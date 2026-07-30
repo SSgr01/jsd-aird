@@ -1,0 +1,51 @@
+spring:
+  application:
+    name: jsd-aird-api
+  datasource:
+    url: ${JSD_AIRD_DATASOURCE_URL:jdbc:postgresql://localhost:5432/jsd_aird}
+    username: ${JSD_AIRD_DATASOURCE_USERNAME:jsd_aird}
+    password: ${JSD_AIRD_DATASOURCE_PASSWORD:jsd_aird_dev}
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 1
+      connection-timeout: 30000
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    validate-migration-naming: true
+  jackson:
+    default-property-inclusion: non_null
+    time-zone: UTC
+  modulith:
+    detection-strategy: explicitly-annotated
+
+server:
+  port: ${SERVER_PORT:8080}
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: never
+
+springdoc:
+  api-docs:
+    version: openapi_3_1
+  paths-to-match: /api/**
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    default-enum-type-handler: org.apache.ibatis.type.EnumTypeHandler
+  global-config:
+    banner: false
+    db-config:
+      id-type: assign_uuid
+
+app:
+  web:
+    allowed-origins: ${JSD_AIRD_ALLOWED_ORIGINS:http://localhost:5173}

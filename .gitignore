@@ -1,0 +1,29 @@
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Java
+**/target/
+*.log
+
+# Node
+**/node_modules/
+**/dist/
+**/coverage/
+*.tsbuildinfo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local database and tooling
+.data/
+.tmp/
+

@@ -1,0 +1,9 @@
+logging:
+  level:
+    com.jsd.aird: DEBUG
+    org.springframework.modulith: INFO
+
+management:
+  endpoint:
+    health:
+      show-details: always

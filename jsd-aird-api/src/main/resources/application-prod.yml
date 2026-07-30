@@ -1,0 +1,13 @@
+spring:
+  flyway:
+    clean-disabled: true
+
+logging:
+  level:
+    root: INFO
+    com.jsd.aird: INFO
+
+management:
+  endpoint:
+    health:
+      show-details: never

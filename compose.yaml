@@ -1,0 +1,27 @@
+name: jsd-aird
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.5-pg16
+    container_name: jsd-aird-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-jsd_aird}
+      POSTGRES_USER: ${POSTGRES_USER:-jsd_aird}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-jsd_aird_dev}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_USER:-jsd_aird} -d ${POSTGRES_DB:-jsd_aird}
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+    name: jsd-aird-postgres-data

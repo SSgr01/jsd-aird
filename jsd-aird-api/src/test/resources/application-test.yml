@@ -1,0 +1,5 @@
+spring:
+  flyway:
+    enabled: false
+  modulith:
+    detection-strategy: explicitly-annotated

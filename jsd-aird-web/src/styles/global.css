@@ -1,0 +1,52 @@
+@import './variables.css';
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-width: 320px;
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--app-background);
+  color: var(--app-text);
+  -webkit-font-smoothing: antialiased;
+}
+
+.page-stack {
+  width: 100%;
+}
+
+.page-title {
+  margin: 0 !important;
+}
+
+.page-description {
+  max-width: 720px;
+  margin-bottom: 0 !important;
+}
+
+.foundation-card {
+  height: 100%;
+}
+
+.foundation-card .ant-typography {
+  margin-top: 0;
+}
+
+.foundation-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  color: var(--app-primary);
+  font-size: 20px;
+  background: var(--app-primary-soft);
+  border-radius: 10px;
+}

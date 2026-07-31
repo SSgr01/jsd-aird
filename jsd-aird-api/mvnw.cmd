@@ -1,7 +1,7 @@
 @echo off
 setlocal
 
-set "MAVEN_VERSION=3.9.9"
+set "MAVEN_VERSION=3.9.11"
 set "MAVEN_DIST_URL=https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/%MAVEN_VERSION%/apache-maven-%MAVEN_VERSION%-bin.zip"
 
 if defined MAVEN_USER_HOME (
@@ -11,10 +11,10 @@ if defined MAVEN_USER_HOME (
 )
 
 set "MAVEN_HOME=%MAVEN_CACHE%\apache-maven-%MAVEN_VERSION%"
+set "MAVEN_ARCHIVE=%MAVEN_CACHE%\apache-maven-%MAVEN_VERSION%-bin.zip"
 
 if not exist "%MAVEN_HOME%\bin\mvn.cmd" (
   if not exist "%MAVEN_CACHE%" mkdir "%MAVEN_CACHE%"
-  set "MAVEN_ARCHIVE=%MAVEN_CACHE%\apache-maven-%MAVEN_VERSION%-bin.zip"
 
   powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ^
     "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -UseBasicParsing -Uri '%MAVEN_DIST_URL%' -OutFile '%MAVEN_ARCHIVE%'"
@@ -33,4 +33,3 @@ if not exist "%MAVEN_HOME%\bin\mvn.cmd" (
 
 call "%MAVEN_HOME%\bin\mvn.cmd" %*
 exit /b %ERRORLEVEL%
-

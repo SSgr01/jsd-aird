@@ -1,3 +1,9 @@
+spring:
+  datasource:
+    url: ${JSD_AIRD_DATASOURCE_URL:jdbc:postgresql://localhost:5433/jsd_aird}
+    username: ${JSD_AIRD_DATASOURCE_USERNAME:jsd_aird}
+    password: ${JSD_AIRD_DATASOURCE_PASSWORD:123456}
+
 logging:
   level:
     com.jsd.aird: DEBUG

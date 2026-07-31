@@ -2,7 +2,7 @@ name: jsd-aird
 
 services:
   postgres:
-    image: pgvector/pgvector:0.8.5-pg16
+    image: pgvector/pgvector:0.8.6-pg18
     container_name: jsd-aird-postgres
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-jsd_aird}

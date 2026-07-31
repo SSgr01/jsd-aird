@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-MAVEN_VERSION="3.9.9"
+MAVEN_VERSION="3.9.11"
 MAVEN_DIST_URL="https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/${MAVEN_VERSION}/apache-maven-${MAVEN_VERSION}-bin.zip"
 MAVEN_CACHE="${MAVEN_USER_HOME:-${HOME}/.m2}/wrapper/dists/apache-maven-${MAVEN_VERSION}"
 MAVEN_HOME="${MAVEN_CACHE}/apache-maven-${MAVEN_VERSION}"
@@ -28,4 +28,3 @@ if [ ! -x "${MAVEN_HOME}/bin/mvn" ]; then
 fi
 
 exec "${MAVEN_HOME}/bin/mvn" "$@"
-

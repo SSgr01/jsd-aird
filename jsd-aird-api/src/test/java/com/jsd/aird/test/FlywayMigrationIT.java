@@ -19,7 +19,7 @@ class FlywayMigrationIT {
 
     @Test
     void createsPgvectorExtensionAndPlatformSchemas() throws SQLException {
-        var image = DockerImageName.parse("pgvector/pgvector:0.8.5-pg16")
+        var image = DockerImageName.parse("pgvector/pgvector:0.8.6-pg18")
                 .asCompatibleSubstituteFor("postgres");
 
         try (var postgres = new PostgreSQLContainer<>(image)
@@ -59,4 +59,3 @@ class FlywayMigrationIT {
         }
     }
 }
-

@@ -1,8 +1,12 @@
 import type { RouteObject } from 'react-router-dom';
+import { Navigate } from 'react-router-dom';
 
 import { BasicLayout } from '@/layouts';
-import { HomePage } from '@/pages/home';
 import { NotFoundPage } from '@/pages/not-found';
+import { ProductionOrderListPage, ProductionOrderUploadPage, ProductionWorkspacePage } from '@/pages/production-orders';
+import { TemplateUploadPage } from '@/pages/template-upload';
+import { TemplateWorkspacePage } from '@/pages/template-workspace';
+import { TemplatesPage } from '@/pages/templates';
 
 export const routeConfig: RouteObject[] = [
   {
@@ -11,7 +15,35 @@ export const routeConfig: RouteObject[] = [
     children: [
       {
         index: true,
-        element: <HomePage />,
+        element: <Navigate to="/templates/upload" replace />,
+      },
+      {
+        path: 'templates',
+        element: <Navigate to="/templates/upload" replace />,
+      },
+      {
+        path: 'templates/upload',
+        element: <TemplateUploadPage />,
+      },
+      {
+        path: 'templates/library',
+        element: <TemplatesPage />,
+      },
+      {
+        path: 'templates/:versionId/workspace',
+        element: <TemplateWorkspacePage />,
+      },
+      {
+        path: 'production-orders',
+        element: <Navigate to="/production-orders/upload" replace />,
+      },
+      {
+        path: 'production-orders/upload',
+        element: <ProductionOrderUploadPage />,
+      },
+      {
+        path: 'production-orders/list',
+        element: <ProductionOrderListPage />,
       },
       {
         path: '*',
@@ -19,4 +51,5 @@ export const routeConfig: RouteObject[] = [
       },
     ],
   },
+  { path: '/production-orders/:orderId/workspace', element: <ProductionWorkspacePage /> },
 ];

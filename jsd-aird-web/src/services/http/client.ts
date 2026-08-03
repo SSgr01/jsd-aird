@@ -14,6 +14,9 @@ export const httpClient = axios.create({
 
 httpClient.interceptors.request.use((config) => {
   config.headers.set('X-Request-Id', crypto.randomUUID());
+  config.headers.set('X-Organization-Id', '00000000-0000-0000-0000-000000000001');
+  config.headers.set('X-User-Id', '00000000-0000-0000-0000-000000000002');
+  config.headers.set('X-Username', 'developer');
   return config;
 });
 

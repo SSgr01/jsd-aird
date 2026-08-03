@@ -13,3 +13,7 @@ management:
   endpoint:
     health:
       show-details: always
+
+app:
+  worker:
+    enabled: ${JSD_AIRD_WORKER_ENABLED:true}

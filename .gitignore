@@ -18,6 +18,7 @@
 **/dist/
 **/coverage/
 *.tsbuildinfo
+/jsd-aird-web/.npm-cache/
 
 # OS
 .DS_Store
@@ -27,3 +28,4 @@ Thumbs.db
 .data/
 .tmp/
 
+/交付文档/

@@ -1,6 +1,18 @@
 :root {
-  --app-primary: #1677ff;
-  --app-primary-soft: #e6f4ff;
-  --app-background: #f5f7fa;
-  --app-text: #1f2329;
+  --app-primary: #2563eb;
+  --app-primary-hover: #1d4ed8;
+  --app-primary-soft: #eff6ff;
+  --app-accent: #0f766e;
+  --app-background: #f8fafc;
+  --app-surface: #ffffff;
+  --app-surface-subtle: #f1f5f9;
+  --app-text: #0f172a;
+  --app-text-secondary: #475569;
+  --app-border: #e2e8f0;
+  --app-danger: #dc2626;
+  --app-warning: #b45309;
+  --app-success: #047857;
+  --app-focus: #1e40af;
+  --app-radius: 6px;
+  --app-shadow: 0 1px 2px rgb(15 23 42 / 6%);
 }

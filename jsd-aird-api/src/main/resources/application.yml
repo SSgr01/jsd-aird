@@ -18,6 +18,10 @@ spring:
     time-zone: UTC
   modulith:
     detection-strategy: explicitly-annotated
+  servlet:
+    multipart:
+      max-file-size: -1
+      max-request-size: -1
 
 server:
   port: ${SERVER_PORT:8080}
@@ -49,3 +53,22 @@ mybatis-plus:
 app:
   web:
     allowed-origins: ${JSD_AIRD_ALLOWED_ORIGINS:http://localhost:5173}
+  identity:
+    development-mode: ${JSD_AIRD_DEV_IDENTITY_ENABLED:true}
+  storage:
+    endpoint: ${JSD_AIRD_MINIO_ENDPOINT:http://localhost:9000}
+    access-key: ${JSD_AIRD_MINIO_ACCESS_KEY:jsd_aird}
+    secret-key: ${JSD_AIRD_MINIO_SECRET_KEY:jsd_aird_minio_dev}
+    bucket: ${JSD_AIRD_MINIO_BUCKET:jsd-aird}
+  worker:
+    enabled: ${JSD_AIRD_WORKER_ENABLED:false}
+    id: ${JSD_AIRD_WORKER_ID:api-local}
+    poll-delay: ${JSD_AIRD_WORKER_POLL_DELAY:2s}
+    lease-duration: ${JSD_AIRD_WORKER_LEASE_DURATION:60s}
+  model:
+    base-url: ${JSD_AIRD_MODEL_BASE_URL:${OPENAI_BASE_URL:}}
+    api-key: ${JSD_AIRD_MODEL_API_KEY:${OPENAI_API_KEY:}}
+    model: ${JSD_AIRD_MODEL_NAME:${OPENAI_MODEL:}}
+    temperature: ${JSD_AIRD_MODEL_TEMPERATURE:${OPENAI_TEMPERATURE:0.5}}
+  recognition:
+    audit-cleanup-cron: ${JSD_AIRD_RECOGNITION_AUDIT_CLEANUP_CRON:0 30 2 * * *}

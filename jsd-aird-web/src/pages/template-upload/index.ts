@@ -1,0 +1,1 @@
+export { TemplateUploadPage } from './TemplateUploadPage';

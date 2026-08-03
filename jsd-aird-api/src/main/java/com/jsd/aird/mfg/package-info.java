@@ -2,4 +2,3 @@
 package com.jsd.aird.mfg;
 
 import org.springframework.modulith.ApplicationModule;
-

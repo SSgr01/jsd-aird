@@ -2,14 +2,15 @@ import { render, screen } from '@testing-library/react';
 
 import { App } from '@/app/App';
 
-vi.mock('@/services/health/health-api', () => ({
-  getHealth: vi.fn().mockResolvedValue({ status: 'UP' }),
+vi.mock('@/services/templates/template-api', () => ({
+  templateApi: { listImports: vi.fn().mockResolvedValue([]) },
 }));
 
 describe('App', () => {
   it('renders the platform shell', async () => {
     render(<App />);
 
-    expect(await screen.findByText('研发数字化与 AI 平台')).toBeInTheDocument();
+    expect(await screen.findByText('模板上传')).toBeInTheDocument();
+    expect(screen.getByText('生产单管理')).toBeInTheDocument();
   });
 });

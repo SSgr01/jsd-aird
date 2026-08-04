@@ -135,7 +135,7 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
                         "FAILED", httpStatus, startedAt, finishedAt, sanitizedBody, auditedResponse,
                         requestHash, responseHash, exception.getClass().getSimpleName(),
                         safeError(exception.getMessage())));
-                if (attempt == 1 && structured != null && isRepairableReferenceViolation(exception)) {
+                if (attempt == 1 && structured != null && isRepairableProtocolViolation(exception)) {
                     invalidStructuredResponse = structured.deepCopy();
                     validationError = safeError(exception.getMessage());
                     parentCallId = callId;
@@ -205,12 +205,15 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
             RecognitionRequest request, JsonNode invalidResponse, String validationError
     ) {
         try {
-            return "上一份响应没有通过临时标识交叉引用校验。只修正该协议错误，不改变业务语义。\n"
+            return "上一份响应没有通过业务结构协议校验。只修正该协议错误，不改变业务语义。\n"
                     + "校验错误：" + safeError(validationError) + "\n"
+                    + "字段和表格必须完整位于其 blockTemporaryId 对应的业务块内；ROW_TABLE 的表头、数据和合计范围必须都在表格范围内。"
+                    + "如果业务块范围截断了已关联的真实单元格，应扩展该业务块或调整归属，不能删除有效业务内容。\n"
                     + "所有 blockTemporaryId、temporaryBlockRef、temporaryRelationRef 和 temporaryTableRef "
                     + "只能引用同一响应对应数组中已声明的 temporaryId；没有所属对象时必须使用空字符串。\n"
-                    + "不得删除业务内容、增加物理坐标或返回协议外字段。请返回一份完整的修正后 JSON。\n"
-                    + "原始物理事实：\n" + objectMapper.writeValueAsString(request.structureSummary()) + "\n"
+                    + "不得虚构工作表或坐标、修改物理工作簿、返回协议外字段。请返回一份完整的修正后 JSON。\n"
+                    + "可用工作表范围（只用于校验修正后的范围，不要重新识别整份工作簿）：\n"
+                    + objectMapper.writeValueAsString(repairPhysicalBounds(request.structureSummary())) + "\n"
                     + "未通过校验的响应：\n" + objectMapper.writeValueAsString(invalidResponse);
         } catch (Exception exception) {
             throw new IllegalArgumentException("Unable to build protocol repair prompt", exception);
@@ -221,13 +224,15 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
         return """
                 你是企业 Excel 模板的全局业务语义识别器。必须先理解所有工作表及其上下文，再输出稀疏的范围级语义，不能逐单元格枚举角色。
 
+                本次任务是“忠实识别”，不是重新设计模板：不得因视觉上像合并区域就虚构物理合并，不得拆分、移动、新增或删除 Excel 单元格。可以提出业务语义层的范围和层级建议，但必须基于给出的真实物理事实。
+
                 只允许返回 recognitionProtocolVersion=1 JSON。严格遵循提供的 JSON Schema；不得增加字段、发明枚举、虚构工作表或坐标。不得返回 SQL、代码、JSON Schema、Mapping、dataPath、fieldCode、持久化 ID 或物理修改指令。
 
                 你的职责：
                 1. 标注标题、字段标签和值、表头、数据、合计、说明、确认、签字、提醒和静态参考等范围。
                 2. 建议可嵌套业务块及父子关系。父块可包含子块，同一父块下的兄弟块不能重叠。
                 3. 建立字段标签和值范围关系。已有值、默认值、示例值和公式值都可以是字段值；不能因为值不为空而忽略关系。
-                4. 识别明细表与矩阵，并对每一列分别判断 editability 和 valueSource。
+                4. 识别明细表与矩阵，并对每一列分别判断 editability 和 valueSource。只有同时能确定行标题、列标题和交叉数据区时才标记 MATRIX；无法确定时保留为 UNKNOWN 或一个待核对问题，不能把普通明细表猜成矩阵。
                 5. 将含义不明确的内容保留为 UNKNOWN 或单个待核对问题，不能擅自命名或合并。
 
                 业务值不能仅因包含“原料、树脂、测试”等词就被当作字段。产品名称、原料名称、编号、公式结果和历史值通常是值或表格数据，需要依靠标签—值关系和整表上下文判断。
@@ -236,10 +241,29 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
 
                 操作说明、文档标题、提醒、签字提示和静态流程要保留在 semanticAnnotations/businessBlocks 中，但除非确有可填写位置，不得生成 fieldRelations。隐藏的字段字典、规范说明和原始备份工作表应按辅助内容理解，不能当成普通客户业务表。
 
+                关系和表格必须属于并完全位于一个业务块中。LABEL_VALUE 的标签和值不能重叠；标签和值写在同一个单元格时必须使用 INLINE_TEXT。表格列只放在 tables.columns 中，不要再为同一列表头和值区域重复生成 fieldRelations。
+
                 LAYOUT_BLANK 不需要输出，版式空白已由后端保留。temporaryId、temporaryRelationRef、temporaryBlockRef 和 temporaryTableRef 只用于本次响应内关联。
                 blockTemporaryId、temporaryBlockRef、temporaryRelationRef 和 temporaryTableRef 只能引用当前响应对应数组中已声明的 temporaryId；没有所属对象时必须返回空字符串。
                 JSON Schema 中无值的可选字符串必须返回空字符串，不能删除属性或返回额外属性。
                 """;
+    }
+
+    /**
+     * A repair is constrained to an already produced semantic response. Repeating every cell,
+     * style span and merge on the second call needlessly doubles token cost and invites a fresh
+     * recognition instead of a narrow protocol correction.
+     */
+    private ObjectNode repairPhysicalBounds(JsonNode structureSummary) {
+        var result = objectMapper.createObjectNode();
+        var sheets = result.putArray("sheets");
+        for (var sheet : structureSummary.path("sheets")) {
+            sheets.add(objectMapper.createObjectNode()
+                    .put("id", sheet.path("id").asText(sheet.path("sheetId").asText("")))
+                    .put("name", sheet.path("name").asText(""))
+                    .put("usedRange", sheet.path("usedRange").asText("A1")));
+        }
+        return result;
     }
 
     private RecognitionModelClient.CallTrace trace(
@@ -259,10 +283,8 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
         );
     }
 
-    private boolean isRepairableReferenceViolation(Exception exception) {
-        return exception instanceof GlobalSemanticRecognitionProtocol.ProtocolViolationException
-                && exception.getMessage() != null
-                && exception.getMessage().contains("引用了不存在的临时标识");
+    private boolean isRepairableProtocolViolation(Exception exception) {
+        return exception instanceof GlobalSemanticRecognitionProtocol.ProtocolViolationException;
     }
 
     private JsonNode successAuditResponse(

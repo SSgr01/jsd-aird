@@ -169,8 +169,19 @@ public class TemplateWorkspaceService {
                     "保存基线已变化，请先比较本地修改与服务端草稿"
             );
         }
+        // Apply review decisions first (inside this transaction), so a just-confirmed item can
+        // enter the same saved draft while an unconfirmed candidate cannot slip into Mapping.
+        recognitionReviewService.applyActions(
+                actor.organizationId(), actor.userId(), versionId, command.recognitionActions()
+        );
+        recognitionReviewService.applyQualityActions(
+                actor.organizationId(), actor.userId(), versionId, command.qualityActions()
+        );
         validateSchema(command.schema());
         var reconciliationRequired = validateMappings(current.format(), command.mapping());
+        recognitionReviewService.validateAcceptedMappings(
+                actor.organizationId(), versionId, command.mapping()
+        );
         validateBindingValues(command.bindingValues());
         validateSnapshot(command.snapshotFileId(), command.snapshotHash());
 
@@ -213,12 +224,6 @@ public class TemplateWorkspaceService {
             throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT);
         }
         repository.replaceMappings(versionId, current.format(), command.mapping());
-        recognitionReviewService.applyActions(
-                actor.organizationId(), actor.userId(), versionId, command.recognitionActions()
-        );
-        recognitionReviewService.applyQualityActions(
-                actor.organizationId(), actor.userId(), versionId, command.qualityActions()
-        );
         repository.appendAudit(
                 actor.organizationId(),
                 actor.userId(),

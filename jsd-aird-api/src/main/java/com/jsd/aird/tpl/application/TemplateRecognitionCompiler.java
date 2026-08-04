@@ -4,6 +4,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -23,6 +24,9 @@ import org.springframework.util.StringUtils;
 public class TemplateRecognitionCompiler {
 
     public static final String FIELD_MODEL_KEY = "x-jsd-field-model";
+    private static final Set<String> STATIC_BLOCK_TYPES = Set.of(
+            "DOCUMENT_HEADER", "INSTRUCTION_LIST", "NOTE_BLOCK", "LOOKUP_TABLE"
+    );
 
     private final ObjectMapper objectMapper;
 
@@ -53,8 +57,12 @@ public class TemplateRecognitionCompiler {
                 });
 
         suggestions.stream()
-                .filter(suggestion -> !"REJECTED".equals(suggestion.decision()))
+                // Recognition output is a candidate overlay. Only an explicitly accepted
+                // candidate is allowed to become the canonical FieldModel/Schema/Mapping.
+                // PENDING items remain available through recognition-review for customer review.
+                .filter(suggestion -> "ACCEPTED".equals(suggestion.decision()))
                 .filter(suggestion -> !"SEMANTIC_MODEL".equals(suggestion.suggestionType()))
+                .filter(this::isFormalSuggestion)
                 .sorted(java.util.Comparator
                         .comparing((TemplateImportRepository.RecognitionSuggestionView item) ->
                                 item.payload().path("locator").path("sheetId").asText(""))
@@ -210,6 +218,12 @@ public class TemplateRecognitionCompiler {
         var valueSource = payload.path("valueSource").asText("UNKNOWN");
         return !"UNKNOWN".equals(editability) && !"UNKNOWN".equals(valueSource)
                 && !("EDITABLE".equals(editability) && "FORMULA".equals(valueSource));
+    }
+
+    private boolean isFormalSuggestion(TemplateImportRepository.RecognitionSuggestionView suggestion) {
+        var payload = suggestion.payload();
+        return !STATIC_BLOCK_TYPES.contains(payload.path("blockType").asText())
+                && !"STATIC".equals(payload.path("valueSource").asText());
     }
 
     private String syncDirection(JsonNode payload) {

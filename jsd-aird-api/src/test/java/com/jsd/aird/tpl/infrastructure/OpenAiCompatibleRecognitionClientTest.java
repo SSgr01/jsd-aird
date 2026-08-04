@@ -64,6 +64,26 @@ class OpenAiCompatibleRecognitionClientTest {
     }
 
     @Test
+    void rejectsAFieldRelationThatOverlapsItsOwnLabelAndValue() throws Exception {
+        var response = validResponse().deepCopy();
+        ((com.fasterxml.jackson.databind.node.ObjectNode) response.path("fieldRelations").get(0))
+                .put("valueRange", "A5");
+
+        assertThatThrownBy(() -> client.validateResponse(response, physicalFacts()))
+                .hasMessageContaining("标签范围和值范围不能重叠");
+    }
+
+    @Test
+    void rejectsAFieldRelationInsideAnInstructionBlock() throws Exception {
+        var response = validResponse().deepCopy();
+        var block = (com.fasterxml.jackson.databind.node.ObjectNode) response.path("businessBlocks").get(0);
+        block.put("type", "INSTRUCTION_LIST");
+
+        assertThatThrownBy(() -> client.validateResponse(response, physicalFacts()))
+                .hasMessageContaining("静态备注块生成字段");
+    }
+
+    @Test
     void sendsJsonSchemaAtZeroTemperatureAndAuditsSanitizedUsage() throws Exception {
         var captured = new AtomicReference<String>();
         var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -164,6 +184,44 @@ class OpenAiCompatibleRecognitionClientTest {
             assertThat(repaired.parentCallId()).isEqualTo(failed.callId());
             assertThat(repaired.totalTokens()).isEqualTo(200);
             assertThat(batch.callTrace()).isEqualTo(repaired);
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void retriesARepairableBusinessRangeViolation() throws Exception {
+        var calls = new AtomicInteger();
+        var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/chat/completions", exchange -> {
+            var semantic = validResponse();
+            if (calls.incrementAndGet() == 1) {
+                ((com.fasterxml.jackson.databind.node.ObjectNode) semantic.path("businessBlocks").get(0))
+                        .put("range", "A1:A4");
+            }
+            var bytes = objectMapper.writeValueAsBytes(modelResponse(semantic, 90, 40, 130));
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, bytes.length);
+            exchange.getResponseBody().write(bytes);
+            exchange.close();
+        });
+        server.start();
+        try {
+            var localClient = new OpenAiCompatibleRecognitionClient(
+                    objectMapper, new JsonCanonicalizer(objectMapper),
+                    "http://127.0.0.1:" + server.getAddress().getPort() + "/v1",
+                    "test-key", "qwen-plus", 0.0
+            );
+
+            var batch = localClient.recognize(new RecognitionModelClient.RecognitionRequest(
+                    UUID.randomUUID(), UUID.randomUUID(), TemplateFormat.XLSX,
+                    "测试.xlsx", "workbook-global", physicalFacts()
+            ));
+
+            assertThat(calls).hasValue(2);
+            assertThat(batch.callTraces()).hasSize(2);
+            assertThat(batch.callTraces().get(0).status()).isEqualTo("FAILED");
+            assertThat(batch.callTraces().get(1).phase()).isEqualTo("PROTOCOL_REPAIR");
         } finally {
             server.stop(0);
         }

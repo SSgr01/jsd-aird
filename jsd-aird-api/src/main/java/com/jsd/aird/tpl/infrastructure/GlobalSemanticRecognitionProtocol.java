@@ -49,6 +49,9 @@ final class GlobalSemanticRecognitionProtocol {
             "EDITABILITY_UNCLEAR", "LAYOUT_INCONSISTENT", "DUPLICATE_MEANING", "OTHER"
     );
     private static final Set<String> SEVERITIES = Set.of("INFO", "WARNING", "BLOCKER");
+    private static final Set<String> STATIC_BLOCK_TYPES = Set.of(
+            "DOCUMENT_HEADER", "INSTRUCTION_LIST", "NOTE_BLOCK", "LOOKUP_TABLE"
+    );
 
     private final ObjectMapper objectMapper;
 
@@ -85,9 +88,9 @@ final class GlobalSemanticRecognitionProtocol {
         var tableIds = uniqueIds(candidate.path("tables"), "tables");
         uniqueIds(candidate.path("qualityIssues"), "qualityIssues");
 
-        validateBlocks(candidate.path("businessBlocks"), sheets, blockIds);
-        validateRelations(candidate.path("fieldRelations"), sheets, blockIds);
-        validateTables(candidate.path("tables"), sheets, blockIds);
+        var blocks = validateBlocks(candidate.path("businessBlocks"), sheets, blockIds);
+        validateRelations(candidate.path("fieldRelations"), sheets, blockIds, blocks);
+        validateTables(candidate.path("tables"), sheets, blockIds, blocks);
         validateAnnotations(candidate.path("semanticAnnotations"), sheets, blockIds, relationIds, tableIds);
         validateQualityIssues(candidate.path("qualityIssues"), sheets, blockIds);
         return candidate;
@@ -139,17 +142,17 @@ final class GlobalSemanticRecognitionProtocol {
             optionalRef(value, "temporaryBlockRef", blockIds, path);
             optionalRef(value, "temporaryTableRef", tableIds, path);
             if (Set.of("FIELD_LABEL", "FIELD_VALUE").contains(value.path("role").asText())) {
-                require(value.path("temporaryRelationRef").isTextual(),
+                require(nonBlankReference(value, "temporaryRelationRef", relationIds),
                         path + " 的字段标签/值必须引用 fieldRelations");
             }
             if (Set.of("TABLE_HEADER", "TABLE_DATA", "TABLE_TOTAL").contains(value.path("role").asText())) {
-                require(value.path("temporaryTableRef").isTextual(),
+                require(nonBlankReference(value, "temporaryTableRef", tableIds),
                         path + " 的表格范围必须引用 tables");
             }
         }
     }
 
-    private void validateBlocks(JsonNode values, Map<String, SheetBounds> sheets, Set<String> blockIds) {
+    private Map<String, JsonNode> validateBlocks(JsonNode values, Map<String, SheetBounds> sheets, Set<String> blockIds) {
         var blocks = new LinkedHashMap<String, JsonNode>();
         for (int index = 0; index < values.size(); index++) {
             var value = values.get(index);
@@ -196,9 +199,12 @@ final class GlobalSemanticRecognitionProtocol {
                         "同一父块下的兄弟业务块不能重叠");
             }
         }
+        return blocks;
     }
 
-    private void validateRelations(JsonNode values, Map<String, SheetBounds> sheets, Set<String> blockIds) {
+    private void validateRelations(
+            JsonNode values, Map<String, SheetBounds> sheets, Set<String> blockIds, Map<String, JsonNode> blocks
+    ) {
         for (int index = 0; index < values.size(); index++) {
             var value = values.get(index);
             var path = "fieldRelations[" + index + "]";
@@ -218,11 +224,32 @@ final class GlobalSemanticRecognitionProtocol {
             enumValue(value, "valueSource", VALUE_SOURCES, path);
             require(value.path("required").isBoolean(), path + ".required 必须是布尔值");
             optionalRef(value, "blockTemporaryId", blockIds, path);
+            require(nonBlankReference(value, "blockTemporaryId", blockIds),
+                    path + ".blockTemporaryId 必须引用包含该字段的业务块");
+            var block = blocks.get(value.path("blockTemporaryId").asText());
+            var labelRange = bounds(value.path("labelRange").asText());
+            var valueRange = bounds(value.path("valueRange").asText());
+            require(block != null && value.path("sheetId").asText().equals(block.path("sheetId").asText())
+                            && bounds(block.path("range").asText()).contains(labelRange)
+                            && bounds(block.path("range").asText()).contains(valueRange),
+                    path + " 的标签和值必须位于所属业务块范围内");
+            var relationType = value.path("relationType").asText();
+            if ("LABEL_VALUE".equals(relationType)) {
+                require(!labelRange.overlaps(valueRange),
+                        path + " 的 LABEL_VALUE 标签范围和值范围不能重叠");
+            } else {
+                require(labelRange.equals(valueRange),
+                        path + " 的 INLINE_TEXT 标签和值必须使用同一单元格范围");
+            }
+            require(!STATIC_BLOCK_TYPES.contains(block.path("type").asText()),
+                    path + " 不能从文档标题、操作说明或静态备注块生成字段");
             validateCondition(value, path);
         }
     }
 
-    private void validateTables(JsonNode values, Map<String, SheetBounds> sheets, Set<String> blockIds) {
+    private void validateTables(
+            JsonNode values, Map<String, SheetBounds> sheets, Set<String> blockIds, Map<String, JsonNode> blocks
+    ) {
         for (int index = 0; index < values.size(); index++) {
             var value = values.get(index);
             var path = "tables[" + index + "]";
@@ -242,6 +269,29 @@ final class GlobalSemanticRecognitionProtocol {
             }
             enumValue(value, "tableKind", TABLE_KINDS, path);
             optionalRef(value, "blockTemporaryId", blockIds, path);
+            require(nonBlankReference(value, "blockTemporaryId", blockIds),
+                    path + ".blockTemporaryId 必须引用包含该表格的业务块");
+            var tableRange = bounds(value.path("range").asText());
+            var headerRange = bounds(value.path("headerRange").asText());
+            var dataRange = bounds(value.path("dataRange").asText());
+            var totalRange = value.path("totalRange").asText("").isBlank()
+                    ? null : bounds(value.path("totalRange").asText());
+            var block = blocks.get(value.path("blockTemporaryId").asText());
+            require(block != null && value.path("sheetId").asText().equals(block.path("sheetId").asText())
+                            && bounds(block.path("range").asText()).contains(tableRange),
+                    path + " 的表格范围必须位于所属业务块内");
+            require(tableRange.contains(headerRange) && tableRange.contains(dataRange)
+                            && (totalRange == null || tableRange.contains(totalRange)),
+                    path + " 的表头、数据和合计范围必须位于表格范围内");
+            require(!headerRange.overlaps(dataRange), path + " 的表头范围与数据范围不能重叠");
+            if ("ROW_TABLE".equals(value.path("tableKind").asText())) {
+                require(headerRange.endRow() < dataRange.startRow(),
+                        path + " 的 ROW_TABLE 表头必须位于数据区上方");
+                if (totalRange != null) {
+                    require(dataRange.endRow() < totalRange.startRow(),
+                            path + " 的 ROW_TABLE 合计行必须位于数据区下方");
+                }
+            }
             require(value.path("columns").isArray() && !value.path("columns").isEmpty(),
                     path + ".columns 必须是非空数组");
             var columnIds = new HashSet<String>();
@@ -265,6 +315,10 @@ final class GlobalSemanticRecognitionProtocol {
                 enumValue(column, "editability", EDITABILITY, columnPath);
                 enumValue(column, "valueSource", VALUE_SOURCES, columnPath);
                 validateCondition(column, columnPath);
+                var columnLabel = bounds(column.path("labelRange").asText());
+                var columnValue = bounds(column.path("valueRange").asText());
+                require(headerRange.contains(columnLabel) && dataRange.contains(columnValue),
+                        columnPath + " 的列名必须位于表头、值范围必须位于数据区");
             }
         }
     }
@@ -351,6 +405,12 @@ final class GlobalSemanticRecognitionProtocol {
         if (!value.has(key) || value.path(key).isNull() || value.path(key).asText("").isBlank()) return;
         require(value.path(key).isTextual() && ids.contains(value.path(key).asText()),
                 path + "." + key + " 引用了不存在的临时标识");
+    }
+
+    private boolean nonBlankReference(JsonNode value, String key, Set<String> ids) {
+        return value.path(key).isTextual()
+                && !value.path(key).asText().isBlank()
+                && ids.contains(value.path(key).asText());
     }
 
     private void enumValue(JsonNode value, String key, Set<String> allowed, String path) {

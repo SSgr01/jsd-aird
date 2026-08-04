@@ -7,6 +7,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -18,6 +19,10 @@ import com.jsd.aird.tpl.application.port.RecognitionModelClient;
 
 /** Converts a validated sparse semantic response into persistence-compatible candidates. */
 final class GlobalSemanticSuggestionCompiler {
+
+    private static final Set<String> STATIC_BLOCK_TYPES = Set.of(
+            "DOCUMENT_HEADER", "INSTRUCTION_LIST", "NOTE_BLOCK", "LOOKUP_TABLE"
+    );
 
     private final ObjectMapper objectMapper;
 
@@ -32,6 +37,7 @@ final class GlobalSemanticSuggestionCompiler {
 
         var semanticModel = objectMapper.createObjectNode()
                 .put("kind", "SEMANTIC_MODEL")
+                .put("recognitionMode", "FAITHFUL")
                 .put("recognitionProtocolVersion", GlobalSemanticRecognitionProtocol.VERSION);
         semanticModel.set("semanticAnnotations", remapAnnotations(response.path("semanticAnnotations"), blocks));
         var stableBlockArray = objectMapper.createArrayNode();
@@ -43,6 +49,7 @@ final class GlobalSemanticSuggestionCompiler {
 
         var units = new ArrayList<Unit>();
         for (var relation : response.path("fieldRelations")) {
+            if (!isFormalRelation(relation, response.path("tables"), blocks)) continue;
             units.add(new Unit("RELATION", relation, relation.path("sheetId").asText(),
                     relation.path("valueRange").asText(), groupName(relation, blocks)));
         }
@@ -91,8 +98,10 @@ final class GlobalSemanticSuggestionCompiler {
                 source.path("relationType").asText()
         );
         var fieldId = RecognitionIdentity.fieldId(relationId);
+        var inlineText = "INLINE_TEXT".equals(source.path("relationType").asText());
+        var locatorType = inlineText ? "INLINE_TEXT" : "CELL_RANGE";
         var bindingId = RecognitionIdentity.bindingId(
-                fieldId, "CELL_RANGE", sheetId + "|" + source.path("valueRange").asText()
+                fieldId, locatorType, sheetId + "|" + source.path("valueRange").asText()
         );
         var payload = objectMapper.createObjectNode()
                 .put("kind", "SCALAR")
@@ -100,13 +109,13 @@ final class GlobalSemanticSuggestionCompiler {
                 .put("fieldId", fieldId.toString())
                 .put("bindingId", bindingId.toString())
                 .put("temporaryRelationId", source.path("temporaryId").asText())
-                .put("fieldCode", fieldCode(groupCode, "FIELD", ordinal))
-                .put("dataPath", dataPath(groupCode, "field", ordinal))
+                .put("fieldCode", fieldCode(groupCode, "FIELD", relationId))
+                .put("dataPath", dataPath(groupCode, "field", relationId))
                 .put("fieldName", source.path("businessName").asText())
                 .put("groupName", groupName)
                 .put("valueType", source.path("valueType").asText())
                 .put("required", source.path("required").asBoolean(false))
-                .put("role", "FIELD").put("locatorType", "CELL_RANGE")
+                .put("role", "FIELD").put("locatorType", locatorType)
                 .put("editability", source.path("editability").asText())
                 .put("valueSource", source.path("valueSource").asText())
                 .put("unit", source.path("unit").asText(""))
@@ -114,8 +123,14 @@ final class GlobalSemanticSuggestionCompiler {
                 .put("reason", "根据完整工作簿的标签和值关系识别")
                 .put("interpretation", "系统认为这里用于填写或读取“"
                         + source.path("businessName").asText() + "”。");
-        payload.set("locator", locator(sheetId, sheetNames.getOrDefault(sheetId, sheetId),
-                source.path("labelRange").asText(), source.path("valueRange").asText(), "ANCHOR"));
+        var locator = locator(sheetId, sheetNames.getOrDefault(sheetId, sheetId),
+                source.path("labelRange").asText(), source.path("valueRange").asText(),
+                inlineText ? "INLINE_TEXT" : "ANCHOR");
+        if (inlineText) {
+            locator.put("valuePart", "AFTER_DELIMITER");
+            locator.put("labelPrefix", source.path("businessName").asText());
+        }
+        payload.set("locator", locator);
         attachBlock(payload, source.path("blockTemporaryId").asText(""), blocks);
         return new RecognitionModelClient.ModelSuggestion(
                 "SCALAR_FIELD", payload, confidence(source), objectMapper.createArrayNode()
@@ -140,8 +155,8 @@ final class GlobalSemanticSuggestionCompiler {
                 .put("kind", kind).put("relationId", relationId)
                 .put("fieldId", fieldId.toString()).put("bindingId", bindingId.toString())
                 .put("temporaryRelationId", source.path("temporaryId").asText())
-                .put("fieldCode", fieldCode(groupCode, "TABLE", ordinal))
-                .put("dataPath", dataPath(groupCode, "table", ordinal))
+                .put("fieldCode", fieldCode(groupCode, "TABLE", relationId))
+                .put("dataPath", dataPath(groupCode, "table", relationId))
                 .put("fieldName", source.path("businessName").asText())
                 .put("groupName", groupName).put("valueType", "array")
                 .put("required", false).put("role", "REPEAT_REGION")
@@ -259,6 +274,28 @@ final class GlobalSemanticSuggestionCompiler {
         payload.put("regionId", block.path("blockId").asText());
     }
 
+    /**
+     * A table is one structured business object. Its column annotations must not be promoted to
+     * duplicate top-level scalar fields, and static blocks never become a writable binding.
+     */
+    private boolean isFormalRelation(JsonNode relation, JsonNode tables, Map<String, ObjectNode> blocks) {
+        var block = blocks.get(relation.path("blockTemporaryId").asText(""));
+        if (block == null || STATIC_BLOCK_TYPES.contains(block.path("type").asText())) return false;
+        var sheetId = relation.path("sheetId").asText();
+        var labelRange = relation.path("labelRange").asText();
+        var valueRange = relation.path("valueRange").asText();
+        for (var table : tables) {
+            if (!sheetId.equals(table.path("sheetId").asText())) continue;
+            for (var column : table.path("columns")) {
+                if (labelRange.equals(column.path("labelRange").asText())
+                        && valueRange.equals(column.path("valueRange").asText())) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
     private String groupName(JsonNode value, Map<String, ObjectNode> blocks) {
         var suggested = value.path("groupNameSuggestion").asText("");
         if (!suggested.isBlank()) return GroupNameNormalizer.normalize(suggested);
@@ -289,13 +326,15 @@ final class GlobalSemanticSuggestionCompiler {
                 || "UNKNOWN".equals(value.path("valueSource").asText()) ? 0.55 : 0.9;
     }
 
-    private String fieldCode(String groupCode, String type, int ordinal) {
-        return "AUTO." + groupCode + "." + type + "_" + String.format(Locale.ROOT, "%02d", ordinal);
+    private String fieldCode(String groupCode, String type, String relationId) {
+        return "AUTO." + groupCode + "." + type + "_"
+                + RecognitionIdentity.shortHash(relationId, 8).toUpperCase(Locale.ROOT);
     }
 
-    private String dataPath(String groupCode, String type, int ordinal) {
+    private String dataPath(String groupCode, String type, String relationId) {
         var camel = toCamel(groupCode);
-        return "/recognized/" + camel + "/" + type + String.format(Locale.ROOT, "%02d", ordinal);
+        return "/recognized/" + camel + "/" + type + "_"
+                + RecognitionIdentity.shortHash(relationId, 12);
     }
 
     private String toCamel(String value) {

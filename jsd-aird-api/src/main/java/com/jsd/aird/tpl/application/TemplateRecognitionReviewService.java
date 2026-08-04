@@ -160,6 +160,35 @@ public class TemplateRecognitionReviewService {
         return assemble(organizationId, workspace).summary().conflict() > 0;
     }
 
+    /**
+     * The browser may keep recognition candidates in its temporary editing model, but it must not
+     * persist one as a formal mapping before the customer has accepted it. Hand-authored mappings
+     * have no recognitionItemId and intentionally pass this check.
+     */
+    public void validateAcceptedMappings(UUID organizationId, UUID versionId, JsonNode mapping) {
+        if (mapping == null || !mapping.isArray()) return;
+        var workspace = requireWorkspace(organizationId, versionId);
+        var run = importRepository.findLatestForVersion(organizationId, workspace.versionId()).orElse(null);
+        var decisions = new java.util.HashMap<UUID, String>();
+        if (run != null) {
+            importRepository.listSuggestions(organizationId, run.id()).forEach(item ->
+                    decisions.put(item.id(), item.decision()));
+        }
+        for (JsonNode binding : mapping) {
+            var recognitionItemId = binding.path("diagnostic").path("recognitionItemId").asText("");
+            if (recognitionItemId.isBlank()) continue;
+            try {
+                var decision = decisions.get(UUID.fromString(recognitionItemId));
+                if (!"ACCEPTED".equals(decision)) {
+                    throw new ApiException(ApiErrorCode.BINDING_INVALID,
+                            "请先在识别确认中确认该字段，再保存为正式模板字段");
+                }
+            } catch (IllegalArgumentException exception) {
+                throw new ApiException(ApiErrorCode.BINDING_INVALID, "识别字段标识无效，请刷新后重试");
+            }
+        }
+    }
+
     public boolean hasOpenBlockingIssues(UUID organizationId, UUID versionId) {
         var workspace = requireWorkspace(organizationId, versionId);
         var run = importRepository.findLatestForVersion(organizationId, workspace.versionId()).orElse(null);

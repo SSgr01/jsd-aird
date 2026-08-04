@@ -17,7 +17,7 @@ class TemplateRecognitionCompilerTest {
     private final TemplateRecognitionCompiler compiler = new TemplateRecognitionCompiler(objectMapper);
 
     @Test
-    void compilesPendingSuggestionsIntoTheDraftButSkipsIgnoredSuggestions() throws Exception {
+    void compilesOnlyAcceptedSuggestionsIntoTheCanonicalDraft() throws Exception {
         var schema = objectMapper.createObjectNode().put("type", "object");
         schema.set("properties", objectMapper.createObjectNode());
         var accepted = suggestion("ACCEPTED", "/product/name", "产品名称", "基本信息");
@@ -26,27 +26,26 @@ class TemplateRecognitionCompilerTest {
 
         var result = compiler.compile(schema, List.of(accepted, pending, ignored), TemplateFormat.XLSX);
 
-        assertThat(result.mapping()).hasSize(2);
+        assertThat(result.mapping()).singleElement();
         assertThat(result.schema().path("properties").path("product").path("properties").path("name").path("title").asText())
                 .isEqualTo("产品名称");
         assertThat(result.fieldModel().path("groups")).hasSize(1);
-        assertThat(result.fieldModel().path("fields")).hasSize(2);
+        assertThat(result.fieldModel().path("fields")).singleElement();
         assertThat(result.fieldModel().path("modelVersion").asInt()).isEqualTo(4);
-        assertThat(result.fieldModel().path("fields").get(1).path("reviewStatus").asText())
-                .isEqualTo("NEEDS_CONFIRMATION");
+        assertThat(result.fieldModel().path("fields").get(0).path("reviewStatus").asText())
+                .isEqualTo("CONFIRMED");
     }
 
     @Test
-    void marksLowConfidenceFieldsAsSuggestedReviewWithoutDroppingTheirMapping() throws Exception {
+    void keepsLowConfidencePendingFieldsOutOfCanonicalMapping() throws Exception {
         var schema = objectMapper.createObjectNode().put("type", "object");
         schema.set("properties", objectMapper.createObjectNode());
         var lowConfidence = suggestion("PENDING", "/test/result", "测试结果", "性能测试", 0.62);
 
         var result = compiler.compile(schema, List.of(lowConfidence), TemplateFormat.XLSX);
 
-        assertThat(result.mapping()).hasSize(1);
-        assertThat(result.fieldModel().path("fields").get(0).path("reviewStatus").asText())
-                .isEqualTo("NEEDS_CONFIRMATION");
+        assertThat(result.mapping()).isEmpty();
+        assertThat(result.fieldModel().path("fields")).isEmpty();
     }
 
     @Test
@@ -62,13 +61,27 @@ class TemplateRecognitionCompilerTest {
         var first = compiler.compile(firstSchema, List.of(formula, unknown), TemplateFormat.XLSX);
         var second = compiler.compile(secondSchema, List.of(formula, unknown), TemplateFormat.XLSX);
 
-        assertThat(first.fieldModel().path("fields")).hasSize(2);
+        assertThat(first.fieldModel().path("fields")).singleElement();
         assertThat(first.mapping()).singleElement().satisfies(binding ->
                 assertThat(binding.path("syncDirection").asText()).isEqualTo("EDITOR_TO_DATA"));
         assertThat(first.fieldModel().path("fields").get(0).path("id").asText())
                 .isEqualTo(second.fieldModel().path("fields").get(0).path("id").asText());
         assertThat(first.mapping().get(0).path("bindingId").asText())
                 .isEqualTo(second.mapping().get(0).path("bindingId").asText());
+    }
+
+    @Test
+    void neverCompilesStaticInstructionsEvenIfTheyWereIncorrectlyAccepted() throws Exception {
+        var schema = objectMapper.createObjectNode().put("type", "object");
+        schema.set("properties", objectMapper.createObjectNode());
+        var instruction = suggestion("ACCEPTED", "/instruction/step", "操作步骤", "基础信息");
+        ((com.fasterxml.jackson.databind.node.ObjectNode) instruction.payload()).put("blockType", "INSTRUCTION_LIST");
+        ((com.fasterxml.jackson.databind.node.ObjectNode) instruction.payload()).put("valueSource", "STATIC");
+
+        var result = compiler.compile(schema, List.of(instruction), TemplateFormat.XLSX);
+
+        assertThat(result.mapping()).isEmpty();
+        assertThat(result.fieldModel().path("fields")).isEmpty();
     }
 
     private TemplateImportRepository.RecognitionSuggestionView suggestion(

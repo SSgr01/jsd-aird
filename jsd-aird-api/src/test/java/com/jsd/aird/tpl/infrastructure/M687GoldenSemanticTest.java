@@ -2,9 +2,6 @@ package com.jsd.aird.tpl.infrastructure;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.io.ByteArrayInputStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.Set;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -16,11 +13,14 @@ class M687GoldenSemanticTest {
 
     @Test
     void validatesAndCompilesTheExpectedM687BusinessRanges() throws Exception {
-        var source = Path.of("../chatgpt解析的标准模板/M-687_NT_标准化业务语义模板.xlsx")
-                .toAbsolutePath().normalize();
-        assertThat(source).exists();
-        var parser = new XlsxStructureParser(objectMapper);
-        var facts = parser.parse(new ByteArrayInputStream(Files.readAllBytes(source))).structureSummary();
+        // Keep the semantic golden case self-contained. Parser fidelity has its own XLSX tests;
+        // this test must not depend on a developer's Downloads/Desktop directory.
+        var facts = objectMapper.readTree("""
+                {"structureVersion":6,"sheets":[
+                  {"id":"sheet-1","name":"M-687 NT","usedRange":"A1:L28"},
+                  {"id":"sheet-2","name":"辅助配方","usedRange":"A1:E6"}
+                ]}
+                """);
         var response = objectMapper.readTree("""
                 {
                   "recognitionProtocolVersion":1,

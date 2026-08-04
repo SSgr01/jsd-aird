@@ -32,7 +32,30 @@ class RuleBasedRecognitionEngineTest {
         var result = engine.recognize(TemplateFormat.XLSX, "生产单.xlsx", structure);
 
         assertThat(result.suggestions()).isEmpty();
-        assertThat(result.model()).isEqualTo("no-business-rules-v6");
+        assertThat(result.model()).isEqualTo("conservative-label-value-v6");
+    }
+
+    @Test
+    void createsOnlyALowConfidenceCandidateForAnExplicitColonLabelAndAdjacentValue() throws Exception {
+        var structure = objectMapper.readTree("""
+                {
+                  "structureVersion":6,
+                  "semanticCells":[
+                    {"sheetId":"sheet-1","sheetName":"生产单","address":"A2","row":2,"column":1,"value":"产品名称：","factType":"VALUE"},
+                    {"sheetId":"sheet-1","sheetName":"生产单","address":"B2","row":2,"column":2,"value":"M-687 NT","factType":"VALUE"},
+                    {"sheetId":"sheet-1","sheetName":"生产单","address":"A3","row":3,"column":1,"value":"UV树脂","factType":"VALUE"},
+                    {"sheetId":"sheet-1","sheetName":"生产单","address":"B3","row":3,"column":2,"value":"UA-306","factType":"VALUE"}
+                  ]
+                }
+                """);
+
+        var result = engine.recognize(TemplateFormat.XLSX, "生产单.xlsx", structure);
+
+        assertThat(result.suggestions()).singleElement().satisfies(suggestion -> {
+            assertThat(suggestion.confidence()).isEqualTo(0.58);
+            assertThat(suggestion.payload().path("fieldName").asText()).isEqualTo("产品名称");
+            assertThat(suggestion.payload().path("locator").path("address").asText()).isEqualTo("B2");
+        });
     }
 
     @Test

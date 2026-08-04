@@ -225,7 +225,6 @@ public class TemplateImportService {
         var suggestionCount = ruleBatch.suggestions().size();
         var modelStatus = "NOT_CONFIGURED";
         var modelQualityIssues = new java.util.ArrayList<RecognitionModelClient.QualityIssueSuggestion>();
-        var reviewedQualityKeys = new java.util.HashSet<String>();
         if (recognitionModelClient.isConfigured() && format == TemplateFormat.XLSX) {
             repository.updateProgress(importJobId, 65, "RECOGNIZING_WORKBOOK_SEMANTICS");
             var modelSuggestions = new java.util.ArrayList<RecognitionModelClient.ModelSuggestion>();
@@ -291,7 +290,7 @@ public class TemplateImportService {
             repository.replaceModelSuggestions(importJobId, recognitionRunId, aggregate);
             suggestionCount += modelSuggestions.size();
             modelStatus = failedCalls == 0 ? "COMPLETED"
-                    : modelSuggestions.isEmpty() ? "FAILED" : "PARTIAL";
+                    : modelSuggestions.isEmpty() && ruleBatch.suggestions().isEmpty() ? "FAILED" : "PARTIAL";
             repository.completeRecognitionRun(recognitionRunId, modelStatus);
             if (failedCalls > 0) {
                 issues.add(new OfficeStructureParser.ParseIssue(
@@ -313,7 +312,7 @@ public class TemplateImportService {
             }
         }
         var qualityResolution = resolveQualityIssues(
-                qualityAnalysis, modelQualityIssues, reviewedQualityKeys, "WORKBOOK".equals(scope)
+                qualityAnalysis, modelQualityIssues, "WORKBOOK".equals(scope)
         );
         if (qualityResolution.changed()) {
             workingParsed = reparsePatched(qualityResolution.snapshot(), workingParsed);
@@ -353,7 +352,6 @@ public class TemplateImportService {
     private QualityResolution resolveQualityIssues(
             WorkbookQualityAnalyzer.Analysis ruleAnalysis,
             List<RecognitionModelClient.QualityIssueSuggestion> modelIssues,
-            java.util.Set<String> reviewedQualityKeys,
             boolean allowPhysicalAutoFix
     ) {
         var snapshot = ruleAnalysis.snapshot().deepCopy();
@@ -362,8 +360,7 @@ public class TemplateImportService {
             var matchingModel = modelIssues.stream()
                     .filter(model -> qualityKey(model).equals(qualityKey(issue)))
                     .filter(model -> model.confidence() >= 0.92).findFirst().orElse(null);
-            var autoApply = allowPhysicalAutoFix && reviewedQualityKeys.contains(qualityKey(issue))
-                    && matchingModel != null && issue.autoFixable()
+            var autoApply = allowPhysicalAutoFix && matchingModel != null && issue.autoFixable()
                     && issue.confidence() >= 0.92 && qualityAnalyzer.apply(snapshot, issue.suggestedPatch());
             var resolved = new RecognitionModelClient.QualityIssueSuggestion(
                     issue.issueType(), issue.severity(), issue.sheetId(), issue.sheetName(), issue.address(),

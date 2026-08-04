@@ -292,6 +292,143 @@ public class JdbcTemplateRepository implements TemplateRepository {
     }
 
     @Override
+    public void insertRevision(NewRevision version) {
+        jdbcTemplate.update(connection -> {
+            var statement = connection.prepareStatement("""
+                    INSERT INTO tpl.template_version (
+                        id, template_id, version_no, status, schema_jsonb, layout_summary_jsonb,
+                        editor_snapshot_file_id, editor_snapshot_hash, snapshot_kind,
+                        editor_app_version, plugin_manifest_hash, snapshot_format_version,
+                        schema_hash, mapping_hash, data_hash, workspace_hash,
+                        derived_from_version_id, created_by
+                    )
+                    SELECT ?, ?, coalesce(max(version_no), 0) + 1, 'DRAFT', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    FROM tpl.template_version WHERE template_id = ?
+                    """);
+            statement.setObject(1, version.id());
+            statement.setObject(2, version.templateId());
+            statement.setObject(3, pgJson(version.schema()));
+            statement.setObject(4, pgJson(version.layoutSummary()));
+            statement.setObject(5, version.snapshotFileId());
+            statement.setString(6, version.snapshotHash());
+            statement.setString(7, version.snapshotKind());
+            statement.setString(8, version.editorAppVersion());
+            statement.setString(9, version.pluginManifestHash());
+            statement.setInt(10, version.snapshotFormatVersion());
+            statement.setString(11, version.schemaHash());
+            statement.setString(12, version.mappingHash());
+            statement.setString(13, version.dataHash());
+            statement.setString(14, version.workspaceHash());
+            statement.setObject(15, version.derivedFromVersionId());
+            statement.setObject(16, version.actorId());
+            statement.setObject(17, version.templateId());
+            return statement;
+        });
+    }
+
+    @Override
+    public void copyMappings(UUID sourceVersionId, UUID targetVersionId) {
+        jdbcTemplate.update("""
+                INSERT INTO tpl.template_mapping (
+                    id, template_version_id, binding_id, marker_id, format, field_code,
+                    data_path, binding_role, locator_type, locator_jsonb, sync_direction,
+                    primary_binding, binding_status, diagnostic_jsonb, last_validated_at
+                )
+                SELECT gen_random_uuid(), ?, binding_id, marker_id, format, field_code,
+                       data_path, binding_role, locator_type, locator_jsonb, sync_direction,
+                       primary_binding, binding_status, diagnostic_jsonb, now()
+                FROM tpl.template_mapping WHERE template_version_id = ?
+                """, targetVersionId, sourceVersionId);
+    }
+
+    @Override
+    public boolean hasOpenDraft(UUID organizationId, UUID templateId) {
+        var count = jdbcTemplate.queryForObject("""
+                SELECT count(*) FROM tpl.template_version tv
+                JOIN tpl.template t ON t.id = tv.template_id
+                WHERE tv.template_id = ? AND t.organization_id = ? AND tv.status = 'DRAFT'
+                """, Long.class, templateId, organizationId);
+        return count != null && count > 0;
+    }
+
+    @Override
+    public boolean hasProductionOrderReferences(UUID organizationId, UUID versionId) {
+        var count = jdbcTemplate.queryForObject("""
+                SELECT count(*) FROM mfg.production_order po
+                WHERE po.template_version_id = ? AND po.organization_id = ?
+                """, Long.class, versionId, organizationId);
+        return count != null && count > 0;
+    }
+
+    @Override
+    public int deleteDraft(UUID organizationId, UUID versionId) {
+        jdbcTemplate.update(
+                "UPDATE tpl.template_import_job SET generated_template_version_id = NULL WHERE generated_template_version_id = ?",
+                versionId
+        );
+        jdbcTemplate.update(
+                "UPDATE tpl.template_version SET derived_from_version_id = NULL WHERE derived_from_version_id = ?",
+                versionId
+        );
+        return jdbcTemplate.update("""
+                DELETE FROM tpl.template_version tv USING tpl.template t
+                WHERE tv.template_id = t.id AND tv.id = ? AND t.organization_id = ? AND tv.status = 'DRAFT'
+                """, versionId, organizationId);
+    }
+
+    @Override
+    public int deleteTemplateIfEmpty(UUID organizationId, UUID templateId) {
+        return jdbcTemplate.update("""
+                DELETE FROM tpl.template t WHERE t.id = ? AND t.organization_id = ?
+                AND NOT EXISTS (SELECT 1 FROM tpl.template_version tv WHERE tv.template_id = t.id)
+                """, templateId, organizationId);
+    }
+
+    @Override
+    public int retireTemplate(UUID organizationId, UUID templateId) {
+        var retired = jdbcTemplate.update("""
+                UPDATE tpl.template_version tv SET status = 'RETIRED', updated_at = now()
+                FROM tpl.template t
+                WHERE tv.id = t.current_published_version_id AND t.id = ? AND t.organization_id = ?
+                  AND tv.status = 'PUBLISHED'
+                """, templateId, organizationId);
+        if (retired > 0) {
+            jdbcTemplate.update("""
+                    UPDATE tpl.template SET current_published_version_id = NULL, updated_at = now()
+                    WHERE id = ? AND organization_id = ?
+                    """, templateId, organizationId);
+        }
+        return retired;
+    }
+
+    @Override
+    public void appendStructureChanges(
+            UUID versionId,
+            String beforeMappingHash,
+            String afterMappingHash,
+            List<StructureChange> operations,
+            UUID actorId
+    ) {
+        if (operations.isEmpty()) return;
+        var arguments = new ArrayList<Object[]>();
+        for (int index = 0; index < operations.size(); index++) {
+            var operation = operations.get(index);
+            arguments.add(new Object[]{
+                    operation.operationId(), versionId, index, operation.type(), operation.sheetId(),
+                    pgJson(operation.operation()), operation.source(), beforeMappingHash,
+                    afterMappingHash, actorId
+            });
+        }
+        jdbcTemplate.batchUpdate("""
+                INSERT INTO tpl.template_structure_change (
+                    id, template_version_id, operation_order, operation_type, sheet_id,
+                    operation_jsonb, source, before_mapping_hash, after_mapping_hash, created_by
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (id) DO NOTHING
+                """, arguments);
+    }
+
+    @Override
     public boolean hasUnresolvedBlockers(UUID versionId) {
         var count = jdbcTemplate.queryForObject("""
                 SELECT (

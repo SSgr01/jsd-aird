@@ -10,7 +10,10 @@ import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 
 import '@univerjs/preset-sheets-core/lib/index.css';
 
-import type { EditorHandle, EditorSelection, TemplateBinding } from './types';
+import { operationFromUniverCommand } from './structure-migration';
+import type {
+  EditorHandle, EditorSelection, TemplateBinding, WorkbookStructureOperation,
+} from './types';
 
 interface Props {
   snapshot: Record<string, unknown>;
@@ -21,12 +24,13 @@ interface Props {
   editable?: boolean;
   onSelectionChange?: (selection: EditorSelection) => void;
   onUnboundCellChange?: (selection: EditorSelection, value: unknown) => void;
+  onStructureChange?: (operation: WorkbookStructureOperation) => void;
 }
 
 export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function UniverSheetsEditor(
   {
     snapshot, onDirty, onEditorValue, onEditorLabel, bindings, editable = true,
-    onSelectionChange, onUnboundCellChange,
+    onSelectionChange, onUnboundCellChange, onStructureChange,
   },
   ref,
 ) {
@@ -35,7 +39,7 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
   const apiRef = useRef<FUniver>();
   const bindingsRef = useRef(bindings);
   const callbacksRef = useRef({
-    onDirty, onEditorValue, onEditorLabel, onSelectionChange, onUnboundCellChange,
+    onDirty, onEditorValue, onEditorLabel, onSelectionChange, onUnboundCellChange, onStructureChange,
   });
   const suppressUnboundRef = useRef(false);
   const editableRef = useRef(editable);
@@ -43,7 +47,7 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
   const highlightTimersRef = useRef<number[]>([]);
   bindingsRef.current = bindings;
   callbacksRef.current = {
-    onDirty, onEditorValue, onEditorLabel, onSelectionChange, onUnboundCellChange,
+    onDirty, onEditorValue, onEditorLabel, onSelectionChange, onUnboundCellChange, onStructureChange,
   };
   editableRef.current = editable;
 
@@ -98,8 +102,10 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
         bindingValues.set(valueCacheKey(binding), readCell(univerAPI, binding));
       }
       commandSubscription = univerAPI.onCommandExecuted((command) => {
-        if (!isCellMutationCommand(command.id)) return;
+        const structureOperation = operationFromUniverCommand(command);
+        if (!structureOperation && !isCellMutationCommand(command.id)) return;
         callbacksRef.current.onDirty();
+        if (structureOperation) callbacksRef.current.onStructureChange?.(structureOperation);
         window.cancelAnimationFrame(pendingSynchronization);
         pendingSynchronization = window.requestAnimationFrame(() => {
           for (const binding of bindingsRef.current) {

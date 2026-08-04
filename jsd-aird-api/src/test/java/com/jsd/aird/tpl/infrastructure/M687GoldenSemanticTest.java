@@ -54,7 +54,7 @@ class M687GoldenSemanticTest {
                     {"temporaryId":"r1","sheetId":"sheet-1","labelRange":"A5","valueRange":"B5:D5","relationType":"LABEL_VALUE","businessName":"产品名称","blockTemporaryId":"b2","groupNameSuggestion":"基础信息","valueType":"string","required":true,"editability":"EDITABLE","valueSource":"USER_INPUT"}
                   ],
                   "tables":[
-                    {"temporaryId":"t1","sheetId":"sheet-1","range":"A7:I22","tableKind":"ROW_TABLE","businessName":"配方明细","blockTemporaryId":"b3","groupNameSuggestion":"配方明细","headerRange":"A7:I8","dataRange":"A9:I21","totalRange":"A22:I22","columns":[
+                    {"temporaryId":"t1","sheetId":"sheet-1","range":"A7:I22","tableKind":"ROW_TABLE","businessName":"配方明细","blockTemporaryId":"b3","groupNameSuggestion":"配方明细","headerRange":"A7:I8","dataRange":"A9:I21","totalRange":"A22:I22","semanticMode":"ROW_RECORDS","rowHeaderRange":"","columnHeaderRange":"","crossDataRange":"","headerTree":[],"columns":[
                       {"temporaryId":"c1","name":"序号","labelRange":"A7:A8","valueRange":"A9:A21","valueType":"integer","editability":"READ_ONLY","valueSource":"FORMULA"},
                       {"temporaryId":"c2","name":"原料编号","labelRange":"B7:B8","valueRange":"B9:B21","valueType":"string","editability":"EDITABLE","valueSource":"USER_INPUT"},
                       {"temporaryId":"c3","name":"原料名称","labelRange":"C7:C8","valueRange":"C9:C21","valueType":"string","editability":"EDITABLE","valueSource":"USER_INPUT"},
@@ -65,7 +65,7 @@ class M687GoldenSemanticTest {
                       {"temporaryId":"c8","name":"复核","labelRange":"H7:H8","valueRange":"H9:H21","valueType":"string","editability":"EDITABLE","valueSource":"USER_INPUT"},
                       {"temporaryId":"c9","name":"差异","labelRange":"I7:I8","valueRange":"I9:I21","valueType":"number","editability":"READ_ONLY","valueSource":"FORMULA"}
                     ]},
-                    {"temporaryId":"t2","sheetId":"sheet-2","range":"D3:E6","tableKind":"ROW_TABLE","businessName":"预混配方明细","blockTemporaryId":"b10","groupNameSuggestion":"配方明细","headerRange":"D3:E3","dataRange":"D4:E6","columns":[
+                    {"temporaryId":"t2","sheetId":"sheet-2","range":"D3:E6","tableKind":"ROW_TABLE","businessName":"预混配方明细","blockTemporaryId":"b10","groupNameSuggestion":"配方明细","headerRange":"D3:E3","dataRange":"D4:E6","semanticMode":"ROW_RECORDS","rowHeaderRange":"","columnHeaderRange":"","crossDataRange":"","headerTree":[],"columns":[
                       {"temporaryId":"p1","name":"原料","labelRange":"D3","valueRange":"D4:D6","valueType":"string","editability":"EDITABLE","valueSource":"USER_INPUT"},
                       {"temporaryId":"p2","name":"配方比例","labelRange":"E3","valueRange":"E4:E6","valueType":"number","editability":"EDITABLE","valueSource":"USER_INPUT"}
                     ]}

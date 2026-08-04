@@ -82,6 +82,22 @@ export interface BusinessField {
   }>;
   tableModel?: Record<string, unknown>;
   matrixModel?: Record<string, unknown>;
+  /** Recognition candidates are rendered in the field tree but never persisted as formal fields. */
+  candidate?: boolean;
+  candidateLocatorType?: string;
+  candidateLocator?: Record<string, unknown>;
+}
+
+export interface WorkbookStructureOperation {
+  operationId: string;
+  type: 'INSERT_ROWS' | 'DELETE_ROWS' | 'INSERT_COLUMNS' | 'DELETE_COLUMNS' | 'RENAME_SHEET';
+  sheetId: string;
+  sheetName?: string;
+  index?: number;
+  count?: number;
+  previousSheetName?: string;
+  nextSheetName?: string;
+  source: 'CUSTOMER' | 'AI';
 }
 
 export interface BusinessBlock {

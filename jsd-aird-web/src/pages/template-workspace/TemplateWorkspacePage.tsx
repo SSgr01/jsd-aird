@@ -32,6 +32,9 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom';
 
 import {
+  candidateBinding,
+  prepareFormalMappings,
+  prepareFormalSchema,
   readFieldModel,
   removeBusinessField,
   updateBusinessField,
@@ -39,6 +42,7 @@ import {
 } from '@/features/template-workspace/field-model';
 import { groupCode, normalizeFieldModel, normalizeGroupName } from '@/features/template-workspace/group-normalizer';
 import {
+  acceptRecognitionReviewItem,
   mergeRecognitionReview,
 } from '@/features/template-workspace/recognition-review';
 import { getAtPath, setAtPath } from '@/features/template-workspace/path-utils';
@@ -46,6 +50,7 @@ import {
   resolveBindingSelection,
   selectionCycleKey,
 } from '@/features/template-workspace/selection-resolver';
+import { migrateWorkspaceStructure } from '@/features/template-workspace/structure-migration';
 import type {
   BusinessField,
   EditorHandle,
@@ -54,6 +59,7 @@ import type {
   TemplateBinding,
   TemplateVersionHistoryItem,
   TemplateWorkspace,
+  WorkbookStructureOperation,
 } from '@/features/template-workspace/types';
 import { HttpError } from '@/services/http/errors';
 import { templateApi } from '@/services/templates/template-api';
@@ -116,6 +122,7 @@ export function TemplateWorkspacePage() {
   const [selectedQualityIssueId, setSelectedQualityIssueId] = useState<string>();
   const [recognitionJob, setRecognitionJob] = useState<TemplateImportJob>();
   const [recognitionBusy, setRecognitionBusy] = useState(false);
+  const [structureOperations, setStructureOperations] = useState<WorkbookStructureOperation[]>([]);
   const isDesktop = useDesktopEditing();
 
   useEffect(() => {
@@ -152,6 +159,7 @@ export function TemplateWorkspacePage() {
         setVersionHistory(history);
         setView(model.status === 'DRAFT' ? 'edit' : 'preview');
         setSaveState('SAVED');
+        setStructureOperations([]);
       } catch (error) {
         if (active) setLoadError(error instanceof Error ? error.message : '工作台加载失败');
       }
@@ -198,19 +206,20 @@ export function TemplateWorkspacePage() {
     try {
       const currentSnapshot = editorRef.current.getSnapshot();
       let synchronizedData = data;
-      const bindingValues = mapping.flatMap((binding) => {
+      const formalMapping = prepareFormalMappings(mapping, fieldModel);
+      const bindingValues = formalMapping.flatMap((binding) => {
         const editorValue = editorRef.current?.readBinding(binding) ?? null;
         if (binding.syncDirection === 'DATA_TO_EDITOR') return [];
         synchronizedData = setAtPath(synchronizedData, binding.dataPath, editorValue);
         return [{ dataPath: binding.dataPath, dataValue: editorValue, editorValue }];
       });
       const staged = await templateApi.stageSnapshot(currentSnapshot, workspace.format);
-      const savedSchema = writeFieldModel(schema, fieldModel);
+      const savedSchema = prepareFormalSchema(schema, fieldModel);
       const result = await templateApi.saveDraft(versionId, {
         lockVersion: workspace.lockVersion,
         baseWorkspaceHash: workspace.workspaceHash,
         schema: savedSchema,
-        mapping,
+        mapping: formalMapping,
         data: synchronizedData,
         snapshotFileId: staged.fileId,
         snapshotHash: staged.sha256,
@@ -225,9 +234,11 @@ export function TemplateWorkspacePage() {
           action,
         })),
         qualityActions: Object.entries(qualityActions).map(([issueId, action]) => ({ issueId, action })),
+        structureOperations,
       });
       setData(synchronizedData);
       setSchema(savedSchema);
+      setMapping(formalMapping);
       setWorkspace({
         ...workspace,
         lockVersion: result.lockVersion,
@@ -239,6 +250,7 @@ export function TemplateWorkspacePage() {
       setSnapshot(currentSnapshot);
       setRecognitionActions({});
       setQualityActions({});
+      setStructureOperations([]);
       setSaveState('SAVED');
       void message.success('模板草稿已保存');
       return true;
@@ -322,7 +334,8 @@ export function TemplateWorkspacePage() {
     const field = findFieldForRecognitionItem(item);
     if (field) {
       setSelectedFieldId(field.id);
-      const binding = mapping.find((candidate) => candidate.bindingId === field.bindingId);
+      const binding = mapping.find((candidate) => candidate.bindingId === field.bindingId)
+        ?? candidateBinding(field);
       if (binding) editorRef.current?.focusBinding(binding);
       return;
     }
@@ -477,14 +490,11 @@ export function TemplateWorkspacePage() {
   };
 
   const confirmRecognitionItem = (item: RecognitionReviewItem) => {
+    const accepted = acceptRecognitionReviewItem(schema, mapping, fieldModel, item);
+    setSchema(accepted.schema);
+    setMapping(accepted.mapping);
+    setFieldModel(accepted.model);
     recordRecognitionAction(item.id, 'CONFIRM', 'CONFIRMED');
-    setFieldModel((current) => ({
-      ...current,
-      fields: current.fields.map((field) => field.recognitionItemId === item.id
-        || field.dataPath === item.payload.dataPath
-        ? { ...field, recognitionItemId: item.id, reviewStatus: 'CONFIRMED' }
-        : field),
-    }));
     markDirty();
     const next = nextRecognitionItem(recognitionReview, item.id);
     if (next) window.requestAnimationFrame(() => focusRecognitionItem(next));
@@ -546,13 +556,18 @@ export function TemplateWorkspacePage() {
       ...current,
       ...Object.fromEntries(targets.map((item) => [item.id, 'CONFIRM' as const])),
     }));
-    const ids = new Set(targets.map((item) => item.id));
-    setFieldModel((current) => ({
-      ...current,
-      fields: current.fields.map((field) => field.recognitionItemId && ids.has(field.recognitionItemId)
-        ? { ...field, reviewStatus: 'CONFIRMED' }
-        : field),
-    }));
+    let nextSchema = schema;
+    let nextMapping = mapping;
+    let nextModel = fieldModel;
+    for (const item of targets) {
+      const accepted = acceptRecognitionReviewItem(nextSchema, nextMapping, nextModel, item);
+      nextSchema = accepted.schema;
+      nextMapping = accepted.mapping;
+      nextModel = accepted.model;
+    }
+    setSchema(nextSchema);
+    setMapping(nextMapping);
+    setFieldModel(nextModel);
     markDirty();
     void message.success(`已确认 ${targets.length} 个识别项目`);
   };
@@ -610,18 +625,32 @@ export function TemplateWorkspacePage() {
     setSelectedFieldId(field.id);
     setSelectedRecognitionItemId(field.recognitionItemId
       ?? recognitionReview?.items.find((item) => item.payload.dataPath === field.dataPath)?.id);
-    const binding = mapping.find((item) => item.bindingId === field.bindingId);
+    const binding = mapping.find((item) => item.bindingId === field.bindingId)
+      ?? candidateBinding(field);
     if (binding) editorRef.current?.focusBinding(binding);
   };
 
   const updateField = (fieldId: string, update: Partial<BusinessField>) => {
-    const currentField = fieldModel.fields.find((field) => field.id === fieldId);
+    let currentField = fieldModel.fields.find((field) => field.id === fieldId);
     if (!currentField) return;
+    let baseSchema = schema;
+    let baseMapping = mapping;
+    let baseModel = fieldModel;
+    if (currentField.candidate) {
+      const reviewItem = recognitionReview?.items.find((item) => item.id === currentField?.recognitionItemId);
+      if (!reviewItem) return;
+      const accepted = acceptRecognitionReviewItem(schema, mapping, fieldModel, reviewItem);
+      baseSchema = accepted.schema;
+      baseMapping = accepted.mapping;
+      baseModel = accepted.model;
+      currentField = baseModel.fields.find((field) => field.recognitionItemId === reviewItem.id);
+      if (!currentField) return;
+    }
     const normalizedUpdate = { ...update, reviewStatus: 'CONFIRMED' as const };
-    const updated = updateBusinessField(schema, fieldModel, fieldId, normalizedUpdate);
+    const updated = updateBusinessField(baseSchema, baseModel, currentField.id, normalizedUpdate);
     setSchema(updated.schema);
     setFieldModel(updated.model);
-    setMapping((current) => current.map((binding) =>
+    const updatedMapping = baseMapping.map((binding) =>
       binding.bindingId === currentField.bindingId
         ? {
             ...binding,
@@ -634,10 +663,10 @@ export function TemplateWorkspacePage() {
               description: update.description ?? currentField.description,
             },
           }
-        : binding,
-    ));
+        : binding);
+    setMapping(updatedMapping);
     if (update.name !== undefined && update.name !== currentField.name) {
-      const binding = mapping.find((item) => item.bindingId === currentField.bindingId);
+      const binding = updatedMapping.find((item) => item.bindingId === currentField.bindingId);
       if (binding) {
         void editorRef.current?.writeLabel?.(binding, update.name).catch((error) => {
           void message.error(error instanceof Error ? error.message : '字段名称未能写入 Excel');
@@ -653,9 +682,22 @@ export function TemplateWorkspacePage() {
     update: Partial<Record<CoordinateTarget, string>>,
     sheet?: Pick<EditorSelection, 'sheetId' | 'sheetName'>,
   ) => {
-    const field = fieldModel.fields.find((item) => item.id === fieldId);
+    let field = fieldModel.fields.find((item) => item.id === fieldId);
+    if (!field) return;
+    let baseMapping = mapping;
+    let baseModel = fieldModel;
+    let baseSchema = schema;
+    if (field.candidate) {
+      const reviewItem = recognitionReview?.items.find((item) => item.id === field?.recognitionItemId);
+      if (!reviewItem) return;
+      const accepted = acceptRecognitionReviewItem(schema, mapping, fieldModel, reviewItem);
+      baseMapping = accepted.mapping;
+      baseModel = accepted.model;
+      baseSchema = accepted.schema;
+      field = baseModel.fields.find((item) => item.recognitionItemId === reviewItem.id);
+    }
     if (!field?.bindingId) return;
-    setMapping((current) => current.map((binding) => {
+    const nextMapping: TemplateBinding[] = baseMapping.map((binding) => {
       if (binding.bindingId !== field.bindingId) return binding;
       const baseLocator = {
         ...binding.locator,
@@ -672,26 +714,30 @@ export function TemplateWorkspacePage() {
       return {
         ...binding,
         locator,
-        bindingStatus: invalid ? 'INVALID' : field.required && !address ? 'MISSING' : 'VALID',
+        bindingStatus: invalid ? 'INVALID' as const
+          : field.required && !address ? 'MISSING' as const : 'VALID' as const,
       };
-    }));
-    setFieldModel((current) => ({
-      ...current,
-      fields: current.fields.map((item) => item.id === fieldId
+    });
+    const nextModel: FieldModel = {
+      ...baseModel,
+      fields: baseModel.fields.map((item) => item.id === field?.id
         ? {
             ...item,
-            reviewStatus: 'CONFIRMED',
+            reviewStatus: 'CONFIRMED' as const,
             ...(item.kind === 'MATRIX' && update.address !== undefined
               ? { matrixModel: matrixModelFromLocator(
                   reflowStructuredLocator({
-                    ...(mapping.find((binding) => binding.bindingId === item.bindingId)?.locator ?? {}),
+                    ...(baseMapping.find((binding) => binding.bindingId === item.bindingId)?.locator ?? {}),
                     ...update,
-                  }, item.kind, mapping.find((binding) => binding.bindingId === item.bindingId)?.locator),
+                  }, item.kind, baseMapping.find((binding) => binding.bindingId === item.bindingId)?.locator),
                 ) }
               : {}),
           }
         : item),
-    }));
+    };
+    setSchema(writeFieldModel(baseSchema, nextModel));
+    setMapping(nextMapping);
+    setFieldModel(nextModel);
     recordRecognitionAction(field.recognitionItemId, 'CONFIRM', 'CONFIRMED');
     markDirty();
   };
@@ -714,10 +760,19 @@ export function TemplateWorkspacePage() {
     const key = selectionCycleKey(selection);
     const nextIndex = selectionCycleRef.current.key === key
       ? selectionCycleRef.current.index + 1 : 0;
-    const match = resolveBindingSelection(mapping, selection, nextIndex);
+    const selectableBindings = [
+      ...mapping,
+      ...fieldModel.fields.flatMap((field) => {
+        const binding = candidateBinding(field);
+        return binding ? [binding] : [];
+      }),
+    ];
+    const match = resolveBindingSelection(selectableBindings, selection, nextIndex);
     if (!match) return;
     selectionCycleRef.current = { key, index: match.candidateIndex };
-    const field = fieldModel.fields.find((item) => item.bindingId === match.binding.bindingId);
+    const recognitionItemId = stringValue(match.binding.diagnostic?.recognitionItemId);
+    const field = fieldModel.fields.find((item) => item.bindingId === match.binding.bindingId
+      || Boolean(recognitionItemId && item.recognitionItemId === recognitionItemId));
     if (field) {
       setSelectedFieldId(field.id);
       setSelectedRecognitionItemId(field.recognitionItemId
@@ -789,6 +844,15 @@ export function TemplateWorkspacePage() {
       void message.info(`已发现新字段“${label}”，请核对填写位置`);
     }, 800);
   }, [fieldModel.groups, mapping, markDirty, message]);
+
+  const handleStructureChange = useCallback((operation: WorkbookStructureOperation) => {
+    const migrated = migrateWorkspaceStructure(mapping, fieldModel, operation);
+    setMapping(migrated.mapping);
+    setFieldModel(migrated.model);
+    setSchema((current) => writeFieldModel(current, migrated.model));
+    setStructureOperations((current) => [...current, operation]);
+    markDirty();
+  }, [fieldModel, mapping, markDirty]);
 
   const addField = (groupId?: string) => {
     const id = crypto.randomUUID();
@@ -1014,6 +1078,7 @@ export function TemplateWorkspacePage() {
                   onEditorLabel={handleEditorLabel}
                   onSelectionChange={handleSelection}
                   onUnboundCellChange={handleUnboundCellChange}
+                  onStructureChange={handleStructureChange}
                 />
               ) : (
                 <div className={editable ? undefined : 'document-readonly'}>
@@ -1324,6 +1389,7 @@ function fieldsMissingRequiredPosition(
   format: TemplateWorkspace['format'],
 ) {
   return model.fields.filter((field) => {
+    if (field.candidate) return false;
     if (!field.required) return false;
     const binding = mapping.find((item) => item.bindingId === field.bindingId);
     if (!binding) return true;
@@ -1343,6 +1409,7 @@ function nonBlockingWarnings(
     field.reviewStatus === 'NEEDS_CONFIRMATION' || (field.confidence ?? 1) < 0.85,
   ).length;
   const optionalWithoutPosition = model.fields.filter((field) => {
+    if (field.candidate) return false;
     if (field.required) return false;
     const binding = mapping.find((item) => item.bindingId === field.bindingId);
     if (!binding) return true;

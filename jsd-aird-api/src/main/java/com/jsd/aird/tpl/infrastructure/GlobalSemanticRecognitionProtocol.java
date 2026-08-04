@@ -44,6 +44,9 @@ final class GlobalSemanticRecognitionProtocol {
             "USER_INPUT", "FORMULA", "REFERENCE", "STATIC", "MIXED", "UNKNOWN"
     );
     private static final Set<String> TABLE_KINDS = Set.of("ROW_TABLE", "MATRIX");
+    private static final Set<String> TABLE_SEMANTIC_MODES = Set.of(
+            "ROW_RECORDS", "CROSS_TAB", "RECORD_SET", "UNKNOWN"
+    );
     private static final Set<String> ISSUE_CATEGORIES = Set.of(
             "FIELD_RELATION_UNCLEAR", "BUSINESS_BLOCK_UNCLEAR", "TABLE_STRUCTURE_UNCLEAR",
             "EDITABILITY_UNCLEAR", "LAYOUT_INCONSISTENT", "DUPLICATE_MEANING", "OTHER"
@@ -257,7 +260,8 @@ final class GlobalSemanticRecognitionProtocol {
             exactKeys(value, path, Set.of(
                     "temporaryId", "sheetId", "range", "tableKind", "businessName",
                     "blockTemporaryId", "groupNameSuggestion", "semanticKeySuggestion",
-                    "headerRange", "dataRange", "totalRange", "columns"
+                    "headerRange", "dataRange", "totalRange", "columns", "semanticMode",
+                    "rowHeaderRange", "columnHeaderRange", "crossDataRange", "headerTree"
             ));
             requiredText(value, "temporaryId", path);
             requiredText(value, "businessName", path);
@@ -268,6 +272,7 @@ final class GlobalSemanticRecognitionProtocol {
                 validateNamedRange(value, "totalRange", path, sheets);
             }
             enumValue(value, "tableKind", TABLE_KINDS, path);
+            enumValue(value, "semanticMode", TABLE_SEMANTIC_MODES, path);
             optionalRef(value, "blockTemporaryId", blockIds, path);
             require(nonBlankReference(value, "blockTemporaryId", blockIds),
                     path + ".blockTemporaryId 必须引用包含该表格的业务块");
@@ -285,13 +290,40 @@ final class GlobalSemanticRecognitionProtocol {
                     path + " 的表头、数据和合计范围必须位于表格范围内");
             require(!headerRange.overlaps(dataRange), path + " 的表头范围与数据范围不能重叠");
             if ("ROW_TABLE".equals(value.path("tableKind").asText())) {
+                require("ROW_RECORDS".equals(value.path("semanticMode").asText()),
+                        path + " 的 ROW_TABLE 必须使用 ROW_RECORDS 语义模式");
+                require(value.path("rowHeaderRange").asText("").isBlank()
+                                && value.path("columnHeaderRange").asText("").isBlank()
+                                && value.path("crossDataRange").asText("").isBlank(),
+                        path + " 的 ROW_TABLE 不得虚构矩阵轴范围");
                 require(headerRange.endRow() < dataRange.startRow(),
                         path + " 的 ROW_TABLE 表头必须位于数据区上方");
                 if (totalRange != null) {
                     require(dataRange.endRow() < totalRange.startRow(),
                             path + " 的 ROW_TABLE 合计行必须位于数据区下方");
                 }
+            } else {
+                require(Set.of("CROSS_TAB", "RECORD_SET").contains(value.path("semanticMode").asText()),
+                        path + " 的 MATRIX 必须明确 CROSS_TAB 或 RECORD_SET 语义模式");
+                validateNamedRange(value, "rowHeaderRange", path, sheets);
+                validateNamedRange(value, "columnHeaderRange", path, sheets);
+                validateNamedRange(value, "crossDataRange", path, sheets);
+                var rowHeaderRange = bounds(value.path("rowHeaderRange").asText());
+                var columnHeaderRange = bounds(value.path("columnHeaderRange").asText());
+                var crossDataRange = bounds(value.path("crossDataRange").asText());
+                require(tableRange.contains(rowHeaderRange) && tableRange.contains(columnHeaderRange)
+                                && tableRange.contains(crossDataRange),
+                        path + " 的矩阵行标题、列标题和交叉数据区必须位于矩阵范围内");
+                require(!rowHeaderRange.overlaps(crossDataRange)
+                                && !columnHeaderRange.overlaps(crossDataRange),
+                        path + " 的矩阵轴标题不能与交叉数据区重叠");
+                require(rowHeaderRange.endColumn() < crossDataRange.startColumn()
+                                && columnHeaderRange.endRow() < crossDataRange.startRow(),
+                        path + " 的矩阵行标题必须在数据区左侧、列标题必须在数据区上方");
+                require(dataRange.equals(crossDataRange),
+                        path + " 的 MATRIX dataRange 必须等于 crossDataRange");
             }
+            validateHeaderTree(value.path("headerTree"), value, tableRange, path);
             require(value.path("columns").isArray() && !value.path("columns").isEmpty(),
                     path + ".columns 必须是非空数组");
             var columnIds = new HashSet<String>();
@@ -320,6 +352,32 @@ final class GlobalSemanticRecognitionProtocol {
                 require(headerRange.contains(columnLabel) && dataRange.contains(columnValue),
                         columnPath + " 的列名必须位于表头、值范围必须位于数据区");
             }
+        }
+    }
+
+    private void validateHeaderTree(JsonNode tree, JsonNode table, Range tableRange, String path) {
+        require(tree.isArray(), path + ".headerTree 必须是数组");
+        if ("MATRIX".equals(table.path("tableKind").asText())) {
+            require(!tree.isEmpty(), path + " 的 MATRIX 必须提供行列标题树");
+        }
+        var ids = new HashSet<String>();
+        for (int index = 0; index < tree.size(); index++) {
+            var node = tree.get(index);
+            var nodePath = path + ".headerTree[" + index + "]";
+            requireObject(node, nodePath);
+            exactKeys(node, nodePath, Set.of("temporaryId", "parentTemporaryId", "name", "range", "axis"));
+            requiredText(node, "temporaryId", nodePath);
+            requiredText(node, "name", nodePath);
+            require(ids.add(node.path("temporaryId").asText()), nodePath + ".temporaryId 重复");
+            require(Set.of("ROW", "COLUMN").contains(node.path("axis").asText()),
+                    nodePath + ".axis 包含未知枚举值");
+            var range = bounds(node.path("range").asText());
+            require(range != null && tableRange.contains(range), nodePath + ".range 必须位于表格范围内");
+        }
+        for (var node : tree) {
+            var parent = node.path("parentTemporaryId").asText("");
+            require(parent.isBlank() || ids.contains(parent), path + ".headerTree 引用了不存在的父标题");
+            require(!parent.equals(node.path("temporaryId").asText()), path + ".headerTree 标题不能引用自身");
         }
     }
 
@@ -504,7 +562,8 @@ final class GlobalSemanticRecognitionProtocol {
                 "block":{"type":"object","additionalProperties":false,"required":["temporaryId","sheetId","range","type","parentTemporaryId","businessName","groupNameSuggestion","semanticKeySuggestion"],"properties":{"temporaryId":{"type":"string","minLength":1},"sheetId":{"type":"string","minLength":1},"range":{"$ref":"#/$defs/range"},"type":{"enum":["DOCUMENT_HEADER","FORM_FIELDS","ROW_TABLE","MATRIX","INSTRUCTION_LIST","CONFIRMATION_BLOCK","SIGNATURE_BLOCK","NOTE_BLOCK","LOOKUP_TABLE","UNKNOWN"]},"parentTemporaryId":{"type":"string"},"businessName":{"type":"string","minLength":1},"groupNameSuggestion":{"type":"string"},"semanticKeySuggestion":{"type":"string"}}},
                 "relation":{"type":"object","additionalProperties":false,"required":["temporaryId","sheetId","labelRange","valueRange","relationType","businessName","blockTemporaryId","groupNameSuggestion","semanticKeySuggestion","valueType","required","editability","valueSource","unit","condition"],"properties":{"temporaryId":{"type":"string","minLength":1},"sheetId":{"type":"string","minLength":1},"labelRange":{"$ref":"#/$defs/range"},"valueRange":{"$ref":"#/$defs/range"},"relationType":{"enum":["LABEL_VALUE","INLINE_TEXT"]},"businessName":{"type":"string","minLength":1},"blockTemporaryId":{"type":"string"},"groupNameSuggestion":{"type":"string"},"semanticKeySuggestion":{"type":"string"},"valueType":{"$ref":"#/$defs/valueType"},"required":{"type":"boolean"},"editability":{"$ref":"#/$defs/editability"},"valueSource":{"$ref":"#/$defs/valueSource"},"unit":{"type":"string"},"condition":{"type":"string"}}},
                 "column":{"type":"object","additionalProperties":false,"required":["temporaryId","name","labelRange","valueRange","valueType","editability","valueSource","unit","condition","semanticKeySuggestion"],"properties":{"temporaryId":{"type":"string","minLength":1},"name":{"type":"string","minLength":1},"labelRange":{"$ref":"#/$defs/range"},"valueRange":{"$ref":"#/$defs/range"},"valueType":{"$ref":"#/$defs/valueType"},"editability":{"$ref":"#/$defs/editability"},"valueSource":{"$ref":"#/$defs/valueSource"},"unit":{"type":"string"},"condition":{"type":"string"},"semanticKeySuggestion":{"type":"string"}}},
-                "table":{"type":"object","additionalProperties":false,"required":["temporaryId","sheetId","range","tableKind","businessName","blockTemporaryId","groupNameSuggestion","semanticKeySuggestion","headerRange","dataRange","totalRange","columns"],"properties":{"temporaryId":{"type":"string","minLength":1},"sheetId":{"type":"string","minLength":1},"range":{"$ref":"#/$defs/range"},"tableKind":{"enum":["ROW_TABLE","MATRIX"]},"businessName":{"type":"string","minLength":1},"blockTemporaryId":{"type":"string"},"groupNameSuggestion":{"type":"string"},"semanticKeySuggestion":{"type":"string"},"headerRange":{"$ref":"#/$defs/range"},"dataRange":{"$ref":"#/$defs/range"},"totalRange":{"type":"string"},"columns":{"type":"array","minItems":1,"items":{"$ref":"#/$defs/column"}}}},
+                "headerNode":{"type":"object","additionalProperties":false,"required":["temporaryId","parentTemporaryId","name","range","axis"],"properties":{"temporaryId":{"type":"string","minLength":1},"parentTemporaryId":{"type":"string"},"name":{"type":"string","minLength":1},"range":{"$ref":"#/$defs/range"},"axis":{"enum":["ROW","COLUMN"]}}},
+                "table":{"type":"object","additionalProperties":false,"required":["temporaryId","sheetId","range","tableKind","businessName","blockTemporaryId","groupNameSuggestion","semanticKeySuggestion","headerRange","dataRange","totalRange","columns","semanticMode","rowHeaderRange","columnHeaderRange","crossDataRange","headerTree"],"properties":{"temporaryId":{"type":"string","minLength":1},"sheetId":{"type":"string","minLength":1},"range":{"$ref":"#/$defs/range"},"tableKind":{"enum":["ROW_TABLE","MATRIX"]},"businessName":{"type":"string","minLength":1},"blockTemporaryId":{"type":"string"},"groupNameSuggestion":{"type":"string"},"semanticKeySuggestion":{"type":"string"},"headerRange":{"$ref":"#/$defs/range"},"dataRange":{"$ref":"#/$defs/range"},"totalRange":{"type":"string"},"columns":{"type":"array","minItems":1,"items":{"$ref":"#/$defs/column"}},"semanticMode":{"enum":["ROW_RECORDS","CROSS_TAB","RECORD_SET","UNKNOWN"]},"rowHeaderRange":{"type":"string"},"columnHeaderRange":{"type":"string"},"crossDataRange":{"type":"string"},"headerTree":{"type":"array","items":{"$ref":"#/$defs/headerNode"}}}},
                 "issue":{"type":"object","additionalProperties":false,"required":["temporaryId","sheetId","range","category","severity","title","description","businessImpact","rootBlockTemporaryId"],"properties":{"temporaryId":{"type":"string","minLength":1},"sheetId":{"type":"string","minLength":1},"range":{"$ref":"#/$defs/range"},"category":{"enum":["FIELD_RELATION_UNCLEAR","BUSINESS_BLOCK_UNCLEAR","TABLE_STRUCTURE_UNCLEAR","EDITABILITY_UNCLEAR","LAYOUT_INCONSISTENT","DUPLICATE_MEANING","OTHER"]},"severity":{"enum":["INFO","WARNING","BLOCKER"]},"title":{"type":"string","minLength":1},"description":{"type":"string","minLength":1},"businessImpact":{"type":"string","minLength":1},"rootBlockTemporaryId":{"type":"string"}}}
               }
             }

@@ -18,10 +18,10 @@ export function readFieldModel(
   if (isRecord(stored) && Array.isArray(stored.groups) && Array.isArray(stored.fields)) {
     return normalizeFieldModel(structuredClone(stored) as unknown as FieldModel);
   }
-  const groupId = 'group-other';
+  const groupId = 'group-basic';
   return {
     modelVersion: 4,
-    groups: [{ id: groupId, name: '其他信息', order: 0 }],
+    groups: [{ id: groupId, name: '基础信息', groupCode: 'BASIC_INFORMATION', order: 0 }],
     fields: mapping.map((binding) => ({
       id: binding.bindingId,
       bindingId: binding.bindingId,
@@ -146,6 +146,112 @@ export function applySuggestion(
     mapping: validBinding ? [...mapping, binding] : mapping,
     model: nextModel,
     binding,
+  };
+}
+
+export function persistableFieldModel(fieldModel: FieldModel): FieldModel {
+  const formalFields = fieldModel.fields.filter((field) => !field.candidate);
+  const usedGroups = new Set(formalFields.map((field) => field.groupId));
+  return {
+    ...structuredClone(fieldModel),
+    groups: fieldModel.groups.filter((group) => usedGroups.has(group.id) || group.groupCode === 'BASIC_INFORMATION'),
+    fields: structuredClone(formalFields),
+  };
+}
+
+export function prepareFormalSchema(
+  schema: Record<string, unknown>,
+  fieldModel: FieldModel,
+): Record<string, unknown> {
+  const next = structuredClone(schema);
+  for (const candidate of fieldModel.fields.filter((field) => field.candidate && field.dataPath)) {
+    removeSchemaAtPath(next, candidate.dataPath as string);
+  }
+  return writeFieldModel(next, persistableFieldModel(fieldModel));
+}
+
+export function prepareFormalMappings(
+  mapping: TemplateBinding[],
+  fieldModel: FieldModel,
+): TemplateBinding[] {
+  const formalBindingIds = new Set(fieldModel.fields
+    .filter((field) => !field.candidate && field.bindingId)
+    .map((field) => field.bindingId as string));
+  return mapping.filter((binding) => {
+    const recognitionItemId = stringValue(binding.diagnostic?.recognitionItemId);
+    return !recognitionItemId || formalBindingIds.has(binding.bindingId);
+  });
+}
+
+export function addRecognitionCandidate(
+  model: FieldModel,
+  suggestion: RecognitionSuggestion,
+): FieldModel {
+  const next = structuredClone(model);
+  const groupName = normalizeGroupName(suggestion.payload.groupName?.trim() || '基础信息');
+  let group = next.groups.find((item) => item.name === groupName);
+  if (!group) {
+    group = {
+      id: `candidate-group-${groupCode(groupName).toLowerCase()}-${stableTextId(groupName)}`,
+      name: groupName,
+      groupCode: groupCode(groupName),
+      order: next.groups.length,
+    };
+    next.groups.push(group);
+  }
+  const existingIndex = next.fields.findIndex((field) => field.candidate
+    && (field.recognitionItemId === suggestion.id
+      || Boolean(suggestion.payload.relationId && field.relationId === suggestion.payload.relationId)));
+  const kind = suggestionKind(suggestion);
+  const candidate: BusinessField = {
+    id: suggestion.payload.fieldId || `candidate-${suggestion.id}`,
+    fieldId: suggestion.payload.fieldId,
+    relationId: suggestion.payload.relationId,
+    recognitionItemId: suggestion.id,
+    dataPath: suggestion.payload.dataPath,
+    groupId: group.id,
+    name: suggestion.payload.fieldName,
+    kind,
+    valueType: suggestion.payload.valueType,
+    required: suggestion.payload.required,
+    unit: suggestion.payload.unit,
+    description: suggestion.payload.reason,
+    interpretation: suggestion.payload.interpretation
+      || interpretation(kind, suggestion.payload.fieldName),
+    confidence: suggestion.confidence,
+    reviewStatus: 'NEEDS_CONFIRMATION',
+    editability: suggestion.payload.editability,
+    valueSource: suggestion.payload.valueSource,
+    condition: suggestion.payload.condition,
+    blockId: suggestion.payload.blockId,
+    parentBlockId: suggestion.payload.parentBlockId,
+    columns: suggestion.payload.columns,
+    tableModel: suggestion.payload.tableModel,
+    matrixModel: suggestion.payload.matrixModel,
+    candidate: true,
+    candidateLocatorType: suggestion.payload.locatorType,
+    candidateLocator: structuredClone(suggestion.payload.locator),
+  };
+  if (existingIndex >= 0) next.fields[existingIndex] = candidate;
+  else next.fields.push(candidate);
+  return normalizeFieldModel(next);
+}
+
+export function candidateBinding(field: BusinessField): TemplateBinding | undefined {
+  if (!field.candidate || !field.dataPath || !field.candidateLocator) return undefined;
+  return {
+    bindingId: `candidate-${field.recognitionItemId || field.id}`,
+    fieldId: field.fieldId,
+    relationId: field.relationId,
+    dataPath: field.dataPath,
+    role: field.kind === 'SCALAR' ? 'FIELD' : 'REPEAT_REGION',
+    locatorType: field.candidateLocatorType || 'CELL_RANGE',
+    locator: structuredClone(field.candidateLocator),
+    syncDirection: field.editability === 'READ_ONLY' ? 'EDITOR_TO_DATA' : 'TWO_WAY',
+    primaryBinding: false,
+    bindingStatus: field.editability === 'UNKNOWN' || field.valueSource === 'UNKNOWN'
+      ? 'AMBIGUOUS' : 'VALID',
+    diagnostic: { source: 'RECOGNITION_CANDIDATE', recognitionItemId: field.recognitionItemId },
   };
 }
 
@@ -368,4 +474,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function stringValue(value: unknown) {
   return typeof value === 'string' ? value : '';
+}
+
+function stableTextId(value: string) {
+  let hash = 2166136261;
+  for (const character of value) {
+    hash ^= character.codePointAt(0) ?? 0;
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
 }

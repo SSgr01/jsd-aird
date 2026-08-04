@@ -232,7 +232,7 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
                 1. 标注标题、字段标签和值、表头、数据、合计、说明、确认、签字、提醒和静态参考等范围。
                 2. 建议可嵌套业务块及父子关系。父块可包含子块，同一父块下的兄弟块不能重叠。
                 3. 建立字段标签和值范围关系。已有值、默认值、示例值和公式值都可以是字段值；不能因为值不为空而忽略关系。
-                4. 识别明细表与矩阵，并对每一列分别判断 editability 和 valueSource。只有同时能确定行标题、列标题和交叉数据区时才标记 MATRIX；无法确定时保留为 UNKNOWN 或一个待核对问题，不能把普通明细表猜成矩阵。
+                4. 识别明细表与矩阵，并对每一列分别判断 editability 和 valueSource。普通逐行记录必须使用 ROW_TABLE + ROW_RECORDS，并将矩阵轴范围留空。只有同时能确定 rowHeaderRange、columnHeaderRange、crossDataRange 和 headerTree 时才标记 MATRIX，并明确 CROSS_TAB 或 RECORD_SET；无法确定时保留为 UNKNOWN 或一个待核对问题，不能把普通明细表猜成矩阵。
                 5. 将含义不明确的内容保留为 UNKNOWN 或单个待核对问题，不能擅自命名或合并。
 
                 业务值不能仅因包含“原料、树脂、测试”等词就被当作字段。产品名称、原料名称、编号、公式结果和历史值通常是值或表格数据，需要依靠标签—值关系和整表上下文判断。

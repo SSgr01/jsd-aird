@@ -4,7 +4,7 @@ import type {
   RecognitionSuggestion,
 } from '@/services/templates/template-api';
 
-import { applySuggestion, writeFieldModel } from './field-model';
+import { addRecognitionCandidate, applySuggestion, writeFieldModel } from './field-model';
 import type { FieldModel, TemplateBinding } from './types';
 
 export function mergeRecognitionReview(
@@ -31,7 +31,7 @@ export function mergeRecognitionReview(
       || Boolean(item.payload.relationId && field.relationId === item.payload.relationId)
       || Boolean(dataPath && field.dataPath === dataPath),
     );
-    if (existingIndex >= 0) {
+    if (existingIndex >= 0 && item.status === 'CONFIRMED') {
       const existing = nextModel.fields[existingIndex];
       if (!existing) continue;
       nextModel.fields[existingIndex] = {
@@ -48,6 +48,24 @@ export function mergeRecognitionReview(
         : binding);
       continue;
     }
+    if (existingIndex >= 0) {
+      const existing = nextModel.fields[existingIndex];
+      if (existing?.candidate) {
+        nextModel.fields[existingIndex] = {
+          ...existing,
+          confidence: item.confidence,
+          reviewStatus: reviewStatus(item),
+          candidateLocator: structuredClone(item.payload.locator),
+        };
+      }
+      continue;
+    }
+    if (item.status !== 'CONFIRMED') {
+      nextModel = addRecognitionCandidate(nextModel, suggestionFromReview(item));
+      const candidate = nextModel.fields.find((field) => field.recognitionItemId === item.id);
+      if (candidate) candidate.reviewStatus = reviewStatus(item);
+      continue;
+    }
     const applied = applySuggestion(
       nextSchema,
       nextMapping,
@@ -62,6 +80,24 @@ export function mergeRecognitionReview(
   }
   nextSchema = writeFieldModel(nextSchema, nextModel);
   return { schema: nextSchema, mapping: nextMapping, model: nextModel };
+}
+
+export function acceptRecognitionReviewItem(
+  schema: Record<string, unknown>,
+  mapping: TemplateBinding[],
+  model: FieldModel,
+  item: RecognitionReviewItem,
+) {
+  const withoutCandidate = {
+    ...structuredClone(model),
+    fields: model.fields.filter((field) => field.recognitionItemId !== item.id || !field.candidate),
+  };
+  return applySuggestion(
+    schema,
+    mapping,
+    withoutCandidate,
+    { ...suggestionFromReview(item), decision: 'ACCEPTED' },
+  );
 }
 
 export function suggestionFromReview(item: RecognitionReviewItem): RecognitionSuggestion {

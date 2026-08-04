@@ -165,9 +165,9 @@ public class TemplateRecognitionCompiler {
                 .put("order", groups.size())));
         if (groups.isEmpty()) {
             groups.add(objectMapper.createObjectNode()
-                    .put("id", "group-other")
-                    .put("name", "其他信息")
-                    .put("groupCode", "OTHER_INFORMATION")
+                    .put("id", "group-basic")
+                    .put("name", GroupNameNormalizer.BASIC_INFORMATION)
+                    .put("groupCode", "BASIC_INFORMATION")
                     .put("order", 0));
         }
         fieldModel.set("groups", groups);

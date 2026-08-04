@@ -8,6 +8,7 @@ import type {
   TemplateVersionHistoryItem,
   TemplateWorkspace,
   ValueSource,
+  WorkbookStructureOperation,
 } from '@/features/template-workspace/types';
 import { httpClient } from '@/services/http/client';
 
@@ -39,6 +40,7 @@ export interface SaveTemplateDraftInput {
   }>;
   recognitionActions: RecognitionActionInput[];
   qualityActions: QualityActionInput[];
+  structureOperations: WorkbookStructureOperation[];
 }
 
 export interface SaveTemplateDraftResult {
@@ -278,6 +280,21 @@ export const templateApi = {
 
   async publish(versionId: string) {
     await httpClient.post(`/api/v2/template-versions/${versionId}/publish`);
+  },
+
+  async createRevision(versionId: string) {
+    const response = await httpClient.post<ApiResponse<TemplateWorkspace>>(
+      `/api/v2/template-versions/${versionId}/revisions`,
+    );
+    return response.data.data;
+  },
+
+  async deleteDraft(versionId: string) {
+    await httpClient.delete(`/api/v2/template-versions/${versionId}`);
+  },
+
+  async retire(templateId: string) {
+    await httpClient.post(`/api/v2/templates/${templateId}/retire`);
   },
 
   async stageSnapshot(snapshot: Record<string, unknown>, format: TemplateFormat) {

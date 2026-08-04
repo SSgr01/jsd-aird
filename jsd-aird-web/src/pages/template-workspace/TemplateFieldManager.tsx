@@ -18,6 +18,7 @@ import type {
   TemplateBinding,
   TemplateFormat,
 } from '@/features/template-workspace/types';
+import { candidateBinding } from '@/features/template-workspace/field-model';
 import type {
   RecognitionReview,
   RecognitionReviewItem,
@@ -110,7 +111,7 @@ export function TemplateFieldManager({
   const selectedField = fieldModel.fields.find((field) => field.id === selectedFieldId);
   const selectedBinding = selectedField?.bindingId
     ? mapping.find((binding) => binding.bindingId === selectedField.bindingId)
-    : undefined;
+    : selectedField ? candidateBinding(selectedField) : undefined;
 
   const selectField = (field: BusinessField) => {
     onSelectField(field);
@@ -295,7 +296,11 @@ function FieldStructure({
                     )}
                   </button>
                 ))}
-                {!fields.length && <span className="field-tree-empty">暂无字段</span>}
+                {!fields.length && (
+                  <span className="field-tree-empty">
+                    暂无字段。可直接在 Excel 输入“名称：”和相邻内容，或点击新增字段后选择位置。
+                  </span>
+                )}
               </div>
             </details>
           );

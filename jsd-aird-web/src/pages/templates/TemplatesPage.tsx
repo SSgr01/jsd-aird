@@ -1,13 +1,18 @@
 import {
+  CopyOutlined,
+  DeleteOutlined,
   FileExcelOutlined,
   FileWordOutlined,
+  MoreOutlined,
   PlusOutlined,
   ReloadOutlined,
+  StopOutlined,
 } from '@ant-design/icons';
 import {
   App,
   Button,
   Card,
+  Dropdown,
   Empty,
   Form,
   Input,
@@ -35,7 +40,7 @@ const statusLabels: Record<TemplateStatus, { label: string; color: string }> = {
 };
 
 export function TemplatesPage() {
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const navigate = useNavigate();
   const [items, setItems] = useState<TemplateListItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -84,6 +89,42 @@ export function TemplatesPage() {
       setCreating(false);
     }
   };
+
+  const createRevision = async (record: TemplateListItem) => {
+    try {
+      const workspace = await templateApi.createRevision(record.versionId);
+      void message.success('已创建新的修订草稿');
+      navigate(`/templates/${workspace.versionId}/workspace`);
+    } catch (error) {
+      void message.error(error instanceof Error ? error.message : '创建修订草稿失败');
+    }
+  };
+
+  const confirmDeleteDraft = (record: TemplateListItem) => modal.confirm({
+    title: `删除草稿“${record.name}”？`,
+    content: '字段、映射和当前草稿快照引用将被删除；Excel 原文件及仍被引用的对象不会立即删除。',
+    okText: '删除草稿',
+    okButtonProps: { danger: true },
+    cancelText: '取消',
+    onOk: async () => {
+      await templateApi.deleteDraft(record.versionId);
+      void message.success('草稿已删除');
+      await load();
+    },
+  });
+
+  const confirmRetire = (record: TemplateListItem) => modal.confirm({
+    title: `停用模板“${record.name}”？`,
+    content: '停用后不能再用于新生产单，历史版本、已有生产单和审计记录都会保留。',
+    okText: '停用模板',
+    okButtonProps: { danger: true },
+    cancelText: '取消',
+    onOk: async () => {
+      await templateApi.retire(record.templateId);
+      void message.success('模板已停用');
+      await load();
+    },
+  });
 
   return (
     <Space direction="vertical" size={16} className="page-stack">
@@ -214,14 +255,36 @@ export function TemplatesPage() {
             {
               title: '操作',
               key: 'action',
-              width: 110,
+              width: 170,
               render: (_, record) => (
-                <Button
-                  type="link"
-                  onClick={() => navigate(`/templates/${record.versionId}/workspace`)}
-                >
-                  {record.status === 'DRAFT' ? '编辑模板' : '查看模板'}
-                </Button>
+                <Space size={0} onClick={(event) => event.stopPropagation()}>
+                  <Button
+                    type="link"
+                    onClick={() => navigate(`/templates/${record.versionId}/workspace`)}
+                  >
+                    {record.status === 'DRAFT' ? '编辑模板' : '查看模板'}
+                  </Button>
+                  <Dropdown
+                    trigger={['click']}
+                    menu={{
+                      items: record.status === 'DRAFT'
+                        ? [{ key: 'delete', danger: true, icon: <DeleteOutlined />, label: '删除草稿' }]
+                        : [
+                            { key: 'revision', icon: <CopyOutlined />, label: '新建修订版' },
+                            ...(record.status === 'PUBLISHED'
+                              ? [{ key: 'retire', danger: true, icon: <StopOutlined />, label: '停用模板' }]
+                              : []),
+                          ],
+                      onClick: ({ key }) => {
+                        if (key === 'delete') confirmDeleteDraft(record);
+                        if (key === 'revision') void createRevision(record);
+                        if (key === 'retire') confirmRetire(record);
+                      },
+                    }}
+                  >
+                    <Button type="text" aria-label="更多模板操作" icon={<MoreOutlined />} />
+                  </Dropdown>
+                </Space>
               ),
             },
           ]}

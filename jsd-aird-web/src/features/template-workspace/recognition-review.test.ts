@@ -3,10 +3,10 @@ import { describe, expect, it } from 'vitest';
 import type { RecognitionReview, RecognitionReviewItem } from '@/services/templates/template-api';
 
 import { readFieldModel } from './field-model';
-import { mergeRecognitionReview } from './recognition-review';
+import { acceptRecognitionReviewItem, mergeRecognitionReview } from './recognition-review';
 
 describe('recognition review draft merge', () => {
-  it('adds pending recognition results to the draft without auto-confirming them', () => {
+  it('shows pending results as candidates without adding formal schema or mappings', () => {
     const schema = { type: 'object', properties: {} };
     const review = createReview(createItem());
 
@@ -17,8 +17,19 @@ describe('recognition review draft merge', () => {
       recognitionItemId: '11111111-1111-1111-1111-111111111111',
       name: '产品名称',
       reviewStatus: 'NEEDS_CONFIRMATION',
+      candidate: true,
     });
-    expect(merged.mapping[0]?.locator).toMatchObject({ sheetName: '生产单', address: 'B2' });
+    expect(merged.model.fields[0]?.candidateLocator).toMatchObject({ sheetName: '生产单', address: 'B2' });
+    expect(merged.mapping).toHaveLength(0);
+    expect(merged.schema.properties).toEqual({});
+
+    const accepted = acceptRecognitionReviewItem(
+      merged.schema, merged.mapping, merged.model, review.items[0] as RecognitionReviewItem,
+    );
+    expect(accepted.model.fields[0]).toMatchObject({ reviewStatus: 'CONFIRMED' });
+    expect(accepted.model.fields[0]?.candidate).not.toBe(true);
+    expect(accepted.mapping[0]?.locator).toMatchObject({ sheetName: '生产单', address: 'B2' });
+    expect(accepted.schema.properties).toHaveProperty('product');
   });
 
   it('marks conflicts in the field model and keeps ignored items out of the draft', () => {

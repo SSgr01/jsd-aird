@@ -171,6 +171,11 @@ final class GlobalSemanticSuggestionCompiler {
         locator.put("dataRange", source.path("dataRange").asText());
         locator.put("logicalInputRange", source.path("dataRange").asText());
         if (source.has("totalRange")) locator.put("totalRange", source.path("totalRange").asText());
+        if ("MATRIX".equals(kind)) {
+            locator.put("rowHeaderRange", source.path("rowHeaderRange").asText());
+            locator.put("columnHeaderRange", source.path("columnHeaderRange").asText());
+            locator.put("crossDataRange", source.path("crossDataRange").asText());
+        }
         payload.set("locator", locator);
         var columns = objectMapper.createArrayNode();
         var columnOrdinal = 0;
@@ -200,9 +205,13 @@ final class GlobalSemanticSuggestionCompiler {
                 .set("columns", columns.deepCopy()));
         if ("MATRIX".equals(kind)) {
             payload.set("matrixModel", objectMapper.createObjectNode()
-                    .put("semanticMode", "CROSS_TAB")
+                    .put("semanticMode", source.path("semanticMode").asText())
                     .put("headerRange", source.path("headerRange").asText())
-                    .put("dataRange", source.path("dataRange").asText()));
+                    .put("dataRange", source.path("dataRange").asText())
+                    .put("rowHeaderRange", source.path("rowHeaderRange").asText())
+                    .put("columnHeaderRange", source.path("columnHeaderRange").asText())
+                    .put("crossDataRange", source.path("crossDataRange").asText())
+                    .set("headerTree", source.path("headerTree").deepCopy()));
         }
         attachBlock(payload, source.path("blockTemporaryId").asText(""), blocks);
         return new RecognitionModelClient.ModelSuggestion(

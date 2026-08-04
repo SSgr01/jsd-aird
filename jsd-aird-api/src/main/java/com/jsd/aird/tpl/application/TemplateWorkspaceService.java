@@ -183,6 +183,7 @@ public class TemplateWorkspaceService {
                 actor.organizationId(), versionId, command.mapping()
         );
         validateBindingValues(command.bindingValues());
+        validateStructureOperations(command.structureOperations());
         validateSnapshot(command.snapshotFileId(), command.snapshotHash());
 
         var schemaHash = canonicalizer.hash(command.schema());
@@ -224,6 +225,18 @@ public class TemplateWorkspaceService {
             throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT);
         }
         repository.replaceMappings(versionId, current.format(), command.mapping());
+        repository.appendStructureChanges(
+                versionId,
+                current.mappingHash(),
+                mappingHash,
+                command.structureOperations().stream()
+                        .map(operation -> new TemplateRepository.StructureChange(
+                                operation.operationId(), operation.type(), operation.sheetId(),
+                                objectMapper.valueToTree(operation), operation.source()
+                        ))
+                        .toList(),
+                actor.userId()
+        );
         repository.appendAudit(
                 actor.organizationId(),
                 actor.userId(),
@@ -234,6 +247,7 @@ public class TemplateWorkspaceService {
                         .put("workspaceHash", workspaceHash)
                         .put("idempotencyKey", command.idempotencyKey())
                         .put("reconciliationRequired", reconciliationRequired)
+                        .put("structureChangeCount", command.structureOperations().size())
         );
         if (command.snapshotFileId() != null) {
             repository.appendOutbox(
@@ -426,6 +440,109 @@ public class TemplateWorkspaceService {
         }
     }
 
+    @Transactional
+    public TemplateRepository.TemplateWorkspace createRevision(UUID sourceVersionId) {
+        var actor = ActorContext.required();
+        var source = get(sourceVersionId);
+        if (source.status() == TemplateStatus.DRAFT) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "草稿无需创建修订版");
+        }
+        if (repository.hasOpenDraft(actor.organizationId(), source.templateId())) {
+            throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT, "该模板已有未完成草稿，请先处理现有草稿");
+        }
+        var versionId = UUID.randomUUID();
+        var data = objectMapper.createObjectNode();
+        var layoutSummary = objectMapper.createObjectNode()
+                .put("reconciliationRequired", source.reconciliationRequired())
+                .put("derivedFromVersionId", sourceVersionId.toString());
+        var snapshotHash = StringUtils.hasText(source.snapshotHash())
+                ? source.snapshotHash() : canonicalizer.hash(source.inlineSnapshot());
+        var workspaceHash = canonicalizer.workspaceHash(
+                versionId.toString(), source.schema(), source.mapping(), data, snapshotHash,
+                source.editorAppVersion(), source.pluginManifestHash()
+        );
+        repository.insertRevision(new TemplateRepository.NewRevision(
+                versionId, source.templateId(), sourceVersionId, source.schema(), layoutSummary,
+                source.snapshotFileId(), source.snapshotHash(), source.snapshotKind(),
+                source.editorAppVersion(), source.pluginManifestHash(), source.snapshotFormatVersion(),
+                source.schemaHash(), source.mappingHash(), canonicalizer.hash(data), workspaceHash,
+                actor.userId()
+        ));
+        repository.copyMappings(sourceVersionId, versionId);
+        repository.appendAudit(
+                actor.organizationId(), actor.userId(), "TEMPLATE_REVISION_CREATED",
+                "TEMPLATE_VERSION", versionId,
+                objectMapper.createObjectNode().put("derivedFromVersionId", sourceVersionId.toString())
+        );
+        return get(versionId);
+    }
+
+    @Transactional
+    public void deleteDraft(UUID versionId) {
+        var actor = ActorContext.required();
+        var workspace = get(versionId);
+        if (workspace.status() != TemplateStatus.DRAFT) {
+            throw new ApiException(ApiErrorCode.TEMPLATE_VERSION_IMMUTABLE, "仅草稿版本可以删除");
+        }
+        if (repository.hasProductionOrderReferences(actor.organizationId(), versionId)) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "该草稿已被生产单引用，不能删除");
+        }
+        repository.appendAudit(
+                actor.organizationId(), actor.userId(), "TEMPLATE_DRAFT_DELETED",
+                "TEMPLATE_VERSION", versionId,
+                objectMapper.createObjectNode().put("templateId", workspace.templateId().toString())
+        );
+        if (repository.deleteDraft(actor.organizationId(), versionId) == 0) {
+            throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT, "草稿状态已变化，请刷新后重试");
+        }
+        repository.deleteTemplateIfEmpty(actor.organizationId(), workspace.templateId());
+        if (workspace.snapshotFileId() != null) {
+            repository.appendOutbox(
+                    "FILE_OBJECT", workspace.snapshotFileId(), "FILE_REFERENCE_RECALCULATION_REQUESTED",
+                    objectMapper.createObjectNode().put("fileId", workspace.snapshotFileId().toString())
+            );
+        }
+    }
+
+    @Transactional
+    public void retire(UUID templateId) {
+        var actor = ActorContext.required();
+        if (repository.retireTemplate(actor.organizationId(), templateId) == 0) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "模板没有可停用的已发布版本");
+        }
+        repository.appendAudit(
+                actor.organizationId(), actor.userId(), "TEMPLATE_RETIRED", "TEMPLATE", templateId,
+                objectMapper.createObjectNode()
+        );
+        repository.appendOutbox(
+                "TEMPLATE", templateId, "TEMPLATE_RETIRED",
+                objectMapper.createObjectNode().put("templateId", templateId.toString())
+        );
+    }
+
+    private void validateStructureOperations(List<StructureOperation> operations) {
+        var allowed = java.util.Set.of(
+                "INSERT_ROWS", "DELETE_ROWS", "INSERT_COLUMNS", "DELETE_COLUMNS", "RENAME_SHEET"
+        );
+        var ids = new HashSet<UUID>();
+        for (var operation : operations) {
+            if (operation.operationId() == null || !ids.add(operation.operationId())
+                    || !allowed.contains(operation.type()) || !StringUtils.hasText(operation.sheetId())
+                    || !java.util.Set.of("CUSTOMER", "AI").contains(operation.source())) {
+                throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "工作簿结构操作无效");
+            }
+            if (!"RENAME_SHEET".equals(operation.type())
+                    && (operation.index() == null || operation.index() < 1
+                    || operation.count() == null || operation.count() < 1)) {
+                throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "行列结构操作缺少有效位置或数量");
+            }
+            if ("RENAME_SHEET".equals(operation.type())
+                    && !StringUtils.hasText(operation.nextSheetName())) {
+                throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "工作表重命名缺少新名称");
+            }
+        }
+    }
+
     private void validateSnapshot(UUID fileId, String expectedHash) {
         if (fileId == null || !StringUtils.hasText(expectedHash)) {
             throw new ApiException(ApiErrorCode.SNAPSHOT_PERSIST_FAILED, "保存草稿必须提交已暂存的原生快照");
@@ -502,6 +619,19 @@ public class TemplateWorkspaceService {
     public record BindingValuePair(String dataPath, JsonNode dataValue, JsonNode editorValue) {
     }
 
+    public record StructureOperation(
+            UUID operationId,
+            String type,
+            String sheetId,
+            String sheetName,
+            Integer index,
+            Integer count,
+            String previousSheetName,
+            String nextSheetName,
+            String source
+    ) {
+    }
+
     public record SaveDraftCommand(
             long lockVersion,
             String baseWorkspaceHash,
@@ -517,12 +647,14 @@ public class TemplateWorkspaceService {
             String idempotencyKey,
             List<BindingValuePair> bindingValues,
             List<TemplateRecognitionReviewService.RecognitionAction> recognitionActions,
-            List<TemplateRecognitionReviewService.QualityAction> qualityActions
+            List<TemplateRecognitionReviewService.QualityAction> qualityActions,
+            List<StructureOperation> structureOperations
     ) {
         public SaveDraftCommand {
             bindingValues = bindingValues == null ? List.of() : List.copyOf(bindingValues);
             recognitionActions = recognitionActions == null ? List.of() : List.copyOf(recognitionActions);
             qualityActions = qualityActions == null ? List.of() : List.copyOf(qualityActions);
+            structureOperations = structureOperations == null ? List.of() : List.copyOf(structureOperations);
         }
     }
 

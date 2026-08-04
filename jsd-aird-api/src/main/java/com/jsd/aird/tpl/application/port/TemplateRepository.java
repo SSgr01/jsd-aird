@@ -22,6 +22,20 @@ public interface TemplateRepository {
 
     void insertVersion(NewVersion version);
 
+    void insertRevision(NewRevision version);
+
+    void copyMappings(UUID sourceVersionId, UUID targetVersionId);
+
+    boolean hasOpenDraft(UUID organizationId, UUID templateId);
+
+    boolean hasProductionOrderReferences(UUID organizationId, UUID versionId);
+
+    int deleteDraft(UUID organizationId, UUID versionId);
+
+    int deleteTemplateIfEmpty(UUID organizationId, UUID templateId);
+
+    int retireTemplate(UUID organizationId, UUID templateId);
+
     Optional<TemplateWorkspace> findWorkspace(UUID organizationId, UUID versionId);
 
     List<TemplateVersionHistoryItem> findVersionHistory(UUID organizationId, UUID templateId);
@@ -31,6 +45,14 @@ public interface TemplateRepository {
     int updateDraft(DraftUpdate update);
 
     void replaceMappings(UUID versionId, TemplateFormat format, JsonNode mappings);
+
+    void appendStructureChanges(
+            UUID versionId,
+            String beforeMappingHash,
+            String afterMappingHash,
+            List<StructureChange> operations,
+            UUID actorId
+    );
 
     boolean hasUnresolvedBlockers(UUID versionId);
 
@@ -91,6 +113,26 @@ public interface TemplateRepository {
     ) {
     }
 
+    record NewRevision(
+            UUID id,
+            UUID templateId,
+            UUID derivedFromVersionId,
+            JsonNode schema,
+            JsonNode layoutSummary,
+            UUID snapshotFileId,
+            String snapshotHash,
+            String snapshotKind,
+            String editorAppVersion,
+            String pluginManifestHash,
+            int snapshotFormatVersion,
+            String schemaHash,
+            String mappingHash,
+            String dataHash,
+            String workspaceHash,
+            UUID actorId
+    ) {
+    }
+
     record TemplateWorkspace(
             UUID templateId,
             UUID versionId,
@@ -131,6 +173,9 @@ public interface TemplateRepository {
     }
 
     record FileReference(UUID id, String status, String sha256) {
+    }
+
+    record StructureChange(UUID operationId, String type, String sheetId, JsonNode operation, String source) {
     }
 
     record DraftUpdate(

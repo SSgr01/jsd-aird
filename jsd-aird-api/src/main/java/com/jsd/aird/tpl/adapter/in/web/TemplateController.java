@@ -19,6 +19,7 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -122,6 +123,15 @@ public class TemplateController {
                                 item.issueId(), item.action()
                         ))
                         .toList();
+        var structureOperations = request.structureOperations() == null
+                ? List.<TemplateWorkspaceService.StructureOperation>of()
+                : request.structureOperations().stream()
+                        .map(item -> new TemplateWorkspaceService.StructureOperation(
+                                item.operationId(), item.type(), item.sheetId(), item.sheetName(),
+                                item.index(), item.count(), item.previousSheetName(),
+                                item.nextSheetName(), item.source()
+                        ))
+                        .toList();
         return success(service.saveDraft(versionId, new TemplateWorkspaceService.SaveDraftCommand(
                 request.lockVersion(),
                 request.baseWorkspaceHash(),
@@ -137,7 +147,8 @@ public class TemplateController {
                 request.idempotencyKey(),
                 bindingValues,
                 recognitionActions,
-                qualityActions
+                qualityActions,
+                structureOperations
         )));
     }
 
@@ -179,6 +190,36 @@ public class TemplateController {
     ) {
     }
 
+    @PostMapping("/template-versions/{versionId}/revisions")
+    public ApiResponse<TemplateRepository.TemplateWorkspace> createRevision(@PathVariable UUID versionId) {
+        return success(service.createRevision(versionId));
+    }
+
+    @DeleteMapping("/template-versions/{versionId}")
+    public ApiResponse<Void> deleteDraft(@PathVariable UUID versionId) {
+        service.deleteDraft(versionId);
+        return success(null);
+    }
+
+    @PostMapping("/templates/{templateId}/retire")
+    public ApiResponse<Void> retire(@PathVariable UUID templateId) {
+        service.retire(templateId);
+        return success(null);
+    }
+
+    public record StructureOperationRequest(
+            @NotNull UUID operationId,
+            @NotBlank String type,
+            @NotBlank String sheetId,
+            String sheetName,
+            Integer index,
+            Integer count,
+            String previousSheetName,
+            String nextSheetName,
+            @NotBlank String source
+    ) {
+    }
+
     public record RecognitionRunRequest(
             @NotBlank String scope,
             String sheetId,
@@ -202,7 +243,8 @@ public class TemplateController {
             @NotBlank String idempotencyKey,
             List<@Valid BindingValueRequest> bindingValues,
             List<@Valid RecognitionActionRequest> recognitionActions,
-            List<@Valid QualityActionRequest> qualityActions
+            List<@Valid QualityActionRequest> qualityActions,
+            List<@Valid StructureOperationRequest> structureOperations
     ) {
     }
 }

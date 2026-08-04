@@ -2,7 +2,9 @@ package com.jsd.aird.tpl.infrastructure;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Locale;
+import java.util.UUID;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -78,51 +80,73 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
                 && request.structureSummary().path("structureVersion").asInt() != 6) {
             throw new IllegalArgumentException("全局 Excel 识别仅支持 structureVersion 6");
         }
-        var startedAt = Instant.now();
-        var callId = java.util.UUID.randomUUID();
-        var body = requestBody(request);
-        var sanitizedBody = sanitizer.sanitize(body);
-        try {
-            JsonNode response = restClient.post()
-                    .uri(baseUrl + "/chat/completions")
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .accept(MediaType.APPLICATION_JSON)
-                    .header("Authorization", "Bearer " + apiKey)
-                    .body(sanitizedBody)
-                    .retrieve()
-                    .body(JsonNode.class);
-            if (response == null) throw new IllegalStateException("Model returned an empty response");
-            var content = response.path("choices").path(0).path("message").path("content").asText("");
-            if (content.isBlank()) throw new IllegalStateException("Model response has no structured content");
-            var structured = parseJsonObject(content);
-            var validated = protocol.validate(structured, request.structureSummary());
-            var compiled = compiler.compile(validated, request.structureSummary());
-            var finishedAt = Instant.now();
+        var traces = new ArrayList<RecognitionModelClient.CallTrace>();
+        JsonNode invalidStructuredResponse = null;
+        String validationError = null;
+        UUID parentCallId = null;
+        for (var attempt = 1; attempt <= 2; attempt++) {
+            var phase = attempt == 1 ? request.callPhase() : "PROTOCOL_REPAIR";
+            var body = attempt == 1 ? requestBody(request)
+                    : repairRequestBody(request, invalidStructuredResponse, validationError);
+            var sanitizedBody = sanitizer.sanitize(body);
             var requestHash = canonicalizer.hash(sanitizedBody);
-            var responseHash = canonicalizer.hash(response);
-            var trace = trace(callId, request, "SUCCEEDED", 200, startedAt, finishedAt,
-                    sanitizedBody, sanitizer.sanitize(response), requestHash, responseHash, "", "");
-            return new RecognitionBatch(
-                    compiled.suggestions(), compiled.qualityIssues(), "openai-compatible", model,
-                    PROMPT_VERSION, requestHash, responseHash, trace
-            );
-        } catch (Exception exception) {
-            var finishedAt = Instant.now();
-            var httpStatus = exception instanceof RestClientResponseException responseException
-                    ? responseException.getStatusCode().value() : null;
-            var requestHash = canonicalizer.hash(sanitizedBody);
-            var errorResponse = exception instanceof RestClientResponseException responseException
-                    ? sanitizer.sanitize(objectMapper.getNodeFactory().textNode(
-                    responseException.getResponseBodyAsString())) : objectMapper.createObjectNode();
-            var responseHash = exception instanceof RestClientResponseException responseException
-                    ? canonicalizer.hashText(responseException.getResponseBodyAsString()) : null;
-            var trace = trace(callId, request, "FAILED", httpStatus, startedAt, finishedAt,
-                    sanitizedBody, errorResponse, requestHash, responseHash,
-                    exception.getClass().getSimpleName(), safeError(exception.getMessage()));
-            throw new RecognitionModelClient.RecognitionCallException(
-                    "Global semantic recognition failed", exception, trace
-            );
+            var startedAt = Instant.now();
+            var callId = UUID.randomUUID();
+            JsonNode response = null;
+            JsonNode structured = null;
+            try {
+                response = restClient.post()
+                        .uri(baseUrl + "/chat/completions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .accept(MediaType.APPLICATION_JSON)
+                        .header("Authorization", "Bearer " + apiKey)
+                        .body(sanitizedBody)
+                        .retrieve()
+                        .body(JsonNode.class);
+                if (response == null) throw new IllegalStateException("Model returned an empty response");
+                var content = response.path("choices").path(0).path("message").path("content").asText("");
+                if (content.isBlank()) throw new IllegalStateException("Model response has no structured content");
+                structured = parseJsonObject(content);
+                var validated = protocol.validate(structured, request.structureSummary());
+                var compiled = compiler.compile(validated, request.structureSummary());
+                var finishedAt = Instant.now();
+                var responseHash = canonicalizer.hash(response);
+                traces.add(trace(callId, request, attempt, phase, parentCallId,
+                        "SUCCEEDED", 200, startedAt, finishedAt, sanitizedBody,
+                        successAuditResponse(response, structured, validated),
+                        requestHash, responseHash, "", ""));
+                return new RecognitionBatch(
+                        compiled.suggestions(), compiled.qualityIssues(), "openai-compatible", model,
+                        PROMPT_VERSION, requestHash, responseHash, null, traces
+                );
+            } catch (Exception exception) {
+                var finishedAt = Instant.now();
+                var httpStatus = response != null ? 200
+                        : exception instanceof RestClientResponseException responseException
+                        ? responseException.getStatusCode().value() : null;
+                var auditedResponse = response != null ? sanitizer.sanitize(response)
+                        : exception instanceof RestClientResponseException responseException
+                        ? sanitizer.sanitize(objectMapper.getNodeFactory().textNode(
+                        responseException.getResponseBodyAsString())) : objectMapper.createObjectNode();
+                var responseHash = response != null ? canonicalizer.hash(response)
+                        : exception instanceof RestClientResponseException responseException
+                        ? canonicalizer.hashText(responseException.getResponseBodyAsString()) : null;
+                traces.add(trace(callId, request, attempt, phase, parentCallId,
+                        "FAILED", httpStatus, startedAt, finishedAt, sanitizedBody, auditedResponse,
+                        requestHash, responseHash, exception.getClass().getSimpleName(),
+                        safeError(exception.getMessage())));
+                if (attempt == 1 && structured != null && isRepairableReferenceViolation(exception)) {
+                    invalidStructuredResponse = structured.deepCopy();
+                    validationError = safeError(exception.getMessage());
+                    parentCallId = callId;
+                    continue;
+                }
+                throw new RecognitionModelClient.RecognitionCallException(
+                        "Global semantic recognition failed", exception, traces
+                );
+            }
         }
+        throw new IllegalStateException("Global semantic recognition attempts exhausted");
     }
 
     ObjectNode validateResponse(JsonNode response, JsonNode physicalFacts) {
@@ -152,6 +176,17 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
         return body;
     }
 
+    private ObjectNode repairRequestBody(
+            RecognitionRequest request, JsonNode invalidResponse, String validationError
+    ) {
+        var body = requestBody(request);
+        var messages = objectMapper.createArrayNode();
+        messages.add(message("system", systemPrompt()));
+        messages.add(message("user", buildRepairPrompt(request, invalidResponse, validationError)));
+        body.set("messages", messages);
+        return body;
+    }
+
     private String buildPrompt(RecognitionRequest request) {
         try {
             return "识别协议版本：1\n"
@@ -163,6 +198,22 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
                     + objectMapper.writeValueAsString(request.structureSummary());
         } catch (Exception exception) {
             throw new IllegalArgumentException("Unable to build recognition prompt", exception);
+        }
+    }
+
+    private String buildRepairPrompt(
+            RecognitionRequest request, JsonNode invalidResponse, String validationError
+    ) {
+        try {
+            return "上一份响应没有通过临时标识交叉引用校验。只修正该协议错误，不改变业务语义。\n"
+                    + "校验错误：" + safeError(validationError) + "\n"
+                    + "所有 blockTemporaryId、temporaryBlockRef、temporaryRelationRef 和 temporaryTableRef "
+                    + "只能引用同一响应对应数组中已声明的 temporaryId；没有所属对象时必须使用空字符串。\n"
+                    + "不得删除业务内容、增加物理坐标或返回协议外字段。请返回一份完整的修正后 JSON。\n"
+                    + "原始物理事实：\n" + objectMapper.writeValueAsString(request.structureSummary()) + "\n"
+                    + "未通过校验的响应：\n" + objectMapper.writeValueAsString(invalidResponse);
+        } catch (Exception exception) {
+            throw new IllegalArgumentException("Unable to build protocol repair prompt", exception);
         }
     }
 
@@ -186,24 +237,43 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
                 操作说明、文档标题、提醒、签字提示和静态流程要保留在 semanticAnnotations/businessBlocks 中，但除非确有可填写位置，不得生成 fieldRelations。隐藏的字段字典、规范说明和原始备份工作表应按辅助内容理解，不能当成普通客户业务表。
 
                 LAYOUT_BLANK 不需要输出，版式空白已由后端保留。temporaryId、temporaryRelationRef、temporaryBlockRef 和 temporaryTableRef 只用于本次响应内关联。
+                blockTemporaryId、temporaryBlockRef、temporaryRelationRef 和 temporaryTableRef 只能引用当前响应对应数组中已声明的 temporaryId；没有所属对象时必须返回空字符串。
                 JSON Schema 中无值的可选字符串必须返回空字符串，不能删除属性或返回额外属性。
                 """;
     }
 
     private RecognitionModelClient.CallTrace trace(
-            java.util.UUID callId, RecognitionRequest request, String status, Integer httpStatus,
+            UUID callId, RecognitionRequest request, int attempt, String phase, UUID parentCallId,
+            String status, Integer httpStatus,
             Instant startedAt, Instant finishedAt, JsonNode requestPayload, JsonNode responsePayload,
             String requestHash, String responseHash, String errorType, String errorMessage
     ) {
         var usage = responsePayload.path("usage");
         return new RecognitionModelClient.CallTrace(
-                callId, request.regionId(), 1, "openai-compatible", model, PROMPT_VERSION,
+                callId, request.regionId(), attempt, "openai-compatible", model, PROMPT_VERSION,
                 status, httpStatus, startedAt, finishedAt,
                 Math.max(0, Duration.between(startedAt, finishedAt).toMillis()),
                 usage.path("prompt_tokens").asInt(0), usage.path("completion_tokens").asInt(0),
                 usage.path("total_tokens").asInt(0), requestPayload.deepCopy(), responsePayload.deepCopy(),
-                requestHash, responseHash, errorType, errorMessage, request.callPhase(), null
+                requestHash, responseHash, errorType, errorMessage, phase, parentCallId
         );
+    }
+
+    private boolean isRepairableReferenceViolation(Exception exception) {
+        return exception instanceof GlobalSemanticRecognitionProtocol.ProtocolViolationException
+                && exception.getMessage() != null
+                && exception.getMessage().contains("引用了不存在的临时标识");
+    }
+
+    private JsonNode successAuditResponse(
+            JsonNode response, JsonNode structured, ObjectNode validated
+    ) {
+        var audited = (ObjectNode) sanitizer.sanitize(response);
+        if (!structured.equals(validated)) {
+            audited.put("protocolNormalized", true);
+            audited.set("validatedSemanticResponse", sanitizer.sanitize(validated));
+        }
+        return audited;
     }
 
     private ObjectNode message(String role, String content) {

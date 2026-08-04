@@ -92,6 +92,26 @@ const handlers = {
 };
 
 describe('RecognitionReviewPanel', () => {
+  it('识别失败时说明工作簿和原有字段仍被保留', () => {
+    render(
+      <RecognitionReviewPanel
+        review={{
+          ...review,
+          runStatus: 'FAILED',
+          items: [],
+          groups: [],
+          summary: { ...review.summary, total: 0, confirmed: 0, pending: 0, lowConfidence: 0 },
+        }}
+        editable
+        {...handlers}
+      />,
+    );
+
+    expect(screen.getByText('智能识别未完成')).toBeInTheDocument();
+    expect(screen.getByText('工作簿内容和原有字段已保留，可在上方重新识别整份工作簿。'))
+      .toBeInTheDocument();
+  });
+
   it('默认只显示紧凑行，并仅展开当前项', () => {
     const { rerender } = render(
       <RecognitionReviewPanel review={review} editable {...handlers} />,

@@ -594,7 +594,11 @@ export function TemplateWorkspacePage() {
       if (latest.result.initialEditorSnapshot) {
         setSnapshot(latest.result.initialEditorSnapshot);
       }
-      void message.success('重新识别完成，请查看识别结果并保存草稿');
+      if (review.runStatus === 'FAILED') {
+        void message.warning('智能识别未完成，工作簿和原有字段已保留，可稍后重试');
+      } else {
+        void message.success('重新识别完成，请查看识别结果并保存草稿');
+      }
     } catch (error) {
       void message.error(error instanceof Error ? error.message : '重新识别失败');
     } finally {
@@ -1178,7 +1182,9 @@ function RecognitionStatusBar({
   onRestart: () => void;
 }) {
   const summary = review?.summary;
-  const tone = (summary?.conflict ?? 0) > 0 || (summary?.blockingIssueCount ?? 0) > 0
+  const recognitionFailed = review?.runStatus === 'FAILED';
+  const tone = recognitionFailed ? 'pending'
+    : (summary?.conflict ?? 0) > 0 || (summary?.blockingIssueCount ?? 0) > 0
     ? 'conflict'
     : (summary?.pending ?? 0) > 0
       ? 'pending'
@@ -1192,12 +1198,15 @@ function RecognitionStatusBar({
         </span>
         <strong>
           {busy ? '正在重新识别工作簿'
-            : tone === 'conflict' ? '识别结果存在冲突'
+            : recognitionFailed ? '智能识别未完成'
+              : tone === 'conflict' ? '识别结果存在冲突'
               : tone === 'complete' ? 'AI 识别已完成'
                 : review?.recognitionRunId ? 'AI 识别待确认' : '尚未生成识别结果'}
         </strong>
         {busy && job ? (
           <span>{recognitionStageLabel(job.currentStage)} · {job.progress}%</span>
+        ) : recognitionFailed ? (
+          <span>工作簿和原有字段已保留，可重新识别</span>
         ) : tone === 'complete' ? (
           <span>已完成 {summary?.confirmed ?? summary?.total ?? 0} 项识别结果处理</span>
         ) : (

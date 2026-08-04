@@ -240,7 +240,9 @@ public class TemplateImportService {
                                     requestedSheetId, requestedAddress)
                                     : workingParsed.structureSummary()
                     ));
-                    if (batch.callTrace() != null) repository.saveRecognitionCall(recognitionRunId, batch.callTrace());
+                    for (var callTrace : batch.callTraces()) {
+                        repository.saveRecognitionCall(recognitionRunId, callTrace);
+                    }
                     for (var qualityIssue : batch.qualityIssues()) {
                         modelQualityIssues.add(withCall(
                                 qualityIssue, batch.callTrace() == null ? null : batch.callTrace().callId()
@@ -261,7 +263,9 @@ public class TemplateImportService {
                     }
                 } catch (RecognitionModelClient.RecognitionCallException exception) {
                     failedCalls++;
-                    repository.saveRecognitionCall(recognitionRunId, exception.trace());
+                    for (var callTrace : exception.traces()) {
+                        repository.saveRecognitionCall(recognitionRunId, callTrace);
+                    }
                 } catch (Exception exception) {
                     failedCalls++;
                     var now = java.time.Instant.now();

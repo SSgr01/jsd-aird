@@ -66,29 +66,60 @@ final class GlobalSemanticRecognitionProtocol {
 
     ObjectNode validate(JsonNode response, JsonNode physicalFacts) {
         requireObject(response, "响应根节点");
-        exactKeys(response, "响应根节点", Set.of(
+        var candidate = (ObjectNode) response.deepCopy();
+        exactKeys(candidate, "响应根节点", Set.of(
                 "recognitionProtocolVersion", "semanticAnnotations", "businessBlocks",
                 "fieldRelations", "tables", "qualityIssues"
         ));
-        require(response.path("recognitionProtocolVersion").isIntegralNumber()
-                        && response.path("recognitionProtocolVersion").asInt() == VERSION,
+        require(candidate.path("recognitionProtocolVersion").isIntegralNumber()
+                        && candidate.path("recognitionProtocolVersion").asInt() == VERSION,
                 "recognitionProtocolVersion 必须为 1");
         for (var key : List.of("semanticAnnotations", "businessBlocks", "fieldRelations", "tables", "qualityIssues")) {
-            require(response.path(key).isArray(), key + " 必须是数组");
+            require(candidate.path(key).isArray(), key + " 必须是数组");
         }
 
         var sheets = sheets(physicalFacts);
-        var blockIds = uniqueIds(response.path("businessBlocks"), "businessBlocks");
-        var relationIds = uniqueIds(response.path("fieldRelations"), "fieldRelations");
-        var tableIds = uniqueIds(response.path("tables"), "tables");
-        uniqueIds(response.path("qualityIssues"), "qualityIssues");
+        var blockIds = uniqueIds(candidate.path("businessBlocks"), "businessBlocks");
+        repairUniquelyContainedRelationBlocks(candidate, blockIds);
+        var relationIds = uniqueIds(candidate.path("fieldRelations"), "fieldRelations");
+        var tableIds = uniqueIds(candidate.path("tables"), "tables");
+        uniqueIds(candidate.path("qualityIssues"), "qualityIssues");
 
-        validateBlocks(response.path("businessBlocks"), sheets, blockIds);
-        validateRelations(response.path("fieldRelations"), sheets, blockIds);
-        validateTables(response.path("tables"), sheets, blockIds);
-        validateAnnotations(response.path("semanticAnnotations"), sheets, blockIds, relationIds, tableIds);
-        validateQualityIssues(response.path("qualityIssues"), sheets, blockIds);
-        return (ObjectNode) response.deepCopy();
+        validateBlocks(candidate.path("businessBlocks"), sheets, blockIds);
+        validateRelations(candidate.path("fieldRelations"), sheets, blockIds);
+        validateTables(candidate.path("tables"), sheets, blockIds);
+        validateAnnotations(candidate.path("semanticAnnotations"), sheets, blockIds, relationIds, tableIds);
+        validateQualityIssues(candidate.path("qualityIssues"), sheets, blockIds);
+        return candidate;
+    }
+
+    /**
+     * Repairs only a missing relation-to-block reference that is physically unambiguous.
+     * Any absent, nested or otherwise ambiguous match is left untouched and rejected by
+     * the normal strict reference validation below.
+     */
+    private void repairUniquelyContainedRelationBlocks(ObjectNode response, Set<String> blockIds) {
+        var blocks = response.path("businessBlocks");
+        for (var relation : response.withArray("fieldRelations")) {
+            if (!(relation instanceof ObjectNode object)) continue;
+            var reference = object.path("blockTemporaryId").asText("");
+            if (reference.isBlank() || blockIds.contains(reference)) continue;
+            var sheetId = object.path("sheetId").asText("");
+            var labelRange = bounds(object.path("labelRange").asText(""));
+            var valueRange = bounds(object.path("valueRange").asText(""));
+            if (labelRange == null || valueRange == null) continue;
+            String match = null;
+            var matches = 0;
+            for (var block : blocks) {
+                if (!sheetId.equals(block.path("sheetId").asText(""))) continue;
+                var blockRange = bounds(block.path("range").asText(""));
+                if (blockRange == null) continue;
+                if (!blockRange.contains(labelRange) || !blockRange.contains(valueRange)) continue;
+                match = block.path("temporaryId").asText("");
+                matches++;
+            }
+            if (matches == 1) object.put("blockTemporaryId", match);
+        }
     }
 
     private void validateAnnotations(

@@ -7,7 +7,7 @@ import {
   ReloadOutlined,
   WarningOutlined,
 } from '@ant-design/icons';
-import { Button, Empty, Popconfirm, Select } from 'antd';
+import { Alert, Button, Empty, Popconfirm, Select } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type {
@@ -94,6 +94,23 @@ export function RecognitionReviewPanel({
     );
   }
 
+  if (review.runStatus === 'FAILED' && !review.items.length && !review.qualityIssues.length) {
+    return (
+      <section className="recognition-review-pane" role="tabpanel" aria-label="识别确认">
+        <Alert
+          type="warning"
+          showIcon
+          message="智能识别未完成"
+          description="工作簿内容和原有字段已保留，可在上方重新识别整份工作簿。"
+        />
+        <Empty
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+          description="本次没有生成可确认的识别结果"
+        />
+      </section>
+    );
+  }
+
   const filterCounts: Record<ReviewFilter, number> = {
     ALL: review.items.length,
     PENDING: review.summary.pending,
@@ -105,6 +122,14 @@ export function RecognitionReviewPanel({
 
   return (
     <section className="recognition-review-pane" role="tabpanel" aria-label="识别确认">
+      {review.runStatus === 'FAILED' && (
+        <Alert
+          type="warning"
+          showIcon
+          message="智能识别未完成"
+          description="工作簿内容和已有识别结果已保留，可稍后重新识别。"
+        />
+      )}
       <div className="recognition-filter-toolbar">
         <div className="recognition-status-filter" aria-label="识别状态筛选">
           {FILTERS.map((item) => (

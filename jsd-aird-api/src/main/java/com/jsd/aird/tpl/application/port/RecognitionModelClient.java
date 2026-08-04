@@ -43,29 +43,51 @@ public interface RecognitionModelClient {
             String promptVersion,
             String requestHash,
             String responseHash,
-            CallTrace callTrace
+            CallTrace callTrace,
+            List<CallTrace> callTraces
     ) {
+        public RecognitionBatch {
+            suggestions = suggestions == null ? List.of() : List.copyOf(suggestions);
+            qualityIssues = qualityIssues == null ? List.of() : List.copyOf(qualityIssues);
+            callTraces = callTraces == null ? callTrace == null ? List.of() : List.of(callTrace)
+                    : List.copyOf(callTraces);
+            if (callTrace == null && !callTraces.isEmpty()) {
+                callTrace = callTraces.get(callTraces.size() - 1);
+            }
+        }
+
+        public RecognitionBatch(
+                List<ModelSuggestion> suggestions, List<QualityIssueSuggestion> qualityIssues,
+                String provider, String model, String promptVersion,
+                String requestHash, String responseHash, CallTrace callTrace
+        ) {
+            this(suggestions, qualityIssues, provider, model, promptVersion,
+                    requestHash, responseHash, callTrace, null);
+        }
+
         public RecognitionBatch(
                 List<ModelSuggestion> suggestions, List<QualityIssueSuggestion> qualityIssues,
                 String provider, String model, String promptVersion,
                 String requestHash, String responseHash
         ) {
             this(suggestions, qualityIssues, provider, model, promptVersion,
-                    requestHash, responseHash, null);
+                    requestHash, responseHash, null, null);
         }
 
         public RecognitionBatch(
                 List<ModelSuggestion> suggestions, String provider, String model,
                 String promptVersion, String requestHash, String responseHash, CallTrace callTrace
         ) {
-            this(suggestions, List.of(), provider, model, promptVersion, requestHash, responseHash, callTrace);
+            this(suggestions, List.of(), provider, model, promptVersion,
+                    requestHash, responseHash, callTrace, null);
         }
 
         public RecognitionBatch(
                 List<ModelSuggestion> suggestions, String provider, String model,
                 String promptVersion, String requestHash, String responseHash
         ) {
-            this(suggestions, List.of(), provider, model, promptVersion, requestHash, responseHash, null);
+            this(suggestions, List.of(), provider, model, promptVersion,
+                    requestHash, responseHash, null, null);
         }
     }
 
@@ -136,15 +158,23 @@ public interface RecognitionModelClient {
     }
 
     final class RecognitionCallException extends RuntimeException {
-        private final CallTrace trace;
+        private final List<CallTrace> traces;
 
         public RecognitionCallException(String message, Throwable cause, CallTrace trace) {
+            this(message, cause, trace == null ? List.of() : List.of(trace));
+        }
+
+        public RecognitionCallException(String message, Throwable cause, List<CallTrace> traces) {
             super(message, cause);
-            this.trace = trace;
+            this.traces = traces == null ? List.of() : List.copyOf(traces);
         }
 
         public CallTrace trace() {
-            return trace;
+            return traces.isEmpty() ? null : traces.get(traces.size() - 1);
+        }
+
+        public List<CallTrace> traces() {
+            return traces;
         }
     }
 }

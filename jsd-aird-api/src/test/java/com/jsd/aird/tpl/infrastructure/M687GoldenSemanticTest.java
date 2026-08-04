@@ -51,7 +51,7 @@ class M687GoldenSemanticTest {
                     {"temporaryId":"b10","sheetId":"sheet-2","range":"D3:E6","type":"ROW_TABLE","businessName":"预混配方明细","groupNameSuggestion":"配方明细"}
                   ],
                   "fieldRelations":[
-                    {"temporaryId":"r1","sheetId":"sheet-1","labelRange":"A5","valueRange":"B5:D5","relationType":"LABEL_VALUE","businessName":"产品名称","blockTemporaryId":"b2","groupNameSuggestion":"基础信息","valueType":"string","required":true,"editability":"EDITABLE","valueSource":"USER_INPUT"}
+                    {"temporaryId":"r1","sheetId":"sheet-1","labelRange":"A5","valueRange":"B5:D5","relationType":"LABEL_VALUE","businessName":"产品名称","blockTemporaryId":"b2","groupNameSuggestion":"productName","valueType":"string","required":true,"editability":"EDITABLE","valueSource":"USER_INPUT"}
                   ],
                   "tables":[
                     {"temporaryId":"t1","sheetId":"sheet-1","range":"A7:I22","tableKind":"ROW_TABLE","businessName":"配方明细","blockTemporaryId":"b3","groupNameSuggestion":"配方明细","headerRange":"A7:I8","dataRange":"A9:I21","totalRange":"A22:I22","semanticMode":"ROW_RECORDS","rowHeaderRange":"","columnHeaderRange":"","crossDataRange":"","headerTree":[],"columns":[
@@ -96,6 +96,15 @@ class M687GoldenSemanticTest {
                 .doesNotContainAnyElementsOf(Set.of(
                         "UV树脂", "M-687 NT", "UA-306", "USP-130", "USP-039", "USP-096"
                 ));
+        assertThat(compiled.suggestions().stream().skip(1)
+                .map(suggestion -> suggestion.payload().path("groupName").asText()))
+                .contains("基础信息", "配方明细").doesNotContain("formulaDetailTable", "category");
+        var product = compiled.suggestions().stream()
+                .filter(item -> "产品名称".equals(item.payload().path("fieldName").asText()))
+                .findFirst().orElseThrow().payload();
+        assertThat(product.path("groupName").asText()).isEqualTo("基础信息");
+        assertThat(product.path("fieldCode").asText()).doesNotContain("BASIC_INFORMATION");
+        assertThat(product.path("dataPath").asText()).doesNotContain("basicInformation");
         var mainTable = compiled.suggestions().stream()
                 .filter(item -> "配方明细".equals(item.payload().path("fieldName").asText()))
                 .findFirst().orElseThrow().payload();

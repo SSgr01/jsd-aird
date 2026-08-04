@@ -74,6 +74,10 @@ final class GlobalSemanticRecognitionProtocol {
     }
 
     ObjectNode validate(JsonNode response, JsonNode physicalFacts) {
+        return validateWithDiagnostics(response, physicalFacts).response();
+    }
+
+    ValidationResult validateWithDiagnostics(JsonNode response, JsonNode physicalFacts) {
         requireObject(response, "响应根节点");
         var candidate = (ObjectNode) response.deepCopy();
         exactKeys(candidate, "响应根节点", Set.of(
@@ -89,6 +93,9 @@ final class GlobalSemanticRecognitionProtocol {
 
         var sheets = sheets(physicalFacts);
         var blockIds = uniqueIds(candidate.path("businessBlocks"), "businessBlocks");
+        var recoveredBlocks = new RecoverySummary();
+        normalizeOverlappingBlocks(candidate, recoveredBlocks);
+        blockIds = uniqueIds(candidate.path("businessBlocks"), "businessBlocks");
         var blocks = validateBlocks(candidate.path("businessBlocks"), sheets, blockIds);
         repairUniquelyContainedRelationBlocks(candidate, blockIds);
         repairUniquelyContainedTableBlocks(candidate, blockIds);
@@ -117,8 +124,125 @@ final class GlobalSemanticRecognitionProtocol {
         appendRecoveryIssue(validIssues, rejectedTables, "TABLE_STRUCTURE_UNCLEAR", "部分表格结构需要核对",
                 "系统已忽略结构范围不一致的表格候选，其他有效字段和表格仍然保留。",
                 "请核对该区域的表头、数据区和合计范围。", sheets, blockIds);
+        appendRecoveryIssue(validIssues, recoveredBlocks, "BUSINESS_BLOCK_UNCLEAR", "部分业务区域需要核对",
+                "系统已按较大业务区域恢复可识别内容，无法确定归属的内容未写入正式字段。",
+                "请在识别确认中补充未识别字段。", sheets, blockIds);
         candidate.set("qualityIssues", validIssues);
-        return candidate;
+        return new ValidationResult(candidate, new RecoveryDiagnostics(
+                candidate.path("fieldRelations").size() + rejectedRelations.count,
+                candidate.path("fieldRelations").size(), rejectedRelations.count,
+                candidate.path("tables").size() + rejectedTables.count,
+                candidate.path("tables").size(), rejectedTables.count,
+                recoveredBlocks.count
+        ));
+    }
+
+    private void normalizeOverlappingBlocks(ObjectNode response, RecoverySummary recovery) {
+        var blocks = response.withArray("businessBlocks");
+        var removed = new HashMap<String, String>();
+        boolean changed;
+        do {
+            changed = false;
+            for (int left = 0; left < blocks.size() && !changed; left++) {
+                var first = blocks.get(left);
+                var firstRange = bounds(first.path("range").asText(""));
+                if (firstRange == null) continue;
+                for (int right = left + 1; right < blocks.size(); right++) {
+                    var second = blocks.get(right);
+                    if (!first.path("sheetId").asText().equals(second.path("sheetId").asText())
+                            || !first.path("parentTemporaryId").asText("")
+                            .equals(second.path("parentTemporaryId").asText(""))) continue;
+                    var secondRange = bounds(second.path("range").asText(""));
+                    if (secondRange == null || !firstRange.overlaps(secondRange)
+                            || firstRange.contains(secondRange) || secondRange.contains(firstRange)) continue;
+                    var keep = firstRange.area() >= secondRange.area() ? first : second;
+                    var drop = keep == first ? second : first;
+                    var keepId = keep.path("temporaryId").asText("");
+                    var dropId = drop.path("temporaryId").asText("");
+                    if (keepId.isBlank() || dropId.isBlank()) continue;
+                    removed.put(dropId, keepId);
+                    recovery.reject(drop, "range", Map.of(), Set.of());
+                    blocks.remove(drop == first ? left : right);
+                    changed = true;
+                    break;
+                }
+            }
+        } while (changed);
+        if (removed.isEmpty()) return;
+
+        for (var block : blocks) {
+            if (!(block instanceof ObjectNode object)) continue;
+            var parent = object.path("parentTemporaryId").asText("");
+            if (removed.containsKey(parent)) object.put("parentTemporaryId", resolveReplacement(parent, removed));
+        }
+        migrateRemovedBlockReferences(response, removed, blocks);
+    }
+
+    private void migrateRemovedBlockReferences(
+            ObjectNode response, Map<String, String> removed, ArrayNode blocks
+    ) {
+        for (var relation : response.withArray("fieldRelations")) {
+            if (!(relation instanceof ObjectNode object)) continue;
+            migrateRelationBlock(object, removed, blocks);
+        }
+        for (var table : response.withArray("tables")) {
+            if (!(table instanceof ObjectNode object)) continue;
+            var current = object.path("blockTemporaryId").asText("");
+            if (!removed.containsKey(current)) continue;
+            var replacement = findContainingBlock(object.path("sheetId").asText(""),
+                    bounds(object.path("range").asText("")), resolveReplacement(current, removed), blocks);
+            object.put("blockTemporaryId", replacement);
+        }
+        for (var annotation : response.withArray("semanticAnnotations")) {
+            if (!(annotation instanceof ObjectNode object)) continue;
+            var current = object.path("temporaryBlockRef").asText("");
+            if (!removed.containsKey(current)) continue;
+            var replacement = findContainingBlock(object.path("sheetId").asText(""),
+                    bounds(object.path("range").asText("")), resolveReplacement(current, removed), blocks);
+            object.put("temporaryBlockRef", replacement);
+        }
+    }
+
+    private void migrateRelationBlock(ObjectNode relation, Map<String, String> removed, ArrayNode blocks) {
+        var current = relation.path("blockTemporaryId").asText("");
+        if (!removed.containsKey(current)) return;
+        var label = bounds(relation.path("labelRange").asText(""));
+        var value = bounds(relation.path("valueRange").asText(""));
+        var replacement = findContainingBlock(relation.path("sheetId").asText(""), label,
+                resolveReplacement(current, removed), blocks);
+        if (replacement.isBlank() || value == null) {
+            relation.put("blockTemporaryId", "");
+            return;
+        }
+        JsonNode block = null;
+        for (var item : blocks) {
+            if (replacement.equals(item.path("temporaryId").asText(""))) {
+                block = item;
+                break;
+            }
+        }
+        if (block == null || !bounds(block.path("range").asText("")).contains(value)) {
+            relation.put("blockTemporaryId", "");
+        } else {
+            relation.put("blockTemporaryId", replacement);
+        }
+    }
+
+    private String findContainingBlock(String sheetId, Range range, String preferredId, ArrayNode blocks) {
+        if (range == null) return "";
+        for (var block : blocks) {
+            if (preferredId.equals(block.path("temporaryId").asText(""))
+                    && sheetId.equals(block.path("sheetId").asText(""))
+                    && bounds(block.path("range").asText("")).contains(range)) return preferredId;
+        }
+        return "";
+    }
+
+    private String resolveReplacement(String id, Map<String, String> removed) {
+        var current = id;
+        var visited = new HashSet<String>();
+        while (removed.containsKey(current) && visited.add(current)) current = removed.get(current);
+        return current;
     }
 
     /**
@@ -261,9 +385,35 @@ final class GlobalSemanticRecognitionProtocol {
                 result.add(table);
             } catch (ProtocolViolationException exception) {
                 recovery.reject(value, "range", sheets, blockIds);
+                var pending = pendingTable(value, sheets, blockIds, blocks);
+                if (pending != null) result.add(pending);
             }
         }
         return result;
+    }
+
+    private ObjectNode pendingTable(
+            JsonNode value, Map<String, SheetBounds> sheets, Set<String> blockIds,
+            Map<String, JsonNode> blocks
+    ) {
+        if (!(value instanceof ObjectNode source)) return null;
+        var sheetId = source.path("sheetId").asText("");
+        var tableRange = bounds(source.path("range").asText(""));
+        var headerRange = bounds(source.path("headerRange").asText(""));
+        var dataRange = bounds(source.path("dataRange").asText(""));
+        var sheet = sheets.get(sheetId);
+        var block = blocks.get(source.path("blockTemporaryId").asText(""));
+        if (sheet == null || tableRange == null || headerRange == null || dataRange == null
+                || !sheet.bounds().contains(tableRange) || !tableRange.contains(headerRange)
+                || !tableRange.contains(dataRange) || headerRange.overlaps(dataRange)
+                || block == null || !sheetId.equals(block.path("sheetId").asText(""))
+                || !bounds(block.path("range").asText("")).contains(tableRange)) return null;
+        var pending = (ObjectNode) source.deepCopy();
+        pending.withArray("columns").removeAll();
+        pending.put("semanticMode", "UNKNOWN");
+        pending.put("rowHeaderRange", "").put("columnHeaderRange", "").put("crossDataRange", "");
+        pending.withArray("headerTree").removeAll();
+        return pending;
     }
 
     private ArrayNode validAnnotations(
@@ -565,6 +715,9 @@ final class GlobalSemanticRecognitionProtocol {
                 var columnValue = bounds(column.path("valueRange").asText());
                 require(headerRange.contains(columnLabel) && dataRange.contains(columnValue),
                         columnPath + " 的列名必须位于表头、值范围必须位于数据区");
+                require(columnLabel.startColumn() == columnValue.startColumn()
+                                && columnLabel.endColumn() == columnValue.endColumn(),
+                        columnPath + " 的列名与数据区必须垂直对齐");
             }
         }
     }
@@ -738,6 +891,20 @@ final class GlobalSemanticRecognitionProtocol {
         ProtocolViolationException(String message) {
             super("全局语义识别协议校验失败：" + message);
         }
+    }
+
+    record ValidationResult(ObjectNode response, RecoveryDiagnostics diagnostics) {
+    }
+
+    record RecoveryDiagnostics(
+            int relationsReturned,
+            int relationsAccepted,
+            int relationsRejected,
+            int tablesReturned,
+            int tablesAccepted,
+            int tablesRejected,
+            int blocksRecovered
+    ) {
     }
 
     private final class RecoverySummary {

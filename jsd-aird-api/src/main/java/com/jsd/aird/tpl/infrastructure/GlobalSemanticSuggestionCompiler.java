@@ -75,6 +75,9 @@ final class GlobalSemanticSuggestionCompiler {
             var rootTemporaryId = issue.path("rootBlockTemporaryId").asText("");
             var rootBlockId = blocks.containsKey(rootTemporaryId)
                     ? blocks.get(rootTemporaryId).path("blockId").asText() : "sheet-root";
+            var evidence = issue.path("temporaryId").asText("").startsWith("protocol-recovery-")
+                    ? objectMapper.createArrayNode().add(objectMapper.createObjectNode().put("internalRecovery", true))
+                    : objectMapper.createArrayNode();
             qualityIssues.add(new RecognitionModelClient.QualityIssueSuggestion(
                     issue.path("category").asText(), issue.path("severity").asText(),
                     issue.path("sheetId").asText(), sheetNames.getOrDefault(
@@ -82,7 +85,7 @@ final class GlobalSemanticSuggestionCompiler {
                     issue.path("range").asText(), issue.path("title").asText(),
                     issue.path("description").asText(), issue.path("businessImpact").asText(),
                     1, false, objectMapper.createObjectNode(), objectMapper.createObjectNode(),
-                    objectMapper.createArrayNode(), "DETECTED", rootBlockId, null
+                    evidence, "DETECTED", rootBlockId, null
             ));
         }
         return new Compiled(List.copyOf(suggestions), List.copyOf(qualityIssues));
@@ -109,8 +112,8 @@ final class GlobalSemanticSuggestionCompiler {
                 .put("fieldId", fieldId.toString())
                 .put("bindingId", bindingId.toString())
                 .put("temporaryRelationId", source.path("temporaryId").asText())
-                .put("fieldCode", fieldCode(groupCode, "FIELD", relationId))
-                .put("dataPath", dataPath(groupCode, "field", relationId))
+                .put("fieldCode", fieldCode("FIELD", relationId))
+                .put("dataPath", dataPath("field", relationId))
                 .put("fieldName", source.path("businessName").asText())
                 .put("groupName", groupName)
                 .put("valueType", source.path("valueType").asText())
@@ -155,8 +158,8 @@ final class GlobalSemanticSuggestionCompiler {
                 .put("kind", kind).put("relationId", relationId)
                 .put("fieldId", fieldId.toString()).put("bindingId", bindingId.toString())
                 .put("temporaryRelationId", source.path("temporaryId").asText())
-                .put("fieldCode", fieldCode(groupCode, "TABLE", relationId))
-                .put("dataPath", dataPath(groupCode, "table", relationId))
+                .put("fieldCode", fieldCode("TABLE", relationId))
+                .put("dataPath", dataPath("table", relationId))
                 .put("fieldName", source.path("businessName").asText())
                 .put("groupName", groupName).put("valueType", "array")
                 .put("required", false).put("role", "REPEAT_REGION")
@@ -199,6 +202,11 @@ final class GlobalSemanticSuggestionCompiler {
         }
         payload.put("editability", tableEditability).put("valueSource", tableValueSource);
         payload.set("columns", columns);
+        if (columns.isEmpty() || "UNKNOWN".equals(source.path("semanticMode").asText())) {
+            payload.put("candidateOnly", true)
+                    .put("pendingReason", "TABLE_STRUCTURE_UNCLEAR")
+                    .put("reason", "表格范围可定位，但列语义仍需确认");
+        }
         payload.set("tableModel", objectMapper.createObjectNode()
                 .put("headerRange", source.path("headerRange").asText())
                 .put("dataRange", source.path("dataRange").asText())
@@ -238,14 +246,17 @@ final class GlobalSemanticSuggestionCompiler {
                 source.path("sheetId").asText(), source.path("range").asText(),
                 source.path("type").asText(), parent == null ? "" : parent.path("blockId").asText()
         );
-        var suggestedGroup = source.path("groupNameSuggestion").asText("");
+        var suggestedGroup = GroupNameNormalizer.normalizeModelSuggestion(
+                source.path("groupNameSuggestion").asText(""))
+                .orElseGet(() -> GroupNameNormalizer.inferFromBlock(
+                        source.path("type").asText(""), source.path("businessName").asText("")));
         var block = objectMapper.createObjectNode()
                 .put("blockId", blockId).put("temporaryId", temporaryId)
                 .put("sheetId", source.path("sheetId").asText())
                 .put("range", source.path("range").asText())
                 .put("type", source.path("type").asText())
                 .put("businessName", source.path("businessName").asText())
-                .put("groupName", suggestedGroup.isBlank() ? "" : GroupNameNormalizer.normalize(suggestedGroup));
+                .put("groupName", suggestedGroup);
         if (parent != null) block.put("parentBlockId", parent.path("blockId").asText());
         result.put(temporaryId, block);
         return block;
@@ -280,6 +291,7 @@ final class GlobalSemanticSuggestionCompiler {
         payload.put("blockId", block.path("blockId").asText());
         payload.put("parentBlockId", block.path("parentBlockId").asText(""));
         payload.put("blockType", block.path("type").asText());
+        payload.put("blockName", block.path("businessName").asText(""));
         payload.put("regionId", block.path("blockId").asText());
     }
 
@@ -298,6 +310,13 @@ final class GlobalSemanticSuggestionCompiler {
         var valueRange = relation.path("valueRange").asText();
         for (var table : tables) {
             if (!sheetId.equals(table.path("sheetId").asText())) continue;
+            var tableHeader = rangeBounds(table.path("headerRange").asText());
+            var tableData = rangeBounds(table.path("dataRange").asText());
+            if (tableHeader != null && tableData != null
+                    && contains(tableHeader, rangeBounds(labelRange))
+                    && contains(tableData, rangeBounds(valueRange))) {
+                return false;
+            }
             for (var column : table.path("columns")) {
                 if (labelRange.equals(column.path("labelRange").asText())
                         && valueRange.equals(column.path("valueRange").asText())) {
@@ -308,21 +327,38 @@ final class GlobalSemanticSuggestionCompiler {
         return true;
     }
 
+    private int[] rangeBounds(String range) {
+        if (range == null || range.isBlank()) return null;
+        var parts = range.toUpperCase(Locale.ROOT).split(":", 2);
+        var start = cellBounds(parts[0]);
+        var end = cellBounds(parts.length == 1 ? parts[0] : parts[1]);
+        if (start == null || end == null) return null;
+        return new int[]{Math.min(start[0], end[0]), Math.min(start[1], end[1]),
+                Math.max(start[0], end[0]), Math.max(start[1], end[1])};
+    }
+
+    private int[] cellBounds(String cell) {
+        var match = java.util.regex.Pattern.compile("^([A-Z]+)([0-9]+)$").matcher(cell);
+        if (!match.matches()) return null;
+        var column = 0;
+        for (var letter : match.group(1).toCharArray()) column = column * 26 + letter - 'A' + 1;
+        return new int[]{column, Integer.parseInt(match.group(2))};
+    }
+
+    private boolean contains(int[] outer, int[] inner) {
+        return outer != null && inner != null && outer[0] <= inner[0] && outer[1] <= inner[1]
+                && outer[2] >= inner[2] && outer[3] >= inner[3];
+    }
+
     private String groupName(JsonNode value, Map<String, ObjectNode> blocks) {
-        var suggested = value.path("groupNameSuggestion").asText("");
-        if (!suggested.isBlank()) return GroupNameNormalizer.normalize(suggested);
         var block = blocks.get(value.path("blockTemporaryId").asText(""));
-        if (block != null && !block.path("groupName").asText("").isBlank()) {
-            return GroupNameNormalizer.normalize(block.path("groupName").asText());
-        }
         if (block != null) {
-            return switch (block.path("type").asText()) {
-                case "SIGNATURE_BLOCK", "CONFIRMATION_BLOCK" -> "审核信息";
-                case "ROW_TABLE", "MATRIX", "LOOKUP_TABLE" -> "明细信息";
-                default -> GroupNameNormalizer.BASIC_INFORMATION;
-            };
+            var blockGroup = GroupNameNormalizer.normalizeModelSuggestion(block.path("groupName").asText(""));
+            return blockGroup.orElseGet(() -> GroupNameNormalizer.inferFromBlock(
+                    block.path("type").asText(""), block.path("businessName").asText("")));
         }
-        return GroupNameNormalizer.BASIC_INFORMATION;
+        return GroupNameNormalizer.normalizeModelSuggestion(value.path("groupNameSuggestion").asText(""))
+                .orElse(GroupNameNormalizer.BASIC_INFORMATION);
     }
 
     private Map<String, String> sheetNames(JsonNode physicalFacts) {
@@ -338,25 +374,14 @@ final class GlobalSemanticSuggestionCompiler {
                 || "UNKNOWN".equals(value.path("valueSource").asText()) ? 0.55 : 0.9;
     }
 
-    private String fieldCode(String groupCode, String type, String relationId) {
-        return "AUTO." + groupCode + "." + type + "_"
-                + RecognitionIdentity.shortHash(relationId, 8).toUpperCase(Locale.ROOT);
+    private String fieldCode(String type, String relationId) {
+        return "AUTO." + type + "_"
+                + RecognitionIdentity.shortHash(relationId, 12).toUpperCase(Locale.ROOT);
     }
 
-    private String dataPath(String groupCode, String type, String relationId) {
-        var camel = toCamel(groupCode);
-        return "/recognized/" + camel + "/" + type + "_"
+    private String dataPath(String type, String relationId) {
+        return "/recognized/" + type.toLowerCase(Locale.ROOT) + "_"
                 + RecognitionIdentity.shortHash(relationId, 12);
-    }
-
-    private String toCamel(String value) {
-        var parts = value.toLowerCase(Locale.ROOT).split("_+");
-        var result = new StringBuilder(parts.length == 0 ? "other" : parts[0]);
-        for (int index = 1; index < parts.length; index++) {
-            if (!parts[index].isBlank()) result.append(Character.toUpperCase(parts[index].charAt(0)))
-                    .append(parts[index].substring(1));
-        }
-        return result.toString();
     }
 
     private int row(String range) {

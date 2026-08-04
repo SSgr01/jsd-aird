@@ -52,7 +52,10 @@ class MatrixSemanticProtocolTest {
         ((com.fasterxml.jackson.databind.node.ObjectNode) response.path("tables").get(0))
                 .put("rowHeaderRange", "B2:B5");
         var recovered = protocol.validate(response, facts);
-        assertThat(recovered.path("tables")).isEmpty();
+        assertThat(recovered.path("tables")).singleElement().satisfies(table -> {
+            assertThat(table.path("semanticMode").asText()).isEqualTo("UNKNOWN");
+            assertThat(table.path("columns")).isEmpty();
+        });
         assertThat(recovered.path("qualityIssues")).singleElement().satisfies(issue ->
                 assertThat(issue.path("category").asText()).isEqualTo("TABLE_STRUCTURE_UNCLEAR"));
     }

@@ -73,3 +73,5 @@ app:
     response-format: ${JSD_AIRD_MODEL_RESPONSE_FORMAT:json_schema}
   recognition:
     audit-cleanup-cron: ${JSD_AIRD_RECOGNITION_AUDIT_CLEANUP_CRON:0 30 2 * * *}
+    console-log-summary: ${JSD_AIRD_RECOGNITION_CONSOLE_LOG_SUMMARY:true}
+    console-log-payload: ${JSD_AIRD_RECOGNITION_CONSOLE_LOG_PAYLOAD:false}

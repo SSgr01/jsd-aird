@@ -20,9 +20,14 @@ import com.jsd.aird.tpl.application.port.WorkbookSnapshotStructureParser;
 import com.jsd.aird.tpl.domain.TemplateFormat;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
 @Service
 public class TemplateImportService {
+
+    private static final Logger log = LoggerFactory.getLogger(TemplateImportService.class);
 
     private final TemplateImportRepository repository;
     private final FileObjectRepository fileRepository;
@@ -197,6 +202,27 @@ public class TemplateImportService {
             String requestedSheetId,
             String requestedAddress
     ) {
+        MDC.put("importJobId", importJobId.toString());
+        try {
+            return recognizeParsedInternal(importJobId, organizationId, format, sourceFileName, parsed,
+                    scope, requestedSheetId, requestedAddress);
+        } finally {
+            MDC.remove("recognitionCallId");
+            MDC.remove("recognitionRunId");
+            MDC.remove("importJobId");
+        }
+    }
+
+    private JsonNode recognizeParsedInternal(
+            UUID importJobId,
+            UUID organizationId,
+            TemplateFormat format,
+            String sourceFileName,
+            OfficeStructureParser.ParseResult parsed,
+            String scope,
+            String requestedSheetId,
+            String requestedAddress
+    ) {
         var issues = new java.util.ArrayList<>(parsed.issues());
         var workingParsed = parsed;
         var structureVersion = workingParsed.structureSummary().path("structureVersion").asInt();
@@ -215,6 +241,11 @@ public class TemplateImportService {
         var modelRegions = modelRegions(
                 workingParsed.structureSummary(), format, scope, requestedSheetId, requestedAddress
         );
+        log.info("workbook_parsed importJobId={} format={} scope={} sheets={} semanticCells={} formulas={} mergedRanges={}",
+                importJobId, format, scope, workingParsed.structureSummary().path("sheets").size(),
+                workingParsed.structureSummary().path("semanticCells").size(),
+                workingParsed.structureSummary().path("formulas").size(),
+                workingParsed.structureSummary().path("mergedRanges").size());
         var recognitionRunId = repository.startRecognitionRun(
                 importJobId, scope, structureVersion,
                 workingParsed.initialEditorSnapshot().path("snapshotFormatVersion").asInt(3),
@@ -225,10 +256,16 @@ public class TemplateImportService {
         var suggestionCount = ruleBatch.suggestions().size();
         var modelStatus = "NOT_CONFIGURED";
         var modelQualityIssues = new java.util.ArrayList<RecognitionModelClient.QualityIssueSuggestion>();
+        var modelCallCount = 0;
+        var succeededCalls = 0;
+        var failedCalls = 0;
+        MDC.put("recognitionRunId", recognitionRunId.toString());
+        log.info("recognition_run_started runId={} importJobId={} format={} scope={} sheets={}",
+                recognitionRunId, importJobId, format, scope,
+                workingParsed.structureSummary().path("sheets").size());
         if (recognitionModelClient.isConfigured() && format == TemplateFormat.XLSX) {
             repository.updateProgress(importJobId, 65, "RECOGNIZING_WORKBOOK_SEMANTICS");
             var modelSuggestions = new java.util.ArrayList<RecognitionModelClient.ModelSuggestion>();
-            var failedCalls = 0;
             var processedRegions = 0;
             for (var region : modelRegions) {
                 try {
@@ -241,6 +278,9 @@ public class TemplateImportService {
                     ));
                     for (var callTrace : batch.callTraces()) {
                         repository.saveRecognitionCall(recognitionRunId, callTrace);
+                        modelCallCount++;
+                        if ("SUCCEEDED".equals(callTrace.status())) succeededCalls++;
+                        if (callTrace.callId() != null) MDC.put("recognitionCallId", callTrace.callId().toString());
                     }
                     for (var qualityIssue : batch.qualityIssues()) {
                         modelQualityIssues.add(withCall(
@@ -262,11 +302,14 @@ public class TemplateImportService {
                     }
                 } catch (RecognitionModelClient.RecognitionCallException exception) {
                     failedCalls++;
+                    modelCallCount += exception.traces().size();
                     for (var callTrace : exception.traces()) {
                         repository.saveRecognitionCall(recognitionRunId, callTrace);
+                        if (callTrace.callId() != null) MDC.put("recognitionCallId", callTrace.callId().toString());
                     }
                 } catch (Exception exception) {
                     failedCalls++;
+                    modelCallCount++;
                     var now = java.time.Instant.now();
                     repository.saveRecognitionCall(recognitionRunId, new RecognitionModelClient.CallTrace(
                             UUID.randomUUID(), region.path("regionId").asText(), 1,
@@ -289,7 +332,11 @@ public class TemplateImportService {
             );
             repository.replaceModelSuggestions(importJobId, recognitionRunId, aggregate);
             suggestionCount += modelSuggestions.size();
-            modelStatus = failedCalls == 0 ? "COMPLETED"
+            var hasRecoveryDiagnostics = modelQualityIssues.stream().anyMatch(issue ->
+                    issue.evidence() != null && issue.evidence().isArray()
+                            && issue.evidence().findValue("internalRecovery") != null);
+            modelStatus = failedCalls == 0 && !hasRecoveryDiagnostics ? "COMPLETED"
+                    : failedCalls == 0 ? "PARTIAL"
                     : modelSuggestions.isEmpty() && ruleBatch.suggestions().isEmpty() ? "FAILED" : "PARTIAL";
             repository.completeRecognitionRun(recognitionRunId, modelStatus);
             if (failedCalls > 0) {
@@ -335,6 +382,15 @@ public class TemplateImportService {
         result.put("qualityIssueCount", qualityResolution.issues().size());
         result.put("autoFixedCount", qualityResolution.issues().stream()
                 .filter(issue -> "AUTO_APPLIED".equals(issue.status())).count());
+        if ("PARTIAL".equals(modelStatus) || "FAILED".equals(modelStatus)) {
+            log.warn("recognition_run_partial runId={} importJobId={} status={} modelCalls={} succeededCalls={} failedCalls={} modelSuggestions={} ruleSuggestions={} qualityIssues={}",
+                    recognitionRunId, importJobId, modelStatus, modelCallCount, succeededCalls, failedCalls,
+                    Math.max(0, suggestionCount - ruleBatch.suggestions().size()),
+                    ruleBatch.suggestions().size(), qualityResolution.issues().size());
+        }
+        log.info("recognition_run_finished runId={} importJobId={} status={} callCount={} succeededCalls={} failedCalls={} suggestionCount={} qualityIssueCount={}",
+                recognitionRunId, importJobId, modelStatus, modelCallCount, succeededCalls, failedCalls,
+                suggestionCount, qualityResolution.issues().size());
         return result;
     }
 
@@ -399,6 +455,10 @@ public class TemplateImportService {
             var evidence = objectMapper.createArrayNode();
             group.stream().limit(20).forEach(issue -> evidence.add(objectMapper.createObjectNode()
                     .put("address", issue.address()).put("title", issue.title())));
+            if (group.stream().anyMatch(issue -> issue.evidence() != null
+                    && issue.evidence().findValue("internalRecovery") != null)) {
+                evidence.add(objectMapper.createObjectNode().put("internalRecovery", true));
+            }
             result.add(new RecognitionModelClient.QualityIssueSuggestion(
                     customerIssueCategory(first.issueType()), severity, first.sheetId(), first.sheetName(),
                     first.address(), title, description, first.businessImpact(),

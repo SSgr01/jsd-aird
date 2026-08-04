@@ -177,23 +177,25 @@ public class TemplateWorkspaceService {
         recognitionReviewService.applyQualityActions(
                 actor.organizationId(), actor.userId(), versionId, command.qualityActions()
         );
-        validateSchema(command.schema());
-        var reconciliationRequired = validateMappings(current.format(), command.mapping());
+        var normalizedSchema = normalizeFieldGroups(command.schema());
+        var normalizedMapping = normalizeMapping(command.mapping(), normalizedSchema);
+        validateSchema(normalizedSchema);
+        var reconciliationRequired = validateMappings(current.format(), normalizedMapping);
         recognitionReviewService.validateAcceptedMappings(
-                actor.organizationId(), versionId, command.mapping()
+                actor.organizationId(), versionId, normalizedMapping
         );
         validateBindingValues(command.bindingValues());
         validateStructureOperations(command.structureOperations());
         validateSnapshot(command.snapshotFileId(), command.snapshotHash());
 
-        var schemaHash = canonicalizer.hash(command.schema());
-        var mappingHash = canonicalizer.hash(command.mapping());
+        var schemaHash = canonicalizer.hash(normalizedSchema);
+        var mappingHash = canonicalizer.hash(normalizedMapping);
         var dataHash = canonicalizer.hash(command.data());
         var pluginHash = canonicalizer.hashText(command.pluginManifest());
         var workspaceHash = canonicalizer.workspaceHash(
                 versionId.toString(),
-                command.schema(),
-                command.mapping(),
+                normalizedSchema,
+                normalizedMapping,
                 command.data(),
                 command.snapshotHash(),
                 command.editorAppVersion(),
@@ -207,7 +209,7 @@ public class TemplateWorkspaceService {
                 actor.organizationId(),
                 versionId,
                 command.lockVersion(),
-                command.schema(),
+                normalizedSchema,
                 layoutSummary,
                 command.snapshotFileId(),
                 command.snapshotHash(),
@@ -224,7 +226,7 @@ public class TemplateWorkspaceService {
         if (updated == 0) {
             throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT);
         }
-        repository.replaceMappings(versionId, current.format(), command.mapping());
+        repository.replaceMappings(versionId, current.format(), normalizedMapping);
         repository.appendStructureChanges(
                 versionId,
                 current.mappingHash(),
@@ -258,6 +260,58 @@ public class TemplateWorkspaceService {
             );
         }
         return new SaveResult(command.lockVersion() + 1, workspaceHash, reconciliationRequired);
+    }
+
+    private ObjectNode normalizeFieldGroups(JsonNode schema) {
+        var normalized = (ObjectNode) schema.deepCopy();
+        var fieldModel = normalized.path(TemplateRecognitionCompiler.FIELD_MODEL_KEY);
+        if (!(fieldModel instanceof ObjectNode model)) return normalized;
+        var blocks = new java.util.HashMap<String, JsonNode>();
+        for (var block : model.path("blocks")) {
+            blocks.put(block.path("blockId").asText(""), block);
+        }
+        var oldNames = new java.util.HashMap<String, String>();
+        for (var group : model.path("groups")) oldNames.put(group.path("id").asText(""), group.path("name").asText(""));
+        var normalizedGroups = objectMapper.createArrayNode();
+        var groupIds = new java.util.LinkedHashMap<String, String>();
+        for (var fieldNode : model.withArray("fields")) {
+            if (!(fieldNode instanceof ObjectNode field)) continue;
+            var block = blocks.get(field.path("blockId").asText(""));
+            var fallback = GroupNameNormalizer.infer(
+                    block == null ? "" : block.path("type").asText(""),
+                    block == null ? field.path("name").asText("") : block.path("businessName").asText("")
+            );
+            var desired = block == null
+                    ? GroupNameNormalizer.normalizeCustomerDefined(oldNames.get(field.path("groupId").asText("")))
+                    : GroupNameNormalizer.normalizeModelSuggestion(block.path("groupName").asText(""))
+                    .orElse(fallback);
+            var desiredId = groupIds.computeIfAbsent(desired, name -> "group-"
+                    + GroupNameNormalizer.code(name).toLowerCase(Locale.ROOT) + "-"
+                    + RecognitionIdentity.shortHash(name, 8));
+            field.put("groupId", desiredId);
+        }
+        groupIds.forEach((name, id) -> normalizedGroups.add(objectMapper.createObjectNode()
+                .put("id", id).put("name", name).put("groupCode", GroupNameNormalizer.code(name))
+                .put("order", normalizedGroups.size())));
+        if (!normalizedGroups.isEmpty()) model.set("groups", normalizedGroups);
+        return normalized;
+    }
+
+    private JsonNode normalizeMapping(JsonNode mapping, JsonNode schema) {
+        if (mapping == null || !mapping.isArray()) return mapping;
+        var result = mapping.deepCopy();
+        var model = schema.path(TemplateRecognitionCompiler.FIELD_MODEL_KEY);
+        var names = new java.util.HashMap<String, String>();
+        var groups = new java.util.HashMap<String, String>();
+        for (var group : model.path("groups")) groups.put(group.path("id").asText(""), group.path("name").asText(""));
+        for (var field : model.path("fields")) names.put(field.path("fieldId").asText(""),
+                groups.getOrDefault(field.path("groupId").asText(""), GroupNameNormalizer.BASIC_INFORMATION));
+        for (var binding : result) {
+            if (!(binding instanceof ObjectNode object)) continue;
+            var groupName = names.get(object.path("fieldId").asText(""));
+            if (groupName != null) object.withObject("diagnostic").put("groupName", groupName);
+        }
+        return result;
     }
 
     @Transactional

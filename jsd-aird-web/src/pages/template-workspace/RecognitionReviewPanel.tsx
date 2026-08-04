@@ -65,6 +65,10 @@ export function RecognitionReviewPanel({
   const [group, setGroup] = useState('ALL');
   const itemRefs = useRef(new Map<string, HTMLDivElement>());
   const qualityRefs = useRef(new Map<string, HTMLDivElement>());
+  const visibleQualityIssues = useMemo(
+    () => (review?.qualityIssues ?? []).filter((issue) => !isInternalRecoveryIssue(issue)),
+    [review?.qualityIssues],
+  );
 
   useEffect(() => {
     if (!selectedRecognitionItemId) return;
@@ -117,17 +121,17 @@ export function RecognitionReviewPanel({
     LOW: review.summary.lowConfidence,
     CONFLICT: review.summary.conflict,
     CONFIRMED: review.summary.confirmed,
-    QUALITY: review.summary.qualityIssueCount,
+    QUALITY: visibleQualityIssues.length,
   };
 
   return (
     <section className="recognition-review-pane" role="tabpanel" aria-label="识别确认">
-      {review.runStatus === 'FAILED' && (
+      {(review.runStatus === 'FAILED' || review.runStatus === 'PARTIAL') && (
         <Alert
           type="warning"
           showIcon
           message="智能识别未完成"
-          description="工作簿内容和已有识别结果已保留，可稍后重新识别。"
+          description="本次识别部分内容未完成，已识别字段仍可确认，也可以重新识别或手工补充字段。"
         />
       )}
       <div className="recognition-filter-toolbar">
@@ -157,7 +161,7 @@ export function RecognitionReviewPanel({
       </div>
 
       <div className="recognition-review-list" aria-busy={busy}>
-        {(filter === 'ALL' || filter === 'QUALITY') && review.qualityIssues.map((issue) => {
+        {(filter === 'ALL' || filter === 'QUALITY') && visibleQualityIssues.map((issue) => {
           const selected = issue.id === selectedQualityIssueId;
           const preview = qualityPreview(issue);
           return (
@@ -210,14 +214,16 @@ export function RecognitionReviewPanel({
                       </Button>
                     ) : (
                       <>
-                        <Button
-                          size="small"
-                          type="primary"
-                          disabled={!editable || busy || !Object.keys(issue.suggestedPatch).length}
-                          onClick={() => onApplyQualityIssue(issue)}
-                        >
-                          应用建议
-                        </Button>
+                        {Object.keys(issue.suggestedPatch).length > 0 && (
+                          <Button
+                            size="small"
+                            type="primary"
+                            disabled={!editable || busy}
+                            onClick={() => onApplyQualityIssue(issue)}
+                          >
+                            应用建议
+                          </Button>
+                        )}
                         <Button
                           size="small"
                           type="text"
@@ -338,7 +344,7 @@ export function RecognitionReviewPanel({
         {!items.length && !(filter === 'ALL' || filter === 'QUALITY') && (
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有符合条件的识别项目" />
         )}
-        {filter === 'QUALITY' && !review.qualityIssues.length && (
+        {filter === 'QUALITY' && !visibleQualityIssues.length && (
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有发现模板规范问题" />
         )}
       </div>
@@ -392,6 +398,15 @@ function qualityPreview(issue: TemplateQualityIssue) {
   const before = changes.map((operation) => display(operation.expectedValue)).join(' ｜ ');
   const after = changes.map((operation) => display(operation.value)).join(' ｜ ');
   return { before: before || '空白', after: after || '空白' };
+}
+
+function isInternalRecoveryIssue(issue: TemplateQualityIssue) {
+  return new Set([
+    '部分字段关系需要核对',
+    '部分表格结构需要核对',
+    '部分业务区域需要核对',
+  ]).has(issue.title)
+    || issue.evidence.some((item) => item.internalRecovery === true);
 }
 
 function isCellPatchOperation(value: unknown): value is Record<string, unknown> {

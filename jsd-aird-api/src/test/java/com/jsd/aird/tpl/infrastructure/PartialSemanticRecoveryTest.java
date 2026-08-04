@@ -64,15 +64,18 @@ class PartialSemanticRecoveryTest {
         });
         assertThat(validated.path("fieldRelations")).noneSatisfy(relation ->
                 assertThat(relation.path("temporaryId").asText()).isEqualTo("r-company"));
-        assertThat(validated.path("tables")).isEmpty();
+        assertThat(validated.path("tables")).singleElement().satisfies(table -> {
+            assertThat(table.path("semanticMode").asText()).isEqualTo("UNKNOWN");
+            assertThat(table.path("columns")).isEmpty();
+        });
         assertThat(validated.path("semanticAnnotations")).noneSatisfy(annotation ->
                 assertThat(annotation.path("temporaryRelationRef").asText()).isEqualTo("r-company"));
         assertThat(validated.path("qualityIssues")).hasSize(2);
 
         var compiled = new GlobalSemanticSuggestionCompiler(objectMapper).compile(validated, facts);
-        assertThat(compiled.suggestions()).hasSize(3);
+        assertThat(compiled.suggestions()).hasSize(4);
         assertThat(compiled.suggestions().stream().map(item -> item.payload().path("fieldName").asText()))
-                .contains("表单编号", "品名").doesNotContain("公司名称", "配方明细");
+                .contains("表单编号", "品名", "配方明细").doesNotContain("公司名称");
     }
 
     @Test
@@ -87,5 +90,67 @@ class PartialSemanticRecoveryTest {
         assertThatThrownBy(() -> new GlobalSemanticRecognitionProtocol(objectMapper).validate(response, facts))
                 .isInstanceOf(GlobalSemanticRecognitionProtocol.ProtocolViolationException.class)
                 .hasMessageContaining("recognitionProtocolVersion 必须为 1");
+    }
+
+    @Test
+    void keepsTheLargerOverlappingBlockAndMigratesContainedRelations() throws Exception {
+        var facts = objectMapper.readTree("""
+                {"structureVersion":6,"sheets":[{"id":"s1","name":"UV-507E","usedRange":"A1:L12"}]}
+                """);
+        var response = objectMapper.readTree("""
+                {
+                  "recognitionProtocolVersion":1,"semanticAnnotations":[],
+                  "businessBlocks":[
+                    {"temporaryId":"small","sheetId":"s1","range":"A1:F5","type":"FORM_FIELDS","parentTemporaryId":"","businessName":"表单元信息","groupNameSuggestion":"基础信息","semanticKeySuggestion":"meta"},
+                    {"temporaryId":"large","sheetId":"s1","range":"C3:L12","type":"FORM_FIELDS","parentTemporaryId":"","businessName":"产品基础信息","groupNameSuggestion":"基础信息","semanticKeySuggestion":"basic"}
+                  ],
+                  "fieldRelations":[
+                    {"temporaryId":"r1","sheetId":"s1","labelRange":"D4","valueRange":"E4","relationType":"LABEL_VALUE","businessName":"产品名称","blockTemporaryId":"small","groupNameSuggestion":"基础信息","semanticKeySuggestion":"productName","valueType":"string","required":false,"editability":"EDITABLE","valueSource":"USER_INPUT","unit":"","condition":""}
+                  ],
+                  "tables":[],"qualityIssues":[]
+                }
+                """);
+
+        var validated = new GlobalSemanticRecognitionProtocol(objectMapper).validate(response, facts);
+
+        assertThat(validated.path("businessBlocks")).singleElement()
+                .satisfies(block -> assertThat(block.path("temporaryId").asText()).isEqualTo("large"));
+        assertThat(validated.path("fieldRelations")).singleElement()
+                .satisfies(relation -> assertThat(relation.path("blockTemporaryId").asText()).isEqualTo("large"));
+        assertThat(validated.path("qualityIssues")).anySatisfy(issue ->
+                assertThat(issue.path("category").asText()).isEqualTo("BUSINESS_BLOCK_UNCLEAR"));
+    }
+
+    @Test
+    void rejectsMisalignedTableColumnsAndDoesNotPromoteThemToScalarFields() throws Exception {
+        var facts = objectMapper.readTree("""
+                {"structureVersion":6,"sheets":[{"id":"s1","name":"M-687 NT","usedRange":"A1:I10"}]}
+                """);
+        var response = objectMapper.readTree("""
+                {
+                  "recognitionProtocolVersion":1,"semanticAnnotations":[],
+                  "businessBlocks":[
+                    {"temporaryId":"table-block","sheetId":"s1","range":"A7:I10","type":"ROW_TABLE","parentTemporaryId":"","businessName":"配方明细","groupNameSuggestion":"配方明细","semanticKeySuggestion":"formulaItems"}
+                  ],
+                  "fieldRelations":[
+                    {"temporaryId":"ratio","sheetId":"s1","labelRange":"D7","valueRange":"C9:C10","relationType":"LABEL_VALUE","businessName":"配方比例","blockTemporaryId":"table-block","groupNameSuggestion":"配方明细","semanticKeySuggestion":"ratio","valueType":"number","required":false,"editability":"EDITABLE","valueSource":"USER_INPUT","unit":"","condition":""}
+                  ],
+                  "tables":[{
+                    "temporaryId":"t1","sheetId":"s1","range":"A7:I10","tableKind":"ROW_TABLE","businessName":"配方明细","blockTemporaryId":"table-block","groupNameSuggestion":"配方明细","semanticKeySuggestion":"formulaItems",
+                    "headerRange":"A7:I7","dataRange":"A9:I10","totalRange":"","semanticMode":"ROW_RECORDS","rowHeaderRange":"","columnHeaderRange":"","crossDataRange":"","headerTree":[],
+                    "columns":[{"temporaryId":"c1","name":"配方比例","labelRange":"D7","valueRange":"C9:C10","valueType":"number","editability":"EDITABLE","valueSource":"USER_INPUT","unit":"","condition":"","semanticKeySuggestion":"ratio"}]
+                  }],
+                  "qualityIssues":[]
+                }
+                """);
+
+        var validated = new GlobalSemanticRecognitionProtocol(objectMapper).validate(response, facts);
+        var compiled = new GlobalSemanticSuggestionCompiler(objectMapper).compile(validated, facts);
+
+        assertThat(validated.path("tables")).singleElement()
+                .satisfies(table -> assertThat(table.path("columns")).isEmpty());
+        assertThat(compiled.suggestions().stream().skip(1)
+                .map(item -> item.payload().path("fieldName").asText()))
+                .doesNotContain("配方比例");
     }
 }

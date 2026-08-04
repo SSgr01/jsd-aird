@@ -18,12 +18,16 @@ import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
 /** OpenAI-compatible client for the strict, workbook-global semantic protocol. */
 @Component
 public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient {
 
     static final String PROMPT_VERSION = GlobalSemanticRecognitionProtocol.PROMPT_VERSION;
+    private static final Logger log = LoggerFactory.getLogger(OpenAiCompatibleRecognitionClient.class);
 
     private final ObjectMapper objectMapper;
     private final JsonCanonicalizer canonicalizer;
@@ -35,6 +39,8 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
     private final ModelPayloadSanitizer sanitizer;
     private final GlobalSemanticRecognitionProtocol protocol;
     private final GlobalSemanticSuggestionCompiler compiler;
+    private final boolean consoleLogSummary;
+    private final boolean consoleLogPayload;
 
     @Autowired
     public OpenAiCompatibleRecognitionClient(
@@ -44,7 +50,9 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
             @Value("${app.model.api-key:}") String apiKey,
             @Value("${app.model.model:}") String model,
             @Value("${app.model.temperature:0.0}") double ignoredTemperature,
-            @Value("${app.model.response-format:json_schema}") String responseFormat
+            @Value("${app.model.response-format:json_schema}") String responseFormat,
+            @Value("${app.recognition.console-log-summary:true}") boolean consoleLogSummary,
+            @Value("${app.recognition.console-log-payload:false}") boolean consoleLogPayload
     ) {
         this.objectMapper = objectMapper;
         this.canonicalizer = canonicalizer;
@@ -52,6 +60,8 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
         this.apiKey = apiKey == null ? "" : apiKey.strip();
         this.model = model == null ? "" : model.strip();
         this.responseFormat = normalizeResponseFormat(responseFormat);
+        this.consoleLogSummary = consoleLogSummary;
+        this.consoleLogPayload = consoleLogPayload;
         this.sanitizer = new ModelPayloadSanitizer(objectMapper);
         this.protocol = new GlobalSemanticRecognitionProtocol(objectMapper);
         this.compiler = new GlobalSemanticSuggestionCompiler(objectMapper);
@@ -65,7 +75,8 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
             ObjectMapper objectMapper, JsonCanonicalizer canonicalizer, String baseUrl,
             String apiKey, String model, double ignoredTemperature
     ) {
-        this(objectMapper, canonicalizer, baseUrl, apiKey, model, ignoredTemperature, "json_schema");
+        this(objectMapper, canonicalizer, baseUrl, apiKey, model, ignoredTemperature,
+                "json_schema", true, false);
     }
 
     @Override
@@ -75,6 +86,18 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
 
     @Override
     public RecognitionBatch recognize(RecognitionRequest request) {
+        if (request.importJobId() != null) MDC.put("importJobId", request.importJobId().toString());
+        if (request.recognitionRunId() != null) MDC.put("recognitionRunId", request.recognitionRunId().toString());
+        try {
+            return recognizeInternal(request);
+        } finally {
+            MDC.remove("recognitionCallId");
+            if (request.recognitionRunId() != null) MDC.remove("recognitionRunId");
+            if (request.importJobId() != null) MDC.remove("importJobId");
+        }
+    }
+
+    private RecognitionBatch recognizeInternal(RecognitionRequest request) {
         if (!isConfigured()) throw new IllegalStateException("Model recognition is not configured");
         if (request.format() == com.jsd.aird.tpl.domain.TemplateFormat.XLSX
                 && request.structureSummary().path("structureVersion").asInt() != 6) {
@@ -94,6 +117,11 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
             var callId = UUID.randomUUID();
             JsonNode response = null;
             JsonNode structured = null;
+            MDC.put("recognitionCallId", callId.toString());
+            if (consoleLogSummary) {
+                log.info("recognition_model_call_started callId={} runId={} regionId={} attempt={} phase={} model={}",
+                        callId, request.recognitionRunId(), request.regionId(), attempt, phase, model);
+            }
             try {
                 response = restClient.post()
                         .uri(baseUrl + "/chat/completions")
@@ -107,10 +135,33 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
                 var content = response.path("choices").path(0).path("message").path("content").asText("");
                 if (content.isBlank()) throw new IllegalStateException("Model response has no structured content");
                 structured = parseJsonObject(content);
-                var validated = protocol.validate(structured, request.structureSummary());
+                var validation = protocol.validateWithDiagnostics(structured, request.structureSummary());
+                var validated = validation.response();
+                var diagnostics = validation.diagnostics();
                 var compiled = compiler.compile(validated, request.structureSummary());
                 var finishedAt = Instant.now();
                 var responseHash = canonicalizer.hash(response);
+                if (consoleLogSummary && (diagnostics.relationsRejected() > 0
+                        || diagnostics.tablesRejected() > 0 || diagnostics.blocksRecovered() > 0)) {
+                    log.warn("recognition_protocol_partial callId={} runId={} relationsReturned={} relationsAccepted={} relationsRejected={} tablesReturned={} tablesAccepted={} tablesRejected={} blocksRecovered={}",
+                            callId, request.recognitionRunId(), diagnostics.relationsReturned(),
+                            diagnostics.relationsAccepted(), diagnostics.relationsRejected(),
+                            diagnostics.tablesReturned(), diagnostics.tablesAccepted(),
+                            diagnostics.tablesRejected(), diagnostics.blocksRecovered());
+                }
+                if (consoleLogPayload && log.isDebugEnabled()) {
+                    log.debug("recognition_model_response_preview callId={} response={}", callId,
+                            preview(sanitizer.sanitize(validated).toString(), 4000));
+                }
+                if (consoleLogSummary) {
+                    var usage = response.path("usage");
+                    log.info("recognition_model_call_finished callId={} runId={} attempt={} durationMs={} promptTokens={} completionTokens={} totalTokens={} suggestions={} qualityIssues={}",
+                            callId, request.recognitionRunId(), attempt,
+                            Duration.between(startedAt, finishedAt).toMillis(),
+                            usage.path("prompt_tokens").asInt(0), usage.path("completion_tokens").asInt(0),
+                            usage.path("total_tokens").asInt(0), compiled.suggestions().size(),
+                            compiled.qualityIssues().size());
+                }
                 traces.add(trace(callId, request, attempt, phase, parentCallId,
                         "SUCCEEDED", 200, startedAt, finishedAt, sanitizedBody,
                         successAuditResponse(response, structured, validated),
@@ -121,6 +172,11 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
                 );
             } catch (Exception exception) {
                 var finishedAt = Instant.now();
+                if (consoleLogSummary && attempt == 1 && isRepairableProtocolViolation(exception)) {
+                    log.warn("recognition_protocol_validation_failed callId={} runId={} attempt={} phase={} errorType={} errorMessage={}",
+                            callId, request.recognitionRunId(), attempt, phase,
+                            exception.getClass().getSimpleName(), safeError(exception.getMessage()));
+                }
                 var httpStatus = response != null ? 200
                         : exception instanceof RestClientResponseException responseException
                         ? responseException.getStatusCode().value() : null;
@@ -140,6 +196,12 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
                     validationError = safeError(exception.getMessage());
                     parentCallId = callId;
                     continue;
+                }
+                if (consoleLogSummary) {
+                    log.error("recognition_model_call_failed callId={} runId={} attempt={} phase={} durationMs={} errorType={} errorMessage={}",
+                            callId, request.recognitionRunId(), attempt, phase,
+                            Duration.between(startedAt, finishedAt).toMillis(),
+                            exception.getClass().getSimpleName(), safeError(exception.getMessage()), exception);
                 }
                 throw new RecognitionModelClient.RecognitionCallException(
                         "Global semantic recognition failed", exception, traces
@@ -328,6 +390,12 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
         if (value == null) return "模型调用失败";
         var sanitized = sanitizer.sanitize(objectMapper.getNodeFactory().textNode(value)).asText();
         return sanitized.length() <= 500 ? sanitized : sanitized.substring(0, 500);
+    }
+
+    private String preview(String value, int maxLength) {
+        if (value == null) return "";
+        var normalized = value.replaceAll("[\\r\\n\\t]", " ");
+        return normalized.length() <= maxLength ? normalized : normalized.substring(0, maxLength) + "…";
     }
 
     private static String normalizeResponseFormat(String value) {

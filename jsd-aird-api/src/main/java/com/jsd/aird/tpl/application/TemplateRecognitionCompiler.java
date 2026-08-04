@@ -103,10 +103,12 @@ public class TemplateRecognitionCompiler {
                     }
                     var fieldName = payload.path("fieldName").asText("业务字段");
                     var groupName = payload.path("groupName").asText("").strip();
-                    if (groupName.isBlank()) {
-                        groupName = GroupNameNormalizer.BASIC_INFORMATION;
-                    }
-                    var normalizedGroupName = GroupNameNormalizer.normalize(groupName);
+                    var fallbackGroup = GroupNameNormalizer.infer(
+                            payload.path("blockType").asText(""),
+                            payload.path("blockName").asText(fieldName));
+                    var normalizedGroupName = "CUSTOMER".equalsIgnoreCase(suggestion.source())
+                            ? GroupNameNormalizer.normalizeCustomerDefined(groupName)
+                            : GroupNameNormalizer.normalizeModelSuggestion(groupName).orElse(fallbackGroup);
                     var groupId = groupIds.computeIfAbsent(normalizedGroupName, ignored ->
                             "group-" + GroupNameNormalizer.code(normalizedGroupName).toLowerCase(Locale.ROOT)
                                     + "-" + RecognitionIdentity.shortHash(normalizedGroupName, 8));

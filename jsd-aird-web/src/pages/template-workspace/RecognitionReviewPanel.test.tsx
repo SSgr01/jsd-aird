@@ -183,4 +183,40 @@ describe('RecognitionReviewPanel', () => {
     expect(screen.getByText('结论 ｜ 内容')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '应用建议' })).toBeEnabled();
   });
+
+  it('隐藏内部恢复诊断并对部分识别显示统一提示', () => {
+    render(
+      <RecognitionReviewPanel
+        review={{
+          ...review,
+          runStatus: 'PARTIAL',
+          summary: { ...review.summary, qualityIssueCount: 1 },
+          qualityIssues: [{
+            id: 'recovery-1',
+            issueType: 'FIELD_RELATION_UNCLEAR',
+            severity: 'WARNING',
+            confidence: 1,
+            sheetId: 'sheet-1',
+            sheetName: 'Sheet1',
+            address: 'A1',
+            title: '部分字段关系需要核对',
+            description: '内部协议恢复信息',
+            businessImpact: '仅供诊断',
+            autoFixable: false,
+            status: 'DETECTED',
+            suggestedPatch: {},
+            inversePatch: {},
+            evidence: [],
+          }],
+        }}
+        editable
+        {...handlers}
+      />,
+    );
+
+    expect(screen.getByText('本次识别部分内容未完成，已识别字段仍可确认，也可以重新识别或手工补充字段。'))
+      .toBeInTheDocument();
+    expect(screen.queryByText('部分字段关系需要核对')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '应用建议' })).not.toBeInTheDocument();
+  });
 });

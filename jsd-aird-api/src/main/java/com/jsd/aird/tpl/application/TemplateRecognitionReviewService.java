@@ -228,8 +228,12 @@ public class TemplateRecognitionReviewService {
             var payload = primary.payload();
             var kind = kind(primary);
             var groupName = payload.path("groupName").asText("").strip();
-            if (groupName.isBlank()) groupName = GroupNameNormalizer.BASIC_INFORMATION;
-            groupName = GroupNameNormalizer.normalize(groupName);
+            var blockName = payload.path("blockName").asText("");
+            var blockType = payload.path("blockType").asText("");
+            groupName = blockName.isBlank()
+                    ? GroupNameNormalizer.normalizeModelSuggestion(groupName)
+                    .orElse(GroupNameNormalizer.inferFromBlock(blockType, payload.path("fieldName").asText("")))
+                    : GroupNameNormalizer.inferFromBlock(blockType, blockName);
             items.add(new RecognitionReviewItem(
                     primary.id(),
                     candidates.stream().map(TemplateImportRepository.RecognitionSuggestionView::id).toList(),

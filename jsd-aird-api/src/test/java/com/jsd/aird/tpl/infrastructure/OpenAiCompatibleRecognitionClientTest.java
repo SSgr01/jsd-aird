@@ -28,7 +28,7 @@ class OpenAiCompatibleRecognitionClientTest {
     );
 
     @Test
-    void rejectsUnknownEnumsExtraFieldsAndInventedCoordinates() throws Exception {
+    void rejectsInvalidRootAndBlocksButIsolatesAnInventedFieldCoordinate() throws Exception {
         var facts = physicalFacts();
         var unknownEnum = validResponse().deepCopy();
         ((com.fasterxml.jackson.databind.node.ObjectNode) unknownEnum.path("businessBlocks").get(0))
@@ -45,8 +45,10 @@ class OpenAiCompatibleRecognitionClientTest {
         var invented = validResponse().deepCopy();
         ((com.fasterxml.jackson.databind.node.ObjectNode) invented.path("fieldRelations").get(0))
                 .put("valueRange", "Z99");
-        assertThatThrownBy(() -> client.validateResponse(invented, facts))
-                .hasMessageContaining("超出工作表使用范围");
+        var recovered = client.validateResponse(invented, facts);
+        assertThat(recovered.path("fieldRelations")).isEmpty();
+        assertThat(recovered.path("qualityIssues")).singleElement().satisfies(issue ->
+                assertThat(issue.path("category").asText()).isEqualTo("FIELD_RELATION_UNCLEAR"));
     }
 
     @Test
@@ -64,23 +66,25 @@ class OpenAiCompatibleRecognitionClientTest {
     }
 
     @Test
-    void rejectsAFieldRelationThatOverlapsItsOwnLabelAndValue() throws Exception {
+    void isolatesAFieldRelationThatOverlapsItsOwnLabelAndValue() throws Exception {
         var response = validResponse().deepCopy();
         ((com.fasterxml.jackson.databind.node.ObjectNode) response.path("fieldRelations").get(0))
                 .put("valueRange", "A5");
 
-        assertThatThrownBy(() -> client.validateResponse(response, physicalFacts()))
-                .hasMessageContaining("标签范围和值范围不能重叠");
+        var recovered = client.validateResponse(response, physicalFacts());
+        assertThat(recovered.path("fieldRelations")).isEmpty();
+        assertThat(recovered.path("qualityIssues")).hasSize(1);
     }
 
     @Test
-    void rejectsAFieldRelationInsideAnInstructionBlock() throws Exception {
+    void isolatesAFieldRelationInsideAnInstructionBlock() throws Exception {
         var response = validResponse().deepCopy();
         var block = (com.fasterxml.jackson.databind.node.ObjectNode) response.path("businessBlocks").get(0);
         block.put("type", "INSTRUCTION_LIST");
 
-        assertThatThrownBy(() -> client.validateResponse(response, physicalFacts()))
-                .hasMessageContaining("静态备注块生成字段");
+        var recovered = client.validateResponse(response, physicalFacts());
+        assertThat(recovered.path("fieldRelations")).isEmpty();
+        assertThat(recovered.path("businessBlocks")).hasSize(1);
     }
 
     @Test
@@ -136,7 +140,7 @@ class OpenAiCompatibleRecognitionClientTest {
     }
 
     @Test
-    void retriesBrokenReferencesAndKeepsBothAuditedResponsesAndUsage() throws Exception {
+    void locallyRemovesABrokenOptionalAnnotationReferenceWithoutASecondCall() throws Exception {
         var requests = new ArrayList<String>();
         var calls = new AtomicInteger();
         var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -169,28 +173,21 @@ class OpenAiCompatibleRecognitionClientTest {
                     "测试.xlsx", "workbook-global", physicalFacts()
             ));
 
-            assertThat(calls).hasValue(2);
-            assertThat(requests.get(1)).contains("只修正该协议错误", "missing-block");
-            assertThat(batch.callTraces()).hasSize(2);
-            var failed = batch.callTraces().get(0);
-            var repaired = batch.callTraces().get(1);
-            assertThat(failed.status()).isEqualTo("FAILED");
-            assertThat(failed.phase()).isEqualTo("REGION_INFERENCE");
-            assertThat(failed.totalTokens()).isEqualTo(133);
-            assertThat(failed.responsePayload().path("choices")).isNotEmpty();
-            assertThat(repaired.status()).isEqualTo("SUCCEEDED");
-            assertThat(repaired.phase()).isEqualTo("PROTOCOL_REPAIR");
-            assertThat(repaired.attempt()).isEqualTo(2);
-            assertThat(repaired.parentCallId()).isEqualTo(failed.callId());
-            assertThat(repaired.totalTokens()).isEqualTo(200);
-            assertThat(batch.callTrace()).isEqualTo(repaired);
+            assertThat(calls).hasValue(1);
+            assertThat(requests).hasSize(1);
+            assertThat(batch.callTraces()).singleElement().satisfies(trace -> {
+                assertThat(trace.status()).isEqualTo("SUCCEEDED");
+                assertThat(trace.phase()).isEqualTo("REGION_INFERENCE");
+                assertThat(trace.totalTokens()).isEqualTo(133);
+                assertThat(trace.responsePayload().path("choices")).isNotEmpty();
+            });
         } finally {
             server.stop(0);
         }
     }
 
     @Test
-    void retriesARepairableBusinessRangeViolation() throws Exception {
+    void isolatesAFieldOutsideItsBusinessBlockWithoutASecondCall() throws Exception {
         var calls = new AtomicInteger();
         var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/v1/chat/completions", exchange -> {
@@ -218,10 +215,15 @@ class OpenAiCompatibleRecognitionClientTest {
                     "测试.xlsx", "workbook-global", physicalFacts()
             ));
 
-            assertThat(calls).hasValue(2);
-            assertThat(batch.callTraces()).hasSize(2);
-            assertThat(batch.callTraces().get(0).status()).isEqualTo("FAILED");
-            assertThat(batch.callTraces().get(1).phase()).isEqualTo("PROTOCOL_REPAIR");
+            assertThat(calls).hasValue(1);
+            assertThat(batch.callTraces()).singleElement().satisfies(trace -> {
+                assertThat(trace.status()).isEqualTo("SUCCEEDED");
+                assertThat(trace.phase()).isEqualTo("REGION_INFERENCE");
+            });
+            assertThat(batch.suggestions()).extracting(RecognitionModelClient.ModelSuggestion::suggestionType)
+                    .containsExactly("SEMANTIC_MODEL");
+            assertThat(batch.qualityIssues()).singleElement().satisfies(issue ->
+                    assertThat(issue.issueType()).isEqualTo("FIELD_RELATION_UNCLEAR"));
         } finally {
             server.stop(0);
         }

@@ -51,8 +51,9 @@ class MatrixSemanticProtocolTest {
 
         ((com.fasterxml.jackson.databind.node.ObjectNode) response.path("tables").get(0))
                 .put("rowHeaderRange", "B2:B5");
-        assertThatThrownBy(() -> protocol.validate(response, facts))
-                .isInstanceOf(GlobalSemanticRecognitionProtocol.ProtocolViolationException.class)
-                .hasMessageContaining("矩阵轴标题不能与交叉数据区重叠");
+        var recovered = protocol.validate(response, facts);
+        assertThat(recovered.path("tables")).isEmpty();
+        assertThat(recovered.path("qualityIssues")).singleElement().satisfies(issue ->
+                assertThat(issue.path("category").asText()).isEqualTo("TABLE_STRUCTURE_UNCLEAR"));
     }
 }

@@ -15,7 +15,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
-/** Strict validator and JSON Schema for recognitionProtocolVersion 1. */
+/** Strict protocol-envelope validator with isolated recovery for invalid semantic items. */
 final class GlobalSemanticRecognitionProtocol {
 
     static final int VERSION = 1;
@@ -23,6 +23,9 @@ final class GlobalSemanticRecognitionProtocol {
 
     private static final Pattern ADDRESS = Pattern.compile(
             "^([A-Z]{1,4})([1-9][0-9]*)(?::([A-Z]{1,4})([1-9][0-9]*))?$"
+    );
+    private static final Pattern INLINE_KEY_VALUE = Pattern.compile(
+            "^\\s*([^：:\\r\\n]{1,40})\\s*[：:]\\s*(\\S[\\s\\S]*)$"
     );
     private static final Set<String> ANNOTATION_ROLES = Set.of(
             "DOCUMENT_TITLE", "INLINE_METADATA", "FIELD_LABEL", "FIELD_VALUE",
@@ -86,16 +89,35 @@ final class GlobalSemanticRecognitionProtocol {
 
         var sheets = sheets(physicalFacts);
         var blockIds = uniqueIds(candidate.path("businessBlocks"), "businessBlocks");
-        repairUniquelyContainedRelationBlocks(candidate, blockIds);
-        var relationIds = uniqueIds(candidate.path("fieldRelations"), "fieldRelations");
-        var tableIds = uniqueIds(candidate.path("tables"), "tables");
-        uniqueIds(candidate.path("qualityIssues"), "qualityIssues");
-
         var blocks = validateBlocks(candidate.path("businessBlocks"), sheets, blockIds);
-        validateRelations(candidate.path("fieldRelations"), sheets, blockIds, blocks);
-        validateTables(candidate.path("tables"), sheets, blockIds, blocks);
-        validateAnnotations(candidate.path("semanticAnnotations"), sheets, blockIds, relationIds, tableIds);
-        validateQualityIssues(candidate.path("qualityIssues"), sheets, blockIds);
+        repairUniquelyContainedRelationBlocks(candidate, blockIds);
+        repairUniquelyContainedTableBlocks(candidate, blockIds);
+
+        var rejectedRelations = new RecoverySummary();
+        var validRelations = validRelations(
+                candidate.path("fieldRelations"), physicalFacts, sheets, blockIds, blocks, rejectedRelations
+        );
+        candidate.set("fieldRelations", validRelations);
+        var relationIds = uniqueIds(validRelations, "fieldRelations");
+
+        var rejectedTables = new RecoverySummary();
+        var validTables = validTables(candidate.path("tables"), sheets, blockIds, blocks, rejectedTables);
+        candidate.set("tables", validTables);
+        var tableIds = uniqueIds(validTables, "tables");
+
+        var validAnnotations = validAnnotations(
+                candidate.path("semanticAnnotations"), sheets, blockIds, relationIds, tableIds
+        );
+        candidate.set("semanticAnnotations", validAnnotations);
+
+        var validIssues = validQualityIssues(candidate.path("qualityIssues"), sheets, blockIds);
+        appendRecoveryIssue(validIssues, rejectedRelations, "FIELD_RELATION_UNCLEAR", "部分字段关系需要核对",
+                "系统已忽略不符合字段关系约束的候选，其他有效字段和表格仍然保留。",
+                "请核对被忽略区域是否包含需要填写的业务字段。", sheets, blockIds);
+        appendRecoveryIssue(validIssues, rejectedTables, "TABLE_STRUCTURE_UNCLEAR", "部分表格结构需要核对",
+                "系统已忽略结构范围不一致的表格候选，其他有效字段和表格仍然保留。",
+                "请核对该区域的表头、数据区和合计范围。", sheets, blockIds);
+        candidate.set("qualityIssues", validIssues);
         return candidate;
     }
 
@@ -109,23 +131,213 @@ final class GlobalSemanticRecognitionProtocol {
         for (var relation : response.withArray("fieldRelations")) {
             if (!(relation instanceof ObjectNode object)) continue;
             var reference = object.path("blockTemporaryId").asText("");
-            if (reference.isBlank() || blockIds.contains(reference)) continue;
+            if (!reference.isBlank() && blockIds.contains(reference)) continue;
             var sheetId = object.path("sheetId").asText("");
             var labelRange = bounds(object.path("labelRange").asText(""));
             var valueRange = bounds(object.path("valueRange").asText(""));
             if (labelRange == null || valueRange == null) continue;
             String match = null;
+            long smallestArea = Long.MAX_VALUE;
             var matches = 0;
             for (var block : blocks) {
                 if (!sheetId.equals(block.path("sheetId").asText(""))) continue;
                 var blockRange = bounds(block.path("range").asText(""));
                 if (blockRange == null) continue;
                 if (!blockRange.contains(labelRange) || !blockRange.contains(valueRange)) continue;
-                match = block.path("temporaryId").asText("");
-                matches++;
+                var area = blockRange.area();
+                if (area < smallestArea) {
+                    match = block.path("temporaryId").asText("");
+                    smallestArea = area;
+                    matches = 1;
+                } else if (area == smallestArea) {
+                    matches++;
+                }
             }
             if (matches == 1) object.put("blockTemporaryId", match);
         }
+    }
+
+    private void repairUniquelyContainedTableBlocks(ObjectNode response, Set<String> blockIds) {
+        var blocks = response.path("businessBlocks");
+        for (var table : response.withArray("tables")) {
+            if (!(table instanceof ObjectNode object)) continue;
+            var reference = object.path("blockTemporaryId").asText("");
+            if (!reference.isBlank() && blockIds.contains(reference)) continue;
+            var sheetId = object.path("sheetId").asText("");
+            var tableRange = bounds(object.path("range").asText(""));
+            if (tableRange == null) continue;
+            String match = null;
+            long smallestArea = Long.MAX_VALUE;
+            var matches = 0;
+            for (var block : blocks) {
+                if (!sheetId.equals(block.path("sheetId").asText(""))) continue;
+                var blockRange = bounds(block.path("range").asText(""));
+                if (blockRange == null || !blockRange.contains(tableRange)) continue;
+                var area = blockRange.area();
+                if (area < smallestArea) {
+                    match = block.path("temporaryId").asText("");
+                    smallestArea = area;
+                    matches = 1;
+                } else if (area == smallestArea) {
+                    matches++;
+                }
+            }
+            if (matches == 1) object.put("blockTemporaryId", match);
+        }
+    }
+
+    private ArrayNode validRelations(
+            JsonNode values, JsonNode physicalFacts, Map<String, SheetBounds> sheets,
+            Set<String> blockIds, Map<String, JsonNode> blocks, RecoverySummary recovery
+    ) {
+        var result = objectMapper.createArrayNode();
+        var ids = new HashSet<String>();
+        for (var value : values) {
+            try {
+                requireObject(value, "fieldRelations[]");
+                var relation = (ObjectNode) value.deepCopy();
+                normalizeInlineRelation(relation, physicalFacts);
+                var id = relation.path("temporaryId").asText("");
+                require(!id.isBlank() && ids.add(id), "fieldRelations 中 temporaryId 缺失或重复");
+                validateRelations(objectMapper.createArrayNode().add(relation), sheets, blockIds, blocks);
+                result.add(relation);
+            } catch (ProtocolViolationException exception) {
+                recovery.reject(value, "labelRange", sheets, blockIds);
+            }
+        }
+        return result;
+    }
+
+    private void normalizeInlineRelation(ObjectNode relation, JsonNode physicalFacts) {
+        if (!"LABEL_VALUE".equals(relation.path("relationType").asText())) return;
+        var labelRange = bounds(relation.path("labelRange").asText(""));
+        var valueRange = bounds(relation.path("valueRange").asText(""));
+        if (labelRange == null || !labelRange.equals(valueRange)) return;
+        var content = physicalCellText(
+                physicalFacts, relation.path("sheetId").asText(), relation.path("labelRange").asText()
+        );
+        var matcher = INLINE_KEY_VALUE.matcher(content);
+        if (!matcher.matches() || !sameBusinessLabel(matcher.group(1), relation.path("businessName").asText())) {
+            return;
+        }
+        relation.put("relationType", "INLINE_TEXT");
+    }
+
+    private String physicalCellText(JsonNode physicalFacts, String sheetId, String range) {
+        var anchor = range == null ? "" : range.split(":", 2)[0];
+        for (var cell : physicalFacts.path("semanticCells")) {
+            if (!sheetId.equals(cell.path("sheetId").asText())) continue;
+            if (!anchor.equalsIgnoreCase(cell.path("address").asText())
+                    && !range.equalsIgnoreCase(cell.path("mergedRange").asText(""))) continue;
+            return cell.path("value").isTextual() ? cell.path("value").asText() : "";
+        }
+        return "";
+    }
+
+    private boolean sameBusinessLabel(String inlineLabel, String businessName) {
+        var left = normalizeBusinessText(inlineLabel);
+        var right = normalizeBusinessText(businessName);
+        return !left.isBlank() && !right.isBlank()
+                && (left.equals(right) || left.contains(right) || right.contains(left));
+    }
+
+    private String normalizeBusinessText(String value) {
+        return value == null ? "" : value.replaceAll("[\\s：:：()（）]", "").toLowerCase(Locale.ROOT);
+    }
+
+    private ArrayNode validTables(
+            JsonNode values, Map<String, SheetBounds> sheets, Set<String> blockIds,
+            Map<String, JsonNode> blocks, RecoverySummary recovery
+    ) {
+        var result = objectMapper.createArrayNode();
+        var ids = new HashSet<String>();
+        for (var value : values) {
+            try {
+                requireObject(value, "tables[]");
+                var table = (ObjectNode) value.deepCopy();
+                var id = table.path("temporaryId").asText("");
+                require(!id.isBlank() && ids.add(id), "tables 中 temporaryId 缺失或重复");
+                validateTables(objectMapper.createArrayNode().add(table), sheets, blockIds, blocks);
+                result.add(table);
+            } catch (ProtocolViolationException exception) {
+                recovery.reject(value, "range", sheets, blockIds);
+            }
+        }
+        return result;
+    }
+
+    private ArrayNode validAnnotations(
+            JsonNode values, Map<String, SheetBounds> sheets, Set<String> blockIds,
+            Set<String> relationIds, Set<String> tableIds
+    ) {
+        var result = objectMapper.createArrayNode();
+        for (var value : values) {
+            try {
+                requireObject(value, "semanticAnnotations[]");
+                var annotation = (ObjectNode) value.deepCopy();
+                var role = annotation.path("role").asText("");
+                var relationRef = annotation.path("temporaryRelationRef").asText("");
+                if (!relationRef.isBlank() && !relationIds.contains(relationRef)) {
+                    if (Set.of("FIELD_LABEL", "FIELD_VALUE").contains(role)) continue;
+                    annotation.put("temporaryRelationRef", "");
+                }
+                var tableRef = annotation.path("temporaryTableRef").asText("");
+                if (!tableRef.isBlank() && !tableIds.contains(tableRef)) {
+                    if (Set.of("TABLE_HEADER", "TABLE_DATA", "TABLE_TOTAL").contains(role)) continue;
+                    annotation.put("temporaryTableRef", "");
+                }
+                var blockRef = annotation.path("temporaryBlockRef").asText("");
+                if (!blockRef.isBlank() && !blockIds.contains(blockRef)) {
+                    annotation.put("temporaryBlockRef", "");
+                }
+                validateAnnotations(objectMapper.createArrayNode().add(annotation),
+                        sheets, blockIds, relationIds, tableIds);
+                result.add(annotation);
+            } catch (ProtocolViolationException ignored) {
+                // A dangling field/table annotation has no independent business meaning.
+            }
+        }
+        return result;
+    }
+
+    private ArrayNode validQualityIssues(
+            JsonNode values, Map<String, SheetBounds> sheets, Set<String> blockIds
+    ) {
+        var result = objectMapper.createArrayNode();
+        var ids = new HashSet<String>();
+        for (var value : values) {
+            try {
+                var id = value.path("temporaryId").asText("");
+                require(!id.isBlank() && ids.add(id), "qualityIssues 中 temporaryId 缺失或重复");
+                validateQualityIssues(objectMapper.createArrayNode().add(value), sheets, blockIds);
+                result.add(value.deepCopy());
+            } catch (ProtocolViolationException ignored) {
+                // Invalid model-authored advice must not discard valid business fields.
+            }
+        }
+        return result;
+    }
+
+    private void appendRecoveryIssue(
+            ArrayNode issues, RecoverySummary recovery, String category, String title,
+            String description, String impact, Map<String, SheetBounds> sheets, Set<String> blockIds
+    ) {
+        if (recovery.count == 0) return;
+        var sheetId = recovery.sheetId;
+        var range = recovery.range;
+        if (!sheets.containsKey(sheetId) || bounds(range) == null) {
+            var fallback = sheets.values().iterator().next();
+            sheetId = fallback.id();
+            range = fallback.usedRange();
+        }
+        var issueId = "protocol-recovery-" + category.toLowerCase(Locale.ROOT) + "-" + issues.size();
+        issues.add(objectMapper.createObjectNode()
+                .put("temporaryId", issueId).put("sheetId", sheetId).put("range", range)
+                .put("category", category).put("severity", "WARNING").put("title", title)
+                .put("description", description + " 共 " + recovery.count + " 项。")
+                .put("businessImpact", impact)
+                .put("rootBlockTemporaryId", blockIds.contains(recovery.blockTemporaryId)
+                        ? recovery.blockTemporaryId : ""));
     }
 
     private void validateAnnotations(
@@ -244,7 +456,9 @@ final class GlobalSemanticRecognitionProtocol {
                 require(labelRange.equals(valueRange),
                         path + " 的 INLINE_TEXT 标签和值必须使用同一单元格范围");
             }
-            require(!STATIC_BLOCK_TYPES.contains(block.path("type").asText()),
+            var allowedHeaderMetadata = "DOCUMENT_HEADER".equals(block.path("type").asText())
+                    && "INLINE_TEXT".equals(relationType);
+            require(!STATIC_BLOCK_TYPES.contains(block.path("type").asText()) || allowedHeaderMetadata,
                     path + " 不能从文档标题、操作说明或静态备注块生成字段");
             validateCondition(value, path);
         }
@@ -440,9 +654,10 @@ final class GlobalSemanticRecognitionProtocol {
         var result = new HashMap<String, SheetBounds>();
         for (var sheet : physicalFacts.path("sheets")) {
             var id = sheet.path("id").asText(sheet.path("sheetId").asText(""));
-            var used = bounds(sheet.path("usedRange").asText("A1"));
+            var usedRange = sheet.path("usedRange").asText("A1");
+            var used = bounds(usedRange);
             require(!id.isBlank() && used != null, "物理事实中的工作表范围无效");
-            result.put(id, new SheetBounds(id, used));
+            result.put(id, new SheetBounds(id, usedRange, used));
         }
         require(!result.isEmpty(), "物理事实中没有可识别工作表");
         return result;
@@ -525,7 +740,28 @@ final class GlobalSemanticRecognitionProtocol {
         }
     }
 
-    private record SheetBounds(String id, Range bounds) {
+    private final class RecoverySummary {
+        private int count;
+        private String sheetId = "";
+        private String range = "";
+        private String blockTemporaryId = "";
+
+        private void reject(JsonNode value, String rangeKey, Map<String, SheetBounds> sheets, Set<String> blockIds) {
+            count++;
+            if (!sheetId.isBlank()) return;
+            var candidateSheet = value.path("sheetId").asText("");
+            var candidateRange = value.path(rangeKey).asText("");
+            var sheet = sheets.get(candidateSheet);
+            var parsed = bounds(candidateRange);
+            if (sheet == null || parsed == null || !sheet.bounds().contains(parsed)) return;
+            sheetId = candidateSheet;
+            range = candidateRange;
+            var candidateBlock = value.path("blockTemporaryId").asText("");
+            blockTemporaryId = blockIds.contains(candidateBlock) ? candidateBlock : "";
+        }
+    }
+
+    private record SheetBounds(String id, String usedRange, Range bounds) {
     }
 
     private record Range(int startColumn, int startRow, int endColumn, int endRow) {
@@ -537,6 +773,10 @@ final class GlobalSemanticRecognitionProtocol {
         boolean overlaps(Range other) {
             return other != null && startColumn <= other.endColumn && endColumn >= other.startColumn
                     && startRow <= other.endRow && endRow >= other.startRow;
+        }
+
+        long area() {
+            return (long) (endColumn - startColumn + 1) * (endRow - startRow + 1);
         }
     }
 

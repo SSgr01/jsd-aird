@@ -289,7 +289,10 @@ final class GlobalSemanticSuggestionCompiler {
      */
     private boolean isFormalRelation(JsonNode relation, JsonNode tables, Map<String, ObjectNode> blocks) {
         var block = blocks.get(relation.path("blockTemporaryId").asText(""));
-        if (block == null || STATIC_BLOCK_TYPES.contains(block.path("type").asText())) return false;
+        if (block == null) return false;
+        var allowedHeaderMetadata = "DOCUMENT_HEADER".equals(block.path("type").asText())
+                && "INLINE_TEXT".equals(relation.path("relationType").asText());
+        if (STATIC_BLOCK_TYPES.contains(block.path("type").asText()) && !allowedHeaderMetadata) return false;
         var sheetId = relation.path("sheetId").asText();
         var labelRange = relation.path("labelRange").asText();
         var valueRange = relation.path("valueRange").asText();

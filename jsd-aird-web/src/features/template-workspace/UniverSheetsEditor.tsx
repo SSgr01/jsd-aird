@@ -90,6 +90,9 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
       apiRef.current = univerAPI;
       const workbook = univerAPI.createWorkbook(snapshot);
       workbook.setEditable(editableRef.current);
+      if (editableRef.current) {
+        void protectReadOnlyRanges(univerAPI, bindingsRef.current).catch(() => undefined);
+      }
       for (const binding of bindingsRef.current) {
         labelValues.set(labelCacheKey(binding), readLabelCell(univerAPI, binding));
         bindingValues.set(valueCacheKey(binding), readCell(univerAPI, binding));
@@ -165,7 +168,10 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
   useEffect(() => {
     editableRef.current = editable;
     apiRef.current?.getActiveWorkbook()?.setEditable(editable);
-  }, [editable]);
+    if (editable && apiRef.current) {
+      void protectReadOnlyRanges(apiRef.current, bindings).catch(() => undefined);
+    }
+  }, [bindings, editable]);
 
   useImperativeHandle(
     ref,
@@ -378,4 +384,50 @@ function verifyWrite(read: () => unknown, expected: unknown) {
       else reject(new Error('写入后回读的单元格内容不一致'));
     });
   });
+}
+
+async function protectReadOnlyRanges(api: FUniver, bindings: TemplateBinding[]) {
+  const targets = new Map<string, { binding: TemplateBinding; address: string }>();
+  for (const binding of bindings) {
+    if (binding.syncDirection === 'EDITOR_TO_DATA' && binding.role === 'FIELD') {
+      const address = stringLocator(binding.locator.anchorAddress)
+        || stringLocator(binding.locator.address)
+        || stringLocator(binding.locator.range);
+      if (validRange(address)) targets.set(protectionKey(binding, address), { binding, address });
+    }
+    const tableModel = binding.diagnostic?.tableModel;
+    if (!isRecord(tableModel) || !Array.isArray(tableModel.columns)) continue;
+    for (const column of tableModel.columns) {
+      if (!isRecord(column) || !readOnlyColumn(column)) continue;
+      const address = stringLocator(column.valueRange);
+      if (validRange(address)) targets.set(protectionKey(binding, address), { binding, address });
+    }
+  }
+  for (const { binding, address } of targets.values()) {
+    const sheet = resolveSheet(api, binding);
+    if (!sheet) continue;
+    const range = sheet.getRange(address);
+    const permission = range.getRangePermission();
+    if (permission.isProtected()) continue;
+    const rule = await permission.protect({
+      name: '系统识别的只读区域',
+      metadata: { source: 'FIELD_MODEL_V4', bindingId: binding.bindingId },
+    });
+    await rule.setPoint(api.Enum.RangePermissionPoint.Edit, false);
+  }
+}
+
+function readOnlyColumn(column: Record<string, unknown>) {
+  const editability = stringLocator(column.editability);
+  const valueSource = stringLocator(column.valueSource);
+  return editability === 'READ_ONLY'
+    || valueSource === 'FORMULA'
+    || valueSource === 'STATIC';
+}
+
+function protectionKey(binding: TemplateBinding, address: string) {
+  return [
+    stringLocator(binding.locator.sheetId) || stringLocator(binding.locator.sheetName),
+    address.toUpperCase(),
+  ].join('|');
 }

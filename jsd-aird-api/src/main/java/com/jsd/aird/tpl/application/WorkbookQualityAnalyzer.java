@@ -86,7 +86,6 @@ public class WorkbookQualityAnalyzer {
                     autoFix, patch, inverse, status));
         }
 
-        addVisualMismatchIssues(structure, issues);
         return new Analysis(patched, List.copyOf(issues), issues.stream()
                 .anyMatch(issue -> "AUTO_APPLIED".equals(issue.status())));
     }
@@ -173,27 +172,6 @@ public class WorkbookQualityAnalyzer {
             if (reference.matcher(name.path("formula").asText("")).find()) return true;
         }
         return false;
-    }
-
-    private void addVisualMismatchIssues(
-            JsonNode structure, List<RecognitionModelClient.QualityIssueSuggestion> target
-    ) {
-        for (var region : structure.path("regions")) {
-            if (region.path("analysisChild").asBoolean(false)) continue;
-            for (var span : region.path("visualSpans")) {
-                if (span.path("cellCount").asInt() < 2 || span.path("valueCellCount").asInt() != 1) continue;
-                target.add(new RecognitionModelClient.QualityIssueSuggestion(
-                        "VISUAL_PHYSICAL_MISMATCH", "INFO", region.path("sheetId").asText(),
-                        region.path("sheetName").asText(), span.path("address").asText(),
-                        "视觉区域与实际单元格结构不一致",
-                        "这些单元格看起来属于同一个区域，但 Excel 中并未真实合并。",
-                        "系统会按逻辑范围高亮和识别，不会擅自合并。", 0.82, false,
-                        objectMapper.createObjectNode(), objectMapper.createObjectNode(),
-                        objectMapper.createArrayNode().add(span.deepCopy()), "DETECTED",
-                        region.path("regionId").asText(), null
-                ));
-            }
-        }
     }
 
     private RecognitionModelClient.QualityIssueSuggestion issue(

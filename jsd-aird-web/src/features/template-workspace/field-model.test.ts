@@ -56,6 +56,8 @@ describe('field model', () => {
     const model = {
       modelVersion: 1,
       groups: [{ id: 'base', name: '基本信息', order: 0 }],
+      blocks: [],
+      semanticAnnotations: [],
       fields: [{
         id: 'field-1',
         bindingId: 'binding-1',

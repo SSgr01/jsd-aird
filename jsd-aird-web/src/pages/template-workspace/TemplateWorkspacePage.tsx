@@ -96,7 +96,9 @@ export function TemplateWorkspacePage() {
   const [snapshot, setSnapshot] = useState<Record<string, unknown>>();
   const [schema, setSchema] = useState<Record<string, unknown>>({});
   const [mapping, setMapping] = useState<TemplateBinding[]>([]);
-  const [fieldModel, setFieldModel] = useState<FieldModel>({ modelVersion: 1, groups: [], fields: [] });
+  const [fieldModel, setFieldModel] = useState<FieldModel>({
+    modelVersion: 4, groups: [], fields: [], blocks: [], semanticAnnotations: [],
+  });
   const [data, setData] = useState<Record<string, unknown>>({});
   const [view, setView] = useState<WorkspaceView>('edit');
   const [selectedFieldId, setSelectedFieldId] = useState<string>();
@@ -196,10 +198,11 @@ export function TemplateWorkspacePage() {
     try {
       const currentSnapshot = editorRef.current.getSnapshot();
       let synchronizedData = data;
-      const bindingValues = mapping.map((binding) => {
+      const bindingValues = mapping.flatMap((binding) => {
         const editorValue = editorRef.current?.readBinding(binding) ?? null;
+        if (binding.syncDirection === 'DATA_TO_EDITOR') return [];
         synchronizedData = setAtPath(synchronizedData, binding.dataPath, editorValue);
-        return { dataPath: binding.dataPath, dataValue: editorValue, editorValue };
+        return [{ dataPath: binding.dataPath, dataValue: editorValue, editorValue }];
       });
       const staged = await templateApi.stageSnapshot(currentSnapshot, workspace.format);
       const savedSchema = writeFieldModel(schema, fieldModel);
@@ -329,9 +332,10 @@ export function TemplateWorkspacePage() {
       role: item.kind === 'SCALAR' ? 'FIELD' : 'REPEAT_REGION',
       locatorType: item.payload.locatorType,
       locator: item.payload.locator,
-      syncDirection: 'TWO_WAY',
+      syncDirection: item.payload.editability === 'READ_ONLY' ? 'EDITOR_TO_DATA' : 'TWO_WAY',
       primaryBinding: true,
-      bindingStatus: 'VALID',
+      bindingStatus: item.payload.editability === 'UNKNOWN'
+        || item.payload.valueSource === 'UNKNOWN' ? 'AMBIGUOUS' : 'VALID',
     });
   };
 
@@ -533,7 +537,7 @@ export function TemplateWorkspacePage() {
       item.status === 'PENDING' && item.confidence >= 0.85,
     );
     if (!targets.length) {
-      void message.info('没有可一键确认的高置信度项目');
+      void message.info('没有可直接确认的识别项目');
       return;
     }
     const statusUpdates = new Map(targets.map((item) => [item.id, 'CONFIRMED' as const]));
@@ -550,7 +554,7 @@ export function TemplateWorkspacePage() {
         : field),
     }));
     markDirty();
-    void message.success(`已确认 ${targets.length} 个高置信度项目`);
+    void message.success(`已确认 ${targets.length} 个识别项目`);
   };
 
   const restartRecognition = async () => {
@@ -1199,7 +1203,7 @@ function RecognitionStatusBar({
         ) : (
           <span>
             识别 {summary?.total ?? 0} 项 ｜ 已确认 {summary?.confirmed ?? 0} ｜
-            待确认 {summary?.pending ?? 0} ｜ 低置信度 {summary?.lowConfidence ?? 0} ｜
+            待确认 {summary?.pending ?? 0} ｜ 建议核对 {summary?.lowConfidence ?? 0} ｜
             冲突 {summary?.conflict ?? 0} ｜ 规范建议 {summary?.qualityIssueCount ?? 0}
           </span>
         )}
@@ -1216,7 +1220,7 @@ function RecognitionStatusBar({
           disabled={busy || !editable || !review?.items.some((item) =>
             item.status === 'PENDING' && item.confidence >= 0.85)}
         >
-          一键确认高置信度
+          一键确认明确项目
         </Button>
         <Button
           size="small"
@@ -1283,6 +1287,7 @@ function recognitionStageLabel(stage?: string) {
     READING_STRUCTURE: '分析表格结构',
     RECOGNIZING_FIELDS: '识别业务字段',
     RECOGNIZING_COMPLEX_REGIONS: '识别复杂区域',
+    RECOGNIZING_WORKBOOK_SEMANTICS: '理解整份工作簿',
     BUILDING_DRAFT: '生成识别结果',
     PERSISTING_RESULT: '保存识别结果',
   };

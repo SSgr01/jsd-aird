@@ -16,12 +16,20 @@ export function mergeRecognitionReview(
   let nextSchema = schema;
   let nextMapping = structuredClone(mapping);
   let nextModel = structuredClone(model);
+  if (review.semanticModel?.businessBlocks) {
+    nextModel.blocks = structuredClone(review.semanticModel.businessBlocks);
+  }
+  if (review.semanticModel?.semanticAnnotations) {
+    nextModel.semanticAnnotations = structuredClone(review.semanticModel.semanticAnnotations);
+  }
 
   for (const item of review.items) {
     if (item.status === 'IGNORED') continue;
     const dataPath = item.payload.dataPath;
     const existingIndex = nextModel.fields.findIndex((field) =>
-      field.recognitionItemId === item.id || Boolean(dataPath && field.dataPath === dataPath),
+      field.recognitionItemId === item.id
+      || Boolean(item.payload.relationId && field.relationId === item.payload.relationId)
+      || Boolean(dataPath && field.dataPath === dataPath),
     );
     if (existingIndex >= 0) {
       const existing = nextModel.fields[existingIndex];

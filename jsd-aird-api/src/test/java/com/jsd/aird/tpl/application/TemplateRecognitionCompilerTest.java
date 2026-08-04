@@ -31,6 +31,7 @@ class TemplateRecognitionCompilerTest {
                 .isEqualTo("产品名称");
         assertThat(result.fieldModel().path("groups")).hasSize(1);
         assertThat(result.fieldModel().path("fields")).hasSize(2);
+        assertThat(result.fieldModel().path("modelVersion").asInt()).isEqualTo(4);
         assertThat(result.fieldModel().path("fields").get(1).path("reviewStatus").asText())
                 .isEqualTo("NEEDS_CONFIRMATION");
     }
@@ -48,6 +49,28 @@ class TemplateRecognitionCompilerTest {
                 .isEqualTo("NEEDS_CONFIRMATION");
     }
 
+    @Test
+    void createsStableIdsAndOneWayFormulaBindingsButNoUnknownBinding() throws Exception {
+        var firstSchema = objectMapper.createObjectNode().put("type", "object");
+        firstSchema.set("properties", objectMapper.createObjectNode());
+        var secondSchema = firstSchema.deepCopy();
+        var formula = suggestion("ACCEPTED", "/result/total", "合计", "基础信息", 0.9,
+                "READ_ONLY", "FORMULA");
+        var unknown = suggestion("PENDING", "/result/unclear", "待确认", "基础信息", 0.5,
+                "UNKNOWN", "UNKNOWN");
+
+        var first = compiler.compile(firstSchema, List.of(formula, unknown), TemplateFormat.XLSX);
+        var second = compiler.compile(secondSchema, List.of(formula, unknown), TemplateFormat.XLSX);
+
+        assertThat(first.fieldModel().path("fields")).hasSize(2);
+        assertThat(first.mapping()).singleElement().satisfies(binding ->
+                assertThat(binding.path("syncDirection").asText()).isEqualTo("EDITOR_TO_DATA"));
+        assertThat(first.fieldModel().path("fields").get(0).path("id").asText())
+                .isEqualTo(second.fieldModel().path("fields").get(0).path("id").asText());
+        assertThat(first.mapping().get(0).path("bindingId").asText())
+                .isEqualTo(second.mapping().get(0).path("bindingId").asText());
+    }
+
     private TemplateImportRepository.RecognitionSuggestionView suggestion(
             String decision, String dataPath, String name, String group
     ) throws Exception {
@@ -57,6 +80,13 @@ class TemplateRecognitionCompilerTest {
     private TemplateImportRepository.RecognitionSuggestionView suggestion(
             String decision, String dataPath, String name, String group, double confidence
     ) throws Exception {
+        return suggestion(decision, dataPath, name, group, confidence, "EDITABLE", "USER_INPUT");
+    }
+
+    private TemplateImportRepository.RecognitionSuggestionView suggestion(
+            String decision, String dataPath, String name, String group, double confidence,
+            String editability, String valueSource
+    ) throws Exception {
         var payload = objectMapper.readTree("""
                 {
                   "fieldCode":"PRODUCT.NAME",
@@ -65,12 +95,16 @@ class TemplateRecognitionCompilerTest {
                   "dataPath":"%s",
                   "valueType":"string",
                   "required":false,
+                  "relationId":"%s",
+                  "editability":"%s",
+                  "valueSource":"%s",
                   "kind":"SCALAR",
                   "role":"FIELD",
                   "locatorType":"CELL_RANGE",
                   "locator":{"sheetId":"sheet-1","sheetName":"生产单","address":"B1"}
                 }
-                """.formatted(name, group, dataPath));
+                """.formatted(name, group, dataPath,
+                "rel-" + dataPath.replaceAll("[^A-Za-z0-9]", "-"), editability, valueSource));
         return new TemplateImportRepository.RecognitionSuggestionView(
                 UUID.randomUUID(), UUID.randomUUID(), "RULE", "SCALAR_FIELD", payload,
                 confidence, objectMapper.createArrayNode(), decision, "rule", "v2", "v2", Instant.now()

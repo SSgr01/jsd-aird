@@ -354,6 +354,20 @@ public class TemplateWorkspaceService {
                     || !StringUtils.hasText(locatorType) || !binding.path("locator").isObject()) {
                 throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "Mapping 缺少 bindingId、dataPath 或 locator");
             }
+            var syncDirection = binding.path("syncDirection").asText("");
+            if (!java.util.Set.of("TWO_WAY", "DATA_TO_EDITOR", "EDITOR_TO_DATA")
+                    .contains(syncDirection)) {
+                throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "Mapping 同步方向无效");
+            }
+            var diagnostic = binding.path("diagnostic");
+            if ("FORMULA".equals(diagnostic.path("valueSource").asText())
+                    && !"EDITOR_TO_DATA".equals(syncDirection)) {
+                throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "Excel 公式只能从工作簿同步到数据");
+            }
+            if ("READ_ONLY".equals(diagnostic.path("editability").asText())
+                    && "TWO_WAY".equals(syncDirection)) {
+                throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "只读位置不能配置双向同步");
+            }
             if (!bindingIds.add(bindingId)) {
                 throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "bindingId 必须唯一：" + bindingId);
             }

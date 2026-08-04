@@ -109,10 +109,11 @@ export function ProductionWorkspacePage() {
     try {
       const currentSnapshot = editorRef.current.getSnapshot();
       let synchronizedData = data;
-      const bindingValues = workspace.mapping.map((binding) => {
+      const bindingValues = workspace.mapping.flatMap((binding) => {
         const editorValue = editorRef.current?.readBinding(binding) ?? null;
+        if (binding.syncDirection === 'DATA_TO_EDITOR') return [];
         synchronizedData = setAtPath(synchronizedData, binding.dataPath, editorValue);
-        return { dataPath: binding.dataPath, dataValue: editorValue, editorValue };
+        return [{ dataPath: binding.dataPath, dataValue: editorValue, editorValue }];
       });
       const staged = await productionOrderApi.stageSnapshot(currentSnapshot, workspace.format);
       const result = await productionOrderApi.saveDraft(orderId, {
@@ -272,9 +273,10 @@ export function ProductionWorkspacePage() {
                 <Input.TextArea
                   id="production-field-value"
                   value={formatValue(getAtPath(data, selected.dataPath))}
-                  readOnly={!editable}
+                  readOnly={!editable || selected.syncDirection === 'EDITOR_TO_DATA'}
                   autoSize={{ minRows: 4, maxRows: 12 }}
                   onChange={(event) => {
+                    if (selected.syncDirection === 'EDITOR_TO_DATA') return;
                     const value = event.target.value;
                     setData((current) => setAtPath(current, selected.dataPath, value));
                     setDirty(true);
@@ -287,7 +289,7 @@ export function ProductionWorkspacePage() {
                 <Alert
                   type="info"
                   showIcon
-                  message={selectedField.kind === 'MATRIX' ? '请直接在测试矩阵中填写结果' : '请直接在明细表中逐行填写'}
+                  message={selectedField.kind === 'MATRIX' ? '请直接在矩阵表中填写结果' : '请直接在明细表中逐行填写'}
                   description="系统会把整片表格作为一个业务区域保存，不会要求逐个配置单元格。"
                 />
               )}

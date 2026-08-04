@@ -1,10 +1,13 @@
 import type { ApiResponse, PageResponse } from '@/types/api';
 import type {
+  BusinessBlock,
   TemplateFormat,
+  Editability,
   TemplateListItem,
   TemplateStatus,
   TemplateVersionHistoryItem,
   TemplateWorkspace,
+  ValueSource,
 } from '@/features/template-workspace/types';
 import { httpClient } from '@/services/http/client';
 
@@ -63,7 +66,7 @@ export interface TemplateImportJob {
   structureSummary: Record<string, unknown>;
   result: {
     initialEditorSnapshot?: Record<string, unknown>;
-    modelStatus?: 'COMPLETED' | 'FAILED' | 'NOT_CONFIGURED';
+    modelStatus?: 'COMPLETED' | 'FAILED' | 'PARTIAL' | 'NOT_CONFIGURED' | 'NOT_APPLICABLE';
     suggestionCount?: number;
     qualityIssueCount?: number;
     autoFixedCount?: number;
@@ -79,6 +82,9 @@ export type RecognitionDecision = 'PENDING' | 'ACCEPTED' | 'REJECTED';
 
 export interface RecognitionSuggestionPayload {
   fieldCode: string;
+  fieldId?: string;
+  bindingId?: string;
+  relationId?: string;
   fieldName: string;
   dataPath: string;
   valueType: 'string' | 'number' | 'integer' | 'boolean' | 'date' | 'datetime' | 'time' | 'duration' | 'array';
@@ -90,7 +96,22 @@ export interface RecognitionSuggestionPayload {
   groupName?: string;
   unit?: string;
   interpretation?: string;
-  columns?: Array<{ code: string; name: string; valueType?: string; unit?: string }>;
+  editability?: Editability;
+  valueSource?: ValueSource;
+  condition?: string;
+  blockId?: string;
+  parentBlockId?: string;
+  columns?: Array<{
+    code: string;
+    name: string;
+    valueType?: string;
+    unit?: string;
+    labelRange?: string;
+    valueRange?: string;
+    editability?: Editability;
+    valueSource?: ValueSource;
+    condition?: string;
+  }>;
   tableModel?: Record<string, unknown>;
   matrixModel?: Record<string, unknown>;
   reason?: string;
@@ -185,6 +206,11 @@ export interface RecognitionReview {
   groups: string[];
   items: RecognitionReviewItem[];
   qualityIssues: TemplateQualityIssue[];
+  semanticModel?: {
+    recognitionProtocolVersion?: number;
+    businessBlocks?: BusinessBlock[];
+    semanticAnnotations?: Array<Record<string, unknown>>;
+  };
 }
 
 export const templateApi = {

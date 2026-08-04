@@ -39,8 +39,8 @@ interface Props {
 const FILTERS: Array<{ value: ReviewFilter; label: string }> = [
   { value: 'ALL', label: '全部' },
   { value: 'PENDING', label: '待确认' },
-  { value: 'LOW', label: '低置信度' },
-  { value: 'CONFLICT', label: '冲突' },
+  { value: 'LOW', label: '建议核对' },
+  { value: 'CONFLICT', label: '需要处理' },
   { value: 'CONFIRMED', label: '已确认' },
   { value: 'QUALITY', label: '规范建议' },
 ];
@@ -248,7 +248,7 @@ export function RecognitionReviewPanel({
                   </p>
                   <dl className="recognition-review-details">
                     <div><dt>所属分组</dt><dd>{item.groupName}</dd></div>
-                    <div><dt>识别把握</dt><dd>{confidenceLabel(item.confidenceLevel)}</dd></div>
+                    <div><dt>处理建议</dt><dd>{confidenceLabel(item.confidenceLevel)}</dd></div>
                   </dl>
                   <div className="recognition-review-actions">
                     {item.status === 'IGNORED' ? (
@@ -333,21 +333,21 @@ function StatusIndicator({ status }: { status: RecognitionReviewStatus }) {
 
 function statusLabel(status: RecognitionReviewStatus) {
   if (status === 'CONFIRMED') return '已确认';
-  if (status === 'CONFLICT') return '冲突';
+  if (status === 'CONFLICT') return '需要处理';
   if (status === 'IGNORED') return '已忽略';
   return '待确认';
 }
 
 function kindLabel(kind: RecognitionReviewItem['kind']) {
   if (kind === 'ROW_TABLE') return '明细表';
-  if (kind === 'MATRIX') return '测试矩阵';
+  if (kind === 'MATRIX') return '矩阵表';
   return '普通字段';
 }
 
 function confidenceLabel(level: RecognitionReviewItem['confidenceLevel']) {
-  if (level === 'HIGH') return '高置信度';
-  if (level === 'MEDIUM') return '中置信度';
-  return '低置信度';
+  if (level === 'HIGH') return '可直接确认';
+  if (level === 'MEDIUM') return '建议看一眼位置和名称';
+  return '建议核对后再使用';
 }
 
 function locationText(item: RecognitionReviewItem) {

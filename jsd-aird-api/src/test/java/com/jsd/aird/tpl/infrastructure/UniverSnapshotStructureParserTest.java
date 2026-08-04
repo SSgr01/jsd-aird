@@ -39,11 +39,13 @@ class UniverSnapshotStructureParserTest {
 
         assertThat(result.initialEditorSnapshot().path("id").asText()).isEqualTo("workbook-1");
         assertThat(result.structureSummary().path("candidateCellCount").asInt()).isEqualTo(3);
-        assertThat(result.structureSummary().path("structureVersion").asInt()).isEqualTo(5);
+        assertThat(result.structureSummary().path("structureVersion").asInt()).isEqualTo(6);
         assertThat(result.structureSummary().path("candidateCells").get(0).path("address").asText())
                 .isEqualTo("A2");
         assertThat(result.structureSummary().path("candidateCells").get(2).path("value").asDouble())
                 .isEqualTo(12.5);
+        assertThat(result.structureSummary().path("semanticCells")).hasSize(3);
+        assertThat(result.structureSummary().path("regions")).isEmpty();
     }
 
     @Test

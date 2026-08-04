@@ -30,7 +30,7 @@ import org.springframework.stereotype.Component;
 @Component
 public class XlsxStructureParser implements OfficeStructureParser {
 
-    static final int STRUCTURE_VERSION = WorkbookRegionSegmenter.STRUCTURE_VERSION;
+    static final int STRUCTURE_VERSION = WorkbookPhysicalFactsBuilder.STRUCTURE_VERSION;
     private static final double POINT_TO_PIXEL = 96d / 72d;
 
     private final ObjectMapper objectMapper;
@@ -156,7 +156,7 @@ public class XlsxStructureParser implements OfficeStructureParser {
 
             summary.put("format", "XLSX");
             summary.put("structureVersion", STRUCTURE_VERSION);
-            summary.put("parserVersion", "xlsx-business-regions-v5");
+            summary.put("parserVersion", "xlsx-physical-facts-v6");
             summary.put("sheetCount", workbook.getNumberOfSheets());
             summary.put("formulaCount", formulaCount);
             summary.put("mergedRegionCount", mergedCount);
@@ -164,7 +164,7 @@ public class XlsxStructureParser implements OfficeStructureParser {
             summary.set("candidateCells", allCandidates);
             summary.set("mergedRanges", allMergedRanges);
             summary.set("dataValidations", allDataValidations);
-            new WorkbookRegionSegmenter(objectMapper).enrich(summary);
+            new WorkbookPhysicalFactsBuilder(objectMapper).enrich(summary);
             if (!workbook.getAllNames().isEmpty()) {
                 var names = objectMapper.createArrayNode();
                 workbook.getAllNames().forEach(name -> names.add(objectMapper.createObjectNode()

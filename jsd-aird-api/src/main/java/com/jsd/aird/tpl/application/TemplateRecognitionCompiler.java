@@ -4,7 +4,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.UUID;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -40,23 +39,42 @@ public class TemplateRecognitionCompiler {
         var fieldModel = objectMapper.createObjectNode();
         var groups = objectMapper.createArrayNode();
         var fields = objectMapper.createArrayNode();
+        var blocks = objectMapper.createArrayNode();
+        var semanticAnnotations = objectMapper.createArrayNode();
         var groupIds = new LinkedHashMap<String, String>();
         var seenPaths = new java.util.HashSet<String>();
         var seenLocations = new java.util.HashMap<String, String>();
         var seenStructuredRegions = new java.util.HashMap<String, String>();
 
+        suggestions.stream().filter(suggestion -> "SEMANTIC_MODEL".equals(suggestion.suggestionType()))
+                .findFirst().ifPresent(suggestion -> {
+                    suggestion.payload().path("businessBlocks").forEach(blocks::add);
+                    suggestion.payload().path("semanticAnnotations").forEach(semanticAnnotations::add);
+                });
+
         suggestions.stream()
                 .filter(suggestion -> !"REJECTED".equals(suggestion.decision()))
+                .filter(suggestion -> !"SEMANTIC_MODEL".equals(suggestion.suggestionType()))
                 .sorted(java.util.Comparator
-                        .comparingDouble(TemplateImportRepository.RecognitionSuggestionView::confidence)
-                        .reversed()
-                        .thenComparingInt(item -> "MODEL".equals(item.source()) ? 0 : 1))
+                        .comparing((TemplateImportRepository.RecognitionSuggestionView item) ->
+                                item.payload().path("locator").path("sheetId").asText(""))
+                        .thenComparing(item -> item.payload().path("locator").path("address").asText(""))
+                        .thenComparing(TemplateImportRepository.RecognitionSuggestionView::createdAt))
                 .forEach(suggestion -> {
                     var payload = suggestion.payload();
-                    var dataPath = payload.path("dataPath").asText("");
+                    var relationId = payload.path("relationId").asText("");
                     var locator = payload.path("locator");
                     var sheet = locator.path("sheetId").asText(locator.path("sheetName").asText(""));
                     var address = locator.path("address").asText(locator.path("range").asText(""));
+                    if (relationId.isBlank()) {
+                        relationId = RecognitionIdentity.relationId(
+                                sheet, locator.path("labelRange").asText(locator.path("labelAddress").asText("")),
+                                address, payload.path("kind").asText(payload.path("role").asText("FIELD"))
+                        );
+                    }
+                    var dataPath = payload.path("dataPath").asText("");
+                    if (dataPath.isBlank()) dataPath = "/recognized/field_"
+                            + RecognitionIdentity.shortHash(relationId, 12);
                     var location = sheet + "|" + address;
                     var kind = recognitionKind(suggestion.suggestionType(), payload);
                     var regionId = payload.path("regionId").asText("");
@@ -78,17 +96,22 @@ public class TemplateRecognitionCompiler {
                     var fieldName = payload.path("fieldName").asText("业务字段");
                     var groupName = payload.path("groupName").asText("").strip();
                     if (groupName.isBlank()) {
-                        groupName = inferGroup(fieldName);
+                        groupName = GroupNameNormalizer.BASIC_INFORMATION;
                     }
-                    groupName = GroupNameNormalizer.normalize(groupName);
-                    var groupId = groupIds.computeIfAbsent(
-                            groupName,
-                            ignored -> "group-" + (groupIds.size() + 1)
-                    );
-                    var bindingId = UUID.randomUUID().toString();
+                    var normalizedGroupName = GroupNameNormalizer.normalize(groupName);
+                    var groupId = groupIds.computeIfAbsent(normalizedGroupName, ignored ->
+                            "group-" + GroupNameNormalizer.code(normalizedGroupName).toLowerCase(Locale.ROOT)
+                                    + "-" + RecognitionIdentity.shortHash(normalizedGroupName, 8));
+                    var fieldId = RecognitionIdentity.fieldId(relationId);
+                    var locatorType = payload.path("locatorType").asText("CELL_RANGE");
+                    var bindingId = RecognitionIdentity.bindingId(
+                            fieldId, locatorType, sheet + "|" + address
+                    ).toString();
+                    var validBinding = validBinding(payload);
                     var field = objectMapper.createObjectNode()
-                            .put("id", bindingId)
-                            .put("bindingId", bindingId)
+                            .put("id", fieldId.toString())
+                            .put("fieldId", fieldId.toString())
+                            .put("relationId", relationId)
                             .put("dataPath", dataPath)
                             .put("groupId", groupId)
                             .put("name", fieldName)
@@ -100,9 +123,15 @@ public class TemplateRecognitionCompiler {
                             .put("interpretation", businessInterpretation(kind, fieldName, payload))
                             .put("confidence", suggestion.confidence())
                             .put("recognitionItemId", suggestion.id().toString())
-                            .put("reviewStatus", "ACCEPTED".equals(suggestion.decision())
+                            .put("editability", payload.path("editability").asText("UNKNOWN"))
+                            .put("valueSource", payload.path("valueSource").asText("UNKNOWN"))
+                            .put("condition", payload.path("condition").asText(""))
+                            .put("blockId", payload.path("blockId").asText(""))
+                            .put("parentBlockId", payload.path("parentBlockId").asText(""))
+                            .put("reviewStatus", validBinding && "ACCEPTED".equals(suggestion.decision())
                                     ? "CONFIRMED"
                                     : "NEEDS_CONFIRMATION");
+                    if (validBinding) field.put("bindingId", bindingId);
                     if (payload.path("columns").isArray()) {
                         field.set("columns", payload.path("columns").deepCopy());
                     }
@@ -115,8 +144,9 @@ public class TemplateRecognitionCompiler {
                     fields.add(field);
 
                     applySchema(baseSchema, payload, kind);
-                    if (format == TemplateFormat.XLSX) {
-                        mapping.add(toBinding(bindingId, suggestion.id(), payload, kind));
+                    if (format == TemplateFormat.XLSX && validBinding) {
+                        mapping.add(toBinding(bindingId, fieldId.toString(), relationId,
+                                suggestion.id(), payload, kind));
                     }
                 });
 
@@ -134,27 +164,38 @@ public class TemplateRecognitionCompiler {
         }
         fieldModel.set("groups", groups);
         fieldModel.set("fields", fields);
-        fieldModel.put("modelVersion", 3);
+        fieldModel.set("blocks", blocks);
+        fieldModel.set("semanticAnnotations", semanticAnnotations);
+        fieldModel.put("modelVersion", 4);
         baseSchema.set(FIELD_MODEL_KEY, fieldModel);
         return new CompiledRecognition(baseSchema, mapping, fieldModel);
     }
 
-    private ObjectNode toBinding(String bindingId, UUID recognitionItemId, JsonNode payload, String kind) {
+    private ObjectNode toBinding(
+            String bindingId, String fieldId, String relationId,
+            java.util.UUID recognitionItemId, JsonNode payload, String kind
+    ) {
         var binding = objectMapper.createObjectNode();
         binding.put("bindingId", bindingId);
+        binding.put("fieldId", fieldId);
+        binding.put("relationId", relationId);
         binding.put("fieldCode", payload.path("fieldCode").asText("AUTO.FIELD"));
         binding.put("dataPath", payload.path("dataPath").asText());
         binding.put("role", "SCALAR".equals(kind) ? "FIELD" : "REPEAT_REGION");
         binding.put("locatorType", payload.path("locatorType").asText("CELL_RANGE"));
         binding.set("locator", payload.path("locator").deepCopy());
-        binding.put("syncDirection", "TWO_WAY");
+        binding.put("syncDirection", syncDirection(payload));
         binding.put("primaryBinding", true);
         binding.put("bindingStatus", "VALID");
         binding.set("diagnostic", objectMapper.createObjectNode()
                 .put("source", "AUTO_RECOGNIZED")
                 .put("recognitionItemId", recognitionItemId.toString())
                 .put("kind", kind)
-                .put("groupName", payload.path("groupName").asText("")));
+                .put("groupName", payload.path("groupName").asText(""))
+                .put("editability", payload.path("editability").asText("UNKNOWN"))
+                .put("valueSource", payload.path("valueSource").asText("UNKNOWN"))
+                .put("condition", payload.path("condition").asText(""))
+                .put("blockId", payload.path("blockId").asText("")));
         if (payload.path("matrixModel").isObject()) {
             binding.withObject("diagnostic").set("matrixModel", payload.path("matrixModel").deepCopy());
         }
@@ -162,6 +203,31 @@ public class TemplateRecognitionCompiler {
             binding.withObject("diagnostic").set("tableModel", payload.path("tableModel").deepCopy());
         }
         return binding;
+    }
+
+    private boolean validBinding(JsonNode payload) {
+        var editability = payload.path("editability").asText("UNKNOWN");
+        var valueSource = payload.path("valueSource").asText("UNKNOWN");
+        return !"UNKNOWN".equals(editability) && !"UNKNOWN".equals(valueSource)
+                && !("EDITABLE".equals(editability) && "FORMULA".equals(valueSource));
+    }
+
+    private String syncDirection(JsonNode payload) {
+        var editability = payload.path("editability").asText("UNKNOWN");
+        var valueSource = payload.path("valueSource").asText("UNKNOWN");
+        if ("CONDITIONAL".equals(editability)) return "TWO_WAY";
+        if ("EDITABLE".equals(editability) && "USER_INPUT".equals(valueSource)) return "TWO_WAY";
+        if ("READ_ONLY".equals(editability)
+                || "FORMULA".equals(valueSource) || "STATIC".equals(valueSource)) {
+            return "EDITOR_TO_DATA";
+        }
+        if ("REFERENCE".equals(valueSource)) {
+            return "EDITABLE".equals(editability) ? "TWO_WAY" : "EDITOR_TO_DATA";
+        }
+        if ("MIXED".equals(valueSource)) {
+            return "EDITABLE".equals(editability) ? "TWO_WAY" : "EDITOR_TO_DATA";
+        }
+        throw new IllegalArgumentException("无法为未知字段生成同步方向");
     }
 
     private void applySchema(ObjectNode root, JsonNode payload, String kind) {
@@ -284,34 +350,6 @@ public class TemplateRecognitionCompiler {
             case "MATRIX" -> "系统认为“" + name + "”的行和列分别表示两类条件，交叉位置填写结果。";
             default -> "系统认为这里用于填写“" + name + "”。";
         };
-    }
-
-    private String inferGroup(String fieldName) {
-        if (containsAny(fieldName, "原料", "物料", "配方", "树脂", "单体")) {
-            return "原料信息";
-        }
-        if (containsAny(fieldName, "温度", "时间", "工艺", "搅拌", "反应", "压力")) {
-            return "工艺条件";
-        }
-        if (containsAny(fieldName, "性能", "测试", "检测", "强度", "粘度", "结果")) {
-            return "性能测试";
-        }
-        if (containsAny(fieldName, "审核", "批准", "签字", "确认")) {
-            return "审核信息";
-        }
-        if (containsAny(fieldName, "名称", "编号", "日期", "产品", "项目", "批次")) {
-            return GroupNameNormalizer.BASIC_INFORMATION;
-        }
-        return "其他信息";
-    }
-
-    private boolean containsAny(String value, String... words) {
-        for (String word : words) {
-            if (value.contains(word)) {
-                return true;
-            }
-        }
-        return false;
     }
 
     private String unescape(String value) {

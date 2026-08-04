@@ -57,6 +57,7 @@ public class UniverSnapshotStructureParser implements WorkbookSnapshotStructureP
                         .put("id", sheetId)
                         .put("sheetName", sheetName)
                         .put("name", sheetName)
+                        .put("hidden", sheet.path("hidden").asInt(0) > 0)
                         .put("rowCount", sheet.path("rowCount").asInt(0))
                         .put("columnCount", sheet.path("columnCount").asInt(0))
                         .put("usedCellCount", usedCells)
@@ -70,14 +71,14 @@ public class UniverSnapshotStructureParser implements WorkbookSnapshotStructureP
             }
             summary.put("format", "XLSX");
             summary.put("sourceKind", "UNIVER_SNAPSHOT");
-            summary.put("structureVersion", WorkbookRegionSegmenter.STRUCTURE_VERSION);
-            summary.put("parserVersion", "univer-snapshot-regions-v5");
+            summary.put("structureVersion", WorkbookPhysicalFactsBuilder.STRUCTURE_VERSION);
+            summary.put("parserVersion", "univer-snapshot-physical-facts-v6");
             summary.put("sheetCount", sheetCount);
             summary.put("candidateCellCount", candidateCells.size());
             summary.set("sheets", sheets);
             summary.set("candidateCells", candidateCells);
             summary.set("mergedRanges", allMergedRanges);
-            new WorkbookRegionSegmenter(objectMapper).enrich(summary);
+            new WorkbookPhysicalFactsBuilder(objectMapper).enrich(summary);
             return new OfficeStructureParser.ParseResult(summary, snapshot, List.of());
         } catch (IllegalArgumentException exception) {
             throw exception;
@@ -116,6 +117,11 @@ public class UniverSnapshotStructureParser implements WorkbookSnapshotStructureP
                         .put("row", rowIndex + 1)
                         .put("column", columnIndex + 1)
                         .put("empty", value == null || value.isNull() || value.asText().isBlank())
+                        .put("valueType", cell.path("f").asText("").isBlank()
+                                ? value == null ? "BLANK" : value.isNumber() ? "NUMERIC"
+                                : value.isBoolean() ? "BOOLEAN" : "STRING"
+                                : "FORMULA")
+                        .put("formula", !cell.path("f").asText("").isBlank())
                         .put("bold", cell.path("s").path("bl").asInt(0) > 0)
                         .put("hasBorder", cell.path("s").path("bd").isObject()
                                 && !cell.path("s").path("bd").isEmpty());
@@ -201,7 +207,9 @@ public class UniverSnapshotStructureParser implements WorkbookSnapshotStructureP
         var value = cell.get("v");
         if (value != null && !value.isContainerNode()) return value;
         var formula = cell.path("f").asText("");
-        return formula.isBlank() ? null : objectMapper.getNodeFactory().textNode("=" + formula);
+        return formula.isBlank() ? null : objectMapper.getNodeFactory().textNode(
+                formula.startsWith("=") ? formula : "=" + formula
+        );
     }
 
     private int parseIndex(String value) {

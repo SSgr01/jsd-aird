@@ -173,11 +173,18 @@ public class TemplateRecognitionReviewService {
     private RecognitionReview assemble(UUID organizationId, TemplateRepository.TemplateWorkspace workspace) {
         var run = importRepository.findLatestForVersion(organizationId, workspace.versionId()).orElse(null);
         if (run == null) {
-            return new RecognitionReview(null, "NONE", emptySummary(), List.of(), List.of(), List.of());
+            return new RecognitionReview(null, "NONE", emptySummary(), List.of(), List.of(), List.of(), null);
         }
         var suggestions = importRepository.listSuggestions(organizationId, run.id());
+        var semanticModel = suggestions.stream()
+                .filter(suggestion -> "SEMANTIC_MODEL".equals(suggestion.suggestionType()))
+                .findFirst()
+                .map(suggestion -> (JsonNode) suggestion.payload().deepCopy())
+                .orElse(null);
         var grouped = new LinkedHashMap<String, List<TemplateImportRepository.RecognitionSuggestionView>>();
-        suggestions.stream().sorted(suggestionOrder()).forEach(suggestion ->
+        suggestions.stream()
+                .filter(suggestion -> !"SEMANTIC_MODEL".equals(suggestion.suggestionType()))
+                .sorted(suggestionOrder()).forEach(suggestion ->
                 grouped.computeIfAbsent(reviewKey(suggestion), ignored -> new ArrayList<>()).add(suggestion)
         );
         var items = new ArrayList<RecognitionReviewItem>();
@@ -192,7 +199,7 @@ public class TemplateRecognitionReviewService {
             var payload = primary.payload();
             var kind = kind(primary);
             var groupName = payload.path("groupName").asText("").strip();
-            if (groupName.isBlank()) groupName = inferGroup(payload.path("fieldName").asText(""));
+            if (groupName.isBlank()) groupName = GroupNameNormalizer.BASIC_INFORMATION;
             groupName = GroupNameNormalizer.normalize(groupName);
             items.add(new RecognitionReviewItem(
                     primary.id(),
@@ -236,7 +243,8 @@ public class TemplateRecognitionReviewService {
                         .contains(item.status())).count()
         );
         return new RecognitionReview(
-                run.id(), run.status(), summary, List.copyOf(groups), List.copyOf(items), qualityIssues
+                run.id(), run.status(), summary, List.copyOf(groups), List.copyOf(items), qualityIssues,
+                semanticModel
         );
     }
 
@@ -334,14 +342,6 @@ public class TemplateRecognitionReviewService {
         return (int) items.stream().filter(item -> status.equals(item.status())).count();
     }
 
-    private String inferGroup(String value) {
-        if (value.matches(".*(原料|物料|配方|树脂|单体|用量).*") ) return "原料信息";
-        if (value.matches(".*(温度|时间|工艺|压力|反应).*") ) return "工艺条件";
-        if (value.matches(".*(测试|性能|结果|强度|粘度).*") ) return "性能测试";
-        if (value.matches(".*(审核|批准|签字).*") ) return "审核信息";
-        return GroupNameNormalizer.BASIC_INFORMATION;
-    }
-
     private RecognitionSummary emptySummary() {
         return new RecognitionSummary(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
     }
@@ -352,7 +352,8 @@ public class TemplateRecognitionReviewService {
             RecognitionSummary summary,
             List<String> groups,
             List<RecognitionReviewItem> items,
-            List<QualityIssueItem> qualityIssues
+            List<QualityIssueItem> qualityIssues,
+            JsonNode semanticModel
     ) {
     }
 

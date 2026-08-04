@@ -69,6 +69,7 @@ app:
     base-url: ${JSD_AIRD_MODEL_BASE_URL:${OPENAI_BASE_URL:}}
     api-key: ${JSD_AIRD_MODEL_API_KEY:${OPENAI_API_KEY:}}
     model: ${JSD_AIRD_MODEL_NAME:${OPENAI_MODEL:}}
-    temperature: ${JSD_AIRD_MODEL_TEMPERATURE:${OPENAI_TEMPERATURE:0.5}}
+    temperature: 0.0
+    response-format: ${JSD_AIRD_MODEL_RESPONSE_FORMAT:json_schema}
   recognition:
     audit-cleanup-cron: ${JSD_AIRD_RECOGNITION_AUDIT_CLEANUP_CRON:0 30 2 * * *}

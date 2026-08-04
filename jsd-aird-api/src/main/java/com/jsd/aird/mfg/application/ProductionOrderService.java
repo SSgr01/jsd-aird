@@ -235,6 +235,15 @@ public class ProductionOrderService {
             if (!ids.add(binding.path("bindingId").asText())) {
                 throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "实例 bindingId 必须唯一");
             }
+            var syncDirection = binding.path("syncDirection").asText("");
+            if (!java.util.Set.of("TWO_WAY", "DATA_TO_EDITOR", "EDITOR_TO_DATA")
+                    .contains(syncDirection)) {
+                throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "实例 Mapping 同步方向无效");
+            }
+            if ("FORMULA".equals(binding.path("diagnostic").path("valueSource").asText())
+                    && !"EDITOR_TO_DATA".equals(syncDirection)) {
+                throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "公式字段只能从工作簿同步到数据");
+            }
             var hasPosition = StringUtils.hasText(binding.path("markerId").asText())
                     || StringUtils.hasText(binding.path("locator").path("address").asText())
                     || StringUtils.hasText(binding.path("locator").path("range").asText());

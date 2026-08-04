@@ -20,7 +20,7 @@ export function readFieldModel(
   }
   const groupId = 'group-other';
   return {
-    modelVersion: 3,
+    modelVersion: 4,
     groups: [{ id: groupId, name: '其他信息', order: 0 }],
     fields: mapping.map((binding) => ({
       id: binding.bindingId,
@@ -34,7 +34,11 @@ export function readFieldModel(
       description: stringValue(binding.diagnostic?.description),
       interpretation: interpretation(kindFromBinding(binding), displayName(binding)),
       reviewStatus: binding.bindingStatus === 'VALID' ? 'CONFIRMED' : 'ISSUE',
+      editability: stringValue(binding.diagnostic?.editability) as BusinessField['editability'] || 'UNKNOWN',
+      valueSource: stringValue(binding.diagnostic?.valueSource) as BusinessField['valueSource'] || 'UNKNOWN',
     })),
+    blocks: [],
+    semanticAnnotations: [],
   };
 }
 
@@ -56,7 +60,7 @@ export function applySuggestion(
   if (existing) return { schema, mapping, model, binding: existing };
 
   const groupName = normalizeGroupName(
-    suggestion.payload.groupName?.trim() || inferGroup(suggestion.payload.fieldName),
+    suggestion.payload.groupName?.trim() || '基础信息',
   );
   let group = model.groups.find((item) => item.name === groupName);
   const nextModel = structuredClone(model);
@@ -69,31 +73,43 @@ export function applySuggestion(
     };
     nextModel.groups.push(group);
   }
-  const bindingId = crypto.randomUUID();
+  const bindingId = suggestion.payload.bindingId || crypto.randomUUID();
+  const fieldId = suggestion.payload.fieldId || bindingId;
   const kind = suggestionKind(suggestion);
   const locator = locatorOverride ?? suggestion.payload.locator;
+  const editability = suggestion.payload.editability ?? 'EDITABLE';
+  const valueSource = suggestion.payload.valueSource ?? 'USER_INPUT';
+  const validBinding = editability !== 'UNKNOWN' && valueSource !== 'UNKNOWN';
   const binding: TemplateBinding = {
     bindingId,
+    fieldId,
+    relationId: suggestion.payload.relationId,
     fieldCode: suggestion.payload.fieldCode,
     dataPath: suggestion.payload.dataPath,
     role: kind === 'SCALAR' ? 'FIELD' : 'REPEAT_REGION',
     locatorType: suggestion.payload.locatorType,
     locator,
-    syncDirection: 'TWO_WAY',
+    syncDirection: syncDirection(editability, valueSource),
     primaryBinding: true,
-    bindingStatus: 'VALID',
+    bindingStatus: validBinding ? 'VALID' : 'AMBIGUOUS',
     diagnostic: {
       source: locatorOverride ? 'CUSTOMER_CONFIRMED' : 'AUTO_RECOGNIZED',
       kind,
       groupName,
       description: suggestion.payload.reason,
       recognitionItemId: suggestion.id,
+      editability,
+      valueSource,
+      condition: suggestion.payload.condition,
+      blockId: suggestion.payload.blockId,
     },
   };
   const field: BusinessField = {
-    id: bindingId,
+    id: fieldId,
+    fieldId,
+    relationId: suggestion.payload.relationId,
     recognitionItemId: suggestion.id,
-    bindingId,
+    ...(validBinding ? { bindingId } : {}),
     dataPath: suggestion.payload.dataPath,
     groupId: group.id,
     name: suggestion.payload.fieldName,
@@ -106,6 +122,11 @@ export function applySuggestion(
       suggestion.payload.interpretation || interpretation(kind, suggestion.payload.fieldName),
     confidence: suggestion.confidence,
     reviewStatus: suggestion.decision === 'ACCEPTED' ? 'CONFIRMED' : 'NEEDS_CONFIRMATION',
+    editability,
+    valueSource,
+    condition: suggestion.payload.condition,
+    blockId: suggestion.payload.blockId,
+    parentBlockId: suggestion.payload.parentBlockId,
     columns: suggestion.payload.columns,
     tableModel: suggestion.payload.tableModel,
     matrixModel: suggestion.payload.matrixModel,
@@ -122,10 +143,21 @@ export function applySuggestion(
   const nextSchema = addFieldSchema(schema, suggestion, kind);
   return {
     schema: writeFieldModel(nextSchema, nextModel),
-    mapping: [...mapping, binding],
+    mapping: validBinding ? [...mapping, binding] : mapping,
     model: nextModel,
     binding,
   };
+}
+
+function syncDirection(
+  editability: NonNullable<BusinessField['editability']>,
+  valueSource: NonNullable<BusinessField['valueSource']>,
+): TemplateBinding['syncDirection'] {
+  if (editability === 'EDITABLE' || editability === 'CONDITIONAL') return 'TWO_WAY';
+  if (valueSource === 'FORMULA' || valueSource === 'STATIC' || valueSource === 'REFERENCE' || valueSource === 'MIXED') {
+    return 'EDITOR_TO_DATA';
+  }
+  return 'EDITOR_TO_DATA';
 }
 
 export function updateBusinessField(
@@ -298,14 +330,6 @@ function interpretation(kind: FieldKind, name: string) {
   if (kind === 'ROW_TABLE') return `系统认为“${name}”中每一行代表一条业务记录。`;
   if (kind === 'MATRIX') return `系统认为“${name}”的行列表示不同条件，交叉位置填写结果。`;
   return `系统认为这里用于填写“${name}”。`;
-}
-
-function inferGroup(value: string) {
-  if (/原料|物料|配方|树脂|单体|用量/.test(value)) return '原料信息';
-  if (/温度|时间|工艺|压力|反应/.test(value)) return '工艺条件';
-  if (/测试|性能|结果|强度|粘度/.test(value)) return '性能测试';
-  if (/审核|批准|签字/.test(value)) return '审核信息';
-  return '基础信息';
 }
 
 function normalizeType(value?: string) {

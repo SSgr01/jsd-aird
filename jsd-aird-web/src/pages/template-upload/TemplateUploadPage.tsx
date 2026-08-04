@@ -276,6 +276,7 @@ function stageLabel(stage?: string) {
     READING_STRUCTURE: '正在分析表格结构',
     RECOGNIZING_FIELDS: '正在识别业务字段',
     RECOGNIZING_COMPLEX_REGIONS: '正在识别明细表和复杂区域',
+    RECOGNIZING_WORKBOOK_SEMANTICS: '正在理解整份工作簿',
     AI_RECOGNITION: '正在理解业务含义',
     BUILDING_DRAFT: '正在生成可编辑模板',
     CHECKING_RESULT: '正在检查识别结果',

@@ -44,11 +44,13 @@ export function normalizeFieldModel(model: FieldModel): FieldModel {
   }
   const fallback = groups[0]?.id ?? 'group-basic';
   return {
-    modelVersion: 3,
+    modelVersion: 4,
     groups,
     fields: next.fields.map((field) => ({
       ...field,
       groupId: groupIdMap.get(field.groupId) ?? fallback,
     })),
+    blocks: Array.isArray(next.blocks) ? next.blocks : [],
+    semanticAnnotations: Array.isArray(next.semanticAnnotations) ? next.semanticAnnotations : [],
   };
 }

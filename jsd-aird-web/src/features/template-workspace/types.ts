@@ -3,6 +3,8 @@ export type TemplateStatus = 'DRAFT' | 'PUBLISHED' | 'RETIRED';
 export type BindingRole = 'FIELD' | 'REPEAT_REGION' | 'CONDITIONAL';
 export type SyncDirection = 'TWO_WAY' | 'DATA_TO_EDITOR' | 'EDITOR_TO_DATA';
 export type BindingStatus = 'VALID' | 'INVALID' | 'AMBIGUOUS' | 'MISSING';
+export type Editability = 'EDITABLE' | 'READ_ONLY' | 'CONDITIONAL' | 'UNKNOWN';
+export type ValueSource = 'USER_INPUT' | 'FORMULA' | 'REFERENCE' | 'STATIC' | 'MIXED' | 'UNKNOWN';
 
 export interface TemplateListItem {
   templateId: string;
@@ -21,6 +23,8 @@ export interface TemplateListItem {
 
 export interface TemplateBinding {
   bindingId: string;
+  fieldId?: string;
+  relationId?: string;
   markerId?: string;
   fieldCode?: string;
   dataPath: string;
@@ -45,6 +49,8 @@ export interface FieldGroup {
 
 export interface BusinessField {
   id: string;
+  fieldId?: string;
+  relationId?: string;
   recognitionItemId?: string;
   bindingId?: string;
   dataPath?: string;
@@ -58,15 +64,52 @@ export interface BusinessField {
   interpretation?: string;
   confidence?: number;
   reviewStatus: FieldReviewStatus;
-  columns?: Array<{ code: string; name: string; valueType?: string; unit?: string }>;
+  editability?: Editability;
+  valueSource?: ValueSource;
+  condition?: string;
+  blockId?: string;
+  parentBlockId?: string;
+  columns?: Array<{
+    code: string;
+    name: string;
+    valueType?: string;
+    unit?: string;
+    labelRange?: string;
+    valueRange?: string;
+    editability?: Editability;
+    valueSource?: ValueSource;
+    condition?: string;
+  }>;
   tableModel?: Record<string, unknown>;
   matrixModel?: Record<string, unknown>;
+}
+
+export interface BusinessBlock {
+  blockId: string;
+  parentBlockId?: string;
+  sheetId: string;
+  range: string;
+  type:
+    | 'DOCUMENT_HEADER'
+    | 'FORM_FIELDS'
+    | 'ROW_TABLE'
+    | 'MATRIX'
+    | 'INSTRUCTION_LIST'
+    | 'CONFIRMATION_BLOCK'
+    | 'SIGNATURE_BLOCK'
+    | 'NOTE_BLOCK'
+    | 'LOOKUP_TABLE'
+    | 'UNKNOWN';
+  businessName: string;
+  groupName?: string;
 }
 
 export interface FieldModel {
   modelVersion: number;
   groups: FieldGroup[];
   fields: BusinessField[];
+  blocks: BusinessBlock[];
+  semanticAnnotations: Array<Record<string, unknown>>;
 }
 
 export interface EditorSelection {

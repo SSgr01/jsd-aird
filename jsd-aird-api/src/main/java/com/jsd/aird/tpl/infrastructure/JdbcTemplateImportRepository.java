@@ -322,15 +322,17 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
                                 issue_type, severity, confidence, sheet_id, sheet_name, address,
                                 title, description, business_impact, evidence_jsonb,
                                 suggested_patch_jsonb, inverse_patch_jsonb, auto_fixable, status,
-                                before_snapshot_hash, after_snapshot_hash
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                before_snapshot_hash, after_snapshot_hash, root_block_id,
+                                customer_issue_category
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             """,
                     UUID.randomUUID(), importJobId, recognitionRunId, issue.recognitionCallId(),
                     blankToNull(issue.regionId()), issue.issueType(), issue.severity(), issue.confidence(),
                     blankToNull(issue.sheetId()), blankToNull(issue.sheetName()), issue.address(),
                     issue.title(), issue.description(), issue.businessImpact(), pgJson(issue.evidence()),
                     pgJson(issue.suggestedPatch()), pgJson(issue.inversePatch()), issue.autoFixable(),
-                    issue.status(), beforeSnapshotHash, afterSnapshotHash
+                    issue.status(), beforeSnapshotHash, afterSnapshotHash,
+                    blankToNull(issue.regionId()), issue.issueType()
             );
         }
     }
@@ -391,8 +393,8 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
                                 id, import_job_id, source, suggestion_type, payload_jsonb,
                                 confidence, evidence_jsonb, decision, provider, model,
                                 prompt_version, request_hash, response_hash,
-                                recognition_run_id, recognition_call_id, region_id
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?)
+                                recognition_run_id, recognition_call_id, region_id, relation_id, block_id
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             """,
                     UUID.randomUUID(),
                     importJobId,
@@ -412,7 +414,9 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
                             : UUID.fromString(suggestion.payload().path("recognitionCallId").asText()),
                     suggestion.payload().path("regionId").asText(
                             batch.callTrace() == null ? "" : batch.callTrace().regionId()
-                    )
+                    ),
+                    blankToNull(suggestion.payload().path("relationId").asText("")),
+                    blankToNull(suggestion.payload().path("blockId").asText(""))
             );
         }
     }

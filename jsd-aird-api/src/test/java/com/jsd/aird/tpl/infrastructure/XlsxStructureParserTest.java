@@ -55,7 +55,7 @@ class XlsxStructureParserTest {
         var result = parser.parse(new ByteArrayInputStream(source));
         var sheet = result.initialEditorSnapshot().path("sheets").path("sheet-1");
 
-        assertThat(result.structureSummary().path("structureVersion").asInt()).isEqualTo(5);
+        assertThat(result.structureSummary().path("structureVersion").asInt()).isEqualTo(6);
         assertThat(sheet.path("mergeData")).singleElement().satisfies(merge -> {
             assertThat(merge.path("startColumn").asInt()).isEqualTo(1);
             assertThat(merge.path("endColumn").asInt()).isEqualTo(4);
@@ -67,8 +67,10 @@ class XlsxStructureParserTest {
         var reparsed = new UniverSnapshotStructureParser(objectMapper).parse(new ByteArrayInputStream(
                 objectMapper.writeValueAsBytes(result.initialEditorSnapshot())
         ));
-        assertThat(reparsed.structureSummary().path("regions").findValuesAsText("regionId"))
-                .containsExactlyElementsOf(result.structureSummary().path("regions").findValuesAsText("regionId"));
+        assertThat(reparsed.structureSummary().path("semanticCells"))
+                .isEqualTo(result.structureSummary().path("semanticCells"));
+        assertThat(reparsed.structureSummary().path("layoutSpans"))
+                .isEqualTo(result.structureSummary().path("layoutSpans"));
     }
 
     @Test
@@ -83,7 +85,8 @@ class XlsxStructureParserTest {
             var sheet = result.initialEditorSnapshot().path("sheets").path("sheet-1");
             assertThat(summary.path("sheets").get(0).path("usedRange").asText()).isEqualTo("A1:J37");
             assertThat(summary.path("mergedRegionCount").asInt()).isEqualTo(21);
-            assertThat(summary.path("regionCount").asInt()).isGreaterThan(3);
+            assertThat(summary.path("semanticCells")).isNotEmpty();
+            assertThat(summary.path("layoutSpans")).isNotEmpty();
             assertThat(summary.path("sheets").get(0).path("candidateCellsTruncated").asBoolean()).isFalse();
             assertThat(sheet.path("mergeData")).hasSize(21);
             assertThat(sheet.path("rowData")).hasSizeGreaterThanOrEqualTo(35);
@@ -91,51 +94,13 @@ class XlsxStructureParserTest {
             var reparsed = new UniverSnapshotStructureParser(objectMapper).parse(new ByteArrayInputStream(
                     objectMapper.writeValueAsBytes(result.initialEditorSnapshot())
             ));
-            assertThat(reparsed.structureSummary().path("regions").findValuesAsText("regionId"))
-                    .containsExactlyElementsOf(summary.path("regions").findValuesAsText("regionId"));
-
-            var engine = new RuleBasedRecognitionEngine(
-                    objectMapper, new JsonCanonicalizer(objectMapper)
-            );
-            var recognition = engine.recognize(
-                    TemplateFormat.XLSX, source.getFileName().toString(), summary
-            );
-            assertThat(recognition.suggestions()).anySatisfy(suggestion -> {
-                assertThat(suggestion.payload().path("fieldName").asText()).isEqualTo("项目");
-                assertThat(suggestion.payload().path("locator").path("labelAddress").asText())
-                        .isEqualTo("A3");
-                assertThat(suggestion.payload().path("locator").path("address").asText())
-                        .isEqualTo("B3:I3");
-            });
-            assertThat(recognition.suggestions()).anySatisfy(suggestion -> {
-                assertThat(suggestion.payload().path("fieldName").asText()).isEqualTo("测试数据记录");
-                assertThat(suggestion.payload().path("kind").asText()).isEqualTo("MATRIX");
-                assertThat(suggestion.payload().path("locator").path("labelRange").asText())
-                        .isEqualTo("A17:A35");
-                assertThat(suggestion.payload().path("matrixModel").path("rowHeaderRange").asText())
-                        .isNotBlank();
-                assertThat(suggestion.payload().path("matrixModel").path("columnHeaderRange").asText())
-                        .isNotBlank();
-                assertThat(suggestion.payload().path("matrixModel").path("dataRange").asText())
-                        .isNotBlank();
-                assertThat(suggestion.payload().path("matrixModel").path("headerTree")).isNotEmpty();
-                assertThat(suggestion.payload().path("matrixModel").path("expansion").path("columns").asBoolean())
-                        .isTrue();
-            });
-            var matrixRegionId = recognition.suggestions().stream()
-                    .filter(suggestion -> "测试数据记录".equals(
-                            suggestion.payload().path("fieldName").asText()
-                    ))
-                    .map(suggestion -> suggestion.payload().path("regionId").asText())
-                    .findFirst().orElseThrow();
-            assertThat(recognition.suggestions().stream().filter(suggestion -> matrixRegionId.equals(
-                    suggestion.payload().path("regionId").asText()
-            ))).hasSize(1);
+            assertThat(reparsed.structureSummary().path("semanticCells"))
+                    .isEqualTo(summary.path("semanticCells"));
         }
     }
 
     @Test
-    void keepsAllStyledCellsAndSplitsOversizedRegionsForModelAnalysis() throws Exception {
+    void keepsAllStyledCellsAndCompressesTheirLayoutWithoutBusinessPreclassification() throws Exception {
         byte[] source;
         try (var workbook = new XSSFWorkbook(); var output = new ByteArrayOutputStream()) {
             var sheet = workbook.createSheet("大表");
@@ -151,14 +116,33 @@ class XlsxStructureParserTest {
         var summary = parser.parse(new ByteArrayInputStream(source)).structureSummary();
         assertThat(summary.path("candidateCells")).hasSize(2_400);
         assertThat(summary.path("sheets").get(0).path("candidateCellsTruncated").asBoolean()).isFalse();
-        assertThat(summary.path("regions")).anySatisfy(region -> {
-            assertThat(region.path("hasChildren").asBoolean()).isTrue();
-            assertThat(region.path("requiresModel").asBoolean()).isFalse();
-        });
-        assertThat(summary.path("regions")).anySatisfy(region -> {
-            assertThat(region.path("analysisChild").asBoolean()).isTrue();
-            assertThat(region.path("parentRegionId").asText()).isNotBlank();
-            assertThat(region.path("cellCount").asInt()).isLessThanOrEqualTo(160);
-        });
+        assertThat(summary.path("regions")).isEmpty();
+        assertThat(summary.path("layoutSpans")).hasSize(60);
+        assertThat(summary.path("borderSegments")).hasSize(60);
+        assertThat(summary.path("rowProfiles")).hasSize(60);
+        assertThat(summary.path("columnProfiles")).hasSize(40);
+    }
+
+    @Test
+    void parsesTheM687StandardReferenceAsPhysicalFactsWhenAvailable() throws Exception {
+        var source = Path.of("../chatgpt解析的标准模板/M-687_NT_标准化业务语义模板.xlsx")
+                .toAbsolutePath().normalize();
+        Assumptions.assumeTrue(Files.exists(source));
+        try (var input = Files.newInputStream(source)) {
+            var summary = parser.parse(input).structureSummary();
+            assertThat(summary.path("structureVersion").asInt()).isEqualTo(6);
+            assertThat(summary.path("sheets")).hasSize(6);
+            assertThat(summary.path("sheets").get(0).path("name").asText()).isEqualTo("标准化任务单");
+            assertThat(summary.path("sheets").get(0).path("usedRange").asText()).isEqualTo("A1:L46");
+            assertThat(summary.path("sheets").get(4).path("name").asText()).isEqualTo("原始_M-687 NT");
+            assertThat(summary.path("sheets").get(4).path("hidden").asBoolean()).isTrue();
+            assertThat(summary.path("structureHints")).anySatisfy(hint -> {
+                assertThat(hint.path("sheetId").asText()).isEqualTo("sheet-5");
+                assertThat(hint.path("hintType").asText()).isEqualTo("HIDDEN_SHEET");
+            });
+            assertThat(summary.path("regions")).isEmpty();
+            assertThat(summary.path("semanticCells")).isNotEmpty();
+            assertThat(summary.path("layoutSpans")).isNotEmpty();
+        }
     }
 }

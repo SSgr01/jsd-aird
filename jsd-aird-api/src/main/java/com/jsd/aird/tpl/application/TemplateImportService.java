@@ -200,8 +200,8 @@ public class TemplateImportService {
         var issues = new java.util.ArrayList<>(parsed.issues());
         var workingParsed = parsed;
         var structureVersion = workingParsed.structureSummary().path("structureVersion").asInt();
-        if (format == TemplateFormat.XLSX && structureVersion != 5) {
-            throw new IllegalStateException("Excel 识别仅支持 structureVersion 5");
+        if (format == TemplateFormat.XLSX && structureVersion != 6) {
+            throw new IllegalStateException("Excel 识别仅支持 structureVersion 6");
         }
         var qualityAnalysis = format == TemplateFormat.XLSX
                 ? qualityAnalyzer.analyze(
@@ -218,7 +218,7 @@ public class TemplateImportService {
         var recognitionRunId = repository.startRecognitionRun(
                 importJobId, scope, structureVersion,
                 workingParsed.initialEditorSnapshot().path("snapshotFormatVersion").asInt(3),
-                workingParsed.structureSummary().path("regionCount").asInt(modelRegions.size())
+                modelRegions.size()
         );
         repository.updateProgress(importJobId, 48, "RECOGNIZING_FIELDS");
         var ruleBatch = ruleRecognitionEngine.recognize(format, sourceFileName, workingParsed.structureSummary());
@@ -226,8 +226,8 @@ public class TemplateImportService {
         var modelStatus = "NOT_CONFIGURED";
         var modelQualityIssues = new java.util.ArrayList<RecognitionModelClient.QualityIssueSuggestion>();
         var reviewedQualityKeys = new java.util.HashSet<String>();
-        if (recognitionModelClient.isConfigured()) {
-            repository.updateProgress(importJobId, 65, "RECOGNIZING_COMPLEX_REGIONS");
+        if (recognitionModelClient.isConfigured() && format == TemplateFormat.XLSX) {
+            repository.updateProgress(importJobId, 65, "RECOGNIZING_WORKBOOK_SEMANTICS");
             var modelSuggestions = new java.util.ArrayList<RecognitionModelClient.ModelSuggestion>();
             var failedCalls = 0;
             var processedRegions = 0;
@@ -236,7 +236,8 @@ public class TemplateImportService {
                     var batch = recognitionModelClient.recognize(new RecognitionModelClient.RecognitionRequest(
                             importJobId, recognitionRunId, format, sourceFileName,
                             region.path("regionId").asText(), format == TemplateFormat.XLSX
-                                    ? regionalContext(workingParsed.structureSummary(), region)
+                                    ? globalContext(workingParsed.structureSummary(), scope,
+                                    requestedSheetId, requestedAddress)
                                     : workingParsed.structureSummary()
                     ));
                     if (batch.callTrace() != null) repository.saveRecognitionCall(recognitionRunId, batch.callTrace());
@@ -249,22 +250,10 @@ public class TemplateImportService {
                         var payload = suggestion.payload().deepCopy();
                         var confidence = suggestion.confidence();
                         if (payload instanceof com.fasterxml.jackson.databind.node.ObjectNode object) {
-                            object.put("regionId", region.path("parentRegionId").asText(
-                                    region.path("regionId").asText()
-                            ));
-                            object.put("analysisRegionId", region.path("regionId").asText());
+                            object.put("analysisScope", "WORKBOOK_GLOBAL");
                             if (batch.callTrace() != null) object.put(
                                     "recognitionCallId", batch.callTrace().callId().toString()
                             );
-                            if (!region.path("parentRegionId").asText("").isBlank()
-                                    && !"SCALAR".equals(object.path("kind").asText())) {
-                                if (object.path("locator") instanceof com.fasterxml.jackson.databind.node.ObjectNode locator) {
-                                    locator.put("address", region.path("parentAddress").asText(
-                                            locator.path("address").asText()
-                                    ));
-                                }
-                                confidence = Math.min(confidence, 0.79);
-                            }
                         }
                         modelSuggestions.add(new RecognitionModelClient.ModelSuggestion(
                                 suggestion.suggestionType(), payload, confidence, suggestion.evidence()
@@ -278,53 +267,21 @@ public class TemplateImportService {
                     var now = java.time.Instant.now();
                     repository.saveRecognitionCall(recognitionRunId, new RecognitionModelClient.CallTrace(
                             UUID.randomUUID(), region.path("regionId").asText(), 1,
-                            "openai-compatible", "regional-model", "template-semantic-quality-v5",
+                            "openai-compatible", "global-semantic-model", "template-global-semantic-v1",
                             "FAILED", null, now, now, 0, 0, 0, 0,
                             objectMapper.createObjectNode(), objectMapper.createObjectNode(),
                             ruleBatch.requestHash(), null, exception.getClass().getSimpleName(),
-                            "区域识别调用未执行，请检查区域拆分或模型配置"
+                            "完整工作簿语义识别未执行，请检查模型配置与响应协议"
                     ));
                 }
                 processedRegions++;
                 repository.updateProgress(importJobId,
                         65 + (int) Math.floor(18d * processedRegions / Math.max(1, modelRegions.size())),
-                        "RECOGNIZING_COMPLEX_REGIONS");
-            }
-            for (var ruleIssue : qualityAnalysis.issues()) {
-                if (!ruleIssue.autoFixable() || ruleIssue.confidence() < 0.92) continue;
-                var inferred = modelQualityIssues.stream()
-                        .filter(issue -> qualityKey(issue).equals(qualityKey(ruleIssue)))
-                        .filter(issue -> issue.confidence() >= 0.92)
-                        .findFirst().orElse(null);
-                if (inferred == null) continue;
-                try {
-                    var reviewBatch = recognitionModelClient.recognize(new RecognitionModelClient.RecognitionRequest(
-                            importJobId, recognitionRunId, format, sourceFileName,
-                            "review:" + ruleIssue.sheetId() + ":" + ruleIssue.address(), qualityReviewContext(
-                                    workingParsed.structureSummary(), ruleIssue, inferred
-                            ), "REGION_REVIEW"
-                    ));
-                    if (reviewBatch.callTrace() != null) {
-                        repository.saveRecognitionCall(recognitionRunId, reviewBatch.callTrace());
-                    }
-                    var agreed = reviewBatch.qualityIssues().stream()
-                            .filter(issue -> qualityKey(issue).equals(qualityKey(ruleIssue)))
-                            .filter(issue -> issue.confidence() >= 0.92)
-                            .findFirst().orElse(null);
-                    if (agreed != null) {
-                        reviewedQualityKeys.add(qualityKey(ruleIssue));
-                        modelQualityIssues.add(withCall(
-                                agreed, reviewBatch.callTrace() == null ? null : reviewBatch.callTrace().callId()
-                        ));
-                    }
-                } catch (RecognitionModelClient.RecognitionCallException exception) {
-                    failedCalls++;
-                    repository.saveRecognitionCall(recognitionRunId, exception.trace());
-                }
+                        "RECOGNIZING_WORKBOOK_SEMANTICS");
             }
             var aggregate = new RecognitionModelClient.RecognitionBatch(
                     List.copyOf(modelSuggestions), List.copyOf(modelQualityIssues),
-                    "openai-compatible", "regional-model", "template-semantic-quality-v5",
+                    "openai-compatible", "global-semantic-model", "template-global-semantic-v1",
                     ruleBatch.requestHash(), ruleBatch.responseHash()
             );
             repository.replaceModelSuggestions(importJobId, recognitionRunId, aggregate);
@@ -335,17 +292,21 @@ public class TemplateImportService {
             if (failedCalls > 0) {
                 issues.add(new OfficeStructureParser.ParseIssue(
                         "WARNING", "MODEL_RECOGNITION_FAILED",
-                        "部分复杂区域暂时无法完成智能识别，规则结果已保留，可稍后重新识别。",
+                        "完整工作簿语义识别暂时失败，请检查模型协议或稍后重新识别。",
                         objectMapper.createObjectNode()
                 ));
             }
         } else {
             repository.completeRecognitionRun(recognitionRunId, "COMPLETED");
-            issues.add(new OfficeStructureParser.ParseIssue(
-                    "INFO", "MODEL_NOT_CONFIGURED",
-                    "未配置智能识别服务，本次仅使用规则解析。",
-                    objectMapper.createObjectNode()
-            ));
+            if (!recognitionModelClient.isConfigured()) {
+                issues.add(new OfficeStructureParser.ParseIssue(
+                        "INFO", "MODEL_NOT_CONFIGURED",
+                        "未配置智能识别服务，本次仅使用物理事实解析。",
+                        objectMapper.createObjectNode()
+                ));
+            } else {
+                modelStatus = "NOT_APPLICABLE";
+            }
         }
         var qualityResolution = resolveQualityIssues(
                 qualityAnalysis, modelQualityIssues, reviewedQualityKeys, "WORKBOOK".equals(scope)
@@ -356,7 +317,7 @@ public class TemplateImportService {
         }
         repository.replaceRuleSuggestions(importJobId, recognitionRunId, ruleBatch);
         repository.replaceQualityIssues(
-                importJobId, recognitionRunId, qualityResolution.issues(), beforeSnapshotHash,
+                importJobId, recognitionRunId, aggregateQualityIssues(qualityResolution.issues()), beforeSnapshotHash,
                 canonicalizer.hash(qualityResolution.snapshot())
         );
         var completed = new OfficeStructureParser.ParseResult(
@@ -416,8 +377,57 @@ public class TemplateImportService {
     }
 
     private String qualityKey(RecognitionModelClient.QualityIssueSuggestion issue) {
-        return issue.sheetId() + "|" + issue.address().toUpperCase(java.util.Locale.ROOT)
-                + "|" + issue.issueType();
+        return issue.sheetId() + "|" + rootBlock(issue) + "|" + customerIssueCategory(issue.issueType());
+    }
+
+    private List<RecognitionModelClient.QualityIssueSuggestion> aggregateQualityIssues(
+            List<RecognitionModelClient.QualityIssueSuggestion> issues
+    ) {
+        var grouped = new java.util.LinkedHashMap<String, java.util.List<RecognitionModelClient.QualityIssueSuggestion>>();
+        for (var issue : issues) grouped.computeIfAbsent(qualityKey(issue), ignored -> new java.util.ArrayList<>())
+                .add(issue);
+        var result = new java.util.ArrayList<RecognitionModelClient.QualityIssueSuggestion>();
+        for (var entry : grouped.entrySet()) {
+            var group = entry.getValue();
+            var first = group.getFirst();
+            var severity = group.stream().map(RecognitionModelClient.QualityIssueSuggestion::severity)
+                    .max(java.util.Comparator.comparingInt(this::severityRank)).orElse(first.severity());
+            var title = group.size() == 1 ? first.title() : first.title() + "（" + group.size() + "处）";
+            var description = group.size() == 1 ? first.description()
+                    : "同一业务区域有 " + group.size() + " 处同类情况，已合并为一项建议核对。";
+            var evidence = objectMapper.createArrayNode();
+            group.stream().limit(20).forEach(issue -> evidence.add(objectMapper.createObjectNode()
+                    .put("address", issue.address()).put("title", issue.title())));
+            result.add(new RecognitionModelClient.QualityIssueSuggestion(
+                    customerIssueCategory(first.issueType()), severity, first.sheetId(), first.sheetName(),
+                    first.address(), title, description, first.businessImpact(),
+                    group.stream().mapToDouble(RecognitionModelClient.QualityIssueSuggestion::confidence)
+                            .max().orElse(first.confidence()),
+                    group.size() == 1 && first.autoFixable(), first.suggestedPatch(), first.inversePatch(),
+                    evidence, first.status(), rootBlock(first), first.recognitionCallId()
+            ));
+        }
+        return List.copyOf(result);
+    }
+
+    private int severityRank(String severity) {
+        return "BLOCKER".equals(severity) ? 3 : "WARNING".equals(severity) ? 2 : 1;
+    }
+
+    private String rootBlock(RecognitionModelClient.QualityIssueSuggestion issue) {
+        return issue.regionId() == null || issue.regionId().isBlank() ? "sheet-root" : issue.regionId();
+    }
+
+    private String customerIssueCategory(String issueType) {
+        return switch (issueType) {
+            case "MIXED_CELL_ROLES", "FIELD_RELATION_UNCLEAR" -> "FIELD_RELATION_UNCLEAR";
+            case "HIERARCHY_MISMATCH", "BUSINESS_BLOCK_UNCLEAR" -> "BUSINESS_BLOCK_UNCLEAR";
+            case "RECORD_ORIENTATION_MISMATCH", "TABLE_STRUCTURE_UNCLEAR" -> "TABLE_STRUCTURE_UNCLEAR";
+            case "EDITABILITY_UNCLEAR" -> "EDITABILITY_UNCLEAR";
+            case "VISUAL_PHYSICAL_MISMATCH", "LAYOUT_INCONSISTENT" -> "LAYOUT_INCONSISTENT";
+            case "DUPLICATE_MEANING" -> "DUPLICATE_MEANING";
+            default -> "OTHER";
+        };
     }
 
     private java.util.Set<String> mappedLocations(UUID importJobId, UUID organizationId) {
@@ -504,27 +514,11 @@ public class TemplateImportService {
         if (format != TemplateFormat.XLSX) {
             return List.of(objectMapper.createObjectNode().put("regionId", "document"));
         }
-        if (!structure.path("regions").isArray()) return List.of();
-        var result = new java.util.ArrayList<JsonNode>();
-        if ("REGION".equals(scope)) {
-            for (var region : structure.path("regions")) {
-                if (!requestedSheetId.equals(region.path("sheetId").asText())) continue;
-                if (rangesOverlap(requestedAddress, region.path("address").asText())) result.add(region);
-            }
-            var parentIds = result.stream()
-                    .map(region -> region.path("parentRegionId").asText(""))
-                    .filter(parent -> !parent.isBlank())
-                    .collect(java.util.stream.Collectors.toSet());
-            result.removeIf(region -> parentIds.contains(region.path("regionId").asText()));
-            if (result.isEmpty()) {
-                throw new ApiException(ApiErrorCode.BAD_REQUEST, "所选区域不在工作簿有效范围内");
-            }
-            return List.copyOf(result);
-        }
-        for (var region : structure.path("regions")) {
-            if (region.path("requiresModel").asBoolean(false)) result.add(region);
-        }
-        return List.copyOf(result);
+        return List.of(objectMapper.createObjectNode()
+                .put("regionId", "workbook-global")
+                .put("scope", scope)
+                .put("requestedSheetId", requestedSheetId == null ? "" : requestedSheetId)
+                .put("requestedAddress", requestedAddress == null ? "" : requestedAddress));
     }
 
     private boolean rangesOverlap(String first, String second) {
@@ -559,117 +553,33 @@ public class TemplateImportService {
                 Math.max(firstRow, lastRow), Math.max(firstColumn, lastColumn)};
     }
 
-    private JsonNode regionalContext(JsonNode structure, JsonNode region) {
-        var context = objectMapper.createObjectNode()
-                .put("structureVersion", structure.path("structureVersion").asInt())
-                .put("parserVersion", structure.path("parserVersion").asText())
-                .put("regionId", region.path("regionId").asText());
-        var compactRegion = region.deepCopy();
-        if (compactRegion instanceof com.fasterxml.jackson.databind.node.ObjectNode object) {
-            object.set("candidateCells", compactCandidates(region.path("candidateCells")));
-        }
-        context.set("region", compactRegion);
-        var sheets = objectMapper.createArrayNode();
-        for (var sheet : structure.path("sheets")) {
-            if (!region.path("sheetId").asText().equals(sheet.path("id").asText())) continue;
-            var compactSheet = objectMapper.createObjectNode()
-                    .put("id", sheet.path("id").asText())
-                    .put("name", sheet.path("name").asText())
-                    .put("usedRange", sheet.path("usedRange").asText());
-            compactSheet.set("candidateCells", compactCandidates(region.path("candidateCells")));
-            compactSheet.set("mergedRanges", region.path("mergedRanges").deepCopy());
-            sheets.add(compactSheet);
-        }
-        context.set("sheets", sheets);
-        context.set("regions", objectMapper.createArrayNode().add(compactRegion.deepCopy()));
-        var outline = objectMapper.createArrayNode();
-        for (var item : structure.path("regions")) {
-            if (item.path("analysisChild").asBoolean(false)) continue;
-            var entry = objectMapper.createObjectNode()
-                    .put("regionId", item.path("regionId").asText())
-                    .put("sheetId", item.path("sheetId").asText())
-                    .put("address", item.path("address").asText())
-                    .put("kindCandidate", item.path("kindCandidate").asText());
-            entry.set("headerBands", item.path("headerBands").deepCopy());
-            entry.set("visualSpans", item.path("visualSpans").deepCopy());
-            outline.add(entry);
-        }
-        context.set("workbookOutline", outline);
-        return context;
-    }
-
-    private JsonNode qualityReviewContext(
-            JsonNode structure,
-            RecognitionModelClient.QualityIssueSuggestion ruleIssue,
-            RecognitionModelClient.QualityIssueSuggestion inferredIssue
+    private JsonNode globalContext(
+            JsonNode structure, String scope, String requestedSheetId, String requestedAddress
     ) {
         var context = objectMapper.createObjectNode()
                 .put("structureVersion", structure.path("structureVersion").asInt())
-                .put("reviewMode", "VERIFY_REVERSIBLE_PHYSICAL_FIX")
-                .put("instruction", "独立复核该问题是否可无损拆分；不同意时不要返回对应问题。");
-        var target = objectMapper.createObjectNode()
-                .put("issueType", ruleIssue.issueType())
-                .put("sheetId", ruleIssue.sheetId())
-                .put("sheetName", ruleIssue.sheetName())
-                .put("address", ruleIssue.address())
-                .put("ruleConfidence", ruleIssue.confidence())
-                .put("inferenceConfidence", inferredIssue.confidence())
-                .put("title", ruleIssue.title())
-                .put("description", ruleIssue.description());
-        target.set("suggestedPatch", ruleIssue.suggestedPatch().deepCopy());
-        context.set("reviewTarget", target);
+                .put("parserVersion", structure.path("parserVersion").asText())
+                .put("sourceKind", structure.path("sourceKind").asText("XLSX"))
+                .put("requestedScope", scope)
+                .put("requestedSheetId", requestedSheetId == null ? "" : requestedSheetId)
+                .put("requestedAddress", requestedAddress == null ? "" : requestedAddress);
         var sheets = objectMapper.createArrayNode();
         for (var sheet : structure.path("sheets")) {
-            if (ruleIssue.sheetId().equals(sheet.path("id").asText())) sheets.add(sheet.deepCopy());
+            var compact = objectMapper.createObjectNode()
+                    .put("id", sheet.path("id").asText())
+                    .put("name", sheet.path("name").asText())
+                    .put("hidden", sheet.path("hidden").asBoolean(false))
+                    .put("usedRange", sheet.path("usedRange").asText());
+            for (var key : List.of("semanticCells", "layoutSpans", "borderSegments", "mergedRanges",
+                    "rowProfiles", "columnProfiles", "dataValidationRules")) {
+                compact.set(key, sheet.path(key).deepCopy());
+            }
+            sheets.add(compact);
         }
         context.set("sheets", sheets);
-        for (var region : structure.path("regions")) {
-            if (ruleIssue.sheetId().equals(region.path("sheetId").asText())
-                    && (ruleIssue.regionId().equals(region.path("regionId").asText())
-                    || rangesOverlap(ruleIssue.address(), region.path("address").asText()))) {
-                context.set("region", region.deepCopy());
-                break;
-            }
-        }
-        var nearby = objectMapper.createArrayNode();
-        var point = parseRange(ruleIssue.address());
-        if (point != null) {
-            for (var candidate : structure.path("candidateCells")) {
-                if (!ruleIssue.sheetId().equals(candidate.path("sheetId").asText())) continue;
-                var cell = parseRange(candidate.path("address").asText());
-                if (cell != null && Math.abs(cell[0] - point[0]) <= 2
-                        && Math.abs(cell[1] - point[1]) <= 2) nearby.add(candidate.deepCopy());
-            }
-        }
-        context.set("nearbyCells", nearby);
+        context.set("structureHints", structure.path("structureHints").deepCopy());
+        context.set("namedRanges", structure.path("namedRanges").deepCopy());
         return context;
     }
 
-    private JsonNode compactCandidates(JsonNode candidates) {
-        var result = objectMapper.createArrayNode();
-        var valueCount = 0;
-        var blankCount = 0;
-        for (var candidate : candidates) {
-            var empty = candidate.path("empty").asBoolean(!candidate.has("value"));
-            if ((!empty && valueCount >= 120) || (empty && blankCount >= 40)) continue;
-            var compact = objectMapper.createObjectNode()
-                    .put("sheetId", candidate.path("sheetId").asText())
-                    .put("sheetName", candidate.path("sheetName").asText())
-                    .put("address", candidate.path("address").asText())
-                    .put("row", candidate.path("row").asInt())
-                    .put("column", candidate.path("column").asInt())
-                    .put("empty", empty)
-                    .put("bold", candidate.path("bold").asBoolean())
-                    .put("hasBorder", candidate.path("hasBorder").asBoolean());
-            if (candidate.has("value")) compact.set("value", candidate.path("value").deepCopy());
-            if (!candidate.path("mergedRange").asText().isBlank()) {
-                compact.put("mergedRange", candidate.path("mergedRange").asText());
-            }
-            var numberFormat = candidate.path("style").path("n").path("pattern").asText("");
-            if (!numberFormat.isBlank()) compact.put("numberFormat", numberFormat);
-            result.add(compact);
-            if (empty) blankCount++; else valueCount++;
-        }
-        return result;
-    }
 }

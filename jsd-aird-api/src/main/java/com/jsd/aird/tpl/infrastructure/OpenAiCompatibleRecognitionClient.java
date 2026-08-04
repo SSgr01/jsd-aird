@@ -39,6 +39,10 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
     private final ModelPayloadSanitizer sanitizer;
     private final GlobalSemanticRecognitionProtocol protocol;
     private final GlobalSemanticSuggestionCompiler compiler;
+    private final boolean enableThinking;
+    private final int thinkingBudget;
+    private final int maxCompletionTokens;
+    private final String maxTokenParameter;
     private final boolean consoleLogSummary;
     private final boolean consoleLogPayload;
 
@@ -51,6 +55,10 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
             @Value("${app.model.model:}") String model,
             @Value("${app.model.temperature:0.0}") double ignoredTemperature,
             @Value("${app.model.response-format:json_schema}") String responseFormat,
+            @Value("${app.model.enable-thinking:false}") boolean enableThinking,
+            @Value("${app.model.thinking-budget:1024}") int thinkingBudget,
+            @Value("${app.model.max-completion-tokens:12000}") int maxCompletionTokens,
+            @Value("${app.model.max-token-parameter:max_tokens}") String maxTokenParameter,
             @Value("${app.recognition.console-log-summary:true}") boolean consoleLogSummary,
             @Value("${app.recognition.console-log-payload:false}") boolean consoleLogPayload
     ) {
@@ -60,6 +68,10 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
         this.apiKey = apiKey == null ? "" : apiKey.strip();
         this.model = model == null ? "" : model.strip();
         this.responseFormat = normalizeResponseFormat(responseFormat);
+        this.enableThinking = enableThinking;
+        this.thinkingBudget = Math.max(0, thinkingBudget);
+        this.maxCompletionTokens = Math.max(0, maxCompletionTokens);
+        this.maxTokenParameter = normalizeMaxTokenParameter(maxTokenParameter);
         this.consoleLogSummary = consoleLogSummary;
         this.consoleLogPayload = consoleLogPayload;
         this.sanitizer = new ModelPayloadSanitizer(objectMapper);
@@ -76,7 +88,7 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
             String apiKey, String model, double ignoredTemperature
     ) {
         this(objectMapper, canonicalizer, baseUrl, apiKey, model, ignoredTemperature,
-                "json_schema", true, false);
+                "json_schema", false, 1024, 12000, "max_tokens", true, false);
     }
 
     @Override
@@ -138,6 +150,19 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
                 var validation = protocol.validateWithDiagnostics(structured, request.structureSummary());
                 var validated = validation.response();
                 var diagnostics = validation.diagnostics();
+                var semanticCounts = semanticCounts(validated);
+                if (consoleLogSummary) {
+                    var message = "recognition_model_response callId={} runId={} blocks={} relations={} tables={} annotations={} issues={} promptTokens={} completionTokens={} reasoningTokens={} totalTokens={} semanticStatus={}";
+                    var args = new Object[]{callId, request.recognitionRunId(), semanticCounts.blocks(), semanticCounts.relations(),
+                            semanticCounts.tables(), semanticCounts.annotations(), semanticCounts.issues(),
+                            response.path("usage").path("prompt_tokens").asInt(0),
+                            response.path("usage").path("completion_tokens").asInt(0),
+                            reasoningTokens(response.path("usage")), response.path("usage").path("total_tokens").asInt(0),
+                            semanticCounts.total() == 0 ? "EMPTY_RESULT" : "NON_EMPTY"};
+                    if (semanticCounts.total() == 0) log.warn(message, args);
+                    else log.info(message, args);
+                }
+                new SemanticResultValidator().validateMeaningfulResult(validated, request.structureSummary());
                 var compiled = compiler.compile(validated, request.structureSummary());
                 var finishedAt = Instant.now();
                 var responseHash = canonicalizer.hash(response);
@@ -187,9 +212,10 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
                 var responseHash = response != null ? canonicalizer.hash(response)
                         : exception instanceof RestClientResponseException responseException
                         ? canonicalizer.hashText(responseException.getResponseBodyAsString()) : null;
+                var errorType = auditErrorType(exception);
                 traces.add(trace(callId, request, attempt, phase, parentCallId,
                         "FAILED", httpStatus, startedAt, finishedAt, sanitizedBody, auditedResponse,
-                        requestHash, responseHash, exception.getClass().getSimpleName(),
+                        requestHash, responseHash, errorType,
                         safeError(exception.getMessage())));
                 if (attempt == 1 && structured != null && isRepairableProtocolViolation(exception)) {
                     invalidStructuredResponse = structured.deepCopy();
@@ -201,7 +227,7 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
                     log.error("recognition_model_call_failed callId={} runId={} attempt={} phase={} durationMs={} errorType={} errorMessage={}",
                             callId, request.recognitionRunId(), attempt, phase,
                             Duration.between(startedAt, finishedAt).toMillis(),
-                            exception.getClass().getSimpleName(), safeError(exception.getMessage()), exception);
+                            errorType, safeError(exception.getMessage()), exception);
                 }
                 throw new RecognitionModelClient.RecognitionCallException(
                         "Global semantic recognition failed", exception, traces
@@ -221,6 +247,9 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
         // The semantic protocol is deliberately deterministic. Configuration
         // cannot raise the temperature for this call.
         body.put("temperature", 0.0);
+        if (maxCompletionTokens > 0) body.put(maxTokenParameter, maxCompletionTokens);
+        body.put("enable_thinking", enableThinking);
+        if (enableThinking && thinkingBudget > 0) body.put("thinking_budget", thinkingBudget);
         if ("json_schema".equals(responseFormat)) {
             body.set("response_format", objectMapper.createObjectNode()
                     .put("type", "json_schema")
@@ -289,6 +318,13 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
                 本次任务是“忠实识别”，不是重新设计模板：不得因视觉上像合并区域就虚构物理合并，不得拆分、移动、新增或删除 Excel 单元格。可以提出业务语义层的范围和层级建议，但必须基于给出的真实物理事实。
 
                 只允许返回 recognitionProtocolVersion=1 JSON。严格遵循提供的 JSON Schema；不得增加字段、发明枚举、虚构工作表或坐标。不得返回 SQL、代码、JSON Schema、Mapping、dataPath、fieldCode、持久化 ID 或物理修改指令。
+
+                顶层输出只能是以下六个数组字段，不能再套 sheets、sheet、semanticAnnotations 对象或旧版 tableType：
+                {"recognitionProtocolVersion":1,"semanticAnnotations":[],"businessBlocks":[],"fieldRelations":[],"tables":[],"qualityIssues":[]}
+                businessBlocks 使用 temporaryId/sheetId/range/type/parentTemporaryId/businessName/groupNameSuggestion/semanticKeySuggestion；
+                fieldRelations 使用 temporaryId/sheetId/labelRange/valueRange/relationType/businessName/blockTemporaryId/groupNameSuggestion/semanticKeySuggestion/valueType/required/editability/valueSource/unit/condition；
+                tables 使用 temporaryId/sheetId/range/tableKind/businessName/blockTemporaryId/groupNameSuggestion/semanticKeySuggestion/headerRange/dataRange/totalRange/semanticMode/rowHeaderRange/columnHeaderRange/crossDataRange/headerTree/columns；columns 使用 temporaryId/name/labelRange/valueRange/valueType/editability/valueSource/unit/condition/semanticKeySuggestion。
+                工作簿只要存在 VALUE、FORMULA 或 INPUT_CANDIDATE，就不能把所有数组都返回为空；至少返回能确认的业务块、字段关系或表格。空白工作簿才允许空结果。
 
                 你的职责：
                 1. 标注标题、字段标签和值、表头、数据、合计、说明、确认、签字、提醒和静态参考等范围。
@@ -404,6 +440,38 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
             throw new IllegalArgumentException("app.model.response-format 只能是 json_schema 或 json_object");
         }
         return normalized;
+    }
+
+    private static String normalizeMaxTokenParameter(String value) {
+        var normalized = value == null ? "max_tokens" : value.strip().toLowerCase(Locale.ROOT);
+        if (!"max_tokens".equals(normalized) && !"max_completion_tokens".equals(normalized)) {
+            throw new IllegalArgumentException(
+                    "app.model.max-token-parameter 只能是 max_tokens 或 max_completion_tokens");
+        }
+        return normalized;
+    }
+
+    private int reasoningTokens(JsonNode usage) {
+        return usage.path("completion_tokens_details").path("reasoning_tokens")
+                .asInt(usage.path("reasoning_tokens").asInt(0));
+    }
+
+    private String auditErrorType(Exception exception) {
+        return exception instanceof SemanticResultValidator.EmptySemanticResultException
+                ? "EMPTY_SEMANTIC_RESULT" : exception.getClass().getSimpleName();
+    }
+
+    private SemanticCounts semanticCounts(JsonNode response) {
+        if (response == null || !response.isObject()) return new SemanticCounts(0, 0, 0, 0, 0);
+        return new SemanticCounts(response.path("businessBlocks").size(), response.path("fieldRelations").size(),
+                response.path("tables").size(), response.path("semanticAnnotations").size(),
+                response.path("qualityIssues").size());
+    }
+
+    private record SemanticCounts(int blocks, int relations, int tables, int annotations, int issues) {
+        private int total() {
+            return blocks + relations + tables + annotations + issues;
+        }
     }
 
     private static String stripTrailingSlash(String value) {

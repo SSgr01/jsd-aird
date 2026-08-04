@@ -121,6 +121,8 @@ class OpenAiCompatibleRecognitionClientTest {
 
             var sent = objectMapper.readTree(captured.get());
             assertThat(sent.path("temperature").asDouble()).isZero();
+            assertThat(sent.path("enable_thinking").asBoolean()).isFalse();
+            assertThat(sent.path("max_tokens").asInt()).isEqualTo(12000);
             assertThat(sent.path("response_format").path("type").asText()).isEqualTo("json_schema");
             var schema = sent.path("response_format").path("json_schema").path("schema");
             for (var definition : java.util.List.of(
@@ -134,6 +136,63 @@ class OpenAiCompatibleRecognitionClientTest {
             assertThat(batch.suggestions()).extracting(RecognitionModelClient.ModelSuggestion::suggestionType)
                     .contains("SEMANTIC_MODEL", "SCALAR_FIELD");
             assertThat(batch.callTrace().totalTokens()).isEqualTo(200);
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void rejectsAnEmptySemanticResultWhenPhysicalFactsContainValues() throws Exception {
+        var facts = physicalFacts();
+        facts.putArray("semanticCells").addObject()
+                .put("factType", "VALUE").put("address", "A1").put("value", "产品名称");
+        var empty = objectMapper.readTree("""
+                {"recognitionProtocolVersion":1,"semanticAnnotations":[],"businessBlocks":[],
+                 "fieldRelations":[],"tables":[],"qualityIssues":[]}
+                """);
+
+        assertThatThrownBy(() -> new SemanticResultValidator().validateMeaningfulResult(empty, facts))
+                .isInstanceOf(SemanticResultValidator.EmptySemanticResultException.class)
+                .hasMessageContaining("空语义结果");
+    }
+
+    @Test
+    void auditsHttp200EmptySemanticResultAsFailedCall() throws Exception {
+        var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/chat/completions", exchange -> {
+            var response = modelResponse(objectMapper.readTree("""
+                    {"recognitionProtocolVersion":1,"semanticAnnotations":[],"businessBlocks":[],
+                     "fieldRelations":[],"tables":[],"qualityIssues":[]}
+                    """), 46767, 4914, 51681);
+            var bytes = objectMapper.writeValueAsBytes(response);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, bytes.length);
+            exchange.getResponseBody().write(bytes);
+            exchange.close();
+        });
+        server.start();
+        try {
+            var localClient = new OpenAiCompatibleRecognitionClient(
+                    objectMapper, new JsonCanonicalizer(objectMapper),
+                    "http://127.0.0.1:" + server.getAddress().getPort() + "/v1",
+                    "test-key", "qwen3.7-max", 0.0
+            );
+            var facts = physicalFacts();
+            facts.putArray("semanticCells").addObject().put("factType", "VALUE").put("address", "A1");
+            assertThatThrownBy(() -> localClient.recognize(new RecognitionModelClient.RecognitionRequest(
+                    UUID.randomUUID(), UUID.randomUUID(), TemplateFormat.XLSX,
+                    "测试.xlsx", "workbook-global", facts
+            ))).isInstanceOf(RecognitionModelClient.RecognitionCallException.class)
+                    .satisfies(error -> {
+                        var exception = (RecognitionModelClient.RecognitionCallException) error;
+                        assertThat(exception.traces()).singleElement().satisfies(trace -> {
+                            assertThat(trace.status()).isEqualTo("FAILED");
+                            assertThat(trace.httpStatus()).isEqualTo(200);
+                            assertThat(trace.errorType()).isEqualTo("EMPTY_SEMANTIC_RESULT");
+                            assertThat(trace.responsePayload().path("usage").path("prompt_tokens").asInt())
+                                    .isEqualTo(46767);
+                        });
+                    });
         } finally {
             server.stop(0);
         }

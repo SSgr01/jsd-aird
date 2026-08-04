@@ -71,6 +71,10 @@ app:
     model: ${JSD_AIRD_MODEL_NAME:${OPENAI_MODEL:}}
     temperature: 0.0
     response-format: ${JSD_AIRD_MODEL_RESPONSE_FORMAT:json_schema}
+    enable-thinking: ${JSD_AIRD_MODEL_ENABLE_THINKING:false}
+    thinking-budget: ${JSD_AIRD_MODEL_THINKING_BUDGET:1024}
+    max-completion-tokens: ${JSD_AIRD_MODEL_MAX_COMPLETION_TOKENS:12000}
+    max-token-parameter: ${JSD_AIRD_MODEL_MAX_TOKEN_PARAMETER:max_tokens}
   recognition:
     audit-cleanup-cron: ${JSD_AIRD_RECOGNITION_AUDIT_CLEANUP_CRON:0 30 2 * * *}
     console-log-summary: ${JSD_AIRD_RECOGNITION_CONSOLE_LOG_SUMMARY:true}

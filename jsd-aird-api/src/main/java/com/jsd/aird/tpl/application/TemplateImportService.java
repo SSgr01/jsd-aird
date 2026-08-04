@@ -40,6 +40,7 @@ public class TemplateImportService {
     private final WorkbookQualityAnalyzer qualityAnalyzer;
     private final JsonCanonicalizer canonicalizer;
     private final TemplateRepository templateRepository;
+    private final ModelSemanticViewBuilder semanticViewBuilder;
 
     public TemplateImportService(
             TemplateImportRepository repository,
@@ -65,6 +66,7 @@ public class TemplateImportService {
         this.qualityAnalyzer = qualityAnalyzer;
         this.canonicalizer = canonicalizer;
         this.templateRepository = templateRepository;
+        this.semanticViewBuilder = new ModelSemanticViewBuilder(objectMapper);
     }
 
     @Transactional
@@ -617,30 +619,7 @@ public class TemplateImportService {
     private JsonNode globalContext(
             JsonNode structure, String scope, String requestedSheetId, String requestedAddress
     ) {
-        var context = objectMapper.createObjectNode()
-                .put("structureVersion", structure.path("structureVersion").asInt())
-                .put("parserVersion", structure.path("parserVersion").asText())
-                .put("sourceKind", structure.path("sourceKind").asText("XLSX"))
-                .put("requestedScope", scope)
-                .put("requestedSheetId", requestedSheetId == null ? "" : requestedSheetId)
-                .put("requestedAddress", requestedAddress == null ? "" : requestedAddress);
-        var sheets = objectMapper.createArrayNode();
-        for (var sheet : structure.path("sheets")) {
-            var compact = objectMapper.createObjectNode()
-                    .put("id", sheet.path("id").asText())
-                    .put("name", sheet.path("name").asText())
-                    .put("hidden", sheet.path("hidden").asBoolean(false))
-                    .put("usedRange", sheet.path("usedRange").asText());
-            for (var key : List.of("semanticCells", "layoutSpans", "borderSegments", "mergedRanges",
-                    "rowProfiles", "columnProfiles", "dataValidationRules")) {
-                compact.set(key, sheet.path(key).deepCopy());
-            }
-            sheets.add(compact);
-        }
-        context.set("sheets", sheets);
-        context.set("structureHints", structure.path("structureHints").deepCopy());
-        context.set("namedRanges", structure.path("namedRanges").deepCopy());
-        return context;
+        return semanticViewBuilder.build(structure, scope, requestedSheetId, requestedAddress);
     }
 
 }

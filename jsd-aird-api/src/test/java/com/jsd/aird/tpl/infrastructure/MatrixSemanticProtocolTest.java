@@ -30,9 +30,7 @@ class MatrixSemanticProtocolTest {
                       {"temporaryId":"h1","parentTemporaryId":"","name":"实验记录","range":"B1:D1","axis":"COLUMN"},
                       {"temporaryId":"h2","parentTemporaryId":"","name":"性能指标","range":"A2:A5","axis":"ROW"}
                     ],
-                    "columns":[
-                      {"temporaryId":"c1","name":"实验一","labelRange":"B1","valueRange":"B2:B5","valueType":"number","editability":"EDITABLE","valueSource":"USER_INPUT","unit":"","condition":"","semanticKeySuggestion":"record1"}
-                    ]
+                    "columns":[]
                   }],
                   "qualityIssues":[]
                 }
@@ -49,13 +47,22 @@ class MatrixSemanticProtocolTest {
         assertThat(matrix.path("crossDataRange").asText()).isEqualTo("B2:D5");
         assertThat(matrix.path("headerTree")).hasSize(2);
 
+        var emptyTerminationRule = response.deepCopy();
+        ((com.fasterxml.jackson.databind.node.ObjectNode) emptyTerminationRule.path("tables").get(0))
+                .putObject("terminationRule");
+        var normalized = protocol.validate(emptyTerminationRule, facts);
+        assertThat(normalized.path("tables")).singleElement()
+                .satisfies(table -> assertThat(table.path("terminationRule").path("type").asText())
+                        .isEqualTo("UNTIL_REGION_END"));
+
         ((com.fasterxml.jackson.databind.node.ObjectNode) response.path("tables").get(0))
                 .put("rowHeaderRange", "B2:B5");
         var recovered = protocol.validate(response, facts);
-        assertThat(recovered.path("tables")).singleElement().satisfies(table -> {
-            assertThat(table.path("semanticMode").asText()).isEqualTo("UNKNOWN");
-            assertThat(table.path("columns")).isEmpty();
-        });
+        // The malformed candidate remains diagnostic-only.  It must not be
+        // promoted back into the reviewable table list.
+        assertThat(recovered.path("tables")).isEmpty();
+        assertThat(recovered.path("_rejectedTables")).singleElement()
+                .satisfies(table -> assertThat(table.path("temporaryId").asText()).isEqualTo("t1"));
         assertThat(recovered.path("qualityIssues")).singleElement().satisfies(issue ->
                 assertThat(issue.path("category").asText()).isEqualTo("TABLE_STRUCTURE_UNCLEAR"));
     }

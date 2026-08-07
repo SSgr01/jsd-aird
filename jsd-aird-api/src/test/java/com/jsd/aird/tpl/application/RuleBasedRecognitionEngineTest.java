@@ -20,12 +20,12 @@ class RuleBasedRecognitionEngineTest {
         var structure = objectMapper.readTree("""
                 {
                   "structureVersion":6,
-                  "semanticCells":[
+                  "sheets":[{"id":"sheet-1","semanticCells":[
                     {"sheetId":"sheet-1","address":"A1","value":"UV树脂"},
                     {"sheetId":"sheet-1","address":"B1","value":"M-687 NT"},
                     {"sheetId":"sheet-1","address":"A2","value":"原料名称"},
                     {"sheetId":"sheet-1","address":"B2","value":"UA-306"}
-                  ]
+                  ]}]
                 }
                 """);
 
@@ -40,12 +40,12 @@ class RuleBasedRecognitionEngineTest {
         var structure = objectMapper.readTree("""
                 {
                   "structureVersion":6,
-                  "semanticCells":[
+                  "sheets":[{"id":"sheet-1","semanticCells":[
                     {"sheetId":"sheet-1","sheetName":"生产单","address":"A2","row":2,"column":1,"value":"产品名称：","factType":"VALUE"},
                     {"sheetId":"sheet-1","sheetName":"生产单","address":"B2","row":2,"column":2,"value":"M-687 NT","factType":"VALUE"},
                     {"sheetId":"sheet-1","sheetName":"生产单","address":"A3","row":3,"column":1,"value":"UV树脂","factType":"VALUE"},
                     {"sheetId":"sheet-1","sheetName":"生产单","address":"B3","row":3,"column":2,"value":"UA-306","factType":"VALUE"}
-                  ]
+                  ]}]
                 }
                 """);
 

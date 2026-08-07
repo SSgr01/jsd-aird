@@ -20,6 +20,6 @@ class GroupNameNormalizerTest {
     void infersGroupsFromBusinessBlocks() {
         assertThat(GroupNameNormalizer.infer("ROW_TABLE", "配方明细表")).isEqualTo("配方明细");
         assertThat(GroupNameNormalizer.infer("FORM_FIELDS", "包装与产量信息")).isEqualTo("包装信息");
-        assertThat(GroupNameNormalizer.infer("SIGNATURE_BLOCK", "人员签字")).isEqualTo("审核信息");
+        assertThat(GroupNameNormalizer.infer("FREE_TEXT", "人员签字")).isEqualTo("审核信息");
     }
 }

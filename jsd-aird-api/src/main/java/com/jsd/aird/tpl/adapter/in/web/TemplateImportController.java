@@ -12,6 +12,7 @@ import com.jsd.aird.tpl.domain.TemplateFormat;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -43,6 +44,30 @@ public class TemplateImportController {
             @PathVariable UUID importJobId
     ) {
         return success(service.listSuggestions(importJobId));
+    }
+
+    @GetMapping("/{importJobId}/recognition-calls")
+    public ApiResponse<List<TemplateImportRepository.RecognitionCallView>> recognitionCalls(
+            @PathVariable UUID importJobId
+    ) {
+        return success(service.listRecognitionCalls(importJobId));
+    }
+
+    /** Internal read-only entry point for optional visual rendering. */
+    @GetMapping("/{importJobId}/render-context")
+    public ApiResponse<com.fasterxml.jackson.databind.JsonNode> renderContext(@PathVariable UUID importJobId) {
+        return success(service.renderContext(importJobId));
+    }
+
+    @GetMapping("/{importJobId}/document-structure")
+    public ApiResponse<com.fasterxml.jackson.databind.JsonNode> documentStructure(@PathVariable UUID importJobId) {
+        return success(service.documentStructure(importJobId));
+    }
+
+    @DeleteMapping("/{importJobId}")
+    public ApiResponse<Void> delete(@PathVariable UUID importJobId) {
+        service.delete(importJobId);
+        return success(null);
     }
 
     @PostMapping("/{importJobId}/suggestions/{suggestionId}/decision")

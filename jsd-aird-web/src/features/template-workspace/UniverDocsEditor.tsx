@@ -15,13 +15,14 @@ import type { BindingRole, EditorHandle, TemplateBinding } from './types';
 
 interface Props {
   snapshot: Record<string, unknown>;
+  editable: boolean;
   onDirty: () => void;
   onEditorValue: (binding: TemplateBinding, value: unknown) => void;
   bindings: TemplateBinding[];
 }
 
 export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverDocsEditor(
-  { snapshot, onDirty, onEditorValue, bindings },
+  { snapshot, editable, onDirty, onEditorValue, bindings },
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -59,7 +60,11 @@ export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverD
         presets: [
           UniverDocsCorePreset({
             container: host,
-            ribbonType: 'collapsed',
+            // Docs Core already supplies the common formatting operations needed by
+            // template authors: font family/size, bold/italic/underline, text and
+            // highlight colour, paragraph alignment, lists and tables.
+            toolbar: editable,
+            ribbonType: editable ? 'classic' : 'collapsed',
             header: true,
             footer: true,
           }),
@@ -91,7 +96,7 @@ export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverD
         if (host.parentNode) host.parentNode.removeChild(host);
       }, 32);
     };
-  }, [snapshot]);
+  }, [snapshot, editable]);
 
   useImperativeHandle(
     ref,

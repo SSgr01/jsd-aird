@@ -16,17 +16,32 @@ public interface TemplateImportRepository {
 
     Optional<ImportJobView> findLatestForVersion(UUID organizationId, UUID versionId);
 
+    /**
+     * Returns the original Office file used to create a version, if it is still available.
+     * Recognition retries normally use the saved editor snapshot, but legacy snapshots
+     * may need to be rebuilt from the original file.
+     */
+    Optional<UUID> findOriginalSourceFileId(UUID organizationId, UUID versionId);
+
     Optional<UUID> findGeneratedVersionId(UUID importJobId);
 
     List<ImportJobView> list(UUID organizationId);
 
     void complete(UUID importJobId, OfficeStructureParser.ParseResult result);
 
+    void saveRenderSnapshot(UUID importJobId, JsonNode snapshot);
+
+    void saveImportResult(UUID importJobId, JsonNode result);
+
     void updateProgress(UUID importJobId, int progress, String stage);
 
     UUID startRecognitionRun(
             UUID importJobId, String scope, int structureVersion, int snapshotFormatVersion, int regionCount
     );
+
+    void updateRecognitionRunSnapshot(UUID recognitionRunId, String snapshotHash, String reason);
+
+    void updateRecognitionRunRegionCount(UUID recognitionRunId, int regionCount);
 
     void saveRecognitionCall(UUID recognitionRunId, RecognitionModelClient.CallTrace trace);
 
@@ -35,6 +50,13 @@ public interface TemplateImportRepository {
     int purgeExpiredRecognitionPayloads();
 
     void replaceModelSuggestions(UUID importJobId, UUID recognitionRunId, RecognitionModelClient.RecognitionBatch batch);
+
+    /** Appends a reviewed recompile result without deleting the original audit trail. */
+    void appendModelSuggestions(UUID importJobId, UUID recognitionRunId, RecognitionModelClient.RecognitionBatch batch);
+
+    void markStructureResolved(UUID organizationId, UUID recognitionRunId, UUID suggestionId);
+
+    void replacePhysicalSuggestions(UUID importJobId, UUID recognitionRunId, RecognitionModelClient.RecognitionBatch batch);
 
     void replaceRuleSuggestions(UUID importJobId, UUID recognitionRunId, RecognitionModelClient.RecognitionBatch batch);
 
@@ -53,6 +75,10 @@ public interface TemplateImportRepository {
     );
 
     List<RecognitionSuggestionView> listSuggestions(UUID organizationId, UUID importJobId);
+
+    List<RecognitionCallView> listRecognitionCalls(UUID organizationId, UUID importJobId);
+
+    int delete(UUID organizationId, UUID importJobId);
 
     Optional<RecognitionSuggestionView> decideSuggestion(
             UUID organizationId,
@@ -117,6 +143,8 @@ public interface TemplateImportRepository {
             Instant createdAt,
             int suggestionCount,
             int pendingSuggestionCount,
+            UUID recognitionRunId,
+            String recognitionRunStatus,
             List<IssueView> issues
     ) {
     }
@@ -133,6 +161,7 @@ public interface TemplateImportRepository {
     record RecognitionSuggestionView(
             UUID id,
             UUID importJobId,
+            UUID recognitionRunId,
             String source,
             String suggestionType,
             JsonNode payload,
@@ -142,7 +171,46 @@ public interface TemplateImportRepository {
             String provider,
             String model,
             String promptVersion,
+            String filterReasonCode,
+            String filterDetail,
             Instant createdAt
+    ) {
+        public RecognitionSuggestionView(
+                UUID id, UUID importJobId, String source, String suggestionType, JsonNode payload,
+                double confidence, JsonNode evidence, String decision, String provider, String model,
+                String promptVersion, Instant createdAt
+        ) {
+            this(id, importJobId, null, source, suggestionType, payload, confidence, evidence, decision,
+                    provider, model, promptVersion, "", "", createdAt);
+        }
+    }
+
+    record RecognitionCallView(
+            UUID id,
+            UUID recognitionRunId,
+            String regionId,
+            int attempt,
+            String provider,
+            String model,
+            String promptVersion,
+            String status,
+            Integer httpStatus,
+            Instant startedAt,
+            Instant finishedAt,
+            long durationMs,
+            int promptTokens,
+            int completionTokens,
+            int totalTokens,
+            JsonNode requestPayload,
+            JsonNode responsePayload,
+            String errorType,
+            String errorMessage,
+            String finishReason,
+            String outcomeCode,
+            boolean responseTruncated,
+            String phase,
+            UUID parentCallId,
+            boolean payloadAvailable
     ) {
     }
 

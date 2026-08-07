@@ -114,6 +114,16 @@ class OpenAiCompatibleRecognitionClientTest {
             );
             var facts = physicalFacts();
             ((com.fasterxml.jackson.databind.node.ObjectNode) facts).put("contact", "13812345678");
+            var matrixPrimitive = facts.putArray("structurePrimitives").addObject()
+                    .put("blockType", "MATRIX")
+                    .put("validationStatus", "VALID")
+                    .put("sheetId", "sheet-1")
+                    .put("range", "A4:L30");
+            matrixPrimitive.set("structure", objectMapper.createObjectNode()
+                    .put("cornerRange", "A4:D4")
+                    .put("rowHeaderRange", "A5:D30")
+                    .put("columnHeaderRange", "E4:L4")
+                    .put("crossDataRange", "E5:L30"));
             var batch = localClient.recognize(new RecognitionModelClient.RecognitionRequest(
                     UUID.randomUUID(), UUID.randomUUID(), TemplateFormat.XLSX,
                     "测试.xlsx", "workbook-global", facts
@@ -132,7 +142,9 @@ class OpenAiCompatibleRecognitionClientTest {
                         .isEqualTo(schema.path("$defs").path(definition).path("properties").size());
             }
             assertThat(captured.get()).doesNotContain("13812345678", "sk-should-never-be-audited")
-                    .contains("[REDACTED_PHONE]");
+                    .contains("[REDACTED_PHONE]")
+                    .contains("A4:L30", "A4:D4", "A5:D30", "E4:L4", "E5:L30",
+                            "parentTemporaryId 必须为空字符串", "不得把矩阵拆成多个 ROW_TABLE");
             assertThat(batch.suggestions()).extracting(RecognitionModelClient.ModelSuggestion::suggestionType)
                     .contains("SEMANTIC_MODEL", "SCALAR_FIELD");
             assertThat(batch.callTrace().totalTokens()).isEqualTo(200);
@@ -142,9 +154,117 @@ class OpenAiCompatibleRecognitionClientTest {
     }
 
     @Test
+    void acceptsOnlyTheIndependentStructureProposalProtocolWithoutARepairCall() throws Exception {
+        var requests = new ArrayList<String>();
+        var calls = new AtomicInteger();
+        var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/chat/completions", exchange -> {
+            requests.add(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            calls.incrementAndGet();
+            var bytes = objectMapper.writeValueAsBytes(modelResponse(structureResponse(), 80, 40, 120));
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, bytes.length);
+            exchange.getResponseBody().write(bytes);
+            exchange.close();
+        });
+        server.start();
+        try {
+            var localClient = new OpenAiCompatibleRecognitionClient(
+                    objectMapper, new JsonCanonicalizer(objectMapper),
+                    "http://127.0.0.1:" + server.getAddress().getPort() + "/v1",
+                    "test-key", "qwen-plus", 0.0
+            );
+            var facts = physicalFacts();
+            ((com.fasterxml.jackson.databind.node.ObjectNode) facts).putArray("structurePrimitives")
+                    .addObject().put("blockType", "MATRIX").put("validationStatus", "VALID")
+                    .put("sheetId", "sheet-1").put("range", "A4:L30")
+                    .putObject("structure")
+                    .put("cornerRange", "A4:D4")
+                    .put("rowHeaderRange", "A5:D30")
+                    .put("columnHeaderRange", "E4:L4")
+                    .put("crossDataRange", "E5:L30");
+
+            var batch = localClient.recognize(new RecognitionModelClient.RecognitionRequest(
+                    UUID.randomUUID(), UUID.randomUUID(), TemplateFormat.XLSX,
+                    "测试.xlsx", "workbook-structure", facts, null, "STRUCTURE_DISCOVERY"
+            ));
+
+            assertThat(calls).hasValue(1);
+            assertThat(requests).hasSize(1);
+            assertThat(requests.getFirst()).contains(
+                    "独立提出 proposals",
+                    "StructureProposalResponse"
+            ).doesNotContain("physicalStructureContract");
+            assertThat(batch.suggestions()).extracting(RecognitionModelClient.ModelSuggestion::suggestionType)
+                    .containsExactly("SEMANTIC_MODEL");
+            assertThat(batch.callTraces()).hasSize(1);
+            assertThat(batch.callTrace().status()).isEqualTo("SUCCEEDED");
+            assertThat(batch.callTrace().responsePayload().path("validatedProtocolResponse")
+                    .path("recognitionProtocolVersion").asInt()).isEqualTo(2);
+            assertThat(batch.callTrace().responsePayload().path("validatedProtocolResponse")
+                    .path("proposals")).hasSize(1);
+            assertThat(batch.callTrace().responsePayload().path("validatedSemanticResponse").isMissingNode()).isTrue();
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void doesNotRetryAStageWhenDashscopeRejectsVisualContentItem() throws Exception {
+        var requests = new ArrayList<String>();
+        var calls = new AtomicInteger();
+        var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/chat/completions", exchange -> {
+            requests.add(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            if (calls.incrementAndGet() == 1) {
+                var error = """
+                        {"error":{"message":"<400> InternalError.Algo.InvalidParameter: The provided messages input is invalid. The error info is [Unexpected item type in content.].","code":"invalid_parameter_error"}}
+                        """;
+                var bytes = error.getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().add("Content-Type", "application/json");
+                exchange.sendResponseHeaders(400, bytes.length);
+                exchange.getResponseBody().write(bytes);
+            } else {
+                var bytes = objectMapper.writeValueAsBytes(modelResponse(structureResponse(), 20, 30, 50));
+                exchange.getResponseHeaders().add("Content-Type", "application/json");
+                exchange.sendResponseHeaders(200, bytes.length);
+                exchange.getResponseBody().write(bytes);
+            }
+            exchange.close();
+        });
+        server.start();
+        try {
+            var localClient = new OpenAiCompatibleRecognitionClient(
+                    objectMapper, new JsonCanonicalizer(objectMapper), null,
+                    "http://127.0.0.1:" + server.getAddress().getPort() + "/v1",
+                    "test-key", "qwen3.7-max", 0.0, "json_schema", false,
+                    1024, 12000, "max_tokens", true, false, "AUTO", false
+            );
+            var visual = objectMapper.createObjectNode().put("dataUri", "data:image/png;base64,AAAA");
+
+            assertThatThrownBy(() -> localClient.recognize(new RecognitionModelClient.RecognitionRequest(
+                    UUID.randomUUID(), UUID.randomUUID(), TemplateFormat.XLSX,
+                    "测试.xlsx", "workbook-global", physicalFacts(), visual, "STRUCTURE_DISCOVERY"
+            ))).isInstanceOf(RecognitionModelClient.RecognitionCallException.class)
+                    .hasMessageContaining("Global semantic recognition failed");
+
+            assertThat(calls).hasValue(1);
+            assertThat(requests).hasSize(1);
+            var first = objectMapper.readTree(requests.get(0));
+            assertThat(first.path("messages").path(1).path("content").isArray()).isTrue();
+            assertThat(first.path("messages").path(1).path("content").findValue("image_url")).isNotNull();
+            assertThat(first.path("messages").path(1).path("content").toString())
+                    .contains("data:image/png;base64,AAAA");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
     void rejectsAnEmptySemanticResultWhenPhysicalFactsContainValues() throws Exception {
         var facts = physicalFacts();
-        facts.putArray("semanticCells").addObject()
+        ((com.fasterxml.jackson.databind.node.ObjectNode) facts.withArray("sheets").get(0))
+                .withArray("semanticCells").addObject()
                 .put("factType", "VALUE").put("address", "A1").put("value", "产品名称");
         var empty = objectMapper.readTree("""
                 {"recognitionProtocolVersion":1,"semanticAnnotations":[],"businessBlocks":[],
@@ -178,7 +298,9 @@ class OpenAiCompatibleRecognitionClientTest {
                     "test-key", "qwen3.7-max", 0.0
             );
             var facts = physicalFacts();
-            facts.putArray("semanticCells").addObject().put("factType", "VALUE").put("address", "A1");
+            ((com.fasterxml.jackson.databind.node.ObjectNode) facts.withArray("sheets").get(0))
+                    .withArray("semanticCells")
+                    .addObject().put("factType", "VALUE").put("address", "A1");
             assertThatThrownBy(() -> localClient.recognize(new RecognitionModelClient.RecognitionRequest(
                     UUID.randomUUID(), UUID.randomUUID(), TemplateFormat.XLSX,
                     "测试.xlsx", "workbook-global", facts
@@ -193,6 +315,55 @@ class OpenAiCompatibleRecognitionClientTest {
                                     .isEqualTo(46767);
                         });
                     });
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void treatsLengthFinishReasonAsTruncatedAndDoesNotAttemptProtocolRepair() throws Exception {
+        var calls = new AtomicInteger();
+        var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/chat/completions", exchange -> {
+            calls.incrementAndGet();
+            var response = objectMapper.createObjectNode();
+            var choice = objectMapper.createObjectNode();
+            choice.set("message", objectMapper.createObjectNode()
+                    .put("content", "{\"recognitionProtocolVersion\":1"));
+            choice.put("finish_reason", "length");
+            response.set("choices", objectMapper.createArrayNode().add(choice));
+            response.set("usage", objectMapper.createObjectNode()
+                    .put("prompt_tokens", 100).put("completion_tokens", 12000).put("total_tokens", 12100));
+            var bytes = objectMapper.writeValueAsBytes(response);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, bytes.length);
+            exchange.getResponseBody().write(bytes);
+            exchange.close();
+        });
+        server.start();
+        try {
+            var localClient = new OpenAiCompatibleRecognitionClient(
+                    objectMapper, new JsonCanonicalizer(objectMapper),
+                    "http://127.0.0.1:" + server.getAddress().getPort() + "/v1",
+                    "test-key", "qwen-plus", 0.0
+            );
+
+            assertThatThrownBy(() -> localClient.recognize(new RecognitionModelClient.RecognitionRequest(
+                    UUID.randomUUID(), UUID.randomUUID(), TemplateFormat.XLSX,
+                    "测试.xlsx", "workbook-global", physicalFacts()
+            ))).isInstanceOf(RecognitionModelClient.RecognitionCallException.class)
+                    .hasMessage("MODEL_OUTPUT_TRUNCATED")
+                    .satisfies(error -> {
+                        var exception = (RecognitionModelClient.RecognitionCallException) error;
+                        assertThat(exception.traces()).singleElement().satisfies(trace -> {
+                            assertThat(trace.status()).isEqualTo("FAILED");
+                            assertThat(trace.errorType()).isEqualTo("MODEL_OUTPUT_TRUNCATED");
+                            assertThat(trace.outcomeCode()).isEqualTo("MODEL_OUTPUT_TRUNCATED");
+                            assertThat(trace.finishReason()).isEqualTo("length");
+                            assertThat(trace.responseTruncated()).isTrue();
+                        });
+                    });
+            assertThat(calls).hasValue(1);
         } finally {
             server.stop(0);
         }
@@ -279,8 +450,13 @@ class OpenAiCompatibleRecognitionClientTest {
                 assertThat(trace.status()).isEqualTo("SUCCEEDED");
                 assertThat(trace.phase()).isEqualTo("REGION_INFERENCE");
             });
+            // A relation outside its validated business block is diagnostic
+            // only; the rejected raw candidate must not become a review card.
             assertThat(batch.suggestions()).extracting(RecognitionModelClient.ModelSuggestion::suggestionType)
                     .containsExactly("SEMANTIC_MODEL");
+            assertThat(batch.suggestions().getFirst().payload().path("diagnostics"))
+                    .anySatisfy(diagnostic -> assertThat(diagnostic.path("reasonCode").asText())
+                            .isEqualTo("REJECTED_FIELD_RELATIONS"));
             assertThat(batch.qualityIssues()).singleElement().satisfies(issue ->
                     assertThat(issue.issueType()).isEqualTo("FIELD_RELATION_UNCLEAR"));
         } finally {
@@ -325,6 +501,29 @@ class OpenAiCompatibleRecognitionClientTest {
                   ],
                   "tables":[],
                   "qualityIssues":[]
+                }
+                """);
+    }
+
+    private com.fasterxml.jackson.databind.node.ObjectNode structureResponse() throws IOException {
+        return (com.fasterxml.jackson.databind.node.ObjectNode) objectMapper.readTree("""
+                {
+                  "recognitionProtocolVersion": 2,
+                  "proposals": [
+                    {
+                      "proposalId": "proposal-matrix-1",
+                      "sheetId": "sheet-1",
+                      "type": "MATRIX",
+                      "range": "A4:L30",
+                      "cornerRange": "A4:D4",
+                      "rowHeaderRange": "A5:D30",
+                      "columnHeaderRange": "E4:L4",
+                      "crossDataRange": "E5:L30",
+                      "recordAxis": "COLUMN",
+                      "confidence": 0.72
+                    }
+                  ],
+                  "qualityIssues": []
                 }
                 """);
     }

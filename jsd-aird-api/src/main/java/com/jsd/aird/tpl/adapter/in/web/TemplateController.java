@@ -2,6 +2,9 @@ package com.jsd.aird.tpl.adapter.in.web;
 
 import java.util.List;
 import java.util.UUID;
+import java.io.IOException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -27,6 +30,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import jakarta.servlet.http.HttpServletResponse;
 
 @RestController
 @RequestMapping("/api/v2")
@@ -51,6 +55,12 @@ public class TemplateController {
     ) {
         var items = service.list(keyword, format, status);
         return success(new PageResponse<>(items, 1, items.size(), items.size(), 1));
+    }
+
+    @DeleteMapping("/template-categories/{category}")
+    public ApiResponse<Void> clearCategory(@PathVariable String category) {
+        service.clearCategory(category);
+        return success(null);
     }
 
     @PostMapping("/templates")
@@ -113,7 +123,7 @@ public class TemplateController {
                 ? List.<TemplateRecognitionReviewService.RecognitionAction>of()
                 : request.recognitionActions().stream()
                         .map(item -> new TemplateRecognitionReviewService.RecognitionAction(
-                                item.recognitionItemId(), item.action()
+                                item.recognitionItemId(), item.action(), item.selectedSuggestionId()
                         ))
                         .toList();
         var qualityActions = request.qualityActions() == null
@@ -148,7 +158,9 @@ public class TemplateController {
                 bindingValues,
                 recognitionActions,
                 qualityActions,
-                structureOperations
+                structureOperations,
+                request.wordPatchBaseHash(),
+                request.wordPatch()
         )));
     }
 
@@ -180,9 +192,25 @@ public class TemplateController {
 
     public record RecognitionActionRequest(
             @NotNull UUID recognitionItemId,
-            @NotBlank String action
+            @NotBlank String action,
+            UUID selectedSuggestionId
     ) {
     }
+
+    @GetMapping("/template-versions/{versionId}/word-document")
+    public void downloadWordDocument(@PathVariable UUID versionId, HttpServletResponse response) throws IOException {
+        var downloaded = service.downloadWordDocument(versionId);
+        try (var stored = downloaded.storedObject()) {
+            response.setContentType(downloaded.contentType());
+            response.setHeader("Content-Disposition", "attachment; filename*=UTF-8''"
+                    + URLEncoder.encode(downloaded.originalName(), StandardCharsets.UTF_8).replace("+", "%20"));
+            stored.stream().transferTo(response.getOutputStream());
+        } catch (Exception exception) {
+            throw new com.jsd.aird.shared.error.ApiException(
+                    com.jsd.aird.shared.error.ApiErrorCode.NOT_FOUND, "Word 原生文档读取失败");
+        }
+    }
+
 
     public record QualityActionRequest(
             @NotNull UUID issueId,
@@ -234,8 +262,8 @@ public class TemplateController {
             @NotNull JsonNode schema,
             @NotNull ArrayNode mapping,
             @NotNull JsonNode data,
-            @NotNull UUID snapshotFileId,
-            @NotBlank String snapshotHash,
+            UUID snapshotFileId,
+            String snapshotHash,
             @NotBlank String editorAppVersion,
             @NotBlank String pluginManifest,
             @Min(1) int snapshotFormatVersion,
@@ -244,7 +272,9 @@ public class TemplateController {
             List<@Valid BindingValueRequest> bindingValues,
             List<@Valid RecognitionActionRequest> recognitionActions,
             List<@Valid QualityActionRequest> qualityActions,
-            List<@Valid StructureOperationRequest> structureOperations
+            List<@Valid StructureOperationRequest> structureOperations,
+            String wordPatchBaseHash,
+            ArrayNode wordPatch
     ) {
     }
 }

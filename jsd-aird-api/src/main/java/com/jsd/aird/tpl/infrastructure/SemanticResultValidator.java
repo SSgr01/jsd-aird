@@ -21,15 +21,6 @@ final class SemanticResultValidator {
 
     int countPhysicalValueCells(JsonNode physicalFacts) {
         var count = 0;
-        for (var cell : physicalFacts.path("semanticCells")) {
-            var factType = cell.path("factType").asText("");
-            if ("VALUE".equals(factType) || "FORMULA".equals(factType)
-                    || "INPUT_CANDIDATE".equals(factType)) {
-                count++;
-            }
-        }
-        if (count > 0) return count;
-        // Some callers provide sheet-local facts instead of the flattened v6 array.
         for (var sheet : physicalFacts.path("sheets")) {
             for (var cell : sheet.path("semanticCells")) {
                 var factType = cell.path("factType").asText("");

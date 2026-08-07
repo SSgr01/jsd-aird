@@ -20,6 +20,7 @@ public interface RecognitionModelClient {
             String sourceFileName,
             String regionId,
             JsonNode structureSummary,
+            JsonNode visualInput,
             String callPhase
     ) {
         public RecognitionRequest(
@@ -27,11 +28,20 @@ public interface RecognitionModelClient {
                 String sourceFileName, String regionId, JsonNode structureSummary
         ) {
             this(importJobId, recognitionRunId, format, sourceFileName, regionId,
-                    structureSummary, "REGION_INFERENCE");
+                    structureSummary, null, "REGION_INFERENCE");
+        }
+
+        public RecognitionRequest(
+                UUID importJobId, UUID recognitionRunId, TemplateFormat format,
+                String sourceFileName, String regionId, JsonNode structureSummary, String callPhase
+        ) {
+            this(importJobId, recognitionRunId, format, sourceFileName, regionId,
+                    structureSummary, null, callPhase);
         }
 
         public RecognitionRequest(UUID importJobId, TemplateFormat format, String sourceFileName, JsonNode structureSummary) {
-            this(importJobId, null, format, sourceFileName, "", structureSummary, "REGION_INFERENCE");
+            this(importJobId, null, format, sourceFileName, "", structureSummary,
+                    null, "REGION_INFERENCE");
         }
     }
 
@@ -140,6 +150,9 @@ public interface RecognitionModelClient {
             String responseHash,
             String errorType,
             String errorMessage,
+            String finishReason,
+            String outcomeCode,
+            boolean responseTruncated,
             String phase,
             UUID parentCallId
     ) {
@@ -153,7 +166,7 @@ public interface RecognitionModelClient {
             this(callId, regionId, attempt, provider, model, promptVersion, status, httpStatus,
                     startedAt, finishedAt, durationMs, promptTokens, completionTokens, totalTokens,
                     requestPayload, responsePayload, requestHash, responseHash, errorType,
-                    errorMessage, "REGION_INFERENCE", null);
+                    errorMessage, "", "", false, "REGION_INFERENCE", null);
         }
     }
 

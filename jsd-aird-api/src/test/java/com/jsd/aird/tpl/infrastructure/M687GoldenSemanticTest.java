@@ -35,7 +35,7 @@ class M687GoldenSemanticTest {
                     {"sheetId":"sheet-1","range":"J7:L17","role":"INSTRUCTION","temporaryBlockRef":"b4"},
                     {"sheetId":"sheet-1","range":"J18:L22","role":"CONFIRMATION","temporaryBlockRef":"b5"},
                     {"sheetId":"sheet-1","range":"A23:L25","role":"NOTE","temporaryBlockRef":"b8"},
-                    {"sheetId":"sheet-1","range":"A27:L28","role":"SIGNATURE","temporaryBlockRef":"b9"},
+                    {"sheetId":"sheet-1","range":"A27:L28","role":"NOTE","temporaryBlockRef":"b9"},
                     {"sheetId":"sheet-2","range":"D4:E6","role":"TABLE_DATA","temporaryTableRef":"t2","temporaryBlockRef":"b10"}
                   ],
                   "businessBlocks":[
@@ -44,10 +44,10 @@ class M687GoldenSemanticTest {
                     {"temporaryId":"b3","sheetId":"sheet-1","range":"A7:I22","type":"ROW_TABLE","businessName":"配方明细","groupNameSuggestion":"配方明细"},
                     {"temporaryId":"b4","sheetId":"sheet-1","range":"J7:L17","type":"INSTRUCTION_LIST","businessName":"生产操作流程"},
                     {"temporaryId":"b5","sheetId":"sheet-1","range":"J18:L22","type":"CONFIRMATION_BLOCK","businessName":"生产确认"},
-                    {"temporaryId":"b6","sheetId":"sheet-1","range":"J18:L20","type":"SIGNATURE_BLOCK","parentTemporaryId":"b5","businessName":"确认签字"},
+                    {"temporaryId":"b6","sheetId":"sheet-1","range":"J18:L20","type":"FREE_TEXT","parentTemporaryId":"b5","businessName":"确认签字"},
                     {"temporaryId":"b7","sheetId":"sheet-1","range":"J21:L22","type":"NOTE_BLOCK","parentTemporaryId":"b5","businessName":"确认提醒"},
                     {"temporaryId":"b8","sheetId":"sheet-1","range":"A23:L25","type":"FORM_FIELDS","businessName":"包装信息","groupNameSuggestion":"包装信息"},
-                    {"temporaryId":"b9","sheetId":"sheet-1","range":"A27:L28","type":"SIGNATURE_BLOCK","businessName":"人员签字"},
+                    {"temporaryId":"b9","sheetId":"sheet-1","range":"A27:L28","type":"FREE_TEXT","businessName":"人员签字"},
                     {"temporaryId":"b10","sheetId":"sheet-2","range":"D3:E6","type":"ROW_TABLE","businessName":"预混配方明细","groupNameSuggestion":"配方明细"}
                   ],
                   "fieldRelations":[
@@ -79,7 +79,8 @@ class M687GoldenSemanticTest {
         var validated = new GlobalSemanticRecognitionProtocol(objectMapper).validate(response, facts);
         var compiled = new GlobalSemanticSuggestionCompiler(objectMapper).compile(validated, facts);
 
-        assertThat(compiled.suggestions()).hasSize(4);
+        // 语义模型 + 2 个父级重复区域 + 每个重复区域的独立子字段 Mapping。
+        assertThat(compiled.suggestions()).hasSize(15);
         assertThat(compiled.qualityIssues()).singleElement().satisfies(issue -> {
             assertThat(issue.title()).isEqualTo("一组配方比例含义需核对");
             assertThat(issue.regionId()).startsWith("blk-");
@@ -103,8 +104,8 @@ class M687GoldenSemanticTest {
                 .filter(item -> "产品名称".equals(item.payload().path("fieldName").asText()))
                 .findFirst().orElseThrow().payload();
         assertThat(product.path("groupName").asText()).isEqualTo("基础信息");
-        assertThat(product.path("fieldCode").asText()).doesNotContain("BASIC_INFORMATION");
-        assertThat(product.path("dataPath").asText()).doesNotContain("basicInformation");
+        assertThat(product.path("fieldCode").asText()).isEqualTo("PRODUCTION.PRODUCT_NAME");
+        assertThat(product.path("dataPath").asText()).isEqualTo("/recognized/basicInformation/productName");
         var mainTable = compiled.suggestions().stream()
                 .filter(item -> "配方明细".equals(item.payload().path("fieldName").asText()))
                 .findFirst().orElseThrow().payload();
@@ -113,5 +114,70 @@ class M687GoldenSemanticTest {
             assertThat(column.path("editability").asText()).isEqualTo("READ_ONLY");
             assertThat(column.path("valueSource").asText()).isEqualTo("FORMULA");
         });
+        var materialCodeColumn = java.util.stream.StreamSupport.stream(
+                mainTable.path("columns").spliterator(), false)
+                .filter(column -> "原料编号".equals(column.path("name").asText()))
+                .findFirst().orElseThrow();
+        assertThat(materialCodeColumn.path("fieldCode").asText())
+                .isEqualTo("FORMULA.ITEM.MATERIAL_CODE");
+        assertThat(compiled.suggestions().stream().skip(1)
+                .map(suggestion -> suggestion.payload().path("dataPath").asText())
+                .filter(path -> !path.isBlank()).toList()).doesNotHaveDuplicates();
+    }
+
+    @Test
+    void keepsRepeatedStandardLabelsAsIndependentPhysicalFields() throws Exception {
+        var facts = objectMapper.readTree("""
+                {"structureVersion":6,"sheets":[{"id":"sheet-1","name":"检测","usedRange":"A1:F4"}]}
+                """);
+        var response = (com.fasterxml.jackson.databind.node.ObjectNode) objectMapper.readTree("""
+                {
+                  "recognitionProtocolVersion":1,
+                  "semanticAnnotations":[],
+                  "businessBlocks":[{"temporaryId":"b1","sheetId":"sheet-1","range":"A1:F4","type":"FORM_FIELDS","businessName":"检测信息"}],
+                  "fieldRelations":[
+                    {"temporaryId":"r1","sheetId":"sheet-1","labelRange":"A1","valueRange":"B1:C1","relationType":"LABEL_VALUE","businessName":"实际产量","blockTemporaryId":"b1","valueType":"number","editability":"EDITABLE","valueSource":"USER_INPUT"},
+                    {"temporaryId":"r2","sheetId":"sheet-1","labelRange":"A3","valueRange":"B3:C3","relationType":"LABEL_VALUE","businessName":"实际产量","blockTemporaryId":"b1","valueType":"number","editability":"EDITABLE","valueSource":"USER_INPUT"}
+                  ],
+                  "tables":[],"qualityIssues":[]
+                }
+                """);
+
+        var compiled = new GlobalSemanticSuggestionCompiler(objectMapper).compile(response, facts);
+        var paths = compiled.suggestions().stream().skip(1)
+                .map(suggestion -> suggestion.payload().path("dataPath").asText())
+                .toList();
+        assertThat(paths).hasSize(2).doesNotHaveDuplicates();
+        assertThat(paths.get(0)).isEqualTo("/recognized/basicInformation/actualOutput");
+        assertThat(paths.get(1)).startsWith("/recognized/basicInformation/actualOutput__");
+    }
+
+    @Test
+    void keepsSimilarAppearanceLabelsMappedToTheirOwnStandardCodes() throws Exception {
+        var facts = objectMapper.readTree(
+                "{\"structureVersion\":6,\"sheets\":[{\"id\":\"sheet-1\",\"name\":\"检测\",\"usedRange\":\"A1:C4\"}]}"
+        );
+        var response = (com.fasterxml.jackson.databind.node.ObjectNode) objectMapper.readTree("""
+                {
+                  "recognitionProtocolVersion":1,
+                  "semanticAnnotations":[],
+                  "businessBlocks":[{"temporaryId":"b1","sheetId":"sheet-1","range":"A1:C4","type":"ROW_TABLE","businessName":"外观检测"}],
+                  "fieldRelations":[],
+                  "tables":[{"temporaryId":"t1","sheetId":"sheet-1","range":"A1:C4","tableKind":"ROW_TABLE","businessName":"外观检测","blockTemporaryId":"b1","headerRange":"A1:C1","dataRange":"A2:C4","columns":[
+                    {"temporaryId":"c1","name":"涂料外观","labelRange":"B1","valueRange":"B2:B4","valueType":"string","editability":"EDITABLE","valueSource":"USER_INPUT"},
+                    {"temporaryId":"c2","name":"漆膜外观","labelRange":"C1","valueRange":"C2:C4","valueType":"string","editability":"EDITABLE","valueSource":"USER_INPUT"}
+                  ]}],
+                  "qualityIssues":[]
+                }
+                """);
+
+        var compiled = new GlobalSemanticSuggestionCompiler(objectMapper).compile(response, facts);
+        var table = compiled.suggestions().stream()
+                .filter(item -> "ROW_TABLE".equals(item.payload().path("kind").asText()))
+                .findFirst().orElseThrow().payload();
+        var columns = java.util.stream.StreamSupport.stream(table.path("columns").spliterator(), false).toList();
+        assertThat(columns).extracting(column -> column.path("fieldCode").asText())
+                .containsExactly("COATING.PROPERTY.APPEARANCE", "FILM.PROPERTY.APPEARANCE");
+        assertThat(columns).extracting(column -> column.path("dataPath").asText()).doesNotHaveDuplicates();
     }
 }

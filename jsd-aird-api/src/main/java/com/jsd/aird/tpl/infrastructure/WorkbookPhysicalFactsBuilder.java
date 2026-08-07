@@ -31,7 +31,6 @@ final class WorkbookPhysicalFactsBuilder {
     }
 
     void enrich(ObjectNode summary) {
-        var semanticCells = objectMapper.createArrayNode();
         var layoutSpans = objectMapper.createArrayNode();
         var borderSegments = objectMapper.createArrayNode();
         var rowProfiles = objectMapper.createArrayNode();
@@ -54,7 +53,6 @@ final class WorkbookPhysicalFactsBuilder {
             sheet.put("semanticCellCount", sheetSemanticCells.size());
             sheet.put("layoutSpanCount", sheetLayoutSpans.size());
 
-            appendCopies(semanticCells, sheetSemanticCells);
             appendCopies(layoutSpans, sheetLayoutSpans);
             appendCopies(borderSegments, sheetBorderSegments);
             appendCopies(rowProfiles, sheetRowProfiles);
@@ -63,7 +61,6 @@ final class WorkbookPhysicalFactsBuilder {
 
         summary.put("structureVersion", STRUCTURE_VERSION);
         summary.put("parserProtocol", "workbook-physical-facts-v6");
-        summary.set("semanticCells", semanticCells);
         summary.set("layoutSpans", layoutSpans);
         summary.set("borderSegments", borderSegments);
         summary.set("rowProfiles", rowProfiles);
@@ -78,18 +75,25 @@ final class WorkbookPhysicalFactsBuilder {
     private ArrayNode semanticCells(ObjectNode sheet, List<CellFact> cells) {
         var result = objectMapper.createArrayNode();
         var mergeAnchors = mergeAnchors(sheet.path("mergedRanges"));
+        var byPosition = new HashMap<String, JsonNode>();
+        for (var cell : cells) byPosition.put(position(cell.source()), cell.source());
         for (var cell : cells) {
             var source = cell.source();
             var formula = source.path("formula").asBoolean(false)
                     || source.path("value").asText("").startsWith("=");
             var mergeAnchor = mergeAnchors.get(source.path("mergedRange").asText(""));
             var hasValue = !source.path("empty").asBoolean(!source.has("value"));
-            var inputCandidate = !hasValue && looksLikeInput(source);
+            var mergeAnchorCell = mergeAnchor == null
+                    || source.path("address").asText().equalsIgnoreCase(mergeAnchor);
+            if (!mergeAnchorCell && !hasValue) continue;
+            var inputCandidate = !hasValue && mergeAnchorCell && looksLikeInput(sheet, source, byPosition);
             if (!hasValue && !inputCandidate && mergeAnchor == null) continue;
             var fact = base(sheet, source)
                     .put("factType", formula ? "FORMULA" : hasValue ? "VALUE" : "INPUT_CANDIDATE")
                     .put("inputCandidate", inputCandidate)
+                    .put("inputConfidence", inputCandidate ? inputConfidence(sheet, source, byPosition) : 0.0)
                     .put("styleRef", styleRef(source));
+            if (inputCandidate) fact.set("inputEvidence", inputEvidence(sheet, source, byPosition));
             if (source.has("value")) fact.set("value", source.path("value").deepCopy());
             if (formula) fact.put("formula", source.path("value").asText(""));
             if (!source.path("valueType").asText("").isBlank()) {
@@ -99,7 +103,7 @@ final class WorkbookPhysicalFactsBuilder {
             if (!mergedRange.isBlank()) {
                 fact.put("mergedRange", mergedRange);
                 fact.put("mergeAnchor", mergeAnchor == null ? source.path("address").asText() : mergeAnchor);
-                fact.put("mergeAnchorCell", source.path("address").asText().equalsIgnoreCase(mergeAnchor));
+                fact.put("mergeAnchorCell", mergeAnchorCell);
             }
             result.add(fact);
         }
@@ -236,14 +240,142 @@ final class WorkbookPhysicalFactsBuilder {
         return result;
     }
 
-    private boolean looksLikeInput(JsonNode source) {
-        if (!source.path("empty").asBoolean(true)) return false;
-        if (source.path("formula").asBoolean(false)) return false;
+    private boolean looksLikeInput(ObjectNode sheet, JsonNode source, Map<String, JsonNode> byPosition) {
+        if (!source.path("empty").asBoolean(true) || source.path("formula").asBoolean(false)) return false;
+        if (source.path("hasComment").asBoolean(false) || source.path("hasHyperlink").asBoolean(false)) return false;
+        if (isHidden(sheet, source)) return false;
         var style = source.path("style");
-        return source.path("hasBorder").asBoolean(false)
-                || style.path("bg").isValueNode()
-                || style.path("fill").isValueNode()
-                || style.path("n").path("pattern").isTextual();
+        var fill = !style.path("bg").asText(style.path("fill").asText("")).isBlank();
+        var numberFormat = !style.path("n").path("pattern").asText("").isBlank();
+        var border = source.path("hasBorder").asBoolean(false);
+        var unlocked = source.path("locked").isBoolean() && !source.path("locked").asBoolean();
+        if (!(unlocked || (border && (fill || numberFormat)))) return false;
+        return hasValidation(sheet, source) || hasAdjacentLabel(source, byPosition)
+                || hasRepeatedDataPattern(source, byPosition);
+    }
+
+    private double inputConfidence(ObjectNode sheet, JsonNode source, Map<String, JsonNode> byPosition) {
+        var score = 0.38;
+        if (source.path("locked").isBoolean() && !source.path("locked").asBoolean()) score += 0.25;
+        if (source.path("hasBorder").asBoolean(false)) score += 0.12;
+        var style = source.path("style");
+        if (!style.path("n").path("pattern").asText("").isBlank()) score += 0.10;
+        if (!style.path("bg").asText(style.path("fill").asText("")).isBlank()) score += 0.08;
+        if (hasValidation(sheet, source)) score += 0.18;
+        if (hasAdjacentLabel(source, byPosition)) score += 0.14;
+        if (hasRepeatedDataPattern(source, byPosition)) score += 0.09;
+        if (!source.path("mergedRange").asText("").isBlank()) score += 0.04;
+        return Math.min(0.99, score);
+    }
+
+    private ArrayNode inputEvidence(ObjectNode sheet, JsonNode source, Map<String, JsonNode> byPosition) {
+        var evidence = objectMapper.createArrayNode();
+        if (source.path("locked").isBoolean() && !source.path("locked").asBoolean()) evidence.add("UNLOCKED");
+        if (source.path("hasBorder").asBoolean(false)) evidence.add("BORDERED_INPUT_REGION");
+        if (!source.path("style").path("n").path("pattern").asText("").isBlank()) {
+            evidence.add("NUMBER_FORMAT");
+        }
+        if (!source.path("style").path("bg").asText(source.path("style").path("fill").asText(""))
+                .isBlank()) evidence.add("FILLED_INPUT_REGION");
+        if (source.path("mergedRange").isTextual() && !source.path("mergedRange").asText().isBlank()) {
+            evidence.add("MERGED_INPUT_REGION");
+        }
+        if (hasValidation(sheet, source)) evidence.add("DATA_VALIDATION");
+        if (hasAdjacentLabel(source, byPosition)) evidence.add("ADJACENT_LABEL");
+        if (hasRepeatedDataPattern(source, byPosition)) evidence.add("REPEATED_DATA_REGION");
+        return evidence;
+    }
+
+    private boolean hasValidation(ObjectNode sheet, JsonNode source) {
+        for (var rule : sheet.path("dataValidationRules")) {
+            if (rangesOverlap(source.path("address").asText(""), rule.path("range").asText(""))) return true;
+        }
+        return false;
+    }
+
+    private boolean hasAdjacentLabel(JsonNode source, Map<String, JsonNode> byPosition) {
+        var sheetId = source.path("sheetId").asText("");
+        var row = source.path("row").asInt();
+        var column = source.path("column").asInt();
+        return isLabelCell(byPosition.get(position(sheetId, row, column - 1)))
+                || isLabelCell(byPosition.get(position(sheetId, row - 1, column)));
+    }
+
+    private boolean isLabelCell(JsonNode cell) {
+        if (cell == null || cell.path("empty").asBoolean(true) || !cell.path("value").isTextual()) return false;
+        var value = cell.path("value").asText("").strip();
+        if (value.isBlank() || isStaticText(value) || isUnitText(value)) return false;
+        return value.endsWith(":") || value.endsWith("：")
+                || (value.length() <= 24 && cell.path("bold").asBoolean(false));
+    }
+
+    private boolean hasRepeatedDataPattern(JsonNode source, Map<String, JsonNode> byPosition) {
+        var sheetId = source.path("sheetId").asText("");
+        var row = source.path("row").asInt();
+        var column = source.path("column").asInt();
+        for (var delta = -3; delta <= 3; delta++) {
+            if (delta == 0) continue;
+            var neighbor = byPosition.get(position(sheetId, row + delta, column));
+            if (neighbor != null && !neighbor.path("empty").asBoolean(true)) return true;
+        }
+        var sameRowInputs = 0;
+        for (var delta = -3; delta <= 3; delta++) {
+            if (delta == 0) continue;
+            var neighbor = byPosition.get(position(sheetId, row, column + delta));
+            if (neighbor != null && neighbor.path("empty").asBoolean(false)
+                    && neighbor.path("hasBorder").asBoolean(false)) sameRowInputs++;
+        }
+        return sameRowInputs > 0;
+    }
+
+    private boolean isHidden(ObjectNode sheet, JsonNode source) {
+        var row = source.path("row").asInt() - 1;
+        var column = source.path("column").asInt() - 1;
+        return sheet.path("rowData").path(String.valueOf(row)).path("hd").asInt(0) > 0
+                || sheet.path("columnData").path(String.valueOf(column)).path("hd").asInt(0) > 0;
+    }
+
+    private boolean isStaticText(String value) {
+        return value.startsWith("注") || value.startsWith("备注") || value.startsWith("注意")
+                || value.startsWith("说明") || value.startsWith("提示") || value.startsWith("操作要求");
+    }
+
+    private boolean isUnitText(String value) {
+        return value.matches("(?i)^(kg|g|mg|吨|t|ml|l|%|‰|个|件|箱|批|天|小时|元)$");
+    }
+
+    private String position(JsonNode cell) {
+        return position(cell.path("sheetId").asText(""), cell.path("row").asInt(), cell.path("column").asInt());
+    }
+
+    private String position(String sheetId, int row, int column) {
+        return sheetId + "|" + row + "|" + column;
+    }
+
+    private boolean rangesOverlap(String first, String second) {
+        var left = rangeBounds(first);
+        var right = rangeBounds(second);
+        return left != null && right != null && left[0] <= right[2] && right[0] <= left[2]
+                && left[1] <= right[3] && right[1] <= left[3];
+    }
+
+    private int[] rangeBounds(String address) {
+        var matcher = java.util.regex.Pattern.compile(
+                "^([A-Z]+)([1-9][0-9]*)(?::([A-Z]+)([1-9][0-9]*))?$"
+        ).matcher(address == null ? "" : address.toUpperCase(Locale.ROOT));
+        if (!matcher.matches()) return null;
+        var firstColumn = columnIndex(matcher.group(1));
+        var firstRow = Integer.parseInt(matcher.group(2));
+        var lastColumn = matcher.group(3) == null ? firstColumn : columnIndex(matcher.group(3));
+        var lastRow = matcher.group(4) == null ? firstRow : Integer.parseInt(matcher.group(4));
+        return new int[]{Math.min(firstColumn, lastColumn), Math.min(firstRow, lastRow),
+                Math.max(firstColumn, lastColumn), Math.max(lastRow, firstRow)};
+    }
+
+    private int columnIndex(String letters) {
+        var result = 0;
+        for (var letter : letters.toCharArray()) result = result * 26 + letter - 'A' + 1;
+        return result;
     }
 
     private ObjectNode base(ObjectNode sheet, JsonNode source) {
@@ -257,8 +389,10 @@ final class WorkbookPhysicalFactsBuilder {
     private Map<String, String> mergeAnchors(JsonNode ranges) {
         var result = new HashMap<String, String>();
         for (var range : ranges) {
-            var address = range.path("address").asText("");
-            if (!address.isBlank()) result.put(address, address.split(":", 2)[0]);
+            var address = range.path("range").asText(range.path("address").asText(""));
+            var anchor = range.path("anchor").asText(range.path("anchorAddress").asText(""));
+            if (anchor.isBlank() && !address.isBlank()) anchor = address.split(":", 2)[0];
+            if (!address.isBlank()) result.put(address, anchor);
         }
         return result;
     }

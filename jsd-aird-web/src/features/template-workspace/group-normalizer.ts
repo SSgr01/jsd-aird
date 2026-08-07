@@ -15,7 +15,7 @@ const SYSTEM_GROUPS: Record<string, { name: string; code: string }> = {
 };
 
 export function normalizeGroupName(value?: string) {
-  const name = value?.trim() || '基础信息';
+  const name = typeof value === 'string' ? value.trim() || '基础信息' : '基础信息';
   return SYSTEM_GROUPS[name]?.name ?? name;
 }
 
@@ -48,9 +48,13 @@ export function normalizeFieldModel(model: FieldModel): FieldModel {
     groups,
     fields: next.fields.map((field) => ({
       ...field,
+      name: typeof field.name === 'string' ? field.name : '',
+      fieldCode: typeof field.fieldCode === 'string' ? field.fieldCode : '',
+      valueType: typeof field.valueType === 'string' ? field.valueType : 'UNKNOWN',
       groupId: groupIdMap.get(field.groupId) ?? fallback,
     })),
     blocks: Array.isArray(next.blocks) ? next.blocks : [],
     semanticAnnotations: Array.isArray(next.semanticAnnotations) ? next.semanticAnnotations : [],
+    staticRegions: Array.isArray(next.staticRegions) ? next.staticRegions : [],
   };
 }

@@ -19,7 +19,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 final class GlobalSemanticRecognitionProtocol {
 
     static final int VERSION = 1;
-    static final String PROMPT_VERSION = "template-global-semantic-v1";
+    static final String PROMPT_VERSION = "template-global-semantic-v3";
 
     private static final Pattern ADDRESS = Pattern.compile(
             "^([A-Z]{1,4})([1-9][0-9]*)(?::([A-Z]{1,4})([1-9][0-9]*))?$"
@@ -30,25 +30,25 @@ final class GlobalSemanticRecognitionProtocol {
     private static final Set<String> ANNOTATION_ROLES = Set.of(
             "DOCUMENT_TITLE", "INLINE_METADATA", "FIELD_LABEL", "FIELD_VALUE",
             "TABLE_HEADER", "TABLE_DATA", "TABLE_TOTAL", "INSTRUCTION", "CONFIRMATION",
-            "SIGNATURE", "NOTE", "LOOKUP_DATA", "STATIC_REFERENCE", "UNKNOWN"
+            "NOTE", "LOOKUP_DATA", "STATIC_REFERENCE", "UNKNOWN"
     );
     private static final Set<String> BLOCK_TYPES = Set.of(
             "DOCUMENT_HEADER", "FORM_FIELDS", "ROW_TABLE", "MATRIX", "INSTRUCTION_LIST",
-            "CONFIRMATION_BLOCK", "SIGNATURE_BLOCK", "NOTE_BLOCK", "LOOKUP_TABLE", "UNKNOWN"
+            "CONFIRMATION_BLOCK", "NOTE_BLOCK", "LOOKUP_TABLE",
+            "COLUMN_TABLE", "FREE_TEXT", "STATIC_REFERENCE", "UNKNOWN"
     );
     private static final Set<String> RELATION_TYPES = Set.of("LABEL_VALUE", "INLINE_TEXT");
-    private static final Set<String> VALUE_TYPES = Set.of(
-            "string", "number", "integer", "boolean", "date", "datetime", "time", "duration"
-    );
-    private static final Set<String> EDITABILITY = Set.of(
-            "EDITABLE", "READ_ONLY", "CONDITIONAL", "UNKNOWN"
-    );
-    private static final Set<String> VALUE_SOURCES = Set.of(
-            "USER_INPUT", "FORMULA", "REFERENCE", "STATIC", "MIXED", "UNKNOWN"
-    );
-    private static final Set<String> TABLE_KINDS = Set.of("ROW_TABLE", "MATRIX");
+    private static final Set<String> VALUE_TYPES = SemanticProtocolTypes.VALUE_TYPES;
+    private static final Set<String> EDITABILITY = SemanticProtocolTypes.EDITABILITY;
+    private static final Set<String> VALUE_SOURCES = SemanticProtocolTypes.VALUE_SOURCES;
+    private static final Set<String> TABLE_KINDS = Set.of("ROW_TABLE", "COLUMN_TABLE", "MATRIX");
     private static final Set<String> TABLE_SEMANTIC_MODES = Set.of(
             "ROW_RECORDS", "CROSS_TAB", "RECORD_SET", "UNKNOWN"
+    );
+    private static final Set<String> REPEAT_AXES = Set.of("ROW", "COLUMN");
+    private static final Set<String> TERMINATION_TYPES = Set.of(
+            "UNTIL_TOTAL_ROW", "UNTIL_EMPTY_RECORD", "UNTIL_REGION_END",
+            "UNTIL_LABEL", "FIXED_COUNT"
     );
     private static final Set<String> ISSUE_CATEGORIES = Set.of(
             "FIELD_RELATION_UNCLEAR", "BUSINESS_BLOCK_UNCLEAR", "TABLE_STRUCTURE_UNCLEAR",
@@ -56,7 +56,7 @@ final class GlobalSemanticRecognitionProtocol {
     );
     private static final Set<String> SEVERITIES = Set.of("INFO", "WARNING", "BLOCKER");
     private static final Set<String> STATIC_BLOCK_TYPES = Set.of(
-            "DOCUMENT_HEADER", "INSTRUCTION_LIST", "NOTE_BLOCK", "LOOKUP_TABLE"
+            "DOCUMENT_HEADER", "INSTRUCTION_LIST", "NOTE_BLOCK", "LOOKUP_TABLE", "STATIC_REFERENCE"
     );
 
     private final ObjectMapper objectMapper;
@@ -67,7 +67,23 @@ final class GlobalSemanticRecognitionProtocol {
 
     JsonNode responseSchema() {
         try {
-            return objectMapper.readTree(SCHEMA);
+            var schema = objectMapper.readTree(SCHEMA);
+            // Layout metadata is backend-derived. Older providers may still send
+            // these fields, but they are intentionally not required from the
+            // model and are normalized only for backward compatibility.
+            var table = (ObjectNode) schema.path("$defs").path("table");
+            var required = table.withArray("required");
+            required.removeAll();
+            table.path("properties").fieldNames().forEachRemaining(required::add);
+            var terminationRule = (ObjectNode) schema.path("$defs").path("table")
+                    .path("properties").path("terminationRule");
+            var terminationRequired = terminationRule.withArray("required");
+            if (!terminationRequired.toString().contains("\"type\"")) {
+                terminationRequired.add("type");
+            }
+            // Do not add recordProjection, slots, bindings or measurement sizes
+            // to the required list. They are computed by CanonicalMatrixCompiler.
+            return schema;
         } catch (Exception exception) {
             throw new IllegalStateException("无法加载全局语义识别协议", exception);
         }
@@ -100,17 +116,32 @@ final class GlobalSemanticRecognitionProtocol {
         repairUniquelyContainedRelationBlocks(candidate, blockIds);
         repairUniquelyContainedTableBlocks(candidate, blockIds);
 
+        var normalized = new RecoverySummary();
+        normalizeOwnedBlockRanges(candidate, physicalFacts, blocks, normalized);
+        normalizeRelations(candidate.path("fieldRelations"), physicalFacts, normalized);
+        normalizeTables(candidate.path("tables"), normalized);
+
         var rejectedRelations = new RecoverySummary();
+        var rejectedRelationCandidates = objectMapper.createArrayNode();
         var validRelations = validRelations(
-                candidate.path("fieldRelations"), physicalFacts, sheets, blockIds, blocks, rejectedRelations
+                candidate.path("fieldRelations"), physicalFacts, sheets, blockIds, blocks,
+                rejectedRelations, rejectedRelationCandidates
         );
         candidate.set("fieldRelations", validRelations);
         var relationIds = uniqueIds(validRelations, "fieldRelations");
 
         var rejectedTables = new RecoverySummary();
-        var validTables = validTables(candidate.path("tables"), sheets, blockIds, blocks, rejectedTables);
+        var rejectedTableCandidates = objectMapper.createArrayNode();
+        var validTables = validTables(candidate.path("tables"), sheets, blockIds, blocks,
+                rejectedTables, rejectedTableCandidates);
         candidate.set("tables", validTables);
         var tableIds = uniqueIds(validTables, "tables");
+
+        // These are internal recovery channels. They are added only after the strict
+        // protocol envelope has been validated and are consumed by the compiler so a
+        // candidate is never silently lost from the review surface.
+        candidate.set("_rejectedRelations", rejectedRelationCandidates);
+        candidate.set("_rejectedTables", rejectedTableCandidates);
 
         var validAnnotations = validAnnotations(
                 candidate.path("semanticAnnotations"), sheets, blockIds, relationIds, tableIds
@@ -127,6 +158,7 @@ final class GlobalSemanticRecognitionProtocol {
         appendRecoveryIssue(validIssues, recoveredBlocks, "BUSINESS_BLOCK_UNCLEAR", "部分业务区域需要核对",
                 "系统已按较大业务区域恢复可识别内容，无法确定归属的内容未写入正式字段。",
                 "请在识别确认中补充未识别字段。", sheets, blockIds);
+        appendNormalizationIssue(validIssues, normalized, sheets, blockIds);
         candidate.set("qualityIssues", validIssues);
         return new ValidationResult(candidate, new RecoveryDiagnostics(
                 candidate.path("fieldRelations").size() + rejectedRelations.count,
@@ -312,7 +344,8 @@ final class GlobalSemanticRecognitionProtocol {
 
     private ArrayNode validRelations(
             JsonNode values, JsonNode physicalFacts, Map<String, SheetBounds> sheets,
-            Set<String> blockIds, Map<String, JsonNode> blocks, RecoverySummary recovery
+            Set<String> blockIds, Map<String, JsonNode> blocks, RecoverySummary recovery,
+            ArrayNode rejectedCandidates
     ) {
         var result = objectMapper.createArrayNode();
         var ids = new HashSet<String>();
@@ -327,6 +360,7 @@ final class GlobalSemanticRecognitionProtocol {
                 result.add(relation);
             } catch (ProtocolViolationException exception) {
                 recovery.reject(value, "labelRange", sheets, blockIds);
+                rejectedCandidates.add(value.deepCopy());
             }
         }
         return result;
@@ -347,13 +381,171 @@ final class GlobalSemanticRecognitionProtocol {
         relation.put("relationType", "INLINE_TEXT");
     }
 
+    /**
+     * Expands a model block only when its owned field/table ranges are unambiguous.
+     * Models frequently return the label-side width for a block and forget the merged
+     * value cells on the right. Rejecting the relation in that case loses valid work.
+     */
+    private void normalizeOwnedBlockRanges(
+            ObjectNode response, JsonNode physicalFacts, Map<String, JsonNode> blocks,
+            RecoverySummary recovery
+    ) {
+        for (var relation : response.withArray("fieldRelations")) {
+            if (!(relation instanceof ObjectNode object)) continue;
+            var block = blocks.get(object.path("blockTemporaryId").asText(""));
+            if (block == null) continue;
+            expandBlockIfSafe(object.path("sheetId").asText(""),
+                    union(bounds(object.path("labelRange").asText()), bounds(object.path("valueRange").asText())),
+                    block, response.path("businessBlocks"), physicalFacts, recovery, "valueRange");
+        }
+        for (var table : response.withArray("tables")) {
+            if (!(table instanceof ObjectNode object)) continue;
+            var block = blocks.get(object.path("blockTemporaryId").asText(""));
+            if (block == null) continue;
+            expandBlockIfSafe(object.path("sheetId").asText(""),
+                    bounds(object.path("range").asText()), block, response.path("businessBlocks"),
+                    physicalFacts, recovery, "range");
+        }
+    }
+
+    private void expandBlockIfSafe(
+            String sheetId, Range required, JsonNode blocks, JsonNode block,
+            JsonNode physicalFacts, RecoverySummary recovery, String rangeKey
+    ) {
+        if (required == null) return;
+        var current = bounds(block.path("range").asText(""));
+        if (current == null || current.contains(required)) return;
+        var sheet = sheetBounds(physicalFacts, sheetId);
+        var expanded = union(current, required);
+        if (sheet == null || expanded == null || !sheet.bounds().contains(expanded)) return;
+
+        var parent = block.path("parentTemporaryId").asText("");
+        for (var sibling : blocks) {
+            if (sibling == block || !sheetId.equals(sibling.path("sheetId").asText())
+                    || !parent.equals(sibling.path("parentTemporaryId").asText(""))) continue;
+            var siblingRange = bounds(sibling.path("range").asText(""));
+            if (siblingRange != null && expanded.overlaps(siblingRange)) return;
+        }
+        ((ObjectNode) block).put("range", address(expanded));
+        recovery.normalized(sheetId, block.path("range").asText(""),
+                block.path("temporaryId").asText(""));
+    }
+
+    private void normalizeRelations(JsonNode values, JsonNode physicalFacts, RecoverySummary recovery) {
+        for (var value : values) {
+            if (!(value instanceof ObjectNode relation)) continue;
+            var label = bounds(relation.path("labelRange").asText(""));
+            var input = bounds(relation.path("valueRange").asText(""));
+            if (label == null || input == null) continue;
+
+            var merged = commonMergedRange(physicalFacts, relation.path("sheetId").asText(""), label, input);
+            if (merged != null && (label.overlaps(input)
+                    || "INLINE_TEXT".equals(relation.path("relationType").asText()))) {
+                relation.put("labelRange", merged).put("valueRange", merged)
+                        .put("relationType", "INLINE_TEXT");
+                recovery.normalized(relation.path("sheetId").asText(""), merged,
+                        relation.path("temporaryId").asText(""));
+            } else if ("INLINE_TEXT".equals(relation.path("relationType").asText())
+                    && !label.equals(input) && !label.overlaps(input)) {
+                relation.put("relationType", "LABEL_VALUE");
+                recovery.normalized(relation.path("sheetId").asText(""),
+                        relation.path("labelRange").asText(""), relation.path("temporaryId").asText(""));
+            }
+        }
+    }
+
+    private void normalizeTables(JsonNode values, RecoverySummary recovery) {
+        for (var value : values) {
+            if (!(value instanceof ObjectNode table)) continue;
+            var kind = table.path("tableKind").asText("");
+            if (!Set.of("ROW_TABLE", "COLUMN_TABLE").contains(kind)) continue;
+            var repeatAxis = table.path("repeatAxis").asText("");
+            if (repeatAxis.isBlank()) {
+                repeatAxis = "COLUMN_TABLE".equals(kind) ? "COLUMN" : "ROW";
+                table.put("repeatAxis", repeatAxis);
+            }
+            var header = bounds(table.path("headerRange").asText(""));
+            var data = bounds(table.path("dataRange").asText(""));
+            if (header != null && data != null
+                    && (("ROW".equals(repeatAxis) && header.endRow() < data.startRow())
+                    || ("COLUMN".equals(repeatAxis) && header.endColumn() < data.startColumn()))) {
+                if (!"ROW_RECORDS".equals(table.path("semanticMode").asText(""))) {
+                    table.put("semanticMode", "ROW_RECORDS");
+                    recovery.normalized(table.path("sheetId").asText(""),
+                            table.path("range").asText(""), table.path("temporaryId").asText(""));
+                }
+                table.put("rowHeaderRange", "").put("columnHeaderRange", "").put("crossDataRange", "");
+            }
+            var termination = table.path("terminationRule");
+            if (termination.isObject() && "FIXED_COUNT".equals(termination.path("type").asText())
+                    && termination.path("maxRecords").asInt(0) <= 0
+                    && termination.path("count").asInt(0) > 0) {
+                ((ObjectNode) termination).put("maxRecords", termination.path("count").asInt());
+                recovery.normalized(table.path("sheetId").asText(""),
+                        table.path("range").asText(""), table.path("temporaryId").asText(""));
+            }
+        }
+    }
+
+    private String commonMergedRange(JsonNode physicalFacts, String sheetId, Range label, Range value) {
+        for (var sheet : physicalFacts.path("sheets")) {
+            if (!sheetId.equals(sheet.path("id").asText(sheet.path("sheetId").asText("")))) continue;
+            for (var merged : sheet.path("mergedRanges")) {
+                var range = bounds(merged.path("address").asText(merged.path("range").asText("")));
+                if (range != null && range.contains(label) && range.contains(value)) {
+                    return merged.path("address").asText(merged.path("range").asText(""));
+                }
+            }
+        }
+        return null;
+    }
+
+    private SheetBounds sheetBounds(JsonNode physicalFacts, String sheetId) {
+        for (var sheet : physicalFacts.path("sheets")) {
+            var id = sheet.path("id").asText(sheet.path("sheetId").asText(""));
+            if (sheetId.equals(id)) {
+                return new SheetBounds(id, sheet.path("usedRange").asText("A1"),
+                        bounds(sheet.path("usedRange").asText("A1")));
+            }
+        }
+        return null;
+    }
+
+    private Range union(Range left, Range right) {
+        if (left == null) return right;
+        if (right == null) return left;
+        return new Range(Math.min(left.startColumn(), right.startColumn()),
+                Math.min(left.startRow(), right.startRow()),
+                Math.max(left.endColumn(), right.endColumn()),
+                Math.max(left.endRow(), right.endRow()));
+    }
+
+    private String address(Range range) {
+        var start = columnName(range.startColumn()) + range.startRow();
+        var end = columnName(range.endColumn()) + range.endRow();
+        return start.equals(end) ? start : start + ":" + end;
+    }
+
+    private String columnName(int value) {
+        var current = value;
+        var result = new StringBuilder();
+        while (current > 0) {
+            var remainder = (current - 1) % 26;
+            result.insert(0, (char) ('A' + remainder));
+            current = (current - 1) / 26;
+        }
+        return result.toString();
+    }
+
     private String physicalCellText(JsonNode physicalFacts, String sheetId, String range) {
         var anchor = range == null ? "" : range.split(":", 2)[0];
-        for (var cell : physicalFacts.path("semanticCells")) {
-            if (!sheetId.equals(cell.path("sheetId").asText())) continue;
-            if (!anchor.equalsIgnoreCase(cell.path("address").asText())
-                    && !range.equalsIgnoreCase(cell.path("mergedRange").asText(""))) continue;
-            return cell.path("value").isTextual() ? cell.path("value").asText() : "";
+        for (var sheet : physicalFacts.path("sheets")) {
+            for (var cell : sheet.path("semanticCells")) {
+                if (!sheetId.equals(cell.path("sheetId").asText())) continue;
+                if (!anchor.equalsIgnoreCase(cell.path("address").asText())
+                        && !range.equalsIgnoreCase(cell.path("mergedRange").asText(""))) continue;
+                return cell.path("value").isTextual() ? cell.path("value").asText() : "";
+            }
         }
         return "";
     }
@@ -371,7 +563,7 @@ final class GlobalSemanticRecognitionProtocol {
 
     private ArrayNode validTables(
             JsonNode values, Map<String, SheetBounds> sheets, Set<String> blockIds,
-            Map<String, JsonNode> blocks, RecoverySummary recovery
+            Map<String, JsonNode> blocks, RecoverySummary recovery, ArrayNode rejectedCandidates
     ) {
         var result = objectMapper.createArrayNode();
         var ids = new HashSet<String>();
@@ -379,14 +571,14 @@ final class GlobalSemanticRecognitionProtocol {
             try {
                 requireObject(value, "tables[]");
                 var table = (ObjectNode) value.deepCopy();
+                normalizeTableLayout(table);
                 var id = table.path("temporaryId").asText("");
                 require(!id.isBlank() && ids.add(id), "tables 中 temporaryId 缺失或重复");
                 validateTables(objectMapper.createArrayNode().add(table), sheets, blockIds, blocks);
                 result.add(table);
             } catch (ProtocolViolationException exception) {
                 recovery.reject(value, "range", sheets, blockIds);
-                var pending = pendingTable(value, sheets, blockIds, blocks);
-                if (pending != null) result.add(pending);
+                rejectedCandidates.add(value.deepCopy());
             }
         }
         return result;
@@ -410,9 +602,15 @@ final class GlobalSemanticRecognitionProtocol {
                 || !bounds(block.path("range").asText("")).contains(tableRange)) return null;
         var pending = (ObjectNode) source.deepCopy();
         pending.withArray("columns").removeAll();
-        pending.put("semanticMode", "UNKNOWN");
-        pending.put("rowHeaderRange", "").put("columnHeaderRange", "").put("crossDataRange", "");
-        pending.withArray("headerTree").removeAll();
+        // A rejected MATRIX candidate must retain the physical axes. Clearing them here
+        // turned a recoverable matrix into an untraceable UNKNOWN table and made the
+        // compiler infer every cell as a flat column. The candidate is still pending;
+        // its structure is not promoted merely because the ranges are retained.
+        if (!"MATRIX".equals(source.path("tableKind").asText())) {
+            pending.put("semanticMode", "UNKNOWN");
+            pending.put("rowHeaderRange", "").put("columnHeaderRange", "").put("crossDataRange", "");
+            pending.withArray("headerTree").removeAll();
+        }
         return pending;
     }
 
@@ -490,6 +688,30 @@ final class GlobalSemanticRecognitionProtocol {
                         ? recovery.blockTemporaryId : ""));
     }
 
+    private void appendNormalizationIssue(
+            ArrayNode issues, RecoverySummary recovery, Map<String, SheetBounds> sheets,
+            Set<String> blockIds
+    ) {
+        if (recovery.count == 0) return;
+        var sheetId = recovery.sheetId;
+        var range = recovery.range;
+        if (!sheets.containsKey(sheetId) || bounds(range) == null) {
+            var fallback = sheets.values().iterator().next();
+            sheetId = fallback.id();
+            range = fallback.usedRange();
+        }
+        issues.add(objectMapper.createObjectNode()
+                .put("temporaryId", "protocol-normalized-" + issues.size())
+                .put("sheetId", sheetId).put("range", range)
+                .put("category", "LAYOUT_INCONSISTENT").put("severity", "INFO")
+                .put("title", "系统已自动规范部分识别结果")
+                .put("description", "系统修正了 " + recovery.count
+                        + " 项表格、合并单元格或业务区域范围，原始候选仍保留待人工确认。")
+                .put("businessImpact", "不会自动进入正式模板，请确认字段名称、范围和填写方式。")
+                .put("rootBlockTemporaryId", blockIds.contains(recovery.blockTemporaryId)
+                        ? recovery.blockTemporaryId : ""));
+    }
+
     private void validateAnnotations(
             JsonNode values, Map<String, SheetBounds> sheets, Set<String> blockIds,
             Set<String> relationIds, Set<String> tableIds
@@ -543,7 +765,9 @@ final class GlobalSemanticRecognitionProtocol {
             require(parent != null && parent.path("sheetId").asText().equals(child.path("sheetId").asText()),
                     "父子业务块必须位于同一工作表");
             require(bounds(parent.path("range").asText()).contains(bounds(child.path("range").asText())),
-                    "父业务块必须完整包含子业务块：" + entry.getKey());
+                    "父业务块必须完整包含子业务块：parent=" + parentId
+                            + "(" + parent.path("range").asText() + ") child=" + entry.getKey()
+                            + "(" + child.path("range").asText() + ")");
             var visited = new HashSet<String>();
             var cursor = entry.getKey();
             while (cursor != null && visited.add(cursor)) {
@@ -561,7 +785,10 @@ final class GlobalSemanticRecognitionProtocol {
                 if (!first.path("parentTemporaryId").asText("")
                         .equals(second.path("parentTemporaryId").asText(""))) continue;
                 require(!bounds(first.path("range").asText()).overlaps(bounds(second.path("range").asText())),
-                        "同一父块下的兄弟业务块不能重叠");
+                        "同一父块下的兄弟业务块不能重叠：first="
+                                + first.path("temporaryId").asText() + "(" + first.path("range").asText()
+                                + ") second=" + second.path("temporaryId").asText() + "("
+                                + second.path("range").asText() + ")");
             }
         }
         return blocks;
@@ -621,63 +848,96 @@ final class GlobalSemanticRecognitionProtocol {
             var value = values.get(index);
             var path = "tables[" + index + "]";
             requireObject(value, path);
+            var table = (ObjectNode) value.deepCopy();
+            normalizeTableLayout(table);
             exactKeys(value, path, Set.of(
                     "temporaryId", "sheetId", "range", "tableKind", "businessName",
                     "blockTemporaryId", "groupNameSuggestion", "semanticKeySuggestion",
                     "headerRange", "dataRange", "totalRange", "columns", "semanticMode",
-                    "rowHeaderRange", "columnHeaderRange", "crossDataRange", "headerTree"
+                    "rowHeaderRange", "columnHeaderRange", "crossDataRange", "headerTree",
+                    "cornerRange", "repeatAxis", "recordAxis", "recordHeight", "recordWidth",
+                    "recordStride", "measureHeight", "recordHeightIncludesIdentity", "recordProjection",
+                    "columnSlots", "columnMemberRole", "memberMode", "bindings", "terminationRule"
             ));
-            requiredText(value, "temporaryId", path);
-            requiredText(value, "businessName", path);
-            validateRange(value, path, sheets);
-            validateNamedRange(value, "headerRange", path, sheets);
-            validateNamedRange(value, "dataRange", path, sheets);
-            if (value.has("totalRange") && !value.path("totalRange").asText("").isBlank()) {
-                validateNamedRange(value, "totalRange", path, sheets);
+            requiredText(table, "temporaryId", path);
+            requiredText(table, "businessName", path);
+            validateRange(table, path, sheets);
+            validateNamedRange(table, "headerRange", path, sheets);
+            validateNamedRange(table, "dataRange", path, sheets);
+            if (table.has("totalRange") && !table.path("totalRange").asText("").isBlank()) {
+                validateNamedRange(table, "totalRange", path, sheets);
             }
-            enumValue(value, "tableKind", TABLE_KINDS, path);
-            enumValue(value, "semanticMode", TABLE_SEMANTIC_MODES, path);
-            optionalRef(value, "blockTemporaryId", blockIds, path);
-            require(nonBlankReference(value, "blockTemporaryId", blockIds),
+            enumValue(table, "tableKind", TABLE_KINDS, path);
+            enumValue(table, "semanticMode", TABLE_SEMANTIC_MODES, path);
+            optionalRef(table, "blockTemporaryId", blockIds, path);
+            require(nonBlankReference(table, "blockTemporaryId", blockIds),
                     path + ".blockTemporaryId 必须引用包含该表格的业务块");
-            var tableRange = bounds(value.path("range").asText());
-            var headerRange = bounds(value.path("headerRange").asText());
-            var dataRange = bounds(value.path("dataRange").asText());
-            var totalRange = value.path("totalRange").asText("").isBlank()
+            var tableRange = bounds(table.path("range").asText());
+            var headerRange = bounds(table.path("headerRange").asText());
+            var dataRange = bounds(table.path("dataRange").asText());
+            var totalRange = table.path("totalRange").asText("").isBlank()
                     ? null : bounds(value.path("totalRange").asText());
-            var block = blocks.get(value.path("blockTemporaryId").asText());
-            require(block != null && value.path("sheetId").asText().equals(block.path("sheetId").asText())
+            var block = blocks.get(table.path("blockTemporaryId").asText());
+            require(block != null && table.path("sheetId").asText().equals(block.path("sheetId").asText())
                             && bounds(block.path("range").asText()).contains(tableRange),
                     path + " 的表格范围必须位于所属业务块内");
             require(tableRange.contains(headerRange) && tableRange.contains(dataRange)
                             && (totalRange == null || tableRange.contains(totalRange)),
                     path + " 的表头、数据和合计范围必须位于表格范围内");
             require(!headerRange.overlaps(dataRange), path + " 的表头范围与数据范围不能重叠");
-            if ("ROW_TABLE".equals(value.path("tableKind").asText())) {
-                require("ROW_RECORDS".equals(value.path("semanticMode").asText()),
-                        path + " 的 ROW_TABLE 必须使用 ROW_RECORDS 语义模式");
-                require(value.path("rowHeaderRange").asText("").isBlank()
-                                && value.path("columnHeaderRange").asText("").isBlank()
-                                && value.path("crossDataRange").asText("").isBlank(),
+            if (Set.of("ROW_TABLE", "COLUMN_TABLE").contains(table.path("tableKind").asText())) {
+                require("ROW_RECORDS".equals(table.path("semanticMode").asText()),
+                        path + " 的重复表必须使用 ROW_RECORDS 语义模式");
+                enumValue(table, "repeatAxis", REPEAT_AXES, path);
+                require(table.path("recordHeight").asInt(0) > 0
+                                && table.path("recordWidth").asInt(0) > 0
+                                && table.path("recordStride").asInt(0) > 0,
+                        path + " 的记录单元必须是正整数");
+                require(table.path("rowHeaderRange").asText("").isBlank()
+                                && table.path("columnHeaderRange").asText("").isBlank()
+                                && table.path("crossDataRange").asText("").isBlank(),
                         path + " 的 ROW_TABLE 不得虚构矩阵轴范围");
-                require(headerRange.endRow() < dataRange.startRow(),
-                        path + " 的 ROW_TABLE 表头必须位于数据区上方");
-                if (totalRange != null) {
-                    require(dataRange.endRow() < totalRange.startRow(),
-                            path + " 的 ROW_TABLE 合计行必须位于数据区下方");
+                if ("ROW".equals(table.path("repeatAxis").asText())) {
+                    require(headerRange.endRow() < dataRange.startRow(),
+                            path + " 的按行明细表头必须位于数据区上方");
+                    if (totalRange != null) {
+                        require(dataRange.endRow() < totalRange.startRow(),
+                                path + " 的按行明细合计行必须位于数据区下方");
+                    }
+                } else {
+                    require(headerRange.endColumn() < dataRange.startColumn(),
+                            path + " 的按列明细表头必须位于数据区左侧");
+                    if (totalRange != null) {
+                        require(dataRange.endColumn() < totalRange.startColumn(),
+                                path + " 的按列明细合计列必须位于数据区右侧");
+                    }
                 }
             } else {
-                require(Set.of("CROSS_TAB", "RECORD_SET").contains(value.path("semanticMode").asText()),
+                require(Set.of("CROSS_TAB", "RECORD_SET").contains(table.path("semanticMode").asText()),
                         path + " 的 MATRIX 必须明确 CROSS_TAB 或 RECORD_SET 语义模式");
-                validateNamedRange(value, "rowHeaderRange", path, sheets);
-                validateNamedRange(value, "columnHeaderRange", path, sheets);
-                validateNamedRange(value, "crossDataRange", path, sheets);
-                var rowHeaderRange = bounds(value.path("rowHeaderRange").asText());
-                var columnHeaderRange = bounds(value.path("columnHeaderRange").asText());
-                var crossDataRange = bounds(value.path("crossDataRange").asText());
+                if (table.has("repeatAxis") && !table.path("repeatAxis").asText("").isBlank()) {
+                    enumValue(table, "repeatAxis", REPEAT_AXES, path);
+                }
+                validateNamedRange(table, "rowHeaderRange", path, sheets);
+                validateNamedRange(table, "columnHeaderRange", path, sheets);
+                validateNamedRange(table, "crossDataRange", path, sheets);
+                if (table.has("cornerRange") && !table.path("cornerRange").asText("").isBlank()) {
+                    validateNamedRange(table, "cornerRange", path, sheets);
+                }
+                var rowHeaderRange = bounds(table.path("rowHeaderRange").asText());
+                var columnHeaderRange = bounds(table.path("columnHeaderRange").asText());
+                var crossDataRange = bounds(table.path("crossDataRange").asText());
+                var cornerRange = table.path("cornerRange").asText("").isBlank()
+                        ? null : bounds(table.path("cornerRange").asText());
                 require(tableRange.contains(rowHeaderRange) && tableRange.contains(columnHeaderRange)
                                 && tableRange.contains(crossDataRange),
                         path + " 的矩阵行标题、列标题和交叉数据区必须位于矩阵范围内");
+                if (cornerRange != null) {
+                    require(tableRange.contains(cornerRange)
+                                    && cornerRange.endRow() < crossDataRange.startRow()
+                                    && cornerRange.endColumn() < crossDataRange.startColumn(),
+                            path + " 的矩阵角区必须位于行列轴交界处");
+                }
                 require(!rowHeaderRange.overlaps(crossDataRange)
                                 && !columnHeaderRange.overlaps(crossDataRange),
                         path + " 的矩阵轴标题不能与交叉数据区重叠");
@@ -687,12 +947,19 @@ final class GlobalSemanticRecognitionProtocol {
                 require(dataRange.equals(crossDataRange),
                         path + " 的 MATRIX dataRange 必须等于 crossDataRange");
             }
-            validateHeaderTree(value.path("headerTree"), value, tableRange, path);
-            require(value.path("columns").isArray() && !value.path("columns").isEmpty(),
-                    path + ".columns 必须是非空数组");
+            validateHeaderTree(table.path("headerTree"), table, tableRange, path);
+            require(table.path("columns").isArray(), path + ".columns 必须是数组");
+            // MATRIX 的字段身份来自行/列轴和交叉数据坐标，不要求模型虚构
+            // “第1列/第2列”这样的列名。ROW/COLUMN_TABLE 仍要求显式列定义。
+            if ("MATRIX".equals(table.path("tableKind").asText())) {
+                require(table.path("columns").isEmpty(),
+                        path + ".MATRIX.columns 必须为空，轴字段由 headerTree 定义");
+            } else {
+                require(!table.path("columns").isEmpty(), path + ".columns 必须是非空数组");
+            }
             var columnIds = new HashSet<String>();
-            for (int columnIndex = 0; columnIndex < value.path("columns").size(); columnIndex++) {
-                var column = value.path("columns").get(columnIndex);
+            for (int columnIndex = 0; columnIndex < table.path("columns").size(); columnIndex++) {
+                var column = table.path("columns").get(columnIndex);
                 var columnPath = path + ".columns[" + columnIndex + "]";
                 requireObject(column, columnPath);
                 exactKeys(column, columnPath, Set.of(
@@ -713,12 +980,64 @@ final class GlobalSemanticRecognitionProtocol {
                 validateCondition(column, columnPath);
                 var columnLabel = bounds(column.path("labelRange").asText());
                 var columnValue = bounds(column.path("valueRange").asText());
-                require(headerRange.contains(columnLabel) && dataRange.contains(columnValue),
-                        columnPath + " 的列名必须位于表头、值范围必须位于数据区");
-                require(columnLabel.startColumn() == columnValue.startColumn()
-                                && columnLabel.endColumn() == columnValue.endColumn(),
-                        columnPath + " 的列名与数据区必须垂直对齐");
+                require(tableRange.contains(columnLabel) && dataRange.contains(columnValue),
+                        columnPath + " 的字段标签和值范围必须位于表格内");
+                if ("MATRIX".equals(table.path("tableKind").asText())
+                        || "ROW".equals(table.path("repeatAxis").asText("ROW"))) {
+                    require(columnLabel.startColumn() == columnValue.startColumn()
+                                    && columnLabel.endColumn() == columnValue.endColumn(),
+                            columnPath + " 的字段标签与数据区必须垂直对齐");
+                } else {
+                    require(columnLabel.startRow() == columnValue.startRow()
+                                    && columnLabel.endRow() == columnValue.endRow(),
+                            columnPath + " 的字段标签与数据区必须水平对齐");
+                }
             }
+            validateTerminationRule(table.path("terminationRule"), path);
+        }
+    }
+
+    private void normalizeTableLayout(ObjectNode table) {
+        var kind = table.path("tableKind").asText("");
+        var data = bounds(table.path("dataRange").asText(""));
+        if (!table.has("repeatAxis") || table.path("repeatAxis").asText("").isBlank()) {
+            table.put("repeatAxis", "MATRIX".equals(kind) ? "" : "ROW");
+        }
+        if (!table.has("recordHeight") || table.path("recordHeight").asInt(0) <= 0) {
+            table.put("recordHeight", "COLUMN".equals(table.path("repeatAxis").asText())
+                    && data != null ? data.endRow() - data.startRow() + 1 : 1);
+        }
+        if (!table.has("recordWidth") || table.path("recordWidth").asInt(0) <= 0) {
+            table.put("recordWidth", "ROW".equals(table.path("repeatAxis").asText())
+                    && data != null ? data.endColumn() - data.startColumn() + 1 : 1);
+        }
+        if (!table.has("recordStride") || table.path("recordStride").asInt(0) <= 0) {
+            table.put("recordStride", 1);
+        }
+        var terminationRule = table.path("terminationRule");
+        // Some model providers satisfy the object-level schema by returning an
+        // empty object, but that is not a usable termination rule. Treat it the
+        // same as an omitted rule so a valid table is not discarded merely
+        // because the provider omitted the default type.
+        if (!table.has("terminationRule") || !terminationRule.isObject()
+                || terminationRule.path("type").asText("").isBlank()) {
+            var termination = objectMapper.createObjectNode();
+            termination.put("type", table.path("totalRange").asText("").isBlank()
+                    ? "UNTIL_REGION_END" : "UNTIL_TOTAL_ROW");
+            table.set("terminationRule", termination);
+        }
+    }
+
+    private void validateTerminationRule(JsonNode rule, String path) {
+        require(rule.isObject(), path + ".terminationRule 必须是对象");
+        enumValue(rule, "type", TERMINATION_TYPES, path + ".terminationRule");
+        if ("UNTIL_LABEL".equals(rule.path("type").asText())) {
+            require(!rule.path("label").asText("").isBlank(),
+                    path + ".terminationRule.label 不能为空");
+        }
+        if ("FIXED_COUNT".equals(rule.path("type").asText())) {
+            require(rule.path("maxRecords").asInt(0) > 0,
+                    path + ".terminationRule.maxRecords 必须为正整数");
         }
     }
 
@@ -732,7 +1051,9 @@ final class GlobalSemanticRecognitionProtocol {
             var node = tree.get(index);
             var nodePath = path + ".headerTree[" + index + "]";
             requireObject(node, nodePath);
-            exactKeys(node, nodePath, Set.of("temporaryId", "parentTemporaryId", "name", "range", "axis"));
+            exactKeys(node, nodePath, Set.of(
+                    "temporaryId", "parentTemporaryId", "name", "range", "axis", "role", "memberMode"
+            ));
             requiredText(node, "temporaryId", nodePath);
             requiredText(node, "name", nodePath);
             require(ids.add(node.path("temporaryId").asText()), nodePath + ".temporaryId 重复");
@@ -913,6 +1234,14 @@ final class GlobalSemanticRecognitionProtocol {
         private String range = "";
         private String blockTemporaryId = "";
 
+        private void normalized(String candidateSheetId, String candidateRange, String candidateBlock) {
+            count++;
+            if (!sheetId.isBlank()) return;
+            sheetId = candidateSheetId == null ? "" : candidateSheetId;
+            range = candidateRange == null ? "" : candidateRange;
+            blockTemporaryId = candidateBlock == null ? "" : candidateBlock;
+        }
+
         private void reject(JsonNode value, String rangeKey, Map<String, SheetBounds> sheets, Set<String> blockIds) {
             count++;
             if (!sheetId.isBlank()) return;
@@ -947,7 +1276,7 @@ final class GlobalSemanticRecognitionProtocol {
         }
     }
 
-    private static final String SCHEMA = """
+    private static final String SCHEMA = schemaText("""
             {
               "$schema":"https://json-schema.org/draft/2020-12/schema",
               "type":"object","additionalProperties":false,
@@ -965,14 +1294,40 @@ final class GlobalSemanticRecognitionProtocol {
                 "editability":{"enum":["EDITABLE","READ_ONLY","CONDITIONAL","UNKNOWN"]},
                 "valueSource":{"enum":["USER_INPUT","FORMULA","REFERENCE","STATIC","MIXED","UNKNOWN"]},
                 "valueType":{"enum":["string","number","integer","boolean","date","datetime","time","duration"]},
-                "annotation":{"type":"object","additionalProperties":false,"required":["sheetId","range","role","temporaryRelationRef","temporaryBlockRef","temporaryTableRef"],"properties":{"sheetId":{"type":"string","minLength":1},"range":{"$ref":"#/$defs/range"},"role":{"enum":["DOCUMENT_TITLE","INLINE_METADATA","FIELD_LABEL","FIELD_VALUE","TABLE_HEADER","TABLE_DATA","TABLE_TOTAL","INSTRUCTION","CONFIRMATION","SIGNATURE","NOTE","LOOKUP_DATA","STATIC_REFERENCE","UNKNOWN"]},"temporaryRelationRef":{"type":"string"},"temporaryBlockRef":{"type":"string"},"temporaryTableRef":{"type":"string"}}},
-                "block":{"type":"object","additionalProperties":false,"required":["temporaryId","sheetId","range","type","parentTemporaryId","businessName","groupNameSuggestion","semanticKeySuggestion"],"properties":{"temporaryId":{"type":"string","minLength":1},"sheetId":{"type":"string","minLength":1},"range":{"$ref":"#/$defs/range"},"type":{"enum":["DOCUMENT_HEADER","FORM_FIELDS","ROW_TABLE","MATRIX","INSTRUCTION_LIST","CONFIRMATION_BLOCK","SIGNATURE_BLOCK","NOTE_BLOCK","LOOKUP_TABLE","UNKNOWN"]},"parentTemporaryId":{"type":"string"},"businessName":{"type":"string","minLength":1},"groupNameSuggestion":{"type":"string"},"semanticKeySuggestion":{"type":"string"}}},
+                "annotation":{"type":"object","additionalProperties":false,"required":["sheetId","range","role","temporaryRelationRef","temporaryBlockRef","temporaryTableRef"],"properties":{"sheetId":{"type":"string","minLength":1},"range":{"$ref":"#/$defs/range"},"role":{"enum":["DOCUMENT_TITLE","INLINE_METADATA","FIELD_LABEL","FIELD_VALUE","TABLE_HEADER","TABLE_DATA","TABLE_TOTAL","INSTRUCTION","CONFIRMATION","NOTE","LOOKUP_DATA","STATIC_REFERENCE","UNKNOWN"]},"temporaryRelationRef":{"type":"string"},"temporaryBlockRef":{"type":"string"},"temporaryTableRef":{"type":"string"}}},
+                "block":{"type":"object","additionalProperties":false,"required":["temporaryId","sheetId","range","type","parentTemporaryId","businessName","groupNameSuggestion","semanticKeySuggestion"],"properties":{"temporaryId":{"type":"string","minLength":1},"sheetId":{"type":"string","minLength":1},"range":{"$ref":"#/$defs/range"},"type":{"enum":["DOCUMENT_HEADER","FORM_FIELDS","ROW_TABLE","COLUMN_TABLE","MATRIX","FREE_TEXT","STATIC_REFERENCE","INSTRUCTION_LIST","CONFIRMATION_BLOCK","NOTE_BLOCK","LOOKUP_TABLE","UNKNOWN"]},"parentTemporaryId":{"type":"string"},"businessName":{"type":"string","minLength":1},"groupNameSuggestion":{"type":"string"},"semanticKeySuggestion":{"type":"string"}}},
                 "relation":{"type":"object","additionalProperties":false,"required":["temporaryId","sheetId","labelRange","valueRange","relationType","businessName","blockTemporaryId","groupNameSuggestion","semanticKeySuggestion","valueType","required","editability","valueSource","unit","condition"],"properties":{"temporaryId":{"type":"string","minLength":1},"sheetId":{"type":"string","minLength":1},"labelRange":{"$ref":"#/$defs/range"},"valueRange":{"$ref":"#/$defs/range"},"relationType":{"enum":["LABEL_VALUE","INLINE_TEXT"]},"businessName":{"type":"string","minLength":1},"blockTemporaryId":{"type":"string"},"groupNameSuggestion":{"type":"string"},"semanticKeySuggestion":{"type":"string"},"valueType":{"$ref":"#/$defs/valueType"},"required":{"type":"boolean"},"editability":{"$ref":"#/$defs/editability"},"valueSource":{"$ref":"#/$defs/valueSource"},"unit":{"type":"string"},"condition":{"type":"string"}}},
                 "column":{"type":"object","additionalProperties":false,"required":["temporaryId","name","labelRange","valueRange","valueType","editability","valueSource","unit","condition","semanticKeySuggestion"],"properties":{"temporaryId":{"type":"string","minLength":1},"name":{"type":"string","minLength":1},"labelRange":{"$ref":"#/$defs/range"},"valueRange":{"$ref":"#/$defs/range"},"valueType":{"$ref":"#/$defs/valueType"},"editability":{"$ref":"#/$defs/editability"},"valueSource":{"$ref":"#/$defs/valueSource"},"unit":{"type":"string"},"condition":{"type":"string"},"semanticKeySuggestion":{"type":"string"}}},
                 "headerNode":{"type":"object","additionalProperties":false,"required":["temporaryId","parentTemporaryId","name","range","axis"],"properties":{"temporaryId":{"type":"string","minLength":1},"parentTemporaryId":{"type":"string"},"name":{"type":"string","minLength":1},"range":{"$ref":"#/$defs/range"},"axis":{"enum":["ROW","COLUMN"]}}},
-                "table":{"type":"object","additionalProperties":false,"required":["temporaryId","sheetId","range","tableKind","businessName","blockTemporaryId","groupNameSuggestion","semanticKeySuggestion","headerRange","dataRange","totalRange","columns","semanticMode","rowHeaderRange","columnHeaderRange","crossDataRange","headerTree"],"properties":{"temporaryId":{"type":"string","minLength":1},"sheetId":{"type":"string","minLength":1},"range":{"$ref":"#/$defs/range"},"tableKind":{"enum":["ROW_TABLE","MATRIX"]},"businessName":{"type":"string","minLength":1},"blockTemporaryId":{"type":"string"},"groupNameSuggestion":{"type":"string"},"semanticKeySuggestion":{"type":"string"},"headerRange":{"$ref":"#/$defs/range"},"dataRange":{"$ref":"#/$defs/range"},"totalRange":{"type":"string"},"columns":{"type":"array","minItems":1,"items":{"$ref":"#/$defs/column"}},"semanticMode":{"enum":["ROW_RECORDS","CROSS_TAB","RECORD_SET","UNKNOWN"]},"rowHeaderRange":{"type":"string"},"columnHeaderRange":{"type":"string"},"crossDataRange":{"type":"string"},"headerTree":{"type":"array","items":{"$ref":"#/$defs/headerNode"}}}},
+                 "table":{"type":"object","additionalProperties":false,"required":["temporaryId","sheetId","range","tableKind","businessName","blockTemporaryId","groupNameSuggestion","semanticKeySuggestion","headerRange","dataRange","totalRange","columns","semanticMode","rowHeaderRange","columnHeaderRange","crossDataRange","headerTree"],"properties":{"temporaryId":{"type":"string","minLength":1},"sheetId":{"type":"string","minLength":1},"range":{"$ref":"#/$defs/range"},"tableKind":{"enum":["ROW_TABLE","COLUMN_TABLE","MATRIX"]},"businessName":{"type":"string","minLength":1},"blockTemporaryId":{"type":"string"},"groupNameSuggestion":{"type":"string"},"semanticKeySuggestion":{"type":"string"},"headerRange":{"$ref":"#/$defs/range"},"dataRange":{"$ref":"#/$defs/range"},"totalRange":{"type":"string"},"columns":{"type":"array","minItems":1,"items":{"$ref":"#/$defs/column"}},"semanticMode":{"enum":["ROW_RECORDS","CROSS_TAB","RECORD_SET","UNKNOWN"]},"rowHeaderRange":{"type":"string"},"columnHeaderRange":{"type":"string"},"crossDataRange":{"type":"string"},"headerTree":{"type":"array","items":{"$ref":"#/$defs/headerNode"}},"repeatAxis":{"enum":["ROW","COLUMN"]},"recordHeight":{"type":"integer","minimum":1},"recordWidth":{"type":"integer","minimum":1},"recordStride":{"type":"integer","minimum":1},"terminationRule":{"type":"object","additionalProperties":true,"properties":{"type":{"enum":["UNTIL_TOTAL_ROW","UNTIL_EMPTY_RECORD","UNTIL_REGION_END","UNTIL_LABEL","FIXED_COUNT"]},"label":{"type":"string"},"address":{"type":"string"},"maxRecords":{"type":"integer","minimum":1}}}}},
                 "issue":{"type":"object","additionalProperties":false,"required":["temporaryId","sheetId","range","category","severity","title","description","businessImpact","rootBlockTemporaryId"],"properties":{"temporaryId":{"type":"string","minLength":1},"sheetId":{"type":"string","minLength":1},"range":{"$ref":"#/$defs/range"},"category":{"enum":["FIELD_RELATION_UNCLEAR","BUSINESS_BLOCK_UNCLEAR","TABLE_STRUCTURE_UNCLEAR","EDITABILITY_UNCLEAR","LAYOUT_INCONSISTENT","DUPLICATE_MEANING","OTHER"]},"severity":{"enum":["INFO","WARNING","BLOCKER"]},"title":{"type":"string","minLength":1},"description":{"type":"string","minLength":1},"businessImpact":{"type":"string","minLength":1},"rootBlockTemporaryId":{"type":"string"}}}
               }
             }
-            """;
+            """);
+
+    private static String schemaText(String schema) {
+        // MATRIX axes are valid field identity even when the physical header row is
+        // blank. Do not force the model to invent column names just to satisfy JSON
+        // Schema; ROW/COLUMN_TABLE are still checked as non-empty in validateTables().
+        var result = schema
+                .replace("\"columns\":{\"type\":\"array\",\"minItems\":1,",
+                        "\"columns\":{\"type\":\"array\",")
+                .replace("\"axis\":{\"enum\":[\"ROW\",\"COLUMN\"]}}",
+                        "\"axis\":{\"enum\":[\"ROW\",\"COLUMN\"]},\"role\":{\"type\":\"string\"},\"memberMode\":{\"type\":\"string\"}}");
+        result = result
+                .replace("\"editability\":{\"enum\":[\"EDITABLE\",\"READ_ONLY\",\"CONDITIONAL\",\"UNKNOWN\"]}",
+                        "\"editability\":" + jsonEnum(SemanticProtocolTypes.EDITABILITY))
+                .replace("\"valueSource\":{\"enum\":[\"USER_INPUT\",\"FORMULA\",\"REFERENCE\",\"STATIC\",\"MIXED\",\"UNKNOWN\"]}",
+                        "\"valueSource\":" + jsonEnum(SemanticProtocolTypes.VALUE_SOURCES))
+                .replace("\"valueType\":{\"enum\":[\"string\",\"number\",\"integer\",\"boolean\",\"date\",\"datetime\",\"time\",\"duration\"]}",
+                        "\"valueType\":" + jsonEnum(SemanticProtocolTypes.VALUE_TYPES));
+        return result.replace("\"terminationRule\":{\"type\":\"object\",",
+                "\"cornerRange\":{\"type\":\"string\"},\"recordAxis\":{\"enum\":[\"ROW\",\"COLUMN\",\"UNKNOWN\"]},\"layoutMode\":{\"type\":\"string\"},\"measureHeight\":{\"type\":\"integer\",\"minimum\":1},\"recordHeightIncludesIdentity\":{\"type\":\"boolean\"},\"recordProjection\":{\"type\":\"object\",\"additionalProperties\":true},\"columnSlots\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"additionalProperties\":true}},\"columnMemberRole\":{\"type\":\"string\"},\"memberMode\":{\"type\":\"string\"},\"bindings\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"additionalProperties\":true}},\"terminationRule\":{\"type\":\"object\",");
+    }
+
+    private static String jsonEnum(Set<String> values) {
+        return "{\"enum\":[" + values.stream().sorted()
+                .map(value -> "\"" + value + "\"")
+                .collect(java.util.stream.Collectors.joining(",")) + "]}";
+    }
 }

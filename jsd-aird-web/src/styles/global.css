@@ -111,8 +111,10 @@ a,
   overflow-x: auto;
   padding: 2px;
 }
+.category-filter-item { display: flex; align-items: center; gap: 2px; }
 
-.category-strip button {
+.category-strip > button,
+.category-filter-item > button:first-child {
   display: flex;
   min-width: 140px;
   align-items: center;
@@ -126,8 +128,10 @@ a,
   cursor: pointer;
 }
 
-.category-strip button:hover,
-.category-strip button[aria-current='true'] {
+.category-strip > button:hover,
+.category-filter-item > button:first-child:hover,
+.category-strip > button[aria-current='true'],
+.category-filter-item > button:first-child[aria-current='true'] {
   color: var(--app-primary);
   background: #f7faff;
   border-color: var(--app-primary);
@@ -615,6 +619,20 @@ a,
   pointer-events: none;
 }
 
+.word-document-status {
+  margin: 10px 12px 0;
+}
+
+.word-template-editor { display: flex; flex-direction: column; width: 100%; height: 100%; background: #eef1f4; }
+.word-template-toolbar { display: flex; align-items: center; gap: 6px; padding: 8px 12px; background: #fff; border-bottom: 1px solid var(--app-border); }
+.word-template-page { width: min(900px, calc(100% - 32px)); min-height: 900px; margin: 16px auto; padding: 48px 56px; background: #fff; box-shadow: 0 2px 10px rgb(15 23 42 / 10%); }
+.word-template-block { margin: 0 0 12px; }
+.word-template-block p { margin: 0; min-height: 22px; line-height: 1.7; white-space: pre-wrap; }
+.word-template-table { min-height: 60px; padding: 12px; border: 1px solid #b8c3d1; white-space: pre-wrap; }
+.word-control { margin: 4px; padding: 3px 7px; color: #1456a0; background: #edf5ff; border: 1px dashed #5994d8; border-radius: 4px; }
+.word-control.is-selected { background: #cfe5ff; box-shadow: 0 0 0 2px #70a8df; }
+.word-template-empty { color: #667085; text-align: center; }
+
 .version-history-page {
   height: calc(100% - 99px);
   overflow: auto;
@@ -851,6 +869,7 @@ a,
   height: auto;
   min-height: 0;
   flex: 1;
+  overflow: hidden;
 }
 
 .recognition-status-bar {
@@ -900,6 +919,27 @@ a,
   overflow: hidden;
   background: #fff;
   border-left: 1px solid var(--app-border);
+}
+
+/* The review panel owns the only vertical scroll area in the right inspector. */
+.template-business-workspace .template-field-manager {
+  height: 100%;
+  overflow: hidden;
+}
+.template-business-workspace .recognition-review-pane {
+  min-height: 0;
+  flex: 1 1 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+.template-business-workspace .recognition-structure-summary,
+.template-business-workspace .recognition-filter-toolbar {
+  flex: 0 0 auto;
+}
+.template-business-workspace .recognition-review-list {
+  flex: 0 0 auto;
+  overflow: visible;
 }
 
 .field-manager-tabs {
@@ -1117,7 +1157,9 @@ a,
 .field-tree-group > summary > span:first-child { display: flex; align-items: center; gap: 7px; }
 .field-tree-group > summary > span:last-child { color: var(--app-text-secondary); font-size: 11px; }
 
-.field-tree-items > button {
+.field-tree-items > button,
+.field-tree-node > button,
+.field-tree-child {
   display: grid;
   grid-template-columns: 30px minmax(0, 1fr) auto;
   gap: 8px;
@@ -1134,8 +1176,17 @@ a,
   transition: background 160ms ease, box-shadow 160ms ease;
 }
 
-.field-tree-items > button:hover { background: #f8faff; }
-.field-tree-items > button[aria-current='true'] {
+.field-tree-items > button:hover,
+.field-tree-node > button:hover,
+.field-tree-child:hover { background: #f8faff; }
+.field-tree-node { display: block; }
+.field-tree-node > button,
+.field-tree-child { width: 100%; }
+.field-tree-children { margin: 2px 0 5px 20px; border-left: 2px solid #e6edf7; }
+.field-tree-child { padding-left: 18px !important; background: #fbfcfe; }
+.field-tree-items > button[aria-current='true'],
+.field-tree-node > button[aria-current='true'],
+.field-tree-child[aria-current='true'] {
   background: #eaf3ff;
   box-shadow: inset 3px 0 0 var(--app-primary);
 }
@@ -1368,6 +1419,24 @@ a,
   font-weight: 650;
 }
 
+.recognition-structure-summary {
+  margin: 10px 12px 0;
+  padding: 10px;
+  border: 1px solid #dbe5f1;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+.recognition-structure-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.recognition-structure-heading > div { display: grid; gap: 3px; min-width: 0; }
+.recognition-structure-heading strong { color: var(--workspace-text); font-size: 13px; }
+.recognition-structure-heading span { color: var(--workspace-muted); font-size: 11px; }
+.recognition-structure-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 6px; margin-top: 9px; }
+.recognition-structure-card { display: grid; gap: 2px; min-width: 0; padding: 7px 8px; border: 1px solid #e3ebf5; border-radius: 6px; background: #fff; }
+.recognition-structure-card strong { overflow: hidden; color: var(--workspace-text); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.recognition-structure-card > span:last-child { color: var(--workspace-muted); font-size: 11px; }
+.recognition-structure-type { color: #2165a5; font-size: 10px; }
+.recognition-candidate-alert { margin: 0 0 10px; }
+
 .recognition-filter-toolbar {
   display: grid;
   gap: 8px;
@@ -1458,6 +1527,40 @@ a,
 .recognition-review-item[data-status='conflict'] .recognition-row-status { color: #b42318; }
 .recognition-review-item[data-status='ignored'] .recognition-row-status { color: var(--workspace-muted); }
 .recognition-review-expanded { padding: 0 12px 12px 38px; }
+.recognition-table-columns { display: grid; gap: 7px; margin: 8px 0 12px; padding: 10px; border: 1px solid #e5eaf2; border-radius: 6px; background: #fafcff; }
+.recognition-table-column-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.recognition-table-column-list span { padding: 3px 7px; border-radius: 4px; background: #eef4ff; color: #31578f; font-size: 12px; }
+.recognition-matrix-structure {
+  display: grid;
+  gap: 8px;
+  margin: 8px 0 12px;
+  padding: 10px;
+  border: 1px solid #c9ddf5;
+  border-radius: 8px;
+  background: #f7fbff;
+}
+.recognition-matrix-structure-heading { display: flex; justify-content: space-between; gap: 8px; color: #174ea6; font-size: 13px; }
+.recognition-matrix-structure-heading span { color: var(--workspace-muted); font-size: 12px; }
+.recognition-matrix-structure dl { display: grid; grid-template-columns: 1fr 1fr; gap: 7px 12px; margin: 0; }
+.recognition-matrix-structure dt { color: var(--workspace-muted); font-size: 12px; }
+.recognition-matrix-structure dd { margin: 2px 0 0; color: var(--workspace-text); font-size: 13px; font-weight: 500; }
+.recognition-matrix-preview {
+  display: grid;
+  gap: 7px;
+  margin: 8px 0 12px;
+  padding: 10px;
+  border: 1px solid #d9e6f7;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
+}
+.recognition-matrix-preview-heading { display: flex; justify-content: space-between; gap: 8px; color: #174ea6; font-size: 12px; }
+.recognition-matrix-preview-heading span { color: var(--workspace-muted); white-space: nowrap; }
+.recognition-matrix-preview > small { color: var(--workspace-muted); line-height: 1.5; }
+.recognition-matrix-preview-table { display: grid; gap: 1px; overflow: hidden; border: 1px solid #e5eaf2; border-radius: 6px; background: #e5eaf2; }
+.recognition-matrix-preview-row { display: grid; grid-template-columns: minmax(0, 1.5fr) 1fr 72px minmax(48px, .7fr); gap: 6px; padding: 5px 7px; background: #fff; color: var(--workspace-text); font-size: 11px; }
+.recognition-matrix-preview-row.header { color: var(--workspace-muted); background: #f4f7fb; font-weight: 600; }
+.recognition-matrix-preview-row span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recognition-audit-payload { max-height: 260px; overflow: auto; margin: 0; padding: 10px; border-radius: 5px; background: #111827; color: #d1fae5; font-size: 11px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
 .recognition-review-expanded > p { margin: 0 0 10px; color: var(--workspace-muted); font-size: 13px; line-height: 1.55; }
 .recognition-review-expanded > p svg { margin-right: 6px; }
 .recognition-conflict-reason { color: #9f2d23 !important; }
@@ -1502,15 +1605,21 @@ a,
 }
 .field-tree-group-add:hover { background: #eaf2ff; }
 .field-tree-group-add:focus-visible { outline: 2px solid var(--workspace-primary); outline-offset: 1px; }
-.template-business-workspace .field-tree-items > button {
+.template-business-workspace .field-tree-items > button,
+.template-business-workspace .field-tree-node > button,
+.template-business-workspace .field-tree-child {
   grid-template-columns: 18px minmax(0, 1fr) 18px;
   gap: 8px;
   min-height: 50px;
   padding: 6px 12px 6px 16px;
   color: var(--workspace-text);
 }
-.template-business-workspace .field-tree-items > button:hover { background: #f7f9fc; }
-.template-business-workspace .field-tree-items > button[aria-current='true'] {
+.template-business-workspace .field-tree-items > button:hover,
+.template-business-workspace .field-tree-node > button:hover,
+.template-business-workspace .field-tree-child:hover { background: #f7f9fc; }
+.template-business-workspace .field-tree-items > button[aria-current='true'],
+.template-business-workspace .field-tree-node > button[aria-current='true'],
+.template-business-workspace .field-tree-child[aria-current='true'] {
   background: #edf4ff;
   box-shadow: inset 3px 0 0 var(--workspace-primary);
 }
@@ -1575,6 +1684,235 @@ a,
 }
 .template-business-workspace .word-position-note { color: var(--workspace-muted); border-color: var(--workspace-border); }
 .template-business-workspace .field-properties-scroll > .ant-btn-block { width: calc(100% - 28px); margin: 0 14px 14px; }
+
+/* Comfortable template workbench: keep the editor dominant while giving the
+   review inspector enough room for readable Chinese text and actions. */
+.template-business-workspace {
+  --workspace-bg: #f4f6f8;
+  --workspace-panel: #ffffff;
+  --workspace-text: #17202a;
+  --workspace-muted: #667085;
+  --workspace-border: #e4e7ec;
+  --workspace-primary: #2868d7;
+  font-family: "Segoe UI Variable", "Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  background: var(--workspace-bg);
+}
+
+.template-business-workspace .workspace-header {
+  min-height: 70px;
+  gap: 18px;
+  padding: 12px 24px;
+  background: var(--workspace-panel);
+  border-color: var(--workspace-border);
+}
+.template-business-workspace .workspace-identity {
+  min-width: 0;
+  gap: 14px;
+}
+.template-business-workspace .workspace-title-block {
+  min-width: 0;
+  gap: 2px;
+}
+.template-business-workspace .workspace-title-block > span:last-child {
+  max-width: min(34vw, 520px);
+  font-size: 17px;
+  line-height: 1.45;
+}
+.template-business-workspace .workspace-header > .ant-space {
+  flex: 0 0 auto;
+  gap: 10px !important;
+}
+.template-business-workspace .workspace-header .ant-btn {
+  min-height: 36px;
+  border-radius: 8px;
+}
+.template-business-workspace .workspace-save-button,
+.template-business-workspace .workspace-publish-button {
+  padding-inline: 14px;
+  font-weight: 600;
+}
+.template-business-workspace .workspace-publish-button {
+  box-shadow: 0 2px 6px rgb(40 104 215 / 18%);
+}
+
+.template-business-workspace .workspace-view-tabs {
+  height: 50px;
+  padding: 0 24px;
+  background: var(--workspace-panel);
+}
+.template-business-workspace .workspace-view-tabs .ant-tabs-tab {
+  padding: 13px 3px;
+  font-size: 14px;
+}
+
+.template-business-workspace .recognition-status-bar {
+  min-height: 58px;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+  padding: 10px 20px;
+}
+.template-business-workspace .recognition-status-content {
+  min-width: 260px;
+  gap: 10px;
+}
+.template-business-workspace .recognition-status-content strong {
+  font-size: 14px;
+  line-height: 1.45;
+}
+.template-business-workspace .recognition-status-content > span:not(.recognition-status-icon) {
+  line-height: 1.5;
+}
+.template-business-workspace .recognition-status-bar > .ant-space {
+  flex-wrap: wrap;
+  gap: 6px !important;
+}
+.template-business-workspace .recognition-status-bar .ant-btn {
+  min-height: 32px;
+  padding-inline: 10px;
+  border-radius: 7px;
+}
+.recognition-sync-stale {
+  color: #a15c00 !important;
+  font-weight: 600;
+}
+
+.template-business-workspace .prototype-workspace-grid {
+  grid-template-columns: minmax(0, 1fr) minmax(410px, 420px);
+}
+.template-business-workspace .workspace-canvas {
+  background: #eef1f4;
+}
+.template-business-workspace .template-field-manager {
+  background: var(--workspace-panel);
+  border-left-color: var(--workspace-border);
+  box-shadow: -6px 0 18px rgb(16 24 40 / 3%);
+}
+.template-business-workspace .field-manager-tabs {
+  height: 52px;
+  flex-basis: 52px;
+  padding: 0 16px;
+}
+.template-business-workspace .field-manager-tabs button {
+  font-size: 14px;
+  font-weight: 550;
+}
+
+.template-business-workspace .recognition-structure-summary {
+  margin: 14px 16px 0;
+  padding: 14px;
+  border-radius: 10px;
+}
+.template-business-workspace .recognition-structure-heading {
+  gap: 16px;
+}
+.template-business-workspace .recognition-structure-heading strong {
+  font-size: 14px;
+}
+.template-business-workspace .recognition-structure-heading span {
+  font-size: 12px;
+  line-height: 1.5;
+}
+.template-business-workspace .recognition-structure-list {
+  grid-template-columns: repeat(auto-fill, minmax(175px, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+.template-business-workspace .recognition-structure-card {
+  gap: 4px;
+  padding: 9px 10px;
+  border-radius: 8px;
+}
+.template-business-workspace .recognition-structure-card strong {
+  font-size: 13px;
+}
+.template-business-workspace .recognition-structure-card > span:last-child {
+  font-size: 12px;
+}
+
+.template-business-workspace .recognition-filter-toolbar {
+  gap: 10px;
+  padding: 14px 16px;
+}
+.template-business-workspace .recognition-status-filter {
+  gap: 4px;
+}
+.template-business-workspace .recognition-status-filter button {
+  min-height: 36px;
+  padding: 5px 8px;
+  font-size: 12px;
+  border-radius: 8px;
+}
+.template-business-workspace .recognition-group-filter .ant-select-selector {
+  min-height: 36px !important;
+  padding-inline: 10px !important;
+  line-height: 34px !important;
+}
+.template-business-workspace .recognition-review-list {
+  padding: 8px 0 22px;
+}
+.template-business-workspace .recognition-review-row {
+  min-height: 68px;
+  column-gap: 10px;
+  padding: 11px 16px;
+}
+.template-business-workspace .recognition-row-content {
+  gap: 9px;
+}
+.template-business-workspace .recognition-row-content strong {
+  font-size: 14px;
+  line-height: 1.5;
+}
+.template-business-workspace .recognition-row-content > span,
+.template-business-workspace .recognition-row-location,
+.template-business-workspace .recognition-row-status {
+  font-size: 12px;
+  line-height: 1.5;
+}
+.template-business-workspace .recognition-review-expanded {
+  padding: 2px 16px 16px 46px;
+}
+.template-business-workspace .recognition-review-expanded > p {
+  margin-bottom: 12px;
+  font-size: 13px;
+  line-height: 1.7;
+}
+.template-business-workspace .recognition-review-details {
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.template-business-workspace .recognition-review-details dt {
+  font-size: 12px;
+}
+.template-business-workspace .recognition-review-details dd {
+  margin-top: 3px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.template-business-workspace .recognition-table-columns {
+  margin: 12px 0 14px;
+  padding: 11px 12px;
+  border-radius: 8px;
+}
+.template-business-workspace .recognition-review-actions {
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.template-business-workspace .recognition-review-actions .ant-btn {
+  min-height: 32px;
+  padding-inline: 11px;
+  border-radius: 7px;
+}
+
+@media (max-width: 1350px) and (min-width: 1100px) {
+  .template-business-workspace .prototype-workspace-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(380px, 400px);
+  }
+  .template-business-workspace .workspace-header {
+    padding-inline: 18px;
+  }
+}
 
 @media (prefers-reduced-motion: reduce) {
   .recognition-review-item,

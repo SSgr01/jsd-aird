@@ -9,6 +9,14 @@ import type {
   TemplateWorkspace,
   ValueSource,
   WorkbookStructureOperation,
+  MappingKind,
+  MatrixColumnSlot,
+  MatrixModel,
+  MatrixRecordProjection,
+  RepeatAxis,
+  StaticRegion,
+  LongTableModel,
+  DocumentStructure,
 } from '@/features/template-workspace/types';
 import { httpClient } from '@/services/http/client';
 
@@ -26,8 +34,8 @@ export interface SaveTemplateDraftInput {
   schema: Record<string, unknown>;
   mapping: TemplateWorkspace['mapping'];
   data: Record<string, unknown>;
-  snapshotFileId: string;
-  snapshotHash: string;
+  snapshotFileId?: string;
+  snapshotHash?: string;
   editorAppVersion: string;
   pluginManifest: string;
   snapshotFormatVersion: number;
@@ -41,12 +49,16 @@ export interface SaveTemplateDraftInput {
   recognitionActions: RecognitionActionInput[];
   qualityActions: QualityActionInput[];
   structureOperations: WorkbookStructureOperation[];
+  wordPatchBaseHash?: string;
+  wordPatch?: Array<Record<string, unknown>>;
 }
 
 export interface SaveTemplateDraftResult {
   lockVersion: number;
   workspaceHash: string;
   reconciliationRequired: boolean;
+  wordDocument?: TemplateWorkspace['wordDocument'];
+  documentStructure?: TemplateWorkspace['documentStructure'];
 }
 
 export interface TemplateImportIssue {
@@ -68,7 +80,17 @@ export interface TemplateImportJob {
   structureSummary: Record<string, unknown>;
   result: {
     initialEditorSnapshot?: Record<string, unknown>;
-    modelStatus?: 'COMPLETED' | 'FAILED' | 'PARTIAL' | 'NOT_CONFIGURED' | 'NOT_APPLICABLE';
+    modelStatus?: 'COMPLETED' | 'FAILED' | 'PARTIAL' | 'TRUNCATED' | 'NOT_CONFIGURED' | 'NOT_APPLICABLE';
+    recognitionStatus?: 'COMPLETE' | 'REVIEW_REQUIRED' | 'NO_PHYSICAL_TABLE';
+    recognitionCoverage?: {
+      status?: string;
+      physicalRegionCount?: number;
+      expectedRegionCount?: number;
+      coveredRegionCount?: number;
+      unresolvedRegionCount?: number;
+      coverageRatio?: number;
+      issues?: string[];
+    };
     suggestionCount?: number;
     qualityIssueCount?: number;
     autoFixedCount?: number;
@@ -77,6 +99,8 @@ export interface TemplateImportJob {
   createdAt: string;
   suggestionCount: number;
   pendingSuggestionCount: number;
+  recognitionRunId?: string;
+  recognitionRunStatus?: string;
   issues: TemplateImportIssue[];
 }
 
@@ -84,27 +108,88 @@ export type RecognitionDecision = 'PENDING' | 'ACCEPTED' | 'REJECTED';
 
 export interface RecognitionSuggestionPayload {
   fieldCode: string;
+  standardFieldId?: string;
+  standardFieldVersion?: number;
+  standardFieldName?: string;
+  fieldOrigin?: 'STANDARD' | 'TEMPLATE_LOCAL' | 'PENDING_STANDARD';
+  standardSelectionStatus?: 'MATCHED' | 'CONFIRMED' | 'CUSTOM' | 'REQUESTED';
+  uiType?: 'TEXT' | 'SIGNATURE';
   fieldId?: string;
   bindingId?: string;
   relationId?: string;
   fieldName: string;
   dataPath: string;
-  valueType: 'string' | 'number' | 'integer' | 'boolean' | 'date' | 'datetime' | 'time' | 'duration' | 'array';
+  valueType:
+    | 'string'
+    | 'number'
+    | 'integer'
+    | 'boolean'
+    | 'date'
+    | 'datetime'
+    | 'time'
+    | 'duration'
+    | 'array';
   required: boolean;
   role: 'FIELD' | 'REPEAT_REGION' | 'CONDITIONAL';
-  locatorType: 'CELL_RANGE' | 'TABLE_REGION' | 'MATRIX_REGION' | 'TEXT_QUOTE';
+  locatorType:
+    | 'CELL_RANGE'
+    | 'TABLE_REGION'
+    | 'MATRIX_REGION'
+    | 'INLINE_TEXT'
+    | 'MERGED_VALUE'
+    | 'VERTICAL_LABEL_VALUE'
+    | 'HORIZONTAL_LABEL_VALUE'
+    | 'TEXT_QUOTE';
   locator: Record<string, unknown>;
-  kind?: 'SCALAR' | 'ROW_TABLE' | 'MATRIX';
+  kind?: 'SCALAR' | 'ROW_TABLE' | 'COLUMN_TABLE' | 'MATRIX' | 'FREE_TEXT';
   groupName?: string;
   unit?: string;
   interpretation?: string;
   editability?: Editability;
   valueSource?: ValueSource;
   condition?: string;
+  dictionaryVersion?: number;
+  standardMatchStatus?: 'MATCHED' | 'UNMATCHED' | 'CONFIRMED';
+  requiresStandardConfirmation?: boolean;
+  candidateOnly?: boolean;
+  physicalStructureOnly?: boolean;
+  reviewRequired?: boolean;
+  structureConflict?: boolean;
+  canonicalStatus?: 'PROVISIONAL' | 'CONFIRMED';
+  resolutionGroupId?: string;
+  alternativeRole?: 'PHYSICAL' | 'MODEL' | 'HUMAN';
+  structureStatus?: 'PROVISIONAL' | 'MODEL_ASSESSED' | 'CONFLICT' | 'UNRESOLVED' | 'CONFIRMED';
+  runtimeInputOnly?: boolean;
+  templateStatus?: 'RUNTIME_INPUT' | 'CONFIRMED';
+  publishable?: boolean;
+  pendingReason?: string;
+  protocolRecovery?: string;
+  blockType?: string;
+  blockName?: string;
+  mappingKind?: MappingKind;
+  parentSuggestionId?: string;
+  parentRelationId?: string;
+  parentFieldId?: string;
+  parentBindingId?: string;
+  suggestionLevel?: 'ROOT' | 'CHILD' | 'SCALAR';
+  repeatAxis?: RepeatAxis;
+  recordHeight?: number;
+  recordWidth?: number;
+  recordStride?: number;
+  terminationRule?: Record<string, unknown>;
+  semanticConflict?: boolean;
+  conflictCode?: string;
+  conflictMessage?: string;
+  semanticAlternatives?: Array<{ fieldCode: string; name: string }>;
   blockId?: string;
   parentBlockId?: string;
   columns?: Array<{
     code: string;
+    bindingId?: string;
+    relationId?: string;
+    fieldId?: string;
+    fieldCode?: string;
+    dataPath?: string;
     name: string;
     valueType?: string;
     unit?: string;
@@ -113,16 +198,50 @@ export interface RecognitionSuggestionPayload {
     editability?: Editability;
     valueSource?: ValueSource;
     condition?: string;
+    required?: boolean;
+    dataStartRow?: number;
+    semanticConflict?: boolean;
+    conflictCode?: string;
+    conflictMessage?: string;
+    semanticAlternatives?: Array<{ fieldCode: string; name: string }>;
+    dictionaryVersion?: number;
+    standardMatchStatus?: 'MATCHED' | 'UNMATCHED' | 'CONFIRMED';
+    requiresStandardConfirmation?: boolean;
+    standardFieldId?: string;
+    standardFieldVersion?: number;
+    standardFieldName?: string;
+    fieldOrigin?: 'STANDARD' | 'TEMPLATE_LOCAL' | 'PENDING_STANDARD';
+    standardSelectionStatus?: 'MATCHED' | 'CONFIRMED' | 'CUSTOM' | 'REQUESTED';
+    uiType?: 'TEXT' | 'SIGNATURE';
+    columnOffset?: number;
+    columnSpan?: number;
+    physicalColumnRanges?: string[];
+    mergeRange?: string;
+    valueMode?: string;
   }>;
   tableModel?: Record<string, unknown>;
-  matrixModel?: Record<string, unknown>;
+  matrixModel?: MatrixModel;
+  recordProjection?: MatrixRecordProjection;
+  columnSlots?: MatrixColumnSlot[];
+  longTableModel?: LongTableModel;
+  structureAlternatives?: Array<{
+    suggestionId: string;
+    source?: 'RULE' | 'MODEL' | 'PHYSICAL' | 'HUMAN';
+    kind?: string;
+    range?: string;
+    decision?: RecognitionDecision | 'REJECTED_BY_RESOLUTION';
+  }>;
+  hasIndependentChildren?: boolean;
   reason?: string;
 }
+
+export type { LongTableModel, LongTableRecord, MatrixModel } from '@/features/template-workspace/types';
 
 export interface RecognitionSuggestion {
   id: string;
   importJobId: string;
-  source: 'RULE' | 'MODEL' | 'HUMAN';
+  recognitionRunId?: string;
+  source: 'RULE' | 'MODEL' | 'PHYSICAL' | 'HUMAN';
   suggestionType: string;
   payload: RecognitionSuggestionPayload;
   confidence: number;
@@ -131,7 +250,37 @@ export interface RecognitionSuggestion {
   provider?: string;
   model?: string;
   promptVersion?: string;
+  filterReasonCode?: string;
+  filterDetail?: string;
   createdAt: string;
+}
+
+export interface RecognitionCall {
+  id: string;
+  recognitionRunId?: string;
+  regionId: string;
+  attempt: number;
+  provider: string;
+  model: string;
+  promptVersion: string;
+  status: string;
+  httpStatus?: number;
+  startedAt: string;
+  finishedAt: string;
+  durationMs: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  requestPayload: Record<string, unknown>;
+  responsePayload: Record<string, unknown>;
+  errorType?: string;
+  errorMessage?: string;
+  finishReason?: string;
+  outcomeCode?: string;
+  responseTruncated?: boolean;
+  phase: string;
+  parentCallId?: string;
+  payloadAvailable: boolean;
 }
 
 export type RecognitionReviewStatus = 'PENDING' | 'CONFIRMED' | 'CONFLICT' | 'IGNORED';
@@ -141,6 +290,7 @@ export type RecognitionAction = 'CONFIRM' | 'IGNORE' | 'RESTORE';
 export interface RecognitionActionInput {
   recognitionItemId: string;
   action: RecognitionAction;
+  selectedSuggestionId?: string;
 }
 
 export type QualityAction = 'APPLY' | 'IGNORE' | 'ROLLBACK';
@@ -172,10 +322,13 @@ export interface RecognitionReviewItem {
   id: string;
   suggestionIds: string[];
   fieldId?: string;
+  parentSuggestionId?: string;
+  parentFieldId?: string;
+  child?: boolean;
   fieldName: string;
   description: string;
   groupName: string;
-  kind: 'SCALAR' | 'ROW_TABLE' | 'MATRIX';
+  kind: 'SCALAR' | 'ROW_TABLE' | 'COLUMN_TABLE' | 'MATRIX' | 'FREE_TEXT';
   valueType: string;
   sheetId: string;
   sheetName: string;
@@ -183,6 +336,9 @@ export interface RecognitionReviewItem {
   address: string;
   confidence: number;
   confidenceLevel: RecognitionConfidenceLevel;
+  source?: 'RULE' | 'MODEL' | 'PHYSICAL' | 'HUMAN';
+  reasonCode?: string;
+  reasonDetail?: string;
   status: RecognitionReviewStatus;
   conflictReason?: string;
   payload: RecognitionSuggestionPayload;
@@ -212,15 +368,65 @@ export interface RecognitionReview {
     recognitionProtocolVersion?: number;
     businessBlocks?: BusinessBlock[];
     semanticAnnotations?: Array<Record<string, unknown>>;
+    staticRegions?: StaticRegion[];
+    diagnostics?: Array<{
+      stage: string;
+      reasonCode: string;
+      message: string;
+      detail?: Record<string, unknown>;
+    }>;
+  };
+  staticRegions?: StaticRegion[];
+  diagnostics?: Array<{
+    stage: string;
+    reasonCode: string;
+    message: string;
+    detail?: Record<string, unknown>;
+  }>;
+    recognitionStatus?: string;
+  recognitionCoverage?: {
+    status?: string;
+    physicalRegionCount?: number;
+    expectedRegionCount?: number;
+    coveredRegionCount?: number;
+    unresolvedRegionCount?: number;
+    coverageRatio?: number;
+    issues?: string[];
+    regions?: Array<Record<string, unknown>>;
   };
 }
 
+export interface StandardFieldOption {
+  id: string;
+  fieldCode: string;
+  version: number;
+  displayName: string;
+  valueType: string;
+  uiType?: 'TEXT' | 'SIGNATURE';
+  groupCode?: string;
+  groupName?: string;
+  defaultUnit?: string;
+  description?: string;
+}
+
+export interface StandardFieldRequest {
+  id: string;
+  templateVersionId?: string;
+  fieldId?: string;
+  displayName: string;
+  valueType: string;
+  uiType?: 'TEXT' | 'SIGNATURE';
+  groupCode?: string;
+  description?: string;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED';
+  proposedFieldCode?: string;
+  reviewComment?: string;
+  createdAt: string;
+  reviewedAt?: string;
+}
+
 export const templateApi = {
-  async list(params?: {
-    keyword?: string;
-    format?: TemplateFormat;
-    status?: TemplateStatus;
-  }) {
+  async list(params?: { keyword?: string; format?: TemplateFormat; status?: TemplateStatus }) {
     const response = await httpClient.get<ApiResponse<PageResponse<TemplateListItem>>>(
       '/api/v2/templates',
       { params },
@@ -229,7 +435,10 @@ export const templateApi = {
   },
 
   async create(input: CreateTemplateInput) {
-    const response = await httpClient.post<ApiResponse<TemplateWorkspace>>('/api/v2/templates', input);
+    const response = await httpClient.post<ApiResponse<TemplateWorkspace>>(
+      '/api/v2/templates',
+      input,
+    );
     return response.data.data;
   },
 
@@ -243,6 +452,30 @@ export const templateApi = {
   async getRecognitionReview(versionId: string) {
     const response = await httpClient.get<ApiResponse<RecognitionReview>>(
       `/api/v2/template-versions/${versionId}/recognition-review`,
+    );
+    return response.data.data;
+  },
+
+  async searchStandardFields(params: { keyword?: string; valueType?: string } = {}) {
+    const response = await httpClient.get<ApiResponse<StandardFieldOption[]>>(
+      '/api/v2/standard-fields',
+      { params },
+    );
+    return response.data.data;
+  },
+
+  async requestStandardField(input: {
+    templateVersionId: string;
+    fieldId?: string;
+    displayName: string;
+    valueType: string;
+    uiType?: 'TEXT' | 'SIGNATURE';
+    groupCode?: string;
+    description?: string;
+  }) {
+    const response = await httpClient.post<ApiResponse<StandardFieldRequest>>(
+      '/api/v2/standard-field-requests',
+      input,
     );
     return response.data.data;
   },
@@ -280,6 +513,19 @@ export const templateApi = {
 
   async publish(versionId: string) {
     await httpClient.post(`/api/v2/template-versions/${versionId}/publish`);
+  },
+
+  async downloadWordDocument(versionId: string) {
+    const response = await httpClient.get<Blob>(
+      `/api/v2/template-versions/${versionId}/word-document`,
+      { responseType: 'blob' },
+    );
+    const url = URL.createObjectURL(response.data);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = 'word-template.docx';
+    anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
   },
 
   async createRevision(versionId: string) {
@@ -341,11 +587,55 @@ export const templateApi = {
     return response.data.data;
   },
 
+  async getImportRenderContext(importJobId: string) {
+    const response = await httpClient.get<
+      ApiResponse<{
+        importJobId: string;
+        sourceFileId: string;
+        ready: boolean;
+        visualStatus: string;
+        visualRender?: {
+          status: string;
+          sourceUrl?: string;
+          objectKey?: string;
+          size?: number;
+          width?: number;
+          height?: number;
+          detail?: string;
+        };
+        snapshot: Record<string, unknown>;
+      }>
+    >(`/api/v2/template-imports/${importJobId}/render-context`);
+    return response.data.data;
+  },
+
+  async getImportDocumentStructure(importJobId: string) {
+    const response = await httpClient.get<ApiResponse<DocumentStructure>>(
+      '/api/v2/template-imports/' + importJobId + '/document-structure',
+    );
+    return response.data.data;
+  },
+
   async listRecognitionSuggestions(importJobId: string) {
     const response = await httpClient.get<ApiResponse<RecognitionSuggestion[]>>(
       `/api/v2/template-imports/${importJobId}/suggestions`,
     );
     return response.data.data;
+  },
+
+  async listRecognitionCalls(importJobId: string) {
+    const response = await httpClient.get<ApiResponse<RecognitionCall[]>>(
+      `/api/v2/template-imports/${importJobId}/recognition-calls`,
+    );
+    return response.data.data;
+  },
+
+  async deleteImport(importJobId: string) {
+    await httpClient.delete(`/api/v2/template-imports/${importJobId}`);
+  },
+
+  async deleteCategory(category: string) {
+    await httpClient.delete(`/api/v2/template-categories/${encodeURIComponent(category)}`);
   },
 
   async decideRecognitionSuggestion(

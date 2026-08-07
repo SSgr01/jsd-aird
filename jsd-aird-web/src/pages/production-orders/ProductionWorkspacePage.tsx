@@ -37,11 +37,12 @@ import type {
 import type { ProductionWorkspace } from '@/features/production-orders/types';
 import { productionOrderApi } from '@/services/production-orders/production-order-api';
 
-const SheetsEditor = lazy(async () => ({
-  default: (await import('@/features/template-workspace/UniverSheetsEditor')).UniverSheetsEditor,
-}));
 const DocsEditor = lazy(async () => ({
   default: (await import('@/features/template-workspace/UniverDocsEditor')).UniverDocsEditor,
+}));
+
+const SheetsEditor = lazy(async () => ({
+  default: (await import('@/features/template-workspace/UniverSheetsEditor')).UniverSheetsEditor,
 }));
 
 export function ProductionWorkspacePage() {
@@ -255,7 +256,14 @@ export function ProductionWorkspacePage() {
               />
             ) : (
               <div className={editable ? undefined : 'document-readonly'}>
-                <DocsEditor ref={editorRef} snapshot={snapshot} bindings={workspace.mapping} onDirty={() => setDirty(true)} onEditorValue={onEditorValue} />
+                <DocsEditor
+                  ref={editorRef}
+                  snapshot={snapshot}
+                  bindings={workspace.mapping}
+                  editable={editable}
+                  onDirty={() => setDirty(true)}
+                  onEditorValue={onEditorValue}
+                />
               </div>
             )}
           </Suspense>

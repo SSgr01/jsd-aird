@@ -4,7 +4,13 @@ import type {
   RecognitionSuggestion,
 } from '@/services/templates/template-api';
 
-import { addRecognitionCandidate, applySuggestion, writeFieldModel } from './field-model';
+import {
+  addRecognitionCandidate,
+  applySuggestion,
+  bindingMatchesIdentity,
+  fieldMatchesIdentity,
+  writeFieldModel,
+} from './field-model';
 import type { FieldModel, TemplateBinding } from './types';
 
 export function mergeRecognitionReview(
@@ -22,15 +28,19 @@ export function mergeRecognitionReview(
   if (review.semanticModel?.semanticAnnotations) {
     nextModel.semanticAnnotations = structuredClone(review.semanticModel.semanticAnnotations);
   }
+  if (review.semanticModel?.staticRegions) {
+    nextModel.staticRegions = structuredClone(review.semanticModel.staticRegions);
+  }
 
   for (const item of review.items) {
     if (item.status === 'IGNORED') continue;
-    const dataPath = item.payload.dataPath;
-    const existingIndex = nextModel.fields.findIndex((field) =>
-      field.recognitionItemId === item.id
-      || Boolean(item.payload.relationId && field.relationId === item.payload.relationId)
-      || Boolean(dataPath && field.dataPath === dataPath),
-    );
+    if (isProtocolRejected(item.payload)) continue;
+    const existingIndex = nextModel.fields.findIndex((field) => fieldMatchesIdentity(field, {
+      bindingId: item.payload.bindingId,
+      relationId: item.payload.relationId,
+      fieldId: item.payload.fieldId,
+      recognitionItemId: item.id,
+    }));
     if (existingIndex >= 0 && item.status === 'CONFIRMED') {
       const existing = nextModel.fields[existingIndex];
       if (!existing) continue;
@@ -40,7 +50,11 @@ export function mergeRecognitionReview(
         confidence: item.confidence,
         reviewStatus: reviewStatus(item),
       };
-      nextMapping = nextMapping.map((binding) => binding.bindingId === existing.bindingId
+       nextMapping = nextMapping.map((binding) => bindingMatchesIdentity(binding, {
+         bindingId: existing.bindingId,
+         relationId: existing.relationId,
+         fieldId: existing.fieldId || existing.id,
+       })
         ? {
             ...binding,
             diagnostic: { ...binding.diagnostic, recognitionItemId: item.id },
@@ -62,7 +76,12 @@ export function mergeRecognitionReview(
     }
     if (item.status !== 'CONFIRMED') {
       nextModel = addRecognitionCandidate(nextModel, suggestionFromReview(item));
-      const candidate = nextModel.fields.find((field) => field.recognitionItemId === item.id);
+      const candidate = nextModel.fields.find((field) => fieldMatchesIdentity(field, {
+        bindingId: item.payload.bindingId,
+        relationId: item.payload.relationId,
+        fieldId: item.payload.fieldId,
+        recognitionItemId: item.id,
+      }));
       if (candidate) candidate.reviewStatus = reviewStatus(item);
       continue;
     }
@@ -75,11 +94,21 @@ export function mergeRecognitionReview(
     nextSchema = applied.schema;
     nextMapping = applied.mapping;
     nextModel = applied.model;
-    const created = nextModel.fields.find((field) => field.recognitionItemId === item.id);
+    const created = nextModel.fields.find((field) => fieldMatchesIdentity(field, {
+      bindingId: item.payload.bindingId,
+      relationId: item.payload.relationId,
+      fieldId: item.payload.fieldId,
+      recognitionItemId: item.id,
+    }));
     if (created) created.reviewStatus = reviewStatus(item);
   }
   nextSchema = writeFieldModel(nextSchema, nextModel);
   return { schema: nextSchema, mapping: nextMapping, model: nextModel };
+}
+
+function isProtocolRejected(payload: RecognitionReviewItem['payload']) {
+  return payload.protocolRecovery === 'RETAINED_REJECTED_CANDIDATE'
+    || payload.pendingReason === 'PROTOCOL_REVIEW_REQUIRED';
 }
 
 export function acceptRecognitionReviewItem(
@@ -87,11 +116,18 @@ export function acceptRecognitionReviewItem(
   mapping: TemplateBinding[],
   model: FieldModel,
   item: RecognitionReviewItem,
-) {
-  const withoutCandidate = {
-    ...structuredClone(model),
-    fields: model.fields.filter((field) => field.recognitionItemId !== item.id || !field.candidate),
-  };
+  ) {
+    const withoutCandidate = {
+      ...structuredClone(model),
+      fields: model.fields.filter(
+        (field) => !field.candidate || !fieldMatchesIdentity(field, {
+          bindingId: item.payload.bindingId,
+          relationId: item.payload.relationId,
+          fieldId: item.payload.fieldId,
+          recognitionItemId: item.id,
+        }),
+      ),
+    };
   return applySuggestion(
     schema,
     mapping,
@@ -104,7 +140,7 @@ export function suggestionFromReview(item: RecognitionReviewItem): RecognitionSu
   return {
     id: item.id,
     importJobId: '',
-    source: 'MODEL',
+    source: item.source ?? 'MODEL',
     suggestionType: item.kind,
     payload: item.payload,
     confidence: item.confidence,

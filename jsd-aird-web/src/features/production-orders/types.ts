@@ -1,4 +1,4 @@
-import type { TemplateBinding, TemplateFormat } from '@/features/template-workspace/types';
+import type { DocumentStructure, TemplateBinding, TemplateFormat } from '@/features/template-workspace/types';
 
 export type ProductionOrderStatus = 'DRAFT' | 'SUBMITTED' | 'CANCELLED';
 
@@ -32,6 +32,7 @@ export interface ProductionWorkspace {
   schema: Record<string, unknown>;
   mapping: TemplateBinding[];
   data: Record<string, unknown>;
+  documentStructure?: DocumentStructure;
   snapshotFileId?: string;
   snapshotHash?: string;
   snapshotKind: 'UNIVER_WORKBOOK' | 'UNIVER_DOCUMENT';

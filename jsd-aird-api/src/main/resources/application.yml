@@ -71,11 +71,21 @@ app:
     model: ${JSD_AIRD_MODEL_NAME:${OPENAI_MODEL:}}
     temperature: 0.0
     response-format: ${JSD_AIRD_MODEL_RESPONSE_FORMAT:json_schema}
-    enable-thinking: ${JSD_AIRD_MODEL_ENABLE_THINKING:false}
+    enable-thinking: ${JSD_AIRD_MODEL_ENABLE_THINKING:true}
     thinking-budget: ${JSD_AIRD_MODEL_THINKING_BUDGET:1024}
     max-completion-tokens: ${JSD_AIRD_MODEL_MAX_COMPLETION_TOKENS:12000}
     max-token-parameter: ${JSD_AIRD_MODEL_MAX_TOKEN_PARAMETER:max_tokens}
+    visual-mode: ${JSD_AIRD_MODEL_VISUAL_MODE:auto}
+    visual-enabled: ${JSD_AIRD_MODEL_VISUAL_ENABLED:false}
+  render:
+    enabled: ${JSD_AIRD_RENDER_ENABLED:true}
+    frontend-base-url: ${JSD_AIRD_RENDER_FRONTEND_BASE_URL:http://localhost:5173}
+    node-command: ${JSD_AIRD_RENDER_NODE_COMMAND:node}
+    capture-script: ${JSD_AIRD_RENDER_CAPTURE_SCRIPT:../jsd-aird-web/scripts/capture-template-render.mjs}
+    browser-path: ${JSD_AIRD_RENDER_BROWSER_PATH:}
+    timeout: ${JSD_AIRD_RENDER_TIMEOUT:20s}
   recognition:
     audit-cleanup-cron: ${JSD_AIRD_RECOGNITION_AUDIT_CLEANUP_CRON:0 30 2 * * *}
     console-log-summary: ${JSD_AIRD_RECOGNITION_CONSOLE_LOG_SUMMARY:true}
-    console-log-payload: ${JSD_AIRD_RECOGNITION_CONSOLE_LOG_PAYLOAD:false}
+    console-log-payload: ${JSD_AIRD_RECOGNITION_CONSOLE_LOG_PAYLOAD:true}
+    allow-legacy-region-envelope: ${JSD_AIRD_RECOGNITION_ALLOW_LEGACY_REGION_ENVELOPE:false}

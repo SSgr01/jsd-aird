@@ -1,5 +1,5 @@
-export function normalizeAddress(value: string) {
-  return value.trim().replaceAll('$', '').toUpperCase();
+export function normalizeAddress(value: unknown) {
+  return (typeof value === 'string' ? value : '').trim().replaceAll('$', '').toUpperCase();
 }
 
 export function validateAddress(value: string, singleCell: boolean) {

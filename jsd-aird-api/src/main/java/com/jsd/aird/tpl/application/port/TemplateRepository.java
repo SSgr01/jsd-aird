@@ -36,6 +36,8 @@ public interface TemplateRepository {
 
     int retireTemplate(UUID organizationId, UUID templateId);
 
+    int clearCategory(UUID organizationId, String category);
+
     Optional<TemplateWorkspace> findWorkspace(UUID organizationId, UUID versionId);
 
     List<TemplateVersionHistoryItem> findVersionHistory(UUID organizationId, UUID templateId);
@@ -57,6 +59,8 @@ public interface TemplateRepository {
     boolean hasUnresolvedBlockers(UUID versionId);
 
     void publish(UUID organizationId, UUID versionId, UUID actorId);
+
+    int updatePublishedWordDocument(UUID organizationId, UUID versionId, JsonNode wordDocument);
 
     void appendAudit(
             UUID organizationId,
@@ -145,6 +149,8 @@ public interface TemplateRepository {
             JsonNode schema,
             JsonNode mapping,
             JsonNode data,
+            JsonNode documentStructure,
+            JsonNode wordDocument,
             JsonNode inlineSnapshot,
             UUID snapshotFileId,
             String snapshotHash,

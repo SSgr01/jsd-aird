@@ -16,7 +16,8 @@ class ModelPayloadSanitizerTest {
                 {
                   "authorization":"Bearer secret",
                   "api_key":"sk-1234567890abcdefghijklmnop",
-                  "content":"联系人 13812345678，邮箱 user@example.com，身份证 110101199001011234"
+                  "content":"联系人 13812345678，邮箱 user@example.com，身份证 110101199001011234",
+                  "dataUri":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"
                 }
                 """);
         var sanitized = sanitizer.sanitize(source);
@@ -26,5 +27,7 @@ class ModelPayloadSanitizerTest {
         assertThat(sanitized.path("content").asText())
                 .doesNotContain("13812345678", "user@example.com", "110101199001011234")
                 .contains("[REDACTED_PHONE]", "[REDACTED_EMAIL]", "[REDACTED_ID]");
+        assertThat(sanitized.path("dataUri").asText())
+                .isEqualTo("[REDACTED_IMAGE_DATA]");
     }
 }

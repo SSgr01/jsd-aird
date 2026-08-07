@@ -17,6 +17,7 @@ import {
   Form,
   Input,
   Modal,
+  Popconfirm,
   Select,
   Space,
   Table,
@@ -50,6 +51,7 @@ export function TemplatesPage() {
   const [format, setFormat] = useState<TemplateFormat>();
   const [status, setStatus] = useState<TemplateStatus>();
   const [category, setCategory] = useState('全部模板');
+  const [deletingCategory, setDeletingCategory] = useState<string>();
   const [form] = Form.useForm<CreateTemplateInput>();
 
   const load = useCallback(async () => {
@@ -70,10 +72,17 @@ export function TemplatesPage() {
 
   const categories = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const item of items) counts.set(item.category || '未分类', (counts.get(item.category || '未分类') || 0) + 1);
-    return [{ name: '全部模板', count: items.length }, ...Array.from(counts, ([name, count]) => ({ name, count }))];
+    for (const item of items)
+      counts.set(item.category || '未分类', (counts.get(item.category || '未分类') || 0) + 1);
+    return [
+      { name: '全部模板', count: items.length },
+      ...Array.from(counts, ([name, count]) => ({ name, count })),
+    ];
   }, [items]);
-  const displayedItems = category === '全部模板' ? items : items.filter((item) => (item.category || '未分类') === category);
+  const displayedItems =
+    category === '全部模板'
+      ? items
+      : items.filter((item) => (item.category || '未分类') === category);
 
   const create = async () => {
     const input = await form.validateFields();
@@ -100,31 +109,47 @@ export function TemplatesPage() {
     }
   };
 
-  const confirmDeleteDraft = (record: TemplateListItem) => modal.confirm({
-    title: `删除草稿“${record.name}”？`,
-    content: '字段、映射和当前草稿快照引用将被删除；Excel 原文件及仍被引用的对象不会立即删除。',
-    okText: '删除草稿',
-    okButtonProps: { danger: true },
-    cancelText: '取消',
-    onOk: async () => {
-      await templateApi.deleteDraft(record.versionId);
-      void message.success('草稿已删除');
-      await load();
-    },
-  });
+  const confirmDeleteDraft = (record: TemplateListItem) =>
+    modal.confirm({
+      title: `删除草稿“${record.name}”？`,
+      content: '字段、映射和当前草稿快照引用将被删除；Excel 原文件及仍被引用的对象不会立即删除。',
+      okText: '删除草稿',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        await templateApi.deleteDraft(record.versionId);
+        void message.success('草稿已删除');
+        await load();
+      },
+    });
 
-  const confirmRetire = (record: TemplateListItem) => modal.confirm({
-    title: `停用模板“${record.name}”？`,
-    content: '停用后不能再用于新生产单，历史版本、已有生产单和审计记录都会保留。',
-    okText: '停用模板',
-    okButtonProps: { danger: true },
-    cancelText: '取消',
-    onOk: async () => {
-      await templateApi.retire(record.templateId);
-      void message.success('模板已停用');
+  const confirmRetire = (record: TemplateListItem) =>
+    modal.confirm({
+      title: `停用模板“${record.name}”？`,
+      content: '停用后不能再用于新生产单，历史版本、已有生产单和审计记录都会保留。',
+      okText: '停用模板',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        await templateApi.retire(record.templateId);
+        void message.success('模板已停用');
+        await load();
+      },
+    });
+
+  const deleteCategory = async (name: string) => {
+    setDeletingCategory(name);
+    try {
+      await templateApi.deleteCategory(name);
+      setCategory('全部模板');
       await load();
-    },
-  });
+      void message.success(`分类“${name}”已删除，模板已移到未分类`);
+    } catch (error) {
+      void message.error(error instanceof Error ? error.message : '分类删除失败');
+    } finally {
+      setDeletingCategory(undefined);
+    }
+  };
 
   return (
     <Space direction="vertical" size={16} className="page-stack">
@@ -140,7 +165,38 @@ export function TemplatesPage() {
       </Card>
 
       <div className="category-strip" aria-label="模板分类">
-        {categories.map((item) => <button type="button" key={item.name} aria-current={category === item.name} onClick={() => setCategory(item.name)}><span>{item.name}</span><strong>{item.count}</strong></button>)}
+        {categories.map((item) => (
+          <div className="category-filter-item" key={item.name}>
+            <button
+              type="button"
+              aria-current={category === item.name}
+              onClick={() => setCategory(item.name)}
+            >
+              <span>{item.name}</span>
+              <strong>{item.count}</strong>
+            </button>
+            {!['全部模板', '未分类'].includes(item.name) && (
+              <Popconfirm
+                title={`删除分类“${item.name}”？`}
+                description="不会删除模板，只会清空这些模板的分类。"
+                okText="删除分类"
+                okButtonProps={{ danger: true }}
+                cancelText="取消"
+                onConfirm={() => void deleteCategory(item.name)}
+              >
+                <Button
+                  type="text"
+                  danger
+                  size="small"
+                  loading={deletingCategory === item.name}
+                  icon={<DeleteOutlined />}
+                  aria-label={`删除分类${item.name}`}
+                  onClick={(event) => event.stopPropagation()}
+                />
+              </Popconfirm>
+            )}
+          </div>
+        ))}
       </div>
 
       <Card className="content-card">
@@ -267,14 +323,29 @@ export function TemplatesPage() {
                   <Dropdown
                     trigger={['click']}
                     menu={{
-                      items: record.status === 'DRAFT'
-                        ? [{ key: 'delete', danger: true, icon: <DeleteOutlined />, label: '删除草稿' }]
-                        : [
-                            { key: 'revision', icon: <CopyOutlined />, label: '新建修订版' },
-                            ...(record.status === 'PUBLISHED'
-                              ? [{ key: 'retire', danger: true, icon: <StopOutlined />, label: '停用模板' }]
-                              : []),
-                          ],
+                      items:
+                        record.status === 'DRAFT'
+                          ? [
+                              {
+                                key: 'delete',
+                                danger: true,
+                                icon: <DeleteOutlined />,
+                                label: '删除草稿',
+                              },
+                            ]
+                          : [
+                              { key: 'revision', icon: <CopyOutlined />, label: '新建修订版' },
+                              ...(record.status === 'PUBLISHED'
+                                ? [
+                                    {
+                                      key: 'retire',
+                                      danger: true,
+                                      icon: <StopOutlined />,
+                                      label: '停用模板',
+                                    },
+                                  ]
+                                : []),
+                            ],
                       onClick: ({ key }) => {
                         if (key === 'delete') confirmDeleteDraft(record);
                         if (key === 'revision') void createRevision(record);
@@ -302,7 +373,11 @@ export function TemplatesPage() {
         destroyOnHidden
       >
         <Form form={form} layout="vertical" initialValues={{ format: 'XLSX' }}>
-          <Form.Item name="name" label="模板名称" rules={[{ required: true, message: '请输入模板名称' }]}>
+          <Form.Item
+            name="name"
+            label="模板名称"
+            rules={[{ required: true, message: '请输入模板名称' }]}
+          >
             <Input autoFocus maxLength={200} />
           </Form.Item>
           <Form.Item name="format" label="编辑格式" rules={[{ required: true }]}>

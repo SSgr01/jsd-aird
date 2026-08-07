@@ -1,12 +1,17 @@
 package com.jsd.aird.tpl.infrastructure;
 
 import java.util.List;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.HashSet;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jsd.aird.tpl.application.RecognitionIdentity;
 import com.jsd.aird.tpl.application.port.OfficeStructureParser;
 import com.jsd.aird.tpl.application.port.TemplateImportRepository;
 import com.jsd.aird.tpl.domain.TemplateFormat;
@@ -87,6 +92,21 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
     }
 
     @Override
+    public Optional<UUID> findOriginalSourceFileId(UUID organizationId, UUID versionId) {
+        return jdbcTemplate.query("""
+                        SELECT tij.source_file_id
+                        FROM tpl.template_import_job tij
+                        JOIN ops.async_job aj ON aj.id = tij.async_job_id
+                        WHERE tij.generated_template_version_id = ?
+                          AND tij.organization_id = ?
+                          AND aj.payload_jsonb ->> 'sourceKind' = 'OFFICE_FILE'
+                        ORDER BY tij.created_at ASC, tij.id ASC
+                        LIMIT 1
+                        """, (rs, rowNum) -> rs.getObject(1, UUID.class), versionId, organizationId)
+                .stream().findFirst();
+    }
+
+    @Override
     public Optional<UUID> findGeneratedVersionId(UUID importJobId) {
         return jdbcTemplate.query("""
                         SELECT generated_template_version_id
@@ -116,13 +136,22 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
                                END AS status,
                                aj.progress, aj.current_stage, tij.structure_summary_jsonb,
                                aj.result_jsonb, aj.last_error, tij.created_at,
+                               latest_run.id AS recognition_run_id,
+                               latest_run.status AS recognition_run_status,
                                (SELECT count(*)::int FROM tpl.recognition_suggestion rs
-                                WHERE rs.import_job_id = tij.id) AS suggestion_count,
+                                 WHERE rs.import_job_id = tij.id) AS suggestion_count,
                                (SELECT count(*)::int FROM tpl.recognition_suggestion rs
                                 WHERE rs.import_job_id = tij.id AND rs.decision = 'PENDING') AS pending_suggestion_count
                         FROM tpl.template_import_job tij
                         JOIN ops.async_job aj ON aj.id = tij.async_job_id
                         JOIN ops.file_object fo ON fo.id = tij.source_file_id
+                        LEFT JOIN LATERAL (
+                            SELECT rr.id, rr.status
+                            FROM tpl.recognition_run rr
+                            WHERE rr.import_job_id = tij.id
+                            ORDER BY rr.created_at DESC, rr.id DESC
+                            LIMIT 1
+                        ) latest_run ON true
                         """ + suffix,
                 (rs, rowNum) -> new ImportJobView(
                         rs.getObject("id", UUID.class),
@@ -138,6 +167,8 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
                         rs.getTimestamp("created_at").toInstant(),
                         rs.getInt("suggestion_count"),
                         rs.getInt("pending_suggestion_count"),
+                        rs.getObject("recognition_run_id", UUID.class),
+                        rs.getString("recognition_run_status"),
                         loadIssues(rs.getObject("id", UUID.class))
                 ),
                 arguments
@@ -228,6 +259,46 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
     }
 
     @Override
+    public void saveRenderSnapshot(UUID importJobId, JsonNode snapshot) {
+        var result = objectMapper.createObjectNode();
+        result.set("initialEditorSnapshot", snapshot == null ? objectMapper.createObjectNode() : snapshot.deepCopy());
+        jdbcTemplate.update("""
+                        UPDATE ops.async_job
+                        SET result_jsonb = ?, current_stage = 'RENDER_CONTEXT_READY', updated_at = now()
+                        WHERE id = (SELECT async_job_id FROM tpl.template_import_job WHERE id = ?)
+                        """, pgJson(result), importJobId);
+    }
+
+    @Override
+    public void saveImportResult(UUID importJobId, JsonNode result) {
+        jdbcTemplate.update("""
+                        UPDATE ops.async_job
+                        SET result_jsonb = ?, updated_at = now()
+                        WHERE id = (
+                            SELECT async_job_id FROM tpl.template_import_job WHERE id = ?
+                        )
+                        """,
+                pgJson(result == null ? objectMapper.createObjectNode() : result),
+                importJobId
+        );
+    }
+
+    @Override
+    public void updateRecognitionRunSnapshot(UUID recognitionRunId, String snapshotHash, String reason) {
+        jdbcTemplate.update("""
+                        UPDATE tpl.recognition_run
+                        SET source_snapshot_hash = ?, run_reason = ?
+                        WHERE id = ?
+                """, snapshotHash, reason, recognitionRunId);
+    }
+
+    @Override
+    public void updateRecognitionRunRegionCount(UUID recognitionRunId, int regionCount) {
+        jdbcTemplate.update("UPDATE tpl.recognition_run SET region_count = ? WHERE id = ?",
+                Math.max(1, regionCount), recognitionRunId);
+    }
+
+    @Override
     public void saveRecognitionCall(
             UUID recognitionRunId,
             com.jsd.aird.tpl.application.port.RecognitionModelClient.CallTrace trace
@@ -238,8 +309,9 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
                             status, http_status, started_at, finished_at, duration_ms,
                             prompt_tokens, completion_tokens, total_tokens,
                             request_payload_gzip, response_payload_gzip, request_hash, response_hash,
-                            error_type, error_message, phase, parent_call_id
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             error_type, error_message, finish_reason, outcome_code, response_truncated,
+                             phase, parent_call_id
+                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                 trace.callId(), recognitionRunId, trace.regionId(), trace.attempt(), trace.provider(),
                 trace.model(), trace.promptVersion(), trace.status(), trace.httpStatus(),
@@ -247,6 +319,7 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
                 trace.durationMs(), trace.promptTokens(), trace.completionTokens(), trace.totalTokens(),
                 auditPayloadCodec.compress(trace.requestPayload()), auditPayloadCodec.compress(trace.responsePayload()), trace.requestHash(),
                 trace.responseHash(), blankToNull(trace.errorType()), blankToNull(trace.errorMessage()),
+                blankToNull(trace.finishReason()), blankToNull(trace.outcomeCode()), trace.responseTruncated(),
                 trace.phase(), trace.parentCallId()
         );
     }
@@ -295,6 +368,23 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
     }
 
     @Override
+    public void appendModelSuggestions(
+            UUID importJobId, UUID recognitionRunId,
+            com.jsd.aird.tpl.application.port.RecognitionModelClient.RecognitionBatch batch
+    ) {
+        persistSuggestions(importJobId, recognitionRunId, "MODEL", batch);
+    }
+
+    @Override
+    public void replacePhysicalSuggestions(
+            UUID importJobId,
+            UUID recognitionRunId,
+            com.jsd.aird.tpl.application.port.RecognitionModelClient.RecognitionBatch batch
+    ) {
+        replaceSuggestions(importJobId, recognitionRunId, "PHYSICAL", batch);
+    }
+
+    @Override
     public void replaceRuleSuggestions(
             UUID importJobId,
             UUID recognitionRunId,
@@ -329,12 +419,29 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
                     UUID.randomUUID(), importJobId, recognitionRunId, issue.recognitionCallId(),
                     blankToNull(issue.regionId()), issue.issueType(), issue.severity(), issue.confidence(),
                     blankToNull(issue.sheetId()), blankToNull(issue.sheetName()), issue.address(),
-                    issue.title(), issue.description(), issue.businessImpact(), pgJson(issue.evidence()),
-                    pgJson(issue.suggestedPatch()), pgJson(issue.inversePatch()), issue.autoFixable(),
-                    issue.status(), beforeSnapshotHash, afterSnapshotHash,
+                    issue.title(), issue.description(), issue.businessImpact(),
+                    pgJson(issue.evidence() == null ? objectMapper.createArrayNode() : issue.evidence()),
+                    pgJson(issue.suggestedPatch() == null ? objectMapper.createObjectNode() : issue.suggestedPatch()),
+                    pgJson(issue.inversePatch() == null ? objectMapper.createObjectNode() : issue.inversePatch()),
+                    issue.autoFixable(),
+                    qualityIssueStatus(issue.status()), beforeSnapshotHash, afterSnapshotHash,
                     blankToNull(issue.regionId()), issue.issueType()
             );
         }
+    }
+
+    /**
+     * Quality issues use the database lifecycle (DETECTED -> CONFIRMED/IGNORED),
+     * while recognition runs use OPEN/RESOLVED.  Keep that distinction at the
+     * persistence boundary so a diagnostic cannot abort the whole import by
+     * violating template_quality_issue_status_check.
+     */
+    private String qualityIssueStatus(String status) {
+        return switch (status == null ? "" : status) {
+            case "DETECTED", "AUTO_APPLIED", "CONFIRMED", "IGNORED", "ROLLED_BACK", "FAILED" -> status;
+            case "OPEN", "PENDING", "" -> "DETECTED";
+            default -> "DETECTED";
+        };
     }
 
     @Override
@@ -383,53 +490,134 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
             com.jsd.aird.tpl.application.port.RecognitionModelClient.RecognitionBatch batch
     ) {
         jdbcTemplate.update(
-                "DELETE FROM tpl.recognition_suggestion WHERE import_job_id = ? AND source = ?",
-                importJobId,
+                "DELETE FROM tpl.recognition_suggestion WHERE recognition_run_id = ? AND source = ?",
+                recognitionRunId,
                 source
         );
+        persistSuggestions(importJobId, recognitionRunId, source, batch);
+    }
+
+    private void persistSuggestions(
+            UUID importJobId,
+            UUID recognitionRunId,
+            String source,
+            com.jsd.aird.tpl.application.port.RecognitionModelClient.RecognitionBatch batch
+    ) {
+        var persisted = new ArrayList<PersistedSuggestion>();
+        var identities = new LinkedHashMap<String, UUID>();
+        var fingerprints = new HashSet<String>();
         for (var suggestion : batch.suggestions()) {
+            var id = UUID.randomUUID();
+            var relationId = blankToNull(suggestion.payload().path("relationId").asText(""));
+            if (relationId != null) identities.putIfAbsent(relationId, id);
+            var fingerprint = suggestionFingerprint(source, suggestion.payload());
+            if (!fingerprints.add(fingerprint)) continue;
+            persisted.add(new PersistedSuggestion(id, suggestion, relationId));
+        }
+        for (var entry : persisted) {
+            var suggestion = entry.suggestion();
+            var payload = suggestion.payload();
+            var parentRelationId = blankToNull(payload.path("parentRelationId").asText(""));
+            var fieldId = safeUuid(payload.path("fieldId").asText(""));
+            var fingerprint = suggestionFingerprint(source, payload);
+            var filterReasonCode = filterReasonCode(payload);
             jdbcTemplate.update("""
                             INSERT INTO tpl.recognition_suggestion (
                                 id, import_job_id, source, suggestion_type, payload_jsonb,
                                 confidence, evidence_jsonb, decision, provider, model,
                                 prompt_version, request_hash, response_hash,
-                                recognition_run_id, recognition_call_id, region_id, relation_id, block_id
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                recognition_run_id, recognition_call_id, region_id, relation_id, block_id,
+                                parent_suggestion_id, field_id, semantic_fingerprint, suggestion_level,
+                                filter_stage, filter_reason_code, filter_detail
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             """,
-                    UUID.randomUUID(),
+                    entry.id(),
                     importJobId,
                     source,
-                    suggestion.suggestionType(),
-                    pgJson(suggestion.payload()),
-                    suggestion.confidence(),
-                    pgJson(suggestion.evidence()),
+                    suggestion.suggestionType(), pgJson(payload), suggestion.confidence(), pgJson(suggestion.evidence()),
                     batch.provider(),
                     batch.model(),
                     batch.promptVersion(),
                     batch.requestHash(),
                     batch.responseHash(),
                     recognitionRunId,
-                    suggestion.payload().path("recognitionCallId").asText("").isBlank()
+                    payload.path("recognitionCallId").asText("").isBlank()
                             ? batch.callTrace() == null ? null : batch.callTrace().callId()
-                            : UUID.fromString(suggestion.payload().path("recognitionCallId").asText()),
-                    suggestion.payload().path("regionId").asText(
+                            : UUID.fromString(payload.path("recognitionCallId").asText()),
+                    payload.path("regionId").asText(
                             batch.callTrace() == null ? "" : batch.callTrace().regionId()
                     ),
-                    blankToNull(suggestion.payload().path("relationId").asText("")),
-                    blankToNull(suggestion.payload().path("blockId").asText(""))
+                    entry.relationId(), blankToNull(payload.path("blockId").asText("")),
+                    parentRelationId == null ? null : identities.get(parentRelationId),
+                    fieldId, fingerprint,
+                    payload.path("suggestionLevel").asText(
+                            "CHILD".equals(suggestion.suggestionType()) ? "CHILD" : "ROOT"),
+                    "FORMAL_MAPPING_COMPILE", filterReasonCode, filterDetail(filterReasonCode)
             );
         }
+    }
+
+    private String suggestionFingerprint(String source, JsonNode payload) {
+        return RecognitionIdentity.shortHash(
+                source + "|" + payload.path("relationId").asText("") + "|"
+                        + payload.path("dataPath").asText("") + "|"
+                        + payload.path("semanticRecompileRegionId").asText("") + "|"
+                        + payload.path("locator").path("sheetId").asText("") + "|"
+                        + payload.path("locator").path("address").asText(
+                        payload.path("locator").path("range").asText("")), 64);
+    }
+
+    private UUID safeUuid(String value) {
+        try {
+            return value == null || value.isBlank() ? null : UUID.fromString(value);
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
+    }
+
+    private String filterReasonCode(JsonNode payload) {
+        if (payload.path("semanticConflict").asBoolean(false)) return "SEMANTIC_CONFLICT";
+        if (payload.path("requiresStandardConfirmation").asBoolean(false)) return "STANDARD_FIELD_UNMATCHED";
+        if ("UNKNOWN".equals(payload.path("editability").asText("UNKNOWN"))) return "EDITABILITY_UNKNOWN";
+        if ("UNKNOWN".equals(payload.path("valueSource").asText("UNKNOWN"))) return "VALUE_SOURCE_UNKNOWN";
+        if ("CHILD".equals(payload.path("suggestionLevel").asText(""))
+                && payload.path("parentRelationId").asText("").isBlank()) return "CHILD_PARENT_MISSING";
+        return "PENDING_NOT_CONFIRMED";
+    }
+
+    private String filterDetail(String reasonCode) {
+        return switch (reasonCode) {
+            case "SEMANTIC_CONFLICT" -> "字段含义或单位存在冲突";
+            case "STANDARD_FIELD_UNMATCHED" -> "未匹配标准字段，需人工确认";
+            case "EDITABILITY_UNKNOWN" -> "填写权限未明确";
+            case "VALUE_SOURCE_UNKNOWN" -> "数据来源未明确";
+            case "CHILD_PARENT_MISSING" -> "明细字段缺少父级";
+            default -> "识别建议尚未确认";
+        };
+    }
+
+    private record PersistedSuggestion(
+            UUID id,
+            com.jsd.aird.tpl.application.port.RecognitionModelClient.ModelSuggestion suggestion,
+            String relationId
+    ) {
     }
 
     @Override
     public List<RecognitionSuggestionView> listSuggestions(UUID organizationId, UUID importJobId) {
         return jdbcTemplate.query("""
-                        SELECT rs.id, rs.import_job_id, rs.source, rs.suggestion_type,
+                        SELECT rs.id, rs.import_job_id, rs.recognition_run_id, rs.source, rs.suggestion_type,
                                rs.payload_jsonb, rs.confidence, rs.evidence_jsonb,
-                               rs.decision, rs.provider, rs.model, rs.prompt_version, rs.created_at
+                               rs.decision, rs.provider, rs.model, rs.prompt_version,
+                               rs.filter_reason_code, rs.filter_detail, rs.created_at
                         FROM tpl.recognition_suggestion rs
                         JOIN tpl.template_import_job tij ON tij.id = rs.import_job_id
-                        WHERE rs.import_job_id = ? AND tij.organization_id = ?
+                        WHERE rs.recognition_run_id = (
+                            SELECT rr.id FROM tpl.recognition_run rr
+                            WHERE rr.import_job_id = tij.id
+                            ORDER BY rr.created_at DESC, rr.id DESC LIMIT 1
+                        )
+                          AND tij.id = ? AND tij.organization_id = ?
                         ORDER BY rs.confidence DESC NULLS LAST, rs.created_at, rs.id
                         """,
                 (rs, rowNum) -> mapSuggestion(rs),
@@ -438,33 +626,139 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
         );
     }
 
+    private List<RecognitionSuggestionView> listSuggestionsByRun(UUID organizationId, UUID recognitionRunId) {
+        return jdbcTemplate.query("""
+                        SELECT rs.id, rs.import_job_id, rs.recognition_run_id, rs.source, rs.suggestion_type,
+                               rs.payload_jsonb, rs.confidence, rs.evidence_jsonb,
+                               rs.decision, rs.provider, rs.model, rs.prompt_version,
+                               rs.filter_reason_code, rs.filter_detail, rs.created_at
+                        FROM tpl.recognition_suggestion rs
+                        JOIN tpl.template_import_job tij ON tij.id = rs.import_job_id
+                        WHERE rs.recognition_run_id = ? AND tij.organization_id = ?
+                        ORDER BY rs.confidence DESC NULLS LAST, rs.created_at, rs.id
+                        """,
+                (rs, rowNum) -> mapSuggestion(rs),
+                recognitionRunId,
+                organizationId
+        );
+    }
+
+    @Override
+    public List<RecognitionCallView> listRecognitionCalls(UUID organizationId, UUID importJobId) {
+        return jdbcTemplate.query("""
+                        SELECT rc.id, rc.recognition_run_id, rc.region_id, rc.attempt, rc.provider, rc.model, rc.prompt_version,
+                               rc.status, rc.http_status, rc.started_at, rc.finished_at, rc.duration_ms,
+                               rc.prompt_tokens, rc.completion_tokens, rc.total_tokens,
+                               rc.request_payload_gzip, rc.response_payload_gzip, rc.error_type,
+                               rc.error_message, rc.finish_reason, rc.outcome_code, rc.response_truncated,
+                               rc.phase, rc.parent_call_id
+                        FROM tpl.recognition_call rc
+                        JOIN tpl.recognition_run rr ON rr.id = rc.recognition_run_id
+                        JOIN tpl.template_import_job tij ON tij.id = rr.import_job_id
+                        WHERE tij.id = ? AND tij.organization_id = ?
+                          AND rc.recognition_run_id = (
+                              SELECT latest.id FROM tpl.recognition_run latest
+                              WHERE latest.import_job_id = tij.id
+                              ORDER BY latest.created_at DESC, latest.id DESC LIMIT 1
+                          )
+                        ORDER BY rc.started_at, rc.attempt
+                        """,
+                (rs, rowNum) -> {
+                    var request = rs.getBytes("request_payload_gzip");
+                    var response = rs.getBytes("response_payload_gzip");
+                    return new RecognitionCallView(
+                             rs.getObject("id", UUID.class), rs.getObject("recognition_run_id", UUID.class),
+                             rs.getString("region_id"), rs.getInt("attempt"),
+                            rs.getString("provider"), rs.getString("model"), rs.getString("prompt_version"),
+                            rs.getString("status"), (Integer) rs.getObject("http_status"),
+                            rs.getTimestamp("started_at").toInstant(), rs.getTimestamp("finished_at").toInstant(),
+                            rs.getLong("duration_ms"), rs.getInt("prompt_tokens"), rs.getInt("completion_tokens"),
+                            rs.getInt("total_tokens"), auditPayload(request), auditPayload(response),
+                             rs.getString("error_type"), rs.getString("error_message"),
+                             rs.getString("finish_reason"), rs.getString("outcome_code"),
+                             rs.getBoolean("response_truncated"), rs.getString("phase"),
+                            rs.getObject("parent_call_id", UUID.class), request != null || response != null
+                    );
+                }, importJobId, organizationId);
+    }
+
+    @Override
+    public int delete(UUID organizationId, UUID importJobId) {
+        var asyncJobId = jdbcTemplate.query("""
+                        SELECT async_job_id FROM tpl.template_import_job
+                        WHERE id = ? AND organization_id = ?
+                        """, (rs, rowNum) -> rs.getObject(1, UUID.class), importJobId, organizationId)
+                .stream().findFirst().orElse(null);
+        if (asyncJobId == null) return 0;
+        var deleted = jdbcTemplate.update("""
+                        DELETE FROM tpl.template_import_job
+                        WHERE id = ? AND organization_id = ?
+                        """, importJobId, organizationId);
+        jdbcTemplate.update("DELETE FROM ops.async_job WHERE id = ?", asyncJobId);
+        return deleted;
+    }
+
     @Override
     public Optional<RecognitionSuggestionView> decideSuggestion(
             UUID organizationId,
-            UUID importJobId,
+            UUID recognitionRunId,
             UUID suggestionId,
             String decision,
             UUID actorId
     ) {
+        var persistedDecision = "REJECTED_BY_RESOLUTION".equals(decision) ? "REJECTED" : decision;
         var updated = jdbcTemplate.update("""
                         UPDATE tpl.recognition_suggestion rs
-                        SET decision = ?, decided_by = ?, decided_at = now()
-                        FROM tpl.template_import_job tij
-                        WHERE rs.id = ? AND rs.import_job_id = ?
-                          AND tij.id = rs.import_job_id AND tij.organization_id = ?
+                        SET decision = ?,
+                            payload_jsonb = CASE
+                                WHEN ? = 'REJECTED_BY_RESOLUTION'
+                                THEN rs.payload_jsonb || jsonb_build_object(
+                                    'resolutionDecision', 'REJECTED_BY_RESOLUTION')
+                                ELSE rs.payload_jsonb
+                            END,
+                            decided_by = ?, decided_at = now()
+                        FROM tpl.recognition_run rr
+                        JOIN tpl.template_import_job tij ON tij.id = rr.import_job_id
+                        WHERE rs.id = ? AND rs.recognition_run_id = ?
+                          AND rr.id = rs.recognition_run_id AND tij.organization_id = ?
                         """,
+                persistedDecision,
                 decision,
                 actorId,
                 suggestionId,
-                importJobId,
+                recognitionRunId,
                 organizationId
         );
         if (updated == 0) {
             return Optional.empty();
         }
-        return listSuggestions(organizationId, importJobId).stream()
+        return listSuggestionsByRun(organizationId, recognitionRunId).stream()
                 .filter(suggestion -> suggestion.id().equals(suggestionId))
                 .findFirst();
+    }
+
+    @Override
+    public void markStructureResolved(UUID organizationId, UUID recognitionRunId, UUID suggestionId) {
+        jdbcTemplate.update("""
+                UPDATE tpl.recognition_suggestion rs
+                SET payload_jsonb = (rs.payload_jsonb
+                    || jsonb_build_object(
+                        'humanResolved', true,
+                        'resolutionSource', 'HUMAN_REVIEW',
+                        'candidateOnly', false,
+                        'physicalStructureOnly', false,
+                        'reviewRequired', false,
+                        'structureConflict', false,
+                        'canonicalStatus', 'CONFIRMED',
+                        'structureStatus', 'CONFIRMED',
+                        'publishable', false,
+                        'semanticRecompileStatus', 'SUCCEEDED'))
+                    - 'pendingReason'
+                FROM tpl.recognition_run rr
+                JOIN tpl.template_import_job tij ON tij.id = rr.import_job_id
+                WHERE rs.id = ? AND rs.recognition_run_id = ?
+                  AND rr.id = rs.recognition_run_id AND tij.organization_id = ?
+                """, suggestionId, recognitionRunId, organizationId);
     }
 
     @Override
@@ -481,7 +775,17 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
                         WHERE rs.import_job_id = ?
                           AND rs.decision = 'PENDING'
                           AND rs.confidence >= ?
+                          AND coalesce((rs.payload_jsonb ->> 'semanticConflict')::boolean, false) = false
+                          AND coalesce((rs.payload_jsonb ->> 'reviewRequired')::boolean, false) = false
+                          AND coalesce((rs.payload_jsonb ->> 'physicalStructureOnly')::boolean, false) = false
+                          AND coalesce((rs.payload_jsonb ->> 'candidateOnly')::boolean, false) = false
+                          AND coalesce(rs.payload_jsonb ->> 'protocolRecovery', '') NOT IN ('RETAINED_REJECTED_CANDIDATE', 'PROTOCOL_REVIEW_REQUIRED')
                           AND tij.id = rs.import_job_id
+                          AND rs.recognition_run_id = (
+                              SELECT latest.id FROM tpl.recognition_run latest
+                              WHERE latest.import_job_id = rs.import_job_id
+                              ORDER BY latest.created_at DESC, latest.id DESC LIMIT 1
+                          )
                           AND tij.organization_id = ?
                         """,
                 actorId,
@@ -508,6 +812,7 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
         return new RecognitionSuggestionView(
                 rs.getObject("id", UUID.class),
                 rs.getObject("import_job_id", UUID.class),
+                rs.getObject("recognition_run_id", UUID.class),
                 rs.getString("source"),
                 rs.getString("suggestion_type"),
                 parse(rs.getString("payload_jsonb")),
@@ -517,11 +822,19 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
                 rs.getString("provider"),
                 rs.getString("model"),
                 rs.getString("prompt_version"),
+                rs.getString("filter_reason_code"),
+                rs.getString("filter_detail"),
                 rs.getTimestamp("created_at").toInstant()
         );
     }
 
     private QualityIssueView mapQualityIssue(java.sql.ResultSet rs) throws java.sql.SQLException {
+        var evidence = parse(rs.getString("evidence_jsonb"));
+        var suggestedPatch = parse(rs.getString("suggested_patch_jsonb"));
+        var inversePatch = parse(rs.getString("inverse_patch_jsonb"));
+        if (!evidence.isArray()) evidence = objectMapper.createArrayNode();
+        if (!suggestedPatch.isObject()) suggestedPatch = objectMapper.createObjectNode();
+        if (!inversePatch.isObject()) inversePatch = objectMapper.createObjectNode();
         return new QualityIssueView(
                 rs.getObject("id", UUID.class), rs.getObject("import_job_id", UUID.class),
                 rs.getObject("recognition_run_id", UUID.class),
@@ -529,8 +842,7 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
                 rs.getString("issue_type"), rs.getString("severity"), rs.getDouble("confidence"),
                 rs.getString("sheet_id"), rs.getString("sheet_name"), rs.getString("address"),
                 rs.getString("title"), rs.getString("description"), rs.getString("business_impact"),
-                parse(rs.getString("evidence_jsonb")), parse(rs.getString("suggested_patch_jsonb")),
-                parse(rs.getString("inverse_patch_jsonb")), rs.getBoolean("auto_fixable"),
+                evidence, suggestedPatch, inversePatch, rs.getBoolean("auto_fixable"),
                 rs.getString("status"), rs.getString("before_snapshot_hash"),
                 rs.getString("after_snapshot_hash"), rs.getTimestamp("created_at").toInstant()
         );
@@ -576,6 +888,10 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException("Unable to parse JSONB", exception);
         }
+    }
+
+    private JsonNode auditPayload(byte[] value) {
+        return value == null ? objectMapper.createObjectNode() : auditPayloadCodec.decompress(value);
     }
 
     private String blankToNull(String value) {

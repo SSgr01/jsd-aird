@@ -84,6 +84,113 @@ class TemplateRecognitionCompilerTest {
         assertThat(result.fieldModel().path("fields")).isEmpty();
     }
 
+    @Test
+    void neverCompilesAcceptedSuggestionInsideTemplateBaselineRegion() throws Exception {
+        var schema = objectMapper.createObjectNode().put("type", "object");
+        schema.set("properties", objectMapper.createObjectNode());
+        var accepted = suggestion("ACCEPTED", "/instruction/step", "操作步骤", "基础信息");
+        var semanticModel = objectMapper.createObjectNode().put("kind", "SEMANTIC_MODEL");
+        semanticModel.set("semanticAnnotations", objectMapper.createArrayNode().add(
+                objectMapper.createObjectNode()
+                        .put("sheetId", "sheet-1")
+                        .put("range", "B1:B2")
+                        .put("role", "INSTRUCTION")
+        ));
+        semanticModel.set("businessBlocks", objectMapper.createArrayNode());
+        var semanticSuggestion = new TemplateImportRepository.RecognitionSuggestionView(
+                UUID.randomUUID(), UUID.randomUUID(), "MODEL", "SEMANTIC_MODEL", semanticModel,
+                1.0, objectMapper.createArrayNode(), "PENDING", "model", "v2", "v2", Instant.now()
+        );
+
+        var result = compiler.compile(schema, List.of(semanticSuggestion, accepted), TemplateFormat.XLSX);
+
+        assertThat(result.mapping()).isEmpty();
+        assertThat(result.fieldModel().path("fields")).isEmpty();
+        assertThat(result.fieldModel().path("staticRegions")).singleElement()
+                .satisfies(region -> assertThat(region.path("address").asText()).isEqualTo("B1:B2"));
+    }
+
+    @Test
+    void compilesOneMatrixFieldWithColumnSlotsInsteadOfSixBusinessFields() throws Exception {
+        var schema = objectMapper.createObjectNode().put("type", "object");
+        schema.set("properties", objectMapper.createObjectNode());
+        var payload = objectMapper.createObjectNode()
+                .put("fieldCode", "TEST.MATRIX")
+                .put("fieldName", "光引发剂性能对比矩阵")
+                .put("groupName", "性能测试")
+                .put("dataPath", "/records")
+                .put("valueType", "array")
+                .put("required", false)
+                .put("relationId", "matrix-A4-H19")
+                .put("fieldId", "11111111-1111-1111-1111-111111111111")
+                .put("bindingId", "matrix-binding-A4-H19")
+                .put("kind", "MATRIX")
+                .put("role", "REPEAT_REGION")
+                .put("mappingKind", "MATRIX_REGION")
+                .put("repeatAxis", "COLUMN")
+                .put("recordHeight", 16)
+                .put("recordWidth", 1)
+                .put("recordStride", 1)
+                .put("editability", "EDITABLE")
+                .put("valueSource", "MIXED")
+                .put("locatorType", "MATRIX_REGION");
+        payload.set("locator", objectMapper.createObjectNode()
+                .put("sheetId", "sheet-1")
+                .put("address", "A4:H19")
+                .put("rowHeaderRange", "A5:B19")
+                .put("columnHeaderRange", "C4:H4")
+                .put("crossDataRange", "C5:H19"));
+        var slots = objectMapper.createArrayNode();
+        for (var column : List.of("C", "D", "E", "F", "G", "H")) {
+            slots.add(objectMapper.createObjectNode().put("slotId", "column-" + column)
+                    .put("column", column).put("identityAddress", column + "4")
+                    .put("recordRange", column + "4:" + column + "19"));
+        }
+        payload.set("matrixModel", objectMapper.createObjectNode()
+                .put("semanticMode", "CROSS_TAB")
+                .put("recordAxis", "COLUMN")
+                .put("rowHeaderRange", "A5:B19")
+                .put("columnHeaderRange", "C4:H4")
+                .put("crossDataRange", "C5:H19")
+                .set("columnSlots", slots));
+        payload.set("columnSlots", slots.deepCopy());
+        var suggestion = new TemplateImportRepository.RecognitionSuggestionView(
+                UUID.randomUUID(), UUID.randomUUID(), "MODEL", "MATRIX", payload,
+                0.95, objectMapper.createArrayNode(), "ACCEPTED", "model", "v2", "v2", Instant.now()
+        );
+
+        var result = compiler.compile(schema, List.of(suggestion), TemplateFormat.XLSX);
+
+        assertThat(result.fieldModel().path("fields")).singleElement()
+                .satisfies(field -> assertThat(field.path("columnSlots")).hasSize(6));
+        assertThat(result.mapping()).singleElement().satisfies(binding -> {
+            assertThat(binding.path("mappingKind").asText()).isEqualTo("MATRIX_REGION");
+            assertThat(binding.path("repeatAxis").asText()).isEqualTo("COLUMN");
+            assertThat(binding.path("recordHeight").asInt()).isEqualTo(16);
+        });
+    }
+
+    @Test
+    void doesNotCompileAnAcceptedButUnresolvedStructureCandidate() throws Exception {
+        var schema = objectMapper.createObjectNode().put("type", "object");
+        schema.set("properties", objectMapper.createObjectNode());
+        var candidate = suggestion("ACCEPTED", "/records", "结构候选", "性能测试");
+        ((com.fasterxml.jackson.databind.node.ObjectNode) candidate.payload())
+                .put("kind", "MATRIX")
+                .put("candidateOnly", true)
+                .put("reviewRequired", true)
+                .put("physicalStructureOnly", true)
+                .put("structureConflict", true)
+                .put("resolutionGroupId", "structure-conflict-1")
+                .put("canonicalStatus", "PROVISIONAL")
+                .put("structureStatus", "CONFLICT");
+
+        var result = compiler.compile(schema, List.of(candidate), TemplateFormat.XLSX);
+
+        assertThat(result.mapping()).isEmpty();
+        assertThat(result.fieldModel().path("fields")).isEmpty();
+    }
+
     private TemplateImportRepository.RecognitionSuggestionView suggestion(
             String decision, String dataPath, String name, String group
     ) throws Exception {

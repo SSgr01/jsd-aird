@@ -1,5 +1,6 @@
 import {
   CheckCircleOutlined,
+  DeleteOutlined,
   FileExcelOutlined,
   FileWordOutlined,
   InboxOutlined,
@@ -10,6 +11,7 @@ import {
   App,
   Button,
   Card,
+  Collapse,
   Form,
   Input,
   Modal,
@@ -28,6 +30,8 @@ import type { TemplateFormat } from '@/features/template-workspace/types';
 import {
   templateApi,
   type CreateTemplateInput,
+  type RecognitionCall,
+  type RecognitionSuggestion,
   type TemplateImportJob,
 } from '@/services/templates/template-api';
 
@@ -40,6 +44,11 @@ export function TemplateUploadPage() {
   const [jobs, setJobs] = useState<TemplateImportJob[]>([]);
   const [uploading, setUploading] = useState(false);
   const [selectedJob, setSelectedJob] = useState<TemplateImportJob>();
+  const [viewingJob, setViewingJob] = useState<TemplateImportJob>();
+  const [viewSuggestions, setViewSuggestions] = useState<RecognitionSuggestion[]>([]);
+  const [viewCalls, setViewCalls] = useState<RecognitionCall[]>([]);
+  const [viewLoading, setViewLoading] = useState(false);
+  const [deletingJobId, setDeletingJobId] = useState<string>();
   const [retryingJobId, setRetryingJobId] = useState<string>();
   const [creating, setCreating] = useState(false);
   const [form] = Form.useForm<CreateTemplateInput>();
@@ -96,6 +105,37 @@ export function TemplateUploadPage() {
     });
   };
 
+  const openRecognition = async (job: TemplateImportJob) => {
+    setViewingJob(job);
+    setViewLoading(true);
+    try {
+      const [suggestions, calls] = await Promise.all([
+        templateApi.listRecognitionSuggestions(job.id),
+        templateApi.listRecognitionCalls(job.id),
+      ]);
+      setViewSuggestions(suggestions);
+      setViewCalls(calls);
+    } catch (error) {
+      void message.error(error instanceof Error ? error.message : '识别详情加载失败');
+    } finally {
+      setViewLoading(false);
+    }
+  };
+
+  const deleteRecognition = async (job: TemplateImportJob) => {
+    setDeletingJobId(job.id);
+    try {
+      await templateApi.deleteImport(job.id);
+      if (viewingJob?.id === job.id) setViewingJob(undefined);
+      await load();
+      void message.success('识别记录已删除');
+    } catch (error) {
+      void message.error(error instanceof Error ? error.message : '识别记录删除失败');
+    } finally {
+      setDeletingJobId(undefined);
+    }
+  };
+
   const createTemplate = async () => {
     if (!selectedJob) return;
     const input = await form.validateFields();
@@ -147,7 +187,9 @@ export function TemplateUploadPage() {
           beforeUpload={() => false}
           onChange={({ fileList }) => setFiles(fileList.slice(-1))}
         >
-          <p className="ant-upload-drag-icon"><InboxOutlined /></p>
+          <p className="ant-upload-drag-icon">
+            <InboxOutlined />
+          </p>
           <p className="ant-upload-text">拖入 Excel 或 Word 文件</p>
           <p className="ant-upload-hint">原始版式会完整保留，系统会在后台自动分析可填写内容。</p>
         </Upload.Dragger>
@@ -175,7 +217,11 @@ export function TemplateUploadPage() {
               dataIndex: 'sourceFileName',
               render: (value: string, job) => (
                 <Space>
-                  {job.format === 'XLSX' ? <FileExcelOutlined className="excel-icon" /> : <FileWordOutlined className="word-icon" />}
+                  {job.format === 'XLSX' ? (
+                    <FileExcelOutlined className="excel-icon" />
+                  ) : (
+                    <FileWordOutlined className="word-icon" />
+                  )}
                   <Typography.Text>{value}</Typography.Text>
                 </Space>
               ),
@@ -188,10 +234,18 @@ export function TemplateUploadPage() {
                   <Progress
                     percent={job.progress}
                     size="small"
-                    status={job.status === 'FAILED' ? 'exception' : job.status === 'PARSED' ? 'success' : 'active'}
+                    status={
+                      job.status === 'FAILED'
+                        ? 'exception'
+                        : job.status === 'PARSED'
+                          ? 'success'
+                          : 'active'
+                    }
                   />
                   <Typography.Text type="secondary" className="progress-stage">
-                    {job.status === 'PARSED' ? '识别完成，可以查看结果' : stageLabel(job.currentStage)}
+                    {job.status === 'PARSED'
+                      ? '识别完成，可以查看结果'
+                      : stageLabel(job.currentStage)}
                   </Typography.Text>
                 </div>
               ),
@@ -201,9 +255,15 @@ export function TemplateUploadPage() {
               width: 210,
               render: (_, job) => (
                 <Space size={4} wrap>
-                  {job.status === 'PARSED' && <Tag color="success" icon={<CheckCircleOutlined />}>完成</Tag>}
+                  {job.status === 'PARSED' && (
+                    <Tag color="success" icon={<CheckCircleOutlined />}>
+                      完成
+                    </Tag>
+                  )}
                   {job.suggestionCount > 0 && <Tag color="blue">识别 {job.suggestionCount} 项</Tag>}
-                  {job.pendingSuggestionCount > 0 && <Tag color="gold">待确认 {job.pendingSuggestionCount} 项</Tag>}
+                  {job.pendingSuggestionCount > 0 && (
+                    <Tag color="gold">待确认 {job.pendingSuggestionCount} 项</Tag>
+                  )}
                   {job.status === 'FAILED' && <Tag color="error">识别失败</Tag>}
                 </Space>
               ),
@@ -219,8 +279,19 @@ export function TemplateUploadPage() {
               width: 190,
               render: (_, job) => (
                 <Space size={2}>
-                  <Button type="link" disabled={job.status !== 'PARSED'} onClick={() => openCreate(job)}>
+                  <Button
+                    type="link"
+                    disabled={job.status !== 'PARSED'}
+                    onClick={() => void openRecognition(job)}
+                  >
                     查看识别结果
+                  </Button>
+                  <Button
+                    type="link"
+                    disabled={job.status !== 'PARSED'}
+                    onClick={() => openCreate(job)}
+                  >
+                    创建模板
                   </Button>
                   <Button
                     type="link"
@@ -231,6 +302,24 @@ export function TemplateUploadPage() {
                   >
                     重试
                   </Button>
+                  <Button
+                    type="link"
+                    danger
+                    icon={<DeleteOutlined />}
+                    loading={deletingJobId === job.id}
+                    disabled={!['PARSED', 'FAILED'].includes(job.status)}
+                    onClick={() =>
+                      Modal.confirm({
+                        title: `删除“${job.sourceFileName}”的识别记录？`,
+                        content:
+                          '只删除识别记录和审计数据，不删除原始 Excel 文件；已生成模板的记录不能删除。',
+                        okText: '删除记录',
+                        okButtonProps: { danger: true },
+                        cancelText: '取消',
+                        onOk: () => deleteRecognition(job),
+                      })
+                    }
+                  />
                 </Space>
               ),
             },
@@ -251,11 +340,19 @@ export function TemplateUploadPage() {
           type="success"
           showIcon
           message="系统已完成初步识别"
-          description={selectedJob ? `识别出 ${selectedJob.suggestionCount} 项内容；不确定的部分会在 Excel 旁边用中文问题引导确认。` : undefined}
+          description={
+            selectedJob
+              ? `识别出 ${selectedJob.suggestionCount} 项内容；不确定的部分会在 Excel 旁边用中文问题引导确认。`
+              : undefined
+          }
           style={{ marginBottom: 16 }}
         />
         <Form form={form} layout="vertical">
-          <Form.Item name="name" label="模板名称" rules={[{ required: true, message: '请输入模板名称' }]}>
+          <Form.Item
+            name="name"
+            label="模板名称"
+            rules={[{ required: true, message: '请输入模板名称' }]}
+          >
             <Input autoFocus maxLength={200} />
           </Form.Item>
           <Form.Item name="category" label="模板分类">
@@ -265,6 +362,105 @@ export function TemplateUploadPage() {
             <Input.TextArea rows={3} placeholder="说明这个模板用于什么业务场景" maxLength={300} />
           </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        title={viewingJob ? `识别结果：${viewingJob.sourceFileName}` : '识别结果'}
+        open={Boolean(viewingJob)}
+        width={960}
+        footer={
+          viewingJob ? (
+            <Space>
+              <Button onClick={() => setViewingJob(undefined)}>关闭</Button>
+              <Button
+                type="primary"
+                onClick={() => {
+                  const job = viewingJob;
+                  setViewingJob(undefined);
+                  if (job) openCreate(job);
+                }}
+              >
+                填写模板信息并创建
+              </Button>
+            </Space>
+          ) : null
+        }
+        onCancel={() => setViewingJob(undefined)}
+      >
+        {viewLoading ? (
+          <Progress percent={60} status="active" showInfo={false} />
+        ) : (
+          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            <Alert
+              type={viewingJob?.status === 'FAILED' ? 'error' : 'success'}
+              showIcon
+              message={
+                viewingJob?.status === 'FAILED' ? '识别失败' : '识别完成，可直接核对识别结果'
+              }
+              description={
+                viewingJob
+                  ? `共 ${viewSuggestions.length} 项建议，${viewCalls.length} 次模型调用。`
+                  : undefined
+              }
+            />
+            <Table
+              size="small"
+              rowKey="id"
+              pagination={{ pageSize: 8 }}
+              dataSource={viewSuggestions}
+              columns={[
+                {
+                  title: '字段/区域',
+                  dataIndex: ['payload', 'fieldName'],
+                  render: (_: unknown, item: RecognitionSuggestion) => item.payload.fieldName,
+                },
+                { title: '类型', dataIndex: 'suggestionType' },
+                { title: '状态', dataIndex: 'decision' },
+                {
+                  title: '位置',
+                  render: (_: unknown, item: RecognitionSuggestion) =>
+                    locatorDisplay(item.payload.locator?.address, item.payload.locator?.range),
+                },
+                {
+                  title: '明细列',
+                  render: (_: unknown, item: RecognitionSuggestion) =>
+                    item.payload.columns?.length
+                      ? item.payload.columns
+                          .map(
+                            (column) =>
+                              `${column.name}（${column.valueType || 'string'}${column.unit ? `/${column.unit}` : ''}）`,
+                          )
+                          .join('、')
+                      : '—',
+                },
+              ]}
+            />
+            <Collapse
+              items={viewCalls.map((call) => ({
+                key: call.id,
+                label: `${call.status} · ${call.phase} · 第 ${call.attempt} 次 · ${call.durationMs}ms`,
+                children: (
+                  <Space direction="vertical" style={{ width: '100%' }}>
+                    {call.errorMessage && (
+                      <Alert
+                        type="error"
+                        message={`${call.errorType || '调用错误'}：${call.errorMessage}`}
+                      />
+                    )}
+                    <Typography.Text strong>完整脱敏请求</Typography.Text>
+                    <pre className="recognition-audit-payload">
+                      {JSON.stringify(call.requestPayload, null, 2)}
+                    </pre>
+                    <Typography.Text strong>完整脱敏响应</Typography.Text>
+                    <pre className="recognition-audit-payload">
+                      {JSON.stringify(call.responsePayload, null, 2)}
+                    </pre>
+                  </Space>
+                ),
+              }))}
+            />
+          </Space>
+        )}
       </Modal>
     </div>
   );
@@ -283,4 +479,11 @@ function stageLabel(stage?: string) {
     PERSISTING_RESULT: '正在保存识别结果',
   };
   return labels[stage ?? ''] ?? '等待后台处理';
+}
+
+function locatorDisplay(...values: unknown[]) {
+  return (
+    values.find((value): value is string => typeof value === 'string' && value.trim().length > 0) ||
+    '—'
+  );
 }

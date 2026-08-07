@@ -95,7 +95,7 @@ public final class GroupNameNormalizer {
                 || text.contains("类别") || text.contains("品名") || text.contains("订单")) return BASIC_INFORMATION;
         return switch (blockType == null ? "" : blockType) {
             case "LOOKUP_TABLE" -> "明细信息";
-            case "SIGNATURE_BLOCK", "CONFIRMATION_BLOCK" -> "审核信息";
+            case "CONFIRMATION_BLOCK" -> "审核信息";
             default -> BASIC_INFORMATION;
         };
     }

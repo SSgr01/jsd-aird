@@ -15,11 +15,12 @@ class UniverSnapshotStructureParserTest {
     private final UniverSnapshotStructureParser parser = new UniverSnapshotStructureParser(objectMapper);
 
     @Test
-    void convertsWorkbookCellsIntoRecognitionCandidates() {
+    void convertsWorkbookCellsIntoRecognitionCandidates() throws Exception {
         var source = """
                 {
                   "id":"workbook-1",
                   "snapshotFormatVersion":3,
+                  "styles":{"border-style":{"bd":{"b":{"s":1,"cl":{"rgb":"#000000"}}}}},
                   "sheets":{
                     "sheet-1":{
                       "id":"sheet-1",
@@ -27,7 +28,7 @@ class UniverSnapshotStructureParserTest {
                       "rowCount":100,
                       "columnCount":20,
                       "cellData":{
-                        "1":{"0":{"v":"产品名称"},"1":{"v":"示例产品"}},
+                         "1":{"0":{"v":"产品名称","s":"border-style"},"1":{"v":"示例产品"}},
                         "2":{"2":{"v":12.5}}
                       }
                     }
@@ -44,8 +45,15 @@ class UniverSnapshotStructureParserTest {
                 .isEqualTo("A2");
         assertThat(result.structureSummary().path("candidateCells").get(2).path("value").asDouble())
                 .isEqualTo(12.5);
-        assertThat(result.structureSummary().path("semanticCells")).hasSize(3);
+        assertThat(result.structureSummary().path("candidateCells").get(0).path("hasBorder").asBoolean())
+                .isTrue();
+        assertThat(result.structureSummary().path("sheets").get(0).path("semanticCells")).hasSize(3);
         assertThat(result.structureSummary().path("regions")).isEmpty();
+        var reparsed = parser.parse(new ByteArrayInputStream(
+                objectMapper.writeValueAsBytes(result.initialEditorSnapshot())
+        ));
+        assertThat(reparsed.structureSummary().path("candidateCells").get(0).path("hasBorder").asBoolean())
+                .isTrue();
     }
 
     @Test

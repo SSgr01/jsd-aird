@@ -2,8 +2,10 @@ package com.jsd.aird.tpl.infrastructure;
 
 import java.io.InputStream;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -24,6 +26,7 @@ import org.apache.poi.xssf.usermodel.XSSFCellStyle;
 import org.apache.poi.xssf.usermodel.XSSFColor;
 import org.apache.poi.xssf.usermodel.XSSFFont;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.apache.poi.xssf.usermodel.extensions.XSSFCellBorder;
 import org.springframework.stereotype.Component;
 
 /** Converts XLSX OOXML into a business-fidelity Univer workbook and recognition summary. */
@@ -52,6 +55,8 @@ public class XlsxStructureParser implements OfficeStructureParser {
             var snapshot = objectMapper.createObjectNode();
             var sheetOrder = objectMapper.createArrayNode();
             var snapshotSheets = objectMapper.createObjectNode();
+            var snapshotStyles = objectMapper.createObjectNode();
+            var styleIds = new LinkedHashMap<String, String>();
             var issues = new ArrayList<ParseIssue>();
             var allCandidates = objectMapper.createArrayNode();
             var allMergedRanges = objectMapper.createArrayNode();
@@ -91,12 +96,13 @@ public class XlsxStructureParser implements OfficeStructureParser {
                     var cells = objectMapper.createObjectNode();
                     for (var cell : row) {
                         var cellJson = cellData(workbook, cell);
-                        if (!cellJson.isEmpty()) cells.set(String.valueOf(cell.getColumnIndex()), cellJson);
-                        var candidate = candidateCell(cell, cellJson, sheetId, sheet.getSheetName(), mergeAddresses);
+                        var candidate = candidateCell(workbook, cell, cellJson, sheetId, sheet.getSheetName(), mergeAddresses);
                         if (candidate != null) {
                             sheetCandidates.add(candidate);
                             allCandidates.add(candidate.deepCopy());
                         }
+                        canonicalizeCellStyle(cellJson, snapshotStyles, styleIds);
+                        if (!cellJson.isEmpty()) cells.set(String.valueOf(cell.getColumnIndex()), cellJson);
                         if (cell.getCellType() == CellType.FORMULA) formulaCount++;
                     }
                     if (!cells.isEmpty()) cellData.set(String.valueOf(row.getRowNum()), cells);
@@ -125,6 +131,15 @@ public class XlsxStructureParser implements OfficeStructureParser {
                         .put("candidateCellCount", sheetCandidates.size())
                         .put("candidateCellsTruncated", false)
                         .put("usedRange", dimensions.a1());
+                var nativeTables = objectMapper.createArrayNode();
+                sheet.getTables().forEach(table -> nativeTables.add(objectMapper.createObjectNode()
+                        .put("name", table.getName())
+                        .put("displayName", table.getDisplayName())
+                        .put("sheetId", sheetId)
+                        .put("range", table.getArea() == null ? "" : table.getArea().formatAsString())
+                        .put("geometryStatus", "CONFIRMED")
+                        .put("semanticStatus", "PROVISIONAL")));
+                sheetSummary.set("nativeTables", nativeTables);
                 sheetSummary.set("candidateCells", sheetCandidates);
                 sheetSummary.set("mergedRanges", mergedRanges);
                 sheetSummary.set("rowData", rowData.deepCopy());
@@ -169,7 +184,11 @@ public class XlsxStructureParser implements OfficeStructureParser {
                 var names = objectMapper.createArrayNode();
                 workbook.getAllNames().forEach(name -> names.add(objectMapper.createObjectNode()
                         .put("name", name.getNameName())
-                        .put("formula", name.getRefersToFormula())));
+                        .put("formula", name.getRefersToFormula())
+                        // A named range proves that this address exists, but it
+                        // does not prove MATRIX/ROW_TABLE semantics or record axis.
+                        .put("geometryStatus", "CONFIRMED")
+                        .put("semanticStatus", "PROVISIONAL")));
                 summary.set("namedRanges", names);
             }
 
@@ -177,6 +196,7 @@ public class XlsxStructureParser implements OfficeStructureParser {
             snapshot.put("name", "导入的 Excel 模板");
             snapshot.put("appVersion", "univer-0.25.1");
             snapshot.put("snapshotFormatVersion", 3);
+            snapshot.set("styles", snapshotStyles);
             snapshot.set("sheetOrder", sheetOrder);
             snapshot.set("sheets", snapshotSheets);
 
@@ -207,7 +227,29 @@ public class XlsxStructureParser implements OfficeStructureParser {
                 result.put("v", cell.getBooleanCellValue());
                 result.put("t", 3);
             }
-            case FORMULA -> result.put("f", "=" + cell.getCellFormula());
+            case FORMULA -> {
+                result.put("f", "=" + cell.getCellFormula());
+                var cachedType = cell.getCachedFormulaResultType();
+                switch (cachedType) {
+                    case STRING -> {
+                        result.put("v", cell.getStringCellValue());
+                        result.put("t", 1);
+                    }
+                    case NUMERIC -> {
+                        result.put("v", cell.getNumericCellValue());
+                        result.put("t", 2);
+                    }
+                    case BOOLEAN -> {
+                        result.put("v", cell.getBooleanCellValue());
+                        result.put("t", 3);
+                    }
+                    case ERROR -> {
+                        result.put("v", "#ERROR");
+                        result.put("t", 1);
+                    }
+                    default -> { }
+                }
+            }
             case ERROR -> {
                 result.put("v", "#ERROR");
                 result.put("t", 1);
@@ -219,7 +261,23 @@ public class XlsxStructureParser implements OfficeStructureParser {
         return result;
     }
 
+    private void canonicalizeCellStyle(
+            ObjectNode cell, ObjectNode styles, Map<String, String> styleIds
+    ) {
+        var style = cell.path("s");
+        if (!style.isObject() || style.isEmpty()) return;
+        var serialized = style.toString();
+        var styleId = styleIds.get(serialized);
+        if (styleId == null) {
+            styleId = "style-" + (styleIds.size() + 1);
+            styleIds.put(serialized, styleId);
+            styles.set(styleId, style.deepCopy());
+        }
+        cell.put("s", styleId);
+    }
+
     private ObjectNode candidateCell(
+            XSSFWorkbook workbook,
             Cell cell,
             ObjectNode cellJson,
             String sheetId,
@@ -245,7 +303,7 @@ public class XlsxStructureParser implements OfficeStructureParser {
                 .put("bold", cell.getSheet().getWorkbook().getFontAt(
                         cell.getCellStyle().getFontIndex()
                 ).getBold())
-                .put("hasBorder", hasBorder(cell.getCellStyle()));
+                .put("hasBorder", hasBorder(workbook, cell));
         if (cellJson.has("v")) candidate.set("value", cellJson.get("v"));
         if (cellJson.has("f")) {
             candidate.set("value", cellJson.get("f"));
@@ -272,10 +330,18 @@ public class XlsxStructureParser implements OfficeStructureParser {
             putColor(style, "bg", source.getFillForegroundXSSFColor());
         }
         var borders = objectMapper.createObjectNode();
-        putBorder(borders, "t", source.getBorderTop(), source.getTopBorderXSSFColor());
-        putBorder(borders, "r", source.getBorderRight(), source.getRightBorderXSSFColor());
-        putBorder(borders, "b", source.getBorderBottom(), source.getBottomBorderXSSFColor());
-        putBorder(borders, "l", source.getBorderLeft(), source.getLeftBorderXSSFColor());
+        putBorder(borders, "t", borderStyle(workbook, cell, XSSFCellBorder.BorderSide.TOP,
+                source.getBorderTop()), borderColor(workbook, cell, XSSFCellBorder.BorderSide.TOP,
+                source.getTopBorderXSSFColor()));
+        putBorder(borders, "r", borderStyle(workbook, cell, XSSFCellBorder.BorderSide.RIGHT,
+                source.getBorderRight()), borderColor(workbook, cell, XSSFCellBorder.BorderSide.RIGHT,
+                source.getRightBorderXSSFColor()));
+        putBorder(borders, "b", borderStyle(workbook, cell, XSSFCellBorder.BorderSide.BOTTOM,
+                source.getBorderBottom()), borderColor(workbook, cell, XSSFCellBorder.BorderSide.BOTTOM,
+                source.getBottomBorderXSSFColor()));
+        putBorder(borders, "l", borderStyle(workbook, cell, XSSFCellBorder.BorderSide.LEFT,
+                source.getBorderLeft()), borderColor(workbook, cell, XSSFCellBorder.BorderSide.LEFT,
+                source.getLeftBorderXSSFColor()));
         if (!borders.isEmpty()) style.set("bd", borders);
         var horizontal = horizontal(source.getAlignment());
         if (horizontal > 0) style.put("ht", horizontal);
@@ -354,9 +420,38 @@ public class XlsxStructureParser implements OfficeStructureParser {
         };
     }
 
-    private boolean hasBorder(org.apache.poi.ss.usermodel.CellStyle style) {
-        return style.getBorderTop() != BorderStyle.NONE || style.getBorderRight() != BorderStyle.NONE
-                || style.getBorderBottom() != BorderStyle.NONE || style.getBorderLeft() != BorderStyle.NONE;
+    private boolean hasBorder(XSSFWorkbook workbook, Cell cell) {
+        return borderStyle(workbook, cell, XSSFCellBorder.BorderSide.TOP, cell.getCellStyle().getBorderTop())
+                        != BorderStyle.NONE
+                || borderStyle(workbook, cell, XSSFCellBorder.BorderSide.RIGHT, cell.getCellStyle().getBorderRight())
+                        != BorderStyle.NONE
+                || borderStyle(workbook, cell, XSSFCellBorder.BorderSide.BOTTOM, cell.getCellStyle().getBorderBottom())
+                        != BorderStyle.NONE
+                || borderStyle(workbook, cell, XSSFCellBorder.BorderSide.LEFT, cell.getCellStyle().getBorderLeft())
+                        != BorderStyle.NONE;
+    }
+
+    private BorderStyle borderStyle(
+            XSSFWorkbook workbook, Cell cell, XSSFCellBorder.BorderSide side, BorderStyle preferred
+    ) {
+        if (preferred != BorderStyle.NONE) return preferred;
+        var border = rawBorder(workbook, cell);
+        return border == null ? BorderStyle.NONE : border.getBorderStyle(side);
+    }
+
+    private XSSFColor borderColor(
+            XSSFWorkbook workbook, Cell cell, XSSFCellBorder.BorderSide side, XSSFColor preferred
+    ) {
+        if (preferred != null) return preferred;
+        var border = rawBorder(workbook, cell);
+        return border == null ? null : border.getBorderColor(side);
+    }
+
+    private XSSFCellBorder rawBorder(XSSFWorkbook workbook, Cell cell) {
+        if (!(cell.getCellStyle() instanceof XSSFCellStyle style)) return null;
+        var borderId = style.getCoreXf().getBorderId();
+        if (borderId < 0 || borderId > Integer.MAX_VALUE) return null;
+        return workbook.getStylesSource().getBorderAt((int) borderId);
     }
 
     private ObjectNode regionSummary(String sheetId, String sheetName, CellRangeAddress region) {
@@ -364,6 +459,8 @@ public class XlsxStructureParser implements OfficeStructureParser {
                 .put("sheetId", sheetId)
                 .put("sheetName", sheetName)
                 .put("address", region.formatAsString())
+                .put("range", region.formatAsString())
+                .put("anchor", region.formatAsString().split(":", 2)[0])
                 .put("startRow", region.getFirstRow() + 1)
                 .put("endRow", region.getLastRow() + 1)
                 .put("startColumn", region.getFirstColumn() + 1)

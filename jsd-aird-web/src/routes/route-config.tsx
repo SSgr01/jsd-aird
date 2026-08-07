@@ -7,8 +7,13 @@ import { ProductionOrderListPage, ProductionOrderUploadPage, ProductionWorkspace
 import { TemplateUploadPage } from '@/pages/template-upload';
 import { TemplateWorkspacePage } from '@/pages/template-workspace';
 import { TemplatesPage } from '@/pages/templates';
+import { TemplateImportRenderPage } from '@/pages/template-render/TemplateImportRenderPage';
 
 export const routeConfig: RouteObject[] = [
+  {
+    path: '/render/import/:importJobId',
+    element: <TemplateImportRenderPage />,
+  },
   {
     path: '/',
     element: <BasicLayout />,

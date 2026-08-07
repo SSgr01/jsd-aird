@@ -37,6 +37,7 @@ public class UniverSnapshotStructureParser implements WorkbookSnapshotStructureP
             var sheets = objectMapper.createArrayNode();
             var candidateCells = objectMapper.createArrayNode();
             var allMergedRanges = objectMapper.createArrayNode();
+            var styles = snapshot.path("styles");
             var sheetFields = snapshot.path("sheets").fields();
             var sheetCount = 0;
             while (sheetFields.hasNext()) {
@@ -46,7 +47,7 @@ public class UniverSnapshotStructureParser implements WorkbookSnapshotStructureP
                 var sheetName = sheet.path("name").asText(entry.getKey());
                 var sheetCandidates = objectMapper.createArrayNode();
                 var usedCells = appendCells(
-                        sheetCandidates, sheetId, sheetName, sheet.path("cellData"), sheet.path("mergeData")
+                        sheetCandidates, sheetId, sheetName, sheet.path("cellData"), sheet.path("mergeData"), styles
                 );
                 for (var candidate : sheetCandidates) candidateCells.add(candidate.deepCopy());
                 var mergedRanges = appendMergedRanges(
@@ -92,7 +93,8 @@ public class UniverSnapshotStructureParser implements WorkbookSnapshotStructureP
             String sheetId,
             String sheetName,
             JsonNode cellData,
-            JsonNode mergeData
+            JsonNode mergeData,
+            JsonNode styles
     ) {
         if (!cellData.isObject()) return 0;
         var count = 0;
@@ -108,7 +110,8 @@ public class UniverSnapshotStructureParser implements WorkbookSnapshotStructureP
                 if (columnIndex < 0) continue;
                 var cell = column.getValue();
                 var value = cellValue(cell);
-                var styled = cell.path("s").isObject() || cell.path("s").isTextual();
+                var style = resolvedStyle(cell, styles);
+                var styled = style.isObject() && !style.isEmpty();
                 if ((value == null || value.isNull() || value.asText().isBlank()) && !styled) continue;
                 var candidate = objectMapper.createObjectNode()
                         .put("sheetId", sheetId)
@@ -122,11 +125,10 @@ public class UniverSnapshotStructureParser implements WorkbookSnapshotStructureP
                                 : value.isBoolean() ? "BOOLEAN" : "STRING"
                                 : "FORMULA")
                         .put("formula", !cell.path("f").asText("").isBlank())
-                        .put("bold", cell.path("s").path("bl").asInt(0) > 0)
-                        .put("hasBorder", cell.path("s").path("bd").isObject()
-                                && !cell.path("s").path("bd").isEmpty());
+                        .put("bold", style.path("bl").asInt(0) > 0)
+                        .put("hasBorder", style.path("bd").isObject() && !style.path("bd").isEmpty());
                 if (value != null && !value.isNull() && !value.asText().isBlank()) candidate.set("value", value);
-                if (cell.path("s").isObject()) candidate.set("style", cell.path("s").deepCopy());
+                if (style.isObject()) candidate.set("style", style.deepCopy());
                 var mergedRange = mergedRange(rowIndex, columnIndex, mergeData);
                 if (!mergedRange.isBlank()) candidate.put("mergedRange", mergedRange);
                 target.add(candidate);
@@ -134,6 +136,16 @@ public class UniverSnapshotStructureParser implements WorkbookSnapshotStructureP
             }
         }
         return count;
+    }
+
+    private JsonNode resolvedStyle(JsonNode cell, JsonNode styles) {
+        var style = cell.path("s");
+        if (style.isObject()) return style;
+        if (style.isTextual() && styles.isObject()) {
+            var referenced = styles.path(style.asText());
+            if (referenced.isObject()) return referenced;
+        }
+        return com.fasterxml.jackson.databind.node.MissingNode.getInstance();
     }
 
     private String mergedRange(int row, int column, JsonNode mergeData) {
@@ -166,6 +178,7 @@ public class UniverSnapshotStructureParser implements WorkbookSnapshotStructureP
                     + (merge.path("endRow").asInt() + 1);
             var item = objectMapper.createObjectNode()
                     .put("sheetId", sheetId).put("sheetName", sheetName).put("address", address)
+                    .put("range", address).put("anchor", address.split(":", 2)[0])
                     .put("startRow", merge.path("startRow").asInt() + 1)
                     .put("endRow", merge.path("endRow").asInt() + 1)
                     .put("startColumn", merge.path("startColumn").asInt() + 1)

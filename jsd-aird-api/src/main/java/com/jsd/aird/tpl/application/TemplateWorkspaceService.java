@@ -3,9 +3,15 @@ package com.jsd.aird.tpl.application;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.HashSet;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.io.ByteArrayInputStream;
+import java.security.MessageDigest;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -15,12 +21,18 @@ import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.json.JsonCanonicalizer;
 import com.jsd.aird.shared.security.ActorContext;
+import com.jsd.aird.shared.security.Actor;
+import com.jsd.aird.ops.application.port.FileObjectRepository;
+import com.jsd.aird.ops.application.port.ObjectStorage;
 import com.jsd.aird.tpl.application.port.TemplateRepository;
 import com.jsd.aird.tpl.application.port.TemplateImportRepository;
 import com.jsd.aird.tpl.domain.TemplateFormat;
 import com.jsd.aird.tpl.domain.TemplateStatus;
+import com.jsd.aird.tpl.application.port.WordOoxmlPatcher;
+import com.jsd.aird.tpl.application.port.WordDocumentParser;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.util.StringUtils;
 
 @Service
@@ -33,23 +45,41 @@ public class TemplateWorkspaceService {
     private final TemplateImportRepository importRepository;
     private final TemplateRecognitionCompiler recognitionCompiler;
     private final TemplateRecognitionReviewService recognitionReviewService;
+    private final StandardFieldService standardFieldService;
     private final JsonCanonicalizer canonicalizer;
     private final ObjectMapper objectMapper;
+    private final FileObjectRepository fileRepository;
+    private final ObjectStorage objectStorage;
+    private final WordOoxmlPatcher wordOoxmlPatchService;
+    private final WordDocumentParser wordDocumentParser;
+    private final String storageBucket;
 
     public TemplateWorkspaceService(
             TemplateRepository repository,
             TemplateImportRepository importRepository,
             TemplateRecognitionCompiler recognitionCompiler,
             TemplateRecognitionReviewService recognitionReviewService,
+            StandardFieldService standardFieldService,
             JsonCanonicalizer canonicalizer,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            FileObjectRepository fileRepository,
+            ObjectStorage objectStorage,
+            WordOoxmlPatcher wordOoxmlPatchService,
+            WordDocumentParser wordDocumentParser,
+            @Value("${app.storage.bucket}") String storageBucket
     ) {
         this.repository = repository;
         this.importRepository = importRepository;
         this.recognitionCompiler = recognitionCompiler;
         this.recognitionReviewService = recognitionReviewService;
+        this.standardFieldService = standardFieldService;
         this.canonicalizer = canonicalizer;
         this.objectMapper = objectMapper;
+        this.fileRepository = fileRepository;
+        this.objectStorage = objectStorage;
+        this.wordOoxmlPatchService = wordOoxmlPatchService;
+        this.wordDocumentParser = wordDocumentParser;
+        this.storageBucket = storageBucket;
     }
 
     public List<TemplateRepository.TemplateListItem> list(
@@ -58,6 +88,15 @@ public class TemplateWorkspaceService {
             TemplateStatus status
     ) {
         return repository.findTemplates(ActorContext.required().organizationId(), keyword, format, status);
+    }
+
+    @Transactional
+    public void clearCategory(String category) {
+        var normalized = trimToNull(category);
+        if (normalized == null || "未分类".equals(normalized) || "全部模板".equals(normalized)) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "只能删除已有的自定义分类");
+        }
+        repository.clearCategory(ActorContext.required().organizationId(), normalized);
     }
 
     @Transactional
@@ -93,7 +132,32 @@ public class TemplateWorkspaceService {
             var compiled = recognitionCompiler.compile(schema, List.of(), command.format());
             schema = compiled.schema();
         }
-        var layoutSummary = objectMapper.createObjectNode().set("initialSnapshot", snapshot);
+        var layoutSummary = objectMapper.createObjectNode();
+        layoutSummary.set("initialSnapshot", snapshot);
+        if (command.format() == TemplateFormat.DOCX && command.importJobId() != null) {
+            var importJob = importRepository.find(actor.organizationId(), command.importJobId())
+                    .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "导入任务不存在"));
+            var documentIr = java.util.Optional.of(importJob)
+                    .map(TemplateImportRepository.ImportJobView::structureSummary)
+                    .map(summary -> summary.path("documentIR"))
+                    .filter(JsonNode::isObject)
+                    .orElse(null);
+            if (documentIr != null) {
+                var sourceHash = fileRepository.find(actor.organizationId(), importJob.sourceFileId())
+                        .map(FileObjectRepository.FileObject::sha256)
+                        .orElse(canonicalizer.hash(documentIr));
+                layoutSummary.put("sourceImportJobId", command.importJobId().toString());
+                layoutSummary.set("documentStructure", documentIr.deepCopy());
+                layoutSummary.set("wordDocument", objectMapper.createObjectNode()
+                        .put("sourceDocxFileId", importJob.sourceFileId().toString())
+                        .put("workingDocxFileId", importJob.sourceFileId().toString())
+                        .put("documentHash", sourceHash)
+                        .put("structureHash", documentIr.path("structureHash").asText(""))
+                        .put("structureVersion", documentIr.path("structureVersion").asInt(1))
+                        .put("patchSequence", 0)
+                        .put("state", "WORKING"));
+            }
+        }
         var schemaHash = canonicalizer.hash(schema);
         var mappingHash = canonicalizer.hash(mapping);
         var dataHash = canonicalizer.hash(data);
@@ -180,13 +244,60 @@ public class TemplateWorkspaceService {
         var normalizedSchema = normalizeFieldGroups(command.schema());
         var normalizedMapping = normalizeMapping(command.mapping(), normalizedSchema);
         validateSchema(normalizedSchema);
+        standardFieldService.validateFormalFields(normalizedSchema);
         var reconciliationRequired = validateMappings(current.format(), normalizedMapping);
         recognitionReviewService.validateAcceptedMappings(
                 actor.organizationId(), versionId, normalizedMapping
         );
         validateBindingValues(command.bindingValues());
         validateStructureOperations(command.structureOperations());
-        validateSnapshot(command.snapshotFileId(), command.snapshotHash());
+        if (current.format() == TemplateFormat.XLSX) {
+            validateSnapshot(command.snapshotFileId(), command.snapshotHash());
+        }
+        var wordDocument = current.wordDocument().isObject()
+                ? (ObjectNode) current.wordDocument().deepCopy() : null;
+        var documentStructure = current.documentStructure().isObject()
+                ? current.documentStructure().deepCopy() : current.documentStructure();
+        if (current.format() == TemplateFormat.DOCX && command.wordPatch() != null
+                && !command.wordPatch().isEmpty()) {
+            if (wordDocument == null) throw new ApiException(ApiErrorCode.BAD_REQUEST, "Word 原生工件不存在");
+            if (!StringUtils.hasText(command.wordPatchBaseHash())
+                    || !command.wordPatchBaseHash().equals(wordDocument.path("documentHash").asText())) {
+                throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT,
+                        "Word 基准文件已变化，请重新加载后再保存");
+            }
+            var structureHash = current.documentStructure().path("structureHash").asText("");
+            for (var operation : command.wordPatch()) {
+                if (operation.has("baseStructureHash")
+                        && !operation.path("baseStructureHash").asText().equals(structureHash)) {
+                    throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT,
+                            "Word 结构基线已变化，请重新加载后再保存");
+                }
+            }
+            var currentFileId = UUID.fromString(wordDocument.path("workingDocxFileId")
+                    .asText(wordDocument.path("sourceDocxFileId").asText("")));
+            var sourceFile = fileRepository.find(actor.organizationId(), currentFileId)
+                    .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "Word 原生工件不存在"));
+            try (var stored = objectStorage.get(sourceFile.objectKey())) {
+                var patched = wordOoxmlPatchService.apply(stored.stream().readAllBytes(), command.wordPatch());
+                var parsed = wordDocumentParser.parse(new ByteArrayInputStream(patched));
+                documentStructure = parsed.structureSummary().path("documentIR").deepCopy();
+                var staged = stageWordDocument(patched, sourceFile.originalName(), actor);
+                wordDocument.put("workingDocxFileId", staged.id().toString());
+                wordDocument.put("documentHash", staged.sha256());
+                wordDocument.put("patchSequence", wordDocument.path("patchSequence").asInt(0)
+                        + command.wordPatch().size());
+                wordDocument.put("lastPatchCount", command.wordPatch().size());
+                wordDocument.put("lastPatchSummary", command.wordPatch().toString());
+                wordDocument.put("structureVersion", documentStructure.path("structureVersion").asInt(1));
+                wordDocument.put("structureHash", documentStructure.path("structureHash").asText(""));
+                wordDocument.put("state", "WORKING");
+            } catch (ApiException exception) {
+                throw exception;
+            } catch (Exception exception) {
+                throw new ApiException(ApiErrorCode.SNAPSHOT_PERSIST_FAILED, "Word 原生工件写入失败");
+            }
+        }
 
         var schemaHash = canonicalizer.hash(normalizedSchema);
         var mappingHash = canonicalizer.hash(normalizedMapping);
@@ -204,6 +315,10 @@ public class TemplateWorkspaceService {
         var layoutSummary = objectMapper.createObjectNode()
                 .put("reconciliationRequired", reconciliationRequired)
                 .put("lastCommandSummary", trimToEmpty(command.clientCommandSummary()));
+        if (documentStructure != null && documentStructure.isObject()) {
+            layoutSummary.set("documentStructure", documentStructure);
+        }
+        if (wordDocument != null) layoutSummary.set("wordDocument", wordDocument);
 
         var updated = repository.updateDraft(new TemplateRepository.DraftUpdate(
                 actor.organizationId(),
@@ -259,7 +374,9 @@ public class TemplateWorkspaceService {
                     objectMapper.createObjectNode().put("fileId", command.snapshotFileId().toString())
             );
         }
-        return new SaveResult(command.lockVersion() + 1, workspaceHash, reconciliationRequired);
+        return new SaveResult(command.lockVersion() + 1, workspaceHash, reconciliationRequired,
+                wordDocument == null ? null : wordDocument.deepCopy(),
+                documentStructure == null ? null : documentStructure.deepCopy());
     }
 
     private ObjectNode normalizeFieldGroups(JsonNode schema) {
@@ -321,8 +438,14 @@ public class TemplateWorkspaceService {
         if (workspace.status() != TemplateStatus.DRAFT) {
             throw new ApiException(ApiErrorCode.TEMPLATE_VERSION_IMMUTABLE);
         }
-        if (workspace.snapshotFileId() == null) {
-            throw new ApiException(ApiErrorCode.FILE_NOT_READY, "发布前必须持久化 Univer 原生快照");
+        if (workspace.format() == TemplateFormat.XLSX && workspace.snapshotFileId() == null) {
+            throw new ApiException(ApiErrorCode.FILE_NOT_READY, "发布前必须持久化 Excel 原生快照");
+        }
+        if (workspace.format() == TemplateFormat.DOCX
+                && (!workspace.wordDocument().isObject()
+                || !StringUtils.hasText(workspace.wordDocument().path("workingDocxFileId").asText(
+                        workspace.wordDocument().path("sourceDocxFileId").asText(""))))) {
+            throw new ApiException(ApiErrorCode.FILE_NOT_READY, "发布前必须准备 Word 原生工件");
         }
         if (hasRequiredFieldWithoutPosition(workspace.schema(), workspace.mapping(), workspace.format())) {
             var message = workspace.format() == TemplateFormat.DOCX
@@ -330,11 +453,26 @@ public class TemplateWorkspaceService {
                     : "还有必填字段没有有效填写位置";
             throw new ApiException(ApiErrorCode.BINDING_INVALID, message);
         }
+        if (recognitionReviewService.hasIncompleteRecognition(actor.organizationId(), versionId)) {
+            throw new ApiException(ApiErrorCode.BINDING_INVALID,
+                    "识别结果尚未完成结构确认或人工复核，暂不能发布");
+        }
         if (recognitionReviewService.hasOpenConflicts(actor.organizationId(), versionId)) {
             throw new ApiException(ApiErrorCode.BINDING_INVALID, "识别结果仍有冲突，请在识别确认中处理后再发布");
         }
         if (recognitionReviewService.hasOpenBlockingIssues(actor.organizationId(), versionId)) {
             throw new ApiException(ApiErrorCode.BINDING_INVALID, "模板仍有会影响可靠填写的问题，请按识别确认中的提示处理");
+        }
+        if (workspace.format() == TemplateFormat.DOCX && workspace.wordDocument().isObject()) {
+            var wordDocument = (ObjectNode) workspace.wordDocument().deepCopy();
+            var working = wordDocument.path("workingDocxFileId").asText(
+                    wordDocument.path("sourceDocxFileId").asText(""));
+            if (working.isBlank()) {
+                throw new ApiException(ApiErrorCode.FILE_NOT_READY, "发布前必须准备 Word 原生工件");
+            }
+            wordDocument.put("publishedDocxFileId", working);
+            wordDocument.put("state", "PUBLISHED");
+            repository.updatePublishedWordDocument(actor.organizationId(), versionId, wordDocument);
         }
         repository.publish(actor.organizationId(), versionId, actor.userId());
         repository.appendAudit(
@@ -418,6 +556,7 @@ public class TemplateWorkspaceService {
         }
         var bindingIds = new HashSet<String>();
         var primaryPaths = new HashSet<String>();
+        var bindingsById = new HashMap<String, JsonNode>();
         var reconciliationRequired = false;
         for (JsonNode binding : mapping) {
             var bindingId = binding.path("bindingId").asText();
@@ -433,6 +572,9 @@ public class TemplateWorkspaceService {
                 throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "Mapping 同步方向无效");
             }
             var diagnostic = binding.path("diagnostic");
+            if (diagnostic.path("semanticConflict").asBoolean(false)) {
+                throw new ApiException(ApiErrorCode.BINDING_INVALID, "请先解决字段的业务含义冲突，再保存模板");
+            }
             if ("FORMULA".equals(diagnostic.path("valueSource").asText())
                     && !"EDITOR_TO_DATA".equals(syncDirection)) {
                 throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "Excel 公式只能从工作簿同步到数据");
@@ -444,6 +586,7 @@ public class TemplateWorkspaceService {
             if (!bindingIds.add(bindingId)) {
                 throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "bindingId 必须唯一：" + bindingId);
             }
+            bindingsById.put(bindingId, binding);
             if (binding.path("primaryBinding").asBoolean(true) && !primaryPaths.add(path)) {
                 throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "同一路径只能有一个主绑定：" + path);
             }
@@ -468,7 +611,151 @@ public class TemplateWorkspaceService {
                     || StringUtils.hasText(binding.path("locator").path("range").asText());
             reconciliationRequired |= !"VALID".equals(status) && hasPosition;
         }
+        validateRepeatMappings(mapping, bindingsById);
         return reconciliationRequired;
+    }
+
+    public WordDocumentDownload downloadWordDocument(UUID versionId) {
+        var workspace = get(versionId);
+        if (workspace.format() != TemplateFormat.DOCX || !workspace.wordDocument().isObject()) {
+            throw new ApiException(ApiErrorCode.NOT_FOUND, "Word 原生文档不存在");
+        }
+        var key = workspace.status() == TemplateStatus.PUBLISHED
+                ? "publishedDocxFileId" : "workingDocxFileId";
+        var value = workspace.wordDocument().path(key).asText(
+                workspace.wordDocument().path("workingDocxFileId").asText(
+                        workspace.wordDocument().path("sourceDocxFileId").asText("")));
+        if (value.isBlank()) throw new ApiException(ApiErrorCode.NOT_FOUND, "Word 原生文档不存在");
+        var file = fileRepository.find(ActorContext.required().organizationId(), UUID.fromString(value))
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "Word 原生文档不存在"));
+        var stored = objectStorage.get(file.objectKey());
+        return new WordDocumentDownload(file.originalName(), file.contentType(), stored);
+    }
+
+    private StagedWord stageWordDocument(byte[] bytes, String originalName, Actor actor) {
+        try {
+            var sha = java.util.HexFormat.of().formatHex(
+                    MessageDigest.getInstance("SHA-256").digest(bytes));
+            var id = UUID.randomUUID();
+            var safeName = originalName.toLowerCase(Locale.ROOT).endsWith(".docx")
+                    ? originalName : originalName + ".docx";
+            var key = actor.organizationId() + "/template-word/" + id + "/" + safeName;
+            var contentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+            objectStorage.put(key, new ByteArrayInputStream(bytes), bytes.length, contentType);
+            fileRepository.insert(new FileObjectRepository.NewFileObject(
+                    id, actor.organizationId(), storageBucket, key, safeName, contentType,
+                    bytes.length, sha, actor.userId()));
+            return new StagedWord(id, sha);
+        } catch (Exception exception) {
+            throw new ApiException(ApiErrorCode.SNAPSHOT_PERSIST_FAILED, "Word 文件暂存失败");
+        }
+    }
+
+    private void validateRepeatMappings(JsonNode mapping, Map<String, JsonNode> bindingsById) {
+        var childrenByParent = new HashMap<String, List<JsonNode>>();
+        for (var binding : mapping) {
+            var kind = binding.path("mappingKind").asText("");
+            var parentId = binding.path("parentBindingId").asText("");
+            if (!"REPEAT_FIELD".equals(kind) && !"MATRIX_FIELD".equals(kind)
+                    && parentId.isBlank()) continue;
+            if (parentId.isBlank() || !bindingsById.containsKey(parentId)) {
+                throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "明细字段缺少有效的父级重复区域");
+            }
+            var parent = bindingsById.get(parentId);
+            var parentKind = parent.path("mappingKind").asText("");
+            if (!Set.of("REPEAT_REGION", "MATRIX_REGION").contains(parentKind)) {
+                throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "明细字段的父级不是重复区域");
+            }
+            var parentPath = parent.path("dataPath").asText("");
+            var childPath = binding.path("dataPath").asText("");
+            if (!childPath.startsWith(parentPath + "/*/")) {
+                throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "明细字段 dataPath 必须位于父级记录下：" + childPath);
+            }
+            if ("REPEAT_FIELD".equals(kind)) {
+                var axis = binding.path("repeatAxis").asText(parent.path("repeatAxis").asText(""));
+                if (!Set.of("ROW", "COLUMN").contains(axis)) {
+                    throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "重复明细必须指定按行或按列展开");
+                }
+            }
+            if ("REPEAT_REGION".equals(parentKind) || "MATRIX_REGION".equals(parentKind)
+                    || "REPEAT_FIELD".equals(kind) || "MATRIX_FIELD".equals(kind)) {
+                if (parent.path("recordHeight").asInt(0) <= 0
+                        || parent.path("recordWidth").asInt(0) <= 0
+                        || parent.path("recordStride").asInt(0) <= 0) {
+                    throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "重复区域的记录单元和步长必须为正整数");
+                }
+                validateTermination(parent.path("termination"));
+            }
+            var parentRange = "MATRIX_FIELD".equals(kind)
+                    ? rangeFromLocator(parent.path("locator"), "range")
+                    : rangeFromLocator(parent.path("locator"), "dataRange");
+            var childRange = rangeFromLocator(binding.path("locator"), "valueRange");
+            if (childRange == null) childRange = rangeFromLocator(binding.path("locator"), "address");
+            if (parentRange != null && childRange != null && !contains(parentRange, childRange)) {
+                throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "明细字段位置超出了父级重复区域");
+            }
+            childrenByParent.computeIfAbsent(parentId, ignored -> new ArrayList<>()).add(binding);
+        }
+        for (var children : childrenByParent.values()) {
+            for (var left = 0; left < children.size(); left++) {
+                var leftRange = rangeFromLocator(children.get(left).path("locator"), "valueRange");
+                if (leftRange == null) leftRange = rangeFromLocator(children.get(left).path("locator"), "address");
+                for (var right = left + 1; right < children.size(); right++) {
+                    var rightRange = rangeFromLocator(children.get(right).path("locator"), "valueRange");
+                    if (rightRange == null) rightRange = rangeFromLocator(children.get(right).path("locator"), "address");
+                    if (overlaps(leftRange, rightRange)) {
+                        throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "同一重复区域的明细字段位置发生重叠");
+                    }
+                }
+            }
+        }
+    }
+
+    private void validateTermination(JsonNode termination) {
+        if (termination.isMissingNode() || termination.isNull() || termination.isEmpty()) return;
+        var type = termination.path("type").asText("");
+        if (!Set.of("UNTIL_TOTAL_ROW", "UNTIL_EMPTY_RECORD", "UNTIL_REGION_END",
+                "UNTIL_LABEL", "FIXED_COUNT").contains(type)) {
+            throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "重复区域结束规则无效");
+        }
+        if ("UNTIL_LABEL".equals(type) && !StringUtils.hasText(termination.path("label").asText())) {
+            throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "按标签结束时必须填写结束标签");
+        }
+        if ("FIXED_COUNT".equals(type) && termination.path("maxRecords").asInt(0) <= 0) {
+            throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "固定条数结束规则必须填写正整数");
+        }
+    }
+
+    private int[] rangeFromLocator(JsonNode locator, String preferred) {
+        var value = locator.path(preferred).asText("");
+        if (value.isBlank()) value = locator.path("range").asText(locator.path("address").asText(""));
+        if (!validRange(value)) return null;
+        var parts = value.toUpperCase(Locale.ROOT).split(":", 2);
+        var start = cellBounds(parts[0]);
+        var end = cellBounds(parts.length == 1 ? parts[0] : parts[1]);
+        if (start == null || end == null) return null;
+        return new int[]{Math.min(start[0], end[0]), Math.min(start[1], end[1]),
+                Math.max(start[0], end[0]), Math.max(start[1], end[1])};
+    }
+
+    private int[] cellBounds(String cell) {
+        var match = java.util.regex.Pattern.compile("^([A-Z]+)([0-9]+)$")
+                .matcher(cell.toUpperCase(Locale.ROOT));
+        if (!match.matches()) return null;
+        var column = 0;
+        for (var letter : match.group(1).toCharArray()) column = column * 26 + letter - 'A' + 1;
+        return new int[]{column, Integer.parseInt(match.group(2))};
+    }
+
+    private boolean contains(int[] outer, int[] inner) {
+        return outer[0] <= inner[0] && outer[1] <= inner[1]
+                && outer[2] >= inner[2] && outer[3] >= inner[3];
+    }
+
+    private boolean overlaps(int[] left, int[] right) {
+        return left != null && right != null
+                && left[0] <= right[2] && right[0] <= left[2]
+                && left[1] <= right[3] && right[1] <= left[3];
     }
 
     private boolean validCell(String value) {
@@ -509,6 +796,14 @@ public class TemplateWorkspaceService {
         var layoutSummary = objectMapper.createObjectNode()
                 .put("reconciliationRequired", source.reconciliationRequired())
                 .put("derivedFromVersionId", sourceVersionId.toString());
+        if (source.documentStructure().isObject()) layoutSummary.set("documentStructure", source.documentStructure().deepCopy());
+        if (source.wordDocument().isObject()) {
+            var word = (ObjectNode) source.wordDocument().deepCopy();
+            word.put("workingDocxFileId", word.path("publishedDocxFileId")
+                    .asText(word.path("workingDocxFileId").asText("")));
+            word.put("state", "WORKING");
+            layoutSummary.set("wordDocument", word);
+        }
         var snapshotHash = StringUtils.hasText(source.snapshotHash())
                 ? source.snapshotHash() : canonicalizer.hash(source.inlineSnapshot());
         var workspaceHash = canonicalizer.workspaceHash(
@@ -670,6 +965,16 @@ public class TemplateWorkspaceService {
     ) {
     }
 
+    public record WordDocumentDownload(
+            String originalName,
+            String contentType,
+            ObjectStorage.StoredObject storedObject
+    ) {
+    }
+
+    private record StagedWord(UUID id, String sha256) {
+    }
+
     public record BindingValuePair(String dataPath, JsonNode dataValue, JsonNode editorValue) {
     }
 
@@ -702,7 +1007,9 @@ public class TemplateWorkspaceService {
             List<BindingValuePair> bindingValues,
             List<TemplateRecognitionReviewService.RecognitionAction> recognitionActions,
             List<TemplateRecognitionReviewService.QualityAction> qualityActions,
-            List<StructureOperation> structureOperations
+            List<StructureOperation> structureOperations,
+            String wordPatchBaseHash,
+            ArrayNode wordPatch
     ) {
         public SaveDraftCommand {
             bindingValues = bindingValues == null ? List.of() : List.copyOf(bindingValues);
@@ -712,6 +1019,7 @@ public class TemplateWorkspaceService {
         }
     }
 
-    public record SaveResult(long lockVersion, String workspaceHash, boolean reconciliationRequired) {
+    public record SaveResult(long lockVersion, String workspaceHash, boolean reconciliationRequired,
+                             JsonNode wordDocument, JsonNode documentStructure) {
     }
 }

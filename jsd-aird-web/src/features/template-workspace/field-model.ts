@@ -1,14 +1,37 @@
 import type { RecognitionSuggestion } from '@/services/templates/template-api';
 
-import type {
-  BusinessField,
-  FieldKind,
-  FieldModel,
-  TemplateBinding,
-} from './types';
+import type { BusinessField, FieldKind, FieldModel, TemplateBinding } from './types';
 import { groupCode, normalizeFieldModel, normalizeGroupName } from './group-normalizer';
 
 const FIELD_MODEL_KEY = 'x-jsd-field-model';
+
+export interface FieldIdentity {
+  bindingId?: string;
+  relationId?: string;
+  fieldId?: string;
+  recognitionItemId?: string;
+}
+
+/** Stable field identity. dataPath is deliberately not part of this key. */
+export function fieldMatchesIdentity(field: BusinessField, identity: FieldIdentity) {
+  const stableIdentity = Boolean(identity.bindingId || identity.relationId || identity.fieldId);
+  if (identity.bindingId && field.bindingId === identity.bindingId) return true;
+  if (identity.relationId && field.relationId === identity.relationId) return true;
+  if (identity.fieldId && (field.fieldId === identity.fieldId || field.id === identity.fieldId)) {
+    return true;
+  }
+  return !stableIdentity && Boolean(identity.recognitionItemId)
+    && field.recognitionItemId === identity.recognitionItemId;
+}
+
+export function bindingMatchesIdentity(binding: TemplateBinding, identity: FieldIdentity) {
+  const stableIdentity = Boolean(identity.bindingId || identity.relationId || identity.fieldId);
+  if (identity.bindingId && binding.bindingId === identity.bindingId) return true;
+  if (identity.relationId && binding.relationId === identity.relationId) return true;
+  if (identity.fieldId && binding.fieldId === identity.fieldId) return true;
+  return !stableIdentity && Boolean(identity.recognitionItemId)
+    && stringValue(binding.diagnostic?.recognitionItemId) === identity.recognitionItemId;
+}
 
 export function readFieldModel(
   schema: Record<string, unknown>,
@@ -25,6 +48,7 @@ export function readFieldModel(
     fields: mapping.map((binding) => ({
       id: binding.bindingId,
       bindingId: binding.bindingId,
+      fieldCode: binding.fieldCode,
       dataPath: binding.dataPath,
       groupId,
       name: displayName(binding),
@@ -34,8 +58,10 @@ export function readFieldModel(
       description: stringValue(binding.diagnostic?.description),
       interpretation: interpretation(kindFromBinding(binding), displayName(binding)),
       reviewStatus: binding.bindingStatus === 'VALID' ? 'CONFIRMED' : 'ISSUE',
-      editability: stringValue(binding.diagnostic?.editability) as BusinessField['editability'] || 'UNKNOWN',
-      valueSource: stringValue(binding.diagnostic?.valueSource) as BusinessField['valueSource'] || 'UNKNOWN',
+      editability:
+        (stringValue(binding.diagnostic?.editability) as BusinessField['editability']) || 'UNKNOWN',
+      valueSource:
+        (stringValue(binding.diagnostic?.valueSource) as BusinessField['valueSource']) || 'UNKNOWN',
     })),
     blocks: [],
     semanticAnnotations: [],
@@ -49,6 +75,20 @@ export function writeFieldModel(
   return { ...structuredClone(schema), [FIELD_MODEL_KEY]: structuredClone(fieldModel) };
 }
 
+export function templateLocalFieldCode(
+  templateVersionId: string,
+  field: Pick<BusinessField, 'id' | 'name' | 'dataPath'>,
+) {
+  const templateKey = templateVersionId.replaceAll('-', '').slice(0, 12).toUpperCase();
+  const pathKey = (field.dataPath || '').split('/').filter(Boolean).pop() || '';
+  const semanticKey =
+    pathKey.replace(/[^A-Za-z0-9_]/g, '_').toUpperCase() ||
+    ((field.name || '').includes('签名')
+      ? 'SIGNATURE'
+      : `FIELD_${field.id.replaceAll('-', '').slice(0, 10).toUpperCase()}`);
+  return `TEMPLATE_LOCAL.${templateKey}.${semanticKey}`;
+}
+
 export function applySuggestion(
   schema: Record<string, unknown>,
   mapping: TemplateBinding[],
@@ -56,11 +96,23 @@ export function applySuggestion(
   suggestion: RecognitionSuggestion,
   locatorOverride?: Record<string, unknown>,
 ) {
-  const existing = mapping.find((binding) => binding.dataPath === suggestion.payload.dataPath);
+  suggestion = normalizeSuggestionDataPaths(suggestion, model.fields);
+  const hasStableIdentity = Boolean(
+    suggestion.payload.bindingId || suggestion.payload.relationId || suggestion.payload.fieldId,
+  );
+  const existing = mapping.find((binding) =>
+    bindingMatchesIdentity(binding, {
+      bindingId: suggestion.payload.bindingId,
+      relationId: suggestion.payload.relationId,
+      fieldId: suggestion.payload.fieldId,
+      ...(!hasStableIdentity ? { recognitionItemId: suggestion.id } : {}),
+    })
+    || (!hasStableIdentity && binding.dataPath === suggestion.payload.dataPath),
+  );
   if (existing) return { schema, mapping, model, binding: existing };
 
   const groupName = normalizeGroupName(
-    suggestion.payload.groupName?.trim() || '基础信息',
+    typeof suggestion.payload.groupName === 'string' ? suggestion.payload.groupName : '基础信息',
   );
   let group = model.groups.find((item) => item.name === groupName);
   const nextModel = structuredClone(model);
@@ -80,6 +132,7 @@ export function applySuggestion(
   const editability = suggestion.payload.editability ?? 'EDITABLE';
   const valueSource = suggestion.payload.valueSource ?? 'USER_INPUT';
   const validBinding = editability !== 'UNKNOWN' && valueSource !== 'UNKNOWN';
+  const isChild = suggestion.payload.suggestionLevel === 'CHILD';
   const binding: TemplateBinding = {
     bindingId,
     fieldId,
@@ -87,6 +140,21 @@ export function applySuggestion(
     fieldCode: suggestion.payload.fieldCode,
     dataPath: suggestion.payload.dataPath,
     role: kind === 'SCALAR' ? 'FIELD' : 'REPEAT_REGION',
+    mappingKind: suggestion.payload.mappingKind || (isChild
+      ? kind === 'MATRIX'
+        ? 'MATRIX_FIELD'
+        : 'REPEAT_FIELD'
+      : kind === 'MATRIX'
+        ? 'MATRIX_REGION'
+        : kind === 'SCALAR'
+          ? 'SCALAR'
+          : 'REPEAT_REGION'),
+    parentBindingId: suggestion.payload.parentBindingId,
+    repeatAxis: suggestion.payload.repeatAxis,
+    recordHeight: suggestion.payload.recordHeight ?? 1,
+    recordWidth: suggestion.payload.recordWidth ?? 1,
+    recordStride: suggestion.payload.recordStride ?? 1,
+    termination: suggestion.payload.terminationRule,
     locatorType: suggestion.payload.locatorType,
     locator,
     syncDirection: syncDirection(editability, valueSource),
@@ -100,6 +168,12 @@ export function applySuggestion(
       recognitionItemId: suggestion.id,
       editability,
       valueSource,
+      semanticConflict: suggestion.payload.semanticConflict,
+      conflictCode: suggestion.payload.conflictCode,
+      conflictMessage: suggestion.payload.conflictMessage,
+      dictionaryVersion: suggestion.payload.dictionaryVersion,
+      standardMatchStatus: suggestion.payload.standardMatchStatus,
+      requiresStandardConfirmation: suggestion.payload.requiresStandardConfirmation,
       condition: suggestion.payload.condition,
       blockId: suggestion.payload.blockId,
     },
@@ -109,17 +183,21 @@ export function applySuggestion(
     fieldId,
     relationId: suggestion.payload.relationId,
     recognitionItemId: suggestion.id,
+    parentFieldId: suggestion.payload.parentFieldId,
+    parentSuggestionId:
+      suggestion.payload.parentSuggestionId || suggestion.payload.parentRelationId,
     ...(validBinding ? { bindingId } : {}),
     dataPath: suggestion.payload.dataPath,
+    fieldCode: suggestion.payload.fieldCode,
     groupId: group.id,
-    name: suggestion.payload.fieldName,
+    name: stringValue(suggestion.payload.fieldName),
     kind,
     valueType: suggestion.payload.valueType,
     required: suggestion.payload.required,
     unit: suggestion.payload.unit,
     description: suggestion.payload.reason,
-    interpretation:
-      suggestion.payload.interpretation || interpretation(kind, suggestion.payload.fieldName),
+      interpretation:
+        stringValue(suggestion.payload.interpretation) || interpretation(kind, stringValue(suggestion.payload.fieldName)),
     confidence: suggestion.confidence,
     reviewStatus: suggestion.decision === 'ACCEPTED' ? 'CONFIRMED' : 'NEEDS_CONFIRMATION',
     editability,
@@ -127,18 +205,50 @@ export function applySuggestion(
     condition: suggestion.payload.condition,
     blockId: suggestion.payload.blockId,
     parentBlockId: suggestion.payload.parentBlockId,
+    mappingKind: binding.mappingKind,
+    repeatAxis: binding.repeatAxis,
+    recordHeight: binding.recordHeight,
+    recordWidth: binding.recordWidth,
+    recordStride: binding.recordStride,
+    semanticConflict: suggestion.payload.semanticConflict,
+    conflictCode: suggestion.payload.conflictCode,
+    conflictMessage: suggestion.payload.conflictMessage,
+    dictionaryVersion: suggestion.payload.dictionaryVersion,
+    standardMatchStatus: suggestion.payload.standardMatchStatus,
+    requiresStandardConfirmation: suggestion.payload.requiresStandardConfirmation,
+    standardFieldId: suggestion.payload.standardFieldId,
+    standardFieldVersion: suggestion.payload.standardFieldVersion,
+    standardFieldName: suggestion.payload.standardFieldName,
+    fieldOrigin: suggestion.payload.fieldOrigin,
+    standardSelectionStatus: suggestion.payload.standardSelectionStatus,
+    uiType: suggestion.payload.uiType,
+    termination: suggestion.payload.terminationRule,
     columns: suggestion.payload.columns,
     tableModel: suggestion.payload.tableModel,
     matrixModel: suggestion.payload.matrixModel,
+    longTableModel: suggestion.payload.longTableModel,
+    locator: structuredClone(suggestion.payload.locator),
   };
   const existingFieldIndex = nextModel.fields.findIndex(
-    (item) => item.dataPath === suggestion.payload.dataPath,
+    (item) => fieldMatchesIdentity(item, {
+      bindingId: suggestion.payload.bindingId,
+      relationId: suggestion.payload.relationId,
+      fieldId: suggestion.payload.fieldId,
+      ...(!hasStableIdentity ? { recognitionItemId: suggestion.id } : {}),
+    }),
   );
   if (existingFieldIndex >= 0) {
     field.id = nextModel.fields[existingFieldIndex]?.id ?? field.id;
-    nextModel.fields[existingFieldIndex] = field;
+    nextModel.fields = nextModel.fields.filter(
+      (item, index) => index === existingFieldIndex || item.parentFieldId !== field.id,
+    );
+    const replacementIndex = nextModel.fields.findIndex((item) => item.id === field.id);
+    nextModel.fields[replacementIndex] = field;
   } else {
     nextModel.fields.push(field);
+  }
+  if (kind === 'ROW_TABLE' && !suggestion.payload.hasIndependentChildren) {
+    nextModel.fields.push(...tableChildFields(suggestion, field, false));
   }
   const nextSchema = addFieldSchema(schema, suggestion, kind);
   return {
@@ -154,7 +264,9 @@ export function persistableFieldModel(fieldModel: FieldModel): FieldModel {
   const usedGroups = new Set(formalFields.map((field) => field.groupId));
   return {
     ...structuredClone(fieldModel),
-    groups: fieldModel.groups.filter((group) => usedGroups.has(group.id) || group.groupCode === 'BASIC_INFORMATION'),
+    groups: fieldModel.groups.filter(
+      (group) => usedGroups.has(group.id) || group.groupCode === 'BASIC_INFORMATION',
+    ),
     fields: structuredClone(formalFields),
   };
 }
@@ -165,7 +277,7 @@ export function prepareFormalSchema(
 ): Record<string, unknown> {
   const next = structuredClone(schema);
   for (const candidate of fieldModel.fields.filter((field) => field.candidate && field.dataPath)) {
-    removeSchemaAtPath(next, candidate.dataPath as string);
+    if (!candidate.parentFieldId) removeSchemaAtPath(next, candidate.dataPath as string);
   }
   return writeFieldModel(next, persistableFieldModel(fieldModel));
 }
@@ -174,9 +286,11 @@ export function prepareFormalMappings(
   mapping: TemplateBinding[],
   fieldModel: FieldModel,
 ): TemplateBinding[] {
-  const formalBindingIds = new Set(fieldModel.fields
-    .filter((field) => !field.candidate && field.bindingId)
-    .map((field) => field.bindingId as string));
+  const formalBindingIds = new Set(
+    fieldModel.fields
+      .filter((field) => !field.candidate && field.bindingId)
+      .map((field) => field.bindingId as string),
+  );
   return mapping.filter((binding) => {
     const recognitionItemId = stringValue(binding.diagnostic?.recognitionItemId);
     return !recognitionItemId || formalBindingIds.has(binding.bindingId);
@@ -187,8 +301,11 @@ export function addRecognitionCandidate(
   model: FieldModel,
   suggestion: RecognitionSuggestion,
 ): FieldModel {
+  suggestion = normalizeSuggestionDataPaths(suggestion, model.fields);
   const next = structuredClone(model);
-  const groupName = normalizeGroupName(suggestion.payload.groupName?.trim() || '基础信息');
+  const groupName = normalizeGroupName(
+    typeof suggestion.payload.groupName === 'string' ? suggestion.payload.groupName : '基础信息',
+  );
   let group = next.groups.find((item) => item.name === groupName);
   if (!group) {
     group = {
@@ -199,16 +316,39 @@ export function addRecognitionCandidate(
     };
     next.groups.push(group);
   }
-  const existingIndex = next.fields.findIndex((field) => field.candidate
-    && (field.recognitionItemId === suggestion.id
-      || Boolean(suggestion.payload.relationId && field.relationId === suggestion.payload.relationId)));
+  const existingIndex = next.fields.findIndex(
+    (field) =>
+      field.candidate &&
+      fieldMatchesIdentity(field, {
+        bindingId: suggestion.payload.bindingId,
+        relationId: suggestion.payload.relationId,
+        fieldId: suggestion.payload.fieldId,
+        recognitionItemId: suggestion.id,
+      }),
+  );
   const kind = suggestionKind(suggestion);
   const candidate: BusinessField = {
     id: suggestion.payload.fieldId || `candidate-${suggestion.id}`,
     fieldId: suggestion.payload.fieldId,
     relationId: suggestion.payload.relationId,
     recognitionItemId: suggestion.id,
+    parentFieldId: suggestion.payload.parentFieldId,
+    parentSuggestionId:
+      suggestion.payload.parentSuggestionId || suggestion.payload.parentRelationId,
+    mappingKind: suggestion.payload.mappingKind,
+    repeatAxis: suggestion.payload.repeatAxis,
+    recordHeight: suggestion.payload.recordHeight,
+    recordWidth: suggestion.payload.recordWidth,
+    recordStride: suggestion.payload.recordStride,
+    semanticConflict: suggestion.payload.semanticConflict,
+    conflictCode: suggestion.payload.conflictCode,
+    conflictMessage: suggestion.payload.conflictMessage,
+    dictionaryVersion: suggestion.payload.dictionaryVersion,
+    standardMatchStatus: suggestion.payload.standardMatchStatus,
+    requiresStandardConfirmation: suggestion.payload.requiresStandardConfirmation,
+    termination: suggestion.payload.terminationRule,
     dataPath: suggestion.payload.dataPath,
+    fieldCode: suggestion.payload.fieldCode,
     groupId: group.id,
     name: suggestion.payload.fieldName,
     kind,
@@ -216,8 +356,8 @@ export function addRecognitionCandidate(
     required: suggestion.payload.required,
     unit: suggestion.payload.unit,
     description: suggestion.payload.reason,
-    interpretation: suggestion.payload.interpretation
-      || interpretation(kind, suggestion.payload.fieldName),
+    interpretation:
+      suggestion.payload.interpretation || interpretation(kind, suggestion.payload.fieldName),
     confidence: suggestion.confidence,
     reviewStatus: 'NEEDS_CONFIRMATION',
     editability: suggestion.payload.editability,
@@ -228,13 +368,167 @@ export function addRecognitionCandidate(
     columns: suggestion.payload.columns,
     tableModel: suggestion.payload.tableModel,
     matrixModel: suggestion.payload.matrixModel,
+    longTableModel: suggestion.payload.longTableModel,
+    locator: structuredClone(suggestion.payload.locator),
     candidate: true,
     candidateLocatorType: suggestion.payload.locatorType,
     candidateLocator: structuredClone(suggestion.payload.locator),
   };
-  if (existingIndex >= 0) next.fields[existingIndex] = candidate;
-  else next.fields.push(candidate);
+  if (existingIndex >= 0) {
+    const previousId = next.fields[existingIndex]?.id;
+    next.fields = next.fields.filter(
+      (field, index) => index === existingIndex || field.parentFieldId !== previousId,
+    );
+    const replacementIndex = next.fields.findIndex((field) => field.id === previousId);
+    next.fields[replacementIndex] = candidate;
+    next.fields = next.fields.filter(
+      (field, index) => index === replacementIndex || field.parentFieldId !== candidate.id,
+    );
+  } else {
+    next.fields.push(candidate);
+  }
+  if (kind === 'ROW_TABLE' && !suggestion.payload.hasIndependentChildren) {
+    next.fields.push(...tableChildFields(suggestion, candidate, true));
+  }
   return normalizeFieldModel(next);
+}
+
+function tableChildFields(
+  suggestion: RecognitionSuggestion,
+  parent: BusinessField,
+  candidate: boolean,
+): BusinessField[] {
+  return (suggestion.payload.columns ?? []).map((column) => {
+    const dataPath =
+      column.dataPath || `${parent.dataPath || '/recognized/table'}/*/${column.code}`;
+    const locator = {
+      ...structuredClone(suggestion.payload.locator),
+      labelAddress: column.labelRange || suggestion.payload.locator?.labelAddress,
+      labelRange: column.labelRange || suggestion.payload.locator?.labelRange,
+      address: column.valueRange || suggestion.payload.locator?.address,
+      logicalInputRange: column.valueRange || suggestion.payload.locator?.logicalInputRange,
+      valueMode: parent.repeatAxis === 'COLUMN' ? 'ARRAY_ROW' : 'ARRAY_COLUMN',
+      terminationRule: suggestion.payload.terminationRule,
+    };
+    return {
+      id: candidate ? `candidate-${suggestion.id}-${column.code}` : `${parent.id}::${column.code}`,
+      fieldId: candidate ? undefined : `${parent.id}::${column.code}`,
+      bindingId: candidate ? undefined : column.bindingId,
+      relationId:
+        column.relationId
+        || `${suggestion.payload.relationId || suggestion.id}|child|${column.code}|${normalizeRange(column.valueRange)}`,
+      recognitionItemId: suggestion.id,
+      dataPath,
+      fieldCode: column.fieldCode || `${parent.fieldCode || 'TABLE'}.${column.code.toUpperCase()}`,
+      parentFieldId: parent.id,
+      groupId: parent.groupId,
+      name: stringValue(column.name),
+      kind: 'SCALAR',
+      valueType: column.valueType || 'string',
+      required: column.required ?? false,
+      unit: column.unit,
+      description: '明细表列字段',
+      interpretation: `系统认为这是“${stringValue(column.name)}”明细列。`,
+      confidence: suggestion.confidence,
+      reviewStatus: candidate ? 'NEEDS_CONFIRMATION' : 'CONFIRMED',
+      editability: column.editability,
+      valueSource: column.valueSource,
+      mappingKind: 'REPEAT_FIELD',
+      repeatAxis: parent.repeatAxis || 'ROW',
+      recordHeight: parent.recordHeight,
+      recordWidth: parent.recordWidth,
+      recordStride: parent.recordStride,
+      semanticConflict: column.semanticConflict,
+      conflictCode: column.conflictCode,
+      conflictMessage: column.conflictMessage,
+      dictionaryVersion: column.dictionaryVersion,
+      standardMatchStatus: column.standardMatchStatus,
+      requiresStandardConfirmation: column.requiresStandardConfirmation,
+      standardFieldId: column.standardFieldId,
+      standardFieldVersion: column.standardFieldVersion,
+      standardFieldName: column.standardFieldName,
+      fieldOrigin: column.fieldOrigin,
+      standardSelectionStatus: column.standardSelectionStatus,
+      uiType: column.uiType,
+      condition: column.condition,
+      labelRange: column.labelRange,
+      valueRange: column.valueRange,
+      dataStartRow: column.dataStartRow,
+      locator,
+      ...(candidate
+        ? {
+            candidate: true,
+            candidateLocatorType: 'CELL_RANGE',
+            candidateLocator: locator,
+          }
+        : {}),
+    } satisfies BusinessField;
+  });
+}
+
+function normalizeRange(value?: string) {
+  return (typeof value === 'string' ? value : '').replaceAll('$', '').trim().toUpperCase();
+}
+
+function normalizeSuggestionDataPaths(
+  suggestion: RecognitionSuggestion,
+  fields: BusinessField[],
+): RecognitionSuggestion {
+  const occupied = new Set(fields.map((field) => field.dataPath).filter(Boolean) as string[]);
+  const payload = suggestion.payload;
+  const existing = fields.find((field) => fieldMatchesIdentity(field, {
+    bindingId: payload.bindingId,
+    relationId: payload.relationId,
+    fieldId: payload.fieldId,
+    recognitionItemId: suggestion.id,
+  }));
+  const identity = payload.bindingId || payload.relationId || payload.fieldId || suggestion.id;
+  const dataPath = existing?.dataPath || uniqueDataPath(payload.dataPath, identity, occupied);
+  occupied.add(dataPath);
+
+  const columns = payload.columns?.map((column) => {
+    const relationId = column.relationId
+      || `${payload.relationId || suggestion.id}|child|${column.code}|${normalizeRange(column.valueRange)}`;
+    const child = fields.find((field) => fieldMatchesIdentity(field, {
+      bindingId: column.bindingId,
+      relationId,
+      fieldId: column.fieldId,
+      recognitionItemId: suggestion.id,
+    }));
+    const childPath = child?.dataPath || uniqueDataPath(
+      column.dataPath || `${dataPath}/*/${column.code}`,
+      column.bindingId || relationId || column.fieldId || `${identity}|${column.code}`,
+      occupied,
+    );
+    occupied.add(childPath);
+    return childPath === column.dataPath ? column : { ...column, dataPath: childPath };
+  });
+
+  if (dataPath === payload.dataPath && columns?.every((column, index) => column === payload.columns?.[index])) {
+    return suggestion;
+  }
+  return {
+    ...suggestion,
+    payload: {
+      ...payload,
+      dataPath,
+      ...(columns ? { columns } : {}),
+    },
+  };
+}
+
+function uniqueDataPath(basePath: string, identity: string, occupied: Set<string>) {
+  const normalized = (typeof basePath === 'string' ? basePath.trim() : '')
+    || `/recognized/field/${stableTextId(identity)}`;
+  if (!occupied.has(normalized)) return normalized;
+  const suffix = `__${stableTextId(`${identity}|${normalized}`).slice(0, 8)}`;
+  let candidate = `${normalized}${suffix}`;
+  let sequence = 2;
+  while (occupied.has(candidate)) {
+    candidate = `${normalized}${suffix}_${sequence}`;
+    sequence += 1;
+  }
+  return candidate;
 }
 
 export function candidateBinding(field: BusinessField): TemplateBinding | undefined {
@@ -243,14 +537,24 @@ export function candidateBinding(field: BusinessField): TemplateBinding | undefi
     bindingId: `candidate-${field.recognitionItemId || field.id}`,
     fieldId: field.fieldId,
     relationId: field.relationId,
+    parentBindingId:
+      typeof field.locator?.parentBindingId === 'string'
+        ? field.locator.parentBindingId
+        : undefined,
     dataPath: field.dataPath,
     role: field.kind === 'SCALAR' ? 'FIELD' : 'REPEAT_REGION',
+    mappingKind: field.mappingKind,
+    repeatAxis: field.repeatAxis,
+    recordHeight: field.recordHeight,
+    recordWidth: field.recordWidth,
+    recordStride: field.recordStride,
+    termination: field.termination,
     locatorType: field.candidateLocatorType || 'CELL_RANGE',
     locator: structuredClone(field.candidateLocator),
     syncDirection: field.editability === 'READ_ONLY' ? 'EDITOR_TO_DATA' : 'TWO_WAY',
     primaryBinding: false,
-    bindingStatus: field.editability === 'UNKNOWN' || field.valueSource === 'UNKNOWN'
-      ? 'AMBIGUOUS' : 'VALID',
+    bindingStatus:
+      field.editability === 'UNKNOWN' || field.valueSource === 'UNKNOWN' ? 'AMBIGUOUS' : 'VALID',
     diagnostic: { source: 'RECOGNITION_CANDIDATE', recognitionItemId: field.recognitionItemId },
   };
 }
@@ -260,7 +564,12 @@ function syncDirection(
   valueSource: NonNullable<BusinessField['valueSource']>,
 ): TemplateBinding['syncDirection'] {
   if (editability === 'EDITABLE' || editability === 'CONDITIONAL') return 'TWO_WAY';
-  if (valueSource === 'FORMULA' || valueSource === 'STATIC' || valueSource === 'REFERENCE' || valueSource === 'MIXED') {
+  if (
+    valueSource === 'FORMULA' ||
+    valueSource === 'STATIC' ||
+    valueSource === 'REFERENCE' ||
+    valueSource === 'MIXED'
+  ) {
     return 'EDITOR_TO_DATA';
   }
   return 'EDITOR_TO_DATA';
@@ -273,7 +582,9 @@ export function updateBusinessField(
   update: Partial<BusinessField>,
 ) {
   const next = structuredClone(model);
-  next.fields = next.fields.map((field) => (field.id === fieldId ? { ...field, ...update } : field));
+  next.fields = next.fields.map((field) =>
+    field.id === fieldId ? { ...field, ...update } : field,
+  );
   const updatedField = next.fields.find((field) => field.id === fieldId);
   const nextSchema = updatedField ? updateFieldSchema(schema, updatedField) : schema;
   return { model: next, schema: writeFieldModel(nextSchema, next) };
@@ -287,10 +598,13 @@ export function removeBusinessField(
   const field = model.fields.find((item) => item.id === fieldId);
   const nextModel = {
     ...structuredClone(model),
-    fields: model.fields.filter((item) => item.id !== fieldId),
+    fields: model.fields.filter((item) => item.id !== fieldId && item.parentFieldId !== fieldId),
   };
   const nextSchema = structuredClone(schema);
-  if (field?.dataPath) removeSchemaAtPath(nextSchema, field.dataPath);
+  if (field?.dataPath) {
+    if (field.parentFieldId) removeArrayItemSchemaAtPath(nextSchema, field.dataPath);
+    else removeSchemaAtPath(nextSchema, field.dataPath);
+  }
   return { model: nextModel, schema: writeFieldModel(nextSchema, nextModel) };
 }
 
@@ -337,7 +651,13 @@ function schemaFor(suggestion: RecognitionSuggestion, kind: FieldKind) {
         properties: Object.fromEntries(
           (suggestion.payload.columns ?? []).map((column) => [
             column.code,
-            { type: normalizeType(column.valueType), title: column.name },
+            {
+              type: normalizeType(column.valueType),
+              title: column.name,
+              ...(column.fieldCode ? { 'x-field-code': column.fieldCode } : {}),
+              ...(column.dataPath ? { 'x-data-path': column.dataPath } : {}),
+              ...(column.unit ? { 'x-unit': column.unit } : {}),
+            },
           ]),
         ),
       },
@@ -363,6 +683,9 @@ function schemaFor(suggestion: RecognitionSuggestion, kind: FieldKind) {
 
 function updateFieldSchema(source: Record<string, unknown>, field: BusinessField) {
   if (!field.dataPath) return source;
+  if (field.parentFieldId && field.dataPath.includes('/*/')) {
+    return updateArrayItemSchema(source, field);
+  }
   const schema = structuredClone(source);
   const segments = pointerSegments(field.dataPath);
   let current: Record<string, unknown> = schema;
@@ -379,8 +702,9 @@ function updateFieldSchema(source: Record<string, unknown>, field: BusinessField
           ? { format: fieldFormat(field.valueType) }
           : {}),
         ...(field.unit ? { 'x-unit': field.unit } : {}),
+        ...(field.fieldCode ? { 'x-field-code': field.fieldCode } : {}),
       };
-      const required = Array.isArray(current.required) ? current.required as string[] : [];
+      const required = Array.isArray(current.required) ? (current.required as string[]) : [];
       current.required = field.required
         ? [...new Set([...required, segment])]
         : required.filter((item) => item !== segment);
@@ -396,6 +720,10 @@ function updateFieldSchema(source: Record<string, unknown>, field: BusinessField
 }
 
 function removeSchemaAtPath(schema: Record<string, unknown>, path: string) {
+  if (path.includes('/*/')) {
+    removeArrayItemSchemaAtPath(schema, path);
+    return;
+  }
   const segments = pointerSegments(path);
   let current: Record<string, unknown> = schema;
   segments.forEach((segment, index) => {
@@ -410,6 +738,49 @@ function removeSchemaAtPath(schema: Record<string, unknown>, path: string) {
     const child = current.properties[segment];
     if (isRecord(child)) current = child;
   });
+}
+
+function updateArrayItemSchema(source: Record<string, unknown>, field: BusinessField) {
+  const schema = structuredClone(source);
+  const [parentPath = '', childPath = ''] = field.dataPath!.split('/*/', 2);
+  if (!childPath) return schema;
+  const parentSchema = schemaAtPath(schema, parentPath);
+  if (!parentSchema) return schema;
+  const item = isRecord(parentSchema.items)
+    ? parentSchema.items
+    : { type: 'object', properties: {} };
+  parentSchema.items = item;
+  const properties = ensureRecord(item, 'properties');
+  properties[childPath] = {
+    ...(isRecord(properties[childPath]) ? properties[childPath] : {}),
+    type: normalizeType(field.valueType),
+    title: field.name,
+    ...(field.unit ? { 'x-unit': field.unit } : {}),
+    ...(field.fieldCode ? { 'x-field-code': field.fieldCode } : {}),
+    'x-data-path': field.dataPath,
+  };
+  return schema;
+}
+
+function removeArrayItemSchemaAtPath(schema: Record<string, unknown>, path: string) {
+  const [parentPath = '', childPath = ''] = path.split('/*/', 2);
+  if (!childPath) return;
+  const parentSchema = schemaAtPath(schema, parentPath);
+  if (!parentSchema || !isRecord(parentSchema.items) || !isRecord(parentSchema.items.properties))
+    return;
+  delete parentSchema.items.properties[childPath];
+}
+
+function schemaAtPath(schema: Record<string, unknown>, path: string) {
+  let current: Record<string, unknown> | undefined = schema;
+  for (const segment of pointerSegments(path)) {
+    const properties: Record<string, unknown> | undefined =
+      current && isRecord(current.properties) ? current.properties : undefined;
+    const next: unknown = properties?.[segment];
+    if (!isRecord(next)) return undefined;
+    current = next;
+  }
+  return current;
 }
 
 function suggestionKind(suggestion: RecognitionSuggestion): FieldKind {

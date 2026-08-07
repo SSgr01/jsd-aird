@@ -262,31 +262,48 @@ public class JdbcTemplateRepository implements TemplateRepository {
     public void replaceMappings(UUID versionId, TemplateFormat format, JsonNode mappings) {
         jdbcTemplate.update("DELETE FROM tpl.template_mapping WHERE template_version_id = ?", versionId);
         var arguments = new ArrayList<Object[]>();
-        mappings.forEach(binding -> arguments.add(new Object[]{
-                UUID.randomUUID(),
-                versionId,
-                binding.path("bindingId").asText(),
-                blankToNull(binding.path("markerId").asText()),
-                format.name(),
-                blankToNull(binding.path("fieldCode").asText()),
-                binding.path("dataPath").asText(),
-                binding.path("role").asText("FIELD"),
-                binding.path("locatorType").asText(),
-                pgJson(binding.path("locator")),
-                binding.path("syncDirection").asText("TWO_WAY"),
-                binding.path("primaryBinding").asBoolean(true),
-                binding.path("bindingStatus").asText("VALID"),
-                pgJson(binding.path("diagnostic").isMissingNode()
-                        ? objectMapper.createObjectNode()
-                        : binding.path("diagnostic"))
-        }));
+        mappings.forEach(binding -> {
+            var role = textOrDefault(binding.path("role"), "FIELD");
+            var mappingKind = textOrDefault(binding.path("mappingKind"),
+                    "REPEAT_REGION".equals(role) ? "REPEAT_REGION" : "SCALAR");
+            arguments.add(new Object[]{
+                    UUID.randomUUID(),
+                    versionId,
+                    binding.path("bindingId").asText(),
+                    uuidOrNull(nullableText(binding.path("fieldId"))),
+                    nullableText(binding.path("parentBindingId")),
+                    nullableText(binding.path("markerId")),
+                    format.name(),
+                    nullableText(binding.path("fieldCode")),
+                    binding.path("dataPath").asText(),
+                    role,
+                    mappingKind,
+                    normalizeRepeatAxis(mappingKind, nullableText(binding.path("repeatAxis"))),
+                    binding.path("recordHeight").asInt(1),
+                    binding.path("recordWidth").asInt(1),
+                    binding.path("recordStride").asInt(1),
+                    binding.path("locatorType").asText(),
+                    pgJson(binding.path("locator")),
+                    binding.path("syncDirection").asText("TWO_WAY"),
+                    binding.path("primaryBinding").asBoolean(true),
+                    binding.path("bindingStatus").asText("VALID"),
+                    pgJson(binding.path("diagnostic").isMissingNode()
+                            ? objectMapper.createObjectNode()
+                            : binding.path("diagnostic")),
+                    pgJson(binding.path("termination").isMissingNode()
+                            ? objectMapper.createObjectNode()
+                            : binding.path("termination"))
+            });
+        });
         if (!arguments.isEmpty()) {
             jdbcTemplate.batchUpdate("""
                     INSERT INTO tpl.template_mapping (
-                        id, template_version_id, binding_id, marker_id, format, field_code,
-                        data_path, binding_role, locator_type, locator_jsonb, sync_direction,
-                        primary_binding, binding_status, diagnostic_jsonb, last_validated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())
+                        id, template_version_id, binding_id, field_id, parent_binding_id, marker_id,
+                        format, field_code, data_path, binding_role, mapping_kind, repeat_axis,
+                        record_height, record_width, record_stride, locator_type, locator_jsonb,
+                        sync_direction, primary_binding, binding_status, diagnostic_jsonb,
+                        termination_jsonb, last_validated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())
                     """, arguments);
         }
     }
@@ -330,13 +347,17 @@ public class JdbcTemplateRepository implements TemplateRepository {
     public void copyMappings(UUID sourceVersionId, UUID targetVersionId) {
         jdbcTemplate.update("""
                 INSERT INTO tpl.template_mapping (
-                    id, template_version_id, binding_id, marker_id, format, field_code,
-                    data_path, binding_role, locator_type, locator_jsonb, sync_direction,
-                    primary_binding, binding_status, diagnostic_jsonb, last_validated_at
+                    id, template_version_id, binding_id, field_id, parent_binding_id, marker_id,
+                    format, field_code, data_path, binding_role, mapping_kind, repeat_axis,
+                    record_height, record_width, record_stride, locator_type, locator_jsonb,
+                    sync_direction, primary_binding, binding_status, diagnostic_jsonb,
+                    termination_jsonb, last_validated_at
                 )
-                SELECT gen_random_uuid(), ?, binding_id, marker_id, format, field_code,
-                       data_path, binding_role, locator_type, locator_jsonb, sync_direction,
-                       primary_binding, binding_status, diagnostic_jsonb, now()
+                SELECT gen_random_uuid(), ?, binding_id, field_id, parent_binding_id, marker_id,
+                       format, field_code, data_path, binding_role, mapping_kind, repeat_axis,
+                       record_height, record_width, record_stride, locator_type, locator_jsonb,
+                       sync_direction, primary_binding, binding_status, diagnostic_jsonb,
+                       termination_jsonb, now()
                 FROM tpl.template_mapping WHERE template_version_id = ?
                 """, targetVersionId, sourceVersionId);
     }
@@ -399,6 +420,15 @@ public class JdbcTemplateRepository implements TemplateRepository {
                     """, templateId, organizationId);
         }
         return retired;
+    }
+
+    @Override
+    public int clearCategory(UUID organizationId, String category) {
+        return jdbcTemplate.update("""
+                UPDATE tpl.template
+                SET category = NULL, updated_at = now()
+                WHERE organization_id = ? AND category = ?
+                """, organizationId, category);
     }
 
     @Override
@@ -519,9 +549,10 @@ public class JdbcTemplateRepository implements TemplateRepository {
     private ArrayNode loadMappings(UUID versionId) {
         var result = objectMapper.createArrayNode();
         jdbcTemplate.query("""
-                        SELECT binding_id, marker_id, field_code, data_path, binding_role,
-                               locator_type, locator_jsonb, sync_direction, primary_binding,
-                               binding_status, diagnostic_jsonb
+                        SELECT binding_id, field_id, parent_binding_id, marker_id, field_code, data_path,
+                               binding_role, mapping_kind, repeat_axis, record_height, record_width,
+                               record_stride, locator_type, locator_jsonb, sync_direction, primary_binding,
+                               binding_status, diagnostic_jsonb, termination_jsonb
                         FROM tpl.template_mapping
                         WHERE template_version_id = ?
                         ORDER BY data_path, binding_id
@@ -529,16 +560,25 @@ public class JdbcTemplateRepository implements TemplateRepository {
                 rs -> {
                     var binding = objectMapper.createObjectNode();
                     binding.put("bindingId", rs.getString("binding_id"));
+                    var fieldId = rs.getObject("field_id", UUID.class);
+                    if (fieldId != null) binding.put("fieldId", fieldId.toString());
+                    binding.put("parentBindingId", rs.getString("parent_binding_id"));
                     binding.put("markerId", rs.getString("marker_id"));
                     binding.put("fieldCode", rs.getString("field_code"));
                     binding.put("dataPath", rs.getString("data_path"));
                     binding.put("role", rs.getString("binding_role"));
+                    binding.put("mappingKind", rs.getString("mapping_kind"));
+                    binding.put("repeatAxis", rs.getString("repeat_axis"));
+                    binding.put("recordHeight", rs.getInt("record_height"));
+                    binding.put("recordWidth", rs.getInt("record_width"));
+                    binding.put("recordStride", rs.getInt("record_stride"));
                     binding.put("locatorType", rs.getString("locator_type"));
                     binding.set("locator", parseJson(rs.getString("locator_jsonb")));
                     binding.put("syncDirection", rs.getString("sync_direction"));
                     binding.put("primaryBinding", rs.getBoolean("primary_binding"));
                     binding.put("bindingStatus", rs.getString("binding_status"));
                     binding.set("diagnostic", parseJson(rs.getString("diagnostic_jsonb")));
+                    binding.set("termination", parseJson(rs.getString("termination_jsonb")));
                     result.add(binding);
                 },
                 versionId
@@ -560,6 +600,8 @@ public class JdbcTemplateRepository implements TemplateRepository {
                 parseJson(rs.getString("schema_jsonb")),
                 mapping,
                 objectMapper.createObjectNode(),
+                layoutSummary.path("documentStructure"),
+                layoutSummary.path("wordDocument"),
                 layoutSummary.path("initialSnapshot"),
                 rs.getObject("editor_snapshot_file_id", UUID.class),
                 rs.getString("editor_snapshot_hash"),
@@ -597,5 +639,57 @@ public class JdbcTemplateRepository implements TemplateRepository {
 
     private String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    @Override
+    public int updatePublishedWordDocument(UUID organizationId, UUID versionId, JsonNode wordDocument) {
+        return jdbcTemplate.update(connection -> {
+            var statement = connection.prepareStatement("""
+                    UPDATE tpl.template_version tv
+                    SET layout_summary_jsonb = jsonb_set(
+                            COALESCE(tv.layout_summary_jsonb, '{}'::jsonb),
+                            '{wordDocument}', ?::jsonb, true),
+                        updated_at = now()
+                    FROM tpl.template t
+                    WHERE tv.id = ?
+                      AND tv.template_id = t.id
+                      AND t.organization_id = ?
+                      AND tv.status = 'DRAFT'
+                    """);
+            statement.setString(1, wordDocument.toString());
+            statement.setObject(2, versionId);
+            statement.setObject(3, organizationId);
+            return statement;
+        });
+    }
+
+    private String nullableText(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) return null;
+        var value = blankToNull(node.asText());
+        return "null".equalsIgnoreCase(value) ? null : value;
+    }
+
+    private String textOrDefault(JsonNode node, String defaultValue) {
+        var value = nullableText(node);
+        return value == null ? defaultValue : value;
+    }
+
+    private String normalizeRepeatAxis(String mappingKind, String repeatAxis) {
+        var repeating = "REPEAT_REGION".equals(mappingKind) || "REPEAT_FIELD".equals(mappingKind)
+                || "MATRIX_REGION".equals(mappingKind) || "MATRIX_FIELD".equals(mappingKind);
+        if (repeatAxis == null) return repeating ? "ROW" : null;
+        if (!"ROW".equals(repeatAxis) && !"COLUMN".equals(repeatAxis)) {
+            throw new IllegalArgumentException(
+                    "Mapping repeatAxis 只能是 ROW 或 COLUMN，当前值: " + repeatAxis);
+        }
+        return repeatAxis;
+    }
+
+    private UUID uuidOrNull(String value) {
+        try {
+            return value == null || value.isBlank() ? null : UUID.fromString(value);
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
     }
 }

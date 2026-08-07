@@ -62,15 +62,23 @@ class XlsxStructureParserTest {
         });
         assertThat(sheet.path("rowData").path("0").path("h").asInt()).isEqualTo(48);
         assertThat(sheet.path("columnData").path("0").path("w").asInt()).isGreaterThan(100);
-        assertThat(sheet.path("cellData").path("0").path("0").path("s").path("bl").asInt())
+        var styleId = sheet.path("cellData").path("0").path("0").path("s").asText();
+        assertThat(styleId).isNotBlank();
+        assertThat(result.initialEditorSnapshot().path("styles").path(styleId).path("bl").asInt())
                 .isEqualTo(1);
+        assertThat(result.initialEditorSnapshot().path("styles").path(styleId).path("bd")
+                .path("b").path("s").asInt()).isEqualTo(1);
+        assertThat(result.structureSummary().path("candidateCells").get(0).path("hasBorder").asBoolean())
+                .isTrue();
         var reparsed = new UniverSnapshotStructureParser(objectMapper).parse(new ByteArrayInputStream(
                 objectMapper.writeValueAsBytes(result.initialEditorSnapshot())
         ));
-        assertThat(reparsed.structureSummary().path("semanticCells"))
-                .isEqualTo(result.structureSummary().path("semanticCells"));
+        assertThat(reparsed.structureSummary().path("sheets").get(0).path("semanticCells"))
+                .isEqualTo(result.structureSummary().path("sheets").get(0).path("semanticCells"));
         assertThat(reparsed.structureSummary().path("layoutSpans"))
                 .isEqualTo(result.structureSummary().path("layoutSpans"));
+        assertThat(reparsed.structureSummary().path("candidateCells").get(0).path("hasBorder").asBoolean())
+                .isTrue();
     }
 
     @Test
@@ -85,7 +93,7 @@ class XlsxStructureParserTest {
             var sheet = result.initialEditorSnapshot().path("sheets").path("sheet-1");
             assertThat(summary.path("sheets").get(0).path("usedRange").asText()).isEqualTo("A1:J37");
             assertThat(summary.path("mergedRegionCount").asInt()).isEqualTo(21);
-            assertThat(summary.path("semanticCells")).isNotEmpty();
+            assertThat(summary.path("sheets").get(0).path("semanticCells")).isNotEmpty();
             assertThat(summary.path("layoutSpans")).isNotEmpty();
             assertThat(summary.path("sheets").get(0).path("candidateCellsTruncated").asBoolean()).isFalse();
             assertThat(sheet.path("mergeData")).hasSize(21);
@@ -94,8 +102,29 @@ class XlsxStructureParserTest {
             var reparsed = new UniverSnapshotStructureParser(objectMapper).parse(new ByteArrayInputStream(
                     objectMapper.writeValueAsBytes(result.initialEditorSnapshot())
             ));
-            assertThat(reparsed.structureSummary().path("semanticCells"))
-                    .isEqualTo(summary.path("semanticCells"));
+            assertThat(reparsed.structureSummary().path("sheets").get(0).path("semanticCells"))
+                    .isEqualTo(summary.path("sheets").get(0).path("semanticCells"));
+        }
+    }
+
+    @Test
+    void preservesBordersFromTheOptimizedWorkbookWhenItIsAvailable() throws Exception {
+        var source = Path.of(
+                "C:/Users/Administrator/Downloads/干净模板表_整理完成/原表优化后/光引发剂对比测试模板.xlsx"
+        );
+        Assumptions.assumeTrue(Files.exists(source));
+        try (var input = Files.newInputStream(source)) {
+            var result = parser.parse(input);
+            var snapshot = result.initialEditorSnapshot();
+            var styledCells = result.structureSummary().path("candidateCells").findValues("hasBorder");
+            assertThat(styledCells).isNotEmpty();
+            assertThat(styledCells).anyMatch(node -> node.asBoolean());
+            assertThat(snapshot.toString()).contains("\"bd\"");
+            var reparsed = new UniverSnapshotStructureParser(objectMapper).parse(new ByteArrayInputStream(
+                    objectMapper.writeValueAsBytes(snapshot)
+            ));
+            assertThat(reparsed.structureSummary().path("candidateCells").findValues("hasBorder"))
+                    .anyMatch(node -> node.asBoolean());
         }
     }
 
@@ -141,7 +170,7 @@ class XlsxStructureParserTest {
                 assertThat(hint.path("hintType").asText()).isEqualTo("HIDDEN_SHEET");
             });
             assertThat(summary.path("regions")).isEmpty();
-            assertThat(summary.path("semanticCells")).isNotEmpty();
+            assertThat(summary.path("sheets").get(0).path("semanticCells")).isNotEmpty();
             assertThat(summary.path("layoutSpans")).isNotEmpty();
         }
     }

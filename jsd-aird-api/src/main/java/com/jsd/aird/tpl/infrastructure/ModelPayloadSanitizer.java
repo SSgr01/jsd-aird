@@ -20,6 +20,7 @@ final class ModelPayloadSanitizer {
     private static final Pattern EMAIL = Pattern.compile("(?i)[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}");
     private static final Pattern PHONE = Pattern.compile("(?<!\\d)1[3-9]\\d{9}(?!\\d)");
     private static final Pattern ID_CARD = Pattern.compile("(?<!\\d)\\d{17}[0-9Xx](?!\\d)");
+    private static final Pattern IMAGE_DATA_URI = Pattern.compile("(?i)data:[^;,\\s]+;base64,[A-Za-z0-9+/=]+(?:[^\\s\"']*)?");
 
     private final ObjectMapper objectMapper;
 
@@ -28,20 +29,32 @@ final class ModelPayloadSanitizer {
     }
 
     JsonNode sanitize(JsonNode source) {
+        return sanitize(source, false);
+    }
+
+    JsonNode sanitizeForModel(JsonNode source) {
+        return sanitize(source, true);
+    }
+
+    private JsonNode sanitize(JsonNode source, boolean preserveVisualData) {
         if (source == null || source.isNull()) return objectMapper.nullNode();
         if (source.isObject()) {
             var result = objectMapper.createObjectNode();
             source.fields().forEachRemaining(entry -> {
                 var key = entry.getKey();
-                result.set(key, SECRET_KEYS.contains(key.toLowerCase(Locale.ROOT))
+                result.set(key, "dataUri".equals(key) && preserveVisualData
+                        ? entry.getValue().deepCopy()
+                        : "dataUri".equals(key)
+                        ? objectMapper.getNodeFactory().textNode("[REDACTED_IMAGE_DATA]")
+                        : SECRET_KEYS.contains(key.toLowerCase(Locale.ROOT))
                         ? objectMapper.getNodeFactory().textNode("[REDACTED_SECRET]")
-                        : sanitize(entry.getValue()));
+                        : sanitize(entry.getValue(), preserveVisualData));
             });
             return result;
         }
         if (source.isArray()) {
             var result = objectMapper.createArrayNode();
-            source.forEach(item -> result.add(sanitize(item)));
+            source.forEach(item -> result.add(sanitize(item, preserveVisualData)));
             return result;
         }
         if (!source.isTextual()) return source.deepCopy();
@@ -50,6 +63,9 @@ final class ModelPayloadSanitizer {
         value = EMAIL.matcher(value).replaceAll("[REDACTED_EMAIL]");
         value = PHONE.matcher(value).replaceAll("[REDACTED_PHONE]");
         value = ID_CARD.matcher(value).replaceAll("[REDACTED_ID]");
+        if (!preserveVisualData) {
+            value = IMAGE_DATA_URI.matcher(value).replaceAll("[REDACTED_IMAGE_DATA]");
+        }
         return objectMapper.getNodeFactory().textNode(value);
     }
 }

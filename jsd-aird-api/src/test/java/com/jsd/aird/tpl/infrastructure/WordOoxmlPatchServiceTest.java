@@ -126,19 +126,22 @@ class WordOoxmlPatchServiceTest {
     }
 
     @Test
-    void appliesTheLimitedUniverDocumentSnapshotToNativeParagraphs() throws Exception {
+    void rebuildsTheNativeDocumentFromTheUniverDocumentSnapshot() throws Exception {
         var snapshot = objectMapper.readTree("""
                 {
+                  "id": "doc-1",
+                  "snapshotFormatVersion": 5,
+                  "editorMode": "UNIVER_DOCS",
+                  "documentStyle": {"pageSize": {"width": 595, "height": 842}, "marginTop": 72,
+                    "marginRight": 72, "marginBottom": 72, "marginLeft": 72},
                   "body": {
                     "dataStream": "标题修改\\r正文\\r\\n",
-                    "sourceParagraphs": [
-                      {"paragraphIndex": 1, "text": "标题"},
-                      {"paragraphIndex": 2, "text": "正文"}
-                    ],
                     "paragraphs": [
-                      {"paragraphIndex": 1, "startIndex": 0,
+                      {"startIndex": 0,
                        "paragraphStyle": {"horizontalAlign": 2}}
-                    ]
+                    ],
+                    "textRuns": [],
+                    "customRanges": []
                   }
                 }
                 """);
@@ -152,6 +155,39 @@ class WordOoxmlPatchServiceTest {
                 """), snapshot);
         var xml = documentXml(patched);
         assertThat(xml).contains("标题修改", "w:val=\"center\"");
+    }
+
+    @Test
+    void exportsSnapshotTableCellBordersAsSolidWordBorders() throws Exception {
+        var border = objectMapper.createObjectNode()
+                .put("dashStyle", 1);
+        border.set("width", objectMapper.createObjectNode().put("v", 1));
+        border.set("color", objectMapper.createObjectNode().put("rgb", "#000000"));
+        var cell = objectMapper.createObjectNode();
+        cell.set("borderTop", border);
+        cell.set("borderRight", border);
+        cell.set("borderBottom", border);
+        cell.set("borderLeft", border);
+        var snapshot = objectMapper.createObjectNode().put("snapshotFormatVersion", 5);
+        snapshot.putObject("documentStyle").putObject("pageSize").put("width", 595).put("height", 842);
+        var body = snapshot.putObject("body");
+        body.put("dataStream", "\u001A\u001B\u001C表格\u001D\u000E\u000F\r\n")
+                .putArray("tables").addObject().put("startIndex", 0).put("endIndex", 8).put("tableId", "table-1");
+        body.putArray("paragraphs");
+        body.putArray("textRuns");
+        var table = snapshot.putObject("tableSource").putObject("table-1");
+        table.putArray("tableColumns").addObject().putObject("size").putObject("width").put("v", 72);
+        table.putArray("tableRows").addObject().putArray("tableCells").add(cell);
+
+        var patched = service.applySnapshot(docx("""
+                <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                  <w:body><w:p><w:r><w:t>原始内容</w:t></w:r></w:p></w:body>
+                </w:document>
+                """), snapshot);
+        var xml = documentXml(patched);
+
+        assertThat(xml).contains("w:tcBorders", "w:val=\"single\"", "w:sz=\"8\"");
+        assertThat(xml).doesNotContain("w:val=\"dotted\"", "w:val=\"dashed\"");
     }
 
     private byte[] docx(String documentXml) throws Exception {

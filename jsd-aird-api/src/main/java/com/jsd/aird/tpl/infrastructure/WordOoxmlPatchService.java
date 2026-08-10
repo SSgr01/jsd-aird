@@ -31,6 +31,7 @@ import javax.xml.transform.stream.StreamResult;
 @Component
 public class WordOoxmlPatchService implements WordOoxmlPatcher {
     private static final String W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    private final WordDocumentSnapshotExporter snapshotExporter = new WordDocumentSnapshotExporter();
 
     public byte[] apply(byte[] source, ArrayNode operations) {
         if (operations == null || operations.isEmpty()) return source;
@@ -70,62 +71,9 @@ public class WordOoxmlPatchService implements WordOoxmlPatcher {
         }
     }
 
-    /**
-     * Applies the limited text/paragraph projection produced by Univer Docs
-     * back to the native OOXML.  The source paragraph list is intentionally
-     * stored in the imported snapshot so a changed paragraph is still
-     * optimistic-lock checked against the exact DOCX that was opened.
-     */
     @Override
     public byte[] applySnapshot(byte[] source, JsonNode snapshot) {
-        var body = snapshot == null ? null : snapshot.path("body");
-        var sourceParagraphs = body == null ? null : body.path("sourceParagraphs");
-        if (body == null || !body.isObject() || !sourceParagraphs.isArray()) return source;
-        var stream = body.path("dataStream").asText("");
-        if (stream.endsWith("\r\n")) stream = stream.substring(0, stream.length() - 2);
-        var currentParagraphs = stream.split("\\r", -1);
-        var baselineParagraphs = new ArrayList<JsonNode>();
-        for (var paragraph : sourceParagraphs) {
-            if (!paragraph.path("text").asText("").isBlank()) baselineParagraphs.add(paragraph);
-        }
-        var paragraphProjection = currentParagraphs.length == sourceParagraphs.size()
-                ? sourceParagraphs
-                : currentParagraphs.length == baselineParagraphs.size()
-                    ? objectMapperArray(baselineParagraphs)
-                    : null;
-        if (paragraphProjection == null) {
-            throw new ApiException(ApiErrorCode.BAD_REQUEST,
-                    "当前 Word 编辑包含段落结构变化，暂不支持自动回写；请先保存为原生 Word 文件后重新导入");
-        }
-        var operations = JsonNodeFactory.instance.arrayNode();
-        for (var index = 0; index < currentParagraphs.length; index++) {
-            var sourceParagraph = paragraphProjection.get(index);
-            var baseText = sourceParagraph.path("text").asText("");
-            var currentText = currentParagraphs[index];
-            if (!baseText.equals(currentText)) {
-                operations.add(JsonNodeFactory.instance.objectNode()
-                        .put("type", "REPLACE_TEXT")
-                        .put("targetId", "paragraph-" + sourceParagraph.path("paragraphIndex").asInt(index + 1))
-                        .put("baseText", baseText)
-                        .put("text", currentText));
-            }
-        }
-        for (var paragraph : body.path("paragraphs")) {
-            var paragraphIndex = paragraph.path("paragraphIndex").asInt(0);
-            var style = paragraph.path("paragraphStyle");
-            if (paragraphIndex <= 0 || !style.isObject() || !style.has("horizontalAlign")) continue;
-            var alignment = switch (style.path("horizontalAlign").asInt(1)) {
-                case 2 -> "center";
-                case 3 -> "right";
-                case 4 -> "both";
-                default -> "left";
-            };
-            operations.add(JsonNodeFactory.instance.objectNode()
-                    .put("type", "SET_PARAGRAPH_ALIGNMENT")
-                    .put("targetId", "paragraph-" + paragraphIndex)
-                    .put("alignment", alignment));
-        }
-        return apply(source, operations);
+        return snapshotExporter.export(source, snapshot);
     }
 
     private ArrayNode objectMapperArray(List<JsonNode> nodes) {

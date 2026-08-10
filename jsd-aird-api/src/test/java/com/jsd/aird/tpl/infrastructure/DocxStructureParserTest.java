@@ -4,6 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.Map;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.tpl.domain.TemplateFormat;
@@ -40,5 +44,56 @@ class DocxStructureParserTest {
                 .allMatch(node -> node.has("nodeId") && node.has("sourceLocator"));
         assertThat(result.issues()).isEmpty();
         assertThat(parser.format()).isEqualTo(TemplateFormat.DOCX);
+    }
+
+    @Test
+    void recognizesCustomOutlineStylesAndGenericTableSectionHeadings() throws Exception {
+        var source = minimalDocx(
+                """
+                <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                  <w:body>
+                    <w:p>
+                      <w:pPr><w:pStyle w:val="customSection"/></w:pPr>
+                      <w:r><w:t>Overview of the experiment</w:t></w:r>
+                    </w:p>
+                    <w:tbl>
+                      <w:tblPr><w:tblBorders><w:top w:val="single"/><w:left w:val="single"/><w:bottom w:val="single"/><w:right w:val="single"/></w:tblBorders></w:tblPr>
+                      <w:tblGrid><w:gridCol w:w="9000"/></w:tblGrid>
+                      <w:tr><w:tc><w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Experimental design</w:t></w:r></w:p></w:tc></w:tr>
+                    </w:tbl>
+                    <w:sectPr/>
+                  </w:body>
+                </w:document>
+                """,
+                """
+                <w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                  <w:style w:type="paragraph" w:styleId="customSection">
+                    <w:name w:val="Section Level 2"/>
+                    <w:pPr><w:outlineLvl w:val="1"/></w:pPr>
+                  </w:style>
+                </w:styles>
+                """
+        );
+
+        var nodes = parser.parse(new ByteArrayInputStream(source))
+                .structureSummary().path("documentIR").path("nodes");
+
+        assertThat(nodes).anyMatch(node -> "HEADING".equals(node.path("type").asText())
+                && "Overview of the experiment".equals(node.path("text").asText())
+                && node.path("level").asInt() == 2);
+        assertThat(nodes).anyMatch(node -> "HEADING".equals(node.path("type").asText())
+                && "Experimental design".equals(node.path("text").asText()));
+    }
+
+    private byte[] minimalDocx(String documentXml, String stylesXml) throws Exception {
+        try (var output = new ByteArrayOutputStream(); var zip = new ZipOutputStream(output)) {
+            for (var part : Map.of("word/document.xml", documentXml, "word/styles.xml", stylesXml).entrySet()) {
+                zip.putNextEntry(new ZipEntry(part.getKey()));
+                zip.write(part.getValue().getBytes(StandardCharsets.UTF_8));
+                zip.closeEntry();
+            }
+            zip.finish();
+            return output.toByteArray();
+        }
     }
 }

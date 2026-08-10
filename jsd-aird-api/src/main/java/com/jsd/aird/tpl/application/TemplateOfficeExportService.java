@@ -13,6 +13,7 @@ import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.office.SnapshotWorkbookExporter;
 import com.jsd.aird.shared.security.ActorContext;
 import com.jsd.aird.tpl.application.port.TemplateRepository;
+import com.jsd.aird.tpl.application.port.WordOoxmlPatcher;
 import com.jsd.aird.tpl.domain.TemplateFormat;
 import com.jsd.aird.tpl.domain.TemplateStatus;
 import org.springframework.stereotype.Service;
@@ -24,19 +25,22 @@ public class TemplateOfficeExportService {
     private final ObjectStorage storage;
     private final ObjectMapper objectMapper;
     private final SnapshotWorkbookExporter workbookExporter;
+    private final WordOoxmlPatcher wordOoxmlPatcher;
 
     public TemplateOfficeExportService(
             TemplateRepository repository,
             FileObjectRepository files,
             ObjectStorage storage,
             ObjectMapper objectMapper,
-            SnapshotWorkbookExporter workbookExporter
+            SnapshotWorkbookExporter workbookExporter,
+            WordOoxmlPatcher wordOoxmlPatcher
     ) {
         this.repository = repository;
         this.files = files;
         this.storage = storage;
         this.objectMapper = objectMapper;
         this.workbookExporter = workbookExporter;
+        this.wordOoxmlPatcher = wordOoxmlPatcher;
     }
 
     public Check check(UUID versionId, String format, String state) {
@@ -60,7 +64,10 @@ public class TemplateOfficeExportService {
         var wordId = workspace.wordDocument().path("PUBLISHED".equalsIgnoreCase(state) ? "publishedDocxFileId" : "workingDocxFileId")
                 .asText(workspace.wordDocument().path("sourceDocxFileId").asText(""));
         if (wordId.isBlank()) throw new ApiException(ApiErrorCode.NOT_FOUND, "Word 原生文档不存在");
-        return new Download(fileName(workspace, "docx", state), contentType("DOCX"), readBytes(UUID.fromString(wordId)), warnings);
+        var source = readBytes(UUID.fromString(wordId));
+        var snapshot = readSnapshot(workspace);
+        var exported = wordOoxmlPatcher.applySnapshot(source, snapshot);
+        return new Download(fileName(workspace, "docx", state), contentType("DOCX"), exported, warnings);
     }
 
     private TemplateRepository.TemplateWorkspace workspace(UUID versionId, String state) {

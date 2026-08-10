@@ -1,11 +1,16 @@
 import {
   createUniver,
+  DocumentFlavor,
   LocaleType,
   mergeLocales,
   type FUniver,
   type IDocumentData,
 } from '@univerjs/presets';
-import { UniverDocsCorePreset } from '@univerjs/preset-docs-core';
+import {
+  DocBackScrollRenderController,
+  IRenderManagerService,
+  UniverDocsCorePreset,
+} from '@univerjs/preset-docs-core';
 import UniverPresetDocsCoreZhCN from '@univerjs/preset-docs-core/locales/zh-CN';
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 
@@ -48,54 +53,139 @@ export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverD
     container.replaceChildren(host);
     let cancelled = false;
     let animationFrame = 0;
+    let initialSelectionTimer = 0;
+    let initialized = false;
     let commandSubscription: { dispose(): void } | undefined;
     let ownedUniver: ReturnType<typeof createUniver>['univer'] | undefined;
     let ownedApi: FUniver | undefined;
+    const preventReadOnlyInput = (event: Event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    const preventReadOnlyKey = (event: KeyboardEvent) => {
+      const printable = !event.ctrlKey && !event.metaKey && !event.altKey && event.key.length === 1;
+      const editingKey = printable || event.key === 'Backspace' || event.key === 'Delete' || event.key === 'Enter';
+      const pasteOrCut = (event.ctrlKey || event.metaKey) && ['v', 'x'].includes(event.key.toLowerCase());
+      if (editingKey || pasteOrCut) preventReadOnlyInput(event);
+    };
+    if (!editable) {
+      host.addEventListener('beforeinput', preventReadOnlyInput, true);
+      host.addEventListener('paste', preventReadOnlyInput, true);
+      host.addEventListener('drop', preventReadOnlyInput, true);
+      host.addEventListener('keydown', preventReadOnlyKey, true);
+    }
 
     const initialize = () => {
-      if (cancelled) return;
+      if (cancelled || initialized) return;
       const { width, height } = container.getBoundingClientRect();
       if (width < 320 || height < 240) {
-        animationFrame = window.requestAnimationFrame(initialize);
+        if (!animationFrame) animationFrame = window.requestAnimationFrame(() => {
+          animationFrame = 0;
+          initialize();
+        });
         return;
       }
-      const { univer, univerAPI } = createUniver({
-        locale: LocaleType.ZH_CN,
-        locales: {
-          [LocaleType.ZH_CN]: mergeLocales(UniverPresetDocsCoreZhCN),
-        },
-        presets: [
-          UniverDocsCorePreset({
-            container: host,
-            // Docs Core already supplies the common formatting operations needed by
-            // template authors: font family/size, bold/italic/underline, text and
-            // highlight colour, paragraph alignment, lists and tables.
-            toolbar: editable,
-            ribbonType: editable ? 'classic' : 'collapsed',
-            header: true,
-            footer: true,
-          }),
-        ],
-      });
-      ownedUniver = univer;
-      ownedApi = univerAPI;
-      univerRef.current = univer;
-      apiRef.current = univerAPI;
-      univerAPI.createUniverDoc(normalizeDocumentSnapshot(snapshot));
-      commandSubscription = univerAPI.onCommandExecuted(() => {
-        callbacksRef.current.onDirty();
-        for (const binding of bindingsRef.current) {
-          if (binding.syncDirection === 'DATA_TO_EDITOR') continue;
-          callbacksRef.current.onEditorValue(binding, readMarkerValue(univerAPI, binding));
+      try {
+        const { univer, univerAPI } = createUniver({
+          locale: LocaleType.ZH_CN,
+          locales: {
+            [LocaleType.ZH_CN]: mergeLocales(UniverPresetDocsCoreZhCN),
+          },
+          presets: [
+            UniverDocsCorePreset({
+              container: host,
+              // Docs Core already supplies the common formatting operations needed by
+              // template authors: font family/size, bold/italic/underline, text and
+              // highlight colour, paragraph alignment, lists and tables.
+              toolbar: editable,
+              ribbonType: editable ? 'classic' : 'collapsed',
+              header: true,
+              footer: true,
+            }),
+          ],
+        });
+        ownedUniver = univer;
+        ownedApi = univerAPI;
+        univerRef.current = univer;
+        apiRef.current = univerAPI;
+        const document = univerAPI.createUniverDoc(normalizeDocumentSnapshot(snapshot));
+        // Docs disables paragraph commands until it has an active text range.
+        // Put the editable surface at a valid caret position so alignment and
+        // other paragraph commands work immediately after the document opens.
+        // The first call can happen before the document skeleton has rendered,
+        // so repeat it after the first layout pass.
+        if (editable) {
+          const body = snapshot.body && typeof snapshot.body === 'object'
+            ? snapshot.body as { dataStream?: unknown }
+            : undefined;
+          const dataStream = typeof body?.dataStream === 'string' ? body.dataStream : '';
+          const initialOffset = Math.max(0, dataStream.length - 2);
+          const focusDocument = () => {
+            document.setSelection(initialOffset, initialOffset);
+            // The Docs toolbar derives its enabled state from the canvas text
+            // selection event. Re-emit the same first-page click that a user
+            // would make, because setting a facade range alone does not refresh
+            // that toolbar state in the current Univer release.
+            const canvas = host.querySelector('canvas');
+            if (!canvas) return;
+            const rect = canvas.getBoundingClientRect();
+            const clientX = rect.left + Math.min(250, Math.max(24, rect.width / 2));
+            const clientY = rect.top + Math.min(180, Math.max(24, rect.height / 2));
+            for (const [type, buttons] of [
+              ['pointerdown', 1],
+              ['mousedown', 1],
+              ['pointerup', 0],
+              ['mouseup', 0],
+              ['click', 0],
+            ] as const) {
+              canvas.dispatchEvent(new MouseEvent(type, {
+                bubbles: true,
+                button: 0,
+                buttons,
+                clientX,
+                clientY,
+              }));
+            }
+          };
+          focusDocument();
+          initialSelectionTimer = window.setTimeout(() => {
+            focusDocument();
+          }, 800);
         }
-      });
+        initialized = true;
+        commandSubscription = univerAPI.onCommandExecuted((commandInfo) => {
+          // Selection/focus/zoom operations are not document edits. Only the
+          // Docs text mutation should mark the workspace dirty; otherwise the
+          // initial caret activation looks like an unsaved content change.
+          if (commandInfo.id !== 'doc.mutation.rich-text-editing') return;
+          callbacksRef.current.onDirty();
+          for (const binding of bindingsRef.current) {
+            if (binding.syncDirection === 'DATA_TO_EDITOR') continue;
+            callbacksRef.current.onEditorValue(binding, readMarkerValue(univerAPI, binding));
+          }
+        });
+      } catch (error) {
+        host.textContent = 'Word 文档编辑器初始化失败，请刷新后重试';
+        host.classList.add('univer-editor-error');
+        console.error('Univer Docs 初始化失败', error);
+      }
     };
-    animationFrame = window.requestAnimationFrame(initialize);
+    const resizeObserver = typeof ResizeObserver === 'undefined'
+      ? undefined
+      : new ResizeObserver(initialize);
+    resizeObserver?.observe(container);
+    initialize();
 
     return () => {
       cancelled = true;
       window.cancelAnimationFrame(animationFrame);
+      window.clearTimeout(initialSelectionTimer);
+      resizeObserver?.disconnect();
       commandSubscription?.dispose();
+      host.removeEventListener('beforeinput', preventReadOnlyInput, true);
+      host.removeEventListener('paste', preventReadOnlyInput, true);
+      host.removeEventListener('drop', preventReadOnlyInput, true);
+      host.removeEventListener('keydown', preventReadOnlyKey, true);
       if (apiRef.current === ownedApi) apiRef.current = undefined;
       if (univerRef.current === ownedUniver) univerRef.current = undefined;
       window.setTimeout(() => {
@@ -145,20 +235,31 @@ export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverD
         }
       },
       focusNode(node: DocumentStructureNode) {
-        const document = apiRef.current?.getActiveDocument();
-        if (!document) return;
-        const currentSnapshot = document.getSnapshot();
-        const locator = node.editorLocator;
-        let start = locator?.startOffset;
-        let end = locator?.endOffset;
-        if (!Number.isFinite(start) || !Number.isFinite(end)) {
-          const text = node.text || node.title || '';
-          const found = text ? currentSnapshot.body?.dataStream?.indexOf(text) ?? -1 : -1;
-          if (found < 0) return;
-          start = found;
-          end = found + text.length - 1;
-        }
-        document.setSelection(start as number, (end as number) + 1);
+        const selectNode = () => {
+          const document = apiRef.current?.getActiveDocument();
+          if (!document) return;
+          const currentSnapshot = document.getSnapshot();
+          const locator = node.editorLocator;
+          let start = locator?.startOffset;
+          let end = locator?.endOffset;
+          if (!Number.isFinite(start) || !Number.isFinite(end)) {
+            const text = node.text || node.title || '';
+            const found = text ? currentSnapshot.body?.dataStream?.indexOf(text) ?? -1 : -1;
+            if (found < 0) return;
+            start = found;
+            end = found + text.length - 1;
+          }
+          document.setSelection(start as number, (end as number) + 1);
+          const renderManager = univerRef.current?.__getInjector().get(IRenderManagerService);
+          const render = renderManager?.getRenderById(document.getId());
+          render?.with(DocBackScrollRenderController)?.scrollToRange({
+            startOffset: start as number,
+            endOffset: (end as number) + 1,
+            collapsed: start === end,
+          });
+        };
+        selectNode();
+        window.setTimeout(selectNode, 100);
       },
       async insertWordControl(role: BindingRole, fieldCode: string, dataPath: string) {
         const document = apiRef.current?.getActiveDocument();
@@ -197,18 +298,70 @@ function toEditorText(value: unknown) {
 
 function normalizeDocumentSnapshot(snapshot: Record<string, unknown>) {
   const result = structuredClone(snapshot) as unknown as IDocumentData;
-  const style = result.documentStyle;
-  if (!style || typeof style.pageSize !== 'object') {
-    result.documentStyle = {
-      ...style,
-      pageSize: { width: 595, height: 842 },
-      marginTop: style?.marginTop ?? 72,
-      marginRight: style?.marginRight ?? 72,
-      marginBottom: style?.marginBottom ?? 72,
-      marginLeft: style?.marginLeft ?? 72,
-    };
-  }
+  const style = result.documentStyle && typeof result.documentStyle === 'object'
+    ? result.documentStyle
+    : {};
+  result.documentStyle = {
+    ...style,
+    documentFlavor: DocumentFlavor.MODERN,
+    pageSize: style.pageSize && typeof style.pageSize === 'object'
+      ? style.pageSize
+      : { width: 595, height: 842 },
+    marginTop: style.marginTop ?? 72,
+    marginRight: style.marginRight ?? 72,
+    marginBottom: style.marginBottom ?? 72,
+    marginLeft: style.marginLeft ?? 72,
+  };
+  normalizeDocumentTextStyles(result as unknown as Record<string, unknown>);
+  normalizeDocumentTableBorders(result as unknown as Record<string, unknown>);
   return result;
+}
+
+function normalizeDocumentTextStyles(snapshot: Record<string, unknown>) {
+  const body = snapshot.body;
+  if (!isRecord(body)) return;
+  const textRuns = body.textRuns;
+  if (Array.isArray(textRuns)) {
+    for (const run of textRuns) {
+      if (!isRecord(run) || !isRecord(run.ts)) continue;
+      if (run.ts.ff == null) run.ts.ff = '宋体';
+      if (run.ts.fs == null) run.ts.fs = 14;
+    }
+  }
+  const paragraphs = body.paragraphs;
+  if (!Array.isArray(paragraphs)) return;
+  for (const paragraph of paragraphs) {
+    if (!isRecord(paragraph) || !isRecord(paragraph.paragraphStyle)) continue;
+    const textStyle = paragraph.paragraphStyle.textStyle;
+    if (!isRecord(textStyle)) continue;
+    if (textStyle.ff == null) textStyle.ff = '宋体';
+    if (textStyle.fs == null) textStyle.fs = 14;
+  }
+}
+
+function normalizeDocumentTableBorders(snapshot: Record<string, unknown>) {
+  const tableSource = snapshot.tableSource;
+  if (!isRecord(tableSource)) return;
+  for (const table of Object.values(tableSource)) {
+    if (!isRecord(table) || !Array.isArray(table.tableRows)) continue;
+    for (const row of table.tableRows) {
+      if (!isRecord(row) || !Array.isArray(row.tableCells)) continue;
+      for (const cell of row.tableCells) {
+        if (!isRecord(cell)) continue;
+        for (const side of ['Top', 'Right', 'Bottom', 'Left']) {
+          const key = `border${side}`;
+          if (!isRecord(cell[key])) {
+            cell[key] = {
+              color: { rgb: '#000000' },
+              width: { v: 1 },
+              padding: 0,
+              dashStyle: 1,
+            };
+          }
+        }
+      }
+    }
+  }
 }
 
 function preserveWordSnapshotMetadata(
@@ -219,9 +372,21 @@ function preserveWordSnapshotMetadata(
   const sourceBody = source.body;
   if (!isRecord(currentBody) || !isRecord(sourceBody)) return current;
   const sourceParagraphs = sourceBody.sourceParagraphs;
-  if (!Array.isArray(sourceParagraphs)) return current;
-  return {
+  const result = {
     ...current,
+    snapshotFormatVersion: Math.max(
+      Number(current.snapshotFormatVersion ?? 0),
+      Number(source.snapshotFormatVersion ?? 5),
+    ),
+    editorMode: 'UNIVER_DOCS',
+  } as Record<string, unknown>;
+  const metadataKeys = ['wordImport', 'tableSource', 'resources', 'drawings', 'headers', 'footers'] as const;
+  for (const key of metadataKeys) {
+    if (source[key] !== undefined && current[key] === undefined) result[key] = structuredClone(source[key]);
+  }
+  if (!Array.isArray(sourceParagraphs)) return result;
+  return {
+    ...result,
     body: {
       ...currentBody,
       sourceParagraphs: structuredClone(sourceParagraphs),

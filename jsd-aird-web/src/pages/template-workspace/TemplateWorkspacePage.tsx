@@ -103,7 +103,6 @@ function isRegionModelField(field: BusinessField) {
     field.kind,
   ) || field.mappingKind === 'REPEAT_REGION';
 }
-import type { WordPatchOperation } from '@/features/template-workspace/WordTemplateEditor';
 
 import {
   type CoordinateTarget,
@@ -168,7 +167,6 @@ export function TemplateWorkspacePage() {
   const [recognitionJob, setRecognitionJob] = useState<TemplateImportJob>();
   const [recognitionBusy, setRecognitionBusy] = useState(false);
   const [structureOperations, setStructureOperations] = useState<WorkbookStructureOperation[]>([]);
-  const [wordPatch, setWordPatch] = useState<WordPatchOperation[]>([]);
   const savedSnapshotSignatureRef = useRef<string>();
   const pendingEditorOperationsRef = useRef<Set<Promise<void>>>(new Set());
   const isDesktop = useDesktopEditing();
@@ -189,6 +187,9 @@ export function TemplateWorkspacePage() {
           model.snapshotFileId && model.snapshotHash
             ? await templateApi.downloadSnapshot(model.snapshotFileId)
             : (model.inlineSnapshot ?? {});
+        if (model.format === 'DOCX' && snapshotVersion(loadedSnapshot, 0) < 5) {
+          throw new Error('当前 Word 模板使用旧编辑快照，请重新导入原始 DOCX 后再编辑');
+        }
         if (!active) return;
         const storedFieldModel = readFieldModel(model.schema, model.mapping);
         const merged = model.format === 'DOCX'
@@ -244,10 +245,6 @@ export function TemplateWorkspacePage() {
   }, []);
 
   const handleEditorDirty = useCallback(() => {
-    if (workspace?.format === 'DOCX' && wordPatch.length > 0) {
-      markDirty();
-      return;
-    }
     const currentSnapshot = editorRef.current?.getSnapshot();
     if (
       currentSnapshot &&
@@ -256,7 +253,7 @@ export function TemplateWorkspacePage() {
       return;
     }
     markDirty();
-  }, [markDirty, wordPatch.length, workspace?.format]);
+  }, [markDirty]);
 
   const waitForPendingEditorOperations = async () => {
     for (let attempt = 0; attempt < 4; attempt += 1) {
@@ -427,8 +424,8 @@ export function TemplateWorkspacePage() {
           action,
         })),
         structureOperations,
-        wordPatch: wordPatch as unknown as Array<Record<string, unknown>>,
-        wordPatchBaseHash: workspace.wordDocument?.documentHash,
+        wordPatch: [],
+        wordPatchBaseHash: undefined,
       });
       savedSnapshotSignatureRef.current = snapshotSignature(currentSnapshot);
       setData(synchronizedData);
@@ -451,7 +448,6 @@ export function TemplateWorkspacePage() {
       setRecognitionAlternativeSelections({});
       setQualityActions({});
       setStructureOperations([]);
-      setWordPatch([]);
       const reviewRefreshed = workspace.format === 'DOCX'
         ? true
         : await refreshRecognitionReview(true, {
@@ -1645,7 +1641,7 @@ export function TemplateWorkspacePage() {
                刷新审核状态
              </Button>
            )}
-           {view === 'edit' && workspace.format === 'XLSX' && (
+            {view === 'edit' && (workspace.format === 'XLSX' || workspace.format === 'DOCX') && (
              <Button
               type={saveState === 'DIRTY' || saveState === 'SAVING' ? 'primary' : 'default'}
               className="workspace-save-button"
@@ -1730,7 +1726,13 @@ export function TemplateWorkspacePage() {
               editable={editable}
             />
           )}
-          <div className="template-workspace-grid prototype-workspace-grid">
+          <div className={`template-workspace-grid prototype-workspace-grid ${workspace.format === 'DOCX' ? 'word-workspace-grid' : ''}`}>
+            {workspace.format === 'DOCX' && (
+              <DocumentOutlinePanel
+                structure={workspace.documentStructure}
+                onSelect={(node) => editorRef.current?.focusNode?.(node)}
+              />
+            )}
             <main className={`workspace-canvas ${view === 'preview' ? 'is-preview' : ''}`}>
               {picking && pickingField && (
                 <div className="selection-guide" role="status">
@@ -1779,12 +1781,7 @@ export function TemplateWorkspacePage() {
               </Suspense>
             </main>
 
-            {workspace.format === 'DOCX' ? (
-              <DocumentOutlinePanel
-                structure={workspace.documentStructure}
-                onSelect={(node) => editorRef.current?.focusNode?.(node)}
-              />
-            ) : (
+            {workspace.format !== 'DOCX' && (
               <TemplateFieldManager
                 editable={editable}
                 format={workspace.format}

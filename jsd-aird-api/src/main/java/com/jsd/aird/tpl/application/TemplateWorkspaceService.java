@@ -378,18 +378,22 @@ public class TemplateWorkspaceService {
                     .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "Word 原生工件不存在"));
             var snapshotFile = fileRepository.find(actor.organizationId(), command.snapshotFileId())
                     .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "Word 编辑快照不存在"));
-            try (var source = objectStorage.get(currentFile.objectKey());
-                 var stagedSnapshot = objectStorage.get(snapshotFile.objectKey())) {
-                var snapshot = objectMapper.readTree(stagedSnapshot.stream().readAllBytes());
-                var patched = wordOoxmlPatchService.applySnapshot(source.stream().readAllBytes(), snapshot);
-                var parsed = wordDocumentParser.parse(new ByteArrayInputStream(patched));
+             try (var source = objectStorage.get(currentFile.objectKey());
+                  var stagedSnapshot = objectStorage.get(snapshotFile.objectKey())) {
+                 var snapshot = objectMapper.readTree(stagedSnapshot.stream().readAllBytes());
+                 requireCurrentWordSnapshot(snapshot);
+                 var patched = wordOoxmlPatchService.applySnapshot(source.stream().readAllBytes(), snapshot);
+                 var parsed = wordDocumentParser.parse(new ByteArrayInputStream(patched));
                 documentStructure = parsed.structureSummary().path("documentIR").deepCopy();
                 var staged = stageWordDocument(patched, currentFile.originalName(), actor);
                 wordDocument.put("workingDocxFileId", staged.id().toString());
                 wordDocument.put("documentHash", staged.sha256());
-                wordDocument.put("lastPatchCount", 0);
-                wordDocument.put("lastPatchSummary", "UNIVER_DOCS_SNAPSHOT");
-                wordDocument.put("structureVersion", documentStructure.path("structureVersion").asInt(1));
+                 wordDocument.put("lastPatchCount", 0);
+                 wordDocument.put("lastPatchSummary", "UNIVER_DOCS_REBUILD");
+                 wordDocument.put("conversionMode", "UNIVER_DOCS_REBUILD");
+                 wordDocument.put("exporterVersion", "word-univer-export-v1");
+                 wordDocument.put("unsupportedFeatureCount", snapshot.path("wordImport").path("unsupportedFeatureCount").asInt(0));
+                 wordDocument.put("structureVersion", documentStructure.path("structureVersion").asInt(1));
                 wordDocument.put("structureHash", documentStructure.path("structureHash").asText(""));
                 wordDocument.put("state", "WORKING");
             } catch (ApiException exception) {
@@ -398,10 +402,10 @@ public class TemplateWorkspaceService {
                 throw new ApiException(ApiErrorCode.SNAPSHOT_PERSIST_FAILED, "Word 编辑快照回写失败");
             }
         }
-        if (current.format() == TemplateFormat.DOCX && wordDocument != null
-                && command.snapshotFileId() != null) {
-            wordDocument.put("editorMode", "UNIVER_DOCS");
-            wordDocument.put("conversionMode", "DOCX_LIMITED");
+         if (current.format() == TemplateFormat.DOCX && wordDocument != null
+                 && command.snapshotFileId() != null) {
+             wordDocument.put("editorMode", "UNIVER_DOCS");
+             wordDocument.put("conversionMode", "UNIVER_DOCS_REBUILD");
             wordDocument.put("editorSnapshotFileId", command.snapshotFileId().toString());
             wordDocument.put("editorSnapshotHash", command.snapshotHash());
             wordDocument.put("documentRevision", wordDocument.path("documentRevision").asInt(0) + 1);
@@ -1045,6 +1049,18 @@ public class TemplateWorkspaceService {
         }
     }
 
+    private void requireCurrentWordSnapshot(JsonNode snapshot) {
+        if (snapshot == null || snapshot.path("snapshotFormatVersion").asInt(0) < 5
+                || !"UNIVER_DOCS".equals(snapshot.path("editorMode").asText(""))) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST,
+                    "当前 Word 编辑快照已过期，请重新导入原始 DOCX 后再保存");
+        }
+        var body = snapshot.path("body");
+        if (!body.isObject() || body.path("dataStream").asText("").isBlank()) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "Word 编辑快照正文为空，请重新导入后再试");
+        }
+    }
+
     private ObjectNode blankSchema(String code) {
         ObjectNode schema = objectMapper.createObjectNode();
         schema.put("$schema", "https://json-schema.org/draft/2020-12/schema");
@@ -1069,6 +1085,8 @@ public class TemplateWorkspaceService {
             sheet.set("cellData", objectMapper.createObjectNode());
             snapshot.set("sheets", objectMapper.createObjectNode().set("sheet-1", sheet));
         } else {
+            snapshot.put("snapshotFormatVersion", 5);
+            snapshot.put("editorMode", "UNIVER_DOCS");
             snapshot.put("title", name);
             ObjectNode body = objectMapper.createObjectNode();
             body.put("dataStream", "\r\n");

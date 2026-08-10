@@ -1,0 +1,153 @@
+package com.jsd.aird.data.adapter.in.web;
+
+import java.util.List;
+import java.util.UUID;
+import java.nio.charset.StandardCharsets;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.jsd.aird.data.application.DataAssetExportService;
+import com.jsd.aird.data.application.DataImportService;
+import com.jsd.aird.data.application.port.DataRepository;
+import com.jsd.aird.platform.web.RequestIdHolder;
+import com.jsd.aird.shared.api.ApiResponse;
+import com.jsd.aird.shared.api.ResponseFactory;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+
+@RestController
+@RequestMapping("/api/v2/data")
+public class DataController {
+
+    private final DataImportService service;
+    private final DataAssetExportService assetExportService;
+
+    public DataController(DataImportService service, DataAssetExportService assetExportService) {
+        this.service = service;
+        this.assetExportService = assetExportService;
+    }
+
+    @GetMapping("/templates")
+    public ApiResponse<List<com.jsd.aird.tpl.api.TemplateDataImportFacade.DataTemplateOption>> templates(
+            @RequestParam(required = false) String targetDataType) {
+        return success(service.listTemplates(targetDataType));
+    }
+
+    @PostMapping("/import-jobs")
+    public ApiResponse<DataRepository.Job> create(@Valid @RequestBody CreateRequest request) {
+        return success(service.create(new DataImportService.CreateCommand(
+                request.sourceFileId(), request.templateVersionId(), request.targetDataType(), request.duplicateOverride())));
+    }
+
+    @GetMapping("/import-jobs/{id}")
+    public ApiResponse<DataRepository.Job> get(@PathVariable UUID id) { return success(service.get(id)); }
+
+    @PostMapping("/import-jobs/{id}/parse")
+    public ApiResponse<DataRepository.Job> parse(@PathVariable UUID id) {
+        service.parse(id);
+        return success(service.get(id));
+    }
+
+    @PutMapping("/import-jobs/{id}/sheets")
+    public ApiResponse<DataRepository.Job> sheets(@PathVariable UUID id, @Valid @RequestBody SheetRequest request) {
+        service.confirmSheets(id, request.items().stream().map(item -> new DataRepository.SheetUpdate(
+                id, item.sheetId(), item.selected(), item.headerRows(), item.dataStartRow(), item.dataEndRow(), item.confirmationStatus()
+        )).toList());
+        return success(service.get(id));
+    }
+
+    @PutMapping("/import-jobs/{id}/mappings")
+    public ApiResponse<DataRepository.Job> mappings(@PathVariable UUID id, @Valid @RequestBody MappingRequest request) {
+        service.saveMappings(id, request.items().stream().map(item -> new DataImportService.MappingCommand(
+                item.sheetId(), item.sourceColumn(), item.sourceHeader(), item.fieldCode(), item.fieldName(), item.action(),
+                item.valueType(), item.sourceUnit(), item.standardUnit(), item.detail()
+        )).toList());
+        return success(service.get(id));
+    }
+
+    @GetMapping("/import-jobs/{id}/issues")
+    public ApiResponse<List<DataRepository.Issue>> issues(@PathVariable UUID id) { return success(service.issues(id)); }
+
+    @PostMapping("/import-jobs/{id}/field-requests")
+    public ApiResponse<com.jsd.aird.tpl.api.TemplateDataImportFacade.FieldRequest> requestField(
+            @PathVariable UUID id, @Valid @RequestBody FieldRequest request) {
+        return success(service.requestField(id, new DataImportService.FieldRequestCommand(
+                request.fieldId(), request.displayName(), request.valueType(), request.uiType(),
+                request.groupCode(), request.description())));
+    }
+
+    @PutMapping("/import-jobs/{id}/issues/{issueId}")
+    public ApiResponse<Void> resolve(@PathVariable UUID issueId, @Valid @RequestBody IssueRequest request) {
+        service.resolveIssue(issueId, request.status());
+        return success(null);
+    }
+
+    @GetMapping("/import-jobs/{id}/preview")
+    public ApiResponse<DataImportService.Preview> preview(@PathVariable UUID id) { return success(service.preview(id)); }
+
+    @PostMapping("/import-jobs/{id}/commit")
+    public ApiResponse<DataRepository.Job> commit(@PathVariable UUID id) {
+        service.commit(id);
+        return success(service.get(id));
+    }
+
+    @GetMapping("/assets")
+    public ApiResponse<List<DataRepository.Asset>> assets(
+            @RequestParam(required = false) String targetDataType,
+            @RequestParam(required = false) String keyword) {
+        return success(service.assets(targetDataType, keyword));
+    }
+
+    @PostMapping(value = "/assets/export", produces = "application/zip")
+    public ResponseEntity<byte[]> export(
+            @Valid @RequestBody ExportRequest request) {
+        var result = assetExportService.export(new DataAssetExportService.ExportCommand(
+                request.targetDataType(), request.templateVersionId(), request.assetIds()));
+        var headers = new HttpHeaders();
+        headers.setContentDisposition(ContentDisposition.attachment().filename(result.fileName(), StandardCharsets.UTF_8).build());
+        headers.setContentType(MediaType.parseMediaType("application/zip"));
+        return ResponseEntity.ok().headers(headers).body(result.content());
+    }
+
+    @GetMapping("/assets/{id}")
+    public ApiResponse<DataRepository.AssetDetail> asset(@PathVariable UUID id) { return success(service.asset(id)); }
+
+    @GetMapping("/assets/{id}/revisions")
+    public ApiResponse<List<DataRepository.Revision>> revisions(@PathVariable UUID id) { return success(service.revisions(id)); }
+
+    @GetMapping("/assets/{id}/source")
+    public ApiResponse<List<DataRepository.SourceAnchor>> source(@PathVariable UUID id) { return success(service.sources(id)); }
+
+    private <T> ApiResponse<T> success(T value) { return ResponseFactory.success(value, RequestIdHolder.currentOrUnknown()); }
+
+    public record CreateRequest(@NotNull UUID sourceFileId, @NotNull UUID templateVersionId,
+                                @NotBlank String targetDataType, boolean duplicateOverride) {}
+
+    public record ExportRequest(@NotBlank String targetDataType, @NotNull UUID templateVersionId,
+                                @NotNull List<@NotNull UUID> assetIds) {}
+
+    public record SheetRequest(@NotNull List<@Valid SheetItem> items) {}
+    public record SheetItem(@NotBlank String sheetId, boolean selected, List<Integer> headerRows,
+                            Integer dataStartRow, Integer dataEndRow, @NotBlank String confirmationStatus) {}
+
+    public record MappingRequest(@NotNull List<@Valid MappingItem> items) {}
+    public record MappingItem(@NotBlank String sheetId, @NotBlank String sourceColumn, String sourceHeader,
+                              String fieldCode, String fieldName, @NotBlank String action, String valueType,
+                              String sourceUnit, String standardUnit, JsonNode detail) {}
+
+    public record IssueRequest(@NotBlank String status) {}
+    public record FieldRequest(String fieldId, @NotBlank String displayName, String valueType,
+                               String uiType, String groupCode, String description) {}
+}

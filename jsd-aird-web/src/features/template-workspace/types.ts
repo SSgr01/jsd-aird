@@ -1,4 +1,6 @@
 export type TemplateFormat = 'XLSX' | 'DOCX';
+export type TemplateScope = 'TEMPLATE_CENTER' | 'DATA_CENTER';
+export type TargetDataType = 'MATERIAL' | 'FORMULA' | 'PROCESS' | 'EQUIPMENT' | 'TEST_STANDARD';
 export type TemplateStatus = 'DRAFT' | 'PUBLISHED' | 'RETIRED';
 export type BindingRole = 'FIELD' | 'REPEAT_REGION' | 'CONDITIONAL';
 export type MappingKind =
@@ -24,6 +26,8 @@ export interface TemplateListItem {
   lockVersion: number;
   updatedAt: string;
   issueCount: number;
+  scope?: TemplateScope;
+  targetDataType?: TargetDataType;
 }
 
 export interface TemplateBinding {

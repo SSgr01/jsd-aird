@@ -7,6 +7,8 @@ import java.util.UUID;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.jsd.aird.tpl.domain.TemplateFormat;
+import com.jsd.aird.tpl.domain.TargetDataType;
+import com.jsd.aird.tpl.domain.TemplateScope;
 import com.jsd.aird.tpl.domain.TemplateStatus;
 
 public interface TemplateRepository {
@@ -17,6 +19,10 @@ public interface TemplateRepository {
             TemplateFormat format,
             TemplateStatus status
     );
+
+    List<TemplateListItem> findPublishedDataTemplates(UUID organizationId, TargetDataType targetDataType);
+
+    Optional<TemplateWorkspace> findPublishedDataTemplate(UUID organizationId, UUID versionId);
 
     void insertTemplate(NewTemplate template);
 
@@ -96,6 +102,8 @@ public interface TemplateRepository {
             String category,
             TemplateFormat format,
             TemplateStatus status,
+            TemplateScope scope,
+            TargetDataType targetDataType,
             int versionNo,
             long lockVersion,
             Instant updatedAt,
@@ -130,6 +138,8 @@ public interface TemplateRepository {
             String mappingHash,
             String dataHash,
             String workspaceHash,
+            TemplateScope scope,
+            TargetDataType targetDataType,
             UUID actorId
     ) {
     }
@@ -150,6 +160,8 @@ public interface TemplateRepository {
             String mappingHash,
             String dataHash,
             String workspaceHash,
+            TemplateScope scope,
+            TargetDataType targetDataType,
             UUID actorId
     ) {
     }
@@ -179,6 +191,8 @@ public interface TemplateRepository {
             String mappingHash,
             String dataHash,
             String workspaceHash,
+            TemplateScope scope,
+            TargetDataType targetDataType,
             long lockVersion,
             boolean reconciliationRequired
     ) {

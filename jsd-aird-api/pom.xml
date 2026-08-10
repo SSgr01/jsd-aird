@@ -22,11 +22,13 @@
         <spring-modulith.version>1.4.12</spring-modulith.version>
         <mybatis-plus.version>3.5.17</mybatis-plus.version>
         <springdoc.version>2.8.17</springdoc.version>
+        <spring-ai.version>1.1.8</spring-ai.version>
         <archunit.version>1.4.1</archunit.version>
         <maven-failsafe-plugin.version>3.5.6</maven-failsafe-plugin.version>
         <minio.version>8.5.17</minio.version>
         <poi.version>5.5.1</poi.version>
         <docx4j.version>11.5.14</docx4j.version>
+        <pdfbox.version>3.0.5</pdfbox.version>
     </properties>
 
     <dependencyManagement>
@@ -45,6 +47,13 @@
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
         </dependencies>
     </dependencyManagement>
 
@@ -60,6 +69,10 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-openai</artifactId>
         </dependency>
         <dependency>
             <groupId>org.springframework.modulith</groupId>
@@ -104,6 +117,11 @@
             <groupId>org.docx4j</groupId>
             <artifactId>docx4j-JAXB-ReferenceImpl</artifactId>
             <version>${docx4j.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.pdfbox</groupId>
+            <artifactId>pdfbox</artifactId>
+            <version>${pdfbox.version}</version>
         </dependency>
 
         <dependency>

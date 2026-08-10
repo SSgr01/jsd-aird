@@ -27,6 +27,8 @@ import com.jsd.aird.ops.application.port.ObjectStorage;
 import com.jsd.aird.tpl.application.port.TemplateRepository;
 import com.jsd.aird.tpl.application.port.TemplateImportRepository;
 import com.jsd.aird.tpl.domain.TemplateFormat;
+import com.jsd.aird.tpl.domain.TargetDataType;
+import com.jsd.aird.tpl.domain.TemplateScope;
 import com.jsd.aird.tpl.domain.TemplateStatus;
 import com.jsd.aird.tpl.application.port.WordOoxmlPatcher;
 import com.jsd.aird.tpl.application.port.WordDocumentParser;
@@ -158,6 +160,11 @@ public class TemplateWorkspaceService {
     @Transactional
     public TemplateRepository.TemplateWorkspace createBlank(CreateBlankCommand command) {
         var actor = ActorContext.required();
+        var scope = command.scope() == null ? TemplateScope.TEMPLATE_CENTER : command.scope();
+        var targetDataType = scope == TemplateScope.DATA_CENTER ? command.targetDataType() : null;
+        if (scope == TemplateScope.DATA_CENTER && targetDataType == null) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "数据中心模板必须指定目标数据类型");
+        }
         var normalizedCategory = trimToNull(command.category());
         if (normalizedCategory != null) repository.ensureCategory(
                 actor.organizationId(), validCategoryName(normalizedCategory), actor.userId());
@@ -253,6 +260,8 @@ public class TemplateWorkspaceService {
                 mappingHash,
                 dataHash,
                 workspaceHash,
+                scope,
+                targetDataType,
                 actor.userId()
         ));
         repository.replaceMappings(versionId, command.format(), mapping);
@@ -957,6 +966,7 @@ public class TemplateWorkspaceService {
                 source.snapshotFileId(), source.snapshotHash(), source.snapshotKind(),
                 source.editorAppVersion(), source.pluginManifestHash(), source.snapshotFormatVersion(),
                 source.schemaHash(), source.mappingHash(), canonicalizer.hash(data), workspaceHash,
+                source.scope(), source.targetDataType(),
                 actor.userId()
         ));
         repository.copyMappings(sourceVersionId, versionId);
@@ -1103,7 +1113,9 @@ public class TemplateWorkspaceService {
             String purpose,
             String category,
             TemplateFormat format,
-            UUID importJobId
+            UUID importJobId,
+            TemplateScope scope,
+            TargetDataType targetDataType
     ) {
     }
 

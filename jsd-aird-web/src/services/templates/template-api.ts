@@ -2,6 +2,8 @@ import type { ApiResponse, PageResponse } from '@/types/api';
 import type {
   BusinessBlock,
   TemplateFormat,
+  TemplateScope,
+  TargetDataType,
   Editability,
   TemplateListItem,
   TemplateStatus,
@@ -27,6 +29,8 @@ export interface CreateTemplateInput {
   category?: string;
   format: TemplateFormat;
   importJobId?: string;
+  scope?: TemplateScope;
+  targetDataType?: TargetDataType;
 }
 
 export interface TemplateCategory {

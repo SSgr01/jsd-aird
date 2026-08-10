@@ -15,6 +15,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.jsd.aird.tpl.application.port.TemplateRepository;
 import com.jsd.aird.tpl.domain.TemplateFormat;
+import com.jsd.aird.tpl.domain.TargetDataType;
+import com.jsd.aird.tpl.domain.TemplateScope;
 import com.jsd.aird.tpl.domain.TemplateStatus;
 import org.postgresql.util.PGobject;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -44,7 +46,8 @@ public class JdbcTemplateRepository implements TemplateRepository {
     ) {
         var sql = new StringBuilder("""
                 SELECT t.id AS template_id, tv.id AS version_id, t.template_code, t.name,
-                       t.purpose, coalesce(tc.name, t.category) AS category, t.format, tv.status, tv.version_no,
+                       t.purpose, coalesce(tc.name, t.category) AS category, t.format, tv.status,
+                       tv.template_scope, tv.target_data_type, tv.version_no,
                        tv.lock_version, tv.updated_at,
                        (
                            SELECT count(*)::int
@@ -85,11 +88,28 @@ public class JdbcTemplateRepository implements TemplateRepository {
                 rs.getString("category"),
                 TemplateFormat.valueOf(rs.getString("format")),
                 TemplateStatus.valueOf(rs.getString("status")),
+                TemplateScope.valueOf(rs.getString("template_scope")),
+                rs.getString("target_data_type") == null ? null : TargetDataType.valueOf(rs.getString("target_data_type")),
                 rs.getInt("version_no"),
                 rs.getLong("lock_version"),
                 rs.getTimestamp("updated_at").toInstant(),
                 rs.getInt("issue_count")
         ));
+    }
+
+    @Override
+    public List<TemplateListItem> findPublishedDataTemplates(UUID organizationId, TargetDataType targetDataType) {
+        return findTemplates(organizationId, null, null, TemplateStatus.PUBLISHED).stream()
+                .filter(item -> item.scope() == TemplateScope.DATA_CENTER)
+                .filter(item -> targetDataType == null || item.targetDataType() == targetDataType)
+                .toList();
+    }
+
+    @Override
+    public Optional<TemplateWorkspace> findPublishedDataTemplate(UUID organizationId, UUID versionId) {
+        return findWorkspace(organizationId, versionId)
+                .filter(item -> item.status() == TemplateStatus.PUBLISHED)
+                .filter(item -> item.scope() == TemplateScope.DATA_CENTER && item.targetDataType() != null);
     }
 
     @Override
@@ -122,8 +142,9 @@ public class JdbcTemplateRepository implements TemplateRepository {
                     INSERT INTO tpl.template_version (
                         id, template_id, version_no, status, schema_jsonb, layout_summary_jsonb,
                         snapshot_kind, editor_app_version, plugin_manifest_hash,
-                        snapshot_format_version, schema_hash, mapping_hash, data_hash, workspace_hash, created_by
-                    ) VALUES (?, ?, 1, 'DRAFT', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        template_scope, target_data_type, snapshot_format_version,
+                        schema_hash, mapping_hash, data_hash, workspace_hash, created_by
+                     ) VALUES (?, ?, 1, 'DRAFT', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """);
             statement.setObject(1, version.id());
             statement.setObject(2, version.templateId());
@@ -132,15 +153,17 @@ public class JdbcTemplateRepository implements TemplateRepository {
             statement.setString(5, version.snapshotKind());
             statement.setString(6, version.editorAppVersion());
             statement.setString(7, version.pluginManifestHash());
-            statement.setInt(8, version.layoutSummary().path("initialSnapshot")
+            statement.setString(8, version.scope().name());
+            statement.setString(9, version.targetDataType() == null ? null : version.targetDataType().name());
+            statement.setInt(10, version.layoutSummary().path("initialSnapshot")
                     .path("snapshotFormatVersion").asInt(
                             "UNIVER_WORKBOOK".equals(version.snapshotKind()) ? 3 : 1
                     ));
-            statement.setString(9, version.schemaHash());
-            statement.setString(10, version.mappingHash());
-            statement.setString(11, version.dataHash());
-            statement.setString(12, version.workspaceHash());
-            statement.setObject(13, version.actorId());
+            statement.setString(11, version.schemaHash());
+            statement.setString(12, version.mappingHash());
+            statement.setString(13, version.dataHash());
+            statement.setString(14, version.workspaceHash());
+            statement.setObject(15, version.actorId());
             return statement;
         });
     }
@@ -153,7 +176,8 @@ public class JdbcTemplateRepository implements TemplateRepository {
                                 WHERE tij.generated_template_version_id = tv.id
                                 ORDER BY tij.created_at DESC LIMIT 1) AS recognition_run_id,
                                t.template_code, t.name,
-                               t.format, tv.status, tv.version_no, tv.schema_jsonb,
+                                t.format, tv.status, tv.version_no, tv.template_scope, tv.target_data_type,
+                                tv.schema_jsonb,
                                tv.layout_summary_jsonb, tv.editor_snapshot_file_id,
                                tv.editor_snapshot_hash, tv.snapshot_kind, tv.editor_app_version,
                                tv.plugin_manifest_hash, tv.snapshot_format_version,
@@ -320,11 +344,12 @@ public class JdbcTemplateRepository implements TemplateRepository {
                     INSERT INTO tpl.template_version (
                         id, template_id, version_no, status, schema_jsonb, layout_summary_jsonb,
                         editor_snapshot_file_id, editor_snapshot_hash, snapshot_kind,
-                        editor_app_version, plugin_manifest_hash, snapshot_format_version,
+                        editor_app_version, plugin_manifest_hash, template_scope, target_data_type,
+                        snapshot_format_version,
                         schema_hash, mapping_hash, data_hash, workspace_hash,
                         derived_from_version_id, created_by
                     )
-                    SELECT ?, ?, coalesce(max(version_no), 0) + 1, 'DRAFT', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                     SELECT ?, ?, coalesce(max(version_no), 0) + 1, 'DRAFT', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                     FROM tpl.template_version WHERE template_id = ?
                     """);
             statement.setObject(1, version.id());
@@ -336,14 +361,16 @@ public class JdbcTemplateRepository implements TemplateRepository {
             statement.setString(7, version.snapshotKind());
             statement.setString(8, version.editorAppVersion());
             statement.setString(9, version.pluginManifestHash());
-            statement.setInt(10, version.snapshotFormatVersion());
-            statement.setString(11, version.schemaHash());
-            statement.setString(12, version.mappingHash());
-            statement.setString(13, version.dataHash());
-            statement.setString(14, version.workspaceHash());
-            statement.setObject(15, version.derivedFromVersionId());
-            statement.setObject(16, version.actorId());
-            statement.setObject(17, version.templateId());
+            statement.setString(10, version.scope().name());
+            statement.setString(11, version.targetDataType() == null ? null : version.targetDataType().name());
+            statement.setInt(12, version.snapshotFormatVersion());
+            statement.setString(13, version.schemaHash());
+            statement.setString(14, version.mappingHash());
+            statement.setString(15, version.dataHash());
+            statement.setString(16, version.workspaceHash());
+            statement.setObject(17, version.derivedFromVersionId());
+            statement.setObject(18, version.actorId());
+            statement.setObject(19, version.templateId());
             return statement;
         });
     }
@@ -704,6 +731,8 @@ public class JdbcTemplateRepository implements TemplateRepository {
                 rs.getString("mapping_hash"),
                 rs.getString("data_hash"),
                 rs.getString("workspace_hash"),
+                TemplateScope.valueOf(rs.getString("template_scope")),
+                rs.getString("target_data_type") == null ? null : TargetDataType.valueOf(rs.getString("target_data_type")),
                 rs.getLong("lock_version"),
                 layoutSummary.path("reconciliationRequired").asBoolean(false)
         );

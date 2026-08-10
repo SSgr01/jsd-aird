@@ -53,6 +53,12 @@ export interface ConversationMeta {
   scopeSnapshot?: string[];
 }
 
+export interface FileSearchResult {
+  knowledgeHits: Array<AssistantCitation & { content?: string; score?: number }>;
+  dataHits: Array<{ entryId: string; assetId: string; revisionId: string; rowNumber?: number; fieldCode?: string; assetName?: string; content: string; score: number; sourceLocator?: string }>;
+  trace?: Record<string, unknown>;
+}
+
 export const assistantApi = {
   async ask(question: string, conversationId?: string) {
     const response = await httpClient.post<ApiResponse<AssistantResponse>>('/api/v1/assistant/qa', { question, conversationId });
@@ -73,11 +79,20 @@ export const assistantApi = {
   async renameConversation(id: string, title: string) {
     await httpClient.patch(`/api/v1/assistant/conversations/${id}`, { title });
   },
+  async deleteConversation(id: string) {
+    await httpClient.delete(`/api/v1/assistant/conversations/${id}`);
+  },
+  async fileSearch(input: { query: string; aiOnly?: boolean; limit?: number; scopeIds?: string[]; scopeTypes?: string[]; knowledgeCategoryIds?: string[]; dataCategoryIds?: string[] }) {
+    const response = await httpClient.post<ApiResponse<FileSearchResult>>('/api/v1/assistant/file-search', input);
+    return response.data.data;
+  },
   async stream(
     question: string,
     conversationId: string | undefined,
     scopeIds: string[],
     scopeTypes: string[],
+    knowledgeCategoryIds: string[] = [],
+    dataCategoryIds: string[] = [],
     onToken: (token: string) => void,
     onDone: (response: AssistantResponse) => void,
     onStage?: (event: string, data: unknown) => void,
@@ -92,7 +107,7 @@ export const assistantApi = {
         'X-User-Id': '00000000-0000-0000-0000-000000000002',
         'X-Username': 'developer',
       },
-      body: JSON.stringify({ question, conversationId, scopeIds, scopeTypes }),
+      body: JSON.stringify({ question, conversationId, scopeIds, scopeTypes, knowledgeCategoryIds, dataCategoryIds }),
     });
     if (!response.ok || !response.body) throw new Error(`流式问答失败（${response.status}）`);
     const reader = response.body.getReader();

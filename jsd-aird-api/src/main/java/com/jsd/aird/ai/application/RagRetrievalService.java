@@ -35,17 +35,24 @@ public class RagRetrievalService {
 
     public Retrieval retrieve(UUID organizationId, String question, List<AssistantRepository.MessageRow> history,
                              List<UUID> scopeIds, List<String> scopeTypes) {
-        return retrieve(organizationId, question, history, scopeIds, scopeTypes, true);
+        return retrieve(organizationId, question, history, scopeIds, scopeTypes, List.of(), List.of(), true);
     }
 
     public Retrieval retrieve(UUID organizationId, String question, List<AssistantRepository.MessageRow> history,
                               List<UUID> scopeIds, List<String> scopeTypes, boolean aiOnly) {
+        return retrieve(organizationId, question, history, scopeIds, scopeTypes, List.of(), List.of(), aiOnly);
+    }
+
+    public Retrieval retrieve(UUID organizationId, String question, List<AssistantRepository.MessageRow> history,
+                              List<UUID> scopeIds, List<String> scopeTypes, List<UUID> knowledgeCategoryIds,
+                              List<UUID> dataCategoryIds, boolean aiOnly) {
         var safeScopeIds = scopes.validate(organizationId, scopeIds, scopeTypes).stream().toList();
         var plan = rewrite.rewrite(question, history, scopeTypes == null ? List.of() : scopeTypes);
         var knowledgeResult = knowledge.search(new KnowledgeSearchFacade.SearchRequest(
-                organizationId, plan.plan().rewrittenQuery(), aiOnly, 12, safeScopeIds, plan.plan().subQueries()));
-        var data = safeScopeIds.isEmpty() ? List.<DataAssetSearchFacade.DataHit>of()
-                : dataAssets.search(organizationId, plan.plan().rewrittenQuery(), safeScopeIds, 8);
+                organizationId, plan.plan().rewrittenQuery(), aiOnly, 12, safeScopeIds, knowledgeCategoryIds,
+                plan.plan().subQueries()));
+        var data = safeScopeIds.isEmpty() && (dataCategoryIds == null || dataCategoryIds.isEmpty()) ? List.<DataAssetSearchFacade.DataHit>of()
+                : dataAssets.search(organizationId, plan.plan().rewrittenQuery(), safeScopeIds, dataCategoryIds, 8);
         var knowledgeHits = rerank(plan.plan().rewrittenQuery(), knowledgeResult.hits());
         var fallbacks = new ArrayList<String>(knowledgeResult.trace().fallbacks());
         if ("MODEL_UNAVAILABLE".equals(plan.status()) || "FALLBACK_ORIGINAL_QUERY".equals(plan.status())) {

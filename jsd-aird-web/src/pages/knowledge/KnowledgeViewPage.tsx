@@ -1,0 +1,134 @@
+import { DeleteOutlined, DownloadOutlined, EditOutlined, EyeOutlined, FilePdfOutlined, FileWordOutlined, FileExcelOutlined, FolderOpenOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons';
+import { App, Button, Dropdown, Empty, Input, Modal, Select, Space, Table, Tag, Typography } from 'antd';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+
+import { CategoryCardGrid, CategoryEditorModal, CatalogListPanel, type CatalogCategoryCard, type CategoryEditorValue } from '@/components/catalog-workspace';
+import { knowledgeApi, type KnowledgeCategory, type KnowledgeDocument } from '@/services/knowledge';
+
+const scopes = [{ value: 'INTERNAL' as const, label: '内部资料' }, { value: 'EXTERNAL' as const, label: '外部资料' }];
+const statusLabels: Record<string, [string, string]> = { QUEUED: ['排队中', 'processing'], PROCESSING: ['解析中', 'processing'], READY: ['已入库', 'success'], FAILED: ['失败', 'error'], REJECTED: ['已拒绝', 'error'], PENDING_PROVIDER: ['等待适配器', 'warning'] };
+
+function fileIcon(contentType: string) {
+  if (contentType.includes('pdf')) return <FilePdfOutlined className="pdf-icon" />;
+  if (contentType.includes('word')) return <FileWordOutlined className="word-icon" />;
+  if (contentType.includes('sheet') || contentType.includes('excel')) return <FileExcelOutlined className="excel-icon" />;
+  return <FileWordOutlined />;
+}
+
+export function KnowledgeViewPage() {
+  const { message, modal } = App.useApp();
+  const navigate = useNavigate();
+  const [scope, setScope] = useState<'INTERNAL' | 'EXTERNAL'>('INTERNAL');
+  const [categories, setCategories] = useState<KnowledgeCategory[]>([]);
+  const [items, setItems] = useState<KnowledgeDocument[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [keyword, setKeyword] = useState('');
+  const [status, setStatus] = useState<string>();
+  const [categoryId, setCategoryId] = useState('ALL');
+  const [page, setPage] = useState({ current: 1, pageSize: 20, total: 0 });
+  const [editor, setEditor] = useState<{ mode: 'NEW' | 'EDIT'; item?: KnowledgeCategory }>();
+  const [deleteItem, setDeleteItem] = useState<KnowledgeCategory>();
+  const [replacementId, setReplacementId] = useState<string>();
+  const [moving, setMoving] = useState<KnowledgeDocument>();
+  const [saving, setSaving] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [renameItem, setRenameItem] = useState<KnowledgeDocument>();
+  const [renameValue, setRenameValue] = useState('');
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [categoryList, result] = await Promise.all([
+        knowledgeApi.categories(scope),
+        knowledgeApi.list({ keyword: keyword || undefined, status, scope, categoryId: categoryId === 'ALL' ? undefined : categoryId, page: page.current, size: page.pageSize }),
+      ]);
+      setCategories(categoryList); setItems(result.items); setPage((value) => ({ ...value, current: result.page, pageSize: result.size, total: result.total })); setSelected([]);
+    } catch (error) { void message.error(error instanceof Error ? error.message : '知识库加载失败'); }
+    finally { setLoading(false); }
+  }, [categoryId, keyword, message, page.current, page.pageSize, scope, status]);
+
+  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { setCategoryId('ALL'); setPage((value) => ({ ...value, current: 1 })); }, [scope]);
+
+  const cards = useMemo<CatalogCategoryCard[]>(() => [
+    { id: 'ALL', name: scope === 'INTERNAL' ? '全部内部资料' : '全部外部资料', count: page.total, description: '当前资料范围的全部文档', icon: <FolderOpenOutlined />, tone: 'blue' },
+    ...categories.map((item, index) => ({ id: item.id, name: item.name, count: item.documentCount, description: `${scope === 'INTERNAL' ? '研发内部' : '外部参考'}资料`, icon: <FolderOpenOutlined />, tone: (['green', 'blue', 'violet', 'orange', 'teal'] as const)[index % 5], editable: item.name !== '未分类' })),
+  ], [categories, page.total, scope]);
+
+  const saveCategory = async (value: CategoryEditorValue) => {
+    setSaving(true);
+    try { if (editor?.mode === 'NEW') await knowledgeApi.createCategory({ name: value.name.trim(), scope }); else if (editor?.item) await knowledgeApi.renameCategory(editor.item.id, value.name.trim()); setEditor(undefined); await load(); void message.success('分类已保存'); }
+    catch (error) { void message.error(error instanceof Error ? error.message : '分类保存失败'); }
+    finally { setSaving(false); }
+  };
+
+  const removeCategory = async () => {
+    if (!deleteItem) return;
+    setSaving(true);
+    try { await knowledgeApi.deleteCategory(deleteItem.id, replacementId); setDeleteItem(undefined); setReplacementId(undefined); setCategoryId('ALL'); await load(); void message.success('分类已删除'); }
+    catch (error) { void message.error(error instanceof Error ? error.message : '分类删除失败'); }
+    finally { setSaving(false); }
+  };
+
+  const moveDocument = async (target: string, document?: KnowledgeDocument) => {
+    const current = document || moving;
+    if (!current) return;
+    setSaving(true);
+    try { await knowledgeApi.assignCategory(current.id, target); setMoving(undefined); await load(); void message.success('文档分类已更新'); }
+    catch (error) { void message.error(error instanceof Error ? error.message : '文档移动失败'); }
+    finally { setSaving(false); }
+  };
+
+  const exportDocuments = async () => {
+    if (!selected.length || selected.length > 200) { void message.warning('请选择 1-200 个文件'); return; }
+    setExporting(true);
+    try {
+      const blob = await knowledgeApi.exportDocuments(selected);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'knowledge-documents.zip'; document.body.appendChild(anchor); anchor.click(); anchor.remove(); URL.revokeObjectURL(url);
+      void message.success(`已导出 ${selected.length} 个知识文件`);
+    } catch (error) { void message.error(error instanceof Error ? error.message : '知识文件导出失败'); }
+    finally { setExporting(false); }
+  };
+
+  const renameDocument = async () => {
+    if (!renameItem || !renameValue.trim()) { void message.warning('请输入文件名称'); return; }
+    setSaving(true);
+    try { await knowledgeApi.rename(renameItem.id, renameValue.trim()); setRenameItem(undefined); await load(); void message.success('文件已重命名'); }
+    catch (error) { void message.error(error instanceof Error ? error.message : '文件重命名失败'); }
+    finally { setSaving(false); }
+  };
+
+  const deleteSelected = () => {
+    if (!selected.length) return;
+    modal.confirm({
+      title: `删除已选 ${selected.length} 个文件？`,
+      content: '删除后文件、当前版本和检索内容将从知识库移除，原始对象存储文件会保留以便审计追溯。',
+      okText: '确认删除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        try { await Promise.all(selected.map((id) => knowledgeApi.remove(id))); await load(); void message.success('已删除所选文件'); }
+        catch (error) { void message.error(error instanceof Error ? error.message : '文件删除失败'); }
+      },
+    });
+  };
+
+  return <div className="business-page">
+    <div className="page-heading"><div><Typography.Title level={2}>知识库查看</Typography.Title><Typography.Text type="secondary">按资料范围和业务分类统一查看研发文档，解析完成后可授权 AI 使用。</Typography.Text></div><Button type="primary" icon={<UploadOutlined />} onClick={() => navigate('/knowledge/library')}>上传文件</Button></div>
+    <div className="catalog-tabs" role="tablist" aria-label="资料范围">{scopes.map((item) => <Button key={item.value} type={scope === item.value ? 'primary' : 'default'} role="tab" aria-selected={scope === item.value} onClick={() => setScope(item.value)}>{item.label}</Button>)}</div>
+    <CategoryCardGrid categories={cards} activeId={categoryId} onSelect={(id) => { setCategoryId(id); setPage((value) => ({ ...value, current: 1 })); }} onCreate={() => setEditor({ mode: 'NEW' })} onRename={(item) => setEditor({ mode: 'EDIT', item: categories.find((candidate) => candidate.id === item.id) })} onDelete={(item) => setDeleteItem(categories.find((candidate) => candidate.id === item.id))} />
+    <CatalogListPanel title={cards.find((item) => item.id === categoryId)?.name || '资料文件'} count={page.total} filters={<Space wrap><Input.Search allowClear placeholder="搜索文档、图片或音频" value={keyword} onChange={(event) => { setKeyword(event.target.value); setPage((value) => ({ ...value, current: 1 })); }} onSearch={() => void load()} /><Select allowClear placeholder="全部状态" value={status} onChange={(value) => { setStatus(value); setPage((current) => ({ ...current, current: 1 })); }} options={Object.entries(statusLabels).map(([value, item]) => ({ value, label: item[0] }))} /><Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button></Space>} actions={<><Typography.Text type="secondary">已选 {selected.length} 项</Typography.Text><Button icon={<DownloadOutlined />} loading={exporting} disabled={!selected.length || selected.length > 200} onClick={() => void exportDocuments()}>批量导出</Button><Button danger icon={<DeleteOutlined />} disabled={!selected.length} onClick={deleteSelected}>删除</Button></>} loading={loading}>
+      <Table rowKey="id" rowSelection={{ selectedRowKeys: selected, onChange: (keys) => setSelected(keys.map(String)) }} dataSource={items} pagination={{ current: page.current, pageSize: page.pageSize, total: page.total, showSizeChanger: true, onChange: (current, pageSize) => setPage({ current, pageSize, total: page.total }) }} locale={{ emptyText: <Empty description="当前分类暂无符合条件的文件" /> }} columns={[{ title: '文件名称', dataIndex: 'title', render: (_, item) => <Space>{fileIcon(item.contentType)}<span><Typography.Text strong>{item.title}</Typography.Text><span className="binding-path">{item.originalName} · {(item.size / 1024).toFixed(0)} KB · V{item.currentVersionNo}</span></span></Space> }, { title: '当前分类', dataIndex: 'categoryName', render: (value?: string) => value || '未分类' }, { title: 'AI 使用', dataIndex: 'aiStatus', render: (value: string) => <Tag color={value === 'APPROVED' ? 'success' : 'default'}>{value === 'APPROVED' ? '已授权' : '待授权'}</Tag> }, { title: '更新日期', dataIndex: 'updatedAt', width: 180, render: (value: string) => new Date(value).toLocaleString('zh-CN') }, { title: '处理状态', dataIndex: 'status', render: (value: string) => <Tag color={statusLabels[value]?.[1]}>{statusLabels[value]?.[0] || value}</Tag> }, { title: '操作', width: 300, render: (_, item) => <Space><Button type="link" icon={<EyeOutlined />} onClick={() => navigate(`/knowledge/documents/${item.id}`)}>查看</Button><Button type="link" icon={<EditOutlined />} onClick={() => { setRenameItem(item); setRenameValue(item.title); }}>重命名</Button><Dropdown trigger={['click']} menu={{ items: categories.map((category) => ({ key: category.id, label: category.name, onClick: () => void moveDocument(category.id, item) })) }}><Button type="link">移动</Button></Dropdown></Space> }]} />
+    </CatalogListPanel>
+    <CategoryEditorModal open={Boolean(editor)} title={editor?.mode === 'NEW' ? '新增知识分类' : '重命名知识分类'} initialValue={editor?.item ? { name: editor.item.name } : { name: '' }} confirmLoading={saving} onCancel={() => setEditor(undefined)} onSubmit={(value) => void saveCategory(value)} />
+    {deleteItem && <ModalDelete title={`删除分类“${deleteItem.name}”`} open onCancel={() => setDeleteItem(undefined)} onConfirm={() => void removeCategory()} loading={saving} replacementId={replacementId} onReplacementChange={setReplacementId} options={categories.filter((item) => item.id !== deleteItem.id).map((item) => ({ value: item.id, label: item.name }))} />}
+    <Modal open={Boolean(renameItem)} title="重命名文件" okText="保存" cancelText="取消" confirmLoading={saving} onCancel={() => setRenameItem(undefined)} onOk={() => void renameDocument()}><Input aria-label="文件名称" maxLength={260} value={renameValue} onChange={(event) => setRenameValue(event.target.value)} /></Modal>
+  </div>;
+}
+
+function ModalDelete({ title, open, loading, replacementId, options, onReplacementChange, onCancel, onConfirm }: { title: string; open: boolean; loading: boolean; replacementId?: string; options: Array<{ value: string; label: string }>; onReplacementChange: (value?: string) => void; onCancel: () => void; onConfirm: () => void }) {
+  return <Modal open={open} title={title} okText="删除并迁移" okButtonProps={{ danger: true }} cancelText="取消" confirmLoading={loading} onCancel={onCancel} onOk={onConfirm}><Typography.Paragraph>分类中的文件将被迁移到下方分类；未选择时仅允许删除空分类。</Typography.Paragraph><Select allowClear placeholder="选择替代分类" value={replacementId} onChange={onReplacementChange} options={options} style={{ width: '100%' }} /></Modal>;
+}

@@ -197,7 +197,8 @@ public class AssistantService {
         var meta = repository.conversation(organizationId, conversationId);
         if (meta != null && StringUtils.hasText(meta.summary())) history.add(new AssistantRepository.MessageRow("SUMMARY", meta.summary()));
         history.addAll(repository.recentMessages(organizationId, conversationId, 8));
-        var retrieval = rag.retrieve(organizationId, command.question(), history, command.scopeIds(), command.scopeTypes());
+        var retrieval = rag.retrieve(organizationId, command.question(), history, command.scopeIds(), command.scopeTypes(),
+                command.knowledgeCategoryIds(), command.dataCategoryIds(), true);
         var hits = retrieval.knowledgeHits();
         var dataHits = retrieval.dataHits();
         repository.updateScopeSnapshot(organizationId, conversationId, objectMapper.valueToTree(command.scopeIds()));
@@ -364,13 +365,19 @@ public class AssistantService {
         }
     }
 
-    public record AskCommand(UUID conversationId, String question, List<UUID> scopeIds, List<String> scopeTypes) {
+    public record AskCommand(UUID conversationId, String question, List<UUID> scopeIds, List<String> scopeTypes,
+                             List<UUID> knowledgeCategoryIds, List<UUID> dataCategoryIds) {
         public AskCommand(UUID conversationId, String question) {
-            this(conversationId, question, List.of(), List.of());
+            this(conversationId, question, List.of(), List.of(), List.of(), List.of());
+        }
+        public AskCommand(UUID conversationId, String question, List<UUID> scopeIds, List<String> scopeTypes) {
+            this(conversationId, question, scopeIds, scopeTypes, List.of(), List.of());
         }
         public AskCommand {
             scopeIds = scopeIds == null ? List.of() : List.copyOf(scopeIds);
             scopeTypes = scopeTypes == null ? List.of() : List.copyOf(scopeTypes);
+            knowledgeCategoryIds = knowledgeCategoryIds == null ? List.of() : List.copyOf(knowledgeCategoryIds);
+            dataCategoryIds = dataCategoryIds == null ? List.of() : List.copyOf(dataCategoryIds);
         }
     }
     public record AssistantResponse(UUID conversationId, String answer, List<Citation> citations, List<String> warnings,

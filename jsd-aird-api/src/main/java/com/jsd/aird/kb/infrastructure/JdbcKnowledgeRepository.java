@@ -22,9 +22,10 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
     @Override
     public void insertDocument(NewDocument document) {
         jdbc.update("""
-                INSERT INTO kb.document (id, organization_id, title, document_type, created_by)
-                VALUES (?, ?, ?, ?, ?)
-                """, document.id(), document.organizationId(), document.title(), document.documentType(), document.actorId());
+                INSERT INTO kb.document (id, organization_id, title, document_type, library_scope, category_id, created_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, document.id(), document.organizationId(), document.title(), document.documentType(),
+                document.scope(), document.categoryId(), document.actorId());
     }
 
     @Override
@@ -46,7 +47,7 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
 
     @Override
     public List<DocumentRow> listDocuments(UUID organizationId, String keyword, String status, String aiStatus,
-                                           int page, int size) {
+                                           String scope, UUID categoryId, int page, int size) {
         var normalizedKeyword = blankToNull(keyword);
         var normalizedStatus = blankToNull(status);
         var normalizedAiStatus = blankToNull(aiStatus);
@@ -55,16 +56,20 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                   AND (? IS NULL OR d.title ILIKE '%' || ? || '%' OR v.original_name ILIKE '%' || ? || '%')
                   AND (? IS NULL OR d.status = ?)
                   AND (? IS NULL OR d.ai_status = ?)
+                  AND (? IS NULL OR d.library_scope = ?)
+                  AND (? IS NULL OR d.category_id = ?)
                 ORDER BY d.updated_at DESC
                 LIMIT ? OFFSET ?
                 """);
         return jdbc.query(sql, this::mapDocument, organizationId, normalizedKeyword, normalizedKeyword,
                 normalizedKeyword, normalizedStatus, normalizedStatus, normalizedAiStatus, normalizedAiStatus,
+                blankToNull(scope), blankToNull(scope), categoryId, categoryId,
                 size, Math.max(0, page - 1) * size);
     }
 
     @Override
-    public long countDocuments(UUID organizationId, String keyword, String status, String aiStatus) {
+    public long countDocuments(UUID organizationId, String keyword, String status, String aiStatus,
+                               String scope, UUID categoryId) {
         var normalizedKeyword = blankToNull(keyword);
         var normalizedStatus = blankToNull(status);
         var normalizedAiStatus = blankToNull(aiStatus);
@@ -75,8 +80,105 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                   AND (? IS NULL OR d.title ILIKE '%' || ? || '%' OR v.original_name ILIKE '%' || ? || '%')
                   AND (? IS NULL OR d.status = ?)
                   AND (? IS NULL OR d.ai_status = ?)
+                  AND (? IS NULL OR d.library_scope = ?)
+                  AND (? IS NULL OR d.category_id = ?)
                 """, Long.class, organizationId, normalizedKeyword, normalizedKeyword, normalizedKeyword,
-                normalizedStatus, normalizedStatus, normalizedAiStatus, normalizedAiStatus);
+                normalizedStatus, normalizedStatus, normalizedAiStatus, normalizedAiStatus,
+                blankToNull(scope), blankToNull(scope), categoryId, categoryId);
+    }
+
+    @Override
+    public List<CategoryRow> listCategories(UUID organizationId, String scope) {
+        var normalizedScope = blankToNull(scope);
+        return jdbc.query("""
+                SELECT c.id, c.scope, c.name, c.sort_order, count(d.id) AS document_count
+                FROM kb.document_category c
+                LEFT JOIN kb.document d ON d.category_id = c.id
+                    AND d.organization_id = c.organization_id
+                WHERE c.organization_id = ? AND (? IS NULL OR c.scope = ?)
+                GROUP BY c.id, c.scope, c.name, c.sort_order, c.created_at
+                ORDER BY c.sort_order, c.created_at
+                """, (rs, n) -> new CategoryRow(rs.getObject("id", UUID.class), rs.getString("scope"),
+                        rs.getString("name"), rs.getInt("sort_order"), rs.getLong("document_count")),
+                organizationId, normalizedScope, normalizedScope);
+    }
+
+    @Override
+    public Optional<CategoryRow> findCategory(UUID organizationId, UUID categoryId) {
+        return jdbc.query("""
+                SELECT c.id, c.scope, c.name, c.sort_order, count(d.id) AS document_count
+                FROM kb.document_category c
+                LEFT JOIN kb.document d ON d.category_id = c.id AND d.organization_id = c.organization_id
+                WHERE c.organization_id = ? AND c.id = ?
+                GROUP BY c.id, c.scope, c.name, c.sort_order, c.created_at
+                """, (rs, n) -> new CategoryRow(rs.getObject("id", UUID.class), rs.getString("scope"),
+                        rs.getString("name"), rs.getInt("sort_order"), rs.getLong("document_count")),
+                organizationId, categoryId).stream().findFirst();
+    }
+
+    @Override
+    public Optional<CategoryRow> findDefaultCategory(UUID organizationId, String scope) {
+        return jdbc.query("""
+                SELECT c.id, c.scope, c.name, c.sort_order, count(d.id) AS document_count
+                FROM kb.document_category c
+                LEFT JOIN kb.document d ON d.category_id = c.id AND d.organization_id = c.organization_id
+                WHERE c.organization_id = ? AND c.scope = ? AND c.name = '未分类'
+                GROUP BY c.id, c.scope, c.name, c.sort_order, c.created_at
+                """, (rs, n) -> new CategoryRow(rs.getObject("id", UUID.class), rs.getString("scope"),
+                        rs.getString("name"), rs.getInt("sort_order"), rs.getLong("document_count")),
+                organizationId, scope).stream().findFirst();
+    }
+
+    @Override
+    public CategoryRow createCategory(UUID organizationId, UUID actorId, String scope, String name) {
+        var id = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO kb.document_category (id, organization_id, scope, name, sort_order, created_by)
+                VALUES (?, ?, ?, ?, coalesce((SELECT max(sort_order) + 1 FROM kb.document_category WHERE organization_id = ? AND scope = ?), 1), ?)
+                """, id, organizationId, scope, name, organizationId, scope, actorId);
+        return findCategory(organizationId, id).orElseThrow();
+    }
+
+    @Override
+    public CategoryRow renameCategory(UUID organizationId, UUID categoryId, String name) {
+        jdbc.update("UPDATE kb.document_category SET name = ?, updated_at = now() WHERE organization_id = ? AND id = ?",
+                name, organizationId, categoryId);
+        return findCategory(organizationId, categoryId).orElseThrow();
+    }
+
+    @Override
+    @Transactional
+    public void deleteCategory(UUID organizationId, UUID categoryId, UUID replacementCategoryId) {
+        if (replacementCategoryId != null) {
+            jdbc.update("""
+                    UPDATE kb.document SET category_id = ?
+                    WHERE organization_id = ? AND category_id = ?
+                    """, replacementCategoryId, organizationId, categoryId);
+        } else if (jdbc.queryForObject("SELECT count(*) FROM kb.document WHERE organization_id = ? AND category_id = ?",
+                Long.class, organizationId, categoryId) > 0) {
+            throw new IllegalStateException("分类仍有文档，请先选择替代分类");
+        }
+        jdbc.update("DELETE FROM kb.document_category WHERE organization_id = ? AND id = ?", organizationId, categoryId);
+    }
+
+    @Override
+    public void assignCategory(UUID organizationId, UUID documentId, UUID categoryId) {
+        jdbc.update("""
+                UPDATE kb.document d SET category_id = ?, library_scope = c.scope, updated_at = now()
+                FROM kb.document_category c
+                WHERE d.organization_id = ? AND d.id = ? AND c.organization_id = d.organization_id AND c.id = ?
+                """, categoryId, organizationId, documentId, categoryId);
+    }
+
+    @Override
+    public void renameDocument(UUID organizationId, UUID documentId, String title) {
+        jdbc.update("UPDATE kb.document SET title = ?, updated_at = now() WHERE organization_id = ? AND id = ?",
+                title, organizationId, documentId);
+    }
+
+    @Override
+    public void deleteDocument(UUID organizationId, UUID documentId) {
+        jdbc.update("DELETE FROM kb.document WHERE organization_id = ? AND id = ?", organizationId, documentId);
     }
 
     @Override
@@ -245,11 +347,12 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
 
     @Override
     public List<SearchRow> fullTextSearch(UUID organizationId, String query, boolean aiOnly, int limit) {
-        return fullTextSearch(organizationId, query, aiOnly, List.of(), limit);
+        return fullTextSearch(organizationId, query, aiOnly, List.of(), List.of(), limit);
     }
 
     @Override
-    public List<SearchRow> fullTextSearch(UUID organizationId, String query, boolean aiOnly, List<UUID> scopeIds, int limit) {
+    public List<SearchRow> fullTextSearch(UUID organizationId, String query, boolean aiOnly, List<UUID> scopeIds,
+                                          List<UUID> categoryIds, int limit) {
         var aiClause = aiOnly ? "AND d.ai_status = 'APPROVED'" : "";
         var sql = """
                 SELECT c.id, c.document_id, c.document_version_id, d.title, v.original_name,
@@ -261,18 +364,22 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                 WHERE d.organization_id = ? AND v.version_no = d.current_version_no
                   AND d.status = 'READY' AND v.status = 'READY'
                 """ + aiClause + """
+                """ + categoryClause(categoryIds) + """
                   AND (c.search_vector @@ plainto_tsquery('simple', ?)
                        OR c.content ILIKE '%' || ? || '%')
                 """ + scopeClause(scopeIds, "d.id", "c.document_version_id") + " ORDER BY score DESC, c.created_at DESC LIMIT ?";
         var args = new java.util.ArrayList<Object>();
-        args.add(query); args.add(organizationId); args.add(query); args.add(query);
+        args.add(query); args.add(organizationId);
+        if (categoryIds != null) args.addAll(categoryIds);
+        args.add(query); args.add(query);
         if (scopeIds != null) args.addAll(scopeIds);
         args.add(limit);
         return jdbc.query(sql, this::mapSearch, args.toArray());
     }
 
     @Override
-    public List<SearchRow> bm25Search(UUID organizationId, List<String> terms, boolean aiOnly, List<UUID> scopeIds, int limit) {
+    public List<SearchRow> bm25Search(UUID organizationId, List<String> terms, boolean aiOnly, List<UUID> scopeIds,
+                                      List<UUID> categoryIds, int limit) {
         if (terms == null || terms.isEmpty()) return List.of();
         var scope = scopeClause(scopeIds, "d.id", "c.document_version_id");
         var aiClause = aiOnly ? "AND d.ai_status = 'APPROVED'" : "";
@@ -294,7 +401,7 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                     JOIN kb.document_version v ON v.id = c.document_version_id
                     WHERE d.organization_id = ? AND v.version_no = d.current_version_no
                       AND d.status = 'READY' AND v.status = 'READY'
-                """ + aiClause + scope + """
+                """ + aiClause + categoryClause(categoryIds) + scope + """
                     GROUP BY c.id, c.document_id, c.document_version_id, d.title, v.original_name,
                              c.page_no, c.section, c.content
                 )
@@ -305,6 +412,7 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
         args.add(terms.toArray(String[]::new));
         args.add(organizationId);
         args.add(organizationId);
+        if (categoryIds != null) args.addAll(categoryIds);
         if (scopeIds != null) args.addAll(scopeIds);
         args.add(limit);
         return jdbc.query(sql, this::mapSearch, args.toArray());
@@ -312,11 +420,12 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
 
     @Override
     public List<SearchRow> vectorSearch(UUID organizationId, String vector, boolean aiOnly, int limit) {
-        return vectorSearch(organizationId, vector, aiOnly, List.of(), limit);
+        return vectorSearch(organizationId, vector, aiOnly, List.of(), List.of(), limit);
     }
 
     @Override
-    public List<SearchRow> vectorSearch(UUID organizationId, String vector, boolean aiOnly, List<UUID> scopeIds, int limit) {
+    public List<SearchRow> vectorSearch(UUID organizationId, String vector, boolean aiOnly, List<UUID> scopeIds,
+                                        List<UUID> categoryIds, int limit) {
         var aiClause = aiOnly ? "AND d.ai_status = 'APPROVED'" : "";
         var sql = """
                 SELECT c.id, c.document_id, c.document_version_id, d.title, v.original_name,
@@ -327,10 +436,12 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                 JOIN kb.document_version v ON v.id = c.document_version_id
                 WHERE d.organization_id = ? AND v.version_no = d.current_version_no
                   AND d.status = 'READY' AND v.status = 'READY'
-                """ + aiClause + " AND c.embedding IS NOT NULL\n" + scopeClause(scopeIds, "d.id", "c.document_version_id")
+                """ + aiClause + categoryClause(categoryIds) + " AND c.embedding IS NOT NULL\n"
+                + scopeClause(scopeIds, "d.id", "c.document_version_id")
                 + "ORDER BY c.embedding <=> CAST(? AS vector) LIMIT ?";
         var args = new java.util.ArrayList<Object>();
         args.add(vector); args.add(organizationId);
+        if (categoryIds != null) args.addAll(categoryIds);
         if (scopeIds != null) args.addAll(scopeIds);
         args.add(vector); args.add(limit);
         return jdbc.query(sql, this::mapSearch, args.toArray());
@@ -341,9 +452,11 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                 SELECT d.id, d.organization_id, d.title, d.document_type, d.status, d.scan_status,
                        d.ai_status, d.current_version_no, v.id AS current_version_id,
                        v.original_name, v.content_type, v.size_bytes, v.sha256,
-                       d.parse_error, d.created_at, d.updated_at
+                       d.parse_error, d.created_at, d.updated_at, d.library_scope,
+                       d.category_id, c.name AS category_name
                 FROM kb.document d
                 JOIN kb.document_version v ON v.document_id = d.id AND v.version_no = d.current_version_no
+                LEFT JOIN kb.document_category c ON c.id = d.category_id
                 """ + where;
     }
 
@@ -354,7 +467,8 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                 rs.getString("ai_status"), rs.getInt("current_version_no"),
                 rs.getObject("current_version_id", UUID.class), rs.getString("original_name"),
                 rs.getString("content_type"), rs.getLong("size_bytes"), rs.getString("sha256"),
-                rs.getString("parse_error"), instant(rs.getTimestamp("created_at")), instant(rs.getTimestamp("updated_at"))
+                rs.getString("parse_error"), instant(rs.getTimestamp("created_at")), instant(rs.getTimestamp("updated_at")),
+                rs.getString("library_scope"), rs.getObject("category_id", UUID.class), rs.getString("category_name")
         );
     }
 
@@ -381,6 +495,12 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
         return " AND EXISTS (SELECT 1 FROM ai.ai_scope_resource sr WHERE sr.scope_id IN (" + placeholders + ")"
                 + " AND ((sr.resource_type = 'KNOWLEDGE_DOCUMENT' AND sr.resource_id = " + documentColumn + ")"
                 + " OR (sr.resource_type = 'KNOWLEDGE_VERSION' AND sr.resource_id = " + versionColumn + ")))\n";
+    }
+
+    private String categoryClause(List<UUID> categoryIds) {
+        if (categoryIds == null || categoryIds.isEmpty()) return "";
+        var placeholders = String.join(",", java.util.Collections.nCopies(categoryIds.size(), "?"));
+        return " AND d.category_id IN (" + placeholders + ")\n";
     }
 
     private String truncate(String value) {

@@ -10,10 +10,16 @@ public interface KnowledgeSearchFacade {
     SearchResult search(SearchRequest request);
 
     record SearchRequest(UUID organizationId, String query, boolean aiOnly, int limit,
-                         List<UUID> scopeIds, List<String> queryVariants) {
+                         List<UUID> scopeIds, List<UUID> categoryIds, List<String> queryVariants) {
         public SearchRequest {
             scopeIds = scopeIds == null ? List.of() : List.copyOf(scopeIds);
+            categoryIds = categoryIds == null ? List.of() : List.copyOf(categoryIds);
             queryVariants = queryVariants == null ? List.of() : List.copyOf(queryVariants);
+        }
+
+        public SearchRequest(UUID organizationId, String query, boolean aiOnly, int limit,
+                             List<UUID> scopeIds, List<String> queryVariants) {
+            this(organizationId, query, aiOnly, limit, scopeIds, List.of(), queryVariants);
         }
     }
 

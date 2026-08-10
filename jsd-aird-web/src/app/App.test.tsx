@@ -22,7 +22,7 @@ describe('App', () => {
   it('renders the platform shell', async () => {
     render(<App />);
 
-    expect(await screen.findByText('模板上传')).toBeInTheDocument();
+    expect((await screen.findAllByText('模板上传')).length).toBeGreaterThan(0);
     expect(screen.getByText('生产单管理')).toBeInTheDocument();
   });
 });

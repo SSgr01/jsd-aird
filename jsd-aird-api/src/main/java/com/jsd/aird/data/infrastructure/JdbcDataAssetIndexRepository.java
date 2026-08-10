@@ -26,7 +26,14 @@ public class JdbcDataAssetIndexRepository implements DataAssetIndexRepository {
 
     @Override
     public List<DataAssetSearchFacade.DataHit> search(UUID organizationId, String query, List<UUID> scopeIds, int limit) {
+        return search(organizationId, query, scopeIds, List.of(), limit);
+    }
+
+    @Override
+    public List<DataAssetSearchFacade.DataHit> search(UUID organizationId, String query, List<UUID> scopeIds,
+                                                      List<UUID> categoryIds, int limit) {
         var scopeClause = scopeClause(scopeIds);
+        var categoryClause = categoryClause(categoryIds);
         var sql = """
                 SELECT i.id, i.scope_id, i.asset_id, i.revision_id, i.row_number, i.field_code,
                        a.display_name, i.content,
@@ -37,6 +44,7 @@ public class JdbcDataAssetIndexRepository implements DataAssetIndexRepository {
                 JOIN data.data_asset a ON a.id = i.asset_id
                 JOIN data.data_asset_revision r ON r.id = i.revision_id
                 WHERE i.organization_id = ?
+                  """ + categoryClause + """
                   AND a.status = 'ACTIVE'
                   AND r.publication_status = 'PUBLISHED'
                   AND (i.search_vector @@ plainto_tsquery('simple', ?) OR i.content ILIKE '%' || ? || '%')
@@ -44,6 +52,7 @@ public class JdbcDataAssetIndexRepository implements DataAssetIndexRepository {
         var args = new ArrayList<Object>();
         args.add(query);
         args.add(organizationId);
+        if (categoryIds != null) args.addAll(categoryIds);
         args.add(query);
         args.add(query);
         if (scopeIds != null) args.addAll(scopeIds);
@@ -116,6 +125,11 @@ public class JdbcDataAssetIndexRepository implements DataAssetIndexRepository {
     private String scopeClause(List<UUID> scopeIds) {
         if (scopeIds == null || scopeIds.isEmpty()) return "";
         return " AND i.scope_id IN (" + String.join(",", java.util.Collections.nCopies(scopeIds.size(), "?")) + ")\n";
+    }
+
+    private String categoryClause(List<UUID> categoryIds) {
+        if (categoryIds == null || categoryIds.isEmpty()) return "";
+        return " AND a.category_id IN (" + String.join(",", java.util.Collections.nCopies(categoryIds.size(), "?")) + ")\n";
     }
 
     private record AssetRow(UUID id, String name, UUID revisionId) {

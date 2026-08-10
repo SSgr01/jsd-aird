@@ -1,16 +1,12 @@
 import {
-  CheckCircleOutlined,
   DeleteOutlined,
-  FileExcelOutlined,
-  FileWordOutlined,
-  InboxOutlined,
+  CloudUploadOutlined,
   ReloadOutlined,
 } from '@ant-design/icons';
 import {
   Alert,
   App,
   Button,
-  Card,
   Collapse,
   Form,
   Input,
@@ -19,15 +15,14 @@ import {
   Select,
   Space,
   Table,
-  Tag,
   Typography,
-  Upload,
 } from 'antd';
 import type { UploadFile } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import type { TemplateFormat, TargetDataType } from '@/features/template-workspace/types';
+import { UploadWorkspace, type UploadWorkspaceRecord } from '@/components/upload-workspace';
 import {
   templateApi,
   type CreateTemplateInput,
@@ -63,6 +58,9 @@ export function TemplateUploadPage() {
   const [retryingJobId, setRetryingJobId] = useState<string>();
   const [creating, setCreating] = useState(false);
   const [categories, setCategories] = useState<TemplateCategory[]>([]);
+  const [jobFilter, setJobFilter] = useState('ALL');
+  const [jobKeyword, setJobKeyword] = useState('');
+  const [uploadCategory, setUploadCategory] = useState<string>();
   const [form] = Form.useForm<CreateTemplateInput>();
   const displaySuggestions = useMemo(
     () => buildDisplaySuggestions(viewSuggestions),
@@ -98,25 +96,57 @@ export function TemplateUploadPage() {
   }, [load, running]);
 
   const startUpload = async () => {
-    const file = files[0]?.originFileObj;
-    if (!file) {
+    const sourceFiles = files.flatMap((item) => item.originFileObj ? [item.originFileObj] : []);
+    if (!sourceFiles.length) {
       void message.warning('请先选择 Excel 或 Word 文件');
       return;
     }
-    const format: TemplateFormat = file.name.toLowerCase().endsWith('.xlsx') ? 'XLSX' : 'DOCX';
     setUploading(true);
     try {
-      const staged = await templateApi.stageOfficeFile(file);
-      await templateApi.createImport(staged.fileId, format);
+      const results = await Promise.allSettled(sourceFiles.map(async (file) => {
+        const format: TemplateFormat = file.name.toLowerCase().endsWith('.xlsx') ? 'XLSX' : 'DOCX';
+        const staged = await templateApi.stageOfficeFile(file);
+        await templateApi.createImport(staged.fileId, format);
+      }));
+      const failed = results.filter((result) => result.status === 'rejected').length;
       setFiles([]);
       await load();
-      void message.success('文件已接收，系统正在自动识别');
+      if (failed) void message.warning(`${sourceFiles.length - failed} 个文件已接收，${failed} 个文件上传失败`);
+      else void message.success(`已接收 ${sourceFiles.length} 个文件，系统正在自动识别`);
     } catch (error) {
       void message.error(error instanceof Error ? error.message : '文件上传失败');
     } finally {
       setUploading(false);
     }
   };
+
+  const filteredJobs = useMemo(() => jobs.filter((job) => {
+    const filterMatch = jobFilter === 'ALL' || (jobFilter === 'PROCESSING' ? !['PARSED', 'FAILED'].includes(job.status) : job.status === jobFilter);
+    const keywordMatch = !jobKeyword || job.sourceFileName.toLowerCase().includes(jobKeyword.toLowerCase());
+    return filterMatch && keywordMatch;
+  }), [jobFilter, jobKeyword, jobs]);
+
+  const uploadRecords: UploadWorkspaceRecord[] = filteredJobs.map((job) => {
+    const status = job.status === 'FAILED'
+      ? { label: '识别失败', color: 'error' }
+      : job.status === 'PARSED'
+        ? { label: recognitionStatus(job) === 'COMPLETE' ? '已识别' : '待复核', color: recognitionStatus(job) === 'COMPLETE' ? 'success' : 'warning' }
+        : { label: '识别中', color: 'processing' };
+    return {
+      id: job.id,
+      name: job.sourceFileName,
+      meta: `${job.format === 'XLSX' ? 'Excel' : 'Word'} · ${new Date(job.createdAt).toLocaleString('zh-CN')}`,
+      detail: job.status === 'PARSED' ? recognitionLabel(job) : stageLabel(job.currentStage),
+      status,
+      progress: job.progress,
+      actions: <Space size={2} wrap>
+        <Button type="link" disabled={job.status !== 'PARSED'} onClick={() => void openRecognition(job)}>查看识别结果</Button>
+        <Button type="link" disabled={job.status !== 'PARSED'} onClick={() => openCreate(job)}>创建模板</Button>
+        <Button type="link" icon={<ReloadOutlined />} loading={retryingJobId === job.id} disabled={!['PARSED', 'FAILED'].includes(job.status)} onClick={() => void retryRecognition(job)}>重试</Button>
+        <Button type="link" danger icon={<DeleteOutlined />} loading={deletingJobId === job.id} disabled={!['PARSED', 'FAILED'].includes(job.status)} aria-label={`删除 ${job.sourceFileName}`} onClick={() => Modal.confirm({ title: `删除“${job.sourceFileName}”的识别记录？`, content: '只删除识别记录和审计数据，不删除原始文件；已生成模板的记录不能删除。', okText: '删除记录', okButtonProps: { danger: true }, cancelText: '取消', onOk: () => deleteRecognition(job) })} />
+      </Space>,
+    };
+  });
 
   const openCreate = (job: TemplateImportJob) => {
     setSelectedJob(job);
@@ -199,179 +229,43 @@ export function TemplateUploadPage() {
   };
 
   return (
-    <div className="business-page">
-      <div className="page-heading">
-        <div>
-          <Typography.Title level={2}>从文件创建模板</Typography.Title>
-          <Typography.Text type="secondary">
-            上传后系统自动识别字段、业务分组和表格区域；进入工作台后只需确认少量不确定内容。
-          </Typography.Text>
-        </div>
-        <Button onClick={() => navigate('/templates/library')}>模板中心</Button>
-      </div>
-
-      <Card className="content-card upload-card">
-        <Upload.Dragger
-          accept={accepted}
-          maxCount={1}
-          fileList={files}
-          beforeUpload={() => false}
-          onChange={({ fileList }) => setFiles(fileList.slice(-1))}
-        >
-          <p className="ant-upload-drag-icon">
-            <InboxOutlined />
-          </p>
-          <p className="ant-upload-text">拖入 Excel 或 Word 文件</p>
-          <p className="ant-upload-hint">原始版式会完整保留，系统会在后台自动分析可填写内容。</p>
-        </Upload.Dragger>
-        <div className="upload-actions">
-          <Button
-            type="primary"
-            size="large"
-            loading={uploading}
-            disabled={!files.length}
-            onClick={() => void startUpload()}
-          >
-            开始识别
-          </Button>
-        </div>
-      </Card>
-
-      <Card className="content-card" title="识别记录">
-        <Table
-          rowKey="id"
-          dataSource={jobs}
-          pagination={{ pageSize: 8, showSizeChanger: false }}
-          columns={[
-            {
-              title: '文件',
-              dataIndex: 'sourceFileName',
-              render: (value: string, job) => (
-                <Space>
-                  {job.format === 'XLSX' ? (
-                    <FileExcelOutlined className="excel-icon" />
-                  ) : (
-                    <FileWordOutlined className="word-icon" />
-                  )}
-                  <Typography.Text>{value}</Typography.Text>
-                </Space>
-              ),
-            },
-            {
-              title: '识别进度',
-              width: 260,
-              render: (_, job) => (
-                <div className="recognition-progress-cell">
-                  <Progress
-                    percent={job.progress}
-                    size="small"
-                    status={
-                      job.status === 'FAILED'
-                        ? 'exception'
-                        : job.status === 'PARSED' && recognitionStatus(job) === 'COMPLETE'
-                          ? 'success'
-                          : job.status === 'PARSED'
-                            ? 'normal'
-                            : 'active'
-                    }
-                  />
-                  <Typography.Text type="secondary" className="progress-stage">
-                    {job.status === 'PARSED' ? recognitionLabel(job) : stageLabel(job.currentStage)}
-                  </Typography.Text>
-                </div>
-              ),
-            },
-            {
-              title: '识别结果',
-              width: 210,
-              render: (_, job) => (
-                <Space size={4} wrap>
-                  {job.status === 'PARSED' && recognitionStatus(job) === 'COMPLETE' && (
-                    <Tag color="success" icon={<CheckCircleOutlined />}>
-                      完成
-                    </Tag>
-                  )}
-                  {job.status === 'PARSED' && recognitionStatus(job) === 'REVIEW_REQUIRED' && (
-                    <Tag color="warning">识别待复核</Tag>
-                  )}
-                  {pendingFieldCount(job) > 0 && (
-                    <Tag color="gold">待确认字段 {pendingFieldCount(job)} 项</Tag>
-                  )}
-                  {pendingFieldCount(job) === 0 && reviewableFieldCount(job) > 0 && (
-                    <Tag color="blue">识别字段 {reviewableFieldCount(job)} 项</Tag>
-                  )}
-                  {structureConflictCount(job) > 0 && (
-                    <Tag color="orange">结构冲突 {structureConflictCount(job)} 组</Tag>
-                  )}
-                  {qualityIssueCount(job) > 0 && (
-                    <Tag color="red">质量问题 {qualityIssueCount(job)} 项</Tag>
-                  )}
-                  {job.retryCount > 0 && (
-                    <Tag color="default">已重识别 {job.retryCount} 次</Tag>
-                  )}
-                  {job.status === 'FAILED' && <Tag color="error">识别失败</Tag>}
-                </Space>
-              ),
-            },
-            {
-              title: '时间',
-              dataIndex: 'createdAt',
-              width: 180,
-              render: (value: string) => new Date(value).toLocaleString('zh-CN'),
-            },
-            {
-              title: '操作',
-              width: 190,
-              render: (_, job) => (
-                <Space size={2}>
-                  <Button
-                    type="link"
-                    disabled={job.status !== 'PARSED'}
-                    onClick={() => void openRecognition(job)}
-                  >
-                    查看识别结果
-                  </Button>
-                  <Button
-                    type="link"
-                    disabled={job.status !== 'PARSED'}
-                    onClick={() => openCreate(job)}
-                  >
-                    创建模板
-                  </Button>
-                  <Button
-                    type="link"
-                    icon={<ReloadOutlined />}
-                    loading={retryingJobId === job.id}
-                    disabled={!['PARSED', 'FAILED'].includes(job.status)}
-                    title={`已重识别 ${job.retryCount} 次；调用模型失败时会自动重试瞬时错误`}
-                    onClick={() => void retryRecognition(job)}
-                  >
-                    重试
-                  </Button>
-                  <Button
-                    type="link"
-                    danger
-                    icon={<DeleteOutlined />}
-                    loading={deletingJobId === job.id}
-                    disabled={!['PARSED', 'FAILED'].includes(job.status)}
-                    onClick={() =>
-                      Modal.confirm({
-                        title: `删除“${job.sourceFileName}”的识别记录？`,
-                        content:
-                          '只删除识别记录和审计数据，不删除原始 Excel 文件；已生成模板的记录不能删除。',
-                        okText: '删除记录',
-                        okButtonProps: { danger: true },
-                        cancelText: '取消',
-                        onOk: () => deleteRecognition(job),
-                      })
-                    }
-                  />
-                </Space>
-              ),
-            },
-          ]}
-        />
-      </Card>
+    <>
+      <UploadWorkspace
+        breadcrumbs={[{ title: '模板中心' }, { title: '模板上传' }]}
+        title="模板上传"
+        description="上传后系统自动识别字段、业务分组和表格区域；进入工作台后只需确认少量不确定内容。"
+        headerActions={<Button onClick={() => navigate('/templates/library')}>模板查看</Button>}
+        leftTitle="基础分类"
+        classification={<Form layout="vertical" component={false}>
+          <Form.Item label="模板分类">
+            <Select allowClear placeholder="选择模板分类" value={uploadCategory} onChange={(value) => { setUploadCategory(value); form.setFieldValue('category', value); }} options={categories.map((item) => ({ value: item.name, label: item.name }))} />
+          </Form.Item>
+          <Form.Item label="权限可见">
+            <Select defaultValue="全员可见" options={[{ value: '全员可见', label: '全员可见' }, { value: '研发部可见', label: '研发部可见' }, { value: '项目组可见', label: '项目组可见' }]} />
+          </Form.Item>
+        </Form>}
+        accept={accepted}
+        multiple
+        files={files}
+        onFilesChange={setFiles}
+        onRemoveFile={(file) => setFiles((current) => current.filter((item) => item.uid !== file.uid))}
+        onClearFiles={() => setFiles([])}
+        uploadMainText="拖拽文件到此处，或点击选择文件"
+        uploadHint="支持 XLSX / DOCX，支持批量上传；原始版式会完整保留。"
+        submitLabel="开始识别"
+        submitIcon={<CloudUploadOutlined />}
+        onSubmit={() => void startUpload()}
+        submitting={uploading}
+        rightTitle="已上传文件"
+        rightCount={filteredJobs.length}
+        rightFilters={[{ key: 'ALL', label: '全部' }, { key: 'PROCESSING', label: '识别中' }, { key: 'PARSED', label: '已识别' }, { key: 'FAILED', label: '失败' }]}
+        activeFilter={jobFilter}
+        onFilterChange={setJobFilter}
+        searchValue={jobKeyword}
+        onSearchChange={setJobKeyword}
+        records={uploadRecords}
+        recordsLoading={uploading}
+      />
 
       <Modal
         title="确认模板信息"
@@ -500,7 +394,7 @@ export function TemplateUploadPage() {
           </Space>
         )}
       </Modal>
-    </div>
+    </>
   );
 }
 
@@ -533,22 +427,6 @@ function recognitionAlertType(job: TemplateImportJob): 'success' | 'error' | 'wa
   if (status === 'COMPLETE') return 'success';
   if (status === 'REVIEW_REQUIRED') return 'warning';
   return 'info';
-}
-
-function reviewableFieldCount(job: TemplateImportJob) {
-  return recognitionCounts(job).fields;
-}
-
-function pendingFieldCount(job: TemplateImportJob) {
-  return recognitionCounts(job).pending;
-}
-
-function structureConflictCount(job: TemplateImportJob) {
-  return recognitionCounts(job).conflicts;
-}
-
-function qualityIssueCount(job: TemplateImportJob) {
-  return recognitionCounts(job).quality;
 }
 
 function recognitionDescription(job: TemplateImportJob) {

@@ -9,5 +9,10 @@ public interface DataAssetIndexRepository {
 
     List<DataAssetSearchFacade.DataHit> search(UUID organizationId, String query, List<UUID> scopeIds, int limit);
 
+    default List<DataAssetSearchFacade.DataHit> search(UUID organizationId, String query, List<UUID> scopeIds,
+                                                       List<UUID> categoryIds, int limit) {
+        return search(organizationId, query, scopeIds, limit);
+    }
+
     int indexPublished(UUID organizationId, List<UUID> assetIds);
 }

@@ -23,6 +23,14 @@ public class DataAssetSearchService implements DataAssetSearchFacade {
     }
 
     @Override
+    public List<DataHit> search(UUID organizationId, String query, List<UUID> scopeIds,
+                                List<UUID> categoryIds, int limit) {
+        if (query == null || query.isBlank()) return List.of();
+        return repository.search(organizationId, query.strip(), scopeIds, categoryIds,
+                Math.min(50, Math.max(1, limit)));
+    }
+
+    @Override
     public int indexPublished(UUID organizationId, List<UUID> assetIds) {
         return repository.indexPublished(organizationId, assetIds);
     }

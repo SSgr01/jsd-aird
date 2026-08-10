@@ -61,7 +61,8 @@ public class AssistantController {
     public ApiResponse<?> fileSearch(@RequestBody FileSearchRequest request) {
         var actor = ActorContext.required();
         return success(rag.retrieve(actor.organizationId(), request.query(), List.of(), request.scopeIds(),
-                request.scopeTypes(), !Boolean.FALSE.equals(request.aiOnly())));
+                request.scopeTypes(), request.knowledgeCategoryIds(), request.dataCategoryIds(),
+                !Boolean.FALSE.equals(request.aiOnly())));
     }
 
     @GetMapping("/scopes")
@@ -129,13 +130,16 @@ public class AssistantController {
     }
 
     public record QaRequest(UUID conversationId, @Size(min = 1, max = 3000) String question,
-                            List<UUID> scopeIds, List<String> scopeTypes) {
+                            List<UUID> scopeIds, List<String> scopeTypes, List<UUID> knowledgeCategoryIds,
+                            List<UUID> dataCategoryIds) {
         AssistantService.AskCommand command() {
-            return new AssistantService.AskCommand(conversationId, question, scopeIds, scopeTypes);
+            return new AssistantService.AskCommand(conversationId, question, scopeIds, scopeTypes,
+                    knowledgeCategoryIds, dataCategoryIds);
         }
     }
     public record FileSearchRequest(@Size(min = 1, max = 1000) String query, Boolean aiOnly, int limit,
-                                    List<UUID> scopeIds, List<String> scopeTypes) {
+                                    List<UUID> scopeIds, List<String> scopeTypes, List<UUID> knowledgeCategoryIds,
+                                    List<UUID> dataCategoryIds) {
         public int safeLimit() { return limit <= 0 ? 20 : Math.min(50, limit); }
     }
     public record ScopeRequest(String scopeType, String externalId, String name,

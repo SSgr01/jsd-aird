@@ -1,9 +1,47 @@
-import { InboxOutlined, RightOutlined } from '@ant-design/icons';
-import { Alert, App, Button, Card, Empty, Select, Space, Tag, Typography, Upload } from 'antd';
+import { DatabaseOutlined, FileExcelOutlined, RightOutlined } from '@ant-design/icons';
+import { App, Button, Form, Select } from 'antd';
 import type { UploadFile } from 'antd';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { dataApi, dataTypeOptions, type DataTemplateOption, type DataType } from '@/services/data/data-api';
+
+import { UploadWorkspace, type UploadWorkspaceRecord } from '@/components/upload-workspace';
+import { dataApi, dataTypeOptions, type DataCategory, type DataJob, type DataTemplateOption, type DataType } from '@/services/data/data-api';
+
+const statusFilters = [
+  { key: 'ALL', label: '全部' },
+  { key: 'QUEUED', label: '上传中' },
+  { key: 'PARSING', label: '解析中' },
+  { key: 'WAITING_CONFIRM', label: '待审核' },
+  { key: 'COMPLETED', label: '已完成' },
+];
+
+const statusView: Record<string, { label: string; color: string }> = {
+  CREATED: { label: '待处理', color: 'default' },
+  QUEUED: { label: '上传中', color: 'processing' },
+  PARSING: { label: '解析中', color: 'blue' },
+  WAITING_SHEET: { label: '待确认 Sheet', color: 'gold' },
+  WAITING_MAPPING: { label: '待字段映射', color: 'gold' },
+  VALIDATING: { label: '校验中', color: 'processing' },
+  WAITING_CONFIRM: { label: '待审核', color: 'orange' },
+  COMMITTING: { label: '提交中', color: 'processing' },
+  COMPLETED: { label: '已完成', color: 'success' },
+  FAILED: { label: '处理失败', color: 'error' },
+  CANCELLED: { label: '已取消', color: 'default' },
+};
+
+function jobRecord(job: DataJob, navigate: (path: string) => void): UploadWorkspaceRecord {
+  const status = statusView[job.status] || { label: job.status, color: 'default' };
+  return {
+    id: job.id,
+    name: job.sourceFileName,
+    icon: <FileExcelOutlined />,
+    meta: `${dataTypeOptions.find((item) => item.value === job.targetDataType)?.label || job.targetDataType} · 模板版本 ${job.templateVersionId}`,
+    detail: `${new Date(job.createdAt).toLocaleString('zh-CN')} · ${job.currentStage || '等待处理'}`,
+    status,
+    progress: job.progress,
+    actions: <Button type="link" icon={<RightOutlined />} onClick={() => navigate(`/data/import-jobs/${job.id}`)}>查看导入任务</Button>,
+  };
+}
 
 export function DataUploadPage() {
   const { message, modal } = App.useApp();
@@ -11,18 +49,63 @@ export function DataUploadPage() {
   const [target, setTarget] = useState<DataType>('MATERIAL');
   const [templates, setTemplates] = useState<DataTemplateOption[]>([]);
   const [templateVersionId, setTemplateVersionId] = useState<string>();
+  const [categoryId, setCategoryId] = useState<string>();
+  const [categories, setCategories] = useState<DataCategory[]>([]);
   const [files, setFiles] = useState<UploadFile[]>([]);
   const [loading, setLoading] = useState(false);
+  const [jobs, setJobs] = useState<{ items: DataJob[]; page: number; size: number; total: number }>({ items: [], page: 1, size: 8, total: 0 });
+  const [jobStatus, setJobStatus] = useState('ALL');
+  const [jobKeyword, setJobKeyword] = useState('');
+  const [jobsLoading, setJobsLoading] = useState(false);
 
-  useEffect(() => { void dataApi.listTemplates(target).then((items) => setTemplates(items.filter((item) => item.format === 'XLSX'))).catch((error) => void message.error(error instanceof Error ? error.message : '模板加载失败')); }, [target, message]);
+  useEffect(() => {
+    setTemplateVersionId(undefined);
+    setCategoryId(undefined);
+    void dataApi.listTemplates(target)
+      .then((items) => setTemplates(items.filter((item) => item.format === 'XLSX')))
+      .catch((error) => void message.error(error instanceof Error ? error.message : '模板加载失败'));
+  }, [message, target]);
+
+  useEffect(() => {
+    void dataApi.listCategories().then(setCategories).catch(() => setCategories([]));
+  }, []);
+
+  const loadJobs = useCallback(async () => {
+    setJobsLoading(true);
+    try {
+      const page = await dataApi.listJobs({
+        targetDataType: target,
+        status: jobStatus === 'ALL' ? undefined : jobStatus,
+        keyword: jobKeyword || undefined,
+        page: jobs.page,
+        size: jobs.size,
+      });
+      setJobs({ items: page.items, page: page.page, size: page.size, total: page.total });
+    } catch (error) {
+      void message.error(error instanceof Error ? error.message : '导入任务加载失败');
+    } finally {
+      setJobsLoading(false);
+    }
+  }, [jobKeyword, jobStatus, jobs.page, jobs.size, message, target]);
+
+  useEffect(() => { void loadJobs(); }, [loadJobs]);
+
+  useEffect(() => {
+    const hasActiveJob = jobs.items.some((job) => !['COMPLETED', 'FAILED', 'CANCELLED'].includes(job.status));
+    if (!hasActiveJob) return undefined;
+    const timer = window.setInterval(() => void loadJobs(), 3000);
+    return () => window.clearInterval(timer);
+  }, [jobs.items, loadJobs]);
+
   const chosen = useMemo(() => templates.find((item) => item.versionId === templateVersionId), [templateVersionId, templates]);
+
   const submit = async () => {
     const file = files[0]?.originFileObj;
     if (!chosen || !file) { void message.warning('请选择已发布模板和数据文件'); return; }
     setLoading(true);
     try {
       const staged = await dataApi.stageSource(file);
-      const create = async (duplicateOverride: boolean) => dataApi.createJob({ sourceFileId: staged.fileId, templateVersionId: chosen.versionId, targetDataType: target, duplicateOverride });
+      const create = async (duplicateOverride: boolean) => dataApi.createJob({ sourceFileId: staged.fileId, templateVersionId: chosen.versionId, targetDataType: target, categoryId, duplicateOverride });
       try {
         const job = await create(false);
         navigate(`/data/import-jobs/${job.id}`);
@@ -47,21 +130,69 @@ export function DataUploadPage() {
           });
         } else throw error;
       }
-    } catch (error) { void message.error(error instanceof Error ? error.message : '创建导入任务失败'); }
-    finally { setLoading(false); }
+      setFiles([]);
+      await loadJobs();
+    } catch (error) {
+      void message.error(error instanceof Error ? error.message : '创建导入任务失败');
+    } finally {
+      setLoading(false);
+    }
   };
-  return <div className="business-page">
-    <div className="page-heading"><div><Typography.Title level={2}>数据上传</Typography.Title><Typography.Text type="secondary">选择已发布的数据中心模板，上传后按 Sheet、字段和质量问题逐步确认。</Typography.Text></div><Button onClick={() => navigate('/data/view')}>查看正式数据</Button></div>
-    <Card className="content-card" title="1. 选择数据类型和模板">
-      <Space direction="vertical" size={16} style={{ width: '100%' }}>
-        <Select value={target} options={dataTypeOptions} onChange={(value) => { setTarget(value); setTemplateVersionId(undefined); }} style={{ width: 260 }} aria-label="数据类型" />
-        {templates.length ? <div className="template-card-grid">{templates.map((item) => <button type="button" key={item.versionId} className="template-choice" aria-current={templateVersionId === item.versionId} onClick={() => setTemplateVersionId(item.versionId)}><span className="format-badge excel">▦</span><span className="template-choice-content"><strong>{item.name}</strong><small>{item.templateCode} · V{item.versionNo}</small><span>{item.category || '未分类'}</span></span><Tag color="green">已发布</Tag></button>)}</div> : <Empty description="暂无适用的已发布数据模板" />}
-      </Space>
-    </Card>
-    <Card className="content-card" title="2. 上传数据文件">
-      <Alert type="info" showIcon message="首期支持 XLS、XLSX、CSV；原文件会保留并用于后续来源追溯。" style={{ marginBottom: 16 }} />
-      <Upload.Dragger accept=".xls,.xlsx,.csv" maxCount={1} beforeUpload={() => false} fileList={files} onChange={({ fileList }) => setFiles(fileList)}><p className="ant-upload-drag-icon"><InboxOutlined /></p><p>拖入或选择 XLS / XLSX / CSV 文件</p></Upload.Dragger>
-      <Button type="primary" size="large" block icon={<RightOutlined />} loading={loading} disabled={!chosen || !files.length} onClick={() => void submit()} style={{ marginTop: 18 }}>创建导入任务</Button>
-    </Card>
-  </div>;
+
+  const records = jobs.items.map((job) => jobRecord(job, navigate));
+
+  return (
+    <UploadWorkspace
+      breadcrumbs={[{ title: '数据中心' }, { title: '数据上传' }]}
+      title="数据上传"
+      description="选择已发布的数据中心模板，上传后按 Sheet、字段和质量问题逐步确认。"
+      headerActions={<Button icon={<DatabaseOutlined />} onClick={() => navigate('/data/view')}>查看正式数据</Button>}
+      leftTitle="数据分类"
+      classification={<Form layout="vertical" component={false}>
+        <Form.Item label="数据类型" required>
+          <Select value={target} options={dataTypeOptions} onChange={setTarget} />
+        </Form.Item>
+        <Form.Item label="导入模板" required help="仅显示已发布且适用于当前数据类型的 XLSX 模板。">
+          <Select
+            showSearch
+            optionFilterProp="label"
+            placeholder="请选择数据中心模板"
+            value={templateVersionId}
+            onChange={setTemplateVersionId}
+            options={templates.map((item) => ({ value: item.versionId, label: `${item.name} · ${item.templateCode} · V${item.versionNo}` }))}
+            notFoundContent="暂无适用的已发布模板"
+          />
+        </Form.Item>
+        <Form.Item label="归档分类" help="未选择时自动归入当前数据类型的内置分类。">
+          <Select allowClear value={categoryId} onChange={setCategoryId} placeholder="选择数据分类" options={categories.filter((item) => !item.targetDataType || item.targetDataType === target).map((item) => ({ value: item.id, label: item.name }))} />
+        </Form.Item>
+      </Form>}
+      accept=".xls,.xlsx,.csv"
+      maxCount={1}
+      files={files}
+      onFilesChange={setFiles}
+      onRemoveFile={(file) => setFiles((current) => current.filter((item) => item.uid !== file.uid))}
+      onClearFiles={() => setFiles([])}
+      uploadMainText="拖拽文件到此处，或点击选择文件"
+      uploadHint="支持 XLS / XLSX / CSV；原文件会保留并用于后续来源追溯。"
+      previewEmptyText="暂无待导入文件，点击上方区域选择文件"
+      submitLabel="创建导入任务"
+      submitIcon={<RightOutlined />}
+      onSubmit={() => void submit()}
+      submitting={loading}
+      submitDisabled={!chosen}
+      rightTitle="已上传数据"
+      rightCount={jobs.total}
+      rightFilters={statusFilters}
+      activeFilter={jobStatus}
+      onFilterChange={(key) => { setJobStatus(key); setJobs((current) => ({ ...current, page: 1 })); }}
+      searchValue={jobKeyword}
+      onSearchChange={(value) => { setJobKeyword(value); setJobs((current) => ({ ...current, page: 1 })); }}
+      searchPlaceholder="搜索文件名称"
+      records={records}
+      recordsLoading={jobsLoading}
+      pagination={{ current: jobs.page, pageSize: jobs.size, total: jobs.total }}
+      onPageChange={(page, pageSize) => setJobs((current) => ({ ...current, page, size: pageSize }))}
+    />
+  );
 }

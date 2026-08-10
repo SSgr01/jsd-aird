@@ -2,6 +2,7 @@ package com.jsd.aird.kb.application;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
@@ -9,7 +10,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -79,10 +83,21 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         var file = storage.open(actor.organizationId(), command.fileId());
         try {
             var title = StringUtils.hasText(command.title()) ? command.title().trim() : file.originalName();
+            var scope = normalizeScope(command.libraryScope());
+            var categoryId = command.categoryId();
+            if (categoryId == null) {
+                categoryId = repository.findDefaultCategory(actor.organizationId(), scope)
+                        .map(KnowledgeRepository.CategoryRow::id).orElse(null);
+            } else {
+                var category = repository.findCategory(actor.organizationId(), categoryId)
+                        .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "知识库分类不存在"));
+                if (!scope.equals(category.scope())) throw new ApiException(ApiErrorCode.BAD_REQUEST, "分类与资料范围不匹配");
+            }
             var documentId = UUID.randomUUID();
             var versionId = UUID.randomUUID();
             repository.insertDocument(new KnowledgeRepository.NewDocument(
-                    documentId, actor.organizationId(), title, normalizeType(command.documentType(), file.originalName()), actor.userId()
+                    documentId, actor.organizationId(), title, normalizeType(command.documentType(), file.originalName()),
+                    actor.userId(), scope, categoryId
             ));
             repository.insertVersion(new KnowledgeRepository.NewVersion(
                     versionId, documentId, 1, command.fileId(), file.originalName(), file.contentType(), file.size(), file.sha256()
@@ -103,14 +118,76 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         }
     }
 
-    public PageResponse<DocumentView> list(String keyword, String status, String aiStatus, int page, int size) {
+    public PageResponse<DocumentView> list(String keyword, String status, String aiStatus, String scope, UUID categoryId,
+                                           int page, int size) {
         var actor = ActorContext.required();
         var safePage = Math.max(1, page);
         var safeSize = Math.min(100, Math.max(1, size));
-        var items = repository.listDocuments(actor.organizationId(), keyword, status, aiStatus, safePage, safeSize)
+        var items = repository.listDocuments(actor.organizationId(), keyword, status, aiStatus, scope, categoryId, safePage, safeSize)
                 .stream().map(this::view).toList();
-        var total = repository.countDocuments(actor.organizationId(), keyword, status, aiStatus);
+        var total = repository.countDocuments(actor.organizationId(), keyword, status, aiStatus, scope, categoryId);
         return new PageResponse<>(items, safePage, safeSize, total, (total + safeSize - 1) / safeSize);
+    }
+
+    public List<KnowledgeRepository.CategoryRow> categories(String scope) {
+        return repository.listCategories(ActorContext.required().organizationId(), scope);
+    }
+
+    @Transactional
+    public KnowledgeRepository.CategoryRow createCategory(String scope, String name) {
+        var actor = ActorContext.required();
+        return repository.createCategory(actor.organizationId(), actor.userId(), normalizeScope(scope), normalizeName(name));
+    }
+
+    @Transactional
+    public KnowledgeRepository.CategoryRow renameCategory(UUID categoryId, String name) {
+        var actor = ActorContext.required();
+        requireCategory(actor.organizationId(), categoryId);
+        return repository.renameCategory(actor.organizationId(), categoryId, normalizeName(name));
+    }
+
+    @Transactional
+    public void deleteCategory(UUID categoryId, UUID replacementCategoryId) {
+        var actor = ActorContext.required();
+        var category = requireCategory(actor.organizationId(), categoryId);
+        if (replacementCategoryId != null) {
+            var replacement = requireCategory(actor.organizationId(), replacementCategoryId);
+            if (!category.scope().equals(replacement.scope())) {
+                throw new ApiException(ApiErrorCode.BAD_REQUEST, "替代分类必须属于相同资料范围");
+            }
+        }
+        repository.deleteCategory(actor.organizationId(), categoryId, replacementCategoryId);
+    }
+
+    @Transactional
+    public void assignCategory(UUID documentId, UUID categoryId) {
+        var actor = ActorContext.required();
+        var document = repository.findDocument(actor.organizationId(), documentId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "知识文件不存在"));
+        var category = requireCategory(actor.organizationId(), categoryId);
+        if (!document.libraryScope().equals(category.scope())) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "分类与资料范围不匹配");
+        }
+        repository.assignCategory(actor.organizationId(), documentId, categoryId);
+    }
+
+    @Transactional
+    public DocumentView renameDocument(UUID documentId, String title) {
+        var actor = ActorContext.required();
+        requireDocument(actor.organizationId(), documentId);
+        repository.renameDocument(actor.organizationId(), documentId, normalizeDocumentTitle(title));
+        audit.append(actor.organizationId(), actor.userId(), "KB_DOCUMENT_RENAMED", "KB_DOCUMENT", documentId,
+                objectMapper.createObjectNode().put("title", normalizeDocumentTitle(title)));
+        return get(documentId);
+    }
+
+    @Transactional
+    public void deleteDocument(UUID documentId) {
+        var actor = ActorContext.required();
+        requireDocument(actor.organizationId(), documentId);
+        repository.deleteDocument(actor.organizationId(), documentId);
+        audit.append(actor.organizationId(), actor.userId(), "KB_DOCUMENT_DELETED", "KB_DOCUMENT", documentId,
+                objectMapper.createObjectNode());
     }
 
     public DocumentView get(UUID documentId) {
@@ -210,8 +287,70 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         return storage.open(actor.organizationId(), version.fileObjectId());
     }
 
+    public byte[] exportDocuments(List<UUID> documentIds) {
+        var actor = ActorContext.required();
+        if (documentIds == null || documentIds.isEmpty() || documentIds.size() > 200) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "一次最多导出 200 个知识文件");
+        }
+        try (var output = new ByteArrayOutputStream(); var zip = new ZipOutputStream(output, StandardCharsets.UTF_8)) {
+            var manifest = new StringBuilder("documentId,title,originalName,versionNo,versionId,sha256\n");
+            var usedNames = new java.util.HashSet<String>();
+            usedNames.add("manifest.csv");
+            for (var documentId : documentIds.stream().distinct().toList()) {
+                var document = repository.findDocument(actor.organizationId(), documentId)
+                        .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "知识文件不存在：" + documentId));
+                var version = repository.findVersion(actor.organizationId(), document.currentVersionId())
+                        .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "知识文件版本不存在：" + document.currentVersionId()));
+                var baseName = sanitizeExportName(document.title() + "_V" + version.versionNo() + "_" + version.originalName());
+                var entryName = uniqueExportName(baseName, usedNames);
+                try (var stored = storage.open(actor.organizationId(), version.fileObjectId())) {
+                    zip.putNextEntry(new ZipEntry(entryName));
+                    stored.stream().transferTo(zip);
+                    zip.closeEntry();
+                }
+                manifest.append(csv(document.id().toString())).append(',')
+                        .append(csv(document.title())).append(',')
+                        .append(csv(version.originalName())).append(',')
+                        .append(version.versionNo()).append(',')
+                        .append(csv(version.id().toString())).append(',')
+                        .append(csv(version.sha256())).append('\n');
+            }
+            zip.putNextEntry(new ZipEntry("manifest.csv"));
+            zip.write(manifest.toString().getBytes(StandardCharsets.UTF_8));
+            zip.closeEntry();
+            zip.finish();
+            return output.toByteArray();
+        } catch (Exception exception) {
+            throw new IllegalStateException("知识文件导出失败", exception);
+        }
+    }
+
+    private String sanitizeExportName(String value) {
+        var normalized = value == null ? "document" : value.replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]", "_").trim();
+        normalized = normalized.replaceAll("^\\.+", "");
+        return normalized.isBlank() ? "document" : normalized.substring(0, Math.min(180, normalized.length()));
+    }
+
+    private String uniqueExportName(String requested, java.util.Set<String> usedNames) {
+        var candidate = requested;
+        var suffix = 2;
+        while (!usedNames.add(candidate)) {
+            var dot = requested.lastIndexOf('.');
+            var stem = dot > 0 ? requested.substring(0, dot) : requested;
+            var extension = dot > 0 ? requested.substring(dot) : "";
+            candidate = stem + "_" + suffix++ + extension;
+        }
+        return candidate;
+    }
+
+    private String csv(String value) {
+        var safe = value == null ? "" : value;
+        return "\"" + safe.replace("\"", "\"\"") + "\"";
+    }
+
     public List<KnowledgeSearchFacade.SearchHit> search(UUID organizationId, String query, boolean aiOnly, int limit) {
-        return search(new KnowledgeSearchFacade.SearchRequest(organizationId, query, aiOnly, limit, List.of(), List.of())).hits();
+        return search(new KnowledgeSearchFacade.SearchRequest(organizationId, query, aiOnly, limit,
+                List.of(), List.of(), List.of())).hits();
     }
 
     @Override
@@ -225,13 +364,16 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         var variants = request.queryVariants().isEmpty() ? List.of(request.query().trim()) : request.queryVariants();
         var terms = new java.util.LinkedHashSet<String>();
         variants.forEach(value -> terms.addAll(TermAnalyzer.frequencies(value).keySet()));
-        var bm25 = repository.bm25Search(organizationId, List.copyOf(terms), request.aiOnly(), request.scopeIds(), safeLimit * 4);
+        var bm25 = repository.bm25Search(organizationId, List.copyOf(terms), request.aiOnly(), request.scopeIds(),
+                request.categoryIds(), safeLimit * 4);
         var fullText = bm25.isEmpty()
-                ? repository.fullTextSearch(organizationId, request.query().trim(), request.aiOnly(), request.scopeIds(), safeLimit * 2)
+                ? repository.fullTextSearch(organizationId, request.query().trim(), request.aiOnly(), request.scopeIds(),
+                request.categoryIds(), safeLimit * 2)
                 : bm25;
         var vector = embeddings.getIfAvailable() == null ? java.util.Optional.<String>empty()
                 : embeddings.getIfAvailable().embedVector(request.query().trim());
-        var vectorRows = vector.map(value -> repository.vectorSearch(organizationId, value, request.aiOnly(), request.scopeIds(), safeLimit * 4))
+        var vectorRows = vector.map(value -> repository.vectorSearch(organizationId, value, request.aiOnly(), request.scopeIds(),
+                        request.categoryIds(), safeLimit * 4))
                 .orElse(List.of());
         var scores = new LinkedHashMap<UUID, Double>();
         var retrievalScores = new LinkedHashMap<UUID, Double>();
@@ -368,7 +510,39 @@ public class KnowledgeService implements KnowledgeSearchFacade {
     private DocumentView view(KnowledgeRepository.DocumentRow row) {
         return new DocumentView(row.id(), row.title(), row.documentType(), row.status(), row.scanStatus(), row.aiStatus(),
                 row.currentVersionNo(), row.currentVersionId(), row.originalName(), row.contentType(), row.size(),
-                row.sha256(), row.parseError(), row.createdAt(), row.updatedAt());
+                row.sha256(), row.parseError(), row.createdAt(), row.updatedAt(), row.libraryScope(), row.categoryId(), row.categoryName());
+    }
+
+    private KnowledgeRepository.CategoryRow requireCategory(UUID organizationId, UUID categoryId) {
+        return repository.findCategory(organizationId, categoryId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "知识库分类不存在"));
+    }
+
+    private KnowledgeRepository.DocumentRow requireDocument(UUID organizationId, UUID documentId) {
+        return repository.findDocument(organizationId, documentId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "知识文件不存在"));
+    }
+
+    private String normalizeDocumentTitle(String value) {
+        if (!StringUtils.hasText(value)) throw new ApiException(ApiErrorCode.BAD_REQUEST, "文件名称不能为空");
+        var normalized = value.trim();
+        if (normalized.length() > 260) throw new ApiException(ApiErrorCode.BAD_REQUEST, "文件名称不能超过 260 个字符");
+        return normalized;
+    }
+
+    private String normalizeScope(String value) {
+        var normalized = StringUtils.hasText(value) ? value.trim().toUpperCase(Locale.ROOT) : "INTERNAL";
+        if (!Set.of("INTERNAL", "EXTERNAL").contains(normalized)) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "资料范围只能是 INTERNAL 或 EXTERNAL");
+        }
+        return normalized;
+    }
+
+    private String normalizeName(String value) {
+        if (!StringUtils.hasText(value)) throw new ApiException(ApiErrorCode.BAD_REQUEST, "分类名称不能为空");
+        var normalized = value.trim();
+        if (normalized.length() > 120) throw new ApiException(ApiErrorCode.BAD_REQUEST, "分类名称不能超过 120 个字符");
+        return normalized;
     }
 
     private VersionView versionView(KnowledgeRepository.VersionRow row) {
@@ -408,13 +582,18 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         try { file.close(); } catch (Exception ignored) { }
     }
 
-    public record CreateCommand(UUID fileId, String title, String documentType) { }
+    public record CreateCommand(UUID fileId, String title, String documentType, String libraryScope, UUID categoryId) {
+        public CreateCommand(UUID fileId, String title, String documentType) {
+            this(fileId, title, documentType, "INTERNAL", null);
+        }
+    }
     public record GrantCommand(String action, String reason) { }
     public record CreateVersionCommand(UUID fileId) { }
     public record DocumentView(UUID id, String title, String documentType, String status, String scanStatus,
                                String aiStatus, int currentVersionNo, UUID currentVersionId, String originalName,
                                String contentType, long size, String sha256, String parseError,
-                               java.time.Instant createdAt, java.time.Instant updatedAt) { }
+                               java.time.Instant createdAt, java.time.Instant updatedAt, String libraryScope,
+                               UUID categoryId, String categoryName) { }
     public record VersionView(UUID id, UUID documentId, int versionNo, UUID fileObjectId, String originalName,
                               String contentType, long size, String sha256, String status, String parserVersion,
                               String errorMessage) { }

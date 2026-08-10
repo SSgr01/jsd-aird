@@ -8,6 +8,7 @@ import { DataViewPage } from './DataViewPage';
 vi.mock('@/services/data/data-api', () => ({
   dataApi: {
     listAssets: vi.fn(),
+    listCategories: vi.fn(),
     listTemplates: vi.fn(),
     exportAssets: vi.fn(),
   },
@@ -20,6 +21,8 @@ vi.mock('@/services/data/data-api', () => ({
 // The data service is mocked as a plain object; these references are the mock functions, not context-sensitive methods.
 // eslint-disable-next-line @typescript-eslint/unbound-method
 const listAssetsMock = vi.mocked(dataApi.listAssets);
+// eslint-disable-next-line @typescript-eslint/unbound-method
+const listCategoriesMock = vi.mocked(dataApi.listCategories);
 // eslint-disable-next-line @typescript-eslint/unbound-method
 const listTemplatesMock = vi.mocked(dataApi.listTemplates);
 // eslint-disable-next-line @typescript-eslint/unbound-method
@@ -37,10 +40,17 @@ describe('DataViewPage batch export', () => {
       createObjectURL: vi.fn().mockReturnValue('blob:test'),
       revokeObjectURL: vi.fn(),
     });
-    listAssetsMock.mockResolvedValue([
-      { id: 'asset-1', targetDataType: 'MATERIAL', assetKey: 'M-1', displayName: '物料一', status: 'ACTIVE', updatedAt: '2026-08-10T00:00:00Z' },
-      { id: 'asset-2', targetDataType: 'MATERIAL', assetKey: 'M-2', displayName: '物料二', status: 'ACTIVE', updatedAt: '2026-08-10T00:00:00Z' },
-    ]);
+    listAssetsMock.mockResolvedValue({
+      items: [
+        { id: 'asset-1', targetDataType: 'MATERIAL', assetKey: 'M-1', displayName: '物料一', status: 'ACTIVE', updatedAt: '2026-08-10T00:00:00Z' },
+        { id: 'asset-2', targetDataType: 'MATERIAL', assetKey: 'M-2', displayName: '物料二', status: 'ACTIVE', updatedAt: '2026-08-10T00:00:00Z' },
+      ],
+      page: 1,
+      size: 20,
+      total: 2,
+      totalPages: 1,
+    });
+    listCategoriesMock.mockResolvedValue([]);
     listTemplatesMock.mockResolvedValue([
       { templateId: 'tpl-1', versionId: 'version-1', templateCode: 'material', name: '物料导出模板', category: '原料', targetDataType: 'MATERIAL', versionNo: 1, format: 'XLSX' },
     ]);

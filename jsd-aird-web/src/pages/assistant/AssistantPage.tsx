@@ -1,33 +1,81 @@
-import { ClearOutlined, SendOutlined, RobotOutlined } from '@ant-design/icons';
-import { Alert, Avatar, Button, Card, Divider, Input, List, Select, Space, Spin, Tag, Typography } from 'antd';
-import { useEffect, useState } from 'react';
+import { DatabaseOutlined, FolderOpenOutlined } from '@ant-design/icons';
+import { Alert, App, Checkbox, Collapse, Space, Tag, Typography } from 'antd';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-import { assistantApi, type AssistantCitation, type AssistantResponse, type ConversationMeta } from '@/services/assistant';
+import { AiConversationWorkspace, type ConversationItem, type ConversationMessage } from '@/components/ai-conversation-workspace';
+import { assistantApi, type AiScope, type AssistantCitation, type AssistantResponse, type ConversationMeta } from '@/services/assistant';
+import { dataApi, type DataCategory } from '@/services/data/data-api';
+import { knowledgeApi, type KnowledgeCategory } from '@/services/knowledge';
 
 interface ChatMessage {
+  id: string;
   role: 'USER' | 'ASSISTANT';
   content: string;
   citations?: AssistantCitation[];
   warnings?: string[];
 }
 
+function renderAssistantContent(message: ChatMessage, navigate: ReturnType<typeof useNavigate>, streaming: boolean) {
+  return (
+    <div>
+      <Typography.Paragraph className="ai-message-text">{message.content || (streaming ? '正在生成回答…' : '')}</Typography.Paragraph>
+      {message.warnings?.map((warning) => <Alert key={warning} type="warning" showIcon message={warning} className="ai-message-alert" />)}
+      {message.citations?.length ? (
+        <div className="ai-message-citations">
+          <Typography.Text type="secondary">参考来源</Typography.Text>
+          <Space wrap>
+            {message.citations.map((citation) => (
+              <Tag
+                key={`${citation.sourceType}-${citation.chunkId}`}
+                color="blue"
+                className={citation.documentId ? 'is-clickable' : undefined}
+                onClick={() => { if (citation.documentId) navigate(`/knowledge/documents/${citation.documentId}`); }}
+              >
+                {citation.title || citation.dataAssetId || '数据资产来源'}{citation.pageNo ? ` · 第${citation.pageNo}页` : ''}
+              </Tag>
+            ))}
+          </Space>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function AssistantPage() {
+  const { message: toast } = App.useApp();
   const navigate = useNavigate();
   const [question, setQuestion] = useState('');
   const [conversationId, setConversationId] = useState<string>();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(false);
   const [streaming, setStreaming] = useState(false);
-  const [scopes, setScopes] = useState<Array<{ id: string; scopeType: string; name: string }>>([]);
-  const [selectedScopes, setSelectedScopes] = useState<string[]>([]);
   const [stage, setStage] = useState('等待提问');
+  const [scopes, setScopes] = useState<AiScope[]>([]);
   const [conversations, setConversations] = useState<ConversationMeta[]>([]);
+  const [knowledgeCategories, setKnowledgeCategories] = useState<KnowledgeCategory[]>([]);
+  const [dataCategories, setDataCategories] = useState<DataCategory[]>([]);
+  const [selectedScopes, setSelectedScopes] = useState<string[]>([]);
+  const [selectedKnowledge, setSelectedKnowledge] = useState<string[]>([]);
+  const [selectedData, setSelectedData] = useState<string[]>([]);
 
   useEffect(() => {
-    void assistantApi.scopes().then(setScopes).catch(() => setScopes([]));
-    void assistantApi.conversations().then(setConversations).catch(() => setConversations([]));
-  }, []);
+    void Promise.all([
+      assistantApi.scopes(),
+      assistantApi.conversations(),
+      knowledgeApi.categories(),
+      dataApi.listCategories(),
+    ]).then(([scopeList, conversationList, knowledgeList, dataList]) => {
+      setScopes(scopeList);
+      setConversations(conversationList);
+      setKnowledgeCategories(knowledgeList);
+      setDataCategories(dataList);
+    }).catch(() => toast.error('AI 问答范围加载失败'));
+  }, [toast]);
+
+  const conversationItems: ConversationItem[] = useMemo(() => conversations.map((item) => ({ id: item.id, title: item.title || '未命名会话' })), [conversations]);
+
+  const setChatMessages = (items: ChatMessage[]) => setMessages(items);
 
   const send = async () => {
     const value = question.trim();
@@ -35,46 +83,103 @@ export function AssistantPage() {
     setQuestion('');
     setLoading(true);
     const index = messages.length + 1;
-    setMessages((current) => [...current, { role: 'USER', content: value }, { role: 'ASSISTANT', content: '' }]);
+    setMessages((current) => [...current, { id: `${Date.now()}-user`, role: 'USER', content: value }, { id: `${Date.now()}-assistant`, role: 'ASSISTANT', content: '' }]);
     try {
       setStreaming(true);
       let answer = '';
-      await assistantApi.stream(value, conversationId, selectedScopes,
-        scopes.filter((scope) => selectedScopes.includes(scope.id)).map((scope) => scope.scopeType), (token) => {
-        answer += token;
-        setMessages((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, content: answer } : item));
-      }, (response: AssistantResponse) => {
-        setConversationId(response.conversationId);
-        void assistantApi.conversations().then(setConversations).catch(() => undefined);
-        setMessages((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, content: response.answer || answer, citations: response.citations, warnings: response.warnings } : item));
-      }, (event) => {
-        setStage(event === 'rewrite' ? '已完成查询改写' : event === 'retrieval' ? '已完成混合检索与重排' : event === 'citation' ? '引用来源已生成' : event);
-      });
+      await assistantApi.stream(
+        value,
+        conversationId,
+        selectedScopes,
+        scopes.filter((scope) => selectedScopes.includes(scope.id)).map((scope) => scope.scopeType),
+        selectedKnowledge,
+        selectedData,
+        (token) => {
+          answer += token;
+          setMessages((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, content: answer } : item));
+        },
+        (response: AssistantResponse) => {
+          setConversationId(response.conversationId);
+          setStage('回答已生成');
+          setMessages((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, content: response.answer || answer, citations: response.citations, warnings: response.warnings } : item));
+          void assistantApi.conversations().then(setConversations).catch(() => undefined);
+        },
+        (event) => setStage(event === 'rewrite' ? '已完成查询改写' : event === 'retrieval' ? '已完成混合检索与重排' : event === 'citation' ? '引用来源已生成' : event),
+      );
     } catch (error) {
       setMessages((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, content: error instanceof Error ? error.message : 'AI 问答失败', warnings: ['请检查模型网关配置或稍后重试'] } : item));
-    } finally { setLoading(false); setStreaming(false); }
+    } finally {
+      setLoading(false);
+      setStreaming(false);
+    }
   };
 
-  const reset = () => { setConversationId(undefined); setMessages([]); setQuestion(''); setStage('等待提问'); };
+  const reset = () => { setConversationId(undefined); setChatMessages([]); setQuestion(''); setStage('等待提问'); };
+
   const openConversation = async (id: string) => {
-    const conversation = await assistantApi.conversation(id);
-    setConversationId(id);
-    setMessages(conversation.messages.map((message) => ({ role: message.role as ChatMessage['role'], content: message.content, citations: message.citations, warnings: message.warnings })));
+    setLoading(true);
+    try {
+      const conversation = await assistantApi.conversation(id);
+      setConversationId(id);
+      setMessages(conversation.messages.map((item, index) => ({ id: `${id}-${index}`, role: item.role === 'USER' ? 'USER' : 'ASSISTANT', content: item.content, citations: item.citations, warnings: item.warnings })));
+    } catch (error) {
+      void toast.error(error instanceof Error ? error.message : '会话加载失败');
+    } finally {
+      setLoading(false);
+    }
   };
-  return <div className="business-page">
-    <div className="page-heading"><div><Typography.Title level={2}>AI 研发助手</Typography.Title><Typography.Text type="secondary">回答仅基于已授权知识库内容；需要最新公开信息时可通过 Tavily 受控检索。</Typography.Text></div><Button icon={<ClearOutlined />} onClick={reset}>新建会话</Button></div>
-    <Card className="content-card" bodyStyle={{ paddingBottom: 8 }}>
-      <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12 }}>
-        <Select allowClear placeholder="历史会话" style={{ width: 220 }} value={conversationId} onChange={(id) => { if (id) void openConversation(id); }} options={conversations.map((item) => ({ value: item.id, label: item.title || '未命名会话' }))} />
-        <Typography.Text strong>检索范围</Typography.Text>
-        <Select mode="multiple" allowClear placeholder="选择项目、产品、知识库或数据资产" style={{ flex: 1 }} value={selectedScopes} onChange={setSelectedScopes} options={scopes.map((scope) => ({ value: scope.id, label: `${scope.name} · ${scope.scopeType}` }))} />
-        <Tag color={streaming ? 'processing' : 'default'}>{stage}</Tag>
-      </div>
-      {!messages.length && <div style={{ padding: '48px 12px', textAlign: 'center' }}><Avatar size={64} icon={<RobotOutlined />} style={{ background: '#dbeafe', color: '#2563eb' }} /><Typography.Title level={3}>从研发资料开始提问</Typography.Title><Typography.Text type="secondary">例如：某材料的推荐测试条件是什么？引用会显示在答案下方。</Typography.Text></div>}
-      <List dataSource={messages} split={false} renderItem={(item) => <List.Item style={{ alignItems: 'flex-start', padding: '18px 4px' }}><Space align="start" style={{ width: '100%' }}><Avatar icon={item.role === 'USER' ? '我' : <RobotOutlined />} style={{ background: item.role === 'USER' ? '#0f766e' : '#2563eb' }} /><div style={{ flex: 1, minWidth: 0 }}><Typography.Text strong>{item.role === 'USER' ? '你' : 'AI 研发助手'}</Typography.Text><Typography.Paragraph style={{ whiteSpace: 'pre-wrap', marginTop: 8 }}>{item.content || (streaming ? <Spin size="small" /> : '')}</Typography.Paragraph>{item.warnings?.map((warning) => <Alert key={warning} type="warning" showIcon message={warning} style={{ marginBottom: 8 }} />)}{item.citations?.length ? <div><Typography.Text type="secondary">参考来源</Typography.Text><Space wrap style={{ marginTop: 6 }}>{item.citations.map((citation) => <Tag key={`${citation.sourceType}-${citation.chunkId}`} color="blue" style={{ cursor: citation.documentId ? 'pointer' : 'default' }} onClick={() => { if (citation.documentId) navigate(`/knowledge/documents/${citation.documentId}`); }}>{citation.title || citation.dataAssetId || '数据资产来源'}{citation.pageNo ? ` · 第${citation.pageNo}页` : ''}</Tag>)}</Space></div> : null}</div></Space></List.Item>} />
-      <Divider />
-      <Input.TextArea value={question} onChange={(event) => setQuestion(event.target.value)} onPressEnter={(event) => { if (!event.shiftKey) { event.preventDefault(); void send(); } }} placeholder="输入研发问题，Enter 发送，Shift+Enter 换行" autoSize={{ minRows: 2, maxRows: 6 }} disabled={loading || streaming} />
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 10 }}><Typography.Text type="secondary">未授权文件不会进入 AI 上下文。</Typography.Text><Button type="primary" icon={<SendOutlined />} loading={loading || streaming} disabled={!question.trim()} onClick={() => void send()}>发送问题</Button></div>
-    </Card>
-  </div>;
+
+  const viewMessages: ConversationMessage[] = messages.map((item) => ({
+    id: item.id,
+    role: item.role,
+    content: item.role === 'ASSISTANT' ? renderAssistantContent(item, navigate, streaming) : <Typography.Paragraph className="ai-message-text">{item.content}</Typography.Paragraph>,
+  }));
+
+  const scopeContent = (
+    <Space direction="vertical" size={12} className="ai-scope-content">
+      <Collapse ghost items={[
+        {
+          key: 'knowledge',
+          label: <span><FolderOpenOutlined /> 研发知识库</span>,
+          children: <Space direction="vertical" className="ai-scope-options">
+            {knowledgeCategories.map((item) => <Checkbox key={item.id} checked={selectedKnowledge.includes(item.id)} onChange={(event) => setSelectedKnowledge((current) => event.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id))}>{item.name}<Typography.Text type="secondary">（{item.documentCount}）</Typography.Text></Checkbox>)}
+          </Space>,
+        },
+        {
+          key: 'data',
+          label: <span><DatabaseOutlined /> 数据中心</span>,
+          children: <Space direction="vertical" className="ai-scope-options">
+            {dataCategories.map((item) => <Checkbox key={item.id} checked={selectedData.includes(item.id)} onChange={(event) => setSelectedData((current) => event.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id))}>{item.name}<Typography.Text type="secondary">（{item.assetCount}）</Typography.Text></Checkbox>)}
+          </Space>,
+        },
+        {
+          key: 'business',
+          label: '项目与业务范围',
+          children: <Space direction="vertical" className="ai-scope-options">
+            {scopes.map((item) => <Checkbox key={item.id} checked={selectedScopes.includes(item.id)} onChange={(event) => setSelectedScopes((current) => event.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id))}>{item.name}</Checkbox>)}
+          </Space>,
+        },
+      ]} />
+    </Space>
+  );
+
+  return (
+    <div className="business-page assistant-page">
+      <div className="page-heading"><div><Typography.Title level={2}>AI问答</Typography.Title><Typography.Text type="secondary">回答仅基于已授权的研发资料和正式数据资产。</Typography.Text></div><Tag color={streaming ? 'processing' : 'default'}>{stage}</Tag></div>
+      <AiConversationWorkspace
+        conversations={conversationItems}
+        activeConversationId={conversationId}
+        messages={viewMessages}
+        scopeContent={scopeContent}
+        scopeSummary={<Typography.Text type="secondary">已选择 {selectedKnowledge.length + selectedData.length + selectedScopes.length} 个检索范围</Typography.Text>}
+        question={question}
+        loading={loading}
+        streaming={streaming}
+        onNewConversation={reset}
+        onSelectConversation={(id) => void openConversation(id)}
+        onQuestionChange={setQuestion}
+        onSubmit={() => void send()}
+      />
+    </div>
+  );
 }

@@ -25,9 +25,10 @@ const route = {
       icon: <ExperimentOutlined />,
       routes: [
         { path: '/rnd', name: '研发工作台', icon: <ExperimentOutlined /> },
-        { path: '/knowledge/library', name: '研发知识库', icon: <FolderOpenOutlined /> },
+        { path: '/knowledge/library', name: '资料上传', icon: <FolderOpenOutlined /> },
         { path: '/knowledge/search', name: '文件检索', icon: <FileSearchOutlined /> },
-        { path: '/assistant', name: 'AI研发助手', icon: <RobotOutlined /> },
+        { path: '/knowledge/view', name: '知识库查看', icon: <EyeOutlined /> },
+        { path: '/assistant', name: 'AI问答', icon: <RobotOutlined /> },
       ],
     },
     {
@@ -53,7 +54,7 @@ const route = {
       name: '数据中心',
       icon: <DatabaseOutlined />,
       routes: [
-        { path: '/data/upload', name: '数据导入', icon: <UploadOutlined /> },
+        { path: '/data/upload', name: '数据上传', icon: <UploadOutlined /> },
         { path: '/data/view', name: '数据查看', icon: <EyeOutlined /> },
       ],
     },

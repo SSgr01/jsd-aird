@@ -1,8 +1,8 @@
 import {
   CopyOutlined,
   DeleteOutlined,
-  EditOutlined,
   FileExcelOutlined,
+  FileTextOutlined,
   FileWordOutlined,
   FolderAddOutlined,
   MoreOutlined,
@@ -25,9 +25,10 @@ import {
   Tag,
   Typography,
 } from 'antd';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
+import { CategoryCardGrid, type CatalogCategoryCard } from '@/components/catalog-workspace';
 import type {
   TemplateFormat,
   TemplateListItem,
@@ -90,15 +91,15 @@ export function TemplatesPage() {
     void load();
   }, [load]);
 
-  const categories = useMemo(() => [
-    { id: 'ALL', name: '全部模板', count: items.length },
-    ...categoryItems.map((item) => ({ id: item.id, name: item.name, count: item.templateCount })),
-    { id: 'UNCATEGORIZED', name: '未分类', count: items.filter((item) => !item.category).length },
-  ], [categoryItems, items]);
   const displayedItems =
     category === '全部模板'
       ? items
       : items.filter((item) => (item.category || '未分类') === category);
+  const categoryCards: CatalogCategoryCard[] = [
+    { id: 'ALL', name: '全部模板', count: items.length, description: '所有模板和模板版本', icon: <FileTextOutlined />, tone: 'blue' },
+    ...categoryItems.map((item, index) => ({ id: item.id, name: item.name, count: item.templateCount, description: '组织内可复用的业务模板', icon: <FileTextOutlined />, tone: (['green', 'blue', 'violet', 'orange', 'teal'] as const)[index % 5], editable: true })),
+    { id: 'UNCATEGORIZED', name: '未分类', count: items.filter((item) => !item.category).length, description: '尚未归档的模板', icon: <FolderAddOutlined />, tone: 'teal' },
+  ];
 
   const create = async () => {
     const input = await form.validateFields();
@@ -220,47 +221,14 @@ export function TemplatesPage() {
         </Space>
       </Card>
 
-      <div className="category-strip" aria-label="模板分类">
-        {categories.map((item) => (
-          <div className="category-filter-item" key={item.name}>
-            <button
-              type="button"
-              aria-current={category === item.name}
-              onClick={() => setCategory(item.name)}
-            >
-              <span>{item.name}</span>
-              <strong>{item.count}</strong>
-            </button>
-            {!['全部模板', '未分类'].includes(item.name) && (
-              <Space size={0}>
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<EditOutlined />}
-                  aria-label={`重命名分类${item.name}`}
-                  onClick={() => {
-                    const target = categoryItems.find((candidate) => candidate.id === item.id);
-                    if (target) {
-                      categoryForm.setFieldsValue({ name: target.name });
-                      setCategoryEditor(target);
-                    }
-                  }}
-                />
-                <Button
-                  type="text" danger size="small"
-                  icon={<DeleteOutlined />}
-                  aria-label={`删除分类${item.name}`}
-                  onClick={() => setDeletingCategory(categoryItems.find((candidate) => candidate.id === item.id))}
-                />
-              </Space>
-            )}
-          </div>
-        ))}
-        <Button type="dashed" icon={<FolderAddOutlined />} onClick={() => {
-          categoryForm.resetFields();
-          setCategoryEditor('NEW');
-        }}>新建分类</Button>
-      </div>
+      <CategoryCardGrid
+        categories={categoryCards}
+        activeId={category === '全部模板' ? 'ALL' : categoryItems.find((item) => item.name === category)?.id || 'UNCATEGORIZED'}
+        onSelect={(id) => setCategory(categoryCards.find((item) => item.id === id)?.name || '全部模板')}
+        onCreate={() => { categoryForm.resetFields(); setCategoryEditor('NEW'); }}
+        onRename={(item) => { const target = categoryItems.find((candidate) => candidate.id === item.id); if (target) { categoryForm.setFieldsValue({ name: target.name }); setCategoryEditor(target); } }}
+        onDelete={(item) => setDeletingCategory(categoryItems.find((candidate) => candidate.id === item.id))}
+      />
 
       <Card className="content-card">
         <Space wrap size={12}>

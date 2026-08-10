@@ -18,8 +18,10 @@ import com.jsd.aird.ops.application.port.FileObjectRepository;
 import com.jsd.aird.ops.application.port.OpsAsyncFacade;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
+import com.jsd.aird.shared.api.PageResponse;
 import com.jsd.aird.shared.security.ActorContext;
 import com.jsd.aird.tpl.api.TemplateDataImportFacade;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -35,6 +37,26 @@ public class DataImportService {
     private final ObjectMapper objectMapper;
     private final AuditLogFacade auditLog;
     private final OpsAsyncFacade opsAsync;
+    private final DataCategoryService categories;
+
+    @Autowired
+    public DataImportService(
+            DataRepository repository,
+            FileObjectRepository files,
+            TemplateDataImportFacade templates,
+            ObjectMapper objectMapper,
+            AuditLogFacade auditLog,
+            OpsAsyncFacade opsAsync,
+            DataCategoryService categories
+    ) {
+        this.repository = repository;
+        this.files = files;
+        this.templates = templates;
+        this.objectMapper = objectMapper;
+        this.auditLog = auditLog;
+        this.opsAsync = opsAsync;
+        this.categories = categories;
+    }
 
     public DataImportService(
             DataRepository repository,
@@ -44,12 +66,7 @@ public class DataImportService {
             AuditLogFacade auditLog,
             OpsAsyncFacade opsAsync
     ) {
-        this.repository = repository;
-        this.files = files;
-        this.templates = templates;
-        this.objectMapper = objectMapper;
-        this.auditLog = auditLog;
-        this.opsAsync = opsAsync;
+        this(repository, files, templates, objectMapper, auditLog, opsAsync, null);
     }
 
     @Transactional
@@ -69,10 +86,22 @@ public class DataImportService {
                     "该文件已按此模板完成导入，历史任务：" + duplicate.get().id());
         }
         files.activate(command.sourceFileId());
+        var categoryId = command.categoryId();
+        if (categoryId == null && categories != null) {
+            var defaultCategory = categories.defaultForTargetType(actor.organizationId(), targetDataType);
+            categoryId = defaultCategory == null ? null : defaultCategory.id();
+        } else if (categoryId != null && categories != null) {
+            var requestedCategoryId = categoryId;
+            var category = categories.list().stream().filter(item -> item.id().equals(requestedCategoryId)).findFirst()
+                    .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "数据分类不存在"));
+            if (category.targetDataType() != null && !targetDataType.equals(category.targetDataType())) {
+                throw new ApiException(ApiErrorCode.BAD_REQUEST, "数据分类与数据类型不匹配");
+            }
+        }
         var id = UUID.randomUUID();
         repository.insertJob(new DataRepository.NewJob(
                 id, actor.organizationId(), command.sourceFileId(), file.sha256(), file.originalName(), format,
-                command.templateVersionId(), targetDataType, command.duplicateOverride(), actor.userId()));
+                command.templateVersionId(), targetDataType, categoryId, command.duplicateOverride(), actor.userId()));
         repository.enqueueParse(UUID.randomUUID(), actor.organizationId(), id);
         return get(id);
     }
@@ -80,6 +109,15 @@ public class DataImportService {
     public DataRepository.Job get(UUID importJobId) {
         return repository.findJob(ActorContext.required().organizationId(), importJobId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "导入任务不存在"));
+    }
+
+    public PageResponse<DataRepository.Job> listJobs(String targetDataType, UUID templateVersionId,
+                                                      String status, String keyword, int page, int size) {
+        var actor = ActorContext.required();
+        var safePage = Math.max(1, page);
+        var safeSize = Math.min(100, Math.max(1, size));
+        return repository.listJobs(actor.organizationId(), targetDataType, templateVersionId, status,
+                keyword, safePage, safeSize);
     }
 
     public List<TemplateDataImportFacade.DataTemplateOption> listTemplates(String targetDataType) {
@@ -306,9 +344,13 @@ public class DataImportService {
                         .map(UUID::toString).sorted().collect(java.util.stream.Collectors.joining(",")), 30);
     }
 
-    public List<DataRepository.Asset> assets(String targetDataType, String keyword) {
+    public PageResponse<DataRepository.Asset> assets(String targetDataType, UUID categoryId, String status, String keyword,
+                                                     int page, int size) {
         var actor = ActorContext.required();
-        return repository.listAssets(actor.organizationId(), targetDataType, targetDataType == null && keyword == null ? null : keyword);
+        var safePage = Math.max(1, page);
+        var safeSize = Math.min(100, Math.max(1, size));
+        return repository.listAssets(actor.organizationId(), targetDataType, categoryId, status,
+                targetDataType == null && keyword == null ? null : keyword, safePage, safeSize);
     }
 
     public DataRepository.AssetDetail asset(UUID id) {
@@ -452,7 +494,12 @@ public class DataImportService {
         return value == null || value.isBlank() ? error.getClass().getSimpleName() : value.substring(0, Math.min(2000, value.length()));
     }
 
-    public record CreateCommand(UUID sourceFileId, UUID templateVersionId, String targetDataType, boolean duplicateOverride) {}
+    public record CreateCommand(UUID sourceFileId, UUID templateVersionId, String targetDataType,
+                                UUID categoryId, boolean duplicateOverride) {
+        public CreateCommand(UUID sourceFileId, UUID templateVersionId, String targetDataType, boolean duplicateOverride) {
+            this(sourceFileId, templateVersionId, targetDataType, null, duplicateOverride);
+        }
+    }
     public record FieldRequestCommand(String fieldId, String displayName, String valueType,
                                       String uiType, String groupCode, String description) {}
     public record MappingCommand(String sheetId, String sourceColumn, String sourceHeader, String fieldCode, String fieldName,

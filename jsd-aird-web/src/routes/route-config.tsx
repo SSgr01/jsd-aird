@@ -4,7 +4,7 @@ import { Navigate } from 'react-router-dom';
 import { BasicLayout } from '@/layouts';
 import { AssistantPage } from '@/pages/assistant';
 import { DataAssetPage, DataImportJobPage, DataUploadPage, DataViewPage } from '@/pages/data';
-import { KnowledgeDocumentPage, KnowledgeLibraryPage, KnowledgeSearchPage } from '@/pages/knowledge';
+import { KnowledgeDocumentPage, KnowledgeLibraryPage, KnowledgeSearchPage, KnowledgeViewPage } from '@/pages/knowledge';
 import { NotFoundPage } from '@/pages/not-found';
 import { ProductionOrderListPage, ProductionOrderUploadPage, ProductionWorkspacePage } from '@/pages/production-orders';
 import { TemplateUploadPage } from '@/pages/template-upload';
@@ -28,6 +28,7 @@ export const routeConfig: RouteObject[] = [
       },
       { path: 'rnd', element: <RndCenterPage /> },
       { path: 'knowledge/library', element: <KnowledgeLibraryPage /> },
+      { path: 'knowledge/view', element: <KnowledgeViewPage /> },
       { path: 'knowledge/search', element: <KnowledgeSearchPage /> },
       { path: 'knowledge/documents/:id', element: <KnowledgeDocumentPage /> },
       { path: 'assistant', element: <AssistantPage /> },

@@ -8,6 +8,11 @@ public interface DataAssetSearchFacade {
 
     List<DataHit> search(UUID organizationId, String query, List<UUID> scopeIds, int limit);
 
+    default List<DataHit> search(UUID organizationId, String query, List<UUID> scopeIds,
+                                 List<UUID> categoryIds, int limit) {
+        return search(organizationId, query, scopeIds, limit);
+    }
+
     int indexPublished(UUID organizationId, List<UUID> assetIds);
 
     record DataHit(UUID entryId, UUID scopeId, UUID assetId, UUID revisionId, Integer rowNumber,

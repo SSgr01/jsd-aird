@@ -17,6 +17,7 @@ import type {
   StaticRegion,
   LongTableModel,
   DocumentStructure,
+  TemplateBinding,
 } from '@/features/template-workspace/types';
 import { httpClient } from '@/services/http/client';
 
@@ -26,6 +27,13 @@ export interface CreateTemplateInput {
   category?: string;
   format: TemplateFormat;
   importJobId?: string;
+}
+
+export interface TemplateCategory {
+  id: string;
+  name: string;
+  sortOrder: number;
+  templateCount: number;
 }
 
 export interface SaveTemplateDraftInput {
@@ -57,6 +65,8 @@ export interface SaveTemplateDraftResult {
   lockVersion: number;
   workspaceHash: string;
   reconciliationRequired: boolean;
+  schema?: Record<string, unknown>;
+  mapping?: TemplateBinding[];
   wordDocument?: TemplateWorkspace['wordDocument'];
   documentStructure?: TemplateWorkspace['documentStructure'];
 }
@@ -67,6 +77,34 @@ export interface TemplateImportIssue {
   message: string;
   location: Record<string, unknown>;
   resolution: string;
+}
+
+export interface TemplateImportRecognitionSummary {
+  parseStatus?: string;
+  runStatus?: string;
+  modelStatus?: string;
+  recognitionStatus?: string;
+  reviewResolutionStatus?: string;
+  canonicalStatus?: string;
+  publicationReadiness?: string;
+  coverage?: {
+    status?: string;
+    physicalRegionCount?: number;
+    expectedRegionCount?: number;
+    coveredRegionCount?: number;
+    unresolvedRegionCount?: number;
+    coverageRatio?: number;
+    issues?: string[];
+  };
+  counts?: {
+    rawSuggestions?: number;
+    pendingSuggestions?: number;
+    pendingFields?: number;
+    reviewableFields?: number;
+    structureCandidates?: number;
+    structureConflictGroups?: number;
+    qualityIssues?: number;
+  };
 }
 
 export interface TemplateImportJob {
@@ -80,7 +118,8 @@ export interface TemplateImportJob {
   structureSummary: Record<string, unknown>;
   result: {
     initialEditorSnapshot?: Record<string, unknown>;
-    modelStatus?: 'COMPLETED' | 'FAILED' | 'PARTIAL' | 'TRUNCATED' | 'NOT_CONFIGURED' | 'NOT_APPLICABLE';
+    modelStatus?:
+      'COMPLETED' | 'FAILED' | 'PARTIAL' | 'TRUNCATED' | 'NOT_CONFIGURED' | 'NOT_APPLICABLE';
     recognitionStatus?: 'COMPLETE' | 'REVIEW_REQUIRED' | 'NO_PHYSICAL_TABLE';
     recognitionCoverage?: {
       status?: string;
@@ -95,12 +134,16 @@ export interface TemplateImportJob {
     qualityIssueCount?: number;
     autoFixedCount?: number;
   };
+  recognitionSummary?: TemplateImportRecognitionSummary;
   lastError?: string;
   createdAt: string;
   suggestionCount: number;
   pendingSuggestionCount: number;
+  retryCount: number;
   recognitionRunId?: string;
   recognitionRunStatus?: string;
+  generatedTemplateVersionId?: string;
+  workspaceHash?: string;
   issues: TemplateImportIssue[];
 }
 
@@ -111,7 +154,7 @@ export interface RecognitionSuggestionPayload {
   standardFieldId?: string;
   standardFieldVersion?: number;
   standardFieldName?: string;
-  fieldOrigin?: 'STANDARD' | 'TEMPLATE_LOCAL' | 'PENDING_STANDARD';
+  fieldOrigin?: 'STANDARD' | 'TEMPLATE_LOCAL' | 'ORDER_LOCAL' | 'PENDING_STANDARD';
   standardSelectionStatus?: 'MATCHED' | 'CONFIRMED' | 'CUSTOM' | 'REQUESTED';
   uiType?: 'TEXT' | 'SIGNATURE';
   fieldId?: string;
@@ -150,6 +193,7 @@ export interface RecognitionSuggestionPayload {
   condition?: string;
   dictionaryVersion?: number;
   standardMatchStatus?: 'MATCHED' | 'UNMATCHED' | 'CONFIRMED';
+  standardRequired?: boolean;
   requiresStandardConfirmation?: boolean;
   candidateOnly?: boolean;
   physicalStructureOnly?: boolean;
@@ -157,12 +201,20 @@ export interface RecognitionSuggestionPayload {
   structureConflict?: boolean;
   canonicalStatus?: 'PROVISIONAL' | 'CONFIRMED';
   resolutionGroupId?: string;
+  resolutionAlternativeId?: string;
+  resolutionStatus?: 'PENDING' | 'AUTO_RESOLVED';
+  resolutionReason?: string;
+  structureResolution?: Record<string, unknown>;
   alternativeRole?: 'PHYSICAL' | 'MODEL' | 'HUMAN';
   structureStatus?: 'PROVISIONAL' | 'MODEL_ASSESSED' | 'CONFLICT' | 'UNRESOLVED' | 'CONFIRMED';
   runtimeInputOnly?: boolean;
+  suppressed?: boolean;
   templateStatus?: 'RUNTIME_INPUT' | 'CONFIRMED';
   publishable?: boolean;
   pendingReason?: string;
+  nameSource?: 'MODEL' | 'ROW_ATTRIBUTE_FALLBACK' | 'PHYSICAL_HEADER_FALLBACK'
+    | 'GENERATED_PLACEHOLDER' | 'RUNTIME_SLOT';
+  semanticFallback?: boolean;
   protocolRecovery?: string;
   blockType?: string;
   blockName?: string;
@@ -182,6 +234,7 @@ export interface RecognitionSuggestionPayload {
   conflictMessage?: string;
   semanticAlternatives?: Array<{ fieldCode: string; name: string }>;
   blockId?: string;
+  regionId?: string;
   parentBlockId?: string;
   columns?: Array<{
     code: string;
@@ -210,7 +263,7 @@ export interface RecognitionSuggestionPayload {
     standardFieldId?: string;
     standardFieldVersion?: number;
     standardFieldName?: string;
-    fieldOrigin?: 'STANDARD' | 'TEMPLATE_LOCAL' | 'PENDING_STANDARD';
+    fieldOrigin?: 'STANDARD' | 'TEMPLATE_LOCAL' | 'ORDER_LOCAL' | 'PENDING_STANDARD';
     standardSelectionStatus?: 'MATCHED' | 'CONFIRMED' | 'CUSTOM' | 'REQUESTED';
     uiType?: 'TEXT' | 'SIGNATURE';
     columnOffset?: number;
@@ -218,6 +271,10 @@ export interface RecognitionSuggestionPayload {
     physicalColumnRanges?: string[];
     mergeRange?: string;
     valueMode?: string;
+    nameSource?: 'MODEL' | 'ROW_ATTRIBUTE_FALLBACK' | 'PHYSICAL_HEADER_FALLBACK'
+      | 'GENERATED_PLACEHOLDER' | 'RUNTIME_SLOT';
+    semanticFallback?: boolean;
+    reviewRequired?: boolean;
   }>;
   tableModel?: Record<string, unknown>;
   matrixModel?: MatrixModel;
@@ -225,17 +282,32 @@ export interface RecognitionSuggestionPayload {
   columnSlots?: MatrixColumnSlot[];
   longTableModel?: LongTableModel;
   structureAlternatives?: Array<{
-    suggestionId: string;
+    alternativeId?: string;
+    suggestionId?: string;
     source?: 'RULE' | 'MODEL' | 'PHYSICAL' | 'HUMAN';
+    regions?: Array<{
+      suggestionId: string;
+      source?: 'RULE' | 'MODEL' | 'PHYSICAL' | 'HUMAN';
+      kind?: string;
+      range?: string;
+      decision?: RecognitionDecision | 'REJECTED_BY_RESOLUTION';
+    }>;
+    // Legacy singleton fields remain readable while old runs are retained.
     kind?: string;
     range?: string;
     decision?: RecognitionDecision | 'REJECTED_BY_RESOLUTION';
   }>;
+  structureAlternativeSets?: Array<Record<string, unknown>>;
+  resolution?: Record<string, unknown>;
   hasIndependentChildren?: boolean;
   reason?: string;
 }
 
-export type { LongTableModel, LongTableRecord, MatrixModel } from '@/features/template-workspace/types';
+export type {
+  LongTableModel,
+  LongTableRecord,
+  MatrixModel,
+} from '@/features/template-workspace/types';
 
 export interface RecognitionSuggestion {
   id: string;
@@ -291,6 +363,7 @@ export interface RecognitionActionInput {
   recognitionItemId: string;
   action: RecognitionAction;
   selectedSuggestionId?: string;
+  selectedAlternativeId?: string;
 }
 
 export type QualityAction = 'APPLY' | 'IGNORE' | 'ROLLBACK';
@@ -328,7 +401,7 @@ export interface RecognitionReviewItem {
   fieldName: string;
   description: string;
   groupName: string;
-  kind: 'SCALAR' | 'ROW_TABLE' | 'COLUMN_TABLE' | 'MATRIX' | 'FREE_TEXT';
+  kind: 'SCALAR' | 'FORM_REGION' | 'ROW_TABLE' | 'COLUMN_TABLE' | 'MATRIX' | 'TABLE_REGION' | 'FREE_TEXT';
   valueType: string;
   sheetId: string;
   sheetName: string;
@@ -342,6 +415,74 @@ export interface RecognitionReviewItem {
   status: RecognitionReviewStatus;
   conflictReason?: string;
   payload: RecognitionSuggestionPayload;
+}
+
+export interface RecognitionRegionAlternative {
+  alternativeId: string;
+  source?: 'RULE' | 'MODEL' | 'PHYSICAL' | 'HUMAN';
+  regions: Array<{
+    suggestionId: string;
+    source?: 'RULE' | 'MODEL' | 'PHYSICAL' | 'HUMAN';
+    kind?: string;
+    range?: string;
+    decision?: RecognitionDecision | 'REJECTED_BY_RESOLUTION';
+    recordAxis?: string;
+    headerRange?: string;
+    dataRange?: string;
+    rowHeaderRange?: string;
+    columnHeaderRange?: string;
+    crossDataRange?: string;
+  }>;
+  recordAxis?: string;
+  headerRange?: string;
+  dataRange?: string;
+  rowHeaderRange?: string;
+  columnHeaderRange?: string;
+  crossDataRange?: string;
+}
+
+export interface RecognitionRegionNode {
+  regionId: string;
+  blockId?: string;
+  kind: string;
+  sheetId?: string;
+  sheetName?: string;
+  range?: string;
+  fieldName: string;
+  status: string;
+  canonicalStatus?: string;
+  structureStatus?: string;
+  resolutionGroupId?: string;
+  reviewRequired?: boolean;
+  alternatives: RecognitionRegionAlternative[];
+  fields: Array<RecognitionReviewItem & { attributes?: Record<string, unknown> }>;
+  runtimeSlots: MatrixColumnSlot[];
+  recordSlots?: Array<{
+    slotId: string;
+    recordKey?: string;
+    order?: number;
+    range: string;
+    identityAddress?: string;
+    templateStatus?: string;
+    role?: string;
+  }>;
+  staticContents?: Array<{
+    address?: string;
+    text?: string;
+    role?: string;
+  }>;
+  structures?: Record<string, unknown>;
+  auditSuggestions: RecognitionReviewItem[];
+}
+
+export interface RecognitionReviewStatistics {
+  regionCount: number;
+  structureAlternativeCount: number;
+  structureConflictGroups: number;
+  fieldCount: number;
+  pendingFieldCount: number;
+  auditSuggestionCount: number;
+  runtimeSlotCount: number;
 }
 
 export interface RecognitionReview {
@@ -383,7 +524,9 @@ export interface RecognitionReview {
     message: string;
     detail?: Record<string, unknown>;
   }>;
-    recognitionStatus?: string;
+  recognitionStatus?: string;
+  regions?: RecognitionRegionNode[];
+  statistics?: RecognitionReviewStatistics;
   recognitionCoverage?: {
     status?: string;
     physicalRegionCount?: number;
@@ -507,6 +650,10 @@ export const templateApi = {
     const response = await httpClient.put<ApiResponse<SaveTemplateDraftResult>>(
       `/api/v2/template-versions/${versionId}/draft`,
       input,
+      // Saving may synchronously run one REGION_FIELDS batch after a user
+      // confirms a structure. Keep the normal API timeout short, but allow
+      // this operation to wait for the model and its bounded retries.
+      { timeout: 180_000 },
     );
     return response.data.data;
   },
@@ -526,6 +673,31 @@ export const templateApi = {
     anchor.download = 'word-template.docx';
     anchor.click();
     window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  },
+
+  async checkExport(versionId: string, format: TemplateFormat, state: 'DRAFT' | 'PUBLISHED' = 'DRAFT') {
+    const response = await httpClient.get<ApiResponse<{ canDownload: boolean; warnings: Array<{ code: string; bindingId?: string; dataPath?: string; message: string }> }>>(
+      `/api/v2/template-versions/${versionId}/export/check`, { params: { format, state } },
+    );
+    return response.data.data;
+  },
+
+  async exportOffice(versionId: string, format: TemplateFormat, state: 'DRAFT' | 'PUBLISHED' = 'DRAFT') {
+    const response = await httpClient.get<Blob>(
+      `/api/v2/template-versions/${versionId}/export`, { params: { format, state }, responseType: 'blob' },
+    );
+    const url = URL.createObjectURL(response.data);
+    const anchor = document.createElement('a'); anchor.href = url;
+    anchor.download = format === 'XLSX' ? `template-${state.toLowerCase()}.xlsx` : `template-${state.toLowerCase()}.docx`;
+    anchor.click(); window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  },
+
+  async downloadWordPreview(versionId: string) {
+    const response = await httpClient.get<Blob>(
+      `/api/v2/template-versions/${versionId}/word-preview`,
+      { responseType: 'blob' },
+    );
+    return response.data;
   },
 
   async createRevision(versionId: string) {
@@ -569,6 +741,14 @@ export const templateApi = {
     const response = await httpClient.post<ApiResponse<TemplateImportJob>>(
       '/api/v2/template-imports',
       { fileId, format },
+    );
+    return response.data.data;
+  },
+
+  async retryImport(importJobId: string, baseWorkspaceHash: string) {
+    const response = await httpClient.post<ApiResponse<TemplateImportJob>>(
+      `/api/v2/template-imports/${importJobId}/retry`,
+      { source: 'CURRENT_DRAFT_SNAPSHOT', baseWorkspaceHash },
     );
     return response.data.data;
   },
@@ -634,8 +814,29 @@ export const templateApi = {
     await httpClient.delete(`/api/v2/template-imports/${importJobId}`);
   },
 
-  async deleteCategory(category: string) {
-    await httpClient.delete(`/api/v2/template-categories/${encodeURIComponent(category)}`);
+  async listCategories() {
+    const response = await httpClient.get<ApiResponse<TemplateCategory[]>>('/api/v2/template-categories');
+    return response.data.data;
+  },
+
+  async createCategory(name: string) {
+    const response = await httpClient.post<ApiResponse<TemplateCategory>>('/api/v2/template-categories', { name });
+    return response.data.data;
+  },
+
+  async renameCategory(categoryId: string, name: string) {
+    const response = await httpClient.put<ApiResponse<TemplateCategory>>(`/api/v2/template-categories/${categoryId}`, { name });
+    return response.data.data;
+  },
+
+  async deleteCategory(categoryId: string, replacementCategoryId?: string) {
+    await httpClient.delete(`/api/v2/template-categories/${categoryId}`, {
+      params: replacementCategoryId ? { replacementCategoryId } : undefined,
+    });
+  },
+
+  async assignTemplateCategory(templateId: string, categoryId?: string) {
+    await httpClient.put(`/api/v2/templates/${templateId}/category`, { categoryId: categoryId || null });
   },
 
   async decideRecognitionSuggestion(

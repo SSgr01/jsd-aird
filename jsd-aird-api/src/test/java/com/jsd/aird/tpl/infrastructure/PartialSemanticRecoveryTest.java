@@ -145,6 +145,46 @@ class PartialSemanticRecoveryTest {
     }
 
     @Test
+    void normalizesColumnTableToColumnRecordsAndKeepsItsProjection() throws Exception {
+        var facts = objectMapper.readTree("""
+                {"structureVersion":6,"sheets":[{"id":"s1","name":"测试报告","usedRange":"A1:H19"}]}
+                """);
+        var response = objectMapper.readTree("""
+                {
+                  "recognitionProtocolVersion":1,"semanticAnnotations":[],"fieldRelations":[],
+                  "businessBlocks":[
+                    {"temporaryId":"column-block","sheetId":"s1","range":"A4:H19","type":"COLUMN_TABLE","parentTemporaryId":"","businessName":"样品属性","groupNameSuggestion":"检测结果","semanticKeySuggestion":"samples"}
+                  ],
+                  "tables":[{
+                    "temporaryId":"column-table","sheetId":"s1","range":"A4:H19","tableKind":"COLUMN_TABLE","businessName":"样品属性","blockTemporaryId":"column-block","groupNameSuggestion":"检测结果","semanticKeySuggestion":"samples",
+                    "headerRange":"A4:H4","dataRange":"A5:H19","totalRange":"","semanticMode":"ROW_RECORDS","rowHeaderRange":"","columnHeaderRange":"","crossDataRange":"","headerTree":[],
+                    "repeatAxis":"COLUMN","recordAxis":"COLUMN","recordHeight":15,"recordWidth":1,"recordStride":1,
+                    "recordProjection":{"mode":"COLUMN_RECORDS","recordAxis":"COLUMN"},
+                    "columns":[{"temporaryId":"appearance","name":"外观","labelRange":"C5","valueRange":"D5:H5","valueType":"string","editability":"EDITABLE","valueSource":"USER_INPUT","unit":"","condition":"","semanticKeySuggestion":"appearance"}]
+                  }],
+                  "qualityIssues":[]
+                }
+                """);
+
+        var validated = new GlobalSemanticRecognitionProtocol(objectMapper).validate(response, facts);
+        var compiled = new GlobalSemanticSuggestionCompiler(objectMapper).compile(validated, facts);
+
+        assertThat(validated.path("tables")).singleElement().satisfies(table -> {
+            assertThat(table.path("semanticMode").asText()).isEqualTo("COLUMN_RECORDS");
+            assertThat(table.path("repeatAxis").asText()).isEqualTo("COLUMN");
+            assertThat(table.path("recordProjection").path("mode").asText())
+                    .isEqualTo("COLUMN_RECORDS");
+        });
+        assertThat(compiled.suggestions().stream()
+                .filter(suggestion -> "COLUMN_TABLE".equals(suggestion.payload().path("kind").asText())))
+                .singleElement().satisfies(suggestion -> {
+            assertThat(suggestion.payload().path("semanticMode").asText()).isEqualTo("COLUMN_RECORDS");
+            assertThat(suggestion.payload().path("recordProjection").path("recordAxis").asText())
+                    .isEqualTo("COLUMN");
+        });
+    }
+
+    @Test
     void stillRejectsAnInvalidRootProtocol() throws Exception {
         var facts = objectMapper.readTree("""
                 {"structureVersion":6,"sheets":[{"id":"s1","name":"Sheet1","usedRange":"A1"}]}

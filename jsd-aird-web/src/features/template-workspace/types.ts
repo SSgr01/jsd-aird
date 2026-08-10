@@ -8,7 +8,7 @@ export type SyncDirection = 'TWO_WAY' | 'DATA_TO_EDITOR' | 'EDITOR_TO_DATA';
 export type BindingStatus = 'VALID' | 'INVALID' | 'AMBIGUOUS' | 'MISSING';
 export type Editability = 'EDITABLE' | 'READ_ONLY' | 'CONDITIONAL' | 'UNKNOWN';
 export type ValueSource = 'USER_INPUT' | 'FORMULA' | 'REFERENCE' | 'STATIC' | 'MIXED' | 'UNKNOWN';
-export type FieldOrigin = 'STANDARD' | 'TEMPLATE_LOCAL' | 'PENDING_STANDARD';
+export type FieldOrigin = 'STANDARD' | 'TEMPLATE_LOCAL' | 'ORDER_LOCAL' | 'PENDING_STANDARD';
 export type FieldUiType = 'TEXT' | 'SIGNATURE';
 
 export interface TemplateListItem {
@@ -36,6 +36,7 @@ export interface TemplateBinding {
   dataPath: string;
   role: BindingRole;
   mappingKind?: MappingKind;
+  matrixRole?: 'MEASURE';
   repeatAxis?: RepeatAxis;
   recordHeight?: number;
   recordWidth?: number;
@@ -219,6 +220,7 @@ export interface BusinessField {
   fieldCode?: string;
   groupId: string;
   name: string;
+  displayRole?: 'REGION' | 'FIELD';
   kind: FieldKind;
   valueType: string;
   uiType?: FieldUiType;
@@ -232,10 +234,12 @@ export interface BusinessField {
   valueSource?: ValueSource;
   condition?: string;
   blockId?: string;
+  regionId?: string;
   parentBlockId?: string;
   parentFieldId?: string;
   parentSuggestionId?: string;
   mappingKind?: MappingKind;
+  matrixRole?: 'MEASURE';
   repeatAxis?: RepeatAxis;
   recordHeight?: number;
   recordWidth?: number;
@@ -245,6 +249,7 @@ export interface BusinessField {
   conflictMessage?: string;
   dictionaryVersion?: number;
   standardMatchStatus?: 'MATCHED' | 'UNMATCHED' | 'CONFIRMED';
+  standardRequired?: boolean;
   requiresStandardConfirmation?: boolean;
   standardFieldId?: string;
   standardFieldVersion?: number;
@@ -403,7 +408,13 @@ export interface TemplateWorkspace {
 }
 
 export interface DocumentStructure {
+  schemaVersion?: number;
+  documentType?: 'WORD';
+  documentId?: string;
   structureHash?: string;
+  nodeCount?: number;
+  headingCount?: number;
+  nodes?: DocumentStructureNode[];
   blocks?: Array<{
     id: string;
     type: 'PARAGRAPH' | 'TABLE';
@@ -427,6 +438,7 @@ export interface DocumentStructure {
   contentControls?: Array<{
     nodeId: string;
     contentControlId?: string;
+    markerId?: string;
     tag?: string;
     alias?: string;
     text?: string;
@@ -439,6 +451,36 @@ export interface DocumentStructure {
     hasFootnotes?: boolean;
     hasEndnotes?: boolean;
   };
+}
+
+export type DocumentStructureNodeType =
+  | 'DOCUMENT_TITLE'
+  | 'HEADING'
+  | 'PARAGRAPH'
+  | 'TABLE'
+  | 'TABLE_ROW'
+  | 'TABLE_CELL'
+  | 'IMAGE'
+  | 'PAGE_BREAK'
+  | 'HEADER'
+  | 'FOOTER';
+
+export interface DocumentStructureNode {
+  nodeId: string;
+  type: DocumentStructureNodeType;
+  parentId?: string;
+  level?: number;
+  title?: string;
+  text?: string;
+  sortOrder?: number;
+  sourceLocator?: Record<string, unknown>;
+  editorLocator?: {
+    snapshotRevision?: number;
+    startOffset?: number;
+    endOffset?: number;
+    textHash?: string;
+  };
+  properties?: Record<string, unknown>;
 }
 
 export interface TemplateVersionHistoryItem {
@@ -457,6 +499,7 @@ export interface EditorHandle {
   writeBinding(binding: TemplateBinding, value: unknown): Promise<void>;
   writeLabel?(binding: TemplateBinding, value: unknown): Promise<void>;
   focusBinding(binding: TemplateBinding): void;
+  focusNode?(node: DocumentStructureNode): void;
   appendRepeatRecord?(binding: TemplateBinding): Promise<void>;
   applyCellPatch?(patch: Record<string, unknown>): Promise<void>;
   insertWordControl?(

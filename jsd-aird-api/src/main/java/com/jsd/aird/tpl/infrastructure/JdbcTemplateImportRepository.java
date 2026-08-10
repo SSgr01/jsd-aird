@@ -14,6 +14,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.tpl.application.RecognitionIdentity;
 import com.jsd.aird.tpl.application.port.OfficeStructureParser;
 import com.jsd.aird.tpl.application.port.TemplateImportRepository;
+import com.jsd.aird.tpl.domain.QualityIssueSeverity;
 import com.jsd.aird.tpl.domain.TemplateFormat;
 import org.postgresql.util.PGobject;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -76,6 +77,41 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
     }
 
     @Override
+    public boolean enqueueRerun(RerunImportJob job) {
+        var payload = objectMapper.createObjectNode()
+                .put("importJobId", job.importJobId().toString())
+                .put("organizationId", job.organizationId().toString())
+                .put("fileId", job.sourceFileId().toString())
+                .put("format", job.format().name())
+                .put("sourceKind", job.sourceKind())
+                .put("source", "CURRENT_DRAFT_SNAPSHOT")
+                .put("scope", "WORKBOOK")
+                .put("runReason", job.runReason());
+        if (job.parentRunId() != null) payload.put("parentRunId", job.parentRunId().toString());
+        jdbcTemplate.update("""
+                        INSERT INTO ops.async_job (
+                            id, organization_id, job_type, status, payload_jsonb,
+                            priority, idempotency_key
+                        ) VALUES (?, ?, ?, 'READY', ?, 50, ?)
+                        """, job.asyncJobId(), job.organizationId(),
+                "UNIVER_SNAPSHOT".equals(job.sourceKind())
+                        ? "XLSX_SNAPSHOT_RECOGNIZE" : "XLSX_PARSE",
+                pgJson(payload),
+                "template-import-rerun:" + job.importJobId() + ":" + job.asyncJobId());
+        var updated = jdbcTemplate.update("""
+                        UPDATE tpl.template_import_job tij
+                        SET async_job_id = ?, status = 'QUEUED', progress = 0, updated_at = now()
+                        WHERE tij.id = ? AND tij.organization_id = ?
+                          AND EXISTS (
+                              SELECT 1 FROM ops.async_job current_job
+                              WHERE current_job.id = tij.async_job_id
+                                AND current_job.status IN ('SUCCEEDED', 'FAILED', 'CANCELLED')
+                          )
+                        """, job.asyncJobId(), job.importJobId(), job.organizationId());
+        return updated == 1;
+    }
+
+    @Override
     public Optional<ImportJobView> find(UUID organizationId, UUID importJobId) {
         return queryJobs("""
                         WHERE tij.id = ? AND tij.organization_id = ?
@@ -96,10 +132,8 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
         return jdbcTemplate.query("""
                         SELECT tij.source_file_id
                         FROM tpl.template_import_job tij
-                        JOIN ops.async_job aj ON aj.id = tij.async_job_id
                         WHERE tij.generated_template_version_id = ?
                           AND tij.organization_id = ?
-                          AND aj.payload_jsonb ->> 'sourceKind' = 'OFFICE_FILE'
                         ORDER BY tij.created_at ASC, tij.id ASC
                         LIMIT 1
                         """, (rs, rowNum) -> rs.getObject(1, UUID.class), versionId, organizationId)
@@ -114,6 +148,17 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
                         WHERE id = ? AND generated_template_version_id IS NOT NULL
                         """, (rs, rowNum) -> rs.getObject(1, UUID.class), importJobId)
                 .stream().findFirst();
+    }
+
+    @Override
+    public int countManualReruns(UUID importJobId) {
+        Integer count = jdbcTemplate.queryForObject("""
+                SELECT count(*)::int
+                FROM tpl.recognition_run
+                WHERE import_job_id = ?
+                  AND run_reason = 'MANUAL_RERUN_CURRENT_DRAFT'
+                """, Integer.class, importJobId);
+        return count == null ? 0 : count;
     }
 
     @Override
@@ -134,17 +179,105 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
                                    WHEN aj.status = 'FAILED' THEN 'FAILED'
                                    ELSE aj.status
                                END AS status,
-                               aj.progress, aj.current_stage, tij.structure_summary_jsonb,
-                               aj.result_jsonb, aj.last_error, tij.created_at,
+                                aj.progress, aj.current_stage, tij.structure_summary_jsonb,
+                               aj.result_jsonb,
+                               jsonb_build_object(
+                                   'parseStatus', CASE
+                                       WHEN aj.status = 'SUCCEEDED' THEN 'PARSED'
+                                       WHEN aj.status = 'FAILED' THEN 'FAILED'
+                                       ELSE aj.status
+                                   END,
+                                   'runStatus', COALESCE(latest_run.status, 'NONE'),
+                                   'modelStatus', COALESCE(aj.result_jsonb ->> 'modelStatus', 'NOT_APPLICABLE'),
+                                   'recognitionStatus', COALESCE(aj.result_jsonb ->> 'recognitionStatus', 'REVIEW_REQUIRED'),
+                                   'reviewResolutionStatus', COALESCE(aj.result_jsonb ->> 'reviewResolutionStatus', 'OPEN'),
+                                   'canonicalStatus', COALESCE(aj.result_jsonb ->> 'canonicalStatus', 'PROVISIONAL'),
+                                   'publicationReadiness', COALESCE(aj.result_jsonb ->> 'publicationReadiness', 'NOT_READY'),
+                                   'coverage', COALESCE(aj.result_jsonb -> 'recognitionCoverage', '{}'::jsonb),
+                                   'counts', jsonb_build_object(
+                                       'rawSuggestions', (SELECT count(*)::int
+                                          FROM tpl.recognition_suggestion rs
+                                          WHERE rs.import_job_id = tij.id
+                                            AND rs.recognition_run_id = latest_run.id),
+                                       'pendingSuggestions', (SELECT count(*)::int
+                                          FROM tpl.recognition_suggestion rs
+                                          WHERE rs.import_job_id = tij.id
+                                            AND rs.recognition_run_id = latest_run.id
+                                            AND rs.decision = 'PENDING'),
+                                       'pendingFields', (SELECT count(*)::int
+                                          FROM tpl.recognition_suggestion rs
+                                          WHERE rs.import_job_id = tij.id
+                                            AND rs.recognition_run_id = latest_run.id
+                                            AND rs.decision = 'PENDING'
+                                            AND rs.suggestion_type IN ('SCALAR_FIELD', 'TABLE_CHILD_FIELD', 'MATRIX_FIELD')
+                                            AND NULLIF(BTRIM(rs.payload_jsonb ->> 'fieldName'), '') IS NOT NULL
+                                            AND COALESCE(rs.payload_jsonb ->> 'runtimeInputOnly', 'false') <> 'true'
+                                            AND COALESCE(rs.payload_jsonb ->> 'nameSource', '') <> 'RUNTIME_SLOT'
+                                            AND COALESCE((rs.payload_jsonb ->> 'suppressed')::boolean, false) = false
+                                            AND COALESCE(rs.payload_jsonb ->> 'structureStatus', '') NOT IN ('SUPERSEDED', 'REJECTED')
+                                            AND COALESCE(rs.payload_jsonb ->> 'pendingReason', '') <> 'PHYSICAL_STRUCTURE_SELECTED'),
+                                       'reviewableFields', (SELECT count(*)::int
+                                          FROM tpl.recognition_suggestion rs
+                                          WHERE rs.import_job_id = tij.id
+                                            AND rs.recognition_run_id = latest_run.id
+                                            AND rs.decision NOT IN ('REJECTED', 'REJECTED_BY_RESOLUTION')
+                                            AND rs.suggestion_type IN ('SCALAR_FIELD', 'TABLE_CHILD_FIELD', 'MATRIX_FIELD')
+                                            AND NULLIF(BTRIM(rs.payload_jsonb ->> 'fieldName'), '') IS NOT NULL
+                                            AND COALESCE(rs.payload_jsonb ->> 'runtimeInputOnly', 'false') <> 'true'
+                                            AND COALESCE(rs.payload_jsonb ->> 'nameSource', '') <> 'RUNTIME_SLOT'
+                                            AND COALESCE((rs.payload_jsonb ->> 'suppressed')::boolean, false) = false
+                                            AND COALESCE(rs.payload_jsonb ->> 'structureStatus', '') NOT IN ('SUPERSEDED', 'REJECTED')
+                                            AND COALESCE(rs.payload_jsonb ->> 'pendingReason', '') <> 'PHYSICAL_STRUCTURE_SELECTED'),
+                                       'structureCandidates', (SELECT count(*)::int FROM (
+                                          SELECT COALESCE(NULLIF(rs.payload_jsonb ->> 'resolutionGroupId', ''), rs.id::text) AS candidate_group
+                                          FROM tpl.recognition_suggestion rs
+                                          WHERE rs.import_job_id = tij.id
+                                            AND rs.recognition_run_id = latest_run.id
+                                            AND rs.decision NOT IN ('REJECTED', 'REJECTED_BY_RESOLUTION')
+                                            AND COALESCE(rs.payload_jsonb ->> 'suppressed', 'false') <> 'true'
+                                            AND (
+                                                rs.suggestion_type IN ('TABLE_REGION', 'TABLE_FIELD')
+                                                OR rs.payload_jsonb ->> 'kind' IN ('MATRIX', 'ROW_TABLE', 'COLUMN_TABLE', 'FORM_REGION', 'TABLE_REGION')
+                                            )
+                                          GROUP BY COALESCE(NULLIF(rs.payload_jsonb ->> 'resolutionGroupId', ''), rs.id::text)
+                                       ) candidates),
+                                       'structureConflictGroups', (SELECT count(*)::int FROM (
+                                          SELECT COALESCE(NULLIF(rs.payload_jsonb ->> 'resolutionGroupId', ''), rs.id::text) AS conflict_group
+                                          FROM tpl.recognition_suggestion rs
+                                          WHERE rs.import_job_id = tij.id
+                                            AND rs.recognition_run_id = latest_run.id
+                                            AND rs.decision NOT IN ('REJECTED', 'REJECTED_BY_RESOLUTION')
+                                            AND rs.payload_jsonb ->> 'structureConflict' = 'true'
+                                            AND COALESCE(rs.payload_jsonb ->> 'resolutionStatus', '') <> 'AUTO_RESOLVED'
+                                            AND COALESCE(rs.payload_jsonb ->> 'suppressed', 'false') <> 'true'
+                                          GROUP BY COALESCE(NULLIF(rs.payload_jsonb ->> 'resolutionGroupId', ''), rs.id::text)
+                                       ) conflicts),
+                                       'qualityIssues', (SELECT count(*)::int
+                                          FROM tpl.template_quality_issue qi
+                                          WHERE qi.import_job_id = tij.id
+                                            AND qi.recognition_run_id = latest_run.id
+                                            AND qi.status NOT IN ('AUTO_APPLIED', 'CONFIRMED', 'IGNORED'))
+                                   )
+                               ) AS recognition_summary,
+                               aj.last_error, tij.created_at,
+                               (SELECT count(*)::int FROM tpl.recognition_run rerun
+                                WHERE rerun.import_job_id = tij.id
+                                  AND rerun.run_reason = 'MANUAL_RERUN_CURRENT_DRAFT') AS retry_count,
                                latest_run.id AS recognition_run_id,
                                latest_run.status AS recognition_run_status,
+                               tij.generated_template_version_id,
+                               tv.workspace_hash,
                                (SELECT count(*)::int FROM tpl.recognition_suggestion rs
-                                 WHERE rs.import_job_id = tij.id) AS suggestion_count,
+                                 WHERE rs.import_job_id = tij.id
+                                   AND rs.recognition_run_id = latest_run.id) AS suggestion_count,
                                (SELECT count(*)::int FROM tpl.recognition_suggestion rs
-                                WHERE rs.import_job_id = tij.id AND rs.decision = 'PENDING') AS pending_suggestion_count
+                                WHERE rs.import_job_id = tij.id
+                                  AND rs.recognition_run_id = latest_run.id
+                                  AND rs.decision = 'PENDING') AS pending_suggestion_count
                         FROM tpl.template_import_job tij
                         JOIN ops.async_job aj ON aj.id = tij.async_job_id
                         JOIN ops.file_object fo ON fo.id = tij.source_file_id
+                        LEFT JOIN tpl.template_version tv ON tv.id = tij.generated_template_version_id
                         LEFT JOIN LATERAL (
                             SELECT rr.id, rr.status
                             FROM tpl.recognition_run rr
@@ -161,14 +294,18 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
                         rs.getString("status"),
                         rs.getInt("progress"),
                         rs.getString("current_stage"),
-                        parse(rs.getString("structure_summary_jsonb")),
-                        parse(rs.getString("result_jsonb")),
+                         parse(rs.getString("structure_summary_jsonb")),
+                         parse(rs.getString("result_jsonb")),
+                         parse(rs.getString("recognition_summary")),
                         rs.getString("last_error"),
                         rs.getTimestamp("created_at").toInstant(),
+                        rs.getInt("retry_count"),
                         rs.getInt("suggestion_count"),
                         rs.getInt("pending_suggestion_count"),
                         rs.getObject("recognition_run_id", UUID.class),
                         rs.getString("recognition_run_status"),
+                        rs.getObject("generated_template_version_id", UUID.class),
+                        rs.getString("workspace_hash"),
                         loadIssues(rs.getObject("id", UUID.class))
                 ),
                 arguments
@@ -200,7 +337,7 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
                             """,
                     UUID.randomUUID(),
                     importJobId,
-                    issue.severity(),
+                    QualityIssueSeverity.normalize(issue.severity()),
                     issue.code(),
                     pgJson(issue.location()),
                     issue.message()
@@ -247,14 +384,17 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
 
     @Override
     public UUID startRecognitionRun(
-            UUID importJobId, String scope, int structureVersion, int snapshotFormatVersion, int regionCount
+            UUID importJobId, String scope, int structureVersion, int snapshotFormatVersion, int regionCount,
+            UUID parentRunId, String runReason
     ) {
         var id = UUID.randomUUID();
         jdbcTemplate.update("""
                         INSERT INTO tpl.recognition_run (
-                            id, import_job_id, scope, status, structure_version, snapshot_format_version, region_count
-                        ) VALUES (?, ?, ?, 'RUNNING', ?, ?, ?)
-                        """, id, importJobId, scope, structureVersion, snapshotFormatVersion, regionCount);
+                            id, import_job_id, scope, status, structure_version, snapshot_format_version, region_count,
+                            parent_run_id, run_reason
+                        ) VALUES (?, ?, ?, 'RUNNING', ?, ?, ?, ?, ?)
+                        """, id, importJobId, scope, structureVersion, snapshotFormatVersion, regionCount,
+                parentRunId, runReason == null || runReason.isBlank() ? "INITIAL_RECOGNITION" : runReason);
         return id;
     }
 
@@ -417,7 +557,8 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
                             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             """,
                     UUID.randomUUID(), importJobId, recognitionRunId, issue.recognitionCallId(),
-                    blankToNull(issue.regionId()), issue.issueType(), issue.severity(), issue.confidence(),
+                    blankToNull(issue.regionId()), issue.issueType(),
+                    QualityIssueSeverity.normalize(issue.severity()), issue.confidence(),
                     blankToNull(issue.sheetId()), blankToNull(issue.sheetName()), issue.address(),
                     issue.title(), issue.description(), issue.businessImpact(),
                     pgJson(issue.evidence() == null ? objectMapper.createArrayNode() : issue.evidence()),
@@ -456,6 +597,11 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
                         FROM tpl.template_quality_issue qi
                         JOIN tpl.template_import_job tij ON tij.id = qi.import_job_id
                         WHERE qi.import_job_id = ? AND tij.organization_id = ?
+                          AND qi.recognition_run_id = (
+                              SELECT rr.id FROM tpl.recognition_run rr
+                              WHERE rr.import_job_id = tij.id
+                              ORDER BY rr.created_at DESC, rr.id DESC LIMIT 1
+                          )
                         ORDER BY CASE qi.severity WHEN 'BLOCKER' THEN 1 WHEN 'WARNING' THEN 2 ELSE 3 END,
                                  qi.created_at, qi.id
                         """, (rs, rowNum) -> mapQualityIssue(rs), importJobId, organizationId);
@@ -529,12 +675,13 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
                                 recognition_run_id, recognition_call_id, region_id, relation_id, block_id,
                                 parent_suggestion_id, field_id, semantic_fingerprint, suggestion_level,
                                 filter_stage, filter_reason_code, filter_detail
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, CASE WHEN ? THEN 'ACCEPTED' ELSE 'PENDING' END, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             """,
                     entry.id(),
                     importJobId,
                     source,
                     suggestion.suggestionType(), pgJson(payload), suggestion.confidence(), pgJson(suggestion.evidence()),
+                    payload.path("autoAccept").asBoolean(false),
                     batch.provider(),
                     batch.model(),
                     batch.promptVersion(),

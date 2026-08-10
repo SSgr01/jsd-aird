@@ -22,6 +22,14 @@ export function mergeRecognitionReview(
   let nextSchema = schema;
   let nextMapping = structuredClone(mapping);
   let nextModel = structuredClone(model);
+  // RecognitionReview is a snapshot of the current run, not an incremental
+  // event stream. Replace candidates from the previous run on every refresh;
+  // otherwise each retry permanently appends stale fields to the region tree.
+  // Confirmed/manual fields are preserved because they are no longer marked
+  // as recognition candidates.
+  nextModel.fields = nextModel.fields.filter(
+    (field) => !(field.candidate && field.recognitionItemId),
+  );
   if (review.semanticModel?.businessBlocks) {
     nextModel.blocks = structuredClone(review.semanticModel.businessBlocks);
   }
@@ -34,7 +42,12 @@ export function mergeRecognitionReview(
 
   for (const item of review.items) {
     if (item.status === 'IGNORED') continue;
-    if (isProtocolRejected(item.payload)) continue;
+    // Region roots are structural metadata, not business fields.  They are
+    // kept in RecognitionReview.regions for the review panel; importing them
+    // into fieldModel here made “基本信息区域/重复记录区域” appear as array
+    // fields and allowed the properties tab to edit a structure as a field.
+    if (isRegionRoot(item) || isRuntimeSlot(item.payload)) continue;
+    if (isProtocolRejected(item.payload) || isAuditOnly(item.payload)) continue;
     const existingIndex = nextModel.fields.findIndex((field) => fieldMatchesIdentity(field, {
       bindingId: item.payload.bindingId,
       relationId: item.payload.relationId,
@@ -109,6 +122,26 @@ export function mergeRecognitionReview(
 function isProtocolRejected(payload: RecognitionReviewItem['payload']) {
   return payload.protocolRecovery === 'RETAINED_REJECTED_CANDIDATE'
     || payload.pendingReason === 'PROTOCOL_REVIEW_REQUIRED';
+}
+
+function isRegionRoot(item: RecognitionReviewItem) {
+  const kind = item.payload.kind === 'SCALAR'
+    && item.payload.blockType === 'FORM_REGION'
+    && item.payload.role === 'REPEAT_REGION'
+    && ['object', 'array'].includes(item.payload.valueType)
+    ? 'FORM_REGION'
+    : item.payload.kind || item.payload.blockType || item.kind;
+  return !item.child && ['FORM_REGION', 'ROW_TABLE', 'COLUMN_TABLE', 'MATRIX', 'TABLE_REGION'].includes(kind);
+}
+
+function isRuntimeSlot(payload: RecognitionReviewItem['payload']) {
+  return payload.runtimeInputOnly === true || payload.nameSource === 'RUNTIME_SLOT';
+}
+
+function isAuditOnly(payload: RecognitionReviewItem['payload']) {
+  return payload.suppressed === true
+    || ['SUPERSEDED', 'REJECTED'].includes(payload.structureStatus ?? '')
+    || payload.pendingReason === 'PHYSICAL_STRUCTURE_SELECTED';
 }
 
 export function acceptRecognitionReviewItem(

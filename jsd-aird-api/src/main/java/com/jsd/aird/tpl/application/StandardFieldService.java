@@ -84,8 +84,9 @@ public class StandardFieldService {
         for (var field : model.path("fields")) {
             if (field.path("candidate").asBoolean(false)) continue;
             var origin = field.path("fieldOrigin").asText("");
-            if ("PENDING_STANDARD".equals(origin)
-                    || field.path("requiresStandardConfirmation").asBoolean(false)) {
+            if (field.path("standardRequired").asBoolean(false)
+                    && ("PENDING_STANDARD".equals(origin)
+                    || field.path("requiresStandardConfirmation").asBoolean(false))) {
                 throw new ApiException(ApiErrorCode.INVALID_SCHEMA,
                         "字段“" + field.path("name").asText("未命名") + "”尚未确认标准字段，请选择标准字段或转为模板自定义字段");
             }
@@ -99,6 +100,39 @@ public class StandardFieldService {
                         "字段“" + field.path("name").asText("未命名") + "”的标准字段已失效，请重新选择");
             }
         }
+    }
+
+    /**
+     * Recognition historically marked every unmatched suggestion as requiring
+     * a standard dictionary entry.  A template-local field is a valid product
+     * concept, so normalize that legacy representation before draft validation.
+     */
+    public JsonNode normalizeDraftFields(JsonNode schema) {
+        if (schema == null || !schema.isObject()) return schema;
+        var normalized = schema.deepCopy();
+        var model = normalized.path("x-jsd-field-model");
+        if (!(model instanceof com.fasterxml.jackson.databind.node.ObjectNode modelObject)) {
+            return normalized;
+        }
+        for (var node : modelObject.withArray("fields")) {
+            if (!(node instanceof com.fasterxml.jackson.databind.node.ObjectNode field)
+                    || field.path("candidate").asBoolean(false)
+                    || field.path("standardRequired").asBoolean(false)
+                    || "STANDARD".equals(field.path("fieldOrigin").asText(""))) {
+                continue;
+            }
+            var origin = field.path("fieldOrigin").asText("");
+            var unmatched = "PENDING_STANDARD".equals(origin)
+                    || field.path("requiresStandardConfirmation").asBoolean(false)
+                    || "UNMATCHED".equals(field.path("standardMatchStatus").asText(""));
+            if (!unmatched) continue;
+            field.put("fieldOrigin", "TEMPLATE_LOCAL")
+                    .put("standardSelectionStatus", "CUSTOM")
+                    .put("standardMatchStatus", "UNMATCHED")
+                    .put("requiresStandardConfirmation", false)
+                    .put("reviewRequired", true);
+        }
+        return normalized;
     }
 
     private void requireAdmin(UUID organizationId, UUID userId) {

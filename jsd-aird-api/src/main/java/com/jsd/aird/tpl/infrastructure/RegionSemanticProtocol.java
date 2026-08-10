@@ -105,6 +105,7 @@ final class RegionSemanticProtocol {
                 }
             }
             if (object == null) continue;
+            if (object.path("businessName").asText("").strip().isBlank()) continue;
             var labelRange = object.path("labelRange").asText("");
             var valueRange = object.path("valueRange").asText("");
             if (!RANGE.matcher(labelRange.toUpperCase(java.util.Locale.ROOT)).matches()
@@ -168,7 +169,8 @@ final class RegionSemanticProtocol {
                 .put("tableKind", type).put("businessName", semanticResponse.path("businessName").asText(name))
                 .put("blockTemporaryId", blockId).put("groupNameSuggestion", "").put("semanticKeySuggestion", "")
                 .put("headerRange", headerRange).put("dataRange", dataRange).put("totalRange", "")
-                .put("semanticMode", isMatrix ? "CROSS_TAB" : "ROW_RECORDS")
+                .put("semanticMode", isMatrix ? "CROSS_TAB"
+                        : "COLUMN_TABLE".equals(type) ? "COLUMN_RECORDS" : "ROW_RECORDS")
                 .put("rowHeaderRange", rowHeaderRange).put("columnHeaderRange", columnHeaderRange)
                 .put("crossDataRange", crossDataRange);
         var columns = table.putArray("columns");
@@ -186,21 +188,24 @@ final class RegionSemanticProtocol {
                         .put("condition", relation.path("condition").asText(""))
                         .put("semanticKeySuggestion", relation.path("semanticKeySuggestion").asText("")));
             }
-            if (columns.isEmpty()) {
-                columns.add(objectMapper.createObjectNode()
-                        .put("temporaryId", "column-pending")
-                        .put("name", "待确认列")
-                        .put("labelRange", headerRange).put("valueRange", dataRange)
-                        .put("valueType", "string").put("editability", "UNKNOWN")
-                        .put("valueSource", "UNKNOWN").put("unit", "").put("condition", "")
-                        .put("semanticKeySuggestion", ""));
-            }
+            // Keep the table column list empty when the model did not provide
+            // a usable name. The compiler can then recover physical headers or
+            // row attributes; a synthetic "待确认列" must never become a
+            // formal field mapping.
         }
         table.set("headerTree", structure.path("headerTree").isArray()
                 ? structure.path("headerTree").deepCopy() : objectMapper.createArrayNode());
         if (structure.has("cornerRange")) table.put("cornerRange", structure.path("cornerRange").asText());
         if (structure.has("recordAxis")) table.put("recordAxis", structure.path("recordAxis").asText("UNKNOWN"));
-        if (!isMatrix) table.put("repeatAxis", "COLUMN_TABLE".equals(type) ? "COLUMN" : "ROW");
+        if (!isMatrix) {
+            table.put("repeatAxis", "COLUMN_TABLE".equals(type) ? "COLUMN" : "ROW")
+                    .put("recordHeight", structure.path("recordHeight").asInt(1))
+                    .put("recordWidth", structure.path("recordWidth").asInt(1))
+                    .put("recordStride", structure.path("recordStride").asInt(1));
+            if (structure.path("recordProjection").isObject()) {
+                table.set("recordProjection", structure.path("recordProjection").deepCopy());
+            }
+        }
         tables.add(table);
     }
 

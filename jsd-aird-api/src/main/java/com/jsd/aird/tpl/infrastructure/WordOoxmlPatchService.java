@@ -3,12 +3,15 @@ package com.jsd.aird.tpl.infrastructure;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
@@ -44,7 +47,12 @@ public class WordOoxmlPatchService implements WordOoxmlPatcher {
             }
             if (documentXml == null) throw new ApiException(ApiErrorCode.BAD_REQUEST, "DOCX 缺少正文 XML");
             var document = parse(documentXml);
-            for (var operation : operations) applyOne(document, operation);
+            // Resolve positional node IDs once against the base document.  An
+            // insertion wraps/clones runs and therefore changes later NodeList
+            // indexes; using the initial node references keeps a batch of
+            // INSERT_CONTENT_CONTROL operations deterministic.
+            var stableTargets = stableTargetNodes(document);
+            for (var operation : operations) applyOne(document, operation, stableTargets);
             var patched = write(document);
             var result = new ByteArrayOutputStream();
             try (var zip = new ZipOutputStream(result)) {
@@ -62,11 +70,76 @@ public class WordOoxmlPatchService implements WordOoxmlPatcher {
         }
     }
 
-    private void applyOne(Document document, JsonNode operation) {
+    /**
+     * Applies the limited text/paragraph projection produced by Univer Docs
+     * back to the native OOXML.  The source paragraph list is intentionally
+     * stored in the imported snapshot so a changed paragraph is still
+     * optimistic-lock checked against the exact DOCX that was opened.
+     */
+    @Override
+    public byte[] applySnapshot(byte[] source, JsonNode snapshot) {
+        var body = snapshot == null ? null : snapshot.path("body");
+        var sourceParagraphs = body == null ? null : body.path("sourceParagraphs");
+        if (body == null || !body.isObject() || !sourceParagraphs.isArray()) return source;
+        var stream = body.path("dataStream").asText("");
+        if (stream.endsWith("\r\n")) stream = stream.substring(0, stream.length() - 2);
+        var currentParagraphs = stream.split("\\r", -1);
+        var baselineParagraphs = new ArrayList<JsonNode>();
+        for (var paragraph : sourceParagraphs) {
+            if (!paragraph.path("text").asText("").isBlank()) baselineParagraphs.add(paragraph);
+        }
+        var paragraphProjection = currentParagraphs.length == sourceParagraphs.size()
+                ? sourceParagraphs
+                : currentParagraphs.length == baselineParagraphs.size()
+                    ? objectMapperArray(baselineParagraphs)
+                    : null;
+        if (paragraphProjection == null) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST,
+                    "当前 Word 编辑包含段落结构变化，暂不支持自动回写；请先保存为原生 Word 文件后重新导入");
+        }
+        var operations = JsonNodeFactory.instance.arrayNode();
+        for (var index = 0; index < currentParagraphs.length; index++) {
+            var sourceParagraph = paragraphProjection.get(index);
+            var baseText = sourceParagraph.path("text").asText("");
+            var currentText = currentParagraphs[index];
+            if (!baseText.equals(currentText)) {
+                operations.add(JsonNodeFactory.instance.objectNode()
+                        .put("type", "REPLACE_TEXT")
+                        .put("targetId", "paragraph-" + sourceParagraph.path("paragraphIndex").asInt(index + 1))
+                        .put("baseText", baseText)
+                        .put("text", currentText));
+            }
+        }
+        for (var paragraph : body.path("paragraphs")) {
+            var paragraphIndex = paragraph.path("paragraphIndex").asInt(0);
+            var style = paragraph.path("paragraphStyle");
+            if (paragraphIndex <= 0 || !style.isObject() || !style.has("horizontalAlign")) continue;
+            var alignment = switch (style.path("horizontalAlign").asInt(1)) {
+                case 2 -> "center";
+                case 3 -> "right";
+                case 4 -> "both";
+                default -> "left";
+            };
+            operations.add(JsonNodeFactory.instance.objectNode()
+                    .put("type", "SET_PARAGRAPH_ALIGNMENT")
+                    .put("targetId", "paragraph-" + paragraphIndex)
+                    .put("alignment", alignment));
+        }
+        return apply(source, operations);
+    }
+
+    private ArrayNode objectMapperArray(List<JsonNode> nodes) {
+        var result = JsonNodeFactory.instance.arrayNode();
+        nodes.forEach(result::add);
+        return result;
+    }
+
+    private void applyOne(Document document, JsonNode operation, Map<String, Node> stableTargets) {
         var type = operation.path("type").asText("");
         var target = operation.path("targetId").asText("");
         if (target.isBlank()) throw new ApiException(ApiErrorCode.BAD_REQUEST, "Word Patch 缺少 targetId");
         switch (type) {
+            case "INSERT_CONTENT_CONTROL" -> insertContentControl(document, target, operation, stableTargets);
             case "REPLACE_CONTENT_CONTROL" -> replaceControl(document, target, operation);
             case "REPLACE_TEXT", "REPLACE_RUN_TEXT" -> replaceText(document, target, operation);
             case "SET_PARAGRAPH_ALIGNMENT" -> setParagraphAlignment(document, target, operation.path("alignment").asText(""));
@@ -79,7 +152,119 @@ public class WordOoxmlPatchService implements WordOoxmlPatcher {
         }
     }
 
+    private void insertContentControl(
+            Document document, String target, JsonNode operation, Map<String, Node> stableTargets
+    ) {
+        var markerId = operation.path("markerId").asText("").strip();
+        if (markerId.isBlank()) throw new ApiException(ApiErrorCode.BAD_REQUEST, "Word 内容控件缺少 markerId");
+        var node = findTargetNode(document, target, stableTargets);
+        if (node == null) throw new ApiException(ApiErrorCode.BAD_REQUEST, "找不到 Word 插入位置：" + target);
+        if (hasAncestor(node, "sdt")) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "不能在已有内容控件内部重复插入字段");
+        }
+        var baseText = operation.path("baseText").asText("");
+        if (operation.has("baseText") && !baseText.equals(node.getTextContent())) {
+            throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT, "Word 选区内容已变化");
+        }
+        var parent = node.getParentNode();
+        if (parent == null) throw new ApiException(ApiErrorCode.BAD_REQUEST, "Word 插入位置没有父节点");
+        var control = document.createElementNS(W, "w:sdt");
+        var properties = document.createElementNS(W, "w:sdtPr");
+        var id = document.createElementNS(W, "w:id");
+        id.setAttributeNS(W, "w:val", Integer.toUnsignedString(markerId.hashCode()));
+        properties.appendChild(id);
+        var tag = operation.path("tag").asText("");
+        if (!tag.isBlank()) {
+            var tagNode = document.createElementNS(W, "w:tag");
+            tagNode.setAttributeNS(W, "w:val", tag);
+            properties.appendChild(tagNode);
+        }
+        var dataBinding = document.createElementNS(W, "w:dataBinding");
+        dataBinding.setAttributeNS(W, "w:storeItemID", markerId);
+        properties.appendChild(dataBinding);
+        var alias = operation.path("alias").asText("");
+        if (!alias.isBlank()) {
+            var aliasNode = document.createElementNS(W, "w:alias");
+            aliasNode.setAttributeNS(W, "w:val", alias);
+            properties.appendChild(aliasNode);
+        }
+        control.appendChild(properties);
+        var content = document.createElementNS(W, "w:sdtContent");
+        if ("tc".equals(node.getLocalName())) {
+            // A table-cell target is a block-level location. Preserve tcPr and
+            // move the existing paragraphs into the content control.
+            var children = new ArrayList<Node>();
+            for (var child = node.getFirstChild(); child != null; child = child.getNextSibling()) {
+                if (child instanceof Element element && "tcPr".equals(element.getLocalName())) continue;
+                children.add(child);
+            }
+            for (var child : children) content.appendChild(child);
+            control.appendChild(content);
+            node.appendChild(control);
+            return;
+        }
+        Node replacement = node;
+        if ("text".equals(node.getLocalName())) {
+            var run = node.getParentNode();
+            if (run instanceof Element element && "r".equals(element.getLocalName())) replacement = run;
+        }
+        content.appendChild(replacement.cloneNode(true));
+        control.appendChild(content);
+        parent.replaceChild(control, replacement);
+    }
+
+    private Node findTargetNode(Document document, String target) {
+        return findTargetNode(document, target, Map.of());
+    }
+
+    private Node findTargetNode(Document document, String target, Map<String, Node> stableTargets) {
+        var stable = stableTargets.get(target);
+        if (stable != null && stable.getParentNode() != null) return stable;
+        if (target.startsWith("text-")) return indexed(document.getElementsByTagNameNS("*", "t"), target, "text-");
+        if (target.startsWith("run-")) return indexed(document.getElementsByTagNameNS("*", "r"), target, "run-");
+        if (target.startsWith("cell-")) return indexed(document.getElementsByTagNameNS("*", "tc"), target, "cell-");
+        if (target.startsWith("paragraph-")) return findParagraph(document, target);
+        return null;
+    }
+
+    private Map<String, Node> stableTargetNodes(Document document) {
+        var targets = new HashMap<String, Node>();
+        putIndexed(targets, document.getElementsByTagNameNS("*", "t"), "text-");
+        putIndexed(targets, document.getElementsByTagNameNS("*", "r"), "run-");
+        putIndexed(targets, document.getElementsByTagNameNS("*", "tc"), "cell-");
+        var paragraphs = document.getElementsByTagNameNS("*", "p");
+        for (var index = 0; index < paragraphs.getLength(); index++) {
+            var paragraph = paragraphs.item(index);
+            targets.putIfAbsent("paragraph-" + (index + 1), paragraph);
+            if (paragraph instanceof Element element) {
+                var paraId = attribute(element, "paraId");
+                if (!paraId.isBlank()) targets.putIfAbsent("paragraph-" + paraId, paragraph);
+            }
+        }
+        return targets;
+    }
+
+    private void putIndexed(Map<String, Node> targets, NodeList nodes, String prefix) {
+        for (var index = 0; index < nodes.getLength(); index++) {
+            targets.put(prefix + (index + 1), nodes.item(index));
+        }
+    }
+
+    private boolean hasAncestor(Node node, String localName) {
+        var current = node.getParentNode();
+        while (current != null) {
+            if (current instanceof Element element && localName.equals(element.getLocalName())) return true;
+            current = current.getParentNode();
+        }
+        return false;
+    }
+
     private void replaceText(Document document, String target, JsonNode operation) {
+        if (target.startsWith("paragraph-")) {
+            var paragraph = findParagraph(document, target);
+            replaceDescendantText(paragraph, operation);
+            return;
+        }
         var texts = document.getElementsByTagNameNS("*", "t");
         if (target.startsWith("text-")) {
             var index = parseIndex(target, "text-");
@@ -123,9 +308,23 @@ public class WordOoxmlPatchService implements WordOoxmlPatcher {
             var props = first(control, "sdtPr");
             var id = props == null ? "" : attribute(first(props, "id"), "val");
             var tag = props == null ? "" : attribute(first(props, "tag"), "val");
-            if (!target.equals(id) && !target.equals(tag) && !target.equals("content-control-" + (i + 1))) continue;
+            var storedMarker = props == null ? "" : attribute(first(props, "dataBinding"), "storeItemID");
+            if (!target.equals(id) && !target.equals(tag) && !target.equals(storedMarker)
+                    && !target.equals("content-control-" + (i + 1))) continue;
             var texts = control.getElementsByTagNameNS("*", "t");
-            if (texts.getLength() == 0) throw new ApiException(ApiErrorCode.BAD_REQUEST, "内容控件没有可编辑文本：" + target);
+            if (texts.getLength() == 0) {
+                // Empty controls are valid Word placeholders.  Materialize a
+                // simple run on first write instead of rejecting the field;
+                // complex controls still retain their original OOXML content.
+                var content = first(control, "sdtContent");
+                if (content == null) throw new ApiException(ApiErrorCode.BAD_REQUEST, "内容控件缺少 sdtContent：" + target);
+                var run = document.createElementNS(W, "w:r");
+                var text = document.createElementNS(W, "w:t");
+                text.setTextContent(operation.path("text").asText(""));
+                run.appendChild(text);
+                content.appendChild(run);
+                return;
+            }
             assertBaseText(control.getTextContent(), operation);
             for (var j = texts.getLength() - 1; j > 0; j--) texts.item(j).getParentNode().removeChild(texts.item(j));
             texts.item(0).setTextContent(operation.path("text").asText(""));

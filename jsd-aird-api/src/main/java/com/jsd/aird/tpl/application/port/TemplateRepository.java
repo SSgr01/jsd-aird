@@ -36,7 +36,21 @@ public interface TemplateRepository {
 
     int retireTemplate(UUID organizationId, UUID templateId);
 
-    int clearCategory(UUID organizationId, String category);
+    List<TemplateCategoryItem> findCategories(UUID organizationId);
+
+    void insertCategory(UUID id, UUID organizationId, String name, int sortOrder, UUID actorId);
+
+    Optional<TemplateCategoryItem> findCategory(UUID organizationId, UUID categoryId);
+
+    boolean categoryNameExists(UUID organizationId, String name, UUID excludingId);
+
+    int renameCategory(UUID organizationId, UUID categoryId, String name);
+
+    int deleteCategory(UUID organizationId, UUID categoryId, UUID replacementCategoryId);
+
+    int assignTemplateCategory(UUID organizationId, UUID templateId, UUID categoryId);
+
+    void ensureCategory(UUID organizationId, String name, UUID actorId);
 
     Optional<TemplateWorkspace> findWorkspace(UUID organizationId, UUID versionId);
 
@@ -87,6 +101,9 @@ public interface TemplateRepository {
             Instant updatedAt,
             int issueCount
     ) {
+    }
+
+    record TemplateCategoryItem(UUID id, String name, int sortOrder, int templateCount) {
     }
 
     record NewTemplate(

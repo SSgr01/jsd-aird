@@ -75,4 +75,22 @@ class WorkbookQualityAnalyzerTest {
         });
         assertThat(result.changed()).isFalse();
     }
+
+    @Test
+    void keepsLongNoteSentenceAsStaticContentInsteadOfTemplateQualityIssue() throws Exception {
+        var structure = objectMapper.readTree("""
+                {"candidateCells":[
+                  {"sheetId":"sheet-1","address":"A25","empty":false,
+                   "value":"注：原料投料偏差不能大于1%,补损溶剂除外.","hasBorder":true}
+                ],"regions":[],"dataValidations":[],"namedRanges":[]}
+                """);
+        var snapshot = objectMapper.readTree("""
+                {"sheets":{"sheet-1":{"cellData":{"24":{"0":{"v":"注：原料投料偏差不能大于1%,补损溶剂除外."}}}}}}
+                """);
+
+        var result = analyzer.analyze(structure, snapshot, Set.of(), true);
+
+        assertThat(result.issues()).isEmpty();
+        assertThat(result.changed()).isFalse();
+    }
 }

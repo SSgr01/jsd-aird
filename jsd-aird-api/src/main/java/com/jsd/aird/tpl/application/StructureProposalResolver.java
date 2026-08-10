@@ -1,7 +1,6 @@
 package com.jsd.aird.tpl.application;
 
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -28,7 +27,11 @@ public final class StructureProposalResolver {
         var result = objectMapper.createObjectNode();
         var regions = result.putArray("regions");
         var conflicts = result.putArray("conflictGroups");
+        var resolutions = result.putArray("resolutionGroups");
+        var suppressed = result.putArray("suppressedRegions");
         var diagnostics = result.putArray("diagnostics");
+        var semanticTargets = result.putArray("semanticTargets");
+        var unresolvedTargets = result.putArray("unresolvedStructureTargets");
         var backend = backendProposals == null ? List.<JsonNode>of() : backendProposals;
         var model = modelPayload == null ? objectMapper.createArrayNode() : modelPayload.path("structureProposals");
         var usedModel = new LinkedHashSet<String>();
@@ -39,7 +42,7 @@ public final class StructureProposalResolver {
             if (candidate == null) continue;
             var key = signature(candidate);
             if (!backendSignatures.add(key)) continue;
-            var exact = findExact(candidate, model);
+            var exact = findExact(candidate, model, usedModel);
             if (exact != null) {
                 usedModel.add(exact.path("proposalId").asText());
                 confirmed(candidate, exact);
@@ -47,10 +50,50 @@ public final class StructureProposalResolver {
                 continue;
             }
 
-            var alternatives = overlappingModel(candidate, model);
+            var alternatives = overlappingModel(candidate, model, usedModel);
             if (!alternatives.isEmpty()) {
                 var groupId = "structure-conflict-" + RecognitionIdentity.shortHash(
                         candidate.path("sheetId").asText() + "|" + candidate.path("range").asText(), 16);
+                if (isExactModelPartition(candidate, alternatives, structure)) {
+                    var physicalAlternativeId = groupId + "-physical";
+                    var modelAlternativeId = groupId + "-model-partition";
+                    var modelRegions = new ArrayList<JsonNode>();
+                    for (var alternative : alternatives) {
+                        usedModel.add(alternative.path("proposalId").asText());
+                        var modelRegion = modelCandidate(alternative, structure);
+                        if (modelRegion == null) continue;
+                        confirmPartition(modelRegion, candidate, groupId, modelAlternativeId);
+                        regions.add(modelRegion);
+                        modelRegions.add(modelRegion);
+                    }
+                    var resolution = objectMapper.createObjectNode()
+                            .put("resolutionGroupId", groupId)
+                            .put("type", "STRUCTURE_REPLACEMENT")
+                            .put("resolutionStatus", "AUTO_RESOLVED")
+                            .put("resolutionReason", "MODEL_PARTITION_EXACT_COVER")
+                            .put("selectedAlternativeId", modelAlternativeId);
+                    var resolutionAlternatives = resolution.putArray("alternatives");
+                    resolutionAlternatives.add(alternativeSet(
+                            physicalAlternativeId, "PHYSICAL_HEURISTIC", List.of(candidate)));
+                    resolutionAlternatives.add(alternativeSet(
+                            modelAlternativeId, "MODEL", modelRegions));
+                    resolutions.add(resolution);
+
+                    var suppressedCandidate = candidate.deepCopy();
+                    suppressedCandidate.put("structureStatus", "SUPERSEDED")
+                            .put("canonicalStatus", "REJECTED")
+                            .put("candidateOnly", true)
+                            .put("physicalStructureOnly", true)
+                            .put("reviewRequired", false)
+                            .put("resolutionStatus", "AUTO_RESOLVED")
+                            .put("resolutionReason", "MODEL_PARTITION_EXACT_COVER")
+                            .put("resolutionGroupId", groupId)
+                            .put("resolutionAlternativeId", physicalAlternativeId);
+                    suppressed.add(suppressedCandidate);
+                    continue;
+                }
+                var physicalAlternativeId = groupId + "-physical";
+                var modelAlternativeId = groupId + "-model-partition";
                 candidate.put("structureStatus", "CONFLICT")
                         .put("canonicalStatus", "PROVISIONAL")
                         .put("structureConflict", true)
@@ -59,18 +102,28 @@ public final class StructureProposalResolver {
                         .put("physicalStructureOnly", true)
                         .put("pendingReason", "STRUCTURE_CONFLICT")
                         .put("resolutionGroupId", groupId)
+                        .put("resolutionAlternativeId", physicalAlternativeId)
                         .put("modelAssessmentVerdict", "MODEL_CONFLICTS");
                 var group = objectMapper.createObjectNode()
                         .put("resolutionGroupId", groupId)
-                        .put("type", "STRUCTURE_CONFLICT");
+                        .put("type", "STRUCTURE_CONFLICT")
+                        .put("resolutionStatus", "PENDING");
                 var groupAlternatives = group.putArray("alternatives");
-                groupAlternatives.add(alternative(candidate, "PHYSICAL_HEURISTIC"));
                 var modelAlternatives = candidate.putArray("modelAlternatives");
+                var modelSetRegions = new ArrayList<JsonNode>();
                 for (var alternative : alternatives) {
                     usedModel.add(alternative.path("proposalId").asText());
-                    groupAlternatives.add(alternative(alternative, "MODEL"));
-                    modelAlternatives.add(alternative.deepCopy());
+                    var alternativeCopy = alternative.deepCopy();
+                    if (alternativeCopy instanceof ObjectNode object) {
+                        object.put("resolutionAlternativeId", modelAlternativeId);
+                    }
+                    modelAlternatives.add(alternativeCopy);
+                    modelSetRegions.add(alternativeCopy);
                 }
+                groupAlternatives.add(alternativeSet(
+                        physicalAlternativeId, "PHYSICAL_HEURISTIC", List.of(candidate)));
+                groupAlternatives.add(alternativeSet(modelAlternativeId, "MODEL", modelSetRegions));
+                candidate.set("structureAlternativeSets", groupAlternatives.deepCopy());
                 conflicts.add(group);
             } else {
                 candidate.put("structureStatus", "UNRESOLVED")
@@ -105,6 +158,14 @@ public final class StructureProposalResolver {
         }
 
         validateSetOverlaps(regions, conflicts, diagnostics);
+        // Formal semantic recognition is intentionally limited to the regions
+        // that both proposals have confirmed (or that were proven by the
+        // strict exact-partition invariant).  Unresolved model/physical
+        // proposals are retained separately for review and audit, but are not
+        // sent to REGION_FIELDS and cannot contribute to coverage.
+        appendSemanticTargets(semanticTargets, regions);
+        result.set("canonicalSemanticTargets", semanticTargets.deepCopy());
+        appendUnresolvedTargets(unresolvedTargets, regions);
         result.put("recognitionStatus", conflicts.isEmpty() && diagnostics.isEmpty()
                 && allConfirmed(regions) ? "COMPLETE" : "REVIEW_REQUIRED");
         result.put("canonicalStatus", allConfirmed(regions) && conflicts.isEmpty()
@@ -132,6 +193,21 @@ public final class StructureProposalResolver {
                 .put("reviewRequired", true)
                 .put("confidence", primitive.path("confidence").asDouble(0.5));
         result.set("structure", primitive.path("structure").deepCopy());
+        // Older physical recognizers emitted repeatAxis while the resolver
+        // uses the canonical recordAxis vocabulary. Normalize the alias at
+        // the proposal boundary so comparison is independent of producer
+        // protocol version.
+        var structure = result.with("structure");
+        var recordAxis = structure.path("recordAxis").asText("");
+        if (recordAxis.isBlank() || "UNKNOWN".equalsIgnoreCase(recordAxis)) {
+            var repeatAxis = structure.path("repeatAxis").asText("");
+            if (!repeatAxis.isBlank() && !"UNKNOWN".equalsIgnoreCase(repeatAxis)) {
+                structure.put("recordAxis", repeatAxis.toUpperCase(java.util.Locale.ROOT));
+            }
+        }
+        if (!result.has("recordAxis") && structure.has("recordAxis")) {
+            result.set("recordAxis", structure.path("recordAxis").deepCopy());
+        }
         return result;
     }
 
@@ -153,7 +229,7 @@ public final class StructureProposalResolver {
         var details = objectMapper.createObjectNode();
         for (var key : List.of("cornerRange", "rowHeaderRange", "columnHeaderRange", "crossDataRange",
                 "headerRange", "dataRange", "totalRange", "recordHeight", "recordWidth", "recordStride",
-                "recordAxis")) {
+                "recordAxis", "repeatAxis")) {
             if (proposal.has(key)) details.set(key, proposal.path(key).deepCopy());
         }
         result.set("structure", details);
@@ -168,6 +244,8 @@ public final class StructureProposalResolver {
                 .put("physicalStructureOnly", false)
                 .put("reviewRequired", false)
                 .put("modelAssessmentVerdict", "MODEL_AGREES")
+                .put("resolutionStatus", "AUTO_RESOLVED")
+                .put("resolutionReason", "EXACT_SIGNATURE_AGREEMENT")
                 .put("canonicalStructureMayReopen", false);
         var structure = backend.with("structure");
         for (var key : List.of("cornerRange", "rowHeaderRange", "columnHeaderRange", "crossDataRange",
@@ -180,23 +258,166 @@ public final class StructureProposalResolver {
         backend.set("modelProposal", model.deepCopy());
     }
 
-    private JsonNode findExact(JsonNode backend, JsonNode proposals) {
+    private boolean validTableGeometry(JsonNode candidate, String type) {
+        var structure = candidate.path("structure");
+        if (structure == null || !structure.isObject() || bounds(candidate.path("range").asText()) == null) {
+            return false;
+        }
+        if ("MATRIX".equals(type)) {
+            var region = bounds(candidate.path("range").asText());
+            var corner = bounds(structure.path("cornerRange").asText());
+            var rowHeader = bounds(structure.path("rowHeaderRange").asText());
+            var columnHeader = bounds(structure.path("columnHeaderRange").asText());
+            var crossData = bounds(structure.path("crossDataRange").asText());
+            var axis = structure.path("recordAxis").asText(candidate.path("recordAxis").asText(""));
+            return region != null && corner != null && rowHeader != null && columnHeader != null && crossData != null
+                    && area(crossData) > 0
+                    && Set.of("ROW", "COLUMN").contains(axis)
+                    && contains(region, corner) && contains(region, rowHeader)
+                    && contains(region, columnHeader) && contains(region, crossData)
+                    && height(rowHeader) == height(crossData)
+                    && width(columnHeader) == width(crossData)
+                    && !overlapBounds(rowHeader, columnHeader)
+                    && !overlapBounds(rowHeader, crossData)
+                    && !overlapBounds(columnHeader, crossData);
+        }
+        var header = bounds(structure.path("headerRange").asText());
+        var data = bounds(structure.path("dataRange").asText());
+        if (header == null || data == null) return false;
+        var axis = structure.path("recordAxis").asText("");
+        if (axis.isBlank() || "UNKNOWN".equalsIgnoreCase(axis)) {
+            axis = structure.path("repeatAxis").asText(candidate.path("recordAxis")
+                    .asText(candidate.path("repeatAxis").asText("")));
+        }
+        axis = axis.toUpperCase(java.util.Locale.ROOT);
+        return ("ROW_TABLE".equals(type) && "ROW".equals(axis))
+                || ("COLUMN_TABLE".equals(type) && "COLUMN".equals(axis));
+    }
+
+    private JsonNode findExact(JsonNode backend, JsonNode proposals, Set<String> usedModel) {
         for (var proposal : proposals) {
-            if (proposal.isObject() && signature(backend).equals(signature(proposal))) return proposal;
+            if (proposal.isObject()
+                    && !usedModel.contains(proposal.path("proposalId").asText())
+                    && signature(backend).equals(signature(proposal))) return proposal;
         }
         return null;
     }
 
-    private List<JsonNode> overlappingModel(JsonNode backend, JsonNode proposals) {
+    private List<JsonNode> overlappingModel(JsonNode backend, JsonNode proposals, Set<String> usedModel) {
         var result = new ArrayList<JsonNode>();
         for (var proposal : proposals) {
             if (!proposal.isObject()) continue;
+            if (usedModel.contains(proposal.path("proposalId").asText())) continue;
             if (!backend.path("sheetId").asText().equals(proposal.path("sheetId").asText())) continue;
             if (!overlap(backend.path("range").asText(), proposal.path("range").asText())) continue;
             if (signature(backend).equals(signature(proposal))) continue;
             result.add(proposal);
         }
         return result;
+    }
+
+    private boolean isExactModelPartition(JsonNode backend, List<JsonNode> proposals, JsonNode structure) {
+        if (proposals.size() < 2) return false;
+        var backendBounds = bounds(backend.path("range").asText());
+        if (backendBounds == null) return false;
+        long coveredArea = 0;
+        for (int index = 0; index < proposals.size(); index++) {
+            var proposal = proposals.get(index);
+            var proposalType = normalizeType(proposal.path("type").asText(""));
+            if (!Set.of("MATRIX", "ROW_TABLE", "COLUMN_TABLE", "FORM_REGION")
+                    .contains(proposalType)) return false;
+            if (!backend.path("sheetId").asText().equals(proposal.path("sheetId").asText())) return false;
+            var proposalBounds = bounds(proposal.path("range").asText());
+            if (proposalBounds == null) return false;
+            if (!validModelProposalGeometry(proposal, proposalType, structure)) return false;
+            for (int previous = 0; previous < index; previous++) {
+                if (overlap(proposal.path("range").asText(), proposals.get(previous).path("range").asText())) {
+                    return false;
+                }
+            }
+            var intersection = intersection(backendBounds, proposalBounds);
+            if (intersection == null) return false;
+            coveredArea += area(intersection);
+        }
+        return coveredArea == area(backendBounds);
+    }
+
+    private boolean validModelProposalGeometry(JsonNode proposal, String type, JsonNode structure) {
+        if ("FORM_REGION".equals(type)) return true;
+        var candidate = modelCandidate(proposal, structure);
+        return candidate != null && validTableGeometry(candidate, type);
+    }
+
+    private void appendSemanticTargets(ArrayNode targets, ArrayNode regions) {
+        var seen = new LinkedHashSet<String>();
+        for (var region : regions) {
+            if (!isFormalRegion(region) || region.path("suppressed").asBoolean(false)) continue;
+            if (!"CONFIRMED".equals(region.path("canonicalStatus").asText())
+                    || !"CONFIRMED".equals(region.path("structureStatus").asText())) continue;
+            addSemanticTarget(targets, seen, region);
+        }
+    }
+
+    private void appendUnresolvedTargets(ArrayNode targets, ArrayNode regions) {
+        var seen = new LinkedHashSet<String>();
+        for (var region : regions) {
+            if (!isFormalRegion(region) || region.path("suppressed").asBoolean(false)
+                    || ("CONFIRMED".equals(region.path("canonicalStatus").asText())
+                    && "CONFIRMED".equals(region.path("structureStatus").asText()))) continue;
+            var copy = region.deepCopy();
+            if (copy instanceof ObjectNode object) {
+                object.put("semanticOnly", true).put("publishable", false)
+                        .put("reviewRequired", true);
+            }
+            addSemanticTarget(targets, seen, copy);
+        }
+    }
+
+    private void addSemanticTarget(ArrayNode targets, Set<String> seen, JsonNode region) {
+        var key = region.path("sheetId").asText("") + "|"
+                + normalizeRange(region.path("range").asText("")) + "|"
+                + normalizeType(region.path("type").asText(region.path("blockType").asText(""))) + "|"
+                + region.path("candidateId").asText(region.path("proposalId").asText(""));
+        if (!seen.add(key)) return;
+        var copy = region.deepCopy();
+        if (copy instanceof ObjectNode object) {
+            var type = normalizeType(object.path("type").asText(object.path("blockType").asText("UNKNOWN")));
+            var blockId = object.path("blockId").asText("");
+            if (blockId.isBlank()) {
+                blockId = RecognitionIdentity.blockId(object.path("sheetId").asText(""),
+                        object.path("range").asText(""), type, "");
+            }
+            object.put("blockId", blockId);
+            var regionId = object.path("regionId").asText(blockId);
+            var candidateRef = object.path("candidateRef").asText(object.path("candidateId").asText(
+                    object.path("proposalId").asText(regionId)));
+            object.put("semanticOnly", !"CONFIRMED".equals(object.path("canonicalStatus").asText("")))
+                    .put("regionId", regionId)
+                    .put("candidateRef", candidateRef);
+        }
+        targets.add(copy);
+    }
+
+    private void confirmPartition(
+            ObjectNode modelRegion, JsonNode suppressedPhysical, String groupId, String alternativeId
+    ) {
+        modelRegion.put("structureStatus", "CONFIRMED")
+                .put("canonicalStatus", "CONFIRMED")
+                .put("candidateOnly", false)
+                .put("physicalStructureOnly", false)
+                .put("reviewRequired", false)
+                .put("modelAssessmentVerdict", "MODEL_PARTITION_EXACT_COVER")
+                .put("resolutionStatus", "AUTO_RESOLVED")
+                .put("resolutionReason", "MODEL_PARTITION_EXACT_COVER")
+                .put("resolutionGroupId", groupId)
+                .put("resolutionAlternativeId", alternativeId)
+                .put("canonicalStructureMayReopen", false);
+        var resolution = modelRegion.putObject("resolution")
+                .put("resolutionGroupId", groupId)
+                .put("selectedAlternativeId", alternativeId)
+                .put("resolutionStatus", "AUTO_RESOLVED")
+                .put("resolutionReason", "MODEL_PARTITION_EXACT_COVER");
+        resolution.set("suppressedPhysical", alternative(suppressedPhysical, "PHYSICAL_HEURISTIC"));
     }
 
     private ObjectNode alternative(JsonNode value, String source) {
@@ -211,13 +432,22 @@ public final class StructureProposalResolver {
         return result;
     }
 
+    private ObjectNode alternativeSet(String alternativeId, String source, List<JsonNode> values) {
+        var result = objectMapper.createObjectNode()
+                .put("alternativeId", alternativeId)
+                .put("source", source);
+        var regions = result.putArray("regions");
+        values.forEach(value -> regions.add(alternative(value, source)));
+        return result;
+    }
+
     private void validateSetOverlaps(ArrayNode regions, ArrayNode conflicts, ArrayNode diagnostics) {
         for (int left = 0; left < regions.size(); left++) {
-                var first = (ObjectNode) regions.get(left);
-            if (!isFormalRegion(first)) continue;
+            var first = (ObjectNode) regions.get(left);
+            if (!isActiveRegion(first)) continue;
             for (int right = left + 1; right < regions.size(); right++) {
                 var second = (ObjectNode) regions.get(right);
-                if (!isFormalRegion(second)
+                if (!isActiveRegion(second)
                         || !first.path("sheetId").asText().equals(second.path("sheetId").asText())
                         || !overlap(first.path("range").asText(), second.path("range").asText())) continue;
                 var firstGroup = first.path("resolutionGroupId").asText("");
@@ -226,18 +456,25 @@ public final class StructureProposalResolver {
                 var groupId = firstGroup.isBlank() ? "structure-conflict-"
                         + RecognitionIdentity.shortHash(first.path("sheetId").asText() + "|"
                         + first.path("range").asText() + "|" + second.path("range").asText(), 16) : firstGroup;
+                var firstAlternativeId = groupId + "-first";
+                var secondAlternativeId = groupId + "-second";
                 first.put("structureConflict", true).put("reviewRequired", true)
                         .put("canonicalStatus", "PROVISIONAL").put("structureStatus", "CONFLICT")
                         .put("candidateOnly", true).put("physicalStructureOnly", true)
-                        .put("pendingReason", "STRUCTURE_CONFLICT").put("resolutionGroupId", groupId);
+                        .put("pendingReason", "STRUCTURE_CONFLICT").put("resolutionGroupId", groupId)
+                        .put("resolutionAlternativeId", firstAlternativeId);
                 second.put("structureConflict", true).put("reviewRequired", true)
                         .put("canonicalStatus", "PROVISIONAL").put("structureStatus", "CONFLICT")
                         .put("candidateOnly", true).put("physicalStructureOnly", false)
-                        .put("pendingReason", "STRUCTURE_CONFLICT").put("resolutionGroupId", groupId);
+                        .put("pendingReason", "STRUCTURE_CONFLICT").put("resolutionGroupId", groupId)
+                        .put("resolutionAlternativeId", secondAlternativeId);
                 var group = objectMapper.createObjectNode().put("resolutionGroupId", groupId)
-                        .put("type", "STRUCTURE_CONFLICT");
-                group.putArray("alternatives").add(alternative(first, first.path("source").asText()))
-                        .add(alternative(second, second.path("source").asText()));
+                        .put("type", "STRUCTURE_CONFLICT").put("resolutionStatus", "PENDING");
+                var alternatives = group.putArray("alternatives");
+                alternatives.add(alternativeSet(firstAlternativeId, first.path("source").asText(), List.of(first)));
+                alternatives.add(alternativeSet(secondAlternativeId, second.path("source").asText(), List.of(second)));
+                first.set("structureAlternativeSets", alternatives.deepCopy());
+                second.set("structureAlternativeSets", alternatives.deepCopy());
                 conflicts.add(group);
                 diagnostics.add(objectMapper.createObjectNode()
                         .put("code", "STRUCTURE_CANDIDATE_CONFLICT")
@@ -250,9 +487,19 @@ public final class StructureProposalResolver {
 
     private boolean allConfirmed(ArrayNode regions) {
         for (var region : regions) {
+            if (!isActiveRegion(region)
+                    || "REJECTED".equals(region.path("canonicalStatus").asText())) continue;
             if (isFormalRegion(region) && !"CONFIRMED".equals(region.path("canonicalStatus").asText())) return false;
         }
         return true;
+    }
+
+    private boolean isActiveRegion(JsonNode region) {
+        if (!isFormalRegion(region)) return false;
+        return !region.path("suppressed").asBoolean(false)
+                && !Set.of("SUPERSEDED", "REJECTED").contains(region.path("structureStatus").asText())
+                && !Set.of("REJECTED", "REJECTED_BY_RESOLUTION")
+                        .contains(region.path("canonicalStatus").asText());
     }
 
     private boolean isFormalRegion(JsonNode node) {
@@ -287,6 +534,38 @@ public final class StructureProposalResolver {
         var a = bounds(first);
         var b = bounds(second);
         return a != null && b != null && a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3];
+    }
+
+    private int[] intersection(int[] first, int[] second) {
+        var left = Math.max(first[0], second[0]);
+        var top = Math.max(first[1], second[1]);
+        var right = Math.min(first[2], second[2]);
+        var bottom = Math.min(first[3], second[3]);
+        return left <= right && top <= bottom ? new int[]{left, top, right, bottom} : null;
+    }
+
+    private long area(int[] bounds) {
+        return (long) (bounds[2] - bounds[0] + 1) * (bounds[3] - bounds[1] + 1);
+    }
+
+    private int width(int[] bounds) {
+        return bounds[2] - bounds[0] + 1;
+    }
+
+    private int height(int[] bounds) {
+        return bounds[3] - bounds[1] + 1;
+    }
+
+    private boolean contains(int[] outer, int[] inner) {
+        return outer != null && inner != null
+                && outer[0] <= inner[0] && outer[1] <= inner[1]
+                && outer[2] >= inner[2] && outer[3] >= inner[3];
+    }
+
+    private boolean overlapBounds(int[] first, int[] second) {
+        return first != null && second != null
+                && first[0] <= second[2] && second[0] <= first[2]
+                && first[1] <= second[3] && second[1] <= first[3];
     }
 
     private int[] bounds(String value) {

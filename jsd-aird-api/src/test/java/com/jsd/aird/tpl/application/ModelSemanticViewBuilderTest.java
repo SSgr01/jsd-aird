@@ -20,6 +20,7 @@ class ModelSemanticViewBuilderTest {
                 .put("inputConfidence", 0.69)
                 .put("inputEvidence", "REPEATED_DATA_REGION")
                 .put("value", "")
+                .put("styleRef", "style-999")
                 .put("mergeAnchorCell", true);
         var sheet = objectMapper.createObjectNode()
                 .put("id", "sheet-1")
@@ -27,6 +28,10 @@ class ModelSemanticViewBuilderTest {
                 .put("usedRange", "A1:B5");
         sheet.set("semanticCells", objectMapper.createArrayNode().add(cell));
         sheet.set("mergedRanges", objectMapper.createArrayNode());
+        sheet.set("borderSegments", objectMapper.createArrayNode().add(
+                objectMapper.createObjectNode()
+                        .put("range", "A5:B5")
+                        .put("orientation", "HORIZONTAL_CELL_BAND")));
         var structure = objectMapper.createObjectNode()
                 .put("structureVersion", 6)
                 .set("sheets", objectMapper.createArrayNode().add(sheet));
@@ -37,5 +42,9 @@ class ModelSemanticViewBuilderTest {
         assertThat(view.path("sheets").get(0).path("semanticCells")).hasSize(1);
         assertThat(view.path("sheets").get(0).path("semanticCells").get(0)
                 .path("inputCandidate").asBoolean()).isTrue();
+        assertThat(view.path("sheets").get(0).path("semanticCells").get(0).has("styleRef"))
+                .isFalse();
+        assertThat(view.path("sheets").get(0).path("borderSegments")).hasSize(1);
+        assertThat(view.path("factsCompression").path("styleDetailsOmitted").asBoolean()).isTrue();
     }
 }

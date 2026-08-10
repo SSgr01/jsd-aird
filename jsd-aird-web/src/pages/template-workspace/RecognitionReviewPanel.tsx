@@ -13,6 +13,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   RecognitionReview,
   RecognitionReviewItem,
+  RecognitionRegionNode,
   RecognitionReviewStatus,
   LongTableModel,
   MatrixModel,
@@ -28,7 +29,7 @@ interface Props {
   selectedQualityIssueId?: string;
   busy?: boolean;
   onSelect: (item: RecognitionReviewItem) => void;
-  onConfirm: (item: RecognitionReviewItem, selectedSuggestionId?: string) => void;
+  onConfirm: (item: RecognitionReviewItem, selectedAlternativeId?: string) => void;
   onModify: (item: RecognitionReviewItem) => void;
   onIgnore: (item: RecognitionReviewItem) => void;
   onRestore: (item: RecognitionReviewItem) => void;
@@ -69,12 +70,8 @@ export function RecognitionReviewPanel({
   const itemRefs = useRef(new Map<string, HTMLDivElement>());
   const qualityRefs = useRef(new Map<string, HTMLDivElement>());
   const visibleQualityIssues = useMemo(
-    () => (review?.qualityIssues ?? []).filter((issue) => !isInternalRecoveryIssue(issue)),
+    () => (review?.qualityIssues ?? []).filter(isActionableTemplateIssue),
     [review?.qualityIssues],
-  );
-  const structureBlocks = useMemo(
-    () => review?.semanticModel?.businessBlocks ?? [],
-    [review?.semanticModel?.businessBlocks],
   );
 
   useEffect(() => {
@@ -98,6 +95,10 @@ export function RecognitionReviewPanel({
         return matchesStatus && (group === 'ALL' || item.groupName === group);
       }),
     [filter, group, review?.items],
+  );
+  const visibleRegions = useMemo(
+    () => filterRegionTree(review?.regions ?? [], filter, group),
+    [filter, group, review?.regions],
   );
 
   if (!review?.recognitionRunId) {
@@ -126,65 +127,48 @@ export function RecognitionReviewPanel({
   }
 
   const filterCounts: Record<ReviewFilter, number> = {
-    ALL: review.items.length,
-    PENDING: review.summary.pending,
+    ALL: review.regions?.length ? review.statistics?.fieldCount ?? 0 : review.items.length,
+    PENDING: review.regions?.length
+      ? review.statistics?.pendingFieldCount ?? 0
+      : review.summary.pending,
     LOW: review.summary.lowConfidence,
     CONFLICT: review.summary.conflict,
     CONFIRMED: review.summary.confirmed,
     QUALITY: visibleQualityIssues.length,
   };
+  if (review.regions?.length) {
+    const fields = review.regions.flatMap((region) => region.fields ?? []);
+    filterCounts.CONFIRMED = fields.filter((field) => field.status === 'CONFIRMED').length;
+    filterCounts.CONFLICT = review.statistics?.structureConflictGroups ?? 0;
+    filterCounts.LOW = fields.filter((field) => field.status !== 'IGNORED' && field.confidence < 0.65).length;
+  }
+  const visibleFilters = FILTERS.filter((item) => item.value === 'ALL' || filterCounts[item.value] > 0);
+  const coverageComplete = isCoverageComplete(review.recognitionCoverage);
 
   return (
     <section className="recognition-review-pane" role="tabpanel" aria-label="识别确认">
-      {(review.runStatus === 'FAILED' || review.runStatus === 'PARTIAL' || review.runStatus === 'TRUNCATED') && (
+      {(review.runStatus === 'FAILED' || review.runStatus === 'PARTIAL' || review.runStatus === 'TRUNCATED'
+        || review.recognitionStatus === 'REVIEW_REQUIRED'
+        || (review.semanticModel?.diagnostics?.length ?? 0) > 0) && (
         <Alert
           type="warning"
           showIcon
-          message={review.runStatus === 'TRUNCATED' ? '模型输出过长，识别未完成' : '智能识别未完成'}
-          description={review.runStatus === 'PARTIAL'
-            ? '本次识别部分内容未完成，已识别字段仍可确认，也可以重新识别或手工补充字段。'
-            : '以下“物理结构”或“规则识别”内容是待核对候选，不代表模型已经确认；未确认前不会进入正式模板。'}
-        />
-      )}
-      {review.recognitionStatus === 'REVIEW_REQUIRED' && (
-        <Alert
-          type="warning"
-          showIcon
-          message="物理结构已识别，但语义覆盖仍需确认"
-          description={coverageDescription(review.recognitionCoverage)}
-        />
-      )}
-      {(review.semanticModel?.diagnostics?.length ?? 0) > 0 && (
-        <Alert
-          type="warning"
-          showIcon
-          message={`有 ${review.semanticModel?.diagnostics?.length ?? 0} 项识别结构需要处理`}
-          description="被协议拒绝的原始候选仅保留在诊断中，不会进入确认列表、字段 Mapping 或正式模板。"
-        />
-      )}
-      {structureBlocks.length > 0 && (
-        <section className="recognition-structure-summary" aria-label="识别到的业务区域">
-          <div className="recognition-structure-heading">
-            <div>
-              <strong>先识别出的区域结构</strong>
-              <span>区域结构用于定位，只有下方字段确认后才会进入正式模板。</span>
+          message="还有字段需要确认"
+          description={(
+            <div className="recognition-summary-lines">
+              <div>{coverageComplete
+                ? `已识别 ${review.statistics?.fieldCount ?? filterCounts.ALL} 个字段，请核对名称和填写位置。`
+                : coverageDescription(review.recognitionCoverage)}</div>
+              {(review.runStatus === 'FAILED' || review.runStatus === 'PARTIAL' || review.runStatus === 'TRUNCATED') && !coverageComplete && (
+                <div>部分内容未完成，可重新识别或手工补充。</div>
+              )}
             </div>
-            <span>{structureBlocks.length} 个区域</span>
-          </div>
-          <div className="recognition-structure-list">
-            {structureBlocks.map((block) => (
-              <div className="recognition-structure-card" key={block.blockId}>
-                <span className="recognition-structure-type">{blockTypeLabel(block.type)}</span>
-                <strong>{block.businessName || '未命名区域'}</strong>
-                <span>{block.range}</span>
-              </div>
-            ))}
-          </div>
-        </section>
+          )}
+        />
       )}
       <div className="recognition-filter-toolbar">
         <div className="recognition-status-filter" aria-label="识别状态筛选">
-          {FILTERS.map((item) => (
+          {visibleFilters.map((item) => (
             <button
               type="button"
               key={item.value}
@@ -196,19 +180,24 @@ export function RecognitionReviewPanel({
             </button>
           ))}
         </div>
-        <Select
-          className="recognition-group-filter"
-          aria-label="字段分组筛选"
-          value={group}
-          onChange={setGroup}
-          options={[
-            { value: 'ALL', label: '全部分组' },
-            ...review.groups.map((name) => ({ value: name, label: name })),
-          ]}
-        />
+        {!review.regions?.length && review.groups.length > 1 && (
+          <Select
+            className="recognition-group-filter"
+            aria-label="字段分组筛选"
+            value={group}
+            onChange={setGroup}
+            options={[
+              { value: 'ALL', label: '全部分组' },
+              ...review.groups.map((name) => ({ value: name, label: name })),
+            ]}
+          />
+        )}
       </div>
 
       <div className="recognition-review-list" aria-busy={busy}>
+        {(filter === 'ALL' || filter === 'QUALITY') && visibleQualityIssues.length > 0 && (
+          <div className="recognition-section-heading"><strong>规范问题</strong><span>{visibleQualityIssues.length} 项</span></div>
+        )}
         {(filter === 'ALL' || filter === 'QUALITY') &&
           visibleQualityIssues.map((issue) => {
             const selected = issue.id === selectedQualityIssueId;
@@ -299,10 +288,31 @@ export function RecognitionReviewPanel({
               </div>
             );
           })}
-        {items.map((item) => {
+        {filter !== 'QUALITY' && review.regions?.length ? (
+          <div className="recognition-section-heading"><strong>区域与字段</strong><span>{review.statistics?.regionCount ?? review.regions.length} 个区域</span></div>
+        ) : null}
+        {filter !== 'QUALITY' && (review.regions?.length ? (
+          <RecognitionRegionTree
+            regions={visibleRegions}
+            review={review}
+            editable={editable}
+            busy={busy}
+            selectedRecognitionItemId={selectedRecognitionItemId}
+            selectedAlternatives={selectedAlternatives}
+            onSelectAlternative={(regionId, alternativeId) =>
+              setSelectedAlternatives((current) => ({ ...current, [regionId]: alternativeId }))
+            }
+            onSelect={onSelect}
+            onConfirm={onConfirm}
+            onModify={onModify}
+            onIgnore={onIgnore}
+            onRestore={onRestore}
+          />
+        ) : items.map((item) => {
           const selected = item.id === selectedRecognitionItemId;
           const alternatives = item.payload.structureAlternatives ?? [];
           const selectedAlternativeId = selectedAlternatives[item.id];
+          const structuralCandidate = isStructuralKind(item.kind);
           const runtimeSlots = item.payload.columnSlots ?? [];
           const runtimeSlotCoordinates = runtimeSlots
             .map((slot) => slot.column || slot.identityAddress)
@@ -366,6 +376,12 @@ export function RecognitionReviewPanel({
                       '根据模板内容自动识别'}
                   </p>
                   {item.reasonDetail && <p className="recognition-reason-detail">{item.reasonDetail}</p>}
+                  {item.payload.nameSource && item.payload.nameSource !== 'MODEL' && (
+                    <div className="field-property-alert full" role="status">
+                      <strong>字段名称来自物理回退</strong>
+                      <span>名称来源：{nameSourceLabel(item.payload.nameSource)}，请确认后再发布。</span>
+                    </div>
+                  )}
                   {item.payload.candidateOnly && (
                     <div className="field-property-alert full recognition-candidate-alert" role="status">
                       <strong>这是待确认候选，不是正式字段</strong>
@@ -395,19 +411,26 @@ export function RecognitionReviewPanel({
                     </div>
                   )}
                   {alternatives.length > 1 && (
-                    <div className="field-property-alert full recognition-structure-alternatives" role="group" aria-label="结构候选选择">
-                      <strong>系统发现两种结构判断</strong>
-                      <span>请选择要采用的结构，确认后其他候选会被自动拒绝。</span>
+                    <div
+                      className="field-property-alert full recognition-structure-alternatives"
+                      role="group"
+                      aria-label="结构方案选择"
+                    >
+                      <strong>系统发现 {alternatives.length} 种结构方案</strong>
+                      <span id={`structure-alternative-help-${item.id}`}>
+                        一个方案可以包含多个互补区域；确认后其他方案会被自动拒绝。
+                      </span>
                       <Select
-                        aria-label="选择结构候选"
-                        placeholder="请选择结构"
+                        aria-label="选择结构方案"
+                        aria-describedby={`structure-alternative-help-${item.id}`}
+                        placeholder="请选择结构方案"
                         value={selectedAlternativeId}
                         onChange={(value) =>
                           setSelectedAlternatives((current) => ({ ...current, [item.id]: value }))
                         }
                         options={alternatives.map((alternative) => ({
-                          value: alternative.suggestionId,
-                          label: `${alternative.source === 'PHYSICAL' ? '物理结构' : '模型判断'}：${alternative.kind || '结构'} ${alternative.range || '坐标待确认'}`,
+                          value: alternative.alternativeId ?? alternative.suggestionId ?? '',
+                          label: structureAlternativeLabel(alternative),
                         }))}
                       />
                     </div>
@@ -488,10 +511,10 @@ export function RecognitionReviewPanel({
                               !editable ||
                               busy ||
                               Boolean(item.payload.semanticConflict) ||
-                              Boolean(item.payload.requiresStandardConfirmation) ||
-                              (Boolean(item.payload.candidateOnly) && alternatives.length <= 1) ||
-                              (Boolean(item.payload.reviewRequired) && alternatives.length <= 1) ||
-                              (Boolean(item.payload.physicalStructureOnly) && alternatives.length <= 1) ||
+                              (Boolean(item.payload.standardRequired) && Boolean(item.payload.requiresStandardConfirmation)) ||
+                              (Boolean(item.payload.candidateOnly) && alternatives.length <= 1 && !structuralCandidate) ||
+                              (Boolean(item.payload.reviewRequired) && alternatives.length <= 1 && !structuralCandidate) ||
+                              (Boolean(item.payload.physicalStructureOnly) && alternatives.length <= 1 && !structuralCandidate) ||
                               (Boolean(item.payload.structureConflict) && !selectedAlternativeId)
                             }
                             onClick={() => onConfirm(item, selectedAlternativeId)}
@@ -533,8 +556,14 @@ export function RecognitionReviewPanel({
               )}
             </div>
           );
-        })}
-        {!items.length && !(filter === 'ALL' || filter === 'QUALITY') && (
+        }))}
+        {review.semanticModel && (
+          <details className="recognition-region-audit">
+            <summary>审计信息 · 模型原始响应</summary>
+            <pre className="recognition-audit-payload">{JSON.stringify(review.semanticModel, null, 2)}</pre>
+          </details>
+        )}
+        {!review.regions?.length && !items.length && !(filter === 'ALL' || filter === 'QUALITY') && (
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有符合条件的识别项目" />
         )}
         {filter === 'QUALITY' && !visibleQualityIssues.length && (
@@ -597,12 +626,296 @@ function MatrixLongTablePreview({ model }: { model: LongTableModel }) {
   );
 }
 
+function filterRegionTree(
+  regions: RecognitionRegionNode[],
+  filter: ReviewFilter,
+  group: string,
+) {
+  if (filter === 'QUALITY') return [];
+  return regions
+    .map((region) => {
+      const fields = (region.fields ?? []).filter((field) => {
+        const matchesGroup = group === 'ALL' || field.groupName === group;
+        const matchesStatus =
+          filter === 'ALL' ||
+          (filter === 'LOW' && field.confidence < 0.65 && field.status !== 'IGNORED') ||
+          field.status === filter;
+        return matchesGroup && matchesStatus;
+      });
+      return { ...region, fields };
+    })
+    .filter((region) => {
+      if (filter === 'ALL') return true;
+      return region.fields.length > 0 || region.alternatives.length > 1;
+    });
+}
+
+function RecognitionRegionTree({
+  regions,
+  review,
+  editable,
+  busy,
+  selectedRecognitionItemId,
+  selectedAlternatives,
+  onSelectAlternative,
+  onSelect,
+  onConfirm,
+  onModify,
+  onIgnore,
+  onRestore,
+}: {
+  regions: RecognitionRegionNode[];
+  review: RecognitionReview;
+  editable: boolean;
+  busy?: boolean;
+  selectedRecognitionItemId?: string;
+  selectedAlternatives: Record<string, string>;
+  onSelectAlternative: (regionId: string, alternativeId: string) => void;
+  onSelect: (item: RecognitionReviewItem) => void;
+  onConfirm: (item: RecognitionReviewItem, selectedAlternativeId?: string) => void;
+  onModify: (item: RecognitionReviewItem) => void;
+  onIgnore: (item: RecognitionReviewItem) => void;
+  onRestore: (item: RecognitionReviewItem) => void;
+}) {
+  if (!regions.length) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有符合条件的区域" />;
+  return (
+    <div className="recognition-region-tree" aria-label="区域字段树">
+      {regions.map((region) => {
+        const rootItems = review.items.filter((item) =>
+          item.suggestionIds.some((id) => region.alternatives.some((alternative) =>
+            alternative.regions.some((candidate) => candidate.suggestionId === id))),
+        );
+        const rootItem = rootItems[0];
+        const selectedAlternativeId = selectedAlternatives[region.regionId] || region.alternatives[0]?.alternativeId;
+        const status = regionStatus(region.status);
+        const singleRegionSemanticAction = region.alternatives.length === 1
+          && Boolean(rootItem)
+          && (region.fields.length === 0
+            || region.canonicalStatus !== 'CONFIRMED'
+            || region.structureStatus !== 'CONFIRMED');
+        const resolutionGroupId = region.resolutionGroupId;
+        const isPrimaryResolutionCard = !resolutionGroupId
+          || regions.find((candidate) => candidate.resolutionGroupId === resolutionGroupId)?.regionId === region.regionId;
+        return (
+          <section className="recognition-region-card" key={region.regionId} data-status={status.toLowerCase()}>
+            <div className="recognition-region-heading">
+              <button
+                type="button"
+                className="recognition-review-row recognition-region-row"
+                onClick={() => rootItem && onSelect(rootItem)}
+              >
+                <StatusIndicator status={status} />
+                <span className="recognition-row-content">
+                  <strong>{region.fieldName || '未命名区域'}</strong>
+                  <span>{blockTypeLabel(region.kind)} · {region.sheetName || region.sheetId || '当前工作表'} · {region.range || '范围待确认'}</span>
+                </span>
+                <span className="recognition-row-status">{regionStatusLabel(region)}</span>
+              </button>
+              {region.alternatives.length > 1 && isPrimaryResolutionCard && (
+                <div className="field-property-alert full recognition-structure-alternatives" role="group" aria-label="结构方案选择">
+                  <strong>结构方案（{region.alternatives.length}）</strong>
+                  <Select
+                    aria-label="选择结构方案"
+                    value={selectedAlternativeId}
+                    onChange={(value) => onSelectAlternative(region.regionId, value)}
+                    options={region.alternatives.map((alternative) => ({
+                      value: alternative.alternativeId,
+                      label: regionAlternativeLabel(alternative),
+                    }))}
+                  />
+                  {rootItem && (
+                    <Button
+                      size="small"
+                      type="primary"
+                      disabled={!editable || busy || !selectedAlternativeId}
+                      onClick={() => onConfirm(rootItem, selectedAlternativeId)}
+                    >
+                      确认结构并识别字段
+                    </Button>
+                  )}
+                </div>
+              )}
+              {region.alternatives.length > 1 && !isPrimaryResolutionCard && (
+                <span className="recognition-structure-group-note">同一冲突组的组合方案请在首个区域确认</span>
+              )}
+              {singleRegionSemanticAction && rootItem && selectedAlternativeId && (
+                <div className="recognition-region-semantic-action">
+                  <Button
+                    size="small"
+                    type="primary"
+                    disabled={!editable || busy}
+                    onClick={() => onConfirm(rootItem, selectedAlternativeId)}
+                  >
+                    {region.fields.length === 0 && region.canonicalStatus === 'CONFIRMED'
+                      ? '重新识别区域字段'
+                      : '采用此区域并识别字段'}
+                  </Button>
+                </div>
+              )}
+            </div>
+            {region.kind === 'MATRIX' && Boolean(region.structures?.matrixModel) && (
+              <MatrixStructureSummary model={region.structures?.matrixModel as MatrixModel} title="矩阵结构" />
+            )}
+            {region.fields.length > 0 && (
+              <div className="recognition-region-fields">
+                <div className="recognition-region-subheading"><strong>字段</strong><span>{region.fields.length} 个</span></div>
+                {region.fields.map((field) => (
+                  <RegionFieldCard
+                    key={field.id}
+                    field={field}
+                    selected={field.id === selectedRecognitionItemId}
+                    editable={editable}
+                    busy={busy}
+                    onSelect={onSelect}
+                    onConfirm={onConfirm}
+                    onModify={onModify}
+                    onIgnore={onIgnore}
+                    onRestore={onRestore}
+                  />
+                ))}
+              </div>
+            )}
+            {(region.recordSlots?.length ?? 0) > 0 && (
+              <details className="recognition-region-runtime" open>
+                <summary>步骤记录槽（{region.recordSlots?.length ?? 0}）</summary>
+                <div>{region.recordSlots?.map((slot) => (
+                  <span key={slot.slotId}>第 {slot.order ?? 0} 条 · {slot.range || slot.identityAddress || slot.slotId}</span>
+                ))}</div>
+              </details>
+            )}
+            {region.runtimeSlots.filter((slot) => !(region.recordSlots ?? []).some((record) => record.slotId === slot.slotId)).length > 0 && (
+              <details className="recognition-region-runtime">
+                <summary>运行时成员槽位（{region.runtimeSlots.filter((slot) => !(region.recordSlots ?? []).some((record) => record.slotId === slot.slotId)).length}）</summary>
+                <div>{region.runtimeSlots
+                  .filter((slot) => !(region.recordSlots ?? []).some((record) => record.slotId === slot.slotId))
+                  .map((slot) => <span key={slot.slotId}>{slot.column || slot.identityAddress || slot.slotId}</span>)}</div>
+              </details>
+            )}
+            {(region.staticContents?.length ?? 0) > 0 && (
+              <details className="recognition-region-audit">
+                <summary>静态内容（{region.staticContents?.length ?? 0}）</summary>
+                <div>{region.staticContents?.map((content, index) => (
+                  <span key={`${content.address ?? 'static'}-${index}`}>{content.address ? `${content.address} · ` : ''}{content.text || '静态说明'}</span>
+                ))}</div>
+              </details>
+            )}
+            {region.auditSuggestions.length > 0 && (
+              <details className="recognition-region-audit">
+                <summary>审计信息（{region.auditSuggestions.length}）</summary>
+                <div>{region.auditSuggestions.map((item) => <span key={item.id}>{kindLabel(item.kind)} · {item.fieldName || '原始候选'} · {locationText(item)}</span>)}</div>
+              </details>
+            )}
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+function RegionFieldCard({
+  field,
+  selected,
+  editable,
+  busy,
+  onSelect,
+  onConfirm,
+  onModify,
+  onIgnore,
+  onRestore,
+}: {
+  field: RecognitionRegionNode['fields'][number];
+  selected: boolean;
+  editable: boolean;
+  busy?: boolean;
+  onSelect: (item: RecognitionReviewItem) => void;
+  onConfirm: (item: RecognitionReviewItem, selectedAlternativeId?: string) => void;
+  onModify: (item: RecognitionReviewItem) => void;
+  onIgnore: (item: RecognitionReviewItem) => void;
+  onRestore: (item: RecognitionReviewItem) => void;
+}) {
+  const attributes = field.attributes ?? field.payload;
+  const reviewRequired = Boolean(attributes.reviewRequired ?? field.payload.reviewRequired ?? field.payload.candidateOnly);
+  return (
+    <div className="recognition-field-card" data-status={field.status.toLowerCase()}>
+      <button type="button" className="recognition-review-row recognition-field-row" aria-expanded={selected} onClick={() => onSelect(field)}>
+        <StatusIndicator status={regionStatus(field.status)} />
+        <span className="recognition-row-content">
+          <strong>{field.fieldName || '字段名称待人工命名'}</strong>
+          <span>{field.payload.suggestionLevel === 'CHILD' ? '明细字段' : kindLabel(field.kind)}{reviewRequired ? ' · 待确认' : ''}</span>
+        </span>
+        <span className="recognition-row-location"><EnvironmentOutlined aria-hidden="true" /> {locationText(field)}</span>
+      </button>
+      {selected && (
+        <div className="recognition-review-expanded">
+          <dl className="recognition-field-attributes">
+            <div><dt>类型</dt><dd>{valueTypeLabel(attributeText(attributes.valueType, field.valueType ?? 'string'))}</dd></div>
+            <div><dt>单位</dt><dd>{attributeText(attributes.unit, field.payload.unit ?? '') || '未设置'}</dd></div>
+            <div><dt>单元格位置</dt><dd>{textValue((attributes.locator as Record<string, unknown> | undefined)?.labelAddress) || field.labelAddress || '—'} / {field.address || '—'}</dd></div>
+          </dl>
+          {reviewRequired && <div className="field-property-alert full"><strong>字段待确认</strong><span>请确认字段名称和填写位置，确认后才会进入正式模板。</span></div>}
+          <div className="recognition-review-actions">
+            {field.status === 'IGNORED' ? (
+              <Button size="small" icon={<ReloadOutlined />} disabled={!editable || busy} onClick={() => onRestore(field)}>恢复</Button>
+            ) : (
+              <>
+                {field.status !== 'CONFIRMED' && <Button size="small" type="primary" icon={<CheckOutlined />} disabled={!editable || busy || (Boolean(field.payload.standardRequired) && Boolean(field.payload.requiresStandardConfirmation))} onClick={() => onConfirm(field)}>确认</Button>}
+                <Button size="small" icon={<EditOutlined />} disabled={!editable || busy} onClick={() => onModify(field)}>修改</Button>
+                <Popconfirm title={`忽略“${field.fieldName || '该字段'}”？`} okText="忽略" cancelText="取消" onConfirm={() => onIgnore(field)}>
+                  <Button size="small" danger type="text" icon={<EyeInvisibleOutlined />} disabled={!editable || busy}>忽略</Button>
+                </Popconfirm>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function regionStatus(status: string): RecognitionReviewStatus {
+  return status === 'CONFIRMED' || status === 'CONFLICT' || status === 'IGNORED' ? status : 'PENDING';
+}
+
+function regionStatusLabel(region: RecognitionRegionNode) {
+  if (region.structureStatus === 'CONFLICT') return '结构冲突，待选择';
+  if (region.kind === 'UNKNOWN' || region.structureStatus === 'UNRESOLVED') return '物理证据不足，待复核';
+  if (region.status === 'CONFIRMED' && region.reviewRequired) return '结构已确认，字段待复核';
+  return statusLabel(regionStatus(region.status));
+}
+
+function regionAlternativeLabel(alternative: RecognitionRegionNode['alternatives'][number]) {
+  const source = alternative.source === 'PHYSICAL' ? '物理判断' : alternative.source === 'MODEL' ? '模型判断' : '结构方案';
+  const regions = alternative.regions.map((item) => {
+    const geometry = [
+      item.recordAxis ? `按${item.recordAxis === 'COLUMN' ? '列' : item.recordAxis === 'ROW' ? '行' : item.recordAxis}` : '',
+      item.headerRange ? `表头 ${item.headerRange}` : '',
+      item.dataRange ? `数据 ${item.dataRange}` : '',
+      item.rowHeaderRange ? `行轴 ${item.rowHeaderRange}` : '',
+      item.columnHeaderRange ? `列轴 ${item.columnHeaderRange}` : '',
+      item.crossDataRange ? `交叉 ${item.crossDataRange}` : '',
+    ].filter(Boolean).join(' · ');
+    return `${blockTypeLabel(item.kind ?? '')} ${item.range || '范围待确认'}${geometry ? `（${geometry}）` : ''}`;
+  });
+  return `${source}：${regions.join(' + ')}`;
+}
+
+function attributeText(value: unknown, fallback?: unknown) {
+  const candidate = value ?? fallback;
+  return typeof candidate === 'string' || typeof candidate === 'number' || typeof candidate === 'boolean'
+    ? String(candidate)
+    : '';
+}
+
 function MatrixStructureSummary({ model, title }: { model: MatrixModel; title: string }) {
   const isRowProjection = model.recordAxis === 'ROW';
   const slots = isRowProjection ? (model.rowSlots ?? []) : (model.columnSlots ?? []);
   const incomplete = !model.rowHeaderRange || !model.columnHeaderRange || !model.crossDataRange;
   const rowAxisNames = [...(model.rowDimensions ?? []), ...(model.rowAttributes ?? [])]
     .map((axis) => axis.name)
+    .filter(Boolean);
+  const measures = (model.bindings ?? [])
+    .filter((binding) => binding.bindingKind === 'MEASURE')
+    .map((binding) => binding.name)
     .filter(Boolean);
   return (
     <section className="recognition-matrix-structure" aria-label={`${title}结构`}>
@@ -631,8 +944,12 @@ function MatrixStructureSummary({ model, title }: { model: MatrixModel; title: s
           </dd>
         </div>
         <div>
+          <dt>列成员轴</dt>
+          <dd>{model.columnHeaderRange || '待确认'} · 运行时成员槽位</dd>
+        </div>
+        <div>
           <dt>交叉值填写区域</dt>
-          <dd>{model.crossDataRange || '待确认'}</dd>
+          <dd>{measures.join('、') || '交叉指标待命名'} · {model.crossDataRange || '待确认'}</dd>
         </div>
         <div>
             <dt>{isRowProjection ? '可用行槽位' : '可用列槽位'}</dt>
@@ -685,12 +1002,52 @@ function sourceLabel(source?: RecognitionReviewItem['source']) {
   return source === 'RULE' ? '规则识别' : source === 'MODEL' ? '模型识别' : source === 'PHYSICAL' ? '物理结构' : '人工补充';
 }
 
+type StructureAlternative = NonNullable<
+  RecognitionReviewItem['payload']['structureAlternatives']
+>[number];
+
+function structureAlternativeLabel(alternative: StructureAlternative) {
+  const source =
+    alternative.source === 'PHYSICAL'
+      ? '物理判断'
+      : alternative.source === 'MODEL'
+        ? '模型分区'
+        : '结构方案';
+  const regions =
+    alternative.regions?.length
+      ? alternative.regions
+      : [{
+          suggestionId: alternative.suggestionId ?? '',
+          kind: alternative.kind,
+          range: alternative.range,
+        }];
+  const members = regions
+    .map((region) => `${blockTypeLabel(region.kind ?? '')} ${region.range || '坐标待确认'}`)
+    .join(' + ');
+  return `${source}：${members}`;
+}
+
+function isStructuralKind(kind: RecognitionReviewItem['kind']) {
+  return ['FORM_REGION', 'ROW_TABLE', 'COLUMN_TABLE', 'MATRIX', 'TABLE_REGION'].includes(kind);
+}
+
 function coverageDescription(coverage?: RecognitionReview['recognitionCoverage']) {
   if (!coverage) return '识别结果不是完整业务语义，确认前不会作为正式字段结构使用。';
   const expected = coverage.expectedRegionCount ?? coverage.physicalRegionCount ?? 0;
   const covered = coverage.coveredRegionCount ?? 0;
   const unresolved = coverage.unresolvedRegionCount ?? Math.max(0, expected - covered);
+  if (expected > 0 && covered >= expected && unresolved === 0) {
+    return `结构覆盖已完成（${covered}/${expected}）；字段候选仍需逐项确认后才会进入正式 Mapping。`;
+  }
   return `已覆盖 ${covered}/${expected} 个物理区域，仍有 ${unresolved} 个区域待确认；当前候选不会被视为完整识别结果。`;
+}
+
+function isCoverageComplete(coverage?: RecognitionReview['recognitionCoverage']) {
+  if (!coverage) return false;
+  const expected = coverage.expectedRegionCount ?? coverage.physicalRegionCount ?? 0;
+  const covered = coverage.coveredRegionCount ?? 0;
+  const unresolved = coverage.unresolvedRegionCount ?? Math.max(0, expected - covered);
+  return expected > 0 && covered >= expected && unresolved === 0;
 }
 
 function statusLabel(status: RecognitionReviewStatus) {
@@ -700,10 +1057,38 @@ function statusLabel(status: RecognitionReviewStatus) {
   return '待确认';
 }
 
+function nameSourceLabel(source: string) {
+  switch (source) {
+    case 'ROW_ATTRIBUTE_FALLBACK':
+      return '行属性名称';
+    case 'PHYSICAL_HEADER_FALLBACK':
+      return '表头识别';
+    case 'RUNTIME_SLOT':
+      return '预留填写位置';
+    case 'MODEL':
+      return '智能识别';
+    case 'GENERATED_PLACEHOLDER':
+      return '待人工命名';
+    default:
+      return '智能识别';
+  }
+}
+
+function valueTypeLabel(value: string) {
+  const labels: Record<string, string> = {
+    string: '文本', STRING: '文本', number: '数字', NUMBER: '数字', integer: '整数',
+    date: '日期', DATE: '日期', datetime: '日期时间', DATETIME: '日期时间',
+    boolean: '是/否', BOOLEAN: '是/否', array: '多条记录', ARRAY: '多条记录',
+  };
+  return labels[value] ?? '文本';
+}
+
 function kindLabel(kind: RecognitionReviewItem['kind']) {
+  if (kind === 'FORM_REGION') return '表单区域';
   if (kind === 'ROW_TABLE') return '明细表';
   if (kind === 'COLUMN_TABLE') return '横向明细表';
   if (kind === 'MATRIX') return '矩阵表';
+  if (kind === 'TABLE_REGION') return '表格区域';
   if (kind === 'FREE_TEXT') return '自由文本区';
   return '普通字段';
 }
@@ -791,6 +1176,22 @@ function isInternalRecoveryIssue(issue: TemplateQualityIssue) {
       issue.title,
     ) || (issue.evidence ?? []).some((item) => item.internalRecovery === true)
   );
+}
+
+function isActionableTemplateIssue(issue: TemplateQualityIssue) {
+  if (isInternalRecoveryIssue(issue)) return false;
+  const auditOnlyTypes = new Set([
+    'OTHER',
+    'INVALID_STRUCTURE_PROPOSAL',
+    'MISSING_TABLE_GEOMETRY',
+    'MISSING_MATRIX_GEOMETRY',
+    'PROTOCOL_DEFAULT_APPLIED',
+    'STRUCTURE_CONFLICT',
+    'INVALID_FIELD_RELATION',
+    'INVALID_REGION_SEMANTICS',
+  ]);
+  if (auditOnlyTypes.has(issue.issueType)) return false;
+  return Boolean(issue.address || issue.autoFixable || qualityPreview(issue));
 }
 
 function isCellPatchOperation(value: unknown): value is Record<string, unknown> {

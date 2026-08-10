@@ -93,6 +93,16 @@ public class TemplateImportController {
         return success(service.create(request.fileId(), request.format()));
     }
 
+    @PostMapping("/{importJobId}/retry")
+    public ApiResponse<TemplateImportRepository.ImportJobView> retry(
+            @PathVariable UUID importJobId,
+            @Valid @RequestBody RetryRequest request
+    ) {
+        return success(service.retryCurrentDraft(
+                importJobId, request.source(), request.baseWorkspaceHash()
+        ));
+    }
+
     private <T> ApiResponse<T> success(T value) {
         return ResponseFactory.success(value, RequestIdHolder.currentOrUnknown());
     }
@@ -101,5 +111,8 @@ public class TemplateImportController {
     }
 
     public record DecisionRequest(@NotNull String decision) {
+    }
+
+    public record RetryRequest(@NotNull String source, @NotNull String baseWorkspaceHash) {
     }
 }

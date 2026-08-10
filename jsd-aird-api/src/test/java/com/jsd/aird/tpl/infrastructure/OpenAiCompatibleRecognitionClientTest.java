@@ -154,6 +154,45 @@ class OpenAiCompatibleRecognitionClientTest {
     }
 
     @Test
+    void retriesTransientProviderFailureAndLinksCallTraces() throws Exception {
+        var calls = new AtomicInteger();
+        var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/chat/completions", exchange -> {
+            if (calls.incrementAndGet() == 1) {
+                var bytes = "{\"error\":{\"message\":\"temporary\"}}".getBytes(StandardCharsets.UTF_8);
+                exchange.sendResponseHeaders(500, bytes.length);
+                exchange.getResponseBody().write(bytes);
+            } else {
+                var bytes = objectMapper.writeValueAsBytes(modelResponse(validResponse(), 10, 5, 15));
+                exchange.getResponseHeaders().add("Content-Type", "application/json");
+                exchange.sendResponseHeaders(200, bytes.length);
+                exchange.getResponseBody().write(bytes);
+            }
+            exchange.close();
+        });
+        server.start();
+        try {
+            var localClient = new OpenAiCompatibleRecognitionClient(
+                    objectMapper, new JsonCanonicalizer(objectMapper),
+                    "http://127.0.0.1:" + server.getAddress().getPort() + "/v1",
+                    "test-key", "qwen-plus", 0.0
+            );
+            var batch = localClient.recognize(new RecognitionModelClient.RecognitionRequest(
+                    UUID.randomUUID(), UUID.randomUUID(), TemplateFormat.XLSX,
+                    "测试.xlsx", "workbook-global", physicalFacts()
+            ));
+            assertThat(calls).hasValue(2);
+            assertThat(batch.callTraces()).hasSize(2);
+            assertThat(batch.callTraces().get(0).status()).isEqualTo("FAILED");
+            assertThat(batch.callTraces().get(0).httpStatus()).isEqualTo(500);
+            assertThat(batch.callTrace().status()).isEqualTo("SUCCEEDED");
+            assertThat(batch.callTrace().parentCallId()).isEqualTo(batch.callTraces().get(0).callId());
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
     void acceptsOnlyTheIndependentStructureProposalProtocolWithoutARepairCall() throws Exception {
         var requests = new ArrayList<String>();
         var calls = new AtomicInteger();
@@ -255,6 +294,50 @@ class OpenAiCompatibleRecognitionClientTest {
             assertThat(first.path("messages").path(1).path("content").findValue("image_url")).isNotNull();
             assertThat(first.path("messages").path(1).path("content").toString())
                     .contains("data:image/png;base64,AAAA");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void compilesDocxFieldSemanticsAgainstNestedDocumentIrAnchors() throws Exception {
+        var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/chat/completions", exchange -> {
+            var response = modelResponse(objectMapper.readTree("""
+                    {"fields":[
+                      {"candidateRef":"paragraph-1","fieldName":"订单号","role":"FIELD",
+                       "labelAnchor":"paragraph-1","valueAnchor":"paragraph-1","reviewRequired":true}
+                    ],"qualityIssues":[]}
+                    """), 10, 20, 30);
+            var bytes = objectMapper.writeValueAsBytes(response);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, bytes.length);
+            exchange.getResponseBody().write(bytes);
+            exchange.close();
+        });
+        server.start();
+        try {
+            var localClient = new OpenAiCompatibleRecognitionClient(
+                    objectMapper, new JsonCanonicalizer(objectMapper),
+                    "http://127.0.0.1:" + server.getAddress().getPort() + "/v1",
+                    "test-key", "qwen-plus", 0.0
+            );
+            var context = objectMapper.createObjectNode()
+                    .put("format", "DOCX").put("regionId", "docx-document");
+            context.set("documentIR", objectMapper.readTree("""
+                    {"blocks":[{"id":"paragraph-1","type":"PARAGRAPH","text":"订单号："}],
+                     "anchors":[{"nodeId":"paragraph-1","kind":"PARAGRAPH","text":"订单号："}],
+                     "contentControls":[]}
+                    """));
+            var batch = localClient.recognize(new RecognitionModelClient.RecognitionRequest(
+                    UUID.randomUUID(), UUID.randomUUID(), TemplateFormat.DOCX,
+                    "模板.docx", "docx-document", context, null, "DOCX_FIELD_SEMANTICS"));
+            assertThat(batch.suggestions()).singleElement().satisfies(suggestion -> {
+                assertThat(suggestion.suggestionType()).isEqualTo("SCALAR_FIELD");
+                assertThat(suggestion.payload().path("fieldName").asText()).isEqualTo("订单号");
+                assertThat(suggestion.payload().path("source").asText()).isEqualTo("DOCX_MODEL");
+                assertThat(suggestion.payload().path("candidateOnly").asBoolean()).isTrue();
+            });
         } finally {
             server.stop(0);
         }

@@ -14,12 +14,16 @@ public final class RecognitionCandidatePolicy {
     public static boolean isFormallyConfirmable(JsonNode payload) {
         if (payload == null || !payload.isObject()) return false;
         var hasExplicitStructureStatus = payload.has("canonicalStatus") || payload.has("structureStatus");
+        var stableDocxControl = "DOCX_CONTENT_CONTROL".equals(payload.path("source").asText())
+                && !payload.path("markerId").asText(
+                        payload.path("locator").path("markerId").asText("")).isBlank();
         return !payload.path("candidateOnly").asBoolean(false)
-                && !payload.path("reviewRequired").asBoolean(false)
+                && (!payload.path("reviewRequired").asBoolean(false) || stableDocxControl)
                 && !payload.path("physicalStructureOnly").asBoolean(false)
                 && !payload.path("structureConflict").asBoolean(false)
                 && !payload.path("semanticConflict").asBoolean(false)
-                && !payload.path("requiresStandardConfirmation").asBoolean(false)
+                && !(payload.path("standardRequired").asBoolean(false)
+                    && payload.path("requiresStandardConfirmation").asBoolean(false))
                 && !isProtocolRejected(payload)
                 && (!isStructural(payload) || !hasExplicitStructureStatus
                     || ("CONFIRMED".equals(payload.path("canonicalStatus").asText())

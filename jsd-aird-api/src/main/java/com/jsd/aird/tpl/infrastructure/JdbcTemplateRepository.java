@@ -44,7 +44,7 @@ public class JdbcTemplateRepository implements TemplateRepository {
     ) {
         var sql = new StringBuilder("""
                 SELECT t.id AS template_id, tv.id AS version_id, t.template_code, t.name,
-                       t.purpose, t.category, t.format, tv.status, tv.version_no,
+                       t.purpose, coalesce(tc.name, t.category) AS category, t.format, tv.status, tv.version_no,
                        tv.lock_version, tv.updated_at,
                        (
                            SELECT count(*)::int
@@ -53,6 +53,7 @@ public class JdbcTemplateRepository implements TemplateRepository {
                              AND tm.binding_status <> 'VALID'
                        ) AS issue_count
                 FROM tpl.template t
+                LEFT JOIN tpl.template_category tc ON tc.id = t.category_id
                 JOIN tpl.template_version tv ON tv.template_id = t.id
                 WHERE t.organization_id = :organizationId
                 """);
@@ -95,15 +96,19 @@ public class JdbcTemplateRepository implements TemplateRepository {
     public void insertTemplate(NewTemplate template) {
         jdbcTemplate.update("""
                         INSERT INTO tpl.template (
-                            id, organization_id, template_code, name, purpose, category,
+                            id, organization_id, template_code, name, purpose, category, category_id,
                             format, created_by
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, (
+                            SELECT id FROM tpl.template_category WHERE organization_id = ? AND name = ?
+                        ), ?, ?)
                         """,
                 template.id(),
                 template.organizationId(),
                 template.code(),
                 template.name(),
                 template.purpose(),
+                template.category(),
+                template.organizationId(),
                 template.category(),
                 template.format().name(),
                 template.actorId()
@@ -423,12 +428,98 @@ public class JdbcTemplateRepository implements TemplateRepository {
     }
 
     @Override
-    public int clearCategory(UUID organizationId, String category) {
+    public List<TemplateCategoryItem> findCategories(UUID organizationId) {
+        return jdbcTemplate.query("""
+                SELECT c.id, c.name, c.sort_order, count(t.id)::int AS template_count
+                FROM tpl.template_category c
+                LEFT JOIN tpl.template t ON t.category_id = c.id
+                WHERE c.organization_id = ?
+                GROUP BY c.id, c.name, c.sort_order, c.created_at
+                ORDER BY c.sort_order, c.created_at, c.name
+                """, (rs, rowNum) -> new TemplateCategoryItem(
+                rs.getObject("id", UUID.class), rs.getString("name"),
+                rs.getInt("sort_order"), rs.getInt("template_count")), organizationId);
+    }
+
+    @Override
+    public void insertCategory(UUID id, UUID organizationId, String name, int sortOrder, UUID actorId) {
+        jdbcTemplate.update("""
+                INSERT INTO tpl.template_category (id, organization_id, name, sort_order, created_by)
+                VALUES (?, ?, ?, ?, ?)
+                """, id, organizationId, name, sortOrder, actorId);
+    }
+
+    @Override
+    public Optional<TemplateCategoryItem> findCategory(UUID organizationId, UUID categoryId) {
+        return jdbcTemplate.query("""
+                SELECT c.id, c.name, c.sort_order, count(t.id)::int AS template_count
+                FROM tpl.template_category c LEFT JOIN tpl.template t ON t.category_id = c.id
+                WHERE c.organization_id = ? AND c.id = ?
+                GROUP BY c.id, c.name, c.sort_order
+                """, (rs, rowNum) -> new TemplateCategoryItem(
+                rs.getObject("id", UUID.class), rs.getString("name"),
+                rs.getInt("sort_order"), rs.getInt("template_count")), organizationId, categoryId)
+                .stream().findFirst();
+    }
+
+    @Override
+    public boolean categoryNameExists(UUID organizationId, String name, UUID excludingId) {
+        return Boolean.TRUE.equals(jdbcTemplate.queryForObject("""
+                SELECT EXISTS(SELECT 1 FROM tpl.template_category
+                WHERE organization_id = ? AND lower(name) = lower(?) AND (?::uuid IS NULL OR id <> ?::uuid))
+                """, Boolean.class, organizationId, name, excludingId, excludingId));
+    }
+
+    @Override
+    public int renameCategory(UUID organizationId, UUID categoryId, String name) {
+        var updated = jdbcTemplate.update("""
+                UPDATE tpl.template_category SET name = ?, updated_at = now()
+                WHERE organization_id = ? AND id = ?
+                """, name, organizationId, categoryId);
+        if (updated > 0) {
+            jdbcTemplate.update("""
+                    UPDATE tpl.template SET category = ?, updated_at = now()
+                    WHERE organization_id = ? AND category_id = ?
+                    """, name, organizationId, categoryId);
+        }
+        return updated;
+    }
+
+    @Override
+    public int deleteCategory(UUID organizationId, UUID categoryId, UUID replacementCategoryId) {
+        var replacementName = replacementCategoryId == null ? null : jdbcTemplate.queryForObject("""
+                SELECT name FROM tpl.template_category WHERE organization_id = ? AND id = ?
+                """, String.class, organizationId, replacementCategoryId);
+        jdbcTemplate.update("""
+                UPDATE tpl.template SET category_id = ?, category = ?, updated_at = now()
+                WHERE organization_id = ? AND category_id = ?
+                """, replacementCategoryId, replacementName, organizationId, categoryId);
+        return jdbcTemplate.update("DELETE FROM tpl.template_category WHERE organization_id = ? AND id = ?",
+                organizationId, categoryId);
+    }
+
+    @Override
+    public int assignTemplateCategory(UUID organizationId, UUID templateId, UUID categoryId) {
+        if (categoryId == null) {
+            return jdbcTemplate.update("""
+                    UPDATE tpl.template SET category_id = NULL, category = NULL, updated_at = now()
+                    WHERE organization_id = ? AND id = ?
+                    """, organizationId, templateId);
+        }
         return jdbcTemplate.update("""
-                UPDATE tpl.template
-                SET category = NULL, updated_at = now()
-                WHERE organization_id = ? AND category = ?
-                """, organizationId, category);
+                UPDATE tpl.template t SET category_id = ?, category = c.name, updated_at = now()
+                FROM tpl.template_category c
+                WHERE t.organization_id = ? AND t.id = ? AND c.organization_id = ? AND c.id = ?
+                """, categoryId, organizationId, templateId, organizationId, categoryId);
+    }
+
+    @Override
+    public void ensureCategory(UUID organizationId, String name, UUID actorId) {
+        jdbcTemplate.update("""
+                INSERT INTO tpl.template_category (id, organization_id, name, sort_order, created_by)
+                VALUES (?, ?, ?, coalesce((SELECT max(sort_order) + 1 FROM tpl.template_category WHERE organization_id = ?), 0), ?)
+                ON CONFLICT (organization_id, name) DO NOTHING
+                """, UUID.randomUUID(), organizationId, name, organizationId, actorId);
     }
 
     @Override

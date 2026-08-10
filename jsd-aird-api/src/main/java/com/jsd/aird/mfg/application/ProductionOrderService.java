@@ -23,15 +23,18 @@ public class ProductionOrderService {
     private final ProductionOrderRepository repository;
     private final JsonCanonicalizer canonicalizer;
     private final ObjectMapper objectMapper;
+    private final RecordProjectionService recordProjectionService;
 
     public ProductionOrderService(
             ProductionOrderRepository repository,
             JsonCanonicalizer canonicalizer,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            RecordProjectionService recordProjectionService
     ) {
         this.repository = repository;
         this.canonicalizer = canonicalizer;
         this.objectMapper = objectMapper;
+        this.recordProjectionService = recordProjectionService;
     }
 
     @Transactional
@@ -42,6 +45,9 @@ public class ProductionOrderService {
                         ApiErrorCode.NOT_FOUND,
                         "只能从当前组织的已发布模板创建生产单"
                 ));
+        if (!"XLSX".equalsIgnoreCase(template.format())) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "Word 模板用于文档编辑，不进入生产单填写");
+        }
         var orderId = UUID.randomUUID();
         var data = objectMapper.createObjectNode();
         var schemaHash = canonicalizer.hash(template.schema());
@@ -108,6 +114,15 @@ public class ProductionOrderService {
     }
 
     @Transactional
+    public void delete(UUID orderId) {
+        var actor = ActorContext.required();
+        if (repository.delete(actor.organizationId(), orderId) == 0) {
+            throw new ApiException(ApiErrorCode.TEMPLATE_VERSION_IMMUTABLE,
+                    "只有草稿或已取消的生产单可以删除，已提交生产单请保留历史");
+        }
+    }
+
+    @Transactional
     public SaveResult save(UUID orderId, SaveCommand command) {
         var actor = ActorContext.required();
         var current = get(orderId);
@@ -139,6 +154,7 @@ public class ProductionOrderService {
                 actor.organizationId(),
                 orderId,
                 command.lockVersion(),
+                current.templateVersionId(),
                 command.schema(),
                 command.mapping(),
                 command.data(),
@@ -197,13 +213,65 @@ public class ProductionOrderService {
                 current.workspaceHash(),
                 actor.userId()
         ));
+        var projection = recordProjectionService.compile(
+                revisionId, orderId, current.schema(), current.data());
+        repository.insertRevisionProjection(projection.collections(), projection.values());
+        repository.attachConfirmedIngestSources(
+                actor.organizationId(), orderId, revisionId, actor.userId());
         repository.appendOutbox(
                 "RECORD_REVISION",
                 revisionId,
-                "PROJECTION_REBUILD_REQUESTED",
-                objectMapper.createObjectNode().put("revisionId", revisionId.toString())
+                "PROJECTION_REBUILT",
+                objectMapper.createObjectNode()
+                        .put("revisionId", revisionId.toString())
+                        .put("collectionCount", projection.collections().size())
+                        .put("valueCount", projection.values().size())
         );
         return revisionId;
+    }
+
+    /** Applies a reviewed instance-import result as one optimistic, atomic draft mutation. */
+    @Transactional
+    public SaveResult applyIngestResult(
+            UUID orderId,
+            long expectedLockVersion,
+            String baseWorkspaceHash,
+            ProductionOrderRepository.PublishedTemplate template,
+            JsonNode mapping,
+            JsonNode data,
+            UUID snapshotFileId,
+            String snapshotHash
+    ) {
+        var actor = ActorContext.required();
+        var current = get(orderId);
+        if (!"DRAFT".equals(current.status())) {
+            throw new ApiException(ApiErrorCode.TEMPLATE_VERSION_IMMUTABLE, "只有草稿生产单可以确认导入");
+        }
+        if (current.lockVersion() != expectedLockVersion
+                || !current.workspaceHash().equals(baseWorkspaceHash)) {
+            throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT);
+        }
+        validateInstanceSchema(template.schema());
+        var reconciliationRequired = validateMappings(mapping);
+        validateSnapshot(snapshotFileId, snapshotHash, false);
+
+        var schema = template.schema().deepCopy();
+        var schemaHash = canonicalizer.hash(schema);
+        var mappingHash = canonicalizer.hash(mapping);
+        var dataHash = canonicalizer.hash(data);
+        var workspaceHash = canonicalizer.workspaceHash(
+                orderId.toString(), schema, mapping, data, snapshotHash,
+                template.editorAppVersion(), template.pluginManifestHash());
+        var updated = repository.updateDraft(new ProductionOrderRepository.DraftUpdate(
+                actor.organizationId(), orderId, expectedLockVersion, template.versionId(),
+                schema, mapping.deepCopy(), data.deepCopy(), snapshotFileId, snapshotHash,
+                template.editorAppVersion(), template.pluginManifestHash(),
+                template.snapshotFormatVersion(), schemaHash, mappingHash, dataHash, workspaceHash));
+        if (updated == 0) throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT);
+        repository.appendOutbox(
+                "FILE_OBJECT", snapshotFileId, "FILE_ACTIVATION_REQUESTED",
+                objectMapper.createObjectNode().put("fileId", snapshotFileId.toString()));
+        return new SaveResult(expectedLockVersion + 1, workspaceHash, reconciliationRequired);
     }
 
     private void validateInstanceSchema(JsonNode schema) {
@@ -218,7 +286,9 @@ public class ProductionOrderService {
             return;
         }
         var fieldCode = node.path("x-field-code").asText("");
-        var local = localAncestor || fieldCode.startsWith("LOCAL.");
+        var fieldOrigin = node.path("x-field-origin").asText("");
+        var local = localAncestor || fieldCode.startsWith("LOCAL.")
+                || fieldCode.startsWith("ORDER_LOCAL.") || "ORDER_LOCAL".equals(fieldOrigin);
         if (local && node.path("x-queryable").asBoolean(false)) {
             throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "LOCAL 字段不能启用 x-queryable");
         }

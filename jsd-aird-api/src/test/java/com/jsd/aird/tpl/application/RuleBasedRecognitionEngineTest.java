@@ -65,4 +65,39 @@ class RuleBasedRecognitionEngineTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("必须为 6");
     }
+
+    @Test
+    void doesNotTurnDocxContentControlsIntoBusinessFieldSuggestions() throws Exception {
+        var structure = objectMapper.readTree("""
+                {"documentIR":{"contentControls":[
+                  {"nodeId":"content-control-1","contentControlId":"17","markerId":"marker-order-no","alias":"订单号","tag":"FIELD.ORDER_NO","text":""}
+                ],"blocks":[{"id":"paragraph-1","type":"PARAGRAPH","text":"说明文字"}]}}
+                """);
+        var result = engine.recognize(TemplateFormat.DOCX, "模板.docx", structure);
+        assertThat(result.suggestions()).isEmpty();
+    }
+
+    @Test
+    void keepsDocxControlsAsDocumentFactsInsteadOfMapping() throws Exception {
+        var structure = objectMapper.readTree("""
+                {"documentIR":{"contentControls":[
+                  {"nodeId":"content-control-1","contentControlId":"17","alias":"订单号","tag":"FIELD.ORDER_NO","text":""}
+                ]}}
+                """);
+        var result = engine.recognize(TemplateFormat.DOCX, "模板.docx", structure);
+        assertThat(result.suggestions()).isEmpty();
+    }
+
+    @Test
+    void doesNotTreatNumberedDocxHeadingsAsFieldCandidates() throws Exception {
+        var structure = objectMapper.readTree("""
+                {"documentIR":{"blocks":[
+                  {"id":"paragraph-1","type":"PARAGRAPH","text":"1. 客户名称"},
+                  {"id":"paragraph-2","type":"PARAGRAPH","text":"2. 联系电话"},
+                  {"id":"paragraph-3","type":"PARAGRAPH","text":"说明文字"}
+                ]}}
+                """);
+        var result = engine.recognize(TemplateFormat.DOCX, "模板.docx", structure);
+        assertThat(result.suggestions()).isEmpty();
+    }
 }

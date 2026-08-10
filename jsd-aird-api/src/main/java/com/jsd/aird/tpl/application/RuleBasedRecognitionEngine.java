@@ -27,6 +27,7 @@ public class RuleBasedRecognitionEngine {
 
     private static final Pattern EXPLICIT_LABEL = Pattern.compile("^\\s*([^：:\\r\\n]{1,30})[：:]\\s*$");
     private static final Pattern INLINE_LABEL = Pattern.compile("^\\s*([^：:\\r\\n]{1,30})[：:]\\s*(.+?)\\s*$");
+    private static final Pattern NUMBERED_LABEL = Pattern.compile("^\\s*\\d{1,3}[.．、)）]\\s*(.{1,60}?)\\s*$");
     private static final Set<String> STATIC_PREFIXES = Set.of("注", "备注", "注意", "说明", "提示", "操作要求");
 
     private final ObjectMapper objectMapper;
@@ -57,8 +58,13 @@ public class RuleBasedRecognitionEngine {
             throw new IllegalArgumentException("Excel structureVersion 必须为 6");
         }
         var fingerprint = canonicalizer.hash(structure);
-        var suggestions = format == TemplateFormat.XLSX ? explicitLabelValueCandidates(structure) : List
-                .<RecognitionModelClient.ModelSuggestion>of();
+        // Word is a document template, not an Excel-style business-field template.
+        // Its deterministic output is the documentIR/structure tree produced by
+        // DocxStructureParser.  Even explicit content controls are document facts;
+        // they must not silently become TemplateBinding suggestions.
+        var suggestions = format == TemplateFormat.XLSX
+                ? explicitLabelValueCandidates(structure)
+                : List.<RecognitionModelClient.ModelSuggestion>of();
         return new RecognitionModelClient.RecognitionBatch(
                 suggestions, List.of(), "physical-facts", "conservative-label-value-v6",
                 "physical-fallback-v6", fingerprint,
@@ -109,6 +115,176 @@ public class RuleBasedRecognitionEngine {
         return List.copyOf(result);
     }
 
+    /**
+     * Content controls are deterministic Word fields. Plain label paragraphs
+     * are also surfaced as review-only candidates so a document still has a
+     * useful field model when no external semantic model is configured. They
+     * intentionally remain unbound until the user inserts a real content
+     * control at the chosen position.
+     */
+    private List<RecognitionModelClient.ModelSuggestion> docxContentControlCandidates(JsonNode structure) {
+        var result = new ArrayList<RecognitionModelClient.ModelSuggestion>();
+        var occupied = new java.util.HashSet<String>();
+        var controls = structure.path("documentIR").path("contentControls");
+        if (!controls.isArray()) controls = structure.path("contentControls");
+        for (var control : controls) {
+            var nodeId = control.path("nodeId").asText("");
+            var contentControlId = control.path("contentControlId").asText("");
+            var documentMarkerId = control.path("markerId").asText("");
+            var tag = control.path("tag").asText("").strip();
+            var alias = control.path("alias").asText("").strip();
+            var text = control.path("text").asText("").strip();
+            var name = firstNonPlaceholder(alias, tag, text);
+            // w:id/contentControlId identifies the OOXML element only.  It is
+            // not a data marker and cannot be used as a publishable binding;
+            // only the explicit w:dataBinding storeItemID is stable across
+            // controlled patches and document revisions.
+            var markerId = documentMarkerId;
+            if (nodeId.isBlank()) continue;
+            var stableMarker = !documentMarkerId.isBlank();
+            var fieldSeed = markerId + "|" + name;
+            var fieldId = RecognitionIdentity.fieldId(RecognitionIdentity.relationId(
+                    "docx", nodeId, markerId, "DOCX_CONTENT_CONTROL"));
+            var fieldCode = tag.isBlank()
+                    ? "AUTO.WORD.FIELD_" + RecognitionIdentity.shortHash(fieldSeed, 12).toUpperCase(Locale.ROOT)
+                    : tag;
+            var dataPath = "/recognized/word/" + safePathSegment(name, fieldId.toString());
+            var payload = objectMapper.createObjectNode()
+                    .put("kind", "SCALAR")
+                    .put("role", "FIELD")
+                    .put("blockType", "FORM_REGION")
+                    .put("blockName", "Word 文档字段")
+                    .put("fieldId", fieldId.toString())
+                    .put("fieldCode", fieldCode)
+                    .put("fieldName", name.isBlank() ? "待命名字段" : name)
+                    .put("dataPath", dataPath)
+                    .put("editability", "EDITABLE")
+                    .put("valueSource", "USER_INPUT")
+                    .put("valueType", "string")
+                    .put("required", false)
+                    .put("locatorType", "DOCX_CONTENT_CONTROL")
+                    .put("markerId", markerId)
+                    .put("source", "DOCX_CONTENT_CONTROL")
+                    .put("candidateOnly", !stableMarker)
+                    .put("reviewRequired", true)
+                    .put("publishable", stableMarker)
+                    .put("autoAccept", stableMarker)
+                    .put("pendingReason", stableMarker ? "DOCX_FIELD_REVIEW" : "DOCX_MARKER_MISSING")
+                    .put("standardMatchStatus", "UNMATCHED")
+                    .put("requiresStandardConfirmation", false)
+                    .put("groupName", GroupNameNormalizer.BASIC_INFORMATION)
+                    .put("regionId", "docx-document")
+                    .put("blockId", "docx-document")
+                    .put("regionRange", "DOCX")
+                    .put("candidateRef", nodeId);
+            payload.set("locator", objectMapper.createObjectNode()
+                    .put("nodeId", nodeId)
+                    .put("markerId", markerId)
+                    .put("contentControlId", contentControlId)
+                    .put("tag", tag)
+                    .put("alias", alias)
+                    .put("text", text)
+                    .put("locatorType", "DOCX_CONTENT_CONTROL"));
+            var evidence = objectMapper.createArrayNode().add(objectMapper.createObjectNode()
+                    .put("nodeId", nodeId).put("markerId", markerId)
+                    .put("source", "DOCX_CONTENT_CONTROL"));
+            result.add(new RecognitionModelClient.ModelSuggestion(
+                    "SCALAR_FIELD", payload, stableMarker ? 0.98 : 0.65, evidence));
+            occupied.add(nodeId);
+        }
+
+        var documentIr = structure.path("documentIR");
+        var blocks = documentIr.path("blocks");
+        if (!blocks.isArray()) blocks = structure.path("blocks");
+        for (var block : blocks) {
+            if (!"PARAGRAPH".equals(block.path("type").asText(""))) continue;
+            var nodeId = block.path("id").asText("").strip();
+            var text = block.path("text").asText("").strip();
+            if (nodeId.isBlank() || text.isBlank() || occupied.contains(nodeId)) continue;
+            var fieldName = docxLabelName(text);
+            if (fieldName.isBlank() || STATIC_PREFIXES.contains(fieldName)) continue;
+            result.add(docxTextLabelCandidate(nodeId, text, fieldName));
+        }
+        return List.copyOf(result);
+    }
+
+    private String docxLabelName(String text) {
+        var inline = INLINE_LABEL.matcher(text);
+        if (inline.matches()) return inline.group(1).strip();
+        var explicit = EXPLICIT_LABEL.matcher(text);
+        if (explicit.matches()) return explicit.group(1).strip();
+        var numbered = NUMBERED_LABEL.matcher(text);
+        return numbered.matches() ? numbered.group(1).strip() : "";
+    }
+
+    private RecognitionModelClient.ModelSuggestion docxTextLabelCandidate(
+            String nodeId, String text, String fieldName
+    ) {
+        var relationId = RecognitionIdentity.relationId(
+                "DOCX", nodeId, fieldName, "DOCX_TEXT_LABEL");
+        var fieldId = RecognitionIdentity.fieldId(relationId);
+        var markerSeed = relationId + "|" + fieldName;
+        var fieldCode = "AUTO.WORD.FIELD_"
+                + RecognitionIdentity.shortHash(markerSeed, 12).toUpperCase(Locale.ROOT);
+        var dataPath = "/recognized/word/" + safePathSegment(fieldName, fieldId.toString());
+        var payload = objectMapper.createObjectNode()
+                .put("kind", "SCALAR")
+                .put("role", "FIELD")
+                .put("relationId", relationId)
+                .put("fieldId", fieldId.toString())
+                .put("fieldCode", fieldCode)
+                .put("fieldName", fieldName)
+                .put("dataPath", dataPath)
+                .put("editability", "EDITABLE")
+                .put("valueSource", "USER_INPUT")
+                .put("valueType", "string")
+                .put("required", false)
+                .put("locatorType", "DOCX_TEXT_LABEL")
+                .put("source", "DOCX_TEXT_LABEL")
+                .put("candidateOnly", true)
+                .put("reviewRequired", true)
+                .put("publishable", false)
+                .put("autoAccept", false)
+                .put("pendingReason", "DOCX_FIELD_POSITION_REQUIRED")
+                .put("standardMatchStatus", "UNMATCHED")
+                .put("requiresStandardConfirmation", false)
+                .put("groupName", GroupNameNormalizer.BASIC_INFORMATION)
+                .put("regionId", "docx-document")
+                .put("blockId", "docx-document")
+                .put("regionRange", "DOCX")
+                .put("candidateRef", nodeId)
+                .put("labelAnchor", nodeId)
+                .put("valueAnchor", nodeId);
+        payload.set("locator", objectMapper.createObjectNode()
+                .put("nodeId", nodeId)
+                .put("labelAnchor", nodeId)
+                .put("valueAnchor", nodeId)
+                .put("text", text)
+                .put("locatorType", "DOCX_TEXT_LABEL"));
+        var evidence = objectMapper.createArrayNode().add(objectMapper.createObjectNode()
+                .put("nodeId", nodeId)
+                .put("text", text)
+                .put("source", "DOCX_TEXT_LABEL_RULE"));
+        return new RecognitionModelClient.ModelSuggestion(
+                "SCALAR_FIELD", payload, 0.72, evidence);
+    }
+
+    private String firstNonPlaceholder(String... values) {
+        for (var value : values) {
+            if (value == null) continue;
+            var normalized = value.strip();
+            if (normalized.isBlank()) continue;
+            if (normalized.matches("(?i)^(请输入|点击此处|单击此处|输入|placeholder).*$")) continue;
+            return normalized;
+        }
+        return "";
+    }
+
+    private String safePathSegment(String value, String fallback) {
+        var normalized = value == null ? "" : value.strip().replaceAll("[^\\p{L}\\p{N}_-]+", "_");
+        return normalized.isBlank() ? "field_" + RecognitionIdentity.shortHash(fallback, 10) : normalized;
+    }
+
     private List<JsonNode> semanticCells(JsonNode structure) {
         var result = new ArrayList<JsonNode>();
         for (var sheet : structure.path("sheets")) {
@@ -149,7 +325,9 @@ public class RuleBasedRecognitionEngine {
                 .put("valueSource", formula ? "FORMULA" : "USER_INPUT")
                 .put("dictionaryVersion", standard == null ? StandardFieldDictionary.VERSION : standard.version())
                 .put("standardMatchStatus", standard == null ? "UNMATCHED" : "MATCHED")
-                 .put("requiresStandardConfirmation", standard == null)
+                 .put("requiresStandardConfirmation", false)
+                 .put("fieldOrigin", standard == null ? "TEMPLATE_LOCAL" : "STANDARD")
+                 .put("standardSelectionStatus", standard == null ? "CUSTOM" : "MATCHED")
                  .put("requiresManualConfirmation", true)
                  .put("source", "RULE")
                  .put("reasonCode", "RULE_FALLBACK")

@@ -47,6 +47,10 @@ public class WorkbookQualityAnalyzer {
             if (candidate.path("empty").asBoolean(true) || candidate.path("formula").asBoolean(false)
                     || !candidate.path("value").isTextual()) continue;
             var value = candidate.path("value").asText("");
+            // A short note marker followed by a sentence is intentional static
+            // content, not a mixed label/value field. Keep it available to the
+            // recognition audit, but do not tell the user to split the template.
+            if (isStaticNote(value)) continue;
             var matcher = MIXED_ROLE.matcher(value);
             if (!matcher.matches()) {
                 if (looksLikeMultipleRoles(value)) {
@@ -88,6 +92,13 @@ public class WorkbookQualityAnalyzer {
 
         return new Analysis(patched, List.copyOf(issues), issues.stream()
                 .anyMatch(issue -> "AUTO_APPLIED".equals(issue.status())));
+    }
+
+    private boolean isStaticNote(String value) {
+        var normalized = value == null ? "" : value.strip();
+        if (normalized.length() < 12) return false;
+        return List.of("注：", "注:", "备注：", "备注:", "说明：", "说明:", "注意：", "注意:")
+                .stream().anyMatch(normalized::startsWith);
     }
 
     public boolean apply(JsonNode snapshot, JsonNode patch) {

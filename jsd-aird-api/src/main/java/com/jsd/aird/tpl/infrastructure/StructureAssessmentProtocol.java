@@ -11,6 +11,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.jsd.aird.tpl.domain.QualityIssueSeverity;
 
 /**
  * Independent workbook structure proposal protocol.
@@ -72,7 +73,8 @@ final class StructureAssessmentProtocol {
                              "then":{"required":["cornerRange","rowHeaderRange","columnHeaderRange","crossDataRange"]}}
                           ]
                         }},
-                        "qualityIssues":{"type":"array","items":{"type":"object","additionalProperties":true}}
+                        "qualityIssues":{"type":"array","items":{"type":"object","additionalProperties":true,
+                          "properties":{"severity":{"enum":["INFO","WARNING","BLOCKER"]}}}}
                       }
                     }
                     """);
@@ -91,7 +93,7 @@ final class StructureAssessmentProtocol {
         require(root.path("qualityIssues").isArray(), "qualityIssues 必须是数组");
 
         var normalized = objectMapper.createArrayNode();
-        var issues = (ArrayNode) root.path("qualityIssues").deepCopy();
+        var issues = normalizeQualityIssues((ArrayNode) root.path("qualityIssues"));
         var seen = new LinkedHashSet<String>();
         for (var item : root.path("proposals")) {
             try {
@@ -104,8 +106,28 @@ final class StructureAssessmentProtocol {
                 var proposalId = requiredText(proposal, "proposalId", "结构提议项");
                 var sheetId = requiredText(proposal, "sheetId", "结构提议项");
                 require(seen.add(proposalId), "proposalId 重复: " + proposalId);
-                require(TYPES.contains(requiredText(proposal, "type", "结构提议项")),
+                var type = requiredText(proposal, "type", "结构提议项");
+                require(TYPES.contains(type),
                         "结构提议项 type 不合法");
+                // FORM_REGION has no repeat topology. Older/less strict model
+                // providers therefore sometimes omit recordAxis altogether.
+                // Normalising that semantically empty value is geometry
+                // preserving; doing the same for a table or matrix would hide a
+                // material protocol error and is deliberately forbidden.
+                if ("FORM_REGION".equals(type)
+                        && (!proposal.path("recordAxis").isTextual()
+                        || proposal.path("recordAxis").asText("").isBlank())) {
+                    proposal.put("recordAxis", "UNKNOWN");
+                    issues.add(objectMapper.createObjectNode()
+                            .put("issueType", "PROTOCOL_DEFAULT_APPLIED")
+                            .put("severity", "INFO")
+                            .put("proposalId", proposalId)
+                            .put("sheetId", sheetId)
+                            .put("field", "recordAxis")
+                            .put("defaultValue", "UNKNOWN")
+                            .put("title", "表单区域协议默认值已补齐")
+                            .put("description", "FORM_REGION 未返回 recordAxis，已机械补为 UNKNOWN；区域几何未改变。"));
+                }
                 require(AXES.contains(requiredText(proposal, "recordAxis", "结构提议项")),
                         "结构提议项 recordAxis 不合法");
                 var confidence = proposal.path("confidence").asDouble(-1);
@@ -131,6 +153,26 @@ final class StructureAssessmentProtocol {
             }
         }
         return new ValidationResult(normalized, issues);
+    }
+
+    private ArrayNode normalizeQualityIssues(ArrayNode source) {
+        var result = objectMapper.createArrayNode();
+        for (var issue : source) {
+            if (issue != null && issue.isObject() && issue.size() > 0) {
+                var normalized = (ObjectNode) issue.deepCopy();
+                normalized.put("severity", QualityIssueSeverity.normalize(issue.path("severity").asText("")));
+                result.add(normalized);
+                continue;
+            }
+            result.add(objectMapper.createObjectNode()
+                    .put("issueType", "MALFORMED_QUALITY_ISSUE")
+                    .put("severity", "WARNING")
+                    .put("title", "模型质量问题项格式不完整")
+                    .put("description", "模型返回了空的质量问题对象，系统已保留为待复核诊断。")
+                    .put("businessImpact", "该质量问题无法自动解释，相关识别结果需要人工复核。")
+                    .set("evidence", objectMapper.createObjectNode().put("rawIssue", issue == null ? "null" : issue.toString())));
+        }
+        return result;
     }
 
     /** Compatibility adapter for historical readers only; new code does not call it. */
@@ -181,6 +223,9 @@ final class StructureAssessmentProtocol {
         } else if (Set.of("ROW_TABLE", "COLUMN_TABLE").contains(proposal.path("type").asText())) {
             require(!proposal.path("headerRange").asText("").isBlank(), "普通表格缺少 headerRange");
             require(!proposal.path("dataRange").asText("").isBlank(), "普通表格缺少 dataRange");
+            var expectedAxis = "ROW_TABLE".equals(proposal.path("type").asText()) ? "ROW" : "COLUMN";
+            require(expectedAxis.equals(proposal.path("recordAxis").asText("UNKNOWN")),
+                    proposal.path("type").asText() + " 的 recordAxis 必须为 " + expectedAxis);
         }
     }
 

@@ -92,6 +92,13 @@ final class RegionSemanticBatchProtocol {
         requireObject(response, "批量区域语义响应");
         var root = (ObjectNode) response.deepCopy();
         exactKeys(root, Set.of("recognitionProtocolVersion", "regions", "qualityIssues"), "批量区域语义响应");
+        // Several OpenAI-compatible providers omit an optional-looking empty
+        // top-level collection even when the supplied JSON schema marks it as
+        // required. Missing means no workbook-level issue and can be repaired
+        // deterministically; a present non-array value is still rejected.
+        if (!root.has("qualityIssues") || root.path("qualityIssues").isNull()) {
+            root.putArray("qualityIssues");
+        }
         require(root.path("recognitionProtocolVersion").asInt(-1) == VERSION,
                 "批量区域语义响应 recognitionProtocolVersion 必须为 2");
         require(root.path("regions").isArray(), "regions 必须是数组");
@@ -108,10 +115,12 @@ final class RegionSemanticBatchProtocol {
                 var id = required(item, "regionId");
                 var geometry = contexts.get(id);
                 if (geometry == null) throw new IllegalArgumentException("regionId 未引用语义区域: " + id);
-                for (var key : List.of("rowDimensions", "rowAttributes", "fieldRelations", "qualityIssues")) {
+                for (var key : List.of("fieldRelations", "qualityIssues")) {
                     require(item.path(key).isArray(), key + " 必须是数组");
                 }
                 var copy = (ObjectNode) item.deepCopy();
+                normalizeAxisCollection(copy, "rowDimensions", issues, id);
+                normalizeAxisCollection(copy, "rowAttributes", issues, id);
                 copy.set("rowDimensions", validateAxes(copy.path("rowDimensions"), geometry,
                         "rowDimensions", issues, id));
                 copy.set("rowAttributes", validateAxes(copy.path("rowAttributes"), geometry,
@@ -154,6 +163,21 @@ final class RegionSemanticBatchProtocol {
         return normalized;
     }
 
+    private void normalizeAxisCollection(
+            ObjectNode region,
+            String key,
+            ArrayNode issues,
+            String regionId
+    ) {
+        if (region.path(key).isArray()) return;
+        region.putArray(key);
+        issues.add(objectMapper.createObjectNode()
+                .put("issueType", "INVALID_AXIS_COLLECTION")
+                .put("severity", "WARNING")
+                .put("regionId", regionId)
+                .put("description", key + " 不是数组，已降级为空集合并启用物理标签回退"));
+    }
+
     private Map<String, JsonNode> contexts(JsonNode context) {
         var result = new LinkedHashMap<String, JsonNode>();
         for (var region : context.path("semanticRegions")) {
@@ -178,8 +202,47 @@ final class RegionSemanticBatchProtocol {
                 relation.path("editability").asText("UNKNOWN")))) return false;
         if (!SemanticProtocolTypes.VALUE_SOURCES.contains(SemanticProtocolTypes.normalizeValueSource(
                 relation.path("valueSource").asText("UNKNOWN")))) return false;
-        return contains(geometry.path("range").asText(""), label)
-                && contains(geometry.path("range").asText(""), value);
+        if (!contains(geometry.path("range").asText(""), label)
+                || !contains(geometry.path("range").asText(""), value)) return false;
+        if ("ROW_TABLE".equals(geometry.path("type").asText(""))) {
+            var structure = geometry.path("structure");
+            var headerRange = structure.path("headerRange").asText(
+                    geometry.path("headerRange").asText(""));
+            var dataRange = structure.path("dataRange").asText(
+                    geometry.path("dataRange").asText(""));
+            var totalRange = structure.path("totalRange").asText(
+                    geometry.path("totalRange").asText(""));
+            // A row-table field is defined by a header cell and a projection
+            // into the repeat body. Treating a first data row (or a merged
+            // operation slot) as a label silently shifts the whole mapping and
+            // is therefore a protocol failure, not a fuzzy-match candidate.
+            if (!contains(headerRange, label) || !contains(dataRange, value)) return false;
+            if (!totalRange.isBlank() && overlaps(totalRange, value)) return false;
+        }
+        if ("COLUMN_TABLE".equals(geometry.path("type").asText(""))) {
+            var valueBounds = bounds(value);
+            var recordColumns = geometry.path("structure").path("recordProjection").path("recordColumns");
+            if (valueBounds != null && recordColumns.isArray() && !recordColumns.isEmpty()) {
+                var intersectsRecordSurface = false;
+                for (var column : recordColumns) {
+                    var columnBounds = bounds(column.asText("") + "1");
+                    if (columnBounds != null && valueBounds[0] <= columnBounds[0]
+                            && valueBounds[2] >= columnBounds[0]) {
+                        intersectsRecordSurface = true;
+                        break;
+                    }
+                }
+                if (!intersectsRecordSurface) return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean overlaps(String first, String second) {
+        var a = bounds(first);
+        var b = bounds(second);
+        return a != null && b != null && a[0] <= b[2] && b[0] <= a[2]
+                && a[1] <= b[3] && b[1] <= a[3];
     }
 
     private ArrayNode validateAxes(JsonNode axes, JsonNode geometry, String key, ArrayNode issues, String regionId) {
@@ -189,14 +252,28 @@ final class RegionSemanticBatchProtocol {
         var seen = new java.util.HashSet<String>();
         var valid = objectMapper.createArrayNode();
         for (var axis : axes) {
-            if (!axis.isObject()) throw new IllegalArgumentException(key + " 项必须是对象");
-            var range = axis.path("sourceRange").asText("");
+            // Some OpenAI-compatible providers accept the strict JSON schema
+            // but still emit the unambiguous shorthand "A5:A19". Normalize
+            // only that geometry-preserving form; arbitrary objects and
+            // invalid ranges remain rejected by the checks below.
+            JsonNode normalizedAxis = axis;
+            if (axis.isTextual()) {
+                normalizedAxis = objectMapper.createObjectNode()
+                        .put("sourceRange", axis.asText(""))
+                        .put("name", "")
+                        .put("fillMerged", true)
+                        .put("role", "rowDimensions".equals(key) ? "ROW_DIMENSION" : "ROW_ATTRIBUTE")
+                        .put("optional", true);
+            } else if (!axis.isObject()) {
+                throw new IllegalArgumentException(key + " 项必须是对象或单元格范围");
+            }
+            var range = normalizedAxis.path("sourceRange").asText("");
             if (!RANGE.matcher(range.toUpperCase(java.util.Locale.ROOT)).matches()
                     || !contains(rowHeader, range)) {
                 issues.add(objectMapper.createObjectNode().put("issueType", "INVALID_ROW_AXIS")
                         .put("severity", "WARNING").put("regionId", regionId)
                         .put("description", key + " 的 sourceRange 不在 canonical rowHeaderRange 内")
-                        .set("axis", axis.deepCopy()));
+                        .set("axis", normalizedAxis.deepCopy()));
                 continue;
             }
             if (!seen.add(range.toUpperCase(java.util.Locale.ROOT))) {
@@ -205,7 +282,7 @@ final class RegionSemanticBatchProtocol {
                         .put("description", key + " 存在重复 sourceRange"));
                 continue;
             }
-            valid.add(axis.deepCopy());
+            valid.add(normalizedAxis.deepCopy());
         }
         return valid;
     }

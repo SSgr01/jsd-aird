@@ -21,8 +21,12 @@ public final class RecognitionCoverageValidator {
     private final StructurePrimitiveRecognizer primitiveRecognizer;
 
     public RecognitionCoverageValidator(ObjectMapper objectMapper) {
+        this(objectMapper, false);
+    }
+
+    public RecognitionCoverageValidator(ObjectMapper objectMapper, boolean topologyV2Enabled) {
         this.objectMapper = objectMapper;
-        this.primitiveRecognizer = new StructurePrimitiveRecognizer(objectMapper);
+        this.primitiveRecognizer = new StructurePrimitiveRecognizer(objectMapper, topologyV2Enabled);
     }
 
     public ObjectNode physicalReport(JsonNode structure, String reason) {
@@ -53,7 +57,9 @@ public final class RecognitionCoverageValidator {
             boolean globalSucceeded,
             boolean globalFailed
     ) {
-        var expected = expectedRegions == null ? List.<JsonNode>of() : expectedRegions;
+        var expected = expectedRegions == null || expectedRegions.isEmpty()
+                ? physicalRegions(structure)
+                : expectedRegions;
         var details = objectMapper.createArrayNode();
         var covered = 0;
         var unresolved = 0;
@@ -84,7 +90,9 @@ public final class RecognitionCoverageValidator {
         }
 
         var expectedCount = expected.size();
-        var ratio = expectedCount == 0 ? 1.0 : covered / (double) expectedCount;
+        var ratio = expectedCount == 0
+                ? (physicalRegions(structure).isEmpty() ? 1.0 : 0.0)
+                : covered / (double) expectedCount;
         var status = "COMPLETE";
         if (globalFailed || unresolved > 0) status = "REVIEW_REQUIRED";
         if (!globalSucceeded && expectedCount > 0) status = "REVIEW_REQUIRED";
@@ -150,13 +158,40 @@ public final class RecognitionCoverageValidator {
                 var locator = payload.path("locator");
                 var locatorRange = locator.path("range").asText(payload.path("range").asText(range));
                 if ("SCALAR_FIELD".equals(suggestion.suggestionType())
-                        && range.equalsIgnoreCase(locatorRange)) return true;
+                        && containsRange(range, locatorRange)) return true;
             } else if (payload.path("locator").path("range").asText(range).equalsIgnoreCase(range)
                     || "SCALAR_FIELD".equals(suggestion.suggestionType())) {
                 return true;
             }
         }
         return false;
+    }
+
+    private boolean containsRange(String outer, String inner) {
+        var outerBounds = bounds(outer);
+        var innerBounds = bounds(inner);
+        return outerBounds != null && innerBounds != null
+                && outerBounds[0] <= innerBounds[0] && outerBounds[1] <= innerBounds[1]
+                && outerBounds[2] >= innerBounds[2] && outerBounds[3] >= innerBounds[3];
+    }
+
+    private int[] bounds(String value) {
+        var normalized = value == null ? "" : value.replace("$", "").toUpperCase(java.util.Locale.ROOT);
+        var parts = normalized.split(":", 2);
+        if (parts.length == 0 || parts[0].isBlank()) return null;
+        var first = cell(parts[0]);
+        var last = cell(parts.length == 1 ? parts[0] : parts[1]);
+        if (first == null || last == null) return null;
+        return new int[]{Math.min(first[0], last[0]), Math.min(first[1], last[1]),
+                Math.max(first[0], last[0]), Math.max(first[1], last[1])};
+    }
+
+    private int[] cell(String value) {
+        var matcher = java.util.regex.Pattern.compile("^([A-Z]+)([1-9][0-9]*)$").matcher(value);
+        if (!matcher.matches()) return null;
+        var column = 0;
+        for (var character : matcher.group(1).toCharArray()) column = column * 26 + character - 'A' + 1;
+        return new int[]{column, Integer.parseInt(matcher.group(2))};
     }
 
     private boolean isTableSuggestion(RecognitionModelClient.ModelSuggestion suggestion) {

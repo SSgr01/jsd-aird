@@ -16,6 +16,7 @@ import {
   Input,
   Modal,
   Progress,
+  Select,
   Space,
   Table,
   Tag,
@@ -33,7 +34,10 @@ import {
   type RecognitionCall,
   type RecognitionSuggestion,
   type TemplateImportJob,
+  type TemplateCategory,
 } from '@/services/templates/template-api';
+
+import { buildDisplaySuggestions, recognitionCounts } from './recognition-display';
 
 const accepted = '.xlsx,.docx';
 
@@ -51,11 +55,21 @@ export function TemplateUploadPage() {
   const [deletingJobId, setDeletingJobId] = useState<string>();
   const [retryingJobId, setRetryingJobId] = useState<string>();
   const [creating, setCreating] = useState(false);
+  const [categories, setCategories] = useState<TemplateCategory[]>([]);
   const [form] = Form.useForm<CreateTemplateInput>();
+  const displaySuggestions = useMemo(
+    () => buildDisplaySuggestions(viewSuggestions),
+    [viewSuggestions],
+  );
 
   const load = useCallback(async () => {
     try {
-      setJobs(await templateApi.listImports());
+      const [imports, categoryItems] = await Promise.all([
+        templateApi.listImports(),
+        templateApi.listCategories(),
+      ]);
+      setJobs(imports);
+      setCategories(categoryItems);
     } catch (error) {
       void message.error(error instanceof Error ? error.message : '识别记录加载失败');
     }
@@ -157,9 +171,17 @@ export function TemplateUploadPage() {
   const retryRecognition = async (job: TemplateImportJob) => {
     setRetryingJobId(job.id);
     try {
-      await templateApi.createImport(job.sourceFileId, job.format);
+      if (job.generatedTemplateVersionId && job.workspaceHash) {
+        await templateApi.retryImport(job.id, job.workspaceHash);
+      } else {
+        await templateApi.createImport(job.sourceFileId, job.format);
+      }
       await load();
-      void message.success('已重新开始识别');
+      void message.success(
+        job.generatedTemplateVersionId && job.workspaceHash
+          ? '已按当前已保存草稿重新识别，历史运行会继续保留'
+          : '已重新开始识别',
+      );
     } catch (error) {
       void message.error(error instanceof Error ? error.message : '重新识别失败');
     } finally {
@@ -237,15 +259,15 @@ export function TemplateUploadPage() {
                     status={
                       job.status === 'FAILED'
                         ? 'exception'
-                        : job.status === 'PARSED'
+                        : job.status === 'PARSED' && recognitionStatus(job) === 'COMPLETE'
                           ? 'success'
-                          : 'active'
+                          : job.status === 'PARSED'
+                            ? 'normal'
+                            : 'active'
                     }
                   />
                   <Typography.Text type="secondary" className="progress-stage">
-                    {job.status === 'PARSED'
-                      ? '识别完成，可以查看结果'
-                      : stageLabel(job.currentStage)}
+                    {job.status === 'PARSED' ? recognitionLabel(job) : stageLabel(job.currentStage)}
                   </Typography.Text>
                 </div>
               ),
@@ -255,14 +277,28 @@ export function TemplateUploadPage() {
               width: 210,
               render: (_, job) => (
                 <Space size={4} wrap>
-                  {job.status === 'PARSED' && (
+                  {job.status === 'PARSED' && recognitionStatus(job) === 'COMPLETE' && (
                     <Tag color="success" icon={<CheckCircleOutlined />}>
                       完成
                     </Tag>
                   )}
-                  {job.suggestionCount > 0 && <Tag color="blue">识别 {job.suggestionCount} 项</Tag>}
-                  {job.pendingSuggestionCount > 0 && (
-                    <Tag color="gold">待确认 {job.pendingSuggestionCount} 项</Tag>
+                  {job.status === 'PARSED' && recognitionStatus(job) === 'REVIEW_REQUIRED' && (
+                    <Tag color="warning">识别待复核</Tag>
+                  )}
+                  {pendingFieldCount(job) > 0 && (
+                    <Tag color="gold">待确认字段 {pendingFieldCount(job)} 项</Tag>
+                  )}
+                  {pendingFieldCount(job) === 0 && reviewableFieldCount(job) > 0 && (
+                    <Tag color="blue">识别字段 {reviewableFieldCount(job)} 项</Tag>
+                  )}
+                  {structureConflictCount(job) > 0 && (
+                    <Tag color="orange">结构冲突 {structureConflictCount(job)} 组</Tag>
+                  )}
+                  {qualityIssueCount(job) > 0 && (
+                    <Tag color="red">质量问题 {qualityIssueCount(job)} 项</Tag>
+                  )}
+                  {job.retryCount > 0 && (
+                    <Tag color="default">已重识别 {job.retryCount} 次</Tag>
                   )}
                   {job.status === 'FAILED' && <Tag color="error">识别失败</Tag>}
                 </Space>
@@ -298,6 +334,7 @@ export function TemplateUploadPage() {
                     icon={<ReloadOutlined />}
                     loading={retryingJobId === job.id}
                     disabled={!['PARSED', 'FAILED'].includes(job.status)}
+                    title={`已重识别 ${job.retryCount} 次；调用模型失败时会自动重试瞬时错误`}
                     onClick={() => void retryRecognition(job)}
                   >
                     重试
@@ -337,14 +374,10 @@ export function TemplateUploadPage() {
         onCancel={() => setSelectedJob(undefined)}
       >
         <Alert
-          type="success"
+          type={selectedJob ? recognitionAlertType(selectedJob) : 'info'}
           showIcon
-          message="系统已完成初步识别"
-          description={
-            selectedJob
-              ? `识别出 ${selectedJob.suggestionCount} 项内容；不确定的部分会在 Excel 旁边用中文问题引导确认。`
-              : undefined
-          }
+          message={selectedJob ? recognitionLabel(selectedJob) : '系统已完成初步识别'}
+          description={selectedJob ? recognitionDescription(selectedJob) : undefined}
           style={{ marginBottom: 16 }}
         />
         <Form form={form} layout="vertical">
@@ -356,7 +389,11 @@ export function TemplateUploadPage() {
             <Input autoFocus maxLength={200} />
           </Form.Item>
           <Form.Item name="category" label="模板分类">
-            <Input placeholder="例如：生产记录、检验记录" maxLength={120} />
+            <Select
+              allowClear
+              placeholder="选择分类（可在模板列表中管理）"
+              options={categories.map((item) => ({ value: item.name, label: item.name }))}
+            />
           </Form.Item>
           <Form.Item name="purpose" label="业务用途">
             <Input.TextArea rows={3} placeholder="说明这个模板用于什么业务场景" maxLength={300} />
@@ -392,14 +429,12 @@ export function TemplateUploadPage() {
         ) : (
           <Space direction="vertical" size={16} style={{ width: '100%' }}>
             <Alert
-              type={viewingJob?.status === 'FAILED' ? 'error' : 'success'}
+              type={viewingJob ? recognitionAlertType(viewingJob) : 'info'}
               showIcon
-              message={
-                viewingJob?.status === 'FAILED' ? '识别失败' : '识别完成，可直接核对识别结果'
-              }
+              message={viewingJob ? recognitionLabel(viewingJob) : '识别结果'}
               description={
                 viewingJob
-                  ? `共 ${viewSuggestions.length} 项建议，${viewCalls.length} 次模型调用。`
+                  ? `${recognitionDescription(viewingJob)} 共 ${viewCalls.length} 次模型调用。`
                   : undefined
               }
             />
@@ -407,32 +442,16 @@ export function TemplateUploadPage() {
               size="small"
               rowKey="id"
               pagination={{ pageSize: 8 }}
-              dataSource={viewSuggestions}
+              dataSource={displaySuggestions}
               columns={[
                 {
                   title: '字段/区域',
-                  dataIndex: ['payload', 'fieldName'],
-                  render: (_: unknown, item: RecognitionSuggestion) => item.payload.fieldName,
+                  dataIndex: 'label',
                 },
-                { title: '类型', dataIndex: 'suggestionType' },
+                { title: '类型', dataIndex: 'type' },
                 { title: '状态', dataIndex: 'decision' },
-                {
-                  title: '位置',
-                  render: (_: unknown, item: RecognitionSuggestion) =>
-                    locatorDisplay(item.payload.locator?.address, item.payload.locator?.range),
-                },
-                {
-                  title: '明细列',
-                  render: (_: unknown, item: RecognitionSuggestion) =>
-                    item.payload.columns?.length
-                      ? item.payload.columns
-                          .map(
-                            (column) =>
-                              `${column.name}（${column.valueType || 'string'}${column.unit ? `/${column.unit}` : ''}）`,
-                          )
-                          .join('、')
-                      : '—',
-                },
+                { title: '位置', dataIndex: 'location' },
+                { title: '说明', dataIndex: 'details' },
               ]}
             />
             <Collapse
@@ -466,6 +485,59 @@ export function TemplateUploadPage() {
   );
 }
 
+function recognitionStatus(job: TemplateImportJob) {
+  if (job.status === 'FAILED') return 'FAILED';
+  if (job.recognitionRunStatus === 'PARTIAL') return 'REVIEW_REQUIRED';
+  return (
+    job.recognitionSummary?.recognitionStatus ?? job.result.recognitionStatus ?? 'REVIEW_REQUIRED'
+  );
+}
+
+function recognitionLabel(job: TemplateImportJob) {
+  switch (recognitionStatus(job)) {
+    case 'COMPLETE':
+      return '识别完成';
+    case 'FAILED':
+      return '识别失败';
+    case 'NO_PHYSICAL_TABLE':
+      return '未发现可识别区域';
+    case 'REVIEW_REQUIRED':
+      return job.recognitionRunStatus === 'PARTIAL' ? '部分识别完成，待复核' : '解析完成，识别待复核';
+    default:
+      return job.status === 'PARSED' ? '解析完成，识别待复核' : stageLabel(job.currentStage);
+  }
+}
+
+function recognitionAlertType(job: TemplateImportJob): 'success' | 'error' | 'warning' | 'info' {
+  const status = recognitionStatus(job);
+  if (status === 'FAILED') return 'error';
+  if (status === 'COMPLETE') return 'success';
+  if (status === 'REVIEW_REQUIRED') return 'warning';
+  return 'info';
+}
+
+function reviewableFieldCount(job: TemplateImportJob) {
+  return recognitionCounts(job).fields;
+}
+
+function pendingFieldCount(job: TemplateImportJob) {
+  return recognitionCounts(job).pending;
+}
+
+function structureConflictCount(job: TemplateImportJob) {
+  return recognitionCounts(job).conflicts;
+}
+
+function qualityIssueCount(job: TemplateImportJob) {
+  return recognitionCounts(job).quality;
+}
+
+function recognitionDescription(job: TemplateImportJob) {
+  const counts = recognitionCounts(job);
+  const retry = job.retryCount > 0 ? `已重识别 ${job.retryCount} 次` : '尚未人工重识别';
+  return `识别字段 ${counts.fields} 项，其中待确认 ${counts.pending} 项；结构候选 ${counts.structures} 组，结构冲突 ${counts.conflicts} 组，质量问题 ${counts.quality} 项；${retry}。`;
+}
+
 function stageLabel(stage?: string) {
   const labels: Record<string, string> = {
     LOADING_FILE: '正在读取文件',
@@ -479,11 +551,4 @@ function stageLabel(stage?: string) {
     PERSISTING_RESULT: '正在保存识别结果',
   };
   return labels[stage ?? ''] ?? '等待后台处理';
-}
-
-function locatorDisplay(...values: unknown[]) {
-  return (
-    values.find((value): value is string => typeof value === 'string' && value.trim().length > 0) ||
-    '—'
-  );
 }

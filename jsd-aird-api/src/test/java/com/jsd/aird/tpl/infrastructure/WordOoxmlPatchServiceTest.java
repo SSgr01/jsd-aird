@@ -64,6 +64,96 @@ class WordOoxmlPatchServiceTest {
                 .hasMessageContaining("基线");
     }
 
+    @Test
+    void insertsStableContentControlAroundSelectedRun() throws Exception {
+        var operations = objectMapper.createArrayNode()
+                .add(objectMapper.createObjectNode().put("type", "INSERT_CONTENT_CONTROL")
+                        .put("targetId", "text-1").put("markerId", "marker-123")
+                        .put("tag", "FIELD.ORDER_NO").put("alias", "订单号")
+                        .put("text", "订单号").put("baseText", "订单号"));
+
+        var patched = service.apply(docx("""
+                <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                  <w:body><w:p><w:r><w:rPr><w:b/></w:rPr><w:t>订单号</w:t></w:r></w:p></w:body>
+                </w:document>
+                """), operations);
+        var xml = documentXml(patched);
+        assertThat(xml).contains("w:sdt", "FIELD.ORDER_NO", "订单号", "w:b");
+    }
+
+    @Test
+    void keepsMultiplePositionalInsertionsBoundToTheirOriginalTextNodes() throws Exception {
+        var operations = objectMapper.createArrayNode()
+                .add(objectMapper.createObjectNode().put("type", "INSERT_CONTENT_CONTROL")
+                        .put("targetId", "text-1").put("markerId", "marker-1").put("alias", "订单号")
+                        .put("baseText", "订单号"))
+                .add(objectMapper.createObjectNode().put("type", "INSERT_CONTENT_CONTROL")
+                        .put("targetId", "text-2").put("markerId", "marker-2").put("alias", "批号")
+                        .put("baseText", "批号"));
+        var patched = service.apply(docx("""
+                <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                  <w:body><w:p><w:r><w:t>订单号</w:t></w:r><w:r><w:t>批号</w:t></w:r></w:p></w:body>
+                </w:document>
+                """), operations);
+        var xml = documentXml(patched);
+        assertThat(xml).contains("marker-1", "marker-2", "订单号", "批号");
+    }
+
+    @Test
+    void rejectsInsertionInsideExistingControl() throws Exception {
+        var operations = objectMapper.createArrayNode()
+                .add(objectMapper.createObjectNode().put("type", "INSERT_CONTENT_CONTROL")
+                        .put("targetId", "text-1").put("markerId", "marker-123"));
+        assertThatThrownBy(() -> service.apply(docx("""
+                <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                  <w:body><w:p><w:sdt><w:sdtPr><w:id w:val="7"/></w:sdtPr><w:sdtContent><w:r><w:t>已有</w:t></w:r></w:sdtContent></w:sdt></w:p></w:body>
+                </w:document>
+                """), operations)).isInstanceOf(ApiException.class)
+                .hasMessageContaining("已有内容控件");
+    }
+
+    @Test
+    void writesIntoAnEmptyContentControlPlaceholder() throws Exception {
+        var operations = objectMapper.createArrayNode()
+                .add(objectMapper.createObjectNode().put("type", "REPLACE_CONTENT_CONTROL")
+                        .put("targetId", "marker-empty").put("text", "2026-08-09"));
+        var patched = service.apply(docx("""
+                <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                  <w:body><w:p><w:sdt><w:sdtPr><w:dataBinding w:storeItemID="marker-empty"/></w:sdtPr><w:sdtContent/></w:sdt></w:p></w:body>
+                </w:document>
+                """), operations);
+        assertThat(documentXml(patched)).contains("marker-empty", "2026-08-09");
+    }
+
+    @Test
+    void appliesTheLimitedUniverDocumentSnapshotToNativeParagraphs() throws Exception {
+        var snapshot = objectMapper.readTree("""
+                {
+                  "body": {
+                    "dataStream": "标题修改\\r正文\\r\\n",
+                    "sourceParagraphs": [
+                      {"paragraphIndex": 1, "text": "标题"},
+                      {"paragraphIndex": 2, "text": "正文"}
+                    ],
+                    "paragraphs": [
+                      {"paragraphIndex": 1, "startIndex": 0,
+                       "paragraphStyle": {"horizontalAlign": 2}}
+                    ]
+                  }
+                }
+                """);
+        var patched = service.applySnapshot(docx("""
+                <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                  <w:body>
+                    <w:p><w:r><w:t>标题</w:t></w:r></w:p>
+                    <w:p><w:r><w:t>正文</w:t></w:r></w:p>
+                  </w:body>
+                </w:document>
+                """), snapshot);
+        var xml = documentXml(patched);
+        assertThat(xml).contains("标题修改", "w:val=\"center\"");
+    }
+
     private byte[] docx(String documentXml) throws Exception {
         try (var output = new ByteArrayOutputStream(); var zip = new ZipOutputStream(output)) {
             zip.putNextEntry(new ZipEntry("word/document.xml"));

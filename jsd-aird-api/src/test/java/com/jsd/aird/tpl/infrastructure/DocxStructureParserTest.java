@@ -28,13 +28,16 @@ class DocxStructureParserTest {
         var result = parser.parse(new ByteArrayInputStream(source));
 
         assertThat(result.structureSummary().path("format").asText()).isEqualTo("DOCX");
-        assertThat(result.structureSummary().path("parserVersion").asText()).isEqualTo("docx-ir-v1");
+        assertThat(result.structureSummary().path("parserVersion").asText()).isEqualTo("docx-ir-v2");
         assertThat(result.structureSummary().path("documentIR").path("structureHash").asText()).hasSize(64);
         assertThat(result.structureSummary().path("documentIR").path("blocks")).hasSize(2);
         assertThat(result.structureSummary().path("documentIR").path("anchors"))
                 .anyMatch(anchor -> "PARAGRAPH".equals(anchor.path("kind").asText()));
         assertThat(result.initialEditorSnapshot().path("body").path("dataStream").asText())
                 .contains("生产批号：", "请填写实际数据");
+        assertThat(result.initialEditorSnapshot().path("body").path("sourceParagraphs")).hasSize(2);
+        assertThat(result.structureSummary().path("documentIR").path("nodes"))
+                .allMatch(node -> node.has("nodeId") && node.has("sourceLocator"));
         assertThat(result.issues()).isEmpty();
         assertThat(parser.format()).isEqualTo(TemplateFormat.DOCX);
     }

@@ -15,9 +15,15 @@ public interface ProductionOrderRepository {
 
     Optional<PublishedTemplate> findPublishedTemplate(UUID organizationId, UUID versionId);
 
+    List<TemplateCandidate> listPublishedTemplates(UUID organizationId);
+
     void insert(NewProductionOrder order);
 
     Optional<ProductionWorkspace> findWorkspace(UUID organizationId, UUID orderId);
+
+    List<RevisionSummary> listRevisions(UUID organizationId, UUID orderId);
+
+    Optional<RecordRevision> findRevision(UUID organizationId, UUID orderId, UUID revisionId);
 
     Optional<FileReference> findFile(UUID organizationId, UUID fileId);
 
@@ -25,7 +31,13 @@ public interface ProductionOrderRepository {
 
     UUID submit(SubmitRevision revision);
 
+    void insertRevisionProjection(List<CollectionProjection> collections, List<ValueProjection> values);
+
+    void attachConfirmedIngestSources(UUID organizationId, UUID orderId, UUID revisionId, UUID actorId);
+
     int cancel(UUID organizationId, UUID orderId);
+
+    int delete(UUID organizationId, UUID orderId);
 
     void appendOutbox(String aggregateType, UUID aggregateId, String eventType, JsonNode payload);
 
@@ -34,6 +46,8 @@ public interface ProductionOrderRepository {
             String format,
             JsonNode schema,
             JsonNode mapping,
+            JsonNode wordDocument,
+            JsonNode inlineSnapshot,
             UUID snapshotFileId,
             String snapshotHash,
             String snapshotKind,
@@ -42,6 +56,26 @@ public interface ProductionOrderRepository {
             int snapshotFormatVersion
     ) {
     }
+
+    record TemplateCandidate(UUID versionId, String templateCode, String name) {
+    }
+
+    record RevisionSummary(UUID revisionId, int revisionNo, String status, Instant createdAt, String dataHash) {}
+
+    record RecordRevision(
+            UUID revisionId,
+            UUID orderId,
+            int revisionNo,
+            String status,
+            JsonNode schema,
+            JsonNode mapping,
+            JsonNode data,
+            UUID snapshotFileId,
+            String snapshotHash,
+            String schemaHash,
+            String mappingHash,
+            String dataHash
+    ) {}
 
     record NewProductionOrder(
             UUID id,
@@ -123,6 +157,7 @@ public interface ProductionOrderRepository {
             UUID organizationId,
             UUID orderId,
             long expectedLockVersion,
+            UUID templateVersionId,
             JsonNode schema,
             JsonNode mapping,
             JsonNode data,
@@ -153,6 +188,32 @@ public interface ProductionOrderRepository {
             String dataHash,
             String workspaceHash,
             UUID actorId
+    ) {
+    }
+
+    record CollectionProjection(
+            UUID id,
+            UUID revisionId,
+            UUID productionOrderId,
+            String recordKind,
+            String parentFieldCode,
+            String parentDataPath,
+            String recordKey,
+            int recordIndex,
+            String memberKey,
+            JsonNode data
+    ) {
+    }
+
+    record ValueProjection(
+            UUID id,
+            UUID revisionId,
+            UUID productionOrderId,
+            UUID collectionItemId,
+            String fieldCode,
+            String dataPath,
+            String valueType,
+            JsonNode value
     ) {
     }
 }

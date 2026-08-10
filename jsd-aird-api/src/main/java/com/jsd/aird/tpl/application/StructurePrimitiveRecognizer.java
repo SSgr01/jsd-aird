@@ -23,9 +23,17 @@ public final class StructurePrimitiveRecognizer {
             "注意：", "注意:", "说明：", "说明:", "提示：", "提示:", "操作要求：", "操作要求:");
 
     private final ObjectMapper objectMapper;
+    private final boolean topologyV2Enabled;
+    private final TableTopologyClassifier topologyClassifier;
 
     public StructurePrimitiveRecognizer(ObjectMapper objectMapper) {
+        this(objectMapper, false);
+    }
+
+    public StructurePrimitiveRecognizer(ObjectMapper objectMapper, boolean topologyV2Enabled) {
         this.objectMapper = objectMapper;
+        this.topologyV2Enabled = topologyV2Enabled;
+        this.topologyClassifier = new TableTopologyClassifier();
     }
 
     public ArrayNode recognize(JsonNode structure) {
@@ -44,6 +52,11 @@ public final class StructurePrimitiveRecognizer {
             // tables. Their detection is independent; overlap filtering keeps
             // a matrix axis from being emitted as a second row table.
             addRepeatedRows(result, sheetId, sheet, cells);
+            // Scalar label/value pairs are evidence inside a form, not region
+            // roots. Consolidate the non-table bands into form envelopes only
+            // after table topology is known, so two fields in the same header
+            // cannot become two independent "basic information" regions.
+            consolidateFormEnvelopes(result, sheetId, sheet, cells);
             addStaticAndTextRegions(result, sheetId, cells);
         }
         return result;
@@ -63,6 +76,13 @@ public final class StructurePrimitiveRecognizer {
     ) {
         var grid = selectedGrid;
         var matrixHeaderRow = findStructuralHeaderRow(cells, grid);
+        if (topologyV2Enabled) {
+            var attributeStartRow = findColumnAttributeStartRow(cells, grid);
+            if (attributeStartRow != null) {
+                matrixHeaderRow = matrixHeaderRow == null
+                        ? attributeStartRow : Math.min(matrixHeaderRow, attributeStartRow);
+            }
+        }
         if (grid != null && matrixHeaderRow != null
                 && matrixHeaderRow > grid.startRow() && matrixHeaderRow < grid.endRow()) {
             // A bordered worksheet often starts with full-width title and metadata
@@ -87,7 +107,9 @@ public final class StructurePrimitiveRecognizer {
         var maxColumn = active.stream().mapToInt(cell -> endColumn(cell, cell.path("column").asInt())).max()
                 .orElse(grid == null ? minColumn : grid.endColumn());
         if (grid != null) {
-            minColumn = Math.max(minColumn, dataColumnStart(cells, grid));
+            minColumn = topologyV2Enabled
+                    ? topologyDataColumnStart(cells, grid, grid.startRow())
+                    : Math.max(minColumn, dataColumnStart(cells, grid));
             maxColumn = Math.max(maxColumn, grid.endColumn());
         }
         var formulaCells = cells.stream()
@@ -112,6 +134,10 @@ public final class StructurePrimitiveRecognizer {
         var dataStartRow = corner == null
                 ? grid == null ? formulaMinRow : blankHeaderRow ? grid.startRow() + 1 : grid.startRow()
                 : corner[3] + 1;
+        maxRow = trimTrailingFullWidthTextRows(
+                cells, corner == null ? (grid == null ? 1 : grid.startColumn()) : corner[0],
+                maxColumn, dataStartRow, maxRow
+        );
         if (corner != null) minColumn = corner[2] + 1;
         var dataColumnStart = minColumn;
         var dataRowStart = dataStartRow;
@@ -121,14 +147,16 @@ public final class StructurePrimitiveRecognizer {
             // between row labels and the runtime input surface.  Do not let a
             // populated result cell inside E:N move the split to F or later.
             dataColumnStart = corner == null
-                    ? Math.max(dataColumnStart, dataColumnStart(cells, grid))
+                    ? topologyV2Enabled
+                            ? topologyDataColumnStart(cells, grid, headerRowFor(grid, matrixHeaderRow))
+                            : Math.max(dataColumnStart, dataColumnStart(cells, grid))
                     : corner[2] + 1;
             // A merged/static corner already accounts for the header row.  In that
             // layout the first bordered grid row is a real data row, even if it is
             // blank.  Only skip a bordered row when there is no explicit corner.
             dataRowStart = Math.max(dataRowStart,
                     grid.startRow() + (blankHeaderRow && corner == null ? 1 : 0));
-            dataRowEnd = Math.max(dataRowEnd, grid.endRow());
+            dataRowEnd = Math.min(dataRowEnd, grid.endRow());
             maxColumn = Math.max(maxColumn, grid.endColumn());
         }
         if (grid != null && grid.endColumn() - dataColumnStart + 1 < 2) return false;
@@ -159,6 +187,76 @@ public final class StructurePrimitiveRecognizer {
         var columnHeaderRange = range(minColumn, headerRow, maxColumn, headerRow);
         var crossDataRange = range(minColumn, dataStartRow, maxColumn, maxRow);
         var recordAxis = inferRecordAxis(grid, cells, headerRow, dataStartRow, maxRow);
+        var topologyEvidence = new TableTopologyClassifier.Evidence(
+                recordAxis,
+                blankHeaderRow,
+                countValues(cells, headerRow, dataColumnStart, maxColumn),
+                (int) leftLabels.stream().map(cell -> cell.path("row").asInt()).distinct().count(),
+                maxColumn - dataColumnStart + 1,
+                maxRow - dataStartRow + 1,
+                grid != null || active.size() >= 6,
+                blankHeaderRow && (grid != null || active.size() >= 6),
+                false,
+                blankHeaderRow ? columnHeaderRange : "",
+                "",
+                crossDataRange,
+                (int) leftLabels.stream().map(cell -> cell.path("row").asInt()).distinct().count(),
+                !formulaCells.isEmpty()
+        );
+        var classification = topologyV2Enabled
+                ? topologyClassifier.analyze(topologyEvidence)
+                : new TableTopologyClassifier.Classification(
+                        TableTopologyClassifier.Topology.MATRIX,
+                        List.of(TableTopologyClassifier.Topology.MATRIX), topologyEvidence);
+        // The recognizer emits a proposal only when the evidence has exactly
+        // one defensible topology.  It never promotes a physical proposal to
+        // canonical; that decision remains in StructureProposalResolver.
+        var topology = classification.candidates().size() == 1
+                ? classification.candidates().getFirst()
+                : TableTopologyClassifier.Topology.UNKNOWN;
+        if (topology == TableTopologyClassifier.Topology.UNKNOWN) {
+            var unknownEvidence = objectMapper.createObjectNode()
+                    .put("tableKind", "UNKNOWN")
+                    .put("recordAxis", recordAxis)
+                    .put("topologyClassifierVersion", 2);
+            unknownEvidence.set("topologyEvidence", topologyEvidenceNode(topologyEvidence));
+            unknownEvidence.put("reviewRequired", true);
+            add(result, "TABLE_TOPOLOGY_UNKNOWN", sheetId, tableRange,
+                    unknownEvidence,
+                    0.55, List.of("AMBIGUOUS_ONE_AXIS_OR_TWO_AXIS_GRID"));
+            return true;
+        }
+        if (topology == TableTopologyClassifier.Topology.COLUMN_TABLE) {
+            var headerRange = range(rowStartColumn, headerRow, maxColumn, headerRow);
+            var dataRange = range(rowStartColumn, dataStartRow, maxColumn, maxRow);
+            var columnStructure = objectMapper.createObjectNode()
+                    .put("headerRange", headerRange)
+                    .put("dataRange", dataRange)
+                    .put("semanticMode", "COLUMN_RECORDS")
+                    .put("recordAxis", "COLUMN")
+                    .put("repeatAxis", "COLUMN")
+                    .put("recordHeight", maxRow - dataStartRow + 1)
+                    .put("recordWidth", 1)
+                    .put("recordStride", 1)
+                    .put("canonicalStatus", "PROVISIONAL")
+                    .put("topologyClassifierVersion", 2);
+            columnStructure.set("topologyEvidence", topologyEvidenceNode(topologyEvidence));
+            var columnProjection = columnStructure.putObject("recordProjection")
+                    .put("mode", "COLUMN_RECORDS")
+                    .put("recordAxis", "COLUMN")
+                    .put("identityRow", headerRow)
+                    .put("valueStartRow", dataStartRow)
+                    .put("valueEndRow", maxRow);
+            var projectionColumns = columnProjection.putArray("recordColumns");
+            for (int column = dataColumnStart; column <= maxColumn; column++) {
+                projectionColumns.add(columnName(column));
+            }
+            add(result, "COLUMN_TABLE", sheetId, tableRange, columnStructure, 0.9,
+                    blankHeaderRow
+                            ? List.of("BLANK_RECORD_IDENTITY_BAND", "REPEATED_COLUMN_SURFACE", "LEFT_ATTRIBUTE_BAND")
+                            : List.of("REPEATED_COLUMN_SURFACE", "LEFT_ATTRIBUTE_BAND"));
+            return true;
+        }
         var structure = objectMapper.createObjectNode()
                 .put("headerRange", columnHeaderRange)
                 .put("dataRange", crossDataRange)
@@ -177,6 +275,8 @@ public final class StructurePrimitiveRecognizer {
                 .put("canonicalStatus", "PROVISIONAL")
                 .put("columnMemberRole", "COLUMN_MEMBER_INPUT")
                 .put("memberMode", "RUNTIME_INPUT");
+        structure.put("topologyClassifierVersion", topologyV2Enabled ? 2 : 1);
+        structure.set("topologyEvidence", topologyEvidenceNode(topologyEvidence));
         var projection = structure.putObject("recordProjection")
                 .put("mode", "COLUMN".equals(recordAxis) ? "COLUMN_RECORDS" : "UNRESOLVED")
                 .put("recordAxis", recordAxis)
@@ -239,6 +339,35 @@ public final class StructurePrimitiveRecognizer {
         return true;
     }
 
+    private int countValues(List<JsonNode> cells, int row, int startColumn, int endColumn) {
+        return (int) cells.stream()
+                .filter(cell -> cell.path("row").asInt() == row
+                        && cell.path("column").asInt() >= startColumn
+                        && cell.path("column").asInt() <= endColumn
+                        && !cell.path("value").asText("").strip().isBlank())
+                .count();
+    }
+
+    private int trimTrailingFullWidthTextRows(
+            List<JsonNode> cells, int startColumn, int endColumn, int dataStartRow, int endRow
+    ) {
+        var trimmed = endRow;
+        while (trimmed >= dataStartRow) {
+            final var candidateRow = trimmed;
+            var fullWidthStaticText = cells.stream().anyMatch(cell -> {
+                if (cell.path("row").asInt() != candidateRow
+                        || cell.path("value").asText("").strip().isBlank()
+                        || cell.path("inputCandidate").asBoolean(false)
+                        || "FORMULA".equals(cell.path("factType").asText(""))) return false;
+                var merged = bounds(cell.path("mergedRange").asText(""));
+                return merged != null && merged[0] <= startColumn && merged[2] >= endColumn;
+            });
+            if (!fullWidthStaticText) break;
+            trimmed--;
+        }
+        return trimmed;
+    }
+
     private List<GridSurface> detectBlankGrids(JsonNode sheet) {
         var byRow = new java.util.TreeMap<Integer, List<Integer>>();
         for (var cell : sheet.path("candidateCells")) {
@@ -285,10 +414,37 @@ public final class StructurePrimitiveRecognizer {
         var lastRow = startRow;
         for (int row = startRow + 1; row <= byRow.lastKey(); row++) {
             var columns = byRow.get(row);
-            if (columns == null || !columns.stream().distinct().toList().containsAll(required)) break;
+            if (columns == null || !columns.stream().distinct().toList().containsAll(required)) {
+                if (!topologyV2Enabled || !bridgeableAttributeRow(row, required, byRow)) break;
+            }
             lastRow = row;
         }
         return new GridSurface(startColumn, endColumn, startRow, lastRow);
+    }
+
+    /**
+     * Some column-record forms omit borders from the runtime cells of one
+     * attribute row while keeping the left attribute band. Treat that single
+     * sparse prefix as part of the surrounding surface only when the complete
+     * record columns resume immediately below it. A fully blank separator is
+     * never bridged, so independent tables remain independent.
+     */
+    private boolean bridgeableAttributeRow(
+            int row, List<Integer> required, java.util.TreeMap<Integer, List<Integer>> byRow
+    ) {
+        var columns = byRow.get(row);
+        var nextColumns = byRow.get(row + 1);
+        if (columns == null || nextColumns == null || required.size() < 4
+                || !nextColumns.stream().distinct().toList().containsAll(required)) return false;
+        var available = columns.stream().distinct().sorted().toList();
+        if (available.size() < 2 || !available.contains(required.getFirst())) return false;
+        var prefixEnd = required.getFirst() - 1;
+        for (var column : required) {
+            if (!available.contains(column)) break;
+            prefixEnd = column;
+        }
+        var prefixWidth = prefixEnd - required.getFirst() + 1;
+        return prefixWidth >= 2 && prefixWidth < required.size();
     }
 
     private boolean hasBorderEvidence(JsonNode cell) {
@@ -339,7 +495,33 @@ public final class StructurePrimitiveRecognizer {
                             && next[0] >= merged[0] && next[2] <= merged[2] + 1);
             if (nextRows.size() >= 2 || hasVerticalAxis) candidates.add(row);
         }
-        return candidates.stream().max(Integer::compareTo).orElse(null);
+        return topologyV2Enabled
+                ? candidates.stream().min(Integer::compareTo).orElse(null)
+                : candidates.stream().max(Integer::compareTo).orElse(null);
+    }
+
+    /**
+     * Finds the first vertical attribute group that shares a repeated input
+     * surface to its right. This is the common start shape of a COLUMN_TABLE
+     * whose visual sections continue down the same record columns.
+     */
+    private Integer findColumnAttributeStartRow(List<JsonNode> cells, GridSurface grid) {
+        if (grid == null) return null;
+        return cells.stream()
+                .map(cell -> bounds(cell.path("mergedRange").asText("")))
+                .filter(range -> range != null
+                        && range[3] > range[1]
+                        && range[0] >= grid.startColumn()
+                        && range[2] < grid.endColumn())
+                .filter(range -> cells.stream().anyMatch(label ->
+                        label.path("row").asInt() == range[1]
+                                && label.path("column").asInt() > range[2]
+                                && label.path("column").asInt() < grid.endColumn()
+                                && endColumn(label, label.path("column").asInt()) < grid.endColumn()
+                                && !label.path("value").asText("").strip().isBlank()))
+                .map(range -> range[1])
+                .min(Integer::compareTo)
+                .orElse(null);
     }
 
     /** Include an adjacent method/header cell in the corner axis. */
@@ -383,6 +565,26 @@ public final class StructurePrimitiveRecognizer {
                 .mapToInt(cell -> cell.path("column").asInt())
                 .max().orElse(grid.startColumn() - 1);
         return Math.max(grid.startColumn(), leftValueColumn + 1);
+    }
+
+    private int topologyDataColumnStart(List<JsonNode> cells, GridSurface grid, int headerRow) {
+        return cells.stream()
+                .filter(cell -> cell.path("row").asInt() == headerRow
+                        && cell.path("column").asInt() >= grid.startColumn()
+                        && cell.path("column").asInt() < grid.endColumn()
+                        && !cell.path("value").asText("").strip().isBlank()
+                        && !"FORMULA".equals(cell.path("factType").asText("")))
+                .mapToInt(cell -> endColumn(cell, cell.path("column").asInt()))
+                .filter(column -> column < grid.endColumn())
+                .max()
+                .stream()
+                .map(column -> Math.min(grid.endColumn(), column + 1))
+                .findFirst()
+                .orElse(grid.startColumn());
+    }
+
+    private int headerRowFor(GridSurface grid, Integer structuralHeaderRow) {
+        return structuralHeaderRow == null ? grid.startRow() : structuralHeaderRow;
     }
 
     private boolean blankGridRow(GridSurface grid, int dataColumnStart, List<JsonNode> cells) {
@@ -456,7 +658,8 @@ public final class StructurePrimitiveRecognizer {
         var candidate = bounds(range);
         if (candidate == null) return false;
         for (var primitive : primitives) {
-            if (!"MATRIX".equals(primitive.path("blockType").asText())
+            if (!Set.of("MATRIX", "COLUMN_TABLE", "ROW_TABLE")
+                    .contains(primitive.path("blockType").asText())
                     || !sheetId.equals(primitive.path("sheetId").asText(""))) continue;
             var matrix = bounds(primitive.path("range").asText(""));
             if (matrix != null && candidate[0] <= matrix[2] && matrix[0] <= candidate[2]
@@ -473,11 +676,30 @@ public final class StructurePrimitiveRecognizer {
                     .put("headerRange", range(physical.startColumn(), physical.headerRow(),
                             physical.endColumn(), physical.headerRow()))
                     .put("dataRange", range(physical.startColumn(), physical.dataStartRow(),
-                            physical.endColumn(), physical.endRow()))
-                    .put("repeatAxis", "ROW")
-                    .put("recordHeight", 1)
-                    .put("recordStride", 1);
+                            physical.endColumn(), physical.dataEndRow()))
+                    .put("recordAxis", "ROW")
+                    .put("repeatAxis", "ROW");
+            if (physical.recordSlots().isEmpty()) {
+                details.put("recordHeight", 1).put("recordStride", 1);
+            } else {
+                var slots = details.putArray("recordSlots");
+                for (int index = 0; index < physical.recordSlots().size(); index++) {
+                    var slotRange = physical.recordSlots().get(index);
+                    slots.add(objectMapper.createObjectNode()
+                            .put("slotId", "record-" + (index + 1))
+                            .put("recordKey", "record-" + (index + 1))
+                            .put("order", index + 1)
+                            .put("range", slotRange)
+                            .put("identityAddress", slotRange.split(":", 2)[0]));
+                }
+                details.set("recordProjection", objectMapper.createObjectNode()
+                        .put("mode", "ROW_RECORDS")
+                        .put("recordAxis", "ROW")
+                        .set("recordSlots", slots.deepCopy()));
+            }
             if (physical.totalRow() > 0) {
+                details.put("totalRange", range(physical.startColumn(), physical.totalRow(),
+                        physical.endColumn(), physical.totalRow()));
                 details.set("terminationRule", objectMapper.createObjectNode()
                         .put("type", "UNTIL_TOTAL_ROW")
                         .put("label", physical.totalLabel())
@@ -489,7 +711,9 @@ public final class StructurePrimitiveRecognizer {
             add(result, "ROW_TABLE", sheetId,
                     physicalRange,
                     details, 0.86,
-                    List.of("REPEATED_BORDERED_ROWS", "STABLE_RECORD_WIDTH", "MULTI_ROW_INPUT_SURFACE"));
+                    physical.recordSlots().isEmpty()
+                            ? List.of("REPEATED_BORDERED_ROWS", "STABLE_RECORD_WIDTH", "MULTI_ROW_INPUT_SURFACE")
+                            : List.of("VERTICAL_MERGE_RECORD_SLOTS", "DISTINCT_RECORD_CADENCE", "ROW_RECORD_SURFACE"));
         }
         var byRow = new HashMap<Integer, List<JsonNode>>();
         for (var cell : cells) {
@@ -552,7 +776,7 @@ public final class StructurePrimitiveRecognizer {
             var run = eligibleRows.subList(runStart, index);
             if (run.size() >= 4) {
                 var candidate = rowSurface(run, byRow, semanticCells);
-                if (candidate != null) surfaces.add(candidate);
+                if (candidate != null) surfaces.addAll(splitByVerticalMergeCadence(sheet, candidate));
             }
             runStart = index;
         }
@@ -589,14 +813,220 @@ public final class StructurePrimitiveRecognizer {
                 break;
             }
         }
-        var effectiveEndRow = totalRow > 0 ? totalRow : endRow;
+        var effectiveEndRow = totalRow > 0 ? totalRow - 1 : endRow;
+        for (int row = dataStartRow + 2; row <= effectiveEndRow; row++) {
+            if (isSectionFooterRow(semanticCells, row, startColumn, endColumn)) {
+                effectiveEndRow = row - 1;
+                break;
+            }
+        }
+        final var resolvedEndRow = effectiveEndRow;
         var coveredRows = rows.stream()
-                .filter(row -> row >= dataStartRow && row <= effectiveEndRow)
+                .filter(row -> row >= dataStartRow && row <= resolvedEndRow)
                 .filter(row -> coverage(byRow.get(row), startColumn, endColumn) >= 0.60)
                 .toList();
         if (coveredRows.size() < 3) return null;
-        return new RowSurface(startColumn, endColumn, headerRow, dataStartRow, effectiveEndRow,
-                totalRow, totalLabel);
+        var physicalEndRow = totalRow > 0 ? totalRow : resolvedEndRow;
+        return new RowSurface(startColumn, endColumn, headerRow, dataStartRow, resolvedEndRow,
+                physicalEndRow, totalRow, totalLabel, List.of());
+    }
+
+    /**
+     * Splits a bordered row surface when its right-hand band has a different,
+     * explicit record cadence: variable-height vertical merges aligned to the
+     * same columns. This is a purely geometric invariant; the cell text is not
+     * inspected and no workbook-specific coordinates are involved.
+     */
+    private List<RowSurface> splitByVerticalMergeCadence(JsonNode sheet, RowSurface source) {
+        var groups = new java.util.LinkedHashMap<String, List<int[]>>();
+        for (var merged : sheet.path("mergedRanges")) {
+            var bounds = bounds(merged.path("range").asText(merged.path("address").asText("")));
+            if (bounds == null || bounds[3] <= bounds[1]) continue;
+            if (bounds[0] <= source.startColumn() || bounds[2] > source.endColumn()) continue;
+            if (bounds[1] < source.dataStartRow() || bounds[3] > source.dataEndRow()) continue;
+            groups.computeIfAbsent(bounds[0] + ":" + bounds[2], ignored -> new ArrayList<>()).add(bounds);
+        }
+        for (var group : groups.values()) {
+            group.sort(java.util.Comparator.comparingInt(value -> value[1]));
+            if (group.size() < 2) continue;
+            var firstColumn = group.getFirst()[0];
+            var lastColumn = group.getFirst()[2];
+            if (lastColumn != source.endColumn() || firstColumn - source.startColumn() < 2) continue;
+            if (group.stream().anyMatch(value -> value[0] != firstColumn || value[2] != lastColumn)) continue;
+            var contiguous = group.getFirst()[1] == source.dataStartRow();
+            for (int index = 1; index < group.size() && contiguous; index++) {
+                contiguous = group.get(index)[1] == group.get(index - 1)[3] + 1;
+            }
+            if (!contiguous) continue;
+            var slotEndRow = group.getLast()[3];
+            var covered = group.stream().mapToInt(value -> value[3] - value[1] + 1).sum();
+            if (covered < Math.ceil((slotEndRow - source.dataStartRow() + 1) * 0.8)) continue;
+
+            var slots = group.stream().map(value -> range(value[0], value[1], value[2], value[3])).toList();
+            var left = new RowSurface(source.startColumn(), firstColumn - 1,
+                    source.headerRow(), source.dataStartRow(), source.dataEndRow(), source.endRow(),
+                    source.totalRow(), source.totalLabel(), List.of());
+            var right = new RowSurface(firstColumn, lastColumn,
+                    source.headerRow(), source.dataStartRow(), slotEndRow, slotEndRow,
+                    -1, "", slots);
+            return List.of(left, right);
+        }
+        return List.of(source);
+    }
+
+    private void consolidateFormEnvelopes(
+            ArrayNode result, String sheetId, JsonNode sheet, List<JsonNode> semanticCells
+    ) {
+        var used = structuralEnvelopeBounds(sheet, semanticCells);
+        if (used == null) return;
+        var occupied = new java.util.TreeSet<Integer>();
+        for (var primitive : result) {
+            if (!sheetId.equals(primitive.path("sheetId").asText(""))) continue;
+            if (!Set.of("MATRIX", "ROW_TABLE", "COLUMN_TABLE")
+                    .contains(primitive.path("blockType").asText(""))) continue;
+            var area = bounds(primitive.path("range").asText(""));
+            if (area == null) continue;
+            for (int row = area[1]; row <= area[3]; row++) occupied.add(row);
+        }
+        var bandStart = used[1];
+        for (int row = used[1]; row <= used[3] + 1; row++) {
+            var isOccupied = row <= used[3] && occupied.contains(row);
+            if (!isOccupied && row <= used[3]) continue;
+            if (bandStart <= row - 1) addFormEnvelope(result, sheetId, sheet, semanticCells,
+                    used[0], bandStart, used[2], row - 1);
+            while (row <= used[3] && occupied.contains(row)) row++;
+            bandStart = row;
+        }
+    }
+
+    /**
+     * Univer snapshots may retain formatted but otherwise unused cells beyond
+     * the worksheet's real business surface. Those cells must not widen form
+     * envelopes. Derive the extent from values, formulas, borders, merges and
+     * explicit input evidence, then retain at most one immediately adjacent
+     * styled row for an unbordered signature/input line.
+     */
+    private int[] structuralEnvelopeBounds(JsonNode sheet, List<JsonNode> semanticCells) {
+        var structural = new ArrayList<JsonNode>();
+        sheet.path("candidateCells").forEach(cell -> {
+            if (!cell.path("value").asText("").strip().isBlank()
+                    || cell.path("formula").isTextual()
+                    || "FORMULA".equals(cell.path("factType").asText(""))
+                    || cell.path("inputCandidate").asBoolean(false)
+                    || hasBorderEvidence(cell)
+                    || !cell.path("mergedRange").asText("").isBlank()) structural.add(cell);
+        });
+        for (var cell : semanticCells) if (structural.stream().noneMatch(existing ->
+                existing.path("address").asText("").equalsIgnoreCase(cell.path("address").asText("")))) {
+            structural.add(cell);
+        }
+        if (structural.isEmpty()) return bounds(sheet.path("usedRange").asText(""));
+        var minColumn = structural.stream().mapToInt(cell -> cell.path("column").asInt(0))
+                .filter(value -> value > 0).min().orElse(1);
+        var maxColumn = structural.stream().mapToInt(cell -> endColumn(cell, cell.path("column").asInt(0)))
+                .max().orElse(minColumn);
+        var minRow = structural.stream().mapToInt(cell -> cell.path("row").asInt(0))
+                .filter(value -> value > 0).min().orElse(1);
+        var maxRow = structural.stream().mapToInt(cell -> endRow(cell, cell.path("row").asInt(0)))
+                .max().orElse(minRow);
+        final var trailingRow = maxRow + 1;
+        var hasAdjacentStyledRow = java.util.stream.StreamSupport
+                .stream(sheet.path("candidateCells").spliterator(), false)
+                .anyMatch(cell -> cell.path("row").asInt(0) == trailingRow
+                        && cell.path("column").asInt(0) >= minColumn
+                        && cell.path("column").asInt(0) <= maxColumn);
+        if (hasAdjacentStyledRow) maxRow = trailingRow;
+        return new int[]{minColumn, minRow, maxColumn, maxRow};
+    }
+
+    private void addFormEnvelope(
+            ArrayNode result, String sheetId, JsonNode sheet, List<JsonNode> semanticCells,
+            int startColumn, int startRow, int endColumn, int endRow
+    ) {
+        if (endRow < startRow || formEvidenceCount(sheet, semanticCells, startRow, endRow, endColumn) < 2) return;
+        var envelopeRange = range(startColumn, startRow, endColumn, endRow);
+        var details = objectMapper.createObjectNode().put("recordAxis", "UNKNOWN");
+        var surfaces = details.putArray("fieldSurfaces");
+        for (var primitive : result) {
+            if (!"FORM_REGION".equals(primitive.path("blockType").asText())
+                    || !sheetId.equals(primitive.path("sheetId").asText(""))) continue;
+            var primitiveRange = primitive.path("range").asText("");
+            if (contains(envelopeRange, primitiveRange)) {
+                surfaces.add(objectMapper.createObjectNode()
+                        .put("range", primitiveRange)
+                        .set("structure", primitive.path("structure").deepCopy()));
+            }
+        }
+        var staticContents = details.putArray("staticContents");
+        for (var cell : semanticCells) {
+            var row = cell.path("row").asInt();
+            var text = cell.path("value").asText("").strip();
+            if (row < startRow || row > endRow || text.isBlank() || !isStaticNote(text)) continue;
+            staticContents.add(objectMapper.createObjectNode()
+                    .put("address", rangeFromCell(cell)).put("text", text).put("role", "STATIC_NOTE"));
+        }
+        for (int index = result.size() - 1; index >= 0; index--) {
+            var primitive = result.get(index);
+            if ("FORM_REGION".equals(primitive.path("blockType").asText())
+                    && sheetId.equals(primitive.path("sheetId").asText(""))
+                    && contains(envelopeRange, primitive.path("range").asText(""))) result.remove(index);
+        }
+        add(result, "FORM_REGION", sheetId, envelopeRange, details, 0.84,
+                List.of("CONTIGUOUS_FORM_BAND", "MULTIPLE_LABEL_VALUE_SURFACES", "TABLE_BOUNDARY_ENVELOPE"));
+    }
+
+    private int formEvidenceCount(JsonNode sheet, List<JsonNode> semanticCells, int startRow, int endRow, int endColumn) {
+        var candidates = new ArrayList<JsonNode>();
+        sheet.path("candidateCells").forEach(candidates::add);
+        var count = 0;
+        for (var cell : semanticCells) {
+            var row = cell.path("row").asInt();
+            var column = cell.path("column").asInt();
+            var text = cell.path("value").asText("").strip();
+            if (row < startRow || row > endRow || text.isBlank() || isStaticNote(text) || text.length() > 24) continue;
+            var delimiter = text.indexOf('：');
+            if (delimiter < 0) delimiter = text.indexOf(':');
+            if (delimiter > 0 && delimiter <= 12) {
+                count++;
+                continue;
+            }
+            var labelEnd = endColumn(cell, column);
+            var blankRight = candidates.stream().anyMatch(candidate -> candidate.path("row").asInt() == row
+                    && candidate.path("column").asInt() > labelEnd
+                    && candidate.path("column").asInt() <= endColumn
+                    && candidate.path("column").asInt() <= labelEnd + 3
+                    && candidate.path("empty").asBoolean(true)
+                    && hasBorderEvidence(candidate));
+            if (blankRight) count++;
+        }
+        return count;
+    }
+
+    private boolean isStaticNote(String text) {
+        return STATIC_PREFIXES.stream().anyMatch(text::startsWith) && text.length() >= 12;
+    }
+
+    private boolean isSectionFooterRow(
+            List<JsonNode> cells, int row, int startColumn, int endColumn
+    ) {
+        var merged = cells.stream()
+                .filter(cell -> cell.path("row").asInt() == row)
+                .filter(cell -> !cell.path("value").asText("").strip().isBlank())
+                .map(cell -> bounds(cell.path("mergedRange").asText("")))
+                .filter(java.util.Objects::nonNull)
+                .filter(range -> range[1] == range[3] && range[2] > range[0])
+                .toList();
+        if (merged.isEmpty() || merged.size() > 2) return false;
+        var covered = new java.util.HashSet<Integer>();
+        var widest = 0;
+        for (var range : merged) {
+            widest = Math.max(widest, range[2] - range[0] + 1);
+            for (int column = Math.max(startColumn, range[0]); column <= Math.min(endColumn, range[2]); column++) {
+                covered.add(column);
+            }
+        }
+        var width = endColumn - startColumn + 1;
+        return widest >= 3 && covered.size() >= Math.ceil(width * 0.8);
     }
 
     private int nonBlankCells(List<JsonNode> cells, int row) {
@@ -630,6 +1060,7 @@ public final class StructurePrimitiveRecognizer {
                 objectMapper.createObjectNode()
                         .put("headerRange", range(minColumn, headerRow, maxColumn, headerRow))
                         .put("dataRange", range(minColumn, start, maxColumn, end))
+                        .put("recordAxis", "ROW")
                         .put("repeatAxis", "ROW")
                         .put("recordHeight", 1)
                         .put("recordStride", 1),
@@ -729,6 +1160,7 @@ public final class StructurePrimitiveRecognizer {
                 .filter(cell -> !cell.path("value").asText("").strip().isBlank())
                 .map(cell -> bounds(cell.path("mergedRange").asText("")))
                 .filter(value -> value != null && value[2] > value[0]
+                        && (!topologyV2Enabled || value[1] == value[3])
                         && value[2] < dataColumn && value[1] <= formulaRow)
                 .max(java.util.Comparator.comparingInt(value -> value[1]))
                 .orElse(null);
@@ -742,6 +1174,13 @@ public final class StructurePrimitiveRecognizer {
         if (start == null || end == null) return null;
         return new int[]{Math.min(start[0], end[0]), Math.min(start[1], end[1]),
                 Math.max(start[0], end[0]), Math.max(start[1], end[1])};
+    }
+
+    private boolean contains(String outer, String inner) {
+        var a = bounds(outer);
+        var b = bounds(inner);
+        return a != null && b != null && a[0] <= b[0] && a[1] <= b[1]
+                && a[2] >= b[2] && a[3] >= b[3];
     }
 
     private int[] cellBounds(String address) {
@@ -772,6 +1211,24 @@ public final class StructurePrimitiveRecognizer {
         return start.equals(end) ? start : start + ":" + end;
     }
 
+    private ObjectNode topologyEvidenceNode(TableTopologyClassifier.Evidence evidence) {
+        return objectMapper.createObjectNode()
+                .put("recordAxisEvidence", evidence.recordAxis())
+                .put("blankIdentityBand", evidence.blankIdentityBand())
+                .put("explicitColumnMemberCount", evidence.explicitColumnMemberCount())
+                .put("rowLabelDepth", evidence.rowLabelDepth())
+                .put("dataColumnCount", evidence.dataColumnCount())
+                .put("bodyRowCount", evidence.bodyRowCount())
+                .put("crossSurfacePresent", evidence.crossSurfacePresent())
+                .put("runtimeColumnMemberSurface", evidence.runtimeColumnMemberSurface())
+                .put("runtimeRowMemberSurface", evidence.runtimeRowMemberSurface())
+                .put("runtimeColumnMemberRange", evidence.runtimeColumnMemberRange())
+                .put("runtimeRowMemberRange", evidence.runtimeRowMemberRange())
+                .put("crossDataRange", evidence.crossDataRange())
+                .put("formulaTopologyPresent", evidence.formulaTopologyPresent())
+                .put("confidence", 0.0);
+    }
+
     private String columnName(int column) {
         var value = Math.max(1, column);
         var result = new StringBuilder();
@@ -790,7 +1247,8 @@ public final class StructurePrimitiveRecognizer {
     }
 
     private record RowSurface(int startColumn, int endColumn, int headerRow, int dataStartRow,
-                              int endRow, int totalRow, String totalLabel) {
+                              int dataEndRow, int endRow, int totalRow, String totalLabel,
+                              List<String> recordSlots) {
         int area() {
             return Math.max(0, endColumn - startColumn + 1)
                     * Math.max(0, endRow - headerRow + 1);

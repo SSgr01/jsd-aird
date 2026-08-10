@@ -29,3 +29,6 @@ Thumbs.db
 .tmp/
 
 /交付文档/
+/.pnpm-store/
+/docs/
+/.codex-import-inputs/

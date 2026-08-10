@@ -1,7 +1,9 @@
 import {
   ArrowLeftOutlined,
   CheckCircleOutlined,
+  DownOutlined,
   LoadingOutlined,
+  PlusOutlined,
   SaveOutlined,
   SendOutlined,
 } from '@ant-design/icons';
@@ -10,21 +12,35 @@ import {
   App,
   Button,
   Descriptions,
+  Dropdown,
   Empty,
+  Form,
   Input,
   Result,
+  Modal,
+  Select,
   Skeleton,
   Space,
   Spin,
   Steps,
+  Table,
   Tag,
   Typography,
 } from 'antd';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
-import { readFieldModel } from '@/features/template-workspace/field-model';
+import { readFieldModel, writeFieldModel } from '@/features/template-workspace/field-model';
+import { createCustomFieldWorkspace } from '@/features/template-workspace/custom-field-operations';
 import { getAtPath, setAtPath } from '@/features/template-workspace/path-utils';
+import {
+  buildRepeatDisplay,
+  displayCellValue,
+  isMeaningfulValue,
+  type RepeatDisplayColumn,
+} from '@/features/template-workspace/repeat-data';
+import { synchronizeStructuredData } from '@/features/template-workspace/structured-data';
+import { migrateWorkspaceStructure } from '@/features/template-workspace/structure-migration';
 import {
   resolveBindingSelection,
   selectionCycleKey,
@@ -32,10 +48,15 @@ import {
 import type {
   EditorHandle,
   EditorSelection,
+  BusinessField,
   TemplateBinding,
+  WorkbookStructureOperation,
 } from '@/features/template-workspace/types';
 import type { ProductionWorkspace } from '@/features/production-orders/types';
-import { productionOrderApi } from '@/services/production-orders/production-order-api';
+import {
+  productionOrderApi,
+  type ProductionIngestJob,
+} from '@/services/production-orders/production-order-api';
 
 const DocsEditor = lazy(async () => ({
   default: (await import('@/features/template-workspace/UniverDocsEditor')).UniverDocsEditor,
@@ -48,6 +69,7 @@ const SheetsEditor = lazy(async () => ({
 export function ProductionWorkspacePage() {
   const { orderId } = useParams<{ orderId: string }>();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { message, modal } = App.useApp();
   const editorRef = useRef<EditorHandle>(null);
   const selectionCycleRef = useRef({ key: '', index: 0 });
@@ -58,21 +80,48 @@ export function ProductionWorkspacePage() {
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
+  const [lastSelection, setLastSelection] = useState<EditorSelection>();
+  const [customFieldOpen, setCustomFieldOpen] = useState(false);
+  const [ingestJob, setIngestJob] = useState<ProductionIngestJob>();
+  const [ingestPreview, setIngestPreview] = useState('');
+  const [revisions, setRevisions] = useState<Array<{ revisionId: string; revisionNo: number; status: string; createdAt: string; dataHash: string }>>([]);
+  const [confirmingIngest, setConfirmingIngest] = useState(false);
+  const [expandedRepeatIds, setExpandedRepeatIds] = useState<Record<string, boolean>>({});
+  const [customForm] = Form.useForm<{
+    kind: 'SCALAR' | 'REPEAT_FIELD' | 'MATRIX_FIELD';
+    parentFieldId?: string;
+    name: string;
+    valueType: string;
+    labelRange?: string;
+    valueRange: string;
+  }>();
+
+  const loadWorkspace = useCallback(async () => {
+    if (!orderId) return;
+    const model = await productionOrderApi.getEditModel(orderId);
+    const loaded = model.snapshotFileId
+      ? await productionOrderApi.downloadSnapshot(model.snapshotFileId)
+      : {};
+    setWorkspace(model);
+    setRevisions(await productionOrderApi.listRevisions(orderId).catch(() => []));
+    setData(model.data || {});
+    setSnapshot(loaded);
+  }, [orderId]);
 
   useEffect(() => {
-    if (!orderId) return;
-    void productionOrderApi
-      .getEditModel(orderId)
-      .then(async (model) => {
-        const loaded = model.snapshotFileId
-          ? await productionOrderApi.downloadSnapshot(model.snapshotFileId)
-          : {};
-        setWorkspace(model);
-        setData(model.data || {});
-        setSnapshot(loaded);
-      })
-      .catch((reason) => setError(reason instanceof Error ? reason.message : '生产单加载失败'));
-  }, [orderId]);
+    void loadWorkspace().catch((reason) =>
+      setError(reason instanceof Error ? reason.message : '生产单加载失败'));
+  }, [loadWorkspace]);
+
+  useEffect(() => {
+    const jobId = searchParams.get('ingestJobId');
+    if (!orderId || !jobId) return;
+    void productionOrderApi.getIngestJob(orderId, jobId).then((job) => {
+      setIngestJob(job);
+      setIngestPreview(JSON.stringify(job.result?.data ?? {}, null, 2));
+    }).catch((reason) => void message.error(
+      reason instanceof Error ? reason.message : '导入预览加载失败'));
+  }, [message, orderId, searchParams]);
 
   const fieldModel = useMemo(
     () => (workspace ? readFieldModel(workspace.schema, workspace.mapping) : undefined),
@@ -84,14 +133,56 @@ export function ProductionWorkspacePage() {
   );
   const selectedField = fieldModel?.fields.find((field) => field.bindingId === selectedId);
   const editable = workspace?.status === 'DRAFT';
+  const structuralParentIds = useMemo(
+    () => new Set(
+      (workspace?.mapping || [])
+        .map((binding) => binding.parentBindingId)
+        .filter((value): value is string => Boolean(value)),
+    ),
+    [workspace?.mapping],
+  );
+  const selectedRepeat = useMemo(() => {
+    if (!workspace || !fieldModel || !selected || !selectedField) return undefined;
+    const parentField = findRepeatParentField(selectedField, selected, fieldModel.fields);
+    if (!parentField) return undefined;
+    const parentBinding = workspace.mapping.find((binding) => binding.bindingId === parentField.bindingId);
+    if (!parentBinding) return undefined;
+    const columns = repeatColumns(parentField, fieldModel.fields, workspace.mapping, data);
+    const maxRows = Number(parentBinding.termination?.maxRecords);
+    return {
+      parentField,
+      parentBinding,
+      columns,
+      model: buildRepeatDisplay(columns, {
+        maxRows: Number.isFinite(maxRows) && maxRows > 0 ? maxRows : undefined,
+        expanded: Boolean(expandedRepeatIds[parentField.id]),
+      }),
+    };
+  }, [data, expandedRepeatIds, fieldModel, selected, selectedField, workspace]);
+  const selectedMatrix = useMemo(() => {
+    if (!workspace || !fieldModel || !selected || !selectedField) return undefined;
+    if (selectedField.kind !== 'MATRIX' && !['MATRIX_REGION', 'MATRIX_FIELD'].includes(selected.mappingKind || '')) {
+      return undefined;
+    }
+    const parentField = findMatrixParentField(selectedField, selected, fieldModel.fields);
+    if (!parentField) return undefined;
+    const parentBinding = workspace.mapping.find((binding) => binding.bindingId === parentField.bindingId);
+    if (!parentBinding) return undefined;
+    return { parentField, parentBinding };
+  }, [fieldModel, selected, selectedField, workspace]);
 
   const onEditorValue = useCallback((binding: TemplateBinding, value: unknown) => {
-    if (value !== undefined) setData((current) => setAtPath(current, binding.dataPath, value));
-  }, []);
+    if (value === undefined || structuralParentIds.has(binding.bindingId)) return;
+    setData((current) => {
+      const previous = getAtPath(current, binding.dataPath);
+      return sameValue(previous, value) ? current : setAtPath(current, binding.dataPath, value);
+    });
+  }, [structuralParentIds]);
 
   const onSelectionChange = useCallback(
     (selection: EditorSelection) => {
       if (!workspace) return;
+      setLastSelection(selection);
       const key = selectionCycleKey(selection);
       const nextIndex = selectionCycleRef.current.key === key
         ? selectionCycleRef.current.index + 1 : 0;
@@ -104,18 +195,59 @@ export function ProductionWorkspacePage() {
     [workspace?.mapping],
   );
 
+  const addOrderField = async () => {
+    if (!workspace || !fieldModel || !orderId) return;
+    const values = await customForm.validateFields();
+    const parentField = values.parentFieldId
+      ? fieldModel.fields.find((field) => field.id === values.parentFieldId)
+      : undefined;
+    const parentBinding = parentField?.bindingId
+      ? workspace.mapping.find((binding) => binding.bindingId === parentField.bindingId)
+      : undefined;
+    try {
+      const created = createCustomFieldWorkspace(
+        workspace.schema,
+        fieldModel,
+        workspace.mapping,
+        {
+          ownerId: orderId,
+          origin: 'ORDER_LOCAL',
+          kind: values.kind,
+          name: values.name,
+          valueType: values.valueType,
+          parentField,
+          parentBinding,
+          sheet: lastSelection,
+          labelRange: values.labelRange,
+          valueRange: values.valueRange,
+        },
+      );
+      setWorkspace({ ...workspace, schema: created.schema, mapping: created.mapping });
+      setSelectedId(created.binding.bindingId);
+      if (values.labelRange) {
+        await editorRef.current?.writeLabel?.(created.binding, created.field.name);
+      }
+      setCustomFieldOpen(false);
+      customForm.resetFields();
+      setDirty(true);
+      void message.success('订单自定义字段已添加');
+    } catch (reason) {
+      void message.error(reason instanceof Error ? reason.message : '字段添加失败');
+    }
+  };
+
   const save = async () => {
     if (!workspace || !orderId || !editorRef.current) return false;
     setSaving(true);
     try {
       const currentSnapshot = editorRef.current.getSnapshot();
-      let synchronizedData = data;
-      const bindingValues = workspace.mapping.flatMap((binding) => {
-        const editorValue = editorRef.current?.readBinding(binding) ?? null;
-        if (binding.syncDirection === 'DATA_TO_EDITOR') return [];
-        synchronizedData = setAtPath(synchronizedData, binding.dataPath, editorValue);
-        return [{ dataPath: binding.dataPath, dataValue: editorValue, editorValue }];
-      });
+      const synchronized = synchronizeStructuredData(
+        data,
+        workspace.mapping,
+        (binding) => editorRef.current?.readBinding(binding),
+      );
+      const synchronizedData = synchronized.data;
+      const bindingValues = synchronized.bindingValues;
       const staged = await productionOrderApi.stageSnapshot(currentSnapshot, workspace.format);
       const result = await productionOrderApi.saveDraft(orderId, {
         lockVersion: workspace.lockVersion,
@@ -170,6 +302,100 @@ export function ProductionWorkspacePage() {
     });
   };
 
+  const handleStructureChange = useCallback((operation: WorkbookStructureOperation) => {
+    if (!workspace || !fieldModel) return;
+    const migrated = migrateWorkspaceStructure(workspace.mapping, fieldModel, operation);
+    setWorkspace({
+      ...workspace,
+      mapping: migrated.mapping,
+      schema: writeFieldModel(workspace.schema, migrated.model),
+    });
+    setDirty(true);
+  }, [fieldModel, workspace]);
+
+  const appendMatrixMember = async () => {
+    if (!selected || selected.mappingKind !== 'MATRIX_REGION') return;
+    try {
+      await editorRef.current?.appendRepeatRecord?.(selected);
+      setDirty(true);
+      void message.success('已新增矩阵成员位置，请填写成员名称和数据');
+    } catch (reason) {
+      void message.error(reason instanceof Error ? reason.message : '矩阵成员新增失败');
+    }
+  };
+
+  const confirmIngest = async () => {
+    if (!workspace || !orderId || !ingestJob) return;
+    let correctedData: Record<string, unknown>;
+    try {
+      const parsed: unknown = JSON.parse(ingestPreview);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error();
+      correctedData = parsed as Record<string, unknown>;
+    } catch {
+      void message.error('修正后的实例数据不是有效的 JSON 对象');
+      return;
+    }
+    setConfirmingIngest(true);
+    try {
+      await productionOrderApi.confirmIngestJob(orderId, ingestJob.id, {
+        baseWorkspaceHash: workspace.workspaceHash,
+        lockVersion: workspace.lockVersion,
+        resultVersion: ingestJob.resultVersion,
+        selectedTemplateVersionId: ingestJob.selectedTemplateVersionId,
+        correctedData,
+      });
+      setIngestJob(undefined);
+      setSearchParams({}, { replace: true });
+      await loadWorkspace();
+      void message.success('导入结果已写入生产单草稿，请继续检查后再提交');
+    } catch (reason) {
+      void message.error(reason instanceof Error ? reason.message : '导入确认失败');
+    } finally {
+      setConfirmingIngest(false);
+    }
+  };
+
+  const reselectIngestTemplate = async (templateVersionId: string) => {
+    if (!orderId || !ingestJob) return;
+    setConfirmingIngest(true);
+    try {
+      const next = await productionOrderApi.createIngestJob(orderId, {
+        sourceType: ingestJob.sourceType,
+        sourceFileIds: ingestJob.sourceFileIds,
+        requestedTemplateVersionId: templateVersionId,
+      });
+      setIngestJob(next);
+      setIngestPreview(JSON.stringify(next.result?.data ?? {}, null, 2));
+      setSearchParams({ ingestJobId: next.id }, { replace: true });
+    } catch (reason) {
+      void message.error(reason instanceof Error ? reason.message : '候选模板重新抽取失败');
+    } finally {
+      setConfirmingIngest(false);
+    }
+  };
+
+  const exportProduction = async (revisionId?: string) => {
+    if (!workspace || !orderId) return;
+    if (dirty && !(await save())) return;
+    try {
+      const checked = await productionOrderApi.checkExport(orderId, workspace.format, revisionId);
+      const download = async () => {
+        await productionOrderApi.exportOffice(orderId, workspace.format, revisionId);
+        void message.success('生产单文件已开始下载');
+      };
+      if (checked.warnings.length) {
+        modal.confirm({
+          title: `导出包含 ${checked.warnings.length} 个提示`,
+          content: checked.warnings.slice(0, 5).map((item) => item.message).join('；'),
+          okText: '继续导出', cancelText: '取消',
+          onOk: () => download().catch((error) => void message.error(error instanceof Error ? error.message : '生产单导出失败')),
+        });
+      } else await download();
+    } catch (reason) {
+      void message.error(reason instanceof Error ? reason.message : '生产单导出失败');
+    }
+  };
+
   if (error) {
     return <Result status="error" title="生产单加载失败" subTitle={error} extra={<Button onClick={() => navigate('/production-orders/list')}>返回列表</Button>} />;
   }
@@ -191,6 +417,37 @@ export function ProductionWorkspacePage() {
         </Space>
         <Space>
           {dirty && <Typography.Text type="warning">有未保存内容</Typography.Text>}
+          <Button
+            icon={<PlusOutlined />}
+            disabled={!editable || workspace.format !== 'XLSX'}
+            onClick={() => {
+              customForm.setFieldsValue({
+                kind: 'SCALAR',
+                valueType: 'string',
+                valueRange: lastSelection?.address || '',
+              });
+              setCustomFieldOpen(true);
+            }}
+          >
+            新增自定义字段
+          </Button>
+          {selected?.mappingKind === 'MATRIX_REGION' && <Button
+            icon={<PlusOutlined />}
+            disabled={!editable}
+            onClick={() => void appendMatrixMember()}
+          >新增矩阵成员</Button>}
+          <Dropdown
+            menu={{
+              items: [
+                ...(editable ? [{ key: 'draft', label: '导出当前草稿' }] : []),
+                ...(!editable && revisions.length ? [{ key: 'latest', label: `导出最新提交（修订 ${revisions.at(0)?.revisionNo ?? ''}）` }] : []),
+                ...(revisions.length > 1 ? revisions.map((revision) => ({ key: revision.revisionId, label: `导出历史修订 ${revision.revisionNo}` })) : []),
+              ],
+              onClick: ({ key }) => void exportProduction(key === 'draft' || key === 'latest' ? undefined : key),
+            }}
+          >
+            <Button icon={<DownOutlined />}>导出 {workspace.format === 'XLSX' ? 'Excel' : 'Word'}</Button>
+          </Dropdown>
           <Button icon={<SaveOutlined />} disabled={!editable || !dirty} loading={saving} onClick={() => void save()}>保存</Button>
           <Button type="primary" icon={<SendOutlined />} disabled={!editable || workspace.reconciliationRequired} onClick={submit}>提交生产单</Button>
         </Space>
@@ -213,11 +470,12 @@ export function ProductionWorkspacePage() {
           <Typography.Paragraph type="secondary" className="rail-help">按业务分组查找，点击后会定位到模板中的填写位置。</Typography.Paragraph>
           {fieldModel.groups.map((group) => {
             const fields = fieldModel.fields.filter((field) => field.groupId === group.id && field.bindingId);
-            if (!fields.length) return null;
+            const displayFields = fields.filter((field) => !field.parentFieldId);
+            if (!displayFields.length) return null;
             return (
               <section className="production-field-group" key={group.id}>
                 <strong>{group.name}</strong>
-                {fields.map((field) => {
+                {displayFields.map((field) => {
                   const binding = workspace.mapping.find((item) => item.bindingId === field.bindingId);
                   if (!binding) return null;
                   return (
@@ -225,14 +483,16 @@ export function ProductionWorkspacePage() {
                       key={field.id}
                       type="button"
                       className="binding-item"
-                      aria-current={selectedId === binding.bindingId}
+                      aria-current={selectedId === binding.bindingId || selectedField?.parentFieldId === field.id}
                       onClick={() => {
                         setSelectedId(binding.bindingId);
                         editorRef.current?.focusBinding(binding);
                       }}
                     >
                       <span>{field.name}</span>
-                      <small className="binding-path">{formatValue(getAtPath(data, binding.dataPath)) || '待填写'}</small>
+                      <small className="binding-path">
+                        {fieldSummary(field, binding, fieldModel.fields, workspace.mapping, data)}
+                      </small>
                     </button>
                   );
                 })}
@@ -253,6 +513,7 @@ export function ProductionWorkspacePage() {
                 onDirty={() => setDirty(true)}
                 onEditorValue={onEditorValue}
                 onSelectionChange={onSelectionChange}
+                onStructureChange={handleStructureChange}
               />
             ) : (
               <div className={editable ? undefined : 'document-readonly'}>
@@ -275,9 +536,22 @@ export function ProductionWorkspacePage() {
             <Typography.Text type="secondary">输入内容会同步到模板对应位置</Typography.Text>
           </div>
           {selected && selectedField ? (
-            <div className="field-editor">
-              <label htmlFor="production-field-value">{selectedField.name}</label>
-              {selectedField.kind === 'SCALAR' ? (
+           <div className="field-editor">
+              <label htmlFor="production-field-value">
+                {selectedRepeat?.parentField.name || selectedMatrix?.parentField.name || selectedField.name}
+              </label>
+              {selectedRepeat ? (
+                <RepeatPreview
+                  model={selectedRepeat.model}
+                  columns={selectedRepeat.columns}
+                  expanded={Boolean(expandedRepeatIds[selectedRepeat.parentField.id])}
+                  onToggle={() => setExpandedRepeatIds((current) => ({
+                    ...current,
+                    [selectedRepeat.parentField.id]: !current[selectedRepeat.parentField.id],
+                  }))}
+                  onFocus={() => editorRef.current?.focusBinding(selectedRepeat.parentBinding)}
+                />
+              ) : selectedField.kind === 'SCALAR' ? (
                 <Input.TextArea
                   id="production-field-value"
                   value={formatValue(getAtPath(data, selected.dataPath))}
@@ -293,12 +567,18 @@ export function ProductionWorkspacePage() {
                     });
                   }}
                 />
+              ) : selectedMatrix ? (
+                <MatrixPreview
+                  value={getAtPath(data, selectedMatrix.parentBinding.dataPath)}
+                  binding={selectedMatrix.parentBinding}
+                  onFocus={() => editorRef.current?.focusBinding(selectedMatrix.parentBinding)}
+                />
               ) : (
                 <Alert
                   type="info"
                   showIcon
-                  message={selectedField.kind === 'MATRIX' ? '请直接在矩阵表中填写结果' : '请直接在明细表中逐行填写'}
-                  description="系统会把整片表格作为一个业务区域保存，不会要求逐个配置单元格。"
+                  message="请直接在表格中填写结果"
+                  description="右侧展示会随 Excel 内容同步，保存时按结构化业务数据保存。"
                 />
               )}
               <div className="sync-ok"><CheckCircleOutlined /> 已与模板位置关联</div>
@@ -308,6 +588,124 @@ export function ProductionWorkspacePage() {
           )}
         </aside>
       </div>
+
+      <Modal
+        title="新增订单自定义字段"
+        open={customFieldOpen}
+        okText="添加字段"
+        cancelText="取消"
+        onOk={() => void addOrderField()}
+        onCancel={() => setCustomFieldOpen(false)}
+      >
+        <Form form={customForm} layout="vertical" preserve={false}>
+          <Form.Item name="kind" label="字段位置类型" rules={[{ required: true }]}>
+            <Select options={[
+              { value: 'SCALAR', label: '普通单元格字段' },
+              { value: 'REPEAT_FIELD', label: '明细表字段' },
+            ]} />
+          </Form.Item>
+          <Form.Item noStyle shouldUpdate>
+            {({ getFieldValue }) => getFieldValue('kind') !== 'SCALAR' ? (
+              <Form.Item name="parentFieldId" label="所属结构区域" rules={[{ required: true }]}>
+                <Select options={fieldModel.fields
+                  .filter((field) => getFieldValue('kind') === 'REPEAT_FIELD'
+                    ? ['ROW_TABLE', 'COLUMN_TABLE'].includes(field.kind)
+                    : field.kind === 'MATRIX')
+                  .map((field) => ({ value: field.id, label: field.name }))} />
+              </Form.Item>
+            ) : null}
+          </Form.Item>
+          <Form.Item name="name" label="字段名称" rules={[{ required: true, whitespace: true }]}>
+            <Input placeholder="例如：客户备注" />
+          </Form.Item>
+          <Form.Item name="valueType" label="数据类型" rules={[{ required: true }]}>
+            <Select options={[
+              { value: 'string', label: '文本' },
+              { value: 'number', label: '数值' },
+              { value: 'integer', label: '整数' },
+              { value: 'date', label: '日期' },
+              { value: 'boolean', label: '是/否' },
+            ]} />
+          </Form.Item>
+          <Form.Item name="labelRange" label="标签位置">
+            <Input placeholder="例如 A2" />
+          </Form.Item>
+          <Form.Item
+            name="valueRange"
+            label="填写范围"
+            rules={[{ required: true, message: '请选择 Excel 区域或输入坐标' }]}
+            extra={lastSelection ? `当前选择：${lastSelection.sheetName} ${lastSelection.address}` : undefined}
+          >
+            <Input placeholder="例如 B2、E8:E20 或 E5:N5" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={ingestJob?.sourceType === 'PHOTO' ? '照片识别结果复核' : 'Excel 实例导入预览'}
+        open={Boolean(ingestJob)}
+        width={960}
+        okText="确认写入生产单草稿"
+        cancelText="稍后处理"
+        okButtonProps={{
+          disabled: ingestJob?.status !== 'REVIEW_REQUIRED',
+          loading: confirmingIngest,
+        }}
+        onOk={() => void confirmIngest()}
+        onCancel={() => setIngestJob(undefined)}
+      >
+        {ingestJob?.status === 'FAILED' ? (
+          <Alert type="error" showIcon message="实例导入失败" description={ingestJob.errorMessage} />
+        ) : ingestJob ? (
+          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            <Alert
+              type={ingestJob.items.some((item) => item.reviewStatus === 'NEEDS_REVIEW') ? 'warning' : 'success'}
+              showIcon
+              message={`${ingestJob.sourceType === 'XLSX' ? 'Excel' : '照片'}已抽取 ${ingestJob.items.length} 个值`}
+              description={ingestJob.matchMode === 'EXACT_MANIFEST'
+                ? '已通过隐藏模板清单精确匹配，全程未调用 AI。'
+                : '请核对低置信度内容和明细、矩阵记录，确认后只更新当前生产单。'}
+            />
+            {ingestJob.result?.requiresTemplateSelection
+              && (ingestJob.result.templateCandidates?.length ?? 0) > 0 && <div>
+                <Typography.Text strong>相似模板候选</Typography.Text>
+                <Select
+                  style={{ width: '100%', marginTop: 6 }}
+                  value={ingestJob.selectedTemplateVersionId}
+                  loading={confirmingIngest}
+                  onChange={(value: string) => void reselectIngestTemplate(value)}
+                  options={ingestJob.result.templateCandidates?.map((candidate) => ({
+                    value: candidate.templateVersionId,
+                    label: `${candidate.templateName}（${candidate.templateCode}，匹配 ${Math.round(candidate.score * 100)}%）`,
+                  }))}
+                />
+              </div>}
+            <Table
+              size="small"
+              rowKey="id"
+              pagination={{ pageSize: 8 }}
+              dataSource={ingestJob.items}
+              columns={[
+                { title: '类型', dataIndex: 'itemKind', width: 90 },
+                { title: '字段', dataIndex: 'fieldCode', width: 180 },
+                { title: '数据路径', dataIndex: 'dataPath' },
+                { title: '值', dataIndex: 'normalizedValue', render: (value: unknown) => formatValue(value) || '—' },
+                { title: '置信度', dataIndex: 'confidence', width: 90, render: (value: number) => `${Math.round(value * 100)}%` },
+                { title: '状态', dataIndex: 'reviewStatus', width: 110, render: (value: string) => <Tag color={value === 'NEEDS_REVIEW' ? 'orange' : 'green'}>{value === 'NEEDS_REVIEW' ? '需复核' : '已抽取'}</Tag> },
+              ]}
+            />
+            <div>
+              <Typography.Text strong>结构化实例数据（可在确认前修正）</Typography.Text>
+              <Input.TextArea
+                aria-label="结构化实例数据"
+                value={ingestPreview}
+                autoSize={{ minRows: 8, maxRows: 18 }}
+                onChange={(event) => setIngestPreview(event.target.value)}
+              />
+            </div>
+          </Space>
+        ) : null}
+      </Modal>
     </section>
   );
 }
@@ -317,6 +715,247 @@ function formatValue(value: unknown) {
   if (typeof value === 'string') return value;
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
   return JSON.stringify(value);
+}
+
+function sameValue(left: unknown, right: unknown) {
+  return Object.is(left, right) || JSON.stringify(left) === JSON.stringify(right);
+}
+
+function findRepeatParentField(
+  field: BusinessField,
+  binding: TemplateBinding,
+  fields: BusinessField[],
+) {
+  if (field.parentFieldId) {
+    return fields.find((item) => item.id === field.parentFieldId);
+  }
+  if (['ROW_TABLE', 'COLUMN_TABLE'].includes(field.kind)) return field;
+  if (binding.mappingKind === 'REPEAT_REGION') return field;
+  if (binding.parentBindingId) {
+    return fields.find((item) => item.bindingId === binding.parentBindingId);
+  }
+  return undefined;
+}
+
+function findMatrixParentField(
+  field: BusinessField,
+  binding: TemplateBinding,
+  fields: BusinessField[],
+) {
+  if (field.parentFieldId) return fields.find((item) => item.id === field.parentFieldId);
+  if (field.kind === 'MATRIX' || binding.mappingKind === 'MATRIX_REGION') return field;
+  if (binding.parentBindingId) {
+    return fields.find((item) => item.bindingId === binding.parentBindingId);
+  }
+  return undefined;
+}
+
+function repeatColumns(
+  parentField: BusinessField,
+  fields: BusinessField[],
+  mapping: TemplateBinding[],
+  data: Record<string, unknown>,
+): RepeatDisplayColumn[] {
+  const childFields = fields.filter(
+    (field) => field.parentFieldId === parentField.id && field.bindingId,
+  );
+  if (childFields.length) {
+    return childFields.map((field) => {
+      const binding = mapping.find((item) => item.bindingId === field.bindingId);
+      return {
+        key: field.id,
+        name: field.name,
+        values: binding ? unknownArray(getAtPath(data, binding.dataPath)) : [],
+        sequence: isSequenceField(field.name, field.fieldCode),
+      };
+    });
+  }
+
+  const parentBinding = mapping.find((item) => item.bindingId === parentField.bindingId);
+  return mapping
+    .filter((binding) => binding.parentBindingId === parentBinding?.bindingId)
+    .map((binding, index) => ({
+      key: binding.bindingId,
+      name: stringValue(binding.diagnostic?.displayName)
+        || binding.fieldCode
+        || `字段 ${index + 1}`,
+      values: unknownArray(getAtPath(data, binding.dataPath)),
+      sequence: isSequenceField(
+        stringValue(binding.diagnostic?.displayName),
+        binding.fieldCode,
+      ),
+    }));
+}
+
+function fieldSummary(
+  field: BusinessField,
+  binding: TemplateBinding,
+  fields: BusinessField[],
+  mapping: TemplateBinding[],
+  data: Record<string, unknown>,
+) {
+  const parent = findRepeatParentField(field, binding, fields);
+  if (parent && (parent.id === field.id || field.parentFieldId)) {
+    const columns = repeatColumns(parent, fields, mapping, data);
+    const maxRows = Number(mapping.find((item) => item.bindingId === parent.bindingId)?.termination?.maxRecords);
+    const model = buildRepeatDisplay(columns, {
+      maxRows: Number.isFinite(maxRows) && maxRows > 0 ? maxRows : undefined,
+    });
+    return model.totalRows ? `已填 ${model.filledRows}/${model.totalRows} 行` : '待填写';
+  }
+  if (field.kind === 'MATRIX' || binding.mappingKind === 'MATRIX_REGION') {
+    const values = matrixValues(getAtPath(data, binding.dataPath));
+    const filled = values.flat().filter(isMeaningfulValue).length;
+    const total = values.reduce((count, row) => count + row.length, 0);
+    return total ? `已填 ${filled}/${total} 格` : '待填写';
+  }
+  return formatValue(getAtPath(data, binding.dataPath)) || '待填写';
+}
+
+function isSequenceField(name?: string, fieldCode?: string) {
+  const value = `${name || ''} ${fieldCode || ''}`;
+  return value.includes('序号') || /(?:sequence|serial|row[_ .-]?no)/i.test(value);
+}
+
+function unknownArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function stringValue(value: unknown) {
+  return typeof value === 'string' ? value : '';
+}
+
+function RepeatPreview({
+  model,
+  columns,
+  expanded,
+  onToggle,
+  onFocus,
+}: {
+  model: ReturnType<typeof buildRepeatDisplay>;
+  columns: RepeatDisplayColumn[];
+  expanded: boolean;
+  onToggle: () => void;
+  onFocus: () => void;
+}) {
+  const valueColumns = columns.filter((column) => !column.sequence);
+  return (
+    <div className="structured-field-preview">
+      <div className="structured-field-toolbar">
+        <Typography.Text type="secondary">
+          已填 {model.filledRows} 行{model.totalRows ? ` / 共 ${model.totalRows} 行` : ''}
+        </Typography.Text>
+        <Space size={4}>
+          {model.totalRows > model.rows.length && (
+            <Button type="link" size="small" onClick={onToggle}>
+              {expanded ? '收起空行' : `展开全部 ${model.totalRows} 行`}
+            </Button>
+          )}
+          <Button type="link" size="small" onClick={onFocus}>定位 Excel</Button>
+        </Space>
+      </div>
+      <Table
+        size="small"
+        rowKey="key"
+        pagination={false}
+        dataSource={model.rows}
+        locale={{ emptyText: '暂无填写内容' }}
+        scroll={{ x: 'max-content', y: 300 }}
+        columns={[
+          {
+            title: '序号',
+            dataIndex: 'index',
+            width: 58,
+            render: (value: number) => value,
+          },
+          ...valueColumns.map((column) => ({
+            title: column.name,
+            dataIndex: ['values', column.key],
+            render: (_value: unknown, row: { index: number; values: Record<string, unknown> }) => {
+              const value = row.values[column.key];
+              return displayCellValue(value, column.sequence ? String(row.index) : '—');
+            },
+          })),
+        ]}
+      />
+    </div>
+  );
+}
+
+function MatrixPreview({
+  value,
+  binding,
+  onFocus,
+}: {
+  value: unknown;
+  binding: TemplateBinding;
+  onFocus: () => void;
+}) {
+  const rows = matrixValues(value);
+  const columnSlots = slotLabels(binding.locator.columnSlots);
+  const rowSlots = slotLabels(binding.locator.rowSlots);
+  const width = Math.max(rows.reduce((max, row) => Math.max(max, row.length), 0), columnSlots.length);
+  const filled = rows.flat().filter(isMeaningfulValue).length;
+  const total = rows.reduce((count, row) => count + row.length, 0);
+  const columns = [
+    {
+      title: '行',
+      dataIndex: 'rowIndex',
+      width: 52,
+      render: (index: number) => rowSlots[index - 1] || index,
+    },
+    ...Array.from({ length: width }, (_, index) => ({
+      title: columnSlots[index] || `列 ${index + 1}`,
+      dataIndex: `column-${index}`,
+      render: (_value: unknown, row: { values: unknown[] }) => displayCellValue(row.values[index]),
+    })),
+  ];
+  const dataSource = rows.map((row, index) => ({
+    key: String(index),
+    rowIndex: index + 1,
+    values: row,
+  }));
+
+  return (
+    <div className="structured-field-preview">
+      <div className="structured-field-toolbar">
+        <Typography.Text type="secondary">已填 {filled}/{total || 0} 格</Typography.Text>
+        <Button type="link" size="small" onClick={onFocus}>定位 Excel</Button>
+      </div>
+      <Table
+        size="small"
+        rowKey="key"
+        pagination={false}
+        dataSource={dataSource}
+        columns={columns}
+        locale={{ emptyText: '暂无矩阵数据' }}
+        scroll={{ x: 'max-content', y: 300 }}
+      />
+    </div>
+  );
+}
+
+function matrixValues(value: unknown): unknown[][] {
+  if (!Array.isArray(value)) return [];
+  return (value as unknown[]).map((row: unknown): unknown[] => {
+    if (Array.isArray(row)) return row.map((item: unknown) => item);
+    if (isRecord(row) && Array.isArray(row.value)) {
+      return row.value.map((item: unknown) => item);
+    }
+    return [row];
+  });
+}
+
+function slotLabels(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.map((slot) => {
+    if (!isRecord(slot)) return '';
+    return stringValue(slot.label) || stringValue(slot.name) || stringValue(slot.code);
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 function snapshotVersion(snapshot: Record<string, unknown>, fallback: number) {

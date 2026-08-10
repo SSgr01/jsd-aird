@@ -92,6 +92,10 @@ const handlers = {
 };
 
 describe('RecognitionReviewPanel', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it('识别失败时说明工作簿和原有字段仍被保留', () => {
     render(
       <RecognitionReviewPanel
@@ -144,7 +148,7 @@ describe('RecognitionReviewPanel', () => {
     expect(screen.queryByText('生产日期')).not.toBeInTheDocument();
   });
 
-  it('把结构区域和协议恢复候选分开展示', () => {
+  it('不把模型原始区域摘要混入字段候选', () => {
     render(
       <RecognitionReviewPanel
         review={{
@@ -171,9 +175,9 @@ describe('RecognitionReviewPanel', () => {
       />,
     );
 
-    expect(screen.getByText('先识别出的区域结构')).toBeInTheDocument();
-    expect(screen.getByText('说明文本区')).toBeInTheDocument();
-    expect(screen.getByText('操作程序记录')).toBeInTheDocument();
+    expect(screen.queryByText('先识别出的区域结构')).not.toBeInTheDocument();
+    expect(screen.queryByText('说明文本区')).not.toBeInTheDocument();
+    expect(screen.queryByText('操作程序记录')).not.toBeInTheDocument();
     expect(screen.getByText('这是待确认候选，不是正式字段')).toBeInTheDocument();
   });
 
@@ -247,7 +251,7 @@ describe('RecognitionReviewPanel', () => {
       />,
     );
 
-    expect(screen.getByText('本次识别部分内容未完成，已识别字段仍可确认，也可以重新识别或手工补充字段。'))
+    expect(screen.getByText('部分内容未完成，可重新识别或手工补充。'))
       .toBeInTheDocument();
     expect(screen.queryByText('部分字段关系需要核对')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '应用建议' })).not.toBeInTheDocument();
@@ -362,9 +366,175 @@ describe('RecognitionReviewPanel', () => {
     expect(screen.getAllByText('综合测试结果区域')).toHaveLength(2);
     expect(screen.getByText('E4:N4')).toBeInTheDocument();
     expect(screen.getByText('A5:D100', { exact: true })).toBeInTheDocument();
-    expect(screen.getByText('E5:N100')).toBeInTheDocument();
+    expect(screen.getByText(/E5:N100/)).toBeInTheDocument();
     expect(screen.getByText('10 个', { exact: true })).toBeInTheDocument();
     expect(screen.getByText('类型：交叉测试表 · 记录方向：按列')).toBeInTheDocument();
     expect(screen.queryByText('填写方向：按行填写')).not.toBeInTheDocument();
+  });
+
+  it('把多个互补区域展示为一个模型分区方案', () => {
+    const conflictItem: RecognitionReview['items'][number] = {
+      ...review.items[0]!,
+      id: 'structure-item',
+      suggestionIds: ['physical', 'form', 'rows'],
+      fieldName: '结构候选',
+      kind: 'MATRIX',
+      status: 'CONFLICT',
+      payload: {
+        ...review.items[0]!.payload,
+        candidateOnly: true,
+        structureConflict: true,
+        resolutionGroupId: 'structure-conflict-1',
+        structureAlternatives: [
+          {
+            alternativeId: 'physical-option',
+            source: 'PHYSICAL',
+            regions: [
+              { suggestionId: 'physical', kind: 'MATRIX', range: 'A4:J6' },
+            ],
+          },
+          {
+            alternativeId: 'model-partition',
+            source: 'MODEL',
+            regions: [
+              { suggestionId: 'form', kind: 'FORM_REGION', range: 'A1:J5' },
+              { suggestionId: 'rows', kind: 'ROW_TABLE', range: 'A6:J22' },
+            ],
+          },
+        ],
+      },
+    };
+    render(
+      <RecognitionReviewPanel
+        review={{
+          ...review,
+          items: [conflictItem],
+          summary: { ...review.summary, total: 1, pending: 0, conflict: 1 },
+        }}
+        editable
+        selectedRecognitionItemId="structure-item"
+        {...handlers}
+      />,
+    );
+
+    expect(screen.getByText('系统发现 2 种结构方案')).toBeInTheDocument();
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: '选择结构方案' }));
+    fireEvent.click(screen.getByText('模型分区：字段区 A1:J5 + 按行明细表 A6:J22'));
+    fireEvent.click(screen.getByRole('button', { name: '确认' }));
+
+    expect(handlers.onConfirm).toHaveBeenCalledWith(conflictItem, 'model-partition');
+  });
+
+  it('按区域、字段、属性三级展示，并将槽位和审计候选分离', () => {
+    const root: RecognitionReview['items'][number] = {
+      ...review.items[0]!,
+      id: 'region-root',
+      suggestionIds: ['region-root-suggestion'],
+      fieldName: '光引发剂测试表',
+      kind: 'COLUMN_TABLE',
+      status: 'CONFIRMED',
+      payload: {
+        ...review.items[0]!.payload,
+        fieldName: '光引发剂测试表',
+        kind: 'COLUMN_TABLE',
+      },
+    };
+    const child: RecognitionReview['items'][number] = {
+      ...review.items[0]!,
+      id: 'field-1',
+      suggestionIds: ['field-suggestion'],
+      fieldName: '耐油笔',
+      kind: 'SCALAR',
+      status: 'PENDING',
+      payload: {
+        ...review.items[0]!.payload,
+        fieldName: '耐油笔',
+        nameSource: 'PHYSICAL_HEADER_FALLBACK',
+        reviewRequired: true,
+        regionId: 'region-1',
+        locator: { sheetId: 'sheet-1', address: 'C4:H4', labelAddress: 'A4' },
+      },
+    };
+    render(
+      <RecognitionReviewPanel
+        review={{
+          ...review,
+          items: [root, child],
+          regions: [{
+            regionId: 'region-1',
+            blockId: 'region-1',
+            kind: 'COLUMN_TABLE',
+            sheetId: 'sheet-1',
+            sheetName: 'Sheet1',
+            range: 'A4:H19',
+            fieldName: '光引发剂测试表',
+            status: 'CONFIRMED',
+            canonicalStatus: 'CONFIRMED',
+            structureStatus: 'CONFIRMED',
+            alternatives: [
+              { alternativeId: 'physical', source: 'PHYSICAL', regions: [{ suggestionId: 'region-root-suggestion', kind: 'COLUMN_TABLE', range: 'A4:H19' }] },
+              { alternativeId: 'model', source: 'MODEL', regions: [{ suggestionId: 'model-suggestion', kind: 'MATRIX', range: 'A4:H19' }] },
+            ],
+            fields: [child],
+            runtimeSlots: [{ slotId: 'column-C', column: 'C', identityAddress: 'C3', recordRange: 'C3:C19' }],
+            auditSuggestions: [{ ...root, id: 'audit-1', fieldName: '模型原始矩阵' }],
+          }],
+          statistics: {
+            regionCount: 1,
+            structureAlternativeCount: 2,
+            structureConflictGroups: 1,
+            fieldCount: 1,
+            pendingFieldCount: 1,
+            auditSuggestionCount: 2,
+            runtimeSlotCount: 1,
+          },
+        }}
+        editable
+        selectedRecognitionItemId="field-1"
+        {...handlers}
+      />,
+    );
+
+    expect(screen.getByText('光引发剂测试表')).toBeInTheDocument();
+    expect(screen.getByText('结构方案（2）')).toBeInTheDocument();
+    expect(screen.getAllByText('耐油笔').length).toBeGreaterThan(0);
+    expect(screen.getByText('类型')).toBeInTheDocument();
+    expect(screen.queryByText('名称依据')).not.toBeInTheDocument();
+    expect(screen.queryByText('表头识别')).not.toBeInTheDocument();
+    expect(screen.getByText('运行时成员槽位（1）')).toBeInTheDocument();
+    expect(screen.getByText('审计信息（1）')).toBeInTheDocument();
+  });
+
+  it('为单个未确认的模型区域提供采用并识别字段入口', () => {
+    const root = {
+      ...review.items[0]!,
+      id: 'form-root',
+      suggestionIds: ['form-suggestion'],
+      fieldName: '基本信息区域',
+      kind: 'FORM_REGION' as const,
+      status: 'PENDING' as const,
+    };
+    render(
+      <RecognitionReviewPanel
+        review={{
+          ...review,
+          items: [root],
+          regions: [{
+            regionId: 'form-region', blockId: 'form-region', kind: 'FORM_REGION',
+            sheetId: 'sheet-1', sheetName: 'Sheet1', range: 'A1:H3', fieldName: '基本信息区域',
+            status: 'PENDING', canonicalStatus: 'PROVISIONAL', structureStatus: 'UNRESOLVED',
+            alternatives: [{ alternativeId: 'model-form', source: 'MODEL', regions: [{
+              suggestionId: 'form-suggestion', kind: 'FORM_REGION', range: 'A1:H3',
+            }] }],
+            fields: [], runtimeSlots: [], auditSuggestions: [],
+          }],
+        }}
+        editable
+        {...handlers}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '采用此区域并识别字段' }));
+    expect(handlers.onConfirm).toHaveBeenCalledWith(root, 'model-form');
   });
 });

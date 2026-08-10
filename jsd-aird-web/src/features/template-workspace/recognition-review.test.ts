@@ -44,6 +44,49 @@ describe('recognition review draft merge', () => {
     expect(ignoredMerge.model.fields).toHaveLength(0);
     expect(ignoredMerge.mapping).toHaveLength(0);
   });
+
+  it('keeps structural roots out of the ordinary field model', () => {
+    const schema = { type: 'object', properties: {} };
+    const root = createItem({
+      kind: 'ROW_TABLE',
+      fieldName: '重复记录区域',
+      payload: {
+        ...createItem().payload,
+        kind: 'ROW_TABLE',
+        role: 'REPEAT_REGION',
+        valueType: 'array',
+        fieldName: '重复记录区域',
+      },
+    });
+    const merged = mergeRecognitionReview(schema, [], readFieldModel(schema, []), createReview(root));
+    expect(merged.model.fields).toHaveLength(0);
+    expect(merged.mapping).toHaveLength(0);
+  });
+
+  it('replaces candidates from an older recognition run instead of accumulating them', () => {
+    const schema = { type: 'object', properties: {} };
+    const first = mergeRecognitionReview(
+      schema, [], readFieldModel(schema, []), createReview(createItem()),
+    );
+    const latestItem = createItem({
+      id: '33333333-3333-3333-3333-333333333333',
+      fieldName: '生产日期',
+      payload: {
+        ...createItem().payload,
+        fieldName: '生产日期',
+        fieldCode: 'PRODUCTION.DATE',
+        dataPath: '/production/date',
+      },
+    });
+
+    const second = mergeRecognitionReview(first.schema, first.mapping, first.model, createReview(latestItem));
+
+    expect(second.model.fields).toHaveLength(1);
+    expect(second.model.fields[0]).toMatchObject({
+      recognitionItemId: '33333333-3333-3333-3333-333333333333',
+      name: '生产日期',
+    });
+  });
 });
 
 function createReview(item: RecognitionReviewItem): RecognitionReview {

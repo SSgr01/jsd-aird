@@ -30,14 +30,20 @@ public class TemplateImportJobHandler implements AsyncJobHandler {
                     payload.path("scope").asText("WORKBOOK"),
                     payload.path("sheetId").asText(null),
                     payload.path("address").asText(null),
-                    payload.path("snapshotFragment")
+                    payload.path("snapshotFragment"),
+                    payload.path("parentRunId").asText("").isBlank()
+                            ? null : java.util.UUID.fromString(payload.path("parentRunId").asText()),
+                    payload.path("runReason").asText("INITIAL_RECOGNITION")
             );
         }
         return service.process(
                 java.util.UUID.fromString(payload.path("importJobId").asText()),
                 java.util.UUID.fromString(payload.path("organizationId").asText()),
                 java.util.UUID.fromString(payload.path("fileId").asText()),
-                TemplateFormat.valueOf(payload.path("format").asText())
+                TemplateFormat.valueOf(payload.path("format").asText()),
+                payload.path("parentRunId").asText("").isBlank()
+                        ? null : java.util.UUID.fromString(payload.path("parentRunId").asText()),
+                payload.path("runReason").asText("INITIAL_RECOGNITION")
         );
     }
 }

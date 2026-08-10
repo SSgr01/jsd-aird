@@ -13,6 +13,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
+import com.jsd.aird.shared.excel.WorkbookInstanceParser;
 import com.jsd.aird.tpl.application.port.OfficeStructureParser;
 import com.jsd.aird.tpl.domain.TemplateFormat;
 import org.apache.poi.ss.usermodel.BorderStyle;
@@ -31,7 +32,7 @@ import org.springframework.stereotype.Component;
 
 /** Converts XLSX OOXML into a business-fidelity Univer workbook and recognition summary. */
 @Component
-public class XlsxStructureParser implements OfficeStructureParser {
+public class XlsxStructureParser implements OfficeStructureParser, WorkbookInstanceParser {
 
     static final int STRUCTURE_VERSION = WorkbookPhysicalFactsBuilder.STRUCTURE_VERSION;
     private static final double POINT_TO_PIXEL = 96d / 72d;
@@ -45,6 +46,15 @@ public class XlsxStructureParser implements OfficeStructureParser {
     @Override
     public TemplateFormat format() {
         return TemplateFormat.XLSX;
+    }
+
+    @Override
+    public WorkbookInstanceParser.ParsedWorkbook parseInstance(InputStream input) {
+        var parsed = parse(input);
+        return new WorkbookInstanceParser.ParsedWorkbook(
+                parsed.structureSummary(), parsed.initialEditorSnapshot(),
+                parsed.issues().stream().map(issue -> new WorkbookInstanceParser.Issue(
+                        issue.severity(), issue.code(), issue.message(), issue.location())).toList());
     }
 
     @Override
@@ -171,7 +181,7 @@ public class XlsxStructureParser implements OfficeStructureParser {
 
             summary.put("format", "XLSX");
             summary.put("structureVersion", STRUCTURE_VERSION);
-            summary.put("parserVersion", "xlsx-physical-facts-v6");
+            summary.put("parserVersion", "xlsx-physical-facts-v7-topology-ready");
             summary.put("sheetCount", workbook.getNumberOfSheets());
             summary.put("formulaCount", formulaCount);
             summary.put("mergedRegionCount", mergedCount);

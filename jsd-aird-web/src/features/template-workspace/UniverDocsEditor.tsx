@@ -11,25 +11,32 @@ import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 
 import '@univerjs/preset-docs-core/lib/index.css';
 
-import type { BindingRole, EditorHandle, TemplateBinding } from './types';
+import type {
+  BindingRole,
+  DocumentStructureNode,
+  EditorHandle,
+  TemplateBinding,
+} from './types';
 
 interface Props {
   snapshot: Record<string, unknown>;
   editable: boolean;
   onDirty: () => void;
-  onEditorValue: (binding: TemplateBinding, value: unknown) => void;
-  bindings: TemplateBinding[];
+  onEditorValue?: (binding: TemplateBinding, value: unknown) => void;
+  bindings?: TemplateBinding[];
 }
 
 export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverDocsEditor(
-  { snapshot, editable, onDirty, onEditorValue, bindings },
+  { snapshot, editable, onDirty, onEditorValue = () => undefined, bindings = [] },
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
   const univerRef = useRef<ReturnType<typeof createUniver>['univer']>();
   const apiRef = useRef<FUniver>();
+  const sourceSnapshotRef = useRef(snapshot);
   const bindingsRef = useRef(bindings);
   const callbacksRef = useRef({ onDirty, onEditorValue });
+  sourceSnapshotRef.current = snapshot;
   bindingsRef.current = bindings;
   callbacksRef.current = { onDirty, onEditorValue };
 
@@ -103,7 +110,10 @@ export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverD
     () => ({
       getSnapshot() {
         const document = apiRef.current?.getActiveDocument();
-        return (document?.getSnapshot() ?? {}) as Record<string, unknown>;
+        return preserveWordSnapshotMetadata(
+          (document?.getSnapshot() ?? {}) as Record<string, unknown>,
+          sourceSnapshotRef.current,
+        );
       },
       readBinding(binding) {
         return apiRef.current ? readMarkerValue(apiRef.current, binding) : undefined;
@@ -133,6 +143,22 @@ export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverD
         if (document && marker) {
           document.setSelection(marker.start, marker.end);
         }
+      },
+      focusNode(node: DocumentStructureNode) {
+        const document = apiRef.current?.getActiveDocument();
+        if (!document) return;
+        const currentSnapshot = document.getSnapshot();
+        const locator = node.editorLocator;
+        let start = locator?.startOffset;
+        let end = locator?.endOffset;
+        if (!Number.isFinite(start) || !Number.isFinite(end)) {
+          const text = node.text || node.title || '';
+          const found = text ? currentSnapshot.body?.dataStream?.indexOf(text) ?? -1 : -1;
+          if (found < 0) return;
+          start = found;
+          end = found + text.length - 1;
+        }
+        document.setSelection(start as number, (end as number) + 1);
       },
       async insertWordControl(role: BindingRole, fieldCode: string, dataPath: string) {
         const document = apiRef.current?.getActiveDocument();
@@ -183,6 +209,28 @@ function normalizeDocumentSnapshot(snapshot: Record<string, unknown>) {
     };
   }
   return result;
+}
+
+function preserveWordSnapshotMetadata(
+  current: Record<string, unknown>,
+  source: Record<string, unknown>,
+) {
+  const currentBody = current.body;
+  const sourceBody = source.body;
+  if (!isRecord(currentBody) || !isRecord(sourceBody)) return current;
+  const sourceParagraphs = sourceBody.sourceParagraphs;
+  if (!Array.isArray(sourceParagraphs)) return current;
+  return {
+    ...current,
+    body: {
+      ...currentBody,
+      sourceParagraphs: structuredClone(sourceParagraphs),
+    },
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 function locateMarker(snapshot: IDocumentData, markerId?: string) {

@@ -133,6 +133,22 @@ export function applySuggestion(
   const valueSource = suggestion.payload.valueSource ?? 'USER_INPUT';
   const validBinding = editability !== 'UNKNOWN' && valueSource !== 'UNKNOWN';
   const isChild = suggestion.payload.suggestionLevel === 'CHILD';
+  let nextMapping = structuredClone(mapping);
+  const parentPath = isChild && suggestion.payload.parentBindingId && suggestion.payload.dataPath?.includes('/*/')
+    ? suggestion.payload.dataPath.split('/*/')[0]
+    : undefined;
+  if (parentPath && suggestion.payload.parentBindingId) {
+    nextMapping = nextMapping.map((item) =>
+      item.bindingId === suggestion.payload.parentBindingId
+        ? { ...item, dataPath: parentPath }
+        : item,
+    );
+    nextModel.fields = nextModel.fields.map((item) =>
+      item.bindingId === suggestion.payload.parentBindingId
+        ? { ...item, dataPath: parentPath }
+        : item,
+    );
+  }
   const binding: TemplateBinding = {
     bindingId,
     fieldId,
@@ -191,6 +207,8 @@ export function applySuggestion(
     fieldCode: suggestion.payload.fieldCode,
     groupId: group.id,
     name: stringValue(suggestion.payload.fieldName),
+    displayRole: ['FORM_REGION', 'ROW_TABLE', 'COLUMN_TABLE', 'MATRIX', 'TABLE_REGION'].includes(kind)
+      ? 'REGION' : 'FIELD',
     kind,
     valueType: suggestion.payload.valueType,
     required: suggestion.payload.required,
@@ -204,6 +222,7 @@ export function applySuggestion(
     valueSource,
     condition: suggestion.payload.condition,
     blockId: suggestion.payload.blockId,
+    regionId: suggestion.payload.regionId,
     parentBlockId: suggestion.payload.parentBlockId,
     mappingKind: binding.mappingKind,
     repeatAxis: binding.repeatAxis,
@@ -215,6 +234,7 @@ export function applySuggestion(
     conflictMessage: suggestion.payload.conflictMessage,
     dictionaryVersion: suggestion.payload.dictionaryVersion,
     standardMatchStatus: suggestion.payload.standardMatchStatus,
+    standardRequired: suggestion.payload.standardRequired,
     requiresStandardConfirmation: suggestion.payload.requiresStandardConfirmation,
     standardFieldId: suggestion.payload.standardFieldId,
     standardFieldVersion: suggestion.payload.standardFieldVersion,
@@ -253,7 +273,7 @@ export function applySuggestion(
   const nextSchema = addFieldSchema(schema, suggestion, kind);
   return {
     schema: writeFieldModel(nextSchema, nextModel),
-    mapping: validBinding ? [...mapping, binding] : mapping,
+    mapping: validBinding ? [...nextMapping, binding] : nextMapping,
     model: nextModel,
     binding,
   };
@@ -351,6 +371,8 @@ export function addRecognitionCandidate(
     fieldCode: suggestion.payload.fieldCode,
     groupId: group.id,
     name: suggestion.payload.fieldName,
+    displayRole: ['FORM_REGION', 'ROW_TABLE', 'COLUMN_TABLE', 'MATRIX', 'TABLE_REGION'].includes(kind)
+      ? 'REGION' : 'FIELD',
     kind,
     valueType: suggestion.payload.valueType,
     required: suggestion.payload.required,
@@ -364,6 +386,7 @@ export function addRecognitionCandidate(
     valueSource: suggestion.payload.valueSource,
     condition: suggestion.payload.condition,
     blockId: suggestion.payload.blockId,
+    regionId: suggestion.payload.regionId,
     parentBlockId: suggestion.payload.parentBlockId,
     columns: suggestion.payload.columns,
     tableModel: suggestion.payload.tableModel,
@@ -587,6 +610,19 @@ export function updateBusinessField(
   );
   const updatedField = next.fields.find((field) => field.id === fieldId);
   const nextSchema = updatedField ? updateFieldSchema(schema, updatedField) : schema;
+  return { model: next, schema: writeFieldModel(nextSchema, next) };
+}
+
+export function addBusinessField(
+  schema: Record<string, unknown>,
+  model: FieldModel,
+  field: BusinessField,
+) {
+  const next = normalizeFieldModel({
+    ...structuredClone(model),
+    fields: [...model.fields, structuredClone(field)],
+  });
+  const nextSchema = updateFieldSchema(schema, field);
   return { model: next, schema: writeFieldModel(nextSchema, next) };
 }
 

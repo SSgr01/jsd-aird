@@ -1,8 +1,10 @@
 import {
   CopyOutlined,
   DeleteOutlined,
+  EditOutlined,
   FileExcelOutlined,
   FileWordOutlined,
+  FolderAddOutlined,
   MoreOutlined,
   PlusOutlined,
   ReloadOutlined,
@@ -17,7 +19,6 @@ import {
   Form,
   Input,
   Modal,
-  Popconfirm,
   Select,
   Space,
   Table,
@@ -32,7 +33,7 @@ import type {
   TemplateListItem,
   TemplateStatus,
 } from '@/features/template-workspace/types';
-import { templateApi, type CreateTemplateInput } from '@/services/templates/template-api';
+import { templateApi, type CreateTemplateInput, type TemplateCategory } from '@/services/templates/template-api';
 
 const statusLabels: Record<TemplateStatus, { label: string; color: string }> = {
   DRAFT: { label: '草稿', color: 'gold' },
@@ -51,14 +52,24 @@ export function TemplatesPage() {
   const [format, setFormat] = useState<TemplateFormat>();
   const [status, setStatus] = useState<TemplateStatus>();
   const [category, setCategory] = useState('全部模板');
-  const [deletingCategory, setDeletingCategory] = useState<string>();
+  const [categoryItems, setCategoryItems] = useState<TemplateCategory[]>([]);
+  const [categoryEditor, setCategoryEditor] = useState<TemplateCategory | 'NEW'>();
+  const [deletingCategory, setDeletingCategory] = useState<TemplateCategory>();
+  const [replacementCategoryId, setReplacementCategoryId] = useState<string>();
+  const [movingTemplate, setMovingTemplate] = useState<TemplateListItem>();
+  const [savingCategory, setSavingCategory] = useState(false);
   const [form] = Form.useForm<CreateTemplateInput>();
+  const [categoryForm] = Form.useForm<{ name: string }>();
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const page = await templateApi.list({ keyword: keyword || undefined, format, status });
+      const [page, categoryList] = await Promise.all([
+        templateApi.list({ keyword: keyword || undefined, format, status }),
+        templateApi.listCategories(),
+      ]);
       setItems(page.items);
+      setCategoryItems(categoryList);
     } catch (error) {
       void message.error(error instanceof Error ? error.message : '模板列表加载失败');
     } finally {
@@ -70,15 +81,11 @@ export function TemplatesPage() {
     void load();
   }, [load]);
 
-  const categories = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const item of items)
-      counts.set(item.category || '未分类', (counts.get(item.category || '未分类') || 0) + 1);
-    return [
-      { name: '全部模板', count: items.length },
-      ...Array.from(counts, ([name, count]) => ({ name, count })),
-    ];
-  }, [items]);
+  const categories = useMemo(() => [
+    { id: 'ALL', name: '全部模板', count: items.length },
+    ...categoryItems.map((item) => ({ id: item.id, name: item.name, count: item.templateCount })),
+    { id: 'UNCATEGORIZED', name: '未分类', count: items.filter((item) => !item.category).length },
+  ], [categoryItems, items]);
   const displayedItems =
     category === '全部模板'
       ? items
@@ -137,17 +144,57 @@ export function TemplatesPage() {
       },
     });
 
-  const deleteCategory = async (name: string) => {
-    setDeletingCategory(name);
+  const saveCategory = async () => {
+    const { name } = await categoryForm.validateFields();
+    const editor = categoryEditor;
+    const normalizedName = name.trim();
+    setSavingCategory(true);
     try {
-      await templateApi.deleteCategory(name);
-      setCategory('全部模板');
+      if (editor === 'NEW') await templateApi.createCategory(normalizedName);
+      else if (editor) {
+        await templateApi.renameCategory(editor.id, normalizedName);
+        if (category === editor.name) setCategory(normalizedName);
+      }
+      setCategoryEditor(undefined);
+      categoryForm.resetFields();
       await load();
-      void message.success(`分类“${name}”已删除，模板已移到未分类`);
+      void message.success(editor === 'NEW' ? '分类已创建' : '分类已重命名');
+    } catch (error) {
+      void message.error(error instanceof Error ? error.message : '分类保存失败');
+    } finally {
+      setSavingCategory(false);
+    }
+  };
+
+  const confirmDeleteCategory = async () => {
+    if (!deletingCategory) return;
+    setSavingCategory(true);
+    try {
+      await templateApi.deleteCategory(deletingCategory.id, replacementCategoryId);
+      setCategory('全部模板');
+      setDeletingCategory(undefined);
+      setReplacementCategoryId(undefined);
+      await load();
+      void message.success('分类已删除，原有模板已完成迁移');
     } catch (error) {
       void message.error(error instanceof Error ? error.message : '分类删除失败');
     } finally {
-      setDeletingCategory(undefined);
+      setSavingCategory(false);
+    }
+  };
+
+  const moveTemplate = async (categoryId?: string) => {
+    if (!movingTemplate) return;
+    setSavingCategory(true);
+    try {
+      await templateApi.assignTemplateCategory(movingTemplate.templateId, categoryId);
+      setMovingTemplate(undefined);
+      await load();
+      void message.success('模板分类已更新');
+    } catch (error) {
+      void message.error(error instanceof Error ? error.message : '模板分类更新失败');
+    } finally {
+      setSavingCategory(false);
     }
   };
 
@@ -176,27 +223,34 @@ export function TemplatesPage() {
               <strong>{item.count}</strong>
             </button>
             {!['全部模板', '未分类'].includes(item.name) && (
-              <Popconfirm
-                title={`删除分类“${item.name}”？`}
-                description="不会删除模板，只会清空这些模板的分类。"
-                okText="删除分类"
-                okButtonProps={{ danger: true }}
-                cancelText="取消"
-                onConfirm={() => void deleteCategory(item.name)}
-              >
+              <Space size={0}>
                 <Button
                   type="text"
-                  danger
                   size="small"
-                  loading={deletingCategory === item.name}
+                  icon={<EditOutlined />}
+                  aria-label={`重命名分类${item.name}`}
+                  onClick={() => {
+                    const target = categoryItems.find((candidate) => candidate.id === item.id);
+                    if (target) {
+                      categoryForm.setFieldsValue({ name: target.name });
+                      setCategoryEditor(target);
+                    }
+                  }}
+                />
+                <Button
+                  type="text" danger size="small"
                   icon={<DeleteOutlined />}
                   aria-label={`删除分类${item.name}`}
-                  onClick={(event) => event.stopPropagation()}
+                  onClick={() => setDeletingCategory(categoryItems.find((candidate) => candidate.id === item.id))}
                 />
-              </Popconfirm>
+              </Space>
             )}
           </div>
         ))}
+        <Button type="dashed" icon={<FolderAddOutlined />} onClick={() => {
+          categoryForm.resetFields();
+          setCategoryEditor('NEW');
+        }}>新建分类</Button>
       </div>
 
       <Card className="content-card">
@@ -326,6 +380,7 @@ export function TemplatesPage() {
                       items:
                         record.status === 'DRAFT'
                           ? [
+                              { key: 'move', icon: <FolderAddOutlined />, label: '移动分类' },
                               {
                                 key: 'delete',
                                 danger: true,
@@ -334,6 +389,7 @@ export function TemplatesPage() {
                               },
                             ]
                           : [
+                              { key: 'move', icon: <FolderAddOutlined />, label: '移动分类' },
                               { key: 'revision', icon: <CopyOutlined />, label: '新建修订版' },
                               ...(record.status === 'PUBLISHED'
                                 ? [
@@ -347,6 +403,7 @@ export function TemplatesPage() {
                                 : []),
                             ],
                       onClick: ({ key }) => {
+                        if (key === 'move') setMovingTemplate(record);
                         if (key === 'delete') confirmDeleteDraft(record);
                         if (key === 'revision') void createRevision(record);
                         if (key === 'retire') confirmRetire(record);
@@ -392,9 +449,57 @@ export function TemplatesPage() {
             <Input maxLength={160} />
           </Form.Item>
           <Form.Item name="category" label="分类">
-            <Input maxLength={120} />
+            <Select allowClear placeholder="选择分类" options={categoryItems.map((item) => ({ value: item.name, label: item.name }))} />
           </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        title={categoryEditor === 'NEW' ? '新建分类' : '重命名分类'}
+        open={Boolean(categoryEditor)}
+        confirmLoading={savingCategory}
+        okText="保存"
+        onOk={() => void saveCategory()}
+        onCancel={() => setCategoryEditor(undefined)}
+        destroyOnHidden
+      >
+        <Form form={categoryForm} layout="vertical">
+          <Form.Item name="name" label="分类名称" rules={[{ required: true, whitespace: true, message: '请输入分类名称' }]}>
+            <Input autoFocus maxLength={120} />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={deletingCategory ? `删除分类“${deletingCategory.name}”` : '删除分类'}
+        open={Boolean(deletingCategory)}
+        confirmLoading={savingCategory}
+        okText="删除并迁移"
+        okButtonProps={{ danger: true }}
+        onOk={() => void confirmDeleteCategory()}
+        onCancel={() => setDeletingCategory(undefined)}
+      >
+        <Typography.Paragraph>不会删除模板。请选择原分类中模板的去向：</Typography.Paragraph>
+        <Select
+          allowClear
+          placeholder="未分类"
+          value={replacementCategoryId}
+          onChange={setReplacementCategoryId}
+          options={categoryItems.filter((item) => item.id !== deletingCategory?.id).map((item) => ({ value: item.id, label: item.name }))}
+          style={{ width: '100%' }}
+        />
+      </Modal>
+
+      <Modal
+        title={movingTemplate ? `移动“${movingTemplate.name}”` : '移动模板'}
+        open={Boolean(movingTemplate)}
+        footer={null}
+        onCancel={() => setMovingTemplate(undefined)}
+      >
+        <Space direction="vertical" style={{ width: '100%' }}>
+          <Button block onClick={() => void moveTemplate(undefined)}>移到未分类</Button>
+          {categoryItems.map((item) => <Button block key={item.id} onClick={() => void moveTemplate(item.id)}>{item.name}</Button>)}
+        </Space>
       </Modal>
     </Space>
   );

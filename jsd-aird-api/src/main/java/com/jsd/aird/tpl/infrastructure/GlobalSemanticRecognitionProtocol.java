@@ -19,7 +19,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 final class GlobalSemanticRecognitionProtocol {
 
     static final int VERSION = 1;
-    static final String PROMPT_VERSION = "template-global-semantic-v3";
+    static final String PROMPT_VERSION = "template-global-semantic-v6-record-cadence";
 
     private static final Pattern ADDRESS = Pattern.compile(
             "^([A-Z]{1,4})([1-9][0-9]*)(?::([A-Z]{1,4})([1-9][0-9]*))?$"
@@ -43,7 +43,7 @@ final class GlobalSemanticRecognitionProtocol {
     private static final Set<String> VALUE_SOURCES = SemanticProtocolTypes.VALUE_SOURCES;
     private static final Set<String> TABLE_KINDS = Set.of("ROW_TABLE", "COLUMN_TABLE", "MATRIX");
     private static final Set<String> TABLE_SEMANTIC_MODES = Set.of(
-            "ROW_RECORDS", "CROSS_TAB", "RECORD_SET", "UNKNOWN"
+            "ROW_RECORDS", "COLUMN_RECORDS", "CROSS_TAB", "RECORD_SET", "UNKNOWN"
     );
     private static final Set<String> REPEAT_AXES = Set.of("ROW", "COLUMN");
     private static final Set<String> TERMINATION_TYPES = Set.of(
@@ -466,11 +466,10 @@ final class GlobalSemanticRecognitionProtocol {
             }
             var header = bounds(table.path("headerRange").asText(""));
             var data = bounds(table.path("dataRange").asText(""));
-            if (header != null && data != null
-                    && (("ROW".equals(repeatAxis) && header.endRow() < data.startRow())
-                    || ("COLUMN".equals(repeatAxis) && header.endColumn() < data.startColumn()))) {
-                if (!"ROW_RECORDS".equals(table.path("semanticMode").asText(""))) {
-                    table.put("semanticMode", "ROW_RECORDS");
+            if (header != null && data != null && header.endRow() < data.startRow()) {
+                var expectedMode = "COLUMN_TABLE".equals(kind) ? "COLUMN_RECORDS" : "ROW_RECORDS";
+                if (!expectedMode.equals(table.path("semanticMode").asText(""))) {
+                    table.put("semanticMode", expectedMode);
                     recovery.normalized(table.path("sheetId").asText(""),
                             table.path("range").asText(""), table.path("temporaryId").asText(""));
                 }
@@ -886,8 +885,10 @@ final class GlobalSemanticRecognitionProtocol {
                     path + " 的表头、数据和合计范围必须位于表格范围内");
             require(!headerRange.overlaps(dataRange), path + " 的表头范围与数据范围不能重叠");
             if (Set.of("ROW_TABLE", "COLUMN_TABLE").contains(table.path("tableKind").asText())) {
-                require("ROW_RECORDS".equals(table.path("semanticMode").asText()),
-                        path + " 的重复表必须使用 ROW_RECORDS 语义模式");
+                var columnRecords = "COLUMN_TABLE".equals(table.path("tableKind").asText());
+                var expectedMode = columnRecords ? "COLUMN_RECORDS" : "ROW_RECORDS";
+                require(expectedMode.equals(table.path("semanticMode").asText()),
+                        path + " 的重复表必须使用 " + expectedMode + " 语义模式");
                 enumValue(table, "repeatAxis", REPEAT_AXES, path);
                 require(table.path("recordHeight").asInt(0) > 0
                                 && table.path("recordWidth").asInt(0) > 0
@@ -897,20 +898,11 @@ final class GlobalSemanticRecognitionProtocol {
                                 && table.path("columnHeaderRange").asText("").isBlank()
                                 && table.path("crossDataRange").asText("").isBlank(),
                         path + " 的 ROW_TABLE 不得虚构矩阵轴范围");
-                if ("ROW".equals(table.path("repeatAxis").asText())) {
-                    require(headerRange.endRow() < dataRange.startRow(),
-                            path + " 的按行明细表头必须位于数据区上方");
-                    if (totalRange != null) {
-                        require(dataRange.endRow() < totalRange.startRow(),
-                                path + " 的按行明细合计行必须位于数据区下方");
-                    }
-                } else {
-                    require(headerRange.endColumn() < dataRange.startColumn(),
-                            path + " 的按列明细表头必须位于数据区左侧");
-                    if (totalRange != null) {
-                        require(dataRange.endColumn() < totalRange.startColumn(),
-                                path + " 的按列明细合计列必须位于数据区右侧");
-                    }
+                require(headerRange.endRow() < dataRange.startRow(),
+                        path + " 的记录身份行必须位于数据区上方");
+                if (totalRange != null) {
+                    require(dataRange.endRow() < totalRange.startRow(),
+                            path + " 的合计区域必须位于数据区下方");
                 }
             } else {
                 require(Set.of("CROSS_TAB", "RECORD_SET").contains(table.path("semanticMode").asText()),
@@ -1321,6 +1313,10 @@ final class GlobalSemanticRecognitionProtocol {
                         "\"valueSource\":" + jsonEnum(SemanticProtocolTypes.VALUE_SOURCES))
                 .replace("\"valueType\":{\"enum\":[\"string\",\"number\",\"integer\",\"boolean\",\"date\",\"datetime\",\"time\",\"duration\"]}",
                         "\"valueType\":" + jsonEnum(SemanticProtocolTypes.VALUE_TYPES));
+        result = result.replace(
+                "\"semanticMode\":{\"enum\":[\"ROW_RECORDS\",\"CROSS_TAB\",\"RECORD_SET\",\"UNKNOWN\"]}",
+                "\"semanticMode\":{\"enum\":[\"ROW_RECORDS\",\"COLUMN_RECORDS\",\"CROSS_TAB\",\"RECORD_SET\",\"UNKNOWN\"]}"
+        );
         return result.replace("\"terminationRule\":{\"type\":\"object\",",
                 "\"cornerRange\":{\"type\":\"string\"},\"recordAxis\":{\"enum\":[\"ROW\",\"COLUMN\",\"UNKNOWN\"]},\"layoutMode\":{\"type\":\"string\"},\"measureHeight\":{\"type\":\"integer\",\"minimum\":1},\"recordHeightIncludesIdentity\":{\"type\":\"boolean\"},\"recordProjection\":{\"type\":\"object\",\"additionalProperties\":true},\"columnSlots\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"additionalProperties\":true}},\"columnMemberRole\":{\"type\":\"string\"},\"memberMode\":{\"type\":\"string\"},\"bindings\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"additionalProperties\":true}},\"terminationRule\":{\"type\":\"object\",");
     }

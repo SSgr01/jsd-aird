@@ -7,6 +7,7 @@ import java.util.UUID;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.jsd.aird.mfg.application.ProductionOrderService;
+import com.jsd.aird.mfg.application.ProductionOfficeExportService;
 import com.jsd.aird.mfg.application.port.ProductionOrderRepository;
 import com.jsd.aird.platform.web.RequestIdHolder;
 import com.jsd.aird.shared.api.ApiResponse;
@@ -17,21 +18,30 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import java.nio.charset.StandardCharsets;
 
 @RestController
 @RequestMapping("/api/v2/production-orders")
 public class ProductionOrderController {
 
     private final ProductionOrderService service;
+    private final ProductionOfficeExportService officeExportService;
 
-    public ProductionOrderController(ProductionOrderService service) {
+    public ProductionOrderController(ProductionOrderService service, ProductionOfficeExportService officeExportService) {
         this.service = service;
+        this.officeExportService = officeExportService;
     }
 
     @GetMapping
@@ -59,6 +69,35 @@ public class ProductionOrderController {
             @PathVariable UUID orderId
     ) {
         return success(service.get(orderId));
+    }
+
+    @GetMapping("/{orderId}/revisions")
+    public ApiResponse<List<ProductionOrderRepository.RevisionSummary>> revisions(@PathVariable UUID orderId) {
+        return success(officeExportService.revisions(orderId));
+    }
+
+    @GetMapping("/{orderId}/export/check")
+    public ApiResponse<ProductionOfficeExportService.Check> checkExport(
+            @PathVariable UUID orderId,
+            @RequestParam String format,
+            @RequestParam(required = false) UUID revisionId
+    ) {
+        return success(officeExportService.check(orderId, format, revisionId));
+    }
+
+    @GetMapping("/{orderId}/export")
+    public ResponseEntity<byte[]> export(
+            @PathVariable UUID orderId,
+            @RequestParam String format,
+            @RequestParam(required = false) UUID revisionId
+    ) {
+        var file = officeExportService.export(orderId, format, revisionId);
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType(file.contentType()))
+                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
+                        .filename(file.fileName(), StandardCharsets.UTF_8).build().toString())
+                .header("X-Export-Warning-Count", Integer.toString(file.warnings().size()))
+                .body(file.content());
     }
 
     @PutMapping("/{orderId}/draft")
@@ -98,6 +137,12 @@ public class ProductionOrderController {
     @PostMapping("/{orderId}/cancel")
     public ApiResponse<Void> cancel(@PathVariable UUID orderId) {
         service.cancel(orderId);
+        return success(null);
+    }
+
+    @DeleteMapping("/{orderId}")
+    public ApiResponse<Void> delete(@PathVariable UUID orderId) {
+        service.delete(orderId);
         return success(null);
     }
 

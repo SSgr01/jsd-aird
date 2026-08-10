@@ -79,12 +79,16 @@ final class GlobalSemanticSuggestionCompiler {
             var groupCode = GroupNameNormalizer.code(unit.groupName());
             var ordinal = groupOrdinals.merge(groupCode, 1, Integer::sum);
             if ("RELATION".equals(unit.type())) {
-                var relation = relation(unit.value(), unit.groupName(), groupCode, ordinal, blocks, sheetNames);
+                var relation = relation(unit.value(), unit.groupName(), groupCode, ordinal,
+                        blocks, sheetNames, physicalFacts);
                 if (relation != null) suggestions.add(relation);
             } else {
                 var tableSuggestion = table(unit.value(), unit.groupName(), groupCode, ordinal,
                         blocks, sheetNames, physicalFacts);
                 suggestions.add(tableSuggestion);
+                if ("MATRIX".equals(tableSuggestion.payload().path("kind").asText(""))) {
+                    suggestions.addAll(matrixFields(tableSuggestion));
+                }
                 suggestions.addAll(tableChildren(tableSuggestion));
             }
         }
@@ -140,15 +144,29 @@ final class GlobalSemanticSuggestionCompiler {
             if (geometry == null) continue;
             var sheetId = geometry.path("sheetId").asText();
             var range = geometry.path("range").asText();
-            var type = geometry.path("type").asText("UNKNOWN");
-            var blockId = id;
-            blocks.add(objectMapper.createObjectNode().put("temporaryId", blockId)
+                var type = geometry.path("type").asText("UNKNOWN");
+                var blockId = id;
+                var block = objectMapper.createObjectNode().put("temporaryId", blockId)
                     .put("sheetId", sheetId).put("range", range).put("type", type)
                     .put("parentTemporaryId", "")
+                    .put("candidateRef", geometry.path("candidateRef").asText(id))
                     .put("businessName", semantic.path("businessName").asText("待确认区域"))
-                    .put("groupNameSuggestion", "").put("semanticKeySuggestion", ""));
+                        .put("groupNameSuggestion", "").put("semanticKeySuggestion", "");
+                var staticContents = objectMapper.createArrayNode();
+                if (geometry.path("structure").path("staticContents").isArray()) {
+                    geometry.path("structure").path("staticContents").forEach(content -> {
+                        if (!containsJson(staticContents, content)) staticContents.add(content.deepCopy());
+                    });
+                }
+                if ("FORM_REGION".equals(type)) {
+                    inferFormStaticContents(geometry, context).forEach(content -> {
+                        if (!containsJson(staticContents, content)) staticContents.add(content.deepCopy());
+                    });
+                }
+                if (!staticContents.isEmpty()) block.set("staticContents", staticContents);
+                blocks.add(block);
             if (Set.of("MATRIX", "ROW_TABLE", "COLUMN_TABLE").contains(type)) {
-                var structure = geometry.path("structure");
+                var structure = effectiveTableStructure(geometry, type);
                 var matrix = "MATRIX".equals(type);
                 var table = objectMapper.createObjectNode()
                         .put("temporaryId", "table-" + id).put("sheetId", sheetId).put("range", range)
@@ -158,26 +176,53 @@ final class GlobalSemanticSuggestionCompiler {
                         .put("semanticKeySuggestion", "")
                         .put("headerRange", structure.path(matrix ? "columnHeaderRange" : "headerRange").asText(range))
                         .put("dataRange", structure.path(matrix ? "crossDataRange" : "dataRange").asText(range))
-                        .put("totalRange", "")
-                        .put("semanticMode", matrix ? "CROSS_TAB" : "ROW_RECORDS")
+                        .put("totalRange", structure.path("totalRange").asText(""))
+                        .put("semanticMode", matrix ? "CROSS_TAB"
+                                : "COLUMN_TABLE".equals(type) ? "COLUMN_RECORDS" : "ROW_RECORDS")
                         .put("rowHeaderRange", structure.path("rowHeaderRange").asText(""))
                         .put("columnHeaderRange", structure.path("columnHeaderRange").asText(""))
                         .put("crossDataRange", structure.path("crossDataRange").asText(""))
-                        .put("recordAxis", structure.path("recordAxis").asText("UNKNOWN"));
+                        .put("recordAxis", structure.path("recordAxis").asText("UNKNOWN"))
+                        .put("repeatAxis", structure.path("repeatAxis").asText(
+                                "COLUMN_TABLE".equals(type) ? "COLUMN" : "ROW"))
+                        .put("recordHeight", structure.path("recordHeight").asInt(1))
+                        .put("recordWidth", structure.path("recordWidth").asInt(1))
+                        .put("recordStride", structure.path("recordStride").asInt(1));
+                table.put("candidateRef", geometry.path("candidateRef").asText(
+                        geometry.path("candidateId").asText("")))
+                        .put("regionId", id)
+                        .put("blockId", blockId)
+                        .put("parentBlockId", geometry.path("parentBlockId").asText(""));
+                if (structure.path("recordProjection").isObject()) {
+                    table.set("recordProjection", structure.path("recordProjection").deepCopy());
+                }
+                if (structure.path("recordSlots").isArray()) {
+                    table.set("recordSlots", structure.path("recordSlots").deepCopy());
+                }
                 for (var key : List.of("canonicalStatus", "structureStatus", "candidateOnly",
                         "physicalStructureOnly", "reviewRequired", "structureConflict",
-                        "resolutionGroupId", "pendingReason")) {
+                        "resolutionGroupId", "resolutionAlternativeId", "resolutionStatus",
+                        "resolutionReason", "structureAlternativeSets", "resolution", "pendingReason")) {
                     if (geometry.has(key)) table.set(key, geometry.path(key).deepCopy());
                 }
                 table.set("cornerRange", structure.path("cornerRange").deepCopy());
                 table.set("headerTree", objectMapper.createArrayNode());
                 table.set("rowDimensions", semantic.path("rowDimensions").deepCopy());
-                table.set("rowAttributes", semantic.path("rowAttributes").deepCopy());
+                var rowAttributes = semantic.path("rowAttributes");
+                if ("COLUMN_TABLE".equals(type) && (!rowAttributes.isArray() || rowAttributes.isEmpty())) {
+                    rowAttributes = inferColumnTableRowAttributes(table, context);
+                }
+                table.set("rowAttributes", rowAttributes.deepCopy());
                 var columns = table.putArray("columns");
                 if (!matrix) {
                     for (var relation : semantic.path("fieldRelations")) {
+                        if (relation.path("businessName").asText("").strip().isBlank()) continue;
                         var relationCopy = (ObjectNode) relation.deepCopy();
-                        relationCopy.put("sheetId", sheetId).put("blockTemporaryId", blockId);
+                        relationCopy.put("sheetId", sheetId).put("blockTemporaryId", blockId)
+                                .put("regionId", id)
+                                .put("blockId", blockId)
+                                .put("candidateRef", geometry.path("candidateRef").asText(
+                                        geometry.path("candidateId").asText("")));
                         relations.add(relationCopy);
                         columns.add(objectMapper.createObjectNode()
                                 .put("temporaryId", relation.path("temporaryId").asText("column-" + columns.size()))
@@ -188,19 +233,196 @@ final class GlobalSemanticSuggestionCompiler {
                                 .put("editability", relation.path("editability").asText("UNKNOWN"))
                                 .put("valueSource", relation.path("valueSource").asText("UNKNOWN"))
                                 .put("unit", relation.path("unit").asText(""))
-                                .put("condition", relation.path("condition").asText("")));
+                                .put("condition", relation.path("condition").asText(""))
+                                .put("nameSource", relation.path("nameSource").asText("MODEL"))
+                                .put("semanticFallback", relation.path("semanticFallback").asBoolean(false))
+                                .put("reviewRequired", relation.path("reviewRequired").asBoolean(false)));
+                    }
+                    if (columns.isEmpty() && "COLUMN_TABLE".equals(type)) {
+                        appendColumnTableRowAttributeFallbacks(
+                                columns, relations, rowAttributes, table, sheetId, blockId, context);
+                    }
+                    if ("ROW_TABLE".equals(type)) {
+                        appendRowTableHeaderFallbacks(columns, relations, table, sheetId, blockId, context);
                     }
                 }
                 tables.add(table);
             } else {
-                for (var relation : semantic.path("fieldRelations")) {
+                var formRelations = semantic.path("fieldRelations");
+                if ("FORM_REGION".equals(type)) {
+                    var validModelRelations = objectMapper.createArrayNode();
+                    if (formRelations.isArray()) for (var relation : formRelations) {
+                        if (validPhysicalFormRelation(relation, context, sheetId)
+                                && validFormModelRelation(relation, geometry, context, sheetId)) {
+                            validModelRelations.add(relation.deepCopy());
+                        }
+                    }
+                    formRelations = mergeFormRelations(validModelRelations,
+                            inferFormRelations(geometry, context, blockId));
+                }
+                for (var relation : formRelations) {
+                    if ("FORM_REGION".equals(type)
+                            && !validPhysicalFormRelation(relation, context, sheetId)) continue;
                     var relationCopy = (ObjectNode) relation.deepCopy();
-                    relationCopy.put("sheetId", sheetId).put("blockTemporaryId", blockId);
+                    relationCopy.put("sheetId", sheetId).put("blockTemporaryId", blockId)
+                            .put("formExpectedFieldCount", formRelations.size());
                     relations.add(relationCopy);
                 }
             }
         }
         return result;
+    }
+
+    /**
+     * Model regions created by an exact partition often carry only the
+     * coarse table ranges.  Preserve the physical projection that resolved
+     * the partition so semantic compilation does not mistake the left label
+     * band for record columns.
+     */
+    private ObjectNode effectiveTableStructure(JsonNode geometry, String type) {
+        var source = geometry.path("structure");
+        var structure = source.isObject()
+                ? (ObjectNode) source.deepCopy() : objectMapper.createObjectNode();
+        if (!structure.path("recordAxis").isTextual()
+                || structure.path("recordAxis").asText("").isBlank()
+                || "UNKNOWN".equalsIgnoreCase(structure.path("recordAxis").asText(""))) {
+            var axis = structure.path("repeatAxis").asText(
+                    "COLUMN_TABLE".equals(type) ? "COLUMN" : "ROW");
+            structure.put("recordAxis", axis.toUpperCase(Locale.ROOT));
+        }
+        if ("COLUMN_TABLE".equals(type) && !structure.path("recordProjection").isObject()) {
+            var projection = findPhysicalProjection(geometry);
+            if (projection != null) structure.set("recordProjection", projection.deepCopy());
+        }
+        return structure;
+    }
+
+    private JsonNode findPhysicalProjection(JsonNode geometry) {
+        var direct = geometry.path("resolution").path("suppressedPhysical")
+                .path("structure").path("recordProjection");
+        if (direct.isObject()) return direct;
+        direct = geometry.path("resolution").path("physical").path("structure")
+                .path("recordProjection");
+        if (direct.isObject()) return direct;
+        direct = geometry.path("suppressedPhysical").path("structure").path("recordProjection");
+        if (direct.isObject()) return direct;
+        for (var alternative : geometry.path("structureAlternativeSets")) {
+            for (var region : alternative.path("regions")) {
+                if (!"PHYSICAL_HEURISTIC".equals(region.path("source").asText(""))) continue;
+                var projection = region.path("structure").path("recordProjection");
+                if (projection.isObject()) return projection;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * When REGION_FIELDS omits rowAttributes/fieldRelations, recover names
+     * from the physical label band.  This is deliberately topology based:
+     * the nearest non-record column in the same region is used, regardless of
+     * workbook, customer, sheet name, or fixed coordinates.
+     */
+    private ArrayNode inferColumnTableRowAttributes(ObjectNode table, JsonNode physicalFacts) {
+        var result = objectMapper.createArrayNode();
+        var data = rangeBounds(table.path("dataRange").asText(""));
+        if (data == null) return result;
+        inferColumnRecordProjection(table, physicalFacts);
+        var record = recordColumns(table);
+        if (record.isEmpty()) return result;
+        var firstRecordColumn = record.getFirst();
+        var header = rangeBounds(table.path("headerRange").asText(""));
+        int firstRow = header == null ? data[1] : Math.min(header[1], data[1]);
+        var candidates = new ArrayList<JsonNode>();
+        for (var cell : semanticCells(physicalFacts)) {
+            if (!table.path("sheetId").asText("").equals(cell.path("sheetId").asText(""))) continue;
+            var bounds = rangeBounds(cell.path("mergedRange").asText(""));
+            if (bounds == null) bounds = rangeBounds(cell.path("address").asText(""));
+            if (bounds == null || bounds[2] >= firstRecordColumn
+                    || bounds[3] < firstRow || bounds[1] > data[3]) continue;
+            var value = cell.path("value").asText("").replaceAll("[\\r\\n]+", " ").strip();
+            if (!value.isBlank()) candidates.add(cell);
+        }
+        if (candidates.isEmpty()) return result;
+        var labelColumn = candidates.stream()
+                .mapToInt(cell -> {
+                    var bounds = rangeBounds(cell.path("mergedRange").asText(""));
+                    if (bounds == null) bounds = rangeBounds(cell.path("address").asText(""));
+                    return bounds == null ? 0 : bounds[2];
+                }).max().orElse(0);
+        var seen = new HashSet<String>();
+        candidates.sort(Comparator.comparingInt(cell -> {
+            var bounds = rangeBounds(cell.path("mergedRange").asText(""));
+            if (bounds == null) bounds = rangeBounds(cell.path("address").asText(""));
+            return bounds == null ? Integer.MAX_VALUE : bounds[1];
+        }));
+        for (var cell : candidates) {
+            var bounds = rangeBounds(cell.path("mergedRange").asText(""));
+            if (bounds == null) bounds = rangeBounds(cell.path("address").asText(""));
+            if (bounds == null || bounds[2] != labelColumn) continue;
+            if (header != null && bounds[0] == data[0] && bounds[2] == labelColumn
+                    && bounds[1] >= header[1] && bounds[3] <= header[3]) continue;
+            var currentBounds = bounds;
+            var name = cell.path("value").asText("").replaceAll("[\\r\\n]+", " ").strip();
+            var parentName = candidates.stream().filter(parent -> {
+                var parentBounds = rangeBounds(parent.path("mergedRange").asText(""));
+                if (parentBounds == null) parentBounds = rangeBounds(parent.path("address").asText(""));
+                return parentBounds != null && parentBounds[2] < labelColumn
+                        && (parentBounds[1] > data[1] || parentBounds[3] < data[3])
+                        && parentBounds[1] <= currentBounds[1] && parentBounds[3] >= currentBounds[1];
+            }).max(Comparator.comparingInt(parent -> {
+                var parentBounds = rangeBounds(parent.path("mergedRange").asText(""));
+                if (parentBounds == null) parentBounds = rangeBounds(parent.path("address").asText(""));
+                return parentBounds == null ? 0 : parentBounds[2];
+            })).map(parent -> parent.path("value").asText("").replaceAll("[\\r\\n]+", " ").strip())
+                    .orElse("");
+            if (!parentName.isBlank() && !parentName.equals(name)) name = parentName + " / " + name;
+            var sourceRange = cell.path("mergedRange").asText("");
+            if (sourceRange.isBlank()) sourceRange = cell.path("address").asText("");
+            var key = sourceRange + "|" + name;
+            if (name.isBlank() || !seen.add(key)) continue;
+            result.add(objectMapper.createObjectNode()
+                    .put("name", name)
+                    .put("sourceRange", sourceRange)
+                    .put("role", "ROW_ATTRIBUTE")
+                    .put("optional", false)
+                    .put("nameSource", "PHYSICAL_HEADER_FALLBACK")
+                    .put("semanticFallback", true)
+                    .put("reviewRequired", true));
+        }
+        return result;
+    }
+
+    /**
+     * Recover a COLUMN_TABLE's record columns from its leading header label
+     * band when the selected model proposal did not carry recordProjection.
+     * A leading value/merge such as A4:B4 is physical evidence that columns
+     * after that span are the aligned runtime record surface.
+     */
+    private void inferColumnRecordProjection(ObjectNode table, JsonNode physicalFacts) {
+        if (table.path("recordProjection").path("recordColumns").isArray()
+                && !table.path("recordProjection").path("recordColumns").isEmpty()) return;
+        var header = rangeBounds(table.path("headerRange").asText(""));
+        var data = rangeBounds(table.path("dataRange").asText(""));
+        if (header == null || data == null || header[0] != data[0] || header[2] != data[2]) return;
+        var sheetId = table.path("sheetId").asText("");
+        int labelBandEnd = 0;
+        for (var cell : semanticCells(physicalFacts)) {
+            if (!sheetId.equals(cell.path("sheetId").asText(""))) continue;
+            var bounds = rangeBounds(cell.path("mergedRange").asText(""));
+            if (bounds == null) bounds = rangeBounds(cell.path("address").asText(""));
+            if (bounds == null || bounds[0] != header[0] || bounds[1] != header[1]
+                    || bounds[3] > header[3]) continue;
+            if (cell.path("value").asText("").strip().isBlank()) continue;
+            labelBandEnd = Math.max(labelBandEnd, bounds[2]);
+        }
+        if (labelBandEnd < data[0] || labelBandEnd >= data[2]) return;
+        var projection = table.putObject("recordProjection")
+                .put("mode", "COLUMN_RECORDS")
+                .put("recordAxis", "COLUMN");
+        var columns = projection.putArray("recordColumns");
+        for (int column = labelBandEnd + 1; column <= data[2]; column++) {
+            columns.add(columnName(column));
+        }
     }
 
     private ArrayNode rejectedDiagnostics(JsonNode response) {
@@ -293,13 +515,23 @@ final class GlobalSemanticSuggestionCompiler {
 
     private RecognitionModelClient.ModelSuggestion relation(
             JsonNode source, String groupName, String groupCode, int ordinal,
-            Map<String, ObjectNode> blocks, Map<String, String> sheetNames
+            Map<String, ObjectNode> blocks, Map<String, String> sheetNames, JsonNode physicalFacts
     ) {
         if ("INLINE_TEXT".equals(source.path("relationType").asText())
-                && sameRange(source.path("labelRange").asText(), source.path("valueRange").asText())) {
+                && sameRange(source.path("labelRange").asText(), source.path("valueRange").asText())
+                && !source.path("allowInlineFormValue").asBoolean(false)) {
             return null;
         }
         var sheetId = source.path("sheetId").asText();
+        var businessName = source.path("businessName").asText("").strip();
+        var nameSource = source.path("nameSource").asText("MODEL");
+        var semanticFallback = source.path("semanticFallback").asBoolean(false);
+        if (businessName.isBlank()) {
+            businessName = inferredLabelName(physicalFacts, sheetId, source.path("labelRange").asText(""));
+            if (businessName.isBlank()) return null;
+            nameSource = "PHYSICAL_HEADER_FALLBACK";
+            semanticFallback = true;
+        }
         var relationId = RecognitionIdentity.relationId(
                 sheetId, source.path("labelRange").asText(), source.path("valueRange").asText(),
                 source.path("relationType").asText()
@@ -310,7 +542,7 @@ final class GlobalSemanticSuggestionCompiler {
         var bindingId = RecognitionIdentity.bindingId(
                 fieldId, locatorType, sheetId + "|" + source.path("valueRange").asText()
         );
-        var standard = standard(source.path("businessName").asText());
+        var standard = standard(businessName);
         var relationFieldCode = standard == null
                 ? fieldCode("FIELD", relationId) : standard.fieldCode();
         var relationDataPath = standard == null
@@ -325,7 +557,7 @@ final class GlobalSemanticSuggestionCompiler {
                 .put("temporaryRelationId", source.path("temporaryId").asText())
                 .put("fieldCode", relationFieldCode)
                 .put("dataPath", relationDataPath)
-                .put("fieldName", source.path("businessName").asText())
+                .put("fieldName", businessName)
                 .put("groupName", groupName)
                 .put("valueType", source.path("valueType").asText())
                 .put("required", source.path("required").asBoolean(false))
@@ -334,12 +566,28 @@ final class GlobalSemanticSuggestionCompiler {
                 .put("valueSource", source.path("valueSource").asText())
                  .put("dictionaryVersion", standard == null ? StandardFieldDictionary.VERSION : standard.version())
                  .put("standardMatchStatus", standard == null ? "UNMATCHED" : "MATCHED")
-                 .put("requiresStandardConfirmation", standard == null)
+                 .put("requiresStandardConfirmation", false)
+                 .put("fieldOrigin", standard == null ? "TEMPLATE_LOCAL" : "STANDARD")
+                 .put("standardSelectionStatus", standard == null ? "CUSTOM" : "MATCHED")
+                 .put("nameSource", nameSource)
+                 .put("semanticFallback", semanticFallback)
+                 .put("reviewRequired", semanticFallback || source.path("reviewRequired").asBoolean(false))
                 .put("unit", source.path("unit").asText(""))
                 .put("condition", source.path("condition").asText(""))
                 .put("reason", "根据完整工作簿的标签和值关系识别")
                  .put("interpretation", "系统认为这里用于填写或读取“"
-                         + source.path("businessName").asText() + "”。");
+                         + businessName + "”。");
+        if (source.path("positionPending").asBoolean(false)) {
+            payload.put("positionPending", true)
+                    .put("candidateOnly", true)
+                    .put("publishable", false)
+                    .put("reviewRequired", true)
+                    .put("pendingReason", "FIELD_POSITION_REQUIRED")
+                    .put("interpretation", "已识别字段标签，但需要人工指定 Excel 填写位置。");
+        }
+        if (source.path("formExpectedFieldCount").canConvertToInt()) {
+            payload.put("formExpectedFieldCount", source.path("formExpectedFieldCount").asInt());
+        }
         if (standard != null && standard.id() != null) {
             payload.put("standardFieldId", standard.id().toString())
                     .put("standardFieldVersion", standard.version())
@@ -353,9 +601,13 @@ final class GlobalSemanticSuggestionCompiler {
                 inlineText ? "INLINE_TEXT" : "ANCHOR");
         if (inlineText) {
             locator.put("valuePart", "AFTER_DELIMITER");
-            locator.put("labelPrefix", source.path("businessName").asText());
+            locator.put("labelPrefix", businessName);
         }
         payload.set("locator", locator);
+        if (source.path("positionPending").asBoolean(false)) {
+            locator.put("address", "").put("anchorAddress", "")
+                    .put("logicalInputRange", "").put("valueMode", "UNBOUND");
+        }
         attachBlock(payload, source.path("blockTemporaryId").asText(""), blocks);
         return new RecognitionModelClient.ModelSuggestion(
                 "SCALAR_FIELD", payload, confidence(source), objectMapper.createArrayNode()
@@ -393,12 +645,15 @@ final class GlobalSemanticSuggestionCompiler {
                 .put("suggestionLevel", "ROOT")
                 .put("fieldId", fieldId.toString()).put("bindingId", bindingId.toString())
                 .put("temporaryRelationId", source.path("temporaryId").asText())
+                .put("candidateRef", source.path("candidateRef").asText(""))
                 .put("fieldCode", parentFieldCode)
                 .put("dataPath", parentDataPath)
                 .put("fieldName", source.path("businessName").asText())
                 .put("groupName", groupName).put("valueType", "array")
                 .put("required", false).put("role", "REPEAT_REGION")
                 .put("locatorType", locatorType)
+                .put("semanticMode", source.path("semanticMode").asText(
+                        "COLUMN_TABLE".equals(kind) ? "COLUMN_RECORDS" : "ROW_RECORDS"))
                 .put("repeatAxis", source.path("repeatAxis").asText(
                         Set.of("MATRIX").contains(kind) ? "" : "COLUMN_TABLE".equals(kind) ? "COLUMN" : "ROW"))
                 .put("recordHeight", source.path("recordHeight").asInt(1))
@@ -411,6 +666,12 @@ final class GlobalSemanticSuggestionCompiler {
                         : "COLUMN_TABLE".equals(kind)
                         ? "系统认为这里按列填写或读取“" + source.path("businessName").asText() + "”记录。"
                         : "系统认为这里按两个业务维度记录“" + source.path("businessName").asText() + "”。");
+        if (source.path("recordProjection").isObject()) {
+            payload.set("recordProjection", source.path("recordProjection").deepCopy());
+        }
+        if (source.path("recordSlots").isArray()) {
+            payload.set("recordSlots", source.path("recordSlots").deepCopy());
+        }
         var locator = locator(sheetId, sheetNames.getOrDefault(sheetId, sheetId),
                 source.path("headerRange").asText(), source.path("range").asText(), "ARRAY");
         locator.put("headerRange", source.path("headerRange").asText());
@@ -430,7 +691,9 @@ final class GlobalSemanticSuggestionCompiler {
         for (var key : List.of("canonicalStatus", "structureStatus", "candidateOnly",
                 "physicalStructureOnly", "reviewRequired", "structureConflict",
                 "resolutionGroupId", "pendingReason", "publishable", "humanResolved",
-                "canonicalStructureMayReopen", "modelAssessmentVerdict", "resolutionSource")) {
+                "canonicalStructureMayReopen", "modelAssessmentVerdict", "resolutionSource",
+                "resolutionAlternativeId", "resolutionStatus", "resolutionReason",
+                "structureAlternativeSets", "resolution")) {
             if (source.has(key)) payload.set(key, source.path(key).deepCopy());
         }
         var columns = objectMapper.createArrayNode();
@@ -438,6 +701,7 @@ final class GlobalSemanticSuggestionCompiler {
         var hasRuntimeSlots = false;
         var columnOrdinal = 0;
         var usedColumnPaths = new java.util.HashSet<String>();
+        var usedColumnNames = new java.util.HashSet<String>();
         var tableEditability = "READ_ONLY";
         var tableValueSource = "STATIC";
         for (var sourceColumn : sourceColumns) {
@@ -447,7 +711,7 @@ final class GlobalSemanticSuggestionCompiler {
             if ("EDITABLE".equals(editability) || "CONDITIONAL".equals(editability)) tableEditability = "EDITABLE";
             if ("USER_INPUT".equals(valueSource) || "MIXED".equals(valueSource)) tableValueSource = "USER_INPUT";
             var columnIdentity = uniqueColumnIdentity(
-                    sourceColumn, columnOrdinal, formulaTable, usedColumnPaths
+                    sourceColumn, columnOrdinal, formulaTable, usedColumnPaths, usedColumnNames
             );
             var column = objectMapper.createObjectNode()
                     .put("code", columnIdentity.code())
@@ -467,6 +731,9 @@ final class GlobalSemanticSuggestionCompiler {
                     .put("editability", editability).put("valueSource", valueSource)
                     .put("unit", sourceColumn.path("unit").asText(""))
                     .put("condition", sourceColumn.path("condition").asText(""))
+                    .put("nameSource", sourceColumn.path("nameSource").asText("MODEL"))
+                    .put("semanticFallback", sourceColumn.path("semanticFallback").asBoolean(false))
+                    .put("reviewRequired", sourceColumn.path("reviewRequired").asBoolean(false))
                     .put("required", false)
                     .put("dataStartRow", firstRow(sourceColumn.path("valueRange").asText()));
             if (column.path("name").asText("").isBlank()) {
@@ -487,7 +754,9 @@ final class GlobalSemanticSuggestionCompiler {
             if (standard != null) column.put("fieldCode", standard.fieldCode());
             column.put("dictionaryVersion", standard == null ? StandardFieldDictionary.VERSION : standard.version())
                     .put("standardMatchStatus", standard == null ? "UNMATCHED" : "MATCHED")
-                    .put("requiresStandardConfirmation", standard == null);
+                    .put("requiresStandardConfirmation", false)
+                    .put("fieldOrigin", standard == null ? "TEMPLATE_LOCAL" : "STANDARD")
+                    .put("standardSelectionStatus", standard == null ? "CUSTOM" : "MATCHED");
             if (standard != null && standard.id() != null) {
                 column.put("standardFieldId", standard.id().toString())
                         .put("standardFieldVersion", standard.version())
@@ -537,6 +806,14 @@ final class GlobalSemanticSuggestionCompiler {
                 .put("recordHeight", source.path("recordHeight").asInt(1))
                 .put("recordWidth", source.path("recordWidth").asInt(1))
                 .put("recordStride", source.path("recordStride").asInt(1));
+        tableModel.put("semanticMode", source.path("semanticMode").asText(
+                "COLUMN_TABLE".equals(kind) ? "COLUMN_RECORDS" : "ROW_RECORDS"));
+        if (source.path("recordProjection").isObject()) {
+            tableModel.set("recordProjection", source.path("recordProjection").deepCopy());
+        }
+        if (source.path("recordSlots").isArray()) {
+            tableModel.set("recordSlots", source.path("recordSlots").deepCopy());
+        }
         tableModel.set("terminationRule", source.path("terminationRule").deepCopy());
         tableModel.set("headerTree", source.path("headerTree").deepCopy());
         tableModel.set("columns", columns.deepCopy());
@@ -544,6 +821,10 @@ final class GlobalSemanticSuggestionCompiler {
         payload.set("tableModel", tableModel);
         if (!"MATRIX".equals(kind) && hasRuntimeSlots && canProjectColumns(source, kind, physicalFacts)) {
             payload.set("longTableModel", buildLongTableModel(source, kind, physicalFacts));
+        }
+        if (!"MATRIX".equals(kind) && source.path("recordSlots").isArray()
+                && !source.path("recordSlots").isEmpty()) {
+            payload.set("longTableModel", buildSlotLongTableModel(source));
         }
         if ("MATRIX".equals(kind)) {
             var artifacts = matrixArtifacts(source, physicalFacts);
@@ -647,6 +928,10 @@ final class GlobalSemanticSuggestionCompiler {
                     .put("parentRelationId", parentRelationId)
                     .put("parentFieldId", parentFieldId)
                     .put("parentBindingId", parentBindingId)
+                    .put("regionId", payload.path("regionId").asText(payload.path("blockId").asText("")))
+                    .put("blockId", payload.path("blockId").asText(payload.path("regionId").asText("")))
+                    .put("parentBlockId", payload.path("parentBlockId").asText(""))
+                    .put("candidateRef", payload.path("candidateRef").asText(""))
                     .put("fieldCode", column.path("fieldCode").asText("TABLE.COLUMN." + code))
                      .put("dataPath", column.path("dataPath").asText(""))
                     .put("fieldName", column.path("name").asText(code))
@@ -680,6 +965,10 @@ final class GlobalSemanticSuggestionCompiler {
                      .put("standardFieldName", column.path("standardFieldName").asText(""))
                      .put("fieldOrigin", column.path("fieldOrigin").asText(""))
                      .put("standardSelectionStatus", column.path("standardSelectionStatus").asText(""))
+                     .put("nameSource", column.path("nameSource").asText("MODEL"))
+                     .put("semanticFallback", column.path("semanticFallback").asBoolean(false))
+                     .put("reviewRequired", column.path("reviewRequired").asBoolean(false)
+                             || payload.path("reviewRequired").asBoolean(false))
                      .put("reason", "这是“" + payload.path("fieldName").asText("明细")
                             + "”中的独立明细字段，可单独确认和同步。")
                      .put("interpretation", "系统认为这里填写每条记录的“"
@@ -718,9 +1007,98 @@ final class GlobalSemanticSuggestionCompiler {
                     "TABLE_CHILD_FIELD", childPayload, parent.confidence(),
                     objectMapper.createArrayNode().add(objectMapper.createObjectNode()
                             .put("source", "TABLE_COLUMN")
+                            .put("regionId", childPayload.path("regionId").asText(""))
+                            .put("blockId", childPayload.path("blockId").asText(""))
+                            .put("candidateRef", childPayload.path("candidateRef").asText(""))
                             .put("parentRelationId", parentRelationId)
                             .put("valueRange", valueRange))
             ));
+        }
+        return List.copyOf(result);
+    }
+
+    /**
+     * Matrix axes and the cross-tab measure are semantic fields, but they are
+     * not ordinary table columns. Keep them as explicit MATRIX_FIELD review
+     * items while the root MATRIX suggestion owns the complete geometry and
+     * runtime member slots.
+     */
+    private List<RecognitionModelClient.ModelSuggestion> matrixFields(
+            RecognitionModelClient.ModelSuggestion parent
+    ) {
+        var payload = parent.payload();
+        var matrix = payload.path("matrixModel");
+        if (!matrix.isObject()) return List.of();
+        var bindings = matrix.path("bindings");
+        if (!bindings.isArray()) return List.of();
+        var result = new ArrayList<RecognitionModelClient.ModelSuggestion>();
+        var parentRelationId = payload.path("relationId").asText("");
+        var parentFieldId = payload.path("fieldId").asText("");
+        var parentBindingId = payload.path("bindingId").asText("");
+        for (var binding : bindings) {
+            var bindingKind = binding.path("bindingKind").asText("");
+            if ("COLUMN_MEMBER".equals(bindingKind)) continue;
+            var sourceRange = binding.path("sourceRange").asText("");
+            var name = binding.path("name").asText("").strip();
+            var generated = name.isBlank();
+            if (generated && "MEASURE".equals(bindingKind)) name = "交叉值";
+            if (name.isBlank()) continue;
+            var code = binding.path("code").asText(bindingKind.toLowerCase(Locale.ROOT));
+            var relationId = parentRelationId + "|matrix|" + code + "|"
+                    + RecognitionIdentity.normalizeRange(sourceRange);
+            var fieldId = RecognitionIdentity.fieldId(relationId);
+            var bindingId = RecognitionIdentity.bindingId(fieldId, "MATRIX_REGION",
+                    payload.path("locator").path("sheetId").asText("") + "|" + sourceRange);
+            var fieldCode = "MATRIX." + bindingKind + "." + code;
+            var dataPath = "MEASURE".equals(bindingKind)
+                    ? "/records/*/value" : "/records/*/" + code;
+            var child = objectMapper.createObjectNode()
+                    .put("kind", "SCALAR")
+                    .put("suggestionLevel", "CHILD")
+                    .put("mappingKind", "MATRIX_FIELD")
+                    .put("relationId", relationId)
+                    .put("modelRelationId", parentRelationId)
+                    .put("fieldId", fieldId.toString())
+                    .put("bindingId", bindingId.toString())
+                    .put("parentRelationId", parentRelationId)
+                    .put("parentFieldId", parentFieldId)
+                    .put("parentBindingId", parentBindingId)
+                    .put("regionId", payload.path("regionId").asText(payload.path("blockId").asText("")))
+                    .put("blockId", payload.path("blockId").asText(payload.path("regionId").asText("")))
+                    .put("parentBlockId", payload.path("parentBlockId").asText(""))
+                    .put("candidateRef", payload.path("candidateRef").asText(""))
+                    .put("fieldCode", fieldCode)
+                    .put("dataPath", dataPath)
+                    .put("fieldName", name)
+                    .put("groupName", payload.path("groupName").asText("基础信息"))
+                    .put("valueType", binding.path("valueType").asText("string"))
+                    .put("role", "FIELD")
+                    .put("locatorType", "MATRIX_REGION")
+                    .put("editability", "MEASURE".equals(bindingKind) ? "EDITABLE" : "EDITABLE")
+                    .put("valueSource", "USER_INPUT")
+                    .put("sourceRange", sourceRange)
+                    .put("bindingKind", bindingKind)
+                    .put("nameSource", generated ? "GENERATED_PLACEHOLDER" : "MODEL")
+                    .put("semanticFallback", generated)
+                    .put("candidateOnly", payload.path("candidateOnly").asBoolean(false) || generated)
+                    .put("reviewRequired", payload.path("reviewRequired").asBoolean(false) || generated)
+                    .put("canonicalStatus", payload.path("canonicalStatus").asText("PROVISIONAL"))
+                    .put("structureStatus", payload.path("structureStatus").asText("PROVISIONAL"))
+                    .put("parentStructurePending", payload.path("candidateOnly").asBoolean(false)
+                            || payload.path("reviewRequired").asBoolean(false))
+                    .put("reason", "这是矩阵中的" + ("MEASURE".equals(bindingKind) ? "交叉指标" : "轴字段"));
+            var locator = payload.path("locator").deepCopy();
+            if (locator instanceof ObjectNode locatorObject) {
+                locatorObject.put("sourceRange", sourceRange);
+                locatorObject.put("logicalInputRange", sourceRange);
+            }
+            child.set("locator", locator);
+            var evidence = objectMapper.createArrayNode();
+            evidence.add(objectMapper.createObjectNode()
+                    .put("source", "MATRIX_BINDING")
+                    .put("regionId", child.path("regionId").asText("")));
+            result.add(new RecognitionModelClient.ModelSuggestion(
+                    "MATRIX_FIELD", child, parent.confidence(), evidence));
         }
         return List.copyOf(result);
     }
@@ -796,6 +1174,58 @@ final class GlobalSemanticSuggestionCompiler {
                 projection, columns, rows);
     }
 
+    private ObjectNode buildSlotLongTableModel(JsonNode source) {
+        var sheetId = source.path("sheetId").asText("");
+        var regionId = source.path("blockId").asText(source.path("blockTemporaryId").asText(""));
+        var result = objectMapper.createObjectNode()
+                .put("schemaVersion", 1)
+                .put("sourceKind", source.path("tableKind").asText("ROW_TABLE"))
+                .put("semanticMode", "RECORD_SET")
+                .put("layoutMode", "LONG_FORM")
+                .put("sourceRange", source.path("range").asText(""))
+                .put("dataRange", source.path("dataRange").asText(""))
+                .put("projectionStatus", "ROW_RECORDS")
+                .put("blankAxisPolicy", "KEEP_RUNTIME_RECORD_SLOT")
+                .put("trainingPolicy", "REQUIRE_RUNTIME_RECORD_VALUE");
+        var projection = source.path("recordProjection").isObject()
+                ? source.path("recordProjection").deepCopy()
+                : objectMapper.createObjectNode().put("mode", "ROW_RECORDS").put("recordAxis", "ROW");
+        result.set("recordProjection", projection);
+        result.set("recordSlots", source.path("recordSlots").deepCopy());
+        result.set("rowSlots", source.path("recordSlots").deepCopy());
+        result.putArray("columnSlots");
+        var records = result.putArray("records");
+        var ordinal = 0;
+        for (var slot : source.path("recordSlots")) {
+            ordinal++;
+            var range = slot.path("range").asText("");
+            var slotId = slot.path("slotId").asText("record-" + ordinal);
+            var stableKey = slot.path("recordKey").asText(
+                    sheetId + "|" + regionId + "|" + RecognitionIdentity.normalizeRange(range));
+            var record = objectMapper.createObjectNode()
+                    .put("recordKey", stableKey)
+                    .put("recordId", "record-" + RecognitionIdentity.shortHash(stableKey, 20))
+                    .put("slotId", slotId)
+                    .put("order", slot.path("order").asInt(ordinal))
+                    .put("range", range)
+                    .put("identityAddress", slot.path("identityAddress").asText(range.split(":", 2)[0]))
+                    .put("templateStatus", "RUNTIME_INPUT")
+                    .put("instanceStatus", "EMPTY")
+                    .put("role", "ROW_RECORD_SLOT")
+                    .put("editability", "EDITABLE")
+                    .put("valueSource", "USER_INPUT")
+                    .put("trainingEligible", false);
+            var bounds = rangeBounds(range);
+            if (bounds != null) record.put("startRow", bounds[1]).put("endRow", bounds[3]);
+            records.add(record);
+        }
+        result.set("trainingSummary", objectMapper.createObjectNode()
+                .put("recordCount", records.size())
+                .put("runtimeInputCount", records.size())
+                .put("trainingEligibleCount", 0));
+        return result;
+    }
+
     private String physicalCellText(JsonNode physicalFacts, String sheetId, int column, int row) {
         var cell = physicalCell(physicalFacts, sheetId, column, row);
         return cell == null ? "" : cell.path("value").asText("").replaceAll("[\\r\\n]+", " ").strip();
@@ -859,8 +1289,12 @@ final class GlobalSemanticSuggestionCompiler {
                 .put("sheetId", source.path("sheetId").asText())
                 .put("range", source.path("range").asText())
                 .put("type", normalizedType)
+                .put("candidateRef", source.path("candidateRef").asText(temporaryId))
                 .put("businessName", source.path("businessName").asText())
                 .put("groupName", suggestedGroup);
+        if (source.path("staticContents").isArray()) {
+            block.set("staticContents", source.path("staticContents").deepCopy());
+        }
         if (parent != null) block.put("parentBlockId", parent.path("blockId").asText());
         result.put(temporaryId, block);
         return block;
@@ -944,6 +1378,11 @@ final class GlobalSemanticSuggestionCompiler {
         payload.put("blockType", block.path("type").asText());
         payload.put("blockName", block.path("businessName").asText(""));
         payload.put("regionId", block.path("blockId").asText());
+        payload.put("candidateRef", block.path("candidateRef").asText(""));
+        payload.put("regionRange", block.path("range").asText(""));
+        if (block.path("staticContents").isArray()) {
+            payload.set("regionStaticContents", block.path("staticContents").deepCopy());
+        }
     }
 
     /**
@@ -1078,6 +1517,9 @@ final class GlobalSemanticSuggestionCompiler {
                     .put("valueType", numeric ? "number" : "string")
                     .put("editability", formula ? "READ_ONLY" : "EDITABLE")
                     .put("valueSource", formula ? "FORMULA" : "USER_INPUT")
+                    .put("nameSource", name.isBlank() ? "RUNTIME_SLOT" : "PHYSICAL_HEADER_FALLBACK")
+                    .put("semanticFallback", !name.isBlank())
+                    .put("reviewRequired", !name.isBlank())
                     .put("unit", "").put("condition", "")
                     .put("semanticKeySuggestion", "column_" + String.format(Locale.ROOT, "%02d", ordinal));
             result.add(column);
@@ -1099,7 +1541,14 @@ final class GlobalSemanticSuggestionCompiler {
                 ? table.path("columns") : inferColumns(table, physicalFacts);
         var ordered = new ArrayList<ObjectNode>();
         for (var item : raw) {
-            if (item.isObject()) ordered.add(item.deepCopy());
+            if (item.isObject() && !isGeneratedPlaceholder(item.path("name").asText(""))) {
+                ordered.add(item.deepCopy());
+            }
+        }
+        if (ordered.isEmpty()) {
+            for (var item : inferColumns(table, physicalFacts)) {
+                if (item.isObject()) ordered.add(item.deepCopy());
+            }
         }
         ordered.sort(Comparator.comparingInt(item -> {
             var bounds = rangeBounds(item.path("valueRange").asText(""));
@@ -1108,6 +1557,7 @@ final class GlobalSemanticSuggestionCompiler {
 
         var result = objectMapper.createArrayNode();
         for (var column : ordered) {
+            applyPhysicalHeaderFallback(column, table, physicalFacts);
             var currentBounds = rangeBounds(column.path("valueRange").asText(""));
             if (currentBounds == null) {
                 result.add(column);
@@ -1126,6 +1576,469 @@ final class GlobalSemanticSuggestionCompiler {
             }
         }
         return result;
+    }
+
+    private boolean isGeneratedPlaceholder(String name) {
+        var normalized = name == null ? "" : name.strip();
+        return normalized.isBlank() || "待确认列".equals(normalized)
+                || normalized.matches("(?i)column[_ -]?[0-9]{1,3}");
+    }
+
+    private void applyPhysicalHeaderFallback(ObjectNode column, JsonNode table, JsonNode physicalFacts) {
+        if (!column.path("name").asText("").strip().isBlank()) {
+            if (!column.has("nameSource")) column.put("nameSource", "MODEL");
+            if (!column.has("semanticFallback")) column.put("semanticFallback", false);
+            return;
+        }
+        var header = rangeBounds(table.path("headerRange").asText(""));
+        var value = rangeBounds(column.path("valueRange").asText(""));
+        if (header == null || value == null) return;
+        var inferred = inferredHeaderName(physicalFacts, table.path("sheetId").asText(""), header, value[0]);
+        if (inferred.isBlank()) return;
+        column.put("name", inferred)
+                .put("nameSource", "PHYSICAL_HEADER_FALLBACK")
+                .put("semanticFallback", true)
+                .put("reviewRequired", true)
+                .put("standardMatchStatus", "UNMATCHED");
+    }
+
+    /** Infer conservative label/value pairs for an explicitly selected form region. */
+    private ArrayNode inferFormRelations(JsonNode geometry, JsonNode physicalFacts, String blockId) {
+        var result = objectMapper.createArrayNode();
+        var region = rangeBounds(geometry.path("range").asText(""));
+        if (region == null) return result;
+        var sheetId = geometry.path("sheetId").asText("");
+        var cells = formCells(physicalFacts, sheetId).stream()
+                .filter(cell -> sheetId.equals(cell.path("sheetId").asText("")))
+                .filter(cell -> contains(region, rangeBounds(cell.path("mergedRange")
+                        .asText(cell.path("address").asText("")))))
+                .toList();
+        var ordinal = 0;
+        var consumedValueRanges = new ArrayList<int[]>();
+        for (var labelCell : cells) {
+            var rawName = labelCell.path("value").asText("").strip();
+            var labelRange = labelCell.path("mergedRange").asText(labelCell.path("address").asText(""));
+            var label = rangeBounds(labelRange);
+            if (rawName.isBlank() || label == null || isStaticInstruction(rawName)
+                    || consumedValueRanges.stream().anyMatch(consumed -> intersects(consumed, label))
+                    || (label[1] == region[1] && label[3] == region[1]
+                    && label[0] == region[0] && label[2] == region[2])) continue;
+
+            var delimiter = delimiterIndex(rawName);
+            var inlineName = delimiter > 0 && delimiter <= 16
+                    ? normalizeFormFieldName(rawName.substring(0, delimiter)) : "";
+            var inlineContent = delimiter >= 0 && delimiter + 1 < rawName.length()
+                    ? rawName.substring(delimiter + 1).strip() : "";
+            if (!inlineName.isBlank() && (!inlineContent.isBlank() || label[2] > label[0])) {
+                var relation = formRelation(++ordinal, blockId, labelRange, labelRange, inlineName,
+                        !inlineContent.isBlank(), false);
+                relation.put("relationType", "INLINE_TEXT")
+                        .put("valuePart", "AFTER_DELIMITER")
+                        .put("allowInlineFormValue", true);
+                result.add(relation);
+                consumedValueRanges.add(label);
+                continue;
+            }
+
+            int nextLabelStart = Integer.MAX_VALUE;
+            for (var candidate : cells) {
+                var candidateText = candidate.path("value").asText("").strip();
+                if (candidateText.isBlank() || isStaticInstruction(candidateText)) continue;
+                var candidateRange = rangeBounds(candidate.path("mergedRange")
+                        .asText(candidate.path("address").asText("")));
+                if (candidateRange == null || candidateRange[1] != label[1]
+                        || candidateRange[0] <= label[2]) continue;
+                if (looksLikeFormLabel(candidate, cells, region)) {
+                    nextLabelStart = Math.min(nextLabelStart, candidateRange[0]);
+                }
+            }
+            if (!looksLikeFormLabel(labelCell, cells, region)) continue;
+            var valueStart = label[2] + 1;
+            var valueEnd = nextLabelStart == Integer.MAX_VALUE ? region[2] : nextLabelStart - 1;
+            var positionPending = valueStart > valueEnd || !hasPhysicalSurface(cells, label[1], valueStart, valueEnd);
+            var valueRange = positionPending ? labelRange
+                    : excelRange(valueStart, label[1], valueEnd, label[3]);
+            var staticValue = !positionPending && containsPopulatedValue(cells, valueRange, labelRange);
+            var relation = formRelation(++ordinal, blockId, labelRange, valueRange,
+                    normalizeFormFieldName(rawName), staticValue, positionPending);
+            result.add(relation);
+            if (!positionPending) consumedValueRanges.add(rangeBounds(valueRange));
+        }
+        return result;
+    }
+
+    /** Keep long note/instruction cells visible as region context without promoting them to fields. */
+    private ArrayNode inferFormStaticContents(JsonNode geometry, JsonNode physicalFacts) {
+        var result = objectMapper.createArrayNode();
+        var region = rangeBounds(geometry.path("range").asText(""));
+        if (region == null) return result;
+        var sheetId = geometry.path("sheetId").asText("");
+        for (var cell : formCells(physicalFacts, sheetId)) {
+            var text = cell.path("value").asText("").strip();
+            var address = cell.path("mergedRange").asText(cell.path("address").asText(""));
+            var bounds = rangeBounds(address);
+            if (!isStaticInstruction(text) || bounds == null || !contains(region, bounds)) continue;
+            result.add(objectMapper.createObjectNode()
+                    .put("address", address)
+                    .put("text", text)
+                    .put("role", "NOTE"));
+        }
+        return result;
+    }
+
+    private boolean containsJson(ArrayNode array, JsonNode value) {
+        for (var existing : array) if (existing.equals(value)) return true;
+        return false;
+    }
+
+    private ObjectNode formRelation(
+            int ordinal, String blockId, String labelRange, String valueRange,
+            String name, boolean staticValue, boolean positionPending
+    ) {
+        var relation = objectMapper.createObjectNode()
+                .put("temporaryId", "form-fallback-" + ordinal)
+                .put("blockTemporaryId", blockId)
+                .put("labelRange", labelRange).put("valueRange", valueRange)
+                .put("businessName", name).put("valueType", "string")
+                .put("required", false)
+                .put("editability", staticValue ? "READ_ONLY" : "EDITABLE")
+                .put("valueSource", staticValue ? "STATIC" : "USER_INPUT")
+                .put("unit", "").put("condition", "")
+                .put("nameSource", "PHYSICAL_HEADER_FALLBACK")
+                .put("semanticFallback", true).put("reviewRequired", true);
+        if (positionPending) relation.put("positionPending", true)
+                .put("editability", "EDITABLE").put("valueSource", "USER_INPUT");
+        return relation;
+    }
+
+    private List<JsonNode> formCells(JsonNode physicalFacts, String sheetId) {
+        var byAddress = new LinkedHashMap<String, JsonNode>();
+        for (var sheet : physicalFacts.path("sheets")) {
+            if (!sheetId.equals(sheet.path("id").asText(sheet.path("sheetId").asText("")))) continue;
+            for (var cell : sheet.path("candidateCells")) {
+                var copy = (ObjectNode) cell.deepCopy(); copy.put("sheetId", sheetId);
+                byAddress.put(cell.path("address").asText(""), copy);
+            }
+        }
+        for (var cell : semanticCells(physicalFacts)) {
+            if (sheetId.equals(cell.path("sheetId").asText(""))) {
+                var address = cell.path("address").asText("");
+                var prior = byAddress.get(address);
+                if (prior != null && cell.isObject()) {
+                    var merged = (ObjectNode) prior.deepCopy();
+                    cell.fields().forEachRemaining(entry -> merged.set(entry.getKey(), entry.getValue().deepCopy()));
+                    byAddress.put(address, merged);
+                } else byAddress.put(address, cell);
+            }
+        }
+        return byAddress.values().stream().sorted(Comparator
+                .comparingInt(this::cellRow)
+                .thenComparingInt(this::cellColumn)).toList();
+    }
+
+    private boolean looksLikeFormLabel(JsonNode cell, List<JsonNode> cells, int[] region) {
+        var text = cell.path("value").asText("").strip();
+        var bounds = rangeBounds(cell.path("mergedRange").asText(cell.path("address").asText("")));
+        if (text.isBlank() || text.length() > 24 || bounds == null || isStaticInstruction(text)
+                || isPopulatedValueBesideShortLabel(cell, cells, bounds)) return false;
+        if (delimiterIndex(text) > 0) return true;
+        return bounds[2] < region[2] && hasPhysicalSurface(cells, bounds[1], bounds[2] + 1,
+                Math.min(region[2], bounds[2] + 3));
+    }
+
+    private boolean isPopulatedValueBesideShortLabel(JsonNode cell, List<JsonNode> cells, int[] bounds) {
+        if (cell.path("value").asText("").strip().isBlank() || cell.path("inputCandidate").asBoolean(false)) {
+            return false;
+        }
+        return cells.stream().anyMatch(previous -> {
+            if (previous == cell) return false;
+            var previousText = previous.path("value").asText("").strip();
+            var previousBounds = rangeBounds(previous.path("mergedRange")
+                    .asText(previous.path("address").asText("")));
+            return previousBounds != null && previousBounds[1] == bounds[1]
+                    && previousBounds[2] + 1 == bounds[0]
+                    && previousBounds[0] == previousBounds[2]
+                    && !previousText.isBlank() && previousText.length() <= 8
+                    && delimiterIndex(previousText) < 0 && !isStaticInstruction(previousText);
+        });
+    }
+
+    private boolean hasPhysicalSurface(List<JsonNode> cells, int row, int startColumn, int endColumn) {
+        if (startColumn > endColumn) return false;
+        return cells.stream().anyMatch(cell -> cellRow(cell) == row
+                && cellColumn(cell) >= startColumn && cellColumn(cell) <= endColumn
+                && (cell.path("hasBorder").asBoolean(false)
+                || cell.path("inputCandidate").asBoolean(false)
+                || !cell.path("mergedRange").asText("").isBlank()
+                || !cell.path("value").asText("").strip().isBlank()));
+    }
+
+    private int cellRow(JsonNode cell) {
+        var row = cell.path("row").asInt(0);
+        if (row > 0) return row;
+        var bounds = rangeBounds(cell.path("mergedRange").asText(cell.path("address").asText("")));
+        return bounds == null ? 0 : bounds[1];
+    }
+
+    private int cellColumn(JsonNode cell) {
+        var column = cell.path("column").asInt(0);
+        if (column > 0) return column;
+        var bounds = rangeBounds(cell.path("mergedRange").asText(cell.path("address").asText("")));
+        return bounds == null ? 0 : bounds[0];
+    }
+
+    private boolean containsPopulatedValue(List<JsonNode> cells, String valueRange, String labelRange) {
+        var value = rangeBounds(valueRange);
+        if (value == null) return false;
+        return cells.stream().anyMatch(cell -> {
+            var address = cell.path("mergedRange").asText(cell.path("address").asText(""));
+            var bounds = rangeBounds(address);
+            return bounds != null && contains(value, bounds) && !sameRange(address, labelRange)
+                    && !cell.path("value").asText("").strip().isBlank()
+                    && !cell.path("inputCandidate").asBoolean(false);
+        });
+    }
+
+    private int delimiterIndex(String text) {
+        var chinese = text.indexOf('：');
+        var ascii = text.indexOf(':');
+        if (chinese < 0) return ascii;
+        if (ascii < 0) return chinese;
+        return Math.min(chinese, ascii);
+    }
+
+    private String normalizeFormFieldName(String value) {
+        var name = value == null ? "" : value.replaceAll("[：:]$", "").strip();
+        return name.matches(".*[\\p{IsHan}].*") ? name.replaceAll("\\s+", "") : name;
+    }
+
+    private boolean isStaticInstruction(String value) {
+        var normalized = value == null ? "" : value.strip();
+        return normalized.length() >= 12 && (normalized.startsWith("注：") || normalized.startsWith("注:")
+                || normalized.startsWith("备注：") || normalized.startsWith("备注:")
+                || normalized.startsWith("说明：") || normalized.startsWith("说明:")
+                || normalized.startsWith("注意：") || normalized.startsWith("注意:"));
+    }
+
+    private ArrayNode mergeFormRelations(JsonNode modelRelations, ArrayNode physicalRelations) {
+        var result = objectMapper.createArrayNode();
+        var labels = new java.util.HashSet<String>();
+        var names = new java.util.HashSet<String>();
+        if (modelRelations.isArray()) {
+            for (var relation : modelRelations) {
+                result.add(relation.deepCopy());
+                labels.add(RecognitionIdentity.normalizeRange(relation.path("labelRange").asText("")));
+                names.add(normalizeColumnName(relation.path("businessName").asText("")));
+            }
+        }
+        for (var relation : physicalRelations) {
+            var label = RecognitionIdentity.normalizeRange(relation.path("labelRange").asText(""));
+            var name = normalizeColumnName(relation.path("businessName").asText(""));
+            if (labels.add(label) && names.add(name)) result.add(relation.deepCopy());
+        }
+        return result;
+    }
+
+    private void appendRowTableHeaderFallbacks(
+            ArrayNode columns, ArrayNode relations, ObjectNode table,
+            String sheetId, String blockId, JsonNode physicalFacts
+    ) {
+        var header = rangeBounds(table.path("headerRange").asText(""));
+        var data = rangeBounds(table.path("dataRange").asText(""));
+        if (header == null || data == null) return;
+        var existingLabels = new HashSet<String>();
+        var existingNames = new HashSet<String>();
+        for (var column : columns) {
+            existingLabels.add(RecognitionIdentity.normalizeRange(column.path("labelRange").asText("")));
+            existingNames.add(normalizeColumnName(column.path("name").asText("")));
+        }
+        var ordinal = columns.size();
+        for (var cell : semanticCells(physicalFacts).stream()
+                .filter(cell -> sheetId.equals(cell.path("sheetId").asText("")))
+                .sorted(Comparator.comparingInt(cell -> cell.path("column").asInt())).toList()) {
+            var name = cell.path("value").asText("").replaceAll("[\\r\\n]+", " ").strip();
+            var labelRange = cell.path("mergedRange").asText(cell.path("address").asText(""));
+            var label = rangeBounds(labelRange);
+            if (name.isBlank() || label == null || !contains(header, label)) continue;
+            var normalizedLabel = RecognitionIdentity.normalizeRange(labelRange);
+            var normalizedName = normalizeColumnName(name);
+            if (existingLabels.contains(normalizedLabel) || existingNames.contains(normalizedName)) continue;
+            var valueRange = excelRange(Math.max(data[0], label[0]), data[1],
+                    Math.min(data[2], label[2]), data[3]);
+            if (rangeBounds(valueRange) == null) continue;
+            var formula = containsFormula(physicalFacts, sheetId, valueRange);
+            var valueType = inferredValueType(physicalFacts, sheetId, valueRange);
+            var temporaryId = "row-header-fallback-" + (++ordinal);
+            var relation = objectMapper.createObjectNode()
+                    .put("temporaryId", temporaryId).put("sheetId", sheetId)
+                    .put("blockTemporaryId", blockId).put("labelRange", labelRange)
+                    .put("valueRange", valueRange).put("businessName", name)
+                    .put("valueType", valueType).put("required", false)
+                    .put("editability", formula ? "READ_ONLY" : "EDITABLE")
+                    .put("valueSource", formula ? "FORMULA" : "USER_INPUT")
+                    .put("unit", "").put("condition", "")
+                    .put("nameSource", "PHYSICAL_HEADER_FALLBACK")
+                    .put("semanticFallback", true).put("reviewRequired", true)
+                    .put("standardMatchStatus", "UNMATCHED");
+            relations.add(relation.deepCopy());
+            columns.add(objectMapper.createObjectNode()
+                    .put("temporaryId", temporaryId).put("name", name)
+                    .put("labelRange", labelRange).put("valueRange", valueRange)
+                    .put("valueType", valueType)
+                    .put("editability", formula ? "READ_ONLY" : "EDITABLE")
+                    .put("valueSource", formula ? "FORMULA" : "USER_INPUT")
+                    .put("unit", "").put("condition", "")
+                    .put("nameSource", "PHYSICAL_HEADER_FALLBACK")
+                    .put("semanticFallback", true).put("reviewRequired", true)
+                    .put("standardMatchStatus", "UNMATCHED"));
+            existingLabels.add(normalizedLabel); existingNames.add(normalizedName);
+        }
+    }
+
+    private String inferredValueType(JsonNode physicalFacts, String sheetId, String range) {
+        var bounds = rangeBounds(range);
+        if (bounds == null) return "string";
+        for (var cell : semanticCells(physicalFacts)) {
+            if (!sheetId.equals(cell.path("sheetId").asText(""))) continue;
+            var cellBounds = rangeBounds(cell.path("address").asText(""));
+            if (cellBounds == null || !contains(bounds, cellBounds)) continue;
+            if (cell.path("value").isIntegralNumber()) return "integer";
+            if (cell.path("value").isNumber()) return "number";
+        }
+        return "string";
+    }
+
+    private void appendColumnTableRowAttributeFallbacks(
+            ArrayNode columns,
+            ArrayNode relations,
+            JsonNode rowAttributes,
+            ObjectNode table,
+            String sheetId,
+            String blockId,
+            JsonNode physicalFacts
+    ) {
+        if (!rowAttributes.isArray()) return;
+        var recordColumns = recordColumns(table);
+        if (recordColumns.isEmpty()) return;
+        var ordinal = 0;
+        for (var attribute : rowAttributes) {
+            if (!attribute.isObject()) continue;
+            var name = attribute.path("name").asText("").strip();
+            var labelRange = attribute.path("sourceRange").asText("").strip();
+            var label = rangeBounds(labelRange);
+            if (name.isBlank() || label == null) continue;
+            var valueRange = excelRange(recordColumns.get(0), label[1],
+                    recordColumns.get(recordColumns.size() - 1), label[3]);
+            var formula = containsFormula(physicalFacts, sheetId, valueRange);
+            var temporaryId = "row-attribute-" + (++ordinal);
+            var relation = objectMapper.createObjectNode()
+                    .put("temporaryId", temporaryId)
+                    .put("sheetId", sheetId)
+                    .put("blockTemporaryId", blockId)
+                    .put("labelRange", labelRange)
+                    .put("valueRange", valueRange)
+                    .put("businessName", name)
+                    .put("valueType", "string")
+                    .put("required", attribute.path("optional").asBoolean(false) ? false : true)
+                    .put("editability", formula ? "READ_ONLY" : "EDITABLE")
+                    .put("valueSource", formula ? "FORMULA" : "USER_INPUT")
+                    .put("unit", "")
+                    .put("condition", "")
+                    .put("nameSource", "ROW_ATTRIBUTE_FALLBACK")
+                    .put("semanticFallback", true)
+                    .put("reviewRequired", true)
+                    .put("standardMatchStatus", "UNMATCHED");
+            relations.add(relation.deepCopy());
+            columns.add(objectMapper.createObjectNode()
+                    .put("temporaryId", temporaryId)
+                    .put("name", name)
+                    .put("labelRange", labelRange)
+                    .put("valueRange", valueRange)
+                    .put("valueType", "string")
+                    .put("editability", formula ? "READ_ONLY" : "EDITABLE")
+                    .put("valueSource", formula ? "FORMULA" : "USER_INPUT")
+                    .put("unit", "")
+                    .put("condition", "")
+                    .put("nameSource", "ROW_ATTRIBUTE_FALLBACK")
+                    .put("semanticFallback", true)
+                    .put("reviewRequired", true)
+                    .put("standardMatchStatus", "UNMATCHED"));
+        }
+    }
+
+    private boolean containsFormula(JsonNode physicalFacts, String sheetId, String range) {
+        var target = rangeBounds(range);
+        if (target == null) return false;
+        for (var cell : semanticCells(physicalFacts)) {
+            if (!sheetId.equals(cell.path("sheetId").asText(""))) continue;
+            var bounds = rangeBounds(cell.path("address").asText(""));
+            if (bounds != null && contains(target, bounds)
+                    && ("FORMULA".equals(cell.path("factType").asText(""))
+                    || cell.path("formula").isTextual())) return true;
+        }
+        for (var sheet : physicalFacts.path("sheets")) {
+            if (!sheetId.equals(sheet.path("id").asText(""))) continue;
+            for (var row : sheet.path("rowProfiles")) {
+                var rowNumber = row.path("row").asInt(0);
+                if (rowNumber >= target[1] && rowNumber <= target[3]
+                        && row.path("formulaCells").asInt(0) > 0) return true;
+            }
+        }
+        return false;
+    }
+
+    /** A populated label cell followed by a real input cell is not a value. */
+    private boolean validPhysicalFormRelation(JsonNode relation, JsonNode physicalFacts, String sheetId) {
+        var value = rangeBounds(relation.path("valueRange").asText(""));
+        if (value == null) return false;
+        var valueCell = physicalCell(physicalFacts, sheetId, value[0], value[1]);
+        if (valueCell == null || valueCell.path("value").asText("").strip().isBlank()) return true;
+        for (var candidate : semanticCells(physicalFacts)) {
+            if (!sheetId.equals(candidate.path("sheetId").asText(""))) continue;
+            var bounds = rangeBounds(candidate.path("mergedRange").asText(
+                    candidate.path("address").asText("")));
+            if (bounds != null && bounds[1] == value[1] && bounds[0] == value[2] + 1
+                    && candidate.path("inputCandidate").asBoolean(false)) return false;
+        }
+        return true;
+    }
+
+    private boolean validFormModelRelation(
+            JsonNode relation, JsonNode geometry, JsonNode physicalFacts, String sheetId
+    ) {
+        var region = rangeBounds(geometry.path("range").asText(""));
+        var label = rangeBounds(relation.path("labelRange").asText(""));
+        var value = rangeBounds(relation.path("valueRange").asText(""));
+        if (region == null || label == null || value == null
+                || relation.path("businessName").asText("").strip().isBlank()) return false;
+        if (sameRange(geometry.path("range").asText(""), relation.path("labelRange").asText(""))
+                || sameRange(geometry.path("range").asText(""), relation.path("valueRange").asText(""))) {
+            return false;
+        }
+        var cells = formCells(physicalFacts, sheetId);
+        for (var cell : cells) {
+            var cellRange = rangeBounds(cell.path("mergedRange").asText(cell.path("address").asText("")));
+            if (cellRange != null && intersects(cellRange, label)
+                    && looksLikeFormLabel(cell, cells, region)) return true;
+        }
+        return false;
+    }
+
+    private List<Integer> recordColumns(JsonNode table) {
+        var result = new ArrayList<Integer>();
+        for (var item : table.path("recordProjection").path("recordColumns")) {
+            if (!item.isTextual()) continue;
+            var bounds = rangeBounds(item.asText());
+            if (bounds != null) {
+                for (int column = bounds[0]; column <= bounds[2]; column++) result.add(column);
+                continue;
+            }
+            var cell = cellBounds(item.asText() + "1");
+            if (cell != null) result.add(cell[0]);
+        }
+        if (!result.isEmpty()) return result.stream().distinct().sorted().toList();
+        var data = rangeBounds(table.path("dataRange").asText(""));
+        return data == null ? List.of() : java.util.stream.IntStream.rangeClosed(data[0], data[2]).boxed().toList();
     }
 
     private boolean canMergeColumns(
@@ -1236,11 +2149,41 @@ final class GlobalSemanticSuggestionCompiler {
         return String.join(" / ", values);
     }
 
+    private String inferredLabelName(JsonNode physicalFacts, String sheetId, String labelRange) {
+        var label = rangeBounds(labelRange);
+        if (label == null) return "";
+        var values = new ArrayList<String>();
+        for (var cell : semanticCells(physicalFacts)) {
+            if (!sheetId.equals(cell.path("sheetId").asText(""))) continue;
+            var bounds = rangeBounds(cell.path("mergedRange").asText(""));
+            if (bounds == null) bounds = rangeBounds(cell.path("address").asText(""));
+            if (bounds == null || !intersects(bounds, label)) continue;
+            var value = cell.path("value").asText("").replaceAll("[\\r\\n]+", " ").strip();
+            if (!value.isBlank() && !values.contains(value)) values.add(value);
+        }
+        return String.join(" / ", values);
+    }
+
     /** semanticCells is intentionally canonical at sheet level in physical facts. */
     private List<JsonNode> semanticCells(JsonNode physicalFacts) {
         var result = new ArrayList<JsonNode>();
         for (var sheet : physicalFacts.path("sheets")) {
-            if (sheet.path("semanticCells").isArray()) sheet.path("semanticCells").forEach(result::add);
+            if (!sheet.path("semanticCells").isArray()) continue;
+            var sheetId = sheet.path("id").asText(sheet.path("sheetId").asText(""));
+            for (var cell : sheet.path("semanticCells")) {
+                // Compact physical facts keep cells under their sheet and do
+                // not repeat sheetId on every cell.  Enrich a copy at this
+                // boundary so all topology/name fallbacks use the same
+                // canonical sheet-aware representation as legacy facts.
+                if (cell.path("sheetId").asText("").isBlank() && cell.isObject()
+                        && !sheetId.isBlank()) {
+                    var copy = (ObjectNode) cell.deepCopy();
+                    copy.put("sheetId", sheetId);
+                    result.add(copy);
+                } else {
+                    result.add(cell);
+                }
+            }
         }
         if (result.isEmpty() && physicalFacts.path("candidateCells").isArray()) {
             physicalFacts.path("candidateCells").forEach(result::add);
@@ -1288,19 +2231,28 @@ final class GlobalSemanticSuggestionCompiler {
     }
 
     private ColumnIdentity uniqueColumnIdentity(
-            JsonNode sourceColumn, int ordinal, boolean formulaTable, Set<String> usedPaths
+            JsonNode sourceColumn, int ordinal, boolean formulaTable,
+            Set<String> usedPaths, Set<String> usedNames
     ) {
         var identity = columnIdentity(sourceColumn, ordinal, formulaTable);
+        var duplicateName = !identity.name().isBlank() && !usedNames.add(identity.name());
         if (usedPaths.add(identity.pathSegment())) return identity;
         var offset = sourceColumn.path("columnOffset").asInt(
                 Math.max(0, columnStart(sourceColumn.path("valueRange").asText()) - 1));
         var suffix = "_col" + (offset + 1);
         var unique = identity.pathSegment() + suffix;
-        usedPaths.add(unique);
+        var sequence = 2;
+        while (!usedPaths.add(unique)) unique = identity.pathSegment() + suffix + "_" + sequence++;
+        var displayName = identity.name();
+        if (duplicateName) {
+            var labelRange = sourceColumn.path("labelRange").asText("").strip();
+            if (labelRange.isBlank()) labelRange = sourceColumn.path("valueRange").asText("").strip();
+            if (!labelRange.isBlank()) displayName += "（" + labelRange + "）";
+        }
         return new ColumnIdentity(
                 identity.code() + suffix,
                 identity.fieldCode() + suffix,
-                identity.name() + "（第" + (offset + 1) + "列）",
+                displayName,
                 unique
         );
     }

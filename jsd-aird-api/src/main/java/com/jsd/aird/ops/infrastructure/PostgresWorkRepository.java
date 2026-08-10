@@ -76,7 +76,8 @@ public class PostgresWorkRepository implements WorkRepository {
                         UPDATE ops.async_job
                         SET status = 'SUCCEEDED', result_jsonb = ?, progress = 100,
                             current_stage = 'COMPLETED', lease_owner = NULL,
-                            lease_expires_at = NULL, finished_at = now(), updated_at = now()
+                            lease_expires_at = NULL, last_error = NULL,
+                            finished_at = now(), updated_at = now()
                         WHERE id = ?
                         """,
                 pgJson(result),

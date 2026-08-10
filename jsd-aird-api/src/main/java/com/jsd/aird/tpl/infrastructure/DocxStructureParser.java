@@ -4,9 +4,12 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.security.MessageDigest;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.UUID;
 import java.util.zip.ZipInputStream;
 
@@ -14,6 +17,7 @@ import javax.xml.XMLConstants;
 import javax.xml.parsers.DocumentBuilderFactory;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.tpl.application.port.OfficeStructureParser;
@@ -55,8 +59,8 @@ public class DocxStructureParser implements OfficeStructureParser, WordDocumentP
 
             var summary = objectMapper.createObjectNode();
             summary.put("format", "DOCX");
-            summary.put("parserVersion", "docx-ir-v1");
-            summary.put("structureVersion", 1);
+            summary.put("parserVersion", "docx-ir-v2");
+            summary.put("structureVersion", 2);
             summary.put("paragraphCount", count(dom, "p"));
             summary.put("tableCount", count(dom, "tbl"));
             summary.put("contentControlCount", count(dom, "sdt"));
@@ -76,6 +80,9 @@ public class DocxStructureParser implements OfficeStructureParser, WordDocumentP
             var documentIr = documentIr(dom, documentXml, plainText, packageParts, summary);
             summary.set("documentIR", documentIr);
             var snapshot = documentSnapshot(plainText, documentIr);
+            addEditorLocators(documentIr, snapshot.path("body").path("dataStream").asText(""));
+            applySnapshotStyles(snapshot, documentIr);
+            summary.set("documentIR", documentIr);
             return new ParseResult(summary, snapshot, List.copyOf(issues));
         } catch (ApiException exception) {
             throw exception;
@@ -159,8 +166,11 @@ public class DocxStructureParser implements OfficeStructureParser, WordDocumentP
             com.fasterxml.jackson.databind.node.ObjectNode packageSummary
     ) {
         var result = objectMapper.createObjectNode();
+        result.put("schemaVersion", 2);
+        result.put("documentType", "WORD");
         result.put("text", plainText == null ? "" : plainText);
         result.put("structureHash", sha256(documentXml));
+        result.put("documentId", "docx-" + sha256(documentXml).substring(0, 16));
         result.set("packageFacts", packageSummary.deepCopy());
 
         var blocks = objectMapper.createArrayNode();
@@ -183,6 +193,26 @@ public class DocxStructureParser implements OfficeStructureParser, WordDocumentP
             }
         }
         result.set("blocks", blocks);
+
+        var paragraphTexts = objectMapper.createArrayNode();
+        var allParagraphs = document.getElementsByTagNameNS("*", "p");
+        for (var index = 0; index < allParagraphs.getLength(); index++) {
+            if (allParagraphs.item(index) instanceof Element paragraph) {
+                paragraphTexts.add(objectMapper.createObjectNode()
+                        .put("paragraphIndex", index + 1)
+                        .put("text", text(paragraph)));
+            }
+        }
+        result.set("paragraphTexts", paragraphTexts);
+
+        var nodes = documentNodes(document);
+        result.set("nodes", nodes);
+        result.put("nodeCount", nodes.size());
+        var headingCount = 0;
+        for (var node : nodes) {
+            if (Set.of("DOCUMENT_TITLE", "HEADING").contains(node.path("type").asText())) headingCount++;
+        }
+        result.put("headingCount", headingCount);
 
         var anchors = objectMapper.createArrayNode();
         addEditableAnchors(document, anchors);
@@ -252,7 +282,202 @@ public class DocxStructureParser implements OfficeStructureParser, WordDocumentP
         result.put("style", style == null ? "" : attribute(style, "val"));
         result.put("alignment", alignment == null ? "" : attribute(alignment, "val"));
         result.put("contentControlCount", paragraph.getElementsByTagNameNS("*", "sdt").getLength());
+        result.put("insideTable", ancestor(paragraph, "tc") != null);
         return result;
+    }
+
+    private com.fasterxml.jackson.databind.node.ArrayNode documentNodes(Document document) {
+        var nodes = objectMapper.createArrayNode();
+        var paragraphs = document.getElementsByTagNameNS("*", "p");
+        var stack = new ArrayList<NodeFrame>();
+        var sequence = 0;
+        for (var index = 0; index < paragraphs.getLength(); index++) {
+            if (!(paragraphs.item(index) instanceof Element paragraph)) continue;
+            var value = text(paragraph).strip();
+            if (value.isBlank()) continue;
+            sequence++;
+            var properties = firstElement(paragraph, "pPr");
+            var style = properties == null ? null : firstElement(properties, "pStyle");
+            var outline = properties == null ? null : firstElement(properties, "outlineLvl");
+            var numId = properties == null ? null : firstElement(firstElement(properties, "numPr"), "numId");
+            var ilvl = properties == null ? null : firstElement(firstElement(properties, "numPr"), "ilvl");
+            var alignment = properties == null ? "" : attribute(firstElement(properties, "jc"), "val");
+            var maxFontSize = maxFontSize(paragraph);
+            var bold = paragraph.getElementsByTagNameNS("*", "b").getLength() > 0;
+            var insideTable = ancestor(paragraph, "tc") != null;
+            var title = isDocumentTitle(value, style, alignment, bold, maxFontSize);
+            var heading = title || isHeading(value, style, outline, numId, insideTable, bold, maxFontSize);
+            var level = title ? 0 : headingLevel(value, style, outline, numId, ilvl, insideTable, stack);
+            while (!stack.isEmpty() && stack.get(stack.size() - 1).level >= level) stack.remove(stack.size() - 1);
+            var nodeId = paragraphNodeId(paragraph, index + 1);
+            var node = objectMapper.createObjectNode()
+                    .put("nodeId", nodeId)
+                    .put("type", title ? "DOCUMENT_TITLE" : heading ? "HEADING" : "PARAGRAPH")
+                    .put("level", level)
+                    .put("text", value)
+                    .put("sortOrder", sequence);
+            if (!stack.isEmpty()) node.put("parentId", stack.get(stack.size() - 1).nodeId);
+            if (heading) node.put("title", value);
+            var source = node.putObject("sourceLocator")
+                    .put("part", "word/document.xml")
+                    .put("paragraphIndex", index + 1)
+                    .put("insideTable", insideTable);
+            if (style != null) source.put("style", attribute(style, "val"));
+            if (outline != null) source.put("outlineLevel", attribute(outline, "val"));
+            if (numId != null) source.put("numId", attribute(numId, "val"));
+            if (ilvl != null) source.put("listLevel", attribute(ilvl, "val"));
+            var propertiesNode = node.putObject("properties")
+                    .put("alignment", alignment)
+                    .put("bold", bold)
+                    .put("fontSize", maxFontSize);
+            var family = firstFontFamily(paragraph);
+            if (!family.isBlank()) propertiesNode.put("fontFamily", family);
+            nodes.add(node);
+            if (heading) stack.add(new NodeFrame(nodeId, level));
+        }
+        return nodes;
+    }
+
+    private boolean isDocumentTitle(String value, Element style, String alignment, boolean bold, int fontSize) {
+        var styleValue = style == null ? "" : attribute(style, "val").toLowerCase(Locale.ROOT);
+        return styleValue.contains("title")
+                || ("center".equalsIgnoreCase(alignment)
+                && ((bold && fontSize >= 14) || fontSize >= 20)
+                && value.length() <= 80);
+    }
+
+    private boolean isHeading(String value, Element style, Element outline, Element numId,
+                              boolean insideTable, boolean bold, int fontSize) {
+        var styleValue = style == null ? "" : attribute(style, "val").toLowerCase(Locale.ROOT);
+        if (styleValue.contains("heading") || styleValue.contains("title") || outline != null) return true;
+        if (value.matches("^(第\\s*[一二三四五六七八九十百]+章|[一二三四五六七八九十百]+[、.．]|\\d+(?:[.．]\\d+)*[、.．]).*")) return true;
+        if (insideTable && value.length() <= 36 && !value.contains("____")
+                && !value.contains("________________") && !value.matches(".*[。！？；].*")) {
+            return isTableSectionHeading(value);
+        }
+        return bold && fontSize >= 18 && value.length() <= 48 && !value.contains("____");
+    }
+
+    private boolean isTableSectionHeading(String value) {
+        return Set.of(
+                "立项背景", "组织实施方式：", "立项目的：", "主要研究内容及关键技术：",
+                "研究目标", "研究方案", "风险分析", "结论"
+        ).contains(value.strip());
+    }
+
+    private int headingLevel(String value, Element style, Element outline, Element numId, Element ilvl,
+                             boolean insideTable, List<NodeFrame> stack) {
+        var styleValue = style == null ? "" : attribute(style, "val").toLowerCase(Locale.ROOT);
+        if (styleValue.contains("heading1") || styleValue.equals("heading") || outline != null && "0".equals(attribute(outline, "val"))) return 1;
+        if (styleValue.contains("heading2") || styleValue.contains("heading3")) return 2;
+        if (value.matches("^[一二三四五六七八九十百]+[、.．].*")) return 1;
+        if (value.matches("^\\d+(?:[.．]\\d+)*[、.．].*")) return 2;
+        if (numId != null && ilvl != null) return Math.min(5, 1 + parseInt(attribute(ilvl, "val"), 0));
+        if (insideTable) return 2;
+        return stack.isEmpty() ? 1 : Math.min(5, stack.get(stack.size() - 1).level + 1);
+    }
+
+    private int maxFontSize(Element paragraph) {
+        var sizes = paragraph.getElementsByTagNameNS("*", "sz");
+        var max = 0;
+        for (var index = 0; index < sizes.getLength(); index++) max = Math.max(max, parseInt(attribute((Element) sizes.item(index), "val"), 0));
+        return max / 2;
+    }
+
+    private String firstFontFamily(Element paragraph) {
+        var fonts = paragraph.getElementsByTagNameNS("*", "rFonts");
+        return fonts.getLength() == 0 ? "" : attribute((Element) fonts.item(0), "eastAsia");
+    }
+
+    private int parseInt(String value, int fallback) {
+        try { return Integer.parseInt(value); } catch (Exception ignored) { return fallback; }
+    }
+
+    private Element ancestor(Element element, String localName) {
+        var current = element.getParentNode();
+        while (current instanceof Element parent) {
+            if (isWord(parent, localName)) return parent;
+            current = parent.getParentNode();
+        }
+        return null;
+    }
+
+    private void addEditorLocators(ObjectNode documentIr, String dataStream) {
+        var searchFrom = 0;
+        for (var node : documentIr.withArray("nodes")) {
+            if (!(node instanceof ObjectNode objectNode)) continue;
+            var value = node.path("text").asText("");
+            if (value.isBlank()) continue;
+            var start = dataStream.indexOf(value, searchFrom);
+            if (start < 0) start = dataStream.indexOf(value);
+            if (start < 0) continue;
+            objectNode.putObject("editorLocator")
+                    .put("snapshotRevision", 1)
+                    .put("startOffset", start)
+                    .put("endOffset", start + value.length() - 1)
+                    .put("textHash", sha256(value.getBytes(StandardCharsets.UTF_8)));
+            searchFrom = start + value.length();
+        }
+    }
+
+    private void applySnapshotStyles(com.fasterxml.jackson.databind.JsonNode snapshot,
+                                     com.fasterxml.jackson.databind.JsonNode documentIr) {
+        if (!(snapshot.path("body") instanceof com.fasterxml.jackson.databind.node.ObjectNode body)) return;
+        var paragraphs = objectMapper.createArrayNode();
+        var textRuns = objectMapper.createArrayNode();
+        var paragraphStarts = new HashSet<Integer>();
+        paragraphStarts.add(0);
+        for (var node : documentIr.path("nodes")) {
+            var locator = node.path("editorLocator");
+            if (!locator.has("startOffset")) continue;
+            var start = locator.path("startOffset").asInt();
+            if (paragraphStarts.add(start)) {
+                var paragraph = objectMapper.createObjectNode().put("startIndex", start);
+                paragraph.put("paragraphIndex", node.path("sourceLocator").path("paragraphIndex").asInt(0));
+                paragraph.set("paragraphStyle", paragraphStyle(node));
+                paragraphs.add(paragraph);
+            }
+            var value = node.path("text").asText("");
+            if (!value.isBlank()) {
+                var run = objectMapper.createObjectNode()
+                        .put("st", start)
+                        .put("ed", locator.path("endOffset").asInt(start + value.length() - 1));
+                run.set("ts", textStyle(node));
+                textRuns.add(run);
+            }
+        }
+        body.set("paragraphs", paragraphs);
+        body.set("textRuns", textRuns);
+        body.set("sourceParagraphs", documentIr.path("paragraphTexts").deepCopy());
+    }
+
+    private com.fasterxml.jackson.databind.node.ObjectNode paragraphStyle(com.fasterxml.jackson.databind.JsonNode node) {
+        var style = objectMapper.createObjectNode();
+        var properties = node.path("properties");
+        var alignment = properties.path("alignment").asText("").toLowerCase(Locale.ROOT);
+        if (!alignment.isBlank()) style.put("horizontalAlign", switch (alignment) {
+            case "center" -> 2;
+            case "right" -> 3;
+            case "both", "justify" -> 4;
+            default -> 1;
+        });
+        var type = node.path("type").asText("");
+        if ("DOCUMENT_TITLE".equals(type)) style.put("namedStyleType", 2);
+        else if ("HEADING".equals(type)) style.put("namedStyleType", Math.min(8, 3 + node.path("level").asInt(1)));
+        style.set("textStyle", textStyle(node));
+        return style;
+    }
+
+    private com.fasterxml.jackson.databind.node.ObjectNode textStyle(com.fasterxml.jackson.databind.JsonNode node) {
+        var style = objectMapper.createObjectNode();
+        var properties = node.path("properties");
+        var fontSize = properties.path("fontSize").asInt(0);
+        if (fontSize > 0) style.put("fs", fontSize);
+        if (properties.path("bold").asBoolean(false)) style.put("bl", 1);
+        if (properties.has("fontFamily") && !properties.path("fontFamily").asText().isBlank()) {
+            style.put("ff", properties.path("fontFamily").asText());
+        }
+        return style;
     }
 
     private com.fasterxml.jackson.databind.node.ObjectNode tableBlock(Element table, int sequence) {
@@ -358,6 +583,7 @@ public class DocxStructureParser implements OfficeStructureParser, WordDocumentP
         var dataBinding = properties == null ? null : firstElement(properties, "dataBinding");
         result.put("nodeId", "content-control-" + sequence);
         result.put("contentControlId", id == null ? "" : attribute(id, "val"));
+        result.put("markerId", dataBinding == null ? "" : attribute(dataBinding, "storeItemID"));
         result.put("tag", tag == null ? "" : attribute(tag, "val"));
         result.put("alias", alias == null ? "" : attribute(alias, "val"));
         result.put("text", text(control));
@@ -516,6 +742,8 @@ public class DocxStructureParser implements OfficeStructureParser, WordDocumentP
         var snapshot = objectMapper.createObjectNode();
         snapshot.put("id", UUID.randomUUID().toString());
         snapshot.put("title", "导入的 Word 模板");
+        snapshot.put("snapshotFormatVersion", 4);
+        snapshot.put("editorMode", "UNIVER_DOCS");
         snapshot.set("body", body);
         var documentStyle = objectMapper.createObjectNode();
         documentStyle.set("pageSize", objectMapper.createObjectNode()
@@ -546,7 +774,8 @@ public class DocxStructureParser implements OfficeStructureParser, WordDocumentP
             if (value.isBlank()) continue;
             var start = dataStream.indexOf(value, searchFrom);
             if (start < 0) continue;
-            var markerId = control.path("contentControlId").asText("");
+            var markerId = control.path("markerId").asText("");
+            if (markerId.isBlank()) markerId = control.path("contentControlId").asText("");
             if (markerId.isBlank()) markerId = control.path("nodeId").asText("");
             if (markerId.isBlank()) continue;
             var range = objectMapper.createObjectNode();
@@ -576,5 +805,8 @@ public class DocxStructureParser implements OfficeStructureParser, WordDocumentP
         private boolean hasMacros;
         private boolean hasActiveX;
         private boolean hasOleObjects;
+    }
+
+    private record NodeFrame(String nodeId, int level) {
     }
 }

@@ -2,17 +2,22 @@ package com.jsd.aird.tpl.infrastructure;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.net.ConnectException;
+import java.net.SocketTimeoutException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.TimeoutException;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.shared.json.JsonCanonicalizer;
 import com.jsd.aird.tpl.application.port.RecognitionModelClient;
+import com.jsd.aird.tpl.application.RecognitionIdentity;
+import com.jsd.aird.tpl.domain.QualityIssueSeverity;
 import com.jsd.aird.tpl.application.port.StandardFieldRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -21,6 +26,7 @@ import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
+import org.springframework.web.client.ResourceAccessException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -45,13 +51,16 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
     private final RegionSemanticBatchProtocol regionProtocol;
     private final GlobalSemanticSuggestionCompiler compiler;
     private final boolean enableThinking;
-    private final int thinkingBudget;
+    private final int defaultThinkingBudget;
+    private final int structureThinkingBudget;
+    private final int semanticThinkingBudget;
     private final int maxCompletionTokens;
     private final String maxTokenParameter;
     private final boolean consoleLogSummary;
     private final boolean consoleLogPayload;
     private final String visualMode;
     private final boolean allowLegacyRegionEnvelope;
+    private final int autoRetryCount;
 
     @Autowired
     public OpenAiCompatibleRecognitionClient(
@@ -64,14 +73,17 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
             @Value("${app.model.temperature:0.0}") double ignoredTemperature,
             @Value("${app.model.response-format:json_schema}") String responseFormat,
             @Value("${app.model.enable-thinking:true}") boolean enableThinking,
-            @Value("${app.model.thinking-budget:1024}") int thinkingBudget,
+            @Value("${app.model.thinking-budget:2048}") int thinkingBudget,
+            @Value("${app.model.structure-thinking-budget:4096}") int structureThinkingBudget,
+            @Value("${app.model.semantic-thinking-budget:2048}") int semanticThinkingBudget,
             @Value("${app.model.max-completion-tokens:12000}") int maxCompletionTokens,
             @Value("${app.model.max-token-parameter:max_tokens}") String maxTokenParameter,
             @Value("${app.recognition.console-log-summary:true}") boolean consoleLogSummary,
-             @Value("${app.recognition.console-log-payload:false}") boolean consoleLogPayload,
-             @Value("${app.model.visual-mode:auto}") String visualMode,
-             @Value("${app.model.visual-enabled:false}") boolean legacyVisualEnabled,
-             @Value("${app.recognition.allow-legacy-region-envelope:false}") boolean allowLegacyRegionEnvelope
+            @Value("${app.recognition.console-log-payload:false}") boolean consoleLogPayload,
+            @Value("${app.model.visual-mode:auto}") String visualMode,
+            @Value("${app.model.visual-enabled:false}") boolean legacyVisualEnabled,
+            @Value("${app.recognition.allow-legacy-region-envelope:false}") boolean allowLegacyRegionEnvelope,
+            @Value("${app.model.auto-retry-count:2}") int autoRetryCount
     ) {
         this.objectMapper = objectMapper;
         this.canonicalizer = canonicalizer;
@@ -80,13 +92,16 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
         this.model = model == null ? "" : model.strip();
         this.responseFormat = normalizeResponseFormat(responseFormat);
         this.enableThinking = enableThinking;
-        this.thinkingBudget = Math.max(0, thinkingBudget);
+        this.defaultThinkingBudget = Math.max(0, thinkingBudget);
+        this.structureThinkingBudget = Math.max(0, structureThinkingBudget);
+        this.semanticThinkingBudget = Math.max(0, semanticThinkingBudget);
         this.maxCompletionTokens = Math.max(0, maxCompletionTokens);
         this.maxTokenParameter = normalizeMaxTokenParameter(maxTokenParameter);
         this.consoleLogSummary = consoleLogSummary;
         this.consoleLogPayload = consoleLogPayload;
         this.visualMode = normalizeVisualMode(legacyVisualEnabled ? "ON" : visualMode);
         this.allowLegacyRegionEnvelope = allowLegacyRegionEnvelope;
+        this.autoRetryCount = Math.max(0, autoRetryCount);
         this.sanitizer = new ModelPayloadSanitizer(objectMapper);
         this.protocol = new GlobalSemanticRecognitionProtocol(objectMapper);
         this.structureProtocol = new StructureAssessmentProtocol(objectMapper);
@@ -103,7 +118,7 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
             String apiKey, String model, double ignoredTemperature
     ) {
         this(objectMapper, canonicalizer, null, baseUrl, apiKey, model, ignoredTemperature,
-                "json_schema", false, 1024, 12000, "max_tokens", true, false, "OFF", false, false);
+                "json_schema", false, 2048, 4096, 2048, 12000, "max_tokens", true, false, "OFF", false, false, 2);
     }
 
     /** Backwards-compatible test and local adapter constructor. */
@@ -116,9 +131,26 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
             boolean legacyVisualEnabled
     ) {
         this(objectMapper, canonicalizer, standardFieldRepository, baseUrl, apiKey, model,
-                ignoredTemperature, responseFormat, enableThinking, thinkingBudget, maxCompletionTokens,
+                ignoredTemperature, responseFormat, enableThinking, thinkingBudget, thinkingBudget,
+                thinkingBudget, maxCompletionTokens, maxTokenParameter, consoleLogSummary,
+                consoleLogPayload, visualMode, legacyVisualEnabled, false, 2);
+    }
+
+    /** Backwards-compatible test and local adapter constructor with phase budgets. */
+    OpenAiCompatibleRecognitionClient(
+            ObjectMapper objectMapper, JsonCanonicalizer canonicalizer,
+            StandardFieldRepository standardFieldRepository, String baseUrl, String apiKey,
+            String model, double ignoredTemperature, String responseFormat, boolean enableThinking,
+            int thinkingBudget, int structureThinkingBudget, int semanticThinkingBudget,
+            int maxCompletionTokens, String maxTokenParameter,
+            boolean consoleLogSummary, boolean consoleLogPayload, String visualMode,
+            boolean legacyVisualEnabled
+    ) {
+        this(objectMapper, canonicalizer, standardFieldRepository, baseUrl, apiKey, model,
+                ignoredTemperature, responseFormat, enableThinking, thinkingBudget,
+                structureThinkingBudget, semanticThinkingBudget, maxCompletionTokens,
                 maxTokenParameter, consoleLogSummary, consoleLogPayload, visualMode,
-                legacyVisualEnabled, false);
+                legacyVisualEnabled, false, 2);
     }
 
     @Override
@@ -147,10 +179,11 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
         }
         var traces = new ArrayList<RecognitionModelClient.CallTrace>();
         UUID parentCallId = null;
-        // Application recognition is deliberately bounded to one model request
-        // per stage. Protocol repair used to turn one workbook into N*2 calls and
-        // repeatedly asked the model to guess a backend-specific enum/coordinate.
-        for (var attempt = 1; attempt <= 1; attempt++) {
+        // Only transient transport/provider failures are retried. Protocol and
+        // business errors fail immediately so a malformed response never turns
+        // into an unbounded prompt loop.
+        var maxAttempts = 1 + autoRetryCount;
+        for (var attempt = 1; attempt <= maxAttempts; attempt++) {
             var phase = request.callPhase();
             var body = requestBody(request);
             var visualSent = hasVisualInput(body);
@@ -192,7 +225,18 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
                 JsonNode structureAssessments = null;
                 ObjectNode regionSemantics = null;
                 GlobalSemanticSuggestionCompiler.Compiled compiled;
-                if (request.callPhase().contains("STRUCTURE_DISCOVERY")) {
+                if (isDocxStructurePhase(request.callPhase())) {
+                    if (!(structured instanceof ObjectNode object)) {
+                        throw new IllegalArgumentException("DOCX 结构发现响应必须是 JSON 对象");
+                    }
+                    validated = object;
+                    diagnostics = emptyDiagnostics();
+                    // The structure phase is deliberately audit-only.  It does
+                    // not create field suggestions; the following DOCX_FIELD_SEMANTICS
+                    // call is the only phase allowed to produce reviewable fields.
+                    compiled = new GlobalSemanticSuggestionCompiler.Compiled(
+                            List.of(), List.of());
+                } else if (request.callPhase().contains("STRUCTURE_DISCOVERY")) {
                     if (!structured.path("proposals").isArray()) {
                         throw new GlobalSemanticRecognitionProtocol.ProtocolViolationException(
                                 "STRUCTURE_DISCOVERY 只接受 StructureProposalResponse，不允许旧的 businessBlocks/tables envelope");
@@ -217,6 +261,13 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
                             java.util.List.of(new RecognitionModelClient.ModelSuggestion(
                                     "SEMANTIC_MODEL", structureModel, 1,
                                     objectMapper.createArrayNode())), structureQualityIssues);
+                } else if (isDocxFieldPhase(request.callPhase())) {
+                    if (!(structured instanceof ObjectNode object)) {
+                        throw new IllegalArgumentException("DOCX 字段语义响应必须是 JSON 对象");
+                    }
+                    validated = object;
+                    diagnostics = emptyDiagnostics();
+                    compiled = compileDocxSuggestions(structured, request);
                 } else if (request.callPhase().contains("REGION_FIELDS")
                         && structured.path("businessBlocks").isArray()
                         && allowLegacyRegionEnvelope) {
@@ -268,7 +319,8 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
                     }
                 }
                 if (!request.callPhase().contains("STRUCTURE_DISCOVERY")
-                        && !request.callPhase().contains("REGION_FIELDS")) {
+                        && !request.callPhase().contains("REGION_FIELDS")
+                        && !isDocxPhase(request.callPhase())) {
                     new SemanticResultValidator().validateMeaningfulResult(validated, request.structureSummary());
                 }
                 if (structureAssessments != null) {
@@ -350,6 +402,15 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
                         isVisualUnsupported(exception) && visualSent ? "MODEL_VISUAL_UNSUPPORTED"
                                 : exception instanceof ModelOutputTruncatedException ? "MODEL_OUTPUT_TRUNCATED" : "MODEL_CALL_FAILED",
                         exception instanceof ModelOutputTruncatedException));
+                if (isTransientFailure(exception) && attempt < maxAttempts) {
+                    parentCallId = callId;
+                    if (consoleLogSummary) {
+                        log.warn("recognition_model_auto_retry callId={} runId={} attempt={} nextAttempt={} phase={} errorType={} status={}",
+                                callId, request.recognitionRunId(), attempt, attempt + 1, phase, errorType, httpStatus);
+                    }
+                    backoffBeforeRetry(attempt);
+                    continue;
+                }
                 // A visual request failure is a failed stage.  Retrying the same
                 // stage as text used to make one workbook exceed the application
                 // call budget and hid the real model/configuration error.  The
@@ -374,6 +435,43 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
         throw new IllegalStateException("Global semantic recognition attempts exhausted");
     }
 
+    private boolean isTransientFailure(Exception exception) {
+        if (exception instanceof RestClientResponseException response) {
+            var status = response.getStatusCode().value();
+            return status == 408 || status == 429 || status >= 500;
+        }
+        if (!(exception instanceof ResourceAccessException)
+                && !(exception instanceof java.io.IOException)
+                && !(exception instanceof TimeoutException)
+                && !(exception instanceof SocketTimeoutException)
+                && !(exception instanceof ConnectException)) {
+            return false;
+        }
+        return hasCause(exception, cause -> cause instanceof ResourceAccessException
+                || cause instanceof java.io.IOException
+                || cause instanceof TimeoutException
+                || cause instanceof SocketTimeoutException
+                || cause instanceof ConnectException);
+    }
+
+    private boolean hasCause(Throwable value, java.util.function.Predicate<Throwable> predicate) {
+        var current = value;
+        var depth = 0;
+        while (current != null && depth++ < 12) {
+            if (predicate.test(current)) return true;
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    private void backoffBeforeRetry(int attempt) {
+        try {
+            Thread.sleep(Math.min(1000L, 250L * attempt));
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
     private List<RecognitionModelClient.QualityIssueSuggestion> structureQualityIssues(
             JsonNode issues, RecognitionModelClient.RecognitionRequest request, UUID callId
     ) {
@@ -389,7 +487,7 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
             }
             result.add(new RecognitionModelClient.QualityIssueSuggestion(
                     issue.path("issueType").asText("INVALID_STRUCTURE_PROPOSAL"),
-                    issue.path("severity").asText("WARNING"),
+                    QualityIssueSeverity.normalize(issue.path("severity").asText("WARNING")),
                     issue.path("sheetId").asText(""),
                     issue.path("sheetName").asText(""),
                     issue.path("address").asText(issue.path("range").asText("")),
@@ -423,12 +521,20 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
         body.put("temperature", 0.0);
         if (maxCompletionTokens > 0) body.put(maxTokenParameter, maxCompletionTokens);
         body.put("enable_thinking", enableThinking);
-        if (enableThinking && thinkingBudget > 0) body.put("thinking_budget", thinkingBudget);
-        var structurePhase = request.callPhase().contains("STRUCTURE_DISCOVERY");
+        var requestThinkingBudget = thinkingBudgetFor(request);
+        if (enableThinking && requestThinkingBudget > 0) {
+            body.put("thinking_budget", requestThinkingBudget);
+        }
+        var docxPhase = isDocxPhase(request.callPhase());
+        var structurePhase = request.callPhase().contains("STRUCTURE_DISCOVERY") && !docxPhase;
         var schema = structurePhase ? structureProtocol.responseSchema()
+                : isDocxStructurePhase(request.callPhase()) ? docxStructureResponseSchema()
+                : isDocxFieldPhase(request.callPhase()) ? docxResponseSchema()
                 : request.callPhase().contains("REGION_FIELDS") ? regionProtocol.responseSchema()
                 : protocol.responseSchema();
         var schemaName = structurePhase ? "template_structure_proposal_v2"
+                : isDocxStructurePhase(request.callPhase()) ? "template_docx_structure_discovery_v1"
+                : isDocxFieldPhase(request.callPhase()) ? "template_docx_field_semantics_v1"
                 : request.callPhase().contains("REGION_FIELDS") ? "template_region_semantic_batch_v2"
                 : "template_global_semantic_v1";
         if ("json_schema".equals(responseFormat)) {
@@ -446,6 +552,18 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
         messages.add(userMessage(request, buildPrompt(request), suppressVisual));
         body.set("messages", messages);
         return body;
+    }
+
+    private int thinkingBudgetFor(RecognitionRequest request) {
+        if (request != null && (request.callPhase().contains("STRUCTURE_DISCOVERY")
+                || isDocxStructurePhase(request.callPhase()))) {
+            return structureThinkingBudget;
+        }
+        if (request != null && (request.callPhase().contains("REGION_FIELDS")
+                || isDocxFieldPhase(request.callPhase()))) {
+            return semanticThinkingBudget;
+        }
+        return defaultThinkingBudget;
     }
 
     private ObjectNode userMessage(RecognitionRequest request, String prompt, boolean suppressVisual) {
@@ -467,7 +585,11 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
     private String buildPrompt(RecognitionRequest request) {
         try {
             var phase = request.callPhase();
-            var task = phase.contains("STRUCTURE_DISCOVERY")
+            var task = phase.contains("DOCX_STRUCTURE_DISCOVERY")
+                    ? "DOCX 结构发现阶段：只识别段落、表格、内容控件、书签和可定位文本节点的结构角色。不要生成字段建议，不要生成 Binding；返回 structures 和 qualityIssues，nodeId 必须来自 documentIR。"
+                    : phase.contains("DOCX_FIELD_SEMANTICS")
+                    ? "DOCX 字段语义阶段：只根据 documentIR、内容控件、书签和稳定节点识别有明确填写位置的字段。标题、说明和普通正文不生成字段。每个建议必须返回 candidateRef、fieldName、role、labelAnchor、valueAnchor、reviewRequired=true；不得直接生成正式 Binding。"
+                    : phase.contains("STRUCTURE_DISCOVERY")
                     ? "第一阶段：只根据物理事实独立提出结构 proposals。不要确认或引用后端候选，不要输出 candidateRef、verdict、fieldRelations、tables、bindings 或后端派生投影。"
                     : phase.contains("REGION_FIELDS")
                     ? "第二阶段：一次性识别 semanticRegions 中所有区域的业务名称、行语义、字段关系、editability 和 valueSource。不得修改区域几何；MATRIX 的 fieldRelations 必须为空。"
@@ -490,20 +612,40 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
     }
 
     private String canonicalPhysicalGuidance(JsonNode structure, String phase) {
-        return phase.contains("STRUCTURE_DISCOVERY")
-                ? "第一阶段只允许基于 sheets、semanticCells、mergedRanges、layoutSpans、rowProfiles、columnProfiles、dataValidationRules、nativeTables 和 namedRanges 独立提出 proposals。后端候选不会提供给你。\n"
+            return phase.contains("DOCX_")
+                ? "本阶段只处理 DOCX 文档节点，不使用 Excel 单元格地址、矩阵或表格结构协议。内容控件和书签是稳定锚点；没有明确值位置的正文只能作为待定位建议。\n"
+                : phase.contains("STRUCTURE_DISCOVERY")
+                ? "第一阶段只允许基于 sheets、semanticCells、mergedRanges、borderSegments、layoutSpans、rowProfiles、columnProfiles、dataValidationRules、nativeTables 和 namedRanges 独立提出 proposals。后端候选不会提供给你。样式细节已压缩；请使用边框带、合并拓扑、单元格值/公式和输入候选判断几何，不要依赖 styleRef、fill、numberFormat 或具体对齐值。左侧纵向内容是属性、右侧每列代表一个对象时必须返回 COLUMN_TABLE+recordAxis=COLUMN；只有行和列都是独立业务成员且交叉格表达同一种度量时才返回 MATRIX。多个视觉分组共享同一组记录列时必须合并为一个 COLUMN_TABLE，不能拆成多个 MATRIX。COLUMN_TABLE 的 range 覆盖整表，headerRange 是整表顶部身份行，dataRange 是其余整表表体。相邻列如果具有不同的纵向合并节奏、记录高度或记录终止行，必须拆为独立 proposal；固定逐行记录面不能与可变高度合并记录面合成一张 ROW_TABLE。任何 endRow>startRow 的纵向合并格都是多行记录槽位证据；某个连续列带由多个这类槽位首尾相接、相邻列带却按单行重复时，即使共享顶部标题行也必须提出两个独立 ROW_TABLE；该列带的 range 和 dataRange 必须在最后一个槽位的 endRow 结束，不得为对齐相邻表格而向下延长。totalRange 不属于 dataRange；提供 totalRange 时，dataRange 必须在小计/合计行之前结束。表格之前或之后连续的标签/输入带应整体提出 FORM_REGION，不得为每个标签单独提出区域；签名标签下一行仍有相邻样式或输入单元格时，应包含在该 FORM_REGION 内。\n"
                 : "第二阶段只处理请求中 semanticRegions 声明的区域；区域 range/type/axis 是只读上下文，不能重新猜测。MATRIX 不得生成普通 fieldRelations，空白 runtime column header 是合法模板状态。\n";
     }
 
     private String systemPrompt(String phase) {
+        if (phase.contains("DOCX_STRUCTURE_DISCOVERY")) {
+            return """
+                    你是 DOCX 模板结构发现器。只返回 structures 和 qualityIssues，不返回字段、Binding 或业务映射。
+                    structures 中的 nodeId 必须引用输入 documentIR 中存在的 paragraph、table、cell、anchor 或 content control 节点。
+                    标题和正文可以作为结构节点，但不要把它们命名为业务字段。
+                    """;
+        }
+        if (phase.contains("DOCX_FIELD_SEMANTICS")) {
+            return """
+                    你是 DOCX 模板字段语义识别器。只返回 fields 和 qualityIssues。
+                    普通标题、说明和正文不作为正式字段；所有模型字段必须 reviewRequired=true，且不得生成 markerId 或正式 Mapping。
+                    candidateRef、labelAnchor、valueAnchor 必须引用输入 documentIR 中存在的稳定 nodeId。
+                    """;
+        }
         if (phase.contains("STRUCTURE_DISCOVERY")) {
             return """
                     你是企业 Excel 模板的独立结构提议器。本次只能读取原始物理事实，不能看到后端结构候选，也不能为后端候选盖章。
                     只能返回 StructureProposalResponse：recognitionProtocolVersion=2、proposals、qualityIssues。
                     每个 proposal 必须返回 proposalId、sheetId、type、range、recordAxis、confidence；MATRIX 还必须返回 cornerRange、rowHeaderRange、columnHeaderRange、crossDataRange；ROW_TABLE/COLUMN_TABLE 必须返回 headerRange、dataRange，可选 totalRange、recordHeight、recordWidth、recordStride。
                     type 只能是 ROW_TABLE、COLUMN_TABLE、MATRIX、FORM_REGION、UNKNOWN；recordAxis 只能是 ROW、COLUMN、UNKNOWN。
+                    ROW_TABLE 必须使用 recordAxis=ROW；COLUMN_TABLE 必须使用 recordAxis=COLUMN。左侧是属性、右侧每列一个对象属于 COLUMN_TABLE，不属于 MATRIX。
+                    如果左侧一至多列是纵向分组/指标标签，右侧多列共享这些标签，且右侧顶部存在与各数据列对齐的空白可填写成员格，则这些空白格是运行时记录身份，整体必须提出 COLUMN_TABLE；不得因成员格当前为空而提出 ROW_TABLE。
+                    MATRIX 必须存在两个独立业务成员轴，交叉单元格表达统一度量；rowHeaderRange 必须排除顶部列标题行，并与 crossDataRange 等高。多个纵向属性分组共享相同记录列时只能提出一个 COLUMN_TABLE。
                     不得返回 candidateRef、verdict、businessBlocks、tables、fieldRelations、bindings、columnSlots 或 recordProjection。
                     空白但有边框、样式和重复网格的区域仍可能是输入面；发现多个区域时分别提出，不要把整张工作表包成一个区域。
+                    相邻列若具有不同的纵向合并节奏、记录高度或终止行，必须拆为独立区域；固定逐行记录和可变高度合并记录不能合并成一个 ROW_TABLE。任何 endRow>startRow 的纵向合并格都是多行记录槽位证据；某个连续列带由多个这类槽位首尾相接、相邻列带却按单行重复时，即使共享顶部标题行也必须提出两个独立 ROW_TABLE；该列带的 range 和 dataRange 必须在最后一个槽位的 endRow 结束，不得为对齐相邻表格而向下延长。totalRange 不属于 dataRange；提供 totalRange 时，dataRange 必须在小计或合计行之前结束。表格前后的连续标签—输入带应整体提出 FORM_REGION，不得按单个字段拆成多个区域；签名标签下一行仍有相邻样式或输入单元格时，应包含在该 FORM_REGION 内。
                     """;
         }
         if (phase.contains("REGION_FIELDS")) {
@@ -514,6 +656,7 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
                     不得返回区域 geometry、tables、businessBlocks、tableKind、recordAxis、bindings、columnSlots 或 recordProjection。
                     MATRIX 的 fieldRelations 必须为空；rowDimensions 可以跨多个物理列。RUNTIME_INPUT 的空 column header 是合法状态，不得报告 MISSING_HEADER_LABELS。
                     字段关系必须使用真实的 labelRange/valueRange；无法确定时省略该关系并保留待核对问题。
+                    COLUMN_TABLE 的左侧纵向分组属于 rowDimensions/rowAttributes；fieldRelations.valueRange 必须投影到右侧 recordColumns，不能把左侧标签列本身返回成值字段。
                     editability 与 valueSource 分开判断，公式值使用 READ_ONLY+FORMULA；合计/平均等派生行不要作为普通训练数据。
                     """;
         }
@@ -540,7 +683,7 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
                  4. 识别明细表与矩阵，并对每个字段绑定分别判断 editability 和 valueSource。逐行明细使用 ROW_TABLE + repeatAxis=ROW，逐列明细使用 COLUMN_TABLE + repeatAxis=COLUMN；一条记录跨多行或多列时填写 recordHeight、recordWidth、recordStride。根据合计行、标签、空记录或区域边界填写 terminationRule。只有同时能确定 rowHeaderRange、columnHeaderRange、crossDataRange 和 headerTree 时才标记 MATRIX，并明确 CROSS_TAB 或 RECORD_SET；无法确定时保留为 UNKNOWN 或一个待核对问题，不能把普通明细表猜成矩阵；不得把矩阵拆成多个 ROW_TABLE。
                 5. 将含义不明确的内容保留为 UNKNOWN 或单个待核对问题，不能擅自命名或合并。
                 矩阵列成员约束：如果 C4:H4 这类列成员输入面为空但有连续边框、样式、公式引用或第一阶段矩阵证据，必须标记 memberMode=RUNTIME_INPUT、columnMemberRole=COLUMN_MEMBER_INPUT，保留 C～H 的 columnSlots；这不是 PENDING、UNKNOWN 或标准字段未匹配，也不应生成六个业务字段。columnSlots 只是物理槽位实例，共享字段定义使用一个 column member 语义。只有真实填写了列成员名称后，长表训练导出才将该列标记为 trainingEligible。
-                 逐行或逐列重复表的协议约束：ROW_TABLE/COLUMN_TABLE 必须使用 semanticMode=ROW_RECORDS；普通重复表的 rowHeaderRange、columnHeaderRange、crossDataRange 和 headerTree 必须为空；FIXED_COUNT 终止规则使用 maxRecords。表格列的 labelRange 只覆盖真实表头，valueRange 只覆盖真实数据区，合并表头不得把整张表误写成矩阵轴。物理结构契约已确认为普通重复表时，不得因为模型只看到了一个字段就把整张表缩成一个 SCALAR_FIELD。
+                 逐行或逐列重复表的协议约束：ROW_TABLE 使用 semanticMode=ROW_RECORDS，COLUMN_TABLE 使用 semanticMode=COLUMN_RECORDS；普通重复表的 rowHeaderRange、columnHeaderRange、crossDataRange 和 headerTree 必须为空；FIXED_COUNT 终止规则使用 maxRecords。表格列的 labelRange 只覆盖真实表头，valueRange 只覆盖真实数据区，合并表头不得把整张表误写成矩阵轴。物理结构契约已确认为普通重复表时，不得因为模型只看到了一个字段就把整张表缩成一个 SCALAR_FIELD。
                 如果标签和值实际位于同一个合并单元格，必须把 labelRange 和 valueRange 都写成该合并区域的完整地址，并使用 INLINE_TEXT；不能用同一合并区域的两个重叠子范围冒充 LABEL_VALUE。业务块范围必须覆盖其所有字段和表格的真实单元格，尤其不要遗漏合并值区域。
 
                 业务值不能仅因包含“原料、树脂、测试”等词就被当作字段。产品名称、原料名称、编号、公式结果和历史值通常是值或表格数据，需要依靠标签—值关系和整表上下文判断。
@@ -555,6 +698,117 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
                 blockTemporaryId、temporaryBlockRef、temporaryRelationRef 和 temporaryTableRef 只能引用当前响应对应数组中已声明的 temporaryId；没有所属对象时必须返回空字符串。
                 JSON Schema 中无值的可选字符串必须返回空字符串，不能删除属性或返回额外属性。
                  """;
+    }
+
+    private GlobalSemanticSuggestionCompiler.Compiled compileDocxSuggestions(
+            JsonNode response, RecognitionRequest request
+    ) {
+        var result = new ArrayList<RecognitionModelClient.ModelSuggestion>();
+        var fields = response.path("fields").isArray() ? response.path("fields") : response.path("suggestions");
+        var documentIr = request.structureSummary().path("documentIR").isObject()
+                ? request.structureSummary().path("documentIR") : request.structureSummary();
+        var anchors = new java.util.HashSet<String>();
+        for (var anchor : documentIr.path("anchors")) anchors.add(anchor.path("nodeId").asText(""));
+        for (var block : documentIr.path("blocks")) anchors.add(block.path("id").asText(""));
+        for (var control : documentIr.path("contentControls")) anchors.add(control.path("nodeId").asText(""));
+        for (var field : fields) {
+            if (!field.isObject()) continue;
+            var candidateRef = field.path("candidateRef").asText(
+                    field.path("valueAnchor").asText(field.path("labelAnchor").asText("")));
+            var fieldName = field.path("fieldName").asText("").strip();
+            if (candidateRef.isBlank() || fieldName.isBlank() || !anchors.contains(candidateRef)) continue;
+            var labelAnchor = field.path("labelAnchor").asText(candidateRef);
+            var valueAnchor = field.path("valueAnchor").asText(candidateRef);
+            if (!anchors.contains(labelAnchor) || !anchors.contains(valueAnchor)) continue;
+            var fieldId = RecognitionIdentity.fieldId(RecognitionIdentity.relationId(
+                    "docx", labelAnchor, valueAnchor, "DOCX_MODEL"));
+            var payload = objectMapper.createObjectNode()
+                    .put("kind", "SCALAR").put("role", "FIELD")
+                    .put("fieldId", fieldId.toString()).put("fieldName", fieldName)
+                    .put("fieldCode", "AUTO.WORD.FIELD_" + RecognitionIdentity.shortHash(fieldId.toString(), 12))
+                    .put("dataPath", "/recognized/word/" + fieldName.replaceAll("[^\\p{L}\\p{N}_-]+", "_"))
+                    .put("regionId", "docx-document").put("blockId", "docx-document")
+                    .put("candidateRef", candidateRef).put("editability", "UNKNOWN")
+                    .put("valueSource", "UNKNOWN").put("valueType", "string")
+                    .put("reviewRequired", true).put("candidateOnly", true)
+                    .put("publishable", false).put("pendingReason", "DOCX_MODEL_REVIEW")
+                    .put("source", "DOCX_MODEL").put("locatorType", "DOCX_MODEL")
+                    .put("groupName", "基本信息");
+            payload.set("locator", objectMapper.createObjectNode()
+                    .put("locatorType", "DOCX_MODEL").put("nodeId", candidateRef)
+                    .put("labelAnchor", labelAnchor).put("valueAnchor", valueAnchor));
+            result.add(new RecognitionModelClient.ModelSuggestion(
+                    "SCALAR_FIELD", payload, field.path("confidence").asDouble(0.55),
+                    objectMapper.createArrayNode().add(objectMapper.createObjectNode()
+                            .put("source", "DOCX_MODEL").put("candidateRef", candidateRef))));
+        }
+        return new GlobalSemanticSuggestionCompiler.Compiled(result, List.of());
+    }
+
+    private ObjectNode docxStructureResponseSchema() {
+        var structure = objectMapper.createObjectNode().put("type", "object");
+        var properties = objectMapper.createObjectNode();
+        properties.set("nodeId", objectMapper.createObjectNode().put("type", "string"));
+        properties.set("nodeType", objectMapper.createObjectNode().put("type", "string"));
+        properties.set("role", objectMapper.createObjectNode().put("type", "string"));
+        properties.set("text", objectMapper.createObjectNode().put("type", "string"));
+        structure.set("properties", properties);
+        structure.set("required", objectMapper.createArrayNode()
+                .add("nodeId").add("nodeType").add("role").add("text"));
+        structure.put("additionalProperties", false);
+        var root = objectMapper.createObjectNode().put("type", "object");
+        var rootProperties = objectMapper.createObjectNode();
+        var structures = objectMapper.createObjectNode().put("type", "array");
+        structures.set("items", structure);
+        rootProperties.set("structures", structures);
+        var issues = objectMapper.createObjectNode().put("type", "array");
+        issues.set("items", objectMapper.createObjectNode().put("type", "object")
+                .put("additionalProperties", true));
+        rootProperties.set("qualityIssues", issues);
+        root.set("properties", rootProperties);
+        root.set("required", objectMapper.createArrayNode().add("structures").add("qualityIssues"));
+        root.put("additionalProperties", false);
+        return root;
+    }
+
+    private ObjectNode docxResponseSchema() {
+        var field = objectMapper.createObjectNode().put("type", "object");
+        var fieldProperties = objectMapper.createObjectNode();
+        fieldProperties.set("candidateRef", objectMapper.createObjectNode().put("type", "string"));
+        fieldProperties.set("fieldName", objectMapper.createObjectNode().put("type", "string"));
+        fieldProperties.set("role", objectMapper.createObjectNode().put("type", "string"));
+        fieldProperties.set("labelAnchor", objectMapper.createObjectNode().put("type", "string"));
+        fieldProperties.set("valueAnchor", objectMapper.createObjectNode().put("type", "string"));
+        fieldProperties.set("reviewRequired", objectMapper.createObjectNode().put("type", "boolean"));
+        field.set("properties", fieldProperties);
+        field.set("required", objectMapper.createArrayNode()
+                .add("candidateRef").add("fieldName").add("role")
+                .add("labelAnchor").add("valueAnchor").add("reviewRequired"));
+        field.put("additionalProperties", false);
+        var root = objectMapper.createObjectNode().put("type", "object");
+        var properties = objectMapper.createObjectNode();
+        var fields = objectMapper.createObjectNode().put("type", "array");
+        fields.set("items", field);
+        properties.set("fields", fields);
+        var issues = objectMapper.createObjectNode().put("type", "array");
+        issues.set("items", objectMapper.createObjectNode().put("type", "object").put("additionalProperties", true));
+        properties.set("qualityIssues", issues);
+        root.set("properties", properties);
+        root.set("required", objectMapper.createArrayNode().add("fields").add("qualityIssues"));
+        root.put("additionalProperties", false);
+        return root;
+    }
+
+    private boolean isDocxPhase(String phase) {
+        return phase != null && phase.startsWith("DOCX_");
+    }
+
+    private boolean isDocxStructurePhase(String phase) {
+        return "DOCX_STRUCTURE_DISCOVERY".equals(phase);
+    }
+
+    private boolean isDocxFieldPhase(String phase) {
+        return "DOCX_FIELD_SEMANTICS".equals(phase);
     }
 
     private RecognitionModelClient.CallTrace trace(

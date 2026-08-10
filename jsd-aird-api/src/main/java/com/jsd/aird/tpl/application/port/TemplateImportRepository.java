@@ -12,6 +12,9 @@ public interface TemplateImportRepository {
 
     void enqueue(NewImportJob job);
 
+    /** Reuses the import record while preserving every previous recognition run. */
+    boolean enqueueRerun(RerunImportJob job);
+
     Optional<ImportJobView> find(UUID organizationId, UUID importJobId);
 
     Optional<ImportJobView> findLatestForVersion(UUID organizationId, UUID versionId);
@@ -25,6 +28,8 @@ public interface TemplateImportRepository {
 
     Optional<UUID> findGeneratedVersionId(UUID importJobId);
 
+    int countManualReruns(UUID importJobId);
+
     List<ImportJobView> list(UUID organizationId);
 
     void complete(UUID importJobId, OfficeStructureParser.ParseResult result);
@@ -36,8 +41,16 @@ public interface TemplateImportRepository {
     void updateProgress(UUID importJobId, int progress, String stage);
 
     UUID startRecognitionRun(
-            UUID importJobId, String scope, int structureVersion, int snapshotFormatVersion, int regionCount
+            UUID importJobId, String scope, int structureVersion, int snapshotFormatVersion, int regionCount,
+            UUID parentRunId, String runReason
     );
+
+    default UUID startRecognitionRun(
+            UUID importJobId, String scope, int structureVersion, int snapshotFormatVersion, int regionCount
+    ) {
+        return startRecognitionRun(importJobId, scope, structureVersion, snapshotFormatVersion, regionCount,
+                null, "INITIAL_RECOGNITION");
+    }
 
     void updateRecognitionRunSnapshot(UUID recognitionRunId, String snapshotHash, String reason);
 
@@ -129,6 +142,39 @@ public interface TemplateImportRepository {
         }
     }
 
+    record RerunImportJob(
+            UUID importJobId,
+            UUID asyncJobId,
+            UUID organizationId,
+            UUID sourceFileId,
+            TemplateFormat format,
+            UUID actorId,
+            UUID parentRunId,
+            String runReason,
+            String sourceKind
+    ) {
+        public RerunImportJob {
+            runReason = runReason == null || runReason.isBlank()
+                    ? "MANUAL_RERUN_CURRENT_DRAFT" : runReason;
+            sourceKind = sourceKind == null || sourceKind.isBlank()
+                    ? "UNIVER_SNAPSHOT" : sourceKind;
+        }
+
+        public RerunImportJob(
+                UUID importJobId,
+                UUID asyncJobId,
+                UUID organizationId,
+                UUID sourceFileId,
+                TemplateFormat format,
+                UUID actorId,
+                UUID parentRunId,
+                String runReason
+        ) {
+            this(importJobId, asyncJobId, organizationId, sourceFileId, format, actorId,
+                    parentRunId, runReason, "UNIVER_SNAPSHOT");
+        }
+    }
+
     record ImportJobView(
             UUID id,
             UUID sourceFileId,
@@ -139,12 +185,16 @@ public interface TemplateImportRepository {
             String currentStage,
             JsonNode structureSummary,
             JsonNode result,
+            JsonNode recognitionSummary,
             String lastError,
             Instant createdAt,
+            int retryCount,
             int suggestionCount,
             int pendingSuggestionCount,
             UUID recognitionRunId,
             String recognitionRunStatus,
+            UUID generatedTemplateVersionId,
+            String workspaceHash,
             List<IssueView> issues
     ) {
     }

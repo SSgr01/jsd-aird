@@ -91,17 +91,76 @@ public class TemplateWorkspaceService {
     }
 
     @Transactional
-    public void clearCategory(String category) {
-        var normalized = trimToNull(category);
-        if (normalized == null || "未分类".equals(normalized) || "全部模板".equals(normalized)) {
-            throw new ApiException(ApiErrorCode.BAD_REQUEST, "只能删除已有的自定义分类");
+    public List<TemplateRepository.TemplateCategoryItem> listCategories() {
+        return repository.findCategories(ActorContext.required().organizationId());
+    }
+
+    @Transactional
+    public TemplateRepository.TemplateCategoryItem createCategory(String name) {
+        var actor = ActorContext.required();
+        var normalized = validCategoryName(name);
+        if (repository.categoryNameExists(actor.organizationId(), normalized, null)) {
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "分类名称已存在");
         }
-        repository.clearCategory(ActorContext.required().organizationId(), normalized);
+        var id = UUID.randomUUID();
+        var sortOrder = repository.findCategories(actor.organizationId()).stream()
+                .mapToInt(TemplateRepository.TemplateCategoryItem::sortOrder).max().orElse(-1) + 1;
+        repository.insertCategory(id, actor.organizationId(), normalized, sortOrder, actor.userId());
+        return repository.findCategory(actor.organizationId(), id).orElseThrow();
+    }
+
+    @Transactional
+    public TemplateRepository.TemplateCategoryItem renameCategory(UUID categoryId, String name) {
+        var actor = ActorContext.required();
+        var normalized = validCategoryName(name);
+        if (repository.categoryNameExists(actor.organizationId(), normalized, categoryId)) {
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "分类名称已存在");
+        }
+        if (repository.renameCategory(actor.organizationId(), categoryId, normalized) == 0) {
+            throw new ApiException(ApiErrorCode.NOT_FOUND, "分类不存在");
+        }
+        return repository.findCategory(actor.organizationId(), categoryId).orElseThrow();
+    }
+
+    @Transactional
+    public void deleteCategory(UUID categoryId, UUID replacementCategoryId) {
+        var organizationId = ActorContext.required().organizationId();
+        if (categoryId.equals(replacementCategoryId)) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "不能迁移到当前分类");
+        }
+        repository.findCategory(organizationId, categoryId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "分类不存在"));
+        if (replacementCategoryId != null) repository.findCategory(organizationId, replacementCategoryId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "目标分类不存在"));
+        repository.deleteCategory(organizationId, categoryId, replacementCategoryId);
+    }
+
+    @Transactional
+    public void assignTemplateCategory(UUID templateId, UUID categoryId) {
+        var organizationId = ActorContext.required().organizationId();
+        if (categoryId != null) repository.findCategory(organizationId, categoryId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "分类不存在"));
+        if (repository.assignTemplateCategory(organizationId, templateId, categoryId) == 0) {
+            throw new ApiException(ApiErrorCode.NOT_FOUND, "模板不存在");
+        }
+    }
+
+    private String validCategoryName(String name) {
+        var normalized = trimToNull(name);
+        if (normalized == null) throw new ApiException(ApiErrorCode.BAD_REQUEST, "分类名称不能为空");
+        if (normalized.length() > 120) throw new ApiException(ApiErrorCode.BAD_REQUEST, "分类名称不能超过 120 个字符");
+        if ("未分类".equals(normalized) || "全部模板".equals(normalized)) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "该名称为系统保留名称");
+        }
+        return normalized;
     }
 
     @Transactional
     public TemplateRepository.TemplateWorkspace createBlank(CreateBlankCommand command) {
         var actor = ActorContext.required();
+        var normalizedCategory = trimToNull(command.category());
+        if (normalizedCategory != null) repository.ensureCategory(
+                actor.organizationId(), validCategoryName(normalizedCategory), actor.userId());
         var templateId = UUID.randomUUID();
         var versionId = UUID.randomUUID();
         var code = "TPL-" + LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE)
@@ -178,7 +237,7 @@ public class TemplateWorkspaceService {
                 code,
                 command.name().trim(),
                 trimToNull(command.purpose()),
-                trimToNull(command.category()),
+                normalizedCategory,
                 command.format(),
                 actor.userId()
         ));
@@ -241,17 +300,29 @@ public class TemplateWorkspaceService {
         recognitionReviewService.applyQualityActions(
                 actor.organizationId(), actor.userId(), versionId, command.qualityActions()
         );
-        var normalizedSchema = normalizeFieldGroups(command.schema());
-        var normalizedMapping = normalizeMapping(command.mapping(), normalizedSchema);
-        validateSchema(normalizedSchema);
-        standardFieldService.validateFormalFields(normalizedSchema);
-        var reconciliationRequired = validateMappings(current.format(), normalizedMapping);
-        recognitionReviewService.validateAcceptedMappings(
-                actor.organizationId(), versionId, normalizedMapping
-        );
+        JsonNode normalizedSchema;
+        JsonNode normalizedMapping;
+        boolean reconciliationRequired;
+        if (current.format() == TemplateFormat.DOCX) {
+            normalizedSchema = normalizeWordSchema(command.schema());
+            normalizedMapping = objectMapper.createArrayNode();
+            validateSchema(normalizedSchema);
+            reconciliationRequired = false;
+        } else {
+            normalizedSchema = normalizeFieldGroups(command.schema());
+            normalizedSchema = standardFieldService.normalizeDraftFields(normalizedSchema);
+            normalizedMapping = normalizeMapping(command.mapping(), normalizedSchema);
+            validateSchema(normalizedSchema);
+            standardFieldService.validateFormalFields(normalizedSchema);
+            reconciliationRequired = validateMappings(current.format(), normalizedMapping);
+            recognitionReviewService.validateAcceptedMappings(
+                    actor.organizationId(), versionId, normalizedMapping
+            );
+        }
         validateBindingValues(command.bindingValues());
         validateStructureOperations(command.structureOperations());
-        if (current.format() == TemplateFormat.XLSX) {
+        if (current.format() == TemplateFormat.XLSX
+                || (current.format() == TemplateFormat.DOCX && command.snapshotFileId() != null)) {
             validateSnapshot(command.snapshotFileId(), command.snapshotHash());
         }
         var wordDocument = current.wordDocument().isObject()
@@ -297,6 +368,43 @@ public class TemplateWorkspaceService {
             } catch (Exception exception) {
                 throw new ApiException(ApiErrorCode.SNAPSHOT_PERSIST_FAILED, "Word 原生工件写入失败");
             }
+        }
+        if (current.format() == TemplateFormat.DOCX && command.snapshotFileId() != null
+                && (command.wordPatch() == null || command.wordPatch().isEmpty())) {
+            if (wordDocument == null) throw new ApiException(ApiErrorCode.BAD_REQUEST, "Word 原生工件不存在");
+            var currentFileId = UUID.fromString(wordDocument.path("workingDocxFileId")
+                    .asText(wordDocument.path("sourceDocxFileId").asText("")));
+            var currentFile = fileRepository.find(actor.organizationId(), currentFileId)
+                    .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "Word 原生工件不存在"));
+            var snapshotFile = fileRepository.find(actor.organizationId(), command.snapshotFileId())
+                    .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "Word 编辑快照不存在"));
+            try (var source = objectStorage.get(currentFile.objectKey());
+                 var stagedSnapshot = objectStorage.get(snapshotFile.objectKey())) {
+                var snapshot = objectMapper.readTree(stagedSnapshot.stream().readAllBytes());
+                var patched = wordOoxmlPatchService.applySnapshot(source.stream().readAllBytes(), snapshot);
+                var parsed = wordDocumentParser.parse(new ByteArrayInputStream(patched));
+                documentStructure = parsed.structureSummary().path("documentIR").deepCopy();
+                var staged = stageWordDocument(patched, currentFile.originalName(), actor);
+                wordDocument.put("workingDocxFileId", staged.id().toString());
+                wordDocument.put("documentHash", staged.sha256());
+                wordDocument.put("lastPatchCount", 0);
+                wordDocument.put("lastPatchSummary", "UNIVER_DOCS_SNAPSHOT");
+                wordDocument.put("structureVersion", documentStructure.path("structureVersion").asInt(1));
+                wordDocument.put("structureHash", documentStructure.path("structureHash").asText(""));
+                wordDocument.put("state", "WORKING");
+            } catch (ApiException exception) {
+                throw exception;
+            } catch (Exception exception) {
+                throw new ApiException(ApiErrorCode.SNAPSHOT_PERSIST_FAILED, "Word 编辑快照回写失败");
+            }
+        }
+        if (current.format() == TemplateFormat.DOCX && wordDocument != null
+                && command.snapshotFileId() != null) {
+            wordDocument.put("editorMode", "UNIVER_DOCS");
+            wordDocument.put("conversionMode", "DOCX_LIMITED");
+            wordDocument.put("editorSnapshotFileId", command.snapshotFileId().toString());
+            wordDocument.put("editorSnapshotHash", command.snapshotHash());
+            wordDocument.put("documentRevision", wordDocument.path("documentRevision").asInt(0) + 1);
         }
 
         var schemaHash = canonicalizer.hash(normalizedSchema);
@@ -375,6 +483,7 @@ public class TemplateWorkspaceService {
             );
         }
         return new SaveResult(command.lockVersion() + 1, workspaceHash, reconciliationRequired,
+                normalizedSchema.deepCopy(), normalizedMapping.deepCopy(),
                 wordDocument == null ? null : wordDocument.deepCopy(),
                 documentStructure == null ? null : documentStructure.deepCopy());
     }
@@ -416,7 +525,7 @@ public class TemplateWorkspaceService {
 
     private JsonNode normalizeMapping(JsonNode mapping, JsonNode schema) {
         if (mapping == null || !mapping.isArray()) return mapping;
-        var result = mapping.deepCopy();
+        var result = MappingPathNormalizer.normalize(mapping);
         var model = schema.path(TemplateRecognitionCompiler.FIELD_MODEL_KEY);
         var names = new java.util.HashMap<String, String>();
         var groups = new java.util.HashMap<String, String>();
@@ -447,20 +556,24 @@ public class TemplateWorkspaceService {
                         workspace.wordDocument().path("sourceDocxFileId").asText(""))))) {
             throw new ApiException(ApiErrorCode.FILE_NOT_READY, "发布前必须准备 Word 原生工件");
         }
-        if (hasRequiredFieldWithoutPosition(workspace.schema(), workspace.mapping(), workspace.format())) {
+        if (workspace.format() == TemplateFormat.XLSX
+                && hasRequiredFieldWithoutPosition(workspace.schema(), workspace.mapping(), workspace.format())) {
             var message = workspace.format() == TemplateFormat.DOCX
                     ? "还有必填 Word 字段未插入正文位置"
                     : "还有必填字段没有有效填写位置";
             throw new ApiException(ApiErrorCode.BINDING_INVALID, message);
         }
-        if (recognitionReviewService.hasIncompleteRecognition(actor.organizationId(), versionId)) {
+        if (workspace.format() == TemplateFormat.XLSX
+                && recognitionReviewService.hasIncompleteRecognition(actor.organizationId(), versionId)) {
             throw new ApiException(ApiErrorCode.BINDING_INVALID,
                     "识别结果尚未完成结构确认或人工复核，暂不能发布");
         }
-        if (recognitionReviewService.hasOpenConflicts(actor.organizationId(), versionId)) {
+        if (workspace.format() == TemplateFormat.XLSX
+                && recognitionReviewService.hasOpenConflicts(actor.organizationId(), versionId)) {
             throw new ApiException(ApiErrorCode.BINDING_INVALID, "识别结果仍有冲突，请在识别确认中处理后再发布");
         }
-        if (recognitionReviewService.hasOpenBlockingIssues(actor.organizationId(), versionId)) {
+        if (workspace.format() == TemplateFormat.XLSX
+                && recognitionReviewService.hasOpenBlockingIssues(actor.organizationId(), versionId)) {
             throw new ApiException(ApiErrorCode.BINDING_INVALID, "模板仍有会影响可靠填写的问题，请按识别确认中的提示处理");
         }
         if (workspace.format() == TemplateFormat.DOCX && workspace.wordDocument().isObject()) {
@@ -562,9 +675,17 @@ public class TemplateWorkspaceService {
             var bindingId = binding.path("bindingId").asText();
             var path = binding.path("dataPath").asText();
             var locatorType = binding.path("locatorType").asText();
-            if (!StringUtils.hasText(bindingId) || !StringUtils.hasText(path)
-                    || !StringUtils.hasText(locatorType) || !binding.path("locator").isObject()) {
-                throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "Mapping 缺少 bindingId、dataPath 或 locator");
+            if (!StringUtils.hasText(bindingId)) {
+                throw new ApiException(ApiErrorCode.INVALID_SCHEMA,
+                        "Mapping 缺少 bindingId：" + mappingDescription(binding));
+            }
+            if (!StringUtils.hasText(path)) {
+                throw new ApiException(ApiErrorCode.INVALID_SCHEMA,
+                        "Mapping 缺少 dataPath：" + mappingDescription(binding));
+            }
+            if (!StringUtils.hasText(locatorType) || !binding.path("locator").isObject()) {
+                throw new ApiException(ApiErrorCode.INVALID_SCHEMA,
+                        "Mapping 缺少 locator：" + mappingDescription(binding));
             }
             var syncDirection = binding.path("syncDirection").asText("");
             if (!java.util.Set.of("TWO_WAY", "DATA_TO_EDITOR", "EDITOR_TO_DATA")
@@ -613,6 +734,27 @@ public class TemplateWorkspaceService {
         }
         validateRepeatMappings(mapping, bindingsById);
         return reconciliationRequired;
+    }
+
+    private ObjectNode normalizeWordSchema(JsonNode schema) {
+        var normalized = schema != null && schema.isObject()
+                ? (ObjectNode) schema.deepCopy() : objectMapper.createObjectNode();
+        normalized.put("type", "object");
+        normalized.put("documentType", "WORD");
+        normalized.put("schemaVersion", 1);
+        normalized.remove(TemplateRecognitionCompiler.FIELD_MODEL_KEY);
+        return normalized;
+    }
+
+    private String mappingDescription(JsonNode binding) {
+        var kind = binding.path("mappingKind").asText(binding.path("role").asText("UNKNOWN"));
+        var bindingId = binding.path("bindingId").asText("未提供");
+        var fieldCode = binding.path("fieldCode").asText("");
+        var locator = binding.path("locator").path("address").asText(
+                binding.path("locator").path("range").asText("未提供"));
+        return "[" + kind + ", bindingId=" + bindingId
+                + (fieldCode.isBlank() ? "" : ", fieldCode=" + fieldCode)
+                + ", locator=" + locator + "]";
     }
 
     public WordDocumentDownload downloadWordDocument(UUID versionId) {
@@ -1020,6 +1162,7 @@ public class TemplateWorkspaceService {
     }
 
     public record SaveResult(long lockVersion, String workspaceHash, boolean reconciliationRequired,
+                             JsonNode schema, JsonNode mapping,
                              JsonNode wordDocument, JsonNode documentStructure) {
     }
 }

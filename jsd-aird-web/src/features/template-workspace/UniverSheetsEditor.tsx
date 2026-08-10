@@ -5,6 +5,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 
 import '@univerjs/preset-sheets-core/lib/index.css';
 
+import { isCellMutationCommand, isSingleCellAddress } from './live-field-discovery';
 import { operationFromUniverCommand } from './structure-migration';
 import type {
   EditorHandle,
@@ -113,6 +114,15 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
       apiRef.current = univerAPI;
       const workbook = univerAPI.createWorkbook(snapshot);
       workbook.setEditable(editableRef.current);
+      const initialSheet = workbook.getActiveSheet();
+      const initialRange = initialSheet?.getActiveRange() ?? workbook.getActiveRange();
+      if (initialSheet && initialRange) {
+        latestSelection = {
+          sheetId: initialSheet.getSheetId(),
+          sheetName: initialSheet.getSheetName(),
+          address: initialRange.getA1Notation(),
+        };
+      }
       if (editableRef.current) {
         void protectReadOnlyRanges(univerAPI, bindingsRef.current).catch(() => undefined);
       }
@@ -125,15 +135,26 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
         labelValues.set(labelCacheKey(binding), readLabelCell(univerAPI, binding));
         bindingValues.set(valueCacheKey(binding), readCell(univerAPI, binding));
       }
-      commandSubscription = univerAPI.onCommandExecuted((command) => {
+      // Subscribe on the workbook rather than only on the global API. Direct
+      // typing, paste and fill commands are emitted by the workbook command
+      // service in some Univer versions.
+      commandSubscription = workbook.onCommandExecuted((command) => {
         const structureOperation = operationFromUniverCommand(command);
         if (!structureOperation && !isCellMutationCommand(command.id)) return;
         callbacksRef.current.onDirty();
         if (structureOperation) callbacksRef.current.onStructureChange?.(structureOperation);
         window.cancelAnimationFrame(pendingSynchronization);
         pendingSynchronization = window.requestAnimationFrame(() => {
+          const structuralParentIds = new Set(
+            bindingsRef.current
+              .map((item) => item.parentBindingId)
+              .filter((value): value is string => Boolean(value)),
+          );
           for (const binding of bindingsRef.current) {
             if (binding.syncDirection === 'DATA_TO_EDITOR') continue;
+            // A repeating parent is a layout surface. Its raw 2D values must
+            // not overwrite the business records assembled from child fields.
+            if (structuralParentIds.has(binding.bindingId)) continue;
             const valueKey = valueCacheKey(binding);
             const value = readCell(univerAPI, binding);
             if (!bindingValues.has(valueKey)) {
@@ -151,14 +172,28 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
               callbacksRef.current.onEditorLabel?.(binding, labelValue);
             }
           }
-          if (!suppressUnboundRef.current && latestSelection) {
-            const activeSheet = univerAPI.getActiveWorkbook()?.getActiveSheet();
-            if (activeSheet && activeSheet.getSheetId() === latestSelection.sheetId) {
-              const range = activeSheet.getRange(latestSelection.address);
-              const value = latestSelection.address.includes(':')
-                ? range.getValues()
-                : range.getValue();
-              callbacksRef.current.onUnboundCellChange?.(latestSelection, value);
+          if (!suppressUnboundRef.current) {
+            const activeWorkbook = univerAPI.getActiveWorkbook() ?? workbook;
+            const activeSheet = activeWorkbook.getActiveSheet();
+            const activeRange = activeSheet?.getActiveRange() ?? activeWorkbook.getActiveRange();
+            const activeAddress = activeRange?.getA1Notation() ?? latestSelection?.address;
+            const activeSheetId = activeSheet?.getSheetId() ?? latestSelection?.sheetId;
+            const activeSheetName = activeSheet?.getSheetName() ?? latestSelection?.sheetName;
+            if (
+              activeSheet
+              && activeAddress
+              && activeSheetId
+              && activeSheetName
+              && isSingleCellAddress(activeAddress)
+            ) {
+              const selection: EditorSelection = {
+                sheetId: activeSheetId,
+                sheetName: activeSheetName,
+                address: activeAddress,
+              };
+              latestSelection = selection;
+              const value = activeRange?.getValue() ?? activeSheet.getRange(activeAddress).getValue();
+              callbacksRef.current.onUnboundCellChange?.(selection, value);
             }
           }
         });
@@ -227,7 +262,7 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
           );
         }
         const values = unknownArray(value);
-        if (range && binding.mappingKind === 'REPEAT_FIELD' && values) {
+        if (range && isStructuredLeaf(binding) && values) {
           if (binding.locator.valueMode === 'ARRAY_ROW') {
             range.setValues([values] as never);
           } else {
@@ -311,7 +346,8 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
         }
       },
       async appendRepeatRecord(binding) {
-        if (binding.mappingKind !== 'REPEAT_REGION' && binding.mappingKind !== 'REPEAT_FIELD') {
+        if (!['REPEAT_REGION', 'REPEAT_FIELD', 'MATRIX_REGION', 'MATRIX_FIELD']
+          .includes(binding.mappingKind || '')) {
           return;
         }
         const workbook = apiRef.current?.getActiveWorkbook();
@@ -445,7 +481,7 @@ function resolveSheet(api: FUniver | undefined, binding: TemplateBinding) {
 function resolveRange(api: FUniver | undefined, binding: TemplateBinding) {
   const address =
     binding.role === 'FIELD'
-      ? binding.mappingKind === 'REPEAT_FIELD'
+      ? isStructuredLeaf(binding)
         ? stringLocator(binding.locator.anchorRange) ||
           stringLocator(binding.locator.logicalInputRange) ||
           stringLocator(binding.locator.anchorAddress)
@@ -505,10 +541,14 @@ function readCell(api: FUniver, binding: TemplateBinding) {
   if (binding.locator.valueMode === 'ARRAY_ROW') {
     return range.getValues()[0] ?? [];
   }
-  if (binding.mappingKind === 'REPEAT_FIELD' || binding.locator.valueMode === 'ARRAY_COLUMN') {
+  if (isStructuredLeaf(binding) || binding.locator.valueMode === 'ARRAY_COLUMN') {
     return range.getValues().map((row: unknown[]) => row[0]);
   }
   return binding.role === 'REPEAT_REGION' ? range.getValues() : range.getValue();
+}
+
+function isStructuredLeaf(binding: TemplateBinding) {
+  return binding.mappingKind === 'REPEAT_FIELD' || binding.mappingKind === 'MATRIX_FIELD';
 }
 
 function isInlineTextBinding(binding: TemplateBinding) {
@@ -600,7 +640,22 @@ function columnLetters(value: number) {
 }
 
 function readLabelCell(api: FUniver, binding: TemplateBinding) {
-  return resolveLabelRange(api, binding)?.getValue();
+  const range = resolveLabelRange(api, binding);
+  if (!range) return undefined;
+  try {
+    const direct = range.getValue?.();
+    if (direct !== undefined && direct !== null) return direct;
+    const values = range.getValues?.();
+    return values?.[0]?.[0];
+  } catch {
+    // A merged range can reject getValue() in some Univer builds; the first
+    // cell of getValues() is still the stable label value.
+    try {
+      return range.getValues?.()?.[0]?.[0];
+    } catch {
+      return undefined;
+    }
+  }
 }
 
 function labelCacheKey(binding: TemplateBinding) {
@@ -621,21 +676,6 @@ function valueCacheKey(binding: TemplateBinding) {
 
 function sameValue(left: unknown, right: unknown) {
   return Object.is(left, right) || JSON.stringify(left) === JSON.stringify(right);
-}
-
-function isCellMutationCommand(commandId: string) {
-  const id = commandId.toLowerCase();
-  return [
-    'value',
-    'formula',
-    'paste',
-    'cut',
-    'clear',
-    'delete',
-    'fill',
-    'autofill',
-    'cell-data',
-  ].some((token) => id.includes(token));
 }
 
 function verifyWrite(read: () => unknown, expected: unknown) {

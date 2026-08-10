@@ -165,13 +165,19 @@ public class TemplateRecognitionCompiler {
                              .put("conflictMessage", payload.path("conflictMessage").asText(""))
                               .put("standardMatchStatus", payload.path("standardMatchStatus").asText("UNMATCHED"))
                               .put("dictionaryVersion", payload.path("dictionaryVersion").asInt(StandardFieldDictionary.VERSION))
+                              .put("standardRequired", payload.path("standardRequired").asBoolean(false))
                               .put("requiresStandardConfirmation", payload.path("requiresStandardConfirmation").asBoolean(false))
                               .put("runtimeInputOnly", payload.path("runtimeInputOnly").asBoolean(false))
                               .put("templateStatus", payload.path("templateStatus").asText(""))
                                 .put("publishable", payload.path("publishable").asBoolean(false))
                               .put("reviewStatus", validBinding && "ACCEPTED".equals(suggestion.decision())
+                                     && !"DOCX_CONTENT_CONTROL".equals(payload.path("source").asText())
                                      ? "CONFIRMED"
                                      : "NEEDS_CONFIRMATION");
+                    if (StringUtils.hasText(payload.path("markerId").asText())) {
+                        field.put("markerId", payload.path("markerId").asText());
+                    }
+                    if (payload.path("locator").isObject()) field.set("locator", payload.path("locator").deepCopy());
                      copyStandardMetadata(field, payload);
                     if (StringUtils.hasText(payload.path("parentFieldId").asText())) {
                         field.put("parentFieldId", payload.path("parentFieldId").asText());
@@ -208,7 +214,7 @@ public class TemplateRecognitionCompiler {
                     }
 
                     applySchema(baseSchema, payload, kind);
-                    if (format == TemplateFormat.XLSX && validBinding) {
+                    if ((format == TemplateFormat.XLSX || format == TemplateFormat.DOCX) && validBinding) {
                         mapping.add(toBinding(bindingId, fieldId.toString(), relationId,
                                 suggestion.id(), payload, kind));
                     }
@@ -244,6 +250,11 @@ public class TemplateRecognitionCompiler {
         binding.put("bindingId", bindingId);
         binding.put("fieldId", fieldId);
         binding.put("relationId", relationId);
+        if (StringUtils.hasText(payload.path("markerId").asText())) {
+            binding.put("markerId", payload.path("markerId").asText());
+        } else if (StringUtils.hasText(payload.path("locator").path("markerId").asText())) {
+            binding.put("markerId", payload.path("locator").path("markerId").asText());
+        }
         binding.put("fieldCode", payload.path("fieldCode").asText("AUTO.FIELD"));
         binding.put("dataPath", payload.path("dataPath").asText());
         binding.put("role", "SCALAR".equals(kind) ? "FIELD" : "REPEAT_REGION");
@@ -294,6 +305,13 @@ public class TemplateRecognitionCompiler {
     private boolean validBinding(JsonNode payload) {
         var editability = payload.path("editability").asText("UNKNOWN");
         var valueSource = payload.path("valueSource").asText("UNKNOWN");
+        var locatorType = payload.path("locatorType").asText(
+                payload.path("locator").path("locatorType").asText(""));
+        if (locatorType.startsWith("DOCX") || payload.has("markerId")) {
+            var markerId = payload.path("markerId").asText(
+                    payload.path("locator").path("markerId").asText(""));
+            if (!StringUtils.hasText(markerId)) return false;
+        }
         return !"UNKNOWN".equals(editability) && !"UNKNOWN".equals(valueSource)
                 && !payload.path("semanticConflict").asBoolean(false)
                 && !("EDITABLE".equals(editability) && "FORMULA".equals(valueSource));
@@ -547,6 +565,7 @@ public class TemplateRecognitionCompiler {
                      .put("conflictMessage", column.path("conflictMessage").asText(""))
                      .put("standardMatchStatus", column.path("standardMatchStatus").asText("UNMATCHED"))
                      .put("dictionaryVersion", column.path("dictionaryVersion").asInt(StandardFieldDictionary.VERSION))
+                     .put("standardRequired", column.path("standardRequired").asBoolean(false))
                      .put("requiresStandardConfirmation", column.path("requiresStandardConfirmation").asBoolean(false))
                     .put("labelRange", column.path("labelRange").asText(""))
                      .put("valueRange", column.path("valueRange").asText(""))

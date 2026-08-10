@@ -72,9 +72,12 @@ app:
     temperature: 0.0
     response-format: ${JSD_AIRD_MODEL_RESPONSE_FORMAT:json_schema}
     enable-thinking: ${JSD_AIRD_MODEL_ENABLE_THINKING:true}
-    thinking-budget: ${JSD_AIRD_MODEL_THINKING_BUDGET:1024}
+    thinking-budget: ${JSD_AIRD_MODEL_THINKING_BUDGET:2048}
+    structure-thinking-budget: ${JSD_AIRD_MODEL_STRUCTURE_THINKING_BUDGET:4096}
+    semantic-thinking-budget: ${JSD_AIRD_MODEL_SEMANTIC_THINKING_BUDGET:2048}
     max-completion-tokens: ${JSD_AIRD_MODEL_MAX_COMPLETION_TOKENS:12000}
     max-token-parameter: ${JSD_AIRD_MODEL_MAX_TOKEN_PARAMETER:max_tokens}
+    auto-retry-count: ${JSD_AIRD_MODEL_AUTO_RETRY_COUNT:2}
     visual-mode: ${JSD_AIRD_MODEL_VISUAL_MODE:auto}
     visual-enabled: ${JSD_AIRD_MODEL_VISUAL_ENABLED:false}
   render:
@@ -89,3 +92,10 @@ app:
     console-log-summary: ${JSD_AIRD_RECOGNITION_CONSOLE_LOG_SUMMARY:true}
     console-log-payload: ${JSD_AIRD_RECOGNITION_CONSOLE_LOG_PAYLOAD:true}
     allow-legacy-region-envelope: ${JSD_AIRD_RECOGNITION_ALLOW_LEGACY_REGION_ENVELOPE:false}
+  template-recognition:
+    topology-v2:
+      enabled: ${JSD_AIRD_TEMPLATE_RECOGNITION_TOPOLOGY_V2_ENABLED:true}
+  production-instance-ingest:
+    enabled: ${JSD_AIRD_PRODUCTION_INSTANCE_INGEST_ENABLED:true}
+  production-instance-photo:
+    enabled: ${JSD_AIRD_PRODUCTION_INSTANCE_PHOTO_ENABLED:true}

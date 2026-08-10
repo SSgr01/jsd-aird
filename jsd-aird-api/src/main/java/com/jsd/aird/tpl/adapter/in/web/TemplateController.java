@@ -14,6 +14,7 @@ import com.jsd.aird.shared.api.PageResponse;
 import com.jsd.aird.shared.api.ResponseFactory;
 import com.jsd.aird.tpl.application.TemplateWorkspaceService;
 import com.jsd.aird.tpl.application.TemplateRecognitionReviewService;
+import com.jsd.aird.tpl.application.TemplateOfficeExportService;
 import com.jsd.aird.tpl.application.port.TemplateRepository;
 import com.jsd.aird.tpl.domain.TemplateFormat;
 import com.jsd.aird.tpl.domain.TemplateStatus;
@@ -30,6 +31,10 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseEntity;
+import org.springframework.http.MediaType;
 import jakarta.servlet.http.HttpServletResponse;
 
 @RestController
@@ -38,13 +43,16 @@ public class TemplateController {
 
     private final TemplateWorkspaceService service;
     private final TemplateRecognitionReviewService recognitionReviewService;
+    private final TemplateOfficeExportService officeExportService;
 
     public TemplateController(
             TemplateWorkspaceService service,
-            TemplateRecognitionReviewService recognitionReviewService
+            TemplateRecognitionReviewService recognitionReviewService,
+            TemplateOfficeExportService officeExportService
     ) {
         this.service = service;
         this.recognitionReviewService = recognitionReviewService;
+        this.officeExportService = officeExportService;
     }
 
     @GetMapping("/templates")
@@ -57,9 +65,60 @@ public class TemplateController {
         return success(new PageResponse<>(items, 1, items.size(), items.size(), 1));
     }
 
-    @DeleteMapping("/template-categories/{category}")
-    public ApiResponse<Void> clearCategory(@PathVariable String category) {
-        service.clearCategory(category);
+    @GetMapping("/template-versions/{versionId}/export/check")
+    public ApiResponse<TemplateOfficeExportService.Check> checkExport(
+            @PathVariable UUID versionId,
+            @RequestParam String format,
+            @RequestParam(defaultValue = "DRAFT") String state
+    ) {
+        return success(officeExportService.check(versionId, format, state));
+    }
+
+    @GetMapping("/template-versions/{versionId}/export")
+    public ResponseEntity<byte[]> exportTemplate(
+            @PathVariable UUID versionId,
+            @RequestParam String format,
+            @RequestParam(defaultValue = "DRAFT") String state
+    ) {
+        var file = officeExportService.export(versionId, format, state);
+        var warningCount = Integer.toString(file.warnings().size());
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType(file.contentType()))
+                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
+                        .filename(file.fileName(), StandardCharsets.UTF_8).build().toString())
+                .header("X-Export-Warning-Count", warningCount)
+                .body(file.content());
+    }
+
+    @GetMapping("/template-categories")
+    public ApiResponse<List<TemplateRepository.TemplateCategoryItem>> listCategories() {
+        return success(service.listCategories());
+    }
+
+    @PostMapping("/template-categories")
+    public ApiResponse<TemplateRepository.TemplateCategoryItem> createCategory(
+            @Valid @RequestBody CategoryRequest request) {
+        return success(service.createCategory(request.name()));
+    }
+
+    @PutMapping("/template-categories/{categoryId}")
+    public ApiResponse<TemplateRepository.TemplateCategoryItem> renameCategory(
+            @PathVariable UUID categoryId, @Valid @RequestBody CategoryRequest request) {
+        return success(service.renameCategory(categoryId, request.name()));
+    }
+
+    @DeleteMapping("/template-categories/{categoryId}")
+    public ApiResponse<Void> deleteCategory(
+            @PathVariable UUID categoryId,
+            @RequestParam(required = false) UUID replacementCategoryId) {
+        service.deleteCategory(categoryId, replacementCategoryId);
+        return success(null);
+    }
+
+    @PutMapping("/templates/{templateId}/category")
+    public ApiResponse<Void> assignTemplateCategory(
+            @PathVariable UUID templateId, @RequestBody AssignCategoryRequest request) {
+        service.assignTemplateCategory(templateId, request.categoryId());
         return success(null);
     }
 
@@ -123,7 +182,8 @@ public class TemplateController {
                 ? List.<TemplateRecognitionReviewService.RecognitionAction>of()
                 : request.recognitionActions().stream()
                         .map(item -> new TemplateRecognitionReviewService.RecognitionAction(
-                                item.recognitionItemId(), item.action(), item.selectedSuggestionId()
+                                item.recognitionItemId(), item.action(), item.selectedSuggestionId(),
+                                item.selectedAlternativeId()
                         ))
                         .toList();
         var qualityActions = request.qualityActions() == null
@@ -193,8 +253,15 @@ public class TemplateController {
     public record RecognitionActionRequest(
             @NotNull UUID recognitionItemId,
             @NotBlank String action,
-            UUID selectedSuggestionId
+            UUID selectedSuggestionId,
+            String selectedAlternativeId
     ) {
+    }
+
+    public record CategoryRequest(@NotBlank String name) {
+    }
+
+    public record AssignCategoryRequest(UUID categoryId) {
     }
 
     @GetMapping("/template-versions/{versionId}/word-document")
@@ -208,6 +275,20 @@ public class TemplateController {
         } catch (Exception exception) {
             throw new com.jsd.aird.shared.error.ApiException(
                     com.jsd.aird.shared.error.ApiErrorCode.NOT_FOUND, "Word 原生文档读取失败");
+        }
+    }
+
+    @GetMapping("/template-versions/{versionId}/word-preview")
+    public void previewWordDocument(@PathVariable UUID versionId, HttpServletResponse response) throws IOException {
+        var downloaded = service.downloadWordDocument(versionId);
+        try (var stored = downloaded.storedObject()) {
+            response.setContentType(downloaded.contentType());
+            response.setHeader("Content-Disposition", "inline; filename*=UTF-8''"
+                    + URLEncoder.encode(downloaded.originalName(), StandardCharsets.UTF_8).replace("+", "%20"));
+            stored.stream().transferTo(response.getOutputStream());
+        } catch (Exception exception) {
+            throw new com.jsd.aird.shared.error.ApiException(
+                    com.jsd.aird.shared.error.ApiErrorCode.NOT_FOUND, "Word 原生文档预览读取失败");
         }
     }
 

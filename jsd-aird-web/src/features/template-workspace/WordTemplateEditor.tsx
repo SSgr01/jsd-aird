@@ -16,6 +16,7 @@ interface Props {
 
 export interface WordPatchOperation {
   type:
+    | 'INSERT_CONTENT_CONTROL'
     | 'REPLACE_CONTENT_CONTROL'
     | 'REPLACE_TEXT'
     | 'REPLACE_TABLE_CELL'
@@ -36,6 +37,11 @@ export interface WordPatchOperation {
   rowIndex?: number;
   baseText?: string;
   baseStructureHash?: string;
+  markerId?: string;
+  tag?: string;
+  alias?: string;
+  role?: BindingRole;
+  dataPath?: string;
 }
 
 export const WordTemplateEditor = forwardRef<EditorHandle, Props>(function WordTemplateEditor(

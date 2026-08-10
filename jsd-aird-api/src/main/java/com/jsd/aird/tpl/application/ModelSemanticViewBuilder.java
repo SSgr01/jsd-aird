@@ -8,19 +8,16 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 /**
- * Creates the compact read-only view sent to the model. The complete v6 physical facts remain
- * persisted; this view removes merge-child blanks and repetitive style/layout detail.
+ * Creates the compact read-only view sent to the model. The complete physical facts remain
+ * persisted; this view keeps structural topology and input evidence while dropping workbook
+ * style identifiers and formatting payloads.
  */
 public final class ModelSemanticViewBuilder {
 
     private static final List<String> CELL_KEYS = List.of(
             "address", "factType", "value", "formula", "inputCandidate", "inputConfidence",
             "inputEvidence", "physicalValueType", "mergedRange", "mergeAnchor", "mergeAnchorCell",
-            "styleRef", "bold", "hasBorder"
-    );
-    private static final List<String> LAYOUT_KEYS = List.of(
-            "range", "styleRef", "bold", "hasBorder",
-            "horizontalAlignment", "verticalAlignment", "fill", "numberFormat"
+            "bold", "hasBorder"
     );
     private static final List<String> PROFILE_KEYS = List.of(
             "row", "column", "columnName", "height", "width",
@@ -52,7 +49,8 @@ public final class ModelSemanticViewBuilder {
             var merges = compactRanges(sourceSheet.path("mergedRanges"),
                     List.of("range", "anchor"));
             sheet.set("mergedRanges", merges);
-            sheet.set("layoutSpans", compactObjects(sourceSheet.path("layoutSpans"), LAYOUT_KEYS, true));
+            sheet.set("borderSegments", compactBorderSegments(sourceSheet.path("borderSegments")));
+            sheet.set("layoutSpans", compactLayoutSpans(sourceSheet.path("layoutSpans")));
             sheet.set("rowProfiles", compactProfiles(sourceSheet.path("rowProfiles")));
             sheet.set("columnProfiles", compactProfiles(sourceSheet.path("columnProfiles")));
             sheet.set("dataValidationRules", compactRanges(sourceSheet.path("dataValidationRules"),
@@ -62,6 +60,22 @@ public final class ModelSemanticViewBuilder {
             sheets.add(sheet);
         }
         context.set("sheets", sheets);
+        var originalFactChars = structure.path("sheets").toString().length();
+        var compactFactChars = sheets.toString().length();
+        context.put("factsViewVersion", 2);
+        context.set("factsCompression", objectMapper.createObjectNode()
+                .put("originalChars", originalFactChars)
+                .put("compactChars", compactFactChars)
+                .put("reductionRatio", originalFactChars == 0
+                        ? 0.0
+                        : 1.0 - compactFactChars / (double) originalFactChars)
+                .put("mergeTopologyPreserved", true)
+                .put("styleDetailsOmitted", true)
+                .set("omittedKeys", objectMapper.createArrayNode()
+                        .add("styleRef")
+                        .add("alignment")
+                        .add("fill")
+                        .add("numberFormat")));
         context.set("structureHints", compactHints(structure.path("structureHints")));
         // Structure candidates are deliberately not included in the model view.
         // They are backend hypotheses and showing their interpreted geometry to
@@ -140,7 +154,7 @@ public final class ModelSemanticViewBuilder {
     }
 
     private void filterSheet(ObjectNode sheet, String regionRange) {
-        for (var key : List.of("semanticCells", "mergedRanges", "layoutSpans",
+        for (var key : List.of("semanticCells", "mergedRanges", "borderSegments", "layoutSpans",
                 "dataValidationRules", "rowProfiles", "columnProfiles")) {
             var values = sheet.path(key);
             if (!values.isArray()) continue;
@@ -220,18 +234,62 @@ public final class ModelSemanticViewBuilder {
         return result;
     }
 
-    private ArrayNode compactObjects(JsonNode source, List<String> keys, boolean keepOnlyMeaningful) {
+    private ArrayNode compactLayoutSpans(JsonNode source) {
         var result = objectMapper.createArrayNode();
         for (var item : source) {
-            if (keepOnlyMeaningful && !item.path("bold").asBoolean(false)
-                    && !item.path("hasBorder").asBoolean(false)
-                    && item.path("fill").asText("").isBlank()
-                    && item.path("horizontalAlignment").asText("").isBlank()) continue;
+            var meaningful = item.path("bold").asBoolean(false)
+                    || item.path("inputSurface").asBoolean(false)
+                    || item.path("blankInputSurface").asBoolean(false)
+                    || item.path("formulaSurface").asBoolean(false)
+                    || item.path("textSurface").asBoolean(false);
+            if (!meaningful) continue;
+
             var copy = objectMapper.createObjectNode();
-            copySelected(copy, item, keys);
+            copySelected(copy, item, List.of("range", "bold",
+                    "inputSurface", "blankInputSurface", "formulaSurface", "textSurface",
+                    "topology"));
             result.add(copy);
         }
         return result;
+    }
+
+    private ArrayNode compactBorderSegments(JsonNode source) {
+        var result = objectMapper.createArrayNode();
+        for (var item : source) {
+            var range = item.path("range").asText("");
+            var current = rangeBounds(range);
+            var previous = result.size() == 0 ? null : result.get(result.size() - 1);
+            var previousBounds = previous == null ? null : rangeBounds(previous.path("range").asText(""));
+            if (current != null && previous != null && previousBounds != null
+                    && item.path("orientation").asText("").equals(previous.path("orientation").asText(""))
+                    && current[0] == previousBounds[0]
+                    && current[2] == previousBounds[2]
+                    && current[1] == previousBounds[3] + 1) {
+                ((ObjectNode) previous).put("range", excelRange(
+                        previousBounds[0], previousBounds[1], current[2], current[3]));
+                continue;
+            }
+            var copy = objectMapper.createObjectNode();
+            if (!range.isBlank()) copy.put("range", range);
+            var orientation = item.path("orientation").asText("");
+            if (!orientation.isBlank()) copy.put("orientation", orientation);
+            result.add(copy);
+        }
+        return result;
+    }
+
+    private String excelRange(int startColumn, int startRow, int endColumn, int endRow) {
+        return columnName(startColumn) + startRow + ":" + columnName(endColumn) + endRow;
+    }
+
+    private String columnName(int column) {
+        var value = column;
+        var result = new StringBuilder();
+        while (value > 0) {
+            result.append((char) ('A' + (value - 1) % 26));
+            value = (value - 1) / 26;
+        }
+        return result.reverse().toString();
     }
 
     private ArrayNode compactProfiles(JsonNode source) {

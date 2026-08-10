@@ -56,7 +56,8 @@ public class JdbcProductionOrderRepository implements ProductionOrderRepository 
     @Override
     public Optional<PublishedTemplate> findPublishedTemplate(UUID organizationId, UUID versionId) {
         return jdbcTemplate.query("""
-                        SELECT tv.id, t.format, tv.schema_jsonb, tv.editor_snapshot_file_id,
+                        SELECT tv.id, t.format, tv.schema_jsonb, tv.layout_summary_jsonb,
+                               tv.editor_snapshot_file_id,
                                tv.editor_snapshot_hash, tv.snapshot_kind, tv.editor_app_version,
                                tv.plugin_manifest_hash, tv.snapshot_format_version
                         FROM tpl.template_version tv
@@ -68,6 +69,8 @@ public class JdbcProductionOrderRepository implements ProductionOrderRepository 
                         rs.getString("format"),
                         parse(rs.getString("schema_jsonb")),
                         loadMappings(versionId),
+                        parse(rs.getString("layout_summary_jsonb")).path("wordDocument"),
+                        parse(rs.getString("layout_summary_jsonb")).path("initialSnapshot"),
                         rs.getObject("editor_snapshot_file_id", UUID.class),
                         rs.getString("editor_snapshot_hash"),
                         rs.getString("snapshot_kind"),
@@ -78,6 +81,57 @@ public class JdbcProductionOrderRepository implements ProductionOrderRepository 
                 versionId,
                 organizationId
         ).stream().findFirst();
+    }
+
+    @Override
+    public List<RevisionSummary> listRevisions(UUID organizationId, UUID orderId) {
+        return jdbcTemplate.query("""
+                        SELECT rr.id, rr.revision_no, rr.status, rr.created_at, rr.data_hash
+                        FROM tpl.record_revision rr
+                        JOIN mfg.production_order po ON po.id = rr.production_order_id
+                        WHERE rr.production_order_id = ? AND po.organization_id = ?
+                        ORDER BY rr.revision_no DESC
+                        """,
+                (rs, rowNum) -> new RevisionSummary(
+                        rs.getObject("id", UUID.class), rs.getInt("revision_no"), rs.getString("status"),
+                        rs.getTimestamp("created_at").toInstant(), rs.getString("data_hash")), orderId, organizationId);
+    }
+
+    @Override
+    public Optional<RecordRevision> findRevision(UUID organizationId, UUID orderId, UUID revisionId) {
+        return jdbcTemplate.query("""
+                        SELECT rr.id, rr.production_order_id, rr.revision_no, rr.status,
+                               rr.schema_snapshot_jsonb, rr.mapping_snapshot_jsonb, rr.data_jsonb,
+                               rr.editor_snapshot_file_id, rr.editor_snapshot_hash,
+                               rr.schema_hash, rr.mapping_hash, rr.data_hash
+                        FROM tpl.record_revision rr
+                        JOIN mfg.production_order po ON po.id = rr.production_order_id
+                        WHERE rr.id = ? AND rr.production_order_id = ? AND po.organization_id = ?
+                        """,
+                (rs, rowNum) -> new RecordRevision(
+                        rs.getObject("id", UUID.class), rs.getObject("production_order_id", UUID.class),
+                        rs.getInt("revision_no"), rs.getString("status"), parse(rs.getString("schema_snapshot_jsonb")),
+                        parse(rs.getString("mapping_snapshot_jsonb")), parse(rs.getString("data_jsonb")),
+                        rs.getObject("editor_snapshot_file_id", UUID.class), rs.getString("editor_snapshot_hash"),
+                        rs.getString("schema_hash"), rs.getString("mapping_hash"), rs.getString("data_hash")),
+                revisionId, orderId, organizationId).stream().findFirst();
+    }
+
+    @Override
+    public List<TemplateCandidate> listPublishedTemplates(UUID organizationId) {
+        return jdbcTemplate.query("""
+                        SELECT tv.id, t.template_code, t.name
+                        FROM tpl.template_version tv
+                        JOIN tpl.template t ON t.id = tv.template_id
+                        WHERE t.organization_id = ? AND tv.status = 'PUBLISHED' AND t.format = 'XLSX'
+                        ORDER BY t.updated_at DESC
+                        LIMIT 100
+                        """,
+                (rs, rowNum) -> new TemplateCandidate(
+                        rs.getObject("id", UUID.class),
+                        rs.getString("template_code"),
+                        rs.getString("name")),
+                organizationId);
     }
 
     @Override
@@ -134,12 +188,12 @@ public class JdbcProductionOrderRepository implements ProductionOrderRepository 
                         SELECT po.id, po.order_no, po.status, po.template_version_id,
                                t.name AS template_name, t.template_code, t.format,
                                po.product_id, po.quantity,
-                               unit_code, planned_date, owner_id, instance_schema_jsonb,
-                               instance_mapping_jsonb, draft_data_jsonb,
-                               draft_editor_snapshot_file_id, draft_editor_snapshot_hash,
-                               snapshot_kind, editor_app_version, plugin_manifest_hash,
-                               snapshot_format_version, schema_hash, mapping_hash, data_hash,
-                               workspace_hash, lock_version
+                               po.unit_code, po.planned_date, po.owner_id, po.instance_schema_jsonb,
+                               po.instance_mapping_jsonb, po.draft_data_jsonb,
+                               po.draft_editor_snapshot_file_id, po.draft_editor_snapshot_hash,
+                               po.snapshot_kind, po.editor_app_version, po.plugin_manifest_hash,
+                               po.snapshot_format_version, po.schema_hash, po.mapping_hash, po.data_hash,
+                               po.workspace_hash, po.lock_version
                         FROM mfg.production_order po
                         JOIN tpl.template_version tv ON tv.id = po.template_version_id
                         JOIN tpl.template t ON t.id = tv.template_id
@@ -204,7 +258,8 @@ public class JdbcProductionOrderRepository implements ProductionOrderRepository 
         return jdbcTemplate.update(connection -> {
             var statement = connection.prepareStatement("""
                     UPDATE mfg.production_order
-                    SET instance_schema_jsonb = ?,
+                    SET template_version_id = ?,
+                        instance_schema_jsonb = ?,
                         instance_mapping_jsonb = ?,
                         draft_data_jsonb = ?,
                         draft_editor_snapshot_file_id = ?,
@@ -221,21 +276,22 @@ public class JdbcProductionOrderRepository implements ProductionOrderRepository 
                     WHERE id = ? AND organization_id = ? AND status = 'DRAFT'
                       AND lock_version = ?
                     """);
-            statement.setObject(1, pgJson(update.schema()));
-            statement.setObject(2, pgJson(update.mapping()));
-            statement.setObject(3, pgJson(update.data()));
-            statement.setObject(4, update.snapshotFileId());
-            statement.setString(5, update.snapshotHash());
-            statement.setString(6, update.editorAppVersion());
-            statement.setString(7, update.pluginManifestHash());
-            statement.setInt(8, update.snapshotFormatVersion());
-            statement.setString(9, update.schemaHash());
-            statement.setString(10, update.mappingHash());
-            statement.setString(11, update.dataHash());
-            statement.setString(12, update.workspaceHash());
-            statement.setObject(13, update.orderId());
-            statement.setObject(14, update.organizationId());
-            statement.setLong(15, update.expectedLockVersion());
+            statement.setObject(1, update.templateVersionId());
+            statement.setObject(2, pgJson(update.schema()));
+            statement.setObject(3, pgJson(update.mapping()));
+            statement.setObject(4, pgJson(update.data()));
+            statement.setObject(5, update.snapshotFileId());
+            statement.setString(6, update.snapshotHash());
+            statement.setString(7, update.editorAppVersion());
+            statement.setString(8, update.pluginManifestHash());
+            statement.setInt(9, update.snapshotFormatVersion());
+            statement.setString(10, update.schemaHash());
+            statement.setString(11, update.mappingHash());
+            statement.setString(12, update.dataHash());
+            statement.setString(13, update.workspaceHash());
+            statement.setObject(14, update.orderId());
+            statement.setObject(15, update.organizationId());
+            statement.setLong(16, update.expectedLockVersion());
             return statement;
         });
     }
@@ -279,12 +335,114 @@ public class JdbcProductionOrderRepository implements ProductionOrderRepository 
     }
 
     @Override
+    public void insertRevisionProjection(
+            List<CollectionProjection> collections,
+            List<ValueProjection> values
+    ) {
+        if (!collections.isEmpty()) {
+            jdbcTemplate.batchUpdate("""
+                    INSERT INTO tpl.record_collection_item (
+                        id, revision_id, production_order_id, record_kind,
+                        parent_field_code, parent_data_path, record_key, record_index,
+                        member_key, data_jsonb
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, collections, collections.size(), (statement, item) -> {
+                statement.setObject(1, item.id());
+                statement.setObject(2, item.revisionId());
+                statement.setObject(3, item.productionOrderId());
+                statement.setString(4, item.recordKind());
+                statement.setString(5, item.parentFieldCode());
+                statement.setString(6, item.parentDataPath());
+                statement.setString(7, item.recordKey());
+                statement.setInt(8, item.recordIndex());
+                statement.setString(9, item.memberKey());
+                statement.setObject(10, pgJson(item.data()));
+            });
+        }
+        if (!values.isEmpty()) {
+            jdbcTemplate.batchUpdate("""
+                    INSERT INTO tpl.record_value_index (
+                        id, revision_id, production_order_id, collection_item_id,
+                        field_code, data_path, value_type, text_value, numeric_value,
+                        boolean_value, date_value, reference_value
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, values, values.size(), (statement, item) -> {
+                statement.setObject(1, item.id());
+                statement.setObject(2, item.revisionId());
+                statement.setObject(3, item.productionOrderId());
+                nullableObject(statement, 4, item.collectionItemId(), Types.OTHER);
+                statement.setString(5, item.fieldCode());
+                statement.setString(6, item.dataPath());
+                statement.setString(7, item.valueType());
+                var value = item.value();
+                var type = item.valueType();
+                statement.setString(8, isTextType(type) && value != null && !value.isNull()
+                        ? value.asText() : null);
+                if (isNumericType(type) && value != null && value.isNumber()) {
+                    statement.setBigDecimal(9, value.decimalValue());
+                } else statement.setNull(9, Types.NUMERIC);
+                if ("boolean".equals(type) && value != null && value.isBoolean()) {
+                    statement.setBoolean(10, value.asBoolean());
+                } else statement.setNull(10, Types.BOOLEAN);
+                if ("date".equals(type) && value != null && !value.asText().isBlank()) {
+                    try {
+                        statement.setObject(11, java.time.LocalDate.parse(value.asText()));
+                    } catch (java.time.format.DateTimeParseException ignored) {
+                        statement.setNull(11, Types.DATE);
+                    }
+                } else statement.setNull(11, Types.DATE);
+                if ("reference".equals(type) && value != null) {
+                    try {
+                        statement.setObject(12, UUID.fromString(value.asText()));
+                    } catch (IllegalArgumentException ignored) {
+                        statement.setNull(12, Types.OTHER);
+                    }
+                } else statement.setNull(12, Types.OTHER);
+            });
+        }
+    }
+
+    @Override
+    public void attachConfirmedIngestSources(
+            UUID organizationId, UUID orderId, UUID revisionId, UUID actorId
+    ) {
+        jdbcTemplate.update("""
+                INSERT INTO tpl.record_attachment (
+                    id, production_order_id, revision_id, file_object_id,
+                    attachment_type, created_by
+                )
+                SELECT gen_random_uuid(), j.production_order_id, ?, s.file_object_id,
+                       'INSTANCE_SOURCE', ?
+                FROM mfg.production_ingest_job j
+                JOIN mfg.production_ingest_source s ON s.ingest_job_id = j.id
+                WHERE j.organization_id = ? AND j.production_order_id = ?
+                  AND j.status = 'CONFIRMED'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM tpl.record_attachment a
+                      WHERE a.revision_id = ? AND a.file_object_id = s.file_object_id
+                  )
+                """, revisionId, actorId, organizationId, orderId, revisionId);
+    }
+
+    @Override
     public int cancel(UUID organizationId, UUID orderId) {
         return jdbcTemplate.update("""
                         UPDATE mfg.production_order
                         SET status = 'CANCELLED', updated_at = now()
                         WHERE id = ? AND organization_id = ? AND status = 'DRAFT'
-                        """, orderId, organizationId);
+                """, orderId, organizationId);
+    }
+
+    @Override
+    public int delete(UUID organizationId, UUID orderId) {
+        // Ingest jobs and their source/item rows are ON DELETE CASCADE.  A
+        // submitted order is intentionally excluded so production history and
+        // its revision projections cannot be removed from this list screen.
+        return jdbcTemplate.update("""
+                DELETE FROM mfg.production_order
+                WHERE id = ? AND organization_id = ?
+                  AND status IN ('DRAFT', 'CANCELLED')
+                """, orderId, organizationId);
     }
 
     @Override
@@ -305,7 +463,9 @@ public class JdbcProductionOrderRepository implements ProductionOrderRepository 
     private JsonNode loadMappings(UUID versionId) {
         var result = objectMapper.createArrayNode();
         jdbcTemplate.query("""
-                        SELECT binding_id, marker_id, field_code, data_path, binding_role,
+                        SELECT binding_id, field_id, parent_binding_id, marker_id, field_code,
+                               data_path, binding_role, mapping_kind, repeat_axis,
+                               record_height, record_width, record_stride, termination_jsonb,
                                locator_type, locator_jsonb, sync_direction, primary_binding,
                                binding_status, diagnostic_jsonb
                         FROM tpl.template_mapping
@@ -315,10 +475,21 @@ public class JdbcProductionOrderRepository implements ProductionOrderRepository 
                 rs -> {
                     var binding = objectMapper.createObjectNode();
                     binding.put("bindingId", rs.getString("binding_id"));
+                    var fieldId = rs.getString("field_id");
+                    if (fieldId != null) binding.put("fieldId", fieldId);
+                    var parentBindingId = rs.getString("parent_binding_id");
+                    if (parentBindingId != null) binding.put("parentBindingId", parentBindingId);
                     binding.put("markerId", rs.getString("marker_id"));
                     binding.put("fieldCode", rs.getString("field_code"));
                     binding.put("dataPath", rs.getString("data_path"));
                     binding.put("role", rs.getString("binding_role"));
+                    binding.put("mappingKind", rs.getString("mapping_kind"));
+                    var repeatAxis = rs.getString("repeat_axis");
+                    if (repeatAxis != null) binding.put("repeatAxis", repeatAxis);
+                    binding.put("recordHeight", rs.getInt("record_height"));
+                    binding.put("recordWidth", rs.getInt("record_width"));
+                    binding.put("recordStride", rs.getInt("record_stride"));
+                    binding.set("termination", parse(rs.getString("termination_jsonb")));
                     binding.put("locatorType", rs.getString("locator_type"));
                     binding.set("locator", parse(rs.getString("locator_jsonb")));
                     binding.put("syncDirection", rs.getString("sync_direction"));
@@ -346,6 +517,15 @@ public class JdbcProductionOrderRepository implements ProductionOrderRepository 
             }
         }
         return false;
+    }
+
+    private boolean isTextType(String type) {
+        return !isNumericType(type) && !"boolean".equals(type)
+                && !"date".equals(type) && !"reference".equals(type);
+    }
+
+    private boolean isNumericType(String type) {
+        return java.util.Set.of("number", "integer", "decimal").contains(type);
     }
 
     private PGobject pgJson(JsonNode value) {

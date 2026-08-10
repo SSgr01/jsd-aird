@@ -9,7 +9,7 @@ import {
   SettingOutlined,
   TableOutlined,
 } from '@ant-design/icons';
-import { Button, Empty, Input, Modal, Select, Switch, Tooltip } from 'antd';
+import { Button, Empty, Input, Select, Tooltip } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import type { MutableRefObject } from 'react';
 
@@ -21,15 +21,12 @@ import type {
 } from '@/features/template-workspace/types';
 import {
   candidateBinding,
-  templateLocalFieldCode,
 } from '@/features/template-workspace/field-model';
 import type {
   RecognitionReview,
   RecognitionReviewItem,
-  StandardFieldOption,
   TemplateQualityIssue,
 } from '@/services/templates/template-api';
-import { templateApi } from '@/services/templates/template-api';
 
 import { normalizeAddress, validateAddress } from './coordinates';
 import { RecognitionReviewPanel } from './RecognitionReviewPanel';
@@ -38,7 +35,6 @@ export type CoordinateTarget = 'labelAddress' | 'address';
 export type FieldManagerTab = 'recognition' | 'structure' | 'properties';
 
 interface Props {
-  versionId: string;
   editable: boolean;
   format: TemplateFormat;
   fieldModel: FieldModel;
@@ -52,7 +48,7 @@ interface Props {
   recognitionBusy?: boolean;
   onActiveTabChange: (tab: FieldManagerTab) => void;
   onSelectRecognitionItem: (item: RecognitionReviewItem) => void;
-  onConfirmRecognitionItem: (item: RecognitionReviewItem, selectedSuggestionId?: string) => void;
+  onConfirmRecognitionItem: (item: RecognitionReviewItem, selectedAlternativeId?: string) => void;
   onModifyRecognitionItem: (item: RecognitionReviewItem) => void;
   onIgnoreRecognitionItem: (item: RecognitionReviewItem) => void;
   onRestoreRecognitionItem: (item: RecognitionReviewItem) => void;
@@ -65,6 +61,10 @@ interface Props {
   onUpdateCoordinates: (fieldId: string, update: Partial<Record<CoordinateTarget, string>>) => void;
   onPickCoordinate: (fieldId: string, target: CoordinateTarget) => void;
   onAddField: (groupId?: string) => void;
+  onAddStructuredField: (
+    parent: BusinessField,
+    kind: 'REPEAT_FIELD' | 'MATRIX_FIELD',
+  ) => void;
   onDeleteField: (field: BusinessField) => void;
   onManageGroups: () => void;
   onPlaceWordField: (field: BusinessField) => void;
@@ -81,13 +81,7 @@ const VALUE_TYPES = [
   { value: 'boolean', label: '是 / 否' },
 ];
 
-const UI_TYPES = [
-  { value: 'TEXT', label: '普通填写' },
-  { value: 'SIGNATURE', label: '签名/人员' },
-];
-
 export function TemplateFieldManager({
-  versionId,
   editable,
   format,
   fieldModel,
@@ -114,11 +108,14 @@ export function TemplateFieldManager({
   onUpdateCoordinates,
   onPickCoordinate,
   onAddField,
+  onAddStructuredField,
   onDeleteField,
   onManageGroups,
   onPlaceWordField,
 }: Props) {
-  const selectedField = fieldModel.fields.find((field) => field.id === selectedFieldId);
+  const selectedField = fieldModel.fields.find(
+    (field) => field.id === selectedFieldId && !isRegionField(field),
+  );
   const selectedBinding = selectedField?.bindingId
     ? mapping.find((binding) => binding.bindingId === selectedField.bindingId)
     : selectedField
@@ -146,7 +143,7 @@ export function TemplateFieldManager({
   return (
     <aside className="template-field-manager" aria-label="字段管理">
       <div className="field-manager-tabs" role="tablist" aria-label="字段管理页面">
-        {format === 'XLSX' && editable && (
+        {recognitionReview?.recognitionRunId && editable && (
           <button
             type="button"
             role="tab"
@@ -175,7 +172,7 @@ export function TemplateFieldManager({
         </button>
       </div>
 
-      {activeTab === 'recognition' && format === 'XLSX' && editable ? (
+      {activeTab === 'recognition' && recognitionReview?.recognitionRunId && editable ? (
         <RecognitionReviewPanel
           review={recognitionReview}
           editable={editable}
@@ -196,15 +193,16 @@ export function TemplateFieldManager({
         <FieldStructure
           editable={editable}
           fieldModel={fieldModel}
+          recognitionReview={recognitionReview}
           selectedFieldId={selectedFieldId}
           onSelectField={selectField}
           onAddField={onAddField}
+          onAddStructuredField={onAddStructuredField}
           onManageGroups={onManageGroups}
         />
       ) : selectedField ? (
         <FieldProperties
           key={selectedField.id}
-          versionId={versionId}
           editable={editable}
           format={format}
           groups={fieldModel.groups}
@@ -227,15 +225,23 @@ export function TemplateFieldManager({
 function FieldStructure({
   editable,
   fieldModel,
+  recognitionReview,
   selectedFieldId,
   onSelectField,
   onAddField,
+  onAddStructuredField,
   onManageGroups,
 }: Pick<
   Props,
-  'editable' | 'fieldModel' | 'selectedFieldId' | 'onSelectField' | 'onAddField' | 'onManageGroups'
+    'editable' | 'fieldModel' | 'recognitionReview' | 'selectedFieldId' | 'onSelectField' | 'onAddField'
+    | 'onAddStructuredField' | 'onManageGroups'
 >) {
   const fieldRefs = useRef(new Map<string, HTMLButtonElement>());
+  const regions = buildFieldRegionViews(fieldModel, recognitionReview);
+  const realFieldCount = fieldModel.fields.filter((field) => !isRegionField(field)).length;
+  const pendingFieldCount = fieldModel.fields.filter(
+    (field) => !isRegionField(field) && (field.candidate || field.reviewStatus !== 'CONFIRMED'),
+  ).length;
 
   useEffect(() => {
     if (!selectedFieldId) return;
@@ -246,10 +252,7 @@ function FieldStructure({
     <section className="field-structure-pane" role="tabpanel">
       <div className="field-manager-toolbar">
         <span>
-          共 {fieldModel.fields.length} 个字段
-          {fieldModel.fields.some((field) => field.candidate)
-            ? `（含 ${fieldModel.fields.filter((field) => field.candidate).length} 个待确认候选）`
-            : ''}
+          区域 {regions.length} · 字段 {realFieldCount} · 待确认 {pendingFieldCount}
         </span>
         <div>
           <Tooltip title="管理业务分组">
@@ -272,77 +275,167 @@ function FieldStructure({
           </Button>
         </div>
       </div>
+      <div className="field-manager-help">
+        普通字段：在 Excel 空白单元格输入名称后自动发现；明细字段和矩阵指标请点击对应区域右侧“＋”。在数据区填写业务值不会创建字段。
+      </div>
 
-      <div className="field-group-tree">
-        {fieldModel.groups.map((group) => {
-          const fields = fieldModel.fields.filter(
-            (field) => field.groupId === group.id && !field.parentFieldId,
-          );
-          return (
-            <details className="field-tree-group" key={group.id} open>
-              <summary>
-                <span>
-                  <FolderOpenOutlined /> {group.name}
-                </span>
-                <span className="field-tree-group-meta">
-                  <span>
-                    {fieldModel.fields.filter((field) => field.groupId === group.id).length}
-                  </span>
-                  {editable && (
-                    <Tooltip title={`在“${group.name}”中新增字段`}>
-                      <button
-                        type="button"
-                        className="field-tree-group-add"
-                        aria-label={`在${group.name}中新增字段`}
-                        onClick={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          onAddField(group.id);
-                        }}
-                      >
-                        <PlusOutlined />
-                      </button>
-                    </Tooltip>
-                  )}
-                </span>
-              </summary>
-              <div className="field-tree-items">
-                {fields.map((field) => (
-                  <div key={field.id} className="field-tree-node">
-                    <FieldTreeButton
-                      field={field}
-                      selectedFieldId={selectedFieldId}
-                      fieldRefs={fieldRefs}
-                      onSelectField={onSelectField}
-                    />
-                    {field.kind === 'ROW_TABLE' &&
-                      fieldModel.fields
-                        .filter((child) => child.parentFieldId === field.id)
-                        .map((child) => (
-                          <div className="field-tree-children" key={child.id}>
-                            <FieldTreeButton
-                              field={child}
-                              selectedFieldId={selectedFieldId}
-                              fieldRefs={fieldRefs}
-                              onSelectField={onSelectField}
-                              child
-                            />
-                          </div>
-                        ))}
-                  </div>
-                ))}
-                {!fields.length && (
-                  <span className="field-tree-empty">
-                    暂无字段。可直接在 Excel 输入“名称：”和相邻内容，或点击新增字段后选择位置。
-                  </span>
+      <div className="field-region-tree">
+        {regions.map((region) => (
+          <details className="field-tree-group field-region-group" key={region.id} open>
+            <summary>
+              <span>
+                <FolderOpenOutlined /> {region.name}
+                <small className="field-region-meta">
+                  {kindLabel(region.kind)}{region.sheet ? ` · ${region.sheet}` : ''}{region.range ? ` · ${region.range}` : ''}
+                </small>
+              </span>
+              <span className="field-tree-group-meta">
+                <span>{region.fields.length}</span>
+                {editable && ['ROW_TABLE', 'COLUMN_TABLE', 'MATRIX'].includes(region.kind) && (
+                  <Tooltip title={!region.root
+                    ? '结构区域尚未确认，请先确认结构'
+                    : region.kind === 'MATRIX' ? '新增矩阵指标' : '新增明细字段'}>
+                    <button
+                      type="button"
+                      className="field-tree-group-add"
+                      aria-label={`在${region.name}中新增${region.kind === 'MATRIX' ? '矩阵指标' : '明细字段'}`}
+                      disabled={!region.root}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        if (!region.root) return;
+                        onAddStructuredField(
+                          region.root,
+                          region.kind === 'MATRIX' ? 'MATRIX_FIELD' : 'REPEAT_FIELD',
+                        );
+                      }}
+                    >
+                      <PlusOutlined />
+                    </button>
+                  </Tooltip>
                 )}
-              </div>
-            </details>
-          );
-        })}
+              </span>
+            </summary>
+            <div className="field-tree-items">
+              {region.fields.map((field) => (
+                <div className="field-tree-node" key={field.id}>
+                  <FieldTreeButton
+                    field={field}
+                    selectedFieldId={selectedFieldId}
+                    fieldRefs={fieldRefs}
+                    onSelectField={onSelectField}
+                    child={Boolean(field.parentFieldId)}
+                  />
+                </div>
+              ))}
+              {!region.fields.length && (
+                <span className="field-tree-empty">
+                  该区域暂未生成字段。请在“识别确认”中确认结构并识别字段。
+                </span>
+              )}
+            </div>
+          </details>
+        ))}
       </div>
     </section>
   );
+}
+
+type FieldRegionView = {
+  id: string;
+  name: string;
+  kind: string;
+  sheet?: string;
+  range?: string;
+  root?: BusinessField;
+  fields: BusinessField[];
+};
+
+function isRegionField(field: BusinessField) {
+  return field.displayRole === 'REGION'
+    || ['FORM_REGION', 'ROW_TABLE', 'COLUMN_TABLE', 'MATRIX', 'TABLE_REGION'].includes(field.kind)
+    || field.mappingKind === 'REPEAT_REGION';
+}
+
+function buildFieldRegionViews(fieldModel: FieldModel, review?: RecognitionReview): FieldRegionView[] {
+  const regionNodes = review?.regions ?? [];
+  const roots = fieldModel.fields.filter(isRegionField);
+  const used = new Set<string>();
+  const result: FieldRegionView[] = [];
+
+  for (const region of regionNodes) {
+    const root = roots.find((field) => regionRootMatches(field, region));
+    const fields = fieldModel.fields.filter((field) => {
+      if (isRegionField(field) || used.has(field.id)) return false;
+      const matched = (root && field.parentFieldId === root.id)
+        || (region.regionId && field.regionId === region.regionId)
+        || (region.blockId && field.blockId === region.blockId)
+        || (region.fields ?? []).some((item) => reviewFieldMatches(field, item));
+      if (matched) used.add(field.id);
+      return matched;
+    });
+    result.push({
+      id: region.regionId,
+      name: region.fieldName || '未命名区域',
+      kind: region.kind,
+      sheet: displaySheetName(region.sheetName, region.sheetId, root, fields, region.fields ?? []),
+      range: region.range,
+      root,
+      fields,
+    });
+  }
+
+  for (const root of roots) {
+    if (result.some((region) => region.root?.id === root.id || region.id === root.blockId)) continue;
+    const fields = fieldModel.fields.filter((field) => {
+      if (isRegionField(field) || used.has(field.id)) return false;
+      const matched = field.parentFieldId === root.id || field.blockId === root.blockId;
+      if (matched) used.add(field.id);
+      return matched;
+    });
+    result.push({ id: root.blockId || root.id, name: root.name, kind: root.kind, range: textValue(root.locator?.address), root, fields });
+  }
+
+  const unassigned = fieldModel.fields.filter((field) => !isRegionField(field) && !used.has(field.id));
+  if (unassigned.length) result.push({ id: 'unassigned', name: '未分区字段', kind: 'UNASSIGNED', fields: unassigned });
+  return result;
+}
+
+function displaySheetName(
+  regionSheetName: string | undefined,
+  regionSheetId: string | undefined,
+  root: BusinessField | undefined,
+  fields: BusinessField[],
+  reviewFields: RecognitionReviewItem[],
+) {
+  const reviewName = reviewFields
+    .map((field) => field.sheetName)
+    .find((name) => name && !/^sheet-\d+$/i.test(name));
+  const recognizedName = fields
+    .map((field) => textValue(field.locator?.sheetName))
+    .find((name) => name && !/^sheet-\d+$/i.test(name));
+  const rootName = textValue(root?.locator?.sheetName);
+  const regionNameIsTechnical = !regionSheetName || /^sheet-\d+$/i.test(regionSheetName);
+  if (!regionNameIsTechnical) return regionSheetName;
+  return reviewName || recognizedName || rootName || regionSheetName || regionSheetId;
+}
+
+function regionRootMatches(field: BusinessField, region: NonNullable<RecognitionReview['regions']>[number]) {
+  return (region.regionId && field.regionId === region.regionId)
+    || (region.blockId && field.blockId === region.blockId)
+    || field.id === region.regionId
+    || field.fieldId === region.regionId;
+}
+
+function reviewFieldMatches(field: BusinessField, item: RecognitionReviewItem) {
+  return field.recognitionItemId === item.id
+    || (item.payload.fieldId && field.fieldId === item.payload.fieldId)
+    || (item.payload.relationId && field.relationId === item.payload.relationId)
+    || (item.payload.bindingId && field.bindingId === item.payload.bindingId);
+}
+
+function textValue(value: unknown) {
+  return typeof value === 'string' ? value : '';
 }
 
 function FieldTreeButton({
@@ -375,7 +468,7 @@ function FieldTreeButton({
       <span className="field-tree-name">
         <strong>{field.name}</strong>
         <small>
-          {field.requiresStandardConfirmation || field.fieldOrigin === 'PENDING_STANDARD'
+          {field.standardRequired && (field.requiresStandardConfirmation || field.fieldOrigin === 'PENDING_STANDARD')
             ? '待选择业务字段'
             : field.candidate
               ? '待确认候选'
@@ -399,7 +492,6 @@ function FieldTreeButton({
 }
 
 function FieldProperties({
-  versionId,
   editable,
   format,
   groups,
@@ -412,7 +504,6 @@ function FieldProperties({
   onDeleteField,
   onPlaceWordField,
 }: {
-  versionId: string;
   editable: boolean;
   format: TemplateFormat;
   groups: FieldModel['groups'];
@@ -440,8 +531,10 @@ function FieldProperties({
   const reviewText =
     field.reviewStatus === 'ISSUE'
       ? '该字段存在识别冲突，请核对字段属性或 Excel 位置。'
-      : field.fieldOrigin === 'PENDING_STANDARD'
-        ? '该字段尚未确定业务含义，请选择标准字段，或转为模板自定义字段。'
+      : field.standardRequired && (field.requiresStandardConfirmation || field.fieldOrigin === 'PENDING_STANDARD')
+        ? '该字段被要求绑定标准字段，请选择标准字段，或转为模板自定义字段。'
+        : field.standardMatchStatus === 'UNMATCHED'
+          ? '该字段将作为模板自定义字段保存，尚未匹配标准字段。'
         : field.reviewStatus === 'NEEDS_CONFIRMATION' || (field.confidence ?? 1) < 0.85
           ? '系统建议核对名称或位置，修改后会自动记为已确认。'
           : undefined;
@@ -465,7 +558,6 @@ function FieldProperties({
         <div className="field-properties-scroll">
           {reviewText && <FieldReviewNotice field={field} text={reviewText} />}
           <BusinessPropertyFields
-            versionId={versionId}
             editable={editable}
             field={field}
             groups={groups}
@@ -476,7 +568,7 @@ function FieldProperties({
           </div>
           {editable && (
             <Button block icon={<AimOutlined />} onClick={() => onPlaceWordField(field)}>
-              在当前正文位置插入字段
+              在选中文本/位置插入字段
             </Button>
           )}
         </div>
@@ -490,7 +582,6 @@ function FieldProperties({
       <div className="field-properties-scroll">
         {reviewText && <FieldReviewNotice field={field} text={reviewText} />}
         <BusinessPropertyFields
-          versionId={versionId}
           editable={editable}
           field={field}
           groups={groups}
@@ -554,114 +645,14 @@ function FieldReviewNotice({ field, text: notice }: { field: BusinessField; text
 }
 
 function BusinessPropertyFields({
-  versionId,
   editable,
   field,
   groups,
   onUpdateField,
-}: Pick<Props, 'versionId' | 'editable' | 'onUpdateField'> & {
+}: Pick<Props, 'editable' | 'onUpdateField'> & {
   field: BusinessField;
   groups: FieldModel['groups'];
 }) {
-  const [standardFields, setStandardFields] = useState<StandardFieldOption[]>([]);
-  const [standardKeyword, setStandardKeyword] = useState('');
-  const [standardLoading, setStandardLoading] = useState(false);
-  const [requestOpen, setRequestOpen] = useState(false);
-  const [requestDescription, setRequestDescription] = useState(field.description || '');
-  const [requesting, setRequesting] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    const keyword = standardKeyword.trim() || (field.name ?? '').trim();
-    if (!versionId || !keyword) return () => undefined;
-    setStandardLoading(true);
-    void templateApi
-      .searchStandardFields({ keyword })
-      .then((items) => {
-        if (!cancelled) setStandardFields(items);
-      })
-      .catch(() => {
-        if (!cancelled) setStandardFields([]);
-      })
-      .finally(() => {
-        if (!cancelled) setStandardLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [field.name, standardKeyword, versionId]);
-
-  useEffect(() => setRequestDescription(field.description || ''), [field.id, field.description]);
-
-  const selectStandardField = (option: StandardFieldOption) => {
-    const group = groups.find(
-      (item) => item.groupCode === option.groupCode || item.name === option.groupName,
-    );
-    onUpdateField(field.id, {
-      fieldCode: option.fieldCode,
-      standardFieldId: option.id,
-      standardFieldVersion: option.version,
-      standardFieldName: option.displayName,
-      fieldOrigin: 'STANDARD',
-      standardSelectionStatus: 'CONFIRMED',
-      standardMatchStatus: 'CONFIRMED',
-      requiresStandardConfirmation: false,
-      uiType: option.uiType || 'TEXT',
-      valueType: option.valueType,
-      ...(group ? { groupId: group.id } : {}),
-      ...(option.defaultUnit !== undefined ? { unit: option.defaultUnit || undefined } : {}),
-    });
-  };
-
-  const chooseTemplateLocal = () => {
-    onUpdateField(field.id, {
-      fieldCode: templateLocalFieldCode(versionId, field),
-      fieldOrigin: 'TEMPLATE_LOCAL',
-      standardSelectionStatus: 'CUSTOM',
-      standardMatchStatus: 'CONFIRMED',
-      requiresStandardConfirmation: false,
-      standardFieldId: undefined,
-      standardFieldVersion: undefined,
-      standardFieldName: undefined,
-    });
-  };
-
-  const submitStandardRequest = async () => {
-    setRequesting(true);
-    try {
-      await templateApi.requestStandardField({
-        templateVersionId: versionId,
-        fieldId: field.id,
-        displayName: field.name,
-        valueType: field.valueType,
-        uiType: field.uiType || 'TEXT',
-        groupCode: groups.find((group) => group.id === field.groupId)?.groupCode,
-        description: requestDescription,
-      });
-      onUpdateField(field.id, {
-        fieldCode: undefined,
-        standardFieldId: undefined,
-        standardFieldVersion: undefined,
-        standardFieldName: undefined,
-        fieldOrigin: 'PENDING_STANDARD',
-        standardSelectionStatus: 'REQUESTED',
-        requiresStandardConfirmation: true,
-      });
-      setRequestOpen(false);
-      Modal.success({
-        title: '已提交标准字段申请',
-        content: '管理员审核通过后，可在这里选择新的标准字段。',
-      });
-    } catch (error) {
-      Modal.error({
-        title: '提交申请失败',
-        content: error instanceof Error ? error.message : '请稍后重试',
-      });
-    } finally {
-      setRequesting(false);
-    }
-  };
-
   return (
     <>
       <div className="field-property-section field-property-grid">
@@ -677,49 +668,9 @@ function BusinessPropertyFields({
           />
           {!(field.name ?? '').trim() && <small role="alert">字段名称不能为空</small>}
         </label>
-        <label className="field-property full">
-          <span>业务字段</span>
-          <Select
-            showSearch
-            allowClear
-            disabled={!editable}
-            loading={standardLoading}
-            value={field.standardFieldId}
-            placeholder="搜索并选择标准字段"
-            optionFilterProp="label"
-            filterOption={false}
-            options={standardFields.map((option) => ({
-              value: option.id,
-              label: `${option.displayName} · ${option.fieldCode}`,
-            }))}
-            onSearch={setStandardKeyword}
-            onChange={(value) => {
-              const option = standardFields.find((item) => item.id === value);
-              if (option) selectStandardField(option);
-            }}
-          />
-          <small>选择后系统自动填写标准编码、字段类型和分组。</small>
-        </label>
-        {editable &&
-          (field.requiresStandardConfirmation || field.fieldOrigin === 'PENDING_STANDARD') && (
-            <div className="field-property-actions full">
-              <Button onClick={chooseTemplateLocal}>作为模板自定义字段</Button>
-              <Button onClick={() => setRequestOpen(true)}>申请新增标准字段</Button>
-            </div>
-          )}
-        <label className="field-property full">
-          <span>标准字段编码</span>
-          <Input value={field.fieldCode || '保存后自动生成'} disabled />
-          <small>编码由系统生成，用户不需要手工填写。</small>
-        </label>
         {field.semanticConflict && (
           <div className="field-property-alert full" role="alert">
-            {field.conflictMessage || '这个字段存在两种可能含义，请先修改标准字段编码后再确认。'}
-          </div>
-        )}
-        {field.requiresStandardConfirmation && !field.semanticConflict && (
-          <div className="field-property-alert full" role="status">
-            尚未选择标准字段。请在上方选择业务字段，或转为模板自定义字段后再保存。
+            {field.conflictMessage || '这个字段存在识别冲突，请核对后再保存。'}
           </div>
         )}
         {field.mappingKind === 'MATRIX_REGION' && (
@@ -766,15 +717,6 @@ function BusinessPropertyFields({
           />
         </label>
         <label className="field-property">
-          <span>填写方式</span>
-          <Select
-            value={field.uiType || 'TEXT'}
-            disabled={!editable}
-            options={UI_TYPES}
-            onChange={(value) => onUpdateField(field.id, { uiType: value })}
-          />
-        </label>
-        <label className="field-property">
           <span>单位</span>
           <Input
             value={field.unit}
@@ -782,14 +724,6 @@ function BusinessPropertyFields({
             maxLength={40}
             placeholder="可留空"
             onChange={(event) => onUpdateField(field.id, { unit: event.target.value })}
-          />
-        </label>
-        <label className="field-property required-property">
-          <span>生产单必填</span>
-          <Switch
-            checked={field.required}
-            disabled={!editable}
-            onChange={(checked) => onUpdateField(field.id, { required: checked })}
           />
         </label>
         <label className="field-property full">
@@ -804,24 +738,6 @@ function BusinessPropertyFields({
           />
         </label>
       </div>
-      <Modal
-        open={requestOpen}
-        title="申请新增标准字段"
-        okText="提交申请"
-        cancelText="取消"
-        confirmLoading={requesting}
-        onOk={() => void submitStandardRequest()}
-        onCancel={() => setRequestOpen(false)}
-      >
-        <p>普通用户不需要填写编码，管理员会在审核时生成统一标准编码。</p>
-        <Input.TextArea
-          value={requestDescription}
-          rows={4}
-          maxLength={300}
-          placeholder="请说明这个字段的业务含义和使用场景"
-          onChange={(event) => setRequestDescription(event.target.value)}
-        />
-      </Modal>
     </>
   );
 }
@@ -898,7 +814,7 @@ function DeleteFieldButton({
   );
 }
 
-function kindLabel(kind: BusinessField['kind']) {
+function kindLabel(kind: string) {
   if (kind === 'ROW_TABLE') return '明细表';
   if (kind === 'COLUMN_TABLE') return '横向明细表';
   if (kind === 'MATRIX') return '矩阵表';

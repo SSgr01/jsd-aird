@@ -1,0 +1,1 @@
+export { RndCenterPage } from './RndCenterPage';

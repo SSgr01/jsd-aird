@@ -22,6 +22,21 @@ spring:
     multipart:
       max-file-size: -1
       max-request-size: -1
+  ai:
+    model:
+      chat: ${JSD_AIRD_AI_CHAT_PROVIDER:openai}
+      embedding: ${JSD_AIRD_AI_EMBEDDING_PROVIDER:openai}
+    openai:
+      base-url: ${app.model.base-url:}
+      api-key: ${app.model.api-key:}
+      chat:
+        completions-path: ${JSD_AIRD_MODEL_COMPLETIONS_PATH:/chat/completions}
+        options:
+          model: ${app.model.model:}
+          temperature: ${app.model.temperature:0.0}
+      embedding:
+        options:
+          model: ${app.ai.embedding.model:}
 
 server:
   port: ${SERVER_PORT:8080}
@@ -80,6 +95,24 @@ app:
     auto-retry-count: ${JSD_AIRD_MODEL_AUTO_RETRY_COUNT:2}
     visual-mode: ${JSD_AIRD_MODEL_VISUAL_MODE:auto}
     visual-enabled: ${JSD_AIRD_MODEL_VISUAL_ENABLED:false}
+  ai:
+    prompt-version: ${JSD_AIRD_AI_PROMPT_VERSION:research-assistant-v1}
+    embedding:
+      base-url: ${JSD_AIRD_EMBEDDING_BASE_URL:${JSD_AIRD_MODEL_BASE_URL:}}
+      api-key: ${JSD_AIRD_EMBEDDING_API_KEY:${JSD_AIRD_MODEL_API_KEY:}}
+      model: ${JSD_AIRD_EMBEDDING_MODEL:}
+      timeout: ${JSD_AIRD_EMBEDDING_TIMEOUT:30s}
+    tavily:
+      enabled: ${JSD_AIRD_TAVILY_ENABLED:false}
+      base-url: ${JSD_AIRD_TAVILY_BASE_URL:https://api.tavily.com}
+      api-key: ${JSD_AIRD_TAVILY_API_KEY:}
+      timeout: ${JSD_AIRD_TAVILY_TIMEOUT:15s}
+      max-results: ${JSD_AIRD_TAVILY_MAX_RESULTS:5}
+    reranker:
+      base-url: ${JSD_AIRD_RERANKER_BASE_URL:}
+      api-key: ${JSD_AIRD_RERANKER_API_KEY:}
+      model: ${JSD_AIRD_RERANKER_MODEL:}
+      timeout: ${JSD_AIRD_RERANKER_TIMEOUT:8s}
   render:
     enabled: ${JSD_AIRD_RENDER_ENABLED:true}
     frontend-base-url: ${JSD_AIRD_RENDER_FRONTEND_BASE_URL:http://localhost:5173}

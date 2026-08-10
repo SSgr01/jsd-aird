@@ -27,7 +27,7 @@ import type { UploadFile } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-import type { TemplateFormat } from '@/features/template-workspace/types';
+import type { TemplateFormat, TargetDataType } from '@/features/template-workspace/types';
 import {
   templateApi,
   type CreateTemplateInput,
@@ -40,6 +40,13 @@ import {
 import { buildDisplaySuggestions, recognitionCounts } from './recognition-display';
 
 const accepted = '.xlsx,.docx';
+const targetDataTypeOptions: Array<{ value: TargetDataType; label: string }> = [
+  { value: 'MATERIAL', label: '物料/原料' },
+  { value: 'FORMULA', label: '配方' },
+  { value: 'PROCESS', label: '工艺' },
+  { value: 'EQUIPMENT', label: '设备/仪器' },
+  { value: 'TEST_STANDARD', label: '检测标准' },
+];
 
 export function TemplateUploadPage() {
   const { message } = App.useApp();
@@ -116,6 +123,8 @@ export function TemplateUploadPage() {
     form.setFieldsValue({
       name: job.sourceFileName.replace(/\.(xlsx|docx)$/i, ''),
       format: job.format,
+      scope: 'TEMPLATE_CENTER',
+      targetDataType: undefined,
     });
   };
 
@@ -397,6 +406,16 @@ export function TemplateUploadPage() {
           </Form.Item>
           <Form.Item name="purpose" label="业务用途">
             <Input.TextArea rows={3} placeholder="说明这个模板用于什么业务场景" maxLength={300} />
+          </Form.Item>
+          <Form.Item name="scope" label="模板用途" rules={[{ required: true, message: '请选择模板用途' }]} initialValue="TEMPLATE_CENTER">
+            <Select options={[{ value: 'TEMPLATE_CENTER', label: '模板中心/生产业务' }, { value: 'DATA_CENTER', label: '数据中心导入' }]} />
+          </Form.Item>
+          <Form.Item noStyle shouldUpdate={(previous: Partial<CreateTemplateInput>, current: Partial<CreateTemplateInput>) => previous.scope !== current.scope}>
+            {({ getFieldValue }) => getFieldValue('scope') === 'DATA_CENTER' ? (
+              <Form.Item name="targetDataType" label="目标数据类型" rules={[{ required: true, message: '请选择目标数据类型' }]}>
+                <Select options={targetDataTypeOptions} />
+              </Form.Item>
+            ) : null}
           </Form.Item>
         </Form>
       </Modal>

@@ -14,6 +14,7 @@ import java.util.UUID;
 import java.util.zip.ZipInputStream;
 
 import com.jsd.aird.ops.application.port.FileObjectRepository;
+import com.jsd.aird.ops.application.port.FileStorageFacade;
 import com.jsd.aird.ops.application.port.ObjectStorage;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
@@ -24,7 +25,9 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 @Service
-public class FileObjectService {
+public class FileObjectService implements FileStorageFacade {
+
+    private static final long MAX_KNOWLEDGE_UPLOAD_BYTES = 512L * 1024 * 1024;
 
     private static final Set<String> BLOCKED_OOXML_PARTS = Set.of(
             "vbaproject.bin",
@@ -62,6 +65,9 @@ public class FileObjectService {
             }
             var size = Files.size(temporary);
             var sha256 = hex(digest.digest());
+            if ("KNOWLEDGE".equalsIgnoreCase(kind) && size > MAX_KNOWLEDGE_UPLOAD_BYTES) {
+                throw new ApiException(ApiErrorCode.BAD_REQUEST, "知识文件超过 512MB 限制");
+            }
             validateSecurity(temporary, originalName, kind);
 
             var id = UUID.randomUUID();
@@ -111,7 +117,47 @@ public class FileObjectService {
         );
     }
 
+    @Override
+    public FileStorageFacade.StagedFile stageFile(
+            String originalName, String contentType, String kind, InputStream source
+    ) {
+        var staged = stage(originalName, contentType, kind, source);
+        return new FileStorageFacade.StagedFile(
+                staged.fileId(), staged.originalName(), staged.contentType(), staged.size(), staged.sha256(), staged.status()
+        );
+    }
+
+    @Override
+    public FileStorageFacade.StoredFile open(UUID organizationId, UUID fileId) {
+        var file = repository.find(organizationId, fileId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "文件不存在"));
+        if ("DELETED".equals(file.status())) {
+            throw new ApiException(ApiErrorCode.NOT_FOUND, "文件已删除");
+        }
+        var stored = objectStorage.get(file.objectKey());
+        return new FileStorageFacade.StoredFile(
+                fileId,
+                file.originalName(),
+                file.contentType(),
+                file.size(),
+                file.sha256(),
+                stored.stream()
+        );
+    }
+
+    @Override
+    public void activate(UUID fileId) {
+        repository.activate(fileId);
+    }
+
     private void validateSecurity(Path file, String originalName, String kind) throws IOException {
+        if ("DATA_SOURCE".equalsIgnoreCase(kind)) {
+            var lowerName = originalName.toLowerCase(Locale.ROOT);
+            if (!lowerName.endsWith(".xls") && !lowerName.endsWith(".xlsx") && !lowerName.endsWith(".csv")) {
+                throw new ApiException(ApiErrorCode.BAD_REQUEST, "数据中心仅接受 XLS、XLSX 或 CSV 文件");
+            }
+            return;
+        }
         if (!"OFFICE".equalsIgnoreCase(kind)) {
             return;
         }

@@ -1,8 +1,13 @@
 import {
+  DatabaseOutlined,
+  ExperimentOutlined,
   EyeOutlined,
+  FileSearchOutlined,
   FileTextOutlined,
+  FolderOpenOutlined,
   InboxOutlined,
   OrderedListOutlined,
+  RobotOutlined,
   UploadOutlined,
 } from '@ant-design/icons';
 import { ProLayout } from '@ant-design/pro-components';
@@ -14,6 +19,17 @@ import { useAppStore } from '@/stores/app-store';
 const route = {
   path: '/',
   routes: [
+    {
+      path: '/rnd-center',
+      name: '研发中心',
+      icon: <ExperimentOutlined />,
+      routes: [
+        { path: '/rnd', name: '研发工作台', icon: <ExperimentOutlined /> },
+        { path: '/knowledge/library', name: '研发知识库', icon: <FolderOpenOutlined /> },
+        { path: '/knowledge/search', name: '文件检索', icon: <FileSearchOutlined /> },
+        { path: '/assistant', name: 'AI研发助手', icon: <RobotOutlined /> },
+      ],
+    },
     {
       path: '/templates',
       name: '模板中心',
@@ -30,6 +46,15 @@ const route = {
       routes: [
         { path: '/production-orders/upload', name: '生产单上传', icon: <InboxOutlined /> },
         { path: '/production-orders/list', name: '生产单查看', icon: <EyeOutlined /> },
+      ],
+    },
+    {
+      path: '/data',
+      name: '数据中心',
+      icon: <DatabaseOutlined />,
+      routes: [
+        { path: '/data/upload', name: '数据导入', icon: <UploadOutlined /> },
+        { path: '/data/view', name: '数据查看', icon: <EyeOutlined /> },
       ],
     },
   ],

@@ -31,6 +31,8 @@ import { useNavigate } from 'react-router-dom';
 import type {
   TemplateFormat,
   TemplateListItem,
+  TemplateScope,
+  TargetDataType,
   TemplateStatus,
 } from '@/features/template-workspace/types';
 import { templateApi, type CreateTemplateInput, type TemplateCategory } from '@/services/templates/template-api';
@@ -40,6 +42,13 @@ const statusLabels: Record<TemplateStatus, { label: string; color: string }> = {
   PUBLISHED: { label: '已发布', color: 'green' },
   RETIRED: { label: '已停用', color: 'default' },
 };
+const targetDataTypeOptions: Array<{ value: TargetDataType; label: string }> = [
+  { value: 'MATERIAL', label: '物料/原料' },
+  { value: 'FORMULA', label: '配方' },
+  { value: 'PROCESS', label: '工艺' },
+  { value: 'EQUIPMENT', label: '设备/仪器' },
+  { value: 'TEST_STANDARD', label: '检测标准' },
+];
 
 export function TemplatesPage() {
   const { message, modal } = App.useApp();
@@ -429,7 +438,7 @@ export function TemplatesPage() {
         onCancel={() => setCreateOpen(false)}
         destroyOnHidden
       >
-        <Form form={form} layout="vertical" initialValues={{ format: 'XLSX' }}>
+        <Form form={form} layout="vertical" initialValues={{ format: 'XLSX', scope: 'TEMPLATE_CENTER' as TemplateScope }}>
           <Form.Item
             name="name"
             label="模板名称"
@@ -450,6 +459,16 @@ export function TemplatesPage() {
           </Form.Item>
           <Form.Item name="category" label="分类">
             <Select allowClear placeholder="选择分类" options={categoryItems.map((item) => ({ value: item.name, label: item.name }))} />
+          </Form.Item>
+          <Form.Item name="scope" label="模板用途" rules={[{ required: true, message: '请选择模板用途' }]}>
+            <Select options={[{ value: 'TEMPLATE_CENTER', label: '模板中心/生产业务' }, { value: 'DATA_CENTER', label: '数据中心导入' }]} />
+          </Form.Item>
+          <Form.Item noStyle shouldUpdate={(previous: Partial<CreateTemplateInput>, current: Partial<CreateTemplateInput>) => previous.scope !== current.scope}>
+            {({ getFieldValue }) => getFieldValue('scope') === 'DATA_CENTER' ? (
+              <Form.Item name="targetDataType" label="目标数据类型" rules={[{ required: true, message: '请选择目标数据类型' }]}>
+                <Select options={targetDataTypeOptions} />
+              </Form.Item>
+            ) : null}
           </Form.Item>
         </Form>
       </Modal>

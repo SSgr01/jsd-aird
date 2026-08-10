@@ -17,6 +17,8 @@ import com.jsd.aird.tpl.application.TemplateRecognitionReviewService;
 import com.jsd.aird.tpl.application.TemplateOfficeExportService;
 import com.jsd.aird.tpl.application.port.TemplateRepository;
 import com.jsd.aird.tpl.domain.TemplateFormat;
+import com.jsd.aird.tpl.domain.TargetDataType;
+import com.jsd.aird.tpl.domain.TemplateScope;
 import com.jsd.aird.tpl.domain.TemplateStatus;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
@@ -131,7 +133,9 @@ public class TemplateController {
                 request.purpose(),
                 request.category(),
                 request.format(),
-                request.importJobId()
+                request.importJobId(),
+                request.scope(),
+                request.targetDataType()
         )));
     }
 
@@ -239,7 +243,9 @@ public class TemplateController {
             String purpose,
             String category,
             @NotNull TemplateFormat format,
-            UUID importJobId
+            UUID importJobId,
+            TemplateScope scope,
+            TargetDataType targetDataType
     ) {
     }
 

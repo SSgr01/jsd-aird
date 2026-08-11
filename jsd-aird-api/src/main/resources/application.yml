@@ -37,6 +37,7 @@ spring:
       embedding:
         options:
           model: ${app.ai.embedding.model:}
+          dimensions: ${app.ai.embedding.dimension:1024}
 
 server:
   port: ${SERVER_PORT:8080}
@@ -72,6 +73,8 @@ app:
     development-mode: ${JSD_AIRD_DEV_IDENTITY_ENABLED:true}
   storage:
     endpoint: ${JSD_AIRD_MINIO_ENDPOINT:http://localhost:9000}
+    public-endpoint: ${JSD_AIRD_MINIO_PUBLIC_ENDPOINT:}
+    presign-expiry: ${JSD_AIRD_MINIO_PRESIGN_EXPIRY:15m}
     access-key: ${JSD_AIRD_MINIO_ACCESS_KEY:jsd_aird}
     secret-key: ${JSD_AIRD_MINIO_SECRET_KEY:jsd_aird_minio_dev}
     bucket: ${JSD_AIRD_MINIO_BUCKET:jsd-aird}
@@ -98,10 +101,31 @@ app:
   ai:
     prompt-version: ${JSD_AIRD_AI_PROMPT_VERSION:research-assistant-v1}
     embedding:
-      base-url: ${JSD_AIRD_EMBEDDING_BASE_URL:${JSD_AIRD_MODEL_BASE_URL:}}
-      api-key: ${JSD_AIRD_EMBEDDING_API_KEY:${JSD_AIRD_MODEL_API_KEY:}}
-      model: ${JSD_AIRD_EMBEDDING_MODEL:}
+      base-url: ${JSD_AIRD_EMBEDDING_BASE_URL:${app.model.base-url:}}
+      api-key: ${JSD_AIRD_EMBEDDING_API_KEY:${app.model.api-key:}}
+      model: ${JSD_AIRD_EMBEDDING_MODEL:${RAG_EMBEDDING_MODEL:}}
+      dimension: ${JSD_AIRD_EMBEDDING_DIMENSION:${RAG_EMBEDDING_DIMENSION:1024}}
       timeout: ${JSD_AIRD_EMBEDDING_TIMEOUT:30s}
+    ocr:
+      enabled: ${JSD_AIRD_OCR_ENABLED:false}
+      base-url: ${JSD_AIRD_OCR_BASE_URL:${app.model.base-url:}}
+      api-key: ${JSD_AIRD_OCR_API_KEY:${app.model.api-key:}}
+      model: ${JSD_AIRD_OCR_MODEL:qwen3.5-ocr}
+      completions-path: ${JSD_AIRD_OCR_COMPLETIONS_PATH:/chat/completions}
+      timeout: ${JSD_AIRD_OCR_TIMEOUT:120s}
+      max-bytes: ${JSD_AIRD_OCR_MAX_BYTES:20971520}
+    asr:
+      enabled: ${JSD_AIRD_ASR_ENABLED:false}
+      base-url: ${JSD_AIRD_ASR_BASE_URL:https://dashscope.aliyuncs.com/api/v1}
+      api-key: ${JSD_AIRD_ASR_API_KEY:${app.model.api-key:}}
+      model: ${JSD_AIRD_ASR_MODEL:qwen-audio-3.0-asr-flash-filetrans}
+      transcription-path: ${JSD_AIRD_ASR_TRANSCRIPTION_PATH:/services/audio/asr/transcription}
+      task-path: ${JSD_AIRD_ASR_TASK_PATH:/tasks}
+      language: ${JSD_AIRD_ASR_LANGUAGE:zh}
+      enable-itn: ${JSD_AIRD_ASR_ENABLE_ITN:true}
+      enable-words: ${JSD_AIRD_ASR_ENABLE_WORDS:true}
+      timeout: ${JSD_AIRD_ASR_TIMEOUT:10m}
+      poll-interval: ${JSD_AIRD_ASR_POLL_INTERVAL:2s}
     tavily:
       enabled: ${JSD_AIRD_TAVILY_ENABLED:false}
       base-url: ${JSD_AIRD_TAVILY_BASE_URL:https://api.tavily.com}

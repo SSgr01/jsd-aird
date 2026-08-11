@@ -51,8 +51,15 @@ public class RagRetrievalService {
         var knowledgeResult = knowledge.search(new KnowledgeSearchFacade.SearchRequest(
                 organizationId, plan.plan().rewrittenQuery(), aiOnly, 12, safeScopeIds, knowledgeCategoryIds,
                 plan.plan().subQueries()));
-        var data = safeScopeIds.isEmpty() && (dataCategoryIds == null || dataCategoryIds.isEmpty()) ? List.<DataAssetSearchFacade.DataHit>of()
-                : dataAssets.search(organizationId, plan.plan().rewrittenQuery(), safeScopeIds, dataCategoryIds, 8);
+        // Structured data indexes contain field values, not the document-oriented
+        // expansion terms produced by the rewrite model. Searching them with the
+        // rewritten query can turn an exact asset-code lookup into an impossible
+        // AND match (for example, code + unrelated manual/document terms).
+        var dataQuery = question == null || question.isBlank() ? plan.plan().rewrittenQuery() : question.strip();
+        // Data-center assets are part of the default retrieval corpus. Filters
+        // narrow the result set when present; an empty filter must not disable
+        // structured-data retrieval altogether.
+        var data = dataAssets.search(organizationId, dataQuery, safeScopeIds, dataCategoryIds, 8);
         var knowledgeHits = rerank(plan.plan().rewrittenQuery(), knowledgeResult.hits());
         var fallbacks = new ArrayList<String>(knowledgeResult.trace().fallbacks());
         if ("MODEL_UNAVAILABLE".equals(plan.status()) || "FALLBACK_ORIGINAL_QUERY".equals(plan.status())) {

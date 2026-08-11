@@ -34,14 +34,17 @@ import org.springframework.http.ResponseEntity;
 public class DataController {
 
     private final DataImportService service;
+    private final com.jsd.aird.data.application.DataProjectionService projectionService;
     private final DataAssetExportService assetExportService;
     private final com.jsd.aird.data.application.DataCategoryService categoryService;
 
     public DataController(DataImportService service, DataAssetExportService assetExportService,
-                          com.jsd.aird.data.application.DataCategoryService categoryService) {
+                          com.jsd.aird.data.application.DataCategoryService categoryService,
+                          com.jsd.aird.data.application.DataProjectionService projectionService) {
         this.service = service;
         this.assetExportService = assetExportService;
         this.categoryService = categoryService;
+        this.projectionService = projectionService;
     }
 
     @GetMapping("/templates")
@@ -74,6 +77,12 @@ public class DataController {
     @PostMapping("/import-jobs/{id}/parse")
     public ApiResponse<DataRepository.Job> parse(@PathVariable UUID id) {
         service.parse(id);
+        return success(service.get(id));
+    }
+
+    @PostMapping("/import-jobs/{id}/re-extract")
+    public ApiResponse<DataRepository.Job> reExtract(@PathVariable UUID id) {
+        service.reExtract(id);
         return success(service.get(id));
     }
 
@@ -112,12 +121,54 @@ public class DataController {
     }
 
     @GetMapping("/import-jobs/{id}/preview")
-    public ApiResponse<DataImportService.Preview> preview(@PathVariable UUID id) { return success(service.preview(id)); }
+    public ApiResponse<DataImportService.Preview> preview(@PathVariable UUID id) {
+        var preview = service.preview(id);
+        try {
+            var dataset = projectionService.latest(id);
+            preview = new DataImportService.Preview(preview.job(), preview.sheets(), preview.mappings(), preview.rows(),
+                    preview.issues(), preview.templateContract(), new DataImportService.ProjectionSummary(
+                    dataset.id(), dataset.status(), dataset.recordCount(),
+                    dataset.qualitySummary().path("longValueCount").asInt(0), dataset.eligibleRecordCount()));
+        } catch (com.jsd.aird.shared.error.ApiException ignored) {
+            // A job may legitimately have no committed projection yet.
+        }
+        return success(preview);
+    }
+
+    @GetMapping("/import-jobs/{id}/long-table-preview")
+    public ApiResponse<com.jsd.aird.data.application.DataProjectionService.LongTablePreview> longTablePreview(
+            @PathVariable UUID id, @RequestParam(defaultValue = "20") int limit) {
+        return success(projectionService.longTablePreview(id, limit));
+    }
+
+    @GetMapping("/import-jobs/{id}/training-dataset")
+    public ApiResponse<com.jsd.aird.data.application.port.DataProjectionRepository.TrainingDataset> trainingDatasetForJob(
+            @PathVariable UUID id) {
+        return success(projectionService.latest(id));
+    }
 
     @PostMapping("/import-jobs/{id}/commit")
     public ApiResponse<DataRepository.Job> commit(@PathVariable UUID id) {
         service.commit(id);
         return success(service.get(id));
+    }
+
+    @GetMapping("/training-datasets/{id}")
+    public ApiResponse<com.jsd.aird.data.application.port.DataProjectionRepository.TrainingDataset> trainingDataset(
+            @PathVariable UUID id) {
+        return success(projectionService.dataset(id));
+    }
+
+    @PostMapping("/training-datasets/{id}/approve")
+    public ApiResponse<Void> approveTrainingDataset(@PathVariable UUID id) {
+        projectionService.updateStatus(id, "APPROVED");
+        return success(null);
+    }
+
+    @PostMapping("/training-datasets/{id}/rebuild")
+    public ApiResponse<DataImportService.ProjectionSummary> rebuildTrainingDataset(@PathVariable UUID id) {
+        var dataset = projectionService.dataset(id);
+        return success(projectionService.project(dataset.importJobId()));
     }
 
     @GetMapping("/assets")

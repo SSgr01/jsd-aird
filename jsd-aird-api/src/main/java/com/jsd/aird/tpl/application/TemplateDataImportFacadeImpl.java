@@ -7,6 +7,7 @@ import java.util.UUID;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.ops.application.port.FileObjectRepository;
 import com.jsd.aird.ops.application.port.ObjectStorage;
 import com.jsd.aird.shared.error.ApiErrorCode;
@@ -64,6 +65,62 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade {
         var workspace = repository.findPublishedDataTemplate(organizationId, templateVersionId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "数据中心模板不存在或未发布"));
         return definition(workspace);
+    }
+
+    @Override
+    public List<ImportBinding> getPublishedBindings(UUID organizationId, UUID templateVersionId) {
+        var workspace = repository.findPublishedDataTemplate(organizationId, templateVersionId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "数据中心模板不存在或未发布"));
+        var result = new ArrayList<ImportBinding>();
+        if (workspace.mapping() == null || !workspace.mapping().isArray()) return result;
+        for (JsonNode item : workspace.mapping()) {
+            var fieldCode = firstText(item, "fieldCode", "field_code");
+            if (fieldCode.isBlank() && !item.path("mappingKind").asText("").contains("REGION")) continue;
+            var valueSource = firstText(item, "valueSource", "value_source", "INPUT");
+            result.add(new ImportBinding(
+                    firstText(item, "bindingId", "binding_id"), fieldCode,
+                    firstText(item, "dataPath", "data_path", fieldCode),
+                    firstText(item, "mappingKind", "mapping_kind", "SCALAR"),
+                    firstText(item, "parentBindingId", "parent_binding_id"),
+                    firstText(item, "repeatAxis", "repeat_axis"),
+                    Math.max(1, item.path("recordHeight").asInt(1)),
+                    Math.max(1, item.path("recordWidth").asInt(1)),
+                    Math.max(1, item.path("recordStride").asInt(1)),
+                    item.path("terminationRule").isMissingNode()
+                            ? item.path("termination_jsonb").isMissingNode()
+                            ? item.path("termination") : item.path("termination_jsonb")
+                            : item.path("terminationRule"),
+                    importLocator(item),
+                    item.path("required").asBoolean(false), item.path("identity").asBoolean(false),
+                    item.path("trainingEligible").asBoolean(!"FORMULA".equalsIgnoreCase(valueSource)),
+                    valueSource, firstText(item, "valueType", "dataType", "TEXT"),
+                    firstText(item, "unit", "defaultUnit", "")));
+        }
+        return List.copyOf(result);
+    }
+
+    /**
+     * The published template stores geometry on the binding and the richer
+     * projection contract in diagnostic metadata. Keep both available to the
+     * data importer without changing the public ImportBinding shape.
+     */
+    private JsonNode importLocator(JsonNode item) {
+        JsonNode source = item.path("locator").isObject() ? item.path("locator") : item.path("locator_jsonb");
+        ObjectNode locator = source.isObject()
+                ? (ObjectNode) source.deepCopy()
+                : objectMapper.createObjectNode();
+        JsonNode diagnostic = item.path("diagnostic");
+        for (var key : List.of("matrixModel", "tableModel", "longTableModel", "recordProjection",
+                "columnSlots", "rowSlots", "columns", "kind", "blockType", "valueType", "role")) {
+            if (!locator.has(key) && diagnostic.isObject() && diagnostic.has(key)) {
+                locator.set(key, diagnostic.path(key).deepCopy());
+            }
+        }
+        for (var key : List.of("sheetId", "sheet", "rowHeaderRange", "columnHeaderRange", "crossDataRange",
+                "cornerRange", "totalRange", "recordAxis", "semanticMode", "repeatAxis", "valueMode")) {
+            if (!locator.has(key) && item.has(key)) locator.set(key, item.path(key).deepCopy());
+        }
+        return locator;
     }
 
     @Override

@@ -1011,6 +1011,11 @@ public class TemplateRecognitionReviewService {
     public boolean hasIncompleteRecognition(UUID organizationId, UUID versionId) {
         var workspace = requireWorkspace(organizationId, versionId);
         var run = importRepository.findLatestForVersion(organizationId, workspace.versionId()).orElse(null);
+        // A data-center template can be authored directly in the workspace without an
+        // AI recognition run. Such bindings have already passed the normal draft/publish
+        // mapping validation and must not be blocked by a recognition gate that only
+        // applies to recognition-derived candidates.
+        if (hasOnlyManualMappings(workspace.mapping())) return false;
         if (run == null || run.result() == null) return true;
         var result = run.result();
         var recognitionStatus = result.path("recognitionStatus").asText("REVIEW_REQUIRED");
@@ -1022,6 +1027,16 @@ public class TemplateRecognitionReviewService {
         return !("CONFIRMED".equals(canonicalStatus)
                 && ("COMPLETE".equals(recognitionStatus) || "RESOLVED".equals(reviewResolutionStatus))
                 && "READY".equals(readiness));
+    }
+
+    private boolean hasOnlyManualMappings(JsonNode mapping) {
+        if (mapping == null || !mapping.isArray() || mapping.isEmpty()) return false;
+        for (JsonNode binding : mapping) {
+            if (!binding.path("diagnostic").path("recognitionItemId").asText("").isBlank()) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private com.fasterxml.jackson.databind.node.ArrayNode compileDiagnostics(

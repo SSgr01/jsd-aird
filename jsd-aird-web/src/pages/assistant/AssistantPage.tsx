@@ -1,9 +1,10 @@
-import { DatabaseOutlined, FolderOpenOutlined } from '@ant-design/icons';
-import { Alert, App, Checkbox, Collapse, Space, Tag, Typography } from 'antd';
+import { DatabaseOutlined, DownloadOutlined, EyeOutlined, FolderOpenOutlined } from '@ant-design/icons';
+import { Alert, App, Button, Checkbox, Collapse, Space, Tag, Typography } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { AiConversationWorkspace, type ConversationItem, type ConversationMessage } from '@/components/ai-conversation-workspace';
+import { FilePreviewModal, downloadPreviewFile, type FilePreviewDescriptor } from '@/components/file-preview';
 import { assistantApi, type AiScope, type AssistantCitation, type AssistantResponse, type ConversationMeta } from '@/services/assistant';
 import { dataApi, type DataCategory } from '@/services/data/data-api';
 import { knowledgeApi, type KnowledgeCategory } from '@/services/knowledge';
@@ -16,7 +17,18 @@ interface ChatMessage {
   warnings?: string[];
 }
 
-function renderAssistantContent(message: ChatMessage, navigate: ReturnType<typeof useNavigate>, streaming: boolean) {
+function citationSourceKey(citation: AssistantCitation) {
+  return `${citation.sourceType}-${citation.chunkId}`;
+}
+
+function renderAssistantContent(
+  message: ChatMessage,
+  navigate: ReturnType<typeof useNavigate>,
+  streaming: boolean,
+  onPreview: (citation: AssistantCitation) => void,
+  onDownload: (citation: AssistantCitation) => void,
+  hasOriginalFile: (citation: AssistantCitation) => boolean,
+) {
   return (
     <div>
       <Typography.Paragraph className="ai-message-text">{message.content || (streaming ? '正在生成回答…' : '')}</Typography.Paragraph>
@@ -26,14 +38,22 @@ function renderAssistantContent(message: ChatMessage, navigate: ReturnType<typeo
           <Typography.Text type="secondary">参考来源</Typography.Text>
           <Space wrap>
             {message.citations.map((citation) => (
-              <Tag
-                key={`${citation.sourceType}-${citation.chunkId}`}
-                color="blue"
-                className={citation.documentId ? 'is-clickable' : undefined}
-                onClick={() => { if (citation.documentId) navigate(`/knowledge/documents/${citation.documentId}`); }}
-              >
-                {citation.title || citation.dataAssetId || '数据资产来源'}{citation.pageNo ? ` · 第${citation.pageNo}页` : ''}
-              </Tag>
+              <Space key={`${citation.sourceType}-${citation.chunkId}`} size={4} wrap>
+                {(() => {
+                  const originalFileAvailable = hasOriginalFile(citation);
+                  return <>
+                <Tag
+                  color="blue"
+                  className={citation.documentId ? 'is-clickable' : undefined}
+                  onClick={() => { if (citation.documentId) navigate(`/knowledge/documents/${citation.documentId}`); else if (citation.dataAssetId) navigate(`/data/assets/${citation.dataAssetId}`); }}
+                >
+                  {citation.title || citation.dataAssetId || '数据资产来源'}{citation.pageNo ? ` · 第${citation.pageNo}页` : ''}
+                </Tag>
+                {originalFileAvailable && <Button size="small" type="link" icon={<EyeOutlined />} onClick={() => onPreview(citation)}>预览</Button>}
+                {originalFileAvailable && <Button size="small" type="link" icon={<DownloadOutlined />} onClick={() => onDownload(citation)}>下载</Button>}
+                  </>;
+                })()}
+              </Space>
             ))}
           </Space>
         </div>
@@ -58,6 +78,8 @@ export function AssistantPage() {
   const [selectedScopes, setSelectedScopes] = useState<string[]>([]);
   const [selectedKnowledge, setSelectedKnowledge] = useState<string[]>([]);
   const [selectedData, setSelectedData] = useState<string[]>([]);
+  const [previewFile, setPreviewFile] = useState<FilePreviewDescriptor>();
+  const [citationSources, setCitationSources] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     void Promise.all([
@@ -72,6 +94,21 @@ export function AssistantPage() {
       setDataCategories(dataList);
     }).catch(() => toast.error('AI 问答范围加载失败'));
   }, [toast]);
+
+  useEffect(() => {
+    let active = true;
+    const citations = messages.flatMap((item) => item.citations || []).filter((citation) => citation.dataAssetId);
+    const unique = Array.from(new Map(citations.map((citation) => [citationSourceKey(citation), citation])).values());
+    if (!unique.length) {
+      setCitationSources({});
+      return () => { active = false; };
+    }
+    void Promise.all(unique.map(async (citation) => {
+      try { return [citationSourceKey(citation), Boolean(await dataApi.resolveSourceFile(citation.dataAssetId as string, citation.revisionId))] as const; }
+      catch { return [citationSourceKey(citation), false] as const; }
+    })).then((entries) => { if (active) setCitationSources(Object.fromEntries(entries)); });
+    return () => { active = false; };
+  }, [messages]);
 
   const conversationItems: ConversationItem[] = useMemo(() => conversations.map((item) => ({ id: item.id, title: item.title || '未命名会话' })), [conversations]);
 
@@ -129,10 +166,35 @@ export function AssistantPage() {
     }
   };
 
+  const resolveCitationFile = async (citation: AssistantCitation): Promise<FilePreviewDescriptor> => {
+    if (citation.documentId) {
+      return {
+        fileName: citation.originalName || citation.title || 'knowledge-document',
+        load: () => knowledgeApi.contentBlob(citation.documentId as string, citation.versionId),
+      };
+    }
+    if (citation.dataAssetId) {
+      const source = await dataApi.resolveSourceFile(citation.dataAssetId, citation.revisionId);
+      if (!source) throw new Error('该数据资产没有可用的原始文件');
+      return { fileName: source.fileName, load: () => dataApi.sourceBlob(source.fileId) };
+    }
+    throw new Error('当前引用没有可定位的原始文件');
+  };
+
+  const previewCitation = async (citation: AssistantCitation) => {
+    try { setPreviewFile(await resolveCitationFile(citation)); }
+    catch (error) { void toast.error(error instanceof Error ? error.message : '原始文件加载失败'); }
+  };
+
+  const downloadCitation = async (citation: AssistantCitation) => {
+    try { await downloadPreviewFile(await resolveCitationFile(citation)); void toast.success('原文件下载已开始'); }
+    catch (error) { void toast.error(error instanceof Error ? error.message : '原文件下载失败'); }
+  };
+
   const viewMessages: ConversationMessage[] = messages.map((item) => ({
     id: item.id,
     role: item.role,
-    content: item.role === 'ASSISTANT' ? renderAssistantContent(item, navigate, streaming) : <Typography.Paragraph className="ai-message-text">{item.content}</Typography.Paragraph>,
+    content: item.role === 'ASSISTANT' ? renderAssistantContent(item, navigate, streaming, (citation) => void previewCitation(citation), (citation) => void downloadCitation(citation), (citation) => Boolean(citation.documentId || citationSources[citationSourceKey(citation)])) : <Typography.Paragraph className="ai-message-text">{item.content}</Typography.Paragraph>,
   }));
 
   const scopeContent = (
@@ -180,6 +242,7 @@ export function AssistantPage() {
         onQuestionChange={setQuestion}
         onSubmit={() => void send()}
       />
+      <FilePreviewModal open={Boolean(previewFile)} file={previewFile} onClose={() => setPreviewFile(undefined)} />
     </div>
   );
 }

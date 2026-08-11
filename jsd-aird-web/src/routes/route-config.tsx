@@ -11,7 +11,6 @@ import { TemplateUploadPage } from '@/pages/template-upload';
 import { TemplateWorkspacePage } from '@/pages/template-workspace';
 import { TemplatesPage } from '@/pages/templates';
 import { TemplateImportRenderPage } from '@/pages/template-render/TemplateImportRenderPage';
-import { RndCenterPage } from '@/pages/rnd-center';
 
 export const routeConfig: RouteObject[] = [
   {
@@ -24,9 +23,8 @@ export const routeConfig: RouteObject[] = [
     children: [
       {
         index: true,
-        element: <Navigate to="/rnd" replace />,
+        element: <Navigate to="/assistant" replace />,
       },
-      { path: 'rnd', element: <RndCenterPage /> },
       { path: 'knowledge/library', element: <KnowledgeLibraryPage /> },
       { path: 'knowledge/view', element: <KnowledgeViewPage /> },
       { path: 'knowledge/search', element: <KnowledgeSearchPage /> },

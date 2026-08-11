@@ -176,6 +176,24 @@ public class KnowledgeController {
         }
     }
 
+    @GetMapping("/documents/{documentId}/versions/{versionId}/content")
+    public void versionContent(
+            @PathVariable UUID documentId,
+            @PathVariable UUID versionId,
+            HttpServletResponse response
+    ) throws IOException {
+        var file = service.openVersionContent(documentId, versionId);
+        response.setContentType(file.contentType());
+        response.setContentLengthLong(file.size());
+        response.setHeader(HttpHeaders.CONTENT_DISPOSITION,
+                "inline; filename=\"" + file.originalName().replace("\"", "") + "\"");
+        try (file) {
+            file.stream().transferTo(response.getOutputStream());
+        } catch (Exception exception) {
+            throw new IOException("知识文件版本读取失败", exception);
+        }
+    }
+
     @PostMapping(value = "/documents/export", produces = "application/zip")
     public void export(@Valid @RequestBody DocumentExportRequest request, HttpServletResponse response) throws IOException {
         var content = service.exportDocuments(request.documentIds());

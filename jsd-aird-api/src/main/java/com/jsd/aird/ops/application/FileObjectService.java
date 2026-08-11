@@ -7,10 +7,12 @@ import java.nio.file.Path;
 import java.security.DigestInputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
 import java.util.HashSet;
 import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
+import java.util.Optional;
 import java.util.zip.ZipInputStream;
 
 import com.jsd.aird.ops.application.port.FileObjectRepository;
@@ -143,6 +145,14 @@ public class FileObjectService implements FileStorageFacade {
                 file.sha256(),
                 stored.stream()
         );
+    }
+
+    @Override
+    public Optional<String> presignedUrl(UUID organizationId, UUID fileId, Duration expiry) {
+        var file = repository.find(organizationId, fileId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "文件不存在"));
+        if ("DELETED".equals(file.status())) return Optional.empty();
+        return objectStorage.presignedGetUrl(file.objectKey(), expiry);
     }
 
     @Override

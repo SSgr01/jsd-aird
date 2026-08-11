@@ -13,6 +13,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.tpl.application.port.TemplateRepository;
 import com.jsd.aird.tpl.domain.TemplateFormat;
 import com.jsd.aird.tpl.domain.TargetDataType;
@@ -295,6 +296,17 @@ public class JdbcTemplateRepository implements TemplateRepository {
             var role = textOrDefault(binding.path("role"), "FIELD");
             var mappingKind = textOrDefault(binding.path("mappingKind"),
                     "REPEAT_REGION".equals(role) ? "REPEAT_REGION" : "SCALAR");
+            var diagnostic = binding.path("diagnostic").isObject()
+                    ? (com.fasterxml.jackson.databind.node.ObjectNode) binding.path("diagnostic").deepCopy()
+                    : objectMapper.createObjectNode();
+            copyMappingMetadata(binding, diagnostic, "fieldName");
+            copyMappingMetadata(binding, diagnostic, "valueType");
+            copyMappingMetadata(binding, diagnostic, "unit");
+            copyMappingMetadata(binding, diagnostic, "required");
+            copyMappingMetadata(binding, diagnostic, "identity");
+            copyMappingMetadata(binding, diagnostic, "trainingEligible");
+            copyMappingMetadata(binding, diagnostic, "valueSource");
+            if (binding.path("aliases").isArray()) diagnostic.set("aliases", binding.path("aliases"));
             arguments.add(new Object[]{
                     UUID.randomUUID(),
                     versionId,
@@ -316,9 +328,7 @@ public class JdbcTemplateRepository implements TemplateRepository {
                     binding.path("syncDirection").asText("TWO_WAY"),
                     binding.path("primaryBinding").asBoolean(true),
                     binding.path("bindingStatus").asText("VALID"),
-                    pgJson(binding.path("diagnostic").isMissingNode()
-                            ? objectMapper.createObjectNode()
-                            : binding.path("diagnostic")),
+                    pgJson(diagnostic),
                     pgJson(binding.path("termination").isMissingNode()
                             ? objectMapper.createObjectNode()
                             : binding.path("termination"))
@@ -335,6 +345,10 @@ public class JdbcTemplateRepository implements TemplateRepository {
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())
                     """, arguments);
         }
+    }
+
+    private void copyMappingMetadata(JsonNode binding, ObjectNode diagnostic, String name) {
+        if (binding.has(name) && !binding.path(name).isNull()) diagnostic.set(name, binding.path(name));
     }
 
     @Override
@@ -695,7 +709,15 @@ public class JdbcTemplateRepository implements TemplateRepository {
                     binding.put("syncDirection", rs.getString("sync_direction"));
                     binding.put("primaryBinding", rs.getBoolean("primary_binding"));
                     binding.put("bindingStatus", rs.getString("binding_status"));
-                    binding.set("diagnostic", parseJson(rs.getString("diagnostic_jsonb")));
+                    var diagnostic = parseJson(rs.getString("diagnostic_jsonb"));
+                    binding.set("diagnostic", diagnostic);
+                    for (String metadata : List.of(
+                            "fieldName", "valueType", "unit", "required", "identity",
+                            "trainingEligible", "valueSource", "aliases")) {
+                        if (!binding.has(metadata) && diagnostic.has(metadata)) {
+                            binding.set(metadata, diagnostic.path(metadata));
+                        }
+                    }
                     binding.set("termination", parseJson(rs.getString("termination_jsonb")));
                     result.add(binding);
                 },

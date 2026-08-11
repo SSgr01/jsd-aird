@@ -69,7 +69,7 @@ class FlywayMigrationIT {
                         "select count(*) from information_schema.tables where table_schema = 'data'"
                 ); var resultSet = statement.executeQuery()) {
                     assertThat(resultSet.next()).isTrue();
-                    assertThat(resultSet.getInt(1)).isEqualTo(8);
+                    assertThat(resultSet.getInt(1)).isEqualTo(11);
                 }
             }
         }

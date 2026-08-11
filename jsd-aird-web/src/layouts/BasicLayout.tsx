@@ -1,6 +1,5 @@
 import {
   DatabaseOutlined,
-  ExperimentOutlined,
   EyeOutlined,
   FileSearchOutlined,
   FileTextOutlined,
@@ -20,15 +19,21 @@ const route = {
   path: '/',
   routes: [
     {
-      path: '/rnd-center',
-      name: '研发中心',
-      icon: <ExperimentOutlined />,
+      path: '/ai-assistant',
+      name: 'AI研发助手',
+      icon: <RobotOutlined />,
       routes: [
-        { path: '/rnd', name: '研发工作台', icon: <ExperimentOutlined /> },
-        { path: '/knowledge/library', name: '资料上传', icon: <FolderOpenOutlined /> },
-        { path: '/knowledge/search', name: '文件检索', icon: <FileSearchOutlined /> },
-        { path: '/knowledge/view', name: '知识库查看', icon: <EyeOutlined /> },
         { path: '/assistant', name: 'AI问答', icon: <RobotOutlined /> },
+        { path: '/knowledge/search', name: '文件检索', icon: <FileSearchOutlined /> },
+      ],
+    },
+    {
+      path: '/knowledge',
+      name: '研发知识库',
+      icon: <FolderOpenOutlined />,
+      routes: [
+        { path: '/knowledge/library', name: '资料上传', icon: <FolderOpenOutlined /> },
+        { path: '/knowledge/view', name: '知识库查看', icon: <EyeOutlined /> },
       ],
     },
     {

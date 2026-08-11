@@ -10,17 +10,26 @@ export const appTheme: ThemeConfig = {
     colorText: '#0f172a',
     colorTextSecondary: '#475569',
     colorBorder: '#e2e8f0',
-    borderRadius: 6,
+    colorBgContainer: '#ffffff',
     colorBgLayout: '#f8fafc',
+    borderRadius: 8,
+    controlOutline: '#2563eb',
     fontFamily:
-      '"Source Sans 3", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif',
+      '"Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", sans-serif',
   },
   components: {
     Layout: {
       headerBg: '#ffffff',
+      siderBg: '#ffffff',
+      bodyBg: '#f8fafc',
     },
     Button: {
       controlHeight: 36,
+      borderRadius: 8,
+    },
+    Card: {
+      borderRadiusLG: 12,
+      borderRadiusSM: 8,
     },
     Table: {
       headerBg: '#f8fafc',

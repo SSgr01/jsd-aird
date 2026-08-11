@@ -8,6 +8,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.data.api.DataAssetSearchFacade;
 import com.jsd.aird.data.application.port.DataAssetIndexRepository;
+import com.jsd.aird.kb.api.KnowledgeEmbeddingFacade;
+import org.springframework.beans.factory.ObjectProvider;
 import org.postgresql.util.PGobject;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -18,10 +20,13 @@ public class JdbcDataAssetIndexRepository implements DataAssetIndexRepository {
 
     private final JdbcTemplate jdbc;
     private final ObjectMapper objectMapper;
+    private final ObjectProvider<KnowledgeEmbeddingFacade> embeddings;
 
-    public JdbcDataAssetIndexRepository(JdbcTemplate jdbc, ObjectMapper objectMapper) {
+    public JdbcDataAssetIndexRepository(JdbcTemplate jdbc, ObjectMapper objectMapper,
+                                        ObjectProvider<KnowledgeEmbeddingFacade> embeddings) {
         this.jdbc = jdbc;
         this.objectMapper = objectMapper;
+        this.embeddings = embeddings;
     }
 
     @Override
@@ -47,12 +52,22 @@ public class JdbcDataAssetIndexRepository implements DataAssetIndexRepository {
                   """ + categoryClause + """
                   AND a.status = 'ACTIVE'
                   AND r.publication_status = 'PUBLISHED'
-                  AND (i.search_vector @@ plainto_tsquery('simple', ?) OR i.content ILIKE '%' || ? || '%')
+                  AND (
+                      i.search_vector @@ plainto_tsquery('simple', ?)
+                      OR i.content ILIKE '%' || ? || '%'
+                      OR EXISTS (
+                          SELECT 1
+                          FROM regexp_split_to_table(?, '\\s+') AS token
+                          WHERE length(token) >= 2
+                            AND i.content ILIKE '%' || token || '%'
+                      )
+                  )
                 """ + scopeClause + " ORDER BY score DESC, i.created_at DESC LIMIT ?";
         var args = new ArrayList<Object>();
         args.add(query);
         args.add(organizationId);
         if (categoryIds != null) args.addAll(categoryIds);
+        args.add(query);
         args.add(query);
         args.add(query);
         if (scopeIds != null) args.addAll(scopeIds);
@@ -99,6 +114,27 @@ public class JdbcDataAssetIndexRepository implements DataAssetIndexRepository {
                         id, organization_id, scope_id, asset_id, revision_id, row_number, field_code,
                         content, source_jsonb, token_length
                     )
+                    SELECT gen_random_uuid(), a.organization_id, ?, a.id, r.id, dr.source_row_number,
+                           v.field_code || coalesce(':' || v.data_path, ''),
+                           coalesce(v.value_text, v.value_jsonb::text),
+                           jsonb_build_object('dataPath', v.data_path, 'value', v.value_jsonb,
+                                              'sourceAnchorId', v.source_anchor_id),
+                           length(coalesce(v.value_text, v.value_jsonb::text))
+                    FROM data.data_value v
+                    JOIN data.data_record dr ON dr.id = v.record_id
+                    JOIN data.data_asset_revision r ON r.id = dr.revision_id
+                    JOIN data.data_asset a ON a.id = r.asset_id
+                    WHERE a.organization_id = ? AND a.id = ? AND a.status = 'ACTIVE'
+                      AND r.id = a.current_revision_id AND r.publication_status = 'PUBLISHED'
+                    ON CONFLICT (revision_id, row_number, field_code) DO UPDATE
+                    SET content = EXCLUDED.content, source_jsonb = EXCLUDED.source_jsonb,
+                        token_length = EXCLUDED.token_length, created_at = now()
+                    """, scopeId, organizationId, row.id());
+            indexed += jdbc.update("""
+                    INSERT INTO ai.data_asset_index_entry (
+                        id, organization_id, scope_id, asset_id, revision_id, row_number, field_code,
+                        content, source_jsonb, token_length
+                    )
                     SELECT gen_random_uuid(), a.organization_id, ?, a.id, r.id, anchor.row_number, fields.key,
                            coalesce(fields.value->>'normalizedValue', fields.value->>'rawValue', fields.value::text),
                            fields.value, length(coalesce(fields.value->>'normalizedValue', fields.value::text))
@@ -114,12 +150,40 @@ public class JdbcDataAssetIndexRepository implements DataAssetIndexRepository {
                     ) anchor ON true
                     WHERE a.organization_id = ? AND a.id = ? AND a.status = 'ACTIVE'
                       AND r.publication_status = 'PUBLISHED'
+                      AND NOT EXISTS (
+                          SELECT 1 FROM data.data_record dr WHERE dr.revision_id = r.id
+                      )
                     ON CONFLICT (revision_id, row_number, field_code) DO UPDATE
                     SET content = EXCLUDED.content, source_jsonb = EXCLUDED.source_jsonb,
                         token_length = EXCLUDED.token_length, created_at = now()
                     """, scopeId, organizationId, row.id());
+            indexEmbeddings(organizationId, row.id());
         }
         return indexed;
+    }
+
+    private void indexEmbeddings(UUID organizationId, UUID assetId) {
+        var provider = embeddings.getIfAvailable();
+        if (provider == null) return;
+        var entries = jdbc.query("""
+                SELECT i.id, i.content
+                FROM ai.data_asset_index_entry i
+                JOIN data.data_asset_revision r ON r.id = i.revision_id
+                JOIN data.data_asset a ON a.id = r.asset_id
+                WHERE i.organization_id = ? AND a.id = ?
+                  AND r.id = a.current_revision_id AND r.publication_status = 'PUBLISHED'
+                  AND i.embedding IS NULL
+                """, (rs, rowNum) -> new IndexEntry(rs.getObject("id", UUID.class), rs.getString("content")),
+                organizationId, assetId);
+        for (var entry : entries) {
+            try {
+                provider.embedVector(entry.content()).ifPresent(vector -> jdbc.update(
+                        "UPDATE ai.data_asset_index_entry SET embedding = CAST(? AS vector) WHERE id = ? AND organization_id = ?",
+                        vector, entry.id(), organizationId));
+            } catch (RuntimeException ignored) {
+                // A vector provider or dimension mismatch must not make lexical data search unavailable.
+            }
+        }
     }
 
     private String scopeClause(List<UUID> scopeIds) {
@@ -133,5 +197,8 @@ public class JdbcDataAssetIndexRepository implements DataAssetIndexRepository {
     }
 
     private record AssetRow(UUID id, String name, UUID revisionId) {
+    }
+
+    private record IndexEntry(UUID id, String content) {
     }
 }

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { CategoryCardGrid, CategoryEditorModal, CatalogListPanel, type CatalogCategoryCard, type CategoryEditorValue } from '@/components/catalog-workspace';
+import { FilePreviewModal, downloadPreviewFile, type FilePreviewDescriptor } from '@/components/file-preview';
 import { knowledgeApi, type KnowledgeCategory, type KnowledgeDocument } from '@/services/knowledge';
 
 const scopes = [{ value: 'INTERNAL' as const, label: '内部资料' }, { value: 'EXTERNAL' as const, label: '外部资料' }];
@@ -36,6 +37,7 @@ export function KnowledgeViewPage() {
   const [selected, setSelected] = useState<string[]>([]);
   const [renameItem, setRenameItem] = useState<KnowledgeDocument>();
   const [renameValue, setRenameValue] = useState('');
+  const [previewFile, setPreviewFile] = useState<FilePreviewDescriptor>();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -51,6 +53,18 @@ export function KnowledgeViewPage() {
 
   useEffect(() => { void load(); }, [load]);
   useEffect(() => { setCategoryId('ALL'); setPage((value) => ({ ...value, current: 1 })); }, [scope]);
+
+  const fileDescriptor = (item: KnowledgeDocument): FilePreviewDescriptor => ({
+    fileName: item.originalName,
+    contentType: item.contentType,
+    size: item.size,
+    load: () => knowledgeApi.contentBlob(item.id, item.currentVersionId),
+  });
+
+  const downloadDocument = async (item: KnowledgeDocument) => {
+    try { await downloadPreviewFile(fileDescriptor(item)); void message.success('原文件下载已开始'); }
+    catch (error) { void message.error(error instanceof Error ? error.message : '原文件下载失败'); }
+  };
 
   const cards = useMemo<CatalogCategoryCard[]>(() => [
     { id: 'ALL', name: scope === 'INTERNAL' ? '全部内部资料' : '全部外部资料', count: page.total, description: '当前资料范围的全部文档', icon: <FolderOpenOutlined />, tone: 'blue' },
@@ -121,11 +135,12 @@ export function KnowledgeViewPage() {
     <div className="catalog-tabs" role="tablist" aria-label="资料范围">{scopes.map((item) => <Button key={item.value} type={scope === item.value ? 'primary' : 'default'} role="tab" aria-selected={scope === item.value} onClick={() => setScope(item.value)}>{item.label}</Button>)}</div>
     <CategoryCardGrid categories={cards} activeId={categoryId} onSelect={(id) => { setCategoryId(id); setPage((value) => ({ ...value, current: 1 })); }} onCreate={() => setEditor({ mode: 'NEW' })} onRename={(item) => setEditor({ mode: 'EDIT', item: categories.find((candidate) => candidate.id === item.id) })} onDelete={(item) => setDeleteItem(categories.find((candidate) => candidate.id === item.id))} />
     <CatalogListPanel title={cards.find((item) => item.id === categoryId)?.name || '资料文件'} count={page.total} filters={<Space wrap><Input.Search allowClear placeholder="搜索文档、图片或音频" value={keyword} onChange={(event) => { setKeyword(event.target.value); setPage((value) => ({ ...value, current: 1 })); }} onSearch={() => void load()} /><Select allowClear placeholder="全部状态" value={status} onChange={(value) => { setStatus(value); setPage((current) => ({ ...current, current: 1 })); }} options={Object.entries(statusLabels).map(([value, item]) => ({ value, label: item[0] }))} /><Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button></Space>} actions={<><Typography.Text type="secondary">已选 {selected.length} 项</Typography.Text><Button icon={<DownloadOutlined />} loading={exporting} disabled={!selected.length || selected.length > 200} onClick={() => void exportDocuments()}>批量导出</Button><Button danger icon={<DeleteOutlined />} disabled={!selected.length} onClick={deleteSelected}>删除</Button></>} loading={loading}>
-      <Table rowKey="id" rowSelection={{ selectedRowKeys: selected, onChange: (keys) => setSelected(keys.map(String)) }} dataSource={items} pagination={{ current: page.current, pageSize: page.pageSize, total: page.total, showSizeChanger: true, onChange: (current, pageSize) => setPage({ current, pageSize, total: page.total }) }} locale={{ emptyText: <Empty description="当前分类暂无符合条件的文件" /> }} columns={[{ title: '文件名称', dataIndex: 'title', render: (_, item) => <Space>{fileIcon(item.contentType)}<span><Typography.Text strong>{item.title}</Typography.Text><span className="binding-path">{item.originalName} · {(item.size / 1024).toFixed(0)} KB · V{item.currentVersionNo}</span></span></Space> }, { title: '当前分类', dataIndex: 'categoryName', render: (value?: string) => value || '未分类' }, { title: 'AI 使用', dataIndex: 'aiStatus', render: (value: string) => <Tag color={value === 'APPROVED' ? 'success' : 'default'}>{value === 'APPROVED' ? '已授权' : '待授权'}</Tag> }, { title: '更新日期', dataIndex: 'updatedAt', width: 180, render: (value: string) => new Date(value).toLocaleString('zh-CN') }, { title: '处理状态', dataIndex: 'status', render: (value: string) => <Tag color={statusLabels[value]?.[1]}>{statusLabels[value]?.[0] || value}</Tag> }, { title: '操作', width: 300, render: (_, item) => <Space><Button type="link" icon={<EyeOutlined />} onClick={() => navigate(`/knowledge/documents/${item.id}`)}>查看</Button><Button type="link" icon={<EditOutlined />} onClick={() => { setRenameItem(item); setRenameValue(item.title); }}>重命名</Button><Dropdown trigger={['click']} menu={{ items: categories.map((category) => ({ key: category.id, label: category.name, onClick: () => void moveDocument(category.id, item) })) }}><Button type="link">移动</Button></Dropdown></Space> }]} />
+      <Table rowKey="id" rowSelection={{ selectedRowKeys: selected, onChange: (keys) => setSelected(keys.map(String)) }} dataSource={items} pagination={{ current: page.current, pageSize: page.pageSize, total: page.total, showSizeChanger: true, onChange: (current, pageSize) => setPage({ current, pageSize, total: page.total }) }} locale={{ emptyText: <Empty description="当前分类暂无符合条件的文件" /> }} columns={[{ title: '文件名称', dataIndex: 'title', render: (_, item) => <Space>{fileIcon(item.contentType)}<span><Typography.Text strong>{item.title}</Typography.Text><span className="binding-path">{item.originalName} · {(item.size / 1024).toFixed(0)} KB · V{item.currentVersionNo}</span></span></Space> }, { title: '当前分类', dataIndex: 'categoryName', render: (value?: string) => value || '未分类' }, { title: 'AI 使用', dataIndex: 'aiStatus', render: (value: string) => <Tag color={value === 'APPROVED' ? 'success' : 'default'}>{value === 'APPROVED' ? '已授权' : '待授权'}</Tag> }, { title: '更新日期', dataIndex: 'updatedAt', width: 180, render: (value: string) => new Date(value).toLocaleString('zh-CN') }, { title: '处理状态', dataIndex: 'status', render: (value: string) => <Tag color={statusLabels[value]?.[1]}>{statusLabels[value]?.[0] || value}</Tag> }, { title: '操作', width: 380, render: (_, item) => <Space wrap><Button type="link" icon={<EyeOutlined />} onClick={() => setPreviewFile(fileDescriptor(item))}>预览</Button><Button type="link" icon={<DownloadOutlined />} onClick={() => void downloadDocument(item)}>下载</Button><Button type="link" onClick={() => navigate(`/knowledge/documents/${item.id}`)}>详情</Button><Button type="link" icon={<EditOutlined />} onClick={() => { setRenameItem(item); setRenameValue(item.title); }}>重命名</Button><Dropdown trigger={['click']} menu={{ items: categories.map((category) => ({ key: category.id, label: category.name, onClick: () => void moveDocument(category.id, item) })) }}><Button type="link">移动</Button></Dropdown></Space> }]} />
     </CatalogListPanel>
     <CategoryEditorModal open={Boolean(editor)} title={editor?.mode === 'NEW' ? '新增知识分类' : '重命名知识分类'} initialValue={editor?.item ? { name: editor.item.name } : { name: '' }} confirmLoading={saving} onCancel={() => setEditor(undefined)} onSubmit={(value) => void saveCategory(value)} />
     {deleteItem && <ModalDelete title={`删除分类“${deleteItem.name}”`} open onCancel={() => setDeleteItem(undefined)} onConfirm={() => void removeCategory()} loading={saving} replacementId={replacementId} onReplacementChange={setReplacementId} options={categories.filter((item) => item.id !== deleteItem.id).map((item) => ({ value: item.id, label: item.name }))} />}
     <Modal open={Boolean(renameItem)} title="重命名文件" okText="保存" cancelText="取消" confirmLoading={saving} onCancel={() => setRenameItem(undefined)} onOk={() => void renameDocument()}><Input aria-label="文件名称" maxLength={260} value={renameValue} onChange={(event) => setRenameValue(event.target.value)} /></Modal>
+    <FilePreviewModal open={Boolean(previewFile)} file={previewFile} onClose={() => setPreviewFile(undefined)} />
   </div>;
 }
 

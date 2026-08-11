@@ -1,10 +1,11 @@
-import { DatabaseOutlined, FileExcelOutlined, RightOutlined } from '@ant-design/icons';
+import { DatabaseOutlined, DownloadOutlined, EyeOutlined, FileExcelOutlined, RightOutlined } from '@ant-design/icons';
 import { App, Button, Form, Select } from 'antd';
 import type { UploadFile } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { UploadWorkspace, type UploadWorkspaceRecord } from '@/components/upload-workspace';
+import { FilePreviewModal, downloadPreviewFile, type FilePreviewDescriptor } from '@/components/file-preview';
 import { dataApi, dataTypeOptions, type DataCategory, type DataJob, type DataTemplateOption, type DataType } from '@/services/data/data-api';
 
 const statusFilters = [
@@ -29,7 +30,7 @@ const statusView: Record<string, { label: string; color: string }> = {
   CANCELLED: { label: '已取消', color: 'default' },
 };
 
-function jobRecord(job: DataJob, navigate: (path: string) => void): UploadWorkspaceRecord {
+function jobRecord(job: DataJob, navigate: (path: string) => void, onPreview: (job: DataJob) => void, onDownload: (job: DataJob) => void): UploadWorkspaceRecord {
   const status = statusView[job.status] || { label: job.status, color: 'default' };
   return {
     id: job.id,
@@ -39,7 +40,7 @@ function jobRecord(job: DataJob, navigate: (path: string) => void): UploadWorksp
     detail: `${new Date(job.createdAt).toLocaleString('zh-CN')} · ${job.currentStage || '等待处理'}`,
     status,
     progress: job.progress,
-    actions: <Button type="link" icon={<RightOutlined />} onClick={() => navigate(`/data/import-jobs/${job.id}`)}>查看导入任务</Button>,
+    actions: <><Button type="link" icon={<EyeOutlined />} onClick={() => onPreview(job)}>预览</Button><Button type="link" icon={<DownloadOutlined />} onClick={() => onDownload(job)}>下载</Button><Button type="link" icon={<RightOutlined />} onClick={() => navigate(`/data/import-jobs/${job.id}`)}>查看导入任务</Button></>,
   };
 }
 
@@ -57,6 +58,7 @@ export function DataUploadPage() {
   const [jobStatus, setJobStatus] = useState('ALL');
   const [jobKeyword, setJobKeyword] = useState('');
   const [jobsLoading, setJobsLoading] = useState(false);
+  const [previewFile, setPreviewFile] = useState<FilePreviewDescriptor>();
 
   useEffect(() => {
     setTemplateVersionId(undefined);
@@ -139,10 +141,17 @@ export function DataUploadPage() {
     }
   };
 
-  const records = jobs.items.map((job) => jobRecord(job, navigate));
+  const fileDescriptor = (job: DataJob): FilePreviewDescriptor => ({ fileName: job.sourceFileName, load: () => dataApi.sourceBlob(job.sourceFileId) });
+  const openPreview = (job: DataJob) => setPreviewFile(fileDescriptor(job));
+  const downloadJob = async (job: DataJob) => {
+    try { await downloadPreviewFile(fileDescriptor(job)); void message.success('原文件下载已开始'); }
+    catch (error) { void message.error(error instanceof Error ? error.message : '原文件下载失败'); }
+  };
+  const records = jobs.items.map((job) => jobRecord(job, navigate, openPreview, () => { void downloadJob(job); }));
 
   return (
-    <UploadWorkspace
+    <>
+      <UploadWorkspace
       breadcrumbs={[{ title: '数据中心' }, { title: '数据上传' }]}
       title="数据上传"
       description="选择已发布的数据中心模板，上传后按 Sheet、字段和质量问题逐步确认。"
@@ -193,6 +202,8 @@ export function DataUploadPage() {
       recordsLoading={jobsLoading}
       pagination={{ current: jobs.page, pageSize: jobs.size, total: jobs.total }}
       onPageChange={(page, pageSize) => setJobs((current) => ({ ...current, page, size: pageSize }))}
-    />
+      />
+      <FilePreviewModal open={Boolean(previewFile)} file={previewFile} onClose={() => setPreviewFile(undefined)} />
+    </>
   );
 }

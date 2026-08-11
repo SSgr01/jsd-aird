@@ -12,6 +12,14 @@ public interface TemplateDataImportFacade {
 
     DataTemplateDefinition getPublished(UUID organizationId, UUID templateVersionId);
 
+    /**
+     * Returns the published template bindings used by data-center extraction.
+     * The default keeps existing module implementations source compatible.
+     */
+    default List<ImportBinding> getPublishedBindings(UUID organizationId, UUID templateVersionId) {
+        return List.of();
+    }
+
     ParsedTabularFile parse(UUID organizationId, UUID templateVersionId, UUID fileId);
 
     FieldRequest requestField(UUID organizationId, UUID templateVersionId, FieldRequestCommand command);
@@ -66,6 +74,27 @@ public interface TemplateDataImportFacade {
             boolean identity,
             List<String> aliases,
             String dataPath
+    ) {
+    }
+
+    record ImportBinding(
+            String bindingId,
+            String fieldCode,
+            String dataPath,
+            String mappingKind,
+            String parentBindingId,
+            String repeatAxis,
+            int recordHeight,
+            int recordWidth,
+            int recordStride,
+            JsonNode terminationRule,
+            JsonNode locator,
+            boolean required,
+            boolean identity,
+            boolean trainingEligible,
+            String valueSource,
+            String valueType,
+            String unit
     ) {
     }
 

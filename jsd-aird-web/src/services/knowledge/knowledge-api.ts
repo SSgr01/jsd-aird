@@ -103,6 +103,13 @@ export const knowledgeApi = {
     const response = await httpClient.get<ApiResponse<KnowledgeVersion[]>>(`/api/v1/knowledge/documents/${id}/versions`);
     return response.data.data;
   },
+  async contentBlob(documentId: string, versionId?: string) {
+    const path = versionId
+      ? `/api/v1/knowledge/documents/${documentId}/versions/${versionId}/content`
+      : `/api/v1/knowledge/documents/${documentId}/content`;
+    const response = await httpClient.get<Blob>(path, { responseType: 'blob' });
+    return response.data;
+  },
   async uploadVersion(id: string, file: File) {
     const body = new FormData();
     body.append('file', file);

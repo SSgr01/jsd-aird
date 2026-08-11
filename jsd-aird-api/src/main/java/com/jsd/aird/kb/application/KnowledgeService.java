@@ -3,6 +3,7 @@ package com.jsd.aird.kb.application;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.ByteArrayOutputStream;
+import java.time.Duration;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
@@ -52,6 +53,8 @@ public class KnowledgeService implements KnowledgeSearchFacade {
     private final ObjectProvider<KnowledgeEmbeddingFacade> embeddings;
     private final List<MediaExtractionProvider> mediaProviders;
     private final String embeddingModel;
+    private final int embeddingDimension;
+    private final Duration presignExpiry;
 
     public KnowledgeService(
             KnowledgeRepository repository,
@@ -63,7 +66,9 @@ public class KnowledgeService implements KnowledgeSearchFacade {
             FileSafetyScanner scanner,
             ObjectProvider<KnowledgeEmbeddingFacade> embeddings,
             List<MediaExtractionProvider> mediaProviders,
-            @org.springframework.beans.factory.annotation.Value("${app.ai.embedding.model:}") String embeddingModel
+            @org.springframework.beans.factory.annotation.Value("${app.ai.embedding.model:}") String embeddingModel,
+            @org.springframework.beans.factory.annotation.Value("${app.ai.embedding.dimension:1024}") int embeddingDimension,
+            @org.springframework.beans.factory.annotation.Value("${app.storage.presign-expiry:15m}") Duration presignExpiry
     ) {
         this.repository = repository;
         this.storage = storage;
@@ -75,6 +80,8 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         this.embeddings = embeddings;
         this.mediaProviders = List.copyOf(mediaProviders);
         this.embeddingModel = embeddingModel;
+        this.embeddingDimension = embeddingDimension;
+        this.presignExpiry = presignExpiry;
     }
 
     @Transactional
@@ -287,6 +294,18 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         return storage.open(actor.organizationId(), version.fileObjectId());
     }
 
+    public FileStorageFacade.StoredFile openVersionContent(UUID documentId, UUID versionId) {
+        var actor = ActorContext.required();
+        repository.findDocument(actor.organizationId(), documentId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "知识文件不存在"));
+        var version = repository.findVersion(actor.organizationId(), versionId)
+                .filter(item -> documentId.equals(item.documentId()))
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "知识文件版本不存在"));
+        audit.append(actor.organizationId(), actor.userId(), "KB_DOCUMENT_DOWNLOAD", "KB_DOCUMENT", documentId,
+                objectMapper.createObjectNode().put("versionId", version.id().toString()));
+        return storage.open(actor.organizationId(), version.fileObjectId());
+    }
+
     public byte[] exportDocuments(List<UUID> documentIds) {
         var actor = ActorContext.required();
         if (documentIds == null || documentIds.isEmpty() || documentIds.size() > 200) {
@@ -373,7 +392,7 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         var vector = embeddings.getIfAvailable() == null ? java.util.Optional.<String>empty()
                 : embeddings.getIfAvailable().embedVector(request.query().trim());
         var vectorRows = vector.map(value -> repository.vectorSearch(organizationId, value, request.aiOnly(), request.scopeIds(),
-                        request.categoryIds(), safeLimit * 4))
+                        request.categoryIds(), safeLimit * 4, embeddingDimension))
                 .orElse(List.of());
         var scores = new LinkedHashMap<UUID, Double>();
         var retrievalScores = new LinkedHashMap<UUID, Double>();
@@ -423,6 +442,7 @@ public class KnowledgeService implements KnowledgeSearchFacade {
             repository.finishProcessingStep(organizationId, versionId, "SCAN", "SUCCEEDED", version.sha256(), null);
             var mediaProvider = mediaProviders.stream()
                     .filter(candidate -> candidate.supports(version.originalName(), version.contentType()))
+                    .sorted((left, right) -> Boolean.compare(right.isConfigured(), left.isConfigured()))
                     .findFirst().orElse(null);
             var parser = parsers.stream().filter(candidate -> candidate.supports(version.originalName(), version.contentType()))
                     .findFirst().orElse(null);
@@ -435,12 +455,15 @@ public class KnowledgeService implements KnowledgeSearchFacade {
                     mediaProvider == null ? parser.getClass().getSimpleName() : mediaProvider.getClass().getSimpleName(), null, version.sha256());
             if (mediaProvider != null) {
                 if (!mediaProvider.isConfigured()) {
-                    repository.finishProcessingStep(organizationId, versionId, "PARSE", "PENDING_PROVIDER", null, "OCR/ASR 服务尚未配置");
-                    repository.markFailed(documentId, versionId, "PENDING_PROVIDER", "OCR/ASR 服务尚未配置");
+                    repository.finishProcessingStep(organizationId, versionId, "PARSE", "PENDING_PROVIDER", null,
+                            mediaProvider.unavailableReason());
+                    repository.markFailed(documentId, versionId, "PENDING_PROVIDER", mediaProvider.unavailableReason());
                     return;
                 }
                 try (var stored = storage.open(organizationId, fileId)) {
-                    parsed = mediaProvider.extract(stored.stream(), version.originalName());
+                    var publicUrl = storage.presignedUrl(organizationId, fileId, presignExpiry).orElse(null);
+                    parsed = mediaProvider.extract(stored.stream(), version.originalName(),
+                            new MediaExtractionProvider.ExtractionContext(fileId, version.contentType(), version.size(), publicUrl));
                 }
             } else {
                 try (var stored = storage.open(organizationId, fileId)) {

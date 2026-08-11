@@ -2,7 +2,7 @@
   --app-primary: #2563eb;
   --app-primary-hover: #1d4ed8;
   --app-primary-soft: #eff6ff;
-  --app-accent: #0f766e;
+  --app-accent: #2563eb;
   --app-background: #f8fafc;
   --app-surface: #ffffff;
   --app-surface-subtle: #f1f5f9;
@@ -13,6 +13,11 @@
   --app-warning: #b45309;
   --app-success: #047857;
   --app-focus: #1e40af;
-  --app-radius: 6px;
-  --app-shadow: 0 1px 2px rgb(15 23 42 / 6%);
+  --app-font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", sans-serif;
+  --app-radius: 8px;
+  --app-radius-control: 8px;
+  --app-radius-card: 12px;
+  --app-radius-shell: 14px;
+  --app-shadow: 0 1px 2px rgb(15 23 42 / 4%);
+  --app-shadow-hover: 0 8px 24px rgb(15 23 42 / 6%);
 }

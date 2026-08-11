@@ -102,7 +102,8 @@ public class JdbcDataRepository implements DataRepository {
                        category_id,
                        parser_version, error_message, created_at, updated_at
                 FROM data.import_job
-                WHERE """ + where + " ORDER BY created_at DESC LIMIT ? OFFSET ?", this::mapJob, rows.toArray());
+                WHERE
+                """ + where + " ORDER BY created_at DESC LIMIT ? OFFSET ?", this::mapJob, rows.toArray());
         var totalValue = total == null ? 0L : total;
         return new PageResponse<>(items, page, size, totalValue, (totalValue + size - 1) / size);
     }
@@ -135,7 +136,7 @@ public class JdbcDataRepository implements DataRepository {
     @Override
     @Transactional
     public void saveParsed(UUID importJobId, String parserVersion, List<Sheet> sheets, List<Mapping> mappings,
-                           List<Row> rows, UUID asyncJobId) {
+                            List<Row> rows, UUID asyncJobId) {
         jdbc.update("DELETE FROM data.import_sheet WHERE import_job_id = ?", importJobId);
         jdbc.update("DELETE FROM data.import_mapping WHERE import_job_id = ?", importJobId);
         jdbc.update("DELETE FROM data.staging_row WHERE import_job_id = ?", importJobId);
@@ -168,12 +169,12 @@ public class JdbcDataRepository implements DataRepository {
             jdbc.update("""
                     INSERT INTO data.staging_row (
                         id, import_job_id, import_sheet_id, source_row_number, raw_values_jsonb,
-                        normalized_values_jsonb, corrected_values_jsonb, row_hash, status
+                        normalized_values_jsonb, corrected_values_jsonb, source_metadata_jsonb, row_hash, status
                     ) VALUES (?, ?, (SELECT id FROM data.import_sheet WHERE import_job_id = ? AND sheet_id = ?),
-                              ?, ?, ?, ?, ?, ?)
+                              ?, ?, ?, ?, ?, ?, ?)
                     """, row.id() == null ? UUID.randomUUID() : row.id(), importJobId, importJobId, row.sheetId(),
                     row.rowNumber(), pgJson(row.rawValues()), pgJson(row.normalizedValues()), pgJson(row.correctedValues()),
-                    hash(row.rawValues()), row.status());
+                    pgJson(row.sourceMetadata()), hash(row.rawValues()), row.status());
         }
         jdbc.update("""
                 UPDATE data.import_job SET parser_version = ?, status = 'WAITING_MAPPING', progress = 35,
@@ -182,6 +183,59 @@ public class JdbcDataRepository implements DataRepository {
                 """, parserVersion, importJobId);
         // The worker completes the ops job after the handler returns. Keeping this method
         // independent of the ops job row also preserves the module boundary.
+    }
+
+    @Override
+    @Transactional
+    public void clearParsed(UUID organizationId, UUID importJobId) {
+        jdbc.update("""
+                DELETE FROM data.import_issue
+                WHERE import_job_id = ? AND EXISTS (
+                    SELECT 1 FROM data.import_job WHERE id = ? AND organization_id = ?
+                )
+                """, importJobId, importJobId, organizationId);
+        jdbc.update("""
+                DELETE FROM data.import_mapping
+                WHERE import_job_id = ? AND EXISTS (
+                    SELECT 1 FROM data.import_job WHERE id = ? AND organization_id = ?
+                )
+                """, importJobId, importJobId, organizationId);
+        jdbc.update("""
+                DELETE FROM data.staging_row
+                WHERE import_job_id = ? AND EXISTS (
+                    SELECT 1 FROM data.import_job WHERE id = ? AND organization_id = ?
+                )
+                """, importJobId, importJobId, organizationId);
+        jdbc.update("""
+                DELETE FROM data.import_sheet
+                WHERE import_job_id = ? AND EXISTS (
+                    SELECT 1 FROM data.import_job WHERE id = ? AND organization_id = ?
+                )
+                """, importJobId, importJobId, organizationId);
+    }
+
+    @Override
+    public Optional<JsonNode> findMappingProfile(UUID organizationId, UUID templateVersionId, String sourceFingerprint) {
+        return jdbc.query("""
+                SELECT mapping_jsonb FROM data.import_mapping_profile
+                WHERE organization_id = ? AND template_version_id = ? AND source_fingerprint = ?
+                """, (rs, rowNum) -> parse(rs.getString("mapping_jsonb")),
+                organizationId, templateVersionId, sourceFingerprint).stream().findFirst();
+    }
+
+    @Override
+    public void saveMappingProfile(UUID organizationId, UUID templateVersionId, String sourceFingerprint,
+                                   JsonNode mappings, UUID actorId) {
+        jdbc.update("""
+                INSERT INTO data.import_mapping_profile (
+                    id, organization_id, template_version_id, source_fingerprint, mapping_jsonb,
+                    approved_by, approved_at
+                ) VALUES (?, ?, ?, ?, ?, ?, now())
+                ON CONFLICT (organization_id, template_version_id, source_fingerprint)
+                DO UPDATE SET mapping_jsonb = EXCLUDED.mapping_jsonb, approved_by = EXCLUDED.approved_by,
+                              approved_at = now(), updated_at = now()
+                """, UUID.randomUUID(), organizationId, templateVersionId, sourceFingerprint,
+                pgJson(mappings), actorId);
     }
 
     @Override
@@ -211,8 +265,8 @@ public class JdbcDataRepository implements DataRepository {
                     DELETE FROM data.staging_row
                     WHERE import_job_id = ?
                       AND import_sheet_id = (SELECT id FROM data.import_sheet WHERE import_job_id = ? AND sheet_id = ?)
-                      AND (? IS NULL OR source_row_number < ?)
-                      AND (? IS NULL OR source_row_number > ?)
+                      AND (CAST(? AS integer) IS NULL OR source_row_number < ?)
+                      AND (CAST(? AS integer) IS NULL OR source_row_number > ?)
                     """, update.importJobId(), update.importJobId(), update.sheetId(), update.dataStartRow(),
                     update.dataStartRow(), update.dataEndRow(), update.dataEndRow());
         }
@@ -272,7 +326,7 @@ public class JdbcDataRepository implements DataRepository {
     public List<Row> listRows(UUID organizationId, UUID importJobId) {
         return jdbc.query("""
                 SELECT r.id, s.sheet_id, r.source_row_number, r.raw_values_jsonb, r.normalized_values_jsonb,
-                       r.corrected_values_jsonb, r.status
+                       r.corrected_values_jsonb, r.status, r.source_metadata_jsonb
                 FROM data.staging_row r JOIN data.import_sheet s ON s.id = r.import_sheet_id
                 JOIN data.import_job j ON j.id = r.import_job_id
                 WHERE j.organization_id = ? AND j.id = ? AND s.selected = true
@@ -280,7 +334,7 @@ public class JdbcDataRepository implements DataRepository {
                 """, (rs, n) -> new Row(rs.getObject("id", UUID.class), rs.getString("sheet_id"),
                         rs.getInt("source_row_number"), parse(rs.getString("raw_values_jsonb")),
                         parse(rs.getString("normalized_values_jsonb")), parse(rs.getString("corrected_values_jsonb")),
-                        rs.getString("status")), organizationId, importJobId);
+                        rs.getString("status"), parse(rs.getString("source_metadata_jsonb"))), organizationId, importJobId);
     }
 
     @Override
@@ -289,9 +343,11 @@ public class JdbcDataRepository implements DataRepository {
         jdbc.update("DELETE FROM data.import_issue WHERE import_job_id = ?", importJobId);
         for (Row row : rows) {
             jdbc.update("""
-                    UPDATE data.staging_row SET normalized_values_jsonb = ?, corrected_values_jsonb = ?, status = ?, updated_at = now()
+                    UPDATE data.staging_row SET normalized_values_jsonb = ?, corrected_values_jsonb = ?,
+                        source_metadata_jsonb = ?, status = ?, updated_at = now()
                     WHERE id = ? AND import_job_id = ?
-                    """, pgJson(row.normalizedValues()), pgJson(row.correctedValues()), row.status(), row.id(), importJobId);
+                    """, pgJson(row.normalizedValues()), pgJson(row.correctedValues()), pgJson(row.sourceMetadata()),
+                    row.status(), row.id(), importJobId);
         }
         for (Issue issue : issues) {
             jdbc.update("""
@@ -406,7 +462,8 @@ public class JdbcDataRepository implements DataRepository {
                 SELECT a.id, a.target_data_type, a.asset_key, a.display_name, a.current_revision_id, a.status,
                        a.updated_at, a.category_id, c.name AS category_name
                 FROM data.data_asset a LEFT JOIN data.data_category c ON c.id = a.category_id
-                WHERE """ + where + " ORDER BY a.updated_at DESC LIMIT ? OFFSET ?", (rs, n) -> new Asset(
+                WHERE
+                """ + where + " ORDER BY a.updated_at DESC LIMIT ? OFFSET ?", (rs, n) -> new Asset(
                 rs.getObject("id", UUID.class), rs.getString("target_data_type"), rs.getString("asset_key"),
                 rs.getString("display_name"), rs.getObject("current_revision_id", UUID.class), rs.getString("status"),
                 rs.getTimestamp("updated_at").toInstant(), rs.getObject("category_id", UUID.class), rs.getString("category_name")), rows.toArray());

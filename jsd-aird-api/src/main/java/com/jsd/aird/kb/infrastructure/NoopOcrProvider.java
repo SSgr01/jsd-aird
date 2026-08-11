@@ -4,9 +4,12 @@ import java.io.InputStream;
 
 import com.jsd.aird.kb.domain.DocumentParser;
 import com.jsd.aird.kb.domain.MediaExtractionProvider;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
 @Component
+@Order(Ordered.LOWEST_PRECEDENCE)
 public class NoopOcrProvider implements MediaExtractionProvider {
 
     @Override

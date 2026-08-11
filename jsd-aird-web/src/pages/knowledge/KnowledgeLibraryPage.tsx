@@ -1,10 +1,11 @@
-import { EyeOutlined, FileTextOutlined, SafetyCertificateOutlined, UploadOutlined } from '@ant-design/icons';
+import { DownloadOutlined, EyeOutlined, FileTextOutlined, SafetyCertificateOutlined, UploadOutlined } from '@ant-design/icons';
 import { App, Button, Form, Select, Space } from 'antd';
 import type { UploadFile } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { UploadWorkspace, type UploadWorkspaceRecord } from '@/components/upload-workspace';
+import { FilePreviewModal, downloadPreviewFile, type FilePreviewDescriptor } from '@/components/file-preview';
 import { knowledgeApi, type KnowledgeCategory, type KnowledgeDocument } from '@/services/knowledge';
 
 const statusLabels: Record<string, [string, string]> = {
@@ -31,6 +32,7 @@ export function KnowledgeLibraryPage() {
   const [page, setPage] = useState({ current: 1, pageSize: 8, total: 0 });
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [previewFile, setPreviewFile] = useState<FilePreviewDescriptor>();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -86,6 +88,18 @@ export function KnowledgeLibraryPage() {
     });
   };
 
+  const fileDescriptor = (item: KnowledgeDocument): FilePreviewDescriptor => ({
+    fileName: item.originalName,
+    contentType: item.contentType,
+    size: item.size,
+    load: () => knowledgeApi.contentBlob(item.id, item.currentVersionId),
+  });
+
+  const downloadDocument = async (item: KnowledgeDocument) => {
+    try { await downloadPreviewFile(fileDescriptor(item)); void message.success('原文件下载已开始'); }
+    catch (error) { void message.error(error instanceof Error ? error.message : '原文件下载失败'); }
+  };
+
   const records = useMemo<UploadWorkspaceRecord[]>(() => items.map((item) => {
     const statusLabel = statusLabels[item.status] || [item.status, 'default'];
     const aiLabel = aiLabels[item.aiStatus] || [item.aiStatus, 'default'];
@@ -97,14 +111,17 @@ export function KnowledgeLibraryPage() {
       detail: `更新于 ${new Date(item.updatedAt).toLocaleString('zh-CN')} · AI ${aiLabel[0]}`,
       status: { label: statusLabel[0], color: statusLabel[1] },
       actions: <Space size={4} wrap>
-        <Button type="link" icon={<EyeOutlined />} onClick={() => navigate(`/knowledge/documents/${item.id}`)}>查看</Button>
+        <Button type="link" icon={<EyeOutlined />} onClick={() => setPreviewFile(fileDescriptor(item))}>预览</Button>
+        <Button type="link" icon={<DownloadOutlined />} onClick={() => void downloadDocument(item)}>下载</Button>
+        <Button type="link" onClick={() => navigate(`/knowledge/documents/${item.id}`)}>详情</Button>
         {item.aiStatus === 'APPROVED' ? <Button type="link" danger onClick={() => grant(item, 'REVOKE')}>撤销 AI</Button> : <Button type="link" icon={<SafetyCertificateOutlined />} disabled={item.status !== 'READY'} onClick={() => grant(item, 'APPROVE')}>授权 AI</Button>}
       </Space>,
     };
-  }), [items, navigate]);
+  }), [items, navigate, message]);
 
   return (
-    <UploadWorkspace
+    <>
+      <UploadWorkspace
       breadcrumbs={[{ title: '研发知识库' }, { title: '资料上传' }]}
       title="资料上传"
       description="支持 PDF、Office、CSV、TXT；图片和音频等待 OCR/ASR 适配器配置。"
@@ -148,6 +165,8 @@ export function KnowledgeLibraryPage() {
       recordsLoading={loading}
       pagination={page}
       onPageChange={(current, pageSize) => setPage((value) => ({ ...value, current, pageSize }))}
-    />
+      />
+      <FilePreviewModal open={Boolean(previewFile)} file={previewFile} onClose={() => setPreviewFile(undefined)} />
+    </>
   );
 }

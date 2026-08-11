@@ -6,6 +6,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.jsd.aird.shared.api.PageResponse;
 
 public interface DataRepository {
@@ -25,6 +26,13 @@ public interface DataRepository {
 
     void saveParsed(UUID importJobId, String parserVersion, List<Sheet> sheets, List<Mapping> mappings,
                     List<Row> rows, UUID asyncJobId);
+
+    void clearParsed(UUID organizationId, UUID importJobId);
+
+    Optional<JsonNode> findMappingProfile(UUID organizationId, UUID templateVersionId, String sourceFingerprint);
+
+    void saveMappingProfile(UUID organizationId, UUID templateVersionId, String sourceFingerprint,
+                            JsonNode mappings, UUID actorId);
 
     void updateJobStatus(UUID organizationId, UUID importJobId, String status, int progress, String stage, String error);
 
@@ -91,7 +99,13 @@ public interface DataRepository {
                    JsonNode detail, String status) {}
 
     record Row(UUID id, String sheetId, int rowNumber, JsonNode rawValues, JsonNode normalizedValues,
-               JsonNode correctedValues, String status) {}
+               JsonNode correctedValues, String status, JsonNode sourceMetadata) {
+        public Row(UUID id, String sheetId, int rowNumber, JsonNode rawValues, JsonNode normalizedValues,
+                   JsonNode correctedValues, String status) {
+            this(id, sheetId, rowNumber, rawValues, normalizedValues, correctedValues, status,
+                    JsonNodeFactory.instance.objectNode());
+        }
+    }
 
     record Issue(UUID id, String sheetId, String fieldCode, String severity, String issueType,
                  Integer rowNumber, String column, String address, String message, JsonNode detail, String status) {}

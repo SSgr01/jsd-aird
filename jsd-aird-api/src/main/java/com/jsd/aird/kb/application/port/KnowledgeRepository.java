@@ -79,6 +79,11 @@ public interface KnowledgeRepository {
         return vectorSearch(organizationId, vector, aiOnly, limit);
     }
 
+    default List<SearchRow> vectorSearch(UUID organizationId, String vector, boolean aiOnly, List<UUID> scopeIds,
+                                         List<UUID> categoryIds, int limit, int dimension) {
+        return vectorSearch(organizationId, vector, aiOnly, scopeIds, categoryIds, limit);
+    }
+
     record CategoryRow(UUID id, String scope, String name, int sortOrder, long documentCount) {
     }
 

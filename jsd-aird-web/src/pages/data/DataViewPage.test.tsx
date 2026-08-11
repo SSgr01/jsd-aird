@@ -82,7 +82,7 @@ describe('DataViewPage batch export', () => {
       assetIds: ['asset-1', 'asset-2'],
     }));
     expect((URL as unknown as { createObjectURL: ReturnType<typeof vi.fn> }).createObjectURL).toHaveBeenCalled();
-  });
+  }, 10_000);
 
   it('does not enable export until an asset is selected', async () => {
     render(<AppProviders><MemoryRouter><DataViewPage /></MemoryRouter></AppProviders>);

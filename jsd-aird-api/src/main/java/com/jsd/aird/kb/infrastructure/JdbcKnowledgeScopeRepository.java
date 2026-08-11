@@ -37,8 +37,8 @@ public class JdbcKnowledgeScopeRepository implements KnowledgeScopeRepository {
                 SELECT id, organization_id, scope_type, external_id, name, status, metadata_jsonb
                 FROM ai.ai_scope
                 WHERE organization_id = ?
-                  AND (? IS NULL OR scope_type = ?)
-                  AND (? IS NULL OR name ILIKE '%' || ? || '%' OR external_id ILIKE '%' || ? || '%')
+                  AND (CAST(? AS text) IS NULL OR scope_type = ?)
+                  AND (CAST(? AS text) IS NULL OR name ILIKE '%' || ? || '%' OR external_id ILIKE '%' || ? || '%')
                 ORDER BY scope_type, name
                 """, (rs, rowNum) -> new ScopeRow(rs.getObject("id", UUID.class),
                 rs.getObject("organization_id", UUID.class), rs.getString("scope_type"), rs.getString("external_id"),

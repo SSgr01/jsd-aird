@@ -53,11 +53,11 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
         var normalizedAiStatus = blankToNull(aiStatus);
         var sql = documentQuery("""
                 WHERE d.organization_id = ?
-                  AND (? IS NULL OR d.title ILIKE '%' || ? || '%' OR v.original_name ILIKE '%' || ? || '%')
-                  AND (? IS NULL OR d.status = ?)
-                  AND (? IS NULL OR d.ai_status = ?)
-                  AND (? IS NULL OR d.library_scope = ?)
-                  AND (? IS NULL OR d.category_id = ?)
+                  AND (CAST(? AS text) IS NULL OR d.title ILIKE '%' || ? || '%' OR v.original_name ILIKE '%' || ? || '%')
+                  AND (CAST(? AS text) IS NULL OR d.status = ?)
+                  AND (CAST(? AS text) IS NULL OR d.ai_status = ?)
+                  AND (CAST(? AS text) IS NULL OR d.library_scope = ?)
+                  AND (CAST(? AS uuid) IS NULL OR d.category_id = ?)
                 ORDER BY d.updated_at DESC
                 LIMIT ? OFFSET ?
                 """);
@@ -77,11 +77,11 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                 SELECT count(*) FROM kb.document d
                 JOIN kb.document_version v ON v.document_id = d.id AND v.version_no = d.current_version_no
                 WHERE d.organization_id = ?
-                  AND (? IS NULL OR d.title ILIKE '%' || ? || '%' OR v.original_name ILIKE '%' || ? || '%')
-                  AND (? IS NULL OR d.status = ?)
-                  AND (? IS NULL OR d.ai_status = ?)
-                  AND (? IS NULL OR d.library_scope = ?)
-                  AND (? IS NULL OR d.category_id = ?)
+                  AND (CAST(? AS text) IS NULL OR d.title ILIKE '%' || ? || '%' OR v.original_name ILIKE '%' || ? || '%')
+                  AND (CAST(? AS text) IS NULL OR d.status = ?)
+                  AND (CAST(? AS text) IS NULL OR d.ai_status = ?)
+                  AND (CAST(? AS text) IS NULL OR d.library_scope = ?)
+                  AND (CAST(? AS uuid) IS NULL OR d.category_id = ?)
                 """, Long.class, organizationId, normalizedKeyword, normalizedKeyword, normalizedKeyword,
                 normalizedStatus, normalizedStatus, normalizedAiStatus, normalizedAiStatus,
                 blankToNull(scope), blankToNull(scope), categoryId, categoryId);
@@ -95,7 +95,7 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                 FROM kb.document_category c
                 LEFT JOIN kb.document d ON d.category_id = c.id
                     AND d.organization_id = c.organization_id
-                WHERE c.organization_id = ? AND (? IS NULL OR c.scope = ?)
+                WHERE c.organization_id = ? AND (CAST(? AS text) IS NULL OR c.scope = ?)
                 GROUP BY c.id, c.scope, c.name, c.sort_order, c.created_at
                 ORDER BY c.sort_order, c.created_at
                 """, (rs, n) -> new CategoryRow(rs.getObject("id", UUID.class), rs.getString("scope"),
@@ -420,13 +420,20 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
 
     @Override
     public List<SearchRow> vectorSearch(UUID organizationId, String vector, boolean aiOnly, int limit) {
-        return vectorSearch(organizationId, vector, aiOnly, List.of(), List.of(), limit);
+        return vectorSearch(organizationId, vector, aiOnly, List.of(), List.of(), limit, 0);
     }
 
     @Override
     public List<SearchRow> vectorSearch(UUID organizationId, String vector, boolean aiOnly, List<UUID> scopeIds,
                                         List<UUID> categoryIds, int limit) {
+        return vectorSearch(organizationId, vector, aiOnly, scopeIds, categoryIds, limit, 0);
+    }
+
+    @Override
+    public List<SearchRow> vectorSearch(UUID organizationId, String vector, boolean aiOnly, List<UUID> scopeIds,
+                                        List<UUID> categoryIds, int limit, int dimension) {
         var aiClause = aiOnly ? "AND d.ai_status = 'APPROVED'" : "";
+        var dimensionClause = dimension > 0 ? " AND vector_dims(c.embedding) = ?\n" : "";
         var sql = """
                 SELECT c.id, c.document_id, c.document_version_id, d.title, v.original_name,
                        c.page_no, c.section, c.content,
@@ -437,11 +444,13 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                 WHERE d.organization_id = ? AND v.version_no = d.current_version_no
                   AND d.status = 'READY' AND v.status = 'READY'
                 """ + aiClause + categoryClause(categoryIds) + " AND c.embedding IS NOT NULL\n"
+                + dimensionClause
                 + scopeClause(scopeIds, "d.id", "c.document_version_id")
                 + "ORDER BY c.embedding <=> CAST(? AS vector) LIMIT ?";
         var args = new java.util.ArrayList<Object>();
         args.add(vector); args.add(organizationId);
         if (categoryIds != null) args.addAll(categoryIds);
+        if (dimension > 0) args.add(dimension);
         if (scopeIds != null) args.addAll(scopeIds);
         args.add(vector); args.add(limit);
         return jdbc.query(sql, this::mapSearch, args.toArray());

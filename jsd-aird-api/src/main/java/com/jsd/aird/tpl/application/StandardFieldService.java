@@ -117,22 +117,40 @@ public class StandardFieldService {
         for (var node : modelObject.withArray("fields")) {
             if (!(node instanceof com.fasterxml.jackson.databind.node.ObjectNode field)
                     || field.path("candidate").asBoolean(false)
-                    || field.path("standardRequired").asBoolean(false)
-                    || "STANDARD".equals(field.path("fieldOrigin").asText(""))) {
+                    || field.path("standardRequired").asBoolean(false)) {
                 continue;
             }
             var origin = field.path("fieldOrigin").asText("");
+            if ("STANDARD".equals(origin)) {
+                var id = parseUuid(field.path("standardFieldId").asText(""));
+                var code = field.path("fieldCode").asText("");
+                var version = field.path("standardFieldVersion").asInt(0);
+                // A deleted/deactivated dictionary entry should not turn an
+                // ordinary template field into a customer-facing save blocker.
+                // Keep explicit standardRequired fields strict; everything
+                // else safely falls back to a template-local field.
+                if (id == null || code.isBlank() || version < 1
+                        || repository.findActive(code, version, id).isEmpty()) {
+                    downgradeToTemplateLocal(field);
+                }
+                continue;
+            }
             var unmatched = "PENDING_STANDARD".equals(origin)
                     || field.path("requiresStandardConfirmation").asBoolean(false)
                     || "UNMATCHED".equals(field.path("standardMatchStatus").asText(""));
             if (!unmatched) continue;
-            field.put("fieldOrigin", "TEMPLATE_LOCAL")
-                    .put("standardSelectionStatus", "CUSTOM")
-                    .put("standardMatchStatus", "UNMATCHED")
-                    .put("requiresStandardConfirmation", false)
-                    .put("reviewRequired", true);
+            downgradeToTemplateLocal(field);
         }
         return normalized;
+    }
+
+    private void downgradeToTemplateLocal(com.fasterxml.jackson.databind.node.ObjectNode field) {
+        field.put("fieldOrigin", "TEMPLATE_LOCAL")
+                .put("standardSelectionStatus", "CUSTOM")
+                .put("standardMatchStatus", "UNMATCHED")
+                .put("requiresStandardConfirmation", false)
+                .put("reviewRequired", true);
+        field.remove(List.of("standardFieldId", "standardFieldVersion", "standardFieldName"));
     }
 
     private void requireAdmin(UUID organizationId, UUID userId) {

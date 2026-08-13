@@ -14,6 +14,8 @@ public interface WorkRepository {
 
     void failJob(AsyncJob job, Exception exception);
 
+    void failJobTerminal(AsyncJob job, Exception exception);
+
     Optional<OutboxEvent> claimOutbox(String workerId, Duration leaseDuration);
 
     void completeOutbox(UUID eventId);

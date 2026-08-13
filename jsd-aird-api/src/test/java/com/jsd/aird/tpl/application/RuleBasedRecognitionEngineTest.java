@@ -36,6 +36,52 @@ class RuleBasedRecognitionEngineTest {
     }
 
     @Test
+    void turnsAHeaderOnlyLongTableIntoARepeatRegionWithoutUsingAnAiModel() throws Exception {
+        var structure = objectMapper.readTree("""
+                {
+                  "structureVersion":6,
+                  "sheets":[{"id":"sheet-1","name":"原料","lastRow":1,"semanticCells":[
+                    {"sheetId":"sheet-1","sheetName":"原料","address":"A1","row":1,"column":1,"value":"产品名称","factType":"VALUE"},
+                    {"sheetId":"sheet-1","sheetName":"原料","address":"B1","row":1,"column":2,"value":"批号","factType":"VALUE"},
+                    {"sheetId":"sheet-1","sheetName":"原料","address":"C1","row":1,"column":3,"value":"固含率","factType":"VALUE"}
+                  ],"mergedRanges":[],"formulaCount":0}]
+                }
+                """);
+
+        var result = engine.recognize(TemplateFormat.XLSX, "原料数据模板.xlsx", structure);
+
+        assertThat(engine.isSimpleLongTableWorkbook(structure)).isTrue();
+        assertThat(result.suggestions()).hasSize(4);
+        var roots = result.suggestions().stream()
+                .filter(suggestion -> "TABLE_REGION".equals(suggestion.suggestionType()))
+                .toList();
+        assertThat(roots).hasSize(1);
+        var root = roots.getFirst();
+        assertThat(root).satisfies(suggestion -> {
+            assertThat(suggestion.suggestionType()).isEqualTo("TABLE_REGION");
+            assertThat(suggestion.payload().path("autoAccept").asBoolean()).isTrue();
+            assertThat(suggestion.payload().path("canonicalStatus").asText()).isEqualTo("CONFIRMED");
+            assertThat(suggestion.payload().path("repeatAxis").asText()).isEqualTo("ROW");
+            assertThat(suggestion.payload().path("locator").path("headerRange").asText()).isEqualTo("A1:C1");
+            assertThat(suggestion.payload().path("locator").path("dataRange").asText()).isEqualTo("A2:C200");
+            assertThat(suggestion.payload().path("locator").path("logicalInputRange").asText())
+                    .isEqualTo("A1:C200");
+            assertThat(suggestion.payload().path("columns").get(0).path("valueRange").asText())
+                    .isEqualTo("A2:A200");
+            assertThat(suggestion.payload().path("columns").get(1).path("valueRange").asText())
+                    .isEqualTo("B2:B200");
+        });
+        assertThat(result.suggestions()).filteredOn(suggestion ->
+                        "TABLE_CHILD_FIELD".equals(suggestion.suggestionType()))
+                .allSatisfy(suggestion -> {
+                    assertThat(suggestion.payload().path("suggestionLevel").asText()).isEqualTo("CHILD");
+                    assertThat(suggestion.payload().path("reviewRequired").asBoolean()).isTrue();
+                    assertThat(suggestion.payload().path("locator").path("valueMode").asText())
+                            .isEqualTo("ARRAY_COLUMN");
+                });
+    }
+
+    @Test
     void createsOnlyALowConfidenceCandidateForAnExplicitColonLabelAndAdjacentValue() throws Exception {
         var structure = objectMapper.readTree("""
                 {
@@ -56,6 +102,38 @@ class RuleBasedRecognitionEngineTest {
             assertThat(suggestion.payload().path("fieldName").asText()).isEqualTo("产品名称");
             assertThat(suggestion.payload().path("locator").path("address").asText()).isEqualTo("B2");
         });
+    }
+
+    @Test
+    void doesNotBindAnExplicitLabelToTheNextNonWritableLabelRow() throws Exception {
+        var structure = objectMapper.readTree("""
+                {"structureVersion":6,"sheets":[{"id":"sheet-1","semanticCells":[
+                  {"sheetId":"sheet-1","address":"A2","row":2,"column":1,"value":"实验目的：","factType":"VALUE","mergedRange":"A2:N2"},
+                  {"sheetId":"sheet-1","address":"A3","row":3,"column":1,"value":"实验人员","factType":"VALUE","mergedRange":"A3:C3"}
+                ]}]}
+                """);
+
+        var result = engine.recognize(TemplateFormat.XLSX, "综合测试报告.xlsx", structure);
+
+        assertThat(result.suggestions()).singleElement().satisfies(suggestion -> {
+            assertThat(suggestion.payload().path("fieldName").asText()).isEqualTo("实验目的");
+            assertThat(suggestion.payload().path("locator").path("logicalInputRange").asText())
+                    .isEqualTo("A2:N2");
+        });
+    }
+
+    @Test
+    void doesNotTurnAPrintedInlineFormNumberIntoAnEditableField() throws Exception {
+        var structure = objectMapper.readTree("""
+                {"structureVersion":6,"sheets":[{"id":"sheet-1","semanticCells":[
+                  {"sheetId":"sheet-1","address":"H3","row":3,"column":8,
+                   "value":"表单编号:JSD-QF-SC-001","factType":"VALUE","mergedRange":"H3:J3"}
+                ]}]}
+                """);
+
+        var result = engine.recognize(TemplateFormat.XLSX, "生产任务单.xlsx", structure);
+
+        assertThat(result.suggestions()).isEmpty();
     }
 
     @Test

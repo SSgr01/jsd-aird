@@ -37,39 +37,66 @@ public class JdbcDataAssetIndexRepository implements DataAssetIndexRepository {
     @Override
     public List<DataAssetSearchFacade.DataHit> search(UUID organizationId, String query, List<UUID> scopeIds,
                                                       List<UUID> categoryIds, int limit) {
+        var provider = embeddings.getIfAvailable();
+        var vector = provider == null ? null : provider.embedVector(query).orElse(null);
+        return searchHybrid(organizationId, query, vector, vectorDimension(vector), scopeIds, categoryIds, limit);
+    }
+
+    @Override
+    public List<DataAssetSearchFacade.DataHit> searchHybrid(UUID organizationId, String query, String queryVector,
+                                                            int vectorDimension, List<UUID> scopeIds,
+                                                            List<UUID> categoryIds, int limit) {
         var scopeClause = scopeClause(scopeIds);
         var categoryClause = categoryClause(categoryIds);
+        var vectorEnabled = queryVector != null && !queryVector.isBlank() && vectorDimension > 0;
+        var vectorScore = vectorEnabled
+                ? "CASE WHEN i.embedding IS NOT NULL AND vector_dims(i.embedding) = ? "
+                + "THEN GREATEST(0, 1 - (i.embedding <=> CAST(? AS vector))) ELSE 0 END"
+                : "0";
         var sql = """
                 SELECT i.id, i.scope_id, i.asset_id, i.revision_id, i.row_number, i.field_code,
                        a.display_name, i.content,
-                       GREATEST(ts_rank_cd(i.search_vector, plainto_tsquery('simple', ?)), 0.2) AS score,
+                       (0.58 * GREATEST(ts_rank_cd(i.search_vector, plainto_tsquery('simple', ?)), 0)
+                        + 0.12 * CASE WHEN i.content ILIKE '%%' || ? || '%%' THEN 1 ELSE 0 END
+                       + 0.30 * (%s)) AS score,
                        'data-asset/' || i.asset_id || '/revision/' || i.revision_id
-                           || coalesce('/row/' || i.row_number, '') || coalesce('/field/' || i.field_code, '') AS source_locator
+                           || coalesce('/record/' || nullif(i.source_jsonb->>'recordId', ''), '')
+                           || coalesce('/field/' || i.field_code, '')
+                           || coalesce('/sheet/' || nullif(i.source_jsonb->>'sheetName', ''), '')
+                           || coalesce('/cell/' || nullif(i.source_jsonb->>'cellAddress', ''), '') AS source_locator
                 FROM ai.data_asset_index_entry i
                 JOIN data.data_asset a ON a.id = i.asset_id
                 JOIN data.data_asset_revision r ON r.id = i.revision_id
                 WHERE i.organization_id = ?
-                  """ + categoryClause + """
+                  %s
                   AND a.status = 'ACTIVE'
                   AND r.publication_status = 'PUBLISHED'
                   AND (
                       i.search_vector @@ plainto_tsquery('simple', ?)
-                      OR i.content ILIKE '%' || ? || '%'
+                      OR i.content ILIKE '%%' || ? || '%%'
                       OR EXISTS (
                           SELECT 1
                           FROM regexp_split_to_table(?, '\\s+') AS token
                           WHERE length(token) >= 2
-                            AND i.content ILIKE '%' || token || '%'
+                            AND i.content ILIKE '%%' || token || '%%'
                       )
+                      OR (%s)
                   )
-                """ + scopeClause + " ORDER BY score DESC, i.created_at DESC LIMIT ?";
+                  %s
+                ORDER BY score DESC, i.created_at DESC LIMIT ?
+                """.formatted(vectorScore, categoryClause,
+                vectorEnabled ? "i.embedding IS NOT NULL AND vector_dims(i.embedding) = ?" : "false",
+                scopeClause);
         var args = new ArrayList<Object>();
         args.add(query);
+        args.add(query);
+        if (vectorEnabled) { args.add(vectorDimension); args.add(queryVector); }
         args.add(organizationId);
         if (categoryIds != null) args.addAll(categoryIds);
         args.add(query);
         args.add(query);
         args.add(query);
+        if (vectorEnabled) args.add(vectorDimension);
         if (scopeIds != null) args.addAll(scopeIds);
         args.add(limit);
         return jdbc.query(sql, (rs, rowNum) -> new DataAssetSearchFacade.DataHit(
@@ -114,18 +141,38 @@ public class JdbcDataAssetIndexRepository implements DataAssetIndexRepository {
                         id, organization_id, scope_id, asset_id, revision_id, row_number, field_code,
                         content, source_jsonb, token_length
                     )
-                    SELECT gen_random_uuid(), a.organization_id, ?, a.id, r.id, dr.source_row_number,
+                    SELECT gen_random_uuid(), a.organization_id, ?, a.id, r.id,
+                           coalesce(sa.row_number, dr.source_row_number),
                            v.field_code || coalesce(':' || v.data_path, ''),
-                           coalesce(v.value_text, v.value_jsonb::text),
-                           jsonb_build_object('dataPath', v.data_path, 'value', v.value_jsonb,
-                                              'sourceAnchorId', v.source_anchor_id),
-                           length(coalesce(v.value_text, v.value_jsonb::text))
+                           concat_ws(E'\n', '资产：' || coalesce(a.display_name, a.asset_key),
+                               '记录：' || dr.record_key,
+                               '字段：' || coalesce(v.label_path, v.data_path, v.field_code),
+                               CASE WHEN dr.effective_data_jsonb->'dimensions' IS NOT NULL
+                                    THEN '维度：' || (dr.effective_data_jsonb->'dimensions')::text END,
+                               CASE WHEN sa.cell_address IS NOT NULL
+                                    THEN '来源：' || coalesce(sa.sheet_name, sa.sheet_id, '') || '!' || sa.cell_address END,
+                               '值：' || coalesce(v.value_text, v.value_jsonb::text)
+                                   || coalesce(' ' || v.normalized_unit, '')),
+                           jsonb_strip_nulls(jsonb_build_object(
+                               'templateVersionId', r.template_version_id,
+                               'recordId', dr.id, 'recordKey', dr.record_key,
+                               'labelPath', v.label_path, 'dataPath', v.data_path, 'value', v.value_jsonb,
+                               'bindingId', v.binding_id, 'valuePath', v.value_path,
+                               'valueSource', v.value_source, 'calculationStatus', v.calculation_status,
+                               'sourceAnchorId', v.source_anchor_id, 'sourceFileId', sa.file_id,
+                               'sheetId', sa.sheet_id, 'sheetName', sa.sheet_name,
+                               'rowNumber', sa.row_number, 'columnName', sa.column_name,
+                               'cellAddress', sa.cell_address)),
+                           length(concat_ws(' ', a.display_name, v.data_path, v.value_text, v.normalized_unit))
                     FROM data.data_value v
                     JOIN data.data_record dr ON dr.id = v.record_id
                     JOIN data.data_asset_revision r ON r.id = dr.revision_id
                     JOIN data.data_asset a ON a.id = r.asset_id
+                    LEFT JOIN data.source_anchor sa ON sa.id = v.source_anchor_id
                     WHERE a.organization_id = ? AND a.id = ? AND a.status = 'ACTIVE'
                       AND r.id = a.current_revision_id AND r.publication_status = 'PUBLISHED'
+                      AND v.rag_eligible
+                      AND (v.value_source <> 'FORMULA' OR v.calculation_status = 'VALID')
                     ON CONFLICT (revision_id, row_number, field_code) DO UPDATE
                     SET content = EXCLUDED.content, source_jsonb = EXCLUDED.source_jsonb,
                         token_length = EXCLUDED.token_length, created_at = now()
@@ -197,6 +244,14 @@ public class JdbcDataAssetIndexRepository implements DataAssetIndexRepository {
     }
 
     private record AssetRow(UUID id, String name, UUID revisionId) {
+    }
+
+    private int vectorDimension(String vector) {
+        if (vector == null || vector.isBlank()) return 0;
+        var value = vector.strip();
+        if (!value.startsWith("[") || !value.endsWith("]")) return 0;
+        var body = value.substring(1, value.length() - 1).strip();
+        return body.isBlank() ? 0 : body.split(",").length;
     }
 
     private record IndexEntry(UUID id, String content) {

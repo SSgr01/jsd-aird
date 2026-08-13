@@ -70,7 +70,6 @@ export function AssistantPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(false);
   const [streaming, setStreaming] = useState(false);
-  const [stage, setStage] = useState('等待提问');
   const [scopes, setScopes] = useState<AiScope[]>([]);
   const [conversations, setConversations] = useState<ConversationMeta[]>([]);
   const [knowledgeCategories, setKnowledgeCategories] = useState<KnowledgeCategory[]>([]);
@@ -137,11 +136,10 @@ export function AssistantPage() {
         },
         (response: AssistantResponse) => {
           setConversationId(response.conversationId);
-          setStage('回答已生成');
           setMessages((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, content: response.answer || answer, citations: response.citations, warnings: response.warnings } : item));
           void assistantApi.conversations().then(setConversations).catch(() => undefined);
         },
-        (event) => setStage(event === 'rewrite' ? '已完成查询改写' : event === 'retrieval' ? '已完成混合检索与重排' : event === 'citation' ? '引用来源已生成' : event),
+        undefined,
       );
     } catch (error) {
       setMessages((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, content: error instanceof Error ? error.message : 'AI 问答失败', warnings: ['请检查模型网关配置或稍后重试'] } : item));
@@ -151,7 +149,7 @@ export function AssistantPage() {
     }
   };
 
-  const reset = () => { setConversationId(undefined); setChatMessages([]); setQuestion(''); setStage('等待提问'); };
+  const reset = () => { setConversationId(undefined); setChatMessages([]); setQuestion(''); };
 
   const openConversation = async (id: string) => {
     setLoading(true);
@@ -227,7 +225,7 @@ export function AssistantPage() {
 
   return (
     <div className="business-page assistant-page">
-      <div className="page-heading"><div><Typography.Title level={2}>AI问答</Typography.Title><Typography.Text type="secondary">回答仅基于已授权的研发资料和正式数据资产。</Typography.Text></div><Tag color={streaming ? 'processing' : 'default'}>{stage}</Tag></div>
+      <div className="page-heading"><div><Typography.Title level={2}>AI问答</Typography.Title><Typography.Text type="secondary">回答仅基于已授权的研发资料和正式数据资产。</Typography.Text></div></div>
       <AiConversationWorkspace
         conversations={conversationItems}
         activeConversationId={conversationId}

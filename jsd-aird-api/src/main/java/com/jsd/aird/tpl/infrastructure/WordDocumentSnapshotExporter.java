@@ -67,6 +67,7 @@ final class WordDocumentSnapshotExporter {
             renderer.render(body);
             appendSectionProperties(document, body, original, snapshot.path("documentStyle"));
             var generatedXml = write(document);
+            if (containsList(snapshot)) ensureNumberingParts(parts);
 
             var output = new ByteArrayOutputStream();
             try (var zip = new ZipOutputStream(output)) {
@@ -279,6 +280,24 @@ final class WordDocumentSnapshotExporter {
         private void applyParagraphStyle(Element paragraph, JsonNode style) {
             if (style == null || !style.isObject()) return;
             var pPr = target.createElementNS(W, "w:pPr");
+            var namedStyle = style.path("namedStyleType").asInt(0);
+            if (namedStyle >= 4 && namedStyle <= 8) {
+                var pStyle = target.createElementNS(W, "w:pStyle");
+                pStyle.setAttributeNS(W, "w:val", "Heading" + (namedStyle - 3));
+                pPr.appendChild(pStyle);
+            }
+            var bullet = style.path("bullet");
+            if (bullet.isObject()) {
+                var numPr = target.createElementNS(W, "w:numPr");
+                var ilvl = target.createElementNS(W, "w:ilvl");
+                ilvl.setAttributeNS(W, "w:val", Integer.toString(Math.max(0, bullet.path("nestingLevel").asInt(0))));
+                numPr.appendChild(ilvl);
+                var numId = target.createElementNS(W, "w:numId");
+                var listType = bullet.path("listType").asText("");
+                numId.setAttributeNS(W, "w:val", listType.contains("BULLET") ? "2" : "1");
+                numPr.appendChild(numId);
+                pPr.appendChild(numPr);
+            }
             var align = style.path("horizontalAlign").asInt(1);
             if (align > 1) {
                 var jc = target.createElementNS(W, "w:jc");
@@ -523,5 +542,36 @@ final class WordDocumentSnapshotExporter {
         transformer.setOutputProperty(OutputKeys.OMIT_XML_DECLARATION, "no");
         transformer.transform(new DOMSource(document), new StreamResult(output));
         return output.toByteArray();
+    }
+
+    private boolean containsList(JsonNode snapshot) {
+        for (var paragraph : snapshot.path("body").path("paragraphs")) {
+            if (paragraph.path("paragraphStyle").path("bullet").isObject()) return true;
+        }
+        return false;
+    }
+
+    private void ensureNumberingParts(Map<String, byte[]> parts) {
+        parts.putIfAbsent("word/numbering.xml", defaultNumberingXml().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        var contentTypes = new String(parts.getOrDefault("[Content_Types].xml", "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"/>".getBytes()), java.nio.charset.StandardCharsets.UTF_8);
+        if (!contentTypes.contains("/word/numbering.xml")) {
+            contentTypes = contentTypes.replace("</Types>", "<Override PartName=\"/word/numbering.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml\"/></Types>");
+            parts.put("[Content_Types].xml", contentTypes.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        }
+        var relationshipsName = "word/_rels/document.xml.rels";
+        var relationships = new String(parts.getOrDefault(relationshipsName, "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"/>".getBytes()), java.nio.charset.StandardCharsets.UTF_8);
+        if (!relationships.contains("numbering.xml")) {
+            relationships = relationships.replace("</Relationships>", "<Relationship Id=\"rIdJsdNumbering\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering\" Target=\"numbering.xml\"/></Relationships>");
+            parts.put(relationshipsName, relationships.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        }
+    }
+
+    private String defaultNumberingXml() {
+        return "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>"
+                + "<w:numbering xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">"
+                + "<w:abstractNum w:abstractNumId=\"0\"><w:multiLevelType w:val=\"singleLevel\"/><w:lvl w:ilvl=\"0\"><w:numFmt w:val=\"decimal\"/><w:lvlText w:val=\"%1.\"/><w:start w:val=\"1\"/></w:lvl></w:abstractNum>"
+                + "<w:abstractNum w:abstractNumId=\"1\"><w:multiLevelType w:val=\"singleLevel\"/><w:lvl w:ilvl=\"0\"><w:numFmt w:val=\"bullet\"/><w:lvlText w:val=\"•\"/><w:rPr><w:rFonts w:ascii=\"Symbol\" w:hAnsi=\"Symbol\"/></w:rPr></w:lvl></w:abstractNum>"
+                + "<w:num w:numId=\"1\"><w:abstractNumId w:val=\"0\"/></w:num><w:num w:numId=\"2\"><w:abstractNumId w:val=\"1\"/></w:num>"
+                + "</w:numbering>";
     }
 }

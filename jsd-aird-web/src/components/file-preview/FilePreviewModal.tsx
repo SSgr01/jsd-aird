@@ -3,7 +3,7 @@ import { Alert, Button, Empty, Modal, Spin, Table, Tabs, Tag, Typography, type T
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { downloadBlob } from '@/services/files';
-import { detectPreviewMode, type FilePreviewDescriptor, type FilePreviewMode } from './file-preview-utils';
+import { buildSpreadsheetPreview, detectPreviewMode, excelColumnLabel, type FilePreviewDescriptor, type FilePreviewMode, type SpreadsheetCell, type SpreadsheetPreview } from './file-preview-utils';
 
 const MAX_PREVIEW_BYTES = 50 * 1024 * 1024;
 const MAX_ROWS = 200;
@@ -17,13 +17,13 @@ interface FilePreviewModalProps {
 
 interface SpreadsheetSheet {
   name: string;
-  rows: string[][];
-  truncated: boolean;
+  preview: SpreadsheetPreview;
 }
 
 interface SpreadsheetRow {
   key: string;
-  [key: string]: string;
+  rowNumber: number;
+  cells: SpreadsheetCell[];
 }
 
 export function FilePreviewModal({ open, file, onClose }: FilePreviewModalProps) {
@@ -69,7 +69,7 @@ export function FilePreviewModal({ open, file, onClose }: FilePreviewModalProps)
           throw new Error('文件超过 50 MB，暂不支持在线预览，请下载原文件查看。');
         }
         setBlob(loaded);
-        if (nextMode === 'pdf' || nextMode === 'image') {
+        if (nextMode === 'pdf' || nextMode === 'image' || nextMode === 'audio') {
           nextObjectUrl = URL.createObjectURL(loaded);
           setObjectUrl(nextObjectUrl);
         } else if (nextMode === 'text') {
@@ -90,13 +90,13 @@ export function FilePreviewModal({ open, file, onClose }: FilePreviewModalProps)
           const workbook = XLSX.read(await loaded.arrayBuffer(), { type: 'array', cellDates: true });
           const parsedSheets = workbook.SheetNames.map((name) => {
             const worksheet = workbook.Sheets[name];
-            if (!worksheet) return { name, rows: [], truncated: false };
+            if (!worksheet) return { name, preview: buildSpreadsheetPreview([]) };
             const rawRows = XLSX.utils.sheet_to_json<unknown[]>(worksheet, {
               header: 1,
               raw: false,
               defval: '',
             });
-            const rows = rawRows.slice(0, MAX_ROWS).map((row) => row.slice(0, MAX_COLUMNS).map((cell) => {
+            const rows = rawRows.map((row) => row.map((cell) => {
               if (cell === null || cell === undefined) return '';
               if (typeof cell === 'string') return cell;
               if (typeof cell === 'number' || typeof cell === 'boolean' || typeof cell === 'bigint') return cell.toString();
@@ -104,8 +104,14 @@ export function FilePreviewModal({ open, file, onClose }: FilePreviewModalProps)
             }));
             return {
               name,
-              rows,
-              truncated: rawRows.length > MAX_ROWS || rawRows.some((row) => row.length > MAX_COLUMNS),
+              preview: buildSpreadsheetPreview(
+                rows,
+                worksheet['!merges'] || [],
+                worksheet['!ref'] ? XLSX.utils.decode_range(worksheet['!ref']).s.r : 0,
+                worksheet['!ref'] ? XLSX.utils.decode_range(worksheet['!ref']).s.c : 0,
+                MAX_ROWS,
+                MAX_COLUMNS,
+              ),
             };
           });
           setSheets(parsedSheets);
@@ -134,14 +140,29 @@ export function FilePreviewModal({ open, file, onClose }: FilePreviewModalProps)
   };
 
   const tableColumns: TableColumnsType<SpreadsheetRow> = currentSheet
-    ? Array.from({ length: Math.max(1, Math.min(MAX_COLUMNS, currentSheet.rows.reduce((max, row) => Math.max(max, row.length), 0))) }, (_, index) => ({
-        title: `列 ${index + 1}`,
-        dataIndex: `column-${index}`,
-        key: `column-${index}`,
-        render: (_: unknown, row: SpreadsheetRow) => row[`column-${index}`] || '—',
-      }))
+    ? [
+        {
+          title: '#',
+          dataIndex: 'rowNumber',
+          key: 'row-number',
+          width: 56,
+          fixed: 'left',
+        },
+        ...Array.from({ length: Math.max(1, currentSheet.preview.columnCount) }, (_, index) => ({
+          title: excelColumnLabel(currentSheet.preview.startColumn + index),
+          key: `column-${index}`,
+          onCell: (row: SpreadsheetRow) => {
+            const cell = row.cells[index];
+            return cell?.hidden ? { rowSpan: 0, colSpan: 0 } : { rowSpan: cell?.rowSpan || 1, colSpan: cell?.colSpan || 1 };
+          },
+          render: (_: unknown, row: SpreadsheetRow) => {
+            const cell = row.cells[index];
+            return cell?.hidden ? null : cell?.value || '—';
+          },
+        })),
+      ]
     : [];
-  const tableRows: SpreadsheetRow[] = currentSheet?.rows.map((row, index) => ({ key: `${currentSheet.name}-${index}`, ...Object.fromEntries(row.map((cell, cellIndex) => [`column-${cellIndex}`, cell])) })) || [];
+  const tableRows: SpreadsheetRow[] = currentSheet?.preview.rows.map((row, index) => ({ key: `${currentSheet.name}-${index}`, rowNumber: row.rowNumber, cells: row.cells })) || [];
 
   return (
     <Modal
@@ -161,6 +182,8 @@ export function FilePreviewModal({ open, file, onClose }: FilePreviewModalProps)
         <iframe className="file-preview-frame" title={`${file.fileName} 预览`} src={objectUrl} />
       ) : mode === 'image' && objectUrl ? (
         <div className="file-preview-image-wrap"><img className="file-preview-image" src={objectUrl} alt={file.fileName} /></div>
+      ) : mode === 'audio' && objectUrl ? (
+        <div className="file-preview-state"><audio controls preload="metadata" src={objectUrl} style={{ width: '100%' }}>当前浏览器不支持音频播放</audio></div>
       ) : mode === 'text' ? (
         <pre className="file-preview-text">{text || '文件内容为空'}</pre>
       ) : mode === 'docx' ? (
@@ -168,7 +191,8 @@ export function FilePreviewModal({ open, file, onClose }: FilePreviewModalProps)
       ) : mode === 'spreadsheet' && sheets.length ? (
         <div className="file-preview-spreadsheet">
           <Tabs activeKey={activeSheet} onChange={setActiveSheet} items={sheets.map((sheet) => ({ key: sheet.name, label: sheet.name }))} />
-          {currentSheet?.truncated && <Tag color="warning">仅展示前 200 行、前 50 列</Tag>}
+          {currentSheet?.preview.truncated && <Tag color="warning">仅展示前 200 行、前 50 列</Tag>}
+          {currentSheet?.preview.merges.length ? <div className="file-preview-merges"><Typography.Text type="secondary">已识别合并单元格</Typography.Text><div>{currentSheet.preview.merges.map((merge) => <Tag key={merge.range}>{merge.range}{merge.clipped ? '（预览内裁剪）' : ''}</Tag>)}</div></div> : null}
           <Table<SpreadsheetRow> size="small" bordered pagination={false} scroll={{ x: 'max-content', y: '50vh' }} columns={tableColumns} dataSource={tableRows} />
         </div>
       ) : (

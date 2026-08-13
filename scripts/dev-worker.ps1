@@ -21,7 +21,22 @@ if ($env:JSD_AIRD_JAVA_HOME -and (Test-Path -LiteralPath (Join-Path $env:JSD_AIR
 $env:JSD_AIRD_WORKER_ENABLED = "true"
 Push-Location (Join-Path $Root "jsd-aird-api")
 try {
-    .\mvnw.cmd spring-boot:run "-Dspring-boot.run.profiles=local,worker"
+    # See dev-api.ps1. Keep this identical so either service may be started first.
+    $compileMutex = [System.Threading.Mutex]::new($false, "Local\JsdAirdDevCompile")
+    $compileLockHeld = $false
+    try {
+        try { $compileLockHeld = $compileMutex.WaitOne([TimeSpan]::FromMinutes(3)) }
+        catch [System.Threading.AbandonedMutexException] { $compileLockHeld = $true }
+        if (-not $compileLockHeld) { throw "等待后端编译锁超时" }
+        .\mvnw.cmd "-Dmaven.test.skip=true" compile
+        if ($LASTEXITCODE -ne 0) { .\mvnw.cmd "-Dmaven.test.skip=true" compile }
+        if ($LASTEXITCODE -ne 0) { throw "后端编译失败" }
+    }
+    finally {
+        if ($compileLockHeld) { $compileMutex.ReleaseMutex() }
+        $compileMutex.Dispose()
+    }
+    .\mvnw.cmd "-Dmaven.test.skip=true" spring-boot:run "-Dspring-boot.run.profiles=local,worker"
 }
 finally {
     Pop-Location

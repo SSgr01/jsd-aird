@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.shared.error.ApiException;
@@ -47,5 +48,29 @@ class StandardFieldServiceTest {
         schema.set("x-jsd-field-model", model);
 
         assertThrows(ApiException.class, () -> service.validateFormalFields(schema));
+    }
+
+    @Test
+    void staleOptionalStandardFieldAutomaticallyFallsBackToTemplateLocal() {
+        var repository = mock(StandardFieldRepository.class);
+        var serviceWithRepository = new StandardFieldService(repository);
+        var staleId = java.util.UUID.randomUUID();
+        when(repository.findActive("DATE", 1, staleId)).thenReturn(java.util.Optional.empty());
+
+        var schema = objectMapper.createObjectNode().put("type", "object");
+        var model = objectMapper.createObjectNode();
+        model.set("fields", objectMapper.createArrayNode().add(objectMapper.createObjectNode()
+                .put("name", "日期")
+                .put("fieldOrigin", "STANDARD")
+                .put("fieldCode", "DATE")
+                .put("standardFieldId", staleId.toString())
+                .put("standardFieldVersion", 1)));
+        schema.set("x-jsd-field-model", model);
+
+        var normalized = serviceWithRepository.normalizeDraftFields(schema);
+        var field = normalized.path("x-jsd-field-model").path("fields").get(0);
+        assertThat(field.path("fieldOrigin").asText()).isEqualTo("TEMPLATE_LOCAL");
+        assertThat(field.path("standardFieldId").isMissingNode()).isTrue();
+        assertDoesNotThrow(() -> serviceWithRepository.validateFormalFields(normalized));
     }
 }

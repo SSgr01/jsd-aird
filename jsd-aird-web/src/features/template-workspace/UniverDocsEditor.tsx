@@ -32,7 +32,13 @@ interface Props {
 }
 
 export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverDocsEditor(
-  { snapshot, editable, onDirty, onEditorValue = () => undefined, bindings = [] },
+  {
+    snapshot,
+    editable,
+    onDirty,
+    onEditorValue = () => undefined,
+    bindings = [],
+  },
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -55,6 +61,7 @@ export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverD
     let animationFrame = 0;
     let initialSelectionTimer = 0;
     let initialized = false;
+    let lastDocumentSignature = '';
     let commandSubscription: { dispose(): void } | undefined;
     let ownedUniver: ReturnType<typeof createUniver>['univer'] | undefined;
     let ownedApi: FUniver | undefined;
@@ -109,6 +116,7 @@ export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverD
         univerRef.current = univer;
         apiRef.current = univerAPI;
         const document = univerAPI.createUniverDoc(normalizeDocumentSnapshot(snapshot));
+        lastDocumentSignature = documentContentSignature(document.getSnapshot());
         // Docs disables paragraph commands until it has an active text range.
         // Put the editable surface at a valid caret position so alignment and
         // other paragraph commands work immediately after the document opens.
@@ -154,15 +162,21 @@ export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverD
         }
         initialized = true;
         commandSubscription = univerAPI.onCommandExecuted((commandInfo) => {
-          // Selection/focus/zoom operations are not document edits. Only the
-          // Docs text mutation should mark the workspace dirty; otherwise the
-          // initial caret activation looks like an unsaved content change.
-          if (commandInfo.id !== 'doc.mutation.rich-text-editing') return;
-          callbacksRef.current.onDirty();
-          for (const binding of bindingsRef.current) {
-            if (binding.syncDirection === 'DATA_TO_EDITOR') continue;
-            callbacksRef.current.onEditorValue(binding, readMarkerValue(univerAPI, binding));
-          }
+          // Tables, lists, paragraph styles, page breaks, undo and redo all
+          // mutate the document. Compare the content snapshot instead of
+          // maintaining a brittle list of text-only command IDs.
+          const commandParams = commandInfo.params as { unitId?: string } | undefined;
+          if (commandParams?.unitId && commandParams.unitId !== document.getId()) return;
+          window.setTimeout(() => {
+            const nextSignature = documentContentSignature(document.getSnapshot());
+            if (nextSignature === lastDocumentSignature) return;
+            lastDocumentSignature = nextSignature;
+            callbacksRef.current.onDirty();
+            for (const binding of bindingsRef.current) {
+              if (binding.syncDirection === 'DATA_TO_EDITOR') continue;
+              callbacksRef.current.onEditorValue(binding, readMarkerValue(univerAPI, binding));
+            }
+          }, 0);
         });
       } catch (error) {
         host.textContent = 'Word 文档编辑器初始化失败，请刷新后重试';
@@ -249,9 +263,9 @@ export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverD
             start = found;
             end = found + text.length - 1;
           }
-          document.setSelection(start as number, (end as number) + 1);
           const renderManager = univerRef.current?.__getInjector().get(IRenderManagerService);
           const render = renderManager?.getRenderById(document.getId());
+          document.setSelection(start as number, (end as number) + 1);
           render?.with(DocBackScrollRenderController)?.scrollToRange({
             startOffset: start as number,
             endOffset: (end as number) + 1,
@@ -298,6 +312,12 @@ function toEditorText(value: unknown) {
 
 function normalizeDocumentSnapshot(snapshot: Record<string, unknown>) {
   const result = structuredClone(snapshot) as unknown as IDocumentData;
+  // Univer's segment-aware document commands expect these collections to be
+  // present even when the imported DOCX has no headers or footers. Keep them
+  // empty for the body-only case so native tables, lists and styles can use
+  // the normal body path safely.
+  if (result.headers == null) result.headers = {};
+  if (result.footers == null) result.footers = {};
   const style = result.documentStyle && typeof result.documentStyle === 'object'
     ? result.documentStyle
     : {};
@@ -414,4 +434,17 @@ function readMarkerValue(api: FUniver, binding: TemplateBinding) {
   const document = api.getActiveDocument();
   const marker = document ? locateMarker(document.getSnapshot(), binding.markerId) : null;
   return marker?.value;
+}
+
+function documentContentSignature(snapshot: IDocumentData) {
+  const body = snapshot.body;
+  return JSON.stringify({
+    dataStream: body?.dataStream,
+    paragraphs: body?.paragraphs,
+    textRuns: body?.textRuns,
+    tables: body?.tables,
+    customRanges: body?.customRanges,
+    lists: snapshot.lists,
+    tableSource: snapshot.tableSource,
+  });
 }

@@ -125,6 +125,8 @@ class TemplateRecognitionReviewServiceTest {
         verify(imports).markStructureResolved(organizationId, runId, formId);
         verify(imports).markStructureResolved(organizationId, runId, rowsId);
         verify(imports, never()).markStructureResolved(organizationId, runId, physicalId);
+        verify(imports).supersedeStructureGeneration(
+                eq(organizationId), eq(runId), eq(List.of(formId, rowsId)), any(), anyString(), eq(actorId));
         verify(imports).appendModelSuggestions(eq(importJobId), eq(runId), any());
     }
 
@@ -179,6 +181,7 @@ class TemplateRecognitionReviewServiceTest {
                 .hasMessageContaining("rows");
 
         verify(imports, never()).appendModelSuggestions(any(), any(), any());
+        verify(imports, never()).supersedeStructureGeneration(any(), any(), any(), any(), anyString(), any());
         verify(imports, never()).decideSuggestion(any(), any(), any(), anyString(), any());
         verify(imports, never()).markStructureResolved(any(), any(), any());
     }
@@ -220,9 +223,13 @@ class TemplateRecognitionReviewServiceTest {
         if ("SCALAR_FIELD".equals(type)) {
             payload.put("kind", "SCALAR").put("role", "FIELD").put("fieldName", "测试字段")
                     .put("formExpectedFieldCount", 1);
+            payload.set("locator", objectMapper.createObjectNode()
+                    .put("sheetId", "sheet-1").put("labelRange", "A1").put("valueRange", "B1"));
         }
         if ("TABLE_CHILD_FIELD".equals(type)) {
             payload.put("kind", "SCALAR").put("role", "FIELD").put("fieldName", "明细字段");
+            payload.set("locator", objectMapper.createObjectNode()
+                    .put("sheetId", "sheet-1").put("labelRange", "A6").put("valueRange", "A7:A22"));
         }
         if ("TABLE_REGION".equals(type)) payload.put("kind", "ROW_TABLE");
         return new RecognitionModelClient.ModelSuggestion(type, payload, 0.9, objectMapper.createArrayNode());

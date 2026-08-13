@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.UUID;
 
 import com.jsd.aird.kb.application.KnowledgeService;
+import com.jsd.aird.kb.application.KnowledgeGovernanceService;
 import com.jsd.aird.kb.api.KnowledgeScopeFacade;
 import com.jsd.aird.kb.api.KnowledgeSearchFacade;
 import com.jsd.aird.ops.application.port.FileStorageFacade;
@@ -35,14 +36,17 @@ public class KnowledgeController {
 
     private final KnowledgeService service;
     private final KnowledgeScopeFacade scopes;
+    private final KnowledgeGovernanceService governance;
 
-    public KnowledgeController(KnowledgeService service, FileStorageFacade storage, KnowledgeScopeFacade scopes) {
+    public KnowledgeController(KnowledgeService service, FileStorageFacade storage, KnowledgeScopeFacade scopes,
+                               KnowledgeGovernanceService governance) {
         this.service = service;
         this.storage = storage;
         this.scopes = scopes;
+        this.governance = governance;
     }
 
-    @PostMapping("/documents")
+    @PostMapping(value = "/documents", consumes = org.springframework.http.MediaType.MULTIPART_FORM_DATA_VALUE)
     public ApiResponse<KnowledgeService.DocumentView> create(
     @RequestPart MultipartFile file,
             @RequestParam(required = false) String title,
@@ -56,8 +60,8 @@ public class KnowledgeController {
                 "KNOWLEDGE",
                 file.getInputStream()
         );
-        return success(service.create(new KnowledgeService.CreateCommand(staged.fileId(), title, documentType,
-                libraryScope, categoryId)));
+        return success(governance.create(new KnowledgeGovernanceService.CreateCommand(staged.fileId(), title,
+                documentType, libraryScope, categoryId, List.of(), List.of(), false, null, null, null)));
     }
 
     @GetMapping("/documents")
@@ -67,10 +71,12 @@ public class KnowledgeController {
             @RequestParam(required = false) String aiStatus,
             @RequestParam(required = false) String scope,
             @RequestParam(required = false) UUID categoryId,
+            @RequestParam(required = false) String lifecycleStatus,
+            @RequestParam(required = false) String reviewStatus,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size
     ) {
-        return success(service.list(keyword, status, aiStatus, scope, categoryId, page, size));
+        return success(service.list(keyword, status, aiStatus, scope, categoryId, lifecycleStatus, reviewStatus, page, size));
     }
 
     @GetMapping("/categories")
@@ -82,13 +88,13 @@ public class KnowledgeController {
     @PostMapping("/categories")
     public ApiResponse<com.jsd.aird.kb.application.port.KnowledgeRepository.CategoryRow> createCategory(
             @Valid @RequestBody CategoryRequest request) {
-        return success(service.createCategory(request.scope(), request.name()));
+        return success(service.createCategory(request.scope(), request.name(), request.description()));
     }
 
     @PutMapping("/categories/{categoryId}")
     public ApiResponse<com.jsd.aird.kb.application.port.KnowledgeRepository.CategoryRow> renameCategory(
             @PathVariable UUID categoryId, @Valid @RequestBody RenameCategoryRequest request) {
-        return success(service.renameCategory(categoryId, request.name()));
+        return success(service.renameCategory(categoryId, request.name(), request.description()));
     }
 
     @DeleteMapping("/categories/{categoryId}")
@@ -146,11 +152,6 @@ public class KnowledgeController {
             @RequestBody GrantRequest request
     ) {
         return success(service.updateAiGrant(id, new KnowledgeService.GrantCommand(request.action(), request.reason())));
-    }
-
-    @PostMapping("/documents/{id}/reindex")
-    public ApiResponse<KnowledgeService.DocumentView> reindex(@PathVariable UUID id) {
-        return success(service.reindex(id));
     }
 
     @PostMapping("/documents/{id}/scopes")
@@ -222,8 +223,8 @@ public class KnowledgeController {
         public int limit() { return limit <= 0 ? 20 : Math.min(limit, 50); }
     }
     public record ScopeRequest(UUID scopeId) { }
-    public record CategoryRequest(@NotBlank String name, @NotBlank String scope) { }
-    public record RenameCategoryRequest(@NotBlank String name) { }
+    public record CategoryRequest(@NotBlank String name, @NotBlank String scope, @Size(max = 240) String description) { }
+    public record RenameCategoryRequest(@NotBlank String name, @Size(max = 240) String description) { }
     public record AssignCategoryRequest(@NotNull UUID categoryId) { }
     public record RenameDocumentRequest(@NotBlank @Size(max = 260) String title) { }
     public record DocumentExportRequest(@NotNull @Size(min = 1, max = 200) List<UUID> documentIds) { }

@@ -1,6 +1,4 @@
 export type TemplateFormat = 'XLSX' | 'DOCX';
-export type TemplateScope = 'TEMPLATE_CENTER' | 'DATA_CENTER';
-export type TargetDataType = 'MATERIAL' | 'FORMULA' | 'PROCESS' | 'EQUIPMENT' | 'TEST_STANDARD';
 export type TemplateStatus = 'DRAFT' | 'PUBLISHED' | 'RETIRED';
 export type BindingRole = 'FIELD' | 'REPEAT_REGION' | 'CONDITIONAL';
 export type MappingKind =
@@ -18,7 +16,6 @@ export interface TemplateListItem {
   versionId: string;
   templateCode: string;
   name: string;
-  purpose?: string;
   category?: string;
   format: TemplateFormat;
   status: TemplateStatus;
@@ -26,8 +23,16 @@ export interface TemplateListItem {
   lockVersion: number;
   updatedAt: string;
   issueCount: number;
-  scope?: TemplateScope;
-  targetDataType?: TargetDataType;
+  categoryId?: string;
+  currentPublishedVersionId?: string;
+  currentPublishedVersionNo?: number;
+  retiredVersionNo?: number;
+  draftVersionId?: string;
+  draftVersionNo?: number;
+  hasDraft: boolean;
+  createdBy?: string;
+  createdByName?: string;
+  createdAt: string;
 }
 
 export interface TemplateBinding {
@@ -371,6 +376,11 @@ export interface EditorSelection {
   address: string;
 }
 
+export interface EditorCellChange extends EditorSelection {
+  value: unknown;
+  previousValue: unknown;
+}
+
 export interface TemplateWorkspace {
   templateId: string;
   versionId: string;
@@ -461,6 +471,7 @@ export type DocumentStructureNodeType =
   | 'DOCUMENT_TITLE'
   | 'HEADING'
   | 'PARAGRAPH'
+  | 'LIST_ITEM'
   | 'TABLE'
   | 'TABLE_ROW'
   | 'TABLE_CELL'
@@ -495,6 +506,11 @@ export interface TemplateVersionHistoryItem {
   updatedAt: string;
   publishedAt?: string;
   saveCount: number;
+  derivedFromVersionId?: string;
+  createdBy?: string;
+  createdByName?: string;
+  currentPublished: boolean;
+  canRollback: boolean;
 }
 
 export interface EditorHandle {
@@ -503,6 +519,9 @@ export interface EditorHandle {
   writeBinding(binding: TemplateBinding, value: unknown): Promise<void>;
   writeLabel?(binding: TemplateBinding, value: unknown): Promise<void>;
   focusBinding(binding: TemplateBinding): void;
+  focusCell?(sheetId: string, address: string): void;
+  focusRange?(sheetId: string, address: string): void;
+  writeCell?(sheetId: string, address: string, value: unknown): Promise<void>;
   focusNode?(node: DocumentStructureNode): void;
   appendRepeatRecord?(binding: TemplateBinding): Promise<void>;
   applyCellPatch?(patch: Record<string, unknown>): Promise<void>;

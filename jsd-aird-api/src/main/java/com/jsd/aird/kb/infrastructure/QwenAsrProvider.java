@@ -8,10 +8,12 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.Supplier;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.jsd.aird.kb.domain.DocumentParser;
 import com.jsd.aird.kb.domain.MediaExtractionProvider;
+import com.jsd.aird.kb.domain.MediaExtractionException;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
@@ -44,7 +46,7 @@ public class QwenAsrProvider implements MediaExtractionProvider {
             @Value("${app.ai.asr.enabled:false}") boolean enabled,
             @Value("${app.ai.asr.base-url:https://dashscope.aliyuncs.com/api/v1}") String baseUrl,
             @Value("${app.ai.asr.api-key:}") String apiKey,
-            @Value("${app.ai.asr.model:qwen-audio-3.0-asr-flash-filetrans}") String model,
+            @Value("${app.ai.asr.model:qwen3-asr-flash-filetrans}") String model,
             @Value("${app.ai.asr.transcription-path:/services/audio/asr/transcription}") String transcriptionPath,
             @Value("${app.ai.asr.task-path:/tasks}") String taskPath,
             @Value("${app.ai.asr.language:zh}") String language,
@@ -101,18 +103,24 @@ public class QwenAsrProvider implements MediaExtractionProvider {
         if (!StringUtils.hasText(publicUrl)) {
             throw new IllegalStateException("ASR 文件缺少 MinIO 公网预签名 URL");
         }
+        String taskId = null;
         try {
-            var taskId = submit(publicUrl);
+            taskId = submit(publicUrl);
             var result = poll(taskId);
             var blocks = transcriptBlocks(result);
             if (blocks.isEmpty()) throw new IllegalStateException("ASR 返回结果为空");
-            return new DocumentParser.ParsedDocument(blocks, model);
+            return new DocumentParser.ParsedDocument(blocks, model, taskId,
+                    Map.of("model", model, "timestampLevel", enableWords ? "SENTENCE_AND_WORD" : "SENTENCE"));
         } catch (RestClientResponseException exception) {
-            throw new IllegalStateException("ASR 服务调用失败：HTTP " + exception.getStatusCode().value()
-                    + " " + exception.getResponseBodyAsString(), exception);
+            throw new MediaExtractionException("ASR 服务调用失败：HTTP " + exception.getStatusCode().value()
+                    + " " + exception.getResponseBodyAsString(), taskId, model, exception);
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
-            throw new IllegalStateException("ASR 轮询被中断", exception);
+            throw new MediaExtractionException("ASR 轮询被中断", taskId, model, exception);
+        } catch (RuntimeException exception) {
+            if (exception instanceof MediaExtractionException media) throw media;
+            throw new MediaExtractionException(exception.getMessage() == null ? "ASR任务失败" : exception.getMessage(),
+                    taskId, model, exception);
         }
     }
 
@@ -120,29 +128,23 @@ public class QwenAsrProvider implements MediaExtractionProvider {
         var parameters = new LinkedHashMap<String, Object>();
         parameters.put("channel_id", List.of(0));
         if (StringUtils.hasText(language)) {
-            if (model.toLowerCase(Locale.ROOT).contains("qwen-audio-3.0")) {
-                parameters.put("language_hints", List.of(language));
-            } else {
-                parameters.put("language", language);
-            }
+            parameters.put("language", language);
         }
         parameters.put("enable_itn", enableItn);
         parameters.put("enable_words", enableWords);
-        var input = model.toLowerCase(Locale.ROOT).contains("qwen-audio-3.0")
-                ? Map.of("file_urls", List.of(publicUrl))
-                : Map.of("file_url", publicUrl);
+        var input = Map.of("file_url", publicUrl);
         var body = Map.of(
                 "model", model,
                 "input", input,
                 "parameters", parameters
         );
-        var response = client.post().uri(baseUrl + transcriptionPath)
+        var response = withRetry(() -> client.post().uri(baseUrl + transcriptionPath)
                 .header(HttpHeaders.CONTENT_TYPE, "application/json")
                 .header(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey)
                 .header("X-DashScope-Async", "enable")
                 .body(body)
                 .retrieve()
-                .body(JsonNode.class);
+                .body(JsonNode.class));
         var taskId = firstText(response == null ? null : response.path("output"), "task_id", "taskId");
         if (!StringUtils.hasText(taskId)) throw new IllegalStateException("ASR 未返回 task_id");
         return taskId;
@@ -151,10 +153,10 @@ public class QwenAsrProvider implements MediaExtractionProvider {
     private JsonNode poll(String taskId) throws InterruptedException {
         var deadline = Instant.now().plus(timeout);
         while (Instant.now().isBefore(deadline)) {
-            var response = client.get().uri(baseUrl + taskPath + "/" + taskId)
+            var response = withRetry(() -> client.get().uri(baseUrl + taskPath + "/" + taskId)
                     .header(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey)
                     .retrieve()
-                    .body(JsonNode.class);
+                    .body(JsonNode.class));
             var output = response == null ? null : response.path("output");
             var status = firstText(output, "task_status", "taskStatus");
             if (!StringUtils.hasText(status)) status = response == null ? "" : response.path("status").asText("");
@@ -198,26 +200,52 @@ public class QwenAsrProvider implements MediaExtractionProvider {
     private void downloadTranscript(JsonNode resultNode, List<DocumentParser.TextBlock> result) {
         var transcriptionUrl = firstText(resultNode, "transcription_url", "transcriptionUrl");
         if (!StringUtils.hasText(transcriptionUrl)) return;
-        var transcriptFile = client.get().uri(transcriptionUrl).retrieve().body(JsonNode.class);
+        var transcriptFile = withRetry(() -> client.get().uri(transcriptionUrl).retrieve().body(JsonNode.class));
         collectTranscripts(transcriptFile, result);
     }
 
     private void collectTranscripts(JsonNode node, List<DocumentParser.TextBlock> result) {
+        collectTranscripts(node, result, "0");
+    }
+
+    private void collectTranscripts(JsonNode node, List<DocumentParser.TextBlock> result, String inheritedChannel) {
         if (node == null || node.isMissingNode() || node.isNull()) return;
         if (node.isArray()) {
-            node.forEach(item -> collectTranscripts(item, result));
+            node.forEach(item -> collectTranscripts(item, result, inheritedChannel));
             return;
         }
         if (!node.isObject()) return;
-        var text = firstText(node, "text", "transcript", "sentence");
-        if (StringUtils.hasText(text)) {
-            var channel = node.path("channel_id").asText(node.path("channelId").asText("0"));
-            result.add(new DocumentParser.TextBlock(null, "ASR-CHANNEL-" + channel, text.strip()));
+        var channel = node.hasNonNull("channel_id") ? node.path("channel_id").asText(inheritedChannel)
+                : node.path("channelId").asText(inheritedChannel);
+        var sentences = node.path("sentences");
+        if (sentences.isArray() && !sentences.isEmpty()) {
+            sentences.forEach(sentence -> collectTranscripts(sentence, result, channel));
             return;
         }
-        collectTranscripts(node.path("transcripts"), result);
-        collectTranscripts(node.path("sentences"), result);
-        collectTranscripts(node.path("results"), result);
+        var text = firstText(node, "text", "transcript", "sentence");
+        if (StringUtils.hasText(text)) {
+            var start = firstLong(node, "begin_time", "start_time", "startTime", "start_ms", "beginTime");
+            var end = firstLong(node, "end_time", "endTime", "end_ms", "stop_time");
+            result.add(new DocumentParser.TextBlock(null, "ASR-SENTENCE-CHANNEL-" + channel, text.strip(),
+                    null, null, null, List.of(), start, end, confidence(node)));
+            var words = node.path("words");
+            if (enableWords && words.isArray()) {
+                words.forEach(word -> {
+                    var wordText = firstText(word, "text", "word");
+                    if (StringUtils.hasText(wordText)) {
+                        var punctuation = firstText(word, "punctuation");
+                        result.add(new DocumentParser.TextBlock(null, "ASR-WORD-CHANNEL-" + channel,
+                                wordText + punctuation,
+                                null, null, null, List.of(),
+                                firstLong(word, "begin_time", "start_time", "startTime", "start_ms", "beginTime"),
+                                firstLong(word, "end_time", "endTime", "end_ms", "stop_time"), confidence(word)));
+                    }
+                });
+            }
+            return;
+        }
+        collectTranscripts(node.path("transcripts"), result, channel);
+        collectTranscripts(node.path("results"), result, channel);
     }
 
     private String firstText(JsonNode node, String... names) {
@@ -227,6 +255,45 @@ public class QwenAsrProvider implements MediaExtractionProvider {
             if (value.isTextual() && StringUtils.hasText(value.asText())) return value.asText();
         }
         return "";
+    }
+
+    private Long firstLong(JsonNode node, String... names) {
+        if (node == null || node.isMissingNode() || node.isNull()) return null;
+        for (var name : names) {
+            var value = node.path(name);
+            if (value.isNumber()) return value.longValue();
+            if (value.isTextual()) {
+                try { return Long.parseLong(value.asText()); } catch (NumberFormatException ignored) { }
+            }
+        }
+        return null;
+    }
+
+    private Double confidence(JsonNode node) {
+        var value = node == null ? null : node.path("confidence");
+        return value != null && value.isNumber() ? Math.max(0, Math.min(1, value.doubleValue())) : null;
+    }
+
+    private <T> T withRetry(Supplier<T> request) {
+        RuntimeException last = null;
+        for (int attempt = 0; attempt < 3; attempt++) {
+            try {
+                return request.get();
+            } catch (RestClientResponseException exception) {
+                last = exception;
+                var status = exception.getStatusCode().value();
+                if (status != 429 && status < 500 || attempt == 2) throw exception;
+            } catch (RuntimeException exception) {
+                last = exception;
+                if (attempt == 2) throw exception;
+            }
+            try { Thread.sleep(250L * (1L << attempt)); }
+            catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("ASR重试被中断", exception);
+            }
+        }
+        throw last == null ? new IllegalStateException("ASR调用失败") : last;
     }
 
     private String strip(String value) {

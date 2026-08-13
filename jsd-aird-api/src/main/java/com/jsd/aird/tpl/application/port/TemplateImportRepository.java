@@ -32,6 +32,8 @@ public interface TemplateImportRepository {
 
     List<ImportJobView> list(UUID organizationId);
 
+    Optional<ImportJobView> findDuplicate(UUID organizationId, String sourceSha256, TemplateFormat format);
+
     void complete(UUID importJobId, OfficeStructureParser.ParseResult result);
 
     void saveRenderSnapshot(UUID importJobId, JsonNode snapshot);
@@ -39,6 +41,8 @@ public interface TemplateImportRepository {
     void saveImportResult(UUID importJobId, JsonNode result);
 
     void updateProgress(UUID importJobId, int progress, String stage);
+
+    void fail(UUID importJobId, String message);
 
     UUID startRecognitionRun(
             UUID importJobId, String scope, int structureVersion, int snapshotFormatVersion, int regionCount,
@@ -67,11 +71,27 @@ public interface TemplateImportRepository {
     /** Appends a reviewed recompile result without deleting the original audit trail. */
     void appendModelSuggestions(UUID importJobId, UUID recognitionRunId, RecognitionModelClient.RecognitionBatch batch);
 
+    /**
+     * Removes the previous generation from the active review projection while
+     * retaining every row for audit.  The selected structure root remains
+     * active; its old semantic children are superseded by the new generation.
+     */
+    void supersedeStructureGeneration(
+            UUID organizationId,
+            UUID recognitionRunId,
+            List<UUID> selectedStructureSuggestionIds,
+            List<String> selectedRegionIds,
+            String generationId,
+            UUID actorId
+    );
+
     void markStructureResolved(UUID organizationId, UUID recognitionRunId, UUID suggestionId);
 
     void replacePhysicalSuggestions(UUID importJobId, UUID recognitionRunId, RecognitionModelClient.RecognitionBatch batch);
 
     void replaceRuleSuggestions(UUID importJobId, UUID recognitionRunId, RecognitionModelClient.RecognitionBatch batch);
+
+    void appendRuleSuggestions(UUID importJobId, UUID recognitionRunId, RecognitionModelClient.RecognitionBatch batch);
 
     void replaceQualityIssues(
             UUID importJobId,
@@ -121,7 +141,12 @@ public interface TemplateImportRepository {
             String scope,
             String sheetId,
             String address,
-            JsonNode snapshotFragment
+            JsonNode snapshotFragment,
+            UUID categoryId,
+            String sourceSha256,
+            boolean duplicateOverride,
+            UUID duplicateSourceJobId,
+            String operationSource
     ) {
         public NewImportJob {
             sourceKind = sourceKind == null ? "OFFICE_FILE" : sourceKind;
@@ -138,7 +163,16 @@ public interface TemplateImportRepository {
                 String sourceKind
         ) {
             this(importJobId, asyncJobId, organizationId, fileId, format, actorId, sourceKind,
-                    "WORKBOOK", null, null, null);
+                    "WORKBOOK", null, null, null, null, null, false, null, "UPLOAD");
+        }
+
+        public NewImportJob(
+                UUID importJobId, UUID asyncJobId, UUID organizationId, UUID fileId,
+                TemplateFormat format, UUID actorId, String sourceKind, String scope,
+                String sheetId, String address, JsonNode snapshotFragment
+        ) {
+            this(importJobId, asyncJobId, organizationId, fileId, format, actorId, sourceKind,
+                    scope, sheetId, address, snapshotFragment, null, null, false, null, "RERECOGNITION");
         }
     }
 
@@ -195,7 +229,12 @@ public interface TemplateImportRepository {
             String recognitionRunStatus,
             UUID generatedTemplateVersionId,
             String workspaceHash,
-            List<IssueView> issues
+            List<IssueView> issues,
+            UUID categoryId,
+            String categoryName,
+            String sourceSha256,
+            boolean duplicateOverride,
+            UUID duplicateSourceJobId
     ) {
     }
 

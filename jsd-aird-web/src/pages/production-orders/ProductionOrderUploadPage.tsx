@@ -33,6 +33,7 @@ export function ProductionOrderUploadPage() {
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [orderStatus, setOrderStatus] = useState('ALL');
   const [orderKeyword, setOrderKeyword] = useState('');
+  const [recordPage, setRecordPage] = useState({ current: 1, pageSize: 8 });
   const [form] = Form.useForm<FormValues>();
 
   useEffect(() => {
@@ -72,7 +73,7 @@ export function ProductionOrderUploadPage() {
     finally { setCreating(false); }
   };
 
-  const records = useMemo<UploadWorkspaceRecord[]>(() => orders
+  const allRecords = useMemo<UploadWorkspaceRecord[]>(() => orders
     .filter((item) => (orderStatus === 'ALL' || item.status === orderStatus) && (!orderKeyword || `${item.orderNo}${item.templateName}${item.templateCode}`.toLowerCase().includes(orderKeyword.toLowerCase())))
     .map((item) => ({
       id: item.id,
@@ -83,13 +84,22 @@ export function ProductionOrderUploadPage() {
       status: orderStatuses[item.status],
       actions: <Button type="link" icon={<RightOutlined />} onClick={() => navigate(`/production-orders/${item.id}/workspace`)}>{item.status === 'DRAFT' ? '继续填写' : '查看详情'}</Button>,
     })), [navigate, orderKeyword, orderStatus, orders]);
+  const records = allRecords.slice((recordPage.current - 1) * recordPage.pageSize, recordPage.current * recordPage.pageSize);
+
+  useEffect(() => {
+    setRecordPage((value) => ({ ...value, current: 1 }));
+  }, [orderStatus, orderKeyword]);
+
+  useEffect(() => {
+    const maxPage = Math.max(1, Math.ceil(allRecords.length / recordPage.pageSize));
+    if (recordPage.current > maxPage) setRecordPage((value) => ({ ...value, current: maxPage }));
+  }, [allRecords.length, recordPage.current, recordPage.pageSize]);
 
   return (
     <UploadWorkspace
       breadcrumbs={[{ title: '生产单管理' }, { title: '生产单上传' }]}
       title="生产单上传"
       description="选择已发布模板，再在线填写、上传同模板 Excel，或上传打印件照片。"
-      headerActions={<Button onClick={() => navigate('/production-orders/list')}>生产单查看</Button>}
       leftTitle="基础分类"
       classification={<Form form={form} layout="vertical">
         <Form.Item name="templateVersionId" hidden rules={[{ required: true, message: '请选择业务模板' }]}><Input /></Form.Item>
@@ -123,15 +133,17 @@ export function ProductionOrderUploadPage() {
       submitting={creating}
       submitDisabled={!chosen}
       rightTitle="已上传生产单"
-      rightCount={records.length}
+      rightCount={allRecords.length}
       rightFilters={[{ key: 'ALL', label: '全部' }, { key: 'DRAFT', label: '填写中' }, { key: 'SUBMITTED', label: '已提交' }, { key: 'CANCELLED', label: '已取消' }]}
       activeFilter={orderStatus}
-      onFilterChange={setOrderStatus}
+      onFilterChange={(value) => { setOrderStatus(value); setRecordPage((current) => ({ ...current, current: 1 })); }}
       searchValue={orderKeyword}
-      onSearchChange={setOrderKeyword}
+      onSearchChange={(value) => { setOrderKeyword(value); setRecordPage((current) => ({ ...current, current: 1 })); }}
       searchPlaceholder="搜索生产单号或模板"
       records={records}
       recordsLoading={ordersLoading}
+      pagination={{ ...recordPage, total: allRecords.length }}
+      onPageChange={(current, pageSize) => setRecordPage({ current, pageSize })}
     />
   );
 }

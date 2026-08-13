@@ -7,7 +7,6 @@ import {
   Alert,
   App,
   Button,
-  Collapse,
   Form,
   Input,
   Modal,
@@ -15,44 +14,36 @@ import {
   Select,
   Space,
   Table,
-  Typography,
+  Upload,
 } from 'antd';
-import type { UploadFile } from 'antd';
+import type { UploadFile, UploadProps } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 
-import type { TemplateFormat, TargetDataType } from '@/features/template-workspace/types';
+import type { TemplateFormat } from '@/features/template-workspace/types';
 import { UploadWorkspace, type UploadWorkspaceRecord } from '@/components/upload-workspace';
 import {
   templateApi,
   type CreateTemplateInput,
-  type RecognitionCall,
   type RecognitionSuggestion,
   type TemplateImportJob,
   type TemplateCategory,
 } from '@/services/templates/template-api';
+import { HttpError } from '@/services/http/errors';
 
 import { buildDisplaySuggestions, recognitionCounts } from './recognition-display';
 
 const accepted = '.xlsx,.docx';
-const targetDataTypeOptions: Array<{ value: TargetDataType; label: string }> = [
-  { value: 'MATERIAL', label: '物料/原料' },
-  { value: 'FORMULA', label: '配方' },
-  { value: 'PROCESS', label: '工艺' },
-  { value: 'EQUIPMENT', label: '设备/仪器' },
-  { value: 'TEST_STANDARD', label: '检测标准' },
-];
-
 export function TemplateUploadPage() {
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [files, setFiles] = useState<UploadFile[]>([]);
   const [jobs, setJobs] = useState<TemplateImportJob[]>([]);
   const [uploading, setUploading] = useState(false);
   const [selectedJob, setSelectedJob] = useState<TemplateImportJob>();
   const [viewingJob, setViewingJob] = useState<TemplateImportJob>();
   const [viewSuggestions, setViewSuggestions] = useState<RecognitionSuggestion[]>([]);
-  const [viewCalls, setViewCalls] = useState<RecognitionCall[]>([]);
   const [viewLoading, setViewLoading] = useState(false);
   const [deletingJobId, setDeletingJobId] = useState<string>();
   const [retryingJobId, setRetryingJobId] = useState<string>();
@@ -60,12 +51,32 @@ export function TemplateUploadPage() {
   const [categories, setCategories] = useState<TemplateCategory[]>([]);
   const [jobFilter, setJobFilter] = useState('ALL');
   const [jobKeyword, setJobKeyword] = useState('');
+  const [recordPage, setRecordPage] = useState({ current: 1, pageSize: 8 });
   const [uploadCategory, setUploadCategory] = useState<string>();
   const [form] = Form.useForm<CreateTemplateInput>();
   const displaySuggestions = useMemo(
     () => buildDisplaySuggestions(viewSuggestions),
     [viewSuggestions],
   );
+
+  const validateTemplateFile: UploadProps['beforeUpload'] = (file) => {
+    const name = file.name.toLowerCase();
+    const supported = name.endsWith('.xlsx') || name.endsWith('.docx');
+    if (!supported || file.size === 0) {
+      void message.error('仅支持 XLSX / DOCX 文件，且文件不能为空');
+      return Upload.LIST_IGNORE;
+    }
+    const signature = `${file.name.toLowerCase()}|${file.size}|${file.lastModified}`;
+    const duplicate = files.some((item) => {
+      const existing = item.originFileObj;
+      return existing && `${existing.name.toLowerCase()}|${existing.size}|${existing.lastModified}` === signature;
+    });
+    if (duplicate) {
+      void message.warning(`“${file.name}”已经在待上传队列中`);
+      return Upload.LIST_IGNORE;
+    }
+    return false;
+  };
 
   const load = useCallback(async () => {
     try {
@@ -84,6 +95,17 @@ export function TemplateUploadPage() {
     void load();
   }, [load]);
 
+  useEffect(() => {
+    const categoryId = searchParams.get('categoryId');
+    if (!categoryId || !categories.length || uploadCategory) return;
+    const category = categories.find((item) => item.id === categoryId);
+    if (category) setUploadCategory(category.name);
+  }, [categories, searchParams, uploadCategory]);
+
+  useEffect(() => {
+    setRecordPage((value) => ({ ...value, current: 1 }));
+  }, [jobFilter, jobKeyword]);
+
   const running = useMemo(
     () => jobs.some((job) => !['PARSED', 'FAILED'].includes(job.status)),
     [jobs],
@@ -101,14 +123,42 @@ export function TemplateUploadPage() {
       void message.warning('请先选择 Excel 或 Word 文件');
       return;
     }
+    if (sourceFiles.some((file) => {
+      const name = file.name.toLowerCase();
+      return file.size === 0 || (!name.endsWith('.xlsx') && !name.endsWith('.docx'));
+    })) {
+      void message.error('仅支持 XLSX / DOCX 文件，且文件不能为空');
+      return;
+    }
     setUploading(true);
     try {
-      const results = await Promise.allSettled(sourceFiles.map(async (file) => {
+      let failed = 0;
+      for (const file of sourceFiles) {
         const format: TemplateFormat = file.name.toLowerCase().endsWith('.xlsx') ? 'XLSX' : 'DOCX';
-        const staged = await templateApi.stageOfficeFile(file);
-        await templateApi.createImport(staged.fileId, format);
-      }));
-      const failed = results.filter((result) => result.status === 'rejected').length;
+        try {
+          const staged = await templateApi.stageOfficeFile(file);
+          const selectedCategory = categories.find((item) => item.name === uploadCategory);
+          const options = { categoryId: selectedCategory?.id, operationSource: 'TEMPLATE_UPLOAD_PAGE' };
+          try {
+            await templateApi.createImport(staged.fileId, format, options);
+          } catch (error) {
+            if (!(error instanceof HttpError) || error.code !== 'RESOURCE_CONFLICT') throw error;
+            const override = await new Promise<boolean>((resolve) => { modal.confirm({
+              title: `“${file.name}”已经上传过`,
+              content: '可以查看原任务，或确认重新解析并保留两次识别记录。',
+              okText: '仍然重新解析', cancelText: '取消本次上传',
+              onOk: () => resolve(true), onCancel: () => resolve(false),
+            }); });
+            if (!override) { failed += 1; continue; }
+            await templateApi.createImport(staged.fileId, format, {
+              ...options, duplicateOverride: true, operationSource: 'DUPLICATE_OVERRIDE',
+            });
+          }
+        } catch (error) {
+          failed += 1;
+          void message.error(error instanceof Error ? `${file.name}：${error.message}` : `${file.name} 上传失败`);
+        }
+      }
       setFiles([]);
       await load();
       if (failed) void message.warning(`${sourceFiles.length - failed} 个文件已接收，${failed} 个文件上传失败`);
@@ -126,7 +176,7 @@ export function TemplateUploadPage() {
     return filterMatch && keywordMatch;
   }), [jobFilter, jobKeyword, jobs]);
 
-  const uploadRecords: UploadWorkspaceRecord[] = filteredJobs.map((job) => {
+  const allUploadRecords: UploadWorkspaceRecord[] = filteredJobs.map((job) => {
     const status = job.status === 'FAILED'
       ? { label: '识别失败', color: 'error' }
       : job.status === 'PARSED'
@@ -135,7 +185,7 @@ export function TemplateUploadPage() {
     return {
       id: job.id,
       name: job.sourceFileName,
-      meta: `${job.format === 'XLSX' ? 'Excel' : 'Word'} · ${new Date(job.createdAt).toLocaleString('zh-CN')}`,
+      meta: `${job.format === 'XLSX' ? 'Excel' : 'Word'}${job.categoryName ? ` · ${job.categoryName}` : ' · 未分类'} · ${new Date(job.createdAt).toLocaleString('zh-CN')}`,
       detail: job.status === 'PARSED' ? recognitionLabel(job) : stageLabel(job.currentStage),
       status,
       progress: job.progress,
@@ -143,18 +193,23 @@ export function TemplateUploadPage() {
         <Button type="link" disabled={job.status !== 'PARSED'} onClick={() => void openRecognition(job)}>查看识别结果</Button>
         <Button type="link" disabled={job.status !== 'PARSED'} onClick={() => openCreate(job)}>创建模板</Button>
         <Button type="link" icon={<ReloadOutlined />} loading={retryingJobId === job.id} disabled={!['PARSED', 'FAILED'].includes(job.status)} onClick={() => void retryRecognition(job)}>重试</Button>
-        <Button type="link" danger icon={<DeleteOutlined />} loading={deletingJobId === job.id} disabled={!['PARSED', 'FAILED'].includes(job.status)} aria-label={`删除 ${job.sourceFileName}`} onClick={() => Modal.confirm({ title: `删除“${job.sourceFileName}”的识别记录？`, content: '只删除识别记录和审计数据，不删除原始文件；已生成模板的记录不能删除。', okText: '删除记录', okButtonProps: { danger: true }, cancelText: '取消', onOk: () => deleteRecognition(job) })} />
+        <Button type="link" danger icon={<DeleteOutlined />} loading={deletingJobId === job.id} disabled={!['PARSED', 'FAILED'].includes(job.status)} aria-label={`删除 ${job.sourceFileName}`} onClick={() => Modal.confirm({ title: `删除“${job.sourceFileName}”的识别记录？`, content: '只删除识别记录，不删除原始文件；已生成模板的记录不能删除。', okText: '删除记录', okButtonProps: { danger: true }, cancelText: '取消', onOk: () => deleteRecognition(job) })} />
       </Space>,
     };
   });
+  const uploadRecords = allUploadRecords.slice((recordPage.current - 1) * recordPage.pageSize, recordPage.current * recordPage.pageSize);
+
+  useEffect(() => {
+    const maxPage = Math.max(1, Math.ceil(allUploadRecords.length / recordPage.pageSize));
+    if (recordPage.current > maxPage) setRecordPage((value) => ({ ...value, current: maxPage }));
+  }, [allUploadRecords.length, recordPage.current, recordPage.pageSize]);
 
   const openCreate = (job: TemplateImportJob) => {
     setSelectedJob(job);
     form.setFieldsValue({
       name: job.sourceFileName.replace(/\.(xlsx|docx)$/i, ''),
       format: job.format,
-      scope: 'TEMPLATE_CENTER',
-      targetDataType: undefined,
+      category: job.categoryName ?? uploadCategory,
     });
   };
 
@@ -162,12 +217,8 @@ export function TemplateUploadPage() {
     setViewingJob(job);
     setViewLoading(true);
     try {
-      const [suggestions, calls] = await Promise.all([
-        templateApi.listRecognitionSuggestions(job.id),
-        templateApi.listRecognitionCalls(job.id),
-      ]);
+      const suggestions = await templateApi.listRecognitionSuggestions(job.id);
       setViewSuggestions(suggestions);
-      setViewCalls(calls);
     } catch (error) {
       void message.error(error instanceof Error ? error.message : '识别详情加载失败');
     } finally {
@@ -211,9 +262,14 @@ export function TemplateUploadPage() {
     setRetryingJobId(job.id);
     try {
       if (job.generatedTemplateVersionId && job.workspaceHash) {
-        await templateApi.retryImport(job.id, job.workspaceHash);
+        const useDraftSnapshot = Boolean(job.generatedTemplateVersionId && job.workspaceHash);
+        await templateApi.retryImport(
+          job.id,
+          useDraftSnapshot ? 'CURRENT_DRAFT_SNAPSHOT' : 'ORIGINAL_FILE',
+          useDraftSnapshot ? job.workspaceHash : undefined,
+        );
       } else {
-        await templateApi.createImport(job.sourceFileId, job.format);
+        await templateApi.retryImport(job.id, 'ORIGINAL_FILE');
       }
       await load();
       void message.success(
@@ -234,7 +290,6 @@ export function TemplateUploadPage() {
         breadcrumbs={[{ title: '模板中心' }, { title: '模板上传' }]}
         title="模板上传"
         description="上传后系统自动识别字段、业务分组和表格区域；进入工作台后只需确认少量不确定内容。"
-        headerActions={<Button onClick={() => navigate('/templates/library')}>模板查看</Button>}
         leftTitle="基础分类"
         classification={<Form layout="vertical" component={false}>
           <Form.Item label="模板分类">
@@ -245,6 +300,7 @@ export function TemplateUploadPage() {
           </Form.Item>
         </Form>}
         accept={accepted}
+        beforeUpload={validateTemplateFile}
         multiple
         files={files}
         onFilesChange={setFiles}
@@ -260,11 +316,13 @@ export function TemplateUploadPage() {
         rightCount={filteredJobs.length}
         rightFilters={[{ key: 'ALL', label: '全部' }, { key: 'PROCESSING', label: '识别中' }, { key: 'PARSED', label: '已识别' }, { key: 'FAILED', label: '失败' }]}
         activeFilter={jobFilter}
-        onFilterChange={setJobFilter}
+        onFilterChange={(value) => { setJobFilter(value); setRecordPage((current) => ({ ...current, current: 1 })); }}
         searchValue={jobKeyword}
-        onSearchChange={setJobKeyword}
+        onSearchChange={(value) => { setJobKeyword(value); setRecordPage((current) => ({ ...current, current: 1 })); }}
         records={uploadRecords}
         recordsLoading={uploading}
+        pagination={{ ...recordPage, total: allUploadRecords.length }}
+        onPageChange={(current, pageSize) => setRecordPage({ current, pageSize })}
       />
 
       <Modal
@@ -297,19 +355,6 @@ export function TemplateUploadPage() {
               placeholder="选择分类（可在模板列表中管理）"
               options={categories.map((item) => ({ value: item.name, label: item.name }))}
             />
-          </Form.Item>
-          <Form.Item name="purpose" label="业务用途">
-            <Input.TextArea rows={3} placeholder="说明这个模板用于什么业务场景" maxLength={300} />
-          </Form.Item>
-          <Form.Item name="scope" label="模板用途" rules={[{ required: true, message: '请选择模板用途' }]} initialValue="TEMPLATE_CENTER">
-            <Select options={[{ value: 'TEMPLATE_CENTER', label: '模板中心/生产业务' }, { value: 'DATA_CENTER', label: '数据中心导入' }]} />
-          </Form.Item>
-          <Form.Item noStyle shouldUpdate={(previous: Partial<CreateTemplateInput>, current: Partial<CreateTemplateInput>) => previous.scope !== current.scope}>
-            {({ getFieldValue }) => getFieldValue('scope') === 'DATA_CENTER' ? (
-              <Form.Item name="targetDataType" label="目标数据类型" rules={[{ required: true, message: '请选择目标数据类型' }]}>
-                <Select options={targetDataTypeOptions} />
-              </Form.Item>
-            ) : null}
           </Form.Item>
         </Form>
       </Modal>
@@ -347,7 +392,7 @@ export function TemplateUploadPage() {
               message={viewingJob ? recognitionLabel(viewingJob) : '识别结果'}
               description={
                 viewingJob
-                  ? `${recognitionDescription(viewingJob)} 共 ${viewCalls.length} 次模型调用。`
+                  ? recognitionDescription(viewingJob)
                   : undefined
               }
             />
@@ -358,38 +403,11 @@ export function TemplateUploadPage() {
               dataSource={displaySuggestions}
               columns={[
                 {
-                  title: '字段/区域',
+                  title: '识别项目',
                   dataIndex: 'label',
                 },
-                { title: '类型', dataIndex: 'type' },
-                { title: '状态', dataIndex: 'decision' },
-                { title: '位置', dataIndex: 'location' },
                 { title: '说明', dataIndex: 'details' },
               ]}
-            />
-            <Collapse
-              items={viewCalls.map((call) => ({
-                key: call.id,
-                label: `${call.status} · ${call.phase} · 第 ${call.attempt} 次 · ${call.durationMs}ms`,
-                children: (
-                  <Space direction="vertical" style={{ width: '100%' }}>
-                    {call.errorMessage && (
-                      <Alert
-                        type="error"
-                        message={`${call.errorType || '调用错误'}：${call.errorMessage}`}
-                      />
-                    )}
-                    <Typography.Text strong>完整脱敏请求</Typography.Text>
-                    <pre className="recognition-audit-payload">
-                      {JSON.stringify(call.requestPayload, null, 2)}
-                    </pre>
-                    <Typography.Text strong>完整脱敏响应</Typography.Text>
-                    <pre className="recognition-audit-payload">
-                      {JSON.stringify(call.responsePayload, null, 2)}
-                    </pre>
-                  </Space>
-                ),
-              }))}
             />
           </Space>
         )}

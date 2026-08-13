@@ -28,16 +28,16 @@ public class DataCategoryService {
     }
 
     @Transactional
-    public DataCategoryRepository.Category create(String name, String targetDataType) {
+    public DataCategoryRepository.Category create(String name, String targetDataType, String description) {
         var actor = ActorContext.required();
-        return repository.create(actor.organizationId(), actor.userId(), normalizeName(name), normalizeType(targetDataType));
+        return repository.create(actor.organizationId(), actor.userId(), normalizeName(name), normalizeType(targetDataType), normalizeDescription(description));
     }
 
     @Transactional
-    public DataCategoryRepository.Category rename(UUID id, String name) {
+    public DataCategoryRepository.Category rename(UUID id, String name, String description) {
         var actor = ActorContext.required();
         require(actor.organizationId(), id);
-        return repository.rename(actor.organizationId(), id, normalizeName(name));
+        return repository.rename(actor.organizationId(), id, normalizeName(name), normalizeDescription(description));
     }
 
     @Transactional
@@ -83,5 +83,12 @@ public class DataCategoryService {
         var name = value.trim();
         if (name.length() > 120) throw new ApiException(ApiErrorCode.BAD_REQUEST, "分类名称不能超过 120 个字符");
         return name;
+    }
+
+    private String normalizeDescription(String value) {
+        if (!StringUtils.hasText(value)) return null;
+        var description = value.trim();
+        if (description.length() > 240) throw new ApiException(ApiErrorCode.BAD_REQUEST, "分类简介不能超过 240 个字符");
+        return description;
     }
 }

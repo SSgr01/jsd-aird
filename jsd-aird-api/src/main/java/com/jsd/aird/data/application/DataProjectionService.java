@@ -29,7 +29,7 @@ public class DataProjectionService {
         var actor = ActorContext.required();
         var job = imports.get(importJobId);
         var result = repository.project(actor.organizationId(), importJobId, actor.userId(), job.templateVersionId(),
-                List.of(), templates.getPublishedBindings(actor.organizationId(), job.templateVersionId()));
+                List.of(), templates.getBindings(actor.organizationId(), job.templateVersionId()));
         return new DataImportService.ProjectionSummary(result.datasetId(), "DRAFT", result.recordCount(),
                 result.longValueCount(), result.eligibleRecordCount());
     }
@@ -37,7 +37,7 @@ public class DataProjectionService {
     public void projectInternal(UUID organizationId, UUID actorId, UUID importJobId, UUID templateVersionId,
                                 List<UUID> revisionIds) {
         repository.project(organizationId, importJobId, actorId, templateVersionId, revisionIds,
-                templates.getPublishedBindings(organizationId, templateVersionId));
+                templates.getBindings(organizationId, templateVersionId));
     }
 
     public DataProjectionRepository.TrainingDataset latest(UUID importJobId) {
@@ -69,6 +69,10 @@ public class DataProjectionService {
         }
         var existing = repository.findDataset(actor.organizationId(), datasetId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "训练数据集不存在"));
+        if ("APPROVED".equals(status)
+                && "DISABLED".equals(existing.schema().path("approvalPolicy").asText(""))) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "V2 导入生成的数据集仅为草稿，本阶段不允许审核或训练消费");
+        }
         if ("APPROVED".equals(status) && !List.of("DRAFT", "REVIEWING").contains(existing.status())) {
             throw new ApiException(ApiErrorCode.BAD_REQUEST, "当前训练数据集状态不可审核通过");
         }

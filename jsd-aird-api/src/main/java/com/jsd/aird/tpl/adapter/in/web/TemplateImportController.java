@@ -90,7 +90,8 @@ public class TemplateImportController {
     public ApiResponse<TemplateImportRepository.ImportJobView> create(
             @Valid @RequestBody CreateRequest request
     ) {
-        return success(service.create(request.fileId(), request.format()));
+        return success(service.create(request.fileId(), request.format(), request.categoryId(),
+                request.duplicateOverride(), request.operationSource()));
     }
 
     @PostMapping("/{importJobId}/retry")
@@ -107,12 +108,15 @@ public class TemplateImportController {
         return ResponseFactory.success(value, RequestIdHolder.currentOrUnknown());
     }
 
-    public record CreateRequest(@NotNull UUID fileId, @NotNull TemplateFormat format) {
+    public record CreateRequest(
+            @NotNull UUID fileId, @NotNull TemplateFormat format,
+            UUID categoryId, boolean duplicateOverride, String operationSource
+    ) {
     }
 
     public record DecisionRequest(@NotNull String decision) {
     }
 
-    public record RetryRequest(@NotNull String source, @NotNull String baseWorkspaceHash) {
+    public record RetryRequest(@NotNull String source, String baseWorkspaceHash) {
     }
 }

@@ -1,4 +1,4 @@
-import { DatabaseOutlined, DownloadOutlined, EyeOutlined, FileExcelOutlined, RightOutlined } from '@ant-design/icons';
+import { DownloadOutlined, EyeOutlined, FileExcelOutlined, RightOutlined } from '@ant-design/icons';
 import { App, Button, Form, Select } from 'antd';
 import type { UploadFile } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -155,13 +155,12 @@ export function DataUploadPage() {
       breadcrumbs={[{ title: '数据中心' }, { title: '数据上传' }]}
       title="数据上传"
       description="选择已发布的数据中心模板，上传后按 Sheet、字段和质量问题逐步确认。"
-      headerActions={<Button icon={<DatabaseOutlined />} onClick={() => navigate('/data/view')}>查看正式数据</Button>}
       leftTitle="数据分类"
       classification={<Form layout="vertical" component={false}>
         <Form.Item label="数据类型" required>
           <Select value={target} options={dataTypeOptions} onChange={setTarget} />
         </Form.Item>
-        <Form.Item label="导入模板" required help="仅显示已发布且适用于当前数据类型的 XLSX 模板。">
+        <Form.Item label="导入模板" required help="显示已发布的 XLSX 模板，数据类型由上方选择。">
           <Select
             showSearch
             optionFilterProp="label"
@@ -169,7 +168,7 @@ export function DataUploadPage() {
             value={templateVersionId}
             onChange={setTemplateVersionId}
             options={templates.map((item) => ({ value: item.versionId, label: `${item.name} · ${item.templateCode} · V${item.versionNo}` }))}
-            notFoundContent="暂无适用的已发布模板"
+            notFoundContent="暂无已发布模板"
           />
         </Form.Item>
         <Form.Item label="归档分类" help="未选择时自动归入当前数据类型的内置分类。">

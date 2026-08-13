@@ -68,19 +68,34 @@ public class JdbcDataProjectionRepository implements DataProjectionRepository {
                 .put("projection", "LONG_TABLE")
                 .put("projectionVersion", "v1")
                 .put("templateVersionId", templateVersionId.toString());
+        var contract = jdbc.query("""
+                SELECT import_contract_version, contract_hash
+                FROM data.import_job WHERE organization_id = ? AND id = ?
+                """, (rs, rowNum) -> new ContractRef((Integer) rs.getObject(1), rs.getString(2)),
+                organizationId, importJobId).stream().findFirst().orElse(new ContractRef(null, null));
+        if (contract.version() != null) {
+            schema.put("importContractVersion", contract.version())
+                    .put("contractHash", contract.hash())
+                    .put("approvalPolicy", "DISABLED");
+        }
         jdbc.update("""
                 INSERT INTO ai.training_dataset (
                     id, organization_id, import_job_id, template_version_id, projection_version,
-                    name, status, schema_jsonb, quality_summary_jsonb, source_revision_ids_jsonb, created_by
-                ) VALUES (?, ?, ?, ?, 'v1', ?, 'DRAFT', ?, '{}'::jsonb, ?, ?)
+                    name, status, schema_jsonb, quality_summary_jsonb, source_revision_ids_jsonb, created_by,
+                    import_contract_version, contract_hash, approval_policy
+                ) VALUES (?, ?, ?, ?, 'v1', ?, 'DRAFT', ?, '{}'::jsonb, ?, ?, ?, ?, ?)
                 """, datasetId, organizationId, importJobId, templateVersionId,
-                "导入批次长表候选 - " + importJobId, pgJson(schema), pgJson(sourceRevisionIds), actorId);
+                "导入批次长表候选 - " + importJobId, pgJson(schema), pgJson(sourceRevisionIds), actorId,
+                contract.version(), contract.hash(), contract.version() == null ? "LEGACY" : "DISABLED");
 
         int recordCount = 0;
         int longValueCount = 0;
         int eligibleRecordCount = 0;
         var bindingsByField = bindings.stream().filter(item -> item.fieldCode() != null && !item.fieldCode().isBlank())
                 .collect(java.util.stream.Collectors.toMap(TemplateDataImportFacade.ImportBinding::fieldCode,
+                        item -> item, (left, right) -> left));
+        var bindingsById = bindings.stream().filter(item -> item.bindingId() != null && !item.bindingId().isBlank())
+                .collect(java.util.stream.Collectors.toMap(TemplateDataImportFacade.ImportBinding::bindingId,
                         item -> item, (left, right) -> left));
         for (var item : revisions) {
             var anchors = anchors(item.id());
@@ -107,7 +122,9 @@ public class JdbcDataProjectionRepository implements DataProjectionRepository {
             var values = effective.fields();
             while (values.hasNext()) {
                 var entry = values.next();
-                var binding = bindingsByField.get(entry.getKey());
+                var fieldCode = entry.getValue().path("fieldCode").asText(entry.getKey().split("@", 2)[0]);
+                var binding = bindingsById.get(entry.getValue().path("bindingId").asText(""));
+                if (binding == null) binding = bindingsByField.get(fieldCode);
                 if (binding != null) {
                     dimensions.put(entry.getKey() + ".mappingKind", binding.mappingKind());
                     if (binding.repeatAxis() != null && !binding.repeatAxis().isBlank()) {
@@ -122,13 +139,16 @@ public class JdbcDataProjectionRepository implements DataProjectionRepository {
                     dimensions.put(dataPath.substring("/dimensions/".length()), effectiveValue.asText(""));
                 }
                 var dimensionOnly = binding == null && dataPath.startsWith("/dimensions/");
-                var result = appendValues(organizationId, recordId, entry.getKey(), dataPath,
+                var result = appendValues(organizationId, recordId, fieldCode, dataPath,
                         entry.getValue(), anchors.getOrDefault(entry.getKey(), List.of()),
                         dimensionOnly ? objectMapper.createObjectNode() : measures,
-                        binding == null || binding.trainingEligible());
+                        binding == null || binding.trainingEligible(), binding);
                 recordValueCount += result.count();
                 longValueCount += result.count();
-                eligible &= result.eligible();
+                var role = binding == null ? "FEATURE" : binding.trainingRole();
+                var requiredForTraining = binding != null && binding.required()
+                        && ("FEATURE".equalsIgnoreCase(role) || "TARGET".equalsIgnoreCase(role));
+                if (requiredForTraining) eligible &= result.eligible();
             }
             eligible &= recordValueCount > 0;
             if (eligible) eligibleRecordCount++;
@@ -273,13 +293,14 @@ public class JdbcDataProjectionRepository implements DataProjectionRepository {
 
     private AppendResult appendValues(UUID organizationId, UUID recordId, String fieldCode, String dataPath,
                                       JsonNode node, List<Anchor> anchors, ObjectNode measures,
-                                      boolean bindingTrainingEligible) {
+                                      boolean bindingTrainingEligible,
+                                      TemplateDataImportFacade.ImportBinding binding) {
         if (node != null && node.isArray()) {
             int count = 0;
             boolean eligible = true;
             for (int i = 0; i < node.size(); i++) {
                 var child = appendValues(organizationId, recordId, fieldCode, dataPath + "/" + i,
-                        node.get(i), anchors, measures, bindingTrainingEligible);
+                        node.get(i), anchors, measures, bindingTrainingEligible, binding);
                 count += child.count();
                 eligible &= child.eligible();
             }
@@ -291,23 +312,61 @@ public class JdbcDataProjectionRepository implements DataProjectionRepository {
         eligible &= bindingTrainingEligible;
         if (wrapper != null && wrapper.has("trainingEligible")) eligible &= wrapper.path("trainingEligible").asBoolean(true);
         var reason = eligible ? null : "空值或不可训练字段";
+        var wrapperValueSource = wrapper == null ? "" : wrapper.path("valueSource").asText("");
+        var valueSource = !wrapperValueSource.isBlank() ? wrapperValueSource.toUpperCase(java.util.Locale.ROOT)
+                : binding == null || binding.valueSource() == null || binding.valueSource().isBlank()
+                ? "INPUT" : binding.valueSource().toUpperCase(java.util.Locale.ROOT);
+        if (!java.util.Set.of("INPUT", "FORMULA", "DERIVED", "STATIC").contains(valueSource)) valueSource = "INPUT";
+        var calculationSource = wrapper == null ? null : wrapper.path("calculationSource").asText(null);
+        var calculationStatus = wrapper == null ? null : wrapper.path("calculationStatus").asText(null);
+        var formulaTrustStatus = wrapper == null ? null : wrapper.path("formulaTrustStatus").asText(null);
+        if ("FORMULA".equals(valueSource)) {
+            if (calculationSource == null || calculationSource.isBlank()) calculationSource = "MISSING";
+            if (calculationStatus == null || calculationStatus.isBlank()) calculationStatus = "FAILED";
+            if (formulaTrustStatus == null || formulaTrustStatus.isBlank()) {
+                formulaTrustStatus = "VALID".equals(calculationStatus) ? "TRUSTED_RECALCULATED"
+                        : "STALE_POSSIBLE".equals(calculationStatus) ? "UNVERIFIED_CACHE" : "MISSING_RESULT";
+            }
+            eligible &= "VALID".equals(calculationStatus);
+            if (!eligible) reason = "公式计算结果缺失或不可信";
+        } else {
+            calculationSource = null;
+            calculationStatus = null;
+            formulaTrustStatus = "NOT_APPLICABLE";
+        }
         var anchor = anchors.isEmpty() ? null : anchors.getFirst();
         var anchorId = anchor == null ? null : anchor.id();
+        var effectiveBindingId = binding == null || binding.bindingId() == null || binding.bindingId().isBlank()
+                ? fieldCode : binding.bindingId();
+        var labelPath = binding == null ? wrapper == null ? null : wrapper.path("labelPath").asText(null) : binding.labelPath();
+        var ragEligible = binding == null ? wrapper == null || wrapper.path("ragEligible").asBoolean(true) : binding.ragEligible();
         jdbc.update("""
                 INSERT INTO data.data_value (
                     id, organization_id, record_id, field_code, data_path, value_jsonb, value_text,
                     normalized_unit, source_anchor_id, training_eligible, exclusion_reason
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT (record_id, field_code, data_path) DO UPDATE SET
+                    , binding_id, value_path, label_path, rag_eligible, value_source, calculation_source, calculation_status,
+                    calculation_trust_status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (record_id, binding_id, value_path)
+                    WHERE binding_id IS NOT NULL AND value_path IS NOT NULL
+                DO UPDATE SET
                     value_jsonb = EXCLUDED.value_jsonb, value_text = EXCLUDED.value_text,
                     normalized_unit = EXCLUDED.normalized_unit, source_anchor_id = EXCLUDED.source_anchor_id,
-                    training_eligible = EXCLUDED.training_eligible, exclusion_reason = EXCLUDED.exclusion_reason
+                    training_eligible = EXCLUDED.training_eligible, exclusion_reason = EXCLUDED.exclusion_reason,
+                    binding_id = EXCLUDED.binding_id, value_path = EXCLUDED.value_path,
+                    label_path = EXCLUDED.label_path, rag_eligible = EXCLUDED.rag_eligible,
+                    value_source = EXCLUDED.value_source, calculation_source = EXCLUDED.calculation_source,
+                    calculation_status = EXCLUDED.calculation_status,
+                    calculation_trust_status = EXCLUDED.calculation_trust_status
                 """, UUID.randomUUID(), organizationId, recordId, fieldCode, dataPath,
                 pgJson(value == null ? objectMapper.nullNode() : value),
                 value == null || value.isContainerNode() ? null : value.asText(),
                 wrapper == null ? null : wrapper.path("normalizedUnit").asText(null), anchorId,
-                eligible, reason);
-        measures.set(dataPath, value == null ? objectMapper.nullNode() : value.deepCopy());
+                eligible, reason, effectiveBindingId, dataPath,
+                labelPath, ragEligible, valueSource, calculationSource, calculationStatus, formulaTrustStatus);
+        if (!"FORMULA".equals(valueSource) || "VALID".equals(calculationStatus)) {
+            measures.set(dataPath, value == null ? objectMapper.nullNode() : value.deepCopy());
+        }
         return new AppendResult(1, eligible);
     }
 
@@ -394,4 +453,5 @@ public class JdbcDataProjectionRepository implements DataProjectionRepository {
     private record Anchor(UUID id, String fieldCode, String sheetId, String sheetName, Integer rowNumber,
                           String columnName, String address) {}
     private record AppendResult(int count, boolean eligible) {}
+    private record ContractRef(Integer version, String hash) {}
 }

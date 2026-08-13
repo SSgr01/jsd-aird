@@ -5,10 +5,11 @@ import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 
 import '@univerjs/preset-sheets-core/lib/index.css';
 
-import { isCellMutationCommand, isSingleCellAddress } from './live-field-discovery';
+import { isCellMutationCommand, isNewFieldLabelChange, isSingleCellAddress } from './live-field-discovery';
 import { operationFromUniverCommand } from './structure-migration';
 import type {
   EditorHandle,
+  EditorCellChange,
   EditorSelection,
   TemplateBinding,
   WorkbookStructureOperation,
@@ -23,6 +24,7 @@ interface Props {
   editable?: boolean;
   onSelectionChange?: (selection: EditorSelection) => void;
   onUnboundCellChange?: (selection: EditorSelection, value: unknown) => void;
+  onCellChange?: (change: EditorCellChange) => void;
   onStructureChange?: (operation: WorkbookStructureOperation) => void;
   onReady?: () => void;
 }
@@ -37,6 +39,7 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
     editable = true,
     onSelectionChange,
     onUnboundCellChange,
+    onCellChange,
     onStructureChange,
     onReady,
   },
@@ -52,6 +55,7 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
     onEditorLabel,
     onSelectionChange,
     onUnboundCellChange,
+    onCellChange,
     onStructureChange,
     onReady,
   });
@@ -66,6 +70,7 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
     onEditorLabel,
     onSelectionChange,
     onUnboundCellChange,
+    onCellChange,
     onStructureChange,
     onReady,
   };
@@ -80,6 +85,7 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
     let cancelled = false;
     let animationFrame = 0;
     let commandSubscription: { dispose(): void } | undefined;
+    let globalCommandSubscription: { dispose(): void } | undefined;
     let selectionSubscription: { dispose(): void } | undefined;
     let ownedUniver: ReturnType<typeof createUniver>['univer'] | undefined;
     let ownedApi: FUniver | undefined;
@@ -87,6 +93,14 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
     const bindingValues = new Map<string, unknown>();
     let pendingSynchronization = 0;
     let latestSelection: EditorSelection | undefined;
+    let latestSelectionValue: unknown;
+    let hasLatestSelectionValue = false;
+    let recentCommandKey = '';
+    let recentCommandAt = 0;
+    let recentUnboundKey = '';
+    let recentUnboundAt = 0;
+    let cellChangeEventsArmed = false;
+    let cellChangeArmTimer = 0;
 
     const initialize = () => {
       if (cancelled) return;
@@ -122,27 +136,76 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
           sheetName: initialSheet.getSheetName(),
           address: initialRange.getA1Notation(),
         };
+        try {
+          latestSelectionValue = initialRange.getValue();
+          hasLatestSelectionValue = true;
+        } catch {
+          latestSelectionValue = undefined;
+        }
       }
       if (editableRef.current) {
         void protectReadOnlyRanges(univerAPI, bindingsRef.current).catch(() => undefined);
       }
       window.requestAnimationFrame(() => {
         window.requestAnimationFrame(() => {
-          if (!cancelled) callbacksRef.current.onReady?.();
+          if (!cancelled) {
+            // createWorkbook emits value-mutation commands while restoring the snapshot. They are not user
+            // edits and must never trigger field discovery or data correction callbacks.
+            callbacksRef.current.onReady?.();
+            cellChangeArmTimer = window.setTimeout(() => {
+              if (!cancelled) cellChangeEventsArmed = true;
+            }, 650);
+          }
         });
       });
       for (const binding of bindingsRef.current) {
         labelValues.set(labelCacheKey(binding), readLabelCell(univerAPI, binding));
         bindingValues.set(valueCacheKey(binding), readCell(univerAPI, binding));
       }
-      // Subscribe on the workbook rather than only on the global API. Direct
-      // typing, paste and fill commands are emitted by the workbook command
-      // service in some Univer versions.
-      commandSubscription = workbook.onCommandExecuted((command) => {
+      const emitUnboundCellChange = (selection: EditorSelection, value: unknown, previousValue: unknown) => {
+        if (!cellChangeEventsArmed) return;
+        if (!isSingleCellAddress(selection.address)) return;
+        // Live discovery is only for a brand-new label typed into an empty
+        // cell. Clicking a cell or editing an existing template label must
+        // never create another field.
+        if (!isNewFieldLabelChange(previousValue, value)) return;
+        const key = `${selection.sheetId}|${selection.address}|${stableValueKey(value)}`;
+        const now = Date.now();
+        if (key === recentUnboundKey && now - recentUnboundAt < 120) return;
+        recentUnboundKey = key;
+        recentUnboundAt = now;
+        callbacksRef.current.onUnboundCellChange?.(selection, value);
+      };
+      const emitCellChange = (selection: EditorSelection, value: unknown, previousValue: unknown) => {
+        if (!cellChangeEventsArmed) return;
+        if (!isSingleCellAddress(selection.address) || sameValue(value, previousValue)) return;
+        callbacksRef.current.onCellChange?.({ ...selection, value, previousValue });
+      };
+      const synchronizeAfterCommand = (command: { id: string; params?: object }) => {
+        const paramsKey = (() => {
+          try {
+            return JSON.stringify(command.params ?? {});
+          } catch {
+            return '';
+          }
+        })();
+        const commandKey = `${command.id}|${paramsKey}`;
+        const now = Date.now();
+        // The workbook and global command buses can report the same edit. Do
+        // not schedule two discovery timers for that single keystroke.
+        if (commandKey === recentCommandKey && now - recentCommandAt < 32) return;
+        recentCommandKey = commandKey;
+        recentCommandAt = now;
         const structureOperation = operationFromUniverCommand(command);
-        if (!structureOperation && !isCellMutationCommand(command.id)) return;
+        const cellMutation = isCellMutationCommand(command.id, command.params);
+        if (!structureOperation && !cellMutation) return;
         callbacksRef.current.onDirty();
         if (structureOperation) callbacksRef.current.onStructureChange?.(structureOperation);
+        // Capture the cell before Univer moves the selection after Enter or a
+        // click. This is the cell that was actually edited, not the next blank
+        // cell that happened to become active.
+        const editedSelection = cellMutation && latestSelection
+          && isSingleCellAddress(latestSelection.address) ? latestSelection : undefined;
         window.cancelAnimationFrame(pendingSynchronization);
         pendingSynchronization = window.requestAnimationFrame(() => {
           const structuralParentIds = new Set(
@@ -174,11 +237,22 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
           }
           if (!suppressUnboundRef.current) {
             const activeWorkbook = univerAPI.getActiveWorkbook() ?? workbook;
-            const activeSheet = activeWorkbook.getActiveSheet();
-            const activeRange = activeSheet?.getActiveRange() ?? activeWorkbook.getActiveRange();
-            const activeAddress = activeRange?.getA1Notation() ?? latestSelection?.address;
-            const activeSheetId = activeSheet?.getSheetId() ?? latestSelection?.sheetId;
-            const activeSheetName = activeSheet?.getSheetName() ?? latestSelection?.sheetName;
+            const currentSheet = activeWorkbook.getActiveSheet();
+            const currentRange = currentSheet?.getActiveRange() ?? activeWorkbook.getActiveRange();
+            const editedSheet = editedSelection
+              ? activeWorkbook.getSheetBySheetId(editedSelection.sheetId) ?? currentSheet
+              : currentSheet;
+            const editedRange = editedSelection
+              ? editedSheet?.getRange(editedSelection.address)
+              : undefined;
+            const activeSheet = editedSheet ?? currentSheet;
+            const activeRange = editedRange ?? currentRange;
+            const activeAddress = editedSelection?.address
+              ?? activeRange?.getA1Notation() ?? latestSelection?.address;
+            const activeSheetId = editedSelection?.sheetId
+              ?? activeSheet?.getSheetId() ?? latestSelection?.sheetId;
+            const activeSheetName = editedSelection?.sheetName
+              ?? activeSheet?.getSheetName() ?? latestSelection?.sheetName;
             if (
               activeSheet
               && activeAddress
@@ -191,23 +265,70 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
                 sheetName: activeSheetName,
                 address: activeAddress,
               };
-              latestSelection = selection;
               const value = activeRange?.getValue() ?? activeSheet.getRange(activeAddress).getValue();
-              callbacksRef.current.onUnboundCellChange?.(selection, value);
+              const previousValue = editedSelection
+                && latestSelection?.sheetId === editedSelection.sheetId
+                && latestSelection.address === editedSelection.address
+                && hasLatestSelectionValue
+                ? latestSelectionValue : undefined;
+              if (!editedSelection) latestSelection = selection;
+              if (editedSelection
+                && latestSelection?.sheetId === editedSelection.sheetId
+                && latestSelection.address === editedSelection.address) {
+                latestSelectionValue = value;
+                hasLatestSelectionValue = true;
+              }
+              emitUnboundCellChange(selection, value, previousValue);
+              if (editedSelection) emitCellChange(selection, value, previousValue);
             }
           }
         });
-      });
+      };
+      // Subscribe on both buses. Direct typing is emitted by the workbook
+      // command service in some Univer versions and only by the global facade
+      // in others.
+      commandSubscription = workbook.onCommandExecuted(synchronizeAfterCommand);
+      globalCommandSubscription = univerAPI.addEvent(
+        univerAPI.Event.CommandExecuted,
+        synchronizeAfterCommand,
+      );
       selectionSubscription = workbook.onSelectionChange((selections) => {
         const selection = selections.at(-1);
         const sheet = workbook.getActiveSheet();
         if (!selection || !sheet) return;
+        // Some Univer input paths do not publish a recognizable cell-value
+        // command. When the user leaves the edited cell, compare its current
+        // value with the value captured on entry and emit the same callback as
+        // the command path. This is the reliable path for typing a label and
+        // then clicking another cell.
+        if (latestSelection && isSingleCellAddress(latestSelection.address)) {
+          const previousSheet = workbook.getSheetBySheetId(latestSelection.sheetId);
+          if (previousSheet) {
+            try {
+              const previousValue = previousSheet.getRange(latestSelection.address).getValue();
+              if (!hasLatestSelectionValue || !sameValue(previousValue, latestSelectionValue)) {
+                emitUnboundCellChange(latestSelection, previousValue, latestSelectionValue);
+                emitCellChange(latestSelection, previousValue, latestSelectionValue);
+              }
+            } catch {
+              // Merged or transient ranges can be unavailable during a
+              // selection transition; the command path will handle them.
+            }
+          }
+        }
         const range = sheet.getRange(selection);
         latestSelection = {
           sheetId: sheet.getSheetId(),
           sheetName: sheet.getSheetName(),
           address: range.getA1Notation(),
         };
+        try {
+          latestSelectionValue = range.getValue();
+          hasLatestSelectionValue = true;
+        } catch {
+          latestSelectionValue = undefined;
+          hasLatestSelectionValue = false;
+        }
         callbacksRef.current.onSelectionChange?.(latestSelection);
       });
     };
@@ -215,9 +336,12 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
 
     return () => {
       cancelled = true;
+      cellChangeEventsArmed = false;
       window.cancelAnimationFrame(animationFrame);
       window.cancelAnimationFrame(pendingSynchronization);
+      window.clearTimeout(cellChangeArmTimer);
       commandSubscription?.dispose();
+      globalCommandSubscription?.dispose();
       selectionSubscription?.dispose();
       highlightRef.current.forEach((highlight) => highlight.dispose());
       highlightRef.current = [];
@@ -225,10 +349,12 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
       highlightTimersRef.current = [];
       if (apiRef.current === ownedApi) apiRef.current = undefined;
       if (univerRef.current === ownedUniver) univerRef.current = undefined;
-      window.setTimeout(() => {
-        ownedUniver?.dispose();
-        if (host.parentNode) host.parentNode.removeChild(host);
-      }, 32);
+      // Univer publishes internal React updates while disposing. Deferring
+      // disposal out of React's cleanup stack prevents the renderer warning,
+      // while the host is detached immediately so two editors are never
+      // visible or interactive at the same time.
+      if (host.parentNode) host.parentNode.removeChild(host);
+      window.setTimeout(() => ownedUniver?.dispose(), 0);
     };
   }, [snapshot]);
 
@@ -344,6 +470,24 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
             });
           }
         }
+      },
+      focusCell(sheetId, address) {
+        focusWorkbookRange(apiRef.current, sheetId, address);
+      },
+      focusRange(sheetId, address) {
+        focusWorkbookRange(apiRef.current, sheetId, address);
+      },
+      writeCell(sheetId, address, value) {
+        const workbook = apiRef.current?.getActiveWorkbook();
+        const sheet = workbook?.getSheetBySheetId(sheetId) ?? workbook?.getSheetByName(sheetId);
+        const range = sheet && validCell(address) ? sheet.getRange(address) : null;
+        if (!range) return Promise.reject(new Error(`无法定位单元格 ${address}`));
+        suppressUnboundRef.current = true;
+        const safeValue = value == null ? '' : value;
+        range.setValue(safeValue);
+        return verifyWrite(() => range.getValue(), safeValue).finally(() => {
+          suppressUnboundRef.current = false;
+        });
       },
       async appendRepeatRecord(binding) {
         if (!['REPEAT_REGION', 'REPEAT_FIELD', 'MATRIX_REGION', 'MATRIX_FIELD']
@@ -476,6 +620,15 @@ function resolveSheet(api: FUniver | undefined, binding: TemplateBinding) {
   if (sheetId) return workbook.getSheetBySheetId(sheetId);
   if (sheetName) return workbook.getSheetByName(sheetName);
   return workbook.getActiveSheet();
+}
+
+function focusWorkbookRange(api: FUniver | undefined, sheetId: string, address: string) {
+  const workbook = api?.getActiveWorkbook();
+  const sheet = workbook?.getSheetBySheetId(sheetId) ?? workbook?.getSheetByName(sheetId);
+  if (!workbook || !sheet || !validRange(address)) return;
+  const range = sheet.getRange(address);
+  workbook.setActiveSheet(sheet);
+  sheet.setActiveRange(range);
 }
 
 function resolveRange(api: FUniver | undefined, binding: TemplateBinding) {
@@ -676,6 +829,18 @@ function valueCacheKey(binding: TemplateBinding) {
 
 function sameValue(left: unknown, right: unknown) {
   return Object.is(left, right) || JSON.stringify(left) === JSON.stringify(right);
+}
+
+function stableValueKey(value: unknown) {
+  if (value == null) return '';
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  try {
+    return JSON.stringify(value) ?? '';
+  } catch {
+    return '';
+  }
 }
 
 function verifyWrite(read: () => unknown, expected: unknown) {

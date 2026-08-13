@@ -7,8 +7,6 @@ import java.util.UUID;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.jsd.aird.tpl.domain.TemplateFormat;
-import com.jsd.aird.tpl.domain.TargetDataType;
-import com.jsd.aird.tpl.domain.TemplateScope;
 import com.jsd.aird.tpl.domain.TemplateStatus;
 
 public interface TemplateRepository {
@@ -20,7 +18,15 @@ public interface TemplateRepository {
             TemplateStatus status
     );
 
-    List<TemplateListItem> findPublishedDataTemplates(UUID organizationId, TargetDataType targetDataType);
+    TemplatePage findTemplates(TemplateQuery query);
+
+    TemplateFacetSummary findTemplateFacets(TemplateFacetQuery query);
+
+    List<TemplateCreatorOption> findTemplateCreators(UUID organizationId);
+
+    Optional<TemplateSummary> findTemplateSummary(UUID organizationId, UUID templateId);
+
+    List<TemplateListItem> findPublishedDataTemplates(UUID organizationId);
 
     Optional<TemplateWorkspace> findPublishedDataTemplate(UUID organizationId, UUID versionId);
 
@@ -30,7 +36,9 @@ public interface TemplateRepository {
 
     void insertRevision(NewRevision version);
 
-    void copyMappings(UUID sourceVersionId, UUID targetVersionId);
+    void insertCopiedVersion(NewRevision version);
+
+    void copyMappings(UUID sourceVersionId, UUID targetVersionId, boolean preserveRecognitionReference);
 
     boolean hasOpenDraft(UUID organizationId, UUID templateId);
 
@@ -44,17 +52,19 @@ public interface TemplateRepository {
 
     List<TemplateCategoryItem> findCategories(UUID organizationId);
 
-    void insertCategory(UUID id, UUID organizationId, String name, int sortOrder, UUID actorId);
+    void insertCategory(UUID id, UUID organizationId, String name, String description, int sortOrder, UUID actorId);
 
     Optional<TemplateCategoryItem> findCategory(UUID organizationId, UUID categoryId);
 
     boolean categoryNameExists(UUID organizationId, String name, UUID excludingId);
 
-    int renameCategory(UUID organizationId, UUID categoryId, String name);
+    int renameCategory(UUID organizationId, UUID categoryId, String name, String description);
 
     int deleteCategory(UUID organizationId, UUID categoryId, UUID replacementCategoryId);
 
     int assignTemplateCategory(UUID organizationId, UUID templateId, UUID categoryId);
+
+    int renameTemplate(UUID organizationId, UUID templateId, String name);
 
     void ensureCategory(UUID organizationId, String name, UUID actorId);
 
@@ -80,6 +90,11 @@ public interface TemplateRepository {
 
     void publish(UUID organizationId, UUID versionId, UUID actorId);
 
+    void saveImportContract(UUID organizationId, UUID versionId, int importContractVersion,
+                            int layoutStructureVersion, String contractHash, JsonNode contract, UUID actorId);
+
+    Optional<ImportContract> findImportContract(UUID organizationId, UUID versionId);
+
     int updatePublishedWordDocument(UUID organizationId, UUID versionId, JsonNode wordDocument);
 
     void appendAudit(
@@ -98,20 +113,67 @@ public interface TemplateRepository {
             UUID versionId,
             String templateCode,
             String name,
-            String purpose,
             String category,
             TemplateFormat format,
             TemplateStatus status,
-            TemplateScope scope,
-            TargetDataType targetDataType,
             int versionNo,
             long lockVersion,
             Instant updatedAt,
-            int issueCount
+            int issueCount,
+            UUID categoryId,
+            UUID currentPublishedVersionId,
+            Integer currentPublishedVersionNo,
+            Integer retiredVersionNo,
+            UUID draftVersionId,
+            Integer draftVersionNo,
+            boolean hasDraft,
+            UUID createdBy,
+            String createdByName,
+            Instant createdAt
     ) {
     }
 
-    record TemplateCategoryItem(UUID id, String name, int sortOrder, int templateCount) {
+    record TemplateQuery(
+            UUID organizationId,
+            String keyword,
+            UUID categoryId,
+            boolean uncategorized,
+            TemplateFormat format,
+            TemplateStatus status,
+            UUID createdBy,
+            Instant updatedFrom,
+            Instant updatedTo,
+            String sortBy,
+            String sortDirection,
+            int page,
+            int size
+    ) {}
+
+    record TemplateFacetQuery(
+            UUID organizationId,
+            String keyword,
+            TemplateFormat format,
+            TemplateStatus status,
+            UUID createdBy,
+            Instant updatedFrom,
+            Instant updatedTo
+    ) {}
+
+    record TemplatePage(List<TemplateListItem> items, long total, int page, int size, int totalPages) {}
+
+    record TemplateFacetSummary(
+            long totalCount,
+            long uncategorizedCount,
+            List<TemplateCategoryCount> categoryCounts
+    ) {}
+
+    record TemplateCategoryCount(UUID categoryId, long count) {}
+
+    record TemplateCreatorOption(UUID id, String displayName) {}
+
+    record TemplateSummary(UUID id, String name, UUID categoryId, String category) {}
+
+    record TemplateCategoryItem(UUID id, String name, String description, int sortOrder, int templateCount) {
     }
 
     record NewTemplate(
@@ -119,7 +181,6 @@ public interface TemplateRepository {
             UUID organizationId,
             String code,
             String name,
-            String purpose,
             String category,
             TemplateFormat format,
             UUID actorId
@@ -138,8 +199,6 @@ public interface TemplateRepository {
             String mappingHash,
             String dataHash,
             String workspaceHash,
-            TemplateScope scope,
-            TargetDataType targetDataType,
             UUID actorId
     ) {
     }
@@ -160,8 +219,6 @@ public interface TemplateRepository {
             String mappingHash,
             String dataHash,
             String workspaceHash,
-            TemplateScope scope,
-            TargetDataType targetDataType,
             UUID actorId
     ) {
     }
@@ -191,8 +248,6 @@ public interface TemplateRepository {
             String mappingHash,
             String dataHash,
             String workspaceHash,
-            TemplateScope scope,
-            TargetDataType targetDataType,
             long lockVersion,
             boolean reconciliationRequired
     ) {
@@ -205,7 +260,12 @@ public interface TemplateRepository {
             Instant createdAt,
             Instant updatedAt,
             Instant publishedAt,
-            int saveCount
+            int saveCount,
+            UUID derivedFromVersionId,
+            UUID createdBy,
+            String createdByName,
+            boolean currentPublished,
+            boolean canRollback
     ) {
     }
 
@@ -214,6 +274,9 @@ public interface TemplateRepository {
 
     record StructureChange(UUID operationId, String type, String sheetId, JsonNode operation, String source) {
     }
+
+    record ImportContract(int importContractVersion, int layoutStructureVersion,
+                          String contractHash, JsonNode contract) {}
 
     record DraftUpdate(
             UUID organizationId,

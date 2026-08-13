@@ -7,6 +7,7 @@ import java.util.Locale;
 import com.jsd.aird.kb.domain.DocumentParser;
 import org.apache.poi.ss.usermodel.DataFormatter;
 import org.apache.poi.ss.usermodel.WorkbookFactory;
+import org.apache.poi.ss.util.CellReference;
 import org.apache.poi.xslf.usermodel.XMLSlideShow;
 import org.apache.poi.xslf.usermodel.XSLFShape;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
@@ -38,9 +39,12 @@ public class OfficeDocumentParser implements DocumentParser {
     private ParsedDocument parseDocx(InputStream source) throws Exception {
         var blocks = new ArrayList<TextBlock>();
         try (var document = new XWPFDocument(source)) {
+            var paragraphNo = 0;
             for (XWPFParagraph paragraph : document.getParagraphs()) {
                 var text = paragraph.getText().strip();
-                if (!text.isBlank()) blocks.add(new TextBlock(null, null, text));
+                if (!text.isBlank()) blocks.add(new TextBlock(null, "paragraph", text, null, null,
+                        "p-" + paragraphNo, java.util.List.of(), null, null, null));
+                paragraphNo++;
             }
             document.getTables().forEach(table -> table.getRows().forEach(row -> {
                 var text = row.getTableCells().stream().map(cell -> cell.getText().strip())
@@ -74,13 +78,19 @@ public class OfficeDocumentParser implements DocumentParser {
         var formatter = new DataFormatter();
         try (var workbook = WorkbookFactory.create(source)) {
             for (var sheet : workbook) {
-                var rowNo = 0;
                 for (var row : sheet) {
                     var values = new ArrayList<String>();
                     row.forEach(cell -> values.add(formatter.formatCellValue(cell)));
                     var text = String.join(" | ", values).strip();
-                    if (!text.isBlank()) blocks.add(new TextBlock(rowNo + 1, sheet.getSheetName(), text));
-                    rowNo++;
+                    if (!text.isBlank()) {
+                        var rowNumber = row.getRowNum() + 1;
+                        var first = Math.max(0, row.getFirstCellNum());
+                        var last = Math.max(first, row.getLastCellNum() - 1);
+                        var range = CellReference.convertNumToColString(first) + rowNumber + ":"
+                                + CellReference.convertNumToColString(last) + rowNumber;
+                        blocks.add(new TextBlock(null, "spreadsheet-row", text, sheet.getSheetName(), range,
+                                null, java.util.List.of(), null, null, null));
+                    }
                 }
             }
         }

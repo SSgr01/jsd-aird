@@ -515,7 +515,8 @@ public class DocxStructureParser implements OfficeStructureParser, WordDocumentP
         for (var index = 0; index < paragraphs.getLength(); index++) {
             if (!(paragraphs.item(index) instanceof Element paragraph)) continue;
             var value = text(paragraph).strip();
-            if (value.isBlank()) continue;
+            var pageBreak = hasPageBreak(paragraph);
+            if (value.isBlank() && !pageBreak) continue;
             sequence++;
             var properties = firstElement(paragraph, "pPr");
             var style = properties == null ? null : firstElement(properties, "pStyle");
@@ -529,14 +530,17 @@ public class DocxStructureParser implements OfficeStructureParser, WordDocumentP
             var styleId = style == null ? "" : attribute(style, "val");
             var title = isDocumentTitle(value, styleId, styleCatalog, alignment, bold, maxFontSize);
             var heading = title || isHeading(value, styleId, styleCatalog, outline, insideTable, bold, maxFontSize, paragraph);
+            var listItem = numId != null && !heading;
             var level = title ? 0 : headingLevel(value, styleId, styleCatalog, outline, numId, ilvl, insideTable, stack);
             while (!stack.isEmpty() && stack.get(stack.size() - 1).level >= level) stack.remove(stack.size() - 1);
             var nodeId = paragraphNodeId(paragraph, index + 1);
             var node = objectMapper.createObjectNode()
                     .put("nodeId", nodeId)
-                    .put("type", title ? "DOCUMENT_TITLE" : heading ? "HEADING" : "PARAGRAPH")
+                    .put("type", pageBreak && value.isBlank()
+                            ? "PAGE_BREAK"
+                            : title ? "DOCUMENT_TITLE" : heading ? "HEADING" : listItem ? "LIST_ITEM" : "PARAGRAPH")
                     .put("level", level)
-                    .put("text", value)
+                    .put("text", value.isBlank() && pageBreak ? "分页" : value)
                     .put("sortOrder", sequence);
             if (!stack.isEmpty()) node.put("parentId", stack.get(stack.size() - 1).nodeId);
             if (heading) node.put("title", value);
@@ -548,6 +552,7 @@ public class DocxStructureParser implements OfficeStructureParser, WordDocumentP
             if (outline != null) source.put("outlineLevel", attribute(outline, "val"));
             if (numId != null) source.put("numId", attribute(numId, "val"));
             if (ilvl != null) source.put("listLevel", attribute(ilvl, "val"));
+            if (pageBreak) source.put("pageBreak", true);
             var propertiesNode = node.putObject("properties")
                     .put("alignment", alignment)
                     // The paragraph style is inherited by runs without an
@@ -558,10 +563,38 @@ public class DocxStructureParser implements OfficeStructureParser, WordDocumentP
                     .put("fontSize", firstFontSize(paragraph));
             var family = firstFontFamily(paragraph);
             if (!family.isBlank()) propertiesNode.put("fontFamily", family);
+            if (listItem) propertiesNode.put("listItem", true);
+            if (pageBreak) propertiesNode.put("pageBreak", true);
             nodes.add(node);
             if (heading) stack.add(new NodeFrame(nodeId, level));
         }
+        var tables = document.getElementsByTagNameNS("*", "tbl");
+        for (var index = 0; index < tables.getLength(); index++) {
+            if (!(tables.item(index) instanceof Element table)) continue;
+            var rows = directChildren(table, "tr");
+            var firstText = text(table).strip();
+            var tableNode = objectMapper.createObjectNode()
+                    .put("nodeId", "table-" + (index + 1))
+                    .put("type", "TABLE")
+                    .put("text", firstText)
+                    .put("sortOrder", ++sequence);
+            tableNode.putObject("sourceLocator")
+                    .put("part", "word/document.xml")
+                    .put("tableIndex", index + 1)
+                    .put("rowCount", rows.size())
+                    .put("columnCount", rows.isEmpty() ? 0 : directChildren(rows.get(0), "tc").size());
+            nodes.add(tableNode);
+        }
         return nodes;
+    }
+
+    private boolean hasPageBreak(Element paragraph) {
+        var breaks = paragraph.getElementsByTagNameNS("*", "br");
+        for (var index = 0; index < breaks.getLength(); index++) {
+            if (breaks.item(index) instanceof Element element
+                    && "page".equalsIgnoreCase(attribute(element, "type"))) return true;
+        }
+        return false;
     }
 
     private boolean isDocumentTitle(String value, String styleId, WordStyleCatalog styleCatalog,

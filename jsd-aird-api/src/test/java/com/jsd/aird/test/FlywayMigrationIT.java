@@ -57,19 +57,83 @@ class FlywayMigrationIT {
                 }
 
                 try (var statement = connection.prepareStatement(
-                        "select template_scope, target_data_type from tpl.template_version limit 1"
+                        "select count(*) from information_schema.columns where table_schema = 'tpl' and table_name = 'template_version' and column_name = 'template_scope'"
                 ); var resultSet = statement.executeQuery()) {
-                    if (resultSet.next()) {
-                        assertThat(resultSet.getString("template_scope")).isEqualTo("TEMPLATE_CENTER");
-                        assertThat(resultSet.getObject("target_data_type")).isNull();
-                    }
+                    assertThat(resultSet.next()).isTrue();
+                    assertThat(resultSet.getInt(1)).isZero();
+                }
+
+                try (var statement = connection.prepareStatement("""
+                        select count(*) from information_schema.tables
+                        where table_schema = 'kb' and table_name in (
+                          'document_parse_run', 'document_parse_block', 'document_extract_field', 'document_parse_issue',
+                          'publication', 'ai_usage_grant', 'knowledge_page', 'knowledge_page_version'
+                        )
+                        """); var resultSet = statement.executeQuery()) {
+                    assertThat(resultSet.next()).isTrue();
+                    assertThat(resultSet.getInt(1)).isEqualTo(8);
+                }
+
+                try (var statement = connection.prepareStatement("""
+                        select count(*) from information_schema.views
+                        where (table_schema = 'kb' and table_name = 'current_file_search_projection')
+                           or (table_schema = 'data' and table_name = 'completed_source_file_projection')
+                        """); var resultSet = statement.executeQuery()) {
+                    assertThat(resultSet.next()).isTrue();
+                    assertThat(resultSet.getInt(1)).isEqualTo(2);
+                }
+
+                try (var statement = connection.prepareStatement(
+                        "select count(*) from information_schema.columns where table_schema = 'tpl' and table_name = 'template' and column_name = 'purpose'"
+                ); var resultSet = statement.executeQuery()) {
+                    assertThat(resultSet.next()).isTrue();
+                    assertThat(resultSet.getInt(1)).isZero();
+                }
+
+                try (var statement = connection.prepareStatement(
+                        "select count(*) from information_schema.columns where table_schema = 'tpl' and table_name = 'template_version' and column_name = 'target_data_type'"
+                ); var resultSet = statement.executeQuery()) {
+                    assertThat(resultSet.next()).isTrue();
+                    assertThat(resultSet.getInt(1)).isZero();
                 }
 
                 try (var statement = connection.prepareStatement(
                         "select count(*) from information_schema.tables where table_schema = 'data'"
                 ); var resultSet = statement.executeQuery()) {
                     assertThat(resultSet.next()).isTrue();
-                    assertThat(resultSet.getInt(1)).isEqualTo(11);
+                    assertThat(resultSet.getInt(1)).isEqualTo(13);
+                }
+
+                try (var statement = connection.prepareStatement("select count(*) from information_schema.tables where table_schema = 'tpl' and table_name = 'template_import_contract'");
+                     var resultSet = statement.executeQuery()) {
+                    assertThat(resultSet.next()).isTrue();
+                    assertThat(resultSet.getInt(1)).isEqualTo(1);
+                }
+
+                try (var statement = connection.prepareStatement("select count(*) from information_schema.columns where table_schema = 'data' and table_name = 'data_value' and column_name in ('binding_id','value_path','label_path','rag_eligible','calculation_status','calculation_trust_status')");
+                     var resultSet = statement.executeQuery()) {
+                    assertThat(resultSet.next()).isTrue();
+                    assertThat(resultSet.getInt(1)).isEqualTo(6);
+                }
+
+                try (var statement = connection.prepareStatement("select count(*) from information_schema.tables where table_schema = 'data' and table_name = 'import_component_override'");
+                     var resultSet = statement.executeQuery()) {
+                    assertThat(resultSet.next()).isTrue();
+                    assertThat(resultSet.getInt(1)).isEqualTo(1);
+                }
+
+                try (var statement = connection.prepareStatement("""
+                        select table_name, column_name, character_maximum_length
+                        from information_schema.columns
+                        where table_schema = 'tpl'
+                          and table_name in ('recognition_suggestion', 'recognition_run',
+                                             'recognition_call', 'template_quality_issue')
+                          and column_name in ('region_id', 'relation_id', 'block_id', 'root_block_id')
+                        """ ); var resultSet = statement.executeQuery()) {
+                    while (resultSet.next()) {
+                        assertThat(resultSet.getInt("character_maximum_length"))
+                                .isEqualTo(256);
+                    }
                 }
             }
         }

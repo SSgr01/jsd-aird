@@ -1,6 +1,7 @@
 package com.jsd.aird.ops.adapter.in.web;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 
 import com.jsd.aird.ops.application.FileObjectService;
@@ -9,6 +10,7 @@ import com.jsd.aird.shared.api.ApiResponse;
 import com.jsd.aird.shared.api.ResponseFactory;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.ContentDisposition;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -51,7 +53,9 @@ public class FileObjectController {
         response.setContentLengthLong(file.size());
         response.setHeader(
                 HttpHeaders.CONTENT_DISPOSITION,
-                "attachment; filename=\"" + file.originalName().replace("\"", "") + "\""
+                ContentDisposition.attachment()
+                        .filename(file.originalName(), StandardCharsets.UTF_8)
+                        .build().toString()
         );
         try (var stored = file.storedObject()) {
             stored.stream().transferTo(response.getOutputStream());

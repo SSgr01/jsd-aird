@@ -20,7 +20,7 @@ import {
   Typography,
   Upload,
 } from 'antd';
-import type { BreadcrumbProps, UploadFile } from 'antd';
+import type { BreadcrumbProps, UploadFile, UploadProps } from 'antd';
 import type { ReactNode } from 'react';
 
 export interface UploadWorkspaceFilter {
@@ -48,6 +48,7 @@ export interface UploadWorkspaceProps {
   leftTitle: string;
   classification: ReactNode;
   accept: string;
+  beforeUpload?: UploadProps['beforeUpload'];
   showDropzone?: boolean;
   showPreview?: boolean;
   fileRequired?: boolean;
@@ -104,6 +105,7 @@ export function UploadWorkspace({
   leftTitle,
   classification,
   accept,
+  beforeUpload,
   showDropzone = true,
   showPreview = true,
   fileRequired = true,
@@ -158,7 +160,7 @@ export function UploadWorkspace({
             maxCount={maxCount}
             fileList={files}
             showUploadList={false}
-            beforeUpload={() => false}
+            beforeUpload={beforeUpload || (() => false)}
             onChange={({ fileList }) => onFilesChange(fileList)}
           >
             <div className="upload-workspace-drop-icon">{uploadIcon || <InboxOutlined />}</div>

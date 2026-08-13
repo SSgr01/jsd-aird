@@ -190,6 +190,31 @@ class WordOoxmlPatchServiceTest {
         assertThat(xml).doesNotContain("w:val=\"dotted\"", "w:val=\"dashed\"");
     }
 
+    @Test
+    void exportsSnapshotHeadingListAndPageBreak() throws Exception {
+        var snapshot = objectMapper.createObjectNode().put("snapshotFormatVersion", 5);
+        snapshot.putObject("documentStyle").putObject("pageSize").put("width", 595).put("height", 842);
+        var body = snapshot.putObject("body");
+        body.put("dataStream", "标题\r列表项\r\f\r\n");
+        body.putArray("textRuns");
+        body.putArray("customRanges");
+        var paragraphs = body.putArray("paragraphs");
+        paragraphs.addObject().put("startIndex", 0).putObject("paragraphStyle").put("namedStyleType", 4);
+        var listParagraph = paragraphs.addObject().put("startIndex", 3);
+        listParagraph.putObject("paragraphStyle").putObject("bullet").put("listType", "BULLET_LIST");
+        paragraphs.addObject().put("startIndex", 6).putObject("paragraphStyle");
+
+        var patched = service.applySnapshot(docx("""
+                <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                  <w:body><w:p><w:r><w:t>原始内容</w:t></w:r></w:p></w:body>
+                </w:document>
+                """), snapshot);
+        var xml = documentXml(patched);
+
+        assertThat(xml).contains("w:pStyle", "w:val=\"Heading1\"", "w:numPr", "w:val=\"2\"", "w:type=\"page\"");
+        assertThat(part(patched, "word/numbering.xml")).contains("w:numbering", "w:num w:numId=\"2\"");
+    }
+
     private byte[] docx(String documentXml) throws Exception {
         try (var output = new ByteArrayOutputStream(); var zip = new ZipOutputStream(output)) {
             zip.putNextEntry(new ZipEntry("word/document.xml"));
@@ -200,10 +225,14 @@ class WordOoxmlPatchServiceTest {
     }
 
     private String documentXml(byte[] docx) throws Exception {
+        return part(docx, "word/document.xml");
+    }
+
+    private String part(byte[] docx, String name) throws Exception {
         try (var zip = new ZipInputStream(new ByteArrayInputStream(docx))) {
             ZipEntry entry;
             while ((entry = zip.getNextEntry()) != null) {
-                if ("word/document.xml".equals(entry.getName())) {
+                if (name.equals(entry.getName())) {
                     return new String(zip.readAllBytes(), StandardCharsets.UTF_8);
                 }
             }

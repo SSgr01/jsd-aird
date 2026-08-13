@@ -40,6 +40,45 @@ class StructuredDataExtractorTest {
     }
 
     @Test
+    void skipsReservedRowsThatOnlyContainGeneratedSequenceNumbers() {
+        var sheet = sheet("rows", List.of(
+                List.of("序号", "原料", "数量"),
+                List.of("1", "树脂", "50"),
+                List.of("2", "", "")));
+        var fields = List.of(
+                binding("sequence", "formula.sequence", "序号", "A2:A3", "ROW", false),
+                binding("material", "formula.material", "原料", "B2:B3", "ROW", false),
+                binding("amount", "formula.amount", "数量", "C2:C3", "ROW", false));
+
+        var result = extractor.extract(sheet,
+                definitions("formula.sequence", "formula.material", "formula.amount"), fields, 2, 3)
+                .orElseThrow();
+
+        assertThat(result.rows()).hasSize(1);
+        assertThat(result.rows().getFirst().rawValues().path("b_material").asText()).isEqualTo("树脂");
+    }
+
+    @Test
+    void extractsValueAfterColonForInlineFormFields() {
+        var sheet = sheet("form", List.of(List.of("包装规格：18 kg/桶")));
+        var locator = mapper.createObjectNode().put("sheetId", "form")
+                .put("valueRange", "A1").put("valueMode", "INLINE");
+        var region = new TemplateDataImportFacade.ImportBinding("form", "", "", "FORM_REGION",
+                "", "", 1, 1, 1, mapper.createObjectNode(), mapper.createObjectNode()
+                .put("sheetId", "form").put("range", "A1"), false, false, true,
+                "INPUT", "OBJECT", "");
+        var field = new TemplateDataImportFacade.ImportBinding("package", "package.spec", "/package/spec",
+                "SCALAR", "form", "", 1, 1, 1, mapper.createObjectNode(), locator,
+                false, false, true, "INPUT", "TEXT", "");
+
+        var result = extractor.extract(sheet, definitions("package.spec"), List.of(region, field), 1, 1)
+                .orElseThrow();
+
+        assertThat(result.rows()).hasSize(1);
+        assertThat(result.rows().getFirst().rawValues().path("b_package").asText()).isEqualTo("18 kg/桶");
+    }
+
+    @Test
     void expandsHorizontalColumnTableIntoLogicalRecords() {
         var sheet = sheet("columns", List.of(
                 List.of("指标", "产品A", "产品B"),
@@ -58,6 +97,36 @@ class StructuredDataExtractorTest {
         assertThat(result.rows().get(1).rawValues().path("b_amount").asText()).isEqualTo("20");
         assertThat(result.rows().get(1).sourceMetadata().path("cells").path("b_amount")
                 .path("cellAddress").asText()).isEqualTo("C3");
+    }
+
+    @Test
+    void keepsRowTableRowsWhenBindingsUseArrayColumnAndIgnoresParentRegion() {
+        var sheet = sheet("materials", List.of(
+                List.of("日期", "产品名称", "批号", "粘度"),
+                List.of("2026-12-22", "树脂 A", "M-01", "1200"),
+                List.of("2026-12-23", "溶剂 B", "M-02", "850")));
+        var regionLocator = mapper.createObjectNode().put("sheetId", "materials")
+                .put("range", "A1:D200").put("dataRange", "A2:D200")
+                .put("valueMode", "ARRAY_ROW");
+        var region = new TemplateDataImportFacade.ImportBinding("region", "table.records", "/records",
+                "REPEAT_REGION", "", "ROW", 1, 4, 1, mapper.createObjectNode(), regionLocator,
+                false, false, true, "INPUT", "ARRAY", "");
+        var fields = List.of(
+                rowBinding("date", "material.date", "日期", "A2:A3"),
+                rowBinding("name", "material.name", "产品名称", "B2:B3"),
+                rowBinding("code", "material.code", "批号", "C2:C3"),
+                rowBinding("viscosity", "material.viscosity", "粘度", "D2:D3"));
+
+        var result = extractor.extract(sheet, definitions("material.date", "material.name", "material.code", "material.viscosity"),
+                java.util.stream.Stream.concat(java.util.stream.Stream.of(region), fields.stream()).toList(), 2, 3)
+                .orElseThrow();
+
+        assertThat(result.shape()).isEqualTo("ROW_TABLE");
+        assertThat(result.rows()).hasSize(2);
+        assertThat(result.rows().get(0).rawValues().path("b_date").asText()).isEqualTo("2026-12-22");
+        assertThat(result.rows().get(1).rawValues().path("b_viscosity").asText()).isEqualTo("850");
+        assertThat(result.mappings()).hasSize(4);
+        assertThat(result.mappings()).noneMatch(item -> "table.records".equals(item.fieldCode()));
     }
 
     @Test
@@ -97,6 +166,44 @@ class StructuredDataExtractorTest {
     }
 
     @Test
+    void createsOneMatrixRecordPerIntersectionAndReadsDeclaredRowDimensionFromItsOwnRange() {
+        var sheet = sheet("matrix", List.of(
+                List.of("温度", "1 min", "3 min"),
+                List.of("25℃", "12.4", "18.7"),
+                List.of("50℃", "16.8", "25.1")));
+        var regionLocator = mapper.createObjectNode()
+                .put("sheetId", "matrix")
+                .put("rowHeaderRange", "A2:A3")
+                .put("columnHeaderRange", "B1:C1")
+                .put("crossDataRange", "B2:C3");
+        var rowLocator = regionLocator.deepCopy().put("sourceRange", "A2:A3")
+                .put("logicalInputRange", "A2:A3");
+        var measureLocator = regionLocator.deepCopy().put("sourceRange", "B2:C3")
+                .put("logicalInputRange", "B2:C3");
+        var fields = List.of(
+                new TemplateDataImportFacade.ImportBinding("region", "", "", "MATRIX_REGION", "", "",
+                        1, 1, 1, mapper.createObjectNode(), regionLocator, false, false, true, "INPUT", "TEXT", ""),
+                new TemplateDataImportFacade.ImportBinding("row", "MATRIX.ROW_DIMENSION.temperature",
+                        "/records/*/temperature", "MATRIX_FIELD", "region", "ROW", 1, 1, 1,
+                        mapper.createObjectNode(), rowLocator, false, false, true, "INPUT", "TEXT", ""),
+                new TemplateDataImportFacade.ImportBinding("metric", "MATRIX.MEASURE.value",
+                        "/records/*/value", "MATRIX_FIELD", "region", "ROW", 1, 1, 1,
+                        mapper.createObjectNode(), measureLocator, false, false, true, "INPUT", "NUMBER", ""));
+
+        var result = extractor.extract(sheet,
+                definitions("MATRIX.ROW_DIMENSION.temperature", "MATRIX.MEASURE.value"), fields, 2, 3)
+                .orElseThrow();
+
+        assertThat(result.rows()).hasSize(4);
+        assertThat(result.rows().getFirst().rawValues().path("b_row").asText()).isEqualTo("25℃");
+        assertThat(result.rows().getFirst().rawValues().path("b_metric").asText()).isEqualTo("12.4");
+        assertThat(result.rows()).allMatch(row -> !row.rawValues().has("__dimension_row"));
+        assertThat(result.rows()).allMatch(row -> row.rawValues().has("__dimension_column"));
+        assertThat(result.rows()).extracting(row -> row.sourceMetadata().path("recordKey").asText())
+                .doesNotHaveDuplicates();
+    }
+
+    @Test
     void readsFormRegionAndCarriesBasicInfoIntoDetailRecords() {
         var sheet = sheet("mixed", List.of(
                 List.of("基本信息", "M-01", ""),
@@ -126,6 +233,88 @@ class StructuredDataExtractorTest {
                 .path("cellAddress").asText()).isEqualTo("B1");
     }
 
+    @Test
+    void extractsMultipleComponentsOnOneSheetWithoutMappingOrRecordCollisions() {
+        var sheet = sheet("mixed-components", List.of(
+                List.of("产品名称", "UV 树脂", "", ""),
+                List.of("", "", "", ""),
+                List.of("原料", "用量", "", ""),
+                List.of("树脂", "50", "", ""),
+                List.of("光引发剂", "3", "", ""),
+                List.of("", "", "", ""),
+                List.of("温度", "1 min", "5 min", ""),
+                List.of("25℃", "10", "18", ""),
+                List.of("50℃", "15", "26", "")));
+        var basicLocator = mapper.createObjectNode().put("sheetId", "mixed-components")
+                .put("componentId", "basic").put("address", "A1:B1");
+        var basic = new TemplateDataImportFacade.ImportBinding("basic", "", "", "FORM_REGION",
+                "", "", 1, 1, 1, mapper.createObjectNode(), basicLocator,
+                false, false, true, "INPUT", "OBJECT", "");
+        var nameLocator = mapper.createObjectNode().put("sheetId", "mixed-components")
+                .put("componentId", "basic").put("valueRange", "B1");
+        var name = new TemplateDataImportFacade.ImportBinding("product-name", "product.name", "/product/name",
+                "SCALAR", "basic", "", 1, 1, 1, mapper.createObjectNode(), nameLocator,
+                false, true, true, "INPUT", "TEXT", "");
+
+        var detailRegion = regionBinding("detail", "ROW_TABLE", "A4:B5", "ROW");
+        var material = componentField("detail", "material", "formula.material", "A4:A5", "ROW");
+        var amount = componentField("detail", "amount", "formula.amount", "B4:B5", "ROW");
+
+        var matrixLocator = mapper.createObjectNode().put("sheetId", "mixed-components")
+                .put("componentId", "matrix").put("rowHeaderRange", "A8:A9")
+                .put("columnHeaderRange", "B7:C7").put("crossDataRange", "B8:C9");
+        var matrix = new TemplateDataImportFacade.ImportBinding("matrix", "", "", "MATRIX_REGION",
+                "", "", 1, 1, 1, mapper.createObjectNode(), matrixLocator,
+                false, false, true, "INPUT", "OBJECT", "");
+        var resultValue = new TemplateDataImportFacade.ImportBinding("result", "test.result", "/test/result",
+                "MATRIX_FIELD", "matrix", "", 1, 1, 1, mapper.createObjectNode(), matrixLocator,
+                false, false, true, "INPUT", "NUMBER", "");
+
+        var result = extractor.extract(sheet, definitions("product.name", "formula.material", "formula.amount", "test.result"),
+                List.of(basic, name, detailRegion, material, amount, matrix, resultValue), 1, 9).orElseThrow();
+
+        assertThat(result.shape()).isEqualTo("MULTI_COMPONENT");
+        assertThat(result.rows()).hasSize(7);
+        assertThat(result.rows()).extracting(row -> row.sourceMetadata().path("componentId").asText())
+                .containsOnly("basic", "detail", "matrix");
+        assertThat(result.mappings()).extracting(item -> item.detail().path("componentId").asText())
+                .contains("basic", "detail", "matrix");
+        assertThat(result.rows()).extracting(DataRepository.Row::rowNumber).contains(1, 2, 3, 4);
+    }
+
+    @Test
+    void keepsLongBindingKeysDistinctWithinDatabaseColumnLimit() {
+        var sheet = sheet("mixed-components", List.of(List.of("A", "B"), List.of("1", "2")));
+        var first = componentField("detail", "binding-with-a-very-long-common-prefix-aaaaaaaa-one",
+                "field.one", "A2", "ROW");
+        var second = componentField("detail", "binding-with-a-very-long-common-prefix-aaaaaaaa-two",
+                "field.two", "B2", "ROW");
+
+        var result = extractor.extract(sheet, definitions("field.one", "field.two"), List.of(first, second), 2, 2)
+                .orElseThrow();
+
+        assertThat(result.mappings()).extracting(DataRepository.Mapping::sourceColumn).doesNotHaveDuplicates();
+        assertThat(result.mappings()).allMatch(item -> item.sourceColumn().length() <= 32);
+    }
+
+    private TemplateDataImportFacade.ImportBinding regionBinding(String componentId, String kind,
+                                                                 String range, String axis) {
+        var locator = mapper.createObjectNode().put("sheetId", "mixed-components")
+                .put("componentId", componentId).put("range", range).put("dataRange", range);
+        return new TemplateDataImportFacade.ImportBinding(componentId, "", "", kind, "", axis,
+                1, 1, 1, mapper.createObjectNode(), locator, false, false, true,
+                "INPUT", "OBJECT", "");
+    }
+
+    private TemplateDataImportFacade.ImportBinding componentField(String componentId, String bindingId,
+                                                                  String fieldCode, String range, String axis) {
+        var locator = mapper.createObjectNode().put("sheetId", "mixed-components")
+                .put("componentId", componentId).put("valueRange", range);
+        return new TemplateDataImportFacade.ImportBinding(bindingId, fieldCode, "/" + fieldCode,
+                "REPEAT_FIELD", componentId, axis, 1, 1, 1, mapper.createObjectNode(), locator,
+                false, false, true, "INPUT", "TEXT", "");
+    }
+
     private TemplateDataImportFacade.ParsedSheet sheet(String id, List<List<String>> rows) {
         return new TemplateDataImportFacade.ParsedSheet(id, id, 1, 1, rows.size(), 1,
                 rows.stream().mapToInt(List::size).max().orElse(0), List.of(1), 1, 2, rows);
@@ -148,5 +337,13 @@ class StructuredDataExtractorTest {
         var locator = mapper.createObjectNode().put("sheetId", sheetId).put("valueRange", range);
         return new TemplateDataImportFacade.ImportBinding(id, code, "/" + code, "REPEAT_FIELD", "region",
                 axis, 1, 1, 1, mapper.createObjectNode(), locator, false, identity, true, "INPUT", "TEXT", "");
+    }
+
+    private TemplateDataImportFacade.ImportBinding rowBinding(String id, String code, String name, String range) {
+        var locator = mapper.createObjectNode().put("sheetId", "materials")
+                .put("valueRange", range).put("valueMode", "ARRAY_COLUMN");
+        return new TemplateDataImportFacade.ImportBinding(id, code, "/" + code, "REPEAT_FIELD", "region",
+                "ROW", 1, 1, 1, mapper.createObjectNode(), locator, false, code.endsWith("code"), true,
+                "INPUT", "TEXT", "");
     }
 }

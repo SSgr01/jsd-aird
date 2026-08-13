@@ -52,9 +52,6 @@ public class DataAssetExportService {
             throw new ApiException(ApiErrorCode.BAD_REQUEST, "单次最多导出 " + MAX_ASSETS + " 个数据资产");
         }
         var template = templates.getPublished(actor.organizationId(), command.templateVersionId());
-        if (!targetDataType.equals(template.targetDataType())) {
-            throw new ApiException(ApiErrorCode.BAD_REQUEST, "所选模板与数据类型不匹配");
-        }
         if (!"XLSX".equalsIgnoreCase(template.format())) {
             throw new ApiException(ApiErrorCode.BAD_REQUEST, "批量文件导出首期仅支持 XLSX 模板");
         }

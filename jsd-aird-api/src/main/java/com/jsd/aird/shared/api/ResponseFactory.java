@@ -45,4 +45,8 @@ public final class ResponseFactory {
                 Instant.now()
         );
     }
+
+    public static <T> ApiResponse<T> error(ApiErrorCode errorCode, String message, T data, String traceId) {
+        return new ApiResponse<>(errorCode.code(), message, data, traceId, Instant.now());
+    }
 }

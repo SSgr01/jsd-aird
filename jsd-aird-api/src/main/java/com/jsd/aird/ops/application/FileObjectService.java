@@ -168,11 +168,13 @@ public class FileObjectService implements FileStorageFacade {
             }
             return;
         }
-        if (!"OFFICE".equalsIgnoreCase(kind)) {
+        if (!"OFFICE".equalsIgnoreCase(kind) && !"TEMPLATE_SOURCE".equalsIgnoreCase(kind)) {
             return;
         }
         var lowerName = originalName.toLowerCase(Locale.ROOT);
-        if (!lowerName.endsWith(".xlsx") && !lowerName.endsWith(".docx")) {
+        var xlsx = lowerName.endsWith(".xlsx");
+        var docx = lowerName.endsWith(".docx");
+        if (!xlsx && !docx) {
             throw new ApiException(ApiErrorCode.BAD_REQUEST, "只接受 XLSX 或 DOCX OOXML 文件");
         }
         var entries = new HashSet<String>();
@@ -197,6 +199,12 @@ public class FileObjectService implements FileStorageFacade {
         }
         if (!entries.contains("[content_types].xml")) {
             throw new ApiException(ApiErrorCode.BAD_REQUEST, "OOXML 包缺少 [Content_Types].xml");
+        }
+        if (xlsx && !entries.contains("xl/workbook.xml")) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "XLSX 文件缺少工作簿内容");
+        }
+        if (docx && !entries.contains("word/document.xml")) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "DOCX 文件缺少正文内容");
         }
     }
 

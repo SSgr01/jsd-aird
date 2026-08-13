@@ -40,8 +40,21 @@ export function mergeRecognitionReview(
     nextModel.staticRegions = structuredClone(review.semanticModel.staticRegions);
   }
 
-  for (const item of review.items) {
-    if (item.status === 'IGNORED') continue;
+  const activeByKey = new Map<string, RecognitionReviewItem>();
+  review.items
+    .filter((item) => item.status !== 'IGNORED')
+    .filter((item) => !isRegionRoot(item) && !isRuntimeSlot(item.payload))
+    .filter((item) => !isProtocolRejected(item.payload) && !isAuditOnly(item.payload))
+    .forEach((item) => {
+      const key = effectiveFieldKey(item);
+      const current = activeByKey.get(key);
+      if (!current || effectiveFieldScore(item) > effectiveFieldScore(current)) {
+        activeByKey.set(key, item);
+      }
+    });
+  const activeItems = Array.from(activeByKey.values());
+
+  for (const item of activeItems) {
     // Region roots are structural metadata, not business fields.  They are
     // kept in RecognitionReview.regions for the review panel; importing them
     // into fieldModel here made “基本信息区域/重复记录区域” appear as array
@@ -119,6 +132,36 @@ export function mergeRecognitionReview(
   return { schema: nextSchema, mapping: nextMapping, model: nextModel };
 }
 
+function effectiveFieldKey(item: RecognitionReviewItem) {
+  const locator = item.payload.locator ?? {};
+  const range = locator.valueRange || locator.logicalInputRange || locator.address || locator.range || item.address;
+  return [
+    keyPart(locator.sheetId) || item.sheetId || '',
+    keyPart(item.payload.parentBindingId || item.payload.parentRelationId || item.payload.blockId),
+    keyPart(item.payload.mappingKind || item.payload.role || item.kind),
+    keyPart(range).replaceAll('$', '').toUpperCase(),
+    keyPart((item.payload as RecognitionReviewItem['payload'] & { valuePath?: string }).valuePath),
+  ].join('|');
+}
+
+function keyPart(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return '';
+}
+
+function effectiveFieldScore(item: RecognitionReviewItem) {
+  let score = 0;
+  if (item.payload.recognitionOrigin === 'CANONICAL_FIELD_ASSEMBLER'
+    || item.payload.recognitionOrigin === 'CANONICAL_FORM_ASSEMBLER') score += 100;
+  if (item.payload.activeGenerationId) score += 40;
+  if (item.payload.labelPath) score += 20;
+  if (item.status === 'CONFIRMED') score += 10;
+  if (item.payload.candidateOnly === false) score += 5;
+  if (item.source === 'MODEL') score += 1;
+  return score;
+}
+
 function isProtocolRejected(payload: RecognitionReviewItem['payload']) {
   return payload.protocolRecovery === 'RETAINED_REJECTED_CANDIDATE'
     || payload.pendingReason === 'PROTOCOL_REVIEW_REQUIRED';
@@ -141,7 +184,9 @@ function isRuntimeSlot(payload: RecognitionReviewItem['payload']) {
 function isAuditOnly(payload: RecognitionReviewItem['payload']) {
   return payload.suppressed === true
     || ['SUPERSEDED', 'REJECTED'].includes(payload.structureStatus ?? '')
-    || payload.pendingReason === 'PHYSICAL_STRUCTURE_SELECTED';
+    || payload.pendingReason === 'PHYSICAL_STRUCTURE_SELECTED'
+    || String(payload.fieldName ?? '').trim().startsWith('=')
+    || (payload.valueSource === 'FORMULA' && !String(payload.labelPath ?? '').trim());
 }
 
 export function acceptRecognitionReviewItem(

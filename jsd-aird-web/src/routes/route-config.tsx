@@ -4,7 +4,7 @@ import { Navigate } from 'react-router-dom';
 import { BasicLayout } from '@/layouts';
 import { AssistantPage } from '@/pages/assistant';
 import { DataAssetPage, DataImportJobPage, DataUploadPage, DataViewPage } from '@/pages/data';
-import { KnowledgeDocumentPage, KnowledgeLibraryPage, KnowledgeSearchPage, KnowledgeViewPage } from '@/pages/knowledge';
+import { KnowledgeDocumentPage, KnowledgeLibraryPage, KnowledgePageDetailPage, KnowledgePagesPage, KnowledgeReviewPage, KnowledgeReviewQueuePage, KnowledgeSearchPage, KnowledgeViewPage } from '@/pages/knowledge';
 import { NotFoundPage } from '@/pages/not-found';
 import { ProductionOrderListPage, ProductionOrderUploadPage, ProductionWorkspacePage } from '@/pages/production-orders';
 import { TemplateUploadPage } from '@/pages/template-upload';
@@ -28,6 +28,10 @@ export const routeConfig: RouteObject[] = [
       { path: 'knowledge/library', element: <KnowledgeLibraryPage /> },
       { path: 'knowledge/view', element: <KnowledgeViewPage /> },
       { path: 'knowledge/search', element: <KnowledgeSearchPage /> },
+      { path: 'knowledge/review', element: <KnowledgeReviewQueuePage /> },
+      { path: 'knowledge/review/:documentId/:versionId', element: <KnowledgeReviewPage /> },
+      { path: 'knowledge/pages', element: <KnowledgePagesPage /> },
+      { path: 'knowledge/pages/:id', element: <KnowledgePageDetailPage /> },
       { path: 'knowledge/documents/:id', element: <KnowledgeDocumentPage /> },
       { path: 'assistant', element: <AssistantPage /> },
       {

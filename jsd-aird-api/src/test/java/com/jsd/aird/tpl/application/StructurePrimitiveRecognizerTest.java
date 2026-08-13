@@ -264,6 +264,94 @@ class StructurePrimitiveRecognizerTest {
     }
 
     @Test
+    void treatsParserFactTypeInputCandidateAsAFormInputSurface() throws Exception {
+        var semanticCells = objectMapper.createArrayNode();
+        semanticCells.add(cell("A4", 4, 1, "产品名称", "", false, ""));
+        semanticCells.add(cell("B4", 4, 2, "", "B4:C4", false, "")
+                .put("factType", "INPUT_CANDIDATE"));
+        semanticCells.add(cell("D4", 4, 4, "生产批号", "", false, ""));
+        semanticCells.add(cell("E4", 4, 5, "", "E4:F4", false, "")
+                .put("factType", "INPUT_CANDIDATE"));
+        semanticCells.add(cell("A5", 5, 1, "生产日期", "", false, ""));
+        semanticCells.add(cell("B5", 5, 2, "", "B5:C5", false, "")
+                .put("factType", "INPUT_CANDIDATE"));
+        semanticCells.add(cell("D5", 5, 4, "生产数量", "", false, ""));
+        semanticCells.add(cell("E5", 5, 5, "", "E5:F5", false, "")
+                .put("factType", "INPUT_CANDIDATE"));
+        var candidates = semanticCells.deepCopy();
+        for (var cell : candidates) ((com.fasterxml.jackson.databind.node.ObjectNode) cell)
+                .put("hasBorder", true);
+        var sheet = objectMapper.createObjectNode().put("id", "sheet-1").put("usedRange", "A4:F5");
+        sheet.set("semanticCells", semanticCells);
+        sheet.set("candidateCells", candidates);
+        var structure = objectMapper.createObjectNode();
+        structure.set("sheets", objectMapper.createArrayNode().add(sheet));
+
+        var result = new StructurePrimitiveRecognizer(objectMapper).recognize(structure);
+
+        var form = java.util.stream.StreamSupport.stream(result.spliterator(), false)
+                .filter(item -> "FORM_REGION".equals(item.path("blockType").asText()))
+                .findFirst().orElseThrow(() -> new AssertionError(result.toPrettyString()));
+        assertThat(form.path("structure").path("fieldSurfaces"))
+                .extracting(item -> item.path("structure").path("valueRange").asText())
+                .containsExactly("B4:C4", "E4:F4", "B5:C5", "E5:F5");
+    }
+
+    @Test
+    void borderedMultiSectionFormIsNotMisclassifiedAsOneRepeatedRowTable() throws Exception {
+        var semanticCells = objectMapper.createArrayNode();
+        semanticCells.add(cell("A4", 4, 1, "产品名称", "", true, ""));
+        semanticCells.add(cell("B4", 4, 2, "", "B4:C4", true, "")
+                .put("factType", "INPUT_CANDIDATE"));
+        semanticCells.add(cell("D4", 4, 4, "生产批号", "", true, ""));
+        semanticCells.add(cell("E4", 4, 5, "", "E4:F4", true, "")
+                .put("factType", "INPUT_CANDIDATE"));
+        semanticCells.add(cell("A5", 5, 1, "生产日期", "", true, ""));
+        semanticCells.add(cell("B5", 5, 2, "", "B5:C5", true, "")
+                .put("factType", "INPUT_CANDIDATE"));
+        semanticCells.add(cell("D5", 5, 4, "生产数量", "", true, ""));
+        semanticCells.add(cell("E5", 5, 5, "", "E5:F5", true, "")
+                .put("factType", "INPUT_CANDIDATE"));
+        for (var section : new Object[][]{
+                {"A6", 6, "不合格描述", "A6:A8", "B6:F8"},
+                {"A9", 9, "原因分析", "A9:A13", "B9:F13"},
+                {"A14", 14, "总经理批示", "A14:A15", "B14:F15"},
+                {"A16", 16, "后续改进", "A16:A18", "B16:F18"},
+                {"A19", 19, "跟踪效果", "A19:A21", "B19:F21"}
+        }) {
+            var address = (String) section[0];
+            var row = (int) section[1];
+            semanticCells.add(cell(address, row, 1, (String) section[2], (String) section[3], true, ""));
+            semanticCells.add(cell("B" + row, row, 2, "", (String) section[4], true, "")
+                    .put("factType", "INPUT_CANDIDATE"));
+        }
+        var candidates = semanticCells.deepCopy();
+        for (var row = 4; row <= 21; row++) {
+            for (var column = 1; column <= 6; column++) {
+                var address = address(column, row);
+                var exists = java.util.stream.StreamSupport.stream(candidates.spliterator(), false)
+                        .anyMatch(cell -> address.equals(cell.path("address").asText()));
+                if (!exists) candidates.add(cell(address, row, column, "", "", true, ""));
+            }
+        }
+        var sheet = objectMapper.createObjectNode().put("id", "sheet-1").put("usedRange", "A1:F21");
+        sheet.set("semanticCells", semanticCells);
+        sheet.set("candidateCells", candidates);
+        var structure = objectMapper.createObjectNode();
+        structure.set("sheets", objectMapper.createArrayNode().add(sheet));
+
+        var result = new StructurePrimitiveRecognizer(objectMapper).recognize(structure);
+
+        var form = java.util.stream.StreamSupport.stream(result.spliterator(), false)
+                .filter(item -> "FORM_REGION".equals(item.path("blockType").asText()))
+                .findFirst().orElseThrow(() -> new AssertionError(result.toPrettyString()));
+        assertThat(form.path("range").asText()).isEqualTo("A4:F21");
+        assertThat(form.path("structure").path("fieldSurfaces")).hasSize(9);
+        assertThat(result).noneMatch(item -> "ROW_TABLE".equals(item.path("blockType").asText())
+                && "A4:F21".equals(item.path("range").asText()));
+    }
+
+    @Test
     void extendsStyledBlankMatrixSurfaceToThePhysicalUsedRange() throws Exception {
         var semanticCells = objectMapper.createArrayNode();
         semanticCells.add(cell("A4", 4, 1, "测试树脂样品或配方", "A4:C4", false, ""));
@@ -404,6 +492,93 @@ class StructurePrimitiveRecognizerTest {
                     .isEqualTo("UNTIL_TOTAL_ROW");
         });
         assertThat(result).noneMatch(primitive -> "MATRIX".equals(primitive.path("blockType").asText()));
+    }
+
+    @Test
+    void detectsCompletedStaticCrossTableBeforeGenericRowTable() throws Exception {
+        var semanticCells = objectMapper.createArrayNode();
+        semanticCells.add(cell("A2", 2, 1, "温度 / 配方", "", false, ""));
+        for (var header : new String[]{"配方A", "配方B", "配方C", "配方D"}) {
+            var column = header.charAt(header.length() - 1) - 'A' + 2;
+            semanticCells.add(cell(address(column, 2), 2, column, header, "", false, ""));
+        }
+        var labels = new String[]{"25℃", "40℃", "60℃", "80℃"};
+        var values = new int[][]{{1200, 1300, 1450, 1500}, {980, 1100, 1250, 1380},
+                {760, 850, 960, 1050}, {620, 700, 810, 900}};
+        for (int index = 0; index < labels.length; index++) {
+            int row = index + 3;
+            semanticCells.add(cell("A" + row, row, 1, labels[index], "", false, ""));
+            for (int offset = 0; offset < values[index].length; offset++) {
+                var numeric = cell(address(offset + 2, row), row, offset + 2,
+                        Integer.toString(values[index][offset]), "", false, "");
+                numeric.put("physicalValueType", "NUMERIC");
+                semanticCells.add(numeric);
+            }
+        }
+        var candidates = objectMapper.createArrayNode();
+        for (int row = 2; row <= 6; row++) {
+            for (int column = 1; column <= 5; column++) {
+                candidates.add(cell(address(column, row), row, column, "", "", true, ""));
+            }
+        }
+        var sheet = objectMapper.createObjectNode().put("id", "sheet-1").put("usedRange", "A1:E6");
+        sheet.set("semanticCells", semanticCells);
+        sheet.set("candidateCells", candidates);
+        var structure = objectMapper.createObjectNode();
+        structure.set("sheets", objectMapper.createArrayNode().add(sheet));
+
+        var result = new StructurePrimitiveRecognizer(objectMapper).recognize(structure);
+
+        assertThat(result).anySatisfy(primitive -> {
+            assertThat(primitive.path("blockType").asText()).isEqualTo("MATRIX");
+            assertThat(primitive.path("range").asText()).isEqualTo("A2:E6");
+            assertThat(primitive.path("structure").path("cornerRange").asText()).isEqualTo("A2");
+            assertThat(primitive.path("structure").path("rowHeaderRange").asText()).isEqualTo("A3:A6");
+            assertThat(primitive.path("structure").path("columnHeaderRange").asText()).isEqualTo("B2:E2");
+            assertThat(primitive.path("structure").path("crossDataRange").asText()).isEqualTo("B3:E6");
+        });
+        assertThat(result).noneMatch(primitive -> "ROW_TABLE".equals(primitive.path("blockType").asText()));
+    }
+
+    @Test
+    void detectsCompletedStaticColumnTableAndBuildsColumnProjection() throws Exception {
+        var semanticCells = objectMapper.createArrayNode();
+        var rows = new String[][]{
+                {"属性", "样品A", "样品B", "样品C"},
+                {"物料名称", "树脂A", "树脂B", "树脂C"},
+                {"供应商", "供应商1", "供应商2", "供应商3"},
+                {"粘度", "1200", "900", "1100"}
+        };
+        for (int row = 0; row < rows.length; row++) {
+            for (int column = 0; column < rows[row].length; column++) {
+                semanticCells.add(cell(address(column + 1, row + 1), row + 1, column + 1,
+                        rows[row][column], "", false, ""));
+            }
+        }
+        var candidates = objectMapper.createArrayNode();
+        for (int row = 1; row <= rows.length; row++) {
+            for (int column = 1; column <= rows[row - 1].length; column++) {
+                candidates.add(cell(address(column, row), row, column, "", "", true, ""));
+            }
+        }
+        var sheet = objectMapper.createObjectNode().put("id", "sheet-1").put("usedRange", "A1:D4");
+        sheet.set("semanticCells", semanticCells);
+        sheet.set("candidateCells", candidates);
+        var structure = objectMapper.createObjectNode();
+        structure.set("sheets", objectMapper.createArrayNode().add(sheet));
+
+        var result = new StructurePrimitiveRecognizer(objectMapper).recognize(structure);
+
+        assertThat(result).anySatisfy(primitive -> {
+            assertThat(primitive.path("blockType").asText()).isEqualTo("COLUMN_TABLE");
+            assertThat(primitive.path("range").asText()).isEqualTo("A1:D4");
+            assertThat(primitive.path("structure").path("rowHeaderRange").asText()).isEqualTo("A2:A4");
+            assertThat(primitive.path("structure").path("columnHeaderRange").asText()).isEqualTo("B1:D1");
+            assertThat(primitive.path("structure").path("crossDataRange").asText()).isEqualTo("B2:D4");
+            assertThat(primitive.path("structure").path("recordProjection").path("recordColumns"))
+                    .extracting(com.fasterxml.jackson.databind.JsonNode::asText)
+                    .containsExactly("B", "C", "D");
+        });
     }
 
     @Test

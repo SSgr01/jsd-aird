@@ -64,9 +64,9 @@ describe('TemplateUploadPage recognition summary', () => {
 
     expect(display).toHaveLength(1);
     expect(display[0]?.label).toBe('结构候选（2 个方案）');
-    expect(display[0]?.location).toContain('MATRIX A4:J6');
-    expect(display[0]?.location).toContain('FORM_REGION A1:J5 + ROW_TABLE A6:J22');
-    expect(display[0]?.location).not.toContain('semantic');
+    expect(display[0]?.details).toContain('MATRIX A4:J6');
+    expect(display[0]?.details).toContain('FORM_REGION A1:J5 + ROW_TABLE A6:J22');
+    expect(display[0]?.details).not.toContain('semantic');
   });
 });
 

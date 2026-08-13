@@ -45,34 +45,108 @@ final class StructuredDataExtractor {
         var sheetBindings = bindings.stream()
                 .filter(binding -> sameSheet(binding, sheet.sheetId(), sheet.sheetName()))
                 .toList();
-        var formBindings = sheetBindings.stream().filter(this::isFormBinding).toList();
-        var structuredFields = sheetBindings.stream()
-                .filter(this::isStructuredField)
-                .toList();
-        Result structured = null;
-        if (sheetBindings.stream().anyMatch(this::isMatrixBinding)) {
-            structured = extractMatrix(sheet, definitions, sheetBindings, dataStart, dataEnd);
-        } else if (!structuredFields.isEmpty()) {
-            var column = structuredFields.stream().anyMatch(this::isColumnBinding);
-            structured = column
-                    ? extractColumnTable(sheet, definitions, structuredFields, dataStart, dataEnd)
-                    : extractRowTable(sheet, definitions, structuredFields, dataStart, dataEnd);
+        var components = componentBindings(sheetBindings);
+        var explicitComponents = sheetBindings.stream().anyMatch(binding -> binding.locator() != null
+                && !binding.locator().path("componentId").asText("").isBlank());
+        var results = new ArrayList<Result>();
+        var formResults = new LinkedHashMap<String, Result>();
+        for (var entry : components.entrySet()) {
+            var componentId = entry.getKey();
+            var component = entry.getValue();
+            var hasFormRegion = component.stream().anyMatch(binding ->
+                    binding.mappingKind() != null
+                            && binding.mappingKind().toUpperCase(Locale.ROOT).contains("FORM_REGION"));
+            var formFields = component.stream().filter(binding -> isFormBinding(binding)
+                            || hasFormRegion && !isStructuredField(binding) && !isMatrixBinding(binding))
+                    .filter(binding -> binding.fieldCode() != null && !binding.fieldCode().isBlank()).toList();
+            if (!formFields.isEmpty()) {
+                var form = extractFormRegion(sheet, definitions, componentId, component, formFields, dataStart, dataEnd);
+                if (!form.rows().isEmpty()) formResults.put(entry.getKey(), form);
+            }
+            var structuredFields = component.stream().filter(this::isStructuredField).toList();
+            Result structured = null;
+            if (component.stream().anyMatch(this::isMatrixBinding)) {
+                structured = extractMatrix(sheet, definitions, componentId, component, dataStart, dataEnd);
+            } else if (!structuredFields.isEmpty()) {
+                structured = structuredFields.stream().anyMatch(this::isColumnBinding)
+                        ? extractColumnTable(sheet, definitions, componentId, structuredFields, dataStart, dataEnd)
+                        : extractRowTable(sheet, definitions, componentId, structuredFields, dataStart, dataEnd);
+            }
+            if (structured != null && !structured.rows().isEmpty()) {
+                var form = declaredFormContext(entry.getKey(), component, formResults);
+                results.add(form == null ? structured : mergeFormIntoStructured(structured, form));
+            }
         }
-        var formFields = formBindings.stream()
-                .filter(binding -> binding.fieldCode() != null && !binding.fieldCode().isBlank())
-                .toList();
-        if (formFields.isEmpty()) return structured == null ? Optional.empty() : Optional.of(structured);
-        var form = extractFormRegion(sheet, definitions, formBindings, formFields, dataStart, dataEnd);
-        if (structured == null) return Optional.of(form);
-        // A common workbook has a basic-information form above a detail table.
-        // Repeat the form values into each logical detail record while retaining
-        // their original cell anchors.
-        return Optional.of(mergeFormIntoStructured(structured, form));
+        var legacyMerged = false;
+        if (!explicitComponents && formResults.size() == 1 && results.size() == 1) {
+            results.set(0, mergeFormIntoStructured(results.getFirst(), formResults.values().iterator().next()));
+            legacyMerged = true;
+        }
+        // Standalone forms are records of their own. They are not copied into
+        // unrelated tables merely because they share a sheet.
+        for (var entry : formResults.entrySet()) {
+            if (legacyMerged) break;
+            var usedAsContext = components.entrySet().stream().anyMatch(component ->
+                    entry.getKey().equals(formContextId(component.getKey(), component.getValue())));
+            if (!usedAsContext) results.add(entry.getValue());
+        }
+        return results.isEmpty() ? Optional.empty() : Optional.of(combine(results));
+    }
+
+    private Map<String, List<TemplateDataImportFacade.ImportBinding>> componentBindings(
+            List<TemplateDataImportFacade.ImportBinding> bindings
+    ) {
+        var result = new LinkedHashMap<String, List<TemplateDataImportFacade.ImportBinding>>();
+        for (var binding : bindings) {
+            var locator = binding.locator();
+            var componentId = locator == null ? "" : locator.path("componentId").asText("");
+            if (componentId.isBlank()) componentId = binding.parentBindingId();
+            if (componentId == null || componentId.isBlank()) componentId = binding.bindingId();
+            result.computeIfAbsent(componentId, ignored -> new ArrayList<>()).add(binding);
+        }
+        return result;
+    }
+
+    private Result declaredFormContext(String componentId,
+                                       List<TemplateDataImportFacade.ImportBinding> bindings,
+                                       Map<String, Result> forms) {
+        var formId = formContextId(componentId, bindings);
+        return formId == null ? null : forms.get(formId);
+    }
+
+    private String formContextId(String componentId, List<TemplateDataImportFacade.ImportBinding> bindings) {
+        for (var binding : bindings) {
+            var locator = binding.locator();
+            var declared = locator == null ? "" : locator.path("formContextComponentId").asText("");
+            if (!declared.isBlank()) return declared;
+        }
+        return null;
+    }
+
+    private Result combine(List<Result> results) {
+        var shapes = results.stream().map(Result::shape).distinct().toList();
+        var mappings = new ArrayList<DataRepository.Mapping>();
+        var rows = new ArrayList<DataRepository.Row>();
+        results.forEach(result -> {
+            result.mappings().forEach(mapping -> {
+                var exists = mappings.stream().anyMatch(current -> current.sheetId().equals(mapping.sheetId())
+                        && current.sourceColumn().equals(mapping.sourceColumn())
+                        && mappingComponentId(current).equals(mappingComponentId(mapping)));
+                if (!exists) mappings.add(mapping);
+            });
+            rows.addAll(result.rows());
+        });
+        return new Result(shapes.size() == 1 ? shapes.getFirst() : "MULTI_COMPONENT", mappings, rows);
+    }
+
+    private String mappingComponentId(DataRepository.Mapping mapping) {
+        return mapping.detail() == null ? "" : mapping.detail().path("componentId").asText("");
     }
 
     private Result extractFormRegion(
             TemplateDataImportFacade.ParsedSheet sheet,
             List<TemplateDataImportFacade.FieldDefinition> definitions,
+            String componentId,
             List<TemplateDataImportFacade.ImportBinding> allBindings,
             List<TemplateDataImportFacade.ImportBinding> fields,
             int dataStart,
@@ -90,7 +164,7 @@ final class StructuredDataExtractor {
         }
         if (regionRange.isEmpty()) return new Result("FORM_REGION", List.of(), List.of());
         var shape = "FORM_REGION";
-        var mappings = fieldMappings(sheet.sheetId(), fields, definitions, shape);
+        var mappings = fieldMappings(sheet.sheetId(), componentId, fields, definitions, shape);
         var axis = region == null ? fields.stream().map(TemplateDataImportFacade.ImportBinding::repeatAxis)
                 .filter(value -> value != null && !value.isBlank()).findFirst().orElse("")
                 : region.repeatAxis();
@@ -110,21 +184,23 @@ final class StructuredDataExtractor {
         var rows = new ArrayList<DataRepository.Row>();
         for (int block = 0; block < blockCount; block++) {
             var raw = objectMapper.createObjectNode();
-            var metadata = baseMetadata(shape);
+            var metadata = baseMetadata(shape, componentId);
             var nonBlank = false;
             String identity = null;
             for (var binding : fields) {
                 var sourceRange = range(binding.locator(), false).orElse(regionRange.get());
-                var valueCell = formValue(sheet, sourceRange, axis, block, recordHeight, recordWidth, stride);
+                var valueCell = formValue(sheet, binding, sourceRange, axis, block,
+                        recordHeight, recordWidth, stride);
                 var key = bindingKey(binding);
                 raw.put(key, valueCell.value());
-                putCell(metadata, key, cellMetadata(sheet, valueCell.row(), valueCell.column()));
+                putCell(metadata, key, cellMetadata(sheet, valueCell.row(), valueCell.column(), binding));
                 nonBlank |= !valueCell.value().isBlank();
                 if (binding.identity() && !valueCell.value().isBlank()) identity = valueCell.value();
             }
             if (!nonBlank) continue;
             metadata.put("recordKey", identity == null || identity.isBlank()
-                    ? sheet.sheetId() + ":form:" + block : identity);
+                    ? sheet.sheetId() + ":" + componentId + ":form:" + block : identity);
+            metadata.put("identitySynthetic", identity == null || identity.isBlank());
             rows.add(row(raw, metadata, sheet.sheetId(), regionRange.get().startRow() + block * stride));
         }
         return new Result(shape, mappings, rows);
@@ -150,6 +226,7 @@ final class StructuredDataExtractor {
     private Result extractRowTable(
             TemplateDataImportFacade.ParsedSheet sheet,
             List<TemplateDataImportFacade.FieldDefinition> definitions,
+            String componentId,
             List<TemplateDataImportFacade.ImportBinding> fields,
             int dataStart,
             int dataEnd
@@ -159,12 +236,13 @@ final class StructuredDataExtractor {
         if (ranges.isEmpty()) return new Result("ROW_TABLE", List.of(), List.of());
         var start = Math.max(dataStart, ranges.stream().mapToInt(Range::startRow).min().orElse(dataStart));
         var end = Math.min(dataEnd, ranges.stream().mapToInt(Range::endRow).max().orElse(dataEnd));
-        var mappings = fieldMappings(sheet.sheetId(), fields, definitions, "ROW_TABLE");
+        var mappings = fieldMappings(sheet.sheetId(), componentId, fields, definitions, "ROW_TABLE");
         var rows = new ArrayList<DataRepository.Row>();
         for (int rowNumber = start; rowNumber <= end; rowNumber++) {
             var raw = objectMapper.createObjectNode();
-            var metadata = baseMetadata("ROW_TABLE");
+            var metadata = baseMetadata("ROW_TABLE", componentId);
             var nonBlank = false;
+            var nonSequenceBlank = false;
             String identity = null;
             for (var binding : fields) {
                 var fieldRange = range(binding.locator(), false).orElse(null);
@@ -172,13 +250,18 @@ final class StructuredDataExtractor {
                 var key = bindingKey(binding);
                 var value = value(sheet.rows(), rowNumber, fieldRange.startColumn());
                 raw.put(key, value);
-                putCell(metadata, key, cellMetadata(sheet, rowNumber, fieldRange.startColumn()));
+                putCell(metadata, key, cellMetadata(sheet, rowNumber, fieldRange.startColumn(), binding));
                 nonBlank |= !value.isBlank();
+                nonSequenceBlank |= !value.isBlank() && !isGeneratedSequenceField(binding);
                 if (binding.identity() && !value.isBlank()) identity = value;
             }
-            if (!nonBlank || aggregateRow(raw)) continue;
+            // Preformatted templates commonly pre-fill the row sequence while
+            // leaving every business input blank. Such reserved rows are not
+            // records and must not enter review, RAG or training projections.
+            if (!nonBlank || !nonSequenceBlank || aggregateRow(raw)) continue;
             metadata.put("recordKey", identity == null || identity.isBlank()
-                    ? sheet.sheetId() + ":row:" + rowNumber : identity);
+                    ? sheet.sheetId() + ":" + componentId + ":row:" + rowNumber : identity);
+            metadata.put("identitySynthetic", identity == null || identity.isBlank());
             rows.add(row(raw, metadata, sheet.sheetId(), rowNumber));
         }
         return new Result("ROW_TABLE", mappings, rows);
@@ -187,6 +270,7 @@ final class StructuredDataExtractor {
     private Result extractColumnTable(
             TemplateDataImportFacade.ParsedSheet sheet,
             List<TemplateDataImportFacade.FieldDefinition> definitions,
+            String componentId,
             List<TemplateDataImportFacade.ImportBinding> fields,
             int dataStart,
             int dataEnd
@@ -196,12 +280,12 @@ final class StructuredDataExtractor {
         if (ranges.isEmpty()) return new Result("COLUMN_TABLE", List.of(), List.of());
         var start = ranges.stream().mapToInt(Range::startColumn).min().orElse(1);
         var end = ranges.stream().mapToInt(Range::endColumn).max().orElse(start);
-        var mappings = fieldMappings(sheet.sheetId(), fields, definitions, "COLUMN_TABLE");
+        var mappings = fieldMappings(sheet.sheetId(), componentId, fields, definitions, "COLUMN_TABLE");
         var rows = new ArrayList<DataRepository.Row>();
         int recordIndex = 0;
         for (int column = start; column <= end; column++) {
             var raw = objectMapper.createObjectNode();
-            var metadata = baseMetadata("COLUMN_TABLE");
+            var metadata = baseMetadata("COLUMN_TABLE", componentId);
             var nonBlank = false;
             String identity = null;
             for (var binding : fields) {
@@ -211,14 +295,15 @@ final class StructuredDataExtractor {
                 var key = bindingKey(binding);
                 var value = value(sheet.rows(), sourceRow, column);
                 raw.put(key, value);
-                putCell(metadata, key, cellMetadata(sheet, sourceRow, column));
+                putCell(metadata, key, cellMetadata(sheet, sourceRow, column, binding));
                 nonBlank |= !value.isBlank();
                 if (binding.identity() && !value.isBlank()) identity = value;
             }
             if (!nonBlank || aggregateRow(raw)) continue;
             recordIndex++;
             metadata.put("recordKey", identity == null || identity.isBlank()
-                    ? sheet.sheetId() + ":column:" + column : identity);
+                    ? sheet.sheetId() + ":" + componentId + ":column:" + column : identity);
+            metadata.put("identitySynthetic", identity == null || identity.isBlank());
             rows.add(row(raw, metadata, sheet.sheetId(), recordIndex));
         }
         return new Result("COLUMN_TABLE", mappings, rows);
@@ -227,6 +312,7 @@ final class StructuredDataExtractor {
     private Result extractMatrix(
             TemplateDataImportFacade.ParsedSheet sheet,
             List<TemplateDataImportFacade.FieldDefinition> definitions,
+            String componentId,
             List<TemplateDataImportFacade.ImportBinding> bindings,
             int dataStart,
             int dataEnd
@@ -246,10 +332,23 @@ final class StructuredDataExtractor {
         }
         if (cross.isEmpty()) return new Result("MATRIX", List.of(), List.of());
         var crossRange = cross.get();
-        var mappings = fieldMappings(sheet.sheetId(), fields, definitions, "MATRIX");
+        var rowDimensionFields = fields.stream()
+                .filter(field -> isMatrixRowDimension(field, rowHeaders, crossRange)).toList();
+        var columnDimensionFields = fields.stream()
+                .filter(field -> isMatrixColumnDimension(field, columnHeaders, crossRange)).toList();
+        var measureFields = fields.stream()
+                .filter(field -> !rowDimensionFields.contains(field) && !columnDimensionFields.contains(field))
+                .toList();
+        var mappings = fieldMappings(sheet.sheetId(), componentId, fields, definitions, "MATRIX");
         mappings = new ArrayList<>(mappings);
-        mappings.add(syntheticMapping(sheet.sheetId(), ROW_DIMENSION_KEY, ROW_DIMENSION_CODE, "行维度", "/dimensions/row"));
-        mappings.add(syntheticMapping(sheet.sheetId(), COLUMN_DIMENSION_KEY, COLUMN_DIMENSION_CODE, "列维度", "/dimensions/column"));
+        if (rowDimensionFields.isEmpty()) {
+            mappings.add(syntheticMapping(sheet.sheetId(), componentId, ROW_DIMENSION_KEY,
+                    ROW_DIMENSION_CODE, "行维度", "/dimensions/row"));
+        }
+        if (columnDimensionFields.isEmpty()) {
+            mappings.add(syntheticMapping(sheet.sheetId(), componentId, COLUMN_DIMENSION_KEY,
+                    COLUMN_DIMENSION_CODE, "列维度", "/dimensions/column"));
+        }
         var rows = new ArrayList<DataRepository.Row>();
         int recordIndex = 0;
         for (int rowNumber = crossRange.startRow(); rowNumber <= crossRange.endRow(); rowNumber++) {
@@ -261,33 +360,93 @@ final class StructuredDataExtractor {
                         ? dimensionValue(sheet.rows(), columnHeaders.get(), column, false)
                         : columnName(column);
                 if (aggregateLabel(rowLabel) || aggregateLabel(columnLabel)) continue;
-                for (var field : fields) {
-                    var valueRange = range(field.locator(), "crossDataRange").orElse(crossRange);
+                var value = value(sheet.rows(), rowNumber, column);
+                if (value.isBlank()) continue;
+                var raw = objectMapper.createObjectNode();
+                var metadata = baseMetadata("MATRIX", componentId);
+                for (var field : rowDimensionFields) {
+                    var sourceRange = matrixBindingRange(field).orElseGet(() -> rowHeaders.orElse(null));
+                    if (sourceRange == null) continue;
+                    var key = bindingKey(field);
+                    raw.put(key, dimensionValue(sheet.rows(), sourceRange, rowNumber, true));
+                    putCell(metadata, key, cellMetadata(sheet, rowNumber, sourceRange.startColumn(), field));
+                }
+                for (var field : columnDimensionFields) {
+                    var sourceRange = matrixBindingRange(field).orElseGet(() -> columnHeaders.orElse(null));
+                    if (sourceRange == null) continue;
+                    var key = bindingKey(field);
+                    raw.put(key, dimensionValue(sheet.rows(), sourceRange, column, false));
+                    putCell(metadata, key, cellMetadata(sheet, sourceRange.startRow(), column, field));
+                }
+                for (var field : measureFields) {
+                    var valueRange = matrixBindingRange(field).orElse(crossRange);
                     if (!valueRange.contains(rowNumber, column)) continue;
-                    var value = value(sheet.rows(), rowNumber, column);
-                    if (value.isBlank()) continue;
-                    var raw = objectMapper.createObjectNode();
-                    var metadata = baseMetadata("MATRIX");
                     var key = bindingKey(field);
                     raw.put(key, value);
-                    raw.put(ROW_DIMENSION_KEY, rowLabel);
-                    raw.put(COLUMN_DIMENSION_KEY, columnLabel);
-                    putCell(metadata, key, cellMetadata(sheet, rowNumber, column));
-                    putCell(metadata, ROW_DIMENSION_KEY, firstDimensionCell(sheet, rowHeaders, rowNumber));
-                    putCell(metadata, COLUMN_DIMENSION_KEY, firstDimensionCell(sheet, columnHeaders, column));
-                    metadata.put("recordKey", sheet.sheetId() + ":matrix:" + rowNumber + ":" + column + ":"
-                            + field.fieldCode());
-                    metadata.putObject("dimensions").put("row", rowLabel).put("column", columnLabel);
-                    recordIndex++;
-                    rows.add(row(raw, metadata, sheet.sheetId(), recordIndex));
+                    putCell(metadata, key, cellMetadata(sheet, rowNumber, column, field));
                 }
+                if (measureFields.stream().noneMatch(field -> raw.has(bindingKey(field)))) continue;
+                if (rowDimensionFields.isEmpty()) {
+                    raw.put(ROW_DIMENSION_KEY, rowLabel);
+                    putCell(metadata, ROW_DIMENSION_KEY, firstDimensionCell(sheet, rowHeaders, rowNumber));
+                }
+                if (columnDimensionFields.isEmpty()) {
+                    raw.put(COLUMN_DIMENSION_KEY, columnLabel);
+                    putCell(metadata, COLUMN_DIMENSION_KEY, firstDimensionCell(sheet, columnHeaders, column));
+                }
+                metadata.put("recordKey", sheet.sheetId() + ":" + componentId + ":matrix:"
+                        + rowNumber + ":" + column);
+                metadata.putObject("dimensions").put("row", rowLabel).put("column", columnLabel);
+                recordIndex++;
+                rows.add(row(raw, metadata, sheet.sheetId(), recordIndex));
             }
         }
         return new Result("MATRIX", mappings, rows);
     }
 
+    private boolean isMatrixRowDimension(
+            TemplateDataImportFacade.ImportBinding binding,
+            Optional<Range> rowHeaders,
+            Range crossRange
+    ) {
+        var code = binding.fieldCode() == null ? "" : binding.fieldCode().toUpperCase(Locale.ROOT);
+        if (code.contains("ROW_DIMENSION") || code.contains("ROW_ATTRIBUTE")) return true;
+        var sourceRange = matrixBindingRange(binding);
+        return sourceRange.isPresent() && rowHeaders.isPresent()
+                && rangesOverlap(sourceRange.get(), rowHeaders.get())
+                && !rangesOverlap(sourceRange.get(), crossRange);
+    }
+
+    private boolean isMatrixColumnDimension(
+            TemplateDataImportFacade.ImportBinding binding,
+            Optional<Range> columnHeaders,
+            Range crossRange
+    ) {
+        var code = binding.fieldCode() == null ? "" : binding.fieldCode().toUpperCase(Locale.ROOT);
+        if (code.contains("COLUMN_DIMENSION") || code.contains("COLUMN_MEMBER")) return true;
+        var sourceRange = matrixBindingRange(binding);
+        return sourceRange.isPresent() && columnHeaders.isPresent()
+                && rangesOverlap(sourceRange.get(), columnHeaders.get())
+                && !rangesOverlap(sourceRange.get(), crossRange);
+    }
+
+    private Optional<Range> matrixBindingRange(TemplateDataImportFacade.ImportBinding binding) {
+        if (binding.locator() == null || !binding.locator().isObject()) return Optional.empty();
+        for (var key : List.of("logicalInputRange", "sourceRange", "valueRange", "measureRange", "crossDataRange")) {
+            var parsed = range(binding.locator(), key);
+            if (parsed.isPresent()) return parsed;
+        }
+        return Optional.empty();
+    }
+
+    private boolean rangesOverlap(Range left, Range right) {
+        return left.startRow() <= right.endRow() && left.endRow() >= right.startRow()
+                && left.startColumn() <= right.endColumn() && left.endColumn() >= right.startColumn();
+    }
+
     private List<DataRepository.Mapping> fieldMappings(
             String sheetId,
+            String componentId,
             List<TemplateDataImportFacade.ImportBinding> fields,
             List<TemplateDataImportFacade.FieldDefinition> definitions,
             String shape
@@ -299,6 +458,7 @@ final class StructuredDataExtractor {
             var detail = objectMapper.createObjectNode()
                     .put("dataPath", binding.dataPath())
                     .put("structured", true)
+                    .put("componentId", componentId)
                     .put("shape", shape)
                     .put("bindingId", binding.bindingId())
                     .put("mappingKind", binding.mappingKind())
@@ -306,6 +466,9 @@ final class StructuredDataExtractor {
                     .put("identity", binding.identity() || definition != null && definition.identity())
                     .put("required", binding.required() || definition != null && definition.required())
                     .put("trainingEligible", binding.trainingEligible())
+                    .put("trainingRole", binding.trainingRole())
+                    .put("ragEligible", binding.ragEligible())
+                    .put("labelPath", binding.labelPath() == null ? "" : binding.labelPath())
                     .put("valueSource", binding.valueSource());
             detail.set("locator", binding.locator() == null ? objectMapper.createObjectNode() : binding.locator().deepCopy());
             return new DataRepository.Mapping(null, sheetId, bindingKey(binding),
@@ -315,10 +478,13 @@ final class StructuredDataExtractor {
         }).toList();
     }
 
-    private DataRepository.Mapping syntheticMapping(String sheetId, String key, String fieldCode, String name, String dataPath) {
+    private DataRepository.Mapping syntheticMapping(String sheetId, String componentId, String key,
+                                                    String fieldCode, String name, String dataPath) {
         var detail = objectMapper.createObjectNode()
                 .put("dataPath", dataPath)
                 .put("structured", true)
+                .put("componentId", componentId)
+                .put("bindingId", key)
                 .put("syntheticDimension", true)
                 .put("identity", false)
                 .put("required", false);
@@ -331,8 +497,9 @@ final class StructuredDataExtractor {
                 "STAGED", metadata);
     }
 
-    private ObjectNode baseMetadata(String shape) {
-        return objectMapper.createObjectNode().put("shape", shape).set("cells", objectMapper.createObjectNode());
+    private ObjectNode baseMetadata(String shape, String componentId) {
+        return objectMapper.createObjectNode().put("shape", shape).put("componentId", componentId)
+                .set("cells", objectMapper.createObjectNode());
     }
 
     private void putCell(ObjectNode metadata, String key, ObjectNode cell) {
@@ -347,6 +514,30 @@ final class StructuredDataExtractor {
                 .put("columnNumber", column)
                 .put("columnName", columnName(column))
                 .put("cellAddress", columnName(column) + row);
+    }
+
+    private ObjectNode cellMetadata(TemplateDataImportFacade.ParsedSheet sheet, int row, int column,
+                                    TemplateDataImportFacade.ImportBinding binding) {
+        var metadata = cellMetadata(sheet, row, column)
+                .put("bindingId", binding.bindingId())
+                .put("valuePath", binding.dataPath())
+                .put("valueSource", binding.valueSource() == null ? "INPUT" : binding.valueSource())
+                .put("labelPath", binding.labelPath() == null ? "" : binding.labelPath())
+                .put("ragEligible", binding.ragEligible());
+        var address = columnName(column) + row;
+        if (sheet.layoutIr() != null) {
+            for (var cell : sheet.layoutIr().path("cells")) {
+                if (!address.equalsIgnoreCase(cell.path("address").asText(""))) continue;
+                if ("FORMULA".equals(cell.path("valueSource").asText())) {
+                    for (var key : List.of("formulaExpression", "cachedValue", "calculationSource", "calculationStatus", "formulaTrustStatus")) {
+                        if (cell.has(key)) metadata.set(key, cell.path(key).deepCopy());
+                    }
+                    metadata.put("valueSource", "FORMULA");
+                }
+                break;
+            }
+        }
+        return metadata;
     }
 
     private ObjectNode firstDimensionCell(
@@ -400,6 +591,13 @@ final class StructuredDataExtractor {
                 || normalized.equals("total") || normalized.equals("subtotal");
     }
 
+    private boolean isGeneratedSequenceField(TemplateDataImportFacade.ImportBinding binding) {
+        var normalized = (binding.fieldCode() + " " + binding.labelPath())
+                .replace(" ", "").toLowerCase(Locale.ROOT);
+        return normalized.contains("序号") || normalized.equals("no") || normalized.equals("编号")
+                || normalized.contains("rownumber") || normalized.contains("sequence");
+    }
+
     private boolean sameSheet(TemplateDataImportFacade.ImportBinding binding, String sheetId, String sheetName) {
         var locatorSheet = binding.locator() == null ? "" : binding.locator().path("sheetId").asText(
                 binding.locator().path("sheet").asText(""));
@@ -431,6 +629,12 @@ final class StructuredDataExtractor {
 
     private boolean isStructuredField(TemplateDataImportFacade.ImportBinding binding) {
         var kind = binding.mappingKind().toUpperCase(Locale.ROOT);
+        // A repeat region is the container for the records, not a business
+        // field. Including it here makes a row table produce one extra value
+        // from the header row and also causes the extractor to treat the
+        // container range as a field. Only its child bindings are executable
+        // fields.
+        if (kind.contains("REGION")) return false;
         return !binding.fieldCode().isBlank() && (kind.contains("REPEAT_FIELD")
                 || kind.equals("COLUMN_TABLE") || kind.equals("ROW_TABLE")
                 || binding.repeatAxis() != null && !binding.repeatAxis().isBlank());
@@ -438,15 +642,35 @@ final class StructuredDataExtractor {
 
     private boolean isColumnBinding(TemplateDataImportFacade.ImportBinding binding) {
         var axis = binding.repeatAxis() == null ? "" : binding.repeatAxis().toUpperCase(Locale.ROOT);
-        return axis.contains("COLUMN") || binding.locator() != null
-                && "ARRAY_COLUMN".equals(binding.locator().path("valueMode").asText(""));
+        // repeatAxis is the contract's source of truth. ARRAY_COLUMN means
+        // values are stored down a column and therefore represents one record
+        // per ROW; ARRAY_ROW represents one record per COLUMN. The previous
+        // fallback inverted ordinary row tables and yielded one record per
+        // header column.
+        if (axis.contains("ROW")) return false;
+        if (axis.contains("COLUMN")) return true;
+        return binding.locator() != null
+                && "ARRAY_ROW".equals(binding.locator().path("valueMode").asText(""));
     }
 
     private String bindingKey(TemplateDataImportFacade.ImportBinding binding) {
         var raw = binding.bindingId() == null || binding.bindingId().isBlank()
                 ? binding.fieldCode() : binding.bindingId();
         var normalized = raw.replaceAll("[^A-Za-z0-9]", "");
-        return "b_" + (normalized.length() > 29 ? normalized.substring(0, 29) : normalized);
+        if (normalized.length() <= 29) return "b_" + normalized;
+        // source_column is varchar(32). Preserve a readable prefix while adding
+        // a stable suffix so long binding ids cannot collide after truncation.
+        return "b_" + normalized.substring(0, 18) + "_" + shortHash(raw);
+    }
+
+    private String shortHash(String value) {
+        try {
+            var digest = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(value.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return java.util.HexFormat.of().formatHex(digest).substring(0, 10);
+        } catch (java.security.NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 不可用", exception);
+        }
     }
 
     private String value(List<List<String>> rows, int row, int column) {
@@ -502,7 +726,8 @@ final class StructuredDataExtractor {
         return Optional.of(new Cell(Integer.parseInt(matcher.group(2)), column));
     }
 
-    private ValueCell formValue(TemplateDataImportFacade.ParsedSheet sheet, Range sourceRange,
+    private ValueCell formValue(TemplateDataImportFacade.ParsedSheet sheet,
+                                TemplateDataImportFacade.ImportBinding binding, Range sourceRange,
                                 String axis, int block, int recordHeight, int recordWidth, int stride) {
         var rowOffset = axis != null && axis.toUpperCase(Locale.ROOT).contains("ROW") ? block * stride : 0;
         var columnOffset = axis != null && axis.toUpperCase(Locale.ROOT).contains("COLUMN") ? block * stride : 0;
@@ -517,10 +742,18 @@ final class StructuredDataExtractor {
         for (int row = startRow; row <= endRow; row++) {
             for (int column = startColumn; column <= endColumn; column++) {
                 var value = value(sheet.rows(), row, column);
-                if (!value.isBlank()) return new ValueCell(value, row, column);
+                if (!value.isBlank()) return new ValueCell(inlineValue(binding, value), row, column);
             }
         }
         return new ValueCell("", Math.max(1, startRow), Math.max(1, startColumn));
+    }
+
+    private String inlineValue(TemplateDataImportFacade.ImportBinding binding, String value) {
+        if (binding.locator() == null
+                || !"INLINE".equalsIgnoreCase(binding.locator().path("valueMode").asText(""))) return value;
+        var colon = Math.max(value.indexOf('：'), value.indexOf(':'));
+        if (colon < 0 || colon + 1 >= value.length()) return "";
+        return value.substring(colon + 1).trim();
     }
 
     record Result(String shape, List<DataRepository.Mapping> mappings, List<DataRepository.Row> rows) {}

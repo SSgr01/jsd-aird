@@ -107,6 +107,16 @@ public class PostgresWorkRepository implements WorkRepository {
         );
     }
 
+    @Override
+    public void failJobTerminal(AsyncJob job, Exception exception) {
+        jdbcTemplate.update("""
+                UPDATE ops.async_job
+                SET status = 'FAILED', last_error = ?, lease_owner = NULL,
+                    lease_expires_at = NULL, finished_at = now(), updated_at = now()
+                WHERE id = ?
+                """, truncate(exception.getMessage(), 4000), job.id());
+    }
+
     @Transactional
     @Override
     public Optional<OutboxEvent> claimOutbox(String workerId, Duration leaseDuration) {

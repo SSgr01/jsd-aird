@@ -46,4 +46,14 @@ public class TemplateImportJobHandler implements AsyncJobHandler {
                 payload.path("runReason").asText("INITIAL_RECOGNITION")
         );
     }
+
+    @Override
+    public void handleTerminalFailure(JsonNode payload, Exception exception) {
+        var importJobId = payload.path("importJobId").asText("");
+        if (importJobId.isBlank()) return;
+        service.markTerminalFailure(
+                java.util.UUID.fromString(importJobId),
+                exception.getMessage()
+        );
+    }
 }

@@ -7,6 +7,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -73,6 +75,7 @@ public class XlsxStructureParser implements OfficeStructureParser, WorkbookInsta
             var allDataValidations = objectMapper.createArrayNode();
             var formulaCount = 0;
             var mergedCount = 0;
+            var fingerprintFormatter = new org.apache.poi.ss.usermodel.DataFormatter();
 
             for (int sheetIndex = 0; sheetIndex < workbook.getNumberOfSheets(); sheetIndex++) {
                 var sheet = workbook.getSheetAt(sheetIndex);
@@ -155,6 +158,7 @@ public class XlsxStructureParser implements OfficeStructureParser, WorkbookInsta
                 sheetSummary.set("rowData", rowData.deepCopy());
                 sheetSummary.set("columnData", columnData.deepCopy());
                 sheetSummary.set("dataValidationRules", dataValidations);
+                sheetSummary.put("structureFingerprint", structureFingerprint(sheet, fingerprintFormatter));
                 sheets.add(sheetSummary);
                 sheetOrder.add(sheetId);
 
@@ -166,7 +170,11 @@ public class XlsxStructureParser implements OfficeStructureParser, WorkbookInsta
                         .put("rowCount", Math.max(200, dimensions.lastRow() + 20))
                         .put("columnCount", Math.max(50, dimensions.lastColumn() + 20))
                         .put("defaultColumnWidth", Math.round(sheet.getDefaultColumnWidth() * 7d))
-                        .put("defaultRowHeight", Math.round(sheet.getDefaultRowHeightInPoints() * POINT_TO_PIXEL))
+                        // Some generated XLSX files report a zero default row height even though Excel
+                        // renders them with the normal 15pt row. Univer treats zero literally and hides
+                        // the whole grid, so keep a safe visual default while preserving explicit row heights.
+                        .put("defaultRowHeight", Math.max(20,
+                                Math.round(sheet.getDefaultRowHeightInPoints() * POINT_TO_PIXEL)))
                         .put("showGridlines", sheet.isDisplayGridlines() ? 1 : 0)
                         .put("rightToLeft", sheet.isRightToLeft() ? 1 : 0);
                 snapshotSheet.set("cellData", cellData);
@@ -542,6 +550,34 @@ public class XlsxStructureParser implements OfficeStructureParser, WorkbookInsta
         var count = 0;
         for (var row : sheet) count += row.getPhysicalNumberOfCells();
         return count;
+    }
+
+    private String sha256(String value) {
+        try {
+            return java.util.HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("JDK 不支持 SHA-256", exception);
+        }
+    }
+
+    private String structureFingerprint(org.apache.poi.ss.usermodel.Sheet sheet,
+                                        org.apache.poi.ss.usermodel.DataFormatter formatter) {
+        var basis = objectMapper.createObjectNode();
+        var cells = basis.putArray("cells");
+        var formulaRoles = basis.putArray("formulaRoles");
+        for (var row : sheet) for (var cell : row) {
+            if (cell.getCellType() == CellType.BLANK) continue;
+            var address = cell.getAddress().formatAsString();
+            cells.addObject().put("address", address)
+                    .put("value", formatter.formatCellValue(cell)
+                            .trim().toLowerCase(Locale.ROOT).replaceAll("[\\s_：:（）()\\-]+", ""))
+                    .put("type", cell.getCellType().name());
+            if (cell.getCellType() == CellType.FORMULA) formulaRoles.add(address);
+        }
+        var merges = basis.putArray("merges");
+        sheet.getMergedRegions().forEach(region -> merges.add(region.formatAsString()));
+        return sha256(basis.toString());
     }
 
     private record Dimensions(int firstRow, int lastRow, int firstColumn, int lastColumn) {

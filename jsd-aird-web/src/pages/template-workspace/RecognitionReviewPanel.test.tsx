@@ -419,7 +419,7 @@ describe('RecognitionReviewPanel', () => {
 
     expect(screen.getByText('系统发现 2 种结构方案')).toBeInTheDocument();
     fireEvent.mouseDown(screen.getByRole('combobox', { name: '选择结构方案' }));
-    fireEvent.click(screen.getByText('模型分区：字段区 A1:J5 + 按行明细表 A6:J22'));
+    fireEvent.click(screen.getByText('模型候选：字段区 A1:J5 + 按行明细表 A6:J22'));
     fireEvent.click(screen.getByRole('button', { name: '确认' }));
 
     expect(handlers.onConfirm).toHaveBeenCalledWith(conflictItem, 'model-partition');
@@ -502,7 +502,7 @@ describe('RecognitionReviewPanel', () => {
     expect(screen.queryByText('名称依据')).not.toBeInTheDocument();
     expect(screen.queryByText('表头识别')).not.toBeInTheDocument();
     expect(screen.getByText('运行时成员槽位（1）')).toBeInTheDocument();
-    expect(screen.getByText('审计信息（1）')).toBeInTheDocument();
+    expect(screen.queryByText('审计信息（1）')).not.toBeInTheDocument();
   });
 
   it('为单个未确认的模型区域提供采用并识别字段入口', () => {

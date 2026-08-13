@@ -55,6 +55,8 @@ public class TemplateImportService {
     private final RecognitionCoverageValidator coverageValidator;
     private final CanonicalMatrixCompiler matrixCompiler;
     private final StructureProposalResolver structureProposalResolver;
+    private final PhysicalStructureFieldCompiler physicalFieldCompiler;
+    private final ColumnTableLayoutCompiler columnTableLayoutCompiler;
 
     public TemplateImportService(
             TemplateImportRepository repository,
@@ -87,13 +89,29 @@ public class TemplateImportService {
         this.coverageValidator = new RecognitionCoverageValidator(objectMapper, topologyV2Enabled);
         this.matrixCompiler = new CanonicalMatrixCompiler(objectMapper);
         this.structureProposalResolver = new StructureProposalResolver(objectMapper);
+        this.physicalFieldCompiler = new PhysicalStructureFieldCompiler(objectMapper);
+        this.columnTableLayoutCompiler = new ColumnTableLayoutCompiler(objectMapper);
     }
 
     @Transactional
     public TemplateImportRepository.ImportJobView create(UUID fileId, TemplateFormat format) {
+        return create(fileId, format, null, false, "UPLOAD");
+    }
+
+    @Transactional
+    public TemplateImportRepository.ImportJobView create(
+            UUID fileId, TemplateFormat format, UUID categoryId, boolean duplicateOverride, String operationSource
+    ) {
         var actor = ActorContext.required();
-        fileRepository.find(actor.organizationId(), fileId)
+        var file = fileRepository.find(actor.organizationId(), fileId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.FILE_NOT_READY));
+        if (categoryId != null) templateRepository.findCategory(actor.organizationId(), categoryId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "分类不存在"));
+        var duplicate = repository.findDuplicate(actor.organizationId(), file.sha256(), format).orElse(null);
+        if (duplicate != null && !duplicateOverride) {
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,
+                    "该文件已经上传过，请查看原识别任务或确认重新解析：" + duplicate.id());
+        }
         var importJobId = UUID.randomUUID();
         repository.enqueue(new TemplateImportRepository.NewImportJob(
                 importJobId,
@@ -102,8 +120,20 @@ public class TemplateImportService {
                 fileId,
                 format,
                 actor.userId(),
-                "OFFICE_FILE"
+                "OFFICE_FILE", "WORKBOOK", null, null, null,
+                categoryId, file.sha256(), duplicateOverride,
+                duplicate == null ? null : duplicate.id(),
+                operationSource == null || operationSource.isBlank() ? "UPLOAD" : operationSource
         ));
+        templateRepository.appendAudit(actor.organizationId(), actor.userId(),
+                duplicateOverride ? "TEMPLATE_IMPORT_DUPLICATE_OVERRIDDEN" : "TEMPLATE_IMPORT_CREATED",
+                "TEMPLATE_IMPORT_JOB", importJobId,
+                objectMapper.createObjectNode()
+                        .put("format", format.name())
+                        .put("categoryId", categoryId == null ? "" : categoryId.toString())
+                        .put("sourceSha256", file.sha256())
+                        .put("duplicateSourceJobId", duplicate == null ? "" : duplicate.id().toString())
+                        .put("operationSource", operationSource == null ? "UPLOAD" : operationSource));
         return get(importJobId);
     }
 
@@ -112,54 +142,68 @@ public class TemplateImportService {
             UUID importJobId, String source, String baseWorkspaceHash
     ) {
         var actor = ActorContext.required();
-        if (!"CURRENT_DRAFT_SNAPSHOT".equals(source)) {
-            throw new ApiException(ApiErrorCode.BAD_REQUEST, "重试来源必须是当前已保存草稿快照");
+        if (!Set.of("CURRENT_DRAFT_SNAPSHOT", "ORIGINAL_FILE").contains(source)) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "重试来源不受支持");
         }
         var job = repository.find(actor.organizationId(), importJobId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "导入任务不存在"));
         if (!List.of("PARSED", "FAILED").contains(job.status())) {
             throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT, "该导入任务已有识别正在运行");
         }
-        var versionId = repository.findGeneratedVersionId(importJobId)
-                .orElseThrow(() -> new ApiException(ApiErrorCode.BAD_REQUEST, "请先由该导入任务生成模板草稿"));
-        var workspace = templateRepository.findWorkspace(actor.organizationId(), versionId)
-                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "模板草稿不存在"));
-        if (workspace.status() != TemplateStatus.DRAFT || workspace.format() != TemplateFormat.XLSX) {
-            throw new ApiException(ApiErrorCode.TEMPLATE_VERSION_IMMUTABLE, "只有 Excel 草稿可以重试识别");
-        }
-        if (baseWorkspaceHash == null || !baseWorkspaceHash.equals(workspace.workspaceHash())) {
-            throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT, "草稿已发生变化，请刷新列表后重试");
-        }
-        var sourceFileId = workspace.snapshotFileId();
-        var sourceKind = "UNIVER_SNAPSHOT";
-        // Older imported drafts were created before editor snapshots were persisted.
-        // Keep the existing retry action usable for those jobs by replaying the
-        // original workbook; a saved current snapshot always remains preferred.
-        if (sourceFileId == null) {
-            sourceFileId = repository.findOriginalSourceFileId(actor.organizationId(), versionId)
-                    .orElseThrow(() -> new ApiException(ApiErrorCode.FILE_NOT_READY,
-                            "当前草稿没有快照，且原始 Excel 已不可用"));
+        UUID versionId = repository.findGeneratedVersionId(importJobId).orElse(null);
+        TemplateRepository.TemplateWorkspace workspace = null;
+        UUID sourceFileId;
+        String sourceKind;
+        TemplateFormat sourceFormat;
+        if ("CURRENT_DRAFT_SNAPSHOT".equals(source)) {
+            if (versionId == null) {
+                throw new ApiException(ApiErrorCode.BAD_REQUEST, "请先由该导入任务生成模板草稿，或选择原始文件重试");
+            }
+            workspace = templateRepository.findWorkspace(actor.organizationId(), versionId)
+                    .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "模板草稿不存在"));
+            if (workspace.status() != TemplateStatus.DRAFT || workspace.format() != TemplateFormat.XLSX) {
+                throw new ApiException(ApiErrorCode.TEMPLATE_VERSION_IMMUTABLE, "只有 Excel 草稿可以重试识别");
+            }
+            if (baseWorkspaceHash == null || !baseWorkspaceHash.equals(workspace.workspaceHash())) {
+                throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT, "草稿已发生变化，请刷新列表后重试");
+            }
+            sourceFileId = workspace.snapshotFileId();
+            sourceKind = "UNIVER_SNAPSHOT";
+            sourceFormat = TemplateFormat.XLSX;
+            // Older imported drafts were created before editor snapshots were persisted.
+            // Keep the existing retry action usable for those jobs by replaying the
+            // original workbook; a saved current snapshot always remains preferred.
+            if (sourceFileId == null) {
+                sourceFileId = repository.findOriginalSourceFileId(actor.organizationId(), versionId)
+                        .orElseThrow(() -> new ApiException(ApiErrorCode.FILE_NOT_READY,
+                                "当前草稿没有快照，且原始 Excel 已不可用"));
+                sourceKind = "OFFICE_FILE";
+            }
+        } else {
+            sourceFileId = job.sourceFileId();
             sourceKind = "OFFICE_FILE";
+            sourceFormat = job.format();
         }
         fileRepository.find(actor.organizationId(), sourceFileId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.FILE_NOT_READY));
         var asyncJobId = UUID.randomUUID();
         var enqueued = repository.enqueueRerun(new TemplateImportRepository.RerunImportJob(
                 importJobId, asyncJobId, actor.organizationId(), sourceFileId,
-                TemplateFormat.XLSX, actor.userId(), job.recognitionRunId(),
-                "MANUAL_RERUN_CURRENT_DRAFT", sourceKind
+                sourceFormat, actor.userId(), job.recognitionRunId(),
+                "CURRENT_DRAFT_SNAPSHOT".equals(source)
+                        ? "MANUAL_RERUN_CURRENT_DRAFT" : "MANUAL_RERUN_ORIGINAL_FILE", sourceKind
         ));
         if (!enqueued) {
             throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT, "该导入任务已有识别正在运行");
         }
         templateRepository.appendAudit(
                 actor.organizationId(), actor.userId(), "TEMPLATE_IMPORT_RETRIED",
-                "TEMPLATE_VERSION", versionId,
+                "TEMPLATE_VERSION", versionId == null ? importJobId : versionId,
                 objectMapper.createObjectNode()
                         .put("importJobId", importJobId.toString())
                         .put("parentRunId", job.recognitionRunId() == null ? "" : job.recognitionRunId().toString())
                         .put("source", source)
-                        .put("baseWorkspaceHash", baseWorkspaceHash)
+                        .put("baseWorkspaceHash", baseWorkspaceHash == null ? "" : baseWorkspaceHash)
         );
         return repository.find(actor.organizationId(), importJobId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "识别任务不存在"));
@@ -249,29 +293,63 @@ public class TemplateImportService {
         var job = repository.find(actor.organizationId(), importJobId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "导入任务不存在"));
         var result = job.result();
-        var recognitionStatus = result == null ? "REVIEW_REQUIRED"
-                : result.path("recognitionStatus").asText("REVIEW_REQUIRED");
         var canonicalStatus = result == null ? "PROVISIONAL"
                 : result.path("canonicalStatus").asText("PROVISIONAL");
-        var readiness = result == null ? "NOT_READY"
-                : result.path("publicationReadiness").asText("NOT_READY");
-        if (!"COMPLETE".equals(recognitionStatus)
-                || !"CONFIRMED".equals(canonicalStatus)
-                || !"READY".equals(readiness)) {
+        // Field confirmation is what moves recognitionStatus/publicationReadiness
+        // to their final values. Requiring those final values here created a
+        // circular gate: a structurally confirmed workbook could never use the
+        // "confirm all fields" action because its fields were still pending.
+        // Only the canonical structure must already be resolved; this endpoint
+        // then confirms every formally confirmable field beneath it.
+        if (!"CONFIRMED".equals(canonicalStatus)) {
             throw new ApiException(ApiErrorCode.BINDING_INVALID,
                     "识别结果仍需人工结构确认，不能批量确认全部候选");
         }
-        // Do not use the repository's broad confidence update here. A complete
-        // recognition run may still contain diagnostic, physical-only or
-        // protocol-recovery rows; only candidates that satisfy the same policy
-        // as the compiler may cross the confirmation boundary.
-        for (var suggestion : repository.listSuggestions(actor.organizationId(), importJobId)) {
+        // Structure confirmation and user field confirmation are deliberately
+        // separate boundaries. First persist already-resolved canonical
+        // parents, then confirm their clear fields. `reviewRequired=true` is
+        // expected here: the explicit click is the review decision.
+        var suggestions = repository.listSuggestions(actor.organizationId(), importJobId);
+        for (var suggestion : suggestions) {
             if (!"PENDING".equals(suggestion.decision())
+                    || !RecognitionCandidatePolicy.isStructural(suggestion.payload())
                     || !RecognitionCandidatePolicy.isFormallyConfirmable(suggestion.payload())) continue;
             repository.decideSuggestion(actor.organizationId(), job.recognitionRunId(), suggestion.id(),
                     "ACCEPTED", actor.userId());
         }
+        for (var suggestion : suggestions) {
+            if (!"PENDING".equals(suggestion.decision())
+                    || !RecognitionCandidatePolicy.isOneClickFieldConfirmable(suggestion.payload())
+                    || !hasConfirmedOrConfirmableParent(suggestion, suggestions)) continue;
+            repository.decideSuggestion(actor.organizationId(), job.recognitionRunId(), suggestion.id(),
+                    "ACCEPTED", actor.userId());
+        }
         return repository.listSuggestions(actor.organizationId(), importJobId);
+    }
+
+    private boolean hasConfirmedOrConfirmableParent(
+            TemplateImportRepository.RecognitionSuggestionView suggestion,
+            List<TemplateImportRepository.RecognitionSuggestionView> suggestions
+    ) {
+        var payload = suggestion.payload();
+        if (!"CHILD".equals(payload.path("suggestionLevel").asText(""))) return true;
+        var parentBindingId = payload.path("parentBindingId").asText("");
+        var parentRelationId = payload.path("parentRelationId").asText("");
+        var parentBlockId = payload.path("parentBlockId").asText("");
+        if (parentBindingId.isBlank() && parentRelationId.isBlank() && parentBlockId.isBlank()) return false;
+        return suggestions.stream().anyMatch(parent -> {
+            var parentPayload = parent.payload();
+            var identityMatches = (!parentBindingId.isBlank()
+                    && parentBindingId.equals(parentPayload.path("bindingId").asText("")))
+                    || (!parentRelationId.isBlank()
+                    && parentRelationId.equals(parentPayload.path("relationId").asText("")))
+                    || (!parentBlockId.isBlank()
+                    && parentBlockId.equals(parentPayload.path("blockId").asText("")));
+            return identityMatches
+                    && RecognitionCandidatePolicy.isStructural(parentPayload)
+                    && ("ACCEPTED".equals(parent.decision())
+                    || RecognitionCandidatePolicy.isFormallyConfirmable(parentPayload));
+        });
     }
 
     @Transactional
@@ -353,6 +431,10 @@ public class TemplateImportService {
     ) {
         return processSnapshot(importJobId, organizationId, fileId, scope, sheetId, address,
                 snapshotFragment, null, "INITIAL_RECOGNITION");
+    }
+
+    public void markTerminalFailure(UUID importJobId, String message) {
+        repository.fail(importJobId, message);
     }
 
     public JsonNode processSnapshot(
@@ -487,6 +569,8 @@ public class TemplateImportService {
                 );
         var visualInput = visualRender.rendered() ? visualRender.modelNode(objectMapper) : null;
         var ruleBatch = ruleRecognitionEngine.recognize(format, sourceFileName, workingParsed.structureSummary());
+        var deterministicSimpleLongTable = format == TemplateFormat.XLSX
+                && ruleRecognitionEngine.isSimpleLongTableWorkbook(workingParsed.structureSummary());
         var suggestionCount = ruleBatch.suggestions().size();
         var modelStatus = "NOT_CONFIGURED";
         var recognitionStatus = "REVIEW_REQUIRED";
@@ -502,7 +586,8 @@ public class TemplateImportService {
         log.info("recognition_run_started runId={} importJobId={} format={} scope={} sheets={}",
                 recognitionRunId, importJobId, format, scope,
                 workingParsed.structureSummary().path("sheets").size());
-        if (recognitionModelClient.isConfigured() && format == TemplateFormat.XLSX) {
+        if (recognitionModelClient.isConfigured() && format == TemplateFormat.XLSX
+                && !deterministicSimpleLongTable) {
             repository.updateProgress(importJobId, 65, "DISCOVERING_STRUCTURE_REGIONS");
             var staged = recognizeInStages(importJobId, recognitionRunId, format, sourceFileName,
                     workingParsed.structureSummary(), scope, requestedSheetId, requestedAddress, visualInput,
@@ -552,6 +637,21 @@ public class TemplateImportService {
             succeededCalls = 0;
             failedCalls = 0;
             truncatedCalls = 0;
+        } else if (deterministicSimpleLongTable) {
+            // A one-header-row long table already contains an unambiguous
+            // physical contract. Do not spend an LLM call on it: the rule
+            // candidate contains the whole repeat area and every column's
+            // input range (A2:A200, B2:B200, ...), not just one sample row.
+            repository.completeRecognitionRun(recognitionRunId, "COMPLETED");
+            recognitionStatus = "COMPLETE";
+            recognitionCoverage = coverageValidator.physicalReport(
+                    workingParsed.structureSummary(), "已按单行表头规则识别为按行重复数据表，无需大模型结构识别"
+            );
+            modelStatus = "NOT_APPLICABLE";
+            modelCallCount = 0;
+            succeededCalls = 0;
+            failedCalls = 0;
+            truncatedCalls = 0;
         } else {
             repository.completeRecognitionRun(recognitionRunId, "COMPLETED");
             recognitionStatus = "REVIEW_REQUIRED";
@@ -593,7 +693,7 @@ public class TemplateImportService {
             // final physical snapshot; stale pre-repair candidates must not survive.
             modelQualityIssues.clear();
             if (recognitionModelClient.isConfigured() && format == TemplateFormat.XLSX
-                    && !modelRegions.isEmpty()) {
+                    && !deterministicSimpleLongTable && !modelRegions.isEmpty()) {
                 // An automatic physical patch invalidates the previous model
                 // proposal. Do not silently run a second recognition pipeline
                 // inside the same audit run; the user can explicitly start a
@@ -938,36 +1038,7 @@ public class TemplateImportService {
     }
 
     private void enrichColumnSemanticGeometry(ObjectNode region, JsonNode physicalFacts) {
-        var total = cellBounds(region.path("range").asText(""));
-        if (total == null) return;
-        var sheetId = region.path("sheetId").asText("");
-        int labelEnd = 0;
-        for (var sheet : physicalFacts.path("sheets")) {
-            var currentSheetId = sheet.path("sheetId").asText(sheet.path("id").asText(""));
-            if (!sheetId.equals(currentSheetId)) continue;
-            for (var cell : sheet.path("semanticCells")) {
-                var bounds = cellBounds(cell.path("mergedRange").asText(cell.path("address").asText("")));
-                if (bounds == null || bounds[1] != total[1] || bounds[0] != total[0]
-                        || bounds[2] >= total[2] || cell.path("value").asText("").strip().isBlank()) continue;
-                labelEnd = Math.max(labelEnd, bounds[2]);
-            }
-        }
-        if (labelEnd < total[0] || labelEnd >= total[2]) return;
-        int recordStart = labelEnd + 1;
-        var geometry = region.with("structure");
-        geometry.put("recordAxis", "COLUMN")
-                .put("headerRange", excelRange(total[0], total[1], total[2], total[1]))
-                .put("dataRange", excelRange(total[0], total[1] + 1, total[2], total[3]))
-                .put("rowHeaderRange", excelRange(total[0], total[1] + 1, labelEnd, total[3]))
-                .put("columnHeaderRange", excelRange(recordStart, total[1], total[2], total[1]))
-                .put("crossDataRange", excelRange(recordStart, total[1] + 1, total[2], total[3]));
-        var projection = geometry.putObject("recordProjection")
-                .put("mode", "COLUMN_RECORDS").put("recordAxis", "COLUMN")
-                .put("labelBandRange", excelRange(total[0], total[1], labelEnd, total[3]))
-                .put("runtimeColumnMemberRange", excelRange(recordStart, total[1], total[2], total[1]));
-        var columns = projection.putArray("recordColumns");
-        for (int column = recordStart; column <= total[2]; column++) columns.add(columnName(column));
-        region.put("recordAxis", "COLUMN");
+        columnTableLayoutCompiler.enrich(region, physicalFacts);
     }
 
     private void markSemanticSuggestionsForReview(ModelStageAccumulator accumulator, String status) {
@@ -996,13 +1067,23 @@ public class TemplateImportService {
                 structure, coverageValidator.physicalRegions(structure), semanticModel);
         var result = new ArrayList<JsonNode>();
         for (var region : resolved.path("regions")) {
-            result.add(decorateStructureRegion(region));
+            var decorated = decorateStructureRegion(region);
+            if (decorated instanceof ObjectNode object
+                    && "COLUMN_TABLE".equals(object.path("type").asText(""))) {
+                columnTableLayoutCompiler.enrich(object, structure);
+            }
+            result.add(decorated);
         }
         var targets = new ArrayList<JsonNode>();
         var targetNode = resolved.path("canonicalSemanticTargets").isArray()
                 ? resolved.path("canonicalSemanticTargets") : resolved.path("semanticTargets");
         for (var target : targetNode) {
-            targets.add(decorateStructureRegion(target));
+            var decorated = decorateStructureRegion(target);
+            if (decorated instanceof ObjectNode object
+                    && "COLUMN_TABLE".equals(object.path("type").asText(""))) {
+                columnTableLayoutCompiler.enrich(object, structure);
+            }
+            targets.add(decorated);
         }
         return new ResolvedStructureRegions(List.copyOf(result), List.copyOf(targets));
     }
@@ -1066,27 +1147,68 @@ public class TemplateImportService {
         for (var region : physicalRegions) {
             var key = regionKey(region);
             var candidateId = region.path("candidateId").asText(region.path("blockId").asText(""));
-            var alreadyHasRegion = accumulator.suggestions.stream()
+            if (region.path("physicalConfirmed").asBoolean(false)
+                    || region.path("structure").path("physicalConfirmed").asBoolean(false)) {
+                replaceWithDeterminatePhysicalComponent(accumulator, region, structure);
+                continue;
+            }
+            var existingParent = accumulator.suggestions.stream()
                     .filter(item -> !"SEMANTIC_MODEL".equals(item.suggestionType()))
-                    .anyMatch(item -> (!candidateId.isBlank()
-                            && candidateId.equals(item.payload().path("candidateRef").asText("")))
-                            || (("FORM_REGION".equals(region.path("type").asText(""))
-                                    ? "SCALAR_FIELD".equals(item.suggestionType())
-                                    : isTableSuggestion(item))
-                            && key.equals(regionKeyFromPayload(item.payload(), region))));
-            if (alreadyHasRegion && !region.path("structureConflict").asBoolean(false)) continue;
+                    .filter(item -> {
+                        var sameCandidate = !candidateId.isBlank()
+                                && candidateId.equals(item.payload().path("candidateRef").asText(""));
+                        var sameGeometry = (("FORM_REGION".equals(region.path("type").asText(""))
+                                ? "SCALAR_FIELD".equals(item.suggestionType())
+                                : isTableSuggestion(item))
+                                && key.equals(regionKeyFromPayload(item.payload(), region)));
+                        return sameCandidate || sameGeometry;
+                    })
+                    .findFirst().orElse(null);
+            if (existingParent != null && !region.path("structureConflict").asBoolean(false)) {
+                if (existingParent.payload() instanceof ObjectNode parent
+                        && Set.of("ROW_TABLE", "COLUMN_TABLE", "MATRIX")
+                                .contains(parent.path("kind").asText(region.path("type").asText("")))) {
+                    var hasChild = accumulator.suggestions.stream().anyMatch(item ->
+                            "CHILD".equals(item.payload().path("suggestionLevel").asText())
+                                    && parent.path("relationId").asText("").equals(
+                                            item.payload().path("parentRelationId").asText("")));
+                    var physicalChildren = physicalFieldCompiler.children(parent, region, structure);
+                    if (!hasChild) {
+                        accumulator.suggestions.addAll(physicalChildren);
+                    } else {
+                        // A semantic model may return only one child for a
+                        // table. Geometry is still authoritative, so merge
+                        // the missing physical columns/axes without creating
+                        // duplicate fields for the child the model already returned.
+                        for (var physicalChild : physicalChildren) {
+                            var duplicate = accumulator.suggestions.stream()
+                                    .filter(item -> "CHILD".equals(item.payload().path("suggestionLevel").asText()))
+                                    .filter(item -> parent.path("relationId").asText("").equals(
+                                            item.payload().path("parentRelationId").asText("")))
+                                    .anyMatch(item -> samePhysicalChild(item.payload(), physicalChild.payload()));
+                            if (!duplicate) accumulator.suggestions.add(physicalChild);
+                        }
+                    }
+                }
+                continue;
+            }
             var payload = physicalStructurePayload(region, structure);
             if (payload == null) continue;
+            physicalFieldCompiler.enrichParent(payload, region, structure);
             var suggestionType = "FORM_REGION".equals(region.path("type").asText(""))
                     && "SCALAR".equals(payload.path("kind").asText("")) ? "SCALAR_FIELD" : "TABLE_REGION";
-            accumulator.suggestions.add(new RecognitionModelClient.ModelSuggestion(
+            var parentSuggestion = new RecognitionModelClient.ModelSuggestion(
                     suggestionType, payload,
                     physicalConfidence(region),
                     objectMapper.createArrayNode().add(objectMapper.createObjectNode()
                             .put("source", "PHYSICAL_STRUCTURE_PRIMITIVE")
                             .put("reviewRequired", true)
-                            .put("reason", "模型未返回完整的区域语义结构"))
-            ));
+                            .put("reason", "模型未返回完整的区域语义结构")));
+            accumulator.suggestions.add(parentSuggestion);
+            if (Set.of("ROW_TABLE", "COLUMN_TABLE", "MATRIX", "FORM_REGION")
+                    .contains(payload.path("kind").asText(""))) {
+                accumulator.suggestions.addAll(physicalFieldCompiler.children(payload, region, structure));
+            }
             if (region.path("structureConflict").asBoolean(false)) {
                 var alternatives = region.path("modelAlternatives");
                 if (alternatives.isArray()) for (var proposal : alternatives) {
@@ -1096,7 +1218,7 @@ public class TemplateImportService {
                             || !Set.of("MATRIX", "ROW_TABLE", "COLUMN_TABLE", "FORM_REGION").contains(proposedType)) continue;
                     var alternative = objectMapper.createObjectNode()
                             .put("kind", proposedType).put("tableKind", proposedType)
-                            .put("blockType", proposedType).put("fieldName", "模型建议结构")
+                            .put("blockType", proposedType).put("fieldName", "模型候选结构")
                             .put("candidateRef", proposal.path("proposalId").asText())
                             .put("resolutionGroupId", region.path("resolutionGroupId").asText())
                             .put("resolutionAlternativeId", proposal.path("resolutionAlternativeId").asText(
@@ -1134,6 +1256,152 @@ public class TemplateImportService {
                 }
             }
         }
+        pruneUnboundDuplicateFields(accumulator.suggestions);
+    }
+
+    private void replaceWithDeterminatePhysicalComponent(
+            ModelStageAccumulator accumulator, JsonNode region, JsonNode structure
+    ) {
+        var sheetId = region.path("sheetId").asText("");
+        var range = region.path("range").asText("");
+        var type = region.path("type").asText("");
+        var semantic = accumulator.suggestions.stream()
+                .filter(item -> !"SEMANTIC_MODEL".equals(item.suggestionType()))
+                .filter(item -> sheetId.equals(item.payload().path("locator").path("sheetId").asText(
+                        item.payload().path("sheetId").asText(""))))
+                .filter(item -> fieldRanges(item.payload()).stream().anyMatch(itemRange ->
+                        rangesOverlap(range, itemRange)))
+                .filter(item -> !isTableSuggestion(item))
+                .toList();
+        accumulator.suggestions.removeIf(item -> {
+            if ("SEMANTIC_MODEL".equals(item.suggestionType())) return false;
+            var itemSheet = item.payload().path("locator").path("sheetId").asText(
+                    item.payload().path("sheetId").asText(""));
+            return sheetId.equals(itemSheet) && fieldRanges(item.payload()).stream()
+                    .anyMatch(itemRange -> rangesOverlap(range, itemRange));
+        });
+
+        var parent = physicalStructurePayload(region, structure);
+        if (parent == null) return;
+        physicalFieldCompiler.enrichParent(parent, region, structure);
+        parent.put("physicalConfirmed", true)
+                .put("canonicalStatus", "CONFIRMED")
+                .put("structureStatus", "CONFIRMED")
+                .put("candidateOnly", false)
+                .put("physicalStructureOnly", false)
+                .put("structureConflict", false)
+                .put("reviewRequired", false)
+                .put("publishable", true)
+                .put("recognitionOrigin", "DETERMINATE_PHYSICAL_COMPONENT");
+        var parentType = "FORM_REGION".equals(type) && "SCALAR".equals(parent.path("kind").asText(""))
+                ? "SCALAR_FIELD" : "TABLE_REGION";
+        accumulator.suggestions.add(new RecognitionModelClient.ModelSuggestion(
+                parentType, parent, physicalConfidence(region),
+                objectMapper.createArrayNode().add(objectMapper.createObjectNode()
+                        .put("source", "DETERMINATE_PHYSICAL_COMPONENT"))));
+
+        for (var physicalChild : physicalFieldCompiler.children(parent, region, structure)) {
+            if (!(physicalChild.payload().deepCopy() instanceof ObjectNode payload)) continue;
+            var valueRange = childSourceRange(payload);
+            var labelRange = payload.path("locator").path("labelRange").asText("");
+            var bestSemantic = semantic.stream()
+                    .filter(item -> (!valueRange.isBlank() && fieldRanges(item.payload()).stream()
+                            .anyMatch(itemRange -> sameRange(itemRange, valueRange)))
+                            || (!labelRange.isBlank() && fieldRanges(item.payload()).stream()
+                            .anyMatch(itemRange -> sameRange(itemRange, labelRange))))
+                    .max(java.util.Comparator.comparingDouble(
+                            RecognitionModelClient.ModelSuggestion::confidence)).orElse(null);
+            if (bestSemantic != null) mergeSemanticFieldPresentation(payload, bestSemantic.payload());
+            payload.put("canonicalStatus", "CONFIRMED")
+                    .put("structureStatus", "CONFIRMED")
+                    .put("candidateOnly", false)
+                    .put("physicalStructureOnly", false)
+                    .put("structureConflict", false)
+                    .put("reviewRequired", true)
+                    .put("pendingReason", "FIELD_CONFIRMATION_REQUIRED")
+                    .put("recognitionOrigin", "DETERMINATE_PHYSICAL_FIELD");
+            accumulator.suggestions.add(new RecognitionModelClient.ModelSuggestion(
+                    physicalChild.suggestionType(), payload,
+                    Math.max(physicalChild.confidence(), bestSemantic == null ? 0 : bestSemantic.confidence()),
+                    physicalChild.evidence()));
+        }
+    }
+
+    private boolean sameRange(String first, String second) {
+        var left = parseRange(first);
+        var right = parseRange(second);
+        return left != null && right != null && java.util.Arrays.equals(left, right);
+    }
+
+    private void mergeSemanticFieldPresentation(ObjectNode target, JsonNode semantic) {
+        // Keep the physical leaf name and the hierarchical label path as two
+        // different concepts.  Writing "group > field > method" back into
+        // fieldName made the UI repeat the hierarchy and made standard-field
+        // matching treat every method variant as a completely different name.
+        var physicalName = target.path("fieldName").asText("").strip();
+        if (physicalName.isBlank() && target.path("labelPathSegments").isArray()
+                && !target.path("labelPathSegments").isEmpty()) {
+            physicalName = target.path("labelPathSegments")
+                    .get(target.path("labelPathSegments").size() - 1).asText("").strip();
+        }
+        if (!physicalName.isBlank() && !physicalName.startsWith("=")) {
+            target.put("fieldName", physicalName);
+        }
+        for (var key : List.of("description", "unit", "valueType", "standardFieldId",
+                "standardFieldName", "standardFieldVersion", "standardSelectionStatus")) {
+            if (semantic.has(key) && !semantic.path(key).asText("").isBlank()) {
+                target.set(key, semantic.path(key).deepCopy());
+            }
+        }
+    }
+
+    private void pruneUnboundDuplicateFields(List<RecognitionModelClient.ModelSuggestion> suggestions) {
+        var boundKeys = new java.util.HashSet<String>();
+        for (var suggestion : suggestions) {
+            var payload = suggestion.payload();
+            if (isTableSuggestion(suggestion) || childSourceRange(payload).isBlank()) continue;
+            var key = unboundFieldKey(payload);
+            if (!key.isBlank()) boundKeys.add(key);
+        }
+        suggestions.removeIf(suggestion -> {
+            var payload = suggestion.payload();
+            if (isTableSuggestion(suggestion) || !childSourceRange(payload).isBlank()) return false;
+            var unbound = payload.path("positionPending").asBoolean(false)
+                    || "UNBOUND".equals(payload.path("locator").path("valueMode").asText(""))
+                    || "FIELD_POSITION_REQUIRED".equals(payload.path("pendingReason").asText(""));
+            return unbound && boundKeys.contains(unboundFieldKey(payload));
+        });
+    }
+
+    private String unboundFieldKey(JsonNode payload) {
+        var candidate = payload.path("candidateRef").asText(payload.path("regionId").asText(""));
+        var label = RecognitionIdentity.normalizeRange(payload.path("locator").path("labelRange").asText(
+                payload.path("locator").path("labelAddress").asText("")));
+        return candidate.isBlank() || label.isBlank() ? "" : candidate + "|" + label;
+    }
+
+    private boolean samePhysicalChild(JsonNode left, JsonNode right) {
+        var leftBinding = left.path("bindingId").asText("");
+        var rightBinding = right.path("bindingId").asText("");
+        if (!leftBinding.isBlank() && leftBinding.equals(rightBinding)) return true;
+        var leftCode = left.path("fieldCode").asText("");
+        var rightCode = right.path("fieldCode").asText("");
+        if (!leftCode.isBlank() && leftCode.equalsIgnoreCase(rightCode)) return true;
+        var leftRange = childSourceRange(left);
+        var rightRange = childSourceRange(right);
+        return !leftRange.isBlank() && leftRange.equalsIgnoreCase(rightRange)
+                && normalizedFieldName(left.path("fieldName").asText(""))
+                .equals(normalizedFieldName(right.path("fieldName").asText("")));
+    }
+
+    private String childSourceRange(JsonNode payload) {
+        for (var path : List.of(
+                "/locator/valueRange", "/locator/sourceRange", "/locator/logicalInputRange",
+                "/valueRange", "/sourceRange")) {
+            var value = payload.at(path).asText("");
+            if (!value.isBlank()) return value;
+        }
+        return "";
     }
 
     private void addMissingSemanticFallbacks(
@@ -1164,6 +1432,9 @@ public class TemplateImportService {
                     objectMapper.createArrayNode().add(objectMapper.createObjectNode()
                             .put("source", "PHYSICAL_SEMANTIC_FALLBACK")
                             .put("regionId", targetId))));
+            if ("FORM_REGION".equals(payload.path("kind").asText(""))) {
+                accumulator.suggestions.addAll(physicalFieldCompiler.children(payload, target, structure));
+            }
         }
     }
 
@@ -1220,6 +1491,15 @@ public class TemplateImportService {
                 payload.set("locator", objectMapper.createObjectNode()
                         .put("sheetId", sheetId).put("address", range).put("range", range)
                         .put("locatorType", "TABLE_REGION"));
+                var formStructure = objectMapper.createObjectNode()
+                        .put("recordAxis", details.path("recordAxis").asText("UNKNOWN"));
+                if (details.path("fieldSurfaces").isArray()) {
+                    formStructure.set("fieldSurfaces", details.path("fieldSurfaces").deepCopy());
+                }
+                if (details.path("staticContents").isArray()) {
+                    formStructure.set("staticContents", details.path("staticContents").deepCopy());
+                }
+                payload.set("structure", formStructure);
                 copyResolutionMetadata(payload, region,
                         "MODEL".equals(region.path("source").asText()) ? "MODEL" : "PHYSICAL");
                 return payload;
@@ -1295,6 +1575,9 @@ public class TemplateImportService {
         if (details.path("recordProjection").isObject()) {
             payload.set("recordProjection", details.path("recordProjection").deepCopy());
         }
+        for (var key : List.of("fieldGroups", "fieldRows")) {
+            if (details.path(key).isArray()) payload.set(key, details.path(key).deepCopy());
+        }
         for (var key : List.of("structureAlternativeSets", "resolution")) {
             if (region.has(key)) payload.set(key, region.path(key).deepCopy());
         }
@@ -1313,7 +1596,11 @@ public class TemplateImportService {
                 .put("range", range)
                 .put("headerRange", headerRange)
                 .put("dataRange", dataRange)
-                .put("logicalInputRange", dataRange)
+                // The parent node represents the complete component. Keep
+                // dataRange separately for extraction, but let review/UI
+                // locate and display the header/identity row as well.
+                .put("logicalInputRange", range)
+                .put("recordRange", range)
                 .put("locatorType", "MATRIX".equals(type) ? "MATRIX_REGION" : "TABLE_REGION");
         payload.set("locator", locator);
         payload.set("columns", objectMapper.createArrayNode());
@@ -1381,6 +1668,12 @@ public class TemplateImportService {
             RecognitionModelClient.RecognitionBatch rules,
             RecognitionModelClient.RecognitionBatch recognized
     ) {
+        var recognizedTableRegions = recognized.suggestions().stream()
+                .filter(this::isTableSuggestion)
+                .map(RecognitionModelClient.ModelSuggestion::payload)
+                .filter(payload -> Set.of("ROW_TABLE", "COLUMN_TABLE", "MATRIX")
+                        .contains(payload.path("kind").asText(payload.path("tableKind").asText(""))))
+                .toList();
         var recognizedFields = recognized.suggestions().stream()
                 .filter(item -> Set.of("SCALAR_FIELD", "TABLE_CHILD_FIELD", "MATRIX_FIELD")
                         .contains(item.suggestionType()))
@@ -1391,10 +1684,24 @@ public class TemplateImportService {
         var retained = rules.suggestions().stream().filter(rule -> {
             if (!Set.of("SCALAR_FIELD", "TABLE_CHILD_FIELD", "MATRIX_FIELD")
                     .contains(rule.suggestionType())) return true;
-            var ruleName = normalizedFieldName(rule.payload().path("fieldName").asText(""));
             var ruleSheet = rule.payload().path("locator").path("sheetId")
                     .asText(rule.payload().path("sheetId").asText(""));
             var ruleRanges = fieldRanges(rule.payload());
+            // A rule-only scalar that falls wholly inside a canonical repeat
+            // component competes with that component's field compiler (for
+            // example "水煮温度： 水煮时间：" inside a COLUMN_TABLE label
+            // band).  Keep it in the audit run, but not in the active review
+            // projection.
+            if ("SCALAR_FIELD".equals(rule.suggestionType())
+                    && recognizedTableRegions.stream().anyMatch(table -> {
+                        var tableSheet = table.path("locator").path("sheetId")
+                                .asText(table.path("sheetId").asText(""));
+                        var tableRange = table.path("locator").path("range")
+                                .asText(table.path("range").asText(""));
+                        return ruleSheet.equals(tableSheet) && ruleRanges.stream()
+                                .anyMatch(ruleRange -> rangeContains(tableRange, ruleRange));
+                    })) return false;
+            var ruleName = normalizedFieldName(rule.payload().path("fieldName").asText(""));
             if (ruleName.isBlank() || ruleSheet.isBlank() || ruleRanges.isEmpty()) return true;
             return recognizedFields.stream().noneMatch(field -> {
                 var payload = field.payload();
@@ -1410,6 +1717,14 @@ public class TemplateImportService {
         return new RecognitionModelClient.RecognitionBatch(
                 retained, rules.qualityIssues(), rules.provider(), rules.model(), rules.promptVersion(),
                 rules.requestHash(), rules.responseHash(), rules.callTrace(), rules.callTraces());
+    }
+
+    private boolean rangeContains(String outer, String inner) {
+        var outerBounds = parseRange(outer);
+        var innerBounds = parseRange(inner);
+        return outerBounds != null && innerBounds != null
+                && outerBounds[0] <= innerBounds[0] && outerBounds[1] <= innerBounds[1]
+                && outerBounds[2] >= innerBounds[2] && outerBounds[3] >= innerBounds[3];
     }
 
     private List<String> fieldRanges(JsonNode payload) {

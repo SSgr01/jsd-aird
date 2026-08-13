@@ -1,2 +1,2 @@
 export { knowledgeApi } from './knowledge-api';
-export type { AiStatus, KnowledgeCategory, KnowledgeDocument, KnowledgeSearchHit, KnowledgeStatus, KnowledgeVersion } from './knowledge-api';
+export type { AiStatus, AuditEntry, BatchResult, BusinessObjectRef, DuplicateMatch, ExtractedField, KnowledgeCategory, KnowledgeDocument, KnowledgePageListItem, KnowledgePageSource, KnowledgePageVersion, KnowledgePageView, KnowledgeReview, KnowledgeSearchHit, KnowledgeStatus, KnowledgeVersion, ParseBlock, Publication, ReviewQueueItem, UploadPreflight } from './knowledge-api';

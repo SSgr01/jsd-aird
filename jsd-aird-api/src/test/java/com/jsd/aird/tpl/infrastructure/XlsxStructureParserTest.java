@@ -82,6 +82,28 @@ class XlsxStructureParserTest {
     }
 
     @Test
+    void usesVisibleDefaultRowHeightWhenWorkbookReportsZero() throws Exception {
+        byte[] source;
+        try (var workbook = new XSSFWorkbook(); var output = new ByteArrayOutputStream()) {
+            var sheet = workbook.createSheet("数据");
+            var sheetFormat = sheet.getCTWorksheet().isSetSheetFormatPr()
+                    ? sheet.getCTWorksheet().getSheetFormatPr()
+                    : sheet.getCTWorksheet().addNewSheetFormatPr();
+            sheetFormat.setDefaultRowHeight(0d);
+            sheet.createRow(0).createCell(0).setCellValue("物料名称");
+            workbook.write(output);
+            source = output.toByteArray();
+        }
+
+        var snapshotSheet = parser.parse(new ByteArrayInputStream(source))
+                .initialEditorSnapshot().path("sheets").path("sheet-1");
+
+        assertThat(snapshotSheet.path("defaultRowHeight").asInt()).isGreaterThanOrEqualTo(20);
+        assertThat(snapshotSheet.path("cellData").path("0").path("0").path("v").asText())
+                .isEqualTo("物料名称");
+    }
+
+    @Test
     void verifiesTheProvidedCustomerWorkbookWhenItIsAvailable() throws Exception {
         var source = Path.of(
                 "C:/Users/Administrator/Downloads/阳离子单体、树脂的性能及应用测试_空数据模板.xlsx"

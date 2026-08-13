@@ -21,9 +21,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.kb.api.KnowledgeEmbeddingFacade;
 import com.jsd.aird.kb.api.KnowledgeSearchFacade;
 import com.jsd.aird.kb.application.port.KnowledgeRepository;
+import com.jsd.aird.kb.application.port.KnowledgeGovernanceRepository;
 import com.jsd.aird.kb.domain.DocumentParser;
 import com.jsd.aird.kb.domain.FileSafetyScanner;
 import com.jsd.aird.kb.domain.MediaExtractionProvider;
+import com.jsd.aird.kb.domain.MediaExtractionException;
 import com.jsd.aird.kb.domain.TermAnalyzer;
 import com.jsd.aird.ops.application.port.AuditLogFacade;
 import com.jsd.aird.ops.application.port.FileStorageFacade;
@@ -34,6 +36,7 @@ import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.security.ActorContext;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
@@ -44,6 +47,8 @@ public class KnowledgeService implements KnowledgeSearchFacade {
     private static final int CHUNK_OVERLAP = 180;
 
     private final KnowledgeRepository repository;
+    private final KnowledgeGovernanceRepository governance;
+    private final KnowledgeFieldExtractor fieldExtractor;
     private final FileStorageFacade storage;
     private final OpsAsyncFacade async;
     private final AuditLogFacade audit;
@@ -58,6 +63,8 @@ public class KnowledgeService implements KnowledgeSearchFacade {
 
     public KnowledgeService(
             KnowledgeRepository repository,
+            KnowledgeGovernanceRepository governance,
+            KnowledgeFieldExtractor fieldExtractor,
             FileStorageFacade storage,
             OpsAsyncFacade async,
             AuditLogFacade audit,
@@ -71,6 +78,8 @@ public class KnowledgeService implements KnowledgeSearchFacade {
             @org.springframework.beans.factory.annotation.Value("${app.storage.presign-expiry:15m}") Duration presignExpiry
     ) {
         this.repository = repository;
+        this.governance = governance;
+        this.fieldExtractor = fieldExtractor;
         this.storage = storage;
         this.async = async;
         this.audit = audit;
@@ -89,6 +98,11 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         var actor = ActorContext.required();
         var file = storage.open(actor.organizationId(), command.fileId());
         try {
+            var duplicate = governance.exactMatches(actor.organizationId(), file.sha256());
+            if (!duplicate.isEmpty()) {
+                throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,
+                        "相同文件已存在：" + duplicate.getFirst().title() + " V" + duplicate.getFirst().versionNo());
+            }
             var title = StringUtils.hasText(command.title()) ? command.title().trim() : file.originalName();
             var scope = normalizeScope(command.libraryScope());
             var categoryId = command.categoryId();
@@ -106,17 +120,22 @@ public class KnowledgeService implements KnowledgeSearchFacade {
                     documentId, actor.organizationId(), title, normalizeType(command.documentType(), file.originalName()),
                     actor.userId(), scope, categoryId
             ));
-            repository.insertVersion(new KnowledgeRepository.NewVersion(
-                    versionId, documentId, 1, command.fileId(), file.originalName(), file.contentType(), file.size(), file.sha256()
-            ));
+            try {
+                repository.insertVersion(new KnowledgeRepository.NewVersion(
+                        versionId, documentId, 1, command.fileId(), file.originalName(), file.contentType(), file.size(), file.sha256()
+                ));
+            } catch (DataIntegrityViolationException exception) {
+                throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "相同文件已被其他上传请求创建");
+            }
             var payload = objectMapper.createObjectNode()
                     .put("organizationId", actor.organizationId().toString())
                     .put("documentId", documentId.toString())
                     .put("versionId", versionId.toString())
+                    .put("actorId", actor.userId().toString())
                     .put("fileId", command.fileId().toString());
             async.enqueue(actor.organizationId(), "KB_INGEST_DOCUMENT", payload,
                     "kb-ingest:" + versionId, 40);
-            async.appendOutbox("KB_DOCUMENT", documentId, "FILE_ACTIVATION_REQUESTED", payload);
+            async.appendOutbox("FILE_OBJECT", command.fileId(), "FILE_ACTIVATION_REQUESTED", payload);
             audit.append(actor.organizationId(), actor.userId(), "KB_DOCUMENT_CREATED", "KB_DOCUMENT", documentId,
                     objectMapper.createObjectNode().put("fileId", command.fileId().toString()));
             return get(documentId);
@@ -126,14 +145,21 @@ public class KnowledgeService implements KnowledgeSearchFacade {
     }
 
     public PageResponse<DocumentView> list(String keyword, String status, String aiStatus, String scope, UUID categoryId,
-                                           int page, int size) {
+                                           String lifecycleStatus, String reviewStatus, int page, int size) {
         var actor = ActorContext.required();
         var safePage = Math.max(1, page);
         var safeSize = Math.min(100, Math.max(1, size));
-        var items = repository.listDocuments(actor.organizationId(), keyword, status, aiStatus, scope, categoryId, safePage, safeSize)
+        var items = repository.listDocuments(actor.organizationId(), keyword, status, aiStatus, scope, categoryId,
+                        lifecycleStatus, reviewStatus, safePage, safeSize)
                 .stream().map(this::view).toList();
-        var total = repository.countDocuments(actor.organizationId(), keyword, status, aiStatus, scope, categoryId);
+        var total = repository.countDocuments(actor.organizationId(), keyword, status, aiStatus, scope, categoryId,
+                lifecycleStatus, reviewStatus);
         return new PageResponse<>(items, safePage, safeSize, total, (total + safeSize - 1) / safeSize);
+    }
+
+    public PageResponse<DocumentView> list(String keyword, String status, String aiStatus, String scope,
+                                           UUID categoryId, int page, int size) {
+        return list(keyword, status, aiStatus, scope, categoryId, null, null, page, size);
     }
 
     public List<KnowledgeRepository.CategoryRow> categories(String scope) {
@@ -141,16 +167,16 @@ public class KnowledgeService implements KnowledgeSearchFacade {
     }
 
     @Transactional
-    public KnowledgeRepository.CategoryRow createCategory(String scope, String name) {
+    public KnowledgeRepository.CategoryRow createCategory(String scope, String name, String description) {
         var actor = ActorContext.required();
-        return repository.createCategory(actor.organizationId(), actor.userId(), normalizeScope(scope), normalizeName(name));
+        return repository.createCategory(actor.organizationId(), actor.userId(), normalizeScope(scope), normalizeName(name), normalizeDescription(description));
     }
 
     @Transactional
-    public KnowledgeRepository.CategoryRow renameCategory(UUID categoryId, String name) {
+    public KnowledgeRepository.CategoryRow renameCategory(UUID categoryId, String name, String description) {
         var actor = ActorContext.required();
         requireCategory(actor.organizationId(), categoryId);
-        return repository.renameCategory(actor.organizationId(), categoryId, normalizeName(name));
+        return repository.renameCategory(actor.organizationId(), categoryId, normalizeName(name), normalizeDescription(description));
     }
 
     @Transactional
@@ -192,6 +218,9 @@ public class KnowledgeService implements KnowledgeSearchFacade {
     public void deleteDocument(UUID documentId) {
         var actor = ActorContext.required();
         requireDocument(actor.organizationId(), documentId);
+        if (governance.hasPublication(actor.organizationId(), documentId)) {
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "已发布文档不可物理删除，请使用停用");
+        }
         repository.deleteDocument(actor.organizationId(), documentId);
         audit.append(actor.organizationId(), actor.userId(), "KB_DOCUMENT_DELETED", "KB_DOCUMENT", documentId,
                 objectMapper.createObjectNode());
@@ -219,21 +248,31 @@ public class KnowledgeService implements KnowledgeSearchFacade {
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "知识文件不存在"));
         var file = storage.open(actor.organizationId(), command.fileId());
         try {
+            var duplicate = governance.exactMatches(actor.organizationId(), file.sha256());
+            if (!duplicate.isEmpty()) {
+                throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,
+                        "相同文件已存在：" + duplicate.getFirst().title() + " V" + duplicate.getFirst().versionNo());
+            }
             var versionId = UUID.randomUUID();
             var versionNo = document.currentVersionNo() + 1;
-            repository.insertVersion(new KnowledgeRepository.NewVersion(
-                    versionId, documentId, versionNo, command.fileId(), file.originalName(), file.contentType(),
-                    file.size(), file.sha256()
-            ));
+            try {
+                repository.insertVersion(new KnowledgeRepository.NewVersion(
+                        versionId, documentId, versionNo, command.fileId(), file.originalName(), file.contentType(),
+                        file.size(), file.sha256()
+                ));
+            } catch (DataIntegrityViolationException exception) {
+                throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "文件内容或版本号已被其他上传请求占用，请刷新后重试");
+            }
             repository.updateCurrentVersion(actor.organizationId(), documentId, versionNo);
             var payload = objectMapper.createObjectNode()
                     .put("organizationId", actor.organizationId().toString())
                     .put("documentId", documentId.toString())
                     .put("versionId", versionId.toString())
+                    .put("actorId", actor.userId().toString())
                     .put("fileId", command.fileId().toString());
             async.enqueue(actor.organizationId(), "KB_INGEST_DOCUMENT", payload,
                     "kb-ingest:" + versionId, 40);
-            async.appendOutbox("KB_DOCUMENT", documentId, "FILE_ACTIVATION_REQUESTED", payload);
+            async.appendOutbox("FILE_OBJECT", command.fileId(), "FILE_ACTIVATION_REQUESTED", payload);
             audit.append(actor.organizationId(), actor.userId(), "KB_DOCUMENT_VERSION_CREATED", "KB_DOCUMENT", documentId,
                     objectMapper.createObjectNode().put("versionNo", versionNo).put("fileId", command.fileId().toString()));
             return get(documentId);
@@ -245,39 +284,36 @@ public class KnowledgeService implements KnowledgeSearchFacade {
     @Transactional
     public DocumentView updateAiGrant(UUID documentId, GrantCommand command) {
         var actor = ActorContext.required();
-        var document = repository.findDocument(actor.organizationId(), documentId)
-                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "知识文件不存在"));
+        requireDocument(actor.organizationId(), documentId);
+        var publication = governance.currentPublication(actor.organizationId(), documentId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.AI_DOCUMENT_NOT_APPROVED, "文件尚未审核发布"));
         var action = command.action() == null ? "" : command.action().trim().toUpperCase(Locale.ROOT);
-        var aiStatus = switch (action) {
-            case "APPROVE" -> {
-                if (!"READY".equals(document.status()) || !"SAFE".equals(document.scanStatus())) {
-                    throw new ApiException(ApiErrorCode.AI_DOCUMENT_NOT_APPROVED, "文件解析或安全扫描未完成，不能授权 AI 使用");
-                }
-                yield "APPROVED";
-            }
-            case "REJECT" -> "REJECTED";
-            case "REVOKE" -> "REVOKED";
+        switch (action) {
+            case "APPROVE", "REJECT", "REVOKE" -> { }
             default -> throw new ApiException(ApiErrorCode.BAD_REQUEST, "AI 授权动作只能是 APPROVE、REJECT 或 REVOKE");
-        };
-        repository.updateAiStatus(actor.organizationId(), documentId, aiStatus);
+        }
+        if (!governance.updateAiUsage(actor.organizationId(), actor.userId(), publication.id(), action, command.reason())) {
+            throw new ApiException(ApiErrorCode.AI_DOCUMENT_NOT_APPROVED, "当前发布版本不可授权 AI 使用");
+        }
         audit.append(actor.organizationId(), actor.userId(), "KB_AI_GRANT_" + action, "KB_DOCUMENT", documentId,
                 objectMapper.createObjectNode().put("reason", command.reason() == null ? "" : command.reason()));
         return get(documentId);
     }
 
     @Transactional
-    public DocumentView reindex(UUID documentId) {
+    public DocumentView reindex(UUID documentId, UUID versionId) {
         var actor = ActorContext.required();
         var document = repository.findDocument(actor.organizationId(), documentId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "知识文件不存在"));
+        var version = repository.findVersion(actor.organizationId(), versionId)
+                .filter(item -> documentId.equals(item.documentId()))
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "知识文件版本不存在"));
         var payload = objectMapper.createObjectNode()
                 .put("organizationId", actor.organizationId().toString())
                 .put("documentId", document.id().toString())
-                .put("versionId", document.currentVersionId().toString())
-                .put("fileId", document.currentVersionId().toString());
-        var version = repository.findVersion(actor.organizationId(), document.currentVersionId())
-                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "知识文件版本不存在"));
-        payload.put("fileId", version.fileObjectId().toString());
+                .put("versionId", version.id().toString())
+                .put("actorId", actor.userId().toString())
+                .put("fileId", version.fileObjectId().toString());
         async.enqueue(actor.organizationId(), "KB_INGEST_DOCUMENT", payload,
                 "kb-reindex:" + version.id() + ":" + System.currentTimeMillis(), 40);
         return get(documentId);
@@ -287,7 +323,10 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         var actor = ActorContext.required();
         var document = repository.findDocument(actor.organizationId(), documentId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "知识文件不存在"));
-        var version = repository.findVersion(actor.organizationId(), document.currentVersionId())
+        var versionId = governance.currentPublication(actor.organizationId(), documentId)
+                .map(KnowledgeGovernanceRepository.PublicationRow::versionId)
+                .orElse(document.currentVersionId());
+        var version = repository.findVersion(actor.organizationId(), versionId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "知识文件版本不存在"));
         audit.append(actor.organizationId(), actor.userId(), "KB_DOCUMENT_DOWNLOAD", "KB_DOCUMENT", documentId,
                 objectMapper.createObjectNode().put("versionId", version.id().toString()));
@@ -421,14 +460,19 @@ public class KnowledgeService implements KnowledgeSearchFacade {
                 new KnowledgeSearchFacade.RetrievalTrace("BM25_VECTOR_RRF", bm25.size(), vectorRows.size(), rows.size(), fallbacks));
     }
 
-    public void ingest(UUID organizationId, UUID documentId, UUID versionId, UUID fileId) {
+    public void ingest(UUID organizationId, UUID actorId, UUID documentId, UUID versionId, UUID fileId) {
         repository.updateProcessing(documentId, versionId);
         var version = repository.findVersion(organizationId, versionId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "知识文件版本不存在"));
+        String attemptedProvider = null;
+        UUID activeParseRunId = null;
         try {
             repository.startProcessingStep(organizationId, documentId, versionId, "SCAN", "safety-scanner", null, version.sha256());
             var scan = scan(organizationId, fileId, version);
             if (scan.status() != FileSafetyScanner.ScanResult.Status.SAFE) {
+                governance.createParseRun(organizationId, documentId, versionId, "FAILED", null,
+                        "safety-scanner", null, scan.reason(),
+                        objectMapper.createObjectNode().put("scanStatus", scan.status().name()), List.of(), List.of());
                 repository.finishProcessingStep(organizationId, versionId, "SCAN",
                         scan.status() == FileSafetyScanner.ScanResult.Status.UNAVAILABLE ? "PENDING_PROVIDER" : "FAILED",
                         null, scan.reason());
@@ -446,18 +490,47 @@ public class KnowledgeService implements KnowledgeSearchFacade {
                     .findFirst().orElse(null);
             var parser = parsers.stream().filter(candidate -> candidate.supports(version.originalName(), version.contentType()))
                     .findFirst().orElse(null);
+            if (mediaProvider != null && parser != null) {
+                try (var stored = storage.open(organizationId, fileId)) {
+                    if (!mediaProvider.requiresExternalExtraction(stored.stream(), version.originalName())) {
+                        mediaProvider = null;
+                    }
+                }
+            }
             if (parser == null && mediaProvider == null) {
+                governance.createParseRun(organizationId, documentId, versionId, "FAILED", null,
+                        "unsupported-format", null, "当前文件格式暂不支持",
+                        objectMapper.createObjectNode().put("supported", false), List.of(), List.of());
                 repository.markFailed(documentId, versionId, "REJECTED", "当前文件格式暂不支持");
                 return;
             }
             DocumentParser.ParsedDocument parsed;
             repository.startProcessingStep(organizationId, documentId, versionId, "PARSE",
                     mediaProvider == null ? parser.getClass().getSimpleName() : mediaProvider.getClass().getSimpleName(), null, version.sha256());
+            attemptedProvider = mediaProvider == null ? parser.getClass().getSimpleName() : mediaProvider.getClass().getSimpleName();
             if (mediaProvider != null) {
+                if (!governance.hasMediaConsent(organizationId, versionId)) {
+                    governance.createParseRun(organizationId, documentId, versionId, "WAITING_MEDIA_CONSENT",
+                            null, mediaProvider.getClass().getSimpleName(), null, "等待媒体解析外发确认",
+                            objectMapper.createObjectNode().put("requiresConsent", true), List.of(), List.of());
+                    repository.finishProcessingStep(organizationId, versionId, "PARSE", "PENDING_PROVIDER", null,
+                            "等待媒体解析外发确认");
+                    repository.markFailed(documentId, versionId, "PENDING_PROVIDER", "等待媒体解析外发确认");
+                    appendIngestAudit(organizationId, actorId, "KB_PARSE_WAITING_MEDIA_CONSENT", documentId,
+                            objectMapper.createObjectNode().put("versionId", versionId.toString()));
+                    return;
+                }
                 if (!mediaProvider.isConfigured()) {
+                    governance.createParseRun(organizationId, documentId, versionId, "FAILED",
+                            null, mediaProvider.getClass().getSimpleName(), null, mediaProvider.unavailableReason(),
+                            objectMapper.createObjectNode().put("configured", false), List.of(), List.of());
                     repository.finishProcessingStep(organizationId, versionId, "PARSE", "PENDING_PROVIDER", null,
                             mediaProvider.unavailableReason());
                     repository.markFailed(documentId, versionId, "PENDING_PROVIDER", mediaProvider.unavailableReason());
+                    appendIngestAudit(organizationId, actorId, "KB_PARSE_PROVIDER_UNAVAILABLE", documentId,
+                            objectMapper.createObjectNode().put("versionId", versionId.toString())
+                                    .put("provider", mediaProvider.getClass().getSimpleName())
+                                    .put("error", mediaProvider.unavailableReason()));
                     return;
                 }
                 try (var stored = storage.open(organizationId, fileId)) {
@@ -474,24 +547,38 @@ public class KnowledgeService implements KnowledgeSearchFacade {
             repository.startProcessingStep(organizationId, documentId, versionId, "CHUNK", "builtin-chunker", TermAnalyzer.VERSION, version.sha256());
             var chunks = chunk(parsed.blocks());
             var writes = new ArrayList<KnowledgeRepository.ChunkWrite>();
+            // Every ingestion creates a new, unpublished parse run. A grant on an older publication
+            // (including one for the same source version) must never authorize this draft text to leave the system.
+            var aiApproved = false;
             for (int index = 0; index < chunks.size(); index++) {
                 var block = chunks.get(index);
-                var vector = embeddings.getIfAvailable() == null ? null
+                var vector = !aiApproved || embeddings.getIfAvailable() == null ? null
                         : embeddings.getIfAvailable().embedVector(block.content()).orElse(null);
                 var terms = TermAnalyzer.frequencies(block.content()).entrySet().stream()
                         .map(item -> new KnowledgeRepository.TermFrequency(item.getKey(), item.getValue())).toList();
                 writes.add(new KnowledgeRepository.ChunkWrite(index, block.pageNo(), block.section(), block.content(), vector,
                         terms.stream().mapToInt(KnowledgeRepository.TermFrequency::frequency).sum(), TermAnalyzer.VERSION,
-                        null, embeddingModel, terms));
+                        null, embeddingModel, terms, block.sheetName(), block.cellRange(), block.paragraphId(),
+                        block.bbox(), block.startTimeMs(), block.endTimeMs()));
             }
             var textHash = sha256(writes.stream().map(KnowledgeRepository.ChunkWrite::content).reduce("", (a, b) -> a + "\n" + b));
             repository.finishProcessingStep(organizationId, versionId, "CHUNK", "SUCCEEDED", textHash, null);
             repository.startProcessingStep(organizationId, documentId, versionId, "EMBEDDING", "spring-ai-embedding", null, textHash);
-            repository.replaceChunks(documentId, versionId, writes);
+            var documentType = repository.findDocument(organizationId, documentId)
+                    .map(KnowledgeRepository.DocumentRow::documentType).orElse("UNKNOWN");
+            activeParseRunId = governance.createParseRun(organizationId, documentId, versionId, "PROCESSING",
+                    parsed.parserVersion(), mediaProvider == null ? parser.getClass().getSimpleName()
+                            : mediaProvider.getClass().getSimpleName(), parsed.providerTaskId(), null,
+                    parseMetadata(parsed, textHash), chunks, fieldExtractor.extract(documentType, parsed.blocks())).id();
+            repository.replaceChunks(documentId, versionId, activeParseRunId, writes);
             var hasVector = writes.stream().anyMatch(item -> item.vector() != null && !item.vector().isBlank());
             repository.finishProcessingStep(organizationId, versionId, "EMBEDDING", hasVector ? "SUCCEEDED" : "PENDING_PROVIDER",
                     hasVector ? textHash : null, hasVector ? null : "Embedding 服务未配置或调用失败");
             repository.markReady(documentId, versionId, parsed.parserVersion(), textHash);
+            governance.updateParseRunStatus(organizationId, activeParseRunId, "PENDING_REVIEW", null);
+            appendIngestAudit(organizationId, actorId, "KB_PARSE_COMPLETED", documentId,
+                    objectMapper.createObjectNode().put("versionId", versionId.toString())
+                            .put("parserVersion", parsed.parserVersion()).put("blockCount", parsed.blocks().size()));
             repository.startProcessingStep(organizationId, documentId, versionId, "BM25_INDEX", "postgresql-bm25", TermAnalyzer.VERSION, textHash);
             repository.rebuildTermStats(organizationId);
             repository.finishProcessingStep(organizationId, versionId, "BM25_INDEX", "SUCCEEDED", textHash, null);
@@ -499,9 +586,30 @@ public class KnowledgeService implements KnowledgeSearchFacade {
             repository.finishProcessingStep(organizationId, versionId, "VECTOR_INDEX", hasVector ? "SUCCEEDED" : "PENDING_PROVIDER",
                     hasVector ? textHash : null, hasVector ? null : "Embedding 服务未配置或调用失败");
         } catch (Exception exception) {
+            var mediaFailure = exception instanceof MediaExtractionException failure ? failure : null;
+            try {
+                if (activeParseRunId != null) {
+                    governance.updateParseRunStatus(organizationId, activeParseRunId, "FAILED", safeError(exception));
+                } else governance.createParseRun(organizationId, documentId, versionId, "FAILED",
+                        mediaFailure == null ? null : mediaFailure.model(), attemptedProvider,
+                        mediaFailure == null ? null : mediaFailure.providerTaskId(), safeError(exception),
+                        objectMapper.createObjectNode().put("retryable", false), List.of(), List.of());
+            } catch (RuntimeException ignored) {
+                // The original parser/provider error remains authoritative if failure recording itself is unavailable.
+            }
             repository.markFailed(documentId, versionId, "FAILED", safeError(exception));
+            appendIngestAudit(organizationId, actorId, "KB_PARSE_FAILED", documentId,
+                    objectMapper.createObjectNode().put("versionId", versionId.toString()).put("error", safeError(exception)));
             throw exception instanceof RuntimeException runtime ? runtime : new IllegalStateException(exception);
         }
+    }
+
+    public void ingest(UUID organizationId, UUID documentId, UUID versionId, UUID fileId) {
+        ingest(organizationId, null, documentId, versionId, fileId);
+    }
+
+    private void appendIngestAudit(UUID organizationId, UUID actorId, String action, UUID documentId, JsonNode detail) {
+        if (actorId != null) audit.append(organizationId, actorId, action, "KB_DOCUMENT", documentId, detail);
     }
 
     private FileSafetyScanner.ScanResult scan(UUID organizationId, UUID fileId, KnowledgeRepository.VersionRow version) {
@@ -518,22 +626,34 @@ public class KnowledgeService implements KnowledgeSearchFacade {
             var text = block.content() == null ? "" : block.content().replaceAll("\\s+", " ").strip();
             if (text.isBlank()) continue;
             if (text.length() <= CHUNK_SIZE) {
-                result.add(new DocumentParser.TextBlock(block.pageNo(), block.section(), text));
+                result.add(copyBlock(block, text));
                 continue;
             }
             for (int start = 0; start < text.length(); start += CHUNK_SIZE - CHUNK_OVERLAP) {
                 var end = Math.min(text.length(), start + CHUNK_SIZE);
-                result.add(new DocumentParser.TextBlock(block.pageNo(), block.section(), text.substring(start, end)));
+                result.add(copyBlock(block, text.substring(start, end)));
                 if (end == text.length()) break;
             }
         }
         return result;
     }
 
+    private DocumentParser.TextBlock copyBlock(DocumentParser.TextBlock block, String text) {
+        return new DocumentParser.TextBlock(block.pageNo(), block.section(), text, block.sheetName(), block.cellRange(),
+                block.paragraphId(), block.bbox(), block.startTimeMs(), block.endTimeMs(), block.confidence());
+    }
+
+    private JsonNode parseMetadata(DocumentParser.ParsedDocument parsed, String textHash) {
+        var result = objectMapper.createObjectNode().put("textSha256", textHash);
+        parsed.metadata().forEach((key, value) -> result.set(key, objectMapper.valueToTree(value)));
+        return result;
+    }
+
     private DocumentView view(KnowledgeRepository.DocumentRow row) {
         return new DocumentView(row.id(), row.title(), row.documentType(), row.status(), row.scanStatus(), row.aiStatus(),
                 row.currentVersionNo(), row.currentVersionId(), row.originalName(), row.contentType(), row.size(),
-                row.sha256(), row.parseError(), row.createdAt(), row.updatedAt(), row.libraryScope(), row.categoryId(), row.categoryName());
+                row.sha256(), row.parseError(), row.createdAt(), row.updatedAt(), row.libraryScope(), row.categoryId(), row.categoryName(),
+                row.lifecycleStatus(), row.reviewStatus(), row.reviewRevision(), row.currentPublicationId(), row.currentPublicationNo());
     }
 
     private KnowledgeRepository.CategoryRow requireCategory(UUID organizationId, UUID categoryId) {
@@ -568,9 +688,17 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         return normalized;
     }
 
+    private String normalizeDescription(String value) {
+        if (!StringUtils.hasText(value)) return null;
+        var normalized = value.trim();
+        if (normalized.length() > 240) throw new ApiException(ApiErrorCode.BAD_REQUEST, "分类简介不能超过 240 个字符");
+        return normalized;
+    }
+
     private VersionView versionView(KnowledgeRepository.VersionRow row) {
         return new VersionView(row.id(), row.documentId(), row.versionNo(), row.fileObjectId(), row.originalName(),
-                row.contentType(), row.size(), row.sha256(), row.status(), row.parserVersion(), row.errorMessage());
+                row.contentType(), row.size(), row.sha256(), row.status(), row.parserVersion(), row.errorMessage(),
+                row.reviewStatus(), row.reviewRevision(), row.mediaProcessingConsent());
     }
 
     private KnowledgeSearchFacade.SearchHit toSearchHit(KnowledgeRepository.SearchRow row, double retrieval, double rrf) {
@@ -616,8 +744,10 @@ public class KnowledgeService implements KnowledgeSearchFacade {
                                String aiStatus, int currentVersionNo, UUID currentVersionId, String originalName,
                                String contentType, long size, String sha256, String parseError,
                                java.time.Instant createdAt, java.time.Instant updatedAt, String libraryScope,
-                               UUID categoryId, String categoryName) { }
+                               UUID categoryId, String categoryName, String lifecycleStatus, String reviewStatus,
+                               int reviewRevision, UUID currentPublicationId, Integer currentPublicationNo) { }
     public record VersionView(UUID id, UUID documentId, int versionNo, UUID fileObjectId, String originalName,
                               String contentType, long size, String sha256, String status, String parserVersion,
-                              String errorMessage) { }
+                              String errorMessage, String reviewStatus, int reviewRevision,
+                              boolean mediaProcessingConsent) { }
 }

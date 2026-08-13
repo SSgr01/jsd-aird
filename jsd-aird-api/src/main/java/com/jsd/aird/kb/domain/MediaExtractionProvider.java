@@ -17,6 +17,11 @@ public interface MediaExtractionProvider {
         return "媒体解析服务尚未配置";
     }
 
+    /** Allows mixed-format providers to avoid external calls when local extraction is sufficient. */
+    default boolean requiresExternalExtraction(InputStream source, String fileName) {
+        return true;
+    }
+
     default DocumentParser.ParsedDocument extract(InputStream source, String fileName) {
         throw new IllegalStateException("媒体解析 Provider 未实现");
     }

@@ -16,8 +16,6 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.tpl.application.port.TemplateRepository;
 import com.jsd.aird.tpl.domain.TemplateFormat;
-import com.jsd.aird.tpl.domain.TargetDataType;
-import com.jsd.aird.tpl.domain.TemplateScope;
 import com.jsd.aird.tpl.domain.TemplateStatus;
 import org.postgresql.util.PGobject;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -27,6 +25,49 @@ import org.springframework.stereotype.Repository;
 
 @Repository
 public class JdbcTemplateRepository implements TemplateRepository {
+
+    private static final String LOGICAL_TEMPLATES_CTE = """
+            WITH logical_templates AS (
+                SELECT t.id AS template_id,
+                       coalesce(draft.id, published.id, retired.id, latest.id) AS version_id,
+                       t.template_code, t.name, t.category_id,
+                       coalesce(tc.name, t.category) AS category, t.format,
+                       CASE
+                           WHEN published.id IS NOT NULL THEN published.status
+                           WHEN retired.id IS NOT NULL THEN 'RETIRED'
+                           ELSE coalesce(draft.status, latest.status)
+                       END AS lifecycle_status,
+                       coalesce(draft.version_no, published.version_no, retired.version_no, latest.version_no) AS version_no,
+                       coalesce(draft.lock_version, published.lock_version, retired.lock_version, latest.lock_version) AS lock_version,
+                       greatest(t.updated_at, coalesce(draft.updated_at, published.updated_at, retired.updated_at, latest.updated_at)) AS effective_updated_at,
+                       t.current_published_version_id,
+                       published.version_no AS published_version_no,
+                       retired.version_no AS retired_version_no,
+                       draft.id AS draft_version_id,
+                       draft.version_no AS draft_version_no,
+                       t.created_by, au.display_name AS created_by_name, t.created_at
+                FROM tpl.template t
+                LEFT JOIN tpl.template_category tc ON tc.id = t.category_id
+                LEFT JOIN iam.app_user au ON au.id = t.created_by
+                LEFT JOIN tpl.template_version published ON published.id = t.current_published_version_id
+                LEFT JOIN LATERAL (
+                    SELECT tv.* FROM tpl.template_version tv
+                    WHERE tv.template_id = t.id AND tv.status = 'RETIRED'
+                    ORDER BY tv.version_no DESC LIMIT 1
+                ) retired ON true
+                LEFT JOIN LATERAL (
+                    SELECT tv.* FROM tpl.template_version tv
+                    WHERE tv.template_id = t.id AND tv.status = 'DRAFT'
+                    ORDER BY tv.version_no DESC LIMIT 1
+                ) draft ON true
+                LEFT JOIN LATERAL (
+                    SELECT tv.* FROM tpl.template_version tv
+                    WHERE tv.template_id = t.id
+                    ORDER BY tv.version_no DESC LIMIT 1
+                ) latest ON true
+                WHERE t.organization_id = :organizationId
+            )
+            """;
 
     private final JdbcTemplate jdbcTemplate;
     private final NamedParameterJdbcTemplate namedJdbcTemplate;
@@ -45,81 +86,197 @@ public class JdbcTemplateRepository implements TemplateRepository {
             TemplateFormat format,
             TemplateStatus status
     ) {
-        var sql = new StringBuilder("""
-                SELECT t.id AS template_id, tv.id AS version_id, t.template_code, t.name,
-                       t.purpose, coalesce(tc.name, t.category) AS category, t.format, tv.status,
-                       tv.template_scope, tv.target_data_type, tv.version_no,
-                       tv.lock_version, tv.updated_at,
-                       (
-                           SELECT count(*)::int
-                           FROM tpl.template_mapping tm
-                           WHERE tm.template_version_id = tv.id
-                             AND tm.binding_status <> 'VALID'
-                       ) AS issue_count
-                FROM tpl.template t
-                LEFT JOIN tpl.template_category tc ON tc.id = t.category_id
-                JOIN tpl.template_version tv ON tv.template_id = t.id
-                WHERE t.organization_id = :organizationId
+        return findTemplates(new TemplateQuery(organizationId, keyword, null, false, format, status,
+                null, null, null, "UPDATED_AT", "DESC", 1, 1000)).items();
+    }
+
+    @Override
+    public TemplatePage findTemplates(TemplateQuery query) {
+        var sql = new StringBuilder(LOGICAL_TEMPLATES_CTE).append("""
+                SELECT lt.*,
+                       (SELECT count(*)::int FROM tpl.template_mapping tm
+                        WHERE tm.template_version_id = lt.version_id
+                          AND tm.binding_status <> 'VALID') AS issue_count,
+                       count(*) OVER() AS total_count
+                FROM logical_templates lt
+                WHERE lt.version_id IS NOT NULL
                 """);
-        var normalizedKeyword = blankToNull(keyword);
         var parameters = new MapSqlParameterSource()
-                .addValue("organizationId", organizationId);
-        if (normalizedKeyword != null) {
-            sql.append("""
-                      AND (lower(t.name) LIKE lower(:keywordPattern)
-                           OR lower(t.template_code) LIKE lower(:keywordPattern))
-                    """);
-            parameters.addValue("keywordPattern", "%" + normalizedKeyword + "%");
+                .addValue("organizationId", query.organizationId());
+        if (query.categoryId() != null) {
+            sql.append(" AND lt.category_id = :categoryId\n");
+            parameters.addValue("categoryId", query.categoryId());
+        } else if (query.uncategorized()) {
+            sql.append(" AND lt.category_id IS NULL\n");
         }
-        if (format != null) {
-            sql.append("  AND t.format = :format\n");
-            parameters.addValue("format", format.name());
-        }
-        if (status != null) {
-            sql.append("  AND tv.status = :status\n");
-            parameters.addValue("status", status.name());
-        }
-        sql.append("ORDER BY tv.updated_at DESC, t.name\n");
-        return namedJdbcTemplate.query(sql.toString(), parameters, (rs, rowNum) -> new TemplateListItem(
+        appendCommonFilters(sql, parameters, query.keyword(), query.format(), query.status(),
+                query.createdBy(), query.updatedFrom(), query.updatedTo());
+        var countSql = "SELECT count(*) FROM (" + sql + ") page_count";
+        var total = java.util.Optional.ofNullable(namedJdbcTemplate.queryForObject(
+                countSql, parameters, Long.class)).orElse(0L);
+        var sortColumn = switch (query.sortBy() == null ? "" : query.sortBy().toUpperCase(java.util.Locale.ROOT)) {
+            case "CREATED_AT" -> "lt.created_at";
+            case "NAME" -> "lower(lt.name)";
+            default -> "lt.effective_updated_at";
+        };
+        var direction = "ASC".equalsIgnoreCase(query.sortDirection()) ? "ASC" : "DESC";
+        var page = Math.max(1, query.page());
+        var size = Math.max(1, Math.min(200, query.size()));
+        sql.append(" ORDER BY ").append(sortColumn).append(' ').append(direction)
+                .append(", lt.template_id LIMIT :limit OFFSET :offset");
+        parameters.addValue("limit", size).addValue("offset", (page - 1) * size);
+        var rows = namedJdbcTemplate.query(sql.toString(), parameters, (rs, rowNum) -> new TemplateListItem(
                 rs.getObject("template_id", UUID.class),
                 rs.getObject("version_id", UUID.class),
                 rs.getString("template_code"),
                 rs.getString("name"),
-                rs.getString("purpose"),
                 rs.getString("category"),
                 TemplateFormat.valueOf(rs.getString("format")),
-                TemplateStatus.valueOf(rs.getString("status")),
-                TemplateScope.valueOf(rs.getString("template_scope")),
-                rs.getString("target_data_type") == null ? null : TargetDataType.valueOf(rs.getString("target_data_type")),
+                TemplateStatus.valueOf(rs.getString("lifecycle_status")),
                 rs.getInt("version_no"),
                 rs.getLong("lock_version"),
-                rs.getTimestamp("updated_at").toInstant(),
-                rs.getInt("issue_count")
+                rs.getTimestamp("effective_updated_at").toInstant(),
+                rs.getInt("issue_count"),
+                rs.getObject("category_id", UUID.class),
+                rs.getObject("current_published_version_id", UUID.class),
+                (Integer) rs.getObject("published_version_no"),
+                (Integer) rs.getObject("retired_version_no"),
+                rs.getObject("draft_version_id", UUID.class),
+                (Integer) rs.getObject("draft_version_no"),
+                rs.getObject("draft_version_id") != null,
+                rs.getObject("created_by", UUID.class),
+                rs.getString("created_by_name"),
+                rs.getTimestamp("created_at").toInstant()
         ));
+        var safeTotal = total;
+        return new TemplatePage(rows, safeTotal, page, size,
+                safeTotal == 0 ? 0 : (int) Math.ceil(safeTotal / (double) size));
     }
 
     @Override
-    public List<TemplateListItem> findPublishedDataTemplates(UUID organizationId, TargetDataType targetDataType) {
-        return findTemplates(organizationId, null, null, TemplateStatus.PUBLISHED).stream()
-                .filter(item -> item.scope() == TemplateScope.DATA_CENTER)
-                .filter(item -> targetDataType == null || item.targetDataType() == targetDataType)
+    public TemplateFacetSummary findTemplateFacets(TemplateFacetQuery query) {
+        var sql = new StringBuilder(LOGICAL_TEMPLATES_CTE).append("""
+                , filtered_templates AS (
+                    SELECT lt.*
+                    FROM logical_templates lt
+                    WHERE lt.version_id IS NOT NULL
+                """);
+        var parameters = new MapSqlParameterSource()
+                .addValue("organizationId", query.organizationId());
+        appendCommonFilters(sql, parameters, query.keyword(), query.format(), query.status(),
+                query.createdBy(), query.updatedFrom(), query.updatedTo());
+        sql.append("""
+                ), category_counts AS (
+                    SELECT category_id, count(*)::bigint AS template_count
+                    FROM filtered_templates
+                    GROUP BY category_id
+                )
+                SELECT c.id AS category_id, coalesce(cc.template_count, 0)::bigint AS template_count
+                FROM tpl.template_category c
+                LEFT JOIN category_counts cc ON cc.category_id = c.id
+                WHERE c.organization_id = :organizationId
+                UNION ALL
+                SELECT NULL::uuid AS category_id,
+                       coalesce((SELECT template_count FROM category_counts WHERE category_id IS NULL), 0)::bigint
+                """);
+        var counts = namedJdbcTemplate.query(sql.toString(), parameters,
+                (rs, rowNum) -> new TemplateCategoryCount(
+                        rs.getObject("category_id", UUID.class), rs.getLong("template_count")));
+        var uncategorized = counts.stream()
+                .filter(item -> item.categoryId() == null)
+                .mapToLong(TemplateCategoryCount::count)
+                .sum();
+        var categories = counts.stream().filter(item -> item.categoryId() != null).toList();
+        var total = counts.stream().mapToLong(TemplateCategoryCount::count).sum();
+        return new TemplateFacetSummary(total, uncategorized, categories);
+    }
+
+    private void appendCommonFilters(
+            StringBuilder sql,
+            MapSqlParameterSource parameters,
+            String requestedKeyword,
+            TemplateFormat format,
+            TemplateStatus status,
+            UUID createdBy,
+            java.time.Instant updatedFrom,
+            java.time.Instant updatedTo
+    ) {
+        var keyword = blankToNull(requestedKeyword);
+        if (keyword != null) {
+            sql.append(" AND (lower(lt.name) LIKE lower(:keywordPattern) OR lower(lt.template_code) LIKE lower(:keywordPattern))\n");
+            parameters.addValue("keywordPattern", "%" + keyword + "%");
+        }
+        if (format != null) {
+            sql.append(" AND lt.format = :format\n");
+            parameters.addValue("format", format.name());
+        }
+        if (status != null) {
+            sql.append(" AND lt.lifecycle_status = :status\n");
+            parameters.addValue("status", status.name());
+        }
+        if (createdBy != null) {
+            sql.append(" AND lt.created_by = :createdBy\n");
+            parameters.addValue("createdBy", createdBy);
+        }
+        if (updatedFrom != null) {
+            sql.append(" AND lt.effective_updated_at >= :updatedFrom\n");
+            parameters.addValue("updatedFrom", java.sql.Timestamp.from(updatedFrom));
+        }
+        if (updatedTo != null) {
+            sql.append(" AND lt.effective_updated_at <= :updatedTo\n");
+            parameters.addValue("updatedTo", java.sql.Timestamp.from(updatedTo));
+        }
+    }
+
+    @Override
+    public List<TemplateCreatorOption> findTemplateCreators(UUID organizationId) {
+        return jdbcTemplate.query("""
+                SELECT DISTINCT u.id, u.display_name
+                FROM tpl.template t JOIN iam.app_user u ON u.id = t.created_by
+                WHERE t.organization_id = ?
+                ORDER BY u.display_name, u.id
+                """, (rs, rowNum) -> new TemplateCreatorOption(
+                rs.getObject("id", UUID.class), rs.getString("display_name")), organizationId);
+    }
+
+    @Override
+    public Optional<TemplateSummary> findTemplateSummary(UUID organizationId, UUID templateId) {
+        return jdbcTemplate.query("""
+                SELECT t.id, t.name, t.category_id, coalesce(c.name, t.category) AS category
+                FROM tpl.template t LEFT JOIN tpl.template_category c ON c.id = t.category_id
+                WHERE t.organization_id = ? AND t.id = ?
+                """, (rs, rowNum) -> new TemplateSummary(rs.getObject("id", UUID.class), rs.getString("name"),
+                rs.getObject("category_id", UUID.class), rs.getString("category")), organizationId, templateId)
+                .stream().findFirst();
+    }
+
+    @Override
+    public List<TemplateListItem> findPublishedDataTemplates(UUID organizationId) {
+        return findTemplates(new TemplateQuery(organizationId, null, null, false, null, TemplateStatus.PUBLISHED,
+                null, null, null, "UPDATED_AT", "DESC", 1, 1000)).items().stream()
+                .map(item -> item.currentPublishedVersionId() == null ? item : new TemplateListItem(
+                        item.templateId(), item.currentPublishedVersionId(), item.templateCode(), item.name(),
+                        item.category(), item.format(), TemplateStatus.PUBLISHED,
+                        item.currentPublishedVersionNo() == null ? item.versionNo() : item.currentPublishedVersionNo(),
+                        item.lockVersion(), item.updatedAt(), item.issueCount(), item.categoryId(),
+                        item.currentPublishedVersionId(), item.currentPublishedVersionNo(), item.retiredVersionNo(), item.draftVersionId(),
+                        item.draftVersionNo(), item.hasDraft(), item.createdBy(), item.createdByName(), item.createdAt()))
                 .toList();
     }
 
     @Override
     public Optional<TemplateWorkspace> findPublishedDataTemplate(UUID organizationId, UUID versionId) {
         return findWorkspace(organizationId, versionId)
-                .filter(item -> item.status() == TemplateStatus.PUBLISHED)
-                .filter(item -> item.scope() == TemplateScope.DATA_CENTER && item.targetDataType() != null);
+                .filter(item -> item.status() == TemplateStatus.PUBLISHED);
     }
 
     @Override
     public void insertTemplate(NewTemplate template) {
         jdbcTemplate.update("""
                         INSERT INTO tpl.template (
-                            id, organization_id, template_code, name, purpose, category, category_id,
+                            id, organization_id, template_code, name, category, category_id,
                             format, created_by
-                        ) VALUES (?, ?, ?, ?, ?, ?, (
+                        ) VALUES (?, ?, ?, ?, ?, (
                             SELECT id FROM tpl.template_category WHERE organization_id = ? AND name = ?
                         ), ?, ?)
                         """,
@@ -127,7 +284,6 @@ public class JdbcTemplateRepository implements TemplateRepository {
                 template.organizationId(),
                 template.code(),
                 template.name(),
-                template.purpose(),
                 template.category(),
                 template.organizationId(),
                 template.category(),
@@ -143,9 +299,9 @@ public class JdbcTemplateRepository implements TemplateRepository {
                     INSERT INTO tpl.template_version (
                         id, template_id, version_no, status, schema_jsonb, layout_summary_jsonb,
                         snapshot_kind, editor_app_version, plugin_manifest_hash,
-                        template_scope, target_data_type, snapshot_format_version,
+                        snapshot_format_version,
                         schema_hash, mapping_hash, data_hash, workspace_hash, created_by
-                     ) VALUES (?, ?, 1, 'DRAFT', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, 1, 'DRAFT', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """);
             statement.setObject(1, version.id());
             statement.setObject(2, version.templateId());
@@ -154,17 +310,15 @@ public class JdbcTemplateRepository implements TemplateRepository {
             statement.setString(5, version.snapshotKind());
             statement.setString(6, version.editorAppVersion());
             statement.setString(7, version.pluginManifestHash());
-            statement.setString(8, version.scope().name());
-            statement.setString(9, version.targetDataType() == null ? null : version.targetDataType().name());
-            statement.setInt(10, version.layoutSummary().path("initialSnapshot")
+            statement.setInt(8, version.layoutSummary().path("initialSnapshot")
                     .path("snapshotFormatVersion").asInt(
                             "UNIVER_WORKBOOK".equals(version.snapshotKind()) ? 3 : 1
                     ));
-            statement.setString(11, version.schemaHash());
-            statement.setString(12, version.mappingHash());
-            statement.setString(13, version.dataHash());
-            statement.setString(14, version.workspaceHash());
-            statement.setObject(15, version.actorId());
+            statement.setString(9, version.schemaHash());
+            statement.setString(10, version.mappingHash());
+            statement.setString(11, version.dataHash());
+            statement.setString(12, version.workspaceHash());
+            statement.setObject(13, version.actorId());
             return statement;
         });
     }
@@ -177,7 +331,7 @@ public class JdbcTemplateRepository implements TemplateRepository {
                                 WHERE tij.generated_template_version_id = tv.id
                                 ORDER BY tij.created_at DESC LIMIT 1) AS recognition_run_id,
                                t.template_code, t.name,
-                                t.format, tv.status, tv.version_no, tv.template_scope, tv.target_data_type,
+                                t.format, tv.status, tv.version_no,
                                 tv.schema_jsonb,
                                tv.layout_summary_jsonb, tv.editor_snapshot_file_id,
                                tv.editor_snapshot_hash, tv.snapshot_kind, tv.editor_app_version,
@@ -199,13 +353,20 @@ public class JdbcTemplateRepository implements TemplateRepository {
     public List<TemplateVersionHistoryItem> findVersionHistory(UUID organizationId, UUID templateId) {
         return jdbcTemplate.query("""
                         SELECT tv.id, tv.version_no, tv.status, tv.created_at, tv.updated_at,
-                               tv.published_at,
+                               tv.published_at, tv.derived_from_version_id, tv.created_by,
+                               au.display_name AS created_by_name,
+                               (t.current_published_version_id = tv.id) AS current_published,
+                               NOT EXISTS (
+                                   SELECT 1 FROM tpl.template_version draft
+                                   WHERE draft.template_id = tv.template_id AND draft.status = 'DRAFT'
+                               ) AS can_rollback,
                                (SELECT count(*)::int FROM ops.audit_log al
                                 WHERE al.aggregate_type = 'TEMPLATE_VERSION'
                                   AND al.aggregate_id = tv.id
                                   AND al.action = 'TEMPLATE_DRAFT_SAVED') AS save_count
                         FROM tpl.template_version tv
                         JOIN tpl.template t ON t.id = tv.template_id
+                        LEFT JOIN iam.app_user au ON au.id = tv.created_by
                         WHERE tv.template_id = ? AND t.organization_id = ?
                         ORDER BY tv.version_no DESC
                         """,
@@ -217,7 +378,12 @@ public class JdbcTemplateRepository implements TemplateRepository {
                         rs.getTimestamp("updated_at").toInstant(),
                         rs.getTimestamp("published_at") == null
                                 ? null : rs.getTimestamp("published_at").toInstant(),
-                        rs.getInt("save_count")
+                        rs.getInt("save_count"),
+                        rs.getObject("derived_from_version_id", UUID.class),
+                        rs.getObject("created_by", UUID.class),
+                        rs.getString("created_by_name"),
+                        rs.getBoolean("current_published"),
+                        rs.getBoolean("can_rollback")
                 ),
                 templateId,
                 organizationId
@@ -358,12 +524,12 @@ public class JdbcTemplateRepository implements TemplateRepository {
                     INSERT INTO tpl.template_version (
                         id, template_id, version_no, status, schema_jsonb, layout_summary_jsonb,
                         editor_snapshot_file_id, editor_snapshot_hash, snapshot_kind,
-                        editor_app_version, plugin_manifest_hash, template_scope, target_data_type,
+                        editor_app_version, plugin_manifest_hash,
                         snapshot_format_version,
                         schema_hash, mapping_hash, data_hash, workspace_hash,
                         derived_from_version_id, created_by
                     )
-                     SELECT ?, ?, coalesce(max(version_no), 0) + 1, 'DRAFT', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                     SELECT ?, ?, coalesce(max(version_no), 0) + 1, 'DRAFT', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                     FROM tpl.template_version WHERE template_id = ?
                     """);
             statement.setObject(1, version.id());
@@ -375,22 +541,52 @@ public class JdbcTemplateRepository implements TemplateRepository {
             statement.setString(7, version.snapshotKind());
             statement.setString(8, version.editorAppVersion());
             statement.setString(9, version.pluginManifestHash());
-            statement.setString(10, version.scope().name());
-            statement.setString(11, version.targetDataType() == null ? null : version.targetDataType().name());
-            statement.setInt(12, version.snapshotFormatVersion());
-            statement.setString(13, version.schemaHash());
-            statement.setString(14, version.mappingHash());
-            statement.setString(15, version.dataHash());
-            statement.setString(16, version.workspaceHash());
-            statement.setObject(17, version.derivedFromVersionId());
-            statement.setObject(18, version.actorId());
-            statement.setObject(19, version.templateId());
+            statement.setInt(10, version.snapshotFormatVersion());
+            statement.setString(11, version.schemaHash());
+            statement.setString(12, version.mappingHash());
+            statement.setString(13, version.dataHash());
+            statement.setString(14, version.workspaceHash());
+            statement.setObject(15, version.derivedFromVersionId());
+            statement.setObject(16, version.actorId());
+            statement.setObject(17, version.templateId());
             return statement;
         });
     }
 
     @Override
-    public void copyMappings(UUID sourceVersionId, UUID targetVersionId) {
+    public void insertCopiedVersion(NewRevision version) {
+        jdbcTemplate.update(connection -> {
+            var statement = connection.prepareStatement("""
+                    INSERT INTO tpl.template_version (
+                        id, template_id, version_no, status, schema_jsonb, layout_summary_jsonb,
+                        editor_snapshot_file_id, editor_snapshot_hash, snapshot_kind,
+                        editor_app_version, plugin_manifest_hash, snapshot_format_version,
+                        schema_hash, mapping_hash, data_hash, workspace_hash,
+                        derived_from_version_id, created_by
+                    ) VALUES (?, ?, 1, 'DRAFT', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """);
+            statement.setObject(1, version.id());
+            statement.setObject(2, version.templateId());
+            statement.setObject(3, pgJson(version.schema()));
+            statement.setObject(4, pgJson(version.layoutSummary()));
+            statement.setObject(5, version.snapshotFileId());
+            statement.setString(6, version.snapshotHash());
+            statement.setString(7, version.snapshotKind());
+            statement.setString(8, version.editorAppVersion());
+            statement.setString(9, version.pluginManifestHash());
+            statement.setInt(10, version.snapshotFormatVersion());
+            statement.setString(11, version.schemaHash());
+            statement.setString(12, version.mappingHash());
+            statement.setString(13, version.dataHash());
+            statement.setString(14, version.workspaceHash());
+            statement.setObject(15, version.derivedFromVersionId());
+            statement.setObject(16, version.actorId());
+            return statement;
+        });
+    }
+
+    @Override
+    public void copyMappings(UUID sourceVersionId, UUID targetVersionId, boolean preserveRecognitionReference) {
         jdbcTemplate.update("""
                 INSERT INTO tpl.template_mapping (
                     id, template_version_id, binding_id, field_id, parent_binding_id, marker_id,
@@ -402,10 +598,12 @@ public class JdbcTemplateRepository implements TemplateRepository {
                 SELECT gen_random_uuid(), ?, binding_id, field_id, parent_binding_id, marker_id,
                        format, field_code, data_path, binding_role, mapping_kind, repeat_axis,
                        record_height, record_width, record_stride, locator_type, locator_jsonb,
-                       sync_direction, primary_binding, binding_status, diagnostic_jsonb,
+                       sync_direction, primary_binding, binding_status,
+                       CASE WHEN ? THEN diagnostic_jsonb
+                            ELSE coalesce(diagnostic_jsonb, '{}'::jsonb) - 'recognitionItemId' END,
                        termination_jsonb, now()
                 FROM tpl.template_mapping WHERE template_version_id = ?
-                """, targetVersionId, sourceVersionId);
+                """, targetVersionId, preserveRecognitionReference, sourceVersionId);
     }
 
     @Override
@@ -471,34 +669,41 @@ public class JdbcTemplateRepository implements TemplateRepository {
     @Override
     public List<TemplateCategoryItem> findCategories(UUID organizationId) {
         return jdbcTemplate.query("""
-                SELECT c.id, c.name, c.sort_order, count(t.id)::int AS template_count
+                SELECT c.id, c.name, c.description, c.sort_order,
+                       count(t.id) FILTER (WHERE EXISTS (
+                           SELECT 1 FROM tpl.template_version tv WHERE tv.template_id = t.id
+                       ))::int AS template_count
                 FROM tpl.template_category c
-                LEFT JOIN tpl.template t ON t.category_id = c.id
+                LEFT JOIN tpl.template t ON t.category_id = c.id AND t.organization_id = c.organization_id
                 WHERE c.organization_id = ?
-                GROUP BY c.id, c.name, c.sort_order, c.created_at
+                GROUP BY c.id, c.name, c.description, c.sort_order, c.created_at
                 ORDER BY c.sort_order, c.created_at, c.name
                 """, (rs, rowNum) -> new TemplateCategoryItem(
-                rs.getObject("id", UUID.class), rs.getString("name"),
+                rs.getObject("id", UUID.class), rs.getString("name"), rs.getString("description"),
                 rs.getInt("sort_order"), rs.getInt("template_count")), organizationId);
     }
 
     @Override
-    public void insertCategory(UUID id, UUID organizationId, String name, int sortOrder, UUID actorId) {
+    public void insertCategory(UUID id, UUID organizationId, String name, String description, int sortOrder, UUID actorId) {
         jdbcTemplate.update("""
-                INSERT INTO tpl.template_category (id, organization_id, name, sort_order, created_by)
-                VALUES (?, ?, ?, ?, ?)
-                """, id, organizationId, name, sortOrder, actorId);
+                INSERT INTO tpl.template_category (id, organization_id, name, description, sort_order, created_by)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """, id, organizationId, name, description, sortOrder, actorId);
     }
 
     @Override
     public Optional<TemplateCategoryItem> findCategory(UUID organizationId, UUID categoryId) {
         return jdbcTemplate.query("""
-                SELECT c.id, c.name, c.sort_order, count(t.id)::int AS template_count
-                FROM tpl.template_category c LEFT JOIN tpl.template t ON t.category_id = c.id
+                SELECT c.id, c.name, c.description, c.sort_order,
+                       count(t.id) FILTER (WHERE EXISTS (
+                           SELECT 1 FROM tpl.template_version tv WHERE tv.template_id = t.id
+                       ))::int AS template_count
+                FROM tpl.template_category c
+                LEFT JOIN tpl.template t ON t.category_id = c.id AND t.organization_id = c.organization_id
                 WHERE c.organization_id = ? AND c.id = ?
-                GROUP BY c.id, c.name, c.sort_order
+                GROUP BY c.id, c.name, c.description, c.sort_order
                 """, (rs, rowNum) -> new TemplateCategoryItem(
-                rs.getObject("id", UUID.class), rs.getString("name"),
+                rs.getObject("id", UUID.class), rs.getString("name"), rs.getString("description"),
                 rs.getInt("sort_order"), rs.getInt("template_count")), organizationId, categoryId)
                 .stream().findFirst();
     }
@@ -512,11 +717,11 @@ public class JdbcTemplateRepository implements TemplateRepository {
     }
 
     @Override
-    public int renameCategory(UUID organizationId, UUID categoryId, String name) {
+    public int renameCategory(UUID organizationId, UUID categoryId, String name, String description) {
         var updated = jdbcTemplate.update("""
-                UPDATE tpl.template_category SET name = ?, updated_at = now()
+                UPDATE tpl.template_category SET name = ?, description = ?, updated_at = now()
                 WHERE organization_id = ? AND id = ?
-                """, name, organizationId, categoryId);
+                """, name, description, organizationId, categoryId);
         if (updated > 0) {
             jdbcTemplate.update("""
                     UPDATE tpl.template SET category = ?, updated_at = now()
@@ -552,6 +757,14 @@ public class JdbcTemplateRepository implements TemplateRepository {
                 FROM tpl.template_category c
                 WHERE t.organization_id = ? AND t.id = ? AND c.organization_id = ? AND c.id = ?
                 """, categoryId, organizationId, templateId, organizationId, categoryId);
+    }
+
+    @Override
+    public int renameTemplate(UUID organizationId, UUID templateId, String name) {
+        return jdbcTemplate.update("""
+                UPDATE tpl.template SET name = ?, updated_at = now()
+                WHERE organization_id = ? AND id = ?
+                """, name, organizationId, templateId);
     }
 
     @Override
@@ -616,15 +829,26 @@ public class JdbcTemplateRepository implements TemplateRepository {
 
     @Override
     public void publish(UUID organizationId, UUID versionId, UUID actorId) {
-        var templateId = jdbcTemplate.queryForObject("""
-                SELECT tv.template_id
+        var current = jdbcTemplate.query("""
+                SELECT tv.template_id, t.current_published_version_id
                 FROM tpl.template_version tv
                 JOIN tpl.template t ON t.id = tv.template_id
                 WHERE tv.id = ? AND t.organization_id = ? AND tv.status = 'DRAFT'
                 FOR UPDATE
-                """, UUID.class, versionId, organizationId);
-        if (templateId == null) {
+                """, (rs, rowNum) -> new UUID[]{
+                rs.getObject("template_id", UUID.class),
+                rs.getObject("current_published_version_id", UUID.class)}, versionId, organizationId);
+        if (current.isEmpty()) {
             return;
+        }
+        var templateId = current.getFirst()[0];
+        var oldPublished = current.getFirst()[1];
+        if (oldPublished != null && !oldPublished.equals(versionId)) {
+            jdbcTemplate.update("""
+                    UPDATE tpl.template_version
+                    SET status = 'RETIRED', updated_at = now()
+                    WHERE id = ? AND status = 'PUBLISHED'
+                    """, oldPublished);
         }
         jdbcTemplate.update("""
                 UPDATE tpl.template_version
@@ -636,6 +860,43 @@ public class JdbcTemplateRepository implements TemplateRepository {
                 SET current_published_version_id = ?, updated_at = now()
                 WHERE id = ?
                 """, versionId, templateId);
+    }
+
+    @Override
+    public void saveImportContract(UUID organizationId, UUID versionId, int importContractVersion,
+                                   int layoutStructureVersion, String contractHash, JsonNode contract, UUID actorId) {
+        jdbcTemplate.update("""
+                INSERT INTO tpl.template_import_contract (
+                    template_version_id, import_contract_version, layout_structure_version,
+                    contract_hash, contract_jsonb, created_by
+                )
+                SELECT tv.id, ?, ?, ?, ?, ?
+                FROM tpl.template_version tv JOIN tpl.template t ON t.id = tv.template_id
+                WHERE tv.id = ? AND t.organization_id = ? AND tv.status = 'DRAFT'
+                ON CONFLICT (template_version_id) DO UPDATE SET
+                    import_contract_version = EXCLUDED.import_contract_version,
+                    layout_structure_version = EXCLUDED.layout_structure_version,
+                    contract_hash = EXCLUDED.contract_hash,
+                    contract_jsonb = EXCLUDED.contract_jsonb,
+                    created_by = EXCLUDED.created_by,
+                    created_at = now()
+                """, importContractVersion, layoutStructureVersion, contractHash, pgJson(contract), actorId,
+                versionId, organizationId);
+    }
+
+    @Override
+    public Optional<ImportContract> findImportContract(UUID organizationId, UUID versionId) {
+        return jdbcTemplate.query("""
+                SELECT c.import_contract_version, c.layout_structure_version,
+                       c.contract_hash, c.contract_jsonb
+                FROM tpl.template_import_contract c
+                JOIN tpl.template_version tv ON tv.id = c.template_version_id
+                JOIN tpl.template t ON t.id = tv.template_id
+                WHERE c.template_version_id = ? AND t.organization_id = ?
+                """, (rs, rowNum) -> new ImportContract(
+                rs.getInt("import_contract_version"), rs.getInt("layout_structure_version"),
+                rs.getString("contract_hash"), parseJson(rs.getString("contract_jsonb"))),
+                versionId, organizationId).stream().findFirst();
     }
 
     @Override
@@ -753,8 +1014,6 @@ public class JdbcTemplateRepository implements TemplateRepository {
                 rs.getString("mapping_hash"),
                 rs.getString("data_hash"),
                 rs.getString("workspace_hash"),
-                TemplateScope.valueOf(rs.getString("template_scope")),
-                rs.getString("target_data_type") == null ? null : TargetDataType.valueOf(rs.getString("target_data_type")),
                 rs.getLong("lock_version"),
                 layoutSummary.path("reconciliationRequired").asBoolean(false)
         );

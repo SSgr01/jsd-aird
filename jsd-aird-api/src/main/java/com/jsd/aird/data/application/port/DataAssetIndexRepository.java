@@ -14,5 +14,11 @@ public interface DataAssetIndexRepository {
         return search(organizationId, query, scopeIds, limit);
     }
 
+    default List<DataAssetSearchFacade.DataHit> searchHybrid(UUID organizationId, String query, String queryVector,
+                                                             int vectorDimension, List<UUID> scopeIds,
+                                                             List<UUID> categoryIds, int limit) {
+        return search(organizationId, query, scopeIds, categoryIds, limit);
+    }
+
     int indexPublished(UUID organizationId, List<UUID> assetIds);
 }

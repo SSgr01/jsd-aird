@@ -1,7 +1,9 @@
 package com.jsd.aird.tpl.adapter.in.web;
 
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
+import java.time.Instant;
 import java.io.IOException;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -17,18 +19,18 @@ import com.jsd.aird.tpl.application.TemplateRecognitionReviewService;
 import com.jsd.aird.tpl.application.TemplateOfficeExportService;
 import com.jsd.aird.tpl.application.port.TemplateRepository;
 import com.jsd.aird.tpl.domain.TemplateFormat;
-import com.jsd.aird.tpl.domain.TargetDataType;
-import com.jsd.aird.tpl.domain.TemplateScope;
 import com.jsd.aird.tpl.domain.TemplateStatus;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -60,11 +62,90 @@ public class TemplateController {
     @GetMapping("/templates")
     public ApiResponse<PageResponse<TemplateRepository.TemplateListItem>> list(
             @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) UUID categoryId,
+            @RequestParam(defaultValue = "false") boolean uncategorized,
             @RequestParam(required = false) TemplateFormat format,
-            @RequestParam(required = false) TemplateStatus status
+            @RequestParam(required = false) TemplateStatus status,
+            @RequestParam(required = false) UUID createdBy,
+            @RequestParam(required = false) Instant updatedFrom,
+            @RequestParam(required = false) Instant updatedTo,
+            @RequestParam(defaultValue = "UPDATED_AT") String sortBy,
+            @RequestParam(defaultValue = "DESC") String sortDirection,
+            @RequestParam(defaultValue = "1") @Min(1) int page,
+            @RequestParam(defaultValue = "20") @Min(1) int size
     ) {
-        var items = service.list(keyword, format, status);
-        return success(new PageResponse<>(items, 1, items.size(), items.size(), 1));
+        var result = service.list(new TemplateWorkspaceService.TemplateListQuery(
+                keyword, categoryId, uncategorized, format, status, createdBy, updatedFrom, updatedTo,
+                sortBy, sortDirection, page, size));
+        return success(new PageResponse<>(result.items(), result.page(), result.size(), result.total(), result.totalPages()));
+    }
+
+    @GetMapping("/templates/filter-options")
+    public ApiResponse<List<TemplateRepository.TemplateCreatorOption>> filterOptions() {
+        return success(service.filterOptions());
+    }
+
+    @GetMapping("/templates/facets")
+    public ApiResponse<TemplateRepository.TemplateFacetSummary> facets(
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) TemplateFormat format,
+            @RequestParam(required = false) TemplateStatus status,
+            @RequestParam(required = false) UUID createdBy,
+            @RequestParam(required = false) Instant updatedFrom,
+            @RequestParam(required = false) Instant updatedTo
+    ) {
+        return success(service.facets(new TemplateWorkspaceService.TemplateFacetQuery(
+                keyword, format, status, createdBy, updatedFrom, updatedTo)));
+    }
+
+    @GetMapping(value = "/templates/export.csv", produces = "text/csv;charset=UTF-8")
+    public ResponseEntity<byte[]> exportCsv(
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) UUID categoryId,
+            @RequestParam(defaultValue = "false") boolean uncategorized,
+            @RequestParam(required = false) TemplateFormat format,
+            @RequestParam(required = false) TemplateStatus status,
+            @RequestParam(required = false) UUID createdBy,
+            @RequestParam(required = false) Instant updatedFrom,
+            @RequestParam(required = false) Instant updatedTo,
+            @RequestParam(defaultValue = "UPDATED_AT") String sortBy,
+            @RequestParam(defaultValue = "DESC") String sortDirection,
+            @RequestParam(required = false) Set<UUID> templateIds
+    ) {
+        var content = service.exportCsv(new TemplateWorkspaceService.TemplateListQuery(
+                keyword, categoryId, uncategorized, format, status, createdBy, updatedFrom, updatedTo,
+                sortBy, sortDirection, 1, 200), templateIds);
+        return ResponseEntity.ok().contentType(MediaType.parseMediaType("text/csv;charset=UTF-8"))
+                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
+                        .filename("templates.csv", StandardCharsets.UTF_8).build().toString())
+                .body(content);
+    }
+
+    @PatchMapping("/templates/{templateId}")
+    public ApiResponse<Void> renameTemplate(@PathVariable UUID templateId,
+                                             @Valid @RequestBody RenameTemplateRequest request) {
+        service.renameTemplate(templateId, request.name());
+        return success(null);
+    }
+
+    @PostMapping("/template-versions/{versionId}/copies")
+    public ApiResponse<TemplateRepository.TemplateWorkspace> copyTemplate(
+            @PathVariable UUID versionId, @RequestBody CopyTemplateRequest request) {
+        return success(service.copyVersion(versionId, request.name(), request.categoryId()));
+    }
+
+    @PostMapping("/template-versions/{versionId}/rollback")
+    public ApiResponse<TemplateRepository.TemplateWorkspace> rollback(@PathVariable UUID versionId) {
+        return success(service.rollback(versionId));
+    }
+
+    @PostMapping("/templates/batch-actions")
+    public ApiResponse<List<TemplateWorkspaceService.BatchActionResult>> batch(
+            @Valid @RequestBody BatchActionRequest request) {
+        return success(service.batch(new TemplateWorkspaceService.BatchActionCommand(
+                request.action(), request.categoryId(), request.items().stream()
+                .map(item -> new TemplateWorkspaceService.BatchActionItem(
+                        item.templateId(), item.versionId(), item.name())).toList())));
     }
 
     @GetMapping("/template-versions/{versionId}/export/check")
@@ -100,13 +181,13 @@ public class TemplateController {
     @PostMapping("/template-categories")
     public ApiResponse<TemplateRepository.TemplateCategoryItem> createCategory(
             @Valid @RequestBody CategoryRequest request) {
-        return success(service.createCategory(request.name()));
+        return success(service.createCategory(request.name(), request.description()));
     }
 
     @PutMapping("/template-categories/{categoryId}")
     public ApiResponse<TemplateRepository.TemplateCategoryItem> renameCategory(
             @PathVariable UUID categoryId, @Valid @RequestBody CategoryRequest request) {
-        return success(service.renameCategory(categoryId, request.name()));
+        return success(service.renameCategory(categoryId, request.name(), request.description()));
     }
 
     @DeleteMapping("/template-categories/{categoryId}")
@@ -130,12 +211,9 @@ public class TemplateController {
     ) {
         return success(service.createBlank(new TemplateWorkspaceService.CreateBlankCommand(
                 request.name(),
-                request.purpose(),
                 request.category(),
                 request.format(),
-                request.importJobId(),
-                request.scope(),
-                request.targetDataType()
+                request.importJobId()
         )));
     }
 
@@ -240,14 +318,22 @@ public class TemplateController {
 
     public record CreateTemplateRequest(
             @NotBlank String name,
-            String purpose,
             String category,
             @NotNull TemplateFormat format,
-            UUID importJobId,
-            TemplateScope scope,
-            TargetDataType targetDataType
+            UUID importJobId
     ) {
     }
+
+    public record RenameTemplateRequest(@NotBlank @Size(max = 160) String name) {}
+
+    public record CopyTemplateRequest(String name, UUID categoryId) {}
+
+    public record BatchActionItemRequest(@NotNull UUID templateId, UUID versionId, String name) {}
+
+    public record BatchActionRequest(
+            @NotBlank String action, UUID categoryId,
+            @NotNull List<@Valid BatchActionItemRequest> items
+    ) {}
 
     public record BindingValueRequest(
             @NotBlank String dataPath,
@@ -264,7 +350,7 @@ public class TemplateController {
     ) {
     }
 
-    public record CategoryRequest(@NotBlank String name) {
+    public record CategoryRequest(@NotBlank String name, @Size(max = 240) String description) {
     }
 
     public record AssignCategoryRequest(UUID categoryId) {

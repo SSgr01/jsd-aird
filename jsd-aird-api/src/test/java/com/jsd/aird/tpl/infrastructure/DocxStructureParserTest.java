@@ -85,6 +85,33 @@ class DocxStructureParserTest {
                 && "Experimental design".equals(node.path("text").asText()));
     }
 
+    @Test
+    void exposesListPageBreakAndTableNodes() throws Exception {
+        var source = minimalDocx(
+                """
+                <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                  <w:body>
+                    <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>列表项</w:t></w:r></w:p>
+                    <w:p><w:r><w:br w:type="page"/></w:r></w:p>
+                    <w:tbl><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>单元格</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
+                    <w:sectPr/>
+                  </w:body>
+                </w:document>
+                """,
+                """
+                <w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>
+                """
+        );
+
+        var nodes = parser.parse(new ByteArrayInputStream(source))
+                .structureSummary().path("documentIR").path("nodes");
+
+        assertThat(nodes).anyMatch(node -> "LIST_ITEM".equals(node.path("type").asText()));
+        assertThat(nodes).anyMatch(node -> "PAGE_BREAK".equals(node.path("type").asText()));
+        assertThat(nodes).anyMatch(node -> "TABLE".equals(node.path("type").asText())
+                && node.path("sourceLocator").path("rowCount").asInt() == 1);
+    }
+
     private byte[] minimalDocx(String documentXml, String stylesXml) throws Exception {
         try (var output = new ByteArrayOutputStream(); var zip = new ZipOutputStream(output)) {
             for (var part : Map.of("word/document.xml", documentXml, "word/styles.xml", stylesXml).entrySet()) {

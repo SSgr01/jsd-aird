@@ -6,9 +6,6 @@ import type {
 export type DisplaySuggestion = {
   id: string;
   label: string;
-  type: string;
-  decision: string;
-  location: string;
   details: string;
 };
 
@@ -52,7 +49,7 @@ export function buildDisplaySuggestions(items: RecognitionSuggestion[]): Display
     }
     const alternatives = [...optionRegions.values()].map((regions) => {
       const source = regions[0]?.payload.alternativeRole ?? regions[0]?.source;
-      const sourceName = source === 'PHYSICAL' ? '物理判断' : source === 'MODEL' ? '模型分区' : '结构方案';
+      const sourceName = source === 'PHYSICAL' ? '物理判断' : source === 'MODEL' ? '模型候选' : '结构方案';
       const members = regions
         .map(
           (item) =>
@@ -69,15 +66,10 @@ export function buildDisplaySuggestions(items: RecognitionSuggestion[]): Display
         label: conflict
           ? `结构候选（${optionRegions.size} 个方案）`
           : safeText(primary.payload.fieldName, '待命名区域'),
-        type: conflict ? 'STRUCTURE_CONFLICT' : primary.suggestionType,
-        decision: conflict ? '待选择' : primary.decision,
-        location:
-          alternatives.join('；') ||
-          locatorDisplay(primary.payload.locator?.address, primary.payload.locator?.range),
         details: conflict
           ? `请在工作台按方案选择：${alternatives.join('；')}`
           : primary.payload.resolutionReason === 'MODEL_PARTITION_EXACT_COVER'
-            ? '模型区域严格覆盖了物理候选，已自动采用模型分区。'
+            ? '模型区域与物理候选存在分区差异，请确认结构方案。'
             : (primary.payload.reason ?? primary.filterDetail ?? '—'),
       },
     ];
@@ -107,11 +99,4 @@ function structureRange(item: RecognitionSuggestion) {
 
 function safeText(value: unknown, fallback = '') {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : fallback;
-}
-
-function locatorDisplay(...values: unknown[]) {
-  return (
-    values.find((value): value is string => typeof value === 'string' && value.trim().length > 0) ||
-    '—'
-  );
 }

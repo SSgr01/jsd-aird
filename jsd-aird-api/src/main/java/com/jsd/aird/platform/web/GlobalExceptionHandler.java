@@ -43,13 +43,12 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(ApiException.class)
-    ResponseEntity<ApiResponse<Void>> handleApiException(ApiException exception) {
+    ResponseEntity<ApiResponse<?>> handleApiException(ApiException exception) {
         return ResponseEntity.status(exception.errorCode().httpStatus())
-                .body(ResponseFactory.error(
-                        exception.errorCode(),
-                        exception.getMessage(),
-                        RequestIdHolder.currentOrUnknown()
-                ));
+                .body(exception.detail() == null
+                        ? ResponseFactory.error(exception.errorCode(), exception.getMessage(), RequestIdHolder.currentOrUnknown())
+                        : ResponseFactory.error(exception.errorCode(), exception.getMessage(), exception.detail(),
+                                RequestIdHolder.currentOrUnknown()));
     }
 
     @ExceptionHandler(Exception.class)

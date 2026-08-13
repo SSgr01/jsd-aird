@@ -16,7 +16,6 @@ import com.jsd.aird.shared.office.SnapshotWorkbookExporter;
 import com.jsd.aird.tpl.api.TemplateDataImportFacade;
 import com.jsd.aird.tpl.application.port.TabularStructureParser;
 import com.jsd.aird.tpl.application.port.TemplateRepository;
-import com.jsd.aird.tpl.domain.TargetDataType;
 import com.jsd.aird.tpl.domain.TemplateFormat;
 import org.springframework.stereotype.Service;
 
@@ -51,12 +50,10 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade {
 
     @Override
     public List<DataTemplateOption> listPublished(UUID organizationId, String targetDataType) {
-        TargetDataType target = targetDataType == null || targetDataType.isBlank()
-                ? null : parseTarget(targetDataType);
-        return repository.findPublishedDataTemplates(organizationId, target).stream()
+        return repository.findPublishedDataTemplates(organizationId).stream()
                 .map(item -> new DataTemplateOption(
                         item.templateId(), item.versionId(), item.templateCode(), item.name(),
-                        item.category(), item.targetDataType().name(), item.versionNo(), item.format().name()))
+                        item.category(), item.versionNo(), item.format().name()))
                 .toList();
     }
 
@@ -64,21 +61,49 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade {
     public DataTemplateDefinition getPublished(UUID organizationId, UUID templateVersionId) {
         var workspace = repository.findPublishedDataTemplate(organizationId, templateVersionId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "数据中心模板不存在或未发布"));
-        return definition(workspace);
+        return definition(organizationId, workspace);
+    }
+
+    @Override
+    public DataTemplateDefinition getVersion(UUID organizationId, UUID templateVersionId) {
+        var workspace = repository.findWorkspace(organizationId, templateVersionId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "导入任务引用的模板版本不存在"));
+        return definition(organizationId, workspace);
     }
 
     @Override
     public List<ImportBinding> getPublishedBindings(UUID organizationId, UUID templateVersionId) {
         var workspace = repository.findPublishedDataTemplate(organizationId, templateVersionId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "数据中心模板不存在或未发布"));
+        return bindings(organizationId, workspace);
+    }
+
+    @Override
+    public List<ImportBinding> getBindings(UUID organizationId, UUID templateVersionId) {
+        var workspace = repository.findWorkspace(organizationId, templateVersionId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "导入任务引用的模板版本不存在"));
+        return bindings(organizationId, workspace);
+    }
+
+    private List<ImportBinding> bindings(UUID organizationId, TemplateRepository.TemplateWorkspace workspace) {
         var result = new ArrayList<ImportBinding>();
         if (workspace.mapping() == null || !workspace.mapping().isArray()) return result;
+        var componentByBinding = componentByBinding(
+                repository.findImportContract(organizationId, workspace.versionId())
+                        .map(TemplateRepository.ImportContract::contract).orElse(null));
         for (JsonNode item : workspace.mapping()) {
             var fieldCode = firstText(item, "fieldCode", "field_code");
             if (fieldCode.isBlank() && !item.path("mappingKind").asText("").contains("REGION")) continue;
             var valueSource = firstText(item, "valueSource", "value_source", "INPUT");
+            var bindingId = firstText(item, "bindingId", "binding_id");
+            var locator = importLocator(item);
+            if (locator instanceof ObjectNode target && target.path("componentId").asText("").isBlank()) {
+                var componentId = componentByBinding.getOrDefault(bindingId,
+                        componentByBinding.getOrDefault(firstText(item, "parentBindingId", "parent_binding_id"), ""));
+                if (!componentId.isBlank()) target.put("componentId", componentId);
+            }
             result.add(new ImportBinding(
-                    firstText(item, "bindingId", "binding_id"), fieldCode,
+                    bindingId, fieldCode,
                     firstText(item, "dataPath", "data_path", fieldCode),
                     firstText(item, "mappingKind", "mapping_kind", "SCALAR"),
                     firstText(item, "parentBindingId", "parent_binding_id"),
@@ -90,13 +115,44 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade {
                             ? item.path("termination_jsonb").isMissingNode()
                             ? item.path("termination") : item.path("termination_jsonb")
                             : item.path("terminationRule"),
-                    importLocator(item),
+                    locator,
                     item.path("required").asBoolean(false), item.path("identity").asBoolean(false),
                     item.path("trainingEligible").asBoolean(!"FORMULA".equalsIgnoreCase(valueSource)),
                     valueSource, firstText(item, "valueType", "dataType", "TEXT"),
-                    firstText(item, "unit", "defaultUnit", "")));
+                    firstText(item, "unit", "defaultUnit", ""),
+                    labelPath(item), firstText(item, "trainingRole", "training_role",
+                            item.path("trainingEligible").asBoolean(true) ? "FEATURE" : "EXCLUDE"),
+                    item.path("ragEligible").asBoolean(true)));
         }
         return List.copyOf(result);
+    }
+
+    private LinkedHashMap<String, String> componentByBinding(JsonNode contract) {
+        var result = new LinkedHashMap<String, String>();
+        if (contract == null || !contract.path("components").isArray()) return result;
+        for (var component : contract.path("components")) {
+            var componentId = component.path("componentId").asText("");
+            if (componentId.isBlank()) continue;
+            for (var binding : component.path("bindings")) {
+                var bindingId = binding.path("bindingId").asText("");
+                if (!bindingId.isBlank()) result.put(bindingId, componentId);
+            }
+        }
+        return result;
+    }
+
+    private String labelPath(JsonNode item) {
+        var direct = firstText(item, "labelPath", "label_path");
+        if (!direct.isBlank()) return direct;
+        var diagnostic = item.path("diagnostic");
+        if (diagnostic.path("labelPath").isArray()) {
+            var labels = new ArrayList<String>();
+            diagnostic.path("labelPath").forEach(value -> {
+                if (!value.asText("").isBlank()) labels.add(value.asText());
+            });
+            if (!labels.isEmpty()) return String.join(" > ", labels);
+        }
+        return firstText(item, "fieldName", "displayName", "fieldCode");
     }
 
     /**
@@ -111,12 +167,13 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade {
                 : objectMapper.createObjectNode();
         JsonNode diagnostic = item.path("diagnostic");
         for (var key : List.of("matrixModel", "tableModel", "longTableModel", "recordProjection",
-                "columnSlots", "rowSlots", "columns", "kind", "blockType", "valueType", "role")) {
+                "columnSlots", "rowSlots", "columns", "kind", "blockType", "valueType", "role",
+                "groupName", "displayName", "title")) {
             if (!locator.has(key) && diagnostic.isObject() && diagnostic.has(key)) {
                 locator.set(key, diagnostic.path(key).deepCopy());
             }
         }
-        for (var key : List.of("sheetId", "sheet", "rowHeaderRange", "columnHeaderRange", "crossDataRange",
+        for (var key : List.of("componentId", "sheetId", "sheet", "rowHeaderRange", "columnHeaderRange", "crossDataRange",
                 "cornerRange", "totalRange", "recordAxis", "semanticMode", "repeatAxis", "valueMode")) {
             if (!locator.has(key) && item.has(key)) locator.set(key, item.path(key).deepCopy());
         }
@@ -125,7 +182,7 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade {
 
     @Override
     public ParsedTabularFile parse(UUID organizationId, UUID templateVersionId, UUID fileId) {
-        getPublished(organizationId, templateVersionId);
+        getVersion(organizationId, templateVersionId);
         var file = files.find(organizationId, fileId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.FILE_NOT_READY, "数据源文件不存在"));
         try (var stored = storage.get(file.objectKey())) {
@@ -164,7 +221,7 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade {
                 .toList());
     }
 
-    private DataTemplateDefinition definition(TemplateRepository.TemplateWorkspace workspace) {
+    private DataTemplateDefinition definition(UUID organizationId, TemplateRepository.TemplateWorkspace workspace) {
         var fields = new LinkedHashMap<String, FieldDefinition>();
         collectSchemaFields(workspace.schema(), fields);
         if (workspace.mapping().isArray()) {
@@ -182,11 +239,17 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade {
                         firstText(mapping, "dataPath", "fieldCode")));
             }
         }
+        var contract = repository.findImportContract(organizationId, workspace.versionId()).orElse(null);
         return new DataTemplateDefinition(
                 workspace.templateId(), workspace.versionId(), workspace.templateCode(), workspace.name(),
-                null, workspace.targetDataType().name(), workspace.versionNo(), workspace.format().name(), workspace.schema(),
-                workspace.mapping(), List.copyOf(fields.values()));
+                null, workspace.versionNo(), workspace.format().name(), workspace.schema(),
+                workspace.mapping(), List.copyOf(fields.values()),
+                contract == null ? 0 : contract.importContractVersion(),
+                contract == null ? 0 : contract.layoutStructureVersion(),
+                contract == null ? null : contract.contractHash(),
+                contract == null ? null : contract.contract());
     }
+
 
     private JsonNode readSnapshot(UUID organizationId, TemplateRepository.TemplateWorkspace workspace) {
         var inline = workspace.inlineSnapshot();
@@ -247,11 +310,4 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade {
         return null;
     }
 
-    private TargetDataType parseTarget(String value) {
-        try {
-            return TargetDataType.valueOf(value.trim().toUpperCase());
-        } catch (IllegalArgumentException exception) {
-            throw new ApiException(ApiErrorCode.BAD_REQUEST, "不支持的数据类型：" + value);
-        }
-    }
 }

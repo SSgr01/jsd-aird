@@ -86,7 +86,7 @@ class DataAssetExportServiceTest {
 
     private TemplateDataImportFacade.DataTemplateDefinition template() {
         return new TemplateDataImportFacade.DataTemplateDefinition(
-                UUID.randomUUID(), UUID.randomUUID(), "material-template", "物料模板", "原料", "MATERIAL", 1,
+                UUID.randomUUID(), UUID.randomUUID(), "material-template", "物料模板", "原料", 1,
                 "XLSX", objectMapper.createObjectNode(), objectMapper.createArrayNode(), List.of());
     }
 

@@ -2,8 +2,6 @@ import type { ApiResponse, PageResponse } from '@/types/api';
 import type {
   BusinessBlock,
   TemplateFormat,
-  TemplateScope,
-  TargetDataType,
   Editability,
   TemplateListItem,
   TemplateStatus,
@@ -25,19 +23,23 @@ import { httpClient } from '@/services/http/client';
 
 export interface CreateTemplateInput {
   name: string;
-  purpose?: string;
   category?: string;
   format: TemplateFormat;
   importJobId?: string;
-  scope?: TemplateScope;
-  targetDataType?: TargetDataType;
 }
 
 export interface TemplateCategory {
   id: string;
   name: string;
+  description?: string;
   sortOrder: number;
   templateCount: number;
+}
+
+export interface TemplateFacetSummary {
+  totalCount: number;
+  uncategorizedCount: number;
+  categoryCounts: Array<{ categoryId: string; count: number }>;
 }
 
 export interface SaveTemplateDraftInput {
@@ -149,6 +151,11 @@ export interface TemplateImportJob {
   generatedTemplateVersionId?: string;
   workspaceHash?: string;
   issues: TemplateImportIssue[];
+  categoryId?: string;
+  categoryName?: string;
+  sourceSha256?: string;
+  duplicateOverride: boolean;
+  duplicateSourceJobId?: string;
 }
 
 export type RecognitionDecision = 'PENDING' | 'ACCEPTED' | 'REJECTED';
@@ -178,7 +185,7 @@ export interface RecognitionSuggestionPayload {
     | 'array';
   required: boolean;
   role: 'FIELD' | 'REPEAT_REGION' | 'CONDITIONAL';
-  locatorType:
+  locatorType?:
     | 'CELL_RANGE'
     | 'TABLE_REGION'
     | 'MATRIX_REGION'
@@ -216,6 +223,11 @@ export interface RecognitionSuggestionPayload {
   templateStatus?: 'RUNTIME_INPUT' | 'CONFIRMED';
   publishable?: boolean;
   pendingReason?: string;
+  reasonCode?: string;
+  recognitionOrigin?: string;
+  activeGenerationId?: string;
+  labelPath?: string;
+  autoAccept?: boolean;
   nameSource?: 'MODEL' | 'ROW_ATTRIBUTE_FALLBACK' | 'PHYSICAL_HEADER_FALLBACK'
     | 'GENERATED_PLACEHOLDER' | 'RUNTIME_SLOT';
   semanticFallback?: boolean;
@@ -329,34 +341,6 @@ export interface RecognitionSuggestion {
   filterReasonCode?: string;
   filterDetail?: string;
   createdAt: string;
-}
-
-export interface RecognitionCall {
-  id: string;
-  recognitionRunId?: string;
-  regionId: string;
-  attempt: number;
-  provider: string;
-  model: string;
-  promptVersion: string;
-  status: string;
-  httpStatus?: number;
-  startedAt: string;
-  finishedAt: string;
-  durationMs: number;
-  promptTokens: number;
-  completionTokens: number;
-  totalTokens: number;
-  requestPayload: Record<string, unknown>;
-  responsePayload: Record<string, unknown>;
-  errorType?: string;
-  errorMessage?: string;
-  finishReason?: string;
-  outcomeCode?: string;
-  responseTruncated?: boolean;
-  phase: string;
-  parentCallId?: string;
-  payloadAvailable: boolean;
 }
 
 export type RecognitionReviewStatus = 'PENDING' | 'CONFIRMED' | 'CONFLICT' | 'IGNORED';
@@ -573,12 +557,73 @@ export interface StandardFieldRequest {
 }
 
 export const templateApi = {
-  async list(params?: { keyword?: string; format?: TemplateFormat; status?: TemplateStatus }) {
+  async list(params?: {
+    keyword?: string; categoryId?: string; uncategorized?: boolean; format?: TemplateFormat; status?: TemplateStatus;
+    createdBy?: string; updatedFrom?: string; updatedTo?: string;
+    sortBy?: 'UPDATED_AT' | 'CREATED_AT' | 'NAME'; sortDirection?: 'ASC' | 'DESC';
+    page?: number; size?: number;
+  }) {
     const response = await httpClient.get<ApiResponse<PageResponse<TemplateListItem>>>(
       '/api/v2/templates',
       { params },
     );
     return response.data.data;
+  },
+
+  async filterOptions() {
+    const response = await httpClient.get<ApiResponse<Array<{ id: string; displayName: string }>>>(
+      '/api/v2/templates/filter-options',
+    );
+    return response.data.data;
+  },
+
+  async listFacets(params?: {
+    keyword?: string; format?: TemplateFormat; status?: TemplateStatus; createdBy?: string;
+    updatedFrom?: string; updatedTo?: string;
+  }) {
+    const response = await httpClient.get<ApiResponse<TemplateFacetSummary>>(
+      '/api/v2/templates/facets',
+      { params },
+    );
+    return response.data.data;
+  },
+
+  async renameTemplate(templateId: string, name: string) {
+    await httpClient.patch(`/api/v2/templates/${templateId}`, { name });
+  },
+
+  async copyTemplate(versionId: string, input: { name?: string; categoryId?: string }) {
+    const response = await httpClient.post<ApiResponse<TemplateWorkspace>>(
+      `/api/v2/template-versions/${versionId}/copies`, input,
+    );
+    return response.data.data;
+  },
+
+  async rollback(versionId: string) {
+    const response = await httpClient.post<ApiResponse<TemplateWorkspace>>(
+      `/api/v2/template-versions/${versionId}/rollback`,
+    );
+    return response.data.data;
+  },
+
+  async batchActions(input: {
+    action: 'COPY' | 'MOVE' | 'DELETE_DRAFT' | 'RETIRE'; categoryId?: string;
+    items: Array<{ templateId: string; versionId?: string; name?: string }>;
+  }) {
+    const response = await httpClient.post<ApiResponse<Array<{
+      templateId: string; versionId?: string; success: boolean; reason?: string;
+    }>>>('/api/v2/templates/batch-actions', input);
+    return response.data.data;
+  },
+
+  async exportCsv(params: Record<string, string | number | boolean | string[] | undefined>) {
+    const response = await httpClient.get<Blob>('/api/v2/templates/export.csv', {
+      params, responseType: 'blob',
+    });
+    const url = URL.createObjectURL(response.data);
+    const anchor = document.createElement('a');
+    anchor.href = url; anchor.download = 'templates.csv'; anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
   },
 
   async create(input: CreateTemplateInput) {
@@ -720,6 +765,17 @@ export const templateApi = {
   },
 
   async stageSnapshot(snapshot: Record<string, unknown>, format: TemplateFormat) {
+    const validObject = Boolean(snapshot) && typeof snapshot === 'object' && !Array.isArray(snapshot);
+    const validWorkbook = format !== 'XLSX'
+      || (validObject && snapshot.sheets && typeof snapshot.sheets === 'object'
+        && !Array.isArray(snapshot.sheets) && Object.keys(snapshot.sheets).length > 0);
+    const validDocument = format !== 'DOCX'
+      || (validObject && snapshot.body && typeof snapshot.body === 'object'
+        && !Array.isArray(snapshot.body)
+        && typeof (snapshot.body as Record<string, unknown>).dataStream === 'string');
+    if (!validObject || !validWorkbook || !validDocument) {
+      throw new Error('编辑器快照无效，已取消保存，请刷新页面后重试');
+    }
     const body = new FormData();
     body.append(
       'file',
@@ -741,18 +797,27 @@ export const templateApi = {
     return response.data.data;
   },
 
-  async createImport(fileId: string, format: TemplateFormat) {
+  async createImport(fileId: string, format: TemplateFormat, options?: {
+    categoryId?: string; duplicateOverride?: boolean; operationSource?: string;
+  }) {
     const response = await httpClient.post<ApiResponse<TemplateImportJob>>(
       '/api/v2/template-imports',
-      { fileId, format },
+      { fileId, format, ...options },
     );
     return response.data.data;
   },
 
-  async retryImport(importJobId: string, baseWorkspaceHash: string) {
+  async retryImport(
+    importJobId: string,
+    source: 'ORIGINAL_FILE' | 'CURRENT_DRAFT_SNAPSHOT',
+    baseWorkspaceHash?: string,
+  ) {
     const response = await httpClient.post<ApiResponse<TemplateImportJob>>(
       `/api/v2/template-imports/${importJobId}/retry`,
-      { source: 'CURRENT_DRAFT_SNAPSHOT', baseWorkspaceHash },
+      {
+        source,
+        ...(baseWorkspaceHash ? { baseWorkspaceHash } : {}),
+      },
     );
     return response.data.data;
   },
@@ -807,12 +872,6 @@ export const templateApi = {
     return response.data.data;
   },
 
-  async listRecognitionCalls(importJobId: string) {
-    const response = await httpClient.get<ApiResponse<RecognitionCall[]>>(
-      `/api/v2/template-imports/${importJobId}/recognition-calls`,
-    );
-    return response.data.data;
-  },
 
   async deleteImport(importJobId: string) {
     await httpClient.delete(`/api/v2/template-imports/${importJobId}`);
@@ -823,13 +882,13 @@ export const templateApi = {
     return response.data.data;
   },
 
-  async createCategory(name: string) {
-    const response = await httpClient.post<ApiResponse<TemplateCategory>>('/api/v2/template-categories', { name });
+  async createCategory(input: { name: string; description?: string | null }) {
+    const response = await httpClient.post<ApiResponse<TemplateCategory>>('/api/v2/template-categories', input);
     return response.data.data;
   },
 
-  async renameCategory(categoryId: string, name: string) {
-    const response = await httpClient.put<ApiResponse<TemplateCategory>>(`/api/v2/template-categories/${categoryId}`, { name });
+  async renameCategory(categoryId: string, input: { name: string; description?: string | null }) {
+    const response = await httpClient.put<ApiResponse<TemplateCategory>>(`/api/v2/template-categories/${categoryId}`, input);
     return response.data.data;
   },
 

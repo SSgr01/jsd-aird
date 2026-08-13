@@ -7,6 +7,8 @@ import {
   InboxOutlined,
   OrderedListOutlined,
   RobotOutlined,
+  AuditOutlined,
+  BookOutlined,
   UploadOutlined,
 } from '@ant-design/icons';
 import { ProLayout } from '@ant-design/pro-components';
@@ -34,6 +36,8 @@ const route = {
       routes: [
         { path: '/knowledge/library', name: '资料上传', icon: <FolderOpenOutlined /> },
         { path: '/knowledge/view', name: '知识库查看', icon: <EyeOutlined /> },
+        { path: '/knowledge/review', name: '审核工作台', icon: <AuditOutlined /> },
+        { path: '/knowledge/pages', name: '知识页', icon: <BookOutlined /> },
       ],
     },
     {
@@ -69,6 +73,8 @@ const route = {
 export function BasicLayout() {
   const location = useLocation();
   const isTemplateWorkspace = /^\/templates\/[^/]+\/workspace$/.test(location.pathname);
+  const isDataWorkspace = /^\/data\/(?:import-jobs|assets)\/[^/]+$/.test(location.pathname);
+  const isWorkspace = isTemplateWorkspace || isDataWorkspace;
   const collapsed = useAppStore((state) => state.sidebarCollapsed);
   const setCollapsed = useAppStore((state) => state.setSidebarCollapsed);
 
@@ -87,7 +93,7 @@ export function BasicLayout() {
       menuItemRender={(item, dom) => (item.path ? <Link to={item.path}>{dom}</Link> : dom)}
     >
       <main
-        className={`app-content${isTemplateWorkspace ? ' app-content-workspace' : ''}`}
+        className={`app-content${isWorkspace ? ' app-content-workspace' : ''}`}
         id="main-content"
       >
         <Outlet />

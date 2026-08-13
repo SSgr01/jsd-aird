@@ -200,6 +200,66 @@ describe('field model', () => {
     });
   });
 
+  it('adds the hidden repeat-region mapping when a child is confirmed first', () => {
+    const schema = { type: 'object', properties: {} };
+    const model = readFieldModel(schema, []);
+    const child: RecognitionSuggestion = {
+      id: 'child-only-suggestion',
+      importJobId: 'job-light-initiator',
+      source: 'PHYSICAL',
+      suggestionType: 'TABLE_CHILD_FIELD',
+      confidence: 0.92,
+      evidence: [],
+      decision: 'ACCEPTED',
+      createdAt: '',
+      payload: {
+        fieldId: 'child-field',
+        bindingId: 'child-binding',
+        relationId: 'child-relation',
+        parentRelationId: 'parent-relation',
+        parentFieldId: 'parent-field',
+        parentBindingId: 'parent-binding',
+        suggestionLevel: 'CHILD',
+        fieldCode: 'TABLE.COLUMN.MUSTARD_DELTA_E',
+        fieldName: '耐芥末酱△E',
+        dataPath: '/records/*/mustardDeltaE',
+        valueType: 'string',
+        required: false,
+        role: 'FIELD',
+        kind: 'SCALAR',
+        locatorType: 'CELL_RANGE',
+        locator: {
+          sheetId: 'sheet-1',
+          parentRange: 'A5:H19',
+          address: 'C6:H6',
+          valueRange: 'C6:H6',
+          valueMode: 'ARRAY_ROW',
+        },
+        mappingKind: 'REPEAT_FIELD',
+        repeatAxis: 'COLUMN',
+        recordHeight: 1,
+        recordWidth: 1,
+        recordStride: 1,
+      },
+    };
+
+    const result = applySuggestion(schema, [], model, child);
+
+    expect(result.mapping).toHaveLength(2);
+    expect(result.mapping[0]).toMatchObject({
+      bindingId: 'parent-binding',
+      mappingKind: 'REPEAT_REGION',
+      repeatAxis: 'COLUMN',
+      locator: { dataRange: 'A5:H19' },
+    });
+    expect(result.mapping[0]?.dataPath).toMatch(/^\/records\/component_[a-f0-9]{8,12}$/);
+    expect(result.mapping[1]).toMatchObject({
+      bindingId: 'child-binding',
+      parentBindingId: 'parent-binding',
+    });
+    expect(result.mapping[1]?.dataPath).toBe(`${result.mapping[0]?.dataPath}/*/mustardDeltaE`);
+  });
+
   it('does not collapse fields that arrive with the same dataPath', () => {
     const schema = { type: 'object', properties: {} };
     const model = readFieldModel(schema, []);

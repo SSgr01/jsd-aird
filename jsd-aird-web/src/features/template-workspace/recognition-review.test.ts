@@ -87,6 +87,67 @@ describe('recognition review draft merge', () => {
       name: '生产日期',
     });
   });
+
+  it('uses the locator nested type when a physical field omits the duplicated root type', () => {
+    const schema = { type: 'object', properties: {} };
+    const item = createItem({
+      status: 'CONFIRMED',
+      payload: {
+        ...createItem().payload,
+        locatorType: undefined,
+        bindingId: 'binding-product-name',
+        mappingKind: 'SCALAR',
+        suggestionLevel: 'ROOT',
+        locator: {
+          sheetId: 'sheet-1', sheetName: '生产单', labelAddress: 'A2',
+          address: 'B2', locatorType: 'CELL_RANGE',
+        },
+      },
+    });
+
+    const merged = mergeRecognitionReview(schema, [], readFieldModel(schema, []), createReview(item));
+
+    expect(merged.mapping[0]).toMatchObject({
+      bindingId: 'binding-product-name',
+      locatorType: 'CELL_RANGE',
+    });
+  });
+
+  it('scopes legacy generic record paths to each physical component', () => {
+    const schema = { type: 'object', properties: {} };
+    const first = createItem({
+      id: '44444444-4444-4444-4444-444444444444',
+      status: 'CONFIRMED',
+      payload: {
+        ...createItem().payload,
+        bindingId: 'first-child', parentBindingId: 'first-parent',
+        mappingKind: 'REPEAT_FIELD', suggestionLevel: 'CHILD',
+        dataPath: '/records/*/viscosity',
+        locator: { sheetId: 'sheet-1', address: 'D8:I8', parentRange: 'A8:I37', locatorType: 'CELL_RANGE' },
+      },
+    });
+    const second = createItem({
+      id: '55555555-5555-5555-5555-555555555555',
+      status: 'CONFIRMED',
+      payload: {
+        ...createItem().payload,
+        bindingId: 'second-child', parentBindingId: 'second-parent',
+        mappingKind: 'REPEAT_FIELD', suggestionLevel: 'CHILD',
+        dataPath: '/records/*/viscosity',
+        locator: { sheetId: 'sheet-2', address: 'D8:I8', parentRange: 'A8:I37', locatorType: 'CELL_RANGE' },
+      },
+    });
+    const review = createReview(first);
+    review.items = [first, second];
+
+    const merged = mergeRecognitionReview(schema, [], readFieldModel(schema, []), review);
+    const parents = merged.mapping.filter((item) => item.mappingKind === 'REPEAT_REGION');
+
+    expect(parents).toHaveLength(2);
+    expect(parents[0]?.dataPath).not.toBe(parents[1]?.dataPath);
+    expect(merged.mapping.filter((item) => item.mappingKind === 'REPEAT_FIELD'))
+      .toHaveLength(2);
+  });
 });
 
 function createReview(item: RecognitionReviewItem): RecognitionReview {

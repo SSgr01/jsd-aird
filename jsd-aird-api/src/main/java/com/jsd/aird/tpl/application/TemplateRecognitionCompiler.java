@@ -207,7 +207,8 @@ public class TemplateRecognitionCompiler {
                         field.set("columnSlots", payload.path("columnSlots").deepCopy());
                     }
                     fields.add(field);
-                    if ("ROW_TABLE".equals(kind) && payload.path("columns").isArray()
+                    if (("ROW_TABLE".equals(kind) || "COLUMN_TABLE".equals(kind))
+                            && payload.path("columns").isArray()
                             && !independentChildParents.contains(relationId)) {
                         appendTableChildFields(fields, payload, fieldId.toString(), groupId,
                                 suggestion, validBinding, mapping);
@@ -256,9 +257,14 @@ public class TemplateRecognitionCompiler {
             binding.put("markerId", payload.path("locator").path("markerId").asText());
         }
         binding.put("fieldCode", payload.path("fieldCode").asText("AUTO.FIELD"));
+        binding.put("fieldName", payload.path("fieldName").asText("业务字段"));
         binding.put("dataPath", payload.path("dataPath").asText());
         binding.put("role", "SCALAR".equals(kind) ? "FIELD" : "REPEAT_REGION");
-         binding.put("mappingKind", effectiveMappingKind(payload, kind));
+        binding.put("mappingKind", effectiveMappingKind(payload, kind));
+        var componentId = firstText(payload, "componentId", "regionId", "blockId", "parentBlockId");
+        if (StringUtils.hasText(componentId)) binding.put("componentId", componentId);
+        copyIfPresent(payload, binding, "labelPath", "required", "identity", "trainingRole",
+                "trainingEligible", "ragEligible", "valueSource", "valueType", "unit");
         if (StringUtils.hasText(payload.path("parentBindingId").asText())) {
             binding.put("parentBindingId", payload.path("parentBindingId").asText());
         }
@@ -302,6 +308,20 @@ public class TemplateRecognitionCompiler {
         return binding;
     }
 
+    private void copyIfPresent(JsonNode source, ObjectNode target, String... keys) {
+        for (var key : keys) {
+            if (source.has(key) && !source.path(key).isNull()) target.set(key, source.path(key).deepCopy());
+        }
+    }
+
+    private String firstText(JsonNode source, String... keys) {
+        for (var key : keys) {
+            var value = source.path(key).asText("");
+            if (StringUtils.hasText(value)) return value;
+        }
+        return "";
+    }
+
     private boolean validBinding(JsonNode payload) {
         var editability = payload.path("editability").asText("UNKNOWN");
         var valueSource = payload.path("valueSource").asText("UNKNOWN");
@@ -319,7 +339,17 @@ public class TemplateRecognitionCompiler {
 
     private boolean isFormalSuggestion(TemplateImportRepository.RecognitionSuggestionView suggestion) {
         var payload = suggestion.payload();
-        return RecognitionCandidatePolicy.isFormalCandidate(payload)
+        // FORM_REGION is a review/containment node. Its accepted scalar
+        // children are the canonical fields; compiling the container itself
+        // used to expose a fake ROW_TABLE named "基本信息区域".
+        if ("FORM_REGION".equals(payload.path("kind").asText(""))) return false;
+        // An explicit user confirmation is the boundary that turns a
+        // reviewRequired physical field into a canonical field. Requiring the
+        // pre-click policy again here silently discarded every confirmed form
+        // and table child during template creation.
+        var explicitlyConfirmedField = "ACCEPTED".equals(suggestion.decision())
+                && RecognitionCandidatePolicy.isOneClickFieldConfirmable(payload);
+        return (RecognitionCandidatePolicy.isFormalCandidate(payload) || explicitlyConfirmedField)
                  && !STATIC_BLOCK_TYPES.contains(payload.path("blockType").asText());
     }
 
@@ -334,7 +364,13 @@ public class TemplateRecognitionCompiler {
         return allSuggestions.stream().anyMatch(parent ->
                 "ACCEPTED".equals(parent.decision())
                         && parentRelationId.equals(parent.payload().path("relationId").asText(""))
-                        && RecognitionCandidatePolicy.isFormallyConfirmable(parent.payload()));
+                        && (RecognitionCandidatePolicy.isFormallyConfirmable(parent.payload())
+                        || (RecognitionCandidatePolicy.isStructural(parent.payload())
+                        && !parent.payload().path("candidateOnly").asBoolean(false)
+                        && !parent.payload().path("physicalStructureOnly").asBoolean(false)
+                        && !parent.payload().path("structureConflict").asBoolean(false)
+                        && "CONFIRMED".equals(parent.payload().path("canonicalStatus").asText())
+                        && "CONFIRMED".equals(parent.payload().path("structureStatus").asText()))));
     }
 
     private boolean isProtocolRejected(JsonNode payload) {
@@ -464,7 +500,7 @@ public class TemplateRecognitionCompiler {
                 .put("title", payload.path("fieldName").asText("业务字段"))
                 .put("x-field-code", payload.path("fieldCode").asText("AUTO.FIELD"))
                 .put("x-region-kind", kind);
-        if ("ROW_TABLE".equals(kind)) {
+        if ("ROW_TABLE".equals(kind) || "COLUMN_TABLE".equals(kind)) {
             schema.put("type", "array");
             var item = objectMapper.createObjectNode().put("type", "object");
             var properties = objectMapper.createObjectNode();
@@ -734,6 +770,16 @@ public class TemplateRecognitionCompiler {
         if ("MATRIX".equals(declared) || type.contains("MATRIX")) {
             return "MATRIX";
         }
+        if ("COLUMN_TABLE".equals(declared)) {
+            return "COLUMN_TABLE";
+        }
+        // TABLE_CHILD_FIELD describes where the suggestion came from, not the
+        // business kind of the child. An explicit SCALAR child must stay a
+        // scalar; otherwise it is mistaken for a second table region and is
+        // removed by component de-duplication.
+        if ("SCALAR".equals(declared)) {
+            return "SCALAR";
+        }
         if ("ROW_TABLE".equals(declared) || type.contains("TABLE")
                 || "REPEAT_REGION".equals(payload.path("role").asText())) {
             return "ROW_TABLE";
@@ -747,6 +793,7 @@ public class TemplateRecognitionCompiler {
         }
         return switch (kind) {
             case "ROW_TABLE" -> "系统认为“" + name + "”中每一行代表一条业务记录。";
+            case "COLUMN_TABLE" -> "系统认为“" + name + "”中每一列代表一条业务记录。";
             case "MATRIX" -> "系统认为“" + name + "”的行和列分别表示两类条件，交叉位置填写结果。";
             default -> "系统认为这里用于填写“" + name + "”。";
         };

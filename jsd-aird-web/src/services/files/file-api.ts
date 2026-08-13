@@ -1,4 +1,14 @@
 import { httpClient } from '@/services/http/client';
+import type { ApiResponse } from '@/types/api';
+
+export interface StagedFile { fileId: string; originalName: string; contentType: string; size: number; sha256: string; status: string }
+
+export async function stageFile(file: File, kind: 'KNOWLEDGE' | 'SNAPSHOT' | 'IMPORT' = 'KNOWLEDGE') {
+  const body = new FormData();
+  body.append('file', file);
+  const response = await httpClient.post<ApiResponse<StagedFile>>('/api/v2/files/staged', body, { params: { kind } });
+  return response.data.data;
+}
 
 export async function fetchFileBlob(fileId: string) {
   const response = await httpClient.get<Blob>(`/api/v2/files/${fileId}/content`, {

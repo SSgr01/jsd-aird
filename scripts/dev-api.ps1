@@ -20,7 +20,28 @@ if ($env:JSD_AIRD_JAVA_HOME -and (Test-Path -LiteralPath (Join-Path $env:JSD_AIR
 
 Push-Location (Join-Path $Root "jsd-aird-api")
 try {
-    .\mvnw.cmd spring-boot:run "-Dspring-boot.run.profiles=local"
+    # API and worker share target/classes. Serialize the initial compilation so
+    # two concurrently started services cannot race javac on Windows.
+    $compileMutex = [System.Threading.Mutex]::new($false, "Local\JsdAirdDevCompile")
+    $compileLockHeld = $false
+    try {
+        try { $compileLockHeld = $compileMutex.WaitOne([TimeSpan]::FromMinutes(3)) }
+        catch [System.Threading.AbandonedMutexException] { $compileLockHeld = $true }
+        if (-not $compileLockHeld) { throw "等待后端编译锁超时" }
+        .\mvnw.cmd "-Dmaven.test.skip=true" compile
+        if ($LASTEXITCODE -ne 0) {
+            # Microsoft JDK 21 on Windows can report "cannot close compiler
+            # resources" after all class files were emitted. The second pass is
+            # then incremental and verifies the output without rebuilding it.
+            .\mvnw.cmd "-Dmaven.test.skip=true" compile
+        }
+        if ($LASTEXITCODE -ne 0) { throw "后端编译失败" }
+    }
+    finally {
+        if ($compileLockHeld) { $compileMutex.ReleaseMutex() }
+        $compileMutex.Dispose()
+    }
+    .\mvnw.cmd "-Dmaven.test.skip=true" spring-boot:run "-Dspring-boot.run.profiles=local"
 }
 finally {
     Pop-Location

@@ -36,6 +36,16 @@ public interface DataRepository {
 
     void updateJobStatus(UUID organizationId, UUID importJobId, String status, int progress, String stage, String error);
 
+    void updateCompatibility(UUID organizationId, UUID importJobId, String compatibilityStatus);
+
+    void saveCompatibilityReport(UUID organizationId, UUID importJobId, String compatibilityStatus, JsonNode report);
+
+    JsonNode findCompatibilityReport(UUID organizationId, UUID importJobId);
+
+    void saveComponentOverride(UUID organizationId, UUID importJobId, ComponentOverride override);
+
+    List<ComponentOverride> listComponentOverrides(UUID organizationId, UUID importJobId);
+
     void updateSheet(SheetUpdate update);
 
     void replaceMappings(UUID organizationId, UUID importJobId, List<Mapping> mappings);
@@ -50,7 +60,13 @@ public interface DataRepository {
 
     List<Issue> listIssues(UUID organizationId, UUID importJobId);
 
-    void resolveIssue(UUID organizationId, UUID issueId, UUID actorId, String status);
+    void resolveIssue(UUID organizationId, UUID issueId, UUID actorId, String status, String reason);
+
+    void correctValue(UUID organizationId, UUID importJobId, UUID recordId, String bindingId,
+                      String valuePath, JsonNode correctedValue, UUID actorId, String reason);
+
+    void excludeRow(UUID organizationId, UUID importJobId, UUID recordId, boolean excluded,
+                    UUID actorId, String reason);
 
     CommitResult commit(UUID organizationId, UUID importJobId, UUID actorId, List<CommittedRow> rows);
 
@@ -63,27 +79,44 @@ public interface DataRepository {
 
     List<Revision> listRevisions(UUID organizationId, UUID assetId);
 
+    Optional<RevisionDetail> findRevision(UUID organizationId, UUID assetId, UUID revisionId);
+
     List<SourceAnchor> listSourceAnchors(UUID organizationId, UUID assetId);
 
     record NewJob(UUID id, UUID organizationId, UUID sourceFileId, String sourceSha256, String sourceFileName,
                   String sourceFormat, UUID templateVersionId, String targetDataType, UUID categoryId,
-                  boolean duplicateOverride, UUID actorId) {
+                  boolean duplicateOverride, UUID actorId, Integer importContractVersion, String contractHash) {
+        public NewJob(UUID id, UUID organizationId, UUID sourceFileId, String sourceSha256, String sourceFileName,
+                      String sourceFormat, UUID templateVersionId, String targetDataType, UUID categoryId,
+                      boolean duplicateOverride, UUID actorId) {
+            this(id, organizationId, sourceFileId, sourceSha256, sourceFileName, sourceFormat, templateVersionId,
+                    targetDataType, categoryId, duplicateOverride, actorId, null, null);
+        }
         public NewJob(UUID id, UUID organizationId, UUID sourceFileId, String sourceSha256, String sourceFileName,
                       String sourceFormat, UUID templateVersionId, String targetDataType, boolean duplicateOverride,
                       UUID actorId) {
             this(id, organizationId, sourceFileId, sourceSha256, sourceFileName, sourceFormat, templateVersionId,
-                    targetDataType, null, duplicateOverride, actorId);
+                    targetDataType, null, duplicateOverride, actorId, null, null);
         }
     }
 
     record Job(UUID id, UUID sourceFileId, String sourceSha256, String sourceFileName, String sourceFormat,
                UUID templateVersionId, String targetDataType, UUID categoryId, String status, int progress,
-               String currentStage, String parserVersion, String errorMessage, Instant createdAt, Instant updatedAt) {
+               String currentStage, String parserVersion, String errorMessage, Instant createdAt, Instant updatedAt,
+               Integer importContractVersion, String contractHash, String compatibilityStatus) {
+        public Job(UUID id, UUID sourceFileId, String sourceSha256, String sourceFileName, String sourceFormat,
+                   UUID templateVersionId, String targetDataType, UUID categoryId, String status, int progress,
+                   String currentStage, String parserVersion, String errorMessage, Instant createdAt, Instant updatedAt) {
+            this(id, sourceFileId, sourceSha256, sourceFileName, sourceFormat, templateVersionId, targetDataType,
+                    categoryId, status, progress, currentStage, parserVersion, errorMessage, createdAt, updatedAt,
+                    null, null, "LEGACY");
+        }
         public Job(UUID id, UUID sourceFileId, String sourceSha256, String sourceFileName, String sourceFormat,
                    UUID templateVersionId, String targetDataType, String status, int progress, String currentStage,
                    String parserVersion, String errorMessage, Instant createdAt, Instant updatedAt) {
             this(id, sourceFileId, sourceSha256, sourceFileName, sourceFormat, templateVersionId, targetDataType,
-                    null, status, progress, currentStage, parserVersion, errorMessage, createdAt, updatedAt);
+                    null, status, progress, currentStage, parserVersion, errorMessage, createdAt, updatedAt,
+                    null, null, "LEGACY");
         }
     }
 
@@ -99,16 +132,25 @@ public interface DataRepository {
                    JsonNode detail, String status) {}
 
     record Row(UUID id, String sheetId, int rowNumber, JsonNode rawValues, JsonNode normalizedValues,
-               JsonNode correctedValues, String status, JsonNode sourceMetadata) {
+               JsonNode correctedValues, String status, JsonNode sourceMetadata,
+               boolean excluded, String exclusionReason) {
         public Row(UUID id, String sheetId, int rowNumber, JsonNode rawValues, JsonNode normalizedValues,
                    JsonNode correctedValues, String status) {
             this(id, sheetId, rowNumber, rawValues, normalizedValues, correctedValues, status,
-                    JsonNodeFactory.instance.objectNode());
+                    JsonNodeFactory.instance.objectNode(), false, null);
+        }
+        public Row(UUID id, String sheetId, int rowNumber, JsonNode rawValues, JsonNode normalizedValues,
+                   JsonNode correctedValues, String status, JsonNode sourceMetadata) {
+            this(id, sheetId, rowNumber, rawValues, normalizedValues, correctedValues, status,
+                    sourceMetadata, false, null);
         }
     }
 
     record Issue(UUID id, String sheetId, String fieldCode, String severity, String issueType,
                  Integer rowNumber, String column, String address, String message, JsonNode detail, String status) {}
+
+    record ComponentOverride(String componentId, String sheetId, String sourceRange,
+                             String reason, UUID actorId, Instant updatedAt) {}
 
     record CommittedRow(String sheetId, int rowNumber, JsonNode raw, JsonNode normalized, JsonNode corrected,
                         String assetKey, String displayName, List<Anchor> anchors) {}
@@ -117,8 +159,9 @@ public interface DataRepository {
 
     record CommittedAsset(UUID assetId, UUID revisionId, int revisionNo, String dataHash) {}
 
-    record Anchor(String fieldCode, String sheetId, String sheetName, int rowNumber, int columnNumber,
-                  String columnName, String address, JsonNode rawValue) {}
+    record Anchor(String fieldCode, String bindingId, String valuePath, String labelPath,
+                  String valueSource, String valueStatus, String sheetId, String sheetName,
+                  int rowNumber, int columnNumber, String columnName, String address, JsonNode rawValue) {}
 
     record Asset(UUID id, String targetDataType, String assetKey, String displayName,
                  UUID currentRevisionId, String status, Instant updatedAt, UUID categoryId, String categoryName) {
@@ -143,9 +186,15 @@ public interface DataRepository {
     }
 
     record Revision(UUID id, int revisionNo, UUID importJobId, UUID templateVersionId,
-                    String dataHash, Instant createdAt) {}
+                    String dataHash, Instant createdAt, UUID sourceFileId, String sourceFileName,
+                    List<String> sheetNames, int recordCount) {}
 
-    record SourceAnchor(UUID id, UUID revisionId, String fieldCode, UUID fileId, String sheetId,
-                        String sheetName, Integer rowNumber, Integer columnNumber, String columnName,
-                        String address, JsonNode rawValue) {}
+    record RevisionDetail(UUID id, int revisionNo, UUID importJobId, UUID templateVersionId,
+                          JsonNode rawData, JsonNode normalizedData, JsonNode correctedData,
+                          String dataHash, Instant createdAt) {}
+
+    record SourceAnchor(UUID id, UUID revisionId, String fieldCode, String bindingId,
+                        String valuePath, String labelPath, String valueSource, String valueStatus,
+                        UUID fileId, String sheetId, String sheetName, Integer rowNumber,
+                        Integer columnNumber, String columnName, String address, JsonNode rawValue) {}
 }

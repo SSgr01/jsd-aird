@@ -138,6 +138,45 @@ export function applySuggestion(
     ? suggestion.payload.dataPath.split('/*/')[0]
     : undefined;
   if (parentPath && suggestion.payload.parentBindingId) {
+    const hasParentBinding = nextMapping.some(
+      (item) => item.bindingId === suggestion.payload.parentBindingId,
+    );
+    if (!hasParentBinding) {
+      const parentRange = stringValue(locator?.parentRange);
+      if (parentRange) {
+        const matrixChild = suggestion.payload.mappingKind === 'MATRIX_FIELD';
+        nextMapping.push({
+          bindingId: suggestion.payload.parentBindingId,
+          fieldId: suggestion.payload.parentFieldId,
+          relationId: suggestion.payload.parentRelationId,
+          fieldCode: matrixChild ? 'AUTO.MATRIX.REGION' : 'AUTO.REPEAT.REGION',
+          dataPath: parentPath,
+          role: 'REPEAT_REGION',
+          mappingKind: matrixChild ? 'MATRIX_REGION' : 'REPEAT_REGION',
+          repeatAxis: suggestion.payload.repeatAxis,
+          recordHeight: suggestion.payload.recordHeight ?? 1,
+          recordWidth: suggestion.payload.recordWidth ?? 1,
+          recordStride: suggestion.payload.recordStride ?? 1,
+          termination: suggestion.payload.terminationRule,
+          locatorType: matrixChild ? 'MATRIX_REGION' : 'TABLE_REGION',
+          locator: {
+            sheetId: locator?.sheetId,
+            sheetName: locator?.sheetName,
+            address: parentRange,
+            range: parentRange,
+            dataRange: parentRange,
+            locatorType: matrixChild ? 'MATRIX_REGION' : 'TABLE_REGION',
+          },
+          syncDirection: 'TWO_WAY',
+          primaryBinding: true,
+          bindingStatus: 'VALID',
+          diagnostic: {
+            source: 'INFERRED_PARENT_STRUCTURE',
+            description: '由已确认明细字段自动补齐的重复区域结构',
+          },
+        });
+      }
+    }
     nextMapping = nextMapping.map((item) =>
       item.bindingId === suggestion.payload.parentBindingId
         ? { ...item, dataPath: parentPath }
@@ -171,7 +210,11 @@ export function applySuggestion(
     recordWidth: suggestion.payload.recordWidth ?? 1,
     recordStride: suggestion.payload.recordStride ?? 1,
     termination: suggestion.payload.terminationRule,
-    locatorType: suggestion.payload.locatorType,
+    // Physical compilers keep the canonical locator type beside the concrete
+    // address. Older/model suggestions may also duplicate it at the payload
+    // root. Accept both shapes so a valid confirmed field is not turned into
+    // an incomplete mapping during draft persistence.
+    locatorType: suggestion.payload.locatorType || stringValue(locator?.locatorType),
     locator,
     syncDirection: syncDirection(editability, valueSource),
     primaryBinding: true,
@@ -506,7 +549,8 @@ function normalizeSuggestionDataPaths(
     recognitionItemId: suggestion.id,
   }));
   const identity = payload.bindingId || payload.relationId || payload.fieldId || suggestion.id;
-  const dataPath = existing?.dataPath || uniqueDataPath(payload.dataPath, identity, occupied);
+  const componentScopedPath = componentScopedDataPath(payload.dataPath, payload.parentBindingId);
+  const dataPath = existing?.dataPath || uniqueDataPath(componentScopedPath, identity, occupied);
   occupied.add(dataPath);
 
   const columns = payload.columns?.map((column) => {
@@ -538,6 +582,13 @@ function normalizeSuggestionDataPaths(
       ...(columns ? { columns } : {}),
     },
   };
+}
+
+function componentScopedDataPath(path: string | undefined, parentBindingId: string | undefined) {
+  const normalized = typeof path === 'string' ? path.trim() : '';
+  if (!parentBindingId || !normalized.startsWith('/records/*/')) return normalized;
+  const fieldSuffix = normalized.slice('/records/*/'.length);
+  return `/records/component_${stableTextId(parentBindingId).slice(0, 12)}/*/${fieldSuffix}`;
 }
 
 function uniqueDataPath(basePath: string, identity: string, occupied: Set<string>) {

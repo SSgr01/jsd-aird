@@ -54,9 +54,21 @@ export interface ConversationMeta {
 }
 
 export interface FileSearchResult {
-  knowledgeHits: Array<AssistantCitation & { content?: string; score?: number }>;
-  dataHits: Array<{ entryId: string; assetId: string; revisionId: string; rowNumber?: number; fieldCode?: string; assetName?: string; content: string; score: number; sourceLocator?: string }>;
-  trace?: Record<string, unknown>;
+  files: Array<{
+    fileObjectId: string;
+    logicalDocumentId?: string;
+    fileVersionId: string;
+    sourceModule: 'KNOWLEDGE' | 'DATA_CENTER';
+    title: string;
+    originalName: string;
+    contentType: string;
+    size: number;
+    version: number;
+    tags: string[];
+    relatedObjects: Array<{ id: string; objectType: string; externalId: string; name: string }>;
+    updatedAt: string;
+    hits: Array<{ id: string; snippet: string; score: number; anchor: { pageNo?: number; sheetName?: string; cellRange?: string; paragraphId?: string; bbox?: number[]; startTimeMs?: number; endTimeMs?: number; section?: string; rowNumber?: number; columnName?: string } }>;
+  }>;
 }
 
 export const assistantApi = {
@@ -83,7 +95,7 @@ export const assistantApi = {
     await httpClient.delete(`/api/v1/assistant/conversations/${id}`);
   },
   async fileSearch(input: { query: string; aiOnly?: boolean; limit?: number; scopeIds?: string[]; scopeTypes?: string[]; knowledgeCategoryIds?: string[]; dataCategoryIds?: string[] }) {
-    const response = await httpClient.post<ApiResponse<FileSearchResult>>('/api/v1/assistant/file-search', input);
+    const response = await httpClient.post<ApiResponse<FileSearchResult>>('/api/v1/search/files', input);
     return response.data.data;
   },
   async stream(

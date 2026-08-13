@@ -25,7 +25,10 @@ spring:
   ai:
     model:
       chat: ${JSD_AIRD_AI_CHAT_PROVIDER:openai}
-      embedding: ${JSD_AIRD_AI_EMBEDDING_PROVIDER:openai}
+      # Embeddings use the explicit compatible client below.  Disabling the
+      # Spring AI embedding bean avoids a duplicate request whose path handling
+      # differs across OpenAI-compatible providers.
+      embedding: ${JSD_AIRD_AI_EMBEDDING_PROVIDER:none}
     openai:
       base-url: ${app.model.base-url:}
       api-key: ${app.model.api-key:}
@@ -118,7 +121,7 @@ app:
       enabled: ${JSD_AIRD_ASR_ENABLED:false}
       base-url: ${JSD_AIRD_ASR_BASE_URL:https://dashscope.aliyuncs.com/api/v1}
       api-key: ${JSD_AIRD_ASR_API_KEY:${app.model.api-key:}}
-      model: ${JSD_AIRD_ASR_MODEL:qwen-audio-3.0-asr-flash-filetrans}
+      model: ${JSD_AIRD_ASR_MODEL:qwen3-asr-flash-filetrans}
       transcription-path: ${JSD_AIRD_ASR_TRANSCRIPTION_PATH:/services/audio/asr/transcription}
       task-path: ${JSD_AIRD_ASR_TASK_PATH:/tasks}
       language: ${JSD_AIRD_ASR_LANGUAGE:zh}
@@ -147,7 +150,7 @@ app:
   recognition:
     audit-cleanup-cron: ${JSD_AIRD_RECOGNITION_AUDIT_CLEANUP_CRON:0 30 2 * * *}
     console-log-summary: ${JSD_AIRD_RECOGNITION_CONSOLE_LOG_SUMMARY:true}
-    console-log-payload: ${JSD_AIRD_RECOGNITION_CONSOLE_LOG_PAYLOAD:true}
+    console-log-payload: ${JSD_AIRD_RECOGNITION_CONSOLE_LOG_PAYLOAD:false}
     allow-legacy-region-envelope: ${JSD_AIRD_RECOGNITION_ALLOW_LEGACY_REGION_ENVELOPE:false}
   template-recognition:
     topology-v2:

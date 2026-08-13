@@ -13,6 +13,11 @@ public interface DataAssetSearchFacade {
         return search(organizationId, query, scopeIds, limit);
     }
 
+    default List<DataHit> searchHybrid(UUID organizationId, String query, String queryVector, int vectorDimension,
+                                       List<UUID> scopeIds, List<UUID> categoryIds, int limit) {
+        return search(organizationId, query, scopeIds, categoryIds, limit);
+    }
+
     int indexPublished(UUID organizationId, List<UUID> assetIds);
 
     record DataHit(UUID entryId, UUID scopeId, UUID assetId, UUID revisionId, Integer rowNumber,

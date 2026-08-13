@@ -100,7 +100,14 @@ public class PostgresWorker {
             workRepository.completeJob(job.id(), result);
         } catch (Exception exception) {
             log.warn("Async job {} failed", job.id(), exception);
-            workRepository.failJob(job, exception);
+            var handler = jobHandlers.stream().filter(candidate -> candidate.supports(job.jobType()))
+                    .findFirst().orElse(null);
+            var terminal = (handler != null && !handler.isRetryable(exception))
+                    || job.attemptCount() >= job.maxAttempts();
+            if (terminal) {
+                workRepository.failJobTerminal(job, exception);
+                if (handler != null) handler.handleTerminalFailure(job.payload(), exception);
+            } else workRepository.failJob(job, exception);
         }
     }
 }

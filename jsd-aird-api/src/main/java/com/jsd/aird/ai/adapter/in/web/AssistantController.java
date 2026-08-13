@@ -5,7 +5,7 @@ import java.util.List;
 
 import com.jsd.aird.ai.application.AssistantService;
 import com.jsd.aird.ai.application.ConversationMemoryService;
-import com.jsd.aird.ai.application.RagRetrievalService;
+import com.jsd.aird.ai.application.FileSearchService;
 import com.jsd.aird.ai.application.port.AssistantRepository;
 import com.jsd.aird.kb.api.KnowledgeScopeFacade;
 import com.jsd.aird.platform.web.RequestIdHolder;
@@ -31,15 +31,15 @@ public class AssistantController {
 
     private final AssistantService assistant;
     private final ConversationMemoryService memory;
-    private final RagRetrievalService rag;
     private final KnowledgeScopeFacade scopes;
+    private final FileSearchService fileSearch;
 
     public AssistantController(AssistantService assistant, ConversationMemoryService memory,
-                               RagRetrievalService rag, KnowledgeScopeFacade scopes) {
+                               KnowledgeScopeFacade scopes, FileSearchService fileSearch) {
         this.assistant = assistant;
         this.memory = memory;
-        this.rag = rag;
         this.scopes = scopes;
+        this.fileSearch = fileSearch;
     }
 
     @PostMapping("/qa")
@@ -58,11 +58,12 @@ public class AssistantController {
     }
 
     @PostMapping("/file-search")
+    @Deprecated(forRemoval = true)
     public ApiResponse<?> fileSearch(@RequestBody FileSearchRequest request) {
         var actor = ActorContext.required();
-        return success(rag.retrieve(actor.organizationId(), request.query(), List.of(), request.scopeIds(),
-                request.scopeTypes(), request.knowledgeCategoryIds(), request.dataCategoryIds(),
-                !Boolean.FALSE.equals(request.aiOnly())));
+        return success(fileSearch.search(actor.organizationId(), new FileSearchService.SearchCommand(
+                request.query(), request.safeLimit(), request.scopeIds(), request.knowledgeCategoryIds(),
+                request.dataCategoryIds())));
     }
 
     @GetMapping("/scopes")

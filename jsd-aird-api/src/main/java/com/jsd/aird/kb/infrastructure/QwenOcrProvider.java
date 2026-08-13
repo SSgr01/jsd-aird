@@ -3,14 +3,18 @@ package com.jsd.aird.kb.infrastructure;
 import java.io.IOException;
 import java.io.InputStream;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import javax.imageio.ImageIO;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.jsd.aird.kb.domain.DocumentParser;
 import com.jsd.aird.kb.domain.MediaExtractionProvider;
+import com.jsd.aird.kb.domain.MediaExtractionException;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
@@ -20,12 +24,17 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.rendering.ImageType;
+import org.apache.pdfbox.rendering.PDFRenderer;
+import org.apache.pdfbox.text.PDFTextStripper;
 
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public class QwenOcrProvider implements MediaExtractionProvider {
 
-    private static final String DEFAULT_PROMPT = "Extract all visible text from this image. Return only the recognized text, preserving the original reading order. Do not add explanations.";
+    /** Official OpenAI-compatible prompt for the advanced_recognition built-in task. */
+    private static final String DEFAULT_PROMPT = "Locate all text lines and return the coordinates of the rotated rectangle ([cx, cy, width, height, angle]).";
 
     private final boolean enabled;
     private final String baseUrl;
@@ -34,6 +43,7 @@ public class QwenOcrProvider implements MediaExtractionProvider {
     private final String completionsPath;
     private final long maxBytes;
     private final RestClient client;
+    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
     public QwenOcrProvider(
             @Value("${app.ai.ocr.enabled:false}") boolean enabled,
@@ -60,9 +70,10 @@ public class QwenOcrProvider implements MediaExtractionProvider {
     public boolean supports(String fileName, String contentType) {
         var name = fileName == null ? "" : fileName.toLowerCase(Locale.ROOT);
         var type = contentType == null ? "" : contentType.toLowerCase(Locale.ROOT);
+        var pdf = "application/pdf".equals(type) || name.endsWith(".pdf");
         return type.startsWith("image/") || name.endsWith(".png") || name.endsWith(".jpg")
                 || name.endsWith(".jpeg") || name.endsWith(".gif") || name.endsWith(".webp")
-                || name.endsWith(".bmp") || name.endsWith(".tif") || name.endsWith(".tiff");
+                || name.endsWith(".bmp") || name.endsWith(".tif") || name.endsWith(".tiff") || pdf;
     }
 
     @Override
@@ -76,46 +87,174 @@ public class QwenOcrProvider implements MediaExtractionProvider {
     }
 
     @Override
+    public boolean requiresExternalExtraction(InputStream source, String fileName) {
+        if (fileName == null || !fileName.toLowerCase(Locale.ROOT).endsWith(".pdf")) return true;
+        try (var document = Loader.loadPDF(source.readAllBytes())) {
+            var stripper = new PDFTextStripper();
+            for (int page = 1; page <= document.getNumberOfPages(); page++) {
+                stripper.setStartPage(page);
+                stripper.setEndPage(page);
+                if (!hasSufficientNativeText(document, page, stripper.getText(document))) return true;
+            }
+            return false;
+        } catch (Exception exception) {
+            return true;
+        }
+    }
+
+    @Override
     public DocumentParser.ParsedDocument extract(InputStream source, String fileName, ExtractionContext context) {
         if (!isConfigured()) throw new IllegalStateException("OCR 服务尚未配置");
         try {
             var bytes = source.readAllBytes();
+            if (isPdf(fileName, context)) return extractPdf(bytes);
             if (bytes.length > maxBytes) {
                 throw new IllegalStateException("OCR 图片超过限制：" + maxBytes + " bytes");
             }
             var contentType = StringUtils.hasText(context == null ? null : context.contentType())
                     ? context.contentType() : mimeType(fileName);
-            var dataUrl = "data:" + contentType + ";base64," + Base64.getEncoder().encodeToString(bytes);
-            var request = Map.of(
-                    "model", model,
-                    "stream", false,
-                    "messages", List.of(Map.of(
-                            "role", "user",
-                            "content", List.of(
-                                    Map.of("type", "text", "text", DEFAULT_PROMPT),
-                                    Map.of("type", "image_url", "image_url", Map.of("url", dataUrl))
-                            )
-                    ))
-            );
-            var response = client.post().uri(baseUrl + completionsPath)
-                    .header(HttpHeaders.CONTENT_TYPE, "application/json")
-                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey)
-                    .body(request)
-                    .retrieve()
-                    .body(JsonNode.class);
-            var text = content(response == null ? null : response.at("/choices/0/message/content"));
-            if (!StringUtils.hasText(text)) {
-                text = content(response == null ? null : response.at("/output/choices/0/message/content"));
-            }
-            if (!StringUtils.hasText(text)) throw new IllegalStateException("OCR 返回内容为空");
-            return new DocumentParser.ParsedDocument(List.of(new DocumentParser.TextBlock(null, "OCR", text.strip())),
-                    model);
+            var blocks = recognize(bytes, contentType, null);
+            return new DocumentParser.ParsedDocument(blocks, model, null,
+                    Map.of("model", model, "task", "advanced_recognition"));
         } catch (IOException exception) {
             throw new IllegalStateException("OCR 文件读取失败", exception);
         } catch (RestClientResponseException exception) {
-            throw new IllegalStateException("OCR 服务调用失败：HTTP " + exception.getStatusCode().value()
-                    + " " + exception.getResponseBodyAsString(), exception);
+            throw new MediaExtractionException("OCR 服务调用失败：HTTP " + exception.getStatusCode().value()
+                    + " " + exception.getResponseBodyAsString(), null, model, exception);
+        } catch (RuntimeException exception) {
+            if (exception instanceof MediaExtractionException media) throw media;
+            throw new MediaExtractionException(exception.getMessage() == null ? "OCR 服务调用失败" : exception.getMessage(),
+                    null, model, exception);
         }
+    }
+
+    private DocumentParser.ParsedDocument extractPdf(byte[] bytes) {
+        var blocks = new ArrayList<DocumentParser.TextBlock>();
+        var ocrPages = new ArrayList<Integer>();
+        try (var document = Loader.loadPDF(bytes)) {
+            var stripper = new PDFTextStripper();
+            var renderer = new PDFRenderer(document);
+            for (int page = 1; page <= document.getNumberOfPages(); page++) {
+                stripper.setStartPage(page);
+                stripper.setEndPage(page);
+                var nativeText = stripper.getText(document).strip();
+                if (hasSufficientNativeText(document, page, nativeText)) {
+                    blocks.add(new DocumentParser.TextBlock(page, "PDF-NATIVE", nativeText));
+                    continue;
+                }
+                var image = renderer.renderImageWithDPI(page - 1, 200, ImageType.RGB);
+                var output = new java.io.ByteArrayOutputStream();
+                ImageIO.write(image, "png", output);
+                blocks.addAll(recognize(output.toByteArray(), "image/png", page));
+                ocrPages.add(page);
+            }
+            return new DocumentParser.ParsedDocument(blocks, model + "+pdfbox-3", null,
+                    Map.of("model", model, "task", "advanced_recognition", "pageCount", document.getNumberOfPages(),
+                            "ocrPages", ocrPages, "mode", ocrPages.size() == document.getNumberOfPages() ? "SCANNED" : "MIXED"));
+        } catch (IOException exception) {
+            throw new IllegalStateException("PDF OCR解析失败", exception);
+        }
+    }
+
+    private List<DocumentParser.TextBlock> recognize(byte[] bytes, String contentType, Integer pageNo) {
+        if (bytes.length > maxBytes) throw new IllegalStateException("OCR图片超过限制：" + maxBytes + " bytes");
+        var dataUrl = "data:" + contentType + ";base64," + Base64.getEncoder().encodeToString(bytes);
+        var request = new LinkedHashMap<String, Object>();
+        request.put("model", model);
+        request.put("stream", false);
+        // OpenAI-compatible Qwen OCR selects advanced_recognition through its official fixed prompt.
+        // The DashScope-only ocr_options field is intentionally not sent to this endpoint.
+        request.put("messages", List.of(Map.of("role", "user", "content", List.of(
+                Map.of("type", "text", "text", DEFAULT_PROMPT),
+                Map.of("type", "image_url", "image_url", Map.of("url", dataUrl))))));
+        var response = callWithRetry(request);
+        var blocks = new ArrayList<DocumentParser.TextBlock>();
+        collectStructured(response, pageNo, blocks);
+        if (!blocks.isEmpty()) return blocks;
+        var text = content(response == null ? null : response.at("/choices/0/message/content"));
+        if (!StringUtils.hasText(text)) text = content(response == null ? null : response.at("/output/choices/0/message/content"));
+        if (!StringUtils.hasText(text)) throw new IllegalStateException("OCR返回内容为空");
+        try {
+            var structuredText = text.strip().replaceFirst("^```(?:json)?\\s*", "").replaceFirst("\\s*```$", "");
+            collectStructured(objectMapper.readTree(structuredText), pageNo, blocks);
+            if (!blocks.isEmpty()) return blocks;
+        } catch (Exception ignored) { }
+        for (var line : text.split("\\R")) {
+            if (!line.isBlank()) blocks.add(new DocumentParser.TextBlock(pageNo, "OCR-LINE", line.strip(),
+                    null, null, null, List.of(), null, null, null));
+        }
+        return blocks;
+    }
+
+    private JsonNode callWithRetry(Object request) {
+        RuntimeException last = null;
+        for (int attempt = 0; attempt < 3; attempt++) {
+            try {
+                return client.post().uri(baseUrl + completionsPath)
+                        .header(HttpHeaders.CONTENT_TYPE, "application/json")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey)
+                        .body(request).retrieve().body(JsonNode.class);
+            } catch (RestClientResponseException exception) {
+                last = exception;
+                var status = exception.getStatusCode().value();
+                if (status != 429 && status < 500 || attempt == 2) throw exception;
+                backoff(attempt);
+            } catch (RuntimeException exception) {
+                last = exception;
+                if (attempt == 2) throw exception;
+                backoff(attempt);
+            }
+        }
+        throw last == null ? new IllegalStateException("OCR调用失败") : last;
+    }
+
+    private void collectStructured(JsonNode node, Integer pageNo, List<DocumentParser.TextBlock> blocks) {
+        if (node == null || node.isNull() || node.isMissingNode()) return;
+        if (node.isArray()) { node.forEach(item -> collectStructured(item, pageNo, blocks)); return; }
+        if (!node.isObject()) return;
+        var text = node.path("text").asText(node.path("recognized_text").asText(""));
+        var bbox = firstArray(node, "location", "bbox", "rotate_rect", "rotateRect");
+        if (StringUtils.hasText(text) && bbox != null && bbox.size() >= 4) {
+            var coordinates = new ArrayList<Double>();
+            bbox.forEach(value -> { if (value.isNumber()) coordinates.add(value.doubleValue()); });
+            if (coordinates.size() >= 4) blocks.add(new DocumentParser.TextBlock(pageNo, "OCR-LINE", text.strip(),
+                    null, null, null, coordinates, null, null, confidence(node)));
+        }
+        node.fields().forEachRemaining(entry -> {
+            if (!"image_url".equals(entry.getKey())) collectStructured(entry.getValue(), pageNo, blocks);
+        });
+    }
+
+    private JsonNode firstArray(JsonNode node, String... names) {
+        for (var name : names) {
+            var value = node.path(name);
+            if (value.isArray()) return value;
+        }
+        return null;
+    }
+
+    private Double confidence(JsonNode node) {
+        var value = node.path("confidence");
+        return value.isNumber() ? Math.max(0, Math.min(1, value.doubleValue())) : null;
+    }
+
+    private boolean hasSufficientNativeText(org.apache.pdfbox.pdmodel.PDDocument document,
+                                            int pageNo, String text) {
+        var characterCount = text == null ? 0 : text.replaceAll("\\s+", "").length();
+        if (characterCount < 24) return false;
+        var box = document.getPage(pageNo - 1).getMediaBox();
+        var squareInches = Math.max(1.0, (box.getWidth() / 72.0) * (box.getHeight() / 72.0));
+        return characterCount / squareInches >= 0.4;
+    }
+
+    private void backoff(int attempt) {
+        try { Thread.sleep(250L * (1L << attempt)); }
+        catch (InterruptedException exception) { Thread.currentThread().interrupt(); throw new IllegalStateException("OCR重试被中断", exception); }
+    }
+
+    private boolean isPdf(String fileName, ExtractionContext context) {
+        return fileName != null && fileName.toLowerCase(Locale.ROOT).endsWith(".pdf")
+                || context != null && "application/pdf".equalsIgnoreCase(context.contentType());
     }
 
     private String content(JsonNode node) {

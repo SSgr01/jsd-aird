@@ -1,91 +1,309 @@
-import { ArrowLeftOutlined, DownloadOutlined, EyeOutlined, ReloadOutlined } from '@ant-design/icons';
-import { App, Button, Card, Descriptions, Empty, Space, Spin, Table, Tag, Typography } from 'antd';
-import { useEffect, useState } from 'react';
+import {
+  ArrowLeftOutlined,
+  DownloadOutlined,
+  EyeOutlined,
+  HistoryOutlined,
+  ReloadOutlined,
+} from '@ant-design/icons';
+import { Alert, App, Button, Select, Space, Spin, Tabs, Tag, Typography } from 'antd';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 
-import { dataApi, dataTypeOptions, type DataAssetDetail, type DataRevision, type DataSourceAnchor, type TrainingDataset } from '@/services/data/data-api';
 import { FilePreviewModal, downloadPreviewFile, type FilePreviewDescriptor } from '@/components/file-preview';
+import {
+  DataFieldDataBrowser,
+  DataFieldStructureBrowser,
+  DataWorkbenchShell,
+  DataWorkbookCanvas,
+  WorkbenchPanelHeader,
+} from '@/features/data-workbench/DataWorkbench';
+import type { EditorHandle, EditorSelection } from '@/features/template-workspace/types';
+import {
+  dataApi,
+  dataTypeOptions,
+  type DataAssetDetail,
+  type DataFieldValueView,
+  type DataWorkbookFieldDefinition,
+  type DataRevision,
+  type DataSourceAnchor,
+  type DataWorkbookSnapshot,
+} from '@/services/data/data-api';
 
-const json = (value: unknown) => <Typography.Text code>{JSON.stringify(value ?? {}, null, 2)}</Typography.Text>;
+type PanelTab = 'data' | 'structure' | 'revisions';
+
+const assetStatusLabels: Record<string, string> = {
+  ACTIVE: '当前有效',
+  RETIRED: '已停用',
+  DRAFT: '草稿',
+};
 
 export function DataAssetPage() {
-  const { message } = App.useApp();
-  const navigate = useNavigate();
   const { id = '' } = useParams();
+  const navigate = useNavigate();
+  const { message } = App.useApp();
+  const editorRef = useRef<EditorHandle>(null);
   const [asset, setAsset] = useState<DataAssetDetail>();
   const [revisions, setRevisions] = useState<DataRevision[]>([]);
   const [sources, setSources] = useState<DataSourceAnchor[]>([]);
-  const [trainingDataset, setTrainingDataset] = useState<TrainingDataset>();
-  const [loading, setLoading] = useState(true);
+  const [selectedRevisionId, setSelectedRevisionId] = useState<string>();
+  const [workbook, setWorkbook] = useState<DataWorkbookSnapshot>();
+  const [selectedFieldKey, setSelectedFieldKey] = useState<string>();
+  const [selectedBindingId, setSelectedBindingId] = useState<string>();
+  const [selectedCell, setSelectedCell] = useState<EditorSelection>();
+  const [activeTab, setActiveTab] = useState<PanelTab>('data');
   const [previewFile, setPreviewFile] = useState<FilePreviewDescriptor>();
+  const [loading, setLoading] = useState(true);
+  const [workbookLoading, setWorkbookLoading] = useState(false);
 
-  const load = async () => {
+  const loadOverview = useCallback(async () => {
     setLoading(true);
     try {
-      const [detail, revisionList, sourceList] = await Promise.all([dataApi.getAsset(id), dataApi.listRevisions(id), dataApi.listSources(id)]);
+      const [detail, revisionList, sourceList] = await Promise.all([
+        dataApi.getAsset(id),
+        dataApi.listRevisions(id),
+        dataApi.listSources(id),
+      ]);
       setAsset(detail);
       setRevisions(revisionList);
       setSources(sourceList);
-      if (detail.importJobId) { try { setTrainingDataset(await dataApi.getTrainingDatasetForJob(detail.importJobId)); } catch { setTrainingDataset(undefined); } }
+      setSelectedRevisionId((current) => {
+        if (current && revisionList.some((item) => item.id === current)) return current;
+        return detail.currentRevisionId || revisionList[0]?.id;
+      });
+    } catch (error) {
+      void message.error(error instanceof Error ? error.message : '数据资产加载失败');
     } finally {
       setLoading(false);
     }
-  };
+  }, [id, message]);
+
+  useEffect(() => { void loadOverview(); }, [loadOverview]);
 
   useEffect(() => {
-    void load();
-  }, [id]);
+    if (!selectedRevisionId) return;
+    let cancelled = false;
+    setWorkbookLoading(true);
+    void dataApi.getAssetWorkbookSnapshot(id, selectedRevisionId).then((nextWorkbook) => {
+      if (cancelled) return;
+      setWorkbook(nextWorkbook);
+      setSelectedFieldKey(fieldKey(nextWorkbook.fields[0]));
+      const firstField = nextWorkbook.fields[0];
+      const firstDefinition = firstField ? definitionForValue(nextWorkbook, firstField)
+        : nextWorkbook.fieldDefinitions?.[0];
+      setSelectedBindingId(firstDefinition?.bindingId || firstField?.bindingId);
+      setSelectedCell(undefined);
+    }).catch((error) => {
+      if (!cancelled) void message.error(error instanceof Error ? error.message : '修订工作簿加载失败');
+    }).finally(() => {
+      if (!cancelled) setWorkbookLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [id, message, revisions, selectedRevisionId]);
 
-  if (loading || !asset) return <div className="business-page"><Spin /></div>;
+  const selectedRevision = revisions.find((item) => item.id === selectedRevisionId);
+  const selectedSources = useMemo(
+    () => sources.filter((item) => item.revisionId === selectedRevisionId),
+    [selectedRevisionId, sources],
+  );
+  const fields = workbook?.fields || [];
 
-  const resolveSourceFile = async (): Promise<FilePreviewDescriptor> => {
-    const source = sources.find((item) => item.revisionId === asset.currentRevisionId) || sources[0];
-    if (!source) throw new Error('该数据资产没有可用的原始文件');
-    const job = asset.importJobId ? await dataApi.getJob(asset.importJobId) : undefined;
-    return { fileName: job?.sourceFileName || `${asset.displayName || asset.assetKey || 'data-asset'}-原始文件`, load: () => dataApi.sourceBlob(source.fileId) };
+  if (loading || !asset) return <div className="data-workbench-loading"><Spin /></div>;
+
+  const sourceFile = (): FilePreviewDescriptor | undefined => {
+    const anchor = selectedSources[0];
+    const fileId = selectedRevision?.sourceFileId || anchor?.fileId;
+    if (!fileId) return undefined;
+    return {
+      fileName: selectedRevision?.sourceFileName || workbook?.fileName || `${asset.displayName || asset.assetKey}-原始文件`,
+      load: () => dataApi.sourceBlob(fileId),
+    };
   };
-  const previewSource = async () => {
-    try { setPreviewFile(await resolveSourceFile()); }
-    catch (error) { void message.error(error instanceof Error ? error.message : '原始数据文件加载失败'); }
+
+  const previewSource = () => {
+    const file = sourceFile();
+    if (!file) {
+      void message.warning('当前修订没有可用的原始文件');
+      return;
+    }
+    setPreviewFile(file);
   };
+
   const downloadSource = async () => {
-    try { await downloadPreviewFile(await resolveSourceFile()); void message.success('原文件下载已开始'); }
-    catch (error) { void message.error(error instanceof Error ? error.message : '原始数据文件下载失败'); }
+    const file = sourceFile();
+    if (!file) {
+      void message.warning('当前修订没有可用的原始文件');
+      return;
+    }
+    try {
+      await downloadPreviewFile(file);
+      void message.success('原文件下载已开始');
+    } catch (error) {
+      void message.error(error instanceof Error ? error.message : '原始文件下载失败');
+    }
   };
+
+  const selectField = (field: DataFieldValueView) => {
+    setSelectedFieldKey(fieldKey(field));
+    setSelectedBindingId(definitionForValue(workbook, field)?.bindingId || field.bindingId);
+    if (field.sheetId && field.address) editorRef.current?.focusCell?.(field.sheetId, field.address);
+  };
+
+  const selectDefinition = (field: DataWorkbookFieldDefinition) => {
+    setSelectedBindingId(field.bindingId);
+    const value = fields.find((item) => item.componentId === field.componentId
+      && (item.bindingId === field.bindingId || item.fieldCode === field.fieldCode));
+    if (value) setSelectedFieldKey(fieldKey(value));
+    if (value?.sheetId && value.address) editorRef.current?.focusCell?.(value.sheetId, value.address);
+    else if (field.sheetId && field.sourceRange) editorRef.current?.focusRange?.(field.sheetId, field.sourceRange);
+  };
+
+  const handleSelection = (selection: EditorSelection) => {
+    setSelectedCell(selection);
+    const exact = fields.find((field) => field.sheetId === selection.sheetId
+      && field.address?.toUpperCase() === selection.address.toUpperCase());
+    if (exact) {
+      setSelectedFieldKey(fieldKey(exact));
+      setSelectedBindingId(definitionForValue(workbook, exact)?.bindingId || exact.bindingId);
+    }
+  };
+
+  const currentRevision = selectedRevisionId === asset.currentRevisionId;
+  const meta = (
+    <Space wrap size={8}>
+      <Tag color="blue">{dataTypeOptions.find((item) => item.value === asset.targetDataType)?.label || '研发数据'}</Tag>
+      <Tag color={currentRevision ? 'success' : 'default'}>{currentRevision ? '当前修订' : '历史修订'}</Tag>
+      <Tag>{assetStatusLabels[asset.status] || '已入库'}</Tag>
+      {selectedRevision ? <Typography.Text type="secondary">修订 V{selectedRevision.revisionNo}</Typography.Text> : null}
+    </Space>
+  );
 
   return (
-    <div className="business-page">
-      <div className="page-heading">
-        <div><Typography.Title level={2}>{asset.displayName || '数据资产详情'}</Typography.Title><Typography.Text type="secondary">{asset.assetKey}</Typography.Text></div>
-        <Space><Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button><Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/data/view')}>返回数据查看</Button></Space>
-      </div>
-      <Card className="content-card">
-        <Descriptions column={3} bordered size="small">
-          <Descriptions.Item label="数据类型">{dataTypeOptions.find((item) => item.value === asset.targetDataType)?.label || asset.targetDataType}</Descriptions.Item>
-          <Descriptions.Item label="资产编码">{asset.assetKey}</Descriptions.Item>
-          <Descriptions.Item label="状态"><Tag color="green">{asset.status}</Tag></Descriptions.Item>
-          <Descriptions.Item label="当前修订">{asset.currentRevisionId || '—'}</Descriptions.Item>
-          <Descriptions.Item label="导入批次">{asset.importJobId || '—'}</Descriptions.Item>
-          <Descriptions.Item label="模板版本">{asset.templateVersionId || '—'}</Descriptions.Item>
-        </Descriptions>
-      </Card>
-      <Card className="content-card" title="数据快照">
-        <Space direction="vertical" style={{ width: '100%' }}><Typography.Text strong>原始值</Typography.Text>{json(asset.rawData)}<Typography.Text strong>标准化值</Typography.Text>{json(asset.normalizedData)}<Typography.Text strong>人工修订值</Typography.Text>{json(asset.correctedData)}</Space>
-      </Card>
-      <Card className="content-card" title="建模数据准备" extra={trainingDataset ? <Tag color={trainingDataset.status === 'APPROVED' ? 'green' : 'blue'}>{trainingDataset.status}</Tag> : undefined}>
-        {trainingDataset ? <Space wrap><Typography.Text type="secondary">长表候选已固化为独立快照。</Typography.Text><Tag>记录 {trainingDataset.recordCount}</Tag><Tag color="green">可训练记录 {trainingDataset.eligibleRecordCount}</Tag><Button onClick={() => navigate(`/data/import-jobs/${trainingDataset.importJobId || asset.importJobId}`)}>查看导入任务</Button></Space> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="该资产尚未生成建模数据集" />}
-      </Card>
-      <Card className="content-card" title="修订记录">
-        <Table rowKey="id" pagination={false} dataSource={revisions} locale={{ emptyText: <Empty description="暂无修订记录" /> }} columns={[
-          { title: '修订号', dataIndex: 'revisionNo', render: (value: number) => `V${value}` }, { title: '导入批次', dataIndex: 'importJobId' }, { title: '模板版本', dataIndex: 'templateVersionId' }, { title: '数据哈希', dataIndex: 'dataHash' }, { title: '创建时间', dataIndex: 'createdAt', render: (value: string) => new Date(value).toLocaleString('zh-CN') },
-        ]} />
-      </Card>
-      <Card className="content-card" title="来源锚点" extra={<Space><Button icon={<EyeOutlined />} onClick={() => void previewSource()} disabled={!sources.length}>预览原文件</Button><Button icon={<DownloadOutlined />} onClick={() => void downloadSource()} disabled={!sources.length}>下载原文件</Button></Space>}>
-        <Table rowKey="id" pagination={{ pageSize: 10 }} dataSource={sources} locale={{ emptyText: <Empty description="暂无来源锚点" /> }} columns={[
-          { title: '字段', dataIndex: 'fieldCode' }, { title: 'Sheet', dataIndex: 'sheetName' }, { title: '行', dataIndex: 'rowNumber' }, { title: '列', dataIndex: 'columnName' }, { title: '单元格', dataIndex: 'address' }, { title: '原值', dataIndex: 'rawValue', render: (value: unknown) => JSON.stringify(value) },
-        ]} />
-      </Card>
+    <DataWorkbenchShell
+      breadcrumb="数据中心 / 数据资产"
+      title={asset.displayName || '未命名数据资产'}
+      meta={meta}
+      actions={<>
+        <Button icon={<ReloadOutlined />} onClick={() => void loadOverview()}>刷新</Button>
+        <Button icon={<EyeOutlined />} disabled={!sourceFile()} onClick={previewSource}>预览原文件</Button>
+        <Button icon={<DownloadOutlined />} disabled={!sourceFile()} onClick={() => void downloadSource()}>下载原文件</Button>
+        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/data/view')}>返回数据查看</Button>
+      </>}
+      notice={!sourceFile() ? <Alert type="info" showIcon message="当前修订没有可定位的原始文件，右侧正式数据仍可正常查看。" /> : undefined}
+      canvas={<DataWorkbookCanvas
+        ref={editorRef}
+        workbook={workbook}
+        loading={workbookLoading}
+        editable={false}
+        onSelectionChange={handleSelection}
+      />}
+      panel={<>
+        <Tabs
+          className="data-workbench-tabs"
+          activeKey={activeTab}
+          onChange={(value) => setActiveTab(value as PanelTab)}
+          items={[
+            { key: 'data', label: '字段数据' },
+            { key: 'structure', label: '字段结构' },
+            { key: 'revisions', label: '修订历史' },
+          ]}
+        />
+        {activeTab === 'data' ? (
+          <DataFieldDataBrowser
+            workbook={workbook}
+            selectedFieldKey={selectedFieldKey}
+            selectedCell={selectedCell}
+            onSelectField={selectField}
+            renderFieldMeta={(field) => <Space wrap size={4}>
+              <Tag>{dataTypeLabel(field.valueType)}</Tag>
+              <Tag>{sourceLabel(field.valueSource)}</Tag>
+            </Space>}
+            emptyDescription="当前修订没有可展示的结构化字段"
+          />
+        ) : null}
+        {activeTab === 'structure' ? (
+          <DataFieldStructureBrowser
+            workbook={workbook}
+            selectedBindingId={selectedBindingId}
+            onSelectField={selectDefinition}
+          />
+        ) : null}
+        {activeTab === 'revisions' ? (
+          <RevisionPanel
+            revisions={revisions}
+            selectedRevision={selectedRevision}
+            selectedRevisionId={selectedRevisionId}
+            onRevisionChange={setSelectedRevisionId}
+            onOpenImport={(importJobId) => navigate(`/data/import-jobs/${importJobId}`)}
+          />
+        ) : null}
+      </>}
+      footer={selectedRevision ? (
+        <Space wrap>
+          <HistoryOutlined />
+          <Typography.Text strong>正在查看修订 V{selectedRevision.revisionNo}</Typography.Text>
+          <Typography.Text type="secondary">{new Date(selectedRevision.createdAt).toLocaleString('zh-CN')}</Typography.Text>
+          {!currentRevision ? <Button size="small" onClick={() => setSelectedRevisionId(asset.currentRevisionId)}>返回当前修订</Button> : null}
+        </Space>
+      ) : undefined}
+    >
       <FilePreviewModal open={Boolean(previewFile)} file={previewFile} onClose={() => setPreviewFile(undefined)} />
-    </div>
+    </DataWorkbenchShell>
   );
+}
+
+function RevisionPanel({ revisions, selectedRevision, selectedRevisionId, onRevisionChange, onOpenImport }: {
+  revisions: DataRevision[];
+  selectedRevision?: DataRevision;
+  selectedRevisionId?: string;
+  onRevisionChange: (revisionId: string) => void;
+  onOpenImport: (importJobId: string) => void;
+}) {
+  return <div className="data-panel-body">
+    <WorkbenchPanelHeader title="修订历史" description="切换修订后，左侧同步显示当时的来源文件和生效数据" />
+    <Select
+      value={selectedRevisionId}
+      onChange={onRevisionChange}
+      options={revisions.map((item) => ({
+        value: item.id,
+        label: `修订 V${item.revisionNo} · ${new Date(item.createdAt).toLocaleDateString('zh-CN')}`,
+      }))}
+      style={{ width: '100%' }}
+      placeholder="选择修订"
+    />
+    {selectedRevision ? <section className="data-panel-section data-revision-summary">
+      <dl>
+        <div><dt>来源文件</dt><dd>{selectedRevision.sourceFileName || '暂无文件名'}</dd></div>
+        <div><dt>包含工作表</dt><dd>{selectedRevision.sheetNames?.join('、') || '暂无'}</dd></div>
+        <div><dt>导入记录</dt><dd>{selectedRevision.recordCount ?? 0} 条</dd></div>
+        <div><dt>创建时间</dt><dd>{new Date(selectedRevision.createdAt).toLocaleString('zh-CN')}</dd></div>
+      </dl>
+      <Button block onClick={() => onOpenImport(selectedRevision.importJobId)}>查看对应导入任务</Button>
+    </section> : null}
+  </div>;
+}
+
+function fieldKey(field?: DataFieldValueView) {
+  if (!field) return undefined;
+  return [field.recordId, field.bindingId, field.valuePath, field.sheetId, field.address].join('|');
+}
+
+function definitionForValue(workbook: DataWorkbookSnapshot | undefined, field: DataFieldValueView) {
+  return workbook?.fieldDefinitions?.find((item) => item.componentId === field.componentId
+    && (item.bindingId === field.bindingId || item.fieldCode === field.fieldCode));
+}
+
+function sourceLabel(source?: string) {
+  const labels: Record<string, string> = {
+    INPUT: '人工录入', USER_INPUT: '人工录入', FORMULA: '公式结果', DERIVED: '派生结果',
+    STATIC: '静态说明', REFERENCE: '引用值', MIXED: '混合来源', UNKNOWN: '来源待确认',
+  };
+  return labels[(source || 'UNKNOWN').toUpperCase()] || '数据值';
+}
+
+function dataTypeLabel(value?: string) {
+  const labels: Record<string, string> = {
+    TEXT: '文本', STRING: '文本', NUMBER: '数值', DECIMAL: '小数', INTEGER: '整数',
+    DATE: '日期', DATETIME: '日期时间', BOOLEAN: '是/否', ENUM: '选项',
+  };
+  return labels[(value || 'TEXT').toUpperCase()] || '文本';
 }

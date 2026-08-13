@@ -33,7 +33,7 @@ import {
   Typography,
 } from 'antd';
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
 import {
   candidateBinding,
@@ -73,6 +73,7 @@ import {
 import { migrateWorkspaceStructure } from '@/features/template-workspace/structure-migration';
 import {
   isSingleCellAddress,
+  isStructuredDataCell,
   potentialFieldLabel,
 } from '@/features/template-workspace/live-field-discovery';
 import type {
@@ -82,6 +83,7 @@ import type {
   FieldModel,
   MatrixModel,
   TemplateBinding,
+  TemplateFormat,
   TemplateVersionHistoryItem,
   TemplateWorkspace,
   WorkbookStructureOperation,
@@ -128,11 +130,12 @@ type ReviewSyncState = PublishReviewSyncState;
 export function TemplateWorkspacePage() {
   const { versionId } = useParams<{ versionId: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { message, modal } = App.useApp();
   const editorRef = useRef<EditorHandle>(null);
   const autoAppendKeysRef = useRef(new Set<string>());
   const selectionCycleRef = useRef({ key: '', index: 0 });
-  const unboundChangeTimerRef = useRef<number>();
+  const unboundChangeTimersRef = useRef(new Map<string, number>());
   const [workspace, setWorkspace] = useState<TemplateWorkspace>();
   const [snapshot, setSnapshot] = useState<Record<string, unknown>>();
   const [schema, setSchema] = useState<Record<string, unknown>>({});
@@ -145,7 +148,10 @@ export function TemplateWorkspacePage() {
     semanticAnnotations: [],
   });
   const [data, setData] = useState<Record<string, unknown>>({});
-  const [view, setView] = useState<WorkspaceView>('edit');
+  const requestedView = searchParams.get('view');
+  const [view, setView] = useState<WorkspaceView>(
+    requestedView === 'versions' || requestedView === 'preview' ? requestedView : 'edit',
+  );
   const [selectedFieldId, setSelectedFieldId] = useState<string>();
   const [selectedRecognitionItemId, setSelectedRecognitionItemId] = useState<string>();
   const [saveState, setSaveState] = useState<SaveState>('SAVED');
@@ -164,10 +170,12 @@ export function TemplateWorkspacePage() {
   const [recognitionAlternativeSelections, setRecognitionAlternativeSelections] = useState<Record<string, string>>({});
   const [qualityActions, setQualityActions] = useState<Record<string, QualityAction>>({});
   const [selectedQualityIssueId, setSelectedQualityIssueId] = useState<string>();
+  const [selectedWordNodeId, setSelectedWordNodeId] = useState<string>();
   const [recognitionJob, setRecognitionJob] = useState<TemplateImportJob>();
   const [recognitionBusy, setRecognitionBusy] = useState(false);
   const [structureOperations, setStructureOperations] = useState<WorkbookStructureOperation[]>([]);
   const savedSnapshotSignatureRef = useRef<string>();
+  const suppressEditorDirtyRef = useRef(false);
   const pendingEditorOperationsRef = useRef<Set<Promise<void>>>(new Set());
   const isDesktop = useDesktopEditing();
 
@@ -183,10 +191,23 @@ export function TemplateWorkspacePage() {
               ? templateApi.getRecognitionReview(model.versionId).catch(() => undefined)
             : Promise.resolve(undefined),
         ]);
-        const loadedSnapshot =
-          model.snapshotFileId && model.snapshotHash
-            ? await templateApi.downloadSnapshot(model.snapshotFileId)
-            : (model.inlineSnapshot ?? {});
+        let loadedSnapshot = model.snapshotFileId && model.snapshotHash
+          ? await templateApi.downloadSnapshot(model.snapshotFileId)
+          : model.inlineSnapshot;
+        // Some legacy saves persisted the JSON literal `null` as a staged
+        // snapshot. Recognition can still use the original Office file, but
+        // Univer cannot mount that value and the page otherwise remains on
+        // its skeleton forever. The import result contains the faithful
+        // snapshot produced from the original XLSX/DOCX, so use it as the
+        // recovery source instead of asking the customer to re-import.
+        if (!isUsableEditorSnapshot(loadedSnapshot, model.format) && model.recognitionRunId) {
+          const importJob = await templateApi.getImport(model.recognitionRunId);
+          const recovered = importJob.result.initialEditorSnapshot;
+          if (isUsableEditorSnapshot(recovered, model.format)) loadedSnapshot = recovered;
+        }
+        if (!isUsableEditorSnapshot(loadedSnapshot, model.format)) {
+          throw new Error('模板编辑快照已损坏，且无法从原始导入文件恢复');
+        }
         if (model.format === 'DOCX' && snapshotVersion(loadedSnapshot, 0) < 5) {
           throw new Error('当前 Word 模板使用旧编辑快照，请重新导入原始 DOCX 后再编辑');
         }
@@ -217,7 +238,9 @@ export function TemplateWorkspacePage() {
         setSnapshot(loadedSnapshot);
         savedSnapshotSignatureRef.current = snapshotSignature(loadedSnapshot);
         setVersionHistory(history);
-        setView(model.status === 'DRAFT' ? 'edit' : 'preview');
+        setView(requestedView === 'versions' ? 'versions'
+          : requestedView === 'preview' ? 'preview'
+            : model.status === 'DRAFT' ? 'edit' : 'preview');
         setSaveState('SAVED');
         setStructureOperations([]);
       } catch (error) {
@@ -238,13 +261,19 @@ export function TemplateWorkspacePage() {
     return () => window.removeEventListener('beforeunload', warn);
   }, [saveState]);
 
-  useEffect(() => () => window.clearTimeout(unboundChangeTimerRef.current), []);
+  useEffect(() => () => {
+    unboundChangeTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    unboundChangeTimersRef.current.clear();
+  }, []);
 
   const markDirty = useCallback(() => {
     setSaveState((current) => (current === 'SAVING' ? current : 'DIRTY'));
   }, []);
 
   const handleEditorDirty = useCallback(() => {
+    // Saving updates the parent model and refreshes the review panel. Those
+    // state changes must not be mistaken for a new Univer edit.
+    if (suppressEditorDirtyRef.current) return;
     const currentSnapshot = editorRef.current?.getSnapshot();
     if (
       currentSnapshot &&
@@ -362,6 +391,7 @@ export function TemplateWorkspacePage() {
       void message.warning('请先填写字段名称');
       return false;
     }
+    suppressEditorDirtyRef.current = true;
     setSaveState('SAVING');
     try {
       await waitForPendingEditorOperations();
@@ -443,7 +473,10 @@ export function TemplateWorkspacePage() {
         wordDocument: result.wordDocument ?? workspace.wordDocument,
         documentStructure: result.documentStructure ?? workspace.documentStructure,
       });
-      setSnapshot(currentSnapshot);
+      // The live editor already contains currentSnapshot. Replacing the
+      // snapshot prop here remounts Univer after every save and emits stale
+      // command/selection events, which used to turn a successful save back
+      // into “未保存” and could briefly create two editor instances.
       setRecognitionActions({});
       setRecognitionAlternativeSelections({});
       setQualityActions({});
@@ -496,6 +529,8 @@ export function TemplateWorkspacePage() {
         void message.error(saveErrorMessage(error));
       }
       return false;
+    } finally {
+      suppressEditorDirtyRef.current = false;
     }
   };
 
@@ -631,7 +666,8 @@ export function TemplateWorkspacePage() {
       bindingId: item.id,
       dataPath: item.payload.dataPath,
       role: item.kind === 'SCALAR' ? 'FIELD' : 'REPEAT_REGION',
-      locatorType: item.payload.locatorType,
+      locatorType: item.payload.locatorType
+        ?? (item.kind === 'SCALAR' ? 'CELL_RANGE' : 'TABLE_REGION'),
       locator: item.payload.locator,
       syncDirection: item.payload.editability === 'READ_ONLY' ? 'EDITOR_TO_DATA' : 'TWO_WAY',
       primaryBinding: true,
@@ -844,7 +880,7 @@ export function TemplateWorkspacePage() {
     setFieldModel(accepted.model);
     recordRecognitionAction(item.id, 'CONFIRM', 'CONFIRMED', selectedAlternativeId);
     markDirty();
-    void message.success('字段已记录，点击“保存草稿”后写入服务器');
+    void message.success('字段已记录，待保存');
     const next = nextRecognitionItem(recognitionReview, item.id);
     if (next) window.requestAnimationFrame(() => focusRecognitionItem(next));
   };
@@ -898,31 +934,24 @@ export function TemplateWorkspacePage() {
   const confirmHighConfidence = () => {
     if (!recognitionReview) return;
     const targets = recognitionReview.items.filter(
-      (item) =>
-        item.status === 'PENDING' &&
-        item.confidence >= 0.85 &&
-        !item.payload.requiresStandardConfirmation &&
-        !item.payload.semanticConflict &&
-        !item.payload.candidateOnly &&
-        !item.payload.reviewRequired &&
-        !item.payload.physicalStructureOnly &&
-        !item.payload.structureConflict &&
-        !item.payload.protocolRecovery,
+      (item) => (item.status === 'PENDING' || item.status === 'CONFLICT')
+        && !requiresServerStructureConfirmation(item),
     );
     if (!targets.length) {
-      void message.info('没有可直接确认的识别项目');
+      void message.info('没有待确认的识别项目');
       return;
     }
-    const statusUpdates = new Map(targets.map((item) => [item.id, 'CONFIRMED' as const]));
+    const actionable = targets;
+    const statusUpdates = new Map(actionable.map((item) => [item.id, 'CONFIRMED' as const]));
     setRecognitionReview(updateRecognitionReview(recognitionReview, statusUpdates));
     setRecognitionActions((current) => ({
       ...current,
-      ...Object.fromEntries(targets.map((item) => [item.id, 'CONFIRM' as const])),
+      ...Object.fromEntries(actionable.map((item) => [item.id, 'CONFIRM' as const])),
     }));
     let nextSchema = schema;
     let nextMapping = mapping;
     let nextModel = fieldModel;
-    for (const item of targets) {
+    for (const item of actionable) {
       const accepted = acceptRecognitionReviewItem(nextSchema, nextMapping, nextModel, item);
       nextSchema = accepted.schema;
       nextMapping = accepted.mapping;
@@ -932,7 +961,7 @@ export function TemplateWorkspacePage() {
     setMapping(nextMapping);
     setFieldModel(nextModel);
     markDirty();
-    void message.success(`已确认 ${targets.length} 个识别项目`);
+    void message.success(`已一键确认 ${actionable.length} 个识别项目，请保存草稿`);
   };
 
   const restartRecognition = async () => {
@@ -1273,11 +1302,24 @@ export function TemplateWorkspacePage() {
       // concrete FIELD binding, however, remains protected from duplication.
       const selectionMatch = resolveBindingSelection(mapping, selection);
       if (selectionMatch?.binding.role === 'FIELD') return;
+      if (isStructuredDataCell(
+        selection,
+        mapping,
+        (recognitionReview?.regions ?? []).map((region) => ({
+          kind: region.kind,
+          sheetId: region.sheetId,
+          range: region.range,
+          structures: region.structures,
+        })),
+      )) return;
       const label = potentialFieldLabel(value);
       const labelAddress = selection.address.split(':')[0] ?? selection.address;
-      window.clearTimeout(unboundChangeTimerRef.current);
       if (!label) return;
-      unboundChangeTimerRef.current = window.setTimeout(() => {
+      const timerKey = `${selection.sheetId}|${normalizeAddress(labelAddress)}`;
+      const pendingTimer = unboundChangeTimersRef.current.get(timerKey);
+      if (pendingTimer) window.clearTimeout(pendingTimer);
+      const timer = window.setTimeout(() => {
+        unboundChangeTimersRef.current.delete(timerKey);
         if (
           mapping.some(
             (binding) =>
@@ -1376,6 +1418,7 @@ export function TemplateWorkspacePage() {
         markDirty();
         void message.info(`已发现新字段“${label}”，请核对填写位置`);
       }, 800);
+      unboundChangeTimersRef.current.set(timerKey, timer);
     },
     [fieldModel.fields, fieldModel.groups, mapping, markDirty, message, recognitionReview, versionId],
   );
@@ -1625,8 +1668,8 @@ export function TemplateWorkspacePage() {
               </>
             )}
           </span>
-          <Tag color={workspace.status === 'DRAFT' ? 'gold' : 'success'}>
-            {workspace.status === 'DRAFT' ? '草稿' : '已发布'}
+          <Tag color={workspace.status === 'DRAFT' ? 'gold' : workspace.status === 'PUBLISHED' ? 'success' : 'default'}>
+            {workspace.status === 'DRAFT' ? '草稿' : workspace.status === 'PUBLISHED' ? '已发布' : '已停用'}
           </Tag>
         </div>
         <Space wrap>
@@ -1703,7 +1746,17 @@ export function TemplateWorkspacePage() {
       </nav>
 
       {view === 'versions' ? (
-        <VersionView workspace={workspace} saveState={saveState} items={versionHistory} />
+        <VersionView workspace={workspace} saveState={saveState} items={versionHistory}
+          onView={(id) => navigate(`/templates/${id}/workspace?view=preview`)}
+          onRollback={async (id) => {
+            try {
+              const draft = await templateApi.rollback(id);
+              void message.success('已从历史快照创建新的回退草稿');
+              navigate(`/templates/${draft.versionId}/workspace`);
+            } catch (error) {
+              void message.error(error instanceof Error ? error.message : '创建回退草稿失败');
+            }
+          }} />
       ) : (
         <div className="workspace-main-stage">
           {view === 'edit' && (
@@ -1730,7 +1783,11 @@ export function TemplateWorkspacePage() {
             {workspace.format === 'DOCX' && (
               <DocumentOutlinePanel
                 structure={workspace.documentStructure}
-                onSelect={(node) => editorRef.current?.focusNode?.(node)}
+                selectedNodeId={selectedWordNodeId}
+                onSelect={(node) => {
+                  setSelectedWordNodeId(node.nodeId);
+                  editorRef.current?.focusNode?.(node);
+                }}
               />
             )}
             <main className={`workspace-canvas ${view === 'preview' ? 'is-preview' : ''}`}>
@@ -1935,10 +1992,14 @@ function VersionView({
   workspace,
   saveState,
   items,
+  onView,
+  onRollback,
 }: {
   workspace: TemplateWorkspace;
   saveState: SaveState;
   items: TemplateVersionHistoryItem[];
+  onView: (versionId: string) => void;
+  onRollback: (versionId: string) => Promise<void>;
 }) {
   return (
     <main className="version-history-page">
@@ -1959,6 +2020,8 @@ function VersionView({
                 createdAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString(),
                 saveCount: 0,
+                currentPublished: workspace.status === 'PUBLISHED',
+                canRollback: false,
               },
             ]
         ).map((item) => (
@@ -1984,6 +2047,14 @@ function VersionView({
                   ? ' · 当前还有尚未保存的修改'
                   : ''}
               </Typography.Paragraph>
+              <Space>
+                <Button size="small" icon={<EyeOutlined />} onClick={() => onView(item.versionId)}>查看快照</Button>
+                {item.status !== 'DRAFT' && item.canRollback ? (
+                  <Button size="small" onClick={() => void onRollback(item.versionId)}>回退到此版本</Button>
+                ) : null}
+                {item.currentPublished ? <Tag color="blue">当前发布版</Tag> : null}
+                {item.createdByName ? <Typography.Text type="secondary">创建人：{item.createdByName}</Typography.Text> : null}
+              </Space>
             </div>
           </article>
         ))}
@@ -2096,10 +2167,13 @@ function RecognitionStatusBar({
           disabled={
             busy ||
             !editable ||
-            !review?.items.some((item) => item.status === 'PENDING' && item.confidence >= 0.85)
+            !review?.items.some((item) =>
+              (item.status === 'PENDING' || item.status === 'CONFLICT')
+                && !requiresServerStructureConfirmation(item),
+            )
           }
         >
-          一键确认明确项目
+          一键确认全部字段
         </Button>
         {allowRestart && (
           <Button
@@ -2124,10 +2198,23 @@ function updateRecognitionReview(
   const items = review.items.map((item) =>
     updates.has(item.id) ? { ...item, status: updates.get(item.id) ?? item.status } : item,
   );
+  // The region tree is rendered separately from the flat review list. Keep
+  // its field cards in sync immediately after a local confirmation; otherwise
+  // the field is accepted in the editor but still appears as “待确认” inside
+  // the region card until the next API refresh.
+  const regions = review.regions?.map((region) => ({
+    ...region,
+    fields: region.fields.map((field) =>
+      updates.has(field.id)
+        ? { ...field, status: updates.get(field.id) ?? field.status }
+        : field,
+    ),
+  }));
   const active = items.filter((item) => item.status !== 'IGNORED');
   return {
     ...review,
     items,
+    regions,
     groups: [...new Set(active.map((item) => item.groupName))],
     summary: {
       total: active.length,
@@ -2271,7 +2358,9 @@ function duplicatePositionCount(mapping: TemplateBinding[]) {
   const positions = new Set<string>();
   let count = 0;
   for (const binding of mapping) {
-    const address = stringValue(binding.locator.address || binding.locator.range);
+    const address = binding.mappingKind === 'MATRIX_FIELD'
+      ? stringValue(binding.locator.logicalInputRange || binding.locator.sourceRange || binding.locator.address || binding.locator.range)
+      : stringValue(binding.locator.address || binding.locator.range);
     if (!address) continue;
     const key = `${stringValue(binding.locator.sheetId) || stringValue(binding.locator.sheetName)}:${address}`;
     if (positions.has(key)) count += 1;
@@ -2492,6 +2581,17 @@ function hasMeaningfulValue(value: unknown) {
 function snapshotVersion(snapshot: Record<string, unknown>, fallback: number) {
   const value = snapshot.snapshotFormatVersion;
   return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+function isUsableEditorSnapshot(
+  snapshot: unknown,
+  format: TemplateFormat,
+): snapshot is Record<string, unknown> {
+  if (!isRecord(snapshot)) return false;
+  if (format === 'XLSX') {
+    return isRecord(snapshot.sheets) && Object.keys(snapshot.sheets).length > 0;
+  }
+  return isRecord(snapshot.body) && typeof snapshot.body.dataStream === 'string';
 }
 
 function requiresServerStructureConfirmation(item: RecognitionReviewItem) {

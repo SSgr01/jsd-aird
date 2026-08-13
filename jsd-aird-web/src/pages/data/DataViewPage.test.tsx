@@ -52,7 +52,7 @@ describe('DataViewPage batch export', () => {
     });
     listCategoriesMock.mockResolvedValue([]);
     listTemplatesMock.mockResolvedValue([
-      { templateId: 'tpl-1', versionId: 'version-1', templateCode: 'material', name: '物料导出模板', category: '原料', targetDataType: 'MATERIAL', versionNo: 1, format: 'XLSX' },
+      { templateId: 'tpl-1', versionId: 'version-1', templateCode: 'material', name: '物料导出模板', category: '原料', versionNo: 1, format: 'XLSX' },
     ]);
     exportAssetsMock.mockResolvedValue(new Blob(['zip'], { type: 'application/zip' }));
   });

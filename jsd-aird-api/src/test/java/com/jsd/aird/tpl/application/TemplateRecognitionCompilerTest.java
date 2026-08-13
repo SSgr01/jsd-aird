@@ -55,6 +55,7 @@ class TemplateRecognitionCompilerTest {
         var secondSchema = firstSchema.deepCopy();
         var formula = suggestion("ACCEPTED", "/result/total", "合计", "基础信息", 0.9,
                 "READ_ONLY", "FORMULA");
+        ((com.fasterxml.jackson.databind.node.ObjectNode) formula.payload()).put("labelPath", "合计");
         var unknown = suggestion("PENDING", "/result/unclear", "待确认", "基础信息", 0.5,
                 "UNKNOWN", "UNKNOWN");
 
@@ -168,6 +169,129 @@ class TemplateRecognitionCompilerTest {
             assertThat(binding.path("repeatAxis").asText()).isEqualTo("COLUMN");
             assertThat(binding.path("recordHeight").asInt()).isEqualTo(16);
         });
+    }
+
+    @Test
+    void preservesColumnTableDirectionInCanonicalDraftAndContractMapping() throws Exception {
+        var schema = objectMapper.createObjectNode().put("type", "object");
+        schema.set("properties", objectMapper.createObjectNode());
+        var payload = objectMapper.createObjectNode()
+                .put("fieldCode", "AUTO.FIELD")
+                .put("fieldName", "性能记录")
+                .put("groupName", "性能测试")
+                .put("dataPath", "/records/component_a")
+                .put("valueType", "array")
+                .put("relationId", "column-table-A4-N100")
+                .put("fieldId", "11111111-1111-1111-1111-111111111112")
+                .put("bindingId", "11111111-1111-1111-1111-111111111113")
+                .put("kind", "COLUMN_TABLE")
+                .put("role", "REPEAT_REGION")
+                .put("mappingKind", "REPEAT_REGION")
+                .put("repeatAxis", "COLUMN")
+                .put("editability", "EDITABLE")
+                .put("valueSource", "USER_INPUT")
+                .put("locatorType", "TABLE_REGION")
+                .put("canonicalStatus", "CONFIRMED")
+                .put("structureStatus", "CONFIRMED");
+        payload.set("locator", objectMapper.createObjectNode()
+                .put("sheetId", "sheet-1").put("address", "A4:N100")
+                .put("range", "A4:N100").put("locatorType", "TABLE_REGION"));
+        payload.set("columns", objectMapper.createArrayNode().add(
+                objectMapper.createObjectNode().put("code", "外观").put("name", "外观")
+                        .put("dataPath", "/records/component_a/*/外观")
+                        .put("fieldCode", "TABLE.COLUMN.外观").put("valueType", "string")
+                        .put("labelRange", "A5:C5").put("valueRange", "E5:N5")
+                        .put("editability", "EDITABLE").put("valueSource", "USER_INPUT")));
+        var suggestion = new TemplateImportRepository.RecognitionSuggestionView(
+                UUID.randomUUID(), UUID.randomUUID(), "MODEL", "TABLE_REGION", payload,
+                0.95, objectMapper.createArrayNode(), "ACCEPTED", "model", "v2", "v2", Instant.now());
+
+        var result = compiler.compile(schema, List.of(suggestion), TemplateFormat.XLSX);
+
+        assertThat(result.fieldModel().path("fields").get(0).path("kind").asText())
+                .isEqualTo("COLUMN_TABLE");
+        assertThat(result.fieldModel().path("fields").get(0).path("interpretation").asText())
+                .contains("每一列");
+        assertThat(result.mapping().get(0).path("repeatAxis").asText()).isEqualTo("COLUMN");
+        assertThat(result.schema().path("properties").path("records").path("properties")
+                .path("component_a").path("x-region-kind").asText()).isEqualTo("COLUMN_TABLE");
+    }
+
+    @Test
+    void compilesExplicitlyConfirmedReviewFieldButNotItsFormContainer() throws Exception {
+        var schema = objectMapper.createObjectNode().put("type", "object");
+        schema.set("properties", objectMapper.createObjectNode());
+        var parentPayload = objectMapper.createObjectNode()
+                .put("fieldName", "基本信息区域").put("dataPath", "/form")
+                .put("relationId", "form-parent").put("kind", "FORM_REGION")
+                .put("role", "REPEAT_REGION").put("mappingKind", "REPEAT_REGION")
+                .put("canonicalStatus", "CONFIRMED").put("structureStatus", "CONFIRMED")
+                .put("candidateOnly", false).put("reviewRequired", false)
+                .put("physicalStructureOnly", false).put("structureConflict", false);
+        parentPayload.set("locator", objectMapper.createObjectNode()
+                .put("sheetId", "sheet-1").put("address", "A1:H3").put("range", "A1:H3"));
+        var parent = new TemplateImportRepository.RecognitionSuggestionView(
+                UUID.randomUUID(), UUID.randomUUID(), "MODEL", "TABLE_REGION", parentPayload,
+                0.95, objectMapper.createArrayNode(), "ACCEPTED", "model", "v2", "v2", Instant.now());
+
+        var child = suggestion("ACCEPTED", "/fields/测试人", "测试人", "基础信息");
+        var childPayload = (com.fasterxml.jackson.databind.node.ObjectNode) child.payload();
+        childPayload.put("suggestionLevel", "ROOT").put("mappingKind", "SCALAR")
+                .put("bindingId", "11111111-1111-1111-1111-111111111114")
+                .put("reviewRequired", true).put("candidateOnly", false)
+                .put("physicalStructureOnly", false).put("canonicalStatus", "CONFIRMED")
+                .put("structureStatus", "CONFIRMED");
+
+        var result = compiler.compile(schema, List.of(parent, child), TemplateFormat.XLSX);
+
+        assertThat(result.fieldModel().path("fields")).singleElement()
+                .satisfies(field -> assertThat(field.path("name").asText()).isEqualTo("测试人"));
+        assertThat(result.mapping()).singleElement()
+                .satisfies(binding -> assertThat(binding.path("fieldName").asText()).isEqualTo("测试人"));
+    }
+
+    @Test
+    void compilesConfirmedChildWhenItsConfirmedParentWasReviewRequired() throws Exception {
+        var schema = objectMapper.createObjectNode().put("type", "object");
+        schema.set("properties", objectMapper.createObjectNode());
+        var parentPayload = objectMapper.createObjectNode()
+                .put("fieldName", "性能记录").put("dataPath", "/records/component_a")
+                .put("relationId", "parent-column").put("kind", "COLUMN_TABLE")
+                .put("role", "REPEAT_REGION").put("mappingKind", "REPEAT_REGION")
+                .put("bindingId", "11111111-1111-1111-1111-111111111115")
+                .put("editability", "EDITABLE").put("valueSource", "USER_INPUT")
+                .put("candidateOnly", false).put("reviewRequired", true)
+                .put("physicalStructureOnly", false).put("structureConflict", false)
+                .put("canonicalStatus", "CONFIRMED").put("structureStatus", "CONFIRMED");
+        parentPayload.set("locator", objectMapper.createObjectNode()
+                .put("sheetId", "sheet-1").put("address", "A4:H19").put("range", "A4:H19"));
+        var parent = new TemplateImportRepository.RecognitionSuggestionView(
+                UUID.randomUUID(), UUID.randomUUID(), "MODEL", "TABLE_REGION", parentPayload,
+                0.95, objectMapper.createArrayNode(), "ACCEPTED", "model", "v2", "v2", Instant.now());
+
+        var childSeed = suggestion("ACCEPTED", "/records/component_a/*/外观", "外观", "性能测试");
+        var childPayload = (com.fasterxml.jackson.databind.node.ObjectNode) childSeed.payload();
+        childPayload.put("suggestionLevel", "CHILD").put("mappingKind", "REPEAT_FIELD")
+                .put("bindingId", "11111111-1111-1111-1111-111111111116")
+                .put("parentBindingId", "11111111-1111-1111-1111-111111111115")
+                .put("parentRelationId", "parent-column").put("repeatAxis", "COLUMN")
+                .put("reviewRequired", true).put("candidateOnly", false)
+                .put("physicalStructureOnly", false).put("canonicalStatus", "CONFIRMED")
+                .put("structureStatus", "CONFIRMED");
+        var child = new TemplateImportRepository.RecognitionSuggestionView(
+                childSeed.id(), childSeed.recognitionRunId(), childSeed.source(),
+                "TABLE_CHILD_FIELD", childPayload, childSeed.confidence(), childSeed.evidence(),
+                childSeed.decision(), childSeed.provider(), childSeed.model(), childSeed.promptVersion(),
+                childSeed.createdAt());
+
+        var result = compiler.compile(schema, List.of(parent, child), TemplateFormat.XLSX);
+
+        assertThat(result.fieldModel().path("fields")).singleElement()
+                .satisfies(field -> assertThat(field.path("name").asText()).isEqualTo("外观"));
+        assertThat(result.mapping()).anyMatch(binding ->
+                "REPEAT_FIELD".equals(binding.path("mappingKind").asText())
+                        && "11111111-1111-1111-1111-111111111115".equals(
+                        binding.path("parentBindingId").asText()));
     }
 
     @Test

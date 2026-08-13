@@ -7,6 +7,7 @@ import java.nio.charset.StandardCharsets;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.jsd.aird.data.application.DataAssetExportService;
 import com.jsd.aird.data.application.DataImportService;
+import com.jsd.aird.data.application.DataWorkbookService;
 import com.jsd.aird.data.application.port.DataRepository;
 import com.jsd.aird.platform.web.RequestIdHolder;
 import com.jsd.aird.shared.api.ApiResponse;
@@ -15,6 +16,7 @@ import com.jsd.aird.shared.api.ResponseFactory;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -36,15 +38,18 @@ public class DataController {
     private final DataImportService service;
     private final com.jsd.aird.data.application.DataProjectionService projectionService;
     private final DataAssetExportService assetExportService;
+    private final DataWorkbookService workbookService;
     private final com.jsd.aird.data.application.DataCategoryService categoryService;
 
     public DataController(DataImportService service, DataAssetExportService assetExportService,
                           com.jsd.aird.data.application.DataCategoryService categoryService,
-                          com.jsd.aird.data.application.DataProjectionService projectionService) {
+                          com.jsd.aird.data.application.DataProjectionService projectionService,
+                          DataWorkbookService workbookService) {
         this.service = service;
         this.assetExportService = assetExportService;
         this.categoryService = categoryService;
         this.projectionService = projectionService;
+        this.workbookService = workbookService;
     }
 
     @GetMapping("/templates")
@@ -115,8 +120,23 @@ public class DataController {
     }
 
     @PutMapping("/import-jobs/{id}/issues/{issueId}")
-    public ApiResponse<Void> resolve(@PathVariable UUID issueId, @Valid @RequestBody IssueRequest request) {
-        service.resolveIssue(issueId, request.status());
+    public ApiResponse<Void> resolve(@PathVariable UUID id, @PathVariable UUID issueId, @Valid @RequestBody IssueRequest request) {
+        service.resolveIssue(id, issueId, request.status(), request.reason());
+        return success(null);
+    }
+
+    @PutMapping("/import-jobs/{id}/records/{recordId}/values")
+    public ApiResponse<Void> correctValue(@PathVariable UUID id, @PathVariable UUID recordId,
+                                          @Valid @RequestBody CorrectValueRequest request) {
+        service.correctValue(id, recordId, request.bindingId(), request.valuePath(),
+                request.correctedValue(), request.reason());
+        return success(null);
+    }
+
+    @PutMapping("/import-jobs/{id}/records/{recordId}/exclusion")
+    public ApiResponse<Void> excludeRecord(@PathVariable UUID id, @PathVariable UUID recordId,
+                                           @Valid @RequestBody ExcludeRecordRequest request) {
+        service.excludeRow(id, recordId, request.excluded(), request.reason());
         return success(null);
     }
 
@@ -128,11 +148,25 @@ public class DataController {
             preview = new DataImportService.Preview(preview.job(), preview.sheets(), preview.mappings(), preview.rows(),
                     preview.issues(), preview.templateContract(), new DataImportService.ProjectionSummary(
                     dataset.id(), dataset.status(), dataset.recordCount(),
-                    dataset.qualitySummary().path("longValueCount").asInt(0), dataset.eligibleRecordCount()));
+                    dataset.qualitySummary().path("longValueCount").asInt(0), dataset.eligibleRecordCount()),
+                    preview.compatibilityReport(), preview.componentOverrides());
         } catch (com.jsd.aird.shared.error.ApiException ignored) {
             // A job may legitimately have no committed projection yet.
         }
         return success(preview);
+    }
+
+    @GetMapping("/import-jobs/{id}/workbook-snapshot")
+    public ApiResponse<DataWorkbookService.WorkbookContext> importWorkbook(@PathVariable UUID id) {
+        return success(workbookService.importJob(id));
+    }
+
+    @PutMapping("/import-jobs/{id}/components/{componentId}/anchor")
+    public ApiResponse<DataRepository.Job> reanchorComponent(
+            @PathVariable UUID id, @PathVariable String componentId,
+            @Valid @RequestBody ComponentAnchorRequest request) {
+        service.reanchorComponent(id, componentId, request.sheetId(), request.sourceRange(), request.reason());
+        return success(service.get(id));
     }
 
     @GetMapping("/import-jobs/{id}/long-table-preview")
@@ -190,13 +224,13 @@ public class DataController {
     @PostMapping("/categories")
     public ApiResponse<com.jsd.aird.data.application.port.DataCategoryRepository.Category> createCategory(
             @Valid @RequestBody CategoryRequest request) {
-        return success(categoryService.create(request.name(), request.targetDataType()));
+        return success(categoryService.create(request.name(), request.targetDataType(), request.description()));
     }
 
     @PutMapping("/categories/{categoryId}")
     public ApiResponse<com.jsd.aird.data.application.port.DataCategoryRepository.Category> renameCategory(
             @PathVariable UUID categoryId, @Valid @RequestBody RenameCategoryRequest request) {
-        return success(categoryService.rename(categoryId, request.name()));
+        return success(categoryService.rename(categoryId, request.name(), request.description()));
     }
 
     @DeleteMapping("/categories/{categoryId}")
@@ -232,13 +266,19 @@ public class DataController {
     @GetMapping("/assets/{id}/source")
     public ApiResponse<List<DataRepository.SourceAnchor>> source(@PathVariable UUID id) { return success(service.sources(id)); }
 
+    @GetMapping("/assets/{id}/workbook-snapshot")
+    public ApiResponse<DataWorkbookService.WorkbookContext> assetWorkbook(
+            @PathVariable UUID id, @RequestParam(required = false) UUID revisionId) {
+        return success(workbookService.asset(id, revisionId));
+    }
+
     private <T> ApiResponse<T> success(T value) { return ResponseFactory.success(value, RequestIdHolder.currentOrUnknown()); }
 
     public record CreateRequest(@NotNull UUID sourceFileId, @NotNull UUID templateVersionId,
                                 @NotBlank String targetDataType, UUID categoryId, boolean duplicateOverride) {}
 
-    public record CategoryRequest(@NotBlank String name, String targetDataType) {}
-    public record RenameCategoryRequest(@NotBlank String name) {}
+    public record CategoryRequest(@NotBlank String name, String targetDataType, @Size(max = 240) String description) {}
+    public record RenameCategoryRequest(@NotBlank String name, @Size(max = 240) String description) {}
     public record AssignCategoryRequest(@NotNull UUID categoryId) {}
 
     public record ExportRequest(@NotBlank String targetDataType, @NotNull UUID templateVersionId,
@@ -253,7 +293,12 @@ public class DataController {
                               String fieldCode, String fieldName, @NotBlank String action, String valueType,
                               String sourceUnit, String standardUnit, JsonNode detail) {}
 
-    public record IssueRequest(@NotBlank String status) {}
+    public record IssueRequest(@NotBlank String status, String reason) {}
+    public record CorrectValueRequest(@NotBlank String bindingId, @NotNull String valuePath,
+                                      @NotNull JsonNode correctedValue, String reason) {}
+    public record ExcludeRecordRequest(boolean excluded, String reason) {}
+    public record ComponentAnchorRequest(@NotBlank String sheetId, @NotBlank String sourceRange,
+                                         @NotBlank @Size(max = 500) String reason) {}
     public record FieldRequest(String fieldId, @NotBlank String displayName, String valueType,
                                String uiType, String groupCode, String description) {}
 }

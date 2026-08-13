@@ -96,9 +96,13 @@ export function RecognitionReviewPanel({
       }),
     [filter, group, review?.items],
   );
+  const canonicalRegions = useMemo(
+    () => deduplicateRegions(review?.regions ?? []),
+    [review?.regions],
+  );
   const visibleRegions = useMemo(
-    () => filterRegionTree(review?.regions ?? [], filter, group),
-    [filter, group, review?.regions],
+    () => filterRegionTree(canonicalRegions, filter, group),
+    [canonicalRegions, filter, group],
   );
 
   if (!review?.recognitionRunId) {
@@ -127,7 +131,9 @@ export function RecognitionReviewPanel({
   }
 
   const filterCounts: Record<ReviewFilter, number> = {
-    ALL: review.regions?.length ? review.statistics?.fieldCount ?? 0 : review.items.length,
+    ALL: review.regions?.length
+      ? canonicalRegions.flatMap((region) => region.fields ?? []).length
+      : review.items.length,
     PENDING: review.regions?.length
       ? review.statistics?.pendingFieldCount ?? 0
       : review.summary.pending,
@@ -137,19 +143,22 @@ export function RecognitionReviewPanel({
     QUALITY: visibleQualityIssues.length,
   };
   if (review.regions?.length) {
-    const fields = review.regions.flatMap((region) => region.fields ?? []);
+    const fields = canonicalRegions.flatMap((region) => region.fields ?? []);
     filterCounts.CONFIRMED = fields.filter((field) => field.status === 'CONFIRMED').length;
     filterCounts.CONFLICT = review.statistics?.structureConflictGroups ?? 0;
     filterCounts.LOW = fields.filter((field) => field.status !== 'IGNORED' && field.confidence < 0.65).length;
   }
   const visibleFilters = FILTERS.filter((item) => item.value === 'ALL' || filterCounts[item.value] > 0);
   const coverageComplete = isCoverageComplete(review.recognitionCoverage);
+  const hasPendingRecognitionWork = filterCounts.PENDING > 0
+    || filterCounts.CONFLICT > 0
+    || !coverageComplete
+    || ((review.runStatus === 'FAILED' || review.runStatus === 'PARTIAL' || review.runStatus === 'TRUNCATED')
+      && !coverageComplete);
 
   return (
     <section className="recognition-review-pane" role="tabpanel" aria-label="识别确认">
-      {(review.runStatus === 'FAILED' || review.runStatus === 'PARTIAL' || review.runStatus === 'TRUNCATED'
-        || review.recognitionStatus === 'REVIEW_REQUIRED'
-        || (review.semanticModel?.diagnostics?.length ?? 0) > 0) && (
+      {hasPendingRecognitionWork && (
         <Alert
           type="warning"
           showIcon
@@ -289,7 +298,7 @@ export function RecognitionReviewPanel({
             );
           })}
         {filter !== 'QUALITY' && review.regions?.length ? (
-          <div className="recognition-section-heading"><strong>区域与字段</strong><span>{review.statistics?.regionCount ?? review.regions.length} 个区域</span></div>
+          <div className="recognition-section-heading"><strong>区域与字段</strong><span>{canonicalRegions.length} 个区域</span></div>
         ) : null}
         {filter !== 'QUALITY' && (review.regions?.length ? (
           <RecognitionRegionTree
@@ -338,7 +347,7 @@ export function RecognitionReviewPanel({
                 <span className="recognition-row-content">
                   <strong>{item.fieldName}</strong>
                   <span>
-                    {item.payload.suggestionLevel === 'CHILD' ? '明细字段' : kindLabel(item.kind)} · {sourceLabel(item.source)}
+                    {item.payload.suggestionLevel === 'CHILD' ? '明细字段' : kindLabel(item.kind)}
                   </span>
                 </span>
                 <span className="recognition-row-location">
@@ -557,12 +566,6 @@ export function RecognitionReviewPanel({
             </div>
           );
         }))}
-        {review.semanticModel && (
-          <details className="recognition-region-audit">
-            <summary>审计信息 · 模型原始响应</summary>
-            <pre className="recognition-audit-payload">{JSON.stringify(review.semanticModel, null, 2)}</pre>
-          </details>
-        )}
         {!review.regions?.length && !items.length && !(filter === 'ALL' || filter === 'QUALITY') && (
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有符合条件的识别项目" />
         )}
@@ -688,7 +691,11 @@ function RecognitionRegionTree({
         const rootItem = rootItems[0];
         const selectedAlternativeId = selectedAlternatives[region.regionId] || region.alternatives[0]?.alternativeId;
         const status = regionStatus(region.status);
-        const singleRegionSemanticAction = region.alternatives.length === 1
+        const isSimpleLongTable = rootItem?.source === 'RULE'
+          && rootItem.kind === 'ROW_TABLE'
+          && rootItem.payload.reasonCode === 'SIMPLE_LONG_TABLE';
+        const singleRegionSemanticAction = !isSimpleLongTable
+          && region.alternatives.length === 1
           && Boolean(rootItem)
           && (region.fields.length === 0
             || region.canonicalStatus !== 'CONFIRMED'
@@ -696,8 +703,10 @@ function RecognitionRegionTree({
         const resolutionGroupId = region.resolutionGroupId;
         const isPrimaryResolutionCard = !resolutionGroupId
           || regions.find((candidate) => candidate.resolutionGroupId === resolutionGroupId)?.regionId === region.regionId;
+        const visibleFields = deduplicateRegionFields(region.fields);
+        const regionKey = `${region.sheetId || region.sheetName || ''}|${region.range || ''}|${region.kind}`;
         return (
-          <section className="recognition-region-card" key={region.regionId} data-status={status.toLowerCase()}>
+          <section className="recognition-region-card" key={regionKey} data-status={status.toLowerCase()}>
             <div className="recognition-region-heading">
               <button
                 type="button"
@@ -756,10 +765,13 @@ function RecognitionRegionTree({
             {region.kind === 'MATRIX' && Boolean(region.structures?.matrixModel) && (
               <MatrixStructureSummary model={region.structures?.matrixModel as MatrixModel} title="矩阵结构" />
             )}
-            {region.fields.length > 0 && (
+            {visibleFields.length > 0 && (
               <div className="recognition-region-fields">
-                <div className="recognition-region-subheading"><strong>字段</strong><span>{region.fields.length} 个</span></div>
-                {region.fields.map((field) => (
+                <div className="recognition-region-subheading">
+                  <strong>{isSimpleLongTable ? '表头字段，请逐项确认' : '字段'}</strong>
+                  <span>{visibleFields.length} 个</span>
+                </div>
+                {visibleFields.map((field) => (
                   <RegionFieldCard
                     key={field.id}
                     field={field}
@@ -799,12 +811,6 @@ function RecognitionRegionTree({
                 ))}</div>
               </details>
             )}
-            {region.auditSuggestions.length > 0 && (
-              <details className="recognition-region-audit">
-                <summary>审计信息（{region.auditSuggestions.length}）</summary>
-                <div>{region.auditSuggestions.map((item) => <span key={item.id}>{kindLabel(item.kind)} · {item.fieldName || '原始候选'} · {locationText(item)}</span>)}</div>
-              </details>
-            )}
           </section>
         );
       })}
@@ -834,7 +840,8 @@ function RegionFieldCard({
   onRestore: (item: RecognitionReviewItem) => void;
 }) {
   const attributes = field.attributes ?? field.payload;
-  const reviewRequired = Boolean(attributes.reviewRequired ?? field.payload.reviewRequired ?? field.payload.candidateOnly);
+  const reviewRequired = field.status !== 'CONFIRMED'
+    && Boolean(attributes.reviewRequired ?? field.payload.reviewRequired ?? field.payload.candidateOnly);
   return (
     <div className="recognition-field-card" data-status={field.status.toLowerCase()}>
       <button type="button" className="recognition-review-row recognition-field-row" aria-expanded={selected} onClick={() => onSelect(field)}>
@@ -874,6 +881,49 @@ function RegionFieldCard({
 
 function regionStatus(status: string): RecognitionReviewStatus {
   return status === 'CONFIRMED' || status === 'CONFLICT' || status === 'IGNORED' ? status : 'PENDING';
+}
+
+function deduplicateRegions(regions: RecognitionRegionNode[]) {
+  const byGeometry = new Map<string, RecognitionRegionNode>();
+  for (const region of regions) {
+    const key = `${region.sheetId || region.sheetName || ''}|${region.range || ''}|${region.kind}`;
+    const normalized = { ...region, fields: deduplicateRegionFields(region.fields ?? []) };
+    const current = byGeometry.get(key);
+    if (!current || regionCandidateScore(normalized) > regionCandidateScore(current)) {
+      byGeometry.set(key, normalized);
+    }
+  }
+  return Array.from(byGeometry.values());
+}
+
+function deduplicateRegionFields(fields: RecognitionRegionNode['fields']) {
+  const byLocation = new Map<string, RecognitionRegionNode['fields'][number]>();
+  for (const field of fields) {
+    const locator = field.payload.locator as Record<string, string | undefined> | undefined;
+    const key = `${locator?.sheetId || field.sheetId || ''}|${locator?.valueRange || locator?.logicalInputRange || field.address || ''}|${field.payload.role || 'FIELD'}`;
+    const current = byLocation.get(key);
+    if (!current || fieldCandidateScore(field) > fieldCandidateScore(current)) byLocation.set(key, field);
+  }
+  return Array.from(byLocation.values());
+}
+
+function regionCandidateScore(region: RecognitionRegionNode) {
+  let score = deduplicateRegionFields(region.fields ?? []).length * 2;
+  if (region.canonicalStatus === 'CONFIRMED') score += 20;
+  if (region.structureStatus === 'CONFIRMED') score += 20;
+  if (region.status === 'CONFIRMED') score += 10;
+  return score;
+}
+
+function fieldCandidateScore(field: RecognitionRegionNode['fields'][number]) {
+  let score = 0;
+  if (field.payload.recognitionOrigin === 'CANONICAL_FIELD_ASSEMBLER'
+    || field.payload.recognitionOrigin === 'CANONICAL_FORM_ASSEMBLER') score += 100;
+  if (field.payload.activeGenerationId) score += 40;
+  if (field.payload.labelPath) score += 20;
+  if (field.status === 'CONFIRMED') score += 10;
+  if (field.payload.candidateOnly === false) score += 5;
+  return score;
 }
 
 function regionStatusLabel(region: RecognitionRegionNode) {
@@ -998,10 +1048,6 @@ function StatusIndicator({ status }: { status: RecognitionReviewStatus }) {
   );
 }
 
-function sourceLabel(source?: RecognitionReviewItem['source']) {
-  return source === 'RULE' ? '规则识别' : source === 'MODEL' ? '模型识别' : source === 'PHYSICAL' ? '物理结构' : '人工补充';
-}
-
 type StructureAlternative = NonNullable<
   RecognitionReviewItem['payload']['structureAlternatives']
 >[number];
@@ -1011,7 +1057,7 @@ function structureAlternativeLabel(alternative: StructureAlternative) {
     alternative.source === 'PHYSICAL'
       ? '物理判断'
       : alternative.source === 'MODEL'
-        ? '模型分区'
+        ? '模型候选'
         : '结构方案';
   const regions =
     alternative.regions?.length

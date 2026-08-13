@@ -13,10 +13,11 @@ public interface KnowledgeRepository {
     Optional<DocumentRow> findDocument(UUID organizationId, UUID documentId);
 
     List<DocumentRow> listDocuments(UUID organizationId, String keyword, String status, String aiStatus,
-                                     String scope, UUID categoryId, int page, int size);
+                                     String scope, UUID categoryId, String lifecycleStatus, String reviewStatus,
+                                     int page, int size);
 
     long countDocuments(UUID organizationId, String keyword, String status, String aiStatus,
-                        String scope, UUID categoryId);
+                        String scope, UUID categoryId, String lifecycleStatus, String reviewStatus);
 
     List<CategoryRow> listCategories(UUID organizationId, String scope);
 
@@ -24,9 +25,9 @@ public interface KnowledgeRepository {
 
     Optional<CategoryRow> findDefaultCategory(UUID organizationId, String scope);
 
-    CategoryRow createCategory(UUID organizationId, UUID actorId, String scope, String name);
+    CategoryRow createCategory(UUID organizationId, UUID actorId, String scope, String name, String description);
 
-    CategoryRow renameCategory(UUID organizationId, UUID categoryId, String name);
+    CategoryRow renameCategory(UUID organizationId, UUID categoryId, String name, String description);
 
     void deleteCategory(UUID organizationId, UUID categoryId, UUID replacementCategoryId);
 
@@ -38,6 +39,8 @@ public interface KnowledgeRepository {
 
     Optional<VersionRow> findVersion(UUID organizationId, UUID versionId);
 
+    Optional<ChunkAnchorRow> findChunkAnchor(UUID organizationId, UUID chunkId);
+
     List<VersionRow> listVersions(UUID organizationId, UUID documentId);
 
     void updateCurrentVersion(UUID organizationId, UUID documentId, int versionNo);
@@ -47,6 +50,10 @@ public interface KnowledgeRepository {
     void updateScanStatus(UUID documentId, String scanStatus);
 
     void replaceChunks(UUID documentId, UUID versionId, List<ChunkWrite> chunks);
+
+    void replaceChunks(UUID documentId, UUID versionId, UUID parseRunId, List<ChunkWrite> chunks);
+
+    void updateReviewedChunks(UUID parseRunId, List<ReviewedChunk> chunks);
 
     void rebuildTermStats(UUID organizationId);
 
@@ -84,7 +91,7 @@ public interface KnowledgeRepository {
         return vectorSearch(organizationId, vector, aiOnly, scopeIds, categoryIds, limit);
     }
 
-    record CategoryRow(UUID id, String scope, String name, int sortOrder, long documentCount) {
+    record CategoryRow(UUID id, String scope, String name, String description, int sortOrder, long documentCount) {
     }
 
     record NewDocument(UUID id, UUID organizationId, String title, String documentType, UUID actorId,
@@ -102,29 +109,45 @@ public interface KnowledgeRepository {
                        String scanStatus, String aiStatus, int currentVersionNo, UUID currentVersionId,
                        String originalName, String contentType, long size, String sha256,
                        String parseError, java.time.Instant createdAt, java.time.Instant updatedAt,
-                       String libraryScope, UUID categoryId, String categoryName) {
+                       String libraryScope, UUID categoryId, String categoryName, String lifecycleStatus,
+                       String reviewStatus, int reviewRevision, UUID currentPublicationId,
+                       Integer currentPublicationNo) {
         public DocumentRow(UUID id, UUID organizationId, String title, String documentType, String status,
                            String scanStatus, String aiStatus, int currentVersionNo, UUID currentVersionId,
                            String originalName, String contentType, long size, String sha256, String parseError,
                            java.time.Instant createdAt, java.time.Instant updatedAt) {
             this(id, organizationId, title, documentType, status, scanStatus, aiStatus, currentVersionNo,
                     currentVersionId, originalName, contentType, size, sha256, parseError, createdAt, updatedAt,
-                    "INTERNAL", null, "未分类");
+                    "INTERNAL", null, "未分类", "ACTIVE", "PENDING_REVIEW", 0, null, null);
         }
     }
 
     record VersionRow(UUID id, UUID documentId, int versionNo, UUID fileObjectId, String originalName,
                       String contentType, long size, String sha256, String status, String parserVersion,
-                      String errorMessage) {
+                      String errorMessage, String reviewStatus, int reviewRevision,
+                      boolean mediaProcessingConsent) {
+        public VersionRow(UUID id, UUID documentId, int versionNo, UUID fileObjectId, String originalName,
+                          String contentType, long size, String sha256, String status, String parserVersion,
+                          String errorMessage) {
+            this(id, documentId, versionNo, fileObjectId, originalName, contentType, size, sha256, status,
+                    parserVersion, errorMessage, "PENDING_REVIEW", 0, false);
+        }
     }
 
     record ChunkWrite(int chunkNo, Integer pageNo, String section, String content, String vector,
                       int tokenLength, String analyzerVersion, UUID parentChunkId, String embeddingModel,
-                      List<TermFrequency> terms) {
+                      List<TermFrequency> terms, String sheetName, String cellRange, String paragraphId,
+                      List<Double> bbox, Long startTimeMs, Long endTimeMs) {
         public ChunkWrite(int chunkNo, Integer pageNo, String section, String content, String vector) {
-            this(chunkNo, pageNo, section, content, vector, 0, "term-v1", null, null, List.of());
+            this(chunkNo, pageNo, section, content, vector, 0, "term-v1", null, null, List.of(),
+                    null, null, null, List.of(), null, null);
         }
     }
+
+    record ChunkAnchorRow(Integer pageNo, String sheetName, String cellRange, String paragraphId,
+                          List<Double> bbox, Long startTimeMs, Long endTimeMs, String section) { }
+
+    record ReviewedChunk(int chunkNo, String content, List<TermFrequency> terms) { }
 
     record TermFrequency(String term, int frequency) {
     }

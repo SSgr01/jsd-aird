@@ -1,5 +1,6 @@
 import type { ApiResponse } from '@/types/api';
 import { httpClient } from '@/services/http/client';
+import { generateUUID } from '@/utils/uuid';
 
 export interface AssistantCitation {
   sourceType: string;
@@ -114,7 +115,7 @@ export const assistantApi = {
       headers: {
         Accept: 'text/event-stream',
         'Content-Type': 'application/json',
-        'X-Request-Id': crypto.randomUUID(),
+        'X-Request-Id': generateUUID(),
         'X-Organization-Id': '00000000-0000-0000-0000-000000000001',
         'X-User-Id': '00000000-0000-0000-0000-000000000002',
         'X-Username': 'developer',

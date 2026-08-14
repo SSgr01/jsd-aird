@@ -1,3 +1,5 @@
+import { generateUUID } from '@/utils/uuid';
+
 import {
   addBusinessField,
   templateLocalFieldCode,
@@ -33,8 +35,8 @@ export function createCustomFieldWorkspace(
   mapping: TemplateBinding[],
   input: CreateCustomFieldInput,
 ) {
-  const id = crypto.randomUUID();
-  const bindingId = crypto.randomUUID();
+  const id = generateUUID();
+  const bindingId = generateUUID();
   const key = `field_${id.replaceAll('-', '')}`;
   const parent = input.parentField;
   const parentBinding = input.parentBinding;

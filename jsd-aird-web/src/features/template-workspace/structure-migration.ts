@@ -1,3 +1,5 @@
+import { generateUUID } from '@/utils/uuid';
+
 import type { FieldModel, TemplateBinding, WorkbookStructureOperation } from './types';
 
 const RANGE_KEYS = [
@@ -33,7 +35,7 @@ export function operationFromUniverCommand(command: {
   const rowCount = number(range.endRow) - number(range.startRow) + 1;
   const columnCount = number(range.endColumn) - number(range.startColumn) + 1;
   const base = {
-    operationId: crypto.randomUUID(),
+    operationId: generateUUID(),
     sheetId,
     source: 'CUSTOMER' as const,
   };

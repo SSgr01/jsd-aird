@@ -1,4 +1,5 @@
 import type { RecognitionSuggestion } from '@/services/templates/template-api';
+import { generateUUID } from '@/utils/uuid';
 
 import type { BusinessField, FieldKind, FieldModel, TemplateBinding } from './types';
 import { groupCode, normalizeFieldModel, normalizeGroupName } from './group-normalizer';
@@ -118,14 +119,14 @@ export function applySuggestion(
   const nextModel = structuredClone(model);
   if (!group) {
     group = {
-      id: `group-${crypto.randomUUID()}`,
+      id: `group-${generateUUID()}`,
       name: groupName,
       groupCode: groupCode(groupName),
       order: nextModel.groups.length,
     };
     nextModel.groups.push(group);
   }
-  const bindingId = suggestion.payload.bindingId || crypto.randomUUID();
+  const bindingId = suggestion.payload.bindingId || generateUUID();
   const fieldId = suggestion.payload.fieldId || bindingId;
   const kind = suggestionKind(suggestion);
   const locator = locatorOverride ?? suggestion.payload.locator;

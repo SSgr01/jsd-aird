@@ -14,6 +14,8 @@ import {
 import UniverPresetDocsCoreZhCN from '@univerjs/preset-docs-core/locales/zh-CN';
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 
+import { generateUUID } from '@/utils/uuid';
+
 import '@univerjs/preset-docs-core/lib/index.css';
 
 import type {
@@ -278,7 +280,7 @@ export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverD
       async insertWordControl(role: BindingRole, fieldCode: string, dataPath: string) {
         const document = apiRef.current?.getActiveDocument();
         if (!document) throw new Error('Word 编辑器尚未就绪');
-        const markerId = crypto.randomUUID();
+        const markerId = generateUUID();
         const placeholder = role === 'REPEAT_REGION' ? '重复内容' : role === 'CONDITIONAL' ? '条件内容' : '请输入值';
         const inserted = await apiRef.current?.executeCommand('doc.command.insert-custom-range', {
           unitId: document.getId(),

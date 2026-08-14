@@ -33,6 +33,7 @@ import {
   Typography,
 } from 'antd';
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { generateUUID } from '@/utils/uuid';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
 import {
@@ -438,7 +439,7 @@ export function TemplateWorkspacePage() {
          clientCommandSummary: workspace.format === 'DOCX'
            ? 'word-document-save'
            : `field-position-save:${fieldModel.fields.length}`,
-        idempotencyKey: crypto.randomUUID(),
+        idempotencyKey: generateUUID(),
         bindingValues,
         recognitionActions: Object.entries(effectiveRecognitionActions).map(
           ([recognitionItemId, action]) => ({
@@ -1336,8 +1337,8 @@ export function TemplateWorkspacePage() {
               && normalizeAddress(stringValue(locator.labelAddress || field.labelRange)) === normalizeAddress(labelAddress);
           })
         ) return;
-        const id = crypto.randomUUID();
-        const bindingId = crypto.randomUUID();
+        const id = generateUUID();
+        const bindingId = generateUUID();
         const region = findFormRegionForCell(recognitionReview, selection.sheetId, labelAddress);
         const group =
           fieldModel.groups.find((item) => item.groupCode === 'BASIC_INFORMATION') ??
@@ -1437,8 +1438,8 @@ export function TemplateWorkspacePage() {
 
   const addField = (groupId?: string) => {
     if (!versionId) return;
-    const id = crypto.randomUUID();
-    const bindingId = crypto.randomUUID();
+    const id = generateUUID();
+    const bindingId = generateUUID();
     const selectedGroupId = groupId ?? fieldModel.groups[0]?.id ?? 'group-other';
     const dataPath = `/customFields/field_${id.replaceAll('-', '')}`;
     const field: BusinessField = {
@@ -1931,7 +1932,7 @@ export function TemplateWorkspacePage() {
             setGroupDrafts((current) => [
               ...current,
               {
-                id: `group-${crypto.randomUUID()}`,
+                id: `group-${generateUUID()}`,
                 name: `新分组 ${current.length + 1}`,
                 order: current.length,
               },

@@ -11,6 +11,8 @@ import { Button, Input, Select, Space, Tag, Tooltip, Typography } from 'antd';
 import { renderAsync } from 'docx-preview';
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 
+import { generateUUID } from '@/utils/uuid';
+
 import type { BindingRole, DocumentStructure, EditorHandle, TemplateBinding } from './types';
 import type { WordPatchOperation } from './WordTemplateEditor';
 
@@ -262,7 +264,7 @@ export const WordNativePreview = forwardRef<EditorHandle, Props>(function WordNa
     insertWordControl: (role: BindingRole, fieldCode: string, dataPath: string) => {
       const target = selectionRef.current;
       if (!target) return Promise.reject(new Error('请先在 Word 中选择文本或点击插入位置'));
-      const markerId = crypto.randomUUID();
+      const markerId = generateUUID();
       emit({
         type: 'INSERT_CONTENT_CONTROL',
         targetId: target.targetId,

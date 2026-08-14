@@ -11,26 +11,49 @@ public interface DocumentParser {
     ParsedDocument parse(InputStream source, String fileName);
 
     record ParsedDocument(List<TextBlock> blocks, String parserVersion, String providerTaskId,
-                          Map<String, Object> metadata) {
+                          Map<String, Object> metadata, List<SourceTable> sourceTables) {
         public ParsedDocument {
             blocks = blocks == null ? List.of() : List.copyOf(blocks);
             metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
+            sourceTables = sourceTables == null ? List.of() : List.copyOf(sourceTables);
         }
 
         public ParsedDocument(List<TextBlock> blocks, String parserVersion) {
-            this(blocks, parserVersion, null, Map.of());
+            this(blocks, parserVersion, null, Map.of(), List.of());
+        }
+
+        public ParsedDocument(List<TextBlock> blocks, String parserVersion, String providerTaskId,
+                              Map<String, Object> metadata) {
+            this(blocks, parserVersion, providerTaskId, metadata, List.of());
         }
     }
 
     record TextBlock(Integer pageNo, String section, String content, String sheetName, String cellRange,
                      String paragraphId, List<Double> bbox, Long startTimeMs, Long endTimeMs,
-                     Double confidence) {
+                     Double confidence, Map<String, Object> attributes) {
         public TextBlock(Integer pageNo, String section, String content) {
-            this(pageNo, section, content, null, null, null, List.of(), null, null, null);
+            this(pageNo, section, content, null, null, null, List.of(), null, null, null, Map.of());
+        }
+
+        public TextBlock(Integer pageNo, String section, String content, String sheetName, String cellRange,
+                         String paragraphId, List<Double> bbox, Long startTimeMs, Long endTimeMs,
+                         Double confidence) {
+            this(pageNo, section, content, sheetName, cellRange, paragraphId, bbox, startTimeMs,
+                    endTimeMs, confidence, Map.of());
         }
 
         public TextBlock {
             bbox = bbox == null ? List.of() : List.copyOf(bbox);
+            attributes = attributes == null ? Map.of() : Map.copyOf(attributes);
         }
     }
+
+    record SourceTable(int sourceBlockNo, String sheetKey, String sheetName, int rowCount,
+                       int columnCount, int nonEmptyCount, List<TableCell> cells) {
+        public SourceTable {
+            cells = cells == null ? List.of() : List.copyOf(cells);
+        }
+    }
+
+    record TableCell(int rowNo, int columnNo, String displayValue, String cellRange) { }
 }

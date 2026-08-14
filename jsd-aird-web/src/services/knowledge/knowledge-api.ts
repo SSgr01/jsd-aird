@@ -4,65 +4,36 @@ import { appEnv } from '@/app/config/env';
 
 export type KnowledgeStatus = 'QUEUED' | 'PROCESSING' | 'READY' | 'FAILED' | 'REJECTED' | 'PENDING_PROVIDER';
 export type AiStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'REVOKED';
+export type StructuredDocument = { type: 'doc'; schemaVersion?: number; content?: StructuredNode[] };
+export type StructuredNode = { type: string; text?: string; attrs?: Record<string, unknown>; content?: StructuredNode[]; marks?: Array<{ type: string; attrs?: Record<string, unknown> }> };
 
-export interface KnowledgeDocument {
-  id: string;
-  title: string;
-  status: KnowledgeStatus;
-  scanStatus: string;
-  aiStatus: AiStatus;
-  currentVersionNo: number;
-  currentVersionId: string;
-  originalName: string;
-  contentType: string;
-  size: number;
-  sha256: string;
-  parseError?: string;
-  createdAt: string;
-  updatedAt: string;
-  libraryScope: 'INTERNAL' | 'EXTERNAL';
-  categoryId?: string;
-  categoryName?: string;
-  lifecycleStatus: 'ACTIVE' | 'DISABLED';
-  reviewStatus: 'PENDING_REVIEW' | 'REJECTED' | 'PUBLISHED' | 'SUPERSEDED';
-  reviewRevision: number;
-  currentPublicationId?: string;
-  currentPublicationNo?: number;
-}
-
+export interface KnowledgeDocument { id: string; title: string; status: KnowledgeStatus; scanStatus: string; aiStatus: AiStatus; currentVersionNo: number; currentVersionId: string; originalName: string; contentType: string; size: number; sha256: string; parseError?: string; createdAt: string; updatedAt: string; libraryScope: 'INTERNAL' | 'EXTERNAL'; categoryId?: string; categoryName?: string; lifecycleStatus: 'ACTIVE' | 'DISABLED'; reviewStatus: 'PENDING_REVIEW' | 'REJECTED' | 'PUBLISHED' | 'SUPERSEDED'; reviewRevision: number; currentPublicationId?: string; currentPublicationNo?: number }
 export interface KnowledgeCategory { id: string; scope: 'INTERNAL' | 'EXTERNAL'; name: string; description?: string; sortOrder: number; documentCount: number }
 export interface KnowledgeVersion { id: string; documentId: string; versionNo: number; fileObjectId: string; originalName: string; contentType: string; size: number; sha256: string; status: KnowledgeStatus; errorMessage?: string; reviewStatus: string; reviewRevision: number }
 export interface DuplicateMatch { documentId: string; versionId: string; versionNo: number; title: string; originalName: string; sha256: string; similarity: number; lifecycleStatus: string; reviewStatus: string }
 export interface UploadPreflight { decision: 'EXACT_DUPLICATE' | 'POSSIBLE_VERSION' | 'NEW_DOCUMENT'; fileId: string; originalName: string; sha256: string; exactMatches: DuplicateMatch[]; possibleVersions: DuplicateMatch[] }
-export interface ParseBlock { id: string; blockNo: number; pageNo?: number; sheetName?: string; cellRange?: string; paragraphId?: string; bbox?: number[]; startTimeMs?: number; endTimeMs?: number; section?: string; rawText: string; normalizedText: string; confirmedText?: string; confidence?: number; reviewStatus: 'PENDING' | 'CONFIRMED' | 'IGNORED' | 'ISSUE' }
-export interface ParseRun { id: string; documentId: string; versionId: string; runNo: number; status: string; errorMessage?: string; createdAt: string }
-export interface ParseIssue { id: string; blockId?: string; code: string; severity: 'INFO' | 'WARNING' | 'BLOCKER'; message: string; status: 'OPEN' | 'RESOLVED' | 'IGNORED'; resolution?: string }
-export interface KnowledgeReview { documentId: string; title: string; libraryScope: 'INTERNAL' | 'EXTERNAL'; categoryId?: string; categoryName?: string; lifecycleStatus: string; versionId: string; versionNo: number; originalName: string; contentType: string; size: number; processingStatus: string; reviewStatus: string; reviewRevision: number; sourceInfo: Record<string, unknown>; parseRun?: ParseRun; blocks: ParseBlock[]; issues: ParseIssue[]; tags: string[] }
+export interface ParseRun { id: string; documentId: string; versionId: string; runNo: number; status: 'QUEUED' | 'PROCESSING' | 'SUCCEEDED' | 'FAILED'; errorMessage?: string; createdAt: string; sourceDocument: StructuredDocument; schemaVersion: number }
+export interface SourceAnchor { version: 1; kind: 'none' | 'page' | 'page_region' | 'docx_path' | 'sheet_range' | 'time_range'; page?: number; polygon?: number[] | number[][]; paragraphId?: string; sheetKey?: string; sheetName?: string; range?: string; startMs?: number; endMs?: number }
+export interface SourceNode { sourceNodeKey: string; nodeNo: number; nodeType: string; rawText: string; sourceAnchor: SourceAnchor; confidence: { textConfidence?: number | null; structureConfidence?: number | null; tableConfidence?: number | null } }
+export interface ParseIssue { id: string; sourceNodeKeys: string[]; code: string; severity: 'INFO' | 'WARNING' | 'BLOCKER'; message: string; status: 'OPEN' | 'RESOLVED' | 'IGNORED'; resolution?: string }
+export interface ReviewRevision { id: string; parseRunId: string; revisionNo: number; lockVersion: number; basePublicationId?: string; confirmedDocument: StructuredDocument; excludedReviewNodeIds: string[]; status: 'DRAFT' | 'BUILDING' | 'PUBLISHED' | 'FAILED' | 'SUPERSEDED'; failureReason?: string; updatedAt: string }
+export interface KnowledgeReview { documentId: string; title: string; libraryScope: 'INTERNAL' | 'EXTERNAL'; categoryId?: string; categoryName?: string; lifecycleStatus: string; versionId: string; versionNo: number; fileObjectId: string; originalName: string; contentType: string; size: number; processingStatus: string; reviewStatus: string; sourceInfo: Record<string, unknown>; parseRun?: ParseRun; sourceNodes: SourceNode[]; reviewRevision?: ReviewRevision; issues: ParseIssue[]; tags: string[] }
 export interface ReviewQueueItem { documentId: string; title: string; versionId: string; versionNo: number; originalName: string; processingStatus: string; reviewStatus: string; reviewRevision: number; categoryName?: string; updatedAt: string }
-export interface Publication { id: string; documentId: string; versionId: string; parseRunId: string; publicationNo: number; status: string; aiStatus: AiStatus; publishedAt: string }
-export interface IndexBuildView { documentId: string; versionId: string; parseRunId: string; status: 'INDEXING' }
+export interface Publication { id: string; documentId: string; versionId: string; parseRunId: string; reviewRevisionId: string; publicationNo: number; status: string; aiStatus: AiStatus; publishedAt: string }
+export interface PublishedContent { publication: Publication; fileObjectId: string; originalName: string; contentType: string; size: number; sourceDocument: StructuredDocument; sourceNodes: SourceNode[]; confirmedDocument: StructuredDocument; excludedReviewNodeIds: string[] }
+export interface IndexBuildView { documentId: string; versionId: string; reviewRevisionId: string; status: 'BUILDING' }
 export interface BatchResult { documentId: string; success: boolean; errorCode?: string; message?: string }
+export interface IssueAction { issueId: string; status: 'OPEN' | 'RESOLVED' | 'IGNORED'; resolution?: string }
+export interface TableCellView { rowNo: number; columnNo: number; value: string; patched: boolean }
+export interface TableWindow { sourceTableId: string; sheetKey: string; sheetName: string; rowCount: number; columnCount: number; nonEmptyCount: number; rowOffset: number; columnOffset: number; cells: TableCellView[]; excludedRows: number[]; headerRows: number[] }
 
-const reviewPayload = (review: KnowledgeReview, confirmAll = false) => ({
-  documentId: review.documentId,
-  versionId: review.versionId,
-  reviewRevision: review.reviewRevision,
-  title: review.title,
-  libraryScope: review.libraryScope,
-  categoryId: review.categoryId,
-  tags: review.tags,
-  blocks: review.blocks.map((item) => ({
-    id: item.id,
-    confirmedText: item.confirmedText ?? item.normalizedText,
-    reviewStatus: item.reviewStatus === 'IGNORED' ? 'IGNORED' : confirmAll ? 'CONFIRMED' : item.reviewStatus,
-  })),
-});
+const reviewPayload = (review: KnowledgeReview, issueActions: IssueAction[] = []) => {
+  if (!review.reviewRevision) throw new Error('当前没有可保存的校对版本');
+  return { documentId: review.documentId, versionId: review.versionId, reviewRevisionId: review.reviewRevision.id, lockVersion: review.reviewRevision.lockVersion, basePublicationId: review.reviewRevision.basePublicationId, title: review.title, libraryScope: review.libraryScope, categoryId: review.categoryId, tags: review.tags, confirmedDocument: review.reviewRevision.confirmedDocument, excludedReviewNodeIds: review.reviewRevision.excludedReviewNodeIds, issueActions };
+};
 
 export const knowledgeApi = {
-  async list(params: { keyword?: string; status?: string; aiStatus?: string; scope?: string; categoryId?: string; lifecycleStatus?: string; reviewStatus?: string; page?: number; size?: number } = {}) {
-    const response = await httpClient.get<ApiResponse<PageResponse<KnowledgeDocument>>>('/api/v1/knowledge/documents', { params });
-    return response.data.data;
-  },
+  async list(params: { keyword?: string; status?: string; aiStatus?: string; scope?: string; categoryId?: string; lifecycleStatus?: string; reviewStatus?: string; page?: number; size?: number } = {}) { const response = await httpClient.get<ApiResponse<PageResponse<KnowledgeDocument>>>('/api/v1/knowledge/documents', { params }); return response.data.data; },
   async categories(scope?: 'INTERNAL' | 'EXTERNAL') { const response = await httpClient.get<ApiResponse<KnowledgeCategory[]>>('/api/v1/knowledge/categories', { params: scope ? { scope } : undefined }); return response.data.data; },
   async createCategory(input: { name: string; scope: 'INTERNAL' | 'EXTERNAL'; description?: string }) { const response = await httpClient.post<ApiResponse<KnowledgeCategory>>('/api/v1/knowledge/categories', input); return response.data.data; },
   async renameCategory(id: string, input: { name: string; description?: string }) { const response = await httpClient.put<ApiResponse<KnowledgeCategory>>(`/api/v1/knowledge/categories/${id}`, input); return response.data.data; },
@@ -79,11 +50,15 @@ export const knowledgeApi = {
   async createGoverned(input: { fileId: string; title?: string; libraryScope: string; categoryId: string; tags?: string[]; resolution?: 'NEW_DOCUMENT' | 'NEW_VERSION'; targetDocumentId?: string; sourceInfo?: Record<string, unknown> }) { const response = await httpClient.post<ApiResponse<KnowledgeDocument>>('/api/v1/knowledge/documents', input); return response.data.data; },
   async reviewQueue(status?: string) { const response = await httpClient.get<ApiResponse<ReviewQueueItem[]>>('/api/v1/knowledge/review-queue', { params: status ? { status } : undefined }); return response.data.data; },
   async review(documentId: string, versionId: string) { const response = await httpClient.get<ApiResponse<KnowledgeReview>>(`/api/v1/knowledge/documents/${documentId}/versions/${versionId}/review`); return response.data.data; },
-  async saveReview(review: KnowledgeReview, confirmAll = false) { const response = await httpClient.put<ApiResponse<KnowledgeReview>>(`/api/v1/knowledge/documents/${review.documentId}/versions/${review.versionId}/review`, reviewPayload(review, confirmAll)); return response.data.data; },
-  async publish(documentId: string, versionId: string, reviewRevision: number) { const response = await httpClient.post<ApiResponse<IndexBuildView>>(`/api/v1/knowledge/documents/${documentId}/versions/${versionId}/publish`, { reviewRevision }); return response.data.data; },
-  async revise(review: KnowledgeReview, basePublicationId: string) { const payload = reviewPayload(review, true); const response = await httpClient.post<ApiResponse<IndexBuildView>>(`/api/v1/knowledge/documents/${review.documentId}/revisions`, { basePublicationId, reviewRevision: review.reviewRevision, blocks: payload.blocks }); return response.data.data; },
-  async reject(documentId: string, versionId: string, reviewRevision: number, reason: string) { await httpClient.post(`/api/v1/knowledge/documents/${documentId}/versions/${versionId}/reject`, { reviewRevision, reason }); },
-  async reparse(documentId: string, versionId: string, reviewRevision: number) { const response = await httpClient.post<ApiResponse<KnowledgeDocument>>(`/api/v1/knowledge/documents/${documentId}/versions/${versionId}/reparse`, { reviewRevision }); return response.data.data; },
+  async saveReview(review: KnowledgeReview, issueActions?: IssueAction[]) { const response = await httpClient.put<ApiResponse<KnowledgeReview>>(`/api/v1/knowledge/documents/${review.documentId}/versions/${review.versionId}/review`, reviewPayload(review, issueActions)); return response.data.data; },
+  async publish(review: KnowledgeReview) { if (!review.reviewRevision) throw new Error('当前没有可发布的校对版本'); const revision = review.reviewRevision; const response = await httpClient.post<ApiResponse<IndexBuildView>>(`/api/v1/knowledge/documents/${review.documentId}/versions/${review.versionId}/publish`, { reviewRevisionId: revision.id, lockVersion: revision.lockVersion, basePublicationId: revision.basePublicationId }); return response.data.data; },
+  async createRevision(documentId: string, basePublicationId: string) { const response = await httpClient.post<ApiResponse<KnowledgeReview>>(`/api/v1/knowledge/documents/${documentId}/revisions`, { basePublicationId }); return response.data.data; },
+  async reject(review: KnowledgeReview, reason: string) { if (!review.reviewRevision) throw new Error('当前没有可驳回的校对版本'); await httpClient.post(`/api/v1/knowledge/documents/${review.documentId}/versions/${review.versionId}/reject`, { reviewRevisionId: review.reviewRevision.id, lockVersion: review.reviewRevision.lockVersion, reason }); },
+  async reparse(review: KnowledgeReview) { if (!review.reviewRevision) throw new Error('当前没有可重新解析的版本'); const response = await httpClient.post<ApiResponse<KnowledgeDocument>>(`/api/v1/knowledge/documents/${review.documentId}/versions/${review.versionId}/reparse`, { reviewRevisionId: review.reviewRevision.id, lockVersion: review.reviewRevision.lockVersion }); return response.data.data; },
+  async publishedContent(documentId: string, publicationId?: string) { const response = await httpClient.get<ApiResponse<PublishedContent>>(`/api/v1/knowledge/documents/${documentId}/published-content`, { params: publicationId ? { publicationId } : undefined }); return response.data.data; },
+  async reviewTable(documentId: string, versionId: string, reviewRevisionId: string, sourceTableId: string, params: { rowOffset?: number; rowLimit?: number; columnOffset?: number; columnLimit?: number } = {}) { const response = await httpClient.get<ApiResponse<TableWindow>>(`/api/v1/knowledge/documents/${documentId}/versions/${versionId}/review/${reviewRevisionId}/tables/${sourceTableId}`, { params }); return response.data.data; },
+  async publishedTable(documentId: string, publicationId: string, sourceTableId: string, params: { rowOffset?: number; rowLimit?: number; columnOffset?: number; columnLimit?: number } = {}) { const response = await httpClient.get<ApiResponse<TableWindow>>(`/api/v1/knowledge/documents/${documentId}/publications/${publicationId}/tables/${sourceTableId}`, { params }); return response.data.data; },
+  async saveReviewTable(documentId: string, versionId: string, reviewRevisionId: string, sourceTableId: string, input: { lockVersion: number; patches: Array<{ rowNo: number; columnNo: number; value: string }>; rows: Array<{ rowNo: number; excluded: boolean; header: boolean }>; rowOffset?: number; rowLimit?: number; columnOffset?: number; columnLimit?: number }) { const response = await httpClient.put<ApiResponse<TableWindow>>(`/api/v1/knowledge/documents/${documentId}/versions/${versionId}/review/${reviewRevisionId}/tables/${sourceTableId}`, input); return response.data.data; },
   async disable(documentId: string, reason: string) { await httpClient.post(`/api/v1/knowledge/documents/${documentId}/disable`, { reason }); },
   async restore(documentId: string) { await httpClient.post(`/api/v1/knowledge/documents/${documentId}/restore`); },
   async batchMove(documentIds: string[], categoryId: string) { const response = await httpClient.post<ApiResponse<BatchResult[]>>('/api/v1/knowledge/documents/batch/move', { documentIds, categoryId }); return response.data.data; },

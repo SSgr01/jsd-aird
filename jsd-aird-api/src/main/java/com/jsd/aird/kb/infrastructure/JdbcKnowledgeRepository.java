@@ -266,23 +266,27 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
 
     @Override
     @Transactional
-    public void replaceChunks(UUID documentId, UUID versionId, UUID parseRunId, List<ChunkWrite> chunks) {
-        jdbc.update("DELETE FROM kb.document_chunk WHERE parse_run_id = ?", parseRunId);
-        insertChunks(documentId, versionId, parseRunId, chunks);
+    public void replaceChunks(UUID documentId, UUID versionId, UUID reviewRevisionId, List<ChunkWrite> chunks) {
+        jdbc.update("DELETE FROM kb.document_chunk WHERE review_revision_id = ?", reviewRevisionId);
+        insertChunks(documentId, versionId, reviewRevisionId, chunks);
     }
 
-    private void insertChunks(UUID documentId, UUID versionId, UUID parseRunId, List<ChunkWrite> chunks) {
+    private void insertChunks(UUID documentId, UUID versionId, UUID reviewRevisionId, List<ChunkWrite> chunks) {
+        var parseRunId = jdbc.queryForObject(
+                "SELECT parse_run_id FROM kb.document_review_revision WHERE id = ?", UUID.class, reviewRevisionId);
         UUID parentChunkId = null;
         for (var chunk : chunks) {
             var chunkId = UUID.randomUUID();
             var effectiveParentId = chunk.parentChunkId() == null ? parentChunkId : chunk.parentChunkId();
             jdbc.update("""
                     INSERT INTO kb.document_chunk (
-                        id, document_id, document_version_id, parse_run_id, chunk_no, page_no, section, content, embedding,
+                        id, document_id, document_version_id, parse_run_id, review_revision_id,
+                        chunk_no, page_no, section, content, embedding,
                         parent_chunk_id, token_length, analyzer_version, embedding_model, sheet_name, cell_range,
                         paragraph_id, bbox_jsonb, start_time_ms, end_time_ms
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS vector), ?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb), ?, ?)
-                    """, chunkId, documentId, versionId, parseRunId, chunk.chunkNo(), chunk.pageNo(), chunk.section(),
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS vector), ?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb), ?, ?)
+                    """, chunkId, documentId, versionId, parseRunId, reviewRevisionId,
+                    chunk.chunkNo(), chunk.pageNo(), chunk.section(),
                     chunk.content(), chunk.vector(), effectiveParentId, chunk.tokenLength(), chunk.analyzerVersion(),
                     chunk.embeddingModel(), chunk.sheetName(), chunk.cellRange(), chunk.paragraphId(),
                     chunk.bbox() == null || chunk.bbox().isEmpty() ? null : chunk.bbox().toString(),
@@ -310,7 +314,7 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                     JOIN kb.document_version v ON v.id = c.document_version_id
                     JOIN ops.file_object f ON f.id = v.file_object_id AND f.organization_id = d.organization_id AND f.status <> 'DELETED'
                     JOIN kb.publication p ON p.id = d.current_publication_id
-                        AND p.document_version_id = c.document_version_id AND p.parse_run_id = c.parse_run_id
+                        AND p.document_version_id = c.document_version_id AND p.review_revision_id = c.review_revision_id
                         AND p.status = 'CURRENT'
                     WHERE d.organization_id = ? AND d.lifecycle_status = 'ACTIVE'
                 ), stats AS (
@@ -321,7 +325,7 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                     JOIN kb.document_version v ON v.id = c.document_version_id
                     JOIN ops.file_object f ON f.id = v.file_object_id AND f.organization_id = d.organization_id AND f.status <> 'DELETED'
                     JOIN kb.publication p ON p.id = d.current_publication_id
-                        AND p.document_version_id = c.document_version_id AND p.parse_run_id = c.parse_run_id
+                        AND p.document_version_id = c.document_version_id AND p.review_revision_id = c.review_revision_id
                         AND p.status = 'CURRENT'
                     WHERE d.organization_id = ? AND d.lifecycle_status = 'ACTIVE'
                     GROUP BY t.term
@@ -333,36 +337,44 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
     }
 
     @Override
-    public void startProcessingStep(UUID organizationId, UUID documentId, UUID versionId, UUID parseRunId,
+    public void startProcessingStep(UUID organizationId, UUID documentId, UUID versionId, UUID ownerId,
                                     String stepKey, String provider, String model, String inputSha256) {
+        var reviewStep = isReviewStep(stepKey);
+        var parseRunId = reviewStep ? null : ownerId;
+        var reviewRevisionId = reviewStep ? ownerId : null;
         jdbc.update("""
                 INSERT INTO kb.document_processing_step (
-                    id, organization_id, document_id, document_version_id, parse_run_id, step_key, status, progress,
+                    id, organization_id, document_id, document_version_id, parse_run_id, review_revision_id,
+                    step_key, status, progress,
                     attempt, provider, model, input_sha256, started_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 'RUNNING', 0, 0, ?, ?, ?, now(), now())
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'RUNNING', 0, 0, ?, ?, ?, now(), now())
                 ON CONFLICT DO NOTHING
-                """, UUID.randomUUID(), organizationId, documentId, versionId, parseRunId, stepKey,
+                """, UUID.randomUUID(), organizationId, documentId, versionId, parseRunId, reviewRevisionId, stepKey,
                 provider, model, inputSha256);
         jdbc.update("""
                 UPDATE kb.document_processing_step
                 SET status = 'RUNNING', progress = 0, attempt = attempt + 1, provider = ?, model = ?,
                     input_sha256 = ?, error_message = NULL, started_at = now(), finished_at = NULL, updated_at = now()
                 WHERE organization_id = ? AND document_version_id = ? AND step_key = ?
-                  AND parse_run_id IS NOT DISTINCT FROM ?
-                """, provider, model, inputSha256, organizationId, versionId, stepKey, parseRunId);
+                  AND parse_run_id IS NOT DISTINCT FROM ? AND review_revision_id IS NOT DISTINCT FROM ?
+                """, provider, model, inputSha256, organizationId, versionId, stepKey,
+                parseRunId, reviewRevisionId);
     }
 
     @Override
-    public void finishProcessingStep(UUID organizationId, UUID versionId, UUID parseRunId, String stepKey,
+    public void finishProcessingStep(UUID organizationId, UUID versionId, UUID ownerId, String stepKey,
                                      String status, String outputSha256, String errorMessage) {
+        var reviewStep = isReviewStep(stepKey);
+        var parseRunId = reviewStep ? null : ownerId;
+        var reviewRevisionId = reviewStep ? ownerId : null;
         jdbc.update("""
                 UPDATE kb.document_processing_step
                 SET status = ?, progress = CASE WHEN ? = 'SUCCEEDED' THEN 100 ELSE progress END,
                     output_sha256 = ?, error_message = ?, finished_at = now(), updated_at = now()
                 WHERE organization_id = ? AND document_version_id = ? AND step_key = ?
-                  AND parse_run_id IS NOT DISTINCT FROM ?
+                  AND parse_run_id IS NOT DISTINCT FROM ? AND review_revision_id IS NOT DISTINCT FROM ?
                 """, status, status, outputSha256, errorMessage == null ? null : truncate(errorMessage),
-                organizationId, versionId, stepKey, parseRunId);
+                organizationId, versionId, stepKey, parseRunId, reviewRevisionId);
     }
 
     @Override
@@ -404,14 +416,14 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
     }
 
     @Override
-    public List<ChunkEmbeddingRow> chunksForEmbedding(UUID organizationId, UUID documentId, UUID parseRunId) {
+    public List<ChunkEmbeddingRow> chunksForEmbedding(UUID organizationId, UUID documentId, UUID reviewRevisionId) {
         return jdbc.query("""
                 SELECT c.id, c.content FROM kb.document_chunk c
                 JOIN kb.document d ON d.id = c.document_id
-                WHERE d.organization_id = ? AND c.document_id = ? AND c.parse_run_id = ?
+                WHERE d.organization_id = ? AND c.document_id = ? AND c.review_revision_id = ?
                 ORDER BY c.chunk_no
                 """, (rs, ignored) -> new ChunkEmbeddingRow(rs.getObject("id", UUID.class), rs.getString("content")),
-                organizationId, documentId, parseRunId);
+                organizationId, documentId, reviewRevisionId);
     }
 
     @Override
@@ -461,7 +473,7 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                 JOIN kb.document_version v ON v.id = c.document_version_id
                 JOIN ops.file_object f ON f.id = v.file_object_id AND f.organization_id = d.organization_id AND f.status <> 'DELETED'
                 JOIN kb.publication p ON p.id = d.current_publication_id
-                    AND p.document_version_id = c.document_version_id AND p.parse_run_id = c.parse_run_id
+                    AND p.document_version_id = c.document_version_id AND p.review_revision_id = c.review_revision_id
                     AND p.status = 'CURRENT'
                 WHERE d.organization_id = ? AND d.lifecycle_status = 'ACTIVE'
                 """ + aiClause + """
@@ -503,7 +515,7 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                     JOIN kb.document_version v ON v.id = c.document_version_id
                     JOIN ops.file_object f ON f.id = v.file_object_id AND f.organization_id = d.organization_id AND f.status <> 'DELETED'
                     JOIN kb.publication p ON p.id = d.current_publication_id
-                        AND p.document_version_id = c.document_version_id AND p.parse_run_id = c.parse_run_id
+                        AND p.document_version_id = c.document_version_id AND p.review_revision_id = c.review_revision_id
                         AND p.status = 'CURRENT'
                     WHERE d.organization_id = ? AND d.lifecycle_status = 'ACTIVE'
                 """ + aiClause + categoryClause(categoryIds) + scope + """
@@ -550,7 +562,7 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                 JOIN kb.document_version v ON v.id = c.document_version_id
                 JOIN ops.file_object f ON f.id = v.file_object_id AND f.organization_id = d.organization_id AND f.status <> 'DELETED'
                 JOIN kb.publication p ON p.id = d.current_publication_id
-                    AND p.document_version_id = c.document_version_id AND p.parse_run_id = c.parse_run_id
+                    AND p.document_version_id = c.document_version_id AND p.review_revision_id = c.review_revision_id
                     AND p.status = 'CURRENT'
                 WHERE d.organization_id = ? AND d.lifecycle_status = 'ACTIVE'
                 """ + aiClause + categoryClause(categoryIds) + " AND c.embedding IS NOT NULL\n"
@@ -638,6 +650,10 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
         return " AND coalesce(nullif(p.metadata_snapshot_jsonb->>'categoryId', '')::uuid,"
                 + " nullif(p.metadata_snapshot_jsonb->>'category_id', '')::uuid, d.category_id) IN ("
                 + placeholders + ")\n";
+    }
+
+    private boolean isReviewStep(String stepKey) {
+        return "CHUNK".equals(stepKey) || "BM25_INDEX".equals(stepKey) || "VECTOR_INDEX".equals(stepKey);
     }
 
     private String truncate(String value) {

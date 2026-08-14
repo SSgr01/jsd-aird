@@ -46,7 +46,7 @@ class KnowledgeFileSearchServiceTest {
                         "COA", "ACTIVE", "PUBLISHED", 3, publicationId, 2)));
         when(governance.currentPublication(organizationId, documentId)).thenReturn(Optional.of(
                 new KnowledgeGovernanceRepository.PublicationRow(publicationId, documentId, versionId,
-                        UUID.randomUUID(), 2, "CURRENT", "PENDING", Instant.now())));
+                        UUID.randomUUID(), UUID.randomUUID(), 2, "CURRENT", "PENDING", Instant.now())));
         when(governance.publicationTags(organizationId, publicationId)).thenReturn(List.of("COA", "放行"));
         when(documents.findChunkAnchor(any(), any())).thenReturn(Optional.empty());
 

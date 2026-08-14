@@ -8,6 +8,7 @@ import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.kb.application.port.KnowledgeGovernanceRepository;
 import com.jsd.aird.kb.application.port.KnowledgeRepository;
@@ -27,7 +28,6 @@ import org.springframework.util.StringUtils;
 @Service
 public class KnowledgeGovernanceService {
 
-    private static final Set<String> BLOCK_STATUSES = Set.of("PENDING", "CONFIRMED", "IGNORED", "ISSUE");
     private final KnowledgeGovernanceRepository governance;
     private final KnowledgeRepository knowledgeRepository;
     private final KnowledgeService knowledge;
@@ -35,6 +35,7 @@ public class KnowledgeGovernanceService {
     private final OpsAsyncFacade async;
     private final AuditLogFacade audit;
     private final ObjectMapper objectMapper;
+    private final StructuredDocumentCodec documents;
     private final TransactionTemplate itemTransaction;
 
     public KnowledgeGovernanceService(KnowledgeGovernanceRepository governance,
@@ -44,6 +45,7 @@ public class KnowledgeGovernanceService {
                                       OpsAsyncFacade async,
                                       AuditLogFacade audit,
                                       ObjectMapper objectMapper,
+                                      StructuredDocumentCodec documents,
                                       PlatformTransactionManager transactionManager) {
         this.governance = governance;
         this.knowledgeRepository = knowledgeRepository;
@@ -52,6 +54,7 @@ public class KnowledgeGovernanceService {
         this.async = async;
         this.audit = audit;
         this.objectMapper = objectMapper;
+        this.documents = documents;
         this.itemTransaction = new TransactionTemplate(transactionManager);
         this.itemTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
@@ -139,67 +142,71 @@ public class KnowledgeGovernanceService {
         var actor = ActorContext.required();
         requireReviewIdentity(documentId, versionId, command.documentId(), command.versionId());
         var scope = normalizeScope(command.libraryScope());
-        var update = reviewUpdate(documentId, versionId, command.reviewRevision(), command.title(), scope,
-                command.categoryId(), command.tags(), command.blocks());
+        var update = reviewUpdate(documentId, versionId, command.reviewRevisionId(), command.lockVersion(),
+                command.basePublicationId(), command.title(), scope, command.categoryId(), command.tags(),
+                command.confirmedDocument(), command.excludedReviewNodeIds(), command.issueActions());
         if (!governance.saveReview(actor.organizationId(), actor.userId(), update)) optimisticConflict(documentId, versionId);
         var saved = review(documentId, versionId);
         audit(actor.organizationId(), actor.userId(), "KB_REVIEW_SAVED", documentId,
                 objectMapper.createObjectNode().put("versionId", versionId.toString())
-                        .put("previousRevision", command.reviewRevision())
-                        .put("confirmedBlockCount", saved.blocks().stream().filter(block -> "CONFIRMED".equals(block.reviewStatus())).count()));
+                        .put("reviewRevisionId", command.reviewRevisionId().toString())
+                        .put("previousLockVersion", command.lockVersion()));
         return saved;
     }
 
-    public IndexBuildView publish(UUID documentId, UUID versionId, int reviewRevision) {
+    public IndexBuildView publish(UUID documentId, UUID versionId, UUID reviewRevisionId,
+                                  int lockVersion, UUID basePublicationId) {
         var actor = ActorContext.required();
         var review = review(documentId, versionId);
-        if (review.reviewRevision() != reviewRevision) optimisticConflict(documentId, versionId);
-        validatePublish(review);
-        var parseRunId = review.parseRun().id();
-        if (!governance.reservePublication(actor.organizationId(), documentId, versionId, parseRunId, reviewRevision)) {
+        if (review.reviewRevision() == null || !review.reviewRevision().id().equals(reviewRevisionId)
+                || review.reviewRevision().lockVersion() != lockVersion
+                || !java.util.Objects.equals(review.reviewRevision().basePublicationId(), basePublicationId)) {
             optimisticConflict(documentId, versionId);
         }
-        knowledge.markIndexStale(actor.organizationId(), documentId, versionId, parseRunId);
-        enqueueIndex(actor.organizationId(), actor.userId(), documentId, versionId, parseRunId, reviewRevision);
+        validatePublish(review);
+        var projection = documents.project(review.reviewRevision().confirmedDocument(),
+                review.reviewRevision().excludedReviewNodeIds());
+        var tableText = governance.largeTableRows(actor.organizationId(), reviewRevisionId).stream()
+                .map(KnowledgeGovernanceRepository.LargeTableRow::projectedText)
+                .reduce((left, right) -> left + "\n\n" + right).orElse("");
+        var confirmedText = projection.confirmedText();
+        if (StringUtils.hasText(tableText)) confirmedText = StringUtils.hasText(confirmedText)
+                ? confirmedText + "\n\n" + tableText : tableText;
+        if (!governance.reservePublication(actor.organizationId(), documentId, versionId, reviewRevisionId,
+                lockVersion, basePublicationId, confirmedText)) {
+            optimisticConflict(documentId, versionId);
+        }
+        knowledge.markIndexStale(actor.organizationId(), documentId, versionId, reviewRevisionId);
+        enqueueIndex(actor.organizationId(), actor.userId(), documentId, versionId, reviewRevisionId, lockVersion);
         audit(actor.organizationId(), actor.userId(), "KB_PUBLICATION_INDEX_QUEUED", documentId,
-                objectMapper.createObjectNode().put("versionId", versionId.toString()).put("parseRunId", parseRunId.toString()));
-        return new IndexBuildView(documentId, versionId, parseRunId, "INDEXING");
+                objectMapper.createObjectNode().put("versionId", versionId.toString())
+                        .put("reviewRevisionId", reviewRevisionId.toString()));
+        return new IndexBuildView(documentId, versionId, reviewRevisionId, "BUILDING");
     }
 
     @Transactional
-    public IndexBuildView revise(UUID documentId, RevisionCommand command) {
+    public KnowledgeGovernanceRepository.ReviewView createRevision(UUID documentId, RevisionCommand command) {
         var actor = ActorContext.required();
         var current = governance.currentPublication(actor.organizationId(), documentId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "当前发布不存在"));
         if (!current.id().equals(command.basePublicationId())) {
             throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "当前发布已经变化，请刷新后重试");
         }
-        var review = governance.review(actor.organizationId(), documentId, current.versionId())
-                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "当前发布内容不存在"));
-        if (review.parseRun() == null || "INDEXING".equals(review.parseRun().status())) {
-            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "当前已有修订索引任务执行中");
-        }
-        var update = new KnowledgeGovernanceRepository.ReviewUpdate(documentId, current.versionId(),
-                command.reviewRevision(), review.title(), review.libraryScope(), review.categoryId(), review.tags(),
-                normalizeBlocks(command.blocks()));
-        validateRevisionBlocks(update.blocks());
         var revision = governance.createRevision(actor.organizationId(), actor.userId(), documentId,
-                        command.basePublicationId(), command.reviewRevision(), update)
+                        command.basePublicationId())
                 .orElseThrow(() -> new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "内容已被其他修订更新，请刷新后重试"));
-        knowledge.markIndexStale(actor.organizationId(), documentId, revision.versionId(), revision.parseRunId());
-        enqueueIndex(actor.organizationId(), actor.userId(), documentId, revision.versionId(),
-                revision.parseRunId(), revision.reviewRevision());
-        audit(actor.organizationId(), actor.userId(), "KB_PUBLISHED_TEXT_REVISION_QUEUED", documentId,
+        audit(actor.organizationId(), actor.userId(), "KB_REVIEW_REVISION_CREATED", documentId,
                 objectMapper.createObjectNode().put("basePublicationId", command.basePublicationId().toString())
-                        .put("parseRunId", revision.parseRunId().toString()));
-        return new IndexBuildView(documentId, revision.versionId(), revision.parseRunId(), "INDEXING");
+                        .put("reviewRevisionId", revision.reviewRevisionId().toString()));
+        return review(documentId, revision.versionId());
     }
 
     @Transactional
-    public void reject(UUID documentId, UUID versionId, int reviewRevision, String reason) {
+    public void reject(UUID documentId, UUID versionId, UUID reviewRevisionId, int lockVersion, String reason) {
         var actor = ActorContext.required();
         var normalizedReason = requireText(reason, "驳回原因");
-        if (!governance.reject(actor.organizationId(), actor.userId(), documentId, versionId, reviewRevision, normalizedReason)) {
+        if (!governance.reject(actor.organizationId(), actor.userId(), documentId, versionId,
+                reviewRevisionId, lockVersion, normalizedReason)) {
             optimisticConflict(documentId, versionId);
         }
         audit(actor.organizationId(), actor.userId(), "KB_DOCUMENT_REJECTED", documentId,
@@ -207,14 +214,17 @@ public class KnowledgeGovernanceService {
     }
 
     @Transactional
-    public KnowledgeService.DocumentView reparse(UUID documentId, UUID versionId, int reviewRevision) {
+    public KnowledgeService.DocumentView reparse(UUID documentId, UUID versionId, UUID reviewRevisionId,
+                                                 int lockVersion) {
         var actor = ActorContext.required();
         var current = review(documentId, versionId);
-        if (current.reviewRevision() != reviewRevision) optimisticConflict(documentId, versionId);
-        if (current.parseRun() == null || Set.of("PROCESSING", "INDEXING").contains(current.parseRun().status())) {
+        if (current.reviewRevision() == null || !current.reviewRevision().id().equals(reviewRevisionId)
+                || current.reviewRevision().lockVersion() != lockVersion) optimisticConflict(documentId, versionId);
+        if (current.parseRun() == null || Set.of("QUEUED", "PROCESSING").contains(current.parseRun().status())) {
             throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "当前已有解析或索引任务执行中");
         }
-        if (!governance.reserveReparse(actor.organizationId(), actor.userId(), documentId, versionId, reviewRevision)) {
+        if (!governance.reserveReparse(actor.organizationId(), actor.userId(), documentId, versionId,
+                reviewRevisionId, lockVersion)) {
             optimisticConflict(documentId, versionId);
         }
         var result = knowledge.reindex(documentId, versionId);
@@ -284,29 +294,79 @@ public class KnowledgeGovernanceService {
         return governance.publications(actor.organizationId(), documentId);
     }
 
-    private KnowledgeGovernanceRepository.ReviewUpdate reviewUpdate(UUID documentId, UUID versionId, int revision,
-                                                                    String title, String scope, UUID categoryId,
-                                                                    List<String> tags,
-                                                                    List<KnowledgeGovernanceRepository.BlockUpdate> blocks) {
+    public KnowledgeGovernanceRepository.PublishedContentView publishedContent(UUID documentId, UUID publicationId) {
         var actor = ActorContext.required();
-        return new KnowledgeGovernanceRepository.ReviewUpdate(documentId, versionId, revision,
+        knowledge.get(documentId);
+        return governance.publishedContent(actor.organizationId(), documentId, publicationId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "已发布内容不存在"));
+    }
+
+    public KnowledgeGovernanceRepository.TableWindow reviewTable(UUID documentId, UUID versionId,
+                                                                  UUID reviewRevisionId, UUID sourceTableId,
+                                                                  int rowOffset, int rowLimit,
+                                                                  int columnOffset, int columnLimit) {
+        var actor = ActorContext.required();
+        var review = review(documentId, versionId);
+        if (review.reviewRevision() == null || !review.reviewRevision().id().equals(reviewRevisionId)) {
+            optimisticConflict(documentId, versionId);
+        }
+        return governance.reviewTableWindow(actor.organizationId(), reviewRevisionId, sourceTableId,
+                        rowOffset, rowLimit, columnOffset, columnLimit)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "工作表不存在"));
+    }
+
+    @Transactional
+    public KnowledgeGovernanceRepository.TableWindow saveReviewTable(UUID documentId, UUID versionId,
+                                                                      UUID reviewRevisionId, UUID sourceTableId,
+                                                                      TableReviewCommand command) {
+        var actor = ActorContext.required();
+        if (!governance.saveTableReview(actor.organizationId(), actor.userId(), reviewRevisionId,
+                command.lockVersion(), sourceTableId, command.patches(), command.rows())) {
+            optimisticConflict(documentId, versionId);
+        }
+        return reviewTable(documentId, versionId, reviewRevisionId, sourceTableId,
+                command.rowOffset(), command.rowLimit(), command.columnOffset(), command.columnLimit());
+    }
+
+    public KnowledgeGovernanceRepository.TableWindow publishedTable(UUID documentId, UUID publicationId,
+                                                                     UUID sourceTableId, int rowOffset, int rowLimit,
+                                                                     int columnOffset, int columnLimit) {
+        var actor = ActorContext.required();
+        knowledge.get(documentId);
+        var publication = governance.publications(actor.organizationId(), documentId).stream()
+                .filter(value -> value.id().equals(publicationId)).findFirst()
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "发布版本不存在"));
+        return governance.publishedTableWindow(actor.organizationId(), publication.id(), sourceTableId,
+                        rowOffset, rowLimit, columnOffset, columnLimit)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "工作表不存在"));
+    }
+
+    private KnowledgeGovernanceRepository.ReviewUpdate reviewUpdate(UUID documentId, UUID versionId,
+                                                                    UUID reviewRevisionId, int lockVersion,
+                                                                    UUID basePublicationId, String title, String scope,
+                                                                    UUID categoryId, List<String> tags, JsonNode confirmedDocument,
+                                                                    List<UUID> excludedReviewNodeIds,
+                                                                    List<KnowledgeGovernanceRepository.IssueAction> issueActions) {
+        var actor = ActorContext.required();
+        return new KnowledgeGovernanceRepository.ReviewUpdate(documentId, versionId, reviewRevisionId, lockVersion,
+                basePublicationId,
                 normalizeTitle(title), scope, requireCategory(actor.organizationId(), categoryId, scope),
-                normalizeTags(tags), normalizeBlocks(blocks));
+                normalizeTags(tags), documents.validate(confirmedDocument), safe(excludedReviewNodeIds),
+                normalizeIssueActions(issueActions));
     }
 
     private void validatePublish(KnowledgeGovernanceRepository.ReviewView review) {
         var reasons = new ArrayList<String>();
         if (!"READY".equals(review.processingStatus())) reasons.add("解析未完成");
         if (review.categoryId() == null) reasons.add("分类为空");
-        if (review.parseRun() == null || !Set.of("PENDING_REVIEW", "REJECTED", "FAILED").contains(review.parseRun().status())) {
+        if (review.parseRun() == null || !"SUCCEEDED".equals(review.parseRun().status())
+                || review.reviewRevision() == null || !"DRAFT".equals(review.reviewRevision().status())) {
             reasons.add("没有可发布的校对内容");
         }
-        if (review.blocks().isEmpty()) reasons.add("识别文本为空");
-        if (review.blocks().stream().anyMatch(block -> !Set.of("CONFIRMED", "IGNORED").contains(block.reviewStatus()))) {
-            reasons.add("请先完成整篇内容校对");
-        }
-        if (review.blocks().stream().filter(block -> !"IGNORED".equals(block.reviewStatus()))
-                .map(this::effectiveText).allMatch(value -> !StringUtils.hasText(value))) {
+        if (review.reviewRevision() == null || (!StringUtils.hasText(documents.project(
+                review.reviewRevision().confirmedDocument(), review.reviewRevision().excludedReviewNodeIds()).confirmedText())
+                && governance.largeTableRows(ActorContext.required().organizationId(),
+                review.reviewRevision().id()).isEmpty())) {
             reasons.add("确认文本不能为空");
         }
         if (review.issues().stream().anyMatch(issue -> "BLOCKER".equals(issue.severity()) && "OPEN".equals(issue.status()))) {
@@ -322,24 +382,14 @@ public class KnowledgeGovernanceService {
         if (!reasons.isEmpty()) throw new ApiException(ApiErrorCode.VALIDATION_ERROR, String.join("；", reasons));
     }
 
-    private void validateRevisionBlocks(List<KnowledgeGovernanceRepository.BlockUpdate> blocks) {
-        if (blocks.isEmpty() || blocks.stream().anyMatch(block -> !Set.of("CONFIRMED", "IGNORED").contains(block.reviewStatus()))) {
-            throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "修订内容必须一次完成确认");
-        }
-        if (blocks.stream().filter(block -> !"IGNORED".equals(block.reviewStatus()))
-                .map(KnowledgeGovernanceRepository.BlockUpdate::confirmedText).noneMatch(StringUtils::hasText)) {
-            throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "确认文本不能为空");
-        }
-    }
-
     private void enqueueIndex(UUID organizationId, UUID actorId, UUID documentId, UUID versionId,
-                              UUID parseRunId, int reviewRevision) {
+                              UUID reviewRevisionId, int lockVersion) {
         var payload = objectMapper.createObjectNode().put("organizationId", organizationId.toString())
                 .put("actorId", actorId.toString()).put("documentId", documentId.toString())
-                .put("versionId", versionId.toString()).put("parseRunId", parseRunId.toString())
-                .put("reviewRevision", reviewRevision);
+                .put("versionId", versionId.toString()).put("reviewRevisionId", reviewRevisionId.toString())
+                .put("lockVersion", lockVersion);
         async.enqueue(organizationId, "KB_BUILD_KNOWLEDGE_INDEX", payload,
-                "kb-index:" + parseRunId, 50);
+                "kb-index:" + reviewRevisionId, 50);
     }
 
     private List<BatchResult> batch(List<UUID> documentIds, BatchAction action, String auditAction) {
@@ -365,12 +415,14 @@ public class KnowledgeGovernanceService {
         return result;
     }
 
-    private List<KnowledgeGovernanceRepository.BlockUpdate> normalizeBlocks(List<KnowledgeGovernanceRepository.BlockUpdate> blocks) {
-        return safe(blocks).stream().map(block -> {
-            var status = block.reviewStatus() == null ? "CONFIRMED" : block.reviewStatus().trim().toUpperCase(Locale.ROOT);
-            if (!BLOCK_STATUSES.contains(status)) throw new ApiException(ApiErrorCode.BAD_REQUEST, "无效识别文本状态");
-            var text = block.confirmedText() == null ? "" : block.confirmedText().replace("\u0000", "").strip();
-            return new KnowledgeGovernanceRepository.BlockUpdate(block.id(), text, status);
+    private List<KnowledgeGovernanceRepository.IssueAction> normalizeIssueActions(
+            List<KnowledgeGovernanceRepository.IssueAction> actions) {
+        return safe(actions).stream().map(action -> {
+            var status = action.status() == null ? "OPEN" : action.status().trim().toUpperCase(Locale.ROOT);
+            if (!Set.of("OPEN", "RESOLVED", "IGNORED").contains(status)) {
+                throw new ApiException(ApiErrorCode.BAD_REQUEST, "无效问题处理状态");
+            }
+            return new KnowledgeGovernanceRepository.IssueAction(action.issueId(), status, action.resolution());
         }).toList();
     }
 
@@ -434,9 +486,6 @@ public class KnowledgeGovernanceService {
         throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,
                 "内容已被其他用户修改，请刷新后重试：" + documentId + "/" + versionId);
     }
-    private String effectiveText(KnowledgeGovernanceRepository.ParseBlockView block) {
-        return block.confirmedText() == null ? block.normalizedText() : block.confirmedText();
-    }
     private KnowledgeGovernanceRepository.DuplicateMatch withSimilarity(
             KnowledgeGovernanceRepository.DuplicateMatch match, double similarity) {
         return new KnowledgeGovernanceRepository.DuplicateMatch(match.documentId(), match.versionId(), match.versionNo(),
@@ -462,11 +511,15 @@ public class KnowledgeGovernanceService {
     public record CreateCommand(UUID fileId, String title, String libraryScope, UUID categoryId,
                                 List<String> tags, String resolution, UUID targetDocumentId,
                                 com.fasterxml.jackson.databind.JsonNode sourceInfo) { }
-    public record ReviewCommand(UUID documentId, UUID versionId, int reviewRevision, String title,
-                                String libraryScope, UUID categoryId, List<String> tags,
-                                List<KnowledgeGovernanceRepository.BlockUpdate> blocks) { }
-    public record RevisionCommand(UUID basePublicationId, int reviewRevision,
-                                  List<KnowledgeGovernanceRepository.BlockUpdate> blocks) { }
-    public record IndexBuildView(UUID documentId, UUID versionId, UUID parseRunId, String status) { }
+    public record ReviewCommand(UUID documentId, UUID versionId, UUID reviewRevisionId, int lockVersion,
+                                UUID basePublicationId, String title, String libraryScope, UUID categoryId,
+                                List<String> tags, JsonNode confirmedDocument,
+                                List<UUID> excludedReviewNodeIds,
+                                List<KnowledgeGovernanceRepository.IssueAction> issueActions) { }
+    public record RevisionCommand(UUID basePublicationId) { }
+    public record TableReviewCommand(int lockVersion, List<KnowledgeGovernanceRepository.CellPatch> patches,
+                                     List<KnowledgeGovernanceRepository.RowState> rows,
+                                     int rowOffset, int rowLimit, int columnOffset, int columnLimit) { }
+    public record IndexBuildView(UUID documentId, UUID versionId, UUID reviewRevisionId, String status) { }
     public record BatchResult(UUID documentId, boolean success, String errorCode, String message) { }
 }

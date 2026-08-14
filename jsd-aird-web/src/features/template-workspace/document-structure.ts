@@ -23,8 +23,8 @@ export function deriveDocumentStructureFromSnapshot(
 
   // 段落按 startIndex 升序，便于截取文本。
   const ordered = [...paragraphs]
-    .filter((p) => typeof p.startIndex === 'number')
-    .sort((a, b) => (a.startIndex as number) - (b.startIndex as number));
+    .filter((p): p is Record<string, unknown> & { startIndex: number } => typeof p.startIndex === 'number')
+    .sort((a, b) => a.startIndex - b.startIndex);
 
   const nodes: DocumentStructureNode[] = [];
   let headingCount = 0;
@@ -33,8 +33,9 @@ export function deriveDocumentStructureFromSnapshot(
   ordered.forEach((paragraph, index) => {
     // paragraphs[i].startIndex 指向该段段落结束符（\r）所在位置。
     // 因此段落文本区间为：0 段落 [0, startIndex]，后续段落 (prevStart+1, startIndex]。
-    const endIndex = paragraph.startIndex as number;
-    const startIndex = index === 0 ? 0 : (ordered[index - 1].startIndex as number) + 1;
+    const endIndex = paragraph.startIndex;
+    const previousParagraph = ordered[index - 1];
+    const startIndex = index === 0 || !previousParagraph ? 0 : previousParagraph.startIndex + 1;
     const raw = dataStream.slice(startIndex, endIndex).replace(/\r+$/g, '');
     const text = raw.trim();
     if (!text) return;
@@ -45,7 +46,7 @@ export function deriveDocumentStructureFromSnapshot(
     if (!hasHeading) return;
 
     // Univer namedStyleType 当前实践中：4=标题1，5=标题2，依此类推。
-    const namedStyleType = typeof style.namedStyleType === 'number' ? (style.namedStyleType as number) : 0;
+    const namedStyleType = typeof style.namedStyleType === 'number' ? style.namedStyleType : 0;
     const level = namedStyleType >= 4 ? namedStyleType - 3 : 1;
 
     headingCount += 1;

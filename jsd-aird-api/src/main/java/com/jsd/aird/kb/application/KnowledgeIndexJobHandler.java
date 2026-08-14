@@ -28,13 +28,13 @@ public class KnowledgeIndexJobHandler implements AsyncJobHandler {
     public JsonNode handle(JsonNode payload) {
         var organizationId = uuid(payload, "organizationId");
         var documentId = uuid(payload, "documentId");
-        var parseRunId = uuid(payload, "parseRunId");
+        var reviewRevisionId = uuid(payload, "reviewRevisionId");
         if (payload.hasNonNull("publicationId")) {
-            service.buildVectors(organizationId, documentId, uuid(payload, "publicationId"), parseRunId);
+            service.buildVectors(organizationId, documentId, uuid(payload, "publicationId"), reviewRevisionId);
             return objectMapper.createObjectNode().put("status", "VECTOR_READY");
         }
         service.buildAndPublish(organizationId, uuid(payload, "actorId"), documentId,
-                uuid(payload, "versionId"), parseRunId, payload.path("reviewRevision").asInt());
+                uuid(payload, "versionId"), reviewRevisionId, payload.path("lockVersion").asInt());
         return objectMapper.createObjectNode().put("status", "PUBLISHED");
     }
 
@@ -42,10 +42,10 @@ public class KnowledgeIndexJobHandler implements AsyncJobHandler {
     public void handleTerminalFailure(JsonNode payload, Exception exception) {
         if (payload.hasNonNull("publicationId")) {
             service.failVector(uuid(payload, "organizationId"), uuid(payload, "documentId"),
-                    uuid(payload, "publicationId"), uuid(payload, "parseRunId"), exception);
+                    uuid(payload, "publicationId"), uuid(payload, "reviewRevisionId"), exception);
         } else if (payload.hasNonNull("versionId")) {
             service.failIndex(uuid(payload, "organizationId"), uuid(payload, "documentId"),
-                    uuid(payload, "versionId"), uuid(payload, "parseRunId"), exception);
+                    uuid(payload, "versionId"), uuid(payload, "reviewRevisionId"), exception);
         }
     }
 

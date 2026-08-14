@@ -33,9 +33,6 @@ import org.apache.pdfbox.text.PDFTextStripper;
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public class QwenOcrProvider implements MediaExtractionProvider {
 
-    /** Official OpenAI-compatible prompt for the advanced_recognition built-in task. */
-    private static final String DEFAULT_PROMPT = "Locate all text lines and return the coordinates of the rotated rectangle ([cx, cy, width, height, angle]).";
-
     private final boolean enabled;
     private final String baseUrl;
     private final String apiKey;
@@ -43,7 +40,7 @@ public class QwenOcrProvider implements MediaExtractionProvider {
     private final String completionsPath;
     private final long maxBytes;
     private final RestClient client;
-    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
+    private final QwenDocumentParsingConverter converter;
 
     public QwenOcrProvider(
             @Value("${app.ai.ocr.enabled:false}") boolean enabled,
@@ -52,7 +49,8 @@ public class QwenOcrProvider implements MediaExtractionProvider {
             @Value("${app.ai.ocr.model:qwen3.5-ocr}") String model,
             @Value("${app.ai.ocr.completions-path:/chat/completions}") String completionsPath,
             @Value("${app.ai.ocr.timeout:120s}") Duration timeout,
-            @Value("${app.ai.ocr.max-bytes:20971520}") long maxBytes
+            @Value("${app.ai.ocr.max-bytes:20971520}") long maxBytes,
+            QwenDocumentParsingConverter converter
     ) {
         this.enabled = enabled;
         this.baseUrl = strip(baseUrl);
@@ -60,6 +58,7 @@ public class QwenOcrProvider implements MediaExtractionProvider {
         this.model = model == null ? "" : model.strip();
         this.completionsPath = normalizePath(completionsPath, "/chat/completions");
         this.maxBytes = Math.max(1, maxBytes);
+        this.converter = converter;
         var factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(timeout);
         factory.setReadTimeout(timeout);
@@ -115,7 +114,7 @@ public class QwenOcrProvider implements MediaExtractionProvider {
                     ? context.contentType() : mimeType(fileName);
             var blocks = recognize(bytes, contentType, null);
             return new DocumentParser.ParsedDocument(blocks, model, null,
-                    Map.of("model", model, "task", "advanced_recognition"));
+                    Map.of("model", model, "task", "document_parsing"));
         } catch (IOException exception) {
             throw new IllegalStateException("OCR 文件读取失败", exception);
         } catch (RestClientResponseException exception) {
@@ -149,7 +148,7 @@ public class QwenOcrProvider implements MediaExtractionProvider {
                 ocrPages.add(page);
             }
             return new DocumentParser.ParsedDocument(blocks, model + "+pdfbox-3", null,
-                    Map.of("model", model, "task", "advanced_recognition", "pageCount", document.getNumberOfPages(),
+                    Map.of("model", model, "task", "document_parsing", "pageCount", document.getNumberOfPages(),
                             "ocrPages", ocrPages, "mode", ocrPages.size() == document.getNumberOfPages() ? "SCANNED" : "MIXED"));
         } catch (IOException exception) {
             throw new IllegalStateException("PDF OCR解析失败", exception);
@@ -162,27 +161,15 @@ public class QwenOcrProvider implements MediaExtractionProvider {
         var request = new LinkedHashMap<String, Object>();
         request.put("model", model);
         request.put("stream", false);
-        // OpenAI-compatible Qwen OCR selects advanced_recognition through its official fixed prompt.
-        // The DashScope-only ocr_options field is intentionally not sent to this endpoint.
+        request.put("ocr_options", Map.of("task", "document_parsing"));
         request.put("messages", List.of(Map.of("role", "user", "content", List.of(
-                Map.of("type", "text", "text", DEFAULT_PROMPT),
                 Map.of("type", "image_url", "image_url", Map.of("url", dataUrl))))));
         var response = callWithRetry(request);
-        var blocks = new ArrayList<DocumentParser.TextBlock>();
-        collectStructured(response, pageNo, blocks);
-        if (!blocks.isEmpty()) return blocks;
         var text = content(response == null ? null : response.at("/choices/0/message/content"));
         if (!StringUtils.hasText(text)) text = content(response == null ? null : response.at("/output/choices/0/message/content"));
         if (!StringUtils.hasText(text)) throw new IllegalStateException("OCR返回内容为空");
-        try {
-            var structuredText = text.strip().replaceFirst("^```(?:json)?\\s*", "").replaceFirst("\\s*```$", "");
-            collectStructured(objectMapper.readTree(structuredText), pageNo, blocks);
-            if (!blocks.isEmpty()) return blocks;
-        } catch (Exception ignored) { }
-        for (var line : text.split("\\R")) {
-            if (!line.isBlank()) blocks.add(new DocumentParser.TextBlock(pageNo, "OCR-LINE", line.strip(),
-                    null, null, null, List.of(), null, null, null));
-        }
+        var blocks = new ArrayList<>(converter.convert(text, pageNo));
+        if (blocks.isEmpty()) blocks.add(new DocumentParser.TextBlock(pageNo, "paragraph", text.strip()));
         return blocks;
     }
 
@@ -206,36 +193,6 @@ public class QwenOcrProvider implements MediaExtractionProvider {
             }
         }
         throw last == null ? new IllegalStateException("OCR调用失败") : last;
-    }
-
-    private void collectStructured(JsonNode node, Integer pageNo, List<DocumentParser.TextBlock> blocks) {
-        if (node == null || node.isNull() || node.isMissingNode()) return;
-        if (node.isArray()) { node.forEach(item -> collectStructured(item, pageNo, blocks)); return; }
-        if (!node.isObject()) return;
-        var text = node.path("text").asText(node.path("recognized_text").asText(""));
-        var bbox = firstArray(node, "location", "bbox", "rotate_rect", "rotateRect");
-        if (StringUtils.hasText(text) && bbox != null && bbox.size() >= 4) {
-            var coordinates = new ArrayList<Double>();
-            bbox.forEach(value -> { if (value.isNumber()) coordinates.add(value.doubleValue()); });
-            if (coordinates.size() >= 4) blocks.add(new DocumentParser.TextBlock(pageNo, "OCR-LINE", text.strip(),
-                    null, null, null, coordinates, null, null, confidence(node)));
-        }
-        node.fields().forEachRemaining(entry -> {
-            if (!"image_url".equals(entry.getKey())) collectStructured(entry.getValue(), pageNo, blocks);
-        });
-    }
-
-    private JsonNode firstArray(JsonNode node, String... names) {
-        for (var name : names) {
-            var value = node.path(name);
-            if (value.isArray()) return value;
-        }
-        return null;
-    }
-
-    private Double confidence(JsonNode node) {
-        var value = node.path("confidence");
-        return value.isNumber() ? Math.max(0, Math.min(1, value.doubleValue())) : null;
     }
 
     private boolean hasSufficientNativeText(org.apache.pdfbox.pdmodel.PDDocument document,
@@ -263,12 +220,12 @@ public class QwenOcrProvider implements MediaExtractionProvider {
         if (node.isArray()) {
             var result = new StringBuilder();
             node.forEach(item -> {
-                var text = item.path("text").asText("");
+                var text = item.path("ocr_result").asText(item.path("text").asText(""));
                 if (!text.isBlank()) result.append(text).append('\n');
             });
             return result.toString().strip();
         }
-        return node.path("text").asText(node.path("ocr_result").asText(""));
+        return node.path("ocr_result").asText(node.path("text").asText(""));
     }
 
     private String mimeType(String fileName) {

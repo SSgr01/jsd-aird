@@ -13,7 +13,6 @@ import {
   Spin,
   Table,
   Tag,
-  Tooltip,
   Upload,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';

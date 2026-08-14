@@ -29,48 +29,48 @@ class QwenMediaProviderTest {
             requestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
             var response = objectMapper.createObjectNode();
             response.putArray("choices").addObject().putObject("message").putArray("content")
-                    .addObject().put("type", "text").put("text", "设备编号 A-102\n压力 1.25 MPa");
+                    .addObject().put("type", "text").put("ocr_result", "设备编号 A-102\n\n压力 1.25 MPa");
             sendJson(exchange, response);
         });
         server.start();
         try {
             var provider = new QwenOcrProvider(true,
                     "http://127.0.0.1:" + server.getAddress().getPort(), "test-key", "qwen3.5-ocr",
-                    "/chat/completions", Duration.ofSeconds(3), 1024 * 1024);
+                    "/chat/completions", Duration.ofSeconds(3), 1024 * 1024,
+                    new QwenDocumentParsingConverter());
             var parsed = provider.extract(new ByteArrayInputStream(new byte[] {1, 2, 3}), "sample.png",
                     new MediaExtractionProvider.ExtractionContext(null, "image/png", 3, null));
 
             assertThat(parsed.blocks()).extracting(block -> block.content())
                     .containsExactly("设备编号 A-102", "压力 1.25 MPa");
             assertThat(requestBody.get()).contains("qwen3.5-ocr", "data:image/png;base64,AQID");
+            assertThat(requestBody.get()).contains("document_parsing");
         } finally {
             server.stop(0);
         }
     }
 
     @Test
-    void parsesOfficialAdvancedRecognitionLocationPayload() throws Exception {
+    void convertsOfficialDocumentParsingLatexWithoutInventingCoordinates() throws Exception {
         var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/chat/completions", exchange -> {
             var response = objectMapper.createObjectNode();
             response.putObject("output").putArray("choices").addObject().putObject("message")
-                    .putArray("content").addObject().putObject("ocr_result").putArray("words_info")
-                    .addObject().put("text", "批号 LOT-1").putArray("location")
-                    .add(10).add(20).add(110).add(20).add(110).add(42).add(10).add(42);
+                    .putArray("content").addObject().put("ocr_result", "\\section{检测报告}\n\n批号 LOT-1");
             sendJson(exchange, response);
         });
         server.start();
         try {
             var provider = new QwenOcrProvider(true,
                     "http://127.0.0.1:" + server.getAddress().getPort(), "test-key", "qwen3.5-ocr",
-                    "/chat/completions", Duration.ofSeconds(3), 1024 * 1024);
+                    "/chat/completions", Duration.ofSeconds(3), 1024 * 1024,
+                    new QwenDocumentParsingConverter());
             var parsed = provider.extract(new ByteArrayInputStream(new byte[] {1}), "coa.png",
                     new MediaExtractionProvider.ExtractionContext(null, "image/png", 1, null));
 
-            assertThat(parsed.blocks()).singleElement().satisfies(block -> {
-                assertThat(block.content()).isEqualTo("批号 LOT-1");
-                assertThat(block.bbox()).containsExactly(10d, 20d, 110d, 20d, 110d, 42d, 10d, 42d);
-            });
+            assertThat(parsed.blocks()).extracting(block -> block.content())
+                    .containsExactly("检测报告", "批号 LOT-1");
+            assertThat(parsed.blocks()).allSatisfy(block -> assertThat(block.bbox()).isEmpty());
         } finally {
             server.stop(0);
         }

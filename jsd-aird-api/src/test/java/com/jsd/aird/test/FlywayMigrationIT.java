@@ -66,23 +66,37 @@ class FlywayMigrationIT {
                 try (var statement = connection.prepareStatement("""
                         select count(*) from information_schema.tables
                         where table_schema = 'kb' and table_name in (
-                          'document_parse_run', 'document_parse_block', 'document_parse_issue',
-                          'publication', 'document_ai_grant'
+                          'document_parse_run', 'document_source_node', 'document_review_revision',
+                          'document_review_issue_state', 'document_parse_issue',
+                          'document_parse_issue_source_node', 'publication', 'document_ai_grant',
+                          'document_source_table', 'document_source_table_cell',
+                          'document_review_table_cell_patch', 'document_review_table_row_state'
                         )
                         """); var resultSet = statement.executeQuery()) {
                     assertThat(resultSet.next()).isTrue();
-                    assertThat(resultSet.getInt(1)).isEqualTo(5);
+                    assertThat(resultSet.getInt(1)).isEqualTo(12);
                 }
 
                 try (var statement = connection.prepareStatement("""
                         select count(*) from information_schema.tables
                         where (table_schema = 'kb' and table_name in (
-                          'document_extract_field', 'document_relation', 'ai_usage_grant',
+                          'document_extract_field', 'document_parse_block', 'document_relation', 'ai_usage_grant',
                           'knowledge_page', 'knowledge_page_version', 'knowledge_page_source'
                         )) or (table_schema = 'core' and table_name = 'business_object_ref')
                         """); var resultSet = statement.executeQuery()) {
                     assertThat(resultSet.next()).isTrue();
                     assertThat(resultSet.getInt(1)).isZero();
+                }
+
+                try (var statement = connection.prepareStatement("""
+                        select count(*) from information_schema.columns
+                        where (table_schema = 'kb' and table_name = 'publication'
+                               and column_name = 'review_revision_id')
+                           or (table_schema = 'kb' and table_name = 'document_processing_step'
+                               and column_name = 'review_revision_id')
+                        """); var resultSet = statement.executeQuery()) {
+                    assertThat(resultSet.next()).isTrue();
+                    assertThat(resultSet.getInt(1)).isEqualTo(2);
                 }
 
                 try (var statement = connection.prepareStatement("""

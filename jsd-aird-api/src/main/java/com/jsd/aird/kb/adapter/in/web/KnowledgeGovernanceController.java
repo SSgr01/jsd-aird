@@ -62,35 +62,37 @@ public class KnowledgeGovernanceController {
             @PathVariable UUID documentId, @PathVariable UUID versionId,
             @Valid @RequestBody ReviewRequest request) {
         return success(service.saveReview(documentId, versionId, new KnowledgeGovernanceService.ReviewCommand(
-                request.documentId(), request.versionId(), request.reviewRevision(), request.title(),
-                request.libraryScope(), request.categoryId(), request.tags(), request.blocks())));
+                request.documentId(), request.versionId(), request.reviewRevisionId(), request.lockVersion(),
+                request.basePublicationId(), request.title(), request.libraryScope(), request.categoryId(),
+                request.tags(), request.confirmedDocument(), request.excludedReviewNodeIds(), request.issueActions())));
     }
 
     @PostMapping("/documents/{documentId}/versions/{versionId}/publish")
     public ApiResponse<KnowledgeGovernanceService.IndexBuildView> publish(
             @PathVariable UUID documentId, @PathVariable UUID versionId,
             @Valid @RequestBody RevisionRequest request) {
-        return success(service.publish(documentId, versionId, request.reviewRevision()));
+        return success(service.publish(documentId, versionId, request.reviewRevisionId(), request.lockVersion(),
+                request.basePublicationId()));
     }
 
     @PostMapping("/documents/{documentId}/revisions")
-    public ApiResponse<KnowledgeGovernanceService.IndexBuildView> revise(
+    public ApiResponse<KnowledgeGovernanceRepository.ReviewView> revise(
             @PathVariable UUID documentId, @Valid @RequestBody PublishedRevisionRequest request) {
-        return success(service.revise(documentId, new KnowledgeGovernanceService.RevisionCommand(
-                request.basePublicationId(), request.reviewRevision(), request.blocks())));
+        return success(service.createRevision(documentId,
+                new KnowledgeGovernanceService.RevisionCommand(request.basePublicationId())));
     }
 
     @PostMapping("/documents/{documentId}/versions/{versionId}/reject")
     public ApiResponse<Void> reject(@PathVariable UUID documentId, @PathVariable UUID versionId,
                                     @Valid @RequestBody RejectRequest request) {
-        service.reject(documentId, versionId, request.reviewRevision(), request.reason());
+        service.reject(documentId, versionId, request.reviewRevisionId(), request.lockVersion(), request.reason());
         return success(null);
     }
 
     @PostMapping("/documents/{documentId}/versions/{versionId}/reparse")
     public ApiResponse<?> reparse(@PathVariable UUID documentId, @PathVariable UUID versionId,
                                   @Valid @RequestBody RevisionRequest request) {
-        return success(service.reparse(documentId, versionId, request.reviewRevision()));
+        return success(service.reparse(documentId, versionId, request.reviewRevisionId(), request.lockVersion()));
     }
 
     @PostMapping("/documents/{documentId}/disable")
@@ -125,6 +127,47 @@ public class KnowledgeGovernanceController {
         return success(service.publications(documentId));
     }
 
+    @GetMapping("/documents/{documentId}/published-content")
+    public ApiResponse<KnowledgeGovernanceRepository.PublishedContentView> publishedContent(
+            @PathVariable UUID documentId,
+            @RequestParam(required = false) UUID publicationId) {
+        return success(service.publishedContent(documentId, publicationId));
+    }
+
+    @GetMapping("/documents/{documentId}/versions/{versionId}/review/{reviewRevisionId}/tables/{sourceTableId}")
+    public ApiResponse<KnowledgeGovernanceRepository.TableWindow> reviewTable(
+            @PathVariable UUID documentId, @PathVariable UUID versionId,
+            @PathVariable UUID reviewRevisionId, @PathVariable UUID sourceTableId,
+            @RequestParam(defaultValue = "0") int rowOffset,
+            @RequestParam(defaultValue = "200") int rowLimit,
+            @RequestParam(defaultValue = "0") int columnOffset,
+            @RequestParam(defaultValue = "100") int columnLimit) {
+        return success(service.reviewTable(documentId, versionId, reviewRevisionId, sourceTableId,
+                rowOffset, rowLimit, columnOffset, columnLimit));
+    }
+
+    @PutMapping("/documents/{documentId}/versions/{versionId}/review/{reviewRevisionId}/tables/{sourceTableId}")
+    public ApiResponse<KnowledgeGovernanceRepository.TableWindow> saveReviewTable(
+            @PathVariable UUID documentId, @PathVariable UUID versionId,
+            @PathVariable UUID reviewRevisionId, @PathVariable UUID sourceTableId,
+            @Valid @RequestBody TableReviewRequest request) {
+        return success(service.saveReviewTable(documentId, versionId, reviewRevisionId, sourceTableId,
+                new KnowledgeGovernanceService.TableReviewCommand(request.lockVersion(), request.patches(),
+                        request.rows(), request.rowOffset(), request.rowLimit(),
+                        request.columnOffset(), request.columnLimit())));
+    }
+
+    @GetMapping("/documents/{documentId}/publications/{publicationId}/tables/{sourceTableId}")
+    public ApiResponse<KnowledgeGovernanceRepository.TableWindow> publishedTable(
+            @PathVariable UUID documentId, @PathVariable UUID publicationId, @PathVariable UUID sourceTableId,
+            @RequestParam(defaultValue = "0") int rowOffset,
+            @RequestParam(defaultValue = "200") int rowLimit,
+            @RequestParam(defaultValue = "0") int columnOffset,
+            @RequestParam(defaultValue = "100") int columnLimit) {
+        return success(service.publishedTable(documentId, publicationId, sourceTableId,
+                rowOffset, rowLimit, columnOffset, columnLimit));
+    }
+
     private <T> ApiResponse<T> success(T value) {
         return ResponseFactory.success(value, RequestIdHolder.currentOrUnknown());
     }
@@ -134,14 +177,21 @@ public class KnowledgeGovernanceController {
                                 String libraryScope, @NotNull UUID categoryId, @Size(max = 50) List<String> tags,
                                 String resolution, UUID targetDocumentId,
                                 com.fasterxml.jackson.databind.JsonNode sourceInfo) { }
-    public record ReviewRequest(UUID documentId, UUID versionId, int reviewRevision, @NotBlank String title,
+    public record ReviewRequest(UUID documentId, UUID versionId, @NotNull UUID reviewRevisionId,
+                                int lockVersion, UUID basePublicationId, @NotBlank String title,
                                 @NotBlank String libraryScope, @NotNull UUID categoryId,
                                 @Size(max = 50) List<String> tags,
-                                List<KnowledgeGovernanceRepository.BlockUpdate> blocks) { }
-    public record PublishedRevisionRequest(@NotNull UUID basePublicationId, int reviewRevision,
-                                           @NotNull List<KnowledgeGovernanceRepository.BlockUpdate> blocks) { }
-    public record RevisionRequest(int reviewRevision) { }
-    public record RejectRequest(int reviewRevision, @NotBlank @Size(max = 1000) String reason) { }
+                                @NotNull com.fasterxml.jackson.databind.JsonNode confirmedDocument,
+                                List<UUID> excludedReviewNodeIds,
+                                List<KnowledgeGovernanceRepository.IssueAction> issueActions) { }
+    public record PublishedRevisionRequest(@NotNull UUID basePublicationId) { }
+    public record RevisionRequest(@NotNull UUID reviewRevisionId, int lockVersion, UUID basePublicationId) { }
+    public record RejectRequest(@NotNull UUID reviewRevisionId, int lockVersion,
+                                @NotBlank @Size(max = 1000) String reason) { }
+    public record TableReviewRequest(int lockVersion,
+                                     List<KnowledgeGovernanceRepository.CellPatch> patches,
+                                     List<KnowledgeGovernanceRepository.RowState> rows,
+                                     int rowOffset, int rowLimit, int columnOffset, int columnLimit) { }
     public record ReasonRequest(@NotBlank @Size(max = 500) String reason) { }
     public record BatchMoveRequest(@NotNull @Size(min = 1, max = 200) List<UUID> documentIds,
                                    @NotNull UUID categoryId) { }

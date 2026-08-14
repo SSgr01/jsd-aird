@@ -11,10 +11,8 @@ public interface KnowledgeFileSearchFacade {
 
     record FileMatch(UUID fileObjectId, UUID logicalDocumentId, UUID fileVersionId, String title,
                      String originalName, String contentType, long size, int version,
-                     List<String> tags, List<RelatedObject> relatedObjects, Instant updatedAt,
+                     List<String> tags, Instant updatedAt,
                      List<Hit> hits) { }
-
-    record RelatedObject(UUID id, String objectType, String externalId, String name) { }
 
     record Hit(UUID hitId, String snippet, double score, Integer pageNo, String sheetName,
                String cellRange, String paragraphId, List<Double> bbox, Long startTimeMs,

@@ -34,16 +34,14 @@ public class KnowledgeGovernanceController {
 
     @PostMapping("/uploads/preflight")
     public ApiResponse<KnowledgeGovernanceService.PreflightResult> preflight(@Valid @RequestBody PreflightRequest request) {
-        return success(service.preflight(new KnowledgeGovernanceService.PreflightCommand(
-                request.fileId(), request.documentType(), request.objectRefIds())));
+        return success(service.preflight(new KnowledgeGovernanceService.PreflightCommand(request.fileId(), request.categoryId())));
     }
 
     @PostMapping(value = "/documents", consumes = MediaType.APPLICATION_JSON_VALUE)
     public ApiResponse<?> create(@Valid @RequestBody CreateRequest request) {
         return success(service.create(new KnowledgeGovernanceService.CreateCommand(request.fileId(), request.title(),
-                request.documentType(), request.libraryScope(), request.categoryId(), request.tags(),
-                request.objectRefIds(), request.mediaProcessingConsent(), request.resolution(), request.targetDocumentId(),
-                request.sourceInfo())));
+                request.libraryScope(), request.categoryId(), request.tags(), request.resolution(),
+                request.targetDocumentId(), request.sourceInfo())));
     }
 
     @GetMapping("/review-queue")
@@ -65,15 +63,21 @@ public class KnowledgeGovernanceController {
             @Valid @RequestBody ReviewRequest request) {
         return success(service.saveReview(documentId, versionId, new KnowledgeGovernanceService.ReviewCommand(
                 request.documentId(), request.versionId(), request.reviewRevision(), request.title(),
-                request.documentType(), request.libraryScope(), request.categoryId(), request.tags(),
-                request.objectRefIds(), request.blocks(), request.fields())));
+                request.libraryScope(), request.categoryId(), request.tags(), request.blocks())));
     }
 
     @PostMapping("/documents/{documentId}/versions/{versionId}/publish")
-    public ApiResponse<KnowledgeGovernanceRepository.PublicationRow> publish(
+    public ApiResponse<KnowledgeGovernanceService.IndexBuildView> publish(
             @PathVariable UUID documentId, @PathVariable UUID versionId,
             @Valid @RequestBody RevisionRequest request) {
         return success(service.publish(documentId, versionId, request.reviewRevision()));
+    }
+
+    @PostMapping("/documents/{documentId}/revisions")
+    public ApiResponse<KnowledgeGovernanceService.IndexBuildView> revise(
+            @PathVariable UUID documentId, @Valid @RequestBody PublishedRevisionRequest request) {
+        return success(service.revise(documentId, new KnowledgeGovernanceService.RevisionCommand(
+                request.basePublicationId(), request.reviewRevision(), request.blocks())));
     }
 
     @PostMapping("/documents/{documentId}/versions/{versionId}/reject")
@@ -85,8 +89,8 @@ public class KnowledgeGovernanceController {
 
     @PostMapping("/documents/{documentId}/versions/{versionId}/reparse")
     public ApiResponse<?> reparse(@PathVariable UUID documentId, @PathVariable UUID versionId,
-                                  @Valid @RequestBody ReparseRequest request) {
-        return success(service.reparse(documentId, versionId, request.reviewRevision(), request.mediaProcessingConsent()));
+                                  @Valid @RequestBody RevisionRequest request) {
+        return success(service.reparse(documentId, versionId, request.reviewRevision()));
     }
 
     @PostMapping("/documents/{documentId}/disable")
@@ -99,12 +103,6 @@ public class KnowledgeGovernanceController {
     public ApiResponse<Void> restore(@PathVariable UUID documentId) {
         service.lifecycle(documentId, "ACTIVE", null);
         return success(null);
-    }
-
-    @PutMapping("/publications/{publicationId}/ai-usage")
-    public ApiResponse<KnowledgeGovernanceRepository.PublicationRow> aiUsage(
-            @PathVariable UUID publicationId, @Valid @RequestBody AiUsageRequest request) {
-        return success(service.aiUsage(publicationId, request.action(), request.reason()));
     }
 
     @PostMapping("/documents/batch/move")
@@ -122,67 +120,33 @@ public class KnowledgeGovernanceController {
         return success(service.batchAiUsage(request.documentIds(), request.action(), request.reason()));
     }
 
-    @GetMapping("/pages")
-    public ApiResponse<List<KnowledgeGovernanceRepository.PageListItem>> pages() {
-        return success(service.pages());
-    }
-
-    @GetMapping("/documents/{documentId}/audit")
-    public ApiResponse<List<com.jsd.aird.ops.application.port.AuditLogFacade.AuditEntry>> audit(
-            @PathVariable UUID documentId) {
-        return success(service.auditTrail(documentId));
-    }
-
     @GetMapping("/documents/{documentId}/publications")
-    public ApiResponse<List<KnowledgeGovernanceRepository.PublicationRow>> publications(
-            @PathVariable UUID documentId) {
+    public ApiResponse<List<KnowledgeGovernanceRepository.PublicationRow>> publications(@PathVariable UUID documentId) {
         return success(service.publications(documentId));
-    }
-
-    @GetMapping("/pages/{pageId}")
-    public ApiResponse<KnowledgeGovernanceRepository.PageView> page(@PathVariable UUID pageId) {
-        return success(service.page(pageId));
-    }
-
-    @PutMapping("/pages/{pageId}/draft")
-    public ApiResponse<KnowledgeGovernanceRepository.PageView> savePage(
-            @PathVariable UUID pageId, @Valid @RequestBody PageDraftRequest request) {
-        return success(service.savePageDraft(pageId, request.title(), request.summary(), request.draftRevision()));
-    }
-
-    @PostMapping("/pages/{pageId}/publish")
-    public ApiResponse<KnowledgeGovernanceRepository.PageVersionRow> publishPage(
-            @PathVariable UUID pageId, @Valid @RequestBody PagePublishRequest request) {
-        return success(service.publishPage(pageId, request.draftRevision()));
     }
 
     private <T> ApiResponse<T> success(T value) {
         return ResponseFactory.success(value, RequestIdHolder.currentOrUnknown());
     }
 
-    public record PreflightRequest(@NotNull UUID fileId, @NotBlank String documentType,
-                                   @Size(max = 100) List<UUID> objectRefIds) { }
-    public record CreateRequest(@NotNull UUID fileId, @Size(max = 260) String title, @NotBlank String documentType,
+    public record PreflightRequest(@NotNull UUID fileId, @NotNull UUID categoryId) { }
+    public record CreateRequest(@NotNull UUID fileId, @Size(max = 260) String title,
                                 String libraryScope, @NotNull UUID categoryId, @Size(max = 50) List<String> tags,
-                                @Size(max = 100) List<UUID> objectRefIds, boolean mediaProcessingConsent,
-                                String resolution, UUID targetDocumentId, com.fasterxml.jackson.databind.JsonNode sourceInfo) { }
+                                String resolution, UUID targetDocumentId,
+                                com.fasterxml.jackson.databind.JsonNode sourceInfo) { }
     public record ReviewRequest(UUID documentId, UUID versionId, int reviewRevision, @NotBlank String title,
-                                @NotBlank String documentType, @NotBlank String libraryScope, @NotNull UUID categoryId,
-                                @Size(max = 50) List<String> tags, @Size(max = 100) List<UUID> objectRefIds,
-                                List<KnowledgeGovernanceRepository.BlockUpdate> blocks,
-                                List<KnowledgeGovernanceRepository.FieldUpdate> fields) { }
+                                @NotBlank String libraryScope, @NotNull UUID categoryId,
+                                @Size(max = 50) List<String> tags,
+                                List<KnowledgeGovernanceRepository.BlockUpdate> blocks) { }
+    public record PublishedRevisionRequest(@NotNull UUID basePublicationId, int reviewRevision,
+                                           @NotNull List<KnowledgeGovernanceRepository.BlockUpdate> blocks) { }
     public record RevisionRequest(int reviewRevision) { }
     public record RejectRequest(int reviewRevision, @NotBlank @Size(max = 1000) String reason) { }
-    public record ReparseRequest(int reviewRevision, Boolean mediaProcessingConsent) { }
     public record ReasonRequest(@NotBlank @Size(max = 500) String reason) { }
-    public record AiUsageRequest(@NotBlank String action, @Size(max = 500) String reason) { }
     public record BatchMoveRequest(@NotNull @Size(min = 1, max = 200) List<UUID> documentIds,
                                    @NotNull UUID categoryId) { }
     public record BatchTagsRequest(@NotNull @Size(min = 1, max = 200) List<UUID> documentIds,
                                    @Size(max = 50) List<String> add, @Size(max = 50) List<String> remove) { }
     public record BatchAiRequest(@NotNull @Size(min = 1, max = 200) List<UUID> documentIds,
                                  @NotBlank String action, @Size(max = 500) String reason) { }
-    public record PageDraftRequest(@NotBlank @Size(max = 260) String title, @Size(max = 20000) String summary,
-                                   int draftRevision) { }
-    public record PagePublishRequest(int draftRevision) { }
 }

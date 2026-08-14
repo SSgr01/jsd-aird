@@ -66,12 +66,36 @@ class FlywayMigrationIT {
                 try (var statement = connection.prepareStatement("""
                         select count(*) from information_schema.tables
                         where table_schema = 'kb' and table_name in (
-                          'document_parse_run', 'document_parse_block', 'document_extract_field', 'document_parse_issue',
-                          'publication', 'ai_usage_grant', 'knowledge_page', 'knowledge_page_version'
+                          'document_parse_run', 'document_parse_block', 'document_parse_issue',
+                          'publication', 'document_ai_grant'
                         )
                         """); var resultSet = statement.executeQuery()) {
                     assertThat(resultSet.next()).isTrue();
-                    assertThat(resultSet.getInt(1)).isEqualTo(8);
+                    assertThat(resultSet.getInt(1)).isEqualTo(5);
+                }
+
+                try (var statement = connection.prepareStatement("""
+                        select count(*) from information_schema.tables
+                        where (table_schema = 'kb' and table_name in (
+                          'document_extract_field', 'document_relation', 'ai_usage_grant',
+                          'knowledge_page', 'knowledge_page_version', 'knowledge_page_source'
+                        )) or (table_schema = 'core' and table_name = 'business_object_ref')
+                        """); var resultSet = statement.executeQuery()) {
+                    assertThat(resultSet.next()).isTrue();
+                    assertThat(resultSet.getInt(1)).isZero();
+                }
+
+                try (var statement = connection.prepareStatement("""
+                        select count(*) from information_schema.columns
+                        where (table_schema = 'kb' and table_name = 'document'
+                               and column_name in ('document_type', 'ai_status'))
+                           or (table_schema = 'kb' and table_name = 'document_version'
+                               and column_name in ('media_processing_consent', 'media_consent_by', 'media_consent_at'))
+                           or (table_schema = 'kb' and table_name = 'document_parse_issue'
+                               and column_name = 'extract_field_id')
+                        """); var resultSet = statement.executeQuery()) {
+                    assertThat(resultSet.next()).isTrue();
+                    assertThat(resultSet.getInt(1)).isZero();
                 }
 
                 try (var statement = connection.prepareStatement("""

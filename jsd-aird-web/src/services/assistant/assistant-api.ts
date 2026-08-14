@@ -66,7 +66,6 @@ export interface FileSearchResult {
     size: number;
     version: number;
     tags: string[];
-    relatedObjects: Array<{ id: string; objectType: string; externalId: string; name: string }>;
     updatedAt: string;
     hits: Array<{ id: string; snippet: string; score: number; anchor: { pageNo?: number; sheetName?: string; cellRange?: string; paragraphId?: string; bbox?: number[]; startTimeMs?: number; endTimeMs?: number; section?: string; rowNumber?: number; columnName?: string } }>;
   }>;

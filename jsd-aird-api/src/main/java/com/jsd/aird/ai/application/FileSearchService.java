@@ -43,8 +43,7 @@ public class FileSearchService {
     private FileResult knowledgeFile(KnowledgeFileSearchFacade.FileMatch file) {
         return new FileResult(file.fileObjectId(), file.logicalDocumentId(), file.fileVersionId(), "KNOWLEDGE",
                 file.title(), file.originalName(), file.contentType(), file.size(), file.version(), file.tags(),
-                file.relatedObjects().stream().map(item -> new RelatedObject(item.id(), item.objectType(),
-                        item.externalId(), item.name())).toList(), file.updatedAt(),
+                file.updatedAt(),
                 file.hits().stream().map(item -> new Hit(item.hitId(), item.snippet(), item.score(),
                         new SourceAnchor(item.pageNo(), item.sheetName(), item.cellRange(), item.paragraphId(),
                                 item.bbox(), item.startTimeMs(), item.endTimeMs(), item.section(), null, null))).toList());
@@ -52,7 +51,7 @@ public class FileSearchService {
 
     private FileResult dataFile(DataSourceFileSearchFacade.SourceFileMatch file) {
         return new FileResult(file.fileObjectId(), null, file.importJobId(), "DATA_CENTER", file.originalName(),
-                file.originalName(), file.contentType(), file.size(), 1, List.of(), List.of(), file.updatedAt(),
+                file.originalName(), file.contentType(), file.size(), 1, List.of(), file.updatedAt(),
                 file.hits().stream().map(item -> new Hit(item.hitId(), item.snippet(), item.score(),
                         new SourceAnchor(null, item.sheetName(), item.cellAddress(), null, List.of(), null, null,
                                 "SOURCE_CELL", item.rowNumber(), item.columnName()))).toList());
@@ -69,9 +68,8 @@ public class FileSearchService {
     public record FileSearchResponse(List<FileResult> files) { }
     public record FileResult(UUID fileObjectId, UUID logicalDocumentId, UUID fileVersionId, String sourceModule,
                              String title, String originalName, String contentType, long size, int version,
-                             List<String> tags, List<RelatedObject> relatedObjects, Instant updatedAt,
+                             List<String> tags, Instant updatedAt,
                              List<Hit> hits) { }
-    public record RelatedObject(UUID id, String objectType, String externalId, String name) { }
     public record Hit(UUID id, String snippet, double score, SourceAnchor anchor) { }
     public record SourceAnchor(Integer pageNo, String sheetName, String cellRange, String paragraphId,
                                List<Double> bbox, Long startTimeMs, Long endTimeMs, String section,

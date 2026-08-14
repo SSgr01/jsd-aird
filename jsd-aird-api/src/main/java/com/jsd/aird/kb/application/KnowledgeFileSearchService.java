@@ -44,8 +44,6 @@ public class KnowledgeFileSearchService implements KnowledgeFileSearchFacade {
             if (document == null) continue;
             var publication = governance.currentPublication(organizationId, document.id()).orElse(null);
             if (publication == null || !version.id().equals(publication.versionId())) continue;
-            var related = governance.publicationRelations(organizationId, publication.id()).stream()
-                    .map(item -> new RelatedObject(item.id(), item.objectType(), item.externalId(), item.name())).toList();
             var hits = entry.getValue().stream().limit(8)
                     .map(hit -> {
                         var anchor = documents.findChunkAnchor(organizationId, hit.chunkId()).orElse(
@@ -56,7 +54,7 @@ public class KnowledgeFileSearchService implements KnowledgeFileSearchFacade {
                     }).toList();
             result.add(new FileMatch(version.fileObjectId(), document.id(), version.id(), first.title(),
                     version.originalName(), version.contentType(), version.size(), version.versionNo(),
-                    governance.publicationTags(organizationId, publication.id()), related, publication.publishedAt(), hits));
+                    governance.publicationTags(organizationId, publication.id()), publication.publishedAt(), hits));
         }
         return result;
     }

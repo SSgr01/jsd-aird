@@ -48,7 +48,6 @@ public class KnowledgeService implements KnowledgeSearchFacade {
 
     private final KnowledgeRepository repository;
     private final KnowledgeGovernanceRepository governance;
-    private final KnowledgeFieldExtractor fieldExtractor;
     private final FileStorageFacade storage;
     private final OpsAsyncFacade async;
     private final AuditLogFacade audit;
@@ -64,7 +63,6 @@ public class KnowledgeService implements KnowledgeSearchFacade {
     public KnowledgeService(
             KnowledgeRepository repository,
             KnowledgeGovernanceRepository governance,
-            KnowledgeFieldExtractor fieldExtractor,
             FileStorageFacade storage,
             OpsAsyncFacade async,
             AuditLogFacade audit,
@@ -79,7 +77,6 @@ public class KnowledgeService implements KnowledgeSearchFacade {
     ) {
         this.repository = repository;
         this.governance = governance;
-        this.fieldExtractor = fieldExtractor;
         this.storage = storage;
         this.async = async;
         this.audit = audit;
@@ -117,8 +114,7 @@ public class KnowledgeService implements KnowledgeSearchFacade {
             var documentId = UUID.randomUUID();
             var versionId = UUID.randomUUID();
             repository.insertDocument(new KnowledgeRepository.NewDocument(
-                    documentId, actor.organizationId(), title, normalizeType(command.documentType(), file.originalName()),
-                    actor.userId(), scope, categoryId
+                    documentId, actor.organizationId(), title, actor.userId(), scope, categoryId
             ));
             try {
                 repository.insertVersion(new KnowledgeRepository.NewVersion(
@@ -292,8 +288,14 @@ public class KnowledgeService implements KnowledgeSearchFacade {
             case "APPROVE", "REJECT", "REVOKE" -> { }
             default -> throw new ApiException(ApiErrorCode.BAD_REQUEST, "AI 授权动作只能是 APPROVE、REJECT 或 REVOKE");
         }
-        if (!governance.updateAiUsage(actor.organizationId(), actor.userId(), publication.id(), action, command.reason())) {
-            throw new ApiException(ApiErrorCode.AI_DOCUMENT_NOT_APPROVED, "当前发布版本不可授权 AI 使用");
+        if (!governance.updateAiUsage(actor.organizationId(), actor.userId(), documentId, action, command.reason())) {
+            throw new ApiException(ApiErrorCode.AI_DOCUMENT_NOT_APPROVED, "当前文档不可授权 AI 使用");
+        }
+        if ("APPROVE".equals(action)) {
+            enqueueVectorBuild(actor.organizationId(), documentId, publication.id(), publication.parseRunId());
+        } else {
+            repository.cancelPendingVectorJobs(actor.organizationId(), documentId);
+            repository.clearDocumentEmbeddings(actor.organizationId(), documentId);
         }
         audit.append(actor.organizationId(), actor.userId(), "KB_AI_GRANT_" + action, "KB_DOCUMENT", documentId,
                 objectMapper.createObjectNode().put("reason", command.reason() == null ? "" : command.reason()));
@@ -460,6 +462,140 @@ public class KnowledgeService implements KnowledgeSearchFacade {
                 new KnowledgeSearchFacade.RetrievalTrace("BM25_VECTOR_RRF", bm25.size(), vectorRows.size(), rows.size(), fallbacks));
     }
 
+    public void markIndexStale(UUID organizationId, UUID documentId, UUID versionId, UUID parseRunId) {
+        for (var step : List.of("CHUNK", "BM25_INDEX", "VECTOR_INDEX")) {
+            repository.startProcessingStep(organizationId, documentId, versionId, parseRunId, step,
+                    "knowledge-index", TermAnalyzer.VERSION, null);
+            repository.finishProcessingStep(organizationId, versionId, parseRunId, step,
+                    "VECTOR_INDEX".equals(step) && !repository.isAiApproved(organizationId, documentId)
+                            ? "NOT_REQUIRED" : "STALE", null, null);
+        }
+    }
+
+    @Transactional
+    public KnowledgeGovernanceRepository.PublicationRow buildAndPublish(UUID organizationId, UUID actorId,
+                                                                         UUID documentId, UUID versionId,
+                                                                         UUID parseRunId, int expectedRevision) {
+        var review = governance.review(organizationId, documentId, versionId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "待发布内容不存在"));
+        if (review.parseRun() == null || !parseRunId.equals(review.parseRun().id())) {
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "待发布内容已被新的修订替代");
+        }
+        var source = review.blocks().stream()
+                .filter(block -> !"IGNORED".equals(block.reviewStatus()))
+                .map(block -> new DocumentParser.TextBlock(block.pageNo(), block.section(), effectiveText(block),
+                        block.sheetName(), block.cellRange(), block.paragraphId(), doubles(block.bbox()),
+                        block.startTimeMs(), block.endTimeMs(), block.confidence()))
+                .filter(block -> block.content() != null && !block.content().isBlank())
+                .toList();
+        if (source.isEmpty()) throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "确认文本不能为空");
+
+        var chunks = chunk(source);
+        var textHash = sha256(chunks.stream().map(DocumentParser.TextBlock::content)
+                .reduce("", (left, right) -> left + "\n" + right));
+        var aiApproved = repository.isAiApproved(organizationId, documentId);
+        var embedding = aiApproved ? embeddings.getIfAvailable() : null;
+        if (aiApproved && embedding == null) throw new IllegalStateException("向量服务暂不可用");
+
+        repository.startProcessingStep(organizationId, documentId, versionId, parseRunId,
+                "CHUNK", "builtin-chunker", TermAnalyzer.VERSION, textHash);
+        var writes = new ArrayList<KnowledgeRepository.ChunkWrite>();
+        for (int index = 0; index < chunks.size(); index++) {
+            var block = chunks.get(index);
+            var terms = TermAnalyzer.frequencies(block.content()).entrySet().stream()
+                    .map(item -> new KnowledgeRepository.TermFrequency(item.getKey(), item.getValue())).toList();
+            String vector = null;
+            if (aiApproved) {
+                vector = embedding.embedVector(block.content())
+                        .orElseThrow(() -> new IllegalStateException("向量服务未返回结果"));
+            }
+            writes.add(new KnowledgeRepository.ChunkWrite(index, block.pageNo(), block.section(), block.content(), vector,
+                    terms.stream().mapToInt(KnowledgeRepository.TermFrequency::frequency).sum(), TermAnalyzer.VERSION,
+                    null, vector == null ? null : embeddingModel, terms, block.sheetName(), block.cellRange(),
+                    block.paragraphId(), block.bbox(), block.startTimeMs(), block.endTimeMs()));
+        }
+        repository.replaceChunks(documentId, versionId, parseRunId, writes);
+        repository.finishProcessingStep(organizationId, versionId, parseRunId, "CHUNK", "SUCCEEDED", textHash, null);
+        repository.startProcessingStep(organizationId, documentId, versionId, parseRunId,
+                "BM25_INDEX", "postgresql-bm25", TermAnalyzer.VERSION, textHash);
+        repository.finishProcessingStep(organizationId, versionId, parseRunId, "BM25_INDEX", "SUCCEEDED", textHash, null);
+        if (aiApproved) {
+            repository.startProcessingStep(organizationId, documentId, versionId, parseRunId,
+                    "VECTOR_INDEX", "pgvector", embeddingModel, textHash);
+            repository.finishProcessingStep(organizationId, versionId, parseRunId, "VECTOR_INDEX", "SUCCEEDED", textHash, null);
+        } else {
+            repository.finishProcessingStep(organizationId, versionId, parseRunId, "VECTOR_INDEX", "NOT_REQUIRED", null, null);
+        }
+
+        var publication = governance.publish(organizationId, actorId, documentId, versionId, parseRunId, expectedRevision);
+        if (publication == null) throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "发布内容已发生变化，请刷新后重试");
+        repository.rebuildTermStats(organizationId);
+        appendIngestAudit(organizationId, actorId, "KB_DOCUMENT_PUBLISHED", documentId,
+                objectMapper.createObjectNode().put("publicationId", publication.id().toString())
+                        .put("parseRunId", parseRunId.toString()));
+        return publication;
+    }
+
+    public void buildVectors(UUID organizationId, UUID documentId, UUID publicationId, UUID parseRunId) {
+        if (!repository.isAiApproved(organizationId, documentId)) {
+            repository.clearDocumentEmbeddings(organizationId, documentId);
+            return;
+        }
+        var publication = governance.currentPublicationById(organizationId, publicationId)
+                .filter(value -> parseRunId.equals(value.parseRunId()))
+                .orElseThrow(() -> new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "发布版本已经切换"));
+        var provider = embeddings.getIfAvailable();
+        if (provider == null) throw new IllegalStateException("向量服务暂不可用");
+        repository.startProcessingStep(organizationId, documentId, publication.versionId(), parseRunId,
+                "VECTOR_INDEX", "pgvector", embeddingModel, null);
+        for (var chunk : repository.chunksForEmbedding(organizationId, documentId, parseRunId)) {
+            if (!repository.isAiApproved(organizationId, documentId)) {
+                repository.clearDocumentEmbeddings(organizationId, documentId);
+                return;
+            }
+            var vector = provider.embedVector(chunk.content())
+                    .orElseThrow(() -> new IllegalStateException("向量服务未返回结果"));
+            repository.updateChunkEmbedding(organizationId, chunk.id(), vector, embeddingModel);
+        }
+        repository.finishProcessingStep(organizationId, publication.versionId(), parseRunId,
+                "VECTOR_INDEX", "SUCCEEDED", null, null);
+    }
+
+    public void failIndex(UUID organizationId, UUID documentId, UUID versionId, UUID parseRunId, Exception exception) {
+        var error = safeError(exception);
+        governance.updateParseRunStatus(organizationId, parseRunId, "FAILED", error);
+        for (var step : List.of("CHUNK", "BM25_INDEX", "VECTOR_INDEX")) {
+            repository.finishProcessingStep(organizationId, versionId, parseRunId, step, "FAILED", null, error);
+        }
+    }
+
+    public void failVector(UUID organizationId, UUID documentId, UUID publicationId, UUID parseRunId,
+                           Exception exception) {
+        governance.currentPublicationById(organizationId, publicationId)
+                .filter(publication -> parseRunId.equals(publication.parseRunId()))
+                .ifPresent(publication -> repository.finishProcessingStep(organizationId, publication.versionId(),
+                        parseRunId, "VECTOR_INDEX", "FAILED", null, safeError(exception)));
+    }
+
+    private void enqueueVectorBuild(UUID organizationId, UUID documentId, UUID publicationId, UUID parseRunId) {
+        var payload = objectMapper.createObjectNode().put("organizationId", organizationId.toString())
+                .put("documentId", documentId.toString()).put("publicationId", publicationId.toString())
+                .put("parseRunId", parseRunId.toString());
+        async.enqueue(organizationId, "KB_BUILD_KNOWLEDGE_VECTOR", payload,
+                "kb-vector:" + publicationId + ":" + System.currentTimeMillis(), 55);
+    }
+
+    private String effectiveText(KnowledgeGovernanceRepository.ParseBlockView block) {
+        return block.confirmedText() == null ? block.normalizedText() : block.confirmedText();
+    }
+
+    private List<Double> doubles(JsonNode value) {
+        if (value == null || !value.isArray()) return List.of();
+        var result = new ArrayList<Double>();
+        value.forEach(item -> result.add(item.asDouble()));
+        return result;
+    }
+
     public void ingest(UUID organizationId, UUID actorId, UUID documentId, UUID versionId, UUID fileId) {
         repository.updateProcessing(documentId, versionId);
         var version = repository.findVersion(organizationId, versionId)
@@ -467,15 +603,17 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         String attemptedProvider = null;
         UUID activeParseRunId = null;
         try {
-            repository.startProcessingStep(organizationId, documentId, versionId, "SCAN", "safety-scanner", null, version.sha256());
+            repository.startProcessingStep(organizationId, documentId, versionId, null,
+                    "SCAN", "safety-scanner", null, version.sha256());
             var scan = scan(organizationId, fileId, version);
             if (scan.status() != FileSafetyScanner.ScanResult.Status.SAFE) {
-                governance.createParseRun(organizationId, documentId, versionId, "FAILED", null,
+                activeParseRunId = governance.createParseRun(organizationId, documentId, versionId, "FAILED", null,
                         "safety-scanner", null, scan.reason(),
-                        objectMapper.createObjectNode().put("scanStatus", scan.status().name()), List.of(), List.of());
-                repository.finishProcessingStep(organizationId, versionId, "SCAN",
+                        objectMapper.createObjectNode().put("scanStatus", scan.status().name()), List.of()).id();
+                repository.finishProcessingStep(organizationId, versionId, null, "SCAN",
                         scan.status() == FileSafetyScanner.ScanResult.Status.UNAVAILABLE ? "PENDING_PROVIDER" : "FAILED",
                         null, scan.reason());
+                repository.attachProcessingSteps(organizationId, versionId, activeParseRunId);
                 repository.updateScanStatus(documentId, scan.status().name());
                 repository.markFailed(documentId, versionId,
                         scan.status() == FileSafetyScanner.ScanResult.Status.REJECTED ? "REJECTED" : "FAILED",
@@ -483,7 +621,7 @@ public class KnowledgeService implements KnowledgeSearchFacade {
                 return;
             }
             repository.updateScanStatus(documentId, "SAFE");
-            repository.finishProcessingStep(organizationId, versionId, "SCAN", "SUCCEEDED", version.sha256(), null);
+            repository.finishProcessingStep(organizationId, versionId, null, "SCAN", "SUCCEEDED", version.sha256(), null);
             var mediaProvider = mediaProviders.stream()
                     .filter(candidate -> candidate.supports(version.originalName(), version.contentType()))
                     .sorted((left, right) -> Boolean.compare(right.isConfigured(), left.isConfigured()))
@@ -498,39 +636,28 @@ public class KnowledgeService implements KnowledgeSearchFacade {
                 }
             }
             if (parser == null && mediaProvider == null) {
-                governance.createParseRun(organizationId, documentId, versionId, "FAILED", null,
+                activeParseRunId = governance.createParseRun(organizationId, documentId, versionId, "FAILED", null,
                         "unsupported-format", null, "当前文件格式暂不支持",
-                        objectMapper.createObjectNode().put("supported", false), List.of(), List.of());
+                        objectMapper.createObjectNode().put("supported", false), List.of()).id();
+                repository.attachProcessingSteps(organizationId, versionId, activeParseRunId);
                 repository.markFailed(documentId, versionId, "REJECTED", "当前文件格式暂不支持");
                 return;
             }
             DocumentParser.ParsedDocument parsed;
-            repository.startProcessingStep(organizationId, documentId, versionId, "PARSE",
+            repository.startProcessingStep(organizationId, documentId, versionId, null, "PARSE",
                     mediaProvider == null ? parser.getClass().getSimpleName() : mediaProvider.getClass().getSimpleName(), null, version.sha256());
             attemptedProvider = mediaProvider == null ? parser.getClass().getSimpleName() : mediaProvider.getClass().getSimpleName();
             if (mediaProvider != null) {
-                if (!governance.hasMediaConsent(organizationId, versionId)) {
-                    governance.createParseRun(organizationId, documentId, versionId, "WAITING_MEDIA_CONSENT",
-                            null, mediaProvider.getClass().getSimpleName(), null, "等待媒体解析外发确认",
-                            objectMapper.createObjectNode().put("requiresConsent", true), List.of(), List.of());
-                    repository.finishProcessingStep(organizationId, versionId, "PARSE", "PENDING_PROVIDER", null,
-                            "等待媒体解析外发确认");
-                    repository.markFailed(documentId, versionId, "PENDING_PROVIDER", "等待媒体解析外发确认");
-                    appendIngestAudit(organizationId, actorId, "KB_PARSE_WAITING_MEDIA_CONSENT", documentId,
-                            objectMapper.createObjectNode().put("versionId", versionId.toString()));
-                    return;
-                }
                 if (!mediaProvider.isConfigured()) {
-                    governance.createParseRun(organizationId, documentId, versionId, "FAILED",
-                            null, mediaProvider.getClass().getSimpleName(), null, mediaProvider.unavailableReason(),
-                            objectMapper.createObjectNode().put("configured", false), List.of(), List.of());
-                    repository.finishProcessingStep(organizationId, versionId, "PARSE", "PENDING_PROVIDER", null,
-                            mediaProvider.unavailableReason());
-                    repository.markFailed(documentId, versionId, "PENDING_PROVIDER", mediaProvider.unavailableReason());
+                    activeParseRunId = governance.createParseRun(organizationId, documentId, versionId, "FAILED",
+                            null, mediaProvider.getClass().getSimpleName(), null, "解析服务暂不可用",
+                            objectMapper.createObjectNode().put("configured", false), List.of()).id();
+                    repository.finishProcessingStep(organizationId, versionId, null, "PARSE", "PENDING_PROVIDER", null,
+                            "解析服务暂不可用");
+                    repository.attachProcessingSteps(organizationId, versionId, activeParseRunId);
+                    repository.markFailed(documentId, versionId, "PENDING_PROVIDER", "解析服务暂不可用");
                     appendIngestAudit(organizationId, actorId, "KB_PARSE_PROVIDER_UNAVAILABLE", documentId,
-                            objectMapper.createObjectNode().put("versionId", versionId.toString())
-                                    .put("provider", mediaProvider.getClass().getSimpleName())
-                                    .put("error", mediaProvider.unavailableReason()));
+                            objectMapper.createObjectNode().put("versionId", versionId.toString()));
                     return;
                 }
                 try (var stored = storage.open(organizationId, fileId)) {
@@ -543,57 +670,30 @@ public class KnowledgeService implements KnowledgeSearchFacade {
                     parsed = parser.parse(stored.stream(), version.originalName());
                 }
             }
-            repository.finishProcessingStep(organizationId, versionId, "PARSE", "SUCCEEDED", null, null);
-            repository.startProcessingStep(organizationId, documentId, versionId, "CHUNK", "builtin-chunker", TermAnalyzer.VERSION, version.sha256());
-            var chunks = chunk(parsed.blocks());
-            var writes = new ArrayList<KnowledgeRepository.ChunkWrite>();
-            // Every ingestion creates a new, unpublished parse run. A grant on an older publication
-            // (including one for the same source version) must never authorize this draft text to leave the system.
-            var aiApproved = false;
-            for (int index = 0; index < chunks.size(); index++) {
-                var block = chunks.get(index);
-                var vector = !aiApproved || embeddings.getIfAvailable() == null ? null
-                        : embeddings.getIfAvailable().embedVector(block.content()).orElse(null);
-                var terms = TermAnalyzer.frequencies(block.content()).entrySet().stream()
-                        .map(item -> new KnowledgeRepository.TermFrequency(item.getKey(), item.getValue())).toList();
-                writes.add(new KnowledgeRepository.ChunkWrite(index, block.pageNo(), block.section(), block.content(), vector,
-                        terms.stream().mapToInt(KnowledgeRepository.TermFrequency::frequency).sum(), TermAnalyzer.VERSION,
-                        null, embeddingModel, terms, block.sheetName(), block.cellRange(), block.paragraphId(),
-                        block.bbox(), block.startTimeMs(), block.endTimeMs()));
-            }
-            var textHash = sha256(writes.stream().map(KnowledgeRepository.ChunkWrite::content).reduce("", (a, b) -> a + "\n" + b));
-            repository.finishProcessingStep(organizationId, versionId, "CHUNK", "SUCCEEDED", textHash, null);
-            repository.startProcessingStep(organizationId, documentId, versionId, "EMBEDDING", "spring-ai-embedding", null, textHash);
-            var documentType = repository.findDocument(organizationId, documentId)
-                    .map(KnowledgeRepository.DocumentRow::documentType).orElse("UNKNOWN");
-            activeParseRunId = governance.createParseRun(organizationId, documentId, versionId, "PROCESSING",
+            var textHash = sha256(parsed.blocks().stream().map(block -> block.content() == null ? "" : block.content())
+                    .reduce("", (left, right) -> left + "\n" + right));
+            repository.finishProcessingStep(organizationId, versionId, null, "PARSE", "SUCCEEDED", textHash, null);
+            activeParseRunId = governance.createParseRun(organizationId, documentId, versionId, "PENDING_REVIEW",
                     parsed.parserVersion(), mediaProvider == null ? parser.getClass().getSimpleName()
                             : mediaProvider.getClass().getSimpleName(), parsed.providerTaskId(), null,
-                    parseMetadata(parsed, textHash), chunks, fieldExtractor.extract(documentType, parsed.blocks())).id();
-            repository.replaceChunks(documentId, versionId, activeParseRunId, writes);
-            var hasVector = writes.stream().anyMatch(item -> item.vector() != null && !item.vector().isBlank());
-            repository.finishProcessingStep(organizationId, versionId, "EMBEDDING", hasVector ? "SUCCEEDED" : "PENDING_PROVIDER",
-                    hasVector ? textHash : null, hasVector ? null : "Embedding 服务未配置或调用失败");
+                    parseMetadata(parsed, textHash), parsed.blocks()).id();
+            repository.attachProcessingSteps(organizationId, versionId, activeParseRunId);
             repository.markReady(documentId, versionId, parsed.parserVersion(), textHash);
-            governance.updateParseRunStatus(organizationId, activeParseRunId, "PENDING_REVIEW", null);
             appendIngestAudit(organizationId, actorId, "KB_PARSE_COMPLETED", documentId,
                     objectMapper.createObjectNode().put("versionId", versionId.toString())
                             .put("parserVersion", parsed.parserVersion()).put("blockCount", parsed.blocks().size()));
-            repository.startProcessingStep(organizationId, documentId, versionId, "BM25_INDEX", "postgresql-bm25", TermAnalyzer.VERSION, textHash);
-            repository.rebuildTermStats(organizationId);
-            repository.finishProcessingStep(organizationId, versionId, "BM25_INDEX", "SUCCEEDED", textHash, null);
-            repository.startProcessingStep(organizationId, documentId, versionId, "VECTOR_INDEX", "pgvector", null, textHash);
-            repository.finishProcessingStep(organizationId, versionId, "VECTOR_INDEX", hasVector ? "SUCCEEDED" : "PENDING_PROVIDER",
-                    hasVector ? textHash : null, hasVector ? null : "Embedding 服务未配置或调用失败");
         } catch (Exception exception) {
             var mediaFailure = exception instanceof MediaExtractionException failure ? failure : null;
             try {
                 if (activeParseRunId != null) {
                     governance.updateParseRunStatus(organizationId, activeParseRunId, "FAILED", safeError(exception));
-                } else governance.createParseRun(organizationId, documentId, versionId, "FAILED",
-                        mediaFailure == null ? null : mediaFailure.model(), attemptedProvider,
-                        mediaFailure == null ? null : mediaFailure.providerTaskId(), safeError(exception),
-                        objectMapper.createObjectNode().put("retryable", false), List.of(), List.of());
+                } else {
+                    activeParseRunId = governance.createParseRun(organizationId, documentId, versionId, "FAILED",
+                            mediaFailure == null ? null : mediaFailure.model(), attemptedProvider,
+                            mediaFailure == null ? null : mediaFailure.providerTaskId(), safeError(exception),
+                            objectMapper.createObjectNode().put("retryable", false), List.of()).id();
+                    repository.attachProcessingSteps(organizationId, versionId, activeParseRunId);
+                }
             } catch (RuntimeException ignored) {
                 // The original parser/provider error remains authoritative if failure recording itself is unavailable.
             }
@@ -650,7 +750,7 @@ public class KnowledgeService implements KnowledgeSearchFacade {
     }
 
     private DocumentView view(KnowledgeRepository.DocumentRow row) {
-        return new DocumentView(row.id(), row.title(), row.documentType(), row.status(), row.scanStatus(), row.aiStatus(),
+        return new DocumentView(row.id(), row.title(), row.status(), row.scanStatus(), row.aiStatus(),
                 row.currentVersionNo(), row.currentVersionId(), row.originalName(), row.contentType(), row.size(),
                 row.sha256(), row.parseError(), row.createdAt(), row.updatedAt(), row.libraryScope(), row.categoryId(), row.categoryName(),
                 row.lifecycleStatus(), row.reviewStatus(), row.reviewRevision(), row.currentPublicationId(), row.currentPublicationNo());
@@ -697,20 +797,14 @@ public class KnowledgeService implements KnowledgeSearchFacade {
 
     private VersionView versionView(KnowledgeRepository.VersionRow row) {
         return new VersionView(row.id(), row.documentId(), row.versionNo(), row.fileObjectId(), row.originalName(),
-                row.contentType(), row.size(), row.sha256(), row.status(), row.parserVersion(), row.errorMessage(),
-                row.reviewStatus(), row.reviewRevision(), row.mediaProcessingConsent());
+                row.contentType(), row.size(), row.sha256(), row.status(), row.errorMessage(),
+                row.reviewStatus(), row.reviewRevision());
     }
 
     private KnowledgeSearchFacade.SearchHit toSearchHit(KnowledgeRepository.SearchRow row, double retrieval, double rrf) {
         return new KnowledgeSearchFacade.SearchHit(row.chunkId(), row.documentId(), row.versionId(), row.title(),
                 row.originalName(), row.pageNo(), row.section(), row.content(), rrf, retrieval, rrf, rrf,
                 "KNOWLEDGE_CHUNK", null, null, null, null);
-    }
-
-    private String normalizeType(String value, String fileName) {
-        if (StringUtils.hasText(value)) return value.trim().toUpperCase(Locale.ROOT);
-        var dot = fileName.lastIndexOf('.');
-        return dot > 0 ? fileName.substring(dot + 1).toUpperCase(Locale.ROOT) : "UNKNOWN";
     }
 
     private String safeError(Exception exception) {
@@ -733,21 +827,16 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         try { file.close(); } catch (Exception ignored) { }
     }
 
-    public record CreateCommand(UUID fileId, String title, String documentType, String libraryScope, UUID categoryId) {
-        public CreateCommand(UUID fileId, String title, String documentType) {
-            this(fileId, title, documentType, "INTERNAL", null);
-        }
-    }
+    public record CreateCommand(UUID fileId, String title, String libraryScope, UUID categoryId) { }
     public record GrantCommand(String action, String reason) { }
     public record CreateVersionCommand(UUID fileId) { }
-    public record DocumentView(UUID id, String title, String documentType, String status, String scanStatus,
+    public record DocumentView(UUID id, String title, String status, String scanStatus,
                                String aiStatus, int currentVersionNo, UUID currentVersionId, String originalName,
                                String contentType, long size, String sha256, String parseError,
                                java.time.Instant createdAt, java.time.Instant updatedAt, String libraryScope,
                                UUID categoryId, String categoryName, String lifecycleStatus, String reviewStatus,
                                int reviewRevision, UUID currentPublicationId, Integer currentPublicationNo) { }
     public record VersionView(UUID id, UUID documentId, int versionNo, UUID fileObjectId, String originalName,
-                              String contentType, long size, String sha256, String status, String parserVersion,
-                              String errorMessage, String reviewStatus, int reviewRevision,
-                              boolean mediaProcessingConsent) { }
+                               String contentType, long size, String sha256, String status,
+                               String errorMessage, String reviewStatus, int reviewRevision) { }
 }

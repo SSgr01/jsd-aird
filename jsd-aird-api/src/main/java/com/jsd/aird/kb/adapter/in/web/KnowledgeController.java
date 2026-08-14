@@ -50,7 +50,6 @@ public class KnowledgeController {
     public ApiResponse<KnowledgeService.DocumentView> create(
     @RequestPart MultipartFile file,
             @RequestParam(required = false) String title,
-            @RequestParam(required = false) String documentType,
             @RequestParam(required = false) String libraryScope,
             @RequestParam(required = false) UUID categoryId
     ) throws IOException {
@@ -61,7 +60,7 @@ public class KnowledgeController {
                 file.getInputStream()
         );
         return success(governance.create(new KnowledgeGovernanceService.CreateCommand(staged.fileId(), title,
-                documentType, libraryScope, categoryId, List.of(), List.of(), false, null, null, null)));
+                libraryScope, categoryId, List.of(), null, null, null)));
     }
 
     @GetMapping("/documents")

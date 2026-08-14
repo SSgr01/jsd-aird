@@ -38,9 +38,9 @@ class KnowledgeFileSearchServiceTest {
         when(documents.findVersion(organizationId, versionId)).thenReturn(Optional.of(
                 new KnowledgeRepository.VersionRow(versionId, documentId, 2, fileId, "coa.xlsx",
                         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 1024, "a".repeat(64),
-                        "READY", "poi", null, "PUBLISHED", 3, false)));
+                        "READY", "poi", null, "PUBLISHED", 3)));
         when(documents.findDocument(organizationId, documentId)).thenReturn(Optional.of(
-                new KnowledgeRepository.DocumentRow(documentId, organizationId, "草稿标题", "COA", "READY",
+                new KnowledgeRepository.DocumentRow(documentId, organizationId, "草稿标题", "READY",
                         "SAFE", "PENDING", 2, versionId, "coa.xlsx", "application/octet-stream", 1024,
                         "a".repeat(64), null, Instant.now(), Instant.now(), "INTERNAL", UUID.randomUUID(),
                         "COA", "ACTIVE", "PUBLISHED", 3, publicationId, 2)));
@@ -48,7 +48,6 @@ class KnowledgeFileSearchServiceTest {
                 new KnowledgeGovernanceRepository.PublicationRow(publicationId, documentId, versionId,
                         UUID.randomUUID(), 2, "CURRENT", "PENDING", Instant.now())));
         when(governance.publicationTags(organizationId, publicationId)).thenReturn(List.of("COA", "放行"));
-        when(governance.publicationRelations(organizationId, publicationId)).thenReturn(List.of());
         when(documents.findChunkAnchor(any(), any())).thenReturn(Optional.empty());
 
         var files = new KnowledgeFileSearchService(documents, governance)

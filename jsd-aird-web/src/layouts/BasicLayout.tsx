@@ -9,7 +9,6 @@ import {
   OrderedListOutlined,
   RobotOutlined,
   AuditOutlined,
-  BookOutlined,
   UploadOutlined,
   BankOutlined,
   CheckSquareOutlined,
@@ -67,7 +66,6 @@ const route = {
         { path: '/knowledge/library', name: '资料上传', icon: <FolderOpenOutlined /> },
         { path: '/knowledge/view', name: '知识库查看', icon: <EyeOutlined /> },
         { path: '/knowledge/review', name: '审核工作台', icon: <AuditOutlined /> },
-        { path: '/knowledge/pages', name: '知识页', icon: <BookOutlined /> },
       ],
     },
     {

@@ -1,0 +1,14 @@
+.pm-cr-tab{padding:4px 0 16px}
+.pm-cr-tab-head{display:flex;justify-content:space-between;align-items:center;background:#f5f7fa;border:1px solid #eef0f3;border-radius:6px;padding:10px 14px;margin-bottom:12px;gap:12px}
+.pm-cr-tab-tip{color:#6b7280;font-size:13px}
+.pm-cr-tab .ant-table{border:1px solid #eef0f3;border-radius:6px}
+.pm-cr-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px 16px}
+.pm-cr-grid .ant-form-item{margin-bottom:0}
+.pm-cr-grid-2{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px 16px}
+.pm-cr-grid-2 .ant-form-item{margin-bottom:0}
+.pm-cr-section-title{font-size:13px;font-weight:600;color:#1f2937;margin:12px 0 8px}
+.pm-cr-custom-fields{margin-top:8px}
+.pm-cr-custom-title{font-size:13px;font-weight:600;color:#1f2937;margin-bottom:8px}
+.pm-cr-field-row{display:grid;grid-template-columns:1fr 1fr 32px;gap:8px;margin-bottom:8px}
+.pm-muted{color:#9ca3af}
+@media(max-width:760px){.pm-cr-grid,.pm-cr-grid-2{grid-template-columns:1fr}}

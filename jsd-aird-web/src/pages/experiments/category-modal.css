@@ -1,0 +1,7 @@
+.eln-category-modal .ant-modal-content { padding: 0; overflow: hidden; }
+.eln-category-modal .ant-modal-header { margin: 0; padding: 22px 20px; border-bottom: 1px solid #dfe6f0; }
+.eln-category-modal .ant-modal-title { font-size: 20px; }
+.eln-category-modal .ant-modal-body { padding: 26px 20px 10px; }
+.eln-category-modal .ant-modal-footer { margin: 0; padding: 16px 20px; border-top: 1px solid #dfe6f0; }
+.eln-category-modal .ant-form-item-label > label { font-weight: 600; }
+.eln-category-modal textarea { min-height: 90px; }

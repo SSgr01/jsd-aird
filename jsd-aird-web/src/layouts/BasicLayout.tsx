@@ -1,5 +1,6 @@
 import {
   DatabaseOutlined,
+  ExperimentOutlined,
   EyeOutlined,
   FileSearchOutlined,
   FileTextOutlined,
@@ -10,6 +11,11 @@ import {
   AuditOutlined,
   BookOutlined,
   UploadOutlined,
+  BankOutlined,
+  CheckSquareOutlined,
+  PartitionOutlined,
+  ProjectOutlined,
+  UnorderedListOutlined,
 } from '@ant-design/icons';
 import { ProLayout } from '@ant-design/pro-components';
 import { Link, Outlet, useLocation } from 'react-router-dom';
@@ -20,6 +26,30 @@ import { useAppStore } from '@/stores/app-store';
 const route = {
   path: '/',
   routes: [
+    {
+      path: '/partners',
+      name: '客户管理',
+      icon: <BankOutlined />,
+    },
+    {
+      path: '/projects',
+      name: '项目管理',
+      icon: <ProjectOutlined />,
+      routes: [
+        { path: '/projects/list', name: '项目列表', icon: <UnorderedListOutlined /> },
+        { path: '/projects/phases', name: '阶段', icon: <PartitionOutlined /> },
+        { path: '/projects/tasks', name: '任务', icon: <CheckSquareOutlined /> },
+      ],
+    },
+    {
+      path: '/experiments-root',
+      name: '电子实验记录本',
+      icon: <ExperimentOutlined />,
+      routes: [
+        { path: '/experiments/upload', name: '实验上传', icon: <UploadOutlined /> },
+        { path: '/experiments/list', name: '实验查看', icon: <EyeOutlined /> },
+      ],
+    },
     {
       path: '/ai-assistant',
       name: 'AI研发助手',

@@ -11,6 +11,10 @@ import { TemplateUploadPage } from '@/pages/template-upload';
 import { TemplateWorkspacePage } from '@/pages/template-workspace';
 import { TemplatesPage } from '@/pages/templates';
 import { TemplateImportRenderPage } from '@/pages/template-render/TemplateImportRenderPage';
+import { PartnerDetailPage, PartnerListPage } from '@/pages/partners';
+import { ProjectDetailPage, ProjectListPage, PhasePage, TaskPage } from '@/pages/project';
+import { ProjectDocumentWorkspacePage } from '@/pages/project/ProjectDocumentWorkspacePage';
+import { ExperimentListPage, ExperimentUploadPage, ExperimentWorkspacePage } from '@/pages/experiments';
 
 export const routeConfig: RouteObject[] = [
   {
@@ -71,6 +75,18 @@ export const routeConfig: RouteObject[] = [
         path: '*',
         element: <NotFoundPage />,
       },
+      { path: 'partners', element: <PartnerListPage /> },
+      { path: 'partners/:id', element: <PartnerDetailPage /> },
+      { path: 'projects', element: <Navigate to="/projects/list" replace /> },
+      { path: 'projects/list', element: <ProjectListPage /> },
+      { path: 'projects/:id', element: <ProjectDetailPage /> },
+      { path: 'projects/:id/documents/:documentId', element: <ProjectDocumentWorkspacePage /> },
+      { path: 'projects/phases', element: <PhasePage /> },
+      { path: 'projects/tasks', element: <TaskPage /> },
+      { path: 'experiments', element: <Navigate to="/experiments/list" replace /> },
+      { path: 'experiments/list', element: <ExperimentListPage /> },
+      { path: 'experiments/upload', element: <ExperimentUploadPage /> },
+      { path: 'experiments/:id', element: <ExperimentWorkspacePage /> },
     ],
   },
   { path: '/production-orders/:orderId/workspace', element: <ProductionWorkspacePage /> },

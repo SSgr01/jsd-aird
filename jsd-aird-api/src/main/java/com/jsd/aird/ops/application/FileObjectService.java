@@ -31,6 +31,9 @@ public class FileObjectService implements FileStorageFacade {
 
     private static final long MAX_KNOWLEDGE_UPLOAD_BYTES = 512L * 1024 * 1024;
 
+    private static final long MAX_DOCUMENT_UPLOAD_BYTES = 200L * 1024 * 1024;
+
+
     private static final Set<String> BLOCKED_OOXML_PARTS = Set.of(
             "vbaproject.bin",
             "activex"
@@ -69,6 +72,12 @@ public class FileObjectService implements FileStorageFacade {
             var sha256 = hex(digest.digest());
             if ("KNOWLEDGE".equalsIgnoreCase(kind) && size > MAX_KNOWLEDGE_UPLOAD_BYTES) {
                 throw new ApiException(ApiErrorCode.BAD_REQUEST, "知识文件超过 512MB 限制");
+            }
+            if ("PROJECT_DOCUMENT".equalsIgnoreCase(kind) && size > MAX_DOCUMENT_UPLOAD_BYTES) {
+                throw new ApiException(ApiErrorCode.BAD_REQUEST, "项目文档超过 200MB 限制");
+            }
+            if ("EXPERIMENT_SOURCE".equalsIgnoreCase(kind) && size > MAX_DOCUMENT_UPLOAD_BYTES) {
+                throw new ApiException(ApiErrorCode.BAD_REQUEST, "实验文档超过 200MB 限制");
             }
             validateSecurity(temporary, originalName, kind);
 

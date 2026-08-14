@@ -1,0 +1,20 @@
+.pm-mm-tab{padding:4px 0 16px}
+.pm-mm-tab-head{display:flex;justify-content:space-between;align-items:center;background:#f5f7fa;border:1px solid #eef0f3;border-radius:6px;padding:10px 14px;margin-bottom:12px;gap:12px}
+.pm-mm-tip{color:#6b7280;font-size:13px}
+.pm-mm-empty{display:flex;flex-direction:column;align-items:center;gap:8px;padding:48px 0;color:#9ca3af;border:1px dashed #e5e7eb;border-radius:6px}
+.pm-mm-list{display:flex;flex-direction:column;gap:12px;list-style:none;padding:0;margin:0}
+.pm-mm-item{background:#fff;border:1px solid #eef0f3;border-radius:8px;padding:14px 16px;transition:box-shadow .15s ease}
+.pm-mm-item:hover{box-shadow:0 1px 4px rgba(15,23,42,.06)}
+.pm-mm-item-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.pm-mm-title{font-weight:600;color:#1f2937;font-size:15px}
+.pm-mm-date{color:#6b7280;font-size:13px;display:flex;align-items:center;gap:6px}
+.pm-mm-date-icon{font-size:14px;line-height:1}
+.pm-mm-attendees{color:#374151;font-size:13px;margin:4px 0}
+.pm-mm-summary{color:#374151;font-size:13px;line-height:1.7;margin:6px 0}
+.pm-mm-actions{display:flex;justify-content:flex-start;gap:8px;margin-top:6px;border-top:1px dashed #eef0f3;padding-top:8px}
+.pm-mm-actions .ant-btn{padding:0 4px}
+.pm-mm-view{display:flex;flex-direction:column;gap:18px;padding:4px 0}
+.pm-mm-meta{color:#6b7280;font-size:13px;display:flex;align-items:center;gap:8px;margin-bottom:12px}
+.pm-mm-row{display:flex;flex-direction:column;gap:6px}
+.pm-mm-row-label{color:#9ca3af;font-size:12px}
+.pm-mm-row-value{color:#1f2937;font-size:14px;font-weight:600;line-height:1.6}

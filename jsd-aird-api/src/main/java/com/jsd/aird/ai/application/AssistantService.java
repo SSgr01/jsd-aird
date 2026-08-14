@@ -11,7 +11,7 @@ import java.util.function.Consumer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.ai.application.port.AssistantRepository;
 import com.jsd.aird.ai.application.port.AssistantWebTool;
-import com.jsd.aird.data.api.DataAssetSearchFacade;
+import com.jsd.aird.data.api.DataSourceFileSearchFacade;
 import com.jsd.aird.kb.api.KnowledgeSearchFacade;
 import com.jsd.aird.platform.web.RequestIdHolder;
 import com.jsd.aird.ops.application.port.AuditLogFacade;
@@ -204,7 +204,7 @@ public class AssistantService {
         repository.updateScopeSnapshot(organizationId, conversationId, objectMapper.valueToTree(command.scopeIds()));
         audit.append(organizationId, actorId, "AI_QA_STARTED", "AI_CONVERSATION", conversationId,
                 objectMapper.createObjectNode().put("queryHash", sha256(command.question()))
-                        .put("approvedHitCount", hits.size()).put("dataAssetHitCount", dataHits.size()));
+                        .put("approvedHitCount", hits.size()).put("dataFileHitCount", dataHits.size()));
         return new Prepared(conversationId, history, hits, dataHits, retrieval);
     }
 
@@ -221,20 +221,20 @@ public class AssistantService {
 
     private String buildUserPrompt(String question, List<AssistantRepository.MessageRow> history,
                                    List<KnowledgeSearchFacade.SearchHit> hits,
-                                   List<DataAssetSearchFacade.DataHit> dataHits,
+                                   List<DataSourceFileSearchFacade.SourceFileHit> dataHits,
                                    RagRetrievalService.Retrieval retrieval) {
         var compressed = contextCompression.compress(hits, dataHits, 18000);
         var context = compressed.knowledgeCount() == 0 ? "（没有找到已授权的知识库内容）" : compressed.text();
-        var dataContext = compressed.dataAssetCount() == 0 ? "（没有找到已发布数据资产内容）" : "（数据资产内容已按 sourceType=DATA_ASSET_FIELD 编入上方受控上下文）";
+        var dataContext = compressed.dataFileCount() == 0 ? "（没有找到已归档来源文件内容）" : "（来源文件内容已按 sourceType=DATA_SOURCE_FILE 编入上方受控上下文）";
         var past = history.stream().map(item -> item.role() + ": " + item.content())
                 .reduce((a, b) -> a + "\n" + b).orElse("无历史对话");
         return "问题：" + question + "\n\n检索改写：" + retrieval.plan().rewrittenQuery()
-                + "\n\n已授权知识库上下文：\n" + context + "\n\n已发布数据资产上下文：\n" + dataContext
+                + "\n\n已授权知识库上下文：\n" + context + "\n\n已归档来源文件上下文：\n" + dataContext
                 + "\n\n近期对话：\n" + past;
     }
 
     private NormalizedAnswer normalize(ModelAnswer model, List<KnowledgeSearchFacade.SearchHit> hits,
-                                       List<DataAssetSearchFacade.DataHit> dataHits, RagRetrievalService.Retrieval retrieval) {
+                                       List<DataSourceFileSearchFacade.SourceFileHit> dataHits, RagRetrievalService.Retrieval retrieval) {
         var answer = model == null || model.answer() == null || model.answer().isBlank() ? "暂无可靠答案" : model.answer().strip();
         var known = hits.stream().collect(java.util.stream.Collectors.toMap(hit -> hit.chunkId().toString(), hit -> hit, (a, b) -> a));
         var citations = new ArrayList<Citation>();
@@ -262,13 +262,13 @@ public class AssistantService {
                 hit.retrievalScore(), hit.rrfScore(), hit.rerankScore(), hit.sourceLocator());
     }
 
-    private Citation dataCitation(DataAssetSearchFacade.DataHit hit) {
-        return new Citation("DATA_ASSET_FIELD", hit.entryId().toString(), null, null, hit.assetId().toString(),
-                hit.revisionId().toString(), hit.rowNumber(), hit.assetName(), hit.fieldCode(), null, hit.fieldCode(),
+    private Citation dataCitation(DataSourceFileSearchFacade.SourceFileHit hit) {
+        return new Citation("DATA_SOURCE_FILE", hit.hitId().toString(), null, null, hit.fileObjectId().toString(),
+                hit.importJobId().toString(), hit.rowNumber(), hit.originalName(), hit.originalName(), null, hit.columnName(),
                 preview(hit.content(), 240), hit.score(), hit.score(), hit.score(), hit.sourceLocator());
     }
 
-    private List<Citation> citations(List<KnowledgeSearchFacade.SearchHit> hits, List<DataAssetSearchFacade.DataHit> dataHits) {
+    private List<Citation> citations(List<KnowledgeSearchFacade.SearchHit> hits, List<DataSourceFileSearchFacade.SourceFileHit> dataHits) {
         var result = new ArrayList<Citation>();
         hits.stream().limit(3).map(this::fallbackCitation).forEach(result::add);
         dataHits.stream().limit(Math.max(0, 5 - result.size())).map(this::dataCitation).forEach(result::add);
@@ -387,8 +387,8 @@ public class AssistantService {
             this(conversationId, answer, citations, warnings, usedWebSearch, traceId, usage, null);
         }
     }
-    public record Citation(String sourceType, String chunkId, String documentId, String versionId, String dataAssetId,
-                           String revisionId, Integer rowNumber, String title, String originalName, Integer pageNo,
+    public record Citation(String sourceType, String chunkId, String documentId, String versionId, String fileObjectId,
+                           String importJobId, Integer rowNumber, String title, String originalName, Integer pageNo,
                            String section, String snippet, double retrievalScore, double rrfScore, double rerankScore,
                            String sourceLocator) {
         public Citation(String chunkId, String documentId, String versionId, String title, String originalName,
@@ -402,7 +402,7 @@ public class AssistantService {
     public record ModelAnswer(String answer, List<ModelCitation> citations, List<String> warnings, Boolean usedWebSearch) { }
     public record ModelCitation(String chunkId, String reason) { }
     private record Prepared(UUID conversationId, List<AssistantRepository.MessageRow> history,
-                            List<KnowledgeSearchFacade.SearchHit> hits, List<DataAssetSearchFacade.DataHit> dataHits,
+                            List<KnowledgeSearchFacade.SearchHit> hits, List<DataSourceFileSearchFacade.SourceFileHit> dataHits,
                             RagRetrievalService.Retrieval retrieval) { }
     private record NormalizedAnswer(String answer, List<Citation> citations, List<String> warnings,
                                     boolean usedWebSearch) { }

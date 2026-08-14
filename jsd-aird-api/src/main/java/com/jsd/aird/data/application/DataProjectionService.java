@@ -35,8 +35,8 @@ public class DataProjectionService {
     }
 
     public void projectInternal(UUID organizationId, UUID actorId, UUID importJobId, UUID templateVersionId,
-                                List<UUID> revisionIds) {
-        repository.project(organizationId, importJobId, actorId, templateVersionId, revisionIds,
+                                List<UUID> recordIds) {
+        repository.project(organizationId, importJobId, actorId, templateVersionId, recordIds,
                 templates.getBindings(organizationId, templateVersionId));
     }
 

@@ -20,7 +20,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/api/v2/template-imports")
+@RequestMapping("/api/v1/template-imports")
 public class TemplateImportController {
 
     private final TemplateImportService service;

@@ -60,6 +60,13 @@ describe('DataWorkbench', () => {
     expect(screen.queryByText('/material/name')).not.toBeInTheDocument();
   });
 
+  it('explains how a staged field is confirmed instead of showing a generic warning', () => {
+    render(<DataFieldCard field={{ ...field, valueStatus: 'STAGED' }} active />);
+
+    expect(screen.getByText('待确认映射')).toBeInTheDocument();
+    expect(screen.getByText('请先在“字段映射”中确认字段对应关系。')).toBeInTheDocument();
+  });
+
   it('renders a template field once while two imported records browse their own values', () => {
     const workbook: DataWorkbookSnapshot = {
       fileName: '原料数据.xlsx',

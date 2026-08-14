@@ -274,11 +274,11 @@ class StructuredDataExtractorTest {
                 List.of(basic, name, detailRegion, material, amount, matrix, resultValue), 1, 9).orElseThrow();
 
         assertThat(result.shape()).isEqualTo("MULTI_COMPONENT");
-        assertThat(result.rows()).hasSize(7);
+        assertThat(result.rows()).hasSize(6);
         assertThat(result.rows()).extracting(row -> row.sourceMetadata().path("componentId").asText())
-                .containsOnly("basic", "detail", "matrix");
+                .containsOnly("detail", "matrix");
         assertThat(result.mappings()).extracting(item -> item.detail().path("componentId").asText())
-                .contains("basic", "detail", "matrix");
+                .contains("detail", "matrix").doesNotContain("basic");
         assertThat(result.rows()).extracting(DataRepository.Row::rowNumber).contains(1, 2, 3, 4);
     }
 

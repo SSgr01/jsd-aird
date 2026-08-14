@@ -42,7 +42,7 @@ class DataImportCommitAuditTest {
     private final UUID templateVersionId = UUID.randomUUID();
     private final DataRepository.Job job = new DataRepository.Job(
             importJobId, UUID.randomUUID(), "source-sha", "source.xlsx", "XLSX", templateVersionId,
-            "MATERIAL", "WAITING_CONFIRM", 85, "WAITING_CONFIRM", "parser", null, Instant.now(), Instant.now());
+             null, "WAITING_CONFIRM", 85, "WAITING_CONFIRM", "parser", null, Instant.now(), Instant.now());
 
     @AfterEach
     void clearActor() {
@@ -52,8 +52,7 @@ class DataImportCommitAuditTest {
     @Test
     void appendsAuditAndOutboxWithIdentifiersAndHashes() {
         ActorContext.set(new com.jsd.aird.shared.security.Actor(ORGANIZATION_ID, USER_ID, "developer"));
-        var assetId = UUID.randomUUID();
-        var revisionId = UUID.randomUUID();
+        var recordId = UUID.randomUUID();
         when(repository.findJobForUpdate(ORGANIZATION_ID, importJobId)).thenReturn(Optional.of(job));
         when(repository.listIssues(ORGANIZATION_ID, importJobId)).thenReturn(List.of());
         when(repository.listRows(ORGANIZATION_ID, importJobId)).thenReturn(List.of(
@@ -65,16 +64,16 @@ class DataImportCommitAuditTest {
         when(repository.listSheets(ORGANIZATION_ID, importJobId)).thenReturn(List.of());
         when(repository.commit(eq(ORGANIZATION_ID), eq(importJobId), eq(USER_ID), any()))
                 .thenReturn(new DataRepository.CommitResult(
-                        List.of(new DataRepository.CommittedAsset(assetId, revisionId, 1, "data-hash")), 1));
+                        List.of(new DataRepository.CommittedRecord(recordId, "record-1", "data-hash")), 1));
 
         service.commit(importJobId);
 
         var detail = org.mockito.ArgumentCaptor.forClass(com.fasterxml.jackson.databind.JsonNode.class);
         verify(auditLog).append(eq(ORGANIZATION_ID), eq(USER_ID), eq("DATA_IMPORT_COMMITTED"),
                 eq("DATA_IMPORT_JOB"), eq(importJobId), detail.capture());
-        verify(opsAsync).appendOutbox(eq("DATA_IMPORT_JOB"), eq(importJobId), eq("DATA_ASSETS_COMMITTED"), any());
+        verify(opsAsync).appendOutbox(eq("DATA_IMPORT_JOB"), eq(importJobId), eq("DATA_RECORDS_COMMITTED"), any());
         assertThat(detail.getValue().path("sourceSha256").asText()).isEqualTo("source-sha");
-        assertThat(detail.getValue().path("assets").get(0).path("revisionId").asText()).isEqualTo(revisionId.toString());
+        assertThat(detail.getValue().path("records").get(0).path("recordId").asText()).isEqualTo(recordId.toString());
         assertThat(detail.getValue().toString()).doesNotContain("raw-secret");
     }
 
@@ -126,6 +125,6 @@ class DataImportCommitAuditTest {
         var committed = (ArgumentCaptor<List<DataRepository.CommittedRow>>) (ArgumentCaptor<?>) ArgumentCaptor.forClass(List.class);
         verify(repository).commit(eq(ORGANIZATION_ID), eq(importJobId), eq(USER_ID), committed.capture());
         assertThat(committed.getValue()).singleElement()
-                .extracting(DataRepository.CommittedRow::assetKey).isEqualTo("NEW-001");
+                .extracting(DataRepository.CommittedRow::recordKey).isEqualTo("NEW-001");
     }
 }

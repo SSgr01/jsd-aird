@@ -113,6 +113,18 @@ class FlywayMigrationIT {
                 }
 
                 try (var statement = connection.prepareStatement("""
+                        select count(*) from information_schema.columns
+                        where table_schema = 'kb' and table_name = 'document_parse_issue'
+                          and column_name in (
+                            'id', 'parse_run_id',
+                            'issue_code', 'severity', 'message', 'status', 'resolution', 'updated_at'
+                          )
+                        """); var resultSet = statement.executeQuery()) {
+                    assertThat(resultSet.next()).isTrue();
+                    assertThat(resultSet.getInt(1)).isEqualTo(8);
+                }
+
+                try (var statement = connection.prepareStatement("""
                         select count(*) from information_schema.views
                         where (table_schema = 'kb' and table_name = 'current_file_search_projection')
                            or (table_schema = 'data' and table_name = 'completed_source_file_projection')
@@ -135,11 +147,30 @@ class FlywayMigrationIT {
                     assertThat(resultSet.getInt(1)).isZero();
                 }
 
+                try (var statement = connection.prepareStatement("""
+                        select count(*) from information_schema.columns
+                        where table_schema = 'data'
+                          and column_name = 'target_data_type'
+                          and table_name in ('import_job', 'data_category', 'data_asset')
+                        """); var resultSet = statement.executeQuery()) {
+                    assertThat(resultSet.next()).isTrue();
+                    assertThat(resultSet.getInt(1)).isZero();
+                }
+
                 try (var statement = connection.prepareStatement(
                         "select count(*) from information_schema.tables where table_schema = 'data'"
                 ); var resultSet = statement.executeQuery()) {
                     assertThat(resultSet.next()).isTrue();
-                    assertThat(resultSet.getInt(1)).isEqualTo(13);
+                    assertThat(resultSet.getInt(1)).isEqualTo(12);
+                }
+
+                try (var statement = connection.prepareStatement("""
+                        select count(*) from information_schema.tables
+                        where (table_schema = 'data' and table_name in ('data_asset', 'data_asset_revision'))
+                           or (table_schema = 'ai' and table_name = 'data_asset_index_entry')
+                        """); var resultSet = statement.executeQuery()) {
+                    assertThat(resultSet.next()).isTrue();
+                    assertThat(resultSet.getInt(1)).isZero();
                 }
 
                 try (var statement = connection.prepareStatement("select count(*) from information_schema.tables where table_schema = 'tpl' and table_name = 'template_import_contract'");

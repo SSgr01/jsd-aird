@@ -10,7 +10,7 @@ import com.jsd.aird.tpl.api.TemplateDataImportFacade;
 public interface DataProjectionRepository {
 
     ProjectionResult project(UUID organizationId, UUID importJobId, UUID actorId,
-                             UUID templateVersionId, List<UUID> revisionIds,
+                             UUID templateVersionId, List<UUID> recordIds,
                              List<TemplateDataImportFacade.ImportBinding> bindings);
 
     Optional<TrainingDataset> findLatestDataset(UUID organizationId, UUID importJobId);
@@ -27,7 +27,7 @@ public interface DataProjectionRepository {
 
     record TrainingDataset(UUID id, UUID importJobId, UUID templateVersionId, String projectionVersion,
                            String name, String status, JsonNode schema, JsonNode qualitySummary,
-                           JsonNode sourceRevisionIds, int recordCount, int eligibleRecordCount) {}
+                           JsonNode sourceRecordIds, int recordCount, int eligibleRecordCount) {}
 
     record LongTableRow(String recordKey, JsonNode dimensions, JsonNode measures, JsonNode source,
                         boolean trainingEligible, String exclusionReason) {}

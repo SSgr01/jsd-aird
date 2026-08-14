@@ -71,7 +71,7 @@ export function KnowledgeSearchPage() {
         <Typography.Text strong><FolderOpenOutlined /> 研发知识库</Typography.Text>
         <div className="search-scope-list">{knowledgeGroups.map((item) => <Checkbox key={item.id} checked={item.checked} onChange={(event) => setSelectedKnowledge((current) => event.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id))}>{item.name}<Typography.Text type="secondary">{item.documentCount}</Typography.Text></Checkbox>)}</div>
         <Typography.Text strong><DatabaseOutlined /> 数据中心来源文件</Typography.Text>
-        <div className="search-scope-list">{dataCategories.map((item) => <Checkbox key={item.id} checked={selectedData.includes(item.id)} onChange={(event) => setSelectedData((current) => event.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id))}>{item.name}<Typography.Text type="secondary">{item.assetCount}</Typography.Text></Checkbox>)}</div>
+        <div className="search-scope-list">{dataCategories.map((item) => <Checkbox key={item.id} checked={selectedData.includes(item.id)} onChange={(event) => setSelectedData((current) => event.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id))}>{item.name}<Typography.Text type="secondary">{item.sourceCount}</Typography.Text></Checkbox>)}</div>
       </aside>
       <main className="search-result-panel">
         <div className="search-result-heading"><Typography.Title level={3}><FileSearchOutlined /> 来源文件</Typography.Title>{searched && <Typography.Text type="secondary">共 {result?.files.length || 0} 个文件</Typography.Text>}</div>

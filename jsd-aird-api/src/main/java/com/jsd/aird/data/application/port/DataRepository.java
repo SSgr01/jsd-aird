@@ -17,8 +17,13 @@ public interface DataRepository {
 
     Optional<Job> findJob(UUID organizationId, UUID importJobId);
 
-    PageResponse<Job> listJobs(UUID organizationId, String targetDataType, UUID templateVersionId,
+    PageResponse<Job> listJobs(UUID organizationId, UUID templateVersionId,
                                String status, String keyword, int page, int size);
+
+    PageResponse<SourceFile> listSourceFiles(UUID organizationId, UUID categoryId, String status,
+                                             String keyword, int page, int size);
+
+    int assignSourceCategory(UUID organizationId, UUID importJobId, UUID categoryId);
 
     Optional<Job> findJobForUpdate(UUID organizationId, UUID importJobId);
 
@@ -70,53 +75,40 @@ public interface DataRepository {
 
     CommitResult commit(UUID organizationId, UUID importJobId, UUID actorId, List<CommittedRow> rows);
 
-    List<Asset> listAssets(UUID organizationId, String targetDataType, String keyword);
-
-    PageResponse<Asset> listAssets(UUID organizationId, String targetDataType, UUID categoryId, String status,
-                                   String keyword, int page, int size);
-
-    Optional<AssetDetail> findAsset(UUID organizationId, UUID assetId);
-
-    List<Revision> listRevisions(UUID organizationId, UUID assetId);
-
-    Optional<RevisionDetail> findRevision(UUID organizationId, UUID assetId, UUID revisionId);
-
-    List<SourceAnchor> listSourceAnchors(UUID organizationId, UUID assetId);
-
     record NewJob(UUID id, UUID organizationId, UUID sourceFileId, String sourceSha256, String sourceFileName,
-                  String sourceFormat, UUID templateVersionId, String targetDataType, UUID categoryId,
+                  String sourceFormat, UUID templateVersionId, UUID categoryId,
                   boolean duplicateOverride, UUID actorId, Integer importContractVersion, String contractHash) {
         public NewJob(UUID id, UUID organizationId, UUID sourceFileId, String sourceSha256, String sourceFileName,
-                      String sourceFormat, UUID templateVersionId, String targetDataType, UUID categoryId,
+                      String sourceFormat, UUID templateVersionId, UUID categoryId,
                       boolean duplicateOverride, UUID actorId) {
             this(id, organizationId, sourceFileId, sourceSha256, sourceFileName, sourceFormat, templateVersionId,
-                    targetDataType, categoryId, duplicateOverride, actorId, null, null);
+                    categoryId, duplicateOverride, actorId, null, null);
         }
         public NewJob(UUID id, UUID organizationId, UUID sourceFileId, String sourceSha256, String sourceFileName,
-                      String sourceFormat, UUID templateVersionId, String targetDataType, boolean duplicateOverride,
+                      String sourceFormat, UUID templateVersionId, boolean duplicateOverride,
                       UUID actorId) {
             this(id, organizationId, sourceFileId, sourceSha256, sourceFileName, sourceFormat, templateVersionId,
-                    targetDataType, null, duplicateOverride, actorId, null, null);
+                    null, duplicateOverride, actorId, null, null);
         }
     }
 
     record Job(UUID id, UUID sourceFileId, String sourceSha256, String sourceFileName, String sourceFormat,
-               UUID templateVersionId, String targetDataType, UUID categoryId, String status, int progress,
+               UUID templateVersionId, UUID categoryId, String status, int progress,
                String currentStage, String parserVersion, String errorMessage, Instant createdAt, Instant updatedAt,
                Integer importContractVersion, String contractHash, String compatibilityStatus) {
         public Job(UUID id, UUID sourceFileId, String sourceSha256, String sourceFileName, String sourceFormat,
-                   UUID templateVersionId, String targetDataType, UUID categoryId, String status, int progress,
+                   UUID templateVersionId, UUID categoryId, String status, int progress,
                    String currentStage, String parserVersion, String errorMessage, Instant createdAt, Instant updatedAt) {
-            this(id, sourceFileId, sourceSha256, sourceFileName, sourceFormat, templateVersionId, targetDataType,
-                    categoryId, status, progress, currentStage, parserVersion, errorMessage, createdAt, updatedAt,
-                    null, null, "LEGACY");
+            this(id, sourceFileId, sourceSha256, sourceFileName, sourceFormat, templateVersionId,
+                     categoryId, status, progress, currentStage, parserVersion, errorMessage, createdAt, updatedAt,
+                     null, null, "LEGACY");
         }
         public Job(UUID id, UUID sourceFileId, String sourceSha256, String sourceFileName, String sourceFormat,
-                   UUID templateVersionId, String targetDataType, String status, int progress, String currentStage,
+                   UUID templateVersionId, String status, int progress, String currentStage,
                    String parserVersion, String errorMessage, Instant createdAt, Instant updatedAt) {
-            this(id, sourceFileId, sourceSha256, sourceFileName, sourceFormat, templateVersionId, targetDataType,
-                    null, status, progress, currentStage, parserVersion, errorMessage, createdAt, updatedAt,
-                    null, null, "LEGACY");
+            this(id, sourceFileId, sourceSha256, sourceFileName, sourceFormat, templateVersionId,
+                     null, status, progress, currentStage, parserVersion, errorMessage, createdAt, updatedAt,
+                     null, null, "LEGACY");
         }
     }
 
@@ -152,49 +144,24 @@ public interface DataRepository {
     record ComponentOverride(String componentId, String sheetId, String sourceRange,
                              String reason, UUID actorId, Instant updatedAt) {}
 
-    record CommittedRow(String sheetId, int rowNumber, JsonNode raw, JsonNode normalized, JsonNode corrected,
-                        String assetKey, String displayName, List<Anchor> anchors) {}
+    record CommittedRow(String sheetId, String sheetName, int rowNumber, JsonNode raw, JsonNode normalized, JsonNode corrected,
+                        String recordKey, List<Anchor> anchors) {}
 
-    record CommitResult(List<CommittedAsset> assets, int rowCount) {}
+    record CommitResult(List<CommittedRecord> records, int rowCount) {}
 
-    record CommittedAsset(UUID assetId, UUID revisionId, int revisionNo, String dataHash) {}
+    record CommittedRecord(UUID recordId, String recordKey, String dataHash) {}
 
     record Anchor(String fieldCode, String bindingId, String valuePath, String labelPath,
                   String valueSource, String valueStatus, String sheetId, String sheetName,
                   int rowNumber, int columnNumber, String columnName, String address, JsonNode rawValue) {}
 
-    record Asset(UUID id, String targetDataType, String assetKey, String displayName,
-                 UUID currentRevisionId, String status, Instant updatedAt, UUID categoryId, String categoryName) {
-        public Asset(UUID id, String targetDataType, String assetKey, String displayName,
-                     UUID currentRevisionId, String status, Instant updatedAt) {
-            this(id, targetDataType, assetKey, displayName, currentRevisionId, status, updatedAt, null, null);
-        }
-    }
-
-    record AssetDetail(UUID id, String targetDataType, String assetKey, String displayName,
-                       UUID currentRevisionId, String status, JsonNode rawData, JsonNode normalizedData,
-                       JsonNode correctedData, UUID importJobId, UUID templateVersionId,
-                       Integer currentRevisionNo, String sourceSha256, Instant updatedAt,
-                       UUID categoryId, String categoryName) {
-        public AssetDetail(UUID id, String targetDataType, String assetKey, String displayName,
-                           UUID currentRevisionId, String status, JsonNode rawData, JsonNode normalizedData,
-                           JsonNode correctedData, UUID importJobId, UUID templateVersionId,
-                           Integer currentRevisionNo, String sourceSha256, Instant updatedAt) {
-            this(id, targetDataType, assetKey, displayName, currentRevisionId, status, rawData, normalizedData,
-                    correctedData, importJobId, templateVersionId, currentRevisionNo, sourceSha256, updatedAt, null, null);
-        }
-    }
-
-    record Revision(UUID id, int revisionNo, UUID importJobId, UUID templateVersionId,
-                    String dataHash, Instant createdAt, UUID sourceFileId, String sourceFileName,
-                    List<String> sheetNames, int recordCount) {}
-
-    record RevisionDetail(UUID id, int revisionNo, UUID importJobId, UUID templateVersionId,
-                          JsonNode rawData, JsonNode normalizedData, JsonNode correctedData,
-                          String dataHash, Instant createdAt) {}
-
-    record SourceAnchor(UUID id, UUID revisionId, String fieldCode, String bindingId,
+    record SourceAnchor(UUID id, UUID recordId, String fieldCode, String bindingId,
                         String valuePath, String labelPath, String valueSource, String valueStatus,
                         UUID fileId, String sheetId, String sheetName, Integer rowNumber,
                         Integer columnNumber, String columnName, String address, JsonNode rawValue) {}
+
+    record SourceFile(UUID importJobId, UUID fileObjectId, String originalName, String sourceFormat,
+                      UUID templateVersionId, UUID categoryId, String categoryName, String status,
+                      int progress, Instant createdAt, Instant updatedAt, int sheetCount,
+                      int recordCount, int fieldCount) {}
 }

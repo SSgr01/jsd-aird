@@ -3,7 +3,6 @@ package com.jsd.aird.data.infrastructure;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -36,34 +35,31 @@ public class JdbcDataProjectionRepository implements DataProjectionRepository {
     @Override
     @Transactional
     public ProjectionResult project(UUID organizationId, UUID importJobId, UUID actorId,
-                                    UUID templateVersionId, List<UUID> revisionIds,
+                                    UUID templateVersionId, List<UUID> recordIds,
                                     List<TemplateDataImportFacade.ImportBinding> bindings) {
-        var revisionFilter = revisionIds == null || revisionIds.isEmpty()
+        var recordFilter = recordIds == null || recordIds.isEmpty()
                 ? ""
-                : " AND r.id IN (" + String.join(",", java.util.Collections.nCopies(revisionIds.size(), "?")) + ")";
-        var revisionArgs = new ArrayList<Object>();
-        revisionArgs.add(organizationId);
-        revisionArgs.add(importJobId);
-        if (revisionIds != null) revisionArgs.addAll(revisionIds);
-        var revisions = jdbc.query("""
-                SELECT r.id, r.asset_id, r.revision_no, r.raw_data_jsonb,
-                       r.normalized_data_jsonb, r.corrected_data_jsonb, a.asset_key
-                FROM data.data_asset_revision r
-                JOIN data.data_asset a ON a.id = r.asset_id
-                WHERE a.organization_id = ? AND r.import_job_id = ?
-                  AND r.publication_status = 'PUBLISHED'
-                """ + revisionFilter + """
-                ORDER BY r.revision_no, r.id
-                """, this::revision, revisionArgs.toArray());
-        if (revisions.isEmpty()) return new ProjectionResult(null, 0, 0, 0);
+                : " AND r.id IN (" + String.join(",", java.util.Collections.nCopies(recordIds.size(), "?")) + ")";
+        var recordArgs = new ArrayList<Object>();
+        recordArgs.add(organizationId);
+        recordArgs.add(importJobId);
+        if (recordIds != null) recordArgs.addAll(recordIds);
+        var records = jdbc.query("""
+                SELECT r.id, r.record_key, r.raw_data_jsonb,
+                       r.normalized_data_jsonb, r.corrected_data_jsonb
+                FROM data.data_record r
+                WHERE r.organization_id = ? AND r.import_job_id = ?
+                  AND r.quality_status <> 'BLOCKED'
+                """ + recordFilter + """
+                ORDER BY r.record_index, r.id
+                """, this::record, recordArgs.toArray());
+        if (records.isEmpty()) return new ProjectionResult(null, 0, 0, 0);
 
         retireDatasets(organizationId, importJobId, null);
-        jdbc.update("DELETE FROM data.data_record WHERE organization_id = ? AND import_job_id = ?",
-                organizationId, importJobId);
 
         var datasetId = UUID.randomUUID();
-        var sourceRevisionIds = objectMapper.createArrayNode();
-        revisions.forEach(item -> sourceRevisionIds.add(item.id().toString()));
+        var sourceRecordIds = objectMapper.createArrayNode();
+        records.forEach(item -> sourceRecordIds.add(item.id().toString()));
         var schema = objectMapper.createObjectNode()
                 .put("projection", "LONG_TABLE")
                 .put("projectionVersion", "v1")
@@ -81,11 +77,11 @@ public class JdbcDataProjectionRepository implements DataProjectionRepository {
         jdbc.update("""
                 INSERT INTO ai.training_dataset (
                     id, organization_id, import_job_id, template_version_id, projection_version,
-                    name, status, schema_jsonb, quality_summary_jsonb, source_revision_ids_jsonb, created_by,
+                    name, status, schema_jsonb, quality_summary_jsonb, source_record_ids_jsonb, created_by,
                     import_contract_version, contract_hash, approval_policy
                 ) VALUES (?, ?, ?, ?, 'v1', ?, 'DRAFT', ?, '{}'::jsonb, ?, ?, ?, ?, ?)
                 """, datasetId, organizationId, importJobId, templateVersionId,
-                "导入批次长表候选 - " + importJobId, pgJson(schema), pgJson(sourceRevisionIds), actorId,
+                "导入批次长表候选 - " + importJobId, pgJson(schema), pgJson(sourceRecordIds), actorId,
                 contract.version(), contract.hash(), contract.version() == null ? "LEGACY" : "DISABLED");
 
         int recordCount = 0;
@@ -97,23 +93,12 @@ public class JdbcDataProjectionRepository implements DataProjectionRepository {
         var bindingsById = bindings.stream().filter(item -> item.bindingId() != null && !item.bindingId().isBlank())
                 .collect(java.util.stream.Collectors.toMap(TemplateDataImportFacade.ImportBinding::bindingId,
                         item -> item, (left, right) -> left));
-        for (var item : revisions) {
+        for (var item : records) {
             var anchors = anchors(item.id());
             var firstAnchor = primaryAnchor(anchors, bindingsByField);
-            var recordId = UUID.randomUUID();
-            var recordKey = item.assetKey() + ":V" + item.revisionNo();
+            var recordId = item.id();
+            var recordKey = item.recordKey();
             var effective = effective(item.normalized(), item.corrected());
-            jdbc.update("""
-                    INSERT INTO data.data_record (
-                        id, organization_id, import_job_id, asset_id, revision_id, record_key, record_index,
-                        sheet_id, sheet_name, source_row_number, raw_data_jsonb, normalized_data_jsonb,
-                        corrected_data_jsonb, effective_data_jsonb, quality_status, synthetic_key
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'VALID', false)
-                    """, recordId, organizationId, importJobId, item.assetId(), item.id(), recordKey,
-                    item.revisionNo(), firstAnchor == null ? null : firstAnchor.sheetId(),
-                    firstAnchor == null ? null : firstAnchor.sheetName(),
-                    firstAnchor == null ? null : firstAnchor.rowNumber(), pgJson(item.raw()),
-                    pgJson(item.normalized()), pgJson(item.corrected()), pgJson(effective));
 
             var dimensions = objectMapper.createObjectNode();
             var measures = objectMapper.createObjectNode();
@@ -153,9 +138,8 @@ public class JdbcDataProjectionRepository implements DataProjectionRepository {
             eligible &= recordValueCount > 0;
             if (eligible) eligibleRecordCount++;
             var source = objectMapper.createObjectNode();
-            source.put("assetId", item.assetId().toString())
-                    .put("revisionId", item.id().toString())
-                    .put("revisionNo", item.revisionNo());
+            source.put("recordId", item.id().toString())
+                    .put("recordKey", item.recordKey());
             source.set("sourceAnchor", firstAnchor == null ? objectMapper.nullNode() : anchorJson(firstAnchor));
             source.set("sourceAnchors", anchorArray(anchors));
             jdbc.update("""
@@ -189,7 +173,7 @@ public class JdbcDataProjectionRepository implements DataProjectionRepository {
         return jdbc.query("""
                 SELECT d.id, d.import_job_id, d.template_version_id, d.projection_version,
                        d.name, d.status, d.schema_jsonb, d.quality_summary_jsonb,
-                       d.source_revision_ids_jsonb,
+                       d.source_record_ids_jsonb,
                        coalesce((d.quality_summary_jsonb->>'recordCount')::int, 0) AS record_count,
                        coalesce((d.quality_summary_jsonb->>'eligibleRecordCount')::int, 0) AS eligible_count
                 FROM ai.training_dataset d
@@ -203,7 +187,7 @@ public class JdbcDataProjectionRepository implements DataProjectionRepository {
         return jdbc.query("""
                 SELECT d.id, d.import_job_id, d.template_version_id, d.projection_version,
                        d.name, d.status, d.schema_jsonb, d.quality_summary_jsonb,
-                       d.source_revision_ids_jsonb,
+                       d.source_record_ids_jsonb,
                        coalesce((d.quality_summary_jsonb->>'recordCount')::int, 0) AS record_count,
                        coalesce((d.quality_summary_jsonb->>'eligibleRecordCount')::int, 0) AS eligible_count
                 FROM ai.training_dataset d
@@ -260,26 +244,25 @@ public class JdbcDataProjectionRepository implements DataProjectionRepository {
                 """, status, status, actorId, status, organizationId, datasetId);
     }
 
-    private Revision revision(ResultSet rs, int rowNum) throws SQLException {
-        return new Revision(rs.getObject("id", UUID.class), rs.getObject("asset_id", UUID.class),
-                rs.getInt("revision_no"), parse(rs.getString("raw_data_jsonb")),
-                parse(rs.getString("normalized_data_jsonb")), parse(rs.getString("corrected_data_jsonb")),
-                rs.getString("asset_key"));
+    private Record record(ResultSet rs, int rowNum) throws SQLException {
+        return new Record(rs.getObject("id", UUID.class), rs.getString("record_key"),
+                parse(rs.getString("raw_data_jsonb")),
+                parse(rs.getString("normalized_data_jsonb")), parse(rs.getString("corrected_data_jsonb")));
     }
 
     private TrainingDataset dataset(ResultSet rs, int rowNum) throws SQLException {
         return new TrainingDataset(rs.getObject("id", UUID.class), rs.getObject("import_job_id", UUID.class),
                 rs.getObject("template_version_id", UUID.class), rs.getString("projection_version"),
                 rs.getString("name"), rs.getString("status"), parse(rs.getString("schema_jsonb")),
-                parse(rs.getString("quality_summary_jsonb")), parse(rs.getString("source_revision_ids_jsonb")),
+                parse(rs.getString("quality_summary_jsonb")), parse(rs.getString("source_record_ids_jsonb")),
                 rs.getInt("record_count"), rs.getInt("eligible_count"));
     }
 
-    private Map<String, List<Anchor>> anchors(UUID revisionId) {
+    private Map<String, List<Anchor>> anchors(UUID recordId) {
         var result = new LinkedHashMap<String, List<Anchor>>();
         jdbc.query("""
                 SELECT id, field_code, sheet_id, sheet_name, row_number, column_name, cell_address
-                FROM data.source_anchor WHERE asset_revision_id = ? ORDER BY row_number, column_number
+                FROM data.source_anchor WHERE record_id = ? ORDER BY row_number, column_number
                 """, (rs, rowNum) -> {
             var anchor = new Anchor(rs.getObject("id", UUID.class), rs.getString("field_code"),
                     rs.getString("sheet_id"), rs.getString("sheet_name"),
@@ -287,7 +270,7 @@ public class JdbcDataProjectionRepository implements DataProjectionRepository {
                     rs.getString("cell_address"));
             result.computeIfAbsent(anchor.fieldCode(), ignored -> new ArrayList<>()).add(anchor);
             return anchor;
-        }, revisionId);
+        }, recordId);
         return result;
     }
 
@@ -448,8 +431,7 @@ public class JdbcDataProjectionRepository implements DataProjectionRepository {
         catch (JsonProcessingException exception) { throw new IllegalStateException("Invalid JSONB", exception); }
     }
 
-    private record Revision(UUID id, UUID assetId, int revisionNo, JsonNode raw, JsonNode normalized, JsonNode corrected,
-                            String assetKey) {}
+    private record Record(UUID id, String recordKey, JsonNode raw, JsonNode normalized, JsonNode corrected) {}
     private record Anchor(UUID id, String fieldCode, String sheetId, String sheetName, Integer rowNumber,
                           String columnName, String address) {}
     private record AppendResult(int count, boolean eligible) {}

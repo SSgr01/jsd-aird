@@ -64,14 +64,14 @@ final class ImportCompatibilityEvaluator {
     }
 
     private ComponentScore score(JsonNode component, TemplateDataImportFacade.ParsedSheet sheet) {
-        var labels = labels(component);
+        var labels = labels(component, sheet);
         var values = cellValues(sheet);
-        long found = labels.stream().filter(values::contains).count();
+        long found = labels.stream().filter(candidates -> candidates.stream().anyMatch(values::contains)).count();
         double coverage = labels.isEmpty() ? 1 : (double) found / labels.size();
         var expectedSheet = component.path("sheetId").asText("");
         boolean sameSheet = expectedSheet.isBlank() || expectedSheet.equalsIgnoreCase(sheet.sheetId())
                 || expectedSheet.equalsIgnoreCase(sheet.sheetName());
-        boolean geometry = geometryCompatible(component.path("range").asText(""), sheet);
+        boolean geometry = geometryCompatible(component, sheet);
         boolean formula = formulaRoleCompatible(component, sheet);
         var expectedFingerprint = component.path("sheetStructureFingerprint")
                 .asText(component.path("structureFingerprint").asText(""));
@@ -107,13 +107,56 @@ final class ImportCompatibilityEvaluator {
         return result;
     }
 
-    private Set<String> labels(JsonNode component) {
-        var result = new HashSet<String>();
+    private List<Set<String>> labels(JsonNode component, TemplateDataImportFacade.ParsedSheet sheet) {
+        var result = new ArrayList<Set<String>>();
         component.path("bindings").forEach(binding -> {
             if (isRegionOnlyBinding(binding)) return;
-            var path = binding.path("labelPath").asText("");
-            for (var part : path.split("\\s*>\\s*")) if (!normalize(part).isBlank()) result.add(normalize(part));
+            var candidates = new HashSet<String>();
+            var locator = binding.path("locator");
+            var labelRange = firstRange(locator, "labelRange", "labelAddress");
+            if (!labelRange.isBlank()) {
+                candidates.addAll(cellValuesAt(sheet, labelRange));
+            }
+            // Older contracts may not have a physical label range. Keep their
+            // logical label path as the fallback, while preferring the actual
+            // cell at locator.labelRange for current contracts.
+            if (candidates.isEmpty()) {
+                var path = binding.path("labelPath").asText("");
+                for (var part : path.split("\\s*>\\s*")) {
+                    if (!normalize(part).isBlank()) candidates.add(normalize(part));
+                }
+            }
+            result.add(candidates);
         });
+        return result;
+    }
+
+    private Set<String> cellValuesAt(TemplateDataImportFacade.ParsedSheet sheet, String address) {
+        var result = new HashSet<String>();
+        var range = parseRange(address);
+        if (range == null) return result;
+        if (sheet.layoutIr() != null && sheet.layoutIr().path("cells").isArray()) {
+            for (var cell : sheet.layoutIr().path("cells")) {
+                var addressValue = parseRange(cell.path("address").asText(""));
+                if (addressValue != null
+                        && addressValue.startRow() >= range.startRow() && addressValue.startRow() <= range.endRow()) {
+                    int column = addressValue.startColumn();
+                    if (column >= range.startColumn() && column <= range.endColumn()) {
+                        addCellValue(result, cell.path("displayValue").asText(""));
+                    }
+                }
+            }
+        }
+        if (!result.isEmpty()) return result;
+        for (int rowNumber = range.startRow(); rowNumber <= range.endRow(); rowNumber++) {
+            int rowIndex = rowNumber - sheet.firstRow();
+            if (rowIndex < 0 || rowIndex >= sheet.rows().size()) continue;
+            var row = sheet.rows().get(rowIndex);
+            for (int column = range.startColumn(); column <= range.endColumn(); column++) {
+                int columnIndex = column - sheet.firstColumn();
+                if (columnIndex >= 0 && columnIndex < row.size()) addCellValue(result, row.get(columnIndex));
+            }
+        }
         return result;
     }
 
@@ -163,10 +206,27 @@ final class ImportCompatibilityEvaluator {
         return true;
     }
 
-    private boolean geometryCompatible(String range, TemplateDataImportFacade.ParsedSheet sheet) {
+    private boolean geometryCompatible(JsonNode component, TemplateDataImportFacade.ParsedSheet sheet) {
+        String range = component.path("range").asText("");
         if (range == null || range.isBlank()) return true;
         var parsed = parseRange(range);
-        return parsed == null || parsed.endRow() <= sheet.lastRow() && parsed.endColumn() <= sheet.lastColumn();
+        if (parsed == null) return true;
+        if (!isRepeatComponent(component)) {
+            return parsed.endRow() <= sheet.lastRow() && parsed.endColumn() <= sheet.lastColumn();
+        }
+        // Repeat components commonly describe a capacity or a sub-region
+        // (for example A1:K200 or A9:I35). Other components may exist before,
+        // after, or beside that region, so the whole sheet's used tail must not
+        // be compared with this component's end coordinates. The physical
+        // anchors below still provide the precise field-level check.
+        return sheet.lastRow() >= parsed.startRow() && sheet.lastColumn() >= parsed.startColumn();
+    }
+
+    private boolean isRepeatComponent(JsonNode component) {
+        for (var binding : component.path("bindings")) {
+            if (binding.path("mappingKind").asText("").toUpperCase(Locale.ROOT).startsWith("REPEAT_")) return true;
+        }
+        return false;
     }
 
     private boolean inRange(String address, String range) {

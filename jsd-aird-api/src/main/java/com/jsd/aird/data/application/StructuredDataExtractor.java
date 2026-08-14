@@ -74,18 +74,22 @@ final class StructuredDataExtractor {
             }
             if (structured != null && !structured.rows().isEmpty()) {
                 var form = declaredFormContext(entry.getKey(), component, formResults);
+                // A non-repeating form region on the same sheet is common
+                // context (batch, product, test date, etc.). Copy it into
+                // every detail record instead of creating a standalone row.
+                if (form == null && formResults.size() == 1) {
+                    form = formResults.values().iterator().next();
+                }
                 results.add(form == null ? structured : mergeFormIntoStructured(structured, form));
             }
         }
-        var legacyMerged = false;
-        if (!explicitComponents && formResults.size() == 1 && results.size() == 1) {
-            results.set(0, mergeFormIntoStructured(results.getFirst(), formResults.values().iterator().next()));
-            legacyMerged = true;
-        }
         // Standalone forms are records of their own. They are not copied into
-        // unrelated tables merely because they share a sheet.
+        // unrelated tables merely because they share a sheet. A single form
+        // beside a structured region is the explicit common-context exception
+        // above, including templates that declare component ids.
+        var mergedCommonForm = !results.isEmpty() && formResults.size() == 1;
         for (var entry : formResults.entrySet()) {
-            if (legacyMerged) break;
+            if (mergedCommonForm) break;
             var usedAsContext = components.entrySet().stream().anyMatch(component ->
                     entry.getKey().equals(formContextId(component.getKey(), component.getValue())));
             if (!usedAsContext) results.add(entry.getValue());
@@ -210,7 +214,16 @@ final class StructuredDataExtractor {
         if (form.rows().isEmpty() || form.mappings().isEmpty()) return structured;
         var formRow = form.rows().getFirst();
         var mappings = new ArrayList<DataRepository.Mapping>(structured.mappings());
-        mappings.addAll(form.mappings());
+        for (var mapping : form.mappings()) {
+            var detail = mapping.detail() != null && mapping.detail().isObject()
+                    ? (ObjectNode) mapping.detail().deepCopy() : objectMapper.createObjectNode();
+            var originalComponentId = detail.path("componentId").asText("");
+            detail.put("componentId", structured.rows().getFirst().sourceMetadata().path("componentId").asText(""));
+            if (!originalComponentId.isBlank()) detail.put("sourceComponentId", originalComponentId);
+            mappings.add(new DataRepository.Mapping(mapping.id(), mapping.sheetId(), mapping.sourceColumn(),
+                    mapping.sourceHeader(), mapping.fieldCode(), mapping.fieldName(), mapping.action(), mapping.valueType(),
+                    mapping.sourceUnit(), mapping.standardUnit(), detail, mapping.status()));
+        }
         var rows = structured.rows().stream().map(row -> {
             var raw = (ObjectNode) row.rawValues().deepCopy();
             var metadata = (ObjectNode) row.sourceMetadata().deepCopy();

@@ -9,7 +9,7 @@ import java.util.UUID;
 
 import com.jsd.aird.ai.application.port.AssistantRepository;
 import com.jsd.aird.ai.application.port.RerankerProvider;
-import com.jsd.aird.data.api.DataAssetSearchFacade;
+import com.jsd.aird.data.api.DataSourceFileSearchFacade;
 import com.jsd.aird.kb.api.KnowledgeScopeFacade;
 import com.jsd.aird.kb.api.KnowledgeSearchFacade;
 import org.springframework.stereotype.Service;
@@ -18,16 +18,16 @@ import org.springframework.stereotype.Service;
 public class RagRetrievalService {
 
     private final KnowledgeSearchFacade knowledge;
-    private final DataAssetSearchFacade dataAssets;
+    private final DataSourceFileSearchFacade dataFiles;
     private final KnowledgeScopeFacade scopes;
     private final QueryRewriteService rewrite;
     private final RerankerProvider reranker;
 
-    public RagRetrievalService(KnowledgeSearchFacade knowledge, DataAssetSearchFacade dataAssets,
+    public RagRetrievalService(KnowledgeSearchFacade knowledge, DataSourceFileSearchFacade dataFiles,
                                KnowledgeScopeFacade scopes, QueryRewriteService rewrite,
                                RerankerProvider reranker) {
         this.knowledge = knowledge;
-        this.dataAssets = dataAssets;
+        this.dataFiles = dataFiles;
         this.scopes = scopes;
         this.rewrite = rewrite;
         this.reranker = reranker;
@@ -53,13 +53,13 @@ public class RagRetrievalService {
                 plan.plan().subQueries()));
         // Structured data indexes contain field values, not the document-oriented
         // expansion terms produced by the rewrite model. Searching them with the
-        // rewritten query can turn an exact asset-code lookup into an impossible
+        // rewritten query can turn an exact source-record lookup into an impossible
         // AND match (for example, code + unrelated manual/document terms).
         var dataQuery = question == null || question.isBlank() ? plan.plan().rewrittenQuery() : question.strip();
-        // Data-center assets are part of the default retrieval corpus. Filters
+        // Data-center source files are part of the default retrieval corpus. Filters
         // narrow the result set when present; an empty filter must not disable
-        // structured-data retrieval altogether.
-        var data = dataAssets.search(organizationId, dataQuery, safeScopeIds, dataCategoryIds, 8);
+        // source-file retrieval altogether.
+        var data = dataFiles.search(organizationId, dataQuery, dataCategoryIds, 8);
         var knowledgeHits = rerank(plan.plan().rewrittenQuery(), knowledgeResult.hits());
         var fallbacks = new ArrayList<String>(knowledgeResult.trace().fallbacks());
         if ("MODEL_UNAVAILABLE".equals(plan.status()) || "FALLBACK_ORIGINAL_QUERY".equals(plan.status())) {
@@ -88,7 +88,7 @@ public class RagRetrievalService {
     }
 
     public record Retrieval(QueryRewriteService.QueryPlan plan, List<KnowledgeSearchFacade.SearchHit> knowledgeHits,
-                            List<DataAssetSearchFacade.DataHit> dataHits, Trace trace) {
+                            List<DataSourceFileSearchFacade.SourceFileHit> dataHits, Trace trace) {
         public Retrieval {
             knowledgeHits = knowledgeHits == null ? List.of() : List.copyOf(knowledgeHits);
             dataHits = dataHits == null ? List.of() : List.copyOf(dataHits);
@@ -96,7 +96,7 @@ public class RagRetrievalService {
     }
 
     public record Trace(String rewriteStatus, String strategy, int bm25Candidates, int vectorCandidates,
-                        int mergedCandidates, int dataAssetCandidates, String rerankerStatus,
+                            int mergedCandidates, int dataFileCandidates, String rerankerStatus,
                         List<String> fallbacks) {
     }
 }

@@ -5,7 +5,6 @@ export interface CategoryEditorValue {
   name: string;
   description?: string;
   scope?: string;
-  targetDataType?: string;
 }
 
 interface CategoryEditorModalProps {
@@ -13,13 +12,12 @@ interface CategoryEditorModalProps {
   title: string;
   initialValue?: CategoryEditorValue;
   scopeOptions?: Array<{ value: string; label: string }>;
-  targetDataTypeOptions?: Array<{ value: string; label: string }>;
   confirmLoading?: boolean;
   onCancel: () => void;
   onSubmit: (value: CategoryEditorValue) => void;
 }
 
-export function CategoryEditorModal({ open, title, initialValue, scopeOptions, targetDataTypeOptions, confirmLoading, onCancel, onSubmit }: CategoryEditorModalProps) {
+export function CategoryEditorModal({ open, title, initialValue, scopeOptions, confirmLoading, onCancel, onSubmit }: CategoryEditorModalProps) {
   const [form] = Form.useForm<CategoryEditorValue>();
   useEffect(() => {
     if (open) form.setFieldsValue(initialValue || { name: '' });
@@ -35,7 +33,6 @@ export function CategoryEditorModal({ open, title, initialValue, scopeOptions, t
           <Input.TextArea rows={3} maxLength={240} showCount placeholder="可选，简要说明该分类的用途或内容范围" />
         </Form.Item>
         {scopeOptions && <Form.Item name="scope" label="资料范围" rules={[{ required: true, message: '请选择资料范围' }]}><Select options={scopeOptions} /></Form.Item>}
-        {targetDataTypeOptions && <Form.Item name="targetDataType" label="绑定数据类型"><Select allowClear placeholder="不绑定固定类型" options={targetDataTypeOptions} /></Form.Item>}
       </Form>
     </Modal>
   );

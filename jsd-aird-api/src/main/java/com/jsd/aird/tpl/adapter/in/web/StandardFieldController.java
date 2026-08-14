@@ -20,7 +20,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/api/v2")
+@RequestMapping("/api/v1")
 public class StandardFieldController {
 
     private final StandardFieldService service;

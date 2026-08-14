@@ -6,19 +6,16 @@ import java.util.UUID;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.ops.application.port.AsyncJobHandler;
-import com.jsd.aird.ops.application.port.OpsAsyncFacade;
 import org.springframework.stereotype.Component;
 
 @Component
 public class DataProjectionJobHandler implements AsyncJobHandler {
 
     private final DataProjectionService service;
-    private final OpsAsyncFacade opsAsync;
     private final ObjectMapper objectMapper;
 
-    public DataProjectionJobHandler(DataProjectionService service, OpsAsyncFacade opsAsync, ObjectMapper objectMapper) {
+    public DataProjectionJobHandler(DataProjectionService service, ObjectMapper objectMapper) {
         this.service = service;
-        this.opsAsync = opsAsync;
         this.objectMapper = objectMapper;
     }
 
@@ -34,34 +31,11 @@ public class DataProjectionJobHandler implements AsyncJobHandler {
                 ? UUID.fromString(payload.path("actorId").asText()) : null;
         var importJobId = UUID.fromString(payload.path("importJobId").asText());
         var templateVersionId = UUID.fromString(payload.path("templateVersionId").asText());
-        var revisions = new ArrayList<UUID>();
-        payload.path("assets").forEach(item -> {
-            if (item.hasNonNull("revisionId")) revisions.add(UUID.fromString(item.path("revisionId").asText()));
+        var records = new ArrayList<UUID>();
+        payload.path("records").forEach(item -> {
+            if (item.hasNonNull("recordId")) records.add(UUID.fromString(item.path("recordId").asText()));
         });
-        service.projectInternal(organizationId, actorId, importJobId, templateVersionId, revisions);
-        var assetIds = new ArrayList<UUID>();
-        payload.path("assets").forEach(item -> {
-            if (item.hasNonNull("assetId")) assetIds.add(UUID.fromString(item.path("assetId").asText()));
-        });
-        // Projection owns the publication ordering. Indexing is queued exactly
-        // once after data_record/data_value are committed, never before.
-        if (!assetIds.isEmpty()) {
-            var revisionKey = revisions.stream().map(UUID::toString).sorted()
-                    .collect(java.util.stream.Collectors.joining(","));
-            var digest = sha256(revisionKey);
-            var hash = java.util.HexFormat.of().formatHex(digest);
-            opsAsync.enqueue(organizationId, "AI_INDEX_DATA_ASSETS", payload.deepCopy(),
-                    "ai-data-index-after-projection:" + importJobId + ":" + hash, 30);
-        }
+        service.projectInternal(organizationId, actorId, importJobId, templateVersionId, records);
         return objectMapper.createObjectNode().put("status", "PROJECTED");
-    }
-
-    private byte[] sha256(String value) {
-        try {
-            return java.security.MessageDigest.getInstance("SHA-256")
-                    .digest(value.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        } catch (java.security.NoSuchAlgorithmException exception) {
-            throw new IllegalStateException("JDK 不支持 SHA-256", exception);
-        }
     }
 }

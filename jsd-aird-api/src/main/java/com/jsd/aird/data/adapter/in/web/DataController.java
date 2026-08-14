@@ -2,10 +2,8 @@ package com.jsd.aird.data.adapter.in.web;
 
 import java.util.List;
 import java.util.UUID;
-import java.nio.charset.StandardCharsets;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.jsd.aird.data.application.DataAssetExportService;
 import com.jsd.aird.data.application.DataImportService;
 import com.jsd.aird.data.application.DataWorkbookService;
 import com.jsd.aird.data.application.port.DataRepository;
@@ -26,42 +24,35 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.http.ContentDisposition;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
 
 @RestController
-@RequestMapping("/api/v2/data")
+@RequestMapping("/api/v1/data")
 public class DataController {
 
     private final DataImportService service;
     private final com.jsd.aird.data.application.DataProjectionService projectionService;
-    private final DataAssetExportService assetExportService;
     private final DataWorkbookService workbookService;
     private final com.jsd.aird.data.application.DataCategoryService categoryService;
 
-    public DataController(DataImportService service, DataAssetExportService assetExportService,
+    public DataController(DataImportService service,
                           com.jsd.aird.data.application.DataCategoryService categoryService,
                           com.jsd.aird.data.application.DataProjectionService projectionService,
                           DataWorkbookService workbookService) {
         this.service = service;
-        this.assetExportService = assetExportService;
         this.categoryService = categoryService;
         this.projectionService = projectionService;
         this.workbookService = workbookService;
     }
 
     @GetMapping("/templates")
-    public ApiResponse<List<com.jsd.aird.tpl.api.TemplateDataImportFacade.DataTemplateOption>> templates(
-            @RequestParam(required = false) String targetDataType) {
-        return success(service.listTemplates(targetDataType));
+    public ApiResponse<List<com.jsd.aird.tpl.api.TemplateDataImportFacade.DataTemplateOption>> templates() {
+        return success(service.listTemplates());
     }
 
     @PostMapping("/import-jobs")
     public ApiResponse<DataRepository.Job> create(@Valid @RequestBody CreateRequest request) {
         return success(service.create(new DataImportService.CreateCommand(
-                request.sourceFileId(), request.templateVersionId(), request.targetDataType(), request.categoryId(),
+                request.sourceFileId(), request.templateVersionId(), request.categoryId(),
                 request.duplicateOverride())));
     }
 
@@ -70,13 +61,12 @@ public class DataController {
 
     @GetMapping("/import-jobs")
     public ApiResponse<PageResponse<DataRepository.Job>> jobs(
-            @RequestParam(required = false) String targetDataType,
             @RequestParam(required = false) UUID templateVersionId,
             @RequestParam(required = false) String status,
             @RequestParam(required = false) String keyword,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size) {
-        return success(service.listJobs(targetDataType, templateVersionId, status, keyword, page, size));
+        return success(service.listJobs(templateVersionId, status, keyword, page, size));
     }
 
     @PostMapping("/import-jobs/{id}/parse")
@@ -205,15 +195,15 @@ public class DataController {
         return success(projectionService.project(dataset.importJobId()));
     }
 
-    @GetMapping("/assets")
-    public ApiResponse<PageResponse<DataRepository.Asset>> assets(
-            @RequestParam(required = false) String targetDataType,
+    /** The data-center list is one card per source file/import batch, never one card per field. */
+    @GetMapping("/sources")
+    public ApiResponse<PageResponse<DataRepository.SourceFile>> sources(
             @RequestParam(required = false) UUID categoryId,
             @RequestParam(required = false) String status,
             @RequestParam(required = false) String keyword,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size) {
-        return success(service.assets(targetDataType, categoryId, status, keyword, page, size));
+        return success(service.sourceFiles(categoryId, status, keyword, page, size));
     }
 
     @GetMapping("/categories")
@@ -224,7 +214,7 @@ public class DataController {
     @PostMapping("/categories")
     public ApiResponse<com.jsd.aird.data.application.port.DataCategoryRepository.Category> createCategory(
             @Valid @RequestBody CategoryRequest request) {
-        return success(categoryService.create(request.name(), request.targetDataType(), request.description()));
+        return success(categoryService.create(request.name(), request.description()));
     }
 
     @PutMapping("/categories/{categoryId}")
@@ -240,49 +230,20 @@ public class DataController {
         return success(null);
     }
 
-    @PutMapping("/assets/{id}/category")
-    public ApiResponse<Void> assignCategory(@PathVariable UUID id, @Valid @RequestBody AssignCategoryRequest request) {
-        categoryService.assignAsset(id, request.categoryId());
+    @PutMapping("/sources/{id}/category")
+    public ApiResponse<Void> assignSourceCategory(@PathVariable UUID id, @Valid @RequestBody AssignCategoryRequest request) {
+        service.assignSourceCategory(id, request.categoryId());
         return success(null);
-    }
-
-    @PostMapping(value = "/assets/export", produces = "application/zip")
-    public ResponseEntity<byte[]> export(
-            @Valid @RequestBody ExportRequest request) {
-        var result = assetExportService.export(new DataAssetExportService.ExportCommand(
-                request.targetDataType(), request.templateVersionId(), request.assetIds()));
-        var headers = new HttpHeaders();
-        headers.setContentDisposition(ContentDisposition.attachment().filename(result.fileName(), StandardCharsets.UTF_8).build());
-        headers.setContentType(MediaType.parseMediaType("application/zip"));
-        return ResponseEntity.ok().headers(headers).body(result.content());
-    }
-
-    @GetMapping("/assets/{id}")
-    public ApiResponse<DataRepository.AssetDetail> asset(@PathVariable UUID id) { return success(service.asset(id)); }
-
-    @GetMapping("/assets/{id}/revisions")
-    public ApiResponse<List<DataRepository.Revision>> revisions(@PathVariable UUID id) { return success(service.revisions(id)); }
-
-    @GetMapping("/assets/{id}/source")
-    public ApiResponse<List<DataRepository.SourceAnchor>> source(@PathVariable UUID id) { return success(service.sources(id)); }
-
-    @GetMapping("/assets/{id}/workbook-snapshot")
-    public ApiResponse<DataWorkbookService.WorkbookContext> assetWorkbook(
-            @PathVariable UUID id, @RequestParam(required = false) UUID revisionId) {
-        return success(workbookService.asset(id, revisionId));
     }
 
     private <T> ApiResponse<T> success(T value) { return ResponseFactory.success(value, RequestIdHolder.currentOrUnknown()); }
 
     public record CreateRequest(@NotNull UUID sourceFileId, @NotNull UUID templateVersionId,
-                                @NotBlank String targetDataType, UUID categoryId, boolean duplicateOverride) {}
+                                UUID categoryId, boolean duplicateOverride) {}
 
-    public record CategoryRequest(@NotBlank String name, String targetDataType, @Size(max = 240) String description) {}
+    public record CategoryRequest(@NotBlank String name, @Size(max = 240) String description) {}
     public record RenameCategoryRequest(@NotBlank String name, @Size(max = 240) String description) {}
     public record AssignCategoryRequest(@NotNull UUID categoryId) {}
-
-    public record ExportRequest(@NotBlank String targetDataType, @NotNull UUID templateVersionId,
-                                @NotNull List<@NotNull UUID> assetIds) {}
 
     public record SheetRequest(@NotNull List<@Valid SheetItem> items) {}
     public record SheetItem(@NotBlank String sheetId, boolean selected, List<Integer> headerRows,

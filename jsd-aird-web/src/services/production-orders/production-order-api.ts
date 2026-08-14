@@ -54,14 +54,14 @@ export interface ProductionIngestJob {
 export const productionOrderApi = {
   async list() {
     const response = await httpClient.get<ApiResponse<ProductionOrderListItem[]>>(
-      '/api/v2/production-orders',
+      '/api/v1/production-orders',
     );
     return response.data.data;
   },
 
   async create(input: CreateProductionOrderInput) {
     const response = await httpClient.post<ApiResponse<ProductionWorkspace>>(
-      '/api/v2/production-orders',
+      '/api/v1/production-orders',
       input,
     );
     return response.data.data;
@@ -69,7 +69,7 @@ export const productionOrderApi = {
 
   async getEditModel(orderId: string) {
     const response = await httpClient.get<ApiResponse<ProductionWorkspace>>(
-      `/api/v2/production-orders/${orderId}/edit-model`,
+      `/api/v1/production-orders/${orderId}/edit-model`,
     );
     return response.data.data;
   },
@@ -92,23 +92,23 @@ export const productionOrderApi = {
   ) {
     const response = await httpClient.put<
       ApiResponse<{ lockVersion: number; workspaceHash: string; reconciliationRequired: boolean }>
-    >(`/api/v2/production-orders/${orderId}/draft`, input);
+    >(`/api/v1/production-orders/${orderId}/draft`, input);
     return response.data.data;
   },
 
   async submit(orderId: string) {
     const response = await httpClient.post<ApiResponse<{ revisionId: string }>>(
-      `/api/v2/production-orders/${orderId}/submit`,
+      `/api/v1/production-orders/${orderId}/submit`,
     );
     return response.data.data;
   },
 
   async cancel(orderId: string) {
-    await httpClient.post(`/api/v2/production-orders/${orderId}/cancel`);
+    await httpClient.post(`/api/v1/production-orders/${orderId}/cancel`);
   },
 
   async delete(orderId: string) {
-    await httpClient.delete(`/api/v2/production-orders/${orderId}`);
+    await httpClient.delete(`/api/v1/production-orders/${orderId}`);
   },
 
   async stageInstanceSource(file: File, sourceType: 'XLSX' | 'PHOTO') {
@@ -117,7 +117,7 @@ export const productionOrderApi = {
     const kind = sourceType === 'XLSX' ? 'OFFICE' : 'INSTANCE_SOURCE';
     const response = await httpClient.post<
       ApiResponse<{ fileId: string; sha256: string; status: 'STAGED' }>
-    >(`/api/v2/files/staged?kind=${kind}`, body);
+    >(`/api/v1/files/staged?kind=${kind}`, body);
     return response.data.data;
   },
 
@@ -126,7 +126,7 @@ export const productionOrderApi = {
     input: { sourceType: 'XLSX' | 'PHOTO'; sourceFileIds: string[]; requestedTemplateVersionId: string },
   ) {
     const response = await httpClient.post<ApiResponse<ProductionIngestJob>>(
-      `/api/v2/production-orders/${orderId}/ingest-jobs`,
+      `/api/v1/production-orders/${orderId}/ingest-jobs`,
       input,
     );
     return response.data.data;
@@ -134,7 +134,7 @@ export const productionOrderApi = {
 
   async getIngestJob(orderId: string, jobId: string) {
     const response = await httpClient.get<ApiResponse<ProductionIngestJob>>(
-      `/api/v2/production-orders/${orderId}/ingest-jobs/${jobId}`,
+      `/api/v1/production-orders/${orderId}/ingest-jobs/${jobId}`,
     );
     return response.data.data;
   },
@@ -152,17 +152,17 @@ export const productionOrderApi = {
   ) {
     const response = await httpClient.post<
       ApiResponse<{ lockVersion: number; workspaceHash: string; reconciliationRequired: boolean }>
-    >(`/api/v2/production-orders/${orderId}/ingest-jobs/${jobId}/confirm`, input);
+    >(`/api/v1/production-orders/${orderId}/ingest-jobs/${jobId}/confirm`, input);
     return response.data.data;
   },
 
   async cancelIngestJob(orderId: string, jobId: string) {
-    await httpClient.post(`/api/v2/production-orders/${orderId}/ingest-jobs/${jobId}/cancel`);
+    await httpClient.post(`/api/v1/production-orders/${orderId}/ingest-jobs/${jobId}/cancel`);
   },
 
   async downloadInstanceXlsx(templateVersionId: string) {
     const response = await httpClient.get<Blob>(
-      `/api/v2/template-versions/${templateVersionId}/instance-xlsx`,
+      `/api/v1/template-versions/${templateVersionId}/instance-xlsx`,
       { responseType: 'blob' },
     );
     const url = URL.createObjectURL(response.data);
@@ -176,20 +176,20 @@ export const productionOrderApi = {
   async listRevisions(orderId: string) {
     const response = await httpClient.get<ApiResponse<Array<{
       revisionId: string; revisionNo: number; status: string; createdAt: string; dataHash: string;
-    }>>>(`/api/v2/production-orders/${orderId}/revisions`);
+    }>>>(`/api/v1/production-orders/${orderId}/revisions`);
     return response.data.data;
   },
 
   async checkExport(orderId: string, format: TemplateFormat, revisionId?: string) {
     const response = await httpClient.get<ApiResponse<{ canDownload: boolean; warnings: Array<{ code: string; bindingId?: string; dataPath?: string; message: string }> }>>(
-      `/api/v2/production-orders/${orderId}/export/check`, { params: { format, revisionId } },
+      `/api/v1/production-orders/${orderId}/export/check`, { params: { format, revisionId } },
     );
     return response.data.data;
   },
 
   async exportOffice(orderId: string, format: TemplateFormat, revisionId?: string) {
     const response = await httpClient.get<Blob>(
-      `/api/v2/production-orders/${orderId}/export`, { params: { format, revisionId }, responseType: 'blob' },
+      `/api/v1/production-orders/${orderId}/export`, { params: { format, revisionId }, responseType: 'blob' },
     );
     const url = URL.createObjectURL(response.data);
     const anchor = document.createElement('a'); anchor.href = url;
@@ -208,13 +208,13 @@ export const productionOrderApi = {
     );
     const response = await httpClient.post<
       ApiResponse<{ fileId: string; sha256: string; status: 'STAGED' }>
-    >('/api/v2/files/staged?kind=SNAPSHOT', body);
+    >('/api/v1/files/staged?kind=SNAPSHOT', body);
     return response.data.data;
   },
 
   async downloadSnapshot(fileId: string) {
     const response = await httpClient.get<Record<string, unknown>>(
-      `/api/v2/files/${fileId}/content`,
+      `/api/v1/files/${fileId}/content`,
     );
     return response.data;
   },

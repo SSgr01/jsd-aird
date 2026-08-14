@@ -31,9 +31,6 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class DataImportService {
 
-    private static final Set<String> SUPPORTED_TARGET_DATA_TYPES = Set.of(
-            "MATERIAL", "FORMULA", "PROCESS", "EQUIPMENT", "TEST_STANDARD");
-
     private final DataRepository repository;
     private final FileObjectRepository files;
     private final TemplateDataImportFacade templates;
@@ -79,7 +76,6 @@ public class DataImportService {
     @Transactional
     public DataRepository.Job create(CreateCommand command) {
         var actor = ActorContext.required();
-        var targetDataType = normalizeTargetDataType(command.targetDataType());
         var template = templates.getPublished(actor.organizationId(), command.templateVersionId());
         var file = files.find(actor.organizationId(), command.sourceFileId())
                 .orElseThrow(() -> new ApiException(ApiErrorCode.FILE_NOT_READY, "数据源文件不存在"));
@@ -91,21 +87,15 @@ public class DataImportService {
         }
         files.activate(command.sourceFileId());
         var categoryId = command.categoryId();
-        if (categoryId == null && categories != null) {
-            var defaultCategory = categories.defaultForTargetType(actor.organizationId(), targetDataType);
-            categoryId = defaultCategory == null ? null : defaultCategory.id();
-        } else if (categoryId != null && categories != null) {
+        if (categoryId != null && categories != null) {
             var requestedCategoryId = categoryId;
             var category = categories.list().stream().filter(item -> item.id().equals(requestedCategoryId)).findFirst()
                     .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "数据分类不存在"));
-            if (category.targetDataType() != null && !targetDataType.equals(category.targetDataType())) {
-                throw new ApiException(ApiErrorCode.BAD_REQUEST, "数据分类与数据类型不匹配");
-            }
         }
         var id = UUID.randomUUID();
         repository.insertJob(new DataRepository.NewJob(
                 id, actor.organizationId(), command.sourceFileId(), file.sha256(), file.originalName(), format,
-                command.templateVersionId(), targetDataType, categoryId, command.duplicateOverride(), actor.userId(),
+                command.templateVersionId(), categoryId, command.duplicateOverride(), actor.userId(),
                 template.importContractVersion() > 0 ? template.importContractVersion() : null,
                 template.contractHash()));
         repository.enqueueParse(UUID.randomUUID(), actor.organizationId(), id);
@@ -117,19 +107,34 @@ public class DataImportService {
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "导入任务不存在"));
     }
 
-    public PageResponse<DataRepository.Job> listJobs(String targetDataType, UUID templateVersionId,
+    public PageResponse<DataRepository.Job> listJobs(UUID templateVersionId,
                                                       String status, String keyword, int page, int size) {
         var actor = ActorContext.required();
         var safePage = Math.max(1, page);
         var safeSize = Math.min(100, Math.max(1, size));
-        return repository.listJobs(actor.organizationId(), targetDataType, templateVersionId, status,
+        return repository.listJobs(actor.organizationId(), templateVersionId, status,
                 keyword, safePage, safeSize);
     }
 
-    public List<TemplateDataImportFacade.DataTemplateOption> listTemplates(String targetDataType) {
-        var normalized = targetDataType == null || targetDataType.isBlank()
-                ? null : normalizeTargetDataType(targetDataType);
-        return templates.listPublished(ActorContext.required().organizationId(), normalized);
+    public List<TemplateDataImportFacade.DataTemplateOption> listTemplates() {
+        return templates.listPublished(ActorContext.required().organizationId());
+    }
+
+    public PageResponse<DataRepository.SourceFile> sourceFiles(UUID categoryId, String status, String keyword,
+                                                               int page, int size) {
+        var actor = ActorContext.required();
+        return repository.listSourceFiles(actor.organizationId(), categoryId, status, keyword,
+                Math.max(1, page), Math.min(100, Math.max(1, size)));
+    }
+
+    @Transactional
+    public void assignSourceCategory(UUID importJobId, UUID categoryId) {
+        var actor = ActorContext.required();
+        if (categories != null) categories.list().stream().filter(item -> item.id().equals(categoryId)).findFirst()
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "数据分类不存在"));
+        if (repository.assignSourceCategory(actor.organizationId(), importJobId, categoryId) == 0) {
+            throw new ApiException(ApiErrorCode.NOT_FOUND, "来源文件不存在");
+        }
     }
 
     public TemplateDataImportFacade.FieldRequest requestField(UUID importJobId, FieldRequestCommand command) {
@@ -641,26 +646,21 @@ public class DataImportService {
         var committed = rows.stream().filter(row -> !row.excluded()).map(row -> {
             var effectiveValues = correctedValues(row.normalizedValues(), row.correctedValues());
             var identity = firstValue(effectiveValues, mappings, row, true);
-            var display = firstValue(effectiveValues, mappings, row, false);
             var anchors = mappings.stream().filter(item -> "MAP".equals(item.action()) && item.fieldCode() != null)
                     .map(item -> anchor(item, row, sheetNames.getOrDefault(item.sheetId(), item.sheetId())))
                     .filter(java.util.Objects::nonNull).toList();
             var metadata = row.sourceMetadata() == null ? objectMapper.createObjectNode() : row.sourceMetadata();
             var structuredKey = metadata.path("recordKey").asText("");
-            var structuredDisplay = metadata.path("displayName").asText("");
-            // Structured projections already computed the logical record key.  It must
-            // win over a form-level identity field; otherwise every detail row in a
-            // FORM_REGION + ROW_TABLE sheet would be committed as another revision of
-            // the same form asset instead of as its own record/asset.
-            var assetKey = structuredKey.isBlank()
+            // Structured projections already computed the logical record key. It must
+            // win over a form-level identity field so each detail row remains its own
+            // source record after common form fields are merged into it.
+            var recordKey = structuredKey.isBlank()
                     ? (identity == null || identity.isBlank()
                     ? importScopedKey(job.id(), row) : identity)
                     : metadata.path("identitySynthetic").asBoolean(false)
                     ? importScopedKey(job.id(), row) : structuredKey;
-            return new DataRepository.CommittedRow(row.sheetId(), row.rowNumber(), row.rawValues(), row.normalizedValues(),
-                    row.correctedValues(), assetKey,
-                    display == null || display.isBlank()
-                            ? (structuredDisplay.isBlank() ? identity : structuredDisplay) : display, anchors);
+            return new DataRepository.CommittedRow(row.sheetId(), sheetNames.getOrDefault(row.sheetId(), row.sheetId()), row.rowNumber(), row.rawValues(), row.normalizedValues(),
+                    row.correctedValues(), recordKey, anchors);
         }).toList();
         var result = repository.commit(actor.organizationId(), importJobId, actor.userId(), committed);
         appendCommitAuditAndOutbox(actor.organizationId(), actor.userId(), job, result);
@@ -668,49 +668,46 @@ public class DataImportService {
 
     private void appendCommitAuditAndOutbox(UUID organizationId, UUID actorId, DataRepository.Job job,
                                             DataRepository.CommitResult result) {
-        var assets = objectMapper.createArrayNode();
-        for (var item : result.assets()) {
-            assets.add(objectMapper.createObjectNode()
-                    .put("assetId", item.assetId().toString())
-                    .put("revisionId", item.revisionId().toString())
-                    .put("revisionNo", item.revisionNo())
+        var records = objectMapper.createArrayNode();
+        for (var item : result.records()) {
+            records.add(objectMapper.createObjectNode()
+                    .put("recordId", item.recordId().toString())
+                    .put("recordKey", item.recordKey())
                     .put("dataHash", item.dataHash()));
         }
         var detail = objectMapper.createObjectNode()
-                .put("targetDataType", job.targetDataType())
                 .put("templateVersionId", job.templateVersionId().toString())
                 .put("sourceFileId", job.sourceFileId().toString())
                 .put("sourceFileName", job.sourceFileName())
                 .put("sourceSha256", job.sourceSha256())
-                .put("assetCount", result.assets().stream().map(DataRepository.CommittedAsset::assetId).distinct().count())
+                .put("recordCount", result.records().size())
                 .put("rowCount", result.rowCount())
-                .set("assets", assets);
+                .set("records", records);
         auditLog.append(organizationId, actorId, "DATA_IMPORT_COMMITTED", "DATA_IMPORT_JOB", job.id(), detail);
 
         var eventPayload = objectMapper.createObjectNode()
                 .put("organizationId", organizationId.toString())
                 .put("actorId", actorId.toString())
-                .put("targetDataType", job.targetDataType())
                 .put("templateVersionId", job.templateVersionId().toString())
                 .put("importJobId", job.id().toString())
                 .put("sourceSha256", job.sourceSha256())
-                .put("assetCount", result.assets().stream().map(DataRepository.CommittedAsset::assetId).distinct().count())
+                .put("recordCount", result.records().size())
                 .put("rowCount", result.rowCount())
-                .set("assets", assets.deepCopy());
-        opsAsync.appendOutbox("DATA_IMPORT_JOB", job.id(), "DATA_ASSETS_COMMITTED", eventPayload);
-        var revisionSetKey = revisionSetKey(result);
+                .set("records", records.deepCopy());
+        opsAsync.appendOutbox("DATA_IMPORT_JOB", job.id(), "DATA_RECORDS_COMMITTED", eventPayload);
+        var recordSetKey = recordSetKey(result);
         opsAsync.enqueue(organizationId, "DATA_PROJECT_IMPORT", eventPayload,
-                "data-project:" + job.id() + ":" + revisionSetKey, 30);
+                "data-project:" + job.id() + ":" + recordSetKey, 30);
     }
 
-    private String revisionSetKey(DataRepository.CommitResult result) {
-        var revisions = result.assets().stream()
-                .map(DataRepository.CommittedAsset::revisionId)
+    private String recordSetKey(DataRepository.CommitResult result) {
+        var records = result.records().stream()
+                .map(DataRepository.CommittedRecord::recordId)
                 .map(UUID::toString)
                 .sorted()
                 .collect(java.util.stream.Collectors.joining(","));
         try {
-            var digest = MessageDigest.getInstance("SHA-256").digest(revisions.getBytes(StandardCharsets.UTF_8));
+            var digest = MessageDigest.getInstance("SHA-256").digest(records.getBytes(StandardCharsets.UTF_8));
             var hex = new StringBuilder(digest.length * 2);
             for (var item : digest) hex.append(String.format("%02x", item));
             return hex.toString();
@@ -721,28 +718,6 @@ public class DataImportService {
 
     private String importScopedKey(UUID importJobId, DataRepository.Row row) {
         return "IMPORT:" + importJobId + ":" + row.sheetId() + ":" + row.rowNumber() + ":" + row.id();
-    }
-
-    public PageResponse<DataRepository.Asset> assets(String targetDataType, UUID categoryId, String status, String keyword,
-                                                     int page, int size) {
-        var actor = ActorContext.required();
-        var safePage = Math.max(1, page);
-        var safeSize = Math.min(100, Math.max(1, size));
-        return repository.listAssets(actor.organizationId(), targetDataType, categoryId, status,
-                targetDataType == null && keyword == null ? null : keyword, safePage, safeSize);
-    }
-
-    public DataRepository.AssetDetail asset(UUID id) {
-        return repository.findAsset(ActorContext.required().organizationId(), id)
-                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "数据资产不存在"));
-    }
-
-    public List<DataRepository.Revision> revisions(UUID id) {
-        return repository.listRevisions(ActorContext.required().organizationId(), id);
-    }
-
-    public List<DataRepository.SourceAnchor> sources(UUID id) {
-        return repository.listSourceAnchors(ActorContext.required().organizationId(), id);
     }
 
     private DataRepository.Job requireJob(UUID organizationId, UUID id) {
@@ -1101,14 +1076,6 @@ public class DataImportService {
         throw new ApiException(ApiErrorCode.BAD_REQUEST, "数据中心仅支持 XLS、XLSX 或 CSV");
     }
 
-    private String normalizeTargetDataType(String value) {
-        var normalized = value == null ? "" : value.trim().toUpperCase(Locale.ROOT);
-        if (!SUPPORTED_TARGET_DATA_TYPES.contains(normalized)) {
-            throw new ApiException(ApiErrorCode.BAD_REQUEST, "不支持的数据类型：" + value);
-        }
-        return normalized;
-    }
-
     private String columnName(int value) {
         var result = new StringBuilder();
         while (value > 0) { value--; result.insert(0, (char) ('A' + value % 26)); value /= 26; }
@@ -1141,10 +1108,10 @@ public class DataImportService {
         return false;
     }
 
-    public record CreateCommand(UUID sourceFileId, UUID templateVersionId, String targetDataType,
+    public record CreateCommand(UUID sourceFileId, UUID templateVersionId,
                                 UUID categoryId, boolean duplicateOverride) {
-        public CreateCommand(UUID sourceFileId, UUID templateVersionId, String targetDataType, boolean duplicateOverride) {
-            this(sourceFileId, templateVersionId, targetDataType, null, duplicateOverride);
+        public CreateCommand(UUID sourceFileId, UUID templateVersionId, boolean duplicateOverride) {
+            this(sourceFileId, templateVersionId, null, duplicateOverride);
         }
     }
     public record FieldRequestCommand(String fieldId, String displayName, String valueType,

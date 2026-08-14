@@ -1,8 +1,6 @@
 package com.jsd.aird.data.application;
 
 import java.util.List;
-import java.util.Locale;
-import java.util.Set;
 import java.util.UUID;
 
 import com.jsd.aird.data.application.port.DataCategoryRepository;
@@ -16,7 +14,6 @@ import org.springframework.util.StringUtils;
 @Service
 public class DataCategoryService {
 
-    private static final Set<String> TYPES = Set.of("MATERIAL", "FORMULA", "PROCESS", "EQUIPMENT", "TEST_STANDARD");
     private final DataCategoryRepository repository;
 
     public DataCategoryService(DataCategoryRepository repository) {
@@ -28,9 +25,9 @@ public class DataCategoryService {
     }
 
     @Transactional
-    public DataCategoryRepository.Category create(String name, String targetDataType, String description) {
+    public DataCategoryRepository.Category create(String name, String description) {
         var actor = ActorContext.required();
-        return repository.create(actor.organizationId(), actor.userId(), normalizeName(name), normalizeType(targetDataType), normalizeDescription(description));
+        return repository.create(actor.organizationId(), actor.userId(), normalizeName(name), normalizeDescription(description));
     }
 
     @Transactional
@@ -46,36 +43,12 @@ public class DataCategoryService {
         var category = require(actor.organizationId(), id);
         if (replacementId != null) {
             var replacement = require(actor.organizationId(), replacementId);
-            if (category.targetDataType() != null && replacement.targetDataType() != null
-                    && !category.targetDataType().equals(replacement.targetDataType())) {
-                throw new ApiException(ApiErrorCode.BAD_REQUEST, "替代分类的数据类型不匹配");
-            }
         }
         repository.delete(actor.organizationId(), id, replacementId);
     }
 
-    @Transactional
-    public void assignAsset(UUID assetId, UUID categoryId) {
-        var actor = ActorContext.required();
-        require(actor.organizationId(), categoryId);
-        if (repository.assignAsset(actor.organizationId(), assetId, categoryId) == 0) {
-            throw new ApiException(ApiErrorCode.BAD_REQUEST, "资产不存在或分类与数据类型不匹配");
-        }
-    }
-
-    public DataCategoryRepository.Category defaultForTargetType(UUID organizationId, String targetDataType) {
-        return repository.findForTargetType(organizationId, targetDataType).orElse(null);
-    }
-
     private DataCategoryRepository.Category require(UUID organizationId, UUID id) {
         return repository.find(organizationId, id).orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "数据分类不存在"));
-    }
-
-    private String normalizeType(String value) {
-        if (!StringUtils.hasText(value)) return null;
-        var type = value.trim().toUpperCase(Locale.ROOT);
-        if (!TYPES.contains(type)) throw new ApiException(ApiErrorCode.BAD_REQUEST, "数据类型不受支持");
-        return type;
     }
 
     private String normalizeName(String value) {

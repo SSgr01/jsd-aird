@@ -564,7 +564,7 @@ export const templateApi = {
     page?: number; size?: number;
   }) {
     const response = await httpClient.get<ApiResponse<PageResponse<TemplateListItem>>>(
-      '/api/v2/templates',
+      '/api/v1/templates',
       { params },
     );
     return response.data.data;
@@ -572,7 +572,7 @@ export const templateApi = {
 
   async filterOptions() {
     const response = await httpClient.get<ApiResponse<Array<{ id: string; displayName: string }>>>(
-      '/api/v2/templates/filter-options',
+      '/api/v1/templates/filter-options',
     );
     return response.data.data;
   },
@@ -582,26 +582,26 @@ export const templateApi = {
     updatedFrom?: string; updatedTo?: string;
   }) {
     const response = await httpClient.get<ApiResponse<TemplateFacetSummary>>(
-      '/api/v2/templates/facets',
+      '/api/v1/templates/facets',
       { params },
     );
     return response.data.data;
   },
 
   async renameTemplate(templateId: string, name: string) {
-    await httpClient.patch(`/api/v2/templates/${templateId}`, { name });
+    await httpClient.patch(`/api/v1/templates/${templateId}`, { name });
   },
 
   async copyTemplate(versionId: string, input: { name?: string; categoryId?: string }) {
     const response = await httpClient.post<ApiResponse<TemplateWorkspace>>(
-      `/api/v2/template-versions/${versionId}/copies`, input,
+      `/api/v1/template-versions/${versionId}/copies`, input,
     );
     return response.data.data;
   },
 
   async rollback(versionId: string) {
     const response = await httpClient.post<ApiResponse<TemplateWorkspace>>(
-      `/api/v2/template-versions/${versionId}/rollback`,
+      `/api/v1/template-versions/${versionId}/rollback`,
     );
     return response.data.data;
   },
@@ -612,12 +612,12 @@ export const templateApi = {
   }) {
     const response = await httpClient.post<ApiResponse<Array<{
       templateId: string; versionId?: string; success: boolean; reason?: string;
-    }>>>('/api/v2/templates/batch-actions', input);
+    }>>>('/api/v1/templates/batch-actions', input);
     return response.data.data;
   },
 
   async exportCsv(params: Record<string, string | number | boolean | string[] | undefined>) {
-    const response = await httpClient.get<Blob>('/api/v2/templates/export.csv', {
+    const response = await httpClient.get<Blob>('/api/v1/templates/export.csv', {
       params, responseType: 'blob',
     });
     const url = URL.createObjectURL(response.data);
@@ -628,7 +628,7 @@ export const templateApi = {
 
   async create(input: CreateTemplateInput) {
     const response = await httpClient.post<ApiResponse<TemplateWorkspace>>(
-      '/api/v2/templates',
+      '/api/v1/templates',
       input,
     );
     return response.data.data;
@@ -636,21 +636,21 @@ export const templateApi = {
 
   async getEditModel(versionId: string) {
     const response = await httpClient.get<ApiResponse<TemplateWorkspace>>(
-      `/api/v2/template-versions/${versionId}/edit-model`,
+      `/api/v1/template-versions/${versionId}/edit-model`,
     );
     return response.data.data;
   },
 
   async getRecognitionReview(versionId: string) {
     const response = await httpClient.get<ApiResponse<RecognitionReview>>(
-      `/api/v2/template-versions/${versionId}/recognition-review`,
+      `/api/v1/template-versions/${versionId}/recognition-review`,
     );
     return response.data.data;
   },
 
   async searchStandardFields(params: { keyword?: string; valueType?: string } = {}) {
     const response = await httpClient.get<ApiResponse<StandardFieldOption[]>>(
-      '/api/v2/standard-fields',
+      '/api/v1/standard-fields',
       { params },
     );
     return response.data.data;
@@ -666,7 +666,7 @@ export const templateApi = {
     description?: string;
   }) {
     const response = await httpClient.post<ApiResponse<StandardFieldRequest>>(
-      '/api/v2/standard-field-requests',
+      '/api/v1/standard-field-requests',
       input,
     );
     return response.data.data;
@@ -682,7 +682,7 @@ export const templateApi = {
     } = { scope: 'WORKBOOK' },
   ) {
     const response = await httpClient.post<ApiResponse<TemplateImportJob>>(
-      `/api/v2/template-versions/${versionId}/recognition-runs`,
+      `/api/v1/template-versions/${versionId}/recognition-runs`,
       request,
     );
     return response.data.data;
@@ -690,14 +690,14 @@ export const templateApi = {
 
   async listVersions(templateId: string) {
     const response = await httpClient.get<ApiResponse<TemplateVersionHistoryItem[]>>(
-      `/api/v2/templates/${templateId}/versions`,
+      `/api/v1/templates/${templateId}/versions`,
     );
     return response.data.data;
   },
 
   async saveDraft(versionId: string, input: SaveTemplateDraftInput) {
     const response = await httpClient.put<ApiResponse<SaveTemplateDraftResult>>(
-      `/api/v2/template-versions/${versionId}/draft`,
+      `/api/v1/template-versions/${versionId}/draft`,
       input,
       // Saving may synchronously run one REGION_FIELDS batch after a user
       // confirms a structure. Keep the normal API timeout short, but allow
@@ -708,12 +708,12 @@ export const templateApi = {
   },
 
   async publish(versionId: string) {
-    await httpClient.post(`/api/v2/template-versions/${versionId}/publish`);
+    await httpClient.post(`/api/v1/template-versions/${versionId}/publish`);
   },
 
   async downloadWordDocument(versionId: string) {
     const response = await httpClient.get<Blob>(
-      `/api/v2/template-versions/${versionId}/word-document`,
+      `/api/v1/template-versions/${versionId}/word-document`,
       { responseType: 'blob' },
     );
     const url = URL.createObjectURL(response.data);
@@ -726,14 +726,14 @@ export const templateApi = {
 
   async checkExport(versionId: string, format: TemplateFormat, state: 'DRAFT' | 'PUBLISHED' = 'DRAFT') {
     const response = await httpClient.get<ApiResponse<{ canDownload: boolean; warnings: Array<{ code: string; bindingId?: string; dataPath?: string; message: string }> }>>(
-      `/api/v2/template-versions/${versionId}/export/check`, { params: { format, state } },
+      `/api/v1/template-versions/${versionId}/export/check`, { params: { format, state } },
     );
     return response.data.data;
   },
 
   async exportOffice(versionId: string, format: TemplateFormat, state: 'DRAFT' | 'PUBLISHED' = 'DRAFT') {
     const response = await httpClient.get<Blob>(
-      `/api/v2/template-versions/${versionId}/export`, { params: { format, state }, responseType: 'blob' },
+      `/api/v1/template-versions/${versionId}/export`, { params: { format, state }, responseType: 'blob' },
     );
     const url = URL.createObjectURL(response.data);
     const anchor = document.createElement('a'); anchor.href = url;
@@ -743,7 +743,7 @@ export const templateApi = {
 
   async downloadWordPreview(versionId: string) {
     const response = await httpClient.get<Blob>(
-      `/api/v2/template-versions/${versionId}/word-preview`,
+      `/api/v1/template-versions/${versionId}/word-preview`,
       { responseType: 'blob' },
     );
     return response.data;
@@ -751,17 +751,17 @@ export const templateApi = {
 
   async createRevision(versionId: string) {
     const response = await httpClient.post<ApiResponse<TemplateWorkspace>>(
-      `/api/v2/template-versions/${versionId}/revisions`,
+      `/api/v1/template-versions/${versionId}/revisions`,
     );
     return response.data.data;
   },
 
   async deleteDraft(versionId: string) {
-    await httpClient.delete(`/api/v2/template-versions/${versionId}`);
+    await httpClient.delete(`/api/v1/template-versions/${versionId}`);
   },
 
   async retire(templateId: string) {
-    await httpClient.post(`/api/v2/templates/${templateId}/retire`);
+    await httpClient.post(`/api/v1/templates/${templateId}/retire`);
   },
 
   async stageSnapshot(snapshot: Record<string, unknown>, format: TemplateFormat) {
@@ -784,7 +784,7 @@ export const templateApi = {
     );
     const response = await httpClient.post<
       ApiResponse<{ fileId: string; sha256: string; status: 'STAGED' }>
-    >('/api/v2/files/staged?kind=SNAPSHOT', body);
+    >('/api/v1/files/staged?kind=SNAPSHOT', body);
     return response.data.data;
   },
 
@@ -793,7 +793,7 @@ export const templateApi = {
     body.append('file', file);
     const response = await httpClient.post<
       ApiResponse<{ fileId: string; sha256: string; status: 'STAGED' }>
-    >('/api/v2/files/staged?kind=TEMPLATE_SOURCE', body);
+    >('/api/v1/files/staged?kind=TEMPLATE_SOURCE', body);
     return response.data.data;
   },
 
@@ -801,7 +801,7 @@ export const templateApi = {
     categoryId?: string; duplicateOverride?: boolean; operationSource?: string;
   }) {
     const response = await httpClient.post<ApiResponse<TemplateImportJob>>(
-      '/api/v2/template-imports',
+      '/api/v1/template-imports',
       { fileId, format, ...options },
     );
     return response.data.data;
@@ -813,7 +813,7 @@ export const templateApi = {
     baseWorkspaceHash?: string,
   ) {
     const response = await httpClient.post<ApiResponse<TemplateImportJob>>(
-      `/api/v2/template-imports/${importJobId}/retry`,
+      `/api/v1/template-imports/${importJobId}/retry`,
       {
         source,
         ...(baseWorkspaceHash ? { baseWorkspaceHash } : {}),
@@ -824,14 +824,14 @@ export const templateApi = {
 
   async listImports() {
     const response = await httpClient.get<ApiResponse<TemplateImportJob[]>>(
-      '/api/v2/template-imports',
+      '/api/v1/template-imports',
     );
     return response.data.data;
   },
 
   async getImport(importJobId: string) {
     const response = await httpClient.get<ApiResponse<TemplateImportJob>>(
-      `/api/v2/template-imports/${importJobId}`,
+      `/api/v1/template-imports/${importJobId}`,
     );
     return response.data.data;
   },
@@ -854,52 +854,52 @@ export const templateApi = {
         };
         snapshot: Record<string, unknown>;
       }>
-    >(`/api/v2/template-imports/${importJobId}/render-context`);
+    >(`/api/v1/template-imports/${importJobId}/render-context`);
     return response.data.data;
   },
 
   async getImportDocumentStructure(importJobId: string) {
     const response = await httpClient.get<ApiResponse<DocumentStructure>>(
-      '/api/v2/template-imports/' + importJobId + '/document-structure',
+      '/api/v1/template-imports/' + importJobId + '/document-structure',
     );
     return response.data.data;
   },
 
   async listRecognitionSuggestions(importJobId: string) {
     const response = await httpClient.get<ApiResponse<RecognitionSuggestion[]>>(
-      `/api/v2/template-imports/${importJobId}/suggestions`,
+      `/api/v1/template-imports/${importJobId}/suggestions`,
     );
     return response.data.data;
   },
 
 
   async deleteImport(importJobId: string) {
-    await httpClient.delete(`/api/v2/template-imports/${importJobId}`);
+    await httpClient.delete(`/api/v1/template-imports/${importJobId}`);
   },
 
   async listCategories() {
-    const response = await httpClient.get<ApiResponse<TemplateCategory[]>>('/api/v2/template-categories');
+    const response = await httpClient.get<ApiResponse<TemplateCategory[]>>('/api/v1/template-categories');
     return response.data.data;
   },
 
   async createCategory(input: { name: string; description?: string | null }) {
-    const response = await httpClient.post<ApiResponse<TemplateCategory>>('/api/v2/template-categories', input);
+    const response = await httpClient.post<ApiResponse<TemplateCategory>>('/api/v1/template-categories', input);
     return response.data.data;
   },
 
   async renameCategory(categoryId: string, input: { name: string; description?: string | null }) {
-    const response = await httpClient.put<ApiResponse<TemplateCategory>>(`/api/v2/template-categories/${categoryId}`, input);
+    const response = await httpClient.put<ApiResponse<TemplateCategory>>(`/api/v1/template-categories/${categoryId}`, input);
     return response.data.data;
   },
 
   async deleteCategory(categoryId: string, replacementCategoryId?: string) {
-    await httpClient.delete(`/api/v2/template-categories/${categoryId}`, {
+    await httpClient.delete(`/api/v1/template-categories/${categoryId}`, {
       params: replacementCategoryId ? { replacementCategoryId } : undefined,
     });
   },
 
   async assignTemplateCategory(templateId: string, categoryId?: string) {
-    await httpClient.put(`/api/v2/templates/${templateId}/category`, { categoryId: categoryId || null });
+    await httpClient.put(`/api/v1/templates/${templateId}/category`, { categoryId: categoryId || null });
   },
 
   async decideRecognitionSuggestion(
@@ -908,7 +908,7 @@ export const templateApi = {
     decision: Exclude<RecognitionDecision, 'PENDING'>,
   ) {
     const response = await httpClient.post<ApiResponse<RecognitionSuggestion>>(
-      `/api/v2/template-imports/${importJobId}/suggestions/${suggestionId}/decision`,
+      `/api/v1/template-imports/${importJobId}/suggestions/${suggestionId}/decision`,
       { decision },
     );
     return response.data.data;
@@ -916,14 +916,14 @@ export const templateApi = {
 
   async confirmAllRecognitionSuggestions(importJobId: string) {
     const response = await httpClient.post<ApiResponse<RecognitionSuggestion[]>>(
-      `/api/v2/template-imports/${importJobId}/suggestions/confirm-all`,
+      `/api/v1/template-imports/${importJobId}/suggestions/confirm-all`,
     );
     return response.data.data;
   },
 
   async downloadSnapshot(fileId: string) {
     const response = await httpClient.get<Record<string, unknown>>(
-      `/api/v2/files/${fileId}/content`,
+      `/api/v1/files/${fileId}/content`,
     );
     return response.data;
   },

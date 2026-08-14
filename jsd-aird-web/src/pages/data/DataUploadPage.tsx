@@ -6,7 +6,7 @@ import { useNavigate } from 'react-router-dom';
 
 import { UploadWorkspace, type UploadWorkspaceRecord } from '@/components/upload-workspace';
 import { FilePreviewModal, downloadPreviewFile, type FilePreviewDescriptor } from '@/components/file-preview';
-import { dataApi, dataTypeOptions, type DataCategory, type DataJob, type DataTemplateOption, type DataType } from '@/services/data/data-api';
+import { dataApi, type DataCategory, type DataJob, type DataTemplateOption } from '@/services/data/data-api';
 
 const statusFilters = [
   { key: 'ALL', label: '全部' },
@@ -36,7 +36,7 @@ function jobRecord(job: DataJob, navigate: (path: string) => void, onPreview: (j
     id: job.id,
     name: job.sourceFileName,
     icon: <FileExcelOutlined />,
-    meta: `${dataTypeOptions.find((item) => item.value === job.targetDataType)?.label || job.targetDataType} · 模板版本 ${job.templateVersionId}`,
+    meta: `模板版本 ${job.templateVersionId}`,
     detail: `${new Date(job.createdAt).toLocaleString('zh-CN')} · ${job.currentStage || '等待处理'}`,
     status,
     progress: job.progress,
@@ -47,7 +47,6 @@ function jobRecord(job: DataJob, navigate: (path: string) => void, onPreview: (j
 export function DataUploadPage() {
   const { message, modal } = App.useApp();
   const navigate = useNavigate();
-  const [target, setTarget] = useState<DataType>('MATERIAL');
   const [templates, setTemplates] = useState<DataTemplateOption[]>([]);
   const [templateVersionId, setTemplateVersionId] = useState<string>();
   const [categoryId, setCategoryId] = useState<string>();
@@ -63,10 +62,10 @@ export function DataUploadPage() {
   useEffect(() => {
     setTemplateVersionId(undefined);
     setCategoryId(undefined);
-    void dataApi.listTemplates(target)
+    void dataApi.listTemplates()
       .then((items) => setTemplates(items.filter((item) => item.format === 'XLSX')))
       .catch((error) => void message.error(error instanceof Error ? error.message : '模板加载失败'));
-  }, [message, target]);
+  }, [message]);
 
   useEffect(() => {
     void dataApi.listCategories().then(setCategories).catch(() => setCategories([]));
@@ -76,7 +75,6 @@ export function DataUploadPage() {
     setJobsLoading(true);
     try {
       const page = await dataApi.listJobs({
-        targetDataType: target,
         status: jobStatus === 'ALL' ? undefined : jobStatus,
         keyword: jobKeyword || undefined,
         page: jobs.page,
@@ -88,7 +86,7 @@ export function DataUploadPage() {
     } finally {
       setJobsLoading(false);
     }
-  }, [jobKeyword, jobStatus, jobs.page, jobs.size, message, target]);
+  }, [jobKeyword, jobStatus, jobs.page, jobs.size, message]);
 
   useEffect(() => { void loadJobs(); }, [loadJobs]);
 
@@ -107,7 +105,7 @@ export function DataUploadPage() {
     setLoading(true);
     try {
       const staged = await dataApi.stageSource(file);
-      const create = async (duplicateOverride: boolean) => dataApi.createJob({ sourceFileId: staged.fileId, templateVersionId: chosen.versionId, targetDataType: target, categoryId, duplicateOverride });
+      const create = async (duplicateOverride: boolean) => dataApi.createJob({ sourceFileId: staged.fileId, templateVersionId: chosen.versionId, categoryId, duplicateOverride });
       try {
         const job = await create(false);
         navigate(`/data/import-jobs/${job.id}`);
@@ -157,10 +155,7 @@ export function DataUploadPage() {
       description="选择已发布的数据中心模板，上传后按 Sheet、字段和质量问题逐步确认。"
       leftTitle="数据分类"
       classification={<Form layout="vertical" component={false}>
-        <Form.Item label="数据类型" required>
-          <Select value={target} options={dataTypeOptions} onChange={setTarget} />
-        </Form.Item>
-        <Form.Item label="导入模板" required help="显示已发布的 XLSX 模板，数据类型由上方选择。">
+        <Form.Item label="导入模板" required help="显示已发布的 XLSX 模板；模板自身定义字段和数据结构。">
           <Select
             showSearch
             optionFilterProp="label"
@@ -171,8 +166,8 @@ export function DataUploadPage() {
             notFoundContent="暂无已发布模板"
           />
         </Form.Item>
-        <Form.Item label="归档分类" help="未选择时自动归入当前数据类型的内置分类。">
-          <Select allowClear value={categoryId} onChange={setCategoryId} placeholder="选择数据分类" options={categories.filter((item) => !item.targetDataType || item.targetDataType === target).map((item) => ({ value: item.id, label: item.name }))} />
+        <Form.Item label="归档分类" help="只用于目录归档，不限制模板字段或数据结构。">
+          <Select allowClear value={categoryId} onChange={setCategoryId} placeholder="选择归档分类" options={categories.map((item) => ({ value: item.id, label: item.name }))} />
         </Form.Item>
       </Form>}
       accept=".xls,.xlsx,.csv"

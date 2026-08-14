@@ -10,17 +10,17 @@ import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 
 /** Optional local-Postgres migration test used when Docker/Testcontainers is unavailable. */
-class FlywayV27LocalIT {
+class FlywayV31LocalIT {
 
     @Test
-    void upgradesHistoricalV26RevisionWithoutLosingPublishedContent() throws Exception {
+    void upgradesHistoricalV30RevisionWithoutLosingPublishedContent() throws Exception {
         var url = System.getenv("JSD_AIRD_TEST_JDBC_URL");
         var username = System.getenv().getOrDefault("JSD_AIRD_TEST_DB_USER", "postgres");
         var password = System.getenv().getOrDefault("JSD_AIRD_TEST_DB_PASSWORD", "");
         Assumptions.assumeTrue(url != null && !url.isBlank(), "local migration database is not configured");
 
         Flyway.configure().dataSource(url, username, password).locations("classpath:db/migration")
-                .target(MigrationVersion.fromVersion("26")).load().migrate();
+                .target(MigrationVersion.fromVersion("30")).load().migrate();
         try (var connection = DriverManager.getConnection(url, username, password);
              var statement = connection.createStatement()) {
             statement.execute("""
@@ -29,7 +29,7 @@ class FlywayV27LocalIT {
                         size_bytes, sha256, status, created_by
                     ) VALUES (
                         '10000000-0000-0000-0000-000000000001',
-                        '00000000-0000-0000-0000-000000000001', 'test', 'v27/source',
+                        '00000000-0000-0000-0000-000000000001', 'test', 'v31/source',
                         '历史报告.txt', 'text/plain', 12,
                         'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
                         'ACTIVE', '00000000-0000-0000-0000-000000000002'

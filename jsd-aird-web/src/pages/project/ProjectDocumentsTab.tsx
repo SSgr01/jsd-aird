@@ -442,7 +442,7 @@ function NewDocumentModal({ open, projectLabel, projectId, onCancel, onCreate }:
                   body.append('file', f);
                   const response = await httpClient.post<
                     ApiResponse<{ fileId: string; sha256: string; status: 'STAGED' }>
-                  >('/api/v2/files/staged?kind=PROJECT_DOCUMENT', body);
+                  >('/api/v1/files/staged?kind=PROJECT_DOCUMENT', body);
                   const staged = response.data.data;
                   setFile(f);
                   setFileObjectId(staged.fileId);

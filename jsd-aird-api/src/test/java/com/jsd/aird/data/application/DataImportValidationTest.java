@@ -132,7 +132,7 @@ class DataImportValidationTest {
 
     private void givenJob() {
         when(repository.findJob(ORGANIZATION_ID, jobId)).thenReturn(Optional.of(new DataRepository.Job(
-                jobId, UUID.randomUUID(), "sha", "data.xlsx", "XLSX", templateVersionId, "MATERIAL",
+                 jobId, UUID.randomUUID(), "sha", "data.xlsx", "XLSX", templateVersionId, null,
                 "WAITING_MAPPING", 45, "WAITING_MAPPING", "parser", null, Instant.now(), Instant.now())));
     }
 

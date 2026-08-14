@@ -35,7 +35,6 @@ public class TemplateImportContractCompiler {
                 .put("layoutStructureVersion", layoutVersion)
                 .put("identityFallback", "IMPORT_SCOPED")
                 .put("compatibilityPolicy", "CONTROLLED");
-        // targetDataType deliberately does not belong to the template contract.
         contract.set("fields", contractFields(schema));
         var components = components(mappings, schema);
         attachSheetFingerprints(components, layoutSummary);

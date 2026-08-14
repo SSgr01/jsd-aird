@@ -65,33 +65,6 @@ public class DataWorkbookService {
                 fieldDefinitions, fields, definition);
     }
 
-    public WorkbookContext asset(UUID assetId, UUID requestedRevisionId) {
-        var actor = ActorContext.required();
-        var asset = repository.findAsset(actor.organizationId(), assetId)
-                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "数据资产不存在"));
-        var revisionId = requestedRevisionId == null ? asset.currentRevisionId() : requestedRevisionId;
-        if (revisionId == null) throw new ApiException(ApiErrorCode.NOT_FOUND, "数据资产没有可查看的修订");
-        var revision = repository.findRevision(actor.organizationId(), assetId, revisionId)
-                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "数据资产修订不存在"));
-        var job = repository.findJob(actor.organizationId(), revision.importJobId())
-                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "修订对应的导入任务不存在"));
-        var sheets = repository.listSheets(actor.organizationId(), revision.importJobId());
-        var anchors = repository.listSourceAnchors(actor.organizationId(), assetId).stream()
-                .filter(item -> revisionId.equals(item.revisionId())).toList();
-        var fileId = anchors.stream().map(DataRepository.SourceAnchor::fileId).findFirst().orElse(job.sourceFileId());
-        var file = requireFile(actor.organizationId(), fileId);
-        var snapshot = sourceSnapshot(file, job.sourceFormat(), sheets);
-        var definition = templates.getVersion(actor.organizationId(), revision.templateVersionId());
-        var bindings = templates.getBindings(actor.organizationId(), revision.templateVersionId());
-        var fields = assetFields(revision, anchors, definition, bindings);
-        var fieldDefinitions = fieldDefinitions(definition, bindings, fields);
-        applyCorrections(snapshot, fields);
-        return context(file, job.sourceSha256(), job.sourceFormat(), snapshot, sheets,
-                anchors.stream().map(DataRepository.SourceAnchor::sheetId)
-                        .filter(value -> value != null && !value.isBlank()).findFirst().orElse(null),
-                false, fieldDefinitions, fields, definition);
-    }
-
     private FileObjectRepository.FileObject requireFile(UUID organizationId, UUID fileId) {
         return files.find(organizationId, fileId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.FILE_NOT_READY, "原始数据文件不存在"));
@@ -229,11 +202,10 @@ public class DataWorkbookService {
                         row.sourceMetadata() == null ? "" : row.sourceMetadata().path("shape").asText(""));
                 var parentBindingId = firstText(value, "parentBindingId", source.path("parentBindingId").asText(""),
                         mapping == null ? "" : mapping.detail().path("parentBindingId").asText(""));
-                var componentId = firstNonBlank(componentByBinding.get(bindingId),
-                        componentByBinding.get(parentBindingId),
+                var componentId = firstNonBlank(mapping == null ? "" : mapping.detail().path("componentId").asText(""),
                         value != null && value.isObject() ? value.path("componentId").asText("") : "",
                         source.path("componentId").asText(""),
-                        mapping == null ? "" : mapping.detail().path("componentId").asText(""),
+                        componentByBinding.get(bindingId), componentByBinding.get(parentBindingId),
                         locator.path("componentId").asText(""), parentBindingId);
                 if (componentId.isBlank()) componentId = row.sheetId() + ":" + mappingKind;
                 var repeatAxis = firstText(value, "repeatAxis", source.path("repeatAxis").asText(""),
@@ -283,63 +255,6 @@ public class DataWorkbookService {
                 .findFirst().orElseGet(() -> mappings.stream()
                         .filter(item -> sheetId.equals(item.sheetId()) && fieldCode.equals(item.fieldCode()))
                         .findFirst().orElse(null));
-    }
-
-    private List<FieldValue> assetFields(DataRepository.RevisionDetail revision,
-                                         List<DataRepository.SourceAnchor> anchors,
-                                         TemplateDataImportFacade.DataTemplateDefinition definition,
-                                         List<TemplateDataImportFacade.ImportBinding> bindings) {
-        var names = new LinkedHashMap<String, String>();
-        definition.fields().forEach(item -> names.put(item.fieldCode(), item.displayName()));
-        var bindingsById = new LinkedHashMap<String, TemplateDataImportFacade.ImportBinding>();
-        bindings.forEach(item -> bindingsById.put(item.bindingId(), item));
-        var componentByBinding = componentByBinding(definition);
-        var result = new ArrayList<FieldValue>();
-        var normalized = revision.normalizedData();
-        var corrected = revision.correctedData();
-        var entries = normalized.fields();
-        while (entries.hasNext()) {
-            var entry = entries.next();
-            var value = entry.getValue();
-            var fieldCode = value.path("fieldCode").asText(entry.getKey());
-            var bindingId = value.path("bindingId").asText(fieldCode);
-            var valuePath = value.path("valuePath").asText(value.path("dataPath").asText("/" + fieldCode));
-            var anchor = anchors.stream().filter(item -> fieldCode.equals(item.fieldCode()))
-                    .filter(item -> item.bindingId() == null || bindingId.equals(item.bindingId()))
-                    .filter(item -> item.valuePath() == null || valuePath.equals(item.valuePath()))
-                    .findFirst().orElse(null);
-            var correctedWrapper = corrected.path(entry.getKey());
-            var correctedValue = correctedWrapper.has("correctedValue")
-                    ? correctedWrapper.path("correctedValue") : JsonNodeFactory.instance.nullNode();
-            var rawValue = value.has("rawValue") ? value.path("rawValue")
-                    : anchor == null ? JsonNodeFactory.instance.nullNode() : anchor.rawValue();
-            var normalizedValue = value.has("normalizedValue") ? value.path("normalizedValue") : rawValue;
-            var effective = correctedValue.isNull() ? normalizedValue : correctedValue;
-            var binding = bindingsById.get(bindingId);
-            var labelPath = userLabelPath(value.path("labelPath").asText(
-                    anchor == null || anchor.labelPath() == null ? binding == null ? "" : binding.labelPath()
-                            : anchor.labelPath()));
-            var parentBindingId = binding == null ? "" : binding.parentBindingId();
-            var componentId = firstNonBlank(componentByBinding.get(bindingId),
-                    componentByBinding.get(parentBindingId), parentBindingId,
-                    (anchor == null ? "asset" : firstNonBlank(anchor.sheetId(), "asset")) + ":SCALAR");
-            var fieldName = userFieldName(names.getOrDefault(fieldCode, fieldCode), null, fieldCode);
-            result.add(new FieldValue(revision.id().toString(), fieldCode, fieldName,
-                    labelPath,
-                    bindingId, valuePath, value.path("valueSource").asText(anchor == null ? "INPUT" : anchor.valueSource()),
-                    anchor == null || anchor.valueStatus() == null ? "VALID" : anchor.valueStatus(),
-                    value.path("valueType").asText("TEXT"), value.path("normalizedUnit").asText(""),
-                    false, false, value.path("trainingEligible").asBoolean(true), true,
-                    anchor == null ? null : anchor.sheetId(), anchor == null ? null : anchor.sheetName(),
-                    anchor == null ? null : anchor.rowNumber(), anchor == null ? null : anchor.address(),
-                    rawValue.deepCopy(), normalizedValue.deepCopy(), correctedValue.deepCopy(), effective.deepCopy(),
-                    false, false, null, componentId,
-                    binding == null ? "SCALAR" : binding.mappingKind(),
-                    binding == null ? "" : binding.repeatAxis(), parentBindingId,
-                    fieldGroup(labelPath, fieldName), revision.id().toString(),
-                    JsonNodeFactory.instance.nullNode(), revision.id().toString()));
-        }
-        return List.copyOf(result);
     }
 
     private void applyCorrections(JsonNode snapshot, List<FieldValue> fields) {
@@ -489,10 +404,10 @@ public class DataWorkbookService {
             var bindingId = firstNonBlank(binding.bindingId(), binding.fieldCode(), binding.dataPath());
             if (bindingId.isBlank() || result.containsKey(bindingId)) continue;
             var locator = binding.locator() == null ? JsonNodeFactory.instance.missingNode() : binding.locator();
-            var componentId = firstNonBlank(components.get(bindingId),
-                    components.get(binding.parentBindingId()), locator.path("componentId").asText(""),
-                    binding.parentBindingId());
             var value = values.stream().filter(item -> bindingId.equals(item.bindingId())).findFirst().orElse(null);
+            var componentId = firstNonBlank(value == null ? "" : value.componentId(), components.get(bindingId),
+                    components.get(binding.parentBindingId()), locator.path("componentId").asText(""),
+                     binding.parentBindingId());
             if (value == null) {
                 var sameCode = values.stream()
                         .filter(item -> binding.fieldCode() != null && binding.fieldCode().equals(item.fieldCode()))

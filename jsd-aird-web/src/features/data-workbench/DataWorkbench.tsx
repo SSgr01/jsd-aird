@@ -113,7 +113,7 @@ export function DataFieldCard({ field, active, onSelect, extra, children }: Fiel
         </span>
         <span className="data-field-card-status">
           <Tag color={field.excluded ? 'default' : field.valueStatus === 'VALID' ? 'success' : 'warning'}>
-            {field.excluded ? '已排除' : field.valueStatus === 'VALID' ? '校验通过' : '需要确认'}
+            {field.excluded ? '已排除' : fieldStatusLabel(field.valueStatus)}
           </Tag>
         </span>
       </button>
@@ -125,6 +125,15 @@ export function DataFieldCard({ field, active, onSelect, extra, children }: Fiel
             {effectiveChanged ? <div><dt>最终采用值</dt><dd>{effective || '空'}</dd></div> : null}
             <div><dt>单位</dt><dd>{field.unit || '无'}</dd></div>
           </dl>
+          {!field.excluded && field.valueStatus !== 'VALID' ? (
+            <Typography.Text type="warning">
+              {field.valueStatus === 'STAGED'
+                ? '请先在“字段映射”中确认字段对应关系。'
+                : field.editable
+                  ? '请直接修改左侧单元格，保存后系统会重新校验。'
+                  : '该字段不能直接修正，请检查原文件或排除整条记录。'}
+            </Typography.Text>
+          ) : null}
           {corrected ? <Typography.Text type="secondary">已人工修正：{corrected}</Typography.Text> : null}
           {children}
           {extra ? <div className="data-field-card-actions">{extra}</div> : null}
@@ -356,6 +365,16 @@ function dataBrowserDescription(region?: DataWorkbookRegion) {
   if (structureLabel(region.structureType, region.recordAxis) === '按列记录') return '每个数据列是一条记录';
   if (structureLabel(region.structureType, region.recordAxis) === '矩阵/交叉表') return '按行维度和列维度组合浏览';
   return '选择记录查看本次导入的实际值';
+}
+
+function fieldStatusLabel(status?: string) {
+  switch ((status || '').toUpperCase()) {
+    case 'VALID': return '校验通过';
+    case 'STAGED': return '待确认映射';
+    case 'WAITING_CONFIRM': return '待确认提交';
+    case 'BLOCKED': return '需修正';
+    default: return '待确认';
+  }
 }
 
 function isSingleFormRegion(region?: DataWorkbookRegion) {

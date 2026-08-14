@@ -20,4 +20,4 @@ export async function listAudits(id:string){return data(await httpClient.get<Api
 export async function listCategories(includeInactive=false){return data(await httpClient.get<ApiResponse<Category[]>>('/api/v1/experiment-categories',{params:{includeInactive}}));}
 export async function createCategory(input:{code:string;name:string;description:string}){return data(await httpClient.post<ApiResponse<Category>>('/api/v1/experiment-categories',input));}
 export interface StagedFile{fileId:string;originalName:string;contentType:string;size:number;sha256:string;status:'STAGED'}
-export async function stageExperimentFile(file:File){const body=new FormData();body.append('file',file);return data(await httpClient.post<ApiResponse<StagedFile>>('/api/v2/files/staged?kind=EXPERIMENT_SOURCE',body));}
+export async function stageExperimentFile(file:File){const body=new FormData();body.append('file',file);return data(await httpClient.post<ApiResponse<StagedFile>>('/api/v1/files/staged?kind=EXPERIMENT_SOURCE',body));}

@@ -14,7 +14,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/api/v2/template-versions")
+@RequestMapping("/api/v1/template-versions")
 public class InstanceTemplateWorkbookController {
 
     private final TemplateInstanceWorkbookService service;

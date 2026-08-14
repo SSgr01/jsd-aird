@@ -21,7 +21,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/api/v2/production-orders/{orderId}/ingest-jobs")
+@RequestMapping("/api/v1/production-orders/{orderId}/ingest-jobs")
 public class InstanceIngestController {
 
     private final InstanceIngestService service;

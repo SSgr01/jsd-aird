@@ -147,7 +147,7 @@ a:active,
   overflow: hidden;
 }
 
-/* Data import and asset review share one focused spreadsheet workbench. */
+/* Data import review uses one focused spreadsheet workbench. */
 .data-workbench {
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr) auto;

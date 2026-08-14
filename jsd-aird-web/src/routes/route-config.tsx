@@ -3,7 +3,7 @@ import { Navigate } from 'react-router-dom';
 
 import { BasicLayout } from '@/layouts';
 import { AssistantPage } from '@/pages/assistant';
-import { DataAssetPage, DataImportJobPage, DataUploadPage, DataViewPage } from '@/pages/data';
+import { DataImportJobPage, DataUploadPage, DataViewPage } from '@/pages/data';
 import { KnowledgeDocumentPage, KnowledgeLibraryPage, KnowledgeReviewPage, KnowledgeReviewQueuePage, KnowledgeSearchPage, KnowledgeViewPage } from '@/pages/knowledge';
 import { NotFoundPage } from '@/pages/not-found';
 import { ProductionOrderListPage, ProductionOrderUploadPage, ProductionWorkspacePage } from '@/pages/production-orders';
@@ -68,7 +68,6 @@ export const routeConfig: RouteObject[] = [
       { path: 'data/upload', element: <DataUploadPage /> },
       { path: 'data/import-jobs/:id', element: <DataImportJobPage /> },
       { path: 'data/view', element: <DataViewPage /> },
-      { path: 'data/assets/:id', element: <DataAssetPage /> },
       {
         path: '*',
         element: <NotFoundPage />,

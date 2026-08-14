@@ -33,7 +33,7 @@ import org.springframework.http.ResponseEntity;
 import java.nio.charset.StandardCharsets;
 
 @RestController
-@RequestMapping("/api/v2/production-orders")
+@RequestMapping("/api/v1/production-orders")
 public class ProductionOrderController {
 
     private final ProductionOrderService service;

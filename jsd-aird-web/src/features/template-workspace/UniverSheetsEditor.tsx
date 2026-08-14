@@ -306,7 +306,11 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
           if (previousSheet) {
             try {
               const previousValue = previousSheet.getRange(latestSelection.address).getValue();
-              if (!hasLatestSelectionValue || !sameValue(previousValue, latestSelectionValue)) {
+              // A selection can arrive before Univer exposes the value of the
+              // previous range. Without a baseline there is no evidence of an
+              // edit; treating it as one makes a plain cell click call the
+              // import correction API with an incomplete/stale field identity.
+              if (hasLatestSelectionValue && !sameValue(previousValue, latestSelectionValue)) {
                 emitUnboundCellChange(latestSelection, previousValue, latestSelectionValue);
                 emitCellChange(latestSelection, previousValue, latestSelectionValue);
               }

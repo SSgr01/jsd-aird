@@ -42,7 +42,7 @@ import org.springframework.http.MediaType;
 import jakarta.servlet.http.HttpServletResponse;
 
 @RestController
-@RequestMapping("/api/v2")
+@RequestMapping("/api/v1")
 public class TemplateController {
 
     private final TemplateWorkspaceService service;

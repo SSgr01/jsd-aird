@@ -10,16 +10,12 @@ public interface DataCategoryRepository {
 
     Optional<Category> find(UUID organizationId, UUID categoryId);
 
-    Optional<Category> findForTargetType(UUID organizationId, String targetDataType);
-
-    Category create(UUID organizationId, UUID actorId, String name, String targetDataType, String description);
+    Category create(UUID organizationId, UUID actorId, String name, String description);
 
     Category rename(UUID organizationId, UUID categoryId, String name, String description);
 
     void delete(UUID organizationId, UUID categoryId, UUID replacementCategoryId);
 
-    int assignAsset(UUID organizationId, UUID assetId, UUID categoryId);
-
-    record Category(UUID id, String name, String targetDataType, String description, int sortOrder, long assetCount) {
+    record Category(UUID id, String name, String description, int sortOrder, long sourceCount) {
     }
 }

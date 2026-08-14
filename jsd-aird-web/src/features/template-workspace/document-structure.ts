@@ -33,8 +33,10 @@ export function deriveDocumentStructureFromSnapshot(
   ordered.forEach((paragraph, index) => {
     // paragraphs[i].startIndex 指向该段段落结束符（\r）所在位置。
     // 因此段落文本区间为：0 段落 [0, startIndex]，后续段落 (prevStart+1, startIndex]。
-    const endIndex = paragraph.startIndex as number;
-    const startIndex = index === 0 ? 0 : (ordered[index - 1].startIndex as number) + 1;
+    const endIndex = typeof paragraph.startIndex === 'number' ? paragraph.startIndex : 0;
+    const previous = ordered[index - 1];
+    const previousStart = previous && typeof previous.startIndex === 'number' ? previous.startIndex : 0;
+    const startIndex = index === 0 ? 0 : previousStart + 1;
     const raw = dataStream.slice(startIndex, endIndex).replace(/\r+$/g, '');
     const text = raw.trim();
     if (!text) return;
@@ -45,7 +47,7 @@ export function deriveDocumentStructureFromSnapshot(
     if (!hasHeading) return;
 
     // Univer namedStyleType 当前实践中：4=标题1，5=标题2，依此类推。
-    const namedStyleType = typeof style.namedStyleType === 'number' ? (style.namedStyleType as number) : 0;
+    const namedStyleType = typeof style.namedStyleType === 'number' ? style.namedStyleType : 0;
     const level = namedStyleType >= 4 ? namedStyleType - 3 : 1;
 
     headingCount += 1;

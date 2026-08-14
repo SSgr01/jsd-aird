@@ -35,12 +35,12 @@ public class JdbcDataRepository implements DataRepository {
         jdbc.update("""
                 INSERT INTO data.import_job (
                     id, organization_id, source_file_id, source_sha256, source_file_name,
-                    source_format, template_version_id, target_data_type, category_id, status,
+                    source_format, template_version_id, category_id, status,
                     duplicate_override, created_by, import_contract_version, contract_hash,
                     source_file_hash, compatibility_status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'CREATED', ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'CREATED', ?, ?, ?, ?, ?, ?)
                 """, job.id(), job.organizationId(), job.sourceFileId(), job.sourceSha256(), job.sourceFileName(),
-                job.sourceFormat(), job.templateVersionId(), job.targetDataType(), job.categoryId(),
+                job.sourceFormat(), job.templateVersionId(), job.categoryId(),
                 job.duplicateOverride(), job.actorId(), job.importContractVersion(), job.contractHash(),
                 job.sourceSha256(), job.importContractVersion() == null ? "LEGACY" : "REVIEW_REQUIRED");
     }
@@ -61,7 +61,7 @@ public class JdbcDataRepository implements DataRepository {
     public Optional<Job> findJob(UUID organizationId, UUID importJobId) {
         return jdbc.query("""
                 SELECT id, source_file_id, source_sha256, source_file_name, source_format,
-                       template_version_id, target_data_type, status, progress, current_stage,
+                       template_version_id, status, progress, current_stage,
                        category_id,
                        parser_version, error_message, created_at, updated_at,
                        import_contract_version, contract_hash, compatibility_status
@@ -70,16 +70,12 @@ public class JdbcDataRepository implements DataRepository {
     }
 
     @Override
-    public PageResponse<Job> listJobs(UUID organizationId, String targetDataType, UUID templateVersionId,
+    public PageResponse<Job> listJobs(UUID organizationId, UUID templateVersionId,
                                       String status, String keyword, int page, int size) {
         var conditions = new ArrayList<String>();
         var parameters = new ArrayList<Object>();
         conditions.add("organization_id = ?");
         parameters.add(organizationId);
-        if (targetDataType != null && !targetDataType.isBlank()) {
-            conditions.add("target_data_type = ?");
-            parameters.add(targetDataType);
-        }
         if (templateVersionId != null) {
             conditions.add("template_version_id = ?");
             parameters.add(templateVersionId);
@@ -101,7 +97,7 @@ public class JdbcDataRepository implements DataRepository {
         rows.add(offset);
         var items = jdbc.query("""
                 SELECT id, source_file_id, source_sha256, source_file_name, source_format,
-                       template_version_id, target_data_type, status, progress, current_stage,
+                       template_version_id, status, progress, current_stage,
                        category_id,
                        parser_version, error_message, created_at, updated_at,
                        import_contract_version, contract_hash, compatibility_status
@@ -113,10 +109,69 @@ public class JdbcDataRepository implements DataRepository {
     }
 
     @Override
+    public PageResponse<SourceFile> listSourceFiles(UUID organizationId, UUID categoryId, String status,
+                                                     String keyword, int page, int size) {
+        var conditions = new ArrayList<String>();
+        var parameters = new ArrayList<Object>();
+        conditions.add("j.organization_id = ?");
+        parameters.add(organizationId);
+        if (categoryId != null) {
+            conditions.add("j.category_id = ?");
+            parameters.add(categoryId);
+        }
+        if (status != null && !status.isBlank()) {
+            conditions.add("j.status = ?");
+            parameters.add(status);
+        }
+        if (keyword != null && !keyword.isBlank()) {
+            conditions.add("lower(j.source_file_name) LIKE lower(?)");
+            parameters.add("%" + keyword.trim() + "%");
+        }
+        var where = String.join(" AND ", conditions);
+        var total = jdbc.queryForObject("SELECT count(*) FROM data.import_job j WHERE " + where,
+                Long.class, parameters.toArray());
+        var args = new ArrayList<>(parameters);
+        args.add(size);
+        args.add(Math.max(0, page - 1) * size);
+        var items = jdbc.query("""
+                SELECT j.id AS import_job_id, j.source_file_id, j.source_file_name, j.source_format,
+                       j.template_version_id, j.category_id, c.name AS category_name, j.status, j.progress,
+                       j.created_at, j.updated_at,
+                       (SELECT count(*) FROM data.import_sheet s WHERE s.import_job_id = j.id) AS sheet_count,
+                       greatest(
+                           (SELECT count(*) FROM data.data_record r WHERE r.import_job_id = j.id),
+                           (SELECT count(*) FROM data.staging_row sr WHERE sr.import_job_id = j.id AND coalesce(sr.excluded, false) = false)
+                       ) AS record_count,
+                       (SELECT count(*) FROM data.data_value v
+                          JOIN data.data_record r ON r.id = v.record_id
+                         WHERE r.import_job_id = j.id) AS field_count
+                FROM data.import_job j
+                LEFT JOIN data.data_category c ON c.id = j.category_id
+                 WHERE """ + " " + where + " ORDER BY j.updated_at DESC, j.created_at DESC LIMIT ? OFFSET ?",
+                (rs, n) -> new SourceFile(rs.getObject("import_job_id", UUID.class),
+                        rs.getObject("source_file_id", UUID.class), rs.getString("source_file_name"),
+                        rs.getString("source_format"), rs.getObject("template_version_id", UUID.class),
+                        rs.getObject("category_id", UUID.class), rs.getString("category_name"),
+                        rs.getString("status"), rs.getInt("progress"),
+                        rs.getTimestamp("created_at").toInstant(), rs.getTimestamp("updated_at").toInstant(),
+                        rs.getInt("sheet_count"), rs.getInt("record_count"), rs.getInt("field_count")),
+                args.toArray());
+        var totalValue = total == null ? 0L : total;
+        return new PageResponse<>(items, page, size, totalValue, (totalValue + size - 1) / size);
+    }
+
+    @Override
+    public int assignSourceCategory(UUID organizationId, UUID importJobId, UUID categoryId) {
+        return jdbc.update("UPDATE data.import_job SET category_id = ?, updated_at = now() "
+                        + "WHERE organization_id = ? AND id = ?",
+                categoryId, organizationId, importJobId);
+    }
+
+    @Override
     public Optional<Job> findJobForUpdate(UUID organizationId, UUID importJobId) {
         return jdbc.query("""
                 SELECT id, source_file_id, source_sha256, source_file_name, source_format,
-                       template_version_id, target_data_type, status, progress, current_stage,
+                       template_version_id, status, progress, current_stage,
                        category_id,
                        parser_version, error_message, created_at, updated_at,
                        import_contract_version, contract_hash, compatibility_status
@@ -128,7 +183,7 @@ public class JdbcDataRepository implements DataRepository {
     public Optional<Job> findCompletedDuplicate(UUID organizationId, String sha256, UUID templateVersionId) {
         return jdbc.query("""
                 SELECT id, source_file_id, source_sha256, source_file_name, source_format,
-                       template_version_id, target_data_type, status, progress, current_stage,
+                       template_version_id, status, progress, current_stage,
                        category_id,
                        parser_version, error_message, created_at, updated_at,
                        import_contract_version, contract_hash, compatibility_status
@@ -501,162 +556,48 @@ public class JdbcDataRepository implements DataRepository {
     @Transactional
     public CommitResult commit(UUID organizationId, UUID importJobId, UUID actorId, List<CommittedRow> rows) {
         var job = findJob(organizationId, importJobId).orElseThrow();
-        var committedAssets = new ArrayList<CommittedAsset>();
+        var committedRecords = new ArrayList<CommittedRecord>();
+        // A re-confirmation replaces the records of this import batch. Cascades
+        // remove the field values and source anchors belonging to those records.
+        jdbc.update("DELETE FROM data.data_record WHERE organization_id = ? AND import_job_id = ?",
+                organizationId, importJobId);
+        var recordIndex = 0;
         for (CommittedRow row : rows) {
-            var existing = jdbc.query("""
-                    SELECT id, current_revision_id FROM data.data_asset
-                    WHERE organization_id = ? AND target_data_type = ? AND asset_key = ? FOR UPDATE
-                    """, (rs, n) -> new ExistingAsset(rs.getObject("id", UUID.class), rs.getObject("current_revision_id", UUID.class)),
-                    organizationId, job.targetDataType(), row.assetKey()).stream().findFirst();
-            UUID assetId;
-            if (existing.isEmpty()) {
-                assetId = UUID.randomUUID();
-                jdbc.update("""
-                        INSERT INTO data.data_asset (id, organization_id, target_data_type, category_id, asset_key, display_name, created_by)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """, assetId, organizationId, job.targetDataType(), job.categoryId(), row.assetKey(), row.displayName(), actorId);
-            } else assetId = existing.get().id();
-            int revisionNo = jdbc.queryForObject("SELECT coalesce(max(revision_no), 0) + 1 FROM data.data_asset_revision WHERE asset_id = ?",
-                    Integer.class, assetId);
-            var revisionId = UUID.randomUUID();
+            var recordId = UUID.randomUUID();
             var dataHash = hash(row.normalized());
             jdbc.update("""
-                    INSERT INTO data.data_asset_revision (
-                        id, asset_id, revision_no, import_job_id, template_version_id,
-                        raw_data_jsonb, normalized_data_jsonb, corrected_data_jsonb, data_hash, created_by
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, revisionId, assetId, revisionNo, importJobId, job.templateVersionId(), pgJson(row.raw()),
-                    pgJson(row.normalized()), pgJson(row.corrected()), dataHash, actorId);
+                    INSERT INTO data.data_record (
+                        id, organization_id, import_job_id, record_key, record_index,
+                        sheet_id, sheet_name, source_row_number, raw_data_jsonb,
+                        normalized_data_jsonb, corrected_data_jsonb, effective_data_jsonb,
+                        quality_status, synthetic_key
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'VALID', ?)
+                    """, recordId, organizationId, importJobId, row.recordKey(), ++recordIndex,
+                    row.sheetId(), row.sheetName(), row.rowNumber(), pgJson(row.raw()),
+                    pgJson(row.normalized()), pgJson(row.corrected()), pgJson(row.normalized()),
+                    row.recordKey().startsWith("IMPORT:"));
             for (Anchor anchor : row.anchors()) {
                 jdbc.update("""
-                        INSERT INTO data.source_anchor (
-                            id, asset_revision_id, import_job_id, field_code, binding_id, value_path,
+                    INSERT INTO data.source_anchor (
+                            id, record_id, import_job_id, field_code, binding_id, value_path,
                             label_path, value_source, value_status, file_id, sheet_id, sheet_name,
                             row_number, column_number, column_name, cell_address, raw_value_jsonb
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, UUID.randomUUID(), revisionId, importJobId, anchor.fieldCode(), anchor.bindingId(),
+                        """, UUID.randomUUID(), recordId, importJobId, anchor.fieldCode(), anchor.bindingId(),
                         anchor.valuePath(), anchor.labelPath(), anchor.valueSource(), anchor.valueStatus(),
                         job.sourceFileId(), anchor.sheetId(), anchor.sheetName(), anchor.rowNumber(),
                         anchor.columnNumber(), anchor.columnName(), anchor.address(), pgJson(anchor.rawValue()));
             }
-            jdbc.update("UPDATE data.data_asset SET current_revision_id = ?, display_name = ?, updated_at = now() WHERE id = ?",
-                    revisionId, row.displayName(), assetId);
-            committedAssets.add(new CommittedAsset(assetId, revisionId, revisionNo, dataHash));
+            committedRecords.add(new CommittedRecord(recordId, row.recordKey(), dataHash));
         }
         updateJobStatus(organizationId, importJobId, "COMPLETED", 100, "COMPLETED", null);
-        return new CommitResult(List.copyOf(committedAssets), rows.size());
-    }
-
-    @Override
-    public List<Asset> listAssets(UUID organizationId, String targetDataType, String keyword) {
-        return listAssets(organizationId, targetDataType, null, null, keyword, 1, Integer.MAX_VALUE).items();
-    }
-
-    @Override
-    public PageResponse<Asset> listAssets(UUID organizationId, String targetDataType, UUID categoryId, String status,
-                                          String keyword, int page, int size) {
-        var conditions = new ArrayList<String>();
-        var parameters = new ArrayList<Object>();
-        conditions.add("a.organization_id = ?"); parameters.add(organizationId);
-        if (targetDataType != null && !targetDataType.isBlank()) { conditions.add("a.target_data_type = ?"); parameters.add(targetDataType); }
-        if (categoryId != null) { conditions.add("a.category_id = ?"); parameters.add(categoryId); }
-        if (status != null && !status.isBlank()) { conditions.add("a.status = ?"); parameters.add(status); }
-        if (keyword != null && !keyword.isBlank()) {
-            conditions.add("lower(coalesce(a.display_name, '') || a.asset_key) LIKE lower(?)");
-            parameters.add("%" + keyword.trim() + "%");
-        }
-        var where = String.join(" AND ", conditions);
-        var total = jdbc.queryForObject("SELECT count(*) FROM data.data_asset a WHERE " + where, Long.class, parameters.toArray());
-        var rows = new ArrayList<>(parameters); rows.add(size); rows.add(Math.max(0, page - 1) * size);
-        var items = jdbc.query("""
-                SELECT a.id, a.target_data_type, a.asset_key, a.display_name, a.current_revision_id, a.status,
-                       a.updated_at, a.category_id, c.name AS category_name
-                FROM data.data_asset a LEFT JOIN data.data_category c ON c.id = a.category_id
-                WHERE
-                """ + where + " ORDER BY a.updated_at DESC LIMIT ? OFFSET ?", (rs, n) -> new Asset(
-                rs.getObject("id", UUID.class), rs.getString("target_data_type"), rs.getString("asset_key"),
-                rs.getString("display_name"), rs.getObject("current_revision_id", UUID.class), rs.getString("status"),
-                rs.getTimestamp("updated_at").toInstant(), rs.getObject("category_id", UUID.class), rs.getString("category_name")), rows.toArray());
-        var totalValue = total == null ? 0L : total;
-        return new PageResponse<>(items, page, size, totalValue, (totalValue + size - 1) / size);
-    }
-
-    @Override
-    public Optional<AssetDetail> findAsset(UUID organizationId, UUID assetId) {
-        return jdbc.query("""
-                SELECT a.id, a.target_data_type, a.asset_key, a.display_name, a.current_revision_id, a.status,
-                       r.raw_data_jsonb, r.normalized_data_jsonb, r.corrected_data_jsonb, r.import_job_id,
-                       r.template_version_id, r.revision_no, j.source_sha256, a.updated_at,
-                       a.category_id, c.name AS category_name
-                FROM data.data_asset a LEFT JOIN data.data_asset_revision r ON r.id = a.current_revision_id
-                     LEFT JOIN data.import_job j ON j.id = r.import_job_id
-                     LEFT JOIN data.data_category c ON c.id = a.category_id
-                WHERE a.organization_id = ? AND a.id = ?
-                """, (rs, n) -> new AssetDetail(rs.getObject("id", UUID.class), rs.getString("target_data_type"),
-                        rs.getString("asset_key"), rs.getString("display_name"), rs.getObject("current_revision_id", UUID.class),
-                        rs.getString("status"), parse(rs.getString("raw_data_jsonb")), parse(rs.getString("normalized_data_jsonb")),
-                        parse(rs.getString("corrected_data_jsonb")), rs.getObject("import_job_id", UUID.class),
-                        rs.getObject("template_version_id", UUID.class), (Integer) rs.getObject("revision_no"),
-                        rs.getString("source_sha256"), rs.getTimestamp("updated_at").toInstant(),
-                        rs.getObject("category_id", UUID.class), rs.getString("category_name")),
-                organizationId, assetId).stream().findFirst();
-    }
-
-    @Override
-    public List<Revision> listRevisions(UUID organizationId, UUID assetId) {
-        return jdbc.query("""
-                SELECT r.id, r.revision_no, r.import_job_id, r.template_version_id, r.data_hash, r.created_at,
-                       j.source_file_id, j.source_file_name,
-                       coalesce((SELECT jsonb_agg(s.sheet_name ORDER BY s.sheet_order)
-                                 FROM data.import_sheet s WHERE s.import_job_id = r.import_job_id), '[]'::jsonb) AS sheet_names,
-                       coalesce((SELECT count(*) FROM data.staging_row sr WHERE sr.import_job_id = r.import_job_id), 0) AS record_count
-                FROM data.data_asset_revision r JOIN data.data_asset a ON a.id = r.asset_id
-                JOIN data.import_job j ON j.id = r.import_job_id
-                WHERE a.organization_id = ? AND a.id = ? ORDER BY r.revision_no DESC
-                """, (rs, n) -> new Revision(rs.getObject("id", UUID.class), rs.getInt("revision_no"),
-                        rs.getObject("import_job_id", UUID.class), rs.getObject("template_version_id", UUID.class),
-                        rs.getString("data_hash"), rs.getTimestamp("created_at").toInstant(),
-                        rs.getObject("source_file_id", UUID.class), rs.getString("source_file_name"),
-                        strings(parse(rs.getString("sheet_names"))), rs.getInt("record_count")), organizationId, assetId);
-    }
-
-    @Override
-    public Optional<RevisionDetail> findRevision(UUID organizationId, UUID assetId, UUID revisionId) {
-        return jdbc.query("""
-                SELECT r.id, r.revision_no, r.import_job_id, r.template_version_id,
-                       r.raw_data_jsonb, r.normalized_data_jsonb, r.corrected_data_jsonb,
-                       r.data_hash, r.created_at
-                FROM data.data_asset_revision r JOIN data.data_asset a ON a.id = r.asset_id
-                WHERE a.organization_id = ? AND a.id = ? AND r.id = ?
-                """, (rs, n) -> new RevisionDetail(rs.getObject("id", UUID.class), rs.getInt("revision_no"),
-                        rs.getObject("import_job_id", UUID.class), rs.getObject("template_version_id", UUID.class),
-                        parse(rs.getString("raw_data_jsonb")), parse(rs.getString("normalized_data_jsonb")),
-                        parse(rs.getString("corrected_data_jsonb")), rs.getString("data_hash"),
-                        rs.getTimestamp("created_at").toInstant()), organizationId, assetId, revisionId).stream().findFirst();
-    }
-
-    @Override
-    public List<SourceAnchor> listSourceAnchors(UUID organizationId, UUID assetId) {
-        return jdbc.query("""
-                SELECT s.id, s.asset_revision_id, s.field_code, s.binding_id, s.value_path, s.label_path,
-                       s.value_source, s.value_status, s.file_id, s.sheet_id, s.sheet_name,
-                       s.row_number, s.column_number, s.column_name, s.cell_address, s.raw_value_jsonb
-                FROM data.source_anchor s JOIN data.data_asset_revision r ON r.id = s.asset_revision_id
-                JOIN data.data_asset a ON a.id = r.asset_id
-                WHERE a.organization_id = ? AND a.id = ? ORDER BY r.revision_no DESC, s.row_number, s.column_number
-                """, (rs, n) -> new SourceAnchor(rs.getObject("id", UUID.class), rs.getObject("asset_revision_id", UUID.class),
-                        rs.getString("field_code"), rs.getString("binding_id"), rs.getString("value_path"),
-                        rs.getString("label_path"), rs.getString("value_source"), rs.getString("value_status"),
-                        rs.getObject("file_id", UUID.class), rs.getString("sheet_id"),
-                        rs.getString("sheet_name"), (Integer) rs.getObject("row_number"), (Integer) rs.getObject("column_number"),
-                        rs.getString("column_name"), rs.getString("cell_address"), parse(rs.getString("raw_value_jsonb"))),
-                organizationId, assetId);
+        return new CommitResult(List.copyOf(committedRecords), rows.size());
     }
 
     private Job mapJob(ResultSet rs, int rowNum) throws java.sql.SQLException {
         return new Job(rs.getObject("id", UUID.class), rs.getObject("source_file_id", UUID.class),
                 rs.getString("source_sha256"), rs.getString("source_file_name"), rs.getString("source_format"),
-                rs.getObject("template_version_id", UUID.class), rs.getString("target_data_type"),
+                rs.getObject("template_version_id", UUID.class),
                 rs.getObject("category_id", UUID.class), rs.getString("status"),
                 rs.getInt("progress"), rs.getString("current_stage"), rs.getString("parser_version"),
                 rs.getString("error_message"), rs.getTimestamp("created_at").toInstant(), rs.getTimestamp("updated_at").toInstant(),
@@ -667,14 +608,6 @@ public class JdbcDataRepository implements DataRepository {
     private List<Integer> ints(JsonNode node) {
         var result = new ArrayList<Integer>();
         if (node != null && node.isArray()) node.forEach(item -> result.add(item.asInt()));
-        return List.copyOf(result);
-    }
-
-    private List<String> strings(JsonNode node) {
-        var result = new ArrayList<String>();
-        if (node != null && node.isArray()) node.forEach(item -> {
-            if (!item.asText("").isBlank()) result.add(item.asText());
-        });
         return List.copyOf(result);
     }
 
@@ -700,5 +633,4 @@ public class JdbcDataRepository implements DataRepository {
         } catch (Exception exception) { throw new IllegalStateException("Unable to hash JSON", exception); }
     }
 
-    private record ExistingAsset(UUID id, UUID currentRevisionId) {}
 }

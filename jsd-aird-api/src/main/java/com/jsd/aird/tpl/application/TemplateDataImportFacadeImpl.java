@@ -49,7 +49,7 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade {
     }
 
     @Override
-    public List<DataTemplateOption> listPublished(UUID organizationId, String targetDataType) {
+    public List<DataTemplateOption> listPublished(UUID organizationId) {
         return repository.findPublishedDataTemplates(organizationId).stream()
                 .map(item -> new DataTemplateOption(
                         item.templateId(), item.versionId(), item.templateCode(), item.name(),

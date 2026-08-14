@@ -7,8 +7,8 @@ export interface AssistantCitation {
   chunkId: string;
   documentId?: string;
   versionId?: string;
-  dataAssetId?: string;
-  revisionId?: string;
+  fileObjectId?: string;
+  importJobId?: string;
   rowNumber?: number;
   title: string;
   originalName: string;

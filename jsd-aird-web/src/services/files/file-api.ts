@@ -6,12 +6,12 @@ export interface StagedFile { fileId: string; originalName: string; contentType:
 export async function stageFile(file: File, kind: 'KNOWLEDGE' | 'SNAPSHOT' | 'IMPORT' = 'KNOWLEDGE') {
   const body = new FormData();
   body.append('file', file);
-  const response = await httpClient.post<ApiResponse<StagedFile>>('/api/v2/files/staged', body, { params: { kind } });
+  const response = await httpClient.post<ApiResponse<StagedFile>>('/api/v1/files/staged', body, { params: { kind } });
   return response.data.data;
 }
 
 export async function fetchFileBlob(fileId: string) {
-  const response = await httpClient.get<Blob>(`/api/v2/files/${fileId}/content`, {
+  const response = await httpClient.get<Blob>(`/api/v1/files/${fileId}/content`, {
     responseType: 'blob',
   });
   return response.data;

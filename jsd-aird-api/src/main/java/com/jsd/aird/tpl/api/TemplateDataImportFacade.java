@@ -8,7 +8,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 /** Public template contract used by the data-center module. */
 public interface TemplateDataImportFacade {
 
-    List<DataTemplateOption> listPublished(UUID organizationId, String targetDataType);
+    List<DataTemplateOption> listPublished(UUID organizationId);
 
     DataTemplateDefinition getPublished(UUID organizationId, UUID templateVersionId);
 
@@ -34,7 +34,7 @@ public interface TemplateDataImportFacade {
     FieldRequest requestField(UUID organizationId, UUID templateVersionId, FieldRequestCommand command);
 
     /**
-     * Renders one normalized data asset with a published DATA_CENTER template.
+     * Renders one normalized import record with a published DATA_CENTER template.
      * The implementation owns snapshot loading and workbook generation; callers
      * only see this stable cross-module contract.
      */

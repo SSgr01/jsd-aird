@@ -15,8 +15,8 @@ import org.springframework.stereotype.Service;
 @Service
 public class KnowledgeScopeService implements KnowledgeScopeFacade {
 
-    private static final Set<String> TYPES = Set.of("PROJECT", "PRODUCT", "KNOWLEDGE_BASE", "DATA_ASSET");
-    private static final Set<String> RESOURCE_TYPES = Set.of("KNOWLEDGE_DOCUMENT", "KNOWLEDGE_VERSION", "DATA_ASSET", "DATA_ASSET_REVISION");
+    private static final Set<String> TYPES = Set.of("PROJECT", "PRODUCT", "KNOWLEDGE_BASE");
+    private static final Set<String> RESOURCE_TYPES = Set.of("KNOWLEDGE_DOCUMENT", "KNOWLEDGE_VERSION");
 
     private final KnowledgeScopeRepository repository;
     private final ObjectMapper objectMapper;

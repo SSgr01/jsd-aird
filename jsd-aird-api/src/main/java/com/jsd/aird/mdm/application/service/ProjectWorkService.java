@@ -1,5 +1,4 @@
 package com.jsd.aird.mdm.application.service;
-import com.jsd.aird.mdm.application.audit.ProjectAudited;
 import com.jsd.aird.mdm.application.query.ProjectTaskQuery;
 import com.jsd.aird.mdm.domain.model.*;
 import com.jsd.aird.mdm.infrastructure.model.ProjectTaskSummaryRow;
@@ -16,7 +15,6 @@ public class ProjectWorkService {
  public ProjectWorkService(ProjectWorkMapper mapper){this.mapper=mapper;}
  public List<ProjectTask> tasks(UUID stageId){return mapper.tasks(stageId);}
  @Transactional
- @ProjectAudited(projectId="#result.projectId()",objectType="'PROJECT_TASK'",objectId="#result.id()",objectName="#result.name()",action="'CREATE'",detail="'新增项目任务：' + #result.name()")
  public ProjectTask createTask(UUID projectId,TaskInput input){
   if(!mapper.stageBelongs(input.stageId(),projectId)) throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"所选阶段不属于当前项目");
   String name=required(input.name(),"任务名称不能为空"); Instant now=Instant.now();
@@ -52,14 +50,12 @@ public class ProjectWorkService {
  }
 
  @Transactional
- @ProjectAudited(projectId="#result.projectId()",objectType="'PROJECT_EXPERIMENT'",objectId="#result.id()",objectName="#result.title()",action="'CREATE'",detail="'新增实验：' + #result.title()")
  public ProjectExperiment createExperiment(UUID taskId,ExperimentInput input){
   ProjectTask task=mapper.task(taskId).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"任务不存在")); Instant now=Instant.now();
   var experiment=new ProjectExperiment(UUID.randomUUID(),code("EXP"),task.projectId(),task.stageId(),taskId,required(input.title(),"实验标题不能为空"),clean(input.category()),required(input.owner(),"实验人不能为空"),input.experimentDate()==null?LocalDate.now():input.experimentDate(),"DRAFT",input.templateName(),input.templateVersion(),input.workbookContent(),0,now,now);
   mapper.insertExperiment(experiment); return experiment;
  }
  @Transactional
- @ProjectAudited(projectId="#result.projectId()",objectType="'PROJECT_EXPERIMENT'",objectId="#result.id()",objectName="#result.title()",action="'UPDATE'",detail="'更新实验：' + #result.title()")
  public ProjectExperiment updateExperiment(UUID id,ExperimentInput input,long version){
   ProjectExperiment existing=mapper.experiment(id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"实验不存在"));
   int rows=mapper.updateExperiment(id,required(input.title(),"实验标题不能为空"),clean(input.category()),required(input.owner(),"实验人不能为空"),input.experimentDate(),version);

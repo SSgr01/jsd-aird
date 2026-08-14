@@ -1,6 +1,5 @@
 package com.jsd.aird.mdm.application.service;
 
-import com.jsd.aird.mdm.application.audit.ProjectAudited;
 import com.jsd.aird.mdm.application.command.ProjectStageCommands;
 import com.jsd.aird.mdm.application.port.ProjectRepository;
 import com.jsd.aird.mdm.application.port.ProjectStageRepository;
@@ -48,7 +47,6 @@ public class ProjectStageService {
     }
 
     @Transactional
-    @ProjectAudited(projectId="#result.projectId()", objectType="'PROJECT_STAGE'", objectId="#result.id()", objectName="#result.name()", action="'CREATE'", detail="'新增阶段：' + #result.name()")
     public ProjectStage create(UUID projectId, ProjectStageCommands.Create command) {
         var project = requireProject(projectId);
         if (project.status() == ProjectStatus.COMPLETED) {
@@ -78,7 +76,6 @@ public class ProjectStageService {
     }
 
     @Transactional
-    @ProjectAudited(projectId="#result.projectId()", objectType="'PROJECT_STAGE'", objectId="#result.id()", objectName="#result.name()", action="#command.transitionReason() != null ? 'REOPEN' : 'UPDATE'", detail="'更新阶段：' + #result.name()")
     public ProjectStage update(UUID id, ProjectStageCommands.Update command) {
         ProjectStage current = get(id);
         String name = validateName(command.name());
@@ -111,7 +108,6 @@ public class ProjectStageService {
     }
 
     @Transactional
-    @ProjectAudited(projectId="#result.projectId()", objectType="'PROJECT_STAGE'", objectId="#result.id()", objectName="#result.name()", action="'DELETE'", detail="'删除阶段：' + #result.name()")
     public ProjectStage delete(UUID id, long version) {
         ProjectStage stage = get(id);
         if (stage.taskCount() > 0 || stage.openTaskCount() > 0) {
@@ -124,7 +120,6 @@ public class ProjectStageService {
     }
 
     @Transactional
-    @ProjectAudited(projectId="#projectId", objectType="'PROJECT'", objectId="#projectId", objectName="'项目阶段'", action="'REORDER'", detail="'调整阶段顺序'")
     public List<ProjectStage> reorder(UUID projectId, ProjectStageCommands.Reorder command) {
         List<ProjectStage> current = stages.findByProject(projectId);
         if (command.items().size() != current.size()) {

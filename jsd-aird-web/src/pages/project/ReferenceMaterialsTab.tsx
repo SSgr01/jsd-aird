@@ -12,7 +12,7 @@ import {
   removeReferenceMaterial,
   type ReferenceMaterial,
   type ReferenceMaterialQuery,
-} from '@/services/reference/reference-api';
+} from '@/services/project/reference-api';
 
 import './reference-materials-tab.css';
 

@@ -15,7 +15,7 @@ import {
   unlinkProjectMaterial,
   type Material,
   type ProjectMaterial,
-} from '@/services/material/material-api';
+} from '@/services/project/material-api';
 
 import './project-materials-tab.css';
 

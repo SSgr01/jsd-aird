@@ -11,7 +11,7 @@ import {
   updateMeeting,
   type MeetingMinutes,
   type MeetingMinutesInput,
-} from '@/services/meeting/meeting-api';
+} from '@/services/project/meeting-api';
 
 import './meeting-minutes-tab.css';
 

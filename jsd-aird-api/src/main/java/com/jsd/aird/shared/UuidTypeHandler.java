@@ -1,4 +1,4 @@
-package com.jsd.aird.mdm.infrastructure.persistence;
+package com.jsd.aird.shared;
 
 import java.sql.CallableStatement;
 import java.sql.PreparedStatement;

@@ -61,6 +61,7 @@ springdoc:
   paths-to-match: /api/**
 
 mybatis-plus:
+  type-handlers-package: com.jsd.aird.shared
   configuration:
     map-underscore-to-camel-case: true
     default-enum-type-handler: org.apache.ibatis.type.EnumTypeHandler

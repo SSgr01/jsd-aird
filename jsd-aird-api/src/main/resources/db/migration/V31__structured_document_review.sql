@@ -182,6 +182,7 @@ LEFT JOIN kb.document_parse_run source_run
            ELSE NULL
        END
 WHERE r.result_jsonb->>'revision' = 'true'
+   OR p.id IS NOT NULL
    OR NOT EXISTS (
        SELECT 1 FROM kb.document_parse_run historical_revision
        WHERE historical_revision.result_jsonb->>'revision' = 'true'
@@ -226,16 +227,11 @@ FROM kb.document_review_revision r
 WHERE r.document_id = p.document_id
   AND r.document_version_id = p.document_version_id
   AND r.status = 'PUBLISHED'
-  AND (r.base_publication_id = p.id OR r.parse_run_id = p.parse_run_id);
+  AND r.base_publication_id = p.id;
 ALTER TABLE kb.publication
     ALTER COLUMN review_revision_id SET NOT NULL,
     ADD CONSTRAINT fk_kb_publication_review_revision
         FOREIGN KEY (review_revision_id) REFERENCES kb.document_review_revision(id);
-
-UPDATE kb.publication p
-SET parse_run_id = r.parse_run_id
-FROM kb.document_review_revision r
-WHERE r.id = p.review_revision_id AND p.parse_run_id IS DISTINCT FROM r.parse_run_id;
 
 UPDATE ops.async_job j
 SET payload_jsonb = (j.payload_jsonb - 'parseRunId')
@@ -250,15 +246,43 @@ ALTER TABLE kb.document_chunk
     ADD COLUMN review_node_ids_jsonb jsonb NOT NULL DEFAULT '[]'::jsonb,
     ADD COLUMN source_node_keys_jsonb jsonb NOT NULL DEFAULT '[]'::jsonb,
     ADD COLUMN source_anchor_jsonb jsonb;
+
+-- Keep the original parse-run identity while resolving the publication.  A
+-- revision run also points back to its source run, so both the source and the
+-- revision publication can satisfy the fallback predicate.  Prefer the exact
+-- parse-run match to prevent a revision chunk from being attached to the
+-- source publication nondeterministically.
+WITH chunk_revision_match AS (
+    SELECT DISTINCT ON (c.id)
+           c.id AS chunk_id,
+           p.review_revision_id
+    FROM kb.document_chunk c
+    JOIN kb.publication p
+      ON p.document_id = c.document_id
+     AND p.document_version_id = c.document_version_id
+     AND (
+          p.parse_run_id = c.parse_run_id
+          OR EXISTS (
+              SELECT 1
+              FROM kb.document_parse_run fake
+              WHERE fake.id = c.parse_run_id
+                AND fake.result_jsonb->>'revision' = 'true'
+                AND fake.result_jsonb->>'sourceParseRunId' = p.parse_run_id::text
+          )
+     )
+    ORDER BY c.id,
+             CASE WHEN p.parse_run_id = c.parse_run_id THEN 0 ELSE 1 END,
+             p.id
+)
 UPDATE kb.document_chunk c
-SET review_revision_id = p.review_revision_id
-FROM kb.publication p
-WHERE p.document_id = c.document_id AND p.document_version_id = c.document_version_id
-  AND (p.parse_run_id = c.parse_run_id OR EXISTS (
-      SELECT 1 FROM kb.document_parse_run fake
-      WHERE fake.id = c.parse_run_id AND fake.result_jsonb->>'revision' = 'true'
-        AND fake.result_jsonb->>'sourceParseRunId' = p.parse_run_id::text
-  ));
+SET review_revision_id = m.review_revision_id
+FROM chunk_revision_match m
+WHERE c.id = m.chunk_id;
+
+-- The legacy index cannot remain while historical revision chunks are
+-- normalized to their source parse run.  Drop it before the update; the new
+-- review-revision-scoped index below becomes the invariant for review chunks.
+DROP INDEX IF EXISTS kb.uq_kb_chunk_parse_run_no;
 UPDATE kb.document_chunk c
 SET parse_run_id = r.parse_run_id
 FROM kb.document_review_revision r
@@ -266,10 +290,14 @@ WHERE r.id = c.review_revision_id AND c.parse_run_id IS DISTINCT FROM r.parse_ru
 ALTER TABLE kb.document_chunk
     ADD CONSTRAINT fk_kb_chunk_review_revision
         FOREIGN KEY (review_revision_id) REFERENCES kb.document_review_revision(id) ON DELETE CASCADE;
-DROP INDEX IF EXISTS kb.uq_kb_chunk_parse_run_no;
 CREATE UNIQUE INDEX uq_kb_chunk_review_revision_no
     ON kb.document_chunk(review_revision_id, chunk_no)
     WHERE review_revision_id IS NOT NULL;
+
+UPDATE kb.publication p
+SET parse_run_id = r.parse_run_id
+FROM kb.document_review_revision r
+WHERE r.id = p.review_revision_id AND p.parse_run_id IS DISTINCT FROM r.parse_run_id;
 
 ALTER TABLE kb.document_processing_step ADD COLUMN review_revision_id uuid;
 UPDATE kb.document_processing_step s
@@ -281,8 +309,13 @@ WHERE (s.parse_run_id = r.parse_run_id OR EXISTS (
         AND fake.result_jsonb->>'sourceParseRunId' = r.parse_run_id::text
         AND fake.created_at = r.created_at
   ))
-  AND s.step_key IN ('CHUNK', 'BM25_INDEX', 'VECTOR_INDEX')
-  AND r.status IN ('BUILDING', 'PUBLISHED', 'FAILED');
+   AND s.step_key IN ('CHUNK', 'BM25_INDEX', 'VECTOR_INDEX')
+   AND r.status IN ('BUILDING', 'PUBLISHED', 'FAILED');
+
+-- Legacy NULL-parse-run rows were unique per document version. Review steps
+-- are now scoped by review_revision_id, so remove that invariant before
+-- normalizing the rows to NULL.
+DROP INDEX IF EXISTS kb.uq_kb_processing_step_legacy_version;
 UPDATE kb.document_processing_step
 SET parse_run_id = NULL
 WHERE review_revision_id IS NOT NULL
@@ -343,9 +376,66 @@ CREATE TABLE kb.document_review_table_row_state (
     PRIMARY KEY (review_revision_id, source_table_id, row_no)
 );
 
--- Historical V26 revisions were represented as fake parse executions. Their
--- confirmed documents now reference nodes from the true source run, so they can
--- be removed without losing publications or review history.
+-- Historical V26 revisions were represented as fake parse executions. Repoint
+-- issue, source-node and parse-block references before removing those runs.
+-- The review rows and publication/chunk rows already use the true source run.
+UPDATE kb.document_parse_issue issue
+SET parse_run_id = source_run.id
+FROM kb.document_parse_run fake_run
+JOIN kb.document_parse_run source_run
+  ON source_run.id = CASE
+      WHEN fake_run.result_jsonb->>'sourceParseRunId' ~* '^[0-9a-f-]{36}$'
+      THEN (fake_run.result_jsonb->>'sourceParseRunId')::uuid
+      ELSE NULL
+  END
+WHERE fake_run.result_jsonb->>'revision' = 'true'
+  AND issue.parse_run_id = fake_run.id;
+
+UPDATE kb.document_parse_issue issue
+SET parse_block_id = source_block.id
+FROM kb.document_parse_run fake_run
+JOIN kb.document_parse_run source_run
+  ON source_run.id = CASE
+      WHEN fake_run.result_jsonb->>'sourceParseRunId' ~* '^[0-9a-f-]{36}$'
+      THEN (fake_run.result_jsonb->>'sourceParseRunId')::uuid
+      ELSE NULL
+  END
+JOIN kb.document_parse_block fake_block
+  ON fake_block.parse_run_id = fake_run.id
+JOIN kb.document_parse_block source_block
+  ON source_block.parse_run_id = source_run.id
+ AND source_block.block_no = fake_block.block_no
+WHERE fake_run.result_jsonb->>'revision' = 'true'
+  AND issue.parse_block_id = fake_block.id;
+
+INSERT INTO kb.document_parse_issue_source_node(parse_issue_id, source_node_key)
+SELECT link.parse_issue_id, source_node.source_node_key
+FROM kb.document_parse_issue_source_node link
+JOIN kb.document_source_node fake_node
+  ON fake_node.source_node_key = link.source_node_key
+JOIN kb.document_parse_run fake_run
+  ON fake_run.id = fake_node.parse_run_id
+JOIN kb.document_source_node source_node
+  ON source_node.parse_run_id = CASE
+      WHEN fake_run.result_jsonb->>'sourceParseRunId' ~* '^[0-9a-f-]{36}$'
+      THEN (fake_run.result_jsonb->>'sourceParseRunId')::uuid
+      ELSE NULL
+  END
+ AND source_node.node_no = fake_node.node_no
+WHERE fake_run.result_jsonb->>'revision' = 'true'
+ON CONFLICT DO NOTHING;
+
+DELETE FROM kb.document_parse_issue_source_node link
+USING kb.document_source_node fake_node
+JOIN kb.document_parse_run fake_run ON fake_run.id = fake_node.parse_run_id
+WHERE link.source_node_key = fake_node.source_node_key
+  AND fake_run.result_jsonb->>'revision' = 'true';
+
+DELETE FROM kb.document_source_node node
+USING kb.document_parse_run fake_run
+WHERE node.parse_run_id = fake_run.id
+  AND fake_run.result_jsonb->>'revision' = 'true';
+
 DELETE FROM kb.document_parse_run
 WHERE result_jsonb->>'revision' = 'true';
 

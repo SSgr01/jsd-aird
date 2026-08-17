@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -68,7 +69,10 @@ public class StructuredDocumentCodec {
                 listGroup = null;
                 sourceList = null;
                 reviewList = null;
-                var group = String.valueOf(block.pageNo()) + "|" + String.valueOf(block.sheetName()) + "|" + block.section();
+                var explicitGroup = block.attributes().get("tableGroup");
+                var group = explicitGroup == null
+                        ? String.valueOf(block.pageNo()) + "|" + String.valueOf(block.sheetName()) + "|" + block.section()
+                        : explicitGroup.toString();
                 if (!group.equals(tableGroup)) {
                     tableGroup = group;
                     sourceTable = objectMapper.createObjectNode().put("type", "table");
@@ -80,8 +84,8 @@ public class StructuredDocumentCodec {
                     reviewTable.set("content", objectMapper.createArrayNode());
                     reviewContent.add(reviewTable);
                 }
-                ((ArrayNode) sourceTable.path("content")).add(tableRow(sourceKey, null, text, false));
-                ((ArrayNode) reviewTable.path("content")).add(tableRow(sourceKey, reviewNodeId, text, true));
+                ((ArrayNode) sourceTable.path("content")).add(tableRow(sourceKey, null, text, block.attributes(), false));
+                ((ArrayNode) reviewTable.path("content")).add(tableRow(sourceKey, reviewNodeId, text, block.attributes(), true));
             } else if ("listItem".equals(type)) {
                 tableGroup = null;
                 sourceTable = null;
@@ -247,7 +251,8 @@ public class StructuredDocumentCodec {
         return node;
     }
 
-    private ObjectNode tableRow(UUID sourceKey, UUID reviewNodeId, String text, boolean review) {
+    private ObjectNode tableRow(UUID sourceKey, UUID reviewNodeId, String text,
+                                Map<String, Object> attributes, boolean review) {
         var row = objectMapper.createObjectNode().put("type", "tableRow");
         var attrs = objectMapper.createObjectNode();
         if (review) {
@@ -258,15 +263,36 @@ public class StructuredDocumentCodec {
         }
         row.set("attrs", attrs);
         var cells = objectMapper.createArrayNode();
-        for (var value : text.split("\\s*\\|\\s*", -1)) {
-            var cell = objectMapper.createObjectNode().put("type", "tableCell");
-            var paragraph = objectMapper.createObjectNode().put("type", "paragraph");
-            paragraph.set("content", textContent(value));
-            cell.set("content", objectMapper.createArrayNode().add(paragraph));
-            cells.add(cell);
+        var structured = attributes == null ? null : attributes.get("cells");
+        if (structured instanceof List<?> values && !values.isEmpty()) {
+            for (var value : values) {
+                if (!(value instanceof Map<?, ?> cellValue)) continue;
+                var content = cellValue.get("text") == null ? "" : cellValue.get("text").toString();
+                var header = Boolean.TRUE.equals(cellValue.get("header"));
+                cells.add(tableCell(content, header, positiveInt(cellValue.get("rowSpan")),
+                        positiveInt(cellValue.get("columnSpan"))));
+            }
+        }
+        if (cells.isEmpty()) {
+            for (var value : text.split("\\s*\\|\\s*", -1)) cells.add(tableCell(value, false, 1, 1));
         }
         row.set("content", cells);
         return row;
+    }
+
+    private ObjectNode tableCell(String text, boolean header, int rowSpan, int columnSpan) {
+        var cell = objectMapper.createObjectNode().put("type", header ? "tableHeader" : "tableCell");
+        cell.putObject("attrs").put("colspan", columnSpan).put("rowspan", rowSpan).putNull("colwidth");
+        var paragraph = objectMapper.createObjectNode().put("type", "paragraph");
+        paragraph.set("content", textContent(text));
+        cell.set("content", objectMapper.createArrayNode().add(paragraph));
+        return cell;
+    }
+
+    private int positiveInt(Object value) {
+        if (value instanceof Number number) return Math.max(1, number.intValue());
+        try { return Math.max(1, Integer.parseInt(String.valueOf(value))); }
+        catch (RuntimeException ignored) { return 1; }
     }
 
     private ObjectNode listItem(UUID sourceKey, UUID reviewNodeId, String text, boolean review) {

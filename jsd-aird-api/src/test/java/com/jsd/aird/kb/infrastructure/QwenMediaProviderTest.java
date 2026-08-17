@@ -7,6 +7,9 @@ import java.io.ByteArrayInputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -71,6 +74,76 @@ class QwenMediaProviderTest {
             assertThat(parsed.blocks()).extracting(block -> block.content())
                     .containsExactly("检测报告", "批号 LOT-1");
             assertThat(parsed.blocks()).allSatisfy(block -> assertThat(block.bbox()).isEmpty());
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void fallsBackToOfficialTableParsingForRealMaterialSpreadsheetScreenshot() throws Exception {
+        var requests = new CopyOnWriteArrayList<String>();
+        var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/chat/completions", exchange -> {
+            var request = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            requests.add(request);
+            var task = objectMapper.readTree(request).at("/ocr_options/task").asText();
+            var text = "table_parsing".equals(task) ? materialSpreadsheetHtml() : """
+                    A
+                    B
+                    C
+                    D
+                    1
+                    2
+                    3
+                    4
+                    5
+                    6
+                    7
+                    8
+                    9
+                    10
+                    材料基础信息
+                    物料名称
+                    TEST-TPL-丙烯酸树脂
+                    牌号
+                    A-2026
+                    供应商
+                    杰事达供应商
+                    密度
+                    1.05
+                    检验日期
+                    2026-08-11
+                    备注
+                    适用温度
+                    25 ℃
+                    状态
+                    合格
+                    """;
+            var response = objectMapper.createObjectNode();
+            response.putArray("choices").addObject().putObject("message").putArray("content")
+                    .addObject().put("type", "text").put("text", text);
+            sendJson(exchange, response);
+        });
+        server.start();
+        try {
+            var provider = new QwenOcrProvider(true,
+                    "http://127.0.0.1:" + server.getAddress().getPort(), "test-key", "qwen3.5-ocr",
+                    "/chat/completions", Duration.ofSeconds(3), 1024 * 1024,
+                    new QwenDocumentParsingConverter());
+            var parsed = provider.extract(new ByteArrayInputStream(new byte[] {1, 2, 3}), "材料基础信息.png",
+                    new MediaExtractionProvider.ExtractionContext(null, "image/png", 1, null));
+
+            assertThat(requests).hasSize(2);
+            assertThat(requests.get(0)).contains("document_parsing");
+            assertThat(requests.get(1)).contains("table_parsing");
+            assertThat(parsed.blocks()).hasSize(10);
+            assertThat(parsed.blocks()).extracting(block -> block.content())
+                    .startsWith("材料基础信息", "物料名称 | TEST-TPL-丙烯酸树脂")
+                    .doesNotContain("A", "B", "C", "D", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10");
+            assertThat(parsed.blocks()).allSatisfy(block ->
+                    assertThat(block.attributes()).containsEntry("spreadsheetAxesRemoved", true));
+            assertThat(cells(parsed.blocks().getFirst()).getFirst())
+                    .containsEntry("text", "材料基础信息").containsEntry("columnSpan", 4);
         } finally {
             server.stop(0);
         }
@@ -210,6 +283,31 @@ class QwenMediaProviderTest {
                 "http://127.0.0.1:" + server.getAddress().getPort() + "/api/v1", "test-key",
                 "qwen3-asr-flash-filetrans", "/services/audio/asr/transcription", "/tasks",
                 "zh", true, true, timeout, Duration.ofMillis(1), "http://minio-public");
+    }
+
+    private String materialSpreadsheetHtml() {
+        return """
+                ```html
+                <table>
+                  <tr><td></td><td>A</td><td>B</td><td>C</td><td>D</td></tr>
+                  <tr><td>1</td><th colspan="4">材料基础信息</th></tr>
+                  <tr><td>2</td><th>物料名称</th><td colspan="3">TEST-TPL-丙烯酸树脂</td></tr>
+                  <tr><td>3</td><th>牌号</th><td colspan="3">A-2026</td></tr>
+                  <tr><td>4</td><th>供应商</th><td colspan="3">杰事达供应商</td></tr>
+                  <tr><td>5</td><th>密度</th><td colspan="3">1.05</td></tr>
+                  <tr><td>6</td><th>检验日期</th><td colspan="3">2026-08-11</td></tr>
+                  <tr><td>7</td><td colspan="4"></td></tr>
+                  <tr><td>8</td><th colspan="4">备注</th></tr>
+                  <tr><td>9</td><th>适用温度</th><td colspan="3">25 ℃</td></tr>
+                  <tr><td>10</td><th>状态</th><td colspan="3">合格</td></tr>
+                </table>
+                ```
+                """;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> cells(com.jsd.aird.kb.domain.DocumentParser.TextBlock block) {
+        return (List<Map<String, Object>>) block.attributes().get("cells");
     }
 
     private void sendJson(com.sun.net.httpserver.HttpExchange exchange, JsonNode body) throws java.io.IOException {

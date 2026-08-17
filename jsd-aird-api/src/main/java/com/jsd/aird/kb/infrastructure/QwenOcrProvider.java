@@ -6,9 +6,11 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import javax.imageio.ImageIO;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -157,20 +159,60 @@ public class QwenOcrProvider implements MediaExtractionProvider {
 
     private List<DocumentParser.TextBlock> recognize(byte[] bytes, String contentType, Integer pageNo) {
         if (bytes.length > maxBytes) throw new IllegalStateException("OCR图片超过限制：" + maxBytes + " bytes");
+        var documentText = recognizeTask(bytes, contentType, "document_parsing");
+        var document = converter.convertDetailed(documentText, pageNo);
+        if (!document.reliableTable() && document.tableCandidate()) {
+            var tableText = recognizeTask(bytes, contentType, "table_parsing");
+            var table = converter.convertTableHtml(tableText, pageNo);
+            if (table.reliableTable()) return mergeTableFallback(document.blocks(), table.blocks());
+        }
+        if (!document.blocks().isEmpty()) return document.blocks();
+        return List.of(new DocumentParser.TextBlock(pageNo, "paragraph", documentText.strip()));
+    }
+
+    private String recognizeTask(byte[] bytes, String contentType, String task) {
         var dataUrl = "data:" + contentType + ";base64," + Base64.getEncoder().encodeToString(bytes);
         var request = new LinkedHashMap<String, Object>();
         request.put("model", model);
         request.put("stream", false);
-        request.put("ocr_options", Map.of("task", "document_parsing"));
+        request.put("ocr_options", Map.of("task", task));
         request.put("messages", List.of(Map.of("role", "user", "content", List.of(
                 Map.of("type", "image_url", "image_url", Map.of("url", dataUrl))))));
         var response = callWithRetry(request);
         var text = content(response == null ? null : response.at("/choices/0/message/content"));
         if (!StringUtils.hasText(text)) text = content(response == null ? null : response.at("/output/choices/0/message/content"));
         if (!StringUtils.hasText(text)) throw new IllegalStateException("OCR返回内容为空");
-        var blocks = new ArrayList<>(converter.convert(text, pageNo));
-        if (blocks.isEmpty()) blocks.add(new DocumentParser.TextBlock(pageNo, "paragraph", text.strip()));
-        return blocks;
+        return text;
+    }
+
+    private List<DocumentParser.TextBlock> mergeTableFallback(List<DocumentParser.TextBlock> documentBlocks,
+                                                               List<DocumentParser.TextBlock> tableBlocks) {
+        var tableText = normalizeForOverlap(tableBlocks.stream().map(DocumentParser.TextBlock::content)
+                .reduce((left, right) -> left + right).orElse(""));
+        var spreadsheetAxesRemoved = tableBlocks.stream()
+                .anyMatch(block -> Boolean.TRUE.equals(block.attributes().get("spreadsheetAxesRemoved")));
+        var result = new ArrayList<DocumentParser.TextBlock>(tableBlocks);
+        documentBlocks.stream().filter(block -> !coveredByTable(block.content(), tableText, spreadsheetAxesRemoved))
+                .forEach(result::add);
+        return List.copyOf(result);
+    }
+
+    private boolean coveredByTable(String source, String tableText, boolean spreadsheetAxesRemoved) {
+        var value = normalizeForOverlap(source);
+        if (value.isBlank()) return true;
+        if (tableText.contains(value) || value.contains(tableText)) return true;
+        if (spreadsheetAxesRemoved && (value.matches("[a-z]{1,3}") || value.matches("\\d{1,7}"))) return true;
+        if (value.codePointCount(0, value.length()) < 8) return false;
+        var sourceCharacters = value.codePoints().collect(LinkedHashSet<Integer>::new, Set::add, Set::addAll);
+        var tableCharacters = tableText.codePoints().collect(LinkedHashSet<Integer>::new, Set::add, Set::addAll);
+        if (sourceCharacters.isEmpty()) return true;
+        var covered = sourceCharacters.stream().filter(tableCharacters::contains).count();
+        return covered / (double) sourceCharacters.size() >= 0.85;
+    }
+
+    private String normalizeForOverlap(String value) {
+        return value == null ? "" : value.toLowerCase(Locale.ROOT)
+                .replaceAll("[^\\p{IsHan}\\p{L}\\p{N}]", "");
     }
 
     private JsonNode callWithRetry(Object request) {

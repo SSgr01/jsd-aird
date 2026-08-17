@@ -32,3 +32,4 @@ Thumbs.db
 /.pnpm-store/
 /.codex-import-inputs/
 /artifacts/
+/.runtime/

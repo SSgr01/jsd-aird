@@ -1,7 +1,6 @@
 import { Extension, mergeAttributes, Node } from '@tiptap/core';
 import Link from '@tiptap/extension-link';
 import { Table, TableCell, TableHeader, TableRow } from '@tiptap/extension-table';
-import Underline from '@tiptap/extension-underline';
 import StarterKit from '@tiptap/starter-kit';
 
 function attribute(attributes: unknown, name: string): unknown {
@@ -65,7 +64,6 @@ const SourceImage = Node.create({
 
 export const knowledgeDocumentExtensions = [
   StarterKit.configure({ link: false }),
-  Underline,
   Link.configure({ openOnClick: false, autolink: true }),
   Table.configure({ resizable: false }), TableRow, TableHeader, TableCell,
   ReviewAttributes, Formula, AudioSegment, DataTableRef, SourceImage,

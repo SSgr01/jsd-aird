@@ -43,19 +43,28 @@ function Quote-Literal([string]$Value) { "'" + $Value.Replace("'", "''") + "'" }
 
 try {
     $env:PGPASSWORD = $adminPassword
-    $serverNumber = (& $psql -X -tAc "SHOW server_version_num" -h $HostName -p $Port -U $AdminUser -d postgres).Trim()
-    if ($LASTEXITCODE -ne 0) { throw "无法连接 PostgreSQL 服务。请确认服务已启动、管理员账号正确且允许本机连接。" }
+    $serverOutput = & $psql -X -tAc "SHOW server_version_num" -h $HostName -p $Port -U $AdminUser -d postgres
+    $serverExitCode = $LASTEXITCODE
+    if ($serverExitCode -ne 0) { throw "无法连接 PostgreSQL 服务。请确认服务已启动、管理员账号正确且允许本机连接。" }
+    $serverNumber = if ($null -eq $serverOutput) { "" } else { "$serverOutput".Trim() }
+    if (-not $serverNumber) { throw "PostgreSQL 服务未返回版本号。" }
     $major = [math]::Floor([int64]$serverNumber / 10000)
     if ($major -lt 16 -or $major -gt 18) { throw "需要 PostgreSQL 16、17 或 18；当前服务器版本号：$serverNumber。" }
     if ($major -ne 18) { Write-Warning "当前使用 PostgreSQL $major；可用于本机开发，CI/Compose 基线为 PostgreSQL 18。" }
 
-    $roleExists = (& $psql -X -tAc "SELECT 1 FROM pg_roles WHERE rolname = $(Quote-Literal $AppUser)" -h $HostName -p $Port -U $AdminUser -d postgres).Trim()
+    $roleOutput = & $psql -X -tAc "SELECT 1 FROM pg_roles WHERE rolname = $(Quote-Literal $AppUser)" -h $HostName -p $Port -U $AdminUser -d postgres
+    $roleExitCode = $LASTEXITCODE
+    if ($roleExitCode -ne 0) { throw "无法查询业务角色 $AppUser。请检查管理员权限。" }
+    $roleExists = if ($null -eq $roleOutput) { "" } else { "$roleOutput".Trim() }
     if (-not $roleExists) {
         & $psql -X -v ON_ERROR_STOP=1 -h $HostName -p $Port -U $AdminUser -d postgres -c "CREATE ROLE $(Quote-Identifier $AppUser) LOGIN PASSWORD $(Quote-Literal $AppPassword);"
         if ($LASTEXITCODE -ne 0) { throw "无法创建业务角色 $AppUser。请检查管理员权限。" }
     }
 
-    $databaseExists = (& $psql -X -tAc "SELECT 1 FROM pg_database WHERE datname = $(Quote-Literal $Database)" -h $HostName -p $Port -U $AdminUser -d postgres).Trim()
+    $databaseOutput = & $psql -X -tAc "SELECT 1 FROM pg_database WHERE datname = $(Quote-Literal $Database)" -h $HostName -p $Port -U $AdminUser -d postgres
+    $databaseExitCode = $LASTEXITCODE
+    if ($databaseExitCode -ne 0) { throw "无法查询业务数据库 $Database。请检查管理员权限。" }
+    $databaseExists = if ($null -eq $databaseOutput) { "" } else { "$databaseOutput".Trim() }
     if (-not $databaseExists) {
         & $psql -X -v ON_ERROR_STOP=1 -h $HostName -p $Port -U $AdminUser -d postgres -c "CREATE DATABASE $(Quote-Identifier $Database) OWNER $(Quote-Identifier $AppUser);"
         if ($LASTEXITCODE -ne 0) { throw "无法创建业务数据库 $Database。请检查管理员权限。" }
@@ -67,8 +76,10 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "无法创建 vector 扩展。请安装与 PostgreSQL $major 匹配的 pgvector 扩展。" }
 
     $env:PGPASSWORD = $AppPassword
-    $vectorVersion = (& $psql -X -v ON_ERROR_STOP=1 -tAc "SELECT extversion FROM pg_extension WHERE extname = 'vector'" -h $HostName -p $Port -U $AppUser -d $Database).Trim()
-    if ($LASTEXITCODE -ne 0 -or -not $vectorVersion) { throw "业务账号无法连接已初始化的数据库，或 pgvector 未启用。" }
+    $vectorOutput = & $psql -X -v ON_ERROR_STOP=1 -tAc "SELECT extversion FROM pg_extension WHERE extname = 'vector'" -h $HostName -p $Port -U $AppUser -d $Database
+    $vectorExitCode = $LASTEXITCODE
+    $vectorVersion = if ($null -eq $vectorOutput) { "" } else { "$vectorOutput".Trim() }
+    if ($vectorExitCode -ne 0 -or -not $vectorVersion) { throw "业务账号无法连接已初始化的数据库，或 pgvector 未启用。" }
     Write-Host "本机数据库初始化完成：$HostName`:$Port/$Database（pgvector $vectorVersion）。"
 }
 finally {

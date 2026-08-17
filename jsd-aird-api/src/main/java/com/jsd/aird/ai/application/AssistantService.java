@@ -324,7 +324,12 @@ public class AssistantService {
     }
 
     private void send(SseEmitter emitter, String event, Object data) {
-        try { emitter.send(SseEmitter.event().name(event).data(data)); }
+        try {
+            // Always put a JSON value on the wire.  In particular, a String
+            // warning must be quoted so clients can parse every SSE payload
+            // consistently with token, stage and done events.
+            emitter.send(SseEmitter.event().name(event).data(objectMapper.writeValueAsString(data)));
+        }
         catch (Exception exception) { emitter.completeWithError(exception); }
     }
 

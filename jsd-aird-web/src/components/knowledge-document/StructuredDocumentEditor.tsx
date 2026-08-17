@@ -18,7 +18,9 @@ export interface StructuredDocumentEditorProps {
 const reviewable = new Set(['paragraph', 'heading', 'blockquote', 'codeBlock', 'listItem', 'tableRow', 'formula', 'audioSegment', 'dataTableRef']);
 
 export function StructuredDocumentEditor({ value, onChange, onSelectionChange, selectedSourceNodeKey, disabled }: StructuredDocumentEditorProps) {
-  const settingContent = useRef(false);
+  // Tiptap may emit an update while it is mounting the initial document. Keep
+  // that lifecycle event out of the review autosave pipeline.
+  const settingContent = useRef(true);
   const editor = useEditor({
     extensions: knowledgeDocumentExtensions,
     content: value,
@@ -49,8 +51,11 @@ export function StructuredDocumentEditor({ value, onChange, onSelectionChange, s
   useEffect(() => {
     if (!editor) return;
     const current = JSON.stringify(editor.getJSON()); const next = JSON.stringify(value);
-    if (current === next) return;
-    settingContent.current = true; editor.commands.setContent(value, { emitUpdate: false }); settingContent.current = false;
+    if (current !== next) {
+      settingContent.current = true;
+      editor.commands.setContent(value, { emitUpdate: false });
+    }
+    settingContent.current = false;
   }, [editor, value]);
   useEffect(() => {
     if (!editor || !selectedSourceNodeKey) return;
@@ -70,17 +75,17 @@ export function StructuredDocumentEditor({ value, onChange, onSelectionChange, s
     <div className="knowledge-editor-toolbar" role="toolbar" aria-label="文本格式">
       <Space size={2} split={<Divider type="vertical" />}>
         <Space size={2}>
-          <Tooltip title="标题"><Button size="small" type={editor.isActive('heading') ? 'primary' : 'text'} onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}>H2</Button></Tooltip>
-          <Tooltip title="正文"><Button size="small" type={editor.isActive('paragraph') ? 'primary' : 'text'} onClick={() => editor.chain().focus().setParagraph().run()}>正文</Button></Tooltip>
+          <Tooltip title="标题"><Button disabled={disabled} size="small" type={editor.isActive('heading') ? 'primary' : 'text'} onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}>H2</Button></Tooltip>
+          <Tooltip title="正文"><Button disabled={disabled} size="small" type={editor.isActive('paragraph') ? 'primary' : 'text'} onClick={() => editor.chain().focus().setParagraph().run()}>正文</Button></Tooltip>
         </Space>
         <Space size={2}>
-          <Button aria-label="加粗" size="small" type={editor.isActive('bold') ? 'primary' : 'text'} icon={<BoldOutlined />} onClick={() => editor.chain().focus().toggleBold().run()} />
-          <Button aria-label="斜体" size="small" type={editor.isActive('italic') ? 'primary' : 'text'} icon={<ItalicOutlined />} onClick={() => editor.chain().focus().toggleItalic().run()} />
-          <Button aria-label="删除线" size="small" type={editor.isActive('strike') ? 'primary' : 'text'} icon={<StrikethroughOutlined />} onClick={() => editor.chain().focus().toggleStrike().run()} />
+          <Button disabled={disabled} aria-label="加粗" size="small" type={editor.isActive('bold') ? 'primary' : 'text'} icon={<BoldOutlined />} onClick={() => editor.chain().focus().toggleBold().run()} />
+          <Button disabled={disabled} aria-label="斜体" size="small" type={editor.isActive('italic') ? 'primary' : 'text'} icon={<ItalicOutlined />} onClick={() => editor.chain().focus().toggleItalic().run()} />
+          <Button disabled={disabled} aria-label="删除线" size="small" type={editor.isActive('strike') ? 'primary' : 'text'} icon={<StrikethroughOutlined />} onClick={() => editor.chain().focus().toggleStrike().run()} />
         </Space>
         <Space size={2}>
-          <Button aria-label="无序列表" size="small" type={editor.isActive('bulletList') ? 'primary' : 'text'} icon={<UnorderedListOutlined />} onClick={() => editor.chain().focus().toggleBulletList().run()} />
-          <Button aria-label="有序列表" size="small" type={editor.isActive('orderedList') ? 'primary' : 'text'} icon={<OrderedListOutlined />} onClick={() => editor.chain().focus().toggleOrderedList().run()} />
+          <Button disabled={disabled} aria-label="无序列表" size="small" type={editor.isActive('bulletList') ? 'primary' : 'text'} icon={<UnorderedListOutlined />} onClick={() => editor.chain().focus().toggleBulletList().run()} />
+          <Button disabled={disabled} aria-label="有序列表" size="small" type={editor.isActive('orderedList') ? 'primary' : 'text'} icon={<OrderedListOutlined />} onClick={() => editor.chain().focus().toggleOrderedList().run()} />
         </Space>
       </Space>
     </div>

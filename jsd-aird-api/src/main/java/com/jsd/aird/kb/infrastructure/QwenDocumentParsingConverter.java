@@ -45,15 +45,26 @@ public class QwenDocumentParsingConverter {
                 appendText(result, segment.text(), pageNo);
             }
         }
-        return new ConversionResult(List.copyOf(result), reliableTable,
-                !reliableTable && tableParser.looksLikeTable(safe));
+        return new ConversionResult(List.copyOf(result), reliableTable);
     }
 
     public ConversionResult convertTableHtml(String html, Integer pageNo) {
         var result = new ArrayList<DocumentParser.TextBlock>();
         var tableNo = 0;
         for (var table : tableParser.parseHtml(html)) appendTable(result, table, pageNo, tableNo++);
-        return new ConversionResult(List.copyOf(result), !result.isEmpty(), true);
+        return new ConversionResult(List.copyOf(result), !result.isEmpty());
+    }
+
+    boolean isSpreadsheetColumnSequence(String source) {
+        return tableParser.isSpreadsheetColumnSequence(source);
+    }
+
+    boolean isSpreadsheetRowSequence(String source) {
+        return tableParser.isSpreadsheetRowSequence(source);
+    }
+
+    String removeSpreadsheetAxisRuns(String source) {
+        return tableParser.removeSpreadsheetAxisRuns(source);
     }
 
     private void appendText(List<DocumentParser.TextBlock> result, String source, Integer pageNo) {
@@ -185,8 +196,7 @@ public class QwenDocumentParsingConverter {
                 null, null, null, attributes);
     }
 
-    public record ConversionResult(List<DocumentParser.TextBlock> blocks, boolean reliableTable,
-                                   boolean tableCandidate) {
+    public record ConversionResult(List<DocumentParser.TextBlock> blocks, boolean reliableTable) {
         public ConversionResult {
             blocks = blocks == null ? List.of() : List.copyOf(blocks);
         }

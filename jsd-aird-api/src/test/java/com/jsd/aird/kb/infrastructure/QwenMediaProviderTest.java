@@ -26,10 +26,10 @@ class QwenMediaProviderTest {
 
     @Test
     void sendsImageAsDataUrlAndParsesMultipartTextContent() throws Exception {
-        var requestBody = new AtomicReference<String>();
+        var requests = new CopyOnWriteArrayList<String>();
         var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/chat/completions", exchange -> {
-            requestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            requests.add(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
             var response = objectMapper.createObjectNode();
             response.putArray("choices").addObject().putObject("message").putArray("content")
                     .addObject().put("type", "text").put("ocr_result", "设备编号 A-102\n\n压力 1.25 MPa");
@@ -46,8 +46,8 @@ class QwenMediaProviderTest {
 
             assertThat(parsed.blocks()).extracting(block -> block.content())
                     .containsExactly("设备编号 A-102", "压力 1.25 MPa");
-            assertThat(requestBody.get()).contains("qwen3.5-ocr", "data:image/png;base64,AQID");
-            assertThat(requestBody.get()).contains("document_parsing");
+            assertThat(requests.getFirst()).contains("qwen3.5-ocr", "data:image/png;base64,AQID");
+            assertThat(requests.getFirst()).contains("document_parsing");
         } finally {
             server.stop(0);
         }
@@ -74,6 +74,88 @@ class QwenMediaProviderTest {
             assertThat(parsed.blocks()).extracting(block -> block.content())
                     .containsExactly("检测报告", "批号 LOT-1");
             assertThat(parsed.blocks()).allSatisfy(block -> assertThat(block.bbox()).isEmpty());
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void extractsTextFromNativeDashScopeLayoutObjectsInsteadOfPreviewMarkdown() throws Exception {
+        var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/services/aigc/multimodal-generation/generation", exchange -> {
+            var response = objectMapper.createObjectNode();
+            var content = response.putObject("output").putArray("choices").addObject()
+                    .putObject("message").putArray("content").addObject();
+            content.putObject("ocr_result").putArray("layouts").addObject()
+                    .put("markdownContent", "![preview](https://example.com/page.png)")
+                    .put("text", "物料名称\n\nTEST-TPL-丙烯酸树脂");
+            sendJson(exchange, response);
+        });
+        server.start();
+        try {
+            var provider = new QwenOcrProvider(true,
+                    "http://127.0.0.1:" + server.getAddress().getPort(), "test-key", "qwen3.5-ocr",
+                    "/services/aigc/multimodal-generation/generation", Duration.ofSeconds(3), 1024 * 1024,
+                    new QwenDocumentParsingConverter());
+            var parsed = provider.extract(new ByteArrayInputStream(new byte[] {1}), "layout.png",
+                    new MediaExtractionProvider.ExtractionContext(null, "image/png", 1, null));
+
+            assertThat(parsed.blocks()).extracting(block -> block.content())
+                    .containsExactly("物料名称", "TEST-TPL-丙烯酸树脂");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void sendsNativeDashScopeOcrOptionsUnderParameters() throws Exception {
+        var requests = new CopyOnWriteArrayList<String>();
+        var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/services/aigc/multimodal-generation/generation", exchange -> {
+            requests.add(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            var response = objectMapper.createObjectNode();
+            response.putObject("output").putArray("choices").addObject().putObject("message").putArray("content")
+                    .addObject().put("text", "\\section{原生协议}\n\n批号 LOT-NATIVE");
+            sendJson(exchange, response);
+        });
+        server.start();
+        try {
+            var provider = new QwenOcrProvider(true,
+                    "http://127.0.0.1:" + server.getAddress().getPort(), "test-key", "qwen3.5-ocr",
+                    "/services/aigc/multimodal-generation/generation", Duration.ofSeconds(3), 1024 * 1024,
+                    new QwenDocumentParsingConverter());
+            var parsed = provider.extract(new ByteArrayInputStream(new byte[] {1, 2, 3}), "native.png",
+                    new MediaExtractionProvider.ExtractionContext(null, "image/png", 3, null));
+
+            assertThat(parsed.blocks()).extracting(block -> block.content())
+                    .containsExactly("原生协议", "批号 LOT-NATIVE");
+            assertThat(requests.getFirst()).contains("\"parameters\"", "\"ocr_options\"", "document_parsing", "\"image\"");
+            assertThat(requests.getFirst()).doesNotContain("\"type\":\"image_url\"");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void rejectsImageOnlyMarkdownReturnedAsOcrContent() throws Exception {
+        var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/services/aigc/multimodal-generation/generation", exchange -> {
+            var response = objectMapper.createObjectNode();
+            response.putArray("choices").addObject().putObject("message").putArray("content")
+                    .addObject().put("text", "![preview](https://example.com/preview.png?token=abc123)");
+            sendJson(exchange, response);
+        });
+        server.start();
+        try {
+            var provider = new QwenOcrProvider(true,
+                    "http://127.0.0.1:" + server.getAddress().getPort(), "test-key", "qwen3.5-ocr",
+                    "/services/aigc/multimodal-generation/generation", Duration.ofSeconds(3), 1024 * 1024,
+                    new QwenDocumentParsingConverter());
+
+            assertThatThrownBy(() -> provider.extract(new ByteArrayInputStream(new byte[] {1}), "preview.png",
+                    new MediaExtractionProvider.ExtractionContext(null, "image/png", 1, null)))
+                    .isInstanceOf(MediaExtractionException.class)
+                    .hasMessageContaining("图片链接而非识别内容");
         } finally {
             server.stop(0);
         }
@@ -152,6 +234,7 @@ class QwenMediaProviderTest {
     @Test
     void submitsAndPollsFiletransThenDownloadsTranscriptionResult() throws Exception {
         var postBody = new AtomicReference<String>();
+        var transcriptQuery = new AtomicReference<String>();
         var polls = new AtomicInteger();
         var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/api/v1/services/audio/asr/transcription", exchange -> {
@@ -168,11 +251,13 @@ class QwenMediaProviderTest {
             } else {
                 output.put("task_status", "SUCCEEDED").putArray("results").addObject()
                         .put("subtask_status", "SUCCEEDED")
-                        .put("transcription_url", "http://127.0.0.1:" + server.getAddress().getPort() + "/transcript.json");
+                        .put("transcription_url", "http://127.0.0.1:" + server.getAddress().getPort()
+                                + "/transcript.json?response-content-disposition=attachment%3Bfilename%3Dresult.json&token=a%2Fb");
             }
             sendJson(exchange, response);
         });
         server.createContext("/transcript.json", exchange -> {
+            transcriptQuery.set(exchange.getRequestURI().getRawQuery());
             var response = objectMapper.createObjectNode();
             var sentence = response.putArray("transcripts").addObject().put("channel_id", 0)
                     .putArray("sentences").addObject().put("text", "这是一个 ASR 测试。")
@@ -187,24 +272,84 @@ class QwenMediaProviderTest {
             var provider = new QwenAsrProvider(true,
                     "http://127.0.0.1:" + server.getAddress().getPort() + "/api/v1", "test-key",
                     "qwen3-asr-flash-filetrans", "/services/audio/asr/transcription", "/tasks",
-                    "zh", true, true, Duration.ofSeconds(3), Duration.ofMillis(1), "http://minio-public");
+                    "zh", true, true, Duration.ofSeconds(3), Duration.ofMillis(1));
             var parsed = provider.extract(new ByteArrayInputStream(new byte[] {9}), "sample.wav",
                     new MediaExtractionProvider.ExtractionContext(null, "audio/wav", 1,
                             "http://minio-public/presigned.wav"));
 
             assertThat(parsed.providerTaskId()).isEqualTo("task-1");
-            assertThat(parsed.blocks()).hasSize(3);
+            assertThat(parsed.blocks()).hasSize(1);
             assertThat(parsed.blocks().getFirst().content()).isEqualTo("这是一个 ASR 测试。");
             assertThat(parsed.blocks().getFirst().startTimeMs()).isEqualTo(120);
             assertThat(parsed.blocks().getFirst().endTimeMs()).isEqualTo(1680);
-            assertThat(parsed.blocks().get(2).content()).isEqualTo("一个测试。");
-            assertThat(parsed.blocks().get(2).startTimeMs()).isEqualTo(520);
             JsonNode sent = objectMapper.readTree(postBody.get());
             assertThat(sent.path("model").asText()).isEqualTo("qwen3-asr-flash-filetrans");
             assertThat(sent.path("input").path("file_url").asText()).contains("presigned.wav");
             assertThat(sent.path("parameters").path("language").asText()).isEqualTo("zh");
             assertThat(sent.path("parameters").path("channel_id").get(0).asInt()).isZero();
             assertThat(polls).hasValue(2);
+            assertThat(transcriptQuery.get()).contains("%3Bfilename%3Dresult.json", "token=a%2Fb")
+                    .doesNotContain("%253B", "%252F");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void uploadsLocalAudioToDashScopeTemporaryStorageBeforeFiletrans() throws Exception {
+        var uploadBody = new AtomicReference<String>();
+        var submitBody = new AtomicReference<String>();
+        var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/api/v1/uploads", exchange -> {
+            var response = objectMapper.createObjectNode();
+            response.putObject("data")
+                    .put("upload_host", "http://127.0.0.1:" + server.getAddress().getPort() + "/upload")
+                    .put("upload_dir", "temporary")
+                    .put("oss_access_key_id", "oss-key")
+                    .put("policy", "policy")
+                    .put("signature", "signature")
+                    .put("x_oss_object_acl", "private")
+                    .put("x_oss_forbid_overwrite", "true");
+            sendJson(exchange, response);
+        });
+        server.createContext("/upload", exchange -> {
+            uploadBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            exchange.sendResponseHeaders(204, -1);
+            exchange.close();
+        });
+        server.createContext("/api/v1/services/audio/asr/transcription", exchange -> {
+            submitBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            var response = objectMapper.createObjectNode();
+            response.putObject("output").put("task_id", "task-local-upload").put("task_status", "PENDING");
+            sendJson(exchange, response);
+        });
+        server.createContext("/api/v1/tasks/task-local-upload", exchange -> {
+            var response = objectMapper.createObjectNode();
+            response.putObject("output").put("task_status", "SUCCEEDED")
+                    .putArray("results").addObject().put("transcription_url",
+                            "http://127.0.0.1:" + server.getAddress().getPort() + "/local-transcript.json");
+            sendJson(exchange, response);
+        });
+        server.createContext("/local-transcript.json", exchange -> {
+            var response = objectMapper.createObjectNode();
+            response.putArray("transcripts").addObject().putArray("sentences").addObject()
+                    .put("text", "本地音频临时上传成功").put("begin_time", 0).put("end_time", 500);
+            sendJson(exchange, response);
+        });
+        server.start();
+        try {
+            var provider = new QwenAsrProvider(true,
+                    "http://127.0.0.1:" + server.getAddress().getPort() + "/api/v1", "test-key",
+                    "qwen3-asr-flash-filetrans", "/services/audio/asr/transcription", "/tasks",
+                    "zh", true, false, Duration.ofSeconds(3), Duration.ofMillis(1));
+            var parsed = provider.extract(new ByteArrayInputStream(new byte[] {9, 8, 7}), "中文录音.wav",
+                    new MediaExtractionProvider.ExtractionContext(null, "audio/wav", 1, null));
+
+            assertThat(parsed.providerTaskId()).isEqualTo("task-local-upload");
+            assertThat(parsed.blocks()).extracting(block -> block.content()).contains("本地音频临时上传成功");
+            assertThat(uploadBody.get()).contains("name=\"OSSAccessKeyId\"", "name=\"key\"", "name=\"file\"");
+            assertThat(objectMapper.readTree(submitBody.get()).path("input").path("file_url").asText())
+                    .startsWith("oss://temporary/");
         } finally {
             server.stop(0);
         }
@@ -282,7 +427,7 @@ class QwenMediaProviderTest {
         return new QwenAsrProvider(true,
                 "http://127.0.0.1:" + server.getAddress().getPort() + "/api/v1", "test-key",
                 "qwen3-asr-flash-filetrans", "/services/audio/asr/transcription", "/tasks",
-                "zh", true, true, timeout, Duration.ofMillis(1), "http://minio-public");
+                 "zh", true, true, timeout, Duration.ofMillis(1));
     }
 
     private String materialSpreadsheetHtml() {

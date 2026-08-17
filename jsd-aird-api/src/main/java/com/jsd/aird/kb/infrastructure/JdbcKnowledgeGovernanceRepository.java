@@ -148,6 +148,8 @@ public class JdbcKnowledgeGovernanceRepository implements KnowledgeGovernanceRep
         }
         if (!"FAILED".equals(parseStatus)) {
             var effectiveActor = actorId == null ? createdBy(documentId) : actorId;
+            var basePublicationId = jdbc.query("SELECT current_publication_id FROM kb.document WHERE organization_id = ? AND id = ?",
+                    (rs, ignored) -> rs.getObject(1, UUID.class), organizationId, documentId).stream().findFirst().orElse(null);
             var revisionId = UUID.randomUUID();
             var revisionNo = jdbc.queryForObject("SELECT coalesce(max(revision_no), 0) + 1 FROM kb.document_review_revision WHERE document_id = ?",
                     Integer.class, documentId);
@@ -156,10 +158,10 @@ public class JdbcKnowledgeGovernanceRepository implements KnowledgeGovernanceRep
             jdbc.update("""
                     INSERT INTO kb.document_review_revision (
                         id, organization_id, document_id, document_version_id, parse_run_id, revision_no,
-                        confirmed_document_jsonb, confirmed_text, status, created_by, updated_by
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, '', 'DRAFT', ?, ?)
+                        base_publication_id, confirmed_document_jsonb, confirmed_text, status, created_by, updated_by
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', 'DRAFT', ?, ?)
                     """, revisionId, organizationId, documentId, versionId, id, revisionNo,
-                    json(initial.confirmedDocument()), effectiveActor, effectiveActor);
+                    basePublicationId, json(initial.confirmedDocument()), effectiveActor, effectiveActor);
             jdbc.update("""
                     UPDATE kb.document_version
                     SET review_status = 'PENDING_REVIEW', review_reason = NULL, review_revision = ?, updated_at = now()

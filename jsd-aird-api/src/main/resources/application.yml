@@ -76,12 +76,14 @@ app:
   identity:
     development-mode: ${JSD_AIRD_DEV_IDENTITY_ENABLED:true}
   storage:
+    provider: ${JSD_AIRD_STORAGE_PROVIDER:minio}
     endpoint: ${JSD_AIRD_MINIO_ENDPOINT:http://localhost:9000}
     public-endpoint: ${JSD_AIRD_MINIO_PUBLIC_ENDPOINT:}
     presign-expiry: ${JSD_AIRD_MINIO_PRESIGN_EXPIRY:15m}
     access-key: ${JSD_AIRD_MINIO_ACCESS_KEY:jsd_aird}
     secret-key: ${JSD_AIRD_MINIO_SECRET_KEY:jsd_aird_minio_dev}
     bucket: ${JSD_AIRD_MINIO_BUCKET:jsd-aird}
+    local-root: ${JSD_AIRD_LOCAL_STORAGE_ROOT:${java.io.tmpdir}/jsd-aird-storage}
   worker:
     enabled: ${JSD_AIRD_WORKER_ENABLED:false}
     id: ${JSD_AIRD_WORKER_ID:api-local}
@@ -112,10 +114,10 @@ app:
       timeout: ${JSD_AIRD_EMBEDDING_TIMEOUT:30s}
     ocr:
       enabled: ${JSD_AIRD_OCR_ENABLED:false}
-      base-url: ${JSD_AIRD_OCR_BASE_URL:${app.model.base-url:}}
+      base-url: ${JSD_AIRD_OCR_BASE_URL:https://dashscope.aliyuncs.com/api/v1}
       api-key: ${JSD_AIRD_OCR_API_KEY:${app.model.api-key:}}
       model: ${JSD_AIRD_OCR_MODEL:qwen3.5-ocr}
-      completions-path: ${JSD_AIRD_OCR_COMPLETIONS_PATH:/chat/completions}
+      completions-path: ${JSD_AIRD_OCR_COMPLETIONS_PATH:/services/aigc/multimodal-generation/generation}
       timeout: ${JSD_AIRD_OCR_TIMEOUT:120s}
       max-bytes: ${JSD_AIRD_OCR_MAX_BYTES:20971520}
     asr:
@@ -137,9 +139,11 @@ app:
       timeout: ${JSD_AIRD_TAVILY_TIMEOUT:15s}
       max-results: ${JSD_AIRD_TAVILY_MAX_RESULTS:5}
     reranker:
-      base-url: ${JSD_AIRD_RERANKER_BASE_URL:}
-      api-key: ${JSD_AIRD_RERANKER_API_KEY:}
-      model: ${JSD_AIRD_RERANKER_MODEL:}
+      # The rerank endpoint is exposed by the same OpenAI-compatible gateway
+      # unless a dedicated endpoint/key is configured.
+      base-url: ${JSD_AIRD_RERANKER_BASE_URL:${app.model.base-url:}}
+      api-key: ${JSD_AIRD_RERANKER_API_KEY:${app.model.api-key:}}
+      model: ${JSD_AIRD_RERANKER_MODEL:qwen3-rerank}
       timeout: ${JSD_AIRD_RERANKER_TIMEOUT:8s}
   render:
     enabled: ${JSD_AIRD_RENDER_ENABLED:true}

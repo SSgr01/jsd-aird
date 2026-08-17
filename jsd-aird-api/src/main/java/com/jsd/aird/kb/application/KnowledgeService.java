@@ -712,6 +712,10 @@ public class KnowledgeService implements KnowledgeSearchFacade {
                             objectMapper.createObjectNode().put("retryable", false), List.of(), List.of()).id();
                     repository.attachProcessingSteps(organizationId, versionId, activeParseRunId);
                 }
+                if (activeParseRunId != null) {
+                    repository.finishProcessingStep(organizationId, versionId, activeParseRunId, "PARSE", "FAILED",
+                            null, safeError(exception));
+                }
             } catch (RuntimeException ignored) {
                 // The original parser/provider error remains authoritative if failure recording itself is unavailable.
             }

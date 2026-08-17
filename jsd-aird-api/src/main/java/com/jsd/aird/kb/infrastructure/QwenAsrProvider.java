@@ -1,10 +1,14 @@
 package com.jsd.aird.kb.infrastructure;
 
 import java.io.InputStream;
+import java.io.IOException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.UUID;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -15,18 +19,25 @@ import com.jsd.aird.kb.domain.DocumentParser;
 import com.jsd.aird.kb.domain.MediaExtractionProvider;
 import com.jsd.aird.kb.domain.MediaExtractionException;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.core.annotation.Order;
 import org.springframework.core.Ordered;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
+import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public class QwenAsrProvider implements MediaExtractionProvider {
+
+    private static final Logger log = LoggerFactory.getLogger(QwenAsrProvider.class);
 
     private final boolean enabled;
     private final String baseUrl;
@@ -39,7 +50,6 @@ public class QwenAsrProvider implements MediaExtractionProvider {
     private final boolean enableWords;
     private final Duration timeout;
     private final Duration pollInterval;
-    private final boolean publicStorageConfigured;
     private final RestClient client;
 
     public QwenAsrProvider(
@@ -53,8 +63,7 @@ public class QwenAsrProvider implements MediaExtractionProvider {
             @Value("${app.ai.asr.enable-itn:true}") boolean enableItn,
             @Value("${app.ai.asr.enable-words:true}") boolean enableWords,
             @Value("${app.ai.asr.timeout:10m}") Duration timeout,
-            @Value("${app.ai.asr.poll-interval:2s}") Duration pollInterval,
-            @Value("${app.storage.public-endpoint:}") String publicEndpoint
+            @Value("${app.ai.asr.poll-interval:2s}") Duration pollInterval
     ) {
         this.enabled = enabled;
         this.baseUrl = strip(baseUrl);
@@ -67,11 +76,13 @@ public class QwenAsrProvider implements MediaExtractionProvider {
         this.enableWords = enableWords;
         this.timeout = timeout == null ? Duration.ofMinutes(10) : timeout;
         this.pollInterval = pollInterval == null ? Duration.ofSeconds(2) : pollInterval;
-        this.publicStorageConfigured = StringUtils.hasText(publicEndpoint);
         var factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(Duration.ofSeconds(30));
         factory.setReadTimeout(this.timeout);
         this.client = RestClient.builder().requestFactory(factory).build();
+        log.debug("Qwen ASR config enabled={}, baseUrlPresent={}, apiKeyPresent={}, modelPresent={}",
+                enabled, StringUtils.hasText(this.baseUrl), StringUtils.hasText(this.apiKey),
+                StringUtils.hasText(this.model));
     }
 
     @Override
@@ -85,32 +96,38 @@ public class QwenAsrProvider implements MediaExtractionProvider {
 
     @Override
     public boolean isConfigured() {
-        return enabled && publicStorageConfigured && StringUtils.hasText(baseUrl)
+        // DashScope accepts a short-lived oss:// URL obtained from its upload
+        // policy endpoint, so local object storage can still be used for
+        // development and end-to-end tests. A public storage endpoint remains
+        // preferred when one is configured.
+        return enabled && StringUtils.hasText(baseUrl)
                 && StringUtils.hasText(apiKey) && StringUtils.hasText(model);
     }
 
     @Override
     public String unavailableReason() {
-        return "ASR 服务未配置，需配置可被 DashScope 访问的 MinIO 公网 endpoint";
+        return "ASR 服务暂不可用";
     }
 
     @Override
     public DocumentParser.ParsedDocument extract(InputStream source, String fileName, ExtractionContext context) {
         if (!isConfigured()) {
-            throw new IllegalStateException("ASR 服务未配置，需配置可被 DashScope 访问的 MinIO 公网 endpoint");
+            throw new IllegalStateException("ASR 服务尚未配置");
         }
         var publicUrl = context == null ? null : context.publicUrl();
-        if (!StringUtils.hasText(publicUrl)) {
-            throw new IllegalStateException("ASR 文件缺少 MinIO 公网预签名 URL");
-        }
         String taskId = null;
         try {
+            if (!StringUtils.hasText(publicUrl)) {
+                publicUrl = uploadToTemporaryStorage(source.readAllBytes(), fileName);
+            }
             taskId = submit(publicUrl);
             var result = poll(taskId);
             var blocks = transcriptBlocks(result);
             if (blocks.isEmpty()) throw new IllegalStateException("ASR 返回结果为空");
             return new DocumentParser.ParsedDocument(blocks, model, taskId,
                     Map.of("model", model, "timestampLevel", enableWords ? "SENTENCE_AND_WORD" : "SENTENCE"));
+        } catch (IOException exception) {
+            throw new MediaExtractionException("ASR 文件读取失败", taskId, model, exception);
         } catch (RestClientResponseException exception) {
             throw new MediaExtractionException("ASR 服务调用失败：HTTP " + exception.getStatusCode().value()
                     + " " + exception.getResponseBodyAsString(), taskId, model, exception);
@@ -138,16 +155,65 @@ public class QwenAsrProvider implements MediaExtractionProvider {
                 "input", input,
                 "parameters", parameters
         );
-        var response = withRetry(() -> client.post().uri(baseUrl + transcriptionPath)
-                .header(HttpHeaders.CONTENT_TYPE, "application/json")
-                .header(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey)
-                .header("X-DashScope-Async", "enable")
-                .body(body)
-                .retrieve()
-                .body(JsonNode.class));
+        var response = withRetry(() -> {
+            var request = client.post().uri(baseUrl + transcriptionPath)
+                    .header(HttpHeaders.CONTENT_TYPE, "application/json")
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey)
+                    .header("X-DashScope-Async", "enable");
+            if (publicUrl.startsWith("oss://")) {
+                request.header("X-DashScope-OssResourceResolve", "enable");
+            }
+            return request.body(body).retrieve().body(JsonNode.class);
+        });
         var taskId = firstText(response == null ? null : response.path("output"), "task_id", "taskId");
         if (!StringUtils.hasText(taskId)) throw new IllegalStateException("ASR 未返回 task_id");
         return taskId;
+    }
+
+    private String uploadToTemporaryStorage(byte[] bytes, String fileName) {
+        if (bytes == null || bytes.length == 0) throw new IllegalStateException("ASR 音频内容为空");
+        var modelQuery = URLEncoder.encode(model, StandardCharsets.UTF_8);
+        var policyResponse = withRetry(() -> client.get()
+                .uri(baseUrl + "/uploads?action=getPolicy&model=" + modelQuery)
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey)
+                .retrieve()
+                .body(JsonNode.class));
+        var data = policyResponse == null ? null : policyResponse.path("data");
+        var uploadHost = required(data, "upload_host", "uploadHost");
+        var uploadDir = required(data, "upload_dir", "uploadDir");
+        var key = uploadDir + "/" + safeFileName(fileName);
+        var form = new LinkedMultiValueMap<String, Object>();
+        form.add("OSSAccessKeyId", required(data, "oss_access_key_id", "ossAccessKeyId"));
+        form.add("policy", required(data, "policy"));
+        form.add("Signature", required(data, "signature"));
+        form.add("x-oss-object-acl", required(data, "x_oss_object_acl", "xOssObjectAcl"));
+        form.add("x-oss-forbid-overwrite", required(data, "x_oss_forbid_overwrite", "xOssForbidOverwrite"));
+        form.add("key", key);
+        form.add("success_action_status", "200");
+        form.add("file", new ByteArrayResource(bytes) {
+            @Override
+            public String getFilename() {
+                return safeFileName(fileName);
+            }
+        });
+        withRetry(() -> {
+            client.post().uri(uploadHost).contentType(MediaType.MULTIPART_FORM_DATA)
+                    .body(form).retrieve().toBodilessEntity();
+            return Boolean.TRUE;
+        });
+        return "oss://" + key;
+    }
+
+    private String required(JsonNode node, String... names) {
+        var value = firstText(node, names);
+        if (!StringUtils.hasText(value)) throw new IllegalStateException("ASR 临时上传凭证不完整");
+        return value;
+    }
+
+    private String safeFileName(String fileName) {
+        var value = StringUtils.hasText(fileName) ? fileName : "audio.bin";
+        value = value.replaceAll("[^A-Za-z0-9._-]", "_");
+        return UUID.randomUUID() + "-" + value;
     }
 
     private JsonNode poll(String taskId) throws InterruptedException {
@@ -200,7 +266,12 @@ public class QwenAsrProvider implements MediaExtractionProvider {
     private void downloadTranscript(JsonNode resultNode, List<DocumentParser.TextBlock> result) {
         var transcriptionUrl = firstText(resultNode, "transcription_url", "transcriptionUrl");
         if (!StringUtils.hasText(transcriptionUrl)) return;
-        var transcriptFile = withRetry(() -> client.get().uri(transcriptionUrl).retrieve().body(JsonNode.class));
+        // DashScope returns a pre-signed OSS URL. Passing it as a String lets
+        // RestClient treat the percent-encoded query as a URI template and
+        // encode it again, invalidating the OSS signature. URI preserves the
+        // provider's raw query exactly.
+        var transcriptFile = withRetry(() -> client.get().uri(java.net.URI.create(transcriptionUrl))
+                .retrieve().body(JsonNode.class));
         collectTranscripts(transcriptFile, result);
     }
 
@@ -228,20 +299,11 @@ public class QwenAsrProvider implements MediaExtractionProvider {
             var end = firstLong(node, "end_time", "endTime", "end_ms", "stop_time");
             result.add(new DocumentParser.TextBlock(null, "ASR-SENTENCE-CHANNEL-" + channel, text.strip(),
                     null, null, null, List.of(), start, end, confidence(node)));
-            var words = node.path("words");
-            if (enableWords && words.isArray()) {
-                words.forEach(word -> {
-                    var wordText = firstText(word, "text", "word");
-                    if (StringUtils.hasText(wordText)) {
-                        var punctuation = firstText(word, "punctuation");
-                        result.add(new DocumentParser.TextBlock(null, "ASR-WORD-CHANNEL-" + channel,
-                                wordText + punctuation,
-                                null, null, null, List.of(),
-                                firstLong(word, "begin_time", "start_time", "startTime", "start_ms", "beginTime"),
-                                firstLong(word, "end_time", "endTime", "end_ms", "stop_time"), confidence(word)));
-                    }
-                });
-            }
+            // Word timestamps are useful provider metadata, but exposing every
+            // word as a separate review block duplicates each sentence and
+            // makes the correction editor unreadable. The sentence block keeps
+            // the stable audio anchor; word-level data remains available in the
+            // provider response diagnostics when needed.
             return;
         }
         collectTranscripts(node.path("transcripts"), result, channel);

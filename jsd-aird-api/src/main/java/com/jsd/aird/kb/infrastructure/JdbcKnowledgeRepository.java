@@ -401,7 +401,13 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
 
     @Override
     public void markFailed(UUID documentId, UUID versionId, String status, String error) {
-        jdbc.update("UPDATE kb.document_version SET status = ?, error_message = ?, updated_at = now() WHERE id = ?",
+        jdbc.update("""
+                UPDATE kb.document_version
+                SET status = ?, error_message = ?,
+                    review_reason = CASE WHEN review_reason = 'REPARSE_QUEUED' THEN NULL ELSE review_reason END,
+                    updated_at = now()
+                WHERE id = ?
+                """,
                 status, truncate(error), versionId);
         jdbc.update("UPDATE kb.document SET status = ?, parse_error = ?, updated_at = now() WHERE id = ?",
                 status, truncate(error), documentId);

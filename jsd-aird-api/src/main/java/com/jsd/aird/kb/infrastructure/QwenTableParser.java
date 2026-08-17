@@ -24,8 +24,6 @@ final class QwenTableParser {
             "(?i)\\b(rowspan|colspan)\\s*=\\s*(?:\"(\\d+)\"|'(\\d+)'|(\\d+))");
     private static final Pattern EXCEL_COLUMN = Pattern.compile("[A-Za-z]{1,3}");
     private static final Pattern ROW_NUMBER = Pattern.compile("\\d{1,7}");
-    private static final Pattern TABLE_TOKEN = Pattern.compile(
-            "(?<![\\p{L}\\p{N}])(?:[A-Za-z]{1,3}|\\d{1,7})(?![\\p{L}\\p{N}])");
     private static final int MIN_AXIS_LENGTH = 3;
     private static final int MAX_SPAN = 1_000;
 
@@ -114,14 +112,45 @@ final class QwenTableParser {
         return tables.stream().filter(Table::reliable).toList();
     }
 
-    boolean looksLikeTable(String source) {
-        var value = source == null ? "" : source;
-        if (TABLE_BEGIN.matcher(value).find() || value.toLowerCase(Locale.ROOT).contains("<table")
-                || value.contains("\\multicolumn") || value.contains("\\multirow")) return true;
-        var tokens = TABLE_TOKEN.matcher(value);
-        var values = new ArrayList<String>();
-        while (tokens.find() && values.size() < 80) values.add(tokens.group());
-        return hasSequentialColumns(values) && hasSequentialRows(values);
+    boolean isSpreadsheetColumnSequence(String source) {
+        return sequentialExcelColumns(tokens(source));
+    }
+
+    boolean isSpreadsheetRowSequence(String source) {
+        return sequentialIntegers(tokens(source));
+    }
+
+    /** Remove axis runs from OCR paragraphs only after table structure proved both axes exist. */
+    String removeSpreadsheetAxisRuns(String source) {
+        var lines = (source == null ? "" : source).split("\\R", -1);
+        var kept = new ArrayList<String>();
+        var index = 0;
+        while (index < lines.length) {
+            var lineTokens = tokens(lines[index]);
+            if (lineTokens.size() >= MIN_AXIS_LENGTH
+                    && (sequentialExcelColumns(lineTokens) || sequentialIntegers(lineTokens))) {
+                index++;
+                continue;
+            }
+            if (lineTokens.size() == 1 && isAxisToken(lineTokens.getFirst())) {
+                var end = index + 1;
+                var run = new ArrayList<String>(lineTokens);
+                while (end < lines.length) {
+                    var next = tokens(lines[end]);
+                    if (next.size() != 1 || !isAxisToken(next.getFirst())) break;
+                    run.add(next.getFirst());
+                    end++;
+                }
+                if (run.size() >= MIN_AXIS_LENGTH
+                        && (sequentialExcelColumns(run) || sequentialIntegers(run))) {
+                    index = end;
+                    continue;
+                }
+            }
+            kept.add(lines[index]);
+            index++;
+        }
+        return String.join("\n", kept).replaceAll("(?s)\\A\\s+|\\s+\\z", "").strip();
     }
 
     private Table parseLatexTable(String body) {
@@ -360,36 +389,13 @@ final class QwenTableParser {
         return true;
     }
 
-    private boolean hasSequentialColumns(List<String> values) {
-        for (var start = 0; start <= values.size() - MIN_AXIS_LENGTH; start++) {
-            var previous = excelColumnIndex(values.get(start));
-            if (previous < 0) continue;
-            var count = 1;
-            for (var index = start + 1; index < values.size(); index++) {
-                var current = excelColumnIndex(values.get(index));
-                if (current == previous + 1) {
-                    if (++count >= MIN_AXIS_LENGTH) return true;
-                    previous = current;
-                } else if (current >= 0) break;
-            }
-        }
-        return false;
+    private List<String> tokens(String source) {
+        if (source == null || source.isBlank()) return List.of();
+        return List.of(source.strip().split("\\s+"));
     }
 
-    private boolean hasSequentialRows(List<String> values) {
-        for (var start = 0; start <= values.size() - MIN_AXIS_LENGTH; start++) {
-            var previous = integer(values.get(start));
-            if (previous < 0) continue;
-            var count = 1;
-            for (var index = start + 1; index < values.size(); index++) {
-                var current = integer(values.get(index));
-                if (current == previous + 1) {
-                    if (++count >= MIN_AXIS_LENGTH) return true;
-                    previous = current;
-                } else if (current >= 0) break;
-            }
-        }
-        return false;
+    private boolean isAxisToken(String value) {
+        return excelColumnIndex(value) >= 0 || integer(value) >= 0;
     }
 
     private int excelColumnIndex(String value) {

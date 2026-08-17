@@ -71,6 +71,16 @@ export interface FileSearchResult {
   }>;
 }
 
+export function parseAssistantSseData(data: string): unknown {
+  try {
+    return JSON.parse(data);
+  } catch {
+    // Keep compatibility with older servers that sent String warnings as
+    // unquoted SSE data.  A malformed stage payload must not break the stream.
+    return data;
+  }
+}
+
 export const assistantApi = {
   async ask(question: string, conversationId?: string) {
     const response = await httpClient.post<ApiResponse<AssistantResponse>>('/api/v1/assistant/qa', { question, conversationId });
@@ -137,7 +147,7 @@ export const assistantApi = {
           if (line.startsWith('data:')) data += line.slice(5).trim();
         }
         if (!data) continue;
-        const parsed: unknown = JSON.parse(data);
+        const parsed = parseAssistantSseData(data);
         if (event === 'token') onToken(typeof parsed === 'string' ? parsed : String(parsed));
         if (event === 'done') onDone(parsed as AssistantResponse);
         if (event !== 'token' && event !== 'done') onStage?.(event, parsed);

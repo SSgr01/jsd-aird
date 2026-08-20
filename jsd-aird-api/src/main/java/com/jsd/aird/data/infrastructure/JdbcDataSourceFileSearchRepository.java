@@ -33,6 +33,8 @@ public class JdbcDataSourceFileSearchRepository implements DataSourceFileSearchF
                            ELSE 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' END) AS content_type,
                        coalesce(fo.size_bytes, 0) AS size_bytes, coalesce(j.completed_at, j.updated_at) AS updated_at,
                        s.sheet_name, r.source_row_number, cells.key AS column_name, cells.value AS cell_value,
+                       coalesce(m.field_name, m.source_header, cells.key) AS source_header,
+                       row_context.context_text,
                        GREATEST(ts_rank_cd(r.source_search_vector, plainto_tsquery('simple', ?)),
                            CASE WHEN j.source_file_name ILIKE '%%' || ? || '%%' THEN 1 ELSE 0 END) AS score
                 FROM data.completed_source_file_projection fp
@@ -41,12 +43,24 @@ public class JdbcDataSourceFileSearchRepository implements DataSourceFileSearchF
                 LEFT JOIN data.import_sheet s ON s.import_job_id = j.id
                 LEFT JOIN data.staging_row r ON r.import_job_id = j.id AND r.import_sheet_id = s.id
                 LEFT JOIN LATERAL jsonb_each_text(r.raw_values_jsonb) cells ON true
+                LEFT JOIN data.import_mapping m ON m.import_job_id = j.id
+                    AND m.import_sheet_id = s.id AND m.source_column = cells.key
+                LEFT JOIN LATERAL (
+                    SELECT string_agg(
+                        coalesce(m2.field_name, m2.source_header, row_cells.key) || '=' || row_cells.value,
+                        '；' ORDER BY row_cells.key
+                    ) AS context_text
+                    FROM jsonb_each_text(r.raw_values_jsonb) row_cells
+                    LEFT JOIN data.import_mapping m2 ON m2.import_job_id = j.id
+                        AND m2.import_sheet_id = s.id AND m2.source_column = row_cells.key
+                ) row_context ON true
                 WHERE j.organization_id = ?
                   %s
                   AND (j.source_file_name ILIKE '%%' || ? || '%%'
                        OR r.source_search_vector @@ plainto_tsquery('simple', ?)
                        OR cells.value ILIKE '%%' || ? || '%%'
-                       OR cells.key ILIKE '%%' || ? || '%%')
+                       OR cells.key ILIKE '%%' || ? || '%%'
+                       OR coalesce(m.field_name, m.source_header, '') ILIKE '%%' || ? || '%%')
                 ORDER BY score DESC, j.completed_at DESC NULLS LAST, j.updated_at DESC,
                          s.sheet_order, r.source_row_number
                 LIMIT ?
@@ -54,7 +68,8 @@ public class JdbcDataSourceFileSearchRepository implements DataSourceFileSearchF
         var args = new ArrayList<Object>();
         args.add(query); args.add(query); args.add(organizationId);
         if (categoryIds != null) args.addAll(categoryIds);
-        args.add(query); args.add(query); args.add(query); args.add(query); args.add(Math.min(1000, Math.max(20, limit * 25)));
+        args.add(query); args.add(query); args.add(query); args.add(query); args.add(query);
+        args.add(Math.min(1000, Math.max(20, limit * 25)));
         var rows = jdbc.query(sql, this::mapRow, args.toArray());
         var grouped = new LinkedHashMap<UUID, Aggregate>();
         for (var row : rows) {
@@ -69,11 +84,16 @@ public class JdbcDataSourceFileSearchRepository implements DataSourceFileSearchF
                 rs.getString("source_file_name"), rs.getString("content_type"), rs.getLong("size_bytes"),
                 rs.getTimestamp("updated_at").toInstant(), rs.getString("sheet_name"),
                 (Integer) rs.getObject("source_row_number"), rs.getString("column_name"), rs.getString("cell_value"),
-                rs.getDouble("score"));
+                rs.getString("source_header"), rs.getString("context_text"), rs.getDouble("score"));
     }
 
     private Hit hit(Row row) {
-        var snippet = row.value() == null || row.value().isBlank() ? row.originalName() : row.value();
+        var value = row.value() == null || row.value().isBlank() ? "未填写" : row.value();
+        var snippet = "字段=" + (row.sourceHeader() == null ? row.column() : row.sourceHeader())
+                + "；值=" + value;
+        if (row.contextText() != null && !row.contextText().isBlank()) {
+            snippet += "；同行数据=" + row.contextText();
+        }
         if (snippet.length() > 800) snippet = snippet.substring(0, 800) + "…";
         var cell = cellAddress(row.column(), row.rowNumber());
         var identity = row.importJobId() + ":" + row.sheetName() + ":" + row.rowNumber() + ":" + row.column();
@@ -94,7 +114,7 @@ public class JdbcDataSourceFileSearchRepository implements DataSourceFileSearchF
 
     private record Row(UUID importJobId, UUID fileId, String originalName, String contentType, long size,
                        java.time.Instant updatedAt, String sheetName, Integer rowNumber, String column,
-                       String value, double score) { }
+                       String value, String sourceHeader, String contextText, double score) { }
 
     private static final class Aggregate {
         private final Row row;

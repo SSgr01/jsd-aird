@@ -2,6 +2,7 @@ package com.jsd.aird.ai.application;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -55,11 +56,22 @@ public class RagRetrievalService {
         // expansion terms produced by the rewrite model. Searching them with the
         // rewritten query can turn an exact source-record lookup into an impossible
         // AND match (for example, code + unrelated manual/document terms).
-        var dataQuery = question == null || question.isBlank() ? plan.plan().rewrittenQuery() : question.strip();
-        // Data-center source files are part of the default retrieval corpus. Filters
-        // narrow the result set when present; an empty filter must not disable
-        // source-file retrieval altogether.
-        var data = dataFiles.search(organizationId, dataQuery, dataCategoryIds, 8);
+        // Structured rows must not be searched with one long natural-language
+        // string. A question such as "比较 UA-2524 中 184、TPO、BP" contains
+        // several independent lookup keys, and plainto_tsquery/ILIKE against the
+        // whole sentence can miss every cell. Search the original question,
+        // rewrite sub-queries and extracted keywords independently, then merge
+        // the row/cell evidence by stable hit id.
+        var dataQueries = dataQueries(question, plan.plan());
+        var dataByHit = new LinkedHashMap<UUID, DataSourceFileSearchFacade.SourceFileHit>();
+        for (var dataQuery : dataQueries) {
+            dataFiles.search(organizationId, dataQuery, dataCategoryIds, 8)
+                    .forEach(hit -> dataByHit.putIfAbsent(hit.hitId(), hit));
+        }
+        var data = dataByHit.values().stream()
+                .sorted(Comparator.comparingDouble(DataSourceFileSearchFacade.SourceFileHit::score).reversed())
+                .limit(16)
+                .toList();
         var knowledgeHits = rerank(plan.plan().rewrittenQuery(), knowledgeResult.hits());
         var fallbacks = new ArrayList<String>(knowledgeResult.trace().fallbacks());
         if ("MODEL_UNAVAILABLE".equals(plan.status()) || "FALLBACK_ORIGINAL_QUERY".equals(plan.status())) {
@@ -70,7 +82,27 @@ public class RagRetrievalService {
         return new Retrieval(plan.plan(), knowledgeHits, data, new Trace(
                 plan.status(), knowledgeResult.trace().strategy(), knowledgeResult.trace().bm25Candidates(),
                 knowledgeResult.trace().vectorCandidates(), knowledgeResult.trace().mergedCandidates(),
-                data.size(), reranker.isConfigured() ? "CONFIGURED" : "RRF_FALLBACK", fallbacks));
+                data.size(), reranker.isConfigured() ? "CONFIGURED" : "RRF_FALLBACK", fallbacks,
+                dataQueries.size(), List.of(
+                        new ChannelTrace("KNOWLEDGE_KEYWORD_VECTOR", "SUCCEEDED", knowledgeResult.trace().mergedCandidates()),
+                        new ChannelTrace("DATA_CENTER_ROW", data.isEmpty() ? "EMPTY" : "SUCCEEDED", data.size()))));
+    }
+
+    private List<String> dataQueries(String question, QueryRewriteService.QueryPlan plan) {
+        var queries = new LinkedHashSet<String>();
+        if (question != null && !question.isBlank()) queries.add(question.strip());
+        if (plan != null) {
+            if (plan.rewrittenQuery() != null && !plan.rewrittenQuery().isBlank()) {
+                queries.add(plan.rewrittenQuery().strip());
+            }
+            if (plan.subQueries() != null) plan.subQueries().stream()
+                    .filter(value -> value != null && !value.isBlank())
+                    .map(String::strip).forEach(queries::add);
+            if (plan.keywords() != null) plan.keywords().stream()
+                    .filter(value -> value != null && !value.isBlank())
+                    .map(String::strip).forEach(queries::add);
+        }
+        return queries.stream().limit(20).toList();
     }
 
     private List<KnowledgeSearchFacade.SearchHit> rerank(String query, List<KnowledgeSearchFacade.SearchHit> hits) {
@@ -97,6 +129,13 @@ public class RagRetrievalService {
 
     public record Trace(String rewriteStatus, String strategy, int bm25Candidates, int vectorCandidates,
                             int mergedCandidates, int dataFileCandidates, String rerankerStatus,
-                        List<String> fallbacks) {
+                        List<String> fallbacks, int dataQueryCount, List<ChannelTrace> channels) {
+        public Trace {
+            fallbacks = fallbacks == null ? List.of() : List.copyOf(fallbacks);
+            channels = channels == null ? List.of() : List.copyOf(channels);
+        }
+    }
+
+    public record ChannelTrace(String channel, String status, int resultCount) {
     }
 }

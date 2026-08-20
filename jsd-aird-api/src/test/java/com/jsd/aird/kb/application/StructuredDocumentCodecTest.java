@@ -1,4 +1,4 @@
-package com.jsd.aird.kb.application;
+package com.jsd.aird.kb.infrastructure;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -8,6 +8,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jsd.aird.kb.application.StructuredDocumentCodec;
 import com.jsd.aird.kb.domain.DocumentParser;
 import com.jsd.aird.kb.infrastructure.QwenDocumentParsingConverter;
 import com.jsd.aird.shared.error.ApiException;

@@ -17,6 +17,7 @@ import com.jsd.aird.shared.api.ResponseFactory;
 import com.jsd.aird.tpl.application.TemplateWorkspaceService;
 import com.jsd.aird.tpl.application.TemplateRecognitionReviewService;
 import com.jsd.aird.tpl.application.TemplateOfficeExportService;
+import com.jsd.aird.tpl.application.TemplateVersionReviewService;
 import com.jsd.aird.tpl.application.port.TemplateRepository;
 import com.jsd.aird.tpl.domain.TemplateFormat;
 import com.jsd.aird.tpl.domain.TemplateStatus;
@@ -48,15 +49,18 @@ public class TemplateController {
     private final TemplateWorkspaceService service;
     private final TemplateRecognitionReviewService recognitionReviewService;
     private final TemplateOfficeExportService officeExportService;
+    private final TemplateVersionReviewService templateVersionReviewService;
 
     public TemplateController(
             TemplateWorkspaceService service,
             TemplateRecognitionReviewService recognitionReviewService,
-            TemplateOfficeExportService officeExportService
+            TemplateOfficeExportService officeExportService,
+            TemplateVersionReviewService templateVersionReviewService
     ) {
         this.service = service;
         this.recognitionReviewService = recognitionReviewService;
         this.officeExportService = officeExportService;
+        this.templateVersionReviewService = templateVersionReviewService;
     }
 
     @GetMapping("/templates")
@@ -98,7 +102,10 @@ public class TemplateController {
                 keyword, format, status, createdBy, updatedFrom, updatedTo)));
     }
 
-    @GetMapping(value = "/templates/export.csv", produces = "text/csv;charset=UTF-8")
+    // Do not constrain content negotiation here. Axios sends application/json
+    // in its default Accept header even though this endpoint returns a file;
+    // the response itself declares the CSV content type below.
+    @GetMapping("/templates/export.csv")
     public ResponseEntity<byte[]> exportCsv(
             @RequestParam(required = false) String keyword,
             @RequestParam(required = false) UUID categoryId,
@@ -312,6 +319,28 @@ public class TemplateController {
         return success(null);
     }
 
+    @GetMapping("/template-versions/{versionId}/review")
+    public ApiResponse<TemplateVersionReviewService.View> review(@PathVariable UUID versionId) {
+        return success(templateVersionReviewService.get(versionId));
+    }
+
+    @PostMapping("/template-versions/{versionId}/review/submit")
+    public ApiResponse<TemplateVersionReviewService.View> submitReview(@PathVariable UUID versionId) {
+        return success(templateVersionReviewService.submit(versionId));
+    }
+
+    @PostMapping("/template-versions/{versionId}/review/approve")
+    public ApiResponse<TemplateVersionReviewService.View> approveReview(
+            @PathVariable UUID versionId, @RequestBody ReviewCommentRequest request) {
+        return success(templateVersionReviewService.approve(versionId, request == null ? null : request.comment()));
+    }
+
+    @PostMapping("/template-versions/{versionId}/review/reject")
+    public ApiResponse<TemplateVersionReviewService.View> rejectReview(
+            @PathVariable UUID versionId, @Valid @RequestBody ReviewReasonRequest request) {
+        return success(templateVersionReviewService.reject(versionId, request.reason()));
+    }
+
     private <T> ApiResponse<T> success(T value) {
         return ResponseFactory.success(value, RequestIdHolder.currentOrUnknown());
     }
@@ -325,6 +354,10 @@ public class TemplateController {
     }
 
     public record RenameTemplateRequest(@NotBlank @Size(max = 160) String name) {}
+
+    public record ReviewCommentRequest(String comment) {}
+
+    public record ReviewReasonRequest(@NotBlank @Size(max = 2000) String reason) {}
 
     public record CopyTemplateRequest(String name, UUID categoryId) {}
 

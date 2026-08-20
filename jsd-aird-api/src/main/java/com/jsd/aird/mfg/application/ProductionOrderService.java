@@ -9,6 +9,7 @@ import java.util.UUID;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.mfg.application.port.ProductionOrderRepository;
+import com.jsd.aird.tpl.api.RequiredFieldValidator;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.json.JsonCanonicalizer;
@@ -24,17 +25,20 @@ public class ProductionOrderService {
     private final JsonCanonicalizer canonicalizer;
     private final ObjectMapper objectMapper;
     private final RecordProjectionService recordProjectionService;
+    private final RequiredFieldValidator requiredFieldValidator;
 
     public ProductionOrderService(
             ProductionOrderRepository repository,
             JsonCanonicalizer canonicalizer,
             ObjectMapper objectMapper,
-            RecordProjectionService recordProjectionService
+            RecordProjectionService recordProjectionService,
+            RequiredFieldValidator requiredFieldValidator
     ) {
         this.repository = repository;
         this.canonicalizer = canonicalizer;
         this.objectMapper = objectMapper;
         this.recordProjectionService = recordProjectionService;
+        this.requiredFieldValidator = requiredFieldValidator;
     }
 
     @Transactional
@@ -133,6 +137,7 @@ public class ProductionOrderService {
             throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT);
         }
         validateInstanceSchema(command.schema());
+        requiredFieldValidator.validate(command.schema(), command.data());
         var reconciliationRequired = validateMappings(command.mapping());
         validateBindingValues(command.bindingValues());
         validateSnapshot(command.snapshotFileId(), command.snapshotHash(), false);
@@ -191,6 +196,7 @@ public class ProductionOrderService {
             throw new ApiException(ApiErrorCode.MAPPING_RECONCILIATION_REQUIRED);
         }
         validateSnapshot(current.snapshotFileId(), current.snapshotHash(), true);
+        requiredFieldValidator.validate(current.schema(), current.data());
         var revisionId = UUID.randomUUID();
         var core = objectMapper.createObjectNode()
                 .put("orderNo", current.orderNo())
@@ -252,6 +258,7 @@ public class ProductionOrderService {
             throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT);
         }
         validateInstanceSchema(template.schema());
+        requiredFieldValidator.validate(template.schema(), data);
         var reconciliationRequired = validateMappings(mapping);
         validateSnapshot(snapshotFileId, snapshotHash, false);
 

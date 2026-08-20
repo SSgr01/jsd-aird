@@ -30,7 +30,10 @@ public final class RecognitionCoverageValidator {
     }
 
     public ObjectNode physicalReport(JsonNode structure, String reason) {
-        var regions = physicalRegions(structure);
+        return physicalReport(structure, physicalRegions(structure), reason);
+    }
+
+    public ObjectNode physicalReport(JsonNode structure, List<JsonNode> regions, String reason) {
         var report = objectMapper.createObjectNode().put("schemaVersion", 1)
                 .put("status", regions.isEmpty() ? "NO_PHYSICAL_TABLE" : "REVIEW_REQUIRED")
                 .put("reason", reason == null ? "" : reason)
@@ -57,8 +60,21 @@ public final class RecognitionCoverageValidator {
             boolean globalSucceeded,
             boolean globalFailed
     ) {
+        return assess(structure, expectedRegions, regionStates, suggestions,
+                globalSucceeded, globalFailed, physicalRegions(structure));
+    }
+
+    public Assessment assess(
+            JsonNode structure,
+            List<JsonNode> expectedRegions,
+            Map<String, String> regionStates,
+            List<RecognitionModelClient.ModelSuggestion> suggestions,
+            boolean globalSucceeded,
+            boolean globalFailed,
+            List<JsonNode> physicalRegionFacts
+    ) {
         var expected = expectedRegions == null || expectedRegions.isEmpty()
-                ? physicalRegions(structure)
+                ? physicalRegionFacts
                 : expectedRegions;
         var details = objectMapper.createArrayNode();
         var covered = 0;
@@ -91,7 +107,7 @@ public final class RecognitionCoverageValidator {
 
         var expectedCount = expected.size();
         var ratio = expectedCount == 0
-                ? (physicalRegions(structure).isEmpty() ? 1.0 : 0.0)
+                ? (physicalRegionFacts.isEmpty() ? 1.0 : 0.0)
                 : covered / (double) expectedCount;
         var status = "COMPLETE";
         if (globalFailed || unresolved > 0) status = "REVIEW_REQUIRED";
@@ -103,7 +119,7 @@ public final class RecognitionCoverageValidator {
 
         var report = objectMapper.createObjectNode().put("schemaVersion", 1)
                 .put("status", status)
-                .put("physicalRegionCount", physicalRegions(structure).size())
+                .put("physicalRegionCount", physicalRegionFacts.size())
                 .put("expectedRegionCount", expectedCount)
                 .put("coveredRegionCount", covered)
                 .put("unresolvedRegionCount", unresolved)

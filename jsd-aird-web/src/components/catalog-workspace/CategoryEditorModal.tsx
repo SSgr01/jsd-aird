@@ -24,7 +24,7 @@ export function CategoryEditorModal({ open, title, initialValue, scopeOptions, c
     else form.resetFields();
   }, [form, initialValue, open]);
   return (
-    <Modal open={open} title={title} okText="保存" cancelText="取消" confirmLoading={confirmLoading} destroyOnHidden onCancel={onCancel} onOk={() => void form.validateFields().then(onSubmit)}>
+    <Modal open={open} forceRender title={title} okText="保存" cancelText="取消" confirmLoading={confirmLoading} onCancel={onCancel} onOk={() => void form.validateFields().then(onSubmit)}>
       <Form form={form} layout="vertical">
         <Form.Item name="name" label="分类名称" rules={[{ required: true, whitespace: true, message: '请输入分类名称' }]}>
           <Input autoFocus maxLength={120} />

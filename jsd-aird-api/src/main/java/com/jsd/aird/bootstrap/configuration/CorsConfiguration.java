@@ -15,8 +15,8 @@ public class CorsConfiguration {
         var configuration = new org.springframework.web.cors.CorsConfiguration();
         configuration.setAllowedOrigins(properties.allowedOrigins());
         configuration.setAllowedMethods(java.util.List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
-        configuration.setAllowedHeaders(java.util.List.of("*"));
-        configuration.setExposedHeaders(java.util.List.of("X-Request-Id"));
+        configuration.setAllowedHeaders(java.util.List.of("Accept", "Content-Type", "X-Request-Id", "X-XSRF-TOKEN"));
+        configuration.setExposedHeaders(java.util.List.of("X-Request-Id", "Content-Disposition"));
         configuration.setAllowCredentials(true);
         configuration.setMaxAge(3600L);
 
@@ -25,4 +25,3 @@ public class CorsConfiguration {
         return source;
     }
 }
-

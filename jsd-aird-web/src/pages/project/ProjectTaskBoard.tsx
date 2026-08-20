@@ -1,4 +1,3 @@
-/* eslint-disable no-irregular-whitespace */
 import { Button, DatePicker, Empty, Form, Input, Modal, Select, Table, Tag, message } from 'antd';
 import { FileAddOutlined, SnippetsOutlined, FileWordOutlined, FileExcelOutlined } from '@ant-design/icons';
 import { useCallback, useEffect, useMemo, useState } from 'react';

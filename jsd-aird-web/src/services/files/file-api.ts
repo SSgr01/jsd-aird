@@ -3,7 +3,7 @@ import type { ApiResponse } from '@/types/api';
 
 export interface StagedFile { fileId: string; originalName: string; contentType: string; size: number; sha256: string; status: string }
 
-export async function stageFile(file: File, kind: 'KNOWLEDGE' | 'SNAPSHOT' | 'IMPORT' = 'KNOWLEDGE') {
+export async function stageFile(file: File, kind: 'KNOWLEDGE' | 'SNAPSHOT' | 'IMPORT' | 'SPC_CHART' = 'KNOWLEDGE') {
   const body = new FormData();
   body.append('file', file);
   const response = await httpClient.post<ApiResponse<StagedFile>>('/api/v1/files/staged', body, { params: { kind } });

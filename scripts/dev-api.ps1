@@ -27,21 +27,21 @@ try {
     try {
         try { $compileLockHeld = $compileMutex.WaitOne([TimeSpan]::FromMinutes(3)) }
         catch [System.Threading.AbandonedMutexException] { $compileLockHeld = $true }
-        if (-not $compileLockHeld) { throw "等待后端编译锁超时" }
-        .\mvnw.cmd "-Dmaven.test.skip=true" compile
+        if (-not $compileLockHeld) { throw "Compilation mutex wait timed out" }
+        & .\mvnw.cmd "-Dmaven.test.skip=true" compile
         if ($LASTEXITCODE -ne 0) {
             # Microsoft JDK 21 on Windows can report "cannot close compiler
             # resources" after all class files were emitted. The second pass is
             # then incremental and verifies the output without rebuilding it.
-            .\mvnw.cmd "-Dmaven.test.skip=true" compile
+            & .\mvnw.cmd "-Dmaven.test.skip=true" compile
         }
-        if ($LASTEXITCODE -ne 0) { throw "后端编译失败" }
+        if ($LASTEXITCODE -ne 0) { throw "Backend compilation failed" }
     }
     finally {
         if ($compileLockHeld) { $compileMutex.ReleaseMutex() }
         $compileMutex.Dispose()
     }
-    .\mvnw.cmd "-Dmaven.test.skip=true" spring-boot:run "-Dspring-boot.run.profiles=local"
+    & .\mvnw.cmd "-Dmaven.test.skip=true" spring-boot:run "-Dspring-boot.run.profiles=local"
 }
 finally {
     Pop-Location

@@ -139,7 +139,7 @@ export function ProjectListPage() {
   const handleModalAfterOpenChange = (open: boolean) => {
     if (open && pendingFormValues) {
       form.resetFields();
-      form.setFieldsValue(pendingFormValues as ProjectFormValues);
+      form.setFieldsValue(pendingFormValues);
       setPendingFormValues(null);
     }
   };

@@ -20,7 +20,6 @@ import type { UploadFile, UploadProps } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
-import type { TemplateFormat } from '@/features/template-workspace/types';
 import { UploadWorkspace, type UploadWorkspaceRecord } from '@/components/upload-workspace';
 import {
   templateApi,
@@ -32,8 +31,11 @@ import {
 import { HttpError } from '@/services/http/errors';
 
 import { buildDisplaySuggestions, recognitionCounts } from './recognition-display';
+import { sourceFormatOf } from './normalize-template-file';
 
-const accepted = '.xlsx,.docx';
+// Show all files in the picker so unsupported formats are not silently hidden;
+// beforeUpload remains the single source of truth for rejecting them.
+const accepted = '*/*';
 export function TemplateUploadPage() {
   const { message, modal } = App.useApp();
   const navigate = useNavigate();
@@ -60,10 +62,14 @@ export function TemplateUploadPage() {
   );
 
   const validateTemplateFile: UploadProps['beforeUpload'] = (file) => {
-    const name = file.name.toLowerCase();
-    const supported = name.endsWith('.xlsx') || name.endsWith('.docx');
-    if (!supported || file.size === 0) {
-      void message.error('仅支持 XLSX / DOCX 文件，且文件不能为空');
+    try {
+      sourceFormatOf(file.name);
+    } catch {
+      void message.error('仅支持 XLSX、XLS、CSV、DOCX 或 DOC 文件');
+      return Upload.LIST_IGNORE;
+    }
+    if (file.size === 0) {
+      void message.error('文件不能为空');
       return Upload.LIST_IGNORE;
     }
     const signature = `${file.name.toLowerCase()}|${file.size}|${file.lastModified}`;
@@ -124,23 +130,34 @@ export function TemplateUploadPage() {
       return;
     }
     if (sourceFiles.some((file) => {
-      const name = file.name.toLowerCase();
-      return file.size === 0 || (!name.endsWith('.xlsx') && !name.endsWith('.docx'));
+      try {
+        return file.size === 0;
+      } catch {
+        return true;
+      }
     })) {
-      void message.error('仅支持 XLSX / DOCX 文件，且文件不能为空');
+      void message.error('支持 XLSX、XLS、CSV、DOCX、DOC；文件不能为空');
       return;
     }
     setUploading(true);
     try {
       let failed = 0;
       for (const file of sourceFiles) {
-        const format: TemplateFormat = file.name.toLowerCase().endsWith('.xlsx') ? 'XLSX' : 'DOCX';
         try {
-          const staged = await templateApi.stageOfficeFile(file);
+          const staged = await templateApi.stageTemplateFile(file);
           const selectedCategory = categories.find((item) => item.name === uploadCategory);
-          const options = { categoryId: selectedCategory?.id, operationSource: 'TEMPLATE_UPLOAD_PAGE' };
+          const options = {
+            categoryId: selectedCategory?.id,
+            operationSource: 'TEMPLATE_UPLOAD_PAGE',
+            originalSourceFileId: staged.originalFileId,
+            normalizedSourceFileId: staged.normalizedFileId,
+            originalFormat: staged.originalFormat,
+            normalizedFormat: staged.normalizedFormat,
+            normalizationStatus: staged.normalizationStatus,
+            normalizationMessage: staged.normalizationMessage,
+          };
           try {
-            await templateApi.createImport(staged.fileId, format, options);
+            await templateApi.createImport(staged.normalizedFileId, staged.normalizedFormat, options);
           } catch (error) {
             if (!(error instanceof HttpError) || error.code !== 'RESOURCE_CONFLICT') throw error;
             const override = await new Promise<boolean>((resolve) => { modal.confirm({
@@ -150,9 +167,12 @@ export function TemplateUploadPage() {
               onOk: () => resolve(true), onCancel: () => resolve(false),
             }); });
             if (!override) { failed += 1; continue; }
-            await templateApi.createImport(staged.fileId, format, {
+            await templateApi.createImport(staged.normalizedFileId, staged.normalizedFormat, {
               ...options, duplicateOverride: true, operationSource: 'DUPLICATE_OVERRIDE',
             });
+          }
+          if (staged.originalFormat !== staged.normalizedFormat) {
+            void message.info(`${file.name} 已标准化为 ${staged.normalizedFormat} 工作区`);
           }
         } catch (error) {
           failed += 1;
@@ -177,16 +197,19 @@ export function TemplateUploadPage() {
   }), [jobFilter, jobKeyword, jobs]);
 
   const allUploadRecords: UploadWorkspaceRecord[] = filteredJobs.map((job) => {
+    const staleState = jobFreshness(job);
     const status = job.status === 'FAILED'
       ? { label: '识别失败', color: 'error' }
       : job.status === 'PARSED'
         ? { label: recognitionStatus(job) === 'COMPLETE' ? '已识别' : '待复核', color: recognitionStatus(job) === 'COMPLETE' ? 'success' : 'warning' }
-        : { label: '识别中', color: 'processing' };
+        : staleState === 'STOPPED' ? { label: '可能已停止响应', color: 'error' }
+          : staleState === 'SLOW' ? { label: '处理较慢', color: 'warning' }
+            : { label: '识别中', color: 'processing' };
     return {
       id: job.id,
       name: job.sourceFileName,
-      meta: `${job.format === 'XLSX' ? 'Excel' : 'Word'}${job.categoryName ? ` · ${job.categoryName}` : ' · 未分类'} · ${new Date(job.createdAt).toLocaleString('zh-CN')}`,
-      detail: job.status === 'PARSED' ? recognitionLabel(job) : stageLabel(job.currentStage),
+      meta: `${formatLabel(job.format)}${job.categoryName ? ` · ${job.categoryName}` : ' · 未分类'} · ${new Date(job.createdAt).toLocaleString('zh-CN')}`,
+      detail: job.status === 'PARSED' ? recognitionLabel(job) : `${stageLabel(job.currentStage)} · ${jobElapsed(job)} · 最近更新${heartbeatAge(job)}`,
       status,
       progress: job.progress,
       actions: <Space size={2} wrap>
@@ -242,9 +265,9 @@ export function TemplateUploadPage() {
 
   const createTemplate = async () => {
     if (!selectedJob) return;
-    const input = await form.validateFields();
-    setCreating(true);
     try {
+      const input = await form.validateFields();
+      setCreating(true);
       const workspace = await templateApi.create({
         ...input,
         format: selectedJob.format,
@@ -252,6 +275,7 @@ export function TemplateUploadPage() {
       });
       navigate(`/templates/${workspace.versionId}/workspace?importJobId=${selectedJob.id}`);
     } catch (error) {
+      if (error && typeof error === 'object' && 'errorFields' in error) return;
       void message.error(error instanceof Error ? error.message : '模板草稿生成失败');
     } finally {
       setCreating(false);
@@ -307,7 +331,7 @@ export function TemplateUploadPage() {
         onRemoveFile={(file) => setFiles((current) => current.filter((item) => item.uid !== file.uid))}
         onClearFiles={() => setFiles([])}
         uploadMainText="拖拽文件到此处，或点击选择文件"
-        uploadHint="支持 XLSX / DOCX，支持批量上传；原始版式会完整保留。"
+        uploadHint="支持 XLSX、XLS、CSV、DOCX、DOC；旧格式由服务端标准化为模板工作区；支持批量上传。"
         submitLabel="开始识别"
         submitIcon={<CloudUploadOutlined />}
         onSubmit={() => void startUpload()}
@@ -455,15 +479,46 @@ function recognitionDescription(job: TemplateImportJob) {
 
 function stageLabel(stage?: string) {
   const labels: Record<string, string> = {
+    PREPARING: '正在准备任务',
     LOADING_FILE: '正在读取文件',
     READING_STRUCTURE: '正在分析表格结构',
     RECOGNIZING_FIELDS: '正在识别业务字段',
     RECOGNIZING_COMPLEX_REGIONS: '正在识别明细表和复杂区域',
     RECOGNIZING_WORKBOOK_SEMANTICS: '正在理解整份工作簿',
+    DISCOVERING_STRUCTURE_REGIONS: '正在发现结构区域',
+    RECOGNIZING_REGION_FIELDS: '正在识别区域字段',
     AI_RECOGNITION: '正在理解业务含义',
     BUILDING_DRAFT: '正在生成可编辑模板',
     CHECKING_RESULT: '正在检查识别结果',
     PERSISTING_RESULT: '正在保存识别结果',
   };
   return labels[stage ?? ''] ?? '等待后台处理';
+}
+
+function formatLabel(format?: string) {
+  return ({ XLSX: 'Excel', DOCX: 'Word', PDF: 'PDF', UNKNOWN: '未知格式' } as Record<string, string>)[format ?? ''] ?? '未知格式';
+}
+
+function jobFreshness(job: TemplateImportJob): 'NORMAL' | 'SLOW' | 'STOPPED' {
+  if (['PARSED', 'FAILED'].includes(job.status)) return 'NORMAL';
+  const heartbeat = Date.parse(job.lastHeartbeatAt || job.createdAt);
+  const age = Date.now() - heartbeat;
+  if (age >= 120_000) return 'STOPPED';
+  if (age >= 60_000) return 'SLOW';
+  return 'NORMAL';
+}
+
+function jobElapsed(job: TemplateImportJob) {
+  const started = Date.parse(job.startedAt || job.createdAt);
+  const seconds = Math.max(0, Math.floor((Date.now() - started) / 1000));
+  if (seconds < 60) return `已运行 ${seconds} 秒`;
+  return `已运行 ${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
+}
+
+function heartbeatAge(job: TemplateImportJob) {
+  const timestamp = Date.parse(job.lastHeartbeatAt || job.createdAt);
+  const seconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+  if (seconds < 5) return '刚刚';
+  if (seconds < 60) return `${seconds} 秒前`;
+  return `${Math.floor(seconds / 60)} 分钟前`;
 }

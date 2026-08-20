@@ -55,6 +55,9 @@ public interface KnowledgeRepository {
     }
     List<SearchRow> bm25Search(UUID organizationId, List<String> terms, boolean aiOnly, List<UUID> scopeIds,
                                List<UUID> categoryIds, int limit);
+    List<SearchRow> neighboringChunks(UUID organizationId, UUID documentId, UUID versionId, Integer pageNo,
+                                      int centerChunkNo, boolean aiOnly, List<UUID> scopeIds,
+                                      List<UUID> categoryIds, int radius, int limit);
     List<SearchRow> vectorSearch(UUID organizationId, String vector, boolean aiOnly, int limit);
     default List<SearchRow> vectorSearch(UUID organizationId, String vector, boolean aiOnly, List<UUID> scopeIds,
                                          List<UUID> categoryIds, int limit) {
@@ -87,5 +90,10 @@ public interface KnowledgeRepository {
                           List<Double> bbox, Long startTimeMs, Long endTimeMs, String section) { }
     record TermFrequency(String term, int frequency) { }
     record SearchRow(UUID chunkId, UUID documentId, UUID versionId, String title, String originalName,
-                     Integer pageNo, String section, String content, double score) { }
+                     Integer pageNo, String section, String content, double score, int chunkNo) {
+        public SearchRow(UUID chunkId, UUID documentId, UUID versionId, String title, String originalName,
+                         Integer pageNo, String section, String content, double score) {
+            this(chunkId, documentId, versionId, title, originalName, pageNo, section, content, score, -1);
+        }
+    }
 }

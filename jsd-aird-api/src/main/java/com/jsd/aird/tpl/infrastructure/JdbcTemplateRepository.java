@@ -111,6 +111,7 @@ public class JdbcTemplateRepository implements TemplateRepository {
         }
         appendCommonFilters(sql, parameters, query.keyword(), query.format(), query.status(),
                 query.createdBy(), query.updatedFrom(), query.updatedTo());
+        appendScopeFilter(sql, parameters, query.scope());
         var countSql = "SELECT count(*) FROM (" + sql + ") page_count";
         var total = java.util.Optional.ofNullable(namedJdbcTemplate.queryForObject(
                 countSql, parameters, Long.class)).orElse(0L);
@@ -165,6 +166,7 @@ public class JdbcTemplateRepository implements TemplateRepository {
                 .addValue("organizationId", query.organizationId());
         appendCommonFilters(sql, parameters, query.keyword(), query.format(), query.status(),
                 query.createdBy(), query.updatedFrom(), query.updatedTo());
+        appendScopeFilter(sql, parameters, query.scope());
         sql.append("""
                 ), category_counts AS (
                     SELECT category_id, count(*)::bigint AS template_count
@@ -225,6 +227,35 @@ public class JdbcTemplateRepository implements TemplateRepository {
         if (updatedTo != null) {
             sql.append(" AND lt.effective_updated_at <= :updatedTo\n");
             parameters.addValue("updatedTo", java.sql.Timestamp.from(updatedTo));
+        }
+    }
+
+    private void appendScopeFilter(StringBuilder sql, MapSqlParameterSource parameters,
+                                   TemplateRepository.DataScopeFilter scope) {
+        if (scope == null || "ALL".equals(scope.type())) return;
+        switch (scope.type()) {
+            case "SELF" -> {
+                sql.append(" AND lt.created_by = :scopeActorId\n");
+                parameters.addValue("scopeActorId", scope.actorId());
+            }
+            case "SELECTED" -> {
+                if (scope.targetIds().isEmpty()) sql.append(" AND 1 = 0\n");
+                else {
+                    sql.append(" AND lt.template_id IN (:scopeTargetIds)\n");
+                    parameters.addValue("scopeTargetIds", scope.targetIds());
+                }
+            }
+            case "CATEGORY" -> {
+                if (scope.targetIds().isEmpty()) sql.append(" AND 1 = 0\n");
+                else {
+                    sql.append(" AND lt.category_id IN (:scopeTargetIds)\n");
+                    parameters.addValue("scopeTargetIds", scope.targetIds());
+                }
+            }
+            // A template has no assignee/project relation in the current model.
+            // Returning an empty set is safer than broadening access.
+            case "ASSIGNED", "PROJECT" -> sql.append(" AND 1 = 0\n");
+            default -> sql.append(" AND 1 = 0\n");
         }
     }
 

@@ -39,7 +39,7 @@ spring:
           temperature: ${app.model.temperature:0.0}
       embedding:
         options:
-          model: ${app.ai.embedding.model:}
+          model: ${app.ai.embedding.model:text-embedding-v4}
           dimensions: ${app.ai.embedding.dimension:1024}
 
 server:
@@ -72,9 +72,22 @@ mybatis-plus:
 
 app:
   web:
-    allowed-origins: ${JSD_AIRD_ALLOWED_ORIGINS:http://localhost:5173}
+    allowed-origins: ${JSD_AIRD_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}
+  security:
+    session-cookie-name: ${JSD_AIRD_SESSION_COOKIE_NAME:JSD_AIRD_SESSION}
+    session-idle-timeout: ${JSD_AIRD_SESSION_IDLE_TIMEOUT:12h}
+    session-absolute-timeout: ${JSD_AIRD_SESSION_ABSOLUTE_TIMEOUT:30d}
+    cookie-secure: ${JSD_AIRD_COOKIE_SECURE:false}
+    cookie-same-site: ${JSD_AIRD_COOKIE_SAME_SITE:Lax}
+    enforcement-mode: ${JSD_AIRD_IAM_ENFORCEMENT_MODE:ENFORCE}
+  iam:
+    bootstrap:
+      enabled: ${JSD_AIRD_IAM_BOOTSTRAP_ENABLED:false}
+      organization-name: ${JSD_AIRD_IAM_ORG_NAME:本地开发组织}
+      admin-username: ${JSD_AIRD_IAM_ADMIN_USERNAME:admin}
+      admin-password: ${JSD_AIRD_IAM_ADMIN_PASSWORD:}
   identity:
-    development-mode: ${JSD_AIRD_DEV_IDENTITY_ENABLED:true}
+    development-mode: ${JSD_AIRD_DEV_IDENTITY_ENABLED:false}
   storage:
     provider: ${JSD_AIRD_STORAGE_PROVIDER:minio}
     endpoint: ${JSD_AIRD_MINIO_ENDPOINT:http://localhost:9000}
@@ -89,6 +102,7 @@ app:
     id: ${JSD_AIRD_WORKER_ID:api-local}
     poll-delay: ${JSD_AIRD_WORKER_POLL_DELAY:2s}
     lease-duration: ${JSD_AIRD_WORKER_LEASE_DURATION:60s}
+    job-timeout: ${JSD_AIRD_WORKER_JOB_TIMEOUT:15m}
   model:
     base-url: ${JSD_AIRD_MODEL_BASE_URL:${OPENAI_BASE_URL:}}
     api-key: ${JSD_AIRD_MODEL_API_KEY:${OPENAI_API_KEY:}}
@@ -106,6 +120,13 @@ app:
     visual-enabled: ${JSD_AIRD_MODEL_VISUAL_ENABLED:false}
   ai:
     prompt-version: ${JSD_AIRD_AI_PROMPT_VERSION:research-assistant-v1}
+    conversation-title:
+      enabled: ${JSD_AIRD_AI_CONVERSATION_TITLE_ENABLED:true}
+      max-length: ${JSD_AIRD_AI_CONVERSATION_TITLE_MAX_LENGTH:30}
+      prompt-version: ${JSD_AIRD_AI_CONVERSATION_TITLE_PROMPT_VERSION:conversation-title-v1}
+    circuit-breaker:
+      failure-threshold: ${JSD_AIRD_AI_CIRCUIT_BREAKER_FAILURE_THRESHOLD:3}
+      open-seconds: ${JSD_AIRD_AI_CIRCUIT_BREAKER_OPEN_SECONDS:30}
     embedding:
       base-url: ${JSD_AIRD_EMBEDDING_BASE_URL:${app.model.base-url:}}
       api-key: ${JSD_AIRD_EMBEDDING_API_KEY:${app.model.api-key:}}

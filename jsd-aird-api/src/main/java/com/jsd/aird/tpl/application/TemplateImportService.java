@@ -13,6 +13,7 @@ import java.util.UUID;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.jsd.aird.ops.application.port.JobDeadline;
 import com.jsd.aird.ops.application.port.FileObjectRepository;
 import com.jsd.aird.ops.application.port.ObjectStorage;
 import com.jsd.aird.shared.error.ApiErrorCode;
@@ -102,8 +103,20 @@ public class TemplateImportService {
     public TemplateImportRepository.ImportJobView create(
             UUID fileId, TemplateFormat format, UUID categoryId, boolean duplicateOverride, String operationSource
     ) {
+        return create(fileId, format, categoryId, duplicateOverride, operationSource,
+                fileId, fileId, format.name(), format.name(), "PASSTHROUGH", "当前文件已是标准模板工作区格式");
+    }
+
+    @Transactional
+    public TemplateImportRepository.ImportJobView create(
+            UUID fileId, TemplateFormat format, UUID categoryId, boolean duplicateOverride, String operationSource,
+            UUID originalSourceFileId, UUID normalizedSourceFileId, String originalFormat,
+            String normalizedFormat, String normalizationStatus, String normalizationMessage
+    ) {
         var actor = ActorContext.required();
         var file = fileRepository.find(actor.organizationId(), fileId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.FILE_NOT_READY));
+        if (originalSourceFileId != null) fileRepository.find(actor.organizationId(), originalSourceFileId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.FILE_NOT_READY));
         if (categoryId != null) templateRepository.findCategory(actor.organizationId(), categoryId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "分类不存在"));
@@ -123,7 +136,13 @@ public class TemplateImportService {
                 "OFFICE_FILE", "WORKBOOK", null, null, null,
                 categoryId, file.sha256(), duplicateOverride,
                 duplicate == null ? null : duplicate.id(),
-                operationSource == null || operationSource.isBlank() ? "UPLOAD" : operationSource
+                operationSource == null || operationSource.isBlank() ? "UPLOAD" : operationSource,
+                originalSourceFileId == null ? fileId : originalSourceFileId,
+                normalizedSourceFileId == null ? fileId : normalizedSourceFileId,
+                originalFormat == null ? format.name() : originalFormat,
+                normalizedFormat == null ? format.name() : normalizedFormat,
+                normalizationStatus == null ? "PASSTHROUGH" : normalizationStatus,
+                normalizationMessage == null ? "" : normalizationMessage
         ));
         templateRepository.appendAudit(actor.organizationId(), actor.userId(),
                 duplicateOverride ? "TEMPLATE_IMPORT_DUPLICATE_OVERRIDDEN" : "TEMPLATE_IMPORT_CREATED",
@@ -546,6 +565,10 @@ public class TemplateImportService {
         var modelRegions = modelRegions(
                 workingParsed.structureSummary(), format, scope, requestedSheetId, requestedAddress
         );
+        // Structure primitive discovery is CPU-heavy on large bordered sheets.
+        // Keep one physical snapshot for the recognition run instead of
+        // re-discovering the same regions before and after the model calls.
+        var physicalRegionFacts = coverageValidator.physicalRegions(workingParsed.structureSummary());
         log.info("workbook_parsed importJobId={} format={} scope={} sheets={} semanticCells={} formulas={} mergedRanges={}",
                 importJobId, format, scope, workingParsed.structureSummary().path("sheets").size(),
                 semanticCellCount(workingParsed.structureSummary()),
@@ -575,7 +598,7 @@ public class TemplateImportService {
         var modelStatus = "NOT_CONFIGURED";
         var recognitionStatus = "REVIEW_REQUIRED";
         var recognitionCoverage = coverageValidator.physicalReport(
-                workingParsed.structureSummary(), "模型语义识别尚未完成"
+                workingParsed.structureSummary(), physicalRegionFacts, "模型语义识别尚未完成"
         );
         var modelQualityIssues = new java.util.ArrayList<RecognitionModelClient.QualityIssueSuggestion>();
         var modelCallCount = 0;
@@ -591,7 +614,7 @@ public class TemplateImportService {
             repository.updateProgress(importJobId, 65, "DISCOVERING_STRUCTURE_REGIONS");
             var staged = recognizeInStages(importJobId, recognitionRunId, format, sourceFileName,
                     workingParsed.structureSummary(), scope, requestedSheetId, requestedAddress, visualInput,
-                    "STRUCTURE_DISCOVERY", "REGION_FIELDS");
+                    "STRUCTURE_DISCOVERY", "REGION_FIELDS", physicalRegionFacts);
             modelCallCount += staged.callCount();
             succeededCalls += staged.succeededCalls();
             failedCalls += staged.failedCalls();
@@ -645,7 +668,8 @@ public class TemplateImportService {
             repository.completeRecognitionRun(recognitionRunId, "COMPLETED");
             recognitionStatus = "COMPLETE";
             recognitionCoverage = coverageValidator.physicalReport(
-                    workingParsed.structureSummary(), "已按单行表头规则识别为按行重复数据表，无需大模型结构识别"
+                    workingParsed.structureSummary(), physicalRegionFacts,
+                    "已按单行表头规则识别为按行重复数据表，无需大模型结构识别"
             );
             modelStatus = "NOT_APPLICABLE";
             modelCallCount = 0;
@@ -656,7 +680,8 @@ public class TemplateImportService {
             repository.completeRecognitionRun(recognitionRunId, "COMPLETED");
             recognitionStatus = "REVIEW_REQUIRED";
             recognitionCoverage = coverageValidator.physicalReport(
-                    workingParsed.structureSummary(), "未配置模型服务，物理结构未完成业务语义确认"
+                    workingParsed.structureSummary(), physicalRegionFacts,
+                    "未配置模型服务，物理结构未完成业务语义确认"
             );
             var physicalBatch = physicalStructureBatch(workingParsed.structureSummary());
             repository.replacePhysicalSuggestions(importJobId, recognitionRunId, physicalBatch);
@@ -706,7 +731,9 @@ public class TemplateImportService {
                 modelStatus = "PARTIAL";
                 recognitionStatus = "REVIEW_REQUIRED";
                 recognitionCoverage = coverageValidator.physicalReport(
-                        workingParsed.structureSummary(), "结构已自动修复；请基于新快照重新发起识别"
+                        workingParsed.structureSummary(),
+                        coverageValidator.physicalRegions(workingParsed.structureSummary()),
+                        "结构已自动修复；请基于新快照重新发起识别"
                 );
             } else {
                 var physicalBatch = physicalStructureBatch(workingParsed.structureSummary());
@@ -778,7 +805,8 @@ public class TemplateImportService {
     private StagedModelResult recognizeInStages(
             UUID importJobId, UUID recognitionRunId, TemplateFormat format, String sourceFileName,
             JsonNode structure, String scope, String requestedSheetId, String requestedAddress,
-            JsonNode visualInput, String structurePhase, String regionPhase
+            JsonNode visualInput, String structurePhase, String regionPhase,
+            List<JsonNode> physicalRegionFacts
     ) {
         var accumulator = new ModelStageAccumulator();
         RecognitionModelClient.RecognitionBatch global = null;
@@ -804,11 +832,12 @@ public class TemplateImportService {
         var semanticModel = global == null ? null : global.suggestions().stream()
                 .filter(item -> "SEMANTIC_MODEL".equals(item.suggestionType()))
                 .findFirst().map(RecognitionModelClient.ModelSuggestion::payload).orElse(null);
-        var resolvedStructure = physicalCanonicalRegions(structure, global);
+        var resolvedStructure = physicalCanonicalRegions(structure, global, physicalRegionFacts);
         var regions = resolvedStructure.regions();
         var semanticTargets = resolvedStructure.canonicalSemanticTargets();
         var conflictGroups = new HashSet<String>();
         for (var region : regions) {
+            JobDeadline.check();
             var groupId = region.path("resolutionGroupId").asText("");
             if (!groupId.isBlank() && region.path("structureConflict").asBoolean(false)
                     && conflictGroups.add(groupId)) {
@@ -835,14 +864,20 @@ public class TemplateImportService {
             try {
                 var batchContext = semanticViewBuilder.build(structure, scope, requestedSheetId, requestedAddress);
                 var semanticRegions = batchContext.putArray("semanticRegions");
-                for (var region : semanticTargets) semanticRegions.add(semanticRegionContext(region, structure));
+                for (var region : semanticTargets) {
+                    JobDeadline.check();
+                    semanticRegions.add(semanticRegionContext(region, structure));
+                }
                 var batch = recognitionModelClient.recognize(new RecognitionModelClient.RecognitionRequest(
                         importJobId, recognitionRunId, format, sourceFileName, "workbook-regions",
                         batchContext, visualInput, regionPhase
                 ));
                 collectStage(accumulator, recognitionRunId, batch, false, semanticTargets, structure);
                 addMissingSemanticFallbacks(accumulator, semanticTargets, structure);
-                for (var region : canonicalRegions) accumulator.regionStates.put(regionKey(region), "SUCCEEDED");
+                for (var region : canonicalRegions) {
+                    JobDeadline.check();
+                    accumulator.regionStates.put(regionKey(region), "SUCCEEDED");
+                }
                 repository.updateProgress(importJobId, 84, "RECOGNIZING_REGION_FIELDS");
             } catch (RecognitionModelClient.RecognitionCallException exception) {
                 for (var region : canonicalRegions) accumulator.regionStates.put(regionKey(region), "FAILED");
@@ -858,7 +893,7 @@ public class TemplateImportService {
         }
         var coverage = coverageValidator.assess(
                 structure, regions, accumulator.regionStates, accumulator.suggestions,
-                globalSucceeded, globalFailed
+                globalSucceeded, globalFailed, physicalRegionFacts
         );
         var structureDiagnostics = accumulator.qualityIssues.stream().anyMatch(issue ->
                 issue.issueType().startsWith("INVALID_STRUCTURE")
@@ -1058,13 +1093,14 @@ public class TemplateImportService {
     }
 
     private ResolvedStructureRegions physicalCanonicalRegions(
-            JsonNode structure, RecognitionModelClient.RecognitionBatch global
+            JsonNode structure, RecognitionModelClient.RecognitionBatch global,
+            List<JsonNode> physicalRegionFacts
     ) {
         var semanticModel = global == null ? null : global.suggestions().stream()
                 .filter(item -> "SEMANTIC_MODEL".equals(item.suggestionType()))
                 .findFirst().map(RecognitionModelClient.ModelSuggestion::payload).orElse(null);
         var resolved = structureProposalResolver.resolve(
-                structure, coverageValidator.physicalRegions(structure), semanticModel);
+                structure, physicalRegionFacts, semanticModel);
         var result = new ArrayList<JsonNode>();
         for (var region : resolved.path("regions")) {
             var decorated = decorateStructureRegion(region);
@@ -1145,6 +1181,7 @@ public class TemplateImportService {
             ModelStageAccumulator accumulator, List<JsonNode> physicalRegions, JsonNode structure
     ) {
         for (var region : physicalRegions) {
+            JobDeadline.check();
             var key = regionKey(region);
             var candidateId = region.path("candidateId").asText(region.path("blockId").asText(""));
             if (region.path("physicalConfirmed").asBoolean(false)
@@ -1301,6 +1338,7 @@ public class TemplateImportService {
                         .put("source", "DETERMINATE_PHYSICAL_COMPONENT"))));
 
         for (var physicalChild : physicalFieldCompiler.children(parent, region, structure)) {
+            JobDeadline.check();
             if (!(physicalChild.payload().deepCopy() instanceof ObjectNode payload)) continue;
             var valueRange = childSourceRange(payload);
             var labelRange = payload.path("locator").path("labelRange").asText("");
@@ -1642,7 +1680,9 @@ public class TemplateImportService {
 
     private RecognitionModelClient.RecognitionBatch physicalStructureBatch(JsonNode structure) {
         var accumulator = new ModelStageAccumulator();
-        addPhysicalStructureSuggestions(accumulator, physicalCanonicalRegions(structure, null).regions(), structure);
+        var physicalRegionFacts = coverageValidator.physicalRegions(structure);
+        addPhysicalStructureSuggestions(accumulator,
+                physicalCanonicalRegions(structure, null, physicalRegionFacts).regions(), structure);
         return new RecognitionModelClient.RecognitionBatch(
                 List.copyOf(accumulator.suggestions), List.of(), "physical-structure", "", "", "", ""
         );

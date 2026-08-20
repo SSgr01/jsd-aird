@@ -1,13 +1,14 @@
 package com.jsd.aird.mdm.infrastructure.persistence;
 import com.jsd.aird.mdm.application.query.ProjectTaskQuery;
+import com.jsd.aird.mdm.application.query.ProjectTaskSummary;
+import com.jsd.aird.mdm.application.port.ProjectWorkRepository;
 import com.jsd.aird.mdm.domain.model.*;
-import com.jsd.aird.mdm.infrastructure.model.ProjectTaskSummaryRow;
 import org.apache.ibatis.annotations.*;
 import java.time.LocalDate;
 import java.util.*;
 
 @Mapper
-public interface ProjectWorkMapper {
+public interface ProjectWorkMapper extends ProjectWorkRepository {
  @Select("SELECT t.id,t.task_code taskCode,t.project_id projectId,t.stage_id stageId,t.name,t.owner,t.planned_date plannedDate,t.status,"+
   "(SELECT count(*) FROM mdm.project_experiment e WHERE e.task_id=t.id AND e.deleted=false) experimentCount,t.version,t.created_at createdAt,t.updated_at updatedAt " +
   "FROM mdm.project_task t WHERE t.stage_id=#{stageId} AND t.deleted=false ORDER BY t.created_at")
@@ -23,7 +24,7 @@ public interface ProjectWorkMapper {
  @Update("UPDATE mdm.project_experiment SET title=#{title},category=#{category},owner=#{owner},experiment_date=#{experimentDate},version=version+1,updated_at=now() WHERE id=#{id} AND version=#{version}") int updateExperiment(UUID id,String title,String category,String owner,LocalDate experimentDate,long version);
 @Update("UPDATE mdm.project_experiment SET deleted=true,version=version+1,updated_at=now() WHERE id=#{id} AND version=#{version} AND deleted=false") int deleteExperiment(UUID id,long version);
  @SelectProvider(type = ProjectWorkSqlProvider.class, method = "findPage")
- List<ProjectTaskSummaryRow> findTaskPage(@Param("query") ProjectTaskQuery query, @Param("offset") long offset, @Param("limit") int limit);
+ List<ProjectTaskSummary> findTaskPage(@Param("query") ProjectTaskQuery query, @Param("offset") long offset, @Param("limit") int limit);
  @SelectProvider(type = ProjectWorkSqlProvider.class, method = "count")
  long countTasks(@Param("query") ProjectTaskQuery query);
  @Select("SELECT DISTINCT t.owner FROM mdm.project_task t WHERE t.deleted = false AND t.owner IS NOT NULL AND t.owner <> '' ORDER BY t.owner")

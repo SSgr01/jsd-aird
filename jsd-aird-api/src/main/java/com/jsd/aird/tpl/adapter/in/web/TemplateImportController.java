@@ -91,7 +91,9 @@ public class TemplateImportController {
             @Valid @RequestBody CreateRequest request
     ) {
         return success(service.create(request.fileId(), request.format(), request.categoryId(),
-                request.duplicateOverride(), request.operationSource()));
+                request.duplicateOverride(), request.operationSource(), request.originalSourceFileId(),
+                request.normalizedSourceFileId(), request.originalFormat(), request.normalizedFormat(),
+                request.normalizationStatus(), request.normalizationMessage()));
     }
 
     @PostMapping("/{importJobId}/retry")
@@ -110,7 +112,9 @@ public class TemplateImportController {
 
     public record CreateRequest(
             @NotNull UUID fileId, @NotNull TemplateFormat format,
-            UUID categoryId, boolean duplicateOverride, String operationSource
+            UUID categoryId, boolean duplicateOverride, String operationSource,
+            UUID originalSourceFileId, UUID normalizedSourceFileId, String originalFormat,
+            String normalizedFormat, String normalizationStatus, String normalizationMessage
     ) {
     }
 

@@ -15,6 +15,8 @@ import java.util.UUID;
 import java.util.Optional;
 import java.util.zip.ZipInputStream;
 
+import javax.imageio.ImageIO;
+
 import com.jsd.aird.ops.application.port.FileObjectRepository;
 import com.jsd.aird.ops.application.port.FileStorageFacade;
 import com.jsd.aird.ops.application.port.ObjectStorage;
@@ -32,6 +34,8 @@ public class FileObjectService implements FileStorageFacade {
     private static final long MAX_KNOWLEDGE_UPLOAD_BYTES = 512L * 1024 * 1024;
 
     private static final long MAX_DOCUMENT_UPLOAD_BYTES = 200L * 1024 * 1024;
+
+    private static final long MAX_SPC_UPLOAD_BYTES = 100L * 1024 * 1024;
 
 
     private static final Set<String> BLOCKED_OOXML_PARTS = Set.of(
@@ -79,13 +83,17 @@ public class FileObjectService implements FileStorageFacade {
             if ("EXPERIMENT_SOURCE".equalsIgnoreCase(kind) && size > MAX_DOCUMENT_UPLOAD_BYTES) {
                 throw new ApiException(ApiErrorCode.BAD_REQUEST, "实验文档超过 200MB 限制");
             }
+            if ("SPC_CHART".equalsIgnoreCase(kind) && size > MAX_SPC_UPLOAD_BYTES) {
+                throw new ApiException(ApiErrorCode.BAD_REQUEST, "图谱文件超过 100MB 限制");
+            }
             validateSecurity(temporary, originalName, kind);
+            var effectiveContentType = FileContentTypeResolver.resolve(temporary, originalName, contentType);
 
             var id = UUID.randomUUID();
             var safeName = sanitizeFileName(originalName);
             var objectKey = actor.organizationId() + "/staged/" + id + "/" + safeName;
             try (var uploadStream = Files.newInputStream(temporary)) {
-                objectStorage.put(objectKey, uploadStream, size, contentType);
+                objectStorage.put(objectKey, uploadStream, size, effectiveContentType);
             }
             repository.insert(new FileObjectRepository.NewFileObject(
                     id,
@@ -93,12 +101,12 @@ public class FileObjectService implements FileStorageFacade {
                     bucket,
                     objectKey,
                     safeName,
-                    contentType,
+                    effectiveContentType,
                     size,
                     sha256,
                     actor.userId()
             ));
-            return new StagedFile(id, safeName, contentType, size, sha256, "STAGED");
+            return new StagedFile(id, safeName, effectiveContentType, size, sha256, "STAGED");
         } catch (IOException | NoSuchAlgorithmException exception) {
             throw new ApiException(ApiErrorCode.SNAPSHOT_PERSIST_FAILED, "文件暂存失败");
         } finally {
@@ -170,6 +178,10 @@ public class FileObjectService implements FileStorageFacade {
     }
 
     private void validateSecurity(Path file, String originalName, String kind) throws IOException {
+        if ("SPC_CHART".equalsIgnoreCase(kind)) {
+            validateSpectrumFile(file, originalName);
+            return;
+        }
         if ("DATA_SOURCE".equalsIgnoreCase(kind)) {
             var lowerName = originalName.toLowerCase(Locale.ROOT);
             if (!lowerName.endsWith(".xls") && !lowerName.endsWith(".xlsx") && !lowerName.endsWith(".csv")) {
@@ -183,6 +195,12 @@ public class FileObjectService implements FileStorageFacade {
         var lowerName = originalName.toLowerCase(Locale.ROOT);
         var xlsx = lowerName.endsWith(".xlsx");
         var docx = lowerName.endsWith(".docx");
+        if ("TEMPLATE_SOURCE".equalsIgnoreCase(kind)
+                && (lowerName.endsWith(".xls") || lowerName.endsWith(".csv") || lowerName.endsWith(".doc"))) {
+            // Legacy template formats are validated and converted by the tpl
+            // normalization endpoint before an import job is created.
+            return;
+        }
         if (!xlsx && !docx) {
             throw new ApiException(ApiErrorCode.BAD_REQUEST, "只接受 XLSX 或 DOCX OOXML 文件");
         }
@@ -214,6 +232,27 @@ public class FileObjectService implements FileStorageFacade {
         }
         if (docx && !entries.contains("word/document.xml")) {
             throw new ApiException(ApiErrorCode.BAD_REQUEST, "DOCX 文件缺少正文内容");
+        }
+    }
+
+    private void validateSpectrumFile(Path file, String originalName) throws IOException {
+        var lowerName = (originalName == null ? "" : originalName).toLowerCase(Locale.ROOT);
+        if (!(lowerName.endsWith(".pdf") || lowerName.endsWith(".png") || lowerName.endsWith(".jpg")
+                || lowerName.endsWith(".jpeg") || lowerName.endsWith(".tif") || lowerName.endsWith(".tiff"))) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "图谱中心仅接受 PDF、PNG、JPG、JPEG、TIF 或 TIFF 文件");
+        }
+        if (lowerName.endsWith(".pdf")) {
+            try (var input = Files.newInputStream(file)) {
+                var header = input.readNBytes(5);
+                if (header.length != 5 || header[0] != '%' || header[1] != 'P' || header[2] != 'D'
+                        || header[3] != 'F' || header[4] != '-') {
+                    throw new ApiException(ApiErrorCode.BAD_REQUEST, "文件不是有效的 PDF 图谱");
+                }
+            }
+            return;
+        }
+        if (ImageIO.read(file.toFile()) == null) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "文件不是有效的图片图谱");
         }
     }
 

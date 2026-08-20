@@ -23,6 +23,8 @@ import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.json.JsonCanonicalizer;
 import com.jsd.aird.shared.security.ActorContext;
 import com.jsd.aird.shared.security.Actor;
+import com.jsd.aird.iam.api.AuthorizationService;
+import com.jsd.aird.iam.api.PermissionCheck;
 import com.jsd.aird.ops.application.port.FileObjectRepository;
 import com.jsd.aird.ops.application.port.ObjectStorage;
 import com.jsd.aird.tpl.application.port.TemplateRepository;
@@ -51,6 +53,8 @@ public class TemplateWorkspaceService {
     private final TemplateImportRepository importRepository;
     private final TemplateRecognitionCompiler recognitionCompiler;
     private final TemplateRecognitionReviewService recognitionReviewService;
+    private final TemplateVersionReviewService templateVersionReviewService;
+    private final AuthorizationService authorizationService;
     private final StandardFieldService standardFieldService;
     private final JsonCanonicalizer canonicalizer;
     private final ObjectMapper objectMapper;
@@ -68,6 +72,8 @@ public class TemplateWorkspaceService {
             TemplateImportRepository importRepository,
             TemplateRecognitionCompiler recognitionCompiler,
             TemplateRecognitionReviewService recognitionReviewService,
+            TemplateVersionReviewService templateVersionReviewService,
+            AuthorizationService authorizationService,
             StandardFieldService standardFieldService,
             JsonCanonicalizer canonicalizer,
             ObjectMapper objectMapper,
@@ -84,6 +90,8 @@ public class TemplateWorkspaceService {
         this.importRepository = importRepository;
         this.recognitionCompiler = recognitionCompiler;
         this.recognitionReviewService = recognitionReviewService;
+        this.templateVersionReviewService = templateVersionReviewService;
+        this.authorizationService = authorizationService;
         this.standardFieldService = standardFieldService;
         this.canonicalizer = canonicalizer;
         this.objectMapper = objectMapper;
@@ -102,7 +110,10 @@ public class TemplateWorkspaceService {
             TemplateFormat format,
             TemplateStatus status
     ) {
-        return repository.findTemplates(ActorContext.required().organizationId(), keyword, format, status);
+        var actor = ActorContext.required();
+        return repository.findTemplates(new TemplateRepository.TemplateQuery(
+                actor.organizationId(), keyword, null, false, format, status, null, null, null,
+                "UPDATED_AT", "DESC", 1, 1000, scopeFilter(actor, "template.view", "TEMPLATE", "READ"))).items();
     }
 
     public TemplateRepository.TemplatePage list(TemplateListQuery query) {
@@ -110,14 +121,14 @@ public class TemplateWorkspaceService {
         return repository.findTemplates(new TemplateRepository.TemplateQuery(
                 actor.organizationId(), query.keyword(), query.categoryId(), query.uncategorized(), query.format(), query.status(),
                 query.createdBy(), query.updatedFrom(), query.updatedTo(), query.sortBy(), query.sortDirection(),
-                query.page(), query.size()));
+                query.page(), query.size(), scopeFilter(actor, "template.view", "TEMPLATE", "READ")));
     }
 
     public TemplateRepository.TemplateFacetSummary facets(TemplateFacetQuery query) {
         var actor = ActorContext.required();
         return repository.findTemplateFacets(new TemplateRepository.TemplateFacetQuery(
                 actor.organizationId(), query.keyword(), query.format(), query.status(), query.createdBy(),
-                query.updatedFrom(), query.updatedTo()));
+                query.updatedFrom(), query.updatedTo(), scopeFilter(actor, "template.view", "TEMPLATE", "READ")));
     }
 
     public List<TemplateRepository.TemplateCreatorOption> filterOptions() {
@@ -148,6 +159,16 @@ public class TemplateWorkspaceService {
                         .append(csv(item.createdByName())).append(',')
                         .append(csv(item.updatedAt().toString())).append("\r\n"));
         return builder.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    private TemplateRepository.DataScopeFilter scopeFilter(Actor actor, String permissionCode,
+                                                              String resourceType, String operation) {
+        var scope = authorizationService.resolveScope(new PermissionCheck(
+                actor.organizationId(), actor.userId(), permissionCode, resourceType, null, operation));
+        if (!scope.allowed()) {
+            throw new ApiException(ApiErrorCode.PERMISSION_DENIED, "当前用户没有模板查看权限");
+        }
+        return new TemplateRepository.DataScopeFilter(scope.scopeType(), actor.userId(), scope.targetIds());
     }
 
     private String csv(String value) {
@@ -463,6 +484,15 @@ public class TemplateWorkspaceService {
     }
 
     public List<BatchActionResult> batch(BatchActionCommand command) {
+        var actor = ActorContext.required();
+        var permissionCode = switch (command.action().toUpperCase(Locale.ROOT)) {
+            case "COPY" -> "template.copy";
+            case "MOVE" -> "template.update";
+            case "DELETE_DRAFT", "RETIRE" -> "template.delete";
+            default -> throw new ApiException(ApiErrorCode.BAD_REQUEST, "不支持的批量操作");
+        };
+        authorizationService.require(new PermissionCheck(
+                actor.organizationId(), actor.userId(), permissionCode, "TEMPLATE", null, "WRITE"));
         var results = new ArrayList<BatchActionResult>();
         for (var item : command.items()) {
             try {
@@ -755,6 +785,7 @@ public class TemplateWorkspaceService {
         if (workspace.status() != TemplateStatus.DRAFT) {
             throw new ApiException(ApiErrorCode.TEMPLATE_VERSION_IMMUTABLE);
         }
+        templateVersionReviewService.requireApproved(actor.organizationId(), versionId);
         if (workspace.format() == TemplateFormat.XLSX && workspace.snapshotFileId() == null) {
             throw new ApiException(ApiErrorCode.FILE_NOT_READY, "发布前必须持久化 Excel 原生快照");
         }
@@ -764,12 +795,14 @@ public class TemplateWorkspaceService {
                         workspace.wordDocument().path("sourceDocxFileId").asText(""))))) {
             throw new ApiException(ApiErrorCode.FILE_NOT_READY, "发布前必须准备 Word 原生工件");
         }
-        if (workspace.format() == TemplateFormat.XLSX
-                && hasRequiredFieldWithoutPosition(workspace.schema(), workspace.mapping(), workspace.format())) {
+        var requiredFieldsWithoutPosition = requiredFieldsWithoutPosition(
+                workspace.schema(), workspace.mapping(), workspace.format());
+        if (!requiredFieldsWithoutPosition.isEmpty()) {
             var message = workspace.format() == TemplateFormat.DOCX
                     ? "还有必填 Word 字段未插入正文位置"
                     : "还有必填字段没有有效填写位置";
-            throw new ApiException(ApiErrorCode.BINDING_INVALID, message);
+            throw new ApiException(ApiErrorCode.TEMPLATE_REQUIRED_FIELD_UNBOUND, message,
+                    requiredFieldsWithoutPosition);
         }
         if (workspace.format() == TemplateFormat.XLSX
                 && recognitionReviewService.hasIncompleteRecognition(actor.organizationId(), versionId)) {
@@ -829,7 +862,8 @@ public class TemplateWorkspaceService {
         return summary;
     }
 
-    private boolean hasRequiredFieldWithoutPosition(JsonNode schema, JsonNode mapping, TemplateFormat format) {
+    private List<Map<String, String>> requiredFieldsWithoutPosition(JsonNode schema, JsonNode mapping, TemplateFormat format) {
+        var missing = new ArrayList<Map<String, String>>();
         var bindings = new java.util.HashMap<String, JsonNode>();
         if (mapping != null && mapping.isArray()) {
             for (JsonNode binding : mapping) {
@@ -839,20 +873,28 @@ public class TemplateWorkspaceService {
         }
         var fields = schema.path(TemplateRecognitionCompiler.FIELD_MODEL_KEY).path("fields");
         if (!fields.isArray()) {
-            return false;
+            return missing;
         }
         for (JsonNode field : fields) {
             if (!field.path("required").asBoolean(false)) continue;
             var bindingId = field.path("bindingId").asText("");
             var binding = bindings.get(bindingId);
-            if (binding == null) return true;
+            if (binding == null) {
+                missing.add(Map.of("fieldId", field.path("id").asText(field.path("fieldId").asText("")),
+                        "fieldName", field.path("name").asText("未命名字段")));
+                continue;
+            }
             if (format == TemplateFormat.DOCX) {
-                if (!StringUtils.hasText(binding.path("markerId").asText())) return true;
+                if (!StringUtils.hasText(binding.path("markerId").asText())) {
+                    missing.add(Map.of("fieldId", field.path("id").asText(field.path("fieldId").asText("")),
+                            "fieldName", field.path("name").asText("未命名字段")));
+                }
             } else if (!validRange(binding.path("locator").path("address").asText(""))) {
-                return true;
+                missing.add(Map.of("fieldId", field.path("id").asText(field.path("fieldId").asText("")),
+                        "fieldName", field.path("name").asText("未命名字段")));
             }
         }
-        return false;
+        return missing;
     }
 
     private void validateSchema(JsonNode schema) {

@@ -20,6 +20,10 @@ public final class ActorContext {
         ACTOR.set(actor);
     }
 
+    public static Actor current() {
+        return ACTOR.get();
+    }
+
     public static Actor required() {
         var actor = ACTOR.get();
         if (actor == null) {

@@ -12,12 +12,18 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.jsd.aird.ops.application.port.JobDeadline;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Produces conservative, reusable structure hints before semantic field matching.
  * It never assigns a standard field code and never promotes a hint to a formal mapping.
  */
 public final class StructurePrimitiveRecognizer {
+
+    private static final Logger log = LoggerFactory.getLogger(StructurePrimitiveRecognizer.class);
+    private static final int MAX_GRID_CANDIDATES = 50_000;
 
     private static final Set<String> STATIC_PREFIXES = Set.of("注：", "注:", "备注：", "备注:",
             "注意：", "注意:", "说明：", "说明:", "提示：", "提示:", "操作要求：", "操作要求:");
@@ -41,16 +47,19 @@ public final class StructurePrimitiveRecognizer {
     public ArrayNode recognize(JsonNode structure) {
         var result = objectMapper.createArrayNode();
         for (var sheet : structure.path("sheets")) {
+            JobDeadline.check();
+            var startedAt = System.nanoTime();
             var sheetId = sheet.path("id").asText(sheet.path("sheetId").asText(""));
             var cells = new ArrayList<JsonNode>();
             sheet.path("semanticCells").forEach(cells::add);
             if (cells.isEmpty()) continue;
+            var detectedGrids = detectBlankGrids(sheet);
             addLargeColumnTable(result, sheetId, sheet);
-            addMatrix(result, sheetId, sheet, cells);
+            addMatrix(result, sheetId, sheet, cells, detectedGrids);
             // Discover scalar form fields after the matrix envelope is known. A
             // label immediately before a matrix member row must not become a
             // scalar field merely because the member cells are blank inputs.
-            addStaticColumnTables(result, sheetId, sheet, cells);
+            addStaticColumnTables(result, sheetId, sheet, cells, detectedGrids);
             addFieldGroups(result, sheetId, cells);
             // A sheet may contain a matrix and one or more ordinary repeated
             // tables. Their detection is independent; overlap filtering keeps
@@ -62,6 +71,9 @@ public final class StructurePrimitiveRecognizer {
             // cannot become two independent "basic information" regions.
             consolidateFormEnvelopes(result, sheetId, sheet, cells);
             addStaticAndTextRegions(result, sheetId, cells);
+            log.debug("structure_recognition_sheet sheetId={} semanticCells={} candidateCells={} primitives={} durationMs={}",
+                    sheetId, cells.size(), sheet.path("candidateCells").size(), result.size(),
+                    (System.nanoTime() - startedAt) / 1_000_000);
         }
         return result;
     }
@@ -77,8 +89,10 @@ public final class StructurePrimitiveRecognizer {
     }
 
     /** Detects all cross-filled regions before ordinary repeated-row detection. */
-    private boolean addMatrix(ArrayNode result, String sheetId, JsonNode sheet, List<JsonNode> cells) {
-        var grids = detectBlankGrids(sheet);
+    private boolean addMatrix(
+            ArrayNode result, String sheetId, JsonNode sheet, List<JsonNode> cells,
+            List<GridSurface> grids
+    ) {
         if (grids.isEmpty()) return addMatrixForGrid(result, sheetId, sheet, cells, null);
         var detected = false;
         for (var grid : grids) detected |= addMatrixForGrid(result, sheetId, sheet, cells, grid);
@@ -86,9 +100,10 @@ public final class StructurePrimitiveRecognizer {
     }
 
     private void addStaticColumnTables(
-            ArrayNode result, String sheetId, JsonNode sheet, List<JsonNode> cells
+            ArrayNode result, String sheetId, JsonNode sheet, List<JsonNode> cells,
+            List<GridSurface> detectedGrids
     ) {
-        var grids = new ArrayList<>(detectBlankGrids(sheet));
+        var grids = new ArrayList<>(detectedGrids);
         var usedRange = bounds(sheet.path("usedRange").asText(""));
         if (usedRange != null) {
             var usedGrid = new GridSurface(usedRange[0], usedRange[2], usedRange[1], usedRange[3]);
@@ -597,21 +612,23 @@ public final class StructurePrimitiveRecognizer {
     }
 
     private List<GridSurface> detectBlankGrids(JsonNode sheet) {
-        var byRow = new java.util.TreeMap<Integer, List<Integer>>();
+        var byRow = new java.util.TreeMap<Integer, Set<Integer>>();
         for (var cell : sheet.path("candidateCells")) {
+            JobDeadline.check();
             if (!hasBorderEvidence(cell)) continue;
-            byRow.computeIfAbsent(cell.path("row").asInt(), ignored -> new ArrayList<>())
+            byRow.computeIfAbsent(cell.path("row").asInt(), ignored -> new HashSet<>())
                     .add(cell.path("column").asInt());
         }
         var candidates = new ArrayList<GridSurface>();
         for (var entry : byRow.entrySet()) {
-            var columns = entry.getValue().stream().distinct().sorted().toList();
+            var columns = entry.getValue().stream().sorted().toList();
             var start = -1;
             var previous = -1;
             for (var column : columns) {
                 if (start < 0 || column != previous + 1) {
                     if (start >= 0) {
                         for (int candidateStart = start; candidateStart < previous; candidateStart++) {
+                            if (candidates.size() >= MAX_GRID_CANDIDATES) break;
                             candidates.add(contiguousGrid(candidateStart, previous, entry.getKey(), byRow));
                         }
                     }
@@ -621,6 +638,7 @@ public final class StructurePrimitiveRecognizer {
             }
             if (start >= 0) {
                 for (int candidateStart = start; candidateStart < previous; candidateStart++) {
+                    if (candidates.size() >= MAX_GRID_CANDIDATES) break;
                     candidates.add(contiguousGrid(candidateStart, previous, entry.getKey(), byRow));
                 }
             }
@@ -636,13 +654,14 @@ public final class StructurePrimitiveRecognizer {
     }
 
     private GridSurface contiguousGrid(
-            int startColumn, int endColumn, int startRow, java.util.TreeMap<Integer, List<Integer>> byRow
+            int startColumn, int endColumn, int startRow,
+            java.util.TreeMap<Integer, Set<Integer>> byRow
     ) {
         var required = java.util.stream.IntStream.rangeClosed(startColumn, endColumn).boxed().toList();
         var lastRow = startRow;
         for (int row = startRow + 1; row <= byRow.lastKey(); row++) {
             var columns = byRow.get(row);
-            if (columns == null || !columns.stream().distinct().toList().containsAll(required)) {
+            if (columns == null || !columns.containsAll(required)) {
                 if (!topologyV2Enabled || !bridgeableAttributeRow(row, required, byRow)) break;
             }
             lastRow = row;
@@ -658,13 +677,13 @@ public final class StructurePrimitiveRecognizer {
      * never bridged, so independent tables remain independent.
      */
     private boolean bridgeableAttributeRow(
-            int row, List<Integer> required, java.util.TreeMap<Integer, List<Integer>> byRow
+            int row, List<Integer> required, java.util.TreeMap<Integer, Set<Integer>> byRow
     ) {
         var columns = byRow.get(row);
         var nextColumns = byRow.get(row + 1);
         if (columns == null || nextColumns == null || required.size() < 4
-                || !nextColumns.stream().distinct().toList().containsAll(required)) return false;
-        var available = columns.stream().distinct().sorted().toList();
+                || !nextColumns.containsAll(required)) return false;
+        var available = columns;
         if (available.size() < 2 || !available.contains(required.getFirst())) return false;
         var prefixEnd = required.getFirst() - 1;
         for (var column : required) {
@@ -854,16 +873,18 @@ public final class StructurePrimitiveRecognizer {
     }
 
     private void addFieldGroups(ArrayNode result, String sheetId, List<JsonNode> cells) {
+        var byPosition = new HashMap<String, JsonNode>();
+        for (var cell : cells) {
+            byPosition.putIfAbsent(positionKey(cell.path("row").asInt(), cell.path("column").asInt()), cell);
+        }
         for (var label : cells) {
+            JobDeadline.check();
             var text = label.path("value").asText("").strip();
             if (text.isBlank()) continue;
             var row = label.path("row").asInt();
             var column = label.path("column").asInt();
             var labelEndColumn = endColumn(label, column);
-            var next = cells.stream()
-                    .filter(candidate -> candidate.path("row").asInt() == row
-                            && candidate.path("column").asInt() == labelEndColumn + 1)
-                    .findFirst().orElse(null);
+            var next = byPosition.get(positionKey(row, labelEndColumn + 1));
             if (next == null) continue;
             var explicitLabel = text.matches("^.*[：:]$");
             var horizontalLabel = labelEndColumn > column && endRow(label, row) == row;
@@ -1172,18 +1193,27 @@ public final class StructurePrimitiveRecognizer {
      */
     private int[] structuralEnvelopeBounds(JsonNode sheet, List<JsonNode> semanticCells) {
         var structural = new ArrayList<JsonNode>();
+        var structuralAddresses = new HashSet<String>();
         sheet.path("candidateCells").forEach(cell -> {
+            JobDeadline.check();
             if (!cell.path("value").asText("").strip().isBlank()
                     || cell.path("formula").isTextual()
                     || "FORMULA".equals(cell.path("factType").asText(""))
                     || "INPUT_CANDIDATE".equals(cell.path("factType").asText(""))
                     || cell.path("inputCandidate").asBoolean(false)
                     || hasBorderEvidence(cell)
-                    || !cell.path("mergedRange").asText("").isBlank()) structural.add(cell);
+                    || !cell.path("mergedRange").asText("").isBlank()) {
+                structural.add(cell);
+                var address = cell.path("address").asText("");
+                if (!address.isBlank()) structuralAddresses.add(normalizeAddress(address));
+            }
         });
-        for (var cell : semanticCells) if (structural.stream().noneMatch(existing ->
-                existing.path("address").asText("").equalsIgnoreCase(cell.path("address").asText("")))) {
-            structural.add(cell);
+        for (var cell : semanticCells) {
+            JobDeadline.check();
+            var address = cell.path("address").asText("");
+            if (address.isBlank() || structuralAddresses.add(normalizeAddress(address))) {
+                structural.add(cell);
+            }
         }
         if (structural.isEmpty()) return bounds(sheet.path("usedRange").asText(""));
         var minColumn = structural.stream().mapToInt(cell -> cell.path("column").asInt(0))
@@ -1241,10 +1271,14 @@ public final class StructurePrimitiveRecognizer {
     }
 
     private int formEvidenceCount(JsonNode sheet, List<JsonNode> semanticCells, int startRow, int endRow, int endColumn) {
-        var candidates = new ArrayList<JsonNode>();
-        sheet.path("candidateCells").forEach(candidates::add);
+        var candidatesByRow = new HashMap<Integer, List<JsonNode>>();
+        for (var candidate : sheet.path("candidateCells")) {
+            candidatesByRow.computeIfAbsent(candidate.path("row").asInt(), ignored -> new ArrayList<>())
+                    .add(candidate);
+        }
         var count = 0;
         for (var cell : semanticCells) {
+            JobDeadline.check();
             var row = cell.path("row").asInt();
             var column = cell.path("column").asInt();
             var text = cell.path("value").asText("").strip();
@@ -1256,8 +1290,8 @@ public final class StructurePrimitiveRecognizer {
                 continue;
             }
             var labelEnd = endColumn(cell, column);
-            var blankRight = candidates.stream().anyMatch(candidate -> candidate.path("row").asInt() == row
-                    && candidate.path("column").asInt() > labelEnd
+            var blankRight = candidatesByRow.getOrDefault(row, List.of()).stream().anyMatch(candidate ->
+                    candidate.path("column").asInt() > labelEnd
                     && candidate.path("column").asInt() <= endColumn
                     && candidate.path("column").asInt() <= labelEnd + 3
                     && (candidate.path("empty").asBoolean(true)
@@ -1478,6 +1512,14 @@ public final class StructurePrimitiveRecognizer {
         var overlapHeight = overlapBottom - overlapTop + 1;
         var shorterHeight = Math.min(first[3] - first[1] + 1, second[3] - second[1] + 1);
         return overlapHeight / (double) Math.max(1, shorterHeight) >= 0.95;
+    }
+
+    private String positionKey(int row, int column) {
+        return row + ":" + column;
+    }
+
+    private String normalizeAddress(String address) {
+        return address.toUpperCase(Locale.ROOT);
     }
 
     private String address(JsonNode cell) {

@@ -65,8 +65,10 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
                         INSERT INTO tpl.template_import_job (
                             id, organization_id, source_file_id, format, status,
                             progress, async_job_id, created_by, category_id, source_sha256,
-                            duplicate_override, duplicate_source_job_id, operation_source
-                        ) VALUES (?, ?, ?, ?, 'QUEUED', 0, ?, ?, ?, ?, ?, ?, ?)
+                            duplicate_override, duplicate_source_job_id, operation_source,
+                            original_source_file_id, normalized_source_file_id, original_format,
+                            normalized_format, normalization_status, normalization_message
+                        ) VALUES (?, ?, ?, ?, 'QUEUED', 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                 job.importJobId(),
                 job.organizationId(),
@@ -78,7 +80,13 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
                 job.sourceSha256(),
                 job.duplicateOverride(),
                 job.duplicateSourceJobId(),
-                job.operationSource()
+                job.operationSource(),
+                job.originalSourceFileId(),
+                job.normalizedSourceFileId(),
+                job.originalFormat(),
+                job.normalizedFormat(),
+                job.normalizationStatus(),
+                job.normalizationMessage()
         );
     }
 
@@ -290,7 +298,7 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
                                             AND qi.status NOT IN ('AUTO_APPLIED', 'CONFIRMED', 'IGNORED'))
                                    )
                                ) AS recognition_summary,
-                               aj.last_error, tij.created_at,
+                               aj.last_error, tij.created_at, aj.started_at, aj.updated_at,
                                (SELECT count(*)::int FROM tpl.recognition_run rerun
                                 WHERE rerun.import_job_id = tij.id
                                   AND rerun.run_reason LIKE 'MANUAL_RERUN%') AS retry_count,
@@ -332,6 +340,8 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
                          parse(rs.getString("recognition_summary")),
                         rs.getString("last_error"),
                         rs.getTimestamp("created_at").toInstant(),
+                        timestampInstant(rs, "started_at"),
+                        timestampInstant(rs, "updated_at"),
                         rs.getInt("retry_count"),
                         rs.getInt("suggestion_count"),
                         rs.getInt("pending_suggestion_count"),
@@ -1123,6 +1133,11 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
                 rs.getString("filter_detail"),
                 rs.getTimestamp("created_at").toInstant()
         );
+    }
+
+    private java.time.Instant timestampInstant(java.sql.ResultSet rs, String column) throws java.sql.SQLException {
+        var timestamp = rs.getTimestamp(column);
+        return timestamp == null ? null : timestamp.toInstant();
     }
 
     private QualityIssueView mapQualityIssue(java.sql.ResultSet rs) throws java.sql.SQLException {

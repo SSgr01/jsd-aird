@@ -95,7 +95,6 @@ export function CustomerRequirementTab({ projectId, projectName, partnerId }: Pr
 
   useEffect(() => {
     void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
   const fillCustomFields = (record?: Requirement | null) => {
@@ -165,13 +164,13 @@ export function CustomerRequirementTab({ projectId, projectName, partnerId }: Pr
 
   const handleSubmit = async () => {
     const values = await form.validateFields();
-    const customFields: Record<string, string> = {} as Record<string, string>;
+    const customFields: Record<string, string> = {};
     const rows: { name?: string; value?: string }[] = customFieldRows ?? [];
     for (const row of rows) {
       const name = String(row?.name ?? '').trim();
       if (name) {
         const val = row?.value ?? '';
-        customFields[name] = String(val) as string;
+        customFields[name] = String(val);
       }
     }
     setSubmitting(true);
@@ -187,7 +186,7 @@ export function CustomerRequirementTab({ projectId, projectName, partnerId }: Pr
         deliveryDate: values.deliveryDate,
         projectId: projectId ?? undefined,
         metrics: [],
-        customFields: (Object.keys(customFields).length ? (customFields as Record<string, unknown>) : undefined),
+        customFields: (Object.keys(customFields).length ? (customFields) : undefined),
         version: mode === 'edit' && editingRecord ? editingRecord.version ?? 0 : 0,
       };
       if (mode === 'edit' && editingRecord) {

@@ -57,7 +57,6 @@ export function ReferenceMaterialsTab({ projectId }: Props) {
 
   useEffect(() => {
     void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, filters.keyword, filters.source, filters.stage, filters.addedBy, filters.status]);
 
   const addedByOptions = useMemo(() => {

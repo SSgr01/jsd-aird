@@ -20,30 +20,6 @@ public class ConversationMemoryService {
         this.clients = clients;
     }
 
-    public void ensureTitle(UUID organizationId, UUID conversationId) {
-        var meta = repository.conversation(organizationId, conversationId);
-        if (meta == null || "USER".equals(meta.titleSource()) || !"FIRST_QUESTION".equals(meta.titleSource())) return;
-        var messages = repository.recentMessages(organizationId, conversationId, 2);
-        var question = messages.stream().filter(item -> "USER".equals(item.role())).map(AssistantRepository.MessageRow::content)
-                .findFirst().orElse("");
-        if (question.isBlank()) return;
-        var title = question.substring(0, Math.min(36, question.length())).replaceAll("[\\r\\n]+", " ").strip();
-        var builder = clients.getIfAvailable();
-        if (builder != null) {
-            try {
-                var generated = builder.build().prompt()
-                        .system("只生成简短中文会话标题，不超过 20 个字，不要引号，不要解释")
-                        .user(question).call().entity(TitleResult.class);
-                if (generated != null && StringUtils.hasText(generated.title())) {
-                    title = generated.title().replaceAll("[\\r\\n\\\"']+", " ").strip();
-                }
-            } catch (Exception ignored) {
-                // The first question remains a deterministic title fallback.
-            }
-        }
-        repository.updateTitle(organizationId, conversationId, title, builder == null ? "FIRST_QUESTION" : "MODEL");
-    }
-
     public void maybeSummarize(UUID organizationId, UUID conversationId) {
         var messages = repository.recentMessages(organizationId, conversationId, 100);
         if (messages.size() < 12) return;
@@ -101,9 +77,6 @@ public class ConversationMemoryService {
 
     public void delete(UUID organizationId, UUID conversationId) {
         repository.renameOrDelete(organizationId, conversationId, null, true);
-    }
-
-    public record TitleResult(String title) {
     }
 
     public record ConversationSummary(String summary) {

@@ -105,7 +105,6 @@ export default function TaskPage() {
 
   useEffect(() => {
     loadTasks(query);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query.page, query.size, query.keyword, query.projectId, query.stageId, query.status, query.owner, query.priority]);
 
   useEffect(() => {
@@ -219,7 +218,7 @@ export default function TaskPage() {
       render: (value: string) => {
         const label = formatTaskStatus(value);
         const color = value === 'COMPLETED' ? 'success' : value === 'IN_PROGRESS' ? 'processing' : 'default';
-        return <Badge status={color as any} text={label} />;
+        return <Badge status={color} text={label} />;
       },
     },
     {
@@ -248,7 +247,7 @@ export default function TaskPage() {
         </Button>
       </Flex>
 
-      <Card bordered={false}>
+          <Card variant="borderless">
         <Space wrap style={{ marginBottom: 16 }}>
           <Input.Search
             placeholder="搜索任务名称、编号或目标"

@@ -8,7 +8,8 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && npm run check:bundle",
+    "check:bundle": "node scripts/check-bundle-size.mjs",
     "capture:template-render": "node scripts/capture-template-render.mjs",
     "preview": "vite preview",
     "typecheck": "tsc -b --pretty false",

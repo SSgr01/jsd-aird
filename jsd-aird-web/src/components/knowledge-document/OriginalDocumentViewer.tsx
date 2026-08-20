@@ -13,7 +13,7 @@ export function OriginalDocumentViewer(props: OriginalDocumentViewerProps) {
   const [blob, setBlob] = useState<Blob>(); const [loading, setLoading] = useState(true); const [error, setError] = useState<string>();
   const selected = props.sourceNodes.find((item) => item.sourceNodeKey === props.selectedSourceNodeKey);
   useEffect(() => { let active = true; setLoading(true); setError(undefined); props.load().then((value) => { if (active) setBlob(value); }).catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : '原文件加载失败'); }).finally(() => { if (active) setLoading(false); }); return () => { active = false; }; }, [props.fileName, props.load]);
-  if (loading) return <div className="knowledge-viewer-state"><Spin tip="正在加载原文件" /></div>;
+  if (loading) return <div className="knowledge-viewer-state"><Spin /><span>正在加载原文件</span></div>;
   if (error || !blob) return <div className="knowledge-viewer-state"><Alert type="error" showIcon message={error || '原文件不可读取'} /></div>;
   const name = props.fileName.toLowerCase(); const type = props.contentType.toLowerCase();
   if (type === 'application/pdf' || name.endsWith('.pdf')) return <PdfViewer blob={blob} selected={selected?.sourceAnchor} sourceNodes={props.sourceNodes} onSourceSelect={props.onSourceSelect} />;

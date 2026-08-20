@@ -70,7 +70,9 @@ export function RecognitionReviewPanel({
   const itemRefs = useRef(new Map<string, HTMLDivElement>());
   const qualityRefs = useRef(new Map<string, HTMLDivElement>());
   const visibleQualityIssues = useMemo(
-    () => (review?.qualityIssues ?? []).filter(isActionableTemplateIssue),
+    () => (review?.qualityIssues ?? [])
+      .filter(isActionableTemplateIssue)
+      .filter((issue) => issue.status !== 'IGNORED'),
     [review?.qualityIssues],
   );
 

@@ -3,6 +3,7 @@ package com.jsd.aird.tpl.application.port;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -146,8 +147,16 @@ public interface TemplateRepository {
             String sortBy,
             String sortDirection,
             int page,
-            int size
-    ) {}
+            int size,
+            DataScopeFilter scope
+    ) {
+        public TemplateQuery(UUID organizationId, String keyword, UUID categoryId, boolean uncategorized,
+                             TemplateFormat format, TemplateStatus status, UUID createdBy, Instant updatedFrom,
+                             Instant updatedTo, String sortBy, String sortDirection, int page, int size) {
+            this(organizationId, keyword, categoryId, uncategorized, format, status, createdBy, updatedFrom,
+                    updatedTo, sortBy, sortDirection, page, size, DataScopeFilter.all());
+        }
+    }
 
     record TemplateFacetQuery(
             UUID organizationId,
@@ -156,8 +165,25 @@ public interface TemplateRepository {
             TemplateStatus status,
             UUID createdBy,
             Instant updatedFrom,
-            Instant updatedTo
-    ) {}
+            Instant updatedTo,
+            DataScopeFilter scope
+    ) {
+        public TemplateFacetQuery(UUID organizationId, String keyword, TemplateFormat format, TemplateStatus status,
+                                  UUID createdBy, Instant updatedFrom, Instant updatedTo) {
+            this(organizationId, keyword, format, status, createdBy, updatedFrom, updatedTo, DataScopeFilter.all());
+        }
+    }
+
+    record DataScopeFilter(String type, UUID actorId, Set<UUID> targetIds) {
+        public DataScopeFilter {
+            type = type == null || type.isBlank() ? "ALL" : type.toUpperCase(java.util.Locale.ROOT);
+            targetIds = targetIds == null ? Set.of() : Set.copyOf(targetIds);
+        }
+
+        public static DataScopeFilter all() {
+            return new DataScopeFilter("ALL", null, Set.of());
+        }
+    }
 
     record TemplatePage(List<TemplateListItem> items, long total, int page, int size, int totalPages) {}
 

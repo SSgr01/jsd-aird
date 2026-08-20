@@ -21,6 +21,7 @@ vi.mock('@/services/data/data-api', () => ({
 const listSourceFilesMock = vi.mocked(dataApi.listSourceFiles);
 const listCategoriesMock = vi.mocked(dataApi.listCategories);
 const listTemplatesMock = vi.mocked(dataApi.listTemplates);
+const testRouterFuture = { v7_startTransition: true, v7_relativeSplatPath: true } as const;
 
 describe('DataViewPage source-file list', () => {
   beforeEach(() => {
@@ -37,7 +38,7 @@ describe('DataViewPage source-file list', () => {
   });
 
   it('shows one row for the source file and its import summary', async () => {
-    render(<AppProviders><MemoryRouter><DataViewPage /></MemoryRouter></AppProviders>);
+    render(<AppProviders><MemoryRouter future={testRouterFuture}><DataViewPage /></MemoryRouter></AppProviders>);
 
     expect(await screen.findByText('检测报告.xlsx')).toBeInTheDocument();
     expect(screen.getAllByText('检测标准').length).toBeGreaterThan(0);
@@ -50,7 +51,7 @@ describe('DataViewPage source-file list', () => {
   });
 
   it('loads source files with category-only filters', async () => {
-    render(<AppProviders><MemoryRouter><DataViewPage /></MemoryRouter></AppProviders>);
+    render(<AppProviders><MemoryRouter future={testRouterFuture}><DataViewPage /></MemoryRouter></AppProviders>);
     await screen.findByText('检测报告.xlsx');
     expect(listSourceFilesMock).toHaveBeenCalledWith(expect.objectContaining({ categoryId: undefined }));
   });

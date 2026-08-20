@@ -74,7 +74,6 @@ export function ProjectMaterialsTab({ projectId }: Props) {
 
   useEffect(() => {
     void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, filters.category, filters.stage, filters.status, filters.keyword]);
 
   const openLink = () => {

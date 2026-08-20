@@ -5,6 +5,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.timeout;
 
 import java.time.Duration;
 import java.util.List;
@@ -43,5 +44,36 @@ class PostgresWorkerTest {
 
         verify(repository).failJobTerminal(any(), any(DataIntegrityViolationException.class));
         verify(repository, never()).failJob(any(), any());
+    }
+
+    @Test
+    void terminatesAHandlerThatExceedsTheConfiguredJobTimeout() {
+        var repository = mock(WorkRepository.class);
+        var files = mock(FileObjectRepository.class);
+        var mapper = new ObjectMapper();
+        var payload = mapper.createObjectNode().put("importJobId", UUID.randomUUID().toString());
+        var job = new WorkRepository.AsyncJob(UUID.randomUUID(), "SLOW_JOB", payload, 1, 5,
+                "DISCOVERING_STRUCTURE_REGIONS");
+        var handler = mock(AsyncJobHandler.class);
+        when(handler.supports("SLOW_JOB")).thenReturn(true);
+        when(handler.isRetryable(any())).thenReturn(true);
+        when(handler.handle(any())).thenAnswer(invocation -> {
+            Thread.sleep(5_000);
+            return mapper.createObjectNode();
+        });
+        when(repository.claimOutbox(any(), any())).thenReturn(Optional.empty());
+        when(repository.claimJob(any(), any())).thenReturn(Optional.of(job), Optional.empty());
+
+        var worker = new PostgresWorker(repository, files, mapper, List.of(handler),
+                "test-worker", Duration.ofSeconds(30), Duration.ofMillis(50));
+        try {
+            worker.poll();
+        } finally {
+            worker.shutdownExecutors();
+        }
+
+        verify(repository, timeout(1_000)).failJobTerminal(any(), any());
+        verify(repository, never()).completeJob(any(), any());
+        verify(handler).handleTerminalFailure(any(), any());
     }
 }

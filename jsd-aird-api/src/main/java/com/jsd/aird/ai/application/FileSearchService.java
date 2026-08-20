@@ -3,6 +3,8 @@ package com.jsd.aird.ai.application;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.UUID;
 
@@ -31,8 +33,12 @@ public class FileSearchService {
         knowledge.searchFiles(organizationId, command.query().trim(), safe(command.scopeIds()),
                         safe(command.knowledgeCategoryIds()), limit)
                 .stream().map(this::knowledgeFile).forEach(candidates::add);
-        dataSources.searchSourceFiles(organizationId, command.query().trim(), safe(command.dataCategoryIds()), limit)
-                .stream().map(this::dataFile).forEach(candidates::add);
+        var dataFilesById = new LinkedHashMap<UUID, DataSourceFileSearchFacade.SourceFileMatch>();
+        for (var term : searchTerms(command.query())) {
+            dataSources.searchSourceFiles(organizationId, term, safe(command.dataCategoryIds()), limit)
+                    .forEach(file -> dataFilesById.merge(file.fileObjectId(), file, this::mergeDataFile));
+        }
+        dataFilesById.values().stream().map(this::dataFile).forEach(candidates::add);
         var files = candidates.stream()
                 .sorted(Comparator.comparingDouble(this::bestScore).reversed()
                         .thenComparing(FileResult::updatedAt, Comparator.nullsLast(Comparator.reverseOrder())))
@@ -58,7 +64,31 @@ public class FileSearchService {
     }
 
     private double bestScore(FileResult file) {
-        return file.hits().stream().mapToDouble(Hit::score).max().orElse(0);
+        var best = file.hits().stream().mapToDouble(Hit::score).max().orElse(0);
+        return best + Math.min(0.05, file.hits().size() * 0.005);
+    }
+
+    private DataSourceFileSearchFacade.SourceFileMatch mergeDataFile(
+            DataSourceFileSearchFacade.SourceFileMatch left,
+            DataSourceFileSearchFacade.SourceFileMatch right) {
+        var hits = new LinkedHashMap<UUID, DataSourceFileSearchFacade.Hit>();
+        left.hits().forEach(hit -> hits.put(hit.hitId(), hit));
+        right.hits().forEach(hit -> hits.putIfAbsent(hit.hitId(), hit));
+        var merged = hits.values().stream()
+                .sorted(Comparator.comparingDouble(DataSourceFileSearchFacade.Hit::score).reversed())
+                .limit(10).toList();
+        return new DataSourceFileSearchFacade.SourceFileMatch(left.fileObjectId(), left.importJobId(),
+                left.originalName(), left.contentType(), left.size(),
+                left.updatedAt().isAfter(right.updatedAt()) ? left.updatedAt() : right.updatedAt(), merged);
+    }
+
+    private List<String> searchTerms(String query) {
+        var terms = new LinkedHashSet<String>();
+        terms.add(query.trim());
+        for (var term : query.split("[\\s,，、；;：:()（）]+")) {
+            if (term.length() >= 2) terms.add(term);
+        }
+        return terms.stream().limit(12).toList();
     }
 
     private <T> List<T> safe(List<T> values) { return values == null ? List.of() : values; }

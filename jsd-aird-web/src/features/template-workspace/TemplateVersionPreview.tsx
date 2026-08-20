@@ -40,7 +40,7 @@ export default function TemplateVersionPreview({ versionId, height = 560 }: Prop
     setError(undefined);
     setWorkspace(undefined);
     setSnapshot(undefined);
-    (async () => {
+    void (async () => {
       try {
         const model = await templateApi.getEditModel(versionId);
         const loaded =
@@ -62,7 +62,6 @@ export default function TemplateVersionPreview({ versionId, height = 560 }: Prop
     return () => {
       active = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [versionId]);
 
   const noop = useMemo(() => () => undefined, []);
@@ -71,7 +70,7 @@ export default function TemplateVersionPreview({ versionId, height = 560 }: Prop
     return (
       <div className="pm-documents-preview" style={{ height }}>
         <div className="pm-documents-preview-loading">
-          <Spin tip="正在加载模板内容" />
+          <Spin /><span>正在加载模板内容</span>
         </div>
       </div>
     );
@@ -90,7 +89,7 @@ export default function TemplateVersionPreview({ versionId, height = 560 }: Prop
       <Suspense
         fallback={
           <div className="pm-documents-preview-loading">
-            <Spin tip="正在渲染文档" />
+            <Spin /><span>正在渲染文档</span>
           </div>
         }
       >

@@ -196,6 +196,7 @@ export function TemplatesPage() {
     setExporting(true);
     try {
       await templateApi.exportCsv(params);
+      void message.success('模板列表已导出');
     } catch (error) {
       void message.error(error instanceof Error ? error.message : '模板导出失败');
     } finally {
@@ -208,13 +209,14 @@ export function TemplatesPage() {
       const suffix = categoryId ? `?categoryId=${encodeURIComponent(categoryId)}` : '';
       setCreateOpen(false); navigate(`/templates/upload${suffix}`); return;
     }
-    const input = await form.validateFields();
-    setCreating(true);
     try {
+      const input = await form.validateFields();
+      setCreating(true);
       const workspace = await templateApi.create(input);
       setCreateOpen(false); form.resetFields();
       navigate(`/templates/${workspace.versionId}/workspace`);
     } catch (error) {
+      if (error && typeof error === 'object' && 'errorFields' in error) return;
       void message.error(error instanceof Error ? error.message : '模板创建失败');
     } finally { setCreating(false); }
   };
@@ -259,13 +261,14 @@ export function TemplatesPage() {
     },
   });
 
-  const saveCategory = async () => {
-    const { name, description } = await categoryForm.validateFields();
+  const saveCategory = async (values?: { name: string; description?: string | null }) => {
+    const formValues = values ?? await categoryForm.validateFields();
     const editor = categoryEditor; setSavingCategory(true);
     try {
-      const value = { name: name.trim(), description: description?.trim() || null };
+      const value = { name: formValues.name.trim(), description: formValues.description?.trim() || null };
       if (editor === 'NEW') await templateApi.createCategory(value);
       else if (editor) await templateApi.renameCategory(editor.id, value);
+      void message.success(editor === 'NEW' ? '分类已创建' : '分类已保存');
       setCategoryEditor(undefined); categoryForm.resetFields(); await refreshCatalog();
     } catch (error) { void message.error(error instanceof Error ? error.message : '分类保存失败'); }
     finally { setSavingCategory(false); }
@@ -410,8 +413,11 @@ export function TemplatesPage() {
       </Form> : <Typography.Paragraph type="secondary">前往模板上传页，选择分类并批量导入 XLSX 或 DOCX 文件。原上传地址保持兼容。</Typography.Paragraph>}
     </Modal>
 
-    <Modal title={categoryEditor === 'NEW' ? '新建分类' : '编辑分类'} open={Boolean(categoryEditor)} confirmLoading={savingCategory} onOk={() => void saveCategory()} onCancel={() => setCategoryEditor(undefined)} destroyOnHidden>
-      <Form form={categoryForm} layout="vertical"><Form.Item name="name" label="分类名称" rules={[{ required: true, whitespace: true }]}><Input maxLength={120} /></Form.Item><Form.Item name="description" label="分类简介"><Input.TextArea rows={3} maxLength={240} showCount /></Form.Item></Form>
+    <Modal title={categoryEditor === 'NEW' ? '新建分类' : '编辑分类'} open={Boolean(categoryEditor)} confirmLoading={savingCategory} onOk={() => categoryForm.submit()} onCancel={() => { setCategoryEditor(undefined); categoryForm.resetFields(); }} forceRender>
+      <Form form={categoryForm} layout="vertical" onFinish={(values) => void saveCategory(values)}>
+        <Form.Item name="name" label="分类名称" rules={[{ required: true, whitespace: true, message: '请输入分类名称' }]}><Input maxLength={120} /></Form.Item>
+        <Form.Item name="description" label="分类简介"><Input.TextArea rows={3} maxLength={240} showCount /></Form.Item>
+      </Form>
     </Modal>
 
     <Modal title={deletingCategory ? `删除分类“${deletingCategory.name}”` : '删除分类'} open={Boolean(deletingCategory)} confirmLoading={savingCategory} okText="删除并迁移" okButtonProps={{ danger: true }} onOk={() => void deleteCategory()} onCancel={() => setDeletingCategory(undefined)}>

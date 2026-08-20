@@ -33,3 +33,5 @@ Thumbs.db
 /.codex-import-inputs/
 /artifacts/
 /.runtime/
+/ragent-main/
+/.codex-tmp/

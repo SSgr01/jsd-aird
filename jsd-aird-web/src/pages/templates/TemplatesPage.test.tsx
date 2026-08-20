@@ -27,6 +27,7 @@ const listCategoriesMock = vi.mocked(templateApi.listCategories);
 const filterOptionsMock = vi.mocked(templateApi.filterOptions);
 // eslint-disable-next-line @typescript-eslint/unbound-method
 const exportCsvMock = vi.mocked(templateApi.exportCsv);
+const testRouterFuture = { v7_startTransition: true, v7_relativeSplatPath: true } as const;
 
 const publishedWithDraft: TemplateListItem = {
   templateId: 'template-published',
@@ -90,7 +91,7 @@ describe('TemplatesPage catalog presentation', () => {
   });
 
   it('uses facet counts and displays lifecycle status separately from both versions', async () => {
-    render(<AppProviders><MemoryRouter><TemplatesPage /></MemoryRouter></AppProviders>);
+    render(<AppProviders><MemoryRouter future={testRouterFuture}><TemplatesPage /></MemoryRouter></AppProviders>);
 
     expect(await screen.findByText('已发布模板')).toBeInTheDocument();
     const allCard = screen.getByText('全部模板').closest('.catalog-category-card');
@@ -128,7 +129,7 @@ describe('TemplatesPage catalog presentation', () => {
   }, 15_000);
 
   it('submits search explicitly and never sends the active category to facets', async () => {
-    render(<AppProviders><MemoryRouter><TemplatesPage /></MemoryRouter></AppProviders>);
+    render(<AppProviders><MemoryRouter future={testRouterFuture}><TemplatesPage /></MemoryRouter></AppProviders>);
     await screen.findByText('已发布模板');
     const initialListCalls = listMock.mock.calls.length;
     const search = screen.getByPlaceholderText('名称或编码');
@@ -154,7 +155,7 @@ describe('TemplatesPage catalog presentation', () => {
       .mockImplementationOnce(() => new Promise((resolve) => { resolveInitial = resolve; }))
       .mockResolvedValueOnce(page([{ ...publishedWithDraft, templateId: 'new-result', name: '未分类新结果' }], 89));
 
-    render(<AppProviders><MemoryRouter><TemplatesPage /></MemoryRouter></AppProviders>);
+    render(<AppProviders><MemoryRouter future={testRouterFuture}><TemplatesPage /></MemoryRouter></AppProviders>);
     fireEvent.click(await screen.findByRole('button', { name: /未分类/ }));
     expect(await screen.findByText('未分类新结果')).toBeInTheDocument();
 
@@ -165,7 +166,7 @@ describe('TemplatesPage catalog presentation', () => {
 
   it('reports export failures and restores the export button', async () => {
     exportCsvMock.mockRejectedValueOnce(new Error('导出服务不可用'));
-    render(<AppProviders><MemoryRouter><TemplatesPage /></MemoryRouter></AppProviders>);
+    render(<AppProviders><MemoryRouter future={testRouterFuture}><TemplatesPage /></MemoryRouter></AppProviders>);
     await screen.findByText('已发布模板');
 
     const exportButton = screen.getByRole('button', { name: /导出当前筛选结果/ });

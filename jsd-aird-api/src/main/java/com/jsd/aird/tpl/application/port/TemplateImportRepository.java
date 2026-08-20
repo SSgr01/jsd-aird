@@ -146,7 +146,13 @@ public interface TemplateImportRepository {
             String sourceSha256,
             boolean duplicateOverride,
             UUID duplicateSourceJobId,
-            String operationSource
+            String operationSource,
+            UUID originalSourceFileId,
+            UUID normalizedSourceFileId,
+            String originalFormat,
+            String normalizedFormat,
+            String normalizationStatus,
+            String normalizationMessage
     ) {
         public NewImportJob {
             sourceKind = sourceKind == null ? "OFFICE_FILE" : sourceKind;
@@ -163,7 +169,8 @@ public interface TemplateImportRepository {
                 String sourceKind
         ) {
             this(importJobId, asyncJobId, organizationId, fileId, format, actorId, sourceKind,
-                    "WORKBOOK", null, null, null, null, null, false, null, "UPLOAD");
+                    "WORKBOOK", null, null, null, null, null, false, null, "UPLOAD",
+                    null, null, null, null, null, null);
         }
 
         public NewImportJob(
@@ -172,7 +179,8 @@ public interface TemplateImportRepository {
                 String sheetId, String address, JsonNode snapshotFragment
         ) {
             this(importJobId, asyncJobId, organizationId, fileId, format, actorId, sourceKind,
-                    scope, sheetId, address, snapshotFragment, null, null, false, null, "RERECOGNITION");
+                    scope, sheetId, address, snapshotFragment, null, null, false, null, "RERECOGNITION",
+                    null, null, null, null, null, null);
         }
     }
 
@@ -222,6 +230,8 @@ public interface TemplateImportRepository {
             JsonNode recognitionSummary,
             String lastError,
             Instant createdAt,
+            Instant startedAt,
+            Instant lastHeartbeatAt,
             int retryCount,
             int suggestionCount,
             int pendingSuggestionCount,

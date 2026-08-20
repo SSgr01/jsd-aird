@@ -9,7 +9,7 @@ import {
   SettingOutlined,
   TableOutlined,
 } from '@ant-design/icons';
-import { Button, Empty, Input, Select, Tooltip } from 'antd';
+import { Button, Empty, Input, Select, Switch, Tooltip } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import type { MutableRefObject } from 'react';
 
@@ -725,6 +725,17 @@ function BusinessPropertyFields({
             placeholder="可留空"
             onChange={(event) => onUpdateField(field.id, { unit: event.target.value })}
           />
+        </label>
+        <label className="field-property">
+          <span>是否必填</span>
+          <Switch
+            checked={field.required}
+            disabled={!editable || isRegionField(field)}
+            checkedChildren="是"
+            unCheckedChildren="否"
+            onChange={(checked) => onUpdateField(field.id, { required: checked })}
+          />
+          {isRegionField(field) && <small>结构区域不参与必填校验</small>}
         </label>
         <label className="field-property full">
           <span>填写说明</span>

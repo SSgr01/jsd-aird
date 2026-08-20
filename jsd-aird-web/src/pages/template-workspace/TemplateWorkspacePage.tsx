@@ -98,6 +98,7 @@ import type {
   QualityAction,
   TemplateQualityIssue,
   TemplateImportJob,
+  TemplateVersionReview,
 } from '@/services/templates/template-api';
 import { DocumentOutlinePanel } from '@/features/template-workspace/DocumentOutlinePanel';
 
@@ -165,6 +166,9 @@ export function TemplateWorkspacePage() {
   const [groupDrafts, setGroupDrafts] = useState<FieldModel['groups']>([]);
   const [fieldManagerTab, setFieldManagerTab] = useState<FieldManagerTab>('structure');
   const [recognitionReview, setRecognitionReview] = useState<RecognitionReview>();
+  const [templateReview, setTemplateReview] = useState<TemplateVersionReview>();
+  const [rejectReviewOpen, setRejectReviewOpen] = useState(false);
+  const [rejectReason, setRejectReason] = useState('');
   const [recognitionActions, setRecognitionActions] = useState<Record<string, RecognitionAction>>(
     {},
   );
@@ -186,11 +190,12 @@ export function TemplateWorkspacePage() {
     const load = async () => {
       try {
         const model = await templateApi.getEditModel(versionId);
-        const [history, review] = await Promise.all([
+        const [history, review, versionReview] = await Promise.all([
           templateApi.listVersions(model.templateId).catch(() => []),
             model.recognitionRunId
               ? templateApi.getRecognitionReview(model.versionId).catch(() => undefined)
             : Promise.resolve(undefined),
+          templateApi.review(model.versionId).catch(() => undefined),
         ]);
         let loadedSnapshot = model.snapshotFileId && model.snapshotHash
           ? await templateApi.downloadSnapshot(model.snapshotFileId)
@@ -225,6 +230,7 @@ export function TemplateWorkspacePage() {
         setFieldModel(merged.model);
         setSelectedFieldId(merged.model.fields.find((field) => !isRegionModelField(field))?.id);
         setRecognitionReview(model.format === 'DOCX' ? undefined : review);
+        setTemplateReview(versionReview);
         setReviewSyncState('FRESH');
         setQualityActions({});
         setSelectedQualityIssueId(
@@ -274,7 +280,7 @@ export function TemplateWorkspacePage() {
   const handleEditorDirty = useCallback(() => {
     // Saving updates the parent model and refreshes the review panel. Those
     // state changes must not be mistaken for a new Univer edit.
-    if (suppressEditorDirtyRef.current) return;
+    if (suppressEditorDirtyRef.current || workspace?.status !== 'DRAFT') return;
     const currentSnapshot = editorRef.current?.getSnapshot();
     if (
       currentSnapshot &&
@@ -283,7 +289,7 @@ export function TemplateWorkspacePage() {
       return;
     }
     markDirty();
-  }, [markDirty]);
+  }, [markDirty, workspace?.status]);
 
   const waitForPendingEditorOperations = async () => {
     for (let attempt = 0; attempt < 4; attempt += 1) {
@@ -551,13 +557,57 @@ export function TemplateWorkspacePage() {
     setPublishBusy(true);
     try {
       await templateApi.publish(versionId);
-      setWorkspace({ ...workspace, status: 'PUBLISHED' });
+      const [publishedWorkspace, refreshedHistory] = await Promise.all([
+        templateApi.getEditModel(versionId),
+        templateApi.listVersions(workspace.templateId).catch(() => versionHistory),
+      ]);
+      setWorkspace(publishedWorkspace);
+      setVersionHistory(refreshedHistory);
+      // A published version is immutable. Clear any draft indicator left by
+      // the editor event that triggered the publish request so the header
+      // cannot show “已发布” and “未保存” at the same time.
+      setSaveState('SAVED');
       setView('preview');
       void message.success('模板已发布，当前版本已锁定');
     } catch (error) {
       void message.error(error instanceof Error ? error.message : '发布失败');
     } finally {
       setPublishBusy(false);
+    }
+  };
+
+  const submitTemplateReview = async () => {
+    if (!versionId) return;
+    try {
+      setTemplateReview(await templateApi.submitReview(versionId));
+      void message.success('模板已提交审核');
+    } catch (error) {
+      void message.error(error instanceof Error ? error.message : '提交审核失败');
+    }
+  };
+
+  const approveTemplateReview = async () => {
+    if (!versionId) return;
+    try {
+      setTemplateReview(await templateApi.approveReview(versionId));
+      void message.success('模板审核已通过');
+    } catch (error) {
+      void message.error(error instanceof Error ? error.message : '审核通过失败');
+    }
+  };
+
+  const rejectTemplateReview = async () => {
+    if (!versionId || !rejectReason.trim()) {
+      void message.warning('请填写驳回原因');
+      return;
+    }
+    try {
+      setTemplateReview(await templateApi.rejectReview(versionId, rejectReason.trim()));
+      setRejectReviewOpen(false);
+      setRejectReason('');
+      void message.success('模板已驳回');
+    } catch (error) {
+      void message.error(error instanceof Error ? error.message : '驳回模板失败');
     }
   };
 
@@ -589,6 +639,10 @@ export function TemplateWorkspacePage() {
 
   const requestPublish = () => {
     if (!workspace || workspace.status !== 'DRAFT') return;
+    if (templateReview?.status !== 'APPROVED') {
+      void message.warning('请先提交并通过模板审核');
+      return;
+    }
     if (workspace.format === 'DOCX') {
       void (async () => {
         if (saveState !== 'SAVED' && !(await save())) return;
@@ -1672,10 +1726,15 @@ export function TemplateWorkspacePage() {
           <Tag color={workspace.status === 'DRAFT' ? 'gold' : workspace.status === 'PUBLISHED' ? 'success' : 'default'}>
             {workspace.status === 'DRAFT' ? '草稿' : workspace.status === 'PUBLISHED' ? '已发布' : '已停用'}
           </Tag>
+          {workspace.status === 'DRAFT' && templateReview && (
+            <Tag color={templateReview.status === 'APPROVED' ? 'success' : templateReview.status === 'REJECTED' ? 'error' : 'processing'}>
+              审核：{templateReview.status === 'NOT_SUBMITTED' ? '未提交' : templateReview.status === 'SUBMITTED' ? '待审核' : templateReview.status === 'APPROVED' ? '已通过' : '已驳回'}
+            </Tag>
+          )}
         </div>
         <Space wrap>
            <SaveStateIndicator state={saveState} reviewSyncState={reviewSyncState} />
-           {reviewSyncState === 'STALE' && (
+            {reviewSyncState === 'STALE' && (
              <Button
                type="link"
                size="small"
@@ -1683,8 +1742,19 @@ export function TemplateWorkspacePage() {
                onClick={() => void refreshRecognitionReview(true)}
              >
                刷新审核状态
-             </Button>
-           )}
+              </Button>
+            )}
+            {workspace.status === 'DRAFT' && templateReview && templateReview.status !== 'SUBMITTED' && templateReview.status !== 'APPROVED' && (
+              <Button onClick={() => void submitTemplateReview()}>
+                再次提交审核
+              </Button>
+            )}
+            {workspace.status === 'DRAFT' && templateReview?.status === 'SUBMITTED' && (
+              <>
+                <Button onClick={() => void approveTemplateReview()}>审核通过</Button>
+                <Button danger onClick={() => setRejectReviewOpen(true)}>驳回</Button>
+              </>
+            )}
             {view === 'edit' && (workspace.format === 'XLSX' || workspace.format === 'DOCX') && (
              <Button
               type={saveState === 'DIRTY' || saveState === 'SAVING' ? 'primary' : 'default'}
@@ -1723,9 +1793,26 @@ export function TemplateWorkspacePage() {
              onClick={requestPublish}
            >
             发布
-          </Button>
-        </Space>
-      </header>
+         </Button>
+         </Space>
+       </header>
+
+       <Modal
+         title="驳回模板审核"
+         open={rejectReviewOpen}
+         okText="确认驳回"
+         cancelText="取消"
+         onCancel={() => { setRejectReviewOpen(false); setRejectReason(''); }}
+         onOk={() => void rejectTemplateReview()}
+       >
+         <Typography.Paragraph>驳回原因必填，提交后可修改草稿并再次提交审核。</Typography.Paragraph>
+         <Input.TextArea
+           value={rejectReason}
+           onChange={(event) => setRejectReason(event.target.value)}
+           placeholder="请输入驳回原因"
+           rows={4}
+         />
+       </Modal>
 
       <nav className="workspace-view-tabs" aria-label="模板页面">
         <Tabs
@@ -2044,7 +2131,7 @@ function VersionView({
               <Typography.Paragraph type="secondary">
                 最近更新：{new Date(item.updatedAt).toLocaleString('zh-CN')} · 已保存{' '}
                 {item.saveCount} 次
-                {item.versionId === workspace.versionId && saveState !== 'SAVED'
+                {item.versionId === workspace.versionId && item.status === 'DRAFT' && saveState !== 'SAVED'
                   ? ' · 当前还有尚未保存的修改'
                   : ''}
               </Typography.Paragraph>
@@ -2212,10 +2299,21 @@ function updateRecognitionReview(
     ),
   }));
   const active = items.filter((item) => item.status !== 'IGNORED');
+  const regionFields = regions?.flatMap((region) => region.fields ?? []) ?? [];
+  const statistics = review.statistics
+    ? {
+        ...review.statistics,
+        fieldCount: regionFields.length || review.statistics.fieldCount,
+        pendingFieldCount: regionFields.length
+          ? regionFields.filter((field) => field.status === 'PENDING').length
+          : review.statistics.pendingFieldCount,
+      }
+    : review.statistics;
   return {
     ...review,
     items,
     regions,
+    statistics,
     groups: [...new Set(active.map((item) => item.groupName))],
     summary: {
       total: active.length,

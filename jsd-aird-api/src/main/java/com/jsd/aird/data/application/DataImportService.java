@@ -332,7 +332,11 @@ public class DataImportService {
     @Transactional
     public void confirmSheets(UUID importJobId, List<DataRepository.SheetUpdate> updates) {
         var actor = ActorContext.required();
-        requireJob(actor.organizationId(), importJobId);
+        var job = requireJob(actor.organizationId(), importJobId);
+        if (!Set.of("WAITING_SHEET", "WAITING_MAPPING").contains(job.status())) {
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,
+                    "当前状态为 " + job.status() + "，不能重新确认工作表；如需修改请重新解析");
+        }
         for (var update : updates) repository.updateSheet(update);
         reExtract(importJobId);
     }
@@ -341,6 +345,10 @@ public class DataImportService {
     public void saveMappings(UUID importJobId, List<MappingCommand> commands) {
         var actor = ActorContext.required();
         var job = requireJob(actor.organizationId(), importJobId);
+        if (!Set.of("WAITING_MAPPING", "WAITING_SHEET").contains(job.status())) {
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,
+                    "当前状态为 " + job.status() + "，不能修改字段映射");
+        }
         var mappings = commands.stream().map(item -> new DataRepository.Mapping(
                 null, item.sheetId(), item.sourceColumn(), item.sourceHeader(), item.fieldCode(), item.fieldName(),
                 item.action(), item.valueType(), item.sourceUnit(), item.standardUnit(),

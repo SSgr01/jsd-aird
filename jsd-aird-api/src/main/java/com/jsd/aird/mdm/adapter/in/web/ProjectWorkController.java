@@ -1,9 +1,9 @@
 package com.jsd.aird.mdm.adapter.in.web;
 
 import com.jsd.aird.mdm.application.query.ProjectTaskQuery;
+import com.jsd.aird.mdm.application.query.ProjectTaskSummary;
 import com.jsd.aird.mdm.application.service.ProjectWorkService;
 import com.jsd.aird.mdm.domain.model.*;
-import com.jsd.aird.mdm.infrastructure.model.ProjectTaskSummaryRow;
 import com.jsd.aird.platform.web.RequestIdHolder;
 import com.jsd.aird.shared.api.*;
 import jakarta.validation.Valid;
@@ -48,7 +48,7 @@ public class ProjectWorkController {
     }
 
     @GetMapping("/tasks")
-    public ApiResponse<PageResponse<ProjectTaskSummaryRow>> searchTasks(
+    public ApiResponse<PageResponse<ProjectTaskSummary>> searchTasks(
         @RequestParam(required = false) String keyword,
         @RequestParam(required = false) String projectId,
         @RequestParam(required = false) String stageId,

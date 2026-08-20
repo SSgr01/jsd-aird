@@ -35,7 +35,9 @@ import com.jsd.aird.tpl.application.TemplateImportContractCompiler;
 import com.jsd.aird.tpl.application.TemplateOfficeExportService;
 import com.jsd.aird.tpl.application.TemplateRecognitionCompiler;
 import com.jsd.aird.tpl.application.TemplateRecognitionReviewService;
+import com.jsd.aird.tpl.application.TemplateVersionReviewService;
 import com.jsd.aird.tpl.application.TemplateWorkspaceService;
+import com.jsd.aird.iam.api.AuthorizationService;
 import com.jsd.aird.tpl.application.port.BlankWordDocumentFactory;
 import com.jsd.aird.tpl.application.port.TemplateImportRepository;
 import com.jsd.aird.tpl.application.port.TemplateRepository;
@@ -63,6 +65,7 @@ class TemplateWorkspaceBlankWordTest {
     private final TemplateRepository repository = mock(TemplateRepository.class);
     private final TemplateImportRepository importRepository = mock(TemplateImportRepository.class);
     private final TemplateRecognitionReviewService recognitionReviewService = mock(TemplateRecognitionReviewService.class);
+    private final TemplateVersionReviewService templateVersionReviewService = mock(TemplateVersionReviewService.class);
     private final StandardFieldService standardFieldService = mock(StandardFieldService.class);
     private final FileObjectRepository fileRepository = mock(FileObjectRepository.class);
     private final ObjectStorage objectStorage = mock(ObjectStorage.class);
@@ -283,6 +286,8 @@ class TemplateWorkspaceBlankWordTest {
                 importRepository,
                 new TemplateRecognitionCompiler(objectMapper),
                 recognitionReviewService,
+                templateVersionReviewService,
+                check -> new com.jsd.aird.iam.api.PermissionDecision(true, check.permissionCode(), "ALLOW", "ALL", "TEST"),
                 standardFieldService,
                 new JsonCanonicalizer(objectMapper),
                 objectMapper,

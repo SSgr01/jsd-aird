@@ -66,7 +66,6 @@ export function MeetingMinutesTab({ projectId }: Props) {
 
   useEffect(() => {
     void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
   const openCreate = () => {

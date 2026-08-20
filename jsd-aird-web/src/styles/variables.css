@@ -1,23 +1,52 @@
 :root {
-  --app-primary: #2563eb;
-  --app-primary-hover: #1d4ed8;
-  --app-primary-soft: #eff6ff;
-  --app-accent: #2563eb;
-  --app-background: #f8fafc;
+  /* Primitive tokens: prototype visual baseline */
+  --color-blue-600: #2f66e8;
+  --color-blue-700: #2453c6;
+  --color-blue-50: #edf3ff;
+  --color-slate-50: #f3f6fb;
+  --color-slate-100: #eef2f7;
+  --color-slate-400: #9aa7b8;
+  --color-slate-500: #66758b;
+  --color-slate-900: #17233a;
+  --color-teal-300: #76ccc6;
+  --color-green-600: #16a34a;
+  --color-amber-500: #f59e0b;
+  --color-red-600: #dc2626;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+
+  /* Semantic tokens */
+  --app-primary: var(--color-blue-600);
+  --app-primary-hover: var(--color-blue-700);
+  --app-primary-soft: var(--color-blue-50);
+  --app-accent: var(--color-blue-600);
+  --app-background: var(--color-slate-50);
   --app-surface: #ffffff;
-  --app-surface-subtle: #f1f5f9;
-  --app-text: #0f172a;
-  --app-text-secondary: #475569;
-  --app-border: #e2e8f0;
-  --app-danger: #dc2626;
-  --app-warning: #b45309;
-  --app-success: #047857;
-  --app-focus: #1e40af;
-  --app-font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", sans-serif;
-  --app-radius: 8px;
-  --app-radius-control: 8px;
-  --app-radius-card: 12px;
-  --app-radius-shell: 14px;
-  --app-shadow: 0 1px 2px rgb(15 23 42 / 4%);
-  --app-shadow-hover: 0 8px 24px rgb(15 23 42 / 6%);
+  --app-surface-subtle: var(--color-slate-100);
+  --app-text: var(--color-slate-900);
+  --app-text-secondary: var(--color-slate-500);
+  --app-border: #dfe7f2;
+  --app-danger: var(--color-red-600);
+  --app-warning: var(--color-amber-500);
+  --app-success: var(--color-green-600);
+  --app-focus: var(--color-blue-700);
+  --app-font-family: Inter, "Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", sans-serif;
+  --app-radius: var(--radius-md);
+  --app-radius-control: var(--radius-sm);
+  --app-radius-card: var(--radius-md);
+  --app-radius-shell: var(--radius-lg);
+  --app-shadow: 0 1px 3px rgb(32 70 125 / 5%);
+  --app-shadow-hover: 0 7px 22px rgb(35 74 130 / 8%);
+
+  /* Component tokens */
+  --iam-sidebar-background: linear-gradient(180deg, #2f63d9 0%, #4c8ddd 62%, var(--color-teal-300) 100%);
+  --iam-card-padding: var(--space-5);
+  --iam-table-header: #f7f9fc;
 }

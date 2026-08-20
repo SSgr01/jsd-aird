@@ -121,13 +121,11 @@ export const assistantApi = {
   ) {
     const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || ''}/api/v1/assistant/qa/stream`, {
       method: 'POST',
+      credentials: 'include',
       headers: {
         Accept: 'text/event-stream',
         'Content-Type': 'application/json',
         'X-Request-Id': generateUUID(),
-        'X-Organization-Id': '00000000-0000-0000-0000-000000000001',
-        'X-User-Id': '00000000-0000-0000-0000-000000000002',
-        'X-Username': 'developer',
       },
       body: JSON.stringify({ question, conversationId, scopeIds, scopeTypes, knowledgeCategoryIds, dataCategoryIds }),
     });
@@ -148,7 +146,14 @@ export const assistantApi = {
         }
         if (!data) continue;
         const parsed = parseAssistantSseData(data);
-        if (event === 'token') onToken(typeof parsed === 'string' ? parsed : String(parsed));
+        if (event === 'token') {
+          const token = typeof parsed === 'string'
+            ? parsed
+            : parsed && typeof parsed === 'object' && 'delta' in parsed && typeof parsed.delta === 'string'
+              ? parsed.delta
+              : '';
+          if (token) onToken(token);
+        }
         if (event === 'done') onDone(parsed as AssistantResponse);
         if (event !== 'token' && event !== 'done') onStage?.(event, parsed);
         event = 'message';

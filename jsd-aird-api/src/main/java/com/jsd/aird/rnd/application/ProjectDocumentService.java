@@ -22,34 +22,25 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.jsd.aird.tpl.application.RuleBasedRecognitionEngine;
-import com.jsd.aird.tpl.application.port.OfficeStructureParser;
-import com.jsd.aird.tpl.application.port.WorkbookSnapshotStructureParser;
-import com.jsd.aird.tpl.domain.TemplateFormat;
+import com.jsd.aird.tpl.api.TemplateOfficeFacade;
 
 @Service
 public class ProjectDocumentService {
 
     private final ProjectDocumentRepository repository;
     private final FileStorageFacade fileStorageFacade;
-    private final List<OfficeStructureParser> officeParsers;
-    private final WorkbookSnapshotStructureParser snapshotStructureParser;
-    private final RuleBasedRecognitionEngine ruleRecognitionEngine;
+    private final TemplateOfficeFacade templateOffice;
     private final ObjectMapper objectMapper;
 
     public ProjectDocumentService(
             ProjectDocumentRepository repository,
             FileStorageFacade fileStorageFacade,
-            List<OfficeStructureParser> officeParsers,
-            WorkbookSnapshotStructureParser snapshotStructureParser,
-            RuleBasedRecognitionEngine ruleRecognitionEngine,
+            TemplateOfficeFacade templateOffice,
             ObjectMapper objectMapper
     ) {
         this.repository = repository;
         this.fileStorageFacade = fileStorageFacade;
-        this.officeParsers = List.copyOf(officeParsers);
-        this.snapshotStructureParser = snapshotStructureParser;
-        this.ruleRecognitionEngine = ruleRecognitionEngine;
+        this.templateOffice = templateOffice;
         this.objectMapper = objectMapper;
     }
 
@@ -107,11 +98,8 @@ public class ProjectDocumentService {
             throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "仅支持导入 DOCX 或 XLSX 文件");
         }
         var actor = ActorContext.required();
-        var templateFormat = format == ProjectDocumentFormat.DOCX ? TemplateFormat.DOCX : TemplateFormat.XLSX;
-        var parser = officeParsers.stream().filter(item -> item.format() == templateFormat).findFirst()
-                .orElseThrow(() -> new IllegalStateException("No parser for " + templateFormat));
         try (var stored = fileStorageFacade.open(actor.organizationId(), fileObjectId)) {
-            var parsed = parser.parse(stored.stream());
+            var parsed = templateOffice.parseOffice(format.name(), stored.stream());
             var id = repository.create(new Create(projectId, title, format, ProjectDocumentSource.IMPORT,
                     null, null, fileObjectId, ProjectDocumentStatus.DRAFT, actor.username()));
             repository.saveContent(id, parsed.initialEditorSnapshot(), objectMapper.createObjectNode(),
@@ -140,7 +128,7 @@ public class ProjectDocumentService {
         JsonNode resolvedMapping = mapping;
         if (detail.format() == ProjectDocumentFormat.XLSX
                 && snapshot != null && snapshot.isObject() && !snapshot.isEmpty()) {
-            var result = recognizeSnapshot(snapshot, TemplateFormat.XLSX, detail.title());
+            var result = recognizeSnapshot(snapshot, "XLSX", detail.title());
             recognition = result.recognition();
             resolvedSchema = result.schema();
             resolvedMapping = result.mapping();
@@ -154,16 +142,16 @@ public class ProjectDocumentService {
      * 复刻模板解析链路（OfficeStructureParser + RuleBasedRecognitionEngine），但产物
      * 完全独立于模板中心，仅服务于当前项目文档。
      */
-    private RecognitionResult recognizeSnapshot(JsonNode snapshot, TemplateFormat format, String sourceFileName) {
+    private RecognitionResult recognizeSnapshot(JsonNode snapshot, String format, String sourceFileName) {
         try {
-            var parsed = snapshotStructureParser.parse(
+            var parsed = templateOffice.parseWorkbookSnapshot(
                     new java.io.ByteArrayInputStream(objectMapper.writeValueAsBytes(snapshot)));
             var structureSummary = parsed.structureSummary();
             var recognition = objectMapper.createObjectNode();
             recognition.set("structureSummary", structureSummary.deepCopy());
             recognition.set("initialEditorSnapshot", parsed.initialEditorSnapshot().deepCopy());
             // 规则识别：XLSX 走显式标签-值候选；DOCX 暂无规则候选。
-            var batch = ruleRecognitionEngine.recognize(format, sourceFileName, structureSummary);
+            var batch = templateOffice.recognize(format, sourceFileName, structureSummary);
             var suggestions = objectMapper.createArrayNode();
             for (var suggestion : batch.suggestions()) {
                 var node = objectMapper.createObjectNode()
@@ -175,7 +163,7 @@ public class ProjectDocumentService {
             }
             recognition.set("ruleSuggestions", suggestions);
             // 将规则候选落成项目文档自身的内容模型（schema/mapping）。
-            var compiled = compileRuleSuggestions(suggestions, format);
+            var compiled = compileRuleSuggestions(suggestions);
             return new RecognitionResult(recognition, compiled.schema(), compiled.mapping());
         } catch (ApiException exception) {
             throw exception;
@@ -189,7 +177,7 @@ public class ProjectDocumentService {
      * 把规则识别候选转换为项目文档的内容模型，结构对齐模板中心的
      * x-jsd-field-model + mapping 约定，但不依赖 TemplateRecognitionCompiler。
      */
-    private CompiledContent compileRuleSuggestions(ArrayNode suggestions, TemplateFormat format) {
+    private CompiledContent compileRuleSuggestions(ArrayNode suggestions) {
         var schema = objectMapper.createObjectNode();
         var fieldModel = objectMapper.createObjectNode();
         var fields = objectMapper.createArrayNode();

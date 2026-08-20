@@ -78,8 +78,8 @@ export function ProjectDocumentWorkspacePage() {
         let nextSchema = doc.contentSchema ?? {};
         let nextMapping = (doc.contentMapping ?? []) as TemplateBinding[];
         let nextData = doc.contentData ?? {};
-        let nextStructure: DocumentStructure | undefined = (doc.contentStructure as DocumentStructure | undefined)
-          ?? deriveDocumentStructureFromSnapshot(nextSnapshot as Record<string, unknown>, doc.id);
+        let nextStructure: DocumentStructure | undefined = (doc.contentStructure)
+          ?? deriveDocumentStructureFromSnapshot(nextSnapshot, doc.id);
         if (!nextSnapshot && doc.templateVersionId) {
           try {
             const template = await templateApi.getEditModel(doc.templateVersionId);

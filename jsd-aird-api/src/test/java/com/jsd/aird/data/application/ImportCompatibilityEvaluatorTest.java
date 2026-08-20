@@ -109,8 +109,8 @@ class ImportCompatibilityEvaluatorTest {
         var binding = mapper.createObjectNode()
                 .put("fieldCode", "TABLE.COLUMN.SURFACE")
                 .put("mappingKind", "REPEAT_FIELD")
-                .put("labelPath", "TABLE.COLUMN.SURFACE")
-                .putObject("locator").put("labelRange", "A1:B1");
+                .put("labelPath", "TABLE.COLUMN.SURFACE");
+        binding.putObject("locator").put("labelRange", "A1:B1");
         var contract = mapper.createObjectNode();
         contract.putArray("components").addObject()
                 .put("componentId", "table")

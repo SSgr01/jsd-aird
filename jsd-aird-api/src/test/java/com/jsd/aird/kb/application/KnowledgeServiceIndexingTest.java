@@ -2,6 +2,10 @@ package com.jsd.aird.kb.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -15,6 +19,7 @@ import java.util.UUID;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.kb.api.KnowledgeEmbeddingFacade;
+import com.jsd.aird.kb.api.KnowledgeSearchFacade;
 import com.jsd.aird.kb.application.port.KnowledgeGovernanceRepository;
 import com.jsd.aird.kb.application.port.KnowledgeRepository;
 import com.jsd.aird.kb.domain.DocumentParser;
@@ -27,6 +32,88 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.ObjectProvider;
 
 class KnowledgeServiceIndexingTest {
+
+    @Test
+    void reportsBm25NoHitSeparatelyFromAnUnavailableIndex() {
+        var repository = mock(KnowledgeRepository.class);
+        var organizationId = UUID.randomUUID();
+        var row = new KnowledgeRepository.SearchRow(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
+                "测试文档", "test.pdf", 1, "paragraph", "全文命中", 1.0, 1);
+        when(repository.bm25Search(any(), any(), anyBoolean(), any(), any(), anyInt())).thenReturn(List.of());
+        when(repository.fullTextSearch(any(), anyString(), anyBoolean(), any(), any(), anyInt()))
+                .thenReturn(List.of(row));
+
+        var service = new KnowledgeService(repository, mock(KnowledgeGovernanceRepository.class),
+                mock(FileStorageFacade.class), mock(OpsAsyncFacade.class), mock(AuditLogFacade.class),
+                new ObjectMapper(), new StructuredDocumentCodec(new ObjectMapper()), List.of(),
+                mock(FileSafetyScanner.class), mockEmbeddingProvider(), List.of(), "embedding-model", 1024,
+                Duration.ofMinutes(15));
+
+        var result = service.search(new KnowledgeSearchFacade.SearchRequest(organizationId, "无索引词", false,
+                5, List.of(), List.of(), List.of()));
+
+        assertThat(result.hits()).hasSize(1);
+        assertThat(result.trace().fallbacks()).contains("BM25_EMPTY")
+                .doesNotContain("BM25_UNAVAILABLE");
+    }
+
+    @Test
+    void reportsBm25ErrorAndContinuesWithFullText() {
+        var repository = mock(KnowledgeRepository.class);
+        var organizationId = UUID.randomUUID();
+        var row = new KnowledgeRepository.SearchRow(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
+                "测试文档", "test.pdf", 1, "paragraph", "全文命中", 1.0, 1);
+        when(repository.bm25Search(any(), any(), anyBoolean(), any(), any(), anyInt()))
+                .thenThrow(new IllegalStateException("index unavailable"));
+        when(repository.fullTextSearch(any(), anyString(), anyBoolean(), any(), any(), anyInt()))
+                .thenReturn(List.of(row));
+
+        var service = new KnowledgeService(repository, mock(KnowledgeGovernanceRepository.class),
+                mock(FileStorageFacade.class), mock(OpsAsyncFacade.class), mock(AuditLogFacade.class),
+                new ObjectMapper(), new StructuredDocumentCodec(new ObjectMapper()), List.of(),
+                mock(FileSafetyScanner.class), mockEmbeddingProvider(), List.of(), "embedding-model", 1024,
+                Duration.ofMinutes(15));
+
+        var result = service.search(new KnowledgeSearchFacade.SearchRequest(organizationId, "索引异常", false,
+                5, List.of(), List.of(), List.of()));
+
+        assertThat(result.hits()).hasSize(1);
+        assertThat(result.trace().fallbacks()).contains("BM25_ERROR")
+                .doesNotContain("BM25_UNAVAILABLE");
+    }
+
+    @Test
+    void keepsAnOcrFieldValueNeighborInTheSearchWindow() {
+        var repository = mock(KnowledgeRepository.class);
+        var organizationId = UUID.randomUUID();
+        var documentId = UUID.randomUUID();
+        var versionId = UUID.randomUUID();
+        var sample = new KnowledgeRepository.SearchRow(UUID.randomUUID(), documentId, versionId,
+                "测试文档", "form.pdf", 1, "OCR-LINE", "TEST-TPL-丙烯酸树脂", 3.0, 16);
+        var density = new KnowledgeRepository.SearchRow(UUID.randomUUID(), documentId, versionId,
+                "测试文档", "form.pdf", 1, "OCR-LINE", "密度", 2.0, 21);
+        var densityValue = new KnowledgeRepository.SearchRow(UUID.randomUUID(), documentId, versionId,
+                "测试文档", "form.pdf", 1, "OCR-LINE", "1.05", 0.0, 22);
+        when(repository.bm25Search(any(), any(), anyBoolean(), any(), any(), anyInt()))
+                .thenReturn(List.of(sample, density));
+        when(repository.neighboringChunks(any(), eq(documentId), eq(versionId), eq(1), eq(21),
+                anyBoolean(), any(), any(), eq(2), eq(5)))
+                .thenReturn(List.of(density, densityValue));
+
+        var service = new KnowledgeService(repository, mock(KnowledgeGovernanceRepository.class),
+                mock(FileStorageFacade.class), mock(OpsAsyncFacade.class), mock(AuditLogFacade.class),
+                new ObjectMapper(), new StructuredDocumentCodec(new ObjectMapper()), List.of(),
+                mock(FileSafetyScanner.class), mockEmbeddingProvider(), List.of(), "embedding-model", 1024,
+                Duration.ofMinutes(15));
+
+        var hits = service.search(organizationId, "TEST-TPL-丙烯酸树脂的密度", false, 2);
+
+        assertThat(hits).extracting(KnowledgeSearchFacade.SearchHit::content)
+                .containsExactly("TEST-TPL-丙烯酸树脂", "密度");
+        assertThat(service.search(organizationId, "密度", false, 3))
+                .extracting(KnowledgeSearchFacade.SearchHit::content)
+                .contains("1.05");
+    }
 
     @Test
     void buildsKeywordChunksFromReviewRevisionWithoutCallingEmbeddingWhenNotAuthorized() {

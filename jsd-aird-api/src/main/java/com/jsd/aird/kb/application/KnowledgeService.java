@@ -37,11 +37,15 @@ import com.jsd.aird.shared.security.ActorContext;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 @Service
 public class KnowledgeService implements KnowledgeSearchFacade {
+
+    private static final Logger log = LoggerFactory.getLogger(KnowledgeService.class);
 
     private static final int CHUNK_SIZE = 1800;
     private static final int CHUNK_OVERLAP = 180;
@@ -427,12 +431,34 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         var variants = request.queryVariants().isEmpty() ? List.of(request.query().trim()) : request.queryVariants();
         var terms = new java.util.LinkedHashSet<String>();
         variants.forEach(value -> terms.addAll(TermAnalyzer.frequencies(value).keySet()));
-        var bm25 = repository.bm25Search(organizationId, List.copyOf(terms), request.aiOnly(), request.scopeIds(),
-                request.categoryIds(), safeLimit * 4);
-        var fullText = bm25.isEmpty()
-                ? repository.fullTextSearch(organizationId, request.query().trim(), request.aiOnly(), request.scopeIds(),
-                request.categoryIds(), safeLimit * 2)
-                : bm25;
+        var fallbacks = new ArrayList<String>();
+        List<KnowledgeRepository.SearchRow> bm25;
+        try {
+            bm25 = repository.bm25Search(organizationId, List.copyOf(terms), request.aiOnly(), request.scopeIds(),
+                    request.categoryIds(), safeLimit * 4);
+            if (bm25 == null || bm25.isEmpty()) {
+                bm25 = List.of();
+                // Empty is a normal no-hit result, not an index/database outage.
+                fallbacks.add("BM25_EMPTY");
+            }
+        } catch (RuntimeException exception) {
+            bm25 = List.of();
+            fallbacks.add("BM25_ERROR");
+            log.warn("BM25 search failed; falling back to full-text/vector search", exception);
+        }
+        List<KnowledgeRepository.SearchRow> fullText;
+        if (bm25.isEmpty()) {
+            try {
+                fullText = repository.fullTextSearch(organizationId, request.query().trim(), request.aiOnly(),
+                        request.scopeIds(), request.categoryIds(), safeLimit * 2);
+            } catch (RuntimeException exception) {
+                fullText = List.of();
+                fallbacks.add("FULLTEXT_ERROR");
+                log.warn("Full-text search failed; continuing with vector search", exception);
+            }
+        } else {
+            fullText = bm25;
+        }
         var vector = embeddings.getIfAvailable() == null ? java.util.Optional.<String>empty()
                 : embeddings.getIfAvailable().embedVector(request.query().trim());
         var vectorRows = vector.map(value -> repository.vectorSearch(organizationId, value, request.aiOnly(), request.scopeIds(),
@@ -453,16 +479,62 @@ public class KnowledgeService implements KnowledgeSearchFacade {
             retrievalScores.merge(row.chunkId(), row.score(), Math::max);
             scores.merge(row.chunkId(), 1.0 / (60 + index + 1), Double::sum);
         }
-        var hits = rows.keySet().stream()
+        var rankedIds = rows.keySet().stream()
                 .sorted((a, b) -> Double.compare(scores.getOrDefault(b, 0.0), scores.getOrDefault(a, 0.0)))
+                .toList();
+        var orderedIds = expandNeighborEvidence(request, terms, rankedIds, rows, scores, retrievalScores, safeLimit);
+        var hits = orderedIds.stream()
                 .limit(safeLimit)
                 .map(id -> toSearchHit(rows.get(id), retrievalScores.getOrDefault(id, 0.0), scores.getOrDefault(id, 0.0)))
                 .toList();
-        var fallbacks = new ArrayList<String>();
-        if (bm25.isEmpty()) fallbacks.add("BM25_UNAVAILABLE");
         if (vector.isEmpty()) fallbacks.add("EMBEDDING_UNAVAILABLE");
         return new KnowledgeSearchFacade.SearchResult(hits,
                 new KnowledgeSearchFacade.RetrievalTrace("BM25_VECTOR_RRF", bm25.size(), vectorRows.size(), rows.size(), fallbacks));
+    }
+
+    /**
+     * OCR for scanned forms often stores a field label and its value as two
+     * adjacent chunks. Keep the pair together when a query contains the
+     * label, otherwise the numeric/text value can be cut off by top-k before
+     * the model receives the evidence.
+     */
+    private List<UUID> expandNeighborEvidence(KnowledgeSearchFacade.SearchRequest request,
+                                              Set<String> queryTerms,
+                                              List<UUID> rankedIds,
+                                              Map<UUID, KnowledgeRepository.SearchRow> rows,
+                                              Map<UUID, Double> scores,
+                                              Map<UUID, Double> retrievalScores,
+                                              int safeLimit) {
+        if (rankedIds.isEmpty() || queryTerms.isEmpty()) return rankedIds;
+        var ordered = new java.util.LinkedHashSet<UUID>();
+        var expandedSeeds = 0;
+        for (var id : rankedIds) {
+            var row = rows.get(id);
+            if (row == null) continue;
+            ordered.add(id);
+            if (expandedSeeds >= 3 || ordered.size() > safeLimit * 2
+                    || !isQueryFieldLabel(row.content(), queryTerms)
+                    || row.pageNo() == null || row.chunkNo() < 0) continue;
+            expandedSeeds++;
+            var neighbors = repository.neighboringChunks(request.organizationId(), row.documentId(), row.versionId(),
+                    row.pageNo(), row.chunkNo(), request.aiOnly(), request.scopeIds(), request.categoryIds(), 2, 5);
+            for (var neighbor : neighbors) {
+                if (neighbor.chunkId().equals(row.chunkId())) continue;
+                rows.putIfAbsent(neighbor.chunkId(), neighbor);
+                scores.putIfAbsent(neighbor.chunkId(), Math.max(0.0001, scores.getOrDefault(id, 0.0) * 0.96));
+                retrievalScores.putIfAbsent(neighbor.chunkId(), row.score());
+                ordered.add(neighbor.chunkId());
+            }
+        }
+        rankedIds.stream().filter(id -> !ordered.contains(id)).forEach(ordered::add);
+        return List.copyOf(ordered);
+    }
+
+    private boolean isQueryFieldLabel(String content, Set<String> queryTerms) {
+        if (!StringUtils.hasText(content)) return false;
+        var normalized = content.strip().toLowerCase(Locale.ROOT);
+        if (normalized.length() > 24 || normalized.matches("[\\p{N}\\p{Punct}\\s]+")) return false;
+        return queryTerms.contains(normalized);
     }
 
     public void markIndexStale(UUID organizationId, UUID documentId, UUID versionId, UUID reviewRevisionId) {
@@ -489,11 +561,12 @@ public class KnowledgeService implements KnowledgeSearchFacade {
                 KnowledgeGovernanceRepository.SourceNodeView::sourceNodeKey, value -> value));
         var projection = documents.project(review.reviewRevision().confirmedDocument(),
                 review.reviewRevision().excludedReviewNodeIds());
-        var source = new ArrayList<>(projection.nodes().stream().map(node -> {
+        var projectedSource = projection.nodes().stream().map(node -> {
             var sourceNode = node.sourceNodeKeys().stream().map(sourceByKey::get)
                     .filter(java.util.Objects::nonNull).findFirst().orElse(null);
             return projectedBlock(node, sourceNode);
-        }).filter(block -> block.content() != null && !block.content().isBlank()).toList());
+        }).filter(block -> block.content() != null && !block.content().isBlank()).toList();
+        var source = new ArrayList<>(OcrFieldValueLinker.link(projectedSource));
         governance.largeTableRows(organizationId, reviewRevisionId).forEach(row -> source.add(
                 new DocumentParser.TextBlock(null, "spreadsheet-row", row.projectedText(), row.sheetName(),
                         row.cellRange(), null, List.of(), null, null, null)));
@@ -747,6 +820,14 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         for (var block : blocks) {
             var text = block.content() == null ? "" : block.content().replaceAll("\\s+", " ").strip();
             if (text.isBlank()) continue;
+            // OCR field/value relations and spreadsheet rows are atomic evidence
+            // units. Splitting them into unrelated character windows would make
+            // a label and its value independently retrievable again.
+            if (block.section() != null && (block.section().startsWith("ocr-field-value")
+                    || block.section().startsWith("spreadsheet-row"))) {
+                result.add(copyBlock(block, text));
+                continue;
+            }
             if (text.length() <= CHUNK_SIZE) {
                 result.add(copyBlock(block, text));
                 continue;
@@ -762,7 +843,8 @@ public class KnowledgeService implements KnowledgeSearchFacade {
 
     private DocumentParser.TextBlock copyBlock(DocumentParser.TextBlock block, String text) {
         return new DocumentParser.TextBlock(block.pageNo(), block.section(), text, block.sheetName(), block.cellRange(),
-                block.paragraphId(), block.bbox(), block.startTimeMs(), block.endTimeMs(), block.confidence());
+                block.paragraphId(), block.bbox(), block.startTimeMs(), block.endTimeMs(), block.confidence(),
+                block.attributes());
     }
 
     private JsonNode parseMetadata(DocumentParser.ParsedDocument parsed, String textHash) {

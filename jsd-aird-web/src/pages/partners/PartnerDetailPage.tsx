@@ -141,12 +141,12 @@ export function PartnerDetailPage() {
       customFields: mergedCustomFields,
       version: partner.version,
     };
-    await updatePartner(id!, input);
+    await updatePartner(id, input);
     msg.success('公司资料已更新'); await load();
   };
   const addContact = () => {
     const tempId = `new-${Date.now()}`;
-    const empty: PartnerContact = { id: tempId, partnerId: id!, name: '', title: '', department: '', phone: '', wechat: '', email: '', members: '', assignedProjectIds: [], manualTeamMembers: [], primaryContact: false, status: 'ACTIVE', customFields: {}, version: 0 };
+    const empty: PartnerContact = { id: tempId, partnerId: id, name: '', title: '', department: '', phone: '', wechat: '', email: '', members: '', assignedProjectIds: [], manualTeamMembers: [], primaryContact: false, status: 'ACTIVE', customFields: {}, version: 0 };
     setPartner({ ...partner, contacts: [...partner.contacts, empty] });
     setNewContactIds((prev) => [...prev, tempId]);
   };
@@ -157,8 +157,8 @@ export function PartnerDetailPage() {
   const saveAllContacts = async () => {
     for (const person of partner.contacts) {
       const input: ContactInput = { ...person, customFields: person.customFields ?? {} };
-      if (newContactIds.includes(person.id)) await createContact(id!, input);
-      else await updateContact(id!, person.id, { ...input, version: person.version });
+      if (newContactIds.includes(person.id)) await createContact(id, input);
+      else await updateContact(id, person.id, { ...input, version: person.version });
     }
     setNewContactIds([]);
     msg.success('负责人已保存');
@@ -167,11 +167,11 @@ export function PartnerDetailPage() {
   const savePersonSnapshot = async (person: PartnerContact) => {
     const input: ContactInput = { ...person, customFields: person.customFields ?? {} };
     if (newContactIds.includes(person.id)) {
-      await createContact(id!, input);
+      await createContact(id, input);
       msg.success('负责人已添加');
       setNewContactIds((prev) => prev.filter((cid) => cid !== person.id));
     } else {
-      await updateContact(id!, person.id, { ...input, version: person.version });
+      await updateContact(id, person.id, { ...input, version: person.version });
       msg.success('负责人已保存');
     }
     await load();
@@ -269,7 +269,7 @@ export function PartnerDetailPage() {
             <label>负责项目（可多选）
               <Select mode="multiple" allowClear value={person.assignedProjectIds ?? []} options={projectOptions}
                 onChange={(value) => {
-                  const ids = (value as string[]) ?? [];
+                  const ids = (value) ?? [];
                   const members = mergeProjectMembers(person.manualTeamMembers ?? [], ids, allProjects);
                   setPartner({ ...partner, contacts: partner.contacts.map((c) => c.id === person.id ? { ...c, assignedProjectIds: ids, members } : c) });
                 }}
@@ -494,6 +494,6 @@ export function PartnerDetailPage() {
         ),
       },
     ]} /></div>
-    {businessModal && <PartnerPrototypeModal mode={businessModal.mode} partner={partner} requirement={businessModal.edit instanceof Object && 'requirementCode' in businessModal.edit ? (businessModal.edit as Requirement) : undefined} communication={businessModal.edit instanceof Object && 'recordCode' in businessModal.edit ? (businessModal.edit as Communication) : undefined} open onClose={() => setBusinessModal(undefined)} onSaved={async () => { if (businessModal.mode === 'requirement') { setRequirementsLoaded(false); await ensureRequirements(); } else { setCommunicationsLoaded(false); await ensureCommunications(); } await load(); }} />}
+    {businessModal && <PartnerPrototypeModal mode={businessModal.mode} partner={partner} requirement={businessModal.edit instanceof Object && 'requirementCode' in businessModal.edit ? (businessModal.edit) : undefined} communication={businessModal.edit instanceof Object && 'recordCode' in businessModal.edit ? (businessModal.edit) : undefined} open onClose={() => setBusinessModal(undefined)} onSaved={async () => { if (businessModal.mode === 'requirement') { setRequirementsLoaded(false); await ensureRequirements(); } else { setCommunicationsLoaded(false); await ensureCommunications(); } await load(); }} />}
   </div>;
 }

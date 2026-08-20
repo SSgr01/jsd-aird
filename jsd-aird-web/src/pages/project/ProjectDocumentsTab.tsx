@@ -84,7 +84,6 @@ export default function ProjectDocumentsTab({
 
   useEffect(() => {
     void loadDocuments();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
   const createDocument = async (input: CreateProjectDocumentInput) => {
@@ -301,7 +300,6 @@ function NewDocumentModal({ open, projectLabel, projectId, onCancel, onCreate }:
         })
         .finally(() => setLoadingTpl(false));
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, open]);
 
   const handleSubmit = async () => {

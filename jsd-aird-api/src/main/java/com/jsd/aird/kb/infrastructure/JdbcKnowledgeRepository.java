@@ -472,7 +472,7 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
         var sql = """
                 SELECT c.id, c.document_id, c.document_version_id,
                        coalesce(p.metadata_snapshot_jsonb->>'title', d.title) AS title, v.original_name,
-                       c.page_no, c.section, c.content,
+                       c.page_no, c.section, c.content, c.chunk_no,
                        GREATEST(ts_rank_cd(c.search_vector, plainto_tsquery('simple', ?)), 0.4) AS score
                 FROM kb.document_chunk c
                 JOIN kb.document d ON d.id = c.document_id
@@ -506,7 +506,7 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                 WITH query_terms AS (SELECT unnest(?::text[]) AS term), ranked AS (
                     SELECT c.id, c.document_id, c.document_version_id,
                            coalesce(p.metadata_snapshot_jsonb->>'title', d.title) AS title, v.original_name,
-                           c.page_no, c.section, c.content,
+                           c.page_no, c.section, c.content, c.chunk_no,
                            sum(
                                ln(((s.document_count - s.document_frequency + 0.5) / (s.document_frequency + 0.5)) + 1)
                                * ((t.term_frequency * 2.2) /
@@ -527,9 +527,9 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                 """ + aiClause + categoryClause(categoryIds) + scope + """
                     GROUP BY c.id, c.document_id, c.document_version_id,
                              coalesce(p.metadata_snapshot_jsonb->>'title', d.title), v.original_name,
-                             c.page_no, c.section, c.content
+                             c.page_no, c.section, c.content, c.chunk_no
                 )
-                SELECT id, document_id, document_version_id, title, original_name, page_no, section, content, score
+                SELECT id, document_id, document_version_id, title, original_name, page_no, section, content, score, chunk_no
                 FROM ranked ORDER BY score DESC LIMIT ?
                 """;
         var args = new java.util.ArrayList<Object>();
@@ -539,6 +539,48 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
         if (categoryIds != null) args.addAll(categoryIds);
         if (scopeIds != null) args.addAll(scopeIds);
         args.add(limit);
+        return jdbc.query(sql, this::mapSearch, args.toArray());
+    }
+
+    @Override
+    public List<SearchRow> neighboringChunks(UUID organizationId, UUID documentId, UUID versionId,
+                                              Integer pageNo, int centerChunkNo, boolean aiOnly,
+                                              List<UUID> scopeIds, List<UUID> categoryIds,
+                                              int radius, int limit) {
+        var safeRadius = Math.min(12, Math.max(1, radius));
+        var safeLimit = Math.min(32, Math.max(1, limit));
+        var aiClause = aiOnly ? "AND EXISTS (SELECT 1 FROM kb.document_ai_grant g "
+                + "WHERE g.document_id = d.id AND g.status = 'APPROVED')" : "";
+        var sql = """
+                SELECT c.id, c.document_id, c.document_version_id,
+                       coalesce(p.metadata_snapshot_jsonb->>'title', d.title) AS title, v.original_name,
+                       c.page_no, c.section, c.content, c.chunk_no, 0.0 AS score
+                FROM kb.document_chunk c
+                JOIN kb.document d ON d.id = c.document_id
+                JOIN kb.document_version v ON v.id = c.document_version_id
+                JOIN ops.file_object f ON f.id = v.file_object_id AND f.organization_id = d.organization_id AND f.status <> 'DELETED'
+                JOIN kb.publication p ON p.id = d.current_publication_id
+                    AND p.document_version_id = c.document_version_id AND p.review_revision_id = c.review_revision_id
+                    AND p.status = 'CURRENT'
+                WHERE d.organization_id = ? AND d.lifecycle_status = 'ACTIVE'
+                  AND c.document_id = ? AND c.document_version_id = ?
+                  AND c.page_no IS NOT DISTINCT FROM CAST(? AS integer)
+                  AND c.chunk_no BETWEEN ? AND ?
+                """ + aiClause + categoryClause(categoryIds) + scopeClause(scopeIds, "d.id", "c.document_version_id") + """
+                ORDER BY abs(c.chunk_no - ?) ASC, c.chunk_no ASC
+                LIMIT ?
+                """;
+        var args = new java.util.ArrayList<Object>();
+        args.add(organizationId);
+        args.add(documentId);
+        args.add(versionId);
+        args.add(pageNo);
+        args.add(centerChunkNo - safeRadius);
+        args.add(centerChunkNo + safeRadius);
+        if (categoryIds != null) args.addAll(categoryIds);
+        if (scopeIds != null) args.addAll(scopeIds);
+        args.add(centerChunkNo);
+        args.add(safeLimit);
         return jdbc.query(sql, this::mapSearch, args.toArray());
     }
 
@@ -561,7 +603,7 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
         var sql = """
                 SELECT c.id, c.document_id, c.document_version_id,
                        coalesce(p.metadata_snapshot_jsonb->>'title', d.title) AS title, v.original_name,
-                       c.page_no, c.section, c.content,
+                       c.page_no, c.section, c.content, c.chunk_no,
                        (1 - (c.embedding <=> CAST(? AS vector))) AS score
                 FROM kb.document_chunk c
                 JOIN kb.document d ON d.id = c.document_id
@@ -621,7 +663,7 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                 rs.getObject("id", UUID.class), rs.getObject("document_id", UUID.class),
                 rs.getObject("document_version_id", UUID.class), rs.getString("title"),
                 rs.getString("original_name"), (Integer) rs.getObject("page_no"), rs.getString("section"),
-                rs.getString("content"), rs.getDouble("score")
+                rs.getString("content"), rs.getDouble("score"), rs.getInt("chunk_no")
         );
     }
 

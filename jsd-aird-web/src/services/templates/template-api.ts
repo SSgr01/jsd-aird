@@ -36,6 +36,25 @@ export interface TemplateCategory {
   templateCount: number;
 }
 
+export interface TemplateVersionReview {
+  versionId: string;
+  status: 'NOT_SUBMITTED' | 'SUBMITTED' | 'APPROVED' | 'REJECTED';
+  submittedBy?: string;
+  submittedAt?: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
+  comment?: string;
+  events: Array<{
+    id: string;
+    versionId: string;
+    fromStatus?: string;
+    toStatus: string;
+    actorId?: string;
+    comment?: string;
+    createdAt: string;
+  }>;
+}
+
 export interface TemplateFacetSummary {
   totalCount: number;
   uncategorizedCount: number;
@@ -143,6 +162,8 @@ export interface TemplateImportJob {
   recognitionSummary?: TemplateImportRecognitionSummary;
   lastError?: string;
   createdAt: string;
+  startedAt?: string;
+  lastHeartbeatAt?: string;
   suggestionCount: number;
   pendingSuggestionCount: number;
   retryCount: number;
@@ -622,8 +643,13 @@ export const templateApi = {
     });
     const url = URL.createObjectURL(response.data);
     const anchor = document.createElement('a');
-    anchor.href = url; anchor.download = 'templates.csv'; anchor.click();
-    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    anchor.href = url; anchor.download = 'templates.csv'; anchor.style.display = 'none';
+    document.body.appendChild(anchor);
+    anchor.click();
+    window.setTimeout(() => {
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    }, 0);
   },
 
   async create(input: CreateTemplateInput) {
@@ -709,6 +735,34 @@ export const templateApi = {
 
   async publish(versionId: string) {
     await httpClient.post(`/api/v1/template-versions/${versionId}/publish`);
+  },
+
+  async review(versionId: string) {
+    const response = await httpClient.get<ApiResponse<TemplateVersionReview>>(
+      `/api/v1/template-versions/${versionId}/review`,
+    );
+    return response.data.data;
+  },
+
+  async submitReview(versionId: string) {
+    const response = await httpClient.post<ApiResponse<TemplateVersionReview>>(
+      `/api/v1/template-versions/${versionId}/review/submit`,
+    );
+    return response.data.data;
+  },
+
+  async approveReview(versionId: string, comment?: string) {
+    const response = await httpClient.post<ApiResponse<TemplateVersionReview>>(
+      `/api/v1/template-versions/${versionId}/review/approve`, { comment },
+    );
+    return response.data.data;
+  },
+
+  async rejectReview(versionId: string, reason: string) {
+    const response = await httpClient.post<ApiResponse<TemplateVersionReview>>(
+      `/api/v1/template-versions/${versionId}/review/reject`, { reason },
+    );
+    return response.data.data;
   },
 
   async downloadWordDocument(versionId: string) {
@@ -797,8 +851,22 @@ export const templateApi = {
     return response.data.data;
   },
 
+  async stageTemplateFile(file: File) {
+    const body = new FormData();
+    body.append('file', file);
+    const response = await httpClient.post<ApiResponse<{
+      originalFileId: string; normalizedFileId: string; originalName: string; normalizedName: string;
+      originalFormat: 'XLSX' | 'DOCX' | 'XLS' | 'CSV' | 'DOC'; normalizedFormat: TemplateFormat;
+      normalizationStatus: 'PASSTHROUGH' | 'NORMALIZED'; normalizationMessage: string;
+      originalSha256: string; normalizedSha256: string;
+    }>>('/api/v1/template-files/staged', body);
+    return response.data.data;
+  },
+
   async createImport(fileId: string, format: TemplateFormat, options?: {
     categoryId?: string; duplicateOverride?: boolean; operationSource?: string;
+    originalSourceFileId?: string; normalizedSourceFileId?: string; originalFormat?: string;
+    normalizedFormat?: string; normalizationStatus?: string; normalizationMessage?: string;
   }) {
     const response = await httpClient.post<ApiResponse<TemplateImportJob>>(
       '/api/v1/template-imports',

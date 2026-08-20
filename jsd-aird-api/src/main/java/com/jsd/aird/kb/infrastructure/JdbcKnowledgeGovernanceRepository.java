@@ -149,7 +149,8 @@ public class JdbcKnowledgeGovernanceRepository implements KnowledgeGovernanceRep
         if (!"FAILED".equals(parseStatus)) {
             var effectiveActor = actorId == null ? createdBy(documentId) : actorId;
             var basePublicationId = jdbc.query("SELECT current_publication_id FROM kb.document WHERE organization_id = ? AND id = ?",
-                    (rs, ignored) -> rs.getObject(1, UUID.class), organizationId, documentId).stream().findFirst().orElse(null);
+                    (rs, ignored) -> Optional.ofNullable(rs.getObject(1, UUID.class)), organizationId, documentId)
+                    .stream().flatMap(Optional::stream).findFirst().orElse(null);
             var revisionId = UUID.randomUUID();
             var revisionNo = jdbc.queryForObject("SELECT coalesce(max(revision_no), 0) + 1 FROM kb.document_review_revision WHERE document_id = ?",
                     Integer.class, documentId);

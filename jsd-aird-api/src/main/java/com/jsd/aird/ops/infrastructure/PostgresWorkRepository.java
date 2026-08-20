@@ -56,18 +56,34 @@ public class PostgresWorkRepository implements WorkRepository {
                         FROM candidate
                         WHERE job.id = candidate.id
                         RETURNING job.id, job.job_type, job.payload_jsonb, job.attempt_count,
-                                  job.max_attempts
+                                  job.max_attempts, job.current_stage
                         """,
                 (rs, rowNum) -> new AsyncJob(
                         rs.getObject("id", UUID.class),
                         rs.getString("job_type"),
                         parse(rs.getString("payload_jsonb")),
                         rs.getInt("attempt_count"),
-                        rs.getInt("max_attempts")
+                        rs.getInt("max_attempts"),
+                        rs.getString("current_stage")
                 ),
                 workerId,
                 leaseUntil
         ).stream().findFirst();
+    }
+
+    @Override
+    public void heartbeatJob(UUID jobId, String workerId, Duration leaseDuration) {
+        jdbcTemplate.update("""
+                UPDATE ops.async_job
+                SET lease_expires_at = ?, updated_at = now()
+                WHERE id = ? AND status = 'RUNNING' AND lease_owner = ?
+                """, Timestamp.from(Instant.now().plus(leaseDuration)), jobId, workerId);
+    }
+
+    @Override
+    public String currentStage(UUID jobId) {
+        return jdbcTemplate.queryForObject(
+                "SELECT current_stage FROM ops.async_job WHERE id = ?", String.class, jobId);
     }
 
     @Override

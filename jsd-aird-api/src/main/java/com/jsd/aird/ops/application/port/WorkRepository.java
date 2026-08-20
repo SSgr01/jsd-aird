@@ -10,6 +10,12 @@ public interface WorkRepository {
 
     Optional<AsyncJob> claimJob(String workerId, Duration leaseDuration);
 
+    /** Renews the lease and records a heartbeat while a handler is running. */
+    void heartbeatJob(UUID jobId, String workerId, Duration leaseDuration);
+
+    /** Reads the live stage so timeout diagnostics do not use a stale claim snapshot. */
+    String currentStage(UUID jobId);
+
     void completeJob(UUID jobId, JsonNode result);
 
     void failJob(AsyncJob job, Exception exception);
@@ -27,8 +33,12 @@ public interface WorkRepository {
             String jobType,
             JsonNode payload,
             int attemptCount,
-            int maxAttempts
+            int maxAttempts,
+            String currentStage
     ) {
+        public AsyncJob(UUID id, String jobType, JsonNode payload, int attemptCount, int maxAttempts) {
+            this(id, jobType, payload, attemptCount, maxAttempts, "");
+        }
     }
 
     record OutboxEvent(

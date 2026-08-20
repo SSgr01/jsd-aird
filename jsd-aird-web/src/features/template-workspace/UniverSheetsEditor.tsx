@@ -374,7 +374,7 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
     ref,
     () => ({
       getSnapshot() {
-        return (apiRef.current?.getActiveWorkbook()?.getSnapshot() ?? {}) as Record<
+        return (apiRef.current?.getActiveWorkbook()?.save() ?? {}) as Record<
           string,
           unknown
         >;

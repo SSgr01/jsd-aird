@@ -14,6 +14,8 @@ public interface AuditLogFacade {
 
     List<AuditEntry> list(UUID organizationId, String aggregateType, UUID aggregateId, int limit);
 
+    List<AuditEntry> search(UUID organizationId, UUID actorId, String action, Instant from, Instant to, int limit);
+
     record AuditEntry(UUID id, UUID actorId, String action, String aggregateType, UUID aggregateId,
                       JsonNode detail, Instant createdAt) { }
 }

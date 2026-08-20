@@ -1,8 +1,8 @@
 package com.jsd.aird.mdm.application.service;
 import com.jsd.aird.mdm.application.query.ProjectTaskQuery;
+import com.jsd.aird.mdm.application.query.ProjectTaskSummary;
+import com.jsd.aird.mdm.application.port.ProjectWorkRepository;
 import com.jsd.aird.mdm.domain.model.*;
-import com.jsd.aird.mdm.infrastructure.model.ProjectTaskSummaryRow;
-import com.jsd.aird.mdm.infrastructure.persistence.ProjectWorkMapper;
 import com.jsd.aird.shared.error.*;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -11,8 +11,8 @@ import java.util.*;
 
 @Service
 public class ProjectWorkService {
- private final ProjectWorkMapper mapper;
- public ProjectWorkService(ProjectWorkMapper mapper){this.mapper=mapper;}
+ private final ProjectWorkRepository mapper;
+ public ProjectWorkService(ProjectWorkRepository mapper){this.mapper=mapper;}
  public List<ProjectTask> tasks(UUID stageId){return mapper.tasks(stageId);}
  @Transactional
  public ProjectTask createTask(UUID projectId,TaskInput input){
@@ -34,7 +34,7 @@ public class ProjectWorkService {
   return getTask(id);
  }
 
- public List<ProjectTaskSummaryRow> searchTasks(ProjectTaskQuery query) {
+ public List<ProjectTaskSummary> searchTasks(ProjectTaskQuery query) {
   int page = query.page() == null || query.page() < 1 ? 1 : query.page();
   int size = query.size() == null || query.size() < 1 ? 20 : query.size();
   long offset = (long) (page - 1) * size;

@@ -406,7 +406,7 @@ function CustomerModal({ partner, open, onClose, onSaved }: Omit<Props, 'mode'>)
                       placeholder="搜索并选择项目"
                       value={person.projectIds}
                       onChange={(value) => {
-                        const ids = (value as string[]) ?? [];
+                        const ids = (value) ?? [];
                         updatePerson(index, {
                           projectIds: ids,
                           teamMembers: mergeProjectTeamMembers(person.manualTeamMembers ?? [], ids, allProjects),
@@ -616,7 +616,7 @@ function FollowupModal({ partner, communication, open, onClose, onSaved }: Omit<
       communicationMethod: v.method,
       internalParticipants: v.owner,
       content: v.content,
-      status: (communication?.status ?? 'OPEN') as Communication['status'],
+      status: (communication?.status ?? 'OPEN'),
       customFields: toCustomFieldRecord(followupCustomFields),
       version: communication?.version ?? 0,
     };

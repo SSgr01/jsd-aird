@@ -29,7 +29,23 @@ export function downloadBlob(blob: Blob, fileName: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-export async function downloadFile(fileId: string, fileName: string) {
-  const blob = await fetchFileBlob(fileId);
-  downloadBlob(blob, fileName);
+/**
+ * Start a same-origin download through the browser's native download
+ * pipeline.  This is intentionally separate from the Blob helper used by
+ * previews: native links let the browser observe Content-Disposition and
+ * emit a real download event for regression tests and assistive tooling.
+ */
+export function triggerNativeDownload(path: string, fileName?: string) {
+  const anchor = document.createElement('a');
+  anchor.href = path;
+  if (fileName) anchor.download = fileName;
+  anchor.rel = 'noopener';
+  anchor.style.display = 'none';
+  document.body.appendChild(anchor);
+  anchor.click();
+  window.setTimeout(() => anchor.remove(), 0);
+}
+
+export function downloadFile(fileId: string, fileName: string) {
+  triggerNativeDownload(`/api/v1/files/${encodeURIComponent(fileId)}/content`, fileName);
 }

@@ -126,6 +126,11 @@ public class KnowledgeController {
         return success(service.get(id));
     }
 
+    @GetMapping("/documents/{id}/processing")
+    public ApiResponse<KnowledgeService.ProcessingView> processing(@PathVariable UUID id) {
+        return success(service.processing(id));
+    }
+
     @GetMapping("/documents/{id}/versions")
     public ApiResponse<?> versions(@PathVariable UUID id) {
         return success(service.versions(id));

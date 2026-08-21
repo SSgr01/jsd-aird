@@ -1,15 +1,81 @@
 import { describe, expect, it } from 'vitest';
 
 import type { RecognitionSuggestion } from '@/services/templates/template-api';
+import type { TemplateBinding } from './types';
 
 import {
   applySuggestion,
+  bindingForField,
   readFieldModel,
   removeBusinessField,
   updateBusinessField,
 } from './field-model';
+import { locatorValueRange } from './locator';
 
 describe('field model', () => {
+  it('uses the complete visible row path instead of splitting a sanitized field code', () => {
+    const schema = {
+      'x-jsd-field-model': {
+        modelVersion: 5,
+        groups: [{ id: 'group-1', name: '基础信息', order: 0 }],
+        fields: [{
+          id: 'field-1',
+          fieldId: 'field-1',
+          bindingId: 'binding-1',
+          groupId: 'group-1',
+          name: '外观',
+          kind: 'SCALAR',
+          fieldType: 'TABLE_COLUMN',
+          displayRole: 'FIELD',
+          valueType: 'string',
+          required: false,
+          reviewStatus: 'CONFIRMED',
+          pathSegments: ['喷板', '刮板或淋涂后性能测试', 'ph', '8'],
+          locator: { labelRange: 'A90:C90', valueRange: 'E90:N90' },
+        }],
+      },
+    };
+    const mapping: TemplateBinding[] = [{
+      bindingId: 'binding-1',
+      fieldId: 'field-1',
+      fieldCode: 'TABLE.COLUMN.喷板_刮板或淋涂后性能测试_ph_8_8人工汗测试_外观_目测',
+      dataPath: '/records/*/appearance',
+      role: 'FIELD',
+      mappingKind: 'REPEAT_FIELD',
+      locatorType: 'CELL_RANGE',
+      locator: { sheetId: 'sheet-1', labelRange: 'A90:C90', valueRange: 'E90:N90' },
+      syncDirection: 'TWO_WAY',
+      primaryBinding: true,
+      bindingStatus: 'VALID',
+    }];
+
+    const result = readFieldModel(schema, mapping, {
+      sheets: {
+        'sheet-1': {
+          cellData: {
+            '32': {
+              '0': { v: '喷板、刮板或淋涂后性能测试' },
+            },
+            '89': {
+              '1': { v: 'PH=8.8人工汗测试' },
+              '2': { v: '外观' },
+              '3': { v: '目测' },
+            },
+          },
+          mergeData: [
+            { startRow: 32, endRow: 99, startColumn: 0, endColumn: 0 },
+          ],
+        },
+      },
+    });
+    expect(result.fields[0]?.pathSegments).toEqual([
+      '喷板、刮板或淋涂后性能测试',
+      'PH=8.8人工汗测试',
+      '外观',
+      '目测',
+    ]);
+  });
+
   it('groups an accepted table suggestion and creates one region binding', () => {
     const suggestion: RecognitionSuggestion = {
       id: 'suggestion-1',
@@ -175,6 +241,7 @@ describe('field model', () => {
           valueMode: 'ARRAY_ROW',
         },
         mappingKind: 'REPEAT_FIELD',
+        labelPath: '物性测试 > 粘度 > 25℃涂4杯',
       },
     };
 
@@ -197,7 +264,21 @@ describe('field model', () => {
     expect(childResult.model.fields.find((field) => field.id === 'child-field')).toMatchObject({
       parentFieldId: 'parent-field',
       mappingKind: 'REPEAT_FIELD',
+      pathSegments: ['物性测试', '粘度', '25℃涂4杯'],
     });
+
+    const childField = childResult.model.fields.find((field) => field.id === 'child-field');
+    expect(childField).toBeDefined();
+    if (childField) {
+      const parentLocatorWithChildIdentity = {
+        ...childResult.mapping[0]!,
+        bindingId: 'parent-binding',
+        relationId: childField.relationId ?? '',
+        locator: { sheetId: 'sheet-1', address: 'B6:H10', range: 'B6:H10' },
+      };
+      const focused = bindingForField(childField, [parentLocatorWithChildIdentity]);
+      expect(locatorValueRange(focused?.locator)).toBe('C6:H6');
+    }
   });
 
   it('adds the hidden repeat-region mapping when a child is confirmed first', () => {

@@ -20,7 +20,7 @@ import type {
   TemplateFormat,
 } from '@/features/template-workspace/types';
 import {
-  candidateBinding,
+  bindingForField,
 } from '@/features/template-workspace/field-model';
 import type {
   RecognitionReview,
@@ -30,6 +30,7 @@ import type {
 
 import { normalizeAddress, validateAddress } from './coordinates';
 import { RecognitionReviewPanel } from './RecognitionReviewPanel';
+import { locatorLabelRange, locatorValueRange, mergeLocators } from '@/features/template-workspace/locator';
 
 export type CoordinateTarget = 'labelAddress' | 'address';
 export type FieldManagerTab = 'recognition' | 'structure' | 'properties';
@@ -116,24 +117,7 @@ export function TemplateFieldManager({
   const selectedField = fieldModel.fields.find(
     (field) => field.id === selectedFieldId && !isRegionField(field),
   );
-  const selectedBinding = selectedField?.bindingId
-    ? mapping.find((binding) => binding.bindingId === selectedField.bindingId)
-    : selectedField
-      ? (candidateBinding(selectedField) ??
-        (selectedField.locator
-          ? {
-              bindingId: `field-${selectedField.id}`,
-              fieldId: selectedField.id,
-              dataPath: selectedField.dataPath || '',
-              role: 'FIELD' as const,
-              locatorType: 'CELL_RANGE',
-              locator: selectedField.locator,
-              syncDirection: 'TWO_WAY' as const,
-              primaryBinding: false,
-              bindingStatus: 'VALID' as const,
-            }
-          : undefined))
-      : undefined;
+  const selectedBinding = selectedField ? bindingForField(selectedField, mapping) : undefined;
 
   const selectField = (field: BusinessField) => {
     onSelectField(field);
@@ -317,16 +301,14 @@ function FieldStructure({
               </span>
             </summary>
             <div className="field-tree-items">
-              {region.fields.map((field) => (
-                <div className="field-tree-node" key={field.id}>
-                  <FieldTreeButton
-                    field={field}
-                    selectedFieldId={selectedFieldId}
-                    fieldRefs={fieldRefs}
-                    onSelectField={onSelectField}
-                    child={Boolean(field.parentFieldId)}
-                  />
-                </div>
+              {buildFieldTree(region.fields).map((node) => (
+                <FieldTreeNode
+                  key={node.field.id}
+                  node={node}
+                  selectedFieldId={selectedFieldId}
+                  fieldRefs={fieldRefs}
+                  onSelectField={onSelectField}
+                />
               ))}
               {!region.fields.length && (
                 <span className="field-tree-empty">
@@ -350,6 +332,58 @@ type FieldRegionView = {
   root?: BusinessField;
   fields: BusinessField[];
 };
+
+type FieldTreeNode = {
+  field: BusinessField;
+  children: FieldTreeNode[];
+};
+
+function buildFieldTree(fields: BusinessField[]): FieldTreeNode[] {
+  const nodes = new Map(fields.map((field) => [field.id, { field, children: [] as FieldTreeNode[] }]));
+  const roots: FieldTreeNode[] = [];
+  for (const node of nodes.values()) {
+    const parent = node.field.parentFieldId ? nodes.get(node.field.parentFieldId) : undefined;
+    if (parent) parent.children.push(node);
+    else roots.push(node);
+  }
+  return roots;
+}
+
+function FieldTreeNode({
+  node,
+  selectedFieldId,
+  fieldRefs,
+  onSelectField,
+  depth = 0,
+}: {
+  node: FieldTreeNode;
+  selectedFieldId?: string;
+  fieldRefs: MutableRefObject<Map<string, HTMLButtonElement>>;
+  onSelectField: (field: BusinessField) => void;
+  depth?: number;
+}) {
+  return (
+    <div className="field-tree-node">
+      <FieldTreeButton
+        field={node.field}
+        selectedFieldId={selectedFieldId}
+        fieldRefs={fieldRefs}
+        onSelectField={onSelectField}
+        depth={depth}
+      />
+      {node.children.map((child) => (
+        <FieldTreeNode
+          key={child.field.id}
+          node={child}
+          selectedFieldId={selectedFieldId}
+          fieldRefs={fieldRefs}
+          onSelectField={onSelectField}
+          depth={depth + 1}
+        />
+      ))}
+    </div>
+  );
+}
 
 function isRegionField(field: BusinessField) {
   return field.displayRole === 'REGION'
@@ -393,7 +427,7 @@ function buildFieldRegionViews(fieldModel: FieldModel, review?: RecognitionRevie
       if (matched) used.add(field.id);
       return matched;
     });
-    result.push({ id: root.blockId || root.id, name: root.name, kind: root.kind, range: textValue(root.locator?.address), root, fields });
+    result.push({ id: root.blockId || root.id, name: root.name, kind: root.kind, range: locatorValueRange(root.locator), root, fields });
   }
 
   const unassigned = fieldModel.fields.filter((field) => !isRegionField(field) && !used.has(field.id));
@@ -443,18 +477,19 @@ function FieldTreeButton({
   selectedFieldId,
   fieldRefs,
   onSelectField,
-  child = false,
+  depth = 0,
 }: {
   field: BusinessField;
   selectedFieldId?: string;
   fieldRefs: MutableRefObject<Map<string, HTMLButtonElement>>;
   onSelectField: (field: BusinessField) => void;
-  child?: boolean;
+  depth?: number;
 }) {
   return (
     <button
       type="button"
-      className={child ? 'field-tree-child' : undefined}
+      className={depth > 0 ? 'field-tree-child' : undefined}
+      style={depth > 0 ? { paddingLeft: `${12 + depth * 18}px` } : undefined}
       ref={(node) => {
         if (node) fieldRefs.current.set(field.id, node);
         else fieldRefs.current.delete(field.id);
@@ -466,20 +501,20 @@ function FieldTreeButton({
         {field.kind === 'SCALAR' ? <EditOutlined /> : <TableOutlined />}
       </span>
       <span className="field-tree-name">
-        <strong>{field.name}</strong>
+        <strong title={fieldDisplayPath(field)}>{fieldDisplayPath(field)}</strong>
         <small>
           {field.standardRequired && (field.requiresStandardConfirmation || field.fieldOrigin === 'PENDING_STANDARD')
             ? '待选择业务字段'
             : field.candidate
               ? '待确认候选'
-              : child
+              : field.fieldType === 'TABLE_COLUMN'
                 ? '明细列'
                 : kindLabel(field.kind)}
           {field.unit ? ` · ${field.unit}` : ''}
         </small>
       </span>
-      {field.reviewStatus === 'NEEDS_CONFIRMATION' || (field.confidence ?? 1) < 0.85 ? (
-        <span className="field-tree-status needs-review" aria-label="建议核对" title="建议核对">
+      {field.labelStatus === 'UNRESOLVED' || field.reviewStatus === 'NEEDS_CONFIRMATION' || (field.confidence ?? 1) < 0.85 ? (
+        <span className="field-tree-status needs-review" aria-label={field.labelStatus === 'UNRESOLVED' ? '标签位置待确认' : '建议核对'} title={field.labelStatus === 'UNRESOLVED' ? '标签位置待确认' : '建议核对'}>
           <ExclamationCircleOutlined />
         </span>
       ) : (
@@ -489,6 +524,33 @@ function FieldTreeButton({
       )}
     </button>
   );
+}
+
+function fieldDisplayPath(field: BusinessField) {
+  const segments = (field.pathSegments ?? []).map((segment) => segment.trim()).filter(Boolean);
+  return segments.length ? segments.join(' > ') : field.name;
+}
+
+function fieldNameInputValue(field: BusinessField) {
+  return fieldDisplayPath(field);
+}
+
+function fieldNameInputUpdate(field: BusinessField, value: string) {
+  const entered = value.trim();
+  const enteredPath = entered
+    .split(/\s*>\s*/)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  const currentPath = (field.pathSegments ?? []).map((segment) => segment.trim()).filter(Boolean);
+  const nextPath = enteredPath.length > 1
+    ? enteredPath
+    : currentPath.length > 1
+      ? [...currentPath.slice(0, -1), entered]
+      : enteredPath;
+  return {
+    name: nextPath.at(-1) ?? entered,
+    pathSegments: nextPath.length ? nextPath : [entered],
+  };
 }
 
 function FieldProperties({
@@ -516,9 +578,9 @@ function FieldProperties({
   onDeleteField: Props['onDeleteField'];
   onPlaceWordField: Props['onPlaceWordField'];
 }) {
-  const locator = binding?.locator ?? field.locator ?? {};
-  const sourceLabelAddress = text(locator.labelAddress);
-  const sourceAddress = text(locator.address) || text(locator.range);
+  const locator = mergeLocators(field.locator, binding?.locator);
+  const sourceLabelAddress = locatorLabelRange(locator);
+  const sourceAddress = locatorValueRange(locator);
   const [labelAddress, setLabelAddress] = useState(sourceLabelAddress);
   const [address, setAddress] = useState(sourceAddress);
   const [labelError, setLabelError] = useState<string>();
@@ -541,7 +603,7 @@ function FieldProperties({
 
   const commitCoordinate = (target: CoordinateTarget, rawValue: string) => {
     const value = normalizeAddress(rawValue);
-    const error = validateAddress(value, target === 'labelAddress');
+    const error = validateAddress(value, target === 'labelAddress' && field.fieldType !== 'TABLE_COLUMN');
     if (target === 'labelAddress') {
       setLabelAddress(value);
       setLabelError(error);
@@ -591,20 +653,24 @@ function FieldProperties({
         <div className="field-property-section">
           <div className="field-property-section-title">Excel 位置</div>
           <span className="field-sheet-name">工作表：{sheetName}</span>
+          <div className="field-position-meta">
+            <span>定位来源：{locator.source === 'INFERRED' ? '系统推断' : locator.source === 'MANUAL' ? '人工配置' : locator.source === 'UNRESOLVED' ? '待确认' : '识别结果'}</span>
+            {typeof locator.confidence === 'number' && <span>置信度：{Math.round(locator.confidence * 100)}%</span>}
+          </div>
           <CoordinateInput
             label="标签位置"
             value={labelAddress}
             error={labelError}
-            placeholder="例如 A2"
+            placeholder={field.fieldType === 'TABLE_COLUMN' ? '例如 A5:C5' : '例如 A2'}
             editable={editable}
             picking={picking?.fieldId === field.id && picking.target === 'labelAddress'}
             onChange={setLabelAddress}
             onCommit={(value) => commitCoordinate('labelAddress', value)}
             onPick={() => onPickCoordinate(field.id, 'labelAddress')}
           />
-          {!labelAddress && (
+          {!labelAddress && field.fieldType !== 'MANUAL_VALUE' && (
             <span className="coordinate-help">
-              尚未设置标签位置，Excel 标签与字段名称不能自动同步。
+              尚未确认标签位置，请从工作表选择标签单元格后再发布。
             </span>
           )}
           <CoordinateInput
@@ -660,11 +726,11 @@ function BusinessPropertyFields({
         <label className="field-property full">
           <span>字段名称</span>
           <Input
-            value={field.name}
+            value={fieldNameInputValue(field)}
             disabled={!editable}
             maxLength={100}
             status={(field.name ?? '').trim() ? undefined : 'error'}
-            onChange={(event) => onUpdateField(field.id, { name: event.target.value })}
+            onChange={(event) => onUpdateField(field.id, fieldNameInputUpdate(field, event.target.value))}
           />
           {!(field.name ?? '').trim() && <small role="alert">字段名称不能为空</small>}
         </label>
@@ -709,6 +775,13 @@ function BusinessPropertyFields({
         </label>
         <label className="field-property">
           <span>字段类型</span>
+          <Input
+            value={field.fieldType === 'TABLE_COLUMN' ? '表格列字段' : field.fieldType === 'MANUAL_VALUE' ? '手工录入字段' : '普通字段'}
+            disabled
+          />
+        </label>
+        <label className="field-property">
+          <span>值类型</span>
           <Select
             value={field.valueType}
             disabled={!editable || field.kind !== 'SCALAR'}

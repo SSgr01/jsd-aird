@@ -91,7 +91,7 @@ public class KnowledgeGovernanceController {
 
     @PostMapping("/documents/{documentId}/versions/{versionId}/reparse")
     public ApiResponse<?> reparse(@PathVariable UUID documentId, @PathVariable UUID versionId,
-                                  @Valid @RequestBody RevisionRequest request) {
+                                  @Valid @RequestBody ReparseRequest request) {
         return success(service.reparse(documentId, versionId, request.reviewRevisionId(), request.lockVersion()));
     }
 
@@ -186,6 +186,7 @@ public class KnowledgeGovernanceController {
                                 List<KnowledgeGovernanceRepository.IssueAction> issueActions) { }
     public record PublishedRevisionRequest(@NotNull UUID basePublicationId) { }
     public record RevisionRequest(@NotNull UUID reviewRevisionId, int lockVersion, UUID basePublicationId) { }
+    public record ReparseRequest(UUID reviewRevisionId, Integer lockVersion) { }
     public record RejectRequest(@NotNull UUID reviewRevisionId, int lockVersion,
                                 @NotBlank @Size(max = 1000) String reason) { }
     public record TableReviewRequest(int lockVersion,

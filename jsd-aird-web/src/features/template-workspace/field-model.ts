@@ -3,6 +3,12 @@ import { generateUUID } from '@/utils/uuid';
 
 import type { BusinessField, FieldKind, FieldModel, TemplateBinding } from './types';
 import { groupCode, normalizeFieldModel, normalizeGroupName } from './group-normalizer';
+import {
+  expandSemanticLabelRange,
+  locatorLabelRange,
+  locatorValueRange,
+  mergeLocators,
+} from './locator';
 
 const FIELD_MODEL_KEY = 'x-jsd-field-model';
 
@@ -34,31 +40,108 @@ export function bindingMatchesIdentity(binding: TemplateBinding, identity: Field
     && stringValue(binding.diagnostic?.recognitionItemId) === identity.recognitionItemId;
 }
 
+/** Keep a selected child field's own locator when its parent is also a repeat region. */
+export function bindingForField(
+  field: BusinessField,
+  mapping: TemplateBinding[],
+): TemplateBinding | undefined {
+  const exact = mapping.find((binding) =>
+    (Boolean(field.bindingId) && binding.bindingId === field.bindingId)
+      || (Boolean(field.relationId) && binding.relationId === field.relationId
+        && (!field.fieldId || !binding.fieldId || binding.fieldId === field.fieldId))
+      || (Boolean(field.fieldId) && binding.fieldId === field.fieldId),
+  );
+  const base = exact ?? candidateBinding(field);
+  if (base) {
+    const locator = expandSemanticLabelRange(
+      mergeLocators(base.locator, field.locator),
+      field.pathSegments,
+    );
+    return {
+      ...base,
+      fieldId: field.fieldId || base.fieldId,
+      relationId: field.relationId || base.relationId,
+      mappingKind: field.mappingKind || base.mappingKind,
+      locator,
+    };
+  }
+  if (!field.locator) return undefined;
+  return {
+    bindingId: `field-${field.id}`,
+    fieldId: field.fieldId || field.id,
+    relationId: field.relationId,
+    dataPath: field.dataPath || '',
+    role: 'FIELD',
+    mappingKind: field.mappingKind,
+    locatorType: 'CELL_RANGE',
+    locator: expandSemanticLabelRange(mergeLocators(field.locator), field.pathSegments),
+    syncDirection: 'TWO_WAY',
+    primaryBinding: false,
+    bindingStatus: 'VALID',
+  };
+}
+
 export function readFieldModel(
   schema: Record<string, unknown>,
   mapping: TemplateBinding[],
+  snapshot?: Record<string, unknown>,
 ): FieldModel {
   const stored = schema[FIELD_MODEL_KEY];
   if (isRecord(stored) && Array.isArray(stored.groups) && Array.isArray(stored.fields)) {
-    return normalizeFieldModel(structuredClone(stored) as unknown as FieldModel);
+    const normalized = normalizeFieldModel(structuredClone(stored) as unknown as FieldModel);
+    return normalizeFieldModel({
+      ...normalized,
+      fields: normalized.fields.map((field) => {
+        const binding = mapping.find((item) => bindingMatchesIdentity(item, {
+          bindingId: field.bindingId,
+          relationId: field.relationId,
+          fieldId: field.fieldId || field.id,
+        }));
+        const locator = mergeLocators(field.locator, binding?.locator);
+        // The confirmed binding/path and the workbook snapshot are the only
+        // sources of the displayed structure. Do not decode business names
+        // from fieldCode here: fieldCode is an identifier, not a display path.
+        const bindingPath = bindingSemanticPath(binding);
+        const snapshotPath = recoverSnapshotSemanticPath(binding, snapshot);
+        const namedPath = splitLabelPath(field.name);
+        const pathSegments = bindingPath
+          ?? mergeSemanticPaths(namedPath, snapshotPath)
+          ?? (namedPath && namedPath.length >= 2
+            ? namedPath
+            : preferSemanticPath(field.pathSegments, bindingPath));
+        return {
+          ...field,
+          locator,
+          pathSegments,
+          labelStatus: field.fieldType === 'REGION' ? 'NOT_APPLICABLE' : locator.label ? 'RESOLVED' : 'UNRESOLVED',
+        };
+      }),
+    });
   }
   const groupId = 'group-basic';
   return {
-    modelVersion: 4,
+    modelVersion: 5,
     groups: [{ id: groupId, name: '基础信息', groupCode: 'BASIC_INFORMATION', order: 0 }],
     fields: mapping.map((binding) => ({
       id: binding.bindingId,
       bindingId: binding.bindingId,
       fieldCode: binding.fieldCode,
       dataPath: binding.dataPath,
+      relationId: binding.relationId,
       groupId,
       name: displayName(binding),
       kind: kindFromBinding(binding),
+      fieldType: binding.mappingKind === 'REPEAT_REGION'
+        ? 'REGION'
+        : binding.mappingKind === 'REPEAT_FIELD' ? 'TABLE_COLUMN' : 'FIELD',
+      displayRole: binding.mappingKind === 'REPEAT_REGION' ? 'REGION' : 'FIELD',
+      pathSegments: bindingSemanticPath(binding),
       valueType: 'string',
       required: false,
       description: stringValue(binding.diagnostic?.description),
       interpretation: interpretation(kindFromBinding(binding), displayName(binding)),
       reviewStatus: binding.bindingStatus === 'VALID' ? 'CONFIRMED' : 'ISSUE',
+      locator: mergeLocators(binding.locator),
       editability:
         (stringValue(binding.diagnostic?.editability) as BusinessField['editability']) || 'UNKNOWN',
       valueSource:
@@ -251,6 +334,7 @@ export function applySuggestion(
     fieldCode: suggestion.payload.fieldCode,
     groupId: group.id,
     name: stringValue(suggestion.payload.fieldName),
+    pathSegments: splitLabelPath(suggestion.payload.labelPath),
     displayRole: ['FORM_REGION', 'ROW_TABLE', 'COLUMN_TABLE', 'MATRIX', 'TABLE_REGION'].includes(kind)
       ? 'REGION' : 'FIELD',
     kind,
@@ -415,6 +499,7 @@ export function addRecognitionCandidate(
     fieldCode: suggestion.payload.fieldCode,
     groupId: group.id,
     name: suggestion.payload.fieldName,
+    pathSegments: splitLabelPath(suggestion.payload.labelPath),
     displayRole: ['FORM_REGION', 'ROW_TABLE', 'COLUMN_TABLE', 'MATRIX', 'TABLE_REGION'].includes(kind)
       ? 'REGION' : 'FIELD',
     kind,
@@ -468,15 +553,15 @@ function tableChildFields(
   return (suggestion.payload.columns ?? []).map((column) => {
     const dataPath =
       column.dataPath || `${parent.dataPath || '/recognized/table'}/*/${column.code}`;
-    const locator = {
-      ...structuredClone(suggestion.payload.locator),
-      labelAddress: column.labelRange || suggestion.payload.locator?.labelAddress,
-      labelRange: column.labelRange || suggestion.payload.locator?.labelRange,
-      address: column.valueRange || suggestion.payload.locator?.address,
-      logicalInputRange: column.valueRange || suggestion.payload.locator?.logicalInputRange,
+    const locator = mergeLocators(suggestion.payload.locator, {
+      labelAddress: column.labelRange,
+      labelRange: column.labelRange,
+      address: column.valueRange,
+      valueRange: column.valueRange,
+      logicalInputRange: column.valueRange,
       valueMode: parent.repeatAxis === 'COLUMN' ? 'ARRAY_ROW' : 'ARRAY_COLUMN',
       terminationRule: suggestion.payload.terminationRule,
-    };
+    });
     return {
       id: candidate ? `candidate-${suggestion.id}-${column.code}` : `${parent.id}::${column.code}`,
       fieldId: candidate ? undefined : `${parent.id}::${column.code}`,
@@ -490,7 +575,15 @@ function tableChildFields(
       parentFieldId: parent.id,
       groupId: parent.groupId,
       name: stringValue(column.name),
+      pathSegments: splitLabelPath(
+        typeof (column as { labelPath?: unknown }).labelPath === 'string'
+          ? (column as { labelPath: string }).labelPath
+          : [...(parent.pathSegments ?? [parent.name]), stringValue(column.name)].join(' > '),
+      ),
       kind: 'SCALAR',
+      fieldType: 'TABLE_COLUMN',
+      displayRole: 'FIELD',
+      labelStatus: locator.label ? 'RESOLVED' : 'UNRESOLVED',
       valueType: column.valueType || 'string',
       required: column.required ?? false,
       unit: column.unit,
@@ -535,6 +628,32 @@ function tableChildFields(
 
 function normalizeRange(value?: string) {
   return (typeof value === 'string' ? value : '').replaceAll('$', '').trim().toUpperCase();
+}
+
+function splitLabelPath(value?: string) {
+  if (typeof value !== 'string') return undefined;
+  const segments = value.split(/\s*>\s*/).map((item) => item.trim()).filter(Boolean);
+  return segments.length ? segments : undefined;
+}
+
+/**
+ * A worksheet snapshot often exposes only the row-local suffix (for example
+ * “PH=8.8人工汗测试 > 附着力 > 百格法”), while the persisted field name also
+ * contains the merged section prefix (“喷板、刮板或淋涂后性能测试”). Keep the
+ * complete persisted path when the snapshot is a suffix; never replace a
+ * confirmed parent with a shorter reconstruction.
+ */
+function mergeSemanticPaths(
+  namedPath?: string[],
+  snapshotPath?: string[],
+) {
+  if (!snapshotPath?.length) return namedPath;
+  if (!namedPath?.length) return snapshotPath;
+  if (namedPath.length >= snapshotPath.length
+    && snapshotPath.every((segment, index) => segment === namedPath[namedPath.length - snapshotPath.length + index])) {
+    return namedPath;
+  }
+  return snapshotPath.length >= namedPath.length ? snapshotPath : namedPath;
 }
 
 function normalizeSuggestionDataPaths(
@@ -889,6 +1008,133 @@ function kindFromBinding(binding: TemplateBinding): FieldKind {
 
 function displayName(binding: TemplateBinding) {
   return stringValue(binding.diagnostic?.displayName) || binding.fieldCode || '业务字段';
+}
+
+function bindingSemanticPath(binding?: TemplateBinding) {
+  if (!binding) return undefined;
+  const explicit = Array.isArray(binding.labelPathSegments)
+    ? binding.labelPathSegments.map((segment) => stringValue(segment).trim()).filter(Boolean)
+    : [];
+  if (explicit.length) return explicit;
+  const direct = splitLabelPath(binding.labelPath);
+  if (direct?.length) return direct;
+  const diagnostic = binding.diagnostic?.labelPath;
+  if (Array.isArray(diagnostic)) {
+    const segments = diagnostic.map((segment) => stringValue(segment).trim()).filter(Boolean);
+    return segments.length ? segments : undefined;
+  }
+  return splitLabelPath(stringValue(diagnostic));
+}
+
+function recoverSnapshotSemanticPath(
+  binding: TemplateBinding | undefined,
+  snapshot?: Record<string, unknown>,
+) {
+  if (!binding || binding.mappingKind !== 'REPEAT_FIELD' || !snapshot) return undefined;
+  const label = parseA1Range(locatorLabelRange(binding.locator));
+  const value = parseA1Range(locatorValueRange(binding.locator));
+  if (!label || !value || label.startRow !== value.startRow || value.startColumn <= label.endColumn + 1) {
+    return undefined;
+  }
+  const texts: string[] = [];
+  // The visible path is the complete row hierarchy. For merged workbooks the
+  // upper-level section is often stored in a merged cell to the left of the
+  // label range (for example A5:B26 = “物性测试”). Read the whole row prefix
+  // through the label cells so that “PH=8.8人工汗测试” remains one segment
+  // instead of being reconstructed from a sanitized field code.
+  for (let column = 1; column < value.startColumn; column += 1) {
+    const cell = snapshotCell(snapshot, binding.locator, label.startRow, column);
+    if (cell && texts[texts.length - 1] !== cell) texts.push(cell);
+  }
+  if (!texts.length) return undefined;
+  return texts;
+}
+
+interface A1Range {
+  startColumn: number;
+  startRow: number;
+  endColumn: number;
+  endRow: number;
+}
+
+function parseA1Range(value: string): A1Range | undefined {
+  const match = value.replaceAll('$', '').trim().toUpperCase().match(
+    /^([A-Z]{1,4})([1-9][0-9]*)(?::([A-Z]{1,4})([1-9][0-9]*))?$/,
+  );
+  if (!match) return undefined;
+  const columnNumber = (letters: string) => {
+    let result = 0;
+    for (const character of letters) result = result * 26 + character.charCodeAt(0) - 64;
+    return result;
+  };
+  const startColumn = columnNumber(match[1] ?? '');
+  const endColumn = columnNumber(match[3] || match[1] || '');
+  const startRow = Number(match[2]);
+  const endRow = Number(match[4] || match[2]);
+  if (!startColumn || !endColumn || !startRow || !endRow) return undefined;
+  return {
+    startColumn: Math.min(startColumn, endColumn),
+    startRow: Math.min(startRow, endRow),
+    endColumn: Math.max(startColumn, endColumn),
+    endRow: Math.max(startRow, endRow),
+  };
+}
+
+function snapshotCell(
+  snapshot: Record<string, unknown>,
+  locator: Record<string, unknown>,
+  row: number,
+  column: number,
+) {
+  const sheets = isRecord(snapshot.sheets) ? snapshot.sheets : undefined;
+  if (!sheets) return '';
+  const sheetId = stringValue(locator.sheetId);
+  const sheet = (sheetId && isRecord(sheets[sheetId])
+    ? sheets[sheetId]
+    : Object.values(sheets).find((item) => isRecord(item) && stringValue(item.id) === sheetId)) as Record<string, unknown> | undefined;
+  if (!sheet || !isRecord(sheet.cellData)) return '';
+  const directValue = readSnapshotCell(sheet, row, column);
+  if (directValue) return directValue;
+  const mergeData = Array.isArray(sheet.mergeData) ? sheet.mergeData : [];
+  const merge = mergeData.find((item) => {
+    if (!isRecord(item)) return false;
+    const startRow = numberValue(item.startRow);
+    const endRow = numberValue(item.endRow);
+    const startColumn = numberValue(item.startColumn);
+    const endColumn = numberValue(item.endColumn);
+    // Workbook snapshots store merge coordinates as zero-based indexes,
+    // while A1 ranges and readSnapshotCell use one-based row/column numbers.
+    return row - 1 >= startRow && row - 1 <= endRow
+      && column - 1 >= startColumn && column - 1 <= endColumn;
+  });
+  if (!isRecord(merge)) return '';
+  return readSnapshotCell(
+    sheet,
+    numberValue(merge.startRow) + 1,
+    numberValue(merge.startColumn) + 1,
+  );
+}
+
+function readSnapshotCell(sheet: Record<string, unknown>, row: number, column: number) {
+  if (!isRecord(sheet.cellData)) return '';
+  const rowData = sheet.cellData[String(row - 1)];
+  if (!isRecord(rowData)) return '';
+  const cell = rowData[String(column - 1)];
+  if (!isRecord(cell)) return '';
+  const value = cell.v ?? cell.value ?? cell.text;
+  return value === null || value === undefined ? '' : String(value).trim();
+}
+
+function numberValue(value: unknown) {
+  const number = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(number) ? number : -1;
+}
+
+function preferSemanticPath(fieldPath?: string[], bindingPath?: string[]) {
+  const fieldSegments = (fieldPath ?? []).map((segment) => segment.trim()).filter(Boolean);
+  if (!bindingPath?.length) return fieldSegments.length ? fieldSegments : undefined;
+  if (bindingPath.length >= 3 || fieldSegments.length < 3) return bindingPath;
+  return fieldSegments;
 }
 
 function interpretation(kind: FieldKind, name: string) {

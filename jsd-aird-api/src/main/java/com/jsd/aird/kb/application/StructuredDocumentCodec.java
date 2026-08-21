@@ -3,6 +3,7 @@ package com.jsd.aird.kb.application;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -16,6 +17,8 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.kb.domain.DocumentParser;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 /**
@@ -24,6 +27,8 @@ import org.springframework.stereotype.Component;
  */
 @Component
 public class StructuredDocumentCodec {
+
+    private static final Logger log = LoggerFactory.getLogger(StructuredDocumentCodec.class);
 
     public static final int SCHEMA_VERSION = 1;
     public static final int MAX_NODE_COUNT = 20_000;
@@ -42,6 +47,22 @@ public class StructuredDocumentCodec {
         this.objectMapper = objectMapper;
     }
 
+    /** Sanitizes provider output without guessing layout semantics. */
+    public List<DocumentParser.TextBlock> normalizeBlocks(List<DocumentParser.TextBlock> blocks) {
+        var result = new ArrayList<DocumentParser.TextBlock>();
+        if (blocks == null) return List.of();
+        for (var raw : blocks) {
+            if (raw == null) continue;
+            var text = normalize(raw.content());
+            if (text.isBlank()) continue;
+            result.add(copyWithText(raw, text));
+        }
+        if (log.isDebugEnabled() && result.size() != blocks.size()) {
+            log.debug("structured_block_normalized inputBlocks={} outputBlocks={}", blocks.size(), result.size());
+        }
+        return List.copyOf(result);
+    }
+
     public InitialDocuments initialize(List<DocumentParser.TextBlock> blocks) {
         var sourceNodes = new ArrayList<SourceNodeDraft>();
         var sourceContent = objectMapper.createArrayNode();
@@ -53,7 +74,7 @@ public class StructuredDocumentCodec {
         ObjectNode sourceList = null;
         ObjectNode reviewList = null;
         String listGroup = null;
-        for (var block : blocks == null ? List.<DocumentParser.TextBlock>of() : blocks) {
+        for (var block : normalizeBlocks(blocks)) {
             var sourceKey = UUID.randomUUID();
             var reviewNodeId = UUID.randomUUID();
             var text = normalize(block.content());
@@ -135,7 +156,7 @@ public class StructuredDocumentCodec {
     public Projection project(JsonNode confirmedDocument, List<UUID> excludedReviewNodeIds) {
         var excluded = new HashSet<>(excludedReviewNodeIds == null ? List.of() : excludedReviewNodeIds);
         var paragraphs = new ArrayList<ProjectedNode>();
-        collectProjection(validate(confirmedDocument), excluded, new LinkedHashSet<>(), paragraphs);
+        collectProjection(validate(confirmedDocument), excluded, new LinkedHashSet<>(), List.of(), paragraphs);
         var text = paragraphs.stream().map(ProjectedNode::text)
                 .filter(value -> value != null && !value.isBlank())
                 .reduce((left, right) -> left + "\n\n" + right).orElse("");
@@ -188,7 +209,7 @@ public class StructuredDocumentCodec {
     }
 
     private void collectProjection(JsonNode node, Set<UUID> excluded, LinkedHashSet<UUID> inheritedSources,
-                                   List<ProjectedNode> output) {
+                                   List<String> inheritedHeadingPath, List<ProjectedNode> output) {
         var sources = new LinkedHashSet<>(inheritedSources);
         var attrs = node.path("attrs");
         if (attrs.path("sourceNodeKeys").isArray()) {
@@ -202,20 +223,29 @@ public class StructuredDocumentCodec {
         if (reviewNodeId != null && excluded.contains(reviewNodeId)) return;
 
         var type = node.path("type").asText();
+        var attributes = node.path("attrs").isObject()
+                ? objectMapper.convertValue(node.path("attrs"), Map.class) : Map.<String, Object>of();
+        var headingPath = new ArrayList<>(inheritedHeadingPath);
+        if ("heading".equals(type)) {
+            var headingText = textContent(node).strip();
+            if (!headingText.isBlank()) headingPath.add(headingText);
+        }
         if (Set.of("paragraph", "heading", "blockquote", "codeBlock", "listItem", "formula", "audioSegment").contains(type)) {
             var text = textContent(node).strip();
-            if (!text.isBlank()) output.add(new ProjectedNode(reviewNodeId, List.copyOf(sources), text, type));
+            if (!text.isBlank()) output.add(new ProjectedNode(reviewNodeId, List.copyOf(sources), text, type,
+                    List.copyOf(headingPath), attributes));
             return;
         }
         if ("tableRow".equals(type)) {
             var cells = new ArrayList<String>();
             node.path("content").forEach(cell -> cells.add(textContent(cell).strip()));
             var text = String.join(" | ", cells);
-            if (!text.isBlank()) output.add(new ProjectedNode(reviewNodeId, List.copyOf(sources), text, type));
+            if (!text.isBlank()) output.add(new ProjectedNode(reviewNodeId, List.copyOf(sources), text, type,
+                    List.copyOf(headingPath), attributes));
             return;
         }
         if ("dataTableRef".equals(type)) return; // Streamed separately by the table projector.
-        node.path("content").forEach(child -> collectProjection(child, excluded, sources, output));
+        node.path("content").forEach(child -> collectProjection(child, excluded, sources, headingPath, output));
     }
 
     private String textContent(JsonNode node) {
@@ -260,6 +290,9 @@ public class StructuredDocumentCodec {
             attrs.set("sourceNodeKeys", objectMapper.createArrayNode().add(sourceKey.toString()));
         } else {
             attrs.put("sourceNodeKey", sourceKey.toString());
+        }
+        if (attributes != null) {
+            attributes.forEach((key, value) -> attrs.set(key, objectMapper.valueToTree(value)));
         }
         row.set("attrs", attrs);
         var cells = objectMapper.createArrayNode();
@@ -341,6 +374,13 @@ public class StructuredDocumentCodec {
 
     private ObjectNode anchor(DocumentParser.TextBlock block) {
         var result = objectMapper.createObjectNode().put("version", 1);
+        var attributes = block.attributes();
+        putIfPresent(result, "provider", attributes.get("sourceProvider"));
+        putIfPresent(result, "providerCoordinateSpace", attributes.get("providerCoordinateSpace"));
+        putIfPresent(result, "coordinateSpace", attributes.get("coordinateSpace"));
+        putIfPresent(result, "pageWidth", attributes.get("pageWidth"));
+        putIfPresent(result, "pageHeight", attributes.get("pageHeight"));
+        putIfPresent(result, "rotation", attributes.get("rotation"));
         if (block.sheetName() != null) {
             result.put("kind", "sheet_range").put("sheetKey", block.sheetName())
                     .put("sheetName", block.sheetName()).put("range", block.cellRange());
@@ -358,8 +398,18 @@ public class StructuredDocumentCodec {
         return result;
     }
 
+    private void putIfPresent(ObjectNode target, String key, Object value) {
+        if (value != null) target.set(key, objectMapper.valueToTree(value));
+    }
+
     private String normalize(String value) {
         return value == null ? "" : value.replace("\u0000", "").replaceAll("[\\t\\r]+", " ").strip();
+    }
+
+    private DocumentParser.TextBlock copyWithText(DocumentParser.TextBlock block, String text) {
+        return new DocumentParser.TextBlock(block.pageNo(), block.section(), text, block.sheetName(), block.cellRange(),
+                block.paragraphId(), block.bbox(), block.startTimeMs(), block.endTimeMs(), block.confidence(),
+                block.attributes());
     }
 
     public record InitialDocuments(JsonNode sourceDocument, JsonNode confirmedDocument,
@@ -367,5 +417,11 @@ public class StructuredDocumentCodec {
     public record SourceNodeDraft(UUID sourceNodeKey, int nodeNo, String nodeType, String rawText,
                                   JsonNode sourceAnchor, JsonNode confidence) { }
     public record Projection(String confirmedText, List<ProjectedNode> nodes) { }
-    public record ProjectedNode(UUID reviewNodeId, List<UUID> sourceNodeKeys, String text, String nodeType) { }
+    public record ProjectedNode(UUID reviewNodeId, List<UUID> sourceNodeKeys, String text, String nodeType,
+                                List<String> headingPath, Map<String, Object> attributes) {
+        public ProjectedNode {
+            headingPath = headingPath == null ? List.of() : List.copyOf(headingPath);
+            attributes = attributes == null ? Map.of() : Map.copyOf(attributes);
+        }
+    }
 }

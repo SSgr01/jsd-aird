@@ -236,6 +236,24 @@ public class KnowledgeService implements KnowledgeSearchFacade {
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "知识文件不存在"));
     }
 
+    public ProcessingView processing(UUID documentId) {
+        var actor = ActorContext.required();
+        var document = repository.findDocument(actor.organizationId(), documentId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "知识文件不存在"));
+        var review = governance.review(actor.organizationId(), documentId, document.currentVersionId()).orElse(null);
+        var run = review == null ? null : review.parseRun();
+        var job = async.findLatestJob(actor.organizationId(), "kb-reindex:" + document.currentVersionId())
+                .or(() -> async.findJob(actor.organizationId(), "kb-ingest:" + document.currentVersionId()))
+                .orElse(null);
+        return new ProcessingView(document.id(), document.currentVersionId(), document.status(), safeUserError(document.parseError()),
+                run == null ? null : run.id(), run == null ? null : run.status(),
+                run == null ? null : safeUserError(run.errorMessage()), run == null ? null : run.createdAt(),
+                job == null ? null : job.id(), job == null ? null : job.status(), job == null ? 0 : job.progress(),
+                job == null ? null : job.currentStage(), job == null ? 0 : job.attemptCount(),
+                job == null ? 0 : job.maxAttempts(), job == null ? null : job.nextAttemptAt(),
+                job != null && job.terminal(), job == null ? null : safeUserError(job.lastError()));
+    }
+
     public List<VersionView> versions(UUID documentId) {
         var actor = ActorContext.required();
         if (repository.findDocument(actor.organizationId(), documentId).isEmpty()) {
@@ -534,7 +552,12 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         if (!StringUtils.hasText(content)) return false;
         var normalized = content.strip().toLowerCase(Locale.ROOT);
         if (normalized.length() > 24 || normalized.matches("[\\p{N}\\p{Punct}\\s]+")) return false;
-        return queryTerms.contains(normalized);
+        // MinerU often keeps a parameter label together with its unit, for
+        // example “粘度（25℃/cps）”. The query index contains the meaningful
+        // label token “粘度”, so exact equality would prevent adjacent value
+        // expansion and leave the model with the label but not its value.
+        return queryTerms.stream().filter(term -> term != null && term.length() >= 2)
+                .anyMatch(normalized::contains);
     }
 
     public void markIndexStale(UUID organizationId, UUID documentId, UUID versionId, UUID reviewRevisionId) {
@@ -566,7 +589,7 @@ public class KnowledgeService implements KnowledgeSearchFacade {
                     .filter(java.util.Objects::nonNull).findFirst().orElse(null);
             return projectedBlock(node, sourceNode);
         }).filter(block -> block.content() != null && !block.content().isBlank()).toList();
-        var source = new ArrayList<>(OcrFieldValueLinker.link(projectedSource));
+        var source = new ArrayList<>(OcrFieldValueLinker.link(documents.normalizeBlocks(projectedSource)));
         governance.largeTableRows(organizationId, reviewRevisionId).forEach(row -> source.add(
                 new DocumentParser.TextBlock(null, "spreadsheet-row", row.projectedText(), row.sheetName(),
                         row.cellRange(), null, List.of(), null, null, null)));
@@ -683,8 +706,17 @@ public class KnowledgeService implements KnowledgeSearchFacade {
             if (value.isNumber()) bbox.add(value.asDouble());
             else if (value.isArray()) value.forEach(coordinate -> bbox.add(coordinate.asDouble()));
         });
+        var attributes = new LinkedHashMap<String, Object>(node.attributes());
+        attributes.put("headingPath", node.headingPath());
+        if (anchor.has("provider")) attributes.putIfAbsent("sourceProvider", anchor.path("provider").asText());
+        if (anchor.has("providerCoordinateSpace")) attributes.putIfAbsent("providerCoordinateSpace",
+                anchor.path("providerCoordinateSpace").asText());
+        if (anchor.has("coordinateSpace")) attributes.putIfAbsent("coordinateSpace", anchor.path("coordinateSpace").asText());
+        if (anchor.has("pageWidth")) attributes.putIfAbsent("pageWidth", anchor.path("pageWidth").asDouble());
+        if (anchor.has("pageHeight")) attributes.putIfAbsent("pageHeight", anchor.path("pageHeight").asDouble());
+        if (anchor.has("rotation")) attributes.putIfAbsent("rotation", anchor.path("rotation").asInt());
         return new DocumentParser.TextBlock(page, node.nodeType(), node.text(), sheet, range, paragraph,
-                bbox, start, end, null);
+                bbox, start, end, null, attributes);
     }
 
     public void ingest(UUID organizationId, UUID actorId, UUID documentId, UUID versionId, UUID fileId) {
@@ -757,8 +789,22 @@ public class KnowledgeService implements KnowledgeSearchFacade {
                             new MediaExtractionProvider.ExtractionContext(fileId, version.contentType(), version.size(), publicUrl));
                 }
             } else {
+                if (!parser.isConfigured()) {
+                    activeParseRunId = governance.createParseRun(organizationId, actorId, documentId, versionId, "FAILED",
+                            null, parser.getClass().getSimpleName(), null, parser.unavailableReason(),
+                            objectMapper.createObjectNode().put("configured", false), List.of(), List.of()).id();
+                    repository.finishProcessingStep(organizationId, versionId, null, "PARSE", "PENDING_PROVIDER", null,
+                            parser.unavailableReason());
+                    repository.attachProcessingSteps(organizationId, versionId, activeParseRunId);
+                    repository.markFailed(documentId, versionId, "PENDING_PROVIDER", parser.unavailableReason());
+                    appendIngestAudit(organizationId, actorId, "KB_PARSE_PROVIDER_UNAVAILABLE", documentId,
+                            objectMapper.createObjectNode().put("versionId", versionId.toString()));
+                    return;
+                }
                 try (var stored = storage.open(organizationId, fileId)) {
-                    parsed = parser.parse(stored.stream(), version.originalName());
+                    parsed = parser.parse(stored.stream(), version.originalName(),
+                            new DocumentParser.ParseContext(organizationId, actorId, fileId,
+                                    version.contentType(), version.size()));
                 }
             }
             var textHash = sha256(parsed.blocks().stream().map(block -> block.content() == null ? "" : block.content())
@@ -817,28 +863,92 @@ public class KnowledgeService implements KnowledgeSearchFacade {
 
     private List<DocumentParser.TextBlock> chunk(List<DocumentParser.TextBlock> blocks) {
         var result = new ArrayList<DocumentParser.TextBlock>();
+        var tableHeaders = new LinkedHashMap<String, String>();
         for (var block : blocks) {
-            var text = block.content() == null ? "" : block.content().replaceAll("\\s+", " ").strip();
+            var text = normalizeChunkText(block.content());
             if (text.isBlank()) continue;
-            // OCR field/value relations and spreadsheet rows are atomic evidence
-            // units. Splitting them into unrelated character windows would make
-            // a label and its value independently retrievable again.
-            if (block.section() != null && (block.section().startsWith("ocr-field-value")
-                    || block.section().startsWith("spreadsheet-row"))) {
-                result.add(copyBlock(block, text));
+            var attributes = block.attributes();
+            var headingPath = stringList(attributes.get("headingPath"));
+            var context = headingPath.isEmpty() ? "" : "章节：" + String.join(" / ", headingPath) + "\n\n";
+            var section = block.section() == null ? "paragraph" : block.section();
+            if (section.contains("table") || section.startsWith("spreadsheet-row")) {
+                var group = String.valueOf(attributes.getOrDefault("tableGroup", "table-page-" + block.pageNo()));
+                var rowText = tableRowText(attributes, text);
+                if (isHeaderRow(attributes)) tableHeaders.put(group, rowText);
+                var header = tableHeaders.get(group);
+                if (header != null && !header.equals(rowText)) rowText = "表头：" + header + "\n数据行：" + rowText;
+                addSemanticChunks(result, block, context + "表格：" + rowText);
                 continue;
             }
-            if (text.length() <= CHUNK_SIZE) {
-                result.add(copyBlock(block, text));
+            if (section.contains("formula")) {
+                if (!result.isEmpty() && sameContext(result.getLast(), block, headingPath)) {
+                    var last = result.removeLast();
+                    result.add(copyBlock(last, last.content() + "\n\n公式：" + text));
+                } else {
+                    addSemanticChunks(result, block, context + "公式：" + text);
+                }
                 continue;
             }
-            for (int start = 0; start < text.length(); start += CHUNK_SIZE - CHUNK_OVERLAP) {
-                var end = Math.min(text.length(), start + CHUNK_SIZE);
-                result.add(copyBlock(block, text.substring(start, end)));
-                if (end == text.length()) break;
-            }
+            addSemanticChunks(result, block, context + text);
         }
         return result;
+    }
+
+    private void addSemanticChunks(List<DocumentParser.TextBlock> result, DocumentParser.TextBlock block, String text) {
+        if (text.length() <= CHUNK_SIZE) {
+            result.add(copyBlock(block, text));
+            return;
+        }
+        var start = 0;
+        while (start < text.length()) {
+            var hardEnd = Math.min(text.length(), start + CHUNK_SIZE);
+            var end = semanticBoundary(text, start, hardEnd);
+            result.add(copyBlock(block, text.substring(start, end).strip()));
+            if (end >= text.length()) break;
+            start = Math.max(end - CHUNK_OVERLAP, start + 1);
+        }
+    }
+
+    private int semanticBoundary(String text, int start, int hardEnd) {
+        if (hardEnd >= text.length()) return text.length();
+        var floor = Math.min(hardEnd, start + Math.max(200, CHUNK_SIZE / 2));
+        for (var index = hardEnd; index >= floor; index--) {
+            var character = text.charAt(index - 1);
+            if (character == '\n' || character == '。' || character == '！' || character == '？'
+                    || character == '；' || character == '.' || character == '!' || character == '?') return index;
+        }
+        return hardEnd;
+    }
+
+    private String tableRowText(Map<String, Object> attributes, String fallback) {
+        var cells = attributes.get("cells");
+        if (!(cells instanceof List<?> values) || values.isEmpty()) return fallback;
+        return values.stream().map(value -> {
+            if (value instanceof Map<?, ?> map) return String.valueOf(map.get("text") == null ? "" : map.get("text"));
+            return String.valueOf(value);
+        }).reduce((left, right) -> left + " | " + right).orElse(fallback);
+    }
+
+    private boolean isHeaderRow(Map<String, Object> attributes) {
+        if (String.valueOf(attributes.getOrDefault("tableRowIndex", "-1")).equals("0")) return true;
+        var cells = attributes.get("cells");
+        if (!(cells instanceof List<?> values)) return false;
+        return !values.isEmpty() && values.stream().allMatch(value -> value instanceof Map<?, ?> map
+                && Boolean.TRUE.equals(map.get("header")));
+    }
+
+    private boolean sameContext(DocumentParser.TextBlock last, DocumentParser.TextBlock current, List<String> path) {
+        return java.util.Objects.equals(last.pageNo(), current.pageNo())
+                && stringList(last.attributes().get("headingPath")).equals(path);
+    }
+
+    private List<String> stringList(Object value) {
+        if (!(value instanceof List<?> values)) return List.of();
+        return values.stream().map(String::valueOf).filter(StringUtils::hasText).toList();
+    }
+
+    private String normalizeChunkText(String value) {
+        return value == null ? "" : value.replaceAll("[\\t\\r]+", " ").replaceAll("[ ]{2,}", " ").strip();
     }
 
     private DocumentParser.TextBlock copyBlock(DocumentParser.TextBlock block, String text) {
@@ -856,7 +966,7 @@ public class KnowledgeService implements KnowledgeSearchFacade {
     private DocumentView view(KnowledgeRepository.DocumentRow row) {
         return new DocumentView(row.id(), row.title(), row.status(), row.scanStatus(), row.aiStatus(),
                 row.currentVersionNo(), row.currentVersionId(), row.originalName(), row.contentType(), row.size(),
-                row.sha256(), row.parseError(), row.createdAt(), row.updatedAt(), row.libraryScope(), row.categoryId(), row.categoryName(),
+                row.sha256(), safeUserError(row.parseError()), row.createdAt(), row.updatedAt(), row.libraryScope(), row.categoryId(), row.categoryName(),
                 row.lifecycleStatus(), row.reviewStatus(), row.reviewRevision(), row.currentPublicationId(), row.currentPublicationNo());
     }
 
@@ -901,14 +1011,23 @@ public class KnowledgeService implements KnowledgeSearchFacade {
 
     private VersionView versionView(KnowledgeRepository.VersionRow row) {
         return new VersionView(row.id(), row.documentId(), row.versionNo(), row.fileObjectId(), row.originalName(),
-                row.contentType(), row.size(), row.sha256(), row.status(), row.errorMessage(),
+                row.contentType(), row.size(), row.sha256(), row.status(), safeUserError(row.errorMessage()),
                 row.reviewStatus(), row.reviewRevision());
+    }
+
+    private String safeUserError(String value) {
+        if (!StringUtils.hasText(value)) return null;
+        var normalized = value.trim();
+        if (normalized.contains("Exception") || normalized.contains("java.") || normalized.contains(" at ")) {
+            return "文件解析失败，请重新解析或联系管理员";
+        }
+        return normalized.length() <= 500 ? normalized : normalized.substring(0, 500);
     }
 
     private KnowledgeSearchFacade.SearchHit toSearchHit(KnowledgeRepository.SearchRow row, double retrieval, double rrf) {
         return new KnowledgeSearchFacade.SearchHit(row.chunkId(), row.documentId(), row.versionId(), row.title(),
                 row.originalName(), row.pageNo(), row.section(), row.content(), rrf, retrieval, rrf, rrf,
-                "KNOWLEDGE_CHUNK", null, null, null, null);
+                "KNOWLEDGE_CHUNK", null, null, null, null, row.chunkNo());
     }
 
     private String safeError(Exception exception) {
@@ -940,6 +1059,11 @@ public class KnowledgeService implements KnowledgeSearchFacade {
                                java.time.Instant createdAt, java.time.Instant updatedAt, String libraryScope,
                                UUID categoryId, String categoryName, String lifecycleStatus, String reviewStatus,
                                int reviewRevision, UUID currentPublicationId, Integer currentPublicationNo) { }
+    public record ProcessingView(UUID documentId, UUID versionId, String documentStatus, String documentError,
+                                 UUID parseRunId, String parseRunStatus, String parseRunError,
+                                 java.time.Instant lastAttemptAt, UUID jobId, String jobStatus, int progress,
+                                 String currentStage, int attemptCount, int maxAttempts,
+                                 java.time.Instant nextAttemptAt, boolean terminal, String lastError) { }
     public record VersionView(UUID id, UUID documentId, int versionNo, UUID fileObjectId, String originalName,
                                String contentType, long size, String sha256, String status,
                                String errorMessage, String reviewStatus, int reviewRevision) { }

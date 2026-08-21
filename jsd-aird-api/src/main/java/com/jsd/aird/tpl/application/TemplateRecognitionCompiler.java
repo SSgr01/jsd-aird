@@ -81,7 +81,7 @@ public class TemplateRecognitionCompiler {
                 .forEach(suggestion -> {
                     var payload = suggestion.payload();
                     var relationId = payload.path("relationId").asText("");
-                    var locator = payload.path("locator");
+                    var locator = payloadLocator(payload);
                     var sheet = locator.path("sheetId").asText(locator.path("sheetName").asText(""));
                     var address = locator.path("address").asText(locator.path("range").asText(""));
                     if (relationId.isBlank()) {
@@ -177,7 +177,7 @@ public class TemplateRecognitionCompiler {
                     if (StringUtils.hasText(payload.path("markerId").asText())) {
                         field.put("markerId", payload.path("markerId").asText());
                     }
-                    if (payload.path("locator").isObject()) field.set("locator", payload.path("locator").deepCopy());
+                    field.set("locator", locator.deepCopy());
                      copyStandardMetadata(field, payload);
                     if (StringUtils.hasText(payload.path("parentFieldId").asText())) {
                         field.put("parentFieldId", payload.path("parentFieldId").asText());
@@ -188,6 +188,7 @@ public class TemplateRecognitionCompiler {
                         field.put("parentSuggestionId", payload.path("parentRelationId").asText());
                     }
                     if (validBinding) field.put("bindingId", bindingId);
+                    TemplateLocatorNormalizer.normalizeField(objectMapper, field);
                     if (payload.path("columns").isArray()) {
                         field.set("columns", payload.path("columns").deepCopy());
                     }
@@ -240,6 +241,8 @@ public class TemplateRecognitionCompiler {
         fieldModel.set("staticRegions", staticRegions);
         fieldModel.put("modelVersion", 4);
         baseSchema.set(FIELD_MODEL_KEY, fieldModel);
+        TemplateLocatorNormalizer.normalizeFieldModel(objectMapper, baseSchema);
+        fieldModel = (ObjectNode) baseSchema.path(FIELD_MODEL_KEY);
         return new CompiledRecognition(baseSchema, mapping, fieldModel);
     }
 
@@ -261,6 +264,8 @@ public class TemplateRecognitionCompiler {
         binding.put("dataPath", payload.path("dataPath").asText());
         binding.put("role", "SCALAR".equals(kind) ? "FIELD" : "REPEAT_REGION");
         binding.put("mappingKind", effectiveMappingKind(payload, kind));
+        binding.put("fieldType", "CHILD".equals(payload.path("suggestionLevel").asText())
+                ? "TABLE_COLUMN" : ("SCALAR".equals(kind) ? "FIELD" : "REGION"));
         var componentId = firstText(payload, "componentId", "regionId", "blockId", "parentBlockId");
         if (StringUtils.hasText(componentId)) binding.put("componentId", componentId);
         copyIfPresent(payload, binding, "labelPath", "required", "identity", "trainingRole",
@@ -278,7 +283,7 @@ public class TemplateRecognitionCompiler {
             binding.set("termination", payload.path("terminationRule").deepCopy());
         }
         binding.put("locatorType", payload.path("locatorType").asText("CELL_RANGE"));
-        binding.set("locator", payload.path("locator").deepCopy());
+        binding.set("locator", payloadLocator(payload));
         binding.put("syncDirection", syncDirection(payload));
         binding.put("primaryBinding", true);
         binding.put("bindingStatus", "VALID");
@@ -618,7 +623,10 @@ public class TemplateRecognitionCompiler {
                      .put("logicalInputRange", column.path("valueRange").asText(""))
                     .put("valueMode", "ROW".equals(payload.path("repeatAxis").asText("ROW"))
                             ? "ARRAY_COLUMN" : "ARRAY_ROW");
+            locator = TemplateLocatorNormalizer.normalize(objectMapper, locator);
             child.set("locator", locator);
+            child.put("fieldType", "TABLE_COLUMN");
+            child.put("displayRole", "FIELD");
             var childBindingValid = parentBindingValid && validBinding(column);
             var childBindingId = RecognitionIdentity.bindingId(
                     RecognitionIdentity.fieldId(childRelation), "CELL_RANGE",
@@ -640,6 +648,19 @@ public class TemplateRecognitionCompiler {
         object.put("parentFieldId", parent.path("fieldId").asText(""));
         object.put("suggestionLevel", "CHILD");
         return object;
+    }
+
+    private ObjectNode payloadLocator(JsonNode payload) {
+        ObjectNode raw = payload.path("locator").isObject()
+                ? (ObjectNode) payload.path("locator").deepCopy()
+                : objectMapper.createObjectNode();
+        if (!TemplateLocatorNormalizer.hasLabel(raw) && payload.path("labelRange").isTextual()) {
+            raw.put("labelRange", payload.path("labelRange").asText());
+        }
+        if (!TemplateLocatorNormalizer.hasValue(raw) && payload.path("valueRange").isTextual()) {
+            raw.put("valueRange", payload.path("valueRange").asText());
+        }
+        return TemplateLocatorNormalizer.normalize(objectMapper, raw);
     }
 
     private void copyStandardMetadata(ObjectNode target, JsonNode source) {

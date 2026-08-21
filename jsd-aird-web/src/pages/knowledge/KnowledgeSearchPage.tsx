@@ -32,7 +32,7 @@ export function KnowledgeSearchPage() {
   }, []);
 
   const doSearch = async () => {
-    if (!query.trim()) return;
+    if (!query.trim()) { setSearched(true); setError('请输入检索关键词'); setResult(undefined); return; }
     setLoading(true); setError(undefined); setSearched(true);
     try {
       setResult(await assistantApi.fileSearch({ query: query.trim(), limit: 30, knowledgeCategoryIds: selectedKnowledge, dataCategoryIds: selectedData }));
@@ -81,7 +81,7 @@ export function KnowledgeSearchPage() {
         {!loading && !error && !searched && <div className="search-state"><SearchOutlined /><Typography.Text type="secondary">输入关键词开始检索</Typography.Text></div>}
         {!loading && !error && result?.files.map((file) => <Card key={`${file.sourceModule}-${file.fileVersionId}`} className="search-result-card content-card">
           <div className="search-result-card-head"><div><Tag color={file.sourceModule === 'KNOWLEDGE' ? 'blue' : 'purple'}>{file.sourceModule === 'KNOWLEDGE' ? '研发知识文件' : '数据中心来源文件'}</Tag><Typography.Title level={4}>{file.title}</Typography.Title></div><Typography.Text type="secondary">{new Date(file.updatedAt).toLocaleString('zh-CN')}</Typography.Text></div>
-          <div className="search-result-meta"><Tag>{file.originalName}</Tag><Tag>V{file.version}</Tag>{file.tags.map((tag) => <Tag color="cyan" key={tag}>{tag}</Tag>)}</div>
+          <div className="search-result-meta"><Tag>{file.originalName}</Tag><Tag>V{file.version}</Tag><Tag color={file.matchType === 'EXACT_FILENAME' || file.matchType === 'EXACT_IDENTIFIER' ? 'green' : 'default'}>{matchTypeLabel(file.matchType)}</Tag>{file.matchedFields.map((field) => <Tag color="cyan" key={`field-${field}`}>{`命中${field}`}</Tag>)}{file.matchedTerms.map((term) => <Tag color="geekblue" key={`term-${term}`}>{`“${term}”`}</Tag>)}{file.tags.map((tag) => <Tag color="cyan" key={`tag-${tag}`}>{tag}</Tag>)}</div>
           <Space direction="vertical" size={6} style={{ width: '100%' }}>{file.hits.slice(0, 4).map((hit) => <div key={hit.id} className="search-hit-snippet"><Typography.Paragraph ellipsis={{ rows: 2 }} style={{ margin: 0 }}>{hit.snippet}</Typography.Paragraph><Typography.Text type="secondary">{anchorLabel(hit.anchor)}</Typography.Text></div>)}</Space>
           <Space wrap style={{ marginTop: 12 }}><Button icon={<SearchOutlined />} onClick={() => openDetail(file)}>查看来源</Button><Button icon={<EyeOutlined />} onClick={() => setPreviewFile(descriptor(file))}>预览原文件</Button><Button icon={<DownloadOutlined />} onClick={() => void download(file)}>下载原文件</Button></Space>
         </Card>)}
@@ -96,6 +96,10 @@ function anchorLabel(anchor: SearchFile['hits'][number]['anchor']) {
   if (anchor.sheetName) return `${anchor.sheetName}${anchor.cellRange ? `!${anchor.cellRange}` : anchor.rowNumber ? ` · 第 ${anchor.rowNumber} 行` : ''}`;
   if (anchor.startTimeMs !== undefined) return `${formatTime(anchor.startTimeMs)} - ${formatTime(anchor.endTimeMs || anchor.startTimeMs)}`;
   return anchor.section || '文件内容命中';
+}
+
+function matchTypeLabel(value: SearchFile['matchType']) {
+  return ({ EXACT_FILENAME: '精确文件名', EXACT_IDENTIFIER: '精确编号', CONTENT: '内容命中', FULL_TEXT: '全文命中' } as const)[value] || '全文命中';
 }
 
 function formatTime(milliseconds: number) {

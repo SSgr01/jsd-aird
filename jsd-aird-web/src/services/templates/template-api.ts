@@ -1,4 +1,5 @@
 import type { ApiResponse, PageResponse } from '@/types/api';
+import { triggerNativeDownload } from '@/services/files/file-api';
 import type {
   BusinessBlock,
   TemplateFormat,
@@ -281,6 +282,7 @@ export interface RecognitionSuggestionPayload {
     fieldCode?: string;
     dataPath?: string;
     name: string;
+    labelPath?: string;
     valueType?: string;
     unit?: string;
     labelRange?: string;
@@ -637,19 +639,15 @@ export const templateApi = {
     return response.data.data;
   },
 
-  async exportCsv(params: Record<string, string | number | boolean | string[] | undefined>) {
-    const response = await httpClient.get<Blob>('/api/v1/templates/export.csv', {
-      params, responseType: 'blob',
+  exportCsv(params: Record<string, string | number | boolean | string[] | undefined>) {
+    const query = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value === undefined) return;
+      if (Array.isArray(value)) value.forEach((item) => query.append(key, String(item)));
+      else query.set(key, String(value));
     });
-    const url = URL.createObjectURL(response.data);
-    const anchor = document.createElement('a');
-    anchor.href = url; anchor.download = 'templates.csv'; anchor.style.display = 'none';
-    document.body.appendChild(anchor);
-    anchor.click();
-    window.setTimeout(() => {
-      anchor.remove();
-      URL.revokeObjectURL(url);
-    }, 0);
+    triggerNativeDownload(`/api/v1/templates/export.csv${query.toString() ? `?${query}` : ''}`, 'templates.csv');
+    return Promise.resolve();
   },
 
   async create(input: CreateTemplateInput) {
@@ -785,14 +783,11 @@ export const templateApi = {
     return response.data.data;
   },
 
-  async exportOffice(versionId: string, format: TemplateFormat, state: 'DRAFT' | 'PUBLISHED' = 'DRAFT') {
-    const response = await httpClient.get<Blob>(
-      `/api/v1/template-versions/${versionId}/export`, { params: { format, state }, responseType: 'blob' },
-    );
-    const url = URL.createObjectURL(response.data);
-    const anchor = document.createElement('a'); anchor.href = url;
-    anchor.download = format === 'XLSX' ? `template-${state.toLowerCase()}.xlsx` : `template-${state.toLowerCase()}.docx`;
-    anchor.click(); window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  exportOffice(versionId: string, format: TemplateFormat, state: 'DRAFT' | 'PUBLISHED' = 'DRAFT') {
+    const query = new URLSearchParams({ format, state });
+    const name = format === 'XLSX' ? `template-${state.toLowerCase()}.xlsx` : `template-${state.toLowerCase()}.docx`;
+    triggerNativeDownload(`/api/v1/template-versions/${encodeURIComponent(versionId)}/export?${query}`, name);
+    return Promise.resolve();
   },
 
   async downloadWordPreview(versionId: string) {

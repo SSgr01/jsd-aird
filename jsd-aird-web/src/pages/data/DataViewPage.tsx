@@ -59,7 +59,7 @@ export function DataViewPage() {
     ...categories.map((item) => ({ id: item.id, name: item.name, count: item.sourceCount, description: item.description, icon: <DatabaseOutlined />, tone: 'blue' as const, editable: true })),
   ], [allSourceCount, categories]);
 
-  const resolveFile = (item: DataSourceFile): FilePreviewDescriptor => ({ fileName: item.originalName, load: () => dataApi.sourceBlob(item.fileObjectId) });
+  const resolveFile = (item: DataSourceFile): FilePreviewDescriptor => ({ fileName: item.originalName, load: () => dataApi.sourceBlob(item.fileObjectId), downloadUrl: `/api/v1/files/${encodeURIComponent(item.fileObjectId)}/content` });
   const moveSource = async (item: DataSourceFile, nextCategoryId: string) => {
     try { await dataApi.assignSourceCategory(item.importJobId, nextCategoryId); await load(); void message.success('归档分类已更新'); }
     catch (error) { void message.error(error instanceof Error ? error.message : '归档分类更新失败'); }
@@ -98,15 +98,15 @@ export function DataViewPage() {
     <CatalogListPanel title={cards.find((item) => item.id === categoryId)?.name || '来源文件'} count={page.total}
       filters={<Space wrap><Input.Search allowClear placeholder="搜索来源文件名" value={keyword} onChange={(event) => { setKeyword(event.target.value); setPage((value) => ({ ...value, current: 1 })); }} onSearch={() => void load()} /><Select allowClear placeholder="全部状态" value={status} onChange={(value) => { setStatus(value); setPage((value) => ({ ...value, current: 1 })); }} options={Object.entries(statusLabels).map(([value, item]) => ({ value, label: item[0] }))} /><Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button></Space>}
       loading={loading}>
-      <Table rowKey="importJobId" dataSource={items} pagination={{ current: page.current, pageSize: page.pageSize, total: page.total, showSizeChanger: true, onChange: (current, pageSize) => setPage({ current, pageSize, total: page.total }) }} locale={{ emptyText: <Empty description="暂无来源文件" /> }} onRow={(record) => ({ onDoubleClick: () => navigate(`/data/import-jobs/${record.importJobId}`) })} columns={[
-        { title: '来源文件', dataIndex: 'originalName', render: (value: string, record: DataSourceFile) => <Space><DatabaseOutlined /><Typography.Text strong>{value}</Typography.Text><Typography.Text type="secondary">{record.sourceFormat}</Typography.Text></Space> },
-        { title: '归档分类', dataIndex: 'categoryName', render: (value?: string) => value || '未分类' },
-        { title: '导入模板', dataIndex: 'templateVersionId', render: (value: string) => { const item = templates.find((candidate) => candidate.versionId === value); return item ? `${item.name} · ${item.templateCode} · V${item.versionNo}` : `版本 ${value.slice(0, 8)}`; } },
-        { title: '状态', dataIndex: 'status', render: (value: string) => <Tag color={statusLabels[value]?.[1]}>{statusLabels[value]?.[0] || value}</Tag> },
-        { title: '工作表', dataIndex: 'sheetCount' },
-        { title: '识别记录', dataIndex: 'recordCount' },
-        { title: '字段值', dataIndex: 'fieldCount' },
-        { title: '最近更新', dataIndex: 'updatedAt', render: (value: string) => new Date(value).toLocaleString('zh-CN') },
+      <Table className="catalog-data-table" scroll={{ x: 1380 }} rowKey="importJobId" dataSource={items} pagination={{ current: page.current, pageSize: page.pageSize, total: page.total, showSizeChanger: true, onChange: (current, pageSize) => setPage({ current, pageSize, total: page.total }) }} locale={{ emptyText: <Empty description="暂无来源文件" /> }} onRow={(record) => ({ onDoubleClick: () => navigate(`/data/import-jobs/${record.importJobId}`) })} columns={[
+        { title: '来源文件', dataIndex: 'originalName', width: 280, ellipsis: true, render: (value: string, record: DataSourceFile) => <Space><DatabaseOutlined /><Typography.Text strong ellipsis={{ tooltip: value }}>{value}</Typography.Text><Typography.Text type="secondary">{record.sourceFormat}</Typography.Text></Space> },
+        { title: '归档分类', dataIndex: 'categoryName', width: 150, ellipsis: true, render: (value?: string) => value || '未分类' },
+        { title: '导入模板', dataIndex: 'templateVersionId', width: 320, ellipsis: true, render: (value: string) => { const item = templates.find((candidate) => candidate.versionId === value); return item ? `${item.name} · ${item.templateCode} · V${item.versionNo}` : `版本 ${value.slice(0, 8)}`; } },
+        { title: '状态', dataIndex: 'status', width: 130, render: (value: string) => <Tag color={statusLabels[value]?.[1]}>{statusLabels[value]?.[0] || value}</Tag> },
+        { title: '工作表', dataIndex: 'sheetCount', width: 100 },
+        { title: '识别记录', dataIndex: 'recordCount', width: 110 },
+        { title: '字段值', dataIndex: 'fieldCount', width: 100 },
+        { title: '最近更新', dataIndex: 'updatedAt', width: 180, render: (value: string) => new Date(value).toLocaleString('zh-CN') },
         { title: '操作', width: 360, render: (_: unknown, record: DataSourceFile) => <Space wrap><Button type="link" icon={<EyeOutlined />} onClick={() => setPreviewFile(resolveFile(record))}>预览</Button><Button type="link" icon={<DownloadOutlined />} onClick={() => void downloadPreviewFile(resolveFile(record))}>下载</Button><Button type="link" onClick={() => navigate(`/data/import-jobs/${record.importJobId}`)}>查看详情</Button><Dropdown trigger={['click']} menu={{ items: categories.map((category) => ({ key: category.id, label: category.name, onClick: () => void moveSource(record, category.id) })) }}><Button type="link">移动分类</Button></Dropdown></Space> },
       ]} />
     </CatalogListPanel>

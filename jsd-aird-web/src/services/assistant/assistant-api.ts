@@ -1,6 +1,18 @@
 import type { ApiResponse } from '@/types/api';
-import { httpClient } from '@/services/http/client';
+import { ensureCsrfToken, httpClient, refreshCsrfToken } from '@/services/http/client';
 import { generateUUID } from '@/utils/uuid';
+
+export class AssistantRequestError extends Error {
+  public constructor(
+    message: string,
+    public readonly code: string,
+    public readonly status?: number,
+    public readonly traceId?: string,
+  ) {
+    super(message);
+    this.name = 'AssistantRequestError';
+  }
+}
 
 export interface AssistantCitation {
   sourceType: string;
@@ -67,6 +79,9 @@ export interface FileSearchResult {
     version: number;
     tags: string[];
     updatedAt: string;
+    matchType: 'EXACT_FILENAME' | 'EXACT_IDENTIFIER' | 'CONTENT' | 'FULL_TEXT';
+    matchedFields: string[];
+    matchedTerms: string[];
     hits: Array<{ id: string; snippet: string; score: number; anchor: { pageNo?: number; sheetName?: string; cellRange?: string; paragraphId?: string; bbox?: number[]; startTimeMs?: number; endTimeMs?: number; section?: string; rowNumber?: number; columnName?: string } }>;
   }>;
 }
@@ -119,17 +134,41 @@ export const assistantApi = {
     onDone: (response: AssistantResponse) => void,
     onStage?: (event: string, data: unknown) => void,
   ) {
-    const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || ''}/api/v1/assistant/qa/stream`, {
+    const requestStream = async (csrfToken: string) => fetch(`${import.meta.env.VITE_API_BASE_URL || ''}/api/v1/assistant/qa/stream`, {
       method: 'POST',
       credentials: 'include',
       headers: {
         Accept: 'text/event-stream',
         'Content-Type': 'application/json',
         'X-Request-Id': generateUUID(),
+        'X-XSRF-TOKEN': csrfToken,
       },
       body: JSON.stringify({ question, conversationId, scopeIds, scopeTypes, knowledgeCategoryIds, dataCategoryIds }),
     });
-    if (!response.ok || !response.body) throw new Error(`流式问答失败（${response.status}）`);
+    let csrfToken = await ensureCsrfToken();
+    let response = await requestStream(csrfToken);
+    if (!response.ok || !response.body) {
+      let message = `流式问答失败（${response.status}）`;
+      let code = 'AI_REQUEST_FAILED';
+      let traceId: string | undefined;
+      try {
+        const payload = JSON.parse(await response.text()) as { message?: string; code?: string; traceId?: string };
+        if (payload.message) message = payload.message;
+        if (payload.code) code = payload.code;
+        traceId = payload.traceId;
+      } catch { /* 保留 HTTP 状态提示 */ }
+      if (response.status === 403 && code === 'CSRF_TOKEN_INVALID') {
+        csrfToken = await refreshCsrfToken();
+        response = await requestStream(csrfToken);
+        if (response.ok && response.body) {
+          // Continue with the retried stream below.
+        } else {
+          throw new AssistantRequestError('页面安全令牌已失效，请刷新页面后重试', 'CSRF_TOKEN_INVALID', response.status, traceId);
+        }
+      } else {
+        throw new AssistantRequestError(message, code, response.status, traceId);
+      }
+    }
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -146,6 +185,22 @@ export const assistantApi = {
         }
         if (!data) continue;
         const parsed = parseAssistantSseData(data);
+        if (event === 'error') {
+          const errorPayload = parsed && typeof parsed === 'object' ? parsed as {
+            message?: unknown;
+            code?: unknown;
+            requestId?: unknown;
+            traceId?: unknown;
+          } : {};
+          throw new AssistantRequestError(
+            typeof errorPayload.message === 'string' ? errorPayload.message : 'AI 问答失败',
+            typeof errorPayload.code === 'string' ? errorPayload.code : 'AI_REQUEST_FAILED',
+            undefined,
+            typeof errorPayload.traceId === 'string'
+              ? errorPayload.traceId
+              : typeof errorPayload.requestId === 'string' ? errorPayload.requestId : undefined,
+          );
+        }
         if (event === 'token') {
           const token = typeof parsed === 'string'
             ? parsed

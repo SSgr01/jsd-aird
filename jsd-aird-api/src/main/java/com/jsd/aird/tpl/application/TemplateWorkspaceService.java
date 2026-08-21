@@ -546,6 +546,9 @@ public class TemplateWorkspaceService {
         } else {
             normalizedSchema = normalizeFieldGroups(command.schema());
             normalizedSchema = standardFieldService.normalizeDraftFields(normalizedSchema);
+            if (normalizedSchema instanceof ObjectNode schemaObject) {
+                TemplateLocatorNormalizer.normalizeFieldModel(objectMapper, schemaObject);
+            }
             normalizedMapping = normalizeMapping(command.mapping(), normalizedSchema);
             validateSchema(normalizedSchema);
             standardFieldService.validateFormalFields(normalizedSchema);
@@ -764,6 +767,7 @@ public class TemplateWorkspaceService {
     private JsonNode normalizeMapping(JsonNode mapping, JsonNode schema) {
         if (mapping == null || !mapping.isArray()) return mapping;
         var result = MappingPathNormalizer.normalize(mapping);
+        result = TemplateLocatorNormalizer.normalizeMappings(objectMapper, result);
         var model = schema.path(TemplateRecognitionCompiler.FIELD_MODEL_KEY);
         var names = new java.util.HashMap<String, String>();
         var groups = new java.util.HashMap<String, String>();
@@ -803,6 +807,11 @@ public class TemplateWorkspaceService {
                     : "还有必填字段没有有效填写位置";
             throw new ApiException(ApiErrorCode.TEMPLATE_REQUIRED_FIELD_UNBOUND, message,
                     requiredFieldsWithoutPosition);
+        }
+        var unresolvedLabels = fieldsWithUnresolvedLabels(workspace.schema(), workspace.mapping(), workspace.format());
+        if (!unresolvedLabels.isEmpty()) {
+            throw new ApiException(ApiErrorCode.TEMPLATE_FIELD_LABEL_UNRESOLVED,
+                    "还有字段没有确认标签位置，请在字段属性中手动选择", unresolvedLabels);
         }
         if (workspace.format() == TemplateFormat.XLSX
                 && recognitionReviewService.hasIncompleteRecognition(actor.organizationId(), versionId)) {
@@ -889,9 +898,36 @@ public class TemplateWorkspaceService {
                     missing.add(Map.of("fieldId", field.path("id").asText(field.path("fieldId").asText("")),
                             "fieldName", field.path("name").asText("未命名字段")));
                 }
-            } else if (!validRange(binding.path("locator").path("address").asText(""))) {
+            } else if (!validRange(TemplateLocatorNormalizer.valueRange(binding.path("locator")))) {
                 missing.add(Map.of("fieldId", field.path("id").asText(field.path("fieldId").asText("")),
                         "fieldName", field.path("name").asText("未命名字段")));
+            }
+        }
+        return missing;
+    }
+
+    private List<Map<String, String>> fieldsWithUnresolvedLabels(JsonNode schema, JsonNode mapping,
+                                                                  TemplateFormat format) {
+        var missing = new ArrayList<Map<String, String>>();
+        if (format != TemplateFormat.XLSX) return missing;
+        var bindings = new java.util.HashMap<String, JsonNode>();
+        if (mapping != null && mapping.isArray()) {
+            for (JsonNode binding : mapping) {
+                var bindingId = binding.path("bindingId").asText("");
+                if (!bindingId.isBlank()) bindings.put(bindingId, binding);
+            }
+        }
+        for (JsonNode field : schema.path(TemplateRecognitionCompiler.FIELD_MODEL_KEY).path("fields")) {
+            var fieldType = field.path("fieldType").asText("");
+            if ("REGION".equals(fieldType) || TemplateLocatorNormalizer.isRegion(field)
+                    || "MANUAL_VALUE".equals(field.path("valueSource").asText(""))) continue;
+            var binding = bindings.get(field.path("bindingId").asText(""));
+            if (binding == null || !TemplateLocatorNormalizer.hasLabel(binding.path("locator"))) {
+                missing.add(Map.of(
+                        "fieldId", field.path("id").asText(field.path("fieldId").asText("")),
+                        "fieldName", field.path("name").asText("未命名字段"),
+                        "fieldType", fieldType.isBlank() ? "FIELD" : fieldType
+                ));
             }
         }
         return missing;
@@ -985,18 +1021,17 @@ public class TemplateWorkspaceService {
                 throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "Word 绑定必须包含稳定 markerId");
             }
             if (format == TemplateFormat.XLSX) {
-                var address = binding.path("locator").path("address").asText("");
-                var labelAddress = binding.path("locator").path("labelAddress").asText("");
+                var address = TemplateLocatorNormalizer.valueRange(binding.path("locator"));
+                var labelAddress = TemplateLocatorNormalizer.labelRange(binding.path("locator"));
                 if (StringUtils.hasText(address) && !validRange(address)) {
                     throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "填写位置格式不正确，例如 B2 或 B7:D10");
                 }
-                if (StringUtils.hasText(labelAddress) && !validCell(labelAddress)) {
-                    throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "标签位置格式不正确，例如 A2");
+                if (StringUtils.hasText(labelAddress) && !validRange(labelAddress)) {
+                    throw new ApiException(ApiErrorCode.TEMPLATE_FIELD_LOCATOR_INVALID, "标签位置格式不正确，例如 A2 或 A2:C2");
                 }
             }
             var hasPosition = StringUtils.hasText(binding.path("markerId").asText())
-                    || StringUtils.hasText(binding.path("locator").path("address").asText())
-                    || StringUtils.hasText(binding.path("locator").path("range").asText());
+                    || StringUtils.hasText(TemplateLocatorNormalizer.valueRange(binding.path("locator")));
             reconciliationRequired |= !"VALID".equals(status) && hasPosition;
         }
         validateRepeatMappings(mapping, bindingsById);

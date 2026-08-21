@@ -37,6 +37,7 @@ import { generateUUID } from '@/utils/uuid';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
 import {
+  bindingForField,
   candidateBinding,
   bindingMatchesIdentity,
   fieldMatchesIdentity,
@@ -69,9 +70,11 @@ import {
 } from '@/features/template-workspace/selection-resolver';
 import {
   publishReadinessBlocker,
+  fieldsMissingLabelPosition,
   type PublishReviewSyncState,
 } from '@/features/template-workspace/publish-readiness';
 import { migrateWorkspaceStructure } from '@/features/template-workspace/structure-migration';
+import { locatorLabelRange, locatorValueRange, mergeLocators } from '@/features/template-workspace/locator';
 import {
   isSingleCellAddress,
   isStructuredDataCell,
@@ -143,7 +146,7 @@ export function TemplateWorkspacePage() {
   const [schema, setSchema] = useState<Record<string, unknown>>({});
   const [mapping, setMapping] = useState<TemplateBinding[]>([]);
   const [fieldModel, setFieldModel] = useState<FieldModel>({
-    modelVersion: 4,
+    modelVersion: 5,
     groups: [],
     fields: [],
     blocks: [],
@@ -218,17 +221,35 @@ export function TemplateWorkspacePage() {
           throw new Error('当前 Word 模板使用旧编辑快照，请重新导入原始 DOCX 后再编辑');
         }
         if (!active) return;
-        const storedFieldModel = readFieldModel(model.schema, model.mapping);
+        const storedFieldModel = readFieldModel(model.schema, model.mapping, loadedSnapshot);
+        // Published/retired versions are immutable. Their field tree is the
+        // persisted contract and must not be rebuilt from the current review
+        // suggestions; doing that reintroduced legacy/sanitized paths such as
+        // “物性测试 > 粘度 > 固含 > 120℃×1h”. Review data is still loaded for
+        // status/history, but it is not allowed to replace the published
+        // structure.
         const merged = model.format === 'DOCX'
           ? { schema: normalizeWordSchema(model.schema), mapping: [] as TemplateBinding[], model: emptyWordFieldModel() }
+          : ['PUBLISHED', 'RETIRED'].includes(model.status)
+            ? { schema: model.schema, mapping: model.mapping, model: storedFieldModel }
           : review
             ? mergeRecognitionReview(model.schema, model.mapping, storedFieldModel, review)
             : { schema: model.schema, mapping: model.mapping, model: storedFieldModel };
+        // Recognition review data can contain a legacy/sanitized label path.
+        // The workbook row is the authoritative source for repeat-field paths;
+        // canonicalize once more after review merging so a review refresh
+        // cannot put an old path back into the published structure.
+        const canonicalMerged = model.format === 'DOCX'
+          ? merged
+          : {
+              ...merged,
+              model: readFieldModel(merged.schema, merged.mapping, loadedSnapshot),
+            };
         setWorkspace(model);
-        setSchema(merged.schema);
-        setMapping(merged.mapping);
-        setFieldModel(merged.model);
-        setSelectedFieldId(merged.model.fields.find((field) => !isRegionModelField(field))?.id);
+        setSchema(canonicalMerged.schema);
+        setMapping(canonicalMerged.mapping);
+        setFieldModel(canonicalMerged.model);
+        setSelectedFieldId(canonicalMerged.model.fields.find((field) => !isRegionModelField(field))?.id);
         setRecognitionReview(model.format === 'DOCX' ? undefined : review);
         setTemplateReview(versionReview);
         setReviewSyncState('FRESH');
@@ -315,16 +336,22 @@ export function TemplateWorkspacePage() {
       // resulting REGION_FIELDS suggestions are therefore not present in the
       // previous client model; merge the refreshed review immediately so the
       // structure tab shows them as pending fields without requiring a reload.
-      const merged = mergeRecognitionReview(
-        base?.schema ?? schema,
-        base?.mapping ?? mapping,
-        base?.model ?? fieldModel,
-        latestReview,
-      );
+      const baseSchema = base?.schema ?? schema;
+      const baseMapping = base?.mapping ?? mapping;
+      const baseModel = base?.model ?? fieldModel;
+      const merged = ['PUBLISHED', 'RETIRED'].includes(workspace.status)
+        ? { schema: baseSchema, mapping: baseMapping, model: baseModel }
+        : mergeRecognitionReview(baseSchema, baseMapping, baseModel, latestReview);
+      const canonicalMerged = workspace.status === 'DRAFT'
+        ? {
+            ...merged,
+            model: readFieldModel(merged.schema, merged.mapping, snapshot),
+          }
+        : merged;
       setRecognitionReview(latestReview);
-      setSchema(merged.schema);
-      setMapping(merged.mapping);
-      setFieldModel(merged.model);
+      setSchema(canonicalMerged.schema);
+      setMapping(canonicalMerged.mapping);
+      setFieldModel(canonicalMerged.model);
       setReviewSyncState('FRESH');
       return true;
     } catch (error) {
@@ -650,7 +677,7 @@ export function TemplateWorkspacePage() {
       })();
       return;
     }
-    const readinessBlocker = publishReadinessBlocker(saveState, reviewSyncState);
+    const readinessBlocker = publishReadinessBlocker(saveState, reviewSyncState, templateReview?.status);
     if (readinessBlocker) {
       setFieldManagerTab('recognition');
       void message.warning(readinessBlocker);
@@ -671,6 +698,13 @@ export function TemplateWorkspacePage() {
     if (missingRequired.length) {
       setSelectedFieldId(missingRequired[0]?.id);
       void message.warning(`必填字段“${missingRequired[0]?.name}”还没有有效填写位置`);
+      return;
+    }
+    const missingLabels = fieldsMissingLabelPosition(fieldModel, mapping, workspace.format);
+    if (missingLabels.length) {
+      setSelectedFieldId(missingLabels[0]?.id);
+      setFieldManagerTab('properties');
+      void message.warning(`字段“${missingLabels[0]?.name}”还没有确认标签位置`);
       return;
     }
     const warnings = nonBlockingWarnings(fieldModel, mapping, workspace.format);
@@ -707,13 +741,7 @@ export function TemplateWorkspacePage() {
     const field = findFieldForRecognitionItem(item);
     if (field) {
       setSelectedFieldId(field.id);
-      const binding =
-        mapping.find((candidate) => bindingMatchesIdentity(candidate, {
-          bindingId: field.bindingId,
-          relationId: field.relationId,
-          fieldId: field.fieldId || field.id,
-        })) ??
-        candidateBinding(field);
+      const binding = bindingForField(field, mapping);
       if (binding) editorRef.current?.focusBinding(binding);
       return;
     }
@@ -1078,26 +1106,7 @@ export function TemplateWorkspacePage() {
           fieldId: item.payload.fieldId,
         }))?.id,
     );
-    const binding =
-      mapping.find((item) => bindingMatchesIdentity(item, {
-        bindingId: field.bindingId,
-        relationId: field.relationId,
-        fieldId: field.fieldId || field.id,
-      })) ??
-      candidateBinding(field) ??
-      (field.locator
-        ? {
-            bindingId: `field-${field.id}`,
-            fieldId: field.id,
-            dataPath: field.dataPath || '',
-            role: 'FIELD' as const,
-            locatorType: 'CELL_RANGE',
-            locator: field.locator,
-            syncDirection: 'TWO_WAY' as const,
-            primaryBinding: false,
-            bindingStatus: 'VALID' as const,
-          }
-        : undefined);
+    const binding = bindingForField(field, mapping);
     if (binding) editorRef.current?.focusBinding(binding);
   };
 
@@ -1248,12 +1257,18 @@ export function TemplateWorkspacePage() {
     if (!currentBinding) return;
     const nextMapping: TemplateBinding[] = baseMapping.map((binding) => {
       if (!bindingMatchesIdentity(binding, fieldIdentity)) return binding;
-      const baseLocator: Record<string, unknown> = {
-        ...binding.locator,
-        ...update,
-        ...(update.labelAddress !== undefined ? { labelRange: update.labelAddress } : {}),
-        ...(sheet ?? {}),
-      };
+      const baseLocator: Record<string, unknown> = mergeLocators(
+        field.locator,
+        binding.locator,
+        {
+          ...update,
+          ...(update.labelAddress !== undefined ? { labelRange: update.labelAddress } : {}),
+          ...(update.labelAddress !== undefined || update.address !== undefined
+            ? { source: 'MANUAL', relation: 'MANUAL' }
+            : {}),
+          ...(sheet ?? {}),
+        },
+      );
       const locator: Record<string, unknown> =
         update.address !== undefined
           ? reflowStructuredLocator(baseLocator, field.kind, binding.locator)
@@ -1261,8 +1276,8 @@ export function TemplateWorkspacePage() {
       if (update.address !== undefined && !locator.logicalInputRange) {
         locator.logicalInputRange = locator.address;
       }
-      const address = stringValue(locator.address);
-      const labelAddress = stringValue(locator.labelAddress);
+      const address = locatorValueRange(locator);
+      const labelAddress = locatorLabelRange(locator);
       const invalid = Boolean(
         validateAddress(address, false) || validateAddress(labelAddress, true),
       );
@@ -1279,8 +1294,8 @@ export function TemplateWorkspacePage() {
     const nextBinding = nextMapping.find((binding) => bindingMatchesIdentity(binding, fieldIdentity));
     if (!nextBinding) return;
     const nextLocator = structuredClone(nextBinding.locator);
-    const nextAddress = stringValue(nextLocator.address || nextLocator.range);
-    const nextLabelAddress = stringValue(nextLocator.labelAddress || nextLocator.labelRange);
+    const nextAddress = locatorValueRange(nextLocator);
+    const nextLabelAddress = locatorLabelRange(nextLocator);
     const modelUpdate: Partial<BusinessField> = {
       locator: nextLocator,
       labelRange: nextLabelAddress || undefined,
@@ -1299,8 +1314,9 @@ export function TemplateWorkspacePage() {
   const handleSelection = useCallback(
     (selection: EditorSelection) => {
       if (picking) {
+        const pickingField = fieldModel.fields.find((item) => item.id === picking.fieldId);
         const address =
-          picking.target === 'labelAddress'
+          picking.target === 'labelAddress' && pickingField?.fieldType !== 'TABLE_COLUMN'
             ? (selection.address.split(':')[0] ?? selection.address)
             : selection.address;
         updateCoordinates(
@@ -1728,12 +1744,17 @@ export function TemplateWorkspacePage() {
           </Tag>
           {workspace.status === 'DRAFT' && templateReview && (
             <Tag color={templateReview.status === 'APPROVED' ? 'success' : templateReview.status === 'REJECTED' ? 'error' : 'processing'}>
-              审核：{templateReview.status === 'NOT_SUBMITTED' ? '未提交' : templateReview.status === 'SUBMITTED' ? '待审核' : templateReview.status === 'APPROVED' ? '已通过' : '已驳回'}
+              审核：{templateReview.status === 'NOT_SUBMITTED' ? '未提交审核' : templateReview.status === 'SUBMITTED' ? '待审核（不可发布）' : templateReview.status === 'APPROVED' ? '已通过审核' : '已驳回，需重新提交'}
             </Tag>
           )}
         </div>
-        <Space wrap>
-           <SaveStateIndicator state={saveState} reviewSyncState={reviewSyncState} />
+        <Space wrap className="workspace-header-actions">
+             <SaveStateIndicator
+               state={saveState}
+               reviewSyncState={reviewSyncState}
+               reviewStatus={templateReview?.status}
+               workspaceStatus={workspace.status}
+             />
             {reviewSyncState === 'STALE' && (
              <Button
                type="link"
@@ -1746,7 +1767,7 @@ export function TemplateWorkspacePage() {
             )}
             {workspace.status === 'DRAFT' && templateReview && templateReview.status !== 'SUBMITTED' && templateReview.status !== 'APPROVED' && (
               <Button onClick={() => void submitTemplateReview()}>
-                再次提交审核
+                {templateReview.status === 'REJECTED' ? '再次提交审核' : '提交审核'}
               </Button>
             )}
             {workspace.status === 'DRAFT' && templateReview?.status === 'SUBMITTED' && (
@@ -1788,7 +1809,8 @@ export function TemplateWorkspacePage() {
              type="primary"
              className="workspace-publish-button"
              icon={<SendOutlined />}
-             disabled={workspace.status !== 'DRAFT' || publishBusy}
+             disabled={workspace.status !== 'DRAFT' || publishBusy || templateReview?.status !== 'APPROVED'}
+             title={templateReview?.status === 'APPROVED' ? '发布已通过审核且已保存的模板' : '模板审核通过后才能发布'}
              loading={publishBusy}
              onClick={requestPublish}
            >
@@ -2377,15 +2399,36 @@ function snapshotSignature(snapshot: Record<string, unknown>) {
 function SaveStateIndicator({
   state,
   reviewSyncState,
+  reviewStatus,
+  workspaceStatus,
 }: {
   state: SaveState;
   reviewSyncState: ReviewSyncState;
+  reviewStatus?: TemplateVersionReview['status'];
+  workspaceStatus: TemplateWorkspace['status'];
 }) {
+  if (workspaceStatus === 'PUBLISHED') {
+    return (
+      <span className="save-state" style={{ color: 'var(--app-success)' }} aria-live="polite">
+        <CheckCircleOutlined />
+        已发布，当前版本已锁定
+      </span>
+    );
+  }
+  const reviewText = reviewStatus === undefined
+    ? '已保存，审核状态加载中'
+    : reviewStatus === 'NOT_SUBMITTED'
+      ? '已保存，待提交审核'
+    : reviewStatus === 'SUBMITTED'
+      ? '已保存，待审核'
+      : reviewStatus === 'REJECTED'
+        ? '已保存，需重新提交审核'
+        : '已保存，可发布';
   const config = {
     SAVED: {
       icon: <CheckCircleOutlined />,
-      text: reviewSyncState === 'STALE' ? '已保存，审核需刷新' : '已保存，可发布',
-      color: reviewSyncState === 'STALE' ? 'var(--app-warning)' : 'var(--app-success)',
+      text: reviewSyncState === 'STALE' ? '已保存，审核需刷新' : reviewText,
+      color: reviewSyncState === 'STALE' || reviewStatus !== 'APPROVED' ? 'var(--app-warning)' : 'var(--app-success)',
     },
     DIRTY: { icon: <CloudUploadOutlined />, text: '未保存', color: 'var(--app-warning)' },
     SAVING: { icon: <LoadingOutlined spin />, text: '保存中', color: 'var(--app-primary)' },
@@ -2621,7 +2664,7 @@ function stringValue(value: unknown) {
 
 function emptyWordFieldModel(): FieldModel {
   return {
-    modelVersion: 4,
+    modelVersion: 5,
     groups: [],
     fields: [],
     blocks: [],

@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.platform.web.RequestIdHolder;
 import com.jsd.aird.shared.api.ResponseFactory;
 import com.jsd.aird.shared.error.ApiErrorCode;
+import jakarta.servlet.DispatcherType;
 import jakarta.servlet.Filter;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -27,6 +28,7 @@ import org.springframework.security.web.access.AccessDeniedHandler;
 import org.springframework.security.web.authentication.AnonymousAuthenticationFilter;
 import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
+import org.springframework.security.web.csrf.CsrfException;
 import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
 import org.springframework.web.cors.CorsConfigurationSource;
 
@@ -82,6 +84,13 @@ public class SecurityConfig {
                         .contentTypeOptions(content -> { })
                         .httpStrictTransportSecurity(hsts -> hsts.includeSubDomains(true).maxAgeInSeconds(31536000)))
                 .authorizeHttpRequests(auth -> {
+                    // SseEmitter completes on an ASYNC dispatcher after the
+                    // authenticated controller request has already passed the
+                    // session and permission filters. Re-running the normal
+                    // request authorization on that dispatcher loses the
+                    // request-bound authentication and produces a misleading
+                    // AccessDeniedException after a successful stream.
+                    auth.dispatcherTypeMatchers(DispatcherType.ASYNC).permitAll();
                     auth.requestMatchers(HttpMethod.OPTIONS, "/**").permitAll();
                     auth.requestMatchers("/api/v1/auth/csrf", "/api/v1/auth/login", "/actuator/health").permitAll();
                     if (developmentMode) auth.anyRequest().permitAll();
@@ -130,7 +139,12 @@ public class SecurityConfig {
 
     @Bean
     AccessDeniedHandler accessDeniedHandler(ObjectMapper objectMapper) {
-        return (request, response, exception) -> writeError(objectMapper, request, response, ApiErrorCode.PERMISSION_DENIED);
+        return (request, response, exception) -> {
+            var errorCode = exception instanceof CsrfException
+                    ? ApiErrorCode.CSRF_TOKEN_INVALID
+                    : ApiErrorCode.PERMISSION_DENIED;
+            writeError(objectMapper, request, response, errorCode);
+        };
     }
 
     private static void writeError(ObjectMapper mapper, HttpServletRequest request, HttpServletResponse response,

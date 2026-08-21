@@ -20,12 +20,14 @@ import {
 } from '@/components/file-preview';
 import { MarkdownContent } from '@/components/markdown/MarkdownContent';
 import {
+  AssistantRequestError,
   assistantApi,
   type AiScope,
   type AssistantCitation,
   type AssistantResponse,
   type ConversationMeta,
 } from '@/services/assistant';
+import { HttpError } from '@/services/http/errors';
 import { dataApi, type DataCategory } from '@/services/data/data-api';
 import { knowledgeApi, type KnowledgeCategory } from '@/services/knowledge';
 
@@ -61,6 +63,57 @@ function displayAnswer(value: string) {
 
 function citationSourceKey(citation: AssistantCitation) {
   return `${citation.sourceType}-${citation.chunkId}`;
+}
+
+function assistantFailure(error: unknown): { content: string; warnings: string[] } {
+  const code = error instanceof AssistantRequestError || error instanceof HttpError ? error.code : '';
+  const status = error instanceof AssistantRequestError || error instanceof HttpError ? error.status : undefined;
+  if (code === 'AI_PERMISSION_DENIED' || code === 'PERMISSION_DENIED') {
+    return {
+      content: '当前账号没有使用 AI 问答的权限，请联系系统管理员开通。',
+      warnings: [],
+    };
+  }
+  if (code === 'CSRF_TOKEN_INVALID') {
+    return {
+      content: '页面安全令牌已失效，请刷新页面后重试。',
+      warnings: [],
+    };
+  }
+  if (code === 'AI_MODEL_NOT_CONFIGURED' || code === 'AI_NOT_CONFIGURED') {
+    return {
+      content: 'AI 模型网关尚未配置，暂时无法生成回答。',
+      warnings: ['请管理员检查模型网关地址、模型名称和 API Key。'],
+    };
+  }
+  if (code === 'AI_MODEL_AUTH_FAILED') {
+    return {
+      content: 'AI 模型网关认证失败，暂时无法生成回答。',
+      warnings: ['请管理员检查模型网关 API Key 和访问地址。'],
+    };
+  }
+  if (code === 'AI_MODEL_RATE_LIMITED') {
+    return { content: 'AI 模型服务请求过于频繁，请稍后重试。', warnings: [] };
+  }
+  if (code === 'AI_MODEL_TIMEOUT') {
+    return { content: 'AI 模型服务响应超时，请稍后重试。', warnings: [] };
+  }
+  if (code === 'AI_MODEL_EMPTY_RESPONSE') {
+    return { content: 'AI 模型没有返回有效回答，请稍后重试。', warnings: [] };
+  }
+  if (code === 'AI_PROVIDER_UNAVAILABLE') {
+    return { content: 'AI 模型服务暂时不可用，请稍后重试。', warnings: [] };
+  }
+  if (status === 403) {
+    return {
+      content: '请求被安全策略拒绝，请刷新页面后重试；如仍失败请联系管理员。',
+      warnings: [],
+    };
+  }
+  return {
+    content: error instanceof Error ? error.message : 'AI 问答失败，请稍后重试。',
+    warnings: [],
+  };
 }
 
 function renderAssistantContent(
@@ -268,13 +321,14 @@ export function AssistantPage() {
         },
       );
     } catch (error) {
+      const failure = assistantFailure(error);
       setMessages((current) =>
         current.map((item, itemIndex) =>
           itemIndex === index
             ? {
                 ...item,
-                content: error instanceof Error ? error.message : 'AI 问答失败',
-                warnings: ['请检查模型网关配置或稍后重试'],
+                content: failure.content,
+                warnings: failure.warnings,
               }
             : item,
         ),

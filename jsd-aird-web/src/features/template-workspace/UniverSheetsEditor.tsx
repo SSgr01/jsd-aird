@@ -6,6 +6,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import '@univerjs/preset-sheets-core/lib/index.css';
 
 import { isCellMutationCommand, isNewFieldLabelChange, isSingleCellAddress } from './live-field-discovery';
+import { locatorValueRange } from './locator';
 import { operationFromUniverCommand } from './structure-migration';
 import type {
   EditorHandle,
@@ -420,7 +421,11 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
         const rowHeaderRange = resolveLocatorRange(apiRef.current, binding, 'rowHeaderRange');
         const columnHeaderRange = resolveLocatorRange(apiRef.current, binding, 'columnHeaderRange');
         const matrixDataRange = resolveLocatorRange(apiRef.current, binding, 'dataRange');
-        const activeRange = matrixDataRange ?? valueRange ?? labelRange;
+        // A table-column field owns its value range. Do not let the parent
+        // repeat-region data range swallow the selected child field.
+        const activeRange = isStructuredLeaf(binding)
+          ? valueRange ?? matrixDataRange ?? labelRange
+          : matrixDataRange ?? valueRange ?? labelRange;
         if (workbook && sheet && activeRange) {
           highlightTimersRef.current.forEach((timer) => window.clearTimeout(timer));
           highlightTimersRef.current = [];
@@ -455,7 +460,9 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
                   strokeWidth: strong ? 3 : 2,
                 }),
               );
-            const fillRange = matrixDataRange ?? valueRange;
+            const fillRange = isStructuredLeaf(binding)
+              ? valueRange ?? matrixDataRange
+              : matrixDataRange ?? valueRange;
             if (fillRange)
               highlightRef.current.push(
                 fillRange.highlight({
@@ -641,7 +648,8 @@ function resolveRange(api: FUniver | undefined, binding: TemplateBinding) {
       ? isStructuredLeaf(binding)
         ? stringLocator(binding.locator.anchorRange) ||
           stringLocator(binding.locator.logicalInputRange) ||
-          stringLocator(binding.locator.anchorAddress)
+          stringLocator(binding.locator.anchorAddress) ||
+          locatorValueRange(binding.locator)
         : stringLocator(binding.locator.anchorAddress) ||
           stringLocator(binding.locator.address) ||
           stringLocator(binding.locator.range)

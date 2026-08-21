@@ -43,6 +43,24 @@ class ContextCompressionServiceTest {
     }
 
     @Test
+    void marksMineruAdjacentParameterLabelAndValueAsStructuredEvidence() {
+        var documentId = UUID.randomUUID();
+        var versionId = UUID.randomUUID();
+        var label = new KnowledgeSearchFacade.SearchHit(UUID.randomUUID(), documentId, versionId,
+                "UA-1117 TDS", "UA-1117.pdf", 1, "paragraph", "粘度 （25℃/cps）", 0.9,
+                0.9, 0.9, 0.9, "KNOWLEDGE_CHUNK", null, null, null, null, 19);
+        var value = new KnowledgeSearchFacade.SearchHit(UUID.randomUUID(), documentId, versionId,
+                "UA-1117 TDS", "UA-1117.pdf", 1, "paragraph", "400-700cps", 0.8,
+                0.8, 0.8, 0.8, "KNOWLEDGE_CHUNK", null, null, null, null, 20);
+
+        var context = new ContextCompressionService().compress(List.of(value, label), List.of(), 500);
+
+        assertThat(context.text()).contains("粘度 （25℃/cps） = 400-700cps")
+                .contains("relatedChunkId=" + value.chunkId())
+                .contains("evidenceRelation=STRUCTURED_FIELD_VALUE");
+    }
+
+    @Test
     void keepsDataEvidenceAttachedToTheSameRow() {
         var data = new DataSourceFileSearchFacade.SourceFileHit(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
                 12, "B", "检测报告.xlsx", "字段=密度；值=1.05；同行数据=材料名称=TEST-TPL-丙烯酸树脂", 0.9,

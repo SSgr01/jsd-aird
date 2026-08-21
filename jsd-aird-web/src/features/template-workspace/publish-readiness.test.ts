@@ -13,4 +13,11 @@ describe('publish readiness', () => {
     expect(publishReadinessBlocker('SAVED', 'STALE')).toBe('审核状态需要刷新后才能发布');
     expect(publishReadinessBlocker('SAVED', 'FRESH')).toBeUndefined();
   });
+
+  it('aligns the publish state with template review status', () => {
+    expect(publishReadinessBlocker('SAVED', 'FRESH', 'NOT_SUBMITTED')).toBe('请先提交模板审核，通过后才能发布');
+    expect(publishReadinessBlocker('SAVED', 'FRESH', 'SUBMITTED')).toBe('模板正在审核中，通过后才能发布');
+    expect(publishReadinessBlocker('SAVED', 'FRESH', 'REJECTED')).toBe('模板审核未通过，请修改后重新提交审核');
+    expect(publishReadinessBlocker('SAVED', 'FRESH', 'APPROVED')).toBeUndefined();
+  });
 });

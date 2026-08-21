@@ -237,10 +237,12 @@ public class JdbcKnowledgeGovernanceRepository implements KnowledgeGovernanceRep
                 WHERE p.organization_id = ? AND p.document_id = ?
                 """ + publicationFilter, (rs, ignored) -> {
             var publication = mapPublication(rs, ignored);
+            var sourceNodes = sourceNodes(publication.parseRunId());
             return new PublishedContentView(publication, rs.getObject("file_object_id", UUID.class),
                     rs.getString("original_name"), rs.getString("content_type"), rs.getLong("size_bytes"),
-                    read(rs.getString("source_document_jsonb")), sourceNodes(publication.parseRunId()),
-                    read(rs.getString("confirmed_document_jsonb")), uuidList(rs.getString("excluded_review_node_ids")));
+                    read(rs.getString("source_document_jsonb")), sourceNodes,
+                    read(rs.getString("confirmed_document_jsonb")),
+                    uuidList(rs.getString("excluded_review_node_ids")));
         }, args).stream().findFirst();
     }
 
@@ -648,6 +650,19 @@ public class JdbcKnowledgeGovernanceRepository implements KnowledgeGovernanceRep
                   AND r.lock_version = ? AND r.status IN ('DRAFT', 'FAILED')
                   AND v.review_reason IS DISTINCT FROM 'REPARSE_QUEUED'
                 """, actorId, organizationId, documentId, versionId, reviewRevisionId, expectedLockVersion) > 0;
+    }
+
+    @Override
+    public boolean reserveReparseWithoutRevision(UUID organizationId, UUID actorId, UUID documentId, UUID versionId) {
+        return jdbc.update("""
+                UPDATE kb.document_version v
+                SET review_status = 'PENDING_REVIEW', review_reason = 'REPARSE_QUEUED', reviewed_by = ?,
+                    reviewed_at = now(), updated_at = now()
+                FROM kb.document d
+                WHERE v.document_id = d.id AND d.organization_id = ? AND d.id = ? AND v.id = ?
+                  AND v.status IN ('FAILED', 'PENDING_PROVIDER', 'REJECTED')
+                  AND v.review_reason IS DISTINCT FROM 'REPARSE_QUEUED'
+                """, actorId, organizationId, documentId, versionId) > 0;
     }
 
     @Override

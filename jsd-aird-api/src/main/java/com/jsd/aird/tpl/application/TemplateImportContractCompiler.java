@@ -66,7 +66,8 @@ public class TemplateImportContractCompiler {
         for (var field : sorted) {
             var item = objectMapper.createObjectNode();
             copy(field, item, "fieldId", "fieldCode", "name", "description", "valueType", "unit",
-                    "required", "identity", "trainingRole", "trainingEligible", "ragEligible", "dataPath");
+                    "required", "identity", "trainingRole", "trainingEligible", "ragEligible", "dataPath",
+                    "fieldType", "labelStatus", "pathSegments");
             result.add(item);
         }
         return result;
@@ -117,7 +118,7 @@ public class TemplateImportContractCompiler {
             copy(mapping, binding, "bindingId", "parentBindingId", "fieldCode", "dataPath", "mappingKind",
                     "repeatAxis", "recordHeight", "recordWidth", "recordStride", "required", "identity",
                     "trainingRole", "trainingEligible", "ragEligible", "valueSource", "valueType", "unit",
-                    "valuePath", "formulaTrustStatus");
+                    "valuePath", "formulaTrustStatus", "fieldType");
             var labelPath = labelPath(mapping, fieldNames);
             if (!labelPath.isBlank()) binding.put("labelPath", labelPath);
             if (mapping.path("labelPathSegments").isArray()) {

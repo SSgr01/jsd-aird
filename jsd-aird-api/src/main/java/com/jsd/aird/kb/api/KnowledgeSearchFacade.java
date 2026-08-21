@@ -45,17 +45,18 @@ public interface KnowledgeSearchFacade {
             UUID scopeId,
             Integer rowNumber,
             String fieldCode,
-            String sourceLocator
+            String sourceLocator,
+            Integer chunkNo
     ) {
         public SearchHit(UUID chunkId, UUID documentId, UUID versionId, String title, String originalName,
                          Integer pageNo, String section, String content, double score) {
             this(chunkId, documentId, versionId, title, originalName, pageNo, section, content, score,
-                    score, score, score, "KNOWLEDGE_CHUNK", null, null, null, null);
+                    score, score, score, "KNOWLEDGE_CHUNK", null, null, null, null, -1);
         }
 
         public SearchHit withScores(double retrieval, double rrf, double rerank) {
             return new SearchHit(chunkId, documentId, versionId, title, originalName, pageNo, section, content,
-                    rerank, retrieval, rrf, rerank, sourceType, scopeId, rowNumber, fieldCode, sourceLocator);
+                    rerank, retrieval, rrf, rerank, sourceType, scopeId, rowNumber, fieldCode, sourceLocator, chunkNo);
         }
     }
 }

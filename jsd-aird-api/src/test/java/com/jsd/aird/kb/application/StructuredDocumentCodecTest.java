@@ -81,8 +81,50 @@ class StructuredDocumentCodecTest {
         assertThat(value.path("attrs").path("colspan").asInt()).isEqualTo(3);
     }
 
+    @Test
+    void keepsProviderBlocksWithoutGuessingPdfLayout() {
+        var blocks = List.of(
+                pdfBlock("产", 0.10, 0.20, 0.12, 0.24),
+                pdfBlock("品", 0.125, 0.20, 0.145, 0.24),
+                pdfBlock("说", 0.15, 0.20, 0.17, 0.24),
+                pdfBlock("明", 0.175, 0.20, 0.195, 0.24),
+                pdfBlock("书", 0.20, 0.20, 0.22, 0.24),
+                pdfBlock("外", 0.10, 0.30, 0.12, 0.34),
+                pdfBlock("观", 0.10, 0.35, 0.12, 0.39),
+                new DocumentParser.TextBlock(1, "table-row", "物料 | UA-1117", null, null, null,
+                        List.of(0.1, 0.45, 0.3, 0.45, 0.3, 0.49, 0.1, 0.49), null, null, null, Map.of())
+        );
+
+        var normalized = codec.normalizeBlocks(blocks);
+
+        assertThat(normalized).hasSize(8);
+        assertThat(normalized.get(0).content()).isEqualTo("产");
+        assertThat(normalized.get(1).content()).isEqualTo("品");
+        assertThat(normalized.get(5).content()).isEqualTo("外");
+        assertThat(normalized.getLast().content()).isEqualTo("物料 | UA-1117");
+        assertThat(normalized.get(0).bbox()).containsExactly(0.1, 0.20, 0.12, 0.20, 0.12, 0.24, 0.1, 0.24);
+    }
+
+    @Test
+    void doesNotMergeSeparateNormalParagraphsWithoutShortPdfFragments() {
+        var blocks = List.of(
+                pdfBlock("产品说明书", 0.10, 0.20, 0.40, 0.24),
+                pdfBlock("主要技术指标", 0.10, 0.30, 0.40, 0.34)
+        );
+
+        var normalized = codec.normalizeBlocks(blocks);
+        assertThat(normalized).hasSize(2);
+        assertThat(normalized.get(0).content()).isEqualTo("产品说明书");
+        assertThat(normalized.get(1).content()).isEqualTo("主要技术指标");
+    }
+
     private DocumentParser.TextBlock block(String section, String text, Map<String, Object> attributes) {
         return new DocumentParser.TextBlock(null, section, text, null, null, null, List.of(), null,
                 null, null, attributes);
+    }
+
+    private DocumentParser.TextBlock pdfBlock(String text, double left, double top, double right, double bottom) {
+        return new DocumentParser.TextBlock(1, "paragraph", text, null, null, null,
+                List.of(left, top, right, top, right, bottom, left, bottom), null, null, null, Map.of());
     }
 }

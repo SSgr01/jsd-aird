@@ -52,6 +52,9 @@ public class IamAdminService {
 
     @Transactional
     public CreateUserResult create(Actor actor, CreateUserCommand command) {
+        if (command.password() == null || command.password().length() < 6 || command.password().length() > 200) {
+            throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "密码长度为 6-200 位");
+        }
         require(actor, "system.user.manage");
         var role = role(actor, command.roleId());
         var id = UUID.randomUUID();
@@ -85,6 +88,9 @@ public class IamAdminService {
 
     @Transactional
     public void resetPassword(Actor actor, UUID userId, String password) {
+        if (password == null || password.length() < 6 || password.length() > 200) {
+            throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "密码长度为 6-200 位");
+        }
         require(actor, "system.user.manage");
         requireUser(actor, userId);
         store.resetPassword(actor.organizationId(), userId, passwordEncoder.encode(password));

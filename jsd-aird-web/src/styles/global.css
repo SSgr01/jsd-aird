@@ -1861,6 +1861,14 @@ a:active,
   line-height: 1.55;
 }
 
+.field-position-meta {
+  display: flex;
+  gap: 12px;
+  margin: 6px 0 10px;
+  color: var(--app-text-secondary);
+  font-size: 12px;
+}
+
 .field-properties-actions {
   display: flex;
   justify-content: flex-end;
@@ -1899,12 +1907,20 @@ a:active,
 
 .template-business-workspace .workspace-header {
   min-height: 62px;
-  padding: 8px 18px;
+  /* Keep room for the fixed top-right user control. Without this reserved
+     area the publish action can sit underneath the avatar/dropdown. */
+  padding: 8px 100px 8px 18px;
   border-color: var(--workspace-border);
 }
 
 .template-business-workspace .workspace-identity { gap: 12px; }
 .template-business-workspace .workspace-title-block { gap: 1px; }
+.template-business-workspace .workspace-header-actions {
+  min-width: 0;
+  max-width: calc(100% - 120px);
+  flex: 0 1 auto;
+  justify-content: flex-end;
+}
 .template-business-workspace .workspace-title-block > span:last-child {
   color: var(--workspace-text);
   font-size: 16px;
@@ -2281,7 +2297,16 @@ a:active,
 .template-business-workspace .field-tree-icon.kind-row_table,
 .template-business-workspace .field-tree-icon.kind-matrix { color: #475467; background: transparent; }
 .template-business-workspace .field-tree-name { gap: 1px; }
-.template-business-workspace .field-tree-name strong { font-size: 14px; font-weight: 600; }
+.template-business-workspace .field-tree-name strong {
+  display: block;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  text-overflow: clip;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.45;
+}
 .template-business-workspace .field-tree-name small { color: var(--workspace-muted); font-size: 12px; }
 .field-tree-status { display: grid; color: #98a2b3; font-size: 14px; place-items: center; }
 .field-tree-status.needs-review { color: #b7791f; }
@@ -2350,7 +2375,11 @@ a:active,
 .template-business-workspace .workspace-header {
   min-height: 70px;
   gap: 18px;
-  padding: 12px 24px;
+  /* The user menu is fixed above the workspace header. Keep a real right
+     gutter in the final (later) workspace theme rule as well; otherwise this
+     rule overrides the earlier collision fix and the publish button ends up
+     underneath the avatar menu. */
+  padding: 12px 112px 12px 24px;
   background: var(--workspace-panel);
   border-color: var(--workspace-border);
 }
@@ -2578,7 +2607,7 @@ a:active,
     grid-template-columns: minmax(0, 1fr) minmax(380px, 400px);
   }
   .template-business-workspace .workspace-header {
-    padding-inline: 18px;
+    padding: 12px 112px 12px 18px;
   }
 }
 
@@ -2995,6 +3024,12 @@ a:active,
 .catalog-tabs { display: flex; flex-wrap: wrap; gap: 8px; padding-bottom: 4px; border-bottom: 1px solid var(--app-border); }
 .catalog-tabs .ant-btn { min-height: 44px; border-radius: 10px; }
 .catalog-sync-note { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 10px 14px; color: var(--app-text-secondary); background: var(--app-primary-soft); border: 1px solid color-mix(in srgb, var(--app-primary) 14%, var(--app-border)); border-radius: 12px; }
+.catalog-data-table .ant-table-cell,
+.catalog-knowledge-table .ant-table-cell { white-space: nowrap; word-break: keep-all; }
+.catalog-data-table .ant-table-cell:first-child,
+.catalog-knowledge-table .ant-table-cell:first-child { overflow: hidden; text-overflow: ellipsis; }
+.catalog-data-table .ant-table-cell .ant-space,
+.catalog-knowledge-table .ant-table-cell .ant-space { max-width: 100%; }
 .search-workspace-page { display: grid; gap: 20px; width: 100%; max-width: 1440px; margin: 0 auto; }
 .search-hero { display: grid; gap: 14px; padding: 24px; background: var(--app-primary-soft); }
 .search-hero-row { display: flex; gap: 12px; align-items: stretch; }

@@ -125,5 +125,5 @@ public class AuthController {
                                @NotBlank String password, boolean rememberMe) { }
 
     public record ChangePasswordRequest(@NotBlank String currentPassword,
-                                        @NotBlank @Size(min = 12, max = 200) String newPassword) { }
+                                        @NotBlank @Size(min = 6, max = 200) String newPassword) { }
 }

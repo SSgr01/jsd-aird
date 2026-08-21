@@ -31,7 +31,7 @@ class TemplateRecognitionCompilerTest {
                 .isEqualTo("产品名称");
         assertThat(result.fieldModel().path("groups")).hasSize(1);
         assertThat(result.fieldModel().path("fields")).singleElement();
-        assertThat(result.fieldModel().path("modelVersion").asInt()).isEqualTo(4);
+        assertThat(result.fieldModel().path("modelVersion").asInt()).isEqualTo(5);
         assertThat(result.fieldModel().path("fields").get(0).path("reviewStatus").asText())
                 .isEqualTo("CONFIRMED");
     }
@@ -215,6 +215,78 @@ class TemplateRecognitionCompilerTest {
         assertThat(result.mapping().get(0).path("repeatAxis").asText()).isEqualTo("COLUMN");
         assertThat(result.schema().path("properties").path("records").path("properties")
                 .path("component_a").path("x-region-kind").asText()).isEqualTo("COLUMN_TABLE");
+    }
+
+    @Test
+    void emitsCanonicalLabelAndValueLocatorForLabelRangeOnlyPayload() throws Exception {
+        var schema = objectMapper.createObjectNode().put("type", "object");
+        schema.set("properties", objectMapper.createObjectNode());
+        var payload = objectMapper.createObjectNode()
+                .put("fieldCode", "TEST.VISCOSITY")
+                .put("fieldName", "粘度")
+                .put("groupName", "技术指标")
+                .put("dataPath", "/technical/viscosity")
+                .put("relationId", "viscosity-A5-D5")
+                .put("kind", "SCALAR")
+                .put("editability", "EDITABLE")
+                .put("valueSource", "USER_INPUT")
+                .put("locatorType", "CELL_RANGE")
+                .set("locator", objectMapper.createObjectNode()
+                        .put("sheetId", "sheet-1")
+                        .put("labelRange", "A5:C5")
+                        .put("address", "D5:H5"));
+        var suggestion = new TemplateImportRepository.RecognitionSuggestionView(
+                UUID.randomUUID(), UUID.randomUUID(), "RULE", "SCALAR_FIELD", payload,
+                0.98, objectMapper.createArrayNode(), "ACCEPTED", "rule", "v2", "v2", Instant.now());
+
+        var result = compiler.compile(schema, List.of(suggestion), TemplateFormat.XLSX);
+        var field = result.fieldModel().path("fields").get(0);
+        var binding = result.mapping().get(0);
+
+        assertThat(field.path("fieldType").asText()).isEqualTo("FIELD");
+        assertThat(field.path("labelStatus").asText()).isEqualTo("RESOLVED");
+        assertThat(field.path("locator").path("label").path("range").asText()).isEqualTo("A5:C5");
+        assertThat(field.path("locator").path("value").path("range").asText()).isEqualTo("D5:H5");
+        assertThat(binding.path("locator").path("label").path("address").asText()).isEqualTo("A5");
+    }
+
+    @Test
+    void marksValueOnlyFieldAsUnresolvedAndRegionAsNotApplicable() throws Exception {
+        var schema = objectMapper.createObjectNode().put("type", "object");
+        schema.set("properties", objectMapper.createObjectNode());
+        var valueOnly = suggestion("ACCEPTED", "/value", "值", "基础信息");
+        ((com.fasterxml.jackson.databind.node.ObjectNode) valueOnly.payload()).set("locator",
+                objectMapper.createObjectNode().put("sheetId", "sheet-1").put("address", "B2"));
+        var regionPayload = objectMapper.createObjectNode()
+                .put("fieldName", "基本信息区域")
+                .put("dataPath", "/form")
+                .put("relationId", "region-1")
+                .put("kind", "TABLE_REGION")
+                .put("role", "REPEAT_REGION")
+                .put("mappingKind", "REPEAT_REGION")
+                .put("canonicalStatus", "CONFIRMED")
+                .put("structureStatus", "CONFIRMED")
+                .set("locator", objectMapper.createObjectNode().put("address", "A1:H3"));
+        var region = new TemplateImportRepository.RecognitionSuggestionView(
+                UUID.randomUUID(), UUID.randomUUID(), "MODEL", "TABLE_REGION", regionPayload,
+                0.95, objectMapper.createArrayNode(), "ACCEPTED", "model", "v2", "v2", Instant.now());
+
+        var result = compiler.compile(schema, List.of(valueOnly, region), TemplateFormat.XLSX);
+        assertThat(result.fieldModel().path("fields")).hasSize(2);
+        var unresolvedField = java.util.stream.StreamSupport.stream(
+                        result.fieldModel().path("fields").spliterator(), false)
+                .filter(field -> "值".equals(field.path("name").asText()))
+                .findFirst().orElseThrow();
+        var regionField = java.util.stream.StreamSupport.stream(
+                        result.fieldModel().path("fields").spliterator(), false)
+                .filter(field -> "基本信息区域".equals(field.path("name").asText()))
+                .findFirst().orElseThrow();
+        assertThat(unresolvedField.path("labelStatus").asText())
+                .isEqualTo("UNRESOLVED");
+        assertThat(regionField.path("fieldType").asText())
+                .isEqualTo("REGION");
+        assertThat(regionField.path("labelStatus").asText())
+                .isEqualTo("NOT_APPLICABLE");
     }
 
     @Test

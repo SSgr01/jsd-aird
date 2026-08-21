@@ -141,6 +141,15 @@ app:
       completions-path: ${JSD_AIRD_OCR_COMPLETIONS_PATH:/services/aigc/multimodal-generation/generation}
       timeout: ${JSD_AIRD_OCR_TIMEOUT:120s}
       max-bytes: ${JSD_AIRD_OCR_MAX_BYTES:20971520}
+    mineru:
+      enabled: ${JSD_AIRD_MINERU_ENABLED:true}
+      base-url: ${JSD_AIRD_MINERU_BASE_URL:https://mineru.net}
+      token: ${JSD_AIRD_OCR_MINERU_TOKEN:}
+      model: ${JSD_AIRD_MINERU_MODEL:vlm}
+      poll-interval: ${JSD_AIRD_MINERU_POLL_INTERVAL:3s}
+      max-wait: ${JSD_AIRD_MINERU_MAX_WAIT:15m}
+      http-timeout: ${JSD_AIRD_MINERU_HTTP_TIMEOUT:60s}
+      agent-fallback-enabled: ${JSD_AIRD_MINERU_AGENT_FALLBACK_ENABLED:true}
     asr:
       enabled: ${JSD_AIRD_ASR_ENABLED:false}
       base-url: ${JSD_AIRD_ASR_BASE_URL:https://dashscope.aliyuncs.com/api/v1}

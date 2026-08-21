@@ -10,6 +10,8 @@ export type Editability = 'EDITABLE' | 'READ_ONLY' | 'CONDITIONAL' | 'UNKNOWN';
 export type ValueSource = 'USER_INPUT' | 'FORMULA' | 'REFERENCE' | 'STATIC' | 'MIXED' | 'UNKNOWN';
 export type FieldOrigin = 'STANDARD' | 'TEMPLATE_LOCAL' | 'ORDER_LOCAL' | 'PENDING_STANDARD';
 export type FieldUiType = 'TEXT' | 'SIGNATURE';
+export type TemplateFieldType = 'FIELD' | 'TABLE_COLUMN' | 'REGION' | 'MANUAL_VALUE';
+export type LabelStatus = 'RESOLVED' | 'UNRESOLVED' | 'NOT_APPLICABLE';
 
 export interface TemplateListItem {
   templateId: string;
@@ -53,6 +55,9 @@ export interface TemplateBinding {
   termination?: Record<string, unknown>;
   locatorType: string;
   locator: Record<string, unknown>;
+  /** Semantic label path persisted with recognition results. */
+  labelPath?: string;
+  labelPathSegments?: string[];
   syncDirection: SyncDirection;
   primaryBinding: boolean;
   bindingStatus: BindingStatus;
@@ -230,6 +235,9 @@ export interface BusinessField {
   groupId: string;
   name: string;
   displayRole?: 'REGION' | 'FIELD';
+  fieldType?: TemplateFieldType;
+  labelStatus?: LabelStatus;
+  pathSegments?: string[];
   kind: FieldKind;
   valueType: string;
   uiType?: FieldUiType;
@@ -303,6 +311,9 @@ export interface BusinessField {
     physicalColumnRanges?: string[];
     mergeRange?: string;
     valueMode?: string;
+    locator?: Record<string, unknown>;
+    fieldType?: 'TABLE_COLUMN';
+    labelStatus?: LabelStatus;
   }>;
   tableModel?: Record<string, unknown>;
   matrixModel?: MatrixModel;

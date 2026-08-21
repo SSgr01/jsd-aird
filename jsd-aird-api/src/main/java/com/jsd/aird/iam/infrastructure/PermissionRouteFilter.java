@@ -54,7 +54,8 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
         var decision = authorization.check(new PermissionCheck(actor.organizationId(), actor.userId(), permission.code(),
                 permission.resourceType(), resourceId(request), permission.operation()));
         if (!decision.allowed()) {
-            writeError(response, ApiErrorCode.PERMISSION_DENIED);
+            writeError(response, "ai.use".equals(permission.code())
+                    ? ApiErrorCode.AI_PERMISSION_DENIED : ApiErrorCode.PERMISSION_DENIED);
             return;
         }
         chain.doFilter(request, response);
@@ -181,6 +182,7 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
             if (path.contains("/download")) return permission("knowledge.download", "KNOWLEDGE", "READ");
             if (path.contains("/export")) return permission("knowledge.export", "KNOWLEDGE", "READ");
             if (path.contains("/ai-grant") || path.contains("/batch/ai-usage")) return permission("knowledge.ai.external", "KNOWLEDGE", "WRITE");
+            if (path.contains("/reparse")) return permission("knowledge.update", "KNOWLEDGE", "WRITE");
             if (path.contains("/review") || path.endsWith("/reject")) return read ? permission("knowledge.review", "KNOWLEDGE", "READ") : permission("knowledge.review", "KNOWLEDGE", "WRITE");
             if (path.contains("/publish")) return permission("knowledge.publish", "KNOWLEDGE", "WRITE");
             if (read) return permission("knowledge.view", "KNOWLEDGE", "READ");

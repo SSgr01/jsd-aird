@@ -50,6 +50,11 @@ class PermissionRouteFilterTest {
     void mapsKnowledgeSearchToAiPermission() {
         assertThat(code("POST", "/api/v1/knowledge/search")).isEqualTo("ai.use");
         assertThat(code("POST", "/api/v1/knowledge/assistant")).isEqualTo("ai.use");
+        assertThat(code("POST", "/api/v1/assistant/qa")).isEqualTo("ai.use");
+        assertThat(code("POST", "/api/v1/assistant/qa/stream")).isEqualTo("ai.use");
+        assertThat(code("POST", "/api/v1/search/files")).isEqualTo("ai.use");
+        assertThat(code("POST", "/api/v1/knowledge/documents/00000000-0000-0000-0000-000000000000/versions/00000000-0000-0000-0000-000000000000/reparse"))
+                .isEqualTo("knowledge.update");
     }
 
     private String code(String method, String uri) {

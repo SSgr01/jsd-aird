@@ -63,3 +63,24 @@ httpClient.interceptors.response.use(
     throw error;
   },
 );
+
+/**
+ * Raw fetch calls (for example SSE) do not pass through Axios' request
+ * interceptor. Keep CSRF acquisition in one place so those calls use the
+ * same server-issued token as the rest of the application.
+ */
+export async function ensureCsrfToken(): Promise<string> {
+  if (csrfToken) return csrfToken;
+  csrfRefresh ??= httpClient.get<CsrfResponse>('/api/v1/auth/csrf').then((response) => {
+    csrfToken = response.data.data?.token || csrfToken;
+  }).finally(() => { csrfRefresh = null; });
+  await csrfRefresh;
+  if (!csrfToken) throw new Error('CSRF 安全令牌获取失败，请刷新页面后重试');
+  return csrfToken;
+}
+
+export async function refreshCsrfToken(): Promise<string> {
+  csrfToken = null;
+  csrfRefresh = null;
+  return ensureCsrfToken();
+}

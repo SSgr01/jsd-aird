@@ -115,8 +115,8 @@ public class IamBootstrapService {
     }
 
     private void createBootstrapAdmin(UUID organizationId, UUID adminRoleId) {
-        if (adminPassword == null || adminPassword.length() < 12) {
-            throw new IllegalStateException("启用 IAM 引导时必须通过环境变量提供至少 12 位管理员密码");
+        if (adminPassword == null || adminPassword.length() < 6) {
+            throw new IllegalStateException("启用 IAM 引导时必须通过环境变量提供至少 6 位管理员密码");
         }
         if (store.user(organizationId, adminUsername).isPresent()) {
             throw new IllegalStateException("IAM 引导管理员用户名已存在但尚未具备系统管理员角色：" + adminUsername);

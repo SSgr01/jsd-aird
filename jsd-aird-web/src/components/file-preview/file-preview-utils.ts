@@ -1,4 +1,4 @@
-import { downloadBlob } from '@/services/files';
+import { downloadBlob, triggerNativeDownload } from '@/services/files';
 
 export type FilePreviewMode = 'pdf' | 'image' | 'audio' | 'text' | 'docx' | 'spreadsheet' | 'unsupported';
 
@@ -7,6 +7,7 @@ export interface FilePreviewDescriptor {
   contentType?: string;
   size?: number;
   load: () => Promise<Blob>;
+  downloadUrl?: string;
 }
 
 export interface SpreadsheetMergeInput {
@@ -144,6 +145,10 @@ export function detectPreviewMode(fileName: string, contentType = ''): FilePrevi
 }
 
 export async function downloadPreviewFile(file: FilePreviewDescriptor) {
+  if (file.downloadUrl) {
+    triggerNativeDownload(file.downloadUrl, file.fileName);
+    return;
+  }
   const blob = await file.load();
   downloadBlob(blob, file.fileName);
 }

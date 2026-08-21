@@ -33,7 +33,7 @@ const PasswordField = forwardRef<PasswordFieldHandle, PasswordFieldProps>(({ lab
   };
   return <div className="iam-password-item">
     <div className="iam-password-label">{label} <span>*</span></div>
-    <Input.Password prefix={prefix} placeholder="至少 12 位" autoComplete="new-password" value={value} onChange={(event) => setValue(event.target.value)} suffix={<Button type="link" onClick={generate}>随机生成</Button>} />
+    <Input.Password prefix={prefix} placeholder="至少 6 位" autoComplete="new-password" value={value} onChange={(event) => setValue(event.target.value)} suffix={<Button type="link" onClick={generate}>随机生成</Button>} />
   </div>;
 });
 PasswordField.displayName = 'PasswordField';
@@ -99,8 +99,8 @@ export function UserManagementPage() {
         });
       } else {
         const password = passwordInputRef.current?.getValue() || '';
-        if (password.length < 12 || password.length > 200) {
-          message.error('密码长度为 12-200 位');
+        if (password.length < 6 || password.length > 200) {
+          message.error('密码长度为 6-200 位');
           return;
         }
         await iamApi.createUser({
@@ -123,8 +123,8 @@ export function UserManagementPage() {
   const submitReset = async () => {
     if (!resetTarget) return;
     const resetPassword = resetPasswordInputRef.current?.getValue() || '';
-    if (resetPassword.length < 12 || resetPassword.length > 200) {
-      message.error('密码长度为 12-200 位');
+    if (resetPassword.length < 6 || resetPassword.length > 200) {
+      message.error('密码长度为 6-200 位');
       return;
     }
     setResetting(true);

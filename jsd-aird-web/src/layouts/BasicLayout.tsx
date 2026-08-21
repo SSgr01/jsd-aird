@@ -191,6 +191,7 @@ export function BasicLayout() {
         fixSiderbar
         avatarProps={false}
         actionsRender={() => null}
+        rightContentRender={() => null}
         contentStyle={{ minHeight: 'calc(100dvh - 64px)', padding: 0 }}
         menuItemRender={(item, dom) => (item.path ? <Link to={item.path}>{dom}</Link> : dom)}
       >

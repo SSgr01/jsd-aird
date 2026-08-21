@@ -147,8 +147,8 @@ public class IamController {
 
     public record CreateUserRequest(@NotBlank String username, @NotBlank String displayName, String email, String phone,
                                     String departmentName, @NotNull UUID roleId,
-                                    @NotBlank @jakarta.validation.constraints.Size(min = 12, max = 200) String password) { }
-    public record ResetPasswordRequest(@NotBlank @jakarta.validation.constraints.Size(min = 12, max = 200) String password) { }
+                                    @NotBlank @jakarta.validation.constraints.Size(min = 6, max = 200) String password) { }
+    public record ResetPasswordRequest(@NotBlank @jakarta.validation.constraints.Size(min = 6, max = 200) String password) { }
     public record UpdateUserRequest(@NotBlank String displayName, String email, String phone, String departmentName,
                                     @NotNull UUID roleId) { }
     public record RoleRequest(@NotBlank String code, @NotBlank String name) { }

@@ -10,6 +10,10 @@ public interface FileStorageFacade {
 
     StagedFile stageFile(String originalName, String contentType, String kind, InputStream source);
 
+    /** Stores a server-produced artifact without making it look like a user upload. */
+    StagedFile stageDerived(UUID organizationId, UUID actorId, String originalName,
+                            String contentType, String kind, InputStream source);
+
     StoredFile open(UUID organizationId, UUID fileId);
 
     default Optional<String> presignedUrl(UUID organizationId, UUID fileId, Duration expiry) {

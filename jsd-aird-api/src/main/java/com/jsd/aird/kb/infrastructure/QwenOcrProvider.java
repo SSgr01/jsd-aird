@@ -11,8 +11,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import javax.imageio.ImageIO;
-
 import com.fasterxml.jackson.databind.JsonNode;
 import com.jsd.aird.kb.domain.DocumentParser;
 import com.jsd.aird.kb.domain.MediaExtractionProvider;
@@ -26,10 +24,6 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
-import org.apache.pdfbox.Loader;
-import org.apache.pdfbox.rendering.ImageType;
-import org.apache.pdfbox.rendering.PDFRenderer;
-import org.apache.pdfbox.text.PDFTextStripper;
 
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE)
@@ -71,10 +65,9 @@ public class QwenOcrProvider implements MediaExtractionProvider {
     public boolean supports(String fileName, String contentType) {
         var name = fileName == null ? "" : fileName.toLowerCase(Locale.ROOT);
         var type = contentType == null ? "" : contentType.toLowerCase(Locale.ROOT);
-        var pdf = "application/pdf".equals(type) || name.endsWith(".pdf");
         return type.startsWith("image/") || name.endsWith(".png") || name.endsWith(".jpg")
                 || name.endsWith(".jpeg") || name.endsWith(".gif") || name.endsWith(".webp")
-                || name.endsWith(".bmp") || name.endsWith(".tif") || name.endsWith(".tiff") || pdf;
+                || name.endsWith(".bmp") || name.endsWith(".tif") || name.endsWith(".tiff");
     }
 
     @Override
@@ -89,18 +82,7 @@ public class QwenOcrProvider implements MediaExtractionProvider {
 
     @Override
     public boolean requiresExternalExtraction(InputStream source, String fileName) {
-        if (fileName == null || !fileName.toLowerCase(Locale.ROOT).endsWith(".pdf")) return true;
-        try (var document = Loader.loadPDF(source.readAllBytes())) {
-            var stripper = new PDFTextStripper();
-            for (int page = 1; page <= document.getNumberOfPages(); page++) {
-                stripper.setStartPage(page);
-                stripper.setEndPage(page);
-                if (!hasSufficientNativeText(document, page, stripper.getText(document))) return true;
-            }
-            return false;
-        } catch (Exception exception) {
-            return true;
-        }
+        return true;
     }
 
     @Override
@@ -108,7 +90,6 @@ public class QwenOcrProvider implements MediaExtractionProvider {
         if (!isConfigured()) throw new IllegalStateException("OCR 服务尚未配置");
         try {
             var bytes = source.readAllBytes();
-            if (isPdf(fileName, context)) return extractPdf(bytes);
             if (bytes.length > maxBytes) {
                 throw new IllegalStateException("OCR 图片超过限制：" + maxBytes + " bytes");
             }
@@ -126,34 +107,6 @@ public class QwenOcrProvider implements MediaExtractionProvider {
             if (exception instanceof MediaExtractionException media) throw media;
             throw new MediaExtractionException(exception.getMessage() == null ? "OCR 服务调用失败" : exception.getMessage(),
                     null, model, exception);
-        }
-    }
-
-    private DocumentParser.ParsedDocument extractPdf(byte[] bytes) {
-        var blocks = new ArrayList<DocumentParser.TextBlock>();
-        var ocrPages = new ArrayList<Integer>();
-        try (var document = Loader.loadPDF(bytes)) {
-            var stripper = new PDFTextStripper();
-            var renderer = new PDFRenderer(document);
-            for (int page = 1; page <= document.getNumberOfPages(); page++) {
-                stripper.setStartPage(page);
-                stripper.setEndPage(page);
-                var nativeText = stripper.getText(document).strip();
-                if (hasSufficientNativeText(document, page, nativeText)) {
-                    blocks.add(new DocumentParser.TextBlock(page, "PDF-NATIVE", nativeText));
-                    continue;
-                }
-                var image = renderer.renderImageWithDPI(page - 1, 200, ImageType.RGB);
-                var output = new java.io.ByteArrayOutputStream();
-                ImageIO.write(image, "png", output);
-                blocks.addAll(recognize(output.toByteArray(), "image/png", page));
-                ocrPages.add(page);
-            }
-            return new DocumentParser.ParsedDocument(blocks, model + "+pdfbox-3", null,
-                    Map.of("model", model, "task", "document_parsing", "pageCount", document.getNumberOfPages(),
-                            "ocrPages", ocrPages, "mode", ocrPages.size() == document.getNumberOfPages() ? "SCANNED" : "MIXED"));
-        } catch (IOException exception) {
-            throw new IllegalStateException("PDF OCR解析失败", exception);
         }
     }
 
@@ -334,23 +287,9 @@ public class QwenOcrProvider implements MediaExtractionProvider {
         return baseUrl.replaceFirst("/compatible-mode/v1$", "/api/v1");
     }
 
-    private boolean hasSufficientNativeText(org.apache.pdfbox.pdmodel.PDDocument document,
-                                            int pageNo, String text) {
-        var characterCount = text == null ? 0 : text.replaceAll("\\s+", "").length();
-        if (characterCount < 24) return false;
-        var box = document.getPage(pageNo - 1).getMediaBox();
-        var squareInches = Math.max(1.0, (box.getWidth() / 72.0) * (box.getHeight() / 72.0));
-        return characterCount / squareInches >= 0.4;
-    }
-
     private void backoff(int attempt) {
         try { Thread.sleep(250L * (1L << attempt)); }
         catch (InterruptedException exception) { Thread.currentThread().interrupt(); throw new IllegalStateException("OCR重试被中断", exception); }
-    }
-
-    private boolean isPdf(String fileName, ExtractionContext context) {
-        return fileName != null && fileName.toLowerCase(Locale.ROOT).endsWith(".pdf")
-                || context != null && "application/pdf".equalsIgnoreCase(context.contentType());
     }
 
     private String content(JsonNode node) {

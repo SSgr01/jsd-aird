@@ -215,17 +215,24 @@ public class KnowledgeGovernanceService {
 
     @Transactional
     public KnowledgeService.DocumentView reparse(UUID documentId, UUID versionId, UUID reviewRevisionId,
-                                                 int lockVersion) {
+                                                 Integer lockVersion) {
         var actor = ActorContext.required();
         var current = review(documentId, versionId);
-        if (current.reviewRevision() == null || !current.reviewRevision().id().equals(reviewRevisionId)
-                || current.reviewRevision().lockVersion() != lockVersion) optimisticConflict(documentId, versionId);
-        if (current.parseRun() == null || Set.of("QUEUED", "PROCESSING").contains(current.parseRun().status())) {
+        if (current.parseRun() != null && Set.of("QUEUED", "PROCESSING").contains(current.parseRun().status())) {
             throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "当前已有解析或索引任务执行中");
         }
-        if (!governance.reserveReparse(actor.organizationId(), actor.userId(), documentId, versionId,
-                reviewRevisionId, lockVersion)) {
-            optimisticConflict(documentId, versionId);
+        if (reviewRevisionId == null) {
+            if (!governance.reserveReparseWithoutRevision(actor.organizationId(), actor.userId(), documentId, versionId)) {
+                optimisticConflict(documentId, versionId);
+            }
+        } else {
+            if (current.reviewRevision() == null || lockVersion == null
+                    || !current.reviewRevision().id().equals(reviewRevisionId)
+                    || current.reviewRevision().lockVersion() != lockVersion) optimisticConflict(documentId, versionId);
+            if (!governance.reserveReparse(actor.organizationId(), actor.userId(), documentId, versionId,
+                    reviewRevisionId, lockVersion)) {
+                optimisticConflict(documentId, versionId);
+            }
         }
         var result = knowledge.reindex(documentId, versionId);
         audit(actor.organizationId(), actor.userId(), "KB_DOCUMENT_REPARSE_REQUESTED", documentId,

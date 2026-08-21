@@ -43,6 +43,7 @@ public interface KnowledgeGovernanceRepository {
                    UUID reviewRevisionId, int expectedLockVersion, String reason);
     boolean reserveReparse(UUID organizationId, UUID actorId, UUID documentId, UUID versionId,
                            UUID reviewRevisionId, int expectedLockVersion);
+    boolean reserveReparseWithoutRevision(UUID organizationId, UUID actorId, UUID documentId, UUID versionId);
     boolean hasPublication(UUID organizationId, UUID documentId);
     boolean updateLifecycle(UUID organizationId, UUID actorId, UUID documentId, String status, String reason);
 

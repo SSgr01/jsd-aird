@@ -1,6 +1,9 @@
 package com.jsd.aird.ops.infrastructure;
 
 import java.util.UUID;
+import java.sql.Timestamp;
+import java.time.Instant;
+import java.util.Optional;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.jsd.aird.ops.application.port.OpsAsyncFacade;
@@ -37,6 +40,40 @@ public class JdbcOpsAsyncFacade implements OpsAsyncFacade {
                 VALUES (?, ?, ?, ?, ?)
                 """, UUID.randomUUID(), aggregateType, aggregateId, eventType, json(payload));
     }
+
+    @Override
+    public Optional<AsyncJobView> findJob(UUID organizationId, String idempotencyKey) {
+        return jdbc.query("""
+                SELECT id, job_type, status, progress, current_stage, attempt_count, max_attempts,
+                       next_attempt_at, last_error, finished_at
+                FROM ops.async_job
+                WHERE organization_id = ? AND idempotency_key = ?
+                """, (rs, ignored) -> new AsyncJobView(
+                rs.getObject("id", UUID.class), rs.getString("job_type"), rs.getString("status"),
+                rs.getInt("progress"), rs.getString("current_stage"), rs.getInt("attempt_count"),
+                rs.getInt("max_attempts"), instant(rs.getTimestamp("next_attempt_at")),
+                rs.getString("last_error"), instant(rs.getTimestamp("finished_at"))), organizationId, idempotencyKey)
+                .stream().findFirst();
+    }
+
+    @Override
+    public Optional<AsyncJobView> findLatestJob(UUID organizationId, String idempotencyKeyPrefix) {
+        return jdbc.query("""
+                SELECT id, job_type, status, progress, current_stage, attempt_count, max_attempts,
+                       next_attempt_at, last_error, finished_at
+                FROM ops.async_job
+                WHERE organization_id = ? AND idempotency_key LIKE ?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """, (rs, ignored) -> new AsyncJobView(
+                rs.getObject("id", UUID.class), rs.getString("job_type"), rs.getString("status"),
+                rs.getInt("progress"), rs.getString("current_stage"), rs.getInt("attempt_count"),
+                rs.getInt("max_attempts"), instant(rs.getTimestamp("next_attempt_at")),
+                rs.getString("last_error"), instant(rs.getTimestamp("finished_at"))),
+                organizationId, idempotencyKeyPrefix + "%").stream().findFirst();
+    }
+
+    private Instant instant(Timestamp value) { return value == null ? null : value.toInstant(); }
 
     private PGobject json(JsonNode value) {
         try {

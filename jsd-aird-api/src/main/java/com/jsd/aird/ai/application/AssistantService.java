@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.function.Consumer;
+import java.util.concurrent.TimeoutException;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -28,9 +29,14 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import jakarta.annotation.PostConstruct;
 
 @Service
 public class AssistantService {
+
+    private static final Logger log = LoggerFactory.getLogger(AssistantService.class);
 
     private final AssistantRepository repository;
     private final KnowledgeSearchFacade knowledge;
@@ -45,6 +51,8 @@ public class AssistantService {
     private final OpsAsyncFacade async;
     private final ModelCircuitBreaker circuitBreaker;
     private final String promptVersion;
+    private final String configuredBaseUrl;
+    private final String configuredApiKey;
     private final String configuredModel;
 
     public AssistantService(
@@ -61,6 +69,8 @@ public class AssistantService {
             OpsAsyncFacade async,
             ModelCircuitBreaker circuitBreaker,
             @org.springframework.beans.factory.annotation.Value("${app.ai.prompt-version:research-assistant-v1}") String promptVersion,
+            @org.springframework.beans.factory.annotation.Value("${app.model.base-url:}") String configuredBaseUrl,
+            @org.springframework.beans.factory.annotation.Value("${app.model.api-key:}") String configuredApiKey,
             @org.springframework.beans.factory.annotation.Value("${app.model.model:}") String configuredModel
     ) {
         this.repository = repository;
@@ -76,15 +86,27 @@ public class AssistantService {
         this.async = async;
         this.circuitBreaker = circuitBreaker;
         this.promptVersion = promptVersion;
+        this.configuredBaseUrl = configuredBaseUrl;
+        this.configuredApiKey = configuredApiKey;
         this.configuredModel = configuredModel;
+    }
+
+    @PostConstruct
+    void validateModelConfiguration() {
+        if (!StringUtils.hasText(configuredBaseUrl) || !StringUtils.hasText(configuredModel)) {
+            log.warn("AI model configuration is incomplete baseUrlPresent={} modelPresent={} apiKeyPresenceNotLogged=true",
+                    StringUtils.hasText(configuredBaseUrl), StringUtils.hasText(configuredModel));
+        }
     }
 
     public AssistantResponse ask(AskCommand command) {
         var actor = ActorContext.required();
         var prepared = prepare(actor.organizationId(), actor.userId(), command);
         if (noEvidence(prepared)) return noEvidenceResponse(actor, prepared);
+        requireModelConfiguration();
         var builder = clients.getIfAvailable();
-        if (builder == null) throw new ApiException(ApiErrorCode.AI_NOT_CONFIGURED, "Spring AI 模型尚未配置");
+        if (builder == null) throw new ApiException(ApiErrorCode.AI_MODEL_NOT_CONFIGURED,
+                ApiErrorCode.AI_MODEL_NOT_CONFIGURED.defaultMessage());
         if (!circuitBreaker.allow("chat")) {
             throw new ApiException(ApiErrorCode.AI_PROVIDER_UNAVAILABLE, "AI 模型暂时熔断，请稍后重试");
         }
@@ -96,7 +118,10 @@ public class AssistantService {
         if (tavilyTool != null && tavilyTool.isConfigured()) request.tools(tavilyTool.toolObject());
         try {
             var invocation = invokeBlocking(request);
-            if (!StringUtils.hasText(invocation.text())) throw new IllegalStateException("模型响应为空");
+            if (!StringUtils.hasText(invocation.text())) {
+                throw new ApiException(ApiErrorCode.AI_MODEL_EMPTY_RESPONSE,
+                        ApiErrorCode.AI_MODEL_EMPTY_RESPONSE.defaultMessage());
+            }
             circuitBreaker.success("chat");
             var modelAnswer = parseModelAnswer(invocation.text());
             var usage = invocation.usage();
@@ -115,10 +140,11 @@ public class AssistantService {
             return new AssistantResponse(prepared.conversationId(), answer.answer(), answer.citations(), answer.warnings(),
                     answer.usedWebSearch(), RequestIdHolder.currentOrUnknown(), usage, prepared.retrieval().trace());
         } catch (Exception exception) {
+            if (exception instanceof ApiException apiException) throw apiException;
             circuitBreaker.failure("chat");
             repository.insertCallAudit(actor.organizationId(), actor.userId(), prepared.conversationId(), "QA",
                     configuredModel, promptVersion, sha256(userPrompt), null, 0, 0, 0, "FAILED", safeError(exception));
-            throw new ApiException(ApiErrorCode.AI_PROVIDER_UNAVAILABLE, "AI 模型调用失败，请检查模型网关配置");
+            throw new ApiException(providerErrorCode(exception), providerErrorMessage(exception));
         }
     }
 
@@ -126,8 +152,10 @@ public class AssistantService {
         var actor = ActorContext.required();
         var prepared = prepare(actor.organizationId(), actor.userId(), command);
         if (noEvidence(prepared)) return noEvidenceStream(actor, prepared);
+        requireModelConfiguration();
         var builder = clients.getIfAvailable();
-        if (builder == null) throw new ApiException(ApiErrorCode.AI_NOT_CONFIGURED, "Spring AI 模型尚未配置");
+        if (builder == null) throw new ApiException(ApiErrorCode.AI_MODEL_NOT_CONFIGURED,
+                ApiErrorCode.AI_MODEL_NOT_CONFIGURED.defaultMessage());
         if (!circuitBreaker.allow("chat")) {
             throw new ApiException(ApiErrorCode.AI_PROVIDER_UNAVAILABLE, "AI 模型暂时熔断，请稍后重试");
         }
@@ -176,17 +204,26 @@ public class AssistantService {
                 },
                 error -> {
                     circuitBreaker.failure("chat");
-                    send(emitter, "error", Map.of("message", "AI 流式调用失败", "traceId", traceId,
-                            "runId", runId, "stage", "ANSWER_GENERATION"));
+                    var code = providerErrorCode(error);
+                    send(emitter, "error", Map.of("code", code.code(), "message", providerErrorMessage(error),
+                            "requestId", traceId, "traceId", traceId, "runId", runId,
+                            "stage", "ANSWER_GENERATION", "retryable", isRetryableProviderError(error)));
                     repository.insertCallAudit(actor.organizationId(), actor.userId(), prepared.conversationId(), "QA_STREAM",
                             configuredModel, promptVersion, sha256(userPrompt), null, 0, 0, 0, "FAILED", safeError(error));
-                    emitter.completeWithError(new ApiException(ApiErrorCode.AI_PROVIDER_UNAVAILABLE, "AI 流式调用失败"));
+                    // The SSE response has already been committed by the time a
+                    // provider error arrives. Dispatching completeWithError here
+                    // makes Spring try to render /error and then run the security
+                    // chain a second time, producing a misleading access-denied
+                    // exception in the API log. The structured SSE error event is
+                    // the client contract; complete the stream normally instead.
+                    emitter.complete();
                 },
                 () -> {
                     var rawAnswer = content.toString().strip();
                     if (!StringUtils.hasText(rawAnswer)) {
                         circuitBreaker.failure("chat");
-                        var message = Map.of("message", "模型响应为空，未生成可验证回答", "traceId", traceId,
+                        var message = Map.of("code", ApiErrorCode.AI_MODEL_EMPTY_RESPONSE.code(),
+                                "message", ApiErrorCode.AI_MODEL_EMPTY_RESPONSE.defaultMessage(), "traceId", traceId,
                                 "runId", runId, "stage", "ANSWER_GENERATION");
                         send(emitter, "error", message);
                         repository.insertCallAudit(actor.organizationId(), actor.userId(), prepared.conversationId(), "QA_STREAM",
@@ -426,6 +463,52 @@ public class AssistantService {
         var output = value(providerUsage.getCompletionTokens());
         var total = providerUsage.getTotalTokens() == null ? input + output : value(providerUsage.getTotalTokens());
         return new Usage(input, output, total);
+    }
+
+    private ApiErrorCode providerErrorCode(Throwable exception) {
+        var current = exception;
+        while (current != null) {
+            var name = current.getClass().getName().toLowerCase(java.util.Locale.ROOT);
+            var message = current.getMessage() == null ? "" : current.getMessage().toLowerCase(java.util.Locale.ROOT);
+            if (current instanceof TimeoutException || name.contains("timeout") || message.contains("timeout")) {
+                return ApiErrorCode.AI_MODEL_TIMEOUT;
+            }
+            if (name.contains("unauthorized") || name.contains("forbidden") || message.contains("401")
+                    || message.contains("403") || message.contains("invalid api key")
+                    || message.contains("authentication")) {
+                return ApiErrorCode.AI_MODEL_AUTH_FAILED;
+            }
+            if (message.contains("429") || message.contains("rate limit") || message.contains("too many requests")) {
+                return ApiErrorCode.AI_MODEL_RATE_LIMITED;
+            }
+            if (message.contains("404") || message.contains("model not found") || message.contains("no such model")) {
+                return ApiErrorCode.AI_MODEL_NOT_CONFIGURED;
+            }
+            current = current.getCause();
+        }
+        return ApiErrorCode.AI_PROVIDER_UNAVAILABLE;
+    }
+
+    private String providerErrorMessage(Throwable exception) {
+        var code = providerErrorCode(exception);
+        log.warn("AI provider request failed code={} model={} requestId={} detail={}", code.code(), configuredModel,
+                RequestIdHolder.currentOrUnknown(), safeError(exception));
+        return code.defaultMessage();
+    }
+
+    private boolean isRetryableProviderError(Throwable exception) {
+        var code = providerErrorCode(exception);
+        return code == ApiErrorCode.AI_MODEL_RATE_LIMITED
+                || code == ApiErrorCode.AI_MODEL_TIMEOUT
+                || code == ApiErrorCode.AI_PROVIDER_UNAVAILABLE;
+    }
+
+    private void requireModelConfiguration() {
+        if (!StringUtils.hasText(configuredBaseUrl) || !StringUtils.hasText(configuredApiKey)
+                || !StringUtils.hasText(configuredModel)) {
+            throw new ApiException(ApiErrorCode.AI_MODEL_NOT_CONFIGURED,
+                    ApiErrorCode.AI_MODEL_NOT_CONFIGURED.defaultMessage());
+        }
     }
 
     private ModelInvocation invokeBlocking(ChatClient.ChatClientRequestSpec request) {

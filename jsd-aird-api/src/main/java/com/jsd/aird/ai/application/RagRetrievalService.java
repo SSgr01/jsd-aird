@@ -49,9 +49,21 @@ public class RagRetrievalService {
                               List<UUID> dataCategoryIds, boolean aiOnly) {
         var safeScopeIds = scopes.validate(organizationId, scopeIds, scopeTypes).stream().toList();
         var plan = rewrite.rewrite(question, history, scopeTypes == null ? List.of() : scopeTypes);
-        var knowledgeResult = knowledge.search(new KnowledgeSearchFacade.SearchRequest(
-                organizationId, plan.plan().rewrittenQuery(), aiOnly, 12, safeScopeIds, knowledgeCategoryIds,
-                plan.plan().subQueries()));
+        // The scope selectors are explicit module boundaries. When the user
+        // selects a knowledge category, data-center rows must not be used as a
+        // silent fallback (and vice versa), otherwise an unrelated file can be
+        // presented as evidence for a knowledge-base question.
+        var knowledgeSelected = knowledgeCategoryIds != null && !knowledgeCategoryIds.isEmpty();
+        var dataSelected = dataCategoryIds != null && !dataCategoryIds.isEmpty();
+        var searchKnowledge = !dataSelected || knowledgeSelected;
+        var searchData = !knowledgeSelected || dataSelected;
+        var knowledgeResult = searchKnowledge
+                ? knowledge.search(new KnowledgeSearchFacade.SearchRequest(
+                        organizationId, plan.plan().rewrittenQuery(), aiOnly, 12, safeScopeIds, knowledgeCategoryIds,
+                        plan.plan().subQueries()))
+                : new KnowledgeSearchFacade.SearchResult(List.of(),
+                        new KnowledgeSearchFacade.RetrievalTrace("SKIPPED", 0, 0, 0,
+                                List.of("KNOWLEDGE_SCOPE_NOT_SELECTED")));
         // Structured data indexes contain field values, not the document-oriented
         // expansion terms produced by the rewrite model. Searching them with the
         // rewritten query can turn an exact source-record lookup into an impossible
@@ -62,11 +74,13 @@ public class RagRetrievalService {
         // whole sentence can miss every cell. Search the original question,
         // rewrite sub-queries and extracted keywords independently, then merge
         // the row/cell evidence by stable hit id.
-        var dataQueries = dataQueries(question, plan.plan());
         var dataByHit = new LinkedHashMap<UUID, DataSourceFileSearchFacade.SourceFileHit>();
-        for (var dataQuery : dataQueries) {
-            dataFiles.search(organizationId, dataQuery, dataCategoryIds, 8)
-                    .forEach(hit -> dataByHit.putIfAbsent(hit.hitId(), hit));
+        var dataQueries = searchData ? dataQueries(question, plan.plan()) : List.<String>of();
+        if (searchData) {
+            for (var dataQuery : dataQueries) {
+                dataFiles.search(organizationId, dataQuery, dataCategoryIds, 8)
+                        .forEach(hit -> dataByHit.putIfAbsent(hit.hitId(), hit));
+            }
         }
         var data = dataByHit.values().stream()
                 .sorted(Comparator.comparingDouble(DataSourceFileSearchFacade.SourceFileHit::score).reversed())
@@ -84,8 +98,8 @@ public class RagRetrievalService {
                 knowledgeResult.trace().vectorCandidates(), knowledgeResult.trace().mergedCandidates(),
                 data.size(), reranker.isConfigured() ? "CONFIGURED" : "RRF_FALLBACK", fallbacks,
                 dataQueries.size(), List.of(
-                        new ChannelTrace("KNOWLEDGE_KEYWORD_VECTOR", "SUCCEEDED", knowledgeResult.trace().mergedCandidates()),
-                        new ChannelTrace("DATA_CENTER_ROW", data.isEmpty() ? "EMPTY" : "SUCCEEDED", data.size()))));
+                        new ChannelTrace("KNOWLEDGE_KEYWORD_VECTOR", searchKnowledge ? "SUCCEEDED" : "SKIPPED", knowledgeResult.trace().mergedCandidates()),
+                        new ChannelTrace("DATA_CENTER_ROW", searchData ? (data.isEmpty() ? "EMPTY" : "SUCCEEDED") : "SKIPPED", data.size()))));
     }
 
     private List<String> dataQueries(String question, QueryRewriteService.QueryPlan plan) {

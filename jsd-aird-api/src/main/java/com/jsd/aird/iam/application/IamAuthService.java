@@ -76,8 +76,8 @@ public class IamAuthService {
 
     @Transactional
     public void changePassword(Actor actor, String currentPassword, String newPassword) {
-        if (newPassword == null || newPassword.length() < 12) {
-            throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "新密码至少 12 位");
+        if (newPassword == null || newPassword.length() < 6) {
+            throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "新密码至少 6 位");
         }
         var user = store.user(actor.userId()).orElseThrow(() -> new ApiException(ApiErrorCode.AUTH_REQUIRED));
         if (user.passwordHash() == null || !passwordEncoder.matches(currentPassword, user.passwordHash())) {

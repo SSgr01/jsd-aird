@@ -65,6 +65,23 @@ public class FileObjectService implements FileStorageFacade {
             InputStream source
     ) {
         var actor = ActorContext.required();
+        return stageFor(actor.organizationId(), actor.userId(), originalName, contentType, kind, source, false);
+    }
+
+    @Transactional
+    @Override
+    public FileStorageFacade.StagedFile stageDerived(UUID organizationId, UUID actorId, String originalName,
+                                                      String contentType, String kind, InputStream source) {
+        if (organizationId == null || actorId == null) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "解析产物缺少组织或创建人");
+        }
+        var staged = stageFor(organizationId, actorId, originalName, contentType, kind, source, true);
+        return new FileStorageFacade.StagedFile(staged.fileId(), staged.originalName(), staged.contentType(),
+                staged.size(), staged.sha256(), staged.status());
+    }
+
+    private StagedFile stageFor(UUID organizationId, UUID actorId, String originalName, String contentType,
+                                String kind, InputStream source, boolean derived) {
         Path temporary = null;
         try {
             temporary = Files.createTempFile("jsd-aird-upload-", ".staged");
@@ -86,25 +103,25 @@ public class FileObjectService implements FileStorageFacade {
             if ("SPC_CHART".equalsIgnoreCase(kind) && size > MAX_SPC_UPLOAD_BYTES) {
                 throw new ApiException(ApiErrorCode.BAD_REQUEST, "图谱文件超过 100MB 限制");
             }
-            validateSecurity(temporary, originalName, kind);
+            if (!derived) validateSecurity(temporary, originalName, kind);
             var effectiveContentType = FileContentTypeResolver.resolve(temporary, originalName, contentType);
 
             var id = UUID.randomUUID();
             var safeName = sanitizeFileName(originalName);
-            var objectKey = actor.organizationId() + "/staged/" + id + "/" + safeName;
+            var objectKey = organizationId + "/" + (derived ? "derived" : "staged") + "/" + id + "/" + safeName;
             try (var uploadStream = Files.newInputStream(temporary)) {
                 objectStorage.put(objectKey, uploadStream, size, effectiveContentType);
             }
             repository.insert(new FileObjectRepository.NewFileObject(
                     id,
-                    actor.organizationId(),
+                    organizationId,
                     bucket,
                     objectKey,
                     safeName,
                     effectiveContentType,
                     size,
                     sha256,
-                    actor.userId()
+                    actorId
             ));
             return new StagedFile(id, safeName, effectiveContentType, size, sha256, "STAGED");
         } catch (IOException | NoSuchAlgorithmException exception) {

@@ -19,6 +19,7 @@ import type {
   MatrixModel,
   TemplateQualityIssue,
 } from '@/services/templates/template-api';
+import { expandSemanticLabelRange, locatorLabelRange, locatorValueRange, mergeLocators } from '@/features/template-workspace/locator';
 
 type ReviewFilter = 'ALL' | 'LOW' | 'QUALITY' | Exclude<RecognitionReviewStatus, 'IGNORED'>;
 
@@ -347,7 +348,7 @@ export function RecognitionReviewPanel({
               >
                 <StatusIndicator status={item.status} />
                 <span className="recognition-row-content">
-                  <strong>{item.fieldName}</strong>
+                  <strong>{recognitionPath(item)}</strong>
                   <span>
                     {item.payload.suggestionLevel === 'CHILD' ? '明细字段' : kindLabel(item.kind)}
                   </span>
@@ -849,7 +850,7 @@ function RegionFieldCard({
       <button type="button" className="recognition-review-row recognition-field-row" aria-expanded={selected} onClick={() => onSelect(field)}>
         <StatusIndicator status={regionStatus(field.status)} />
         <span className="recognition-row-content">
-          <strong>{field.fieldName || '字段名称待人工命名'}</strong>
+          <strong>{recognitionPath(field) || '字段名称待人工命名'}</strong>
           <span>{field.payload.suggestionLevel === 'CHILD' ? '明细字段' : kindLabel(field.kind)}{reviewRequired ? ' · 待确认' : ''}</span>
         </span>
         <span className="recognition-row-location"><EnvironmentOutlined aria-hidden="true" /> {locationText(field)}</span>
@@ -859,7 +860,7 @@ function RegionFieldCard({
           <dl className="recognition-field-attributes">
             <div><dt>类型</dt><dd>{valueTypeLabel(attributeText(attributes.valueType, field.valueType ?? 'string'))}</dd></div>
             <div><dt>单位</dt><dd>{attributeText(attributes.unit, field.payload.unit ?? '') || '未设置'}</dd></div>
-            <div><dt>单元格位置</dt><dd>{textValue((attributes.locator as Record<string, unknown> | undefined)?.labelAddress) || field.labelAddress || '—'} / {field.address || '—'}</dd></div>
+            <div><dt>单元格位置</dt><dd>{locatorLabelRange(mergeLocators(field.payload.locator, attributes.locator as Record<string, unknown> | undefined, { labelAddress: field.labelAddress })) || '—'} / {locatorValueRange(mergeLocators(field.payload.locator, attributes.locator as Record<string, unknown> | undefined, { address: field.address })) || '—'}</dd></div>
           </dl>
           {reviewRequired && <div className="field-property-alert full"><strong>字段待确认</strong><span>请确认字段名称和填写位置，确认后才会进入正式模板。</span></div>}
           <div className="recognition-review-actions">
@@ -1170,8 +1171,25 @@ function confidenceLabel(level: RecognitionReviewItem['confidenceLevel']) {
 }
 
 function locationText(item: RecognitionReviewItem) {
-  const address = item.address || item.labelAddress || '未定位';
+  const locator = expandSemanticLabelRange(mergeLocators(item.payload.locator, {
+    address: item.address,
+    labelAddress: item.labelAddress,
+  }), semanticPathSegments(item.payload.labelPath));
+  const address = locatorValueRange(locator) || locatorLabelRange(locator) || '未定位';
   return `${item.sheetName || '当前工作表'} · ${address}`;
+}
+
+function recognitionPath(item: RecognitionReviewItem) {
+  const labelPath = typeof item.payload.labelPath === 'string'
+    ? item.payload.labelPath.trim()
+    : '';
+  return labelPath || item.fieldName;
+}
+
+function semanticPathSegments(value?: string) {
+  return typeof value === 'string'
+    ? value.split(/\s*>\s*/).map((segment) => segment.trim()).filter(Boolean)
+    : undefined;
 }
 
 function layoutDescription(payload: RecognitionReviewItem['payload']) {

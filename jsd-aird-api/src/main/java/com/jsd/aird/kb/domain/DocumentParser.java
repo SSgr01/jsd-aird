@@ -3,12 +3,25 @@ package com.jsd.aird.kb.domain;
 import java.io.InputStream;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 public interface DocumentParser {
 
     boolean supports(String fileName, String contentType);
 
+    /** Returns false when the configured provider cannot accept work yet. */
+    default boolean isConfigured() { return true; }
+
+    default String unavailableReason() { return "文档解析服务尚未配置"; }
+
     ParsedDocument parse(InputStream source, String fileName);
+
+    default ParsedDocument parse(InputStream source, String fileName, ParseContext context) {
+        return parse(source, fileName);
+    }
+
+    record ParseContext(UUID organizationId, UUID actorId, UUID sourceFileId,
+                        String contentType, long size) { }
 
     record ParsedDocument(List<TextBlock> blocks, String parserVersion, String providerTaskId,
                           Map<String, Object> metadata, List<SourceTable> sourceTables) {

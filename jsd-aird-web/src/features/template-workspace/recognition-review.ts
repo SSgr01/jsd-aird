@@ -128,8 +128,69 @@ export function mergeRecognitionReview(
     }));
     if (created) created.reviewStatus = reviewStatus(item);
   }
+  // The recognition panel is the source of truth for a confirmed semantic
+  // path. Candidate fields can be created earlier from the physical table
+  // shape and therefore still carry a generic path such as
+  // “重复记录区域 > 漆膜外观”. Copy the confirmed path onto the field model
+  // by stable identity so the structure tree and properties panel render the
+  // same hierarchy as recognition confirmation.
+  nextModel.fields = nextModel.fields.map((field) => {
+    const item = review.items.find((candidate) => reviewItemMatchesField(field, candidate));
+    const path = item ? splitLabelPath(item.payload.labelPath) : undefined;
+    if (!path?.length) return field;
+    return {
+      ...field,
+      name: path.at(-1) || field.name,
+      pathSegments: path,
+    };
+  });
+  // Keep the executable mapping in lockstep with the field model. The data
+  // center consumes the published binding contract, not the review panel, so
+  // updating only fields would make the application report fall back to a
+  // generic repeat-region path again.
+  nextMapping = nextMapping.map((binding) => {
+    const item = review.items.find((candidate) => reviewItemMatchesBinding(binding, candidate));
+    const path = item ? splitLabelPath(item.payload.labelPath) : undefined;
+    if (!path?.length) return binding;
+    return {
+      ...binding,
+      labelPath: path.join(' > '),
+      labelPathSegments: path,
+    };
+  });
   nextSchema = writeFieldModel(nextSchema, nextModel);
   return { schema: nextSchema, mapping: nextMapping, model: nextModel };
+}
+
+function reviewItemMatchesField(field: FieldModel['fields'][number], item: RecognitionReviewItem) {
+  const payload = item.payload;
+  if (payload.fieldId && (field.fieldId === payload.fieldId || field.id === payload.fieldId)) return true;
+  if (payload.relationId && field.relationId === payload.relationId) return true;
+  if (payload.bindingId && field.bindingId === payload.bindingId) return true;
+  // A scalar candidate has no stable field identity before confirmation, so
+  // its recognition item id is the only available identity. Do not use this
+  // fallback for generated repeat children: their recognitionItemId points to
+  // the parent suggestion and would incorrectly give every child the parent
+  // path.
+  return field.mappingKind !== 'REPEAT_FIELD' && field.recognitionItemId === item.id;
+}
+
+function reviewItemMatchesBinding(binding: TemplateBinding, item: RecognitionReviewItem) {
+  const payload = item.payload;
+  if (payload.bindingId && binding.bindingId === payload.bindingId) return true;
+  if (payload.relationId && binding.relationId === payload.relationId) return true;
+  if (payload.fieldId && binding.fieldId === payload.fieldId) return true;
+  return stringValue(binding.diagnostic?.recognitionItemId) === item.id;
+}
+
+function stringValue(value: unknown) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function splitLabelPath(value?: string) {
+  if (typeof value !== 'string') return undefined;
+  const segments = value.split(/\s*>\s*/).map((segment) => segment.trim()).filter(Boolean);
+  return segments.length ? segments : undefined;
 }
 
 function effectiveFieldKey(item: RecognitionReviewItem) {

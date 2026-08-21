@@ -102,13 +102,16 @@ export function readFieldModel(
         // sources of the displayed structure. Do not decode business names
         // from fieldCode here: fieldCode is an identifier, not a display path.
         const bindingPath = bindingSemanticPath(binding);
-        const snapshotPath = recoverSnapshotSemanticPath(binding, snapshot);
+        const snapshotPath = recoverSnapshotSemanticPath(
+          binding?.mappingKind ?? field.mappingKind,
+          binding?.locator ?? field.locator,
+          snapshot,
+        );
         const namedPath = splitLabelPath(field.name);
-        const pathSegments = bindingPath
-          ?? mergeSemanticPaths(namedPath, snapshotPath)
-          ?? (namedPath && namedPath.length >= 2
-            ? namedPath
-            : preferSemanticPath(field.pathSegments, bindingPath));
+        const storedPath = bindingPath
+          ?? preferSemanticPath(field.pathSegments, undefined)
+          ?? namedPath;
+        const pathSegments = mergeSemanticPaths(storedPath, snapshotPath) ?? namedPath;
         return {
           ...field,
           locator,
@@ -303,6 +306,12 @@ export function applySuggestion(
     syncDirection: syncDirection(editability, valueSource),
     primaryBinding: true,
     bindingStatus: validBinding ? 'VALID' : 'AMBIGUOUS',
+    ...(suggestion.payload.labelPath
+      ? {
+          labelPath: suggestion.payload.labelPath,
+          labelPathSegments: splitLabelPath(suggestion.payload.labelPath),
+        }
+      : {}),
     diagnostic: {
       source: locatorOverride ? 'CUSTOMER_CONFIRMED' : 'AUTO_RECOGNIZED',
       kind,
@@ -1027,12 +1036,13 @@ function bindingSemanticPath(binding?: TemplateBinding) {
 }
 
 function recoverSnapshotSemanticPath(
-  binding: TemplateBinding | undefined,
+  mappingKind: string | undefined,
+  locator: Record<string, unknown> | undefined,
   snapshot?: Record<string, unknown>,
 ) {
-  if (!binding || binding.mappingKind !== 'REPEAT_FIELD' || !snapshot) return undefined;
-  const label = parseA1Range(locatorLabelRange(binding.locator));
-  const value = parseA1Range(locatorValueRange(binding.locator));
+  if (mappingKind !== 'REPEAT_FIELD' || !locator || !snapshot) return undefined;
+  const label = parseA1Range(locatorLabelRange(locator));
+  const value = parseA1Range(locatorValueRange(locator));
   if (!label || !value || label.startRow !== value.startRow || value.startColumn <= label.endColumn + 1) {
     return undefined;
   }
@@ -1043,7 +1053,7 @@ function recoverSnapshotSemanticPath(
   // through the label cells so that “PH=8.8人工汗测试” remains one segment
   // instead of being reconstructed from a sanitized field code.
   for (let column = 1; column < value.startColumn; column += 1) {
-    const cell = snapshotCell(snapshot, binding.locator, label.startRow, column);
+    const cell = snapshotCell(snapshot, locator, label.startRow, column);
     if (cell && texts[texts.length - 1] !== cell) texts.push(cell);
   }
   if (!texts.length) return undefined;

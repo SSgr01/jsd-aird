@@ -31,6 +31,10 @@ export interface AssistantCitation {
   rrfScore: number;
   rerankScore: number;
   sourceLocator?: string;
+  anchor?: Record<string, unknown>;
+  anchors?: Array<Record<string, unknown>>;
+  reviewNodeIds?: string[];
+  sourceNodeKeys?: string[];
 }
 
 export interface AssistantResponse {
@@ -71,6 +75,8 @@ export interface FileSearchResult {
     fileObjectId: string;
     logicalDocumentId?: string;
     fileVersionId: string;
+    resourceType: 'KNOWLEDGE_DOCUMENT' | 'DATA_IMPORT_JOB';
+    resourceId: string;
     sourceModule: 'KNOWLEDGE' | 'DATA_CENTER';
     title: string;
     originalName: string;
@@ -82,6 +88,7 @@ export interface FileSearchResult {
     matchType: 'EXACT_FILENAME' | 'EXACT_IDENTIFIER' | 'CONTENT' | 'FULL_TEXT';
     matchedFields: string[];
     matchedTerms: string[];
+    relatedProjects: Array<{ projectId: string; projectCode: string; projectName: string; stageId?: string; stageName?: string; taskId?: string; taskName?: string }>;
     hits: Array<{ id: string; snippet: string; score: number; anchor: { pageNo?: number; sheetName?: string; cellRange?: string; paragraphId?: string; bbox?: number[]; startTimeMs?: number; endTimeMs?: number; section?: string; rowNumber?: number; columnName?: string } }>;
   }>;
 }
@@ -119,7 +126,7 @@ export const assistantApi = {
   async deleteConversation(id: string) {
     await httpClient.delete(`/api/v1/assistant/conversations/${id}`);
   },
-  async fileSearch(input: { query: string; aiOnly?: boolean; limit?: number; scopeIds?: string[]; scopeTypes?: string[]; knowledgeCategoryIds?: string[]; dataCategoryIds?: string[] }) {
+  async fileSearch(input: { query: string; aiOnly?: boolean; limit?: number; scopeIds?: string[]; scopeTypes?: string[]; knowledgeCategoryIds?: string[]; dataCategoryIds?: string[]; projectId?: string }) {
     const response = await httpClient.post<ApiResponse<FileSearchResult>>('/api/v1/search/files', input);
     return response.data.data;
   },

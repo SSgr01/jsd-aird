@@ -61,9 +61,9 @@ public class AssistantController {
     @Deprecated(forRemoval = true)
     public ApiResponse<?> fileSearch(@RequestBody FileSearchRequest request) {
         var actor = ActorContext.required();
-        return success(fileSearch.search(actor.organizationId(), new FileSearchService.SearchCommand(
+        return success(fileSearch.search(actor, new FileSearchService.SearchCommand(
                 request.query(), request.safeLimit(), request.scopeIds(), request.knowledgeCategoryIds(),
-                request.dataCategoryIds())));
+                request.dataCategoryIds(), request.projectId())));
     }
 
     @GetMapping("/scopes")
@@ -140,7 +140,7 @@ public class AssistantController {
     }
     public record FileSearchRequest(@Size(min = 1, max = 1000) String query, Boolean aiOnly, int limit,
                                     List<UUID> scopeIds, List<String> scopeTypes, List<UUID> knowledgeCategoryIds,
-                                    List<UUID> dataCategoryIds) {
+                                    List<UUID> dataCategoryIds, UUID projectId) {
         public int safeLimit() { return limit <= 0 ? 20 : Math.min(50, limit); }
     }
     public record ScopeRequest(String scopeType, String externalId, String name,

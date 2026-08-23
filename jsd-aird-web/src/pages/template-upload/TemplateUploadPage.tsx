@@ -230,11 +230,18 @@ export function TemplateUploadPage() {
   const openCreate = (job: TemplateImportJob) => {
     setSelectedJob(job);
     form.setFieldsValue({
-      name: job.sourceFileName.replace(/\.(xlsx|docx)$/i, ''),
+      name: displayTemplateName(job.sourceFileName),
       format: job.format,
       category: job.categoryName ?? uploadCategory,
     });
   };
+
+  function displayTemplateName(sourceFileName: string) {
+    return sourceFileName
+      .replace(/(?:xlsx|xls|csv|docx|doc)-univer-snapshot\.json$/i, '')
+      .replace(/\.(xlsx|xls|csv|docx|doc)$/i, '')
+      .trim();
+  }
 
   const openRecognition = async (job: TemplateImportJob) => {
     setViewingJob(job);

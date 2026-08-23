@@ -5,8 +5,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { UploadWorkspace, type UploadWorkspaceRecord } from '@/components/upload-workspace';
+import { ProjectRelationPicker } from '@/components/project-relations/ProjectRelationPicker';
 import { FilePreviewModal, downloadPreviewFile, type FilePreviewDescriptor } from '@/components/file-preview';
 import { dataApi, type DataCategory, type DataJob, type DataTemplateOption } from '@/services/data/data-api';
+import type { ProjectRelationTarget } from '@/services/project/project-resource-api';
 
 const statusFilters = [
   { key: 'ALL', label: '全部' },
@@ -58,6 +60,7 @@ export function DataUploadPage() {
   const [jobKeyword, setJobKeyword] = useState('');
   const [jobsLoading, setJobsLoading] = useState(false);
   const [previewFile, setPreviewFile] = useState<FilePreviewDescriptor>();
+  const [projectRelations, setProjectRelations] = useState<ProjectRelationTarget[]>([]);
 
   useEffect(() => {
     setTemplateVersionId(undefined);
@@ -105,7 +108,7 @@ export function DataUploadPage() {
     setLoading(true);
     try {
       const staged = await dataApi.stageSource(file);
-      const create = async (duplicateOverride: boolean) => dataApi.createJob({ sourceFileId: staged.fileId, templateVersionId: chosen.versionId, categoryId, duplicateOverride });
+      const create = async (duplicateOverride: boolean) => dataApi.createJob({ sourceFileId: staged.fileId, templateVersionId: chosen.versionId, categoryId, duplicateOverride, projectRelations });
       try {
         const job = await create(false);
         navigate(`/data/import-jobs/${job.id}`);
@@ -169,6 +172,7 @@ export function DataUploadPage() {
         <Form.Item label="归档分类" help="只用于目录归档，不限制模板字段或数据结构。">
           <Select allowClear value={categoryId} onChange={setCategoryId} placeholder="选择归档分类" options={categories.map((item) => ({ value: item.id, label: item.name }))} />
         </Form.Item>
+        <Form.Item label="关联项目 / 阶段 / 任务" extra="关系保存到本次导入任务，工作表、数据行和源文件会继承。"><ProjectRelationPicker value={projectRelations} onChange={setProjectRelations} /></Form.Item>
       </Form>}
       accept=".xls,.xlsx,.csv"
       maxCount={1}

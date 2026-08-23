@@ -18,7 +18,7 @@ class FlywayMigrationIT {
     );
 
     @Test
-    void createsPgvectorExtensionAndPlatformSchemas() throws SQLException {
+    void createsSearchExtensionsAndPlatformSchemas() throws SQLException {
         var image = DockerImageName.parse("pgvector/pgvector:0.8.6-pg18")
                 .asCompatibleSubstituteFor("postgres");
 
@@ -36,10 +36,11 @@ class FlywayMigrationIT {
 
             try (var connection = postgres.createConnection("")) {
                 try (var statement = connection.prepareStatement(
-                        "select extname from pg_extension where extname = 'vector'"
+                        "select count(*) from pg_extension where extname in ('vector', 'pg_trgm')"
                 )) {
                     try (var resultSet = statement.executeQuery()) {
                         assertThat(resultSet.next()).isTrue();
+                        assertThat(resultSet.getInt(1)).isEqualTo(2);
                     }
                 }
 
@@ -203,6 +204,28 @@ class FlywayMigrationIT {
                         assertThat(resultSet.getInt("character_maximum_length"))
                                 .isEqualTo(256);
                     }
+                }
+
+                try (var statement = connection.prepareStatement("""
+                        select count(*) from information_schema.columns
+                        where (table_schema = 'kb' and table_name = 'document_version'
+                               and column_name in ('ocr_mode', 'allow_agent_fallback', 'effective_ocr',
+                                                   'parser_mode', 'parser_metadata_jsonb'))
+                           or (table_schema = 'kb' and table_name = 'document_chunk'
+                               and column_name in ('chunk_role', 'heading_path_jsonb', 'source_anchors_jsonb',
+                                                   'relations_jsonb', 'model_token_length'))
+                        """); var resultSet = statement.executeQuery()) {
+                    assertThat(resultSet.next()).isTrue();
+                    assertThat(resultSet.getInt(1)).isEqualTo(10);
+                }
+
+                try (var statement = connection.prepareStatement("""
+                        select count(*) from pg_indexes
+                        where schemaname = 'kb'
+                          and indexname in ('idx_kb_chunk_child_document', 'idx_kb_chunk_content_trgm')
+                        """); var resultSet = statement.executeQuery()) {
+                    assertThat(resultSet.next()).isTrue();
+                    assertThat(resultSet.getInt(1)).isEqualTo(2);
                 }
             }
         }

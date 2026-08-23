@@ -29,13 +29,13 @@ public class FileSearchController {
     @PostMapping("/files")
     public ApiResponse<FileSearchService.FileSearchResponse> search(@Valid @RequestBody Request request) {
         var actor = ActorContext.required();
-        return ResponseFactory.success(service.search(actor.organizationId(), new FileSearchService.SearchCommand(
+        return ResponseFactory.success(service.search(actor, new FileSearchService.SearchCommand(
                 request.query(), request.safeLimit(), request.scopeIds(), request.knowledgeCategoryIds(),
-                request.dataCategoryIds())), RequestIdHolder.currentOrUnknown());
+                request.dataCategoryIds(), request.projectId())), RequestIdHolder.currentOrUnknown());
     }
 
     public record Request(@NotBlank @Size(max = 1000) String query, int limit, List<UUID> scopeIds,
-                          List<UUID> knowledgeCategoryIds, List<UUID> dataCategoryIds) {
+                          List<UUID> knowledgeCategoryIds, List<UUID> dataCategoryIds, UUID projectId) {
         public int safeLimit() { return limit <= 0 ? 20 : Math.min(50, limit); }
     }
 }

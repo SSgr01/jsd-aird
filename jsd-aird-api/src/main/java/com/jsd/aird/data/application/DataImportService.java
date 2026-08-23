@@ -15,6 +15,9 @@ import java.util.UUID;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.jsd.aird.core.api.ProjectResourceFacade;
+import com.jsd.aird.core.api.ProjectResourceFacade.ProjectRelationTarget;
+import com.jsd.aird.core.api.ProjectResourceFacade.ResourceType;
 import com.jsd.aird.data.application.port.DataRepository;
 import com.jsd.aird.ops.application.port.AuditLogFacade;
 import com.jsd.aird.ops.application.port.FileObjectRepository;
@@ -40,6 +43,7 @@ public class DataImportService {
     private final DataCategoryService categories;
     private final StructuredDataExtractor structuredExtractor;
     private final ImportCompatibilityEvaluator compatibilityEvaluator;
+    private final ProjectResourceFacade projectResources;
 
     @Autowired
     public DataImportService(
@@ -49,7 +53,8 @@ public class DataImportService {
             ObjectMapper objectMapper,
             AuditLogFacade auditLog,
             OpsAsyncFacade opsAsync,
-            DataCategoryService categories
+            DataCategoryService categories,
+            ProjectResourceFacade projectResources
     ) {
         this.repository = repository;
         this.files = files;
@@ -58,6 +63,7 @@ public class DataImportService {
         this.auditLog = auditLog;
         this.opsAsync = opsAsync;
         this.categories = categories;
+        this.projectResources = projectResources;
         this.structuredExtractor = new StructuredDataExtractor(objectMapper);
         this.compatibilityEvaluator = new ImportCompatibilityEvaluator(objectMapper);
     }
@@ -68,9 +74,21 @@ public class DataImportService {
             TemplateDataImportFacade templates,
             ObjectMapper objectMapper,
             AuditLogFacade auditLog,
+            OpsAsyncFacade opsAsync,
+            DataCategoryService categories
+    ) {
+        this(repository, files, templates, objectMapper, auditLog, opsAsync, categories, null);
+    }
+
+    public DataImportService(
+            DataRepository repository,
+            FileObjectRepository files,
+            TemplateDataImportFacade templates,
+            ObjectMapper objectMapper,
+            AuditLogFacade auditLog,
             OpsAsyncFacade opsAsync
     ) {
-        this(repository, files, templates, objectMapper, auditLog, opsAsync, null);
+        this(repository, files, templates, objectMapper, auditLog, opsAsync, null, null);
     }
 
     @Transactional
@@ -99,6 +117,10 @@ public class DataImportService {
                 template.importContractVersion() > 0 ? template.importContractVersion() : null,
                 template.contractHash()));
         repository.enqueueParse(UUID.randomUUID(), actor.organizationId(), id);
+        if (projectResources != null) {
+            projectResources.replaceLinks(actor, ResourceType.DATA_IMPORT_JOB, id,
+                    command.projectRelations() == null ? List.of() : command.projectRelations());
+        }
         return get(id);
     }
 
@@ -121,10 +143,26 @@ public class DataImportService {
     }
 
     public PageResponse<DataRepository.SourceFile> sourceFiles(UUID categoryId, String status, String keyword,
-                                                               int page, int size) {
+                                                               UUID projectId, int page, int size) {
         var actor = ActorContext.required();
-        return repository.listSourceFiles(actor.organizationId(), categoryId, status, keyword,
+        var allowed = projectId == null || projectResources == null ? null
+                : projectResources.resourceIdsForProject(actor, ResourceType.DATA_IMPORT_JOB, projectId);
+        var result = repository.listSourceFiles(actor.organizationId(), categoryId, status, keyword, allowed,
                 Math.max(1, page), Math.min(100, Math.max(1, size)));
+        if (projectResources == null || result.items().isEmpty()) return result;
+        var links = projectResources.links(actor, ResourceType.DATA_IMPORT_JOB,
+                result.items().stream().map(DataRepository.SourceFile::importJobId).toList());
+        var items = result.items().stream().map(item -> new DataRepository.SourceFile(
+                item.importJobId(), item.fileObjectId(), item.originalName(), item.sourceFormat(),
+                item.templateVersionId(), item.categoryId(), item.categoryName(), item.status(), item.progress(),
+                item.createdAt(), item.updatedAt(), item.sheetCount(), item.recordCount(), item.fieldCount(),
+                links.getOrDefault(item.importJobId(), List.of()))).toList();
+        return new PageResponse<>(items, result.page(), result.size(), result.total(), result.totalPages());
+    }
+
+    public PageResponse<DataRepository.SourceFile> sourceFiles(UUID categoryId, String status, String keyword,
+                                                               int page, int size) {
+        return sourceFiles(categoryId, status, keyword, null, page, size);
     }
 
     @Transactional
@@ -1117,9 +1155,14 @@ public class DataImportService {
     }
 
     public record CreateCommand(UUID sourceFileId, UUID templateVersionId,
-                                UUID categoryId, boolean duplicateOverride) {
+                                UUID categoryId, boolean duplicateOverride,
+                                List<ProjectRelationTarget> projectRelations) {
+        public CreateCommand(UUID sourceFileId, UUID templateVersionId,
+                             UUID categoryId, boolean duplicateOverride) {
+            this(sourceFileId, templateVersionId, categoryId, duplicateOverride, List.of());
+        }
         public CreateCommand(UUID sourceFileId, UUID templateVersionId, boolean duplicateOverride) {
-            this(sourceFileId, templateVersionId, null, duplicateOverride);
+            this(sourceFileId, templateVersionId, null, duplicateOverride, List.of());
         }
     }
     public record FieldRequestCommand(String fieldId, String displayName, String valueType,

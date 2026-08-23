@@ -14,7 +14,8 @@ public interface ProjectStageMapper {
     String COLUMNS = "SELECT s.id,s.project_id projectId,p.project_code projectCode,p.name projectName," +
         "s.stage_code stageCode,s.name,s.order_no orderNo,s.status,s.owner,s.description,s.planned_start plannedStart," +
         "s.planned_end plannedEnd,s.actual_start actualStart,s.actual_end actualEnd," +
-        "mdm.project_stage_task_count(s.id) taskCount,mdm.project_stage_open_task_count(s.id) openTaskCount," +
+        "(SELECT count(*) FROM mdm.project_task t WHERE t.stage_id=s.id AND t.deleted=false) taskCount," +
+        "(SELECT count(*) FROM mdm.project_task t WHERE t.stage_id=s.id AND t.deleted=false AND t.status!='COMPLETED') openTaskCount," +
         "s.version,s.created_at createdAt,s.updated_at updatedAt FROM mdm.project_stage s " +
         "JOIN mdm.project p ON p.id=s.project_id ";
 

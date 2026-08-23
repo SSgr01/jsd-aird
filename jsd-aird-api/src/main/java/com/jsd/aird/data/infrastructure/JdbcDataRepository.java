@@ -111,6 +111,16 @@ public class JdbcDataRepository implements DataRepository {
     @Override
     public PageResponse<SourceFile> listSourceFiles(UUID organizationId, UUID categoryId, String status,
                                                      String keyword, int page, int size) {
+        return listSourceFiles(organizationId, categoryId, status, keyword, null, page, size);
+    }
+
+    @Override
+    public PageResponse<SourceFile> listSourceFiles(UUID organizationId, UUID categoryId, String status,
+                                                    String keyword, java.util.Set<UUID> allowedImportJobIds,
+                                                    int page, int size) {
+        if (allowedImportJobIds != null && allowedImportJobIds.isEmpty()) {
+            return new PageResponse<>(List.of(), page, size, 0, 0);
+        }
         var conditions = new ArrayList<String>();
         var parameters = new ArrayList<Object>();
         conditions.add("j.organization_id = ?");
@@ -126,6 +136,10 @@ public class JdbcDataRepository implements DataRepository {
         if (keyword != null && !keyword.isBlank()) {
             conditions.add("lower(j.source_file_name) LIKE lower(?)");
             parameters.add("%" + keyword.trim() + "%");
+        }
+        if (allowedImportJobIds != null) {
+            conditions.add("j.id IN (" + String.join(",", java.util.Collections.nCopies(allowedImportJobIds.size(), "?")) + ")");
+            parameters.addAll(allowedImportJobIds);
         }
         var where = String.join(" AND ", conditions);
         var total = jdbc.queryForObject("SELECT count(*) FROM data.import_job j WHERE " + where,

@@ -51,7 +51,9 @@ public class KnowledgeController {
     @RequestPart MultipartFile file,
             @RequestParam(required = false) String title,
             @RequestParam(required = false) String libraryScope,
-            @RequestParam(required = false) UUID categoryId
+            @RequestParam(required = false) UUID categoryId,
+            @RequestParam(defaultValue = "AUTO") String ocrMode,
+            @RequestParam(defaultValue = "false") boolean allowAgentFallback
     ) throws IOException {
         var staged = storage.stageFile(
                 file.getOriginalFilename(),
@@ -60,7 +62,7 @@ public class KnowledgeController {
                 file.getInputStream()
         );
         return success(governance.create(new KnowledgeGovernanceService.CreateCommand(staged.fileId(), title,
-                libraryScope, categoryId, List.of(), null, null, null)));
+                libraryScope, categoryId, List.of(), null, null, null, ocrMode, allowAgentFallback)));
     }
 
     @GetMapping("/documents")
@@ -72,10 +74,12 @@ public class KnowledgeController {
             @RequestParam(required = false) UUID categoryId,
             @RequestParam(required = false) String lifecycleStatus,
             @RequestParam(required = false) String reviewStatus,
+            @RequestParam(required = false) UUID projectId,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size
     ) {
-        return success(service.list(keyword, status, aiStatus, scope, categoryId, lifecycleStatus, reviewStatus, page, size));
+        return success(service.list(keyword, status, aiStatus, scope, categoryId, lifecycleStatus, reviewStatus,
+                projectId, page, size));
     }
 
     @GetMapping("/categories")
@@ -139,7 +143,9 @@ public class KnowledgeController {
     @PostMapping("/documents/{id}/versions")
     public ApiResponse<KnowledgeService.DocumentView> createVersion(
             @PathVariable UUID id,
-            @RequestPart MultipartFile file
+            @RequestPart MultipartFile file,
+            @RequestParam(defaultValue = "AUTO") String ocrMode,
+            @RequestParam(defaultValue = "false") boolean allowAgentFallback
     ) throws IOException {
         var staged = storage.stageFile(
                 file.getOriginalFilename(),
@@ -147,7 +153,8 @@ public class KnowledgeController {
                 "KNOWLEDGE",
                 file.getInputStream()
         );
-        return success(service.createVersion(id, new KnowledgeService.CreateVersionCommand(staged.fileId())));
+        return success(service.createVersion(id, new KnowledgeService.CreateVersionCommand(
+                staged.fileId(), ocrMode, allowAgentFallback)));
     }
 
     @PostMapping("/documents/{id}/ai-grant")

@@ -14,6 +14,8 @@ import java.util.UUID;
 
 import com.jsd.aird.kb.application.port.KnowledgeGovernanceRepository;
 import com.jsd.aird.kb.application.port.KnowledgeRepository;
+import com.jsd.aird.kb.domain.LexicalAnalyzer;
+import com.jsd.aird.kb.domain.TermAnalyzer;
 import org.junit.jupiter.api.Test;
 
 class KnowledgeFileSearchServiceTest {
@@ -31,14 +33,14 @@ class KnowledgeFileSearchServiceTest {
                 "已发布标题", "coa.xlsx", null, "Sheet1", "批号 LOT-1", 2.0);
         var second = new KnowledgeRepository.SearchRow(UUID.randomUUID(), documentId, versionId,
                 "已发布标题", "coa.xlsx", null, "Sheet1", "固含量 42%", 1.5);
-        when(documents.bm25Search(any(), any(), anyBoolean(), any(), any(), anyInt()))
+        when(documents.bm25Search(any(), any(), anyBoolean(), any(), any(), any(), anyInt()))
                 .thenReturn(List.of(first, second));
-        when(documents.fullTextSearch(any(), any(), anyBoolean(), any(), any(), anyInt()))
+        when(documents.fullTextSearch(any(), any(), anyBoolean(), any(), any(), any(), anyInt()))
                 .thenReturn(List.of(second));
         when(documents.findVersion(organizationId, versionId)).thenReturn(Optional.of(
                 new KnowledgeRepository.VersionRow(versionId, documentId, 2, fileId, "coa.xlsx",
                         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 1024, "a".repeat(64),
-                        "READY", "poi", null, "PUBLISHED", 3)));
+                        "READY", "poi", null, "PUBLISHED", 3, "AUTO", false, null, "LOCAL", "{}")));
         when(documents.findDocument(organizationId, documentId)).thenReturn(Optional.of(
                 new KnowledgeRepository.DocumentRow(documentId, organizationId, "草稿标题", "READY",
                         "SAFE", "PENDING", 2, versionId, "coa.xlsx", "application/octet-stream", 1024,
@@ -50,7 +52,7 @@ class KnowledgeFileSearchServiceTest {
         when(governance.publicationTags(organizationId, publicationId)).thenReturn(List.of("COA", "放行"));
         when(documents.findChunkAnchor(any(), any())).thenReturn(Optional.empty());
 
-        var files = new KnowledgeFileSearchService(documents, governance)
+        var files = new KnowledgeFileSearchService(documents, governance, testAnalyzer())
                 .searchFiles(organizationId, "LOT-1", List.of(), List.of(), 20);
 
         assertThat(files).singleElement().satisfies(file -> {
@@ -59,5 +61,29 @@ class KnowledgeFileSearchServiceTest {
             assertThat(file.hits()).hasSize(2);
             assertThat(file.tags()).containsExactly("COA", "放行");
         });
+    }
+
+    private LexicalAnalyzer testAnalyzer() {
+        return new LexicalAnalyzer() {
+            @Override
+            public String version() {
+                return TermAnalyzer.VERSION;
+            }
+
+            @Override
+            public Analysis analyzeDocument(String text) {
+                return analyze(text);
+            }
+
+            @Override
+            public Analysis analyzeQuery(String text) {
+                return analyze(text);
+            }
+
+            private Analysis analyze(String text) {
+                var frequencies = TermAnalyzer.frequencies(text);
+                return new Analysis(frequencies, frequencies.values().stream().mapToInt(Integer::intValue).sum());
+            }
+        };
     }
 }

@@ -344,9 +344,7 @@ public class AssistantService {
         if (model != null && model.citations() != null) {
             for (var citation : model.citations()) {
                 var hit = known.get(citation.chunkId());
-                if (hit != null) citations.add(new Citation(hit.chunkId().toString(), hit.documentId().toString(),
-                        hit.versionId().toString(), hit.title(), hit.originalName(), hit.pageNo(), hit.section(),
-                        preview(hit.content(), 240), hit.score()));
+                if (hit != null) citations.add(fallbackCitation(hit));
                 else {
                     var dataHit = knownData.get(citation.chunkId());
                     if (dataHit != null) citations.add(dataCitation(dataHit));
@@ -366,13 +364,15 @@ public class AssistantService {
     private Citation fallbackCitation(KnowledgeSearchFacade.SearchHit hit) {
         return new Citation("KNOWLEDGE_CHUNK", hit.chunkId().toString(), hit.documentId().toString(), hit.versionId().toString(),
                 null, null, null, hit.title(), hit.originalName(), hit.pageNo(), hit.section(), preview(hit.content(), 240),
-                hit.retrievalScore(), hit.rrfScore(), hit.rerankScore(), hit.sourceLocator());
+                hit.retrievalScore(), hit.rrfScore(), hit.rerankScore(), hit.sourceLocator(), hit.anchor(),
+                hit.anchors(), hit.reviewNodeIds(), hit.sourceNodeKeys());
     }
 
     private Citation dataCitation(DataSourceFileSearchFacade.SourceFileHit hit) {
         return new Citation("DATA_SOURCE_FILE", hit.hitId().toString(), null, null, hit.fileObjectId().toString(),
                 hit.importJobId().toString(), hit.rowNumber(), hit.originalName(), hit.originalName(), null, hit.columnName(),
-                preview(hit.content(), 240), hit.score(), hit.score(), hit.score(), hit.sourceLocator());
+                preview(hit.content(), 240), hit.score(), hit.score(), hit.score(), hit.sourceLocator(), null,
+                List.of(), List.of(), List.of());
     }
 
     private List<Citation> citations(List<KnowledgeSearchFacade.SearchHit> hits, List<DataSourceFileSearchFacade.SourceFileHit> dataHits) {
@@ -640,11 +640,13 @@ public class AssistantService {
     public record Citation(String sourceType, String chunkId, String documentId, String versionId, String fileObjectId,
                            String importJobId, Integer rowNumber, String title, String originalName, Integer pageNo,
                            String section, String snippet, double retrievalScore, double rrfScore, double rerankScore,
-                           String sourceLocator) {
+                           String sourceLocator, com.fasterxml.jackson.databind.JsonNode anchor,
+                           List<com.fasterxml.jackson.databind.JsonNode> anchors, List<UUID> reviewNodeIds,
+                           List<UUID> sourceNodeKeys) {
         public Citation(String chunkId, String documentId, String versionId, String title, String originalName,
                         Integer pageNo, String section, String snippet, double score) {
             this("KNOWLEDGE_CHUNK", chunkId, documentId, versionId, null, null, null, title, originalName, pageNo,
-                    section, snippet, score, score, score, null);
+                    section, snippet, score, score, score, null, null, List.of(), List.of(), List.of());
         }
     }
     public record Usage(int inputTokens, int outputTokens, int totalTokens) { }

@@ -59,7 +59,9 @@ public interface KnowledgeGovernanceRepository {
                           String sha256, String normalizedStem, double similarity,
                           String lifecycleStatus, String reviewStatus) { }
     record ParseRunRow(UUID id, UUID documentId, UUID versionId, int runNo, String status,
-                       String errorMessage, Instant createdAt, JsonNode sourceDocument, int schemaVersion) { }
+                       String errorMessage, Instant createdAt, JsonNode sourceDocument, int schemaVersion,
+                       JsonNode diagnosticResult, String parserVersion, String provider, String providerTaskId,
+                       String requestedOcrMode, Boolean effectiveOcr, String parserMode) { }
     record SourceNodeView(UUID sourceNodeKey, int nodeNo, String nodeType, String rawText,
                           JsonNode sourceAnchor, JsonNode confidence) { }
     record ParseIssueView(UUID id, List<UUID> sourceNodeKeys, String code, String severity,

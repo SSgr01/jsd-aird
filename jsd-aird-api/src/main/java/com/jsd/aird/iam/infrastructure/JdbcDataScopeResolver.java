@@ -41,10 +41,19 @@ public class JdbcDataScopeResolver implements DataScopeResolver {
         return switch (scope) {
             case "SELF" -> self(resourceType, check);
             case "ASSIGNED" -> assigned(resourceType, check);
-            case "PROJECT" -> relationScope(resourceType, check, Set.copyOf(binding.targetIds()), "project_id", "NOT_IN_SELECTED_PROJECT");
+            case "PROJECT" -> "PROJECT".equals(resourceType)
+                    ? selectedProject(check, Set.copyOf(binding.targetIds()))
+                    : relationScope(resourceType, check, Set.copyOf(binding.targetIds()), "project_id", "NOT_IN_SELECTED_PROJECT");
             case "CATEGORY" -> relationScope(resourceType, check, Set.copyOf(binding.targetIds()), "category_id", "CATEGORY_NOT_SELECTED");
             default -> ResolvedDataScope.deny(scope, "UNKNOWN_DATA_SCOPE");
         };
+    }
+
+    private ResolvedDataScope selectedProject(PermissionCheck check, Set<UUID> targetIds) {
+        if (targetIds.isEmpty()) return ResolvedDataScope.deny("PROJECT", "EMPTY_SCOPE");
+        return targetIds.contains(check.resourceId())
+                ? ResolvedDataScope.allow("PROJECT")
+                : ResolvedDataScope.deny("PROJECT", "NOT_IN_SELECTED_PROJECT");
     }
 
     private ResolvedDataScope self(String resourceType, PermissionCheck check) {

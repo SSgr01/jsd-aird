@@ -211,7 +211,9 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
                   + "'recognitionStatus', COALESCE(aj.result_jsonb ->> 'recognitionStatus', 'REVIEW_REQUIRED')"
                   + ") AS result_jsonb,";
         return jdbcTemplate.query("""
-                        SELECT tij.id, tij.source_file_id, fo.original_name AS source_file_name,
+                        SELECT tij.id, tij.source_file_id,
+                               COALESCE(original_source.original_name, inferred_source.original_name,
+                                        fo.original_name) AS source_file_name,
                                tij.format,
                                CASE
                                    WHEN aj.status = 'SUCCEEDED' THEN 'PARSED'
@@ -317,6 +319,21 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
                         FROM tpl.template_import_job tij
                         JOIN ops.async_job aj ON aj.id = tij.async_job_id
                         JOIN ops.file_object fo ON fo.id = tij.source_file_id
+                        LEFT JOIN ops.file_object original_source
+                               ON original_source.id = tij.original_source_file_id
+                              AND lower(original_source.original_name) !~ '-univer-snapshot\\.json$'
+                        LEFT JOIN LATERAL (
+                            SELECT candidate.original_name
+                            FROM tpl.template_import_job previous_job
+                            JOIN ops.file_object candidate
+                              ON candidate.id = COALESCE(previous_job.original_source_file_id,
+                                                         previous_job.source_file_id)
+                            WHERE previous_job.organization_id = tij.organization_id
+                              AND previous_job.generated_template_version_id = tij.generated_template_version_id
+                              AND lower(candidate.original_name) ~ '\\.(xlsx|xls|csv|docx|doc)$'
+                            ORDER BY previous_job.created_at ASC, previous_job.id ASC
+                            LIMIT 1
+                        ) inferred_source ON true
                         LEFT JOIN tpl.template_version tv ON tv.id = tij.generated_template_version_id
                         LEFT JOIN tpl.template_category tc ON tc.id = tij.category_id
                         LEFT JOIN LATERAL (

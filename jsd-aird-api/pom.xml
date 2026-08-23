@@ -29,6 +29,7 @@
         <poi.version>5.5.1</poi.version>
         <docx4j.version>11.5.14</docx4j.version>
         <pdfbox.version>3.0.5</pdfbox.version>
+        <lucene.version>10.5.1</lucene.version>
     </properties>
 
     <dependencyManagement>
@@ -131,6 +132,16 @@
             <groupId>org.apache.pdfbox</groupId>
             <artifactId>pdfbox</artifactId>
             <version>${pdfbox.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.lucene</groupId>
+            <artifactId>lucene-core</artifactId>
+            <version>${lucene.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.lucene</groupId>
+            <artifactId>lucene-analysis-smartcn</artifactId>
+            <version>${lucene.version}</version>
         </dependency>
 
         <dependency>

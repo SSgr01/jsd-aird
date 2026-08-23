@@ -5,6 +5,7 @@ import {
   DownloadOutlined,
   EyeOutlined,
   ReloadOutlined,
+  LinkOutlined,
 } from '@ant-design/icons';
 import {
   Alert,
@@ -25,6 +26,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 
 import { FilePreviewModal, downloadPreviewFile, type FilePreviewDescriptor } from '@/components/file-preview';
+import { usePermission } from '@/components/auth/usePermission';
+import { ProjectRelationPicker } from '@/components/project-relations/ProjectRelationPicker';
 import {
   DataFieldDataBrowser,
   DataFieldStructureBrowser,
@@ -43,6 +46,7 @@ import {
   type DataPreview,
   type DataWorkbookSnapshot,
 } from '@/services/data/data-api';
+import { projectResourceApi, type ProjectRelationTarget, type RelatedProjectView } from '@/services/project/project-resource-api';
 
 type PanelTab = 'data' | 'structure' | 'mapping';
 
@@ -78,6 +82,12 @@ export function DataImportJobPage() {
   const [anchorRange, setAnchorRange] = useState('');
   const [anchorReason, setAnchorReason] = useState('');
   const [categoryName, setCategoryName] = useState<string>();
+  const [relatedProjects, setRelatedProjects] = useState<RelatedProjectView[]>([]);
+  const [projectRelations, setProjectRelations] = useState<ProjectRelationTarget[]>([]);
+  const [relationOpen, setRelationOpen] = useState(false);
+  const canUpdate = usePermission('data.update');
+  const canAssign = usePermission('project.assign');
+  const canCreate = usePermission('data.create');
 
   const load = useCallback(async (options: { silent?: boolean; preserveSnapshot?: boolean; skipWorkbook?: boolean } = {}) => {
     if (!options.silent) setLoading(true);
@@ -88,6 +98,10 @@ export function DataImportJobPage() {
         ? undefined
         : await dataApi.getImportWorkbookSnapshot(id).catch(() => undefined);
       setPreview(nextPreview);
+      void projectResourceApi.links('DATA_IMPORT_JOB', id).then((relations) => {
+        setRelatedProjects(relations);
+        setProjectRelations(relations.map((item) => ({ projectId: item.projectId, stageId: item.stageId, taskId: item.taskId })));
+      }).catch(() => { setRelatedProjects([]); setProjectRelations([]); });
       if (nextWorkbook) {
         setWorkbook((current) => options.preserveSnapshot && current
           ? { ...nextWorkbook, snapshot: current.snapshot }
@@ -277,6 +291,15 @@ export function DataImportJobPage() {
   };
 
   const compatibility = preview.job.compatibilityStatus || 'LEGACY';
+  const saveProjectRelations = async () => {
+    setSaving(true);
+    try {
+      const relations = await projectResourceApi.replaceLinks('DATA_IMPORT_JOB', id,
+        projectRelations.filter((item) => item.projectId));
+      setRelatedProjects(relations); setRelationOpen(false); void message.success('关联项目已保存');
+    } catch (error) { void message.error(error instanceof Error ? error.message : '关联项目保存失败'); }
+    finally { setSaving(false); }
+  };
   const meta = (
     <Space wrap size={8}>
       {categoryName ? <Tag color="blue">归档分类：{categoryName}</Tag> : null}
@@ -287,6 +310,7 @@ export function DataImportJobPage() {
         {compatibilityLabels[compatibility] || '需要确认'}
       </Tag>
       <Typography.Text type="secondary">进度 {preview.job.progress}%</Typography.Text>
+      {relatedProjects.map((relation) => <Tag color="blue" key={`${relation.projectId}-${relation.stageId || ''}-${relation.taskId || ''}`}>{relation.projectName}{relation.stageName ? ` / ${relation.stageName}` : ''}{relation.taskName ? ` / ${relation.taskName}` : ''}</Tag>)}
     </Space>
   );
 
@@ -294,13 +318,14 @@ export function DataImportJobPage() {
     <DataWorkbenchShell
       breadcrumb="数据中心 / 导入确认"
       title={preview.job.sourceFileName}
-      leading={<Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate('/data/upload')}>返回上传</Button>}
+      leading={<Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate(canCreate ? '/data/upload' : '/data/view')}>{canCreate ? '返回上传' : '返回数据查看'}</Button>}
       meta={meta}
       actions={<>
         <Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button>
         <Button icon={<EyeOutlined />} onClick={() => setPreviewFile(sourceFile)}>预览原文件</Button>
         <Button icon={<DownloadOutlined />} onClick={() => void downloadPreviewFile(sourceFile)}>下载原文件</Button>
-        {preview.job.status !== 'COMPLETED' ? <Button
+        {canAssign && canUpdate ? <Button icon={<LinkOutlined />} onClick={() => setRelationOpen(true)}>关联项目</Button> : null}
+        {canUpdate && preview.job.status !== 'COMPLETED' ? <Button
           type="primary"
           icon={<CheckOutlined />}
           disabled={blockers.length > 0 || preview.job.status !== 'WAITING_CONFIRM' || ['INCOMPATIBLE', 'REVIEW_REQUIRED'].includes(compatibility)}
@@ -313,7 +338,7 @@ export function DataImportJobPage() {
         ref={editorRef}
         workbook={workbook}
         loading={!workbook && processing}
-        editable={Boolean(workbook?.editable && workbook.fields.some((field) => field.editable) && !savingCell)}
+        editable={Boolean(canUpdate && workbook?.editable && workbook.fields.some((field) => field.editable) && !savingCell)}
         onSelectionChange={handleSelection}
         onCellChange={(change) => void handleCellChange(change)}
       />}
@@ -335,7 +360,7 @@ export function DataImportJobPage() {
             selectedCell={selectedCell}
             headerExtra={<Space size={8}>
               {savingCell ? <Tag color="processing">正在保存</Tag> : null}
-              {preview.job.status === 'WAITING_MAPPING' ? <Button
+              {canUpdate && preview.job.status === 'WAITING_MAPPING' ? <Button
                 size="small"
                 type="primary"
                 loading={saving}
@@ -350,7 +375,7 @@ export function DataImportJobPage() {
               {!field.excluded && field.valueStatus !== 'VALID' && field.editable && field.sheetId && field.address ? (
                 <Button size="small" onClick={() => selectField(field)}>定位并修正</Button>
               ) : null}
-              {field.recordId ? <Button size="small" danger={!field.excluded} onClick={() => toggleExclusion(field)}>{field.excluded ? '恢复记录' : '排除记录'}</Button> : null}
+              {canUpdate && field.recordId ? <Button size="small" danger={!field.excluded} onClick={() => toggleExclusion(field)}>{field.excluded ? '恢复记录' : '排除记录'}</Button> : null}
             </Space>}
             renderFieldMeta={(field) => <Space wrap size={4}><Tag>{fieldTypeLabel(field.valueType)}</Tag>{field.required ? <Tag color="orange">必填</Tag> : null}{field.identity ? <Tag color="blue">记录标识</Tag> : null}</Space>}
           />
@@ -366,6 +391,7 @@ export function DataImportJobPage() {
           <MappingPanel
             preview={preview}
             saving={saving}
+            readOnly={!canUpdate}
             onUpdateMapping={updateMapping}
             onSaveMappings={() => void saveMappings()}
             onUpdateSheet={updateSheet}
@@ -386,6 +412,7 @@ export function DataImportJobPage() {
       ) : undefined}
     >
       <FilePreviewModal open={Boolean(previewFile)} file={previewFile} onClose={() => setPreviewFile(undefined)} />
+      <Modal open={relationOpen} title="维护数据任务关联项目" width={760} okText="保存" confirmLoading={saving} onCancel={() => setRelationOpen(false)} onOk={() => void saveProjectRelations()}><ProjectRelationPicker value={projectRelations} onChange={setProjectRelations} /></Modal>
       <Modal open={Boolean(componentAnchor)} title="调整本次导入的数据区域" okText="保存并重新读取" cancelText="取消" confirmLoading={saving} onOk={() => void saveComponentAnchor()} onCancel={() => setComponentAnchor(undefined)}>
         <Space direction="vertical" style={{ width: '100%' }}>
           <Alert type="info" showIcon message="该位置只作用于本次导入，不修改已发布模板。" />
@@ -398,9 +425,10 @@ export function DataImportJobPage() {
   );
 }
 
-function MappingPanel({ preview, saving, onUpdateMapping, onSaveMappings, onUpdateSheet, onSaveSheets, onReExtract, onLocateComponent, onFocus }: {
+function MappingPanel({ preview, saving, readOnly, onUpdateMapping, onSaveMappings, onUpdateSheet, onSaveSheets, onReExtract, onLocateComponent, onFocus }: {
   preview: DataPreview;
   saving: boolean;
+  readOnly: boolean;
   onUpdateMapping: (index: number, patch: Partial<DataMapping>) => void;
   onSaveMappings: () => void;
   onUpdateSheet: (sheetId: string, patch: Partial<DataPreview['sheets'][number]>) => void;
@@ -413,11 +441,12 @@ function MappingPanel({ preview, saving, onUpdateMapping, onSaveMappings, onUpda
   const templateFields = preview.templateContract?.fields || [];
   return <div className="data-panel-body">
     <WorkbenchPanelHeader title="字段对应关系" description="仅在系统无法确定时需要人工选择" />
-    {pending.length ? <section className="data-panel-section"><Alert type="warning" showIcon message={`还有 ${pending.length} 个字段需要确认`} />{pending.map(({ item, index }) => <div className="data-mapping-card" key={`${item.sheetId}-${item.sourceColumn}`}><strong>{item.sourceHeader || `位置 ${item.sourceColumn}`}</strong><Select value={item.action} options={actionOptions} onChange={(value) => onUpdateMapping(index, { action: value })} /><Select showSearch optionFilterProp="label" placeholder="选择对应字段" value={item.fieldCode} disabled={item.action !== 'MAP'} options={templateFields.map((field) => ({ value: field.fieldCode, label: `${field.displayName}${field.required ? ' · 必填' : ''}` }))} onChange={(value) => { const field = templateFields.find((candidate) => candidate.fieldCode === value); onUpdateMapping(index, { fieldCode: value, fieldName: field?.displayName, valueType: field?.dataType, standardUnit: field?.defaultUnit, detail: { ...(item.detail || {}), dataPath: field?.dataPath, identity: field?.identity, required: field?.required } }); }} /></div>)}<Button type="primary" block loading={saving} onClick={onSaveMappings}>保存对应关系并校验</Button></section> : preview.job.status === 'WAITING_MAPPING' ? <section className="data-panel-section"><Alert type="info" showIcon message={`系统已自动对应 ${preview.mappings.length} 个字段`} /><Button type="primary" block loading={saving} onClick={onSaveMappings}>确认自动对应并校验</Button></section> : <Alert type="success" showIcon message="字段对应关系已确认" />}
-    <WorkbenchPanelHeader title="工作表与数据范围" description="一般无需调整；文件结构变化时可重新读取" extra={<Button size="small" onClick={onReExtract}>重新读取</Button>} />
-    <div className="data-panel-section">{preview.sheets.map((sheet) => <article className="data-sheet-card" key={sheet.sheetId}><div className="data-sheet-card-title"><Checkbox checked={sheet.selected} onChange={(event) => onUpdateSheet(sheet.sheetId, { selected: event.target.checked })}>{sheet.sheetName}</Checkbox><Tag>{sheet.selected ? '使用' : '忽略'}</Tag></div><div className="data-sheet-fields"><label>表头行<InputNumber min={1} value={sheet.headerRows[0]} onChange={(value) => onUpdateSheet(sheet.sheetId, { headerRows: value ? [value] : [] })} /></label><label>数据开始<InputNumber min={1} value={sheet.dataStartRow} onChange={(value) => onUpdateSheet(sheet.sheetId, { dataStartRow: value ?? undefined })} /></label><label>数据结束<InputNumber min={sheet.dataStartRow || 1} value={sheet.dataEndRow} onChange={(value) => onUpdateSheet(sheet.sheetId, { dataEndRow: value ?? undefined })} /></label></div></article>)}<Button type="primary" block loading={saving} onClick={onSaveSheets}>确认 Sheet 配置</Button></div>
+    {pending.length ? <section className="data-panel-section"><Alert type="warning" showIcon message={`还有 ${pending.length} 个字段需要确认`} />{pending.map(({ item, index }) => <div className="data-mapping-card" key={`${item.sheetId}-${item.sourceColumn}`}><strong>{item.sourceHeader || `位置 ${item.sourceColumn}`}</strong><Select disabled={readOnly} value={item.action} options={actionOptions} onChange={(value) => onUpdateMapping(index, { action: value })} /><Select showSearch optionFilterProp="label" placeholder="选择对应字段" value={item.fieldCode} disabled={readOnly || item.action !== 'MAP'} options={templateFields.map((field) => ({ value: field.fieldCode, label: `${field.displayName}${field.required ? ' · 必填' : ''}` }))} onChange={(value) => { const field = templateFields.find((candidate) => candidate.fieldCode === value); onUpdateMapping(index, { fieldCode: value, fieldName: field?.displayName, valueType: field?.dataType, standardUnit: field?.defaultUnit, detail: { ...(item.detail || {}), dataPath: field?.dataPath, identity: field?.identity, required: field?.required } }); }} /></div>)}{!readOnly && <Button type="primary" block loading={saving} onClick={onSaveMappings}>保存对应关系并校验</Button>}</section> : preview.job.status === 'WAITING_MAPPING' ? <section className="data-panel-section"><Alert type="info" showIcon message={`系统已自动对应 ${preview.mappings.length} 个字段`} />{!readOnly && <Button type="primary" block loading={saving} onClick={onSaveMappings}>确认自动对应并校验</Button>}</section> : <Alert type="success" showIcon message="字段对应关系已确认" />}
+    <WorkbenchPanelHeader title="工作表与数据范围" description="一般无需调整；文件结构变化时可重新读取" extra={!readOnly ? <Button size="small" onClick={onReExtract}>重新读取</Button> : undefined} />
+    <div className="data-panel-section">{preview.sheets.map((sheet) => <article className="data-sheet-card" key={sheet.sheetId}><div className="data-sheet-card-title"><Checkbox disabled={readOnly} checked={sheet.selected} onChange={(event) => onUpdateSheet(sheet.sheetId, { selected: event.target.checked })}>{sheet.sheetName}</Checkbox><Tag>{sheet.selected ? '使用' : '忽略'}</Tag></div><div className="data-sheet-fields"><label>表头行<InputNumber disabled={readOnly} min={1} value={sheet.headerRows[0]} onChange={(value) => onUpdateSheet(sheet.sheetId, { headerRows: value ? [value] : [] })} /></label><label>数据开始<InputNumber disabled={readOnly} min={1} value={sheet.dataStartRow} onChange={(value) => onUpdateSheet(sheet.sheetId, { dataStartRow: value ?? undefined })} /></label><label>数据结束<InputNumber disabled={readOnly} min={sheet.dataStartRow || 1} value={sheet.dataEndRow} onChange={(value) => onUpdateSheet(sheet.sheetId, { dataEndRow: value ?? undefined })} /></label></div></article>)}{!readOnly && <Button type="primary" block loading={saving} onClick={onSaveSheets}>确认 Sheet 配置</Button>}</div>
     {(preview.compatibilityReport?.componentMatches?.length || 0) > 0 ? <CompatibilityPanel
       preview={preview}
+      readOnly={readOnly}
       onLocateComponent={onLocateComponent}
       onFocus={onFocus}
     /> : null}
@@ -432,8 +461,9 @@ function WorkbenchNotice({ preview, processing }: { preview: DataPreview; proces
   return <Alert banner showIcon type="success" message="文件已读取，请确认字段对应关系和实际数据。" />;
 }
 
-function CompatibilityPanel({ preview, onLocateComponent, onFocus }: {
+function CompatibilityPanel({ preview, readOnly, onLocateComponent, onFocus }: {
   preview: DataPreview;
+  readOnly: boolean;
   onLocateComponent: (item: ComponentMatch) => void;
   onFocus: (sheetId: string, address: string) => void;
 }) {
@@ -470,7 +500,7 @@ function CompatibilityPanel({ preview, onLocateComponent, onFocus }: {
           <Typography.Text type="secondary">{compatibilityDetail(item, preview)}</Typography.Text>
           <Space>
             <Button size="small" disabled={!item.sheetId} onClick={() => item.sheetId && onFocus(item.sheetId, componentRange(preview, item))}>查看位置</Button>
-            <Button size="small" disabled={preview.job.status === 'COMPLETED'} onClick={() => onLocateComponent(item)}>调整位置</Button>
+            {!readOnly && <Button size="small" disabled={preview.job.status === 'COMPLETED'} onClick={() => onLocateComponent(item)}>调整位置</Button>}
           </Space>
         </article>)}
       </details>

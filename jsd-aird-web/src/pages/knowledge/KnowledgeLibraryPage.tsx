@@ -1,13 +1,15 @@
 import { DownloadOutlined, EyeOutlined, FileTextOutlined, SafetyCertificateOutlined, UploadOutlined } from '@ant-design/icons';
-import { App, Button, Form, Input, Select, Space, Typography } from 'antd';
+import { Alert, App, Button, Form, Input, Select, Space, Switch, Typography } from 'antd';
 import type { UploadFile } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { downloadPreviewFile } from '@/components/file-preview';
 import { UploadWorkspace, type UploadWorkspaceRecord } from '@/components/upload-workspace';
+import { ProjectRelationPicker } from '@/components/project-relations/ProjectRelationPicker';
 import { stageFile } from '@/services/files';
-import { knowledgeApi, type KnowledgeCategory, type KnowledgeDocument, type UploadPreflight } from '@/services/knowledge';
+import { knowledgeApi, type KnowledgeCategory, type KnowledgeDocument, type OcrMode, type UploadPreflight } from '@/services/knowledge';
+import type { ProjectRelationTarget } from '@/services/project/project-resource-api';
 
 const statusLabels: Record<string, [string, string]> = {
   QUEUED: ['排队中', 'blue'], PROCESSING: ['解析中', 'processing'], READY: ['待校对', 'green'],
@@ -30,10 +32,13 @@ export function KnowledgeLibraryPage() {
   const [categoryId, setCategoryId] = useState<string>();
   const [tagsText, setTagsText] = useState('');
   const [sourceDescription, setSourceDescription] = useState('');
+  const [ocrMode, setOcrMode] = useState<OcrMode>('AUTO');
+  const [allowAgentFallback, setAllowAgentFallback] = useState(false);
   const [categories, setCategories] = useState<KnowledgeCategory[]>([]);
   const [page, setPage] = useState({ current: 1, pageSize: 8, total: 0 });
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [projectRelations, setProjectRelations] = useState<ProjectRelationTarget[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -76,7 +81,7 @@ export function KnowledgeLibraryPage() {
           const preflight = await knowledgeApi.preflight(staged.fileId, categoryId);
           if (preflight.decision === 'EXACT_DUPLICATE') { duplicates += 1; continue; }
           const resolution = preflight.decision === 'POSSIBLE_VERSION' ? await chooseVersionResolution(preflight) : { resolution: 'NEW_DOCUMENT' as const };
-          await knowledgeApi.createGoverned({ fileId: staged.fileId, title: file.name.replace(/\.[^.]+$/, ''), libraryScope, categoryId, tags, resolution: resolution.resolution, targetDocumentId: resolution.targetDocumentId, sourceInfo: { description: sourceDescription.trim(), originalName: file.name } });
+          await knowledgeApi.createGoverned({ fileId: staged.fileId, title: file.name.replace(/\.[^.]+$/, ''), libraryScope, categoryId, tags, resolution: resolution.resolution, targetDocumentId: resolution.targetDocumentId, sourceInfo: { description: sourceDescription.trim(), originalName: file.name }, ocrMode, allowAgentFallback, projectRelations });
           succeeded += 1;
         } catch { failed += 1; }
       }
@@ -125,6 +130,10 @@ export function KnowledgeLibraryPage() {
         <Form.Item label="保存分类" required help="同分类内文件名相似时会提示作为新版本上传"><Select allowClear value={categoryId} onChange={setCategoryId} placeholder="选择知识库分类" options={categories.map((item) => ({ value: item.id, label: item.name }))} /></Form.Item>
         <Form.Item label="标签"><Input value={tagsText} onChange={(event) => setTagsText(event.target.value)} placeholder="多个标签用逗号分隔" /></Form.Item>
         <Form.Item label="来源信息"><Input.TextArea rows={3} value={sourceDescription} onChange={(event) => setSourceDescription(event.target.value)} placeholder="资料来源、提供方或获取背景" /></Form.Item>
+        <Form.Item label="关联项目 / 阶段 / 任务" extra="批量上传时会应用到每个逻辑文档；新版本默认继承原文档关系。"><ProjectRelationPicker value={projectRelations} onChange={setProjectRelations} /></Form.Item>
+        <Form.Item label="PDF OCR 策略" help="AUTO 会抽样检测文本层；非 PDF 文件会忽略此选项"><Select value={ocrMode} onChange={setOcrMode} options={[{ value: 'AUTO', label: '自动判断（推荐）' }, { value: 'ON', label: '强制 OCR' }, { value: 'OFF', label: '关闭强制 OCR' }]} /></Form.Item>
+        <Form.Item label="允许 Agent 降级" extra="仅精准服务发生可降级故障时启用；版面和坐标质量较低，默认关闭"><Switch checked={allowAgentFallback} onChange={setAllowAgentFallback} /></Form.Item>
+        {allowAgentFallback && <Alert type="warning" showIcon message="Agent 降级结果必须重点审核，ZIP、格式和契约错误不会触发降级。" />}
         <Form.Item label="权限可见" required><Select defaultValue="研发部可见" options={[{ value: '研发部可见', label: '研发部可见' }, { value: '全员可见', label: '全员可见' }, { value: '项目组可见', label: '项目组可见' }]} /></Form.Item>
         <Form.Item label="AI 使用状态"><Select allowClear placeholder="全部状态" value={aiStatus} onChange={(value) => { setAiStatus(value); setPage((current) => ({ ...current, current: 1 })); }} options={Object.entries(aiLabels).map(([value, [label]]) => ({ value, label }))} /></Form.Item>
       </Form>}

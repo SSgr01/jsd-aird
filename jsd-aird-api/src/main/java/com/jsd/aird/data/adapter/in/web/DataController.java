@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.UUID;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.jsd.aird.core.api.ProjectResourceFacade.ProjectRelationTarget;
 import com.jsd.aird.data.application.DataImportService;
 import com.jsd.aird.data.application.DataWorkbookService;
 import com.jsd.aird.data.application.port.DataRepository;
@@ -53,7 +54,7 @@ public class DataController {
     public ApiResponse<DataRepository.Job> create(@Valid @RequestBody CreateRequest request) {
         return success(service.create(new DataImportService.CreateCommand(
                 request.sourceFileId(), request.templateVersionId(), request.categoryId(),
-                request.duplicateOverride())));
+                request.duplicateOverride(), targets(request.projectRelations()))));
     }
 
     @GetMapping("/import-jobs/{id}")
@@ -201,9 +202,10 @@ public class DataController {
             @RequestParam(required = false) UUID categoryId,
             @RequestParam(required = false) String status,
             @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) UUID projectId,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size) {
-        return success(service.sourceFiles(categoryId, status, keyword, page, size));
+        return success(service.sourceFiles(categoryId, status, keyword, projectId, page, size));
     }
 
     @GetMapping("/categories")
@@ -238,8 +240,16 @@ public class DataController {
 
     private <T> ApiResponse<T> success(T value) { return ResponseFactory.success(value, RequestIdHolder.currentOrUnknown()); }
 
+    private List<ProjectRelationTarget> targets(List<ProjectRelationRequest> values) {
+        if (values == null) return List.of();
+        return values.stream().map(value -> new ProjectRelationTarget(
+                value.projectId(), value.stageId(), value.taskId())).toList();
+    }
+
     public record CreateRequest(@NotNull UUID sourceFileId, @NotNull UUID templateVersionId,
-                                UUID categoryId, boolean duplicateOverride) {}
+                                UUID categoryId, boolean duplicateOverride,
+                                List<@Valid ProjectRelationRequest> projectRelations) {}
+    public record ProjectRelationRequest(@NotNull UUID projectId, UUID stageId, UUID taskId) {}
 
     public record CategoryRequest(@NotBlank String name, @Size(max = 240) String description) {}
     public record RenameCategoryRequest(@NotBlank String name, @Size(max = 240) String description) {}

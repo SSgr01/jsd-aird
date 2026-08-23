@@ -24,6 +24,8 @@ import com.jsd.aird.kb.application.port.KnowledgeGovernanceRepository;
 import com.jsd.aird.kb.application.port.KnowledgeRepository;
 import com.jsd.aird.kb.domain.DocumentParser;
 import com.jsd.aird.kb.domain.FileSafetyScanner;
+import com.jsd.aird.kb.domain.LexicalAnalyzer;
+import com.jsd.aird.kb.domain.TermAnalyzer;
 import com.jsd.aird.ops.application.port.AuditLogFacade;
 import com.jsd.aird.ops.application.port.FileStorageFacade;
 import com.jsd.aird.ops.application.port.OpsAsyncFacade;
@@ -47,7 +49,7 @@ class KnowledgeServiceIndexingTest {
                 mock(FileStorageFacade.class), mock(OpsAsyncFacade.class), mock(AuditLogFacade.class),
                 new ObjectMapper(), new StructuredDocumentCodec(new ObjectMapper()), List.of(),
                 mock(FileSafetyScanner.class), mockEmbeddingProvider(), List.of(), "embedding-model", 1024,
-                Duration.ofMinutes(15));
+                Duration.ofMinutes(15), new BlockAwareChunker(new ObjectMapper()), testAnalyzer());
 
         var result = service.search(new KnowledgeSearchFacade.SearchRequest(organizationId, "无索引词", false,
                 5, List.of(), List.of(), List.of()));
@@ -72,7 +74,7 @@ class KnowledgeServiceIndexingTest {
                 mock(FileStorageFacade.class), mock(OpsAsyncFacade.class), mock(AuditLogFacade.class),
                 new ObjectMapper(), new StructuredDocumentCodec(new ObjectMapper()), List.of(),
                 mock(FileSafetyScanner.class), mockEmbeddingProvider(), List.of(), "embedding-model", 1024,
-                Duration.ofMinutes(15));
+                Duration.ofMinutes(15), new BlockAwareChunker(new ObjectMapper()), testAnalyzer());
 
         var result = service.search(new KnowledgeSearchFacade.SearchRequest(organizationId, "索引异常", false,
                 5, List.of(), List.of(), List.of()));
@@ -83,7 +85,7 @@ class KnowledgeServiceIndexingTest {
     }
 
     @Test
-    void keepsAnOcrFieldValueNeighborInTheSearchWindow() {
+    void doesNotUseRetrievalTimeNeighborCompensation() {
         var repository = mock(KnowledgeRepository.class);
         var organizationId = UUID.randomUUID();
         var documentId = UUID.randomUUID();
@@ -92,27 +94,20 @@ class KnowledgeServiceIndexingTest {
                 "测试文档", "form.pdf", 1, "OCR-LINE", "TEST-TPL-丙烯酸树脂", 3.0, 16);
         var density = new KnowledgeRepository.SearchRow(UUID.randomUUID(), documentId, versionId,
                 "测试文档", "form.pdf", 1, "OCR-LINE", "密度", 2.0, 21);
-        var densityValue = new KnowledgeRepository.SearchRow(UUID.randomUUID(), documentId, versionId,
-                "测试文档", "form.pdf", 1, "OCR-LINE", "1.05", 0.0, 22);
         when(repository.bm25Search(any(), any(), anyBoolean(), any(), any(), anyInt()))
                 .thenReturn(List.of(sample, density));
-        when(repository.neighboringChunks(any(), eq(documentId), eq(versionId), eq(1), eq(21),
-                anyBoolean(), any(), any(), eq(2), eq(5)))
-                .thenReturn(List.of(density, densityValue));
-
         var service = new KnowledgeService(repository, mock(KnowledgeGovernanceRepository.class),
                 mock(FileStorageFacade.class), mock(OpsAsyncFacade.class), mock(AuditLogFacade.class),
                 new ObjectMapper(), new StructuredDocumentCodec(new ObjectMapper()), List.of(),
                 mock(FileSafetyScanner.class), mockEmbeddingProvider(), List.of(), "embedding-model", 1024,
-                Duration.ofMinutes(15));
+                Duration.ofMinutes(15), new BlockAwareChunker(new ObjectMapper()), testAnalyzer());
 
         var hits = service.search(organizationId, "TEST-TPL-丙烯酸树脂的密度", false, 2);
 
         assertThat(hits).extracting(KnowledgeSearchFacade.SearchHit::content)
                 .containsExactly("TEST-TPL-丙烯酸树脂", "密度");
         assertThat(service.search(organizationId, "密度", false, 3))
-                .extracting(KnowledgeSearchFacade.SearchHit::content)
-                .contains("1.05");
+                .extracting(KnowledgeSearchFacade.SearchHit::content).doesNotContain("1.05");
     }
 
     @Test
@@ -133,7 +128,8 @@ class KnowledgeServiceIndexingTest {
                 "人工确认文本", null, null, "paragraph-1", List.of(), null, null, 0.92)));
         var source = initialized.sourceNodes().getFirst();
         var parseRun = new KnowledgeGovernanceRepository.ParseRunRow(parseRunId, documentId, versionId,
-                1, "SUCCEEDED", null, Instant.now(), initialized.sourceDocument(), 1);
+                1, "SUCCEEDED", null, Instant.now(), initialized.sourceDocument(), 1,
+                objectMapper.createObjectNode(), "test-parser", "test", null, "AUTO", false, "LOCAL");
         var revision = new KnowledgeGovernanceRepository.ReviewRevisionView(reviewRevisionId, parseRunId,
                 1, 3, null, initialized.confirmedDocument(), List.of(), "BUILDING", null, Instant.now());
         var sourceNode = new KnowledgeGovernanceRepository.SourceNodeView(source.sourceNodeKey(), 0,
@@ -153,7 +149,7 @@ class KnowledgeServiceIndexingTest {
         var service = new KnowledgeService(repository, governance, mock(FileStorageFacade.class),
                 mock(OpsAsyncFacade.class), mock(AuditLogFacade.class), objectMapper, documents, List.of(),
                 mock(FileSafetyScanner.class), embeddingProvider, List.of(), "embedding-model", 1024,
-                Duration.ofMinutes(15));
+                Duration.ofMinutes(15), new BlockAwareChunker(objectMapper), testAnalyzer());
 
         var result = service.buildAndPublish(organizationId, actorId, documentId, versionId,
                 reviewRevisionId, 3);
@@ -162,8 +158,13 @@ class KnowledgeServiceIndexingTest {
         @SuppressWarnings("unchecked")
         var chunks = ArgumentCaptor.forClass((Class<List<KnowledgeRepository.ChunkWrite>>) (Class<?>) List.class);
         verify(repository).replaceChunks(eq(documentId), eq(versionId), eq(reviewRevisionId), chunks.capture());
-        assertThat(chunks.getValue()).singleElement().satisfies(chunk -> {
-            assertThat(chunk.content()).isEqualTo("人工确认文本");
+        assertThat(chunks.getValue()).hasSize(2);
+        assertThat(chunks.getValue()).extracting(KnowledgeRepository.ChunkWrite::chunkRole)
+                .containsExactly("PARENT", "CHILD");
+        var child = chunks.getValue().getLast();
+        assertThat(child.parentKey()).isEqualTo(chunks.getValue().getFirst().chunkKey());
+        assertThat(child.content()).contains("文档：测试文档", "人工确认文本");
+        assertThat(child).satisfies(chunk -> {
             assertThat(chunk.vector()).isNull();
             assertThat(chunk.terms()).isNotEmpty();
             assertThat(chunk.pageNo()).isNull();
@@ -177,5 +178,29 @@ class KnowledgeServiceIndexingTest {
     @SuppressWarnings("unchecked")
     private ObjectProvider<KnowledgeEmbeddingFacade> mockEmbeddingProvider() {
         return (ObjectProvider<KnowledgeEmbeddingFacade>) mock(ObjectProvider.class);
+    }
+
+    private LexicalAnalyzer testAnalyzer() {
+        return new LexicalAnalyzer() {
+            @Override
+            public String version() {
+                return TermAnalyzer.VERSION;
+            }
+
+            @Override
+            public Analysis analyzeDocument(String text) {
+                return analyze(text);
+            }
+
+            @Override
+            public Analysis analyzeQuery(String text) {
+                return analyze(text);
+            }
+
+            private Analysis analyze(String text) {
+                var frequencies = TermAnalyzer.frequencies(text);
+                return new Analysis(frequencies, frequencies.values().stream().mapToInt(Integer::intValue).sum());
+            }
+        };
     }
 }

@@ -1,6 +1,7 @@
 import type { ApiResponse, PageResponse } from '@/types/api';
 import { httpClient } from '@/services/http/client';
 import { fetchFileBlob } from '@/services/files';
+import type { ProjectRelationTarget, RelatedProjectView } from '@/services/project/project-resource-api';
 
 export interface DataTemplateOption { templateId: string; versionId: string; templateCode: string; name: string; category?: string; versionNo: number; format: 'XLSX' | 'DOCX' }
 export interface DataJob { id: string; sourceFileId: string; sourceSha256: string; sourceFileName: string; sourceFormat: string; templateVersionId: string; categoryId?: string; status: string; progress: number; currentStage?: string; parserVersion?: string; errorMessage?: string; createdAt: string; updatedAt: string; importContractVersion?: number; contractHash?: string; compatibilityStatus?: 'LEGACY' | 'EXACT' | 'COMPATIBLE' | 'REVIEW_REQUIRED' | 'INCOMPATIBLE' }
@@ -20,7 +21,7 @@ export interface LongTablePreview { dataset: TrainingDataset; rows: LongTableRow
 export interface TrainingDataset { id: string; importJobId?: string; templateVersionId: string; projectionVersion: string; name: string; status: string; schema: Record<string, unknown>; qualitySummary: Record<string, unknown>; sourceRecordIds: string[]; recordCount: number; eligibleRecordCount: number }
 export interface DataPreview { job: DataJob; sheets: DataSheet[]; mappings: DataMapping[]; rows: DataRow[]; issues: DataIssue[]; templateContract?: TemplateContract; projectionSummary?: ProjectionSummary; compatibilityReport?: { status?: string; componentMatches?: ComponentMatch[] }; componentOverrides?: ComponentOverride[] }
 export interface DataCategory { id: string; name: string; description?: string; sortOrder: number; sourceCount: number }
-export interface DataSourceFile { importJobId: string; fileObjectId: string; originalName: string; sourceFormat: string; templateVersionId: string; categoryId?: string; categoryName?: string; status: string; progress: number; createdAt: string; updatedAt: string; sheetCount: number; recordCount: number; fieldCount: number }
+export interface DataSourceFile { importJobId: string; fileObjectId: string; originalName: string; sourceFormat: string; templateVersionId: string; categoryId?: string; categoryName?: string; status: string; progress: number; createdAt: string; updatedAt: string; sheetCount: number; recordCount: number; fieldCount: number; relatedProjects?: RelatedProjectView[] }
 export interface DataWorkbookSheet { sheetId: string; sheetName: string; sheetOrder: number; selected: boolean; confirmationStatus: string }
 export interface DataWorkbookFieldGroup { groupId: string; name: string; fieldCount: number }
 export interface DataWorkbookRegion { regionId: string; name: string; structureType: string; sheetId?: string; sheetName?: string; range?: string; recordAxis?: string; fieldCount: number; recordCount: number; fieldGroups: DataWorkbookFieldGroup[] }
@@ -39,7 +40,7 @@ export const dataApi = {
     const response = await httpClient.post<ApiResponse<{ fileId: string; sha256: string; status: string }>>('/api/v1/files/staged?kind=DATA_SOURCE', body);
     return response.data.data;
   },
-  async createJob(input: { sourceFileId: string; templateVersionId: string; categoryId?: string; duplicateOverride?: boolean }) {
+  async createJob(input: { sourceFileId: string; templateVersionId: string; categoryId?: string; duplicateOverride?: boolean; projectRelations?: ProjectRelationTarget[] }) {
     const response = await httpClient.post<ApiResponse<DataJob>>('/api/v1/data/import-jobs', input); return response.data.data;
   },
   async getJob(id: string) { const response = await httpClient.get<ApiResponse<DataJob>>(`/api/v1/data/import-jobs/${id}`); return response.data.data; },
@@ -63,7 +64,7 @@ export const dataApi = {
   async reanchorComponent(id: string, componentId: string, input: { sheetId: string; sourceRange: string; reason: string }) { const response = await httpClient.put<ApiResponse<DataJob>>(`/api/v1/data/import-jobs/${id}/components/${encodeURIComponent(componentId)}/anchor`, input); return response.data.data; },
   async requestField(id: string, input: { fieldId?: string; displayName: string; valueType?: string; uiType?: string; groupCode?: string; description?: string }) { const response = await httpClient.post<ApiResponse<{ id: string; status: string }>>(`/api/v1/data/import-jobs/${id}/field-requests`, input); return response.data.data; },
   async commit(id: string) { const response = await httpClient.post<ApiResponse<DataJob>>(`/api/v1/data/import-jobs/${id}/commit`); return response.data.data; },
-  async listSourceFiles(params: { categoryId?: string; status?: string; keyword?: string; page?: number; size?: number } = {}) { const response = await httpClient.get<ApiResponse<PageResponse<DataSourceFile>>>('/api/v1/data/sources', { params }); return response.data.data; },
+  async listSourceFiles(params: { categoryId?: string; status?: string; keyword?: string; projectId?: string; page?: number; size?: number } = {}) { const response = await httpClient.get<ApiResponse<PageResponse<DataSourceFile>>>('/api/v1/data/sources', { params }); return response.data.data; },
   async listCategories() { const response = await httpClient.get<ApiResponse<DataCategory[]>>('/api/v1/data/categories'); return response.data.data; },
   async createCategory(input: { name: string; description?: string }) { const response = await httpClient.post<ApiResponse<DataCategory>>('/api/v1/data/categories', input); return response.data.data; },
   async renameCategory(id: string, input: { name: string; description?: string }) { const response = await httpClient.put<ApiResponse<DataCategory>>(`/api/v1/data/categories/${id}`, input); return response.data.data; },

@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.UUID;
 
 import com.jsd.aird.kb.application.KnowledgeGovernanceService;
+import com.jsd.aird.core.api.ProjectResourceFacade.ProjectRelationTarget;
 import com.jsd.aird.kb.application.port.KnowledgeGovernanceRepository;
 import com.jsd.aird.platform.web.RequestIdHolder;
 import com.jsd.aird.shared.api.ApiResponse;
@@ -41,7 +42,14 @@ public class KnowledgeGovernanceController {
     public ApiResponse<?> create(@Valid @RequestBody CreateRequest request) {
         return success(service.create(new KnowledgeGovernanceService.CreateCommand(request.fileId(), request.title(),
                 request.libraryScope(), request.categoryId(), request.tags(), request.resolution(),
-                request.targetDocumentId(), request.sourceInfo())));
+                request.targetDocumentId(), request.sourceInfo(), request.ocrMode(), request.allowAgentFallback(),
+                targets(request.projectRelations()))));
+    }
+
+    private List<ProjectRelationTarget> targets(List<ProjectRelationRequest> values) {
+        if (values == null) return null;
+        return values.stream().map(value -> new ProjectRelationTarget(
+                value.projectId(), value.stageId(), value.taskId())).toList();
     }
 
     @GetMapping("/review-queue")
@@ -92,7 +100,8 @@ public class KnowledgeGovernanceController {
     @PostMapping("/documents/{documentId}/versions/{versionId}/reparse")
     public ApiResponse<?> reparse(@PathVariable UUID documentId, @PathVariable UUID versionId,
                                   @Valid @RequestBody ReparseRequest request) {
-        return success(service.reparse(documentId, versionId, request.reviewRevisionId(), request.lockVersion()));
+        return success(service.reparse(documentId, versionId, request.reviewRevisionId(), request.lockVersion(),
+                request.ocrMode(), request.allowAgentFallback()));
     }
 
     @PostMapping("/documents/{documentId}/disable")
@@ -176,7 +185,10 @@ public class KnowledgeGovernanceController {
     public record CreateRequest(@NotNull UUID fileId, @Size(max = 260) String title,
                                 String libraryScope, @NotNull UUID categoryId, @Size(max = 50) List<String> tags,
                                 String resolution, UUID targetDocumentId,
-                                com.fasterxml.jackson.databind.JsonNode sourceInfo) { }
+                                com.fasterxml.jackson.databind.JsonNode sourceInfo, String ocrMode,
+                                Boolean allowAgentFallback,
+                                List<@Valid ProjectRelationRequest> projectRelations) { }
+    public record ProjectRelationRequest(@NotNull UUID projectId, UUID stageId, UUID taskId) { }
     public record ReviewRequest(UUID documentId, UUID versionId, @NotNull UUID reviewRevisionId,
                                 int lockVersion, UUID basePublicationId, @NotBlank String title,
                                 @NotBlank String libraryScope, @NotNull UUID categoryId,
@@ -186,7 +198,8 @@ public class KnowledgeGovernanceController {
                                 List<KnowledgeGovernanceRepository.IssueAction> issueActions) { }
     public record PublishedRevisionRequest(@NotNull UUID basePublicationId) { }
     public record RevisionRequest(@NotNull UUID reviewRevisionId, int lockVersion, UUID basePublicationId) { }
-    public record ReparseRequest(UUID reviewRevisionId, Integer lockVersion) { }
+    public record ReparseRequest(UUID reviewRevisionId, Integer lockVersion, String ocrMode,
+                                 Boolean allowAgentFallback) { }
     public record RejectRequest(@NotNull UUID reviewRevisionId, int lockVersion,
                                 @NotBlank @Size(max = 1000) String reason) { }
     public record TableReviewRequest(int lockVersion,

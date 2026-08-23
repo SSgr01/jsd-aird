@@ -3,10 +3,12 @@ package com.jsd.aird.data.application.port;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.jsd.aird.core.api.ProjectResourceFacade.RelatedProjectView;
 import com.jsd.aird.shared.api.PageResponse;
 
 public interface DataRepository {
@@ -22,6 +24,18 @@ public interface DataRepository {
 
     PageResponse<SourceFile> listSourceFiles(UUID organizationId, UUID categoryId, String status,
                                              String keyword, int page, int size);
+
+    default PageResponse<SourceFile> listSourceFiles(UUID organizationId, UUID categoryId, String status,
+                                                     String keyword, Set<UUID> allowedImportJobIds,
+                                                     int page, int size) {
+        if (allowedImportJobIds != null && allowedImportJobIds.isEmpty()) {
+            return new PageResponse<>(List.of(), Math.max(1, page), Math.max(1, size), 0, 0);
+        }
+        var result = listSourceFiles(organizationId, categoryId, status, keyword, page, size);
+        if (allowedImportJobIds == null) return result;
+        var items = result.items().stream().filter(item -> allowedImportJobIds.contains(item.importJobId())).toList();
+        return new PageResponse<>(items, result.page(), result.size(), items.size(), items.isEmpty() ? 0 : 1);
+    }
 
     int assignSourceCategory(UUID organizationId, UUID importJobId, UUID categoryId);
 
@@ -163,5 +177,14 @@ public interface DataRepository {
     record SourceFile(UUID importJobId, UUID fileObjectId, String originalName, String sourceFormat,
                       UUID templateVersionId, UUID categoryId, String categoryName, String status,
                       int progress, Instant createdAt, Instant updatedAt, int sheetCount,
-                      int recordCount, int fieldCount) {}
+                      int recordCount, int fieldCount, List<RelatedProjectView> relatedProjects) {
+        public SourceFile(UUID importJobId, UUID fileObjectId, String originalName, String sourceFormat,
+                          UUID templateVersionId, UUID categoryId, String categoryName, String status,
+                          int progress, Instant createdAt, Instant updatedAt, int sheetCount,
+                          int recordCount, int fieldCount) {
+            this(importJobId, fileObjectId, originalName, sourceFormat, templateVersionId, categoryId,
+                    categoryName, status, progress, createdAt, updatedAt, sheetCount, recordCount, fieldCount,
+                    List.of());
+        }
+    }
 }

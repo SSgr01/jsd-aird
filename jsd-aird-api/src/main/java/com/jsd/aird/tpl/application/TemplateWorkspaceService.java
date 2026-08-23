@@ -280,6 +280,8 @@ public class TemplateWorkspaceService {
         var mapping = objectMapper.createArrayNode();
         var data = objectMapper.createObjectNode();
         JsonNode snapshot;
+        TemplateImportRepository.ImportJobView importedJob = null;
+        String templateName = command.name().trim();
         ObjectNode blankWordDocument = null;
         JsonNode blankWordStructure = null;
         UUID blankWordFileId = null;
@@ -299,12 +301,12 @@ public class TemplateWorkspaceService {
             snapshot = blankSnapshot(command.format(), versionId, command.name());
         }
         if (command.importJobId() != null) {
-            var importJob = importRepository.find(actor.organizationId(), command.importJobId())
+            importedJob = importRepository.find(actor.organizationId(), command.importJobId())
                     .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "导入任务不存在"));
-            if (!"PARSED".equals(importJob.status())) {
+            if (!"PARSED".equals(importedJob.status())) {
                 throw new ApiException(ApiErrorCode.BAD_REQUEST, "模板识别尚未完成，请稍后再试");
             }
-            var importedSnapshot = importJob.result().path("initialEditorSnapshot");
+            var importedSnapshot = importedJob.result().path("initialEditorSnapshot");
             if (!importedSnapshot.isObject()) {
                 throw new ApiException(ApiErrorCode.BAD_REQUEST, "识别结果缺少可编辑文档底稿");
             }
@@ -316,7 +318,8 @@ public class TemplateWorkspaceService {
             );
             schema = compiled.schema();
             mapping = compiled.mapping();
-            attachStructureFingerprints(mapping, importJob.structureSummary());
+            attachStructureFingerprints(mapping, importedJob.structureSummary());
+            templateName = normalizeImportedTemplateName(templateName, importedJob.sourceFileName());
         } else {
             var compiled = recognitionCompiler.compile(schema, List.of(), command.format());
             schema = compiled.schema();
@@ -369,7 +372,7 @@ public class TemplateWorkspaceService {
                 templateId,
                 actor.organizationId(),
                 code,
-                command.name().trim(),
+                templateName,
                 normalizedCategory,
                 command.format(),
                 actor.userId()
@@ -1491,6 +1494,17 @@ public class TemplateWorkspaceService {
 
     private String trimToNull(String value) {
         return StringUtils.hasText(value) ? value.trim() : null;
+    }
+
+    private String normalizeImportedTemplateName(String requestedName, String sourceFileName) {
+        if (!requestedName.toLowerCase(Locale.ROOT).matches("(?:xlsx|xls|csv|docx|doc)-univer-snapshot\\.json")) {
+            return requestedName;
+        }
+        if (sourceFileName == null || sourceFileName.isBlank()
+                || sourceFileName.toLowerCase(Locale.ROOT).matches("(?:xlsx|xls|csv|docx|doc)-univer-snapshot\\.json")) {
+            return requestedName;
+        }
+        return sourceFileName.replaceFirst("(?i)\\.(xlsx|xls|csv|docx|doc)$", "");
     }
 
     private String trimToEmpty(String value) {

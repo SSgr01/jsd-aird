@@ -1,12 +1,15 @@
 package com.jsd.aird.kb.infrastructure;
 
-import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -17,7 +20,9 @@ import java.util.UUID;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.kb.domain.DocumentParser;
+import com.jsd.aird.kb.domain.OcrMode;
 import com.jsd.aird.ops.application.port.FileStorageFacade;
+import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -27,12 +32,15 @@ import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
 
 /** MinerU precise PDF parser. The worker owns the asynchronous ingestion boundary. */
 @Component
 public final class MineruDocumentParser implements DocumentParser {
 
+    static final long MAX_DOWNLOAD_BYTES = 512L * 1024 * 1024;
+    private static final int MAX_REQUEST_ATTEMPTS = 3;
     private static final Logger log = LoggerFactory.getLogger(MineruDocumentParser.class);
 
     private final boolean enabled;
@@ -43,10 +51,11 @@ public final class MineruDocumentParser implements DocumentParser {
     private final Duration maxWait;
     private final boolean agentFallbackEnabled;
     private final RestClient client;
-    private final HttpClient signedUploadClient;
+    private final HttpClient transferClient;
     private final ObjectMapper mapper;
     private final FileStorageFacade storage;
     private final MineruDocumentAdapter adapter;
+    private final PdfOcrDecider ocrDecider = new PdfOcrDecider();
 
     public MineruDocumentParser(
             @Value("${app.ai.mineru.enabled:true}") boolean enabled,
@@ -74,7 +83,13 @@ public final class MineruDocumentParser implements DocumentParser {
         factory.setConnectTimeout(httpTimeout);
         factory.setReadTimeout(httpTimeout);
         this.client = RestClient.builder().requestFactory(factory).build();
-        this.signedUploadClient = HttpClient.newBuilder().connectTimeout(httpTimeout).build();
+        this.transferClient = HttpClient.newBuilder().connectTimeout(httpTimeout).build();
+    }
+
+    @PostConstruct
+    void logConfiguration() {
+        log.info("MinerU configuration: enabled={}, preciseConfigured={}, fallbackCapability={}, defaultOcrMode=AUTO",
+                enabled, StringUtils.hasText(token), agentFallbackEnabled);
     }
 
     @Override
@@ -91,7 +106,7 @@ public final class MineruDocumentParser implements DocumentParser {
 
     @Override
     public String unavailableReason() {
-        return "MinerU 未配置精准接口 Token，且未启用轻量降级解析";
+        return "MinerU 未配置精准接口 Token，且未启用 Agent 降级能力";
     }
 
     @Override
@@ -101,216 +116,351 @@ public final class MineruDocumentParser implements DocumentParser {
 
     @Override
     public ParsedDocument parse(InputStream source, String fileName, ParseContext context) {
-        if (!isConfigured()) throw new IllegalStateException(unavailableReason());
-        final byte[] bytes;
+        if (!enabled) throw MineruException.contract("MinerU 解析已禁用", null);
+        var policy = context == null ? OcrMode.AUTO : context.ocrMode();
+        var allowFallback = context != null && context.allowAgentFallback();
+        Path sourceFile = null;
         try {
-            bytes = source.readAllBytes();
+            sourceFile = Files.createTempFile("mineru-source-", ".pdf");
+            Files.copy(source, sourceFile, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            var decision = ocrDecider.decide(sourceFile, policy);
+            MineruException preciseFailure = null;
+            if (StringUtils.hasText(token)) {
+                try {
+                    return parsePrecise(sourceFile, fileName, context, policy, decision);
+                } catch (MineruException exception) {
+                    preciseFailure = exception;
+                    if (!(allowFallback && agentFallbackEnabled && exception.fallbackEligible())) throw exception;
+                    log.warn("MinerU precise provider unavailable; explicit Agent fallback enabled: fileName={} taskId={} reason={}",
+                            fileName, exception.taskId(), safeMessage(exception));
+                }
+            } else if (!(allowFallback && agentFallbackEnabled)) {
+                throw MineruException.contract("MinerU 精准接口 Token 未配置，当前版本也未允许 Agent 降级", null);
+            }
+            if (allowFallback && agentFallbackEnabled) {
+                try {
+                    return parseAgent(sourceFile, fileName, context, policy, decision, preciseFailure);
+                } catch (MineruException fallbackFailure) {
+                    if (preciseFailure != null) fallbackFailure.addSuppressed(preciseFailure);
+                    throw fallbackFailure;
+                }
+            }
+            throw preciseFailure == null ? MineruException.contract("MinerU 精准解析不可用", null) : preciseFailure;
         } catch (IOException exception) {
-            throw new IllegalStateException("PDF 文件读取失败", exception);
+            throw new MineruException("PDF 临时文件读取失败", null, "FILE_IO", null,
+                    false, false, exception);
+        } finally {
+            deleteQuietly(sourceFile);
         }
-        Exception preciseFailure = null;
-        if (StringUtils.hasText(token)) {
-            try {
-                return parsePrecise(bytes, fileName, context);
-            } catch (Exception exception) {
-                preciseFailure = exception;
-                log.warn("MinerU 精准解析失败，将尝试轻量降级：fileName={} reason={}", fileName, safeMessage(exception));
-            }
-        }
-        if (agentFallbackEnabled) {
-            try {
-                return parseAgent(bytes, fileName, context);
-            } catch (Exception fallbackFailure) {
-                if (preciseFailure != null) fallbackFailure.addSuppressed(preciseFailure);
-                throw new IllegalStateException("MinerU 解析失败：精准接口和轻量降级均失败", fallbackFailure);
-            }
-        }
-        throw new IllegalStateException("MinerU 精准解析失败", preciseFailure);
     }
 
-    private ParsedDocument parsePrecise(byte[] bytes, String fileName, ParseContext context) {
+    private ParsedDocument parsePrecise(Path sourceFile, String fileName, ParseContext context,
+                                        OcrMode requestedMode, PdfOcrDecider.Decision decision) {
         var request = new LinkedHashMap<String, Object>();
-        request.put("files", List.of(Map.of("name", fileName == null ? "document.pdf" : fileName,
-                "data_id", "jsd-aird-" + UUID.randomUUID())));
+        request.put("files", List.of(Map.of(
+                "name", safeFileName(fileName),
+                "data_id", "jsd-aird-" + UUID.randomUUID(),
+                "is_ocr", decision.useOcr())));
         request.put("model_version", model);
         request.put("language", "ch");
         request.put("enable_formula", true);
         request.put("enable_table", true);
-        request.put("is_ocr", false);
-        var submitted = post("/api/v4/file-urls/batch", request, true);
-        ensureOk(submitted, "MinerU 精准接口提交失败");
+        var submitted = withRetry(() -> {
+            var response = post("/api/v4/file-urls/batch", request, true, null);
+            ensureOk(response, "MinerU 精准接口提交失败", null);
+            return response;
+        });
         var data = submitted.path("data");
         var batchId = data.path("batch_id").asText(null);
-        var uploadUrl = data.path("file_urls").isArray() && data.path("file_urls").size() > 0
+        var uploadUrl = data.path("file_urls").isArray() && !data.path("file_urls").isEmpty()
                 ? data.path("file_urls").get(0).asText(null) : null;
         if (!StringUtils.hasText(batchId) || !StringUtils.hasText(uploadUrl)) {
-            throw new IllegalStateException("MinerU 精准接口未返回上传地址");
+            throw MineruException.contract("MinerU 精准接口未返回上传地址", batchId);
         }
-        upload(uploadUrl, bytes, fileName);
+        withRetry(() -> { upload(uploadUrl, sourceFile, batchId); return null; });
         var result = pollPrecise(batchId);
         var zipUrl = result.path("full_zip_url").asText(null);
-        if (!StringUtils.hasText(zipUrl)) throw new IllegalStateException("MinerU 未返回结果 ZIP 地址");
-        var zip = download(zipUrl);
-        var adapted = adapter.parsePrecise(zip, fileName);
-        var metadata = new LinkedHashMap<>(adapted.metadata());
-        metadata.put("taskId", batchId);
-        metadata.put("modelVersion", model);
-        metadata.put("mode", "PRECISION");
-        var resultFileId = persistResult(context, fileName, ".mineru.zip", "application/zip", "KB_MINERU_RESULT", zip);
-        if (resultFileId != null) metadata.put("resultFileId", resultFileId.toString());
-        return new ParsedDocument(adapted.blocks(), "mineru-precision-v1", batchId, metadata, List.of());
+        if (!StringUtils.hasText(zipUrl)) throw MineruException.contract("MinerU 未返回结果 ZIP 地址", batchId);
+        Path resultFile = null;
+        try {
+            resultFile = Files.createTempFile("mineru-result-", ".zip");
+            var target = resultFile;
+            withRetry(() -> { download(zipUrl, target, batchId); return null; });
+            var resultFileId = persistResult(context, fileName, ".mineru.zip", "application/zip",
+                    "KB_MINERU_RESULT", resultFile);
+            var adapted = adapter.parsePrecise(resultFile, fileName, resultFileId);
+            var metadata = baseMetadata(adapted.metadata(), requestedMode, decision);
+            metadata.put("taskId", batchId);
+            metadata.put("modelVersion", model);
+            metadata.put("mode", "PRECISE");
+            if (resultFileId != null) metadata.put("resultFileId", resultFileId.toString());
+            return new ParsedDocument(adapted.blocks(), "mineru-precision-v2", batchId, metadata, List.of());
+        } catch (IOException exception) {
+            throw MineruException.adapter("MinerU 结果临时文件处理失败", exception);
+        } finally {
+            deleteQuietly(resultFile);
+        }
     }
 
-    private ParsedDocument parseAgent(byte[] bytes, String fileName, ParseContext context) {
+    private ParsedDocument parseAgent(Path sourceFile, String fileName, ParseContext context,
+                                      OcrMode requestedMode, PdfOcrDecider.Decision decision,
+                                      MineruException preciseFailure) {
         var request = new LinkedHashMap<String, Object>();
-        request.put("file_name", fileName == null ? "document.pdf" : fileName);
+        request.put("file_name", safeFileName(fileName));
         request.put("language", "ch");
         request.put("enable_table", true);
         request.put("enable_formula", true);
-        request.put("is_ocr", false);
-        var submitted = post("/api/v1/agent/parse/file", request, false);
-        ensureOk(submitted, "MinerU 轻量解析提交失败");
+        request.put("is_ocr", decision.useOcr());
+        var submitted = withRetry(() -> {
+            var response = post("/api/v1/agent/parse/file", request, false, null);
+            ensureOk(response, "MinerU Agent 提交失败", null);
+            return response;
+        });
         var data = submitted.path("data");
         var taskId = data.path("task_id").asText(null);
         var uploadUrl = data.path("file_url").asText(null);
         if (!StringUtils.hasText(taskId) || !StringUtils.hasText(uploadUrl)) {
-            throw new IllegalStateException("MinerU 轻量解析未返回上传地址");
+            throw MineruException.contract("MinerU Agent 未返回上传地址", taskId);
         }
-        upload(uploadUrl, bytes, fileName);
+        withRetry(() -> { upload(uploadUrl, sourceFile, taskId); return null; });
         var result = pollAgent(taskId);
         var markdownUrl = result.path("markdown_url").asText(null);
-        if (!StringUtils.hasText(markdownUrl)) throw new IllegalStateException("MinerU 轻量解析未返回 Markdown");
-        var markdown = new String(download(markdownUrl), java.nio.charset.StandardCharsets.UTF_8);
-        var adapted = adapter.parseAgent(markdown, fileName);
-        var metadata = new LinkedHashMap<>(adapted.metadata());
-        metadata.put("taskId", taskId);
-        metadata.put("mode", "AGENT_FALLBACK");
-        var resultFileId = persistResult(context, fileName, ".mineru.agent.md", "text/markdown", "KB_MINERU_AGENT_RESULT",
-                markdown.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        if (resultFileId != null) metadata.put("resultFileId", resultFileId.toString());
-        return new ParsedDocument(adapted.blocks(), "mineru-agent-v1", taskId, metadata, List.of());
+        if (!StringUtils.hasText(markdownUrl)) throw MineruException.contract("MinerU Agent 未返回 Markdown", taskId);
+        Path resultFile = null;
+        try {
+            resultFile = Files.createTempFile("mineru-agent-result-", ".md");
+            var target = resultFile;
+            withRetry(() -> { download(markdownUrl, target, taskId); return null; });
+            if (Files.size(resultFile) > MineruDocumentAdapter.MAX_ENTRY_BYTES) {
+                throw MineruException.contract("MinerU Agent Markdown 超过 128 MiB", taskId);
+            }
+            var markdown = Files.readString(resultFile, StandardCharsets.UTF_8);
+            var adapted = adapter.parseAgent(markdown, fileName);
+            var resultFileId = persistResult(context, fileName, ".mineru.agent.md", "text/markdown",
+                    "KB_MINERU_AGENT_RESULT", resultFile);
+            var metadata = baseMetadata(adapted.metadata(), requestedMode, decision);
+            metadata.put("taskId", taskId);
+            metadata.put("mode", "AGENT_FALLBACK");
+            metadata.put("degraded", true);
+            metadata.put("reviewWarning", "该版本使用 MinerU Agent 降级解析，版面和坐标质量较低，请重点审核");
+            if (preciseFailure != null) {
+                metadata.put("fallbackReason", preciseFailure.getMessage());
+                if (preciseFailure.taskId() != null) metadata.put("preciseTaskId", preciseFailure.taskId());
+            }
+            if (resultFileId != null) metadata.put("resultFileId", resultFileId.toString());
+            return new ParsedDocument(adapted.blocks(), "mineru-agent-v2", taskId, metadata, List.of());
+        } catch (IOException exception) {
+            throw MineruException.adapter("MinerU Agent 结果临时文件处理失败", exception);
+        } finally {
+            deleteQuietly(resultFile);
+        }
     }
 
-    private UUID persistResult(ParseContext context, String fileName, String suffix, String contentType, String kind,
-                               byte[] bytes) {
+    private LinkedHashMap<String, Object> baseMetadata(Map<String, Object> source, OcrMode requestedMode,
+                                                        PdfOcrDecider.Decision decision) {
+        var metadata = new LinkedHashMap<>(source);
+        metadata.put("requestedOcrMode", requestedMode.name());
+        metadata.put("effectiveOcr", decision.useOcr());
+        metadata.put("ocrDecisionReason", decision.reason());
+        metadata.put("ocrSampledPages", decision.sampledPages());
+        metadata.put("ocrQualifiedPages", decision.qualifiedPages());
+        metadata.put("ocrValidCharacters", decision.validCharacters());
+        return metadata;
+    }
+
+    private UUID persistResult(ParseContext context, String fileName, String suffix, String contentType,
+                               String kind, Path path) {
         if (context == null || context.organizationId() == null || context.actorId() == null) return null;
-        var base = StringUtils.hasText(fileName) ? fileName : "document.pdf";
-        var name = base + suffix;
-        var staged = storage.stageDerived(context.organizationId(), context.actorId(), name, contentType, kind,
-                new ByteArrayInputStream(bytes));
-        storage.activate(staged.fileId());
-        return staged.fileId();
+        try (var input = Files.newInputStream(path)) {
+            var staged = storage.stageDerived(context.organizationId(), context.actorId(),
+                    safeFileName(fileName) + suffix, contentType, kind, input);
+            storage.activate(staged.fileId());
+            return staged.fileId();
+        } catch (IOException exception) {
+            throw MineruException.adapter("MinerU 结果文件持久化失败", exception);
+        }
     }
 
     private JsonNode pollPrecise(String batchId) {
         var deadline = System.nanoTime() + maxWait.toNanos();
         while (System.nanoTime() < deadline) {
-            var response = get("/api/v4/extract-results/batch/" + batchId, true);
-            ensureOk(response, "MinerU 精准结果查询失败");
+            var response = withRetry(() -> {
+                var value = get("/api/v4/extract-results/batch/" + batchId, true, batchId);
+                ensureOk(value, "MinerU 精准结果查询失败", batchId);
+                return value;
+            });
             for (var item : response.path("data").path("extract_result")) {
                 var state = item.path("state").asText("").toLowerCase(Locale.ROOT);
                 if ("done".equals(state)) return item;
                 if ("failed".equals(state) || "error".equals(state)) {
-                    throw new IllegalStateException("MinerU 精准任务失败：" + item.path("err_msg").asText("未知错误"));
+                    throw taskFailure("MinerU 精准任务失败：" + item.path("err_msg").asText("未知错误"), batchId);
                 }
             }
             pause();
         }
-        throw new IllegalStateException("MinerU 精准任务等待超时");
+        throw new MineruException("MinerU 精准任务等待超时", null, "TIMEOUT", batchId, true, true, null);
     }
 
     private JsonNode pollAgent(String taskId) {
         var deadline = System.nanoTime() + maxWait.toNanos();
         while (System.nanoTime() < deadline) {
-            var response = get("/api/v1/agent/parse/" + taskId, false);
-            ensureOk(response, "MinerU 轻量结果查询失败");
+            var response = withRetry(() -> {
+                var value = get("/api/v1/agent/parse/" + taskId, false, taskId);
+                ensureOk(value, "MinerU Agent 结果查询失败", taskId);
+                return value;
+            });
             var state = response.path("data").path("state").asText("").toLowerCase(Locale.ROOT);
             if ("done".equals(state)) return response.path("data");
             if ("failed".equals(state) || "error".equals(state)) {
-                throw new IllegalStateException("MinerU 轻量任务失败：" + response.path("data").path("err_msg").asText("未知错误"));
+                throw taskFailure("MinerU Agent 任务失败：" + response.path("data").path("err_msg").asText("未知错误"), taskId);
             }
             pause();
         }
-        throw new IllegalStateException("MinerU 轻量任务等待超时");
+        throw new MineruException("MinerU Agent 任务等待超时", null, "TIMEOUT", taskId, true, false, null);
+    }
+
+    private MineruException taskFailure(String message, String taskId) {
+        var badInput = message.matches("(?is).*(auth|token|参数|格式|文件损坏|password|encrypted|unsupported).*?");
+        return new MineruException(message, null, "TASK_FAILED", taskId, false, !badInput, null);
     }
 
     private void pause() {
         try { Thread.sleep(Math.max(100L, pollInterval.toMillis())); }
         catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
-            throw new IllegalStateException("MinerU 任务等待被中断", exception);
+            throw new MineruException("MinerU 任务等待被中断", null, "INTERRUPTED", null,
+                    false, false, exception);
         }
     }
 
-    private void upload(String url, byte[] bytes, String fileName) {
+    private void upload(String url, Path path, String taskId) {
         try {
-            // The signed object-store URL is signed with an empty Content-Type. Spring's
-            // byte[] converter adds application/octet-stream automatically, which changes
-            // the OSS canonical string and yields SignatureDoesNotMatch. Use JDK HttpClient
-            // so the PUT contains only the signed URL and raw bytes.
-            var request = HttpRequest.newBuilder(URI.create(url))
-                    .timeout(Duration.ofMinutes(2))
-                    .PUT(HttpRequest.BodyPublishers.ofByteArray(bytes))
-                    .build();
-            var response = signedUploadClient.send(request, HttpResponse.BodyHandlers.discarding());
-            if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                throw new IllegalStateException("MinerU 文件上传失败：HTTP " + response.statusCode());
-            }
+            var request = HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofMinutes(2))
+                    .PUT(HttpRequest.BodyPublishers.ofFile(path)).build();
+            var response = transferClient.send(request, HttpResponse.BodyHandlers.discarding());
+            if (response.statusCode() < 200 || response.statusCode() >= 300) throw httpFailure(
+                    "MinerU 文件上传失败", response.statusCode(), taskId, null);
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
-            throw new IllegalStateException("MinerU 文件上传失败", exception);
+            throw new MineruException("MinerU 文件上传被中断", null, "INTERRUPTED", taskId,
+                    false, false, exception);
         } catch (IOException exception) {
-            throw new IllegalStateException("MinerU 文件上传失败", exception);
+            throw new MineruException("MinerU 文件上传网络故障", null, "NETWORK", taskId,
+                    true, true, exception);
         }
     }
 
-    private byte[] download(String url) {
+    private void download(String url, Path target, String taskId) {
         try {
-            return client.get().uri(url).retrieve().body(byte[].class);
+            var request = HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofMinutes(5)).GET().build();
+            var response = transferClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                response.body().close();
+                throw httpFailure("MinerU 结果下载失败", response.statusCode(), taskId, null);
+            }
+            try (var input = response.body();
+                 var output = Files.newOutputStream(target, StandardOpenOption.TRUNCATE_EXISTING)) {
+                var buffer = new byte[64 * 1024];
+                long total = 0;
+                for (int read; (read = input.read(buffer)) >= 0;) {
+                    total += read;
+                    if (total > MAX_DOWNLOAD_BYTES) {
+                        throw MineruException.contract("MinerU 结果下载超过 512 MiB", taskId);
+                    }
+                    output.write(buffer, 0, read);
+                }
+            }
+        } catch (MineruException exception) {
+            throw exception;
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new MineruException("MinerU 结果下载被中断", null, "INTERRUPTED", taskId,
+                    false, false, exception);
+        } catch (IOException exception) {
+            throw new MineruException("MinerU 结果下载网络故障", null, "NETWORK", taskId,
+                    true, true, exception);
+        }
+    }
+
+    private JsonNode post(String path, Object body, boolean precise, String taskId) {
+        try {
+            var request = client.post().uri(url(path)).contentType(MediaType.APPLICATION_JSON)
+                    .accept(MediaType.APPLICATION_JSON);
+            if (precise) request.header(HttpHeaders.AUTHORIZATION, "Bearer " + token);
+            return request.body(writeJson(body)).retrieve().body(JsonNode.class);
         } catch (RestClientResponseException exception) {
-            throw new IllegalStateException("MinerU 结果下载失败：HTTP " + exception.getStatusCode().value(), exception);
+            throw httpFailure("MinerU API 请求失败", exception.getStatusCode().value(), taskId, exception);
+        } catch (RestClientException exception) {
+            throw new MineruException("MinerU API 网络故障", null, "NETWORK", taskId, true, true, exception);
         }
     }
 
-    private JsonNode post(String path, Object body, boolean precise) {
-        var request = client.post().uri(url(path))
-                .contentType(MediaType.APPLICATION_JSON)
-                .accept(MediaType.APPLICATION_JSON);
-        if (precise) request.header(HttpHeaders.AUTHORIZATION, "Bearer " + token);
-        return request.body(writeJson(body)).retrieve().body(JsonNode.class);
-    }
-
-    private JsonNode get(String path, boolean precise) {
-        var request = client.get().uri(url(path));
-        if (precise) request.header(HttpHeaders.AUTHORIZATION, "Bearer " + token);
-        return request.retrieve().body(JsonNode.class);
-    }
-
-    private void ensureOk(JsonNode response, String message) {
-        if (response == null || response.path("code").asInt(-1) != 0) {
-            throw new IllegalStateException(message + "：" + (response == null ? "空响应" : response.path("msg").asText("未知错误")));
+    private JsonNode get(String path, boolean precise, String taskId) {
+        try {
+            var request = client.get().uri(url(path));
+            if (precise) request.header(HttpHeaders.AUTHORIZATION, "Bearer " + token);
+            return request.retrieve().body(JsonNode.class);
+        } catch (RestClientResponseException exception) {
+            throw httpFailure("MinerU API 请求失败", exception.getStatusCode().value(), taskId, exception);
+        } catch (RestClientException exception) {
+            throw new MineruException("MinerU API 网络故障", null, "NETWORK", taskId, true, true, exception);
         }
+    }
+
+    private MineruException httpFailure(String message, int status, String taskId, Throwable cause) {
+        var transientFailure = status == 429 || status >= 500;
+        return new MineruException(message + "：HTTP " + status, status, "HTTP_" + status, taskId,
+                transientFailure, transientFailure, cause);
+    }
+
+    private void ensureOk(JsonNode response, String message, String taskId) {
+        if (response != null && response.path("code").asInt(-1) == 0) return;
+        var code = response == null ? "EMPTY_RESPONSE" : response.path("code").asText("UNKNOWN");
+        var detail = response == null ? "空响应" : response.path("msg").asText("未知错误");
+        var transientFailure = "429".equals(code) || code.startsWith("5");
+        var badInput = detail.matches("(?is).*(auth|token|参数|文件|格式|permission|unauthorized).*?");
+        throw new MineruException(message + "：" + detail, null, code, taskId,
+                transientFailure, transientFailure && !badInput, null);
+    }
+
+    private <T> T withRetry(ProviderCall<T> call) {
+        MineruException last = null;
+        for (var attempt = 1; attempt <= MAX_REQUEST_ATTEMPTS; attempt++) {
+            try {
+                return call.call();
+            } catch (MineruException exception) {
+                last = exception;
+                if (!exception.retryable() || attempt == MAX_REQUEST_ATTEMPTS) throw exception;
+                pause();
+            }
+        }
+        throw last;
     }
 
     private String writeJson(Object body) {
-        try {
-            return mapper.writeValueAsString(body);
-        } catch (Exception exception) {
-            throw new IllegalStateException("MinerU 请求参数序列化失败", exception);
-        }
+        try { return mapper.writeValueAsString(body); }
+        catch (Exception exception) { throw MineruException.contract("MinerU 请求参数序列化失败", null); }
     }
 
-    private String url(String path) {
-        return baseUrl + "/" + path.replaceFirst("^/", "");
-    }
+    private String url(String path) { return baseUrl + "/" + path.replaceFirst("^/", ""); }
 
     private String strip(String value) {
         if (!StringUtils.hasText(value)) return "https://mineru.net";
         return value.strip().replaceAll("/+$", "");
     }
 
+    private String safeFileName(String value) { return StringUtils.hasText(value) ? value : "document.pdf"; }
+
+    private void deleteQuietly(Path value) {
+        if (value != null) try { Files.deleteIfExists(value); } catch (IOException ignored) { }
+    }
+
     private String safeMessage(Exception exception) {
         var message = exception.getMessage();
-        return message == null ? exception.getClass().getSimpleName() : message.replaceAll("(?i)bearer\\s+\\S+", "Bearer [redacted]");
+        return message == null ? exception.getClass().getSimpleName()
+                : message.replaceAll("(?i)bearer\\s+\\S+", "Bearer [redacted]");
     }
+
+    @FunctionalInterface
+    private interface ProviderCall<T> { T call(); }
 }

@@ -242,7 +242,7 @@ export function ProjectListPage() {
     setEditingProject(null);
     setPendingFormValues({
       priority: 'MEDIUM',
-      status: 'PENDING',
+      status: 'NOT_STARTED',
       teamMembers: [],
       customFields: [],
     });

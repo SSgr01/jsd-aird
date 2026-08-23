@@ -170,7 +170,12 @@ public class JdbcKnowledgeGovernanceRepository implements KnowledgeGovernanceRep
                     """, revisionNo, versionId);
         }
         return new ParseRunRow(id, documentId, versionId, runNo, parseStatus, errorMessage, Instant.now(),
-                initial.sourceDocument(), StructuredDocumentCodec.SCHEMA_VERSION);
+                initial.sourceDocument(), StructuredDocumentCodec.SCHEMA_VERSION, diagnosticResult, parserVersion,
+                provider, providerTaskId,
+                diagnosticResult == null ? "AUTO" : diagnosticResult.path("requestedOcrMode").asText("AUTO"),
+                diagnosticResult != null && diagnosticResult.path("effectiveOcr").isBoolean()
+                        ? diagnosticResult.path("effectiveOcr").asBoolean() : null,
+                diagnosticResult == null ? null : diagnosticResult.path("mode").asText(null));
     }
 
     @Override
@@ -192,6 +197,8 @@ public class JdbcKnowledgeGovernanceRepository implements KnowledgeGovernanceRep
                        coalesce(v.source_info_jsonb, d.source_info_jsonb) AS source_info_jsonb,
                        r.id AS parse_run_id, r.run_no, r.status AS parse_status, r.error_message,
                        r.created_at AS parse_created_at, r.source_document_jsonb, r.document_schema_version,
+                       r.result_jsonb AS parse_result_jsonb, r.parser_version, r.provider, r.provider_task_id,
+                       v.ocr_mode, v.effective_ocr, v.parser_mode,
                        rr.id AS review_revision_id, rr.revision_no, rr.lock_version, rr.base_publication_id,
                        rr.confirmed_document_jsonb, rr.excluded_review_node_ids, rr.status AS revision_status,
                        rr.failure_reason, rr.updated_at AS revision_updated_at
@@ -407,7 +414,9 @@ public class JdbcKnowledgeGovernanceRepository implements KnowledgeGovernanceRep
             parse = new ParseRunRow(parseRunId, documentId, versionId, rs.getInt("run_no"),
                     rs.getString("parse_status"), rs.getString("error_message"),
                     rs.getTimestamp("parse_created_at").toInstant(), read(rs.getString("source_document_jsonb")),
-                    rs.getInt("document_schema_version"));
+                    rs.getInt("document_schema_version"), read(rs.getString("parse_result_jsonb")),
+                    rs.getString("parser_version"), rs.getString("provider"), rs.getString("provider_task_id"),
+                    rs.getString("ocr_mode"), (Boolean) rs.getObject("effective_ocr"), rs.getString("parser_mode"));
         }
         var revisionId = rs.getObject("review_revision_id", UUID.class);
         ReviewRevisionView revision = null;

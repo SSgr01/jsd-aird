@@ -95,6 +95,9 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
         if (path.startsWith("/api/v1/projects") || path.startsWith("/api/v1/tasks") || path.startsWith("/api/v1/stages")
                 || path.startsWith("/api/v1/project-stages") || path.startsWith("/api/v1/materials")
                 || path.startsWith("/api/v1/meetings")) {
+            if (path.matches("/api/v1/projects/[0-9a-f-]{36}/references(/.*)?"))
+                return read ? permission("project.view", "PROJECT", "READ")
+                        : permission("project.assign", "PROJECT", "WRITE");
             if (path.contains("/materials/link") || path.contains("/materials/unlink") || path.contains("/materials/associations"))
                 return permission("project.assign", "PROJECT", "WRITE");
             if (path.equals("/api/v1/projects/copy")) return permission("project.copy", "PROJECT", "WRITE");
@@ -113,6 +116,14 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
                     || path.matches("/api/v1/projects/[0-9a-f-]{36}/(stages|tasks|materials|documents)/.*")
                     || path.matches("/api/v1/(tasks|stages|materials|meetings)/[0-9a-f-]{36}"))) return permission("project.update", "PROJECT", "WRITE");
             return null;
+        }
+
+        if (path.startsWith("/api/v1/project-resource-links")) {
+            return read ? permission("project.view", "PROJECT", "READ")
+                    : permission("project.assign", "PROJECT", "WRITE");
+        }
+        if (path.startsWith("/api/v1/project-references")) {
+            return permission("project.assign", "PROJECT", "WRITE");
         }
 
         if (path.startsWith("/api/v1/template-imports")) {
@@ -248,8 +259,20 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
 
     private UUID resourceId(HttpServletRequest request) {
         var path = request.getRequestURI();
-        var value = path.substring(path.lastIndexOf('/') + 1);
-        try { return UUID.fromString(value); } catch (Exception ignored) { return null; }
+        if (path.startsWith("/api/v1/project-resource-links") || path.startsWith("/api/v1/project-references")) {
+            // These endpoints authorize every project in the application service because the project id is in
+            // the request body or the reference record, not reliably in the URL.
+            return null;
+        }
+        var projectMatcher = java.util.regex.Pattern.compile("/api/v1/projects/([0-9a-fA-F-]{36})(?:/|$)").matcher(path);
+        if (projectMatcher.find()) {
+            try { return UUID.fromString(projectMatcher.group(1)); } catch (Exception ignored) { return null; }
+        }
+        var segments = path.split("/");
+        for (var index = segments.length - 1; index >= 0; index--) {
+            try { return UUID.fromString(segments[index]); } catch (Exception ignored) { }
+        }
+        return null;
     }
 
     private void writeError(HttpServletResponse response, ApiErrorCode code) throws IOException {

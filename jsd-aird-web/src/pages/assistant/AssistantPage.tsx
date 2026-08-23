@@ -30,6 +30,7 @@ import {
 import { HttpError } from '@/services/http/errors';
 import { dataApi, type DataCategory } from '@/services/data/data-api';
 import { knowledgeApi, type KnowledgeCategory } from '@/services/knowledge';
+import { citationEvidenceLabel } from './citation-utils';
 
 interface ChatMessage {
   id: string;
@@ -156,6 +157,7 @@ function renderAssistantContent(
                       >
                         {citation.title || citation.originalName || '来源文件'}
                         {citation.pageNo ? ` · 第${citation.pageNo}页` : ''}
+                        {citationEvidenceLabel(citation)}
                       </Tag>
                       {originalFileAvailable && (
                         <Button

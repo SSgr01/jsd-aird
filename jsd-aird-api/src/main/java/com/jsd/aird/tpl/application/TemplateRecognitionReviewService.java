@@ -127,6 +127,9 @@ public class TemplateRecognitionReviewService {
         var sourceFileId = recognitionSourceFileId(actor.organizationId(), workspace.versionId(), workspace.snapshotFileId());
         var sourceKind = sourceFileId.equals(workspace.snapshotFileId()) ? "UNIVER_SNAPSHOT" : "OFFICE_FILE";
         var importJobId = UUID.randomUUID();
+        var originalSourceFileId = "UNIVER_SNAPSHOT".equals(sourceKind)
+                ? importRepository.findOriginalSourceFileId(actor.organizationId(), versionId).orElse(null)
+                : sourceFileId;
         importRepository.enqueue(new TemplateImportRepository.NewImportJob(
                 importJobId,
                 UUID.randomUUID(),
@@ -138,7 +141,18 @@ public class TemplateRecognitionReviewService {
                 scope,
                 sheetId,
                 address == null ? null : address.toUpperCase(Locale.ROOT),
-                snapshotFragment
+                snapshotFragment,
+                null,
+                null,
+                false,
+                null,
+                "RECOGNITION_RESTART",
+                originalSourceFileId,
+                sourceFileId,
+                "XLSX",
+                "XLSX",
+                "PASSTHROUGH",
+                "当前工作簿快照仅作为识别输入，业务名称沿用原始文件"
         ));
         importRepository.linkGeneratedVersion(actor.organizationId(), importJobId, versionId);
         templateRepository.appendAudit(

@@ -1,9 +1,9 @@
 package com.jsd.aird.mdm.domain.model;
 
 public enum ProjectStatus {
-    PENDING,
+    NOT_STARTED,
     IN_PROGRESS,
-    AUDITING,
-    MASS_PRODUCTION,
-    COMPLETED
+    PAUSED,
+    COMPLETED,
+    CANCELLED
 }

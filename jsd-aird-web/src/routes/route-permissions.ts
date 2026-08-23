@@ -96,6 +96,8 @@ export function riskDisplayLabel(risk: string): string {
 export function requiredPermissionForPath(pathname: string): string | undefined {
   const path = pathname.replace(/\/$/, '') || '/';
   if (path === '/assistant' || path === '/knowledge/search') return 'ai.use';
+  if (path === '/knowledge/library') return 'knowledge.upload';
+  if (path === '/data/upload') return 'data.create';
   if (path.startsWith('/system/users')) return 'system.user.view';
   if (path.startsWith('/system/roles') || path.startsWith('/system/user-permissions')) return 'system.permission.manage';
   if (path.startsWith('/system/audit-logs')) return 'system.audit.view';

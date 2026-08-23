@@ -156,7 +156,7 @@ public class StructuredDocumentCodec {
     public Projection project(JsonNode confirmedDocument, List<UUID> excludedReviewNodeIds) {
         var excluded = new HashSet<>(excludedReviewNodeIds == null ? List.of() : excludedReviewNodeIds);
         var paragraphs = new ArrayList<ProjectedNode>();
-        collectProjection(validate(confirmedDocument), excluded, new LinkedHashSet<>(), List.of(), paragraphs);
+        collectProjection(validate(confirmedDocument), excluded, new LinkedHashSet<>(), new HeadingState(), paragraphs);
         var text = paragraphs.stream().map(ProjectedNode::text)
                 .filter(value -> value != null && !value.isBlank())
                 .reduce((left, right) -> left + "\n\n" + right).orElse("");
@@ -209,7 +209,7 @@ public class StructuredDocumentCodec {
     }
 
     private void collectProjection(JsonNode node, Set<UUID> excluded, LinkedHashSet<UUID> inheritedSources,
-                                   List<String> inheritedHeadingPath, List<ProjectedNode> output) {
+                                   HeadingState headings, List<ProjectedNode> output) {
         var sources = new LinkedHashSet<>(inheritedSources);
         var attrs = node.path("attrs");
         if (attrs.path("sourceNodeKeys").isArray()) {
@@ -225,11 +225,12 @@ public class StructuredDocumentCodec {
         var type = node.path("type").asText();
         var attributes = node.path("attrs").isObject()
                 ? objectMapper.convertValue(node.path("attrs"), Map.class) : Map.<String, Object>of();
-        var headingPath = new ArrayList<>(inheritedHeadingPath);
         if ("heading".equals(type)) {
             var headingText = textContent(node).strip();
-            if (!headingText.isBlank()) headingPath.add(headingText);
+            var level = Math.min(6, Math.max(1, attrs.path("level").asInt(1)));
+            if (!headingText.isBlank()) headings.update(level, headingText);
         }
+        var headingPath = headings.path();
         if (Set.of("paragraph", "heading", "blockquote", "codeBlock", "listItem", "formula", "audioSegment").contains(type)) {
             var text = textContent(node).strip();
             if (!text.isBlank()) output.add(new ProjectedNode(reviewNodeId, List.copyOf(sources), text, type,
@@ -245,7 +246,7 @@ public class StructuredDocumentCodec {
             return;
         }
         if ("dataTableRef".equals(type)) return; // Streamed separately by the table projector.
-        node.path("content").forEach(child -> collectProjection(child, excluded, sources, headingPath, output));
+        node.path("content").forEach(child -> collectProjection(child, excluded, sources, headings, output));
     }
 
     private String textContent(JsonNode node) {
@@ -381,6 +382,12 @@ public class StructuredDocumentCodec {
         putIfPresent(result, "pageWidth", attributes.get("pageWidth"));
         putIfPresent(result, "pageHeight", attributes.get("pageHeight"));
         putIfPresent(result, "rotation", attributes.get("rotation"));
+        putIfPresent(result, "locatorAccuracy", attributes.get("locatorAccuracy"));
+        putIfPresent(result, "resultFileId", attributes.get("resultFileId"));
+        putIfPresent(result, "resultEntryPath", attributes.get("resultEntryPath"));
+        putIfPresent(result, "caption", attributes.get("caption"));
+        putIfPresent(result, "footnote", attributes.get("footnote"));
+        putIfPresent(result, "searchable", attributes.get("searchable"));
         if (block.sheetName() != null) {
             result.put("kind", "sheet_range").put("sheetKey", block.sheetName())
                     .put("sheetName", block.sheetName()).put("range", block.cellRange());
@@ -410,6 +417,17 @@ public class StructuredDocumentCodec {
         return new DocumentParser.TextBlock(block.pageNo(), block.section(), text, block.sheetName(), block.cellRange(),
                 block.paragraphId(), block.bbox(), block.startTimeMs(), block.endTimeMs(), block.confidence(),
                 block.attributes());
+    }
+
+    private static final class HeadingState {
+        private final ArrayList<String> values = new ArrayList<>();
+
+        void update(int level, String text) {
+            while (values.size() >= level) values.removeLast();
+            values.add(text);
+        }
+
+        List<String> path() { return List.copyOf(values); }
     }
 
     public record InitialDocuments(JsonNode sourceDocument, JsonNode confirmedDocument,

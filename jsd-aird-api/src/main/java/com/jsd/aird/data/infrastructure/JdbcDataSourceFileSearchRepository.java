@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.UUID;
 
 import com.jsd.aird.data.api.DataSourceFileSearchFacade;
@@ -25,7 +26,16 @@ public class JdbcDataSourceFileSearchRepository implements DataSourceFileSearchF
     @Override
     public List<SourceFileMatch> searchSourceFiles(UUID organizationId, String query,
                                                    List<UUID> categoryIds, int limit) {
+        return searchSourceFiles(organizationId, query, categoryIds, null, limit);
+    }
+
+    @Override
+    public List<SourceFileMatch> searchSourceFiles(UUID organizationId, String query,
+                                                   List<UUID> categoryIds, Set<UUID> allowedImportJobIds,
+                                                   int limit) {
+        if (allowedImportJobIds != null && allowedImportJobIds.isEmpty()) return List.of();
         var categories = categoryClause(categoryIds);
+        var jobs = importJobClause(allowedImportJobIds);
         var sql = """
                 SELECT j.id AS import_job_id, j.source_file_id, j.source_file_name, j.source_format,
                        coalesce(fo.content_type, CASE j.source_format WHEN 'CSV' THEN 'text/csv'
@@ -47,14 +57,14 @@ public class JdbcDataSourceFileSearchRepository implements DataSourceFileSearchF
                     AND m.import_sheet_id = s.id AND m.source_column = cells.key
                 LEFT JOIN LATERAL (
                     SELECT string_agg(
-                        coalesce(m2.field_name, m2.source_header, row_cells.key) || '=' || row_cells.value,
+                        row_cells.value,
                         '；' ORDER BY row_cells.key
                     ) AS context_text
                     FROM jsonb_each_text(r.raw_values_jsonb) row_cells
-                    LEFT JOIN data.import_mapping m2 ON m2.import_job_id = j.id
-                        AND m2.import_sheet_id = s.id AND m2.source_column = row_cells.key
+                    WHERE row_cells.value IS NOT NULL AND btrim(row_cells.value) <> ''
                 ) row_context ON true
                 WHERE j.organization_id = ?
+                  %s
                   %s
                   AND (j.source_file_name ILIKE '%%' || ? || '%%'
                        OR r.source_search_vector @@ plainto_tsquery('simple', ?)
@@ -64,10 +74,11 @@ public class JdbcDataSourceFileSearchRepository implements DataSourceFileSearchF
                 ORDER BY score DESC, j.completed_at DESC NULLS LAST, j.updated_at DESC,
                          s.sheet_order, r.source_row_number
                 LIMIT ?
-                """.formatted(categories);
+                """.formatted(categories, jobs);
         var args = new ArrayList<Object>();
         args.add(query); args.add(query); args.add(organizationId);
         if (categoryIds != null) args.addAll(categoryIds);
+        if (allowedImportJobIds != null) args.addAll(allowedImportJobIds);
         args.add(query); args.add(query); args.add(query); args.add(query); args.add(query);
         args.add(Math.min(1000, Math.max(20, limit * 25)));
         var rows = jdbc.query(sql, this::mapRow, args.toArray());
@@ -76,7 +87,7 @@ public class JdbcDataSourceFileSearchRepository implements DataSourceFileSearchF
             var aggregate = grouped.computeIfAbsent(row.importJobId(), ignored -> new Aggregate(row));
             if (aggregate.hits.size() < 10) aggregate.hits.add(hit(row));
         }
-        return grouped.values().stream().limit(limit).map(Aggregate::view).toList();
+        return grouped.values().stream().limit(limit).map(item -> item.view(query)).toList();
     }
 
     private Row mapRow(ResultSet rs, int ignored) throws SQLException {
@@ -89,11 +100,11 @@ public class JdbcDataSourceFileSearchRepository implements DataSourceFileSearchF
 
     private Hit hit(Row row) {
         var value = row.value() == null || row.value().isBlank() ? "未填写" : row.value();
-        var snippet = "字段=" + (row.sourceHeader() == null ? row.column() : row.sourceHeader())
-                + "；值=" + value;
-        if (row.contextText() != null && !row.contextText().isBlank()) {
-            snippet += "；同行数据=" + row.contextText();
-        }
+        // Search results should read like the source file, not like an internal
+        // field/value diagnostic payload. The row text is assembled from the
+        // original imported cell values; the sheet/row/cell remain in the anchor.
+        var snippet = row.contextText() == null || row.contextText().isBlank()
+                ? value : row.contextText();
         if (snippet.length() > 800) snippet = snippet.substring(0, 800) + "…";
         var cell = cellAddress(row.column(), row.rowNumber());
         var identity = row.importJobId() + ":" + row.sheetName() + ":" + row.rowNumber() + ":" + row.column();
@@ -112,6 +123,11 @@ public class JdbcDataSourceFileSearchRepository implements DataSourceFileSearchF
         return "AND j.category_id IN (" + String.join(",", java.util.Collections.nCopies(categoryIds.size(), "?")) + ")";
     }
 
+    private String importJobClause(Set<UUID> importJobIds) {
+        if (importJobIds == null) return "";
+        return "AND j.id IN (" + String.join(",", java.util.Collections.nCopies(importJobIds.size(), "?")) + ")";
+    }
+
     private record Row(UUID importJobId, UUID fileId, String originalName, String contentType, long size,
                        java.time.Instant updatedAt, String sheetName, Integer rowNumber, String column,
                        String value, String sourceHeader, String contextText, double score) { }
@@ -120,9 +136,17 @@ public class JdbcDataSourceFileSearchRepository implements DataSourceFileSearchF
         private final Row row;
         private final List<Hit> hits = new ArrayList<>();
         private Aggregate(Row row) { this.row = row; }
-        private SourceFileMatch view() {
+        private SourceFileMatch view(String query) {
+            var normalizedQuery = normalizeEvidence(query);
+            var matched = normalizedQuery.length() >= 2 && (normalizeEvidence(row.originalName()).contains(normalizedQuery)
+                    || hits.stream().anyMatch(hit -> normalizeEvidence(hit.snippet()).contains(normalizedQuery)))
+                    ? List.of(query) : List.<String>of();
             return new SourceFileMatch(row.fileId(), row.importJobId(), row.originalName(), row.contentType(),
-                    row.size(), row.updatedAt(), List.copyOf(hits));
+                    row.size(), row.updatedAt(), List.copyOf(hits), matched);
+        }
+
+        private static String normalizeEvidence(String value) {
+            return value == null ? "" : value.toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9\\u4E00-\\u9FFF]", "");
         }
     }
 }

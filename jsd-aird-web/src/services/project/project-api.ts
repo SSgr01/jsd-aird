@@ -123,11 +123,11 @@ export interface ProjectExperiment { id:string; experimentCode:string; projectId
 
 export type ProjectPriority = 'HIGH' | 'MEDIUM' | 'LOW';
 export type ProjectStatus =
+  | 'NOT_STARTED'
   | 'IN_PROGRESS'
+  | 'PAUSED'
   | 'COMPLETED'
-  | 'AUDITING'
-  | 'MASS_PRODUCTION'
-  | 'PENDING';
+  | 'CANCELLED';
 
 export interface Project {
   id: string;
@@ -181,11 +181,11 @@ const priorityLabels: Record<ProjectPriority, string> = {
 };
 
 const statusLabels: Record<ProjectStatus, string> = {
+  NOT_STARTED: '待启动',
   IN_PROGRESS: '进行中',
+  PAUSED: '已暂停',
   COMPLETED: '已完成',
-  AUDITING: '审核中',
-  MASS_PRODUCTION: '已量产',
-  PENDING: '待启动',
+  CANCELLED: '已取消',
 };
 
 export const projectPriorities: { value: ProjectPriority; label: string }[] = [
@@ -195,11 +195,11 @@ export const projectPriorities: { value: ProjectPriority; label: string }[] = [
 ];
 
 export const projectStatuses: { value: ProjectStatus; label: string }[] = [
+  { value: 'NOT_STARTED', label: statusLabels.NOT_STARTED },
   { value: 'IN_PROGRESS', label: statusLabels.IN_PROGRESS },
+  { value: 'PAUSED', label: statusLabels.PAUSED },
   { value: 'COMPLETED', label: statusLabels.COMPLETED },
-  { value: 'AUDITING', label: statusLabels.AUDITING },
-  { value: 'MASS_PRODUCTION', label: statusLabels.MASS_PRODUCTION },
-  { value: 'PENDING', label: statusLabels.PENDING },
+  { value: 'CANCELLED', label: statusLabels.CANCELLED },
 ];
 
 const stageStatusLabels: Record<StageStatus, string> = {

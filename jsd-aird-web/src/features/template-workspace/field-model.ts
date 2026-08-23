@@ -1105,7 +1105,7 @@ function snapshotCell(
   if (!sheet || !isRecord(sheet.cellData)) return '';
   const directValue = readSnapshotCell(sheet, row, column);
   if (directValue) return directValue;
-  const mergeData = Array.isArray(sheet.mergeData) ? sheet.mergeData : [];
+  const mergeData: unknown[] = Array.isArray(sheet.mergeData) ? sheet.mergeData as unknown[] : [];
   const merge = mergeData.find((item) => {
     if (!isRecord(item)) return false;
     const startRow = numberValue(item.startRow);
@@ -1132,7 +1132,11 @@ function readSnapshotCell(sheet: Record<string, unknown>, row: number, column: n
   const cell = rowData[String(column - 1)];
   if (!isRecord(cell)) return '';
   const value = cell.v ?? cell.value ?? cell.text;
-  return value === null || value === undefined ? '' : String(value).trim();
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+    return String(value).trim();
+  }
+  return '';
 }
 
 function numberValue(value: unknown) {

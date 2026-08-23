@@ -18,14 +18,19 @@ import java.util.zip.ZipOutputStream;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jsd.aird.core.api.ProjectResourceFacade;
+import com.jsd.aird.core.api.ProjectResourceFacade.ResourceType;
 import com.jsd.aird.kb.api.KnowledgeEmbeddingFacade;
 import com.jsd.aird.kb.api.KnowledgeSearchFacade;
 import com.jsd.aird.kb.application.port.KnowledgeRepository;
 import com.jsd.aird.kb.application.port.KnowledgeGovernanceRepository;
 import com.jsd.aird.kb.domain.DocumentParser;
+import com.jsd.aird.kb.domain.DocumentParsingFailure;
 import com.jsd.aird.kb.domain.FileSafetyScanner;
 import com.jsd.aird.kb.domain.MediaExtractionProvider;
 import com.jsd.aird.kb.domain.MediaExtractionException;
+import com.jsd.aird.kb.domain.OcrMode;
+import com.jsd.aird.kb.domain.LexicalAnalyzer;
 import com.jsd.aird.kb.domain.TermAnalyzer;
 import com.jsd.aird.ops.application.port.AuditLogFacade;
 import com.jsd.aird.ops.application.port.FileStorageFacade;
@@ -35,6 +40,7 @@ import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.security.ActorContext;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.slf4j.Logger;
@@ -46,9 +52,6 @@ import org.springframework.util.StringUtils;
 public class KnowledgeService implements KnowledgeSearchFacade {
 
     private static final Logger log = LoggerFactory.getLogger(KnowledgeService.class);
-
-    private static final int CHUNK_SIZE = 1800;
-    private static final int CHUNK_OVERLAP = 180;
 
     private final KnowledgeRepository repository;
     private final KnowledgeGovernanceRepository governance;
@@ -64,7 +67,11 @@ public class KnowledgeService implements KnowledgeSearchFacade {
     private final String embeddingModel;
     private final int embeddingDimension;
     private final Duration presignExpiry;
+    private final BlockAwareChunker blockAwareChunker;
+    private final LexicalAnalyzer lexicalAnalyzer;
+    private final ProjectResourceFacade projectResources;
 
+    @Autowired
     public KnowledgeService(
             KnowledgeRepository repository,
             KnowledgeGovernanceRepository governance,
@@ -79,7 +86,10 @@ public class KnowledgeService implements KnowledgeSearchFacade {
             List<MediaExtractionProvider> mediaProviders,
             @org.springframework.beans.factory.annotation.Value("${app.ai.embedding.model:}") String embeddingModel,
             @org.springframework.beans.factory.annotation.Value("${app.ai.embedding.dimension:1024}") int embeddingDimension,
-            @org.springframework.beans.factory.annotation.Value("${app.storage.presign-expiry:15m}") Duration presignExpiry
+            @org.springframework.beans.factory.annotation.Value("${app.storage.presign-expiry:15m}") Duration presignExpiry,
+            BlockAwareChunker blockAwareChunker,
+            LexicalAnalyzer lexicalAnalyzer,
+            ProjectResourceFacade projectResources
     ) {
         this.repository = repository;
         this.governance = governance;
@@ -95,6 +105,32 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         this.embeddingModel = embeddingModel;
         this.embeddingDimension = embeddingDimension;
         this.presignExpiry = presignExpiry;
+        this.blockAwareChunker = blockAwareChunker;
+        this.lexicalAnalyzer = lexicalAnalyzer;
+        this.projectResources = projectResources;
+    }
+
+    public KnowledgeService(
+            KnowledgeRepository repository,
+            KnowledgeGovernanceRepository governance,
+            FileStorageFacade storage,
+            OpsAsyncFacade async,
+            AuditLogFacade audit,
+            ObjectMapper objectMapper,
+            StructuredDocumentCodec documents,
+            List<DocumentParser> parsers,
+            FileSafetyScanner scanner,
+            ObjectProvider<KnowledgeEmbeddingFacade> embeddings,
+            List<MediaExtractionProvider> mediaProviders,
+            String embeddingModel,
+            int embeddingDimension,
+            Duration presignExpiry,
+            BlockAwareChunker blockAwareChunker,
+            LexicalAnalyzer lexicalAnalyzer
+    ) {
+        this(repository, governance, storage, async, audit, objectMapper, documents, parsers, scanner, embeddings,
+                mediaProviders, embeddingModel, embeddingDimension, presignExpiry, blockAwareChunker,
+                lexicalAnalyzer, null);
     }
 
     @Transactional
@@ -120,12 +156,15 @@ public class KnowledgeService implements KnowledgeSearchFacade {
             }
             var documentId = UUID.randomUUID();
             var versionId = UUID.randomUUID();
+            var parsePolicy = parsingPolicy(file.originalName(), file.contentType(), command.ocrMode(),
+                    command.allowAgentFallback());
             repository.insertDocument(new KnowledgeRepository.NewDocument(
                     documentId, actor.organizationId(), title, actor.userId(), scope, categoryId
             ));
             try {
                 repository.insertVersion(new KnowledgeRepository.NewVersion(
                         versionId, documentId, 1, command.fileId(), file.originalName(), file.contentType(), file.size(), file.sha256()
+                        , parsePolicy.ocrMode().name(), parsePolicy.allowAgentFallback()
                 ));
             } catch (DataIntegrityViolationException exception) {
                 throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "相同文件已被其他上传请求创建");
@@ -148,16 +187,25 @@ public class KnowledgeService implements KnowledgeSearchFacade {
     }
 
     public PageResponse<DocumentView> list(String keyword, String status, String aiStatus, String scope, UUID categoryId,
-                                           String lifecycleStatus, String reviewStatus, int page, int size) {
+                                           String lifecycleStatus, String reviewStatus, UUID projectId,
+                                           int page, int size) {
         var actor = ActorContext.required();
         var safePage = Math.max(1, page);
         var safeSize = Math.min(100, Math.max(1, size));
+        var allowed = projectId == null || projectResources == null ? null
+                : projectResources.resourceIdsForProject(actor, ResourceType.KNOWLEDGE_DOCUMENT, projectId);
         var items = repository.listDocuments(actor.organizationId(), keyword, status, aiStatus, scope, categoryId,
-                        lifecycleStatus, reviewStatus, safePage, safeSize)
+                        lifecycleStatus, reviewStatus, allowed, safePage, safeSize)
                 .stream().map(this::view).toList();
         var total = repository.countDocuments(actor.organizationId(), keyword, status, aiStatus, scope, categoryId,
-                lifecycleStatus, reviewStatus);
+                lifecycleStatus, reviewStatus, allowed);
+        items = withProjects(actor, items);
         return new PageResponse<>(items, safePage, safeSize, total, (total + safeSize - 1) / safeSize);
+    }
+
+    public PageResponse<DocumentView> list(String keyword, String status, String aiStatus, String scope, UUID categoryId,
+                                           String lifecycleStatus, String reviewStatus, int page, int size) {
+        return list(keyword, status, aiStatus, scope, categoryId, lifecycleStatus, reviewStatus, null, page, size);
     }
 
     public PageResponse<DocumentView> list(String keyword, String status, String aiStatus, String scope,
@@ -233,6 +281,7 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         var actor = ActorContext.required();
         return repository.findDocument(actor.organizationId(), documentId)
                 .map(this::view)
+                .map(item -> withProjects(actor, List.of(item)).getFirst())
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "知识文件不存在"));
     }
 
@@ -276,10 +325,12 @@ public class KnowledgeService implements KnowledgeSearchFacade {
             }
             var versionId = UUID.randomUUID();
             var versionNo = document.currentVersionNo() + 1;
+            var parsePolicy = parsingPolicy(file.originalName(), file.contentType(), command.ocrMode(),
+                    command.allowAgentFallback());
             try {
                 repository.insertVersion(new KnowledgeRepository.NewVersion(
                         versionId, documentId, versionNo, command.fileId(), file.originalName(), file.contentType(),
-                        file.size(), file.sha256()
+                        file.size(), file.sha256(), parsePolicy.ocrMode().name(), parsePolicy.allowAgentFallback()
                 ));
             } catch (DataIntegrityViolationException exception) {
                 throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "文件内容或版本号已被其他上传请求占用，请刷新后重试");
@@ -447,12 +498,17 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         var organizationId = request.organizationId();
         var safeLimit = Math.min(50, Math.max(1, request.limit()));
         var variants = request.queryVariants().isEmpty() ? List.of(request.query().trim()) : request.queryVariants();
-        var terms = new java.util.LinkedHashSet<String>();
-        variants.forEach(value -> terms.addAll(TermAnalyzer.frequencies(value).keySet()));
+        var queryTerms = new java.util.LinkedHashSet<KnowledgeRepository.AnalyzedTerm>();
+        variants.forEach(value -> {
+            TermAnalyzer.frequencies(value).keySet().forEach(term -> queryTerms.add(
+                    new KnowledgeRepository.AnalyzedTerm(TermAnalyzer.VERSION, term)));
+            lexicalAnalyzer.analyzeQuery(value).frequencies().keySet().forEach(term -> queryTerms.add(
+                    new KnowledgeRepository.AnalyzedTerm(lexicalAnalyzer.version(), term)));
+        });
         var fallbacks = new ArrayList<String>();
         List<KnowledgeRepository.SearchRow> bm25;
         try {
-            bm25 = repository.bm25Search(organizationId, List.copyOf(terms), request.aiOnly(), request.scopeIds(),
+            bm25 = repository.bm25Search(organizationId, List.copyOf(queryTerms), request.aiOnly(), request.scopeIds(),
                     request.categoryIds(), safeLimit * 4);
             if (bm25 == null || bm25.isEmpty()) {
                 bm25 = List.of();
@@ -500,70 +556,20 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         var rankedIds = rows.keySet().stream()
                 .sorted((a, b) -> Double.compare(scores.getOrDefault(b, 0.0), scores.getOrDefault(a, 0.0)))
                 .toList();
-        var orderedIds = expandNeighborEvidence(request, terms, rankedIds, rows, scores, retrievalScores, safeLimit);
-        var hits = orderedIds.stream()
+        var hits = rankedIds.stream()
                 .limit(safeLimit)
-                .map(id -> toSearchHit(rows.get(id), retrievalScores.getOrDefault(id, 0.0), scores.getOrDefault(id, 0.0)))
+                .map(id -> toSearchHit(organizationId, rows.get(id), retrievalScores.getOrDefault(id, 0.0),
+                        scores.getOrDefault(id, 0.0)))
                 .toList();
         if (vector.isEmpty()) fallbacks.add("EMBEDDING_UNAVAILABLE");
         return new KnowledgeSearchFacade.SearchResult(hits,
                 new KnowledgeSearchFacade.RetrievalTrace("BM25_VECTOR_RRF", bm25.size(), vectorRows.size(), rows.size(), fallbacks));
     }
 
-    /**
-     * OCR for scanned forms often stores a field label and its value as two
-     * adjacent chunks. Keep the pair together when a query contains the
-     * label, otherwise the numeric/text value can be cut off by top-k before
-     * the model receives the evidence.
-     */
-    private List<UUID> expandNeighborEvidence(KnowledgeSearchFacade.SearchRequest request,
-                                              Set<String> queryTerms,
-                                              List<UUID> rankedIds,
-                                              Map<UUID, KnowledgeRepository.SearchRow> rows,
-                                              Map<UUID, Double> scores,
-                                              Map<UUID, Double> retrievalScores,
-                                              int safeLimit) {
-        if (rankedIds.isEmpty() || queryTerms.isEmpty()) return rankedIds;
-        var ordered = new java.util.LinkedHashSet<UUID>();
-        var expandedSeeds = 0;
-        for (var id : rankedIds) {
-            var row = rows.get(id);
-            if (row == null) continue;
-            ordered.add(id);
-            if (expandedSeeds >= 3 || ordered.size() > safeLimit * 2
-                    || !isQueryFieldLabel(row.content(), queryTerms)
-                    || row.pageNo() == null || row.chunkNo() < 0) continue;
-            expandedSeeds++;
-            var neighbors = repository.neighboringChunks(request.organizationId(), row.documentId(), row.versionId(),
-                    row.pageNo(), row.chunkNo(), request.aiOnly(), request.scopeIds(), request.categoryIds(), 2, 5);
-            for (var neighbor : neighbors) {
-                if (neighbor.chunkId().equals(row.chunkId())) continue;
-                rows.putIfAbsent(neighbor.chunkId(), neighbor);
-                scores.putIfAbsent(neighbor.chunkId(), Math.max(0.0001, scores.getOrDefault(id, 0.0) * 0.96));
-                retrievalScores.putIfAbsent(neighbor.chunkId(), row.score());
-                ordered.add(neighbor.chunkId());
-            }
-        }
-        rankedIds.stream().filter(id -> !ordered.contains(id)).forEach(ordered::add);
-        return List.copyOf(ordered);
-    }
-
-    private boolean isQueryFieldLabel(String content, Set<String> queryTerms) {
-        if (!StringUtils.hasText(content)) return false;
-        var normalized = content.strip().toLowerCase(Locale.ROOT);
-        if (normalized.length() > 24 || normalized.matches("[\\p{N}\\p{Punct}\\s]+")) return false;
-        // MinerU often keeps a parameter label together with its unit, for
-        // example “粘度（25℃/cps）”. The query index contains the meaningful
-        // label token “粘度”, so exact equality would prevent adjacent value
-        // expansion and leave the model with the label but not its value.
-        return queryTerms.stream().filter(term -> term != null && term.length() >= 2)
-                .anyMatch(normalized::contains);
-    }
-
     public void markIndexStale(UUID organizationId, UUID documentId, UUID versionId, UUID reviewRevisionId) {
         for (var step : List.of("CHUNK", "BM25_INDEX", "VECTOR_INDEX")) {
             repository.startProcessingStep(organizationId, documentId, versionId, reviewRevisionId, step,
-                    "knowledge-index", TermAnalyzer.VERSION, null);
+                    "knowledge-index", lexicalAnalyzer.version(), null);
             repository.finishProcessingStep(organizationId, versionId, reviewRevisionId, step,
                     "VECTOR_INDEX".equals(step) && !repository.isAiApproved(organizationId, documentId)
                             ? "NOT_REQUIRED" : "STALE", null, null);
@@ -580,49 +586,48 @@ public class KnowledgeService implements KnowledgeSearchFacade {
                 || !"BUILDING".equals(review.reviewRevision().status())) {
             throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "待发布内容已被新的修订替代");
         }
-        var sourceByKey = review.sourceNodes().stream().collect(java.util.stream.Collectors.toMap(
-                KnowledgeGovernanceRepository.SourceNodeView::sourceNodeKey, value -> value));
         var projection = documents.project(review.reviewRevision().confirmedDocument(),
                 review.reviewRevision().excludedReviewNodeIds());
-        var projectedSource = projection.nodes().stream().map(node -> {
-            var sourceNode = node.sourceNodeKeys().stream().map(sourceByKey::get)
-                    .filter(java.util.Objects::nonNull).findFirst().orElse(null);
-            return projectedBlock(node, sourceNode);
-        }).filter(block -> block.content() != null && !block.content().isBlank()).toList();
-        var source = new ArrayList<>(OcrFieldValueLinker.link(documents.normalizeBlocks(projectedSource)));
-        governance.largeTableRows(organizationId, reviewRevisionId).forEach(row -> source.add(
-                new DocumentParser.TextBlock(null, "spreadsheet-row", row.projectedText(), row.sheetName(),
-                        row.cellRange(), null, List.of(), null, null, null)));
-        if (source.isEmpty()) throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "确认文本不能为空");
-
-        var chunks = chunk(source);
-        var textHash = sha256(chunks.stream().map(DocumentParser.TextBlock::content)
+        var chunks = blockAwareChunker.chunk(review.title(), projection.nodes(), review.sourceNodes(),
+                governance.largeTableRows(organizationId, reviewRevisionId));
+        if (chunks.stream().noneMatch(chunk -> "CHILD".equals(chunk.role()))) {
+            throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "确认文本没有可检索内容");
+        }
+        var textHash = sha256(chunks.stream().map(BlockAwareChunker.ChunkDraft::content)
                 .reduce("", (left, right) -> left + "\n" + right));
         var aiApproved = repository.isAiApproved(organizationId, documentId);
         var embedding = aiApproved ? embeddings.getIfAvailable() : null;
         if (aiApproved && embedding == null) throw new IllegalStateException("向量服务暂不可用");
 
         repository.startProcessingStep(organizationId, documentId, versionId, reviewRevisionId,
-                "CHUNK", "builtin-chunker", TermAnalyzer.VERSION, textHash);
+                "CHUNK", "block-aware-chunker", lexicalAnalyzer.version(), textHash);
         var writes = new ArrayList<KnowledgeRepository.ChunkWrite>();
         for (int index = 0; index < chunks.size(); index++) {
             var block = chunks.get(index);
-            var terms = TermAnalyzer.frequencies(block.content()).entrySet().stream()
+            var child = "CHILD".equals(block.role());
+            var analysis = child ? lexicalAnalyzer.analyzeDocument(block.content())
+                    : new LexicalAnalyzer.Analysis(Map.of(), 0);
+            var terms = analysis.frequencies().entrySet().stream()
                     .map(item -> new KnowledgeRepository.TermFrequency(item.getKey(), item.getValue())).toList();
             String vector = null;
-            if (aiApproved) {
+            if (aiApproved && child) {
                 vector = embedding.embedVector(block.content())
                         .orElseThrow(() -> new IllegalStateException("向量服务未返回结果"));
             }
-            writes.add(new KnowledgeRepository.ChunkWrite(index, block.pageNo(), block.section(), block.content(), vector,
-                    terms.stream().mapToInt(KnowledgeRepository.TermFrequency::frequency).sum(), TermAnalyzer.VERSION,
-                    null, vector == null ? null : embeddingModel, terms, block.sheetName(), block.cellRange(),
-                    block.paragraphId(), block.bbox(), block.startTimeMs(), block.endTimeMs()));
+            var anchor = block.primaryAnchor();
+            writes.add(new KnowledgeRepository.ChunkWrite(block.chunkKey(), block.parentKey(), block.role(), index,
+                    block.firstPage(), block.headingPath().isEmpty() ? null : String.join(" > ", block.headingPath()),
+                    block.content(), vector, analysis.documentLength(), block.modelTokenLength(),
+                    lexicalAnalyzer.version(), vector == null ? null : embeddingModel, terms, block.headingPath(),
+                    block.reviewNodeIds(), block.sourceNodeKeys(), json(anchor), json(block.anchors()),
+                    json(block.relations()), anchorText(anchor, "sheetName"), anchorText(anchor, "range"),
+                    anchorText(anchor, "paragraphId"), anchorDoubles(anchor, "polygon"), anchorLong(anchor, "startMs"),
+                    anchorLong(anchor, "endMs")));
         }
         repository.replaceChunks(documentId, versionId, reviewRevisionId, writes);
         repository.finishProcessingStep(organizationId, versionId, reviewRevisionId, "CHUNK", "SUCCEEDED", textHash, null);
         repository.startProcessingStep(organizationId, documentId, versionId, reviewRevisionId,
-                "BM25_INDEX", "postgresql-bm25", TermAnalyzer.VERSION, textHash);
+                "BM25_INDEX", "postgresql-bm25", lexicalAnalyzer.version(), textHash);
         repository.finishProcessingStep(organizationId, versionId, reviewRevisionId, "BM25_INDEX", "SUCCEEDED", textHash, null);
         if (aiApproved) {
             repository.startProcessingStep(organizationId, documentId, versionId, reviewRevisionId,
@@ -689,34 +694,6 @@ public class KnowledgeService implements KnowledgeSearchFacade {
                 .put("reviewRevisionId", reviewRevisionId.toString());
         async.enqueue(organizationId, "KB_BUILD_KNOWLEDGE_VECTOR", payload,
                 "kb-vector:" + publicationId + ":" + System.currentTimeMillis(), 55);
-    }
-
-    private DocumentParser.TextBlock projectedBlock(StructuredDocumentCodec.ProjectedNode node,
-                                                    KnowledgeGovernanceRepository.SourceNodeView source) {
-        var anchor = source == null ? objectMapper.createObjectNode() : source.sourceAnchor();
-        var kind = anchor.path("kind").asText();
-        Integer page = anchor.has("page") ? anchor.path("page").asInt() : null;
-        String sheet = "sheet_range".equals(kind) ? anchor.path("sheetName").asText(null) : null;
-        String range = "sheet_range".equals(kind) ? anchor.path("range").asText(null) : null;
-        String paragraph = "docx_path".equals(kind) ? anchor.path("paragraphId").asText(null) : null;
-        Long start = "time_range".equals(kind) && anchor.has("startMs") ? anchor.path("startMs").asLong() : null;
-        Long end = "time_range".equals(kind) && anchor.has("endMs") ? anchor.path("endMs").asLong() : null;
-        var bbox = new ArrayList<Double>();
-        anchor.path("polygon").forEach(value -> {
-            if (value.isNumber()) bbox.add(value.asDouble());
-            else if (value.isArray()) value.forEach(coordinate -> bbox.add(coordinate.asDouble()));
-        });
-        var attributes = new LinkedHashMap<String, Object>(node.attributes());
-        attributes.put("headingPath", node.headingPath());
-        if (anchor.has("provider")) attributes.putIfAbsent("sourceProvider", anchor.path("provider").asText());
-        if (anchor.has("providerCoordinateSpace")) attributes.putIfAbsent("providerCoordinateSpace",
-                anchor.path("providerCoordinateSpace").asText());
-        if (anchor.has("coordinateSpace")) attributes.putIfAbsent("coordinateSpace", anchor.path("coordinateSpace").asText());
-        if (anchor.has("pageWidth")) attributes.putIfAbsent("pageWidth", anchor.path("pageWidth").asDouble());
-        if (anchor.has("pageHeight")) attributes.putIfAbsent("pageHeight", anchor.path("pageHeight").asDouble());
-        if (anchor.has("rotation")) attributes.putIfAbsent("rotation", anchor.path("rotation").asInt());
-        return new DocumentParser.TextBlock(page, node.nodeType(), node.text(), sheet, range, paragraph,
-                bbox, start, end, null, attributes);
     }
 
     public void ingest(UUID organizationId, UUID actorId, UUID documentId, UUID versionId, UUID fileId) {
@@ -804,11 +781,18 @@ public class KnowledgeService implements KnowledgeSearchFacade {
                 try (var stored = storage.open(organizationId, fileId)) {
                     parsed = parser.parse(stored.stream(), version.originalName(),
                             new DocumentParser.ParseContext(organizationId, actorId, fileId,
-                                    version.contentType(), version.size()));
+                                    version.contentType(), version.size(), OcrMode.fromNullable(version.ocrMode()),
+                                    version.allowAgentFallback()));
                 }
             }
             var textHash = sha256(parsed.blocks().stream().map(block -> block.content() == null ? "" : block.content())
                     .reduce("", (left, right) -> left + "\n" + right));
+            var effectiveOcrValue = parsed.metadata().get("effectiveOcr");
+            var effectiveOcr = effectiveOcrValue instanceof Boolean value ? value : null;
+            var parserMode = parsed.metadata().get("mode") == null ?
+                    (mediaProvider == null ? "LOCAL" : "PRECISE") : String.valueOf(parsed.metadata().get("mode"));
+            repository.updateVersionParseOutcome(organizationId, versionId, effectiveOcr, parserMode,
+                    objectMapper.writeValueAsString(parsed.metadata()));
             repository.finishProcessingStep(organizationId, versionId, null, "PARSE", "SUCCEEDED", textHash, null);
             activeParseRunId = governance.createParseRun(organizationId, actorId, documentId, versionId, "SUCCEEDED",
                     parsed.parserVersion(), mediaProvider == null ? parser.getClass().getSimpleName()
@@ -821,14 +805,26 @@ public class KnowledgeService implements KnowledgeSearchFacade {
                             .put("parserVersion", parsed.parserVersion()).put("blockCount", parsed.blocks().size()));
         } catch (Exception exception) {
             var mediaFailure = exception instanceof MediaExtractionException failure ? failure : null;
+            var parsingFailure = exception instanceof DocumentParsingFailure failure ? failure : null;
             try {
                 if (activeParseRunId != null) {
                     governance.updateParseRunStatus(organizationId, activeParseRunId, "FAILED", safeError(exception));
                 } else {
+                    var diagnostic = objectMapper.createObjectNode()
+                            .put("requestedOcrMode", version.ocrMode())
+                            .put("allowAgentFallback", version.allowAgentFallback())
+                            .put("retryable", parsingFailure != null && parsingFailure.retryable())
+                            .put("fallbackEligible", parsingFailure != null && parsingFailure.fallbackEligible());
+                    if (parsingFailure != null && parsingFailure.httpStatus() != null) {
+                        diagnostic.put("httpStatus", parsingFailure.httpStatus());
+                    }
+                    if (parsingFailure != null && parsingFailure.apiCode() != null) {
+                        diagnostic.put("apiCode", parsingFailure.apiCode());
+                    }
                     activeParseRunId = governance.createParseRun(organizationId, actorId, documentId, versionId, "FAILED",
                             mediaFailure == null ? null : mediaFailure.model(), attemptedProvider,
-                            mediaFailure == null ? null : mediaFailure.providerTaskId(), safeError(exception),
-                            objectMapper.createObjectNode().put("retryable", false), List.of(), List.of()).id();
+                            parsingFailure == null ? mediaFailure == null ? null : mediaFailure.providerTaskId()
+                                    : parsingFailure.taskId(), safeError(exception), diagnostic, List.of(), List.of()).id();
                     repository.attachProcessingSteps(organizationId, versionId, activeParseRunId);
                 }
                 if (activeParseRunId != null) {
@@ -861,113 +857,53 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         }
     }
 
-    private List<DocumentParser.TextBlock> chunk(List<DocumentParser.TextBlock> blocks) {
-        var result = new ArrayList<DocumentParser.TextBlock>();
-        var tableHeaders = new LinkedHashMap<String, String>();
-        for (var block : blocks) {
-            var text = normalizeChunkText(block.content());
-            if (text.isBlank()) continue;
-            var attributes = block.attributes();
-            var headingPath = stringList(attributes.get("headingPath"));
-            var context = headingPath.isEmpty() ? "" : "章节：" + String.join(" / ", headingPath) + "\n\n";
-            var section = block.section() == null ? "paragraph" : block.section();
-            if (section.contains("table") || section.startsWith("spreadsheet-row")) {
-                var group = String.valueOf(attributes.getOrDefault("tableGroup", "table-page-" + block.pageNo()));
-                var rowText = tableRowText(attributes, text);
-                if (isHeaderRow(attributes)) tableHeaders.put(group, rowText);
-                var header = tableHeaders.get(group);
-                if (header != null && !header.equals(rowText)) rowText = "表头：" + header + "\n数据行：" + rowText;
-                addSemanticChunks(result, block, context + "表格：" + rowText);
-                continue;
-            }
-            if (section.contains("formula")) {
-                if (!result.isEmpty() && sameContext(result.getLast(), block, headingPath)) {
-                    var last = result.removeLast();
-                    result.add(copyBlock(last, last.content() + "\n\n公式：" + text));
-                } else {
-                    addSemanticChunks(result, block, context + "公式：" + text);
-                }
-                continue;
-            }
-            addSemanticChunks(result, block, context + text);
-        }
-        return result;
-    }
-
-    private void addSemanticChunks(List<DocumentParser.TextBlock> result, DocumentParser.TextBlock block, String text) {
-        if (text.length() <= CHUNK_SIZE) {
-            result.add(copyBlock(block, text));
-            return;
-        }
-        var start = 0;
-        while (start < text.length()) {
-            var hardEnd = Math.min(text.length(), start + CHUNK_SIZE);
-            var end = semanticBoundary(text, start, hardEnd);
-            result.add(copyBlock(block, text.substring(start, end).strip()));
-            if (end >= text.length()) break;
-            start = Math.max(end - CHUNK_OVERLAP, start + 1);
-        }
-    }
-
-    private int semanticBoundary(String text, int start, int hardEnd) {
-        if (hardEnd >= text.length()) return text.length();
-        var floor = Math.min(hardEnd, start + Math.max(200, CHUNK_SIZE / 2));
-        for (var index = hardEnd; index >= floor; index--) {
-            var character = text.charAt(index - 1);
-            if (character == '\n' || character == '。' || character == '！' || character == '？'
-                    || character == '；' || character == '.' || character == '!' || character == '?') return index;
-        }
-        return hardEnd;
-    }
-
-    private String tableRowText(Map<String, Object> attributes, String fallback) {
-        var cells = attributes.get("cells");
-        if (!(cells instanceof List<?> values) || values.isEmpty()) return fallback;
-        return values.stream().map(value -> {
-            if (value instanceof Map<?, ?> map) return String.valueOf(map.get("text") == null ? "" : map.get("text"));
-            return String.valueOf(value);
-        }).reduce((left, right) -> left + " | " + right).orElse(fallback);
-    }
-
-    private boolean isHeaderRow(Map<String, Object> attributes) {
-        if (String.valueOf(attributes.getOrDefault("tableRowIndex", "-1")).equals("0")) return true;
-        var cells = attributes.get("cells");
-        if (!(cells instanceof List<?> values)) return false;
-        return !values.isEmpty() && values.stream().allMatch(value -> value instanceof Map<?, ?> map
-                && Boolean.TRUE.equals(map.get("header")));
-    }
-
-    private boolean sameContext(DocumentParser.TextBlock last, DocumentParser.TextBlock current, List<String> path) {
-        return java.util.Objects.equals(last.pageNo(), current.pageNo())
-                && stringList(last.attributes().get("headingPath")).equals(path);
-    }
-
-    private List<String> stringList(Object value) {
-        if (!(value instanceof List<?> values)) return List.of();
-        return values.stream().map(String::valueOf).filter(StringUtils::hasText).toList();
-    }
-
-    private String normalizeChunkText(String value) {
-        return value == null ? "" : value.replaceAll("[\\t\\r]+", " ").replaceAll("[ ]{2,}", " ").strip();
-    }
-
-    private DocumentParser.TextBlock copyBlock(DocumentParser.TextBlock block, String text) {
-        return new DocumentParser.TextBlock(block.pageNo(), block.section(), text, block.sheetName(), block.cellRange(),
-                block.paragraphId(), block.bbox(), block.startTimeMs(), block.endTimeMs(), block.confidence(),
-                block.attributes());
-    }
-
     private JsonNode parseMetadata(DocumentParser.ParsedDocument parsed, String textHash) {
         var result = objectMapper.createObjectNode().put("textSha256", textHash);
         parsed.metadata().forEach((key, value) -> result.set(key, objectMapper.valueToTree(value)));
         return result;
     }
 
+    private String json(Object value) {
+        if (value == null) return null;
+        try { return objectMapper.writeValueAsString(value); }
+        catch (Exception exception) { throw new IllegalStateException("Chunk 来源信息序列化失败", exception); }
+    }
+
+    private String anchorText(JsonNode anchor, String field) {
+        return anchor != null && anchor.hasNonNull(field) ? anchor.path(field).asText(null) : null;
+    }
+
+    private Long anchorLong(JsonNode anchor, String field) {
+        return anchor != null && anchor.path(field).isNumber() ? anchor.path(field).asLong() : null;
+    }
+
+    private List<Double> anchorDoubles(JsonNode anchor, String field) {
+        if (anchor == null || !anchor.path(field).isArray()) return List.of();
+        var result = new ArrayList<Double>();
+        anchor.path(field).forEach(value -> {
+            if (value.isNumber()) result.add(value.asDouble());
+            else if (value.isArray()) value.forEach(number -> result.add(number.asDouble()));
+        });
+        return List.copyOf(result);
+    }
+
     private DocumentView view(KnowledgeRepository.DocumentRow row) {
         return new DocumentView(row.id(), row.title(), row.status(), row.scanStatus(), row.aiStatus(),
                 row.currentVersionNo(), row.currentVersionId(), row.originalName(), row.contentType(), row.size(),
                 row.sha256(), safeUserError(row.parseError()), row.createdAt(), row.updatedAt(), row.libraryScope(), row.categoryId(), row.categoryName(),
-                row.lifecycleStatus(), row.reviewStatus(), row.reviewRevision(), row.currentPublicationId(), row.currentPublicationNo());
+                row.lifecycleStatus(), row.reviewStatus(), row.reviewRevision(), row.currentPublicationId(), row.currentPublicationNo(),
+                List.of());
+    }
+
+    private List<DocumentView> withProjects(com.jsd.aird.shared.security.Actor actor, List<DocumentView> items) {
+        if (projectResources == null || items.isEmpty()) return items;
+        var links = projectResources.links(actor, ResourceType.KNOWLEDGE_DOCUMENT,
+                items.stream().map(DocumentView::id).toList());
+        return items.stream().map(item -> new DocumentView(item.id(), item.title(), item.status(), item.scanStatus(),
+                item.aiStatus(), item.currentVersionNo(), item.currentVersionId(), item.originalName(), item.contentType(),
+                item.size(), item.sha256(), item.parseError(), item.createdAt(), item.updatedAt(), item.libraryScope(),
+                item.categoryId(), item.categoryName(), item.lifecycleStatus(), item.reviewStatus(), item.reviewRevision(),
+                item.currentPublicationId(), item.currentPublicationNo(), links.getOrDefault(item.id(), List.of()))).toList();
     }
 
     private KnowledgeRepository.CategoryRow requireCategory(UUID organizationId, UUID categoryId) {
@@ -1012,7 +948,26 @@ public class KnowledgeService implements KnowledgeSearchFacade {
     private VersionView versionView(KnowledgeRepository.VersionRow row) {
         return new VersionView(row.id(), row.documentId(), row.versionNo(), row.fileObjectId(), row.originalName(),
                 row.contentType(), row.size(), row.sha256(), row.status(), safeUserError(row.errorMessage()),
-                row.reviewStatus(), row.reviewRevision());
+                row.reviewStatus(), row.reviewRevision(), row.ocrMode(), row.allowAgentFallback(),
+                row.effectiveOcr(), row.parserMode(), readJsonObject(row.parserMetadataJson()));
+    }
+
+    private JsonNode readJsonObject(String value) {
+        if (!StringUtils.hasText(value)) return objectMapper.createObjectNode();
+        try { return objectMapper.readTree(value); }
+        catch (Exception ignored) { return objectMapper.createObjectNode(); }
+    }
+
+    private ParsePolicy parsingPolicy(String fileName, String contentType, String requestedMode,
+                                      Boolean requestedFallback) {
+        var pdf = (fileName != null && fileName.toLowerCase(Locale.ROOT).endsWith(".pdf"))
+                || "application/pdf".equalsIgnoreCase(contentType);
+        if (!pdf) return new ParsePolicy(OcrMode.AUTO, false);
+        try {
+            return new ParsePolicy(OcrMode.fromNullable(requestedMode), Boolean.TRUE.equals(requestedFallback));
+        } catch (IllegalArgumentException exception) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, exception.getMessage());
+        }
     }
 
     private String safeUserError(String value) {
@@ -1024,10 +979,30 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         return normalized.length() <= 500 ? normalized : normalized.substring(0, 500);
     }
 
-    private KnowledgeSearchFacade.SearchHit toSearchHit(KnowledgeRepository.SearchRow row, double retrieval, double rrf) {
+    private KnowledgeSearchFacade.SearchHit toSearchHit(UUID organizationId, KnowledgeRepository.SearchRow row,
+                                                         double retrieval, double rrf) {
+        var provenance = repository.findChunkAnchor(organizationId, row.chunkId()).orElse(null);
         return new KnowledgeSearchFacade.SearchHit(row.chunkId(), row.documentId(), row.versionId(), row.title(),
                 row.originalName(), row.pageNo(), row.section(), row.content(), rrf, retrieval, rrf, rrf,
-                "KNOWLEDGE_CHUNK", null, null, null, null, row.chunkNo());
+                "KNOWLEDGE_CHUNK", null, null, null,
+                provenance == null ? null : provenance.primaryAnchorJson(), row.chunkNo(),
+                provenance == null ? null : readJsonNullable(provenance.primaryAnchorJson()),
+                provenance == null ? List.of() : readJsonArray(provenance.anchorsJson()),
+                provenance == null ? List.of() : provenance.reviewNodeIds(),
+                provenance == null ? List.of() : provenance.sourceNodeKeys());
+    }
+
+    private JsonNode readJsonNullable(String value) {
+        if (!StringUtils.hasText(value)) return null;
+        try { return objectMapper.readTree(value); } catch (Exception ignored) { return null; }
+    }
+
+    private List<JsonNode> readJsonArray(String value) {
+        var parsed = readJsonNullable(value);
+        if (parsed == null || !parsed.isArray()) return List.of();
+        var result = new ArrayList<JsonNode>();
+        parsed.forEach(result::add);
+        return List.copyOf(result);
     }
 
     private String safeError(Exception exception) {
@@ -1050,15 +1025,17 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         try { file.close(); } catch (Exception ignored) { }
     }
 
-    public record CreateCommand(UUID fileId, String title, String libraryScope, UUID categoryId) { }
+    public record CreateCommand(UUID fileId, String title, String libraryScope, UUID categoryId,
+                                String ocrMode, Boolean allowAgentFallback) { }
     public record GrantCommand(String action, String reason) { }
-    public record CreateVersionCommand(UUID fileId) { }
+    public record CreateVersionCommand(UUID fileId, String ocrMode, Boolean allowAgentFallback) { }
     public record DocumentView(UUID id, String title, String status, String scanStatus,
                                String aiStatus, int currentVersionNo, UUID currentVersionId, String originalName,
                                String contentType, long size, String sha256, String parseError,
                                java.time.Instant createdAt, java.time.Instant updatedAt, String libraryScope,
                                UUID categoryId, String categoryName, String lifecycleStatus, String reviewStatus,
-                               int reviewRevision, UUID currentPublicationId, Integer currentPublicationNo) { }
+                               int reviewRevision, UUID currentPublicationId, Integer currentPublicationNo,
+                               List<ProjectResourceFacade.RelatedProjectView> relatedProjects) { }
     public record ProcessingView(UUID documentId, UUID versionId, String documentStatus, String documentError,
                                  UUID parseRunId, String parseRunStatus, String parseRunError,
                                  java.time.Instant lastAttemptAt, UUID jobId, String jobStatus, int progress,
@@ -1066,5 +1043,8 @@ public class KnowledgeService implements KnowledgeSearchFacade {
                                  java.time.Instant nextAttemptAt, boolean terminal, String lastError) { }
     public record VersionView(UUID id, UUID documentId, int versionNo, UUID fileObjectId, String originalName,
                                String contentType, long size, String sha256, String status,
-                               String errorMessage, String reviewStatus, int reviewRevision) { }
+                               String errorMessage, String reviewStatus, int reviewRevision, String ocrMode,
+                               boolean allowAgentFallback, Boolean effectiveOcr, String parserMode,
+                               JsonNode parserMetadata) { }
+    private record ParsePolicy(OcrMode ocrMode, boolean allowAgentFallback) { }
 }

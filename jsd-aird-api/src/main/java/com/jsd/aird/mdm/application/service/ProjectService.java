@@ -51,7 +51,7 @@ public class ProjectService {
         var project = new Project(UUID.randomUUID(), code, command.name().trim(), command.partnerId(),
             trim(command.partnerName()), trim(command.owner()), command.startDate(), command.endDate(),
             command.priority() == null ? ProjectPriority.MEDIUM : command.priority(),
-            command.status() == null ? ProjectStatus.PENDING : command.status(),
+            command.status() == null ? ProjectStatus.NOT_STARTED : command.status(),
             command.teamSize() == null ? 0 : Math.max(command.teamSize(), 0),
             command.background(), command.customFields(), command.teamMembers(), 0, now, now);
         repository.insert(project, OPERATOR);
@@ -100,7 +100,7 @@ public class ProjectService {
         return sources.stream().map(source -> {
             var copy = new Project(UUID.randomUUID(), repository.nextProjectCode(year),
                 truncate(source.name() + "（副本）"), source.partnerId(), source.partnerName(), source.owner(),
-                source.startDate(), source.endDate(), source.priority(), ProjectStatus.PENDING,
+                source.startDate(), source.endDate(), source.priority(), ProjectStatus.NOT_STARTED,
                 source.teamSize(), source.background(), source.customFields(), source.teamMembers(), 0, now, now);
             repository.insert(copy, OPERATOR);
             return new ProjectCommands.Created(copy.id(), 0);

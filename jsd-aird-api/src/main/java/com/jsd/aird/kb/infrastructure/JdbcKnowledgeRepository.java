@@ -33,10 +33,11 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
         jdbc.update("""
                 INSERT INTO kb.document_version (
                     id, document_id, version_no, file_object_id, original_name,
-                    content_type, size_bytes, sha256
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    content_type, size_bytes, sha256, ocr_mode, allow_agent_fallback
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, version.id(), version.documentId(), version.versionNo(), version.fileObjectId(),
-                version.originalName(), version.contentType(), version.size(), version.sha256());
+                version.originalName(), version.contentType(), version.size(), version.sha256(),
+                version.ocrMode(), version.allowAgentFallback());
     }
 
     @Override
@@ -49,9 +50,19 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
     public List<DocumentRow> listDocuments(UUID organizationId, String keyword, String status, String aiStatus,
                                            String scope, UUID categoryId, String lifecycleStatus, String reviewStatus,
                                            int page, int size) {
+        return listDocuments(organizationId, keyword, status, aiStatus, scope, categoryId,
+                lifecycleStatus, reviewStatus, null, page, size);
+    }
+
+    @Override
+    public List<DocumentRow> listDocuments(UUID organizationId, String keyword, String status, String aiStatus,
+                                           String scope, UUID categoryId, String lifecycleStatus, String reviewStatus,
+                                           java.util.Set<UUID> allowedDocumentIds, int page, int size) {
+        if (allowedDocumentIds != null && allowedDocumentIds.isEmpty()) return List.of();
         var normalizedKeyword = blankToNull(keyword);
         var normalizedStatus = blankToNull(status);
         var normalizedAiStatus = blankToNull(aiStatus);
+        var projectClause = documentIdClause(allowedDocumentIds);
         var sql = documentQuery("""
                 WHERE d.organization_id = ?
                   AND (CAST(? AS text) IS NULL OR d.title ILIKE '%' || ? || '%' OR v.original_name ILIKE '%' || ? || '%')
@@ -61,23 +72,42 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                   AND (CAST(? AS uuid) IS NULL OR d.category_id = ?)
                   AND (CAST(? AS text) IS NULL OR d.lifecycle_status = ?)
                   AND (CAST(? AS text) IS NULL OR v.review_status = ?)
+                """ + projectClause + """
                 ORDER BY d.updated_at DESC
                 LIMIT ? OFFSET ?
                 """);
-        return jdbc.query(sql, this::mapDocument, organizationId, normalizedKeyword, normalizedKeyword,
+        var args = new java.util.ArrayList<Object>(java.util.Arrays.asList(organizationId, normalizedKeyword, normalizedKeyword,
                 normalizedKeyword, normalizedStatus, normalizedStatus, normalizedAiStatus, normalizedAiStatus,
                 blankToNull(scope), blankToNull(scope), categoryId, categoryId,
                 blankToNull(lifecycleStatus), blankToNull(lifecycleStatus),
-                blankToNull(reviewStatus), blankToNull(reviewStatus),
-                size, Math.max(0, page - 1) * size);
+                blankToNull(reviewStatus), blankToNull(reviewStatus)));
+        if (allowedDocumentIds != null) args.addAll(allowedDocumentIds);
+        args.add(size);
+        args.add(Math.max(0, page - 1) * size);
+        return jdbc.query(sql, this::mapDocument, args.toArray());
     }
 
     @Override
     public long countDocuments(UUID organizationId, String keyword, String status, String aiStatus,
                                String scope, UUID categoryId, String lifecycleStatus, String reviewStatus) {
+        return countDocuments(organizationId, keyword, status, aiStatus, scope, categoryId,
+                lifecycleStatus, reviewStatus, null);
+    }
+
+    @Override
+    public long countDocuments(UUID organizationId, String keyword, String status, String aiStatus,
+                               String scope, UUID categoryId, String lifecycleStatus, String reviewStatus,
+                               java.util.Set<UUID> allowedDocumentIds) {
+        if (allowedDocumentIds != null && allowedDocumentIds.isEmpty()) return 0;
         var normalizedKeyword = blankToNull(keyword);
         var normalizedStatus = blankToNull(status);
         var normalizedAiStatus = blankToNull(aiStatus);
+        var args = new java.util.ArrayList<Object>(java.util.Arrays.asList(organizationId, normalizedKeyword, normalizedKeyword,
+                normalizedKeyword, normalizedStatus, normalizedStatus, normalizedAiStatus, normalizedAiStatus,
+                blankToNull(scope), blankToNull(scope), categoryId, categoryId,
+                blankToNull(lifecycleStatus), blankToNull(lifecycleStatus),
+                blankToNull(reviewStatus), blankToNull(reviewStatus)));
+        if (allowedDocumentIds != null) args.addAll(allowedDocumentIds);
         return jdbc.queryForObject("""
                 SELECT count(*) FROM kb.document d
                 JOIN kb.document_version v ON v.document_id = d.id AND v.version_no = d.current_version_no
@@ -90,11 +120,12 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                   AND (CAST(? AS uuid) IS NULL OR d.category_id = ?)
                   AND (CAST(? AS text) IS NULL OR d.lifecycle_status = ?)
                   AND (CAST(? AS text) IS NULL OR v.review_status = ?)
-                """, Long.class, organizationId, normalizedKeyword, normalizedKeyword, normalizedKeyword,
-                normalizedStatus, normalizedStatus, normalizedAiStatus, normalizedAiStatus,
-                blankToNull(scope), blankToNull(scope), categoryId, categoryId,
-                blankToNull(lifecycleStatus), blankToNull(lifecycleStatus),
-                blankToNull(reviewStatus), blankToNull(reviewStatus));
+                """ + documentIdClause(allowedDocumentIds), Long.class, args.toArray());
+    }
+
+    private String documentIdClause(java.util.Set<UUID> allowedDocumentIds) {
+        if (allowedDocumentIds == null) return "";
+        return " AND d.id IN (" + String.join(",", java.util.Collections.nCopies(allowedDocumentIds.size(), "?")) + ")\n";
     }
 
     @Override
@@ -196,7 +227,8 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
         return jdbc.query("""
                 SELECT v.id, v.document_id, v.version_no, v.file_object_id, v.original_name,
                        v.content_type, v.size_bytes, v.sha256, v.status, v.parser_version, v.error_message,
-                       v.review_status, v.review_revision
+                       v.review_status, v.review_revision, v.ocr_mode, v.allow_agent_fallback,
+                       v.effective_ocr, v.parser_mode, v.parser_metadata_jsonb
                 FROM kb.document_version v
                 JOIN kb.document d ON d.id = v.document_id
                 WHERE d.organization_id = ? AND v.id = ?
@@ -205,7 +237,9 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                 rs.getObject("file_object_id", UUID.class), rs.getString("original_name"),
                 rs.getString("content_type"), rs.getLong("size_bytes"), rs.getString("sha256"),
                 rs.getString("status"), rs.getString("parser_version"), rs.getString("error_message"),
-                rs.getString("review_status"), rs.getInt("review_revision")
+                rs.getString("review_status"), rs.getInt("review_revision"), rs.getString("ocr_mode"),
+                rs.getBoolean("allow_agent_fallback"), (Boolean) rs.getObject("effective_ocr"),
+                rs.getString("parser_mode"), rs.getString("parser_metadata_jsonb")
         ), organizationId, versionId).stream().findFirst();
     }
 
@@ -214,7 +248,8 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
         return jdbc.query("""
                 SELECT v.id, v.document_id, v.version_no, v.file_object_id, v.original_name,
                        v.content_type, v.size_bytes, v.sha256, v.status, v.parser_version, v.error_message,
-                       v.review_status, v.review_revision
+                       v.review_status, v.review_revision, v.ocr_mode, v.allow_agent_fallback,
+                       v.effective_ocr, v.parser_mode, v.parser_metadata_jsonb
                 FROM kb.document_version v
                 JOIN kb.document d ON d.id = v.document_id
                 WHERE d.organization_id = ? AND d.id = ?
@@ -224,8 +259,34 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                 rs.getObject("file_object_id", UUID.class), rs.getString("original_name"),
                 rs.getString("content_type"), rs.getLong("size_bytes"), rs.getString("sha256"),
                 rs.getString("status"), rs.getString("parser_version"), rs.getString("error_message"),
-                rs.getString("review_status"), rs.getInt("review_revision")
+                rs.getString("review_status"), rs.getInt("review_revision"), rs.getString("ocr_mode"),
+                rs.getBoolean("allow_agent_fallback"), (Boolean) rs.getObject("effective_ocr"),
+                rs.getString("parser_mode"), rs.getString("parser_metadata_jsonb")
         ), organizationId, documentId);
+    }
+
+    @Override
+    public void updateVersionParsingPolicy(UUID organizationId, UUID versionId, String ocrMode,
+                                           boolean allowAgentFallback) {
+        jdbc.update("""
+                UPDATE kb.document_version v
+                SET ocr_mode = ?, allow_agent_fallback = ?, effective_ocr = NULL,
+                    parser_mode = NULL, parser_metadata_jsonb = '{}'::jsonb, updated_at = now()
+                FROM kb.document d
+                WHERE d.id = v.document_id AND d.organization_id = ? AND v.id = ?
+                """, ocrMode, allowAgentFallback, organizationId, versionId);
+    }
+
+    @Override
+    public void updateVersionParseOutcome(UUID organizationId, UUID versionId, Boolean effectiveOcr,
+                                          String parserMode, String parserMetadataJson) {
+        jdbc.update("""
+                UPDATE kb.document_version v
+                SET effective_ocr = ?, parser_mode = ?, parser_metadata_jsonb = CAST(? AS jsonb), updated_at = now()
+                FROM kb.document d
+                WHERE d.id = v.document_id AND d.organization_id = ? AND v.id = ?
+                """, effectiveOcr, parserMode, parserMetadataJson == null ? "{}" : parserMetadataJson,
+                organizationId, versionId);
     }
 
     @Override
@@ -255,12 +316,15 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
     public Optional<ChunkAnchorRow> findChunkAnchor(UUID organizationId, UUID chunkId) {
         return jdbc.query("""
                 SELECT c.page_no, c.sheet_name, c.cell_range, c.paragraph_id, c.bbox_jsonb,
-                       c.start_time_ms, c.end_time_ms, c.section
+                       c.start_time_ms, c.end_time_ms, c.section, c.source_anchor_jsonb,
+                       c.source_anchors_jsonb, c.review_node_ids_jsonb, c.source_node_keys_jsonb
                 FROM kb.document_chunk c JOIN kb.document d ON d.id = c.document_id
                 WHERE d.organization_id = ? AND c.id = ?
                 """, (rs, ignored) -> new ChunkAnchorRow((Integer) rs.getObject("page_no"), rs.getString("sheet_name"),
                 rs.getString("cell_range"), rs.getString("paragraph_id"), parseDoubles(rs.getString("bbox_jsonb")),
-                (Long) rs.getObject("start_time_ms"), (Long) rs.getObject("end_time_ms"), rs.getString("section")),
+                (Long) rs.getObject("start_time_ms"), (Long) rs.getObject("end_time_ms"), rs.getString("section"),
+                rs.getString("source_anchor_jsonb"), rs.getString("source_anchors_jsonb"),
+                parseUuids(rs.getString("review_node_ids_jsonb")), parseUuids(rs.getString("source_node_keys_jsonb"))),
                 organizationId, chunkId).stream().findFirst();
     }
 
@@ -274,31 +338,41 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
     private void insertChunks(UUID documentId, UUID versionId, UUID reviewRevisionId, List<ChunkWrite> chunks) {
         var parseRunId = jdbc.queryForObject(
                 "SELECT parse_run_id FROM kb.document_review_revision WHERE id = ?", UUID.class, reviewRevisionId);
-        UUID parentChunkId = null;
+        var ids = new java.util.LinkedHashMap<String, UUID>();
+        for (var chunk : chunks) ids.put(chunk.chunkKey(), UUID.randomUUID());
         for (var chunk : chunks) {
-            var chunkId = UUID.randomUUID();
-            var effectiveParentId = chunk.parentChunkId() == null ? parentChunkId : chunk.parentChunkId();
+            var chunkId = ids.get(chunk.chunkKey());
+            var effectiveParentId = chunk.parentKey() == null ? null : ids.get(chunk.parentKey());
+            if (chunk.parentKey() != null && effectiveParentId == null) {
+                throw new IllegalArgumentException("Chunk 父块键不存在：" + chunk.parentKey());
+            }
             jdbc.update("""
                     INSERT INTO kb.document_chunk (
                         id, document_id, document_version_id, parse_run_id, review_revision_id,
                         chunk_no, page_no, section, content, embedding,
                         parent_chunk_id, token_length, analyzer_version, embedding_model, sheet_name, cell_range,
-                        paragraph_id, bbox_jsonb, start_time_ms, end_time_ms
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS vector), ?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb), ?, ?)
+                        paragraph_id, bbox_jsonb, start_time_ms, end_time_ms, chunk_role, heading_path_jsonb,
+                        review_node_ids_jsonb, source_node_keys_jsonb, source_anchor_jsonb,
+                        source_anchors_jsonb, relations_jsonb, model_token_length
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS vector), ?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb), ?, ?,
+                              ?, CAST(? AS jsonb), CAST(? AS jsonb), CAST(? AS jsonb), CAST(? AS jsonb),
+                              CAST(? AS jsonb), CAST(? AS jsonb), ?)
                     """, chunkId, documentId, versionId, parseRunId, reviewRevisionId,
                     chunk.chunkNo(), chunk.pageNo(), chunk.section(),
                     chunk.content(), chunk.vector(), effectiveParentId, chunk.tokenLength(), chunk.analyzerVersion(),
                     chunk.embeddingModel(), chunk.sheetName(), chunk.cellRange(), chunk.paragraphId(),
                     chunk.bbox() == null || chunk.bbox().isEmpty() ? null : chunk.bbox().toString(),
-                    chunk.startTimeMs(), chunk.endTimeMs());
-            for (var term : chunk.terms()) {
+                    chunk.startTimeMs(), chunk.endTimeMs(), chunk.chunkRole(), jsonStrings(chunk.headingPath()),
+                    jsonUuids(chunk.reviewNodeIds()), jsonUuids(chunk.sourceNodeKeys()), chunk.sourceAnchorJson(),
+                    chunk.sourceAnchorsJson(), chunk.relationsJson(), chunk.modelTokenLength());
+            if (!"CHILD".equals(chunk.chunkRole())) continue;
+            for (var term : chunk.terms() == null ? List.<TermFrequency>of() : chunk.terms()) {
                 jdbc.update("""
                         INSERT INTO kb.chunk_term (chunk_id, term, term_frequency)
                         VALUES (?, ?, ?)
                         ON CONFLICT (chunk_id, term) DO UPDATE SET term_frequency = EXCLUDED.term_frequency
                         """, chunkId, term.term(), term.frequency());
             }
-            if (parentChunkId == null) parentChunkId = chunkId;
         }
     }
 
@@ -307,7 +381,7 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
         jdbc.update("DELETE FROM kb.term_stat WHERE organization_id = ?", organizationId);
         jdbc.update("""
                 WITH corpus AS (
-                    SELECT count(*)::int AS document_count,
+                    SELECT c.analyzer_version, count(*)::int AS document_count,
                            coalesce(avg(c.token_length), 0)::double precision AS average_document_length
                     FROM kb.document_chunk c
                     JOIN kb.document d ON d.id = c.document_id
@@ -316,9 +390,10 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                     JOIN kb.publication p ON p.id = d.current_publication_id
                         AND p.document_version_id = c.document_version_id AND p.review_revision_id = c.review_revision_id
                         AND p.status = 'CURRENT'
-                    WHERE d.organization_id = ? AND d.lifecycle_status = 'ACTIVE'
+                    WHERE d.organization_id = ? AND d.lifecycle_status = 'ACTIVE' AND c.chunk_role = 'CHILD'
+                    GROUP BY c.analyzer_version
                 ), stats AS (
-                    SELECT t.term, count(DISTINCT t.chunk_id)::int AS document_frequency
+                    SELECT c.analyzer_version, t.term, count(DISTINCT t.chunk_id)::int AS document_frequency
                     FROM kb.chunk_term t
                     JOIN kb.document_chunk c ON c.id = t.chunk_id
                     JOIN kb.document d ON d.id = c.document_id
@@ -327,12 +402,14 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                     JOIN kb.publication p ON p.id = d.current_publication_id
                         AND p.document_version_id = c.document_version_id AND p.review_revision_id = c.review_revision_id
                         AND p.status = 'CURRENT'
-                    WHERE d.organization_id = ? AND d.lifecycle_status = 'ACTIVE'
-                    GROUP BY t.term
+                    WHERE d.organization_id = ? AND d.lifecycle_status = 'ACTIVE' AND c.chunk_role = 'CHILD'
+                    GROUP BY c.analyzer_version, t.term
                 )
-                INSERT INTO kb.term_stat (organization_id, term, document_frequency, document_count, average_document_length)
-                SELECT ?, stats.term, stats.document_frequency, corpus.document_count, corpus.average_document_length
-                FROM stats CROSS JOIN corpus
+                INSERT INTO kb.term_stat (organization_id, term, document_frequency, document_count,
+                                          average_document_length, analyzer_version)
+                SELECT ?, stats.term, stats.document_frequency, corpus.document_count,
+                       corpus.average_document_length, stats.analyzer_version
+                FROM stats JOIN corpus USING (analyzer_version)
                 """, organizationId, organizationId, organizationId);
     }
 
@@ -427,6 +504,7 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                 SELECT c.id, c.content FROM kb.document_chunk c
                 JOIN kb.document d ON d.id = c.document_id
                 WHERE d.organization_id = ? AND c.document_id = ? AND c.review_revision_id = ?
+                  AND c.chunk_role = 'CHILD'
                 ORDER BY c.chunk_no
                 """, (rs, ignored) -> new ChunkEmbeddingRow(rs.getObject("id", UUID.class), rs.getString("content")),
                 organizationId, documentId, reviewRevisionId);
@@ -468,12 +546,21 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
     @Override
     public List<SearchRow> fullTextSearch(UUID organizationId, String query, boolean aiOnly, List<UUID> scopeIds,
                                           List<UUID> categoryIds, int limit) {
+        return fullTextSearch(organizationId, query, aiOnly, scopeIds, categoryIds, null, limit);
+    }
+
+    @Override
+    public List<SearchRow> fullTextSearch(UUID organizationId, String query, boolean aiOnly, List<UUID> scopeIds,
+                                          List<UUID> categoryIds, java.util.Set<UUID> allowedDocumentIds, int limit) {
+        if (allowedDocumentIds != null && allowedDocumentIds.isEmpty()) return List.of();
         var aiClause = aiOnly ? "AND EXISTS (SELECT 1 FROM kb.document_ai_grant g WHERE g.document_id = d.id AND g.status = 'APPROVED')" : "";
         var sql = """
                 SELECT c.id, c.document_id, c.document_version_id,
                        coalesce(p.metadata_snapshot_jsonb->>'title', d.title) AS title, v.original_name,
                        c.page_no, c.section, c.content, c.chunk_no,
-                       GREATEST(ts_rank_cd(c.search_vector, plainto_tsquery('simple', ?)), 0.4) AS score
+                       GREATEST(ts_rank_cd(c.search_vector, plainto_tsquery('simple', ?)),
+                                similarity(c.content, ?),
+                                CASE WHEN c.content ILIKE '%' || ? || '%' THEN 0.8 ELSE 0 END) AS score
                 FROM kb.document_chunk c
                 JOIN kb.document d ON d.id = c.document_id
                 JOIN kb.document_version v ON v.id = c.document_version_id
@@ -481,15 +568,17 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                 JOIN kb.publication p ON p.id = d.current_publication_id
                     AND p.document_version_id = c.document_version_id AND p.review_revision_id = c.review_revision_id
                     AND p.status = 'CURRENT'
-                WHERE d.organization_id = ? AND d.lifecycle_status = 'ACTIVE'
+                WHERE d.organization_id = ? AND d.lifecycle_status = 'ACTIVE' AND c.chunk_role = 'CHILD'
                 """ + aiClause + """
                 """ + categoryClause(categoryIds) + """
+                """ + documentClause(allowedDocumentIds) + """
                   AND (c.search_vector @@ plainto_tsquery('simple', ?)
                        OR c.content ILIKE '%' || ? || '%')
                 """ + scopeClause(scopeIds, "d.id", "c.document_version_id") + " ORDER BY score DESC, c.created_at DESC LIMIT ?";
         var args = new java.util.ArrayList<Object>();
-        args.add(query); args.add(organizationId);
+        args.add(query); args.add(query); args.add(query); args.add(organizationId);
         if (categoryIds != null) args.addAll(categoryIds);
+        if (allowedDocumentIds != null) args.addAll(allowedDocumentIds);
         args.add(query); args.add(query);
         if (scopeIds != null) args.addAll(scopeIds);
         args.add(limit);
@@ -497,13 +586,22 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
     }
 
     @Override
-    public List<SearchRow> bm25Search(UUID organizationId, List<String> terms, boolean aiOnly, List<UUID> scopeIds,
+    public List<SearchRow> bm25Search(UUID organizationId, List<AnalyzedTerm> terms, boolean aiOnly, List<UUID> scopeIds,
                                       List<UUID> categoryIds, int limit) {
+        return bm25Search(organizationId, terms, aiOnly, scopeIds, categoryIds, null, limit);
+    }
+
+    @Override
+    public List<SearchRow> bm25Search(UUID organizationId, List<AnalyzedTerm> terms, boolean aiOnly, List<UUID> scopeIds,
+                                      List<UUID> categoryIds, java.util.Set<UUID> allowedDocumentIds, int limit) {
         if (terms == null || terms.isEmpty()) return List.of();
+        if (allowedDocumentIds != null && allowedDocumentIds.isEmpty()) return List.of();
         var scope = scopeClause(scopeIds, "d.id", "c.document_version_id");
         var aiClause = aiOnly ? "AND EXISTS (SELECT 1 FROM kb.document_ai_grant g WHERE g.document_id = d.id AND g.status = 'APPROVED')" : "";
         var sql = """
-                WITH query_terms AS (SELECT unnest(?::text[]) AS term), ranked AS (
+                WITH query_terms AS (
+                    SELECT * FROM unnest(?::text[], ?::text[]) AS q(analyzer_version, term)
+                ), ranked AS (
                     SELECT c.id, c.document_id, c.document_version_id,
                            coalesce(p.metadata_snapshot_jsonb->>'title', d.title) AS title, v.original_name,
                            c.page_no, c.section, c.content, c.chunk_no,
@@ -514,17 +612,18 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                                   nullif(s.average_document_length, 0))))
                            ) AS score
                     FROM kb.chunk_term t
-                    JOIN query_terms q ON q.term = t.term
-                    JOIN kb.term_stat s ON s.organization_id = ? AND s.term = t.term
                     JOIN kb.document_chunk c ON c.id = t.chunk_id
+                    JOIN query_terms q ON q.term = t.term AND q.analyzer_version = c.analyzer_version
+                    JOIN kb.term_stat s ON s.organization_id = ? AND s.term = t.term
+                        AND s.analyzer_version = c.analyzer_version
                     JOIN kb.document d ON d.id = c.document_id
                     JOIN kb.document_version v ON v.id = c.document_version_id
                     JOIN ops.file_object f ON f.id = v.file_object_id AND f.organization_id = d.organization_id AND f.status <> 'DELETED'
                     JOIN kb.publication p ON p.id = d.current_publication_id
                         AND p.document_version_id = c.document_version_id AND p.review_revision_id = c.review_revision_id
                         AND p.status = 'CURRENT'
-                    WHERE d.organization_id = ? AND d.lifecycle_status = 'ACTIVE'
-                """ + aiClause + categoryClause(categoryIds) + scope + """
+                    WHERE d.organization_id = ? AND d.lifecycle_status = 'ACTIVE' AND c.chunk_role = 'CHILD'
+                """ + aiClause + categoryClause(categoryIds) + documentClause(allowedDocumentIds) + scope + """
                     GROUP BY c.id, c.document_id, c.document_version_id,
                              coalesce(p.metadata_snapshot_jsonb->>'title', d.title), v.original_name,
                              c.page_no, c.section, c.content, c.chunk_no
@@ -533,54 +632,14 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                 FROM ranked ORDER BY score DESC LIMIT ?
                 """;
         var args = new java.util.ArrayList<Object>();
-        args.add(terms.toArray(String[]::new));
+        args.add(terms.stream().map(AnalyzedTerm::analyzerVersion).toArray(String[]::new));
+        args.add(terms.stream().map(AnalyzedTerm::term).toArray(String[]::new));
         args.add(organizationId);
         args.add(organizationId);
         if (categoryIds != null) args.addAll(categoryIds);
+        if (allowedDocumentIds != null) args.addAll(allowedDocumentIds);
         if (scopeIds != null) args.addAll(scopeIds);
         args.add(limit);
-        return jdbc.query(sql, this::mapSearch, args.toArray());
-    }
-
-    @Override
-    public List<SearchRow> neighboringChunks(UUID organizationId, UUID documentId, UUID versionId,
-                                              Integer pageNo, int centerChunkNo, boolean aiOnly,
-                                              List<UUID> scopeIds, List<UUID> categoryIds,
-                                              int radius, int limit) {
-        var safeRadius = Math.min(12, Math.max(1, radius));
-        var safeLimit = Math.min(32, Math.max(1, limit));
-        var aiClause = aiOnly ? "AND EXISTS (SELECT 1 FROM kb.document_ai_grant g "
-                + "WHERE g.document_id = d.id AND g.status = 'APPROVED')" : "";
-        var sql = """
-                SELECT c.id, c.document_id, c.document_version_id,
-                       coalesce(p.metadata_snapshot_jsonb->>'title', d.title) AS title, v.original_name,
-                       c.page_no, c.section, c.content, c.chunk_no, 0.0 AS score
-                FROM kb.document_chunk c
-                JOIN kb.document d ON d.id = c.document_id
-                JOIN kb.document_version v ON v.id = c.document_version_id
-                JOIN ops.file_object f ON f.id = v.file_object_id AND f.organization_id = d.organization_id AND f.status <> 'DELETED'
-                JOIN kb.publication p ON p.id = d.current_publication_id
-                    AND p.document_version_id = c.document_version_id AND p.review_revision_id = c.review_revision_id
-                    AND p.status = 'CURRENT'
-                WHERE d.organization_id = ? AND d.lifecycle_status = 'ACTIVE'
-                  AND c.document_id = ? AND c.document_version_id = ?
-                  AND c.page_no IS NOT DISTINCT FROM CAST(? AS integer)
-                  AND c.chunk_no BETWEEN ? AND ?
-                """ + aiClause + categoryClause(categoryIds) + scopeClause(scopeIds, "d.id", "c.document_version_id") + """
-                ORDER BY abs(c.chunk_no - ?) ASC, c.chunk_no ASC
-                LIMIT ?
-                """;
-        var args = new java.util.ArrayList<Object>();
-        args.add(organizationId);
-        args.add(documentId);
-        args.add(versionId);
-        args.add(pageNo);
-        args.add(centerChunkNo - safeRadius);
-        args.add(centerChunkNo + safeRadius);
-        if (categoryIds != null) args.addAll(categoryIds);
-        if (scopeIds != null) args.addAll(scopeIds);
-        args.add(centerChunkNo);
-        args.add(safeLimit);
         return jdbc.query(sql, this::mapSearch, args.toArray());
     }
 
@@ -613,7 +672,7 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                     AND p.document_version_id = c.document_version_id AND p.review_revision_id = c.review_revision_id
                     AND p.status = 'CURRENT'
                 WHERE d.organization_id = ? AND d.lifecycle_status = 'ACTIVE'
-                """ + aiClause + categoryClause(categoryIds) + " AND c.embedding IS NOT NULL\n"
+                """ + aiClause + categoryClause(categoryIds) + " AND c.chunk_role = 'CHILD' AND c.embedding IS NOT NULL\n"
                 + dimensionClause
                 + scopeClause(scopeIds, "d.id", "c.document_version_id")
                 + "ORDER BY c.embedding <=> CAST(? AS vector) LIMIT ?";
@@ -684,6 +743,27 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
         return value == null || value.isBlank() ? null : value.trim();
     }
 
+    private List<UUID> parseUuids(String json) {
+        if (json == null || json.isBlank()) return List.of();
+        try {
+            return java.util.Arrays.stream(json.replace("[", "").replace("]", "").replace("\"", "")
+                            .split(","))
+                    .map(String::trim).filter(value -> !value.isBlank()).map(UUID::fromString).toList();
+        } catch (RuntimeException exception) { return List.of(); }
+    }
+
+    private String jsonUuids(List<UUID> values) {
+        if (values == null || values.isEmpty()) return "[]";
+        return values.stream().map(value -> "\"" + value + "\"")
+                .reduce((left, right) -> left + "," + right).map(value -> "[" + value + "]").orElse("[]");
+    }
+
+    private String jsonStrings(List<String> values) {
+        if (values == null || values.isEmpty()) return "[]";
+        return values.stream().map(value -> "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\"")
+                .reduce((left, right) -> left + "," + right).map(value -> "[" + value + "]").orElse("[]");
+    }
+
     private String scopeClause(List<UUID> scopeIds, String documentColumn, String versionColumn) {
         if (scopeIds == null || scopeIds.isEmpty()) return "";
         var placeholders = String.join(",", java.util.Collections.nCopies(scopeIds.size(), "?"));
@@ -698,6 +778,12 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
         return " AND coalesce(nullif(p.metadata_snapshot_jsonb->>'categoryId', '')::uuid,"
                 + " nullif(p.metadata_snapshot_jsonb->>'category_id', '')::uuid, d.category_id) IN ("
                 + placeholders + ")\n";
+    }
+
+    private String documentClause(java.util.Set<UUID> documentIds) {
+        if (documentIds == null) return "";
+        var placeholders = String.join(",", java.util.Collections.nCopies(documentIds.size(), "?"));
+        return " AND d.id IN (" + placeholders + ")\n";
     }
 
     private boolean isReviewStep(String stepKey) {

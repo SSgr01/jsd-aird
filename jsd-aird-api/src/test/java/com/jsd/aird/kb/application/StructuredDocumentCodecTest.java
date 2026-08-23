@@ -118,6 +118,27 @@ class StructuredDocumentCodecTest {
         assertThat(normalized.get(1).content()).isEqualTo("主要技术指标");
     }
 
+    @Test
+    void truncatesHeadingStackAndLetsSiblingContentInheritTheCorrectSection() {
+        var initial = codec.initialize(List.of(
+                block("heading-1", "第一章", Map.of("level", 1)),
+                block("heading-2", "参数", Map.of("level", 2)),
+                block("paragraph", "参数正文", Map.of()),
+                block("heading-2", "用途", Map.of("level", 2)),
+                block("paragraph", "用途正文", Map.of()),
+                block("heading-1", "第二章", Map.of("level", 1)),
+                block("paragraph", "第二章正文", Map.of())
+        ));
+
+        var projection = codec.project(initial.confirmedDocument(), List.of());
+        assertThat(projection.nodes().stream().filter(node -> node.text().equals("参数正文")).findFirst().orElseThrow()
+                .headingPath()).containsExactly("第一章", "参数");
+        assertThat(projection.nodes().stream().filter(node -> node.text().equals("用途正文")).findFirst().orElseThrow()
+                .headingPath()).containsExactly("第一章", "用途");
+        assertThat(projection.nodes().stream().filter(node -> node.text().equals("第二章正文")).findFirst().orElseThrow()
+                .headingPath()).containsExactly("第二章");
+    }
+
     private DocumentParser.TextBlock block(String section, String text, Map<String, Object> attributes) {
         return new DocumentParser.TextBlock(null, section, text, null, null, null, List.of(), null,
                 null, null, attributes);

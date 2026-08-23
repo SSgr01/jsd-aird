@@ -6,6 +6,7 @@ public enum ApiErrorCode {
     BAD_REQUEST("SYS_BAD_REQUEST", "请求内容无法解析", 400),
     NOT_FOUND("SYS_NOT_FOUND", "资源不存在", 404),
     RESOURCE_CONFLICT("RESOURCE_CONFLICT", "资源已存在或发生冲突", 409),
+    REFERENCE_IN_USE("REFERENCE_IN_USE", "活动资料参考仍在使用该项目关联", 409),
     OPERATION_FORBIDDEN("OPERATION_FORBIDDEN", "当前身份无权执行此操作", 403),
     AUTH_REQUIRED("AUTH_REQUIRED", "请先登录", 401),
     AUTH_INVALID("AUTH_INVALID", "用户名或密码错误", 401),

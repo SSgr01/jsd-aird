@@ -1,0 +1,412 @@
+.quality-page {
+  padding: 20px 24px;
+  background: linear-gradient(135deg, #f2f6ff, #f4fbf9);
+  min-height: calc(100dvh - 56px);
+}
+.quality-upload-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+.quality-panel,
+.quality-data-panel {
+  background: #fff;
+  border: 1px solid #dbe5f4;
+  border-radius: 12px;
+  overflow: hidden;
+}
+.quality-panel {
+  padding: 20px;
+}
+.quality-section-title {
+  font-size: 17px;
+  font-weight: 700;
+  border-left: 3px solid #2f66e8;
+  padding-left: 9px;
+  margin-bottom: 16px;
+}
+.quality-upload-form {
+  display: grid;
+  grid-template-columns: 1fr 2fr 1fr;
+  gap: 16px;
+}
+.quality-drop {
+  margin: 22px 0;
+  border: 2px dashed #c8d6eb;
+  border-radius: 12px;
+  height: 180px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #7790b4;
+  cursor: pointer;
+}
+.quality-drop strong {
+  color: #2f66e8;
+}
+.quality-preview {
+  min-height: 112px;
+  border: 1px dashed #d8e3f2;
+  border-radius: 10px;
+  padding: 12px;
+}
+.quality-file {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px;
+  border-bottom: 1px solid #edf1f7;
+}
+.quality-file-main {
+  flex: 1;
+  min-width: 0;
+}
+.quality-file-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.quality-file-meta {
+  font-size: 12px;
+  color: #8796ad;
+  margin-top: 4px;
+}
+.quality-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid #dbe5f4;
+  margin-bottom: 16px;
+  overflow: auto;
+}
+.quality-tab {
+  border: 0;
+  background: transparent;
+  padding: 10px 16px;
+  font-weight: 600;
+  color: #52647e;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.quality-tab.active {
+  color: #2f66e8;
+  border-bottom: 2px solid #2f66e8;
+}
+.quality-categories {
+  display: flex;
+  gap: 12px;
+  overflow: auto;
+  margin-bottom: 14px;
+}
+.quality-category {
+  position: relative;
+  display: flex;
+  box-sizing: border-box;
+  width: 256px;
+  min-width: 256px;
+  height: 126px;
+  padding: 16px;
+  border: 1px solid #dbe5f4;
+  border-radius: 12px;
+  background: #fff;
+  text-align: left;
+  cursor: pointer;
+}
+.quality-category.active {
+  border: 2px solid #3974ef;
+  background: linear-gradient(135deg, #f4f8ff, #f1fbf5);
+}
+.quality-category-icon {
+  display: grid;
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  margin-right: 14px;
+  border-radius: 10px;
+  background: #eaf0ff;
+  color: #2f66e8;
+  font-size: 22px;
+  place-items: center;
+}
+.quality-category-content {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+}
+.quality-category-title {
+  overflow: hidden;
+  color: #101c36;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.quality-category-desc {
+  display: block;
+  overflow: hidden;
+  min-height: 0;
+  margin-top: 5px;
+  font-size: 12px;
+  color: #64738e;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.quality-category-footer {
+  display: flex;
+  margin-top: auto;
+  align-items: center;
+  justify-content: space-between;
+  white-space: nowrap;
+}
+.quality-category-footer strong {
+  font-size: 15px;
+}
+.quality-category-footer strong i {
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 400;
+}
+.quality-category-actions {
+  display: flex;
+  gap: 10px;
+  color: #2563eb;
+  font-size: 12px;
+  line-height: 18px;
+}
+.quality-category-actions .ant-btn {
+  height: auto;
+  padding: 0;
+  font-size: 12px;
+}
+.quality-add-category {
+  align-items: center;
+  justify-content: center;
+  border-style: dashed;
+  flex-direction: column;
+  text-align: center;
+}
+.quality-add-category > .anticon {
+  margin-bottom: 12px;
+  color: #586b83;
+  font-size: 28px;
+}
+.quality-add-category b {
+  font-size: 14px;
+}
+.quality-add-category small {
+  margin-top: 5px;
+  color: #64738e;
+  font-size: 12px;
+}
+.quality-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid #dbe5f4;
+  gap: 12px;
+}
+.quality-grid-wrap {
+  overflow: auto;
+  min-height: 360px;
+}
+.quality-grid {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 1050px;
+}
+.quality-grid th,
+.quality-grid td {
+  border-right: 1px solid #dbe5f4;
+  border-bottom: 1px solid #dbe5f4;
+  padding: 9px 10px;
+  white-space: nowrap;
+}
+.quality-grid th {
+  background: #f7f9fc;
+  text-align: left;
+}
+.quality-grid input,
+.quality-grid select,
+.quality-grid textarea {
+  width: 100%;
+  min-width: 130px;
+  border: 1px solid #cfd9e8;
+  border-radius: 5px;
+  padding: 6px;
+}
+.quality-grid textarea {
+  height: 54px;
+}
+.quality-footer {
+  padding: 10px 14px;
+  display: flex;
+  justify-content: flex-end;
+}
+.quality-dirty {
+  color: #d98200;
+  font-size: 12px;
+}
+@media (max-width: 1100px) {
+  .quality-upload-grid {
+    grid-template-columns: 1fr;
+  }
+  .quality-upload-form {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 700px) {
+  .quality-page {
+    padding: 12px;
+  }
+  .quality-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+.quality-workspace-page {
+  padding: 24px;
+}
+.quality-workspace-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #fff;
+  border: 1px solid #dbe5f4;
+  border-radius: 12px;
+  padding: 16px 20px;
+  margin-bottom: 12px;
+}
+.quality-record-editor,
+.quality-version-panel {
+  background: #fff;
+  border: 1px solid #dbe5f4;
+  border-radius: 12px;
+  padding: 24px;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+.quality-record-editor-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #edf1f7;
+  padding-bottom: 16px;
+  margin-bottom: 20px;
+}
+.quality-record-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(260px, 1fr));
+  gap: 18px 24px;
+}
+.quality-record-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  color: #52647e;
+  font-weight: 600;
+}
+.quality-record-fields label > span {
+  font-size: 13px;
+}
+.quality-version-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 22px;
+}
+.quality-version-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 14px 16px;
+  text-align: left;
+  background: #fafcff;
+  border: 1px solid #dbe5f4;
+  border-radius: 10px;
+  cursor: pointer;
+}
+.quality-version-card:hover {
+  border-color: #3974ef;
+  background: #f4f8ff;
+}
+.quality-version-no {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: #e7efff;
+  color: #2f66e8;
+  font-weight: 700;
+}
+.quality-version-card small {
+  display: block;
+  color: #8796ad;
+  margin-top: 4px;
+}
+.quality-version-panel > .ant-typography {
+  display: block;
+}
+@media (max-width: 700px) {
+  .quality-workspace-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .quality-record-fields {
+    grid-template-columns: 1fr;
+  }
+}
+.quality-excel-canvas {
+  height: min(72vh, 760px);
+  min-height: 520px;
+  border: 1px solid #dbe5f4;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fff;
+}
+.quality-excel-canvas .univer-editor-container,
+.quality-excel-canvas .univer-editor-host {
+  height: 100%;
+  min-height: 0;
+}
+.quality-excel-loading {
+  height: 100%;
+  display: grid;
+  place-items: center;
+}
+.quality-excel-workspace .workspace-main-stage {
+  min-height: 0;
+}
+.quality-single-workspace-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+.quality-excel-workspace .workspace-canvas {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+.quality-excel-workspace .quality-record-editor {
+  position: absolute;
+  inset: 0;
+  max-width: none;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  overflow: auto;
+}
+.quality-excel-workspace .quality-excel-canvas {
+  height: 100%;
+  min-height: 520px;
+  border: 0;
+  border-radius: 0;
+}
+.quality-excel-workspace .quality-record-fields {
+  max-width: 1100px;
+  margin: 0 auto;
+}

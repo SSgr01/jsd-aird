@@ -2,7 +2,11 @@ package com.jsd.aird.tpl.domain;
 
 public enum TemplateFormat {
     XLSX("UNIVER_WORKBOOK"),
-    DOCX("UNIVER_DOCUMENT");
+    XLS("UNIVER_WORKBOOK"),
+    CSV("UNIVER_WORKBOOK"),
+    DOCX("UNIVER_DOCUMENT"),
+    PDF("UNIVER_DOCUMENT"),
+    IMAGE("UNIVER_DOCUMENT");
 
     private final String snapshotKind;
 

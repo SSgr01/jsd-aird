@@ -61,7 +61,7 @@ export interface StageQuery {
   size?: number;
 }
 
-export type ProjectLogObjectType = 'PROJECT_STAGE' | 'PROJECT_TASK' | 'PROJECT_EXPERIMENT' | 'PROJECT';
+export type ProjectLogObjectType = 'PROJECT_STAGE' | 'PROJECT_TASK' | 'PROJECT_EXPERIMENT' | 'PROJECT_DOCUMENT' | 'PROJECT';
 export type ProjectLogAction = 'CREATE' | 'UPDATE' | 'REOPEN' | 'DELETE' | 'REORDER';
 
 export interface ProjectAuditLog {
@@ -181,7 +181,7 @@ const priorityLabels: Record<ProjectPriority, string> = {
 };
 
 const statusLabels: Record<ProjectStatus, string> = {
-  NOT_STARTED: '待启动',
+  NOT_STARTED: '未开始',
   IN_PROGRESS: '进行中',
   PAUSED: '已暂停',
   COMPLETED: '已完成',
@@ -254,6 +254,21 @@ export async function getProjects(query: ProjectQuery): Promise<PageData<Project
   return data.data;
 }
 
+export async function exportProjects(query: Omit<ProjectQuery, 'page' | 'size'>): Promise<void> {
+  const response = await httpClient.get<Blob>('/api/v1/projects/export', {
+    params: cleanParams(query), responseType: 'blob',
+    headers: { Accept: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' },
+  });
+  const url = URL.createObjectURL(response.data);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = 'projects.xlsx';
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
 export async function getProject(id: string): Promise<Project> {
   const { data } = await httpClient.get<ApiResponse<Project>>(`/api/v1/projects/${id}`);
   return data.data;
@@ -323,9 +338,13 @@ export async function getStageTasks(stageId:string):Promise<ProjectTask[]>{const
 export async function createProjectTask(projectId:string,input:{stageId:string;name:string;owner?:string;plannedDate?:string;status?:string}):Promise<ProjectTask>{const {data}=await httpClient.post<ApiResponse<ProjectTask>>(`/api/v1/projects/${projectId}/tasks`,input);return data.data;}
 export async function getProjectTask(taskId:string):Promise<ProjectTask>{const {data}=await httpClient.get<ApiResponse<ProjectTask>>(`/api/v1/tasks/${taskId}`);return data.data;}
 export async function updateProjectTask(taskId:string,input:{stageId:string;name:string;owner?:string;plannedDate?:string;status?:string;version:number}):Promise<ProjectTask>{const {data}=await httpClient.put<ApiResponse<ProjectTask>>(`/api/v1/tasks/${taskId}`,input);return data.data;}
+/** @deprecated Project details now reads experiments from the canonical ELN experiment API. */
 export async function getTaskExperiments(taskId:string):Promise<ProjectExperiment[]>{const {data}=await httpClient.get<ApiResponse<ProjectExperiment[]>>(`/api/v1/tasks/${taskId}/experiments`);return data.data;}
+/** @deprecated Project details now creates experiments through the canonical ELN experiment API. */
 export async function createTaskExperiment(taskId:string,input:{experimentCode?:string;title:string;category?:string;owner:string;experimentDate:string;templateName?:string;templateVersion?:string;workbookContent?:string}):Promise<ProjectExperiment>{const {data}=await httpClient.post<ApiResponse<ProjectExperiment>>(`/api/v1/tasks/${taskId}/experiments`,input);return data.data;}
+/** @deprecated Project experiments are maintained by the ELN workspace. */
 export async function updateTaskExperiment(id:string,input:{experimentCode?:string;title:string;category?:string;owner:string;experimentDate:string;version:number}):Promise<ProjectExperiment>{const {data}=await httpClient.put<ApiResponse<ProjectExperiment>>(`/api/v1/experiments/${id}`,input);return data.data;}
+/** @deprecated Project experiments are maintained by the ELN workspace. */
 export async function deleteTaskExperiment(id:string,version:number):Promise<void>{const {data}=await httpClient.delete<ApiResponse<void>>(`/api/v1/experiments/${id}`,{params:{version}});return data.data;}
 export async function getTasks(query: TaskQuery = {}): Promise<PageData<ProjectTask>> {
   const { data } = await httpClient.get<ApiResponse<PageData<ProjectTask>>>('/api/v1/tasks', {

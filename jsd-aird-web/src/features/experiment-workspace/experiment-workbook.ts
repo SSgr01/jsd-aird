@@ -97,13 +97,67 @@ function readCell(sheet: Record<string, unknown>, row: number, column: number): 
   return typeof value === 'string' ? value : '';
 }
 
+export function isDocumentSnapshot(snapshot: Record<string, unknown> | null | undefined): boolean {
+  if (!snapshot) return false;
+  return 'body' in snapshot || 'documentStyle' in snapshot || 'editorMode' in snapshot;
+}
+
+function buildBlankDocumentSnapshot(id: string, title?: string): Record<string, unknown> {
+  const content = title?.trim() ? title.trim() : '';
+  const textLength = content.length;
+  return {
+    id,
+    snapshotFormatVersion: 5,
+    editorMode: 'UNIVER_DOCS',
+    documentStyle: {},
+    body: {
+      dataStream: `${content}\r\n`,
+      textRuns: textLength
+        ? [
+            {
+              st: 0,
+              ed: textLength,
+              ts: { fs: 24, bl: 1 },
+            },
+          ]
+        : [],
+      paragraphs: [
+        {
+          startIndex: textLength,
+          paragraphStyle: {
+            spaceAbove: 12,
+            spaceBelow: 12,
+          },
+        },
+      ],
+    },
+  };
+}
+
 /**
- * 将实验本 editModel 构建为一个可直接被 UniverSheetsEditor 渲染的 workbook 快照。
- * 布局约定：
- *  - sheet「实验记录」：A 列为字段标签，B 列为内容（第 1 行为表头“字段/内容”）。
- *  - 各数据 sheet：第 1 行为表头，第 2 行起为明细记录。
+ * 将实验本 editModel 构建为 Univer 编辑器可直接渲染的快照。
+ * - Word 实验：返回文档快照（已有 documentSnapshot/模板快照时复用，否则生成空白文档）。
+ * - Excel 实验：返回 workbook 快照。
  */
-export function buildExperimentSnapshot(editModel: ExperimentModel, id: string): Record<string, unknown> {
+export function buildExperimentSnapshot(
+  editModel: ExperimentModel,
+  id: string,
+  templateSnapshot?: Record<string, unknown> | null,
+): Record<string, unknown> {
+  if (editModel.documentSnapshot && Object.keys(editModel.documentSnapshot).length > 0) {
+    return editModel.documentSnapshot;
+  }
+  const isWord =
+    editModel.documentFormat === 'word' ||
+    isDocumentSnapshot(editModel.documentSnapshot) ||
+    isDocumentSnapshot(templateSnapshot);
+
+  if (isWord) {
+    if (isDocumentSnapshot(editModel.documentSnapshot)) return editModel.documentSnapshot as Record<string, unknown>;
+    if (isDocumentSnapshot(templateSnapshot)) return templateSnapshot as Record<string, unknown>;
+    return buildBlankDocumentSnapshot(id, editModel.title);
+  }
+
   const sheets: Record<string, Record<string, unknown>> = {};
 
   const recordRows: Array<[string, unknown]> = [
@@ -189,5 +243,11 @@ export function parseExperimentRecords(snapshot: Record<string, unknown>, editMo
 
 /** 将 Univer 快照整体解析回实验本 editModel。 */
 export function parseExperimentSnapshot(snapshot: Record<string, unknown>, editModel: ExperimentModel): ExperimentModel {
-  return parseExperimentRecords(snapshot, parseExperimentRecord(snapshot, editModel));
+  if (editModel.documentFormat === 'word' || isDocumentSnapshot(snapshot)) {
+    return { ...editModel, documentSnapshot: snapshot };
+  }
+  return {
+    ...parseExperimentRecords(snapshot, parseExperimentRecord(snapshot, editModel)),
+    documentSnapshot: snapshot,
+  };
 }

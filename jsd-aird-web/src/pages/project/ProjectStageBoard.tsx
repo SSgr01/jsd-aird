@@ -1,4 +1,4 @@
-import { ArrowLeftOutlined, ArrowRightOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, ArrowRightOutlined, CaretDownOutlined, CaretRightOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
 import { Alert, Button, DatePicker, Empty, Form, Input, Modal, Select, Skeleton, Space, Tag, message } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
@@ -30,6 +30,7 @@ interface StageFormValues {
 export function ProjectStageBoard({ projectId }: { projectId: string }) {
   const [stages, setStages] = useState<ProjectStage[]>([]);
   const [selectedStageId, setSelectedStageId] = useState<string>();
+  const [collapsedStageId, setCollapsedStageId] = useState<string>();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
@@ -48,7 +49,7 @@ export function ProjectStageBoard({ projectId }: { projectId: string }) {
     try {
       const data = await getProjectStages(projectId);
       setStages(data);
-      setSelectedStageId((value) => value && data.some(({ id }) => id === value) ? value : data[0]?.id);
+      setSelectedStageId((value) => value && data.some(({ id }) => id === value) ? value : (focusedId && data.some(({ id }) => id === focusedId) ? focusedId : data[0]?.id));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '阶段加载失败');
     } finally {
@@ -90,7 +91,12 @@ export function ProjectStageBoard({ projectId }: { projectId: string }) {
   };
 
   const submit = async () => {
-    const values = await form.validateFields();
+    let values: StageFormValues;
+    try {
+      values = await form.validateFields();
+    } catch {
+      return;
+    }
     const input: StageInput = {
       name: values.name.trim(), stageCode: values.stageCode?.trim() || undefined, status: values.status,
       owner: values.owner?.trim() || undefined, description: values.description?.trim() || undefined,
@@ -177,9 +183,20 @@ export function ProjectStageBoard({ projectId }: { projectId: string }) {
                 className={`pm-stage-card${stage.id === focusedId ? ' pm-stage-focused' : ''}${stage.id === selectedStageId ? ' pm-stage-selected' : ''}`}
                 draggable onDragStart={() => setDragId(stage.id)} onDragOver={(event) => event.preventDefault()}
                 onDrop={() => dropOn(stage.id)}
-                onClick={() => setSelectedStageId(stage.id)}
+                onClick={() => {
+                  if (stage.id === selectedStageId) {
+                    setCollapsedStageId((value) => (value === stage.id ? undefined : stage.id));
+                  } else {
+                    setSelectedStageId(stage.id);
+                    setCollapsedStageId(undefined);
+                  }
+                }}
               >
-                <div className="pm-stage-card-head"><strong title={stage.name}>{stage.name}</strong><Tag>阶段{stage.orderNo}</Tag></div>
+                <div className="pm-stage-card-head">
+                  <span className="pm-stage-card-toggle">{stage.id === selectedStageId && collapsedStageId === stage.id ? <CaretRightOutlined /> : <CaretDownOutlined />}</span>
+                  <strong title={stage.name}>{stage.name}</strong>
+                  <Tag>阶段{stage.orderNo}</Tag>
+                </div>
                 <div className="pm-stage-card-body">
                   <span className="pm-stage-status">
                     <span className={`pm-dot pm-dot-${stage.status.toLowerCase()}`} />
@@ -197,7 +214,7 @@ export function ProjectStageBoard({ projectId }: { projectId: string }) {
           ))}
         </div>
       ) : null}
-      {stages.find(({ id }) => id === selectedStageId) ? (
+      {stages.find(({ id }) => id === selectedStageId) && collapsedStageId !== selectedStageId ? (
         <ProjectTaskBoard projectId={projectId} stage={stages.find(({ id }) => id === selectedStageId)!} />
       ) : null}
 

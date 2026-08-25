@@ -92,6 +92,19 @@ public final class IamPermissionCatalog {
                 p("data.export", "data", "导出数据", "HIGH", "ALL"),
                 p("data.download", "data", "下载数据", "HIGH", "ALL"),
 
+                p("quality.view", "quality", "查看品管数据", "LOW", "ALL"),
+                p("quality.upload", "quality", "上传品管源文件", "MEDIUM", "ALL"),
+                p("quality.create", "quality", "新增品管数据", "MEDIUM", "ALL"),
+                p("quality.update", "quality", "编辑/移动品管数据", "MEDIUM", "ALL"),
+                p("quality.delete", "quality", "删除品管数据", "HIGH", "ALL"),
+                p("quality.publish", "quality", "发布品管版本", "HIGH", "ALL"),
+                p("quality.export", "quality", "导出品管数据", "HIGH", "ALL"),
+
+                p("inventory.view", "inventory", "查看库存", "LOW", "ALL"),
+                p("inventory.create", "inventory", "新增库存业务", "MEDIUM", "ALL"),
+                p("inventory.update", "inventory", "维护库存策略", "MEDIUM", "ALL"),
+                p("inventory.reverse", "inventory", "冲销库存流水", "HIGH", "ALL"),
+
                 p("spectrum.view", "spectrum", "查看谱图/图谱", "LOW", "ALL"),
                 p("spectrum.create", "spectrum", "新建图谱", "MEDIUM", "SELF"),
                 p("spectrum.update", "spectrum", "编辑图谱", "MEDIUM", "SELF"),

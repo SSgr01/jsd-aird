@@ -10,9 +10,18 @@ export interface ProductionOrderListItem {
   templateName: string;
   templateCode: string;
   format: TemplateFormat;
+  productId?: string;
+  productName?: string;
   quantity?: number;
   unitCode?: string;
   plannedDate?: string;
+  ownerId?: string;
+  ownerName?: string;
+  createdBy: string;
+  createdByName: string;
+  createdAt: string;
+  updatedBy?: string;
+  updatedByName?: string;
   updatedAt: string;
 }
 
@@ -25,10 +34,12 @@ export interface ProductionWorkspace {
   templateCode: string;
   format: TemplateFormat;
   productId?: string;
+  productName?: string;
   quantity?: number;
   unitCode?: string;
   plannedDate?: string;
   ownerId?: string;
+  ownerName?: string;
   schema: Record<string, unknown>;
   mapping: TemplateBinding[];
   data: Record<string, unknown>;
@@ -45,4 +56,25 @@ export interface ProductionWorkspace {
   workspaceHash: string;
   lockVersion: number;
   reconciliationRequired: boolean;
+  createdBy: string;
+  createdByName: string;
+  createdAt: string;
+  updatedBy?: string;
+  updatedByName?: string;
+  updatedAt: string;
+}
+
+export interface ProductionOrderPage {
+  items: ProductionOrderListItem[];
+  page: number;
+  size: number;
+  total: number;
+  totalPages: number;
+}
+
+export interface ProductionOrderLookupOption {
+  id: string;
+  code: string;
+  name: string;
+  defaultUnit?: string;
 }

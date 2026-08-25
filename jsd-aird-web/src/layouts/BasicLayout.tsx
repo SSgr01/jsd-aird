@@ -12,6 +12,7 @@ import {
   UploadOutlined,
   BankOutlined,
   CheckSquareOutlined,
+  SafetyCertificateOutlined,
   PartitionOutlined,
   ProjectOutlined,
   UnorderedListOutlined,
@@ -19,8 +20,13 @@ import {
   HomeOutlined,
   LockOutlined,
   LogoutOutlined,
+  AppstoreOutlined,
+  CalendarOutlined,
+  SwapOutlined,
+  LinkOutlined,
   SettingOutlined,
   UserOutlined,
+  HistoryOutlined,
 } from '@ant-design/icons';
 import { ProLayout } from '@ant-design/pro-components';
 import { Avatar, Button, Dropdown, Result, Typography } from 'antd';
@@ -89,12 +95,43 @@ const route = {
       ],
     },
     {
+      path: '/quality',
+      name: '品管部数据',
+      icon: <SafetyCertificateOutlined />,
+      routes: [
+        { path: '/quality/upload', name: '品管部数据上传', icon: <UploadOutlined /> },
+        { path: '/quality/view', name: '品管部数据查看', icon: <EyeOutlined /> },
+      ],
+    },
+    {
       path: '/production-orders',
       name: '生产单管理',
       icon: <OrderedListOutlined />,
       routes: [
         { path: '/production-orders/upload', name: '生产单上传', icon: <InboxOutlined /> },
         { path: '/production-orders/list', name: '生产单查看', icon: <EyeOutlined /> },
+      ],
+    },
+    {
+      path: '/inventory',
+      name: '库存管理',
+      icon: <AppstoreOutlined />,
+      routes: [
+        { path: '/inventory/query', name: '库存查询', icon: <EyeOutlined /> },
+        { path: '/inventory/rnd', name: '研发库存表', icon: <ExperimentOutlined /> },
+        { path: '/inventory/production', name: '生产库存表', icon: <OrderedListOutlined /> },
+        { path: '/inventory/samples', name: '发样记录表', icon: <InboxOutlined /> },
+        { path: '/inventory/shipments', name: '出货记录表', icon: <UnorderedListOutlined /> },
+        { path: '/inventory/products', name: '产品主档', icon: <AppstoreOutlined /> },
+        { path: '/inventory/warnings', name: '预警规则', icon: <SafetyCertificateOutlined /> },
+        { path: '/inventory/batches', name: '批次管理', icon: <UnorderedListOutlined /> },
+        { path: '/inventory/expiry', name: '有效期与重测', icon: <CalendarOutlined /> },
+        { path: '/inventory/transfer', name: '库存调拨', icon: <SwapOutlined /> },
+        { path: '/inventory/production-links', name: '生产联动', icon: <LinkOutlined /> },
+        { path: '/inventory/eln-links', name: 'ELN 联动', icon: <LinkOutlined /> },
+        { path: '/inventory/settings', name: '库存参数', icon: <SettingOutlined /> },
+        { path: '/inventory/permissions', name: '库存权限', icon: <SafetyCertificateOutlined /> },
+        { path: '/inventory/audit', name: '库存审计', icon: <HistoryOutlined /> },
       ],
     },
     {

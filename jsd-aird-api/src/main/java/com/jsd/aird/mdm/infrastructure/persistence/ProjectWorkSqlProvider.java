@@ -9,7 +9,7 @@ public class ProjectWorkSqlProvider {
         "t.id, t.task_code taskCode, t.project_id projectId, p.name projectName, " +
         "t.stage_id stageId, s.name stageName, t.name, t.owner, p.priority, " +
         "t.planned_date plannedDate, t.status, " +
-        "(SELECT count(*) FROM mdm.project_experiment e WHERE e.task_id = t.id AND e.deleted = false) experimentCount, " +
+        "(SELECT count(*) FROM rnd.experiment e WHERE e.task_id = t.id AND e.deleted = false) experimentCount, " +
         "t.version, t.created_at createdAt, t.updated_at updatedAt";
 
     private static void applyFilters(SQL sql, ProjectTaskQuery query) {

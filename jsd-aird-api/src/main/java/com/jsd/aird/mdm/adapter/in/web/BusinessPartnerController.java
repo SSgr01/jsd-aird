@@ -9,6 +9,7 @@ import com.jsd.aird.platform.web.RequestIdHolder;
 import com.jsd.aird.shared.api.ApiResponse;
 import com.jsd.aird.shared.api.PageResponse;
 import com.jsd.aird.shared.api.ResponseFactory;
+import com.jsd.aird.ops.application.port.AuditLogFacade;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -30,18 +31,28 @@ public class BusinessPartnerController {
     }
 
     @GetMapping
-    @Operation(summary = "分页查询业务伙伴", description = "按关键字、状态分页查询公司列表")
+    @Operation(summary = "分页查询业务伙伴", description = "按关键字、行业、等级、合作状态、负责人和启用状态分页查询公司列表")
     public ApiResponse<PageResponse<BusinessPartner>> findPage(
         @RequestParam(required = false) String keyword,
+        @RequestParam(required = false) String industry,
+        @RequestParam(required = false) String customerLevel,
+        @RequestParam(required = false) String cooperationStatus,
+        @RequestParam(required = false) String owner,
         @RequestParam(required = false) PartnerStatus status, @RequestParam(defaultValue = "1") int page,
-        @RequestParam(defaultValue = "20") int size) {
-        return ok(service.findPage(keyword, status, page, size));
+        @RequestParam(defaultValue = "10") int size) {
+        return ok(service.findPage(keyword, industry, customerLevel, cooperationStatus, owner, status, page, size));
     }
 
     @GetMapping("/{id:[0-9a-fA-F-]{36}}")
     @Operation(summary = "查询单个业务伙伴", description = "按 ID 获取公司详情")
     public ApiResponse<BusinessPartner> get(@Parameter(description = "公司 ID") @PathVariable UUID id) {
         return ok(service.get(id));
+    }
+
+    @GetMapping("/{id:[0-9a-fA-F-]{36}}/audit")
+    @Operation(summary = "查询客户操作记录", description = "查询客户及其联系人、需求、跟进等变更的统一审计记录")
+    public ApiResponse<List<AuditLogFacade.AuditEntry>> audit(@PathVariable UUID id) {
+        return ok(service.audits(id));
     }
 
     @PostMapping
@@ -71,8 +82,8 @@ public class BusinessPartnerController {
     }
 
     public record SavePartnerRequest(@NotBlank @Size(max = 32) String partnerCode,
-                                     @NotBlank @Size(max = 200) String name, @Size(max = 100) String industry,
-                                     @Size(max = 500) String address, @Size(max = 1000) String remark,
+                                     @NotBlank @Size(max = 20) String name, @Size(max = 100) String industry,
+                                     @Size(max = 50) String address, @Size(max = 1000) String remark,
                                      @Size(max = 50) String customerLevel,
                                      @Size(max = 50) String cooperationStatus,
                                      @Size(max = 500) String mainBusiness, JsonNode customFields,

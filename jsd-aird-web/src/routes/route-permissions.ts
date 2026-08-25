@@ -52,6 +52,10 @@ export const permissionLabels: Record<string, string> = {
   'production.submit': '提交生产单（production.submit）',
   'production.cancel': '取消生产单（production.cancel）',
   'production.export': '导出生产单（production.export）',
+  'inventory.view': '查看库存（inventory.view）',
+  'inventory.create': '新增库存业务（inventory.create）',
+  'inventory.update': '维护库存策略（inventory.update）',
+  'inventory.reverse': '冲销库存流水（inventory.reverse）',
   'data.view': '查看数据中心',
   'data.create': '新建/导入数据任务（data.create）',
   'data.update': '编辑数据任务（data.update）',
@@ -60,6 +64,13 @@ export const permissionLabels: Record<string, string> = {
   'data.approve': '审核训练数据（data.approve）',
   'data.export': '导出数据（data.export）',
   'data.download': '下载数据（data.download）',
+  'quality.view': '查看品管数据（quality.view）',
+  'quality.upload': '上传品管源文件（quality.upload）',
+  'quality.create': '新增品管数据（quality.create）',
+  'quality.update': '编辑/移动品管数据（quality.update）',
+  'quality.delete': '删除品管数据（quality.delete）',
+  'quality.publish': '发布品管版本（quality.publish）',
+  'quality.export': '导出品管数据（quality.export）',
   'spectrum.view': '查看图谱中心',
   'spectrum.create': '新建图谱（spectrum.create）',
   'spectrum.update': '编辑图谱（spectrum.update）',
@@ -78,8 +89,10 @@ const moduleLabels: Record<string, string> = {
   template: '模板中心',
   experiment: '实验记录本',
   production: '生产管理',
+  inventory: '库存管理',
   knowledge: '研发知识库',
   data: '数据中心',
+  quality: '品管部数据',
   spectrum: 'AI图谱中心',
   ai: 'AI研发助手',
   ops: '文件管理',
@@ -98,17 +111,21 @@ export function requiredPermissionForPath(pathname: string): string | undefined 
   if (path === '/assistant' || path === '/knowledge/search') return 'ai.use';
   if (path === '/knowledge/library') return 'knowledge.upload';
   if (path === '/data/upload') return 'data.create';
+  if (path === '/quality/upload') return 'quality.upload';
+  if (path === '/quality/view' || path.startsWith('/quality/records/')) return 'quality.view';
   if (path.startsWith('/system/users')) return 'system.user.view';
   if (path.startsWith('/system/roles') || path.startsWith('/system/user-permissions')) return 'system.permission.manage';
   if (path.startsWith('/system/audit-logs')) return 'system.audit.view';
   if (path.startsWith('/partners')) return 'customer.view';
   if (path.startsWith('/projects')) return 'project.view';
+  if (path === '/experiments/upload') return 'experiment.create';
   if (path.startsWith('/experiments')) return 'experiment.view';
   if (path.startsWith('/knowledge/review')) return 'knowledge.review';
   if (path.startsWith('/knowledge')) return 'knowledge.view';
   if (path === '/templates/upload') return 'template.upload';
   if (path.startsWith('/templates') || path.startsWith('/render/import')) return 'template.view';
   if (path.startsWith('/production-orders')) return 'production.view';
+  if (path.startsWith('/inventory')) return 'inventory.view';
   if (path.startsWith('/data')) return 'data.view';
   if (path.startsWith('/spectrum')) return 'spectrum.view';
   return undefined;
@@ -116,7 +133,30 @@ export function requiredPermissionForPath(pathname: string): string | undefined 
 
 export function canViewPath(pathname: string, permissions: string[]): boolean {
   const required = requiredPermissionForPath(pathname);
-  return !required || permissions.includes(required);
+  return !required || hasPermission(required, permissions);
+}
+
+/**
+ * Experiment actions are intentionally hierarchical in the UI: a user who
+ * can create, edit, submit, review, approve, or delete an experiment must be
+ * able to open the experiment workspace and its list. This keeps the menu,
+ * route guard, and the backend role policy aligned for IAM role overrides.
+ */
+export function hasPermission(required: string, permissions: string[]): boolean {
+  if (permissions.includes(required)) return true;
+  if (required === 'experiment.view') {
+    return permissions.some((permission) => [
+      'experiment.create', 'experiment.update', 'experiment.submit',
+      'experiment.approve', 'experiment.review', 'experiment.delete',
+    ].includes(permission));
+  }
+  if (required === 'production.view') {
+    return permissions.some((permission) => [
+      'production.create', 'production.update', 'production.delete',
+      'production.submit', 'production.cancel', 'production.export',
+    ].includes(permission));
+  }
+  return false;
 }
 
 export function firstAccessiblePath(permissions: string[]): string | null {
@@ -128,11 +168,12 @@ export function firstAccessiblePath(permissions: string[]): string | null {
     ['/experiments/list', 'experiment.view'],
     ['/production-orders/list', 'production.view'],
     ['/data/view', 'data.view'],
+    ['/quality/view', 'quality.view'],
     ['/spectrum/view', 'spectrum.view'],
     ['/partners', 'customer.view'],
     ['/system/users', 'system.user.view'],
   ] as const;
-  return candidates.find(([, permission]) => permissions.includes(permission))?.[0] ?? null;
+  return candidates.find(([, permission]) => hasPermission(permission, permissions))?.[0] ?? null;
 }
 
 type MenuRoute = {
@@ -146,7 +187,7 @@ type MenuRoute = {
 export function filterMenuRoute(route: MenuRoute, permissions: string[]): MenuRoute | null {
   const children = route.routes?.map((child) => filterMenuRoute(child, permissions)).filter((child): child is MenuRoute => child !== null);
   const permission = route.path ? requiredPermissionForPath(route.path) : undefined;
-  if (permission && !permissions.includes(permission)) return null;
+  if (permission && !hasPermission(permission, permissions)) return null;
   if (route.routes && (!children || children.length === 0)) return null;
   return { ...route, ...(route.routes ? { routes: children } : {}) };
 }

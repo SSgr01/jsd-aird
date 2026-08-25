@@ -53,8 +53,8 @@ export async function listMeetings(projectId: string, query: MeetingMinutesQuery
   return data.data;
 }
 
-export async function getMeeting(id: string): Promise<MeetingMinutes> {
-  const { data } = await httpClient.get<ApiResponse<MeetingMinutes>>(`/api/v1/projects/_/meetings/${id}`);
+export async function getMeeting(projectId: string, id: string): Promise<MeetingMinutes> {
+  const { data } = await httpClient.get<ApiResponse<MeetingMinutes>>(`/api/v1/projects/${projectId}/meetings/${id}`);
   return unwrap(data);
 }
 
@@ -66,14 +66,14 @@ export async function createMeeting(projectId: string, input: MeetingMinutesInpu
   return unwrap(data);
 }
 
-export async function updateMeeting(id: string, input: MeetingMinutesInput): Promise<void> {
-  await httpClient.put(`/api/v1/projects/_/meetings/${id}`, input);
+export async function updateMeeting(projectId: string, id: string, input: MeetingMinutesInput): Promise<void> {
+  await httpClient.put(`/api/v1/projects/${projectId}/meetings/${id}`, input);
 }
 
-export async function deleteMeeting(id: string, version: number): Promise<void> {
-  await httpClient.delete(`/api/v1/projects/_/meetings/${id}`, { params: { version } });
+export async function deleteMeeting(projectId: string, id: string, version: number): Promise<void> {
+  await httpClient.delete(`/api/v1/projects/${projectId}/meetings/${id}`, { params: { version } });
 }
 
-export async function archiveMeetingToKb(id: string): Promise<void> {
-  await httpClient.post(`/api/v1/projects/_/meetings/${id}/archive-to-kb`);
+export async function archiveMeetingToKb(projectId: string, id: string): Promise<void> {
+  await httpClient.post(`/api/v1/projects/${projectId}/meetings/${id}/archive-to-kb`);
 }

@@ -52,6 +52,7 @@ export interface Requirement {
   deliveryDate?: string;
   status: 'DRAFT' | 'CONFIRMED' | 'IN_PROJECT' | 'COMPLETED' | 'CANCELLED';
   projectId?: string;
+  projectIds?: string[];
   metrics: Metric[];
   version: number;
   customStatusName?: string;

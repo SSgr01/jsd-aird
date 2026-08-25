@@ -21,9 +21,17 @@ public interface BusinessPartnerMapper {
         "FROM mdm.business_partner p ";
 
     @Select("<script>" + SELECT_COLUMNS +
-        "WHERE 1=1 <if test='keyword != null and keyword != &quot;&quot;'> AND (p.partner_code ILIKE concat('%',#{keyword},'%') OR p.name ILIKE concat('%',#{keyword},'%'))</if>" +
+        "WHERE 1=1 <if test='keyword != null and keyword != &quot;&quot;'> AND (p.partner_code ILIKE concat('%',#{keyword},'%') OR p.name ILIKE concat('%',#{keyword},'%') OR EXISTS (SELECT 1 FROM mdm.partner_contact c WHERE c.partner_id=p.id AND c.status='ACTIVE' AND c.name ILIKE concat('%',#{keyword},'%')))</if>" +
+        "<if test='industry != null and industry != &quot;&quot;'> AND p.industry=#{industry}</if>" +
+        "<if test='customerLevel != null and customerLevel != &quot;&quot;'> AND p.customer_level=#{customerLevel}</if>" +
+        "<if test='cooperationStatus != null and cooperationStatus != &quot;&quot;'> AND p.cooperation_status=#{cooperationStatus}</if>" +
+        "<if test='owner != null and owner != &quot;&quot;'> AND EXISTS (SELECT 1 FROM mdm.partner_contact c WHERE c.partner_id=p.id AND c.status='ACTIVE' AND c.name=#{owner})</if>" +
         "<if test='status != null'> AND p.status=#{status}</if> ORDER BY p.updated_at DESC LIMIT #{size} OFFSET #{offset}</script>")
     List<BusinessPartnerRow> findPage(@Param("keyword") String keyword,
+                                      @Param("industry") String industry,
+                                      @Param("customerLevel") String customerLevel,
+                                      @Param("cooperationStatus") String cooperationStatus,
+                                      @Param("owner") String owner,
                                       @Param("status") String status, @Param("offset") int offset, @Param("size") int size);
 
     record PartnerStatsRow(UUID id, long requirementCount, long projectCount,
@@ -35,23 +43,30 @@ public interface BusinessPartnerMapper {
         SELECT bp.id,
                COALESCE(req.req_count, 0) AS requirement_count,
                COALESCE(prj.project_count, 0) AS project_count,
-               prj.latest_follow_up_at AS latest_follow_up_at,
+               fu.latest_follow_up_at AS latest_follow_up_at,
                COALESCE(owners.owner_names, '') AS owner_names
         FROM mdm.business_partner bp
         LEFT JOIN (
             SELECT partner_id, COUNT(*) AS req_count
             FROM mdm.customer_requirement
+            WHERE status <![CDATA[<>]]> 'CANCELLED'
             GROUP BY partner_id
         ) req ON req.partner_id = bp.id
         LEFT JOIN (
             SELECT pc.partner_id,
-                   COUNT(DISTINCT pcp.project_id) AS project_count,
-                   MAX(cr.communicated_at) AS latest_follow_up_at
+                   COUNT(DISTINCT pcp.project_id) AS project_count
             FROM mdm.partner_contact pc
-            LEFT JOIN mdm.partner_contact_project pcp ON pcp.contact_id = pc.id
-            LEFT JOIN mdm.communication_record cr ON cr.partner_id = pc.partner_id
+            JOIN mdm.partner_contact_project pcp ON pcp.contact_id = pc.id
+            JOIN mdm.project p ON p.id = pcp.project_id AND p.deleted = false
+            WHERE pc.status = 'ACTIVE'
             GROUP BY pc.partner_id
         ) prj ON prj.partner_id = bp.id
+        LEFT JOIN (
+            SELECT partner_id, MAX(communicated_at) AS latest_follow_up_at
+            FROM mdm.communication_record
+            WHERE deleted = false
+            GROUP BY partner_id
+        ) fu ON fu.partner_id = bp.id
         LEFT JOIN (
             SELECT partner_id, string_agg(name, ', ') AS owner_names
             FROM mdm.partner_contact
@@ -65,14 +80,23 @@ public interface BusinessPartnerMapper {
     List<PartnerStatsRow> selectPartnerStats(@Param("ids") List<UUID> ids);
 
     @Select("<script>SELECT count(*) FROM mdm.business_partner p WHERE 1=1 " +
-        "<if test='keyword != null and keyword != &quot;&quot;'> AND (p.partner_code ILIKE concat('%',#{keyword},'%') OR p.name ILIKE concat('%',#{keyword},'%'))</if>" +
+        "<if test='keyword != null and keyword != &quot;&quot;'> AND (p.partner_code ILIKE concat('%',#{keyword},'%') OR p.name ILIKE concat('%',#{keyword},'%') OR EXISTS (SELECT 1 FROM mdm.partner_contact c WHERE c.partner_id=p.id AND c.status='ACTIVE' AND c.name ILIKE concat('%',#{keyword},'%')))</if>" +
+        "<if test='industry != null and industry != &quot;&quot;'> AND p.industry=#{industry}</if>" +
+        "<if test='customerLevel != null and customerLevel != &quot;&quot;'> AND p.customer_level=#{customerLevel}</if>" +
+        "<if test='cooperationStatus != null and cooperationStatus != &quot;&quot;'> AND p.cooperation_status=#{cooperationStatus}</if>" +
+        "<if test='owner != null and owner != &quot;&quot;'> AND EXISTS (SELECT 1 FROM mdm.partner_contact c WHERE c.partner_id=p.id AND c.status='ACTIVE' AND c.name=#{owner})</if>" +
         "<if test='status != null'> AND p.status=#{status}</if></script>")
-    long count(@Param("keyword") String keyword, @Param("status") String status);
+    long count(@Param("keyword") String keyword,
+               @Param("industry") String industry,
+               @Param("customerLevel") String customerLevel,
+               @Param("cooperationStatus") String cooperationStatus,
+               @Param("owner") String owner,
+               @Param("status") String status);
 
     @Select(SELECT_COLUMNS + "WHERE p.id=#{id} GROUP BY p.id")
     Optional<BusinessPartnerRow> findById(@Param("id") UUID id);
 
-    @Select("<script>SELECT EXISTS(SELECT 1 FROM mdm.business_partner WHERE (partner_code=#{code} OR normalized_name=#{name}) <if test='excludedId != null'>AND id != #{excludedId}</if>)</script>")
+    @Select("<script>SELECT EXISTS(SELECT 1 FROM mdm.business_partner WHERE normalized_name=#{name} <if test='excludedId != null'>AND id != #{excludedId}</if>)</script>")
     boolean exists(@Param("code") String code, @Param("name") String name, @Param("excludedId") UUID excludedId);
 
     @Insert("INSERT INTO mdm.business_partner(id,partner_code,name,normalized_name,industry,address,status,remark,customer_level,cooperation_status,main_business,custom_fields,version,created_at,updated_at,created_by,updated_by) VALUES(#{id},#{code},#{name},#{normalized},#{industry},#{address},#{status},#{remark},#{customerLevel},#{cooperationStatus},#{mainBusiness},CAST(#{customFields} AS jsonb),0,#{now},#{now},#{operator},#{operator})")
@@ -142,6 +166,9 @@ public interface BusinessPartnerMapper {
         """)
     List<com.jsd.aird.mdm.application.port.ContactProjectVector> findContactProjectVectors(@Param("partnerId") UUID partnerId);
 
+    @Select("SELECT EXISTS (SELECT 1 FROM mdm.partner_contact pc JOIN mdm.partner_contact_project pcp ON pcp.contact_id = pc.id WHERE pc.partner_id = #{partnerId} AND pc.status = 'ACTIVE' AND pcp.project_id = #{projectId})")
+    boolean hasActiveProjectAssignment(@Param("partnerId") UUID partnerId, @Param("projectId") UUID projectId);
+
     @Insert("""
         INSERT INTO mdm.partner_contact_project (id, contact_id, project_id, created_at, updated_at, created_by, updated_by)
         VALUES (gen_random_uuid(), #{contactId}, #{projectId}, now(), now(), 'system', 'system')
@@ -156,13 +183,18 @@ public interface BusinessPartnerMapper {
     @Delete("DELETE FROM mdm.partner_contact WHERE partner_id=#{partnerId}")
     void deleteContacts(@Param("partnerId") UUID partnerId);
 
+    @Select("<script>SELECT EXISTS(SELECT 1 FROM mdm.partner_contact WHERE partner_id=#{partnerId} AND status='ACTIVE' " +
+        "<choose>" +
+        "<when test='phone != null and phone != &quot;&quot;'>AND phone=#{phone}</when>" +
+        "<otherwise>AND name=#{name}</otherwise>" +
+        "</choose>" +
+        "<if test='excludedId != null'>AND id != #{excludedId}</if>)</script>")
+    boolean existsContact(@Param("partnerId") UUID partnerId, @Param("phone") String phone,
+                          @Param("name") String name, @Param("excludedId") UUID excludedId);
+
     @Update("UPDATE mdm.business_partner target SET customer_level=source.customer_level,cooperation_status=source.cooperation_status,main_business=source.main_business,custom_fields=source.custom_fields FROM mdm.business_partner source WHERE target.id=#{newId} AND source.id=#{sourceId}")
     void copyPartnerExtensions(@Param("sourceId") UUID sourceId, @Param("newId") UUID newId);
 
     @Update("WITH source_rows AS (SELECT custom_fields,row_number() OVER (ORDER BY created_at,id) rn FROM mdm.partner_contact WHERE partner_id=#{sourceId}), target_rows AS (SELECT id,row_number() OVER (ORDER BY created_at,id) rn FROM mdm.partner_contact WHERE partner_id=#{newId}) UPDATE mdm.partner_contact target SET custom_fields=source.custom_fields FROM source_rows source JOIN target_rows mapped ON mapped.rn=source.rn WHERE target.id=mapped.id")
     void copyContactExtensions(@Param("sourceId") UUID sourceId, @Param("newId") UUID newId);
-
-    @Insert("INSERT INTO ops.audit_log(id,object_type,object_id,action,operator,detail,created_at) VALUES(#{id},'BUSINESS_PARTNER',#{objectId},#{action},#{operator},#{detail},now())")
-    void audit(@Param("id") UUID id, @Param("objectId") UUID objectId, @Param("action") String action,
-               @Param("detail") String detail, @Param("operator") String operator);
 }

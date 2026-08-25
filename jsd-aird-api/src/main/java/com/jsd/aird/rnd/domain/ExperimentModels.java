@@ -7,15 +7,16 @@ import java.util.*;
 public final class ExperimentModels {
     private ExperimentModels() {}
 
-    public record Summary(UUID id, String experimentNo, String title, String categoryName, String sourceType,
-                          ExperimentStatus status, UUID projectId, UUID stageId, UUID taskId, String ownerName,
+    public record Summary(UUID id, String experimentNo, String title, UUID categoryId, String categoryName, String sourceType,
+                          ExperimentStatus status, UUID projectId, String projectName, UUID stageId, String stageName,
+                          UUID taskId, String taskName, String ownerName,
                           LocalDate experimentDate, int versionNo, long revision, Instant updatedAt) {}
     public record Detail(Summary summary, UUID currentVersionId, UUID templateVersionId, String templateSnapshotHash,
                          JsonNode templateSnapshot, JsonNode editModel, List<Review> reviews,
                          List<Attachment> attachments) {}
     public record Version(UUID id, int versionNo, String status, UUID templateVersionId, String snapshotHash,
-                          JsonNode editModel, String revisionReason, Instant submittedAt, Instant publishedAt,
-                          Instant createdAt) {}
+                          JsonNode templateSnapshot, JsonNode editModel, String revisionReason,
+                          Instant submittedAt, Instant publishedAt, Instant createdAt, UUID createdBy) {}
     public record Review(UUID id, String action, String comment, String operatorName, Instant createdAt) {}
     public record Attachment(UUID id, UUID fileId, UUID fileVersionId, String type, String sectionKey,
                              String fileName, String description, Instant createdAt) {}

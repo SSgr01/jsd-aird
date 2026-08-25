@@ -51,6 +51,11 @@ public class MyBatisPartnerContactRepository implements PartnerContactRepository
     }
 
     @Override
+    public boolean existsContact(UUID partnerId, String phone, String name, UUID excludedId) {
+        return mapper.existsContact(partnerId, phone, name, excludedId);
+    }
+
+    @Override
     public List<PartnerContact> findContacts(UUID partnerId) {
         return mapper.findContacts(partnerId).stream().map(MyBatisPartnerContactRepository::toContact).toList();
     }
@@ -58,6 +63,11 @@ public class MyBatisPartnerContactRepository implements PartnerContactRepository
     @Override
     public List<ContactProjectVector> findContactProjectVectors(UUID partnerId) {
         return mapper.findContactProjectVectors(partnerId);
+    }
+
+    @Override
+    public boolean hasActiveProjectAssignment(UUID partnerId, UUID projectId) {
+        return mapper.hasActiveProjectAssignment(partnerId, projectId);
     }
 
     private static PartnerContact toContact(PartnerContactRow r) {

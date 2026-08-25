@@ -5,6 +5,7 @@ import com.jsd.aird.platform.web.RequestIdHolder;
 import com.jsd.aird.mdm.application.command.ProjectCommands;
 import com.jsd.aird.mdm.application.query.ProjectQuery;
 import com.jsd.aird.mdm.application.service.ProjectService;
+import com.jsd.aird.mdm.application.service.ProjectAuditLogService;
 import com.jsd.aird.mdm.domain.model.Project;
 import com.jsd.aird.mdm.domain.model.ProjectPriority;
 import com.jsd.aird.mdm.domain.model.ProjectStatus;
@@ -20,9 +21,15 @@ import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
+import java.time.Instant;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.UUID;
 
@@ -32,9 +39,11 @@ import java.util.UUID;
 public class ProjectController {
 
     private final ProjectService service;
+    private final ProjectAuditLogService auditLogService;
 
-    public ProjectController(ProjectService service) {
+    public ProjectController(ProjectService service, ProjectAuditLogService auditLogService) {
         this.service = service;
+        this.auditLogService = auditLogService;
     }
 
     @GetMapping
@@ -59,10 +68,51 @@ public class ProjectController {
         return ok(new PageResponse<>(items, query.page(), query.size(), total, totalPages));
     }
 
-    @GetMapping("/{id}")
+    // Do not constrain the mapping by produces: the shared axios client sends
+    // Accept: application/json even for downloads. The response below still
+    // advertises the correct Excel content type.
+    @GetMapping(value = { "/export", "/export.csv" })
+    @Operation(summary = "导出项目列表", description = "按当前筛选条件导出全部项目 Excel")
+    public ResponseEntity<byte[]> exportExcel(
+        @RequestParam(required = false) String keyword,
+        @RequestParam(required = false) String owner,
+        @RequestParam(required = false) ProjectPriority priority,
+        @RequestParam(required = false) ProjectStatus status,
+        @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDateFrom,
+        @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDateTo,
+        @RequestParam(required = false) UUID partnerId) {
+        var query = new ProjectQuery(keyword, owner, priority, status, startDateFrom, startDateTo, partnerId, 1, 200);
+        var content = service.exportXlsx(query);
+        return ResponseEntity.ok().contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+            .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
+                .filename("projects.xlsx", StandardCharsets.UTF_8).build().toString())
+            .body(content);
+    }
+
+    @GetMapping("/{id:[0-9a-fA-F-]+}")
     @Operation(summary = "查询项目详情", description = "根据 ID 获取项目详情")
     public ApiResponse<ProjectResponse> get(@Parameter(description = "项目 ID") @PathVariable UUID id) {
         return ok(ProjectResponse.from(service.get(id)));
+    }
+
+    @GetMapping("/{id:[0-9a-fA-F-]+}/logs")
+    @Operation(summary = "查询项目日志", description = "从通用 ops.audit_log 查询当前项目及其阶段、任务、实验、文档相关审计记录")
+    public ApiResponse<PageResponse<ProjectAuditLogService.ProjectAuditLog>> logs(
+            @Parameter(description = "项目 ID") @PathVariable UUID id,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String objectType,
+            @RequestParam(required = false) String action,
+            @RequestParam(required = false) String operator,
+            @RequestParam(required = false) Instant createdFrom,
+            @RequestParam(required = false) Instant createdTo,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "10") int size) {
+        // Check that the project exists before querying audit rows so a deleted or
+        // misspelled project id is reported consistently with the other detail APIs.
+        service.get(id);
+        return ok(auditLogService.page(id,
+                new ProjectAuditLogService.Query(keyword, objectType, action, operator,
+                        createdFrom, createdTo, page, size)));
     }
 
     @PostMapping
@@ -71,7 +121,7 @@ public class ProjectController {
         return ok(service.create(r.toCommand()));
     }
 
-    @PutMapping("/{id}")
+    @PutMapping("/{id:[0-9a-fA-F-]+}")
     @Operation(summary = "更新项目", description = "按乐观锁版本更新项目信息")
     public ApiResponse<Void> update(@Parameter(description = "项目 ID") @PathVariable UUID id,
                                     @Valid @RequestBody SaveProjectRequest r) {
@@ -85,7 +135,7 @@ public class ProjectController {
         return ok(service.copy(r.ids()));
     }
 
-    @DeleteMapping("/{id}")
+    @DeleteMapping("/{id:[0-9a-fA-F-]+}")
     @Operation(summary = "删除项目", description = "逻辑删除指定项目")
     public ApiResponse<Void> delete(@Parameter(description = "项目 ID") @PathVariable UUID id) {
         service.delete(id);

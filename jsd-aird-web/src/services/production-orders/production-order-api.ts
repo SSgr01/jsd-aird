@@ -1,5 +1,6 @@
 import type {
-  ProductionOrderListItem,
+  ProductionOrderLookupOption,
+  ProductionOrderPage,
   ProductionWorkspace,
 } from '@/features/production-orders/types';
 import type { TemplateFormat } from '@/features/template-workspace/types';
@@ -12,6 +13,19 @@ export interface CreateProductionOrderInput {
   quantity?: number;
   unitCode?: string;
   plannedDate?: string;
+  productId?: string;
+  ownerId?: string;
+}
+
+export interface ProductionOrderListQuery {
+  keyword?: string;
+  status?: string;
+  productId?: string;
+  ownerId?: string;
+  plannedDateFrom?: string;
+  plannedDateTo?: string;
+  page?: number;
+  size?: number;
 }
 
 export interface ProductionIngestItem {
@@ -52,10 +66,20 @@ export interface ProductionIngestJob {
 }
 
 export const productionOrderApi = {
-  async list() {
-    const response = await httpClient.get<ApiResponse<ProductionOrderListItem[]>>(
-      '/api/v1/production-orders',
+  async list(query: ProductionOrderListQuery = {}) {
+    const response = await httpClient.get<ApiResponse<ProductionOrderPage>>(
+      '/api/v1/production-orders', { params: query },
     );
+    return response.data.data;
+  },
+
+  async productOptions() {
+    const response = await httpClient.get<ApiResponse<ProductionOrderLookupOption[]>>('/api/v1/production-orders/options/products');
+    return response.data.data;
+  },
+
+  async ownerOptions() {
+    const response = await httpClient.get<ApiResponse<ProductionOrderLookupOption[]>>('/api/v1/production-orders/options/owners');
     return response.data.data;
   },
 

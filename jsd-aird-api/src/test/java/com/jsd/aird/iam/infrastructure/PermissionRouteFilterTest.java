@@ -47,6 +47,25 @@ class PermissionRouteFilterTest {
     }
 
     @Test
+    void mapsProjectDetailReadApisToProjectView() {
+        var projectId = "00000000-0000-0000-0000-000000000001";
+        var meetingId = "00000000-0000-0000-0000-000000000002";
+
+        assertThat(code("GET", "/api/v1/projects/" + projectId + "/meetings")).isEqualTo("project.view");
+        assertThat(code("GET", "/api/v1/projects/" + projectId + "/logs")).isEqualTo("project.view");
+        assertThat(codeWithProjectId("GET", "/api/v1/quality/uploads", projectId)).isEqualTo("project.view");
+        assertThat(codeWithProjectId("GET", "/api/v1/production-uploads", projectId)).isEqualTo("project.view");
+        assertThat(code("GET", "/api/v1/quality/uploads")).isEqualTo("quality.view");
+        assertThat(code("GET", "/api/v1/production-uploads")).isEqualTo("production.view");
+
+        assertThat(code("POST", "/api/v1/projects/" + projectId + "/meetings")).isEqualTo("project.create");
+        assertThat(code("PUT", "/api/v1/projects/" + projectId + "/meetings/" + meetingId)).isEqualTo("project.update");
+        assertThat(code("DELETE", "/api/v1/projects/" + projectId + "/meetings/" + meetingId)).isEqualTo("project.delete");
+        assertThat(code("POST", "/api/v1/projects/" + projectId + "/meetings/" + meetingId + "/archive-to-kb"))
+                .isEqualTo("project.update");
+    }
+
+    @Test
     void mapsKnowledgeSearchToAiPermission() {
         assertThat(code("POST", "/api/v1/knowledge/search")).isEqualTo("ai.use");
         assertThat(code("POST", "/api/v1/knowledge/assistant")).isEqualTo("ai.use");
@@ -57,7 +76,41 @@ class PermissionRouteFilterTest {
                 .isEqualTo("knowledge.update");
     }
 
+    @Test
+    void mapsInventoryActionsToInventoryPermissions() {
+        var id = "00000000-0000-0000-0000-000000000001";
+        assertThat(code("GET", "/api/v1/inventory/balances")).isEqualTo("inventory.view");
+        assertThat(code("POST", "/api/v1/inventory/products")).isEqualTo("inventory.create");
+        assertThat(code("PUT", "/api/v1/inventory/balances/" + id + "/policy")).isEqualTo("inventory.update");
+        assertThat(code("POST", "/api/v1/inventory/transactions/" + id + "/reverse")).isEqualTo("inventory.reverse");
+        assertThat(code("POST", "/api/v1/inventory/transactions")).isEqualTo("inventory.create");
+    }
+
+    @Test
+    void mapsExperimentImportAndSourceUploadActionsToExperimentPermissions() {
+        assertThat(code("GET", "/api/v1/experiment-imports")).isEqualTo("experiment.view");
+        assertThat(code("POST", "/api/v1/experiment-imports")).isEqualTo("experiment.create");
+        assertThat(code("DELETE", "/api/v1/experiment-imports/00000000-0000-0000-0000-000000000001"))
+                .isEqualTo("experiment.update");
+        assertThat(codeWithKind("POST", "/api/v1/files/staged", "EXPERIMENT_SOURCE"))
+                .isEqualTo("experiment.create");
+        assertThat(codeWithKind("POST", "/api/v1/files/staged", "TEMPLATE_SOURCE"))
+                .isEqualTo("template.upload");
+    }
+
     private String code(String method, String uri) {
         return filter.permissionCode(new MockHttpServletRequest(method, uri));
+    }
+
+    private String codeWithProjectId(String method, String uri, String projectId) {
+        var request = new MockHttpServletRequest(method, uri);
+        request.addParameter("projectId", projectId);
+        return filter.permissionCode(request);
+    }
+
+    private String codeWithKind(String method, String uri, String kind) {
+        var request = new MockHttpServletRequest(method, uri);
+        request.addParameter("kind", kind);
+        return filter.permissionCode(request);
     }
 }

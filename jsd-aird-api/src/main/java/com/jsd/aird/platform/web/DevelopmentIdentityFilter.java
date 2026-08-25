@@ -72,7 +72,10 @@ public class DevelopmentIdentityFilter extends OncePerRequestFilter {
         var username = StringUtils.hasText(request.getHeader(ActorContext.USERNAME_HEADER))
                 ? request.getHeader(ActorContext.USERNAME_HEADER).trim()
                 : defaults.username();
-        return new Actor(organization, user, username);
+        var role = StringUtils.hasText(request.getHeader(ActorContext.ROLE_HEADER))
+                ? request.getHeader(ActorContext.ROLE_HEADER).trim()
+                : defaults.role();
+        return new Actor(organization, user, username, role);
     }
 
     private UUID parseUuid(String raw, UUID fallback) {

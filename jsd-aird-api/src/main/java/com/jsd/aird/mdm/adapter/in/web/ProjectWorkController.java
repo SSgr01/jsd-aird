@@ -58,10 +58,10 @@ public class ProjectWorkController {
         @RequestParam(defaultValue = "1") int page,
         @RequestParam(defaultValue = "20") int size) {
         var query = new ProjectTaskQuery(keyword, projectId, stageId, status, owner, priority, page, size);
-        var items = service.searchTasks(query);
+        List<ProjectTaskSummary> items = service.searchTasks(query);
         var total = service.countTasks(query);
         var totalPages = size == 0 ? 0 : (total + size - 1) / size;
-        return ok(new PageResponse<>(items, page, size, total, totalPages));
+        return ok(new PageResponse<ProjectTaskSummary>(items, page, size, total, totalPages));
     }
 
     @GetMapping("/tasks/owners")

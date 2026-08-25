@@ -60,6 +60,7 @@ export interface UploadWorkspaceProps {
   onClearFiles: () => void;
   uploadMainText?: string;
   uploadHint?: string;
+  uploadDisabled?: boolean;
   uploadIcon?: ReactNode;
   previewEmptyText?: string;
   submitLabel: string;
@@ -117,6 +118,7 @@ export function UploadWorkspace({
   onClearFiles,
   uploadMainText = '拖拽文件到此处，或点击选择文件',
   uploadHint,
+  uploadDisabled = false,
   uploadIcon,
   previewEmptyText = '暂无待上传文件，点击上方区域选择文件',
   submitLabel,
@@ -156,6 +158,7 @@ export function UploadWorkspace({
           {showDropzone ? <Upload.Dragger
             className="upload-workspace-drop"
             accept={accept}
+            disabled={uploadDisabled}
             multiple={multiple}
             maxCount={maxCount}
             fileList={files}
@@ -171,12 +174,12 @@ export function UploadWorkspace({
           {showPreview ? <div className="upload-workspace-preview-heading">
             <div className="upload-workspace-section-title">文件预览区 <span>({files.length})</span></div>
             <Space size={8} wrap>
-              <Button onClick={onClearFiles} disabled={!files.length}>清空</Button>
+              <Button onClick={onClearFiles} disabled={uploadDisabled || !files.length}>清空</Button>
               <Button
                 type="primary"
                 icon={submitIcon}
                 loading={submitting}
-                disabled={submitDisabled || (fileRequired && !files.length)}
+                disabled={uploadDisabled || submitDisabled || (fileRequired && !files.length)}
                 onClick={onSubmit}
               >
                 {submitLabel}
@@ -197,6 +200,7 @@ export function UploadWorkspace({
                   danger
                   aria-label={`移除 ${file.name}`}
                   icon={<DeleteOutlined />}
+                  disabled={uploadDisabled}
                   onClick={() => onRemoveFile(file)}
                 />
               </div>

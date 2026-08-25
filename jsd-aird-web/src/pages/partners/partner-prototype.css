@@ -7,6 +7,29 @@
 }
 .cm-page-head {
   min-height: 66px;
+  padding-right: 0;
+}
+.cm-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 37px;
+  flex-wrap: wrap;
+}
+.cm-toolbar-left,
+.cm-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.cm-toolbar-right .ant-btn-primary {
+  height: 37px;
+  padding: 0 16px;
+  border-radius: 8px;
+  font-weight: 600;
+  box-shadow: 0 6px 14px rgba(22, 119, 255, 0.22);
 }
 .cm-page-head h3 {
   margin: 0 0 4px;
@@ -17,13 +40,6 @@
 .cm-page-head p {
   font-size: 13px;
   color: #55708f;
-}
-.cm-page-head .ant-btn-primary {
-  height: 37px;
-  padding: 0 16px;
-  border-radius: 8px;
-  font-weight: 600;
-  box-shadow: 0 6px 14px rgba(22, 119, 255, 0.22);
 }
 .cm-filter {
   grid-template-columns: minmax(310px, 1.7fr) repeat(4, minmax(145px, 0.8fr)) 82px;
@@ -47,6 +63,16 @@
 .cm-filter .ant-input-prefix {
   margin-right: 9px;
   color: #7f92ab;
+}
+.cm-filter .cm-filter-reset {
+  width: 82px;
+  min-width: 82px;
+  max-width: 82px;
+  flex: 0 0 82px;
+  box-sizing: border-box;
+  padding: 0 12px;
+  white-space: nowrap;
+  justify-self: start;
 }
 .cm-table-card {
   border-color: #d6e2ef;
@@ -195,10 +221,26 @@
 .cm-timeline-meta {
   display: flex;
   flex-wrap: wrap;
+  align-items: baseline;
   gap: 6px 16px;
   color: #667085;
   font-size: 13px;
   margin-bottom: 6px;
+}
+.cm-timeline-method,
+.cm-timeline-owner {
+  color: #1f2937;
+  font-weight: 600;
+  font-size: 14px;
+}
+.cm-timeline-label {
+  color: #98a2b3;
+  font-weight: 400;
+  font-size: 13px;
+  margin-right: 4px;
+}
+.cm-timeline-label::after {
+  content: "：";
 }
 .cm-timeline-text {
   color: #475467;
@@ -224,6 +266,120 @@
   background: #e6f4ff;
   border-color: #1677ff;
 }
+
+/* 客户卡片视图 */
+.cm-customer-cards {
+  padding: 16px;
+}
+.cm-customer-cards-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #eef2f7;
+}
+.cm-customer-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 14px;
+}
+.cm-customer-card {
+  position: relative;
+  background: #fff;
+  border: 1px solid #e6ecf4;
+  border-radius: 10px;
+  padding: 16px 16px 14px;
+  transition: all 0.18s ease;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+.cm-customer-card:hover {
+  border-color: #bfd4ef;
+  box-shadow: 0 6px 16px rgba(22, 94, 175, 0.09);
+  transform: translateY(-1px);
+}
+.cm-customer-card.is-selected {
+  border-color: #1677ff;
+  box-shadow: 0 0 0 2px rgba(22, 119, 255, 0.16);
+}
+.cm-customer-card-check {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+}
+.cm-customer-card-head {
+  padding-right: 36px;
+  margin-bottom: 10px;
+}
+.cm-customer-card-titleline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+.cm-customer-card-tags {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.cm-customer-card-name {
+  font-size: 15px;
+  color: #11233f;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+}
+.cm-customer-card-subline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #7b8ba5;
+  font-size: 12px;
+}
+.cm-customer-card-dot {
+  color: #c4cfdf;
+}
+.cm-customer-card-owner {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+.cm-customer-card-owner-value {
+  color: #1f2937;
+  font-weight: 600;
+}
+.cm-customer-card-stats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  background: #f7fafd;
+  border-radius: 8px;
+  font-size: 12px;
+}
+.cm-customer-card-stat {
+  color: #44546f;
+}
+.cm-customer-card-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 10px;
+  border-top: 1px dashed #edf1f7;
+  font-size: 12px;
+}
+.cm-customer-card-foot .cm-link-button {
+  color: #1677ff;
+}
+
 @media (max-width: 1300px) {
   .cm-filter {
     grid-template-columns: minmax(260px, 1.5fr) repeat(2, minmax(140px, 0.8fr));
@@ -243,5 +399,12 @@
   }
   .cm-page-head {
     min-height: auto;
+  }
+  .cm-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .cm-toolbar-right {
+    width: 100%;
   }
 }

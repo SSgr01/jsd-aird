@@ -54,4 +54,28 @@ describe('experiment-workbook round trip', () => {
     expect(cellData['2']?.['0']?.v).toBe('实验标题');
     expect(cellData['2']?.['1']?.v).toBe('环氧固化实验');
   });
+
+  it('keeps an Excel template snapshot as the independent experiment document', () => {
+    const templateSnapshot = {
+      id: 'published-template',
+      sheetOrder: ['sheet-template'],
+      sheets: {
+        'sheet-template': {
+          id: 'sheet-template',
+          name: '模板表格',
+          rowCount: 20,
+          columnCount: 10,
+          cellData: { 0: { 0: { v: '模板内容' } } },
+        },
+      },
+    };
+    const templateModel: ExperimentModel = {
+      title: '模板实验',
+      documentFormat: 'excel',
+      documentSnapshot: templateSnapshot,
+    };
+
+    expect(buildExperimentSnapshot(templateModel, 'exp-template', templateSnapshot)).toBe(templateSnapshot);
+    expect(parseExperimentSnapshot(templateSnapshot, templateModel).documentSnapshot).toBe(templateSnapshot);
+  });
 });

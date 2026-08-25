@@ -84,18 +84,22 @@ public class IamBootstrapService {
                 "knowledge.create", "knowledge.update", "knowledge.submit", "knowledge.review",
                 "knowledge.approve", "knowledge.publish", "knowledge.export", "knowledge.download",
                 "data.view", "data.create", "data.update", "data.submit", "data.approve", "data.export",
-                "data.download", "spectrum.view", "spectrum.create", "spectrum.update", "spectrum.export",
+                "data.download", "quality.view", "quality.upload", "quality.create", "quality.update",
+                "quality.delete", "quality.publish", "quality.export", "spectrum.view", "spectrum.create", "spectrum.update", "spectrum.export",
                 "spectrum.download", "ai.use", "production.view", "production.create", "production.update",
-                "production.submit", "production.cancel", "production.export", "ops.file.view", "ops.file.upload");
+                "production.submit", "production.cancel", "production.export", "ops.file.view", "ops.file.upload", "ops.file.download");
+        var inventory = List.of("inventory.view", "inventory.create", "inventory.update", "inventory.reverse");
         var production = List.of("production.view", "production.create", "production.update", "production.submit",
                 "production.cancel", "template.view", "data.view", "ops.file.view", "ops.file.upload");
-        var quality = List.of("knowledge.view", "knowledge.upload", "knowledge.create", "knowledge.update",
-                "knowledge.submit", "knowledge.review", "knowledge.approve", "knowledge.publish", "data.view",
-                "data.create", "data.update", "data.approve", "spectrum.view", "spectrum.create",
-                "spectrum.update", "experiment.view", "project.view", "ops.file.view", "ops.file.upload");
+        var quality = List.of("quality.view", "quality.upload", "quality.create", "quality.update", "quality.delete",
+                "quality.publish", "quality.export", "knowledge.view", "knowledge.upload", "knowledge.create",
+                "knowledge.update", "knowledge.submit", "knowledge.review", "knowledge.approve", "knowledge.publish",
+                "data.view", "data.create", "data.update", "data.approve", "spectrum.view", "spectrum.create",
+                "spectrum.update", "experiment.view", "project.view", "ops.file.view", "ops.file.upload", "ops.file.download");
 
         all.forEach(code -> store.ensureRoleBinding(organizationId, roles.get("SYSTEM_ADMIN").id(), new Binding(code, "ALLOW", "ALL", List.of())));
         responsibility.forEach(code -> store.ensureRoleBinding(organizationId, roles.get("RND_MANAGER").id(), new Binding(code, "ALLOW", defaultScope(code), List.of())));
+        inventory.forEach(code -> store.ensureRoleBinding(organizationId, roles.get("RND_MANAGER").id(), new Binding(code, "ALLOW", defaultScope(code), List.of())));
         responsibility.stream().filter(code -> Set.of("customer.view", "project.view", "project.create", "project.update",
                         "template.view", "template.create", "template.update", "template.upload", "template.copy",
                         "template.recognition", "experiment.view", "experiment.create", "experiment.update",
@@ -105,8 +109,12 @@ public class IamBootstrapService {
                         "production.view", "production.create", "production.update", "production.submit",
                         "ops.file.view", "ops.file.upload").contains(code))
                 .forEach(code -> store.ensureRoleBinding(organizationId, roles.get("RND_ENGINEER").id(), new Binding(code, "ALLOW", defaultScope(code), List.of())));
+        inventory.stream().filter(code -> Set.of("inventory.view", "inventory.create", "inventory.update").contains(code))
+                .forEach(code -> store.ensureRoleBinding(organizationId, roles.get("RND_ENGINEER").id(), new Binding(code, "ALLOW", defaultScope(code), List.of())));
         quality.forEach(code -> store.ensureRoleBinding(organizationId, roles.get("QUALITY_MANAGER").id(), new Binding(code, "ALLOW", defaultScope(code), List.of())));
         production.forEach(code -> store.ensureRoleBinding(organizationId, roles.get("PRODUCTION_OPERATOR").id(), new Binding(code, "ALLOW", defaultScope(code), List.of())));
+        inventory.stream().filter(code -> Set.of("inventory.view", "inventory.create", "inventory.update").contains(code))
+                .forEach(code -> store.ensureRoleBinding(organizationId, roles.get("PRODUCTION_OPERATOR").id(), new Binding(code, "ALLOW", defaultScope(code), List.of())));
     }
 
     private String defaultScope(String code) {

@@ -10,6 +10,7 @@ public final class ActorContext {
     public static final String ORGANIZATION_HEADER = "X-Organization-Id";
     public static final String USER_HEADER = "X-User-Id";
     public static final String USERNAME_HEADER = "X-Username";
+    public static final String ROLE_HEADER = "X-User-Role";
 
     private static final ThreadLocal<Actor> ACTOR = new ThreadLocal<>();
 

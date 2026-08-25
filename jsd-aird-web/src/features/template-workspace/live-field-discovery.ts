@@ -41,6 +41,13 @@ export function potentialFieldLabel(value: unknown) {
 
 export function isCellMutationCommand(commandId: string, params?: unknown) {
   const id = (commandId || '').toLowerCase();
+  // The sheet editor shares Univer's global command bus with the document and
+  // formula engines. Their snapshot replacement, recalculation, and edit-mode
+  // activation commands are internal initialization/state changes, not user
+  // cell edits. Treating them as mutations causes false dirty events and can
+  // start an autosave -> reload -> reinitialize loop on Excel experiments.
+  if (id.startsWith('doc.') || id.startsWith('formula.mutation.')
+    || id === 'sheet.operation.set-activate-cell-edit') return false;
   // Univer emits formatting, selection and merge commands through the same
   // command bus. They must not turn an already selected label into a new
   // field. Value/edit commands are intentionally checked before the fallback

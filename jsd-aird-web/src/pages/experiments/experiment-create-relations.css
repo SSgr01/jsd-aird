@@ -1,0 +1,15 @@
+.eln-relation-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0 16px;
+}
+
+.eln-relation-grid .ant-select {
+  width: 100%;
+}
+
+@media (max-width: 640px) {
+  .eln-relation-grid {
+    grid-template-columns: 1fr;
+  }
+}

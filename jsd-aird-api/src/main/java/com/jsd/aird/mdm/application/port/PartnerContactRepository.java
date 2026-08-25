@@ -16,7 +16,11 @@ public interface PartnerContactRepository {
 
     boolean updateContactStatus(UUID partnerId, UUID contactId, PartnerStatus status, long version, String operator);
 
+    boolean existsContact(UUID partnerId, String phone, String name, UUID excludedId);
+
     List<PartnerContact> findContacts(UUID partnerId);
 
     List<ContactProjectVector> findContactProjectVectors(UUID partnerId);
+
+    boolean hasActiveProjectAssignment(UUID partnerId, UUID projectId);
 }

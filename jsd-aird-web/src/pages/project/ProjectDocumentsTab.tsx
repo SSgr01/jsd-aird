@@ -26,6 +26,7 @@ import dayjs from '@/utils/dayjs';
 import { httpClient } from '@/services/http/client';
 import type { ApiResponse } from '@/types/api';
 import { projectDocumentApi } from '@/services/project/project-document-api';
+import { downloadBlob } from '@/services/files/file-api';
 import { templateApi } from '@/services/templates/template-api';
 import TemplateVersionPreview from '@/features/template-workspace/TemplateVersionPreview';
 import type { TemplateListItem } from '@/features/template-workspace/types';
@@ -68,6 +69,7 @@ export default function ProjectDocumentsTab({
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [activeDoc, setActiveDoc] = useState<ProjectDocumentSummary | null>(null);
+  const [downloadingId, setDownloadingId] = useState<string>();
   const navigate = useNavigate();
 
   const loadDocuments = async () => {
@@ -84,6 +86,7 @@ export default function ProjectDocumentsTab({
 
   useEffect(() => {
     void loadDocuments();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
   const createDocument = async (input: CreateProjectDocumentInput) => {
@@ -115,6 +118,21 @@ export default function ProjectDocumentsTab({
 
   const projectLabel = [projectCode, projectName].filter(Boolean).join(' · ');
 
+  const downloadDocument = async (doc: ProjectDocumentSummary) => {
+    setDownloadingId(doc.id);
+    try {
+      const blob = await projectDocumentApi.exportDocument(projectId, doc.id);
+      const extension = doc.format === 'XLSX' ? 'xlsx' : doc.format === 'DOCX' ? 'docx' : 'bin';
+      const fileName = doc.title.toLowerCase().endsWith(`.${extension}`) ? doc.title : `${doc.title}.${extension}`;
+      downloadBlob(blob, fileName);
+      message.success('项目文档已下载');
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '项目文档下载失败');
+    } finally {
+      setDownloadingId(undefined);
+    }
+  };
+
   const columns: ColumnsType<ProjectDocumentSummary> = [
     {
       title: '文档名称',
@@ -135,7 +153,7 @@ export default function ProjectDocumentsTab({
     {
       title: '创建来源',
       dataIndex: 'source',
-      width: 120,
+      width: 190,
       render: (value: ProjectDocumentSummary['source']) => sourceLabels[value] ?? value,
     },
     {
@@ -163,7 +181,7 @@ export default function ProjectDocumentsTab({
     {
       title: '操作',
       key: 'action',
-      width: 120,
+      width: 180,
       render: (_, doc) => (
         <Space size={0}>
           <Button
@@ -172,6 +190,14 @@ export default function ProjectDocumentsTab({
             onClick={() => navigate(`/projects/${projectId}/documents/${doc.id}`)}
           >
             查看
+          </Button>
+          <Button
+            size="small"
+            type="link"
+            loading={downloadingId === doc.id}
+            onClick={() => void downloadDocument(doc)}
+          >
+            下载
           </Button>
           <Button
             size="small"
@@ -253,6 +279,7 @@ export default function ProjectDocumentsTab({
         projectId={projectId}
         onCancel={() => setModalOpen(false)}
         onCreate={createDocument}
+        onImported={loadDocuments}
       />
     </div>
   );
@@ -264,9 +291,10 @@ interface NewDocumentModalProps {
   projectId: string;
   onCancel: () => void;
   onCreate: (input: CreateProjectDocumentInput) => Promise<string>;
+  onImported: () => Promise<void>;
 }
 
-function NewDocumentModal({ open, projectLabel, projectId, onCancel, onCreate }: NewDocumentModalProps) {
+function NewDocumentModal({ open, projectLabel, projectId, onCancel, onCreate, onImported }: NewDocumentModalProps) {
   const [mode, setMode] = useState<CreateMode>('TEMPLATE');
   const [form] = Form.useForm();
   const [templates, setTemplates] = useState<TemplateListItem[]>([]);
@@ -300,6 +328,7 @@ function NewDocumentModal({ open, projectLabel, projectId, onCancel, onCreate }:
         })
         .finally(() => setLoadingTpl(false));
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, open]);
 
   const handleSubmit = async () => {
@@ -326,6 +355,7 @@ function NewDocumentModal({ open, projectLabel, projectId, onCancel, onCreate }:
           format: format as 'DOCX' | 'XLSX',
           fileObjectId,
         });
+        await onImported();
         message.success('文件已上传至 MinIO，解析并保存为项目文档');
       } else {
         await onCreate({

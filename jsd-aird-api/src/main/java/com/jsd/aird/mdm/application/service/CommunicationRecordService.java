@@ -34,28 +34,34 @@ public class CommunicationRecordService {
 
     @Transactional
     public PartnerCommands.Created createCommunication(CommunicationRecord input) {
+        BusinessPartnerService.requireWrite();
         var now = Instant.now();
         var value = new CommunicationRecord(UUID.randomUUID(), CrmServiceSupport.code("COMMU"), input.name(), input.partnerId(),
             input.communicatedAt(), input.internalParticipants(), input.communicationMethod(),
             input.content(), CommunicationRecord.CommunicationStatus.OPEN,
             input.customFields(), 0, now, now);
         repository.insertCommunication(value, CrmServiceSupport.OPERATOR);
+        partnerService.appendAudit("COMMUNICATION_CREATED", value.partnerId());
         return new PartnerCommands.Created(value.id(), 0);
     }
 
     @Transactional
     public void updateCommunication(UUID id, CommunicationRecord input) {
+        BusinessPartnerService.requireWrite();
         var current = communication(id);
         var value = new CommunicationRecord(id, current.recordCode(), input.name(), input.partnerId(),
             input.communicatedAt(), input.internalParticipants(), input.communicationMethod(),
             input.content(), input.status(), input.customFields(), input.version(), current.createdAt(), Instant.now());
         if (!repository.updateCommunication(value, CrmServiceSupport.OPERATOR)) CrmServiceSupport.conflict();
+        partnerService.appendAudit("COMMUNICATION_UPDATED", value.partnerId());
     }
 
     @Transactional
     public void deleteCommunication(UUID id, long version) {
-        communication(id);
+        BusinessPartnerService.requireWrite();
+        var current = communication(id);
         if (!repository.deleteCommunication(id, version)) CrmServiceSupport.conflict();
+        partnerService.appendAudit("COMMUNICATION_DELETED", current.partnerId());
     }
 
     private static int page(int value) {

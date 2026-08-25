@@ -24,7 +24,7 @@ public interface ProjectMapper {
         "<if test='priority != null'> AND p.priority = #{priority}</if>" +
         "<if test='status != null'> AND p.status = #{status}</if>" +
         "<if test='partnerId != null'> AND p.partner_id = #{partnerId}</if>" +
-        "<if test='startDateFrom != null'> AND p.start_date &gt;= #{startDateFrom}</if>" +
+        "<if test='startDateFrom != null'> AND p.end_date &gt;= #{startDateFrom}</if>" +
         "<if test='startDateTo != null'> AND p.start_date &lt;= #{startDateTo}</if>";
 
     @Select("<script>" + SELECT_COLUMNS + "WHERE p.deleted = false " + FILTERS +
@@ -86,4 +86,16 @@ public interface ProjectMapper {
     @Update("UPDATE mdm.project SET deleted=true,version=version+1,updated_at=now(),updated_by=#{operator} " +
         "WHERE id=#{id} AND deleted=false")
     int softDelete(@Param("id") UUID id, @Param("operator") String operator);
+
+    @Update("UPDATE mdm.project SET partner_id=#{partnerId},partner_name=#{partnerName},version=version+1,updated_at=now(),updated_by=#{operator} WHERE id=#{projectId} AND deleted=false AND (partner_id IS NULL OR partner_id=#{partnerId})")
+    int assignPartner(@Param("projectId") UUID projectId, @Param("partnerId") UUID partnerId,
+                      @Param("partnerName") String partnerName, @Param("operator") String operator);
+
+    @Update("UPDATE mdm.project SET partner_id=NULL,partner_name=NULL,version=version+1,updated_at=now(),updated_by=#{operator} WHERE id=#{projectId} AND deleted=false AND partner_id=#{partnerId}")
+    int clearPartner(@Param("projectId") UUID projectId, @Param("partnerId") UUID partnerId,
+                     @Param("operator") String operator);
+
+    @Update("UPDATE mdm.project SET partner_name=#{partnerName},version=version+1,updated_at=now(),updated_by=#{operator} WHERE partner_id=#{partnerId} AND deleted=false")
+    int refreshPartnerName(@Param("partnerId") UUID partnerId, @Param("partnerName") String partnerName,
+                           @Param("operator") String operator);
 }

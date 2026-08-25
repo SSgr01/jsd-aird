@@ -1,11 +1,13 @@
 import {
   ArrowLeftOutlined,
   BookOutlined,
+  DeleteOutlined,
   FileTextOutlined,
   FolderOpenOutlined,
   HistoryOutlined,
   InfoCircleOutlined,
   LinkOutlined,
+  PlusOutlined,
   SaveOutlined,
   TeamOutlined,
 } from '@ant-design/icons';
@@ -28,6 +30,7 @@ import dayjs from '@/utils/dayjs';
 import {
   formatProjectStatus,
   getProject,
+  getProjects,
   projectPriorities,
   projectStatuses,
   updateProject,
@@ -47,6 +50,7 @@ import ProjectDocumentsTab from './ProjectDocumentsTab';
 const detailTabKeys = new Set(['documents', 'info', 'requirements', 'references', 'meetings', 'logs', 'assets']);
 
 interface InfoFormValues {
+  projectCode?: string;
   name: string;
   owner?: string;
   startDate?: dayjs.Dayjs | null;
@@ -54,6 +58,7 @@ interface InfoFormValues {
   status?: Project['status'];
   teamMembers?: string[];
   background?: string;
+  customFields?: { key: string; value: string }[];
 }
 
 export function ProjectDetailPage() {
@@ -88,6 +93,7 @@ export function ProjectDetailPage() {
   useEffect(() => {
     if (!project) return;
     form.setFieldsValue({
+      projectCode: project.projectCode,
       name: project.name,
       owner: project.owner,
       startDate: project.startDate ? dayjs(project.startDate) : null,
@@ -95,13 +101,44 @@ export function ProjectDetailPage() {
       status: project.status,
       teamMembers: members,
       background: project.background,
+      customFields: (project.customFields
+        ? Object.entries(project.customFields).map(([key, value]) => ({
+            key,
+            value: value == null ? '' : String(value),
+          }))
+        : []),
     });
   }, [project, members, form]);
 
   const handleSave = async () => {
     if (!project || !id) return;
-    const values = await form.validateFields();
+    let values: InfoFormValues;
+    try {
+      values = await form.validateFields();
+    } catch {
+      return;
+    }
+    const projectCode = values.projectCode?.trim();
+    if (projectCode) {
+      const result = await getProjects({ keyword: projectCode, page: 1, size: 200 });
+      const duplicate = result.items.some(
+        (item) => item.id !== project.id && item.projectCode.trim() === projectCode,
+      );
+      if (duplicate) {
+        form.setFields([{ name: 'projectCode', errors: ['项目编号已存在'] }]);
+        messageApi.error('项目编号已存在');
+        return;
+      }
+    }
+
+    const customFields = (values.customFields ?? []).reduce<Record<string, string>>((acc, item) => {
+      const key = item?.key?.trim();
+      if (!key) return acc;
+      acc[key] = (item.value ?? '').toString();
+      return acc;
+    }, {});
     const input: ProjectInput = {
+      projectCode: projectCode || undefined,
       name: values.name.trim(),
       owner: values.owner?.trim() || undefined,
       startDate: values.startDate?.format('YYYY-MM-DD') || undefined,
@@ -110,6 +147,7 @@ export function ProjectDetailPage() {
       teamSize: (values.teamMembers ?? []).length,
       background: values.background?.trim() || undefined,
       teamMembers: values.teamMembers ?? [],
+      customFields: Object.keys(customFields).length ? customFields : undefined,
       version: project.version,
     };
     setSaving(true);
@@ -141,19 +179,33 @@ export function ProjectDetailPage() {
         className="pm-info-form"
         initialValues={
           project
-            ? {
-                name: project.name,
-                owner: project.owner,
+                ? {
+                    projectCode: project.projectCode,
+                    name: project.name,
+                    owner: project.owner,
                 startDate: project.startDate ? dayjs(project.startDate) : null,
                 priority: project.priority,
                 status: project.status,
                 teamMembers: members,
                 background: project.background,
+                customFields: project.customFields
+                  ? Object.entries(project.customFields).map(([key, value]) => ({
+                      key,
+                      value: value == null ? '' : String(value),
+                    }))
+                  : [],
               }
             : undefined
         }
       >
         <div className="pm-form-grid">
+          <Form.Item
+            name="projectCode"
+            label="项目编号"
+            rules={[{ required: true, whitespace: true, message: '请输入项目编号' }, { max: 64, message: '最多 64 个字符' }]}
+          >
+            <Input placeholder="请输入项目编号（可修改）" maxLength={64} />
+          </Form.Item>
           <Form.Item
             name="name"
             label="项目名称"
@@ -170,8 +222,12 @@ export function ProjectDetailPage() {
           <Form.Item name="priority" label="优先级">
             <Select placeholder="请选择" options={projectPriorities.map(({ value, label }) => ({ value, label }))} />
           </Form.Item>
-          <Form.Item name="status" label="项目状态" className="pm-form-span-2">
-            <Select placeholder="请选择" options={projectStatuses.map(({ value, label }) => ({ value, label }))} />
+          <Form.Item name="status" label="项目状态">
+            <Select
+              style={{ width: 220 }}
+              placeholder="请选择"
+              options={projectStatuses.map(({ value, label }) => ({ value, label }))}
+            />
           </Form.Item>
           <Form.Item name="teamMembers" label="团队成员" className="pm-form-span-2">
             <Select
@@ -185,6 +241,45 @@ export function ProjectDetailPage() {
           <Form.Item name="background" label="项目描述" className="pm-form-span-2">
             <Input.TextArea rows={4} placeholder="请输入项目描述" />
           </Form.Item>
+
+          <Form.List name="customFields">
+            {(fields, { add, remove }) => (
+              <div className="pm-form-span-2">
+                <div className="pm-custom-field-toolbar">
+                  <span>自定义字段</span>
+                  <Button type="dashed" size="small" icon={<PlusOutlined />} onClick={() => add({ key: '', value: '' })}>
+                    添加字段
+                  </Button>
+                </div>
+
+                {fields.length === 0 ? (
+                  <div className="pm-custom-field-empty">未设置字段</div>
+                ) : (
+                  fields.map((field) => (
+                    <div key={field.key} className="pm-custom-field-row">
+                      <Form.Item
+                        name={[field.name, 'key']}
+                        rules={[{ required: true, message: '请输入字段名' }]}
+                      >
+                        <Input placeholder="字段名" maxLength={80} />
+                      </Form.Item>
+                      <Form.Item name={[field.name, 'value']}>
+                        <Input placeholder="字段值" />
+                      </Form.Item>
+                      <Button
+                        type="link"
+                        size="small"
+                        className="pm-custom-field-remove"
+                        icon={<DeleteOutlined />}
+                        onClick={() => remove(field.name)}
+                        danger
+                      />
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+          </Form.List>
         </div>
       </Form>
     </div>
@@ -207,6 +302,7 @@ export function ProjectDetailPage() {
         <Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate('/projects/list')}>返回</Button>
         <h2>{project.name}</h2>
         <Tag color="blue">{formatProjectStatus(project.status)}</Tag>
+        <span className="pm-detail-partner">关联客户：{project.partnerName ?? '—'}</span>
       </div>
 
       <ProjectStageBoard projectId={id ?? project.id} />

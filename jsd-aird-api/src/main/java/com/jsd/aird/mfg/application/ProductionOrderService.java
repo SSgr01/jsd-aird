@@ -9,12 +9,13 @@ import java.util.UUID;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.mfg.application.port.ProductionOrderRepository;
-import com.jsd.aird.tpl.api.RequiredFieldValidator;
+import com.jsd.aird.ops.application.port.AuditLogFacade;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.json.JsonCanonicalizer;
 import com.jsd.aird.shared.security.ActorContext;
 import org.springframework.stereotype.Service;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
@@ -25,20 +26,20 @@ public class ProductionOrderService {
     private final JsonCanonicalizer canonicalizer;
     private final ObjectMapper objectMapper;
     private final RecordProjectionService recordProjectionService;
-    private final RequiredFieldValidator requiredFieldValidator;
+    private final AuditLogFacade auditLog;
 
     public ProductionOrderService(
             ProductionOrderRepository repository,
             JsonCanonicalizer canonicalizer,
             ObjectMapper objectMapper,
             RecordProjectionService recordProjectionService,
-            RequiredFieldValidator requiredFieldValidator
+            AuditLogFacade auditLog
     ) {
         this.repository = repository;
         this.canonicalizer = canonicalizer;
         this.objectMapper = objectMapper;
         this.recordProjectionService = recordProjectionService;
-        this.requiredFieldValidator = requiredFieldValidator;
+        this.auditLog = auditLog;
     }
 
     @Transactional
@@ -51,6 +52,22 @@ public class ProductionOrderService {
                 ));
         if (!"XLSX".equalsIgnoreCase(template.format())) {
             throw new ApiException(ApiErrorCode.BAD_REQUEST, "Word 模板用于文档编辑，不进入生产单填写");
+        }
+        if (command.productId() != null && !repository.productExists(command.productId())) {
+            throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "请选择有效的产品主数据");
+        }
+        if (command.ownerId() != null && !repository.ownerExists(actor.organizationId(), command.ownerId())) {
+            throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "负责人不属于当前组织");
+        }
+        if (command.quantity() != null && command.quantity().signum() <= 0) {
+            throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "计划数量必须大于零");
+        }
+        if (command.quantity() != null && !StringUtils.hasText(command.unitCode())) {
+            throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "填写计划数量时必须选择单位");
+        }
+        if (StringUtils.hasText(command.unitCode())
+                && !java.util.Set.of("kg", "t", "L", "pcs").contains(command.unitCode())) {
+            throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "生产单单位不受支持");
         }
         var orderId = UUID.randomUUID();
         var data = objectMapper.createObjectNode();
@@ -66,7 +83,8 @@ public class ProductionOrderService {
                 template.editorAppVersion(),
                 template.pluginManifestHash()
         );
-        repository.insert(new ProductionOrderRepository.NewProductionOrder(
+        try {
+            repository.insert(new ProductionOrderRepository.NewProductionOrder(
                 orderId,
                 actor.organizationId(),
                 command.orderNo().trim(),
@@ -90,7 +108,12 @@ public class ProductionOrderService {
                 dataHash,
                 workspaceHash,
                 actor.userId()
-        ));
+            ));
+        } catch (DuplicateKeyException exception) {
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "当前组织已存在相同生产单号", exception);
+        }
+        audit(actor, orderId, "PRODUCTION_ORDER_CREATED", objectMapper.createObjectNode()
+                .put("orderNo", command.orderNo().trim()).put("templateVersionId", template.versionId().toString()));
         return get(orderId);
     }
 
@@ -99,14 +122,23 @@ public class ProductionOrderService {
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "生产单不存在"));
     }
 
-    public List<ProductionOrderRepository.ProductionOrderListItem> list() {
-        return repository.list(ActorContext.required().organizationId());
+    public ProductionOrderRepository.PageResult<ProductionOrderRepository.ProductionOrderListItem> list(
+            ProductionOrderRepository.ListQuery query) {
+        return repository.list(ActorContext.required().organizationId(), query);
+    }
+
+    public List<ProductionOrderRepository.LookupOption> productOptions() {
+        return repository.listProductOptions();
+    }
+
+    public List<ProductionOrderRepository.LookupOption> ownerOptions() {
+        return repository.listOwnerOptions(ActorContext.required().organizationId());
     }
 
     @Transactional
     public void cancel(UUID orderId) {
         var actor = ActorContext.required();
-        if (repository.cancel(actor.organizationId(), orderId) == 0) {
+        if (repository.cancel(actor.organizationId(), orderId, actor.userId()) == 0) {
             throw new ApiException(ApiErrorCode.NOT_FOUND, "只有草稿生产单可以取消");
         }
         repository.appendOutbox(
@@ -115,15 +147,18 @@ public class ProductionOrderService {
                 "PRODUCTION_ORDER_CANCELLED",
                 objectMapper.createObjectNode().put("orderId", orderId.toString())
         );
+        audit(actor, orderId, "PRODUCTION_ORDER_CANCELLED", objectMapper.createObjectNode());
     }
 
     @Transactional
     public void delete(UUID orderId) {
         var actor = ActorContext.required();
+        var current = get(orderId);
         if (repository.delete(actor.organizationId(), orderId) == 0) {
             throw new ApiException(ApiErrorCode.TEMPLATE_VERSION_IMMUTABLE,
                     "只有草稿或已取消的生产单可以删除，已提交生产单请保留历史");
         }
+        audit(actor, orderId, "PRODUCTION_ORDER_DELETED", objectMapper.createObjectNode().put("orderNo", current.orderNo()));
     }
 
     @Transactional
@@ -137,7 +172,6 @@ public class ProductionOrderService {
             throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT);
         }
         validateInstanceSchema(command.schema());
-        requiredFieldValidator.validate(command.schema(), command.data());
         var reconciliationRequired = validateMappings(command.mapping());
         validateBindingValues(command.bindingValues());
         validateSnapshot(command.snapshotFileId(), command.snapshotHash(), false);
@@ -171,7 +205,8 @@ public class ProductionOrderService {
                 schemaHash,
                 mappingHash,
                 dataHash,
-                workspaceHash
+                workspaceHash,
+                actor.userId()
         ));
         if (updated == 0) {
             throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT);
@@ -182,6 +217,8 @@ public class ProductionOrderService {
                 "FILE_ACTIVATION_REQUESTED",
                 objectMapper.createObjectNode().put("fileId", command.snapshotFileId().toString())
         );
+        audit(actor, orderId, "PRODUCTION_ORDER_SAVED", objectMapper.createObjectNode()
+                .put("lockVersion", command.lockVersion() + 1).put("workspaceHash", workspaceHash));
         return new SaveResult(command.lockVersion() + 1, workspaceHash, reconciliationRequired);
     }
 
@@ -195,8 +232,11 @@ public class ProductionOrderService {
         if (current.reconciliationRequired()) {
             throw new ApiException(ApiErrorCode.MAPPING_RECONCILIATION_REQUIRED);
         }
+        if (repository.hasUnresolvedIngest(actor.organizationId(), orderId)) {
+            throw new ApiException(ApiErrorCode.RECOGNITION_UNCONFIRMED, "仍有待处理或待复核的生产单导入任务");
+        }
+        validateRequiredData(current.schema(), current.data(), "");
         validateSnapshot(current.snapshotFileId(), current.snapshotHash(), true);
-        requiredFieldValidator.validate(current.schema(), current.data());
         var revisionId = UUID.randomUUID();
         var core = objectMapper.createObjectNode()
                 .put("orderNo", current.orderNo())
@@ -233,6 +273,8 @@ public class ProductionOrderService {
                         .put("collectionCount", projection.collections().size())
                         .put("valueCount", projection.values().size())
         );
+        audit(actor, orderId, "PRODUCTION_ORDER_SUBMITTED", objectMapper.createObjectNode()
+                .put("revisionId", revisionId.toString()));
         return revisionId;
     }
 
@@ -258,7 +300,6 @@ public class ProductionOrderService {
             throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT);
         }
         validateInstanceSchema(template.schema());
-        requiredFieldValidator.validate(template.schema(), data);
         var reconciliationRequired = validateMappings(mapping);
         validateSnapshot(snapshotFileId, snapshotHash, false);
 
@@ -273,12 +314,19 @@ public class ProductionOrderService {
                 actor.organizationId(), orderId, expectedLockVersion, template.versionId(),
                 schema, mapping.deepCopy(), data.deepCopy(), snapshotFileId, snapshotHash,
                 template.editorAppVersion(), template.pluginManifestHash(),
-                template.snapshotFormatVersion(), schemaHash, mappingHash, dataHash, workspaceHash));
+                template.snapshotFormatVersion(), schemaHash, mappingHash, dataHash, workspaceHash,
+                actor.userId()));
         if (updated == 0) throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT);
         repository.appendOutbox(
                 "FILE_OBJECT", snapshotFileId, "FILE_ACTIVATION_REQUESTED",
                 objectMapper.createObjectNode().put("fileId", snapshotFileId.toString()));
+        audit(actor, orderId, "PRODUCTION_ORDER_INGEST_CONFIRMED", objectMapper.createObjectNode()
+                .put("lockVersion", expectedLockVersion + 1));
         return new SaveResult(expectedLockVersion + 1, workspaceHash, reconciliationRequired);
+    }
+
+    private void audit(com.jsd.aird.shared.security.Actor actor, UUID orderId, String action, JsonNode detail) {
+        auditLog.append(actor.organizationId(), actor.userId(), action, "PRODUCTION_ORDER", orderId, detail);
     }
 
     private void validateInstanceSchema(JsonNode schema) {
@@ -286,6 +334,25 @@ public class ProductionOrderService {
             throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "实例 Schema 根节点必须是 object");
         }
         scanQueryable(schema, false);
+    }
+
+    private void validateRequiredData(JsonNode schema, JsonNode data, String path) {
+        if (schema == null || !schema.isObject()) return;
+        var required = schema.path("required");
+        if (required.isArray()) {
+            for (var name : required) {
+                var key = name.asText();
+                var value = data == null ? null : data.get(key);
+                if (value == null || value.isNull() || (value.isTextual() && value.asText().isBlank())) {
+                    throw new ApiException(ApiErrorCode.DATA_SCHEMA_INVALID, "必填字段未填写: " + path + "/" + key);
+                }
+            }
+        }
+        var properties = schema.path("properties");
+        if (properties.isObject() && data != null && data.isObject()) {
+            properties.fields().forEachRemaining(field -> validateRequiredData(
+                    field.getValue(), data.get(field.getKey()), path + "/" + field.getKey()));
+        }
     }
 
     private void scanQueryable(JsonNode node, boolean localAncestor) {

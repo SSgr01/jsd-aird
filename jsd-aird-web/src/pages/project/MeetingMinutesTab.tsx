@@ -66,6 +66,7 @@ export function MeetingMinutesTab({ projectId }: Props) {
 
   useEffect(() => {
     void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
   const openCreate = () => {
@@ -111,7 +112,7 @@ export function MeetingMinutesTab({ projectId }: Props) {
     setSubmitting(true);
     try {
       if (editing) {
-        await updateMeeting(editing.id, payload);
+        await updateMeeting(projectId, editing.id, payload);
         message.success('会议纪要已更新');
       } else {
         await createMeeting(projectId, payload);
@@ -128,7 +129,7 @@ export function MeetingMinutesTab({ projectId }: Props) {
 
   const handleDelete = async (record: MeetingMinutes) => {
     try {
-      await deleteMeeting(record.id, record.version);
+      await deleteMeeting(projectId, record.id, record.version);
       message.success('会议纪要已删除');
       await load();
     } catch (reason) {
@@ -138,7 +139,7 @@ export function MeetingMinutesTab({ projectId }: Props) {
 
   const handleArchive = async (record: MeetingMinutes) => {
     try {
-      await archiveMeetingToKb(record.id);
+      await archiveMeetingToKb(projectId, record.id);
       message.success('已归档到知识库');
       await load();
     } catch (reason) {

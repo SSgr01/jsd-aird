@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.UUID;
+import java.util.List;
 import java.util.function.Supplier;
 
 @Service
@@ -32,24 +33,30 @@ public class CustomerRequirementService {
 
     @Transactional
     public PartnerCommands.Created createRequirement(CustomerRequirement input) {
+        BusinessPartnerService.requireWrite();
         CrmServiceSupport.validatePartnerAndContact(partnerService, input.partnerId(), null);
         var now = java.time.Instant.now();
+        var projectIds = normalizeProjectIds(input.projectIds(), input.projectId());
         var value = new CustomerRequirement(UUID.randomUUID(), CrmServiceSupport.code("REQ"), input.partnerId(),
-            input.title(), input.rawRequirement(), input.urgency(), input.raisedAt(), input.deliveryDate(), CustomerRequirement.RequirementStatus.DRAFT,
-            input.customStatusName(), input.projectId(), input.customFields(), 0, now, now);
+            input.title(), input.rawRequirement(), input.urgency(), input.raisedAt(), input.deliveryDate(), input.status(),
+            input.customStatusName(), firstProjectId(projectIds), projectIds, input.customFields(), 0, now, now);
         repository.insertRequirement(value, CrmServiceSupport.OPERATOR);
+        partnerService.appendAudit("CUSTOMER_REQUIREMENT_CREATED", value.partnerId());
         return new PartnerCommands.Created(value.id(), 0);
     }
 
     @Transactional
     public void updateRequirement(UUID id, CustomerRequirement input) {
+        BusinessPartnerService.requireWrite();
         var current = requirement(id);
         CrmServiceSupport.validatePartnerAndContact(partnerService, input.partnerId(), null);
+        var projectIds = normalizeProjectIds(input.projectIds(), input.projectId());
         var value = new CustomerRequirement(id, current.requirementCode(), input.partnerId(), input.title(),
             input.rawRequirement(), input.urgency(), input.raisedAt(), input.deliveryDate(),
-            input.status(), input.customStatusName(), input.projectId(), input.customFields(), input.version(),
+            input.status(), input.customStatusName(), firstProjectId(projectIds), projectIds, input.customFields(), input.version(),
             current.createdAt(), java.time.Instant.now());
         if (!repository.updateRequirement(value, CrmServiceSupport.OPERATOR)) CrmServiceSupport.conflict();
+        partnerService.appendAudit("CUSTOMER_REQUIREMENT_UPDATED", value.partnerId());
     }
 
     private static int page(int value) {
@@ -58,6 +65,15 @@ public class CustomerRequirementService {
 
     private static int size(int value) {
         return Math.min(Math.max(value, 1), 100);
+    }
+
+    private static List<UUID> normalizeProjectIds(List<UUID> projectIds, UUID legacyProjectId) {
+        if (projectIds == null || projectIds.isEmpty()) return legacyProjectId == null ? List.of() : List.of(legacyProjectId);
+        return projectIds.stream().filter(java.util.Objects::nonNull).distinct().toList();
+    }
+
+    private static UUID firstProjectId(List<UUID> projectIds) {
+        return projectIds.isEmpty() ? null : projectIds.get(0);
     }
 
     private static Supplier<ApiException> notFound(String message) {

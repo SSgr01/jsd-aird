@@ -82,6 +82,21 @@ public class MyBatisProjectRepository implements ProjectRepository {
         return prefix + String.format("%03d", mapper.maxSequence(prefix) + 1);
     }
 
+    @Override
+    public void assignPartner(UUID projectId, UUID partnerId, String partnerName, String operator) {
+        mapper.assignPartner(projectId, partnerId, partnerName, operator);
+    }
+
+    @Override
+    public void clearPartner(UUID projectId, UUID partnerId, String operator) {
+        mapper.clearPartner(projectId, partnerId, operator);
+    }
+
+    @Override
+    public void refreshPartnerName(UUID partnerId, String partnerName, String operator) {
+        mapper.refreshPartnerName(partnerId, partnerName, operator);
+    }
+
     private static String name(Enum<?> value) {
         return value == null ? null : value.name();
     }

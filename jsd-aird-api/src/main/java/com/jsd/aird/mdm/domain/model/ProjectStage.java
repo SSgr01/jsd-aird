@@ -21,6 +21,8 @@ public record ProjectStage(
     Instant actualEnd,
     long taskCount,
     long openTaskCount,
+    long experimentCount,
+    long materialCount,
     long version,
     Instant createdAt,
     Instant updatedAt

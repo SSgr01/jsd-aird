@@ -1,12 +1,15 @@
 import {
   AppstoreOutlined,
+  DeleteOutlined,
   CopyOutlined,
+  DownloadOutlined,
   PlusOutlined,
   ReloadOutlined,
   SearchOutlined,
   UnorderedListOutlined,
 } from '@ant-design/icons';
 import {
+  Breadcrumb,
   Button,
   Checkbox,
   DatePicker,
@@ -25,8 +28,9 @@ import {
 } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import dayjs from '@/utils/dayjs';
+import type dayjs from '@/utils/dayjs';
 import './project-pages.css';
+import './project-list.css';
 import '@/pages/partners/partner-prototype.css';
 import {
   copyProjects,
@@ -35,7 +39,7 @@ import {
   formatProjectPriority,
   formatProjectStatus,
   getProjects,
-  updateProject,
+  exportProjects,
   projectPriorities,
   projectStatuses,
   type Project,
@@ -63,7 +67,7 @@ interface ProjectFormValues {
   customFields?: CustomField[];
 }
 
-const PAGE_SIZE = 10;
+const DEFAULT_PAGE_SIZE = 10;
 
 function priorityClass(value: ProjectPriority) {
   return `pm-tag priority-${value.toLowerCase()}`;
@@ -82,7 +86,8 @@ export function ProjectListPage() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(1);
-  const [view, setView] = useState<ViewMode>('list');
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
+  const [view, setView] = useState<ViewMode>('card');
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const [keyword, setKeyword] = useState('');
@@ -92,8 +97,8 @@ export function ProjectListPage() {
   const [status, setStatus] = useState<ProjectStatus>();
 
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [detail, setDetail] = useState<Project | null>(null);
   const [pendingFormValues, setPendingFormValues] = useState<Partial<ProjectFormValues> | null>(null);
   const [form] = Form.useForm<ProjectFormValues>();
@@ -111,17 +116,10 @@ export function ProjectListPage() {
         startDateFrom: dateRange?.[0]?.format('YYYY-MM-DD') || undefined,
         startDateTo: dateRange?.[1]?.format('YYYY-MM-DD') || undefined,
         page,
-        size: PAGE_SIZE,
+        size: pageSize,
       });
       setRows(result.items);
       setTotal(result.total);
-      setSelected((prev) => {
-        const next = new Set<string>();
-        for (const id of prev) {
-          if (result.items.some((r) => r.id === id)) next.add(id);
-        }
-        return next;
-      });
     } catch (error) {
       setRows([]);
       setTotal(0);
@@ -129,7 +127,7 @@ export function ProjectListPage() {
     } finally {
       setLoading(false);
     }
-  }, [keyword, owner, priority, status, dateRange, page, msg]);
+  }, [keyword, owner, priority, status, dateRange, page, pageSize, msg]);
 
   useEffect(() => {
     void load();
@@ -139,7 +137,7 @@ export function ProjectListPage() {
   const handleModalAfterOpenChange = (open: boolean) => {
     if (open && pendingFormValues) {
       form.resetFields();
-      form.setFieldsValue(pendingFormValues);
+      form.setFieldsValue(pendingFormValues as ProjectFormValues);
       setPendingFormValues(null);
     }
   };
@@ -187,15 +185,29 @@ export function ProjectListPage() {
     setSelected(new Set());
   };
 
-  const selectedRows = useMemo(
-    () => rows.filter((r) => selected.has(r.id)),
-    [rows, selected],
-  );
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      await exportProjects({
+        keyword: keyword || undefined,
+        owner,
+        priority,
+        status,
+        startDateFrom: dateRange?.[0]?.format('YYYY-MM-DD') || undefined,
+        startDateTo: dateRange?.[1]?.format('YYYY-MM-DD') || undefined,
+      });
+      msg.success('项目列表已导出');
+    } catch (error) {
+      msg.error(error instanceof Error ? error.message : '项目列表导出失败');
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const handleCopy = async () => {
-    if (!selectedRows.length) return;
+    if (!selected.size) return;
     try {
-      await copyProjects(selectedRows.map((r) => r.id));
+      await copyProjects([...selected]);
       msg.success('项目已复制');
       await load();
     } catch (error) {
@@ -204,15 +216,15 @@ export function ProjectListPage() {
   };
 
   const handleDelete = () => {
-    if (!selectedRows.length) return;
+    if (!selected.size) return;
     Modal.confirm({
       title: '删除选中的项目？',
-      content: `已选择 ${selectedRows.length} 个项目，删除后不可恢复。`,
+      content: `已选择 ${selected.size} 个项目，删除后不可恢复。`,
       okText: '删除',
       okType: 'danger',
       onOk: async () => {
         try {
-          await deleteProjects(selectedRows.map((r) => r.id));
+          await deleteProjects([...selected]);
           msg.success('项目已删除');
           await load();
         } catch {
@@ -234,36 +246,15 @@ export function ProjectListPage() {
 
   const closeDrawer = () => {
     setDrawerOpen(false);
-    setEditingProject(null);
     setPendingFormValues(null);
   };
 
   const openCreate = () => {
-    setEditingProject(null);
     setPendingFormValues({
       priority: 'MEDIUM',
       status: 'NOT_STARTED',
       teamMembers: [],
       customFields: [],
-    });
-    setDrawerOpen(true);
-  };
-
-  const openEdit = (row: Project) => {
-    setEditingProject(row);
-    setPendingFormValues({
-      name: row.name,
-      projectCode: row.projectCode,
-      owner: row.owner,
-      startDate: row.startDate ? dayjs(row.startDate) : null,
-      priority: row.priority,
-      status: row.status,
-      teamMembers: row.teamMembers ?? [],
-      background: row.background,
-      customFields: Object.entries(row.customFields ?? {}).map(([key, value]) => ({
-        key,
-        value: String(value ?? ''),
-      })),
     });
     setDrawerOpen(true);
   };
@@ -284,24 +275,23 @@ export function ProjectListPage() {
       background: values.background?.trim() || undefined,
       customFields: Object.keys(customFields).length ? customFields : undefined,
       teamMembers: values.teamMembers ?? [],
-      version: editingProject?.version,
     };
   };
 
   const handleSubmit = async () => {
-    const values = await form.validateFields();
+    let values: ProjectFormValues;
+    try {
+      values = await form.validateFields();
+    } catch {
+      return;
+    }
     const input = buildInput(values);
 
     setSubmitting(true);
     try {
-      if (editingProject) {
-        await updateProject(editingProject.id, input);
-        msg.success('项目已保存');
-      } else {
-        await createProject(input);
-        msg.success('项目已创建');
-        setPage(1);
-      }
+      await createProject(input);
+      msg.success('项目已创建');
+      setPage(1);
       closeDrawer();
       await load();
     } catch (error) {
@@ -311,18 +301,12 @@ export function ProjectListPage() {
     }
   };
 
-  const renderTags = (row: Project) => (
-    <div className="pm-card-tags">
-      <span className={priorityClass(row.priority)}>{formatProjectPriority(row.priority)}</span>
-      <span className={statusClass(row.status)}>{formatProjectStatus(row.status)}</span>
-    </div>
-  );
-
   return (
     <div className="pm-page">
       {holder}
       <div className="pm-page-head">
         <div>
+          <Breadcrumb items={[{ title: '项目管理' }, { title: '项目列表' }]} />
           <h3>项目列表</h3>
           <p>统一管理研发项目、项目阶段、任务及关联实验。</p>
         </div>
@@ -335,6 +319,9 @@ export function ProjectListPage() {
         <div className="pm-toolbar-right">
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
             新建项目
+          </Button>
+          <Button icon={<DownloadOutlined />} loading={exporting} onClick={() => void handleExport()}>
+            导出
           </Button>
           <Button icon={<CopyOutlined />} disabled={!selected.size} onClick={handleCopy}>
             复制
@@ -364,7 +351,7 @@ export function ProjectListPage() {
       <div className="pm-filter">
         <Input
           prefix={<SearchOutlined />}
-          placeholder="项目名称 / 项目编号"
+          placeholder="项目名称 / 项目编号 / 公司名称"
           value={keyword}
           onChange={(e) => {
             setKeyword(e.target.value);
@@ -417,46 +404,64 @@ export function ProjectListPage() {
 
       <div className="pm-content" aria-busy={loading}>
         {view === 'card' ? (
-          <div className="pm-card-grid">
-            {rows.map((row) => (
-              <div
-                key={row.id}
-                className={selected.has(row.id) ? 'pm-card pm-card-checked' : 'pm-card'}
-              >
-                <div className="pm-card-head">
-                  <div style={{ minWidth: 0 }}>
-                    <h4 className="pm-card-title" title={row.name}>
-                      <Link to={`/projects/${row.id}`}>{row.name}</Link>
-                    </h4>
-                    <div className="pm-card-code">{row.projectCode}</div>
-                  </div>
-                  <Checkbox
-                    checked={selected.has(row.id)}
-                    onChange={() => toggleSelect(row.id)}
-                  />
-                </div>
-                {renderTags(row)}
-                <div className="pm-card-row">
-                  <span>开始日期</span>
-                  <strong>{row.startDate ?? '未设置'}</strong>
-                </div>
-                <div className="pm-card-row">
-                  <span>团队</span>
-                  <strong>{(row.teamMembers ?? []).length} 人</strong>
-                </div>
-                <div className="pm-card-row">
-                  <span>负责人</span>
-                  <strong>{row.owner ?? '未设置负责人'}</strong>
-                </div>
-                <div className="cm-row-actions">
-                  <Link to={`/projects/${row.id}`}>查看</Link>
-                  <button className="cm-link-button" onClick={() => openEdit(row)}>
-                    编辑
-                  </button>
-                </div>
+          <>
+            {rows.length > 0 && (
+              <div className="pm-card-grid-head">
+                <Checkbox
+                  checked={allSelected}
+                  indeterminate={indeterminate}
+                  onChange={toggleSelectAll}
+                />
+                <span>全选当前页</span>
               </div>
-            ))}
-          </div>
+            )}
+            <div className="pm-card-grid">
+              {rows.map((row) => (
+                <div
+                  key={row.id}
+                  className={selected.has(row.id) ? 'pm-card pm-card-checked' : 'pm-card'}
+                >
+                  <div className="pm-card-head">
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <h4 className="pm-card-title" title={row.name}>
+                        <Link to={`/projects/${row.id}`}>{row.name}</Link>
+                      </h4>
+                      <div className="pm-card-code">
+                        {row.projectCode}
+                        {row.owner ? ` · ${row.owner}` : ''}
+                      </div>
+                    </div>
+                    <Checkbox
+                      checked={selected.has(row.id)}
+                      onChange={() => toggleSelect(row.id)}
+                    />
+                  </div>
+                  <div className="pm-card-info-grid">
+                    <div className="pm-card-info-item">
+                      <span className="pm-card-info-label">开始日期</span>
+                      <strong className="pm-card-info-value">{row.startDate ?? '未设置'}</strong>
+                    </div>
+                    <div className="pm-card-info-item">
+                      <span className="pm-card-info-label">团队</span>
+                      <strong className="pm-card-info-value">{(row.teamMembers ?? []).length} 人</strong>
+                    </div>
+                  </div>
+                  <div className="pm-card-tags">
+                    <span className={priorityClass(row.priority)}>{formatProjectPriority(row.priority)}</span>
+                    <span className={statusClass(row.status)}>{formatProjectStatus(row.status)}</span>
+                  </div>
+                  <div className="pm-card-actions">
+                    <Link to={`/projects/${row.id}`}>查看</Link>
+                    <Popconfirm title="确认删除该项目？" description="删除后不可恢复。" onConfirm={() => handleDeleteRow(row.id)}>
+                      <Button type="link" danger>
+                        删除
+                      </Button>
+                    </Popconfirm>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
         ) : (
           <div style={{ overflow: 'auto' }}>
             <table className="pm-table">
@@ -504,9 +509,6 @@ export function ProjectListPage() {
                     <td>
                       <div className="cm-row-actions">
                         <Link to={`/projects/${row.id}`}>查看</Link>
-                        <button className="cm-link-button" onClick={() => openEdit(row)}>
-                          编辑
-                        </button>
                         <Popconfirm title="确认删除该项目？" description="删除后不可恢复。" onConfirm={() => handleDeleteRow(row.id)}>
                           <Button type="link" size="small" danger>
                             删除
@@ -524,25 +526,32 @@ export function ProjectListPage() {
         {!loading && !rows.length && <Empty className="pm-empty" description="没有符合筛选条件的项目" />}
 
         <div className="pm-pagination">
-          <span>共 {total} 个项目</span>
-          <Pagination
-            current={page}
-            pageSize={PAGE_SIZE}
-            total={total}
-            showSizeChanger={false}
-            showQuickJumper
-            onChange={(p) => setPage(p)}
-          />
+          <div className="pm-pagination-right">
+            <span>共 {total} 个项目</span>
+            <Pagination
+              current={page}
+              pageSize={pageSize}
+              total={total}
+              showSizeChanger
+              pageSizeOptions={[10, 20, 30, 50]}
+              onChange={(p, s) => {
+                // Changing the page size is a new query; restart at page 1 so
+                // a previously selected page cannot leave the list empty.
+                setPage(s !== pageSize ? 1 : p);
+                setPageSize(s);
+              }}
+            />
+          </div>
         </div>
       </div>
 
       <Modal
-        title={editingProject ? '编辑项目' : '新建项目'}
+        title="新建项目"
         open={drawerOpen}
         onCancel={closeDrawer}
         onOk={handleSubmit}
         confirmLoading={submitting}
-        okText={editingProject ? '保存' : '创建'}
+        okText="创建"
         cancelText="取消"
         afterOpenChange={handleModalAfterOpenChange}
         width={760}
@@ -574,7 +583,7 @@ export function ProjectListPage() {
                 }
                 extra="留空时由系统自动生成"
               >
-                <Input placeholder="例如 JSD-PM-20260810-JFSE2" maxLength={64} disabled={Boolean(editingProject)} />
+                <Input placeholder="例如 JSD-PM-20260810-JFSE2" maxLength={64} />
               </Form.Item>
               <Form.Item
                 name="name"
@@ -593,7 +602,11 @@ export function ProjectListPage() {
                 <Select placeholder="请选择" options={projectPriorities.map(({ value, label }) => ({ value, label }))} />
               </Form.Item>
               <Form.Item name="status" label="项目状态">
-                <Select placeholder="请选择" options={projectStatuses.map(({ value, label }) => ({ value, label }))} />
+                <Select
+                  style={{ width: 220 }}
+                  placeholder="请选择"
+                  options={projectStatuses.map(({ value, label }) => ({ value, label }))}
+                />
               </Form.Item>
               <Form.Item name="teamMembers" label="团队成员" className="pm-form-span-2">
                 <Select
@@ -627,9 +640,7 @@ export function ProjectListPage() {
                           <Form.Item name={[name, 'value']}>
                             <Input placeholder="字段值" />
                           </Form.Item>
-                          <Button type="link" danger onClick={() => remove(name)}>
-                            删除
-                          </Button>
+                          <Button type="link" danger icon={<DeleteOutlined />} onClick={() => remove(name)} />
                         </div>
                       ))}
                     </div>

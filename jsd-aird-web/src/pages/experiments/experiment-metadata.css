@@ -1,0 +1,14 @@
+.experiment-metadata-panel {
+  display: grid;
+  gap: 8px;
+  max-width: 420px;
+  margin-bottom: 16px;
+  padding: 16px;
+  border: 1px solid #dce4ef;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.experiment-metadata-panel h5 { margin: 0; }
+.experiment-metadata-panel label { display: grid; gap: 5px; color: #52647d; font-size: 12px; }
+.experiment-result-select { height: 32px; padding: 0 8px; border: 1px solid #d9e2ef; border-radius: 6px; color: #1d2a44; background: #fff; }

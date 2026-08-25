@@ -26,4 +26,10 @@ public interface ProjectRepository {
     boolean softDelete(UUID id, String operator);
 
     String nextProjectCode(int year);
+
+    void assignPartner(UUID projectId, UUID partnerId, String partnerName, String operator);
+
+    void clearPartner(UUID projectId, UUID partnerId, String operator);
+
+    void refreshPartnerName(UUID partnerId, String partnerName, String operator);
 }

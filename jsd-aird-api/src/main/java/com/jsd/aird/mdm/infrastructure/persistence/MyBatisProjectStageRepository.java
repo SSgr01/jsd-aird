@@ -85,6 +85,6 @@ public class MyBatisProjectStageRepository implements ProjectStageRepository {
     private static ProjectStage map(ProjectStageRow r) {
         return new ProjectStage(r.id(), r.projectId(), r.projectCode(), r.projectName(), r.stageCode(), r.name(),
             r.orderNo(), StageStatus.valueOf(r.status()), r.owner(), r.description(), r.plannedStart(), r.plannedEnd(),
-            r.actualStart(), r.actualEnd(), r.taskCount(), r.openTaskCount(), r.version(), r.createdAt(), r.updatedAt());
+            r.actualStart(), r.actualEnd(), r.taskCount(), r.openTaskCount(), r.experimentCount(), r.materialCount(), r.version(), r.createdAt(), r.updatedAt());
     }
 }

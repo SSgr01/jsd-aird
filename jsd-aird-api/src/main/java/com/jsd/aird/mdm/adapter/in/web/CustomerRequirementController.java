@@ -13,6 +13,7 @@ import jakarta.validation.constraints.*;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
+import java.util.List;
 import java.util.UUID;
 
 @RestController
@@ -59,10 +60,13 @@ public class CustomerRequirementController {
                                      String rawRequirement,
                                      @Size(max = 20) String urgency, LocalDate raisedAt,
                                      LocalDate deliveryDate, CustomerRequirement.RequirementStatus status,
-                                     @Size(max = 50) String customStatusName, UUID projectId, JsonNode customFields,
+                                     @Size(max = 50) String customStatusName, UUID projectId, List<UUID> projectIds, JsonNode customFields,
                                      @PositiveOrZero Long version) {
         CustomerRequirement toDomain() {
-            return new CustomerRequirement(null, null, partnerId, title, rawRequirement, urgency, raisedAt, deliveryDate, status == null ? CustomerRequirement.RequirementStatus.DRAFT : status, customStatusName, projectId, customFields, version == null ? 0 : version, null, null);
+            var ids = projectIds == null || projectIds.isEmpty()
+                ? (projectId == null ? List.<UUID>of() : List.of(projectId))
+                : projectIds.stream().filter(java.util.Objects::nonNull).distinct().toList();
+            return new CustomerRequirement(null, null, partnerId, title, rawRequirement, urgency, raisedAt, deliveryDate, status == null ? CustomerRequirement.RequirementStatus.DRAFT : status, customStatusName, ids.isEmpty() ? null : ids.get(0), ids, customFields, version == null ? 0 : version, null, null);
         }
     }
 }

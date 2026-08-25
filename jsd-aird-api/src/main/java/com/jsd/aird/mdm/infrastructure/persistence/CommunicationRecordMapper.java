@@ -16,18 +16,18 @@ public interface CommunicationRecordMapper {
         "FROM mdm.communication_record cr ";
 
     @Select("<script>" + COLS +
-        "WHERE 1=1 <if test='partnerId != null'> AND cr.partner_id=#{partnerId}</if>" +
+        "WHERE cr.deleted = false <if test='partnerId != null'> AND cr.partner_id=#{partnerId}</if>" +
         "<if test='status != null'> AND cr.status=#{status}</if> " +
         "ORDER BY cr.communicated_at DESC LIMIT #{size} OFFSET #{offset}</script>")
     List<CommunicationRow> findPage(@Param("partnerId") UUID partnerId, @Param("status") String status,
                                     @Param("offset") int offset, @Param("size") int size);
 
-    @Select("<script>SELECT count(*) FROM mdm.communication_record cr WHERE 1=1 " +
+    @Select("<script>SELECT count(*) FROM mdm.communication_record cr WHERE cr.deleted = false " +
         "<if test='partnerId != null'> AND cr.partner_id=#{partnerId}</if>" +
         "<if test='status != null'> AND cr.status=#{status}</if></script>")
     long count(@Param("partnerId") UUID partnerId, @Param("status") String status);
 
-    @Select(COLS + "WHERE cr.id=#{id}")
+    @Select(COLS + "WHERE cr.id=#{id} AND cr.deleted = false")
     Optional<CommunicationRow> findById(@Param("id") UUID id);
 
     @Insert("INSERT INTO mdm.communication_record(id,record_code,name,partner_id,communicated_at,internal_participants," +
@@ -51,6 +51,6 @@ public interface CommunicationRecordMapper {
                             @Param("status") String status, @Param("customFields") String customFields,
                             @Param("version") long version, @Param("operator") String operator);
 
-    @Delete("DELETE FROM mdm.communication_record WHERE id=#{id} AND version=#{version}")
+    @Update("UPDATE mdm.communication_record SET deleted=true,version=version+1,updated_at=now() WHERE id=#{id} AND version=#{version}")
     int deleteCommunication(@Param("id") UUID id, @Param("version") long version);
 }

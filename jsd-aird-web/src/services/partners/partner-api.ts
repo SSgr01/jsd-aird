@@ -103,6 +103,19 @@ export async function getPartner(id: string) {
   const { data } = await httpClient.get<ApiResponse<BusinessPartner>>(`/api/v1/business-partners/${id}`);
   return data.data;
 }
+export interface PartnerAuditEntry {
+  id: string;
+  actorId?: string;
+  action: string;
+  aggregateType: string;
+  aggregateId: string;
+  detail?: Record<string, unknown>;
+  createdAt: string;
+}
+export async function getPartnerAudits(id: string) {
+  const { data } = await httpClient.get<ApiResponse<PartnerAuditEntry[]>>(`/api/v1/business-partners/${id}/audit`);
+  return data.data;
+}
 export async function createPartner(input: PartnerInput) {
   const { data } = await httpClient.post<ApiResponse<{ id: string; version: number }>>('/api/v1/business-partners', input);
   return data.data;
@@ -133,7 +146,8 @@ export async function getPartnerContacts(partnerId: string) {
   return data.data.map(parseContactExtras);
 }
 export async function createContact(partnerId: string, input: ContactInput) {
-  await httpClient.post(`/api/v1/business-partners/${partnerId}/contacts`, buildContactInputExtras(input));
+  const { data } = await httpClient.post<ApiResponse<{ id: string; version: number }>>(`/api/v1/business-partners/${partnerId}/contacts`, buildContactInputExtras(input));
+  return data.data;
 }
 export async function updateContact(partnerId: string, contactId: string, input: ContactInput) {
   await httpClient.put(`/api/v1/business-partners/${partnerId}/contacts/${contactId}`, buildContactInputExtras(input));

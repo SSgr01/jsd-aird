@@ -6,10 +6,10 @@ import com.jsd.aird.mdm.infrastructure.model.RequirementRow;
 import com.jsd.aird.shared.api.PageResponse;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
 import org.springframework.stereotype.Repository;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -41,7 +41,7 @@ public class MyBatisCustomerRequirementRepository implements CustomerRequirement
         mapper.insertRequirement(requirement.id(), requirement.requirementCode(), requirement.partnerId(),
             requirement.title(), requirement.rawRequirement(), requirement.urgency(), requirement.raisedAt(),
             requirement.deliveryDate(), requirement.status().name(), requirement.customStatusName(),
-            projectIdsJson(requirement.projectId()), json(requirement.customFields()), Instant.now(), operator);
+            requirement.projectId(), json(requirement.projectIds()), json(requirement.customFields()), Instant.now(), operator);
     }
 
     @Override
@@ -49,7 +49,7 @@ public class MyBatisCustomerRequirementRepository implements CustomerRequirement
         return mapper.updateRequirement(requirement.id(), requirement.title(), requirement.rawRequirement(),
             requirement.urgency(), requirement.raisedAt(), requirement.deliveryDate(),
             requirement.status().name(), requirement.customStatusName(),
-            projectIdsJson(requirement.projectId()), json(requirement.customFields()),
+            requirement.projectId(), json(requirement.projectIds()), json(requirement.customFields()),
             requirement.version(), operator) == 1;
     }
 
@@ -57,30 +57,32 @@ public class MyBatisCustomerRequirementRepository implements CustomerRequirement
         return new CustomerRequirement(r.id(), r.requirementCode(), r.partnerId(), r.title(), r.rawRequirement(),
             r.urgency(), r.raisedAt(), r.deliveryDate(),
             CustomerRequirement.RequirementStatus.valueOf(r.status()), r.customStatusName(),
-            firstProjectId(r.assignedProjectIds()), parse(r.customFields()), r.version(), r.createdAt(), r.updatedAt());
-    }
-
-    private static UUID firstProjectId(String assignedProjectIds) {
-        try {
-            JsonNode node = JSON.readTree(assignedProjectIds == null ? "[]" : assignedProjectIds);
-            if (node.isArray() && node.size() > 0) {
-                return UUID.fromString(node.get(0).asText());
-            }
-        } catch (Exception ignored) {
-        }
-        return null;
-    }
-
-    private static String projectIdsJson(UUID projectId) {
-        ArrayNode arr = JSON.createArrayNode();
-        if (projectId != null) {
-            arr.add(projectId.toString());
-        }
-        return arr.toString();
+            r.projectId(), parseProjectIds(r.assignedProjectIds(), r.projectId()), parse(r.customFields()),
+            r.version(), r.createdAt(), r.updatedAt());
     }
 
     private static String json(JsonNode value) {
         return value == null || value.isNull() ? "{}" : value.toString();
+    }
+
+    private static String json(List<UUID> value) {
+        return value == null ? "[]" : value.stream().map(UUID::toString).map(s -> "\"" + s + "\"").collect(java.util.stream.Collectors.joining(",", "[", "]"));
+    }
+
+    private static List<UUID> parseProjectIds(String value, UUID legacyProjectId) {
+        try {
+            var node = JSON.readTree(value == null ? "[]" : value);
+            var ids = new ArrayList<UUID>();
+            if (node != null && node.isArray()) {
+                node.forEach(item -> {
+                    if (item.isTextual()) ids.add(UUID.fromString(item.asText()));
+                });
+            }
+            if (ids.isEmpty() && legacyProjectId != null) ids.add(legacyProjectId);
+            return List.copyOf(ids);
+        } catch (Exception exception) {
+            throw new IllegalStateException("Invalid JSON stored in assigned_project_ids", exception);
+        }
     }
 
     private static JsonNode parse(String value) {

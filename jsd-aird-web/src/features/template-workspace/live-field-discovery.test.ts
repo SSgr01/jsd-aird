@@ -51,6 +51,14 @@ describe('live field discovery guards', () => {
     })).toBe(true);
   });
 
+  it('ignores internal document, formula, and edit-mode commands', () => {
+    expect(isCellMutationCommand('doc.command-replace-snapshot')).toBe(false);
+    expect(isCellMutationCommand('doc.mutation.rich-text-editing')).toBe(false);
+    expect(isCellMutationCommand('formula.mutation.set-formula-calculation-start')).toBe(false);
+    expect(isCellMutationCommand('formula.mutation.set-formula-calculation-notification')).toBe(false);
+    expect(isCellMutationCommand('sheet.operation.set-activate-cell-edit')).toBe(false);
+  });
+
   it('does not discover short business values inside a repeat data range', () => {
     expect(isStructuredDataCell(
       { sheetId: 'sheet-1', address: 'A2' },

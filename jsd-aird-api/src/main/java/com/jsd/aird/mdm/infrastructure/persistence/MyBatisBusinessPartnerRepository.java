@@ -23,9 +23,11 @@ public class MyBatisBusinessPartnerRepository implements BusinessPartnerReposito
         this.mapper = mapper;
     }
 
-    public PageResponse<BusinessPartner> findPage(String k, PartnerStatus s, int p, int z) {
-        var total = mapper.count(k, value(s));
-        var rows = mapper.findPage(k, value(s), (p - 1) * z, z);
+    public PageResponse<BusinessPartner> findPage(String k, String industry, String customerLevel,
+                                                  String cooperationStatus, String owner, PartnerStatus s,
+                                                  int p, int z) {
+        var total = mapper.count(k, industry, customerLevel, cooperationStatus, owner, value(s));
+        var rows = mapper.findPage(k, industry, customerLevel, cooperationStatus, owner, value(s), (p - 1) * z, z);
         var items = rows.stream().map(row -> toDomain(row, List.of())).toList();
         if (!items.isEmpty()) {
             var stats = mapper.selectPartnerStats(items.stream().map(BusinessPartner::id).toList()).stream()
@@ -48,8 +50,8 @@ public class MyBatisBusinessPartnerRepository implements BusinessPartnerReposito
         return mapper.findById(id).map(row -> toDomain(row, List.of()));
     }
 
-    public boolean existsByCodeOrNormalizedName(String c, String n, UUID x) {
-        return mapper.exists(c, n, x);
+    public boolean existsByName(String n, UUID x) {
+        return mapper.exists(null, n, x);
     }
 
     public void insert(BusinessPartner p, String n, String o) {
@@ -65,15 +67,6 @@ public class MyBatisBusinessPartnerRepository implements BusinessPartnerReposito
 
     public boolean updateStatus(UUID id, PartnerStatus s, long v, String o) {
         return mapper.updateStatus(id, s.name(), v, o) == 1;
-    }
-
-    @Override
-    public List<PartnerContact> findContacts(UUID partnerId) {
-        return List.of();
-    }
-
-    public void audit(UUID objectId, String action, String detail, String operator) {
-        mapper.audit(UUID.randomUUID(), objectId, action, detail, operator);
     }
 
     private static BusinessPartner toDomain(BusinessPartnerRow r, List<PartnerContactRow> contacts) {

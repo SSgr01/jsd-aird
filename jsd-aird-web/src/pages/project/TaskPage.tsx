@@ -3,13 +3,11 @@ import { useNavigate } from 'react-router-dom';
 import {
   Badge,
   Button,
-  Card,
   Flex,
   Input,
   message,
   Pagination,
   Select,
-  Space,
   Table,
   Typography,
 } from 'antd';
@@ -30,6 +28,8 @@ import {
   type TaskQuery,
 } from '@/services/project/project-api';
 
+import './task-page.css';
+
 const { Title, Text } = Typography;
 
 const defaultQuery: TaskQuery = {
@@ -49,7 +49,6 @@ export default function TaskPage() {
   const [tasks, setTasks] = useState<ProjectTask[]>([]);
   const [total, setTotal] = useState(0);
   const [query, setQuery] = useState<TaskQuery>({ ...defaultQuery });
-  const [keywordInput, setKeywordInput] = useState(query.keyword ?? '');
 
   const [projects, setProjects] = useState<Project[]>([]);
   const [stages, setStages] = useState<ProjectStage[]>([]);
@@ -105,16 +104,8 @@ export default function TaskPage() {
 
   useEffect(() => {
     loadTasks(query);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query.page, query.size, query.keyword, query.projectId, query.stageId, query.status, query.owner, query.priority]);
-
-  useEffect(() => {
-    setKeywordInput(query.keyword ?? '');
-  }, [query.keyword]);
-
-  // Keyword search with debounce via onSearch trigger
-  const handleKeywordSearch = (keyword: string) => {
-    setQuery((prev) => ({ ...prev, keyword: keyword || undefined, page: 1 }));
-  };
 
   const handleFilterChange = <K extends keyof TaskQuery>(key: K, value: TaskQuery[K]) => {
     setQuery((prev) => {
@@ -132,7 +123,7 @@ export default function TaskPage() {
 
   const handleView = (task: ProjectTask) => {
     if (task.projectId) {
-      navigate(`/projects/${task.projectId}`);
+      navigate(`/projects/${task.projectId}?section=tasks&stageId=${task.stageId}&taskId=${task.id}`);
     }
   };
 
@@ -170,7 +161,7 @@ export default function TaskPage() {
     {
       title: '任务编号',
       dataIndex: 'taskCode',
-      width: 140,
+      width: 200,
     },
     {
       title: '任务名称',
@@ -218,7 +209,7 @@ export default function TaskPage() {
       render: (value: string) => {
         const label = formatTaskStatus(value);
         const color = value === 'COMPLETED' ? 'success' : value === 'IN_PROGRESS' ? 'processing' : 'default';
-        return <Badge status={color} text={label} />;
+        return <Badge status={color as any} text={label} />;
       },
     },
     {
@@ -247,67 +238,68 @@ export default function TaskPage() {
         </Button>
       </Flex>
 
-          <Card variant="borderless">
-        <Space wrap style={{ marginBottom: 16 }}>
-          <Input.Search
-            placeholder="搜索任务名称、编号或目标"
-            allowClear
-            enterButton={<><SearchOutlined /> 搜索</>}
-            value={keywordInput}
-            onChange={(e) => setKeywordInput(e.target.value)}
-            onSearch={handleKeywordSearch}
-            style={{ width: 280 }}
-          />
-          <Select
-            placeholder="全部项目"
-            value={query.projectId || ''}
-            options={projectOptions}
-            onChange={(v) => handleFilterChange('projectId', v || undefined)}
-            style={{ width: 180 }}
-            showSearch
-            optionFilterProp="label"
-          />
-          <Select
-            placeholder="全部阶段"
-            value={query.stageId || ''}
-            options={stageOptions}
-            onChange={(v) => handleFilterChange('stageId', v || undefined)}
-            style={{ width: 180 }}
-            disabled={!query.projectId}
-            showSearch
-            optionFilterProp="label"
-          />
-          <Select
-            placeholder="全部状态"
-            value={query.status || ''}
-            options={statusOptions}
-            onChange={(v) => handleFilterChange('status', v || undefined)}
-            style={{ width: 150 }}
-          />
-          <Select
-            placeholder="全部执行人"
-            value={query.owner || ''}
-            options={ownerOptions}
-            onChange={(v) => handleFilterChange('owner', v || undefined)}
-            style={{ width: 150 }}
-            showSearch
-            optionFilterProp="label"
-          />
-          <Select
-            placeholder="全部优先级"
-            value={query.priority || ''}
-            options={priorityOptions}
-            onChange={(v) => handleFilterChange('priority', (v || undefined) as ProjectPriority | undefined)}
-            style={{ width: 150 }}
-          />
-          <Button icon={<ReloadOutlined />} onClick={handleReset}>
-            重置
-          </Button>
-        </Space>
+      <div className="pm-task-filters">
+        <Input
+          prefix={<SearchOutlined />}
+          placeholder="搜索任务名称、编号或目标"
+          allowClear
+          value={query.keyword}
+          onChange={(e) => {
+            handleFilterChange('keyword', e.target.value || undefined);
+          }}
+        />
+        <Select
+          placeholder="全部项目"
+          value={query.projectId || ''}
+          options={projectOptions}
+          onChange={(v) => handleFilterChange('projectId', v || undefined)}
+          showSearch
+          optionFilterProp="label"
+          allowClear
+        />
+        <Select
+          placeholder="全部阶段"
+          value={query.stageId || ''}
+          options={stageOptions}
+          onChange={(v) => handleFilterChange('stageId', v || undefined)}
+          disabled={!query.projectId}
+          showSearch
+          optionFilterProp="label"
+          allowClear
+        />
+        <Select
+          placeholder="全部状态"
+          value={query.status || ''}
+          options={statusOptions}
+          onChange={(v) => handleFilterChange('status', v || undefined)}
+          allowClear
+        />
+        <Select
+          placeholder="全部执行人"
+          value={query.owner || ''}
+          options={ownerOptions}
+          onChange={(v) => handleFilterChange('owner', v || undefined)}
+          showSearch
+          optionFilterProp="label"
+          allowClear
+        />
+        <Select
+          placeholder="全部优先级"
+          value={query.priority || ''}
+          options={priorityOptions}
+          onChange={(v) => handleFilterChange('priority', (v || undefined) as ProjectPriority | undefined)}
+          allowClear
+        />
+        <Button icon={<ReloadOutlined />} onClick={handleReset}>
+          重置
+        </Button>
+      </div>
 
         <Table
+          className="pm-task-page"
           rowKey="id"
           loading={loading}
+          size="small"
           columns={columns}
           dataSource={tasks}
           pagination={false}
@@ -320,11 +312,11 @@ export default function TaskPage() {
             pageSize={query.size}
             total={total}
             showSizeChanger
+            pageSizeOptions={[10, 20, 30, 50]}
             showTotal={(t) => `共 ${t} 条`}
             onChange={(page, size) => setQuery((prev) => ({ ...prev, page, size }))}
           />
         </Flex>
-      </Card>
     </Flex>
   );
 }

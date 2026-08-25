@@ -1,8 +1,8 @@
 import { DeleteOutlined, PlusOutlined, SaveOutlined, UpOutlined } from '@ant-design/icons';
-import { Button, Col, DatePicker, Form, Input, Modal, Row, Select, message } from 'antd';
+import { App, Button, Col, DatePicker, Form, Input, Modal, Row, Select } from 'antd';
 import dayjs from '@/utils/dayjs';
 import type { Dayjs } from 'dayjs';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createCommunication, createRequirement, updateCommunication, updateRequirement } from '@/services/partners/crm-api';
 import type { Communication, CommunicationInput, Requirement, RequirementInput } from '@/services/partners/crm-api';
 import { getProjects } from '@/services/project/project-api';
@@ -19,6 +19,7 @@ import type {
   BusinessPartner,
   PartnerContact,
 } from '@/services/partners/partner-api';
+import { errorMessage } from '@/services/http/errors';
 import './partner-modals.css';
 
 type Props = {
@@ -53,19 +54,11 @@ type Person = {
 const customerLevels = ['重点客户', '普通客户', '潜在客户'];
 const cooperationStatuses = ['潜在客户', '需求沟通', '合作中', '暂停', '已结束'];
 const emptyPerson = (): Person => ({
-  expanded: false,
+  expanded: true,
   teamMembers: [],
   manualTeamMembers: [],
   projectIds: [],
 });
-
-// 合并所选项目的团队成员：保留手动添加的成员，项目成员追加到末尾并去重
-function mergeProjectTeamMembers(current: string[], projectIds: string[], projects: Project[]): string[] {
-  const selected = projects.filter((p) => projectIds.includes(String(p.id)));
-  const fromProjects = [...new Set(selected.flatMap((p) => p.teamMembers ?? []))];
-  const manual = current.filter((m) => !fromProjects.includes(m));
-  return [...new Set([...manual, ...fromProjects])];
-}
 
 function toCustomFieldList(source?: Record<string, unknown>): CustomField[] {
   return Object.entries(source ?? {}).map(([key, value]) => ({
@@ -97,6 +90,7 @@ type RequirementValues = {
   status?: string;
   customStatusName?: string;
   projectId?: string;
+  projectIds?: string[];
   rawRequirement?: string;
 };
 type FollowupValues = {
@@ -124,12 +118,16 @@ export function PartnerPrototypeModal({
 }
 
 function CustomerModal({ partner, open, onClose, onSaved }: Omit<Props, 'mode'>) {
+  const { message } = App.useApp();
   const [form] = Form.useForm<CustomerValues>();
   const [people, setPeople] = useState<Person[]>([]);
+  const [nameTouched, setNameTouched] = useState(false);
   const [partnerFields, setPartnerFields] = useState<CustomField[]>([]);
   const [loadedContacts, setLoadedContacts] = useState<PartnerContact[]>([]);
   const [projectOptions, setProjectOptions] = useState<{ value: string; label: string }[]>([]);
   const [allProjects, setAllProjects] = useState<Project[]>([]);
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
 
   useEffect(() => {
     if (!open) return;
@@ -146,6 +144,7 @@ function CustomerModal({ partner, open, onClose, onSaved }: Omit<Props, 'mode'>)
         : { name: undefined, industry: undefined, region: undefined, business: undefined },
     );
     setPeople([]);
+    setNameTouched(false);
     setLoadedContacts([]);
     setProjectOptions([]);
     setAllProjects([]);
@@ -194,79 +193,85 @@ function CustomerModal({ partner, open, onClose, onSaved }: Omit<Props, 'mode'>)
       .catch(() => message.error('项目列表加载失败'));
   }, [open]);
 
-  // 项目列表加载完成后，按当前手动成员 + 已选项目重新计算团队成员
-  useEffect(() => {
-    if (allProjects.length === 0) return;
-    setPeople((prev) =>
-      prev.map((p) => ({
-        ...p,
-        teamMembers: mergeProjectTeamMembers(p.manualTeamMembers ?? [], p.projectIds ?? [], allProjects),
-      })),
-    );
-  }, [allProjects]);
-
   const updatePerson = (index: number, patch: Partial<Person>) =>
     setPeople((prev) => prev.map((p, i) => (i === index ? { ...p, ...patch } : p)));
 
   const save = async () => {
-    const v = await form.validateFields();
-    const input = {
-      partnerCode: partner?.partnerCode ?? `CUS-${Date.now().toString().slice(-10)}`,
-      name: v.name,
-      industry: v.industry,
-      address: v.region,
-      remark: partner?.remark,
-      customerLevel: v.level,
-      cooperationStatus: v.cooperation,
-      mainBusiness: v.business,
-      customFields: toCustomFieldRecord(partnerFields),
-      version: partner?.version,
-    };
-    const partnerId = partner?.id ?? (await createPartner(input)).id;
-    if (partner) await updatePartner(partner.id, input);
-    for (const [index, person] of people.entries())
-      if (person.name) {
-        const contactInput = {
-          name: person.name,
-          department: person.department,
-          title: person.title,
-          phone: person.phone,
-          email: person.email,
-          wechat: person.wechat,
-          responsibility: undefined,
-          members: (person.teamMembers ?? []).join(','),
-          assignedProjectIds: person.projectIds ?? [],
-          customFields: toCustomFieldRecord(person.customFields),
-          primaryContact: index === 0,
-          version: person.version,
-        };
-        if (person.id) await updateContact(partnerId, person.id, contactInput);
-        else await createContact(partnerId, contactInput);
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      const v = await form.validateFields();
+      if (people.length > 0 && people.some((p) => !p.name || !p.name.trim())) {
+        setNameTouched(true);
+        message.error('请输入负责人姓名');
+        return;
       }
-    if (partner)
-      for (const contact of loadedContacts.filter(
-        (item) => item.status === 'ACTIVE' && !people.some((person) => person.id === item.id),
-      ))
-        await changeContactStatus(partner.id, contact);
-    form.resetFields();
-    setPeople([]);
-    setLoadedContacts([]);
-    setProjectOptions([]);
-    setAllProjects([]);
-    setPartnerFields([]);
-    onSaved();
-    onClose();
+      const input = {
+        partnerCode: partner?.partnerCode ?? `CUS-${Date.now().toString().slice(-10)}`,
+        name: v.name,
+        industry: v.industry,
+        address: v.region,
+        remark: partner?.remark,
+        customerLevel: v.level,
+        cooperationStatus: v.cooperation,
+        mainBusiness: v.business,
+        customFields: toCustomFieldRecord(partnerFields),
+        version: partner?.version,
+      };
+      const partnerId = partner?.id ?? (await createPartner(input)).id;
+      if (partner) await updatePartner(partner.id, input);
+      for (const [index, person] of people.entries())
+        if (person.name) {
+          const contactInput = {
+            name: person.name,
+            department: person.department,
+            title: person.title,
+            phone: person.phone,
+            email: person.email,
+            wechat: person.wechat,
+            responsibility: undefined,
+            members: (person.manualTeamMembers ?? []).join(','),
+            assignedProjectIds: person.projectIds ?? [],
+            customFields: toCustomFieldRecord(person.customFields),
+            primaryContact: index === 0,
+            version: person.version,
+          };
+          if (person.id) await updateContact(partnerId, person.id, contactInput);
+          else await createContact(partnerId, contactInput);
+        }
+      if (partner)
+        for (const contact of loadedContacts.filter(
+          (item) => item.status === 'ACTIVE' && !people.some((person) => person.id === item.id),
+        ))
+          await changeContactStatus(partner.id, contact);
+      form.resetFields();
+      setPeople([]);
+    setNameTouched(false);
+      setLoadedContacts([]);
+      setProjectOptions([]);
+      setAllProjects([]);
+      setPartnerFields([]);
+      message.success(partner ? '客户已更新' : '客户已创建');
+      onSaved();
+      onClose();
+    } catch (e) {
+      message.error(errorMessage(e, '客户保存失败'));
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
   };
 
   return (
     <Modal
       className="cm-prototype-modal cm-customer-modal"
-      width={960}
+      width={1200}
       open={open}
       onCancel={onClose}
       title={partner ? '编辑客户' : '新建客户'}
       footer={
-        <Button type="primary" icon={<SaveOutlined />} onClick={() => void save()}>
+        <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={() => void save()}>
           保存
         </Button>
       }
@@ -276,8 +281,8 @@ function CustomerModal({ partner, open, onClose, onSaved }: Omit<Props, 'mode'>)
           <h3>公司资料</h3>
           <p>填写客户公司的基础资料。</p>
           <Form form={form} layout="vertical">
-            <Form.Item name="name" label="公司名称" rules={[{ required: true }]}>
-              <Input placeholder="请输入公司名称" />
+            <Form.Item name="name" label="公司名称" rules={[{ required: true }, { max: 20, message: '公司名称不能超过20个字' }]}>
+              <Input placeholder="请输入公司名称" maxLength={20} showCount />
             </Form.Item>
             <div className="cm-form-grid">
               <Form.Item name="industry" label="所属行业">
@@ -289,12 +294,12 @@ function CustomerModal({ partner, open, onClose, onSaved }: Omit<Props, 'mode'>)
               <Form.Item name="cooperation" label="合作状态" initialValue="潜在客户">
                 <Select options={cooperationStatuses.map((value) => ({ value }))} />
               </Form.Item>
-              <Form.Item name="region" label="所在地区">
-                <Input placeholder="请输入所在地区" />
+              <Form.Item name="region" label="所在地区" rules={[{ max: 30, message: '所在地区不能超过30个字' }]}>
+                <Input placeholder="请输入所在地区" maxLength={30} showCount />
               </Form.Item>
             </div>
-            <Form.Item name="business" label="主营业务">
-              <Input.TextArea rows={3} placeholder="请输入主营业务" />
+            <Form.Item name="business" label="主营业务" rules={[{ max: 200, message: '主营业务不能超过200个字' }]}>
+              <Input.TextArea rows={3} placeholder="请输入主营业务" maxLength={200} showCount />
             </Form.Item>
           </Form>
           <CustomFieldEditor fields={partnerFields} onChange={setPartnerFields} />
@@ -339,9 +344,11 @@ function CustomerModal({ partner, open, onClose, onSaved }: Omit<Props, 'mode'>)
                 <>
                   <div className="cm-form-grid cm-form-grid-3">
                     <label>
-                      姓名
+                      <span className="cm-required">姓名</span>
                       <Input
                         value={person.name}
+                        status={!person.name && nameTouched ? 'error' : undefined}
+                        placeholder="请输入姓名"
                         onChange={(e) => updatePerson(index, { name: e.target.value })}
                       />
                     </label>
@@ -385,15 +392,16 @@ function CustomerModal({ partner, open, onClose, onSaved }: Omit<Props, 'mode'>)
                   </div>
                   <label>
                     团队成员
-                    <Input
-                      placeholder="多个成员用逗号或顿号分隔"
-                      value={(person.teamMembers ?? []).join(',')}
-                      onChange={(e) => {
-                        const manual = e.target.value.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
-                        updatePerson(index, {
-                          manualTeamMembers: manual,
-                          teamMembers: mergeProjectTeamMembers(manual, person.projectIds ?? [], allProjects),
-                        });
+                    <Select
+                      mode="tags"
+                      placeholder="输入姓名后按回车"
+                      tokenSeparators={[',', '，', '\n']}
+                      style={{ width: '100%' }}
+                      allowClear
+                      value={person.manualTeamMembers ?? []}
+                      onChange={(value) => {
+                        const manual = (value as string[]) ?? [];
+                        updatePerson(index, { manualTeamMembers: manual });
                       }}
                     />
                   </label>
@@ -406,10 +414,12 @@ function CustomerModal({ partner, open, onClose, onSaved }: Omit<Props, 'mode'>)
                       placeholder="搜索并选择项目"
                       value={person.projectIds}
                       onChange={(value) => {
-                        const ids = (value) ?? [];
+                        const ids = (value as string[]) ?? [];
+                        const fromProjects = [...new Set(allProjects.filter((p) => ids.includes(String(p.id))).flatMap((p) => p.teamMembers ?? []))];
+                        const manual = [...new Set([...(person.manualTeamMembers ?? []), ...fromProjects])];
                         updatePerson(index, {
                           projectIds: ids,
-                          teamMembers: mergeProjectTeamMembers(person.manualTeamMembers ?? [], ids, allProjects),
+                          manualTeamMembers: manual,
                         });
                       }}
                       options={projectOptions}
@@ -431,9 +441,12 @@ function CustomerModal({ partner, open, onClose, onSaved }: Omit<Props, 'mode'>)
 }
 
 function RequirementModal({ partner, requirement, open, onClose, onSaved }: Omit<Props, 'mode'>) {
+  const { message } = App.useApp();
   const [form] = Form.useForm<RequirementValues>();
   const [requirementCustomFields, setRequirementCustomFields] = useState<CustomField[]>([]);
   const [allProjects, setAllProjects] = useState<Project[]>([]);
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
   useEffect(() => {
     if (!open) return;
     void getProjects({ page: 1, size: 1000 }).then((res) => setAllProjects(res.items));
@@ -450,6 +463,7 @@ function RequirementModal({ partner, requirement, open, onClose, onSaved }: Omit
         status: statusName,
         customStatusName: requirement.customStatusName,
         projectId: requirement.projectId,
+        projectIds: requirement.projectIds ?? (requirement.projectId ? [requirement.projectId] : []),
       });
     } else {
       form.resetFields();
@@ -458,28 +472,44 @@ function RequirementModal({ partner, requirement, open, onClose, onSaved }: Omit
     setRequirementCustomFields(toCustomFieldList(requirement?.customFields));
   }, [form, open, requirement]);
   const save = async () => {
-    const v = await form.validateFields();
-    if (!partner) return;
-    const isCustomStatus = v.status === '自定义状态';
-    const payload: RequirementInput = {
-      partnerId: partner.id,
-      title: v.title,
-      rawRequirement: v.rawRequirement,
-      urgency: v.urgency,
-      raisedAt: v.raisedAt?.format('YYYY-MM-DD'),
-      deliveryDate: v.deliveryDate?.format('YYYY-MM-DD'),
-      status: (isCustomStatus ? 'DRAFT' : (requirementStateReverse[v.status ?? '草稿'] ?? 'DRAFT')) as Requirement['status'],
-      customStatusName: isCustomStatus ? v.customStatusName : undefined,
-      projectId: v.projectId,
-      metrics: [],
-      customFields: toCustomFieldRecord(requirementCustomFields),
-      version: requirement?.version ?? 0,
-    };
-    if (requirement) await updateRequirement(requirement.id, payload);
-    else await createRequirement(payload);
-    form.resetFields();
-    onSaved();
-    onClose();
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      const v = await form.validateFields();
+      if (!partner) return;
+      if (v.raisedAt && v.deliveryDate && v.raisedAt.isAfter(v.deliveryDate)) {
+        message.error('提出日期不能大于预计完成日期');
+        return;
+      }
+      const isCustomStatus = v.status === '自定义状态';
+      const payload: RequirementInput = {
+        partnerId: partner.id,
+        title: v.title,
+        rawRequirement: v.rawRequirement,
+        urgency: v.urgency,
+        raisedAt: v.raisedAt?.format('YYYY-MM-DD'),
+        deliveryDate: v.deliveryDate?.format('YYYY-MM-DD'),
+        status: (isCustomStatus ? 'DRAFT' : (requirementStateReverse[v.status ?? '草稿'] ?? 'DRAFT')) as Requirement['status'],
+        customStatusName: isCustomStatus ? v.customStatusName : undefined,
+        projectId: v.projectIds?.[0] ?? v.projectId,
+        projectIds: [...new Set(v.projectIds ?? (v.projectId ? [v.projectId] : []))],
+        metrics: [],
+        customFields: toCustomFieldRecord(requirementCustomFields),
+        version: requirement?.version ?? 0,
+      };
+      if (requirement) await updateRequirement(requirement.id, payload);
+      else await createRequirement(payload);
+      form.resetFields();
+      message.success(requirement ? '客户需求已更新' : '客户需求已创建');
+      onSaved();
+      onClose();
+    } catch (e) {
+      message.error(errorMessage(e, '客户需求保存失败'));
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
   };
   return (
     <Modal
@@ -491,7 +521,7 @@ function RequirementModal({ partner, requirement, open, onClose, onSaved }: Omit
       footer={
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12 }}>
           <Button onClick={onClose}>取消</Button>
-          <Button type="primary" onClick={() => void save()}>
+          <Button type="primary" loading={saving} onClick={() => void save()}>
             保存
           </Button>
         </div>
@@ -505,12 +535,17 @@ function RequirementModal({ partner, requirement, open, onClose, onSaved }: Omit
             </Form.Item>
           </Col>
           <Col span={12}>
-            <Form.Item name="projectId" label="关联项目">
-              <Select
-                showSearch
-                placeholder="搜索并选择项目"
-                optionFilterProp="label"
-                options={allProjects.map((p) => ({ label: `${p.projectCode} ${p.name}`, value: p.id }))}
+              <Form.Item name="projectIds" label="关联项目">
+                <Select
+                mode="multiple"
+                  showSearch
+                  allowClear
+                  placeholder="搜索并选择项目"
+                  optionFilterProp="label"
+                options={allProjects.map((p) => ({
+                  label: `${p.projectCode} ${p.name}${p.owner ? `（负责人：${p.owner}）` : ''}`,
+                  value: p.id,
+                }))}
               />
             </Form.Item>
           </Col>
@@ -588,8 +623,11 @@ const requirementStateMap: Record<string, string> = { DRAFT: '草稿', CONFIRMED
 const requirementStateReverse: Record<string, string> = { 草稿: 'DRAFT', 已确认: 'CONFIRMED', 已立项: 'IN_PROJECT', 已完成: 'COMPLETED', 已取消: 'CANCELLED' };
 
 function FollowupModal({ partner, communication, open, onClose, onSaved }: Omit<Props, 'mode'>) {
+  const { message } = App.useApp();
   const [form] = Form.useForm<FollowupValues>();
   const [followupCustomFields, setFollowupCustomFields] = useState<CustomField[]>([]);
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
   useEffect(() => {
     if (!open) return;
     if (communication) {
@@ -607,24 +645,35 @@ function FollowupModal({ partner, communication, open, onClose, onSaved }: Omit<
     setFollowupCustomFields(toCustomFieldList(communication?.customFields));
   }, [form, open, communication, partner?.name]);
   const save = async () => {
-    const v = await form.validateFields();
-    if (!partner) return;
-    const payload: CommunicationInput = {
-      partnerId: partner.id,
-      name: v.name,
-      communicatedAt: v.time.toISOString(),
-      communicationMethod: v.method,
-      internalParticipants: v.owner,
-      content: v.content,
-      status: (communication?.status ?? 'OPEN'),
-      customFields: toCustomFieldRecord(followupCustomFields),
-      version: communication?.version ?? 0,
-    };
-    if (communication) await updateCommunication(communication.id, payload);
-    else await createCommunication(payload);
-    form.resetFields();
-    onSaved();
-    onClose();
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      const v = await form.validateFields();
+      if (!partner) return;
+      const payload: CommunicationInput = {
+        partnerId: partner.id,
+        name: v.name,
+        communicatedAt: v.time.toISOString(),
+        communicationMethod: v.method,
+        internalParticipants: v.owner,
+        content: v.content,
+        status: (communication?.status ?? 'OPEN') as Communication['status'],
+        customFields: toCustomFieldRecord(followupCustomFields),
+        version: communication?.version ?? 0,
+      };
+      if (communication) await updateCommunication(communication.id, payload);
+      else await createCommunication(payload);
+      form.resetFields();
+      message.success(communication ? '跟进记录已更新' : '跟进记录已创建');
+      onSaved();
+      onClose();
+    } catch (e) {
+      message.error(errorMessage(e, '跟进记录保存失败'));
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
   };
   return (
     <Modal
@@ -636,7 +685,7 @@ function FollowupModal({ partner, communication, open, onClose, onSaved }: Omit<
       footer={
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12 }}>
           <Button onClick={onClose}>取消</Button>
-          <Button type="primary" icon={<SaveOutlined />} onClick={() => void save()}>
+          <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={() => void save()}>
             保存
           </Button>
         </div>
@@ -656,7 +705,7 @@ function FollowupModal({ partner, communication, open, onClose, onSaved }: Omit<
           </Col>
           <Col span={6}>
             <Form.Item name="method" label="跟进方式">
-              <Select options={['微信', '电话', '邮件', '会议', '现场'].map((value) => ({ value }))} />
+              <Select options={['微信', '电话', '邮件', '会议', '现场拜访', '样品寄送'].map((value) => ({ value }))} />
             </Form.Item>
           </Col>
           <Col span={6}>

@@ -70,7 +70,7 @@ public class ProjectStageService {
         var stage = new ProjectStage(UUID.randomUUID(), projectId, project.projectCode(), project.name(), stageCode,
             name, orderNo, status, clean(command.owner()), clean(command.description()),
             command.plannedStart(), command.plannedEnd(), status == StageStatus.IN_PROGRESS ? now : null,
-            null, 0, 0, 0, now, now);
+            null, 0, 0, 0, 0, 0, now, now);
         stages.insert(stage, OPERATOR);
         return stage;
     }
@@ -100,7 +100,7 @@ public class ProjectStageService {
         var updated = new ProjectStage(current.id(), current.projectId(), current.projectCode(), current.projectName(),
             current.stageCode(), name, current.orderNo(), target, clean(command.owner()), clean(command.description()),
             command.plannedStart(), command.plannedEnd(), actualStart, actualEnd, current.taskCount(),
-            current.openTaskCount(), current.version() + 1, current.createdAt(), now);
+            current.openTaskCount(), current.experimentCount(), current.materialCount(), current.version() + 1, current.createdAt(), now);
         if (!stages.update(updated, command.version(), OPERATOR)) {
             throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "阶段已被其他用户修改，请刷新后重试");
         }

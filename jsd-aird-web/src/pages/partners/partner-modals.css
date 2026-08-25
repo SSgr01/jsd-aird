@@ -139,6 +139,12 @@
 .cm-form-grid .ant-picker {
   width: 100%;
 }
+.cm-required::before {
+  content: '*';
+  color: #ff4d4f;
+  margin-right: 4px;
+  font-weight: bold;
+}
 .cm-prototype-modal .ant-form-item {
   margin-bottom: 13px;
 }

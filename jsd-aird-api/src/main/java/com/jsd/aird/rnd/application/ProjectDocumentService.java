@@ -5,10 +5,13 @@ import java.util.UUID;
 
 import com.jsd.aird.ops.application.port.FileStorageFacade;
 import com.jsd.aird.rnd.application.port.ProjectDocumentRepository;
+import com.jsd.aird.rnd.application.port.ProjectDocumentRepository.AuditRecord;
 import com.jsd.aird.rnd.application.port.ProjectDocumentRepository.Create;
 import com.jsd.aird.rnd.application.port.ProjectDocumentRepository.Detail;
 import com.jsd.aird.rnd.application.port.ProjectDocumentRepository.Search;
 import com.jsd.aird.rnd.application.port.ProjectDocumentRepository.Summary;
+import com.jsd.aird.rnd.application.port.ProjectDocumentRepository.VersionDiff;
+import com.jsd.aird.rnd.application.port.ProjectDocumentRepository.VersionRecord;
 import com.jsd.aird.rnd.domain.ProjectDocumentFormat;
 import com.jsd.aird.rnd.domain.ProjectDocumentSource;
 import com.jsd.aird.rnd.domain.ProjectDocumentStatus;
@@ -22,25 +25,34 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.jsd.aird.tpl.api.TemplateOfficeFacade;
+import com.jsd.aird.tpl.application.RuleBasedRecognitionEngine;
+import com.jsd.aird.tpl.application.port.OfficeStructureParser;
+import com.jsd.aird.tpl.application.port.WorkbookSnapshotStructureParser;
+import com.jsd.aird.tpl.domain.TemplateFormat;
 
 @Service
 public class ProjectDocumentService {
 
     private final ProjectDocumentRepository repository;
     private final FileStorageFacade fileStorageFacade;
-    private final TemplateOfficeFacade templateOffice;
+    private final List<OfficeStructureParser> officeParsers;
+    private final WorkbookSnapshotStructureParser snapshotStructureParser;
+    private final RuleBasedRecognitionEngine ruleRecognitionEngine;
     private final ObjectMapper objectMapper;
 
     public ProjectDocumentService(
             ProjectDocumentRepository repository,
             FileStorageFacade fileStorageFacade,
-            TemplateOfficeFacade templateOffice,
+            List<OfficeStructureParser> officeParsers,
+            WorkbookSnapshotStructureParser snapshotStructureParser,
+            RuleBasedRecognitionEngine ruleRecognitionEngine,
             ObjectMapper objectMapper
     ) {
         this.repository = repository;
         this.fileStorageFacade = fileStorageFacade;
-        this.templateOffice = templateOffice;
+        this.officeParsers = List.copyOf(officeParsers);
+        this.snapshotStructureParser = snapshotStructureParser;
+        this.ruleRecognitionEngine = ruleRecognitionEngine;
         this.objectMapper = objectMapper;
     }
 
@@ -98,8 +110,11 @@ public class ProjectDocumentService {
             throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "仅支持导入 DOCX 或 XLSX 文件");
         }
         var actor = ActorContext.required();
+        var templateFormat = format == ProjectDocumentFormat.DOCX ? TemplateFormat.DOCX : TemplateFormat.XLSX;
+        var parser = officeParsers.stream().filter(item -> item.format() == templateFormat).findFirst()
+                .orElseThrow(() -> new IllegalStateException("No parser for " + templateFormat));
         try (var stored = fileStorageFacade.open(actor.organizationId(), fileObjectId)) {
-            var parsed = templateOffice.parseOffice(format.name(), stored.stream());
+            var parsed = parser.parse(stored.stream());
             var id = repository.create(new Create(projectId, title, format, ProjectDocumentSource.IMPORT,
                     null, null, fileObjectId, ProjectDocumentStatus.DRAFT, actor.username()));
             repository.saveContent(id, parsed.initialEditorSnapshot(), objectMapper.createObjectNode(),
@@ -120,6 +135,9 @@ public class ProjectDocumentService {
         var actor = ActorContext.required();
         var detail = repository.findById(id)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "项目文档不存在"));
+        if (detail.status() == ProjectDocumentStatus.ARCHIVED) {
+            throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "已归档文档不可编辑");
+        }
         // 按模板解析逻辑：若传入编辑器快照且为 Excel，则独立解析+规则识别，结果独属于本项目文档。
         // recognition 为完整识别产物；schema/mapping 由识别结果回填，覆盖前端原样提交的值。
         // DOCX 编辑器快照为 Univer Docs 格式，需原始文件流才能解析，保存阶段仅原样存储，识别留空。
@@ -128,30 +146,93 @@ public class ProjectDocumentService {
         JsonNode resolvedMapping = mapping;
         if (detail.format() == ProjectDocumentFormat.XLSX
                 && snapshot != null && snapshot.isObject() && !snapshot.isEmpty()) {
-            var result = recognizeSnapshot(snapshot, "XLSX", detail.title());
+            var result = recognizeSnapshot(snapshot, TemplateFormat.XLSX, detail.title());
             recognition = result.recognition();
             resolvedSchema = result.schema();
             resolvedMapping = result.mapping();
         }
+        // 仅保存草稿内容，不记录版本（对齐实验记事本 saveDraft）。
         repository.saveContent(id, snapshot, resolvedSchema, resolvedMapping, data, recognition, actor.username());
+        var saved = repository.findById(id)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "项目文档不存在"));
+        var mergedSnapshot = mergeContentSnapshot(saved);
+        repository.appendAudit(id, saved.currentVersionId(), "DRAFT_SAVED", null, mergedSnapshot,
+                actor.userId(), actor.username());
+        return saved;
+    }
+
+    /**
+     * 发布：仅发布时才记录版本（新建已发布版本行 + 回写文档状态 + 审批记录 + 审计）。
+     * 对齐实验记事本 ExperimentService.transition 到 COMPLETED 的逻辑。
+     */
+    @Transactional
+    public Detail publish(UUID id, JsonNode snapshot, JsonNode schema, JsonNode mapping, JsonNode data) {
+        var actor = ActorContext.required();
+        var detail = repository.findById(id)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "项目文档不存在"));
+        if (detail.status() == ProjectDocumentStatus.ARCHIVED) {
+            throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "已归档文档不可发布");
+        }
+        saveContent(id, snapshot, schema, mapping, data);
+        detail = repository.findById(id)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "项目文档不存在"));
+        var mergedSnapshot = mergeContentSnapshot(detail);
+        var versionId = repository.publish(id, mergedSnapshot, "文档发布", detail.templateVersionId(), actor.username());
+        repository.appendReview(id, versionId, "PUBLISHED", null, actor.userId(), actor.username());
+        repository.appendAudit(id, versionId, "PUBLISHED", null, mergedSnapshot, actor.userId(), actor.username());
         return repository.findById(id)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "项目文档不存在"));
+    }
+
+    public List<VersionRecord> listVersions(UUID id) {
+        ActorContext.required();
+        repository.findById(id)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "项目文档不存在"));
+        return repository.versions(id);
+    }
+
+    public VersionDiff compareVersions(UUID id, long from, long to) {
+        ActorContext.required();
+        repository.findById(id)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "项目文档不存在"));
+        return repository.diff(id, from, to);
+    }
+
+    public List<AuditRecord> listAudits(UUID id) {
+        ActorContext.required();
+        repository.findById(id)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "项目文档不存在"));
+        return repository.audits(id);
+    }
+
+    /**
+     * 把文档当前的多字段内容合并成单一快照，写入 project_document_version.content_jsonb，
+     * 与文件对象解耦（对齐实验记事本的独立快照方案）。
+     */
+    private JsonNode mergeContentSnapshot(Detail detail) {
+        var node = objectMapper.createObjectNode();
+        node.set("contentSnapshot", detail.contentSnapshot());
+        node.set("contentSchema", detail.contentSchema());
+        node.set("contentMapping", detail.contentMapping());
+        node.set("contentData", detail.contentData());
+        node.set("contentRecognition", detail.contentRecognition());
+        return node;
     }
 
     /**
      * 复刻模板解析链路（OfficeStructureParser + RuleBasedRecognitionEngine），但产物
      * 完全独立于模板中心，仅服务于当前项目文档。
      */
-    private RecognitionResult recognizeSnapshot(JsonNode snapshot, String format, String sourceFileName) {
+    private RecognitionResult recognizeSnapshot(JsonNode snapshot, TemplateFormat format, String sourceFileName) {
         try {
-            var parsed = templateOffice.parseWorkbookSnapshot(
+            var parsed = snapshotStructureParser.parse(
                     new java.io.ByteArrayInputStream(objectMapper.writeValueAsBytes(snapshot)));
             var structureSummary = parsed.structureSummary();
             var recognition = objectMapper.createObjectNode();
             recognition.set("structureSummary", structureSummary.deepCopy());
             recognition.set("initialEditorSnapshot", parsed.initialEditorSnapshot().deepCopy());
             // 规则识别：XLSX 走显式标签-值候选；DOCX 暂无规则候选。
-            var batch = templateOffice.recognize(format, sourceFileName, structureSummary);
+            var batch = ruleRecognitionEngine.recognize(format, sourceFileName, structureSummary);
             var suggestions = objectMapper.createArrayNode();
             for (var suggestion : batch.suggestions()) {
                 var node = objectMapper.createObjectNode()
@@ -163,7 +244,7 @@ public class ProjectDocumentService {
             }
             recognition.set("ruleSuggestions", suggestions);
             // 将规则候选落成项目文档自身的内容模型（schema/mapping）。
-            var compiled = compileRuleSuggestions(suggestions);
+            var compiled = compileRuleSuggestions(suggestions, format);
             return new RecognitionResult(recognition, compiled.schema(), compiled.mapping());
         } catch (ApiException exception) {
             throw exception;
@@ -177,7 +258,7 @@ public class ProjectDocumentService {
      * 把规则识别候选转换为项目文档的内容模型，结构对齐模板中心的
      * x-jsd-field-model + mapping 约定，但不依赖 TemplateRecognitionCompiler。
      */
-    private CompiledContent compileRuleSuggestions(ArrayNode suggestions) {
+    private CompiledContent compileRuleSuggestions(ArrayNode suggestions, TemplateFormat format) {
         var schema = objectMapper.createObjectNode();
         var fieldModel = objectMapper.createObjectNode();
         var fields = objectMapper.createArrayNode();

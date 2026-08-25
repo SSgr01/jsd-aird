@@ -10,7 +10,10 @@ import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.apache.poi.ss.usermodel.Row;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 
+import java.io.ByteArrayOutputStream;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
@@ -33,6 +36,57 @@ public class ProjectService {
 
     public long count(ProjectQuery query) {
         return repository.count(query);
+    }
+
+    public byte[] exportXlsx(ProjectQuery query) {
+        var total = repository.count(query);
+        var projects = new java.util.ArrayList<Project>();
+        var pageSize = 200;
+        var pages = (int) Math.ceil((double) total / pageSize);
+        for (var page = 1; page <= pages; page++) {
+            var pageQuery = new ProjectQuery(query.keyword(), query.owner(), query.priority(), query.status(),
+                query.startDateFrom(), query.startDateTo(), query.partnerId(), page, pageSize);
+            projects.addAll(repository.findPage(pageQuery));
+        }
+        try (var workbook = new XSSFWorkbook(); var output = new ByteArrayOutputStream()) {
+            var sheet = workbook.createSheet("项目列表");
+            var headerStyle = workbook.createCellStyle();
+            var headerFont = workbook.createFont();
+            headerFont.setBold(true);
+            headerStyle.setFont(headerFont);
+            var headers = new String[]{"项目编号", "项目名称", "客户", "负责人", "开始日期", "结束日期", "优先级", "状态", "团队人数"};
+            var header = sheet.createRow(0);
+            for (var column = 0; column < headers.length; column++) {
+                var cell = header.createCell(column);
+                cell.setCellValue(headers[column]);
+                cell.setCellStyle(headerStyle);
+            }
+            for (var index = 0; index < projects.size(); index++) {
+                var project = projects.get(index);
+                var row = sheet.createRow(index + 1);
+                setCell(row, 0, project.projectCode());
+                setCell(row, 1, project.name());
+                setCell(row, 2, project.partnerName());
+                setCell(row, 3, project.owner());
+                setCell(row, 4, project.startDate());
+                setCell(row, 5, project.endDate());
+                setCell(row, 6, project.priority());
+                setCell(row, 7, project.status());
+                setCell(row, 8, project.teamSize());
+            }
+            for (var column = 0; column < headers.length; column++) sheet.autoSizeColumn(column);
+            workbook.write(output);
+            return output.toByteArray();
+        } catch (Exception exception) {
+            throw new ApiException(ApiErrorCode.INTERNAL_ERROR, "项目列表 Excel 导出失败");
+        }
+    }
+
+    private static void setCell(Row row, int column, Object value) {
+        var cell = row.createCell(column);
+        if (value == null) return;
+        if (value instanceof Number number) cell.setCellValue(number.doubleValue());
+        else cell.setCellValue(String.valueOf(value));
     }
 
     public Project get(UUID id) {
@@ -61,9 +115,10 @@ public class ProjectService {
     @Transactional
     public void update(UUID id, ProjectCommands.SaveProject command) {
         validate(command);
+        if (command.projectCode() == null || command.projectCode().isBlank())
+            throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "项目编号不能为空");
         var current = get(id);
-        var code = command.projectCode() == null || command.projectCode().isBlank()
-            ? current.projectCode() : command.projectCode().trim();
+        var code = command.projectCode().trim();
         if (repository.existsByProjectCode(code, id))
             throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "项目编号已存在：" + code);
 

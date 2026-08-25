@@ -2,6 +2,7 @@ package com.jsd.aird.mfg.infrastructure;
 
 import java.sql.Types;
 import java.util.List;
+import java.util.ArrayList;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -25,16 +26,42 @@ public class JdbcProductionOrderRepository implements ProductionOrderRepository 
     }
 
     @Override
-    public List<ProductionOrderListItem> list(UUID organizationId) {
-        return jdbcTemplate.query("""
-                        SELECT po.id, po.order_no, po.status, po.template_version_id,
-                               t.name AS template_name, t.template_code, t.format,
-                               po.quantity, po.unit_code, po.planned_date, po.updated_at
+    public PageResult<ProductionOrderListItem> list(UUID organizationId, ListQuery query) {
+        var where = new StringBuilder(" WHERE po.organization_id = ? ");
+        var args = new ArrayList<Object>();
+        args.add(organizationId);
+        if (query.keyword() != null && !query.keyword().isBlank()) {
+            where.append(" AND (lower(po.order_no) LIKE ? OR lower(t.name) LIKE ? OR lower(t.template_code) LIKE ? OR lower(coalesce(p.name, '')) LIKE ?)");
+            var keyword = "%" + query.keyword().trim().toLowerCase() + "%";
+            args.add(keyword); args.add(keyword); args.add(keyword); args.add(keyword);
+        }
+        if (query.status() != null) { where.append(" AND po.status = ?"); args.add(query.status()); }
+        if (query.productId() != null) { where.append(" AND po.product_id = ?"); args.add(query.productId()); }
+        if (query.ownerId() != null) { where.append(" AND po.owner_id = ?"); args.add(query.ownerId()); }
+        if (query.plannedDateFrom() != null) { where.append(" AND po.planned_date >= ?"); args.add(query.plannedDateFrom()); }
+        if (query.plannedDateTo() != null) { where.append(" AND po.planned_date <= ?"); args.add(query.plannedDateTo()); }
+        var from = """
                         FROM mfg.production_order po
                         JOIN tpl.template_version tv ON tv.id = po.template_version_id
                         JOIN tpl.template t ON t.id = tv.template_id
-                        WHERE po.organization_id = ?
+                        LEFT JOIN mdm.material p ON p.id = po.product_id
+                        LEFT JOIN iam.app_user owner_user ON owner_user.id = po.owner_id
+                        JOIN iam.app_user creator ON creator.id = po.created_by
+                        LEFT JOIN iam.app_user updater ON updater.id = po.updated_by
+                        """;
+        var total = jdbcTemplate.queryForObject("SELECT count(*) " + from + where, Long.class, args.toArray());
+        var pageArgs = new ArrayList<>(args);
+        pageArgs.add(query.size()); pageArgs.add((query.page() - 1) * query.size());
+        var items = jdbcTemplate.query("""
+                        SELECT po.id, po.order_no, po.status, po.template_version_id,
+                               t.name AS template_name, t.template_code, t.format,
+                               po.product_id, p.name AS product_name, po.quantity, po.unit_code,
+                               po.planned_date, po.owner_id, owner_user.display_name AS owner_name,
+                               po.created_by, creator.display_name AS created_by_name, po.created_at,
+                               po.updated_by, updater.display_name AS updated_by_name, po.updated_at
+                        """ + from + where + """
                         ORDER BY po.updated_at DESC
+                        LIMIT ? OFFSET ?
                         """,
                 (rs, rowNum) -> new ProductionOrderListItem(
                         rs.getObject("id", UUID.class),
@@ -44,13 +71,66 @@ public class JdbcProductionOrderRepository implements ProductionOrderRepository 
                         rs.getString("template_name"),
                         rs.getString("template_code"),
                         rs.getString("format"),
+                        rs.getObject("product_id", UUID.class),
+                        rs.getString("product_name"),
                         rs.getBigDecimal("quantity"),
                         rs.getString("unit_code"),
                         rs.getObject("planned_date", java.time.LocalDate.class),
+                        rs.getObject("owner_id", UUID.class),
+                        rs.getString("owner_name"),
+                        rs.getObject("created_by", UUID.class),
+                        rs.getString("created_by_name"),
+                        rs.getTimestamp("created_at").toInstant(),
+                        rs.getObject("updated_by", UUID.class),
+                        rs.getString("updated_by_name"),
                         rs.getTimestamp("updated_at").toInstant()
                 ),
-                organizationId
+                pageArgs.toArray()
         );
+        var safeTotal = total == null ? 0 : total;
+        return new PageResult<>(items, query.page(), query.size(), safeTotal,
+                safeTotal == 0 ? 0 : (safeTotal + query.size() - 1) / query.size());
+    }
+
+    @Override
+    public List<LookupOption> listProductOptions() {
+        return jdbcTemplate.query("""
+                SELECT id, code, name FROM mdm.material
+                WHERE status IN ('PUBLISHED', 'ACTIVE') AND category IN ('产品', '成品', 'PRODUCT')
+                ORDER BY name LIMIT 500
+                """, (rs, ignored) -> new LookupOption(rs.getObject("id", UUID.class),
+                rs.getString("code"), rs.getString("name"), null));
+    }
+
+    @Override
+    public List<LookupOption> listOwnerOptions(UUID organizationId) {
+        return jdbcTemplate.query("""
+                SELECT id, username, display_name FROM iam.app_user
+                WHERE organization_id = ? ORDER BY display_name LIMIT 500
+                """, (rs, ignored) -> new LookupOption(rs.getObject("id", UUID.class),
+                rs.getString("username"), rs.getString("display_name"), null), organizationId);
+    }
+
+    @Override
+    public boolean productExists(UUID productId) {
+        var count = jdbcTemplate.queryForObject("SELECT count(*) FROM mdm.material WHERE id = ? AND status IN ('PUBLISHED', 'ACTIVE')", Integer.class, productId);
+        return count != null && count > 0;
+    }
+
+    @Override
+    public boolean ownerExists(UUID organizationId, UUID ownerId) {
+        var count = jdbcTemplate.queryForObject("SELECT count(*) FROM iam.app_user WHERE id = ? AND organization_id = ?", Integer.class, ownerId, organizationId);
+        return count != null && count > 0;
+    }
+
+    @Override
+    public boolean hasUnresolvedIngest(UUID organizationId, UUID orderId) {
+        var count = jdbcTemplate.queryForObject("""
+                SELECT count(*) FROM mfg.production_ingest_job
+                WHERE organization_id = ? AND production_order_id = ?
+                  AND status IN ('QUEUED', 'PROCESSING', 'REVIEW_REQUIRED')
+                """, Integer.class, organizationId, orderId);
+        return count != null && count > 0;
     }
 
     @Override
@@ -145,10 +225,10 @@ public class JdbcProductionOrderRepository implements ProductionOrderRepository 
                         draft_editor_snapshot_file_id, draft_editor_snapshot_hash,
                         snapshot_kind, editor_app_version, plugin_manifest_hash,
                         snapshot_format_version, schema_hash, mapping_hash, data_hash,
-                        workspace_hash, created_by
+                        workspace_hash, created_by, updated_by
                     ) VALUES (
                         ?, ?, ?, 'DRAFT', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                        ?, ?, ?, ?, ?, ?
+                        ?, ?, ?, ?, ?, ?, ?
                     )
                     """);
             statement.setObject(1, order.id());
@@ -178,6 +258,7 @@ public class JdbcProductionOrderRepository implements ProductionOrderRepository 
             statement.setString(21, order.dataHash());
             statement.setString(22, order.workspaceHash());
             statement.setObject(23, order.actorId());
+            statement.setObject(24, order.actorId());
             return statement;
         });
     }
@@ -187,16 +268,23 @@ public class JdbcProductionOrderRepository implements ProductionOrderRepository 
         return jdbcTemplate.query("""
                         SELECT po.id, po.order_no, po.status, po.template_version_id,
                                t.name AS template_name, t.template_code, t.format,
-                               po.product_id, po.quantity,
-                               po.unit_code, po.planned_date, po.owner_id, po.instance_schema_jsonb,
+                               po.product_id, p.name AS product_name, po.quantity,
+                               po.unit_code, po.planned_date, po.owner_id, owner_user.display_name AS owner_name,
+                               po.instance_schema_jsonb,
                                po.instance_mapping_jsonb, po.draft_data_jsonb,
                                po.draft_editor_snapshot_file_id, po.draft_editor_snapshot_hash,
                                po.snapshot_kind, po.editor_app_version, po.plugin_manifest_hash,
                                po.snapshot_format_version, po.schema_hash, po.mapping_hash, po.data_hash,
-                               po.workspace_hash, po.lock_version
+                               po.workspace_hash, po.lock_version,
+                               po.created_by, creator.display_name AS created_by_name, po.created_at,
+                               po.updated_by, updater.display_name AS updated_by_name, po.updated_at
                         FROM mfg.production_order po
                         JOIN tpl.template_version tv ON tv.id = po.template_version_id
                         JOIN tpl.template t ON t.id = tv.template_id
+                        LEFT JOIN mdm.material p ON p.id = po.product_id
+                        LEFT JOIN iam.app_user owner_user ON owner_user.id = po.owner_id
+                        JOIN iam.app_user creator ON creator.id = po.created_by
+                        LEFT JOIN iam.app_user updater ON updater.id = po.updated_by
                         WHERE po.id = ? AND po.organization_id = ?
                         """,
                 (rs, rowNum) -> {
@@ -210,10 +298,12 @@ public class JdbcProductionOrderRepository implements ProductionOrderRepository 
                             rs.getString("template_code"),
                             rs.getString("format"),
                             rs.getObject("product_id", UUID.class),
+                            rs.getString("product_name"),
                             rs.getBigDecimal("quantity"),
                             rs.getString("unit_code"),
                             rs.getObject("planned_date", java.time.LocalDate.class),
                             rs.getObject("owner_id", UUID.class),
+                            rs.getString("owner_name"),
                             parse(rs.getString("instance_schema_jsonb")),
                             mapping,
                             parse(rs.getString("draft_data_jsonb")),
@@ -228,7 +318,13 @@ public class JdbcProductionOrderRepository implements ProductionOrderRepository 
                             rs.getString("data_hash"),
                             rs.getString("workspace_hash"),
                             rs.getLong("lock_version"),
-                            hasInvalidBinding(mapping)
+                            hasInvalidBinding(mapping),
+                            rs.getObject("created_by", UUID.class),
+                            rs.getString("created_by_name"),
+                            rs.getTimestamp("created_at").toInstant(),
+                            rs.getObject("updated_by", UUID.class),
+                            rs.getString("updated_by_name"),
+                            rs.getTimestamp("updated_at").toInstant()
                     );
                 },
                 orderId,
@@ -272,6 +368,7 @@ public class JdbcProductionOrderRepository implements ProductionOrderRepository 
                         data_hash = ?,
                         workspace_hash = ?,
                         lock_version = lock_version + 1,
+                        updated_by = ?,
                         updated_at = now()
                     WHERE id = ? AND organization_id = ? AND status = 'DRAFT'
                       AND lock_version = ?
@@ -289,9 +386,10 @@ public class JdbcProductionOrderRepository implements ProductionOrderRepository 
             statement.setString(11, update.mappingHash());
             statement.setString(12, update.dataHash());
             statement.setString(13, update.workspaceHash());
-            statement.setObject(14, update.orderId());
-            statement.setObject(15, update.organizationId());
-            statement.setLong(16, update.expectedLockVersion());
+            statement.setObject(14, update.actorId());
+            statement.setObject(15, update.orderId());
+            statement.setObject(16, update.organizationId());
+            statement.setLong(17, update.expectedLockVersion());
             return statement;
         });
     }
@@ -328,9 +426,9 @@ public class JdbcProductionOrderRepository implements ProductionOrderRepository 
         );
         jdbcTemplate.update("""
                 UPDATE mfg.production_order
-                SET status = 'SUBMITTED', updated_at = now()
+                SET status = 'SUBMITTED', updated_by = ?, updated_at = now()
                 WHERE id = ? AND organization_id = ? AND status = 'DRAFT'
-                """, revision.orderId(), revision.organizationId());
+                """, revision.actorId(), revision.orderId(), revision.organizationId());
         return revision.id();
     }
 
@@ -425,12 +523,12 @@ public class JdbcProductionOrderRepository implements ProductionOrderRepository 
     }
 
     @Override
-    public int cancel(UUID organizationId, UUID orderId) {
+    public int cancel(UUID organizationId, UUID orderId, UUID actorId) {
         return jdbcTemplate.update("""
                         UPDATE mfg.production_order
-                        SET status = 'CANCELLED', updated_at = now()
+                        SET status = 'CANCELLED', updated_by = ?, updated_at = now()
                         WHERE id = ? AND organization_id = ? AND status = 'DRAFT'
-                """, orderId, organizationId);
+                """, actorId, orderId, organizationId);
     }
 
     @Override

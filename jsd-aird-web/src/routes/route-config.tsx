@@ -11,6 +11,14 @@ const AssistantPage = lazy(async () => ({ default: (await import('@/pages/assist
 const DataImportJobPage = lazy(async () => ({ default: (await import('@/pages/data')).DataImportJobPage }));
 const DataUploadPage = lazy(async () => ({ default: (await import('@/pages/data')).DataUploadPage }));
 const DataViewPage = lazy(async () => ({ default: (await import('@/pages/data')).DataViewPage }));
+const QualityUploadPage = lazy(async () => ({ default: (await import('@/pages/quality/QualityUploadPage')).QualityUploadPage }));
+const QualityDataPage = lazy(async () => ({ default: (await import('@/pages/quality/QualityDataPage')).QualityDataPage }));
+const QualityRecordWorkspacePage = lazy(async () => ({ default: (await import('@/pages/quality/QualityRecordWorkspacePage')).QualityRecordWorkspacePage }));
+const InventoryQueryPage = lazy(async () => ({ default: (await import('@/pages/inventory')).InventoryQueryPage }));
+const InventoryLedgerPage = lazy(async () => ({ default: (await import('@/pages/inventory')).InventoryLedgerPage }));
+const SampleRecordsPage = lazy(async () => ({ default: (await import('@/pages/inventory')).SampleRecordsPage }));
+const ShipmentRecordsPage = lazy(async () => ({ default: (await import('@/pages/inventory')).ShipmentRecordsPage }));
+const InventoryControlPage = lazy(async () => ({ default: (await import('@/pages/inventory')).InventoryControlPage }));
 const KnowledgeDocumentPage = lazy(async () => ({ default: (await import('@/pages/knowledge')).KnowledgeDocumentPage }));
 const KnowledgeLibraryPage = lazy(async () => ({ default: (await import('@/pages/knowledge')).KnowledgeLibraryPage }));
 const KnowledgeReviewPage = lazy(async () => ({ default: (await import('@/pages/knowledge')).KnowledgeReviewPage }));
@@ -19,7 +27,8 @@ const KnowledgeSearchPage = lazy(async () => ({ default: (await import('@/pages/
 const KnowledgeViewPage = lazy(async () => ({ default: (await import('@/pages/knowledge')).KnowledgeViewPage }));
 const ProductionOrderListPage = lazy(async () => ({ default: (await import('@/pages/production-orders')).ProductionOrderListPage }));
 const ProductionOrderUploadPage = lazy(async () => ({ default: (await import('@/pages/production-orders')).ProductionOrderUploadPage }));
-const ProductionWorkspacePage = lazy(async () => ({ default: (await import('@/pages/production-orders')).ProductionWorkspacePage }));
+const ProductionUploadWorkspacePage = lazy(async () => ({ default: (await import('@/pages/production-orders')).ProductionUploadWorkspacePage }));
+const ProductionWorkspacePage = lazy(async () => ({ default: (await import('@/pages/production-orders/ProductionWorkspacePage')).ProductionWorkspacePage }));
 const TemplateUploadPage = lazy(async () => ({ default: (await import('@/pages/template-upload')).TemplateUploadPage }));
 const TemplateWorkspacePage = lazy(async () => ({ default: (await import('@/pages/template-workspace')).TemplateWorkspacePage }));
 const TemplatesPage = lazy(async () => ({ default: (await import('@/pages/templates')).TemplatesPage }));
@@ -94,6 +103,10 @@ export const routeConfig: RouteObject[] = [
         path: 'production-orders/list',
         element: <ProductionOrderListPage />,
       },
+      {
+        path: 'production-orders/uploads/:uploadId/workspace',
+        element: <ProductionUploadWorkspacePage />,
+      },
       { path: 'data', element: <Navigate to="/data/upload" replace /> },
       { path: 'data/upload', element: <PagePermissionGate permission="data.create"><DataUploadPage /></PagePermissionGate> },
       { path: 'data/import-jobs/:id', element: <DataImportJobPage /> },
@@ -102,6 +115,29 @@ export const routeConfig: RouteObject[] = [
       { path: 'spectrum/upload', element: <SpectrumUploadPage /> },
       { path: 'spectrum/view', element: <SpectrumViewPage /> },
       { path: 'spectrum/chat', element: <SpectrumChatPage /> },
+      { path: 'quality', element: <Navigate to="/quality/upload" replace /> },
+      { path: 'quality/upload', element: <PagePermissionGate permission="quality.upload"><QualityUploadPage /></PagePermissionGate> },
+      { path: 'quality/view', element: <PagePermissionGate permission="quality.view"><QualityDataPage /></PagePermissionGate> },
+      { path: 'quality/records/:id', element: <PagePermissionGate permission="quality.view"><QualityRecordWorkspacePage /></PagePermissionGate> },
+      { path: 'inventory', element: <Navigate to="/inventory/query" replace /> },
+      { path: 'inventory/query', element: <InventoryQueryPage /> },
+      { path: 'inventory/rnd', element: <InventoryLedgerPage key="inventory-rnd" scope="RND" /> },
+      {
+        path: 'inventory/production',
+        element: <InventoryLedgerPage key="inventory-production" scope="PRODUCTION" />,
+      },
+      { path: 'inventory/samples', element: <SampleRecordsPage /> },
+      { path: 'inventory/shipments', element: <ShipmentRecordsPage /> },
+      { path: 'inventory/products', element: <InventoryControlPage mode="products" /> },
+      { path: 'inventory/warnings', element: <InventoryControlPage mode="warnings" /> },
+      { path: 'inventory/batches', element: <InventoryControlPage mode="batches" /> },
+      { path: 'inventory/expiry', element: <InventoryControlPage mode="expiry" /> },
+      { path: 'inventory/transfer', element: <InventoryControlPage mode="transfer" /> },
+      { path: 'inventory/production-links', element: <InventoryControlPage mode="production-link" /> },
+      { path: 'inventory/eln-links', element: <InventoryControlPage mode="eln-link" /> },
+      { path: 'inventory/settings', element: <InventoryControlPage mode="settings" /> },
+      { path: 'inventory/permissions', element: <InventoryControlPage mode="permissions" /> },
+      { path: 'inventory/audit', element: <InventoryControlPage mode="audit" /> },
       {
         path: '*',
         element: <NotFoundPage />,

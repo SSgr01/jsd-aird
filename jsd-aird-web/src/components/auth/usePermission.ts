@@ -1,5 +1,6 @@
 import { useAuthStore } from '@/stores/auth-store';
+import { hasPermission } from '@/routes/route-permissions';
 
 export function usePermission(permission: string) {
-  return useAuthStore((state) => state.user?.permissions.includes(permission) ?? false);
+  return useAuthStore((state) => hasPermission(permission, state.user?.permissions ?? []));
 }

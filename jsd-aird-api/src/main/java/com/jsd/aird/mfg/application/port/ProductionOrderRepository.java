@@ -11,7 +11,17 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 public interface ProductionOrderRepository {
 
-    List<ProductionOrderListItem> list(UUID organizationId);
+    PageResult<ProductionOrderListItem> list(UUID organizationId, ListQuery query);
+
+    List<LookupOption> listProductOptions();
+
+    List<LookupOption> listOwnerOptions(UUID organizationId);
+
+    boolean productExists(UUID productId);
+
+    boolean ownerExists(UUID organizationId, UUID ownerId);
+
+    boolean hasUnresolvedIngest(UUID organizationId, UUID orderId);
 
     Optional<PublishedTemplate> findPublishedTemplate(UUID organizationId, UUID versionId);
 
@@ -35,7 +45,7 @@ public interface ProductionOrderRepository {
 
     void attachConfirmedIngestSources(UUID organizationId, UUID orderId, UUID revisionId, UUID actorId);
 
-    int cancel(UUID organizationId, UUID orderId);
+    int cancel(UUID organizationId, UUID orderId, UUID actorId);
 
     int delete(UUID organizationId, UUID orderId);
 
@@ -113,10 +123,12 @@ public interface ProductionOrderRepository {
             String templateCode,
             String format,
             UUID productId,
+            String productName,
             BigDecimal quantity,
             String unitCode,
             LocalDate plannedDate,
             UUID ownerId,
+            String ownerName,
             JsonNode schema,
             JsonNode mapping,
             JsonNode data,
@@ -131,7 +143,13 @@ public interface ProductionOrderRepository {
             String dataHash,
             String workspaceHash,
             long lockVersion,
-            boolean reconciliationRequired
+            boolean reconciliationRequired,
+            UUID createdBy,
+            String createdByName,
+            Instant createdAt,
+            UUID updatedBy,
+            String updatedByName,
+            Instant updatedAt
     ) {
     }
 
@@ -143,9 +161,18 @@ public interface ProductionOrderRepository {
             String templateName,
             String templateCode,
             String format,
+            UUID productId,
+            String productName,
             BigDecimal quantity,
             String unitCode,
             LocalDate plannedDate,
+            UUID ownerId,
+            String ownerName,
+            UUID createdBy,
+            String createdByName,
+            Instant createdAt,
+            UUID updatedBy,
+            String updatedByName,
             Instant updatedAt
     ) {
     }
@@ -169,9 +196,17 @@ public interface ProductionOrderRepository {
             String schemaHash,
             String mappingHash,
             String dataHash,
-            String workspaceHash
+            String workspaceHash,
+            UUID actorId
     ) {
     }
+
+    record ListQuery(String keyword, String status, UUID productId, UUID ownerId,
+                     LocalDate plannedDateFrom, LocalDate plannedDateTo, int page, int size) {}
+
+    record PageResult<T>(List<T> items, long page, long size, long total, long totalPages) {}
+
+    record LookupOption(UUID id, String code, String name, String defaultUnit) {}
 
     record SubmitRevision(
             UUID id,

@@ -32,7 +32,9 @@ public class SessionAuthenticationFilter extends OncePerRequestFilter {
         var session = auth.session(token);
         try {
             if (session != null && isCurrent(session)) {
-                var actor = new Actor(session.organizationId(), session.userId(), session.username());
+                var user = auth.user(session.userId());
+                var actor = new Actor(session.organizationId(), session.userId(), session.username(),
+                        user == null || user.roleCode() == null ? "USER" : user.roleCode());
                 ActorContext.set(actor);
                 request.setAttribute(SESSION_ATTRIBUTE, session);
                 SecurityContextHolder.getContext().setAuthentication(

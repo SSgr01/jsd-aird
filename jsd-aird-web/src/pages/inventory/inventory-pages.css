@@ -1,0 +1,34 @@
+.inventory-page {
+  padding: 24px;
+}
+.inventory-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+.inventory-heading h1 {
+  font-size: 24px;
+  margin: 0 0 6px;
+}
+.inventory-heading p {
+  color: #667085;
+  margin: 0;
+}
+.inventory-summary {
+  margin-bottom: 16px;
+}
+.inventory-filters {
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.inventory-filters .ant-input-search {
+  width: 280px;
+}
+.inventory-full {
+  width: 100%;
+}
+.inventory-error {
+  color: #dc2626;
+  margin: 6px 0;
+}

@@ -2,7 +2,7 @@ import { Result } from 'antd';
 import type { ReactNode } from 'react';
 import { Navigate } from 'react-router-dom';
 
-import { firstAccessiblePath } from './route-permissions';
+import { firstAccessiblePath, hasPermission } from './route-permissions';
 import { useAuthStore } from '@/stores/auth-store';
 
 export function AuthorizedHomeRedirect() {
@@ -13,7 +13,7 @@ export function AuthorizedHomeRedirect() {
 
 export function PagePermissionGate({ permission, children }: { permission: string; children: ReactNode }) {
   const permissions = useAuthStore((state) => state.user?.permissions ?? []);
-  if (!permissions.includes(permission)) {
+  if (!hasPermission(permission, permissions)) {
     return <Result status="403" title="暂无权限访问此页面" subTitle="请联系系统管理员开通查看权限" />;
   }
   return <>{children}</>;

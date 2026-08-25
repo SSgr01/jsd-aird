@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.mfg.application.port.ProductionOrderRepository;
 import com.jsd.aird.ops.application.port.FileObjectRepository;
+import com.jsd.aird.ops.application.port.AuditLogFacade;
 import com.jsd.aird.ops.application.port.ObjectStorage;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
@@ -24,6 +25,7 @@ public class ProductionOfficeExportService {
     private final ObjectMapper objectMapper;
     private final SnapshotWorkbookExporter workbookExporter;
     private final DocxContentControlExporter docxExporter;
+    private final AuditLogFacade auditLog;
 
     public ProductionOfficeExportService(
             ProductionOrderRepository repository,
@@ -31,7 +33,8 @@ public class ProductionOfficeExportService {
             ObjectStorage storage,
             ObjectMapper objectMapper,
             SnapshotWorkbookExporter workbookExporter,
-            DocxContentControlExporter docxExporter
+            DocxContentControlExporter docxExporter,
+            AuditLogFacade auditLog
     ) {
         this.repository = repository;
         this.files = files;
@@ -39,6 +42,7 @@ public class ProductionOfficeExportService {
         this.objectMapper = objectMapper;
         this.workbookExporter = workbookExporter;
         this.docxExporter = docxExporter;
+        this.auditLog = auditLog;
     }
 
     public List<ProductionOrderRepository.RevisionSummary> revisions(UUID orderId) {
@@ -60,16 +64,25 @@ public class ProductionOfficeExportService {
             var result = workbookExporter.export(snapshot, source.mapping(), source.data(),
                     new SnapshotWorkbookExporter.Manifest(source.template().versionId().toString(),
                             source.schemaHash(), source.mappingHash(), source.kind(), source.revisionId() == null ? null : source.revisionId().toString()));
-            return new Download(source.order().orderNo() + "-" + source.kind().toLowerCase() + ".xlsx",
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", result.content(), result.warnings());
+            return audited(source, new Download(source.order().orderNo() + "-" + source.kind().toLowerCase() + ".xlsx",
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", result.content(), result.warnings()));
         }
         var wordId = source.template().wordDocument().path("publishedDocxFileId").asText(
                 source.template().wordDocument().path("workingDocxFileId").asText(
                         source.template().wordDocument().path("sourceDocxFileId").asText("")));
         if (wordId.isBlank()) throw new ApiException(ApiErrorCode.NOT_FOUND, "生产单对应的 Word 原生模板不存在");
         var result = docxExporter.export(readBytes(UUID.fromString(wordId)), source.mapping(), source.data());
-        return new Download(source.order().orderNo() + "-" + source.kind().toLowerCase() + ".docx",
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document", result.content(), result.warnings());
+        return audited(source, new Download(source.order().orderNo() + "-" + source.kind().toLowerCase() + ".docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document", result.content(), result.warnings()));
+    }
+
+    private Download audited(Source source, Download download) {
+        var actor = ActorContext.required();
+        auditLog.append(actor.organizationId(), actor.userId(), "PRODUCTION_ORDER_EXPORTED", "PRODUCTION_ORDER",
+                source.order().id(), objectMapper.createObjectNode()
+                        .put("revisionId", source.revisionId() == null ? null : source.revisionId().toString())
+                        .put("fileName", download.fileName()).put("warningCount", download.warnings().size()));
+        return download;
     }
 
     private Source source(UUID orderId, UUID revisionId) {

@@ -1,9 +1,19 @@
 import { httpClient } from '@/services/http/client';
 import type { ApiResponse } from '@/types/api';
 
-export interface StagedFile { fileId: string; originalName: string; contentType: string; size: number; sha256: string; status: string }
+export interface StagedFile {
+  fileId: string;
+  originalName: string;
+  contentType: string;
+  size: number;
+  sha256: string;
+  status: string;
+}
 
-export async function stageFile(file: File, kind: 'KNOWLEDGE' | 'SNAPSHOT' | 'IMPORT' | 'SPC_CHART' = 'KNOWLEDGE') {
+export async function stageFile(
+  file: File,
+  kind: 'KNOWLEDGE' | 'SNAPSHOT' | 'IMPORT' | 'QUALITY_SOURCE' | 'PRODUCTION_SOURCE' | 'SPC_CHART' = 'KNOWLEDGE',
+) {
   const body = new FormData();
   body.append('file', file);
   const response = await httpClient.post<ApiResponse<StagedFile>>('/api/v1/files/staged', body, { params: { kind } });
@@ -46,6 +56,6 @@ export function triggerNativeDownload(path: string, fileName?: string) {
   window.setTimeout(() => anchor.remove(), 0);
 }
 
-export function downloadFile(fileId: string, fileName: string) {
+export async function downloadFile(fileId: string, fileName: string): Promise<void> {
   triggerNativeDownload(`/api/v1/files/${encodeURIComponent(fileId)}/content`, fileName);
 }

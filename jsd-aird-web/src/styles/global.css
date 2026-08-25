@@ -484,6 +484,23 @@ a:active,
   box-shadow: var(--app-shadow);
 }
 
+/* Keep wide data tables inside the content column; Ant Table owns the
+   horizontal scroll instead of expanding the whole application viewport. */
+.business-page {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+.business-page > .content-card {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+.business-page .ant-table-wrapper {
+  max-width: 100%;
+  overflow: hidden;
+}
+
 .filter-card .ant-card-body {
   padding-block: 14px;
 }
@@ -1408,6 +1425,27 @@ a:active,
   min-height: 0;
   flex: 1;
   flex-direction: column;
+}
+
+/* The experiment workspace is a focused editor: the document itself is the
+ * source of experiment content, so it uses the full available width. */
+.experiment-workspace-shell .workspace-main-stage {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.experiment-workspace-shell .workspace-main-stage > .template-workspace-grid {
+  flex: 1;
+  grid-template-columns: minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+}
+
+.experiment-workspace-shell .workspace-main-stage > .template-workspace-grid > .workspace-canvas {
+  grid-column: 1;
+  grid-row: 1;
+  min-height: 0;
 }
 
 .workspace-main-stage .template-workspace-grid {
@@ -2664,6 +2702,15 @@ a:active,
   }
   .template-business-workspace .word-workspace-grid > .workspace-canvas {
     grid-row: 2;
+  }
+  .experiment-workspace-shell .workspace-main-stage {
+    display: flex;
+    overflow: auto;
+  }
+  .experiment-workspace-shell .workspace-main-stage > .template-workspace-grid {
+    flex: 0 0 420px;
+    height: 420px;
+    min-height: 420px;
   }
   .business-field-panel,
   .template-field-manager { border-top: 1px solid var(--app-border); border-left: 0; }

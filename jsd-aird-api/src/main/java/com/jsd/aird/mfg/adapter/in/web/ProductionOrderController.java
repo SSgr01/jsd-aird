@@ -17,6 +17,7 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.Size;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -45,8 +46,29 @@ public class ProductionOrderController {
     }
 
     @GetMapping
-    public ApiResponse<List<ProductionOrderRepository.ProductionOrderListItem>> list() {
-        return success(service.list());
+    public ApiResponse<ProductionOrderRepository.PageResult<ProductionOrderRepository.ProductionOrderListItem>> list(
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) UUID productId,
+            @RequestParam(required = false) UUID ownerId,
+            @RequestParam(required = false) LocalDate plannedDateFrom,
+            @RequestParam(required = false) LocalDate plannedDateTo,
+            @RequestParam(defaultValue = "1") @Min(1) int page,
+            @RequestParam(defaultValue = "20") @Min(1) int size
+    ) {
+        var safeSize = Math.min(size, 200);
+        return success(service.list(new ProductionOrderRepository.ListQuery(
+                keyword, status, productId, ownerId, plannedDateFrom, plannedDateTo, page, safeSize)));
+    }
+
+    @GetMapping("/options/products")
+    public ApiResponse<List<ProductionOrderRepository.LookupOption>> productOptions() {
+        return success(service.productOptions());
+    }
+
+    @GetMapping("/options/owners")
+    public ApiResponse<List<ProductionOrderRepository.LookupOption>> ownerOptions() {
+        return success(service.ownerOptions());
     }
 
     @PostMapping
@@ -151,7 +173,7 @@ public class ProductionOrderController {
     }
 
     public record CreateRequest(
-            @NotBlank String orderNo,
+            @NotBlank @Size(max = 80) String orderNo,
             @NotNull UUID templateVersionId,
             UUID productId,
             @Positive BigDecimal quantity,

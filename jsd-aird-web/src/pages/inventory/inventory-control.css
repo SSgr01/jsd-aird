@@ -1,0 +1,39 @@
+.inventory-control-page {
+  padding-bottom: 32px;
+}
+
+.inventory-control-page .ant-tabs {
+  margin-bottom: 16px;
+}
+
+.inventory-control-page .ant-card {
+  border-radius: 12px;
+}
+
+.inventory-control-page .ant-table-wrapper {
+  background: #fff;
+  border-radius: 12px;
+}
+
+.inventory-control-page .ant-alert {
+  margin-bottom: 16px;
+}
+
+.inventory-permission-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 20px 0;
+}
+
+.inventory-permission-grid .ant-tag {
+  margin-inline-end: 0;
+  padding: 10px 12px;
+  text-align: center;
+}
+
+@media (max-width: 900px) {
+  .inventory-permission-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

@@ -143,9 +143,16 @@ public class IamAuthService {
         if (user.roleId() != null) store.role(organization.id(), user.roleId()).ifPresent(role ->
                 store.roleBindings(organization.id(), role.id()).forEach(binding -> bindings.put(binding.permissionCode(), binding)));
         store.userOverrides(organization.id(), user.id()).forEach(binding -> bindings.put(binding.permissionCode(), binding));
+        // DevelopmentIdentityFilter/JdbcAuthorizationService intentionally allow
+        // every permission in local development mode. Return the same effective
+        // permission set to the web client; otherwise the UI hides all protected
+        // menus even though the API accepts their requests.
+        var permissions = developmentMode
+                ? store.permissionDefinitions().stream().map(definition -> definition.code()).toList()
+                : bindings.values().stream().filter(b -> "ALLOW".equals(b.effect())).map(Binding::permissionCode).toList();
         return new MeView(user.id(), organization.id(), organization.name(), user.username(), user.displayName(),
                 user.email(), user.departmentName(), user.roleId(), user.roleCode(), user.roleName(), user.status(),
-                user.authVersion(), bindings.values().stream().filter(b -> "ALLOW".equals(b.effect())).map(Binding::permissionCode).toList());
+                user.authVersion(), permissions);
     }
 
     private String hash(String token) {

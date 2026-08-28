@@ -46,8 +46,7 @@ public class FileSearchService {
                 : projectResources.resourceIdsForProject(actor, ResourceType.KNOWLEDGE_DOCUMENT, command.projectId());
         Set<UUID> allowedData = command.projectId() == null ? null
                 : projectResources.resourceIdsForProject(actor, ResourceType.DATA_IMPORT_JOB, command.projectId());
-        knowledge.searchFiles(actor.organizationId(), query, safe(command.scopeIds()),
-                        safe(command.knowledgeCategoryIds()), allowedKnowledge, limit)
+        knowledge.searchFiles(actor.organizationId(), query, safe(command.knowledgeCategoryIds()), allowedKnowledge, limit)
                 .stream().map(file -> knowledgeFile(file, query)).filter(Objects::nonNull).forEach(candidates::add);
         var dataFilesById = new LinkedHashMap<UUID, DataSourceFileSearchFacade.SourceFileMatch>();
         for (var term : searchTerms(query, identifierQuery)) {
@@ -190,8 +189,8 @@ public class FileSearchService {
 
     private <T> List<T> safe(List<T> values) { return values == null ? List.of() : values; }
 
-    public record SearchCommand(String query, int limit, List<UUID> scopeIds,
-                                List<UUID> knowledgeCategoryIds, List<UUID> dataCategoryIds, UUID projectId) { }
+    public record SearchCommand(String query, int limit, List<UUID> knowledgeCategoryIds,
+                                List<UUID> dataCategoryIds, UUID projectId) { }
     public record FileSearchResponse(List<FileResult> files) { }
     public record FileResult(UUID fileObjectId, UUID logicalDocumentId, UUID fileVersionId,
                              String resourceType, UUID resourceId, String sourceModule,

@@ -124,6 +124,7 @@ public class JdbcKnowledgeGovernanceRepository implements KnowledgeGovernanceRep
                 insertIssue(id, source.sourceNodeKey(), "LOW_TEXT_CONFIDENCE", "WARNING", "文字识别置信度较低，请重点校对");
             }
         }
+        persistResultAssets(organizationId, documentId, versionId, diagnosticResult, initial.sourceNodes());
         for (var table : safe(sourceTables)) {
             if (table.sourceBlockNo() < 0 || table.sourceBlockNo() >= initial.sourceNodes().size()) continue;
             var sourceNodeKey = initial.sourceNodes().get(table.sourceBlockNo()).sourceNodeKey();
@@ -176,6 +177,50 @@ public class JdbcKnowledgeGovernanceRepository implements KnowledgeGovernanceRep
                 diagnosticResult != null && diagnosticResult.path("effectiveOcr").isBoolean()
                         ? diagnosticResult.path("effectiveOcr").asBoolean() : null,
                 diagnosticResult == null ? null : diagnosticResult.path("mode").asText(null));
+    }
+
+    private void persistResultAssets(UUID organizationId, UUID documentId, UUID versionId,
+                                     JsonNode diagnosticResult, List<StructuredDocumentCodec.SourceNodeDraft> sourceNodes) {
+        if (diagnosticResult == null || !diagnosticResult.path("resultAssets").isArray()) return;
+        UUID resultFileId = uuid(diagnosticResult.path("resultFileId").asText(null));
+        if (resultFileId == null) return;
+        for (var asset : diagnosticResult.path("resultAssets")) {
+            UUID assetFileId = uuid(asset.path("assetFileId").asText(null));
+            String entryPath = asset.path("entryPath").asText(null);
+            if (assetFileId == null || entryPath == null || entryPath.isBlank()) continue;
+            jdbc.update("""
+                    INSERT INTO kb.document_result_asset (
+                        id, organization_id, document_id, document_version_id, result_file_id,
+                        asset_file_id, entry_path, content_type, size_bytes
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (result_file_id, entry_path) DO UPDATE SET
+                        asset_file_id = EXCLUDED.asset_file_id,
+                        content_type = EXCLUDED.content_type,
+                        size_bytes = EXCLUDED.size_bytes
+                    """, UUID.randomUUID(), organizationId, documentId, versionId, resultFileId,
+                    assetFileId, entryPath, asset.path("contentType").asText("application/octet-stream"),
+                    Math.max(0L, asset.path("size").asLong(0)));
+        }
+        for (var source : sourceNodes == null ? List.<StructuredDocumentCodec.SourceNodeDraft>of() : sourceNodes) {
+            var anchor = source.sourceAnchor();
+            UUID sourceResultFileId = uuid(anchor.path("resultFileId").asText(null));
+            UUID sourceAssetFileId = uuid(anchor.path("assetFileId").asText(null));
+            String entryPath = anchor.path("resultEntryPath").asText(null);
+            if (sourceResultFileId == null || sourceAssetFileId == null || entryPath == null || entryPath.isBlank()) continue;
+            jdbc.update("""
+                    UPDATE kb.document_result_asset
+                    SET page_no = ?, bbox_jsonb = ?, caption = ?, footnote = ?, ocr_text = ?
+                    WHERE organization_id = ? AND result_file_id = ? AND asset_file_id = ? AND entry_path = ?
+                    """, anchor.path("page").isNumber() ? anchor.path("page").asInt() : null,
+                    json(anchor.path("polygon")), anchor.path("caption").asText(""),
+                    anchor.path("footnote").asText(""), anchor.path("ocrText").asText(""),
+                    organizationId, sourceResultFileId, sourceAssetFileId, entryPath);
+        }
+    }
+
+    private UUID uuid(String value) {
+        if (value == null || value.isBlank()) return null;
+        try { return UUID.fromString(value); } catch (IllegalArgumentException ignored) { return null; }
     }
 
     @Override

@@ -5,8 +5,8 @@ import java.util.List;
 import java.util.UUID;
 
 import com.jsd.aird.kb.application.KnowledgeService;
+import com.jsd.aird.platform.web.HttpContentDisposition;
 import com.jsd.aird.kb.application.KnowledgeGovernanceService;
-import com.jsd.aird.kb.api.KnowledgeScopeFacade;
 import com.jsd.aird.kb.api.KnowledgeSearchFacade;
 import com.jsd.aird.ops.application.port.FileStorageFacade;
 import com.jsd.aird.platform.web.RequestIdHolder;
@@ -35,14 +35,12 @@ import org.springframework.web.multipart.MultipartFile;
 public class KnowledgeController {
 
     private final KnowledgeService service;
-    private final KnowledgeScopeFacade scopes;
     private final KnowledgeGovernanceService governance;
 
-    public KnowledgeController(KnowledgeService service, FileStorageFacade storage, KnowledgeScopeFacade scopes,
+    public KnowledgeController(KnowledgeService service, FileStorageFacade storage,
                                KnowledgeGovernanceService governance) {
         this.service = service;
         this.storage = storage;
-        this.scopes = scopes;
         this.governance = governance;
     }
 
@@ -165,22 +163,13 @@ public class KnowledgeController {
         return success(service.updateAiGrant(id, new KnowledgeService.GrantCommand(request.action(), request.reason())));
     }
 
-    @PostMapping("/documents/{id}/scopes")
-    public ApiResponse<Void> attachScope(@PathVariable UUID id, @RequestBody ScopeRequest request) {
-        var actor = com.jsd.aird.shared.security.ActorContext.required();
-        service.get(id);
-        scopes.attach(actor.organizationId(), request.scopeId(),
-                new KnowledgeScopeFacade.AttachResource("KNOWLEDGE_DOCUMENT", id, "IN_SCOPE"));
-        return success(null);
-    }
-
     @GetMapping("/documents/{id}/content")
     public void content(@PathVariable UUID id, HttpServletResponse response) throws IOException {
         var file = service.openContent(id);
         response.setContentType(file.contentType());
         response.setContentLengthLong(file.size());
         response.setHeader(HttpHeaders.CONTENT_DISPOSITION,
-                "inline; filename=\"" + file.originalName().replace("\"", "") + "\"");
+                HttpContentDisposition.inline(file.originalName()));
         try (file) {
             file.stream().transferTo(response.getOutputStream());
         } catch (Exception exception) {
@@ -198,7 +187,7 @@ public class KnowledgeController {
         response.setContentType(file.contentType());
         response.setContentLengthLong(file.size());
         response.setHeader(HttpHeaders.CONTENT_DISPOSITION,
-                "inline; filename=\"" + file.originalName().replace("\"", "") + "\"");
+                HttpContentDisposition.inline(file.originalName()));
         try (file) {
             file.stream().transferTo(response.getOutputStream());
         } catch (Exception exception) {
@@ -233,7 +222,6 @@ public class KnowledgeController {
     public record SearchRequest(@Size(min = 1, max = 1000) String query, int limit) {
         public int limit() { return limit <= 0 ? 20 : Math.min(limit, 50); }
     }
-    public record ScopeRequest(UUID scopeId) { }
     public record CategoryRequest(@NotBlank String name, @NotBlank String scope, @Size(max = 240) String description) { }
     public record RenameCategoryRequest(@NotBlank String name, @Size(max = 240) String description) { }
     public record AssignCategoryRequest(@NotNull UUID categoryId) { }

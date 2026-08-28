@@ -12,10 +12,16 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.time.Duration;
 import java.util.LinkedHashMap;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -188,13 +194,17 @@ public final class MineruDocumentParser implements DocumentParser {
             withRetry(() -> { download(zipUrl, target, batchId); return null; });
             var resultFileId = persistResult(context, fileName, ".mineru.zip", "application/zip",
                     "KB_MINERU_RESULT", resultFile);
-            var adapted = adapter.parsePrecise(resultFile, fileName, resultFileId);
+            var adapted = adapter.parsePrecise(resultFile, fileName, resultFileId, Map.of());
+            var artifacts = persistZipArtifacts(context, fileName, resultFile);
+            var blocks = attachAssetFileIds(adapted.blocks(), artifacts.assetFileIds());
             var metadata = baseMetadata(adapted.metadata(), requestedMode, decision);
             metadata.put("taskId", batchId);
             metadata.put("modelVersion", model);
             metadata.put("mode", "PRECISE");
             if (resultFileId != null) metadata.put("resultFileId", resultFileId.toString());
-            return new ParsedDocument(adapted.blocks(), "mineru-precision-v2", batchId, metadata, List.of());
+            if (artifacts.markdownFileId() != null) metadata.put("markdownFileId", artifacts.markdownFileId().toString());
+            metadata.put("resultAssets", artifacts.assets());
+            return new ParsedDocument(blocks, "mineru-precision-v2", batchId, metadata, List.of());
         } catch (IOException exception) {
             throw MineruException.adapter("MinerU 结果临时文件处理失败", exception);
         } finally {
@@ -280,6 +290,117 @@ public final class MineruDocumentParser implements DocumentParser {
             throw MineruException.adapter("MinerU 结果文件持久化失败", exception);
         }
     }
+
+    private ZipArtifacts persistZipArtifacts(ParseContext context, String fileName, Path zipPath) {
+        if (context == null || context.organizationId() == null || context.actorId() == null) {
+            return new ZipArtifacts(Map.of(), null, List.of());
+        }
+        var assetIds = new HashMap<String, UUID>();
+        var assets = new ArrayList<Map<String, Object>>();
+        var seenPaths = new HashSet<String>();
+        var totalBytes = 0L;
+        var entryCount = 0;
+        UUID markdownFileId = null;
+        try (var archive = new ZipFile(zipPath.toFile())) {
+            var entries = archive.entries();
+            while (entries.hasMoreElements()) {
+                var entry = entries.nextElement();
+                if (entry.isDirectory()) continue;
+                if (++entryCount > MineruDocumentAdapter.MAX_ENTRIES) {
+                    throw MineruException.contract("MinerU 结果 entry 数量超过 4096", null);
+                }
+                var path = normalizeEntryPath(entry.getName());
+                if (path.isBlank() || path.contains("../") || path.startsWith("/")) {
+                    throw MineruException.contract("MinerU 结果包含非法资产路径", null);
+                }
+                if (!seenPaths.add(path)) throw MineruException.contract("MinerU 结果包含重复 entry", null);
+                var size = Math.max(0L, entry.getSize());
+                totalBytes += size;
+                if (totalBytes > MineruDocumentAdapter.MAX_TOTAL_BYTES) {
+                    throw MineruException.contract("MinerU 结果解压总大小超过 1 GiB", null);
+                }
+                var compressed = entry.getCompressedSize();
+                if (compressed > 0 && size / (double) compressed > MineruDocumentAdapter.MAX_COMPRESSION_RATIO) {
+                    throw MineruException.contract("MinerU 结果压缩比超过安全限制", null);
+                }
+                var lower = path.toLowerCase(Locale.ROOT);
+                if (markdownFileId == null && (lower.equals("full.md") || lower.endsWith("/full.md"))) {
+                    try (var input = archive.getInputStream(entry)) {
+                        markdownFileId = persistDerivedStream(context, safeFileName(fileName) + ".mineru.full.md",
+                                "text/markdown", "KB_MINERU_MARKDOWN_RESULT", input).fileId();
+                    }
+                    continue;
+                }
+                var contentType = imageContentType(lower);
+                if (contentType == null) continue;
+                if (size > MineruDocumentAdapter.MAX_ENTRY_BYTES) {
+                    throw MineruException.contract("MinerU 图片 entry 超过 128 MiB", null);
+                }
+                try (var input = archive.getInputStream(entry)) {
+                    var staged = persistDerivedStream(context,
+                            safeFileName(fileName) + ".mineru." + basename(path), contentType,
+                            "KB_MINERU_RESULT_ASSET", input);
+                    var assetId = staged.fileId();
+                    assetIds.put(path, assetId);
+                    assets.add(Map.of("assetFileId", assetId.toString(), "entryPath", path,
+                            "contentType", contentType, "size", staged.size()));
+                }
+            }
+            return new ZipArtifacts(Map.copyOf(assetIds), markdownFileId, List.copyOf(assets));
+        } catch (IOException exception) {
+            throw MineruException.adapter("MinerU 结果图片/Markdown 资产持久化失败", exception);
+        }
+    }
+
+    private List<DocumentParser.TextBlock> attachAssetFileIds(List<DocumentParser.TextBlock> blocks,
+                                                               Map<String, UUID> assetFileIds) {
+        if (assetFileIds == null || assetFileIds.isEmpty()) return blocks == null ? List.of() : List.copyOf(blocks);
+        var result = new ArrayList<DocumentParser.TextBlock>();
+        for (var block : blocks == null ? List.<DocumentParser.TextBlock>of() : blocks) {
+            var path = block.attributes().get("resultEntryPath");
+            var assetId = path == null ? null : assetFileIds.get(normalizeEntryPath(String.valueOf(path)));
+            if (assetId == null) {
+                result.add(block);
+                continue;
+            }
+            var attributes = new LinkedHashMap<>(block.attributes());
+            attributes.put("assetFileId", assetId.toString());
+            result.add(new DocumentParser.TextBlock(block.pageNo(), block.section(), block.content(), block.sheetName(),
+                    block.cellRange(), block.paragraphId(), block.bbox(), block.startTimeMs(), block.endTimeMs(),
+                    block.confidence(), attributes));
+        }
+        return List.copyOf(result);
+    }
+
+    private FileStorageFacade.StagedFile persistDerivedStream(ParseContext context, String name, String contentType,
+                                                              String kind, InputStream input) {
+        var staged = storage.stageDerived(context.organizationId(), context.actorId(), name, contentType, kind, input);
+        storage.activate(staged.fileId());
+        return staged;
+    }
+
+    private String normalizeEntryPath(String value) {
+        var normalized = value == null ? "" : value.replace('\\', '/').strip();
+        while (normalized.startsWith("./")) normalized = normalized.substring(2);
+        return normalized;
+    }
+
+    private String basename(String path) {
+        var index = path.lastIndexOf('/');
+        return index < 0 ? path : path.substring(index + 1);
+    }
+
+    private String imageContentType(String path) {
+        if (path.endsWith(".png")) return "image/png";
+        if (path.endsWith(".jpg") || path.endsWith(".jpeg")) return "image/jpeg";
+        if (path.endsWith(".webp")) return "image/webp";
+        if (path.endsWith(".gif")) return "image/gif";
+        if (path.endsWith(".bmp")) return "image/bmp";
+        return null;
+    }
+
+    private record ZipArtifacts(Map<String, UUID> assetFileIds, UUID markdownFileId,
+                                List<Map<String, Object>> assets) { }
 
     private JsonNode pollPrecise(String batchId) {
         var deadline = System.nanoTime() + maxWait.toNanos();

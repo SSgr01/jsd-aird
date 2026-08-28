@@ -10,7 +10,6 @@ import java.util.UUID;
 import com.jsd.aird.kb.api.KnowledgeFileSearchFacade;
 import com.jsd.aird.kb.application.port.KnowledgeGovernanceRepository;
 import com.jsd.aird.kb.application.port.KnowledgeRepository;
-import com.jsd.aird.kb.domain.TermAnalyzer;
 import com.jsd.aird.kb.domain.LexicalAnalyzer;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -33,25 +32,22 @@ public class KnowledgeFileSearchService implements KnowledgeFileSearchFacade {
     }
 
     @Override
-    public List<FileMatch> searchFiles(UUID organizationId, String query, List<UUID> scopeIds,
-                                       List<UUID> categoryIds, int limit) {
-        return searchFiles(organizationId, query, scopeIds, categoryIds, null, limit);
+    public List<FileMatch> searchFiles(UUID organizationId, String query, List<UUID> categoryIds, int limit) {
+        return searchFiles(organizationId, query, categoryIds, null, limit);
     }
 
     @Override
-    public List<FileMatch> searchFiles(UUID organizationId, String query, List<UUID> scopeIds,
-                                       List<UUID> categoryIds, Set<UUID> allowedDocumentIds, int limit) {
+    public List<FileMatch> searchFiles(UUID organizationId, String query, List<UUID> categoryIds,
+                                       Set<UUID> allowedDocumentIds, int limit) {
         if (allowedDocumentIds != null && allowedDocumentIds.isEmpty()) return List.of();
         var candidateLimit = Math.min(400, Math.max(40, limit * 12));
         var rows = new LinkedHashMap<UUID, KnowledgeRepository.SearchRow>();
         var terms = new java.util.LinkedHashSet<KnowledgeRepository.AnalyzedTerm>();
-        TermAnalyzer.frequencies(query).keySet().forEach(term -> terms.add(
-                new KnowledgeRepository.AnalyzedTerm(TermAnalyzer.VERSION, term)));
         lexicalAnalyzer.analyzeQuery(query).frequencies().keySet().forEach(term -> terms.add(
                 new KnowledgeRepository.AnalyzedTerm(lexicalAnalyzer.version(), term)));
         documents.bm25Search(organizationId, List.copyOf(terms), false,
-                scopeIds, categoryIds, allowedDocumentIds, candidateLimit).forEach(row -> rows.putIfAbsent(row.chunkId(), row));
-        documents.fullTextSearch(organizationId, query, false, scopeIds, categoryIds, allowedDocumentIds, candidateLimit)
+                categoryIds, allowedDocumentIds, candidateLimit).forEach(row -> rows.putIfAbsent(row.chunkId(), row));
+        documents.fullTextSearch(organizationId, query, false, categoryIds, allowedDocumentIds, candidateLimit)
                 .forEach(row -> rows.putIfAbsent(row.chunkId(), row));
         var grouped = new LinkedHashMap<UUID, List<KnowledgeRepository.SearchRow>>();
         for (var hit : rows.values()) grouped.computeIfAbsent(hit.versionId(), ignored -> new ArrayList<>()).add(hit);

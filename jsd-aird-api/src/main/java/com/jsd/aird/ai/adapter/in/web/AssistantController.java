@@ -7,7 +7,6 @@ import com.jsd.aird.ai.application.AssistantService;
 import com.jsd.aird.ai.application.ConversationMemoryService;
 import com.jsd.aird.ai.application.FileSearchService;
 import com.jsd.aird.ai.application.port.AssistantRepository;
-import com.jsd.aird.kb.api.KnowledgeScopeFacade;
 import com.jsd.aird.platform.web.RequestIdHolder;
 import com.jsd.aird.shared.api.ApiResponse;
 import com.jsd.aird.shared.api.ResponseFactory;
@@ -21,7 +20,6 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -31,20 +29,13 @@ public class AssistantController {
 
     private final AssistantService assistant;
     private final ConversationMemoryService memory;
-    private final KnowledgeScopeFacade scopes;
     private final FileSearchService fileSearch;
 
     public AssistantController(AssistantService assistant, ConversationMemoryService memory,
-                               KnowledgeScopeFacade scopes, FileSearchService fileSearch) {
+                               FileSearchService fileSearch) {
         this.assistant = assistant;
         this.memory = memory;
-        this.scopes = scopes;
         this.fileSearch = fileSearch;
-    }
-
-    @PostMapping("/qa")
-    public ApiResponse<AssistantService.AssistantResponse> qa(@RequestBody QaRequest request) {
-        return success(assistant.ask(request.command()));
     }
 
     @PostMapping(value = "/qa/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -62,35 +53,8 @@ public class AssistantController {
     public ApiResponse<?> fileSearch(@RequestBody FileSearchRequest request) {
         var actor = ActorContext.required();
         return success(fileSearch.search(actor, new FileSearchService.SearchCommand(
-                request.query(), request.safeLimit(), request.scopeIds(), request.knowledgeCategoryIds(),
+                request.query(), request.safeLimit(), request.knowledgeCategoryIds(),
                 request.dataCategoryIds(), request.projectId())));
-    }
-
-    @GetMapping("/scopes")
-    public ApiResponse<List<KnowledgeScopeFacade.ScopeView>> scopes(
-            @RequestParam(required = false) String scopeType,
-            @RequestParam(required = false) String keyword) {
-        var actor = ActorContext.required();
-        return success(scopes.list(actor.organizationId(), scopeType, keyword));
-    }
-
-    @PostMapping("/scopes")
-    public ApiResponse<KnowledgeScopeFacade.ScopeView> createScope(@RequestBody ScopeRequest request) {
-        var actor = ActorContext.required();
-        return success(scopes.create(actor.organizationId(), actor.userId(), new KnowledgeScopeFacade.CreateScope(
-                request.scopeType(), request.externalId(), request.name(), request.metadata())));
-    }
-
-    @GetMapping("/scopes/{id}/resources")
-    public ApiResponse<List<KnowledgeScopeFacade.ScopeResource>> scopeResources(@PathVariable UUID id) {
-        return success(scopes.resources(ActorContext.required().organizationId(), id));
-    }
-
-    @PostMapping("/scopes/{id}/resources")
-    public ApiResponse<Void> attachScopeResource(@PathVariable UUID id, @RequestBody ResourceRequest request) {
-        scopes.attach(ActorContext.required().organizationId(), id,
-                new KnowledgeScopeFacade.AttachResource(request.resourceType(), request.resourceId(), request.relationType()));
-        return success(null);
     }
 
     @GetMapping("/conversations")
@@ -131,20 +95,14 @@ public class AssistantController {
     }
 
     public record QaRequest(UUID conversationId, @Size(min = 1, max = 3000) String question,
-                            List<UUID> scopeIds, List<String> scopeTypes, List<UUID> knowledgeCategoryIds,
-                            List<UUID> dataCategoryIds) {
+                            List<UUID> knowledgeCategoryIds, List<UUID> dataCategoryIds) {
         AssistantService.AskCommand command() {
-            return new AssistantService.AskCommand(conversationId, question, scopeIds, scopeTypes,
-                    knowledgeCategoryIds, dataCategoryIds);
+            return new AssistantService.AskCommand(conversationId, question, knowledgeCategoryIds, dataCategoryIds);
         }
     }
     public record FileSearchRequest(@Size(min = 1, max = 1000) String query, Boolean aiOnly, int limit,
-                                    List<UUID> scopeIds, List<String> scopeTypes, List<UUID> knowledgeCategoryIds,
-                                    List<UUID> dataCategoryIds, UUID projectId) {
+                                    List<UUID> knowledgeCategoryIds, List<UUID> dataCategoryIds, UUID projectId) {
         public int safeLimit() { return limit <= 0 ? 20 : Math.min(50, limit); }
     }
-    public record ScopeRequest(String scopeType, String externalId, String name,
-                               com.fasterxml.jackson.databind.JsonNode metadata) { }
-    public record ResourceRequest(String resourceType, UUID resourceId, String relationType) { }
     public record RenameRequest(@Size(min = 1, max = 80) String title) { }
 }

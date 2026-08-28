@@ -14,4 +14,12 @@ public enum ExperimentStatus {
             case COMPLETED, VOIDED -> false;
         };
     }
+
+    /** A submitted, completed, or voided version must not be changed in place. */
+    public boolean isEditable() {
+        return switch (this) {
+            case DRAFT, PENDING, IN_PROGRESS, RETURNED -> true;
+            case PENDING_REVIEW, COMPLETED, VOIDED -> false;
+        };
+    }
 }

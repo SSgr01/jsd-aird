@@ -1,6 +1,8 @@
 package com.jsd.aird.ai.infrastructure;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.StringJoiner;
 
@@ -94,13 +96,53 @@ public class OpenAiCompatibleEmbeddingFacade implements KnowledgeEmbeddingFacade
         return joiner.toString();
     }
 
+    @Override
+    public List<Optional<String>> embedVectors(List<String> texts) {
+        if (texts == null || texts.isEmpty()) return List.of();
+        var normalized = texts.stream().map(value -> value == null ? "" : value.strip()).toList();
+        if (normalized.size() == 1) return List.of(embedVector(normalized.getFirst()));
+        if (!StringUtils.hasText(baseUrl) || !StringUtils.hasText(apiKey) || !StringUtils.hasText(model)) {
+            return KnowledgeEmbeddingFacade.super.embedVectors(normalized);
+        }
+        try {
+            var request = client.post().uri(baseUrl + "/embeddings")
+                    .header(HttpHeaders.CONTENT_TYPE, "application/json");
+            request.header(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey);
+            var response = request.body(new EmbeddingRequest(model, normalized,
+                            dimension > 0 ? dimension : null, "float"))
+                    .retrieve().body(JsonNode.class);
+            var data = response == null ? null : response.path("data");
+            if (data == null || !data.isArray()) return emptyVectors(normalized.size());
+            var vectors = new ArrayList<Optional<String>>(java.util.Collections.nCopies(normalized.size(), Optional.empty()));
+            var ordinal = 0;
+            for (var item : data) {
+                var index = item.has("index") ? item.path("index").asInt(ordinal) : ordinal;
+                ordinal++;
+                if (index < 0 || index >= vectors.size()) continue;
+                var values = item.path("embedding");
+                if (!values.isArray() || values.isEmpty() || (dimension > 0 && values.size() != dimension)) continue;
+                var joiner = new StringJoiner(", ", "[", "]");
+                values.forEach(value -> joiner.add(value.asText()));
+                vectors.set(index, Optional.of(joiner.toString()));
+            }
+            return List.copyOf(vectors);
+        } catch (Exception exception) {
+            log.warn("Batch embedding request failed for model {}: {}", model, exception.getMessage());
+            return emptyVectors(normalized.size());
+        }
+    }
+
     private boolean matchesDimension(float[] values) {
         return values != null && values.length > 0 && (dimension <= 0 || values.length == dimension);
+    }
+
+    private List<Optional<String>> emptyVectors(int size) {
+        return List.copyOf(new ArrayList<Optional<String>>(java.util.Collections.nCopies(size, Optional.empty())));
     }
 
     private String strip(String value) {
         return value == null ? "" : value.strip().replaceAll("/+$", "");
     }
 
-    private record EmbeddingRequest(String model, String input, Integer dimensions, String encoding_format) { }
+    private record EmbeddingRequest(String model, Object input, Integer dimensions, String encoding_format) { }
 }

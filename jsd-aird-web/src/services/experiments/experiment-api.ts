@@ -3,13 +3,15 @@ import type { ApiResponse } from '@/types/api';
 
 export type ExperimentStatus =
   'DRAFT' | 'PENDING' | 'IN_PROGRESS' | 'PENDING_REVIEW' | 'RETURNED' | 'COMPLETED' | 'VOIDED';
+export type ExperimentSourceType =
+  'PROJECT' | 'TEMPLATE' | 'MANUAL' | 'EXCEL_IMPORT' | 'OCR_IMPORT';
 export interface ExperimentSummary {
   id: string;
   experimentNo: string;
   title: string;
   categoryId?: string;
   categoryName?: string;
-  sourceType: string;
+  sourceType: ExperimentSourceType;
   status: ExperimentStatus;
   projectId?: string;
   projectName?: string;
@@ -23,7 +25,34 @@ export interface ExperimentSummary {
   revision: number;
   updatedAt: string;
 }
-export interface ExperimentModel {
+export interface ExperimentSourceRef extends Record<string, unknown> {
+  sourceType?: string;
+  sourceFileId?: string;
+  importJobId?: string;
+  dataRecordId?: string;
+  templateVersionId?: string;
+  sheetId?: string;
+  cellRange?: string;
+  sourceHash?: string;
+}
+export interface ExperimentItem extends Record<string, unknown> {
+  itemId: string;
+  sourceRefs: ExperimentSourceRef[];
+}
+export interface FormulaItem extends ExperimentItem {
+  materialId?: string | null;
+  materialCode?: string;
+  rawValue?: unknown;
+  rawUnit?: string;
+}
+export type ProcessStep = ExperimentItem;
+export interface TestResult extends ExperimentItem {
+  testMethod?: string;
+  testCondition?: string;
+  substrate?: string;
+}
+export interface ExperimentModel extends Record<string, unknown> {
+  schemaVersion?: number;
   title?: string;
   sourceFileId?: string;
   sourceFileName?: string;
@@ -32,9 +61,9 @@ export interface ExperimentModel {
   documentFormat?: 'word' | 'excel';
   documentSnapshot?: Record<string, unknown>;
   dynamicValues?: Record<string, unknown>;
-  formulaItems?: Array<Record<string, unknown>>;
-  processSteps?: Array<Record<string, unknown>>;
-  testResults?: Array<Record<string, unknown>>;
+  formulaItems?: FormulaItem[];
+  processSteps?: ProcessStep[];
+  testResults?: TestResult[];
   events?: Array<Record<string, unknown>>;
   conclusion?: Record<string, unknown>;
 }

@@ -1,12 +1,53 @@
+import katex from 'katex';
 import type { ReactNode } from 'react';
+
+import 'katex/dist/katex.min.css';
 
 interface MarkdownContentProps {
   value?: string | null;
   className?: string;
 }
 
+function normalizeLatex(value: string) {
+  return value
+    .trim()
+    .replace(/\\_\s*(?=\{)/g, '_')
+    .replace(/\\(mathrm|mathbf|mathit|mathsf|mathtt)\s*\{([^{}]*)\}/g, (_, command: string, body: string) => {
+      const tokens = body.trim().split(/\s+/);
+      const normalizedBody = tokens.length > 1 && tokens.every((token) => /^[A-Za-z0-9]$/.test(token))
+        ? tokens.join('')
+        : body.trim();
+      return `\\${command}{${normalizedBody}}`;
+    })
+    .replace(/\s*([_^])\s*(?=\{)/g, '$1');
+}
+
+function containsLatex(value: string) {
+  return /\\[A-Za-z]+(?:\s*\{|\b)|\\[_^]|[_^]\s*(?:\{|[A-Za-z0-9])/.test(value);
+}
+
+function MathExpression({ value, displayMode = false }: { value: string; displayMode?: boolean }) {
+  const normalized = normalizeLatex(value);
+  const html = katex.renderToString(normalized, {
+    displayMode,
+    output: 'htmlAndMathml',
+    strict: 'ignore',
+    throwOnError: false,
+    trust: false,
+  });
+
+  const Element = displayMode ? 'div' : 'span';
+  return (
+    <Element
+      className={displayMode ? 'ai-markdown-math ai-markdown-math-block' : 'ai-markdown-math'}
+      data-latex={normalized}
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
+}
+
 function parseInline(value: string, keyPrefix: string): ReactNode[] {
-  const tokenPattern = /(\*\*[^*\n]+\*\*|__[^_\n]+__|`[^`\n]+`|\[[^\]\n]+\]\([^\n)]+\)|\*[^*\n]+\*|_[^_\n]+_|\$[^$\n]+\$)/g;
+  const tokenPattern = /(\*\*[^*\n]+\*\*|__[^_\n]+__|`[^`\n]+`|!\[[^\]\n]*\]\([^\n)]+\)|\[[^\]\n]+\]\([^\n)]+\)|\\\([^\n]+?\\\)|\\\[[^\n]+?\\\]|\$[^$\n]+\$|\*[^*\n]+\*|_[^_\n]+_)/g;
   const nodes: ReactNode[] = [];
   let cursor = 0;
   let match: RegExpExecArray | null;
@@ -22,6 +63,14 @@ function parseInline(value: string, keyPrefix: string): ReactNode[] {
       nodes.push(<strong key={key}>{parseInline(token.slice(2, -2), `${key}-strong`)}</strong>);
     } else if (token.startsWith('`')) {
       nodes.push(<code key={key}>{token.slice(1, -1)}</code>);
+    } else if (token.startsWith('![')) {
+      const image = /^!\[([^\]]*)\]\(([^)]+)\)$/.exec(token);
+      const src = image?.[2]?.trim();
+      if (!image || !src || !/^(https?:\/\/|\/|#)/i.test(src)) {
+        nodes.push(token);
+      } else {
+        nodes.push(<img key={key} className="ai-markdown-image" src={src} alt={image[1] || '资料图片'} loading="lazy" onError={(event) => { event.currentTarget.dataset.failed = 'true'; }} />);
+      }
     } else if (token.startsWith('[')) {
       const link = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(token);
       const href = link?.[2]?.trim();
@@ -31,9 +80,14 @@ function parseInline(value: string, keyPrefix: string): ReactNode[] {
         nodes.push(<a key={key} href={href} target={href.startsWith('http') ? '_blank' : undefined} rel={href.startsWith('http') ? 'noreferrer' : undefined}>{parseInline(link[1] || '', `${key}-link`)}</a>);
       }
     } else if (token.startsWith('$')) {
-      nodes.push(<span key={key} className="ai-markdown-math">{token.slice(1, -1)}</span>);
+      nodes.push(<MathExpression key={key} value={token.slice(1, -1)} />);
+    } else if (token.startsWith('\\(') || token.startsWith('\\[')) {
+      nodes.push(<MathExpression key={key} value={token.slice(2, -2)} displayMode={token.startsWith('\\[')} />);
     } else {
-      nodes.push(<em key={key}>{parseInline(token.slice(1, -1), `${key}-emphasis`)}</em>);
+      const emphasized = token.slice(1, -1);
+      nodes.push(containsLatex(emphasized)
+        ? <MathExpression key={key} value={emphasized} />
+        : <em key={key}>{parseInline(emphasized, `${key}-emphasis`)}</em>);
     }
     cursor = match.index + token.length;
   }
@@ -64,6 +118,7 @@ function isBlockStart(line: string, nextLine?: string) {
     || /^\s*[-*+]\s+/.test(line)
     || /^\s*\d+[.)]\s+/.test(line)
     || /^\s*>/.test(line)
+    || /^\s*(?:\$\$|\\\[)/.test(line)
     || /^\s*([-*_])(?:\s*\1){2,}\s*$/.test(line)
     || (line.includes('|') && Boolean(nextLine) && isTableSeparator(nextLine as string))
     || /^\s*(?:\{|\[)/.test(line);
@@ -82,6 +137,24 @@ function renderBlocks(value: string): ReactNode[] {
     const line = lines[index] ?? '';
     if (!line.trim()) {
       index += 1;
+      continue;
+    }
+
+    const mathFence = /^\s*(\$\$|\\\[)\s*(.*?)\s*(\$\$|\\\])?\s*$/.exec(line);
+    if (mathFence && (mathFence[1] === '$$' || mathFence[1] === '\\[')) {
+      const closingFence = mathFence[1] === '$$' ? '$$' : '\\]';
+      const mathLines: string[] = [];
+      const closesOnSameLine = mathFence[3] === closingFence;
+      if (mathFence[2]) mathLines.push(mathFence[2]);
+      index += 1;
+      if (!closesOnSameLine) {
+        while (index < lines.length && (lines[index] ?? '').trim() !== closingFence) {
+          mathLines.push(lines[index] ?? '');
+          index += 1;
+        }
+        if (index < lines.length) index += 1;
+      }
+      blocks.push(<MathExpression key={`math-${index}`} value={mathLines.join('\n')} displayMode />);
       continue;
     }
 

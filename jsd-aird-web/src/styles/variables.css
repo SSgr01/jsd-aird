@@ -1,15 +1,15 @@
 :root {
-  /* Primitive tokens: prototype visual baseline */
-  --color-blue-600: #2f66e8;
-  --color-blue-700: #2453c6;
-  --color-blue-50: #edf3ff;
-  --color-slate-50: #f3f6fb;
-  --color-slate-100: #eef2f7;
-  --color-slate-400: #9aa7b8;
-  --color-slate-500: #66758b;
-  --color-slate-900: #17233a;
-  --color-teal-300: #76ccc6;
-  --color-green-600: #16a34a;
+  /* Primitive tokens: refined technology palette */
+  --color-blue-600: #315cf6;
+  --color-blue-700: #2448d8;
+  --color-blue-50: #eef3ff;
+  --color-slate-50: #f8fafd;
+  --color-slate-100: #f2f5fa;
+  --color-slate-400: #94a1b4;
+  --color-slate-500: #66738a;
+  --color-slate-900: #14213d;
+  --color-teal-300: #72d5c4;
+  --color-green-600: #18a66a;
   --color-amber-500: #f59e0b;
   --color-red-600: #dc2626;
   --space-1: 4px;
@@ -28,25 +28,31 @@
   --app-primary-soft: var(--color-blue-50);
   --app-accent: var(--color-blue-600);
   --app-background: var(--color-slate-50);
-  --app-surface: #ffffff;
+  --app-surface: #fefeff;
+  --app-surface-elevated: #ffffff;
   --app-surface-subtle: var(--color-slate-100);
   --app-text: var(--color-slate-900);
   --app-text-secondary: var(--color-slate-500);
-  --app-border: #dfe7f2;
+  --app-border: #dce4ef;
+  --app-border-strong: #cbd6e6;
   --app-danger: var(--color-red-600);
   --app-warning: var(--color-amber-500);
   --app-success: var(--color-green-600);
   --app-focus: var(--color-blue-700);
-  --app-font-family: Inter, "Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", sans-serif;
+  --app-font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", sans-serif;
+  --app-font-size-base: 15px;
+  --app-font-size-label: 14px;
+  --app-font-size-caption: 13px;
+  --app-line-height-base: 1.55;
   --app-radius: var(--radius-md);
   --app-radius-control: var(--radius-sm);
   --app-radius-card: var(--radius-md);
   --app-radius-shell: var(--radius-lg);
-  --app-shadow: 0 1px 3px rgb(32 70 125 / 5%);
-  --app-shadow-hover: 0 7px 22px rgb(35 74 130 / 8%);
+  --app-shadow: 0 1px 2px rgb(29 52 91 / 4%), 0 8px 24px rgb(36 72 128 / 3%);
+  --app-shadow-hover: 0 10px 28px rgb(35 74 130 / 9%);
 
   /* Component tokens */
-  --iam-sidebar-background: linear-gradient(180deg, #2f63d9 0%, #4c8ddd 62%, var(--color-teal-300) 100%);
+  --iam-sidebar-background: #fbfcfe;
   --iam-card-padding: var(--space-5);
   --iam-table-header: #f7f9fc;
 }

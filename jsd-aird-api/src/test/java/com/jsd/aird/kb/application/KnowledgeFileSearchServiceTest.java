@@ -8,14 +8,15 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
 
 import com.jsd.aird.kb.application.port.KnowledgeGovernanceRepository;
 import com.jsd.aird.kb.application.port.KnowledgeRepository;
 import com.jsd.aird.kb.domain.LexicalAnalyzer;
-import com.jsd.aird.kb.domain.TermAnalyzer;
 import org.junit.jupiter.api.Test;
 
 class KnowledgeFileSearchServiceTest {
@@ -33,9 +34,9 @@ class KnowledgeFileSearchServiceTest {
                 "已发布标题", "coa.xlsx", null, "Sheet1", "批号 LOT-1", 2.0);
         var second = new KnowledgeRepository.SearchRow(UUID.randomUUID(), documentId, versionId,
                 "已发布标题", "coa.xlsx", null, "Sheet1", "固含量 42%", 1.5);
-        when(documents.bm25Search(any(), any(), anyBoolean(), any(), any(), any(), anyInt()))
+        when(documents.bm25Search(any(), any(), anyBoolean(), any(), any(), anyInt()))
                 .thenReturn(List.of(first, second));
-        when(documents.fullTextSearch(any(), any(), anyBoolean(), any(), any(), any(), anyInt()))
+        when(documents.fullTextSearch(any(), any(), anyBoolean(), any(), any(), anyInt()))
                 .thenReturn(List.of(second));
         when(documents.findVersion(organizationId, versionId)).thenReturn(Optional.of(
                 new KnowledgeRepository.VersionRow(versionId, documentId, 2, fileId, "coa.xlsx",
@@ -53,7 +54,7 @@ class KnowledgeFileSearchServiceTest {
         when(documents.findChunkAnchor(any(), any())).thenReturn(Optional.empty());
 
         var files = new KnowledgeFileSearchService(documents, governance, testAnalyzer())
-                .searchFiles(organizationId, "LOT-1", List.of(), List.of(), 20);
+                .searchFiles(organizationId, "LOT-1", List.of(), 20);
 
         assertThat(files).singleElement().satisfies(file -> {
             assertThat(file.fileObjectId()).isEqualTo(fileId);
@@ -65,24 +66,16 @@ class KnowledgeFileSearchServiceTest {
 
     private LexicalAnalyzer testAnalyzer() {
         return new LexicalAnalyzer() {
-            @Override
-            public String version() {
-                return TermAnalyzer.VERSION;
-            }
-
-            @Override
-            public Analysis analyzeDocument(String text) {
-                return analyze(text);
-            }
-
-            @Override
-            public Analysis analyzeQuery(String text) {
-                return analyze(text);
-            }
-
+            @Override public String version() { return "material-smartcn-v2"; }
+            @Override public Analysis analyzeDocument(String text) { return analyze(text); }
+            @Override public Analysis analyzeQuery(String text) { return analyze(text); }
             private Analysis analyze(String text) {
-                var frequencies = TermAnalyzer.frequencies(text);
-                return new Analysis(frequencies, frequencies.values().stream().mapToInt(Integer::intValue).sum());
+                var frequencies = new LinkedHashMap<String, Integer>();
+                for (var term : text.toLowerCase(Locale.ROOT).split("[^\\p{L}\\p{N}-]+")) {
+                    if (!term.isBlank()) frequencies.merge(term, 1, Integer::sum);
+                }
+                return new Analysis(frequencies,
+                        frequencies.values().stream().mapToInt(Integer::intValue).sum());
             }
         };
     }

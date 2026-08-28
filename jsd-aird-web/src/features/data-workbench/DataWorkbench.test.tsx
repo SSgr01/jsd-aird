@@ -53,11 +53,13 @@ describe('DataWorkbench', () => {
     render(<DataFieldCard field={field} active />);
 
     expect(screen.getByText('基本信息 / 物料名称')).toBeInTheDocument();
-    expect(screen.getAllByText('树脂 A')).toHaveLength(1);
+    expect(screen.getByRole('button', { name: /物料名称.*树脂 A/ })).toBeInTheDocument();
+    expect(screen.getByText('原始值')).toBeInTheDocument();
     expect(screen.queryByText('标准化值')).not.toBeInTheDocument();
     expect(screen.queryByText('原料数据 · B3')).not.toBeInTheDocument();
     expect(screen.queryByText('binding-1')).not.toBeInTheDocument();
     expect(screen.queryByText('/material/name')).not.toBeInTheDocument();
+    expect(screen.queryByText('无')).not.toBeInTheDocument();
   });
 
   it('explains how a staged field is confirmed instead of showing a generic warning', () => {
@@ -109,10 +111,63 @@ describe('DataWorkbench', () => {
       ].join('|'))}
     />);
     rerenderBrowser();
-    expect(screen.getAllByText('树脂 A').length).toBeGreaterThan(0);
-    expect(screen.queryByText('树脂 B', { selector: 'dd' })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '树脂 B' }));
-    fireEvent.click(screen.getByRole('button', { name: /物料名称/ }));
-    expect(screen.getByText('树脂 B', { selector: 'dd' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /物料名称.*树脂 A/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /物料名称.*树脂 B/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText('树脂 B'));
+    expect(screen.getByRole('button', { name: /物料名称.*树脂 B/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /物料名称.*树脂 B/ }));
+    expect(screen.getByText('原始值')).toBeInTheDocument();
+    expect(screen.getAllByText('树脂 B').length).toBeGreaterThan(1);
+  });
+
+  it('shows every current value at a glance and removes duplicate one-field grouping noise', () => {
+    const workbook: DataWorkbookSnapshot = {
+      fileName: '检验数据.xlsx',
+      format: 'XLSX',
+      snapshot: {},
+      sheets: [],
+      editable: true,
+      regions: [{
+        regionId: 'detail', name: '明细数据', structureType: 'ROW_TABLE',
+        recordAxis: 'ROW', fieldCount: 2, recordCount: 1, fieldGroups: [],
+      }],
+      fieldDefinitions: [
+        { componentId: 'detail', bindingId: 'binding-approval', fieldCode: 'APPROVAL', displayName: '制 定', labelPath: '制_定', groupPath: '制_定', mappingKind: 'REPEAT_FIELD', valueType: 'TEXT', required: false, identity: false },
+        { componentId: 'detail', bindingId: 'binding-acid', fieldCode: 'ACID', displayName: '酸值', groupPath: '检测指标', mappingKind: 'REPEAT_FIELD', valueType: 'NUMBER', unit: 'mg KOH/g', required: true, identity: false },
+      ],
+      records: [{ recordId: 'record-1', regionId: 'detail', label: '第 1 条记录', sequence: 1, excluded: false }],
+      fields: [
+        { ...field, componentId: 'detail', recordGroupId: 'record-1', bindingId: 'binding-approval', fieldCode: 'APPROVAL', fieldName: '制 定', labelPath: '制_定', groupPath: '制_定', rawValue: '', normalizedValue: '', effectiveValue: '', required: false },
+        { ...field, componentId: 'detail', recordGroupId: 'record-1', bindingId: 'binding-acid', fieldCode: 'ACID', fieldName: '酸值', labelPath: '检测指标 / 酸值', groupPath: '检测指标', rawValue: 12.5, normalizedValue: 12.5, effectiveValue: 12.5, valueType: 'NUMBER', unit: 'mg KOH/g' },
+      ],
+    };
+
+    render(<DataFieldDataBrowser workbook={workbook} onSelectField={() => undefined} />);
+
+    expect(screen.getByText('制定')).toBeInTheDocument();
+    expect(screen.queryByText('制 定')).not.toBeInTheDocument();
+    expect(screen.queryByText('制_定')).not.toBeInTheDocument();
+    expect(screen.getByText('未填写')).toBeInTheDocument();
+    expect(screen.getByText('12.5')).toBeInTheDocument();
+    expect(screen.getByText('mg KOH/g')).toBeInTheDocument();
+    expect(screen.getByText('当前记录 2 个字段全部校验通过')).toBeInTheDocument();
+    expect(screen.queryByText('校验通过')).not.toBeInTheDocument();
+    expect(screen.queryByText('1 项')).not.toBeInTheDocument();
+  });
+
+  it('keeps conversion and correction details behind the selected field row', () => {
+    render(<DataFieldCard field={{
+      ...field,
+      rawValue: '12,5',
+      normalizedValue: 12.5,
+      correctedValue: 13,
+      effectiveValue: 13,
+      unit: 'mg KOH/g',
+    }} active />);
+
+    expect(screen.getByRole('button', { name: /物料名称.*13.*mg KOH\/g.*已修正/ })).toBeInTheDocument();
+    expect(screen.getByText('格式转换值')).toBeInTheDocument();
+    expect(screen.getByText('最终采用值')).toBeInTheDocument();
+    expect(screen.getByText('该字段已人工修正')).toBeInTheDocument();
   });
 });

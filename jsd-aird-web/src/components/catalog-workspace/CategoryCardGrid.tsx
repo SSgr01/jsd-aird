@@ -1,4 +1,4 @@
-import { DeleteOutlined, EditOutlined, FolderAddOutlined, PlusOutlined } from '@ant-design/icons';
+import { CheckOutlined, DeleteOutlined, EditOutlined, FolderAddOutlined, PlusOutlined } from '@ant-design/icons';
 import { Button, Card, Empty, Space, Typography } from 'antd';
 import type { ReactNode } from 'react';
 
@@ -32,6 +32,7 @@ export function CategoryCardGrid({ categories, activeId, addLabel = '新增分�
           className={`catalog-category-card${activeId === category.id ? ' is-active' : ''}`}
           hoverable
         >
+          {activeId === category.id && <span className="catalog-category-active-mark" aria-hidden="true"><CheckOutlined /></span>}
           <div
             className="catalog-category-select"
             onClick={() => onSelect(category.id)}

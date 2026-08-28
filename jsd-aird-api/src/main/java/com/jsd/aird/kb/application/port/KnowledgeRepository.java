@@ -69,32 +69,38 @@ public interface KnowledgeRepository {
     void cancelPendingVectorJobs(UUID organizationId, UUID documentId);
 
     List<SearchRow> fullTextSearch(UUID organizationId, String query, boolean aiOnly, int limit);
-    default List<SearchRow> fullTextSearch(UUID organizationId, String query, boolean aiOnly, List<UUID> scopeIds,
+    default List<SearchRow> fullTextSearch(UUID organizationId, String query, boolean aiOnly,
                                            List<UUID> categoryIds, int limit) {
         return fullTextSearch(organizationId, query, aiOnly, limit);
     }
-    default List<SearchRow> fullTextSearch(UUID organizationId, String query, boolean aiOnly, List<UUID> scopeIds,
+    default List<SearchRow> fullTextSearch(UUID organizationId, String query, boolean aiOnly,
                                            List<UUID> categoryIds, java.util.Set<UUID> allowedDocumentIds, int limit) {
         if (allowedDocumentIds != null && allowedDocumentIds.isEmpty()) return List.of();
-        return fullTextSearch(organizationId, query, aiOnly, scopeIds, categoryIds, limit).stream()
+        return fullTextSearch(organizationId, query, aiOnly, categoryIds, limit).stream()
                 .filter(row -> allowedDocumentIds == null || allowedDocumentIds.contains(row.documentId())).toList();
     }
-    List<SearchRow> bm25Search(UUID organizationId, List<AnalyzedTerm> terms, boolean aiOnly, List<UUID> scopeIds,
+    List<SearchRow> bm25Search(UUID organizationId, List<AnalyzedTerm> terms, boolean aiOnly,
                                List<UUID> categoryIds, int limit);
-    default List<SearchRow> bm25Search(UUID organizationId, List<AnalyzedTerm> terms, boolean aiOnly, List<UUID> scopeIds,
+    default List<SearchRow> bm25Search(UUID organizationId, List<AnalyzedTerm> terms, boolean aiOnly,
                                       List<UUID> categoryIds, java.util.Set<UUID> allowedDocumentIds, int limit) {
         if (allowedDocumentIds != null && allowedDocumentIds.isEmpty()) return List.of();
-        return bm25Search(organizationId, terms, aiOnly, scopeIds, categoryIds, limit).stream()
+        return bm25Search(organizationId, terms, aiOnly, categoryIds, limit).stream()
                 .filter(row -> allowedDocumentIds == null || allowedDocumentIds.contains(row.documentId())).toList();
     }
     List<SearchRow> vectorSearch(UUID organizationId, String vector, boolean aiOnly, int limit);
-    default List<SearchRow> vectorSearch(UUID organizationId, String vector, boolean aiOnly, List<UUID> scopeIds,
+    default List<SearchRow> phraseSearch(UUID organizationId, List<String> phrases, boolean aiOnly,
+                                        List<UUID> categoryIds, int limit) {
+        if (phrases == null) return List.of();
+        return phrases.stream().flatMap(phrase -> fullTextSearch(organizationId, phrase, aiOnly,
+                        categoryIds, limit).stream()).distinct().limit(limit).toList();
+    }
+    default List<SearchRow> vectorSearch(UUID organizationId, String vector, boolean aiOnly,
                                          List<UUID> categoryIds, int limit) {
         return vectorSearch(organizationId, vector, aiOnly, limit);
     }
-    default List<SearchRow> vectorSearch(UUID organizationId, String vector, boolean aiOnly, List<UUID> scopeIds,
+    default List<SearchRow> vectorSearch(UUID organizationId, String vector, boolean aiOnly,
                                          List<UUID> categoryIds, int limit, int dimension) {
-        return vectorSearch(organizationId, vector, aiOnly, scopeIds, categoryIds, limit);
+        return vectorSearch(organizationId, vector, aiOnly, categoryIds, limit);
     }
 
     record CategoryRow(UUID id, String scope, String name, String description, int sortOrder, long documentCount) { }

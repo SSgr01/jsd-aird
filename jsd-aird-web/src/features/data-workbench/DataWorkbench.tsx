@@ -1,5 +1,14 @@
-import { EditOutlined, FolderOpenOutlined, LoadingOutlined, TableOutlined } from '@ant-design/icons';
-import { Button, Empty, Skeleton, Space, Spin, Tag, Typography } from 'antd';
+import {
+  CheckCircleFilled,
+  EditOutlined,
+  ExclamationCircleFilled,
+  FolderOpenOutlined,
+  LeftOutlined,
+  LoadingOutlined,
+  RightOutlined,
+  TableOutlined,
+} from '@ant-design/icons';
+import { Button, Empty, Segmented, Select, Skeleton, Space, Spin, Tag, Typography } from 'antd';
 import { forwardRef, lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from 'react';
 
 import type {
@@ -104,26 +113,39 @@ export function DataFieldCard({ field, active, onSelect, extra, children }: Fiel
   const corrected = field.correctedValue == null ? '' : displayValue(field.correctedValue);
   const normalizedChanged = normalized !== raw;
   const effectiveChanged = effective !== normalized && effective !== raw;
+  const label = customerDisplayLabel(field.fieldName);
+  const labelPath = customerDisplayLabel(field.labelPath);
+  const secondaryLabel = labelPath && !equivalentCustomerLabel(labelPath, label) ? labelPath : '';
+  const currentValue = fieldCurrentValue(field);
+  const rowStatus = fieldRowStatus(field);
+  const unit = customerDisplayLabel(field.unit);
   return (
     <article className={`data-field-card${active ? ' is-active' : ''}`}>
-      <button type="button" className="data-field-card-summary" onClick={onSelect}>
-        <span>
-          <strong>{field.fieldName}</strong>
-          {field.labelPath && field.labelPath !== field.fieldName ? <small>{field.labelPath}</small> : null}
+      <button
+        type="button"
+        className="data-field-card-summary"
+        aria-expanded={Boolean(active)}
+        onClick={onSelect}
+      >
+        <span className="data-field-card-name">
+          <strong>{label || field.fieldName}</strong>
+          {secondaryLabel ? <small>{secondaryLabel}</small> : null}
+        </span>
+        <span className={`data-field-card-value${currentValue ? '' : ' is-empty'}`}>
+          <strong>{currentValue || '未填写'}</strong>
+          {currentValue && unit ? <small>{unit}</small> : null}
         </span>
         <span className="data-field-card-status">
-          <Tag color={field.excluded ? 'default' : field.valueStatus === 'VALID' ? 'success' : 'warning'}>
-            {field.excluded ? '已排除' : fieldStatusLabel(field.valueStatus)}
-          </Tag>
+          {rowStatus ? <Tag color={rowStatus.color}>{rowStatus.label}</Tag> : null}
         </span>
       </button>
       {active ? (
         <div className="data-field-card-detail">
           <dl>
-            <div><dt>实际值</dt><dd>{raw || '空'}</dd></div>
-            {normalizedChanged ? <div><dt>格式转换后</dt><dd>{normalized || '空'}</dd></div> : null}
-            {effectiveChanged ? <div><dt>最终采用值</dt><dd>{effective || '空'}</dd></div> : null}
-            <div><dt>单位</dt><dd>{field.unit || '无'}</dd></div>
+            <div><dt>原始值</dt><dd>{raw || '未填写'}</dd></div>
+            {normalizedChanged ? <div><dt>格式转换值</dt><dd>{normalized || '未填写'}</dd></div> : null}
+            {normalizedChanged || effectiveChanged || corrected ? <div><dt>最终采用值</dt><dd>{currentValue || '未填写'}</dd></div> : null}
+            {unit ? <div><dt>单位</dt><dd>{unit}</dd></div> : null}
           </dl>
           {!field.excluded && field.valueStatus !== 'VALID' ? (
             <Typography.Text type="warning">
@@ -134,8 +156,8 @@ export function DataFieldCard({ field, active, onSelect, extra, children }: Fiel
                   : '该字段不能直接修正，请检查原文件或排除整条记录。'}
             </Typography.Text>
           ) : null}
-          {corrected ? <Typography.Text type="secondary">已人工修正：{corrected}</Typography.Text> : null}
-          {children}
+          {corrected ? <Typography.Text type="secondary">该字段已人工修正</Typography.Text> : null}
+          {children ? <div className="data-field-card-meta">{children}</div> : null}
           {extra ? <div className="data-field-card-actions">{extra}</div> : null}
         </div>
       ) : null}
@@ -185,56 +207,103 @@ export function DataFieldDataBrowser({
       && (!region || item.componentId === region.regionId))
     : fields.filter((item) => !region || item.componentId === region.regionId);
   const grouped = groupFields(visibleFields, workbook?.fieldDefinitions);
+  const summary = summarizeFields(visibleFields);
+  const activeRecordIndex = regionRecords.findIndex((item) => item.recordId === activeRecordId);
 
-  return <div className="data-panel-body">
-    <WorkbenchPanelHeader
-      title="字段数据"
-      description={selectedCell ? '已同步左侧选中的单元格' : dataBrowserDescription(region)}
-      extra={headerExtra}
-    />
-    {regions.length > 1 ? <div className="data-region-selector" role="list" aria-label="数据区域">
-      {regions.map((item) => <button
-        type="button"
-        key={item.regionId}
-        className={item.regionId === region?.regionId ? 'is-active' : ''}
-        onClick={() => {
-          setSelectedRegionId(item.regionId);
-          const firstRecord = records.find((record) => record.regionId === item.regionId);
-          setSelectedRecordId(firstRecord?.recordId);
-          const first = fields.find((field) => field.componentId === item.regionId
-            && (!firstRecord || (field.recordGroupId || field.recordId) === firstRecord.recordId));
-          if (first) onSelectField(first);
-        }}
-      >
-        <span><strong>{item.name}</strong><small>{structureLabel(item.structureType, item.recordAxis)}</small></span>
-        <span>{item.recordCount ? `${item.recordCount} 条` : `${item.fieldCount} 个字段`}</span>
-      </button>)}
-    </div> : null}
-    {region ? <section className="data-region-summary">
-      <div><strong>{region.name}</strong><Tag>{structureLabel(region.structureType, region.recordAxis)}</Tag></div>
-      <small>{visibleFieldDefinitionCount(region, workbook)} 个字段{region.recordCount ? `，${region.recordCount} 条记录` : ''}</small>
-    </section> : null}
-    {regionRecords.length > 1 || regionRecords.length === 1 && !isSingleFormRegion(region) ? <div className="data-structure-toolbar">
-      <div className="data-record-strip" aria-label="选择记录">
-        {regionRecords.map((item) => <button
-          type="button"
-          key={item.recordId}
-          className={item.recordId === activeRecordId ? 'is-active' : ''}
-          onClick={() => {
-            setSelectedRecordId(item.recordId);
-            const next = fields.find((field) => (field.recordGroupId || field.recordId) === item.recordId
-              && (!region || field.componentId === region.regionId));
-            if (next) onSelectField(next);
-          }}
-        >{item.label}</button>)}
+  const selectRecord = (recordId: string) => {
+    setSelectedRecordId(recordId);
+    const next = fields.find((field) => (field.recordGroupId || field.recordId) === recordId
+      && (!region || field.componentId === region.regionId));
+    if (next) onSelectField(next);
+  };
+
+  const selectRegion = (regionId: string) => {
+    setSelectedRegionId(regionId);
+    const nextRegion = regions.find((item) => item.regionId === regionId);
+    const firstRecord = records.find((record) => record.regionId === regionId);
+    setSelectedRecordId(firstRecord?.recordId);
+    const first = fields.find((field) => field.componentId === nextRegion?.regionId
+      && (!firstRecord || (field.recordGroupId || field.recordId) === firstRecord.recordId));
+    if (first) onSelectField(first);
+  };
+
+  return <div className="data-panel-body data-field-data-browser" aria-label="字段数据">
+    <div className="data-browser-heading">
+      <div className="data-browser-identity">
+        <div><strong>{customerDisplayLabel(region?.name) || '字段数据'}</strong><span>{region ? structureLabel(region.structureType, region.recordAxis) : null}</span></div>
+        <small>
+          {region ? `${visibleFieldDefinitionCount(region, workbook)} 个字段${region.recordCount ? `，${region.recordCount} 条记录` : ''}` : emptyDescription}
+          {selectedCell ? '，已同步左侧选中的单元格' : ''}
+        </small>
       </div>
+      {headerExtra ? <div className="data-browser-heading-extra">{headerExtra}</div> : null}
+    </div>
+    {regions.length > 1 ? <label className="data-region-switcher">
+      <span>数据区域</span>
+      <Select
+        value={region?.regionId}
+        onChange={selectRegion}
+        options={regions.map((item) => ({
+          value: item.regionId,
+          label: `${customerDisplayLabel(item.name)}（${item.recordCount ? `${item.recordCount} 条记录` : `${item.fieldCount} 个字段`}）`,
+        }))}
+      />
+    </label> : null}
+    {regionRecords.length > 1 || regionRecords.length === 1 && !isSingleFormRegion(region) ? <div className="data-structure-toolbar">
+      {regionRecords.length <= 5 ? <Segmented
+        block
+        size="small"
+        aria-label="选择记录"
+        value={activeRecordId}
+        options={regionRecords.map((item) => ({ value: item.recordId, label: customerDisplayLabel(item.label) }))}
+        onChange={(value) => selectRecord(String(value))}
+      /> : <div className="data-record-navigator">
+        <Button
+          type="text"
+          size="small"
+          aria-label="上一条记录"
+          icon={<LeftOutlined />}
+          disabled={activeRecordIndex <= 0}
+          onClick={() => {
+            const previous = regionRecords[activeRecordIndex - 1];
+            if (previous) selectRecord(previous.recordId);
+          }}
+        />
+        <Select
+          showSearch
+          optionFilterProp="label"
+          aria-label="选择记录"
+          value={activeRecordId}
+          onChange={selectRecord}
+          options={regionRecords.map((item) => ({ value: item.recordId, label: customerDisplayLabel(item.label) }))}
+        />
+        <span>{activeRecordIndex + 1} / {regionRecords.length}</span>
+        <Button
+          type="text"
+          size="small"
+          aria-label="下一条记录"
+          icon={<RightOutlined />}
+          disabled={activeRecordIndex < 0 || activeRecordIndex >= regionRecords.length - 1}
+          onClick={() => {
+            const next = regionRecords[activeRecordIndex + 1];
+            if (next) selectRecord(next.recordId);
+          }}
+        />
+      </div>}
+    </div> : null}
+    {visibleFields.length ? <div className={`data-validation-summary${summary.issueCount || summary.excludedCount ? ' has-issues' : ''}`}>
+      {summary.issueCount || summary.excludedCount ? <ExclamationCircleFilled /> : <CheckCircleFilled />}
+      <span>{fieldSummaryLabel(summary)}</span>
     </div> : null}
     {selectedCell && !fields.some((field) => field.sheetId === selectedCell.sheetId
       && field.address?.toUpperCase() === selectedCell.address.toUpperCase())
       ? <div className="data-inline-note">该单元格没有匹配到业务字段</div> : null}
+    {grouped.length ? <div className="data-field-columns" aria-hidden="true"><span>字段名称</span><span>当前值</span><span>状态</span></div> : null}
     <div className="data-structure-groups">
-      {grouped.length ? grouped.map((group) => <section className="data-field-group" key={group.name}>
-        {group.name ? <header><strong>{group.name}</strong><span>{distinctBindings(group.fields)} 个字段</span></header> : null}
+      {grouped.length ? grouped.map((group, groupIndex) => {
+        const groupName = visibleFieldGroupName(group);
+        return <section className="data-field-group" key={`${group.name || 'root'}-${groupIndex}`}>
+        {groupName ? <header><strong>{groupName}</strong><span>{distinctBindings(group.fields)} 项</span></header> : null}
         <div className="data-field-list">
           {group.fields.map((field) => <DataFieldCard
             key={dataFieldKey(field)}
@@ -246,7 +315,8 @@ export function DataFieldDataBrowser({
             {renderFieldMeta?.(field)}
           </DataFieldCard>)}
         </div>
-      </section>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={emptyDescription} />}
+      </section>;
+      }) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={emptyDescription} />}
     </div>
   </div>;
 }
@@ -359,14 +429,6 @@ function valueTypeLabel(value?: string) {
   return labels[(value || 'TEXT').toUpperCase()] || '文本';
 }
 
-function dataBrowserDescription(region?: DataWorkbookRegion) {
-  if (!region) return '文件解析完成后按区域和记录查看实际值';
-  if (isSingleFormRegion(region)) return '公共信息区域，直接查看本次填写值';
-  if (structureLabel(region.structureType, region.recordAxis) === '按列记录') return '每个数据列是一条记录';
-  if (structureLabel(region.structureType, region.recordAxis) === '矩阵/交叉表') return '按行维度和列维度组合浏览';
-  return '选择记录查看本次导入的实际值';
-}
-
 function fieldStatusLabel(status?: string) {
   switch ((status || '').toUpperCase()) {
     case 'VALID': return '校验通过';
@@ -418,6 +480,65 @@ function groupFields(fields: DataFieldValueView[], definitions?: DataWorkbookFie
     result.set(name, [...(result.get(name) || []), field]);
   }
   return [...result.entries()].map(([name, items]) => ({ name, fields: items }));
+}
+
+function visibleFieldGroupName(group: { name: string; fields: DataFieldValueView[] }) {
+  const name = customerDisplayLabel(group.name);
+  return !name || group.fields.length === 1 ? '' : name;
+}
+
+function customerDisplayLabel(value?: string) {
+  if (!value) return '';
+  return value
+    .replace(/_/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/([\u3400-\u9fff])\s+(?=[\u3400-\u9fff])/g, '$1')
+    .replace(/\s+([（(）)，、：；])/g, '$1')
+    .replace(/([（(])\s+/g, '$1')
+    .trim();
+}
+
+function equivalentCustomerLabel(left?: string, right?: string) {
+  const canonical = (value?: string) => customerDisplayLabel(value)
+    .replace(/\s*(?:>|\/|›)\s*/g, '')
+    .replace(/\s+/g, '')
+    .toLocaleLowerCase();
+  return Boolean(canonical(left) && canonical(left) === canonical(right));
+}
+
+function fieldCurrentValue(field: DataFieldValueView) {
+  return displayValue(field.effectiveValue ?? field.normalizedValue ?? field.rawValue);
+}
+
+function fieldRowStatus(field: DataFieldValueView) {
+  if (field.excluded) return { label: '已排除', color: 'default' };
+  if ((field.valueStatus || '').toUpperCase() !== 'VALID') {
+    return { label: fieldStatusLabel(field.valueStatus), color: 'warning' };
+  }
+  if (field.correctedValue != null) return { label: '已修正', color: 'blue' };
+  return undefined;
+}
+
+function summarizeFields(fields: DataFieldValueView[]) {
+  return fields.reduce((summary, field) => {
+    summary.total += 1;
+    if (field.excluded) summary.excludedCount += 1;
+    else if ((field.valueStatus || '').toUpperCase() === 'VALID') summary.validCount += 1;
+    else summary.issueCount += 1;
+    return summary;
+  }, { total: 0, validCount: 0, issueCount: 0, excludedCount: 0 });
+}
+
+function fieldSummaryLabel(summary: ReturnType<typeof summarizeFields>) {
+  if (!summary.issueCount && !summary.excludedCount) {
+    return `当前记录 ${summary.total} 个字段全部校验通过`;
+  }
+  const parts = [
+    `${summary.validCount} 个通过`,
+    summary.issueCount ? `${summary.issueCount} 个待处理` : '',
+    summary.excludedCount ? `${summary.excludedCount} 个已排除` : '',
+  ].filter(Boolean);
+  return `当前记录：${parts.join('，')}`;
 }
 
 function customerFieldGroup(field: DataFieldValueView) {

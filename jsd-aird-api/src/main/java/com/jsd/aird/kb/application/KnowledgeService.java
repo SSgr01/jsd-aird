@@ -13,6 +13,9 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -31,7 +34,6 @@ import com.jsd.aird.kb.domain.MediaExtractionProvider;
 import com.jsd.aird.kb.domain.MediaExtractionException;
 import com.jsd.aird.kb.domain.OcrMode;
 import com.jsd.aird.kb.domain.LexicalAnalyzer;
-import com.jsd.aird.kb.domain.TermAnalyzer;
 import com.jsd.aird.ops.application.port.AuditLogFacade;
 import com.jsd.aird.ops.application.port.FileStorageFacade;
 import com.jsd.aird.ops.application.port.OpsAsyncFacade;
@@ -41,6 +43,7 @@ import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.security.ActorContext;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.slf4j.Logger;
@@ -70,6 +73,9 @@ public class KnowledgeService implements KnowledgeSearchFacade {
     private final BlockAwareChunker blockAwareChunker;
     private final LexicalAnalyzer lexicalAnalyzer;
     private final ProjectResourceFacade projectResources;
+    private final Executor retrievalExecutor;
+    private final Duration lexicalTimeout;
+    private final Duration vectorTimeout;
 
     @Autowired
     public KnowledgeService(
@@ -89,6 +95,9 @@ public class KnowledgeService implements KnowledgeSearchFacade {
             @org.springframework.beans.factory.annotation.Value("${app.storage.presign-expiry:15m}") Duration presignExpiry,
             BlockAwareChunker blockAwareChunker,
             LexicalAnalyzer lexicalAnalyzer,
+            @Qualifier("ragRetrievalExecutor") Executor retrievalExecutor,
+            @org.springframework.beans.factory.annotation.Value("${app.ai.retrieval.lexical-timeout:2s}") Duration lexicalTimeout,
+            @org.springframework.beans.factory.annotation.Value("${app.ai.retrieval.vector-timeout:5s}") Duration vectorTimeout,
             ProjectResourceFacade projectResources
     ) {
         this.repository = repository;
@@ -107,6 +116,9 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         this.presignExpiry = presignExpiry;
         this.blockAwareChunker = blockAwareChunker;
         this.lexicalAnalyzer = lexicalAnalyzer;
+        this.retrievalExecutor = retrievalExecutor;
+        this.lexicalTimeout = lexicalTimeout;
+        this.vectorTimeout = vectorTimeout;
         this.projectResources = projectResources;
     }
 
@@ -130,7 +142,20 @@ public class KnowledgeService implements KnowledgeSearchFacade {
     ) {
         this(repository, governance, storage, async, audit, objectMapper, documents, parsers, scanner, embeddings,
                 mediaProviders, embeddingModel, embeddingDimension, presignExpiry, blockAwareChunker,
-                lexicalAnalyzer, null);
+                lexicalAnalyzer, Runnable::run, Duration.ofSeconds(2), Duration.ofSeconds(5), null);
+    }
+
+    KnowledgeService(
+            KnowledgeRepository repository, KnowledgeGovernanceRepository governance, FileStorageFacade storage,
+            OpsAsyncFacade async, AuditLogFacade audit, ObjectMapper objectMapper, StructuredDocumentCodec documents,
+            List<DocumentParser> parsers, FileSafetyScanner scanner,
+            ObjectProvider<KnowledgeEmbeddingFacade> embeddings, List<MediaExtractionProvider> mediaProviders,
+            String embeddingModel, int embeddingDimension, Duration presignExpiry,
+            BlockAwareChunker blockAwareChunker, LexicalAnalyzer lexicalAnalyzer, Executor retrievalExecutor,
+            Duration lexicalTimeout, Duration vectorTimeout) {
+        this(repository, governance, storage, async, audit, objectMapper, documents, parsers, scanner, embeddings,
+                mediaProviders, embeddingModel, embeddingDimension, presignExpiry, blockAwareChunker,
+                lexicalAnalyzer, retrievalExecutor, lexicalTimeout, vectorTimeout, null);
     }
 
     @Transactional
@@ -486,7 +511,7 @@ public class KnowledgeService implements KnowledgeSearchFacade {
 
     public List<KnowledgeSearchFacade.SearchHit> search(UUID organizationId, String query, boolean aiOnly, int limit) {
         return search(new KnowledgeSearchFacade.SearchRequest(organizationId, query, aiOnly, limit,
-                List.of(), List.of(), List.of())).hits();
+                List.of(), List.of())).hits();
     }
 
     @Override
@@ -496,74 +521,224 @@ public class KnowledgeService implements KnowledgeSearchFacade {
                     new KnowledgeSearchFacade.RetrievalTrace("BM25_VECTOR_RRF", 0, 0, 0, List.of("EMPTY_QUERY")));
         }
         var organizationId = request.organizationId();
-        var safeLimit = Math.min(50, Math.max(1, request.limit()));
-        var variants = request.queryVariants().isEmpty() ? List.of(request.query().trim()) : request.queryVariants();
-        var queryTerms = new java.util.LinkedHashSet<KnowledgeRepository.AnalyzedTerm>();
-        variants.forEach(value -> {
-            TermAnalyzer.frequencies(value).keySet().forEach(term -> queryTerms.add(
-                    new KnowledgeRepository.AnalyzedTerm(TermAnalyzer.VERSION, term)));
-            lexicalAnalyzer.analyzeQuery(value).frequencies().keySet().forEach(term -> queryTerms.add(
-                    new KnowledgeRepository.AnalyzedTerm(lexicalAnalyzer.version(), term)));
-        });
-        var fallbacks = new ArrayList<String>();
-        List<KnowledgeRepository.SearchRow> bm25;
-        try {
-            bm25 = repository.bm25Search(organizationId, List.copyOf(queryTerms), request.aiOnly(), request.scopeIds(),
-                    request.categoryIds(), safeLimit * 4);
-            if (bm25 == null || bm25.isEmpty()) {
-                bm25 = List.of();
-                // Empty is a normal no-hit result, not an index/database outage.
-                fallbacks.add("BM25_EMPTY");
+        var safeLimit = Math.min(60, Math.max(1, request.limit()));
+        var variants = searchVariants(request);
+        var phrases = searchPhrases(request);
+        var fallbacks = java.util.Collections.synchronizedList(new ArrayList<String>());
+        var scores = new java.util.concurrent.ConcurrentHashMap<UUID, Double>();
+        var retrievalScores = new java.util.concurrent.ConcurrentHashMap<UUID, Double>();
+        var rows = new java.util.concurrent.ConcurrentHashMap<UUID, KnowledgeRepository.SearchRow>();
+        var bm25Ids = java.util.concurrent.ConcurrentHashMap.<UUID>newKeySet();
+        var vectorIds = java.util.concurrent.ConcurrentHashMap.<UUID>newKeySet();
+        var phraseIds = java.util.concurrent.ConcurrentHashMap.<UUID>newKeySet();
+        var queryCandidates = new java.util.concurrent.ConcurrentHashMap<String, Set<UUID>>();
+        var queryTraces = java.util.Collections.synchronizedList(new ArrayList<KnowledgeSearchFacade.QueryTrace>());
+
+        var bm25Future = CompletableFuture.runAsync(() -> {
+            for (var variant : variants) {
+                var started = System.nanoTime();
+                var terms = lexicalAnalyzer.analyzeQuery(variant).frequencies().keySet().stream()
+                        .map(term -> new KnowledgeRepository.AnalyzedTerm(lexicalAnalyzer.version(), term)).toList();
+                try {
+                    var channel = repository.bm25Search(organizationId, terms, request.aiOnly(),
+                            request.categoryIds(), 48);
+                    mergeChannel(channel, 1.0, scores, retrievalScores, rows);
+                    channel.forEach(row -> {
+                        bm25Ids.add(row.chunkId());
+                        queryCandidates.computeIfAbsent(variant,
+                                ignored -> java.util.concurrent.ConcurrentHashMap.newKeySet()).add(row.chunkId());
+                    });
+                    queryTraces.add(queryTrace(variant, "BM25", "SUCCEEDED", channel, started, ""));
+                } catch (RuntimeException exception) {
+                    fallbacks.add("BM25_ERROR");
+                    queryTraces.add(queryTrace(variant, "BM25", "FAILED", List.of(), started, exception.getMessage()));
+                    log.warn("BM25 search failed for query variant; continuing with other channels", exception);
+                }
             }
-        } catch (RuntimeException exception) {
-            bm25 = List.of();
-            fallbacks.add("BM25_ERROR");
-            log.warn("BM25 search failed; falling back to full-text/vector search", exception);
-        }
-        List<KnowledgeRepository.SearchRow> fullText;
-        if (bm25.isEmpty()) {
+        }, retrievalExecutor);
+
+        var vectorQueries = vectorQueries(request);
+        var vectorFuture = CompletableFuture.runAsync(() -> {
+            var embeddingStarted = System.nanoTime();
+            KnowledgeEmbeddingFacade embedding;
+            List<java.util.Optional<String>> vectors;
             try {
-                fullText = repository.fullTextSearch(organizationId, request.query().trim(), request.aiOnly(),
-                        request.scopeIds(), request.categoryIds(), safeLimit * 2);
+                embedding = embeddings.getIfAvailable();
+                vectors = embedding == null ? List.of() : embedding.embedVectors(vectorQueries);
             } catch (RuntimeException exception) {
-                fullText = List.of();
-                fallbacks.add("FULLTEXT_ERROR");
-                log.warn("Full-text search failed; continuing with vector search", exception);
+                fallbacks.add("EMBEDDING_ERROR");
+                queryTraces.add(new KnowledgeSearchFacade.QueryTrace(String.join(" | ", vectorQueries),
+                        "EMBEDDING_BATCH", "FAILED", 0, elapsedMs(embeddingStarted),
+                        safeTraceError(exception), List.of()));
+                log.warn("Query embedding failed; continuing with lexical retrieval", exception);
+                return;
             }
-        } else {
-            fullText = bm25;
+            queryTraces.add(new KnowledgeSearchFacade.QueryTrace(String.join(" | ", vectorQueries), "EMBEDDING_BATCH",
+                    vectors.isEmpty() ? "UNAVAILABLE" : "SUCCEEDED", vectors.size(), elapsedMs(embeddingStarted), "", List.of()));
+            for (var index = 0; index < Math.min(vectorQueries.size(), vectors.size()); index++) {
+                var vector = vectors.get(index);
+                if (vector.isEmpty()) continue;
+                var variant = vectorQueries.get(index);
+                var started = System.nanoTime();
+                try {
+                    var channel = repository.vectorSearch(organizationId, vector.get(), request.aiOnly(),
+                            request.categoryIds(), 48, embeddingDimension);
+                    mergeChannel(channel, 1.0, scores, retrievalScores, rows);
+                    channel.forEach(row -> {
+                        vectorIds.add(row.chunkId());
+                        queryCandidates.computeIfAbsent(variant,
+                                ignored -> java.util.concurrent.ConcurrentHashMap.newKeySet()).add(row.chunkId());
+                    });
+                    queryTraces.add(queryTrace(variant, "VECTOR", "SUCCEEDED", channel, started, ""));
+                } catch (RuntimeException exception) {
+                    fallbacks.add("VECTOR_ERROR");
+                    queryTraces.add(queryTrace(variant, "VECTOR", "FAILED", List.of(), started, exception.getMessage()));
+                    log.warn("Vector search failed for query variant; continuing with lexical channels", exception);
+                }
+            }
+            if (vectors.isEmpty() || vectors.stream().allMatch(java.util.Optional::isEmpty)) {
+                fallbacks.add("EMBEDDING_UNAVAILABLE");
+            } else if (vectors.stream().anyMatch(java.util.Optional::isEmpty)) fallbacks.add("EMBEDDING_PARTIAL");
+        }, retrievalExecutor);
+
+        awaitChannel(bm25Future, lexicalTimeout, "BM25_TIMEOUT", fallbacks);
+        awaitChannel(vectorFuture, vectorTimeout, "VECTOR_TIMEOUT", fallbacks);
+
+        if (bm25Ids.isEmpty()) {
+            fallbacks.add("BM25_EMPTY");
+            var fallbackPhrases = phrases.isEmpty() && StringUtils.hasText(request.originalQuery())
+                    ? List.of(request.originalQuery().strip()) : phrases;
+            if (!fallbackPhrases.isEmpty()) {
+                var phraseFuture = CompletableFuture.runAsync(() -> {
+                    var started = System.nanoTime();
+                    try {
+                        var channel = phrases.isEmpty()
+                                ? repository.fullTextSearch(organizationId, fallbackPhrases.getFirst(), request.aiOnly(),
+                                        request.categoryIds(), 48)
+                                : repository.phraseSearch(organizationId, fallbackPhrases, request.aiOnly(),
+                                        request.categoryIds(), 48);
+                        mergeChannel(channel, 1.2, scores, retrievalScores, rows);
+                        channel.forEach(row -> phraseIds.add(row.chunkId()));
+                        queryTraces.add(queryTrace(String.join(" | ", fallbackPhrases), "PHRASE_TRGM", "SUCCEEDED",
+                                channel, started, ""));
+                    } catch (RuntimeException exception) {
+                        fallbacks.add("PHRASE_ERROR");
+                        queryTraces.add(queryTrace(String.join(" | ", fallbackPhrases), "PHRASE_TRGM", "FAILED",
+                                List.of(), started, exception.getMessage()));
+                    }
+                }, retrievalExecutor);
+                awaitChannel(phraseFuture, lexicalTimeout, "PHRASE_TIMEOUT", fallbacks);
+            }
         }
-        var vector = embeddings.getIfAvailable() == null ? java.util.Optional.<String>empty()
-                : embeddings.getIfAvailable().embedVector(request.query().trim());
-        var vectorRows = vector.map(value -> repository.vectorSearch(organizationId, value, request.aiOnly(), request.scopeIds(),
-                        request.categoryIds(), safeLimit * 4, embeddingDimension))
-                .orElse(List.of());
-        var scores = new LinkedHashMap<UUID, Double>();
-        var retrievalScores = new LinkedHashMap<UUID, Double>();
-        var rows = new LinkedHashMap<UUID, KnowledgeRepository.SearchRow>();
-        for (int index = 0; index < fullText.size(); index++) {
-            var row = fullText.get(index);
-            rows.put(row.chunkId(), row);
-            retrievalScores.merge(row.chunkId(), row.score(), Math::max);
-            scores.merge(row.chunkId(), 1.0 / (60 + index + 1), Double::sum);
-        }
-        for (int index = 0; index < vectorRows.size(); index++) {
-            var row = vectorRows.get(index);
-            rows.putIfAbsent(row.chunkId(), row);
-            retrievalScores.merge(row.chunkId(), row.score(), Math::max);
-            scores.merge(row.chunkId(), 1.0 / (60 + index + 1), Double::sum);
-        }
+
         var rankedIds = rows.keySet().stream()
                 .sorted((a, b) -> Double.compare(scores.getOrDefault(b, 0.0), scores.getOrDefault(a, 0.0)))
+                .limit(60)
                 .toList();
         var hits = rankedIds.stream()
                 .limit(safeLimit)
                 .map(id -> toSearchHit(organizationId, rows.get(id), retrievalScores.getOrDefault(id, 0.0),
                         scores.getOrDefault(id, 0.0)))
                 .toList();
-        if (vector.isEmpty()) fallbacks.add("EMBEDDING_UNAVAILABLE");
+        var factCandidates = request.requiredFacts().stream().map(fact -> {
+            var ids = queryCandidates.getOrDefault(fact.retrievalQuery(), Set.of()).stream()
+                    .sorted((left, right) -> Double.compare(scores.getOrDefault(right, 0d), scores.getOrDefault(left, 0d)))
+                    .toList();
+            return new KnowledgeSearchFacade.FactCandidateSet(fact.label(), fact.retrievalQuery(), ids);
+        }).toList();
+        List<String> fallbackSnapshot;
+        List<KnowledgeSearchFacade.QueryTrace> traceSnapshot;
+        synchronized (fallbacks) { fallbackSnapshot = List.copyOf(fallbacks); }
+        synchronized (queryTraces) {
+            traceSnapshot = queryTraces.stream().sorted(java.util.Comparator
+                    .comparing(KnowledgeSearchFacade.QueryTrace::channel)
+                    .thenComparing(KnowledgeSearchFacade.QueryTrace::query)).toList();
+        }
         return new KnowledgeSearchFacade.SearchResult(hits,
-                new KnowledgeSearchFacade.RetrievalTrace("BM25_VECTOR_RRF", bm25.size(), vectorRows.size(), rows.size(), fallbacks));
+                new KnowledgeSearchFacade.RetrievalTrace("DYNAMIC_BM25_VECTOR_PHRASE_RRF", bm25Ids.size(),
+                        vectorIds.size(), rankedIds.size(), phraseIds.size(), fallbackSnapshot, traceSnapshot), factCandidates);
+    }
+
+    private List<String> searchVariants(KnowledgeSearchFacade.SearchRequest request) {
+        var values = new java.util.LinkedHashSet<String>();
+        addQuery(values, request.originalQuery());
+        addQuery(values, request.query());
+        request.queryVariants().forEach(value -> addQuery(values, value));
+        request.requiredFacts().forEach(value -> addQuery(values, value.retrievalQuery()));
+        var dynamicTerms = searchPhrases(request);
+        if (!dynamicTerms.isEmpty()) addQuery(values, String.join(" ", dynamicTerms));
+        return values.stream().limit(16).toList();
+    }
+
+    private List<String> searchPhrases(KnowledgeSearchFacade.SearchRequest request) {
+        var values = new java.util.LinkedHashSet<String>();
+        for (var term : request.retrievalTerms()) {
+            addQuery(values, term.text());
+            term.aliases().forEach(value -> addQuery(values, value));
+        }
+        return values.stream().limit(48).toList();
+    }
+
+    private List<String> vectorQueries(KnowledgeSearchFacade.SearchRequest request) {
+        var values = new java.util.LinkedHashSet<String>();
+        addQuery(values, request.originalQuery());
+        addQuery(values, request.query());
+        request.requiredFacts().forEach(value -> addQuery(values, value.retrievalQuery()));
+        return values.stream().limit(5).toList();
+    }
+
+    private void addQuery(java.util.LinkedHashSet<String> values, String value) {
+        if (StringUtils.hasText(value)) values.add(value.strip());
+    }
+
+    private void mergeChannel(List<KnowledgeRepository.SearchRow> channel, double weight,
+                              Map<UUID, Double> scores, Map<UUID, Double> retrievalScores,
+                              Map<UUID, KnowledgeRepository.SearchRow> rows) {
+        if (channel == null) return;
+        for (var index = 0; index < channel.size(); index++) {
+            var row = channel.get(index);
+            rows.putIfAbsent(row.chunkId(), row);
+            retrievalScores.merge(row.chunkId(), row.score(), Math::max);
+            scores.merge(row.chunkId(), weight / (60 + index + 1), Double::sum);
+        }
+    }
+
+    private KnowledgeSearchFacade.QueryTrace queryTrace(String query, String channel, String status,
+                                                        List<KnowledgeRepository.SearchRow> rows,
+                                                        long started, String error) {
+        var safeRows = rows == null ? List.<KnowledgeRepository.SearchRow>of() : rows;
+        var safeError = error == null ? "" : error;
+        if (safeError.length() > 300) safeError = safeError.substring(0, 300);
+        return new KnowledgeSearchFacade.QueryTrace(query, channel, status, safeRows.size(), elapsedMs(started), safeError,
+                safeRows.stream().limit(10).map(KnowledgeRepository.SearchRow::chunkId).toList());
+    }
+
+    private void awaitChannel(CompletableFuture<Void> future, Duration timeout, String fallback,
+                              List<String> fallbacks) {
+        try {
+            future.get(Math.max(1, timeout.toMillis()), TimeUnit.MILLISECONDS);
+        } catch (java.util.concurrent.TimeoutException exception) {
+            future.cancel(true);
+            fallbacks.add(fallback);
+            log.warn("Retrieval channel {}: {}", fallback, exception.getMessage());
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            future.cancel(true);
+            fallbacks.add(fallback.replace("_TIMEOUT", "_INTERRUPTED"));
+        } catch (java.util.concurrent.ExecutionException exception) {
+            fallbacks.add(fallback.replace("_TIMEOUT", "_ERROR"));
+            log.warn("Retrieval channel failed: {}", exception.getCause() == null
+                    ? exception.getMessage() : exception.getCause().getMessage());
+        }
+    }
+
+    private String safeTraceError(Exception exception) {
+        var value = exception.getMessage() == null ? exception.getClass().getSimpleName() : exception.getMessage();
+        return value.substring(0, Math.min(300, value.length()));
+    }
+
+    private long elapsedMs(long started) {
+        return Math.max(0, (System.nanoTime() - started) / 1_000_000);
     }
 
     public void markIndexStale(UUID organizationId, UUID documentId, UUID versionId, UUID reviewRevisionId) {
@@ -586,53 +761,21 @@ public class KnowledgeService implements KnowledgeSearchFacade {
                 || !"BUILDING".equals(review.reviewRevision().status())) {
             throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "待发布内容已被新的修订替代");
         }
-        var projection = documents.project(review.reviewRevision().confirmedDocument(),
-                review.reviewRevision().excludedReviewNodeIds());
-        var chunks = blockAwareChunker.chunk(review.title(), projection.nodes(), review.sourceNodes(),
-                governance.largeTableRows(organizationId, reviewRevisionId));
-        if (chunks.stream().noneMatch(chunk -> "CHILD".equals(chunk.role()))) {
-            throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "确认文本没有可检索内容");
-        }
-        var textHash = sha256(chunks.stream().map(BlockAwareChunker.ChunkDraft::content)
-                .reduce("", (left, right) -> left + "\n" + right));
-        var aiApproved = repository.isAiApproved(organizationId, documentId);
-        var embedding = aiApproved ? embeddings.getIfAvailable() : null;
-        if (aiApproved && embedding == null) throw new IllegalStateException("向量服务暂不可用");
+        var prepared = prepareIndex(organizationId, documentId, versionId, reviewRevisionId, review.title(),
+                review.reviewRevision().confirmedDocument(), review.reviewRevision().excludedReviewNodeIds(),
+                review.sourceNodes());
 
         repository.startProcessingStep(organizationId, documentId, versionId, reviewRevisionId,
-                "CHUNK", "block-aware-chunker", lexicalAnalyzer.version(), textHash);
-        var writes = new ArrayList<KnowledgeRepository.ChunkWrite>();
-        for (int index = 0; index < chunks.size(); index++) {
-            var block = chunks.get(index);
-            var child = "CHILD".equals(block.role());
-            var analysis = child ? lexicalAnalyzer.analyzeDocument(block.content())
-                    : new LexicalAnalyzer.Analysis(Map.of(), 0);
-            var terms = analysis.frequencies().entrySet().stream()
-                    .map(item -> new KnowledgeRepository.TermFrequency(item.getKey(), item.getValue())).toList();
-            String vector = null;
-            if (aiApproved && child) {
-                vector = embedding.embedVector(block.content())
-                        .orElseThrow(() -> new IllegalStateException("向量服务未返回结果"));
-            }
-            var anchor = block.primaryAnchor();
-            writes.add(new KnowledgeRepository.ChunkWrite(block.chunkKey(), block.parentKey(), block.role(), index,
-                    block.firstPage(), block.headingPath().isEmpty() ? null : String.join(" > ", block.headingPath()),
-                    block.content(), vector, analysis.documentLength(), block.modelTokenLength(),
-                    lexicalAnalyzer.version(), vector == null ? null : embeddingModel, terms, block.headingPath(),
-                    block.reviewNodeIds(), block.sourceNodeKeys(), json(anchor), json(block.anchors()),
-                    json(block.relations()), anchorText(anchor, "sheetName"), anchorText(anchor, "range"),
-                    anchorText(anchor, "paragraphId"), anchorDoubles(anchor, "polygon"), anchorLong(anchor, "startMs"),
-                    anchorLong(anchor, "endMs")));
-        }
-        repository.replaceChunks(documentId, versionId, reviewRevisionId, writes);
-        repository.finishProcessingStep(organizationId, versionId, reviewRevisionId, "CHUNK", "SUCCEEDED", textHash, null);
+                "CHUNK", "block-aware-chunker", lexicalAnalyzer.version(), prepared.textHash());
+        repository.replaceChunks(documentId, versionId, reviewRevisionId, prepared.writes());
+        repository.finishProcessingStep(organizationId, versionId, reviewRevisionId, "CHUNK", "SUCCEEDED", prepared.textHash(), null);
         repository.startProcessingStep(organizationId, documentId, versionId, reviewRevisionId,
-                "BM25_INDEX", "postgresql-bm25", lexicalAnalyzer.version(), textHash);
-        repository.finishProcessingStep(organizationId, versionId, reviewRevisionId, "BM25_INDEX", "SUCCEEDED", textHash, null);
-        if (aiApproved) {
+                "BM25_INDEX", "postgresql-bm25", lexicalAnalyzer.version(), prepared.textHash());
+        repository.finishProcessingStep(organizationId, versionId, reviewRevisionId, "BM25_INDEX", "SUCCEEDED", prepared.textHash(), null);
+        if (prepared.aiApproved()) {
             repository.startProcessingStep(organizationId, documentId, versionId, reviewRevisionId,
-                    "VECTOR_INDEX", "pgvector", embeddingModel, textHash);
-            repository.finishProcessingStep(organizationId, versionId, reviewRevisionId, "VECTOR_INDEX", "SUCCEEDED", textHash, null);
+                    "VECTOR_INDEX", "pgvector", embeddingModel, prepared.textHash());
+            repository.finishProcessingStep(organizationId, versionId, reviewRevisionId, "VECTOR_INDEX", "SUCCEEDED", prepared.textHash(), null);
         } else {
             repository.finishProcessingStep(organizationId, versionId, reviewRevisionId, "VECTOR_INDEX", "NOT_REQUIRED", null, null);
         }
@@ -646,6 +789,110 @@ public class KnowledgeService implements KnowledgeSearchFacade {
                         .put("reviewRevisionId", reviewRevisionId.toString()));
         return publication;
     }
+
+    @Transactional
+    public void rebuildPublishedIndex(UUID organizationId, UUID documentId) {
+        var document = repository.findDocument(organizationId, documentId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "知识文件不存在"));
+        var publication = governance.currentPublication(organizationId, documentId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "当前发布不存在"));
+        var snapshot = governance.publishedContent(organizationId, documentId, publication.id())
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "当前发布快照不存在"));
+        var prepared = prepareIndex(organizationId, documentId, publication.versionId(),
+                publication.reviewRevisionId(), document.title(), snapshot.confirmedDocument(),
+                snapshot.excludedReviewNodeIds(), snapshot.sourceNodes());
+        replacePreparedIndex(organizationId, documentId, publication, prepared);
+        repository.rebuildTermStats(organizationId);
+    }
+
+    @Transactional
+    public int rebuildAllPublishedIndexes(UUID organizationId) {
+        var preparedPublications = new ArrayList<PreparedPublication>();
+        for (var document : repository.listDocuments(organizationId, null, null, null,
+                null, null, "ACTIVE", null, 1, 1000)) {
+            var publication = governance.currentPublication(organizationId, document.id()).orElse(null);
+            if (publication == null) continue;
+            var snapshot = governance.publishedContent(organizationId, document.id(), publication.id())
+                    .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND,
+                            "当前发布快照不存在：" + document.title()));
+            var prepared = prepareIndex(organizationId, document.id(), publication.versionId(),
+                    publication.reviewRevisionId(), document.title(), snapshot.confirmedDocument(),
+                    snapshot.excludedReviewNodeIds(), snapshot.sourceNodes());
+            preparedPublications.add(new PreparedPublication(document.id(), publication, prepared));
+        }
+        if (preparedPublications.isEmpty()) {
+            throw new ApiException(ApiErrorCode.NOT_FOUND, "没有可重建的当前发布索引");
+        }
+        for (var item : preparedPublications) {
+            replacePreparedIndex(organizationId, item.documentId(), item.publication(), item.prepared());
+        }
+        repository.rebuildTermStats(organizationId);
+        return preparedPublications.size();
+    }
+
+    private void replacePreparedIndex(UUID organizationId, UUID documentId,
+                                      KnowledgeGovernanceRepository.PublicationRow publication,
+                                      PreparedIndex prepared) {
+        repository.startProcessingStep(organizationId, documentId, publication.versionId(),
+                publication.reviewRevisionId(), "CHUNK", "block-aware-chunker", lexicalAnalyzer.version(),
+                prepared.textHash());
+        repository.replaceChunks(documentId, publication.versionId(), publication.reviewRevisionId(), prepared.writes());
+        repository.finishProcessingStep(organizationId, publication.versionId(), publication.reviewRevisionId(),
+                "CHUNK", "SUCCEEDED", prepared.textHash(), null);
+        repository.startProcessingStep(organizationId, documentId, publication.versionId(),
+                publication.reviewRevisionId(), "BM25_INDEX", "postgresql-bm25", lexicalAnalyzer.version(),
+                prepared.textHash());
+        repository.finishProcessingStep(organizationId, publication.versionId(), publication.reviewRevisionId(),
+                "BM25_INDEX", "SUCCEEDED", prepared.textHash(), null);
+        repository.startProcessingStep(organizationId, documentId, publication.versionId(),
+                publication.reviewRevisionId(), "VECTOR_INDEX", "pgvector", embeddingModel, prepared.textHash());
+        repository.finishProcessingStep(organizationId, publication.versionId(), publication.reviewRevisionId(),
+                "VECTOR_INDEX", prepared.aiApproved() ? "SUCCEEDED" : "NOT_REQUIRED", prepared.textHash(), null);
+    }
+
+    private PreparedIndex prepareIndex(UUID organizationId, UUID documentId, UUID versionId, UUID reviewRevisionId,
+                                       String title, JsonNode confirmedDocument, List<UUID> excludedReviewNodeIds,
+                                       List<KnowledgeGovernanceRepository.SourceNodeView> sourceNodes) {
+        var projection = documents.project(confirmedDocument, excludedReviewNodeIds);
+        var chunks = blockAwareChunker.chunk(title, projection.nodes(), sourceNodes,
+                governance.largeTableRows(organizationId, reviewRevisionId));
+        if (chunks.stream().noneMatch(chunk -> "CHILD".equals(chunk.role()))) {
+            throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "确认文本没有可检索内容");
+        }
+        var textHash = sha256(chunks.stream().map(BlockAwareChunker.ChunkDraft::content)
+                .reduce("", (left, right) -> left + "\n" + right));
+        var aiApproved = repository.isAiApproved(organizationId, documentId);
+        var embedding = aiApproved ? embeddings.getIfAvailable() : null;
+        if (aiApproved && embedding == null) throw new IllegalStateException("向量服务暂不可用");
+        var writes = new ArrayList<KnowledgeRepository.ChunkWrite>();
+        for (var index = 0; index < chunks.size(); index++) {
+            var block = chunks.get(index);
+            var child = "CHILD".equals(block.role());
+            var analysis = child ? lexicalAnalyzer.analyzeDocument(block.content())
+                    : new LexicalAnalyzer.Analysis(Map.of(), 0);
+            var terms = analysis.frequencies().entrySet().stream()
+                    .map(item -> new KnowledgeRepository.TermFrequency(item.getKey(), item.getValue())).toList();
+            String vector = null;
+            if (aiApproved && child) vector = embedding.embedVector(block.content())
+                    .orElseThrow(() -> new IllegalStateException("向量服务未返回结果"));
+            var anchor = block.primaryAnchor();
+            writes.add(new KnowledgeRepository.ChunkWrite(block.chunkKey(), block.parentKey(), block.role(), index,
+                    block.firstPage(), block.headingPath().isEmpty() ? null : String.join(" > ", block.headingPath()),
+                    block.content(), vector, analysis.documentLength(), block.modelTokenLength(),
+                    lexicalAnalyzer.version(), vector == null ? null : embeddingModel, terms, block.headingPath(),
+                    block.reviewNodeIds(), block.sourceNodeKeys(), json(anchor), json(block.anchors()),
+                    json(block.relations()), anchorText(anchor, "sheetName"), anchorText(anchor, "range"),
+                    anchorText(anchor, "paragraphId"), anchorDoubles(anchor, "polygon"), anchorLong(anchor, "startMs"),
+                    anchorLong(anchor, "endMs")));
+        }
+        return new PreparedIndex(List.copyOf(writes), textHash, aiApproved);
+    }
+
+    private record PreparedIndex(List<KnowledgeRepository.ChunkWrite> writes, String textHash, boolean aiApproved) { }
+
+    private record PreparedPublication(UUID documentId,
+                                       KnowledgeGovernanceRepository.PublicationRow publication,
+                                       PreparedIndex prepared) { }
 
     public void buildVectors(UUID organizationId, UUID documentId, UUID publicationId, UUID reviewRevisionId) {
         if (!repository.isAiApproved(organizationId, documentId)) {
@@ -782,7 +1029,7 @@ public class KnowledgeService implements KnowledgeSearchFacade {
                     parsed = parser.parse(stored.stream(), version.originalName(),
                             new DocumentParser.ParseContext(organizationId, actorId, fileId,
                                     version.contentType(), version.size(), OcrMode.fromNullable(version.ocrMode()),
-                                    version.allowAgentFallback()));
+                                    version.allowAgentFallback(), documentId, versionId));
                 }
             }
             var textHash = sha256(parsed.blocks().stream().map(block -> block.content() == null ? "" : block.content())
@@ -982,11 +1229,14 @@ public class KnowledgeService implements KnowledgeSearchFacade {
     private KnowledgeSearchFacade.SearchHit toSearchHit(UUID organizationId, KnowledgeRepository.SearchRow row,
                                                          double retrieval, double rrf) {
         var provenance = repository.findChunkAnchor(organizationId, row.chunkId()).orElse(null);
+        var primary = provenance == null ? null : readJsonNullable(provenance.primaryAnchorJson());
+        var pageNo = primary != null && primary.path("page").isNumber()
+                ? primary.path("page").asInt() : row.pageNo();
         return new KnowledgeSearchFacade.SearchHit(row.chunkId(), row.documentId(), row.versionId(), row.title(),
-                row.originalName(), row.pageNo(), row.section(), row.content(), rrf, retrieval, rrf, rrf,
-                "KNOWLEDGE_CHUNK", null, null, null,
+                row.originalName(), pageNo, row.section(), row.content(), rrf, retrieval, rrf, rrf,
+                "KNOWLEDGE_CHUNK", null, null,
                 provenance == null ? null : provenance.primaryAnchorJson(), row.chunkNo(),
-                provenance == null ? null : readJsonNullable(provenance.primaryAnchorJson()),
+                primary,
                 provenance == null ? List.of() : readJsonArray(provenance.anchorsJson()),
                 provenance == null ? List.of() : provenance.reviewNodeIds(),
                 provenance == null ? List.of() : provenance.sourceNodeKeys());

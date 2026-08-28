@@ -1,11 +1,14 @@
 import {
   DeleteOutlined,
   EditOutlined,
+  CloseOutlined,
+  MenuOutlined,
   MessageOutlined,
   PlusOutlined,
+  RobotOutlined,
   SendOutlined,
 } from '@ant-design/icons';
-import { Avatar, Button, Empty, Input, List, Modal, Popconfirm, Space, Spin, Typography } from 'antd';
+import { Button, Empty, Input, List, Modal, Popconfirm, Space, Spin, Typography } from 'antd';
 import { useState, type ReactNode } from 'react';
 
 export interface ConversationItem {
@@ -31,6 +34,8 @@ interface AiConversationWorkspaceProps {
   streaming?: boolean;
   scopeSummary?: ReactNode;
   composerTopContent?: ReactNode;
+  assistantLabel?: string;
+  submitDisabled?: boolean;
   pendingLabel?: string;
   scopeTitle?: string;
   welcomeTitle?: string;
@@ -52,7 +57,6 @@ function ThinkingIndicator({ label }: { label: string }) {
         <i />
         <i />
       </span>
-      <span className="ai-thinking-label">正在思考</span>
       <span className="ai-thinking-detail">{label}</span>
     </div>
   );
@@ -68,6 +72,8 @@ export function AiConversationWorkspace({
   streaming,
   scopeSummary,
   composerTopContent,
+  assistantLabel = 'AI研发助手',
+  submitDisabled = false,
   pendingLabel = '正在阅读资料并整理依据',
   scopeTitle = '选择同步数据范围',
   welcomeTitle = '从研发资料开始提问',
@@ -83,6 +89,7 @@ export function AiConversationWorkspace({
   const [editingConversation, setEditingConversation] = useState<ConversationItem>();
   const [editingTitle, setEditingTitle] = useState('');
   const [renameLoading, setRenameLoading] = useState(false);
+  const [sideOpen, setSideOpen] = useState(false);
 
   const openRename = (item: ConversationItem) => {
     setEditingConversation(item);
@@ -103,17 +110,29 @@ export function AiConversationWorkspace({
   };
 
   return (
-    <div className="ai-conversation-workspace">
+    <div className={`ai-conversation-workspace${sideOpen ? ' is-side-open' : ''}`}>
       <aside className="ai-conversation-side">
-        <Button
-          type="primary"
-          size="large"
-          icon={<PlusOutlined />}
-          block
-          onClick={onNewConversation}
-        >
-          新建对话
-        </Button>
+        <div className="ai-conversation-side-head">
+          <Button
+            type="primary"
+            size="large"
+            icon={<PlusOutlined />}
+            block
+            onClick={() => {
+              onNewConversation();
+              setSideOpen(false);
+            }}
+          >
+            新建对话
+          </Button>
+          <Button
+            className="ai-conversation-side-close"
+            type="text"
+            icon={<CloseOutlined />}
+            aria-label="关闭对话与范围面板"
+            onClick={() => setSideOpen(false)}
+          />
+        </div>
         <Typography.Text strong className="ai-conversation-section-title">
           最近对话
         </Typography.Text>
@@ -125,7 +144,10 @@ export function AiConversationWorkspace({
               renderItem={(item) => (
                 <List.Item
                   className={item.id === activeConversationId ? 'is-active' : ''}
-                  onClick={() => onSelectConversation(item.id)}
+                  onClick={() => {
+                    onSelectConversation(item.id);
+                    setSideOpen(false);
+                  }}
                 >
                   <MessageOutlined />
                   <span className="ai-conversation-name" title={item.title}>
@@ -180,17 +202,28 @@ export function AiConversationWorkspace({
         <Typography.Text strong className="ai-conversation-section-title">
           {scopeTitle}
         </Typography.Text>
-        <div className="ai-conversation-scope">{scopeContent}</div>
+        <div className="ai-conversation-scope">
+          {scopeContent}
+        </div>
       </aside>
+      <button
+        className="ai-conversation-scrim"
+        type="button"
+        aria-label="关闭对话与范围面板"
+        onClick={() => setSideOpen(false)}
+      />
       <main className="ai-conversation-main">
+        <div className="ai-conversation-mobile-bar">
+          <Button type="text" icon={<MenuOutlined />} onClick={() => setSideOpen(true)}>
+            对话与范围
+          </Button>
+        </div>
         <div className="ai-conversation-messages" aria-live="polite">
           {!messages.length && !loading && (
             <div className="ai-conversation-welcome">
-              <Avatar
-                size={64}
-                className="ai-conversation-welcome-avatar"
-                icon={<MessageOutlined />}
-              />
+              <span className="ai-conversation-welcome-mark" aria-hidden="true">
+                <RobotOutlined />
+              </span>
               <Typography.Title level={3}>{welcomeTitle}</Typography.Title>
               <Typography.Paragraph type="secondary">{welcomeDescription}</Typography.Paragraph>
               {scopeSummary}
@@ -206,48 +239,66 @@ export function AiConversationWorkspace({
           <List
             split={false}
             dataSource={messages}
-            renderItem={(item) => (
-              <List.Item className={`ai-message ai-message-${item.role.toLowerCase()}`}>
-                <Avatar
-                  className="ai-message-avatar"
-                  icon={item.role === 'USER' ? undefined : <MessageOutlined />}
-                >
-                  {item.role === 'USER' ? '我' : undefined}
-                </Avatar>
-                <div className="ai-message-content">
-                   <Typography.Text strong className="ai-message-meta">
-                    {item.role === 'USER' ? '你' : 'AI研发助手'}
-                  </Typography.Text>
-                  <div className="ai-message-body">
-                    {item.pending ? (
-                      <ThinkingIndicator label={pendingLabel} />
+            renderItem={(item) => {
+              const messageBody = item.pending ? (
+                <ThinkingIndicator label={pendingLabel} />
+              ) : (
+                item.content ||
+                (streaming && item.role === 'ASSISTANT' ? (
+                  <ThinkingIndicator label={pendingLabel} />
+                ) : null)
+              );
+
+              return (
+                <List.Item className={`ai-message ai-message-${item.role.toLowerCase()}`}>
+                  <div className="ai-message-content">
+                    {item.role === 'ASSISTANT' ? (
+                      <>
+                        <div className="ai-message-assistant-heading">
+                          <span className="ai-message-assistant-icon" aria-hidden="true">
+                            ✦
+                          </span>
+                          <Typography.Text strong className="ai-message-meta">
+                            {assistantLabel}
+                          </Typography.Text>
+                        </div>
+                        <div className="ai-message-body ai-message-assistant-body">
+                          {messageBody}
+                        </div>
+                      </>
                     ) : (
-                      item.content ||
-                      (streaming && item.role === 'ASSISTANT' ? (
-                        <ThinkingIndicator label={pendingLabel} />
-                      ) : null)
+                      <>
+                        <Typography.Text strong className="ai-message-meta">
+                          你
+                        </Typography.Text>
+                        <div className="ai-message-body">{messageBody}</div>
+                      </>
                     )}
                   </div>
-                </div>
-              </List.Item>
-            )}
+                </List.Item>
+              );
+            }}
           />
         </div>
         <div className="ai-conversation-composer">
           {composerTopContent ? (
-            <div className="ai-conversation-composer-top">{composerTopContent}</div>
+            <div className="ai-conversation-composer-top">
+              <div className="ai-conversation-composer-context">{composerTopContent}</div>
+            </div>
           ) : null}
           <div className="ai-conversation-composer-row">
             <Input.TextArea
               aria-label="输入问题"
-              autoSize={{ minRows: 2, maxRows: 6 }}
+              autoSize={{ minRows: 3, maxRows: 6 }}
+              maxLength={2000}
+              showCount={{ formatter: ({ count, maxLength }) => `${count}/${maxLength || 2000}` }}
               placeholder="输入你的问题…"
               value={question}
               onChange={(event) => onQuestionChange(event.target.value)}
               onPressEnter={(event) => {
                 if (!event.shiftKey) {
                   event.preventDefault();
-                  onSubmit();
+                  if (question.trim() && !loading && !streaming && !submitDisabled) onSubmit();
                 }
               }}
             />
@@ -257,32 +308,32 @@ export function AiConversationWorkspace({
               icon={<SendOutlined />}
               aria-label="发送问题"
               loading={streaming}
-              disabled={!question.trim() || loading || streaming}
+              disabled={!question.trim() || loading || streaming || submitDisabled}
               onClick={onSubmit}
             />
           </div>
         </div>
-       </main>
-       <Modal
-         title="编辑会话标题"
-         open={Boolean(editingConversation)}
-         okText="保存"
-         cancelText="取消"
-         confirmLoading={renameLoading}
-         okButtonProps={{ disabled: !editingTitle.trim() || editingTitle.trim().length > 80 }}
-         onCancel={() => setEditingConversation(undefined)}
-         onOk={() => void confirmRename()}
-       >
-         <Input
-           autoFocus
-           maxLength={80}
-           showCount
-           value={editingTitle}
-           placeholder="输入会话标题"
-           onChange={(event) => setEditingTitle(event.target.value)}
-           onPressEnter={() => void confirmRename()}
-         />
-       </Modal>
-     </div>
+      </main>
+      <Modal
+        title="编辑会话标题"
+        open={Boolean(editingConversation)}
+        okText="保存"
+        cancelText="取消"
+        confirmLoading={renameLoading}
+        okButtonProps={{ disabled: !editingTitle.trim() || editingTitle.trim().length > 80 }}
+        onCancel={() => setEditingConversation(undefined)}
+        onOk={() => void confirmRename()}
+      >
+        <Input
+          autoFocus
+          maxLength={80}
+          showCount
+          value={editingTitle}
+          placeholder="输入会话标题"
+          onChange={(event) => setEditingTitle(event.target.value)}
+          onPressEnter={() => void confirmRename()}
+        />
+      </Modal>
+    </div>
   );
 }

@@ -540,17 +540,17 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
 
     @Override
     public List<SearchRow> fullTextSearch(UUID organizationId, String query, boolean aiOnly, int limit) {
-        return fullTextSearch(organizationId, query, aiOnly, List.of(), List.of(), limit);
+        return fullTextSearch(organizationId, query, aiOnly, List.of(), limit);
     }
 
     @Override
-    public List<SearchRow> fullTextSearch(UUID organizationId, String query, boolean aiOnly, List<UUID> scopeIds,
+    public List<SearchRow> fullTextSearch(UUID organizationId, String query, boolean aiOnly,
                                           List<UUID> categoryIds, int limit) {
-        return fullTextSearch(organizationId, query, aiOnly, scopeIds, categoryIds, null, limit);
+        return fullTextSearch(organizationId, query, aiOnly, categoryIds, null, limit);
     }
 
     @Override
-    public List<SearchRow> fullTextSearch(UUID organizationId, String query, boolean aiOnly, List<UUID> scopeIds,
+    public List<SearchRow> fullTextSearch(UUID organizationId, String query, boolean aiOnly,
                                           List<UUID> categoryIds, java.util.Set<UUID> allowedDocumentIds, int limit) {
         if (allowedDocumentIds != null && allowedDocumentIds.isEmpty()) return List.of();
         var aiClause = aiOnly ? "AND EXISTS (SELECT 1 FROM kb.document_ai_grant g WHERE g.document_id = d.id AND g.status = 'APPROVED')" : "";
@@ -574,29 +574,73 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                 """ + documentClause(allowedDocumentIds) + """
                   AND (c.search_vector @@ plainto_tsquery('simple', ?)
                        OR c.content ILIKE '%' || ? || '%')
-                """ + scopeClause(scopeIds, "d.id", "c.document_version_id") + " ORDER BY score DESC, c.created_at DESC LIMIT ?";
+                ORDER BY score DESC, c.created_at DESC LIMIT ?
+                """;
         var args = new java.util.ArrayList<Object>();
         args.add(query); args.add(query); args.add(query); args.add(organizationId);
         if (categoryIds != null) args.addAll(categoryIds);
         if (allowedDocumentIds != null) args.addAll(allowedDocumentIds);
         args.add(query); args.add(query);
-        if (scopeIds != null) args.addAll(scopeIds);
         args.add(limit);
         return jdbc.query(sql, this::mapSearch, args.toArray());
     }
 
     @Override
-    public List<SearchRow> bm25Search(UUID organizationId, List<AnalyzedTerm> terms, boolean aiOnly, List<UUID> scopeIds,
-                                      List<UUID> categoryIds, int limit) {
-        return bm25Search(organizationId, terms, aiOnly, scopeIds, categoryIds, null, limit);
+    public List<SearchRow> phraseSearch(UUID organizationId, List<String> phrases, boolean aiOnly,
+                                       List<UUID> categoryIds, int limit) {
+        var values = phrases == null ? List.<String>of() : phrases.stream()
+                .filter(org.springframework.util.StringUtils::hasText).map(String::strip).distinct().limit(48).toList();
+        if (values.isEmpty()) return List.of();
+        var aiClause = aiOnly
+                ? "AND EXISTS (SELECT 1 FROM kb.document_ai_grant g WHERE g.document_id = d.id AND g.status = 'APPROVED')"
+                : "";
+        var sql = """
+                WITH phrases AS (
+                    SELECT DISTINCT phrase FROM unnest(?::text[]) AS p(phrase)
+                    WHERE length(phrase) >= 2
+                ), ranked AS (
+                    SELECT c.id, c.document_id, c.document_version_id,
+                           coalesce(published.metadata_snapshot_jsonb->>'title', d.title) AS title, v.original_name,
+                           c.page_no, c.section, c.content, c.chunk_no,
+                           max(GREATEST(similarity(lower(c.content), lower(phrases.phrase)),
+                               CASE WHEN c.content ILIKE '%' || phrases.phrase || '%' THEN 0.9 ELSE 0 END)) AS score
+                    FROM kb.document_chunk c
+                    JOIN kb.document d ON d.id = c.document_id
+                    JOIN kb.document_version v ON v.id = c.document_version_id
+                    JOIN ops.file_object f ON f.id = v.file_object_id AND f.organization_id = d.organization_id AND f.status <> 'DELETED'
+                    JOIN kb.publication published ON published.id = d.current_publication_id
+                        AND published.document_version_id = c.document_version_id
+                        AND published.review_revision_id = c.review_revision_id AND published.status = 'CURRENT'
+                    JOIN phrases ON c.content ILIKE '%' || phrases.phrase || '%'
+                        OR similarity(lower(c.content), lower(phrases.phrase)) >= 0.18
+                    WHERE d.organization_id = ? AND d.lifecycle_status = 'ACTIVE' AND c.chunk_role = 'CHILD'
+                """ + aiClause + categoryClause(categoryIds) + """
+                    GROUP BY c.id, c.document_id, c.document_version_id,
+                             coalesce(published.metadata_snapshot_jsonb->>'title', d.title), v.original_name,
+                             c.page_no, c.section, c.content, c.chunk_no
+                )
+                SELECT id, document_id, document_version_id, title, original_name, page_no, section, content, score, chunk_no
+                FROM ranked ORDER BY score DESC LIMIT ?
+                """;
+        var args = new java.util.ArrayList<Object>();
+        args.add(values.toArray(String[]::new));
+        args.add(organizationId);
+        if (categoryIds != null) args.addAll(categoryIds);
+        args.add(limit);
+        return jdbc.query(sql, this::mapSearch, args.toArray());
     }
 
     @Override
-    public List<SearchRow> bm25Search(UUID organizationId, List<AnalyzedTerm> terms, boolean aiOnly, List<UUID> scopeIds,
+    public List<SearchRow> bm25Search(UUID organizationId, List<AnalyzedTerm> terms, boolean aiOnly,
+                                      List<UUID> categoryIds, int limit) {
+        return bm25Search(organizationId, terms, aiOnly, categoryIds, null, limit);
+    }
+
+    @Override
+    public List<SearchRow> bm25Search(UUID organizationId, List<AnalyzedTerm> terms, boolean aiOnly,
                                       List<UUID> categoryIds, java.util.Set<UUID> allowedDocumentIds, int limit) {
         if (terms == null || terms.isEmpty()) return List.of();
         if (allowedDocumentIds != null && allowedDocumentIds.isEmpty()) return List.of();
-        var scope = scopeClause(scopeIds, "d.id", "c.document_version_id");
         var aiClause = aiOnly ? "AND EXISTS (SELECT 1 FROM kb.document_ai_grant g WHERE g.document_id = d.id AND g.status = 'APPROVED')" : "";
         var sql = """
                 WITH query_terms AS (
@@ -623,7 +667,7 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                         AND p.document_version_id = c.document_version_id AND p.review_revision_id = c.review_revision_id
                         AND p.status = 'CURRENT'
                     WHERE d.organization_id = ? AND d.lifecycle_status = 'ACTIVE' AND c.chunk_role = 'CHILD'
-                """ + aiClause + categoryClause(categoryIds) + documentClause(allowedDocumentIds) + scope + """
+                """ + aiClause + categoryClause(categoryIds) + documentClause(allowedDocumentIds) + """
                     GROUP BY c.id, c.document_id, c.document_version_id,
                              coalesce(p.metadata_snapshot_jsonb->>'title', d.title), v.original_name,
                              c.page_no, c.section, c.content, c.chunk_no
@@ -638,25 +682,24 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
         args.add(organizationId);
         if (categoryIds != null) args.addAll(categoryIds);
         if (allowedDocumentIds != null) args.addAll(allowedDocumentIds);
-        if (scopeIds != null) args.addAll(scopeIds);
         args.add(limit);
         return jdbc.query(sql, this::mapSearch, args.toArray());
     }
 
     @Override
     public List<SearchRow> vectorSearch(UUID organizationId, String vector, boolean aiOnly, int limit) {
-        return vectorSearch(organizationId, vector, aiOnly, List.of(), List.of(), limit, 0);
+        return vectorSearch(organizationId, vector, aiOnly, List.of(), limit, 0);
     }
 
     @Override
-    public List<SearchRow> vectorSearch(UUID organizationId, String vector, boolean aiOnly, List<UUID> scopeIds,
-                                        List<UUID> categoryIds, int limit) {
-        return vectorSearch(organizationId, vector, aiOnly, scopeIds, categoryIds, limit, 0);
+    public List<SearchRow> vectorSearch(UUID organizationId, String vector, boolean aiOnly,
+                                       List<UUID> categoryIds, int limit) {
+        return vectorSearch(organizationId, vector, aiOnly, categoryIds, limit, 0);
     }
 
     @Override
-    public List<SearchRow> vectorSearch(UUID organizationId, String vector, boolean aiOnly, List<UUID> scopeIds,
-                                        List<UUID> categoryIds, int limit, int dimension) {
+    public List<SearchRow> vectorSearch(UUID organizationId, String vector, boolean aiOnly,
+                                       List<UUID> categoryIds, int limit, int dimension) {
         var aiClause = aiOnly ? "AND EXISTS (SELECT 1 FROM kb.document_ai_grant g WHERE g.document_id = d.id AND g.status = 'APPROVED')" : "";
         var dimensionClause = dimension > 0 ? " AND vector_dims(c.embedding) = ?\n" : "";
         var sql = """
@@ -674,13 +717,11 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                 WHERE d.organization_id = ? AND d.lifecycle_status = 'ACTIVE'
                 """ + aiClause + categoryClause(categoryIds) + " AND c.chunk_role = 'CHILD' AND c.embedding IS NOT NULL\n"
                 + dimensionClause
-                + scopeClause(scopeIds, "d.id", "c.document_version_id")
                 + "ORDER BY c.embedding <=> CAST(? AS vector) LIMIT ?";
         var args = new java.util.ArrayList<Object>();
         args.add(vector); args.add(organizationId);
         if (categoryIds != null) args.addAll(categoryIds);
         if (dimension > 0) args.add(dimension);
-        if (scopeIds != null) args.addAll(scopeIds);
         args.add(vector); args.add(limit);
         return jdbc.query(sql, this::mapSearch, args.toArray());
     }
@@ -762,14 +803,6 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
         if (values == null || values.isEmpty()) return "[]";
         return values.stream().map(value -> "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\"")
                 .reduce((left, right) -> left + "," + right).map(value -> "[" + value + "]").orElse("[]");
-    }
-
-    private String scopeClause(List<UUID> scopeIds, String documentColumn, String versionColumn) {
-        if (scopeIds == null || scopeIds.isEmpty()) return "";
-        var placeholders = String.join(",", java.util.Collections.nCopies(scopeIds.size(), "?"));
-        return " AND EXISTS (SELECT 1 FROM ai.ai_scope_resource sr WHERE sr.scope_id IN (" + placeholders + ")"
-                + " AND ((sr.resource_type = 'KNOWLEDGE_DOCUMENT' AND sr.resource_id = " + documentColumn + ")"
-                + " OR (sr.resource_type = 'KNOWLEDGE_VERSION' AND sr.resource_id = " + versionColumn + ")))\n";
     }
 
     private String categoryClause(List<UUID> categoryIds) {

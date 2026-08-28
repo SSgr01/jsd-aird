@@ -90,6 +90,16 @@ public class KnowledgeGovernanceController {
                 new KnowledgeGovernanceService.RevisionCommand(request.basePublicationId())));
     }
 
+    @PostMapping("/documents/{documentId}/rebuild-index")
+    public ApiResponse<KnowledgeGovernanceService.IndexBuildView> rebuildIndex(@PathVariable UUID documentId) {
+        return success(service.rebuildPublishedIndex(documentId));
+    }
+
+    @PostMapping("/rebuild-index")
+    public ApiResponse<KnowledgeGovernanceService.BulkIndexBuildView> rebuildAllIndexes() {
+        return success(service.rebuildAllPublishedIndexes());
+    }
+
     @PostMapping("/documents/{documentId}/versions/{versionId}/reject")
     public ApiResponse<Void> reject(@PathVariable UUID documentId, @PathVariable UUID versionId,
                                     @Valid @RequestBody RejectRequest request) {

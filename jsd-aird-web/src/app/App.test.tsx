@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import type * as ReactRouterDom from 'react-router-dom';
 
 import { App } from '@/app/App';
@@ -43,6 +43,9 @@ describe('App', () => {
     const asyncRenderOptions = { timeout: 5000 };
     expect((await screen.findAllByText('模板上传', undefined, asyncRenderOptions)).length).toBeGreaterThan(0);
     expect(await screen.findByText('生产单管理', undefined, asyncRenderOptions)).toBeInTheDocument();
+    const globalSearch = screen.getByRole('textbox', { name: '全局搜索' });
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
+    expect(globalSearch).toHaveFocus();
     // ProLayout schedules a short tooltip state update when the shell mounts.
     // Let that update settle before the test environment tears down its window.
     await act(async () => {

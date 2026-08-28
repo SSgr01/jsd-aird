@@ -25,6 +25,7 @@ import { buildExperimentSnapshot, parseExperimentSnapshot } from '@/features/exp
 import type { EditorHandle } from '@/features/template-workspace/types';
 import {
   actExperiment,
+  createRevision,
   getExperiment,
   listVersions,
   rollbackVersion,
@@ -74,7 +75,7 @@ export function ExperimentWorkspacePage() {
   const location = useLocation();
   const returnTo = typeof location.state?.returnTo === 'string' ? location.state.returnTo : '/experiments/list';
   const goBack = () => navigate(returnTo);
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const editorRef = useRef<EditorHandle>(null);
   const [detail, setDetail] = useState<ExperimentDetail>();
   const [snapshot, setSnapshot] = useState<Record<string, unknown>>();
@@ -177,6 +178,26 @@ export function ExperimentWorkspacePage() {
     }
   };
 
+  const reviseCompletedExperiment = () => {
+    if (!detail || detail.summary.status !== 'COMPLETED') return;
+    modal.confirm({
+      title: '创建修订版本？',
+      content: '当前已完成版本会永久保留；系统将复制其内容，创建一个新的草稿版本供修改。',
+      okText: '创建修订',
+      cancelText: '取消',
+      onOk: async () => {
+        setBusy(true);
+        try {
+          await createRevision(id, detail.summary.revision, '修改已完成实验');
+          void message.success('已创建修订草稿，原完成版本未改变');
+          await load();
+        } finally {
+          setBusy(false);
+        }
+      },
+    });
+  };
+
   const exportRecord = async () => {
     if (!detail) return;
     setExporting(true);
@@ -239,6 +260,9 @@ export function ExperimentWorkspacePage() {
         <Space wrap>
           <SaveStateBadge state={saveState} />
           <Button className="workspace-export-button" icon={<DownloadOutlined />} loading={exporting} onClick={() => void exportRecord()}>导出</Button>
+          {status === 'COMPLETED' && (
+            <Button loading={busy} onClick={reviseCompletedExperiment}>创建修订</Button>
+          )}
           <Button
             className="workspace-save-button"
             icon={<SaveOutlined />}

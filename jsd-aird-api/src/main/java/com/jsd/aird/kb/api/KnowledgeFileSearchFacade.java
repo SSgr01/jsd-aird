@@ -8,13 +8,12 @@ import java.util.UUID;
 
 public interface KnowledgeFileSearchFacade {
 
-    List<FileMatch> searchFiles(UUID organizationId, String query, List<UUID> scopeIds,
-                                List<UUID> categoryIds, int limit);
+    List<FileMatch> searchFiles(UUID organizationId, String query, List<UUID> categoryIds, int limit);
 
-    default List<FileMatch> searchFiles(UUID organizationId, String query, List<UUID> scopeIds,
-                                        List<UUID> categoryIds, Set<UUID> allowedDocumentIds, int limit) {
+    default List<FileMatch> searchFiles(UUID organizationId, String query, List<UUID> categoryIds,
+                                        Set<UUID> allowedDocumentIds, int limit) {
         if (allowedDocumentIds != null && allowedDocumentIds.isEmpty()) return List.of();
-        return searchFiles(organizationId, query, scopeIds, categoryIds, limit).stream()
+        return searchFiles(organizationId, query, categoryIds, limit).stream()
                 .filter(file -> allowedDocumentIds == null || allowedDocumentIds.contains(file.logicalDocumentId()))
                 .toList();
     }

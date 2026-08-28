@@ -1,4 +1,5 @@
 import type { ApiResponse } from '@/types/api';
+import { appEnv } from '@/app/config/env';
 import { ensureCsrfToken, httpClient, refreshCsrfToken } from '@/services/http/client';
 import { generateUUID } from '@/utils/uuid';
 
@@ -41,25 +42,14 @@ export interface AssistantResponse {
   conversationId: string;
   answer: string;
   citations: AssistantCitation[];
-  warnings: string[];
   usedWebSearch: boolean;
   traceId: string;
   usage: { inputTokens: number; outputTokens: number; totalTokens: number };
-  retrievalTrace?: { fallbacks?: string[]; strategy?: string; rerankerStatus?: string };
-}
-
-export interface AiScope {
-  id: string;
-  scopeType: string;
-  externalId: string;
-  name: string;
-  status: string;
-  metadata?: Record<string, unknown>;
 }
 
 export interface ConversationView {
   conversationId: string;
-  messages: Array<{ role: string; content: string; citations?: AssistantCitation[]; warnings?: string[] }>;
+  messages: Array<{ role: string; content: string; citations?: AssistantCitation[] }>;
 }
 
 export interface ConversationMeta {
@@ -67,7 +57,6 @@ export interface ConversationMeta {
   title: string;
   summary?: string;
   titleSource?: string;
-  scopeSnapshot?: string[];
 }
 
 export interface FileSearchResult {
@@ -97,21 +86,12 @@ export function parseAssistantSseData(data: string): unknown {
   try {
     return JSON.parse(data);
   } catch {
-    // Keep compatibility with older servers that sent String warnings as
-    // unquoted SSE data.  A malformed stage payload must not break the stream.
+    // A malformed optional event payload must not break the stream.
     return data;
   }
 }
 
 export const assistantApi = {
-  async ask(question: string, conversationId?: string) {
-    const response = await httpClient.post<ApiResponse<AssistantResponse>>('/api/v1/assistant/qa', { question, conversationId });
-    return response.data.data;
-  },
-  async scopes() {
-    const response = await httpClient.get<ApiResponse<AiScope[]>>('/api/v1/assistant/scopes');
-    return response.data.data;
-  },
   async conversation(id: string) {
     const response = await httpClient.get<ApiResponse<ConversationView>>(`/api/v1/assistant/conversations/${id}`);
     return response.data.data;
@@ -126,22 +106,20 @@ export const assistantApi = {
   async deleteConversation(id: string) {
     await httpClient.delete(`/api/v1/assistant/conversations/${id}`);
   },
-  async fileSearch(input: { query: string; aiOnly?: boolean; limit?: number; scopeIds?: string[]; scopeTypes?: string[]; knowledgeCategoryIds?: string[]; dataCategoryIds?: string[]; projectId?: string }) {
+  async fileSearch(input: { query: string; aiOnly?: boolean; limit?: number; knowledgeCategoryIds?: string[]; dataCategoryIds?: string[]; projectId?: string }) {
     const response = await httpClient.post<ApiResponse<FileSearchResult>>('/api/v1/search/files', input);
     return response.data.data;
   },
   async stream(
     question: string,
     conversationId: string | undefined,
-    scopeIds: string[],
-    scopeTypes: string[],
     knowledgeCategoryIds: string[] = [],
     dataCategoryIds: string[] = [],
     onToken: (token: string) => void,
     onDone: (response: AssistantResponse) => void,
     onStage?: (event: string, data: unknown) => void,
   ) {
-    const requestStream = async (csrfToken: string) => fetch(`${import.meta.env.VITE_API_BASE_URL || ''}/api/v1/assistant/qa/stream`, {
+    const requestStream = async (csrfToken: string) => fetch(`${appEnv.apiBaseUrl}/api/v1/assistant/qa/stream`, {
       method: 'POST',
       credentials: 'include',
       headers: {
@@ -150,7 +128,7 @@ export const assistantApi = {
         'X-Request-Id': generateUUID(),
         'X-XSRF-TOKEN': csrfToken,
       },
-      body: JSON.stringify({ question, conversationId, scopeIds, scopeTypes, knowledgeCategoryIds, dataCategoryIds }),
+      body: JSON.stringify({ question, conversationId, knowledgeCategoryIds, dataCategoryIds }),
     });
     let csrfToken = await ensureCsrfToken();
     let response = await requestStream(csrfToken);
@@ -217,7 +195,7 @@ export const assistantApi = {
           if (token) onToken(token);
         }
         if (event === 'done') onDone(parsed as AssistantResponse);
-        if (event !== 'token' && event !== 'done') onStage?.(event, parsed);
+        if (event === 'thinking') onStage?.(event, parsed);
         event = 'message';
       }
     };

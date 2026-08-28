@@ -13,6 +13,7 @@ interface FilePreviewModalProps {
   open: boolean;
   file?: FilePreviewDescriptor;
   onClose: () => void;
+  showSpreadsheetMerges?: boolean;
 }
 
 interface SpreadsheetSheet {
@@ -26,7 +27,7 @@ interface SpreadsheetRow {
   cells: SpreadsheetCell[];
 }
 
-export function FilePreviewModal({ open, file, onClose }: FilePreviewModalProps) {
+export function FilePreviewModal({ open, file, onClose, showSpreadsheetMerges = true }: FilePreviewModalProps) {
   const [mode, setMode] = useState<FilePreviewMode>('unsupported');
   const [blob, setBlob] = useState<Blob>();
   const [objectUrl, setObjectUrl] = useState<string>();
@@ -192,7 +193,7 @@ export function FilePreviewModal({ open, file, onClose }: FilePreviewModalProps)
         <div className="file-preview-spreadsheet">
           <Tabs activeKey={activeSheet} onChange={setActiveSheet} items={sheets.map((sheet) => ({ key: sheet.name, label: sheet.name }))} />
           {currentSheet?.preview.truncated && <Tag color="warning">仅展示前 200 行、前 50 列</Tag>}
-          {currentSheet?.preview.merges.length ? <div className="file-preview-merges"><Typography.Text type="secondary">已识别合并单元格</Typography.Text><div>{currentSheet.preview.merges.map((merge) => <Tag key={merge.range}>{merge.range}{merge.clipped ? '（预览内裁剪）' : ''}</Tag>)}</div></div> : null}
+          {showSpreadsheetMerges && currentSheet?.preview.merges.length ? <div className="file-preview-merges"><Typography.Text type="secondary">已识别合并单元格</Typography.Text><div>{currentSheet.preview.merges.map((merge) => <Tag key={merge.range}>{merge.range}{merge.clipped ? '（预览内裁剪）' : ''}</Tag>)}</div></div> : null}
           <Table<SpreadsheetRow> size="small" bordered pagination={false} scroll={{ x: 'max-content', y: '50vh' }} columns={tableColumns} dataSource={tableRows} />
         </div>
       ) : (

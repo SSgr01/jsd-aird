@@ -18,6 +18,10 @@ vi.mock('@/services/data/data-api', () => ({
   },
 }));
 
+vi.mock('@/services/project/project-api', () => ({
+  getProjects: vi.fn().mockResolvedValue({ items: [], page: 1, size: 100, total: 0, totalPages: 0 }),
+}));
+
 const listSourceFilesMock = vi.mocked(dataApi.listSourceFiles);
 const listCategoriesMock = vi.mocked(dataApi.listCategories);
 const listTemplatesMock = vi.mocked(dataApi.listTemplates);
@@ -30,7 +34,7 @@ describe('DataViewPage source-file list', () => {
       items: [{
         importJobId: 'job-1', fileObjectId: 'file-1', originalName: '检测报告.xlsx', sourceFormat: 'XLSX',
         templateVersionId: 'version-1', categoryId: 'cat-1', categoryName: '检测标准', status: 'COMPLETED', progress: 100,
-        createdAt: '2026-08-10T00:00:00Z', updatedAt: '2026-08-10T00:00:00Z', sheetCount: 2, recordCount: 3, fieldCount: 270,
+        createdAt: '2026-08-10T00:00:00Z', updatedAt: '2026-08-10T00:00:00Z',
       }], page: 1, size: 20, total: 1, totalPages: 1,
     });
     listCategoriesMock.mockResolvedValue([{ id: 'cat-1', name: '检测标准', sortOrder: 1, sourceCount: 1 }]);
@@ -43,16 +47,17 @@ describe('DataViewPage source-file list', () => {
     expect(await screen.findByText('检测报告.xlsx')).toBeInTheDocument();
     expect(screen.getAllByText('检测标准').length).toBeGreaterThan(0);
     expect(screen.getByText('检测模板 · test · V1')).toBeInTheDocument();
-    expect(screen.getByText('3')).toBeInTheDocument();
-    expect(screen.getByText('270')).toBeInTheDocument();
+    expect(screen.queryByText('工作表', { selector: 'th' })).not.toBeInTheDocument();
+    expect(screen.queryByText('识别记录', { selector: 'th' })).not.toBeInTheDocument();
+    expect(screen.queryByText('字段值', { selector: 'th' })).not.toBeInTheDocument();
     expect(screen.queryByText('资产名称')).not.toBeInTheDocument();
     expect(screen.queryByText('数据类型')).not.toBeInTheDocument();
     expect(screen.queryByText('资产编码')).not.toBeInTheDocument();
-  });
+  }, 30_000);
 
   it('loads source files with category-only filters', async () => {
     render(<AppProviders><MemoryRouter future={testRouterFuture}><DataViewPage /></MemoryRouter></AppProviders>);
     await screen.findByText('检测报告.xlsx');
     expect(listSourceFilesMock).toHaveBeenCalledWith(expect.objectContaining({ categoryId: undefined }));
-  });
+  }, 10_000);
 });

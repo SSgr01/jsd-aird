@@ -21,7 +21,13 @@ public interface DocumentParser {
     }
 
     record ParseContext(UUID organizationId, UUID actorId, UUID sourceFileId,
-                        String contentType, long size, OcrMode ocrMode, boolean allowAgentFallback) {
+                        String contentType, long size, OcrMode ocrMode, boolean allowAgentFallback,
+                        UUID documentId, UUID documentVersionId) {
+        public ParseContext(UUID organizationId, UUID actorId, UUID sourceFileId,
+                            String contentType, long size, OcrMode ocrMode, boolean allowAgentFallback) {
+            this(organizationId, actorId, sourceFileId, contentType, size, ocrMode, allowAgentFallback, null, null);
+        }
+
         public ParseContext {
             ocrMode = ocrMode == null ? OcrMode.AUTO : ocrMode;
         }

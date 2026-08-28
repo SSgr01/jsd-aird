@@ -1,4 +1,10 @@
-import { EyeOutlined, LineChartOutlined, SearchOutlined } from '@ant-design/icons';
+import {
+  ArrowLeftOutlined,
+  EyeOutlined,
+  FileImageOutlined,
+  LineChartOutlined,
+  SearchOutlined,
+} from '@ant-design/icons';
 import {
   Alert,
   App,
@@ -14,7 +20,7 @@ import {
   Typography,
 } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 
 import {
   AiConversationWorkspace,
@@ -48,6 +54,11 @@ const resultFieldLabels: Record<string, string> = {
   candidateComponent: '候选成分',
   functionalGroup: '可能官能团',
   overlapReason: '叠加原因',
+};
+const evidenceSufficiencyLabels: Record<string, string> = {
+  SUFFICIENT: '证据较充分',
+  PARTIALLY_SUFFICIENT: '证据部分充分',
+  INSUFFICIENT: '证据不足',
 };
 
 function printValue(value: unknown) {
@@ -154,9 +165,7 @@ function PeakMappingTable({ value }: { value: unknown }) {
   if (!isUnknownArray(value)) return null;
   const rows = value.filter(isRecord);
   if (!rows.length) return null;
-  const cell = (row: Record<string, unknown>, key: string) => (
-    <StructuredValue value={row[key]} />
-  );
+  const cell = (row: Record<string, unknown>, key: string) => <StructuredValue value={row[key]} />;
   return (
     <section className="spectrum-result-mapping">
       <div className="spectrum-result-section-heading">
@@ -219,7 +228,8 @@ function AssistantResult({
   const partial = result.analysisStatus === 'PARTIAL';
   const hasReferenceAnalysis = Boolean(result.referenceAvailability);
   const hasSinglePeakReferences = result.referenceAvailability?.hasSinglePeakReferences === true;
-  const mappingStatement = result.referenceAvailability?.statement ||
+  const mappingStatement =
+    result.referenceAvailability?.statement ||
     '当前材料不足以建立样品峰与单峰参考峰的映射，只能描述谱形相似性。';
   const summaryObject = parseStructuredObject(result.answerMarkdown);
   const detailSections = [
@@ -231,44 +241,54 @@ function AssistantResult({
     [
       'conflicts',
       '冲突点与不确定性',
-      Array.isArray(result.conflicts) && result.conflicts.length ? result.conflicts : result.uncertainty,
+      Array.isArray(result.conflicts) && result.conflicts.length
+        ? result.conflicts
+        : result.uncertainty,
     ],
     ['suggestedValidationExperiments', '建议验证实验', result.suggestedValidationExperiments],
     ['evidence', '分析依据', result.evidence],
     ['testConditionLimitations', '测试条件限制', result.testConditionLimitations],
   ].filter(([, , value]) => isUnknownArray(value) && value.length) as [string, string, unknown][];
   return (
-    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+    <div className="spectrum-result-shell">
       {failed ? (
         <Alert
           type="error"
           showIcon
           message="图谱 AI 分析失败"
-          description={result.errorMessage || result.answerMarkdown || '模型未返回有效分析结果，请重新分析。'}
+          description={
+            result.errorMessage || result.answerMarkdown || '模型未返回有效分析结果，请重新分析。'
+          }
         />
       ) : null}
       {!failed ? (
         <div className="spectrum-result-status">
           <div className="spectrum-result-status-main">
-            <div>
-              <Typography.Text strong>AI图谱分析</Typography.Text>
-              <Typography.Paragraph type="secondary">
-                {partial ? '部分结果已按证据边界过滤' : '分析已完成，结论仅供专业人员复核'}
-              </Typography.Paragraph>
+            <div className="spectrum-result-status-copy">
+              <span className="spectrum-result-status-icon" aria-hidden="true">
+                <LineChartOutlined />
+              </span>
+              <div>
+                <Typography.Text strong>图谱分析结果</Typography.Text>
+                <Typography.Paragraph type="secondary">
+                  {partial ? '部分结果已按证据边界过滤' : '分析已完成，结论仅供专业人员复核'}
+                </Typography.Paragraph>
+              </div>
             </div>
             <Space wrap>
               <Tag color={partial ? 'orange' : 'green'}>{partial ? '部分结果' : '已完成'}</Tag>
               <Tag color="gold">待专业人员复核</Tag>
               {confidence && <Tag color="blue">置信度：{confidence}</Tag>}
               {result.evidenceSufficiency && (
-                <Tag>{result.evidenceSufficiency.replaceAll('_', ' ')}</Tag>
+                <Tag>
+                  {evidenceSufficiencyLabels[result.evidenceSufficiency] ||
+                    result.evidenceSufficiency.replaceAll('_', ' ')}
+                </Tag>
               )}
             </Space>
           </div>
           {hasReferenceAnalysis && hasSinglePeakReferences ? (
-            <Typography.Text type="secondary">
-              {mappingStatement}
-            </Typography.Text>
+            <Typography.Text type="secondary">{mappingStatement}</Typography.Text>
           ) : null}
         </div>
       ) : null}
@@ -297,12 +317,16 @@ function AssistantResult({
           <div className="spectrum-result-section-heading">
             <div>
               <Typography.Text strong>AI建议复核重点</Typography.Text>
-              <Typography.Text type="secondary">这些是待实验或专业人员确认的事项，不代表已完成复核</Typography.Text>
+              <Typography.Text type="secondary">
+                这些是待实验或专业人员确认的事项，不代表已完成复核
+              </Typography.Text>
             </div>
           </div>
           <ul>
             {result.aiReviewFocus.map((item, index) => (
-              <li key={`focus-${index}`}><StructuredValue value={item} /></li>
+              <li key={`focus-${index}`}>
+                <StructuredValue value={item} />
+              </li>
             ))}
           </ul>
         </section>
@@ -310,6 +334,7 @@ function AssistantResult({
       {!failed && <PeakMappingTable value={result.peakMappings} />}
       {!failed && detailSections.length ? (
         <Collapse
+          className="spectrum-result-details"
           ghost
           items={detailSections.map(([key, title, value]) => ({
             key,
@@ -319,34 +344,44 @@ function AssistantResult({
         />
       ) : null}
       {result.conclusionBoundary && (
-        <Typography.Text type="secondary">结论边界：{result.conclusionBoundary}</Typography.Text>
+        <Typography.Text type="secondary" className="spectrum-result-boundary">
+          结论边界：{result.conclusionBoundary}
+        </Typography.Text>
       )}
       {citations.length ? (
-        <div>
+        <div className="spectrum-result-citations">
           <Typography.Text strong>依据图谱</Typography.Text>
-          <div style={{ marginTop: 6 }}>
-            <Space wrap>
-              {citations.map((item) => (
-                <Tag
-                  key={`${item.chartId}-${item.page}`}
-                  icon={<EyeOutlined />}
-                  color="geekblue"
+          <div className="spectrum-result-citation-list">
+            {citations.map((item) => (
+              <div className="spectrum-result-citation-row" key={`${item.chartId}-${item.page}`}>
+                <FileImageOutlined aria-hidden="true" />
+                <button
+                  type="button"
+                  className="spectrum-result-citation-title"
                   onClick={() => onPreview(item.chartId)}
-                  style={{ cursor: 'pointer' }}
                 >
                   {item.title} · 第 {item.page} 页
-                </Tag>
-              ))}
-            </Space>
+                </button>
+                <Button
+                  size="small"
+                  type="text"
+                  icon={<EyeOutlined />}
+                  onClick={() => onPreview(item.chartId)}
+                >
+                  预览
+                </Button>
+              </div>
+            ))}
           </div>
         </div>
       ) : null}
-    </Space>
+    </div>
   );
 }
 
 export function SpectrumChatPage() {
   const { message: toast } = App.useApp();
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [categories, setCategories] = useState<SpectrumCategory[]>([]);
   const [charts, setCharts] = useState<SpectrumChart[]>([]);
@@ -497,33 +532,45 @@ export function SpectrumChatPage() {
   const scopeContent = (
     <div className="spectrum-chat-scope-content">
       <Input
+        className="spectrum-chat-scope-search"
         allowClear
         prefix={<SearchOutlined />}
         placeholder="搜索图谱、样品、批号"
         value={scopeKeyword}
         onChange={(event) => setScopeKeyword(event.target.value)}
       />
-      <Typography.Text type="secondary">
-        已选择 {selectedCharts.length} 张图谱（可多选）
-      </Typography.Text>
+      <div className="spectrum-chat-scope-summary">
+        <span>当前引用</span>
+        <strong>{selectedCharts.length}</strong>
+        <Typography.Text type="secondary">张图谱，可跨分类多选</Typography.Text>
+      </div>
       {loading ? (
-        <Spin />
+        <div className="spectrum-chat-scope-state">
+          <Spin size="small" />
+          <Typography.Text type="secondary">正在加载图谱</Typography.Text>
+        </div>
       ) : chartsByCategory.length ? (
         <Collapse
+          className="spectrum-chat-category-list"
           ghost
           items={chartsByCategory.map(({ category, charts: categoryCharts }) => ({
             key: category.id,
             label: (
-              <Space>
-                <LineChartOutlined />
-                {category.name}
-                <Tag>{categoryCharts.length}</Tag>
-              </Space>
+              <span className="spectrum-chat-category-label">
+                <span>
+                  <LineChartOutlined />
+                  {category.name}
+                </span>
+                <b>{categoryCharts.length}</b>
+              </span>
             ),
             children: (
-              <Space direction="vertical" style={{ width: '100%' }}>
+              <div className="spectrum-chat-chart-list">
                 {categoryCharts.map((chart) => (
-                  <div key={chart.id} className="spectrum-chat-chart-option">
+                  <div
+                    key={chart.id}
+                    className={`spectrum-chat-chart-option${selectedCharts.includes(chart.id) ? ' is-selected' : ''}`}
+                  >
                     <Checkbox
                       checked={selectedCharts.includes(chart.id)}
                       onChange={(event) =>
@@ -534,49 +581,59 @@ export function SpectrumChatPage() {
                         )
                       }
                     >
-                      <Typography.Text ellipsis={{ tooltip: chart.title }}>
-                        {chart.title}
-                      </Typography.Text>
+                      <span className="spectrum-chat-chart-copy">
+                        <Typography.Text ellipsis={{ tooltip: chart.title }}>
+                          {chart.title}
+                        </Typography.Text>
+                        <Typography.Text
+                          type="secondary"
+                          ellipsis={{ tooltip: chart.originalName }}
+                        >
+                          {chart.originalName}
+                        </Typography.Text>
+                      </span>
                     </Checkbox>
                     <Button type="link" size="small" onClick={() => void openPagePicker(chart)}>
                       选页
                     </Button>
                   </div>
                 ))}
-              </Space>
+              </div>
             ),
           }))}
         />
       ) : (
-        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无可选图谱，请先上传" />
+        <div className="spectrum-chat-scope-state">
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无可选图谱，请先上传" />
+        </div>
       )}
     </div>
   );
 
-  const composerTopContent = selectedChartItems.length ? (
+  const composerTopContent = (
     <div className="spectrum-composer-selection" aria-label="已选择的图谱">
-      <Typography.Text className="spectrum-composer-selection-label">
-        本次分析图谱
-      </Typography.Text>
+      <Typography.Text className="spectrum-composer-selection-label">本次分析图谱</Typography.Text>
       <div className="spectrum-composer-selection-list">
-        {selectedChartItems.map((item) => (
-          <Tag
-            key={item.id}
-            closable
-            onClose={() =>
-              setSelectedCharts((current) => current.filter((id) => id !== item.id))
-            }
-            title={item.title}
-          >
-            {item.title}
-          </Tag>
-        ))}
+        {selectedChartItems.length ? (
+          selectedChartItems.map((item) => (
+            <Tag
+              key={item.id}
+              closable
+              onClose={() => setSelectedCharts((current) => current.filter((id) => id !== item.id))}
+              title={item.title}
+            >
+              {item.title}
+            </Tag>
+          ))
+        ) : (
+          <Typography.Text type="secondary">请先从左侧选择图谱</Typography.Text>
+        )}
       </div>
       <Typography.Text type="secondary" className="spectrum-composer-selection-count">
         {selectedChartItems.length} 张
       </Typography.Text>
     </div>
-  ) : null;
+  );
 
   const descriptor = (chart: SpectrumChart): FilePreviewDescriptor => ({
     fileName: chart.originalName,
@@ -621,9 +678,7 @@ export function SpectrumChatPage() {
           />
         ) : null
       ) : (
-        <Typography.Paragraph style={{ whiteSpace: 'pre-wrap' }}>
-          {item.content}
-        </Typography.Paragraph>
+        <Typography.Paragraph className="ai-message-text">{item.content}</Typography.Paragraph>
       ),
   }));
 
@@ -694,7 +749,10 @@ export function SpectrumChatPage() {
         setMessages(session.messages);
         setSessions(await spectrumApi.sessions());
         window.setTimeout(() => {
-          void spectrumApi.sessions().then(setSessions).catch(() => undefined);
+          void spectrumApi
+            .sessions()
+            .then(setSessions)
+            .catch(() => undefined);
         }, 1200);
         if (analysis.status === 'FAILED') setQuestion('');
       }
@@ -721,21 +779,47 @@ export function SpectrumChatPage() {
   ];
 
   return (
-    <>
+    <div className="business-page spectrum-chat-page">
+      <div className="page-heading">
+        <Button
+          type="text"
+          shape="circle"
+          className="assistant-page-back spectrum-page-back"
+          icon={<ArrowLeftOutlined />}
+          aria-label="返回上一页"
+          onClick={() => navigate(-1)}
+        />
+        <div className="spectrum-page-heading-copy">
+          <div className="spectrum-page-title-row">
+            <span className="spectrum-page-mark" aria-hidden="true">
+              <LineChartOutlined />
+            </span>
+            <Typography.Title level={2}>AI图谱分析</Typography.Title>
+          </div>
+          <Typography.Text type="secondary">
+            从图谱分类中选择文件，引用到 AI 对话中，自定义你的分析问题。
+          </Typography.Text>
+        </div>
+      </div>
       <AiConversationWorkspace
         conversations={conversationItems}
         activeConversationId={activeSessionId}
         messages={conversationMessages}
         scopeContent={scopeContent}
         composerTopContent={composerTopContent}
+        assistantLabel="AI图谱助手"
+        submitDisabled={!selectedCharts.length}
         scopeTitle="选择参与分析的图谱"
-        welcomeTitle="从图谱开始提问"
-        welcomeDescription="选择左侧图谱，输入问题后开始视觉观察和受控解释。"
+        welcomeTitle="开始图谱分析对话"
+        welcomeDescription="选择一个或多个图谱文件，再输入需要验证的分析问题。"
         scopeSummary={
-          <Typography.Text type="secondary">
-            图谱只作为视觉证据输入。AI
-            解释可能的特征峰、基团、候选成分、冲突点和验证建议，不直接给出确定配方。
-          </Typography.Text>
+          <div className="spectrum-welcome-boundary">
+            <LineChartOutlined aria-hidden="true" />
+            <Typography.Text type="secondary">
+              当前已选择 {selectedCharts.length} 张图谱。AI
+              仅在图谱证据边界内提供观察、候选解释和验证建议。
+            </Typography.Text>
+          </div>
         }
         pendingLabel={streamStage}
         welcomeContent={
@@ -790,6 +874,6 @@ export function SpectrumChatPage() {
         file={previewFile}
         onClose={() => setPreviewFile(undefined)}
       />
-    </>
+    </div>
   );
 }

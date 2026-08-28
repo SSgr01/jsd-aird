@@ -51,14 +51,14 @@ class JdbcKnowledgeRepositoryTest {
     }
 
     @Test
-    void keepsAnalyzerVersionsIsolatedAndExcludesParentsFromStatisticsAndEmbedding() {
+    void usesCurrentAnalyzerVersionAndExcludesParentsFromStatisticsAndEmbedding() {
         var jdbc = mock(JdbcTemplate.class);
         var repository = new JdbcKnowledgeRepository(jdbc);
 
         repository.bm25Search(UUID.randomUUID(), List.of(
-                new KnowledgeRepository.AnalyzedTerm("term-v1", "乙酸"),
-                new KnowledgeRepository.AnalyzedTerm("material-smartcn-v1", "乙酸乙酯")),
-                false, List.of(), List.of(), 10);
+                new KnowledgeRepository.AnalyzedTerm("material-smartcn-v2", "chemical"),
+                new KnowledgeRepository.AnalyzedTerm("material-smartcn-v2", "cacl2")),
+                false, List.of(), 10);
         repository.rebuildTermStats(UUID.randomUUID());
         repository.chunksForEmbedding(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID());
 
@@ -80,7 +80,7 @@ class JdbcKnowledgeRepositoryTest {
                                                    List<UUID> reviewIds, List<UUID> sourceIds,
                                                    List<KnowledgeRepository.TermFrequency> terms) {
         return new KnowledgeRepository.ChunkWrite(key, parent, role, number, 1, "paragraph", "内容", null,
-                role.equals("CHILD") ? 1 : 0, 1, "material-smartcn-v1", null, terms, List.of("参数"),
+                role.equals("CHILD") ? 1 : 0, 1, "material-smartcn-v2", null, terms, List.of("参数"),
                 reviewIds, sourceIds, "{\"kind\":\"page\"}", "[{\"kind\":\"page\"}]", "[]",
                 null, null, null, List.of(), null, null);
     }

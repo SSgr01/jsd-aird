@@ -196,6 +196,38 @@ public class KnowledgeGovernanceService {
         return new IndexBuildView(documentId, versionId, reviewRevisionId, "BUILDING");
     }
 
+    public IndexBuildView rebuildPublishedIndex(UUID documentId) {
+        var actor = ActorContext.required();
+        var publication = governance.currentPublication(actor.organizationId(), documentId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "当前发布不存在"));
+        var payload = objectMapper.createObjectNode()
+                .put("organizationId", actor.organizationId().toString())
+                .put("actorId", actor.userId().toString())
+                .put("documentId", documentId.toString())
+                .put("rebuildPublishedIndex", true);
+        async.enqueue(actor.organizationId(), "KB_REBUILD_PUBLISHED_INDEX", payload,
+                "kb-rebuild-published-index:" + documentId + ":" + System.currentTimeMillis(), 45);
+        audit(actor.organizationId(), actor.userId(), "KB_PUBLISHED_INDEX_REBUILD_QUEUED", documentId,
+                objectMapper.createObjectNode().put("publicationId", publication.id().toString()));
+        return new IndexBuildView(documentId, publication.versionId(), publication.reviewRevisionId(), "QUEUED");
+    }
+
+    public BulkIndexBuildView rebuildAllPublishedIndexes() {
+        var actor = ActorContext.required();
+        var documentCount = Math.toIntExact(knowledgeRepository.countDocuments(actor.organizationId(),
+                null, null, null, null, null, "ACTIVE", null));
+        var payload = objectMapper.createObjectNode()
+                .put("organizationId", actor.organizationId().toString())
+                .put("actorId", actor.userId().toString())
+                .put("rebuildAllPublishedIndexes", true);
+        async.enqueue(actor.organizationId(), "KB_REBUILD_PUBLISHED_INDEX", payload,
+                "kb-rebuild-all-published-indexes:" + System.currentTimeMillis(), 45);
+        audit(actor.organizationId(), actor.userId(), "KB_ALL_PUBLISHED_INDEXES_REBUILD_QUEUED",
+                actor.organizationId(),
+                objectMapper.createObjectNode().put("documentCount", documentCount));
+        return new BulkIndexBuildView(documentCount, "QUEUED");
+    }
+
     @Transactional
     public KnowledgeGovernanceRepository.ReviewView createRevision(UUID documentId, RevisionCommand command) {
         var actor = ActorContext.required();
@@ -566,5 +598,7 @@ public class KnowledgeGovernanceService {
                                      List<KnowledgeGovernanceRepository.RowState> rows,
                                      int rowOffset, int rowLimit, int columnOffset, int columnLimit) { }
     public record IndexBuildView(UUID documentId, UUID versionId, UUID reviewRevisionId, String status) { }
+
+    public record BulkIndexBuildView(int documentCount, String status) { }
     public record BatchResult(UUID documentId, boolean success, String errorCode, String message) { }
 }

@@ -17,6 +17,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.kb.application.port.KnowledgeGovernanceRepository;
+import com.jsd.aird.kb.domain.TechnicalTextNormalizer;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
 import org.springframework.stereotype.Component;
@@ -30,11 +31,6 @@ public final class BlockAwareChunker {
     public static final int MAX_TOKENS = 1_200;
     public static final int OVERLAP_TOKENS = 100;
     public static final int HARD_LIMIT_TOKENS = 8_192;
-
-    private static final Set<String> FIELD_TERMS = Set.of(
-            "型号", "产品编号", "批号", "名称", "材料", "成分", "粘度", "黏度", "固含", "固体含量", "官能度",
-            "温度", "固化温度", "固化能量", "波长", "拉伸强度", "断裂伸长率", "附着力", "密度", "用途", "颜色"
-    );
 
     private final ObjectMapper mapper;
 
@@ -90,27 +86,32 @@ public final class BlockAwareChunker {
         for (var node : safe(nodes)) {
             if (!StringUtils.hasText(node.text()) || "heading".equals(node.nodeType())) continue;
             var searchable = !Boolean.FALSE.equals(node.attributes().get("searchable"));
+            var headingPath = sanitizeHeadingPath(node.headingPath());
             var anchors = node.sourceNodeKeys().stream().map(sourceByKey::get).filter(Objects::nonNull)
                     .map(KnowledgeGovernanceRepository.SourceNodeView::sourceAnchor).filter(Objects::nonNull).toList();
             var page = pages(anchors);
             var tableGroup = nullableString(node.attributes().get("tableGroup"));
             var tableRow = integer(node.attributes().get("tableRowIndex"));
-            initial.add(new Piece(node.text().strip(), node.nodeType(), node.headingPath(), node.reviewNodeId() == null
+            initial.add(new Piece(node.text().strip(), node.nodeType(), headingPath, node.reviewNodeId() == null
                     ? List.of() : List.of(node.reviewNodeId()), node.sourceNodeKeys(), anchors, page.first(), page.last(),
                     tableGroup, tableRow, node.attributes(), searchable, List.of()));
         }
-        return linkFieldValues(initial);
+        return linkFieldValues(normalizeReadingFlow(initial));
     }
 
     private ArrayList<Piece> linkFieldValues(List<Piece> source) {
         var result = new ArrayList<Piece>();
         for (var index = 0; index < source.size(); index++) {
             var field = source.get(index);
-            if (index + 1 >= source.size() || field.tableGroup() != null || !isField(field.text())) {
+            if (!field.searchable() || index + 1 >= source.size() || field.tableGroup() != null) {
                 result.add(field);
                 continue;
             }
             var value = source.get(index + 1);
+            if (!isFieldCandidate(field, value)) {
+                result.add(field);
+                continue;
+            }
             var confidence = spatialConfidence(field, value);
             if (confidence <= 0) {
                 result.add(field);
@@ -138,7 +139,8 @@ public final class BlockAwareChunker {
     private Piece merge(Piece field, Piece value, String text, JsonNode relation) {
         return new Piece(text, "fieldValue", field.headingPath(), union(field.reviewNodeIds(), value.reviewNodeIds()),
                 union(field.sourceNodeKeys(), value.sourceNodeKeys()), unionJson(field.anchors(), value.anchors()),
-                field.firstPage(), value.lastPage(), null, null, Map.of(), true, List.of(relation));
+                field.firstPage(), value.lastPage(), null, null, Map.of(),
+                field.searchable() && value.searchable(), List.of(relation));
     }
 
     private Piece largeTablePiece(KnowledgeGovernanceRepository.LargeTableRow row) {
@@ -159,6 +161,14 @@ public final class BlockAwareChunker {
         var currentTokens = 0;
         var hasNewContent = false;
         for (var piece : expanded) {
+            if (standalone(piece)) {
+                if (!current.isEmpty()) batches.add(List.copyOf(current));
+                current.clear();
+                currentTokens = 0;
+                batches.add(List.of(piece));
+                hasNewContent = false;
+                continue;
+            }
             var tokens = estimateTokens(piece.text());
             var discontinuous = !current.isEmpty() && !continuous(current.getLast(), piece);
             if (!current.isEmpty() && (discontinuous || currentTokens + tokens > maximumTokens)) {
@@ -340,8 +350,9 @@ public final class BlockAwareChunker {
             if (piece.lastPage() != null) lastPage = lastPage == null ? piece.lastPage() : Math.max(lastPage, piece.lastPage());
             types.add(piece.nodeType());
         }
+        var citationPage = primary != null && primary.has("page") ? primary.path("page").asInt() : firstPage;
         return new ChunkDraft(key, parentKey, role, title, headingPath, content, List.copyOf(reviews),
-                List.copyOf(sources), primary, List.copyOf(anchors), List.copyOf(relations), firstPage, lastPage,
+                List.copyOf(sources), primary, List.copyOf(anchors), List.copyOf(relations), citationPage, lastPage,
                 String.join(",", types), estimateTokens(content));
     }
 
@@ -373,7 +384,24 @@ public final class BlockAwareChunker {
     }
 
     private JsonNode primary(List<Piece> pieces) {
-        return pieces.stream().flatMap(value -> value.anchors().stream()).findFirst().orElse(null);
+        return pieces.stream().flatMap(value -> value.anchors().stream())
+                .max(Comparator.comparingDouble(this::anchorArea)).orElse(null);
+    }
+
+    private double anchorArea(JsonNode anchor) {
+        var coordinates = polygon(List.of(anchor));
+        if (coordinates.size() < 4) return 0;
+        var minX = Double.POSITIVE_INFINITY;
+        var maxX = Double.NEGATIVE_INFINITY;
+        var minY = Double.POSITIVE_INFINITY;
+        var maxY = Double.NEGATIVE_INFINITY;
+        for (var index = 0; index + 1 < coordinates.size(); index += 2) {
+            minX = Math.min(minX, coordinates.get(index));
+            maxX = Math.max(maxX, coordinates.get(index));
+            minY = Math.min(minY, coordinates.get(index + 1));
+            maxY = Math.max(maxY, coordinates.get(index + 1));
+        }
+        return Math.max(0, maxX - minX) * Math.max(0, maxY - minY);
     }
 
     private List<JsonNode> relations(List<Piece> pieces) {
@@ -422,9 +450,116 @@ public final class BlockAwareChunker {
         return List.copyOf(result);
     }
 
-    private boolean isField(String value) {
-        var normalized = value == null ? "" : value.strip().replaceAll("[：:]$", "");
-        return FIELD_TERMS.contains(normalized);
+    private boolean isFieldCandidate(Piece field, Piece value) {
+        var text = field.text() == null ? "" : field.text().strip();
+        if (!field.searchable() || !value.searchable() || text.isBlank() || text.length() > 40
+                || text.matches("(?s).*[。！？.!?].*")) return false;
+        var explicit = "field".equalsIgnoreCase(field.nodeType()) || "label".equalsIgnoreCase(field.nodeType())
+                || text.endsWith(":") || text.endsWith("：")
+                || Boolean.TRUE.equals(field.attributes().get("field"));
+        return explicit || horizontallyAligned(field, value);
+    }
+
+    private boolean horizontallyAligned(Piece field, Piece value) {
+        if (field.firstPage() == null || !Objects.equals(field.firstPage(), value.firstPage())) return false;
+        var left = polygon(field.anchors());
+        var right = polygon(value.anchors());
+        if (left.size() < 8 || right.size() < 8) return false;
+        var leftMidY = (left.get(1) + left.get(5)) / 2;
+        var rightMidY = (right.get(1) + right.get(5)) / 2;
+        return Math.abs(leftMidY - rightMidY) <= 0.035 && right.get(0) >= left.get(2) - 0.01;
+    }
+
+    private ArrayList<Piece> normalizeReadingFlow(List<Piece> source) {
+        var prepared = source.stream().map(piece -> isBoilerplate(piece) ? withSearchable(piece, false) : piece).toList();
+        var consumed = new boolean[prepared.size()];
+        var result = new ArrayList<Piece>();
+        for (var index = 0; index < prepared.size(); index++) {
+            if (consumed[index]) continue;
+            var current = prepared.get(index);
+            if (dangling(current)) {
+                for (var nextIndex = index + 1; nextIndex < Math.min(prepared.size(), index + 13); nextIndex++) {
+                    var candidate = prepared.get(nextIndex);
+                    if (!continuation(current, candidate)) continue;
+                    var safeGap = true;
+                    for (var gap = index + 1; gap < nextIndex; gap++) {
+                        if (prepared.get(gap).searchable() && !media(prepared.get(gap))) { safeGap = false; break; }
+                    }
+                    if (!safeGap) break;
+                    current = mergeContinuation(current, candidate);
+                    consumed[nextIndex] = true;
+                    break;
+                }
+            }
+            result.add(current);
+        }
+        return result;
+    }
+
+    private boolean standalone(Piece piece) {
+        return media(piece) || (TechnicalTextNormalizer.measurementCount(piece.text()) >= 2
+                && estimateTokens(piece.text()) >= TARGET_TOKENS / 2);
+    }
+
+    private boolean media(Piece piece) {
+        var type = piece.nodeType() == null ? "" : piece.nodeType().toLowerCase(java.util.Locale.ROOT);
+        return type.equals("image") || type.equals("chart") || type.equals("figure") || type.equals("imagecaption");
+    }
+
+    private boolean dangling(Piece piece) {
+        if (!piece.searchable() || media(piece) || piece.tableGroup() != null || !"paragraph".equals(piece.nodeType())) return false;
+        var text = piece.text().strip();
+        return text.length() >= 12 && !text.matches("(?s).*[。！？.!?;；:：)]$");
+    }
+
+    private boolean continuation(Piece left, Piece right) {
+        return right.searchable() && "paragraph".equals(right.nodeType())
+                && Objects.equals(left.headingPath(), right.headingPath())
+                && left.lastPage() != null && right.firstPage() != null
+                && right.firstPage() - left.lastPage() == 1;
+    }
+
+    private Piece mergeContinuation(Piece left, Piece right) {
+        return new Piece(left.text().stripTrailing() + " " + right.text().stripLeading(), "paragraph",
+                left.headingPath(), union(left.reviewNodeIds(), right.reviewNodeIds()),
+                union(left.sourceNodeKeys(), right.sourceNodeKeys()), unionJson(left.anchors(), right.anchors()),
+                left.firstPage(), right.lastPage(), null, null, left.attributes(), true,
+                unionJson(left.relations(), right.relations()));
+    }
+
+    private boolean isBoilerplate(Piece piece) {
+        var type = piece.nodeType() == null ? "" : piece.nodeType().toLowerCase(java.util.Locale.ROOT);
+        if (Set.of("header", "footer", "pagenumber").contains(type)) return true;
+        var path = String.join(" ", piece.headingPath()).strip().toLowerCase(java.util.Locale.ROOT);
+        if (path.matches(".*(?:references|bibliography|acknowledg(?:e)?ments?|supporting information|"
+                + "supplementary (?:information|material)|参考文献|致谢|补充材料).*")) return true;
+        var text = piece.text() == null ? "" : piece.text().strip();
+        if (text.isBlank()) return true;
+        var box = polygon(piece.anchors());
+        if (box.size() < 8) return false;
+        var xs = List.of(box.get(0), box.get(2), box.get(4), box.get(6));
+        var ys = List.of(box.get(1), box.get(3), box.get(5), box.get(7));
+        var minX = xs.stream().min(Double::compareTo).orElse(1d);
+        var minY = ys.stream().min(Double::compareTo).orElse(1d);
+        var maxY = ys.stream().max(Double::compareTo).orElse(0d);
+        var evidenceType = Set.of("footnote", "caption", "imagecaption", "tablecaption").contains(type);
+        if (!evidenceType && text.length() <= 160 && maxY > 0.955) return true;
+        if (!evidenceType && text.length() <= 120 && minY < 0.03 && looksLikePageFurniture(text)) return true;
+        return text.length() <= 60 && text.equals(text.toUpperCase(java.util.Locale.ROOT))
+                && (minX < 0.045 || minY < 0.05 || maxY > 0.95);
+    }
+
+    private List<String> sanitizeHeadingPath(List<String> path) {
+        return safe(path).stream().map(String::strip).filter(StringUtils::hasText)
+                .filter(value -> !looksLikePageFurniture(value)).toList();
+    }
+
+    private boolean looksLikePageFurniture(String value) {
+        if (value == null || value.isBlank()) return true;
+        var text = value.strip();
+        return text.matches("(?iu)^(?:https?://)?(?:www\\.)?[\\p{L}\\p{N}-]+(?:\\.[\\p{L}\\p{N}-]+)+(?:/\\S*)?$")
+                || text.matches("(?iu)^\\d{1,4}$")
+                || text.matches("(?iu)^(?:doi|issn)\\s*[:：].*$");
     }
 
     private boolean hasSentenceBoundary(String value) { return value.matches("(?s).*[。！？；.!?;\\n].*"); }
@@ -464,6 +599,11 @@ public final class BlockAwareChunker {
         return new Piece(text, source.nodeType(), source.headingPath(), source.reviewNodeIds(), source.sourceNodeKeys(),
                 source.anchors(), source.firstPage(), source.lastPage(), source.tableGroup(), source.tableRow(),
                 source.attributes(), source.searchable(), source.relations());
+    }
+    private Piece withSearchable(Piece source, boolean searchable) {
+        return new Piece(source.text(), source.nodeType(), source.headingPath(), source.reviewNodeIds(),
+                source.sourceNodeKeys(), source.anchors(), source.firstPage(), source.lastPage(), source.tableGroup(),
+                source.tableRow(), source.attributes(), searchable, source.relations());
     }
     private <T> List<T> union(List<T> left, List<T> right) {
         var result = new LinkedHashSet<T>(left); result.addAll(right); return List.copyOf(result);

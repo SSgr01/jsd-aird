@@ -32,7 +32,7 @@ public class RequestIdFilter extends OncePerRequestFilter {
             filterChain.doFilter(request, response);
         } finally {
             RequestIdHolder.clear();
+            RequestTimingHolder.clear();
         }
     }
 }
-

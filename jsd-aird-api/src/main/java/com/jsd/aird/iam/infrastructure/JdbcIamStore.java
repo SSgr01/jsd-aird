@@ -273,6 +273,17 @@ public class JdbcIamStore implements IamStore {
                 """, (rs, row) -> session(rs, row), hash(token)).stream().findFirst();
     }
 
+    @Override
+    public Optional<Session> activeSession(String token) {
+        return jdbc.query("""
+                SELECT s.id, s.organization_id, s.user_id, s.auth_version, s.issued_at, s.last_seen_at,
+                    s.expires_at, s.absolute_expires_at, u.username, u.status
+                FROM iam.login_session s JOIN iam.app_user u ON u.id = s.user_id
+                WHERE s.token_hash = ? AND s.revoked_at IS NULL
+                  AND u.status = 'ACTIVE' AND u.auth_version = s.auth_version
+                """, (rs, row) -> session(rs, row), hash(token)).stream().findFirst();
+    }
+
     public Session createSession(UUID organizationId, UUID userId, long authVersion, String tokenHash,
                                  Instant expiresAt, Instant absoluteExpiresAt, String ip, String userAgent,
                                  boolean rememberMe) {

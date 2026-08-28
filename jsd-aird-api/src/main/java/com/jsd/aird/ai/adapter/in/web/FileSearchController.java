@@ -30,11 +30,11 @@ public class FileSearchController {
     public ApiResponse<FileSearchService.FileSearchResponse> search(@Valid @RequestBody Request request) {
         var actor = ActorContext.required();
         return ResponseFactory.success(service.search(actor, new FileSearchService.SearchCommand(
-                request.query(), request.safeLimit(), request.scopeIds(), request.knowledgeCategoryIds(),
+                request.query(), request.safeLimit(), request.knowledgeCategoryIds(),
                 request.dataCategoryIds(), request.projectId())), RequestIdHolder.currentOrUnknown());
     }
 
-    public record Request(@NotBlank @Size(max = 1000) String query, int limit, List<UUID> scopeIds,
+    public record Request(@NotBlank @Size(max = 1000) String query, int limit,
                           List<UUID> knowledgeCategoryIds, List<UUID> dataCategoryIds, UUID projectId) {
         public int safeLimit() { return limit <= 0 ? 20 : Math.min(50, limit); }
     }

@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -13,9 +14,14 @@ import static org.mockito.Mockito.when;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.kb.api.KnowledgeEmbeddingFacade;
@@ -25,7 +31,6 @@ import com.jsd.aird.kb.application.port.KnowledgeRepository;
 import com.jsd.aird.kb.domain.DocumentParser;
 import com.jsd.aird.kb.domain.FileSafetyScanner;
 import com.jsd.aird.kb.domain.LexicalAnalyzer;
-import com.jsd.aird.kb.domain.TermAnalyzer;
 import com.jsd.aird.ops.application.port.AuditLogFacade;
 import com.jsd.aird.ops.application.port.FileStorageFacade;
 import com.jsd.aird.ops.application.port.OpsAsyncFacade;
@@ -36,13 +41,60 @@ import org.springframework.beans.factory.ObjectProvider;
 class KnowledgeServiceIndexingTest {
 
     @Test
+    void runsBm25AndEmbeddingVectorBranchesInParallelAndKeepsBothResults() throws Exception {
+        var repository = mock(KnowledgeRepository.class);
+        var embedding = mock(KnowledgeEmbeddingFacade.class);
+        @SuppressWarnings("unchecked")
+        var provider = (ObjectProvider<KnowledgeEmbeddingFacade>) mock(ObjectProvider.class);
+        when(provider.getIfAvailable()).thenReturn(embedding);
+        var bm25Started = new CountDownLatch(1);
+        var embeddingStarted = new CountDownLatch(1);
+        var bm25Row = new KnowledgeRepository.SearchRow(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
+                "BM25", "bm25.pdf", 1, "paragraph", "bm25", 1.0, 1);
+        var vectorRow = new KnowledgeRepository.SearchRow(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
+                "VECTOR", "vector.pdf", 1, "paragraph", "vector", 0.9, 2);
+        when(repository.bm25Search(any(), any(), anyBoolean(), any(), anyInt())).thenAnswer(ignored -> {
+            bm25Started.countDown();
+            assertThat(embeddingStarted.await(1, TimeUnit.SECONDS)).isTrue();
+            return List.of(bm25Row);
+        });
+        when(embedding.embedVectors(anyList())).thenAnswer(ignored -> {
+            embeddingStarted.countDown();
+            assertThat(bm25Started.await(1, TimeUnit.SECONDS)).isTrue();
+            return List.of(Optional.of("[0.1, 0.2]"));
+        });
+        when(repository.vectorSearch(any(), anyString(), anyBoolean(), any(), anyInt(), anyInt()))
+                .thenReturn(List.of(vectorRow));
+
+        var executor = Executors.newFixedThreadPool(2);
+        try {
+            var mapper = new ObjectMapper();
+            var service = new KnowledgeService(repository, mock(KnowledgeGovernanceRepository.class),
+                    mock(FileStorageFacade.class), mock(OpsAsyncFacade.class), mock(AuditLogFacade.class), mapper,
+                    new StructuredDocumentCodec(mapper), List.of(), mock(FileSafetyScanner.class), provider, List.of(),
+                    "embedding-model", 2, Duration.ofMinutes(15), new BlockAwareChunker(mapper), testAnalyzer(),
+                    executor, Duration.ofSeconds(2), Duration.ofSeconds(2));
+
+            var result = service.search(new KnowledgeSearchFacade.SearchRequest(UUID.randomUUID(), "parallel", false,
+                    30, List.of(), List.of()));
+
+            assertThat(result.hits()).extracting(KnowledgeSearchFacade.SearchHit::content)
+                    .contains("bm25", "vector");
+            assertThat(result.trace().queries()).extracting(KnowledgeSearchFacade.QueryTrace::channel)
+                    .contains("BM25", "EMBEDDING_BATCH", "VECTOR");
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
     void reportsBm25NoHitSeparatelyFromAnUnavailableIndex() {
         var repository = mock(KnowledgeRepository.class);
         var organizationId = UUID.randomUUID();
         var row = new KnowledgeRepository.SearchRow(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
                 "测试文档", "test.pdf", 1, "paragraph", "全文命中", 1.0, 1);
-        when(repository.bm25Search(any(), any(), anyBoolean(), any(), any(), anyInt())).thenReturn(List.of());
-        when(repository.fullTextSearch(any(), anyString(), anyBoolean(), any(), any(), anyInt()))
+        when(repository.bm25Search(any(), any(), anyBoolean(), any(), anyInt())).thenReturn(List.of());
+        when(repository.fullTextSearch(any(), anyString(), anyBoolean(), any(), anyInt()))
                 .thenReturn(List.of(row));
 
         var service = new KnowledgeService(repository, mock(KnowledgeGovernanceRepository.class),
@@ -52,7 +104,7 @@ class KnowledgeServiceIndexingTest {
                 Duration.ofMinutes(15), new BlockAwareChunker(new ObjectMapper()), testAnalyzer());
 
         var result = service.search(new KnowledgeSearchFacade.SearchRequest(organizationId, "无索引词", false,
-                5, List.of(), List.of(), List.of()));
+                5, List.of(), List.of()));
 
         assertThat(result.hits()).hasSize(1);
         assertThat(result.trace().fallbacks()).contains("BM25_EMPTY")
@@ -65,9 +117,9 @@ class KnowledgeServiceIndexingTest {
         var organizationId = UUID.randomUUID();
         var row = new KnowledgeRepository.SearchRow(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
                 "测试文档", "test.pdf", 1, "paragraph", "全文命中", 1.0, 1);
-        when(repository.bm25Search(any(), any(), anyBoolean(), any(), any(), anyInt()))
+        when(repository.bm25Search(any(), any(), anyBoolean(), any(), anyInt()))
                 .thenThrow(new IllegalStateException("index unavailable"));
-        when(repository.fullTextSearch(any(), anyString(), anyBoolean(), any(), any(), anyInt()))
+        when(repository.fullTextSearch(any(), anyString(), anyBoolean(), any(), anyInt()))
                 .thenReturn(List.of(row));
 
         var service = new KnowledgeService(repository, mock(KnowledgeGovernanceRepository.class),
@@ -77,7 +129,7 @@ class KnowledgeServiceIndexingTest {
                 Duration.ofMinutes(15), new BlockAwareChunker(new ObjectMapper()), testAnalyzer());
 
         var result = service.search(new KnowledgeSearchFacade.SearchRequest(organizationId, "索引异常", false,
-                5, List.of(), List.of(), List.of()));
+                5, List.of(), List.of()));
 
         assertThat(result.hits()).hasSize(1);
         assertThat(result.trace().fallbacks()).contains("BM25_ERROR")
@@ -94,7 +146,7 @@ class KnowledgeServiceIndexingTest {
                 "测试文档", "form.pdf", 1, "OCR-LINE", "TEST-TPL-丙烯酸树脂", 3.0, 16);
         var density = new KnowledgeRepository.SearchRow(UUID.randomUUID(), documentId, versionId,
                 "测试文档", "form.pdf", 1, "OCR-LINE", "密度", 2.0, 21);
-        when(repository.bm25Search(any(), any(), anyBoolean(), any(), any(), anyInt()))
+        when(repository.bm25Search(any(), any(), anyBoolean(), any(), anyInt()))
                 .thenReturn(List.of(sample, density));
         var service = new KnowledgeService(repository, mock(KnowledgeGovernanceRepository.class),
                 mock(FileStorageFacade.class), mock(OpsAsyncFacade.class), mock(AuditLogFacade.class),
@@ -181,25 +233,21 @@ class KnowledgeServiceIndexingTest {
     }
 
     private LexicalAnalyzer testAnalyzer() {
+        return simpleAnalyzer();
+    }
+
+    private LexicalAnalyzer simpleAnalyzer() {
         return new LexicalAnalyzer() {
-            @Override
-            public String version() {
-                return TermAnalyzer.VERSION;
-            }
-
-            @Override
-            public Analysis analyzeDocument(String text) {
-                return analyze(text);
-            }
-
-            @Override
-            public Analysis analyzeQuery(String text) {
-                return analyze(text);
-            }
-
+            @Override public String version() { return "material-smartcn-v2"; }
+            @Override public Analysis analyzeDocument(String text) { return analyze(text); }
+            @Override public Analysis analyzeQuery(String text) { return analyze(text); }
             private Analysis analyze(String text) {
-                var frequencies = TermAnalyzer.frequencies(text);
-                return new Analysis(frequencies, frequencies.values().stream().mapToInt(Integer::intValue).sum());
+                var frequencies = new LinkedHashMap<String, Integer>();
+                for (var term : text.toLowerCase(Locale.ROOT).split("[^\\p{L}\\p{N}-]+")) {
+                    if (!term.isBlank()) frequencies.merge(term, 1, Integer::sum);
+                }
+                return new Analysis(frequencies,
+                        frequencies.values().stream().mapToInt(Integer::intValue).sum());
             }
         };
     }

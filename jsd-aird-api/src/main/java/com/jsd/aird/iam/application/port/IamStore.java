@@ -82,6 +82,13 @@ public interface IamStore {
 
     Optional<Session> session(String token);
 
+    /**
+     * Looks up only a session whose user is still active and whose auth
+     * version matches the session snapshot.  This keeps request authentication
+     * to one database round trip without weakening revocation semantics.
+     */
+    Optional<Session> activeSession(String token);
+
     Session createSession(UUID organizationId, UUID userId, long authVersion, String tokenHash,
                           Instant expiresAt, Instant absoluteExpiresAt, String ip, String userAgent,
                           boolean rememberMe);

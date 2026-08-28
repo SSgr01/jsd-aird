@@ -201,7 +201,7 @@ export function DataUploadPage() {
       pagination={{ current: jobs.page, pageSize: jobs.size, total: jobs.total }}
       onPageChange={(page, pageSize) => setJobs((current) => ({ ...current, page, size: pageSize }))}
       />
-      <FilePreviewModal open={Boolean(previewFile)} file={previewFile} onClose={() => setPreviewFile(undefined)} />
+      <FilePreviewModal open={Boolean(previewFile)} file={previewFile} onClose={() => setPreviewFile(undefined)} showSpreadsheetMerges={false} />
     </>
   );
 }

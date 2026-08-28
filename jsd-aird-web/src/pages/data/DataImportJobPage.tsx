@@ -377,7 +377,7 @@ export function DataImportJobPage() {
               ) : null}
               {canUpdate && field.recordId ? <Button size="small" danger={!field.excluded} onClick={() => toggleExclusion(field)}>{field.excluded ? '恢复记录' : '排除记录'}</Button> : null}
             </Space>}
-            renderFieldMeta={(field) => <Space wrap size={4}><Tag>{fieldTypeLabel(field.valueType)}</Tag>{field.required ? <Tag color="orange">必填</Tag> : null}{field.identity ? <Tag color="blue">记录标识</Tag> : null}</Space>}
+            renderFieldMeta={(field) => <Space wrap size={4}><Tag>类型：{fieldTypeLabel(field.valueType)}</Tag>{field.required ? <Tag color="orange">必填</Tag> : null}{field.identity ? <Tag color="blue">记录标识</Tag> : null}</Space>}
           />
         ) : null}
         {activeTab === 'structure' ? (
@@ -411,7 +411,7 @@ export function DataImportJobPage() {
         <Space><CheckCircleOutlined className="data-success-icon" /><Typography.Text strong>导入已完成，来源文件已归档</Typography.Text><Button type="primary" onClick={() => navigate('/data/view')}>查看来源文件</Button></Space>
       ) : undefined}
     >
-      <FilePreviewModal open={Boolean(previewFile)} file={previewFile} onClose={() => setPreviewFile(undefined)} />
+      <FilePreviewModal open={Boolean(previewFile)} file={previewFile} onClose={() => setPreviewFile(undefined)} showSpreadsheetMerges={false} />
       <Modal open={relationOpen} title="维护数据任务关联项目" width={760} okText="保存" confirmLoading={saving} onCancel={() => setRelationOpen(false)} onOk={() => void saveProjectRelations()}><ProjectRelationPicker value={projectRelations} onChange={setProjectRelations} /></Modal>
       <Modal open={Boolean(componentAnchor)} title="调整本次导入的数据区域" okText="保存并重新读取" cancelText="取消" confirmLoading={saving} onOk={() => void saveComponentAnchor()} onCancel={() => setComponentAnchor(undefined)}>
         <Space direction="vertical" style={{ width: '100%' }}>

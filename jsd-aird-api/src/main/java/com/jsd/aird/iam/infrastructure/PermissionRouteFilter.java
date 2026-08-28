@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.iam.api.AuthorizationService;
 import com.jsd.aird.iam.api.PermissionCheck;
 import com.jsd.aird.platform.web.RequestIdHolder;
+import com.jsd.aird.platform.web.RequestTimingHolder;
 import com.jsd.aird.shared.api.ResponseFactory;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.security.Actor;
@@ -35,6 +36,11 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
     }
 
     @Override
+    protected boolean shouldNotFilterAsyncDispatch() {
+        return true;
+    }
+
+    @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws ServletException, IOException {
         if (developmentMode || isExcluded(request)) {
@@ -51,14 +57,22 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
             writeError(response, ApiErrorCode.PERMISSION_DENIED);
             return;
         }
+        var started = System.nanoTime();
         var decision = authorization.check(new PermissionCheck(actor.organizationId(), actor.userId(), permission.code(),
                 permission.resourceType(), resourceId(request), permission.operation()));
+        if (request.getRequestURI().startsWith("/api/v1/assistant/qa")) {
+            RequestTimingHolder.put("permissionCheckMs", elapsedMs(started));
+        }
         if (!decision.allowed()) {
             writeError(response, "ai.use".equals(permission.code())
                     ? ApiErrorCode.AI_PERMISSION_DENIED : ApiErrorCode.PERMISSION_DENIED);
             return;
         }
         chain.doFilter(request, response);
+    }
+
+    private long elapsedMs(long started) {
+        return Math.max(0, (System.nanoTime() - started) / 1_000_000);
     }
 
     private boolean isExcluded(HttpServletRequest request) {
@@ -92,6 +106,7 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
             if (path.contains("/submit-review")) return permission("experiment.submit", "EXPERIMENT", "WRITE");
             if (path.contains("/approve")) return permission("experiment.approve", "EXPERIMENT", "WRITE");
             if (path.contains("/return") || path.contains("/void")) return permission("experiment.review", "EXPERIMENT", "WRITE");
+            if (path.contains("/start")) return permission("experiment.update", "EXPERIMENT", "WRITE");
             if (method.equals("DELETE")) return permission("experiment.delete", "EXPERIMENT", "WRITE");
             if (path.startsWith("/api/v1/experiment-categories") && method.equals("POST"))
                 return permission("experiment.create", "EXPERIMENT", "WRITE");

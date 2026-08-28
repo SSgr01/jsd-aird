@@ -57,6 +57,77 @@ class BlockAwareChunkerTest {
     }
 
     @Test
+    void linksLayoutRowsLeftToRightWithoutStealingTheNextRowLabel() {
+        var appearance = source(1, List.of(0.154, 0.608, 0.235, 0.608, 0.235, 0.625, 0.154, 0.625));
+        var appearanceValue = source(1, List.of(0.497, 0.608, 0.630, 0.608, 0.630, 0.627, 0.497, 0.627));
+        var viscosity = source(1, List.of(0.154, 0.627, 0.342, 0.627, 0.342, 0.644, 0.154, 0.644));
+        var viscosityValue = source(1, List.of(0.499, 0.628, 0.593, 0.628, 0.593, 0.644, 0.499, 0.644));
+        var solids = source(1, List.of(0.154, 0.646, 0.356, 0.646, 0.356, 0.663, 0.154, 0.663));
+        var solidsValue = source(1, List.of(0.499, 0.646, 0.560, 0.646, 0.560, 0.663, 0.499, 0.663));
+        var path = List.of("技术指标");
+        var nodes = List.of(
+                node("外观", "paragraph", path, appearance.sourceNodeKey(), Map.of()),
+                node("乳白半透明液体", "paragraph", path, appearanceValue.sourceNodeKey(), Map.of()),
+                node("粘度 （25℃/cps）", "paragraph", path, viscosity.sourceNodeKey(), Map.of()),
+                node("400-700cps", "paragraph", path, viscosityValue.sourceNodeKey(), Map.of()),
+                node("固含 （120℃×1h）", "paragraph", path, solids.sourceNodeKey(), Map.of()),
+                node("85 %", "paragraph", path, solidsValue.sourceNodeKey(), Map.of()));
+
+        var children = chunker.chunk("UA-1117", nodes,
+                        List.of(appearance, appearanceValue, viscosity, viscosityValue, solids, solidsValue), List.of())
+                .stream().filter(value -> value.role().equals("CHILD")).toList();
+
+        assertThat(children).hasSize(1);
+        assertThat(children.getFirst().content())
+                .contains("外观：乳白半透明液体", "粘度 （25℃/cps）：400-700cps", "固含 （120℃×1h）：85 %")
+                .doesNotContain("乳白半透明液体：粘度", "400-700cps：固含");
+        assertThat(children.getFirst().relations()).hasSize(3);
+    }
+
+    @Test
+    void keepsShortMeasurementParagraphsWholeButAggregatesThem() {
+        var first = source(2, List.of(0.1, 0.2, 0.8, 0.2, 0.8, 0.3, 0.1, 0.3));
+        var second = source(2, List.of(0.1, 0.32, 0.8, 0.32, 0.8, 0.42, 0.1, 0.42));
+        var third = source(2, List.of(0.1, 0.44, 0.8, 0.44, 0.8, 0.54, 0.1, 0.54));
+        var path = List.of("实验方法");
+        var nodes = List.of(
+                node("溶液浓度为 2 mg/mL，温度为 25 ℃。", "paragraph", path, first.sourceNodeKey(), Map.of()),
+                node("交联液浓度为 1 mol/L，处理时间为 10 s。", "paragraph", path, second.sourceNodeKey(), Map.of()),
+                node("样品厚度为 2 mm，照射能量为 800 mJ/cm²。", "paragraph", path, third.sourceNodeKey(), Map.of()));
+
+        var children = chunker.chunk("通用实验文档", nodes, List.of(first, second, third), List.of()).stream()
+                .filter(value -> value.role().equals("CHILD")).toList();
+
+        assertThat(children).singleElement().satisfies(child -> {
+            assertThat(child.content()).contains("2 mg/mL", "1 mol/L", "800 mJ/cm²");
+            assertThat(child.sourceNodeKeys()).containsExactly(first.sourceNodeKey(), second.sourceNodeKey(),
+                    third.sourceNodeKey());
+        });
+    }
+
+    @Test
+    void doesNotResurrectFilteredPageFurnitureWhenLinkingFields() {
+        var body = source(2, List.of(0.10, 0.20, 0.80, 0.20, 0.80, 0.35, 0.10, 0.35));
+        var pageNumber = source(2, List.of(0.10, 0.970, 0.13, 0.970, 0.13, 0.985, 0.10, 0.985));
+        var footer = source(2, List.of(0.50, 0.970, 0.75, 0.970, 0.75, 0.985, 0.50, 0.985));
+        var path = List.of("Article");
+        var nodes = List.of(
+                node("The experiment used a stable cross-linking process.", "paragraph", path,
+                        body.sourceNodeKey(), Map.of()),
+                node("2", "paragraph", path, pageNumber.sourceNodeKey(), Map.of()),
+                node("wileyonlinelibrary.com", "paragraph", path, footer.sourceNodeKey(), Map.of()));
+
+        var children = chunker.chunk("Generic paper", nodes, List.of(body, pageNumber, footer), List.of()).stream()
+                .filter(value -> value.role().equals("CHILD")).toList();
+
+        assertThat(children).singleElement().satisfies(child -> {
+            assertThat(child.content()).contains("stable cross-linking process")
+                    .doesNotContain("wileyonlinelibrary.com");
+            assertThat(child.sourceNodeKeys()).containsExactly(body.sourceNodeKey());
+        });
+    }
+
+    @Test
     void keepsAnOversizedSingleBlockButRejectsTheHardLimit() {
         var source = source(1, List.of());
         var allowed = node("树".repeat(1_300), "codeBlock", List.of(), source.sourceNodeKey(), Map.of());
@@ -84,6 +155,34 @@ class BlockAwareChunkerTest {
         assertThat(children).hasSizeGreaterThan(2)
                 .allSatisfy(value -> assertThat(value.modelTokenLength()).isLessThanOrEqualTo(1_200));
         assertThat(children.get(1).content()).contains("乙".repeat(650)).doesNotContain("甲".repeat(101));
+    }
+
+    @Test
+    void rejoinsADanglingCrossPageParagraphAcrossHeaderAndImageAndKeepsItStandalone() {
+        var tailSource = source(2, List.of(0.50, 0.86, 0.91, 0.86, 0.91, 0.92, 0.50, 0.92));
+        var headerSource = source(3, List.of(0.01, 0.10, 0.03, 0.10, 0.03, 0.25, 0.01, 0.25));
+        var imageSource = source(3, List.of(0.20, 0.10, 0.80, 0.10, 0.80, 0.54, 0.20, 0.54));
+        var continuationSource = source(3, List.of(0.08, 0.62, 0.49, 0.62, 0.49, 0.91, 0.08, 0.91));
+        var path = List.of("Article");
+        var nodes = List.of(
+                node("Slide 1 was prepared using", "paragraph", path, tailSource.sourceNodeKey(), Map.of()),
+                node("COMMUNICATION", "paragraph", path, headerSource.sourceNodeKey(), Map.of()),
+                node("Figure caption", "image", path, imageSource.sourceNodeKey(), Map.of()),
+                node("a solution (1 mol L−1). The sample concentration was 2 mg mL−1 and the process took ≈10 s.",
+                        "paragraph", path, continuationSource.sourceNodeKey(), Map.of()));
+
+        var children = chunker.chunk("Generic paper", nodes,
+                        List.of(tailSource, headerSource, imageSource, continuationSource), List.of()).stream()
+                .filter(value -> value.role().equals("CHILD")).toList();
+
+        var method = children.stream().filter(value -> value.content().contains("prepared using")).findFirst().orElseThrow();
+        assertThat(method.content()).contains("prepared using a solution", "1 mol L−1", "2 mg mL−1", "≈10 s")
+                .doesNotContain("COMMUNICATION", "Figure caption");
+        assertThat(method.sourceNodeKeys()).containsExactly(tailSource.sourceNodeKey(), continuationSource.sourceNodeKey());
+        assertThat(method.primaryAnchor().path("page").asInt()).isEqualTo(3);
+        assertThat(method.firstPage()).isEqualTo(3);
+        assertThat(method.content()).contains("页码：2-3");
+        assertThat(children).anySatisfy(value -> assertThat(value.content()).contains("Figure caption"));
     }
 
     private StructuredDocumentCodec.ProjectedNode node(String text, String type, List<String> path,

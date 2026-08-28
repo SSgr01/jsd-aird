@@ -176,15 +176,13 @@ public interface DataRepository {
 
     record SourceFile(UUID importJobId, UUID fileObjectId, String originalName, String sourceFormat,
                       UUID templateVersionId, UUID categoryId, String categoryName, String status,
-                      int progress, Instant createdAt, Instant updatedAt, int sheetCount,
-                      int recordCount, int fieldCount, List<RelatedProjectView> relatedProjects) {
+                      int progress, Instant createdAt, Instant updatedAt,
+                      List<RelatedProjectView> relatedProjects) {
         public SourceFile(UUID importJobId, UUID fileObjectId, String originalName, String sourceFormat,
                           UUID templateVersionId, UUID categoryId, String categoryName, String status,
-                          int progress, Instant createdAt, Instant updatedAt, int sheetCount,
-                          int recordCount, int fieldCount) {
+                          int progress, Instant createdAt, Instant updatedAt) {
             this(importJobId, fileObjectId, originalName, sourceFormat, templateVersionId, categoryId,
-                    categoryName, status, progress, createdAt, updatedAt, sheetCount, recordCount, fieldCount,
-                    List.of());
+                    categoryName, status, progress, createdAt, updatedAt, List.of());
         }
     }
 }

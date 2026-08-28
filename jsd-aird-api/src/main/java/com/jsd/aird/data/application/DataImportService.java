@@ -155,7 +155,7 @@ public class DataImportService {
         var items = result.items().stream().map(item -> new DataRepository.SourceFile(
                 item.importJobId(), item.fileObjectId(), item.originalName(), item.sourceFormat(),
                 item.templateVersionId(), item.categoryId(), item.categoryName(), item.status(), item.progress(),
-                item.createdAt(), item.updatedAt(), item.sheetCount(), item.recordCount(), item.fieldCount(),
+                item.createdAt(), item.updatedAt(),
                 links.getOrDefault(item.importJobId(), List.of()))).toList();
         return new PageResponse<>(items, result.page(), result.size(), result.total(), result.totalPages());
     }

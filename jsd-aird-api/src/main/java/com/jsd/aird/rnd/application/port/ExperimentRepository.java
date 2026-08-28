@@ -12,7 +12,8 @@ public interface ExperimentRepository {
     record Create(UUID id, UUID organizationId, String experimentNo, String title, UUID categoryId, String categoryName,
                   String sourceType, ExperimentStatus status, UUID projectId, UUID stageId, UUID taskId,
                   UUID ownerId, String ownerName, LocalDate experimentDate, UUID versionId, UUID templateVersionId,
-                  String templateHash, JsonNode templateSnapshot, JsonNode editModel, UUID actorId) {}
+                  String templateHash, JsonNode templateSnapshot, JsonNode editModel, UUID actorId,
+                  String actorName) {}
     record Draft(String experimentNo, String title, UUID categoryId, String categoryName, UUID projectId, UUID stageId, UUID taskId,
                  String ownerName, LocalDate experimentDate, UUID templateVersionId, String templateHash,
                  JsonNode templateSnapshot, JsonNode editModel) {}

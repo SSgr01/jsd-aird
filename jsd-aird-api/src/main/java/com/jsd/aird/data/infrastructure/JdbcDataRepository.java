@@ -150,15 +150,7 @@ public class JdbcDataRepository implements DataRepository {
         var items = jdbc.query("""
                 SELECT j.id AS import_job_id, j.source_file_id, j.source_file_name, j.source_format,
                        j.template_version_id, j.category_id, c.name AS category_name, j.status, j.progress,
-                       j.created_at, j.updated_at,
-                       (SELECT count(*) FROM data.import_sheet s WHERE s.import_job_id = j.id) AS sheet_count,
-                       greatest(
-                           (SELECT count(*) FROM data.data_record r WHERE r.import_job_id = j.id),
-                           (SELECT count(*) FROM data.staging_row sr WHERE sr.import_job_id = j.id AND coalesce(sr.excluded, false) = false)
-                       ) AS record_count,
-                       (SELECT count(*) FROM data.data_value v
-                          JOIN data.data_record r ON r.id = v.record_id
-                         WHERE r.import_job_id = j.id) AS field_count
+                       j.created_at, j.updated_at
                 FROM data.import_job j
                 LEFT JOIN data.data_category c ON c.id = j.category_id
                  WHERE """ + " " + where + " ORDER BY j.updated_at DESC, j.created_at DESC LIMIT ? OFFSET ?",
@@ -167,8 +159,7 @@ public class JdbcDataRepository implements DataRepository {
                         rs.getString("source_format"), rs.getObject("template_version_id", UUID.class),
                         rs.getObject("category_id", UUID.class), rs.getString("category_name"),
                         rs.getString("status"), rs.getInt("progress"),
-                        rs.getTimestamp("created_at").toInstant(), rs.getTimestamp("updated_at").toInstant(),
-                        rs.getInt("sheet_count"), rs.getInt("record_count"), rs.getInt("field_count")),
+                        rs.getTimestamp("created_at").toInstant(), rs.getTimestamp("updated_at").toInstant()),
                 args.toArray());
         var totalValue = total == null ? 0L : total;
         return new PageResponse<>(items, page, size, totalValue, (totalValue + size - 1) / size);

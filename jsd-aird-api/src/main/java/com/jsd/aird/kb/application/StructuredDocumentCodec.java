@@ -231,7 +231,7 @@ public class StructuredDocumentCodec {
             if (!headingText.isBlank()) headings.update(level, headingText);
         }
         var headingPath = headings.path();
-        if (Set.of("paragraph", "heading", "blockquote", "codeBlock", "listItem", "formula", "audioSegment").contains(type)) {
+        if (Set.of("paragraph", "heading", "blockquote", "codeBlock", "listItem", "formula", "audioSegment", "image").contains(type)) {
             var text = textContent(node).strip();
             if (!text.isBlank()) output.add(new ProjectedNode(reviewNodeId, List.copyOf(sources), text, type,
                     List.copyOf(headingPath), attributes));
@@ -385,8 +385,10 @@ public class StructuredDocumentCodec {
         putIfPresent(result, "locatorAccuracy", attributes.get("locatorAccuracy"));
         putIfPresent(result, "resultFileId", attributes.get("resultFileId"));
         putIfPresent(result, "resultEntryPath", attributes.get("resultEntryPath"));
+        putIfPresent(result, "assetFileId", attributes.get("assetFileId"));
         putIfPresent(result, "caption", attributes.get("caption"));
         putIfPresent(result, "footnote", attributes.get("footnote"));
+        putIfPresent(result, "ocrText", attributes.get("ocrText"));
         putIfPresent(result, "searchable", attributes.get("searchable"));
         if (block.sheetName() != null) {
             result.put("kind", "sheet_range").put("sheetKey", block.sheetName())

@@ -1,10 +1,12 @@
 import {
+  ArrowLeftOutlined,
   DatabaseOutlined,
   DownloadOutlined,
   EyeOutlined,
+  FileTextOutlined,
   FolderOpenOutlined,
 } from '@ant-design/icons';
-import { Alert, App, Button, Checkbox, Collapse, Space, Tag, Typography } from 'antd';
+import { App, Button, Checkbox, Collapse, Space, Tag, Typography } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
@@ -22,7 +24,6 @@ import { MarkdownContent } from '@/components/markdown/MarkdownContent';
 import {
   AssistantRequestError,
   assistantApi,
-  type AiScope,
   type AssistantCitation,
   type AssistantResponse,
   type ConversationMeta,
@@ -30,14 +31,17 @@ import {
 import { HttpError } from '@/services/http/errors';
 import { dataApi, type DataCategory } from '@/services/data/data-api';
 import { knowledgeApi, type KnowledgeCategory } from '@/services/knowledge';
-import { citationEvidenceLabel } from './citation-utils';
+import {
+  citationEvidenceLabel,
+  citationPagesLabel,
+  groupAssistantCitations,
+} from './citation-utils';
 
 interface ChatMessage {
   id: string;
   role: 'USER' | 'ASSISTANT';
   content: string;
   citations?: AssistantCitation[];
-  warnings?: string[];
 }
 
 function displayAnswer(value: string) {
@@ -66,55 +70,52 @@ function citationSourceKey(citation: AssistantCitation) {
   return `${citation.sourceType}-${citation.chunkId}`;
 }
 
-function assistantFailure(error: unknown): { content: string; warnings: string[] } {
-  const code = error instanceof AssistantRequestError || error instanceof HttpError ? error.code : '';
-  const status = error instanceof AssistantRequestError || error instanceof HttpError ? error.status : undefined;
+function thinkingLabel(value: unknown) {
+  return value === 'UNDERSTANDING'
+    ? '正在理解问题…'
+    : value === 'SEARCHING'
+      ? '正在查找资料…'
+      : value === 'COMPOSING'
+        ? '正在组织回答…'
+        : '正在思考…';
+}
+
+function assistantFailure(error: unknown): string {
+  const code =
+    error instanceof AssistantRequestError || error instanceof HttpError ? error.code : '';
+  const status =
+    error instanceof AssistantRequestError || error instanceof HttpError ? error.status : undefined;
   if (code === 'AI_PERMISSION_DENIED' || code === 'PERMISSION_DENIED') {
-    return {
-      content: '当前账号没有使用 AI 问答的权限，请联系系统管理员开通。',
-      warnings: [],
-    };
+    return '当前账号没有使用 AI 问答的权限，请联系系统管理员开通。';
   }
   if (code === 'CSRF_TOKEN_INVALID') {
-    return {
-      content: '页面安全令牌已失效，请刷新页面后重试。',
-      warnings: [],
-    };
+    return '页面安全令牌已失效，请刷新页面后重试。';
+  }
+  if (code === 'AUTH_REQUIRED') {
+    return '登录状态已失效，请重新登录后再试。';
   }
   if (code === 'AI_MODEL_NOT_CONFIGURED' || code === 'AI_NOT_CONFIGURED') {
-    return {
-      content: 'AI 模型网关尚未配置，暂时无法生成回答。',
-      warnings: ['请管理员检查模型网关地址、模型名称和 API Key。'],
-    };
+    return 'AI 模型网关尚未配置，暂时无法生成回答。';
   }
   if (code === 'AI_MODEL_AUTH_FAILED') {
-    return {
-      content: 'AI 模型网关认证失败，暂时无法生成回答。',
-      warnings: ['请管理员检查模型网关 API Key 和访问地址。'],
-    };
+    return 'AI 模型网关认证失败，暂时无法生成回答。';
   }
   if (code === 'AI_MODEL_RATE_LIMITED') {
-    return { content: 'AI 模型服务请求过于频繁，请稍后重试。', warnings: [] };
+    return 'AI 模型服务请求过于频繁，请稍后重试。';
   }
   if (code === 'AI_MODEL_TIMEOUT') {
-    return { content: 'AI 模型服务响应超时，请稍后重试。', warnings: [] };
+    return 'AI 模型服务响应超时，请稍后重试。';
   }
   if (code === 'AI_MODEL_EMPTY_RESPONSE') {
-    return { content: 'AI 模型没有返回有效回答，请稍后重试。', warnings: [] };
+    return 'AI 模型没有返回有效回答，请稍后重试。';
   }
   if (code === 'AI_PROVIDER_UNAVAILABLE') {
-    return { content: 'AI 模型服务暂时不可用，请稍后重试。', warnings: [] };
+    return 'AI 模型服务暂时不可用，请稍后重试。';
   }
   if (status === 403) {
-    return {
-      content: '请求被安全策略拒绝，请刷新页面后重试；如仍失败请联系管理员。',
-      warnings: [],
-    };
+    return '请求被安全策略拒绝，请刷新页面后重试；如仍失败请联系管理员。';
   }
-  return {
-    content: error instanceof Error ? error.message : 'AI 问答失败，请稍后重试。',
-    warnings: [],
-  };
+  return error instanceof Error ? error.message : 'AI 问答失败，请稍后重试。';
 }
 
 function renderAssistantContent(
@@ -124,67 +125,64 @@ function renderAssistantContent(
   onDownload: (citation: AssistantCitation) => void,
   hasOriginalFile: (citation: AssistantCitation) => boolean,
 ) {
+  const citationGroups = groupAssistantCitations(message.citations);
   return (
     <div>
       <MarkdownContent value={displayAnswer(message.content)} />
-      {message.warnings?.map((warning) => (
-        <Alert
-          key={warning}
-          type="warning"
-          showIcon
-          message={warning}
-          className="ai-message-alert"
-        />
-      ))}
-      {message.citations?.length ? (
+      {citationGroups.length ? (
         <div className="ai-message-citations">
           <Typography.Text type="secondary">参考来源</Typography.Text>
-          <Space wrap>
-            {message.citations.map((citation) => (
-              <Space key={`${citation.sourceType}-${citation.chunkId}`} size={4} wrap>
-                {(() => {
-                  const originalFileAvailable = hasOriginalFile(citation);
-                  return (
-                    <>
-                      <Tag
-                        color="blue"
-                        className={citation.documentId ? 'is-clickable' : undefined}
-                        onClick={() => {
-                          if (citation.documentId)
-                            navigate(`/knowledge/documents/${citation.documentId}`);
-                          else if (citation.fileObjectId) navigate('/data/view');
-                        }}
-                      >
-                        {citation.title || citation.originalName || '来源文件'}
-                        {citation.pageNo ? ` · 第${citation.pageNo}页` : ''}
-                        {citationEvidenceLabel(citation)}
-                      </Tag>
-                      {originalFileAvailable && (
-                        <Button
-                          size="small"
-                          type="link"
-                          icon={<EyeOutlined />}
-                          onClick={() => onPreview(citation)}
-                        >
-                          预览
-                        </Button>
-                      )}
-                      {originalFileAvailable && (
-                        <Button
-                          size="small"
-                          type="link"
-                          icon={<DownloadOutlined />}
-                          onClick={() => onDownload(citation)}
-                        >
-                          下载
-                        </Button>
-                      )}
-                    </>
-                  );
-                })()}
-              </Space>
-            ))}
-          </Space>
+          <div className="ai-message-citation-list">
+            {citationGroups.map((group) => {
+              const citation = group.citation;
+              return (
+              <div
+                className="ai-message-citation-row"
+                key={group.key}
+              >
+                <FileTextOutlined aria-hidden="true" />
+                <button
+                  type="button"
+                  className="ai-message-citation-title"
+                  disabled={!citation.documentId && !citation.fileObjectId}
+                  onClick={() => {
+                    if (citation.documentId)
+                      navigate(`/knowledge/documents/${citation.documentId}`);
+                    else if (citation.fileObjectId) navigate('/data/view');
+                  }}
+                >
+                  <span className="ai-message-citation-name">
+                    {citation.title || citation.originalName || '来源文件'}
+                  </span>
+                  <span className="ai-message-citation-summary">
+                    {citationPagesLabel(group.pages)}
+                    {citationEvidenceLabel(group.evidenceCount)}
+                  </span>
+                </button>
+                {hasOriginalFile(citation) && (
+                  <div className="ai-message-citation-actions">
+                    <Button
+                      size="small"
+                      type="text"
+                      icon={<EyeOutlined />}
+                      onClick={() => onPreview(citation)}
+                    >
+                      预览
+                    </Button>
+                    <Button
+                      size="small"
+                      type="text"
+                      icon={<DownloadOutlined />}
+                      onClick={() => onDownload(citation)}
+                    >
+                      下载
+                    </Button>
+                  </div>
+                )}
+              </div>
+              );
+            })}
+          </div>
         </div>
       ) : null}
     </div>
@@ -199,12 +197,10 @@ export function AssistantPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(false);
   const [streaming, setStreaming] = useState(false);
-  const [streamStage, setStreamStage] = useState('正在检索已授权资料');
-  const [scopes, setScopes] = useState<AiScope[]>([]);
+  const [streamStage, setStreamStage] = useState('正在思考…');
   const [conversations, setConversations] = useState<ConversationMeta[]>([]);
   const [knowledgeCategories, setKnowledgeCategories] = useState<KnowledgeCategory[]>([]);
   const [dataCategories, setDataCategories] = useState<DataCategory[]>([]);
-  const [selectedScopes, setSelectedScopes] = useState<string[]>([]);
   const [selectedKnowledge, setSelectedKnowledge] = useState<string[]>([]);
   const [selectedData, setSelectedData] = useState<string[]>([]);
   const [previewFile, setPreviewFile] = useState<FilePreviewDescriptor>();
@@ -212,16 +208,16 @@ export function AssistantPage() {
 
   useEffect(() => {
     void Promise.all([
-      assistantApi.scopes(),
       assistantApi.conversations(),
       knowledgeApi.categories(),
       dataApi.listCategories(),
     ])
-      .then(([scopeList, conversationList, knowledgeList, dataList]) => {
-        setScopes(scopeList);
+      .then(([conversationList, knowledgeList, dataList]) => {
         setConversations(conversationList);
         setKnowledgeCategories(knowledgeList);
         setDataCategories(dataList);
+        setSelectedKnowledge(knowledgeList.map((item) => item.id));
+        setSelectedData(dataList.map((item) => item.id));
       })
       .catch(() => toast.error('AI 问答范围加载失败'));
   }, [toast]);
@@ -262,13 +258,14 @@ export function AssistantPage() {
   );
 
   const setChatMessages = (items: ChatMessage[]) => setMessages(items);
+  const hasSelectedScope = selectedKnowledge.length > 0 || selectedData.length > 0;
 
   const send = async () => {
     const value = question.trim();
-    if (!value || loading || streaming) return;
+    if (!value || loading || streaming || !hasSelectedScope) return;
     setQuestion('');
     setLoading(true);
-    setStreamStage('正在检索已授权资料');
+    setStreamStage('正在思考…');
     const index = messages.length + 1;
     setMessages((current) => [
       ...current,
@@ -281,8 +278,6 @@ export function AssistantPage() {
       await assistantApi.stream(
         value,
         conversationId,
-        selectedScopes,
-        scopes.filter((scope) => selectedScopes.includes(scope.id)).map((scope) => scope.scopeType),
         selectedKnowledge,
         selectedData,
         (token) => {
@@ -302,7 +297,6 @@ export function AssistantPage() {
                     ...item,
                     content: response.answer || answer,
                     citations: response.citations,
-                    warnings: response.warnings,
                   }
                 : item,
             ),
@@ -319,7 +313,7 @@ export function AssistantPage() {
           }, 1200);
         },
         (event, data) => {
-          if (event === 'stage' && typeof data === 'string') setStreamStage(data);
+          if (event === 'thinking') setStreamStage(thinkingLabel(data));
         },
       );
     } catch (error) {
@@ -329,8 +323,7 @@ export function AssistantPage() {
           itemIndex === index
             ? {
                 ...item,
-                content: failure.content,
-                warnings: failure.warnings,
+                content: failure,
               }
             : item,
         ),
@@ -338,7 +331,7 @@ export function AssistantPage() {
     } finally {
       setLoading(false);
       setStreaming(false);
-      setStreamStage('正在检索已授权资料');
+      setStreamStage('正在思考…');
     }
   };
 
@@ -359,7 +352,6 @@ export function AssistantPage() {
           role: item.role === 'USER' ? 'USER' : 'ASSISTANT',
           content: item.content,
           citations: item.citations,
-          warnings: item.warnings,
         })),
       );
     } catch (error) {
@@ -450,35 +442,60 @@ export function AssistantPage() {
       ),
   }));
 
+  const knowledgeScopeGroups = [
+    { scope: 'INTERNAL' as const, label: '内部资料' },
+    { scope: 'EXTERNAL' as const, label: '外部资料' },
+  ].map((group) => ({
+    ...group,
+    categories: knowledgeCategories.filter((item) => item.scope === group.scope),
+  }));
+
   const scopeContent = (
     <Space direction="vertical" size={12} className="ai-scope-content">
       <Collapse
         ghost
+        defaultActiveKey={['knowledge']}
         items={[
           {
             key: 'knowledge',
             label: (
-              <span>
-                <FolderOpenOutlined /> 研发知识库
+              <span className="ai-scope-group-label">
+                <span>
+                  <FolderOpenOutlined /> 研发知识库
+                </span>
+                <b>{knowledgeCategories.reduce((total, item) => total + item.documentCount, 0)}</b>
               </span>
             ),
             children: (
               <Space direction="vertical" className="ai-scope-options">
-                {knowledgeCategories.map((item) => (
-                  <Checkbox
-                    key={item.id}
-                    checked={selectedKnowledge.includes(item.id)}
-                    onChange={(event) =>
-                      setSelectedKnowledge((current) =>
-                        event.target.checked
-                          ? [...current, item.id]
-                          : current.filter((id) => id !== item.id),
-                      )
-                    }
-                  >
-                    {item.name}
-                    <Typography.Text type="secondary">（{item.documentCount}）</Typography.Text>
-                  </Checkbox>
+                {knowledgeScopeGroups.map((group) => (
+                  <div className="ai-scope-subgroup" key={group.scope}>
+                    <Typography.Text className="ai-scope-subgroup-title" type="secondary">
+                      {group.label}
+                    </Typography.Text>
+                    {group.categories.length ? (
+                      group.categories.map((item) => (
+                        <Checkbox
+                          key={item.id}
+                          checked={selectedKnowledge.includes(item.id)}
+                          onChange={(event) =>
+                            setSelectedKnowledge((current) =>
+                              event.target.checked
+                                ? Array.from(new Set([...current, item.id]))
+                                : current.filter((id) => id !== item.id),
+                            )
+                          }
+                        >
+                          {item.name}
+                          <Typography.Text type="secondary">
+                            （{item.documentCount}）
+                          </Typography.Text>
+                        </Checkbox>
+                      ))
+                    ) : (
+                      <Typography.Text type="secondary">暂无分类</Typography.Text>
+                    )}
+                  </div>
                 ))}
               </Space>
             ),
@@ -486,8 +503,11 @@ export function AssistantPage() {
           {
             key: 'data',
             label: (
-              <span>
-                <DatabaseOutlined /> 数据中心
+              <span className="ai-scope-group-label">
+                <span>
+                  <DatabaseOutlined /> 数据中心
+                </span>
+                <b>{dataCategories.reduce((total, item) => total + item.sourceCount, 0)}</b>
               </span>
             ),
             children: (
@@ -499,7 +519,7 @@ export function AssistantPage() {
                     onChange={(event) =>
                       setSelectedData((current) =>
                         event.target.checked
-                          ? [...current, item.id]
+                          ? Array.from(new Set([...current, item.id]))
                           : current.filter((id) => id !== item.id),
                       )
                     }
@@ -511,39 +531,73 @@ export function AssistantPage() {
               </Space>
             ),
           },
-          {
-            key: 'business',
-            label: '项目与业务范围',
-            children: (
-              <Space direction="vertical" className="ai-scope-options">
-                {scopes.map((item) => (
-                  <Checkbox
-                    key={item.id}
-                    checked={selectedScopes.includes(item.id)}
-                    onChange={(event) =>
-                      setSelectedScopes((current) =>
-                        event.target.checked
-                          ? [...current, item.id]
-                          : current.filter((id) => id !== item.id),
-                      )
-                    }
-                  >
-                    {item.name}
-                  </Checkbox>
-                ))}
-              </Space>
-            ),
-          },
         ]}
       />
     </Space>
   );
 
+  const composerScopeGroups = [
+    {
+      key: 'knowledge',
+      label: '研发知识库',
+      count: knowledgeCategories
+        .filter((item) => selectedKnowledge.includes(item.id))
+        .reduce((total, item) => total + item.documentCount, 0),
+      selected: selectedKnowledge.length,
+    },
+    {
+      key: 'data',
+      label: '数据中心',
+      count: dataCategories
+        .filter((item) => selectedData.includes(item.id))
+        .reduce((total, item) => total + item.sourceCount, 0),
+      selected: selectedData.length,
+    },
+  ].filter((item) => item.selected > 0);
+
+  const allAuthorizedSelected =
+    (knowledgeCategories.length > 0 || dataCategories.length > 0) &&
+    knowledgeCategories.every((item) => selectedKnowledge.includes(item.id)) &&
+    dataCategories.every((item) => selectedData.includes(item.id));
+
+  const composerScopeContent = (
+    <div className="ai-composer-scope-summary">
+      <Typography.Text type="secondary">当前同步范围：</Typography.Text>
+      <Space size={[6, 6]} wrap>
+        {allAuthorizedSelected ? (
+          <Tag className="ai-composer-scope-tag">全部已授权资料</Tag>
+        ) : composerScopeGroups.length ? (
+          composerScopeGroups.map((item) => (
+            <Tag key={item.key} className="ai-composer-scope-tag">
+              {item.label}
+              <b>{item.count}</b>
+            </Tag>
+          ))
+        ) : (
+          <Typography.Text type="secondary">未选择资料范围</Typography.Text>
+        )}
+      </Space>
+    </div>
+  );
+
   return (
     <div className="business-page assistant-page">
       <div className="page-heading">
-        <div>
-          <Typography.Title level={2}>AI问答</Typography.Title>
+        <Button
+          type="text"
+          shape="circle"
+          className="assistant-page-back"
+          icon={<ArrowLeftOutlined />}
+          aria-label="返回上一页"
+          onClick={() => navigate(-1)}
+        />
+        <div className="assistant-page-heading-copy">
+          <div className="assistant-page-title-row">
+            <span className="assistant-page-sparkle" aria-hidden="true">
+              ✦
+            </span>
+            <Typography.Title level={2}>AI问答</Typography.Title>
+          </div>
           <Typography.Text type="secondary">
             回答仅基于已授权的研发资料和已归档来源文件。
           </Typography.Text>
@@ -554,16 +608,21 @@ export function AssistantPage() {
         activeConversationId={conversationId}
         messages={viewMessages}
         scopeContent={scopeContent}
+        composerTopContent={composerScopeContent}
         scopeSummary={
           <Typography.Text type="secondary">
-            已选择 {selectedKnowledge.length + selectedData.length + selectedScopes.length}{' '}
-            个检索范围
+            {allAuthorizedSelected
+              ? '全部已授权资料'
+              : hasSelectedScope
+                ? `已选择 ${selectedKnowledge.length + selectedData.length} 个检索范围`
+                : '未选择资料范围'}
           </Typography.Text>
         }
         pendingLabel={streamStage}
         question={question}
         loading={loading}
         streaming={streaming}
+        submitDisabled={!hasSelectedScope}
         onNewConversation={reset}
         onSelectConversation={(id) => void openConversation(id)}
         onRenameConversation={renameConversation}

@@ -91,6 +91,10 @@ public class IamAuthService {
         return token == null || token.isBlank() ? null : store.session(token).orElse(null);
     }
 
+    public IamStore.Session activeSession(String token) {
+        return token == null || token.isBlank() ? null : store.activeSession(token).orElse(null);
+    }
+
     public IamStore.User user(UUID userId) {
         return store.user(userId).orElse(null);
     }

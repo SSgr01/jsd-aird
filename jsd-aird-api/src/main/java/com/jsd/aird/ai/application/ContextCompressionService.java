@@ -19,8 +19,9 @@ public class ContextCompressionService {
                             List<DataSourceFileSearchFacade.SourceFileHit> dataFiles, int maxChars) {
         var chunks = new ArrayList<String>();
         var used = 0;
+        var safeKnowledge = knowledge == null ? List.<KnowledgeSearchFacade.SearchHit>of() : knowledge;
         var groupedKnowledge = new LinkedHashMap<String, List<KnowledgeSearchFacade.SearchHit>>();
-        for (var hit : knowledge == null ? List.<KnowledgeSearchFacade.SearchHit>of() : knowledge) {
+        for (var hit : safeKnowledge) {
             var key = String.join("|", String.valueOf(hit.documentId()), String.valueOf(hit.versionId()),
                     String.valueOf(hit.pageNo()), String.valueOf(hit.section()));
             groupedKnowledge.computeIfAbsent(key, ignored -> new ArrayList<>()).add(hit);
@@ -32,24 +33,26 @@ public class ContextCompressionService {
             for (var hit : group) {
                 var text = normalized(hit.content());
                 if (text.isBlank()) continue;
-                groupParts.add("[chunkId=" + hit.chunkId() + ";evidenceRelation=TEXT_FRAGMENT] " + text);
+                var image = imageMarkdown(hit);
+                groupParts.add(text + (image.isBlank() ? "" : " " + image));
             }
             var groupText = String.join(" ", groupParts);
             var first = group.get(0);
             var excerpt = groupText.length() <= remaining ? groupText
                     : groupText.substring(0, Math.max(0, remaining - 1)) + "…";
-            chunks.add("[sourceType=KNOWLEDGE_CHUNK,file=" + first.title()
+            chunks.add("[source=knowledge,file=" + first.title()
                     + ",page=" + first.pageNo() + ",section=" + first.section() + "] " + excerpt);
             used += excerpt.length();
         }
-        for (var hit : dataFiles == null ? List.<DataSourceFileSearchFacade.SourceFileHit>of() : dataFiles) {
+        var safeDataFiles = dataFiles == null ? List.<DataSourceFileSearchFacade.SourceFileHit>of() : dataFiles;
+        for (var index = 0; index < safeDataFiles.size(); index++) {
+            var hit = safeDataFiles.get(index);
             var remaining = Math.max(0, maxChars - used);
             if (remaining < 80) break;
             var text = hit.content() == null ? "" : hit.content().replaceAll("[\\r\\n\\t]+", " ").strip();
             var excerpt = text.length() <= remaining ? text : text.substring(0, Math.max(0, remaining - 1)) + "…";
-            chunks.add("[evidenceId=" + hit.hitId() + ",fileObjectId=" + hit.fileObjectId() + ",importJobId=" + hit.importJobId()
-                    + ",row=" + hit.rowNumber() + ",column=" + hit.columnName()
-                    + ",evidenceRelation=SAME_DATA_ROW,sourceType=DATA_SOURCE_FILE] " + excerpt);
+            chunks.add("[source=data,file=" + hit.originalName()
+                    + ",row=" + hit.rowNumber() + ",column=" + hit.columnName() + "] " + excerpt);
             used += excerpt.length();
         }
         return new Context(String.join("\n\n", chunks), used, knowledge == null ? 0 : knowledge.size(),
@@ -58,6 +61,19 @@ public class ContextCompressionService {
 
     private String normalized(String value) {
         return value == null ? "" : value.replaceAll("[\\r\\n\\t]+", " ").strip();
+    }
+
+    private String imageMarkdown(KnowledgeSearchFacade.SearchHit hit) {
+        var anchors = new ArrayList<com.fasterxml.jackson.databind.JsonNode>();
+        if (hit.anchor() != null && !hit.anchor().isMissingNode() && !hit.anchor().isNull()) anchors.add(hit.anchor());
+        if (hit.anchors() != null) anchors.addAll(hit.anchors());
+        for (var anchor : anchors) {
+            var assetId = anchor.path("assetFileId").asText("");
+            if (assetId.isBlank()) continue;
+            var caption = anchor.path("caption").asText("").replace("]", "").replace("\n", " ").strip();
+            return "![" + caption + "](/api/v1/knowledge/assets/" + assetId + "/content)";
+        }
+        return "";
     }
 
     public record Context(String text, int characterCount, int knowledgeCount, int dataFileCount) {

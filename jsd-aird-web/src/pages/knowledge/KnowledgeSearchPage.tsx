@@ -1,6 +1,6 @@
 import { DatabaseOutlined, DownloadOutlined, EyeOutlined, FileAddOutlined, FileSearchOutlined, FolderOpenOutlined, LinkOutlined, SearchOutlined } from '@ant-design/icons';
 import { Alert, App, Button, Card, Checkbox, Empty, Input, Modal, Select, Space, Spin, Tag, Typography } from 'antd';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
 import { assistantApi, type FileSearchResult } from '@/services/assistant/assistant-api';
@@ -19,7 +19,9 @@ export function KnowledgeSearchPage() {
   const { message } = App.useApp();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const [query, setQuery] = useState('');
+  const initialQuery = searchParams.get('q')?.trim() || '';
+  const [query, setQuery] = useState(initialQuery);
+  const autoQueryRef = useRef('');
   const [searched, setSearched] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
@@ -41,15 +43,23 @@ export function KnowledgeSearchPage() {
   }, []);
   useEffect(() => { void getProjects({ page: 1, size: 100 }).then((page) => setProjects(page.items)).catch(() => setProjects([])); }, []);
 
-  const doSearch = async () => {
-    if (!query.trim()) { setSearched(true); setError('请输入检索关键词'); setResult(undefined); return; }
+  const doSearch = useCallback(async (requestedQuery?: string) => {
+    const normalizedQuery = (requestedQuery ?? query).trim();
+    if (!normalizedQuery) { setSearched(true); setError('请输入检索关键词'); setResult(undefined); return; }
     setLoading(true); setError(undefined); setSearched(true);
     try {
-      setResult(await assistantApi.fileSearch({ query: query.trim(), limit: 30, knowledgeCategoryIds: selectedKnowledge, dataCategoryIds: selectedData, projectId }));
+      setResult(await assistantApi.fileSearch({ query: normalizedQuery, limit: 30, knowledgeCategoryIds: selectedKnowledge, dataCategoryIds: selectedData, projectId }));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '检索失败，请稍后重试');
     } finally { setLoading(false); }
-  };
+  }, [projectId, query, selectedData, selectedKnowledge]);
+
+  useEffect(() => {
+    if (!initialQuery || autoQueryRef.current === initialQuery) return;
+    autoQueryRef.current = initialQuery;
+    setQuery(initialQuery);
+    void doSearch(initialQuery);
+  }, [doSearch, initialQuery]);
 
   const knowledgeGroups = useMemo(
     () => knowledgeCategories.map((item) => ({ ...item, checked: selectedKnowledge.includes(item.id) })),

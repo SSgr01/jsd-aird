@@ -27,14 +27,6 @@ public class JdbcAssistantRepository implements AssistantRepository {
     }
 
     @Override
-    public void insertConversation(UUID id, UUID organizationId, String title, UUID actorId, JsonNode scopeSnapshot) {
-        jdbc.update("""
-                INSERT INTO ai.assistant_conversation (id, organization_id, title, title_source, scope_snapshot_jsonb, created_by)
-                VALUES (?, ?, ?, 'FIRST_QUESTION', ?, ?)
-                """, id, organizationId, title, json(scopeSnapshot), actorId);
-    }
-
-    @Override
     public boolean conversationExists(UUID organizationId, UUID conversationId) {
         return Boolean.TRUE.equals(jdbc.queryForObject("""
                 SELECT EXISTS(SELECT 1 FROM ai.assistant_conversation WHERE organization_id = ? AND id = ?)
@@ -42,37 +34,51 @@ public class JdbcAssistantRepository implements AssistantRepository {
     }
 
     @Override
-    public void insertMessage(UUID conversationId, String role, String content, JsonNode citations, JsonNode warnings) {
+    public void insertMessage(UUID conversationId, String role, String content, JsonNode citations) {
         jdbc.update("""
-                INSERT INTO ai.assistant_message (id, conversation_id, role, content, citations_jsonb, warnings_jsonb)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """, UUID.randomUUID(), conversationId, role, content, json(citations), json(warnings));
+                INSERT INTO ai.assistant_message (id, conversation_id, role, content, citations_jsonb)
+                VALUES (?, ?, ?, ?, ?)
+                """, UUID.randomUUID(), conversationId, role, content, json(citations));
         jdbc.update("UPDATE ai.assistant_conversation SET updated_at = now() WHERE id = ?", conversationId);
     }
 
     @Override
-    public void insertMessage(UUID conversationId, String role, String content, JsonNode citations, JsonNode warnings,
+    public void insertMessage(UUID conversationId, String role, String content, JsonNode citations,
                               JsonNode queryPlan, JsonNode retrievalTrace) {
+        insertMessageReturningId(conversationId, role, content, citations, queryPlan, retrievalTrace);
+    }
+
+    @Override
+    public UUID insertMessageReturningId(UUID conversationId, String role, String content, JsonNode citations,
+                                         JsonNode queryPlan, JsonNode retrievalTrace) {
+        var messageId = UUID.randomUUID();
         jdbc.update("""
                 INSERT INTO ai.assistant_message (
-                    id, conversation_id, role, content, citations_jsonb, warnings_jsonb, query_plan_jsonb, retrieval_trace_jsonb
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, UUID.randomUUID(), conversationId, role, content, json(citations), json(warnings),
+                    id, conversation_id, role, content, citations_jsonb, query_plan_jsonb, retrieval_trace_jsonb
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, messageId, conversationId, role, content, json(citations),
                 json(queryPlan), json(retrievalTrace));
         jdbc.update("UPDATE ai.assistant_conversation SET updated_at = now() WHERE id = ?", conversationId);
+        return messageId;
+    }
+
+    @Override
+    public void updateMessageRetrievalTrace(UUID messageId, JsonNode retrievalTrace) {
+        jdbc.update("UPDATE ai.assistant_message SET retrieval_trace_jsonb = ? WHERE id = ?",
+                json(retrievalTrace), messageId);
     }
 
     @Override
     public List<MessageRow> recentMessages(UUID organizationId, UUID conversationId, int limit) {
         return jdbc.query("""
-                SELECT m.id, m.role, m.content, m.citations_jsonb, m.warnings_jsonb
+                SELECT m.id, m.role, m.content, m.citations_jsonb
                 FROM ai.assistant_message m
                 JOIN ai.assistant_conversation c ON c.id = m.conversation_id
                 WHERE c.organization_id = ? AND c.id = ?
                 ORDER BY m.created_at DESC
                 LIMIT ?
                 """, (rs, rowNum) -> new MessageRow(rs.getObject("id", UUID.class), rs.getString("role"), rs.getString("content"),
-                        readJson(rs.getString("citations_jsonb")), readJson(rs.getString("warnings_jsonb"))),
+                        readJson(rs.getString("citations_jsonb"))),
                 organizationId, conversationId, limit).reversed();
     }
 
@@ -80,13 +86,13 @@ public class JdbcAssistantRepository implements AssistantRepository {
     public ConversationMeta conversation(UUID organizationId, UUID conversationId) {
         return jdbc.query("""
                 SELECT id, title, summary, title_source, summary_token_count,
-                       last_summarized_message_id, scope_snapshot_jsonb
+                       last_summarized_message_id
                 FROM ai.assistant_conversation
                 WHERE organization_id = ? AND id = ?
                 """, (rs, rowNum) -> new ConversationMeta(
                 rs.getObject("id", UUID.class), rs.getString("title"), rs.getString("summary"),
                 rs.getString("title_source"), rs.getInt("summary_token_count"),
-                rs.getObject("last_summarized_message_id", UUID.class), readJson(rs.getString("scope_snapshot_jsonb"))),
+                rs.getObject("last_summarized_message_id", UUID.class)),
                 organizationId, conversationId).stream().findFirst().orElse(null);
     }
 
@@ -94,7 +100,7 @@ public class JdbcAssistantRepository implements AssistantRepository {
     public List<ConversationMeta> listConversations(UUID organizationId, int limit) {
         return jdbc.query("""
                 SELECT id, title, summary, title_source, summary_token_count,
-                       last_summarized_message_id, scope_snapshot_jsonb
+                       last_summarized_message_id
                 FROM ai.assistant_conversation
                 WHERE organization_id = ?
                 ORDER BY updated_at DESC
@@ -102,7 +108,7 @@ public class JdbcAssistantRepository implements AssistantRepository {
                 """, (rs, rowNum) -> new ConversationMeta(
                 rs.getObject("id", UUID.class), rs.getString("title"), rs.getString("summary"),
                 rs.getString("title_source"), rs.getInt("summary_token_count"),
-                rs.getObject("last_summarized_message_id", UUID.class), readJson(rs.getString("scope_snapshot_jsonb"))),
+                rs.getObject("last_summarized_message_id", UUID.class)),
                 organizationId, Math.min(100, Math.max(1, limit)));
     }
 
@@ -120,12 +126,6 @@ public class JdbcAssistantRepository implements AssistantRepository {
                 SET summary = ?, summary_version = ?, summary_token_count = ?, last_summarized_message_id = ?, updated_at = now()
                 WHERE organization_id = ? AND id = ?
                 """, summary, version, tokenCount, lastMessageId, organizationId, conversationId);
-    }
-
-    @Override
-    public void updateScopeSnapshot(UUID organizationId, UUID conversationId, JsonNode scopeSnapshot) {
-        jdbc.update("UPDATE ai.assistant_conversation SET scope_snapshot_jsonb = ?, updated_at = now() WHERE organization_id = ? AND id = ?",
-                json(scopeSnapshot), organizationId, conversationId);
     }
 
     @Override

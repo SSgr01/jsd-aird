@@ -69,7 +69,6 @@ class PermissionRouteFilterTest {
     void mapsKnowledgeSearchToAiPermission() {
         assertThat(code("POST", "/api/v1/knowledge/search")).isEqualTo("ai.use");
         assertThat(code("POST", "/api/v1/knowledge/assistant")).isEqualTo("ai.use");
-        assertThat(code("POST", "/api/v1/assistant/qa")).isEqualTo("ai.use");
         assertThat(code("POST", "/api/v1/assistant/qa/stream")).isEqualTo("ai.use");
         assertThat(code("POST", "/api/v1/search/files")).isEqualTo("ai.use");
         assertThat(code("POST", "/api/v1/knowledge/documents/00000000-0000-0000-0000-000000000000/versions/00000000-0000-0000-0000-000000000000/reparse"))
@@ -96,6 +95,25 @@ class PermissionRouteFilterTest {
                 .isEqualTo("experiment.create");
         assertThat(codeWithKind("POST", "/api/v1/files/staged", "TEMPLATE_SOURCE"))
                 .isEqualTo("template.upload");
+    }
+
+    @Test
+    void mapsExperimentLifecycleActionsToTheirActualPermissions() {
+        var id = "00000000-0000-0000-0000-000000000001";
+        assertThat(code("GET", "/api/v1/experiments")).isEqualTo("experiment.view");
+        assertThat(code("POST", "/api/v1/experiments")).isEqualTo("experiment.create");
+        assertThat(code("POST", "/api/v1/experiments/" + id + "/draft")).isEqualTo("experiment.update");
+        assertThat(code("POST", "/api/v1/experiments/" + id + "/start")).isEqualTo("experiment.update");
+        assertThat(code("POST", "/api/v1/experiments/" + id + "/submit-review"))
+                .isEqualTo("experiment.submit");
+        assertThat(code("POST", "/api/v1/experiments/" + id + "/approve"))
+                .isEqualTo("experiment.approve");
+        assertThat(code("POST", "/api/v1/experiments/" + id + "/return"))
+                .isEqualTo("experiment.review");
+        assertThat(code("POST", "/api/v1/experiments/" + id + "/void"))
+                .isEqualTo("experiment.review");
+        assertThat(code("POST", "/api/v1/experiments/" + id + "/versions"))
+                .isEqualTo("experiment.update");
     }
 
     private String code(String method, String uri) {

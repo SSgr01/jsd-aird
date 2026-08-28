@@ -30,7 +30,7 @@ class FileSearchServiceTest {
         var actor = new Actor(organizationId, UUID.randomUUID(), "tester");
         var documentId = UUID.randomUUID();
         var versionId = UUID.randomUUID();
-        when(knowledge.searchFiles(any(), any(), anyList(), anyList(), any(), anyInt())).thenReturn(List.of(
+        when(knowledge.searchFiles(any(), any(), anyList(), any(), anyInt())).thenReturn(List.of(
                 new KnowledgeFileSearchFacade.FileMatch(UUID.randomUUID(), documentId, versionId,
                         "UA-3131 产品资料", "UA-3131 TDS.pdf", "application/pdf", 100, 1, List.of(),
                         Instant.now(), List.of(new KnowledgeFileSearchFacade.Hit(UUID.randomUUID(),
@@ -40,7 +40,7 @@ class FileSearchServiceTest {
         when(projects.links(any(), any(), anyCollection())).thenReturn(Map.of());
 
         var result = new FileSearchService(knowledge, data, projects).search(actor,
-                new FileSearchService.SearchCommand("UA-1117", 20, List.of(), List.of(), List.of(), null));
+                new FileSearchService.SearchCommand("UA-1117", 20, List.of(), List.of(), null));
 
         assertThat(result.files()).isEmpty();
     }
@@ -52,7 +52,7 @@ class FileSearchServiceTest {
         var projects = mock(ProjectResourceFacade.class);
         var organizationId = UUID.randomUUID();
         var actor = new Actor(organizationId, UUID.randomUUID(), "tester");
-        when(knowledge.searchFiles(any(), any(), anyList(), anyList(), any(), anyInt())).thenReturn(List.of(
+        when(knowledge.searchFiles(any(), any(), anyList(), any(), anyInt())).thenReturn(List.of(
                 new KnowledgeFileSearchFacade.FileMatch(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
                         "UA-1117", "UA-1117", "application/pdf", 100, 1, List.of(), Instant.now(),
                         List.of(new KnowledgeFileSearchFacade.Hit(UUID.randomUUID(), "产品资料", 0.4,
@@ -62,7 +62,7 @@ class FileSearchServiceTest {
         when(projects.links(any(), any(), anyCollection())).thenReturn(Map.of());
 
         var result = new FileSearchService(knowledge, data, projects).search(actor,
-                new FileSearchService.SearchCommand("UA-1117", 20, List.of(), List.of(), List.of(), null));
+                new FileSearchService.SearchCommand("UA-1117", 20, List.of(), List.of(), null));
 
         assertThat(result.files()).singleElement().satisfies(file -> {
             assertThat(file.originalName()).isEqualTo("UA-1117");
@@ -77,7 +77,7 @@ class FileSearchServiceTest {
         var data = mock(DataSourceFileSearchFacade.class);
         var projects = mock(ProjectResourceFacade.class);
         var actor = new Actor(UUID.randomUUID(), UUID.randomUUID(), "tester");
-        when(knowledge.searchFiles(any(), any(), anyList(), anyList(), any(), anyInt())).thenReturn(List.of(
+        when(knowledge.searchFiles(any(), any(), anyList(), any(), anyInt())).thenReturn(List.of(
                 new KnowledgeFileSearchFacade.FileMatch(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
                         "聚氨酯说明", "说明书.pdf", "application/pdf", 100, 1, List.of(), Instant.now(),
                         List.of(new KnowledgeFileSearchFacade.Hit(UUID.randomUUID(), "常规产品资料", 0.1,
@@ -87,7 +87,7 @@ class FileSearchServiceTest {
         when(projects.links(any(), any(), anyCollection())).thenReturn(Map.of());
 
         var result = new FileSearchService(knowledge, data, projects).search(actor,
-                new FileSearchService.SearchCommand("绝对不存在关键词", 20, List.of(), List.of(), List.of(), null));
+                new FileSearchService.SearchCommand("绝对不存在关键词", 20, List.of(), List.of(), null));
 
         assertThat(result.files()).isEmpty();
     }

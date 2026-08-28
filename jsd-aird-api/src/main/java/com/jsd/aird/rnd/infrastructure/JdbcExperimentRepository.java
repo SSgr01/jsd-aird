@@ -51,7 +51,7 @@ public class JdbcExperimentRepository implements ExperimentRepository {
         jdbc.update("INSERT INTO rnd.experiment_version(id,organization_id,experiment_id,version_no,status,template_version_id,template_snapshot_hash,template_snapshot_jsonb,edit_model_jsonb,created_by) VALUES(?,?,?,1,?,?,?,?,?,?)",
                 c.versionId(),c.organizationId(),c.id(),c.status().name(),c.templateVersionId(),c.templateHash(),pg(c.templateSnapshot()),pg(c.editModel()),c.actorId());
         jdbc.update("UPDATE rnd.experiment SET current_version_id=? WHERE id=?",c.versionId(),c.id());
-        audit(c.organizationId(),c.id(),c.versionId(),"CREATED",null,c.editModel(),c.actorId(),c.ownerName()); event(c.organizationId(),c.id(),ExperimentEvents.CREATED,c.versionId(),1);
+        audit(c.organizationId(),c.id(),c.versionId(),"CREATED",null,c.editModel(),c.actorId(),c.actorName()); event(c.organizationId(),c.id(),ExperimentEvents.CREATED,c.versionId(),1);
         return detail(c.organizationId(),c.id()).orElseThrow().summary();
     }
     @Override @Transactional public Summary copy(UUID org, UUID sourceId, UUID actor, String name) {
@@ -69,7 +69,7 @@ public class JdbcExperimentRepository implements ExperimentRepository {
         return detail(org,id).orElseThrow().summary();
     }
     @Override @Transactional public Detail saveDraft(UUID org,UUID id,long revision,Draft d,UUID actor,String name){
-        var old=required(org,id); if(old.summary().status()==ExperimentStatus.COMPLETED||old.summary().status()==ExperimentStatus.VOIDED) conflict("已完成或作废实验不可直接编辑");
+        var old=required(org,id); if(!old.summary().status().isEditable()) conflict("待审核、已完成或作废实验不可直接编辑");
         if(!text(d.experimentNo())) invalid("实验编号不能为空");
         if(Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM rnd.experiment WHERE organization_id=? AND experiment_no=? AND id<>? AND deleted=false)",Boolean.class,org,d.experimentNo().trim(),id))) conflict("实验编号 " + d.experimentNo().trim() + " 已存在");
         int n=jdbc.update("UPDATE rnd.experiment SET experiment_no=?,title=?,category_id=?,category_name=?,project_id=?,stage_id=?,task_id=?,owner_name=?,experiment_date=?,revision=revision+1,updated_by=?,updated_at=now() WHERE organization_id=? AND id=? AND revision=?",

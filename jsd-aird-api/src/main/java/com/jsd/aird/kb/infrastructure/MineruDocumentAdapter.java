@@ -56,6 +56,11 @@ final class MineruDocumentAdapter {
     }
 
     Parsed parsePrecise(Path zipPath, String fileName, UUID resultFileId) {
+        return parsePrecise(zipPath, fileName, resultFileId, Map.of());
+    }
+
+    Parsed parsePrecise(Path zipPath, String fileName, UUID resultFileId,
+                        Map<String, UUID> assetFileIds) {
         try (var archive = inspect(zipPath)) {
             var contentEntry = selectContentEntry(archive.entries());
             var content = readJson(archive.zip(), contentEntry);
@@ -77,7 +82,7 @@ final class MineruDocumentAdapter {
                     continue;
                 }
                 if ("image".equals(type) || "image_body".equals(type) || "chart".equals(type)) {
-                    appendVisual(blocks, item, type, pageNo, page, bbox, resultFileId);
+                    appendVisual(blocks, item, type, pageNo, page, bbox, resultFileId, assetFileIds);
                     continue;
                 }
                 appendTextBlock(blocks, item, type, pageNo, page, bbox);
@@ -194,7 +199,8 @@ final class MineruDocumentAdapter {
     }
 
     private void appendVisual(List<DocumentParser.TextBlock> blocks, JsonNode item, String type,
-                              Integer pageNo, Page page, List<Double> bbox, UUID resultFileId) {
+                              Integer pageNo, Page page, List<Double> bbox, UUID resultFileId,
+                              Map<String, UUID> assetFileIds) {
         var caption = joinedText(item.path(type.equals("chart") ? "chart_caption" : "image_caption"));
         if (caption.isBlank()) caption = joinedText(item.path("caption"));
         var footnote = joinedText(item.path(type.equals("chart") ? "chart_footnote" : "image_footnote"));
@@ -209,10 +215,21 @@ final class MineruDocumentAdapter {
         attributes.put("ocrText", normalizeText(ocrText));
         attributes.put("searchable", !joinNonBlank(caption, ocrText, footnote).isBlank());
         var assetPath = firstText(item, "img_path", "image_path", "chart_path");
-        if (!assetPath.isBlank()) attributes.put("resultEntryPath", assetPath.replace('\\', '/'));
+        if (!assetPath.isBlank()) {
+            var normalizedPath = normalizeEntryPath(assetPath);
+            attributes.put("resultEntryPath", normalizedPath);
+            var assetFileId = assetFileIds == null ? null : assetFileIds.get(normalizedPath);
+            if (assetFileId != null) attributes.put("assetFileId", assetFileId.toString());
+        }
         if (resultFileId != null) attributes.put("resultFileId", resultFileId.toString());
         blocks.add(new DocumentParser.TextBlock(pageNo, "chart".equals(type) ? "chart" : "image", text,
                 null, null, null, bbox, null, null, confidence(item), attributes));
+    }
+
+    private String normalizeEntryPath(String value) {
+        var normalized = value == null ? "" : value.replace('\\', '/').strip();
+        while (normalized.startsWith("./")) normalized = normalized.substring(2);
+        return normalized;
     }
 
     private void flushParagraph(List<DocumentParser.TextBlock> blocks, StringBuilder paragraph) {

@@ -27,11 +27,12 @@ import {
   SettingOutlined,
   UserOutlined,
   HistoryOutlined,
+  SearchOutlined,
 } from '@ant-design/icons';
 import { ProLayout } from '@ant-design/pro-components';
-import { Avatar, Button, Dropdown, Result, Typography } from 'antd';
+import { Avatar, Button, Dropdown, Input, Result, Tooltip, Typography, type InputRef } from 'antd';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 
 import { appEnv } from '@/app/config/env';
 import { AuthGate } from '@/components/auth/AuthGate';
@@ -195,6 +196,55 @@ function UserMenu() {
   </Dropdown>;
 }
 
+function AppHeaderTools({ permissions }: { permissions: string[] }) {
+  const navigate = useNavigate();
+  const searchRef = useRef<InputRef>(null);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        searchRef.current?.focus();
+        searchRef.current?.select();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  const search = (value: string) => {
+    const query = value.trim();
+    if (query) navigate(`/knowledge/search?q=${encodeURIComponent(query)}`);
+  };
+
+  return (
+    <div className="app-header-tools">
+      <Input
+        ref={searchRef}
+        className="app-command-search"
+        aria-label="全局搜索"
+        aria-keyshortcuts="Control+K Meta+K"
+        prefix={<SearchOutlined />}
+        placeholder="搜索知识库、文档、问题…"
+        suffix={<kbd>Ctrl K</kbd>}
+        onPressEnter={(event) => search(event.currentTarget.value)}
+      />
+      {canViewPath('/system/users', permissions) && (
+        <Tooltip title="系统设置">
+          <Button
+            type="text"
+            className="app-header-icon-button"
+            icon={<SettingOutlined />}
+            aria-label="打开系统设置"
+            onClick={() => navigate('/system/users')}
+          />
+        </Tooltip>
+      )}
+      <UserMenu />
+    </div>
+  );
+}
+
 function AccessDenied({ permissions }: { permissions: string[] }) {
   const navigate = useNavigate();
   const home = firstAccessiblePath(permissions);
@@ -216,9 +266,12 @@ export function BasicLayout() {
   return (
     <AuthGate>
       <div className="app-shell">
+      <div className="app-topbar" aria-label="全局工具区">
+        <AppHeaderTools permissions={permissions} />
+      </div>
       <ProLayout
         title={appEnv.title}
-        logo={false}
+        logo={<AppstoreOutlined />}
         route={visibleRoute}
         location={{ pathname: location.pathname }}
         collapsed={collapsed}
@@ -226,8 +279,9 @@ export function BasicLayout() {
         layout="side"
         fixedHeader
         fixSiderbar
+        siderWidth={256}
         avatarProps={false}
-        actionsRender={() => null}
+        actionsRender={false}
         rightContentRender={() => null}
         contentStyle={{ minHeight: 'calc(100dvh - 64px)', padding: 0 }}
         menuItemRender={(item, dom) => (item.path ? <Link to={item.path}>{dom}</Link> : dom)}
@@ -239,7 +293,6 @@ export function BasicLayout() {
           {requiredPermission && !canViewPath(location.pathname, permissions) ? <AccessDenied permissions={permissions} /> : <Outlet />}
         </main>
       </ProLayout>
-      <div className="app-header-user"><UserMenu /></div>
       </div>
     </AuthGate>
   );

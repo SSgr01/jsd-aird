@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test;
 class ContextCompressionServiceTest {
 
     @Test
-    void keepsSourceIdentityAndAppliesBudget() {
+    void keepsSafeSourceMetadataAndAppliesBudget() {
         var hit = new KnowledgeSearchFacade.SearchHit(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
                 "材料规范", "spec.pdf", 4, "性能", "a".repeat(500), 0.8);
         var data = new DataSourceFileSearchFacade.SourceFileHit(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
@@ -21,9 +21,11 @@ class ContextCompressionServiceTest {
         var context = new ContextCompressionService().compress(List.of(hit), List.of(data), 200);
 
         assertThat(context.characterCount()).isLessThanOrEqualTo(200);
-        assertThat(context.text()).contains("chunkId=" + hit.chunkId())
-                .contains("sourceType=KNOWLEDGE_CHUNK")
-                .contains("evidenceRelation=TEXT_FRAGMENT");
+        assertThat(context.text()).contains("source=knowledge")
+                .doesNotContain("ref=")
+                .doesNotContain(hit.chunkId().toString())
+                .doesNotContain(hit.documentId().toString())
+                .doesNotContain(hit.versionId().toString());
     }
 
     @Test
@@ -34,8 +36,11 @@ class ContextCompressionServiceTest {
 
         var context = new ContextCompressionService().compress(List.of(), List.of(data), 500);
 
-        assertThat(context.text()).contains("evidenceId=" + data.hitId())
-                .contains("evidenceRelation=SAME_DATA_ROW")
+        assertThat(context.text()).contains("source=data")
+                .doesNotContain("ref=")
+                .doesNotContain(data.hitId().toString())
+                .doesNotContain(data.fileObjectId().toString())
+                .doesNotContain(data.importJobId().toString())
                 .contains("材料名称=TEST-TPL-丙烯酸树脂");
     }
 }

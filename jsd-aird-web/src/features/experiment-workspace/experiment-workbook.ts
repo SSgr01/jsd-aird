@@ -1,6 +1,7 @@
 import type { ExperimentModel } from '@/services/experiments/experiment-api';
 
 type ExperimentListKey = 'formulaItems' | 'processSteps' | 'testResults' | 'events';
+type StableItemListKey = Exclude<ExperimentListKey, 'events'>;
 
 /** 实验本在 Univer 编辑器中的固定工作表布局约定。 */
 export interface ExperimentSheetLayout {
@@ -55,6 +56,16 @@ const SHEET_LAYOUTS: ExperimentSheetLayout[] = [
 ];
 
 const DEFAULT_ROW_CAPACITY = 200;
+const ITEM_ID_HEADER = '__itemId';
+
+function hasStableItemId(key: ExperimentListKey): key is StableItemListKey {
+  return key !== 'events';
+}
+
+function createItemId(): string {
+  if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID();
+  return `item-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
 
 function makeSheet(sheetId: string, name: string, header: string[]): Record<string, unknown> {
   const cellData: Record<string, Record<string, { v: string }>> = {};
@@ -179,11 +190,22 @@ export function buildExperimentSnapshot(
   for (const layout of SHEET_LAYOUTS) {
     const sheet = makeSheet(`sheet-${layout.sheetName}`, layout.sheetName, layout.columns.map((c) => c.title));
     const records = Array.isArray(editModel[layout.key]) ? (editModel[layout.key] as Array<Record<string, unknown>>) : [];
+    const itemIdColumn = layout.columns.length;
+    if (hasStableItemId(layout.key)) {
+      setCell(sheet, HEADER_ROW, itemIdColumn, ITEM_ID_HEADER);
+      sheet.columnData = { [itemIdColumn]: { hd: 1 } };
+    }
     records.forEach((record, row) => {
       const targetRow = HEADER_ROW + 1 + row;
       layout.columns.forEach((column, columnIndex) => {
         setCell(sheet, targetRow, columnIndex, record[column.key] ?? '');
       });
+      if (hasStableItemId(layout.key)) {
+        const itemId = typeof record.itemId === 'string' && record.itemId.trim()
+          ? record.itemId.trim()
+          : createItemId();
+        setCell(sheet, targetRow, itemIdColumn, itemId);
+      }
     });
     sheets[`sheet-${layout.sheetName}`] = sheet;
   }
@@ -222,10 +244,36 @@ export function parseExperimentRecords(snapshot: Record<string, unknown>, editMo
     const sheetId = `sheet-${layout.sheetName}`;
     const sheet = (snapshot.sheets as Record<string, Record<string, unknown>> | undefined)?.[sheetId];
     if (!sheet) continue;
+    const previousRows = Array.isArray(editModel[layout.key])
+      ? (editModel[layout.key] as Array<Record<string, unknown>>)
+      : [];
+    const previousById = new Map<string, Record<string, unknown>>();
+    if (hasStableItemId(layout.key)) {
+      previousRows.forEach((record) => {
+        if (typeof record.itemId === 'string' && record.itemId.trim()) {
+          previousById.set(record.itemId.trim(), record);
+        }
+      });
+    }
+    const seenItemIds = new Set<string>();
+    const sheetHasItemIds = hasStableItemId(layout.key)
+      && readCell(sheet, HEADER_ROW, layout.columns.length) === ITEM_ID_HEADER;
     const rows: Array<Record<string, unknown>> = [];
     let row = HEADER_ROW + 1;
     while (row < DEFAULT_ROW_CAPACITY) {
-      const record: Record<string, unknown> = {};
+      const rowIndex = row - (HEADER_ROW + 1);
+      const itemIdColumn = layout.columns.length;
+      let itemId = sheetHasItemIds ? readCell(sheet, row, itemIdColumn).trim() : '';
+      if (hasStableItemId(layout.key) && (!itemId || seenItemIds.has(itemId))) {
+        const indexedItemId = typeof previousRows[rowIndex]?.itemId === 'string'
+          ? previousRows[rowIndex].itemId.trim()
+          : '';
+        itemId = indexedItemId && !seenItemIds.has(indexedItemId) ? indexedItemId : createItemId();
+      }
+      const previous = hasStableItemId(layout.key)
+        ? (previousById.get(itemId) ?? previousRows[rowIndex])
+        : previousRows[rowIndex];
+      const record: Record<string, unknown> = { ...(previous ?? {}) };
       let hasValue = false;
       layout.columns.forEach((column, columnIndex) => {
         const value = readCell(sheet, row, columnIndex);
@@ -233,10 +281,15 @@ export function parseExperimentRecords(snapshot: Record<string, unknown>, editMo
         record[column.key] = value;
       });
       if (!hasValue) break;
+      if (hasStableItemId(layout.key)) {
+        record.itemId = itemId;
+        record.sourceRefs = Array.isArray(record.sourceRefs) ? record.sourceRefs : [];
+        seenItemIds.add(itemId);
+      }
       rows.push(record);
       row += 1;
     }
-    next[layout.key] = rows;
+    (next as Record<string, unknown>)[layout.key] = rows;
   }
   return next;
 }

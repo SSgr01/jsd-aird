@@ -104,9 +104,10 @@ public class SecurityConfig {
     @Bean
     SessionAuthenticationFilter sessionAuthenticationFilter(
             com.jsd.aird.iam.application.IamAuthService auth,
-            @Value("${app.security.session-cookie-name:JSD_AIRD_SESSION}") String cookieName
+            @Value("${app.security.session-cookie-name:JSD_AIRD_SESSION}") String cookieName,
+            @Value("${app.security.session-touch-interval:30s}") java.time.Duration touchInterval
     ) {
-        return new SessionAuthenticationFilter(auth, cookieName);
+        return new SessionAuthenticationFilter(auth, cookieName, touchInterval);
     }
 
     @Bean

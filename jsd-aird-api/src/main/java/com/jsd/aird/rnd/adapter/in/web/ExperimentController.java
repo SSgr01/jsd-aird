@@ -31,20 +31,20 @@ public class ExperimentController {
     @PostMapping("/experiments/{id}/draft") public ApiResponse<?> draft(@PathVariable UUID id,@Valid @RequestBody DraftRequest r){return ok(service.save(id,r.revision,new ExperimentService.DraftCommand(r.experimentNo,r.title,r.categoryId,r.categoryName,r.projectId,r.stageId,r.taskId,r.ownerName,r.experimentDate,r.templateVersionId,r.templateSnapshotHash,r.templateSnapshot,r.editModel)));}
     /** ELN soft-delete endpoint. The legacy project experiment controller owns DELETE /experiments/{id}. */
     @DeleteMapping("/experiments/{id}/eln-delete") public ApiResponse<?> delete(@PathVariable UUID id,@RequestParam long revision){service.delete(id,revision);return ok(null);}
-    @PostMapping("/experiments/{id}/start") public ApiResponse<?> start(@PathVariable UUID id,@RequestBody ActionRequest r){return ok(service.transition(id,r.revision,ExperimentStatus.IN_PROGRESS,r.comment));}
-    @PostMapping("/experiments/{id}/submit-review") public ApiResponse<?> submit(@PathVariable UUID id,@RequestBody ActionRequest r){return ok(service.transition(id,r.revision,ExperimentStatus.PENDING_REVIEW,r.comment));}
-    @PostMapping("/experiments/{id}/approve") public ApiResponse<?> approve(@PathVariable UUID id,@RequestBody ActionRequest r){return ok(service.transition(id,r.revision,ExperimentStatus.COMPLETED,r.comment));}
-    @PostMapping("/experiments/{id}/return") public ApiResponse<?> returned(@PathVariable UUID id,@RequestBody ActionRequest r){return ok(service.transition(id,r.revision,ExperimentStatus.RETURNED,r.comment));}
-    @PostMapping("/experiments/{id}/void") public ApiResponse<?> voided(@PathVariable UUID id,@RequestBody ActionRequest r){return ok(service.transition(id,r.revision,ExperimentStatus.VOIDED,r.comment));}
+    @PostMapping("/experiments/{id}/start") public ApiResponse<?> start(@PathVariable UUID id,@Valid @RequestBody ActionRequest r){return ok(service.transition(id,r.revision,ExperimentStatus.IN_PROGRESS,r.comment));}
+    @PostMapping("/experiments/{id}/submit-review") public ApiResponse<?> submit(@PathVariable UUID id,@Valid @RequestBody ActionRequest r){return ok(service.transition(id,r.revision,ExperimentStatus.PENDING_REVIEW,r.comment));}
+    @PostMapping("/experiments/{id}/approve") public ApiResponse<?> approve(@PathVariable UUID id,@Valid @RequestBody ActionRequest r){return ok(service.transition(id,r.revision,ExperimentStatus.COMPLETED,r.comment));}
+    @PostMapping("/experiments/{id}/return") public ApiResponse<?> returned(@PathVariable UUID id,@Valid @RequestBody ActionRequest r){return ok(service.transition(id,r.revision,ExperimentStatus.RETURNED,r.comment));}
+    @PostMapping("/experiments/{id}/void") public ApiResponse<?> voided(@PathVariable UUID id,@Valid @RequestBody ActionRequest r){return ok(service.transition(id,r.revision,ExperimentStatus.VOIDED,r.comment));}
     @GetMapping("/experiments/{id}/versions") public ApiResponse<?> versions(@PathVariable UUID id){return ok(service.versions(id));}
-    @PostMapping("/experiments/{id}/versions") public ApiResponse<?> revision(@PathVariable UUID id,@RequestBody RevisionRequest r){return ok(service.revision(id,r.revision,r.reason));}
+    @PostMapping("/experiments/{id}/versions") public ApiResponse<?> revision(@PathVariable UUID id,@Valid @RequestBody RevisionRequest r){return ok(service.revision(id,r.revision,r.reason));}
     @PostMapping("/experiments/{id}/versions/{versionNo}/rollback") public ApiResponse<?> rollback(@PathVariable UUID id,@PathVariable int versionNo,@RequestBody RevisionRequest r){return ok(service.rollback(id,r.revision,versionNo,r.reason));}
     @GetMapping("/experiments/{id}/versions/compare") public ApiResponse<?> compare(@PathVariable UUID id,@RequestParam int from,@RequestParam int to){return ok(service.compare(id,from,to));}
     @GetMapping("/experiments/{id}/audits") public ApiResponse<?> audits(@PathVariable UUID id){return ok(service.audits(id));}
     @GetMapping("/experiment-categories") public ApiResponse<?> categories(@RequestParam(defaultValue="false")boolean includeInactive){return ok(service.categories(includeInactive));}
     @PostMapping("/experiment-categories") public ApiResponse<?> category(@Valid @RequestBody CategoryRequest r){return ok(service.createCategory(r.code,r.name,r.description));}
     @PutMapping("/experiment-categories/{id}") public ApiResponse<?> updateCategory(@PathVariable UUID id,@Valid @RequestBody CategoryUpdateRequest r){return ok(service.updateCategory(id,r.revision,r.name,r.description));}
-    @PutMapping("/experiment-categories/{id}/active") public ApiResponse<?> categoryActive(@PathVariable UUID id,@RequestBody CategoryActiveRequest r){return ok(service.categoryActive(id,r.revision,r.active));}
+    @PutMapping("/experiment-categories/{id}/active") public ApiResponse<?> categoryActive(@PathVariable UUID id,@Valid @RequestBody CategoryActiveRequest r){return ok(service.categoryActive(id,r.revision,r.active));}
     private static <T>ApiResponse<T> ok(T data){return ResponseFactory.success(data,RequestIdHolder.currentOrUnknown());}
     private static ResponseEntity<byte[]> download(ExperimentExportService.Download file){
         var disposition=ContentDisposition.attachment().filename(file.fileName(), StandardCharsets.UTF_8).build();

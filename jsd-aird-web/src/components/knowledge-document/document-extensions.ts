@@ -57,9 +57,21 @@ const DataTableRef = Node.create({
 
 const SourceImage = Node.create({
   name: 'image', group: 'block', content: 'text*', selectable: true,
-  addAttributes() { return { reviewNodeId: { default: null }, origin: { default: 'source' }, sourceNodeKeys: { default: [] } }; },
+  addAttributes() {
+    return {
+      reviewNodeId: { default: null }, origin: { default: 'source' }, sourceNodeKeys: { default: [] },
+      assetFileId: { default: null }, caption: { default: '' },
+    };
+  },
   parseHTML() { return [{ tag: 'figure[data-source-image]' }]; },
-  renderHTML({ HTMLAttributes }) { return ['figure', mergeAttributes(HTMLAttributes, { 'data-source-image': '', class: 'knowledge-source-image' }), ['span', '图片'], ['figcaption', 0]]; },
+  renderHTML({ HTMLAttributes }) {
+    const assetFileId = attributeText(HTMLAttributes, 'assetFileId');
+    const caption = attributeText(HTMLAttributes, 'caption');
+    const children = assetFileId
+      ? [['img', { src: `/api/v1/knowledge/assets/${assetFileId}/content`, alt: caption || '解析图片', loading: 'lazy' }], ['figcaption', 0]]
+      : [['span', '图片'], ['figcaption', 0]];
+    return ['figure', mergeAttributes(HTMLAttributes, { 'data-source-image': '', class: 'knowledge-source-image' }), ...children];
+  },
 });
 
 export const knowledgeDocumentExtensions = [

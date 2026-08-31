@@ -370,6 +370,7 @@ public class AssistantService {
                 - 用户询问资料是否提供某事实而资料未提供时，返回 NOT_FOUND 和空 usedEvidenceRefs；能说“没有找到”不等于事实已找到。
                 - usedEvidenceRefs 只能填写真正包含 answer 结论的 evidenceRef。NOT_FOUND 时必须为空数组。
                 - answer 应直接、简洁，不添加固定的依据说明、置信度、重复总结、证据编号、数据库 ID、内部标识或内部关系类型。
+                - 公式和技术单位只使用证据中的可读 Unicode 表达或完整的 $LaTeX$；不得输出 BM25 内部使用的 h_2o、m^-2 等规范词项。
                 - K、D、E 只是内部分类，禁止在 answer 中出现或解释。页码只可使用知识库证据的 page 字段。
                 - 只可原样使用上下文中已经出现的 /api/v1/knowledge/assets/{assetId}/content 图片地址；不得猜测或改写 URL。
                 """;

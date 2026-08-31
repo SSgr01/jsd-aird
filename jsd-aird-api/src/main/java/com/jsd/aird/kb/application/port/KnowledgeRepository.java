@@ -165,7 +165,9 @@ public interface KnowledgeRepository {
                           String primaryAnchorJson, String anchorsJson, List<UUID> reviewNodeIds,
                           List<UUID> sourceNodeKeys) { }
     record TermFrequency(String term, int frequency) { }
-    record AnalyzedTerm(String analyzerVersion, String term) { }
+    record AnalyzedTerm(int familyOrdinal, String analyzerVersion, String term) {
+        public AnalyzedTerm(String analyzerVersion, String term) { this(0, analyzerVersion, term); }
+    }
     record AnalyzedQuery(int ordinal, String query, List<AnalyzedTerm> terms) {
         public AnalyzedQuery {
             terms = terms == null ? List.of() : List.copyOf(terms);

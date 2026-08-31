@@ -15,11 +15,11 @@ class MaterialLexicalAnalyzerTest {
                         + "样品浓度 2 mg mL−1，过程约 10 s。");
 
         assertThat(analysis.frequencies()).containsKeys(
-                "ua-1117", "400-700cps", "25mj/cm2", "cacl2", "1mol/l", "2mg/ml", "10s");
+                "ua-1117", "400-700cps", "25mj/cm^2", "cacl_2", "1mol/l", "2mg/ml", "10s");
         assertThat(analysis.frequencies()).doesNotContainKeys("的", "为");
         assertThat(analysis.documentLength()).isEqualTo(
                 analysis.frequencies().values().stream().mapToInt(Integer::intValue).sum());
-        assertThat(analyzer.version()).isEqualTo("material-smartcn-v2");
+        assertThat(analyzer.version()).isEqualTo("material-smartcn-v3");
     }
 
     @Test
@@ -32,6 +32,19 @@ class MaterialLexicalAnalyzerTest {
     @Test
     void normalizesLatexChemicalSubscriptsWithoutKnowingTheCompound() {
         assertThat(analyzer.analyzeDocument("$\\mathrm { C a C l } _ { 2 }$").frequencies())
-                .containsKey("cacl2");
+                .containsKey("cacl_2");
+    }
+
+    @Test
+    void modelsScriptlessCompatibilityAsAliasesOfOneOccurrence() {
+        var families = analyzer.analyzeCompatibleQuery("H₂O");
+
+        assertThat(families).hasSize(1);
+        assertThat(families.getFirst().alternatives()).containsExactlyInAnyOrder(
+                new com.jsd.aird.kb.domain.LexicalAnalyzer.QueryAlternative("material-smartcn-v3", "h_2o"),
+                new com.jsd.aird.kb.domain.LexicalAnalyzer.QueryAlternative("material-smartcn-v3", "h2o"),
+                new com.jsd.aird.kb.domain.LexicalAnalyzer.QueryAlternative("material-smartcn-v2", "h2o"));
+        assertThat(analyzer.analyzeDocument("H₂O").documentLength()).isEqualTo(1);
+        assertThat(analyzer.analyzeDocument("H₂O").frequencies()).containsOnlyKeys("h_2o");
     }
 }

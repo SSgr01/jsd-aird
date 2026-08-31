@@ -625,8 +625,10 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         var queries = new ArrayList<KnowledgeRepository.AnalyzedQuery>();
         try {
             for (var ordinal = 0; ordinal < variants.size(); ordinal++) {
-                var terms = lexicalAnalyzer.analyzeQuery(variants.get(ordinal)).frequencies().keySet().stream()
-                        .map(term -> new KnowledgeRepository.AnalyzedTerm(lexicalAnalyzer.version(), term)).toList();
+                var terms = lexicalAnalyzer.analyzeCompatibleQuery(variants.get(ordinal)).stream()
+                        .flatMap(family -> family.alternatives().stream().map(term ->
+                                new KnowledgeRepository.AnalyzedTerm(family.ordinal(), term.analyzerVersion(), term.term())))
+                        .distinct().toList();
                 if (!terms.isEmpty()) queries.add(new KnowledgeRepository.AnalyzedQuery(ordinal, variants.get(ordinal), terms));
             }
         } catch (RuntimeException exception) {

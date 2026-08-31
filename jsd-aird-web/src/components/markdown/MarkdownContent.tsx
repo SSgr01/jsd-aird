@@ -1,25 +1,10 @@
-import katex from 'katex';
 import type { ReactNode } from 'react';
 
-import 'katex/dist/katex.min.css';
+import { latexHtml, normalizeMineruLatex } from './latex-rendering';
 
 interface MarkdownContentProps {
   value?: string | null;
   className?: string;
-}
-
-function normalizeLatex(value: string) {
-  return value
-    .trim()
-    .replace(/\\_\s*(?=\{)/g, '_')
-    .replace(/\\(mathrm|mathbf|mathit|mathsf|mathtt)\s*\{([^{}]*)\}/g, (_, command: string, body: string) => {
-      const tokens = body.trim().split(/\s+/);
-      const normalizedBody = tokens.length > 1 && tokens.every((token) => /^[A-Za-z0-9]$/.test(token))
-        ? tokens.join('')
-        : body.trim();
-      return `\\${command}{${normalizedBody}}`;
-    })
-    .replace(/\s*([_^])\s*(?=\{)/g, '$1');
 }
 
 function containsLatex(value: string) {
@@ -27,14 +12,8 @@ function containsLatex(value: string) {
 }
 
 function MathExpression({ value, displayMode = false }: { value: string; displayMode?: boolean }) {
-  const normalized = normalizeLatex(value);
-  const html = katex.renderToString(normalized, {
-    displayMode,
-    output: 'htmlAndMathml',
-    strict: 'ignore',
-    throwOnError: false,
-    trust: false,
-  });
+  const normalized = normalizeMineruLatex(value);
+  const html = latexHtml(value, displayMode);
 
   const Element = displayMode ? 'div' : 'span';
   return (

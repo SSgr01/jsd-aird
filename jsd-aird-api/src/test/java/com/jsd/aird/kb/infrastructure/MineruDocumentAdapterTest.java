@@ -5,6 +5,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Map;
+import java.util.UUID;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -69,6 +73,78 @@ class MineruDocumentAdapterTest {
     }
 
     @Test
+    void mapsOfficialV2PageArraysAndProjectsChartsAsReviewImages() throws Exception {
+        var content = """
+                [
+                  [
+                    {"type":"title","content":{"title_content":[{"type":"text","content":"研究结果"}],"level":2},"bbox":[20,20,600,70]},
+                    {"type":"paragraph","content":{"paragraph_content":[{"type":"text","content":"第一"},{"type":"text","content":"页正文"}]},"bbox":[20,80,900,150]},
+                    {"type":"chart","content":{"image_source":{"path":"images/chart.jpg"},"content":"PEGDA charge density","chart_caption":[{"type":"text","content":"Figure 3 电荷密度"}],"chart_footnote":[{"type":"text","content":"与 PVC 摩擦 40 s"}]},"bbox":[100,180,900,760]}
+                  ],
+                  [
+                    {"type":"image","content":{"image_source":{"path":"images/photo.jpg"},"image_caption":[{"type":"text","content":"实验装置"}],"image_footnote":[]},"bbox":[50,40,450,300]},
+                    {"type":"table","content":{"html":"<table><tr><td>项目</td><td>值</td></tr><tr><td>时间</td><td>40 s</td></tr></table>","table_caption":[{"type":"text","content":"测试条件"}],"table_footnote":[]},"bbox":[50,320,900,600]},
+                    {"type":"equation_interline","content":{"math_content":"q = 7.4 μC m^{-2}"},"bbox":[50,620,700,670]},
+                    {"type":"algorithm","content":{"algorithm_content":[{"type":"text","content":"Step 1: initialize"}]},"bbox":[50,680,800,730]},
+                    {"type":"index","content":{"list_items":[{"item_content":[{"type":"text","content":"Figure 3"}]},{"item_content":[{"type":"text","content":"Table 1"}]}]},"bbox":[50,740,800,820]},
+                    {"type":"page_footer","content":{"page_footer_content":[{"type":"text","content":"期刊页脚"}]},"bbox":[0,950,1000,1000]},
+                    {"type":"future_semantic_block","content":{"future_semantic_block_content":[{"type":"text","content":"保留供审核"}]},"bbox":[0,900,1000,940]}
+                  ]
+                ]
+                """;
+        var layout = """
+                {"pdf_info":[
+                  {"page_idx":0,"page_size":[600,800],"rotation":0},
+                  {"page_idx":1,"page_size":[600,800],"rotation":0}
+                ]}
+                """;
+        var archive = Path.of(System.getProperty("java.io.tmpdir"), "mineru-v2-" + UUID.randomUUID() + ".zip");
+        var resultFileId = UUID.randomUUID();
+        var chartAssetId = UUID.randomUUID();
+        var photoAssetId = UUID.randomUUID();
+        Files.write(archive, zip("content_list_v2.json", content, "layout.json", layout));
+        try {
+            var parsed = new MineruDocumentAdapter(mapper).parsePrecise(archive, "paper.pdf", resultFileId,
+                    Map.of("images/chart.jpg", chartAssetId, "images/photo.jpg", photoAssetId));
+
+            var chart = parsed.blocks().stream().filter(block -> "chart".equals(block.section())).findFirst().orElseThrow();
+            assertThat(chart.pageNo()).isEqualTo(1);
+            assertThat(chart.bbox()).containsExactly(0.1, 0.18, 0.9, 0.18, 0.9, 0.76, 0.1, 0.76);
+            assertThat(chart.attributes()).containsEntry("visualType", "CHART")
+                    .containsEntry("resultEntryPath", "images/chart.jpg")
+                    .containsEntry("assetFileId", chartAssetId.toString())
+                    .containsEntry("resultFileId", resultFileId.toString())
+                    .containsEntry("caption", "Figure 3 电荷密度")
+                    .containsEntry("footnote", "与 PVC 摩擦 40 s")
+                    .containsEntry("ocrText", "PEGDA charge density");
+            assertThat(parsed.blocks()).anySatisfy(block -> {
+                assertThat(block.pageNo()).isEqualTo(2);
+                assertThat(block.section()).isEqualTo("image");
+                assertThat(block.attributes()).containsEntry("visualType", "IMAGE")
+                        .containsEntry("assetFileId", photoAssetId.toString());
+            });
+            assertThat(parsed.blocks()).extracting(block -> block.section())
+                    .contains("heading-2", "paragraph", "mineru-table-row", "formula", "code", "listItem", "footer");
+            assertThat(parsed.blocks().stream().filter(block -> "footer".equals(block.section())).findFirst().orElseThrow()
+                    .attributes()).containsEntry("searchable", false);
+            assertThat(parsed.blocks().stream()
+                    .filter(block -> "future_semantic_block".equals(block.attributes().get("mineruType")))
+                    .findFirst().orElseThrow().attributes()).containsEntry("searchable", false);
+
+            var initialized = new StructuredDocumentCodec(mapper).initialize(parsed.blocks());
+            assertThat(initialized.sourceNodes()).anySatisfy(node -> assertThat(node.nodeType()).isEqualTo("chart"));
+            var reviewChart = java.util.stream.StreamSupport.stream(
+                            initialized.confirmedDocument().path("content").spliterator(), false)
+                    .filter(node -> node.path("attrs").path("visualType").asText().equals("CHART"))
+                    .findFirst().orElseThrow();
+            assertThat(reviewChart.path("type").asText()).isEqualTo("image");
+            assertThat(reviewChart.path("attrs").path("assetFileId").asText()).isEqualTo(chartAssetId.toString());
+        } finally {
+            Files.deleteIfExists(archive);
+        }
+    }
+
+    @Test
     void rejectsZipPathTraversalBeforeReadingContent() {
         assertThatThrownBy(() -> new MineruDocumentAdapter(mapper).parsePrecise(
                 zip("../content_list.json", "[]", "layout.json", "{}"), "test.pdf"))
@@ -91,6 +167,17 @@ class MineruDocumentAdapterTest {
     void rejectsMoreThanTheConfiguredEntryLimit() {
         assertThatThrownBy(() -> new MineruDocumentAdapter(mapper).parsePrecise(tooManyEntries(), "test.pdf"))
                 .isInstanceOf(MineruException.class).hasMessageContaining("entry 数超过 4096");
+    }
+
+    @Test
+    void keepsAgentMarkdownParagraphsStructuredSoInlineMathIsNotPromotedToABlockFormula() {
+        var parsed = new MineruDocumentAdapter(mapper).parseAgent(
+                "Conductivity is $3.5 \\times 10^{-12} \\mathrm{S}$ in this sample.", "paper.pdf");
+
+        assertThat(parsed.blocks()).singleElement().satisfies(block -> assertThat(block.section()).isEqualTo("paragraph"));
+        var document = new StructuredDocumentCodec(mapper).initialize(parsed.blocks()).confirmedDocument();
+        assertThat(document.path("content").get(0).path("type").asText()).isEqualTo("paragraph");
+        assertThat(document.path("content").get(0).toString()).contains("inlineMath", "latexRaw");
     }
 
     private byte[] zip(String firstName, String first, String secondName, String second) {

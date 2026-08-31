@@ -265,7 +265,7 @@ export function BasicLayout() {
 
   return (
     <AuthGate>
-      <div className="app-shell">
+      <div className={`app-shell${collapsed ? ' app-shell-sidebar-collapsed' : ''}`}>
       <div className="app-topbar" aria-label="全局工具区">
         <AppHeaderTools permissions={permissions} />
       </div>

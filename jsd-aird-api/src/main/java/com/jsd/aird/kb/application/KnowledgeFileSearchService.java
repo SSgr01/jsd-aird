@@ -43,8 +43,8 @@ public class KnowledgeFileSearchService implements KnowledgeFileSearchFacade {
         var candidateLimit = Math.min(400, Math.max(40, limit * 12));
         var rows = new LinkedHashMap<UUID, KnowledgeRepository.SearchRow>();
         var terms = new java.util.LinkedHashSet<KnowledgeRepository.AnalyzedTerm>();
-        lexicalAnalyzer.analyzeQuery(query).frequencies().keySet().forEach(term -> terms.add(
-                new KnowledgeRepository.AnalyzedTerm(lexicalAnalyzer.version(), term)));
+        lexicalAnalyzer.analyzeCompatibleQuery(query).forEach(family -> family.alternatives().forEach(term -> terms.add(
+                new KnowledgeRepository.AnalyzedTerm(family.ordinal(), term.analyzerVersion(), term.term()))));
         documents.bm25Search(organizationId, List.copyOf(terms), false,
                 categoryIds, allowedDocumentIds, candidateLimit).forEach(row -> rows.putIfAbsent(row.chunkId(), row));
         documents.fullTextSearch(organizationId, query, false, categoryIds, allowedDocumentIds, candidateLimit)
@@ -84,7 +84,8 @@ public class KnowledgeFileSearchService implements KnowledgeFileSearchFacade {
     }
 
     private String normalize(String value) {
-        return value == null ? "" : value.toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9\\u4E00-\\u9FFF]", "");
+        return value == null ? "" : java.text.Normalizer.normalize(value, java.text.Normalizer.Form.NFKC)
+                .toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9\\u4E00-\\u9FFF]", "");
     }
 
     private JsonNode read(String value) {

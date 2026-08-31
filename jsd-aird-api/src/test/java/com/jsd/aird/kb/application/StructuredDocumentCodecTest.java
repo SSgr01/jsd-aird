@@ -139,6 +139,71 @@ class StructuredDocumentCodecTest {
                 .headingPath()).containsExactly("第二章");
     }
 
+    @Test
+    void parsesMineruInlineMathAndScriptsWhilePreservingRawLatex() {
+        var latexRaw = "3 . 5 \\times 1 0 ^ { - 1 2 } \\mathrm { S } \\mathrm { c m } ^ { - 1 }";
+        var input = "The conductivity is $" + latexRaw
+                + "$ and the cited result is <sup>[</sup><sup>10</sup><sup>]</sup>.";
+
+        var initialized = codec.initialize(List.of(block("paragraph", input, Map.of())));
+        var paragraph = initialized.confirmedDocument().path("content").get(0);
+        var inlineMath = java.util.stream.StreamSupport.stream(paragraph.path("content").spliterator(), false)
+                .filter(node -> "inlineMath".equals(node.path("type").asText()))
+                .findFirst().orElseThrow();
+
+        assertThat(inlineMath.path("attrs").path("latexRaw").asText()).isEqualTo(latexRaw);
+        assertThat(initialized.confirmedDocument().toString()).contains("superscript")
+                .doesNotContain("<sup>", "</sup>");
+        var evidence = codec.project(initialized.confirmedDocument(), List.of()).confirmedText();
+        assertThat(evidence).contains("10⁻¹²", "cm⁻¹", "[10]").doesNotContain("\\mathrm", "<sup>");
+    }
+
+    @Test
+    void givesBlockMathPriorityAndBuildsAValidTopLevelSequence() {
+        var initialized = codec.initialize(List.of(block("paragraph", "Before $$x^2$$ after", Map.of())));
+        var content = initialized.confirmedDocument().path("content");
+
+        assertThat(content).extracting(node -> node.path("type").asText())
+                .containsExactly("paragraph", "formula", "paragraph");
+        assertThat(content.get(1).path("attrs").path("latexRaw").asText()).isEqualTo("x^2");
+        assertThat(content.get(0).path("attrs").path("sourceNodeKeys").get(0).asText())
+                .isEqualTo(content.get(1).path("attrs").path("sourceNodeKeys").get(0).asText())
+                .isEqualTo(content.get(2).path("attrs").path("sourceNodeKeys").get(0).asText());
+        assertThat(content.get(0).path("attrs").path("reviewNodeId").asText())
+                .isNotEqualTo(content.get(1).path("attrs").path("reviewNodeId").asText());
+        assertThat(content.get(1).path("attrs").path("reviewNodeId").asText())
+                .isNotEqualTo(content.get(2).path("attrs").path("reviewNodeId").asText());
+    }
+
+    @Test
+    void leavesCurrencyUnknownAnglesAndCodeUntouchedWhileRemovingOnlyKnownOrphanTokens() {
+        var initialized = codec.initialize(List.of(
+                block("paragraph", "The price ranges from $5 to $10; \\$5; <Fe>; abc</sup>def", Map.of()),
+                block("code", "$x$ <sup>literal</sup> \\alpha", Map.of())
+        ));
+        var content = initialized.confirmedDocument().path("content");
+
+        assertThat(content.get(0).toString()).doesNotContain("inlineMath", "</sup>");
+        assertThat(codec.project(initialized.confirmedDocument(), List.of()).confirmedText())
+                .contains("$5 to $10", "$5", "<Fe>", "abcdef", "$x$ <sup>literal</sup> \\alpha");
+    }
+
+    @Test
+    void supportsBracketedMathAndNeverRepairsMalformedMarkupAsHtml() {
+        var input = "\\[\\frac{a}{b}\\] then \\(H_{2}O\\) and unclosed $x; "
+                + "A<sup>B<sub>C</sup>D; C:\\Users";
+        var initialized = codec.initialize(List.of(block("paragraph", input, Map.of())));
+        var content = initialized.confirmedDocument().path("content");
+
+        assertThat(content).extracting(node -> node.path("type").asText())
+                .containsExactly("formula", "paragraph");
+        assertThat(content.get(0).path("attrs").path("latexRaw").asText()).isEqualTo("\\frac{a}{b}");
+        assertThat(content.get(1).toString()).contains("inlineMath", "$x", "C:\\\\Users")
+                .doesNotContain("<sup>", "<sub>");
+        assertThat(codec.project(initialized.confirmedDocument(), List.of()).confirmedText())
+                .contains("$\\frac{a}{b}$", "H₂O", "$x", "ABCD", "C:\\Users");
+    }
+
     private DocumentParser.TextBlock block(String section, String text, Map<String, Object> attributes) {
         return new DocumentParser.TextBlock(null, section, text, null, null, null, List.of(), null,
                 null, null, attributes);

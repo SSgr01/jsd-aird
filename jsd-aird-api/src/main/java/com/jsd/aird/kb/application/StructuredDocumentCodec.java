@@ -37,14 +37,17 @@ public class StructuredDocumentCodec {
     private static final Set<String> ALLOWED_NODES = Set.of(
             "doc", "paragraph", "heading", "text", "bulletList", "orderedList", "listItem",
             "blockquote", "codeBlock", "horizontalRule", "hardBreak", "table", "tableRow",
-            "tableHeader", "tableCell", "image", "audioSegment", "formula", "dataTableRef"
+            "tableHeader", "tableCell", "image", "audioSegment", "formula", "inlineMath", "dataTableRef"
     );
-    private static final Set<String> ALLOWED_MARKS = Set.of("bold", "italic", "underline", "strike", "code", "link");
+    private static final Set<String> ALLOWED_MARKS = Set.of(
+            "bold", "italic", "underline", "strike", "code", "link", "superscript", "subscript");
 
     private final ObjectMapper objectMapper;
+    private final MineruInlineSemanticParser inlineParser;
 
     public StructuredDocumentCodec(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
+        this.inlineParser = new MineruInlineSemanticParser(objectMapper, new LatexEvidenceProjector());
     }
 
     /** Sanitizes provider output without guessing layout semantics. */
@@ -130,8 +133,10 @@ public class StructuredDocumentCodec {
                 listGroup = null;
                 sourceList = null;
                 reviewList = null;
-                sourceContent.add(sourceNode(type, sourceKey, text, block.attributes()));
-                reviewContent.add(reviewNode(type, reviewNodeId, sourceKey, text, block.attributes()));
+                structuredNodes(type, sourceKey, reviewNodeId, text, block.attributes(), false)
+                        .forEach(sourceContent::add);
+                structuredNodes(type, sourceKey, reviewNodeId, text, block.attributes(), true)
+                        .forEach(reviewContent::add);
             }
         }
         return new InitialDocuments(document(sourceContent), document(reviewContent), sourceNodes);
@@ -250,10 +255,7 @@ public class StructuredDocumentCodec {
     }
 
     private String textContent(JsonNode node) {
-        if ("text".equals(node.path("type").asText())) return node.path("text").asText("");
-        var value = new StringBuilder();
-        node.path("content").forEach(child -> value.append(textContent(child)));
-        return value.toString();
+        return inlineParser.evidenceText(node);
     }
 
     private ObjectNode document(ArrayNode content) {
@@ -261,24 +263,45 @@ public class StructuredDocumentCodec {
                 .set("content", content);
     }
 
-    private ObjectNode sourceNode(String type, UUID sourceKey, String text, java.util.Map<String, Object> attributes) {
-        var node = objectMapper.createObjectNode().put("type", tiptapType(type));
-        var attrs = objectMapper.createObjectNode().put("sourceNodeKey", sourceKey.toString());
-        attributes.forEach((key, value) -> attrs.set(key, objectMapper.valueToTree(value)));
-        node.set("attrs", attrs);
-        if (!"dataTableRef".equals(tiptapType(type))) node.set("content", textContent(text));
-        return node;
+    private List<ObjectNode> structuredNodes(String sourceType, UUID sourceKey, UUID firstReviewNodeId, String text,
+                                             Map<String, Object> attributes, boolean review) {
+        var tiptapType = tiptapType(sourceType);
+        if (Set.of("image", "audioSegment", "dataTableRef").contains(tiptapType)) {
+            return List.of(structuredNode(tiptapType, sourceType, sourceKey, firstReviewNodeId, text, attributes,
+                    review, null, true));
+        }
+        var blocks = inlineParser.parseBlocks(text, "codeBlock".equals(tiptapType), "formula".equals(tiptapType));
+        var result = new ArrayList<ObjectNode>();
+        var ordinal = 0;
+        for (var block : blocks) {
+            var reviewNodeId = ordinal++ == 0 ? firstReviewNodeId : UUID.randomUUID();
+            var nodeType = block.kind() == MineruInlineSemanticParser.BlockKind.FORMULA ? "formula" : tiptapType;
+            result.add(structuredNode(nodeType, sourceType, sourceKey, reviewNodeId, text, attributes, review,
+                    block, false));
+        }
+        return List.copyOf(result);
     }
 
-    private ObjectNode reviewNode(String type, UUID reviewNodeId, UUID sourceKey, String text,
-                                  java.util.Map<String, Object> attributes) {
-        var node = objectMapper.createObjectNode().put("type", tiptapType(type));
-        var attrs = objectMapper.createObjectNode().put("reviewNodeId", reviewNodeId.toString()).put("origin", "source");
-        attrs.set("sourceNodeKeys", objectMapper.createArrayNode().add(sourceKey.toString()));
-        attributes.forEach((key, value) -> attrs.set(key, objectMapper.valueToTree(value)));
-        if ("heading".equals(tiptapType(type)) && !attrs.has("level")) attrs.put("level", 2);
+    private ObjectNode structuredNode(String nodeType, String sourceType, UUID sourceKey, UUID reviewNodeId,
+                                      String text, Map<String, Object> attributes, boolean review,
+                                      MineruInlineSemanticParser.RichBlock block, boolean inlineOnly) {
+        var node = objectMapper.createObjectNode().put("type", nodeType);
+        var attrs = objectMapper.createObjectNode();
+        if (review) {
+            attrs.put("reviewNodeId", reviewNodeId.toString()).put("origin", "source");
+            attrs.set("sourceNodeKeys", objectMapper.createArrayNode().add(sourceKey.toString()));
+        } else attrs.put("sourceNodeKey", sourceKey.toString());
+        if (attributes != null) {
+            attributes.forEach((key, value) -> attrs.set(key, objectMapper.valueToTree(value)));
+        }
+        applyVisualType(sourceType, attrs);
+        if ("heading".equals(nodeType) && !attrs.has("level")) attrs.put("level", 2);
+        if ("formula".equals(nodeType)) attrs.put("latexRaw", block == null ? text : block.latexRaw());
         node.set("attrs", attrs);
-        if (!"dataTableRef".equals(tiptapType(type))) node.set("content", textContent(text));
+        if (!"dataTableRef".equals(nodeType) && !"formula".equals(nodeType)) {
+            node.set("content", inlineOnly ? inlineParser.inlineJson(text, "codeBlock".equals(nodeType))
+                    : inlineParser.inlineJson(block.inline()));
+        }
         return node;
     }
 
@@ -317,9 +340,18 @@ public class StructuredDocumentCodec {
     private ObjectNode tableCell(String text, boolean header, int rowSpan, int columnSpan) {
         var cell = objectMapper.createObjectNode().put("type", header ? "tableHeader" : "tableCell");
         cell.putObject("attrs").put("colspan", columnSpan).put("rowspan", rowSpan).putNull("colwidth");
-        var paragraph = objectMapper.createObjectNode().put("type", "paragraph");
-        paragraph.set("content", textContent(text));
-        cell.set("content", objectMapper.createArrayNode().add(paragraph));
+        var blocks = inlineParser.parseBlocks(text, false, false);
+        var content = objectMapper.createArrayNode();
+        for (var block : blocks) {
+            if (block.kind() == MineruInlineSemanticParser.BlockKind.FORMULA) {
+                var formula = content.addObject().put("type", "formula");
+                formula.putObject("attrs").put("latexRaw", block.latexRaw());
+            } else {
+                var paragraph = content.addObject().put("type", "paragraph");
+                paragraph.set("content", inlineParser.inlineJson(block.inline()));
+            }
+        }
+        cell.set("content", content);
         return cell;
     }
 
@@ -339,16 +371,18 @@ public class StructuredDocumentCodec {
             attrs.put("sourceNodeKey", sourceKey.toString());
         }
         item.set("attrs", attrs);
-        var paragraph = objectMapper.createObjectNode().put("type", "paragraph");
-        paragraph.set("content", textContent(text));
-        item.set("content", objectMapper.createArrayNode().add(paragraph));
-        return item;
-    }
-
-    private ArrayNode textContent(String text) {
         var content = objectMapper.createArrayNode();
-        if (text != null && !text.isEmpty()) content.add(objectMapper.createObjectNode().put("type", "text").put("text", text));
-        return content;
+        for (var block : inlineParser.parseBlocks(text, false, false)) {
+            if (block.kind() == MineruInlineSemanticParser.BlockKind.FORMULA) {
+                var formula = content.addObject().put("type", "formula");
+                formula.putObject("attrs").put("latexRaw", block.latexRaw());
+            } else {
+                var paragraph = content.addObject().put("type", "paragraph");
+                paragraph.set("content", inlineParser.inlineJson(block.inline()));
+            }
+        }
+        item.set("content", content);
+        return item;
     }
 
     private String nodeType(String section) {
@@ -360,6 +394,7 @@ public class StructuredDocumentCodec {
         if (value.contains("list")) return "listItem";
         if (value.contains("code")) return "codeBlock";
         if (value.contains("quote")) return "blockquote";
+        if (value.contains("chart")) return "chart";
         if (value.contains("image")) return "image";
         if (value.contains("formula")) return "formula";
         if (value.contains("audio")) return "audioSegment";
@@ -368,9 +403,16 @@ public class StructuredDocumentCodec {
 
     private String tiptapType(String sourceType) {
         return switch (sourceType) {
+            case "chart" -> "image";
             case "heading", "image", "formula", "audioSegment", "dataTableRef", "codeBlock", "blockquote" -> sourceType;
             default -> "paragraph";
         };
+    }
+
+    private void applyVisualType(String sourceType, ObjectNode attributes) {
+        if (attributes.has("visualType")) return;
+        if ("chart".equals(sourceType)) attributes.put("visualType", "CHART");
+        else if ("image".equals(sourceType)) attributes.put("visualType", "IMAGE");
     }
 
     private ObjectNode anchor(DocumentParser.TextBlock block) {
@@ -389,6 +431,7 @@ public class StructuredDocumentCodec {
         putIfPresent(result, "caption", attributes.get("caption"));
         putIfPresent(result, "footnote", attributes.get("footnote"));
         putIfPresent(result, "ocrText", attributes.get("ocrText"));
+        putIfPresent(result, "visualType", attributes.get("visualType"));
         putIfPresent(result, "searchable", attributes.get("searchable"));
         if (block.sheetName() != null) {
             result.put("kind", "sheet_range").put("sheetKey", block.sheetName())

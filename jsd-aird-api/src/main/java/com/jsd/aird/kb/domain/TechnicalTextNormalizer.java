@@ -9,11 +9,9 @@ import java.util.regex.Pattern;
 public final class TechnicalTextNormalizer {
 
     private static final Pattern MATH_ROMAN = Pattern.compile("\\\\(?:mathrm|text)\\s*\\{([^{}]*)}");
-    private static final Pattern HTML_SCRIPT = Pattern.compile("(?is)<(?:sub|sup)[^>]*>(.*?)</(?:sub|sup)>");
     private static final Pattern LATEX_SCRIPT = Pattern.compile("\\s*[_^]\\s*\\{\\s*([+\\-−]?\\s*\\d+)\\s*}");
-    private static final Pattern HTML_TAG = Pattern.compile("(?is)<[^>]+>");
     private static final String NUMBER = "[≈~]?[+\\-]?\\d+(?:[.,]\\d+)?(?:\\s*[\\-~]\\s*\\d+(?:[.,]\\d+)?)?";
-    private static final String UNIT = "[\\p{L}μµΩ°%℃℉]{1,16}(?:[+\\-]?\\d+)?";
+    private static final String UNIT = "[\\p{L}μµΩ°%℃℉]{1,16}(?:(?:\\^)?[+\\-]?\\d+)?";
     private static final Pattern MEASUREMENT = Pattern.compile(
             "(?iu)(?<![\\p{L}\\d])" + NUMBER + "\\s*(?:[%°℃℉]|" + UNIT
                     + "(?:\\s*(?:[/·⋅*]\\s*" + UNIT + "|\\s+[\\p{L}μµΩ]{1,4}[+\\-]?\\d+)){0,3})(?![\\p{L}])");
@@ -23,11 +21,12 @@ public final class TechnicalTextNormalizer {
     public static String normalizeMarkup(String value) {
         if (value == null || value.isBlank()) return "";
         var result = replaceMathRoman(value);
-        result = replaceGroup(HTML_SCRIPT, result, false);
-        result = replaceGroup(LATEX_SCRIPT, result, true);
-        result = HTML_TAG.matcher(result).replaceAll(" ");
+        result = result.replace("<sub>", "_").replace("</sub>", "")
+                .replace("<sup>", "^").replace("</sup>", "");
+        result = replaceLatexScripts(result);
+        result = unicodeScripts(result);
         return Normalizer.normalize(result, Normalizer.Form.NFKC)
-                .replace('⁻', '-').replace('−', '-').replace('–', '-')
+                .replace('−', '-').replace('–', '-')
                 .replace('—', '-').replace('⋅', '·').replace('µ', 'μ')
                 .replaceAll("\\s+", " ").strip();
     }
@@ -69,15 +68,42 @@ public final class TechnicalTextNormalizer {
         return result.toString();
     }
 
-    private static String replaceGroup(Pattern pattern, String source, boolean compact) {
-        var matcher = pattern.matcher(source);
+    private static String replaceLatexScripts(String source) {
+        var matcher = LATEX_SCRIPT.matcher(source);
         var result = new StringBuffer();
         while (matcher.find()) {
-            var replacement = matcher.group(1);
-            if (compact) replacement = replacement.replaceAll("\\s+", "");
+            var operator = matcher.group().contains("^") ? "^" : "_";
+            var replacement = operator + matcher.group(1).replaceAll("\\s+", "");
             matcher.appendReplacement(result, Matcher.quoteReplacement(replacement));
         }
         matcher.appendTail(result);
+        return result.toString();
+    }
+
+    private static String unicodeScripts(String source) {
+        var superscript = "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ⁿ";
+        var superscriptPlain = "0123456789+-=()n";
+        var subscript = "₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎ₐₑₒₓₕₖₗₘₙₚₛₜ";
+        var subscriptPlain = "0123456789+-=()aeoxhklmnpst";
+        var result = new StringBuilder();
+        Character mode = null;
+        for (var index = 0; index < source.length(); index++) {
+            var value = source.charAt(index);
+            var mapped = superscript.indexOf(value);
+            var nextMode = mapped >= 0 ? '^' : null;
+            if (mapped < 0) {
+                mapped = subscript.indexOf(value);
+                if (mapped >= 0) nextMode = '_';
+            }
+            if (mapped < 0) {
+                mode = null;
+                result.append(value);
+                continue;
+            }
+            if (!java.util.Objects.equals(mode, nextMode)) result.append(nextMode);
+            mode = nextMode;
+            result.append(nextMode == '^' ? superscriptPlain.charAt(mapped) : subscriptPlain.charAt(mapped));
+        }
         return result.toString();
     }
 }

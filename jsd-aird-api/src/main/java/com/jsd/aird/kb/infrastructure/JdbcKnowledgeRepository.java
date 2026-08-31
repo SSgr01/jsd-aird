@@ -639,22 +639,13 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
         var aiClause = aiOnly ? "AND EXISTS (SELECT 1 FROM kb.document_ai_grant g WHERE g.document_id = d.id AND g.status = 'APPROVED')" : "";
         var sql = """
                 WITH query_terms AS (
-                    SELECT * FROM unnest(?::text[], ?::text[]) AS q(analyzer_version, term)
-                ), ranked AS (
-                    SELECT c.id, c.document_id, c.document_version_id,
+                    SELECT DISTINCT * FROM unnest(?::int[], ?::text[], ?::text[])
+                        AS q(family_ordinal, analyzer_version, term)
+                ), eligible_chunks AS (
+                    SELECT c.id, c.document_id, c.document_version_id, c.analyzer_version, c.token_length,
                            coalesce(p.metadata_snapshot_jsonb->>'title', d.title) AS title, v.original_name,
-                           c.page_no, c.section, c.content, c.chunk_no,
-                           sum(
-                               ln(((s.document_count - s.document_frequency + 0.5) / (s.document_frequency + 0.5)) + 1)
-                               * ((t.term_frequency * 2.2) /
-                                  (t.term_frequency + 1.2 * (1 - 0.75 + 0.75 * c.token_length /
-                                  nullif(s.average_document_length, 0))))
-                           ) AS score
-                    FROM kb.chunk_term t
-                    JOIN kb.document_chunk c ON c.id = t.chunk_id
-                    JOIN query_terms q ON q.term = t.term AND q.analyzer_version = c.analyzer_version
-                    JOIN kb.term_stat s ON s.organization_id = ? AND s.term = t.term
-                        AND s.analyzer_version = c.analyzer_version
+                           c.page_no, c.section, c.content, c.chunk_no
+                    FROM kb.document_chunk c
                     JOIN kb.document d ON d.id = c.document_id
                     JOIN kb.document_version v ON v.id = c.document_version_id
                     JOIN ops.file_object f ON f.id = v.file_object_id AND f.organization_id = d.organization_id AND f.status <> 'DELETED'
@@ -663,20 +654,57 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                         AND p.status = 'CURRENT'
                     WHERE d.organization_id = ? AND d.lifecycle_status = 'ACTIVE' AND c.chunk_role = 'CHILD'
                 """ + aiClause + categoryClause(categoryIds) + documentClause(allowedDocumentIds) + """
-                    GROUP BY c.id, c.document_id, c.document_version_id,
-                             coalesce(p.metadata_snapshot_jsonb->>'title', d.title), v.original_name,
-                             c.page_no, c.section, c.content, c.chunk_no
+                ), corpus AS (
+                    SELECT analyzer_version, count(*)::double precision AS document_count,
+                           avg(token_length)::double precision AS average_document_length
+                    FROM eligible_chunks GROUP BY analyzer_version
+                ), family_matches AS (
+                    SELECT q.family_ordinal, q.analyzer_version, c.id AS chunk_id,
+                           sum(t.term_frequency)::double precision AS family_tf
+                    FROM eligible_chunks c
+                    JOIN kb.chunk_term t ON t.chunk_id = c.id
+                    JOIN query_terms q ON q.term = t.term AND q.analyzer_version = c.analyzer_version
+                    GROUP BY q.family_ordinal, q.analyzer_version, c.id
+                ), family_stats AS (
+                    SELECT family_ordinal, analyzer_version,
+                           count(DISTINCT chunk_id)::double precision AS document_frequency
+                    FROM family_matches GROUP BY family_ordinal, analyzer_version
+                ), version_scores AS (
+                    SELECT m.analyzer_version, m.chunk_id,
+                           sum(
+                               ln(((stats.document_count - s.document_frequency + 0.5) /
+                                  (s.document_frequency + 0.5)) + 1)
+                               * ((m.family_tf * 2.2) /
+                                  (m.family_tf + 1.2 * (1 - 0.75 + 0.75 * c.token_length /
+                                  nullif(stats.average_document_length, 0))))
+                           ) AS score
+                    FROM family_matches m
+                    JOIN family_stats s USING (family_ordinal, analyzer_version)
+                    JOIN corpus stats USING (analyzer_version)
+                    JOIN eligible_chunks c ON c.id = m.chunk_id
+                    GROUP BY m.analyzer_version, m.chunk_id
+                ), version_ranked AS (
+                    SELECT analyzer_version, chunk_id,
+                           row_number() OVER (PARTITION BY analyzer_version ORDER BY score DESC, chunk_id) AS version_rank
+                    FROM version_scores
+                ), compatibility_ranked AS (
+                    SELECT chunk_id, (1.0 / (60.0 + version_rank))::double precision AS score,
+                           row_number() OVER (ORDER BY version_rank, analyzer_version DESC, chunk_id) AS rank_no
+                    FROM version_ranked WHERE version_rank <= ?
                 )
-                SELECT id, document_id, document_version_id, title, original_name, page_no, section, content, score, chunk_no
-                FROM ranked ORDER BY score DESC LIMIT ?
+                SELECT c.id, c.document_id, c.document_version_id, c.title, c.original_name,
+                       c.page_no, c.section, c.content, r.score, c.chunk_no
+                FROM compatibility_ranked r JOIN eligible_chunks c ON c.id = r.chunk_id
+                ORDER BY r.rank_no LIMIT ?
                 """;
         var args = new java.util.ArrayList<Object>();
+        args.add(terms.stream().map(AnalyzedTerm::familyOrdinal).toArray(Integer[]::new));
         args.add(terms.stream().map(AnalyzedTerm::analyzerVersion).toArray(String[]::new));
         args.add(terms.stream().map(AnalyzedTerm::term).toArray(String[]::new));
         args.add(organizationId);
-        args.add(organizationId);
         if (categoryIds != null) args.addAll(categoryIds);
         if (allowedDocumentIds != null) args.addAll(allowedDocumentIds);
+        args.add(limit);
         args.add(limit);
         return jdbc.query(sql, this::mapSearch, args.toArray());
     }
@@ -728,11 +756,13 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                 .filter(query -> query != null && query.terms() != null && !query.terms().isEmpty()).toList();
         if (safeQueries.isEmpty()) return List.of();
         var ordinals = new java.util.ArrayList<Integer>();
+        var families = new java.util.ArrayList<Integer>();
         var versions = new java.util.ArrayList<String>();
         var terms = new java.util.ArrayList<String>();
         for (var query : safeQueries) {
             for (var term : query.terms()) {
                 ordinals.add(query.ordinal());
+                families.add(term.familyOrdinal());
                 versions.add(term.analyzerVersion());
                 terms.add(term.term());
             }
@@ -743,22 +773,11 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                 : "";
         var sql = """
                 WITH query_terms AS (
-                    SELECT * FROM unnest(?::int[], ?::text[], ?::text[])
-                        AS q(query_ordinal, analyzer_version, term)
-                ), scored AS (
-                    SELECT q.query_ordinal, c.id AS chunk_id,
-                           sum(
-                               ln(((s.document_count - s.document_frequency + 0.5) /
-                                  (s.document_frequency + 0.5)) + 1)
-                               * ((t.term_frequency * 2.2) /
-                                  (t.term_frequency + 1.2 * (1 - 0.75 + 0.75 * c.token_length /
-                                  nullif(s.average_document_length, 0))))
-                           ) AS score
-                    FROM kb.chunk_term t
-                    JOIN kb.document_chunk c ON c.id = t.chunk_id
-                    JOIN query_terms q ON q.term = t.term AND q.analyzer_version = c.analyzer_version
-                    JOIN kb.term_stat s ON s.organization_id = ? AND s.term = t.term
-                        AND s.analyzer_version = c.analyzer_version
+                    SELECT DISTINCT * FROM unnest(?::int[], ?::int[], ?::text[], ?::text[])
+                        AS q(query_ordinal, family_ordinal, analyzer_version, term)
+                ), eligible_chunks AS (
+                    SELECT c.id, c.analyzer_version, c.token_length
+                    FROM kb.document_chunk c
                     JOIN kb.document d ON d.id = c.document_id
                     JOIN kb.document_version v ON v.id = c.document_version_id
                     JOIN ops.file_object f ON f.id = v.file_object_id
@@ -768,23 +787,59 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                         AND p.review_revision_id = c.review_revision_id AND p.status = 'CURRENT'
                     WHERE d.organization_id = ? AND d.lifecycle_status = 'ACTIVE' AND c.chunk_role = 'CHILD'
                 """ + aiClause + categoryClause(categoryIds) + """
-                    GROUP BY q.query_ordinal, c.id
-                ), ranked AS (
-                    SELECT query_ordinal, chunk_id, score,
-                           row_number() OVER (PARTITION BY query_ordinal ORDER BY score DESC, chunk_id) AS rank_no
-                    FROM scored
+                ), corpus AS (
+                    SELECT analyzer_version, count(*)::double precision AS document_count,
+                           avg(token_length)::double precision AS average_document_length
+                    FROM eligible_chunks GROUP BY analyzer_version
+                ), family_matches AS (
+                    SELECT q.query_ordinal, q.family_ordinal, q.analyzer_version, c.id AS chunk_id,
+                           sum(t.term_frequency)::double precision AS family_tf
+                    FROM eligible_chunks c
+                    JOIN kb.chunk_term t ON t.chunk_id = c.id
+                    JOIN query_terms q ON q.term = t.term AND q.analyzer_version = c.analyzer_version
+                    GROUP BY q.query_ordinal, q.family_ordinal, q.analyzer_version, c.id
+                ), family_stats AS (
+                    SELECT query_ordinal, family_ordinal, analyzer_version,
+                           count(DISTINCT chunk_id)::double precision AS document_frequency
+                    FROM family_matches GROUP BY query_ordinal, family_ordinal, analyzer_version
+                ), version_scores AS (
+                    SELECT m.query_ordinal, m.analyzer_version, m.chunk_id,
+                           sum(
+                               ln(((c.document_count - s.document_frequency + 0.5) /
+                                  (s.document_frequency + 0.5)) + 1)
+                               * ((m.family_tf * 2.2) /
+                                  (m.family_tf + 1.2 * (1 - 0.75 + 0.75 * e.token_length /
+                                  nullif(c.average_document_length, 0))))
+                           ) AS score
+                    FROM family_matches m
+                    JOIN family_stats s USING (query_ordinal, family_ordinal, analyzer_version)
+                    JOIN corpus c USING (analyzer_version)
+                    JOIN eligible_chunks e ON e.id = m.chunk_id
+                    GROUP BY m.query_ordinal, m.analyzer_version, m.chunk_id
+                ), version_ranked AS (
+                    SELECT query_ordinal, analyzer_version, chunk_id, score,
+                           row_number() OVER (PARTITION BY query_ordinal, analyzer_version
+                                              ORDER BY score DESC, chunk_id) AS version_rank
+                    FROM version_scores
+                ), compatibility_ranked AS (
+                    SELECT query_ordinal, chunk_id,
+                           (1.0 / (60.0 + version_rank))::double precision AS score,
+                           row_number() OVER (PARTITION BY query_ordinal
+                                              ORDER BY version_rank, analyzer_version DESC, chunk_id) AS rank_no
+                    FROM version_ranked WHERE version_rank <= ?
                 )
                 SELECT query_ordinal, chunk_id, score, rank_no
-                FROM ranked WHERE rank_no <= ?
+                FROM compatibility_ranked WHERE rank_no <= ?
                 ORDER BY query_ordinal, rank_no
                 """;
         var args = new java.util.ArrayList<Object>();
         args.add(ordinals.toArray(Integer[]::new));
+        args.add(families.toArray(Integer[]::new));
         args.add(versions.toArray(String[]::new));
         args.add(terms.toArray(String[]::new));
         args.add(organizationId);
-        args.add(organizationId);
         if (categoryIds != null) args.addAll(categoryIds);
+        args.add(limit);
         args.add(limit);
         return jdbc.query(sql, (rs, ignored) -> new RankedChunk(rs.getInt("query_ordinal"),
                 rs.getObject("chunk_id", UUID.class), rs.getDouble("score"), rs.getInt("rank_no")), args.toArray());

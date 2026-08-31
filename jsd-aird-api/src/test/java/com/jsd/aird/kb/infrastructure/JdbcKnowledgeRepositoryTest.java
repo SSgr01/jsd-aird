@@ -66,9 +66,9 @@ class JdbcKnowledgeRepositoryTest {
         verify(jdbc, atLeastOnce()).query(sql.capture(), any(org.springframework.jdbc.core.RowMapper.class),
                 any(Object[].class));
         var querySql = String.join("\n", sql.getAllValues());
-        assertThat(querySql).contains("unnest(?::text[], ?::text[])",
-                "q.analyzer_version = c.analyzer_version", "s.analyzer_version = c.analyzer_version",
-                "c.chunk_role = 'CHILD'");
+        assertThat(querySql).contains("unnest(?::int[], ?::text[], ?::text[])",
+                "q.analyzer_version = c.analyzer_version", "count(DISTINCT chunk_id)",
+                "PARTITION BY analyzer_version", "c.chunk_role = 'CHILD'");
 
         var updateSql = ArgumentCaptor.forClass(String.class);
         verify(jdbc, times(2)).update(updateSql.capture(), any(Object[].class));
@@ -117,7 +117,9 @@ class JdbcKnowledgeRepositoryTest {
         verify(jdbc, times(3)).query(sql.capture(), any(org.springframework.jdbc.core.RowMapper.class),
                 any(Object[].class));
         assertThat(sql.getAllValues().get(0)).contains(
-                "unnest(?::int[], ?::text[], ?::text[])",
+                "unnest(?::int[], ?::int[], ?::text[], ?::text[])",
+                "family_matches", "count(DISTINCT chunk_id)",
+                "PARTITION BY query_ordinal, analyzer_version",
                 "PARTITION BY query_ordinal", "rank_no <= ?", "c.chunk_role = 'CHILD'");
         assertThat(sql.getAllValues().get(1)).contains(
                 "unnest(?::int[], ?::text[])", "CROSS JOIN LATERAL",

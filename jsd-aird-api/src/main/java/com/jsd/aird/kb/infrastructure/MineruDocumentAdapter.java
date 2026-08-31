@@ -69,23 +69,25 @@ final class MineruDocumentAdapter {
                     .findFirst().orElse(null);
             var layout = layoutEntry == null ? null : readJson(archive.zip(), layoutEntry);
             var pages = pages(layout);
-            var items = flattenContent(content);
+            var contentListV2 = lower(contentEntry.getName()).endsWith("content_list_v2.json");
+            var items = flattenContent(content, contentListV2);
             var blocks = new ArrayList<DocumentParser.TextBlock>();
             var tableIndex = 0;
             for (var item : items) {
                 var type = normalizedType(item);
+                var kind = contentKind(type);
                 var pageNo = pageNo(item);
                 var page = page(pageNo, pages);
                 var bbox = normalizedPolygon(item.path("bbox"));
-                if ("table".equals(type)) {
+                if (kind == ContentKind.TABLE) {
                     tableIndex = appendTable(blocks, item, pageNo, page, bbox, tableIndex);
                     continue;
                 }
-                if ("image".equals(type) || "image_body".equals(type) || "chart".equals(type)) {
-                    appendVisual(blocks, item, type, pageNo, page, bbox, resultFileId, assetFileIds);
+                if (kind == ContentKind.IMAGE || kind == ContentKind.CHART) {
+                    appendVisual(blocks, item, type, kind, pageNo, page, bbox, resultFileId, assetFileIds);
                     continue;
                 }
-                appendTextBlock(blocks, item, type, pageNo, page, bbox);
+                appendTextBlock(blocks, item, type, kind, pageNo, page, bbox);
             }
             if (blocks.stream().noneMatch(block -> !normalizeText(block.content()).isBlank())) {
                 throw MineruException.contract("MinerU 结果没有非空有效内容", null);
@@ -94,7 +96,7 @@ final class MineruDocumentAdapter {
             metadata.put("provider", PROVIDER);
             metadata.put("coordinateSpace", JSD_COORDINATE_SPACE);
             metadata.put("providerCoordinateSpace", PROVIDER_COORDINATE_SPACE);
-            metadata.put("contentListVersion", lower(contentEntry.getName()).endsWith("content_list_v2.json") ? 2 : 1);
+            metadata.put("contentListVersion", contentListV2 ? 2 : 1);
             metadata.put("pageCount", pages.size());
             metadata.put("pages", pages.stream().map(Page::metadata).toList());
             metadata.put("resultFiles", archive.entries().stream().map(ZipEntry::getName).sorted().toList());
@@ -165,32 +167,41 @@ final class MineruDocumentAdapter {
     }
 
     private void appendTextBlock(List<DocumentParser.TextBlock> blocks, JsonNode item, String type,
-                                 Integer pageNo, Page page, List<Double> bbox) {
-        var text = firstText(item, "text", "content", "latex", "equation", "code_body");
-        if ("list".equals(type) || "list_item".equals(type)) text = listText(item, text);
+                                 ContentKind kind, Integer pageNo, Page page, List<Double> bbox) {
+        var text = switch (kind) {
+            case HEADING -> firstText(item, "text", "title_content", "content");
+            case PARAGRAPH -> firstText(item, "text", "paragraph_content", "content");
+            case FORMULA -> firstText(item, "text", "math_content", "latex", "equation", "content");
+            case CODE -> firstText(item, "code_body", "code_content", "algorithm_content", "text", "content");
+            case LIST -> listText(item, firstText(item, "text", "content"));
+            default -> firstText(item, "text", type + "_content", "content", "latex", "equation", "code_body");
+        };
         text = normalizeText(text);
         if (text.isBlank()) return;
-        var level = item.path("text_level").asInt(item.path("level").asInt(0));
-        var section = switch (type) {
-            case "title", "heading" -> "heading-" + Math.min(6, Math.max(1, level == 0 ? 1 : level));
-            case "equation", "formula", "interline_equation", "inline_equation" -> "formula";
-            case "list", "list_item" -> "listItem";
-            case "code", "code_block" -> "code";
-            case "header", "page_header" -> "header";
-            case "footer", "page_footer" -> "footer";
-            case "page_number" -> "pageNumber";
-            case "table_caption" -> "tableCaption";
-            case "image_caption", "chart_caption" -> "caption";
-            case "footnote", "table_footnote", "image_footnote" -> "footnote";
-            default -> level > 0 ? "heading-" + Math.min(6, level) : "paragraph";
+        var level = integerField(item, "text_level", integerField(item, "level", 0));
+        var effectiveKind = kind == ContentKind.PARAGRAPH && level > 0 ? ContentKind.HEADING : kind;
+        var section = switch (effectiveKind) {
+            case HEADING -> "heading-" + Math.min(6, Math.max(1, level == 0 ? 1 : level));
+            case FORMULA -> "formula";
+            case LIST -> "listItem";
+            case CODE -> "code";
+            case HEADER -> "header";
+            case FOOTER -> "footer";
+            case PAGE_NUMBER -> "pageNumber";
+            case CAPTION -> "caption";
+            case FOOTNOTE -> "footnote";
+            default -> "paragraph";
         };
         var attributes = attributes(pageNo, page, bbox);
         attributes.put("mineruType", type);
+        var subType = firstText(item, "sub_type");
+        if (!subType.isBlank()) attributes.put("mineruSubType", subType);
         if (section.startsWith("heading-")) {
             attributes.put("level", Integer.parseInt(section.substring("heading-".length())));
             attributes.put("searchable", false);
         }
-        if ("header".equals(section) || "footer".equals(section) || "pageNumber".equals(section)) {
+        if (kind == ContentKind.HEADER || kind == ContentKind.FOOTER || kind == ContentKind.PAGE_NUMBER
+                || kind == ContentKind.UNKNOWN) {
             attributes.put("searchable", false);
         }
         if ("code".equals(section)) attributes.put("preserveWhitespace", true);
@@ -198,23 +209,25 @@ final class MineruDocumentAdapter {
                 bbox, null, null, confidence(item), attributes));
     }
 
-    private void appendVisual(List<DocumentParser.TextBlock> blocks, JsonNode item, String type,
+    private void appendVisual(List<DocumentParser.TextBlock> blocks, JsonNode item, String type, ContentKind kind,
                               Integer pageNo, Page page, List<Double> bbox, UUID resultFileId,
                               Map<String, UUID> assetFileIds) {
-        var caption = joinedText(item.path(type.equals("chart") ? "chart_caption" : "image_caption"));
-        if (caption.isBlank()) caption = joinedText(item.path("caption"));
-        var footnote = joinedText(item.path(type.equals("chart") ? "chart_footnote" : "image_footnote"));
-        if (footnote.isBlank()) footnote = joinedText(item.path("footnote"));
-        var ocrText = firstText(item, "ocr_text", "text");
+        var chart = kind == ContentKind.CHART;
+        var caption = firstText(item, chart ? "chart_caption" : "image_caption", "caption");
+        var footnote = firstText(item, chart ? "chart_footnote" : "image_footnote", "footnote");
+        var ocrText = firstText(item, "ocr_text", "text", "content");
         var text = joinNonBlank(caption, ocrText, footnote);
-        if (text.isBlank()) text = "chart".equals(type) ? "[图表]" : "[图片]";
+        if (text.isBlank()) text = chart ? "[图表]" : "[图片]";
         var attributes = attributes(pageNo, page, bbox);
         attributes.put("mineruType", type);
+        attributes.put("visualType", chart ? "CHART" : "IMAGE");
+        var subType = firstText(item, "sub_type");
+        if (!subType.isBlank()) attributes.put("mineruSubType", subType);
         attributes.put("caption", caption);
         attributes.put("footnote", footnote);
         attributes.put("ocrText", normalizeText(ocrText));
         attributes.put("searchable", !joinNonBlank(caption, ocrText, footnote).isBlank());
-        var assetPath = firstText(item, "img_path", "image_path", "chart_path");
+        var assetPath = assetPath(item);
         if (!assetPath.isBlank()) {
             var normalizedPath = normalizeEntryPath(assetPath);
             attributes.put("resultEntryPath", normalizedPath);
@@ -222,7 +235,7 @@ final class MineruDocumentAdapter {
             if (assetFileId != null) attributes.put("assetFileId", assetFileId.toString());
         }
         if (resultFileId != null) attributes.put("resultFileId", resultFileId.toString());
-        blocks.add(new DocumentParser.TextBlock(pageNo, "chart".equals(type) ? "chart" : "image", text,
+        blocks.add(new DocumentParser.TextBlock(pageNo, chart ? "chart" : "image", text,
                 null, null, null, bbox, null, null, confidence(item), attributes));
     }
 
@@ -235,8 +248,7 @@ final class MineruDocumentAdapter {
     private void flushParagraph(List<DocumentParser.TextBlock> blocks, StringBuilder paragraph) {
         var text = normalizeText(paragraph.toString());
         if (!text.isBlank()) {
-            var section = text.contains("$") ? "formula" : "paragraph";
-            blocks.add(new DocumentParser.TextBlock(null, section, text, null, null, null, List.of(), null,
+            blocks.add(new DocumentParser.TextBlock(null, "paragraph", text, null, null, null, List.of(), null,
                     null, null, Map.of("sourceProvider", PROVIDER, "coordinateSpace", "NONE")));
         }
         paragraph.setLength(0);
@@ -281,8 +293,8 @@ final class MineruDocumentAdapter {
             return tableIndex;
         }
         var group = "mineru-table-" + tableIndex;
-        var title = joinNonBlank(joinedText(item.path("table_caption")), joinedText(item.path("caption")));
-        var footnote = joinNonBlank(joinedText(item.path("table_footnote")), joinedText(item.path("footnote")));
+        var title = firstText(item, "table_caption", "caption");
+        var footnote = firstText(item, "table_footnote", "footnote");
         var rowIndex = 0;
         for (var table : parsed) {
             for (var row : table.rows()) {
@@ -376,8 +388,17 @@ final class MineruDocumentAdapter {
         return pages.stream().filter(value -> value.index() + 1 == pageNo).findFirst().orElse(null);
     }
 
-    private List<JsonNode> flattenContent(JsonNode root) {
+    private List<JsonNode> flattenContent(JsonNode root, boolean contentListV2) {
         var result = new ArrayList<JsonNode>();
+        if (contentListV2 && root != null && root.isArray()) {
+            for (var pageIndex = 0; pageIndex < root.size(); pageIndex++) {
+                var page = root.get(pageIndex);
+                var inheritedPage = page.isArray() || (page.isObject() && !page.has("type"))
+                        ? Integer.valueOf(pageIndex) : null;
+                flatten(page, inheritedPage, result);
+            }
+            return result;
+        }
         flatten(root, null, result);
         return result;
     }
@@ -400,6 +421,9 @@ final class MineruDocumentAdapter {
                 flatten(child, page, result);
             }
         } else {
+            if (page != null && !node.has("page_idx")) {
+                ((com.fasterxml.jackson.databind.node.ObjectNode) node).put("page_idx", page);
+            }
             result.add(node);
         }
     }
@@ -415,6 +439,26 @@ final class MineruDocumentAdapter {
                 .strip().toLowerCase(Locale.ROOT).replace('-', '_');
     }
 
+    private ContentKind contentKind(String type) {
+        return switch (type) {
+            case "title", "heading" -> ContentKind.HEADING;
+            case "text", "paragraph" -> ContentKind.PARAGRAPH;
+            case "image", "image_body" -> ContentKind.IMAGE;
+            case "chart", "chart_body" -> ContentKind.CHART;
+            case "table", "table_body" -> ContentKind.TABLE;
+            case "equation", "formula", "interline_equation", "inline_equation", "equation_interline" -> ContentKind.FORMULA;
+            case "code", "code_block", "algorithm" -> ContentKind.CODE;
+            case "list", "list_item", "index", "ref_text" -> ContentKind.LIST;
+            case "header", "page_header" -> ContentKind.HEADER;
+            case "footer", "page_footer" -> ContentKind.FOOTER;
+            case "page_number" -> ContentKind.PAGE_NUMBER;
+            case "aside_text", "page_aside_text" -> ContentKind.ASIDE;
+            case "footnote", "page_footnote", "table_footnote", "image_footnote", "chart_footnote" -> ContentKind.FOOTNOTE;
+            case "table_caption", "image_caption", "chart_caption", "code_caption" -> ContentKind.CAPTION;
+            default -> ContentKind.UNKNOWN;
+        };
+    }
+
     private Double confidence(JsonNode item) {
         if (item.has("score") && item.path("score").isNumber()) return item.path("score").asDouble();
         if (item.has("confidence") && item.path("confidence").isNumber()) return item.path("confidence").asDouble();
@@ -422,12 +466,12 @@ final class MineruDocumentAdapter {
     }
 
     private String listText(JsonNode item, String fallback) {
-        var list = item.path("list_items");
-        if (!list.isArray()) list = item.path("items");
-        if (!list.isArray()) return fallback;
+        var list = field(item, "list_items");
+        if (list == null || !list.isArray()) list = field(item, "items");
+        if (list == null || !list.isArray()) return fallback;
         var values = new ArrayList<String>();
         for (var value : list) {
-            var text = value.isTextual() ? value.asText() : firstText(value, "text", "content");
+            var text = value.isTextual() ? value.asText() : firstText(value, "item_content", "text", "content");
             text = normalizeText(text);
             if (!text.isBlank()) values.add("- " + text);
         }
@@ -436,7 +480,7 @@ final class MineruDocumentAdapter {
 
     private String firstText(JsonNode item, String... names) {
         for (var name : names) {
-            var value = item.path(name);
+            var value = field(item, name);
             var text = joinedText(value);
             if (!text.isBlank()) return text;
         }
@@ -448,14 +492,48 @@ final class MineruDocumentAdapter {
         if (value.isTextual() || value.isNumber()) return normalizeText(value.asText());
         if (value.isArray()) {
             var values = new ArrayList<String>();
+            var inline = true;
             for (var item : value) {
-                var text = item.isTextual() ? item.asText() : firstText(item, "text", "content");
+                var text = joinedText(item);
                 text = normalizeText(text);
                 if (!text.isBlank()) values.add(text);
+                inline &= item.isObject() && item.has("type");
             }
-            return String.join("\n", values);
+            return String.join(inline ? "" : "\n", values);
+        }
+        if (value.isObject()) {
+            for (var name : List.of("text", "content", "item_content", "children")) {
+                if (value.has(name)) {
+                    var text = joinedText(value.get(name));
+                    if (!text.isBlank()) return text;
+                }
+            }
         }
         return "";
+    }
+
+    private JsonNode field(JsonNode item, String name) {
+        if (item == null || item.isNull()) return null;
+        var direct = item.get(name);
+        if (direct != null && !direct.isNull() && !("content".equals(name) && direct.isObject())) return direct;
+        var payload = item.get("content");
+        if (payload != null && payload.isObject()) {
+            var nested = payload.get(name);
+            if (nested != null && !nested.isNull()) return nested;
+        }
+        return direct;
+    }
+
+    private int integerField(JsonNode item, String name, int fallback) {
+        var value = field(item, name);
+        return value != null && value.isNumber() ? value.asInt() : fallback;
+    }
+
+    private String assetPath(JsonNode item) {
+        var direct = firstText(item, "img_path", "image_path", "chart_path");
+        if (!direct.isBlank()) return direct;
+        var source = field(item, "image_source");
+        return source != null && source.isObject() ? joinedText(source.get("path")) : "";
     }
 
     private String joinNonBlank(String... values) {
@@ -555,6 +633,10 @@ final class MineruDocumentAdapter {
     }
 
     record Parsed(List<DocumentParser.TextBlock> blocks, Map<String, Object> metadata) { }
+    private enum ContentKind {
+        HEADING, PARAGRAPH, IMAGE, CHART, TABLE, FORMULA, CODE, LIST,
+        HEADER, FOOTER, PAGE_NUMBER, ASIDE, FOOTNOTE, CAPTION, UNKNOWN
+    }
     record Page(int index, double width, double height, int rotation) {
         Map<String, Object> metadata() {
             return Map.of("pageNo", index + 1, "width", width, "height", height, "rotation", rotation,

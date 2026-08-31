@@ -30,6 +30,7 @@
         <docx4j.version>11.5.14</docx4j.version>
         <pdfbox.version>3.0.5</pdfbox.version>
         <lucene.version>10.5.1</lucene.version>
+        <snuggletex.version>1.3.0</snuggletex.version>
     </properties>
 
     <dependencyManagement>
@@ -142,6 +143,11 @@
             <groupId>org.apache.lucene</groupId>
             <artifactId>lucene-analysis-smartcn</artifactId>
             <version>${lucene.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>de.rototor.snuggletex</groupId>
+            <artifactId>snuggletex-core</artifactId>
+            <version>${snuggletex.version}</version>
         </dependency>
 
         <dependency>

@@ -1,6 +1,7 @@
 package com.jsd.aird.ai.application;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 
@@ -18,8 +19,13 @@ public class ContextCompressionService {
     public Context compress(List<KnowledgeSearchFacade.SearchHit> knowledge,
                             List<DataSourceFileSearchFacade.SourceFileHit> dataFiles, int maxChars) {
         var chunks = new ArrayList<String>();
+        var includedEvidenceRefs = new ArrayList<String>();
         var used = 0;
         var safeKnowledge = knowledge == null ? List.<KnowledgeSearchFacade.SearchHit>of() : knowledge;
+        var knowledgeRefs = new HashMap<java.util.UUID, String>();
+        for (var index = 0; index < safeKnowledge.size(); index++) {
+            knowledgeRefs.put(safeKnowledge.get(index).chunkId(), "K" + (index + 1));
+        }
         var groupedKnowledge = new LinkedHashMap<String, List<KnowledgeSearchFacade.SearchHit>>();
         for (var hit : safeKnowledge) {
             var key = String.join("|", String.valueOf(hit.documentId()), String.valueOf(hit.versionId()),
@@ -30,18 +36,26 @@ public class ContextCompressionService {
             var remaining = Math.max(0, maxChars - used);
             if (remaining < 80) break;
             var groupParts = new ArrayList<String>();
+            var groupRefs = new ArrayList<String>();
             for (var hit : group) {
                 var text = normalized(hit.content());
-                if (text.isBlank()) continue;
                 var image = imageMarkdown(hit);
-                groupParts.add(text + (image.isBlank() ? "" : " " + image));
+                if (text.isBlank() && image.isBlank()) continue;
+                var evidenceRef = knowledgeRefs.get(hit.chunkId());
+                groupRefs.add(evidenceRef);
+                groupParts.add("[evidenceRef=" + evidenceRef + "] " + text
+                        + (image.isBlank() ? "" : " " + image));
             }
+            if (groupParts.isEmpty()) continue;
             var groupText = String.join(" ", groupParts);
             var first = group.get(0);
             var excerpt = groupText.length() <= remaining ? groupText
                     : groupText.substring(0, Math.max(0, remaining - 1)) + "…";
             chunks.add("[source=knowledge,file=" + first.title()
                     + ",page=" + first.pageNo() + ",section=" + first.section() + "] " + excerpt);
+            for (var evidenceRef : groupRefs) {
+                if (excerpt.contains("[evidenceRef=" + evidenceRef + "]")) includedEvidenceRefs.add(evidenceRef);
+            }
             used += excerpt.length();
         }
         var safeDataFiles = dataFiles == null ? List.<DataSourceFileSearchFacade.SourceFileHit>of() : dataFiles;
@@ -50,13 +64,19 @@ public class ContextCompressionService {
             var remaining = Math.max(0, maxChars - used);
             if (remaining < 80) break;
             var text = hit.content() == null ? "" : hit.content().replaceAll("[\\r\\n\\t]+", " ").strip();
-            var excerpt = text.length() <= remaining ? text : text.substring(0, Math.max(0, remaining - 1)) + "…";
+            var evidenceRef = "D" + (index + 1);
+            var evidenceText = "[evidenceRef=" + evidenceRef + "] " + text;
+            var excerpt = evidenceText.length() <= remaining ? evidenceText
+                    : evidenceText.substring(0, Math.max(0, remaining - 1)) + "…";
             chunks.add("[source=data,file=" + hit.originalName()
                     + ",row=" + hit.rowNumber() + ",column=" + hit.columnName() + "] " + excerpt);
+            if (excerpt.contains("[evidenceRef=" + evidenceRef + "]")) includedEvidenceRefs.add(evidenceRef);
             used += excerpt.length();
         }
-        return new Context(String.join("\n\n", chunks), used, knowledge == null ? 0 : knowledge.size(),
-                dataFiles == null ? 0 : dataFiles.size());
+        var knowledgeCount = (int) includedEvidenceRefs.stream().filter(ref -> ref.startsWith("K")).count();
+        var dataFileCount = includedEvidenceRefs.size() - knowledgeCount;
+        return new Context(String.join("\n\n", chunks), used, knowledgeCount, dataFileCount,
+                List.copyOf(includedEvidenceRefs));
     }
 
     private String normalized(String value) {
@@ -76,6 +96,7 @@ public class ContextCompressionService {
         return "";
     }
 
-    public record Context(String text, int characterCount, int knowledgeCount, int dataFileCount) {
+    public record Context(String text, int characterCount, int knowledgeCount, int dataFileCount,
+                          List<String> evidenceRefs) {
     }
 }

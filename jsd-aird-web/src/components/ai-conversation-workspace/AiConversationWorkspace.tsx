@@ -34,6 +34,7 @@ interface AiConversationWorkspaceProps {
   streaming?: boolean;
   scopeSummary?: ReactNode;
   composerTopContent?: ReactNode;
+  composerActions?: ReactNode;
   assistantLabel?: string;
   submitDisabled?: boolean;
   pendingLabel?: string;
@@ -72,10 +73,11 @@ export function AiConversationWorkspace({
   streaming,
   scopeSummary,
   composerTopContent,
+  composerActions,
   assistantLabel = 'AI研发助手',
   submitDisabled = false,
   pendingLabel = '正在阅读资料并整理依据',
-  scopeTitle = '选择同步数据范围',
+  scopeTitle = '选择检索范围',
   welcomeTitle = '从研发资料开始提问',
   welcomeDescription = '选择左侧资料范围，输入问题后开始受控检索和问答。',
   welcomeContent,
@@ -281,9 +283,10 @@ export function AiConversationWorkspace({
           />
         </div>
         <div className="ai-conversation-composer">
-          {composerTopContent ? (
+          {composerTopContent || composerActions ? (
             <div className="ai-conversation-composer-top">
               <div className="ai-conversation-composer-context">{composerTopContent}</div>
+              {composerActions ? <div className="ai-conversation-composer-actions">{composerActions}</div> : null}
             </div>
           ) : null}
           <div className="ai-conversation-composer-row">

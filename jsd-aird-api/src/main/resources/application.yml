@@ -110,9 +110,9 @@ app:
     lease-duration: ${JSD_AIRD_WORKER_LEASE_DURATION:60s}
     job-timeout: ${JSD_AIRD_WORKER_JOB_TIMEOUT:15m}
   model:
-    base-url: ${JSD_AIRD_MODEL_BASE_URL:${OPENAI_BASE_URL:}}
-    api-key: ${JSD_AIRD_MODEL_API_KEY:${OPENAI_API_KEY:}}
-    model: ${JSD_AIRD_MODEL_NAME:${OPENAI_MODEL:}}
+    base-url: ${JSD_AIRD_MODEL_BASE_URL:}
+    api-key: ${JSD_AIRD_MODEL_API_KEY:}
+    model: ${JSD_AIRD_MODEL_NAME:}
     temperature: 0.0
     response-format: ${JSD_AIRD_MODEL_RESPONSE_FORMAT:json_schema}
     enable-thinking: ${JSD_AIRD_MODEL_ENABLE_THINKING:true}
@@ -125,7 +125,7 @@ app:
     visual-mode: ${JSD_AIRD_MODEL_VISUAL_MODE:auto}
     visual-enabled: ${JSD_AIRD_MODEL_VISUAL_ENABLED:false}
   ai:
-    prompt-version: ${JSD_AIRD_AI_PROMPT_VERSION:research-assistant-v1}
+    prompt-version: ${JSD_AIRD_AI_PROMPT_VERSION:research-assistant-v2-grounded}
     query-rewrite:
       enabled: ${JSD_AIRD_QUERY_REWRITE_ENABLED:true}
       model: ${JSD_AIRD_QUERY_REWRITE_MODEL:qwen3.7-flash-2026-07-15}
@@ -134,8 +134,6 @@ app:
     retrieval:
       executor-threads: ${JSD_AIRD_RETRIEVAL_EXECUTOR_THREADS:8}
       queue-capacity: ${JSD_AIRD_RETRIEVAL_QUEUE_CAPACITY:64}
-      lexical-timeout: ${JSD_AIRD_RETRIEVAL_LEXICAL_TIMEOUT:2s}
-      vector-timeout: ${JSD_AIRD_RETRIEVAL_VECTOR_TIMEOUT:5s}
     conversation-title:
       enabled: ${JSD_AIRD_AI_CONVERSATION_TITLE_ENABLED:true}
       max-length: ${JSD_AIRD_AI_CONVERSATION_TITLE_MAX_LENGTH:30}
@@ -146,8 +144,8 @@ app:
     embedding:
       base-url: ${JSD_AIRD_EMBEDDING_BASE_URL:${app.model.base-url:}}
       api-key: ${JSD_AIRD_EMBEDDING_API_KEY:${app.model.api-key:}}
-      model: ${JSD_AIRD_EMBEDDING_MODEL:${RAG_EMBEDDING_MODEL:}}
-      dimension: ${JSD_AIRD_EMBEDDING_DIMENSION:${RAG_EMBEDDING_DIMENSION:1024}}
+      model: ${JSD_AIRD_EMBEDDING_MODEL:}
+      dimension: ${JSD_AIRD_EMBEDDING_DIMENSION:1024}
       timeout: ${JSD_AIRD_EMBEDDING_TIMEOUT:30s}
     ocr:
       enabled: ${JSD_AIRD_OCR_ENABLED:false}
@@ -160,12 +158,13 @@ app:
     mineru:
       enabled: ${JSD_AIRD_MINERU_ENABLED:true}
       base-url: ${JSD_AIRD_MINERU_BASE_URL:https://mineru.net}
-      token: ${JSD_AIRD_MINERU_TOKEN:${JSD_AIRD_OCR_MINERU_TOKEN:}}
+      token: ${JSD_AIRD_MINERU_TOKEN:}
       model: ${JSD_AIRD_MINERU_MODEL:vlm}
       poll-interval: ${JSD_AIRD_MINERU_POLL_INTERVAL:3s}
       max-wait: ${JSD_AIRD_MINERU_MAX_WAIT:15m}
       http-timeout: ${JSD_AIRD_MINERU_HTTP_TIMEOUT:60s}
-      agent-fallback-enabled: ${JSD_AIRD_MINERU_AGENT_FALLBACK_ENABLED:true}
+      default-ocr-mode: ${JSD_AIRD_MINERU_DEFAULT_OCR_MODE:AUTO}
+      agent-fallback-enabled: ${JSD_AIRD_MINERU_AGENT_FALLBACK_ENABLED:false}
     asr:
       enabled: ${JSD_AIRD_ASR_ENABLED:false}
       base-url: ${JSD_AIRD_ASR_BASE_URL:https://dashscope.aliyuncs.com/api/v1}
@@ -182,8 +181,11 @@ app:
       enabled: ${JSD_AIRD_TAVILY_ENABLED:false}
       base-url: ${JSD_AIRD_TAVILY_BASE_URL:https://api.tavily.com}
       api-key: ${JSD_AIRD_TAVILY_API_KEY:}
-      timeout: ${JSD_AIRD_TAVILY_TIMEOUT:15s}
+      timeout: ${JSD_AIRD_TAVILY_TIMEOUT:5s}
       max-results: ${JSD_AIRD_TAVILY_MAX_RESULTS:5}
+      max-candidates: ${JSD_AIRD_TAVILY_MAX_CANDIDATES:6}
+      executor-threads: ${JSD_AIRD_TAVILY_EXECUTOR_THREADS:4}
+      queue-capacity: ${JSD_AIRD_TAVILY_QUEUE_CAPACITY:32}
     reranker:
       endpoint: ${JSD_AIRD_RERANKER_ENDPOINT:}
       api-key: ${JSD_AIRD_RERANKER_API_KEY:${app.model.api-key:}}

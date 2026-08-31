@@ -204,7 +204,7 @@ a:active,
 
 .app-content {
   min-height: calc(100dvh - 64px);
-  padding: 24px clamp(20px, 2vw, 36px) 32px;
+  padding: 80px clamp(20px, 2vw, 36px) 32px;
 }
 
 .app-content-workspace {
@@ -2750,7 +2750,7 @@ a:active,
 
 @media (max-width: 1199px) {
   .app-content:not(.app-content-workspace) {
-    padding: 20px;
+    padding: 76px 20px 20px;
   }
 
   .workspace-shell { height: 100%; }
@@ -2812,7 +2812,7 @@ a:active,
 }
 
 @media (max-width: 720px) {
-  .app-content:not(.app-content-workspace) { padding: 16px; }
+  .app-content:not(.app-content-workspace) { padding: 68px 16px 16px; }
   .page-heading { display: grid; gap: 12px; }
   .template-choice { min-height: 96px; padding: 12px; }
   .suggestion-card { grid-template-columns: 1fr; }
@@ -3415,6 +3415,12 @@ a:active,
 .ai-conversation-composer-top { display: flex; min-width: 0; min-height: 32px; align-items: center; justify-content: space-between; gap: 10px; padding-inline: 4px; }
 
 .ai-conversation-composer-context { min-width: 0; flex: 1; }
+
+.ai-conversation-composer-actions { display: flex; flex: 0 0 auto; align-items: center; }
+
+.ai-composer-web-toggle { min-height: 34px; border-radius: 8px; }
+
+.ai-composer-web-toggle.is-active { font-weight: 650; box-shadow: 0 4px 12px rgb(49 92 246 / 18%); }
 
 .ai-conversation-composer-top > .ant-btn { flex: 0 0 auto; gap: 7px; color: var(--app-primary); font-weight: 600; }
 

@@ -42,4 +42,26 @@ describe('citationEvidenceLabel', () => {
     expect(group.evidenceCount).toBe(15);
     expect(citationPagesLabel(group.pages)).toBe(' · 第1–2页');
   });
+
+  it('groups repeated external evidence by canonical URL', () => {
+    const external = (url: string, contentHash: string) => ({
+      sourceType: 'EXTERNAL_REFERENCE',
+      url,
+      contentHash,
+      title: '公开技术资料',
+      originalName: '公开技术资料',
+      snippet: '公开网页证据',
+      retrievalScore: 1,
+      rrfScore: 1,
+      rerankScore: 1,
+    });
+
+    const groups = groupAssistantCitations([
+      external('https://example.com/article#section-1', 'hash-1'),
+      external('https://example.com/article#section-2', 'hash-2'),
+    ]);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.evidenceCount).toBe(2);
+  });
 });

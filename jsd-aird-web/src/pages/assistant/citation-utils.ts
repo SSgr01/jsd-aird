@@ -9,6 +9,15 @@ export interface AssistantCitationGroup {
 }
 
 function citationDocumentKey(citation: AssistantCitation): string {
+  if (citation.sourceType === 'EXTERNAL_REFERENCE' && citation.url) {
+    try {
+      const url = new URL(citation.url);
+      url.hash = '';
+      return `external:${url.toString()}`;
+    } catch {
+      return `external:${citation.url}`;
+    }
+  }
   if (citation.documentId) return `knowledge-document:${citation.documentId}`;
   if (citation.fileObjectId) return `source-file:${citation.fileObjectId}`;
   if (citation.importJobId) return `import-job:${citation.importJobId}`;
@@ -39,7 +48,7 @@ export function groupAssistantCitations(
     if (citation.anchors?.length) {
       citation.anchors.forEach((anchor) => current.evidence.add(evidenceKey(anchor)));
     } else {
-      current.evidence.add(`chunk:${citation.chunkId}`);
+      current.evidence.add(citation.contentHash ? `content:${citation.contentHash}` : `chunk:${citation.chunkId || citation.url || key}`);
     }
     grouped.set(key, current);
   }

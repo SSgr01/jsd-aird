@@ -39,6 +39,7 @@ public class KnowledgeGovernanceService {
     private final AuditLogFacade audit;
     private final ObjectMapper objectMapper;
     private final StructuredDocumentCodec documents;
+    private final SystemParsingPolicy systemParsingPolicy;
     private final TransactionTemplate itemTransaction;
     private final ProjectResourceFacade projectResources;
 
@@ -50,6 +51,7 @@ public class KnowledgeGovernanceService {
                                       AuditLogFacade audit,
                                       ObjectMapper objectMapper,
                                       StructuredDocumentCodec documents,
+                                      SystemParsingPolicy systemParsingPolicy,
                                       PlatformTransactionManager transactionManager,
                                       ProjectResourceFacade projectResources) {
         this.governance = governance;
@@ -60,6 +62,7 @@ public class KnowledgeGovernanceService {
         this.audit = audit;
         this.objectMapper = objectMapper;
         this.documents = documents;
+        this.systemParsingPolicy = systemParsingPolicy;
         this.projectResources = projectResources;
         this.itemTransaction = new TransactionTemplate(transactionManager);
         this.itemTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
@@ -117,13 +120,13 @@ public class KnowledgeGovernanceService {
                 throw new ApiException(ApiErrorCode.BAD_REQUEST, "作为新版本时必须指定目标文档");
             }
             created = knowledge.createVersion(command.targetDocumentId(), new KnowledgeService.CreateVersionCommand(
-                    command.fileId(), command.ocrMode(), command.allowAgentFallback()));
+                    command.fileId()));
             governance.updateDraftMetadata(actor.organizationId(), created.id(),
                     StringUtils.hasText(command.title()) ? normalizeTitle(command.title()) : created.title(),
                     scope, categoryId);
         } else {
             created = knowledge.create(new KnowledgeService.CreateCommand(command.fileId(), command.title(), scope,
-                    categoryId, command.ocrMode(), command.allowAgentFallback()));
+                    categoryId));
         }
         governance.updateSourceInfo(actor.organizationId(), created.id(), created.currentVersionId(), command.sourceInfo());
         governance.replaceTags(actor.organizationId(), actor.userId(), created.id(), normalizeTags(command.tags()));
@@ -215,7 +218,7 @@ public class KnowledgeGovernanceService {
     public BulkIndexBuildView rebuildAllPublishedIndexes() {
         var actor = ActorContext.required();
         var documentCount = Math.toIntExact(knowledgeRepository.countDocuments(actor.organizationId(),
-                null, null, null, null, null, "ACTIVE", null));
+                null, null, null, null, "ACTIVE", null));
         var payload = objectMapper.createObjectNode()
                 .put("organizationId", actor.organizationId().toString())
                 .put("actorId", actor.userId().toString())
@@ -259,8 +262,7 @@ public class KnowledgeGovernanceService {
 
     @Transactional
     public KnowledgeService.DocumentView reparse(UUID documentId, UUID versionId, UUID reviewRevisionId,
-                                                 Integer lockVersion, String ocrMode,
-                                                 Boolean allowAgentFallback) {
+                                                 Integer lockVersion) {
         var actor = ActorContext.required();
         var current = review(documentId, versionId);
         if (current.parseRun() != null && Set.of("QUEUED", "PROCESSING").contains(current.parseRun().status())) {
@@ -281,20 +283,9 @@ public class KnowledgeGovernanceService {
         }
         var version = knowledgeRepository.findVersion(actor.organizationId(), versionId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "知识文件版本不存在"));
-        var requestedMode = StringUtils.hasText(ocrMode) ? ocrMode : version.ocrMode();
-        var requestedFallback = allowAgentFallback == null ? version.allowAgentFallback() : allowAgentFallback;
-        try {
-            var normalizedMode = com.jsd.aird.kb.domain.OcrMode.fromNullable(requestedMode).name();
-            if (!version.originalName().toLowerCase(Locale.ROOT).endsWith(".pdf")
-                    && !"application/pdf".equalsIgnoreCase(version.contentType())) {
-                normalizedMode = "AUTO";
-                requestedFallback = false;
-            }
-            knowledgeRepository.updateVersionParsingPolicy(actor.organizationId(), versionId,
-                    normalizedMode, requestedFallback);
-        } catch (IllegalArgumentException exception) {
-            throw new ApiException(ApiErrorCode.BAD_REQUEST, exception.getMessage());
-        }
+        var parsingPolicy = systemParsingPolicy.forFile(version.originalName(), version.contentType());
+        knowledgeRepository.updateVersionParsingPolicy(actor.organizationId(), versionId,
+                parsingPolicy.ocrMode().name(), parsingPolicy.allowAgentFallback());
         var result = knowledge.reindex(documentId, versionId);
         audit(actor.organizationId(), actor.userId(), "KB_DOCUMENT_REPARSE_REQUESTED", documentId,
                 objectMapper.createObjectNode().put("versionId", versionId.toString()));
@@ -578,14 +569,13 @@ public class KnowledgeGovernanceService {
                                   List<KnowledgeGovernanceRepository.DuplicateMatch> possibleVersions) { }
     public record CreateCommand(UUID fileId, String title, String libraryScope, UUID categoryId,
                                 List<String> tags, String resolution, UUID targetDocumentId,
-                                com.fasterxml.jackson.databind.JsonNode sourceInfo, String ocrMode,
-                                Boolean allowAgentFallback, List<ProjectRelationTarget> projectRelations) {
+                                com.fasterxml.jackson.databind.JsonNode sourceInfo,
+                                List<ProjectRelationTarget> projectRelations) {
         public CreateCommand(UUID fileId, String title, String libraryScope, UUID categoryId,
                              List<String> tags, String resolution, UUID targetDocumentId,
-                             com.fasterxml.jackson.databind.JsonNode sourceInfo, String ocrMode,
-                             Boolean allowAgentFallback) {
+                             com.fasterxml.jackson.databind.JsonNode sourceInfo) {
             this(fileId, title, libraryScope, categoryId, tags, resolution, targetDocumentId,
-                    sourceInfo, ocrMode, allowAgentFallback, null);
+                    sourceInfo, null);
         }
     }
     public record ReviewCommand(UUID documentId, UUID versionId, UUID reviewRevisionId, int lockVersion,

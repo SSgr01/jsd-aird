@@ -28,4 +28,15 @@ public class AiExecutorConfiguration {
                 Thread.ofPlatform().name("rag-retrieval-", 0).factory(),
                 new ThreadPoolExecutor.CallerRunsPolicy());
     }
+
+    @Bean(name = "webSearchExecutor", destroyMethod = "shutdown")
+    ExecutorService webSearchExecutor(
+            @Value("${app.ai.tavily.executor-threads:4}") int threads,
+            @Value("${app.ai.tavily.queue-capacity:32}") int queueCapacity) {
+        var size = Math.max(1, Math.min(16, threads));
+        return new ThreadPoolExecutor(size, size, 30, TimeUnit.SECONDS,
+                new ArrayBlockingQueue<>(Math.max(4, Math.min(256, queueCapacity))),
+                Thread.ofPlatform().name("web-search-", 0).factory(),
+                new ThreadPoolExecutor.AbortPolicy());
+    }
 }

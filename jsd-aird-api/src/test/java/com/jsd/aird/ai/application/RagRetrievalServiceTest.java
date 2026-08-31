@@ -3,8 +3,11 @@ package com.jsd.aird.ai.application;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -12,8 +15,13 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.time.Duration;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import com.jsd.aird.ai.application.port.RerankerProvider;
+import com.jsd.aird.ai.application.port.WebSearchProvider;
 import com.jsd.aird.data.api.DataSourceFileSearchFacade;
 import com.jsd.aird.kb.api.KnowledgeSearchFacade;
 import org.junit.jupiter.api.Test;
@@ -27,8 +35,8 @@ class RagRetrievalServiceTest {
         var rewrite = mock(QueryRewriteService.class);
         var reranker = mock(RerankerProvider.class);
         var plan = new QueryRewriteService.QueryPlan("question", "question", List.of(), List.of(),
-                List.of(), Map.of(), "", false);
-        when(rewrite.rewrite(eq("question"), anyList()))
+                List.of(), Map.of(), "", List.of());
+        when(rewrite.rewrite(eq("question"), anyList(), anyBoolean()))
                 .thenReturn(new QueryRewriteService.Result(plan, "ORIGINAL", "", false));
 
         var retrieval = new RagRetrievalService(knowledge, data, rewrite, reranker)
@@ -49,8 +57,8 @@ class RagRetrievalServiceTest {
         var categoryId = UUID.randomUUID();
         var plan = new QueryRewriteService.QueryPlan("original", "rewritten", List.of("fact query"),
                 List.of(new QueryRewriteService.RetrievalTerm("dynamic", List.of("alias"), "PHRASE")),
-                List.of(new QueryRewriteService.RequiredFact("requested fact", "fact query")), Map.of(), "", false);
-        when(rewrite.rewrite(eq("original"), anyList()))
+                List.of(new QueryRewriteService.RequiredFact("requested fact", "fact query")), Map.of(), "", List.of());
+        when(rewrite.rewrite(eq("original"), anyList(), anyBoolean()))
                 .thenReturn(new QueryRewriteService.Result(plan, "MODEL", "fast", false));
 
         var hits = new ArrayList<KnowledgeSearchFacade.SearchHit>();
@@ -78,6 +86,159 @@ class RagRetrievalServiceTest {
             assertThat(coverage.status()).isEqualTo("COVERED");
             assertThat(coverage.chunkId()).isEqualTo(target.chunkId());
         });
+    }
+
+    @Test
+    void knowledgeAndDataChannelsRunInParallelAndBothCompleteBeforeMerge() throws Exception {
+        var knowledge = mock(KnowledgeSearchFacade.class);
+        var data = mock(DataSourceFileSearchFacade.class);
+        var rewrite = mock(QueryRewriteService.class);
+        var reranker = mock(RerankerProvider.class);
+        var web = mock(WebSearchProvider.class);
+        var knowledgeStarted = new CountDownLatch(1);
+        var dataStarted = new CountDownLatch(1);
+        var plan = new QueryRewriteService.QueryPlan("question", "question", List.of(), List.of(), List.of(),
+                Map.of(), "", List.of());
+        when(rewrite.rewrite(eq("question"), anyList(), eq(false)))
+                .thenReturn(new QueryRewriteService.Result(plan, "ORIGINAL", "", false));
+        when(knowledge.search(any(KnowledgeSearchFacade.SearchRequest.class))).thenAnswer(ignored -> {
+            knowledgeStarted.countDown();
+            assertThat(dataStarted.await(1, TimeUnit.SECONDS)).isTrue();
+            return new KnowledgeSearchFacade.SearchResult(List.of(),
+                    new KnowledgeSearchFacade.RetrievalTrace("test", 0, 0, 0, List.of()));
+        });
+        when(data.search(any(), any(), anyList(), anyInt())).thenAnswer(ignored -> {
+            dataStarted.countDown();
+            assertThat(knowledgeStarted.await(1, TimeUnit.SECONDS)).isTrue();
+            return List.of();
+        });
+        when(reranker.isConfigured()).thenReturn(false);
+        var executor = Executors.newFixedThreadPool(2);
+        try {
+            var retrieval = new RagRetrievalService(knowledge, data, rewrite, reranker, web, Runnable::run,
+                    executor, Duration.ofSeconds(1), 6).retrieve(UUID.randomUUID(), "question", List.of(),
+                    List.of(UUID.randomUUID()), List.of(UUID.randomUUID()), true, false);
+
+            assertThat(retrieval.trace().channels()).extracting(RagRetrievalService.ChannelTrace::status)
+                    .contains("EMPTY");
+            verify(knowledge).search(any(KnowledgeSearchFacade.SearchRequest.class));
+            verify(data).search(any(), eq("question"), anyList(), eq(8));
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void webSearchRunsInParallelWithInternalRetrieval() throws Exception {
+        var knowledge = mock(KnowledgeSearchFacade.class);
+        var data = mock(DataSourceFileSearchFacade.class);
+        var rewrite = mock(QueryRewriteService.class);
+        var reranker = mock(RerankerProvider.class);
+        var web = mock(WebSearchProvider.class);
+        var webStarted = new CountDownLatch(1);
+        var internalFinished = new CountDownLatch(1);
+        var categoryId = UUID.randomUUID();
+        var plan = new QueryRewriteService.QueryPlan("A-186", "A-186", List.of(), List.of(), List.of(),
+                Map.of(), "", List.of(new QueryRewriteService.WebQuery("A-186 silane", "GENERAL", "ALL")));
+        when(rewrite.rewrite(eq("A-186"), anyList(), eq(true)))
+                .thenReturn(new QueryRewriteService.Result(plan, "MODEL", "fast", false));
+        when(web.isAvailable()).thenReturn(true);
+        when(web.search(any(WebSearchProvider.SearchQuery.class))).thenAnswer(invocation -> {
+            webStarted.countDown();
+            assertThat(internalFinished.await(1, TimeUnit.SECONDS)).isTrue();
+            return new WebSearchProvider.SearchResponse("SUCCEEDED", List.of(
+                    new WebSearchProvider.SearchResult("A-186", "https://example.com/a-186", "public evidence",
+                            0.9, "2026-08-01")), 20, 10, 200, "");
+        });
+        when(knowledge.search(any(KnowledgeSearchFacade.SearchRequest.class))).thenAnswer(invocation -> {
+            assertThat(webStarted.await(1, TimeUnit.SECONDS)).isTrue();
+            internalFinished.countDown();
+            return new KnowledgeSearchFacade.SearchResult(List.of(),
+                    new KnowledgeSearchFacade.RetrievalTrace("test", 0, 0, 0, List.of()));
+        });
+        when(reranker.isConfigured()).thenReturn(false);
+        var executor = Executors.newFixedThreadPool(2);
+        try {
+            var retrieval = new RagRetrievalService(knowledge, data, rewrite, reranker, web, executor,
+                    Duration.ofSeconds(2), 6).retrieve(UUID.randomUUID(), "A-186", List.of(),
+                    List.of(categoryId), List.of(), true, true);
+
+            assertThat(retrieval.webHits()).singleElement().satisfies(hit -> {
+                assertThat(hit.url()).isEqualTo("https://example.com/a-186");
+                assertThat(hit.content()).isEqualTo("public evidence");
+            });
+            assertThat(retrieval.trace().web().status()).isEqualTo("SUCCEEDED");
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void canonicalWebUrlRejectsPrivateAndUnsupportedTargets() {
+        assertThat(RagRetrievalService.canonicalWebUrl("https://Example.com:443/path#part"))
+                .isEqualTo("https://example.com/path");
+        assertThat(RagRetrievalService.canonicalWebUrl("http://127.0.0.1/admin")).isEmpty();
+        assertThat(RagRetrievalService.canonicalWebUrl("file:///etc/passwd")).isEmpty();
+    }
+
+    @Test
+    void disabledWebSearchNeverTouchesTheProvider() {
+        var knowledge = mock(KnowledgeSearchFacade.class);
+        var data = mock(DataSourceFileSearchFacade.class);
+        var rewrite = mock(QueryRewriteService.class);
+        var reranker = mock(RerankerProvider.class);
+        var web = mock(WebSearchProvider.class);
+        var plan = new QueryRewriteService.QueryPlan("question", "question", List.of(), List.of(), List.of(),
+                Map.of(), "", List.of());
+        when(rewrite.rewrite(eq("question"), anyList(), eq(false)))
+                .thenReturn(new QueryRewriteService.Result(plan, "ORIGINAL", "", false));
+        var executor = Executors.newSingleThreadExecutor();
+        try {
+            var retrieval = new RagRetrievalService(knowledge, data, rewrite, reranker, web, executor,
+                    Duration.ofSeconds(1), 6).retrieve(UUID.randomUUID(), "question", List.of(),
+                    List.of(), List.of(), true, false);
+
+            assertThat(retrieval.webHits()).isEmpty();
+            assertThat(retrieval.trace().web().status()).isEqualTo("SKIPPED");
+            verifyNoInteractions(web);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void webEvidenceSurvivesAnInternalRetrievalFailure() {
+        var knowledge = mock(KnowledgeSearchFacade.class);
+        var data = mock(DataSourceFileSearchFacade.class);
+        var rewrite = mock(QueryRewriteService.class);
+        var reranker = mock(RerankerProvider.class);
+        var web = mock(WebSearchProvider.class);
+        var categoryId = UUID.randomUUID();
+        var plan = new QueryRewriteService.QueryPlan("question", "question", List.of(), List.of(), List.of(),
+                Map.of(), "", List.of(new QueryRewriteService.WebQuery("public question", "GENERAL", "ALL")));
+        when(rewrite.rewrite(eq("question"), anyList(), eq(true)))
+                .thenReturn(new QueryRewriteService.Result(plan, "MODEL", "fast", false));
+        when(knowledge.search(any(KnowledgeSearchFacade.SearchRequest.class)))
+                .thenThrow(new IllegalStateException("database unavailable"));
+        when(web.isAvailable()).thenReturn(true);
+        when(web.search(any(WebSearchProvider.SearchQuery.class))).thenReturn(new WebSearchProvider.SearchResponse(
+                "SUCCEEDED", List.of(new WebSearchProvider.SearchResult("Public", "https://example.com/public",
+                "external evidence", 0.8, "")), 10, 8, 200, ""));
+        var executor = Executors.newSingleThreadExecutor();
+        try {
+            var retrieval = new RagRetrievalService(knowledge, data, rewrite, reranker, web, executor,
+                    Duration.ofSeconds(1), 6).retrieve(UUID.randomUUID(), "question", List.of(),
+                    List.of(categoryId), List.of(), true, true);
+
+            assertThat(retrieval.knowledgeHits()).isEmpty();
+            assertThat(retrieval.webHits()).hasSize(1);
+            assertThat(retrieval.trace().channels())
+                    .filteredOn(channel -> "KNOWLEDGE_KEYWORD_VECTOR".equals(channel.channel()))
+                    .singleElement().extracting(RagRetrievalService.ChannelTrace::status).isEqualTo("FAILED");
+            verify(web).search(any(WebSearchProvider.SearchQuery.class));
+        } finally {
+            executor.shutdownNow();
+        }
     }
 
     private KnowledgeSearchFacade.SearchHit hit(int index) {

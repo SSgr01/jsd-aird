@@ -5,6 +5,7 @@ import {
   EyeOutlined,
   FileTextOutlined,
   FolderOpenOutlined,
+  GlobalOutlined,
 } from '@ant-design/icons';
 import { App, Button, Checkbox, Collapse, Space, Tag, Typography } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
@@ -67,7 +68,7 @@ function displayAnswer(value: string) {
 }
 
 function citationSourceKey(citation: AssistantCitation) {
-  return `${citation.sourceType}-${citation.chunkId}`;
+  return `${citation.sourceType}-${citation.chunkId || citation.url || citation.title}`;
 }
 
 function thinkingLabel(value: unknown) {
@@ -135,28 +136,34 @@ function renderAssistantContent(
           <div className="ai-message-citation-list">
             {citationGroups.map((group) => {
               const citation = group.citation;
+              const external = citation.sourceType === 'EXTERNAL_REFERENCE';
               return (
               <div
                 className="ai-message-citation-row"
                 key={group.key}
               >
-                <FileTextOutlined aria-hidden="true" />
+                {external ? <GlobalOutlined aria-hidden="true" /> : <FileTextOutlined aria-hidden="true" />}
                 <button
                   type="button"
                   className="ai-message-citation-title"
-                  disabled={!citation.documentId && !citation.fileObjectId}
+                  disabled={!citation.documentId && !citation.fileObjectId && !citation.url}
                   onClick={() => {
                     if (citation.documentId)
                       navigate(`/knowledge/documents/${citation.documentId}`);
                     else if (citation.fileObjectId) navigate('/data/view');
+                    else if (citation.url) {
+                      const opened = window.open(citation.url, '_blank', 'noopener,noreferrer');
+                      if (opened) opened.opener = null;
+                    }
                   }}
                 >
                   <span className="ai-message-citation-name">
                     {citation.title || citation.originalName || '来源文件'}
                   </span>
                   <span className="ai-message-citation-summary">
-                    {citationPagesLabel(group.pages)}
-                    {citationEvidenceLabel(group.evidenceCount)}
+                    {external
+                      ? ` · 互联网来源${citation.siteName ? ` · ${citation.siteName}` : ''}`
+                      : `${citationPagesLabel(group.pages)}${citationEvidenceLabel(group.evidenceCount)}`}
                   </span>
                 </button>
                 {hasOriginalFile(citation) && (
@@ -205,19 +212,23 @@ export function AssistantPage() {
   const [selectedData, setSelectedData] = useState<string[]>([]);
   const [previewFile, setPreviewFile] = useState<FilePreviewDescriptor>();
   const [citationSources, setCitationSources] = useState<Record<string, boolean>>({});
+  const [webSearchAvailable, setWebSearchAvailable] = useState(false);
+  const [webSearchEnabled, setWebSearchEnabled] = useState(false);
 
   useEffect(() => {
     void Promise.all([
       assistantApi.conversations(),
       knowledgeApi.categories(),
       dataApi.listCategories(),
+      assistantApi.capabilities().catch(() => ({ webSearchAvailable: false })),
     ])
-      .then(([conversationList, knowledgeList, dataList]) => {
+      .then(([conversationList, knowledgeList, dataList, capabilities]) => {
         setConversations(conversationList);
         setKnowledgeCategories(knowledgeList);
         setDataCategories(dataList);
         setSelectedKnowledge(knowledgeList.map((item) => item.id));
         setSelectedData(dataList.map((item) => item.id));
+        setWebSearchAvailable(Boolean(capabilities.webSearchAvailable));
       })
       .catch(() => toast.error('AI 问答范围加载失败'));
   }, [toast]);
@@ -280,6 +291,7 @@ export function AssistantPage() {
         conversationId,
         selectedKnowledge,
         selectedData,
+        webSearchEnabled,
         (token) => {
           answer += token;
           setMessages((current) =>
@@ -339,9 +351,11 @@ export function AssistantPage() {
     setConversationId(undefined);
     setChatMessages([]);
     setQuestion('');
+    setWebSearchEnabled(false);
   };
 
   const openConversation = async (id: string) => {
+    setWebSearchEnabled(false);
     setLoading(true);
     try {
       const conversation = await assistantApi.conversation(id);
@@ -562,7 +576,7 @@ export function AssistantPage() {
 
   const composerScopeContent = (
     <div className="ai-composer-scope-summary">
-      <Typography.Text type="secondary">当前同步范围：</Typography.Text>
+      <Typography.Text type="secondary">当前检索范围：</Typography.Text>
       <Space size={[6, 6]} wrap>
         {allAuthorizedSelected ? (
           <Tag className="ai-composer-scope-tag">全部已授权资料</Tag>
@@ -599,7 +613,7 @@ export function AssistantPage() {
             <Typography.Title level={2}>AI问答</Typography.Title>
           </div>
           <Typography.Text type="secondary">
-            回答仅基于已授权的研发资料和已归档来源文件。
+            基于已授权资料回答，也可按需补充公开互联网信息。
           </Typography.Text>
         </div>
       </div>
@@ -609,6 +623,19 @@ export function AssistantPage() {
         messages={viewMessages}
         scopeContent={scopeContent}
         composerTopContent={composerScopeContent}
+        composerActions={(
+          <Button
+            icon={<GlobalOutlined />}
+            type={webSearchEnabled ? 'primary' : 'default'}
+            className={`ai-composer-web-toggle${webSearchEnabled ? ' is-active' : ''}`}
+            aria-pressed={webSearchEnabled}
+            disabled={!webSearchAvailable || loading || streaming}
+            title={webSearchAvailable ? '联网搜索公开资料' : '联网搜索尚未配置'}
+            onClick={() => setWebSearchEnabled((current) => !current)}
+          >
+            联网搜索
+          </Button>
+        )}
         scopeSummary={
           <Typography.Text type="secondary">
             {allAuthorizedSelected

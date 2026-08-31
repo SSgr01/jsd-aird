@@ -26,9 +26,10 @@ export function OriginalDocumentViewer(props: OriginalDocumentViewerProps) {
 }
 
 function PdfViewer({ blob, selected, sourceNodes, onSourceSelect }: { blob: Blob; selected?: SourceAnchor; sourceNodes: SourceNode[]; onSourceSelect?: (key: string) => void }) {
-  const [pdf, setPdf] = useState<PDFDocumentProxy>();
-  useEffect(() => { let task: PDFDocumentLoadingTask | undefined; void Promise.all([blob.arrayBuffer(), import('pdfjs-dist')]).then(([data, pdfjs]) => { pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).toString(); task = pdfjs.getDocument({ data }); return task.promise; }).then(setPdf); return () => { void task?.destroy(); }; }, [blob]);
+  const [pdf, setPdf] = useState<PDFDocumentProxy>(); const [error, setError] = useState<string>();
+  useEffect(() => { let active = true; let task: PDFDocumentLoadingTask | undefined; setPdf(undefined); setError(undefined); void Promise.all([blob.arrayBuffer(), import('pdfjs-dist')]).then(([data, pdfjs]) => { pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).toString(); task = pdfjs.getDocument({ data: new Uint8Array(data) }); return task.promise; }).then((value) => { if (active) setPdf(value); }).catch(() => { if (active) setError('PDF 预览加载失败，请刷新后重试或下载原文件查看'); }); return () => { active = false; void task?.destroy(); }; }, [blob]);
   useEffect(() => { if (selected?.page) document.getElementById(`knowledge-pdf-page-${selected.page}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }); }, [selected]);
+  if (error) return <div className="knowledge-viewer-state"><Alert type="error" showIcon message={error} /></div>;
   if (!pdf) return <div className="knowledge-viewer-state"><Spin /></div>;
   return <div className="knowledge-pdf-pages">{Array.from({ length: pdf.numPages }, (_, index) => <PdfPage key={index + 1} pdf={pdf} pageNo={index + 1} highlight={selected?.page === index + 1 ? selected : undefined} onClick={(x, y) => { const pageNo = index + 1; const node = sourceNodes.find((item) => item.sourceAnchor.page === pageNo && anchorContainsPoint(item.sourceAnchor, x, y)) || sourceNodes.find((item) => item.sourceAnchor.page === pageNo); if (node) onSourceSelect?.(node.sourceNodeKey); }} />)}</div>;
 }

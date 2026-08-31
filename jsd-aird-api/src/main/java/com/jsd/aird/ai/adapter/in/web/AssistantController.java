@@ -43,6 +43,11 @@ public class AssistantController {
         return assistant.stream(request.command());
     }
 
+    @GetMapping("/capabilities")
+    public ApiResponse<AssistantService.Capabilities> capabilities() {
+        return success(assistant.capabilities());
+    }
+
     @GetMapping("/conversations/{id}")
     public ApiResponse<AssistantService.ConversationView> conversation(@PathVariable UUID id) {
         return success(assistant.conversation(id));
@@ -95,9 +100,11 @@ public class AssistantController {
     }
 
     public record QaRequest(UUID conversationId, @Size(min = 1, max = 3000) String question,
-                            List<UUID> knowledgeCategoryIds, List<UUID> dataCategoryIds) {
+                            List<UUID> knowledgeCategoryIds, List<UUID> dataCategoryIds,
+                            Boolean webSearchEnabled) {
         AssistantService.AskCommand command() {
-            return new AssistantService.AskCommand(conversationId, question, knowledgeCategoryIds, dataCategoryIds);
+            return new AssistantService.AskCommand(conversationId, question, knowledgeCategoryIds, dataCategoryIds,
+                    Boolean.TRUE.equals(webSearchEnabled));
         }
     }
     public record FileSearchRequest(@Size(min = 1, max = 1000) String query, Boolean aiOnly, int limit,

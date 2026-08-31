@@ -55,15 +55,24 @@ public interface KnowledgeSearchFacade {
     }
 
     record RetrievalTrace(String strategy, int bm25Candidates, int vectorCandidates, int mergedCandidates,
-                          int phraseCandidates, List<String> fallbacks, List<QueryTrace> queries) {
+                          int phraseCandidates, List<String> fallbacks, List<QueryTrace> queries,
+                          int variantCount, java.util.Map<String, Long> timings) {
         public RetrievalTrace {
             fallbacks = fallbacks == null ? List.of() : List.copyOf(fallbacks);
             queries = queries == null ? List.of() : List.copyOf(queries);
+            timings = timings == null ? java.util.Map.of() : java.util.Map.copyOf(timings);
+        }
+
+        public RetrievalTrace(String strategy, int bm25Candidates, int vectorCandidates, int mergedCandidates,
+                              int phraseCandidates, List<String> fallbacks, List<QueryTrace> queries) {
+            this(strategy, bm25Candidates, vectorCandidates, mergedCandidates, phraseCandidates,
+                    fallbacks, queries, 0, java.util.Map.of());
         }
 
         public RetrievalTrace(String strategy, int bm25Candidates, int vectorCandidates, int mergedCandidates,
                               List<String> fallbacks) {
-            this(strategy, bm25Candidates, vectorCandidates, mergedCandidates, 0, fallbacks, List.of());
+            this(strategy, bm25Candidates, vectorCandidates, mergedCandidates, 0, fallbacks, List.of(),
+                    0, java.util.Map.of());
         }
     }
 

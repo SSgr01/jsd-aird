@@ -10,24 +10,24 @@ public interface KnowledgeRepository {
     void insertDocument(NewDocument document);
     void insertVersion(NewVersion version);
     Optional<DocumentRow> findDocument(UUID organizationId, UUID documentId);
-    List<DocumentRow> listDocuments(UUID organizationId, String keyword, String status, String aiStatus,
+    List<DocumentRow> listDocuments(UUID organizationId, String keyword, String status,
                                     String scope, UUID categoryId, String lifecycleStatus, String reviewStatus,
                                     int page, int size);
-    default List<DocumentRow> listDocuments(UUID organizationId, String keyword, String status, String aiStatus,
+    default List<DocumentRow> listDocuments(UUID organizationId, String keyword, String status,
                                             String scope, UUID categoryId, String lifecycleStatus, String reviewStatus,
                                             Set<UUID> allowedDocumentIds, int page, int size) {
         if (allowedDocumentIds != null && allowedDocumentIds.isEmpty()) return List.of();
-        return listDocuments(organizationId, keyword, status, aiStatus, scope, categoryId, lifecycleStatus,
+        return listDocuments(organizationId, keyword, status, scope, categoryId, lifecycleStatus,
                 reviewStatus, page, size).stream()
                 .filter(row -> allowedDocumentIds == null || allowedDocumentIds.contains(row.id())).toList();
     }
-    long countDocuments(UUID organizationId, String keyword, String status, String aiStatus,
+    long countDocuments(UUID organizationId, String keyword, String status,
                         String scope, UUID categoryId, String lifecycleStatus, String reviewStatus);
-    default long countDocuments(UUID organizationId, String keyword, String status, String aiStatus,
+    default long countDocuments(UUID organizationId, String keyword, String status,
                                 String scope, UUID categoryId, String lifecycleStatus, String reviewStatus,
                                 Set<UUID> allowedDocumentIds) {
         if (allowedDocumentIds != null && allowedDocumentIds.isEmpty()) return 0;
-        return countDocuments(organizationId, keyword, status, aiStatus, scope, categoryId,
+        return countDocuments(organizationId, keyword, status, scope, categoryId,
                 lifecycleStatus, reviewStatus);
     }
 
@@ -103,6 +103,38 @@ public interface KnowledgeRepository {
         return vectorSearch(organizationId, vector, aiOnly, categoryIds, limit);
     }
 
+    default List<RankedChunk> batchBm25Rank(UUID organizationId, List<AnalyzedQuery> queries,
+                                            boolean aiOnly, List<UUID> categoryIds, int limit) {
+        if (queries == null || queries.isEmpty()) return List.of();
+        var result = new java.util.ArrayList<RankedChunk>();
+        for (var query : queries) {
+            var rows = bm25Search(organizationId, query.terms(), aiOnly, categoryIds, limit);
+            for (var index = 0; index < rows.size(); index++) {
+                var row = rows.get(index);
+                result.add(new RankedChunk(query.ordinal(), row.chunkId(), row.score(), index + 1));
+            }
+        }
+        return List.copyOf(result);
+    }
+
+    default List<RankedChunk> batchVectorRank(UUID organizationId, List<VectorQuery> queries,
+                                              boolean aiOnly, List<UUID> categoryIds, int limit, int dimension) {
+        if (queries == null || queries.isEmpty()) return List.of();
+        var result = new java.util.ArrayList<RankedChunk>();
+        for (var query : queries) {
+            var rows = vectorSearch(organizationId, query.vector(), aiOnly, categoryIds, limit, dimension);
+            for (var index = 0; index < rows.size(); index++) {
+                var row = rows.get(index);
+                result.add(new RankedChunk(query.ordinal(), row.chunkId(), row.score(), index + 1));
+            }
+        }
+        return List.copyOf(result);
+    }
+
+    default List<SearchRow> loadSearchRows(UUID organizationId, List<UUID> chunkIds) {
+        return List.of();
+    }
+
     record CategoryRow(UUID id, String scope, String name, String description, int sortOrder, long documentCount) { }
     record NewDocument(UUID id, UUID organizationId, String title, UUID actorId, String scope, UUID categoryId) { }
     record NewVersion(UUID id, UUID documentId, int versionNo, UUID fileObjectId, String originalName,
@@ -113,7 +145,8 @@ public interface KnowledgeRepository {
                        String contentType, long size, String sha256, String parseError,
                        java.time.Instant createdAt, java.time.Instant updatedAt, String libraryScope,
                        UUID categoryId, String categoryName, String lifecycleStatus, String reviewStatus,
-                       int reviewRevision, UUID currentPublicationId, Integer currentPublicationNo) { }
+                       String reviewRevisionStatus, int reviewRevision,
+                       UUID currentPublicationId, Integer currentPublicationNo) { }
     record VersionRow(UUID id, UUID documentId, int versionNo, UUID fileObjectId, String originalName,
                       String contentType, long size, String sha256, String status, String parserVersion,
                       String errorMessage, String reviewStatus, int reviewRevision, String ocrMode,
@@ -133,11 +166,24 @@ public interface KnowledgeRepository {
                           List<UUID> sourceNodeKeys) { }
     record TermFrequency(String term, int frequency) { }
     record AnalyzedTerm(String analyzerVersion, String term) { }
+    record AnalyzedQuery(int ordinal, String query, List<AnalyzedTerm> terms) {
+        public AnalyzedQuery {
+            terms = terms == null ? List.of() : List.copyOf(terms);
+        }
+    }
+    record VectorQuery(int ordinal, String query, String vector) { }
+    record RankedChunk(int queryOrdinal, UUID chunkId, double score, int rank) { }
     record SearchRow(UUID chunkId, UUID documentId, UUID versionId, String title, String originalName,
-                     Integer pageNo, String section, String content, double score, int chunkNo) {
+                     Integer pageNo, String section, String content, double score, int chunkNo,
+                     ChunkAnchorRow provenance) {
+        public SearchRow(UUID chunkId, UUID documentId, UUID versionId, String title, String originalName,
+                         Integer pageNo, String section, String content, double score, int chunkNo) {
+            this(chunkId, documentId, versionId, title, originalName, pageNo, section, content, score, chunkNo, null);
+        }
+
         public SearchRow(UUID chunkId, UUID documentId, UUID versionId, String title, String originalName,
                          Integer pageNo, String section, String content, double score) {
-            this(chunkId, documentId, versionId, title, originalName, pageNo, section, content, score, -1);
+            this(chunkId, documentId, versionId, title, originalName, pageNo, section, content, score, -1, null);
         }
     }
 }

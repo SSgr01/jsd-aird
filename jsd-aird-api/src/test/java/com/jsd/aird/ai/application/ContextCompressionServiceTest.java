@@ -22,6 +22,7 @@ class ContextCompressionServiceTest {
 
         assertThat(context.characterCount()).isLessThanOrEqualTo(200);
         assertThat(context.text()).contains("source=knowledge")
+                .contains("evidenceRef=K1")
                 .doesNotContain("ref=")
                 .doesNotContain(hit.chunkId().toString())
                 .doesNotContain(hit.documentId().toString())
@@ -37,10 +38,25 @@ class ContextCompressionServiceTest {
         var context = new ContextCompressionService().compress(List.of(), List.of(data), 500);
 
         assertThat(context.text()).contains("source=data")
+                .contains("evidenceRef=D1")
                 .doesNotContain("ref=")
                 .doesNotContain(data.hitId().toString())
                 .doesNotContain(data.fileObjectId().toString())
                 .doesNotContain(data.importJobId().toString())
                 .contains("材料名称=TEST-TPL-丙烯酸树脂");
+    }
+
+    @Test
+    void exposesOnlyEvidenceReferencesThatFitInsideTheContextBudget() {
+        var first = new KnowledgeSearchFacade.SearchHit(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
+                "规范", "spec.pdf", 1, "参数", "a".repeat(500), 0.9);
+        var second = new KnowledgeSearchFacade.SearchHit(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
+                "规范", "spec.pdf", 2, "参数", "b".repeat(500), 0.8);
+
+        var context = new ContextCompressionService().compress(List.of(first, second), List.of(), 160);
+
+        assertThat(context.evidenceRefs()).containsExactly("K1");
+        assertThat(context.knowledgeCount()).isEqualTo(1);
+        assertThat(context.dataFileCount()).isZero();
     }
 }

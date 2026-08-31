@@ -173,7 +173,6 @@ public class JdbcKnowledgeGovernanceRepository implements KnowledgeGovernanceRep
         return new ParseRunRow(id, documentId, versionId, runNo, parseStatus, errorMessage, Instant.now(),
                 initial.sourceDocument(), StructuredDocumentCodec.SCHEMA_VERSION, diagnosticResult, parserVersion,
                 provider, providerTaskId,
-                diagnosticResult == null ? "AUTO" : diagnosticResult.path("requestedOcrMode").asText("AUTO"),
                 diagnosticResult != null && diagnosticResult.path("effectiveOcr").isBoolean()
                         ? diagnosticResult.path("effectiveOcr").asBoolean() : null,
                 diagnosticResult == null ? null : diagnosticResult.path("mode").asText(null));
@@ -243,7 +242,7 @@ public class JdbcKnowledgeGovernanceRepository implements KnowledgeGovernanceRep
                        r.id AS parse_run_id, r.run_no, r.status AS parse_status, r.error_message,
                        r.created_at AS parse_created_at, r.source_document_jsonb, r.document_schema_version,
                        r.result_jsonb AS parse_result_jsonb, r.parser_version, r.provider, r.provider_task_id,
-                       v.ocr_mode, v.effective_ocr, v.parser_mode,
+                       v.effective_ocr, v.parser_mode,
                        rr.id AS review_revision_id, rr.revision_no, rr.lock_version, rr.base_publication_id,
                        rr.confirmed_document_jsonb, rr.excluded_review_node_ids, rr.status AS revision_status,
                        rr.failure_reason, rr.updated_at AS revision_updated_at
@@ -253,8 +252,7 @@ public class JdbcKnowledgeGovernanceRepository implements KnowledgeGovernanceRep
                 LEFT JOIN LATERAL (
                     SELECT * FROM kb.document_review_revision value
                     WHERE value.document_version_id = v.id
-                    ORDER BY CASE value.status WHEN 'DRAFT' THEN 0 WHEN 'FAILED' THEN 1 ELSE 2 END,
-                             value.revision_no DESC LIMIT 1
+                    ORDER BY value.revision_no DESC LIMIT 1
                 ) rr ON true
                 LEFT JOIN kb.document_parse_run r ON r.id = rr.parse_run_id
                 WHERE d.organization_id = ? AND d.id = ? AND v.id = ?
@@ -461,7 +459,7 @@ public class JdbcKnowledgeGovernanceRepository implements KnowledgeGovernanceRep
                     rs.getTimestamp("parse_created_at").toInstant(), read(rs.getString("source_document_jsonb")),
                     rs.getInt("document_schema_version"), read(rs.getString("parse_result_jsonb")),
                     rs.getString("parser_version"), rs.getString("provider"), rs.getString("provider_task_id"),
-                    rs.getString("ocr_mode"), (Boolean) rs.getObject("effective_ocr"), rs.getString("parser_mode"));
+                    (Boolean) rs.getObject("effective_ocr"), rs.getString("parser_mode"));
         }
         var revisionId = rs.getObject("review_revision_id", UUID.class);
         ReviewRevisionView revision = null;
@@ -485,24 +483,26 @@ public class JdbcKnowledgeGovernanceRepository implements KnowledgeGovernanceRep
         var normalized = status == null || status.isBlank() ? null : status.trim().toUpperCase();
         return jdbc.query("""
                 SELECT d.id AS document_id, d.title, v.id AS version_id, v.version_no, v.original_name,
-                       v.status AS processing_status, v.review_status,
+                       v.status AS processing_status, v.review_status, rr.status AS review_revision_status,
                        coalesce(rr.revision_no, v.review_revision) AS review_revision,
                        c.name AS category_name, coalesce(rr.updated_at, v.updated_at) AS updated_at
                 FROM kb.document d
                 JOIN kb.document_version v ON v.document_id = d.id AND v.version_no = d.current_version_no
                 LEFT JOIN kb.document_category c ON c.id = d.category_id
                 LEFT JOIN LATERAL (
-                    SELECT revision_no, updated_at FROM kb.document_review_revision x
-                    WHERE x.document_version_id = v.id AND x.status IN ('DRAFT', 'FAILED')
+                    SELECT revision_no, status, updated_at FROM kb.document_review_revision x
+                    WHERE x.document_version_id = v.id
                     ORDER BY x.revision_no DESC LIMIT 1
                 ) rr ON true
                 WHERE d.organization_id = ? AND (CAST(? AS text) IS NULL OR v.review_status = ?)
                   AND v.review_status IN ('PENDING_REVIEW', 'REJECTED')
+                  AND (v.review_status = 'REJECTED' OR rr.status IS DISTINCT FROM 'BUILDING')
                 ORDER BY coalesce(rr.updated_at, v.updated_at) DESC LIMIT ?
                 """, (rs, ignored) -> new ReviewQueueItem(rs.getObject("document_id", UUID.class),
                 rs.getString("title"), rs.getObject("version_id", UUID.class), rs.getInt("version_no"),
                 rs.getString("original_name"), rs.getString("processing_status"), rs.getString("review_status"),
-                rs.getInt("review_revision"), rs.getString("category_name"), rs.getTimestamp("updated_at").toInstant()),
+                rs.getString("review_revision_status"), rs.getInt("review_revision"),
+                rs.getString("category_name"), rs.getTimestamp("updated_at").toInstant()),
                 organizationId, normalized, normalized, Math.min(500, Math.max(1, limit)));
     }
 

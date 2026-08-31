@@ -17,7 +17,7 @@ export class AssistantRequestError extends Error {
 
 export interface AssistantCitation {
   sourceType: string;
-  chunkId: string;
+  chunkId?: string;
   documentId?: string;
   versionId?: string;
   fileObjectId?: string;
@@ -36,6 +36,11 @@ export interface AssistantCitation {
   anchors?: Array<Record<string, unknown>>;
   reviewNodeIds?: string[];
   sourceNodeKeys?: string[];
+  url?: string;
+  siteName?: string;
+  publishedAt?: string;
+  fetchedAt?: string;
+  contentHash?: string;
 }
 
 export interface AssistantResponse {
@@ -57,6 +62,10 @@ export interface ConversationMeta {
   title: string;
   summary?: string;
   titleSource?: string;
+}
+
+export interface AssistantCapabilities {
+  webSearchAvailable: boolean;
 }
 
 export interface FileSearchResult {
@@ -92,6 +101,10 @@ export function parseAssistantSseData(data: string): unknown {
 }
 
 export const assistantApi = {
+  async capabilities() {
+    const response = await httpClient.get<ApiResponse<AssistantCapabilities>>('/api/v1/assistant/capabilities');
+    return response.data.data;
+  },
   async conversation(id: string) {
     const response = await httpClient.get<ApiResponse<ConversationView>>(`/api/v1/assistant/conversations/${id}`);
     return response.data.data;
@@ -115,6 +128,7 @@ export const assistantApi = {
     conversationId: string | undefined,
     knowledgeCategoryIds: string[] = [],
     dataCategoryIds: string[] = [],
+    webSearchEnabled = false,
     onToken: (token: string) => void,
     onDone: (response: AssistantResponse) => void,
     onStage?: (event: string, data: unknown) => void,
@@ -128,7 +142,7 @@ export const assistantApi = {
         'X-Request-Id': generateUUID(),
         'X-XSRF-TOKEN': csrfToken,
       },
-      body: JSON.stringify({ question, conversationId, knowledgeCategoryIds, dataCategoryIds }),
+      body: JSON.stringify({ question, conversationId, knowledgeCategoryIds, dataCategoryIds, webSearchEnabled }),
     });
     let csrfToken = await ensureCsrfToken();
     let response = await requestStream(csrfToken);

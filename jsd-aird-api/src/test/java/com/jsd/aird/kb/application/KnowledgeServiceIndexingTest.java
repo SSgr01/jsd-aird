@@ -9,6 +9,7 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -53,18 +54,19 @@ class KnowledgeServiceIndexingTest {
                 "BM25", "bm25.pdf", 1, "paragraph", "bm25", 1.0, 1);
         var vectorRow = new KnowledgeRepository.SearchRow(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
                 "VECTOR", "vector.pdf", 1, "paragraph", "vector", 0.9, 2);
-        when(repository.bm25Search(any(), any(), anyBoolean(), any(), anyInt())).thenAnswer(ignored -> {
+        when(repository.batchBm25Rank(any(), anyList(), anyBoolean(), anyList(), anyInt())).thenAnswer(ignored -> {
             bm25Started.countDown();
             assertThat(embeddingStarted.await(1, TimeUnit.SECONDS)).isTrue();
-            return List.of(bm25Row);
+            return List.of(new KnowledgeRepository.RankedChunk(0, bm25Row.chunkId(), bm25Row.score(), 1));
         });
         when(embedding.embedVectors(anyList())).thenAnswer(ignored -> {
             embeddingStarted.countDown();
             assertThat(bm25Started.await(1, TimeUnit.SECONDS)).isTrue();
             return List.of(Optional.of("[0.1, 0.2]"));
         });
-        when(repository.vectorSearch(any(), anyString(), anyBoolean(), any(), anyInt(), anyInt()))
-                .thenReturn(List.of(vectorRow));
+        when(repository.batchVectorRank(any(), anyList(), anyBoolean(), anyList(), anyInt(), anyInt()))
+                .thenReturn(List.of(new KnowledgeRepository.RankedChunk(0, vectorRow.chunkId(), vectorRow.score(), 1)));
+        when(repository.loadSearchRows(any(), anyList())).thenReturn(List.of(bm25Row, vectorRow));
 
         var executor = Executors.newFixedThreadPool(2);
         try {
@@ -73,7 +75,7 @@ class KnowledgeServiceIndexingTest {
                     mock(FileStorageFacade.class), mock(OpsAsyncFacade.class), mock(AuditLogFacade.class), mapper,
                     new StructuredDocumentCodec(mapper), List.of(), mock(FileSafetyScanner.class), provider, List.of(),
                     "embedding-model", 2, Duration.ofMinutes(15), new BlockAwareChunker(mapper), testAnalyzer(),
-                    executor, Duration.ofSeconds(2), Duration.ofSeconds(2));
+                    executor);
 
             var result = service.search(new KnowledgeSearchFacade.SearchRequest(UUID.randomUUID(), "parallel", false,
                     30, List.of(), List.of()));
@@ -82,6 +84,9 @@ class KnowledgeServiceIndexingTest {
                     .contains("bm25", "vector");
             assertThat(result.trace().queries()).extracting(KnowledgeSearchFacade.QueryTrace::channel)
                     .contains("BM25", "EMBEDDING_BATCH", "VECTOR");
+            verify(repository, times(1)).batchBm25Rank(any(), anyList(), anyBoolean(), anyList(), anyInt());
+            verify(repository, times(1)).batchVectorRank(any(), anyList(), anyBoolean(), anyList(), anyInt(), anyInt());
+            verify(repository, times(1)).loadSearchRows(any(), anyList());
         } finally {
             executor.shutdownNow();
         }
@@ -93,7 +98,7 @@ class KnowledgeServiceIndexingTest {
         var organizationId = UUID.randomUUID();
         var row = new KnowledgeRepository.SearchRow(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
                 "测试文档", "test.pdf", 1, "paragraph", "全文命中", 1.0, 1);
-        when(repository.bm25Search(any(), any(), anyBoolean(), any(), anyInt())).thenReturn(List.of());
+        when(repository.batchBm25Rank(any(), anyList(), anyBoolean(), anyList(), anyInt())).thenReturn(List.of());
         when(repository.fullTextSearch(any(), anyString(), anyBoolean(), any(), anyInt()))
                 .thenReturn(List.of(row));
 
@@ -117,7 +122,7 @@ class KnowledgeServiceIndexingTest {
         var organizationId = UUID.randomUUID();
         var row = new KnowledgeRepository.SearchRow(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
                 "测试文档", "test.pdf", 1, "paragraph", "全文命中", 1.0, 1);
-        when(repository.bm25Search(any(), any(), anyBoolean(), any(), anyInt()))
+        when(repository.batchBm25Rank(any(), anyList(), anyBoolean(), anyList(), anyInt()))
                 .thenThrow(new IllegalStateException("index unavailable"));
         when(repository.fullTextSearch(any(), anyString(), anyBoolean(), any(), anyInt()))
                 .thenReturn(List.of(row));
@@ -146,8 +151,10 @@ class KnowledgeServiceIndexingTest {
                 "测试文档", "form.pdf", 1, "OCR-LINE", "TEST-TPL-丙烯酸树脂", 3.0, 16);
         var density = new KnowledgeRepository.SearchRow(UUID.randomUUID(), documentId, versionId,
                 "测试文档", "form.pdf", 1, "OCR-LINE", "密度", 2.0, 21);
-        when(repository.bm25Search(any(), any(), anyBoolean(), any(), anyInt()))
-                .thenReturn(List.of(sample, density));
+        when(repository.batchBm25Rank(any(), anyList(), anyBoolean(), anyList(), anyInt()))
+                .thenReturn(List.of(new KnowledgeRepository.RankedChunk(0, sample.chunkId(), sample.score(), 1),
+                        new KnowledgeRepository.RankedChunk(0, density.chunkId(), density.score(), 2)));
+        when(repository.loadSearchRows(any(), anyList())).thenReturn(List.of(sample, density));
         var service = new KnowledgeService(repository, mock(KnowledgeGovernanceRepository.class),
                 mock(FileStorageFacade.class), mock(OpsAsyncFacade.class), mock(AuditLogFacade.class),
                 new ObjectMapper(), new StructuredDocumentCodec(new ObjectMapper()), List.of(),
@@ -181,7 +188,7 @@ class KnowledgeServiceIndexingTest {
         var source = initialized.sourceNodes().getFirst();
         var parseRun = new KnowledgeGovernanceRepository.ParseRunRow(parseRunId, documentId, versionId,
                 1, "SUCCEEDED", null, Instant.now(), initialized.sourceDocument(), 1,
-                objectMapper.createObjectNode(), "test-parser", "test", null, "AUTO", false, "LOCAL");
+                objectMapper.createObjectNode(), "test-parser", "test", null, false, "LOCAL");
         var revision = new KnowledgeGovernanceRepository.ReviewRevisionView(reviewRevisionId, parseRunId,
                 1, 3, null, initialized.confirmedDocument(), List.of(), "BUILDING", null, Instant.now());
         var sourceNode = new KnowledgeGovernanceRepository.SourceNodeView(source.sourceNodeKey(), 0,

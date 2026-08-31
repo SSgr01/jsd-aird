@@ -47,27 +47,25 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
     }
 
     @Override
-    public List<DocumentRow> listDocuments(UUID organizationId, String keyword, String status, String aiStatus,
+    public List<DocumentRow> listDocuments(UUID organizationId, String keyword, String status,
                                            String scope, UUID categoryId, String lifecycleStatus, String reviewStatus,
                                            int page, int size) {
-        return listDocuments(organizationId, keyword, status, aiStatus, scope, categoryId,
+        return listDocuments(organizationId, keyword, status, scope, categoryId,
                 lifecycleStatus, reviewStatus, null, page, size);
     }
 
     @Override
-    public List<DocumentRow> listDocuments(UUID organizationId, String keyword, String status, String aiStatus,
+    public List<DocumentRow> listDocuments(UUID organizationId, String keyword, String status,
                                            String scope, UUID categoryId, String lifecycleStatus, String reviewStatus,
                                            java.util.Set<UUID> allowedDocumentIds, int page, int size) {
         if (allowedDocumentIds != null && allowedDocumentIds.isEmpty()) return List.of();
         var normalizedKeyword = blankToNull(keyword);
         var normalizedStatus = blankToNull(status);
-        var normalizedAiStatus = blankToNull(aiStatus);
         var projectClause = documentIdClause(allowedDocumentIds);
         var sql = documentQuery("""
                 WHERE d.organization_id = ?
                   AND (CAST(? AS text) IS NULL OR d.title ILIKE '%' || ? || '%' OR v.original_name ILIKE '%' || ? || '%')
                   AND (CAST(? AS text) IS NULL OR d.status = ?)
-                  AND (CAST(? AS text) IS NULL OR coalesce(g.status, 'PENDING') = ?)
                   AND (CAST(? AS text) IS NULL OR d.library_scope = ?)
                   AND (CAST(? AS uuid) IS NULL OR d.category_id = ?)
                   AND (CAST(? AS text) IS NULL OR d.lifecycle_status = ?)
@@ -77,7 +75,7 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                 LIMIT ? OFFSET ?
                 """);
         var args = new java.util.ArrayList<Object>(java.util.Arrays.asList(organizationId, normalizedKeyword, normalizedKeyword,
-                normalizedKeyword, normalizedStatus, normalizedStatus, normalizedAiStatus, normalizedAiStatus,
+                normalizedKeyword, normalizedStatus, normalizedStatus,
                 blankToNull(scope), blankToNull(scope), categoryId, categoryId,
                 blankToNull(lifecycleStatus), blankToNull(lifecycleStatus),
                 blankToNull(reviewStatus), blankToNull(reviewStatus)));
@@ -88,22 +86,21 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
     }
 
     @Override
-    public long countDocuments(UUID organizationId, String keyword, String status, String aiStatus,
+    public long countDocuments(UUID organizationId, String keyword, String status,
                                String scope, UUID categoryId, String lifecycleStatus, String reviewStatus) {
-        return countDocuments(organizationId, keyword, status, aiStatus, scope, categoryId,
+        return countDocuments(organizationId, keyword, status, scope, categoryId,
                 lifecycleStatus, reviewStatus, null);
     }
 
     @Override
-    public long countDocuments(UUID organizationId, String keyword, String status, String aiStatus,
+    public long countDocuments(UUID organizationId, String keyword, String status,
                                String scope, UUID categoryId, String lifecycleStatus, String reviewStatus,
                                java.util.Set<UUID> allowedDocumentIds) {
         if (allowedDocumentIds != null && allowedDocumentIds.isEmpty()) return 0;
         var normalizedKeyword = blankToNull(keyword);
         var normalizedStatus = blankToNull(status);
-        var normalizedAiStatus = blankToNull(aiStatus);
         var args = new java.util.ArrayList<Object>(java.util.Arrays.asList(organizationId, normalizedKeyword, normalizedKeyword,
-                normalizedKeyword, normalizedStatus, normalizedStatus, normalizedAiStatus, normalizedAiStatus,
+                normalizedKeyword, normalizedStatus, normalizedStatus,
                 blankToNull(scope), blankToNull(scope), categoryId, categoryId,
                 blankToNull(lifecycleStatus), blankToNull(lifecycleStatus),
                 blankToNull(reviewStatus), blankToNull(reviewStatus)));
@@ -111,11 +108,9 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
         return jdbc.queryForObject("""
                 SELECT count(*) FROM kb.document d
                 JOIN kb.document_version v ON v.document_id = d.id AND v.version_no = d.current_version_no
-                LEFT JOIN kb.document_ai_grant g ON g.document_id = d.id
                 WHERE d.organization_id = ?
                   AND (CAST(? AS text) IS NULL OR d.title ILIKE '%' || ? || '%' OR v.original_name ILIKE '%' || ? || '%')
                   AND (CAST(? AS text) IS NULL OR d.status = ?)
-                  AND (CAST(? AS text) IS NULL OR coalesce(g.status, 'PENDING') = ?)
                   AND (CAST(? AS text) IS NULL OR d.library_scope = ?)
                   AND (CAST(? AS uuid) IS NULL OR d.category_id = ?)
                   AND (CAST(? AS text) IS NULL OR d.lifecycle_status = ?)
@@ -726,6 +721,156 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
         return jdbc.query(sql, this::mapSearch, args.toArray());
     }
 
+    @Override
+    public List<RankedChunk> batchBm25Rank(UUID organizationId, List<AnalyzedQuery> queries,
+                                           boolean aiOnly, List<UUID> categoryIds, int limit) {
+        var safeQueries = queries == null ? List.<AnalyzedQuery>of() : queries.stream()
+                .filter(query -> query != null && query.terms() != null && !query.terms().isEmpty()).toList();
+        if (safeQueries.isEmpty()) return List.of();
+        var ordinals = new java.util.ArrayList<Integer>();
+        var versions = new java.util.ArrayList<String>();
+        var terms = new java.util.ArrayList<String>();
+        for (var query : safeQueries) {
+            for (var term : query.terms()) {
+                ordinals.add(query.ordinal());
+                versions.add(term.analyzerVersion());
+                terms.add(term.term());
+            }
+        }
+        if (terms.isEmpty()) return List.of();
+        var aiClause = aiOnly
+                ? "AND EXISTS (SELECT 1 FROM kb.document_ai_grant g WHERE g.document_id = d.id AND g.status = 'APPROVED')"
+                : "";
+        var sql = """
+                WITH query_terms AS (
+                    SELECT * FROM unnest(?::int[], ?::text[], ?::text[])
+                        AS q(query_ordinal, analyzer_version, term)
+                ), scored AS (
+                    SELECT q.query_ordinal, c.id AS chunk_id,
+                           sum(
+                               ln(((s.document_count - s.document_frequency + 0.5) /
+                                  (s.document_frequency + 0.5)) + 1)
+                               * ((t.term_frequency * 2.2) /
+                                  (t.term_frequency + 1.2 * (1 - 0.75 + 0.75 * c.token_length /
+                                  nullif(s.average_document_length, 0))))
+                           ) AS score
+                    FROM kb.chunk_term t
+                    JOIN kb.document_chunk c ON c.id = t.chunk_id
+                    JOIN query_terms q ON q.term = t.term AND q.analyzer_version = c.analyzer_version
+                    JOIN kb.term_stat s ON s.organization_id = ? AND s.term = t.term
+                        AND s.analyzer_version = c.analyzer_version
+                    JOIN kb.document d ON d.id = c.document_id
+                    JOIN kb.document_version v ON v.id = c.document_version_id
+                    JOIN ops.file_object f ON f.id = v.file_object_id
+                        AND f.organization_id = d.organization_id AND f.status <> 'DELETED'
+                    JOIN kb.publication p ON p.id = d.current_publication_id
+                        AND p.document_version_id = c.document_version_id
+                        AND p.review_revision_id = c.review_revision_id AND p.status = 'CURRENT'
+                    WHERE d.organization_id = ? AND d.lifecycle_status = 'ACTIVE' AND c.chunk_role = 'CHILD'
+                """ + aiClause + categoryClause(categoryIds) + """
+                    GROUP BY q.query_ordinal, c.id
+                ), ranked AS (
+                    SELECT query_ordinal, chunk_id, score,
+                           row_number() OVER (PARTITION BY query_ordinal ORDER BY score DESC, chunk_id) AS rank_no
+                    FROM scored
+                )
+                SELECT query_ordinal, chunk_id, score, rank_no
+                FROM ranked WHERE rank_no <= ?
+                ORDER BY query_ordinal, rank_no
+                """;
+        var args = new java.util.ArrayList<Object>();
+        args.add(ordinals.toArray(Integer[]::new));
+        args.add(versions.toArray(String[]::new));
+        args.add(terms.toArray(String[]::new));
+        args.add(organizationId);
+        args.add(organizationId);
+        if (categoryIds != null) args.addAll(categoryIds);
+        args.add(limit);
+        return jdbc.query(sql, (rs, ignored) -> new RankedChunk(rs.getInt("query_ordinal"),
+                rs.getObject("chunk_id", UUID.class), rs.getDouble("score"), rs.getInt("rank_no")), args.toArray());
+    }
+
+    @Override
+    public List<RankedChunk> batchVectorRank(UUID organizationId, List<VectorQuery> queries,
+                                            boolean aiOnly, List<UUID> categoryIds, int limit, int dimension) {
+        var safeQueries = queries == null ? List.<VectorQuery>of() : queries.stream()
+                .filter(query -> query != null && org.springframework.util.StringUtils.hasText(query.vector())).toList();
+        if (safeQueries.isEmpty()) return List.of();
+        var aiClause = aiOnly
+                ? "AND EXISTS (SELECT 1 FROM kb.document_ai_grant g WHERE g.document_id = d.id AND g.status = 'APPROVED')"
+                : "";
+        var dimensionClause = dimension > 0 ? " AND vector_dims(c.embedding) = ?\n" : "";
+        var sql = """
+                WITH query_vectors AS (
+                    SELECT query_ordinal, CAST(vector_text AS vector) AS embedding
+                    FROM unnest(?::int[], ?::text[]) AS q(query_ordinal, vector_text)
+                ), scored AS (
+                    SELECT q.query_ordinal, hit.chunk_id, hit.score
+                    FROM query_vectors q
+                    CROSS JOIN LATERAL (
+                        SELECT c.id AS chunk_id, (1 - (c.embedding <=> q.embedding)) AS score
+                        FROM kb.document_chunk c
+                        JOIN kb.document d ON d.id = c.document_id
+                        JOIN kb.document_version v ON v.id = c.document_version_id
+                        JOIN ops.file_object f ON f.id = v.file_object_id
+                            AND f.organization_id = d.organization_id AND f.status <> 'DELETED'
+                        JOIN kb.publication p ON p.id = d.current_publication_id
+                            AND p.document_version_id = c.document_version_id
+                            AND p.review_revision_id = c.review_revision_id AND p.status = 'CURRENT'
+                        WHERE d.organization_id = ? AND d.lifecycle_status = 'ACTIVE'
+                """ + aiClause + categoryClause(categoryIds)
+                + " AND c.chunk_role = 'CHILD' AND c.embedding IS NOT NULL\n" + dimensionClause + """
+                        ORDER BY c.embedding <=> q.embedding, c.id
+                        LIMIT ?
+                    ) hit
+                ), ranked AS (
+                    SELECT query_ordinal, chunk_id, score,
+                           row_number() OVER (PARTITION BY query_ordinal ORDER BY score DESC, chunk_id) AS rank_no
+                    FROM scored
+                )
+                SELECT query_ordinal, chunk_id, score, rank_no
+                FROM ranked ORDER BY query_ordinal, rank_no
+                """;
+        var args = new java.util.ArrayList<Object>();
+        args.add(safeQueries.stream().map(VectorQuery::ordinal).toArray(Integer[]::new));
+        args.add(safeQueries.stream().map(VectorQuery::vector).toArray(String[]::new));
+        args.add(organizationId);
+        if (categoryIds != null) args.addAll(categoryIds);
+        if (dimension > 0) args.add(dimension);
+        args.add(limit);
+        return jdbc.query(sql, (rs, ignored) -> new RankedChunk(rs.getInt("query_ordinal"),
+                rs.getObject("chunk_id", UUID.class), rs.getDouble("score"), rs.getInt("rank_no")), args.toArray());
+    }
+
+    @Override
+    public List<SearchRow> loadSearchRows(UUID organizationId, List<UUID> chunkIds) {
+        var ids = chunkIds == null ? List.<UUID>of() : chunkIds.stream().filter(java.util.Objects::nonNull).distinct().toList();
+        if (ids.isEmpty()) return List.of();
+        var placeholders = String.join(",", java.util.Collections.nCopies(ids.size(), "?"));
+        var sql = """
+                SELECT c.id, c.document_id, c.document_version_id,
+                       coalesce(p.metadata_snapshot_jsonb->>'title', d.title) AS title, v.original_name,
+                       c.page_no, c.section, c.content, c.chunk_no, 0::double precision AS score,
+                       c.sheet_name, c.cell_range, c.paragraph_id, c.bbox_jsonb,
+                       c.start_time_ms, c.end_time_ms, c.source_anchor_jsonb,
+                       c.source_anchors_jsonb, c.review_node_ids_jsonb, c.source_node_keys_jsonb
+                FROM kb.document_chunk c
+                JOIN kb.document d ON d.id = c.document_id
+                JOIN kb.document_version v ON v.id = c.document_version_id
+                JOIN ops.file_object f ON f.id = v.file_object_id
+                    AND f.organization_id = d.organization_id AND f.status <> 'DELETED'
+                JOIN kb.publication p ON p.id = d.current_publication_id
+                    AND p.document_version_id = c.document_version_id
+                    AND p.review_revision_id = c.review_revision_id AND p.status = 'CURRENT'
+                WHERE d.organization_id = ? AND d.lifecycle_status = 'ACTIVE'
+                  AND c.chunk_role = 'CHILD' AND c.id IN (
+                """ + placeholders + ")";
+        var args = new java.util.ArrayList<Object>();
+        args.add(organizationId);
+        args.addAll(ids);
+        return jdbc.query(sql, this::mapHydratedSearch, args.toArray());
+    }
+
     private String documentQuery(String where) {
         return """
                 SELECT d.id, d.organization_id, d.title, d.status, d.scan_status,
@@ -733,13 +878,21 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                        v.original_name, v.content_type, v.size_bytes, v.sha256,
                        d.parse_error, d.created_at, d.updated_at, d.library_scope,
                        d.category_id, c.name AS category_name, d.lifecycle_status,
-                       v.review_status, v.review_revision, d.current_publication_id,
+                       v.review_status, latest_rr.status AS review_revision_status,
+                       v.review_revision, d.current_publication_id,
                        p.publication_no AS current_publication_no
                 FROM kb.document d
                 JOIN kb.document_version v ON v.document_id = d.id AND v.version_no = d.current_version_no
                 LEFT JOIN kb.document_category c ON c.id = d.category_id
                 LEFT JOIN kb.publication p ON p.id = d.current_publication_id AND p.status = 'CURRENT'
                 LEFT JOIN kb.document_ai_grant g ON g.document_id = d.id
+                LEFT JOIN LATERAL (
+                    SELECT rr.status
+                    FROM kb.document_review_revision rr
+                    WHERE rr.document_version_id = v.id
+                    ORDER BY rr.revision_no DESC
+                    LIMIT 1
+                ) latest_rr ON true
                 """ + where;
     }
 
@@ -752,7 +905,8 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                 rs.getString("content_type"), rs.getLong("size_bytes"), rs.getString("sha256"),
                 rs.getString("parse_error"), instant(rs.getTimestamp("created_at")), instant(rs.getTimestamp("updated_at")),
                 rs.getString("library_scope"), rs.getObject("category_id", UUID.class), rs.getString("category_name"),
-                rs.getString("lifecycle_status"), rs.getString("review_status"), rs.getInt("review_revision"),
+                rs.getString("lifecycle_status"), rs.getString("review_status"),
+                rs.getString("review_revision_status"), rs.getInt("review_revision"),
                 rs.getObject("current_publication_id", UUID.class),
                 rs.getObject("current_publication_no") == null ? null : rs.getInt("current_publication_no")
         );
@@ -765,6 +919,18 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                 rs.getString("original_name"), (Integer) rs.getObject("page_no"), rs.getString("section"),
                 rs.getString("content"), rs.getDouble("score"), rs.getInt("chunk_no")
         );
+    }
+
+    private SearchRow mapHydratedSearch(java.sql.ResultSet rs, int rowNum) throws java.sql.SQLException {
+        var provenance = new ChunkAnchorRow((Integer) rs.getObject("page_no"), rs.getString("sheet_name"),
+                rs.getString("cell_range"), rs.getString("paragraph_id"), parseDoubles(rs.getString("bbox_jsonb")),
+                (Long) rs.getObject("start_time_ms"), (Long) rs.getObject("end_time_ms"), rs.getString("section"),
+                rs.getString("source_anchor_jsonb"), rs.getString("source_anchors_jsonb"),
+                parseUuids(rs.getString("review_node_ids_jsonb")), parseUuids(rs.getString("source_node_keys_jsonb")));
+        return new SearchRow(rs.getObject("id", UUID.class), rs.getObject("document_id", UUID.class),
+                rs.getObject("document_version_id", UUID.class), rs.getString("title"), rs.getString("original_name"),
+                (Integer) rs.getObject("page_no"), rs.getString("section"), rs.getString("content"),
+                rs.getDouble("score"), rs.getInt("chunk_no"), provenance);
     }
 
     private java.time.Instant instant(Timestamp value) {

@@ -350,7 +350,8 @@ public final class BlockAwareChunker {
             if (piece.lastPage() != null) lastPage = lastPage == null ? piece.lastPage() : Math.max(lastPage, piece.lastPage());
             types.add(piece.nodeType());
         }
-        var citationPage = primary != null && primary.has("page") ? primary.path("page").asInt() : firstPage;
+        Integer citationPage = firstPage;
+        if (primary != null && primary.has("page")) citationPage = primary.path("page").asInt();
         return new ChunkDraft(key, parentKey, role, title, headingPath, content, List.copyOf(reviews),
                 List.copyOf(sources), primary, List.copyOf(anchors), List.copyOf(relations), citationPage, lastPage,
                 String.join(",", types), estimateTokens(content));

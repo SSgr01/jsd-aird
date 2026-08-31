@@ -46,7 +46,7 @@ class KnowledgeFileSearchServiceTest {
                 new KnowledgeRepository.DocumentRow(documentId, organizationId, "草稿标题", "READY",
                         "SAFE", "PENDING", 2, versionId, "coa.xlsx", "application/octet-stream", 1024,
                         "a".repeat(64), null, Instant.now(), Instant.now(), "INTERNAL", UUID.randomUUID(),
-                        "COA", "ACTIVE", "PUBLISHED", 3, publicationId, 2)));
+                        "COA", "ACTIVE", "PUBLISHED", "PUBLISHED", 3, publicationId, 2)));
         when(governance.currentPublication(organizationId, documentId)).thenReturn(Optional.of(
                 new KnowledgeGovernanceRepository.PublicationRow(publicationId, documentId, versionId,
                         UUID.randomUUID(), UUID.randomUUID(), 2, "CURRENT", "PENDING", Instant.now())));

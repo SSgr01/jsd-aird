@@ -61,7 +61,7 @@ public interface KnowledgeGovernanceRepository {
     record ParseRunRow(UUID id, UUID documentId, UUID versionId, int runNo, String status,
                        String errorMessage, Instant createdAt, JsonNode sourceDocument, int schemaVersion,
                        JsonNode diagnosticResult, String parserVersion, String provider, String providerTaskId,
-                       String requestedOcrMode, Boolean effectiveOcr, String parserMode) { }
+                       Boolean effectiveOcr, String parserMode) { }
     record SourceNodeView(UUID sourceNodeKey, int nodeNo, String nodeType, String rawText,
                           JsonNode sourceAnchor, JsonNode confidence) { }
     record ParseIssueView(UUID id, List<UUID> sourceNodeKeys, String code, String severity,
@@ -91,7 +91,8 @@ public interface KnowledgeGovernanceRepository {
                          String projectedText) { }
     record ReviewQueueItem(UUID documentId, String title, UUID versionId, int versionNo,
                            String originalName, String processingStatus, String reviewStatus,
-                           int reviewRevision, String categoryName, Instant updatedAt) { }
+                           String reviewRevisionStatus, int reviewRevision,
+                           String categoryName, Instant updatedAt) { }
     record IssueAction(UUID issueId, String status, String resolution) { }
     record ReviewUpdate(UUID documentId, UUID versionId, UUID reviewRevisionId, int expectedLockVersion,
                         UUID basePublicationId, String title, String libraryScope, UUID categoryId,

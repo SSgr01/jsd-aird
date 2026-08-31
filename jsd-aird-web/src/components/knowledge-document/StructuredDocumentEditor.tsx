@@ -32,6 +32,7 @@ export function StructuredDocumentEditor({ value, onChange, onSelectionChange, s
       onChange(ensureReviewAttributes(current.getJSON() as StructuredDocument));
     },
     onSelectionUpdate: ({ editor: current }) => {
+      if (settingContent.current) return;
       const resolved = current.state.doc.resolve(current.state.selection.from);
       let fallback: { reviewNodeId?: string; sourceNodeKeys: string[]; origin?: string; type?: string } | undefined;
       for (let depth = resolved.depth; depth >= 0; depth -= 1) {

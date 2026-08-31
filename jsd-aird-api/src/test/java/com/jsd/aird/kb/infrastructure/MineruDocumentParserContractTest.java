@@ -15,6 +15,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jsd.aird.kb.application.SystemParsingPolicy;
 import com.jsd.aird.kb.domain.DocumentParser;
 import com.jsd.aird.kb.domain.OcrMode;
 import com.jsd.aird.ops.application.port.FileStorageFacade;
@@ -162,7 +163,8 @@ class MineruDocumentParserContractTest {
 
     private MineruDocumentParser parser(String base, boolean fallbackCapability) {
         return new MineruDocumentParser(true, base, "test-token", "vlm", Duration.ofMillis(1),
-                Duration.ofSeconds(2), Duration.ofSeconds(2), fallbackCapability, new ObjectMapper(),
+                Duration.ofSeconds(2), Duration.ofSeconds(2),
+                new SystemParsingPolicy("AUTO", fallbackCapability), new ObjectMapper(),
                 mock(FileStorageFacade.class));
     }
 

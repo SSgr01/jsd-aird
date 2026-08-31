@@ -76,6 +76,57 @@ class JdbcKnowledgeRepositoryTest {
                 "GROUP BY c.analyzer_version, t.term", "c.chunk_role = 'CHILD'");
     }
 
+    @Test
+    void selectsTheLatestReviewRevisionStatusForDocumentWorkflow() {
+        var jdbc = mock(JdbcTemplate.class);
+        var repository = new JdbcKnowledgeRepository(jdbc);
+
+        repository.listDocuments(UUID.randomUUID(), null, null, null, null,
+                null, null, 1, 20);
+
+        var sql = ArgumentCaptor.forClass(String.class);
+        verify(jdbc).query(sql.capture(), any(org.springframework.jdbc.core.RowMapper.class),
+                any(Object[].class));
+        assertThat(sql.getValue()).contains(
+                "latest_rr.status AS review_revision_status",
+                "LEFT JOIN LATERAL",
+                "ORDER BY rr.revision_no DESC",
+                "LIMIT 1");
+    }
+
+    @Test
+    void batchesAllVariantsAndHydratesRankedChunksWithThreeDatabaseCalls() {
+        var jdbc = mock(JdbcTemplate.class);
+        var repository = new JdbcKnowledgeRepository(jdbc);
+        var organizationId = UUID.randomUUID();
+        var chunkIds = List.of(UUID.randomUUID(), UUID.randomUUID());
+
+        repository.batchBm25Rank(organizationId, List.of(
+                new KnowledgeRepository.AnalyzedQuery(0, "first", List.of(
+                        new KnowledgeRepository.AnalyzedTerm("material-smartcn-v2", "first"))),
+                new KnowledgeRepository.AnalyzedQuery(1, "second", List.of(
+                        new KnowledgeRepository.AnalyzedTerm("material-smartcn-v2", "second")))),
+                true, List.of(UUID.randomUUID()), 48);
+        repository.batchVectorRank(organizationId, List.of(
+                new KnowledgeRepository.VectorQuery(0, "first", "[0.1,0.2]"),
+                new KnowledgeRepository.VectorQuery(1, "second", "[0.2,0.1]")),
+                true, List.of(UUID.randomUUID()), 48, 2);
+        repository.loadSearchRows(organizationId, chunkIds);
+
+        var sql = ArgumentCaptor.forClass(String.class);
+        verify(jdbc, times(3)).query(sql.capture(), any(org.springframework.jdbc.core.RowMapper.class),
+                any(Object[].class));
+        assertThat(sql.getAllValues().get(0)).contains(
+                "unnest(?::int[], ?::text[], ?::text[])",
+                "PARTITION BY query_ordinal", "rank_no <= ?", "c.chunk_role = 'CHILD'");
+        assertThat(sql.getAllValues().get(1)).contains(
+                "unnest(?::int[], ?::text[])", "CROSS JOIN LATERAL",
+                "PARTITION BY query_ordinal", "c.embedding IS NOT NULL");
+        assertThat(sql.getAllValues().get(2)).contains(
+                "c.source_anchors_jsonb", "c.review_node_ids_jsonb", "c.source_node_keys_jsonb",
+                "c.id IN (", "?,?)");
+    }
+
     private KnowledgeRepository.ChunkWrite chunk(String key, String parent, String role, int number,
                                                    List<UUID> reviewIds, List<UUID> sourceIds,
                                                    List<KnowledgeRepository.TermFrequency> terms) {

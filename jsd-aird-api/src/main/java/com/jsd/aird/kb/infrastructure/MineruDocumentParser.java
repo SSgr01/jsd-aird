@@ -25,6 +25,7 @@ import java.util.zip.ZipFile;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jsd.aird.kb.application.SystemParsingPolicy;
 import com.jsd.aird.kb.domain.DocumentParser;
 import com.jsd.aird.kb.domain.OcrMode;
 import com.jsd.aird.ops.application.port.FileStorageFacade;
@@ -55,7 +56,7 @@ public final class MineruDocumentParser implements DocumentParser {
     private final String model;
     private final Duration pollInterval;
     private final Duration maxWait;
-    private final boolean agentFallbackEnabled;
+    private final SystemParsingPolicy systemParsingPolicy;
     private final RestClient client;
     private final HttpClient transferClient;
     private final ObjectMapper mapper;
@@ -71,7 +72,7 @@ public final class MineruDocumentParser implements DocumentParser {
             @Value("${app.ai.mineru.poll-interval:3s}") Duration pollInterval,
             @Value("${app.ai.mineru.max-wait:15m}") Duration maxWait,
             @Value("${app.ai.mineru.http-timeout:60s}") Duration httpTimeout,
-            @Value("${app.ai.mineru.agent-fallback-enabled:true}") boolean agentFallbackEnabled,
+            SystemParsingPolicy systemParsingPolicy,
             ObjectMapper mapper,
             FileStorageFacade storage
     ) {
@@ -81,7 +82,7 @@ public final class MineruDocumentParser implements DocumentParser {
         this.model = StringUtils.hasText(model) ? model.strip() : "vlm";
         this.pollInterval = pollInterval == null ? Duration.ofSeconds(3) : pollInterval;
         this.maxWait = maxWait == null ? Duration.ofMinutes(15) : maxWait;
-        this.agentFallbackEnabled = agentFallbackEnabled;
+        this.systemParsingPolicy = systemParsingPolicy;
         this.mapper = mapper;
         this.storage = storage;
         this.adapter = new MineruDocumentAdapter(mapper);
@@ -94,8 +95,9 @@ public final class MineruDocumentParser implements DocumentParser {
 
     @PostConstruct
     void logConfiguration() {
-        log.info("MinerU configuration: enabled={}, preciseConfigured={}, fallbackCapability={}, defaultOcrMode=AUTO",
-                enabled, StringUtils.hasText(token), agentFallbackEnabled);
+        log.info("MinerU configuration: enabled={}, preciseConfigured={}, fallbackCapability={}, defaultOcrMode={}",
+                enabled, StringUtils.hasText(token), systemParsingPolicy.agentFallbackEnabled(),
+                systemParsingPolicy.defaultOcrMode());
     }
 
     @Override
@@ -107,7 +109,7 @@ public final class MineruDocumentParser implements DocumentParser {
 
     @Override
     public boolean isConfigured() {
-        return enabled && (StringUtils.hasText(token) || agentFallbackEnabled);
+        return enabled && (StringUtils.hasText(token) || systemParsingPolicy.agentFallbackEnabled());
     }
 
     @Override
@@ -136,14 +138,15 @@ public final class MineruDocumentParser implements DocumentParser {
                     return parsePrecise(sourceFile, fileName, context, policy, decision);
                 } catch (MineruException exception) {
                     preciseFailure = exception;
-                    if (!(allowFallback && agentFallbackEnabled && exception.fallbackEligible())) throw exception;
+                    if (!(allowFallback && systemParsingPolicy.agentFallbackEnabled()
+                            && exception.fallbackEligible())) throw exception;
                     log.warn("MinerU precise provider unavailable; explicit Agent fallback enabled: fileName={} taskId={} reason={}",
                             fileName, exception.taskId(), safeMessage(exception));
                 }
-            } else if (!(allowFallback && agentFallbackEnabled)) {
+            } else if (!(allowFallback && systemParsingPolicy.agentFallbackEnabled())) {
                 throw MineruException.contract("MinerU 精准接口 Token 未配置，当前版本也未允许 Agent 降级", null);
             }
-            if (allowFallback && agentFallbackEnabled) {
+            if (allowFallback && systemParsingPolicy.agentFallbackEnabled()) {
                 try {
                     return parseAgent(sourceFile, fileName, context, policy, decision, preciseFailure);
                 } catch (MineruException fallbackFailure) {

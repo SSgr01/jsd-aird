@@ -58,7 +58,6 @@ describe('AiConversationWorkspace', () => {
 
     expect(onQuestionChange).toHaveBeenCalledWith('新的问题');
     expect(onSubmit).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole('button', { name: '管理范围' })).toBeInTheDocument();
   });
 
   it('blocks click and Enter submission when the current scope is incomplete', () => {
@@ -84,5 +83,25 @@ describe('AiConversationWorkspace', () => {
     expect(submit).toBeDisabled();
     fireEvent.keyDown(composer, { key: 'Enter', code: 'Enter' });
     expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it('renders controlled composer actions next to the retrieval scope', () => {
+    render(
+      <AiConversationWorkspace
+        conversations={[]}
+        messages={[]}
+        scopeContent={<div>资料范围</div>}
+        composerTopContent={<div>全部已授权资料</div>}
+        composerActions={<button type="button" aria-pressed="false">联网搜索</button>}
+        question=""
+        onNewConversation={vi.fn()}
+        onSelectConversation={vi.fn()}
+        onQuestionChange={vi.fn()}
+        onSubmit={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: '联网搜索' })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByText('全部已授权资料')).toBeInTheDocument();
   });
 });

@@ -1,10 +1,10 @@
 import { ArrowLeftOutlined, CheckCircleOutlined, ExclamationCircleOutlined, MoreOutlined, SaveOutlined, SettingOutlined } from '@ant-design/icons';
-import { Alert, App, Button, Checkbox, Drawer, Dropdown, Empty, Form, Input, Modal, Select, Space, Spin, Tag, Typography } from 'antd';
+import { Alert, App, Button, Drawer, Dropdown, Empty, Form, Input, Modal, Select, Space, Spin, Tag, Typography } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
 import { DocumentComparisonViewer, OriginalDocumentViewer, StructuredDocumentEditor, VirtualDataTable, anchorLabel, findNodeByReviewId, sourceNodeMap } from '@/components/knowledge-document';
-import { knowledgeApi, type IssueAction, type KnowledgeCategory, type KnowledgeReview, type OcrMode, type StructuredDocument } from '@/services/knowledge';
+import { knowledgeApi, type IssueAction, type KnowledgeCategory, type KnowledgeReview, type StructuredDocument } from '@/services/knowledge';
 
 type SaveState = 'saved' | 'dirty' | 'saving' | 'offline' | 'conflict';
 
@@ -66,11 +66,10 @@ export function KnowledgeReviewPage() {
   const updateDocument = (document: StructuredDocument) => edit((current) => current.reviewRevision ? { ...current, reviewRevision: { ...current.reviewRevision, confirmedDocument: document } } : current);
   const toggleExcluded = () => { if (!selectedReviewNodeId) return; edit((current) => { if (!current.reviewRevision) return current; const values = new Set(current.reviewRevision.excludedReviewNodeIds); if (values.has(selectedReviewNodeId)) values.delete(selectedReviewNodeId); else values.add(selectedReviewNodeId); return { ...current, reviewRevision: { ...current.reviewRevision, excludedReviewNodeIds: [...values] } }; }); };
   const forceSave = async () => { if (dirty.current) return persist(); return latestReview.current; };
-  const publish = () => { const current = latestReview.current; if (!current) return; modal.confirm({ title: revisionMode ? '保存并应用本次修订？' : `确认并发布“${current.title}”V${current.versionNo}？`, content: '系统将从确认内容重建关键词索引；文档已获 AI 授权时同时重建向量。构建完成前旧发布版继续提供检索。', okText: revisionMode ? '保存并应用' : '确认并发布', onOk: async () => { const saved = await forceSave(); if (!saved) return; await knowledgeApi.publish(saved); void message.success('已提交索引构建，成功后自动切换发布版本'); navigate(`/knowledge/documents/${saved.documentId}`); } }); };
+  const publish = () => { const current = latestReview.current; if (!current) return; modal.confirm({ title: revisionMode ? '保存并应用本次修订？' : `确认并发布“${current.title}”V${current.versionNo}？`, content: '确认后将发布当前校对内容。', okText: revisionMode ? '保存并应用' : '确认并发布', onOk: async () => { const saved = await forceSave(); if (!saved) return; await knowledgeApi.publish(saved); void message.success('已提交发布，请稍候'); navigate(`/knowledge/documents/${saved.documentId}`); } }); };
   const reparse = () => {
     const current = latestReview.current; if (!current) return;
-    let ocrMode: OcrMode = current.parseRun?.requestedOcrMode || 'AUTO'; let allowAgentFallback = false;
-    modal.confirm({ title: '重新解析原文件？', width: 520, content: <Form layout="vertical" style={{ marginTop: 16 }}><Typography.Paragraph type="secondary">这会创建新的解析执行和校对草稿，当前发布内容不受影响。</Typography.Paragraph><Form.Item label="PDF OCR 策略"><Select defaultValue={ocrMode} onChange={(value: OcrMode) => { ocrMode = value; }} options={[{ value: 'AUTO', label: '自动判断（推荐）' }, { value: 'ON', label: '强制 OCR' }, { value: 'OFF', label: '关闭强制 OCR' }]} /></Form.Item><Checkbox onChange={(event) => { allowAgentFallback = event.target.checked; }}>精准服务故障时允许 Agent 降级（质量较低，需重点审核）</Checkbox></Form>, okText: '重新解析', onOk: async () => { const saved = await forceSave(); if (!saved) return; await knowledgeApi.reparse(saved, { ocrMode, allowAgentFallback }); void message.success('已提交重新解析'); await load(); } });
+    modal.confirm({ title: '重新解析原文件？', content: <Typography.Paragraph type="secondary">系统将使用当前统一解析策略创建新的解析执行和校对草稿，当前发布内容不受影响。</Typography.Paragraph>, okText: '重新解析', onOk: async () => { const saved = await forceSave(); if (!saved) return; await knowledgeApi.reparse(saved); void message.success('已提交重新解析'); await load(); } });
   };
   const reject = async () => { const current = await forceSave(); if (!current || !rejectReason.trim()) return; await knowledgeApi.reject(current, rejectReason.trim()); void message.success('已驳回'); navigate('/knowledge/review'); };
   const unresolved = review?.issues.filter((item) => item.status === 'OPEN') || [];

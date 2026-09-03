@@ -1,0 +1,68 @@
+.version-history-panel {
+  width: min(1100px, 100%);
+  margin: 0 auto;
+  padding: 24px;
+  background: #fff;
+  border: 1px solid #dbe5f4;
+  border-radius: 12px;
+}
+
+.version-history-panel > .ant-typography {
+  display: block;
+}
+
+.version-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.version-history-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 14px 16px;
+  color: inherit;
+  text-align: left;
+  background: #fafcff;
+  border: 1px solid #dbe5f4;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.version-history-card:hover,
+.version-history-card:focus-visible {
+  border-color: #3974ef;
+  background: #f4f8ff;
+  outline: none;
+}
+
+.version-history-no {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: #e7efff;
+  color: #2f66e8;
+  font-weight: 700;
+}
+
+.version-history-meta {
+  min-width: 0;
+}
+
+.version-history-meta small {
+  display: block;
+  margin-top: 4px;
+  color: #8796ad;
+}
+
+@media (max-width: 700px) {
+  .version-history-panel {
+    padding: 16px;
+  }
+}

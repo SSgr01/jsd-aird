@@ -18,14 +18,20 @@ public final class StandardFieldDictionary {
             entry("品名", "PRODUCTION.PRODUCT_NAME", "productName", "品名"),
             entry("产品名称", "PRODUCTION.PRODUCT_NAME", "productName", "品名"),
             entry("产品名", "PRODUCTION.PRODUCT_NAME", "productName", "品名"),
+            entry("产品", "PRODUCTION.PRODUCT_NAME", "productName", "品名"),
             entry("实际产量", "PRODUCTION.ACTUAL_OUTPUT", "actualOutput", "实际产量"),
             entry("实际生产量", "PRODUCTION.ACTUAL_OUTPUT", "actualOutput", "实际产量"),
             entry("类别", "PRODUCTION.CATEGORY", "category", "类别"),
+            entry("产品类别", "PRODUCTION.CATEGORY", "category", "类别"),
             entry("订单号", "PRODUCTION.ORDER_NO", "orderNo", "订单号"),
+            entry("生产单号", "PRODUCTION.ORDER_NO", "orderNo", "订单号"),
+            entry("单号", "PRODUCTION.ORDER_NO", "orderNo", "订单号"),
             entry("表单编号", "DOCUMENT.FORM_NO", "formNo", "表单编号"),
             entry("反应釜", "PRODUCTION.REACTOR", "reactor", "反应釜"),
             entry("包装批号", "PRODUCTION.PACKAGE_BATCH_NO", "packageBatchNo", "包装批号"),
             entry("制造日期", "PRODUCTION.MANUFACTURE_DATE", "manufactureDate", "制造日期"),
+            entry("生产日期", "PRODUCTION.MANUFACTURE_DATE", "manufactureDate", "制造日期"),
+            entry("日期", "PRODUCTION.MANUFACTURE_DATE", "manufactureDate", "制造日期"),
             entry("包装物料", "PACKAGING.MATERIAL", "packageMaterial", "包装物料"),
             entry("包装规格", "PACKAGING.SPECIFICATION", "packageSpecification", "包装规格"),
             entry("包装数量", "PACKAGING.QUANTITY", "packageQuantity", "包装数量"),
@@ -65,7 +71,7 @@ public final class StandardFieldDictionary {
     private static String normalize(String value) {
         return value == null ? "" : value
                 .replace('：', ':')
-                .replaceAll("[\\s:：]", "")
+                .replaceAll("[\\s:：（）()\\[\\]【】_\\-/]", "")
                 .strip()
                 .toLowerCase(Locale.ROOT);
     }

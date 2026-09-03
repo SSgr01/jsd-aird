@@ -20,6 +20,22 @@ export const permissionLabels: Record<string, string> = {
   'experiment.submit': '提交实验审核（experiment.submit）',
   'experiment.approve': '通过实验审核（experiment.approve）',
   'experiment.review': '退回/作废实验记录（experiment.review）',
+  'research-test.report.view': '查看综合测试报告',
+  'research-test.report.create': '新建综合测试报告',
+  'research-test.report.update': '编辑综合测试报告',
+  'research-test.report.delete': '删除综合测试报告',
+  'research-test.report.submit': '提交综合测试报告审核',
+  'research-test.report.approve': '审核综合测试报告',
+  'research-test.report.publish': '发布综合测试报告',
+  'research-test.report.export': '导出综合测试报告',
+  'research-test.standard.view': '查看测试标准',
+  'research-test.standard.create': '新建测试标准',
+  'research-test.standard.update': '编辑测试标准',
+  'research-test.standard.delete': '删除测试标准',
+  'research-test.standard.submit': '提交测试标准审核',
+  'research-test.standard.approve': '审核测试标准',
+  'research-test.standard.publish': '发布测试标准',
+  'research-test.standard.export': '导出测试标准',
   'knowledge.view': '查看研发知识库',
   'knowledge.upload': '上传知识文档（knowledge.upload）',
   'knowledge.create': '新建知识文档（knowledge.create）',
@@ -88,6 +104,7 @@ const moduleLabels: Record<string, string> = {
   project: '项目管理',
   template: '模板中心',
   experiment: '实验记录本',
+  'research-test': '研发测试中心',
   production: '生产管理',
   inventory: '库存管理',
   knowledge: '研发知识库',
@@ -107,6 +124,8 @@ export function riskDisplayLabel(risk: string): string {
 }
 
 export function requiredPermissionForPath(pathname: string): string | undefined {
+  // Pure menu group: its visibility is determined by accessible children.
+  if (pathname === '/research-test-root') return undefined;
   const path = pathname.replace(/\/$/, '') || '/';
   if (path === '/assistant' || path === '/knowledge/search') return 'ai.use';
   if (path === '/knowledge/library') return 'knowledge.upload';
@@ -120,6 +139,9 @@ export function requiredPermissionForPath(pathname: string): string | undefined 
   if (path.startsWith('/projects')) return 'project.view';
   if (path === '/experiments/upload') return 'experiment.create';
   if (path.startsWith('/experiments')) return 'experiment.view';
+  if (path === '/research-test/upload') return 'research-test.report.create';
+  if (path.startsWith('/research-test/standards')) return 'research-test.standard.view';
+  if (path.startsWith('/research-test')) return 'research-test.report.view';
   if (path.startsWith('/knowledge/review')) return 'knowledge.review';
   if (path.startsWith('/knowledge')) return 'knowledge.view';
   if (path === '/templates/upload') return 'template.upload';
@@ -156,6 +178,8 @@ export function hasPermission(required: string, permissions: string[]): boolean 
       'production.submit', 'production.cancel', 'production.export',
     ].includes(permission));
   }
+  if (required === 'research-test.report.view') return permissions.some((permission) => permission.startsWith('research-test.report.'));
+  if (required === 'research-test.standard.view') return permissions.some((permission) => permission.startsWith('research-test.standard.'));
   return false;
 }
 
@@ -166,6 +190,7 @@ export function firstAccessiblePath(permissions: string[]): string | null {
     ['/templates/library', 'template.view'],
     ['/knowledge/view', 'knowledge.view'],
     ['/experiments/list', 'experiment.view'],
+    ['/research-test/reports', 'research-test.report.view'],
     ['/production-orders/list', 'production.view'],
     ['/data/view', 'data.view'],
     ['/quality/view', 'quality.view'],

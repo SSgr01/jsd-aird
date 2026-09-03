@@ -75,12 +75,16 @@ public class IamBootstrapService {
         var all = IamPermissionCatalog.definitions().stream().map(def -> def.code()).toList();
         var responsibility = List.of(
                 "customer.view", "customer.create", "customer.update",
-                "project.view", "project.create", "project.update", "project.copy", "project.assign",
+                "project.view", "project.create", "project.update", "project.copy", "project.delete", "project.assign",
                 "template.view", "template.create", "template.update", "template.upload", "template.copy",
                 "template.recognition", "template.review", "template.publish", "template.rollback",
                 "template.delete", "template.export", "category.create", "category.update",
-                "category.delete", "experiment.view", "experiment.create", "experiment.update",
+                "category.delete", "experiment.view", "experiment.create", "experiment.update", "experiment.delete",
                 "experiment.submit", "experiment.approve", "knowledge.view", "knowledge.upload",
+                "research-test.report.view", "research-test.report.create", "research-test.report.update", "research-test.report.delete",
+                "research-test.report.submit", "research-test.report.approve", "research-test.report.publish", "research-test.report.export",
+                "research-test.standard.view", "research-test.standard.create", "research-test.standard.update", "research-test.standard.delete",
+                "research-test.standard.submit", "research-test.standard.approve", "research-test.standard.publish", "research-test.standard.export",
                 "knowledge.create", "knowledge.update", "knowledge.submit", "knowledge.review",
                 "knowledge.approve", "knowledge.publish", "knowledge.export", "knowledge.download",
                 "data.view", "data.create", "data.update", "data.submit", "data.approve", "data.export",
@@ -90,7 +94,7 @@ public class IamBootstrapService {
                 "production.submit", "production.cancel", "production.export", "ops.file.view", "ops.file.upload", "ops.file.download");
         var inventory = List.of("inventory.view", "inventory.create", "inventory.update", "inventory.reverse");
         var production = List.of("production.view", "production.create", "production.update", "production.submit",
-                "production.cancel", "template.view", "data.view", "ops.file.view", "ops.file.upload");
+                "production.cancel", "template.view", "data.view", "ops.file.view", "ops.file.upload", "ops.file.download");
         var quality = List.of("quality.view", "quality.upload", "quality.create", "quality.update", "quality.delete",
                 "quality.publish", "quality.export", "knowledge.view", "knowledge.upload", "knowledge.create",
                 "knowledge.update", "knowledge.submit", "knowledge.review", "knowledge.approve", "knowledge.publish",
@@ -104,6 +108,8 @@ public class IamBootstrapService {
                         "template.view", "template.create", "template.update", "template.upload", "template.copy",
                         "template.recognition", "experiment.view", "experiment.create", "experiment.update",
                         "experiment.submit", "knowledge.view", "knowledge.upload", "knowledge.create",
+                        "research-test.report.view", "research-test.report.create", "research-test.report.update", "research-test.report.submit", "research-test.report.export",
+                        "research-test.standard.view", "research-test.standard.create", "research-test.standard.update", "research-test.standard.submit", "research-test.standard.export",
                         "knowledge.update", "knowledge.submit", "data.view", "data.create", "data.update",
                         "data.submit", "spectrum.view", "spectrum.create", "spectrum.update", "ai.use",
                         "production.view", "production.create", "production.update", "production.submit",

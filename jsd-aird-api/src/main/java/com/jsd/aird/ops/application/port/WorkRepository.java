@@ -16,6 +16,11 @@ public interface WorkRepository {
     /** Reads the live stage so timeout diagnostics do not use a stale claim snapshot. */
     String currentStage(UUID jobId);
 
+    /** Returns whether an in-flight job was cancelled by its owning request. */
+    default boolean isCancelled(UUID jobId) {
+        return false;
+    }
+
     void completeJob(UUID jobId, JsonNode result);
 
     void failJob(AsyncJob job, Exception exception);

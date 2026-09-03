@@ -81,8 +81,12 @@ public class PostgresWorker {
 
     @PostConstruct
     void announceOnline() {
-        log.info("worker_online workerId={} leaseDuration={} jobTimeout={} handlers={}",
-                workerId, leaseDuration, jobTimeout, jobHandlers.size());
+        var handlerNames = jobHandlers.stream()
+                .map(handler -> handler.getClass().getSimpleName())
+                .sorted()
+                .toList();
+        log.info("worker_online workerId={} leaseDuration={} jobTimeout={} handlers={} handlerNames={}",
+                workerId, leaseDuration, jobTimeout, jobHandlers.size(), handlerNames);
     }
 
     @PreDestroy
@@ -127,6 +131,10 @@ public class PostgresWorker {
         try {
             var result = executeWithTimeout(job);
             workRepository.completeJob(job.id(), result);
+        } catch (JobCancelledException exception) {
+            // The owning request already marked this row CANCELLED. Do not
+            // convert cancellation into a retry or terminal failure.
+            log.info("Async job {} cancelled", job.id());
         } catch (Exception exception) {
             log.warn("Async job {} failed", job.id(), exception);
             var handler = jobHandlers.stream().filter(candidate -> candidate.supports(job.jobType()))
@@ -151,16 +159,35 @@ public class PostgresWorker {
 
     private com.fasterxml.jackson.databind.JsonNode executeWithTimeout(WorkRepository.AsyncJob job)
             throws Exception {
+        if (workRepository.isCancelled(job.id())) {
+            throw new JobCancelledException();
+        }
         Future<com.fasterxml.jackson.databind.JsonNode> future = jobExecutor.submit(() -> {
             try (var ignored = JobDeadline.start(jobTimeout)) {
                 return execute(job);
             }
         });
         try {
-            return future.get(Math.max(1, jobTimeout.toMillis()), TimeUnit.MILLISECONDS);
-        } catch (TimeoutException exception) {
-            future.cancel(true);
-            throw new JobTimeoutException(job, jobTimeout, liveStage(job));
+            var deadline = System.nanoTime()
+                    + TimeUnit.MILLISECONDS.toNanos(Math.max(1, jobTimeout.toMillis()));
+            while (true) {
+                if (workRepository.isCancelled(job.id())) {
+                    future.cancel(true);
+                    throw new JobCancelledException();
+                }
+                var remainingNanos = deadline - System.nanoTime();
+                if (remainingNanos <= 0) {
+                    future.cancel(true);
+                    throw new JobTimeoutException(job, jobTimeout, liveStage(job));
+                }
+                try {
+                    var waitMillis = Math.max(1L,
+                            Math.min(TimeUnit.NANOSECONDS.toMillis(remainingNanos), 1000L));
+                    return future.get(waitMillis, TimeUnit.MILLISECONDS);
+                } catch (TimeoutException ignored) {
+                    // Re-check cancellation while a long OCR/Office parse is running.
+                }
+            }
         } catch (InterruptedException exception) {
             future.cancel(true);
             Thread.currentThread().interrupt();
@@ -221,5 +248,8 @@ public class PostgresWorker {
             super("异步任务超时：" + timeout + "，当前阶段："
                     + (stage == null || stage.isBlank() ? "未知" : stage));
         }
+    }
+
+    private static final class JobCancelledException extends Exception {
     }
 }

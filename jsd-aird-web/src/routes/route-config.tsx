@@ -8,6 +8,7 @@ import { NotFoundPage } from '@/pages/not-found';
 import { AuthorizedHomeRedirect, PagePermissionGate } from '@/routes/route-guards';
 
 const AssistantPage = lazy(async () => ({ default: (await import('@/pages/assistant')).AssistantPage }));
+const DashboardPage = lazy(async () => ({ default: (await import('@/pages/dashboard')).DashboardPage }));
 const DataImportJobPage = lazy(async () => ({ default: (await import('@/pages/data')).DataImportJobPage }));
 const DataUploadPage = lazy(async () => ({ default: (await import('@/pages/data')).DataUploadPage }));
 const DataViewPage = lazy(async () => ({ default: (await import('@/pages/data')).DataViewPage }));
@@ -43,6 +44,9 @@ const ProjectDocumentWorkspacePage = lazy(async () => ({ default: (await import(
 const ExperimentListPage = lazy(async () => ({ default: (await import('@/pages/experiments')).ExperimentListPage }));
 const ExperimentUploadPage = lazy(async () => ({ default: (await import('@/pages/experiments')).ExperimentUploadPage }));
 const ExperimentWorkspacePage = lazy(async () => ({ default: (await import('@/pages/experiments')).ExperimentWorkspacePage }));
+const ResearchTestListPage = lazy(async () => ({ default: (await import('@/pages/research-test')).ResearchTestListPage }));
+const ResearchTestUploadPage = lazy(async () => ({ default: (await import('@/pages/research-test')).ResearchTestUploadPage }));
+const ResearchTestWorkspacePage = lazy(async () => ({ default: (await import('@/pages/research-test')).ResearchTestWorkspacePage }));
 const SpectrumChatPage = lazy(async () => ({ default: (await import('@/pages/spectrum')).SpectrumChatPage }));
 const SpectrumUploadPage = lazy(async () => ({ default: (await import('@/pages/spectrum')).SpectrumUploadPage }));
 const SpectrumViewPage = lazy(async () => ({ default: (await import('@/pages/spectrum')).SpectrumViewPage }));
@@ -52,6 +56,7 @@ const UserManagementPage = lazy(async () => ({ default: (await import('@/pages/i
 const RolePermissionsPage = lazy(async () => ({ default: (await import('@/pages/iam/RolePermissionsPage')).RolePermissionsPage }));
 const UserPermissionsPage = lazy(async () => ({ default: (await import('@/pages/iam/UserPermissionsPage')).UserPermissionsPage }));
 const AuditLogsPage = lazy(async () => ({ default: (await import('@/pages/iam/AuditLogsPage')).AuditLogsPage }));
+const StandardDictionaryPage = lazy(async () => ({ default: (await import('@/pages/iam/StandardDictionaryPage')).StandardDictionaryPage }));
 
 export const routeConfig: RouteObject[] = [
   { path: '/login', element: <LoginPage /> },
@@ -68,6 +73,7 @@ export const routeConfig: RouteObject[] = [
         index: true,
         element: <AuthorizedHomeRedirect />,
       },
+      { path: 'dashboard', element: <DashboardPage /> },
       { path: 'knowledge/library', element: <PagePermissionGate permission="knowledge.upload"><KnowledgeLibraryPage /></PagePermissionGate> },
       { path: 'knowledge/view', element: <KnowledgeViewPage /> },
       { path: 'knowledge/search', element: <KnowledgeSearchPage /> },
@@ -154,10 +160,18 @@ export const routeConfig: RouteObject[] = [
       { path: 'experiments/list', element: <ExperimentListPage /> },
       { path: 'experiments/upload', element: <ExperimentUploadPage /> },
       { path: 'experiments/:id', element: <ExperimentWorkspacePage /> },
+      { path: 'research-test', element: <Navigate to="/research-test/reports" replace /> },
+      { path: 'research-test/upload', element: <PagePermissionGate permission="research-test.report.create"><ResearchTestUploadPage /></PagePermissionGate> },
+      { path: 'research-test/reports', element: <PagePermissionGate permission="research-test.report.view"><ResearchTestListPage type="REPORT" /></PagePermissionGate> },
+      { path: 'research-test/reports/:id', element: <PagePermissionGate permission="research-test.report.view"><ResearchTestWorkspacePage type="REPORT" /></PagePermissionGate> },
+      { path: 'research-test/standards', element: <PagePermissionGate permission="research-test.standard.view"><ResearchTestListPage type="STANDARD" /></PagePermissionGate> },
+      { path: 'research-test/standards/:id', element: <PagePermissionGate permission="research-test.standard.view"><ResearchTestWorkspacePage type="STANDARD" /></PagePermissionGate> },
       { path: 'system/users', element: <UserManagementPage /> },
       { path: 'system/roles', element: <RolePermissionsPage /> },
       { path: 'system/user-permissions', element: <UserPermissionsPage /> },
       { path: 'system/audit-logs', element: <AuditLogsPage /> },
+      { path: 'system/dictionary', element: <PagePermissionGate permission="system.dictionary.manage"><StandardDictionaryPage /></PagePermissionGate> },
+      { path: 'system/parameters', element: <PagePermissionGate permission="system.parameter.manage"><InventoryControlPage mode="settings" /></PagePermissionGate> },
     ],
   },
   {

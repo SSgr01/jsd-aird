@@ -696,6 +696,27 @@ export const templateApi = {
     return response.data.data;
   },
 
+  async listStandardFieldRequests(status?: StandardFieldRequest['status']) {
+    const response = await httpClient.get<ApiResponse<StandardFieldRequest[]>>(
+      '/api/v1/standard-field-requests',
+      { params: status ? { status } : undefined },
+    );
+    return response.data.data;
+  },
+
+  async approveStandardFieldRequest(requestId: string, input: { fieldCode?: string; reviewComment?: string } = {}) {
+    const response = await httpClient.post<ApiResponse<StandardFieldOption>>(
+      `/api/v1/standard-field-requests/${requestId}/approve`, input,
+    );
+    return response.data.data;
+  },
+
+  async rejectStandardFieldRequest(requestId: string, reviewComment?: string) {
+    await httpClient.post(`/api/v1/standard-field-requests/${requestId}/reject`, {
+      reviewComment,
+    });
+  },
+
   async restartRecognition(
     versionId: string,
     request: {

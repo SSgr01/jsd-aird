@@ -17,11 +17,19 @@ interface Props {
   onChange: (value: ProjectRelationTarget[]) => void;
   disabled?: boolean;
   emptyText?: string;
+  /** Legacy upload endpoints persist one project hierarchy; resource links can remain multi-valued. */
+  multiple?: boolean;
 }
 
 const keyOf = (item: ProjectRelationTarget) => `${item.projectId}|${item.stageId || ''}|${item.taskId || ''}`;
 
-export function ProjectRelationPicker({ value, onChange, disabled, emptyText = '尚未关联项目' }: Props) {
+export function ProjectRelationPicker({
+  value,
+  onChange,
+  disabled,
+  emptyText = '尚未关联项目',
+  multiple = true,
+}: Props) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [stages, setStages] = useState<Record<string, ProjectStage[]>>({});
   const [tasks, setTasks] = useState<Record<string, ProjectTask[]>>({});
@@ -68,7 +76,15 @@ export function ProjectRelationPicker({ value, onChange, disabled, emptyText = '
         style={{ width: 220 }}
         options={projects.map((project) => ({ value: project.id, label: `${project.projectCode} · ${project.name}` }))}
         onChange={(projectId) => {
-          update(index, { projectId, stageId: undefined, taskId: undefined });
+          const project = projects.find((item) => item.id === projectId);
+          update(index, {
+            projectId,
+            projectName: project ? `${project.projectCode}·${project.name}` : undefined,
+            stageId: undefined,
+            stageName: undefined,
+            taskId: undefined,
+            taskName: undefined,
+          });
           if (!stages[projectId]) void getProjectStages(projectId).then((items) => setStages((current) => ({ ...current, [projectId]: items })));
         }}
       />
@@ -80,7 +96,13 @@ export function ProjectRelationPicker({ value, onChange, disabled, emptyText = '
         style={{ width: 180 }}
         options={(stages[item.projectId] || []).map((stage) => ({ value: stage.id, label: stage.name }))}
         onChange={(stageId) => {
-          update(index, { stageId, taskId: undefined });
+          const stage = (stages[item.projectId] || []).find((candidate) => candidate.id === stageId);
+          update(index, {
+            stageId,
+            stageName: stage?.name,
+            taskId: undefined,
+            taskName: undefined,
+          });
           if (stageId && !tasks[stageId]) void getStageTasks(stageId).then((items) => setTasks((current) => ({ ...current, [stageId]: items })));
         }}
       />
@@ -91,10 +113,13 @@ export function ProjectRelationPicker({ value, onChange, disabled, emptyText = '
         disabled={disabled || !item.stageId}
         style={{ width: 180 }}
         options={(item.stageId ? tasks[item.stageId] || [] : []).map((task) => ({ value: task.id, label: task.name }))}
-        onChange={(taskId) => update(index, { taskId })}
+        onChange={(taskId) => {
+          const task = (item.stageId ? tasks[item.stageId] || [] : []).find((candidate) => candidate.id === taskId);
+          update(index, { taskId, taskName: task?.name });
+        }}
       />
       {!disabled && <Button aria-label="删除项目关系" icon={<DeleteOutlined />} onClick={() => onChange(normalized.filter((_, itemIndex) => itemIndex !== index))} />}
     </Space>)}
-    {!disabled && <Button type="dashed" icon={<PlusOutlined />} onClick={() => onChange([...normalized, { projectId: '' }])}>添加项目关系</Button>}
+    {!disabled && (multiple || !normalized.length) && <Button type="dashed" icon={<PlusOutlined />} onClick={() => onChange([...normalized, { projectId: '' }])}>添加项目关系</Button>}
   </Space>;
 }

@@ -1,0 +1,190 @@
+.research-test-page,
+.research-test-upload {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+  flex-direction: column;
+  gap: 16px;
+}
+.research-test-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  min-width: 0;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.research-test-head > div { min-width: 0; }
+.research-test-head > .ant-space { max-width: 100%; flex-wrap: wrap; }
+.research-test-head h3 {
+  margin: 0 0 2px;
+}
+.research-test-filter {
+  min-width: 0;
+  max-width: 100%;
+  border-radius: 12px;
+}
+.research-test-filter .ant-space {
+  display: grid;
+  width: 100%;
+  grid-template-columns: minmax(220px, 2fr) repeat(3, minmax(140px, 1fr)) auto;
+  gap: 8px;
+}
+.research-test-filter.has-create-action .ant-space {
+  grid-template-columns: minmax(220px, 2fr) repeat(3, minmax(140px, 1fr)) auto auto;
+}
+.research-test-filter .ant-space-item { min-width: 0; }
+.research-test-filter .ant-input-search,
+.research-test-filter .ant-select,
+.research-test-filter .ant-picker {
+  width: 100% !important;
+  min-width: 0;
+}
+.research-test-table-wrap {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid #dfe6f0;
+  border-radius: 12px;
+  background: #fff;
+}
+.research-test-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.research-test-form-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.relation-box {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 18px 0;
+}
+.upload-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(420px, 0.78fr);
+  gap: 20px;
+}
+.preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 18px;
+}
+.preview-head h5 {
+  margin: 0;
+}
+.file-preview-list {
+  min-height: 110px;
+  border: 1px dashed #d9e2ef;
+  border-radius: 10px;
+  padding: 6px 14px;
+}
+.research-test-workspace .workspace-canvas {
+  min-height: 680px;
+}
+.research-test-page .ant-table-wrapper {
+  min-width: 0;
+  max-width: 100%;
+  background: #fff;
+  border-radius: 12px;
+  overflow: hidden;
+}
+@media (max-width: 1100px) {
+  .research-test-filter .ant-space { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .research-test-filter.has-create-action .ant-space { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .upload-columns {
+    grid-template-columns: 1fr;
+  }
+  .research-test-form-grid {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 720px) {
+  .research-test-filter .ant-space { grid-template-columns: 1fr; }
+  .research-test-head { align-items: stretch; }
+  .research-test-head > .ant-space { justify-content: flex-start; }
+}
+.research-test-create-modal .ant-modal-content {
+  padding: 0;
+  overflow: hidden;
+}
+.research-test-create-modal .ant-modal-header {
+  margin: 0;
+  padding: 20px 24px;
+  border-bottom: 1px solid #dfe6f0;
+}
+.research-test-create-modal .ant-modal-title {
+  font-size: 20px;
+}
+.research-test-create-modal .ant-modal-body {
+  padding: 24px;
+}
+.research-test-create-modal .ant-modal-footer {
+  margin: 0;
+  padding: 16px 20px;
+  border-top: 1px solid #dfe6f0;
+}
+.research-test-create-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 16px;
+}
+.research-test-create-grid .ant-picker {
+  width: 100%;
+}
+.research-test-choice-section > label {
+  display: block;
+  margin: 1px 0 8px;
+  font-weight: 600;
+}
+.research-test-choice-section > label i {
+  color: #e5484d;
+  font-style: normal;
+}
+.research-test-choice-section > div {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.research-test-choice-section button {
+  display: flex;
+  align-items: center;
+  min-height: 64px;
+  padding: 12px;
+  border: 1px solid #d6e0ef;
+  border-radius: 9px;
+  background: #fff;
+  text-align: left;
+  cursor: pointer;
+}
+.research-test-choice-section button.active {
+  border: 2px solid #678bff;
+  background: #f5f8ff;
+}
+.research-test-choice-section button > span {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  margin-right: 10px;
+  border-radius: 8px;
+  background: #eaf0ff;
+  color: #346bf2;
+  place-items: center;
+}
+.research-test-choice-section button b {
+  font-size: 14px;
+}
+.research-test-choice-section button small {
+  display: block;
+  margin-top: 3px;
+  color: #718096;
+  font-size: 11px;
+  font-weight: 400;
+}

@@ -1,0 +1,223 @@
+/* 工作台 - 浮动快捷操作按钮（可拖动 + 点击展开菜单）
+   根层随圆点坐标 translate3d 移动，FAB 与菜单都相对根层定位，
+   因此菜单会跟随圆点一起拖动。 */
+.dashboard-quick-action {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 56px;
+  height: 56px;
+  pointer-events: none;
+  z-index: 1200;
+  will-change: transform;
+  transition: transform 0.18s ease;
+}
+
+.dashboard-quick-action.is-dragging {
+  transition: none;
+}
+
+.dashboard-quick-action-fab {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 56px;
+  height: 56px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  outline: none;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #2f7bff 0%, #4f8bff 100%);
+  box-shadow: 0 12px 28px rgba(47, 123, 255, 0.42), 0 4px 10px rgba(47, 123, 255, 0.18);
+  color: #ffffff;
+  pointer-events: auto;
+  user-select: none;
+}
+
+.dashboard-quick-action-fab:hover {
+  transform: scale(1.05);
+  box-shadow: 0 16px 34px rgba(47, 123, 255, 0.5);
+}
+
+.dashboard-quick-action-fab:focus-visible {
+  box-shadow: 0 0 0 4px rgba(47, 123, 255, 0.28), 0 12px 28px rgba(47, 123, 255, 0.42);
+}
+
+.dashboard-quick-action .is-dragging .dashboard-quick-action-fab {
+  transition: none;
+  box-shadow: 0 16px 32px rgba(47, 123, 255, 0.55);
+}
+
+.dashboard-quick-action-fab-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  font-size: 22px;
+  line-height: 1;
+  transition: transform 0.24s ease;
+}
+
+.dashboard-quick-action-fab-icon.is-open {
+  transform: rotate(45deg);
+}
+
+.dashboard-quick-action-fab-ring {
+  position: absolute;
+  inset: -6px;
+  border-radius: 999px;
+  border: 2px solid rgba(47, 123, 255, 0.35);
+  opacity: 0;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  pointer-events: none;
+}
+
+.dashboard-quick-action.is-open .dashboard-quick-action-fab-ring {
+  opacity: 1;
+  animation: dashboard-quick-action-pulse 1.6s ease-out infinite;
+}
+
+@keyframes dashboard-quick-action-pulse {
+  0% {
+    transform: scale(0.9);
+    opacity: 0.6;
+  }
+  100% {
+    transform: scale(1.25);
+    opacity: 0;
+  }
+}
+
+/* 快捷菜单 —— 相对根层（即圆点位置）定位，随圆点一起拖动 */
+.dashboard-quick-action-menu {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+/* 向上展开：菜单底部贴齐圆点顶部，向上堆叠（第一项靠近圆点） */
+.dashboard-quick-action-menu.is-up {
+  bottom: 100%;
+  margin-bottom: 12px;
+  flex-direction: column-reverse;
+  transform: translate3d(0, 8px, 0);
+}
+
+/* 向下展开：菜单顶部贴齐圆点底部，向下堆叠（第一项靠近圆点） */
+.dashboard-quick-action-menu.is-down {
+  top: 100%;
+  margin-top: 12px;
+  flex-direction: column;
+  transform: translate3d(0, -8px, 0);
+}
+
+.dashboard-quick-action-menu.is-open {
+  pointer-events: auto;
+  opacity: 1;
+  transform: translate3d(0, 0, 0);
+}
+
+/* 圆点在屏幕右半屏：菜单贴右展开，图标靠右贴圆点、标签朝左 */
+.dashboard-quick-action-menu.align-right {
+  right: 0;
+  left: auto;
+  align-items: flex-end;
+}
+
+/* 圆点在屏幕左半屏：菜单贴左展开，图标靠左贴圆点、标签朝右 */
+.dashboard-quick-action-menu.align-left {
+  left: 0;
+  right: auto;
+  align-items: flex-start;
+}
+
+/* 菜单项统一：图标在左、文字在右（文字始终在右） */
+.dashboard-quick-action-item {
+  flex-direction: row;
+}
+
+.dashboard-quick-action-item {
+  --qa-tint: #1f6feb;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  white-space: nowrap;
+}
+
+.dashboard-quick-action-item:focus {
+  outline: none;
+}
+
+.dashboard-quick-action-item:focus-visible .dashboard-quick-action-icon {
+  box-shadow: 0 0 0 4px rgba(47, 123, 255, 0.3);
+}
+
+.dashboard-quick-action-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  background: var(--qa-tint, #1f6feb);
+  color: #ffffff;
+  font-size: 20px;
+  box-shadow: 0 6px 16px rgba(31, 41, 55, 0.18);
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.dashboard-quick-action-item:hover .dashboard-quick-action-icon {
+  transform: scale(1.06);
+  box-shadow: 0 10px 22px rgba(31, 41, 55, 0.24);
+}
+
+.dashboard-quick-action-label {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 14px;
+  background: #ffffff;
+  border: 1px solid var(--qa-tint, #1f6feb);
+  border-radius: 999px;
+  font-size: 13px;
+  color: #11233f;
+  box-shadow: 0 6px 18px rgba(42, 72, 110, 0.08);
+  transition: transform 0.18s ease;
+}
+
+.dashboard-quick-action-item:hover .dashboard-quick-action-label {
+  transform: translateX(2px);
+}
+
+@media (max-width: 640px) {
+  .dashboard-quick-action,
+  .dashboard-quick-action-fab {
+    width: 50px;
+    height: 50px;
+  }
+  .dashboard-quick-action-icon {
+    width: 40px;
+    height: 40px;
+    font-size: 18px;
+  }
+  .dashboard-quick-action-label {
+    font-size: 12px;
+    padding: 5px 12px;
+  }
+}

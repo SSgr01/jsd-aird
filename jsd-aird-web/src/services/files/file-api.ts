@@ -12,7 +12,7 @@ export interface StagedFile {
 
 export async function stageFile(
   file: File,
-  kind: 'KNOWLEDGE' | 'SNAPSHOT' | 'IMPORT' | 'QUALITY_SOURCE' | 'PRODUCTION_SOURCE' | 'SPC_CHART' = 'KNOWLEDGE',
+  kind: 'KNOWLEDGE' | 'SNAPSHOT' | 'IMPORT' | 'QUALITY_SOURCE' | 'PRODUCTION_SOURCE' | 'SPC_CHART' | 'RESEARCH_TEST_SOURCE' = 'KNOWLEDGE',
 ) {
   const body = new FormData();
   body.append('file', file);
@@ -56,6 +56,7 @@ export function triggerNativeDownload(path: string, fileName?: string) {
   window.setTimeout(() => anchor.remove(), 0);
 }
 
-export async function downloadFile(fileId: string, fileName: string): Promise<void> {
+export function downloadFile(fileId: string, fileName: string): Promise<void> {
   triggerNativeDownload(`/api/v1/files/${encodeURIComponent(fileId)}/content`, fileName);
+  return Promise.resolve();
 }

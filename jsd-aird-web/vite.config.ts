@@ -10,6 +10,10 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     resolve: {
+      // Univer declares RxJS as a peer dependency. Keep every Univer package
+      // on the same modern RxJS build; otherwise pnpm may resolve a nested
+      // 7.0.0 copy whose ESM entry does not expose the operators Univer uses.
+      dedupe: ['rxjs'],
       alias: {
         '@': fileURLToPath(new URL('./src', import.meta.url)),
       },

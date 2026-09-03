@@ -1,0 +1,316 @@
+/* Shared list surface: the project list is the visual baseline for business data. */
+.pm-unified-list-page {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  flex-direction: column;
+  gap: 16px;
+  overflow: hidden;
+  padding: 0;
+  background: transparent;
+  color: #1f2937;
+}
+
+.pm-unified-list-page > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.pm-unified-list-page .page-heading,
+.pm-unified-list-page .research-test-head,
+.pm-unified-list-page .inventory-heading,
+.pm-unified-list-page .pm-page-head,
+.pm-unified-list-page .cm-page-head {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0;
+}
+
+.pm-unified-list-page .page-heading > div,
+.pm-unified-list-page .research-test-head > div,
+.pm-unified-list-page .inventory-heading > div,
+.pm-unified-list-page .pm-page-head > div,
+.pm-unified-list-page .cm-page-head > div {
+  min-width: 0;
+}
+
+.pm-unified-list-page .page-heading h1,
+.pm-unified-list-page .page-heading h2,
+.pm-unified-list-page .research-test-head h3,
+.pm-unified-list-page .inventory-heading h1,
+.pm-unified-list-page .pm-page-head h3,
+.pm-unified-list-page .cm-page-head h3 {
+  margin: 0 0 5px;
+  color: #1f2937;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.pm-unified-list-page .page-heading p,
+.pm-unified-list-page .inventory-heading p,
+.pm-unified-list-page .research-test-head .ant-typography-secondary,
+.pm-unified-list-page .pm-page-head p,
+.pm-unified-list-page .cm-page-head p {
+  margin: 0;
+  color: #667085;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.pm-unified-list-page .research-test-filter,
+.pm-unified-list-page .production-order-filter,
+.pm-unified-list-page .quality-data-panel,
+.pm-unified-list-page .inventory-filters,
+.pm-unified-list-page .content-card,
+.pm-unified-list-page .cm-filter,
+.pm-unified-list-page .cm-table-card {
+  min-width: 0;
+  max-width: 100%;
+  border: 1px solid #e1e7ef;
+  border-radius: 10px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+}
+
+.pm-unified-list-page .research-test-filter,
+.pm-unified-list-page .production-order-filter {
+  width: 100%;
+}
+
+.pm-unified-list-page .research-test-filter .ant-card-body,
+.pm-unified-list-page .production-order-filter .ant-card-body {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 14px;
+}
+
+.pm-unified-list-page .research-test-filter .ant-space,
+.pm-unified-list-page .production-order-filter .ant-space,
+.pm-unified-list-page .quality-toolbar,
+.pm-unified-list-page .eln-filter-row,
+.pm-unified-list-page .eln-batch-row {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.pm-unified-list-page .research-test-table-wrap,
+.pm-unified-list-page .eln-table-wrap,
+.pm-unified-list-page .production-order-table-card,
+.pm-unified-list-page .quality-grid-wrap,
+.pm-unified-list-page .ant-table-wrapper {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid #e1e7ef;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+}
+
+.pm-unified-list-page .ant-table-wrapper {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.pm-unified-list-page .ant-table-thead > tr > th {
+  background: #f7f9fc;
+  border-bottom-color: #e1e7ef;
+  color: #667085;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.pm-unified-list-page .ant-table-tbody > tr > td {
+  border-bottom-color: #edf0f5;
+  color: #1f2937;
+  white-space: nowrap;
+}
+
+.pm-unified-list-page .ant-table-tbody > tr:hover > td {
+  background: #f8faff;
+}
+
+.pm-unified-list-page .ant-table-cell-fix-right-first::after,
+.pm-unified-list-page .ant-table-cell-fix-right-last::after {
+  box-shadow: -6px 0 10px rgba(15, 23, 42, 0.06);
+}
+
+.pm-unified-list-page .quality-grid-wrap {
+  overflow: auto;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.pm-unified-list-page .quality-grid {
+  min-width: 980px;
+  border-color: #e1e7ef;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+}
+
+.pm-unified-list-page .quality-grid th {
+  padding: 12px 14px;
+  background: #f7f9fc;
+  border-bottom: 1px solid #e1e7ef;
+  color: #667085;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.pm-unified-list-page .quality-grid td {
+  padding: 12px 14px;
+  border-bottom: 1px solid #edf0f5;
+  color: #1f2937;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.pm-unified-list-page .quality-grid tbody tr:hover td {
+  background: #f8faff;
+}
+
+.pm-unified-list-page .quality-grid th:last-child,
+.pm-unified-list-page .quality-grid td:last-child {
+  position: sticky;
+  right: 0;
+  z-index: 1;
+  min-width: 190px;
+  background: #fff;
+  box-shadow: -6px 0 10px rgba(15, 23, 42, 0.06);
+}
+
+.pm-unified-list-page .quality-grid th:last-child {
+  z-index: 2;
+  background: #f7f9fc;
+}
+
+.pm-unified-list-page .quality-grid tbody tr:hover td:last-child {
+  background: #f8faff;
+}
+
+.pm-unified-list-page .quality-tabs {
+  display: flex;
+  min-width: 0;
+  gap: 4px;
+  padding: 4px;
+  overflow-x: auto;
+  border: 1px solid #e1e7ef;
+  border-radius: 10px;
+  background: #fff;
+}
+
+/* InventoryShell and the inventory control console share the same outer
+   page component but the latter cannot carry the helper class. */
+.inventory-page {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  flex-direction: column;
+  gap: 16px;
+  overflow: hidden;
+  padding: 0;
+  background: transparent;
+}
+
+.inventory-page .inventory-heading {
+  margin-bottom: 0;
+}
+
+.inventory-page .inventory-filters {
+  margin-bottom: 0;
+  padding: 14px;
+  border: 1px solid #e1e7ef;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+}
+
+.inventory-page > .ant-card,
+.inventory-page > .ant-table-wrapper,
+.inventory-page > .ant-tabs,
+.inventory-page > .ant-divider {
+  min-width: 0;
+  max-width: 100%;
+}
+
+@media (max-width: 900px) {
+  .inventory-page {
+    padding: 0;
+  }
+}
+
+.pm-unified-list-page .quality-tab {
+  min-height: 36px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #667085;
+  white-space: nowrap;
+}
+
+.pm-unified-list-page .quality-tab.active {
+  background: #e6f4ff;
+  color: #1677ff;
+  font-weight: 600;
+}
+
+.pm-unified-list-page .quality-categories {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 0;
+  overflow: visible;
+}
+
+.pm-unified-list-page .quality-category {
+  width: auto;
+  min-width: 0;
+  min-height: 126px;
+  border-radius: 10px;
+}
+
+@media (max-width: 720px) {
+  .pm-unified-list-page .page-heading,
+  .pm-unified-list-page .research-test-head,
+  .pm-unified-list-page .inventory-heading,
+  .pm-unified-list-page .pm-page-head,
+  .pm-unified-list-page .cm-page-head {
+    flex-direction: column;
+  }
+
+  .pm-unified-list-page .page-heading > .ant-space,
+  .pm-unified-list-page .research-test-head > .ant-space,
+  .pm-unified-list-page .inventory-heading > .ant-space {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .pm-unified-list-page .research-test-filter .ant-space,
+  .pm-unified-list-page .production-order-filter .ant-space,
+  .pm-unified-list-page .quality-toolbar,
+  .pm-unified-list-page .eln-filter-row,
+  .pm-unified-list-page .eln-batch-row {
+    width: 100%;
+  }
+
+  .pm-unified-list-page .quality-categories {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 520px) {
+  .pm-unified-list-page .quality-categories {
+    grid-template-columns: 1fr;
+  }
+}

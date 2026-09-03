@@ -21,12 +21,8 @@ import {
   LockOutlined,
   LogoutOutlined,
   AppstoreOutlined,
-  CalendarOutlined,
-  SwapOutlined,
-  LinkOutlined,
   SettingOutlined,
   UserOutlined,
-  HistoryOutlined,
   SearchOutlined,
 } from '@ant-design/icons';
 import { ProLayout } from '@ant-design/pro-components';
@@ -43,6 +39,11 @@ import { canViewPath, filterMenuRoute, firstAccessiblePath, requiredPermissionFo
 const route = {
   path: '/',
   routes: [
+    {
+      path: '/dashboard',
+      name: '工作台',
+      icon: <HomeOutlined />,
+    },
     {
       path: '/partners',
       name: '客户管理',
@@ -74,6 +75,16 @@ const route = {
       routes: [
         { path: '/assistant', name: 'AI问答', icon: <RobotOutlined /> },
         { path: '/knowledge/search', name: '文件检索', icon: <FileSearchOutlined /> },
+      ],
+    },
+    {
+      path: '/research-test-root',
+      name: '研发测试中心',
+      icon: <SafetyCertificateOutlined />,
+      routes: [
+        { path: '/research-test/upload', name: '报告上传', icon: <UploadOutlined /> },
+        { path: '/research-test/reports', name: '报告查看', icon: <EyeOutlined /> },
+        { path: '/research-test/standards', name: '测试标准方法', icon: <FileTextOutlined /> },
       ],
     },
     {
@@ -123,16 +134,6 @@ const route = {
         { path: '/inventory/production', name: '生产库存表', icon: <OrderedListOutlined /> },
         { path: '/inventory/samples', name: '发样记录表', icon: <InboxOutlined /> },
         { path: '/inventory/shipments', name: '出货记录表', icon: <UnorderedListOutlined /> },
-        { path: '/inventory/products', name: '产品主档', icon: <AppstoreOutlined /> },
-        { path: '/inventory/warnings', name: '预警规则', icon: <SafetyCertificateOutlined /> },
-        { path: '/inventory/batches', name: '批次管理', icon: <UnorderedListOutlined /> },
-        { path: '/inventory/expiry', name: '有效期与重测', icon: <CalendarOutlined /> },
-        { path: '/inventory/transfer', name: '库存调拨', icon: <SwapOutlined /> },
-        { path: '/inventory/production-links', name: '生产联动', icon: <LinkOutlined /> },
-        { path: '/inventory/eln-links', name: 'ELN 联动', icon: <LinkOutlined /> },
-        { path: '/inventory/settings', name: '库存参数', icon: <SettingOutlined /> },
-        { path: '/inventory/permissions', name: '库存权限', icon: <SafetyCertificateOutlined /> },
-        { path: '/inventory/audit', name: '库存审计', icon: <HistoryOutlined /> },
       ],
     },
     {
@@ -163,6 +164,8 @@ const route = {
         { path: '/system/roles', name: '角色权限配置', icon: <SettingOutlined /> },
         { path: '/system/user-permissions', name: '用户权限配置', icon: <SettingOutlined /> },
         { path: '/system/audit-logs', name: '操作日志', icon: <AuditOutlined /> },
+        { path: '/system/dictionary', name: '基础字典', icon: <FileTextOutlined /> },
+        { path: '/system/parameters', name: '系统参数', icon: <SettingOutlined /> },
       ],
     },
   ],
@@ -183,7 +186,7 @@ function UserMenu() {
   return <Dropdown
     trigger={['click']}
     menu={{ items, onClick: ({ key }) => {
-      if (key === 'workbench') navigate(firstAccessiblePath(user.permissions) || '/');
+      if (key === 'workbench') navigate('/dashboard');
       if (key === 'change-password') navigate('/change-password');
       if (key === 'logout') void logout();
     } }}

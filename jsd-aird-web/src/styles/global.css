@@ -1550,6 +1550,41 @@ a:active,
   overflow: hidden;
 }
 
+/* Historical versions use the same full-height editor surface as the edit
+ * view. Keep the preview shell and canvas in the flex chain so Univer's
+ * absolutely positioned host receives a real height after a version is
+ * selected. */
+.workspace-main-stage > .project-versions-panel,
+.project-versions-panel {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: auto;
+}
+
+.project-versions-content {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  padding: 24px;
+}
+
+.project-version-preview {
+  display: flex;
+  min-height: 100%;
+  flex-direction: column;
+}
+
+.project-version-preview > .project-versions-header {
+  flex: 0 0 auto;
+}
+
+.project-version-preview > .workspace-canvas {
+  min-height: 360px;
+  flex: 1;
+}
+
 .recognition-status-bar {
   display: flex;
   min-height: 52px;

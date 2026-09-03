@@ -87,6 +87,14 @@ public class PostgresWorkRepository implements WorkRepository {
     }
 
     @Override
+    public boolean isCancelled(UUID jobId) {
+        Integer cancelled = jdbcTemplate.queryForObject(
+                "SELECT CASE WHEN status = 'CANCELLED' THEN 1 ELSE 0 END FROM ops.async_job WHERE id = ?",
+                Integer.class, jobId);
+        return cancelled != null && cancelled == 1;
+    }
+
+    @Override
     public void completeJob(UUID jobId, JsonNode result) {
         jdbcTemplate.update("""
                         UPDATE ops.async_job

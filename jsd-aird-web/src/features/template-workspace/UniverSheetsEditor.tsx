@@ -23,6 +23,8 @@ interface Props {
   onEditorLabel?: (binding: TemplateBinding, value: unknown) => void;
   bindings: TemplateBinding[];
   editable?: boolean;
+  /** Hide Univer's built-in permission dialog for read-only workbooks. */
+  permissionDialogVisible?: boolean;
   onSelectionChange?: (selection: EditorSelection) => void;
   onUnboundCellChange?: (selection: EditorSelection, value: unknown) => void;
   onCellChange?: (change: EditorCellChange) => void;
@@ -38,6 +40,7 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
     onEditorLabel,
     bindings,
     editable = true,
+    permissionDialogVisible = true,
     onSelectionChange,
     onUnboundCellChange,
     onCellChange,
@@ -49,6 +52,7 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
   const containerRef = useRef<HTMLDivElement>(null);
   const univerRef = useRef<ReturnType<typeof createUniver>['univer']>();
   const apiRef = useRef<FUniver>();
+  const sourceSnapshotRef = useRef(snapshot);
   const bindingsRef = useRef(bindings);
   const callbacksRef = useRef({
     onDirty,
@@ -65,6 +69,7 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
   const highlightRef = useRef<Array<{ dispose(): void }>>([]);
   const highlightTimersRef = useRef<number[]>([]);
   bindingsRef.current = bindings;
+  sourceSnapshotRef.current = snapshot;
   callbacksRef.current = {
     onDirty,
     onEditorValue,
@@ -129,6 +134,10 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
       apiRef.current = univerAPI;
       const workbook = univerAPI.createWorkbook(snapshot);
       workbook.setEditable(editableRef.current);
+      // In preview/history mode the surrounding page provides the read-only
+      // hint. Suppress the generic Univer permission modal so a click simply
+      // remains non-editable instead of showing a second dialog.
+      univerAPI.setPermissionDialogVisible?.(permissionDialogVisible);
       const initialSheet = workbook.getActiveSheet();
       const initialRange = initialSheet?.getActiveRange() ?? workbook.getActiveRange();
       if (initialSheet && initialRange) {
@@ -200,6 +209,11 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
         const structureOperation = operationFromUniverCommand(command);
         const cellMutation = isCellMutationCommand(command.id, command.params);
         if (!structureOperation && !cellMutation) return;
+        // Restoring the initial snapshot emits the same commands as a user
+        // edit in some Univer versions.  Ignore those commands until the
+        // editor is armed, otherwise a freshly opened production order is
+        // incorrectly shown as “未保存”.
+        if (!cellChangeEventsArmed) return;
         callbacksRef.current.onDirty();
         if (structureOperation) callbacksRef.current.onStructureChange?.(structureOperation);
         // Capture the cell before Univer moves the selection after Enter or a
@@ -366,16 +380,17 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
   useEffect(() => {
     editableRef.current = editable;
     apiRef.current?.getActiveWorkbook()?.setEditable(editable);
+    apiRef.current?.setPermissionDialogVisible?.(permissionDialogVisible);
     if (editable && apiRef.current) {
       void protectReadOnlyRanges(apiRef.current, bindings).catch(() => undefined);
     }
-  }, [bindings, editable]);
+  }, [bindings, editable, permissionDialogVisible]);
 
   useImperativeHandle(
     ref,
     () => ({
       getSnapshot() {
-        return (apiRef.current?.getActiveWorkbook()?.save() ?? {}) as Record<
+        return (apiRef.current?.getActiveWorkbook()?.save() ?? sourceSnapshotRef.current) as Record<
           string,
           unknown
         >;

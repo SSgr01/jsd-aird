@@ -8,6 +8,7 @@ import { downloadPreviewFile, FilePreviewModal, type FilePreviewDescriptor } fro
 import { UploadWorkspace, type UploadWorkspaceRecord } from '@/components/upload-workspace';
 import { stageFile } from '@/services/files';
 import { spectrumApi, type SpectrumCategory, type SpectrumChart } from '@/services/spectrum';
+import { listExperiments, type ExperimentSummary } from '@/services/experiments/experiment-api';
 
 const statusLabels: Record<string, [string, string]> = {
   READY: ['可分析', 'success'], DELETED: ['已删除', 'default'],
@@ -25,6 +26,7 @@ export function SpectrumUploadPage() {
   const [batchNo, setBatchNo] = useState('');
   const [testConditions, setTestConditions] = useState('');
   const [metadata, setMetadata] = useState<Record<string, unknown>>({});
+  const [experiments, setExperiments] = useState<ExperimentSummary[]>([]);
   const [keyword, setKeyword] = useState('');
   const [status, setStatus] = useState('ALL');
   const [page, setPage] = useState({ current: 1, pageSize: 8, total: 0 });
@@ -49,6 +51,11 @@ export function SpectrumUploadPage() {
       setCategories(result);
       setCategoryId((current) => current || result[0]?.id);
     }).catch(() => setCategories([]));
+  }, []);
+  useEffect(() => {
+    void listExperiments({ page: 1, size: 100 })
+      .then((result) => setExperiments(result.items))
+      .catch(() => setExperiments([]));
   }, []);
   useEffect(() => { void load(); }, [load]);
 
@@ -122,6 +129,17 @@ export function SpectrumUploadPage() {
         </Form.Item>
         <Form.Item label="样品名称"><Input value={sampleName} onChange={(event) => setSampleName(event.target.value)} placeholder="可选，如竞品 A、单峰参考 01" /></Form.Item>
         <Form.Item label="批号"><Input value={batchNo} onChange={(event) => setBatchNo(event.target.value)} placeholder="可选" /></Form.Item>
+        <Form.Item label="关联 ELN 实验">
+          <Select
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            value={metadata.experimentId as string | undefined}
+            onChange={(value) => setMetadata((current) => ({ ...current, experimentId: value || undefined }))}
+            placeholder="可选，选择实验后形成稳定关联"
+            options={experiments.map((item) => ({ value: item.id, label: `${item.experimentNo} · ${item.title}` }))}
+          />
+        </Form.Item>
         <Form.Item label="测试条件"><Input.TextArea rows={2} value={testConditions} onChange={(event) => setTestConditions(event.target.value)} placeholder="仪器、范围、溶剂、倍率等，已知则填写" /></Form.Item>
         {selectedCategory?.fields.map((field) => <Form.Item key={field.key} label={field.label}><Input value={metadataValue(field.key)} onChange={(event) => updateMetadata(field.key, event.target.value)} placeholder="可选" /></Form.Item>)}
         {selectedCategory?.analysisHint && <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>当前分类分析提示：{selectedCategory.analysisHint}</Typography.Paragraph>}

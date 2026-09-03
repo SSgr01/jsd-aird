@@ -128,6 +128,7 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
                     : permission("production.view", "PRODUCTION", "READ");
             if (path.endsWith("/select-template")) return permission("production.update", "PRODUCTION", "WRITE");
             if (method.equals("DELETE")) return permission("production.delete", "PRODUCTION", "WRITE");
+            if (method.equals("PUT") || method.equals("PATCH")) return permission("production.update", "PRODUCTION", "WRITE");
             if (method.equals("POST")) return permission("production.create", "PRODUCTION", "WRITE");
             return null;
         }
@@ -149,7 +150,7 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
                 return permission("project.view", "PROJECT", "READ");
             if (method.equals("DELETE") && (path.matches("/api/v1/projects/[0-9a-f-]{36}")
                     || path.matches("/api/v1/projects/[0-9a-f-]{36}/(stages|tasks|materials|documents|meetings)/.*")
-                    || path.matches("/api/v1/(stages|materials)(/[0-9a-f-]{36})?"))) return permission("project.delete", "PROJECT", "WRITE");
+                    || path.matches("/api/v1/(tasks|stages|materials)(/[0-9a-f-]{36})?"))) return permission("project.delete", "PROJECT", "WRITE");
             if (method.equals("POST") && (path.equals("/api/v1/projects")
                     || path.matches("/api/v1/projects/[0-9a-f-]{36}/(stages|tasks|documents|meetings)(/.*)?")
                     || path.matches("/api/v1/(tasks|materials|meetings)(/.*)?"))) return permission("project.create", "PROJECT", "WRITE");
@@ -229,6 +230,23 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
             return null;
         }
 
+        if (path.startsWith("/api/v1/comprehensive-reports") || path.startsWith("/api/v1/test-standards")) {
+            var report = path.startsWith("/api/v1/comprehensive-reports");
+            var prefix = report ? "research-test.report." : "research-test.standard.";
+            if (read && report && path.equals("/api/v1/comprehensive-reports") && request.getParameter("projectId") != null)
+                return permission("project.view", "PROJECT", "READ");
+            if (path.contains("/export")) return permission(prefix + "export", "RESEARCH_TEST", "READ");
+            if (read) return permission(prefix + "view", "RESEARCH_TEST", "READ");
+            if (path.endsWith("/submit-review")) return permission(prefix + "submit", "RESEARCH_TEST", "WRITE");
+            if (path.endsWith("/approve") || path.endsWith("/return")) return permission(prefix + "approve", "RESEARCH_TEST", "WRITE");
+            if (path.endsWith("/publish") || path.endsWith("/archive")) return permission(prefix + "publish", "RESEARCH_TEST", "WRITE");
+            if (method.equals("DELETE")) return permission(prefix + "delete", "RESEARCH_TEST", "WRITE");
+            if (method.equals("PUT") || method.equals("PATCH")) return permission(prefix + "update", "RESEARCH_TEST", "WRITE");
+            if (path.endsWith("/draft") || path.contains("/versions")) return permission(prefix + "update", "RESEARCH_TEST", "WRITE");
+            if (method.equals("POST")) return permission(prefix + "create", "RESEARCH_TEST", "WRITE");
+            return null;
+        }
+
         if (path.startsWith("/api/v1/knowledge")) {
             if (path.equals("/api/v1/knowledge/search") || path.equals("/api/v1/knowledge/assistant"))
                 return permission("ai.use", "KNOWLEDGE", "WRITE");
@@ -268,6 +286,7 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
             if (method.equals("PUT")) return permission("quality.update", "QUALITY", "WRITE");
             if (method.equals("POST")) {
                 if (path.endsWith("/uploads")) return permission("quality.upload", "QUALITY", "WRITE");
+                if (path.matches(".*/uploads/[0-9a-f-]{36}/retry")) return permission("quality.upload", "QUALITY", "WRITE");
                 if (path.endsWith("/categories")) return permission("quality.create", "QUALITY", "WRITE");
                 return permission("quality.update", "QUALITY", "WRITE");
             }
@@ -299,6 +318,8 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
                 return permission("template.upload", "TEMPLATE", "WRITE");
             if ("EXPERIMENT_SOURCE".equalsIgnoreCase(request.getParameter("kind")))
                 return permission("experiment.create", "EXPERIMENT", "WRITE");
+            if ("RESEARCH_TEST_SOURCE".equalsIgnoreCase(request.getParameter("kind")))
+                return permission("research-test.report.create", "RESEARCH_TEST", "WRITE");
         }
         if (path.startsWith("/api/v1/files")) {
             if (path.endsWith("/content")) return permission("ops.file.download", "FILE", "READ");

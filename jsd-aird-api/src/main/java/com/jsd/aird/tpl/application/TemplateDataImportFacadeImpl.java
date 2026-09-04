@@ -166,15 +166,14 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade {
                 ? (ObjectNode) source.deepCopy()
                 : objectMapper.createObjectNode();
         JsonNode diagnostic = item.path("diagnostic");
-        for (var key : List.of("matrixModel", "tableModel", "longTableModel", "recordProjection",
-                "columnSlots", "rowSlots", "columns", "kind", "blockType", "valueType", "role",
+        for (var key : List.of("tableModel", "columns", "kind", "blockType", "valueType", "role",
                 "groupName", "displayName", "title")) {
             if (!locator.has(key) && diagnostic.isObject() && diagnostic.has(key)) {
                 locator.set(key, diagnostic.path(key).deepCopy());
             }
         }
-        for (var key : List.of("componentId", "sheetId", "sheet", "rowHeaderRange", "columnHeaderRange", "crossDataRange",
-                "cornerRange", "totalRange", "recordAxis", "semanticMode", "repeatAxis", "valueMode")) {
+        for (var key : List.of("componentId", "sheetId", "sheet", "headerRange", "dataRange",
+                "recordAxis", "semanticMode", "repeatAxis", "valueMode")) {
             if (!locator.has(key) && item.has(key)) locator.set(key, item.path(key).deepCopy());
         }
         return locator;

@@ -14,15 +14,15 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 /**
  * Canonicalizes template field locations.
  *
- * The public contract is locator.label / locator.value.  The flat keys are
- * retained in the serialized object only while the existing workbook/export
- * consumers are migrated; all new writes are produced by this class.
+ * The public contract is locator.label / locator.value. Flat aliases are
+ * emitted as part of the current workbook/export locator contract; they are
+ * not business region kinds and are never used to infer a legacy structure.
  */
 public final class TemplateLocatorNormalizer {
 
     public static final int LOCATOR_VERSION = 1;
     private static final Set<String> REGION_KINDS = Set.of(
-            "FORM_REGION", "ROW_TABLE", "COLUMN_TABLE", "MATRIX", "TABLE_REGION"
+            "FORM_REGION", "ROW_TABLE", "COLUMN_TABLE"
     );
 
     private TemplateLocatorNormalizer() {
@@ -63,9 +63,8 @@ public final class TemplateLocatorNormalizer {
         locator.put("source", normalizeSource(locator.path("source").asText(""), label.size() > 0));
         if (!locator.hasNonNull("relation")) locator.put("relation", label.size() > 0 ? "ADJACENT" : "UNRESOLVED");
 
-        // Keep the flat aliases at the persistence boundary while old stored
-        // schemas are normalized. The nested label/value objects are the
-        // canonical contract consumed by new code.
+        // Emit the flat coordinate aliases required by workbook/export
+        // consumers. Nested label/value objects remain canonical.
         if (label.size() > 0) {
             locator.put("labelAddress", label.path("address").asText());
             locator.put("labelRange", label.path("range").asText());

@@ -74,7 +74,12 @@ import {
   type PublishReviewSyncState,
 } from '@/features/template-workspace/publish-readiness';
 import { migrateWorkspaceStructure } from '@/features/template-workspace/structure-migration';
-import { locatorLabelRange, locatorValueRange, mergeLocators } from '@/features/template-workspace/locator';
+import {
+  locatorLabelRange,
+  locatorValueRange,
+  mergeLocators,
+  synchronizeLocatorCoordinates,
+} from '@/features/template-workspace/locator';
 import {
   isSingleCellAddress,
   isStructuredDataCell,
@@ -85,7 +90,6 @@ import type {
   EditorHandle,
   EditorSelection,
   FieldModel,
-  MatrixModel,
   TemplateBinding,
   TemplateFormat,
   TemplateVersionHistoryItem,
@@ -106,7 +110,7 @@ import type {
 import { DocumentOutlinePanel } from '@/features/template-workspace/DocumentOutlinePanel';
 
 function isRegionModelField(field: BusinessField) {
-  return field.displayRole === 'REGION' || ['FORM_REGION', 'ROW_TABLE', 'COLUMN_TABLE', 'MATRIX', 'TABLE_REGION'].includes(
+  return field.displayRole === 'REGION' || ['FORM_REGION', 'ROW_TABLE', 'COLUMN_TABLE'].includes(
     field.kind,
   ) || field.mappingKind === 'REPEAT_REGION';
 }
@@ -228,9 +232,7 @@ export function TemplateWorkspacePage() {
         // “物性测试 > 粘度 > 固含 > 120℃×1h”. Review data is still loaded for
         // status/history, but it is not allowed to replace the published
         // structure.
-        const merged = model.format === 'DOCX'
-          ? { schema: normalizeWordSchema(model.schema), mapping: [] as TemplateBinding[], model: emptyWordFieldModel() }
-          : ['PUBLISHED', 'RETIRED'].includes(model.status)
+        const merged = ['PUBLISHED', 'RETIRED'].includes(model.status)
             ? { schema: model.schema, mapping: model.mapping, model: storedFieldModel }
           : review
             ? mergeRecognitionReview(model.schema, model.mapping, storedFieldModel, review)
@@ -239,25 +241,21 @@ export function TemplateWorkspacePage() {
         // The workbook row is the authoritative source for repeat-field paths;
         // canonicalize once more after review merging so a review refresh
         // cannot put an old path back into the published structure.
-        const canonicalMerged = model.format === 'DOCX'
-          ? merged
-          : {
-              ...merged,
-              model: readFieldModel(merged.schema, merged.mapping, loadedSnapshot),
-            };
+        const canonicalMerged = {
+          ...merged,
+          model: readFieldModel(merged.schema, merged.mapping, loadedSnapshot),
+        };
         setWorkspace(model);
         setSchema(canonicalMerged.schema);
         setMapping(canonicalMerged.mapping);
         setFieldModel(canonicalMerged.model);
         setSelectedFieldId(canonicalMerged.model.fields.find((field) => !isRegionModelField(field))?.id);
-        setRecognitionReview(model.format === 'DOCX' ? undefined : review);
+        setRecognitionReview(review);
         setTemplateReview(versionReview);
         setReviewSyncState('FRESH');
         setQualityActions({});
         setSelectedQualityIssueId(
-          model.format === 'DOCX'
-            ? undefined
-            : review?.qualityIssues.find((issue) => issue.severity === 'BLOCKER')?.id,
+          review?.qualityIssues.find((issue) => issue.severity === 'BLOCKER')?.id,
         );
         setFieldManagerTab(
           review?.recognitionRunId ? 'recognition' : 'structure',
@@ -430,9 +428,7 @@ export function TemplateWorkspacePage() {
     try {
       await waitForPendingEditorOperations();
       const currentSnapshot = editorRef.current.getSnapshot();
-      const formalMapping = workspace.format === 'DOCX'
-        ? []
-        : prepareFormalMappings(mapping, fieldModel);
+      const formalMapping = prepareFormalMappings(mapping, fieldModel);
       const synchronized = workspace.format === 'DOCX'
         ? { data, bindingValues: [] as BindingValuePair[] }
         : synchronizeStructuredData(
@@ -443,9 +439,7 @@ export function TemplateWorkspacePage() {
       const synchronizedData = synchronized.data;
       const bindingValues = synchronized.bindingValues;
       const staged = await templateApi.stageSnapshot(currentSnapshot, workspace.format);
-      const savedSchema = workspace.format === 'DOCX'
-        ? normalizeWordSchema(schema)
-        : prepareFormalSchema(schema, fieldModel);
+      const savedSchema = prepareFormalSchema(schema, fieldModel);
       const effectiveRecognitionActions = {
         ...recognitionActions,
         ...(recognitionOverride
@@ -515,18 +509,11 @@ export function TemplateWorkspacePage() {
       setRecognitionAlternativeSelections({});
       setQualityActions({});
       setStructureOperations([]);
-      const reviewRefreshed = workspace.format === 'DOCX'
-        ? true
-        : await refreshRecognitionReview(true, {
-            schema: persistedSchema,
-            mapping: persistedMapping,
-            model: fieldModel,
-          });
-      if (workspace.format === 'DOCX') {
-        setMapping([]);
-        setFieldModel(emptyWordFieldModel());
-        setRecognitionReview(undefined);
-      }
+      const reviewRefreshed = await refreshRecognitionReview(true, {
+        schema: persistedSchema,
+        mapping: persistedMapping,
+        model: fieldModel,
+      });
       setSaveState('SAVED');
       if (reviewRefreshed) {
         void message.success(
@@ -940,7 +927,8 @@ export function TemplateWorkspacePage() {
   };
 
   const confirmRecognitionItem = async (item: RecognitionReviewItem, selectedAlternativeId?: string) => {
-    if (item.payload.structureAlternatives?.length || requiresServerStructureConfirmation(item)) {
+    if (item.payload.structureAlternatives?.length
+      || requiresServerStructureConfirmation(item, recognitionReview, true)) {
       recordRecognitionAction(item.id, 'CONFIRM', 'CONFIRMED', selectedAlternativeId);
       markDirty();
       setRecognitionBusy(true);
@@ -1018,7 +1006,7 @@ export function TemplateWorkspacePage() {
     if (!recognitionReview) return;
     const targets = recognitionReview.items.filter(
       (item) => (item.status === 'PENDING' || item.status === 'CONFLICT')
-        && !requiresServerStructureConfirmation(item),
+        && !requiresServerStructureConfirmation(item, recognitionReview),
     );
     if (!targets.length) {
       void message.info('没有待确认的识别项目');
@@ -1056,7 +1044,7 @@ export function TemplateWorkspacePage() {
     setRecognitionBusy(true);
     setFieldManagerTab('recognition');
     try {
-      const started = await templateApi.restartRecognition(versionId);
+      const started = await templateApi.restartRecognition(versionId, { scope: 'WORKBOOK' });
       setRecognitionJob(started);
       let latest = started;
       for (let attempt = 0; attempt < 120; attempt++) {
@@ -1141,8 +1129,15 @@ export function TemplateWorkspacePage() {
     const resolvesConflict = Boolean(
       currentField.semanticConflict && (update.fieldCode || update.name),
     );
+    const changedProtectedAttributes = (['name', 'unit', 'valueType'] as const)
+      .filter((key) => Object.prototype.hasOwnProperty.call(update, key));
+    const manualOverrides = Array.from(new Set([
+      ...(currentField.manualOverrides ?? []),
+      ...changedProtectedAttributes,
+    ]));
     const normalizedUpdate = {
       ...update,
+      ...(manualOverrides.length ? { manualOverrides } : {}),
       ...(resolvesConflict
         ? { semanticConflict: false, conflictCode: undefined, conflictMessage: undefined }
         : {}),
@@ -1169,6 +1164,10 @@ export function TemplateWorkspacePage() {
                 (group) => group.id === (update.groupId ?? currentField.groupId),
               )?.name,
               description: update.description ?? currentField.description,
+              unit: update.unit ?? currentField.unit,
+              valueType: update.valueType ?? currentField.valueType,
+              manualOverrides,
+              humanConfirmed: true,
               ...(Object.prototype.hasOwnProperty.call(update, 'standardFieldId')
                 ? { standardFieldId: update.standardFieldId }
                 : {}),
@@ -1270,12 +1269,9 @@ export function TemplateWorkspacePage() {
         },
       );
       const locator: Record<string, unknown> =
-        update.address !== undefined
-          ? reflowStructuredLocator(baseLocator, field.kind, binding.locator)
+        update.address !== undefined || update.labelAddress !== undefined
+          ? synchronizeLocatorCoordinates(baseLocator, update)
           : baseLocator;
-      if (update.address !== undefined && !locator.logicalInputRange) {
-        locator.logicalInputRange = locator.address;
-      }
       const address = locatorValueRange(locator);
       const labelAddress = locatorLabelRange(locator);
       const invalid = Boolean(
@@ -1301,12 +1297,16 @@ export function TemplateWorkspacePage() {
       labelRange: nextLabelAddress || undefined,
       valueRange: nextAddress || undefined,
       reviewStatus: nextBinding.bindingStatus === 'INVALID' ? 'ISSUE' : 'CONFIRMED',
-      ...(field.kind === 'MATRIX' ? { matrixModel: matrixModelFromLocator(nextLocator) } : {}),
     };
     const updated = updateBusinessField(baseSchema, baseModel, field.id, modelUpdate);
     setSchema(updated.schema);
     setMapping(nextMapping);
     setFieldModel(updated.model);
+    // Coordinate edits must be visible immediately.  Focusing the freshly
+    // built binding also clears the previous overlay, so all editor paths
+    // (field properties, recognition confirmation and the cell picker) use
+    // the same new locator.
+    window.requestAnimationFrame(() => editorRef.current?.focusBinding(nextBinding));
     recordRecognitionAction(field.recognitionItemId, 'CONFIRM', 'CONFIRMED');
     markDirty();
   };
@@ -1552,7 +1552,7 @@ export function TemplateWorkspacePage() {
 
   const addStructuredField = (
     parent: BusinessField,
-    kind: 'REPEAT_FIELD' | 'MATRIX_FIELD',
+    kind: 'REPEAT_FIELD',
   ) => {
     if (!versionId || !parent.bindingId) return;
     const parentBinding = mapping.find((binding) => binding.bindingId === parent.bindingId);
@@ -1562,7 +1562,7 @@ export function TemplateWorkspacePage() {
         ownerId: versionId,
         origin: 'TEMPLATE_LOCAL',
         kind,
-        name: kind === 'MATRIX_FIELD' ? '新矩阵指标' : '新明细字段',
+        name: '新明细字段',
         parentField: parent,
         parentBinding,
       });
@@ -1948,8 +1948,7 @@ export function TemplateWorkspacePage() {
               </Suspense>
             </main>
 
-            {workspace.format !== 'DOCX' && (
-              <TemplateFieldManager
+            <TemplateFieldManager
                 editable={editable}
                 format={workspace.format}
                 fieldModel={fieldModel}
@@ -1983,7 +1982,6 @@ export function TemplateWorkspacePage() {
                 onManageGroups={openGroupManager}
                 onPlaceWordField={(field) => void placeWordField(field)}
               />
-            )}
           </div>
         </div>
       )}
@@ -2198,15 +2196,33 @@ function RecognitionStatusBar({
 }) {
   const summary = review?.summary;
   const recognitionFailed = review?.runStatus === 'FAILED';
+  const structureConflict = (review?.statistics?.structureConflictGroups ?? 0) > 0;
+  const fieldConflict = (summary?.conflict ?? 0) > 0;
+  const blockingIssue = (summary?.blockingIssueCount ?? 0) > 0;
   const tone = recognitionFailed
     ? 'pending'
-    : (summary?.conflict ?? 0) > 0 || (summary?.blockingIssueCount ?? 0) > 0
+    : structureConflict
       ? 'conflict'
-      : (summary?.pending ?? 0) > 0
+      : fieldConflict || blockingIssue || (summary?.pending ?? 0) > 0
         ? 'pending'
         : review?.recognitionRunId
           ? 'complete'
-          : 'empty';
+        : 'empty';
+  const statusTitle = busy
+    ? '正在重新识别模板'
+    : recognitionFailed
+      ? '智能识别未完成'
+      : tone === 'conflict'
+        ? '结构识别待选择'
+        : fieldConflict
+          ? '字段待复核'
+          : blockingIssue
+            ? '识别结果待处理'
+            : tone === 'complete'
+              ? 'AI 识别已完成'
+              : review?.recognitionRunId
+                ? 'AI 识别待确认'
+                : '尚未生成识别结果';
   return (
     <div className="recognition-status-bar" data-tone={tone} role="status">
       <div className="recognition-status-content">
@@ -2219,19 +2235,7 @@ function RecognitionStatusBar({
             <RobotOutlined />
           )}
         </span>
-        <strong>
-          {busy
-            ? '正在重新识别模板'
-            : recognitionFailed
-              ? '智能识别未完成'
-              : tone === 'conflict'
-                ? '识别结果存在冲突'
-                : tone === 'complete'
-                  ? 'AI 识别已完成'
-                  : review?.recognitionRunId
-                    ? 'AI 识别待确认'
-                    : '尚未生成识别结果'}
-        </strong>
+        <strong>{statusTitle}</strong>
         {busy && job ? (
           <span>
             {recognitionStageLabel(job.currentStage)} · {job.progress}%
@@ -2240,15 +2244,13 @@ function RecognitionStatusBar({
           <span>工作簿和原有字段已保留，可重新识别</span>
         ) : tone === 'complete' ? (
           <span>
-            区域 {review?.statistics?.regionCount ?? 0} ｜ 字段 {review?.statistics?.fieldCount ?? 0} ｜
-            运行时槽位 {review?.statistics?.runtimeSlotCount ?? 0}
+            区域 {review?.statistics?.regionCount ?? 0} ｜ 字段 {review?.statistics?.fieldCount ?? 0}
           </span>
         ) : (
           <span>
             区域 {review?.statistics?.regionCount ?? 0} ｜ 字段 {review?.statistics?.fieldCount ?? 0} ｜
             待确认字段 {review?.statistics?.pendingFieldCount ?? 0} ｜ 结构冲突{' '}
-            {review?.statistics?.structureConflictGroups ?? 0} ｜ 运行时槽位{' '}
-            {review?.statistics?.runtimeSlotCount ?? 0}
+            {review?.statistics?.structureConflictGroups ?? 0}
           </span>
         )}
         {reviewSyncState === 'STALE' && <span className="recognition-sync-stale">审核状态需刷新</span>}
@@ -2279,7 +2281,7 @@ function RecognitionStatusBar({
             !editable ||
             !review?.items.some((item) =>
               (item.status === 'PENDING' || item.status === 'CONFLICT')
-                && !requiresServerStructureConfirmation(item),
+                && !requiresServerStructureConfirmation(item, review),
             )
           }
         >
@@ -2312,14 +2314,42 @@ function updateRecognitionReview(
   // its field cards in sync immediately after a local confirmation; otherwise
   // the field is accepted in the editor but still appears as “待确认” inside
   // the region card until the next API refresh.
-  const regions = review.regions?.map((region) => ({
-    ...region,
-    fields: region.fields.map((field) =>
+  const regions = review.regions?.map((region) => {
+    const fields = region.fields.map((field) =>
       updates.has(field.id)
         ? { ...field, status: updates.get(field.id) ?? field.status }
         : field,
-    ),
-  }));
+    );
+    // Region cards are a separate projection from the flat item list. Keep
+    // them in the same state immediately after a local confirmation. Without
+    // this, confirming “基本信息/重复记录区域” changes only the hidden root
+    // item while the card keeps rendering the old CONFLICT status until the
+    // next server refresh (and may still show “结构冲突，待选择”).
+    const alternativeSuggestionIds = new Set(
+      region.alternatives.flatMap((alternative) =>
+        alternative.regions.map((candidate) => candidate.suggestionId),
+      ),
+    );
+    const rootUpdate = items.find((item) =>
+      !item.child
+      && ['FORM_REGION', 'ROW_TABLE', 'COLUMN_TABLE'].includes(item.kind)
+      && updates.has(item.id)
+      && (alternativeSuggestionIds.has(item.id)
+        || item.suggestionIds.some((id) => alternativeSuggestionIds.has(id))),
+    );
+    if (!rootUpdate) return { ...region, fields };
+    const nextStatus = updates.get(rootUpdate.id) ?? rootUpdate.status;
+    return {
+      ...region,
+      fields,
+      status: nextStatus,
+      ...(nextStatus === 'CONFIRMED'
+        ? { canonicalStatus: 'CONFIRMED', structureStatus: 'CONFIRMED' }
+        : nextStatus === 'CONFLICT'
+          ? { structureStatus: 'CONFLICT' }
+          : {}),
+    };
+  });
   const active = items.filter((item) => item.status !== 'IGNORED');
   const regionFields = regions?.flatMap((region) => region.fields ?? []) ?? [];
   const statistics = review.statistics
@@ -2346,7 +2376,7 @@ function updateRecognitionReview(
       ignored: items.filter((item) => item.status === 'IGNORED').length,
       scalar: active.filter((item) => item.kind === 'SCALAR').length,
       rowTable: active.filter((item) => item.kind === 'ROW_TABLE').length,
-      matrix: active.filter((item) => item.kind === 'MATRIX').length,
+      columnTable: active.filter((item) => item.kind === 'COLUMN_TABLE').length,
       qualityIssueCount: review.qualityIssues.length,
       autoFixedCount: review.qualityIssues.filter((item) => item.status === 'AUTO_APPLIED').length,
       blockingIssueCount: review.qualityIssues.filter(
@@ -2500,9 +2530,7 @@ function duplicatePositionCount(mapping: TemplateBinding[]) {
   const positions = new Set<string>();
   let count = 0;
   for (const binding of mapping) {
-    const address = binding.mappingKind === 'MATRIX_FIELD'
-      ? stringValue(binding.locator.logicalInputRange || binding.locator.sourceRange || binding.locator.address || binding.locator.range)
-      : stringValue(binding.locator.address || binding.locator.range);
+    const address = stringValue(binding.locator.address || binding.locator.range);
     if (!address) continue;
     const key = `${stringValue(binding.locator.sheetId) || stringValue(binding.locator.sheetName)}:${address}`;
     if (positions.has(key)) count += 1;
@@ -2526,72 +2554,6 @@ function addCustomFieldSchema(schema: Record<string, unknown>, field: BusinessFi
   return next;
 }
 
-function reflowStructuredLocator(
-  locator: Record<string, unknown>,
-  kind: BusinessField['kind'],
-  previous?: Record<string, unknown>,
-) {
-  if (kind !== 'MATRIX') return locator;
-  const overall = parseA1Range(stringValue(locator.address));
-  if (!overall) return locator;
-  const previousOverall = parseA1Range(stringValue(previous?.address));
-  const previousData = parseA1Range(stringValue(previous?.dataRange));
-  const headerRows =
-    previousOverall && previousData
-      ? Math.max(1, previousData.startRow - previousOverall.startRow)
-      : 1;
-  const rowHeaderColumns =
-    previousOverall && previousData
-      ? Math.max(1, previousData.startColumn - previousOverall.startColumn)
-      : 1;
-  const dataStartRow = Math.min(overall.endRow, overall.startRow + headerRows);
-  const dataStartColumn = Math.min(overall.endColumn, overall.startColumn + rowHeaderColumns);
-  return {
-    ...locator,
-    rowHeaderRange: formatA1Range({
-      startRow: dataStartRow,
-      endRow: overall.endRow,
-      startColumn: overall.startColumn,
-      endColumn: Math.max(overall.startColumn, dataStartColumn - 1),
-    }),
-    columnHeaderRange: formatA1Range({
-      startRow: overall.startRow,
-      endRow: Math.max(overall.startRow, dataStartRow - 1),
-      startColumn: dataStartColumn,
-      endColumn: overall.endColumn,
-    }),
-    dataRange: formatA1Range({
-      startRow: dataStartRow,
-      endRow: overall.endRow,
-      startColumn: dataStartColumn,
-      endColumn: overall.endColumn,
-    }),
-  };
-}
-
-function matrixModelFromLocator(locator: Record<string, unknown>): MatrixModel {
-  const rowHeaderRange = stringValue(locator.rowHeaderRange);
-  const columnHeaderRange = stringValue(locator.columnHeaderRange);
-  const crossDataRange = stringValue(locator.crossDataRange);
-  return {
-    semanticMode: stringValue(locator.semanticMode) === 'RECORD_SET'
-      ? 'RECORD_SET'
-      : stringValue(locator.semanticMode) === 'CROSS_TAB' ? 'CROSS_TAB' : 'UNKNOWN',
-    layoutMode: stringValue(locator.layoutMode) === 'LONG_FORM'
-      ? 'LONG_FORM' : stringValue(locator.layoutMode) === 'CROSS_TAB' ? 'CROSS_TAB' : 'UNKNOWN',
-    recordAxis: ['ROW', 'COLUMN'].includes(stringValue(locator.recordAxis))
-      ? stringValue(locator.recordAxis) as MatrixModel['recordAxis'] : 'UNKNOWN',
-    rowHeaderRange,
-    columnHeaderRange,
-    crossDataRange,
-    headerRange: stringValue(locator.headerRange),
-    dataRange: stringValue(locator.dataRange),
-    cornerRange: stringValue(locator.cornerRange) || undefined,
-    columnMemberRole: 'COLUMN_MEMBER_INPUT',
-    memberMode: 'RUNTIME_INPUT',
-  };
-}
-
 interface A1Range {
   startRow: number;
   endRow: number;
@@ -2612,12 +2574,6 @@ function parseA1Range(value: string): A1Range | undefined {
     startColumn: Math.min(startColumn, endColumn),
     endColumn: Math.max(startColumn, endColumn),
   };
-}
-
-function formatA1Range(range: A1Range) {
-  const start = `${columnLetters(range.startColumn)}${range.startRow}`;
-  const end = `${columnLetters(range.endColumn)}${range.endRow}`;
-  return start === end ? start : `${start}:${end}`;
 }
 
 function findFormRegionForCell(
@@ -2647,40 +2603,8 @@ function columnNumber(value: string) {
   );
 }
 
-function columnLetters(column: number) {
-  let value = column;
-  let result = '';
-  while (value > 0) {
-    value -= 1;
-    result = String.fromCharCode(65 + (value % 26)) + result;
-    value = Math.floor(value / 26);
-  }
-  return result;
-}
-
 function stringValue(value: unknown) {
   return typeof value === 'string' ? value : '';
-}
-
-function emptyWordFieldModel(): FieldModel {
-  return {
-    modelVersion: 5,
-    groups: [],
-    fields: [],
-    blocks: [],
-    semanticAnnotations: [],
-  };
-}
-
-function normalizeWordSchema(schema: Record<string, unknown>) {
-  const normalized = { ...schema };
-  delete normalized['x-jsd-field-model'];
-  return {
-    ...normalized,
-    type: 'object',
-    documentType: 'WORD',
-    schemaVersion: 1,
-  };
 }
 
 function lastValue(value: unknown) {
@@ -2736,15 +2660,51 @@ function isUsableEditorSnapshot(
   return isRecord(snapshot.body) && typeof snapshot.body.dataStream === 'string';
 }
 
-function requiresServerStructureConfirmation(item: RecognitionReviewItem) {
+function requiresServerStructureConfirmation(
+  item: RecognitionReviewItem,
+  review?: RecognitionReview,
+  allowExistingSemantic = false,
+) {
+  // A provisional structure may already have a complete semantic projection
+  // in the review tree. Confirming that region should only accept the current
+  // geometry; re-running the model would duplicate/replace fields for no
+  // user-visible benefit. Recompilation remains required for an empty or
+  // stale projection.
+  if (allowExistingSemantic && review && hasCurrentRegionSemanticFields(review, item)) return false;
   return (
-    ['FORM_REGION', 'ROW_TABLE', 'COLUMN_TABLE', 'MATRIX', 'TABLE_REGION'].includes(item.kind) &&
+    ['FORM_REGION', 'ROW_TABLE', 'COLUMN_TABLE'].includes(item.kind) &&
     (Boolean(item.payload.candidateOnly) ||
       Boolean(item.payload.physicalStructureOnly) ||
       Boolean(item.payload.structureConflict) ||
       item.payload.canonicalStatus !== 'CONFIRMED' ||
       item.payload.structureStatus !== 'CONFIRMED')
   );
+}
+
+function hasCurrentRegionSemanticFields(review: RecognitionReview, item: RecognitionReviewItem) {
+  const payload = item.payload as unknown as Record<string, unknown>;
+  const locator = isRecord(payload.locator) ? payload.locator : {};
+  const regionId = stringValue(payload.regionId || payload.blockId || payload.candidateRef);
+  const itemRange = stringValue(
+    payload.regionRange || locator.range || locator.address,
+  ).replaceAll('$', '').toUpperCase();
+  const region = (review.regions ?? []).find((candidate) => {
+    if (regionId && stringValue(candidate.regionId || candidate.blockId) === regionId) return true;
+    const range = stringValue(candidate.range).replaceAll('$', '').toUpperCase();
+    return Boolean(itemRange && range && itemRange === range && candidate.kind === item.kind);
+  });
+  if (!region || !Array.isArray(region.fields) || region.fields.length === 0) return false;
+  if (['STALE', 'EXPIRED', 'OUTDATED'].includes(String(region.canonicalStatus || '').toUpperCase())
+    || ['STALE', 'EXPIRED', 'OUTDATED'].includes(String(region.structureStatus || '').toUpperCase())) return false;
+  return !region.fields.some((field) => {
+    const fieldPayload = field.payload as unknown as Record<string, unknown>;
+    const diff = fieldPayload.recognitionDiff;
+    const diffStatus = isRecord(diff) && typeof diff.status === 'string' ? diff.status : '';
+    const fieldStatus = typeof fieldPayload.fieldStatus === 'string' ? fieldPayload.fieldStatus : '';
+    return fieldPayload.semanticConflict === true
+      || diffStatus.toUpperCase() === 'STALE'
+      || ['STALE', 'EXPIRED', 'OUTDATED'].includes(fieldStatus.toUpperCase());
+  });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

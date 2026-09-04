@@ -47,7 +47,7 @@ export function normalizeFieldModel(model: FieldModel): FieldModel {
   const fields = next.fields.map((field) => {
     const fieldType: TemplateFieldType = field.fieldType
       || (field.displayRole === 'REGION'
-        || ['FORM_REGION', 'ROW_TABLE', 'COLUMN_TABLE', 'MATRIX', 'TABLE_REGION'].includes(field.kind)
+        || ['FORM_REGION', 'ROW_TABLE', 'COLUMN_TABLE'].includes(field.kind)
         || field.mappingKind === 'REPEAT_REGION'
         ? 'REGION'
         : field.mappingKind === 'REPEAT_FIELD'

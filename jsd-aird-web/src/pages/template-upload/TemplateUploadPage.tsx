@@ -197,14 +197,11 @@ export function TemplateUploadPage() {
   }), [jobFilter, jobKeyword, jobs]);
 
   const allUploadRecords: UploadWorkspaceRecord[] = filteredJobs.map((job) => {
-    const staleState = jobFreshness(job);
     const status = job.status === 'FAILED'
       ? { label: '识别失败', color: 'error' }
       : job.status === 'PARSED'
         ? { label: recognitionStatus(job) === 'COMPLETE' ? '已识别' : '待复核', color: recognitionStatus(job) === 'COMPLETE' ? 'success' : 'warning' }
-        : staleState === 'STOPPED' ? { label: '可能已停止响应', color: 'error' }
-          : staleState === 'SLOW' ? { label: '处理较慢', color: 'warning' }
-            : { label: '识别中', color: 'processing' };
+        : { label: '识别中', color: 'processing' };
     return {
       id: job.id,
       name: job.sourceFileName,
@@ -216,7 +213,7 @@ export function TemplateUploadPage() {
         <Button type="link" disabled={job.status !== 'PARSED'} onClick={() => void openRecognition(job)}>查看识别结果</Button>
         <Button type="link" disabled={job.status !== 'PARSED'} onClick={() => openCreate(job)}>创建模板</Button>
         <Button type="link" icon={<ReloadOutlined />} loading={retryingJobId === job.id} disabled={!['PARSED', 'FAILED'].includes(job.status)} onClick={() => void retryRecognition(job)}>重试</Button>
-        <Button type="link" danger icon={<DeleteOutlined />} loading={deletingJobId === job.id} disabled={!['PARSED', 'FAILED'].includes(job.status)} aria-label={`删除 ${job.sourceFileName}`} onClick={() => Modal.confirm({ title: `删除“${job.sourceFileName}”的识别记录？`, content: '只删除识别记录，不删除原始文件；已生成模板的记录不能删除。', okText: '删除记录', okButtonProps: { danger: true }, cancelText: '取消', onOk: () => deleteRecognition(job) })} />
+        {job.allowedActions?.includes('DELETE') ? <Button type="link" danger icon={<DeleteOutlined />} loading={deletingJobId === job.id} aria-label={`删除 ${job.sourceFileName}`} onClick={() => Modal.confirm({ title: `删除“${job.sourceFileName}”的识别记录？`, content: '只删除识别记录，不删除原始文件；已生成模板的记录不能删除。', okText: '删除记录', okButtonProps: { danger: true }, cancelText: '取消', onOk: () => deleteRecognition(job) })} /> : null}
       </Space>,
     };
   });
@@ -338,7 +335,7 @@ export function TemplateUploadPage() {
         onRemoveFile={(file) => setFiles((current) => current.filter((item) => item.uid !== file.uid))}
         onClearFiles={() => setFiles([])}
         uploadMainText="拖拽文件到此处，或点击选择文件"
-        uploadHint="支持 XLSX、XLS、CSV、DOCX、DOC；旧格式由服务端标准化为模板工作区；支持批量上传。"
+        uploadHint="支持 XLSX、XLS、CSV、DOCX、DOC；支持批量上传。"
         submitLabel="开始识别"
         submitIcon={<CloudUploadOutlined />}
         onSubmit={() => void startUpload()}
@@ -504,15 +501,6 @@ function stageLabel(stage?: string) {
 
 function formatLabel(format?: string) {
   return ({ XLSX: 'Excel', DOCX: 'Word', PDF: 'PDF', UNKNOWN: '未知格式' } as Record<string, string>)[format ?? ''] ?? '未知格式';
-}
-
-function jobFreshness(job: TemplateImportJob): 'NORMAL' | 'SLOW' | 'STOPPED' {
-  if (['PARSED', 'FAILED'].includes(job.status)) return 'NORMAL';
-  const heartbeat = Date.parse(job.lastHeartbeatAt || job.createdAt);
-  const age = Date.now() - heartbeat;
-  if (age >= 120_000) return 'STOPPED';
-  if (age >= 60_000) return 'SLOW';
-  return 'NORMAL';
 }
 
 function jobElapsed(job: TemplateImportJob) {

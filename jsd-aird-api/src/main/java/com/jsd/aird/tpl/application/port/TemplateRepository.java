@@ -9,6 +9,7 @@ import java.util.UUID;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.jsd.aird.tpl.domain.TemplateFormat;
 import com.jsd.aird.tpl.domain.TemplateStatus;
+import com.jsd.aird.shared.api.AllowedActions;
 
 public interface TemplateRepository {
 
@@ -132,6 +133,10 @@ public interface TemplateRepository {
             String createdByName,
             Instant createdAt
     ) {
+        public List<String> getAllowedActions() {
+            return AllowedActions.template(status == null ? null : status.name(), hasDraft,
+                    currentPublishedVersionId != null);
+        }
     }
 
     record TemplateQuery(
@@ -200,6 +205,7 @@ public interface TemplateRepository {
     record TemplateSummary(UUID id, String name, UUID categoryId, String category) {}
 
     record TemplateCategoryItem(UUID id, String name, String description, int sortOrder, int templateCount) {
+        public List<String> getAllowedActions() { return AllowedActions.category(false); }
     }
 
     record NewTemplate(
@@ -277,6 +283,10 @@ public interface TemplateRepository {
             long lockVersion,
             boolean reconciliationRequired
     ) {
+        public List<String> getAllowedActions() {
+            return AllowedActions.template(status == null ? null : status.name(),
+                    status == TemplateStatus.DRAFT, status == TemplateStatus.PUBLISHED);
+        }
     }
 
     record TemplateVersionHistoryItem(

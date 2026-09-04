@@ -11,33 +11,40 @@ import java.nio.charset.CharacterCodingException;
 import java.nio.charset.Charset;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import com.jsd.aird.ops.application.port.FileStorageFacade;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
 import org.apache.poi.hwpf.HWPFDocument;
-import org.apache.poi.hwpf.usermodel.Range;
-import org.apache.poi.hwpf.usermodel.Picture;
 import org.apache.poi.hwpf.usermodel.Table;
 import org.apache.poi.hwpf.usermodel.TableCell;
 import org.apache.poi.hwpf.usermodel.TableIterator;
 import org.apache.poi.hwpf.usermodel.TableRow;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.CellType;
+import org.apache.poi.ss.usermodel.BorderStyle;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.apache.poi.hssf.usermodel.HSSFWorkbook;
+import org.apache.poi.xwpf.usermodel.IBodyElement;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.apache.poi.xwpf.usermodel.XWPFParagraph;
 import org.apache.poi.xwpf.usermodel.XWPFTable;
-import org.apache.poi.xwpf.usermodel.XWPFTableRow;
 import org.apache.poi.xwpf.usermodel.XWPFTableCell;
-import org.apache.poi.util.Units;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 /**
@@ -52,9 +59,24 @@ public class TemplateFileNormalizationService {
     private static final String DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
     private final FileStorageFacade storage;
+    private final String libreOfficeExecutable;
+    private final Duration libreOfficeTimeout;
 
-    public TemplateFileNormalizationService(FileStorageFacade storage) {
+    @Autowired
+    public TemplateFileNormalizationService(
+            FileStorageFacade storage,
+            @Value("${app.template-normalization.libreoffice.executable:soffice}") String libreOfficeExecutable,
+            @Value("${app.template-normalization.libreoffice.timeout:90s}") Duration libreOfficeTimeout
+    ) {
         this.storage = storage;
+        this.libreOfficeExecutable = libreOfficeExecutable == null || libreOfficeExecutable.isBlank()
+                ? "soffice" : libreOfficeExecutable.strip();
+        this.libreOfficeTimeout = libreOfficeTimeout == null || libreOfficeTimeout.isNegative()
+                || libreOfficeTimeout.isZero() ? Duration.ofSeconds(90) : libreOfficeTimeout;
+    }
+
+    TemplateFileNormalizationService(FileStorageFacade storage) {
+        this(storage, "soffice", Duration.ofSeconds(90));
     }
 
     public Result normalize(String originalName, String contentType, byte[] source) {
@@ -79,27 +101,180 @@ public class TemplateFileNormalizationService {
 
     private Result convertWorkbook(String name, byte[] bytes, String sourceFormat) {
         validateMagic(sourceFormat, bytes);
-        try (Workbook input = new HSSFWorkbook(new ByteArrayInputStream(bytes));
-             XSSFWorkbook output = new XSSFWorkbook();
-             ByteArrayOutputStream result = new ByteArrayOutputStream()) {
-            for (int sheetIndex = 0; sheetIndex < input.getNumberOfSheets(); sheetIndex++) {
-                Sheet source = input.getSheetAt(sheetIndex);
-                Sheet target = output.createSheet(source.getSheetName());
-                for (Row sourceRow : source) {
-                    Row targetRow = target.createRow(sourceRow.getRowNum());
-                    for (Cell sourceCell : sourceRow) {
-                        Cell targetCell = targetRow.createCell(sourceCell.getColumnIndex());
-                        copyCellValue(sourceCell, targetCell);
-                    }
+        var sourceFacts = legacyWorkbookFacts(bytes);
+        var normalized = convertWithLibreOffice(bytes, "xls", "xlsx", sourceFormat);
+        validateMagic("XLSX", normalized);
+        validateXlsConversion(sourceFacts, normalized);
+        return new Result(name, replaceExtension(name, "xlsx"), XLSX_MIME,
+                sourceFormat, "XLSX", normalized, "NORMALIZED", "已通过 LibreOffice 高保真转换为标准 XLSX 工作区");
+    }
+
+    /**
+     * Converts legacy binary Office files without rebuilding the document with
+     * POI.  A POI value-only copy silently discards borders, fills, merges,
+     * dimensions and other layout facts that the template recognizer needs.
+     */
+    private byte[] convertWithLibreOffice(
+            byte[] bytes, String sourceExtension, String targetExtension, String sourceFormat
+    ) {
+        Path workDirectory = null;
+        Process process = null;
+        try {
+            workDirectory = Files.createTempDirectory("jsd-aird-" + sourceExtension + "-convert-")
+                    .toAbsolutePath().normalize();
+            Path sourceFile = workDirectory.resolve("source." + sourceExtension);
+            Path outputFile = workDirectory.resolve("source." + targetExtension);
+            Path profileDirectory = workDirectory.resolve("libreoffice-profile");
+            Files.write(sourceFile, bytes);
+            Files.createDirectories(profileDirectory);
+
+            process = new ProcessBuilder(
+                    libreOfficeExecutable,
+                    "--headless",
+                    "--nologo",
+                    "--nodefault",
+                    "--nofirststartwizard",
+                    "-env:UserInstallation=" + profileDirectory.toUri(),
+                    "--convert-to",
+                    targetExtension,
+                    "--outdir",
+                    workDirectory.toString(),
+                    sourceFile.toString()
+            ).redirectErrorStream(true).start();
+
+            boolean completed = process.waitFor(Math.max(1, libreOfficeTimeout.toMillis()), TimeUnit.MILLISECONDS);
+            if (!completed) {
+                process.destroyForcibly();
+                throw new ApiException(ApiErrorCode.FILE_NOT_READY,
+                        sourceFormat + " 转换超时（" + libreOfficeTimeout.toSeconds()
+                                + " 秒），请检查 LibreOffice 服务");
+            }
+            String converterOutput = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8).strip();
+            if (process.exitValue() != 0 || !Files.isRegularFile(outputFile)) {
+                throw new ApiException(ApiErrorCode.BAD_REQUEST,
+                        "LibreOffice 无法转换 " + sourceFormat + " 文件"
+                                + (converterOutput.isBlank() ? "" : "：" + converterOutput));
+            }
+            return Files.readAllBytes(outputFile);
+        } catch (ApiException exception) {
+            throw exception;
+        } catch (IOException exception) {
+            throw new ApiException(ApiErrorCode.FILE_NOT_READY,
+                    "LibreOffice 转换器不可用，请配置 app.template-normalization.libreoffice.executable");
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new ApiException(ApiErrorCode.FILE_NOT_READY,
+                    sourceFormat + " 转换任务已中断，请稍后重试");
+        } finally {
+            if (process != null && process.isAlive()) process.destroyForcibly();
+            deleteTemporaryDirectory(workDirectory);
+        }
+    }
+
+    private LegacyWorkbookFacts legacyWorkbookFacts(byte[] bytes) {
+        try (var workbook = new HSSFWorkbook(new ByteArrayInputStream(bytes))) {
+            return workbookFacts(workbook);
+        } catch (IOException | RuntimeException exception) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "XLS 文件损坏或无法读取");
+        }
+    }
+
+    private LegacyWorkbookFacts workbookFacts(Workbook workbook) {
+        var sheetNames = new ArrayList<String>();
+        int nonEmptyCells = 0;
+        int styledCells = 0;
+        int borderedCells = 0;
+        int mergedRegions = 0;
+        int formulaCount = 0;
+        int customRowDimensions = 0;
+        int customColumnDimensions = 0;
+        for (int sheetIndex = 0; sheetIndex < workbook.getNumberOfSheets(); sheetIndex++) {
+            var sheet = workbook.getSheetAt(sheetIndex);
+            sheetNames.add(sheet.getSheetName());
+            mergedRegions += sheet.getNumMergedRegions();
+            for (Row row : sheet) {
+                if (row.getZeroHeight() || row.getHeight() != sheet.getDefaultRowHeight()) customRowDimensions++;
+                for (Cell cell : row) {
+                    if (hasCellValue(cell)) nonEmptyCells++;
+                    if (cell.getCellType() == CellType.FORMULA) formulaCount++;
+                    if (cell.getCellStyle() != null && cell.getCellStyle().getIndex() != 0) styledCells++;
+                    if (hasBorder(cell.getCellStyle())) borderedCells++;
                 }
             }
-            if (output.getNumberOfSheets() == 0) output.createSheet("Sheet1");
-            output.write(result);
-            return new Result(name, replaceExtension(name, "xlsx"), XLSX_MIME,
-                    sourceFormat, "XLSX", result.toByteArray(), "NORMALIZED", "已转换为标准 XLSX 工作区");
-        } catch (IOException exception) {
-            throw new ApiException(ApiErrorCode.BAD_REQUEST, "XLS 文件损坏或无法转换为标准 XLSX");
+            // BIFF8 workbooks have 256 columns. Inspect the complete legacy
+            // grid so a width/hidden flag on an otherwise empty layout column
+            // is still part of the conversion-fidelity check.
+            for (int column = 0; column < 256; column++) {
+                if (sheet.isColumnHidden(column)
+                        || sheet.getColumnWidth(column) != sheet.getDefaultColumnWidth() * 256) {
+                    customColumnDimensions++;
+                }
+            }
         }
+        return new LegacyWorkbookFacts(sheetNames, nonEmptyCells, styledCells, borderedCells,
+                mergedRegions, formulaCount, customRowDimensions, customColumnDimensions);
+    }
+
+    private void validateXlsConversion(LegacyWorkbookFacts source, byte[] converted) {
+        try (var workbook = new XSSFWorkbook(new ByteArrayInputStream(converted))) {
+            if (workbook.getNumberOfSheets() != source.sheetNames().size()) {
+                throw invalidXlsConversion("工作表数量变化");
+            }
+            for (int index = 0; index < source.sheetNames().size(); index++) {
+                if (!source.sheetNames().get(index).equals(workbook.getSheetName(index))) {
+                    throw invalidXlsConversion("工作表名称或顺序变化");
+                }
+            }
+            var target = workbookFacts(workbook);
+            if (source.nonEmptyCells() > 0
+                    && target.nonEmptyCells() < minimumRetained(source.nonEmptyCells(), 0.98d)) {
+                throw invalidXlsConversion("转换后非空单元格丢失");
+            }
+            if (source.mergedRegions() > 0
+                    && target.mergedRegions() < minimumRetained(source.mergedRegions(), 0.90d)) {
+                throw invalidXlsConversion("转换后合并关系丢失");
+            }
+            if (source.styledCells() > 0
+                    && target.styledCells() < minimumRetained(source.styledCells(), 0.90d)) {
+                throw invalidXlsConversion("转换后单元格样式丢失");
+            }
+            if (source.borderedCells() > 0
+                    && target.borderedCells() < minimumRetained(source.borderedCells(), 0.90d)) {
+                throw invalidXlsConversion("转换后边框结构丢失");
+            }
+            if (source.formulaCount() > 0 && target.formulaCount() < source.formulaCount()) {
+                throw invalidXlsConversion("转换后公式丢失");
+            }
+            if (source.customRowDimensions() > 0 && target.customRowDimensions() == 0) {
+                throw invalidXlsConversion("转换后行高或隐藏行设置丢失");
+            }
+            if (source.customColumnDimensions() > 0 && target.customColumnDimensions() == 0) {
+                throw invalidXlsConversion("转换后列宽或隐藏列设置丢失");
+            }
+        } catch (ApiException exception) {
+            throw exception;
+        } catch (IOException | RuntimeException exception) {
+            throw invalidXlsConversion("转换结果不是可解析的 XLSX 文件");
+        }
+    }
+
+    private int minimumRetained(int sourceCount, double ratio) {
+        return Math.max(1, (int) Math.ceil(sourceCount * ratio));
+    }
+
+    private boolean hasCellValue(Cell cell) {
+        return switch (cell.getCellType()) {
+            case STRING -> !cell.getStringCellValue().isBlank();
+            case NUMERIC, BOOLEAN, FORMULA, ERROR -> true;
+            case BLANK, _NONE -> false;
+        };
+    }
+
+    private boolean hasBorder(org.apache.poi.ss.usermodel.CellStyle style) {
+        return style != null && (style.getBorderTop() != BorderStyle.NONE
+                || style.getBorderRight() != BorderStyle.NONE
+                || style.getBorderBottom() != BorderStyle.NONE
+                || style.getBorderLeft() != BorderStyle.NONE);
     }
 
     private Result convertCsv(String name, byte[] bytes) {
@@ -125,58 +300,218 @@ public class TemplateFileNormalizationService {
 
     private Result convertDoc(String name, byte[] bytes) {
         validateMagic("DOC", bytes);
-        try (HWPFDocument input = new HWPFDocument(new ByteArrayInputStream(bytes));
-             XWPFDocument output = new XWPFDocument();
-             ByteArrayOutputStream result = new ByteArrayOutputStream()) {
-            Range range = input.getRange();
-            String text = range.text();
-            for (String paragraph : text.split("\\r?\\n")) {
-                if (paragraph.isBlank()) continue;
-                XWPFParagraph target = output.createParagraph();
-                target.createRun().setText(paragraph);
+        LegacyDocFacts sourceFacts = legacyDocFacts(bytes);
+        Path workDirectory = null;
+        Process process = null;
+        try {
+            workDirectory = Files.createTempDirectory("jsd-aird-doc-convert-").toAbsolutePath().normalize();
+            Path sourceFile = workDirectory.resolve("source.doc");
+            Path outputFile = workDirectory.resolve("source.docx");
+            Path profileDirectory = workDirectory.resolve("libreoffice-profile");
+            Files.write(sourceFile, bytes);
+            Files.createDirectories(profileDirectory);
+
+            process = new ProcessBuilder(
+                    libreOfficeExecutable,
+                    "--headless",
+                    "--nologo",
+                    "--nodefault",
+                    "--nofirststartwizard",
+                    "-env:UserInstallation=" + profileDirectory.toUri(),
+                    "--convert-to",
+                    "docx",
+                    "--outdir",
+                    workDirectory.toString(),
+                    sourceFile.toString()
+            ).redirectErrorStream(true).start();
+
+            boolean completed = process.waitFor(Math.max(1, libreOfficeTimeout.toMillis()), TimeUnit.MILLISECONDS);
+            if (!completed) {
+                process.destroyForcibly();
+                throw new ApiException(ApiErrorCode.FILE_NOT_READY,
+                        "DOC 转换超时（" + libreOfficeTimeout.toSeconds() + " 秒），请检查 LibreOffice 服务");
             }
-            copyDocTables(input, output);
-            copyDocPictures(input, output);
-            output.write(result);
+            String converterOutput = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8).strip();
+            if (process.exitValue() != 0 || !Files.isRegularFile(outputFile)) {
+                throw new ApiException(ApiErrorCode.BAD_REQUEST,
+                        "LibreOffice 无法转换 DOC 文件" + (converterOutput.isBlank() ? "" : "：" + converterOutput));
+            }
+
+            byte[] normalized = Files.readAllBytes(outputFile);
+            validateMagic("DOCX", normalized);
+            validateDocConversion(sourceFacts, normalized);
             return new Result(name, replaceExtension(name, "docx"), DOCX_MIME,
-                    "DOC", "DOCX", result.toByteArray(), "NORMALIZED", "已转换为标准 DOCX 工作区");
-        } catch (IOException | RuntimeException exception) {
-            throw new ApiException(ApiErrorCode.BAD_REQUEST, "DOC 文件损坏或无法转换为标准 DOCX");
+                    "DOC", "DOCX", normalized, "NORMALIZED", "已通过 LibreOffice 转换为标准 DOCX 工作区");
+        } catch (ApiException exception) {
+            throw exception;
+        } catch (IOException exception) {
+            throw new ApiException(ApiErrorCode.FILE_NOT_READY,
+                    "LibreOffice 转换器不可用，请配置 app.template-normalization.libreoffice.executable");
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new ApiException(ApiErrorCode.FILE_NOT_READY, "DOC 转换任务已中断，请稍后重试");
+        } finally {
+            if (process != null && process.isAlive()) process.destroyForcibly();
+            deleteTemporaryDirectory(workDirectory);
         }
     }
 
-    private void copyDocTables(HWPFDocument input, XWPFDocument output) {
-        TableIterator iterator = new TableIterator(input.getRange());
-        while (iterator.hasNext()) {
-            Table source = iterator.next();
-            int rows = Math.max(1, source.numRows());
-            int columns = source.numRows() == 0 ? 1 : Math.max(1, source.getRow(0).numCells());
-            XWPFTable target = output.createTable(rows, columns);
-            for (int rowIndex = 0; rowIndex < source.numRows(); rowIndex++) {
-                TableRow sourceRow = source.getRow(rowIndex);
-                XWPFTableRow targetRow = target.getRow(rowIndex);
-                for (int cellIndex = 0; cellIndex < sourceRow.numCells(); cellIndex++) {
-                    TableCell sourceCell = sourceRow.getCell(cellIndex);
-                    XWPFTableCell targetCell = targetRow.getCell(cellIndex);
-                    targetCell.setText(sourceCell.text().replace('\u0007', ' ').trim());
+    private LegacyDocFacts legacyDocFacts(byte[] bytes) {
+        try (HWPFDocument document = new HWPFDocument(new ByteArrayInputStream(bytes))) {
+            String text = normalizeDocumentText(document.getRange().text());
+            int tableCount = 0;
+            int maxTableLevel = 0;
+            int nonEmptyCells = 0;
+            int mergedCells = 0;
+            TableIterator tables = new TableIterator(document.getRange());
+            while (tables.hasNext()) {
+                Table table = tables.next();
+                tableCount++;
+                maxTableLevel = Math.max(maxTableLevel, table.getTableLevel());
+                for (int rowIndex = 0; rowIndex < table.numRows(); rowIndex++) {
+                    TableRow row = table.getRow(rowIndex);
+                    for (int cellIndex = 0; cellIndex < row.numCells(); cellIndex++) {
+                        TableCell cell = row.getCell(cellIndex);
+                        if (!normalizeDocumentText(cell.text()).isBlank()) nonEmptyCells++;
+                        if (cell.isMerged() || cell.isVerticallyMerged()) mergedCells++;
+                    }
+                }
+            }
+            return new LegacyDocFacts(text, tableCount, maxTableLevel, nonEmptyCells, mergedCells,
+                    countCharacter(text, '?'));
+        } catch (IOException | RuntimeException exception) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "DOC 文件损坏或无法读取");
+        }
+    }
+
+    private void validateDocConversion(LegacyDocFacts source, byte[] converted) {
+        try (XWPFDocument document = new XWPFDocument(new ByteArrayInputStream(converted))) {
+            var target = docxFacts(document);
+            if (target.text().isBlank() || characterCoverage(source.text(), target.text()) < 0.98d) {
+                throw invalidDocConversion("转换后正文覆盖不足");
+            }
+            if (target.text().length() > source.text().length() * 1.20d + 100) {
+                throw invalidDocConversion("转换后正文异常重复");
+            }
+            if (source.tableCount() > 0 && target.tableCount() < source.tableCount()) {
+                throw invalidDocConversion("转换后表格数量减少");
+            }
+            if (source.maxTableLevel() > 0 && target.maxTableDepth() < source.maxTableLevel()) {
+                throw invalidDocConversion("转换后表格层级丢失");
+            }
+            int minimumCells = (int) Math.floor(source.nonEmptyCells() * 0.90d);
+            if (source.nonEmptyCells() > 0 && target.nonEmptyCells() < minimumCells) {
+                throw invalidDocConversion("转换后非空单元格丢失");
+            }
+            if (source.mergedCells() > 0 && target.mergedCells() == 0) {
+                throw invalidDocConversion("转换后合并单元格关系丢失");
+            }
+            if (target.questionMarks() > source.questionMarks() + 2) {
+                throw invalidDocConversion("转换后出现异常问号，可能包含未清理的 Word 控制字符");
+            }
+            if (source.tableCount() > 0 && target.firstParagraphLength() > source.text().length() * 0.60d) {
+                throw invalidDocConversion("整篇正文被错误复制到首段");
+            }
+        } catch (ApiException exception) {
+            throw exception;
+        } catch (IOException | RuntimeException exception) {
+            throw invalidDocConversion("转换结果不是可解析的 DOCX 文件");
+        }
+    }
+
+    private DocxFacts docxFacts(XWPFDocument document) {
+        StringBuilder text = new StringBuilder();
+        int firstParagraphLength = 0;
+        for (IBodyElement element : document.getBodyElements()) {
+            if (element instanceof XWPFParagraph paragraph) {
+                String value = normalizeDocumentText(paragraph.getText());
+                if (firstParagraphLength == 0 && !value.isBlank()) firstParagraphLength = value.length();
+                text.append(value);
+            } else if (element instanceof XWPFTable table) {
+                appendTableText(table, text);
+            }
+        }
+        var counters = new int[4];
+        for (XWPFTable table : document.getTables()) collectTableFacts(table, 1, counters);
+        String normalized = normalizeDocumentText(text.toString());
+        return new DocxFacts(normalized, counters[0], counters[1], counters[2], counters[3],
+                countCharacter(normalized, '?'), firstParagraphLength);
+    }
+
+    private void appendTableText(XWPFTable table, StringBuilder text) {
+        for (var row : table.getRows()) {
+            for (var cell : row.getTableCells()) {
+                for (IBodyElement element : cell.getBodyElements()) {
+                    if (element instanceof XWPFParagraph paragraph) text.append(paragraph.getText());
+                    else if (element instanceof XWPFTable nested) appendTableText(nested, text);
                 }
             }
         }
     }
 
-    private void copyDocPictures(HWPFDocument input, XWPFDocument output) {
-        for (Picture picture : input.getPicturesTable().getAllPictures()) {
-            try {
-                int pictureType = picture.getMimeType() != null && picture.getMimeType().contains("png")
-                        ? org.apache.poi.xwpf.usermodel.Document.PICTURE_TYPE_PNG
-                        : org.apache.poi.xwpf.usermodel.Document.PICTURE_TYPE_JPEG;
-                XWPFParagraph paragraph = output.createParagraph();
-                paragraph.createRun().addPicture(new ByteArrayInputStream(picture.getContent()), pictureType,
-                        "image." + picture.suggestFileExtension(),
-                        Units.toEMU(Math.max(1, picture.getWidth())), Units.toEMU(Math.max(1, picture.getHeight())));
-            } catch (Exception ignored) {
-                // Unsupported legacy picture encodings must not abort text/table normalization.
+    private void collectTableFacts(XWPFTable table, int depth, int[] counters) {
+        counters[0]++;
+        counters[1] = Math.max(counters[1], depth);
+        for (var row : table.getRows()) {
+            for (XWPFTableCell cell : row.getTableCells()) {
+                if (!normalizeDocumentText(cell.getText()).isBlank()) counters[2]++;
+                var properties = cell.getCTTc().getTcPr();
+                if (properties != null && (properties.isSetGridSpan() || properties.isSetVMerge())) counters[3]++;
+                for (XWPFTable nested : cell.getTables()) collectTableFacts(nested, depth + 1, counters);
             }
+        }
+    }
+
+    private double characterCoverage(String source, String target) {
+        if (source.isBlank()) return target.isBlank() ? 1d : 0d;
+        Map<Integer, Integer> available = new HashMap<>();
+        target.codePoints().forEach(value -> available.merge(value, 1, Integer::sum));
+        int matched = 0;
+        for (int value : source.codePoints().toArray()) {
+            int count = available.getOrDefault(value, 0);
+            if (count > 0) {
+                matched++;
+                available.put(value, count - 1);
+            }
+        }
+        return matched / (double) source.codePointCount(0, source.length());
+    }
+
+    private String normalizeDocumentText(String value) {
+        if (value == null) return "";
+        return value.replace("\u0007", "")
+                .replace("\u000B", "")
+                .replace("\uFFFD", "")
+                .replaceAll("\\s+", "")
+                .strip();
+    }
+
+    private int countCharacter(String value, char character) {
+        int count = 0;
+        for (int index = 0; index < value.length(); index++) if (value.charAt(index) == character) count++;
+        return count;
+    }
+
+    private ApiException invalidDocConversion(String reason) {
+        return new ApiException(ApiErrorCode.BAD_REQUEST, "DOC 高保真转换校验失败：" + reason);
+    }
+
+    private ApiException invalidXlsConversion(String reason) {
+        return new ApiException(ApiErrorCode.BAD_REQUEST, "XLS 高保真转换校验失败：" + reason);
+    }
+
+    private void deleteTemporaryDirectory(Path directory) {
+        if (directory == null || !Files.exists(directory)) return;
+        try (var paths = Files.walk(directory)) {
+            paths.sorted(Comparator.reverseOrder()).forEach(path -> {
+                try {
+                    Files.deleteIfExists(path);
+                } catch (IOException ignored) {
+                    // Best-effort cleanup of the unique conversion directory.
+                }
+            });
+        } catch (IOException ignored) {
+            // Best-effort cleanup of the unique conversion directory.
         }
     }
 
@@ -279,4 +614,22 @@ public class TemplateFileNormalizationService {
             String normalizationStatus,
             String normalizationMessage
     ) { }
+
+    private record LegacyWorkbookFacts(
+            List<String> sheetNames,
+            int nonEmptyCells,
+            int styledCells,
+            int borderedCells,
+            int mergedRegions,
+            int formulaCount,
+            int customRowDimensions,
+            int customColumnDimensions
+    ) { }
+
+    private record LegacyDocFacts(String text, int tableCount, int maxTableLevel, int nonEmptyCells,
+                                  int mergedCells, int questionMarks) { }
+
+    private record DocxFacts(String text, int tableCount, int maxTableDepth, int nonEmptyCells,
+                             int mergedCells, int questionMarks,
+                             int firstParagraphLength) { }
 }

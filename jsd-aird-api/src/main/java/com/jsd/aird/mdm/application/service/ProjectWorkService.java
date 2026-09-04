@@ -34,6 +34,13 @@ public class ProjectWorkService {
   if(rows==0) throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"任务已被他人修改，请刷新后重试");
   return getTask(id);
  }
+ @Transactional
+ public void deleteTask(UUID id,long version){
+  ProjectTask existing=mapper.task(id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"任务不存在"));
+  if (existing.experimentCount() > 0) throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"任务下存在实验，不能删除");
+  int rows=mapper.deleteTask(id,version);
+  if(rows==0) throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"任务已被他人修改，请刷新后重试");
+ }
 
  public List<ProjectTaskSummary> searchTasks(ProjectTaskQuery query) {
   int page = query.page() == null || query.page() < 1 ? 1 : query.page();

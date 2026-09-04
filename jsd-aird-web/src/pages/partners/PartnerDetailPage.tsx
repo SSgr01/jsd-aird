@@ -2,7 +2,7 @@ import { AppstoreOutlined, ArrowLeftOutlined, DeleteOutlined, EditOutlined, Plus
 import { App, Breadcrumb, Button, Empty, Input, Modal, Popconfirm, Select, Space, Spin, Tabs, Tag, Tooltip } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useBlocker, useParams } from 'react-router-dom';
-import { changeContactStatus, createContact, getContactProjectVectors, getPartner, getPartnerAudits, getPartnerContacts, updateContact, updatePartner, type ContactProjectVector, type PartnerAuditEntry } from '@/services/partners/partner-api';
+import { changeContactStatus, changePartnerStatus, createContact, getContactProjectVectors, getPartner, getPartnerAudits, getPartnerContacts, updateContact, updatePartner, type ContactProjectVector, type PartnerAuditEntry } from '@/services/partners/partner-api';
 import type { BusinessPartner, ContactInput, PartnerContact, PartnerInput } from '@/services/partners/partner-api';
 import { deleteCommunication, getCommunications, getRequirements, updateRequirement } from '@/services/partners/crm-api';
 import type { Communication, Requirement } from '@/services/partners/crm-api';
@@ -92,7 +92,7 @@ export function PartnerDetailPage() {
       ]);
       const value: BusinessPartner = {
         ...base,
-        contacts: contacts.filter((c) => c.status === 'ACTIVE').map((c) => ({
+        contacts: contacts.map((c) => ({
           ...c,
           manualTeamMembers: (c.members ?? '').split(/[,，]/).map((s) => s.trim()).filter(Boolean),
         })),
@@ -321,6 +321,11 @@ export function PartnerDetailPage() {
       return next;
     });
   };
+  const changePartnerLifecycle = () => {
+    if (!partner || (!partner.allowedActions?.includes('DISABLE') && !partner.allowedActions?.includes('RESTORE'))) return;
+    const restoring = partner.allowedActions.includes('RESTORE');
+    Modal.confirm({ title: `${restoring ? '恢复' : '停用'}客户“${partner.name}”？`, okText: restoring ? '恢复' : '停用', cancelText: '取消', okButtonProps: { danger: !restoring }, onOk: async () => { await changePartnerStatus(partner.id, restoring ? 'ACTIVE' : 'INACTIVE', partner.version); msg.success(restoring ? '客户已恢复' : '客户已停用'); await load(); } });
+  };
   const requirementStateName = { DRAFT: '草稿', CONFIRMED: '已确认', IN_PROJECT: '已立项', COMPLETED: '已完成', CANCELLED: '已取消' } as const;
   // 负责项目选项调用 project 接口获取全量项目列表（见 load 中的 getProjects）
   const overview = <div className="cm-customer-modal cm-modal-columns cm-customer-columns">
@@ -440,17 +445,17 @@ export function PartnerDetailPage() {
               <Space size={8}>
                 {isNew
                   ? <Button danger type="primary" icon={<DeleteOutlined />} onClick={() => cancelNewContact(person.id)}>删除</Button>
-                  : <Popconfirm title="停用该负责人？" description="历史业务关联将继续保留；客户至少保留一位负责人。" onConfirm={() => void (async () => {
+                  : <Popconfirm title={person.allowedActions?.includes('RESTORE') ? '恢复该负责人？' : '停用该负责人？'} description="历史业务关联将继续保留；客户至少保留一位负责人。" onConfirm={() => void (async () => {
                     const activeContactCount = partner.contacts.filter((contact) => contact.status === 'ACTIVE').length;
-                    if (activeContactCount <= 1) {
+                    if (!person.allowedActions?.includes('RESTORE') && activeContactCount <= 1) {
                       msg.warning('至少保留一位负责人，当前负责人不可停用');
                       return;
                     }
                     await changeContactStatus(id, person);
-                    msg.success('负责人已停用');
+                    msg.success(person.allowedActions?.includes('RESTORE') ? '负责人已恢复' : '负责人已停用');
                     await load();
                   })()}>
-                    <Button danger type="primary" icon={<DeleteOutlined />} disabled={person.status === 'INACTIVE'} onClick={(e) => e.stopPropagation()}>删除</Button>
+                    <Button danger={!person.allowedActions?.includes('RESTORE')} type="primary" icon={<DeleteOutlined />} disabled={!person.allowedActions?.includes('DISABLE') && !person.allowedActions?.includes('RESTORE')} onClick={(e) => e.stopPropagation()}>{person.allowedActions?.includes('RESTORE') ? '恢复' : '停用'}</Button>
                   </Popconfirm>}
                 <Button type="primary" icon={<EditOutlined />} loading={savingContactIds.has(person.id)} disabled={(!isNew && person.status === 'INACTIVE') || savingContactIds.has(person.id)} onClick={() => void savePersonSnapshot(person)}>保存</Button>
               </Space>
@@ -463,7 +468,7 @@ export function PartnerDetailPage() {
 
   return <div className="cm-page">
     <Breadcrumb items={[{ title: '客户管理' }, { title: partner.name }, { title: tabLabelMap[activeKey] ?? '公司概览' }]} />
-    <div className="cm-detail-head"><div className="cm-back-title"><Link className="cm-back" to="/partners"><ArrowLeftOutlined /></Link><div className="cm-detail-title"><h3>{partner.name} {partner.customerLevel && <Tag color={customerLevelColors[partner.customerLevel] ?? 'default'}>{partner.customerLevel}</Tag>}<Tag color={cooperationStatusColors[partner.cooperationStatus ?? ''] ?? 'default'}>{partner.cooperationStatus || '潜在客户'}</Tag></h3><div className="cm-detail-meta"><span>客户编号：{partner.partnerCode}</span><span>所属行业：{partner.industry || '—'}</span><span>客户等级：{partner.customerLevel || '—'}</span></div></div></div></div>
+    <div className="cm-detail-head"><div className="cm-back-title"><Link className="cm-back" to="/partners"><ArrowLeftOutlined /></Link><div className="cm-detail-title"><h3>{partner.name} {partner.customerLevel && <Tag color={customerLevelColors[partner.customerLevel] ?? 'default'}>{partner.customerLevel}</Tag>}<Tag color={cooperationStatusColors[partner.cooperationStatus ?? ''] ?? 'default'}>{partner.cooperationStatus || '潜在客户'}</Tag></h3><div className="cm-detail-meta"><span>客户编号：{partner.partnerCode}</span><span>所属行业：{partner.industry || '—'}</span><span>客户等级：{partner.customerLevel || '—'}</span></div></div></div><div style={{ marginLeft: 'auto' }}>{partner.allowedActions?.includes('DISABLE') || partner.allowedActions?.includes('RESTORE') ? <Button danger={partner.allowedActions?.includes('DISABLE')} onClick={changePartnerLifecycle}>{partner.allowedActions?.includes('RESTORE') ? '恢复' : '停用'}</Button> : null}</div></div>
     <div className="cm-tabs-shell"><Tabs className="cm-tabs" activeKey={activeKey} onChange={setActiveKey} items={[
       { key: 'overview', label: '公司概览', children: <div className="cm-tab-body">{overview}</div> },
       {
@@ -609,9 +614,9 @@ export function PartnerDetailPage() {
                           <td>
                             <div className="cm-row-actions">
                               <button className="cm-link-button" onClick={() => setBusinessModal({ mode: 'followup', edit: row })}>编辑</button>
-                              <Popconfirm title="删除该跟进记录？" description="历史业务关联将继续保留。" onConfirm={() => void (async () => { await deleteCommunication(row.id, row.version); msg.success('跟进记录已删除'); await load(); })()}>
+                              {row.allowedActions?.includes('DELETE') && <Popconfirm title="删除该跟进记录？" description="历史业务关联将继续保留。" onConfirm={() => void (async () => { await deleteCommunication(row.id, row.version); msg.success('跟进记录已删除'); await load(); })()}>
                                 <Button danger type="text" onClick={(e) => e.stopPropagation()}>删除</Button>
-                              </Popconfirm>
+                              </Popconfirm>}
                             </div>
                           </td>
                         </tr>
@@ -644,9 +649,9 @@ export function PartnerDetailPage() {
                           {row.content && <div className="cm-timeline-text">{row.content}</div>}
                           <div className="cm-timeline-actions">
                             <button className="cm-link-button" onClick={() => setBusinessModal({ mode: 'followup', edit: row })}>编辑</button>
-                            <Popconfirm title="删除该跟进记录？" description="历史业务关联将继续保留。" onConfirm={() => void (async () => { await deleteCommunication(row.id, row.version); msg.success('跟进记录已删除'); await load(); })()}>
+                            {row.allowedActions?.includes('DELETE') && <Popconfirm title="删除该跟进记录？" description="历史业务关联将继续保留。" onConfirm={() => void (async () => { await deleteCommunication(row.id, row.version); msg.success('跟进记录已删除'); await load(); })()}>
                               <Button danger type="text" size="small">删除</Button>
-                            </Popconfirm>
+                            </Popconfirm>}
                           </div>
                         </div>
                       </div>

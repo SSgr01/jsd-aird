@@ -23,6 +23,7 @@ export interface ProductionOrderListItem {
   updatedBy?: string;
   updatedByName?: string;
   updatedAt: string;
+  allowedActions?: string[];
 }
 
 export interface ProductionWorkspace {
@@ -62,6 +63,7 @@ export interface ProductionWorkspace {
   updatedBy?: string;
   updatedByName?: string;
   updatedAt: string;
+  allowedActions?: string[];
 }
 
 export interface ProductionOrderPage {

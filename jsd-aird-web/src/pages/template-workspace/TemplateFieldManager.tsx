@@ -64,7 +64,7 @@ interface Props {
   onAddField: (groupId?: string) => void;
   onAddStructuredField: (
     parent: BusinessField,
-    kind: 'REPEAT_FIELD' | 'MATRIX_FIELD',
+    kind: 'REPEAT_FIELD',
   ) => void;
   onDeleteField: (field: BusinessField) => void;
   onManageGroups: () => void;
@@ -260,7 +260,7 @@ function FieldStructure({
         </div>
       </div>
       <div className="field-manager-help">
-        普通字段：在 Excel 空白单元格输入名称后自动发现；明细字段和矩阵指标请点击对应区域右侧“＋”。在数据区填写业务值不会创建字段。
+        普通字段：在空白位置输入名称后自动发现；明细字段请点击对应区域右侧“＋”。在数据区填写业务值不会创建字段。
       </div>
 
       <div className="field-region-tree">
@@ -275,23 +275,20 @@ function FieldStructure({
               </span>
               <span className="field-tree-group-meta">
                 <span>{region.fields.length}</span>
-                {editable && ['ROW_TABLE', 'COLUMN_TABLE', 'MATRIX'].includes(region.kind) && (
+                {editable && ['ROW_TABLE', 'COLUMN_TABLE'].includes(region.kind) && (
                   <Tooltip title={!region.root
                     ? '结构区域尚未确认，请先确认结构'
-                    : region.kind === 'MATRIX' ? '新增矩阵指标' : '新增明细字段'}>
+                    : '新增明细字段'}>
                     <button
                       type="button"
                       className="field-tree-group-add"
-                      aria-label={`在${region.name}中新增${region.kind === 'MATRIX' ? '矩阵指标' : '明细字段'}`}
+                      aria-label={`在${region.name}中新增明细字段`}
                       disabled={!region.root}
                       onClick={(event) => {
                         event.preventDefault();
                         event.stopPropagation();
                         if (!region.root) return;
-                        onAddStructuredField(
-                          region.root,
-                          region.kind === 'MATRIX' ? 'MATRIX_FIELD' : 'REPEAT_FIELD',
-                        );
+                        onAddStructuredField(region.root, 'REPEAT_FIELD');
                       }}
                     >
                       <PlusOutlined />
@@ -387,7 +384,7 @@ function FieldTreeNode({
 
 function isRegionField(field: BusinessField) {
   return field.displayRole === 'REGION'
-    || ['FORM_REGION', 'ROW_TABLE', 'COLUMN_TABLE', 'MATRIX', 'TABLE_REGION'].includes(field.kind)
+    || ['FORM_REGION', 'ROW_TABLE', 'COLUMN_TABLE'].includes(field.kind)
     || field.mappingKind === 'REPEAT_REGION';
 }
 
@@ -739,16 +736,6 @@ function BusinessPropertyFields({
             {field.conflictMessage || '这个字段存在识别冲突，请核对后再保存。'}
           </div>
         )}
-        {field.mappingKind === 'MATRIX_REGION' && (
-          <div className="field-property-layout full">
-            <span className="field-property-section-title">交叉表结构</span>
-            <small>类型：交叉测试表</small>
-            <small>记录方向：{field.repeatAxis === 'COLUMN' ? '按列；每列代表一个列成员' : field.repeatAxis === 'ROW' ? '按行；每行代表一个行成员' : '待确认'}</small>
-            <small>列成员名称：{locationDisplay(field.locator?.columnHeaderRange)}</small>
-            <small>行维度及属性：{locationDisplay(field.locator?.rowHeaderRange)}</small>
-            <small>交叉值区域：{locationDisplay(field.locator?.crossDataRange)}</small>
-          </div>
-        )}
         {field.mappingKind === 'REPEAT_REGION' && (
           <div className="field-property-layout full">
             <span className="field-property-section-title">重复区域规则</span>
@@ -901,7 +888,6 @@ function DeleteFieldButton({
 function kindLabel(kind: string) {
   if (kind === 'ROW_TABLE') return '明细表';
   if (kind === 'COLUMN_TABLE') return '横向明细表';
-  if (kind === 'MATRIX') return '矩阵表';
   if (kind === 'FREE_TEXT') return '自由文本区';
   return '普通字段';
 }

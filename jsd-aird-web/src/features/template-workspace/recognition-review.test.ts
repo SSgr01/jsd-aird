@@ -88,6 +88,65 @@ describe('recognition review draft merge', () => {
     });
   });
 
+  it('keeps every Word table-cell candidate when cells have no spreadsheet address', () => {
+    const schema = { type: 'object', properties: {} };
+    const formField = createItem({
+      id: '88888888-8888-8888-8888-888888888881',
+      fieldName: '项目名称',
+      payload: {
+        ...createItem().payload,
+        fieldName: '项目名称', fieldCode: 'WORD.PROJECT', dataPath: '/word/project',
+        relationId: 'word-project', regionId: 'word-form-region', blockId: 'word-form-region',
+        locatorType: 'DOCX_TABLE_CELL',
+        locator: {
+          locatorType: 'DOCX_TABLE_CELL', nodeId: 'docx-cell-project',
+          valueAnchor: 'docx-cell-project', valueCellPaths: ['/document/table[1]/row[1]/cell[2]'],
+        },
+      },
+    });
+    const rowField = createItem({
+      id: '88888888-8888-8888-8888-888888888882',
+      fieldName: '物料名称',
+      child: true,
+      payload: {
+        ...createItem().payload,
+        fieldName: '物料名称', fieldCode: 'WORD.MATERIAL', dataPath: '/word/records/*/material',
+        relationId: 'word-material', regionId: 'word-row-region', blockId: 'word-row-region',
+        parentRelationId: 'word-row-region', mappingKind: 'REPEAT_FIELD',
+        suggestionLevel: 'CHILD', repeatAxis: 'ROW',
+        locatorType: 'DOCX_TABLE_CELL',
+        locator: {
+          locatorType: 'DOCX_TABLE_CELL', nodeId: 'docx-cell-material',
+          valueAnchor: 'docx-cell-material', valueCellPaths: ['/document/table[2]/row[2]/cell[2]'],
+        },
+      },
+    });
+    const secondRowField = createItem({
+      id: '88888888-8888-8888-8888-888888888883',
+      fieldName: '单位',
+      child: true,
+      payload: {
+        ...rowField.payload,
+        fieldName: '单位', fieldCode: 'WORD.UNIT', dataPath: '/word/records/*/unit',
+        relationId: 'word-unit',
+        locator: {
+          locatorType: 'DOCX_TABLE_CELL', nodeId: 'docx-cell-unit',
+          valueAnchor: 'docx-cell-unit', valueCellPaths: ['/document/table[2]/row[2]/cell[4]'],
+        },
+      },
+    });
+    const review = createReview(formField);
+    review.items = [formField, rowField, secondRowField];
+
+    const merged = mergeRecognitionReview(schema, [], readFieldModel(schema, []), review);
+
+    expect(merged.model.fields).toHaveLength(3);
+    expect(merged.model.fields.map((field) => field.name))
+      .toEqual(expect.arrayContaining(['项目名称', '物料名称', '单位']));
+    expect(merged.model.fields.filter((field) => field.mappingKind === 'REPEAT_FIELD'))
+      .toHaveLength(2);
+  });
+
   it('uses the locator nested type when a physical field omits the duplicated root type', () => {
     const schema = { type: 'object', properties: {} };
     const item = createItem({
@@ -148,6 +207,107 @@ describe('recognition review draft merge', () => {
     expect(merged.mapping.filter((item) => item.mappingKind === 'REPEAT_FIELD'))
       .toHaveLength(2);
   });
+
+  it('preserves manually confirmed name, unit and type after workbook recognition', () => {
+    const schema = { type: 'object', properties: {} };
+    const initial = createItem({
+      status: 'CONFIRMED',
+      payload: {
+        ...createItem().payload,
+        bindingId: 'binding-product-name',
+        labelPath: '基本信息 > 产品名称',
+      },
+    });
+    const accepted = mergeRecognitionReview(
+      schema, [], readFieldModel(schema, []), createReview(initial),
+    );
+    const field = accepted.model.fields[0]!;
+    field.name = '人工产品名';
+    field.unit = 'kg';
+    field.valueType = 'number';
+    field.manualOverrides = ['name', 'unit', 'valueType'];
+    accepted.mapping[0]!.diagnostic = {
+      ...accepted.mapping[0]!.diagnostic,
+      manualOverrides: ['name', 'unit', 'valueType'],
+      humanConfirmed: true,
+    };
+
+    const rerun = createItem({
+      id: '66666666-6666-6666-6666-666666666666',
+      status: 'CONFIRMED',
+      fieldName: '模型新名称',
+      valueType: 'string',
+      payload: {
+        ...createItem().payload,
+        bindingId: 'new-binding-id',
+        fieldName: '模型新名称',
+        fieldCode: 'PRODUCT.NAME',
+        valueType: 'string',
+        unit: 'g',
+        labelPath: '基本信息 > 模型新名称',
+        locator: { sheetId: 'sheet-1', sheetName: '生产单', labelAddress: 'A2', address: 'B2' },
+      },
+    });
+    const merged = mergeRecognitionReview(
+      accepted.schema, accepted.mapping, accepted.model, createReview(rerun),
+    );
+
+    expect(merged.model.fields).toHaveLength(1);
+    expect(merged.model.fields[0]).toMatchObject({
+      name: '人工产品名', unit: 'kg', valueType: 'number', reviewStatus: 'CONFIRMED',
+      manualOverrides: ['name', 'unit', 'valueType'],
+    });
+    expect(merged.mapping[0]?.labelPath).toBe('基本信息 > 人工产品名');
+    expect(merged.mapping[0]?.bindingStatus).not.toBe('AMBIGUOUS');
+  });
+
+  it('keeps manual attributes but marks a moved field stale after workbook recognition', () => {
+    const schema = { type: 'object', properties: {} };
+    const initial = createItem({
+      status: 'CONFIRMED',
+      payload: {
+        ...createItem().payload,
+        bindingId: 'binding-product-name',
+        labelPath: '基本信息 > 产品名称',
+      },
+    });
+    const accepted = mergeRecognitionReview(
+      schema, [], readFieldModel(schema, []), createReview(initial),
+    );
+    const field = accepted.model.fields[0]!;
+    field.name = '人工产品名';
+    field.unit = 'kg';
+    field.valueType = 'number';
+    field.manualOverrides = ['name', 'unit', 'valueType'];
+    accepted.mapping[0]!.diagnostic = {
+      ...accepted.mapping[0]!.diagnostic,
+      manualOverrides: ['name', 'unit', 'valueType'],
+      humanConfirmed: true,
+    };
+
+    const moved = createItem({
+      id: '77777777-7777-7777-7777-777777777777',
+      status: 'CONFIRMED',
+      payload: {
+        ...createItem().payload,
+        bindingId: 'new-binding-id',
+        fieldCode: 'PRODUCT.NAME',
+        labelPath: '基本信息 > 模型新名称',
+        locator: { sheetId: 'sheet-1', sheetName: '生产单', labelAddress: 'D8', address: 'E8' },
+      },
+    });
+    const merged = mergeRecognitionReview(
+      accepted.schema, accepted.mapping, accepted.model, createReview(moved),
+    );
+
+    expect(merged.model.fields[0]).toMatchObject({
+      name: '人工产品名', unit: 'kg', valueType: 'number', reviewStatus: 'ISSUE',
+      conflictCode: 'RECOGNITION_STRUCTURE_CHANGED',
+    });
+    expect(merged.model.fields[0]?.recognitionDiff).toMatchObject({ status: 'STALE' });
+    expect(merged.mapping[0]).toMatchObject({ bindingStatus: 'AMBIGUOUS' });
+    expect(merged.mapping[0]?.diagnostic?.recognitionDiff).toMatchObject({ status: 'STALE' });
+  });
 });
 
 function createReview(item: RecognitionReviewItem): RecognitionReview {
@@ -164,7 +324,7 @@ function createReview(item: RecognitionReviewItem): RecognitionReview {
       ignored: item.status === 'IGNORED' ? 1 : 0,
       scalar: item.status === 'IGNORED' ? 0 : 1,
       rowTable: 0,
-      matrix: 0,
+      columnTable: 0,
       qualityIssueCount: 0,
       autoFixedCount: 0,
       blockingIssueCount: 0,

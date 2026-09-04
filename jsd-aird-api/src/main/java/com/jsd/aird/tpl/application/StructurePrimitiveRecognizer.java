@@ -29,17 +29,11 @@ public final class StructurePrimitiveRecognizer {
             "注意：", "注意:", "说明：", "说明:", "提示：", "提示:", "操作要求：", "操作要求:");
 
     private final ObjectMapper objectMapper;
-    private final boolean topologyV2Enabled;
     private final TableTopologyClassifier topologyClassifier;
     private final ColumnTableLayoutCompiler columnTableLayoutCompiler;
 
     public StructurePrimitiveRecognizer(ObjectMapper objectMapper) {
-        this(objectMapper, false);
-    }
-
-    public StructurePrimitiveRecognizer(ObjectMapper objectMapper, boolean topologyV2Enabled) {
         this.objectMapper = objectMapper;
-        this.topologyV2Enabled = topologyV2Enabled;
         this.topologyClassifier = new TableTopologyClassifier();
         this.columnTableLayoutCompiler = new ColumnTableLayoutCompiler(objectMapper);
     }
@@ -54,48 +48,266 @@ public final class StructurePrimitiveRecognizer {
             sheet.path("semanticCells").forEach(cells::add);
             if (cells.isEmpty()) continue;
             var detectedGrids = detectBlankGrids(sheet);
+            // Discover both column-oriented record surfaces and scalar form
+            // evidence before the coarse repeated-row pass. A column table is
+            // defined by its left attribute band and repeated right-hand
+            // record columns; treating its bordered rows as records first
+            // makes the later overlap guard erase the correct direction.
             addLargeColumnTable(result, sheetId, sheet);
-            addMatrix(result, sheetId, sheet, cells, detectedGrids);
-            // Discover scalar form fields after the matrix envelope is known. A
-            // label immediately before a matrix member row must not become a
-            // scalar field merely because the member cells are blank inputs.
             addStaticColumnTables(result, sheetId, sheet, cells, detectedGrids);
             addFieldGroups(result, sheetId, cells);
-            // A sheet may contain a matrix and one or more ordinary repeated
-            // tables. Their detection is independent; overlap filtering keeps
-            // a matrix axis from being emitted as a second row table.
+            addAmbiguousTables(result, sheetId, sheet, cells, detectedGrids);
+            // Row detection intentionally runs last. Existing column-table
+            // envelopes and multiple label/value form surfaces are independent
+            // evidence that prevents a broad bordered rectangle from being
+            // guessed as ROW_TABLE.
             addRepeatedRows(result, sheetId, sheet, cells);
             // Scalar label/value pairs are evidence inside a form, not region
             // roots. Consolidate the non-table bands into form envelopes only
             // after table topology is known, so two fields in the same header
             // cannot become two independent "basic information" regions.
             consolidateFormEnvelopes(result, sheetId, sheet, cells);
-            addStaticAndTextRegions(result, sheetId, cells);
+            // A broad row-table hypothesis may have covered the leading
+            // metadata rows while detectors were running.  Once all
+            // candidates are present, rebuild one leading form band from the
+            // surviving form surfaces and the first competitive table start.
+            // This keeps rows such as 实验目的/实验方案/施工方式/固化条件 in
+            // the same FORM_REGION even when a model or border heuristic
+            // produced only several small form primitives.
+            mergeLeadingFormBand(result, sheetId, sheet, cells);
             log.debug("structure_recognition_sheet sheetId={} semanticCells={} candidateCells={} primitives={} durationMs={}",
                     sheetId, cells.size(), sheet.path("candidateCells").size(), result.size(),
                     (System.nanoTime() - startedAt) / 1_000_000);
         }
+        // A single physical component can produce independent row and column
+        // evidence.  Collapse only a genuinely symmetric, high-confidence
+        // pair into one UNKNOWN candidate; otherwise the final disjoint pass
+        // keeps the strongest unique topology.  This prevents detector order
+        // from silently choosing a direction when the evidence is actually
+        // indistinguishable, without turning ordinary column tables (whose
+        // column evidence is materially stronger) into false conflicts.
+        return selectPhysicalCandidates(collapseAmbiguousDirections(result));
+    }
+
+    private void mergeLeadingFormBand(
+            ArrayNode result, String sheetId, JsonNode sheet, List<JsonNode> semanticCells
+    ) {
+        var tableStart = Integer.MAX_VALUE;
+        var tableEndColumn = 0;
+        for (var candidate : result) {
+            if (!sheetId.equals(candidate.path("sheetId").asText(""))
+                    || !Set.of("ROW_TABLE", "COLUMN_TABLE")
+                    .contains(candidate.path("blockType").asText(""))) continue;
+            // Ignore a row hypothesis that is fully shadowed by a stronger
+            // column table; it must not determine the form/table boundary.
+            if ("ROW_TABLE".equals(candidate.path("blockType").asText(""))
+                    && shadowedByStrongerColumnTable(result, candidate, sheetId)) continue;
+            // Small exploratory grids (often A4:I8 or a short subtotal band)
+            // are useful evidence for direction, but they are not the
+            // worksheet's leading table boundary.  The leading form should
+            // stop at the major, high-confidence table detected from the
+            // complete repeated surface.
+            if (candidate.path("confidence").asDouble(0.0) < 0.92) continue;
+            var area = bounds(candidate.path("range").asText(""));
+            if (area == null) continue;
+            tableStart = Math.min(tableStart, area[1]);
+            tableEndColumn = Math.max(tableEndColumn, area[2]);
+        }
+        if (tableStart == Integer.MAX_VALUE) return;
+
+        var forms = new ArrayList<JsonNode>();
+        var startRow = Integer.MAX_VALUE;
+        var endRow = 0;
+        var startColumn = Integer.MAX_VALUE;
+        var endColumn = tableEndColumn;
+        for (var candidate : result) {
+            if (!sheetId.equals(candidate.path("sheetId").asText(""))
+                    || !"FORM_REGION".equals(candidate.path("blockType").asText(""))) continue;
+            var area = bounds(candidate.path("range").asText(""));
+            if (area == null || area[3] >= tableStart) continue;
+            forms.add(candidate);
+            startRow = Math.min(startRow, area[1]);
+            endRow = Math.max(endRow, area[3]);
+            startColumn = Math.min(startColumn, area[0]);
+            endColumn = Math.max(endColumn, area[2]);
+        }
+        // One form primitive is already a complete band.  Multiple adjacent
+        // primitives, however, are a split representation of the same form.
+        if (forms.size() < 2 || startRow == Integer.MAX_VALUE || endRow >= tableStart) return;
+        endRow = tableStart - 1;
+        if (endColumn <= 0) {
+            var used = bounds(sheet.path("usedRange").asText(""));
+            endColumn = used == null ? startColumn : used[2];
+        }
+        if (endColumn < startColumn) return;
+        addFormEnvelope(result, sheetId, sheet, semanticCells,
+                startColumn, startRow, endColumn, endRow);
+    }
+
+    private ArrayNode collapseAmbiguousDirections(ArrayNode candidates) {
+        var values = new ArrayList<JsonNode>();
+        candidates.forEach(values::add);
+        var consumed = new HashSet<Integer>();
+        var result = objectMapper.createArrayNode();
+        for (int index = 0; index < values.size(); index++) {
+            if (consumed.contains(index)) continue;
+            var current = values.get(index);
+            ObjectNode conflict = null;
+            for (int otherIndex = index + 1; otherIndex < values.size(); otherIndex++) {
+                if (consumed.contains(otherIndex)) continue;
+                var other = values.get(otherIndex);
+                if (!oppositePhysicalEvidence(current, other)) continue;
+                conflict = ambiguousDirectionPrimitive(current, other);
+                consumed.add(otherIndex);
+                break;
+            }
+            if (conflict != null) {
+                consumed.add(index);
+                result.add(conflict);
+            } else {
+                result.add(current);
+            }
+        }
         return result;
     }
 
+    private boolean oppositePhysicalEvidence(JsonNode first, JsonNode second) {
+        var firstType = first.path("blockType").asText("");
+        var secondType = second.path("blockType").asText("");
+        if (!("ROW_TABLE".equals(firstType) && "COLUMN_TABLE".equals(secondType)
+                || "COLUMN_TABLE".equals(firstType) && "ROW_TABLE".equals(secondType))) return false;
+        if (!first.path("sheetId").asText("").equals(second.path("sheetId").asText(""))) return false;
+        if (!first.path("physicalConfirmed").asBoolean(false)
+                || !second.path("physicalConfirmed").asBoolean(false)) return false;
+        if (Math.abs(first.path("confidence").asDouble(0.0)
+                - second.path("confidence").asDouble(0.0)) > 0.05) return false;
+        var firstBounds = bounds(first.path("range").asText(""));
+        var secondBounds = bounds(second.path("range").asText(""));
+        if (firstBounds == null || secondBounds == null) return false;
+        var intersection = new int[]{Math.max(firstBounds[0], secondBounds[0]),
+                Math.max(firstBounds[1], secondBounds[1]),
+                Math.min(firstBounds[2], secondBounds[2]),
+                Math.min(firstBounds[3], secondBounds[3])};
+        if (intersection[0] > intersection[2] || intersection[1] > intersection[3]) return false;
+        var intersectionArea = (long) (intersection[2] - intersection[0] + 1)
+                * (intersection[3] - intersection[1] + 1);
+        var firstArea = (long) (firstBounds[2] - firstBounds[0] + 1)
+                * (firstBounds[3] - firstBounds[1] + 1);
+        var secondArea = (long) (secondBounds[2] - secondBounds[0] + 1)
+                * (secondBounds[3] - secondBounds[1] + 1);
+        return intersectionArea / (double) Math.min(firstArea, secondArea) >= 0.80;
+    }
+
+    private ObjectNode ambiguousDirectionPrimitive(JsonNode first, JsonNode second) {
+        var firstBounds = bounds(first.path("range").asText(""));
+        var secondBounds = bounds(second.path("range").asText(""));
+        var left = Math.min(firstBounds[0], secondBounds[0]);
+        var top = Math.min(firstBounds[1], secondBounds[1]);
+        var right = Math.max(firstBounds[2], secondBounds[2]);
+        var bottom = Math.max(firstBounds[3], secondBounds[3]);
+        var sheetId = first.path("sheetId").asText("");
+        var range = range(left, top, right, bottom);
+        var ids = List.of(first.path("candidateId").asText(first.path("id").asText("")),
+                second.path("candidateId").asText(second.path("id").asText(""))).stream().sorted().toList();
+        var candidateId = "primitive-" + RecognitionIdentity.shortHash(
+                sheetId + "|UNKNOWN|" + String.join("|", ids), 16);
+        var structure = objectMapper.createObjectNode()
+                .put("recordAxis", "UNKNOWN")
+                .put("repeatAxis", "UNKNOWN")
+                .put("physicalConfirmed", false)
+                .put("reviewRequired", true)
+                .put("directionEvidence", "ROW_AND_COLUMN_SYMMETRIC");
+        var evidence = objectMapper.createArrayNode()
+                .add("OPPOSITE_DIRECTION_EVIDENCE")
+                .add("STRUCTURE_DIRECTION_UNCLEAR");
+        var result = objectMapper.createObjectNode()
+                .put("id", candidateId)
+                .put("candidateId", candidateId)
+                .put("sheetId", sheetId)
+                .put("blockType", "UNKNOWN")
+                .put("range", range);
+        result.set("structure", structure);
+        result.put("confidence", Math.min(first.path("confidence").asDouble(0.55),
+                second.path("confidence").asDouble(0.55)));
+        result.set("evidence", evidence);
+        result.put("validationStatus", "VALID")
+                .put("geometryStatus", "VALID_GEOMETRY")
+                .put("classificationStatus", "AMBIGUOUS")
+                .put("classificationConfidence", Math.min(first.path("confidence").asDouble(0.55),
+                        second.path("confidence").asDouble(0.55)))
+                .put("canonicalStatus", "PROVISIONAL")
+                .put("physicalCandidate", true)
+                .put("candidateOnly", true);
+        return result;
+    }
+
+    /**
+     * Resolve physical candidates only after every detector has contributed.
+     * Detection itself is intentionally lossless; this final pass is the sole
+     * place where the persisted physical regions are made disjoint.
+     */
+    private ArrayNode selectPhysicalCandidates(ArrayNode candidates) {
+        var ordered = new ArrayList<JsonNode>();
+        candidates.forEach(ordered::add);
+        ordered.sort(java.util.Comparator
+                .comparingInt((JsonNode node) -> "UNKNOWN".equals(node.path("blockType").asText()) ? 0 : 1)
+                .reversed()
+                .thenComparingDouble(node -> -node.path("confidence").asDouble(0))
+                .thenComparing(node -> node.path("id").asText()));
+        var selected = objectMapper.createArrayNode();
+        for (var candidate : ordered) {
+            var duplicate = false;
+            var blocked = false;
+            for (var existing : selected) {
+                if (!candidate.path("sheetId").asText().equals(existing.path("sheetId").asText())) continue;
+                if (!overlaps(candidate.path("range").asText(""), existing.path("range").asText(""))) continue;
+                if (samePrimitive(candidate, existing)) {
+                    duplicate = true;
+                    break;
+                }
+                // Higher-confidence physical evidence wins.  An UNKNOWN
+                // proposal is retained only when no formal candidate explains
+                // the same surface; it is never allowed to shadow a proven
+                // table/form candidate.
+                blocked = true;
+                break;
+            }
+            if (!duplicate && !blocked) selected.add(candidate);
+        }
+        return selected;
+    }
+
+    private boolean samePrimitive(JsonNode first, JsonNode second) {
+        return first.path("blockType").asText().equals(second.path("blockType").asText())
+                && first.path("sheetId").asText().equals(second.path("sheetId").asText())
+                && first.path("range").asText().equalsIgnoreCase(second.path("range").asText(""));
+    }
+
+    private boolean overlaps(String first, String second) {
+        var a = bounds(first);
+        var b = bounds(second);
+        return a != null && b != null && a[0] <= b[2] && b[0] <= a[2]
+                && a[1] <= b[3] && b[1] <= a[3];
+    }
+
     private void addLargeColumnTable(ArrayNode result, String sheetId, JsonNode sheet) {
-        if (!topologyV2Enabled) return;
         var detected = columnTableLayoutCompiler.detect(sheet, sheetId);
         if (detected == null) return;
-        add(result, "COLUMN_TABLE", sheetId, detected.path("range").asText(""),
+        var detectedRange = detected.path("range").asText("");
+        add(result, "COLUMN_TABLE", sheetId, detectedRange,
                 (ObjectNode) detected.path("structure").deepCopy(), 0.94,
                 List.of("CONTINUOUS_REPEATED_COLUMN_SURFACE", "HIERARCHICAL_LABEL_BAND",
                         "VERTICAL_MERGES_ARE_FIELD_GROUPS"));
     }
 
-    /** Detects all cross-filled regions before ordinary repeated-row detection. */
-    private boolean addMatrix(
+    /** Detects column-repeat tables or reports an unresolved table direction. */
+    private boolean addAmbiguousTables(
             ArrayNode result, String sheetId, JsonNode sheet, List<JsonNode> cells,
             List<GridSurface> grids
     ) {
-        if (grids.isEmpty()) return addMatrixForGrid(result, sheetId, sheet, cells, null);
+        if (grids.isEmpty()) return addColumnTableOrStructureIssue(result, sheetId, sheet, cells, null);
         var detected = false;
-        for (var grid : grids) detected |= addMatrixForGrid(result, sheetId, sheet, cells, grid);
+        for (var grid : grids) detected |= addColumnTableOrStructureIssue(result, sheetId, sheet, cells, grid);
         return detected;
     }
 
@@ -119,7 +331,6 @@ public final class StructurePrimitiveRecognizer {
         for (var grid : grids) {
             if (!looksLikeStaticColumnTable(cells, grid)) continue;
             var range = range(grid.startColumn(), grid.startRow(), grid.endColumn(), grid.endRow());
-            if (overlapsMatrix(result, sheetId, range)) continue;
             var headerRange = range(grid.startColumn(), grid.startRow(), grid.endColumn(), grid.startRow());
             var dataRange = range(grid.startColumn(), grid.startRow() + 1, grid.endColumn(), grid.endRow());
             var rowHeaderRange = range(grid.startColumn(), grid.startRow() + 1,
@@ -130,27 +341,14 @@ public final class StructurePrimitiveRecognizer {
             var details = objectMapper.createObjectNode()
                     .put("headerRange", headerRange)
                     .put("dataRange", dataRange)
-                    .put("rowHeaderRange", rowHeaderRange)
-                    .put("columnHeaderRange", columnHeaderRange)
-                    .put("crossDataRange", crossDataRange)
                     .put("semanticMode", "COLUMN_RECORDS")
                     .put("recordAxis", "COLUMN")
                     .put("repeatAxis", "COLUMN")
                     .put("recordHeight", grid.endRow() - grid.startRow())
                     .put("recordWidth", 1)
                     .put("recordStride", 1);
-            var projection = details.putObject("recordProjection")
-                    .put("mode", "COLUMN_RECORDS")
-                    .put("recordAxis", "COLUMN")
-                    .put("labelBandRange", range(grid.startColumn(), grid.startRow(),
-                            grid.startColumn(), grid.endRow()))
-                    .put("runtimeColumnMemberRange", columnHeaderRange);
-            var columns = projection.putArray("recordColumns");
-            for (int column = grid.startColumn() + 1; column <= grid.endColumn(); column++) {
-                columns.add(columnName(column));
-            }
             add(result, "COLUMN_TABLE", sheetId, range, details, 0.93,
-                    List.of("STATIC_COLUMN_HEADER", "LEFT_ATTRIBUTE_BAND", "COLUMN_MEMBER_HEADERS"));
+                    List.of("STATIC_COLUMN_HEADER", "LEFT_ATTRIBUTE_BAND", "REPEATED_COLUMNS"));
         }
     }
 
@@ -195,40 +393,37 @@ public final class StructurePrimitiveRecognizer {
                 .contains(normalized);
     }
 
-    private boolean addMatrixForGrid(
+    private boolean addColumnTableOrStructureIssue(
             ArrayNode result, String sheetId, JsonNode sheet, List<JsonNode> cells, GridSurface selectedGrid
     ) {
         var grid = selectedGrid;
         // Large, vertically merged writing areas beside explicit labels are a
-        // form topology, not a two-axis matrix. Border-only grid detection can
+        // form topology, not a repeated table. Border-only grid detection can
         // otherwise see the right edge of those writing areas as a narrow
         // blank cross-data surface. Require this strong, component-local form
-        // evidence before rejecting the matrix hypothesis; ordinary one-row
-        // attribute bands remain eligible for COLUMN_TABLE/MATRIX detection.
-        if (grid != null && hasMultiSectionFormEvidence(cells, grid)) return false;
-        var matrixHeaderRow = findStructuralHeaderRow(cells, grid);
-        // Imported workbooks often contain a completed cross table rather than
+        // evidence before rejecting the repeated-table hypothesis; ordinary one-row
+        // attribute bands remain eligible for COLUMN_TABLE detection.
+        if (grid != null && (hasMultiSectionFormEvidence(cells, grid)
+                || hasMergedWritingSurface(sheet, grid))) return false;
+        var structuralHeaderRow = findStructuralHeaderRow(cells, grid);
+        // Imported workbooks may contain a completed two-axis report rather than
         // an empty input grid.  In that case the cells are static facts
         // (inputCandidate=false), so the older runtime-grid evidence path has
-        // no active cells to anchor the matrix.  A dense numeric body below a
-        // textual header and a textual row-axis is still unambiguous physical
-        // matrix evidence; compile it before the model gets a chance to call
-        // the same rectangle a generic row table.
-        var staticCrossTab = grid != null && looksLikeStaticCrossTab(cells, grid);
-        if (staticCrossTab && matrixHeaderRow == null) matrixHeaderRow = grid.startRow();
-        if (topologyV2Enabled) {
-            var attributeStartRow = findColumnAttributeStartRow(cells, grid);
-            if (attributeStartRow != null) {
-                matrixHeaderRow = matrixHeaderRow == null
-                        ? attributeStartRow : Math.min(matrixHeaderRow, attributeStartRow);
-            }
+        // no active cells to anchor direction. A dense body with visible labels
+        // on both axes is kept as an unresolved structure and is never guessed.
+        var populatedTwoAxisTable = grid != null && looksLikePopulatedTwoAxisTable(cells, grid);
+        if (populatedTwoAxisTable && structuralHeaderRow == null) structuralHeaderRow = grid.startRow();
+        var attributeStartRow = findColumnAttributeStartRow(cells, grid);
+        if (attributeStartRow != null) {
+            structuralHeaderRow = structuralHeaderRow == null
+                    ? attributeStartRow : Math.min(structuralHeaderRow, attributeStartRow);
         }
-        if (grid != null && matrixHeaderRow != null
-                && matrixHeaderRow > grid.startRow() && matrixHeaderRow < grid.endRow()) {
+        if (grid != null && structuralHeaderRow != null
+                && structuralHeaderRow > grid.startRow() && structuralHeaderRow < grid.endRow()) {
             // A bordered worksheet often starts with full-width title and metadata
-            // rows. They are not the matrix identity row even though they look like
+            // rows. They are not the table header even though they look like
             // the same blank grid to a border-only detector.
-            grid = new GridSurface(grid.startColumn(), grid.endColumn(), matrixHeaderRow, grid.endRow());
+            grid = new GridSurface(grid.startColumn(), grid.endColumn(), structuralHeaderRow, grid.endRow());
         }
         var active = cells.stream()
                 .filter(cell -> cell.path("inputCandidate").asBoolean(false)
@@ -236,24 +431,21 @@ public final class StructurePrimitiveRecognizer {
                         || cell.path("formula").isTextual())
                 .toList();
         // A styled/bordered surface by itself is not enough to turn an ordinary
-        // table into a matrix. When no textual identity row is available, retain
-        // only layouts with a physical merged corner or clear cross-filled input
-        // evidence. This keeps legacy physical-only matrix detection working.
-        if (grid != null && matrixHeaderRow == null
-                && active.size() < 6 && !hasMergedMatrixCorner(cells, grid)) return false;
+        // table into a repeated region. Without a textual header, require a
+        // physical merged header corner or a clear editable surface.
+        if (grid != null && structuralHeaderRow == null
+                && active.size() < 6 && !hasMergedHeaderCorner(cells, grid)) return false;
         if (active.size() < 6 && grid == null) return false;
         var minColumn = active.stream().mapToInt(cell -> cell.path("column").asInt()).min()
                 .orElse(grid == null ? 1 : grid.startColumn());
         var maxColumn = active.stream().mapToInt(cell -> endColumn(cell, cell.path("column").asInt())).max()
                 .orElse(grid == null ? minColumn : grid.endColumn());
         if (grid != null) {
-            minColumn = topologyV2Enabled
-                    ? topologyDataColumnStart(cells, grid, grid.startRow())
-                    : Math.max(minColumn, dataColumnStart(cells, grid));
+            minColumn = topologyDataColumnStart(cells, grid, grid.startRow());
             maxColumn = Math.max(maxColumn, grid.endColumn());
-            if (staticCrossTab) {
+            if (populatedTwoAxisTable) {
                 // The first column is the row axis and the remaining columns
-                // are the column members.  Do not let populated body cells
+                // are the second visible axis. Do not let populated body cells
                 // move the split to the last populated column.
                 minColumn = grid.startColumn() + 1;
             }
@@ -262,15 +454,15 @@ public final class StructurePrimitiveRecognizer {
                 .filter(cell -> "FORMULA".equals(cell.path("factType").asText())
                         || cell.path("formula").isTextual())
                 .toList();
-        // Input candidates from the form header may be above the matrix. They can
-        // prove that the workbook has editable cells, but must not move the matrix
+        // Input candidates from the form header may be above the table. They can
+        // prove that the workbook has editable cells, but must not move the table
         // start row. Formula rows are only a lower-bound anchor; the corner and
         // physical input surface still decide the final layout.
         var formulaMinRow = formulaCells.stream()
                 .mapToInt(cell -> cell.path("row").asInt())
                 .min()
                 .orElse(active.stream().mapToInt(cell -> cell.path("row").asInt()).min()
-                        .orElse(matrixHeaderRow == null ? 1 : matrixHeaderRow));
+                        .orElse(structuralHeaderRow == null ? 1 : structuralHeaderRow));
         var maxRow = grid == null
                 ? usedRangeEndRow(sheet.path("usedRange").asText(""), cells, formulaMinRow)
                 : grid.endRow();
@@ -280,7 +472,7 @@ public final class StructurePrimitiveRecognizer {
         var dataStartRow = corner == null
                 ? grid == null ? formulaMinRow : blankHeaderRow ? grid.startRow() + 1 : grid.startRow()
                 : corner[3] + 1;
-        if (staticCrossTab && corner == null) dataStartRow = grid.startRow() + 1;
+        if (populatedTwoAxisTable && corner == null) dataStartRow = grid.startRow() + 1;
         maxRow = trimTrailingFullWidthTextRows(
                 cells, corner == null ? (grid == null ? 1 : grid.startColumn()) : corner[0],
                 maxColumn, dataStartRow, maxRow
@@ -294,17 +486,15 @@ public final class StructurePrimitiveRecognizer {
             // between row labels and the runtime input surface.  Do not let a
             // populated result cell inside E:N move the split to F or later.
             dataColumnStart = corner == null
-                    ? topologyV2Enabled
-                            ? topologyDataColumnStart(cells, grid, headerRowFor(grid, matrixHeaderRow))
-                            : Math.max(dataColumnStart, dataColumnStart(cells, grid))
+                    ? topologyDataColumnStart(cells, grid, headerRowFor(grid, structuralHeaderRow))
                     : corner[2] + 1;
-            if (staticCrossTab && corner == null) dataColumnStart = grid.startColumn() + 1;
+            if (populatedTwoAxisTable && corner == null) dataColumnStart = grid.startColumn() + 1;
             // A merged/static corner already accounts for the header row.  In that
             // layout the first bordered grid row is a real data row, even if it is
             // blank.  Only skip a bordered row when there is no explicit corner.
             dataRowStart = Math.max(dataRowStart,
                     grid.startRow() + (blankHeaderRow && corner == null ? 1 : 0));
-            if (staticCrossTab && corner == null) dataRowStart = grid.startRow() + 1;
+            if (populatedTwoAxisTable && corner == null) dataRowStart = grid.startRow() + 1;
             dataRowEnd = Math.min(dataRowEnd, grid.endRow());
             maxColumn = Math.max(maxColumn, grid.endColumn());
         }
@@ -319,7 +509,7 @@ public final class StructurePrimitiveRecognizer {
                         && !cell.path("value").asText("").strip().isBlank())
                 .toList();
         // Multiple row-axis levels and merged labels are strong evidence, but
-        // they are not required: a one-level cross-tab is still a MATRIX.
+        // they are not sufficient to guess a record direction.
         var leftWidth = resolvedMinColumn - leftLabels.stream()
                 .mapToInt(cell -> cell.path("column").asInt()).min().orElse(resolvedMinColumn);
         var hasMergedAxis = leftLabels.stream().anyMatch(cell -> !cell.path("mergedRange").asText("").isBlank());
@@ -352,33 +542,13 @@ public final class StructurePrimitiveRecognizer {
                 (int) leftLabels.stream().map(cell -> cell.path("row").asInt()).distinct().count(),
                 !formulaCells.isEmpty()
         );
-        var classification = topologyV2Enabled
-                ? topologyClassifier.analyze(topologyEvidence)
-                : new TableTopologyClassifier.Classification(
-                        TableTopologyClassifier.Topology.MATRIX,
-                        List.of(TableTopologyClassifier.Topology.MATRIX), topologyEvidence);
+        var classification = topologyClassifier.analyze(topologyEvidence);
         // The recognizer emits a proposal only when the evidence has exactly
         // one defensible topology.  It never promotes a physical proposal to
         // canonical; that decision remains in StructureProposalResolver.
         var topology = classification.candidates().size() == 1
                 ? classification.candidates().getFirst()
                 : TableTopologyClassifier.Topology.UNKNOWN;
-        ObjectNode compiledColumn = null;
-        if (topologyV2Enabled && topology == TableTopologyClassifier.Topology.UNKNOWN
-                && "COLUMN".equals(recordAxis)) {
-            var candidate = objectMapper.createObjectNode()
-                    .put("sheetId", sheetId).put("range", tableRange).put("type", "COLUMN_TABLE");
-            candidate.putObject("structure").putObject("recordProjection")
-                    .put("identityRow", headerRow).put("valueStartRow", dataStartRow).put("valueEndRow", maxRow);
-            var wrappedFacts = objectMapper.createObjectNode();
-            wrappedFacts.putArray("sheets").add(sheet.deepCopy());
-            if (columnTableLayoutCompiler.enrich(candidate, wrappedFacts)
-                    && !candidate.path("structure").path("recordProjection")
-                    .path("rowAttributeColumns").isEmpty()) {
-                topology = TableTopologyClassifier.Topology.COLUMN_TABLE;
-                compiledColumn = candidate;
-            }
-        }
         if (topology == TableTopologyClassifier.Topology.UNKNOWN) {
             var unknownEvidence = objectMapper.createObjectNode()
                     .put("tableKind", "UNKNOWN")
@@ -386,7 +556,7 @@ public final class StructurePrimitiveRecognizer {
                     .put("topologyClassifierVersion", 2);
             unknownEvidence.set("topologyEvidence", topologyEvidenceNode(topologyEvidence));
             unknownEvidence.put("reviewRequired", true);
-            add(result, "TABLE_TOPOLOGY_UNKNOWN", sheetId, tableRange,
+            add(result, "UNKNOWN", sheetId, tableRange,
                     unknownEvidence,
                     0.55, List.of("AMBIGUOUS_ONE_AXIS_OR_TWO_AXIS_GRID"));
             return true;
@@ -405,106 +575,14 @@ public final class StructurePrimitiveRecognizer {
                     .put("recordStride", 1)
                     .put("canonicalStatus", "PROVISIONAL")
                     .put("topologyClassifierVersion", 2);
-            if (compiledColumn != null) {
-                columnStructure.setAll((ObjectNode) compiledColumn.path("structure"));
-            }
             columnStructure.set("topologyEvidence", topologyEvidenceNode(topologyEvidence));
-            var columnProjection = columnStructure.putObject("recordProjection")
-                    .put("mode", "COLUMN_RECORDS")
-                    .put("recordAxis", "COLUMN")
-                    .put("identityRow", headerRow)
-                    .put("valueStartRow", dataStartRow)
-                    .put("valueEndRow", maxRow);
-            var projectionColumns = columnProjection.putArray("recordColumns");
-            for (int column = dataColumnStart; column <= maxColumn; column++) {
-                projectionColumns.add(columnName(column));
-            }
             add(result, "COLUMN_TABLE", sheetId, tableRange, columnStructure, 0.9,
                     blankHeaderRow
                             ? List.of("BLANK_RECORD_IDENTITY_BAND", "REPEATED_COLUMN_SURFACE", "LEFT_ATTRIBUTE_BAND")
                             : List.of("REPEATED_COLUMN_SURFACE", "LEFT_ATTRIBUTE_BAND"));
             return true;
         }
-        var structure = objectMapper.createObjectNode()
-                .put("headerRange", columnHeaderRange)
-                .put("dataRange", crossDataRange)
-                .put("cornerRange", cornerRange)
-                .put("rowHeaderRange", rowHeaderRange)
-                .put("columnHeaderRange", columnHeaderRange)
-                .put("crossDataRange", crossDataRange)
-                .put("semanticMode", "CROSS_TAB")
-                .put("recordAxis", recordAxis)
-                .put("recordAxisHint", recordAxis)
-                .put("recordHeight", maxRow - headerRow + 1)
-                .put("recordWidth", 1)
-                .put("recordStride", 1)
-                .put("measureHeight", maxRow - dataStartRow + 1)
-                .put("recordHeightIncludesIdentity", true)
-                .put("canonicalStatus", "PROVISIONAL")
-                .put("columnMemberRole", "COLUMN_MEMBER_INPUT")
-                .put("memberMode", "RUNTIME_INPUT");
-        structure.put("topologyClassifierVersion", topologyV2Enabled ? 2 : 1);
-        structure.set("topologyEvidence", topologyEvidenceNode(topologyEvidence));
-        var projection = structure.putObject("recordProjection")
-                .put("mode", "COLUMN".equals(recordAxis) ? "COLUMN_RECORDS" : "UNRESOLVED")
-                .put("recordAxis", recordAxis)
-                .put("identityRow", headerRow)
-                .put("valueStartRow", dataStartRow)
-                .put("valueEndRow", maxRow);
-        var recordColumns = projection.putArray("recordColumns");
-        if ("COLUMN".equals(recordAxis)) {
-            for (int column = minColumn; column <= maxColumn; column++) recordColumns.add(columnName(column));
-        }
-        var tree = structure.putArray("headerTree");
-        tree.add(objectMapper.createObjectNode().put("temporaryId", "axis-column")
-                .put("parentTemporaryId", "").put("name", "列成员输入")
-                .put("range", columnHeaderRange).put("axis", "COLUMN")
-                .put("role", "COLUMN_MEMBER_INPUT").put("memberMode", "RUNTIME_INPUT"));
-        tree.add(objectMapper.createObjectNode().put("temporaryId", "axis-row-level-1")
-                .put("parentTemporaryId", "").put("name", "行标题层级1")
-                .put("range", range(rowStartColumn, dataStartRow, rowStartColumn, maxRow)).put("axis", "ROW")
-                .put("role", "ROW_DIMENSION").put("memberMode", "CELL"));
-        if (rowEndColumn - rowStartColumn >= 1) {
-            tree.add(objectMapper.createObjectNode().put("temporaryId", "axis-row-level-2")
-                    .put("parentTemporaryId", "").put("name", "行标题层级2")
-                    .put("range", range(rowStartColumn + 1, dataStartRow, rowStartColumn + 1, maxRow))
-                    .put("axis", "ROW").put("role", "ROW_DIMENSION").put("memberMode", "CELL"));
-        }
-        if (rowEndColumn - rowStartColumn >= 2) {
-            tree.add(objectMapper.createObjectNode().put("temporaryId", "axis-row-level-3")
-                    .put("parentTemporaryId", "").put("name", "行标题层级3")
-                    .put("range", range(rowStartColumn + 2, dataStartRow, rowStartColumn + 2, maxRow))
-                    .put("axis", "ROW").put("role", "ROW_DIMENSION").put("memberMode", "CELL"));
-        }
-        if (rowEndColumn - rowStartColumn >= 3) {
-            tree.add(objectMapper.createObjectNode().put("temporaryId", "axis-row-attribute-1")
-                    .put("parentTemporaryId", "").put("name", "行属性")
-                    .put("range", range(rowStartColumn + 3, dataStartRow, rowStartColumn + 3, maxRow))
-                    .put("axis", "ROW").put("role", "ROW_ATTRIBUTE").put("memberMode", "CELL"));
-        }
-        if (grid != null) {
-            add(result, "BLANK_GRID_INPUT_SURFACE", sheetId,
-                    range(dataColumnStart, dataStartRow, grid.endColumn(), dataRowEnd),
-                    objectMapper.createObjectNode().put("inputMode", "BLANK_GRID")
-                            .put("columnCount", grid.endColumn() - dataColumnStart + 1)
-                            .put("rowCount", dataRowEnd - dataStartRow + 1),
-                    0.94, List.of("BORDERED_BLANK_GRID", "REPEATED_COLUMN_SURFACE", "STYLE_REPEAT"));
-            add(result, "RUNTIME_COLUMN_MEMBER_SURFACE", sheetId,
-                    range(dataColumnStart, headerRow, grid.endColumn(), headerRow),
-                    objectMapper.createObjectNode().put("memberMode", "RUNTIME_INPUT")
-                            .put("columnMemberRole", "COLUMN_MEMBER_INPUT")
-                            .put("slotCount", grid.endColumn() - dataColumnStart + 1),
-                    0.94, List.of("BLANK_IDENTITY_ROW", "REPEATED_COLUMN_SURFACE"));
-            add(result, "CROSS_TAB_CANDIDATE", sheetId, tableRange,
-                    objectMapper.createObjectNode().put("tableKind", "MATRIX")
-                            .put("semanticMode", "CROSS_TAB").put("recordAxis", recordAxis),
-                    0.95, List.of("BLANK_GRID_INPUT_SURFACE", "MULTI_LEVEL_ROW_LABELS", "RUNTIME_COLUMN_MEMBER_SURFACE"));
-        }
-        add(result, "MATRIX", sheetId, tableRange, structure, 0.86,
-                grid == null
-                        ? List.of("CROSS_FILLED_DATA", "MULTI_LEVEL_ROW_LABELS", "FORMULA_OR_INPUT_GRID")
-                        : List.of("BLANK_GRID_INPUT_SURFACE", "MULTI_LEVEL_ROW_LABELS", "RUNTIME_COLUMN_MEMBER_SURFACE"));
-        return true;
+        return false;
     }
 
     private boolean hasMultiSectionFormEvidence(List<JsonNode> cells, GridSurface grid) {
@@ -533,8 +611,45 @@ public final class StructurePrimitiveRecognizer {
             rows.add(row);
             if (valueEndRow > row || endRow(label, row) > row) multiRowSurfaceCount++;
         }
-        return multiRowSurfaceCount >= 2
+        return (formSurfaceCount >= 2 && rows.size() >= 2)
+                || multiRowSurfaceCount >= 2
                 || (multiRowSurfaceCount >= 1 && formSurfaceCount >= 4 && rows.size() >= 3);
+    }
+
+    /**
+     * Detects the physical shape of a multi-section form even when semantic
+     * facts omit blank merged input anchors. A wide blank merge next to a
+     * vertically merged text label is a writing area, not a repeated sample
+     * column. Two such sections are enough to suppress the generic blank-grid
+     * COLUMN_TABLE hypothesis.
+     */
+    private boolean hasMergedWritingSurface(JsonNode sheet, GridSurface grid) {
+        int writingBlocks = 0;
+        int labelledBlocks = 0;
+        int gridWidth = grid.endColumn() - grid.startColumn() + 1;
+        for (var valueCell : sheet.path("candidateCells")) {
+            var valueBounds = bounds(valueCell.path("mergedRange").asText(""));
+            if (valueBounds == null || valueBounds[0] <= grid.startColumn()
+                    || valueBounds[2] > grid.endColumn() || valueBounds[1] < grid.startRow()
+                    || valueBounds[3] > grid.endRow()
+                    || valueBounds[2] - valueBounds[0] + 1 < Math.max(3, (int) Math.ceil(gridWidth * 0.45))
+                    || valueBounds[3] - valueBounds[1] < 1
+                    || !valueCell.path("value").asText("").strip().isBlank()) continue;
+            writingBlocks++;
+            boolean adjacentLabel = false;
+            for (var labelCell : sheet.path("candidateCells")) {
+                var labelBounds = bounds(labelCell.path("mergedRange").asText(""));
+                if (labelBounds == null || labelBounds[2] >= valueBounds[0]
+                        || labelBounds[1] > valueBounds[3] || labelBounds[3] < valueBounds[1]
+                        || labelCell.path("value").asText("").strip().isBlank()) continue;
+                if (labelBounds[3] > labelBounds[1]) {
+                    adjacentLabel = true;
+                    break;
+                }
+            }
+            if (adjacentLabel) labelledBlocks++;
+        }
+        return writingBlocks >= 2 && labelledBlocks >= 2;
     }
 
     private int countValues(List<JsonNode> cells, int row, int startColumn, int endColumn) {
@@ -546,7 +661,7 @@ public final class StructurePrimitiveRecognizer {
                 .count();
     }
 
-    private boolean looksLikeStaticCrossTab(List<JsonNode> cells, GridSurface grid) {
+    private boolean looksLikePopulatedTwoAxisTable(List<JsonNode> cells, GridSurface grid) {
         int width = grid.endColumn() - grid.startColumn() + 1;
         int height = grid.endRow() - grid.startRow() + 1;
         if (width < 3 || height < 3) return false;
@@ -648,7 +763,7 @@ public final class StructurePrimitiveRecognizer {
         candidates.sort(java.util.Comparator.comparingInt(GridSurface::area).reversed());
         var selected = new ArrayList<GridSurface>();
         for (var candidate : candidates) {
-            if (selected.stream().noneMatch(existing -> overlaps(existing, candidate))) selected.add(candidate);
+            if (selected.stream().noneMatch(existing -> sameGrid(existing, candidate))) selected.add(candidate);
         }
         return List.copyOf(selected);
     }
@@ -662,7 +777,7 @@ public final class StructurePrimitiveRecognizer {
         for (int row = startRow + 1; row <= byRow.lastKey(); row++) {
             var columns = byRow.get(row);
             if (columns == null || !columns.containsAll(required)) {
-                if (!topologyV2Enabled || !bridgeableAttributeRow(row, required, byRow)) break;
+                if (!bridgeableAttributeRow(row, required, byRow)) break;
             }
             lastRow = row;
         }
@@ -700,7 +815,7 @@ public final class StructurePrimitiveRecognizer {
                 && !cell.path("style").path("bd").isEmpty());
     }
 
-    private boolean hasMergedMatrixCorner(List<JsonNode> cells, GridSurface grid) {
+    private boolean hasMergedHeaderCorner(List<JsonNode> cells, GridSurface grid) {
         return cells.stream()
                 .map(cell -> bounds(cell.path("mergedRange").asText("")))
                 .anyMatch(value -> value != null
@@ -714,7 +829,7 @@ public final class StructurePrimitiveRecognizer {
      * A full-sheet border is common in forms, so the first bordered row is not
      * necessarily the table header. A horizontal merged corner followed by
      * multiple left-axis labels is a stable geometric signal; the latest such
-     * row is selected so title and metadata rows stay outside the matrix.
+     * row is selected so title and metadata rows stay outside the repeated region.
      */
     private Integer findStructuralHeaderRow(List<JsonNode> cells, GridSurface grid) {
         if (grid == null) return null;
@@ -742,9 +857,7 @@ public final class StructurePrimitiveRecognizer {
                             && next[0] >= merged[0] && next[2] <= merged[2] + 1);
             if (nextRows.size() >= 2 || hasVerticalAxis) candidates.add(row);
         }
-        return topologyV2Enabled
-                ? candidates.stream().min(Integer::compareTo).orElse(null)
-                : candidates.stream().max(Integer::compareTo).orElse(null);
+        return candidates.stream().min(Integer::compareTo).orElse(null);
     }
 
     /**
@@ -863,13 +976,32 @@ public final class StructurePrimitiveRecognizer {
                         && cell.path("inputCandidate").asBoolean(false))
                 .count();
         if (headerInputs > 0 && bodyInputs >= headerInputs) return "COLUMN";
+        var headerValues = countValues(cells, headerRow, grid.startColumn(), grid.endColumn());
+        var denseHeader = headerValues >= Math.ceil((grid.endColumn() - grid.startColumn() + 1) * 0.7);
+        if (hasColumnIdentityEvidence(grid, cells, headerRow)) return "COLUMN";
+        // A dense, unmerged header followed by populated records is the
+        // ordinary row-table shape.  Do not let the generic bordered-grid
+        // fallback turn every row table into COLUMN_TABLE.
+        if (denseHeader && bodyInputs == 0) return "ROW";
         // Blank runtime headers are often omitted from semanticCells. A
         // bordered rectangular input surface with at least two columns is
-        // still strong physical evidence for column members; this remains a
+        // still strong physical evidence for columns repeated as records; this remains a
         // provisional hint and can be overturned by structure assessment.
         if (grid.endColumn() - grid.startColumn() >= 1
                 && dataEndRow - dataStartRow + 1 >= 2) return "COLUMN";
         return "UNKNOWN";
+    }
+
+    private boolean hasColumnIdentityEvidence(GridSurface grid, List<JsonNode> cells, int headerRow) {
+        var anchor = cellAt(cells, grid.startColumn(), headerRow);
+        if (anchor != null && isColumnAxisLabel(anchor.path("value").asText(""))) return true;
+        if (anchor != null && endColumn(anchor, grid.startColumn()) > grid.startColumn()) return true;
+        return cells.stream().anyMatch(cell -> {
+            var start = cell.path("column").asInt(0);
+            var row = cell.path("row").asInt(0);
+            return start == grid.startColumn() && row >= headerRow
+                    && endRow(cell, row) > row && endRow(cell, row) <= grid.endRow();
+        });
     }
 
     private void addFieldGroups(ArrayNode result, String sheetId, List<JsonNode> cells) {
@@ -900,7 +1032,6 @@ public final class StructurePrimitiveRecognizer {
             if (!inputSurface) continue;
             if (!explicitLabel && !(horizontalLabel || adjacentInputSurface)) continue;
             var fieldRange = range(column, row, endColumn(next, labelEndColumn + 1), endRow(next, row));
-            if (overlapsMatrix(result, sheetId, fieldRange)) continue;
             add(result, "FORM_REGION", sheetId,
                     fieldRange,
                     objectMapper.createObjectNode().put("labelRange", address(label))
@@ -909,22 +1040,18 @@ public final class StructurePrimitiveRecognizer {
         }
     }
 
-    private boolean overlapsMatrix(ArrayNode primitives, String sheetId, String range) {
-        var candidate = bounds(range);
-        if (candidate == null) return false;
-        for (var primitive : primitives) {
-            if (!Set.of("MATRIX", "COLUMN_TABLE", "ROW_TABLE")
-                    .contains(primitive.path("blockType").asText())
-                    || !sheetId.equals(primitive.path("sheetId").asText(""))) continue;
-            var matrix = bounds(primitive.path("range").asText(""));
-            if (matrix != null && candidate[0] <= matrix[2] && matrix[0] <= candidate[2]
-                    && candidate[1] <= matrix[3] && matrix[1] <= candidate[3]) return true;
-        }
-        return false;
-    }
-
     private void addRepeatedRows(ArrayNode result, String sheetId, JsonNode sheet, List<JsonNode> cells) {
         for (var physical : detectRepeatedRowSurfaces(sheet, cells)) {
+            var physicalGrid = new GridSurface(physical.startColumn(), physical.endColumn(),
+                    physical.headerRow(), physical.endRow());
+            // Keep row evidence even when the same connected surface also has
+            // column or form evidence.  The final disjoint resolver compares
+            // all candidates; detection must not erase a direction merely
+            // because another detector ran first.  Known non-row topologies
+            // receive lower confidence so a complete column/form candidate
+            // wins without making the evidence disappear.
+            var staticColumnTopology = looksLikeStaticColumnTable(cells, physicalGrid);
+            var formTopology = hasMergedWritingSurface(sheet, physicalGrid);
             var physicalRange = range(physical.startColumn(), physical.headerRow(), physical.endColumn(), physical.endRow());
             // A fully bordered form can look like a repeated row table when
             // every blank writing surface is retained as an input candidate.
@@ -932,8 +1059,6 @@ public final class StructurePrimitiveRecognizer {
             // evidenced label/value pairs. A real row table normally has one
             // header band; a form has label/value surfaces on multiple rows,
             // often including vertically merged writing areas.
-            if (formSurfacesDominate(result, sheetId, physicalRange)) continue;
-            if (overlapsMatrix(result, sheetId, physicalRange)) continue;
             var details = objectMapper.createObjectNode()
                     .put("headerRange", range(physical.startColumn(), physical.headerRow(),
                             physical.endColumn(), physical.headerRow()))
@@ -941,24 +1066,21 @@ public final class StructurePrimitiveRecognizer {
                             physical.endColumn(), physical.dataEndRow()))
                     .put("recordAxis", "ROW")
                     .put("repeatAxis", "ROW");
-            if (physical.recordSlots().isEmpty()) {
-                details.put("recordHeight", 1).put("recordStride", 1);
-            } else {
-                var slots = details.putArray("recordSlots");
-                for (int index = 0; index < physical.recordSlots().size(); index++) {
-                    var slotRange = physical.recordSlots().get(index);
-                    slots.add(objectMapper.createObjectNode()
-                            .put("slotId", "record-" + (index + 1))
-                            .put("recordKey", "record-" + (index + 1))
-                            .put("order", index + 1)
-                            .put("range", slotRange)
-                            .put("identityAddress", slotRange.split(":", 2)[0]));
+            var recordHeight = 1;
+            var recordStride = 1;
+            if (!physical.cadenceRanges().isEmpty()) {
+                var first = bounds(physical.cadenceRanges().getFirst());
+                if (first != null) recordHeight = first[3] - first[1] + 1;
+                if (physical.cadenceRanges().size() > 1) {
+                    var second = bounds(physical.cadenceRanges().get(1));
+                    if (first != null && second != null) recordStride = Math.max(1, second[1] - first[1]);
+                } else {
+                    recordStride = recordHeight;
                 }
-                details.set("recordProjection", objectMapper.createObjectNode()
-                        .put("mode", "ROW_RECORDS")
-                        .put("recordAxis", "ROW")
-                        .set("recordSlots", slots.deepCopy()));
             }
+            details.put("recordHeight", recordHeight)
+                    .put("recordWidth", physical.endColumn() - physical.startColumn() + 1)
+                    .put("recordStride", recordStride);
             if (physical.totalRow() > 0) {
                 details.put("totalRange", range(physical.startColumn(), physical.totalRow(),
                         physical.endColumn(), physical.totalRow()));
@@ -970,12 +1092,15 @@ public final class StructurePrimitiveRecognizer {
                 details.set("terminationRule", objectMapper.createObjectNode()
                         .put("type", "UNTIL_REGION_END"));
             }
+            var rowEvidence = new ArrayList<String>(physical.cadenceRanges().isEmpty()
+                    ? List.of("REPEATED_BORDERED_ROWS", "STABLE_RECORD_WIDTH", "MULTI_ROW_INPUT_SURFACE")
+                    : List.of("VERTICAL_MERGE_RECORD_SLOTS", "DISTINCT_RECORD_CADENCE", "ROW_RECORD_SURFACE"));
+            if (staticColumnTopology) rowEvidence.add("COLUMN_EVIDENCE_ALSO_PRESENT");
+            if (formTopology) rowEvidence.add("FORM_EVIDENCE_ALSO_PRESENT");
             add(result, "ROW_TABLE", sheetId,
                     physicalRange,
-                    details, 0.86,
-                    physical.recordSlots().isEmpty()
-                            ? List.of("REPEATED_BORDERED_ROWS", "STABLE_RECORD_WIDTH", "MULTI_ROW_INPUT_SURFACE")
-                            : List.of("VERTICAL_MERGE_RECORD_SLOTS", "DISTINCT_RECORD_CADENCE", "ROW_RECORD_SURFACE"));
+                    details, formTopology ? 0.70 : staticColumnTopology ? 0.72 : 0.86,
+                    rowEvidence);
         }
         var byRow = new HashMap<Integer, List<JsonNode>>();
         for (var cell : cells) {
@@ -1002,29 +1127,6 @@ public final class StructurePrimitiveRecognizer {
             previous = row;
         }
         if (start >= 0) addRows(result, sheetId, cells, start, previous);
-    }
-
-    private boolean formSurfacesDominate(ArrayNode primitives, String sheetId, String tableRange) {
-        var table = bounds(tableRange);
-        if (table == null) return false;
-        var labelRows = new java.util.HashSet<Integer>();
-        var formSurfaceCount = 0;
-        var hasMultiRowSurface = false;
-        for (var primitive : primitives) {
-            if (!"FORM_REGION".equals(primitive.path("blockType").asText(""))
-                    || !sheetId.equals(primitive.path("sheetId").asText(""))) continue;
-            var surface = bounds(primitive.path("range").asText(""));
-            if (surface == null || surface[0] < table[0] || surface[1] < table[1]
-                    || surface[2] > table[2] || surface[3] > table[3]) continue;
-            var label = bounds(primitive.path("structure").path("labelRange").asText(""));
-            var value = bounds(primitive.path("structure").path("valueRange").asText(""));
-            if (label == null || value == null || value[0] <= label[2]) continue;
-            formSurfaceCount++;
-            labelRows.add(label[1]);
-            hasMultiRowSurface |= value[3] > value[1] || label[3] > label[1];
-        }
-        return formSurfaceCount >= 3 && labelRows.size() >= 2
-                && (hasMultiRowSurface || formSurfaceCount >= 4);
     }
 
     /**
@@ -1068,9 +1170,17 @@ public final class StructurePrimitiveRecognizer {
         surfaces.sort(java.util.Comparator.comparingInt(RowSurface::area).reversed());
         var selected = new ArrayList<RowSurface>();
         for (var surface : surfaces) {
-            if (selected.stream().noneMatch(existing -> overlaps(existing, surface))) selected.add(surface);
+            if (selected.stream().noneMatch(existing -> sameSurface(existing, surface))) selected.add(surface);
         }
         return List.copyOf(selected);
+    }
+
+    private boolean sameSurface(RowSurface first, RowSurface second) {
+        return first.startColumn() == second.startColumn()
+                && first.endColumn() == second.endColumn()
+                && first.headerRow() == second.headerRow()
+                && first.dataEndRow() == second.dataEndRow()
+                && first.endRow() == second.endRow();
     }
 
     private RowSurface rowSurface(List<Integer> rows, Map<Integer, java.util.Set<Integer>> byRow,
@@ -1167,8 +1277,23 @@ public final class StructurePrimitiveRecognizer {
         var occupied = new java.util.TreeSet<Integer>();
         for (var primitive : result) {
             if (!sheetId.equals(primitive.path("sheetId").asText(""))) continue;
-            if (!Set.of("MATRIX", "ROW_TABLE", "COLUMN_TABLE")
+            if (!Set.of("ROW_TABLE", "COLUMN_TABLE")
                     .contains(primitive.path("blockType").asText(""))) continue;
+            // A broad bordered-row hypothesis can cover the same physical
+            // surface as a stronger column table (the common application
+            // report shape: labels in A:C and samples in D:J).  That row
+            // hypothesis is later discarded by selectPhysicalCandidates, but
+            // using it here would still split the form band above the table
+            // and strand its trailing label/value rows as unpartitioned
+            // fields.  Only competitive table candidates may block a form
+            // envelope.
+            if ("ROW_TABLE".equals(primitive.path("blockType").asText(""))
+                    && shadowedByStrongerColumnTable(result, primitive, sheetId)) continue;
+            // Low-confidence bordered-row hypotheses are commonly produced by
+            // multi-section forms. They are not stable table topology and must
+            // not split the form envelope before the final disjoint decision.
+            if (!primitive.path("physicalConfirmed").asBoolean(false)
+                    && !primitive.path("structure").path("physicalConfirmed").asBoolean(false)) continue;
             var area = bounds(primitive.path("range").asText(""));
             if (area == null) continue;
             for (int row = area[1]; row <= area[3]; row++) occupied.add(row);
@@ -1238,7 +1363,16 @@ public final class StructurePrimitiveRecognizer {
             ArrayNode result, String sheetId, JsonNode sheet, List<JsonNode> semanticCells,
             int startColumn, int startRow, int endColumn, int endRow
     ) {
-        if (endRow < startRow || formEvidenceCount(sheet, semanticCells, startRow, endRow, endColumn) < 2) return;
+        if (endRow < startRow) return;
+        var evidenceCount = formEvidenceCount(sheet, semanticCells, startRow, endRow, endColumn);
+        // Some Excel forms expose the blank merged value cells only through
+        // the already-created label/value primitives. In that case the raw
+        // candidate-cell pass cannot count the writing surfaces, which used to
+        // leave nine independent scalar regions and no FORM_REGION at all.
+        // Existing adjacent FORM_REGION primitives are equally strong physical
+        // evidence and should be consolidated into one form envelope.
+        var primitiveCount = existingFormPrimitiveCount(result, sheetId, startColumn, startRow, endColumn, endRow);
+        if (evidenceCount < 2 && primitiveCount < 2) return;
         var envelopeRange = range(startColumn, startRow, endColumn, endRow);
         var details = objectMapper.createObjectNode().put("recordAxis", "UNKNOWN");
         var surfaces = details.putArray("fieldSurfaces");
@@ -1268,6 +1402,43 @@ public final class StructurePrimitiveRecognizer {
         }
         add(result, "FORM_REGION", sheetId, envelopeRange, details, 0.84,
                 List.of("CONTIGUOUS_FORM_BAND", "MULTIPLE_LABEL_VALUE_SURFACES", "TABLE_BOUNDARY_ENVELOPE"));
+    }
+
+    private int existingFormPrimitiveCount(
+            ArrayNode result, String sheetId, int startColumn, int startRow, int endColumn, int endRow
+    ) {
+        var envelope = new int[]{startColumn, startRow, endColumn, endRow};
+        var count = 0;
+        for (var primitive : result) {
+            if (!"FORM_REGION".equals(primitive.path("blockType").asText())
+                    || !sheetId.equals(primitive.path("sheetId").asText(""))) continue;
+            var primitiveBounds = bounds(primitive.path("range").asText(""));
+            if (primitiveBounds != null && containsBounds(envelope, primitiveBounds)) count++;
+        }
+        return count;
+    }
+
+    private boolean shadowedByStrongerColumnTable(
+            ArrayNode candidates, JsonNode rowCandidate, String sheetId
+    ) {
+        var rowRange = rowCandidate.path("range").asText("");
+        var rowConfidence = rowCandidate.path("confidence").asDouble(0.0);
+        if (rowRange.isBlank()) return false;
+        for (var candidate : candidates) {
+            if (!"COLUMN_TABLE".equals(candidate.path("blockType").asText(""))
+                    || !sheetId.equals(candidate.path("sheetId").asText(""))) continue;
+            if (!candidate.path("physicalConfirmed").asBoolean(false)
+                    && !candidate.path("structure").path("physicalConfirmed").asBoolean(false)) continue;
+            if (!overlaps(rowRange, candidate.path("range").asText(""))) continue;
+            if (candidate.path("confidence").asDouble(0.0) + 0.01 < rowConfidence) continue;
+            return true;
+        }
+        return false;
+    }
+
+    private boolean containsBounds(int[] outer, int[] inner) {
+        return outer[0] <= inner[0] && outer[1] <= inner[1]
+                && outer[2] >= inner[2] && outer[3] >= inner[3];
     }
 
     private int formEvidenceCount(JsonNode sheet, List<JsonNode> semanticCells, int startRow, int endRow, int endColumn) {
@@ -1355,8 +1526,6 @@ public final class StructurePrimitiveRecognizer {
         var maxColumn = rowCells.stream().mapToInt(cell -> endColumn(cell, cell.path("column").asInt())).max().orElse(minColumn);
         var headerRow = Math.max(1, start - 1);
         var tableRange = range(minColumn, headerRow, maxColumn, end);
-        if (formSurfacesDominate(result, sheetId, tableRange)) return;
-        if (overlapsMatrix(result, sheetId, tableRange)) return;
         add(result, "ROW_TABLE", sheetId, tableRange,
                 objectMapper.createObjectNode()
                         .put("headerRange", range(minColumn, headerRow, maxColumn, headerRow))
@@ -1366,24 +1535,6 @@ public final class StructurePrimitiveRecognizer {
                         .put("recordHeight", 1)
                         .put("recordStride", 1),
                 0.68, List.of("REPEATED_ROWS", "STABLE_INPUT_COLUMNS"));
-    }
-
-    private void addStaticAndTextRegions(ArrayNode result, String sheetId, List<JsonNode> cells) {
-        var seen = new HashSet<String>();
-        for (var cell : cells) {
-            var text = cell.path("value").asText("").strip();
-            if (text.isBlank()) continue;
-            var merged = cell.path("mergedRange").asText("");
-            var address = merged.isBlank() ? address(cell) : merged;
-            var prefix = STATIC_PREFIXES.stream().anyMatch(text::startsWith);
-            var blockType = prefix ? "STATIC_REFERENCE"
-                    : (!merged.isBlank() && (text.length() >= 12 || merged.contains(":")) ? "FREE_TEXT" : null);
-            if (blockType == null || !seen.add(blockType + "|" + address)) continue;
-            add(result, blockType, sheetId, address,
-                    objectMapper.createObjectNode().put("textRange", address),
-                    prefix ? 0.94 : 0.62,
-                    prefix ? List.of("STATIC_PREFIX", "TEXT_VALUE") : List.of("MERGED_TEXT_REGION"));
-        }
     }
 
     private void add(ArrayNode result, String blockType, String sheetId, String range,
@@ -1471,10 +1622,8 @@ public final class StructurePrimitiveRecognizer {
         return switch (blockType) {
             case "COLUMN_TABLE" -> "COLUMN".equals(details.path("recordAxis").asText(
                             details.path("repeatAxis").asText("")))
-                    && details.path("recordProjection").path("recordColumns").isArray()
-                    && details.path("recordProjection").path("recordColumns").size() >= 2
-                    && details.path("fieldRows").isArray() && details.path("fieldRows").size() >= 2
-                    && !details.path("crossDataRange").asText("").isBlank()
+                    && bounds(details.path("headerRange").asText("")) != null
+                    && bounds(details.path("dataRange").asText("")) != null
                     && (evidenceSet.contains("CONTINUOUS_REPEATED_COLUMN_SURFACE")
                     || evidenceSet.contains("STATIC_COLUMN_HEADER")
                     || evidenceSet.contains("REPEATED_COLUMN_SURFACE"));
@@ -1482,14 +1631,9 @@ public final class StructurePrimitiveRecognizer {
                             details.path("repeatAxis").asText("")))
                     && !details.path("headerRange").asText("").isBlank()
                     && !details.path("dataRange").asText("").isBlank()
-                    && (details.path("recordSlots").size() >= 2
-                    || evidenceSet.contains("REPEATED_BORDERED_ROWS"));
-            case "MATRIX" -> Set.of("ROW", "COLUMN").contains(details.path("recordAxis").asText(""))
-                    && !details.path("cornerRange").asText("").isBlank()
-                    && !details.path("rowHeaderRange").asText("").isBlank()
-                    && !details.path("columnHeaderRange").asText("").isBlank()
-                    && !details.path("crossDataRange").asText("").isBlank()
-                    && evidenceSet.stream().anyMatch(item -> item.contains("CROSS") || item.contains("GRID"));
+                    && details.path("recordHeight").asInt(0) > 0
+                    && (evidenceSet.contains("REPEATED_BORDERED_ROWS")
+                    || evidenceSet.contains("DISTINCT_RECORD_CADENCE"));
             case "FORM_REGION" -> evidenceSet.contains("MULTIPLE_LABEL_VALUE_SURFACES")
                     && evidenceSet.contains("TABLE_BOUNDARY_ENVELOPE");
             default -> false;
@@ -1498,8 +1642,9 @@ public final class StructurePrimitiveRecognizer {
 
     private List<String> recordColumns(JsonNode structure) {
         var result = new ArrayList<String>();
-        for (var column : structure.path("recordProjection").path("recordColumns")) {
-            result.add(column.asText("").toUpperCase(Locale.ROOT));
+        var data = bounds(structure.path("dataRange").asText(""));
+        if (data != null) {
+            for (int column = data[0]; column <= data[2]; column++) result.add(columnName(column));
         }
         return List.copyOf(result);
     }
@@ -1553,7 +1698,7 @@ public final class StructurePrimitiveRecognizer {
                 .filter(cell -> !cell.path("value").asText("").strip().isBlank())
                 .map(cell -> bounds(cell.path("mergedRange").asText("")))
                 .filter(value -> value != null && value[2] > value[0]
-                        && (!topologyV2Enabled || value[1] == value[3])
+                        && value[1] == value[3]
                         && value[2] < dataColumn && value[1] <= formulaRow)
                 .max(java.util.Comparator.comparingInt(value -> value[1]))
                 .orElse(null);
@@ -1608,16 +1753,16 @@ public final class StructurePrimitiveRecognizer {
         return objectMapper.createObjectNode()
                 .put("recordAxisEvidence", evidence.recordAxis())
                 .put("blankIdentityBand", evidence.blankIdentityBand())
-                .put("explicitColumnMemberCount", evidence.explicitColumnMemberCount())
+                .put("topHeaderValueCount", evidence.topHeaderValueCount())
                 .put("rowLabelDepth", evidence.rowLabelDepth())
                 .put("dataColumnCount", evidence.dataColumnCount())
                 .put("bodyRowCount", evidence.bodyRowCount())
-                .put("crossSurfacePresent", evidence.crossSurfacePresent())
-                .put("runtimeColumnMemberSurface", evidence.runtimeColumnMemberSurface())
-                .put("runtimeRowMemberSurface", evidence.runtimeRowMemberSurface())
-                .put("runtimeColumnMemberRange", evidence.runtimeColumnMemberRange())
-                .put("runtimeRowMemberRange", evidence.runtimeRowMemberRange())
-                .put("crossDataRange", evidence.crossDataRange())
+                .put("rectangularDataSurface", evidence.rectangularDataSurface())
+                .put("blankColumnHeaderBand", evidence.blankColumnHeaderBand())
+                .put("blankRowHeaderBand", evidence.blankRowHeaderBand())
+                .put("columnHeaderRange", evidence.columnHeaderRange())
+                .put("rowHeaderRange", evidence.rowHeaderRange())
+                .put("dataRange", evidence.dataRange())
                 .put("formulaTopologyPresent", evidence.formulaTopologyPresent())
                 .put("confidence", 0.0);
     }
@@ -1641,7 +1786,7 @@ public final class StructurePrimitiveRecognizer {
 
     private record RowSurface(int startColumn, int endColumn, int headerRow, int dataStartRow,
                               int dataEndRow, int endRow, int totalRow, String totalLabel,
-                              List<String> recordSlots) {
+                              List<String> cadenceRanges) {
         int area() {
             return Math.max(0, endColumn - startColumn + 1)
                     * Math.max(0, endRow - headerRow + 1);

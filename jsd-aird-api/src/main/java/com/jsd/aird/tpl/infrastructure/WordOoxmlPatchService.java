@@ -2,6 +2,8 @@ package com.jsd.aird.tpl.infrastructure;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -177,9 +179,9 @@ public class WordOoxmlPatchService implements WordOoxmlPatcher {
 
     private Map<String, Node> stableTargetNodes(Document document) {
         var targets = new HashMap<String, Node>();
-        putIndexed(targets, document.getElementsByTagNameNS("*", "t"), "text-");
-        putIndexed(targets, document.getElementsByTagNameNS("*", "r"), "run-");
-        putIndexed(targets, document.getElementsByTagNameNS("*", "tc"), "cell-");
+        putIndexedAndStable(targets, document.getElementsByTagNameNS("*", "t"), "text-");
+        putIndexedAndStable(targets, document.getElementsByTagNameNS("*", "r"), "run-");
+        putIndexedAndStable(targets, document.getElementsByTagNameNS("*", "tc"), "cell-");
         var paragraphs = document.getElementsByTagNameNS("*", "p");
         for (var index = 0; index < paragraphs.getLength(); index++) {
             var paragraph = paragraphs.item(index);
@@ -187,14 +189,51 @@ public class WordOoxmlPatchService implements WordOoxmlPatcher {
             if (paragraph instanceof Element element) {
                 var paraId = attribute(element, "paraId");
                 if (!paraId.isBlank()) targets.putIfAbsent("paragraph-" + paraId, paragraph);
+                targets.putIfAbsent(stableNodeId("paragraph", element), paragraph);
             }
         }
         return targets;
     }
 
-    private void putIndexed(Map<String, Node> targets, NodeList nodes, String prefix) {
+    private void putIndexedAndStable(Map<String, Node> targets, NodeList nodes, String prefix) {
         for (var index = 0; index < nodes.getLength(); index++) {
-            targets.put(prefix + (index + 1), nodes.item(index));
+            var node = nodes.item(index);
+            targets.put(prefix + (index + 1), node);
+            if (node instanceof Element element) {
+                targets.putIfAbsent(stableNodeId(prefix.substring(0, prefix.length() - 1), element), node);
+            }
+        }
+    }
+
+    private String stableNodeId(String prefix, Element element) {
+        return prefix + "-" + sha256(sourcePath(element).getBytes(StandardCharsets.UTF_8)).substring(0, 16);
+    }
+
+    private String sourcePath(Element element) {
+        var segments = new ArrayList<String>();
+        Node current = element;
+        while (current instanceof Element currentElement) {
+            var localName = currentElement.getLocalName();
+            if (localName == null || localName.isBlank()) localName = currentElement.getNodeName();
+            var position = 1;
+            for (var sibling = currentElement.getPreviousSibling(); sibling != null; sibling = sibling.getPreviousSibling()) {
+                if (sibling instanceof Element siblingElement) {
+                    var siblingName = siblingElement.getLocalName();
+                    if (siblingName == null || siblingName.isBlank()) siblingName = siblingElement.getNodeName();
+                    if (localName.equals(siblingName)) position++;
+                }
+            }
+            segments.add(0, localName + "[" + position + "]");
+            current = currentElement.getParentNode();
+        }
+        return "/" + String.join("/", segments);
+    }
+
+    private String sha256(byte[] bytes) {
+        try {
+            return java.util.HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+        } catch (Exception exception) {
+            throw new IllegalStateException("Unable to hash Word node path", exception);
         }
     }
 

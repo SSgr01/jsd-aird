@@ -37,6 +37,7 @@ import com.jsd.aird.ops.application.port.AuditLogFacade;
 import com.jsd.aird.ops.application.port.FileStorageFacade;
 import com.jsd.aird.ops.application.port.OpsAsyncFacade;
 import com.jsd.aird.shared.api.PageResponse;
+import com.jsd.aird.shared.api.AllowedActions;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.security.ActorContext;
@@ -375,13 +376,18 @@ public class KnowledgeService implements KnowledgeSearchFacade {
     public DocumentView updateAiGrant(UUID documentId, GrantCommand command) {
         var actor = ActorContext.required();
         requireDocument(actor.organizationId(), documentId);
-        var publication = governance.currentPublication(actor.organizationId(), documentId)
-                .orElseThrow(() -> new ApiException(ApiErrorCode.AI_DOCUMENT_NOT_APPROVED, "文件尚未审核发布"));
         var action = command.action() == null ? "" : command.action().trim().toUpperCase(Locale.ROOT);
         switch (action) {
             case "APPROVE", "REJECT", "REVOKE" -> { }
             default -> throw new ApiException(ApiErrorCode.BAD_REQUEST, "AI 授权动作只能是 APPROVE、REJECT 或 REVOKE");
         }
+        // Approval and rejection apply to the current published version. Revocation is
+        // intentionally allowed for disabled documents so an existing grant can be
+        // explicitly cleared without first restoring the document.
+        var publication = "REVOKE".equals(action)
+                ? null
+                : governance.currentPublication(actor.organizationId(), documentId)
+                    .orElseThrow(() -> new ApiException(ApiErrorCode.AI_DOCUMENT_NOT_APPROVED, "文件尚未审核发布"));
         if (!governance.updateAiUsage(actor.organizationId(), actor.userId(), documentId, action, command.reason())) {
             throw new ApiException(ApiErrorCode.AI_DOCUMENT_NOT_APPROVED, "当前文档不可授权 AI 使用");
         }
@@ -1343,7 +1349,11 @@ public class KnowledgeService implements KnowledgeSearchFacade {
                                UUID categoryId, String categoryName, String lifecycleStatus, String reviewStatus,
                                String reviewRevisionStatus, int reviewRevision,
                                UUID currentPublicationId, Integer currentPublicationNo,
-                               List<ProjectResourceFacade.RelatedProjectView> relatedProjects) { }
+                               List<ProjectResourceFacade.RelatedProjectView> relatedProjects) {
+        public List<String> getAllowedActions() {
+            return AllowedActions.knowledge(lifecycleStatus, reviewStatus, currentPublicationId != null);
+        }
+    }
     public record ProcessingView(UUID documentId, UUID versionId, String documentStatus, String documentError,
                                  UUID parseRunId, String parseRunStatus, String parseRunError,
                                  java.time.Instant lastAttemptAt, UUID jobId, String jobStatus, int progress,

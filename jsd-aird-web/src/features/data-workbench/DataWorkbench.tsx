@@ -410,15 +410,13 @@ function groupDefinitions(fields: DataWorkbookFieldDefinition[]) {
 
 function definitionMeta(field: DataWorkbookFieldDefinition) {
   const type = valueTypeLabel(field.valueType);
-  const role = isDetailField(field.mappingKind)
-    ? (field.mappingKind || '').toUpperCase().includes('MATRIX') ? '矩阵指标' : '明细字段'
-    : '普通字段';
+  const role = isDetailField(field.mappingKind) ? '明细字段' : '普通字段';
   return [role, type, field.unit].filter(Boolean).join('，');
 }
 
 function isDetailField(kind?: string) {
   const value = (kind || '').toUpperCase();
-  return value.includes('REPEAT') || value.includes('TABLE') || value.includes('MATRIX');
+  return value.includes('REPEAT') || value.includes('TABLE');
 }
 
 function valueTypeLabel(value?: string) {
@@ -468,7 +466,6 @@ function fallbackRegionName(type?: string, axis?: string) {
   const label = structureLabel(type, axis);
   if (label === '表单信息') return '基本信息';
   if (label === '按行记录' || label === '按列记录') return '明细数据';
-  if (label === '矩阵/交叉表') return '矩阵指标';
   return '其他信息';
 }
 
@@ -542,16 +539,12 @@ function fieldSummaryLabel(summary: ReturnType<typeof summarizeFields>) {
 }
 
 function customerFieldGroup(field: DataFieldValueView) {
-  const code = (field.fieldCode || '').toUpperCase();
-  if (code.includes('ROW_DIMENSION') || code.includes('ROW_ATTRIBUTE')) return '行维度';
-  if (code.includes('COLUMN_DIMENSION') || code.includes('COLUMN_MEMBER')) return '列维度';
-  if (code.includes('MATRIX.MEASURE')) return '指标值';
   return field.groupPath && !internalContractText(field.groupPath)
     ? field.groupPath : labelGroup(field.labelPath);
 }
 
 function internalContractText(value?: string) {
-  return Boolean(value && /^(?:AUTO|TABLE|MATRIX|DATA|MATERIAL|PRODUCTION|WORKFLOW|FIELD)\..+$/i.test(value));
+  return Boolean(value && /^(?:AUTO|TABLE|DATA|MATERIAL|PRODUCTION|WORKFLOW|FIELD)\..+$/i.test(value));
 }
 
 function visibleFieldDefinitionCount(region: DataWorkbookRegion, workbook?: DataWorkbookSnapshot) {
@@ -575,7 +568,6 @@ function distinctBindings(fields: DataFieldValueView[]) {
 
 function structureLabel(type?: string, axis?: string) {
   const value = (type || '').toUpperCase();
-  if (value.includes('MATRIX')) return '矩阵/交叉表';
   if (value.includes('FORM')) return '表单信息';
   if ((axis || '').toUpperCase() === 'COLUMN' || value.includes('COLUMN')) return '按列记录';
   if ((axis || '').toUpperCase() === 'ROW' || value.includes('ROW') || value.includes('REPEAT')) return '按行记录';

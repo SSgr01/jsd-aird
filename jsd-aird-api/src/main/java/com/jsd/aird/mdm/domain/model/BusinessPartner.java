@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import com.jsd.aird.shared.api.AllowedActions;
 
 public record BusinessPartner(UUID id, String partnerCode, String name, String industry, String address,
                               PartnerStatus status, String remark,
@@ -13,6 +14,9 @@ public record BusinessPartner(UUID id, String partnerCode, String name, String i
                               long version, Instant createdAt, Instant updatedAt,
                               long requirementCount, long projectCount, Instant latestFollowUpAt,
                               List<String> ownerNames) {
+    public List<String> getAllowedActions() {
+        return AllowedActions.disabled(status == null ? null : status.name());
+    }
     public BusinessPartner(UUID id, String partnerCode, String name, String industry, String address,
                            PartnerStatus status, String remark,
                            List<PartnerContact> contacts, long version, Instant createdAt, Instant updatedAt) {

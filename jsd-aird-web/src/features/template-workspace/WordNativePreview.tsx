@@ -86,6 +86,33 @@ export const WordNativePreview = forwardRef<EditorHandle, Props>(function WordNa
     void used;
   };
 
+  const decorateTableCells = () => {
+    const root = bodyRef.current;
+    if (!root) return;
+    const structureTables = documentStructure?.tables
+      ?? documentStructure?.blocks?.filter((block) => block.type === 'TABLE')
+      ?? [];
+    const renderedTables = Array.from(root.querySelectorAll<HTMLTableElement>('table'));
+    renderedTables.forEach((renderedTable, tableIndex) => {
+      const structureTable = structureTables[tableIndex];
+      if (!structureTable) return;
+      renderedTable.dataset.wordNodeId = structureTable.id;
+      if (structureTable.sourcePath) renderedTable.dataset.wordSourcePath = structureTable.sourcePath;
+      Array.from(renderedTable.rows).forEach((renderedRow, rowIndex) => {
+        const structureRow = structureTable.rows?.[rowIndex];
+        if (!structureRow) return;
+        renderedRow.dataset.wordNodeId = structureRow.id;
+        if (structureRow.sourcePath) renderedRow.dataset.wordSourcePath = structureRow.sourcePath;
+        Array.from(renderedRow.cells).forEach((renderedCell, cellIndex) => {
+          const structureCell = structureRow.cells?.[cellIndex];
+          if (!structureCell) return;
+          renderedCell.dataset.wordNodeId = structureCell.id;
+          if (structureCell.sourcePath) renderedCell.dataset.wordSourcePath = structureCell.sourcePath;
+        });
+      });
+    });
+  };
+
   useEffect(() => {
     let active = true;
     const load = async () => {
@@ -104,7 +131,10 @@ export const WordNativePreview = forwardRef<EditorHandle, Props>(function WordNa
           renderEndnotes: true,
           useBase64URL: true,
         });
-        if (active) decorateControls();
+        if (active) {
+          decorateTableCells();
+          decorateControls();
+        }
       } catch (reason) {
         if (active) setError(reason instanceof Error ? reason.message : 'Word 原版式预览失败');
       } finally {
@@ -134,7 +164,7 @@ export const WordNativePreview = forwardRef<EditorHandle, Props>(function WordNa
       ? documentStructure?.anchors?.find((anchor) =>
           (anchor.kind === 'TEXT' || anchor.kind === 'RUN') && anchor.text?.trim() === selectedText)
       : undefined;
-    const nodeId = selectedAnchor?.nodeId || element.dataset.wordNodeId || inferNodeId(element, documentStructure);
+    const nodeId = element.dataset.wordNodeId || selectedAnchor?.nodeId || inferNodeId(element, documentStructure);
     if (!nodeId) return;
     const selection = { targetId: nodeId, text: selectedText || element.textContent?.trim() || '', element };
     selectionRef.current = selection;
@@ -252,9 +282,17 @@ export const WordNativePreview = forwardRef<EditorHandle, Props>(function WordNa
     },
     focusBinding: (binding) => {
       const marker = bindingMarker(binding);
-      const element = marker
+      let element = marker
         ? bodyRef.current?.querySelector<HTMLElement>(`[data-word-marker-id="${cssEscape(marker)}"]`)
         : undefined;
+      if (!element) {
+        for (const nodeId of bindingNodeIds(binding)) {
+          element = bodyRef.current?.querySelector<HTMLElement>(
+            `[data-word-node-id="${cssEscape(nodeId)}"]`,
+          );
+          if (element) break;
+        }
+      }
       element?.scrollIntoView({ block: 'center', behavior: 'smooth' });
       if (element) {
         element.classList.add('word-native-focus');
@@ -398,6 +436,7 @@ function wrapFirstText(root: HTMLElement, text: string, markerId: string, nodeId
 
 function inferNodeId(element: HTMLElement, structure?: DocumentStructure) {
   const text = element.textContent?.trim() || '';
+  if (!text) return undefined;
   const match = structure?.anchors?.find((anchor) => anchor.text?.trim() === text);
   return match?.nodeId || structure?.blocks?.find((block) => block.text?.trim() === text)?.id;
 }
@@ -455,4 +494,17 @@ function bindingMarker(binding: TemplateBinding) {
 function bindingNodeId(binding: TemplateBinding) {
   const nodeId = binding.locator?.nodeId;
   return typeof nodeId === 'string' ? nodeId : binding.markerId || '';
+}
+
+function bindingNodeIds(binding: TemplateBinding) {
+  const result = new Set<string>();
+  const add = (value: unknown) => {
+    if (typeof value === 'string' && value.trim()) result.add(value.trim());
+  };
+  add(binding.locator?.nodeId);
+  add(binding.locator?.valueAnchor);
+  add(binding.locator?.labelAnchor);
+  const values = binding.locator?.valueNodeIds;
+  if (Array.isArray(values)) values.forEach(add);
+  return [...result];
 }

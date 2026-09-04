@@ -27,7 +27,7 @@ final class StructureAssessmentProtocol {
             "^[A-Z]{1,4}[1-9][0-9]*(?::[A-Z]{1,4}[1-9][0-9]*)?$"
     );
     private static final Set<String> TYPES = Set.of(
-            "ROW_TABLE", "COLUMN_TABLE", "MATRIX", "FORM_REGION", "UNKNOWN"
+            "ROW_TABLE", "COLUMN_TABLE", "FORM_REGION", "UNKNOWN"
     );
     private static final Set<String> AXES = Set.of("ROW", "COLUMN", "UNKNOWN");
     private final ObjectMapper objectMapper;
@@ -51,12 +51,8 @@ final class StructureAssessmentProtocol {
                           "properties":{
                             "proposalId":{"type":"string","minLength":1},
                             "sheetId":{"type":"string","minLength":1},
-                            "type":{"enum":["ROW_TABLE","COLUMN_TABLE","MATRIX","FORM_REGION","UNKNOWN"]},
+                            "type":{"enum":["ROW_TABLE","COLUMN_TABLE","FORM_REGION","UNKNOWN"]},
                             "range":{"type":"string"},
-                            "cornerRange":{"type":"string"},
-                            "rowHeaderRange":{"type":"string"},
-                            "columnHeaderRange":{"type":"string"},
-                            "crossDataRange":{"type":"string"},
                             "headerRange":{"type":"string"},
                             "dataRange":{"type":"string"},
                             "totalRange":{"type":"string"},
@@ -68,9 +64,7 @@ final class StructureAssessmentProtocol {
                           },
                           "allOf":[
                             {"if":{"properties":{"type":{"enum":["ROW_TABLE","COLUMN_TABLE"]}}},
-                             "then":{"required":["headerRange","dataRange"]}},
-                            {"if":{"properties":{"type":{"const":"MATRIX"}}},
-                             "then":{"required":["cornerRange","rowHeaderRange","columnHeaderRange","crossDataRange"]}}
+                             "then":{"required":["headerRange","dataRange"]}}
                           ]
                         }},
                         "qualityIssues":{"type":"array","items":{"type":"object","additionalProperties":true,
@@ -98,8 +92,7 @@ final class StructureAssessmentProtocol {
         for (var item : root.path("proposals")) {
             try {
                 if (!item.isObject()) throw violation("结构提议项必须是对象");
-                exactKeys(item, Set.of("proposalId", "sheetId", "type", "range", "cornerRange",
-                        "rowHeaderRange", "columnHeaderRange", "crossDataRange", "headerRange", "dataRange",
+                exactKeys(item, Set.of("proposalId", "sheetId", "type", "range", "headerRange", "dataRange",
                         "totalRange", "recordHeight", "recordWidth", "recordStride", "recordAxis", "confidence"),
                         "结构提议项");
                 var proposal = (ObjectNode) item.deepCopy();
@@ -112,7 +105,7 @@ final class StructureAssessmentProtocol {
                 // FORM_REGION has no repeat topology. Older/less strict model
                 // providers therefore sometimes omit recordAxis altogether.
                 // Normalising that semantically empty value is geometry
-                // preserving; doing the same for a table or matrix would hide a
+                // preserving; doing the same for a repeated table would hide a
                 // material protocol error and is deliberately forbidden.
                 if ("FORM_REGION".equals(type)
                         && (!proposal.path("recordAxis").isTextual()
@@ -132,8 +125,7 @@ final class StructureAssessmentProtocol {
                         "结构提议项 recordAxis 不合法");
                 var confidence = proposal.path("confidence").asDouble(-1);
                 require(confidence >= 0 && confidence <= 1, "结构提议项 confidence 不合法");
-                for (var key : List.of("range", "cornerRange", "rowHeaderRange",
-                        "columnHeaderRange", "crossDataRange", "headerRange", "dataRange", "totalRange")) {
+                for (var key : List.of("range", "headerRange", "dataRange", "totalRange")) {
                     var value = proposal.path(key).asText("");
                     require(value.isBlank() || RANGE.matcher(value.toUpperCase(Locale.ROOT)).matches(),
                             key + " 不是合法 Excel 区域");
@@ -141,6 +133,15 @@ final class StructureAssessmentProtocol {
                 validateGeometry(proposal, physicalFacts, sheetId);
                 proposal.put("source", "MODEL").put("proposalStatus", "PROVISIONAL");
                 normalized.add(proposal);
+                if ("UNKNOWN".equals(type)) {
+                    issues.add(objectMapper.createObjectNode()
+                            .put("issueType", "STRUCTURE_DIRECTION_UNCLEAR")
+                            .put("severity", "WARNING")
+                            .put("title", "二维表记录方向无法判断")
+                            .put("description", "该区域无法可靠判断为按行或按列重复，未生成业务区域。")
+                            .put("sheetId", sheetId)
+                            .put("range", proposal.path("range").asText("")));
+                }
             } catch (RuntimeException invalidItem) {
                 // A malformed proposal must not discard valid proposals from the same
                 // workbook.  The item is kept in diagnostics for review/audit.
@@ -175,52 +176,17 @@ final class StructureAssessmentProtocol {
         return result;
     }
 
-    /** Compatibility adapter for historical readers only; new code does not call it. */
-    ObjectNode toLegacyEnvelope(ValidationResult result, JsonNode physicalFacts) {
-        var envelope = objectMapper.createObjectNode().put("recognitionProtocolVersion", 1);
-        envelope.putArray("semanticAnnotations");
-        var blocks = envelope.putArray("businessBlocks");
-        envelope.putArray("fieldRelations");
-        envelope.putArray("tables");
-        envelope.set("qualityIssues", result.qualityIssues().deepCopy());
-        for (var proposal : result.assessments()) {
-            var type = "FORM_FIELDS".equals(proposal.path("type").asText())
-                    ? "FORM_REGION" : proposal.path("type").asText("UNKNOWN");
-            blocks.add(objectMapper.createObjectNode()
-                    .put("temporaryId", "proposal-" + proposal.path("proposalId").asText())
-                    .put("sheetId", proposal.path("sheetId").asText())
-                    .put("range", proposal.path("range").asText())
-                    .put("type", type).put("parentTemporaryId", "")
-                    .put("businessName", "待确认结构")
-                    .put("groupNameSuggestion", "").put("semanticKeySuggestion", ""));
-        }
-        return envelope;
-    }
-
     private void validateGeometry(ObjectNode proposal, JsonNode physicalFacts, String sheetId) {
         var range = proposal.path("range").asText("");
         var used = usedRange(physicalFacts, sheetId);
         require(sheetExists(physicalFacts, sheetId), "结构提议引用了不存在的 Sheet: " + sheetId);
         require(!range.isBlank(), "结构提议 range 不能为空");
         if (!used.isBlank()) require(contains(used, range), "结构提议范围必须位于 usedRange 内: " + range);
-        for (var key : List.of("cornerRange", "rowHeaderRange", "columnHeaderRange", "crossDataRange")) {
-            var value = proposal.path(key).asText("");
-            if (!value.isBlank()) require(contains(range, value), key + " 必须位于 range 内: " + value);
-        }
         for (var key : List.of("headerRange", "dataRange", "totalRange")) {
             var value = proposal.path(key).asText("");
             if (!value.isBlank()) require(contains(range, value), key + " 必须位于 range 内: " + value);
         }
-        if ("MATRIX".equals(proposal.path("type").asText())) {
-            require(!proposal.path("cornerRange").asText("").isBlank(), "MATRIX 缺少 cornerRange");
-            require(!proposal.path("rowHeaderRange").asText("").isBlank(), "MATRIX 缺少 rowHeaderRange");
-            require(!proposal.path("columnHeaderRange").asText("").isBlank(), "MATRIX 缺少 columnHeaderRange");
-            require(!proposal.path("crossDataRange").asText("").isBlank(), "MATRIX 缺少 crossDataRange");
-            require(sameWidth(proposal.path("columnHeaderRange").asText(), proposal.path("crossDataRange").asText()),
-                    "MATRIX 列标题和交叉数据宽度不一致");
-            require(sameHeight(proposal.path("rowHeaderRange").asText(), proposal.path("crossDataRange").asText()),
-                    "MATRIX 行标题和交叉数据高度不一致");
-        } else if (Set.of("ROW_TABLE", "COLUMN_TABLE").contains(proposal.path("type").asText())) {
+        if (Set.of("ROW_TABLE", "COLUMN_TABLE").contains(proposal.path("type").asText())) {
             require(!proposal.path("headerRange").asText("").isBlank(), "普通表格缺少 headerRange");
             require(!proposal.path("dataRange").asText("").isBlank(), "普通表格缺少 dataRange");
             var expectedAxis = "ROW_TABLE".equals(proposal.path("type").asText()) ? "ROW" : "COLUMN";
@@ -237,12 +203,6 @@ final class StructureAssessmentProtocol {
                 && (message.contains("headerRange") || message.contains("dataRange"))) {
             return "MISSING_TABLE_GEOMETRY";
         }
-        if ("MATRIX".equals(type)
-                && message.contains("缺少")
-                && (message.contains("cornerRange") || message.contains("rowHeaderRange")
-                || message.contains("columnHeaderRange") || message.contains("crossDataRange"))) {
-            return "MISSING_MATRIX_GEOMETRY";
-        }
         return "INVALID_STRUCTURE_PROPOSAL";
     }
 
@@ -252,16 +212,6 @@ final class StructureAssessmentProtocol {
             if (sheetId.equals(sheet.path("id").asText(sheet.path("sheetId").asText("")))) return true;
         }
         return false;
-    }
-
-    private boolean sameWidth(String first, String second) {
-        var a = rangeBounds(first); var b = rangeBounds(second);
-        return a != null && b != null && a[2] - a[0] == b[2] - b[0];
-    }
-
-    private boolean sameHeight(String first, String second) {
-        var a = rangeBounds(first); var b = rangeBounds(second);
-        return a != null && b != null && a[3] - a[1] == b[3] - b[1];
     }
 
     private String usedRange(JsonNode facts, String sheetId) {

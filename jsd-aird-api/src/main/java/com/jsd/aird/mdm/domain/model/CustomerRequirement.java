@@ -14,5 +14,9 @@ public record CustomerRequirement(
     JsonNode customFields,
     long version, Instant createdAt, Instant updatedAt
 ) {
+    /** There is intentionally no destructive requirement endpoint yet. */
+    public List<String> getAllowedActions() {
+        return List.of();
+    }
     public enum RequirementStatus {DRAFT, CONFIRMED, IN_PROJECT, COMPLETED, CANCELLED}
 }

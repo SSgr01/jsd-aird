@@ -46,12 +46,12 @@ class StructureAssessmentProtocolTest {
                 {
                   "recognitionProtocolVersion":2,
                   "proposals":[
-                    {"proposalId":"valid","sheetId":"Sheet1","type":"MATRIX","range":"A28:I37",
-                     "cornerRange":"A28:C28","rowHeaderRange":"A29:C37","columnHeaderRange":"D28:I28",
-                     "crossDataRange":"D29:I37","recordAxis":"COLUMN","confidence":0.78},
-                    {"proposalId":"invalid","sheetId":"Sheet1","type":"MATRIX","range":"A28:I37",
-                     "cornerRange":"A28:C28","rowHeaderRange":"A29:C37","columnHeaderRange":"NOT_A_RANGE",
-                     "crossDataRange":"D29:I37","recordAxis":"COLUMN","confidence":0.5}
+                    {"proposalId":"valid","sheetId":"Sheet1","type":"COLUMN_TABLE","range":"A28:I37",
+                     "headerRange":"A28:I28","dataRange":"A29:I37",
+                     "recordAxis":"COLUMN","confidence":0.78},
+                    {"proposalId":"invalid","sheetId":"Sheet1","type":"COLUMN_TABLE","range":"A28:I37",
+                     "headerRange":"NOT_A_RANGE","dataRange":"A29:I37",
+                     "recordAxis":"COLUMN","confidence":0.5}
                   ],
                   "qualityIssues":[]
                 }
@@ -76,7 +76,6 @@ class StructureAssessmentProtocolTest {
                 {
                   "recognitionProtocolVersion":2,
                   "proposals":[{"proposalId":"rows","sheetId":"Sheet1","type":"ROW_TABLE","range":"A20:I27",
-                    "cornerRange":"","rowHeaderRange":"","columnHeaderRange":"","crossDataRange":"",
                     "headerRange":"D20:I20","dataRange":"D21:I27","totalRange":"D26:I26",
                     "recordAxis":"ROW","recordHeight":1,"recordWidth":6,"recordStride":1,"confidence":0.6}],
                   "qualityIssues":[]
@@ -121,9 +120,9 @@ class StructureAssessmentProtocolTest {
         var schema = new StructureAssessmentProtocol(objectMapper).responseSchema();
         var allOf = schema.path("properties").path("proposals").path("items").path("allOf");
 
-        assertThat(allOf.size()).isEqualTo(2);
-        assertThat(allOf.toString()).contains("ROW_TABLE", "COLUMN_TABLE", "headerRange", "dataRange",
-                "cornerRange", "rowHeaderRange", "columnHeaderRange", "crossDataRange");
+        assertThat(allOf.size()).isEqualTo(1);
+        assertThat(allOf.toString()).contains("ROW_TABLE", "COLUMN_TABLE", "headerRange", "dataRange");
+        assertThat(allOf.toString()).doesNotContain("MATRIX", "cornerRange", "crossDataRange");
     }
 
     @Test

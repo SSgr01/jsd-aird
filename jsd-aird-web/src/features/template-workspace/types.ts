@@ -1,8 +1,7 @@
 export type TemplateFormat = 'XLSX' | 'DOCX';
 export type TemplateStatus = 'DRAFT' | 'PUBLISHED' | 'RETIRED';
 export type BindingRole = 'FIELD' | 'REPEAT_REGION' | 'CONDITIONAL';
-export type MappingKind =
-  'SCALAR' | 'REPEAT_REGION' | 'REPEAT_FIELD' | 'MATRIX_REGION' | 'MATRIX_FIELD';
+export type MappingKind = 'SCALAR' | 'REPEAT_REGION' | 'REPEAT_FIELD';
 export type RepeatAxis = 'ROW' | 'COLUMN' | 'UNKNOWN';
 export type SyncDirection = 'TWO_WAY' | 'DATA_TO_EDITOR' | 'EDITOR_TO_DATA';
 export type BindingStatus = 'VALID' | 'INVALID' | 'AMBIGUOUS' | 'MISSING';
@@ -35,6 +34,7 @@ export interface TemplateListItem {
   createdBy?: string;
   createdByName?: string;
   createdAt: string;
+  allowedActions?: string[];
 }
 
 export interface TemplateBinding {
@@ -47,7 +47,6 @@ export interface TemplateBinding {
   dataPath: string;
   role: BindingRole;
   mappingKind?: MappingKind;
-  matrixRole?: 'MEASURE';
   repeatAxis?: RepeatAxis;
   recordHeight?: number;
   recordWidth?: number;
@@ -64,158 +63,8 @@ export interface TemplateBinding {
   diagnostic?: Record<string, unknown>;
 }
 
-export type FieldKind = 'SCALAR' | 'ROW_TABLE' | 'COLUMN_TABLE' | 'MATRIX' | 'FREE_TEXT';
+export type FieldKind = 'SCALAR' | 'FORM_REGION' | 'ROW_TABLE' | 'COLUMN_TABLE';
 export type FieldReviewStatus = 'CONFIRMED' | 'NEEDS_CONFIRMATION' | 'ISSUE';
-export type MatrixMemberStatus = 'RUNTIME_INPUT' | 'POPULATED' | 'EMPTY' | 'PENDING' | 'CONFIRMED';
-
-export interface MatrixColumnSlot {
-  slotId: string;
-  bindingInstanceId?: string;
-  column: string;
-  identityAddress: string;
-  recordRange: string;
-  identityRange?: string;
-  measureRange?: string;
-  templateStatus?: 'RUNTIME_INPUT' | 'CONFIRMED';
-  instanceStatus?: 'EMPTY' | 'POPULATED';
-  role?: 'COLUMN_MEMBER_INPUT';
-  editability?: Editability;
-  valueSource?: ValueSource;
-}
-
-export interface MatrixRowSlot {
-  slotId: string;
-  identityAddress: string;
-  recordRange: string;
-  identityRange?: string;
-  templateStatus?: 'RUNTIME_INPUT' | 'CONFIRMED';
-  instanceStatus?: 'EMPTY' | 'POPULATED';
-  role?: 'ROW_MEMBER_INPUT';
-}
-
-export interface MatrixRecordProjection {
-  mode: 'COLUMN_RECORDS' | 'ROW_RECORDS' | 'CELL_RECORDS' | 'UNRESOLVED';
-  recordAxis: RepeatAxis;
-  identityRow?: number;
-  valueStartRow?: number;
-  valueEndRow?: number;
-  recordColumns?: string[];
-  recordHeight?: number;
-  measureHeight?: number;
-  recordWidth?: number;
-  recordStride?: number;
-  recordHeightIncludesIdentity?: boolean;
-  identityRange?: string;
-  measureRange?: string;
-}
-
-export interface MatrixBindingDefinition {
-  bindingKind: 'ROW_DIMENSION' | 'ROW_ATTRIBUTE' | 'COLUMN_MEMBER' | 'MEASURE';
-  level?: number;
-  code?: string;
-  name?: string;
-  fieldCode?: string;
-  semanticKey?: string;
-  valueType?: string;
-  sourceRange: string;
-  sourceRow?: number;
-  sourceRows?: string;
-  role?: string;
-  memberMode?: string;
-  dataPathTemplate?: string;
-  fillMerged?: boolean;
-  optional?: boolean;
-}
-
-export interface MatrixModel {
-  semanticMode: 'CROSS_TAB' | 'RECORD_SET' | 'UNKNOWN';
-  layoutMode?: 'CROSS_TAB' | 'LONG_FORM' | 'UNKNOWN';
-  canonicalStatus?: 'PROVISIONAL' | 'CONFIRMED';
-  headerRange?: string;
-  dataRange?: string;
-  cornerRange?: string;
-  rowHeaderRange: string;
-  columnHeaderRange: string;
-  crossDataRange: string;
-  recordAxis: RepeatAxis;
-  columnMemberRole?: 'COLUMN_MEMBER_INPUT';
-  memberMode?: 'RUNTIME_INPUT' | 'CELL';
-  headerTree?: Array<Record<string, unknown>>;
-  recordProjection?: MatrixRecordProjection;
-  columnSlots?: MatrixColumnSlot[];
-  rowSlots?: MatrixRowSlot[];
-  bindings?: MatrixBindingDefinition[];
-  rowDimensions?: MatrixBindingDefinition[];
-  rowAttributes?: MatrixBindingDefinition[];
-  longTableModel?: LongTableModel;
-}
-
-export interface LongTableRecord {
-  recordKey: string;
-  rowIndex: number;
-  columnIndex: number;
-  rowRole: 'TEST_ITEM' | 'REPLICATE' | 'AGGREGATE' | 'UNKNOWN';
-  rowPath: string[];
-  entityRecordId?: string;
-  sampleAddress?: string;
-  sampleName?: string;
-  valueAddress?: string;
-  rowDimensions?: Array<{ code: string; value: string; sourceAddress?: string }>;
-  rowAttributes?: Array<{ code: string; value: string; sourceAddress?: string }>;
-  columnMember?: {
-    coordinate: string;
-    address: string;
-    label: string;
-    status: MatrixMemberStatus;
-    instanceStatus?: 'EMPTY' | 'POPULATED';
-    role?: 'COLUMN_MEMBER_INPUT';
-  };
-  rowMember?: {
-    address: string;
-    label: string;
-    status: MatrixMemberStatus;
-    instanceStatus?: 'EMPTY' | 'POPULATED';
-    role?: 'ROW_MEMBER_INPUT';
-  };
-  value: {
-    address: string;
-    valueSource: string;
-    value?: unknown;
-    formula?: unknown;
-    trainingEligible: boolean;
-  };
-  trainingEligible: boolean;
-  recordId?: string;
-}
-
-export interface LongTableModel {
-  schemaVersion: number;
-  sourceKind: 'MATRIX' | 'ROW_TABLE' | 'COLUMN_TABLE';
-  semanticMode?: 'LONG_FORM' | 'RECORD_SET' | 'UNKNOWN';
-  layoutMode?: 'LONG_FORM' | 'CROSS_TAB' | 'UNKNOWN';
-  sourceRange: string;
-  cornerRange?: string;
-  rowHeaderRange: string;
-  columnHeaderRange: string;
-  dataRange: string;
-  aggregatePolicy: string;
-  blankAxisPolicy: string;
-  trainingPolicy: string;
-  dimensions: Array<Record<string, unknown>>;
-  rowAttributes?: Array<Record<string, unknown>>;
-  measure?: Record<string, unknown>;
-  records: LongTableRecord[];
-  recordProjection?: MatrixRecordProjection;
-  columnSlots?: MatrixColumnSlot[];
-  rowSlots?: MatrixRowSlot[];
-  trainingSummary?: {
-    eligible: number;
-    pendingMember: number;
-    aggregate: number;
-    replicate: number;
-    unknown: number;
-  };
-}
 
 export interface FieldGroup {
   id: string;
@@ -245,6 +94,8 @@ export interface BusinessField {
   unit?: string;
   description?: string;
   interpretation?: string;
+  manualOverrides?: Array<'name' | 'unit' | 'valueType'>;
+  recognitionDiff?: Record<string, unknown>;
   confidence?: number;
   reviewStatus: FieldReviewStatus;
   editability?: Editability;
@@ -256,7 +107,6 @@ export interface BusinessField {
   parentFieldId?: string;
   parentSuggestionId?: string;
   mappingKind?: MappingKind;
-  matrixRole?: 'MEASURE';
   repeatAxis?: RepeatAxis;
   recordHeight?: number;
   recordWidth?: number;
@@ -316,10 +166,6 @@ export interface BusinessField {
     labelStatus?: LabelStatus;
   }>;
   tableModel?: Record<string, unknown>;
-  matrixModel?: MatrixModel;
-  recordProjection?: MatrixRecordProjection;
-  columnSlots?: MatrixColumnSlot[];
-  longTableModel?: LongTableModel;
   /** Recognition candidates are rendered in the field tree but never persisted as formal fields. */
   candidate?: boolean;
   candidateLocatorType?: string;
@@ -344,19 +190,9 @@ export interface BusinessBlock {
   sheetId: string;
   range: string;
   type:
-    | 'DOCUMENT_HEADER'
     | 'FORM_REGION'
-    | 'FORM_FIELDS'
     | 'ROW_TABLE'
-    | 'COLUMN_TABLE'
-    | 'MATRIX'
-    | 'FREE_TEXT'
-    | 'STATIC_REFERENCE'
-    | 'INSTRUCTION_LIST'
-    | 'CONFIRMATION_BLOCK'
-    | 'NOTE_BLOCK'
-    | 'LOOKUP_TABLE'
-    | 'UNKNOWN';
+    | 'COLUMN_TABLE';
   businessName: string;
   groupName?: string;
 }
@@ -430,6 +266,7 @@ export interface TemplateWorkspace {
   workspaceHash: string;
   lockVersion: number;
   reconciliationRequired: boolean;
+  allowedActions?: string[];
 }
 
 export interface DocumentStructure {
@@ -442,6 +279,8 @@ export interface DocumentStructure {
   nodes?: DocumentStructureNode[];
   blocks?: Array<{
     id: string;
+    sourcePath?: string;
+    legacyId?: string;
     type: 'PARAGRAPH' | 'TABLE';
     text?: string;
     rowCount?: number;
@@ -450,13 +289,51 @@ export interface DocumentStructure {
     alignment?: string;
     rows?: Array<{
       id: string;
-      cells?: Array<{ id: string; text?: string; editable?: boolean }>;
+      sourcePath?: string;
+      cells?: Array<{
+        id: string;
+        legacyId?: string;
+        sourcePath?: string;
+        text?: string;
+        editable?: boolean;
+      }>;
+    }>;
+  }>;
+  tables?: Array<{
+    id: string;
+    sourcePath?: string;
+    parentTablePath?: string;
+    parentCellPath?: string;
+    nestingDepth?: number;
+    layoutContainer?: boolean;
+    rowCount?: number;
+    columnCount?: number;
+    rows?: Array<{
+      id: string;
+      sourcePath?: string;
+      rowIndex?: number;
+      cells?: Array<{
+        id: string;
+        legacyId?: string;
+        sourcePath?: string;
+        text?: string;
+        editable?: boolean;
+        rowIndex?: number;
+        columnIndex?: number;
+        logicalColumnStart?: number;
+        logicalColumnEnd?: number;
+        rowSpan?: number;
+        columnSpan?: number;
+        mergeRootId?: string;
+        mergeContinuation?: boolean;
+      }>;
     }>;
   }>;
   anchors?: Array<{
     nodeId: string;
     kind: 'PARAGRAPH' | 'RUN' | 'TEXT' | 'TABLE_CELL' | 'CONTENT_CONTROL';
     parentId?: string;
+    sourcePath?: string;
     text?: string;
     editable?: boolean;
   }>;
@@ -468,6 +345,7 @@ export interface DocumentStructure {
     alias?: string;
     text?: string;
     kind?: string;
+    sourcePath?: string;
   }>;
   compatibility?: {
     status?: 'SUPPORTED' | 'DEGRADED' | 'BLOCKED';

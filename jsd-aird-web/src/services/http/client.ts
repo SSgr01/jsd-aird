@@ -4,6 +4,7 @@ import type { AxiosResponse } from 'axios';
 import { appEnv } from '@/app/config/env';
 import { HttpError } from '@/services/http/errors';
 import type { ApiErrorResponse } from '@/services/http/types';
+import { notifyAuthRequired } from '@/services/http/auth-events';
 import { generateUUID } from '@/utils/uuid';
 
 export const httpClient = axios.create({
@@ -53,6 +54,8 @@ httpClient.interceptors.response.use(
   (error: unknown) => {
     if (axios.isAxiosError<ApiErrorResponse>(error)) {
       const response = error.response;
+      const isLoginRequest = response?.config.url?.endsWith('/api/v1/auth/login') ?? false;
+      if (response?.status === 401 && !isLoginRequest) notifyAuthRequired();
       throw new HttpError(
         response?.data?.message || error.message || '请求失败',
         response?.data?.code || 'HTTP_REQUEST_FAILED',

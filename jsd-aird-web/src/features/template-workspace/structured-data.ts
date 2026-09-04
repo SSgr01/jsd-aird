@@ -43,38 +43,5 @@ export function synchronizeStructuredData(
       editorValue,
     });
   }
-  for (const parent of mapping.filter((binding) => binding.mappingKind === 'MATRIX_REGION')) {
-    const records = getAtPath(data, parent.dataPath);
-    if (!Array.isArray(records)) continue;
-    const slots = matrixSlots(parent);
-    data = setAtPath(data, parent.dataPath, records.map((record, index) => {
-      const current: Record<string, unknown> = isRecord(record) ? record : { value: record };
-      if (isRecord(current._member) && typeof current._member.slotId === 'string') return current;
-      const slot = slots[index];
-      return {
-        ...current,
-        _member: {
-          slotId: typeof slot?.slotId === 'string'
-            ? slot.slotId
-            : `${parent.bindingId}:${parent.repeatAxis || 'ROW'}:${index}`,
-          ...(typeof slot?.label === 'string' ? { label: slot.label } : {}),
-          ...(typeof slot?.identityAddress === 'string'
-            ? { coordinate: slot.identityAddress }
-            : {}),
-        },
-      };
-    }));
-  }
   return { data, bindingValues: values };
-}
-
-function matrixSlots(binding: TemplateBinding): Array<Record<string, unknown>> {
-  for (const source of [binding.locator.columnSlots, binding.locator.rowSlots]) {
-    if (Array.isArray(source)) return source.filter(isRecord);
-  }
-  return [];
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }

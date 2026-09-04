@@ -61,7 +61,7 @@ public class JdbcDataProjectionRepository implements DataProjectionRepository {
         var sourceRecordIds = objectMapper.createArrayNode();
         records.forEach(item -> sourceRecordIds.add(item.id().toString()));
         var schema = objectMapper.createObjectNode()
-                .put("projection", "LONG_TABLE")
+                .put("projection", "FIELD_VALUE_ROWS")
                 .put("projectionVersion", "v1")
                 .put("templateVersionId", templateVersionId.toString());
         var contract = jdbc.query("""
@@ -81,7 +81,7 @@ public class JdbcDataProjectionRepository implements DataProjectionRepository {
                     import_contract_version, contract_hash, approval_policy
                 ) VALUES (?, ?, ?, ?, 'v1', ?, 'DRAFT', ?, '{}'::jsonb, ?, ?, ?, ?, ?)
                 """, datasetId, organizationId, importJobId, templateVersionId,
-                "导入批次长表候选 - " + importJobId, pgJson(schema), pgJson(sourceRecordIds), actorId,
+                "导入批次训练数据候选 - " + importJobId, pgJson(schema), pgJson(sourceRecordIds), actorId,
                 contract.version(), contract.hash(), contract.version() == null ? "LEGACY" : "DISABLED");
 
         int recordCount = 0;
@@ -193,29 +193,6 @@ public class JdbcDataProjectionRepository implements DataProjectionRepository {
                 FROM ai.training_dataset d
                 WHERE d.organization_id = ? AND d.id = ?
                 """, this::dataset, organizationId, datasetId).stream().findFirst();
-    }
-
-    @Override
-    public List<LongTableRow> previewRows(UUID organizationId, UUID importJobId, int limit) {
-        return jdbc.query("""
-                SELECT r.record_key, r.dimensions_jsonb, r.measures_jsonb, r.source_jsonb,
-                       r.training_eligible, r.exclusion_reason
-                FROM ai.training_dataset_record r
-                JOIN ai.training_dataset d ON d.id = r.dataset_id
-                WHERE d.organization_id = ? AND d.import_job_id = ?
-                  AND d.created_at = (
-                      SELECT max(previous.created_at)
-                      FROM ai.training_dataset previous
-                      WHERE previous.organization_id = d.organization_id
-                        AND previous.import_job_id = d.import_job_id
-                  )
-                ORDER BY r.created_at, r.record_key
-                LIMIT ?
-                """, (rs, rowNum) -> new LongTableRow(
-                rs.getString("record_key"), parse(rs.getString("dimensions_jsonb")),
-                parse(rs.getString("measures_jsonb")), parse(rs.getString("source_jsonb")),
-                rs.getBoolean("training_eligible"), rs.getString("exclusion_reason")),
-                organizationId, importJobId, Math.min(100, Math.max(1, limit)));
     }
 
     @Override
@@ -398,7 +375,7 @@ public class JdbcDataProjectionRepository implements DataProjectionRepository {
                     var binding = bindingsByField.get(entry.getKey());
                     if (binding == null || binding.mappingKind() == null) return false;
                     var kind = binding.mappingKind().toUpperCase(java.util.Locale.ROOT);
-                    return kind.contains("REPEAT") || kind.contains("MATRIX") || kind.contains("TABLE");
+                    return kind.contains("REPEAT") || kind.contains("TABLE");
                 })
                 .flatMap(entry -> entry.getValue().stream())
                 .findFirst();

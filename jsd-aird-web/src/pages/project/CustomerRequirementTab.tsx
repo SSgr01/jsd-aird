@@ -239,7 +239,7 @@ export function CustomerRequirementTab({ projectId, projectName, partnerId }: Pr
             <Button type="link" size="small" onClick={() => openEdit(record)}>
               编辑
             </Button>
-            <Popconfirm
+            {record.allowedActions?.includes('DELETE') && <Popconfirm
               title="确认删除该客户需求？"
               okText="删除"
               cancelText="取消"
@@ -249,7 +249,7 @@ export function CustomerRequirementTab({ projectId, projectName, partnerId }: Pr
               <Button type="link" size="small" danger icon={<DeleteOutlined />}>
                 删除
               </Button>
-            </Popconfirm>
+            </Popconfirm>}
           </Space>
         ),
       },

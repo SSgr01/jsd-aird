@@ -160,12 +160,6 @@ public class DataController {
         return success(service.get(id));
     }
 
-    @GetMapping("/import-jobs/{id}/long-table-preview")
-    public ApiResponse<com.jsd.aird.data.application.DataProjectionService.LongTablePreview> longTablePreview(
-            @PathVariable UUID id, @RequestParam(defaultValue = "20") int limit) {
-        return success(projectionService.longTablePreview(id, limit));
-    }
-
     @GetMapping("/import-jobs/{id}/training-dataset")
     public ApiResponse<com.jsd.aird.data.application.port.DataProjectionRepository.TrainingDataset> trainingDatasetForJob(
             @PathVariable UUID id) {

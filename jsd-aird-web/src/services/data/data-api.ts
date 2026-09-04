@@ -16,11 +16,9 @@ export interface TemplateContract { importContractVersion?: number; layoutStruct
 export interface ProjectionSummary { datasetId?: string; status: string; recordCount: number; longValueCount: number; eligibleRecordCount: number }
 export interface ComponentMatch { componentId: string; status: 'EXACT' | 'COMPATIBLE' | 'REVIEW_REQUIRED' | 'INCOMPATIBLE'; required: boolean; score: number; sheetId?: string; sheetName?: string; anchorCoverage?: number; geometryCompatible?: boolean; formulaRoleCompatible?: boolean; manuallyReanchored?: boolean; resolutionReasonCodes?: string[]; affectedFieldIds?: string[] }
 export interface ComponentOverride { componentId: string; sheetId: string; sourceRange: string; reason: string; updatedAt?: string }
-export interface LongTableRow { recordKey: string; dimensions: Record<string, unknown>; measures: Record<string, unknown>; source: Record<string, unknown>; trainingEligible: boolean; exclusionReason?: string }
-export interface LongTablePreview { dataset: TrainingDataset; rows: LongTableRow[] }
 export interface TrainingDataset { id: string; importJobId?: string; templateVersionId: string; projectionVersion: string; name: string; status: string; schema: Record<string, unknown>; qualitySummary: Record<string, unknown>; sourceRecordIds: string[]; recordCount: number; eligibleRecordCount: number }
 export interface DataPreview { job: DataJob; sheets: DataSheet[]; mappings: DataMapping[]; rows: DataRow[]; issues: DataIssue[]; templateContract?: TemplateContract; projectionSummary?: ProjectionSummary; compatibilityReport?: { status?: string; componentMatches?: ComponentMatch[] }; componentOverrides?: ComponentOverride[] }
-export interface DataCategory { id: string; name: string; description?: string; sortOrder: number; sourceCount: number }
+export interface DataCategory { id: string; name: string; description?: string; sortOrder: number; sourceCount: number; allowedActions?: string[] }
 export interface DataSourceFile { importJobId: string; fileObjectId: string; originalName: string; sourceFormat: string; templateVersionId: string; categoryId?: string; categoryName?: string; status: string; progress: number; createdAt: string; updatedAt: string; relatedProjects?: RelatedProjectView[] }
 export interface DataWorkbookSheet { sheetId: string; sheetName: string; sheetOrder: number; selected: boolean; confirmationStatus: string }
 export interface DataWorkbookFieldGroup { groupId: string; name: string; fieldCount: number }
@@ -52,7 +50,6 @@ export const dataApi = {
   async reExtract(id: string) { const response = await httpClient.post<ApiResponse<DataJob>>(`/api/v1/data/import-jobs/${id}/re-extract`); return response.data.data; },
   async preview(id: string) { const response = await httpClient.get<ApiResponse<DataPreview>>(`/api/v1/data/import-jobs/${id}/preview`); return response.data.data; },
   async getImportWorkbookSnapshot(id: string) { const response = await httpClient.get<ApiResponse<DataWorkbookSnapshot>>(`/api/v1/data/import-jobs/${id}/workbook-snapshot`); return response.data.data; },
-  async longTablePreview(id: string, limit = 20) { const response = await httpClient.get<ApiResponse<LongTablePreview>>(`/api/v1/data/import-jobs/${id}/long-table-preview`, { params: { limit } }); return response.data.data; },
   async getTrainingDatasetForJob(id: string) { const response = await httpClient.get<ApiResponse<TrainingDataset>>(`/api/v1/data/import-jobs/${id}/training-dataset`); return response.data.data; },
   async getTrainingDataset(id: string) { const response = await httpClient.get<ApiResponse<TrainingDataset>>(`/api/v1/data/training-datasets/${id}`); return response.data.data; },
   async rebuildTrainingDataset(id: string) { const response = await httpClient.post<ApiResponse<ProjectionSummary>>(`/api/v1/data/training-datasets/${id}/rebuild`); return response.data.data; },

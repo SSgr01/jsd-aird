@@ -15,19 +15,19 @@ public final class RecognitionCandidatePolicy {
         if (payload == null || !payload.isObject()) return false;
         if (isFormulaExpression(payload)) return false;
         var hasExplicitStructureStatus = payload.has("canonicalStatus") || payload.has("structureStatus");
-        var deterministicSimpleLongTableField = "RULE_DETERMINISTIC".equals(
+        var deterministicSimpleRowTableField = "RULE_DETERMINISTIC".equals(
                 payload.path("recognitionOrigin").asText())
-                && "SIMPLE_LONG_TABLE_FIELD".equals(payload.path("reasonCode").asText())
+                && "SIMPLE_ROW_TABLE_FIELD".equals(payload.path("reasonCode").asText())
                 && "CHILD".equals(payload.path("suggestionLevel").asText())
                 && "REPEAT_FIELD".equals(payload.path("mappingKind").asText())
                 && "ROW".equals(payload.path("repeatAxis").asText());
         var stableDocxControl = "DOCX_CONTENT_CONTROL".equals(payload.path("source").asText())
-                && !payload.path("markerId").asText(
-                        payload.path("locator").path("markerId").asText("")).isBlank();
-        return (deterministicSimpleLongTableField || !payload.path("candidateOnly").asBoolean(false))
-                && (deterministicSimpleLongTableField
+                && !payload.path("locator").path("nodeId").asText(
+                        payload.path("candidateRef").asText("")).isBlank();
+        return (deterministicSimpleRowTableField || !payload.path("candidateOnly").asBoolean(false))
+                && (deterministicSimpleRowTableField
                     || !payload.path("reviewRequired").asBoolean(false) || stableDocxControl)
-                && (deterministicSimpleLongTableField
+                && (deterministicSimpleRowTableField
                     || !payload.path("physicalStructureOnly").asBoolean(false))
                 && !payload.path("structureConflict").asBoolean(false)
                 && !payload.path("semanticConflict").asBoolean(false)
@@ -88,10 +88,7 @@ public final class RecognitionCandidatePolicy {
     public static boolean isStructural(JsonNode payload) {
         var kind = payload == null ? "" : payload.path("kind")
                 .asText(payload.path("tableKind").asText(""));
-        return "MATRIX".equals(kind) || "ROW_TABLE".equals(kind)
-                || "COLUMN_TABLE".equals(kind) || "FORM_REGION".equals(kind)
-                || "TABLE_REGION".equals(kind)
-                || "TABLE_REGION".equals(payload.path("locatorType").asText(""));
+        return "ROW_TABLE".equals(kind) || "COLUMN_TABLE".equals(kind) || "FORM_REGION".equals(kind);
     }
 
     public static boolean isProtocolRejected(JsonNode payload) {

@@ -123,7 +123,6 @@ app:
     max-token-parameter: ${JSD_AIRD_MODEL_MAX_TOKEN_PARAMETER:max_tokens}
     auto-retry-count: ${JSD_AIRD_MODEL_AUTO_RETRY_COUNT:2}
     visual-mode: ${JSD_AIRD_MODEL_VISUAL_MODE:auto}
-    visual-enabled: ${JSD_AIRD_MODEL_VISUAL_ENABLED:false}
   ai:
     prompt-version: ${JSD_AIRD_AI_PROMPT_VERSION:research-assistant-v2-grounded}
     query-rewrite:
@@ -202,10 +201,10 @@ app:
     audit-cleanup-cron: ${JSD_AIRD_RECOGNITION_AUDIT_CLEANUP_CRON:0 30 2 * * *}
     console-log-summary: ${JSD_AIRD_RECOGNITION_CONSOLE_LOG_SUMMARY:true}
     console-log-payload: ${JSD_AIRD_RECOGNITION_CONSOLE_LOG_PAYLOAD:false}
-    allow-legacy-region-envelope: ${JSD_AIRD_RECOGNITION_ALLOW_LEGACY_REGION_ENVELOPE:false}
-  template-recognition:
-    topology-v2:
-      enabled: ${JSD_AIRD_TEMPLATE_RECOGNITION_TOPOLOGY_V2_ENABLED:true}
+  template-normalization:
+    libreoffice:
+      executable: ${JSD_AIRD_LIBREOFFICE_EXECUTABLE:soffice}
+      timeout: ${JSD_AIRD_LIBREOFFICE_TIMEOUT:90s}
   production-instance-ingest:
     enabled: ${JSD_AIRD_PRODUCTION_INSTANCE_INGEST_ENABLED:true}
   production-instance-photo:

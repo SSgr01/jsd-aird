@@ -1,4 +1,4 @@
-import { EyeOutlined, LineChartOutlined, MessageOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons';
+import { DeleteOutlined, EyeOutlined, LineChartOutlined, MessageOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons';
 import { App, Button, Empty, Input, Modal, Select, Space, Table, Tag, Typography } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -46,7 +46,7 @@ export function SpectrumViewPage() {
 
   const cards = useMemo<CatalogCategoryCard[]>(() => [
     { id: 'ALL', name: '全部图谱', count: allChartCount, description: '按分类查看客户提供的 PDF 和图谱图片', icon: <LineChartOutlined />, tone: 'blue' },
-    ...categories.map((item) => ({ id: item.id, name: item.name, count: item.chartCount, description: item.description, icon: <LineChartOutlined />, tone: 'blue' as const, editable: !item.systemCategory })),
+    ...categories.map((item) => ({ id: item.id, name: item.name, count: item.chartCount, description: item.description, icon: <LineChartOutlined />, tone: 'blue' as const, editable: !item.systemCategory, allowedActions: item.allowedActions })),
   ], [allChartCount, categories]);
 
   const descriptor = (item: SpectrumChart): FilePreviewDescriptor => ({ fileName: item.originalName, contentType: item.contentType, size: item.size, load: () => spectrumApi.contentBlob(item.id) });
@@ -69,6 +69,18 @@ export function SpectrumViewPage() {
     finally { setSaving(false); }
   };
 
+  const removeChart = (item: SpectrumChart) => {
+    if (!item.allowedActions?.includes('DELETE')) return;
+    Modal.confirm({
+      title: `删除图谱“${item.title}”？`,
+      content: '删除后图谱将从列表中隐藏，原始文件保留。',
+      okText: '删除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => { await spectrumApi.deleteChart(item.id); await load(); void message.success('图谱已删除'); },
+    });
+  };
+
   return <div className="business-page">
     <div className="page-heading">
       <div><Typography.Title level={2}>图谱查看</Typography.Title><Typography.Text type="secondary">按 IR、UV、HPLC/GPC、GC、纳米粒径和力学等分类查看，分类可继续扩展。</Typography.Text></div>
@@ -78,7 +90,7 @@ export function SpectrumViewPage() {
       onSelect={(id) => { setCategoryId(id); setPage((value) => ({ ...value, current: 1 })); }}
       onCreate={() => setEditor({ mode: 'NEW' })}
       onRename={(item) => setEditor({ mode: 'EDIT', item: categories.find((candidate) => candidate.id === item.id) })}
-      onDelete={(item) => setDeleteItem(categories.find((candidate) => candidate.id === item.id))} />
+      onDelete={(item) => { const category = categories.find((candidate) => candidate.id === item.id); if (category?.allowedActions?.includes('DELETE')) setDeleteItem(category); }} />
     <CatalogListPanel title={cards.find((item) => item.id === categoryId)?.name || '图谱'} count={page.total}
       filters={<Space wrap><Input.Search allowClear placeholder="搜索图谱名称、样品或批号" value={keyword} onChange={(event) => { setKeyword(event.target.value); setPage((value) => ({ ...value, current: 1 })); }} onSearch={() => void load()} /><Select allowClear placeholder="全部状态" value={status} onChange={(value) => { setStatus(value); setPage((value) => ({ ...value, current: 1 })); }} options={[{ value: 'READY', label: '可分析' }, { value: 'DELETED', label: '已删除' }]} /><Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button></Space>}
       loading={loading}>
@@ -89,7 +101,7 @@ export function SpectrumViewPage() {
         { title: '文件', render: (_: unknown, record) => `${record.contentType || '图谱文件'} · ${formatSize(record.size)} · ${record.pageCount} 页` },
         { title: '状态', dataIndex: 'status', render: (value: string) => <Tag color={value === 'READY' ? 'success' : 'default'}>{value === 'READY' ? '可分析' : value}</Tag> },
         { title: '最近更新', dataIndex: 'updatedAt', render: (value: string) => new Date(value).toLocaleString('zh-CN') },
-        { title: '操作', width: 300, render: (_: unknown, record) => <Space wrap><Button type="link" icon={<EyeOutlined />} onClick={() => setPreviewFile(descriptor(record))}>预览</Button><Button type="link" icon={<MessageOutlined />} onClick={() => navigate(`/spectrum/chat?chartIds=${record.id}`)}>AI 对话</Button><Button type="link" onClick={() => void downloadPreviewFile(descriptor(record))}>下载</Button></Space> },
+        { title: '操作', width: 360, render: (_: unknown, record) => <Space wrap><Button type="link" icon={<EyeOutlined />} onClick={() => setPreviewFile(descriptor(record))}>预览</Button><Button type="link" icon={<MessageOutlined />} onClick={() => navigate(`/spectrum/chat?chartIds=${record.id}`)}>AI 对话</Button><Button type="link" onClick={() => void downloadPreviewFile(descriptor(record))}>下载</Button>{record.allowedActions?.includes('DELETE') ? <Button type="link" danger icon={<DeleteOutlined />} onClick={() => removeChart(record)}>删除</Button> : null}</Space> },
       ]} />
     </CatalogListPanel>
     <CategoryEditorModal open={Boolean(editor)} title={editor?.mode === 'NEW' ? '新增图谱分类' : '编辑图谱分类'} initialValue={editor?.item ? { name: editor.item.name, description: editor.item.description } : { name: '' }} confirmLoading={saving} onCancel={() => setEditor(undefined)} onSubmit={(value) => void saveCategory(value)} />

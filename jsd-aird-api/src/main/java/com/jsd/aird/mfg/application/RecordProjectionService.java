@@ -45,7 +45,7 @@ public class RecordProjectionService {
             if (path.isBlank()) continue;
             var kind = field.path("kind").asText("SCALAR");
             var value = read(data, path);
-            if ("ROW_TABLE".equals(kind) || "COLUMN_TABLE".equals(kind) || "MATRIX".equals(kind)) {
+            if ("ROW_TABLE".equals(kind) || "COLUMN_TABLE".equals(kind)) {
                 appendCollection(revisionId, orderId, field, value, byParent.getOrDefault(
                         field.path("id").asText(""), List.of()), collections, values);
             } else if (indexable(field) && scalar(value)) {
@@ -65,7 +65,7 @@ public class RecordProjectionService {
             List<ProductionOrderRepository.ValueProjection> values
     ) {
         if (value == null || !value.isArray()) return;
-        var kind = "MATRIX".equals(parent.path("kind").asText()) ? "MATRIX" : "DETAIL";
+        var kind = "DETAIL";
         var parentPath = parent.path("dataPath").asText();
         var parentCode = parent.path("fieldCode").asText("LOCAL.COLLECTION");
         for (var index = 0; index < value.size(); index++) {
@@ -115,15 +115,6 @@ public class RecordProjectionService {
     }
 
     private String memberKey(JsonNode record) {
-        var member = record.path("_member");
-        if (member.isObject()) {
-            var slotId = member.path("slotId").asText("");
-            if (!slotId.isBlank()) return slotId;
-            var coordinate = member.path("coordinate").asText("");
-            if (!coordinate.isBlank()) return coordinate;
-            var label = member.path("label").asText("");
-            if (!label.isBlank()) return label;
-        }
         return record.path("recordKey").asText("");
     }
 

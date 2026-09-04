@@ -18,6 +18,7 @@ export interface ProjectDocumentSummary {
   fileObjectId?: string;
   createdAt: string;
   createdBy: string;
+  allowedActions?: string[];
 }
 
 export interface ProjectDocumentDetail extends ProjectDocumentSummary {

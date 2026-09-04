@@ -7,37 +7,6 @@ import org.junit.jupiter.api.Test;
 
 class MappingPathNormalizerTest {
 
-    @Test
-    void restoresHiddenRepeatParentBeforeValidation() throws Exception {
-        var mapper = new ObjectMapper();
-        var mapping = mapper.readTree("""
-                [{
-                  "bindingId":"child-binding",
-                  "fieldId":"child-field",
-                  "relationId":"child-relation",
-                  "parentBindingId":"parent-binding",
-                  "parentFieldId":"parent-field",
-                  "parentRelationId":"parent-relation",
-                  "dataPath":"/records/*/mustardDeltaE",
-                  "mappingKind":"REPEAT_FIELD",
-                  "repeatAxis":"COLUMN",
-                  "recordHeight":1,
-                  "recordWidth":1,
-                  "recordStride":1,
-                  "locator":{"sheetId":"sheet-1","parentRange":"A5:H19","address":"C6:H6"}
-                }]
-                """);
-
-        var normalized = MappingPathNormalizer.normalize(mapping);
-
-        assertThat(normalized).hasSize(2);
-        assertThat(normalized.get(0).path("bindingId").asText()).isEqualTo("parent-binding");
-        assertThat(normalized.get(0).path("mappingKind").asText()).isEqualTo("REPEAT_REGION");
-        assertThat(normalized.get(0).path("dataPath").asText()).isEqualTo("/records");
-        assertThat(normalized.get(0).path("locator").path("dataRange").asText()).isEqualTo("A5:H19");
-        assertThat(normalized.get(1).path("parentBindingId").asText()).isEqualTo("parent-binding");
-    }
-
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Test
@@ -84,12 +53,12 @@ class MappingPathNormalizerTest {
     }
 
     @Test
-    void derivesLegacyParentPathFromExplicitChildPath() {
+    void derivesParentPathFromExplicitChildPath() {
         var parent = objectMapper.createObjectNode()
                 .put("bindingId", "formula-parent")
                 .put("fieldCode", "AUTO.FIELD")
                 .put("mappingKind", "REPEAT_REGION")
-                .put("locatorType", "TABLE_REGION");
+                .put("locatorType", "CELL_RANGE");
         parent.set("locator", objectMapper.createObjectNode().put("address", "A6:G22"));
         var child = objectMapper.createObjectNode()
                 .put("bindingId", "formula-sequence")

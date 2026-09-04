@@ -1,11 +1,12 @@
 import { create } from 'zustand';
 
 import { authApi, type AuthUser, type LoginRequest } from '@/services/auth/auth-api';
+import { subscribeAuthRequired } from '@/services/http/auth-events';
 import { HttpError } from '@/services/http/errors';
 
 interface AuthState {
   user: AuthUser | null;
-  status: 'unknown' | 'loading' | 'authenticated' | 'anonymous';
+  status: 'unknown' | 'loading' | 'authenticated' | 'anonymous' | 'error';
   load: () => Promise<AuthUser | null>;
   login: (request: LoginRequest) => Promise<AuthUser>;
   logout: () => Promise<void>;
@@ -28,7 +29,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         set({ user: null, status: 'anonymous' });
         return null;
       }
-      set({ status: 'anonymous', user: null });
+      set({ status: 'error', user: null });
       return null;
     }
   },
@@ -51,3 +52,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
   can: (permission) => get().user?.permissions.includes(permission) ?? false,
 }));
+
+subscribeAuthRequired(() => {
+  if (useAuthStore.getState().status === 'authenticated') {
+    useAuthStore.setState({ user: null, status: 'anonymous' });
+  }
+});

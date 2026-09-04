@@ -27,7 +27,6 @@ public final class MappingPathNormalizer {
     public static JsonNode normalize(JsonNode mapping) {
         if (mapping == null || !mapping.isArray()) return mapping;
         var result = (ArrayNode) mapping.deepCopy();
-        ensureMissingParentMappings(result);
         var paths = new HashMap<String, String>();
         var usedPaths = new HashSet<String>();
         var inferredParentPaths = inferParentPaths(result);
@@ -67,8 +66,7 @@ public final class MappingPathNormalizer {
                 } else if (isRegion(mappingKind)) {
                     // If a child already carries a valid collection path such as
                     // /formulaItems/*/sequence, that path is stronger evidence
-                    // than a generic /records/<fieldCode> fallback. This keeps
-                    // legacy structural parents compatible with their children.
+                    // than a generic /records/<fieldCode> fallback.
                     generated = inferredParentPaths.getOrDefault(bindingId, "");
                     if (!StringUtils.hasText(generated)) generated = "/records/" + key;
                 } else {
@@ -84,72 +82,6 @@ public final class MappingPathNormalizer {
             if (!changed) break;
         }
         return result;
-    }
-
-    /**
-     * Recognition roots are intentionally hidden from the ordinary field list.
-     * Older clients therefore persisted an accepted child without its structural
-     * parent. Rebuild that non-business mapping from the child's stable parent id
-     * and physical parent range; strict repeat validation still runs afterwards.
-     */
-    private static void ensureMissingParentMappings(ArrayNode mappings) {
-        var existing = new HashSet<String>();
-        for (var node : mappings) {
-            var bindingId = node.path("bindingId").asText("");
-            if (StringUtils.hasText(bindingId)) existing.add(bindingId);
-        }
-        var parents = new java.util.LinkedHashMap<String, ObjectNode>();
-        for (var node : mappings) {
-            if (!(node instanceof ObjectNode child)) continue;
-            var kind = mappingKind(child);
-            if (!isChild(kind)) continue;
-            var parentId = child.path("parentBindingId").asText("");
-            if (!StringUtils.hasText(parentId) || existing.contains(parentId)
-                    || parents.containsKey(parentId)) continue;
-            var locator = child.path("locator");
-            var parentRange = locator.path("parentRange").asText("");
-            if (!StringUtils.hasText(parentRange)) continue;
-            var childPath = child.path("dataPath").asText("");
-            var marker = childPath.indexOf("/*/");
-            if (marker <= 0) continue;
-            var matrix = "MATRIX_FIELD".equals(kind);
-            var parent = com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode()
-                    .put("bindingId", parentId)
-                    .put("fieldId", child.path("parentFieldId").asText(""))
-                    .put("relationId", child.path("parentRelationId").asText(""))
-                    .put("fieldCode", matrix ? "AUTO.MATRIX.REGION" : "AUTO.REPEAT.REGION")
-                    .put("dataPath", childPath.substring(0, marker))
-                    .put("role", "REPEAT_REGION")
-                    .put("mappingKind", matrix ? "MATRIX_REGION" : "REPEAT_REGION")
-                    .put("repeatAxis", child.path("repeatAxis").asText("ROW"))
-                    .put("recordHeight", Math.max(1, child.path("recordHeight").asInt(1)))
-                    .put("recordWidth", Math.max(1, child.path("recordWidth").asInt(1)))
-                    .put("recordStride", Math.max(1, child.path("recordStride").asInt(1)))
-                    .put("locatorType", matrix ? "MATRIX_REGION" : "TABLE_REGION")
-                    .put("syncDirection", "TWO_WAY")
-                    .put("primaryBinding", true)
-                    .put("bindingStatus", "VALID");
-            parent.set("locator", com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode()
-                    .put("sheetId", locator.path("sheetId").asText(""))
-                    .put("sheetName", locator.path("sheetName").asText(""))
-                    .put("address", parentRange)
-                    .put("range", parentRange)
-                    .put("dataRange", parentRange)
-                    .put("locatorType", matrix ? "MATRIX_REGION" : "TABLE_REGION"));
-            parent.set("diagnostic", com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode()
-                    .put("source", "INFERRED_PARENT_STRUCTURE")
-                    .put("description", "由已确认明细字段自动补齐的重复区域结构"));
-            if (child.path("termination").isObject()) {
-                parent.set("termination", child.path("termination").deepCopy());
-            }
-            parents.put(parentId, parent);
-        }
-        if (parents.isEmpty()) return;
-        var combined = com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.arrayNode();
-        parents.values().forEach(combined::add);
-        mappings.forEach(combined::add);
-        mappings.removeAll();
-        mappings.addAll(combined);
     }
 
     private static Map<String, String> inferParentPaths(ArrayNode mappings) {
@@ -180,12 +112,11 @@ public final class MappingPathNormalizer {
     }
 
     private static boolean isRegion(String mappingKind) {
-        return "REPEAT_REGION".equals(mappingKind) || "MATRIX_REGION".equals(mappingKind)
-                || "REPEAT_REGION".equalsIgnoreCase(mappingKind);
+        return "REPEAT_REGION".equalsIgnoreCase(mappingKind);
     }
 
     private static boolean isChild(String mappingKind) {
-        return "REPEAT_FIELD".equals(mappingKind) || "MATRIX_FIELD".equals(mappingKind);
+        return "REPEAT_FIELD".equals(mappingKind);
     }
 
     private static String stableKey(ObjectNode object, String bindingId) {

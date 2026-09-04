@@ -1,6 +1,7 @@
 import type { ApiResponse } from '@/types/api';
 import { appEnv } from '@/app/config/env';
 import { ensureCsrfToken, httpClient, refreshCsrfToken } from '@/services/http/client';
+import { notifyAuthRequired } from '@/services/http/auth-events';
 import { generateUUID } from '@/utils/uuid';
 
 export class AssistantRequestError extends Error {
@@ -147,6 +148,7 @@ export const assistantApi = {
     let csrfToken = await ensureCsrfToken();
     let response = await requestStream(csrfToken);
     if (!response.ok || !response.body) {
+      if (response.status === 401) notifyAuthRequired();
       let message = `流式问答失败（${response.status}）`;
       let code = 'AI_REQUEST_FAILED';
       let traceId: string | undefined;

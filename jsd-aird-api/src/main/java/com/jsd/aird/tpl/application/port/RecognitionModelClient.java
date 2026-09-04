@@ -22,28 +22,7 @@ public interface RecognitionModelClient {
             JsonNode structureSummary,
             JsonNode visualInput,
             String callPhase
-    ) {
-        public RecognitionRequest(
-                UUID importJobId, UUID recognitionRunId, TemplateFormat format,
-                String sourceFileName, String regionId, JsonNode structureSummary
-        ) {
-            this(importJobId, recognitionRunId, format, sourceFileName, regionId,
-                    structureSummary, null, "REGION_INFERENCE");
-        }
-
-        public RecognitionRequest(
-                UUID importJobId, UUID recognitionRunId, TemplateFormat format,
-                String sourceFileName, String regionId, JsonNode structureSummary, String callPhase
-        ) {
-            this(importJobId, recognitionRunId, format, sourceFileName, regionId,
-                    structureSummary, null, callPhase);
-        }
-
-        public RecognitionRequest(UUID importJobId, TemplateFormat format, String sourceFileName, JsonNode structureSummary) {
-            this(importJobId, null, format, sourceFileName, "", structureSummary,
-                    null, "REGION_INFERENCE");
-        }
-    }
+    ) { }
 
     record RecognitionBatch(
             List<ModelSuggestion> suggestions,
@@ -155,20 +134,7 @@ public interface RecognitionModelClient {
             boolean responseTruncated,
             String phase,
             UUID parentCallId
-    ) {
-        public CallTrace(
-                UUID callId, String regionId, int attempt, String provider, String model,
-                String promptVersion, String status, Integer httpStatus, Instant startedAt,
-                Instant finishedAt, long durationMs, int promptTokens, int completionTokens,
-                int totalTokens, JsonNode requestPayload, JsonNode responsePayload,
-                String requestHash, String responseHash, String errorType, String errorMessage
-        ) {
-            this(callId, regionId, attempt, provider, model, promptVersion, status, httpStatus,
-                    startedAt, finishedAt, durationMs, promptTokens, completionTokens, totalTokens,
-                    requestPayload, responsePayload, requestHash, responseHash, errorType,
-                    errorMessage, "", "", false, "REGION_INFERENCE", null);
-        }
-    }
+    ) { }
 
     final class RecognitionCallException extends RuntimeException {
         private final List<CallTrace> traces;

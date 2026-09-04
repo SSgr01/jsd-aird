@@ -25,6 +25,7 @@ export interface Material {
   description?: string;
   version: number;
   linked?: boolean;
+  allowedActions?: string[];
 }
 
 export interface MaterialInput {
@@ -55,6 +56,7 @@ export interface ProjectMaterial {
   linkedAt?: string;
   linkedBy?: string;
   remark?: string;
+  allowedActions?: string[];
 }
 
 export interface ProjectMaterialQuery {

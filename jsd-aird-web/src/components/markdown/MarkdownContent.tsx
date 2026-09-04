@@ -189,16 +189,49 @@ function renderBlocks(value: string): ReactNode[] {
       continue;
     }
 
-    const ordered = /^\s*\d+[.)]\s+(.+)$/.exec(line);
+    const ordered = /^\s*(\d+)[.)]\s+(.+)$/.exec(line);
     if (ordered) {
-      const items: string[] = [];
-      while (index < lines.length) {
-        const item = /^\s*\d+[.)]\s+(.+)$/.exec(lines[index] ?? '');
-        if (!item) break;
-        items.push(item[1] || '');
-        index += 1;
+      const items: Array<{ number: number; text: string }> = [];
+      let cursor = index;
+      let lastNumber = Number.parseInt(ordered[1] || '1', 10);
+
+      while (cursor < lines.length) {
+        const item = /^\s*(\d+)[.)]\s+(.+)$/.exec(lines[cursor] ?? '');
+        if (item) {
+          const number = Number.parseInt(item[1] || '1', 10);
+          items.push({ number, text: item[2] || '' });
+          lastNumber = number;
+          cursor += 1;
+          continue;
+        }
+
+        // Markdown permits a blank line between items. Keep the list open
+        // only when the next non-empty line is the next source number; this
+        // avoids turning every item into a new <ol> while preserving explicit
+        // list restarts.
+        if (!(lines[cursor] ?? '').trim()) {
+          let lookahead = cursor;
+          while (lookahead < lines.length && !(lines[lookahead] ?? '').trim()) lookahead += 1;
+          const next = /^\s*(\d+)[.)]\s+(.+)$/.exec(lines[lookahead] ?? '');
+          const nextNumber = next ? Number.parseInt(next[1] || '1', 10) : NaN;
+          if (next && nextNumber === lastNumber + 1) {
+            cursor = lookahead;
+            continue;
+          }
+        }
+        break;
       }
-      blocks.push(<ol key={`ordered-${index}`}>{items.map((item, itemIndex) => <li key={`ordered-${index}-${itemIndex}`}>{parseInline(item, `ordered-${index}-${itemIndex}`)}</li>)}</ol>);
+
+      index = cursor;
+      blocks.push(
+        <ol key={`ordered-${index}`} start={items[0]?.number}>
+          {items.map((item, itemIndex) => (
+            <li key={`ordered-${index}-${itemIndex}`} value={item.number}>
+              {parseInline(item.text, `ordered-${index}-${itemIndex}`)}
+            </li>
+          ))}
+        </ol>,
+      );
       continue;
     }
 

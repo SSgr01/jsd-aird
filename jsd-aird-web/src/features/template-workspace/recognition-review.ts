@@ -61,12 +61,17 @@ export function mergeRecognitionReview(
     // fields and allowed the properties tab to edit a structure as a field.
     if (isRegionRoot(item) || isRuntimeSlot(item.payload)) continue;
     if (isProtocolRejected(item.payload) || isAuditOnly(item.payload)) continue;
-    const existingIndex = nextModel.fields.findIndex((field) => fieldMatchesIdentity(field, {
-      bindingId: item.payload.bindingId,
-      relationId: item.payload.relationId,
-      fieldId: item.payload.fieldId,
-      recognitionItemId: item.id,
-    }));
+    const existingIndex = nextModel.fields.findIndex((field) =>
+      fieldMatchesIdentity(field, {
+        bindingId: item.payload.bindingId,
+        relationId: item.payload.relationId,
+        fieldId: item.payload.fieldId,
+        recognitionItemId: item.id,
+      })
+      || Boolean(field.manualOverrides?.length
+        && field.fieldCode
+        && field.fieldCode === item.payload.fieldCode),
+    );
     if (existingIndex >= 0 && item.status === 'CONFIRMED') {
       const existing = nextModel.fields[existingIndex];
       if (!existing) continue;
@@ -136,12 +141,38 @@ export function mergeRecognitionReview(
   // same hierarchy as recognition confirmation.
   nextModel.fields = nextModel.fields.map((field) => {
     const item = review.items.find((candidate) => reviewItemMatchesField(field, candidate));
-    const path = item ? splitLabelPath(item.payload.labelPath) : undefined;
-    if (!path?.length) return field;
+    if (!item) return field;
+    const path = splitLabelPath(item.payload.labelPath);
+    const binding = nextMapping.find((candidate) => bindingMatchesIdentity(candidate, {
+      bindingId: field.bindingId,
+      relationId: field.relationId,
+      fieldId: field.fieldId || field.id,
+    }));
+    const overrides = manualOverrideSet(field, binding);
+    const protectedPath = path?.length
+      ? (overrides.has('name') ? [...path.slice(0, -1), field.name] : path)
+      : undefined;
+    const diff = recognitionLocatorDiff(field.locator ?? binding?.locator, item.payload.locator);
+    const structureChanged = item.status === 'CONFLICT'
+      || item.payload.structureConflict === true
+      || Boolean(diff);
     return {
       ...field,
-      name: path.at(-1) || field.name,
-      pathSegments: path,
+      ...(path?.length
+        ? {
+            name: overrides.has('name') ? field.name : path.at(-1) || field.name,
+            pathSegments: protectedPath,
+          }
+        : {}),
+      ...(structureChanged
+        ? {
+            reviewStatus: 'ISSUE' as const,
+            semanticConflict: true,
+            conflictCode: 'RECOGNITION_STRUCTURE_CHANGED',
+            conflictMessage: '重新识别发现字段位置或所属结构已变化，已保留人工名称、单位和类型，请核对差异。',
+            recognitionDiff: diff ?? { status: 'STRUCTURE_CONFLICT' },
+          }
+        : {}),
     };
   });
   // Keep the executable mapping in lockstep with the field model. The data
@@ -150,12 +181,33 @@ export function mergeRecognitionReview(
   // generic repeat-region path again.
   nextMapping = nextMapping.map((binding) => {
     const item = review.items.find((candidate) => reviewItemMatchesBinding(binding, candidate));
-    const path = item ? splitLabelPath(item.payload.labelPath) : undefined;
-    if (!path?.length) return binding;
+    if (!item) return binding;
+    const path = splitLabelPath(item.payload.labelPath);
+    const field = nextModel.fields.find((candidate) => fieldMatchesIdentity(candidate, {
+      bindingId: binding.bindingId,
+      relationId: binding.relationId,
+      fieldId: binding.fieldId,
+    }));
+    const overrides = field ? manualOverrideSet(field, binding) : new Set<string>();
+    const protectedPath = path?.length
+      ? (overrides.has('name') && field ? [...path.slice(0, -1), field.name] : path)
+      : undefined;
+    const diff = recognitionLocatorDiff(binding.locator, item.payload.locator);
     return {
       ...binding,
-      labelPath: path.join(' > '),
-      labelPathSegments: path,
+      ...(protectedPath?.length
+        ? { labelPath: protectedPath.join(' > '), labelPathSegments: protectedPath }
+        : {}),
+      ...(diff || item.status === 'CONFLICT' || item.payload.structureConflict === true
+        ? {
+            bindingStatus: 'AMBIGUOUS' as const,
+            diagnostic: {
+              ...binding.diagnostic,
+              recognitionDiff: diff ?? { status: 'STRUCTURE_CONFLICT' },
+              recognitionConflict: true,
+            },
+          }
+        : {}),
     };
   });
   nextSchema = writeFieldModel(nextSchema, nextModel);
@@ -167,6 +219,7 @@ function reviewItemMatchesField(field: FieldModel['fields'][number], item: Recog
   if (payload.fieldId && (field.fieldId === payload.fieldId || field.id === payload.fieldId)) return true;
   if (payload.relationId && field.relationId === payload.relationId) return true;
   if (payload.bindingId && field.bindingId === payload.bindingId) return true;
+  if (field.manualOverrides?.length && field.fieldCode && field.fieldCode === payload.fieldCode) return true;
   // A scalar candidate has no stable field identity before confirmation, so
   // its recognition item id is the only available identity. Do not use this
   // fallback for generated repeat children: their recognitionItemId points to
@@ -180,11 +233,48 @@ function reviewItemMatchesBinding(binding: TemplateBinding, item: RecognitionRev
   if (payload.bindingId && binding.bindingId === payload.bindingId) return true;
   if (payload.relationId && binding.relationId === payload.relationId) return true;
   if (payload.fieldId && binding.fieldId === payload.fieldId) return true;
+  if (Array.isArray(binding.diagnostic?.manualOverrides)
+    && binding.fieldCode && binding.fieldCode === payload.fieldCode) return true;
   return stringValue(binding.diagnostic?.recognitionItemId) === item.id;
 }
 
 function stringValue(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function manualOverrideSet(
+  field: FieldModel['fields'][number],
+  binding?: TemplateBinding,
+) {
+  const stored = Array.isArray(binding?.diagnostic?.manualOverrides)
+    ? binding.diagnostic.manualOverrides.filter((item): item is string => typeof item === 'string')
+    : [];
+  return new Set([...(field.manualOverrides ?? []), ...stored]);
+}
+
+function recognitionLocatorDiff(
+  current?: Record<string, unknown>,
+  recognized?: Record<string, unknown>,
+) {
+  const previous = locatorIdentity(current);
+  const next = locatorIdentity(recognized);
+  if (!previous || !next || previous === next) return undefined;
+  return { status: 'STALE', previousLocator: previous, recognizedLocator: next };
+}
+
+function locatorIdentity(locator?: Record<string, unknown>) {
+  if (!locator) return '';
+  const value = [
+    locator.markerId,
+    locator.nodeId,
+    locator.sourcePath,
+    locator.valueRange,
+    locator.logicalInputRange,
+    locator.dataRange,
+    locator.address,
+    locator.range,
+  ].find((item) => typeof item === 'string' && item.trim());
+  return typeof value === 'string' ? value.replaceAll('$', '').trim().toUpperCase() : '';
 }
 
 function splitLabelPath(value?: string) {
@@ -195,10 +285,27 @@ function splitLabelPath(value?: string) {
 
 function effectiveFieldKey(item: RecognitionReviewItem) {
   const locator = item.payload.locator ?? {};
-  const range = locator.valueRange || locator.logicalInputRange || locator.address || locator.range || item.address;
+  const valueCellPaths = Array.isArray(locator.valueCellPaths) ? locator.valueCellPaths : [];
+  const valueNodeIds = Array.isArray(locator.valueNodeIds) ? locator.valueNodeIds : [];
+  const range = locator.valueRange
+    || locator.logicalInputRange
+    || locator.dataRange
+    || locator.address
+    || locator.range
+    || locator.nodeId
+    || locator.valueAnchor
+    || locator.sourcePath
+    || valueCellPaths[0]
+    || valueNodeIds[0]
+    || item.address
+    || item.payload.relationId
+    || item.id;
   return [
     keyPart(locator.sheetId) || item.sheetId || '',
-    keyPart(item.payload.parentBindingId || item.payload.parentRelationId || item.payload.blockId),
+    keyPart(item.payload.regionId
+      || item.payload.parentBindingId
+      || item.payload.parentRelationId
+      || item.payload.blockId),
     keyPart(item.payload.mappingKind || item.payload.role || item.kind),
     keyPart(range).replaceAll('$', '').toUpperCase(),
     keyPart((item.payload as RecognitionReviewItem['payload'] & { valuePath?: string }).valuePath),
@@ -235,7 +342,7 @@ function isRegionRoot(item: RecognitionReviewItem) {
     && ['object', 'array'].includes(item.payload.valueType)
     ? 'FORM_REGION'
     : item.payload.kind || item.payload.blockType || item.kind;
-  return !item.child && ['FORM_REGION', 'ROW_TABLE', 'COLUMN_TABLE', 'MATRIX', 'TABLE_REGION'].includes(kind);
+  return !item.child && ['FORM_REGION', 'ROW_TABLE', 'COLUMN_TABLE'].includes(kind);
 }
 
 function isRuntimeSlot(payload: RecognitionReviewItem['payload']) {

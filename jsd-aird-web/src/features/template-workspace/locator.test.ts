@@ -5,6 +5,7 @@ import {
   locatorLabelRange,
   locatorValueRange,
   mergeLocators,
+  synchronizeLocatorCoordinates,
 } from './locator';
 
 describe('template locator normalization', () => {
@@ -55,5 +56,39 @@ describe('template locator normalization', () => {
     );
 
     expect(locatorLabelRange(locator)).toBe('A2:C2');
+  });
+
+  it('moves every value alias together when a field coordinate changes', () => {
+    const locator = synchronizeLocatorCoordinates({
+      address: 'B5', range: 'B5', valueRange: 'B5', logicalInputRange: 'B5',
+      anchorAddress: 'B5', anchorRange: 'B5', value: { address: 'B5', range: 'B5' },
+      labelAddress: 'A5', labelRange: 'A5',
+    }, { address: 'C5' });
+
+    expect(locatorValueRange(locator)).toBe('C5');
+    expect(locator.address).toBe('C5');
+    expect(locator.range).toBe('C5');
+    expect(locator.valueRange).toBe('C5');
+    expect(locator.logicalInputRange).toBe('C5');
+    expect(locator.anchorAddress).toBe('C5');
+    expect(locator.anchorRange).toBe('C5');
+    expect(locator.valueAddress).toBe('C5');
+    expect(locator.valueAnchor).toBe('C5');
+    expect((locator.value as Record<string, unknown>).range).toBe('C5');
+    expect(locatorLabelRange(locator)).toBe('A5');
+  });
+
+  it('moves label aliases without changing the value coordinate', () => {
+    const locator = synchronizeLocatorCoordinates({
+      address: 'B5', valueRange: 'B5', logicalInputRange: 'B5',
+      labelAddress: 'A5', labelRange: 'A5',
+    }, { labelAddress: 'C5' });
+
+    expect(locatorLabelRange(locator)).toBe('C5');
+    expect(locator.labelAddress).toBe('C5');
+    expect(locator.labelRange).toBe('C5');
+    expect(locator.labelAnchor).toBe('C5');
+    expect((locator.label as Record<string, unknown>).address).toBe('C5');
+    expect(locatorValueRange(locator)).toBe('B5');
   });
 });

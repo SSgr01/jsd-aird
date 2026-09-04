@@ -291,7 +291,7 @@ export function QualityDataPage() {
                   >
                     编辑
                   </Button>
-                  <Button
+                  {c.allowedActions?.includes('DELETE') ? <Button
                     type="link"
                     size="small"
                     danger
@@ -308,7 +308,7 @@ export function QualityDataPage() {
                     }
                   >
                     删除
-                  </Button>
+                  </Button> : null}
                 </span>
               </span>
             </span>
@@ -454,8 +454,10 @@ export function QualityDataPage() {
                   danger
                   disabled={!selected.size}
                   onClick={() => {
-                    setDeleted((v) => [...v, ...selected]);
-                    setDraft((v) => v.filter((r) => !selected.has(r.id)));
+                    const deletable = [...selected].filter((id) => draft.some((row) => row.id === id && row.allowedActions?.includes('DELETE')));
+                    if (!deletable.length) { msg.warning('当前选择没有可删除的数据'); return; }
+                    setDeleted((v) => [...v, ...deletable]);
+                    setDraft((v) => v.filter((r) => !deletable.includes(r.id)));
                     setSelected(new Set());
                     setDirty(true);
                   }}
@@ -561,7 +563,7 @@ export function QualityDataPage() {
                           生成不良报告
                         </Button>
                       )}
-                      <Button
+                      {r.allowedActions?.includes('DELETE') ? <Button
                         type="link"
                         danger
                         icon={typeId === 'standard' ? undefined : <DeleteOutlined />}
@@ -586,7 +588,7 @@ export function QualityDataPage() {
                         }
                       >
                         删除
-                      </Button>
+                      </Button> : null}
                     </td>
                   </tr>
                 ))}

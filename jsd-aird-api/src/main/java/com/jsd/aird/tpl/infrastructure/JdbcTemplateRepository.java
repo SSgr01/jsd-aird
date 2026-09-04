@@ -1107,8 +1107,7 @@ public class JdbcTemplateRepository implements TemplateRepository {
     }
 
     private String normalizeRepeatAxis(String mappingKind, String repeatAxis) {
-        var repeating = "REPEAT_REGION".equals(mappingKind) || "REPEAT_FIELD".equals(mappingKind)
-                || "MATRIX_REGION".equals(mappingKind) || "MATRIX_FIELD".equals(mappingKind);
+        var repeating = "REPEAT_REGION".equals(mappingKind) || "REPEAT_FIELD".equals(mappingKind);
         if (repeatAxis == null) return repeating ? "ROW" : null;
         if (!"ROW".equals(repeatAxis) && !"COLUMN".equals(repeatAxis)) {
             throw new IllegalArgumentException(

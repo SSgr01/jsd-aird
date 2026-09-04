@@ -20,7 +20,6 @@ import com.jsd.aird.ops.application.port.ObjectStorage;
 import com.jsd.aird.ops.application.port.FileObjectRepository;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
-import com.jsd.aird.shared.json.JsonCanonicalizer;
 import com.jsd.aird.shared.security.ActorContext;
 import com.jsd.aird.tpl.application.port.TemplateImportRepository;
 import com.jsd.aird.tpl.application.port.RecognitionModelClient;
@@ -39,9 +38,7 @@ public class TemplateRecognitionReviewService {
     private final ObjectStorage objectStorage;
     private final ObjectMapper objectMapper;
     private final RecognitionModelClient recognitionModelClient;
-    private final RuleBasedRecognitionEngine ruleRecognitionEngine;
     private final ModelSemanticViewBuilder semanticViewBuilder;
-    private final ColumnTableLayoutCompiler columnTableLayoutCompiler;
     private final PhysicalStructureFieldCompiler physicalFieldCompiler;
 
     public TemplateRecognitionReviewService(
@@ -58,13 +55,7 @@ public class TemplateRecognitionReviewService {
         this.objectStorage = objectStorage;
         this.objectMapper = objectMapper;
         this.recognitionModelClient = recognitionModelClient;
-        // The simple long-table fallback is deliberately local and deterministic.
-        // It is used only to materialize physical header fields for an existing
-        // rule suggestion; all other structures still use the model recompile path.
-        this.ruleRecognitionEngine = new RuleBasedRecognitionEngine(
-                objectMapper, new JsonCanonicalizer(objectMapper));
         this.semanticViewBuilder = new ModelSemanticViewBuilder(objectMapper);
-        this.columnTableLayoutCompiler = new ColumnTableLayoutCompiler(objectMapper);
         this.physicalFieldCompiler = new PhysicalStructureFieldCompiler(objectMapper);
     }
 
@@ -256,6 +247,7 @@ public class TemplateRecognitionReviewService {
             var explicitStructureRecognition = action.selectedAlternativeId() != null
                     && !action.selectedAlternativeId().isBlank();
             if (!selected.isEmpty() && selected.stream().allMatch(this::isStructuralCandidate)
+                    && !hasCurrentRegionSemanticContent(review.regions(), item)
                     && (explicitStructureRecognition
                     || selected.stream().anyMatch(candidate -> requiresStructureRecompile(candidate.payload())))) {
                 recompileSelectedStructures(organizationId, actorId, workspace, selected);
@@ -282,6 +274,7 @@ public class TemplateRecognitionReviewService {
             if ("ACCEPTED".equals(decision) && structuralItem
                     && resolutionGroupId.isBlank()
                     && !RecognitionCandidatePolicy.isFormallyConfirmable(item.payload())
+                    && !hasCurrentRegionSemanticContent(review.regions(), item)
                     && selectedSuggestionIds.stream().noneMatch(recompiledStructures::contains)) {
                 throw new ApiException(ApiErrorCode.BINDING_INVALID,
                         "结构候选尚未完成区域语义识别，不能确认");
@@ -392,18 +385,53 @@ public class TemplateRecognitionReviewService {
 
     private boolean hasRegionSemanticContent(JsonNode region) {
         return !region.path("fields").isEmpty()
-                || !region.path("runtimeSlots").isEmpty()
-                || !region.path("recordSlots").isEmpty()
                 || !region.path("structures").isEmpty();
+    }
+
+    /**
+     * A structure can be provisional while its semantic children are already
+     * present in the review tree (for example after a previous recognition
+     * run). In that case confirming the region is an acceptance operation, not
+     * a request to call the model again. Geometry and stale-field checks keep
+     * this shortcut safe for every region type.
+     */
+    private boolean hasCurrentRegionSemanticContent(JsonNode regions, RecognitionReviewItem item) {
+        if (regions == null || !regions.isArray() || item == null) return false;
+        var payload = item.payload();
+        var regionId = firstText(payload, "regionId", "blockId", "candidateRef", "");
+        var itemRange = locatorAddress(payload.path("locator"));
+        var itemKind = payload.path("kind").asText(payload.path("tableKind").asText(
+                payload.path("blockType").asText("")));
+        for (var region : regions) {
+            var sameId = !regionId.isBlank()
+                    && regionId.equals(firstText(region, "regionId", "blockId", "candidateRef", ""));
+            var regionRange = region.path("range").asText("");
+            var sameGeometry = !itemRange.isBlank()
+                    && itemRange.equalsIgnoreCase(regionRange)
+                    && itemKind.equals(region.path("kind").asText(""));
+            if (!sameId && !sameGeometry) continue;
+            if (!hasRegionSemanticContent(region)) return false;
+            if (Set.of("STALE", "EXPIRED", "OUTDATED").contains(
+                    region.path("canonicalStatus").asText("").toUpperCase(Locale.ROOT))
+                    || Set.of("STALE", "EXPIRED", "OUTDATED").contains(
+                    region.path("structureStatus").asText("").toUpperCase(Locale.ROOT))) return false;
+            for (var field : region.path("fields")) {
+                if (field.path("semanticConflict").asBoolean(false)) return false;
+                if ("STALE".equalsIgnoreCase(field.path("recognitionDiff").path("status").asText(""))) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        return false;
     }
 
     private boolean isStructuralCandidate(JsonNode payload) {
         // Semantic children inherit the parent's table kind so they can be
         // attached back to the exact region.  That inherited kind must never
-        // promote a TABLE_CHILD_FIELD/MATRIX_FIELD into another region root.
+        // promote a TABLE_CHILD_FIELD into another region root.
         if ("CHILD".equals(payload.path("suggestionLevel").asText(""))
-                || "REPEAT_FIELD".equals(payload.path("mappingKind").asText(""))
-                || "MATRIX_FIELD".equals(payload.path("mappingKind").asText(""))) {
+                || "REPEAT_FIELD".equals(payload.path("mappingKind").asText(""))) {
             return false;
         }
         var type = payload.path("kind").asText(payload.path("tableKind").asText(
@@ -418,7 +446,15 @@ public class TemplateRecognitionReviewService {
                 && Set.of("object", "array").contains(payload.path("valueType").asText(""))) {
             type = "FORM_REGION";
         }
-        return Set.of("MATRIX", "ROW_TABLE", "COLUMN_TABLE", "FORM_REGION", "TABLE_REGION").contains(type);
+        if (Set.of("ROW_TABLE", "COLUMN_TABLE", "FORM_REGION").contains(type)) return true;
+        // Keep an unresolved direction candidate in the same review conflict
+        // as its determinate alternatives. It is a structure proposal for
+        // review purposes, but can only be accepted through another selected
+        // alternative; otherwise it would disappear from the panel and the
+        // rejection audit would be lost.
+        return "UNKNOWN".equals(type)
+                && (!payload.path("resolutionGroupId").asText("").isBlank()
+                || payload.path("structureConflict").asBoolean(false));
     }
 
     private boolean isStructuralCandidate(RecognitionReviewItem item) {
@@ -602,7 +638,7 @@ public class TemplateRecognitionReviewService {
                 mergePhysicalFormFields(suggestions, region, physicalFacts, generationId);
                 continue;
             }
-            if (!Set.of("ROW_TABLE", "COLUMN_TABLE", "MATRIX").contains(type)) continue;
+            if (!Set.of("ROW_TABLE", "COLUMN_TABLE").contains(type)) continue;
             var parent = physicalParentForRecompile(region);
             physicalFieldCompiler.enrichParent(parent, region, physicalFacts);
             var physicalChildren = physicalFieldCompiler.children(parent, region, physicalFacts);
@@ -656,7 +692,6 @@ public class TemplateRecognitionReviewService {
                         Math.max(physicalSuggestion.confidence(), semantic == null ? 0.0 : semantic.confidence()),
                         physicalSuggestion.evidence()));
             }
-            addRecordIdentitySlot(suggestions, parent, region, generationId);
         }
     }
 
@@ -752,12 +787,6 @@ public class TemplateRecognitionReviewService {
                 .put("sheetId", sheetId).put("range", range).put("address", range)
                 .put("headerRange", structure.path("headerRange").asText(""))
                 .put("dataRange", structure.path("dataRange").asText("")));
-        if (structure.path("recordProjection").isObject()) {
-            parent.set("recordProjection", structure.path("recordProjection").deepCopy());
-        }
-        for (var key : List.of("fieldGroups", "fieldRows")) {
-            if (structure.path(key).isArray()) parent.set(key, structure.path(key).deepCopy());
-        }
         return parent;
     }
 
@@ -898,54 +927,6 @@ public class TemplateRecognitionReviewService {
         }
     }
 
-    private void addRecordIdentitySlot(
-            List<RecognitionModelClient.ModelSuggestion> suggestions,
-            ObjectNode parent,
-            ObjectNode region,
-            String generationId
-    ) {
-        if (!"COLUMN_TABLE".equals(region.path("type").asText(""))) return;
-        var identity = region.path("structure").path("recordProjection").path("recordIdentity");
-        var valueRange = identity.path("valueRange").asText("");
-        if (valueRange.isBlank()) return;
-        var sheetId = region.path("sheetId").asText("");
-        var relationId = RecognitionIdentity.relationId(
-                sheetId, identity.path("labelRange").asText(""), valueRange, "RECORD_IDENTITY");
-        var fieldId = RecognitionIdentity.fieldId(relationId);
-        var payload = objectMapper.createObjectNode()
-                .put("kind", "SCALAR").put("role", "RECORD_IDENTITY")
-                .put("fieldName", "记录名称填写槽位")
-                .put("fieldCode", "RECORD.IDENTITY")
-                .put("relationId", relationId).put("fieldId", fieldId.toString())
-                .put("bindingId", RecognitionIdentity.bindingId(fieldId, "CELL_RANGE", sheetId + "|" + valueRange).toString())
-                .put("parentRelationId", parent.path("relationId").asText(""))
-                .put("parentBindingId", parent.path("bindingId").asText(""))
-                .put("parentFieldId", parent.path("fieldId").asText(""))
-                .put("parentBlockId", parent.path("blockId").asText(""))
-                .put("parentSuggestionId", region.path("selectedSuggestionId").asText(""))
-                .put("blockId", parent.path("blockId").asText(""))
-                .put("regionId", parent.path("blockId").asText(""))
-                .put("mappingKind", "RECORD_IDENTITY")
-                .put("repeatAxis", "COLUMN")
-                .put("runtimeInputOnly", true)
-                .put("nameSource", "RECORD_IDENTITY")
-                .put("candidateOnly", false).put("reviewRequired", false)
-                .put("canonicalStatus", "CONFIRMED").put("structureStatus", "CONFIRMED")
-                .put("semanticRecompileRegionId", region.path("regionId").asText(""))
-                .put("activeGenerationId", generationId)
-                .put("suggestionLevel", "CHILD");
-        payload.set("locator", objectMapper.createObjectNode()
-                .put("sheetId", sheetId).put("labelRange", identity.path("labelRange").asText(""))
-                .put("valueRange", valueRange).put("address", valueRange).put("range", valueRange)
-                .put("locatorType", "CELL_RANGE"));
-        suggestions.removeIf(item -> region.path("regionId").asText("")
-                .equals(item.payload().path("semanticRecompileRegionId").asText(""))
-                && !isStructuralCandidate(item.payload())
-                && valueRange.equals(canonicalValueRange(item.payload())));
-        suggestions.add(new RecognitionModelClient.ModelSuggestion(
-                "TABLE_CHILD_FIELD", payload, 1.0, objectMapper.createArrayNode()));
-    }
-
     private String canonicalValueRange(JsonNode payload) {
         for (var pointer : List.of("/locator/valueRange", "/locator/logicalInputRange",
                 "/locator/address", "/locator/range", "/valueRange")) {
@@ -986,11 +967,6 @@ public class TemplateRecognitionReviewService {
             if (Set.of("ROW_TABLE", "COLUMN_TABLE").contains(type)
                     && "TABLE_CHILD_FIELD".equals(suggestion.suggestionType())
                     && !suggestion.payload().path("fieldName").asText("").strip().isBlank()) return true;
-            if ("MATRIX".equals(type)
-                    && ("MATRIX_FIELD".equals(suggestion.suggestionType())
-                    || ("MATRIX".equals(suggestion.payload().path("kind").asText(""))
-                    && (suggestion.payload().path("matrixModel").isObject()
-                    || suggestion.payload().path("runtimeSlots").isArray())))) return true;
         }
         return false;
     }
@@ -1028,36 +1004,26 @@ public class TemplateRecognitionReviewService {
                 .put("pendingReason", "SEMANTIC_RECOGNITION_REQUIRED");
         var geometry = region.putObject("structure");
         var source = payload.path("structure").isObject() ? payload.path("structure") : payload;
-        for (var key : List.of("cornerRange", "rowHeaderRange", "columnHeaderRange", "crossDataRange",
-                "headerRange", "dataRange", "totalRange", "recordAxis", "recordHeight", "recordWidth",
-                "recordStride", "fieldSurfaces", "staticContents")) {
+        for (var key : List.of("headerRange", "dataRange", "totalRange", "recordAxis",
+                "recordHeight", "recordWidth", "recordStride", "fieldSurfaces")) {
             if (source.has(key)) geometry.set(key, source.path(key).deepCopy());
             else if (locator.has(key)) geometry.set(key, locator.path(key).deepCopy());
         }
-        if ("COLUMN_TABLE".equals(type)) enrichColumnProjection(region, geometry, physicalFacts);
-        return region;
-    }
-
-    /**
-     * A model alternative often knows that a block is a COLUMN_TABLE but does
-     * not carry its runtime record projection. Derive that projection from the
-     * workbook facts: the non-empty merged label band at the first row ends
-     * immediately before the aligned runtime record surface.
-     */
-    private void enrichColumnProjection(ObjectNode region, ObjectNode geometry, JsonNode physicalFacts) {
-        columnTableLayoutCompiler.enrich(region, physicalFacts);
-    }
-
-    private String excelRange(int left, int top, int right, int bottom) {
-        return columnName(left) + top + ":" + columnName(right) + bottom;
-    }
-
-    private String columnName(int column) {
-        var value = new StringBuilder();
-        for (int current = column; current > 0; current = (current - 1) / 26) {
-            value.append((char) ('A' + (current - 1) % 26));
+        var parent = objectMapper.createObjectNode().put("kind", type)
+                .put("blockId", regionId).put("regionId", regionId)
+                .put("candidateRef", regionId).put("relationId", payload.path("relationId").asText(""))
+                .put("fieldId", payload.path("fieldId").asText(""));
+        parent.set("locator", objectMapper.createObjectNode().put("sheetId", sheetId).put("range", range));
+        var candidates = region.putArray("fieldCandidates");
+        for (var field : physicalFieldCompiler.children(parent, region, physicalFacts)) {
+            if (field.payload() instanceof ObjectNode candidate) {
+                candidate = candidate.deepCopy();
+                candidate.put("candidateRef", field.payload().path("relationId").asText(
+                        field.payload().path("fieldId").asText("")));
+                candidates.add(candidate);
+            }
         }
-        return value.reverse().toString();
+        return region;
     }
 
     private String semanticRegionId(JsonNode payload) {
@@ -1197,14 +1163,9 @@ public class TemplateRecognitionReviewService {
         if (run == null) {
             return new RecognitionReview(null, "NONE", emptySummary(), List.of(), List.of(), List.of(), null,
                     "NO_PHYSICAL_TABLE", objectMapper.createObjectNode(), objectMapper.createArrayNode(),
-                    new RecognitionReviewStatistics(0, 0, 0, 0, 0, 0, 0));
+                    new RecognitionReviewStatistics(0, 0, 0, 0, 0, 0));
         }
         var suggestions = importRepository.listSuggestions(organizationId, run.id());
-        if (ensureSimpleLongTableFields(run, suggestions)) {
-            // A lazy append added children to the repository; include them in
-            // this same response rather than requiring a manual refresh.
-            suggestions = importRepository.listSuggestions(organizationId, run.id());
-        }
         var semanticModel = suggestions.stream()
                 .filter(suggestion -> "SEMANTIC_MODEL".equals(suggestion.suggestionType()))
                 .findFirst()
@@ -1300,7 +1261,7 @@ public class TemplateRecognitionReviewService {
                     findFieldId(fields, primary.id(), payload),
                     payload.path("parentRelationId").asText(""),
                     payload.path("parentFieldId").asText(""),
-                    "CHILD".equals(payload.path("suggestionLevel").asText("")),
+                    isChildField(payload),
                     payload.path("fieldName").asText("业务字段"),
                     payload.path("reason").asText("根据模板内容自动识别"),
                     groupName,
@@ -1326,7 +1287,7 @@ public class TemplateRecognitionReviewService {
         active.forEach(item -> groups.add(item.groupName()));
         var qualityIssues = importRepository.listQualityIssues(organizationId, run.id()).stream()
                 .map(this::qualityItem).toList();
-        var regionTree = effectiveRegionTree(buildRegionTree(suggestions, items, semanticModel));
+        var regionTree = buildRegionTree(suggestions, items, semanticModel);
         var reviewStatistics = buildReviewStatistics(suggestions, regionTree, active);
         var summary = new RecognitionSummary(
                 active.size(),
@@ -1337,7 +1298,7 @@ public class TemplateRecognitionReviewService {
                 (int) items.stream().filter(item -> "IGNORED".equals(item.status())).count(),
                 (int) active.stream().filter(item -> "SCALAR".equals(item.kind())).count(),
                 (int) active.stream().filter(item -> "ROW_TABLE".equals(item.kind())).count(),
-                (int) active.stream().filter(item -> "MATRIX".equals(item.kind())).count(),
+                (int) active.stream().filter(item -> "COLUMN_TABLE".equals(item.kind())).count(),
                 qualityIssues.size(),
                 (int) qualityIssues.stream().filter(item -> "AUTO_APPLIED".equals(item.status())).count(),
                 (int) qualityIssues.stream().filter(item -> "BLOCKER".equals(item.severity())
@@ -1355,52 +1316,6 @@ public class TemplateRecognitionReviewService {
                 regionTree,
                 reviewStatistics
         );
-    }
-
-    /**
-     * Older deterministic runs stored the long-table region only. Materialize
-     * its physical header columns as pending child fields on first review so
-     * the user can confirm them directly. This path is intentionally limited
-     * to SIMPLE_LONG_TABLE; matrices, column tables, forms and ambiguous
-     * structures remain unchanged and still require semantic recognition.
-     */
-    private boolean ensureSimpleLongTableFields(
-            TemplateImportRepository.ImportJobView run,
-            List<TemplateImportRepository.RecognitionSuggestionView> suggestions
-    ) {
-        var children = new ArrayList<RecognitionModelClient.ModelSuggestion>();
-        for (var root : suggestions) {
-            var payload = root.payload();
-            if (!"RULE".equals(root.source())
-                    || !"ROW_TABLE".equals(payload.path("kind").asText())
-                    || !"SIMPLE_LONG_TABLE".equals(payload.path("reasonCode").asText())
-                    || !payload.path("columns").isArray()) continue;
-            var relationId = payload.path("relationId").asText("");
-            var existingChildRelations = suggestions.stream().filter(candidate ->
-                    "RULE".equals(candidate.source())
-                    && "CHILD".equals(candidate.payload().path("suggestionLevel").asText())
-                    && (relationId.equals(candidate.payload().path("parentRelationId").asText())
-                    || root.id().toString().equals(candidate.payload().path("parentSuggestionId").asText())))
-                    .map(candidate -> candidate.payload().path("relationId").asText(""))
-                    .collect(java.util.stream.Collectors.toSet());
-            var parent = new RecognitionModelClient.ModelSuggestion(
-                    root.suggestionType(), payload.deepCopy(), root.confidence(), root.evidence());
-            for (var child : ruleRecognitionEngine.simpleLongTableFieldSuggestions(parent)) {
-                if (!(child.payload() instanceof ObjectNode childPayload)) continue;
-                if (existingChildRelations.contains(childPayload.path("relationId").asText(""))) continue;
-                childPayload.put("parentSuggestionId", root.id().toString());
-                children.add(new RecognitionModelClient.ModelSuggestion(
-                        child.suggestionType(), childPayload, child.confidence(), child.evidence()));
-            }
-        }
-        if (!children.isEmpty()) {
-            importRepository.appendRuleSuggestions(
-                    run.id(), run.recognitionRunId(),
-                    new RecognitionModelClient.RecognitionBatch(
-                            children, List.of(), "physical-facts", "conservative-label-value-v6",
-                            "simple-long-table-fields-v1", "", ""));
-        }
-        return !children.isEmpty();
     }
 
     private QualityIssueItem qualityItem(TemplateImportRepository.QualityIssueView issue) {
@@ -1686,10 +1601,18 @@ public class TemplateRecognitionReviewService {
                 && Set.of("object", "array").contains(suggestion.payload().path("valueType").asText(""))) {
             return "FORM_REGION";
         }
-        if (!explicit.isBlank()) return explicit;
-        if (suggestion.suggestionType().contains("MATRIX")) return "MATRIX";
-        if (suggestion.suggestionType().contains("TABLE")
-                || "REPEAT_REGION".equals(suggestion.payload().path("role").asText())) return "ROW_TABLE";
+        if (Set.of("SCALAR", "FORM_REGION", "ROW_TABLE", "COLUMN_TABLE", "UNKNOWN").contains(explicit)) {
+            return explicit;
+        }
+        // Unknown/removed business kinds are fields at most; never surface
+        // them as a new region kind in the review model.
+        if (Set.of("ROW_TABLE", "COLUMN_TABLE").contains(suggestion.suggestionType())) {
+            return suggestion.suggestionType();
+        }
+        if ("REPEAT_REGION".equals(suggestion.payload().path("role").asText())) {
+            return "COLUMN".equalsIgnoreCase(suggestion.payload().path("repeatAxis").asText("ROW"))
+                    ? "COLUMN_TABLE" : "ROW_TABLE";
+        }
         return "SCALAR";
     }
 
@@ -1753,6 +1676,20 @@ public class TemplateRecognitionReviewService {
                     && "CONFIRMED".equals(payload.path("structureStatus").asText(""));
             var itemStatus = itemBySuggestionId.containsKey(primary.id())
                     ? itemBySuggestionId.get(primary.id()).status() : "PENDING";
+            // `structureStatus=CONFIRMED` means the physical resolver found a
+            // determinate geometry. It is not a user review decision. Keep an
+            // auto-confirmed region visibly pending until the corresponding
+            // structural suggestion is accepted (or marked humanResolved),
+            // otherwise the card says “已确认” while all of its fields still
+            // correctly remain待确认.
+            var userConfirmed = "ACCEPTED".equals(primary.decision())
+                    || payload.path("humanResolved").asBoolean(false)
+                    || "HUMAN_REVIEW".equals(payload.path("resolutionSource").asText(""));
+            var displayStatus = structureConfirmed && userConfirmed
+                    ? "CONFIRMED"
+                    : "CONFLICT".equals(payload.path("structureStatus").asText(""))
+                        ? "CONFLICT"
+                        : "PENDING";
             var node = objectMapper.createObjectNode()
                     .put("regionId", firstText(payload, "regionId", "blockId", "candidateRef", primary.id().toString()))
                     .put("blockId", firstText(payload, "blockId", "regionId", "candidateRef", ""))
@@ -1761,7 +1698,7 @@ public class TemplateRecognitionReviewService {
                     .put("sheetName", payload.path("locator").path("sheetName").asText(""))
                     .put("range", locatorAddress(payload.path("locator")))
                     .put("fieldName", payload.path("fieldName").asText(payload.path("blockName").asText("待确认区域")))
-                    .put("status", structureConfirmed ? "CONFIRMED" : itemStatus)
+                    .put("status", displayStatus)
                     .put("canonicalStatus", payload.path("canonicalStatus").asText("PROVISIONAL"))
                     .put("structureStatus", payload.path("structureStatus").asText("PROVISIONAL"))
                     .put("resolutionGroupId", payload.path("resolutionGroupId").asText(""))
@@ -1844,6 +1781,11 @@ public class TemplateRecognitionReviewService {
         for (var entry : formFieldsByRegion.entrySet()) {
             var block = semanticModel == null ? null : findSemanticBlock(semanticModel, entry.getKey());
             var first = entry.getValue().getFirst();
+            var formConfirmed = !entry.getValue().isEmpty()
+                    && entry.getValue().stream().allMatch(suggestion -> {
+                        var item = itemBySuggestionId.get(suggestion.id());
+                        return item != null && "CONFIRMED".equals(item.status());
+                    });
             var node = objectMapper.createObjectNode()
                     .put("regionId", entry.getKey()).put("blockId", entry.getKey())
                     .put("kind", "FORM_REGION")
@@ -1854,7 +1796,13 @@ public class TemplateRecognitionReviewService {
                             : block.path("range").asText(first.payload().path("regionRange").asText("")))
                     .put("fieldName", block == null ? first.payload().path("blockName").asText("基本信息区域")
                             : block.path("businessName").asText("基本信息区域"))
-                    .put("status", "CONFIRMED").put("canonicalStatus", "CONFIRMED")
+                    // A reconstructed form card is only a display projection
+                    // for scalar children. Its status must follow the child
+                    // review decisions; setting it unconditionally to
+                    // CONFIRMED made an unconfirmed basic-info area appear
+                    // accepted while every field below was still pending.
+                    .put("status", formConfirmed ? "CONFIRMED" : "PENDING")
+                    .put("canonicalStatus", "CONFIRMED")
                     .put("structureStatus", "CONFIRMED").put("reviewRequired", true);
             node.putArray("alternatives");
             var fields = node.putArray("fields");
@@ -1867,9 +1815,6 @@ public class TemplateRecognitionReviewService {
                 fields.add(field);
                 attachedFieldIds.add(suggestion.id());
             }
-            node.putArray("runtimeSlots"); node.putArray("recordSlots");
-            node.set("staticContents", first.payload().path("regionStaticContents").isArray()
-                    ? first.payload().path("regionStaticContents").deepCopy() : objectMapper.createArrayNode());
             node.putArray("auditSuggestions");
             sortRegionFields(node);
             applyRegionDisplayName(node);
@@ -1902,9 +1847,6 @@ public class TemplateRecognitionReviewService {
                     .put("structureStatus", "UNRESOLVED");
             node.putArray("alternatives");
             node.set("fields", unassigned);
-            node.putArray("runtimeSlots");
-            node.putArray("recordSlots");
-            node.putArray("staticContents");
             node.putArray("auditSuggestions");
             tree.add(node);
         }
@@ -1921,9 +1863,6 @@ public class TemplateRecognitionReviewService {
                     .put("structureStatus", "UNRESOLVED");
             unresolved.putArray("fields");
             unresolved.putArray("alternatives");
-            unresolved.putArray("runtimeSlots");
-            unresolved.putArray("recordSlots");
-            unresolved.putArray("staticContents");
             unresolved.putArray("auditSuggestions");
             tree.add(unresolved);
         }
@@ -1936,6 +1875,24 @@ public class TemplateRecognitionReviewService {
     ) {
         var payload = candidate.payload();
         if (!canonicalValueRange(payload).isBlank()) return false;
+        // REGION_FIELDS model output is allowed to enrich a physical field,
+        // but it must never become a second business candidate when it has no
+        // usable coordinate.  Older responses used a stable candidateRef such
+        // as `|physical-child|粘度|C5:H5` while leaving locator.address empty;
+        // the old positionPending-only check let those rows leak into the
+        // region tree alongside the canonical physical child.  Resolve the
+        // candidateRef back to its physical value range and keep the row as
+        // audit-only whenever that range already exists in this region.
+        var candidateRefRange = candidateRefValueRange(payload.path("candidateRef").asText(""));
+        if (!candidateRefRange.isBlank()) {
+            var regionId = firstText(payload, "regionId", "blockId", "candidateRef", "");
+            var hasCanonicalPeer = suggestions.stream().anyMatch(other ->
+                    !other.id().equals(candidate.id())
+                            && !canonicalValueRange(other.payload()).isBlank()
+                            && candidateRefRange.equals(canonicalValueRange(other.payload()))
+                            && sameRecognitionRegion(payload, other.payload(), regionId));
+            if (hasCanonicalPeer) return true;
+        }
         var unbound = payload.path("positionPending").asBoolean(false)
                 || "UNBOUND".equals(payload.path("locator").path("valueMode").asText(""))
                 || "FIELD_POSITION_REQUIRED".equals(payload.path("pendingReason").asText(""));
@@ -1950,6 +1907,15 @@ public class TemplateRecognitionReviewService {
                         other.payload().path("locator").path("labelRange").asText(
                                 other.payload().path("locator").path("labelAddress").asText(""))))
                 && !canonicalValueRange(other.payload()).isBlank());
+    }
+
+    private String candidateRefValueRange(String candidateRef) {
+        if (candidateRef == null || candidateRef.isBlank()) return "";
+        var normalized = candidateRef.replace('$', ' ').trim().replace(" ", "");
+        var marker = normalized.lastIndexOf('|');
+        if (marker < 0 || marker == normalized.length() - 1) return "";
+        var suffix = normalized.substring(marker + 1);
+        return RecognitionIdentity.normalizeRange(suffix);
     }
 
     private boolean sameRecognitionRegion(JsonNode candidate, JsonNode other, String regionId) {
@@ -1981,154 +1947,6 @@ public class TemplateRecognitionReviewService {
         return result;
     }
 
-    /**
-     * Old recognition runs can contain several persisted generations for one
-     * physical component. Audit rows remain queryable, but the customer-facing
-     * projection must expose one region and one effective field per value
-     * surface. New runs are already generation-replaced in the repository;
-     * this normalization keeps legacy workspaces safe and deterministic.
-     */
-    private ArrayNode effectiveRegionTree(ArrayNode tree) {
-        var assignedNamesBySheet = new LinkedHashMap<String, Set<String>>();
-        var repeatingSurfaces = new ArrayList<ReviewSurface>();
-        for (var value : tree) {
-            var sheetId = value.path("sheetId").asText(value.path("sheetName").asText(""));
-            if (!"UNASSIGNED".equals(value.path("kind").asText(""))) {
-                for (var field : value.path("fields")) {
-                    var name = normalizedReviewName(field);
-                    if (!name.isBlank()) {
-                        assignedNamesBySheet.computeIfAbsent(sheetId, ignored -> new LinkedHashSet<>()).add(name);
-                    }
-                }
-            }
-            if (Set.of("ROW_TABLE", "COLUMN_TABLE", "MATRIX").contains(value.path("kind").asText(""))) {
-                var bounds = reviewRange(value.path("range").asText(""));
-                if (bounds != null) repeatingSurfaces.add(new ReviewSurface(sheetId, bounds));
-            }
-        }
-
-        var regions = new LinkedHashMap<String, ObjectNode>();
-        for (var value : tree) {
-            if (!(value.deepCopy() instanceof ObjectNode region)) continue;
-            var fields = region.putArray("fields");
-            var effectiveFields = new LinkedHashMap<String, ObjectNode>();
-            var candidates = objectMapper.createArrayNode();
-            value.path("fields").forEach(candidates::add);
-            // Legacy generations kept the deterministic label-path field in
-            // auditSuggestions while exposing the model's shorter field at the
-            // same value range.  Audit remains hidden, but a deterministic
-            // field is allowed to compete in this customer-facing projection.
-            // This is a projection-only recovery path; it never changes the
-            // persisted decision history.
-            for (var audit : value.path("auditSuggestions")) {
-                var payload = audit.path("payload");
-                if (!payload.path("labelPath").asText("").isBlank()
-                        && "REPEAT_FIELD".equals(payload.path("mappingKind").asText(""))) {
-                    candidates.add(audit);
-                }
-            }
-            for (var fieldValue : candidates) {
-                if (!(fieldValue.deepCopy() instanceof ObjectNode field)) continue;
-                var payload = field.path("payload");
-                if (isFormulaExpressionCandidate(payload)
-                        || payload.path("runtimeInputOnly").asBoolean(false)
-                        || "RECORD_IDENTITY".equals(payload.path("role").asText(""))) continue;
-                if (isColumnRecordIdentity(region, field)) continue;
-                if ("UNASSIGNED".equals(region.path("kind").asText(""))
-                        && isShadowedUnassignedField(field, assignedNamesBySheet, repeatingSurfaces)) continue;
-                var labelPath = payload.path("labelPath").asText("").strip();
-                if (!labelPath.isBlank()) {
-                    field.put("fieldName", labelPath);
-                    if (field.path("payload") instanceof ObjectNode fieldPayload) {
-                        fieldPayload.put("fieldName", labelPath);
-                    }
-                }
-                var locator = payload.path("locator");
-                var key = firstText(locator, "sheetId", "sheetName", "", "") + "|"
-                        + RecognitionIdentity.normalizeRange(firstText(locator,
-                        "valueRange", "logicalInputRange", "address", field.path("address").asText(""))) + "|"
-                        + payload.path("role").asText("FIELD");
-                var current = effectiveFields.get(key);
-                if (current == null || effectiveReviewFieldScore(field) > effectiveReviewFieldScore(current)) {
-                    effectiveFields.put(key, field);
-                }
-            }
-            effectiveFields.values().forEach(fields::add);
-            sortRegionFields(region);
-            var regionKey = region.path("sheetId").asText(region.path("sheetName").asText("")) + "|"
-                    + RecognitionIdentity.normalizeRange(region.path("range").asText("")) + "|"
-                    + region.path("kind").asText("");
-            var current = regions.get(regionKey);
-            if (current == null || effectiveReviewRegionScore(region) > effectiveReviewRegionScore(current)) {
-                regions.put(regionKey, region);
-            }
-        }
-        var result = objectMapper.createArrayNode();
-        regions.values().forEach(result::add);
-        return sortRegionTree(result);
-    }
-
-    private boolean isColumnRecordIdentity(JsonNode region, JsonNode field) {
-        if (!"COLUMN_TABLE".equals(region.path("kind").asText(""))) return false;
-        var identityRange = RecognitionIdentity.normalizeRange(region.path("structures")
-                .path("recordProjection").path("recordIdentity").path("valueRange").asText(""));
-        if (identityRange.isBlank()) return false;
-        var locator = field.path("payload").path("locator");
-        var fieldRange = RecognitionIdentity.normalizeRange(firstText(locator,
-                "valueRange", "logicalInputRange", "address", field.path("address").asText("")));
-        return identityRange.equals(fieldRange);
-    }
-
-    private boolean isShadowedUnassignedField(
-            JsonNode field,
-            Map<String, Set<String>> assignedNamesBySheet,
-            List<ReviewSurface> repeatingSurfaces
-    ) {
-        var payload = field.path("payload");
-        var locator = payload.path("locator");
-        var sheetId = firstText(locator, "sheetId", "sheetName", "", field.path("sheetId").asText(""));
-        var name = normalizedReviewName(field);
-        if (!name.isBlank() && assignedNamesBySheet.getOrDefault(sheetId, Set.of()).contains(name)) return true;
-        // Rule fallback is useful for isolated forms, but an inline label
-        // inside an already accepted repeated component is row context, not an
-        // independent template field.
-        if (!"RULE".equals(field.path("source").asText(""))
-                || field.path("confidence").asDouble(1.0) >= 0.7) return false;
-        var candidate = reviewRange(firstText(locator,
-                "valueRange", "logicalInputRange", "address", field.path("address").asText("")));
-        if (candidate == null) return false;
-        return repeatingSurfaces.stream().anyMatch(surface -> surface.sheetId().equals(sheetId)
-                && overlaps(candidate, surface.bounds()));
-    }
-
-    private String normalizedReviewName(JsonNode field) {
-        var payload = field.path("payload");
-        var name = payload.path("labelPath").asText(field.path("fieldName").asText(""));
-        return name.replaceAll("\\s+", "").strip().toLowerCase(Locale.ROOT);
-    }
-
-    private record ReviewSurface(String sheetId, int[] bounds) {}
-
-    private int effectiveReviewFieldScore(JsonNode field) {
-        var payload = field.path("payload");
-        var score = 0;
-        if (Set.of("CANONICAL_FIELD_ASSEMBLER", "CANONICAL_FORM_ASSEMBLER")
-                .contains(payload.path("recognitionOrigin").asText(""))) score += 100;
-        if (!payload.path("activeGenerationId").asText("").isBlank()) score += 40;
-        if (!payload.path("labelPath").asText("").isBlank()) score += 20;
-        if ("CONFIRMED".equals(field.path("status").asText(""))) score += 10;
-        if (!payload.path("candidateOnly").asBoolean(true)) score += 5;
-        return score;
-    }
-
-    private int effectiveReviewRegionScore(JsonNode region) {
-        var score = region.path("fields").size() * 2;
-        if ("CONFIRMED".equals(region.path("canonicalStatus").asText(""))) score += 20;
-        if ("CONFIRMED".equals(region.path("structureStatus").asText(""))) score += 20;
-        if ("CONFIRMED".equals(region.path("status").asText(""))) score += 10;
-        return score;
-    }
-
     private JsonNode findSemanticBlock(JsonNode semanticModel, String blockId) {
         for (var block : semanticModel.path("businessBlocks")) {
             if (blockId.equals(block.path("blockId").asText(""))) return block;
@@ -2146,36 +1964,12 @@ public class TemplateRecognitionReviewService {
         return "region:" + sheet + "|" + range;
     }
 
-    /**
-     * A conflict between one physical region and one model region is one
-     * logical review card even when their outer ranges differ by a row.  A
-     * genuine partition keeps its member cards because selecting that
-     * alternative creates several canonical regions.
-     */
-    private boolean isSingleRegionChoiceGroup(
-            List<TemplateImportRepository.RecognitionSuggestionView> group
-    ) {
-        if (group.size() < 2) return false;
-        var membersPerAlternative = new LinkedHashMap<String, Integer>();
-        for (var candidate : group) {
-            membersPerAlternative.merge(alternativeKey(candidate), 1, Integer::sum);
-        }
-        return membersPerAlternative.size() >= 2
-                && membersPerAlternative.values().stream().allMatch(count -> count == 1);
-    }
-
     private boolean isPhysicalAlternative(TemplateImportRepository.RecognitionSuggestionView candidate) {
         return "PHYSICAL".equalsIgnoreCase(candidate.payload().path("alternativeRole").asText(""))
                 || "PHYSICAL".equalsIgnoreCase(candidate.source());
     }
 
-    /**
-     * A legacy run may contain several physical/model rows for the same
-     * geometry without a resolutionAlternativeId.  Those rows are one choice,
-     * not several choices.  Geometry is deliberately part of the key so two
-     * candidates with the same outer range but different header/data regions
-     * remain visibly different alternatives.
-     */
+    /** Groups physical/model rows by their explicit alternative and geometry. */
     private String alternativeKey(TemplateImportRepository.RecognitionSuggestionView suggestion) {
         var explicit = suggestion.payload().path("resolutionAlternativeId").asText("");
         return explicit.isBlank() ? "signature:" + structuralSignature(suggestion) : explicit;
@@ -2274,40 +2068,14 @@ public class TemplateRecognitionReviewService {
 
     private void attachRegionStructures(ObjectNode region, JsonNode payload) {
         region.set("structures", objectMapper.createObjectNode());
-        region.putArray("runtimeSlots");
-        region.putArray("recordSlots");
-        region.putArray("staticContents");
         mergeRegionStructures(region, payload);
     }
 
     private void mergeRegionStructures(ObjectNode region, JsonNode payload) {
         var structures = region.path("structures") instanceof ObjectNode object
                 ? object : region.putObject("structures");
-        for (var key : List.of("matrixModel", "recordProjection", "longTableModel", "tableModel")) {
-            if (payload.has(key) && !payload.path(key).isNull()) structures.set(key, payload.path(key).deepCopy());
-        }
-        var slots = region.withArray("runtimeSlots");
-        var recordSlots = region.withArray("recordSlots");
-        var staticContents = region.withArray("staticContents");
-        for (var source : List.of(payload, payload.path("structure"), payload.path("recordProjection"),
-                payload.path("matrixModel"), payload.path("tableModel"), payload.path("longTableModel"))) {
-            if (source == null || source.isMissingNode()) continue;
-            for (var key : List.of("columnSlots", "rowSlots")) {
-                if (!source.path(key).isArray()) continue;
-                for (var slot : source.path(key)) {
-                    if (!containsJson(slots, slot)) slots.add(slot.deepCopy());
-                }
-            }
-            if (source.path("recordSlots").isArray()) for (var slot : source.path("recordSlots")) {
-                if (!containsJson(recordSlots, slot)) recordSlots.add(slot.deepCopy());
-                if (!containsJson(slots, slot)) slots.add(slot.deepCopy());
-            }
-            for (var key : List.of("staticContents", "regionStaticContents")) {
-                if (!source.path(key).isArray()) continue;
-                for (var content : source.path(key)) {
-                    if (!containsJson(staticContents, content)) staticContents.add(content.deepCopy());
-                }
-            }
+        if (payload.path("tableModel").isObject()) {
+            structures.set("tableModel", payload.path("tableModel").deepCopy());
         }
     }
 
@@ -2327,10 +2095,6 @@ public class TemplateRecognitionReviewService {
                     break;
                 }
             }
-        }
-        if ("ROW_TABLE".equals(kind) && !region.withArray("recordSlots").isEmpty()) {
-            region.put("fieldName", "操作步骤").put("displayRole", "STEP_RECORDS");
-            return;
         }
         if ("ROW_TABLE".equals(kind) || "COLUMN_TABLE".equals(kind)) {
             for (var field : fields) {
@@ -2380,11 +2144,6 @@ public class TemplateRecognitionReviewService {
         return bounds == null ? new int[]{Integer.MAX_VALUE, Integer.MAX_VALUE} : bounds;
     }
 
-    private boolean containsJson(ArrayNode array, JsonNode value) {
-        for (var existing : array) if (existing.equals(value)) return true;
-        return false;
-    }
-
     private ObjectNode fieldAttributes(JsonNode payload) {
         var attributes = objectMapper.createObjectNode();
         for (var key : List.of("nameSource", "semanticFallback", "valueType", "editability",
@@ -2413,7 +2172,6 @@ public class TemplateRecognitionReviewService {
         var conflicts = 0;
         var uniqueAlternatives = new LinkedHashSet<String>();
         var uniqueConflictGroups = new LinkedHashSet<String>();
-        var runtimeSlots = 0;
         var fields = 0;
         var pendingFields = 0;
         var audit = 0;
@@ -2440,14 +2198,13 @@ public class TemplateRecognitionReviewService {
                         && !field.path("payload").path("runtimeInputOnly").asBoolean(false)
                         && Set.of("PENDING", "CONFLICT").contains(field.path("status").asText(""))) pendingFields++;
             }
-            runtimeSlots += region.path("runtimeSlots").size();
             audit += region.path("auditSuggestions").size();
         }
         audit += (int) suggestions.stream().filter(suggestion -> "SEMANTIC_MODEL".equals(suggestion.suggestionType())).count();
         structureAlternatives = uniqueAlternatives.size();
         conflicts = uniqueConflictGroups.size();
         return new RecognitionReviewStatistics(
-                regionTree.size(), structureAlternatives, conflicts, fields, pendingFields, audit, runtimeSlots);
+                regionTree.size(), structureAlternatives, conflicts, fields, pendingFields, audit);
     }
 
     private String locatorAddress(JsonNode locator) {
@@ -2488,8 +2245,7 @@ public class TemplateRecognitionReviewService {
             int structureConflictGroups,
             int fieldCount,
             int pendingFieldCount,
-            int auditSuggestionCount,
-            int runtimeSlotCount
+            int auditSuggestionCount
     ) {
     }
 
@@ -2502,7 +2258,7 @@ public class TemplateRecognitionReviewService {
             int ignored,
             int scalar,
             int rowTable,
-            int matrix,
+            int columnTable,
             int qualityIssueCount,
             int autoFixedCount,
             int blockingIssueCount
@@ -2554,13 +2310,24 @@ public class TemplateRecognitionReviewService {
     private boolean isStructuralCandidate(TemplateImportRepository.RecognitionSuggestionView suggestion) {
         var payload = suggestion.payload();
         if ("TABLE_CHILD_FIELD".equals(suggestion.suggestionType())
-                || "MATRIX_FIELD".equals(suggestion.suggestionType())
-                || "CHILD".equals(payload.path("suggestionLevel").asText(""))) {
+                || "FIELD".equals(payload.path("role").asText(""))
+                || Set.of("SCALAR", "REPEAT_FIELD")
+                .contains(payload.path("mappingKind").asText(""))
+                || Set.of("CHILD", "SCALAR")
+                .contains(payload.path("suggestionLevel").asText(""))) {
             return false;
         }
         var type = kind(suggestion);
-        return Set.of("MATRIX", "ROW_TABLE", "COLUMN_TABLE", "FORM_REGION", "TABLE_REGION")
-                .contains(type);
+        if (Set.of("ROW_TABLE", "COLUMN_TABLE", "FORM_REGION")
+                .contains(type)) return true;
+        return "UNKNOWN".equals(type)
+                && (!payload.path("resolutionGroupId").asText("").isBlank()
+                || payload.path("structureConflict").asBoolean(false));
+    }
+
+    private boolean isChildField(JsonNode payload) {
+        return "CHILD".equals(payload.path("suggestionLevel").asText(""))
+                || "REPEAT_FIELD".equals(payload.path("mappingKind").asText(""));
     }
 
     public record QualityAction(UUID issueId, String action) {

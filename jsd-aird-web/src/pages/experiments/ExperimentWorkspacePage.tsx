@@ -1,5 +1,6 @@
 import {
   ArrowLeftOutlined,
+  DeleteOutlined,
   DownloadOutlined,
   EyeOutlined,
   LoadingOutlined,
@@ -26,6 +27,7 @@ import type { EditorHandle } from '@/features/template-workspace/types';
 import {
   actExperiment,
   createRevision,
+  deleteExperiment,
   getExperiment,
   listVersions,
   rollbackVersion,
@@ -198,6 +200,17 @@ export function ExperimentWorkspacePage() {
     });
   };
 
+  const removeOrVoid = () => {
+    if (!detail) return;
+    if (detail.summary.allowedActions?.includes('VOID')) {
+      modal.confirm({ title: '作废该实验？', content: '作废后保留审计记录，不再作为有效实验使用。', okText: '作废', okButtonProps: { danger: true }, cancelText: '取消', onOk: async () => { await actExperiment(id, 'void', detail.summary.revision, '用户作废'); await load(); } });
+      return;
+    }
+    if (detail.summary.allowedActions?.includes('DELETE')) {
+      modal.confirm({ title: '删除该实验？', content: '仅删除未完成且未产生业务引用的实验。', okText: '删除', okButtonProps: { danger: true }, cancelText: '取消', onOk: async () => { await deleteExperiment(id, detail.summary.revision); void message.success('实验已删除'); goBack(); } });
+    }
+  };
+
   const exportRecord = async () => {
     if (!detail) return;
     setExporting(true);
@@ -260,6 +273,7 @@ export function ExperimentWorkspacePage() {
         <Space wrap>
           <SaveStateBadge state={saveState} />
           <Button className="workspace-export-button" icon={<DownloadOutlined />} loading={exporting} onClick={() => void exportRecord()}>导出</Button>
+          {detail.summary.allowedActions?.includes('DELETE') || detail.summary.allowedActions?.includes('VOID') ? <Button danger icon={<DeleteOutlined />} onClick={removeOrVoid}>{detail.summary.allowedActions?.includes('VOID') ? '作废' : '删除'}</Button> : null}
           {status === 'COMPLETED' && (
             <Button loading={busy} onClick={reviseCompletedExperiment}>创建修订</Button>
           )}

@@ -48,7 +48,7 @@ public class JdbcExperimentImportRepository implements ExperimentImportRepositor
 
     @Override
     public int delete(UUID organizationId, UUID id) {
-        return jdbc.update("DELETE FROM rnd.experiment_import_job WHERE organization_id=? AND id=? AND status IN ('COMPLETED', 'FAILED')",
+        return jdbc.update("DELETE FROM rnd.experiment_import_job WHERE organization_id=? AND id=? AND experiment_id IS NULL AND status IN ('COMPLETED', 'FAILED')",
                 organizationId, id);
     }
 

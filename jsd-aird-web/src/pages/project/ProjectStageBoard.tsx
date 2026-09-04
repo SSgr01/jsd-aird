@@ -1,4 +1,4 @@
-import { ArrowLeftOutlined, ArrowRightOutlined, CaretDownOutlined, CaretRightOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, ArrowRightOutlined, CaretDownOutlined, CaretRightOutlined, DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
 import { Alert, Button, DatePicker, Empty, Form, Input, Modal, Select, Skeleton, Space, Tag, message } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
@@ -7,6 +7,7 @@ import { ProjectTaskBoard } from './ProjectTaskBoard';
 
 import {
   createStage,
+  deleteStage,
   formatStageStatus,
   getProjectStages,
   reorderStages,
@@ -121,6 +122,12 @@ export function ProjectStageBoard({ projectId }: { projectId: string }) {
     catch (reason) { setStages(previous); messageApi.error(reason instanceof Error ? reason.message : '排序失败，请刷新后重试'); }
   };
 
+  const removeSelected = () => {
+    const stage = stages.find(({ id }) => id === selectedStageId);
+    if (!stage?.allowedActions?.includes('DELETE')) return;
+    Modal.confirm({ title: `删除阶段“${stage.name}”？`, content: '仅删除没有任务或关联资料的阶段。', okText: '删除', okButtonProps: { danger: true }, cancelText: '取消', onOk: async () => { await deleteStage(stage.id, stage.version); messageApi.success('阶段已删除'); await load(); } });
+  };
+
   const dropOn = (targetId: string) => {
     if (!dragId || dragId === targetId) return;
     const from = stages.findIndex(({ id }) => id === dragId);
@@ -169,6 +176,7 @@ export function ProjectStageBoard({ projectId }: { projectId: string }) {
           <Button icon={<EditOutlined />} disabled={!selectedStageId} onClick={openEditSelected}>
             编辑阶段
           </Button>
+          <Button danger icon={<DeleteOutlined />} disabled={!stages.find(({ id }) => id === selectedStageId)?.allowedActions?.includes('DELETE')} onClick={removeSelected}>删除阶段</Button>
         </Space.Compact>
       </div>
       {loading ? <div className="pm-stage-loading"><Skeleton active paragraph={{ rows: 2 }} /></div> : null}

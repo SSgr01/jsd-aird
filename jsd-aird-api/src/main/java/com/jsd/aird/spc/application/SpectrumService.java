@@ -13,6 +13,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.ops.application.port.FileStorageFacade;
 import com.jsd.aird.spc.application.port.SpectrumRepository;
 import com.jsd.aird.shared.api.PageResponse;
+import com.jsd.aird.shared.api.AllowedActions;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.security.ActorContext;
@@ -313,12 +314,18 @@ public class SpectrumService {
                                      JsonNode metadata) { }
 
     public record CategoryView(UUID id, String code, String name, String description, String analysisHint,
-                               JsonNode fields, int sortOrder, boolean systemCategory, long chartCount) { }
+                               JsonNode fields, int sortOrder, boolean systemCategory, long chartCount) {
+        public List<String> getAllowedActions() { return AllowedActions.category(systemCategory); }
+    }
 
     public record ChartView(UUID id, UUID categoryId, String categoryCode, String categoryName, UUID fileObjectId,
                             String title, String originalName, String contentType, long size, String sha256,
                             String sampleName, String batchNo, String testConditions, JsonNode metadata,
-                            int pageCount, String status, Instant createdAt, Instant updatedAt) { }
+                            int pageCount, String status, Instant createdAt, Instant updatedAt) {
+        public List<String> getAllowedActions() {
+            return AllowedActions.chart(status);
+        }
+    }
 
     public record PageView(int pageNo, int pageCount) { }
 

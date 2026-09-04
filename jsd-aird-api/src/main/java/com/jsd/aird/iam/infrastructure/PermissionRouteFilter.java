@@ -252,7 +252,7 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
                 return permission("ai.use", "KNOWLEDGE", "WRITE");
             if (path.contains("/download")) return permission("knowledge.download", "KNOWLEDGE", "READ");
             if (path.contains("/export")) return permission("knowledge.export", "KNOWLEDGE", "READ");
-            if (path.contains("/ai-grant") || path.contains("/batch/ai-usage")) return permission("knowledge.ai.external", "KNOWLEDGE", "WRITE");
+            if (path.contains("/ai-grant") || path.contains("/batch/ai-usage")) return permission("ai.external", "KNOWLEDGE", "WRITE");
             if (path.contains("/reparse")) return permission("knowledge.update", "KNOWLEDGE", "WRITE");
             if (path.contains("/review") || path.endsWith("/reject")) return read ? permission("knowledge.review", "KNOWLEDGE", "READ") : permission("knowledge.review", "KNOWLEDGE", "WRITE");
             if (path.contains("/publish")) return permission("knowledge.publish", "KNOWLEDGE", "WRITE");

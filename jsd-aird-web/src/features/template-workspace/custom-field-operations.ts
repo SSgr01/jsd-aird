@@ -13,7 +13,7 @@ import type {
   TemplateBinding,
 } from './types';
 
-export type CustomFieldKind = 'SCALAR' | 'REPEAT_FIELD' | 'MATRIX_FIELD';
+export type CustomFieldKind = 'SCALAR' | 'REPEAT_FIELD';
 
 export interface CreateCustomFieldInput {
   ownerId: string;
@@ -41,7 +41,7 @@ export function createCustomFieldWorkspace(
   const parent = input.parentField;
   const parentBinding = input.parentBinding;
   if (input.kind !== 'SCALAR' && (!parent || !parentBinding || !parent.dataPath)) {
-    throw new Error('明细或矩阵字段缺少父级区域');
+    throw new Error('明细字段缺少父级区域');
   }
   const dataPath = parent?.dataPath
     ? `${parent.dataPath}/*/${key}`
@@ -73,7 +73,6 @@ export function createCustomFieldWorkspace(
     editability: 'EDITABLE',
     valueSource: 'USER_INPUT',
     mappingKind,
-    matrixRole: input.kind === 'MATRIX_FIELD' ? 'MEASURE' : undefined,
     repeatAxis: parent?.repeatAxis,
     recordHeight: parent?.recordHeight,
     recordWidth: parent?.recordWidth,
@@ -94,7 +93,6 @@ export function createCustomFieldWorkspace(
       anchorAddress: firstCell(valueRange),
       anchorRange: valueRange,
       valueMode,
-      ...(input.kind === 'MATRIX_FIELD' ? { matrixRole: 'MEASURE' } : {}),
     },
   };
   const binding: TemplateBinding = {
@@ -124,7 +122,6 @@ export function createCustomFieldWorkspace(
       parentBlockId: parent?.parentBlockId ?? parent?.blockId,
       parentFieldId: parent?.id,
       parentBindingId: parentBinding?.bindingId,
-      ...(input.kind === 'MATRIX_FIELD' ? { matrixRole: 'MEASURE' } : {}),
     },
   };
   const added = addBusinessField(schema, model, field);
@@ -168,7 +165,7 @@ function appendParentColumn(model: FieldModel, parentId: string, field: Business
 }
 
 function structuredValueMode(parent?: BusinessField) {
-  const axis = parent?.matrixModel?.recordAxis || parent?.repeatAxis;
+  const axis = parent?.repeatAxis;
   return axis === 'COLUMN' ? 'ARRAY_ROW' : 'ARRAY_COLUMN';
 }
 

@@ -43,14 +43,7 @@ public class DataProjectionService {
     public DataProjectionRepository.TrainingDataset latest(UUID importJobId) {
         var actor = ActorContext.required();
         return repository.findLatestDataset(actor.organizationId(), importJobId)
-                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "该导入任务尚未生成长表数据集"));
-    }
-
-    public LongTablePreview longTablePreview(UUID importJobId, int limit) {
-        var actor = ActorContext.required();
-        var dataset = repository.findLatestDataset(actor.organizationId(), importJobId)
-                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "该导入任务尚未生成长表数据集"));
-        return new LongTablePreview(dataset, repository.previewRows(actor.organizationId(), importJobId, limit));
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "该导入任务尚未生成训练数据集"));
     }
 
     public DataProjectionRepository.TrainingDataset dataset(UUID datasetId) {
@@ -58,9 +51,6 @@ public class DataProjectionService {
         return repository.findDataset(actor.organizationId(), datasetId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "训练数据集不存在"));
     }
-
-    public record LongTablePreview(DataProjectionRepository.TrainingDataset dataset,
-                                   List<DataProjectionRepository.LongTableRow> rows) {}
 
     public void updateStatus(UUID datasetId, String status) {
         var actor = ActorContext.required();

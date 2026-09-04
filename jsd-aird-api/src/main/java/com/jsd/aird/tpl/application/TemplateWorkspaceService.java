@@ -1157,14 +1157,13 @@ public class TemplateWorkspaceService {
         for (var binding : mapping) {
             var kind = binding.path("mappingKind").asText("");
             var parentId = binding.path("parentBindingId").asText("");
-            if (!"REPEAT_FIELD".equals(kind) && !"MATRIX_FIELD".equals(kind)
-                    && parentId.isBlank()) continue;
+            if (!"REPEAT_FIELD".equals(kind) && parentId.isBlank()) continue;
             if (parentId.isBlank() || !bindingsById.containsKey(parentId)) {
                 throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "明细字段缺少有效的父级重复区域");
             }
             var parent = bindingsById.get(parentId);
             var parentKind = parent.path("mappingKind").asText("");
-            if (!Set.of("REPEAT_REGION", "MATRIX_REGION").contains(parentKind)) {
+            if (!"REPEAT_REGION".equals(parentKind)) {
                 throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "明细字段的父级不是重复区域");
             }
             var parentPath = parent.path("dataPath").asText("");
@@ -1178,8 +1177,7 @@ public class TemplateWorkspaceService {
                     throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "重复明细必须指定按行或按列展开");
                 }
             }
-            if ("REPEAT_REGION".equals(parentKind) || "MATRIX_REGION".equals(parentKind)
-                    || "REPEAT_FIELD".equals(kind) || "MATRIX_FIELD".equals(kind)) {
+            if ("REPEAT_REGION".equals(parentKind) || "REPEAT_FIELD".equals(kind)) {
                 if (parent.path("recordHeight").asInt(0) <= 0
                         || parent.path("recordWidth").asInt(0) <= 0
                         || parent.path("recordStride").asInt(0) <= 0) {
@@ -1187,9 +1185,7 @@ public class TemplateWorkspaceService {
                 }
                 validateTermination(parent.path("termination"));
             }
-            var parentRange = "MATRIX_FIELD".equals(kind)
-                    ? rangeFromLocator(parent.path("locator"), "range")
-                    : rangeFromLocator(parent.path("locator"), "dataRange");
+            var parentRange = rangeFromLocator(parent.path("locator"), "dataRange");
             var childRange = repeatChildRange(binding);
             if (parentRange != null && childRange != null && !contains(parentRange, childRange)) {
                 throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "明细字段位置超出了父级重复区域");
@@ -1422,13 +1418,6 @@ public class TemplateWorkspaceService {
 
     private int[] repeatChildRange(JsonNode binding) {
         var locator = binding.path("locator");
-        if ("MATRIX_FIELD".equals(binding.path("mappingKind").asText())) {
-            for (var key : List.of("logicalInputRange", "sourceRange", "valueRange", "address")) {
-                var range = rangeFromLocator(locator, key);
-                if (range != null) return range;
-            }
-            return null;
-        }
         var range = rangeFromLocator(locator, "valueRange");
         return range == null ? rangeFromLocator(locator, "address") : range;
     }

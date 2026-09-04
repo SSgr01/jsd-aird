@@ -32,6 +32,40 @@ class TemplateRecognitionReviewServiceTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Test
+    void keepsWordFieldsIndependentlyReviewableInsideTheSameRegion() throws Exception {
+        var service = new TemplateRecognitionReviewService(
+                mock(TemplateImportRepository.class), mock(TemplateRepository.class),
+                mock(FileObjectRepository.class), mock(ObjectStorage.class), objectMapper,
+                mock(RecognitionModelClient.class));
+        var importJobId = UUID.randomUUID();
+        var runId = UUID.randomUUID();
+        var first = wordFieldSuggestion(UUID.randomUUID(), importJobId, runId,
+                "word-project", "docx-cell-project", "SCALAR");
+        var second = wordFieldSuggestion(UUID.randomUUID(), importJobId, runId,
+                "word-applicant", "docx-cell-applicant", "SCALAR");
+        var repeat = wordFieldSuggestion(UUID.randomUUID(), importJobId, runId,
+                "word-material", "docx-cell-material", "REPEAT_FIELD");
+
+        Method isStructural = TemplateRecognitionReviewService.class.getDeclaredMethod(
+                "isStructuralCandidate", TemplateImportRepository.RecognitionSuggestionView.class);
+        isStructural.setAccessible(true);
+        Method reviewKey = TemplateRecognitionReviewService.class.getDeclaredMethod(
+                "reviewKey", TemplateImportRepository.RecognitionSuggestionView.class);
+        reviewKey.setAccessible(true);
+        Method isChildField = TemplateRecognitionReviewService.class.getDeclaredMethod(
+                "isChildField", com.fasterxml.jackson.databind.JsonNode.class);
+        isChildField.setAccessible(true);
+
+        assertThat(isStructural.invoke(service, first)).isEqualTo(false);
+        assertThat(isStructural.invoke(service, repeat)).isEqualTo(false);
+        assertThat(reviewKey.invoke(service, first)).isNotEqualTo(reviewKey.invoke(service, second));
+        assertThat(reviewKey.invoke(service, second)).isNotEqualTo(reviewKey.invoke(service, repeat));
+        assertThat(isChildField.invoke(service, first.payload())).isEqualTo(false);
+        assertThat(isChildField.invoke(service, repeat.payload())).isEqualTo(true);
+
+    }
+
+    @Test
     void rendersOneRegionCardForSinglePhysicalAndModelAlternatives() throws Exception {
         var service = new TemplateRecognitionReviewService(
                 mock(TemplateImportRepository.class), mock(TemplateRepository.class),
@@ -53,6 +87,85 @@ class TemplateRecognitionReviewServiceTest {
         assertThat(regions).hasSize(1);
         assertThat(regions.get(0).path("range").asText()).isEqualTo("A23:J28");
         assertThat(regions.get(0).path("alternatives")).hasSize(2);
+    }
+
+    @Test
+    void doesNotShowAutoConfirmedGeometryAsUserConfirmed() throws Exception {
+        var service = new TemplateRecognitionReviewService(
+                mock(TemplateImportRepository.class), mock(TemplateRepository.class),
+                mock(FileObjectRepository.class), mock(ObjectStorage.class), objectMapper,
+                mock(RecognitionModelClient.class));
+        var importJobId = UUID.randomUUID();
+        var runId = UUID.randomUUID();
+        var id = UUID.randomUUID();
+        var payload = objectMapper.createObjectNode()
+                .put("kind", "FORM_REGION")
+                .put("blockType", "FORM_REGION")
+                .put("fieldName", "基本信息区域")
+                .put("canonicalStatus", "CONFIRMED")
+                .put("structureStatus", "CONFIRMED")
+                .put("candidateOnly", false)
+                .put("reviewRequired", false)
+                .put("regionId", "form-1")
+                .put("blockId", "form-1");
+        payload.set("locator", objectMapper.createObjectNode()
+                .put("sheetId", "sheet-1").put("range", "A1:H3").put("address", "A1:H3"));
+        var suggestion = new TemplateImportRepository.RecognitionSuggestionView(
+                id, importJobId, runId, "PHYSICAL", "FORM_REGION", payload, 0.9,
+                objectMapper.createArrayNode(), "PENDING", "test", "test", "test", "", "", Instant.now());
+
+        Method buildRegionTree = TemplateRecognitionReviewService.class.getDeclaredMethod(
+                "buildRegionTree", List.class, List.class, com.fasterxml.jackson.databind.JsonNode.class);
+        buildRegionTree.setAccessible(true);
+        var regions = (com.fasterxml.jackson.databind.node.ArrayNode) buildRegionTree.invoke(
+                service, List.of(suggestion), List.of(), objectMapper.createObjectNode());
+
+        assertThat(regions).singleElement().satisfies(region -> {
+            assertThat(region.path("canonicalStatus").asText()).isEqualTo("CONFIRMED");
+            assertThat(region.path("structureStatus").asText()).isEqualTo("CONFIRMED");
+            assertThat(region.path("status").asText()).isEqualTo("PENDING");
+        });
+    }
+
+    @Test
+    void hidesUnlocatedSemanticChildWhenItsCandidateRefMatchesPhysicalField() throws Exception {
+        var service = new TemplateRecognitionReviewService(
+                mock(TemplateImportRepository.class), mock(TemplateRepository.class),
+                mock(FileObjectRepository.class), mock(ObjectStorage.class), objectMapper,
+                mock(RecognitionModelClient.class));
+        var importJobId = UUID.randomUUID();
+        var runId = UUID.randomUUID();
+        var physicalId = UUID.randomUUID();
+        var orphanId = UUID.randomUUID();
+
+        var physicalPayload = objectMapper.createObjectNode()
+                .put("kind", "SCALAR").put("mappingKind", "REPEAT_FIELD")
+                .put("suggestionLevel", "CHILD").put("regionId", "column-region")
+                .put("candidateRef", "|physical-child|粘度|C5:H5");
+        physicalPayload.set("locator", objectMapper.createObjectNode()
+                .put("sheetId", "sheet-1").put("valueRange", "C5:H5"));
+        var orphanPayload = physicalPayload.deepCopy()
+                .put("candidateRef", "|physical-child|粘度|C5:H5")
+                .put("relationId", "model-child")
+                .put("fieldName", "粘度");
+        orphanPayload.set("locator", objectMapper.createObjectNode()
+                .put("sheetId", "sheet-1").put("address", "")
+                .put("valueMode", "ARRAY_ROW"));
+
+        var physical = new TemplateImportRepository.RecognitionSuggestionView(
+                physicalId, importJobId, runId, "PHYSICAL", "SCALAR_FIELD", physicalPayload, 0.95,
+                objectMapper.createArrayNode(), "PENDING", "test", "test", "test", "", "", Instant.now());
+        var orphan = new TemplateImportRepository.RecognitionSuggestionView(
+                orphanId, importJobId, runId, "MODEL", "TABLE_CHILD_FIELD", orphanPayload, 0.9,
+                objectMapper.createArrayNode(), "PENDING", "test", "test", "test", "", "", Instant.now());
+
+        Method duplicate = TemplateRecognitionReviewService.class.getDeclaredMethod(
+                "isUnboundDuplicateOfPhysicalField",
+                TemplateImportRepository.RecognitionSuggestionView.class, List.class);
+        duplicate.setAccessible(true);
+
+        assertThat(duplicate.invoke(service, orphan, List.of(physical, orphan))).isEqualTo(true);
+        assertThat(duplicate.invoke(service, physical, List.of(physical, orphan))).isEqualTo(false);
     }
 
     @Test
@@ -87,7 +200,7 @@ class TemplateRecognitionReviewServiceTest {
         when(run.result()).thenReturn(objectMapper.createObjectNode().put("recognitionStatus", "REVIEW_REQUIRED"));
         when(imports.findLatestForVersion(organizationId, versionId)).thenReturn(Optional.of(run));
 
-        var physical = structuralSuggestion(physicalId, importJobId, runId, "PHYSICAL", "MATRIX", "A4:J6",
+        var physical = structuralSuggestion(physicalId, importJobId, runId, "PHYSICAL", "UNKNOWN", "A4:J6",
                 "physical", "physical-option");
         var form = structuralSuggestion(formId, importJobId, runId, "MODEL", "FORM_REGION", "A1:J5",
                 "form", "model-partition");
@@ -162,7 +275,7 @@ class TemplateRecognitionReviewServiceTest {
         when(run.result()).thenReturn(objectMapper.createObjectNode().put("recognitionStatus", "REVIEW_REQUIRED"));
         when(imports.findLatestForVersion(organizationId, versionId)).thenReturn(Optional.of(run));
 
-        var physical = structuralSuggestion(physicalId, importJobId, runId, "PHYSICAL", "MATRIX", "A4:J6",
+        var physical = structuralSuggestion(physicalId, importJobId, runId, "PHYSICAL", "UNKNOWN", "A4:J6",
                 "physical", "physical-option");
         var form = structuralSuggestion(formId, importJobId, runId, "MODEL", "FORM_REGION", "A1:J5",
                 "form", "model-partition");
@@ -209,7 +322,29 @@ class TemplateRecognitionReviewServiceTest {
             payload.put("headerRange", "A6:J6").put("dataRange", "A7:J22").put("recordAxis", "ROW");
         }
         return new TemplateImportRepository.RecognitionSuggestionView(
-                id, importJobId, runId, source, "TABLE_REGION", payload, 0.9,
+                id, importJobId, runId, source, kind, payload, 0.9,
+                objectMapper.createArrayNode(), "PENDING", "test", "test", "test", "", "", Instant.now());
+    }
+
+    private TemplateImportRepository.RecognitionSuggestionView wordFieldSuggestion(
+            UUID id, UUID importJobId, UUID runId, String relationId, String nodeId, String mappingKind
+    ) {
+        var payload = objectMapper.createObjectNode()
+                .put("kind", "SCALAR")
+                .put("blockType", "REPEAT_FIELD".equals(mappingKind) ? "ROW_TABLE" : "FORM_REGION")
+                .put("role", "FIELD")
+                .put("mappingKind", mappingKind)
+                .put("relationId", relationId)
+                .put("fieldId", UUID.randomUUID().toString())
+                .put("fieldName", relationId)
+                .put("regionId", "word-region")
+                .put("suggestionLevel", "REPEAT_FIELD".equals(mappingKind) ? "CHILD" : "SCALAR");
+        payload.set("locator", objectMapper.createObjectNode()
+                .put("locatorType", "DOCX_TABLE_CELL")
+                .put("nodeId", nodeId)
+                .put("valueAnchor", nodeId));
+        return new TemplateImportRepository.RecognitionSuggestionView(
+                id, importJobId, runId, "RULE", "SCALAR_FIELD", payload, 0.95,
                 objectMapper.createArrayNode(), "PENDING", "test", "test", "test", "", "", Instant.now());
     }
 
@@ -231,7 +366,6 @@ class TemplateRecognitionReviewServiceTest {
             payload.set("locator", objectMapper.createObjectNode()
                     .put("sheetId", "sheet-1").put("labelRange", "A6").put("valueRange", "A7:A22"));
         }
-        if ("TABLE_REGION".equals(type)) payload.put("kind", "ROW_TABLE");
         return new RecognitionModelClient.ModelSuggestion(type, payload, 0.9, objectMapper.createArrayNode());
     }
 

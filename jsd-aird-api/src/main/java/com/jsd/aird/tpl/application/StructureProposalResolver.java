@@ -14,10 +14,10 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 
 /**
  * Compares independent backend/model structure proposals. Physical and model
- * geometry are both evidence, never an implicit formal decision. Equivalent
+ * geometry is diagnostic evidence, never a formal geometry source. Equivalent
  * proposals are merged; conflicting proposals remain one explicit choice
- * group; model-only proposals remain candidates only when no physical region
- * exists.
+ * group; model-only proposals remain diagnostics until a physical candidate
+ * or explicit user resolution exists.
  */
 public final class StructureProposalResolver {
 
@@ -49,31 +49,49 @@ public final class StructureProposalResolver {
             if (!backendSignatures.add(key)) continue;
             var exact = findExact(candidate, model, usedModel);
             var alternatives = overlappingModel(candidate, model, usedModel, structure, suppressed);
+            // A model may describe a form-shaped sub-band inside a physically
+            // determinate repeat table (for example the lower identity rows of
+            // a COLUMN_TABLE).  That is not a second business region: the
+            // physical repeat surface is the only authoritative geometry.
+            // Keep the model proposal as an audit diagnostic instead of
+            // reopening a false structure-choice dialog.
+            alternatives.removeIf(proposal -> {
+                if (!isContainedFormSubdivision(candidate, proposal)
+                        || !isComponentPhysicallyDeterminate(candidate)) return false;
+                usedModel.add(proposal.path("proposalId").asText());
+                modelDiagnostics.add(modelSuppression(proposal, "MODEL_FORM_SUBDIVISION_IGNORED",
+                        "模型表单子区域位于已确定的重复区域内，不能改变物理区域范围或方向"));
+                return true;
+            });
+            // A model is allowed to refine field semantics, never the
+            // physical component's range/header/data geometry.  Same-kind
+            // overlapping proposals are therefore audit diagnostics only;
+            // keeping them as alternatives made a harmless boundary mismatch
+            // turn a stable physical table into a pending conflict.
+            alternatives.removeIf(proposal -> {
+                if (!sameBusinessDirection(candidate, proposal)) return false;
+                usedModel.add(proposal.path("proposalId").asText());
+                modelDiagnostics.add(modelSuppression(proposal, "MODEL_GEOMETRY_IGNORED",
+                        "物理解析是区域范围、表头、数据区和方向的唯一来源，模型几何仅保留为诊断"));
+                return true;
+            });
             if (exact != null && alternatives.isEmpty()) {
                 usedModel.add(exact.path("proposalId").asText());
                 confirmed(candidate, exact);
                 regions.add(candidate);
                 continue;
             }
-            if (exact == null && alternatives.isEmpty() && hasSupportingFormPartition(candidate, model)) {
-                confirmedByFormPartition(candidate);
-                regions.add(candidate);
-                continue;
-            }
-            if (isComponentPhysicallyDeterminate(candidate)) {
+            // Model geometry is diagnostic only.  In particular, never split
+            // one physical component from model-provided boundaries; doing so
+            // made recognition drift whenever the model returned a different
+            // partition for the same sheet.
+            if (isComponentPhysicallyDeterminate(candidate) && alternatives.isEmpty()) {
                 // A determinate component is not selected merely because its
-                // rectangle overlaps a model proposal.  Its direction,
-                // repeated value surface and field bindings are independently
-                // proven by workbook geometry.  Conflicting model rectangles
-                // remain diagnostics/semantic hints and cannot create a
-                // second formal structure for this component.
-                alternatives.forEach(alternative -> {
-                    usedModel.add(alternative.path("proposalId").asText());
-                    suppressed.add(modelSuppression(alternative,
-                            "MODEL_STRUCTURE_REJECTED_BY_DETERMINATE_COMPONENT",
-                            "当前组件的记录方向、填写面和字段路径已有完整物理证据；模型建议仅用于补充字段语义"));
-                });
-                if (exact != null) usedModel.add(exact.path("proposalId").asText());
+                // direction, repeated value surface and field bindings are
+                // independently proven by workbook geometry. A competing
+                // model rectangle is not silently discarded: it must remain a
+                // visible conflict, even when it uses the same axis, because
+                // the model is not allowed to split or resize a physical area.
                 confirmedByPhysicalEvidence(candidate, exact);
                 regions.add(candidate);
                 continue;
@@ -97,6 +115,7 @@ public final class StructureProposalResolver {
                 candidate.put("structureStatus", "CONFLICT")
                         .put("canonicalStatus", "PROVISIONAL")
                         .put("structureConflict", true)
+                        .put("resolutionStatus", "PENDING")
                         .put("reviewRequired", true)
                         .put("candidateOnly", true)
                         .put("physicalStructureOnly", true)
@@ -137,6 +156,10 @@ public final class StructureProposalResolver {
                         .put("physicalStructureOnly", true)
                         .put("pendingReason", "STRUCTURE_UNRESOLVED")
                         .put("modelAssessmentVerdict", "MODEL_UNRESOLVED");
+                if ("UNKNOWN".equals(candidate.path("type").asText())) {
+                    candidate.put("pendingReason", "STRUCTURE_DIRECTION_UNCLEAR")
+                            .put("modelAssessmentVerdict", "STRUCTURE_DIRECTION_UNCLEAR");
+                }
                 var suppressedTable = java.util.stream.StreamSupport.stream(suppressed.spliterator(), false)
                         .anyMatch(item -> candidate.path("sheetId").asText("").equals(item.path("sheetId").asText(""))
                                 && overlap(candidate.path("range").asText(""), item.path("range").asText(""))
@@ -187,9 +210,13 @@ public final class StructureProposalResolver {
                     .put("resolutionReason", "NO_PHYSICAL_STRUCTURE");
             modelOnly.add(modelRegion);
         }
-        appendModelOnlyComponents(modelOnly, regions, conflicts, resolutions);
+        // A model-only rectangle is a diagnostic/manual candidate, never a
+        // canonical physical region.  Keeping it outside `regions` prevents
+        // model hallucinations from entering coverage or Schema compilation.
+        modelOnly.forEach(candidate -> modelDiagnostics.add(candidate.deepCopy()));
 
         validateSetOverlaps(regions, conflicts, diagnostics);
+        validatePhysicalGeometry(structure, regions, diagnostics);
         // Formal semantic recognition is intentionally limited to regions that
         // both proposals confirmed or that a user explicitly resolves. Model
         // diagnostics never become REGION_FIELDS or coverage by themselves.
@@ -197,8 +224,10 @@ public final class StructureProposalResolver {
         result.set("canonicalSemanticTargets", semanticTargets.deepCopy());
         appendUnresolvedTargets(unresolvedTargets, regions);
         result.put("recognitionStatus", conflicts.isEmpty() && diagnostics.isEmpty()
+                && unresolvedTargets.isEmpty()
                 && allConfirmed(regions) ? "COMPLETE" : "REVIEW_REQUIRED");
         result.put("canonicalStatus", allConfirmed(regions) && conflicts.isEmpty()
+                && unresolvedTargets.isEmpty()
                 ? "CONFIRMED" : "PROVISIONAL");
         return result;
     }
@@ -212,86 +241,6 @@ public final class StructureProposalResolver {
                     && overlap(modelRegion.path("range").asText(), region.path("range").asText())) return true;
         }
         return false;
-    }
-
-    /**
-     * Builds model-only decision groups by independent spatial component. A
-     * model supplied component id is honoured; otherwise only overlapping
-     * rectangles are connected. Merely sharing a sheet is never evidence that
-     * proposals belong to one decision.
-     */
-    private void appendModelOnlyComponents(
-            List<ObjectNode> candidates, ArrayNode regions, ArrayNode conflicts, ArrayNode resolutions
-    ) {
-        var remaining = new LinkedHashSet<Integer>();
-        for (int index = 0; index < candidates.size(); index++) remaining.add(index);
-        while (!remaining.isEmpty()) {
-            var seed = remaining.iterator().next();
-            remaining.remove(seed);
-            var component = new ArrayList<ObjectNode>();
-            component.add(candidates.get(seed));
-            var changed = true;
-            while (changed) {
-                changed = false;
-                for (var index : List.copyOf(remaining)) {
-                    var candidate = candidates.get(index);
-                    if (component.stream().anyMatch(existing -> sameModelComponent(existing, candidate))) {
-                        component.add(candidate);
-                        remaining.remove(index);
-                        changed = true;
-                    }
-                }
-            }
-            appendModelOnlyComponent(component, regions, conflicts, resolutions);
-        }
-    }
-
-    private boolean sameModelComponent(JsonNode first, JsonNode second) {
-        if (!first.path("sheetId").asText().equals(second.path("sheetId").asText())) return false;
-        var firstExplicit = proposalText(first, "componentId");
-        var secondExplicit = proposalText(second, "componentId");
-        if (!firstExplicit.isBlank() || !secondExplicit.isBlank()) {
-            return !firstExplicit.isBlank() && firstExplicit.equals(secondExplicit);
-        }
-        var firstHypothesis = proposalText(first, "hypothesisId");
-        var secondHypothesis = proposalText(second, "hypothesisId");
-        if (!firstHypothesis.isBlank() || !secondHypothesis.isBlank()) {
-            return !firstHypothesis.isBlank() && firstHypothesis.equals(secondHypothesis);
-        }
-        return overlap(first.path("range").asText(), second.path("range").asText());
-    }
-
-    private void appendModelOnlyComponent(
-            List<ObjectNode> component, ArrayNode regions, ArrayNode conflicts, ArrayNode resolutions
-    ) {
-        if (component.isEmpty()) return;
-        var seed = component.getFirst();
-        var explicitComponent = proposalText(seed, "componentId");
-        var groupId = "structure-model-only-" + RecognitionIdentity.shortHash(
-                seed.path("sheetId").asText() + "|"
-                        + (explicitComponent.isBlank() ? componentEnvelope(component) : explicitComponent), 16);
-        var hypotheses = modelHypotheses(new ArrayList<>(component), componentEnvelope(component));
-        var alternatives = objectMapper.createArrayNode();
-        var alternativeIndex = 0;
-        for (var hypothesis : hypotheses) {
-            var alternativeId = groupId + "-model-" + (++alternativeIndex);
-            for (var item : hypothesis) {
-                if (item instanceof ObjectNode region) {
-                    region.put("componentId", explicitComponent.isBlank() ? groupId + "-component" : explicitComponent)
-                            .put("resolutionGroupId", groupId)
-                            .put("resolutionAlternativeId", alternativeId);
-                }
-            }
-            alternatives.add(alternativeSet(alternativeId, "MODEL", hypothesis));
-        }
-        component.forEach(regions::add);
-        var group = objectMapper.createObjectNode()
-                .put("resolutionGroupId", groupId)
-                .put("type", hypotheses.size() > 1 ? "STRUCTURE_CONFLICT" : "MODEL_ONLY_STRUCTURE")
-                .put("resolutionStatus", "PENDING");
-        group.set("alternatives", alternatives);
-        component.forEach(region -> region.set("structureAlternativeSets", alternatives.deepCopy()));
-        if (hypotheses.size() > 1) conflicts.add(group); else resolutions.add(group);
     }
 
     /**
@@ -387,11 +336,6 @@ public final class StructureProposalResolver {
         return candidate.path("proposal").path(key).asText("");
     }
 
-    private boolean hasExplicitHypothesis(JsonNode candidate) {
-        return !proposalText(candidate, "hypothesisId").isBlank()
-                || !proposalText(candidate, "resolutionAlternativeId").isBlank();
-    }
-
     private ObjectNode modelSuppression(JsonNode proposal, String code, String reason) {
         return objectMapper.createObjectNode()
                 .put("code", code)
@@ -409,23 +353,19 @@ public final class StructureProposalResolver {
                 || candidate.path("confidence").asDouble(0) < 0.80
                 || !"VALID_GEOMETRY".equals(candidate.path("geometryStatus").asText(""))) return false;
         if ("COLUMN_TABLE".equals(type)) {
-            var projection = structure.path("recordProjection");
             return "COLUMN".equals(structure.path("recordAxis").asText(
                     structure.path("repeatAxis").asText("")))
-                    && projection.path("recordColumns").isArray()
-                    && projection.path("recordColumns").size() >= 2
-                    && structure.path("fieldRows").isArray()
-                    && structure.path("fieldRows").size() >= 2
-                    && bounds(structure.path("crossDataRange").asText("")) != null;
+                    && bounds(structure.path("headerRange").asText("")) != null
+                    && bounds(structure.path("dataRange").asText("")) != null;
         }
         if ("ROW_TABLE".equals(type)) {
             return "ROW".equals(structure.path("recordAxis").asText(
                     structure.path("repeatAxis").asText("")))
-                    && structure.path("columns").isArray() && structure.path("columns").size() >= 2
+                    && (structure.path("recordWidth").asInt(0) >= 2
+                        || structure.path("columns").isArray() && structure.path("columns").size() >= 2)
                     && bounds(structure.path("headerRange").asText("")) != null
                     && bounds(structure.path("dataRange").asText("")) != null;
         }
-        if ("MATRIX".equals(type)) return validTableGeometry(candidate, type);
         // FORM_REGION was marked physicalConfirmed only after the detector
         // counted multiple label/value surfaces inside a closed form envelope.
         // Some inline merged fields are not serialized into fieldSurfaces, so
@@ -449,8 +389,8 @@ public final class StructureProposalResolver {
     }
 
     private ObjectNode backendCandidate(JsonNode primitive) {
-        var type = normalizeType(primitive.path("blockType").asText(primitive.path("type").asText("")));
-        if (!Set.of("MATRIX", "ROW_TABLE", "COLUMN_TABLE", "FORM_REGION").contains(type)) return null;
+        var type = primitive.path("blockType").asText(primitive.path("type").asText(""));
+        if (!Set.of("ROW_TABLE", "COLUMN_TABLE", "FORM_REGION", "UNKNOWN").contains(type)) return null;
         if (!"VALID_GEOMETRY".equals(primitive.path("geometryStatus").asText(""))
                 && !"VALID".equals(primitive.path("validationStatus").asText(""))) return null;
         var result = objectMapper.createObjectNode()
@@ -470,10 +410,6 @@ public final class StructureProposalResolver {
         result.set("structure", primitive.path("structure").deepCopy());
         result.put("physicalConfirmed", primitive.path("physicalConfirmed").asBoolean(
                 primitive.path("structure").path("physicalConfirmed").asBoolean(false)));
-        // Older physical recognizers emitted repeatAxis while the resolver
-        // uses the canonical recordAxis vocabulary. Normalize the alias at
-        // the proposal boundary so comparison is independent of producer
-        // protocol version.
         var structure = result.with("structure");
         var recordAxis = structure.path("recordAxis").asText("");
         if (recordAxis.isBlank() || "UNKNOWN".equalsIgnoreCase(recordAxis)) {
@@ -489,10 +425,10 @@ public final class StructureProposalResolver {
     }
 
     private ObjectNode modelCandidate(JsonNode proposal, JsonNode structure) {
-        var type = normalizeType(proposal.path("type").asText(""));
+        var type = proposal.path("type").asText("");
         var sheetId = proposal.path("sheetId").asText("");
         var range = proposal.path("range").asText("");
-        if (!Set.of("MATRIX", "ROW_TABLE", "COLUMN_TABLE", "FORM_REGION").contains(type)
+        if (!Set.of("ROW_TABLE", "COLUMN_TABLE", "FORM_REGION", "UNKNOWN").contains(type)
                 || sheetId.isBlank() || range.isBlank()) return null;
         var result = objectMapper.createObjectNode()
                 .put("proposalId", proposal.path("proposalId").asText())
@@ -505,14 +441,13 @@ public final class StructureProposalResolver {
                 .put("confidence", proposal.path("confidence").asDouble(0.5));
         var details = objectMapper.createObjectNode();
         var source = proposal.path("structure").isObject() ? proposal.path("structure") : proposal;
-        for (var key : List.of("cornerRange", "rowHeaderRange", "columnHeaderRange", "crossDataRange",
-                "headerRange", "dataRange", "totalRange", "recordHeight", "recordWidth", "recordStride",
-                "recordAxis", "repeatAxis", "recordProjection", "rowAttributeColumns", "fieldGroups")) {
+        for (var key : List.of("headerRange", "dataRange", "totalRange",
+                "recordHeight", "recordWidth", "recordStride", "recordAxis", "repeatAxis")) {
             if (source.has(key)) details.set(key, source.path(key).deepCopy());
         }
         result.set("structure", details);
         result.set("proposal", proposal.deepCopy());
-        if (!validTableGeometry(result, type)) return null;
+        if (!"UNKNOWN".equals(type) && !validTableGeometry(result, type)) return null;
         return result;
     }
 
@@ -526,14 +461,14 @@ public final class StructureProposalResolver {
                 .put("resolutionStatus", "AUTO_RESOLVED")
                 .put("resolutionReason", "EXACT_SIGNATURE_AGREEMENT")
                 .put("canonicalStructureMayReopen", false);
-        var structure = backend.with("structure");
-        for (var key : List.of("cornerRange", "rowHeaderRange", "columnHeaderRange", "crossDataRange",
-                "headerRange", "dataRange", "totalRange", "recordHeight", "recordWidth", "recordStride",
-                "recordAxis")) {
-            var value = model.path(key).asText("");
-            if (!value.isBlank() && model.path(key).isIntegralNumber()) structure.put(key, model.path(key).asInt());
-            else if (!value.isBlank() && !"UNKNOWN".equals(value)) structure.put(key, value);
-        }
+        // Exact outer-range agreement confirms that both recognizers found the
+        // same business component. It does not make the model's inner header
+        // and data split more authoritative than independently proven workbook
+        // geometry. Replacing a determinate COLUMN_TABLE's multi-row identity
+        // band here used to move rows such as 日期 into dataRange and caused the
+        // physical field compiler to keep only the model's partial field list.
+        // Model geometry is retained only as an audit artifact.  The physical
+        // parser remains the sole source for header/data ranges and axis.
         backend.set("modelProposal", model.deepCopy());
     }
 
@@ -543,24 +478,6 @@ public final class StructureProposalResolver {
             return false;
         }
         if ("FORM_REGION".equals(type)) return true;
-        if ("MATRIX".equals(type)) {
-            var region = bounds(candidate.path("range").asText());
-            var corner = bounds(structure.path("cornerRange").asText());
-            var rowHeader = bounds(structure.path("rowHeaderRange").asText());
-            var columnHeader = bounds(structure.path("columnHeaderRange").asText());
-            var crossData = bounds(structure.path("crossDataRange").asText());
-            var axis = structure.path("recordAxis").asText(candidate.path("recordAxis").asText(""));
-            return region != null && corner != null && rowHeader != null && columnHeader != null && crossData != null
-                    && area(crossData) > 0
-                    && Set.of("ROW", "COLUMN").contains(axis)
-                    && contains(region, corner) && contains(region, rowHeader)
-                    && contains(region, columnHeader) && contains(region, crossData)
-                    && height(rowHeader) == height(crossData)
-                    && width(columnHeader) == width(crossData)
-                    && !overlapBounds(rowHeader, columnHeader)
-                    && !overlapBounds(rowHeader, crossData)
-                    && !overlapBounds(columnHeader, crossData);
-        }
         var header = bounds(structure.path("headerRange").asText());
         var data = bounds(structure.path("dataRange").asText());
         if (header == null || data == null) return false;
@@ -571,17 +488,7 @@ public final class StructureProposalResolver {
         }
         axis = axis.toUpperCase(java.util.Locale.ROOT);
         if ("ROW_TABLE".equals(type)) return "ROW".equals(axis);
-        if (!"COLUMN_TABLE".equals(type) || !"COLUMN".equals(axis)) return false;
-        var projection = structure.path("recordProjection");
-        var explicitRecords = projection.path("recordColumns").isArray()
-                && projection.path("recordColumns").size() >= 2;
-        var crossData = bounds(structure.path("crossDataRange").asText(""));
-        var explicitSurface = crossData != null && width(crossData) >= 2 && height(crossData) >= 2;
-        // A rectangle containing only the left label band is not a valid
-        // COLUMN_TABLE hypothesis. The model must identify the repeated record
-        // surface; otherwise it remains diagnostic and cannot compete with a
-        // physically proven full component.
-        return explicitRecords || explicitSurface;
+        return "COLUMN_TABLE".equals(type) && "COLUMN".equals(axis);
     }
 
     private JsonNode findExact(JsonNode backend, JsonNode proposals, Set<String> usedModel) {
@@ -606,22 +513,16 @@ public final class StructureProposalResolver {
             if (signature(backend).equals(signature(proposal))) continue;
             var normalized = modelCandidate(proposal, workbookStructure);
             var geometry = normalized == null ? proposal : normalized;
-            if (modelOccupiesOnlyLabelBand(backend, geometry)) {
+            if (isHeaderBoundaryFormOverlap(backend, geometry)) {
                 usedModel.add(proposal.path("proposalId").asText());
-                suppressed.add(modelSuppression(proposal, "MODEL_COLUMN_TABLE_WITHOUT_RECORD_SURFACE",
-                        "模型区域只覆盖字段标签带，没有覆盖物理上连续的记录列，不能作为列表结构候选"));
+                suppressed.add(modelSuppression(proposal, "MODEL_FORM_HEADER_BOUNDARY_IGNORED",
+                        "模型基本信息范围只覆盖物理明细表表头边界，物理表单和明细区域已经完整解释该单元格面"));
                 continue;
             }
             if (modelTableConsumesFormFields(backend, geometry)) {
                 usedModel.add(proposal.path("proposalId").asText());
                 suppressed.add(modelSuppression(proposal, "MODEL_TABLE_WITHOUT_REPEAT_EVIDENCE",
                         "模型把多个表单标签/填写面对误判成列表，但没有足够的重复记录面证据"));
-                continue;
-            }
-            if (isFieldGroupSubdivision(backend, geometry)) {
-                usedModel.add(proposal.path("proposalId").asText());
-                suppressed.add(modelSuppression(proposal, "MODEL_TABLE_DEMOTED_TO_FIELD_GROUP",
-                        "模型分区与同一连续记录面的字段组一致，已作为字段组语义保留，不再重复显示为独立列表"));
                 continue;
             }
             if (isFormSemanticSubdivision(backend, geometry, proposals)) {
@@ -638,14 +539,84 @@ public final class StructureProposalResolver {
         return result;
     }
 
-    private boolean modelOccupiesOnlyLabelBand(JsonNode backend, JsonNode model) {
-        if (!"COLUMN_TABLE".equals(normalizeType(backend.path("type").asText(
-                backend.path("blockType").asText(""))))
-                || !"COLUMN_TABLE".equals(normalizeType(model.path("type").asText(
-                model.path("blockType").asText(""))))) return false;
-        var firstRecordColumn = firstRecordColumn(backend.path("structure").path("recordProjection"));
-        var modelBounds = bounds(model.path("range").asText(""));
-        return firstRecordColumn > 0 && modelBounds != null && modelBounds[2] < firstRecordColumn;
+    /**
+     * A common workbook layout puts a small form band immediately above a
+     * repeat table. Models often include the first table header row in the
+     * form rectangle (for example A1:H4 instead of A1:H3). That one-row edge
+     * overlap is not a competing business structure: the physical FORM and
+     * repeat-table components already partition it. Treat it as an audit
+     * diagnostic so a harmless off-by-one model boundary cannot reopen the
+     * table as a structure conflict.
+     */
+    private boolean isHeaderBoundaryFormOverlap(
+            JsonNode backend,
+            JsonNode model
+    ) {
+        var backendType = normalizeType(backend.path("type").asText(
+                backend.path("blockType").asText("")));
+        var modelType = normalizeType(model.path("type").asText(
+                model.path("blockType").asText("")));
+        if (!Set.of("ROW_TABLE", "COLUMN_TABLE").contains(backendType)
+                || !"FORM_REGION".equals(modelType)) return false;
+        var backendRange = bounds(backend.path("range").asText(""));
+        var modelRange = bounds(model.path("range").asText(""));
+        var headerRange = bounds(backend.path("structure").path("headerRange").asText(
+                backend.path("headerRange").asText("")));
+        if (backendRange == null || modelRange == null || headerRange == null) return false;
+        var intersection = intersection(backendRange, modelRange);
+        if (intersection == null || !contains(headerRange, intersection)
+                || contains(modelRange, backendRange)) return false;
+        // The model form rectangle must not reach the table's data surface.
+        var dataRange = bounds(backend.path("structure").path("dataRange").asText(
+                backend.path("dataRange").asText("")));
+        if (dataRange != null && overlapBounds(modelRange, dataRange)) return false;
+        // The model rectangle itself must be a form band immediately adjacent
+        // to the full header edge. This also handles parsers that do not emit a
+        // separate physical FORM_REGION for the rows above the table.
+        var directlyAbove = modelRange[3] == headerRange[1]
+                && modelRange[0] <= headerRange[0] && modelRange[2] >= headerRange[2];
+        var directlyLeft = modelRange[2] == headerRange[0]
+                && modelRange[1] <= headerRange[1] && modelRange[3] >= headerRange[3];
+        return directlyAbove || directlyLeft;
+    }
+
+    private boolean sameBusinessDirection(JsonNode physical, JsonNode model) {
+        var physicalType = normalizeType(physical.path("type").asText(
+                physical.path("blockType").asText("")));
+        var modelType = normalizeType(model.path("type").asText(
+                model.path("blockType").asText("")));
+        if (!physicalType.equals(modelType)) return false;
+        if ("FORM_REGION".equals(physicalType)) return true;
+        var physicalAxis = axis(physical);
+        var modelAxis = axis(model);
+        return physicalAxis.isBlank() || modelAxis.isBlank() || physicalAxis.equals(modelAxis);
+    }
+
+    private boolean isContainedFormSubdivision(JsonNode physical, JsonNode model) {
+        var physicalType = normalizeType(physical.path("type").asText(
+                physical.path("blockType").asText("")));
+        var modelType = normalizeType(model.path("type").asText(
+                model.path("blockType").asText("")));
+        if (!Set.of("ROW_TABLE", "COLUMN_TABLE").contains(physicalType)
+                || !"FORM_REGION".equals(modelType)
+                || !physical.path("sheetId").asText("").equals(model.path("sheetId").asText(""))) {
+            return false;
+        }
+        var physicalRange = bounds(physical.path("range").asText(""));
+        var modelRange = bounds(model.path("range").asText(""));
+        // Proper containment is intentional. A same-size FORM_REGION is a
+        // genuinely competing interpretation and should remain reviewable.
+        return physicalRange != null && modelRange != null
+                && contains(physicalRange, modelRange)
+                && !contains(modelRange, physicalRange);
+    }
+
+    private String axis(JsonNode node) {
+        var structure = node.path("structure").isObject() ? node.path("structure") : node;
+        var value = structure.path("recordAxis").asText(
+                structure.path("repeatAxis").asText(proposalText(node, "recordAxis")));
+        if (value.isBlank()) value = proposalText(node, "repeatAxis");
+        return value.toUpperCase(Locale.ROOT);
     }
 
     private boolean modelTableConsumesFormFields(JsonNode backend, JsonNode model) {
@@ -674,30 +645,9 @@ public final class StructureProposalResolver {
         return repeatedDepth < 2;
     }
 
-    private boolean isFieldGroupSubdivision(JsonNode backend, JsonNode model) {
-        if (!"COLUMN_TABLE".equals(normalizeType(backend.path("type").asText(
-                backend.path("blockType").asText(""))))
-                || !"COLUMN_TABLE".equals(normalizeType(model.path("type").asText(
-                model.path("blockType").asText(""))))) return false;
-        var structure = backend.path("structure");
-        var groups = structure.path("fieldGroups");
-        if (!groups.isArray() || groups.size() < 2
-                || firstRecordColumn(structure.path("recordProjection")) <= 0) return false;
-        var modelRange = normalizeRange(model.path("range").asText(""));
-        if (modelRange.equals(normalizeRange(backend.path("range").asText("")))) return false;
-        for (var group : groups) {
-            if (modelRange.equals(normalizeRange(group.path("range").asText("")))) return true;
-        }
-        return false;
-    }
-
     /**
-     * A model may split one physically continuous form into department or
-     * chapter bands. Those rectangles add semantic grouping, but they do not
-     * redefine where the editable label/value surfaces are. Treat them as
-     * semantic subdivisions only when the physical form has multiple explicit
-     * field surfaces and the model keeps the FORM_REGION type. A competing
-     * ROW/COLUMN/MATRIX proposal still remains a genuine structure conflict.
+     * Keep model-only form subdivisions as semantic diagnostics. They never
+     * become physical regions or alter the editable label/value surfaces.
      */
     private boolean isFormSemanticSubdivision(JsonNode backend, JsonNode model, JsonNode proposals) {
         if (!"FORM_REGION".equals(normalizeType(backend.path("type").asText(
@@ -754,34 +704,6 @@ public final class StructureProposalResolver {
             }
         }
         return true;
-    }
-
-    private void confirmedByFormPartition(ObjectNode backend) {
-        backend.put("structureStatus", "CONFIRMED")
-                .put("canonicalStatus", "CONFIRMED")
-                .put("candidateOnly", false)
-                .put("physicalStructureOnly", false)
-                .put("reviewRequired", false)
-                .put("modelAssessmentVerdict", "MODEL_SUPPORTS_FORM_PARTITION")
-                .put("resolutionStatus", "AUTO_RESOLVED")
-                .put("resolutionReason", "PHYSICAL_FORM_WITH_MODEL_SEMANTIC_PARTITION")
-                .put("canonicalStructureMayReopen", true);
-    }
-
-    private int firstRecordColumn(JsonNode projection) {
-        var first = Integer.MAX_VALUE;
-        for (var value : projection.path("recordColumns")) {
-            var parsed = columnNumber(value.asText(""));
-            if (parsed > 0) first = Math.min(first, parsed);
-        }
-        return first == Integer.MAX_VALUE ? -1 : first;
-    }
-
-    private int columnNumber(String value) {
-        var normalized = value == null ? "" : value.toUpperCase(Locale.ROOT).replaceAll("[^A-Z]", "");
-        var result = 0;
-        for (var character : normalized.toCharArray()) result = result * 26 + character - 'A' + 1;
-        return result;
     }
 
     private void appendSemanticTargets(ArrayNode targets, ArrayNode regions) {
@@ -901,11 +823,63 @@ public final class StructureProposalResolver {
 
     private boolean allConfirmed(ArrayNode regions) {
         for (var region : regions) {
+            if ("UNKNOWN".equals(normalizeType(region.path("type").asText(
+                    region.path("blockType").asText(""))))) return false;
             if (!isActiveRegion(region)
                     || "REJECTED".equals(region.path("canonicalStatus").asText())) continue;
             if (isFormalRegion(region) && !"CONFIRMED".equals(region.path("canonicalStatus").asText())) return false;
         }
         return true;
+    }
+
+    private void validatePhysicalGeometry(JsonNode workbook, ArrayNode regions, ArrayNode diagnostics) {
+        for (var regionNode : regions) {
+            if (!(regionNode instanceof ObjectNode region)) continue;
+            var type = normalizeType(region.path("type").asText(region.path("blockType").asText("")));
+            if ("UNKNOWN".equals(type)) {
+                diagnostics.add(objectMapper.createObjectNode()
+                        .put("code", "STRUCTURE_DIRECTION_UNCLEAR")
+                        .put("sheetId", region.path("sheetId").asText())
+                        .put("range", region.path("range").asText())
+                        .put("message", "物理证据同时支持或不足以区分行列重复方向"));
+                continue;
+            }
+            if (!isFormalRegion(region)) continue;
+            var used = nullBounds();
+            for (var sheet : workbook.path("sheets")) {
+                var id = sheet.path("id").asText(sheet.path("sheetId").asText(""));
+                if (id.equals(region.path("sheetId").asText())) {
+                    used = bounds(sheet.path("usedRange").asText(""));
+                    break;
+                }
+            }
+            var range = bounds(region.path("range").asText(""));
+            var structure = region.path("structure");
+            var invalid = range == null || (used != null && !contains(used, range));
+            if ("ROW_TABLE".equals(type) || "COLUMN_TABLE".equals(type)) {
+                var expectedAxis = "ROW_TABLE".equals(type) ? "ROW" : "COLUMN";
+                var axis = structure.path("recordAxis").asText(structure.path("repeatAxis").asText(""));
+                var header = bounds(structure.path("headerRange").asText(""));
+                var data = bounds(structure.path("dataRange").asText(""));
+                invalid |= !expectedAxis.equalsIgnoreCase(axis) || !contains(range, header) || !contains(range, data);
+                if (structure.has("recordHeight")) invalid |= structure.path("recordHeight").asInt(0) <= 0;
+                if (structure.has("recordWidth")) invalid |= structure.path("recordWidth").asInt(0) <= 0;
+                if (structure.has("recordStride")) invalid |= structure.path("recordStride").asInt(0) <= 0;
+            }
+            if (invalid) {
+                region.put("structureStatus", "CONFLICT").put("canonicalStatus", "PROVISIONAL")
+                        .put("structureConflict", true).put("reviewRequired", true)
+                        .put("candidateOnly", true).put("pendingReason", "INVALID_PHYSICAL_GEOMETRY");
+                diagnostics.add(objectMapper.createObjectNode()
+                        .put("code", "INVALID_PHYSICAL_GEOMETRY")
+                        .put("sheetId", region.path("sheetId").asText())
+                        .put("range", region.path("range").asText()));
+            }
+        }
+    }
+
+    private int[] nullBounds() {
+        return null;
     }
 
     private boolean isActiveRegion(JsonNode region) {
@@ -917,7 +891,7 @@ public final class StructureProposalResolver {
     }
 
     private boolean isFormalRegion(JsonNode node) {
-        return Set.of("MATRIX", "ROW_TABLE", "COLUMN_TABLE", "FORM_REGION")
+        return Set.of("ROW_TABLE", "COLUMN_TABLE", "FORM_REGION")
                 .contains(normalizeType(node.path("type").asText(node.path("blockType").asText())));
     }
 
@@ -926,10 +900,6 @@ public final class StructureProposalResolver {
         var structure = node.path("structure").isObject() ? node.path("structure") : node;
         return node.path("sheetId").asText().toUpperCase(Locale.ROOT) + "|"
                 + type + "|" + normalizeRange(node.path("range").asText()) + "|"
-                + normalizeRange(structure.path("cornerRange").asText(node.path("cornerRange").asText())) + "|"
-                + normalizeRange(structure.path("rowHeaderRange").asText(node.path("rowHeaderRange").asText())) + "|"
-                + normalizeRange(structure.path("columnHeaderRange").asText(node.path("columnHeaderRange").asText())) + "|"
-                + normalizeRange(structure.path("crossDataRange").asText(node.path("crossDataRange").asText())) + "|"
                 + normalizeRange(structure.path("headerRange").asText(node.path("headerRange").asText())) + "|"
                 + normalizeRange(structure.path("dataRange").asText(node.path("dataRange").asText())) + "|"
                 + normalizeRange(structure.path("totalRange").asText(node.path("totalRange").asText())) + "|"
@@ -937,7 +907,9 @@ public final class StructureProposalResolver {
     }
 
     private String normalizeType(String type) {
-        return "FORM_FIELDS".equals(type) ? "FORM_REGION" : type;
+        // New recognition results use the three public region kinds directly.
+        // Unknown legacy values are intentionally not translated at runtime.
+        return type == null ? "" : type;
     }
 
     private String normalizeRange(String value) {

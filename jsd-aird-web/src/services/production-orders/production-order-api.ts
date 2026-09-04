@@ -31,7 +31,7 @@ export interface ProductionOrderListQuery {
 export interface ProductionIngestItem {
   id: string;
   itemKey: string;
-  itemKind: 'SCALAR' | 'DETAIL' | 'MATRIX';
+  itemKind: 'SCALAR' | 'DETAIL';
   fieldCode?: string;
   dataPath: string;
   recordIndex?: number;

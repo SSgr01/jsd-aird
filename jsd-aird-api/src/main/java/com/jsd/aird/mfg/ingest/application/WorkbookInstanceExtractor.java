@@ -65,8 +65,7 @@ public class WorkbookInstanceExtractor {
             rows.add(values);
         }
         var valueMode = locator.path("valueMode").asText("");
-        var structuredLeaf = List.of("REPEAT_FIELD", "MATRIX_FIELD")
-                .contains(binding.path("mappingKind").asText(""));
+        var structuredLeaf = "REPEAT_FIELD".equals(binding.path("mappingKind").asText(""));
         if ("ARRAY_ROW".equals(valueMode)) return trim(rows.path(0));
         if ("ARRAY_COLUMN".equals(valueMode) || structuredLeaf) {
             var result = objectMapper.createArrayNode();
@@ -82,12 +81,11 @@ public class WorkbookInstanceExtractor {
     private void appendItems(List<ExtractedItem> items, JsonNode binding, JsonNode field, JsonNode value) {
         var path = binding.path("dataPath").asText();
         var kind = binding.path("mappingKind").asText("SCALAR");
-        var itemKind = "MATRIX_FIELD".equals(kind) ? "MATRIX"
-                : "REPEAT_FIELD".equals(kind) ? "DETAIL" : "SCALAR";
+        var itemKind = "REPEAT_FIELD".equals(kind) ? "DETAIL" : "SCALAR";
         var locator = binding.path("locator").deepCopy();
         var fieldCode = binding.path("fieldCode").asText(field == null ? "" : field.path("fieldCode").asText(""));
         var bindingId = binding.path("bindingId").asText("");
-        if (("DETAIL".equals(itemKind) || "MATRIX".equals(itemKind)) && value.isArray()) {
+        if ("DETAIL".equals(itemKind) && value.isArray()) {
             for (var index = 0; index < value.size(); index++) {
                 var concretePath = path.replace("/*/", "/" + index + "/");
                 items.add(new ExtractedItem(

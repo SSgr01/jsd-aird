@@ -39,21 +39,21 @@ describe('TemplateUploadPage recognition summary', () => {
       suggestion('semantic', 'SEMANTIC_MODEL', 'MODEL', {}, 'PENDING'),
       suggestion(
         'physical',
-        'TABLE_REGION',
+        'COLUMN_TABLE',
         'PHYSICAL',
-        structurePayload('MATRIX', 'A4:J6', 'physical'),
+        structurePayload('COLUMN_TABLE', 'A4:J6', 'physical'),
         'PENDING',
       ),
       suggestion(
         'form',
-        'TABLE_REGION',
+        'FORM_REGION',
         'MODEL',
         structurePayload('FORM_REGION', 'A1:J5', 'model-partition'),
         'PENDING',
       ),
       suggestion(
         'rows',
-        'TABLE_REGION',
+        'ROW_TABLE',
         'MODEL',
         structurePayload('ROW_TABLE', 'A6:J22', 'model-partition'),
         'PENDING',
@@ -64,7 +64,7 @@ describe('TemplateUploadPage recognition summary', () => {
 
     expect(display).toHaveLength(1);
     expect(display[0]?.label).toBe('结构候选（2 个方案）');
-    expect(display[0]?.details).toContain('MATRIX A4:J6');
+    expect(display[0]?.details).toContain('COLUMN_TABLE A4:J6');
     expect(display[0]?.details).toContain('FORM_REGION A1:J5 + ROW_TABLE A6:J22');
     expect(display[0]?.details).not.toContain('semantic');
   });

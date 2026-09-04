@@ -100,7 +100,7 @@ public final class ModelSemanticViewBuilder {
     /**
      * Builds a region view with the canonical primitive selected by stage one.
      * Stage two may add semantic fields, but it is not allowed to change the
-     * physical region kind (especially MATRIX versus ROW_TABLE).
+     * physical region kind or repeat direction.
      */
     public ObjectNode buildRegion(
             JsonNode structure, String scope, String requestedSheetId, String requestedAddress,

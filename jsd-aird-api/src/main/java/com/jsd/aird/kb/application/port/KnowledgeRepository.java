@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import com.jsd.aird.shared.api.AllowedActions;
 
 public interface KnowledgeRepository {
 
@@ -135,7 +136,9 @@ public interface KnowledgeRepository {
         return List.of();
     }
 
-    record CategoryRow(UUID id, String scope, String name, String description, int sortOrder, long documentCount) { }
+    record CategoryRow(UUID id, String scope, String name, String description, int sortOrder, long documentCount) {
+        public List<String> getAllowedActions() { return AllowedActions.category(false); }
+    }
     record NewDocument(UUID id, UUID organizationId, String title, UUID actorId, String scope, UUID categoryId) { }
     record NewVersion(UUID id, UUID documentId, int versionNo, UUID fileObjectId, String originalName,
                       String contentType, long size, String sha256, String ocrMode,

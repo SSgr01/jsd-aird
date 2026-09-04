@@ -40,6 +40,7 @@ export interface ProjectReference {
   removedBy?: string;
   removedAt?: string;
   sourceAvailable: boolean;
+  allowedActions?: string[];
 }
 
 export const projectResourceApi = {

@@ -3,6 +3,7 @@ package com.jsd.aird.tpl.application;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -21,7 +22,7 @@ import org.springframework.stereotype.Component;
 
 /**
  * Conservative physical fallback for explicit label/value pairs plus the one
- * unambiguous long-table shape. Ambiguous table/block layouts remain on the
+ * unambiguous row-table shape. Ambiguous table/block layouts remain on the
  * model and review path.
  */
 @Component
@@ -31,7 +32,6 @@ public class RuleBasedRecognitionEngine {
 
     private static final Pattern EXPLICIT_LABEL = Pattern.compile("^\\s*([^：:\\r\\n]{1,30})[：:]\\s*$");
     private static final Pattern INLINE_LABEL = Pattern.compile("^\\s*([^：:\\r\\n]{1,30})[：:]\\s*(.+?)\\s*$");
-    private static final Pattern NUMBERED_LABEL = Pattern.compile("^\\s*\\d{1,3}[.．、)）]\\s*(.{1,60}?)\\s*$");
     private static final Set<String> STATIC_PREFIXES = Set.of("注", "备注", "注意", "说明", "提示", "操作要求");
 
     private final ObjectMapper objectMapper;
@@ -62,19 +62,17 @@ public class RuleBasedRecognitionEngine {
             throw new IllegalArgumentException("Excel structureVersion 必须为 6");
         }
         var fingerprint = canonicalizer.hash(structure);
-        // Word is a document template, not an Excel-style business-field template.
-        // Its deterministic output is the documentIR/structure tree produced by
-        // DocxStructureParser.  Even explicit content controls are document facts;
-        // they must not silently become TemplateBinding suggestions.
+        var docx = format == TemplateFormat.DOCX ? docxCandidates(structure) : null;
         var suggestions = format == TemplateFormat.XLSX
-                ? simpleLongTableCandidates(structure)
-                : List.<RecognitionModelClient.ModelSuggestion>of();
+                ? simpleRowTableCandidates(structure)
+                : docx.suggestions();
         if (format == TemplateFormat.XLSX && suggestions.isEmpty()) {
             suggestions = new ArrayList<>(suggestions);
             suggestions.addAll(explicitLabelValueCandidates(structure));
         }
         return new RecognitionModelClient.RecognitionBatch(
-                suggestions, List.of(), "physical-facts", "conservative-label-value-v6",
+                suggestions, docx == null ? List.of() : docx.issues(),
+                "physical-facts", "conservative-label-value-v6",
                 "physical-fallback-v6", fingerprint,
                 canonicalizer.hashText(sourceFileName + "|" + fingerprint), null
         );
@@ -83,44 +81,44 @@ public class RuleBasedRecognitionEngine {
     /**
      * A strict one-header-row table is a physical contract, not a semantic
      * guessing problem.  Returning true lets the import service avoid a model
-     * call for the common long-table template while still leaving ambiguous
+     * call for the common single-header row table while still leaving ambiguous
      * layouts to the model/review path.
      */
-    public boolean isSimpleLongTableWorkbook(JsonNode structure) {
+    public boolean isSimpleRowTableWorkbook(JsonNode structure) {
         var found = false;
         for (var sheet : structure.path("sheets")) {
             if (sheet.path("hidden").asBoolean(false)) continue;
             if (semanticCellsOfSheet(sheet).isEmpty()) continue;
-            if (simpleLongTable(sheet) == null) return false;
+            if (simpleRowTable(sheet) == null) return false;
             found = true;
         }
         return found;
     }
 
-    private List<RecognitionModelClient.ModelSuggestion> simpleLongTableCandidates(JsonNode structure) {
+    private List<RecognitionModelClient.ModelSuggestion> simpleRowTableCandidates(JsonNode structure) {
         var result = new ArrayList<RecognitionModelClient.ModelSuggestion>();
         for (var sheet : structure.path("sheets")) {
             if (sheet.path("hidden").asBoolean(false)) continue;
-            var table = simpleLongTable(sheet);
+            var table = simpleRowTable(sheet);
             if (table != null) {
-                var parent = simpleLongTableSuggestion(table);
+                var parent = simpleRowTableSuggestion(table);
                 result.add(parent);
-                result.addAll(simpleLongTableFieldSuggestions(parent));
+                result.addAll(simpleRowTableFieldSuggestions(parent));
             }
         }
         return List.copyOf(result);
     }
 
     /**
-     * A simple long table has an unambiguous physical contract: the first
+     * A simple row table has an unambiguous physical contract: the first
      * contiguous text row is the header and each following column is one
      * repeat field. Keep these children as reviewable suggestions so the user
      * can confirm the actual fields without triggering semantic recognition.
      */
-    public List<RecognitionModelClient.ModelSuggestion> simpleLongTableFieldSuggestions(
+    public List<RecognitionModelClient.ModelSuggestion> simpleRowTableFieldSuggestions(
             RecognitionModelClient.ModelSuggestion parent
     ) {
-        if (parent == null || !"SIMPLE_LONG_TABLE".equals(parent.payload().path("reasonCode").asText())
+        if (parent == null || !"SIMPLE_ROW_TABLE".equals(parent.payload().path("reasonCode").asText())
                 || !"ROW_TABLE".equals(parent.payload().path("kind").asText())
                 || !parent.payload().path("columns").isArray()) {
             return List.of();
@@ -177,11 +175,11 @@ public class RuleBasedRecognitionEngine {
                     .put("reviewRequired", true)
                     .put("candidateOnly", true)
                     .put("publishable", false)
-                    .put("pendingReason", "SIMPLE_LONG_TABLE_FIELD_REVIEW")
+                    .put("pendingReason", "SIMPLE_ROW_TABLE_FIELD_REVIEW")
                     .put("nameSource", "PHYSICAL_HEADER_FALLBACK")
                     .put("semanticFallback", true)
                     .put("recognitionOrigin", "RULE_DETERMINISTIC")
-                    .put("reasonCode", "SIMPLE_LONG_TABLE_FIELD")
+                    .put("reasonCode", "SIMPLE_ROW_TABLE_FIELD")
                     .put("reason", "字段名称来自单行表头，请人工确认后写入正式模板")
                     .put("interpretation", "每条记录从“" + name + "”列读取");
 
@@ -218,7 +216,7 @@ public class RuleBasedRecognitionEngine {
         return List.copyOf(result);
     }
 
-    private SimpleLongTable simpleLongTable(JsonNode sheet) {
+    private SimpleRowTable simpleRowTable(JsonNode sheet) {
         if (!sheet.path("mergedRanges").isEmpty()
                 || sheet.path("formulaCount").asInt(0) > 0) return null;
         var rows = new TreeMap<Integer, List<CellPosition>>();
@@ -254,7 +252,7 @@ public class RuleBasedRecognitionEngine {
         if (startColumn < 1 || endColumn - startColumn + 1 != headerCells.size()) return null;
 
         // Every populated row below the header must stay inside the same
-        // columns.  This rejects side notes and cross-tabs without guessing.
+        // columns. This rejects side notes and two-axis reports without guessing.
         for (var entry : rows.tailMap(headerRow + 1).entrySet()) {
             if (entry.getValue().stream().anyMatch(item ->
                     item.column() < startColumn || item.column() > endColumn)) return null;
@@ -262,16 +260,21 @@ public class RuleBasedRecognitionEngine {
         var sheetId = sheet.path("id").asText(sheet.path("sheetId").asText(""));
         if (sheetId.isBlank()) return null;
         var sheetName = sheet.path("name").asText(sheetId);
-        var endRow = Math.max(MAX_TEMPLATE_ROWS, sheet.path("lastRow").asInt(headerRow));
+        // Keep physical geometry faithful to the source.  Capacity for future
+        // records is runtime metadata, not an artificial row-200 region.
+        // Keep one concrete input row for a header-only template so the
+        // physical data range remains valid.  Additional entry capacity is
+        // carried separately as runtimeCapacity and never expands geometry.
+        var endRow = Math.max(headerRow + 1, sheet.path("lastRow").asInt(headerRow));
         var headerRange = excelRange(startColumn, headerRow, endColumn, headerRow);
         var dataStartRow = headerRow + 1;
         var dataRange = excelRange(startColumn, dataStartRow, endColumn, endRow);
         var fullRange = excelRange(startColumn, headerRow, endColumn, endRow);
-        return new SimpleLongTable(sheetId, sheetName, headerRow, startColumn, endColumn, endRow,
+        return new SimpleRowTable(sheetId, sheetName, headerRow, startColumn, endColumn, endRow,
                 headerRange, dataRange, fullRange, headerCells);
     }
 
-    private RecognitionModelClient.ModelSuggestion simpleLongTableSuggestion(SimpleLongTable table) {
+    private RecognitionModelClient.ModelSuggestion simpleRowTableSuggestion(SimpleRowTable table) {
         var relationId = RecognitionIdentity.relationId(
                 table.sheetId(), table.headerRange(), table.dataRange(), "ROW_TABLE");
         var fieldId = RecognitionIdentity.fieldId(relationId);
@@ -355,7 +358,7 @@ public class RuleBasedRecognitionEngine {
                 .put("canonicalStatus", "CONFIRMED")
                 .put("structureStatus", "CONFIRMED")
                 .put("recognitionOrigin", "RULE_DETERMINISTIC")
-                .put("reasonCode", "SIMPLE_LONG_TABLE")
+                .put("reasonCode", "SIMPLE_ROW_TABLE")
                 .put("reason", "检测到单行表头的规则长表，按行生成可重复录入区域")
                 .put("interpretation", "每一行填写一条记录，字段值从对应列读取")
                 .put("standardMatchStatus", "NOT_APPLICABLE")
@@ -366,30 +369,27 @@ public class RuleBasedRecognitionEngine {
                 .put("blockId", relationId)
                 .put("suggestionLevel", "ROOT")
                 .put("dataStartRow", table.dataStartRow());
+        payload.put("runtimeCapacity", table.runtimeCapacity());
         payload.set("columns", columns);
         payload.set("locator", locator);
         payload.set("terminationRule", objectMapper.createObjectNode()
                 .put("type", "UNTIL_EMPTY_RECORD")
-                .put("maxRecords", table.maxRecords()));
-        payload.set("longTableModel", objectMapper.createObjectNode()
-                .put("mode", "ROW_TABLE")
-                .put("recordAxis", "ROW")
+                .put("maxRecords", table.runtimeCapacity()));
+        payload.set("tableModel", objectMapper.createObjectNode()
                 .put("headerRange", table.headerRange())
                 .put("dataRange", table.dataRange())
-                .put("output", "ONE_RECORD_PER_ROW")
-                .put("maxRecords", table.maxRecords()));
-        payload.set("recordProjection", objectMapper.createObjectNode()
-                .put("kind", "ROW_TABLE")
-                .put("sourceRange", table.dataRange())
-                .put("recordAxis", "ROW")
-                .put("headerRange", table.headerRange()));
+                .put("repeatAxis", "ROW")
+                .put("recordHeight", 1)
+                .put("recordWidth", table.columnCount())
+                .put("recordStride", 1)
+                .set("columns", columns.deepCopy()));
         var evidence = objectMapper.createArrayNode().add(objectMapper.createObjectNode()
                 .put("sheetId", table.sheetId())
                 .put("headerRange", table.headerRange())
                 .put("dataRange", table.dataRange())
                 .put("rule", "ONE_HEADER_ROW_CONTIGUOUS_COLUMNS"));
         return new RecognitionModelClient.ModelSuggestion(
-                "TABLE_REGION", payload, 0.99, evidence);
+                "ROW_TABLE", payload, 0.99, evidence);
     }
 
     private boolean contiguous(List<CellPosition> cells) {
@@ -465,7 +465,7 @@ public class RuleBasedRecognitionEngine {
     private record CellPosition(JsonNode cell, int row, int column) {
     }
 
-    private record SimpleLongTable(
+    private record SimpleRowTable(
             String sheetId, String sheetName, int headerRow, int startColumn, int endColumn,
             int endRow, String headerRange, String dataRange, String fullRange,
             List<CellPosition> headerCells
@@ -480,6 +480,10 @@ public class RuleBasedRecognitionEngine {
 
         int maxRecords() {
             return Math.max(1, endRow - headerRow);
+        }
+
+        int runtimeCapacity() {
+            return Math.max(MAX_TEMPLATE_ROWS - headerRow, maxRecords());
         }
     }
 
@@ -534,6 +538,470 @@ public class RuleBasedRecognitionEngine {
         return List.copyOf(result);
     }
 
+    private DocxCandidates docxCandidates(JsonNode structure) {
+        var regions = new LinkedHashMap<String, DocxTableRegion>();
+        var suggestions = new ArrayList<RecognitionModelClient.ModelSuggestion>();
+        var issues = new ArrayList<RecognitionModelClient.QualityIssueSuggestion>();
+        var documentIr = structure.path("documentIR").isObject()
+                ? structure.path("documentIR") : structure;
+        var tables = documentIr.path("tables").isArray() && !documentIr.path("tables").isEmpty()
+                ? documentIr.path("tables") : documentIr.path("blocks");
+        for (var table : tables) {
+            if (!"TABLE".equals(table.path("type").asText(""))
+                    || table.path("layoutContainer").asBoolean(false)) continue;
+            var classification = classifyDocxTable(table);
+            if (classification.type().isBlank()) {
+                if (classification.ambiguous()) issues.add(docxDirectionIssue(table));
+                continue;
+            }
+            var region = docxTableRegion(table, classification);
+            regions.put(table.path("sourcePath").asText(""), region);
+            if (region.suggestion() != null) suggestions.add(region.suggestion());
+            suggestions.addAll(docxTableFieldCandidates(table, classification, region));
+        }
+        suggestions.addAll(docxContentControlCandidates(structure, regions));
+        return new DocxCandidates(List.copyOf(suggestions), List.copyOf(issues));
+    }
+
+    /**
+     * Separates form pairs from repeated record surfaces. A normal column table
+     * deliberately has labels on both the top and left; that is not ambiguity.
+     */
+    private DocxTableClassification classifyDocxTable(JsonNode table) {
+        var rows = table.path("rows");
+        var rowCount = table.path("rowCount").asInt(rows.size());
+        var columnCount = table.path("columnCount").asInt();
+        if (!rows.isArray() || rowCount < 2 || columnCount < 2) {
+            return new DocxTableClassification("", "", false, 0, 0);
+        }
+
+        var formPairs = 0;
+        var formPairRows = 0;
+        var logicalSlots = 0;
+        for (var row : rows) {
+            var rowPairs = 0;
+            var cells = row.path("cells");
+            logicalSlots += Math.max(columnCount, cells.size());
+            for (var index = 0; index + 1 < cells.size(); index += 2) {
+                var label = cells.path(index);
+                var value = cells.path(index + 1);
+                if (docxLabelCell(label) && docxValueCell(value)) rowPairs++;
+            }
+            if (rowPairs > 0) formPairRows++;
+            formPairs += rowPairs;
+        }
+        var formCoverage = logicalSlots == 0 ? 0d : (formPairs * 2d) / logicalSlots;
+        if (formPairs >= 2 && formPairRows >= Math.max(1, rowCount - 1) && formCoverage >= 0.70d) {
+            return new DocxTableClassification("FORM_REGION", "", false, 0, 0);
+        }
+
+        var topCells = rows.path(0).path("cells");
+        var topLabels = 0;
+        var topOccupiedColumns = 0;
+        for (var cell : topCells) {
+            var value = cell.path("text").asText("").strip();
+            if (value.isBlank()) continue;
+            topOccupiedColumns += Math.max(1, cell.path("columnSpan").asInt(1));
+            if (looksLikeFieldLabel(value)) topLabels++;
+        }
+        var repeatedBodyRows = 0;
+        var rowIdentityRows = 0;
+        for (var index = 1; index < rows.size(); index++) {
+            var row = rows.path(index);
+            var present = 0;
+            for (var cell : row.path("cells")) {
+                if (!cell.path("mergeContinuation").asBoolean(false)) {
+                    present += Math.max(1, cell.path("columnSpan").asInt(1));
+                }
+            }
+            if (present >= Math.max(2, columnCount - 1)) repeatedBodyRows++;
+            var first = cellAt(row, 1);
+            if (first != null && !first.path("text").asText("").strip().isBlank()
+                    && !looksLikeFieldLabel(first.path("text").asText(""))) rowIdentityRows++;
+        }
+        var rowCandidate = topLabels >= 2
+                && topOccupiedColumns >= Math.max(2, (int) Math.ceil(columnCount * 0.65d))
+                && repeatedBodyRows >= 2;
+
+        var labelBandVotes = new HashMap<Integer, Integer>();
+        var identityCue = false;
+        var sampleHeadingCue = false;
+        for (var row : rows) {
+            var bandEnd = leadingLabelBandEnd(row, columnCount);
+            if (bandEnd > 0 && columnCount - bandEnd >= 2) {
+                labelBandVotes.merge(bandEnd, 1, Integer::sum);
+            }
+            var rowText = leftBandText(row, Math.max(1, bandEnd));
+            if (rowText.matches(".*(?:样品|试验|实验|配方|批号|编号).*")) identityCue = true;
+            var firstCell = cellAt(row, 1);
+            var firstEnd = firstCell == null ? 0
+                    : firstCell.path("logicalColumnEnd").asInt(firstCell.path("columnIndex").asInt(1));
+            var trailingIdentityCells = 0;
+            var physicalIndex = 0;
+            for (var cell : row.path("cells")) {
+                physicalIndex++;
+                var value = cell.path("text").asText("").strip();
+                if (value.matches("(?i)^\\d+[#＃]$")
+                        || value.matches("(?i)^(?:样品|试验|实验|配方)\\s*[甲乙丙丁A-Z0-9#＃-]+$")) {
+                    sampleHeadingCue = true;
+                    if (logicalColumnStart(cell, physicalIndex) > firstEnd) {
+                        trailingIdentityCells++;
+                    }
+                }
+            }
+            if (firstEnd > 0 && columnCount - firstEnd >= 2 && trailingIdentityCells >= 2) {
+                labelBandVotes.merge(firstEnd, 2, Integer::sum);
+            }
+        }
+        var labelBandWidth = labelBandVotes.entrySet().stream()
+                .max(java.util.Comparator.<Map.Entry<Integer, Integer>>comparingInt(Map.Entry::getValue)
+                        .thenComparingInt(Map.Entry::getKey))
+                .map(Map.Entry::getKey).orElse(0);
+        var columnLabelRows = 0;
+        if (labelBandWidth > 0) {
+            for (var row : rows) {
+                var hasLeftLabel = false;
+                var physicalIndex = 0;
+                for (var cell : row.path("cells")) {
+                    physicalIndex++;
+                    if (logicalColumnStart(cell, physicalIndex) > labelBandWidth) continue;
+                    if (docxLabelCell(cell)) hasLeftLabel = true;
+                }
+                if (hasLeftLabel) columnLabelRows++;
+            }
+        }
+        var columnCandidate = labelBandWidth > 0 && columnCount - labelBandWidth >= 2
+                && columnLabelRows >= 2;
+
+        if (columnCandidate && (identityCue || sampleHeadingCue)) {
+            return new DocxTableClassification("COLUMN_TABLE", "COLUMN", false, labelBandWidth, 0);
+        }
+        if (rowCandidate && !columnCandidate) {
+            return new DocxTableClassification("ROW_TABLE", "ROW", false, 0, 1);
+        }
+        if (columnCandidate && !rowCandidate) {
+            return new DocxTableClassification("COLUMN_TABLE", "COLUMN", false, labelBandWidth, 0);
+        }
+        if (rowCandidate && columnCandidate) {
+            if (rowIdentityRows >= 2) {
+                return new DocxTableClassification("ROW_TABLE", "ROW", false, 0, 1);
+            }
+            return new DocxTableClassification("", "", true, labelBandWidth, 0);
+        }
+        return new DocxTableClassification("", "", false, labelBandWidth, 0);
+    }
+
+    private boolean docxLabelCell(JsonNode cell) {
+        return cell != null && !cell.path("mergeContinuation").asBoolean(false)
+                && looksLikeFieldLabel(cell.path("text").asText(""));
+    }
+
+    private boolean docxValueCell(JsonNode cell) {
+        if (cell == null || cell.path("mergeContinuation").asBoolean(false)) return false;
+        var value = cell.path("text").asText("").strip();
+        return cell.path("editable").asBoolean(true)
+                && (value.isBlank() || !looksLikeFieldLabel(value));
+    }
+
+    private int leadingLabelBandEnd(JsonNode row, int columnCount) {
+        var end = 0;
+        for (var column = 1; column <= columnCount; column++) {
+            var cell = cellAt(row, column);
+            if (cell == null) break;
+            var structuralContinuation = cell.path("mergeContinuation").asBoolean(false);
+            var value = cell.path("text").asText("").strip();
+            if (!structuralContinuation && (value.isBlank() || !looksLikeFieldLabel(value))) break;
+            end = Math.max(end, cell.path("logicalColumnEnd").asInt(column));
+            column = end;
+        }
+        return end;
+    }
+
+    private String leftBandText(JsonNode row, int bandWidth) {
+        var values = new ArrayList<String>();
+        for (var cell : row.path("cells")) {
+            if (cell.path("logicalColumnStart").asInt(cell.path("columnIndex").asInt()) > bandWidth) continue;
+            var value = cell.path("text").asText("").strip();
+            if (!value.isBlank()) values.add(value);
+        }
+        return String.join(" ", values);
+    }
+
+    private JsonNode cellAt(JsonNode row, int logicalColumn) {
+        if (row == null) return null;
+        var physicalIndex = 0;
+        for (var cell : row.path("cells")) {
+            physicalIndex++;
+            var start = logicalColumnStart(cell, physicalIndex);
+            var end = cell.path("logicalColumnEnd").asInt(start + cell.path("columnSpan").asInt(1) - 1);
+            if (logicalColumn >= start && logicalColumn <= end) return cell;
+        }
+        return null;
+    }
+
+    private int logicalColumnStart(JsonNode cell, int physicalFallback) {
+        return cell.path("logicalColumnStart").asInt(
+                cell.path("columnIndex").asInt(Math.max(1, physicalFallback)));
+    }
+
+    private boolean looksLikeFieldLabel(String value) {
+        var normalized = value == null ? "" : value.replaceAll("[：:]$", "").strip();
+        if (normalized.length() < 2 || normalized.length() > 40) return false;
+        if (normalized.matches("(?i)^[a-z0-9#._/-]{1,12}$")) return false;
+        return !normalized.matches("^[+-]?(?:\\d+(?:\\.\\d+)?)%?$" );
+    }
+
+    private DocxTableRegion docxTableRegion(JsonNode table, DocxTableClassification classification) {
+        var nodeId = table.path("id").asText();
+        var sourcePath = table.path("sourcePath").asText();
+        var rowCount = table.path("rowCount").asInt(table.path("rows").size());
+        var columnCount = table.path("columnCount").asInt(1);
+        var type = classification.type();
+        var axis = classification.axis();
+        var relationId = RecognitionIdentity.relationId("DOCX", nodeId, sourcePath, type);
+        if ("FORM_REGION".equals(type)) {
+            return new DocxTableRegion(sourcePath, relationId, type, "", null,
+                    classification.labelBandWidth(), classification.headerDepth());
+        }
+        var fieldId = RecognitionIdentity.fieldId(relationId);
+        var bindingId = RecognitionIdentity.bindingId(fieldId, "DOCX_TABLE_REGION", sourcePath);
+        var payload = objectMapper.createObjectNode()
+                .put("kind", type).put("tableKind", type).put("blockType", type)
+                .put("role", "REPEAT_REGION").put("mappingKind", "REPEAT_REGION")
+                .put("relationId", relationId).put("fieldId", fieldId.toString())
+                .put("bindingId", bindingId.toString())
+                .put("fieldCode", "AUTO.WORD.TABLE_" + RecognitionIdentity.shortHash(relationId, 10).toUpperCase(Locale.ROOT))
+                .put("fieldName", "ROW".equals(axis) ? "Word 按行明细" : "Word 按列明细")
+                .put("groupName", "业务明细")
+                .put("dataPath", "/recognized/word/" + safePathSegment(nodeId, relationId) + "/records")
+                .put("valueType", "array").put("required", false)
+                .put("editability", "EDITABLE").put("valueSource", "USER_INPUT")
+                .put("locatorType", "DOCX_TABLE_REGION")
+                .put("repeatAxis", axis)
+                .put("recordHeight", "ROW".equals(axis) ? 1 : Math.max(1, rowCount))
+                .put("recordWidth", "ROW".equals(axis) ? columnCount : 1)
+                .put("recordStride", 1)
+                .put("reviewRequired", true).put("candidateOnly", false)
+                .put("publishable", true).put("autoAccept", false)
+                .put("canonicalStatus", "PROVISIONAL").put("structureStatus", "CONFIRMED")
+                .put("recognitionOrigin", "RULE_DETERMINISTIC")
+                .put("reasonCode", "DOCX_REPEAT_TABLE")
+                .put("regionId", relationId).put("blockId", relationId)
+                .put("candidateRef", nodeId);
+        payload.set("locator", objectMapper.createObjectNode()
+                .put("locatorType", "DOCX_TABLE_REGION")
+                .put("nodeId", nodeId).put("sourcePath", sourcePath));
+        var evidence = objectMapper.createArrayNode().add(objectMapper.createObjectNode()
+                .put("source", "DOCX_TABLE_GEOMETRY").put("nodeId", nodeId)
+                .put("sourcePath", sourcePath).put("repeatAxis", axis));
+        var suggestion = new RecognitionModelClient.ModelSuggestion(
+                type, payload, 0.90, evidence);
+        return new DocxTableRegion(sourcePath, relationId, type, axis, suggestion,
+                classification.labelBandWidth(), classification.headerDepth());
+    }
+
+    private List<RecognitionModelClient.ModelSuggestion> docxTableFieldCandidates(
+            JsonNode table, DocxTableClassification classification, DocxTableRegion region
+    ) {
+        return switch (classification.type()) {
+            case "FORM_REGION" -> docxFormFields(table, region);
+            case "ROW_TABLE" -> docxRowFields(table, region);
+            case "COLUMN_TABLE" -> docxColumnFields(table, region, classification.labelBandWidth());
+            default -> List.of();
+        };
+    }
+
+    private List<RecognitionModelClient.ModelSuggestion> docxFormFields(
+            JsonNode table, DocxTableRegion region
+    ) {
+        var result = new ArrayList<RecognitionModelClient.ModelSuggestion>();
+        for (var row : table.path("rows")) {
+            var cells = row.path("cells");
+            for (var index = 0; index + 1 < cells.size(); index += 2) {
+                var label = cells.path(index);
+                var value = cells.path(index + 1);
+                if (!docxLabelCell(label) || !docxValueCell(value)) continue;
+                var parsed = parseDocxFieldLabel(label.path("text").asText(""));
+                if (parsed.name().isBlank()) continue;
+                result.add(docxTableFieldCandidate(table, region, label, List.of(value),
+                        parsed, GroupNameNormalizer.BASIC_INFORMATION, "SCALAR", ""));
+            }
+        }
+        return List.copyOf(result);
+    }
+
+    private List<RecognitionModelClient.ModelSuggestion> docxRowFields(
+            JsonNode table, DocxTableRegion region
+    ) {
+        var result = new ArrayList<RecognitionModelClient.ModelSuggestion>();
+        var rows = table.path("rows");
+        if (!rows.isArray() || rows.size() < 2) return List.of();
+        var columnCount = table.path("columnCount").asInt();
+        var header = rows.path(0);
+        for (var column = 1; column <= columnCount; column++) {
+            var label = cellAt(header, column);
+            if (!docxLabelCell(label)) continue;
+            var values = new LinkedHashMap<String, JsonNode>();
+            for (var rowIndex = 1; rowIndex < rows.size(); rowIndex++) {
+                var value = cellAt(rows.path(rowIndex), column);
+                if (value != null && !value.path("mergeContinuation").asBoolean(false)) {
+                    values.putIfAbsent(value.path("sourcePath").asText(value.path("id").asText()), value);
+                }
+            }
+            if (values.isEmpty()) continue;
+            var parsed = parseDocxFieldLabel(label.path("text").asText(""));
+            result.add(docxTableFieldCandidate(table, region, label, List.copyOf(values.values()),
+                    parsed, "业务明细", "REPEAT_FIELD", "ROW"));
+            column = Math.max(column, label.path("logicalColumnEnd").asInt(column));
+        }
+        return List.copyOf(result);
+    }
+
+    private List<RecognitionModelClient.ModelSuggestion> docxColumnFields(
+            JsonNode table, DocxTableRegion region, int labelBandWidth
+    ) {
+        var result = new ArrayList<RecognitionModelClient.ModelSuggestion>();
+        var columnCount = table.path("columnCount").asInt();
+        var currentGroup = "";
+        for (var row : table.path("rows")) {
+            JsonNode label = null;
+            var physicalIndex = 0;
+            for (var cell : row.path("cells")) {
+                physicalIndex++;
+                var start = logicalColumnStart(cell, physicalIndex);
+                var end = cell.path("logicalColumnEnd").asInt(start);
+                if (start > labelBandWidth || end > labelBandWidth
+                        || cell.path("mergeContinuation").asBoolean(false)) continue;
+                var value = cell.path("text").asText("").strip();
+                if (value.isBlank()) continue;
+                if (end < labelBandWidth && looksLikeFieldLabel(value)) currentGroup = value;
+                if (looksLikeFieldLabel(value)) label = cell;
+            }
+            if (label == null) continue;
+            var values = new LinkedHashMap<String, JsonNode>();
+            for (var column = labelBandWidth + 1; column <= columnCount; column++) {
+                var value = cellAt(row, column);
+                if (value != null && !value.path("mergeContinuation").asBoolean(false)) {
+                    var valueKey = value.path("sourcePath").asText(value.path("id").asText(""));
+                    values.putIfAbsent(valueKey.isBlank() ? "column-" + column : valueKey, value);
+                }
+            }
+            if (values.size() < 2) continue;
+            var parsed = parseDocxFieldLabel(label.path("text").asText(""));
+            var groupName = currentGroup.isBlank() || currentGroup.equals(parsed.name()) ? "业务明细" : currentGroup;
+            result.add(docxTableFieldCandidate(table, region, label, List.copyOf(values.values()),
+                    parsed, groupName, "REPEAT_FIELD", "COLUMN"));
+        }
+        return List.copyOf(result);
+    }
+
+    private RecognitionModelClient.ModelSuggestion docxTableFieldCandidate(
+            JsonNode table,
+            DocxTableRegion region,
+            JsonNode label,
+            List<JsonNode> values,
+            DocxFieldLabel parsed,
+            String groupName,
+            String mappingKind,
+            String repeatAxis
+    ) {
+        var labelPath = label.path("sourcePath").asText(label.path("id").asText());
+        var valueIdentity = values.stream()
+                .map(value -> value.path("sourcePath").asText(value.path("id").asText()))
+                .reduce((left, right) -> left + "|" + right).orElse("");
+        var relationId = RecognitionIdentity.relationId(
+                "DOCX", region.regionId(), labelPath, "DOCX_TABLE_CELL|" + valueIdentity);
+        var fieldId = RecognitionIdentity.fieldId(relationId);
+        var firstValue = values.getFirst();
+        var candidateRef = firstValue.path("id").asText(label.path("id").asText());
+        var payload = objectMapper.createObjectNode()
+                .put("kind", "SCALAR")
+                .put("role", "FIELD")
+                .put("blockType", region.type())
+                .put("blockName", "FORM_REGION".equals(region.type()) ? "Word 基本信息"
+                        : "ROW_TABLE".equals(region.type()) ? "Word 按行明细" : "Word 按列明细")
+                .put("relationId", relationId)
+                .put("fieldId", fieldId.toString())
+                .put("fieldCode", "AUTO.WORD.FIELD_"
+                        + RecognitionIdentity.shortHash(relationId, 12).toUpperCase(Locale.ROOT))
+                .put("fieldName", parsed.name())
+                .put("dataPath", "/recognized/word/" + safePathSegment(parsed.name(), fieldId.toString())
+                        + "_" + RecognitionIdentity.shortHash(relationId, 6))
+                .put("valueType", "string")
+                .put("required", false)
+                .put("unit", parsed.unit())
+                .put("editability", "EDITABLE")
+                .put("valueSource", "USER_INPUT")
+                .put("mappingKind", mappingKind)
+                .put("locatorType", "DOCX_TABLE_CELL")
+                .put("source", "DOCX_TABLE_CELL")
+                .put("candidateOnly", true)
+                .put("reviewRequired", true)
+                .put("publishable", false)
+                .put("autoAccept", false)
+                .put("pendingReason", "DOCX_FIELD_POSITION_REQUIRED")
+                .put("groupName", groupName)
+                .put("labelPath", groupName.equals("业务明细") || groupName.equals(GroupNameNormalizer.BASIC_INFORMATION)
+                        ? parsed.name() : groupName + "/" + parsed.name())
+                .put("regionId", region.regionId())
+                .put("blockId", region.regionId())
+                .put("regionRange", table.path("sourcePath").asText(""))
+                .put("parentRelationId", region.regionId())
+                .put("candidateRef", candidateRef);
+        payload.put("suggestionLevel", "REPEAT_FIELD".equals(mappingKind) ? "CHILD" : "SCALAR");
+        if (!repeatAxis.isBlank()) {
+            payload.put("repeatAxis", repeatAxis)
+                    .put("recordHeight", "ROW".equals(repeatAxis) ? 1 : table.path("rowCount").asInt(1))
+                    .put("recordWidth", "ROW".equals(repeatAxis) ? table.path("columnCount").asInt(1) : 1)
+                    .put("recordStride", 1);
+        }
+        var locator = payload.putObject("locator")
+                .put("locatorType", "DOCX_TABLE_CELL")
+                .put("nodeId", candidateRef)
+                .put("labelAnchor", label.path("id").asText(""))
+                .put("valueAnchor", candidateRef)
+                .put("tablePath", table.path("sourcePath").asText(""))
+                .put("labelCellPath", label.path("sourcePath").asText(""));
+        var valuePaths = locator.putArray("valueCellPaths");
+        var valueNodeIds = locator.putArray("valueNodeIds");
+        values.forEach(value -> {
+            valuePaths.add(value.path("sourcePath").asText(""));
+            valueNodeIds.add(value.path("id").asText(""));
+        });
+        var evidence = objectMapper.createArrayNode().add(objectMapper.createObjectNode()
+                .put("source", "DOCX_TABLE_FIELD")
+                .put("tablePath", table.path("sourcePath").asText(""))
+                .put("labelCellPath", label.path("sourcePath").asText(""))
+                .put("repeatAxis", repeatAxis));
+        return new RecognitionModelClient.ModelSuggestion("SCALAR_FIELD", payload, 0.95, evidence);
+    }
+
+    private DocxFieldLabel parseDocxFieldLabel(String value) {
+        var normalized = value == null ? "" : value.replaceAll("[：:]$", "").strip();
+        var slash = Pattern.compile("^(.{1,40}?)\\s*[/／]\\s*([^/／]{1,20})$").matcher(normalized);
+        if (slash.matches()) return new DocxFieldLabel(slash.group(1).strip(), slash.group(2).strip());
+        var parenthesized = Pattern.compile("^(.{1,40}?)\\s*[（(]([^）)]{1,20})[）)]$").matcher(normalized);
+        if (parenthesized.matches()) {
+            return new DocxFieldLabel(parenthesized.group(1).strip(), parenthesized.group(2).strip());
+        }
+        return new DocxFieldLabel(normalized, "");
+    }
+
+    private RecognitionModelClient.QualityIssueSuggestion docxDirectionIssue(JsonNode table) {
+        var nodeId = table.path("id").asText("");
+        var evidence = objectMapper.createObjectNode()
+                .put("nodeId", nodeId)
+                .put("sourcePath", table.path("sourcePath").asText(""))
+                .put("rowCount", table.path("rowCount").asInt())
+                .put("columnCount", table.path("columnCount").asInt());
+        return new RecognitionModelClient.QualityIssueSuggestion(
+                "STRUCTURE_DIRECTION_UNCLEAR", "ERROR", "", "", nodeId,
+                "Word 表格记录方向不明确",
+                "该二维表同时具有行、列标签特征，无法可靠判断每条记录按行还是按列重复。",
+                "必须先确认结构，系统不会猜测或降级。", 0.99, false,
+                null, null, evidence, "DETECTED", nodeId, null);
+    }
+
     /**
      * Content controls are deterministic Word fields. Plain label paragraphs
      * are also surfaced as review-only candidates so a document still has a
@@ -541,27 +1009,29 @@ public class RuleBasedRecognitionEngine {
      * intentionally remain unbound until the user inserts a real content
      * control at the chosen position.
      */
-    private List<RecognitionModelClient.ModelSuggestion> docxContentControlCandidates(JsonNode structure) {
+    private List<RecognitionModelClient.ModelSuggestion> docxContentControlCandidates(
+            JsonNode structure, Map<String, DocxTableRegion> tableRegions
+    ) {
         var result = new ArrayList<RecognitionModelClient.ModelSuggestion>();
         var occupied = new java.util.HashSet<String>();
         var controls = structure.path("documentIR").path("contentControls");
         if (!controls.isArray()) controls = structure.path("contentControls");
         for (var control : controls) {
             var nodeId = control.path("nodeId").asText("");
+            var sourcePath = control.path("sourcePath").asText("");
+            var tableRegion = tableRegions.entrySet().stream()
+                    .filter(entry -> !entry.getKey().isBlank() && sourcePath.startsWith(entry.getKey() + "/"))
+                    .max(java.util.Comparator.comparingInt(entry -> entry.getKey().length()))
+                    .map(Map.Entry::getValue).orElse(null);
             var contentControlId = control.path("contentControlId").asText("");
             var documentMarkerId = control.path("markerId").asText("");
             var tag = control.path("tag").asText("").strip();
             var alias = control.path("alias").asText("").strip();
             var text = control.path("text").asText("").strip();
             var name = firstNonPlaceholder(alias, tag, text);
-            // w:id/contentControlId identifies the OOXML element only.  It is
-            // not a data marker and cannot be used as a publishable binding;
-            // only the explicit w:dataBinding storeItemID is stable across
-            // controlled patches and document revisions.
             var markerId = documentMarkerId;
             if (nodeId.isBlank()) continue;
-            var stableMarker = !documentMarkerId.isBlank();
-            var fieldSeed = markerId + "|" + name;
+            var fieldSeed = nodeId + "|" + markerId + "|" + name;
             var fieldId = RecognitionIdentity.fieldId(RecognitionIdentity.relationId(
                     "docx", nodeId, markerId, "DOCX_CONTENT_CONTROL"));
             var fieldCode = tag.isBlank()
@@ -571,8 +1041,9 @@ public class RuleBasedRecognitionEngine {
             var payload = objectMapper.createObjectNode()
                     .put("kind", "SCALAR")
                     .put("role", "FIELD")
-                    .put("blockType", "FORM_REGION")
-                    .put("blockName", "Word 文档字段")
+                    .put("blockType", tableRegion == null ? "FORM_REGION" : tableRegion.type())
+                    .put("blockName", tableRegion == null || "FORM_REGION".equals(tableRegion.type())
+                            ? "Word 基本信息" : "Word 明细字段")
                     .put("fieldId", fieldId.toString())
                     .put("fieldCode", fieldCode)
                     .put("fieldName", name.isBlank() ? "待命名字段" : name)
@@ -581,24 +1052,38 @@ public class RuleBasedRecognitionEngine {
                     .put("valueSource", "USER_INPUT")
                     .put("valueType", "string")
                     .put("required", false)
+                    .put("mappingKind", tableRegion == null || "FORM_REGION".equals(tableRegion.type())
+                            ? "SCALAR" : "REPEAT_FIELD")
                     .put("locatorType", "DOCX_CONTENT_CONTROL")
                     .put("markerId", markerId)
                     .put("source", "DOCX_CONTENT_CONTROL")
-                    .put("candidateOnly", !stableMarker)
+                    .put("candidateOnly", false)
                     .put("reviewRequired", true)
-                    .put("publishable", stableMarker)
-                    .put("autoAccept", stableMarker)
-                    .put("pendingReason", stableMarker ? "DOCX_FIELD_REVIEW" : "DOCX_MARKER_MISSING")
+                    .put("publishable", true)
+                    .put("autoAccept", false)
+                    .put("pendingReason", "DOCX_FIELD_REVIEW")
                     .put("standardMatchStatus", "UNMATCHED")
                     .put("requiresStandardConfirmation", false)
-                    .put("groupName", GroupNameNormalizer.BASIC_INFORMATION)
-                    .put("regionId", "docx-document")
-                    .put("blockId", "docx-document")
+                    .put("groupName", tableRegion == null || "FORM_REGION".equals(tableRegion.type())
+                            ? GroupNameNormalizer.BASIC_INFORMATION : "业务明细")
+                    .put("regionId", tableRegion == null ? "docx-document" : tableRegion.regionId())
+                    .put("blockId", tableRegion == null ? "docx-document" : tableRegion.regionId())
                     .put("regionRange", "DOCX")
                     .put("candidateRef", nodeId);
+            if (tableRegion != null && !"FORM_REGION".equals(tableRegion.type())) {
+                payload.put("parentRelationId", tableRegion.regionId())
+                        .put("suggestionLevel", "CHILD")
+                        .put("repeatAxis", tableRegion.axis())
+                        .put("recordHeight", "ROW".equals(tableRegion.axis()) ? 1 : 1)
+                        .put("recordWidth", 1)
+                        .put("recordStride", 1);
+            } else {
+                payload.put("suggestionLevel", "SCALAR");
+            }
             payload.set("locator", objectMapper.createObjectNode()
                     .put("nodeId", nodeId)
                     .put("markerId", markerId)
+                    .put("sourcePath", sourcePath)
                     .put("contentControlId", contentControlId)
                     .put("tag", tag)
                     .put("alias", alias)
@@ -608,7 +1093,7 @@ public class RuleBasedRecognitionEngine {
                     .put("nodeId", nodeId).put("markerId", markerId)
                     .put("source", "DOCX_CONTENT_CONTROL"));
             result.add(new RecognitionModelClient.ModelSuggestion(
-                    "SCALAR_FIELD", payload, stableMarker ? 0.98 : 0.65, evidence));
+                    "SCALAR_FIELD", payload, 0.98, evidence));
             occupied.add(nodeId);
         }
 
@@ -622,6 +1107,7 @@ public class RuleBasedRecognitionEngine {
             if (nodeId.isBlank() || text.isBlank() || occupied.contains(nodeId)) continue;
             var fieldName = docxLabelName(text);
             if (fieldName.isBlank() || STATIC_PREFIXES.contains(fieldName)) continue;
+            if (fieldName.matches("^类型(?:[一二三四五六七八九十]+|\\d+)$")) continue;
             result.add(docxTextLabelCandidate(nodeId, text, fieldName));
         }
         return List.copyOf(result);
@@ -632,8 +1118,7 @@ public class RuleBasedRecognitionEngine {
         if (inline.matches()) return inline.group(1).strip();
         var explicit = EXPLICIT_LABEL.matcher(text);
         if (explicit.matches()) return explicit.group(1).strip();
-        var numbered = NUMBERED_LABEL.matcher(text);
-        return numbered.matches() ? numbered.group(1).strip() : "";
+        return "";
     }
 
     private RecognitionModelClient.ModelSuggestion docxTextLabelCandidate(
@@ -853,5 +1338,34 @@ public class RuleBasedRecognitionEngine {
     }
 
     private record Adjacent(String relationType, JsonNode value) {
+    }
+
+    private record DocxCandidates(
+            List<RecognitionModelClient.ModelSuggestion> suggestions,
+            List<RecognitionModelClient.QualityIssueSuggestion> issues
+    ) {
+    }
+
+    private record DocxTableClassification(
+            String type,
+            String axis,
+            boolean ambiguous,
+            int labelBandWidth,
+            int headerDepth
+    ) {
+    }
+
+    private record DocxTableRegion(
+            String sourcePath,
+            String regionId,
+            String type,
+            String axis,
+            RecognitionModelClient.ModelSuggestion suggestion,
+            int labelBandWidth,
+            int headerDepth
+    ) {
+    }
+
+    private record DocxFieldLabel(String name, String unit) {
     }
 }

@@ -72,6 +72,7 @@ public class TemplateRecognitionCompiler {
                  .filter(suggestion -> !isProtocolRejected(suggestion.payload()))
                  .filter(suggestion -> !isStaticSuggestion(suggestion, staticRegions))
                  .filter(this::isFormalSuggestion)
+                 .filter(this::hasSupportedBusinessKind)
                  .filter(suggestion -> parentStructureResolved(suggestion, suggestions))
                 .sorted(java.util.Comparator
                         .comparing((TemplateImportRepository.RecognitionSuggestionView item) ->
@@ -195,18 +196,6 @@ public class TemplateRecognitionCompiler {
                     if (payload.path("tableModel").isObject()) {
                         field.set("tableModel", payload.path("tableModel").deepCopy());
                     }
-                    if (payload.path("matrixModel").isObject()) {
-                        field.set("matrixModel", payload.path("matrixModel").deepCopy());
-                    }
-                    if (payload.path("longTableModel").isObject()) {
-                        field.set("longTableModel", payload.path("longTableModel").deepCopy());
-                    }
-                    if (payload.path("recordProjection").isObject()) {
-                        field.set("recordProjection", payload.path("recordProjection").deepCopy());
-                    }
-                    if (payload.path("columnSlots").isArray()) {
-                        field.set("columnSlots", payload.path("columnSlots").deepCopy());
-                    }
                     fields.add(field);
                     if (("ROW_TABLE".equals(kind) || "COLUMN_TABLE".equals(kind))
                             && payload.path("columns").isArray()
@@ -301,12 +290,6 @@ public class TemplateRecognitionCompiler {
                 .put("dictionaryVersion", payload.path("dictionaryVersion").asInt(StandardFieldDictionary.VERSION))
                 .put("condition", payload.path("condition").asText(""))
                 .put("blockId", payload.path("blockId").asText("")));
-        if (payload.path("matrixModel").isObject()) {
-            binding.withObject("diagnostic").set("matrixModel", payload.path("matrixModel").deepCopy());
-        }
-        if (payload.path("longTableModel").isObject()) {
-            binding.withObject("diagnostic").set("longTableModel", payload.path("longTableModel").deepCopy());
-        }
         if (payload.path("tableModel").isObject()) {
             binding.withObject("diagnostic").set("tableModel", payload.path("tableModel").deepCopy());
         }
@@ -358,6 +341,18 @@ public class TemplateRecognitionCompiler {
                  && !STATIC_BLOCK_TYPES.contains(payload.path("blockType").asText());
     }
 
+    private boolean hasSupportedBusinessKind(
+            TemplateImportRepository.RecognitionSuggestionView suggestion
+    ) {
+        var payload = suggestion.payload();
+        var kind = payload.path("kind").asText(payload.path("tableKind").asText(""));
+        if (Set.of("FORM_REGION", "ROW_TABLE", "COLUMN_TABLE", "SCALAR").contains(kind)) return true;
+        // A child suggestion is a scalar field even though its transport
+        // envelope is named TABLE_CHILD_FIELD. No historical TABLE_REGION or
+        // TABLE_FIELD value is accepted as a business kind.
+        return "SCALAR".equals(recognitionKind(suggestion.suggestionType(), payload));
+    }
+
     private boolean parentStructureResolved(
             TemplateImportRepository.RecognitionSuggestionView suggestion,
             List<TemplateImportRepository.RecognitionSuggestionView> allSuggestions
@@ -384,12 +379,11 @@ public class TemplateRecognitionCompiler {
 
     private String effectiveMappingKind(JsonNode payload, String kind) {
         var explicit = payload.path("mappingKind").asText("");
-        if (Set.of("SCALAR", "REPEAT_REGION", "REPEAT_FIELD", "MATRIX_REGION", "MATRIX_FIELD")
+        if (Set.of("SCALAR", "REPEAT_REGION", "REPEAT_FIELD")
                 .contains(explicit)) return explicit;
         return payload.path("suggestionLevel").asText("").equals("CHILD")
-                ? ("MATRIX".equals(kind) ? "MATRIX_FIELD" : "REPEAT_FIELD")
-                : ("MATRIX".equals(kind) ? "MATRIX_REGION"
-                : "SCALAR".equals(kind) ? "SCALAR" : "REPEAT_REGION");
+                ? "REPEAT_FIELD"
+                : "SCALAR".equals(kind) ? "SCALAR" : "REPEAT_REGION";
     }
 
     private boolean isStaticSuggestion(
@@ -524,24 +518,6 @@ public class TemplateRecognitionCompiler {
             }
             item.set("properties", properties);
             schema.set("items", item);
-        } else if ("MATRIX".equals(kind)) {
-            schema.put("type", "array");
-            if ("RECORD_SET".equals(payload.path("matrixModel").path("semanticMode").asText())) {
-                schema.set("items", objectMapper.createObjectNode()
-                        .put("type", "object")
-                        .put("additionalProperties", true));
-            } else {
-                schema.set("items", objectMapper.createObjectNode()
-                        .put("type", "array")
-                        .set("items", objectMapper.createObjectNode()
-                                .put("type", normalizeType(payload.path("valueType").asText("number")))));
-            }
-            if (payload.path("matrixModel").isObject()) {
-                schema.set("x-semantic-model", payload.path("matrixModel").deepCopy());
-            }
-            if (payload.path("longTableModel").isObject()) {
-                schema.set("x-long-table-model", payload.path("longTableModel").deepCopy());
-            }
         } else {
             var valueType = payload.path("valueType").asText("string");
             schema.put("type", normalizeType(valueType));
@@ -788,24 +764,12 @@ public class TemplateRecognitionCompiler {
     private String recognitionKind(String suggestionType, JsonNode payload) {
         var declared = payload.path("kind").asText("").toUpperCase(Locale.ROOT);
         var type = suggestionType == null ? "" : suggestionType.toUpperCase(Locale.ROOT);
-        if ("MATRIX".equals(declared) || type.contains("MATRIX")) {
-            return "MATRIX";
+        if (Set.of("FORM_REGION", "ROW_TABLE", "COLUMN_TABLE", "SCALAR").contains(declared)) {
+            return declared;
         }
-        if ("COLUMN_TABLE".equals(declared)) {
-            return "COLUMN_TABLE";
-        }
-        // TABLE_CHILD_FIELD describes where the suggestion came from, not the
-        // business kind of the child. An explicit SCALAR child must stay a
-        // scalar; otherwise it is mistaken for a second table region and is
-        // removed by component de-duplication.
-        if ("SCALAR".equals(declared)) {
-            return "SCALAR";
-        }
-        if ("ROW_TABLE".equals(declared) || type.contains("TABLE")
-                || "REPEAT_REGION".equals(payload.path("role").asText())) {
-            return "ROW_TABLE";
-        }
-        return "SCALAR";
+        if ("SCALAR_FIELD".equals(type) || "REPEAT_FIELD".equals(type)
+                || "TABLE_CHILD_FIELD".equals(type)) return "SCALAR";
+        return "";
     }
 
     private String businessInterpretation(String kind, String name, JsonNode payload) {
@@ -815,7 +779,6 @@ public class TemplateRecognitionCompiler {
         return switch (kind) {
             case "ROW_TABLE" -> "系统认为“" + name + "”中每一行代表一条业务记录。";
             case "COLUMN_TABLE" -> "系统认为“" + name + "”中每一列代表一条业务记录。";
-            case "MATRIX" -> "系统认为“" + name + "”的行和列分别表示两类条件，交叉位置填写结果。";
             default -> "系统认为这里用于填写“" + name + "”。";
         };
     }

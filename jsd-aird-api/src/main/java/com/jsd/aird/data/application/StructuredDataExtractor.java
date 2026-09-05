@@ -19,15 +19,10 @@ import com.jsd.aird.tpl.api.TemplateDataImportFacade;
  * Executes the physical shape described by a published data template.
  *
  * The generic tabular parser intentionally only exposes a two-dimensional grid.
- * This class is the bridge from that grid to logical records: rows for ROW_TABLE,
- * columns for COLUMN_TABLE and cell intersections for MATRIX_FIELD.
+ * This class is the bridge from that grid to logical records: rows for ROW_TABLE
+ * and columns for COLUMN_TABLE.
  */
 final class StructuredDataExtractor {
-
-    private static final String ROW_DIMENSION_CODE = "DATA.DIMENSION.ROW";
-    private static final String COLUMN_DIMENSION_CODE = "DATA.DIMENSION.COLUMN";
-    private static final String ROW_DIMENSION_KEY = "__dimension_row";
-    private static final String COLUMN_DIMENSION_KEY = "__dimension_column";
 
     private final ObjectMapper objectMapper;
 
@@ -57,7 +52,7 @@ final class StructuredDataExtractor {
                     binding.mappingKind() != null
                             && binding.mappingKind().toUpperCase(Locale.ROOT).contains("FORM_REGION"));
             var formFields = component.stream().filter(binding -> isFormBinding(binding)
-                            || hasFormRegion && !isStructuredField(binding) && !isMatrixBinding(binding))
+                            || hasFormRegion && !isStructuredField(binding))
                     .filter(binding -> binding.fieldCode() != null && !binding.fieldCode().isBlank()).toList();
             if (!formFields.isEmpty()) {
                 var form = extractFormRegion(sheet, definitions, componentId, component, formFields, dataStart, dataEnd);
@@ -65,9 +60,7 @@ final class StructuredDataExtractor {
             }
             var structuredFields = component.stream().filter(this::isStructuredField).toList();
             Result structured = null;
-            if (component.stream().anyMatch(this::isMatrixBinding)) {
-                structured = extractMatrix(sheet, definitions, componentId, component, dataStart, dataEnd);
-            } else if (!structuredFields.isEmpty()) {
+            if (!structuredFields.isEmpty()) {
                 structured = structuredFields.stream().anyMatch(this::isColumnBinding)
                         ? extractColumnTable(sheet, definitions, componentId, structuredFields, dataStart, dataEnd)
                         : extractRowTable(sheet, definitions, componentId, structuredFields, dataStart, dataEnd);
@@ -322,141 +315,6 @@ final class StructuredDataExtractor {
         return new Result("COLUMN_TABLE", mappings, rows);
     }
 
-    private Result extractMatrix(
-            TemplateDataImportFacade.ParsedSheet sheet,
-            List<TemplateDataImportFacade.FieldDefinition> definitions,
-            String componentId,
-            List<TemplateDataImportFacade.ImportBinding> bindings,
-            int dataStart,
-            int dataEnd
-    ) {
-        var region = bindings.stream().filter(this::isMatrixRegion).findFirst().orElse(null);
-        var fields = bindings.stream().filter(this::isMatrixField).toList();
-        if (fields.isEmpty() && region != null && !region.fieldCode().isBlank()) fields = List.of(region);
-        var baseLocator = region == null ? objectMapper.createObjectNode() : region.locator();
-        var rowHeaders = range(baseLocator, "rowHeaderRange");
-        var columnHeaders = range(baseLocator, "columnHeaderRange");
-        var cross = range(baseLocator, "crossDataRange");
-        if (cross.isEmpty()) {
-            for (var field : fields) {
-                cross = range(field.locator(), "crossDataRange");
-                if (cross.isPresent()) break;
-            }
-        }
-        if (cross.isEmpty()) return new Result("MATRIX", List.of(), List.of());
-        var crossRange = cross.get();
-        var rowDimensionFields = fields.stream()
-                .filter(field -> isMatrixRowDimension(field, rowHeaders, crossRange)).toList();
-        var columnDimensionFields = fields.stream()
-                .filter(field -> isMatrixColumnDimension(field, columnHeaders, crossRange)).toList();
-        var measureFields = fields.stream()
-                .filter(field -> !rowDimensionFields.contains(field) && !columnDimensionFields.contains(field))
-                .toList();
-        var mappings = fieldMappings(sheet.sheetId(), componentId, fields, definitions, "MATRIX");
-        mappings = new ArrayList<>(mappings);
-        if (rowDimensionFields.isEmpty()) {
-            mappings.add(syntheticMapping(sheet.sheetId(), componentId, ROW_DIMENSION_KEY,
-                    ROW_DIMENSION_CODE, "行维度", "/dimensions/row"));
-        }
-        if (columnDimensionFields.isEmpty()) {
-            mappings.add(syntheticMapping(sheet.sheetId(), componentId, COLUMN_DIMENSION_KEY,
-                    COLUMN_DIMENSION_CODE, "列维度", "/dimensions/column"));
-        }
-        var rows = new ArrayList<DataRepository.Row>();
-        int recordIndex = 0;
-        for (int rowNumber = crossRange.startRow(); rowNumber <= crossRange.endRow(); rowNumber++) {
-            var rowLabel = rowHeaders.isPresent()
-                    ? dimensionValue(sheet.rows(), rowHeaders.get(), rowNumber, true)
-                    : Integer.toString(rowNumber);
-            for (int column = crossRange.startColumn(); column <= crossRange.endColumn(); column++) {
-                var columnLabel = columnHeaders.isPresent()
-                        ? dimensionValue(sheet.rows(), columnHeaders.get(), column, false)
-                        : columnName(column);
-                if (aggregateLabel(rowLabel) || aggregateLabel(columnLabel)) continue;
-                var value = value(sheet.rows(), rowNumber, column);
-                if (value.isBlank()) continue;
-                var raw = objectMapper.createObjectNode();
-                var metadata = baseMetadata("MATRIX", componentId);
-                for (var field : rowDimensionFields) {
-                    var sourceRange = matrixBindingRange(field).orElseGet(() -> rowHeaders.orElse(null));
-                    if (sourceRange == null) continue;
-                    var key = bindingKey(field);
-                    raw.put(key, dimensionValue(sheet.rows(), sourceRange, rowNumber, true));
-                    putCell(metadata, key, cellMetadata(sheet, rowNumber, sourceRange.startColumn(), field));
-                }
-                for (var field : columnDimensionFields) {
-                    var sourceRange = matrixBindingRange(field).orElseGet(() -> columnHeaders.orElse(null));
-                    if (sourceRange == null) continue;
-                    var key = bindingKey(field);
-                    raw.put(key, dimensionValue(sheet.rows(), sourceRange, column, false));
-                    putCell(metadata, key, cellMetadata(sheet, sourceRange.startRow(), column, field));
-                }
-                for (var field : measureFields) {
-                    var valueRange = matrixBindingRange(field).orElse(crossRange);
-                    if (!valueRange.contains(rowNumber, column)) continue;
-                    var key = bindingKey(field);
-                    raw.put(key, value);
-                    putCell(metadata, key, cellMetadata(sheet, rowNumber, column, field));
-                }
-                if (measureFields.stream().noneMatch(field -> raw.has(bindingKey(field)))) continue;
-                if (rowDimensionFields.isEmpty()) {
-                    raw.put(ROW_DIMENSION_KEY, rowLabel);
-                    putCell(metadata, ROW_DIMENSION_KEY, firstDimensionCell(sheet, rowHeaders, rowNumber));
-                }
-                if (columnDimensionFields.isEmpty()) {
-                    raw.put(COLUMN_DIMENSION_KEY, columnLabel);
-                    putCell(metadata, COLUMN_DIMENSION_KEY, firstDimensionCell(sheet, columnHeaders, column));
-                }
-                metadata.put("recordKey", sheet.sheetId() + ":" + componentId + ":matrix:"
-                        + rowNumber + ":" + column);
-                metadata.putObject("dimensions").put("row", rowLabel).put("column", columnLabel);
-                recordIndex++;
-                rows.add(row(raw, metadata, sheet.sheetId(), recordIndex));
-            }
-        }
-        return new Result("MATRIX", mappings, rows);
-    }
-
-    private boolean isMatrixRowDimension(
-            TemplateDataImportFacade.ImportBinding binding,
-            Optional<Range> rowHeaders,
-            Range crossRange
-    ) {
-        var code = binding.fieldCode() == null ? "" : binding.fieldCode().toUpperCase(Locale.ROOT);
-        if (code.contains("ROW_DIMENSION") || code.contains("ROW_ATTRIBUTE")) return true;
-        var sourceRange = matrixBindingRange(binding);
-        return sourceRange.isPresent() && rowHeaders.isPresent()
-                && rangesOverlap(sourceRange.get(), rowHeaders.get())
-                && !rangesOverlap(sourceRange.get(), crossRange);
-    }
-
-    private boolean isMatrixColumnDimension(
-            TemplateDataImportFacade.ImportBinding binding,
-            Optional<Range> columnHeaders,
-            Range crossRange
-    ) {
-        var code = binding.fieldCode() == null ? "" : binding.fieldCode().toUpperCase(Locale.ROOT);
-        if (code.contains("COLUMN_DIMENSION") || code.contains("COLUMN_MEMBER")) return true;
-        var sourceRange = matrixBindingRange(binding);
-        return sourceRange.isPresent() && columnHeaders.isPresent()
-                && rangesOverlap(sourceRange.get(), columnHeaders.get())
-                && !rangesOverlap(sourceRange.get(), crossRange);
-    }
-
-    private Optional<Range> matrixBindingRange(TemplateDataImportFacade.ImportBinding binding) {
-        if (binding.locator() == null || !binding.locator().isObject()) return Optional.empty();
-        for (var key : List.of("logicalInputRange", "sourceRange", "valueRange", "measureRange", "crossDataRange")) {
-            var parsed = range(binding.locator(), key);
-            if (parsed.isPresent()) return parsed;
-        }
-        return Optional.empty();
-    }
-
-    private boolean rangesOverlap(Range left, Range right) {
-        return left.startRow() <= right.endRow() && left.endRow() >= right.startRow()
-                && left.startColumn() <= right.endColumn() && left.endColumn() >= right.startColumn();
-    }
-
     private List<DataRepository.Mapping> fieldMappings(
             String sheetId,
             String componentId,
@@ -489,20 +347,6 @@ final class StructuredDataExtractor {
                     definition == null ? binding.fieldCode() : definition.displayName(), "MAP", binding.valueType(),
                     null, binding.unit(), detail, "MATCHED");
         }).toList();
-    }
-
-    private DataRepository.Mapping syntheticMapping(String sheetId, String componentId, String key,
-                                                    String fieldCode, String name, String dataPath) {
-        var detail = objectMapper.createObjectNode()
-                .put("dataPath", dataPath)
-                .put("structured", true)
-                .put("componentId", componentId)
-                .put("bindingId", key)
-                .put("syntheticDimension", true)
-                .put("identity", false)
-                .put("required", false);
-        return new DataRepository.Mapping(null, sheetId, key, name, fieldCode, name, "MAP", "TEXT",
-                null, null, detail, "MATCHED");
     }
 
     private DataRepository.Row row(ObjectNode raw, ObjectNode metadata, String sheetId, int rowNumber) {
@@ -553,45 +397,6 @@ final class StructuredDataExtractor {
         return metadata;
     }
 
-    private ObjectNode firstDimensionCell(
-            TemplateDataImportFacade.ParsedSheet sheet,
-            Optional<Range> range,
-            int coordinate
-    ) {
-        if (range.isEmpty()) return cellMetadata(sheet, coordinate, 1);
-        var value = range.get();
-        if (value.startColumn() == value.endColumn()) return cellMetadata(sheet, coordinate, value.startColumn());
-        if (value.startRow() == value.endRow()) return cellMetadata(sheet, value.startRow(), coordinate);
-        return cellMetadata(sheet, coordinate, value.startColumn());
-    }
-
-    private String dimensionValue(List<List<String>> rows, Range range, int coordinate, boolean rowDimension) {
-        if (rowDimension) {
-            var value = joinRow(rows, coordinate, range.startColumn(), range.endColumn());
-            if (!value.isBlank()) return value;
-            for (int row = coordinate - 1; row >= range.startRow(); row--) {
-                value = joinRow(rows, row, range.startColumn(), range.endColumn());
-                if (!value.isBlank()) return value;
-            }
-            return "";
-        }
-        var values = new ArrayList<String>();
-        for (int row = range.startRow(); row <= range.endRow(); row++) {
-            var value = value(rows, row, coordinate);
-            if (!value.isBlank()) values.add(value);
-        }
-        return String.join(" / ", values);
-    }
-
-    private String joinRow(List<List<String>> rows, int row, int startColumn, int endColumn) {
-        var values = new ArrayList<String>();
-        for (int column = startColumn; column <= endColumn; column++) {
-            var value = value(rows, row, column);
-            if (!value.isBlank()) values.add(value);
-        }
-        return String.join(" / ", values);
-    }
-
     private boolean aggregateRow(ObjectNode raw) {
         var fields = raw.fields();
         while (fields.hasNext()) if (aggregateLabel(fields.next().getValue().asText())) return true;
@@ -615,19 +420,6 @@ final class StructuredDataExtractor {
         var locatorSheet = binding.locator() == null ? "" : binding.locator().path("sheetId").asText(
                 binding.locator().path("sheet").asText(""));
         return locatorSheet.isBlank() || locatorSheet.equals(sheetId) || locatorSheet.equals(sheetName);
-    }
-
-    private boolean isMatrixBinding(TemplateDataImportFacade.ImportBinding binding) {
-        var kind = binding.mappingKind().toUpperCase(Locale.ROOT);
-        return kind.contains("MATRIX") || range(binding.locator(), "crossDataRange").isPresent();
-    }
-
-    private boolean isMatrixRegion(TemplateDataImportFacade.ImportBinding binding) {
-        return binding.mappingKind().toUpperCase(Locale.ROOT).contains("MATRIX_REGION");
-    }
-
-    private boolean isMatrixField(TemplateDataImportFacade.ImportBinding binding) {
-        return binding.mappingKind().toUpperCase(Locale.ROOT).contains("MATRIX_FIELD");
     }
 
     private boolean isFormBinding(TemplateDataImportFacade.ImportBinding binding) {
@@ -712,11 +504,6 @@ final class StructuredDataExtractor {
             if (parsed.isPresent()) return parsed;
         }
         return Optional.empty();
-    }
-
-    private Optional<Range> range(JsonNode locator, String key) {
-        if (locator == null || !locator.isObject()) return Optional.empty();
-        return parseRange(locator.path(key).asText(""));
     }
 
     private Optional<Range> parseRange(String text) {

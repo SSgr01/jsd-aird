@@ -2,6 +2,8 @@ package com.jsd.aird.mdm.domain.model;
 
 import java.time.Instant;
 import java.util.UUID;
+import java.util.List;
+import com.jsd.aird.shared.api.AllowedActions;
 
 public record Material(
         UUID id,
@@ -19,4 +21,7 @@ public record Material(
         Instant updatedAt,
         boolean linked
 ) {
+    public List<String> getAllowedActions() {
+        return AllowedActions.material(linked);
+    }
 }

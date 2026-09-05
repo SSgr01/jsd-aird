@@ -1,11 +1,13 @@
 import {
   ArrowLeftOutlined,
   CheckCircleOutlined,
+  DeleteOutlined,
   DownOutlined,
   LoadingOutlined,
   PlusOutlined,
   SaveOutlined,
   SendOutlined,
+  StopOutlined,
 } from '@ant-design/icons';
 import {
   Alert,
@@ -36,7 +38,6 @@ import { getAtPath, setAtPath } from '@/features/template-workspace/path-utils';
 import {
   buildRepeatDisplay,
   displayCellValue,
-  isMeaningfulValue,
   type RepeatDisplayColumn,
 } from '@/features/template-workspace/repeat-data';
 import { synchronizeStructuredData } from '@/features/template-workspace/structured-data';
@@ -88,7 +89,7 @@ export function ProductionWorkspacePage() {
   const [confirmingIngest, setConfirmingIngest] = useState(false);
   const [expandedRepeatIds, setExpandedRepeatIds] = useState<Record<string, boolean>>({});
   const [customForm] = Form.useForm<{
-    kind: 'SCALAR' | 'REPEAT_FIELD' | 'MATRIX_FIELD';
+    kind: 'SCALAR' | 'REPEAT_FIELD';
     parentFieldId?: string;
     name: string;
     valueType: string;
@@ -159,18 +160,6 @@ export function ProductionWorkspacePage() {
       }),
     };
   }, [data, expandedRepeatIds, fieldModel, selected, selectedField, workspace]);
-  const selectedMatrix = useMemo(() => {
-    if (!workspace || !fieldModel || !selected || !selectedField) return undefined;
-    if (selectedField.kind !== 'MATRIX' && !['MATRIX_REGION', 'MATRIX_FIELD'].includes(selected.mappingKind || '')) {
-      return undefined;
-    }
-    const parentField = findMatrixParentField(selectedField, selected, fieldModel.fields);
-    if (!parentField) return undefined;
-    const parentBinding = workspace.mapping.find((binding) => binding.bindingId === parentField.bindingId);
-    if (!parentBinding) return undefined;
-    return { parentField, parentBinding };
-  }, [fieldModel, selected, selectedField, workspace]);
-
   const onEditorValue = useCallback((binding: TemplateBinding, value: unknown) => {
     if (value === undefined || structuralParentIds.has(binding.bindingId)) return;
     setData((current) => {
@@ -302,6 +291,27 @@ export function ProductionWorkspacePage() {
     });
   };
 
+  const removeOrCancel = () => {
+    if (!workspace || !orderId) return;
+    const canDelete = workspace.allowedActions?.includes('DELETE');
+    const canCancel = workspace.allowedActions?.includes('CANCEL');
+    if (!canDelete && !canCancel) return;
+    const action = canCancel ? 'CANCEL' : 'DELETE';
+    modal.confirm({
+      title: action === 'CANCEL' ? '确认取消生产单？' : '确认删除生产单？',
+      content: action === 'CANCEL' ? '取消后将保留业务记录，不能继续提交。' : '仅删除未发布且未产生引用的生产单。',
+      okText: action === 'CANCEL' ? '确认取消' : '确认删除',
+      okButtonProps: { danger: true },
+      cancelText: '返回',
+      onOk: async () => {
+        if (action === 'CANCEL') await productionOrderApi.cancel(orderId);
+        else await productionOrderApi.delete(orderId);
+        void message.success(action === 'CANCEL' ? '生产单已取消' : '生产单已删除');
+        navigate('/production-orders/list');
+      },
+    });
+  };
+
   const handleStructureChange = useCallback((operation: WorkbookStructureOperation) => {
     if (!workspace || !fieldModel) return;
     const migrated = migrateWorkspaceStructure(workspace.mapping, fieldModel, operation);
@@ -312,17 +322,6 @@ export function ProductionWorkspacePage() {
     });
     setDirty(true);
   }, [fieldModel, workspace]);
-
-  const appendMatrixMember = async () => {
-    if (!selected || selected.mappingKind !== 'MATRIX_REGION') return;
-    try {
-      await editorRef.current?.appendRepeatRecord?.(selected);
-      setDirty(true);
-      void message.success('已新增矩阵成员位置，请填写成员名称和数据');
-    } catch (reason) {
-      void message.error(reason instanceof Error ? reason.message : '矩阵成员新增失败');
-    }
-  };
 
   const confirmIngest = async () => {
     if (!workspace || !orderId || !ingestJob) return;
@@ -431,11 +430,6 @@ export function ProductionWorkspacePage() {
           >
             新增自定义字段
           </Button>
-          {selected?.mappingKind === 'MATRIX_REGION' && <Button
-            icon={<PlusOutlined />}
-            disabled={!editable}
-            onClick={() => void appendMatrixMember()}
-          >新增矩阵成员</Button>}
           <Dropdown
             menu={{
               items: [
@@ -450,6 +444,7 @@ export function ProductionWorkspacePage() {
           </Dropdown>
           <Button icon={<SaveOutlined />} disabled={!editable || !dirty} loading={saving} onClick={() => void save()}>保存</Button>
           <Button type="primary" icon={<SendOutlined />} disabled={!editable || workspace.reconciliationRequired} onClick={submit}>提交生产单</Button>
+          {workspace.allowedActions?.includes('CANCEL') || workspace.allowedActions?.includes('DELETE') ? <Button danger icon={workspace.allowedActions.includes('CANCEL') ? <StopOutlined /> : <DeleteOutlined />} onClick={removeOrCancel}>{workspace.allowedActions.includes('CANCEL') ? '取消生产单' : '删除生产单'}</Button> : null}
         </Space>
       </header>
 
@@ -538,7 +533,7 @@ export function ProductionWorkspacePage() {
           {selected && selectedField ? (
            <div className="field-editor">
               <label htmlFor="production-field-value">
-                {selectedRepeat?.parentField.name || selectedMatrix?.parentField.name || selectedField.name}
+                {selectedRepeat?.parentField.name || selectedField.name}
               </label>
               {selectedRepeat ? (
                 <RepeatPreview
@@ -566,12 +561,6 @@ export function ProductionWorkspacePage() {
                       void message.error(reason instanceof Error ? reason.message : '内容未能写入模板');
                     });
                   }}
-                />
-              ) : selectedMatrix ? (
-                <MatrixPreview
-                  value={getAtPath(data, selectedMatrix.parentBinding.dataPath)}
-                  binding={selectedMatrix.parentBinding}
-                  onFocus={() => editorRef.current?.focusBinding(selectedMatrix.parentBinding)}
                 />
               ) : (
                 <Alert
@@ -608,9 +597,7 @@ export function ProductionWorkspacePage() {
             {({ getFieldValue }) => getFieldValue('kind') !== 'SCALAR' ? (
               <Form.Item name="parentFieldId" label="所属结构区域" rules={[{ required: true }]}>
                 <Select options={fieldModel.fields
-                  .filter((field) => getFieldValue('kind') === 'REPEAT_FIELD'
-                    ? ['ROW_TABLE', 'COLUMN_TABLE'].includes(field.kind)
-                    : field.kind === 'MATRIX')
+                  .filter((field) => ['ROW_TABLE', 'COLUMN_TABLE'].includes(field.kind))
                   .map((field) => ({ value: field.id, label: field.name }))} />
               </Form.Item>
             ) : null}
@@ -664,7 +651,7 @@ export function ProductionWorkspacePage() {
               message={`${ingestJob.sourceType === 'XLSX' ? 'Excel' : '照片'}已抽取 ${ingestJob.items.length} 个值`}
               description={ingestJob.matchMode === 'EXACT_MANIFEST'
                 ? '已通过隐藏模板清单精确匹配，全程未调用 AI。'
-                : '请核对低置信度内容和明细、矩阵记录，确认后只更新当前生产单。'}
+                : '请核对低置信度内容和明细记录，确认后只更新当前生产单。'}
             />
             {ingestJob.result?.requiresTemplateSelection
               && (ingestJob.result.templateCandidates?.length ?? 0) > 0 && <div>
@@ -737,19 +724,6 @@ function findRepeatParentField(
   return undefined;
 }
 
-function findMatrixParentField(
-  field: BusinessField,
-  binding: TemplateBinding,
-  fields: BusinessField[],
-) {
-  if (field.parentFieldId) return fields.find((item) => item.id === field.parentFieldId);
-  if (field.kind === 'MATRIX' || binding.mappingKind === 'MATRIX_REGION') return field;
-  if (binding.parentBindingId) {
-    return fields.find((item) => item.bindingId === binding.parentBindingId);
-  }
-  return undefined;
-}
-
 function repeatColumns(
   parentField: BusinessField,
   fields: BusinessField[],
@@ -802,12 +776,6 @@ function fieldSummary(
       maxRows: Number.isFinite(maxRows) && maxRows > 0 ? maxRows : undefined,
     });
     return model.totalRows ? `已填 ${model.filledRows}/${model.totalRows} 行` : '待填写';
-  }
-  if (field.kind === 'MATRIX' || binding.mappingKind === 'MATRIX_REGION') {
-    const values = matrixValues(getAtPath(data, binding.dataPath));
-    const filled = values.flat().filter(isMeaningfulValue).length;
-    const total = values.reduce((count, row) => count + row.length, 0);
-    return total ? `已填 ${filled}/${total} 格` : '待填写';
   }
   return formatValue(getAtPath(data, binding.dataPath)) || '待填写';
 }
@@ -880,82 +848,6 @@ function RepeatPreview({
       />
     </div>
   );
-}
-
-function MatrixPreview({
-  value,
-  binding,
-  onFocus,
-}: {
-  value: unknown;
-  binding: TemplateBinding;
-  onFocus: () => void;
-}) {
-  const rows = matrixValues(value);
-  const columnSlots = slotLabels(binding.locator.columnSlots);
-  const rowSlots = slotLabels(binding.locator.rowSlots);
-  const width = Math.max(rows.reduce((max, row) => Math.max(max, row.length), 0), columnSlots.length);
-  const filled = rows.flat().filter(isMeaningfulValue).length;
-  const total = rows.reduce((count, row) => count + row.length, 0);
-  const columns = [
-    {
-      title: '行',
-      dataIndex: 'rowIndex',
-      width: 52,
-      render: (index: number) => rowSlots[index - 1] || index,
-    },
-    ...Array.from({ length: width }, (_, index) => ({
-      title: columnSlots[index] || `列 ${index + 1}`,
-      dataIndex: `column-${index}`,
-      render: (_value: unknown, row: { values: unknown[] }) => displayCellValue(row.values[index]),
-    })),
-  ];
-  const dataSource = rows.map((row, index) => ({
-    key: String(index),
-    rowIndex: index + 1,
-    values: row,
-  }));
-
-  return (
-    <div className="structured-field-preview">
-      <div className="structured-field-toolbar">
-        <Typography.Text type="secondary">已填 {filled}/{total || 0} 格</Typography.Text>
-        <Button type="link" size="small" onClick={onFocus}>定位 Excel</Button>
-      </div>
-      <Table
-        size="small"
-        rowKey="key"
-        pagination={false}
-        dataSource={dataSource}
-        columns={columns}
-        locale={{ emptyText: '暂无矩阵数据' }}
-        scroll={{ x: 'max-content', y: 300 }}
-      />
-    </div>
-  );
-}
-
-function matrixValues(value: unknown): unknown[][] {
-  if (!Array.isArray(value)) return [];
-  return (value as unknown[]).map((row: unknown): unknown[] => {
-    if (Array.isArray(row)) return row.map((item: unknown) => item);
-    if (isRecord(row) && Array.isArray(row.value)) {
-      return row.value.map((item: unknown) => item);
-    }
-    return [row];
-  });
-}
-
-function slotLabels(value: unknown) {
-  if (!Array.isArray(value)) return [];
-  return value.map((slot) => {
-    if (!isRecord(slot)) return '';
-    return stringValue(slot.label) || stringValue(slot.name) || stringValue(slot.code);
-  });
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 function snapshotVersion(snapshot: Record<string, unknown>, fallback: number) {

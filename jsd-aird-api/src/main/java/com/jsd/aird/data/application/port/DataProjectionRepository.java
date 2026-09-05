@@ -17,8 +17,6 @@ public interface DataProjectionRepository {
 
     Optional<TrainingDataset> findDataset(UUID organizationId, UUID datasetId);
 
-    List<LongTableRow> previewRows(UUID organizationId, UUID importJobId, int limit);
-
     void retireDatasets(UUID organizationId, UUID importJobId, UUID exceptDatasetId);
 
     void updateDatasetStatus(UUID organizationId, UUID datasetId, String status, UUID actorId);
@@ -29,6 +27,4 @@ public interface DataProjectionRepository {
                            String name, String status, JsonNode schema, JsonNode qualitySummary,
                            JsonNode sourceRecordIds, int recordCount, int eligibleRecordCount) {}
 
-    record LongTableRow(String recordKey, JsonNode dimensions, JsonNode measures, JsonNode source,
-                        boolean trainingEligible, String exclusionReason) {}
 }

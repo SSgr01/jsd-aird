@@ -66,10 +66,6 @@ final class WorkbookPhysicalFactsBuilder {
         summary.set("rowProfiles", rowProfiles);
         summary.set("columnProfiles", columnProfiles);
         summary.set("structureHints", structureHints(summary));
-        // Kept as an empty compatibility field so old readers fail closed
-        // instead of treating physical components as business regions.
-        summary.set("regions", objectMapper.createArrayNode());
-        summary.put("regionCount", 0);
     }
 
     private ArrayNode semanticCells(ObjectNode sheet, List<CellFact> cells) {

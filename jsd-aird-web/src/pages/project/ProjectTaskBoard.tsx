@@ -1,4 +1,5 @@
-import { Button, DatePicker, Empty, Form, Input, Modal, Select, Table, Tag, message } from 'antd';
+import { Button, DatePicker, Empty, Form, Input, Modal, Select, Table, Tag, message, Popconfirm } from 'antd';
+import { DeleteOutlined } from '@ant-design/icons';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import dayjs from '@/utils/dayjs';
@@ -6,7 +7,7 @@ import { createExperiment, listExperiments, type ExperimentSummary } from '@/ser
 import { templateApi } from '@/services/templates/template-api';
 import type { TemplateListItem } from '@/features/template-workspace/types';
 import {
-  createProjectTask, getProjectStages, getProjectTask, getStageTasks,
+  createProjectTask, deleteProjectTask, getProjectStages, getProjectTask, getStageTasks,
   updateProjectTask,
   type ProjectStage, type ProjectTask,
 } from '@/services/project/project-api';
@@ -207,10 +208,16 @@ export function ProjectTaskBoard({ projectId, stage }: { projectId: string; stag
     } finally { setTaskSaving(false); }
   };
 
+  const removeTask = async (task: ProjectTask) => {
+    if (!task.allowedActions?.includes('DELETE')) return;
+    try { await deleteProjectTask(task.id, task.version); messageApi.success('任务已删除'); await load(); }
+    catch (reason) { messageApi.error(reason instanceof Error ? reason.message : '任务删除失败'); }
+  };
+
   return <div className="pm-stage-work">
     {holder}
     <div className="pm-stage-work-head"><div><b>{stage.name}任务</b><small>项目 &gt; {stage.name} &gt; {tasks.length}个任务 &gt; {totalExperiments}个实验</small></div><Button type="primary" onClick={openNewTask}>＋ 新增任务</Button></div>
-    <div className="pm-task-cards">{tasks.map((task) => <button key={task.id} ref={task.id === focusedTaskId ? focusedTaskRef : undefined} className={`${selected?.id === task.id ? 'active' : ''}${task.id === focusedTaskId ? ' pm-task-focused' : ''}`} onClick={() => setSelected(task)}><div className="pm-task-card-head"><b title={task.name}>{task.name}</b><span className="pm-task-card-edit" onClick={(e) => { e.stopPropagation(); void openEditTask(task.id); }}>编辑</span></div><div className="pm-task-card-body"><span>{task.owner || '未设置'}</span><Tag>{task.experimentCount}实验</Tag></div><div className="pm-task-card-status"><span className={`pm-dot pm-dot-${task.status.toLowerCase()}`} />{formatTaskStatus(task.status)}</div></button>)}</div>
+    <div className="pm-task-cards">{tasks.map((task) => <button key={task.id} ref={task.id === focusedTaskId ? focusedTaskRef : undefined} className={`${selected?.id === task.id ? 'active' : ''}${task.id === focusedTaskId ? ' pm-task-focused' : ''}`} onClick={() => setSelected(task)}><div className="pm-task-card-head"><b title={task.name}>{task.name}</b><span className="pm-task-card-edit" onClick={(e) => { e.stopPropagation(); void openEditTask(task.id); }}>编辑</span>{task.allowedActions?.includes('DELETE') ? <Popconfirm title="确认删除该任务？" onConfirm={() => void removeTask(task)}><DeleteOutlined onClick={(e) => e.stopPropagation()} style={{ color: '#ff4d4f', marginLeft: 8 }} /></Popconfirm> : null}</div><div className="pm-task-card-body"><span>{task.owner || '未设置'}</span><Tag>{task.experimentCount}实验</Tag></div><div className="pm-task-card-status"><span className={`pm-dot pm-dot-${task.status.toLowerCase()}`} />{formatTaskStatus(task.status)}</div></button>)}</div>
     {selected ? <><div className="pm-stage-work-head"><b>当前任务：{selected.name}</b><Button type="primary" onClick={showExperiment}>＋ 新增实验</Button></div><Table rowKey="id" pagination={false} dataSource={experiments} columns={[{ title: '实验编号', dataIndex: 'experimentNo' }, { title: '实验名称', dataIndex: 'title' }, { title: '日期', dataIndex: 'experimentDate' }, { title: '负责人', dataIndex: 'ownerName' }, { title: '状态', dataIndex: 'status', render: (status: string) => formatExperimentStatus(status) }, { title: '操作', key: 'action', render: (_, experiment) => <Button type="link" size="small" onClick={() => nav(`/experiments/${experiment.id}`, { state: { returnTo: `${location.pathname}${location.search}` } })}>查看</Button> }]} /></> : <Empty description="当前阶段暂无任务" />}
 
     <Modal rootClassName="eln-create-modal" width={598} centered title="新增实验" open={open} closable

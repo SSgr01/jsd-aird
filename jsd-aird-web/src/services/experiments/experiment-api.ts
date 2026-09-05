@@ -24,6 +24,7 @@ export interface ExperimentSummary {
   versionNo: number;
   revision: number;
   updatedAt: string;
+  allowedActions?: string[];
 }
 export interface ExperimentSourceRef extends Record<string, unknown> {
   sourceType?: string;
@@ -105,6 +106,7 @@ export interface Category {
   description: string;
   active: boolean;
   revision: number;
+  allowedActions?: string[];
 }
 const data = <T>(r: { data: ApiResponse<T> }) => r.data.data;
 export async function listExperiments(params: Record<string, unknown>) {
@@ -255,6 +257,7 @@ export interface ExperimentImportJob {
   taskName?: string;
   visibility?: 'ALL' | 'QUALITY' | 'PROJECT';
   createdAt: string;
+  allowedActions?: string[];
 }
 export async function listExperimentImports() {
   return data(

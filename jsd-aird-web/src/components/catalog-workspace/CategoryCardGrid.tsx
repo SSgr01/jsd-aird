@@ -10,6 +10,7 @@ export interface CatalogCategoryCard {
   icon?: ReactNode;
   tone?: 'blue' | 'green' | 'violet' | 'orange' | 'teal';
   editable?: boolean;
+  allowedActions?: string[];
 }
 
 interface CategoryCardGridProps {
@@ -53,10 +54,10 @@ export function CategoryCardGrid({ categories, activeId, addLabel = '新增分�
               <Typography.Text strong>{category.count}</Typography.Text><Typography.Text type="secondary"> {countLabel}</Typography.Text>
             </div>
           </div>
-          {category.editable && (onRename || onDelete) && (
+          {category.editable && (onRename || (onDelete && category.allowedActions?.includes('DELETE'))) && (
             <Space className="catalog-category-actions" size={2}>
               {onRename && <Button type="text" size="small" icon={<EditOutlined />} aria-label={`重命名${category.name}`} onClick={() => onRename(category)} />}
-              {onDelete && <Button type="text" danger size="small" icon={<DeleteOutlined />} aria-label={`删除${category.name}`} onClick={() => onDelete(category)} />}
+              {onDelete && category.allowedActions?.includes('DELETE') && <Button type="text" danger size="small" icon={<DeleteOutlined />} aria-label={`删除${category.name}`} onClick={() => onDelete(category)} />}
             </Space>
           )}
         </Card>

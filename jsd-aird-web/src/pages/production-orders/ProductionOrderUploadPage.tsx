@@ -364,7 +364,7 @@ export function ProductionOrderUploadPage() {
         >
           下载
         </Button>
-        {canDelete && (
+        {canDelete && upload.allowedActions?.includes('DELETE') && (
           <Button
             type="link"
             danger

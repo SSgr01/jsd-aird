@@ -3,6 +3,7 @@ package com.jsd.aird.data.application.port;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import com.jsd.aird.shared.api.AllowedActions;
 
 public interface DataCategoryRepository {
 
@@ -17,5 +18,8 @@ public interface DataCategoryRepository {
     void delete(UUID organizationId, UUID categoryId, UUID replacementCategoryId);
 
     record Category(UUID id, String name, String description, int sortOrder, long sourceCount) {
+        public List<String> getAllowedActions() {
+            return AllowedActions.category(false);
+        }
     }
 }

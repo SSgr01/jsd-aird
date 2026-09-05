@@ -66,7 +66,7 @@ export function DataViewPage() {
 
   const cards = useMemo<CatalogCategoryCard[]>(() => [
     { id: 'ALL', name: '全部来源文件', count: allSourceCount, description: '按上传文件和导入批次查看', icon: <DatabaseOutlined />, tone: 'blue' },
-    ...categories.map((item) => ({ id: item.id, name: item.name, count: item.sourceCount, description: item.description, icon: <DatabaseOutlined />, tone: 'blue' as const, editable: true })),
+    ...categories.map((item) => ({ id: item.id, name: item.name, count: item.sourceCount, description: item.description, icon: <DatabaseOutlined />, tone: 'blue' as const, editable: true, allowedActions: item.allowedActions })),
   ], [allSourceCount, categories]);
 
   const resolveFile = (item: DataSourceFile): FilePreviewDescriptor => ({ fileName: item.originalName, load: () => dataApi.sourceBlob(item.fileObjectId), downloadUrl: `/api/v1/files/${encodeURIComponent(item.fileObjectId)}/content` });
@@ -113,7 +113,7 @@ export function DataViewPage() {
       onSelect={(id) => { setCategoryId(id); setPage((value) => ({ ...value, current: 1 })); }}
       onCreate={canUpdate ? () => setEditor({ mode: 'NEW' }) : undefined}
       onRename={canUpdate ? (item) => setEditor({ mode: 'EDIT', item: categories.find((candidate) => candidate.id === item.id) }) : undefined}
-      onDelete={canUpdate ? (item) => setDeleteItem(categories.find((candidate) => candidate.id === item.id)) : undefined} />
+      onDelete={canUpdate ? (item) => { const category = categories.find((candidate) => candidate.id === item.id); if (category?.allowedActions?.includes('DELETE')) setDeleteItem(category); } : undefined} />
     <div className="catalog-sync-note"><ReloadOutlined /> 列表按来源文件聚合；一个 Excel/CSV 只显示一条导入批次记录。</div>
     <CatalogListPanel title={cards.find((item) => item.id === categoryId)?.name || '来源文件'} count={page.total}
       filters={<Space wrap><Input.Search allowClear placeholder="搜索来源文件名" value={keyword} onChange={(event) => { setKeyword(event.target.value); setPage((value) => ({ ...value, current: 1 })); }} onSearch={() => void load()} /><Select allowClear showSearch optionFilterProp="label" placeholder="全部项目" value={projectId} onChange={(value) => { setProjectId(value); setPage((current) => ({ ...current, current: 1 })); }} options={projects.map((project) => ({ value: project.id, label: `${project.projectCode} · ${project.name}` }))} /><Select allowClear placeholder="全部状态" value={status} onChange={(value) => { setStatus(value); setPage((value) => ({ ...value, current: 1 })); }} options={Object.entries(statusLabels).map(([value, item]) => ({ value, label: item[0] }))} /><Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button></Space>}

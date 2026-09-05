@@ -130,80 +130,6 @@ class StructuredDataExtractorTest {
     }
 
     @Test
-    void pivotsMatrixCellsWithRowAndColumnDimensions() {
-        var sheet = sheet("matrix", List.of(
-                List.of("地区", "2024", "2025", "合计"),
-                List.of("华东", "10", "20", "30"),
-                List.of("华南", "11", "21", "32"),
-                List.of("合计", "21", "41", "62")));
-        var regionLocator = mapper.createObjectNode()
-                .put("sheetId", "matrix")
-                .put("rowHeaderRange", "A2:A4")
-                .put("columnHeaderRange", "B1:D1")
-                .put("crossDataRange", "B2:D4");
-        var fieldLocator = mapper.createObjectNode().put("crossDataRange", "B2:C3");
-        var fields = List.of(
-                new TemplateDataImportFacade.ImportBinding("region", "", "", "MATRIX_REGION", "", "",
-                        1, 1, 1, mapper.createObjectNode(), regionLocator, false, false, true, "INPUT", "TEXT", ""),
-                new TemplateDataImportFacade.ImportBinding("metric", "metric.value", "/metric/value", "MATRIX_FIELD",
-                        "region", "", 1, 1, 1, mapper.createObjectNode(), fieldLocator, false, false, true,
-                        "INPUT", "NUMBER", ""));
-
-        var result = extractor.extract(sheet, definitions("metric.value"), fields, 2, 4).orElseThrow();
-
-        assertThat(result.shape()).isEqualTo("MATRIX");
-        assertThat(result.rows()).hasSize(4);
-        assertThat(result.rows()).allMatch(row -> row.rawValues().has("__dimension_row")
-                && row.rawValues().has("__dimension_column"));
-        assertThat(result.rows().get(0).sourceMetadata().path("dimensions").path("row").asText())
-                .isEqualTo("华东");
-        assertThat(result.rows().get(0).sourceMetadata().path("dimensions").path("column").asText())
-                .isEqualTo("2024");
-        assertThat(result.rows().get(0).sourceMetadata().path("cells").path("b_metric")
-                .path("cellAddress").asText()).isEqualTo("B2");
-        assertThat(result.mappings()).extracting(DataRepository.Mapping::fieldCode)
-                .contains("metric.value", "DATA.DIMENSION.ROW", "DATA.DIMENSION.COLUMN");
-    }
-
-    @Test
-    void createsOneMatrixRecordPerIntersectionAndReadsDeclaredRowDimensionFromItsOwnRange() {
-        var sheet = sheet("matrix", List.of(
-                List.of("温度", "1 min", "3 min"),
-                List.of("25℃", "12.4", "18.7"),
-                List.of("50℃", "16.8", "25.1")));
-        var regionLocator = mapper.createObjectNode()
-                .put("sheetId", "matrix")
-                .put("rowHeaderRange", "A2:A3")
-                .put("columnHeaderRange", "B1:C1")
-                .put("crossDataRange", "B2:C3");
-        var rowLocator = regionLocator.deepCopy().put("sourceRange", "A2:A3")
-                .put("logicalInputRange", "A2:A3");
-        var measureLocator = regionLocator.deepCopy().put("sourceRange", "B2:C3")
-                .put("logicalInputRange", "B2:C3");
-        var fields = List.of(
-                new TemplateDataImportFacade.ImportBinding("region", "", "", "MATRIX_REGION", "", "",
-                        1, 1, 1, mapper.createObjectNode(), regionLocator, false, false, true, "INPUT", "TEXT", ""),
-                new TemplateDataImportFacade.ImportBinding("row", "MATRIX.ROW_DIMENSION.temperature",
-                        "/records/*/temperature", "MATRIX_FIELD", "region", "ROW", 1, 1, 1,
-                        mapper.createObjectNode(), rowLocator, false, false, true, "INPUT", "TEXT", ""),
-                new TemplateDataImportFacade.ImportBinding("metric", "MATRIX.MEASURE.value",
-                        "/records/*/value", "MATRIX_FIELD", "region", "ROW", 1, 1, 1,
-                        mapper.createObjectNode(), measureLocator, false, false, true, "INPUT", "NUMBER", ""));
-
-        var result = extractor.extract(sheet,
-                definitions("MATRIX.ROW_DIMENSION.temperature", "MATRIX.MEASURE.value"), fields, 2, 3)
-                .orElseThrow();
-
-        assertThat(result.rows()).hasSize(4);
-        assertThat(result.rows().getFirst().rawValues().path("b_row").asText()).isEqualTo("25℃");
-        assertThat(result.rows().getFirst().rawValues().path("b_metric").asText()).isEqualTo("12.4");
-        assertThat(result.rows()).allMatch(row -> !row.rawValues().has("__dimension_row"));
-        assertThat(result.rows()).allMatch(row -> row.rawValues().has("__dimension_column"));
-        assertThat(result.rows()).extracting(row -> row.sourceMetadata().path("recordKey").asText())
-                .doesNotHaveDuplicates();
-    }
-
-    @Test
     void readsFormRegionAndCarriesBasicInfoIntoDetailRecords() {
         var sheet = sheet("mixed", List.of(
                 List.of("基本信息", "M-01", ""),
@@ -231,55 +157,6 @@ class StructuredDataExtractorTest {
         assertThat(result.rows()).allMatch(row -> row.rawValues().path("b_formcode").asText().equals("M-01"));
         assertThat(result.rows().get(1).sourceMetadata().path("cells").path("b_formcode")
                 .path("cellAddress").asText()).isEqualTo("B1");
-    }
-
-    @Test
-    void extractsMultipleComponentsOnOneSheetWithoutMappingOrRecordCollisions() {
-        var sheet = sheet("mixed-components", List.of(
-                List.of("产品名称", "UV 树脂", "", ""),
-                List.of("", "", "", ""),
-                List.of("原料", "用量", "", ""),
-                List.of("树脂", "50", "", ""),
-                List.of("光引发剂", "3", "", ""),
-                List.of("", "", "", ""),
-                List.of("温度", "1 min", "5 min", ""),
-                List.of("25℃", "10", "18", ""),
-                List.of("50℃", "15", "26", "")));
-        var basicLocator = mapper.createObjectNode().put("sheetId", "mixed-components")
-                .put("componentId", "basic").put("address", "A1:B1");
-        var basic = new TemplateDataImportFacade.ImportBinding("basic", "", "", "FORM_REGION",
-                "", "", 1, 1, 1, mapper.createObjectNode(), basicLocator,
-                false, false, true, "INPUT", "OBJECT", "");
-        var nameLocator = mapper.createObjectNode().put("sheetId", "mixed-components")
-                .put("componentId", "basic").put("valueRange", "B1");
-        var name = new TemplateDataImportFacade.ImportBinding("product-name", "product.name", "/product/name",
-                "SCALAR", "basic", "", 1, 1, 1, mapper.createObjectNode(), nameLocator,
-                false, true, true, "INPUT", "TEXT", "");
-
-        var detailRegion = regionBinding("detail", "ROW_TABLE", "A4:B5", "ROW");
-        var material = componentField("detail", "material", "formula.material", "A4:A5", "ROW");
-        var amount = componentField("detail", "amount", "formula.amount", "B4:B5", "ROW");
-
-        var matrixLocator = mapper.createObjectNode().put("sheetId", "mixed-components")
-                .put("componentId", "matrix").put("rowHeaderRange", "A8:A9")
-                .put("columnHeaderRange", "B7:C7").put("crossDataRange", "B8:C9");
-        var matrix = new TemplateDataImportFacade.ImportBinding("matrix", "", "", "MATRIX_REGION",
-                "", "", 1, 1, 1, mapper.createObjectNode(), matrixLocator,
-                false, false, true, "INPUT", "OBJECT", "");
-        var resultValue = new TemplateDataImportFacade.ImportBinding("result", "test.result", "/test/result",
-                "MATRIX_FIELD", "matrix", "", 1, 1, 1, mapper.createObjectNode(), matrixLocator,
-                false, false, true, "INPUT", "NUMBER", "");
-
-        var result = extractor.extract(sheet, definitions("product.name", "formula.material", "formula.amount", "test.result"),
-                List.of(basic, name, detailRegion, material, amount, matrix, resultValue), 1, 9).orElseThrow();
-
-        assertThat(result.shape()).isEqualTo("MULTI_COMPONENT");
-        assertThat(result.rows()).hasSize(6);
-        assertThat(result.rows()).extracting(row -> row.sourceMetadata().path("componentId").asText())
-                .containsOnly("detail", "matrix");
-        assertThat(result.mappings()).extracting(item -> item.detail().path("componentId").asText())
-                .contains("detail", "matrix").doesNotContain("basic");
-        assertThat(result.rows()).extracting(DataRepository.Row::rowNumber).contains(1, 2, 3, 4);
     }
 
     @Test

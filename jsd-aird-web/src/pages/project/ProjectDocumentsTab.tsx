@@ -199,14 +199,7 @@ export default function ProjectDocumentsTab({
           >
             下载
           </Button>
-          <Button
-            size="small"
-            type="link"
-            danger
-            onClick={() => removeDocument(doc)}
-          >
-            删除
-          </Button>
+          {doc.allowedActions?.includes('DELETE') ? <Button size="small" type="link" danger onClick={() => removeDocument(doc)}>删除</Button> : null}
         </Space>
       ),
     },

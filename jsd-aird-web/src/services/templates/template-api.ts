@@ -11,12 +11,8 @@ import type {
   ValueSource,
   WorkbookStructureOperation,
   MappingKind,
-  MatrixColumnSlot,
-  MatrixModel,
-  MatrixRecordProjection,
   RepeatAxis,
   StaticRegion,
-  LongTableModel,
   DocumentStructure,
   TemplateBinding,
 } from '@/features/template-workspace/types';
@@ -35,6 +31,7 @@ export interface TemplateCategory {
   description?: string;
   sortOrder: number;
   templateCount: number;
+  allowedActions?: string[];
 }
 
 export interface TemplateVersionReview {
@@ -178,6 +175,7 @@ export interface TemplateImportJob {
   sourceSha256?: string;
   duplicateOverride: boolean;
   duplicateSourceJobId?: string;
+  allowedActions?: string[];
 }
 
 export type RecognitionDecision = 'PENDING' | 'ACCEPTED' | 'REJECTED';
@@ -210,14 +208,18 @@ export interface RecognitionSuggestionPayload {
   locatorType?:
     | 'CELL_RANGE'
     | 'TABLE_REGION'
-    | 'MATRIX_REGION'
     | 'INLINE_TEXT'
     | 'MERGED_VALUE'
     | 'VERTICAL_LABEL_VALUE'
     | 'HORIZONTAL_LABEL_VALUE'
-    | 'TEXT_QUOTE';
+    | 'TEXT_QUOTE'
+    | 'DOCX_TABLE_CELL'
+    | 'DOCX_TABLE_REGION'
+    | 'DOCX_CONTENT_CONTROL'
+    | 'DOCX_MODEL'
+    | 'DOCX_TEXT_LABEL';
   locator: Record<string, unknown>;
-  kind?: 'SCALAR' | 'ROW_TABLE' | 'COLUMN_TABLE' | 'MATRIX' | 'FREE_TEXT';
+  kind?: 'SCALAR' | 'FORM_REGION' | 'ROW_TABLE' | 'COLUMN_TABLE';
   groupName?: string;
   unit?: string;
   interpretation?: string;
@@ -316,10 +318,6 @@ export interface RecognitionSuggestionPayload {
     reviewRequired?: boolean;
   }>;
   tableModel?: Record<string, unknown>;
-  matrixModel?: MatrixModel;
-  recordProjection?: MatrixRecordProjection;
-  columnSlots?: MatrixColumnSlot[];
-  longTableModel?: LongTableModel;
   structureAlternatives?: Array<{
     alternativeId?: string;
     suggestionId?: string;
@@ -341,12 +339,6 @@ export interface RecognitionSuggestionPayload {
   hasIndependentChildren?: boolean;
   reason?: string;
 }
-
-export type {
-  LongTableModel,
-  LongTableRecord,
-  MatrixModel,
-} from '@/features/template-workspace/types';
 
 export interface RecognitionSuggestion {
   id: string;
@@ -412,7 +404,7 @@ export interface RecognitionReviewItem {
   fieldName: string;
   description: string;
   groupName: string;
-  kind: 'SCALAR' | 'FORM_REGION' | 'ROW_TABLE' | 'COLUMN_TABLE' | 'MATRIX' | 'TABLE_REGION' | 'FREE_TEXT';
+  kind: 'SCALAR' | 'FORM_REGION' | 'ROW_TABLE' | 'COLUMN_TABLE';
   valueType: string;
   sheetId: string;
   sheetName: string;
@@ -440,16 +432,10 @@ export interface RecognitionRegionAlternative {
     recordAxis?: string;
     headerRange?: string;
     dataRange?: string;
-    rowHeaderRange?: string;
-    columnHeaderRange?: string;
-    crossDataRange?: string;
   }>;
   recordAxis?: string;
   headerRange?: string;
   dataRange?: string;
-  rowHeaderRange?: string;
-  columnHeaderRange?: string;
-  crossDataRange?: string;
 }
 
 export interface RecognitionRegionNode {
@@ -467,21 +453,6 @@ export interface RecognitionRegionNode {
   reviewRequired?: boolean;
   alternatives: RecognitionRegionAlternative[];
   fields: Array<RecognitionReviewItem & { attributes?: Record<string, unknown> }>;
-  runtimeSlots: MatrixColumnSlot[];
-  recordSlots?: Array<{
-    slotId: string;
-    recordKey?: string;
-    order?: number;
-    range: string;
-    identityAddress?: string;
-    templateStatus?: string;
-    role?: string;
-  }>;
-  staticContents?: Array<{
-    address?: string;
-    text?: string;
-    role?: string;
-  }>;
   structures?: Record<string, unknown>;
   auditSuggestions: RecognitionReviewItem[];
 }
@@ -493,7 +464,6 @@ export interface RecognitionReviewStatistics {
   fieldCount: number;
   pendingFieldCount: number;
   auditSuggestionCount: number;
-  runtimeSlotCount: number;
 }
 
 export interface RecognitionReview {
@@ -508,7 +478,7 @@ export interface RecognitionReview {
     ignored: number;
     scalar: number;
     rowTable: number;
-    matrix: number;
+    columnTable: number;
     qualityIssueCount: number;
     autoFixedCount: number;
     blockingIssueCount: number;

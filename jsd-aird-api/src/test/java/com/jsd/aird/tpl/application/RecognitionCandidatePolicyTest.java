@@ -12,7 +12,7 @@ class RecognitionCandidatePolicyTest {
     @Test
     void rejectsPhysicalOnlyCandidateEvenWhenItHasHighConfidence() {
         var payload = objectMapper.createObjectNode()
-                .put("kind", "MATRIX").put("candidateOnly", true)
+                .put("kind", "UNKNOWN").put("candidateOnly", true)
                 .put("physicalStructureOnly", true).put("canonicalStatus", "PROVISIONAL")
                 .put("structureStatus", "PROVISIONAL");
 
@@ -22,7 +22,7 @@ class RecognitionCandidatePolicyTest {
     @Test
     void acceptsResolvedCanonicalStructureOnlyAfterBothStatusesAreConfirmed() {
         var payload = objectMapper.createObjectNode()
-                .put("kind", "MATRIX").put("canonicalStatus", "CONFIRMED")
+                .put("kind", "COLUMN_TABLE").put("canonicalStatus", "CONFIRMED")
                 .put("structureStatus", "CONFIRMED").put("editability", "EDITABLE")
                 .put("valueSource", "USER_INPUT");
 
@@ -30,12 +30,12 @@ class RecognitionCandidatePolicyTest {
     }
 
     @Test
-    void acceptsDeterministicSimpleLongTableFieldForOneClickConfirmation() {
+    void acceptsDeterministicSimpleRowTableFieldForOneClickConfirmation() {
         var payload = objectMapper.createObjectNode()
                 .put("kind", "SCALAR").put("suggestionLevel", "CHILD")
                 .put("mappingKind", "REPEAT_FIELD").put("repeatAxis", "ROW")
                 .put("recognitionOrigin", "RULE_DETERMINISTIC")
-                .put("reasonCode", "SIMPLE_LONG_TABLE_FIELD")
+                .put("reasonCode", "SIMPLE_ROW_TABLE_FIELD")
                 .put("candidateOnly", true).put("reviewRequired", true)
                 .put("physicalStructureOnly", true).put("editability", "EDITABLE")
                 .put("valueSource", "USER_INPUT");
@@ -49,7 +49,7 @@ class RecognitionCandidatePolicyTest {
                 .put("kind", "SCALAR").put("suggestionLevel", "CHILD")
                 .put("mappingKind", "REPEAT_FIELD").put("repeatAxis", "ROW")
                 .put("recognitionOrigin", "MODEL")
-                .put("reasonCode", "SIMPLE_LONG_TABLE_FIELD")
+                .put("reasonCode", "SIMPLE_ROW_TABLE_FIELD")
                 .put("candidateOnly", true).put("reviewRequired", true);
 
         assertThat(RecognitionCandidatePolicy.isFormallyConfirmable(payload)).isFalse();

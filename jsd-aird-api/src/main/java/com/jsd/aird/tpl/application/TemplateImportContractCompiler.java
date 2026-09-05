@@ -17,8 +17,8 @@ import org.springframework.stereotype.Component;
 @Component
 public class TemplateImportContractCompiler {
 
-    public static final int IMPORT_CONTRACT_VERSION = 7;
-    public static final int LEGACY_LAYOUT_STRUCTURE_VERSION = 6;
+    public static final int IMPORT_CONTRACT_VERSION = 8;
+    public static final int CURRENT_LAYOUT_STRUCTURE_VERSION = 7;
 
     private final ObjectMapper objectMapper;
     private final JsonCanonicalizer canonicalizer;
@@ -34,7 +34,7 @@ public class TemplateImportContractCompiler {
                 .put("importContractVersion", IMPORT_CONTRACT_VERSION)
                 .put("layoutStructureVersion", layoutVersion)
                 .put("identityFallback", "IMPORT_SCOPED")
-                .put("compatibilityPolicy", "CONTROLLED");
+                .put("compatibilityPolicy", "STRICT_SIMPLE_REGIONS");
         contract.set("fields", contractFields(schema));
         var components = components(mappings, schema);
         attachSheetFingerprints(components, layoutSummary);
@@ -53,7 +53,7 @@ public class TemplateImportContractCompiler {
         )) {
             if (path.isInt() && path.asInt() > 0) return path.asInt();
         }
-        return LEGACY_LAYOUT_STRUCTURE_VERSION;
+        return CURRENT_LAYOUT_STRUCTURE_VERSION;
     }
 
     private JsonNode contractFields(JsonNode schema) {
@@ -105,10 +105,6 @@ public class TemplateImportContractCompiler {
                 copy(mapping, component, "recordAxis", "repeatAxis", "semanticMode");
                 var name = componentName(mapping);
                 if (!name.isBlank()) component.put("name", name);
-                for (var key : List.of("recordIdentity", "rowAttributeColumns", "recordProjection",
-                        "fieldGroups", "fieldRows", "longTableModel")) {
-                    if (mapping.path(key).isContainerNode()) component.set(key, mapping.path(key).deepCopy());
-                }
             }
             if (component.path("name").asText("").isBlank()) {
                 var groupName = userFacingText(mapping.path("diagnostic").path("groupName").asText(""));
@@ -123,9 +119,6 @@ public class TemplateImportContractCompiler {
             if (!labelPath.isBlank()) binding.put("labelPath", labelPath);
             if (mapping.path("labelPathSegments").isArray()) {
                 binding.set("labelPathSegments", mapping.path("labelPathSegments").deepCopy());
-            }
-            if (mapping.path("rowAttributes").isArray()) {
-                binding.set("rowAttributes", mapping.path("rowAttributes").deepCopy());
             }
             binding.set("locator", locator.isObject() ? locator.deepCopy() : objectMapper.createObjectNode());
             var terminationRule = mapping.path("terminationRule").isObject()
@@ -153,8 +146,7 @@ public class TemplateImportContractCompiler {
         var names = new ArrayList<String>();
         for (var binding : component.withArray("bindings")) {
             var kind = binding.path("mappingKind").asText("").toUpperCase(java.util.Locale.ROOT);
-            if (kind.contains("REGION") || kind.equals("ROW_TABLE") || kind.equals("COLUMN_TABLE")
-                    || kind.equals("MATRIX")) continue;
+            if (kind.contains("REGION") || kind.equals("ROW_TABLE") || kind.equals("COLUMN_TABLE")) continue;
             var label = binding.path("labelPath").asText("").trim();
             if (label.isBlank()) continue;
             var parts = label.split("\\s*(?:>|/|›)\\s*");
@@ -177,7 +169,7 @@ public class TemplateImportContractCompiler {
             return;
         }
         if (!isRepeatedStructure(type)) return;
-        if (!type.contains("COLUMN") && !type.contains("MATRIX")
+        if (!type.contains("COLUMN")
                 && names.size() == 1 && names.getFirst().length() <= 20
                 && !names.getFirst().contains("／")) {
             component.put("name", "操作程序".equals(names.getFirst()) ? "操作步骤" : names.getFirst());
@@ -191,14 +183,13 @@ public class TemplateImportContractCompiler {
         }
         var current = component.path("name").asText("");
         if (current.isBlank() || "基础信息".equals(current) || "重复记录区域".equals(current)) {
-            component.put("name", type.contains("MATRIX") ? "矩阵数据"
-                    : type.contains("COLUMN") ? "测试数据" : "明细数据");
+            component.put("name", type.contains("COLUMN") ? "测试数据" : "明细数据");
         }
     }
 
     private boolean isRepeatedStructure(String type) {
         return type.contains("REPEAT") || type.contains("TABLE") || type.contains("ROW")
-                || type.contains("COLUMN") || type.contains("MATRIX");
+                || type.contains("COLUMN");
     }
 
     private String componentId(JsonNode mapping, JsonNode locator) {
@@ -242,7 +233,7 @@ public class TemplateImportContractCompiler {
         var kind = firstNonBlank(mapping, "mappingKind", "role");
         var diagnosticKind = mapping.path("diagnostic").path("kind").asText("");
         if ((kind.isBlank() || "REPEAT_REGION".equalsIgnoreCase(kind))
-                && Set.of("FORM_REGION", "ROW_TABLE", "COLUMN_TABLE", "MATRIX", "MATRIX_FIELD")
+                && Set.of("FORM_REGION", "ROW_TABLE", "COLUMN_TABLE")
                 .contains(diagnosticKind.toUpperCase(java.util.Locale.ROOT))) {
             return diagnosticKind.toUpperCase(java.util.Locale.ROOT);
         }
@@ -344,7 +335,7 @@ public class TemplateImportContractCompiler {
     private boolean isComponentRoot(JsonNode mapping) {
         if (!firstNonBlank(mapping, "parentBindingId").isBlank()) return false;
         var kind = firstNonBlank(mapping, "mappingKind", "role").toUpperCase(java.util.Locale.ROOT);
-        return kind.contains("REGION") || kind.contains("TABLE") || kind.contains("MATRIX");
+        return kind.contains("REGION") || kind.contains("TABLE");
     }
 
     private String componentName(JsonNode mapping) {
@@ -365,7 +356,7 @@ public class TemplateImportContractCompiler {
         if (value == null) return "";
         var normalized = value.trim();
         if (normalized.isBlank()
-                || normalized.matches("(?i)^(?:AUTO|TABLE|MATRIX|DATA|MATERIAL|PRODUCTION|WORKFLOW|FIELD)\\..+$")
+                || normalized.matches("(?i)^(?:AUTO|TABLE|DATA|MATERIAL|PRODUCTION|WORKFLOW|FIELD)\\..+$")
                 || normalized.matches("[A-Z0-9_.:/@\\-]+")
                 || normalized.matches("b_[a-fA-F0-9]+")) return "";
         return normalized;

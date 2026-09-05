@@ -249,7 +249,7 @@ public class DataImportService {
 
                 // Structured template bindings are executable import instructions. They
                 // must run before the generic header mapper, otherwise a horizontal table
-                // or matrix would be mistaken for a scalar row and lose its dimensions.
+                // or repeated table would be mistaken for a scalar row and lose its dimensions.
                 var structured = structuredExtractor.extract(parsedSheet, definition.fields(), bindings, dataStart, dataEnd);
                 if (structured.isPresent()) {
                     mappings.addAll(structured.get().mappings());

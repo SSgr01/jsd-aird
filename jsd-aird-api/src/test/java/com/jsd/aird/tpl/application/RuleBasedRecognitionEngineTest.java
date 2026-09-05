@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.shared.json.JsonCanonicalizer;
+import com.jsd.aird.tpl.application.port.RecognitionModelClient;
 import com.jsd.aird.tpl.domain.TemplateFormat;
 import org.junit.jupiter.api.Test;
 
@@ -36,7 +37,7 @@ class RuleBasedRecognitionEngineTest {
     }
 
     @Test
-    void turnsAHeaderOnlyLongTableIntoARepeatRegionWithoutUsingAnAiModel() throws Exception {
+    void turnsAHeaderOnlyRowTableIntoARepeatRegionWithoutUsingAnAiModel() throws Exception {
         var structure = objectMapper.readTree("""
                 {
                   "structureVersion":6,
@@ -50,26 +51,26 @@ class RuleBasedRecognitionEngineTest {
 
         var result = engine.recognize(TemplateFormat.XLSX, "原料数据模板.xlsx", structure);
 
-        assertThat(engine.isSimpleLongTableWorkbook(structure)).isTrue();
+        assertThat(engine.isSimpleRowTableWorkbook(structure)).isTrue();
         assertThat(result.suggestions()).hasSize(4);
         var roots = result.suggestions().stream()
-                .filter(suggestion -> "TABLE_REGION".equals(suggestion.suggestionType()))
+                .filter(suggestion -> "ROW_TABLE".equals(suggestion.suggestionType()))
                 .toList();
         assertThat(roots).hasSize(1);
         var root = roots.getFirst();
         assertThat(root).satisfies(suggestion -> {
-            assertThat(suggestion.suggestionType()).isEqualTo("TABLE_REGION");
+            assertThat(suggestion.suggestionType()).isEqualTo("ROW_TABLE");
             assertThat(suggestion.payload().path("autoAccept").asBoolean()).isTrue();
             assertThat(suggestion.payload().path("canonicalStatus").asText()).isEqualTo("CONFIRMED");
             assertThat(suggestion.payload().path("repeatAxis").asText()).isEqualTo("ROW");
             assertThat(suggestion.payload().path("locator").path("headerRange").asText()).isEqualTo("A1:C1");
-            assertThat(suggestion.payload().path("locator").path("dataRange").asText()).isEqualTo("A2:C200");
+            assertThat(suggestion.payload().path("locator").path("dataRange").asText()).isEqualTo("A2:C2");
             assertThat(suggestion.payload().path("locator").path("logicalInputRange").asText())
-                    .isEqualTo("A1:C200");
+                    .isEqualTo("A1:C2");
             assertThat(suggestion.payload().path("columns").get(0).path("valueRange").asText())
-                    .isEqualTo("A2:A200");
+                    .isEqualTo("A2");
             assertThat(suggestion.payload().path("columns").get(1).path("valueRange").asText())
-                    .isEqualTo("B2:B200");
+                    .isEqualTo("B2");
         });
         assertThat(result.suggestions()).filteredOn(suggestion ->
                         "TABLE_CHILD_FIELD".equals(suggestion.suggestionType()))
@@ -145,25 +146,35 @@ class RuleBasedRecognitionEngineTest {
     }
 
     @Test
-    void doesNotTurnDocxContentControlsIntoBusinessFieldSuggestions() throws Exception {
+    void recognizesDocxContentControlsAsStableReviewableFields() throws Exception {
         var structure = objectMapper.readTree("""
                 {"documentIR":{"contentControls":[
                   {"nodeId":"content-control-1","contentControlId":"17","markerId":"marker-order-no","alias":"订单号","tag":"FIELD.ORDER_NO","text":""}
                 ],"blocks":[{"id":"paragraph-1","type":"PARAGRAPH","text":"说明文字"}]}}
                 """);
         var result = engine.recognize(TemplateFormat.DOCX, "模板.docx", structure);
-        assertThat(result.suggestions()).isEmpty();
+        assertThat(result.suggestions()).singleElement().satisfies(suggestion -> {
+            assertThat(suggestion.suggestionType()).isEqualTo("SCALAR_FIELD");
+            assertThat(suggestion.payload().path("mappingKind").asText()).isEqualTo("SCALAR");
+            assertThat(suggestion.payload().path("locatorType").asText()).isEqualTo("DOCX_CONTENT_CONTROL");
+            assertThat(suggestion.payload().path("publishable").asBoolean()).isTrue();
+            assertThat(suggestion.payload().path("reviewRequired").asBoolean()).isTrue();
+        });
     }
 
     @Test
-    void keepsDocxControlsAsDocumentFactsInsteadOfMapping() throws Exception {
+    void usesStableNodePathWhenDocxControlHasNoCustomXmlMarker() throws Exception {
         var structure = objectMapper.readTree("""
                 {"documentIR":{"contentControls":[
                   {"nodeId":"content-control-1","contentControlId":"17","alias":"订单号","tag":"FIELD.ORDER_NO","text":""}
                 ]}}
                 """);
         var result = engine.recognize(TemplateFormat.DOCX, "模板.docx", structure);
-        assertThat(result.suggestions()).isEmpty();
+        assertThat(result.suggestions()).singleElement().satisfies(suggestion -> {
+            assertThat(suggestion.payload().path("candidateOnly").asBoolean()).isFalse();
+            assertThat(suggestion.payload().path("locator").path("nodeId").asText())
+                    .isEqualTo("content-control-1");
+        });
     }
 
     @Test
@@ -177,5 +188,75 @@ class RuleBasedRecognitionEngineTest {
                 """);
         var result = engine.recognize(TemplateFormat.DOCX, "模板.docx", structure);
         assertThat(result.suggestions()).isEmpty();
+    }
+
+    @Test
+    void recognizesUnambiguousDocxRowTable() throws Exception {
+        var structure = objectMapper.readTree("""
+                {"documentIR":{"blocks":[
+                  {"id":"table-1","sourcePath":"/document[1]/body[1]/tbl[1]","type":"TABLE","rowCount":4,"columnCount":3,"rows":[
+                    {"cells":[{"text":"物料名称"},{"text":"批号"},{"text":"数量"}]},
+                    {"cells":[{"text":"A"},{"text":""},{"text":""}]},
+                    {"cells":[{"text":"B"},{"text":""},{"text":""}]},
+                    {"cells":[{"text":"C"},{"text":""},{"text":""}]}
+                  ]}
+                ]}}
+                """);
+
+        var result = engine.recognize(TemplateFormat.DOCX, "模板.docx", structure);
+
+        assertThat(result.suggestions()).filteredOn(suggestion ->
+                "ROW_TABLE".equals(suggestion.suggestionType())).singleElement().satisfies(suggestion -> {
+            assertThat(suggestion.suggestionType()).isEqualTo("ROW_TABLE");
+            assertThat(suggestion.payload().path("kind").asText()).isEqualTo("ROW_TABLE");
+            assertThat(suggestion.payload().path("repeatAxis").asText()).isEqualTo("ROW");
+        });
+        assertThat(result.suggestions()).filteredOn(suggestion ->
+                "SCALAR_FIELD".equals(suggestion.suggestionType())).hasSize(3);
+        assertThat(result.qualityIssues()).isEmpty();
+    }
+
+    @Test
+    void recognizesStandardDocxColumnTableWithSampleHeadings() throws Exception {
+        var structure = objectMapper.readTree("""
+                {"documentIR":{"blocks":[
+                  {"id":"table-1","sourcePath":"/document[1]/body[1]/tbl[1]","type":"TABLE","rowCount":3,"columnCount":3,"rows":[
+                    {"cells":[{"text":"属性"},{"text":"样品甲"},{"text":"样品乙"}]},
+                    {"cells":[{"text":"外观"},{"text":"透明"},{"text":"微黄"}]},
+                    {"cells":[{"text":"粘度"},{"text":"低粘"},{"text":"高粘"}]}
+                  ]}
+                ]}}
+                """);
+
+        var result = engine.recognize(TemplateFormat.DOCX, "模板.docx", structure);
+
+        assertThat(result.suggestions()).filteredOn(suggestion ->
+                "COLUMN_TABLE".equals(suggestion.suggestionType())).singleElement().satisfies(suggestion -> {
+            assertThat(suggestion.payload().path("kind").asText()).isEqualTo("COLUMN_TABLE");
+            assertThat(suggestion.payload().path("repeatAxis").asText()).isEqualTo("COLUMN");
+        });
+        assertThat(result.suggestions()).filteredOn(suggestion ->
+                "SCALAR_FIELD".equals(suggestion.suggestionType())).hasSize(3);
+        assertThat(result.qualityIssues()).isEmpty();
+    }
+
+    @Test
+    void keepsACompletelySymmetricDocxGridAsStructureAbnormal() throws Exception {
+        var structure = objectMapper.readTree("""
+                {"documentIR":{"blocks":[
+                  {"id":"table-1","sourcePath":"/document[1]/body[1]/tbl[1]","type":"TABLE","rowCount":3,"columnCount":3,"rows":[
+                    {"cells":[{"text":"指标"},{"text":"甲类"},{"text":"乙类"}]},
+                    {"cells":[{"text":"外观"},{"text":"1"},{"text":"2"}]},
+                    {"cells":[{"text":"粘度"},{"text":"3"},{"text":"4"}]}
+                  ]}
+                ]}}
+                """);
+
+        var result = engine.recognize(TemplateFormat.DOCX, "模板.docx", structure);
+
+        assertThat(result.suggestions()).isEmpty();
+        assertThat(result.qualityIssues()).singleElement()
+                .extracting(RecognitionModelClient.QualityIssueSuggestion::issueType)
+                .isEqualTo("STRUCTURE_DIRECTION_UNCLEAR");
     }
 }

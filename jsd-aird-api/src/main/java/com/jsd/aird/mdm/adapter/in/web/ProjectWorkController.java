@@ -42,6 +42,12 @@ public class ProjectWorkController {
         return ok(service.updateTask(taskId, new ProjectWorkService.TaskInput(r.stageId, r.name, r.owner, r.plannedDate, r.status, r.version)));
     }
 
+    @DeleteMapping("/tasks/{taskId}")
+    public ApiResponse<Void> deleteTask(@PathVariable UUID taskId, @RequestParam long version) {
+        service.deleteTask(taskId, version);
+        return ok(null);
+    }
+
     @GetMapping("/tasks/{taskId}/experiments")
     public ApiResponse<List<ProjectExperiment>> experiments(@PathVariable UUID taskId) {
         return ok(service.experiments(taskId));

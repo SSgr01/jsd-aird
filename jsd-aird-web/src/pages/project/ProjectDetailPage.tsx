@@ -17,6 +17,7 @@ import {
   DatePicker,
   Form,
   Input,
+  Modal,
   Select,
   Skeleton,
   Tabs,
@@ -29,6 +30,7 @@ import dayjs from '@/utils/dayjs';
 
 import {
   formatProjectStatus,
+  deleteProjects,
   getProject,
   getProjects,
   projectPriorities,
@@ -160,6 +162,24 @@ export function ProjectDetailPage() {
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleLifecycle = () => {
+    if (!project) return;
+    const archive = project.allowedActions?.includes('ARCHIVE');
+    if (!archive && !project.allowedActions?.includes('DELETE')) return;
+    Modal.confirm({
+      title: `${archive ? '归档' : '删除'}项目“${project.name}”？`,
+      content: archive ? '归档后项目不再出现在默认列表。' : '项目将从默认列表中隐藏。',
+      okText: archive ? '归档' : '删除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        await deleteProjects([project.id]);
+        messageApi.success(archive ? '项目已归档' : '项目已删除');
+        navigate('/projects/list');
+      },
+    });
   };
 
   if (loading) return <Skeleton active paragraph={{ rows: 12 }} />;
@@ -303,6 +323,9 @@ export function ProjectDetailPage() {
         <h2>{project.name}</h2>
         <Tag color="blue">{formatProjectStatus(project.status)}</Tag>
         <span className="pm-detail-partner">关联客户：{project.partnerName ?? '—'}</span>
+        <span style={{ marginLeft: 'auto' }}>
+          {project.allowedActions?.includes('ARCHIVE') || project.allowedActions?.includes('DELETE') ? <Button danger={project.allowedActions?.includes('DELETE')} icon={project.allowedActions?.includes('ARCHIVE') ? undefined : <DeleteOutlined />} onClick={handleLifecycle}>{project.allowedActions?.includes('ARCHIVE') ? '归档' : '删除'}</Button> : null}
+        </span>
       </div>
 
       <ProjectStageBoard projectId={id ?? project.id} />

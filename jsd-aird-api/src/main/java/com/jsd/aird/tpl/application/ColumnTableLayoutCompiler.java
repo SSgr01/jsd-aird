@@ -48,15 +48,55 @@ public final class ColumnTableLayoutCompiler {
         var cells = cells(sheet);
         if (cells.isEmpty()) return null;
 
+        // A bordered worksheet can contain an ordinary row table below a
+        // metadata band.  The left metadata merge (for example A3:B3) and
+        // the repeated borders on its right otherwise look like a column
+        // identity band.  Prefer the stronger, dense-header/vertical-record
+        // evidence of a row table before considering a column layout.  This
+        // check is intentionally based on geometry and text density only so
+        // it applies to all row-detail templates, not a named fixture.
+        if (looksLikeRowOrientedSurface(cells, used)) return null;
+
+        // A form often uses a vertically merged label beside a large,
+        // horizontally merged writing area. Its physical borders make every
+        // column look repeated, but there is no independent sample/record
+        // column. Reject this topology before generic column-band detection.
+        if (looksLikeFormWritingSurface(cells, used)) return null;
+
         var band = detectRepeatedColumnBand(cells, used);
         if (band == null) return null;
         var groups = physicalFieldGroups(cells, used, band.recordStart(), band.recordEnd());
-        if (groups.isEmpty()) return null;
-
-        var groupStart = groups.stream().mapToInt(FieldGroup::startRow).min().orElse(used[1]);
+        // A simple column table can have one label per row and therefore no
+        // vertical group merge at all. The repeated right-hand column band is
+        // already sufficient geometry; use the rows below its identity band
+        // as the field surface in that case.
+        int groupStart = groups.stream().mapToInt(FieldGroup::startRow).min().orElse(used[1] + 1);
         var groupEnd = groups.stream().mapToInt(FieldGroup::endRow).max().orElse(used[3]);
         var identityRow = canExtendIdentityRow(cells, used[0], band.recordStart(), band.recordEnd(), groupStart - 1)
                 ? groupStart - 1 : groupStart;
+        if (groups.isEmpty()) {
+            var mergedIdentityRow = findMergedIdentityRow(cells, used, band);
+            if (mergedIdentityRow > 0) {
+                identityRow = mergedIdentityRow;
+                groupStart = mergedIdentityRow + 1;
+            }
+        }
+        // A record identity can occupy more than one row above the measure
+        // band (for example an experiment number followed by a date).  Keep
+        // the earliest explicit identity row inside the repeated component,
+        // but do not absorb ordinary form rows merely because they share the
+        // same bordered surface.
+        while (identityRow > used[1]
+                && canExtendIdentityRow(cells, used[0], band.recordStart(), band.recordEnd(), identityRow - 1)
+                && hasRecordIdentityLabel(cells, used[0], band.recordStart(), identityRow - 1)) {
+            identityRow--;
+        }
+        // Without vertical field groups, the identity band itself must prove
+        // the label/record split.  A document title merged across the inferred
+        // record columns is not a column-table header (production forms often
+        // have exactly that shape above an ordinary ROW_TABLE).
+        if (groups.isEmpty()
+                && !hasSeparatedSimpleIdentity(cells, used[0], band.recordStart(), identityRow)) return null;
         var endRow = extendAndTrimEnd(cells, used, band.recordStart(), band.recordEnd(), groupEnd);
         if (endRow - identityRow < 3) return null;
 
@@ -64,21 +104,152 @@ public final class ColumnTableLayoutCompiler {
                 .put("sheetId", sheetId)
                 .put("type", "COLUMN_TABLE")
                 .put("range", range(used[0], identityRow, band.recordEnd(), endRow));
-        region.putObject("structure").putObject("recordProjection")
-                .put("identityRow", identityRow)
-                .put("valueStartRow", groupStart)
-                .put("valueEndRow", endRow)
-                .put("recordStartColumn", band.recordStart())
-                .put("recordEndColumn", band.recordEnd());
-        var wrapped = objectMapper.createObjectNode();
-        wrapped.putArray("sheets").add(sheet.deepCopy());
-        if (!enrich(region, wrapped)) return null;
+        var identityEndRow = Math.max(identityRow, groupStart - 1);
+        region.putObject("structure")
+                .put("recordAxis", "COLUMN")
+                .put("repeatAxis", "COLUMN")
+                .put("headerRange", range(used[0], identityRow, band.recordEnd(), identityEndRow))
+                .put("dataRange", range(used[0], groupStart, band.recordEnd(), endRow))
+                .put("recordHeight", Math.max(1, endRow - groupStart + 1))
+                .put("recordWidth", 1)
+                .put("recordStride", 1)
+                .put("semanticMode", "COLUMN_RECORDS")
+                .put("layoutCompiler", "COLUMN_LAYOUT_SIMPLE");
         region.with("structure")
                 .put("canonicalStatus", "PROVISIONAL")
                 .put("geometryStatus", "VALID_GEOMETRY")
                 .put("classificationStatus", "HIGH")
                 .put("layoutCompiler", "COLUMN_LAYOUT_V3");
         return region;
+    }
+
+    /**
+     * Returns true when a dense textual header is followed by a contiguous
+     * run of bordered rows.  Such a surface repeats records downward and must
+     * be left to the ROW_TABLE detector.  Column tables have a sparse left
+     * label band, so they do not satisfy the dense-header threshold.
+     */
+    private boolean looksLikeRowOrientedSurface(List<JsonNode> cells, int[] used) {
+        int width = used[2] - used[0] + 1;
+        if (width < 3 || used[3] - used[1] + 1 < 5) return false;
+        var rows = new LinkedHashMap<Integer, List<JsonNode>>();
+        for (var cell : cells) {
+            var b = bounds(cellRange(cell));
+            if (b == null || b[0] < used[0] || b[2] > used[2]
+                    || b[1] < used[1] || b[3] > used[3]) continue;
+            rows.computeIfAbsent(b[1], ignored -> new ArrayList<>()).add(cell);
+        }
+        var identityRows = new LinkedHashSet<Integer>();
+        for (var entry : rows.entrySet()) {
+            int candidateRow = entry.getKey();
+            for (var left : entry.getValue()) {
+                var leftBounds = bounds(cellRange(left));
+                if (leftBounds == null || leftBounds[1] != candidateRow || leftBounds[3] != candidateRow
+                        || leftBounds[0] != used[0] || leftBounds[2] - leftBounds[0] < 1
+                        || text(left).isBlank() || formula(left)) continue;
+                var rightHeaders = (int) entry.getValue().stream()
+                        .filter(right -> {
+                            var rightBounds = bounds(cellRange(right));
+                            return rightBounds != null && rightBounds[1] == candidateRow
+                                    && rightBounds[3] == candidateRow
+                                    && rightBounds[0] > leftBounds[2]
+                                    && rightBounds[2] <= used[2]
+                                    && !text(right).isBlank() && !formula(right);
+                        }).count();
+                if (rightHeaders >= 3) {
+                    identityRows.add(candidateRow);
+                    break;
+                }
+            }
+        }
+        var identitySeen = false;
+        for (int headerRow = used[1]; headerRow <= used[3] - 3; headerRow++) {
+            // A merged left identity followed by populated sample titles is
+            // positive COLUMN_TABLE evidence.  Rows beneath it can be dense
+            // because the workbook is a completed report; do not reinterpret
+            // those body rows as a row-table header.
+            if (identityRows.contains(headerRow)) identitySeen = true;
+            if (identitySeen) continue;
+            int textHeaders = 0;
+            boolean fullWidthTitle = false;
+            for (var cell : rows.getOrDefault(headerRow, List.of())) {
+                var b = bounds(cellRange(cell));
+                if (b == null || b[1] != headerRow || b[3] != headerRow
+                        || b[0] < used[0] || b[2] > used[2] || text(cell).isBlank()
+                        || formula(cell)) continue;
+                if (b[2] - b[0] + 1 >= Math.max(3, (int) Math.ceil(width * 0.80))) {
+                    fullWidthTitle = true;
+                    break;
+                }
+                // Count logical header cells rather than their merged span;
+                // a title merged across the worksheet must not look like a
+                // dense row-table header.
+                textHeaders++;
+            }
+            if (fullWidthTitle) continue;
+            if (textHeaders < Math.max(3, (int) Math.ceil(width * 0.55))) continue;
+
+            int borderedRows = 0;
+            int lastChecked = Math.min(used[3], headerRow + 8);
+            for (int row = headerRow + 1; row <= lastChecked; row++) {
+                if (rowHasStructuralSurface(cells, used[0], used[2], row)
+                        >= Math.max(3, (int) Math.ceil(width * 0.70))) borderedRows++;
+                else if (row > headerRow + 2) break;
+            }
+            if (borderedRows >= 3) return true;
+        }
+        return false;
+    }
+
+    private boolean looksLikeFormWritingSurface(List<JsonNode> cells, int[] used) {
+        int wideWritingBlocks = 0;
+        int labelledBlocks = 0;
+        int usableWidth = used[2] - used[0] + 1;
+        for (var valueCell : cells) {
+            var valueBounds = bounds(cellRange(valueCell));
+            if (valueBounds == null || valueBounds[0] <= used[0]
+                    || valueBounds[2] - valueBounds[0] + 1
+                    < Math.max(3, (int) Math.ceil(usableWidth * 0.45))
+                    || valueBounds[3] - valueBounds[1] < 1
+                    || !text(valueCell).isBlank()) continue;
+            // A merged blank range is a writing/input surface. Plain blank
+            // styled cells are intentionally not enough; they are common in
+            // column tables with empty sample titles.
+            if (!valueCell.path("mergedRange").isTextual()
+                    || valueCell.path("mergedRange").asText().isBlank()) continue;
+            wideWritingBlocks++;
+            boolean adjacentLabel = false;
+            for (var labelCell : cells) {
+                var labelBounds = bounds(cellRange(labelCell));
+                if (labelBounds == null || text(labelCell).isBlank()
+                        || labelBounds[2] >= valueBounds[0]
+                        || labelBounds[1] > valueBounds[3] || labelBounds[3] < valueBounds[1]) continue;
+                // Labels spanning multiple rows denote form sections rather
+                // than one-row sample/record identity headers.
+                if (labelBounds[3] > labelBounds[1]) {
+                    adjacentLabel = true;
+                    break;
+                }
+            }
+            if (adjacentLabel) labelledBlocks++;
+        }
+        // Two independent section writing blocks are strong form evidence. A
+        // single merged block may still be a legitimate grouped table header.
+        return wideWritingBlocks >= 2 && labelledBlocks >= 2;
+    }
+
+    private boolean hasSeparatedSimpleIdentity(
+            List<JsonNode> cells, int labelStart, int recordStart, int identityRow
+    ) {
+        var hasLabel = false;
+        for (var cell : cells) {
+            var cellBounds = bounds(cellRange(cell));
+            if (cellBounds == null || cellBounds[1] > identityRow || cellBounds[3] < identityRow
+                    || text(cell).isBlank()) continue;
+            if (cellBounds[0] < recordStart && cellBounds[2] >= recordStart) return false;
+            if (cellBounds[0] >= labelStart && cellBounds[2] < recordStart) hasLabel = true;
+        }
+        return hasLabel;
     }
 
     /** Enriches an already proposed COLUMN_TABLE. Returns false when the split cannot be proven. */
@@ -90,106 +261,55 @@ public final class ColumnTableLayoutCompiler {
         if (cells.isEmpty()) return false;
 
         var structure = region.with("structure");
-        var identityRow = structure.path("recordProjection").path("identityRow").asInt(total[1]);
+        var existingHeader = bounds(structure.path("headerRange").asText(""));
+        var existingData = bounds(structure.path("dataRange").asText(""));
+        // A determinate physical proposal has already compiled the record
+        // identity band and measure surface from the complete workbook.  This
+        // enrichment pass is also used for model-only COLUMN_TABLE proposals,
+        // but it must not collapse a proven multi-row identity band back to
+        // the first row.  Doing so moved rows such as 实验编号/日期 out of the
+        // repeated region's header and reduced the physical field projection.
+        if ((region.path("physicalConfirmed").asBoolean(false)
+                || structure.path("physicalConfirmed").asBoolean(false))
+                && contained(existingHeader, total)
+                && contained(existingData, total)
+                && existingHeader[3] < existingData[1]) {
+            structure.put("recordAxis", "COLUMN")
+                    .put("repeatAxis", "COLUMN")
+                    .put("recordWidth", Math.max(1, structure.path("recordWidth").asInt(1)))
+                    .put("recordStride", Math.max(1, structure.path("recordStride").asInt(1)))
+                    .put("semanticMode", "COLUMN_RECORDS")
+                    .put("layoutCompiler", "COLUMN_LAYOUT_V3");
+            region.put("recordAxis", "COLUMN");
+            return true;
+        }
+        var identityRow = total[1];
         if (identityRow < total[1] || identityRow >= total[3]) identityRow = total[1];
 
-        var split = inferBands(cells, total, identityRow,
-                structure.path("recordProjection").path("recordStartColumn").asInt(-1));
+        var split = inferBands(cells, total, identityRow, -1);
         if (split == null || split.recordStart() <= total[0] || split.recordStart() > total[2]) return false;
 
-        var requestedValueStart = structure.path("recordProjection").path("valueStartRow")
-                .asInt(identityRow + 1);
-        var valueStartRow = Math.max(identityRow, requestedValueStart);
-        var valueEndRow = Math.min(total[3],
-                structure.path("recordProjection").path("valueEndRow").asInt(total[3]));
+        var valueStartRow = identityRow + 1;
+        var valueEndRow = total[3];
         if (valueStartRow > valueEndRow) return false;
 
         structure.put("recordAxis", "COLUMN")
                 .put("repeatAxis", "COLUMN")
                 .put("headerRange", range(total[0], identityRow, total[2], identityRow))
                 .put("dataRange", range(total[0], valueStartRow, total[2], valueEndRow))
-                .put("rowHeaderRange", range(total[0], valueStartRow, split.recordStart() - 1, valueEndRow))
-                .put("columnHeaderRange", range(split.recordStart(), identityRow, total[2], identityRow))
-                .put("crossDataRange", range(split.recordStart(), valueStartRow, total[2], valueEndRow))
+                .put("recordHeight", Math.max(1, valueEndRow - valueStartRow + 1))
+                .put("recordWidth", 1)
+                .put("recordStride", 1)
                 .put("semanticMode", "COLUMN_RECORDS")
-                .put("layoutCompiler", "COLUMN_LAYOUT_V2");
-
-        var projection = structure.putObject("recordProjection")
-                .put("mode", "COLUMN_RECORDS")
-                .put("recordAxis", "COLUMN")
-                .put("identityRow", identityRow)
-                .put("valueStartRow", valueStartRow)
-                .put("valueEndRow", valueEndRow)
-                .put("labelBandRange", range(total[0], identityRow, split.labelEnd(), valueEndRow))
-                .put("runtimeColumnMemberRange", range(split.recordStart(), identityRow, total[2], identityRow));
-        projection.putArray("recordColumns").removeAll();
-        for (int column = split.recordStart(); column <= total[2]; column++) {
-            projection.withArray("recordColumns").add(columnName(column));
-        }
-
-        var identity = projection.putObject("recordIdentity")
-                .put("strategy", "RUNTIME_COLUMN_MEMBER")
-                .put("labelRange", range(total[0], identityRow, split.labelEnd(), identityRow))
-                .put("valueRange", range(split.recordStart(), identityRow, total[2], identityRow));
-
-        var rowAttributes = projection.putArray("rowAttributeColumns");
-        rowAttributes.removeAll();
-        for (int column = split.labelEnd() + 1; column < split.recordStart(); column++) {
-            var header = textAt(cells, column, identityRow);
-            rowAttributes.add(objectMapper.createObjectNode()
-                    .put("column", columnName(column))
-                    .put("role", "ROW_ATTRIBUTE")
-                    .put("label", header)
-                    .put("labelRange", address(column, identityRow))
-                    .put("valueRange", range(column, valueStartRow, column, valueEndRow)));
-        }
-
-        var groups = structure.putArray("fieldGroups");
-        groups.removeAll();
-        for (var group : fieldGroups(cells, total[0], split.labelEnd(), valueStartRow, valueEndRow)) {
-            groups.add(objectMapper.createObjectNode()
-                    .put("groupId", stableKey("group", group.label(), group.startRow(), group.endRow()))
-                    .put("label", group.label())
-                    .put("labelRange", group.labelRange())
-                    .put("range", range(total[0], group.startRow(), total[2], group.endRow()))
-                    .put("startRow", group.startRow())
-                    .put("endRow", group.endRow()));
-        }
-
-        var rows = structure.putArray("fieldRows");
-        rows.removeAll();
-        for (int row = valueStartRow; row <= valueEndRow; row++) {
-            var path = labelPath(cells, total[0], split.labelEnd(), row);
-            if (path.isEmpty() || !hasSpecificRowLabel(cells, total[0], split.labelEnd(), row)) continue;
-            var item = objectMapper.createObjectNode()
-                    .put("row", row)
-                    .put("labelPath", String.join(" > ", path))
-                    .put("labelRange", coveringLabelRange(cells, total[0], split.labelEnd(), row))
-                    .put("valueRange", range(split.recordStart(), row, total[2], row));
-            var valueRole = rowValueRole(cells, split.recordStart(), total[2], row);
-            item.put("valueSource", valueRole.formulaDerived() ? "FORMULA" : "USER_INPUT")
-                    .put("editability", valueRole.formulaDerived() ? "READ_ONLY" : "EDITABLE")
-                    .put("trainingEligible", !valueRole.formulaDerived())
-                    .put("trainingRole", valueRole.formulaDerived() ? "EXCLUDE" : "FEATURE")
-                    .put("formulaDerived", valueRole.formulaDerived())
-                    .put("calculationTrustStatus", valueRole.trustStatus());
-            var pathArray = item.putArray("labelPathSegments");
-            path.forEach(pathArray::add);
-            var attributes = item.putArray("rowAttributes");
-            for (int column = split.labelEnd() + 1; column < split.recordStart(); column++) {
-                var value = textAt(cells, column, row);
-                if (value.isBlank()) continue;
-                attributes.add(objectMapper.createObjectNode()
-                        .put("column", columnName(column))
-                        .put("role", "ROW_ATTRIBUTE")
-                        .put("label", textAt(cells, column, identityRow))
-                        .put("value", value)
-                        .put("address", address(column, row)));
-            }
-            rows.add(item);
-        }
+                .put("layoutCompiler", "COLUMN_LAYOUT_SIMPLE");
         region.put("recordAxis", "COLUMN");
         return true;
+    }
+
+    private boolean contained(int[] inner, int[] outer) {
+        return inner != null && outer != null
+                && inner[0] >= outer[0] && inner[1] >= outer[1]
+                && inner[2] <= outer[2] && inner[3] <= outer[3];
     }
 
     private BandSplit inferBands(List<JsonNode> cells, int[] total, int identityRow, int explicitRecordStart) {
@@ -266,6 +386,14 @@ public final class ColumnTableLayoutCompiler {
             stats.put(column, new ColumnStats(structuralRows.size(), textRows.size(), valueRows.size(), height));
         }
 
+        // Completed workbooks often have no inputCandidate/formula markers:
+        // their bordered cells are present only in the physical candidate
+        // snapshot.  A merged label immediately followed by three or more
+        // continuous bordered/value columns is deterministic column-table
+        // evidence and does not depend on whether the sample titles are blank.
+        var identityBand = detectMergedIdentityBand(cells, used);
+        if (identityBand != null) return identityBand;
+
         var recordStart = -1;
         var bestSeparation = 0.0;
         for (int candidate = used[0] + 1; candidate <= used[2] - 2; candidate++) {
@@ -287,6 +415,82 @@ public final class ColumnTableLayoutCompiler {
             recordEnd = column;
         }
         return recordEnd - recordStart + 1 >= 3 ? new RepeatedColumnBand(recordStart, recordEnd) : null;
+    }
+
+    private RepeatedColumnBand detectMergedIdentityBand(List<JsonNode> cells, int[] used) {
+        var row = findMergedIdentityRow(cells, used, null);
+        return row > 0 ? new RepeatedColumnBand(identityRecordStart(cells, used, row), used[2]) : null;
+    }
+
+    private int findMergedIdentityRow(List<JsonNode> cells, int[] used, RepeatedColumnBand expectedBand) {
+        var expectedStart = expectedBand == null ? -1 : expectedBand.recordStart();
+        for (int row = used[1]; row <= used[3] - 3; row++) {
+            for (var cell : cells) {
+                var bounds = bounds(cellRange(cell));
+                if (bounds == null || bounds[1] != row || bounds[3] != row
+                        || bounds[0] != used[0] || bounds[2] >= used[2] - 1
+                        || bounds[2] - bounds[0] < 1 || text(cell).isBlank()
+                        || (!recordIdentityText(text(cell)) && !identityBandLabel(text(cell), bounds))) continue;
+                var recordStart = bounds[2] + 1;
+                if (expectedStart > 0 && recordStart != expectedStart) continue;
+                var recordEnd = used[2];
+                if (recordEnd - recordStart + 1 < 3) continue;
+                var headerSurface = rowHasStructuralSurface(cells, recordStart, recordEnd, row);
+                if (headerSurface < 3) continue;
+                var bodyRows = 0;
+                for (int bodyRow = row + 1; bodyRow <= used[3]; bodyRow++) {
+                    var rightSurface = rowHasStructuralSurface(cells, recordStart, recordEnd, bodyRow);
+                    var leftLabels = countTextCells(cells, used[0], recordStart - 1, bodyRow);
+                    if (rightSurface >= Math.ceil((recordEnd - recordStart + 1) * 0.7)
+                            && leftLabels > 0) bodyRows++;
+                }
+                if (bodyRows >= 3) return row;
+            }
+        }
+        return -1;
+    }
+
+    private int identityRecordStart(List<JsonNode> cells, int[] used, int row) {
+        for (var cell : cells) {
+            var bounds = bounds(cellRange(cell));
+            if (bounds != null && bounds[0] == used[0] && bounds[1] == row && bounds[3] == row
+                    && bounds[2] - bounds[0] >= 1) return bounds[2] + 1;
+        }
+        return used[0] + 1;
+    }
+
+    private boolean identityBandLabel(String value, int[] bounds) {
+        // A horizontally merged left label is the physical separator between
+        // metadata and repeated records.  It is intentionally accepted even
+        // when its business wording is unknown; unmerged labels still need
+        // explicit identity semantics (编号/样品/配方/名称, etc.).
+        return bounds != null && bounds[2] - bounds[0] >= 1;
+    }
+
+    private int rowHasStructuralSurface(List<JsonNode> cells, int startColumn, int endColumn, int row) {
+        var covered = 0;
+        for (int column = startColumn; column <= endColumn; column++) {
+            for (var cell : cells) {
+                var bounds = bounds(cellRange(cell));
+                if (bounds != null && bounds[0] <= column && bounds[2] >= column
+                        && bounds[1] <= row && bounds[3] >= row &&
+                        (structural(cell) || !text(cell).isBlank())) {
+                    covered++;
+                    break;
+                }
+            }
+        }
+        return covered;
+    }
+
+    private int countTextCells(List<JsonNode> cells, int startColumn, int endColumn, int row) {
+        var count = 0;
+        for (var cell : cells) {
+            var bounds = bounds(cellRange(cell));
+            if (bounds != null && bounds[0] >= startColumn && bounds[2] <= endColumn
+                    && bounds[1] <= row && bounds[3] >= row && !text(cell).isBlank()) count++;
+        }
+        return count;
     }
 
     private List<FieldGroup> physicalFieldGroups(
@@ -369,6 +573,29 @@ public final class ColumnTableLayoutCompiler {
         return hasLabel;
     }
 
+    private boolean hasRecordIdentityLabel(
+            List<JsonNode> cells, int labelStart, int recordStart, int row
+    ) {
+        for (var cell : cells) {
+            var b = bounds(cellRange(cell));
+            if (b == null || b[1] > row || b[3] < row || b[0] < labelStart || b[0] >= recordStart) continue;
+            if (recordIdentityText(text(cell))) return true;
+        }
+        return false;
+    }
+
+    private boolean recordIdentityText(String value) {
+        var normalized = value == null ? "" : value.replaceAll("\\s+", "").toLowerCase(Locale.ROOT);
+        if (normalized.isBlank()) return false;
+        if (normalized.matches(".*(编号|序号|批号|实验号|试验号|样品号|试样号|树脂号).*")) return true;
+        if ((normalized.contains("样品") || normalized.contains("试样"))
+                && (normalized.contains("配方") || normalized.contains("树脂")
+                || normalized.contains("实验") || normalized.contains("试验")
+                || normalized.contains("名称"))) return true;
+        return normalized.matches(".*\\b(sample|specimen|trial|experiment|batch)"
+                + "([_-]?(id|no|number|code))?\\b.*");
+    }
+
     private int extendAndTrimEnd(
             List<JsonNode> cells, int[] used, int recordStart, int recordEnd, int groupEnd
     ) {
@@ -438,7 +665,10 @@ public final class ColumnTableLayoutCompiler {
 
     private List<JsonNode> cells(JsonNode sheet) {
         var result = new LinkedHashMap<String, JsonNode>();
-        for (var key : List.of("semanticCells", "candidateCells", "physicalCells")) {
+        // Candidate/physical snapshots carry border and input facts that are
+        // absent from semantic cells in completed workbooks. Prefer them when
+        // the same address occurs in more than one collection.
+        for (var key : List.of("candidateCells", "physicalCells", "semanticCells")) {
             for (var cell : sheet.path(key)) {
                 var identity = cell.path("address").asText(cellRange(cell));
                 result.putIfAbsent(identity.toUpperCase(Locale.ROOT), cell);
@@ -516,7 +746,7 @@ public final class ColumnTableLayoutCompiler {
         for (var sheet : facts.path("sheets")) {
             var id = sheet.path("sheetId").asText(sheet.path("id").asText(""));
             if (!sheetId.equals(id)) continue;
-            for (var key : List.of("semanticCells", "candidateCells", "physicalCells")) {
+            for (var key : List.of("candidateCells", "physicalCells", "semanticCells")) {
                 for (var cell : sheet.path(key)) {
                     var identity = cell.path("address").asText(cellRange(cell));
                     result.putIfAbsent(identity.toUpperCase(Locale.ROOT), cell);

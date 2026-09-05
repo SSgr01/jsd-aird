@@ -1,5 +1,5 @@
-import { ArrowLeftOutlined, HistoryOutlined, EyeOutlined, SaveOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Empty, Result, Skeleton, Space, Spin, Tabs, Tag, Typography, message } from 'antd';
+import { ArrowLeftOutlined, DeleteOutlined, HistoryOutlined, EyeOutlined, SaveOutlined } from '@ant-design/icons';
+import { Alert, Button, Card, Empty, Modal, Result, Skeleton, Space, Spin, Tabs, Tag, Typography, message } from 'antd';
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 
@@ -281,6 +281,21 @@ export function ProductionUploadWorkspacePage() {
   const meta = [record.productionName, record.orderNo, record.productName, record.category]
     .filter(Boolean)
     .join(' · ');
+  const removeUpload = () => {
+    if (!record.allowedActions?.includes('DELETE')) return;
+    Modal.confirm({
+      title: '删除生产单上传记录？',
+      content: '仅删除未生成业务数据的上传记录，原始文件保留。',
+      okText: '确认删除',
+      okButtonProps: { danger: true },
+      cancelText: '返回',
+      onOk: async () => {
+        await productionUploadApi.delete(record.id);
+        message.success('上传记录已删除');
+        navigate('/production-orders/upload');
+      },
+    });
+  };
 
   return (
     <section className="workspace-shell template-business-workspace quality-excel-workspace production-upload-workspace">
@@ -332,6 +347,7 @@ export function ProductionUploadWorkspacePage() {
               >
                 发布
               </Button>
+              {record.allowedActions?.includes('DELETE') && <Button danger icon={<DeleteOutlined />} onClick={removeUpload}>删除</Button>}
             </>
           )}
         </Space>

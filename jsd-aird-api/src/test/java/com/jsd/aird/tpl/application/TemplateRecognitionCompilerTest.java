@@ -112,66 +112,6 @@ class TemplateRecognitionCompilerTest {
     }
 
     @Test
-    void compilesOneMatrixFieldWithColumnSlotsInsteadOfSixBusinessFields() throws Exception {
-        var schema = objectMapper.createObjectNode().put("type", "object");
-        schema.set("properties", objectMapper.createObjectNode());
-        var payload = objectMapper.createObjectNode()
-                .put("fieldCode", "TEST.MATRIX")
-                .put("fieldName", "光引发剂性能对比矩阵")
-                .put("groupName", "性能测试")
-                .put("dataPath", "/records")
-                .put("valueType", "array")
-                .put("required", false)
-                .put("relationId", "matrix-A4-H19")
-                .put("fieldId", "11111111-1111-1111-1111-111111111111")
-                .put("bindingId", "matrix-binding-A4-H19")
-                .put("kind", "MATRIX")
-                .put("role", "REPEAT_REGION")
-                .put("mappingKind", "MATRIX_REGION")
-                .put("repeatAxis", "COLUMN")
-                .put("recordHeight", 16)
-                .put("recordWidth", 1)
-                .put("recordStride", 1)
-                .put("editability", "EDITABLE")
-                .put("valueSource", "MIXED")
-                .put("locatorType", "MATRIX_REGION");
-        payload.set("locator", objectMapper.createObjectNode()
-                .put("sheetId", "sheet-1")
-                .put("address", "A4:H19")
-                .put("rowHeaderRange", "A5:B19")
-                .put("columnHeaderRange", "C4:H4")
-                .put("crossDataRange", "C5:H19"));
-        var slots = objectMapper.createArrayNode();
-        for (var column : List.of("C", "D", "E", "F", "G", "H")) {
-            slots.add(objectMapper.createObjectNode().put("slotId", "column-" + column)
-                    .put("column", column).put("identityAddress", column + "4")
-                    .put("recordRange", column + "4:" + column + "19"));
-        }
-        payload.set("matrixModel", objectMapper.createObjectNode()
-                .put("semanticMode", "CROSS_TAB")
-                .put("recordAxis", "COLUMN")
-                .put("rowHeaderRange", "A5:B19")
-                .put("columnHeaderRange", "C4:H4")
-                .put("crossDataRange", "C5:H19")
-                .set("columnSlots", slots));
-        payload.set("columnSlots", slots.deepCopy());
-        var suggestion = new TemplateImportRepository.RecognitionSuggestionView(
-                UUID.randomUUID(), UUID.randomUUID(), "MODEL", "MATRIX", payload,
-                0.95, objectMapper.createArrayNode(), "ACCEPTED", "model", "v2", "v2", Instant.now()
-        );
-
-        var result = compiler.compile(schema, List.of(suggestion), TemplateFormat.XLSX);
-
-        assertThat(result.fieldModel().path("fields")).singleElement()
-                .satisfies(field -> assertThat(field.path("columnSlots")).hasSize(6));
-        assertThat(result.mapping()).singleElement().satisfies(binding -> {
-            assertThat(binding.path("mappingKind").asText()).isEqualTo("MATRIX_REGION");
-            assertThat(binding.path("repeatAxis").asText()).isEqualTo("COLUMN");
-            assertThat(binding.path("recordHeight").asInt()).isEqualTo(16);
-        });
-    }
-
-    @Test
     void preservesColumnTableDirectionInCanonicalDraftAndContractMapping() throws Exception {
         var schema = objectMapper.createObjectNode().put("type", "object");
         schema.set("properties", objectMapper.createObjectNode());
@@ -203,7 +143,7 @@ class TemplateRecognitionCompilerTest {
                         .put("labelRange", "A5:C5").put("valueRange", "E5:N5")
                         .put("editability", "EDITABLE").put("valueSource", "USER_INPUT")));
         var suggestion = new TemplateImportRepository.RecognitionSuggestionView(
-                UUID.randomUUID(), UUID.randomUUID(), "MODEL", "TABLE_REGION", payload,
+                UUID.randomUUID(), UUID.randomUUID(), "MODEL", "COLUMN_TABLE", payload,
                 0.95, objectMapper.createArrayNode(), "ACCEPTED", "model", "v2", "v2", Instant.now());
 
         var result = compiler.compile(schema, List.of(suggestion), TemplateFormat.XLSX);
@@ -251,7 +191,7 @@ class TemplateRecognitionCompilerTest {
     }
 
     @Test
-    void marksValueOnlyFieldAsUnresolvedAndRegionAsNotApplicable() throws Exception {
+    void ignoresStandaloneRegionSuggestionAndKeepsValueOnlyFieldUnresolved() throws Exception {
         var schema = objectMapper.createObjectNode().put("type", "object");
         schema.set("properties", objectMapper.createObjectNode());
         var valueOnly = suggestion("ACCEPTED", "/value", "值", "基础信息");
@@ -261,32 +201,26 @@ class TemplateRecognitionCompilerTest {
                 .put("fieldName", "基本信息区域")
                 .put("dataPath", "/form")
                 .put("relationId", "region-1")
-                .put("kind", "TABLE_REGION")
+                .put("kind", "FORM_REGION")
                 .put("role", "REPEAT_REGION")
                 .put("mappingKind", "REPEAT_REGION")
                 .put("canonicalStatus", "CONFIRMED")
                 .put("structureStatus", "CONFIRMED")
                 .set("locator", objectMapper.createObjectNode().put("address", "A1:H3"));
         var region = new TemplateImportRepository.RecognitionSuggestionView(
-                UUID.randomUUID(), UUID.randomUUID(), "MODEL", "TABLE_REGION", regionPayload,
+                UUID.randomUUID(), UUID.randomUUID(), "MODEL", "FORM_REGION", regionPayload,
                 0.95, objectMapper.createArrayNode(), "ACCEPTED", "model", "v2", "v2", Instant.now());
 
         var result = compiler.compile(schema, List.of(valueOnly, region), TemplateFormat.XLSX);
-        assertThat(result.fieldModel().path("fields")).hasSize(2);
+        assertThat(result.fieldModel().path("fields")).hasSize(1);
         var unresolvedField = java.util.stream.StreamSupport.stream(
                         result.fieldModel().path("fields").spliterator(), false)
                 .filter(field -> "值".equals(field.path("name").asText()))
                 .findFirst().orElseThrow();
-        var regionField = java.util.stream.StreamSupport.stream(
-                        result.fieldModel().path("fields").spliterator(), false)
-                .filter(field -> "基本信息区域".equals(field.path("name").asText()))
-                .findFirst().orElseThrow();
         assertThat(unresolvedField.path("labelStatus").asText())
                 .isEqualTo("UNRESOLVED");
-        assertThat(regionField.path("fieldType").asText())
-                .isEqualTo("REGION");
-        assertThat(regionField.path("labelStatus").asText())
-                .isEqualTo("NOT_APPLICABLE");
+        assertThat(result.mapping()).hasSize(1);
+        assertThat(result.mapping().get(0).path("fieldName").asText()).isEqualTo("值");
     }
 
     @Test
@@ -303,7 +237,7 @@ class TemplateRecognitionCompilerTest {
         parentPayload.set("locator", objectMapper.createObjectNode()
                 .put("sheetId", "sheet-1").put("address", "A1:H3").put("range", "A1:H3"));
         var parent = new TemplateImportRepository.RecognitionSuggestionView(
-                UUID.randomUUID(), UUID.randomUUID(), "MODEL", "TABLE_REGION", parentPayload,
+                UUID.randomUUID(), UUID.randomUUID(), "MODEL", "FORM_REGION", parentPayload,
                 0.95, objectMapper.createArrayNode(), "ACCEPTED", "model", "v2", "v2", Instant.now());
 
         var child = suggestion("ACCEPTED", "/fields/测试人", "测试人", "基础信息");
@@ -338,7 +272,7 @@ class TemplateRecognitionCompilerTest {
         parentPayload.set("locator", objectMapper.createObjectNode()
                 .put("sheetId", "sheet-1").put("address", "A4:H19").put("range", "A4:H19"));
         var parent = new TemplateImportRepository.RecognitionSuggestionView(
-                UUID.randomUUID(), UUID.randomUUID(), "MODEL", "TABLE_REGION", parentPayload,
+                UUID.randomUUID(), UUID.randomUUID(), "MODEL", "COLUMN_TABLE", parentPayload,
                 0.95, objectMapper.createArrayNode(), "ACCEPTED", "model", "v2", "v2", Instant.now());
 
         var childSeed = suggestion("ACCEPTED", "/records/component_a/*/外观", "外观", "性能测试");
@@ -372,7 +306,7 @@ class TemplateRecognitionCompilerTest {
         schema.set("properties", objectMapper.createObjectNode());
         var candidate = suggestion("ACCEPTED", "/records", "结构候选", "性能测试");
         ((com.fasterxml.jackson.databind.node.ObjectNode) candidate.payload())
-                .put("kind", "MATRIX")
+                .put("kind", "UNKNOWN")
                 .put("candidateOnly", true)
                 .put("reviewRequired", true)
                 .put("physicalStructureOnly", true)

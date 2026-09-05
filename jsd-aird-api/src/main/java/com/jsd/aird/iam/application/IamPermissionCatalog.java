@@ -98,8 +98,6 @@ public final class IamPermissionCatalog {
                 p("knowledge.publish", "knowledge", "发布知识文档", "HIGH", "ALL"),
                 p("knowledge.export", "knowledge", "导出知识文档", "HIGH", "ALL"),
                 p("knowledge.download", "knowledge", "下载知识文档", "HIGH", "ALL"),
-                p("knowledge.ai.external", "knowledge", "允许知识内容 AI 外发", "CRITICAL", "SELECTED"),
-
                 p("data.view", "data", "查看数据", "LOW", "ALL"),
                 p("data.create", "data", "新建/导入数据任务", "MEDIUM", "SELF"),
                 p("data.update", "data", "编辑数据任务", "MEDIUM", "SELF"),
@@ -129,7 +127,7 @@ public final class IamPermissionCatalog {
                 p("spectrum.export", "spectrum", "导出图谱", "HIGH", "ALL"),
                 p("spectrum.download", "spectrum", "下载谱图数据", "HIGH", "ALL"),
                 p("ai.use", "ai", "使用 AI 能力", "MEDIUM", "ALL"),
-                p("ai.external", "ai", "允许 AI 外部发送", "CRITICAL", "SELECTED"),
+                p("ai.external", "ai", "允许知识文档 AI 授权", "CRITICAL", "SELECTED"),
                 p("ops.file.view", "ops", "查看文件", "LOW", "ALL"),
                 p("ops.file.upload", "ops", "上传文件", "MEDIUM", "SELF"),
                 p("ops.file.download", "ops", "下载文件", "HIGH", "ALL")

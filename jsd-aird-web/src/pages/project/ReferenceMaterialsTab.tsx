@@ -58,7 +58,7 @@ export function ReferenceMaterialsTab({ projectId }: { projectId: string }) {
       : `/data/import-jobs/${record.resourceId}`);
   };
   const changeStatus = (record: ReferenceMaterial) => {
-    const restoring = record.status === 'REMOVED';
+    const restoring = record.allowedActions?.includes('RESTORE');
     modal.confirm({
       title: restoring ? `恢复“${record.title}”？` : `移除“${record.title}”？`,
       content: restoring ? '恢复后重新显示在活动资料参考中。' : '仅移除项目资料参考，普通项目关联会保留。',
@@ -79,7 +79,7 @@ export function ReferenceMaterialsTab({ projectId }: { projectId: string }) {
     { title: '添加人', dataIndex: 'addedByName', width: 110, render: (value?: string, record?: ReferenceMaterial) => value || record?.addedBy || '—' },
     { title: '添加时间', dataIndex: 'addedAt', width: 160, render: (value: string) => dayjs(value).format('YYYY-MM-DD HH:mm') },
     { title: '状态', dataIndex: 'status', width: 90, render: (value: string) => <Tag color={value === 'ACTIVE' ? 'success' : 'default'}>{value === 'ACTIVE' ? '有效' : '已移除'}</Tag> },
-    { title: '操作', fixed: 'right', width: 190, render: (_: unknown, record) => <Space size={0}><Button type="link" disabled={!record.sourceAvailable} onClick={() => source(record)}>查看来源</Button><Can permission="project.assign"><Button type="link" danger={record.status === 'ACTIVE'} onClick={() => changeStatus(record)}>{record.status === 'ACTIVE' ? '移除' : '恢复'}</Button></Can></Space> },
+    { title: '操作', fixed: 'right', width: 190, render: (_: unknown, record) => <Space size={0}><Button type="link" disabled={!record.sourceAvailable} onClick={() => source(record)}>查看来源</Button><Can permission="project.assign">{record.allowedActions?.includes('DISABLE') || record.allowedActions?.includes('RESTORE') ? <Button type="link" danger={record.allowedActions.includes('DISABLE')} onClick={() => changeStatus(record)}>{record.allowedActions.includes('DISABLE') ? '移除' : '恢复'}</Button> : null}</Can></Space> },
   ];
 
   return <div className="pm-ref-tab">

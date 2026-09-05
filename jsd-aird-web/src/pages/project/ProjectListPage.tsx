@@ -1,5 +1,6 @@
 import {
   AppstoreOutlined,
+  InboxOutlined,
   DeleteOutlined,
   CopyOutlined,
   DownloadOutlined,
@@ -216,15 +217,16 @@ export function ProjectListPage() {
   };
 
   const handleDelete = () => {
-    if (!selected.size) return;
+    const ids = rows.filter((row) => selected.has(row.id) && row.allowedActions?.includes('DELETE')).map((row) => row.id);
+    if (!ids.length) { msg.warning('当前选择没有可删除的项目'); return; }
     Modal.confirm({
       title: '删除选中的项目？',
-      content: `已选择 ${selected.size} 个项目，删除后不可恢复。`,
+      content: `已选择 ${ids.length} 个可删除项目，删除后项目将从列表中隐藏。`,
       okText: '删除',
       okType: 'danger',
       onOk: async () => {
         try {
-          await deleteProjects([...selected]);
+          await deleteProjects(ids);
           msg.success('项目已删除');
           await load();
         } catch {
@@ -235,6 +237,8 @@ export function ProjectListPage() {
   };
 
   const handleDeleteRow = async (id: string) => {
+    const row = rows.find((item) => item.id === id);
+    if (!row || (!row.allowedActions?.includes('DELETE') && !row.allowedActions?.includes('ARCHIVE'))) return;
     try {
       await deleteProjects([id]);
       msg.success('项目已删除');
@@ -326,7 +330,7 @@ export function ProjectListPage() {
           <Button icon={<CopyOutlined />} disabled={!selected.size} onClick={handleCopy}>
             复制
           </Button>
-          <Button danger disabled={!selected.size} onClick={handleDelete}>
+          <Button danger disabled={!rows.some((row) => selected.has(row.id) && row.allowedActions?.includes('DELETE'))} onClick={handleDelete}>
             删除
           </Button>
           <Space.Compact>
@@ -452,11 +456,7 @@ export function ProjectListPage() {
                   </div>
                   <div className="pm-card-actions">
                     <Link to={`/projects/${row.id}`}>查看</Link>
-                    <Popconfirm title="确认删除该项目？" description="删除后不可恢复。" onConfirm={() => handleDeleteRow(row.id)}>
-                      <Button type="link" danger>
-                        删除
-                      </Button>
-                    </Popconfirm>
+                    {row.allowedActions?.includes('DELETE') ? <Popconfirm title="确认删除该项目？" description="项目将从默认列表中隐藏。" onConfirm={() => handleDeleteRow(row.id)}><Button type="link" danger>删除</Button></Popconfirm> : row.allowedActions?.includes('ARCHIVE') ? <Popconfirm title="确认归档该项目？" description="归档后项目不再出现在默认列表。" onConfirm={() => handleDeleteRow(row.id)}><Button type="link" icon={<InboxOutlined />}>归档</Button></Popconfirm> : null}
                   </div>
                 </div>
               ))}
@@ -509,11 +509,7 @@ export function ProjectListPage() {
                     <td>
                       <div className="cm-row-actions">
                         <Link to={`/projects/${row.id}`}>查看</Link>
-                        <Popconfirm title="确认删除该项目？" description="删除后不可恢复。" onConfirm={() => handleDeleteRow(row.id)}>
-                          <Button type="link" size="small" danger>
-                            删除
-                          </Button>
-                        </Popconfirm>
+                        {row.allowedActions?.includes('DELETE') ? <Popconfirm title="确认删除该项目？" description="项目将从默认列表中隐藏。" onConfirm={() => handleDeleteRow(row.id)}><Button type="link" size="small" danger>删除</Button></Popconfirm> : row.allowedActions?.includes('ARCHIVE') ? <Popconfirm title="确认归档该项目？" description="归档后项目不再出现在默认列表。" onConfirm={() => void handleDeleteRow(row.id)}><Button type="link" size="small" icon={<InboxOutlined />}>归档</Button></Popconfirm> : null}
                       </div>
                     </td>
                   </tr>

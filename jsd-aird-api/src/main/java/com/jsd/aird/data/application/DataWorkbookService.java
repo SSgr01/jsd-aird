@@ -340,7 +340,7 @@ public class DataWorkbookService {
         if (value == null || value.isBlank()) return false;
         var normalized = value.trim();
         return normalized.matches("(?i)b_[a-f0-9]+")
-                || normalized.matches("(?i)^(?:AUTO|TABLE|MATRIX|DATA|MATERIAL|PRODUCTION|WORKFLOW|FIELD)\\..+$")
+                || normalized.matches("(?i)^(?:AUTO|TABLE|DATA|MATERIAL|PRODUCTION|WORKFLOW|FIELD)\\..+$")
                 || normalized.matches("[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}");
     }
 
@@ -466,17 +466,12 @@ public class DataWorkbookService {
 
     private String fieldDefinitionGroup(TemplateDataImportFacade.ImportBinding binding,
                                         String labelPath, String displayName) {
-        var code = binding.fieldCode() == null ? "" : binding.fieldCode().toUpperCase(Locale.ROOT);
-        if (code.contains("ROW_DIMENSION") || code.contains("ROW_ATTRIBUTE")) return "行维度";
-        if (code.contains("COLUMN_DIMENSION") || code.contains("COLUMN_MEMBER")) return "列维度";
-        if (code.contains("MATRIX.MEASURE")) return "指标值";
         return fieldGroup(labelPath, displayName);
     }
 
     private boolean isRegionBinding(TemplateDataImportFacade.ImportBinding binding) {
         var kind = binding.mappingKind() == null ? "" : binding.mappingKind().toUpperCase(Locale.ROOT);
-        return kind.endsWith("_REGION") || List.of("ROW_TABLE", "COLUMN_TABLE", "MATRIX", "TABLE_REGION")
-                .contains(kind);
+        return "REPEAT_REGION".equals(kind) || List.of("ROW_TABLE", "COLUMN_TABLE").contains(kind);
     }
 
     private String labelLeaf(String labelPath) {
@@ -669,7 +664,7 @@ public class DataWorkbookService {
     private boolean isRepeatedStructure(String value) {
         var type = value == null ? "" : value.toUpperCase(Locale.ROOT);
         return type.contains("REPEAT") || type.contains("TABLE") || type.contains("ROW")
-                || type.contains("COLUMN") || type.contains("MATRIX");
+                || type.contains("COLUMN");
     }
 
     private String normalizeBusinessRegionName(String value) {
@@ -679,7 +674,7 @@ public class DataWorkbookService {
     }
 
     private boolean isGenericRegionName(String value) {
-        return Set.of("基本信息", "基础信息", "测试数据", "矩阵数据", "按行记录", "按列记录", "表单信息", "其他信息")
+        return Set.of("基本信息", "基础信息", "测试数据", "按行记录", "按列记录", "表单信息", "其他信息")
                 .contains(value);
     }
 
@@ -701,7 +696,6 @@ public class DataWorkbookService {
 
     private String structureTypeLabel(String value) {
         var type = value == null ? "" : value.toUpperCase(Locale.ROOT);
-        if (type.contains("MATRIX")) return "矩阵数据";
         if (type.contains("COLUMN")) return "按列记录";
         if (type.contains("ROW") || type.contains("REPEAT")) return "按行记录";
         if (type.contains("FORM")) return "表单信息";
@@ -735,7 +729,7 @@ public class DataWorkbookService {
         if (dimensions != null && dimensions.isObject()) {
             var row = dimensions.path("row").asText("").trim();
             var column = dimensions.path("column").asText("").trim();
-            if (!row.isBlank() || !column.isBlank()) return componentId + ":matrix:" + row + ":" + column;
+            if (!row.isBlank() || !column.isBlank()) return componentId + ":repeat:" + row + ":" + column;
         }
         return recordId;
     }

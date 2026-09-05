@@ -21,6 +21,7 @@ export interface Communication {
   status: 'OPEN' | 'FOLLOWING' | 'CLOSED';
   customFields?: Record<string, unknown>;
   version: number;
+  allowedActions?: string[];
 }
 export type CommunicationInput = Omit<
   Communication,
@@ -57,6 +58,7 @@ export interface Requirement {
   version: number;
   customStatusName?: string;
   customFields?: Record<string, unknown>;
+  allowedActions?: string[];
 }
 export type RequirementInput = Omit<Requirement, 'id' | 'requirementCode'>;
 async function list<T>(path: string, params: Record<string, unknown>) {

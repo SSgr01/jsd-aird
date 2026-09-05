@@ -19,14 +19,12 @@ public final class RecognitionCoverageValidator {
 
     private final ObjectMapper objectMapper;
     private final StructurePrimitiveRecognizer primitiveRecognizer;
+    private final PhysicalStructureFieldCompiler fieldCompiler;
 
     public RecognitionCoverageValidator(ObjectMapper objectMapper) {
-        this(objectMapper, false);
-    }
-
-    public RecognitionCoverageValidator(ObjectMapper objectMapper, boolean topologyV2Enabled) {
         this.objectMapper = objectMapper;
-        this.primitiveRecognizer = new StructurePrimitiveRecognizer(objectMapper, topologyV2Enabled);
+        this.primitiveRecognizer = new StructurePrimitiveRecognizer(objectMapper);
+        this.fieldCompiler = new PhysicalStructureFieldCompiler(objectMapper);
     }
 
     public ObjectNode physicalReport(JsonNode structure, String reason) {
@@ -46,9 +44,22 @@ public final class RecognitionCoverageValidator {
         for (var region : regions) {
             details.add(regionDetail(region, "UNRESOLVED", false));
         }
-        report.putArray("issues").add(reason == null || reason.isBlank()
+        var reportIssues = report.putArray("issues");
+        for (var region : regions) {
+            if ("UNKNOWN".equals(region.path("blockType").asText(region.path("type").asText("")))) {
+                reportIssues.add("STRUCTURE_DIRECTION_UNCLEAR");
+            }
+        }
+        reportIssues.add(reason == null || reason.isBlank()
                 ? "物理结构区域尚未完成语义识别"
                 : reason);
+        report.put("expectedFieldCount", regions.stream()
+                        .mapToInt(region -> region.path("expectedFieldCount").asInt(0)).sum())
+                .put("returnedFieldCount", 0)
+                .put("validLocationFieldCount", 0)
+                .put("pendingFieldCount", regions.stream()
+                        .mapToInt(region -> region.path("expectedFieldCount").asInt(0)).sum())
+                .put("structureExceptionCount", reportIssues.size());
         return report;
     }
 
@@ -86,6 +97,11 @@ public final class RecognitionCoverageValidator {
             var key = regionKey(region);
             var callState = regionStates.getOrDefault(key, "NOT_SCHEDULED");
             var semantic = hasSemanticSuggestion(region, suggestions);
+            var expectedFields = region.path("expectedFieldCount").asInt(0);
+            var fieldCoverage = fieldCoverage(region, suggestions);
+            var returnedFields = fieldCoverage.returned();
+            var fieldsCovered = expectedFields == 0
+                    || (fieldCoverage.valid() >= expectedFields && fieldCoverage.pending() == 0);
             var structureConflict = region.path("structureConflict").asBoolean(false)
                     || "CONFLICT".equals(region.path("structureStatus").asText(""));
             var structureUnresolved = "UNRESOLVED".equals(region.path("structureStatus").asText(""))
@@ -93,13 +109,17 @@ public final class RecognitionCoverageValidator {
             var canonicalConfirmed = "CONFIRMED".equals(region.path("canonicalStatus").asText())
                     && (!region.has("structureStatus")
                         || "CONFIRMED".equals(region.path("structureStatus").asText()));
-            var complete = "SUCCEEDED".equals(callState) && semantic
+            var complete = "SUCCEEDED".equals(callState) && semantic && fieldsCovered
                     && canonicalConfirmed && !structureConflict && !structureUnresolved;
             if (complete) covered++;
             else unresolved++;
             details.add(regionDetail(region,
                     complete ? "COVERED" : callState,
-                    semantic));
+                    semantic).put("expectedFieldCount", expectedFields)
+                    .put("returnedFieldCount", returnedFields)
+                    .put("validLocationFieldCount", fieldCoverage.valid())
+                    .put("pendingFieldCount", fieldCoverage.pending())
+                    .put("fieldCoverageComplete", fieldsCovered));
             if (seen.add(key) && !complete) {
                 issues.add(issueFor(region, callState, semantic));
             }
@@ -125,7 +145,16 @@ public final class RecognitionCoverageValidator {
                 .put("unresolvedRegionCount", unresolved)
                 .put("coverageRatio", ratio)
                 .put("globalStructureCallSucceeded", globalSucceeded)
-                .put("globalStructureCallFailed", globalFailed);
+                .put("globalStructureCallFailed", globalFailed)
+                .put("expectedFieldCount", expected.stream()
+                        .mapToInt(region -> region.path("expectedFieldCount").asInt(0)).sum())
+                .put("returnedFieldCount", expected.stream()
+                        .mapToInt(region -> fieldCoverage(region, suggestions).returned()).sum())
+                .put("validLocationFieldCount", expected.stream()
+                        .mapToInt(region -> fieldCoverage(region, suggestions).valid()).sum())
+                .put("pendingFieldCount", expected.stream()
+                        .mapToInt(region -> fieldCoverage(region, suggestions).pending()).sum())
+                .put("structureExceptionCount", issues.size());
         report.set("regions", details);
         report.set("issues", issues);
         return new Assessment(report, status, covered, unresolved);
@@ -145,12 +174,102 @@ public final class RecognitionCoverageValidator {
         var result = new ArrayList<JsonNode>();
         for (var primitive : primitiveRecognizer.recognize(structure)) {
             var type = primitive.path("blockType").asText("");
-            if (!Set.of("MATRIX", "ROW_TABLE", "COLUMN_TABLE", "FORM_REGION").contains(type)) continue;
+            if (!Set.of("ROW_TABLE", "COLUMN_TABLE", "FORM_REGION", "UNKNOWN").contains(type)) continue;
             var geometryStatus = primitive.path("geometryStatus").asText("");
             if (!"VALID_GEOMETRY".equals(geometryStatus)) continue;
-            result.add(primitive);
+            var copy = primitive.deepCopy();
+            if (copy instanceof ObjectNode object) {
+                var expectedRefs = expectedCandidateRefs(object, structure);
+                object.put("expectedFieldCount", expectedRefs.size());
+                var refs = object.putArray("expectedCandidateRefs");
+                expectedRefs.forEach(refs::add);
+            }
+            result.add(copy);
         }
         return List.copyOf(result);
+    }
+
+    private Set<String> expectedCandidateRefs(JsonNode region, JsonNode facts) {
+        var type = region.path("blockType").asText(region.path("type").asText(""));
+        if ("UNKNOWN".equals(type)) return Set.of();
+        var parent = objectMapper.createObjectNode().put("kind", type)
+                .put("blockId", region.path("candidateId").asText(region.path("id").asText("")))
+                .put("regionId", region.path("candidateId").asText(region.path("id").asText("")));
+        parent.set("locator", objectMapper.createObjectNode()
+                .put("sheetId", region.path("sheetId").asText())
+                .put("range", region.path("range").asText()));
+        var refs = new LinkedHashSet<String>();
+        for (var field : fieldCompiler.children(parent, region, facts)) {
+            var payload = field.payload();
+            var ref = payload.path("candidateRef").asText("").strip();
+            if (ref.isBlank()) ref = payload.path("relationId").asText("").strip();
+            if (!ref.isBlank()) refs.add(ref);
+        }
+        return refs;
+    }
+
+    private FieldCoverage fieldCoverage(JsonNode region,
+            List<RecognitionModelClient.ModelSuggestion> suggestions) {
+        var expectedRefs = new LinkedHashSet<String>();
+        region.path("expectedCandidateRefs").forEach(ref -> {
+            if (ref.isTextual() && !ref.asText().isBlank()) expectedRefs.add(ref.asText());
+        });
+        if (expectedRefs.isEmpty()) return new FieldCoverage(0, 0, 0);
+        var returnedRefs = new LinkedHashSet<String>();
+        var validRefs = new LinkedHashSet<String>();
+        var pendingRefs = new LinkedHashSet<String>();
+        for (var suggestion : suggestions == null ? List.<RecognitionModelClient.ModelSuggestion>of() : suggestions) {
+            var payload = suggestion.payload();
+            if ("SCALAR_FIELD".equals(suggestion.suggestionType())
+                    || "REPEAT_FIELD".equals(payload.path("mappingKind").asText(""))) {
+                var ref = payload.path("candidateRef").asText("");
+                addMatchingCandidate(returnedRefs, expectedRefs, ref);
+                if (expectedRefs.contains(ref)) {
+                    if (hasValidFieldLocation(payload)) validRefs.add(ref);
+                    if (isPendingField(payload)) pendingRefs.add(ref);
+                }
+            }
+            for (var column : payload.path("columns")) {
+                var ref = column.path("candidateRef").asText("");
+                addMatchingCandidate(returnedRefs, expectedRefs, ref);
+                if (expectedRefs.contains(ref)) {
+                    if (hasValidFieldLocation(column)) validRefs.add(ref);
+                    if (isPendingField(column)) pendingRefs.add(ref);
+                }
+            }
+        }
+        // Missing candidates are pending by definition; an explicitly returned
+        // candidate remains pending when it has no usable locator or is marked
+        // for human confirmation.
+        var missingOrInvalid = new LinkedHashSet<>(expectedRefs);
+        missingOrInvalid.removeAll(validRefs);
+        pendingRefs.addAll(missingOrInvalid);
+        return new FieldCoverage(returnedRefs.size(), validRefs.size(), pendingRefs.size());
+    }
+
+    private boolean hasValidFieldLocation(JsonNode field) {
+        var locator = field.path("locator");
+        var range = locator.path("value").path("range").asText("");
+        if (range.isBlank()) range = locator.path("valueRange").asText("");
+        if (range.isBlank()) range = field.path("valueRange").asText("");
+        if (range.isBlank()) range = locator.path("range").asText("");
+        if (range.isBlank()) range = locator.path("address").asText("");
+        return bounds(range) != null;
+    }
+
+    private boolean isPendingField(JsonNode field) {
+        return field.path("reviewRequired").asBoolean(false)
+                || field.path("candidateOnly").asBoolean(false)
+                || field.path("semanticFallback").asBoolean(false)
+                || field.path("positionPending").asBoolean(false);
+    }
+
+    private record FieldCoverage(int returned, int valid, int pending) {
+    }
+
+    private void addMatchingCandidate(Set<String> returned, Set<String> expected, String candidateRef) {
+        var ref = candidateRef == null ? "" : candidateRef.strip();
+        if (!ref.isBlank() && expected.contains(ref)) returned.add(ref);
     }
 
     private boolean hasSemanticSuggestion(
@@ -165,12 +284,12 @@ public final class RecognitionCoverageValidator {
             var blockId = payload.path("blockId").asText(payload.path("regionId").asText(""));
             if (!expectedId.equals(candidateRef) && !expectedId.equals(blockId)) continue;
             var kind = payload.path("kind").asText(payload.path("tableKind").asText(""));
-            if (Set.of("MATRIX", "ROW_TABLE", "COLUMN_TABLE").contains(type)) {
+            if (Set.of("ROW_TABLE", "COLUMN_TABLE").contains(type)) {
                 var locatorRange = payload.path("locator").path("range")
                         .asText(payload.path("range").asText(range));
                 if (isTableSuggestion(suggestion) && type.equals(kind)
                         && range.equalsIgnoreCase(locatorRange)) return true;
-            } else if ("FORM_REGION".equals(type) || "FORM_FIELDS".equals(type)) {
+            } else if ("FORM_REGION".equals(type)) {
                 var locator = payload.path("locator");
                 var locatorRange = locator.path("range").asText(payload.path("range").asText(range));
                 if ("SCALAR_FIELD".equals(suggestion.suggestionType())
@@ -211,11 +330,7 @@ public final class RecognitionCoverageValidator {
     }
 
     private boolean isTableSuggestion(RecognitionModelClient.ModelSuggestion suggestion) {
-        var type = suggestion.suggestionType();
-        var kind = suggestion.payload().path("kind")
-                .asText(suggestion.payload().path("tableKind").asText(""));
-        return Set.of("ROW_TABLE", "COLUMN_TABLE", "MATRIX", "TABLE_REGION", "TABLE_FIELD")
-                .contains(type) || Set.of("ROW_TABLE", "COLUMN_TABLE", "MATRIX").contains(kind);
+        return Set.of("ROW_TABLE", "COLUMN_TABLE").contains(suggestion.suggestionType());
     }
 
     private ObjectNode regionDetail(JsonNode region, String status, boolean semantic) {
@@ -230,10 +345,15 @@ public final class RecognitionCoverageValidator {
                 .put("structureConflict", region.path("structureConflict").asBoolean(false))
                 .put("modelAssessmentVerdict", region.path("modelAssessmentVerdict").asText("MODEL_UNRESOLVED"))
                 .put("status", status)
-                .put("semanticSuggestionPresent", semantic);
+                .put("semanticSuggestionPresent", semantic)
+                .put("expectedFieldCount", region.path("expectedFieldCount").asInt(0))
+                .put("candidateId", region.path("candidateId").asText(region.path("id").asText("")));
     }
 
     private String issueFor(JsonNode region, String callState, boolean semantic) {
+        if ("UNKNOWN".equals(region.path("type").asText(region.path("blockType").asText("")))) {
+            return "区域 " + region.path("range").asText("") + "：STRUCTURE_DIRECTION_UNCLEAR（无法唯一判断按行或按列重复方向）";
+        }
         if (!"SUCCEEDED".equals(callState)) {
             return "区域 " + region.path("range").asText("") + " 未完成第二阶段识别：" + callState;
         }

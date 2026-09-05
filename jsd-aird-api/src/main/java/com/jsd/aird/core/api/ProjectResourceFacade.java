@@ -8,6 +8,7 @@ import java.util.Set;
 import java.util.UUID;
 
 import com.jsd.aird.shared.api.PageResponse;
+import com.jsd.aird.shared.api.AllowedActions;
 import com.jsd.aird.shared.security.Actor;
 
 public interface ProjectResourceFacade {
@@ -50,5 +51,9 @@ public interface ProjectResourceFacade {
                          UUID fileObjectId, String sourceModule, String title, String originalName,
                          String contentType, long size, String summary, String status,
                          UUID addedBy, String addedByName, Instant addedAt,
-                         UUID removedBy, Instant removedAt, boolean sourceAvailable) { }
+                         UUID removedBy, Instant removedAt, boolean sourceAvailable) {
+        public List<String> getAllowedActions() {
+            return AllowedActions.disabled(status);
+        }
+    }
 }

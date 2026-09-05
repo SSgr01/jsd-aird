@@ -268,53 +268,6 @@ class DataWorkbookServiceTest {
         assertThat(service.workbookRegions(definition, List.of(sheet), definitions, List.of())).isEmpty();
     }
 
-    @Test
-    void usesTemplateMatrixRegionNameAndChineseFieldGroupsInsteadOfContractCodes() {
-        var contract = objectMapper.createObjectNode();
-        contract.putArray("components").add(component("matrix-region", "MATRIX_REGION",
-                "matrix-region", "matrix-row", "matrix-value").put("name", "基础信息"));
-        var schema = objectMapper.createObjectNode();
-        schema.putObject("x-jsd-field-model").putArray("fields")
-                .add(objectMapper.createObjectNode().put("fieldId", "matrix-field")
-                        .put("fieldCode", "AUTO.MATRIX").put("name", "性能矩阵"));
-        var mappings = objectMapper.createArrayNode();
-        mappings.add(objectMapper.createObjectNode().put("bindingId", "matrix-region")
-                .put("fieldId", "matrix-field").put("fieldCode", "AUTO.MATRIX")
-                .put("mappingKind", "MATRIX_REGION"));
-        var definition = new TemplateDataImportFacade.DataTemplateDefinition(
-                UUID.randomUUID(), UUID.randomUUID(), "TPL-M", "矩阵模板", null, 1, "XLSX",
-                schema, mappings, List.of(
-                        new TemplateDataImportFacade.FieldDefinition("MATRIX.ROW_DIMENSION.temperature", "固化温度",
-                                "TEXT", null, false, false, List.of(), "/temperature"),
-                        new TemplateDataImportFacade.FieldDefinition("MATRIX.MEASURE.value", "交叉值",
-                                "NUMBER", null, false, false, List.of(), "/value")),
-                7, 7, "hash", contract);
-        var rowLocator = objectMapper.createObjectNode().put("componentId", "matrix-region")
-                .put("sheetId", "sheet-1").put("sourceRange", "A2:A3");
-        var valueLocator = objectMapper.createObjectNode().put("componentId", "matrix-region")
-                .put("sheetId", "sheet-1").put("sourceRange", "B2:C3");
-        var bindings = List.of(
-                new TemplateDataImportFacade.ImportBinding("matrix-row", "MATRIX.ROW_DIMENSION.temperature",
-                        "/temperature", "MATRIX_FIELD", "matrix-region", "ROW", 1, 1, 1,
-                        JsonNodeFactory.instance.objectNode(), rowLocator, false, false, true,
-                        "INPUT", "TEXT", "", "MATRIX.ROW_DIMENSION.temperature", "FEATURE", true),
-                new TemplateDataImportFacade.ImportBinding("matrix-value", "MATRIX.MEASURE.value",
-                        "/value", "MATRIX_FIELD", "matrix-region", "ROW", 1, 1, 1,
-                        JsonNodeFactory.instance.objectNode(), valueLocator, false, false, true,
-                        "INPUT", "NUMBER", "", "MATRIX.MEASURE.value", "FEATURE", true));
-        var definitions = service.fieldDefinitions(definition, bindings, List.of());
-        var sheet = new DataRepository.Sheet(UUID.randomUUID(), "sheet-1", "性能矩阵", 0,
-                true, List.of(1), 2, 3, objectMapper.createObjectNode(), "CONFIRMED");
-
-        var regions = service.workbookRegions(definition, List.of(sheet), definitions, List.of());
-
-        assertThat(regions).singleElement().satisfies(region -> {
-            assertThat(region.name()).isEqualTo("性能矩阵");
-            assertThat(region.fieldGroups()).extracting(DataWorkbookService.WorkbookFieldGroup::name)
-                    .containsExactly("行维度", "指标值");
-        });
-    }
-
     private com.fasterxml.jackson.databind.node.ObjectNode component(String id, String type, String... bindingIds) {
         var component = objectMapper.createObjectNode().put("componentId", id)
                 .put("sheetId", "sheet-1").put("structureType", type);

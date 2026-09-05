@@ -3,6 +3,7 @@ package com.jsd.aird.quality.application.port;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.jsd.aird.quality.application.QualityDataService;
 import com.jsd.aird.shared.api.PageResponse;
+import com.jsd.aird.shared.api.AllowedActions;
 
 import java.time.Instant;
 import java.util.List;
@@ -12,13 +13,23 @@ import java.util.UUID;
 /** Persistence boundary for the quality data application service. */
 public interface QualityDataStore {
     record Category(UUID id, String businessType, String name, String description,
-                    boolean systemDefault, int sortOrder, long recordCount) {}
+                    boolean systemDefault, int sortOrder, long recordCount) {
+        public List<String> getAllowedActions() {
+            return AllowedActions.category(systemDefault);
+        }
+    }
 
     record RecordView(UUID id, String businessType, UUID categoryId, String categoryName,
                       String businessNo, JsonNode data, UUID sourceFileId, String sourceFileName,
                       UUID projectId, String projectName, String stageName, String taskName,
                       String visibility, JsonNode workbookSnapshot, long lockVersion,
-                      Instant createdAt, Instant updatedAt) {}
+                      Instant createdAt, Instant updatedAt) {
+        public List<String> getAllowedActions() {
+            // Quality records currently expose no completed/reference marker;
+            // the existing service permits soft deletion and re-checks it at command time.
+            return List.of("DELETE");
+        }
+    }
 
     record VersionView(UUID id, UUID recordId, int versionNo, String businessNo, JsonNode data,
                        JsonNode workbookSnapshot, long lockVersion, String changeType,
@@ -27,7 +38,11 @@ public interface QualityDataStore {
     record UploadView(UUID id, UUID fileId, UUID categoryId, String categoryName, String originalName,
                       String contentType, long size, String status, UUID generatedRecordId,
                       UUID projectId, String projectName, String stageName, String taskName,
-                      String visibility, Instant createdAt) {}
+                      String visibility, Instant createdAt) {
+        public List<String> getAllowedActions() {
+            return "DELETED".equalsIgnoreCase(status) ? List.of() : List.of("DELETE");
+        }
+    }
 
     List<Category> categories(UUID organizationId, String type);
     Category category(UUID organizationId, UUID categoryId);

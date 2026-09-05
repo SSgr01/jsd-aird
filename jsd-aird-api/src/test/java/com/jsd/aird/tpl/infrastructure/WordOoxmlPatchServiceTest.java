@@ -82,6 +82,35 @@ class WordOoxmlPatchServiceTest {
     }
 
     @Test
+    void insertsContentControlIntoTheExactStableEmptyTableCell() throws Exception {
+        var source = docx("""
+                <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                  <w:body><w:tbl><w:tr>
+                    <w:tc><w:p><w:r><w:t>申请编号</w:t></w:r></w:p></w:tc>
+                    <w:tc><w:p/></w:tc>
+                    <w:tc><w:p><w:r><w:t>申请人</w:t></w:r></w:p></w:tc>
+                    <w:tc><w:p/></w:tc>
+                  </w:tr></w:tbl></w:body>
+                </w:document>
+                """);
+        var parsed = new DocxStructureParser(objectMapper).parse(new ByteArrayInputStream(source));
+        var valueCellId = parsed.structureSummary().path("documentIR").path("tables").get(0)
+                .path("rows").get(0).path("cells").get(1).path("id").asText();
+        var operations = objectMapper.createArrayNode()
+                .add(objectMapper.createObjectNode().put("type", "INSERT_CONTENT_CONTROL")
+                        .put("targetId", valueCellId).put("markerId", "marker-application-no")
+                        .put("tag", "FIELD.APPLICATION_NO").put("alias", "申请编号")
+                        .put("baseText", ""));
+
+        var patched = service.apply(source, operations);
+        var xml = documentXml(patched);
+
+        assertThat(xml).contains("marker-application-no", "FIELD.APPLICATION_NO");
+        assertThat(xml.indexOf("marker-application-no")).isBetween(
+                xml.indexOf("申请编号"), xml.indexOf("申请人"));
+    }
+
+    @Test
     void keepsMultiplePositionalInsertionsBoundToTheirOriginalTextNodes() throws Exception {
         var operations = objectMapper.createArrayNode()
                 .add(objectMapper.createObjectNode().put("type", "INSERT_CONTENT_CONTROL")

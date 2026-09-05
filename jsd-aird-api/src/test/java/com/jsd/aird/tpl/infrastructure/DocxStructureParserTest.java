@@ -112,6 +112,43 @@ class DocxStructureParserTest {
                 && node.path("sourceLocator").path("rowCount").asInt() == 1);
     }
 
+    @Test
+    void exposesNestedTablesAndStableLogicalCellsWhileKeepingOnlyTopLevelBlocks() throws Exception {
+        var source = minimalDocx(
+                """
+                <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                  <w:body>
+                    <w:tbl><w:tblGrid><w:gridCol w:w="9000"/></w:tblGrid><w:tr><w:tc>
+                      <w:p/>
+                      <w:tbl><w:tblGrid><w:gridCol w:w="4500"/><w:gridCol w:w="4500"/></w:tblGrid>
+                        <w:tr><w:tc><w:p><w:r><w:t>拟制人</w:t></w:r></w:p></w:tc><w:tc><w:p/></w:tc></w:tr>
+                        <w:tr><w:tc><w:tcPr><w:gridSpan w:val="2"/></w:tcPr><w:p><w:r><w:t>结论</w:t></w:r></w:p></w:tc></w:tr>
+                      </w:tbl>
+                    </w:tc></w:tr></w:tbl>
+                    <w:sectPr/>
+                  </w:body>
+                </w:document>
+                """,
+                """
+                <w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>
+                """
+        );
+
+        var ir = parser.parse(new ByteArrayInputStream(source)).structureSummary().path("documentIR");
+
+        assertThat(ir.path("blocks")).hasSize(1);
+        assertThat(ir.path("tables")).hasSize(2);
+        assertThat(ir.path("tables").get(0).path("layoutContainer").asBoolean()).isTrue();
+        assertThat(ir.path("tables").get(1).path("nestingDepth").asInt()).isEqualTo(1);
+        assertThat(ir.path("tables").get(1).path("parentTablePath").asText()).isNotBlank();
+        var firstCell = ir.path("tables").get(1).path("rows").get(0).path("cells").get(0);
+        assertThat(firstCell.path("id").asText()).startsWith("cell-").hasSize(21);
+        assertThat(firstCell.path("sourcePath").asText())
+                .contains("/tbl[1]/tr[1]/tc[1]/tbl[1]/", "tc[1]");
+        assertThat(ir.path("tables").get(1).path("rows").get(1).path("cells").get(0)
+                .path("columnSpan").asInt()).isEqualTo(2);
+    }
+
     private byte[] minimalDocx(String documentXml, String stylesXml) throws Exception {
         try (var output = new ByteArrayOutputStream(); var zip = new ZipOutputStream(output)) {
             for (var part : Map.of("word/document.xml", documentXml, "word/styles.xml", stylesXml).entrySet()) {

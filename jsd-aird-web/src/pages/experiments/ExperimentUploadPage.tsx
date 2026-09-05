@@ -269,7 +269,7 @@ export function ExperimentUploadPage() {
             type="link"
             danger
             icon={<DeleteOutlined />}
-            disabled={!['COMPLETED', 'FAILED'].includes(job.status)}
+            disabled={!job.allowedActions?.includes('DELETE')}
             onClick={() => Modal.confirm({
               title: `删除“${job.sourceFileName}”的上传记录？`,
               content: job.experimentId

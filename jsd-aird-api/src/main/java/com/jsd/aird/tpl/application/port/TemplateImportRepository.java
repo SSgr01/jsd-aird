@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import com.jsd.aird.shared.api.AllowedActions;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.jsd.aird.tpl.domain.TemplateFormat;
@@ -246,6 +247,9 @@ public interface TemplateImportRepository {
             boolean duplicateOverride,
             UUID duplicateSourceJobId
     ) {
+        public List<String> getAllowedActions() {
+            return AllowedActions.templateImport(status, generatedTemplateVersionId != null);
+        }
     }
 
     record IssueView(

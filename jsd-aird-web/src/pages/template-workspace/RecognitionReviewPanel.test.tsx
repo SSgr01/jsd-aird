@@ -16,7 +16,7 @@ const review: RecognitionReview = {
     ignored: 0,
     scalar: 2,
     rowTable: 0,
-    matrix: 0,
+    columnTable: 0,
     qualityIssueCount: 0,
     autoFixedCount: 0,
     blockingIssueCount: 0,
@@ -153,17 +153,7 @@ describe('RecognitionReviewPanel', () => {
       <RecognitionReviewPanel
         review={{
           ...review,
-          semanticModel: {
-            businessBlocks: [
-              {
-                blockId: 'block-text',
-                sheetId: 'sheet-1',
-                range: 'H6:J23',
-                type: 'FREE_TEXT',
-                businessName: '操作程序记录',
-              },
-            ],
-          },
+          semanticModel: { businessBlocks: [] },
           items: [{
             ...review.items[0]!,
             payload: { ...review.items[0]!.payload, candidateOnly: true, pendingReason: 'PROTOCOL_REVIEW_REQUIRED' },
@@ -221,6 +211,45 @@ describe('RecognitionReviewPanel', () => {
     expect(screen.getByRole('button', { name: '应用建议' })).toBeEnabled();
   });
 
+  it('展示 Word 表格方向异常而不把它当成 OTHER 隐藏', () => {
+    render(
+      <RecognitionReviewPanel
+        review={{
+          ...review,
+          summary: { ...review.summary, qualityIssueCount: 1, blockingIssueCount: 1 },
+          qualityIssues: [{
+            id: 'word-direction-1',
+            issueType: 'STRUCTURE_DIRECTION_UNCLEAR',
+            severity: 'BLOCKER',
+            confidence: 0.99,
+            sheetId: '',
+            sheetName: '',
+            address: 'table-a',
+            title: 'Word 表格记录方向不明确',
+            description: '无法可靠判断每条记录按行还是按列重复。',
+            businessImpact: '必须先确认结构。',
+            autoFixable: false,
+            status: 'DETECTED',
+            suggestedPatch: {},
+            inversePatch: {},
+            evidence: [{
+              nodeId: 'table-a',
+              sourcePath: '/document[1]/body[1]/tbl[2]',
+              rowCount: 3,
+              columnCount: 3,
+            }],
+          }],
+        }}
+        editable
+        selectedQualityIssueId="word-direction-1"
+        {...handlers}
+      />,
+    );
+
+    expect(screen.getByText('Word 表格记录方向不明确')).toBeInTheDocument();
+    expect(screen.getByText('必须先确认结构。')).toBeInTheDocument();
+  });
+
   it('隐藏内部恢复诊断并对部分识别显示统一提示', () => {
     render(
       <RecognitionReviewPanel
@@ -257,128 +286,13 @@ describe('RecognitionReviewPanel', () => {
     expect(screen.queryByRole('button', { name: '应用建议' })).not.toBeInTheDocument();
   });
 
-  it('普通表格也展示长表预览和运行时列槽位', () => {
-    render(
-      <RecognitionReviewPanel
-        review={{
-          ...review,
-          items: [{
-            ...review.items[0]!,
-            kind: 'ROW_TABLE',
-            payload: {
-              ...review.items[0]!.payload,
-              longTableModel: {
-                schemaVersion: 1,
-                sourceKind: 'ROW_TABLE',
-                semanticMode: 'LONG_FORM',
-                sourceRange: 'A5:N26',
-                rowHeaderRange: 'A5:D26',
-                columnHeaderRange: 'E4:N4',
-                dataRange: 'E5:N26',
-                aggregatePolicy: 'INCLUDE_MARKED',
-                blankAxisPolicy: 'SKIP_EMPTY_RUNTIME_MEMBER',
-                trainingPolicy: 'REQUIRE_RUNTIME_MEMBER',
-                dimensions: [],
-                records: [{
-                  recordKey: 'sheet-1|5|E5',
-                  rowIndex: 5,
-                  columnIndex: 5,
-                  rowRole: 'TEST_ITEM',
-                  rowPath: ['物性测试', '外观'],
-                  columnMember: {
-                    coordinate: 'E',
-                    address: 'E4',
-                    label: '',
-                    status: 'RUNTIME_INPUT',
-                    instanceStatus: 'EMPTY',
-                  },
-                  value: {
-                    address: 'E5',
-                    valueSource: 'USER_INPUT',
-                    trainingEligible: false,
-                  },
-                  trainingEligible: false,
-                }],
-                columnSlots: [{
-                  slotId: 'column-E',
-                  column: 'E',
-                  identityAddress: 'E4',
-                  recordRange: 'E4:E26',
-                  templateStatus: 'RUNTIME_INPUT',
-                  instanceStatus: 'EMPTY',
-                }],
-              },
-            },
-          }],
-        }}
-        editable
-        selectedRecognitionItemId="item-1"
-        {...handlers}
-      />,
-    );
-
-    expect(screen.getByText('长表结构预览')).toBeInTheDocument();
-    expect(screen.getByText(/1 个运行时列槽位/)).toBeInTheDocument();
-    expect(screen.getByText('空白输入')).toBeInTheDocument();
-  });
-
-  it('矩阵表展示共享列轴和交叉结果区，而不是普通明细表描述', () => {
-    const slots = Array.from({ length: 10 }, (_, index) => {
-      const column = String.fromCharCode('E'.charCodeAt(0) + index);
-      return {
-        slotId: `column-${column}`,
-        column,
-        identityAddress: `${column}4`,
-        recordRange: `${column}4:${column}100`,
-        templateStatus: 'RUNTIME_INPUT' as const,
-        instanceStatus: 'EMPTY' as const,
-      };
-    });
-    render(
-      <RecognitionReviewPanel
-        review={{
-          ...review,
-          summary: { ...review.summary, total: 1, pending: 1, scalar: 0, matrix: 1 },
-          items: [{
-            ...review.items[0]!,
-            fieldName: '综合测试结果区域',
-            kind: 'MATRIX',
-            payload: {
-              ...review.items[0]!.payload,
-              fieldName: '综合测试结果区域',
-              matrixModel: {
-                semanticMode: 'CROSS_TAB',
-                recordAxis: 'COLUMN',
-                columnHeaderRange: 'E4:N4',
-                rowHeaderRange: 'A5:D100',
-                crossDataRange: 'E5:N100',
-                columnSlots: slots,
-              },
-            },
-          }],
-        }}
-        editable
-        selectedRecognitionItemId="item-1"
-        {...handlers}
-      />,
-    );
-
-    expect(screen.getAllByText('综合测试结果区域')).toHaveLength(2);
-    expect(screen.getByText('E4:N4')).toBeInTheDocument();
-    expect(screen.getByText('A5:D100', { exact: true })).toBeInTheDocument();
-    expect(screen.getByText(/E5:N100/)).toBeInTheDocument();
-    expect(screen.getByText('10 个', { exact: true })).toBeInTheDocument();
-    expect(screen.getByText('类型：交叉测试表 · 记录方向：按列')).toBeInTheDocument();
-    expect(screen.queryByText('填写方向：按行填写')).not.toBeInTheDocument();
-  });
-
   it('把多个互补区域展示为一个模型分区方案', () => {
     const conflictItem: RecognitionReview['items'][number] = {
       ...review.items[0]!,
       id: 'structure-item',
       suggestionIds: ['physical', 'form', 'rows'],
       fieldName: '结构候选',
-      kind: 'MATRIX',
+      kind: 'COLUMN_TABLE',
       status: 'CONFLICT',
       payload: {
         ...review.items[0]!.payload,
@@ -390,7 +304,7 @@ describe('RecognitionReviewPanel', () => {
             alternativeId: 'physical-option',
             source: 'PHYSICAL',
             regions: [
-              { suggestionId: 'physical', kind: 'MATRIX', range: 'A4:J6' },
+              { suggestionId: 'physical', kind: 'COLUMN_TABLE', range: 'A4:J6' },
             ],
           },
           {
@@ -473,11 +387,10 @@ describe('RecognitionReviewPanel', () => {
             structureStatus: 'CONFIRMED',
             alternatives: [
               { alternativeId: 'physical', source: 'PHYSICAL', regions: [{ suggestionId: 'region-root-suggestion', kind: 'COLUMN_TABLE', range: 'A4:H19' }] },
-              { alternativeId: 'model', source: 'MODEL', regions: [{ suggestionId: 'model-suggestion', kind: 'MATRIX', range: 'A4:H19' }] },
+              { alternativeId: 'model', source: 'MODEL', regions: [{ suggestionId: 'model-suggestion', kind: 'ROW_TABLE', range: 'A4:H19' }] },
             ],
             fields: [child],
-            runtimeSlots: [{ slotId: 'column-C', column: 'C', identityAddress: 'C3', recordRange: 'C3:C19' }],
-            auditSuggestions: [{ ...root, id: 'audit-1', fieldName: '模型原始矩阵' }],
+            auditSuggestions: [{ ...root, id: 'audit-1', fieldName: '模型原始候选' }],
           }],
           statistics: {
             regionCount: 1,
@@ -486,7 +399,6 @@ describe('RecognitionReviewPanel', () => {
             fieldCount: 1,
             pendingFieldCount: 1,
             auditSuggestionCount: 2,
-            runtimeSlotCount: 1,
           },
         }}
         editable
@@ -501,11 +413,67 @@ describe('RecognitionReviewPanel', () => {
     expect(screen.getByText('类型')).toBeInTheDocument();
     expect(screen.queryByText('名称依据')).not.toBeInTheDocument();
     expect(screen.queryByText('表头识别')).not.toBeInTheDocument();
-    expect(screen.getByText('运行时成员槽位（1）')).toBeInTheDocument();
     expect(screen.queryByText('审计信息（1）')).not.toBeInTheDocument();
   });
 
-  it('为单个未确认的模型区域提供采用并识别字段入口', () => {
+  it('同一 Word 区域保留所有稳定单元格候选并标记重复字段', () => {
+    const wordFields = ['序号', '物料名称', '单位'].map((fieldName, index) => ({
+      ...review.items[0]!,
+      id: `word-field-${index}`,
+      suggestionIds: [`word-suggestion-${index}`],
+      fieldName,
+      child: true,
+      payload: {
+        ...review.items[0]!.payload,
+        fieldName,
+        relationId: `word-relation-${index}`,
+        regionId: 'word-row-region',
+        blockId: 'word-row-region',
+        parentRelationId: 'word-row-region',
+        mappingKind: 'REPEAT_FIELD' as const,
+        locatorType: 'DOCX_TABLE_CELL' as const,
+        locator: {
+          locatorType: 'DOCX_TABLE_CELL',
+          nodeId: `docx-cell-${index}`,
+          valueAnchor: `docx-cell-${index}`,
+          valueCellPaths: [`/document[1]/body[1]/tbl[2]/tr[2]/tc[${index + 1}]`],
+        },
+      },
+    }));
+    render(
+      <RecognitionReviewPanel
+        review={{
+          ...review,
+          items: wordFields,
+          regions: [{
+            regionId: 'word-row-region',
+            blockId: 'word-row-region',
+            kind: 'ROW_TABLE',
+            sheetId: '',
+            sheetName: '',
+            range: '/document[1]/body[1]/tbl[2]',
+            fieldName: 'Word 按行明细',
+            status: 'CONFIRMED',
+            canonicalStatus: 'CONFIRMED',
+            structureStatus: 'CONFIRMED',
+            alternatives: [],
+            fields: wordFields,
+            auditSuggestions: [],
+          }],
+        }}
+        editable
+        {...handlers}
+      />,
+    );
+
+    expect(screen.getByText('3 个')).toBeInTheDocument();
+    for (const fieldName of ['序号', '物料名称', '单位']) {
+      expect(screen.getByRole('button', { name: new RegExp(fieldName) })).toBeInTheDocument();
+    }
+    expect(screen.getAllByText(/明细字段/)).toHaveLength(3);
+  });
+
+  it('为单个未确认且没有字段的模型区域提供确认并识别字段入口', () => {
     const root = {
       ...review.items[0]!,
       id: 'form-root',
@@ -526,7 +494,7 @@ describe('RecognitionReviewPanel', () => {
             alternatives: [{ alternativeId: 'model-form', source: 'MODEL', regions: [{
               suggestionId: 'form-suggestion', kind: 'FORM_REGION', range: 'A1:H3',
             }] }],
-            fields: [], runtimeSlots: [], auditSuggestions: [],
+            fields: [], auditSuggestions: [],
           }],
         }}
         editable
@@ -534,7 +502,47 @@ describe('RecognitionReviewPanel', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: '采用此区域并识别字段' }));
+    fireEvent.click(screen.getByRole('button', { name: '确认该区域并识别字段' }));
     expect(handlers.onConfirm).toHaveBeenCalledWith(root, 'model-form');
+  });
+
+  it('已有当前字段时只确认区域，不重复显示识别字段动作', () => {
+    const root = {
+      ...review.items[0]!,
+      id: 'row-root-current',
+      suggestionIds: ['row-suggestion'],
+      fieldName: '检测明细',
+      kind: 'ROW_TABLE' as const,
+      status: 'PENDING' as const,
+      payload: {
+        ...review.items[0]!.payload,
+        kind: 'ROW_TABLE' as const,
+        candidateOnly: true,
+      },
+    };
+    render(
+      <RecognitionReviewPanel
+        review={{
+          ...review,
+          items: [root, review.items[0]!],
+          regions: [{
+            regionId: 'row-region-current', blockId: 'row-region-current', kind: 'ROW_TABLE',
+            sheetId: 'sheet-1', sheetName: 'Sheet1', range: 'A7:J21', fieldName: '检测明细',
+            status: 'PENDING', canonicalStatus: 'PROVISIONAL', structureStatus: 'CONFIRMED',
+            alternatives: [{ alternativeId: 'row-current', source: 'PHYSICAL', regions: [{
+              suggestionId: 'row-suggestion', kind: 'ROW_TABLE', range: 'A7:J21',
+            }] }],
+            fields: [review.items[0]!], auditSuggestions: [],
+          }],
+        }}
+        editable
+        {...handlers}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: '确认该区域' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '确认该区域并识别字段' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '确认该区域' }));
+    expect(handlers.onConfirm).toHaveBeenCalledWith(root, 'row-current');
   });
 });

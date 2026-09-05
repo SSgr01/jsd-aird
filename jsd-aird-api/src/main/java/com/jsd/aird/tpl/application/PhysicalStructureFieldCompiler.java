@@ -3,6 +3,7 @@ package com.jsd.aird.tpl.application;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -24,11 +25,9 @@ import com.jsd.aird.tpl.application.port.RecognitionModelClient;
 public final class PhysicalStructureFieldCompiler {
 
     private final ObjectMapper objectMapper;
-    private final CanonicalMatrixCompiler matrixCompiler;
 
     public PhysicalStructureFieldCompiler(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
-        this.matrixCompiler = new CanonicalMatrixCompiler(objectMapper);
     }
 
     public void enrichParent(ObjectNode parent, JsonNode region, JsonNode facts) {
@@ -39,14 +38,7 @@ public final class PhysicalStructureFieldCompiler {
             if (columns.isEmpty()) {
                 columns.addAll(buildColumns(parent, region, facts));
             }
-            ensureTableProjection(parent, region, facts);
-        } else if ("MATRIX".equals(kind)) {
-            ensureComponentDataPath(parent);
-            // normalizeMatrixRegion normally supplies these artifacts. Keep a
-            // physical-only fallback here for older recognition runs.
-            if (!parent.path("matrixModel").isObject()) {
-                ensureMatrixProjection(parent, region, facts);
-            }
+            ensureTableModel(parent, region);
         }
     }
 
@@ -65,7 +57,6 @@ public final class PhysicalStructureFieldCompiler {
         return switch (kind) {
             case "FORM_REGION" -> formChildren(parent, region, facts);
             case "ROW_TABLE", "COLUMN_TABLE" -> tableChildren(parent, kind);
-            case "MATRIX" -> matrixChildren(parent, region, facts);
             default -> List.of();
         };
     }
@@ -122,7 +113,7 @@ public final class PhysicalStructureFieldCompiler {
                             fieldId, "CELL_RANGE", sheetId + "|" + surface.valueRange()).toString())
                     .put("blockId", parent.path("blockId").asText(""))
                     .put("regionId", parent.path("regionId").asText(parent.path("blockId").asText("")))
-                    .put("candidateRef", region.path("regionId").asText(""))
+                    .put("candidateRef", relationId)
                     .put("fieldCode", fieldCode(surface.label(), result.size()))
                     .put("dataPath", "/fields/" + fieldCode(surface.label(), result.size()))
                     .put("fieldName", surface.label())
@@ -175,7 +166,7 @@ public final class PhysicalStructureFieldCompiler {
         var result = new ArrayList<FormSurface>();
         for (var labelCell : semantic) {
             var rawLabel = cellText(labelCell);
-            var label = rawLabel.replaceFirst("[：:]\\s*$", "").strip();
+            var label = normalizedLabelName(rawLabel.replaceFirst("[：:]\\s*$", ""));
             var labelBounds = bounds(cellRange(labelCell));
             if (label.isBlank() || isFormulaText(label) || labelBounds == null
                     || !inside(regionBounds, labelBounds) || label.length() > 60
@@ -282,7 +273,7 @@ public final class PhysicalStructureFieldCompiler {
                 || !inside(regionBounds, labelBounds) || !inside(regionBounds, valueBounds)) return;
         var labelCell = findCell(facts, sheetId, labelBounds[0], labelBounds[1]);
         var valueCell = findCell(facts, sheetId, valueBounds[0], valueBounds[1]);
-        var label = cellText(labelCell).replaceFirst("[：:]\\s*$", "").strip();
+        var label = normalizedLabelName(cellText(labelCell).replaceFirst("[：:]\\s*$", ""));
         if (label.isBlank() || isFormulaText(label) || isStaticInstruction(label)) return;
         var formula = isFormulaCell(valueCell);
         var trust = formula && !valueCell.path("cachedValue").isMissingNode()
@@ -412,6 +403,10 @@ public final class PhysicalStructureFieldCompiler {
     }
 
     private JsonNode findCellIn(List<JsonNode> source, int column, int row) {
+        var address = address(column, row);
+        for (var cell : source) {
+            if (address.equalsIgnoreCase(cell.path("address").asText(""))) return cell;
+        }
         for (var cell : source) {
             var cellBounds = bounds(cellRange(cell));
             if (cellBounds != null && column >= cellBounds[0] && column <= cellBounds[2]
@@ -473,6 +468,8 @@ public final class PhysicalStructureFieldCompiler {
             boolean formulaDerived, String calculationTrustStatus, boolean inlineValue
     ) {}
 
+    private record HeaderLabel(String name, String unit) {}
+
     private List<RecognitionModelClient.ModelSuggestion> tableChildren(ObjectNode parent, String kind) {
         var result = new ArrayList<RecognitionModelClient.ModelSuggestion>();
         var parentRelationId = parent.path("relationId").asText("");
@@ -513,7 +510,11 @@ public final class PhysicalStructureFieldCompiler {
                     .put("regionId", parent.path("regionId").asText(parent.path("blockId").asText("")))
                     .put("blockId", parent.path("blockId").asText(parent.path("regionId").asText("")))
                     .put("parentBlockId", parent.path("blockId").asText(""))
-                    .put("candidateRef", parent.path("candidateRef").asText(""))
+                    // Candidate identity belongs to the physical field, not
+                    // the enclosing repeat region.  This gives the semantic
+                    // patch protocol a stable whitelist and keeps review,
+                    // coverage and export bound to the same cell surface.
+                    .put("candidateRef", relationId)
                     .put("fieldCode", column.path("fieldCode").asText("TABLE.COLUMN." + code))
                     .put("dataPath", parentPath + "/*/" + code)
                     .put("fieldName", name)
@@ -558,9 +559,6 @@ public final class PhysicalStructureFieldCompiler {
             if (!column.path("labelPath").asText("").isBlank()) {
                 child.put("labelPath", column.path("labelPath").asText());
             }
-            if (column.path("rowAttributes").isArray()) {
-                child.set("rowAttributes", column.path("rowAttributes").deepCopy());
-            }
             var locator = objectMapper.createObjectNode()
                     .put("sheetId", parent.path("locator").path("sheetId").asText(""))
                     .put("sheetName", parent.path("locator").path("sheetName").asText(""))
@@ -568,8 +566,9 @@ public final class PhysicalStructureFieldCompiler {
                     .put("range", valueRange)
                     .put("valueRange", valueRange)
                     .put("labelRange", column.path("labelRange").asText(""))
-                    .put("parentRange", parent.path("locator").path("dataRange")
-                            .asText(parent.path("locator").path("range").asText("")))
+                    .put("parentRange", column.path("parentRange").asText(
+                            parent.path("locator").path("dataRange")
+                                    .asText(parent.path("locator").path("range").asText(""))))
                     .put("valueMode", "COLUMN".equals(repeatAxis) ? "ARRAY_ROW" : "ARRAY_COLUMN")
                     .put("locatorType", "CELL_RANGE");
             child.set("locator", locator);
@@ -581,110 +580,6 @@ public final class PhysicalStructureFieldCompiler {
                             .put("parentRelationId", parentRelationId))));
         }
         return List.copyOf(result);
-    }
-
-    private List<RecognitionModelClient.ModelSuggestion> matrixChildren(
-            ObjectNode parent, JsonNode region, JsonNode facts
-    ) {
-        var result = new ArrayList<RecognitionModelClient.ModelSuggestion>();
-        var bindings = parent.path("matrixModel").path("bindings");
-        if (!bindings.isArray() || bindings.isEmpty()) {
-            ensureMatrixProjection(parent, region, facts);
-            bindings = parent.path("matrixModel").path("bindings");
-        }
-        var seen = new HashSet<String>();
-        for (var binding : bindings) {
-            var bindingKind = binding.path("bindingKind").asText("");
-            if ("COLUMN_MEMBER".equals(bindingKind)) continue;
-            var name = binding.path("name").asText("").strip();
-            if (name.isBlank() && "MEASURE".equals(bindingKind)) name = "交叉值";
-            var sourceRange = binding.path("sourceRange").asText("");
-            if (name.isBlank() || sourceRange.isBlank()) continue;
-            var code = binding.path("code").asText(bindingKind.toLowerCase(Locale.ROOT));
-            if (!seen.add(bindingKind + "|" + code + "|" + sourceRange)) continue;
-            result.add(matrixChild(parent, bindingKind, code, name, sourceRange,
-                    binding.path("valueType").asText("MEASURE".equals(bindingKind) ? "number" : "string")));
-        }
-        // A minimal cross-tab often has no named row axis. Expose the physical
-        // row header as one local dimension instead of silently dropping it.
-        if (result.stream().noneMatch(item -> "ROW_DIMENSION".equals(item.payload().path("bindingKind").asText()))) {
-            var rowRange = parent.path("rowHeaderRange").asText(
-                    parent.path("locator").path("rowHeaderRange").asText(""));
-            if (!rowRange.isBlank()) {
-                var name = firstText(facts, parent.path("locator").path("sheetId").asText(""), rowRange);
-                var corner = parent.path("cornerRange").asText(
-                        parent.path("locator").path("cornerRange").asText(""));
-                if (!corner.isBlank()) {
-                    var cornerText = firstText(facts, parent.path("locator").path("sheetId").asText(""), corner);
-                    if (!cornerText.isBlank()) name = cornerText.split("[/／]", 2)[0].strip();
-                }
-                if (name.isBlank()) name = "行维度";
-                result.add(matrixChild(parent, "ROW_DIMENSION", "row_dimension", name, rowRange, "string"));
-            }
-        }
-        return List.copyOf(result);
-    }
-
-    private RecognitionModelClient.ModelSuggestion matrixChild(
-            ObjectNode parent, String bindingKind, String code, String name, String sourceRange, String valueType
-    ) {
-        var parentRelationId = parent.path("relationId").asText("");
-        var relationId = parentRelationId + "|physical-matrix|" + code + "|"
-                + RecognitionIdentity.normalizeRange(sourceRange);
-        var fieldId = RecognitionIdentity.fieldId(relationId);
-        var bindingId = RecognitionIdentity.bindingId(fieldId, "MATRIX_REGION",
-                parent.path("locator").path("sheetId").asText("") + "|" + sourceRange);
-        var parentPath = parent.path("dataPath").asText("");
-        var child = objectMapper.createObjectNode()
-                .put("kind", "SCALAR")
-                .put("suggestionLevel", "CHILD")
-                .put("mappingKind", "MATRIX_FIELD")
-                .put("bindingKind", bindingKind)
-                .put("relationId", relationId)
-                .put("modelRelationId", parentRelationId)
-                .put("fieldId", fieldId.toString())
-                .put("bindingId", bindingId.toString())
-                .put("parentRelationId", parentRelationId)
-                .put("parentFieldId", parent.path("fieldId").asText(""))
-                .put("parentBindingId", parent.path("bindingId").asText(""))
-                .put("regionId", parent.path("regionId").asText(parent.path("blockId").asText("")))
-                .put("blockId", parent.path("blockId").asText(parent.path("regionId").asText("")))
-                .put("candidateRef", parent.path("candidateRef").asText(""))
-                .put("fieldCode", "MATRIX." + bindingKind + "." + code)
-                .put("dataPath", parentPath + "/*/" + ("MEASURE".equals(bindingKind) ? "value" : code))
-                .put("fieldName", name)
-                .put("groupName", parent.path("groupName").asText("业务数据"))
-                .put("valueType", valueType)
-                .put("role", "FIELD")
-                .put("locatorType", "MATRIX_REGION")
-                .put("editability", "EDITABLE")
-                .put("valueSource", "USER_INPUT")
-                .put("sourceRange", sourceRange)
-                .put("candidateOnly", parent.path("candidateOnly").asBoolean(true))
-                .put("reviewRequired", parent.path("reviewRequired").asBoolean(true))
-                .put("publishable", false)
-                .put("physicalStructureOnly", parent.path("physicalStructureOnly").asBoolean(true))
-                .put("pendingReason", "PHYSICAL_MATRIX_AXIS_REVIEW")
-                .put("canonicalStatus", parent.path("canonicalStatus").asText("PROVISIONAL"))
-                .put("structureStatus", parent.path("structureStatus").asText("PROVISIONAL"))
-                .put("recognitionOrigin", "PHYSICAL_MATRIX_COMPILER")
-                .put("nameSource", "PHYSICAL_HEADER_FALLBACK")
-                .put("fieldOrigin", "TEMPLATE_LOCAL")
-                .put("standardSelectionStatus", "CUSTOM")
-                .put("standardRequired", false)
-                .put("requiresStandardConfirmation", false)
-                .put("reason", "字段来自矩阵的" + ("MEASURE".equals(bindingKind) ? "交叉指标" : "行维度或行属性") + "结构。")
-                .put("interpretation", "按行维度、列成员和指标值展开为长表记录。");
-        child.set("locator", parent.path("locator").deepCopy());
-        if (child.path("locator") instanceof ObjectNode locator) {
-            locator.put("sourceRange", sourceRange).put("logicalInputRange", sourceRange);
-        }
-        return new RecognitionModelClient.ModelSuggestion(
-                "MATRIX_FIELD", child, 0.9,
-                objectMapper.createArrayNode().add(objectMapper.createObjectNode()
-                        .put("source", "PHYSICAL_MATRIX_COMPILER")
-                        .put("bindingKind", bindingKind)
-                        .put("sourceRange", sourceRange)));
     }
 
     private ArrayNode buildColumns(ObjectNode parent, JsonNode region, JsonNode facts) {
@@ -700,7 +595,8 @@ public final class PhysicalStructureFieldCompiler {
                 var cell = findHeaderCell(facts, parent.path("locator").path("sheetId").asText(""),
                         column, header[1]);
                 if (isFormulaCell(cell)) continue;
-                var name = cellText(cell);
+                var headerLabel = headerLabel(cellText(cell));
+                var name = headerLabel.name();
                 if (name.isBlank() || isFormulaText(name)) continue;
                 var physicalLabelRange = cellRange(cell);
                 var normalizedLabelRange = RecognitionIdentity.normalizeRange(physicalLabelRange);
@@ -709,299 +605,170 @@ public final class PhysicalStructureFieldCompiler {
                 var valueStartColumn = labelBounds == null ? column : Math.max(header[0], labelBounds[0]);
                 var valueEndColumn = labelBounds == null ? column : Math.min(header[2], labelBounds[2]);
                 var code = fieldCode(name, column);
-                result.add(column(name, code,
+                result.add(column(name, headerLabel.unit(), code,
                         valueRange(valueStartColumn, data[1], valueEndColumn, data[3]),
                         physicalLabelRange, sampleType(facts,
                                 parent.path("locator").path("sheetId").asText(""),
                                 valueStartColumn, data[1])));
             }
         } else {
-            var projection = details.path("recordProjection");
-            var recordColumns = new ArrayList<Integer>();
-            for (var value : projection.path("recordColumns")) {
-                var parsed = columnNumber(value.asText(""));
-                if (parsed > 0) recordColumns.add(parsed);
-            }
-            if (recordColumns.isEmpty()) {
-                var start = data[0] + 1;
-                for (int column = start; column <= data[2]; column++) recordColumns.add(column);
-            }
-            var firstRecordColumn = recordColumns.stream().min(Comparator.naturalOrder()).orElse(data[0] + 1);
-            if (details.path("fieldRows").isArray() && !details.path("fieldRows").isEmpty()) {
-                var usedCodes = new HashSet<String>();
-                for (var fieldRow : details.path("fieldRows")) {
-                    var row = fieldRow.path("row").asInt();
-                    if (row < data[1] || row > data[3]) continue;
-                    var structuralPath = fieldRow.path("labelPath").asText("").strip();
-                    if (structuralPath.isBlank()) continue;
-                    var segments = fieldRow.path("labelPathSegments");
-                    var name = segments.isArray() && !segments.isEmpty()
-                            ? segments.get(segments.size() - 1).asText(structuralPath) : structuralPath;
-                    var completeSegments = objectMapper.createArrayNode();
-                    if (segments.isArray()) segments.forEach(completeSegments::add);
-                    var semanticIdentity = new StringBuilder(structuralPath);
-                    for (var attribute : fieldRow.path("rowAttributes")) {
-                        var attributeLabel = attribute.path("label").asText("").strip();
-                        var attributeValue = attribute.path("value").asText("").strip();
-                        if (attributeValue.isBlank()) continue;
-                        semanticIdentity.append('|').append(attributeLabel).append('=').append(attributeValue);
-                        var alreadyPresent = false;
-                        for (var segment : completeSegments) {
-                            if (attributeValue.equals(segment.asText(""))) {
-                                alreadyPresent = true;
-                                break;
-                            }
-                        }
-                        if (!alreadyPresent) completeSegments.add(attributeValue);
-                    }
-                    var completePath = new ArrayList<String>();
-                    completeSegments.forEach(segment -> {
-                        if (!segment.asText("").isBlank()) completePath.add(segment.asText());
-                    });
-                    var baseCode = fieldCode(semanticIdentity.toString(), row);
-                    var code = baseCode;
-                    var duplicate = 2;
-                    while (!usedCodes.add(code)) code = baseCode + "_" + duplicate++;
-                    var item = column(name, code,
-                            fieldRow.path("valueRange").asText(
-                                    valueRange(firstRecordColumn, row, recordColumns.getLast(), row)),
-                            fieldRow.path("labelRange").asText(address(data[0], row)),
-                            sampleType(facts, parent.path("locator").path("sheetId").asText(""),
-                                    firstRecordColumn, row));
-                    item.put("labelPath", completePath.isEmpty()
-                                    ? structuralPath : String.join(" > ", completePath))
-                            .set("labelPathSegments", completeSegments);
-                    item.set("rowAttributes", fieldRow.path("rowAttributes").deepCopy());
-                    item.put("valueSource", fieldRow.path("valueSource").asText("USER_INPUT"))
-                            .put("editability", fieldRow.path("editability").asText("EDITABLE"))
-                            .put("trainingEligible", fieldRow.path("trainingEligible").asBoolean(true))
-                            .put("trainingRole", fieldRow.path("trainingRole").asText("FEATURE"))
-                            .put("formulaDerived", fieldRow.path("formulaDerived").asBoolean(false))
-                            .put("calculationTrustStatus", fieldRow.path("calculationTrustStatus")
-                                    .asText("NOT_APPLICABLE"));
-                    result.add(item);
-                }
-                return result;
+            // COLUMN_TABLE keeps label/attribute columns inside dataRange.
+            // Derive the first repeated record column from the physical
+            // identity row instead of assuming that only the first column is
+            // a label. Real templates commonly use two to four hierarchy and
+            // method columns before the blank sample/experiment columns.
+            var firstRecordColumn = firstColumnRecord(facts,
+                    parent.path("locator").path("sheetId").asText(""), header, data);
+            // The top identity band belongs to the same COLUMN_TABLE.  Keep
+            // sample/initiator identifiers (including blank input slots) in
+            // the repeat-field projection instead of leaving them as form
+            // fields or dropping them before the metric rows.
+            var sheetId = parent.path("locator").path("sheetId").asText("");
+            var identityEnd = Math.min(header[3], data[1] - 1);
+            for (int row = header[1]; row <= identityEnd; row++) {
+                var label = findRowLabel(facts, sheetId, row, firstRecordColumn);
+                if (label == null || cellText(label).isBlank()
+                        || !hasRecordSurface(facts, sheetId, firstRecordColumn, data[2], row)) continue;
+                var headerLabel = headerLabel(cellText(label));
+                var name = headerLabel.name();
+                if (name.isBlank() || isFormulaText(name) || isAxisLabel(name)) continue;
+                var identity = column(name, headerLabel.unit(), fieldCode(name, row),
+                        valueRange(firstRecordColumn, row, data[2], row), cellRange(label),
+                        sampleType(facts, sheetId, firstRecordColumn, row));
+                identity.put("parentRange", region.path("range").asText(
+                        parent.path("locator").path("range")
+                                .asText(parent.path("locator").path("dataRange").asText(""))));
+                result.add(identity);
             }
             for (int row = data[1]; row <= data[3]; row++) {
-                var label = findRowLabel(facts, parent.path("locator").path("sheetId").asText(""),
+                var label = findRowLabel(facts, sheetId,
                         row, firstRecordColumn);
                 if (label == null || cellText(label).isBlank()) continue;
-                var name = cellText(label);
+                var headerLabel = headerLabel(cellText(label));
+                var name = headerLabel.name();
                 var code = fieldCode(name, row);
-                result.add(column(name, code,
-                        valueRange(firstRecordColumn, row, recordColumns.getLast(), row),
-                        cellRange(label), sampleType(facts, parent.path("locator").path("sheetId").asText(""), firstRecordColumn, row)));
+                var projected = column(name, headerLabel.unit(), code,
+                        valueRange(firstRecordColumn, row, data[2], row),
+                        cellRange(label), sampleType(facts, sheetId, firstRecordColumn, row));
+                var labelPath = rowLabelPath(facts,
+                        sheetId, row, firstRecordColumn);
+                if (!labelPath.isEmpty()) {
+                    projected.put("labelPath", String.join(" > ", labelPath));
+                    var segments = projected.putArray("labelPathSegments");
+                    labelPath.forEach(segments::add);
+                }
+                result.add(projected);
             }
         }
         return result;
     }
 
-    private void ensureTableProjection(ObjectNode parent, JsonNode region, JsonNode facts) {
+    private int firstColumnRecord(JsonNode facts, String sheetId, int[] header, int[] data) {
+        // A merged left identity label (for example A4:B4) gives an exact
+        // record-column split even when every sample title is already filled.
+        for (var cell : cells(facts, sheetId)) {
+            var b = bounds(cellRange(cell));
+            if (b == null || b[0] != data[0] || b[1] != header[1] || b[3] != header[3]
+                    || b[2] <= b[0] || b[2] >= data[2] - 1 || cellText(cell).isBlank()) continue;
+            return b[2] + 1;
+        }
+        var labelEnd = data[0] - 1;
+        for (var cell : cells(facts, sheetId)) {
+            var b = bounds(cellRange(cell));
+            if (b == null || cellText(cell).isBlank() || b[1] > header[3] || b[3] < header[1]
+                    || b[0] < data[0] || b[2] >= data[2] - 1) continue;
+            labelEnd = Math.max(labelEnd, b[2]);
+        }
+        return Math.max(data[0] + 1, Math.min(data[2] - 1, labelEnd + 1));
+    }
+
+    private boolean hasRecordSurface(JsonNode facts, String sheetId, int startColumn, int endColumn, int row) {
+        var covered = 0;
+        for (int column = startColumn; column <= endColumn; column++) {
+            var cell = findCell(facts, sheetId, column, row);
+            if (cell != null && (!cellText(cell).isBlank() || hasBorder(cell)
+                    || cell.path("inputCandidate").asBoolean(false))) covered++;
+        }
+        return covered >= Math.max(2, (int) Math.ceil((endColumn - startColumn + 1) * 0.7));
+    }
+
+    private boolean hasBorder(JsonNode cell) {
+        return cell.path("hasBorder").asBoolean(false)
+                || cell.path("bordered").asBoolean(false)
+                || cell.path("style").path("bd").isObject()
+                || !cell.path("borderSignature").asText("").isBlank();
+    }
+
+    private boolean isAxisLabel(String value) {
+        return Set.of("属性", "项目", "指标", "参数", "字段", "特性", "项目/属性", "属性/项目")
+                .contains(value == null ? "" : value.strip());
+    }
+
+    private List<String> rowLabelPath(JsonNode facts, String sheetId, int row, int firstRecordColumn) {
+        var labels = cells(facts, sheetId).stream()
+                .filter(cell -> {
+                    var b = bounds(cellRange(cell));
+                    return b != null && b[0] < firstRecordColumn && b[1] <= row && b[3] >= row
+                            && !cellText(cell).isBlank() && !isFormulaCell(cell);
+                })
+                .sorted(Comparator.comparingInt((JsonNode cell) -> bounds(cellRange(cell))[0])
+                        .thenComparingInt(cell -> bounds(cellRange(cell))[2]))
+                .map(this::cellText)
+                .distinct()
+                .toList();
+        return List.copyOf(labels);
+    }
+
+    private void ensureTableModel(ObjectNode parent, JsonNode region) {
         var kind = parent.path("kind").asText(region.path("type").asText("ROW_TABLE"));
         var details = region.path("structure");
         var headerRange = parent.path("headerRange").asText(details.path("headerRange").asText(""));
         var dataRange = parent.path("dataRange").asText(details.path("dataRange").asText(""));
-        var h = bounds(headerRange);
-        var d = bounds(dataRange);
-        if (h == null || d == null) return;
-        var projection = parent.path("recordProjection").isObject()
-                ? (ObjectNode) parent.path("recordProjection") : objectMapper.createObjectNode();
-        if (projection.isEmpty() && details.path("recordProjection").isObject()) {
-            projection = (ObjectNode) details.path("recordProjection").deepCopy();
-            parent.set("recordProjection", projection);
+        if (bounds(headerRange) == null || bounds(dataRange) == null) return;
+        var repeatAxis = "COLUMN_TABLE".equals(kind) ? "COLUMN" : "ROW";
+        parent.put("repeatAxis", parent.path("repeatAxis").asText(repeatAxis))
+                .put("recordHeight", parent.path("recordHeight").asInt(details.path("recordHeight").asInt(1)))
+                .put("recordWidth", parent.path("recordWidth").asInt(details.path("recordWidth").asInt(1)))
+                .put("recordStride", parent.path("recordStride").asInt(details.path("recordStride").asInt(1)));
+        var model = objectMapper.createObjectNode()
+                .put("headerRange", headerRange)
+                .put("dataRange", dataRange)
+                .put("totalRange", details.path("totalRange").asText(""))
+                .put("repeatAxis", parent.path("repeatAxis").asText(repeatAxis))
+                .put("recordHeight", parent.path("recordHeight").asInt(1))
+                .put("recordWidth", parent.path("recordWidth").asInt(1))
+                .put("recordStride", parent.path("recordStride").asInt(1));
+        model.set("columns", parent.path("columns").deepCopy());
+        if (details.path("terminationRule").isObject()) {
+            model.set("terminationRule", details.path("terminationRule").deepCopy());
         }
-        for (var key : List.of("fieldGroups", "fieldRows")) {
-            if (!parent.path(key).isArray() && details.path(key).isArray()) {
-                parent.set(key, details.path(key).deepCopy());
-            }
-        }
-        if (projection.isEmpty()) {
-            projection = matrixCompiler.recordProjection(h[1], d[0], d[2], h[1], d[1], d[3],
-                    "COLUMN_TABLE".equals(kind) ? "COLUMN" : "ROW");
-            parent.set("recordProjection", projection);
-        }
-        if (projection.path("recordIdentity").isObject()) {
-            parent.set("recordIdentity", projection.path("recordIdentity").deepCopy());
-        }
-        if (projection.path("rowAttributeColumns").isArray()) {
-            parent.set("rowAttributeColumns", projection.path("rowAttributeColumns").deepCopy());
-        }
-        if ("COLUMN_TABLE".equals(kind)) {
-            parent.set("columnSlots", matrixCompiler.columnSlots(
-                    parent.path("locator").path("sheetId").asText(""), parent.path("blockId").asText(""),
-                    parent.path("locator").path("range").asText(""), d[0] + 1, d[2], h[1], d[3]));
-        }
-        var slots = parent.path("columnSlots").isArray()
-                ? (ArrayNode) parent.path("columnSlots") : objectMapper.createArrayNode();
-        if ("COLUMN_TABLE".equals(kind)
-                && (!parent.path("longTableModel").isObject()
-                || !parent.path("longTableModel").path("records").isArray()
-                || parent.path("longTableModel").path("records").isEmpty())) {
-            parent.set("longTableModel", compileColumnTableProjection(
-                    facts, parent, d, headerRange, dataRange, projection, slots));
-        } else if (!parent.path("longTableModel").isObject()) {
-            var rowHeaderRange = "ROW_TABLE".equals(kind)
-                    ? headerRange
-                    : columnLabelRange(d, projection);
-            parent.set("longTableModel", matrixCompiler.compileLongTableModel(
-                    facts, parent.path("locator").path("sheetId").asText(""), parent.path("blockId").asText(""),
-                    kind, parent.path("locator").path("range").asText(dataRange), "",
-                    rowHeaderRange, headerRange, dataRange, projection, slots, objectMapper.createArrayNode()));
-            parent.with("longTableModel").put("output", "COLUMN_TABLE".equals(kind)
-                    ? "ONE_RECORD_PER_COLUMN" : "ONE_RECORD_PER_ROW");
-        }
+        parent.set("tableModel", model);
     }
 
-    private String columnLabelRange(int[] data, ObjectNode projection) {
-        var firstRecordColumn = data[0] + 1;
-        for (var value : projection.path("recordColumns")) {
-            var parsed = columnNumber(value.asText(""));
-            if (parsed > data[0]) firstRecordColumn = Math.min(firstRecordColumn, parsed);
-        }
-        if (firstRecordColumn <= data[0]) return "";
-        return valueRange(data[0], data[1], firstRecordColumn - 1, data[3]);
-    }
-
-    private ObjectNode compileColumnTableProjection(
-            JsonNode facts, ObjectNode parent, int[] data, String headerRange, String dataRange,
-            ObjectNode projection, ArrayNode slots
+    private ObjectNode column(
+            String name, String unit, String code, String valueRange, String labelRange, String type
     ) {
-        var sheetId = parent.path("locator").path("sheetId").asText("");
-        var regionId = parent.path("blockId").asText(parent.path("regionId").asText(""));
-        var result = objectMapper.createObjectNode()
-                .put("schemaVersion", 1).put("sourceKind", "COLUMN_TABLE")
-                .put("semanticMode", "RECORD_SET").put("layoutMode", "LONG_FORM")
-                .put("sourceRange", parent.path("locator").path("range").asText(dataRange))
-                .put("rowHeaderRange", columnLabelRange(data, projection))
-                .put("columnHeaderRange", headerRange).put("dataRange", dataRange)
-                .put("aggregatePolicy", "INCLUDE_MARKED")
-                .put("blankAxisPolicy", "SKIP_EMPTY_RUNTIME_MEMBER")
-                .put("trainingPolicy", "REQUIRE_RUNTIME_MEMBER")
-                .put("projectionStatus", "COLUMN_RECORDS")
-                .put("output", "ONE_RECORD_PER_COLUMN");
-        result.set("recordProjection", projection.deepCopy());
-        result.set("columnSlots", slots.deepCopy());
-        result.set("rowSlots", objectMapper.createArrayNode());
-        result.set("dimensions", objectMapper.createArrayNode().add(objectMapper.createObjectNode()
-                .put("code", "column_member").put("name", "列成员")
-                .put("role", "COLUMN_DIMENSION").put("sourceRange", headerRange)));
-        result.set("measure", objectMapper.createObjectNode().put("code", "fields")
-                .put("name", "属性字段").put("sourceRange", dataRange));
-        var records = result.putArray("records");
-        var recordColumns = new ArrayList<Integer>();
-        for (var value : projection.path("recordColumns")) {
-            var parsed = columnNumber(value.asText(""));
-            if (parsed >= data[0] && parsed <= data[2]) recordColumns.add(parsed);
-        }
-        if (recordColumns.isEmpty()) {
-            for (int column = data[0] + 1; column <= data[2]; column++) recordColumns.add(column);
-        }
-        for (var column : recordColumns) {
-            var headerCell = findCell(facts, sheetId, column, bounds(headerRange)[1]);
-            var memberName = cellText(headerCell);
-            var memberStatus = memberName.isBlank() ? "EMPTY" : "POPULATED";
-            var record = objectMapper.createObjectNode()
-                    .put("recordKey", sheetId + "|" + regionId + "|COLUMN|" + address(column, bounds(headerRange)[1]))
-                    .put("recordId", sheetId + "|" + regionId + "|COLUMN|" + address(column, bounds(headerRange)[1]))
-                    .put("entityRecordId", sheetId + "|" + regionId + "|COLUMN|" + address(column, bounds(headerRange)[1]))
-                    .put("rowIndex", data[1]).put("columnIndex", column).put("rowRole", "TEST_ITEM")
-                    .put("trainingEligible", !memberName.isBlank()).put("sampleAddress", address(column, bounds(headerRange)[1]))
-                    .put("sampleName", memberName);
-            record.putArray("rowPath").add(memberName);
-            record.set("rowDimensions", objectMapper.createArrayNode().add(objectMapper.createObjectNode()
-                    .put("code", "column_member").put("value", memberName)
-                    .put("sourceAddress", address(column, bounds(headerRange)[1]))));
-            record.set("rowAttributes", objectMapper.createArrayNode());
-            record.set("columnMember", objectMapper.createObjectNode()
-                    .put("coordinate", columnLetters(column)).put("address", address(column, bounds(headerRange)[1]))
-                    .put("label", memberName).put("status", memberStatus)
-                    .put("instanceStatus", memberStatus).put("role", "COLUMN_MEMBER_INPUT"));
-            var values = record.putArray("values");
-            JsonNode firstValue = null;
-            String firstAddress = address(column, data[1]);
-            for (int row = data[1]; row <= data[3]; row++) {
-                var labelCell = findRowLabel(facts, sheetId, row, column);
-                var valueCell = findCell(facts, sheetId, column, row);
-                var valueAddress = address(column, row);
-                var formula = valueCell != null && valueCell.path("formula").isTextual();
-                var value = objectMapper.createObjectNode().put("address", valueAddress)
-                        .put("label", labelCell == null ? "" : cellText(labelCell))
-                        .put("valueSource", formula ? "FORMULA" : "USER_INPUT")
-                        .put("trainingEligible", !memberName.isBlank() && !formula);
-                if (valueCell != null && valueCell.has("value")) value.set("value", valueCell.path("value").deepCopy());
-                if (valueCell != null && valueCell.has("formula")) value.set("formula", valueCell.path("formula").deepCopy());
-                if (firstValue == null) {
-                    firstValue = value.deepCopy();
-                    firstAddress = valueAddress;
-                }
-                values.add(value);
-            }
-            record.set("value", firstValue == null
-                    ? objectMapper.createObjectNode().put("address", firstAddress).put("trainingEligible", false)
-                    : firstValue);
-            record.put("valueAddress", firstAddress);
-            records.add(record);
-        }
-        var eligibleCount = 0;
-        var emptyMemberCount = 0;
-        for (var record : records) {
-            if (record.path("trainingEligible").asBoolean(false)) eligibleCount++;
-            if ("EMPTY".equals(record.path("columnMember").path("instanceStatus").asText())) emptyMemberCount++;
-        }
-        result.set("trainingSummary", objectMapper.createObjectNode()
-                .put("total", records.size()).put("eligible", eligibleCount)
-                .put("testItem", records.size()).put("replicate", 0).put("aggregate", 0).put("unknown", 0)
-                .put("emptyRuntimeMember", emptyMemberCount)
-                .put("formulaExcluded", 0));
-        return result;
-    }
-
-    private String columnLetters(int column) {
-        var result = new StringBuilder();
-        var value = column;
-        while (value > 0) {
-            var rem = (value - 1) % 26;
-            result.append((char) ('A' + rem));
-            value = (value - 1) / 26;
-        }
-        return result.reverse().toString();
-    }
-
-    private void ensureMatrixProjection(ObjectNode parent, JsonNode region, JsonNode facts) {
-        var details = region.path("structure");
-        var range = parent.path("locator").path("range").asText(region.path("range").asText(""));
-        var corner = details.path("cornerRange").asText("");
-        var rowHeader = details.path("rowHeaderRange").asText("");
-        var columnHeader = details.path("columnHeaderRange").asText("");
-        var crossData = details.path("crossDataRange").asText("");
-        var cb = bounds(corner);
-        var db = bounds(crossData);
-        if (cb == null || db == null || rowHeader.isBlank() || columnHeader.isBlank()) return;
-        var projection = matrixCompiler.recordProjection(cb[3], db[0], db[2], cb[3], db[1], db[3],
-                details.path("recordAxis").asText("COLUMN"));
-        var slots = matrixCompiler.columnSlots(parent.path("locator").path("sheetId").asText(""),
-                parent.path("blockId").asText(""), range, db[0], db[2], cb[3], db[3]);
-        var artifacts = matrixCompiler.compileMatrixArtifacts(facts,
-                parent.path("locator").path("sheetId").asText(""), parent.path("blockId").asText(""),
-                range, corner, rowHeader, columnHeader, crossData, objectMapper.createArrayNode(),
-                projection, slots, objectMapper.createArrayNode(), "PROVISIONAL");
-        parent.set("matrixModel", artifacts.path("matrixModel").deepCopy());
-        parent.set("tableModel", artifacts.path("tableModel").deepCopy());
-        parent.set("longTableModel", artifacts.path("longTableModel").deepCopy());
-        parent.set("recordProjection", artifacts.path("recordProjection").deepCopy());
-        parent.set("columnSlots", artifacts.path("columnSlots").deepCopy());
-        parent.put("rowHeaderRange", rowHeader).put("columnHeaderRange", columnHeader)
-                .put("crossDataRange", crossData).put("cornerRange", corner);
-    }
-
-    private ObjectNode column(String name, String code, String valueRange, String labelRange, String type) {
         return objectMapper.createObjectNode().put("name", name).put("code", code)
                 .put("fieldCode", "TABLE.COLUMN." + code).put("dataPath", "/records/*/" + code)
                 .put("labelRange", labelRange).put("valueRange", valueRange)
-                .put("valueType", type).put("editability", "EDITABLE")
+                .put("valueType", type).put("editability", "EDITABLE").put("unit", unit)
                 .put("valueSource", "USER_INPUT").put("fieldOrigin", "TEMPLATE_LOCAL")
                 .put("standardSelectionStatus", "CUSTOM");
+    }
+
+    private HeaderLabel headerLabel(String value) {
+        var normalized = normalizedLabelName(value);
+        var matcher = java.util.regex.Pattern.compile(
+                "^(.+?)[（(]\\s*([^（）()]{1,12})\\s*[）)]$").matcher(normalized);
+        if (!matcher.matches()) return new HeaderLabel(normalized, "");
+        return new HeaderLabel(matcher.group(1).strip(), matcher.group(2).strip());
+    }
+
+    private String normalizedLabelName(String value) {
+        if (value == null) return "";
+        return value.strip()
+                .replaceAll("(?<=\\p{IsHan})\\s+(?=\\p{IsHan})", "")
+                .replaceAll("\\s{2,}", " ");
     }
 
     private String fieldCode(String name, int ordinal) {
@@ -1025,16 +792,35 @@ public final class PhysicalStructureFieldCompiler {
     }
 
     private JsonNode findRowLabel(JsonNode facts, String sheetId, int row, int firstRecordColumn) {
-        JsonNode fallback = null;
+        JsonNode selected = null;
+        var selectedEndColumn = -1;
         for (var cell : cells(facts, sheetId)) {
             var b = bounds(cellRange(cell));
             if (b == null || b[1] > row || b[3] < row || b[0] >= firstRecordColumn) continue;
-            if (!cellText(cell).isBlank()) {
-                if (b[1] == row) return cell;
-                if (fallback == null) fallback = cell;
+            // A group merge spanning several rows is context, not a field by
+            // itself. Materialize the rightmost leaf that starts on this row;
+            // rowLabelPath() retains every enclosing group as internal context.
+            if (b[1] != row || cellText(cell).isBlank() || isFormulaCell(cell)) continue;
+            if (b[3] > b[1] && (b[2] != firstRecordColumn - 1
+                    || !hasEnclosingParentLabel(facts, sheetId, b, row))) continue;
+            if (b[2] > selectedEndColumn) {
+                selected = cell;
+                selectedEndColumn = b[2];
             }
         }
-        return fallback;
+        return selected;
+    }
+
+    private boolean hasEnclosingParentLabel(
+            JsonNode facts, String sheetId, int[] leafBounds, int row
+    ) {
+        for (var cell : cells(facts, sheetId)) {
+            var candidate = bounds(cellRange(cell));
+            if (candidate == null || cellText(cell).isBlank() || isFormulaCell(cell)) continue;
+            if (candidate[0] < leafBounds[0] && candidate[2] < leafBounds[0]
+                    && candidate[1] <= row && candidate[3] >= row) return true;
+        }
+        return false;
     }
 
     private String firstText(JsonNode facts, String sheetId, String range) {
@@ -1052,22 +838,33 @@ public final class PhysicalStructureFieldCompiler {
 
     private JsonNode findCell(JsonNode facts, String sheetId, int column, int row) {
         var address = address(column, row);
+        // Prefer the exact physical cell over a containing merged candidate.
+        // A blank G2:J2 input surface must not hide the semantic H2 label when
+        // form coordinates are compiled from the union of snapshots.
+        for (var cell : cells(facts, sheetId)) {
+            if (address.equalsIgnoreCase(cell.path("address").asText(""))) return cell;
+        }
         for (var cell : cells(facts, sheetId)) {
             var b = bounds(cellRange(cell));
             if (b != null && column >= b[0] && column <= b[2] && row >= b[1] && row <= b[3]) return cell;
-            if (address.equalsIgnoreCase(cell.path("address").asText(""))) return cell;
         }
         return null;
     }
 
     private List<JsonNode> cells(JsonNode facts, String sheetId) {
-        var result = new ArrayList<JsonNode>();
+        var result = new LinkedHashMap<String, JsonNode>();
         for (var sheet : facts.path("sheets")) {
             var id = sheet.path("id").asText(sheet.path("sheetId").asText(""));
             if (!sheetId.equals(id)) continue;
-            sheet.path("semanticCells").forEach(result::add);
+            for (var key : List.of("candidateCells", "physicalCells", "semanticCells")) {
+                for (var cell : sheet.path(key)) {
+                    var address = cell.path("address").asText(cellRange(cell));
+                    if (address.isBlank()) continue;
+                    result.putIfAbsent(address.toUpperCase(Locale.ROOT), cell);
+                }
+            }
         }
-        return result;
+        return new ArrayList<>(result.values());
     }
 
     private String cellText(JsonNode cell) {

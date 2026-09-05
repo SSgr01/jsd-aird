@@ -9,6 +9,7 @@ import com.jsd.aird.rnd.domain.ProjectDocumentFormat;
 import com.jsd.aird.rnd.domain.ProjectDocumentSource;
 import com.jsd.aird.rnd.domain.ProjectDocumentStatus;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.jsd.aird.shared.api.AllowedActions;
 
 public interface ProjectDocumentRepository {
 
@@ -44,6 +45,9 @@ public interface ProjectDocumentRepository {
             Instant createdAt,
             String createdBy
     ) {
+        public List<String> getAllowedActions() {
+            return AllowedActions.projectDocument(status == null ? null : status.name());
+        }
     }
 
     record Detail(
@@ -69,6 +73,9 @@ public interface ProjectDocumentRepository {
             JsonNode contentData,
             JsonNode contentRecognition
     ) {
+        public List<String> getAllowedActions() {
+            return AllowedActions.projectDocument(status == null ? null : status.name());
+        }
     }
 
     List<Summary> search(Search q);

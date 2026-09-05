@@ -1,6 +1,7 @@
 package com.jsd.aird.mfg.upload.application.port;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.jsd.aird.shared.api.AllowedActions;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
@@ -120,6 +121,9 @@ public interface ProductionUploadRepository {
             UUID updatedBy,
             Instant updatedAt
     ) {
+        public List<String> getAllowedActions() {
+            return AllowedActions.productionUpload(status);
+        }
     }
 
     record VersionView(

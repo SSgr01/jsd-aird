@@ -43,18 +43,18 @@ class RecognitionCoverageValidatorTest {
     @Test
     void acceptsARegionOnlyWhenTheReturnedTableMatchesItsPhysicalKindAndRegion() {
         var validator = new RecognitionCoverageValidator(objectMapper);
-        var region = region("b1", "MATRIX", "A4:N100");
+        var region = region("b1", "COLUMN_TABLE", "A4:N100");
         var table = objectMapper.createObjectNode()
                 .put("blockId", "b1")
-                .put("kind", "MATRIX")
+                .put("kind", "COLUMN_TABLE")
                 .set("locator", objectMapper.createObjectNode().put("range", "A4:N100"));
 
         var assessment = validator.assess(
                 objectMapper.createObjectNode(),
                 List.of(region),
-                Map.of("s1|A4:N100|MATRIX", "SUCCEEDED"),
+                Map.of("s1|A4:N100|COLUMN_TABLE", "SUCCEEDED"),
                 List.of(new RecognitionModelClient.ModelSuggestion(
-                        "TABLE_REGION", table, 0.9, objectMapper.createArrayNode()
+                        "COLUMN_TABLE", table, 0.9, objectMapper.createArrayNode()
                 )),
                 true,
                 false
@@ -91,7 +91,7 @@ class RecognitionCoverageValidatorTest {
                         new RecognitionModelClient.ModelSuggestion(
                                 "SCALAR_FIELD", scalar, 0.9, objectMapper.createArrayNode()),
                         new RecognitionModelClient.ModelSuggestion(
-                                "TABLE_REGION", table, 0.9, objectMapper.createArrayNode())
+                                "ROW_TABLE", table, 0.9, objectMapper.createArrayNode())
                 ),
                 true,
                 false

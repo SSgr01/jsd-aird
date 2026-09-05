@@ -394,7 +394,7 @@ export function QualityUploadPage() {
           >
             下载
           </Button>
-          <Button
+          {upload.allowedActions?.includes('DELETE') ? <Button
             type="link"
             danger
             icon={<DeleteOutlined />}
@@ -402,7 +402,7 @@ export function QualityUploadPage() {
             onClick={() => removeUpload(upload)}
           >
             删除
-          </Button>
+          </Button> : null}
         </Space>
       ),
     };

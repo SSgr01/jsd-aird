@@ -11,7 +11,6 @@ public final class TableTopologyClassifier {
 
     public enum Topology {
         COLUMN_TABLE,
-        MATRIX,
         UNKNOWN
     }
 
@@ -20,26 +19,19 @@ public final class TableTopologyClassifier {
     }
 
     /**
-     * Returns the physical conclusion and the evidence used to reach it.  A
-     * blank identity band is deliberately treated as a runtime-member surface,
-     * not as proof that a second member axis is absent.  Such a shape remains
-     * UNKNOWN unless the independent axes are explicit and complete.
+     * Returns the physical conclusion and the evidence used to reach it. Both
+     * populated and blank identity bands are valid column evidence; genuinely
+     * missing or competing axes remain UNKNOWN.
      */
     public Classification analyze(Evidence evidence) {
         if (evidence == null || evidence.dataColumnCount() < 2 || evidence.bodyRowCount() < 2) {
             return new Classification(Topology.UNKNOWN, List.of(), evidence);
         }
         var candidates = new java.util.ArrayList<Topology>();
-        if (evidence.explicitColumnMemberCount() >= 2
-                && evidence.leftLabelRowCount() >= 2
-                && evidence.crossSurfacePresent()) {
-            candidates.add(Topology.MATRIX);
-        }
         // A column table needs a real left attribute band and repeated record
-        // columns, with no runtime/explicit competing member surface.
-        if (!evidence.runtimeColumnMemberSurface()
-                && evidence.explicitColumnMemberCount() == 0
-                && "COLUMN".equals(evidence.recordAxis())
+        // columns.  The identity row may be populated (completed report) or
+        // blank (new input template); both are valid column-table evidence.
+        if ("COLUMN".equals(evidence.recordAxis())
                 && evidence.leftLabelRowCount() >= 3
                 && evidence.dataColumnCount() >= 3
                 && evidence.bodyRowCount() >= 4) {
@@ -57,30 +49,30 @@ public final class TableTopologyClassifier {
     public record Evidence(
             String recordAxis,
             boolean blankIdentityBand,
-            int explicitColumnMemberCount,
+            int topHeaderValueCount,
             int leftLabelRowCount,
             int dataColumnCount,
             int bodyRowCount,
-            boolean crossSurfacePresent,
-            boolean runtimeColumnMemberSurface,
-            boolean runtimeRowMemberSurface,
-            String runtimeColumnMemberRange,
-            String runtimeRowMemberRange,
-            String crossDataRange,
+            boolean rectangularDataSurface,
+            boolean blankColumnHeaderBand,
+            boolean blankRowHeaderBand,
+            String columnHeaderRange,
+            String rowHeaderRange,
+            String dataRange,
             int rowLabelDepth,
             boolean formulaTopologyPresent
     ) {
         public Evidence(
                 String recordAxis,
                 boolean blankIdentityBand,
-                int explicitColumnMemberCount,
+                int topHeaderValueCount,
                 int leftLabelRowCount,
                 int dataColumnCount,
                 int bodyRowCount,
-                boolean crossSurfacePresent
+                boolean rectangularDataSurface
         ) {
-            this(recordAxis, blankIdentityBand, explicitColumnMemberCount, leftLabelRowCount,
-                    dataColumnCount, bodyRowCount, crossSurfacePresent, blankIdentityBand, false,
+            this(recordAxis, blankIdentityBand, topHeaderValueCount, leftLabelRowCount,
+                    dataColumnCount, bodyRowCount, rectangularDataSurface, blankIdentityBand, false,
                     "", "", "", leftLabelRowCount, false);
         }
     }

@@ -196,14 +196,12 @@ export function MeetingMinutesTab({ projectId }: Props) {
                 <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => setViewing(item)}>
                   查看
                 </Button>
-                <Button type="link" size="small" icon={<FileTextOutlined />} onClick={() => handleArchive(item)} disabled={item.archivedToKb}>
+                <Button type="link" size="small" icon={<FileTextOutlined />} onClick={() => handleArchive(item)} disabled={!item.allowedActions?.includes('ARCHIVE')}>
                   归档知识库
                 </Button>
-                <Popconfirm title="确认删除该会议纪要？" okText="删除" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => handleDelete(item)}>
-                  <Button type="link" size="small" danger icon={<DeleteOutlined />}>
-                    删除
-                  </Button>
-                </Popconfirm>
+                {item.allowedActions?.includes('DELETE') ? <Popconfirm title="确认删除该会议纪要？" okText="删除" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => handleDelete(item)}>
+                  <Button type="link" size="small" danger icon={<DeleteOutlined />}>删除</Button>
+                </Popconfirm> : null}
               </div>
             </li>
           ))}

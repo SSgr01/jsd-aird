@@ -96,7 +96,7 @@ export function isCellMutationCommand(commandId: string, params?: unknown) {
 type RangeRecord = Record<string, unknown>;
 
 /**
- * A repeating table or matrix owns its value surface. Text typed in that
+ * A repeating table owns its value surface. Text typed in that
  * surface is business data, even when it is short enough to look like a
  * label. Keep automatic discovery limited to the header/label bands and to
  * genuinely unstructured cells.
@@ -109,7 +109,7 @@ export function isStructuredDataCell(
   const cell = rangeBounds(selection.address);
   if (!cell) return false;
   const structuredKinds = new Set([
-    'REPEAT_REGION', 'REPEAT_FIELD', 'MATRIX_REGION', 'MATRIX_FIELD',
+    'REPEAT_REGION', 'REPEAT_FIELD',
   ]);
   const contains = (range: unknown) => {
     const bounds = rangeBounds(typeof range === 'string' ? range : '');
@@ -118,7 +118,7 @@ export function isStructuredDataCell(
   };
   const isHeader = (locator: RangeRecord) => [
     locator.headerRange, locator.labelRange, locator.labelAddress,
-    locator.rowHeaderRange, locator.columnHeaderRange, locator.identityRange,
+    locator.identityRange,
   ].some(contains);
 
   for (const binding of bindings) {
@@ -126,27 +126,24 @@ export function isStructuredDataCell(
     const locator = binding.locator ?? {};
     if (typeof locator.sheetId !== 'string' || locator.sheetId !== selection.sheetId) continue;
     if (isHeader(locator)) continue;
-    if ([locator.dataRange, locator.crossDataRange, locator.valueRange,
-      locator.logicalInputRange, locator.recordRange, locator.measureRange].some(contains)) {
+    if ([locator.dataRange, locator.valueRange,
+      locator.logicalInputRange, locator.recordRange].some(contains)) {
       return true;
     }
   }
 
   for (const region of regions) {
     if (region.sheetId !== selection.sheetId
-      || !['ROW_TABLE', 'COLUMN_TABLE', 'MATRIX'].includes(region.kind ?? '')) continue;
+      || !['ROW_TABLE', 'COLUMN_TABLE'].includes(region.kind ?? '')) continue;
     const structures = region.structures ?? {};
     // `region.range` is the whole envelope and may include the header band.
     // Only value/projection ranges suppress live discovery; otherwise a blank
     // template header cell would be incorrectly treated as business data.
     const ranges = [
       structures.dataRange,
-      structures.crossDataRange,
-      structures.recordProjection && (structures.recordProjection as RangeRecord).sourceRange,
     ];
     const headers = [
-      structures.headerRange, structures.rowHeaderRange,
-      structures.columnHeaderRange, structures.cornerRange,
+      structures.headerRange,
     ];
     if (headers.some(contains)) continue;
     if (ranges.some(contains)) return true;

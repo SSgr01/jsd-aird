@@ -96,6 +96,54 @@ export function mergeLocators(
   return result;
 }
 
+/**
+ * Update editable coordinates while keeping the canonical nested parts and
+ * the current flat workbook/export aliases in sync. Leaving one alias stale
+ * makes the editor highlight the old cell and makes export write to it again.
+ */
+export function synchronizeLocatorCoordinates(
+  locator: Record<string, unknown> | undefined,
+  updates: Record<string, unknown>,
+): CanonicalLocator {
+  const next = mergeLocators(locator, updates);
+  const valueRange = text(updates.address)
+    || text(updates.valueRange)
+    || text(updates.logicalInputRange)
+    || locatorValueRange(next);
+  const labelRange = text(updates.labelAddress)
+    || text(updates.labelRange)
+    || locatorLabelRange(next);
+
+  if (valueRange) {
+    const address = firstCell(valueRange);
+    next.address = valueRange;
+    next.range = valueRange;
+    next.valueRange = valueRange;
+    next.logicalInputRange = valueRange;
+    next.valueAddress = address || valueRange;
+    next.valueAnchor = address || valueRange;
+    next.anchorAddress = address || valueRange;
+    next.anchorRange = valueRange;
+    next.value = {
+      ...(next.value && typeof next.value === 'object' ? next.value : {}),
+      address: address || valueRange,
+      range: valueRange,
+    };
+  }
+  if (labelRange) {
+    const address = firstCell(labelRange);
+    next.labelAddress = address || labelRange;
+    next.labelRange = labelRange;
+    next.labelAnchor = address || labelRange;
+    next.label = {
+      ...(next.label && typeof next.label === 'object' ? next.label : {}),
+      address: address || labelRange,
+      range: labelRange,
+    };
+  }
+  return next;
+}
+
 export function locatorLabelRange(locator?: Record<string, unknown>) {
   return text((locator?.label as Record<string, unknown> | undefined)?.range)
     || text((locator?.label as Record<string, unknown> | undefined)?.address)

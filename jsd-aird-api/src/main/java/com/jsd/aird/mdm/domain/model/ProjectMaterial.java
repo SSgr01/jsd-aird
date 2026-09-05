@@ -2,6 +2,7 @@ package com.jsd.aird.mdm.domain.model;
 
 import java.time.Instant;
 import java.util.UUID;
+import java.util.List;
 
 public record ProjectMaterial(
         UUID id,
@@ -17,4 +18,8 @@ public record ProjectMaterial(
         String status,
         Instant createdAt
 ) {
+    /** Association rows are removed through the explicit unlink command. */
+    public List<String> getAllowedActions() {
+        return List.of();
+    }
 }

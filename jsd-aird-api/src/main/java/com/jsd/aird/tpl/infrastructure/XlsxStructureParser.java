@@ -204,7 +204,7 @@ public class XlsxStructureParser implements OfficeStructureParser, WorkbookInsta
                         .put("name", name.getNameName())
                         .put("formula", name.getRefersToFormula())
                         // A named range proves that this address exists, but it
-                        // does not prove MATRIX/ROW_TABLE semantics or record axis.
+                        // does not prove ROW_TABLE semantics or record direction.
                         .put("geometryStatus", "CONFIRMED")
                         .put("semanticStatus", "PROVISIONAL")));
                 summary.set("namedRanges", names);

@@ -1,6 +1,7 @@
 import type { ApiResponse, PageResponse } from '@/types/api';
 import { appEnv } from '@/app/config/env';
 import { httpClient } from '@/services/http/client';
+import { notifyAuthRequired } from '@/services/http/auth-events';
 import { generateUUID } from '@/utils/uuid';
 
 export interface SpectrumFieldDefinition {
@@ -17,6 +18,7 @@ export interface SpectrumCategory {
   sortOrder: number;
   systemCategory: boolean;
   chartCount: number;
+  allowedActions?: string[];
 }
 export interface SpectrumChart {
   id: string;
@@ -37,6 +39,7 @@ export interface SpectrumChart {
   status: string;
   createdAt: string;
   updatedAt: string;
+  allowedActions?: string[];
 }
 export interface SpectrumPage {
   pageNo: number;
@@ -266,6 +269,7 @@ export const spectrumApi = {
         'X-Request-Id': generateUUID(),
       },
     });
+    if (response.status === 401) notifyAuthRequired();
     if (!response.ok || !response.body) throw new Error(`图谱进度流连接失败（${response.status}）`);
     const reader = response.body.getReader();
     const decoder = new TextDecoder();

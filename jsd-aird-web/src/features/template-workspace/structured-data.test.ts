@@ -49,17 +49,6 @@ describe('synchronizeStructuredData', () => {
     ]);
   });
 
-  it('normalizes a matrix parent into stable member records when it has no semantic children', () => {
-    const parent = binding('matrix', '/matrix', 'MATRIX_REGION');
-    const result = synchronizeStructuredData({}, [parent], () => [[1, 2], [3, 4]]);
-    expect(result.data).toEqual({
-      matrix: [
-        { _member: { slotId: 'matrix:ROW:0' }, value: [1, 2] },
-        { _member: { slotId: 'matrix:ROW:1' }, value: [3, 4] },
-      ],
-    });
-  });
-
   it('keeps the existing value when a binding cannot be read', () => {
     const result = synchronizeStructuredData(
       { order: { code: 'existing' } },

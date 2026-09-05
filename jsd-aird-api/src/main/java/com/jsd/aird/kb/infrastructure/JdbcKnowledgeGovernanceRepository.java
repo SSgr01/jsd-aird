@@ -780,10 +780,27 @@ public class JdbcKnowledgeGovernanceRepository implements KnowledgeGovernanceRep
             case "REJECT" -> "REJECTED";
             default -> throw new IllegalArgumentException("无效AI授权动作");
         };
-        var exists = Boolean.TRUE.equals(jdbc.queryForObject("""
-                SELECT EXISTS(SELECT 1 FROM kb.document d WHERE d.organization_id = ? AND d.id = ?
-                  AND d.lifecycle_status = 'ACTIVE' AND d.current_publication_id IS NOT NULL)
-                """, Boolean.class, organizationId, documentId));
+        var existsSql = "REVOKE".equals(action) ? """
+                SELECT EXISTS(
+                    SELECT 1
+                    FROM kb.document d
+                    JOIN kb.document_ai_grant g ON g.document_id = d.id
+                    WHERE d.organization_id = ? AND d.id = ?
+                      AND g.organization_id = ?
+                )
+                """ : """
+                SELECT EXISTS(
+                    SELECT 1 FROM kb.document d
+                    WHERE d.organization_id = ? AND d.id = ?
+                      AND d.lifecycle_status = 'ACTIVE'
+                      AND d.current_publication_id IS NOT NULL
+                )
+                """;
+        var exists = "REVOKE".equals(action)
+                ? Boolean.TRUE.equals(jdbc.queryForObject(existsSql, Boolean.class,
+                    organizationId, documentId, organizationId))
+                : Boolean.TRUE.equals(jdbc.queryForObject(existsSql, Boolean.class,
+                    organizationId, documentId));
         if (!exists) return false;
         jdbc.update("""
                 INSERT INTO kb.document_ai_grant (document_id, organization_id, status, reason, updated_by)

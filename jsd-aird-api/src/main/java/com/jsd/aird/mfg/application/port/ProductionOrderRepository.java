@@ -8,6 +8,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.jsd.aird.shared.api.AllowedActions;
 
 public interface ProductionOrderRepository {
 
@@ -151,6 +152,9 @@ public interface ProductionOrderRepository {
             String updatedByName,
             Instant updatedAt
     ) {
+        public List<String> getAllowedActions() {
+            return AllowedActions.production(status);
+        }
     }
 
     record ProductionOrderListItem(
@@ -175,6 +179,9 @@ public interface ProductionOrderRepository {
             String updatedByName,
             Instant updatedAt
     ) {
+        public List<String> getAllowedActions() {
+            return AllowedActions.production(status);
+        }
     }
 
     record FileReference(UUID id, String status, String sha256) {

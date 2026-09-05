@@ -162,16 +162,22 @@ export function PartnerListPage() {
     try {
       await Promise.all(
         targets
-          .filter((x) => x.status === 'ACTIVE')
+          .filter((x) => x.allowedActions?.includes('DISABLE'))
           .map((x) => changePartnerStatus(x.id, 'INACTIVE', x.version)),
       );
-      msg.success('删除成功');
+      msg.success('停用成功');
       setSelectedIds([]);
       setSelectedPartnersById({});
       await load();
     } catch (error) {
-      msg.error(errorMessage(error, '删除失败'));
+      msg.error(errorMessage(error, '停用失败'));
     }
+  };
+  const changeLifecycle = async (target: BusinessPartner) => {
+    const restoring = target.allowedActions?.includes('RESTORE');
+    if (!restoring && !target.allowedActions?.includes('DISABLE')) return;
+    try { await changePartnerStatus(target.id, restoring ? 'ACTIVE' : 'INACTIVE', target.version); msg.success(restoring ? '客户已恢复' : '客户已停用'); await load(); }
+    catch (error) { msg.error(errorMessage(error, restoring ? '恢复失败' : '停用失败')); }
   };
   const selectedPartners = selectedIds
     .map((id) => selectedPartnersById[id])
@@ -212,9 +218,9 @@ export function PartnerListPage() {
     }
   };
   const batchDeactivate = async () => {
-    const targets = selectedPartners.filter((x) => x.status === 'ACTIVE');
+    const targets = selectedPartners.filter((x) => x.allowedActions?.includes('DISABLE'));
     if (!targets.length) {
-      msg.warning('没有可删除的客户');
+      msg.warning('没有可停用的客户');
       return;
     }
     await deactivate(targets);
@@ -398,7 +404,7 @@ export function PartnerListPage() {
                         <Checkbox
                           checked={selectedIds.includes(x.id)}
                           onChange={(e) => toggleOne(x.id, e.target.checked)}
-                          disabled={x.status === 'INACTIVE'}
+                          disabled={x.allowedActions?.includes('RESTORE')}
                         />
                       </td>
                       <td>{x.partnerCode}</td>
@@ -420,16 +426,7 @@ export function PartnerListPage() {
                       <td>
                         <div className="cm-row-actions">
                           <Link to={`/partners/${x.id}`}>查看</Link>
-                          <Popconfirm
-                            title="删除该公司？"
-                            description="历史关联数据不会被删除。"
-                            disabled={x.status === 'INACTIVE'}
-                            onConfirm={() => void deactivate([x])}
-                          >
-                            <Button danger type="link" size="small" disabled={x.status === 'INACTIVE'}>
-                              删除
-                            </Button>
-                          </Popconfirm>
+                          {x.allowedActions?.includes('DISABLE') || x.allowedActions?.includes('RESTORE') ? <Popconfirm title={x.allowedActions?.includes('RESTORE') ? '恢复该公司？' : '停用该公司？'} description="历史关联数据不会被删除。" onConfirm={() => void changeLifecycle(x)}><Button danger={x.allowedActions?.includes('DISABLE')} type="link" size="small">{x.allowedActions?.includes('RESTORE') ? '恢复' : '停用'}</Button></Popconfirm> : null}
                         </div>
                       </td>
                     </tr>
@@ -463,7 +460,7 @@ export function PartnerListPage() {
                       <Checkbox
                         checked={selectedIds.includes(x.id)}
                         onChange={(e) => toggleOne(x.id, e.target.checked)}
-                        disabled={x.status === 'INACTIVE'}
+                        disabled={x.allowedActions?.includes('RESTORE')}
                       />
                     </div>
                     <div className="cm-customer-card-head">
@@ -499,16 +496,7 @@ export function PartnerListPage() {
                       </span>
                       <Space size={8}>
                         <Link className="cm-link-button" to={`/partners/${x.id}`}>查看</Link>
-                        <Popconfirm
-                          title="删除该公司？"
-                          description="历史关联数据不会被删除。"
-                          disabled={x.status === 'INACTIVE'}
-                          onConfirm={() => void deactivate([x])}
-                        >
-                          <Button danger type="link" size="small" disabled={x.status === 'INACTIVE'}>
-                            删除
-                          </Button>
-                        </Popconfirm>
+                        {x.allowedActions?.includes('DISABLE') || x.allowedActions?.includes('RESTORE') ? <Popconfirm title={x.allowedActions?.includes('RESTORE') ? '恢复该公司？' : '停用该公司？'} description="历史关联数据不会被删除。" onConfirm={() => void changeLifecycle(x)}><Button danger={x.allowedActions?.includes('DISABLE')} type="link" size="small">{x.allowedActions?.includes('RESTORE') ? '恢复' : '停用'}</Button></Popconfirm> : null}
                       </Space>
                     </div>
                   </div>

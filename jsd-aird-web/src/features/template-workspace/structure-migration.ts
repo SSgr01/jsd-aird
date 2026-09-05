@@ -14,12 +14,7 @@ const RANGE_KEYS = [
   'dataRange',
   'valueRange',
   'totalRange',
-  'rowHeaderRange',
-  'columnHeaderRange',
-  'crossDataRange',
-  'cornerRange',
   'identityRange',
-  'measureRange',
   'recordRange',
   'sourceRange',
 ] as const;
@@ -111,30 +106,10 @@ export function migrateWorkspaceStructure(
       const binding = field.bindingId
         ? nextMapping.find((item) => item.bindingId === field.bindingId)
         : undefined;
-      const matrixModel = field.matrixModel
-        ? migrateStructuredRecord(field.matrixModel as unknown as Record<string, unknown>, operation)
-        : undefined;
-      const recordProjection = field.recordProjection
-        ? migrateStructuredRecord(field.recordProjection as unknown as Record<string, unknown>, operation)
-        : undefined;
-      const longTableModel = field.longTableModel
-        ? migrateStructuredRecord(field.longTableModel as unknown as Record<string, unknown>, operation)
-        : undefined;
       return {
         ...field,
         ...(binding ? { locator: structuredClone(binding.locator) } : {}),
         ...(candidate ? { candidateLocator: candidate.locator } : {}),
-        ...(matrixModel ? { matrixModel: matrixModel as never } : {}),
-        ...(recordProjection ? { recordProjection: recordProjection as never } : {}),
-        ...(longTableModel ? { longTableModel: longTableModel as never } : {}),
-        ...(field.columnSlots
-          ? {
-              columnSlots: migrateSlots(
-                field.columnSlots as unknown as Array<Record<string, unknown>>,
-                operation,
-              ) as never,
-            }
-          : {}),
         ...(status === 'MISSING' ? { reviewStatus: 'ISSUE' as const } : {}),
       };
     }),
@@ -184,18 +159,15 @@ function migrateLocator(
       changed = true;
     }
   }
-  for (const key of ['matrixModel', 'recordProjection', 'longTableModel']) {
+  for (const key of ['tableModel']) {
     if (isObjectRecord(next[key])) {
       next[key] = migrateStructuredRecord(asRecord(next[key]), operation);
     }
   }
-  for (const key of ['columnSlots', 'rowSlots']) {
-    if (Array.isArray(next[key])) next[key] = migrateSlots(next[key] as Array<Record<string, unknown>>, operation);
-  }
   if (
     !removed &&
     binding?.mappingKind &&
-    ['REPEAT_REGION', 'REPEAT_FIELD', 'MATRIX_REGION', 'MATRIX_FIELD'].includes(binding.mappingKind)
+    ['REPEAT_REGION', 'REPEAT_FIELD'].includes(binding.mappingKind)
   ) {
     const axis = binding.repeatAxis === 'COLUMN' ? 'COLUMN' : 'ROW';
     const expanded = expandRepeatTail(next, operation, axis);
@@ -225,20 +197,6 @@ function migrateStructuredRecord(
     }
   }
   return next;
-}
-
-function migrateSlots(
-  source: Array<Record<string, unknown>>,
-  operation: WorkbookStructureOperation,
-) {
-  return source.flatMap((slot) => {
-    const next = migrateStructuredRecord(slot, operation);
-    const identity = text(next.identityAddress);
-    if (!identity && text(slot.identityAddress)) return [];
-    const match = /^([A-Z]+)[1-9][0-9]*$/i.exec(identity);
-    if (match && Object.prototype.hasOwnProperty.call(next, 'column')) next.column = match[1]?.toUpperCase();
-    return [next];
-  });
 }
 
 function expandRepeatTail(

@@ -92,7 +92,16 @@ export function KnowledgeLibraryPage() {
       title: action === 'APPROVE' ? `允许“${item.title}”用于 AI 问答？` : `撤销“${item.title}”的 AI 使用授权？`,
       content: action === 'APPROVE' ? '授权作用于整个文档，并自动覆盖后续修订和新文件版本。' : '撤销后将取消待执行任务并清除该文档已有向量；关键词检索不受影响。',
       okText: action === 'APPROVE' ? '确认授权' : '确认撤销', cancelText: '取消',
-      onOk: async () => { await knowledgeApi.grant(item.id, action); void message.success(action === 'APPROVE' ? '文档已获得 AI 授权' : '文档 AI 授权已撤销'); await load(); },
+      onOk: async () => {
+        try {
+          await knowledgeApi.grant(item.id, action);
+          void message.success(action === 'APPROVE' ? '文档已获得 AI 授权' : '文档 AI 授权已撤销');
+          await load();
+        } catch (reason) {
+          void message.error(reason instanceof Error ? reason.message : 'AI 授权操作失败');
+          throw reason;
+        }
+      },
     });
   };
 

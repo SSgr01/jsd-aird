@@ -16,6 +16,7 @@ export interface PartnerContact {
   customFields?: Record<string, unknown>;
   primaryContact: boolean;
   status: PartnerStatus;
+  allowedActions?: string[];
   validFrom?: string;
   validTo?: string;
   version: number;
@@ -52,6 +53,7 @@ export interface BusinessPartner {
   requirementCount?: number;
   projectCount?: number;
   latestFollowUpAt?: string;
+  allowedActions?: string[];
 }
 export interface PartnerInput {
   partnerCode: string;

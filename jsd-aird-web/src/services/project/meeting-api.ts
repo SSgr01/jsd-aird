@@ -23,6 +23,7 @@ export interface MeetingMinutes {
   version: number;
   createdAt?: string;
   updatedAt?: string;
+  allowedActions?: string[];
 }
 
 export interface MeetingMinutesInput {

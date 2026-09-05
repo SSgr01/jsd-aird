@@ -2,6 +2,8 @@ package com.jsd.aird.tpl.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.util.List;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
@@ -318,9 +320,8 @@ class PhysicalStructureFieldCompilerTest {
                         && "ROW".equals(item.payload().path("repeatAxis").asText())
                         && item.payload().path("dataPath").asText()
                         .startsWith(parent.path("dataPath").asText() + "/*/"));
-        assertThat(parent.path("longTableModel").path("output").asText())
-                .isEqualTo("ONE_RECORD_PER_ROW");
-        assertThat(parent.path("longTableModel").path("records")).hasSize(2);
+        assertThat(parent.path("tableModel").path("repeatAxis").asText()).isEqualTo("ROW");
+        assertThat(parent.path("tableModel").path("columns")).hasSize(2);
     }
 
     @Test
@@ -398,7 +399,7 @@ class PhysicalStructureFieldCompilerTest {
     }
 
     @Test
-    void compilesColumnTableAttributesAndOneRecordPerColumnProjection() throws Exception {
+    void compilesColumnTableAttributesAndKeepsColumnRepeatGeometry() throws Exception {
         var facts = objectMapper.readTree("""
                 {"sheets":[{"id":"s1","semanticCells":[
                   {"address":"A1","value":"属性"},{"address":"B1","value":"样品A"},{"address":"C1","value":"样品B"},
@@ -408,8 +409,7 @@ class PhysicalStructureFieldCompilerTest {
                 """);
         var region = objectMapper.readTree("""
                 {"type":"COLUMN_TABLE","sheetId":"s1","range":"A1:C3",
-                 "structure":{"headerRange":"A1:C1","dataRange":"A2:C3","repeatAxis":"COLUMN",
-                   "recordProjection":{"mode":"COLUMN_RECORDS","recordAxis":"COLUMN","recordColumns":["B","C"]}}}
+                 "structure":{"headerRange":"A1:C1","dataRange":"A2:C3","repeatAxis":"COLUMN"}}
                 """);
         var parent = objectMapper.createObjectNode().put("kind", "COLUMN_TABLE")
                 .put("relationId", "r1").put("fieldId", "f1").put("bindingId", "b1")
@@ -426,47 +426,69 @@ class PhysicalStructureFieldCompilerTest {
         assertThat(children).allMatch(item ->
                 "COLUMN".equals(item.payload().path("repeatAxis").asText())
                         && item.payload().path("locator").path("valueRange").asText().contains(":"));
-        assertThat(parent.path("longTableModel").path("output").asText())
-                .isEqualTo("ONE_RECORD_PER_COLUMN");
-        assertThat(parent.path("recordProjection").path("recordColumns"))
-                .extracting(com.fasterxml.jackson.databind.JsonNode::asText)
-                .containsExactly("B", "C");
-        assertThat(parent.path("longTableModel").path("records")).hasSize(2);
+        assertThat(parent.path("tableModel").path("repeatAxis").asText()).isEqualTo("COLUMN");
+        assertThat(parent.path("tableModel").path("columns")).hasSize(2);
     }
 
     @Test
-    void compilesMatrixMeasureAndPhysicalRowDimensionWithoutFlatteningCellsToFields() throws Exception {
+    void keepsSampleIdentityRowInsideOneColumnRegion() throws Exception {
         var facts = objectMapper.readTree("""
                 {"sheets":[{"id":"s1","semanticCells":[
-                  {"address":"A2","value":"温度 / 配方"},{"address":"B2","value":"配方A"},
-                  {"address":"C2","value":"配方B"},{"address":"A3","value":"25℃"},
-                  {"address":"B3","value":1200},{"address":"C3","value":1300}
+                  {"address":"A4","mergedRange":"A4:B4","value":"引发剂"},
+                  {"address":"C4","value":184},{"address":"D4","value":1173},{"address":"E4","value":2959},
+                  {"address":"F4","value":"MBF"},{"address":"G4","value":"TPO"},{"address":"H4","value":"BP"},
+                  {"address":"A5","mergedRange":"A5:A6","value":"UV固化性"},{"address":"B5","value":"耐油笔"},
+                  {"address":"A7","value":"初始附着力"},{"address":"B7","value":"附着力"},
+                  {"address":"A8","value":"水煮附着力"},{"address":"B8","value":"附着力"}
+                ],"candidateCells":[
+                  {"address":"A4","mergedRange":"A4:B4","value":"引发剂","hasBorder":true},
+                  {"address":"C4","value":184,"hasBorder":true},{"address":"D4","value":1173,"hasBorder":true},
+                  {"address":"E4","value":2959,"hasBorder":true},{"address":"F4","value":"MBF","hasBorder":true},
+                  {"address":"G4","value":"TPO","hasBorder":true},{"address":"H4","value":"BP","hasBorder":true},
+                  {"address":"A5","mergedRange":"A5:A6","value":"UV固化性","hasBorder":true},
+                  {"address":"B5","value":"耐油笔","hasBorder":true},{"address":"A7","value":"初始附着力","hasBorder":true},
+                  {"address":"B7","value":"附着力","hasBorder":true},{"address":"A8","value":"水煮附着力","hasBorder":true},
+                  {"address":"B8","value":"附着力","hasBorder":true}
                 ]}]}
                 """);
         var region = objectMapper.readTree("""
-                {"type":"MATRIX","sheetId":"s1","range":"A2:C3",
-                 "structure":{"cornerRange":"A2:A2","rowHeaderRange":"A3:A3",
-                   "columnHeaderRange":"B2:C2","crossDataRange":"B3:C3","recordAxis":"COLUMN"}}
+                {"type":"COLUMN_TABLE","sheetId":"s1","range":"A4:H8",
+                 "structure":{"headerRange":"A4:H4","dataRange":"A5:H8","repeatAxis":"COLUMN"}}
                 """);
-        var parent = objectMapper.createObjectNode().put("kind", "MATRIX")
-                .put("relationId", "r1").put("fieldId", "f1").put("bindingId", "b1")
-                .put("candidateRef", "r1").put("regionId", "r1").put("blockId", "r1")
-                .put("candidateOnly", true).put("reviewRequired", true);
-        parent.putObject("locator").put("sheetId", "s1").put("range", "A2:C3");
+        var parent = tableParent("s1", "A4:H8", "identity-relation", "identity-binding");
+        parent.putObject("locator").put("sheetId", "s1").put("range", "A4:H8")
+                .put("dataRange", "A5:H8").put("headerRange", "A4:H4");
 
         var children = compiler.children(parent, region, facts);
 
-        assertThat(children).anyMatch(item ->
-                "MEASURE".equals(item.payload().path("bindingKind").asText())
-                        && "MATRIX_FIELD".equals(item.suggestionType()));
-        assertThat(children).anyMatch(item ->
-                "ROW_DIMENSION".equals(item.payload().path("bindingKind").asText()));
-        assertThat(children).anyMatch(item ->
-                "ROW_DIMENSION".equals(item.payload().path("bindingKind").asText())
-                        && "温度".equals(item.payload().path("fieldName").asText()));
-        assertThat(parent.path("longTableModel").path("layoutMode").asText())
-                .isEqualTo("LONG_FORM");
-        assertThat(parent.path("columnSlots")).hasSize(2);
-        assertThat(parent.path("longTableModel").path("records")).hasSize(2);
+        assertThat(children).extracting(item -> item.payload().path("fieldName").asText())
+                .contains("引发剂", "耐油笔", "附着力");
+        var identity = children.stream()
+                .filter(item -> "引发剂".equals(item.payload().path("fieldName").asText()))
+                .findFirst().orElseThrow();
+        assertThat(identity.payload().path("mappingKind").asText()).isEqualTo("REPEAT_FIELD");
+        assertThat(identity.payload().path("locator").path("valueRange").asText()).isEqualTo("C4:H4");
+        assertThat(identity.payload().path("locator").path("labelRange").asText()).isEqualTo("A4:B4");
+        assertThat(identity.payload().path("locator").path("parentRange").asText()).isEqualTo("A4:H8");
+
+        // Empty sample titles use the same physical grid and must keep the
+        // identity field inside the column table instead of becoming a form
+        // field or splitting the table into multiple regions.
+        var blankFacts = (com.fasterxml.jackson.databind.node.ObjectNode) facts.deepCopy();
+        for (var key : List.of("semanticCells", "candidateCells")) {
+            for (var cell : blankFacts.path("sheets").get(0).withArray(key)) {
+                if (cell.path("address").asText("").matches("[C-H]4")) {
+                    ((com.fasterxml.jackson.databind.node.ObjectNode) cell).put("value", "");
+                }
+            }
+        }
+        var blankParent = tableParent("s1", "A4:H8", "blank-identity-relation", "blank-identity-binding");
+        blankParent.putObject("locator").put("sheetId", "s1").put("range", "A4:H8")
+                .put("dataRange", "A5:H8").put("headerRange", "A4:H4");
+        var blankIdentity = compiler.children(blankParent, region, blankFacts).stream()
+                .filter(item -> "引发剂".equals(item.payload().path("fieldName").asText()))
+                .findFirst().orElseThrow();
+        assertThat(blankIdentity.payload().path("mappingKind").asText()).isEqualTo("REPEAT_FIELD");
+        assertThat(blankIdentity.payload().path("locator").path("valueRange").asText()).isEqualTo("C4:H4");
     }
 }

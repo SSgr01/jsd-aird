@@ -394,6 +394,14 @@ public class DocxStructureParser implements OfficeStructureParser, WordDocumentP
         result.put("documentId", "docx-" + sha256(documentXml).substring(0, 16));
         result.set("packageFacts", packageSummary.deepCopy());
 
+        var tableSequences = new HashMap<String, Integer>();
+        var allTableElements = document.getElementsByTagNameNS("*", "tbl");
+        for (var index = 0; index < allTableElements.getLength(); index++) {
+            if (allTableElements.item(index) instanceof Element table) {
+                tableSequences.put(sourcePath(table), index + 1);
+            }
+        }
+
         var blocks = objectMapper.createArrayNode();
         var body = firstElement(document.getDocumentElement(), "body");
         if (body != null) {
@@ -403,17 +411,33 @@ public class DocxStructureParser implements OfficeStructureParser, WordDocumentP
                 if (isWord(child, "p")) {
                     blocks.add(paragraphBlock(child, ++paragraphNo));
                 } else if (isWord(child, "tbl")) {
-                    blocks.add(tableBlock(child, ++tableNo));
+                    tableNo++;
+                    blocks.add(tableBlock(child, tableSequences.getOrDefault(sourcePath(child), tableNo)));
                 } else if (isWord(child, "sdt")) {
                     var content = firstElement(child, "sdtContent");
                     for (var nested : content == null ? List.<Element>of() : childElements(content)) {
                         if (isWord(nested, "p")) blocks.add(paragraphBlock(nested, ++paragraphNo));
-                        if (isWord(nested, "tbl")) blocks.add(tableBlock(nested, ++tableNo));
+                        if (isWord(nested, "tbl")) {
+                            tableNo++;
+                            blocks.add(tableBlock(nested,
+                                    tableSequences.getOrDefault(sourcePath(nested), tableNo)));
+                        }
                     }
                 }
             }
         }
         result.set("blocks", blocks);
+
+        // Keep top-level blocks for document-flow compatibility, while exposing
+        // every physical table (including nested tables) to recognition.
+        var tables = objectMapper.createArrayNode();
+        for (var index = 0; index < allTableElements.getLength(); index++) {
+            if (allTableElements.item(index) instanceof Element table) {
+                tables.add(tableBlock(table, index + 1));
+            }
+        }
+        result.set("tables", tables);
+        result.put("tableCount", tables.size());
 
         var paragraphTexts = objectMapper.createArrayNode();
         var allParagraphs = document.getElementsByTagNameNS("*", "p");
@@ -494,7 +518,9 @@ public class DocxStructureParser implements OfficeStructureParser, WordDocumentP
     private com.fasterxml.jackson.databind.node.ObjectNode paragraphBlock(Element paragraph, int sequence) {
         var result = objectMapper.createObjectNode();
         var paragraphId = attribute(paragraph, "paraId");
-        result.put("id", paragraphId.isBlank() ? "paragraph-" + sequence : "paragraph-" + paragraphId);
+        result.put("id", paragraphNodeId(paragraph, sequence));
+        result.put("legacyId", "paragraph-" + sequence);
+        result.put("sourcePath", sourcePath(paragraph));
         result.put("type", "PARAGRAPH");
         result.put("text", text(paragraph));
         var properties = firstElement(paragraph, "pPr");
@@ -546,6 +572,7 @@ public class DocxStructureParser implements OfficeStructureParser, WordDocumentP
             if (heading) node.put("title", value);
             var source = node.putObject("sourceLocator")
                     .put("part", "word/document.xml")
+                    .put("path", sourcePath(paragraph))
                     .put("paragraphIndex", index + 1)
                     .put("insideTable", insideTable);
             if (style != null) source.put("style", attribute(style, "val"));
@@ -574,12 +601,14 @@ public class DocxStructureParser implements OfficeStructureParser, WordDocumentP
             var rows = directChildren(table, "tr");
             var firstText = text(table).strip();
             var tableNode = objectMapper.createObjectNode()
-                    .put("nodeId", "table-" + (index + 1))
+                    .put("nodeId", stableNodeId("table", table, index + 1))
+                    .put("legacyId", "table-" + (index + 1))
                     .put("type", "TABLE")
                     .put("text", firstText)
                     .put("sortOrder", ++sequence);
             tableNode.putObject("sourceLocator")
                     .put("part", "word/document.xml")
+                    .put("path", sourcePath(table))
                     .put("tableIndex", index + 1)
                     .put("rowCount", rows.size())
                     .put("columnCount", rows.isEmpty() ? 0 : directChildren(rows.get(0), "tc").size());
@@ -767,31 +796,102 @@ public class DocxStructureParser implements OfficeStructureParser, WordDocumentP
 
     private com.fasterxml.jackson.databind.node.ObjectNode tableBlock(Element table, int sequence) {
         var result = objectMapper.createObjectNode();
-        result.put("id", "table-" + sequence);
+        result.put("id", stableNodeId("table", table, sequence));
+        result.put("legacyId", "table-" + sequence);
+        result.put("sourcePath", sourcePath(table));
         result.put("type", "TABLE");
+        var parentCell = ancestor(table, "tc");
+        var parentTable = ancestor(table, "tbl");
+        var nestingDepth = 0;
+        var currentParent = parentTable;
+        while (currentParent != null) {
+            nestingDepth++;
+            currentParent = ancestor(currentParent, "tbl");
+        }
+        result.put("nestingDepth", nestingDepth);
+        if (parentCell != null) result.put("parentCellPath", sourcePath(parentCell));
+        if (parentTable != null) result.put("parentTablePath", sourcePath(parentTable));
         var rows = directChildren(table, "tr");
         result.put("rowCount", rows.size());
-        var maxColumns = 0;
-        for (var row : rows) maxColumns = Math.max(maxColumns, directChildren(row, "tc").size());
-        result.put("columnCount", maxColumns);
         result.put("text", text(table));
         result.put("contentControlCount", table.getElementsByTagNameNS("*", "sdt").getLength());
+        var grid = firstElement(table, "tblGrid");
+        var gridColumnCount = grid == null ? 0 : directChildren(grid, "gridCol").size();
+        result.put("gridColumnCount", gridColumnCount);
+        result.put("hasGrid", gridColumnCount > 0);
+        result.put("hasBorders", table.getElementsByTagNameNS("*", "tblBorders").getLength() > 0);
         var rowNodes = objectMapper.createArrayNode();
+        var activeVerticalMerges = new HashMap<Integer, com.fasterxml.jackson.databind.node.ObjectNode>();
+        var maxColumns = 0;
         var rowIndex = 0;
         for (var row : rows) {
+            rowIndex++;
             var rowNode = objectMapper.createObjectNode()
-                    .put("id", "table-" + sequence + "-row-" + (++rowIndex));
+                    .put("id", stableNodeId("row", row, rowIndex))
+                    .put("legacyId", "table-" + sequence + "-row-" + rowIndex)
+                    .put("sourcePath", sourcePath(row))
+                    .put("rowIndex", rowIndex);
             var cells = objectMapper.createArrayNode();
-            var columnIndex = 0;
+            var logicalColumn = 1;
+            var physicalColumn = 0;
             for (var cell : directChildren(row, "tc")) {
-                cells.add(objectMapper.createObjectNode()
-                        .put("id", "table-" + sequence + "-cell-" + rowIndex + "-" + (++columnIndex))
+                physicalColumn++;
+                var cellPath = sourcePath(cell);
+                var properties = firstElement(cell, "tcPr");
+                var gridSpan = properties == null ? null : firstElement(properties, "gridSpan");
+                var columnSpan = Math.max(1, parseInt(attribute(gridSpan, "val"), 1));
+                var verticalMerge = properties == null ? null : firstElement(properties, "vMerge");
+                var verticalMergeValue = attribute(verticalMerge, "val");
+                var continuation = verticalMerge != null
+                        && (verticalMergeValue.isBlank() || "continue".equalsIgnoreCase(verticalMergeValue));
+                var cellId = stableNodeId("cell", cell, physicalColumn);
+                var cellNode = objectMapper.createObjectNode()
+                        .put("id", cellId)
+                        .put("legacyId", "word-cell-"
+                                + sha256(cellPath.getBytes(StandardCharsets.UTF_8)).substring(0, 16))
+                        .put("sourcePath", cellPath)
+                        .put("rowIndex", rowIndex)
+                        .put("columnIndex", logicalColumn)
+                        .put("physicalColumnIndex", physicalColumn)
+                        .put("logicalColumnStart", logicalColumn)
+                        .put("logicalColumnEnd", logicalColumn + columnSpan - 1)
+                        .put("columnSpan", columnSpan)
+                        .put("rowSpan", 1)
                         .put("text", text(cell))
-                        .put("editable", isSimpleTableCell(cell)));
+                        .put("editable", isSimpleTableCell(cell))
+                        .put("empty", text(cell).strip().isBlank())
+                        .put("hasNestedTable", cell.getElementsByTagNameNS("*", "tbl").getLength() > 0);
+                if (verticalMerge != null) cellNode.put("verticalMerge", continuation ? "CONTINUE" : "RESTART");
+                if (continuation) {
+                    var root = activeVerticalMerges.get(logicalColumn);
+                    if (root != null) {
+                        cellNode.put("mergeContinuation", true)
+                                .put("mergeRootId", root.path("id").asText());
+                        root.put("rowSpan", root.path("rowSpan").asInt(1) + 1);
+                    }
+                } else if (verticalMerge != null) {
+                    cellNode.put("mergeRootId", cellId);
+                    for (var column = logicalColumn; column < logicalColumn + columnSpan; column++) {
+                        activeVerticalMerges.put(column, cellNode);
+                    }
+                } else {
+                    for (var column = logicalColumn; column < logicalColumn + columnSpan; column++) {
+                        activeVerticalMerges.remove(column);
+                    }
+                }
+                cells.add(cellNode);
+                logicalColumn += columnSpan;
             }
+            maxColumns = Math.max(maxColumns, logicalColumn - 1);
             rowNode.set("cells", cells);
             rowNodes.add(rowNode);
         }
+        result.put("columnCount", Math.max(maxColumns, gridColumnCount));
+        var physicalCells = rows.stream().mapToInt(row -> directChildren(row, "tc").size()).sum();
+        result.put("physicalCellCount", physicalCells);
+        var singleCellContainer = rows.size() == 1 && physicalCells == 1
+                && table.getElementsByTagNameNS("*", "tbl").getLength() > 0;
+        result.put("layoutContainer", singleCellContainer);
         result.set("rows", rowNodes);
         return result;
     }
@@ -814,6 +914,7 @@ public class DocxStructureParser implements OfficeStructureParser, WordDocumentP
                 anchors.add(objectMapper.createObjectNode()
                         .put("nodeId", paragraphNodeId(paragraph, i + 1))
                         .put("kind", "PARAGRAPH")
+                        .put("sourcePath", sourcePath(paragraph))
                         .put("text", text(paragraph))
                         .put("editable", isEditable(paragraph)));
             }
@@ -821,8 +922,9 @@ public class DocxStructureParser implements OfficeStructureParser, WordDocumentP
         for (var i = 0; i < runs.getLength(); i++) {
             if (runs.item(i) instanceof Element run) {
                 anchors.add(objectMapper.createObjectNode()
-                        .put("nodeId", "run-" + (i + 1))
+                        .put("nodeId", stableNodeId("run", run, i + 1))
                         .put("kind", "RUN")
+                        .put("sourcePath", sourcePath(run))
                         .put("text", text(run))
                         .put("editable", isEditable(run)));
             }
@@ -830,8 +932,9 @@ public class DocxStructureParser implements OfficeStructureParser, WordDocumentP
         for (var i = 0; i < texts.getLength(); i++) {
             if (texts.item(i) instanceof Element textNode) {
                 anchors.add(objectMapper.createObjectNode()
-                        .put("nodeId", "text-" + (i + 1))
+                        .put("nodeId", stableNodeId("text", textNode, i + 1))
                         .put("kind", "TEXT")
+                        .put("sourcePath", sourcePath(textNode))
                         .put("text", textNode.getTextContent())
                         .put("editable", isEditable(textNode)));
             }
@@ -839,8 +942,9 @@ public class DocxStructureParser implements OfficeStructureParser, WordDocumentP
         for (var i = 0; i < cells.getLength(); i++) {
             if (cells.item(i) instanceof Element cell) {
                 anchors.add(objectMapper.createObjectNode()
-                        .put("nodeId", "cell-" + (i + 1))
+                        .put("nodeId", stableNodeId("cell", cell, i + 1))
                         .put("kind", "TABLE_CELL")
+                        .put("sourcePath", sourcePath(cell))
                         .put("text", text(cell))
                         .put("editable", isSimpleTableCell(cell)));
             }
@@ -849,7 +953,40 @@ public class DocxStructureParser implements OfficeStructureParser, WordDocumentP
 
     private String paragraphNodeId(Element paragraph, int sequence) {
         var paragraphId = attribute(paragraph, "paraId");
-        return paragraphId.isBlank() ? "paragraph-" + sequence : "paragraph-" + paragraphId;
+        return paragraphId.isBlank() ? stableNodeId("paragraph", paragraph, sequence) : "paragraph-" + paragraphId;
+    }
+
+    private String stableNodeId(String prefix, Element element, int fallbackSequence) {
+        var path = sourcePath(element);
+        if (path.isBlank()) return prefix + "-" + fallbackSequence;
+        return prefix + "-" + sha256(path.getBytes(StandardCharsets.UTF_8)).substring(0, 16);
+    }
+
+    /**
+     * Stable structural address for paragraphs, tables and nested cells. The
+     * address is independent of the parser's global NodeList order and keeps
+     * nested table/cell locations explicit for recognition and content-control
+     * bindings.
+     */
+    private String sourcePath(Element element) {
+        if (element == null) return "";
+        var segments = new ArrayList<String>();
+        Node current = element;
+        while (current instanceof Element currentElement) {
+            var localName = currentElement.getLocalName();
+            if (localName == null || localName.isBlank()) localName = currentElement.getNodeName();
+            var position = 1;
+            for (var sibling = currentElement.getPreviousSibling(); sibling != null; sibling = sibling.getPreviousSibling()) {
+                if (sibling instanceof Element siblingElement
+                        && localName.equals(siblingElement.getLocalName() == null
+                        ? siblingElement.getNodeName() : siblingElement.getLocalName())) {
+                    position++;
+                }
+            }
+            segments.add(0, localName + "[" + position + "]");
+            current = currentElement.getParentNode();
+        }
+        return "/" + String.join("/", segments);
     }
 
     private boolean isEditable(Element element) {
@@ -866,7 +1003,8 @@ public class DocxStructureParser implements OfficeStructureParser, WordDocumentP
         var alias = properties == null ? null : firstElement(properties, "alias");
         var id = properties == null ? null : firstElement(properties, "id");
         var dataBinding = properties == null ? null : firstElement(properties, "dataBinding");
-        result.put("nodeId", "content-control-" + sequence);
+        result.put("nodeId", stableNodeId("content-control", control, sequence));
+        result.put("sourcePath", sourcePath(control));
         result.put("contentControlId", id == null ? "" : attribute(id, "val"));
         result.put("markerId", dataBinding == null ? "" : attribute(dataBinding, "storeItemID"));
         result.put("tag", tag == null ? "" : attribute(tag, "val"));
@@ -1200,6 +1338,7 @@ public class DocxStructureParser implements OfficeStructureParser, WordDocumentP
             range.put("endIndex", start + value.length() - 1);
             range.set("properties", objectMapper.createObjectNode()
                     .put("source", "DOCX_CONTENT_CONTROL")
+                    .put("sourcePath", control.path("sourcePath").asText(""))
                     .put("tag", control.path("tag").asText(""))
                     .put("alias", control.path("alias").asText(""))
                     .put("kind", control.path("kind").asText("RICH_TEXT")));

@@ -6,22 +6,29 @@ import java.util.LinkedHashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.tpl.application.RecognitionIdentity;
 import com.jsd.aird.tpl.application.port.OfficeStructureParser;
 import com.jsd.aird.tpl.application.port.TemplateImportRepository;
+import com.jsd.aird.tpl.application.TemplateQualityIssueCategory;
 import com.jsd.aird.tpl.domain.QualityIssueSeverity;
 import com.jsd.aird.tpl.domain.TemplateFormat;
 import org.postgresql.util.PGobject;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Repository;
 
 @Repository
 public class JdbcTemplateImportRepository implements TemplateImportRepository {
+
+    private static final Logger log = LoggerFactory.getLogger(JdbcTemplateImportRepository.class);
 
     private final JdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper;
@@ -250,7 +257,7 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
                                           WHERE rs.import_job_id = tij.id
                                             AND rs.recognition_run_id = latest_run.id
                                             AND rs.decision = 'PENDING'
-                                            AND rs.suggestion_type IN ('SCALAR_FIELD', 'TABLE_CHILD_FIELD', 'MATRIX_FIELD')
+                                            AND rs.suggestion_type IN ('SCALAR_FIELD', 'TABLE_CHILD_FIELD')
                                             AND NULLIF(BTRIM(rs.payload_jsonb ->> 'fieldName'), '') IS NOT NULL
                                             AND COALESCE(rs.payload_jsonb ->> 'runtimeInputOnly', 'false') <> 'true'
                                             AND COALESCE(rs.payload_jsonb ->> 'nameSource', '') <> 'RUNTIME_SLOT'
@@ -262,7 +269,7 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
                                           WHERE rs.import_job_id = tij.id
                                             AND rs.recognition_run_id = latest_run.id
                                             AND rs.decision NOT IN ('REJECTED', 'REJECTED_BY_RESOLUTION')
-                                            AND rs.suggestion_type IN ('SCALAR_FIELD', 'TABLE_CHILD_FIELD', 'MATRIX_FIELD')
+                                            AND rs.suggestion_type IN ('SCALAR_FIELD', 'TABLE_CHILD_FIELD')
                                             AND NULLIF(BTRIM(rs.payload_jsonb ->> 'fieldName'), '') IS NOT NULL
                                             AND COALESCE(rs.payload_jsonb ->> 'runtimeInputOnly', 'false') <> 'true'
                                             AND COALESCE(rs.payload_jsonb ->> 'nameSource', '') <> 'RUNTIME_SLOT'
@@ -277,8 +284,8 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
                                             AND rs.decision NOT IN ('REJECTED', 'REJECTED_BY_RESOLUTION')
                                             AND COALESCE(rs.payload_jsonb ->> 'suppressed', 'false') <> 'true'
                                             AND (
-                                                rs.suggestion_type IN ('TABLE_REGION', 'TABLE_FIELD')
-                                                OR rs.payload_jsonb ->> 'kind' IN ('MATRIX', 'ROW_TABLE', 'COLUMN_TABLE', 'FORM_REGION', 'TABLE_REGION')
+                                                rs.suggestion_type IN ('ROW_TABLE', 'COLUMN_TABLE')
+                                                OR rs.payload_jsonb ->> 'kind' IN ('ROW_TABLE', 'COLUMN_TABLE', 'FORM_REGION')
                                             )
                                           GROUP BY COALESCE(NULLIF(rs.payload_jsonb ->> 'resolutionGroupId', ''), rs.id::text)
                                        ) candidates),
@@ -728,7 +735,7 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
                     pgJson(issue.inversePatch() == null ? objectMapper.createObjectNode() : issue.inversePatch()),
                     issue.autoFixable(),
                     qualityIssueStatus(issue.status()), beforeSnapshotHash, afterSnapshotHash,
-                    blankToNull(issue.regionId()), issue.issueType()
+                    blankToNull(issue.regionId()), TemplateQualityIssueCategory.fromIssueType(issue.issueType())
             );
         }
     }
@@ -813,24 +820,61 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
     ) {
         var persisted = new ArrayList<PersistedSuggestion>();
         var identities = new LinkedHashMap<String, UUID>();
+        if ("MODEL".equals(source)) {
+            // Model children may point at a physical region.  The physical
+            // batch is persisted before the model batch, so resolve that
+            // logical relation to the database id that actually exists.
+            jdbcTemplate.query(
+                    "SELECT relation_id, id FROM tpl.recognition_suggestion "
+                            + "WHERE recognition_run_id = ? AND source = 'PHYSICAL' "
+                            + "AND relation_id IS NOT NULL",
+                    rs -> {
+                        var relationId = rs.getString("relation_id");
+                        if (relationId != null && !relationId.isBlank()) {
+                            identities.putIfAbsent(relationId, rs.getObject("id", UUID.class));
+                        }
+                    }, recognitionRunId);
+        }
         var fingerprints = new HashSet<String>();
         for (var suggestion : batch.suggestions()) {
             // Keep formula expressions in workbook facts/audit, not in the
             // customer-confirmable suggestion stream. A formula may provide a
             // cached derived value, but "=IF(...)" is never a field name.
             if (isFormulaExpressionCandidate(suggestion.payload())) continue;
-            var id = UUID.randomUUID();
-            var relationId = blankToNull(suggestion.payload().path("relationId").asText(""));
-            if (relationId != null) identities.putIfAbsent(relationId, id);
             var fingerprint = suggestionFingerprint(source, suggestion.payload());
             if (!fingerprints.add(fingerprint)) continue;
-            persisted.add(new PersistedSuggestion(id, suggestion, relationId));
+            var id = UUID.randomUUID();
+            var relationId = blankToNull(suggestion.payload().path("relationId").asText(""));
+            persisted.add(new PersistedSuggestion(id, suggestion, relationId, null,
+                    suggestion.payload().deepCopy()));
+            if (relationId != null) identities.putIfAbsent(relationId, id);
         }
+        var generatedIds = persisted.stream().map(PersistedSuggestion::id)
+                .collect(java.util.stream.Collectors.toSet());
+        var linked = new ArrayList<PersistedSuggestion>(persisted.size());
         for (var entry : persisted) {
             var suggestion = entry.suggestion();
             var payload = suggestion.payload();
             var parentRelationId = blankToNull(payload.path("parentRelationId").asText(""));
-            var explicitParentSuggestionId = safeUuid(payload.path("parentSuggestionId").asText(""));
+            var explicitParentSuggestionId = payload.path("parentSuggestionId").asText("");
+            var parentSuggestionId = resolveParentSuggestionId(
+                    explicitParentSuggestionId, parentRelationId, generatedIds, identities);
+            var storedPayload = entry.payload();
+            if (storedPayload instanceof ObjectNode objectPayload) {
+                if (parentSuggestionId != null) {
+                    objectPayload.put("parentSuggestionId", parentSuggestionId.toString());
+                } else {
+                    // Keep parentRelationId as the durable logical link.  A
+                    // dangling model UUID would break later compilation.
+                    objectPayload.remove("parentSuggestionId");
+                }
+            }
+            linked.add(new PersistedSuggestion(entry.id(), suggestion, entry.relationId(),
+                    parentSuggestionId, storedPayload));
+        }
+        for (var entry : parentFirst(linked)) {
+            var suggestion = entry.suggestion();
+            var payload = entry.payload();
             var fieldId = safeUuid(payload.path("fieldId").asText(""));
             var fingerprint = suggestionFingerprint(source, payload);
             var filterReasonCode = filterReasonCode(payload);
@@ -862,9 +906,7 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
                             batch.callTrace() == null ? "" : batch.callTrace().regionId()
                     ),
                     entry.relationId(), blankToNull(payload.path("blockId").asText("")),
-                    explicitParentSuggestionId != null
-                            ? explicitParentSuggestionId
-                            : parentRelationId == null ? null : identities.get(parentRelationId),
+                    entry.parentSuggestionId(),
                     fieldId, fingerprint,
                     payload.path("suggestionLevel").asText(
                             "CHILD".equals(suggestion.suggestionType()) ? "CHILD" : "ROOT"),
@@ -884,6 +926,87 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
     }
 
     private UUID safeUuid(String value) {
+        return safeUuidValue(value);
+    }
+
+    /**
+     * Resolve a parent only to a row that is known to exist in the current
+     * batch or in the already-persisted physical batch. Model-provided UUIDs
+     * are not database ids and must never be sent through the FK unchecked.
+     */
+    static UUID resolveParentSuggestionId(
+            String explicitParentSuggestionId,
+            String parentRelationId,
+            Set<UUID> generatedIds,
+            Map<String, UUID> relationIds
+    ) {
+        var explicit = safeUuidValue(explicitParentSuggestionId);
+        if (explicit != null && generatedIds.contains(explicit)) return explicit;
+        if (explicitParentSuggestionId != null && !explicitParentSuggestionId.isBlank()) {
+            var aliased = relationIds.get(explicitParentSuggestionId);
+            if (aliased != null) return aliased;
+        }
+        if (parentRelationId != null && !parentRelationId.isBlank()) {
+            var resolved = relationIds.get(parentRelationId);
+            if (resolved != null) return resolved;
+        }
+        return null;
+    }
+
+    private List<PersistedSuggestion> parentFirst(List<PersistedSuggestion> links) {
+        var pending = new ArrayList<>(links);
+        var ordered = new ArrayList<PersistedSuggestion>(links.size());
+        var inserted = new HashSet<UUID>();
+        while (!pending.isEmpty()) {
+            var progress = false;
+            var iterator = pending.iterator();
+            while (iterator.hasNext()) {
+                var link = iterator.next();
+                if (link.parentSuggestionId() == null || inserted.contains(link.parentSuggestionId())) {
+                    ordered.add(link);
+                    inserted.add(link.id());
+                    iterator.remove();
+                    progress = true;
+                }
+            }
+            if (progress) continue;
+            // A cycle can only come from malformed input. Break it safely so
+            // one bad suggestion cannot abort the entire import transaction.
+            log.warn("recognition_suggestion_parent_cycle links={}", pending.size());
+            for (var link : pending) ordered.add(link.withoutParent());
+            break;
+        }
+        return ordered;
+    }
+
+    /** Pure ordering helper used by persistence regression tests. */
+    static List<UUID> parentFirstOrder(List<ParentLink> links) {
+        var pending = new ArrayList<>(links);
+        var ordered = new ArrayList<UUID>(links.size());
+        var inserted = new HashSet<UUID>();
+        while (!pending.isEmpty()) {
+            var progress = false;
+            var iterator = pending.iterator();
+            while (iterator.hasNext()) {
+                var link = iterator.next();
+                if (link.parentId() == null || inserted.contains(link.parentId())) {
+                    ordered.add(link.id());
+                    inserted.add(link.id());
+                    iterator.remove();
+                    progress = true;
+                }
+            }
+            if (progress) continue;
+            pending.forEach(link -> ordered.add(link.id()));
+            break;
+        }
+        return ordered;
+    }
+
+    record ParentLink(UUID id, UUID parentId) {
+    }
+
+    private static UUID safeUuidValue(String value) {
         try {
             return value == null || value.isBlank() ? null : UUID.fromString(value);
         } catch (IllegalArgumentException ignored) {
@@ -923,8 +1046,13 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
     private record PersistedSuggestion(
             UUID id,
             com.jsd.aird.tpl.application.port.RecognitionModelClient.ModelSuggestion suggestion,
-            String relationId
+            String relationId,
+            UUID parentSuggestionId,
+            JsonNode payload
     ) {
+        private PersistedSuggestion withoutParent() {
+            return new PersistedSuggestion(id, suggestion, relationId, null, payload);
+        }
     }
 
     @Override
@@ -942,6 +1070,9 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
                             ORDER BY rr.created_at DESC, rr.id DESC LIMIT 1
                         )
                           AND tij.id = ? AND tij.organization_id = ?
+                          AND rs.suggestion_type IN ('SEMANTIC_MODEL', 'SCALAR_FIELD',
+                                                     'TABLE_CHILD_FIELD', 'FORM_REGION',
+                                                     'ROW_TABLE', 'COLUMN_TABLE')
                         ORDER BY rs.confidence DESC NULLS LAST, rs.created_at, rs.id
                         """,
                 (rs, rowNum) -> mapSuggestion(rs),
@@ -959,6 +1090,9 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
                         FROM tpl.recognition_suggestion rs
                         JOIN tpl.template_import_job tij ON tij.id = rs.import_job_id
                         WHERE rs.recognition_run_id = ? AND tij.organization_id = ?
+                          AND rs.suggestion_type IN ('SEMANTIC_MODEL', 'SCALAR_FIELD',
+                                                     'TABLE_CHILD_FIELD', 'FORM_REGION',
+                                                     'ROW_TABLE', 'COLUMN_TABLE')
                         ORDER BY rs.confidence DESC NULLS LAST, rs.created_at, rs.id
                         """,
                 (rs, rowNum) -> mapSuggestion(rs),

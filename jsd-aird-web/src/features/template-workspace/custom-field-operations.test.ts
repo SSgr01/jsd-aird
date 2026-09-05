@@ -49,12 +49,11 @@ describe('createCustomFieldWorkspace', () => {
     const result = createCustomFieldWorkspace(
       { type: 'object', properties: {} }, model, [parentBinding],
       {
-        ownerId: 'template-1', origin: 'TEMPLATE_LOCAL', kind: 'MATRIX_FIELD', name: '指标',
+        ownerId: 'template-1', origin: 'TEMPLATE_LOCAL', kind: 'REPEAT_FIELD', name: '明细字段',
         parentField: model.fields[0], parentBinding,
       },
     );
-    expect(result.field.mappingKind).toBe('MATRIX_FIELD');
-    expect(result.field.matrixRole).toBe('MEASURE');
+    expect(result.field.mappingKind).toBe('REPEAT_FIELD');
     expect(result.field.reviewStatus).toBe('NEEDS_CONFIRMATION');
     expect(result.binding.bindingStatus).toBe('MISSING');
     expect(result.binding.diagnostic).toMatchObject({ parentFieldId: 'parent', parentBindingId: 'parent-binding' });

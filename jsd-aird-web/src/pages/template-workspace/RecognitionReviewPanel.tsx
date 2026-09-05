@@ -15,8 +15,6 @@ import type {
   RecognitionReviewItem,
   RecognitionRegionNode,
   RecognitionReviewStatus,
-  LongTableModel,
-  MatrixModel,
   TemplateQualityIssue,
 } from '@/services/templates/template-api';
 import { expandSemanticLabelRange, locatorLabelRange, locatorValueRange, mergeLocators } from '@/features/template-workspace/locator';
@@ -73,8 +71,9 @@ export function RecognitionReviewPanel({
   const visibleQualityIssues = useMemo(
     () => (review?.qualityIssues ?? [])
       .filter(isActionableTemplateIssue)
+      .filter((issue) => isLiveStructureIssue(issue, review))
       .filter((issue) => issue.status !== 'IGNORED'),
-    [review?.qualityIssues],
+    [review?.qualityIssues, review?.regions],
   );
 
   useEffect(() => {
@@ -325,10 +324,6 @@ export function RecognitionReviewPanel({
           const alternatives = item.payload.structureAlternatives ?? [];
           const selectedAlternativeId = selectedAlternatives[item.id];
           const structuralCandidate = isStructuralKind(item.kind);
-          const runtimeSlots = item.payload.columnSlots ?? [];
-          const runtimeSlotCoordinates = runtimeSlots
-            .map((slot) => slot.column || slot.identityAddress)
-            .filter(Boolean);
           return (
             <div
               key={item.id}
@@ -408,9 +403,7 @@ export function RecognitionReviewPanel({
                     <div className="field-property-alert full recognition-runtime-input-alert" role="status">
                       <strong>这是运行时填写位置</strong>
                       <span>
-                        {runtimeSlotCoordinates.length > 0
-                          ? `${runtimeSlotCoordinates.join('、')} 是模板预留的真实列槽位`
-                          : '这些位置是模板预留的真实列槽位'}，不是多个业务字段。实验员填写列名后，系统会按列生成对应记录；空白槽位不会阻止模板保存或发布。
+                        这些位置属于按列重复区域，不是多个业务字段。填写后系统会按列生成对应记录；空白位置不会阻止模板保存或发布。
                       </span>
                     </div>
                   )}
@@ -457,19 +450,7 @@ export function RecognitionReviewPanel({
                       <dd>{confidenceLabel(item.confidenceLevel)}</dd>
                     </div>
                   </dl>
-                    {item.kind === 'MATRIX' && item.payload.matrixModel ? (
-                      <>
-                        <MatrixStructureSummary
-                          model={item.payload.matrixModel}
-                          title={item.fieldName || '交叉表结构'}
-                        />
-                        {item.payload.longTableModel && (
-                          <MatrixLongTablePreview model={item.payload.longTableModel} />
-                        )}
-                      </>
-                    ) : item.payload.longTableModel ? (
-                      <MatrixLongTablePreview model={item.payload.longTableModel} />
-                    ) : item.kind === 'ROW_TABLE' && Array.isArray(item.payload.columns) && item.payload.columns.length ? (
+                    {item.kind === 'ROW_TABLE' && Array.isArray(item.payload.columns) && item.payload.columns.length ? (
                     <div className="recognition-table-columns">
                       <strong>明细字段（可单独确认和同步）</strong>
                       {item.payload.columns.some((column) => typeof column?.name === 'string' && column.name.trim()) ? (
@@ -580,58 +561,6 @@ export function RecognitionReviewPanel({
   );
 }
 
-function MatrixLongTablePreview({ model }: { model: LongTableModel }) {
-  const slots = model.recordProjection?.recordAxis === 'ROW'
-    ? (model.rowSlots ?? [])
-    : (model.columnSlots ?? []);
-  const runtimeSlots = slots.filter((slot) => slot.templateStatus === 'RUNTIME_INPUT').length;
-  const emptyRuntimeSlots = slots.filter((slot) => slot.instanceStatus === 'EMPTY').length;
-  const pendingAxes = model.records.filter((record) => {
-    const member = model.recordProjection?.recordAxis === 'ROW'
-      ? record.rowMember
-      : record.columnMember;
-    return member?.status === 'PENDING';
-  }).length;
-  const roles = Array.from(new Set(model.records.map((record) => record.rowRole)));
-  const preview = model.records.slice(0, 8);
-  return (
-    <div className="recognition-matrix-preview">
-      <div className="recognition-matrix-preview-heading">
-        <strong>长表结构预览</strong>
-        <span>
-          {model.sourceKind === 'MATRIX' ? '矩阵' : '表格'} ·
-          {runtimeSlots ? ' ' + String(runtimeSlots) + ' 个运行时列槽位' : ' 列槽位已识别'} ·
-          {emptyRuntimeSlots ? ' ' + String(emptyRuntimeSlots) + ' 个名称待填写' : ' 列名称已填写'}
-           {pendingAxes ? ' · ' + String(pendingAxes) + ' 条待确认记录' : ''}
-        </span>
-      </div>
-      <small>
-         行标题按层级保留，重复文本不会合并，重复记录和汇总行分别保留。
-         当前行类型：{roles.map(rowRoleLabel).join('、') || '待识别'}。
-         可用于训练：{model.trainingSummary?.eligible ?? model.records.filter((record) => record.trainingEligible).length} 条。
-      </small>
-      <div className="recognition-matrix-preview-table" role="table" aria-label="矩阵长表预览">
-        <div className="recognition-matrix-preview-row header" role="row">
-          <span>行路径</span><span>列坐标</span><span>行类型</span><span>值</span>
-        </div>
-        {preview.map((record) => (
-          <div className="recognition-matrix-preview-row" role="row" key={record.recordKey}>
-            <span title={record.rowPath.join(' / ')}>{record.rowPath.filter(Boolean).join(' / ') || '未命名行'}</span>
-            <span>
-              {model.recordProjection?.recordAxis === 'ROW'
-                ? `${record.rowMember?.label || '行成员待确认'} · ${record.rowMember?.address || '待确认'}`
-                : `${record.columnMember?.coordinate || '列成员待确认'} · ${record.columnMember?.label || '标题待确认'}`}
-            </span>
-            <span>{rowRoleLabel(record.rowRole)}</span>
-            <span>{displayLongTableValue(record.value.value ?? record.value.formula)}</span>
-          </div>
-        ))}
-      </div>
-      {model.records.length > preview.length && <small>仅展示前 {preview.length} 条，完整坐标记录随模板保存。</small>}
-    </div>
-  );
-}
-
 function filterRegionTree(
   regions: RecognitionRegionNode[],
   filter: ReviewFilter,
@@ -694,15 +623,16 @@ function RecognitionRegionTree({
         const rootItem = rootItems[0];
         const selectedAlternativeId = selectedAlternatives[region.regionId] || region.alternatives[0]?.alternativeId;
         const status = regionStatus(region.status);
-        const isSimpleLongTable = rootItem?.source === 'RULE'
+        const isSimpleRowTable = rootItem?.source === 'RULE'
           && rootItem.kind === 'ROW_TABLE'
-          && rootItem.payload.reasonCode === 'SIMPLE_LONG_TABLE';
-        const singleRegionSemanticAction = !isSimpleLongTable
-          && region.alternatives.length === 1
+          && rootItem.payload.reasonCode === 'SIMPLE_ROW_TABLE';
+        const selectedAlternative = region.alternatives.find(
+          (alternative) => alternative.alternativeId === selectedAlternativeId,
+        ) || region.alternatives[0];
+        const regionFieldsStale = regionFieldsAreStale(region, selectedAlternative);
+        const singleRegionSemanticAction = region.alternatives.length === 1
           && Boolean(rootItem)
-          && (region.fields.length === 0
-            || region.canonicalStatus !== 'CONFIRMED'
-            || region.structureStatus !== 'CONFIRMED');
+          && (region.fields.length === 0 || regionFieldsStale || region.status !== 'CONFIRMED');
         const resolutionGroupId = region.resolutionGroupId;
         const isPrimaryResolutionCard = !resolutionGroupId
           || regions.find((candidate) => candidate.resolutionGroupId === resolutionGroupId)?.regionId === region.regionId;
@@ -758,20 +688,19 @@ function RecognitionRegionTree({
                     disabled={!editable || busy}
                     onClick={() => onConfirm(rootItem, selectedAlternativeId)}
                   >
-                    {region.fields.length === 0 && region.canonicalStatus === 'CONFIRMED'
-                      ? '重新识别区域字段'
-                      : '采用此区域并识别字段'}
+                    {region.fields.length === 0
+                      ? '确认该区域并识别字段'
+                      : regionFieldsStale
+                        ? '重新识别区域字段'
+                        : '确认该区域'}
                   </Button>
                 </div>
               )}
             </div>
-            {region.kind === 'MATRIX' && Boolean(region.structures?.matrixModel) && (
-              <MatrixStructureSummary model={region.structures?.matrixModel as MatrixModel} title="矩阵结构" />
-            )}
             {visibleFields.length > 0 && (
               <div className="recognition-region-fields">
                 <div className="recognition-region-subheading">
-                  <strong>{isSimpleLongTable ? '表头字段，请逐项确认' : '字段'}</strong>
+                  <strong>{isSimpleRowTable ? '表头字段，请逐项确认' : '字段'}</strong>
                   <span>{visibleFields.length} 个</span>
                 </div>
                 {visibleFields.map((field) => (
@@ -789,30 +718,6 @@ function RecognitionRegionTree({
                   />
                 ))}
               </div>
-            )}
-            {(region.recordSlots?.length ?? 0) > 0 && (
-              <details className="recognition-region-runtime" open>
-                <summary>步骤记录槽（{region.recordSlots?.length ?? 0}）</summary>
-                <div>{region.recordSlots?.map((slot) => (
-                  <span key={slot.slotId}>第 {slot.order ?? 0} 条 · {slot.range || slot.identityAddress || slot.slotId}</span>
-                ))}</div>
-              </details>
-            )}
-            {region.runtimeSlots.filter((slot) => !(region.recordSlots ?? []).some((record) => record.slotId === slot.slotId)).length > 0 && (
-              <details className="recognition-region-runtime">
-                <summary>运行时成员槽位（{region.runtimeSlots.filter((slot) => !(region.recordSlots ?? []).some((record) => record.slotId === slot.slotId)).length}）</summary>
-                <div>{region.runtimeSlots
-                  .filter((slot) => !(region.recordSlots ?? []).some((record) => record.slotId === slot.slotId))
-                  .map((slot) => <span key={slot.slotId}>{slot.column || slot.identityAddress || slot.slotId}</span>)}</div>
-              </details>
-            )}
-            {(region.staticContents?.length ?? 0) > 0 && (
-              <details className="recognition-region-audit">
-                <summary>静态内容（{region.staticContents?.length ?? 0}）</summary>
-                <div>{region.staticContents?.map((content, index) => (
-                  <span key={`${content.address ?? 'static'}-${index}`}>{content.address ? `${content.address} · ` : ''}{content.text || '静态说明'}</span>
-                ))}</div>
-              </details>
             )}
           </section>
         );
@@ -851,7 +756,8 @@ function RegionFieldCard({
         <StatusIndicator status={regionStatus(field.status)} />
         <span className="recognition-row-content">
           <strong>{recognitionPath(field) || '字段名称待人工命名'}</strong>
-          <span>{field.payload.suggestionLevel === 'CHILD' ? '明细字段' : kindLabel(field.kind)}{reviewRequired ? ' · 待确认' : ''}</span>
+          <span>{field.payload.suggestionLevel === 'CHILD' || field.payload.mappingKind === 'REPEAT_FIELD'
+            ? '明细字段' : kindLabel(field.kind)}{reviewRequired ? ' · 待确认' : ''}</span>
         </span>
         <span className="recognition-row-location"><EnvironmentOutlined aria-hidden="true" /> {locationText(field)}</span>
       </button>
@@ -902,8 +808,21 @@ function deduplicateRegions(regions: RecognitionRegionNode[]) {
 function deduplicateRegionFields(fields: RecognitionRegionNode['fields']) {
   const byLocation = new Map<string, RecognitionRegionNode['fields'][number]>();
   for (const field of fields) {
-    const locator = field.payload.locator as Record<string, string | undefined> | undefined;
-    const key = `${locator?.sheetId || field.sheetId || ''}|${locator?.valueRange || locator?.logicalInputRange || field.address || ''}|${field.payload.role || 'FIELD'}`;
+    const locator = field.payload.locator as Record<string, unknown> | undefined;
+    const valueCellPaths = Array.isArray(locator?.valueCellPaths) ? locator.valueCellPaths : [];
+    const valueNodeIds = Array.isArray(locator?.valueNodeIds) ? locator.valueNodeIds : [];
+    const location = textValue(locator?.valueRange)
+      || textValue(locator?.logicalInputRange)
+      || textValue(locator?.address)
+      || textValue(locator?.nodeId)
+      || textValue(locator?.valueAnchor)
+      || textValue(locator?.sourcePath)
+      || textValue(valueCellPaths[0])
+      || textValue(valueNodeIds[0])
+      || field.address
+      || field.payload.relationId
+      || field.id;
+    const key = `${textValue(locator?.sheetId) || field.sheetId || ''}|${location}|${field.payload.role || 'FIELD'}`;
     const current = byLocation.get(key);
     if (!current || fieldCandidateScore(field) > fieldCandidateScore(current)) byLocation.set(key, field);
   }
@@ -930,10 +849,36 @@ function fieldCandidateScore(field: RecognitionRegionNode['fields'][number]) {
 }
 
 function regionStatusLabel(region: RecognitionRegionNode) {
-  if (region.structureStatus === 'CONFLICT') return '结构冲突，待选择';
+  // A stale issue row can retain structureStatus=CONFLICT after its only
+  // candidate was confirmed (or after a new run replaced the alternatives).
+  // Treat conflict as visible only when the region itself is conflicted or it
+  // still has competing alternatives; otherwise the review status is the
+  // authoritative display state.
+  if (region.structureStatus === 'CONFLICT'
+    && (region.status === 'CONFLICT' || region.alternatives.length > 1)) {
+    return '结构冲突，待选择';
+  }
   if (region.kind === 'UNKNOWN' || region.structureStatus === 'UNRESOLVED') return '物理证据不足，待复核';
   if (region.status === 'CONFIRMED' && region.reviewRequired) return '结构已确认，字段待复核';
   return statusLabel(regionStatus(region.status));
+}
+
+function regionFieldsAreStale(
+  region: RecognitionRegionNode,
+  alternative?: RecognitionRegionNode['alternatives'][number],
+) {
+  if (['STALE', 'EXPIRED', 'OUTDATED'].includes(region.canonicalStatus || '')
+    || ['STALE', 'EXPIRED', 'OUTDATED'].includes(region.structureStatus || '')) return true;
+  const alternativeRange = alternative?.regions?.[0]?.range?.trim().toUpperCase();
+  if (alternativeRange && region.range?.trim().toUpperCase() !== alternativeRange) return true;
+  return region.fields.some((field) => {
+    const payload = field.payload as unknown as Record<string, unknown>;
+    const diff = payload.recognitionDiff;
+    const fieldStatus = typeof payload.fieldStatus === 'string' ? payload.fieldStatus : '';
+    return payload.semanticConflict === true
+      || (diff && typeof diff === 'object' && (diff as Record<string, unknown>).status === 'STALE')
+      || ['STALE', 'EXPIRED', 'OUTDATED'].includes(fieldStatus.toUpperCase());
+  });
 }
 
 function regionAlternativeLabel(alternative: RecognitionRegionNode['alternatives'][number]) {
@@ -943,9 +888,6 @@ function regionAlternativeLabel(alternative: RecognitionRegionNode['alternatives
       item.recordAxis ? `按${item.recordAxis === 'COLUMN' ? '列' : item.recordAxis === 'ROW' ? '行' : item.recordAxis}` : '',
       item.headerRange ? `表头 ${item.headerRange}` : '',
       item.dataRange ? `数据 ${item.dataRange}` : '',
-      item.rowHeaderRange ? `行轴 ${item.rowHeaderRange}` : '',
-      item.columnHeaderRange ? `列轴 ${item.columnHeaderRange}` : '',
-      item.crossDataRange ? `交叉 ${item.crossDataRange}` : '',
     ].filter(Boolean).join(' · ');
     return `${blockTypeLabel(item.kind ?? '')} ${item.range || '范围待确认'}${geometry ? `（${geometry}）` : ''}`;
   });
@@ -957,80 +899,6 @@ function attributeText(value: unknown, fallback?: unknown) {
   return typeof candidate === 'string' || typeof candidate === 'number' || typeof candidate === 'boolean'
     ? String(candidate)
     : '';
-}
-
-function MatrixStructureSummary({ model, title }: { model: MatrixModel; title: string }) {
-  const isRowProjection = model.recordAxis === 'ROW';
-  const slots = isRowProjection ? (model.rowSlots ?? []) : (model.columnSlots ?? []);
-  const incomplete = !model.rowHeaderRange || !model.columnHeaderRange || !model.crossDataRange;
-  const rowAxisNames = [...(model.rowDimensions ?? []), ...(model.rowAttributes ?? [])]
-    .map((axis) => axis.name)
-    .filter(Boolean);
-  const measures = (model.bindings ?? [])
-    .filter((binding) => binding.bindingKind === 'MEASURE')
-    .map((binding) => binding.name)
-    .filter(Boolean);
-  return (
-    <section className="recognition-matrix-structure" aria-label={`${title}结构`}>
-      <div className="recognition-matrix-structure-heading">
-        <strong>{title}</strong>
-        <span>
-          类型：{model.semanticMode === 'CROSS_TAB' ? '交叉测试表' : '待确认'} · 记录方向：
-          {model.recordAxis === 'COLUMN' ? '按列' : model.recordAxis === 'ROW' ? '按行' : '未确定'}
-        </span>
-      </div>
-      {incomplete && (
-        <div className="field-property-alert full" role="status">
-          结构信息不完整，请重新识别或人工确认
-        </div>
-      )}
-      <dl>
-        <div>
-            <dt>{isRowProjection ? '行成员名称填写位置' : '列成员名称填写位置'}</dt>
-            <dd>{(isRowProjection ? model.rowHeaderRange : model.columnHeaderRange) || '待确认'}</dd>
-        </div>
-        <div>
-          <dt>行维度及属性</dt>
-          <dd>
-            <span>{rowAxisNames.join('、') || '行维度'}</span>
-            <span>{model.rowHeaderRange || '待确认'}</span>
-          </dd>
-        </div>
-        <div>
-          <dt>列成员轴</dt>
-          <dd>{model.columnHeaderRange || '待确认'} · 运行时成员槽位</dd>
-        </div>
-        <div>
-          <dt>交叉值填写区域</dt>
-          <dd>{measures.join('、') || '交叉指标待命名'} · {model.crossDataRange || '待确认'}</dd>
-        </div>
-        <div>
-            <dt>{isRowProjection ? '可用行槽位' : '可用列槽位'}</dt>
-          <dd>{slots.length || 0} 个</dd>
-        </div>
-      </dl>
-    </section>
-  );
-}
-
-function rowRoleLabel(role: LongTableModel['records'][number]['rowRole']) {
-  switch (role) {
-    case 'TEST_ITEM':
-      return '测试项目';
-    case 'REPLICATE':
-      return '重复记录';
-    case 'AGGREGATE':
-      return '自动计算结果';
-    default:
-      return '待确认';
-  }
-}
-
-function displayLongTableValue(value: unknown) {
-  if (value === null || value === undefined || value === '') return '空白输入';
-  if (typeof value === 'string') return value;
-  if (typeof value === 'number' || typeof value === 'boolean') return `${value}`;
-  return JSON.stringify(value) ?? '复杂值';
 }
 
 function StatusIndicator({ status }: { status: RecognitionReviewStatus }) {
@@ -1077,7 +945,7 @@ function structureAlternativeLabel(alternative: StructureAlternative) {
 }
 
 function isStructuralKind(kind: RecognitionReviewItem['kind']) {
-  return ['FORM_REGION', 'ROW_TABLE', 'COLUMN_TABLE', 'MATRIX', 'TABLE_REGION'].includes(kind);
+  return ['FORM_REGION', 'ROW_TABLE', 'COLUMN_TABLE'].includes(kind);
 }
 
 function coverageDescription(coverage?: RecognitionReview['recognitionCoverage']) {
@@ -1136,17 +1004,13 @@ function kindLabel(kind: RecognitionReviewItem['kind']) {
   if (kind === 'FORM_REGION') return '表单区域';
   if (kind === 'ROW_TABLE') return '明细表';
   if (kind === 'COLUMN_TABLE') return '横向明细表';
-  if (kind === 'MATRIX') return '矩阵表';
-  if (kind === 'TABLE_REGION') return '表格区域';
-  if (kind === 'FREE_TEXT') return '自由文本区';
   return '普通字段';
 }
 
 function blockTypeLabel(type: string) {
-  if (type === 'FORM_REGION' || type === 'FORM_FIELDS') return '字段区';
+  if (type === 'FORM_REGION') return '字段区';
   if (type === 'ROW_TABLE') return '按行明细表';
   if (type === 'COLUMN_TABLE') return '按列明细表';
-  if (type === 'MATRIX') return '矩阵区';
   if (type === 'FREE_TEXT') return '说明文本区';
   if (type === 'STATIC_REFERENCE') return '固定内容区';
   if (type === 'DOCUMENT_HEADER') return '文档标题区';
@@ -1159,7 +1023,6 @@ function pendingReasonLabel(reason?: string, recovery?: string) {
   if (reason === 'RUNTIME_INPUT') return '这是模板预留的运行时填写位置，不是识别失败';
   if (reason === 'PROTOCOL_REVIEW_REQUIRED') return '原始识别结果与协议不一致，系统已保留候选供人工复核';
   if (reason === 'TABLE_STRUCTURE_UNCLEAR') return '表格结构仍需核对';
-  if (reason === 'MATRIX_AXIS_LABEL_PENDING') return '矩阵列标题为空，系统保留 C、D 等真实坐标，等待用户补充或确认列含义';
   if (recovery === 'RETAINED_REJECTED_CANDIDATE') return '该结果是协议校验后保留的原始候选';
   return '系统尚未确认该识别结果';
 }
@@ -1250,7 +1113,6 @@ function isActionableTemplateIssue(issue: TemplateQualityIssue) {
     'OTHER',
     'INVALID_STRUCTURE_PROPOSAL',
     'MISSING_TABLE_GEOMETRY',
-    'MISSING_MATRIX_GEOMETRY',
     'PROTOCOL_DEFAULT_APPLIED',
     'STRUCTURE_CONFLICT',
     'INVALID_FIELD_RELATION',
@@ -1258,6 +1120,28 @@ function isActionableTemplateIssue(issue: TemplateQualityIssue) {
   ]);
   if (auditOnlyTypes.has(issue.issueType)) return false;
   return Boolean(issue.address || issue.autoFixable || qualityPreview(issue));
+}
+
+function isLiveStructureIssue(issue: TemplateQualityIssue, review?: RecognitionReview) {
+  const structuralTypes = new Set([
+    'STRUCTURE_CANDIDATE_CONFLICT',
+    'STRUCTURE_CONFLICT',
+    'STRUCTURE_DIRECTION_UNCLEAR',
+  ]);
+  if (!structuralTypes.has(issue.issueType) || !review?.regions?.length) return true;
+  const issueRange = normalizeIssueRange(issue.address);
+  const region = review.regions.find((candidate) =>
+    issueRange && normalizeIssueRange(candidate.range) === issueRange,
+  );
+  if (!region) return true;
+  return region.status === 'CONFLICT'
+    || (region.structureStatus === 'CONFLICT' && region.alternatives.length > 1)
+    || region.kind === 'UNKNOWN'
+    || region.structureStatus === 'UNRESOLVED';
+}
+
+function normalizeIssueRange(value?: string) {
+  return typeof value === 'string' ? value.replaceAll('$', '').replaceAll(' ', '').toUpperCase() : '';
 }
 
 function isCellPatchOperation(value: unknown): value is Record<string, unknown> {

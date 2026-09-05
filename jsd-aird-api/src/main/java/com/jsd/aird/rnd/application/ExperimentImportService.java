@@ -100,6 +100,26 @@ public class ExperimentImportService {
         return imports.list(ActorContext.required().organizationId());
     }
 
+    /** Shared source parsing entry point used when a research record is created
+     * from an uploaded office file.  Keep it conservative: use the registered
+     * high-fidelity parser and fail explicitly when the requested format is
+     * unavailable instead of fabricating a lossy document snapshot. */
+    public OfficeStructureParser.ParseResult parseSourceFile(
+            UUID organizationId, UUID fileId, String fileName, String sha256, TemplateFormat format
+    ) {
+        try (var stored = files.open(organizationId, fileId)) {
+            var parser = parsers.stream().filter(item -> item.format() == format).findFirst()
+                    .orElseThrow(() -> new ApiException(ApiErrorCode.VALIDATION_ERROR,
+                            "未配置 " + format + " 文件解析器"));
+            return parser.parse(stored.stream());
+        } catch (ApiException exception) {
+            throw exception;
+        } catch (Exception exception) {
+            throw new ApiException(ApiErrorCode.FILE_NOT_READY,
+                    "源文件解析失败: " + (exception.getMessage() == null ? "未知错误" : exception.getMessage()));
+        }
+    }
+
     @Transactional
     public void delete(UUID id) {
         ExperimentAccessPolicy.requireWrite();

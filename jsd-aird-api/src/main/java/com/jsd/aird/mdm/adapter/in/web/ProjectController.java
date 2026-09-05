@@ -12,6 +12,7 @@ import com.jsd.aird.mdm.domain.model.ProjectStatus;
 import com.jsd.aird.shared.api.ApiResponse;
 import com.jsd.aird.shared.api.PageResponse;
 import com.jsd.aird.shared.api.ResponseFactory;
+import com.jsd.aird.shared.api.AllowedActions;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -167,6 +168,9 @@ public class ProjectController {
                                   String owner, LocalDate startDate, LocalDate endDate, ProjectPriority priority,
                                   ProjectStatus status, int teamSize, String background, JsonNode customFields,
                                   JsonNode teamMembers, long version) {
+        public List<String> getAllowedActions() {
+            return AllowedActions.project(status == null ? null : status.name());
+        }
         static ProjectResponse from(Project p) {
             return new ProjectResponse(p.id(), p.projectCode(), p.name(), p.partnerId(), p.partnerName(),
                 p.owner(), p.startDate(), p.endDate(), p.priority(), p.status(), p.teamSize(),

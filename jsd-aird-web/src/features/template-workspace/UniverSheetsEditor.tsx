@@ -435,12 +435,15 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
         const labelRange = resolveLabelRange(apiRef.current, binding);
         const rowHeaderRange = resolveLocatorRange(apiRef.current, binding, 'rowHeaderRange');
         const columnHeaderRange = resolveLocatorRange(apiRef.current, binding, 'columnHeaderRange');
-        const matrixDataRange = resolveLocatorRange(apiRef.current, binding, 'dataRange');
+        const tableDataRange = resolveLocatorRange(apiRef.current, binding, 'dataRange');
+        const regionRange = !isStructuredLeaf(binding)
+          ? resolveLocatorRange(apiRef.current, binding, 'range')
+          : null;
         // A table-column field owns its value range. Do not let the parent
         // repeat-region data range swallow the selected child field.
         const activeRange = isStructuredLeaf(binding)
-          ? valueRange ?? matrixDataRange ?? labelRange
-          : matrixDataRange ?? valueRange ?? labelRange;
+          ? valueRange ?? tableDataRange ?? labelRange
+          : regionRange ?? tableDataRange ?? valueRange ?? labelRange;
         if (workbook && sheet && activeRange) {
           highlightTimersRef.current.forEach((timer) => window.clearTimeout(timer));
           highlightTimersRef.current = [];
@@ -476,8 +479,8 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
                 }),
               );
             const fillRange = isStructuredLeaf(binding)
-              ? valueRange ?? matrixDataRange
-              : matrixDataRange ?? valueRange;
+              ? valueRange ?? tableDataRange
+              : regionRange ?? tableDataRange ?? valueRange;
             if (fillRange)
               highlightRef.current.push(
                 fillRange.highlight({
@@ -516,7 +519,7 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
         });
       },
       async appendRepeatRecord(binding) {
-        if (!['REPEAT_REGION', 'REPEAT_FIELD', 'MATRIX_REGION', 'MATRIX_FIELD']
+        if (!['REPEAT_REGION', 'REPEAT_FIELD']
           .includes(binding.mappingKind || '')) {
           return;
         }
@@ -728,7 +731,7 @@ function readCell(api: FUniver, binding: TemplateBinding) {
 }
 
 function isStructuredLeaf(binding: TemplateBinding) {
-  return binding.mappingKind === 'REPEAT_FIELD' || binding.mappingKind === 'MATRIX_FIELD';
+  return binding.mappingKind === 'REPEAT_FIELD';
 }
 
 function isInlineTextBinding(binding: TemplateBinding) {

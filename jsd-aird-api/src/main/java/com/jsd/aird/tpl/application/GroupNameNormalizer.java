@@ -87,7 +87,7 @@ public final class GroupNameNormalizer {
     public static String inferFromBlock(String blockType, String businessName) {
         var text = businessName == null ? "" : businessName;
         if (text.contains("配方") || text.contains("原料")
-                || "ROW_TABLE".equals(blockType) || "MATRIX".equals(blockType)) return "配方明细";
+                || "ROW_TABLE".equals(blockType) || "COLUMN_TABLE".equals(blockType)) return "配方明细";
         if (text.contains("包装") || text.contains("产量")) return "包装信息";
         if (text.contains("制单") || text.contains("完成人") || text.contains("投料")
                 || text.contains("监秤") || text.contains("监管") || text.contains("签字")) return "审核信息";

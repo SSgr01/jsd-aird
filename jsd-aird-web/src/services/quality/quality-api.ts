@@ -25,6 +25,7 @@ export interface QualityCategory {
   systemDefault: boolean;
   sortOrder: number;
   recordCount: number;
+  allowedActions?: string[];
 }
 export interface QualityRecord {
   id: string;
@@ -44,6 +45,7 @@ export interface QualityRecord {
   lockVersion: number;
   createdAt: string;
   updatedAt: string;
+  allowedActions?: string[];
   newRow?: boolean;
 }
 export interface QualityRecordVersion {
@@ -74,6 +76,7 @@ export interface QualityUpload {
   taskName?: string;
   visibility: QualityVisibility;
   createdAt: string;
+  allowedActions?: string[];
 }
 export interface PageData<T> {
   items: T[];

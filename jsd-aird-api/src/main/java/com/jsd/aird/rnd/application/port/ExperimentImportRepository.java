@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import java.util.UUID;
 import java.time.Instant;
 import java.util.List;
+import com.jsd.aird.shared.api.AllowedActions;
 
 public interface ExperimentImportRepository {
     void create(UUID id, UUID organizationId, UUID fileId, String fileName, String sha256,
@@ -17,5 +18,9 @@ public interface ExperimentImportRepository {
     record Job(UUID id, UUID sourceFileId, String sourceFileName, String sourceFormat,
                String status, UUID experimentId, String errorMessage, String categoryName,
                UUID projectId, String projectName, UUID stageId, String stageName, UUID taskId,
-               String taskName, String visibility, Instant createdAt) {}
+               String taskName, String visibility, Instant createdAt) {
+        public List<String> getAllowedActions() {
+            return AllowedActions.experimentImport(status, experimentId != null);
+        }
+    }
 }

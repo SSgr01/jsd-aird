@@ -172,7 +172,7 @@ export function TemplatesPage() {
     const counts = new Map(facets.categoryCounts.map((item) => [item.categoryId, item.count]));
     return [
       { id: 'ALL', name: '全部模板', count: facets.totalCount, description: '每个模板仅展示一条记录', icon: <FileTextOutlined />, tone: 'blue' },
-      ...categoryItems.map((item) => ({ id: item.id, name: item.name, count: counts.get(item.id) ?? 0, description: item.description, icon: <FileTextOutlined />, tone: 'blue' as const, editable: true })),
+      ...categoryItems.map((item) => ({ id: item.id, name: item.name, count: counts.get(item.id) ?? 0, description: item.description, icon: <FileTextOutlined />, tone: 'blue' as const, editable: true, allowedActions: item.allowedActions })),
       { id: 'UNCATEGORIZED', name: '未分类', count: facets.uncategorizedCount, description: '尚未归档的模板', icon: <FolderAddOutlined />, tone: 'teal' as const },
     ];
   }, [categoryItems, facets]);
@@ -303,11 +303,16 @@ export function TemplatesPage() {
   };
 
   const runBatch = async (action: 'COPY' | 'MOVE' | 'DELETE_DRAFT' | 'RETIRE', targetCategory?: string) => {
-    if (!selected.length) return;
+    const eligible = action === 'DELETE_DRAFT'
+      ? selected.filter((item) => item.allowedActions?.includes('DELETE'))
+      : action === 'RETIRE'
+        ? selected.filter((item) => item.allowedActions?.includes('RETIRE'))
+        : selected;
+    if (!eligible.length) { void message.warning('当前选择没有可执行该操作的模板'); return; }
     setBatchOperating(true);
     try {
       const results = await templateApi.batchActions({ action, categoryId: targetCategory,
-        items: selected.map((item) => ({ templateId: item.templateId, versionId: item.draftVersionId ?? item.versionId })) });
+        items: eligible.map((item) => ({ templateId: item.templateId, versionId: item.draftVersionId ?? item.versionId })) });
       const successful = new Set(results.filter((item) => item.success).map((item) => item.templateId));
       setSelectedRecords((current) => Object.fromEntries(Object.entries(current).filter(([id]) => !successful.has(id))));
       const failed = results.filter((item) => !item.success);
@@ -343,8 +348,8 @@ export function TemplatesPage() {
         <Dropdown trigger={['click']} menu={{ items: [
           { key: 'copy', icon: <CopyOutlined />, label: '复制模板' }, { key: 'rename', label: '重命名' },
           { key: 'move', icon: <FolderAddOutlined />, label: '移动分类' }, { key: 'history', icon: <HistoryOutlined />, label: '版本历史' },
-          ...(record.hasDraft || record.status === 'DRAFT' ? [{ key: 'delete', danger: true, icon: <DeleteOutlined />, label: '删除草稿' }] : [{ key: 'revision', icon: <CopyOutlined />, label: '新建修订版' }]),
-          ...(record.status === 'PUBLISHED' ? [{ key: 'retire', danger: true, icon: <StopOutlined />, label: '停用模板' }] : []),
+          ...(record.allowedActions?.includes('DELETE') ? [{ key: 'delete', danger: true, icon: <DeleteOutlined />, label: '删除草稿' }] : []),
+          ...(record.allowedActions?.includes('RETIRE') ? [{ key: 'retire', danger: true, icon: <StopOutlined />, label: '停用模板' }] : []),
         ], onClick: ({ key }) => {
           if (key === 'copy' || key === 'rename') { setOperation({ type: key === 'copy' ? 'COPY' : 'RENAME', item: record }); setOperationName(key === 'copy' ? `${record.name} - 副本` : record.name); setOperationCategoryId(record.categoryId); }
           if (key === 'move') setMovingTemplate(record); if (key === 'history') navigate(`/templates/${record.versionId}/workspace?view=versions`);
@@ -387,8 +392,8 @@ export function TemplatesPage() {
       <Typography.Text strong>已选择 {selected.length} 个模板</Typography.Text>
       <Button icon={<CopyOutlined />} loading={batchOperating} onClick={() => void runBatch('COPY')}>批量复制</Button>
       <Button icon={<FolderAddOutlined />} disabled={batchOperating} onClick={() => setBatchMoveOpen(true)}>移动分类</Button>
-      <Button danger icon={<DeleteOutlined />} loading={batchOperating} onClick={() => void runBatch('DELETE_DRAFT')}>删除纯草稿</Button>
-      <Button danger icon={<StopOutlined />} loading={batchOperating} onClick={() => void runBatch('RETIRE')}>停用发布版</Button>
+      <Button danger icon={<DeleteOutlined />} disabled={!selected.some((item) => item.allowedActions?.includes('DELETE'))} loading={batchOperating} onClick={() => void runBatch('DELETE_DRAFT')}>删除纯草稿</Button>
+      <Button danger icon={<StopOutlined />} disabled={!selected.some((item) => item.allowedActions?.includes('RETIRE'))} loading={batchOperating} onClick={() => void runBatch('RETIRE')}>停用发布版</Button>
       <Button icon={<DownloadOutlined />} loading={exporting} onClick={() => void exportTemplates({ ...listParams, templateIds: selected.map((item) => item.templateId) })}>导出选中</Button>
       <Button type="link" disabled={batchOperating} onClick={clearSelection}>取消选择</Button>
     </Space></Card>}

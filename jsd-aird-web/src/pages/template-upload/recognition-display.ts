@@ -77,15 +77,12 @@ export function buildDisplaySuggestions(items: RecognitionSuggestion[]): Display
 }
 
 function isStructuralSuggestion(item: RecognitionSuggestion) {
-  const kind = item.payload.kind;
-  return (
-    ['TABLE_REGION', 'TABLE_FIELD', 'MATRIX', 'ROW_TABLE', 'COLUMN_TABLE', 'FORM_REGION'].includes(
-      item.suggestionType,
-    ) ||
-    ['TABLE_REGION', 'TABLE_FIELD', 'MATRIX', 'ROW_TABLE', 'COLUMN_TABLE', 'FORM_REGION'].includes(
-      kind ?? '',
-    )
-  );
+  const kind = item.payload.kind ?? item.payload.blockType;
+  // Only the three business region kinds render structure cards. Child
+  // suggestions are fields and never become another structure card.
+  return ['ROW_TABLE', 'COLUMN_TABLE', 'FORM_REGION'].includes(kind ?? '')
+    && !['CHILD', 'REPEAT_FIELD'].includes(item.payload.suggestionLevel ?? '')
+    && item.payload.mappingKind !== 'REPEAT_FIELD';
 }
 
 function structureRange(item: RecognitionSuggestion) {

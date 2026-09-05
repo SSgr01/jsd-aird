@@ -1,6 +1,7 @@
 package com.jsd.aird.tpl.infrastructure;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
@@ -10,159 +11,105 @@ class RegionSemanticBatchProtocolTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Test
-    void rejectsRowTableRelationsWhoseLabelsAreInsideTheDataBody() throws Exception {
+    void rejectsRemovedV2ProtocolInsteadOfReadingItAsLegacyInput() throws Exception {
         var response = objectMapper.readTree("""
-                {"recognitionProtocolVersion":2,"regions":[{
-                  "regionId":"ingredients","businessName":"配方明细",
-                  "fieldRelations":[
-                    {"temporaryId":"valid","labelRange":"E6:G6","valueRange":"E7:G21","businessName":"批号",
-                     "unit":"","condition":"","valueType":"string","required":false,"editability":"EDITABLE","valueSource":"USER_INPUT"},
-                    {"temporaryId":"bad-label","labelRange":"E7:G7","valueRange":"E7:G21","businessName":"批号错误",
-                     "unit":"","condition":"","valueType":"string","required":false,"editability":"EDITABLE","valueSource":"USER_INPUT"},
-                    {"temporaryId":"bad-total","labelRange":"C6","valueRange":"C22","businessName":"小计错误",
-                     "unit":"","condition":"","valueType":"number","required":false,"editability":"READ_ONLY","valueSource":"FORMULA"}
-                  ],"rowDimensions":[],"rowAttributes":[],"qualityIssues":[]
+                {"recognitionProtocolVersion":2,"regions":[],"qualityIssues":[]}
+                """);
+
+        assertThatThrownBy(() -> new RegionSemanticBatchProtocol(objectMapper).validate(
+                response, objectMapper.readTree("{\"semanticRegions\":[]}")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("必须为 3");
+    }
+
+    @Test
+    void rejectsRemovedAxisCollectionsInV3() throws Exception {
+        var response = objectMapper.readTree("""
+                {"recognitionProtocolVersion":3,"regions":[{
+                  "regionId":"region-1","businessName":"重复记录区域",
+                  "rowDimensions":["A5:A19"],"fieldRelations":[],"qualityIssues":[]
                 }],"qualityIssues":[]}
                 """);
         var context = objectMapper.readTree("""
-                {"semanticRegions":[{"regionId":"ingredients","blockId":"ingredients",
-                  "candidateRef":"physical-ingredients","sheetId":"sheet-1","range":"A6:G22","type":"ROW_TABLE",
-                  "structure":{"headerRange":"A6:G6","dataRange":"A7:G21","totalRange":"A22:G22","recordAxis":"ROW"}}]}
+                {"semanticRegions":[{"regionId":"region-1","type":"COLUMN_TABLE",
+                  "fieldCandidates":[]}]}
                 """);
 
         var normalized = new RegionSemanticBatchProtocol(objectMapper).validate(response, context);
 
-        assertThat(normalized.path("regions").get(0).path("fieldRelations"))
-                .extracting(node -> node.path("temporaryId").asText())
-                .containsExactly("valid");
+        assertThat(normalized.path("regions")).isEmpty();
+        assertThat(normalized.path("qualityIssues"))
+                .extracting(node -> node.path("issueType").asText())
+                .contains("INVALID_REGION_SEMANTICS");
+    }
+
+    @Test
+    void acceptsOnlySemanticPatchForAnExistingPhysicalCandidate() throws Exception {
+        var protocol = new RegionSemanticBatchProtocol(objectMapper);
+        var response = objectMapper.readTree("""
+                {"recognitionProtocolVersion":3,"regions":[{
+                  "regionId":"form-1","businessName":"基本信息","fieldRelations":[
+                    {"candidateRef":"field-1","fieldName":"粘度","valueType":"number","unit":"mPa·s","groupName":"基础性能"},
+                    {"candidateRef":"field-1","fieldName":"重复候选","valueType":"string","unit":""},
+                    {"candidateRef":"missing","fieldName":"新字段","valueType":"string","unit":""}
+                  ],"qualityIssues":[]}],"qualityIssues":[]}
+                """);
+        var context = objectMapper.readTree("""
+                {"semanticRegions":[{"regionId":"form-1","sheetId":"sheet-1","range":"A1:D4","type":"FORM_REGION",
+                  "fieldCandidates":[{"candidateRef":"field-1","labelRange":"A2","valueRange":"B2:D2",
+                    "valueType":"string","editability":"EDITABLE","valueSource":"USER_INPUT","required":false}]}]}
+                """);
+
+        var normalized = protocol.validate(response, context);
+
+        assertThat(normalized.path("regions").get(0).path("fieldRelations")).hasSize(1);
+        var relation = normalized.path("regions").get(0).path("fieldRelations").get(0);
+        assertThat(relation.path("candidateRef").asText()).isEqualTo("field-1");
+        assertThat(relation.path("labelRange").asText()).isEqualTo("A2");
+        assertThat(relation.path("valueRange").asText()).isEqualTo("B2:D2");
+        assertThat(relation.path("editability").asText()).isEqualTo("EDITABLE");
+        assertThat(relation.path("valueSource").asText()).isEqualTo("USER_INPUT");
         assertThat(normalized.path("qualityIssues"))
                 .extracting(node -> node.path("issueType").asText())
                 .contains("INVALID_FIELD_RELATION");
     }
 
     @Test
-    void normalizesRangeOnlyAxisShorthandWithoutChangingGeometry() throws Exception {
-        var protocol = new RegionSemanticBatchProtocol(objectMapper);
+    void rejectsGeometryPropertiesReturnedByTheModel() throws Exception {
         var response = objectMapper.readTree("""
-                {
-                  "recognitionProtocolVersion": 2,
-                  "regions": [{
-                    "regionId": "region-1",
-                    "businessName": "测试表",
-                    "rowDimensions": ["A5:A19"],
-                    "rowAttributes": ["B5:B19"],
-                    "fieldRelations": [],
-                    "qualityIssues": []
-                  }],
-                  "qualityIssues": []
-                }
+                {"recognitionProtocolVersion":3,"regions":[{
+                  "regionId":"region-1","businessName":"测试表","fieldRelations":[
+                    {"candidateRef":"field-1","fieldName":"名称","valueType":"string","unit":"","labelRange":"Z99"}
+                  ],"qualityIssues":[]}],"qualityIssues":[]}
                 """);
         var context = objectMapper.readTree("""
-                {
-                  "semanticRegions": [{
-                    "regionId": "region-1",
-                    "range": "A4:H19",
-                    "type": "COLUMN_TABLE",
-                    "structure": {"rowHeaderRange": "A4:B19"}
-                  }]
-                }
+                {"semanticRegions":[{"regionId":"region-1","type":"FORM_REGION",
+                  "fieldCandidates":[{"candidateRef":"field-1","labelRange":"A1","valueRange":"B1"}]}]}
                 """);
 
-        var normalized = protocol.validate(response, context);
+        var normalized = new RegionSemanticBatchProtocol(objectMapper).validate(response, context);
 
-        assertThat(normalized.path("regions")).hasSize(1);
-        assertThat(normalized.path("regions").get(0).path("rowDimensions").get(0)
-                .path("sourceRange").asText()).isEqualTo("A5:A19");
-        assertThat(normalized.path("regions").get(0).path("rowAttributes").get(0)
-                .path("role").asText()).isEqualTo("ROW_ATTRIBUTE");
+        assertThat(normalized.path("regions").get(0).path("fieldRelations")).isEmpty();
+        assertThat(normalized.path("qualityIssues"))
+                .extracting(node -> node.path("issueType").asText())
+                .contains("INVALID_FIELD_RELATION");
     }
 
     @Test
-    void treatsMissingTopLevelQualityIssuesAsEmptyCollection() throws Exception {
-        var protocol = new RegionSemanticBatchProtocol(objectMapper);
+    void allowsAnEmptyV3RegionWithoutLegacyMetadata() throws Exception {
         var response = objectMapper.readTree("""
-                {
-                  "recognitionProtocolVersion": 2,
-                  "regions": [{
-                    "regionId": "region-1",
-                    "businessName": "测试表",
-                    "rowDimensions": [],
-                    "rowAttributes": [],
-                    "fieldRelations": [],
-                    "qualityIssues": []
-                  }]
-                }
+                {"recognitionProtocolVersion":3,"regions":[{
+                  "regionId":"region-1","businessName":"基本信息","fieldRelations":[],"qualityIssues":[]
+                }],"qualityIssues":[]}
                 """);
         var context = objectMapper.readTree("""
-                {"semanticRegions":[{"regionId":"region-1","range":"A1:B2","type":"COLUMN_TABLE"}]}
+                {"semanticRegions":[{"regionId":"region-1","type":"FORM_REGION","fieldCandidates":[]}]}
                 """);
 
-        var normalized = protocol.validate(response, context);
+        var normalized = new RegionSemanticBatchProtocol(objectMapper).validate(response, context);
 
         assertThat(normalized.path("regions")).hasSize(1);
-        assertThat(normalized.path("qualityIssues").isArray()).isTrue();
-        assertThat(normalized.path("qualityIssues")).isEmpty();
-    }
-
-    @Test
-    void keepsRegionWhenProviderReturnsAxisMetadataObjectInsteadOfArray() throws Exception {
-        var protocol = new RegionSemanticBatchProtocol(objectMapper);
-        var response = objectMapper.readTree("""
-                {
-                  "recognitionProtocolVersion": 2,
-                  "regions": [{
-                    "regionId": "region-1",
-                    "businessName": "重复记录区域",
-                    "rowDimensions": ["表头行"],
-                    "rowAttributes": {"structureType":"COLUMN_TABLE","recordAxis":"COLUMN"},
-                    "fieldRelations": [],
-                    "qualityIssues": []
-                  }],
-                  "qualityIssues": []
-                }
-                """);
-        var context = objectMapper.readTree("""
-                {"semanticRegions":[{"regionId":"region-1","sheetId":"sheet-1",
-                  "range":"A4:H19","type":"COLUMN_TABLE",
-                  "structure":{"headerRange":"A4:H4","dataRange":"A5:H19","recordAxis":"COLUMN"}}]}
-                """);
-
-        var normalized = protocol.validate(response, context);
-
-        assertThat(normalized.path("regions")).hasSize(1);
-        assertThat(normalized.path("regions").get(0).path("rowAttributes")).isEmpty();
-        assertThat(normalized.path("qualityIssues")).anySatisfy(issue ->
-                assertThat(issue.path("issueType").asText()).isEqualTo("INVALID_AXIS_COLLECTION"));
-    }
-
-    @Test
-    void rejectsColumnTableRelationsThatOnlyOccupyTheLeftLabelBand() throws Exception {
-        var protocol = new RegionSemanticBatchProtocol(objectMapper);
-        var response = objectMapper.readTree("""
-                {"recognitionProtocolVersion":2,"regions":[{
-                  "regionId":"region-1","businessName":"光引发剂测试",
-                  "rowDimensions":[],"rowAttributes":[],
-                  "fieldRelations":[
-                    {"temporaryId":"wrong","labelRange":"A5","valueRange":"A6:A19",
-                     "businessName":"错误字段","valueType":"string","editability":"EDITABLE",
-                     "valueSource":"USER_INPUT","unit":"","condition":""},
-                    {"temporaryId":"right","labelRange":"B5","valueRange":"C5:H5",
-                     "businessName":"耐油笔","valueType":"string","editability":"EDITABLE",
-                     "valueSource":"USER_INPUT","unit":"","condition":""}],
-                  "qualityIssues":[]}],"qualityIssues":[]}
-                """);
-        var context = objectMapper.readTree("""
-                {"semanticRegions":[{"regionId":"region-1","range":"A4:H19","type":"COLUMN_TABLE",
-                  "structure":{"recordProjection":{"mode":"COLUMN_RECORDS","recordAxis":"COLUMN",
-                    "recordColumns":["C","D","E","F","G","H"]}}}]}
-                """);
-
-        var normalized = protocol.validate(response, context);
-
-        assertThat(normalized.path("regions").get(0).path("fieldRelations")).hasSize(1);
-        assertThat(normalized.path("regions").get(0).path("fieldRelations").get(0)
-                .path("businessName").asText()).isEqualTo("耐油笔");
-        assertThat(normalized.path("qualityIssues")).anySatisfy(issue ->
-                assertThat(issue.path("issueType").asText()).isEqualTo("INVALID_FIELD_RELATION"));
+        assertThat(normalized.path("regions").get(0).fieldNames()).toIterable()
+                .containsExactlyInAnyOrder("regionId", "businessName", "fieldRelations", "qualityIssues");
     }
 }

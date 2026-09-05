@@ -231,28 +231,27 @@ export function applySuggestion(
     if (!hasParentBinding) {
       const parentRange = stringValue(locator?.parentRange);
       if (parentRange) {
-        const matrixChild = suggestion.payload.mappingKind === 'MATRIX_FIELD';
         nextMapping.push({
           bindingId: suggestion.payload.parentBindingId,
           fieldId: suggestion.payload.parentFieldId,
           relationId: suggestion.payload.parentRelationId,
-          fieldCode: matrixChild ? 'AUTO.MATRIX.REGION' : 'AUTO.REPEAT.REGION',
+          fieldCode: 'AUTO.REPEAT.REGION',
           dataPath: parentPath,
           role: 'REPEAT_REGION',
-          mappingKind: matrixChild ? 'MATRIX_REGION' : 'REPEAT_REGION',
+          mappingKind: 'REPEAT_REGION',
           repeatAxis: suggestion.payload.repeatAxis,
           recordHeight: suggestion.payload.recordHeight ?? 1,
           recordWidth: suggestion.payload.recordWidth ?? 1,
           recordStride: suggestion.payload.recordStride ?? 1,
           termination: suggestion.payload.terminationRule,
-          locatorType: matrixChild ? 'MATRIX_REGION' : 'TABLE_REGION',
+          locatorType: 'TABLE_REGION',
           locator: {
             sheetId: locator?.sheetId,
             sheetName: locator?.sheetName,
             address: parentRange,
             range: parentRange,
             dataRange: parentRange,
-            locatorType: matrixChild ? 'MATRIX_REGION' : 'TABLE_REGION',
+            locatorType: 'TABLE_REGION',
           },
           syncDirection: 'TWO_WAY',
           primaryBinding: true,
@@ -283,14 +282,10 @@ export function applySuggestion(
     dataPath: suggestion.payload.dataPath,
     role: kind === 'SCALAR' ? 'FIELD' : 'REPEAT_REGION',
     mappingKind: suggestion.payload.mappingKind || (isChild
-      ? kind === 'MATRIX'
-        ? 'MATRIX_FIELD'
-        : 'REPEAT_FIELD'
-      : kind === 'MATRIX'
-        ? 'MATRIX_REGION'
-        : kind === 'SCALAR'
-          ? 'SCALAR'
-          : 'REPEAT_REGION'),
+      ? 'REPEAT_FIELD'
+      : kind === 'SCALAR'
+        ? 'SCALAR'
+        : 'REPEAT_REGION'),
     parentBindingId: suggestion.payload.parentBindingId,
     repeatAxis: suggestion.payload.repeatAxis,
     recordHeight: suggestion.payload.recordHeight ?? 1,
@@ -344,7 +339,7 @@ export function applySuggestion(
     groupId: group.id,
     name: stringValue(suggestion.payload.fieldName),
     pathSegments: splitLabelPath(suggestion.payload.labelPath),
-    displayRole: ['FORM_REGION', 'ROW_TABLE', 'COLUMN_TABLE', 'MATRIX', 'TABLE_REGION'].includes(kind)
+    displayRole: ['FORM_REGION', 'ROW_TABLE', 'COLUMN_TABLE'].includes(kind)
       ? 'REGION' : 'FIELD',
     kind,
     valueType: suggestion.payload.valueType,
@@ -382,8 +377,6 @@ export function applySuggestion(
     termination: suggestion.payload.terminationRule,
     columns: suggestion.payload.columns,
     tableModel: suggestion.payload.tableModel,
-    matrixModel: suggestion.payload.matrixModel,
-    longTableModel: suggestion.payload.longTableModel,
     locator: structuredClone(suggestion.payload.locator),
   };
   const existingFieldIndex = nextModel.fields.findIndex(
@@ -509,7 +502,7 @@ export function addRecognitionCandidate(
     groupId: group.id,
     name: suggestion.payload.fieldName,
     pathSegments: splitLabelPath(suggestion.payload.labelPath),
-    displayRole: ['FORM_REGION', 'ROW_TABLE', 'COLUMN_TABLE', 'MATRIX', 'TABLE_REGION'].includes(kind)
+    displayRole: ['FORM_REGION', 'ROW_TABLE', 'COLUMN_TABLE'].includes(kind)
       ? 'REGION' : 'FIELD',
     kind,
     valueType: suggestion.payload.valueType,
@@ -528,8 +521,6 @@ export function addRecognitionCandidate(
     parentBlockId: suggestion.payload.parentBlockId,
     columns: suggestion.payload.columns,
     tableModel: suggestion.payload.tableModel,
-    matrixModel: suggestion.payload.matrixModel,
-    longTableModel: suggestion.payload.longTableModel,
     locator: structuredClone(suggestion.payload.locator),
     candidate: true,
     candidateLocatorType: suggestion.payload.locatorType,
@@ -879,9 +870,6 @@ function schemaFor(suggestion: RecognitionSuggestion, kind: FieldKind) {
       },
     };
   }
-  if (kind === 'MATRIX') {
-    return { ...common, type: 'array', items: { type: 'array', items: { type: 'number' } } };
-  }
   if (suggestion.payload.valueType === 'date') {
     return { ...common, type: 'string', format: 'date' };
   }
@@ -1001,7 +989,6 @@ function schemaAtPath(schema: Record<string, unknown>, path: string) {
 
 function suggestionKind(suggestion: RecognitionSuggestion): FieldKind {
   if (suggestion.payload.kind) return suggestion.payload.kind;
-  if (suggestion.suggestionType.includes('MATRIX')) return 'MATRIX';
   if (suggestion.suggestionType.includes('TABLE') || suggestion.payload.role === 'REPEAT_REGION') {
     return 'ROW_TABLE';
   }
@@ -1010,7 +997,7 @@ function suggestionKind(suggestion: RecognitionSuggestion): FieldKind {
 
 function kindFromBinding(binding: TemplateBinding): FieldKind {
   const kind = stringValue(binding.diagnostic?.kind);
-  if (kind === 'MATRIX' || binding.locatorType === 'MATRIX_REGION') return 'MATRIX';
+  if (kind === 'COLUMN_TABLE') return 'COLUMN_TABLE';
   if (kind === 'ROW_TABLE' || binding.role === 'REPEAT_REGION') return 'ROW_TABLE';
   return 'SCALAR';
 }
@@ -1153,7 +1140,7 @@ function preferSemanticPath(fieldPath?: string[], bindingPath?: string[]) {
 
 function interpretation(kind: FieldKind, name: string) {
   if (kind === 'ROW_TABLE') return `系统认为“${name}”中每一行代表一条业务记录。`;
-  if (kind === 'MATRIX') return `系统认为“${name}”的行列表示不同条件，交叉位置填写结果。`;
+  if (kind === 'COLUMN_TABLE') return `系统认为“${name}”中每一列代表一条业务记录。`;
   return `系统认为这里用于填写“${name}”。`;
 }
 

@@ -139,15 +139,17 @@ export function ProductionOrderListPage() {
 
   const deleteSelected = () => {
     if (!selectedKeys.length) return;
+    const deletableIds = selectedKeys.filter((id) => items.find((item) => item.id === id)?.allowedActions?.includes('DELETE'));
+    if (!deletableIds.length) { void message.warning('当前选择没有可删除的记录'); return; }
     Modal.confirm({
-      title: `确认删除 ${selectedKeys.length} 条生产单记录？`,
+      title: `确认删除 ${deletableIds.length} 条生产单记录？`,
       content: '删除后记录会进入作废状态，原始文件不会被物理删除。',
       okText: '确认删除',
       cancelText: '取消',
       okButtonProps: { danger: true },
       onOk: async () => {
         try {
-          await Promise.all(selectedKeys.map((id) => productionUploadApi.delete(id)));
+          await Promise.all(deletableIds.map((id) => productionUploadApi.delete(id)));
           setSelectedKeys([]);
           void message.success('选中的生产单记录已作废');
           await load();
@@ -318,7 +320,7 @@ export function ProductionOrderListPage() {
             <Button
               danger
               icon={<DeleteOutlined />}
-              disabled={!selectedKeys.length || editing || !canDelete}
+              disabled={!selectedKeys.some((id) => items.find((item) => item.id === id)?.allowedActions?.includes('DELETE')) || editing || !canDelete}
               onClick={deleteSelected}
             >
               批量作废

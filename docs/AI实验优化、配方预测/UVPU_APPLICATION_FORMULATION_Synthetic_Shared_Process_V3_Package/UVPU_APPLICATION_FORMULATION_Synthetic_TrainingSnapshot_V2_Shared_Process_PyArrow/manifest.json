@@ -1,0 +1,306 @@
+{
+  "snapshot_schema_version": "1.0",
+  "snapshot_id": "SYNTH-UVPU-APP-SHARED-PROCESS-20260903-V2-PYARROW1",
+  "task_profile_code": "UVPU_APPLICATION_FORMULATION",
+  "task_profile_version": "1.0",
+  "snapshot_purpose": "DEVELOPMENT",
+  "data_nature": "SYNTHETIC",
+  "production_eligible": false,
+  "generated_at_utc": "2026-09-03T12:23:11Z",
+  "generator": {
+    "name": "jsd-t07-uvpu-synthetic-shared-process-generator",
+    "version": "2.0.1-pyarrow-repair",
+    "seed": 20260903,
+    "row_count": 400,
+    "report_sheet_count": 67,
+    "source_snapshot_id": "SYNTH-UVPU-APP-SHARED-PROCESS-20260903-V2",
+    "repair_reason": "Original custom Parquet files decode as zero rows in PyArrow 21"
+  },
+  "source_basis": {
+    "semantic_basis": "Original application test report semantics: one report sheet has one public application/cure context and multiple formulation columns.",
+    "original_report_rule": "Rows 2 and 5-7 are public/shared conditions. When normalized, the same values are copied onto every experiment column in that sheet.",
+    "source_excel": "UVPU_APPLICATION_FORMULATION_Synthetic_400_Shared_Process_Original_Report_V3.xlsx",
+    "important_note": "All rows are synthetic and development-only."
+  },
+  "shared_process_semantics": {
+    "group_key": "source_sheet",
+    "shared_fields": [
+      "X_PROCESS__COATING_SOLIDS_PCT",
+      "X_PROCESS__UVA_INTENSITY_MW_CM2",
+      "X_PROCESS__UV_ENERGY_MJ_CM2",
+      "X_ENV__TEMPERATURE_C",
+      "X_ENV__HUMIDITY_RH_PCT",
+      "X_CONTEXT__SUBSTRATE",
+      "X_CONTEXT__APPLICATION_METHOD",
+      "X_CONTEXT__CURING_SOURCE"
+    ],
+    "per_experiment_fields": [
+      "formula composition",
+      "X_PROCESS__FILM_THICKNESS_UM",
+      "targets"
+    ],
+    "rule": "All experiments on the same APP-xxx source sheet have identical shared public process/context X values."
+  },
+  "formula_rules": {
+    "basis": "PERCENT_SUM_100",
+    "sum_tolerance": 0.02,
+    "one_main_resin_per_experiment": true,
+    "materials": [
+      "SJ-230",
+      "SJ-231",
+      "SJ-232",
+      "SJ-230-WASHED",
+      "SJ-231-WASHED",
+      "SJ-232-WASHED",
+      "DSP-3315",
+      "SS059/PC=1/1",
+      "S-48"
+    ]
+  },
+  "feature_schema": [
+    {
+      "name": "experiment_version_id",
+      "role": "IDENTITY",
+      "type": "STRING"
+    },
+    {
+      "name": "X_FORMULA__SJ_230_PCT",
+      "role": "FEATURE",
+      "type": "DOUBLE",
+      "unit": "%"
+    },
+    {
+      "name": "X_FORMULA__SJ_231_PCT",
+      "role": "FEATURE",
+      "type": "DOUBLE",
+      "unit": "%"
+    },
+    {
+      "name": "X_FORMULA__SJ_232_PCT",
+      "role": "FEATURE",
+      "type": "DOUBLE",
+      "unit": "%"
+    },
+    {
+      "name": "X_FORMULA__SJ_230_WASHED_PCT",
+      "role": "FEATURE",
+      "type": "DOUBLE",
+      "unit": "%"
+    },
+    {
+      "name": "X_FORMULA__SJ_231_WASHED_PCT",
+      "role": "FEATURE",
+      "type": "DOUBLE",
+      "unit": "%"
+    },
+    {
+      "name": "X_FORMULA__SJ_232_WASHED_PCT",
+      "role": "FEATURE",
+      "type": "DOUBLE",
+      "unit": "%"
+    },
+    {
+      "name": "X_FORMULA__DSP_3315_PCT",
+      "role": "FEATURE",
+      "type": "DOUBLE",
+      "unit": "%"
+    },
+    {
+      "name": "X_FORMULA__SS059_PC_1_1_PCT",
+      "role": "FEATURE",
+      "type": "DOUBLE",
+      "unit": "%"
+    },
+    {
+      "name": "X_FORMULA__S_48_PCT",
+      "role": "FEATURE",
+      "type": "DOUBLE",
+      "unit": "%"
+    },
+    {
+      "name": "X_PROCESS__COATING_SOLIDS_PCT",
+      "role": "FEATURE",
+      "type": "DOUBLE",
+      "unit": "%"
+    },
+    {
+      "name": "X_PROCESS__UVA_INTENSITY_MW_CM2",
+      "role": "FEATURE",
+      "type": "DOUBLE",
+      "unit": "mW/cm2"
+    },
+    {
+      "name": "X_PROCESS__UV_ENERGY_MJ_CM2",
+      "role": "FEATURE",
+      "type": "DOUBLE",
+      "unit": "mJ/cm2"
+    },
+    {
+      "name": "X_PROCESS__FILM_THICKNESS_UM",
+      "role": "FEATURE",
+      "type": "DOUBLE",
+      "unit": "um"
+    },
+    {
+      "name": "X_ENV__TEMPERATURE_C",
+      "role": "FEATURE",
+      "type": "DOUBLE",
+      "unit": "degC"
+    },
+    {
+      "name": "X_ENV__HUMIDITY_RH_PCT",
+      "role": "FEATURE",
+      "type": "DOUBLE",
+      "unit": "%"
+    },
+    {
+      "name": "X_CONTEXT__SUBSTRATE",
+      "role": "FEATURE",
+      "type": "STRING"
+    },
+    {
+      "name": "X_CONTEXT__APPLICATION_METHOD",
+      "role": "FEATURE",
+      "type": "STRING"
+    },
+    {
+      "name": "X_CONTEXT__CURING_SOURCE",
+      "role": "FEATURE",
+      "type": "STRING"
+    },
+    {
+      "name": "Y__WARPING_PET_INITIAL_CM",
+      "role": "TARGET",
+      "type": "DOUBLE"
+    },
+    {
+      "name": "Y__WARPING_PET_12H_CM",
+      "role": "TARGET",
+      "type": "DOUBLE"
+    },
+    {
+      "name": "Y__HARDNESS_PET_1KG_ORD",
+      "role": "TARGET",
+      "type": "DOUBLE"
+    },
+    {
+      "name": "Y__STEEL_WOOL_500G_CYCLES",
+      "role": "TARGET",
+      "type": "DOUBLE"
+    },
+    {
+      "name": "Y__STEEL_WOOL_1KG_CYCLES",
+      "role": "TARGET",
+      "type": "DOUBLE"
+    }
+  ],
+  "targets": {
+    "Y__WARPING_PET_INITIAL_CM": {
+      "target_key": "APP.WARPING.HEIGHT@substrate=PET_100UM;stage=UV_IMMEDIATE",
+      "value_type": "CONT",
+      "unit": "cm",
+      "direction": "MINIMIZE",
+      "source_semantics": "UV后干膜翘曲度（PET膜）",
+      "missing_probability": 0.03
+    },
+    "Y__WARPING_PET_12H_CM": {
+      "target_key": "APP.WARPING.HEIGHT@substrate=PET_100UM;stage=ROOM_12H",
+      "value_type": "CONT",
+      "unit": "cm",
+      "direction": "MINIMIZE",
+      "source_semantics": "UV后干膜室温放置12小时后的翘曲度（PET膜）",
+      "missing_probability": 0.06
+    },
+    "Y__HARDNESS_PET_1KG_ORD": {
+      "target_key": "APP.HARDNESS.PENCIL@substrate=PET_100UM;load=1KG",
+      "value_type": "ORD",
+      "unit": null,
+      "direction": "MAXIMIZE",
+      "ordinal_mapping": {
+        "1": "H",
+        "2": "2H",
+        "3": "3H",
+        "4": "4H"
+      },
+      "source_semantics": "硬度（1KG负重,PET膜）",
+      "missing_probability": 0.04
+    },
+    "Y__STEEL_WOOL_500G_CYCLES": {
+      "target_key": "APP.ABRASION.STEELWOOL@substrate=PET_100UM;load=500G;contact=1X1_UNSPECIFIED",
+      "value_type": "CONT",
+      "unit": "cycles",
+      "direction": "MAXIMIZE",
+      "source_semantics": "钢丝绒耐磨（1x1，500g负重）",
+      "missing_probability": 0.05
+    },
+    "Y__STEEL_WOOL_1KG_CYCLES": {
+      "target_key": "APP.ABRASION.STEELWOOL@substrate=PET_100UM;load=1KG;contact=1X1_UNSPECIFIED",
+      "value_type": "CONT",
+      "unit": "cycles",
+      "direction": "MAXIMIZE",
+      "source_semantics": "钢丝绒耐磨（1x1，1KG负重）",
+      "missing_probability": 0.25
+    }
+  },
+  "target_statistics": {
+    "Y__WARPING_PET_INITIAL_CM": {
+      "valid_count": 378,
+      "missing_count": 22,
+      "missing_rate": 0.055,
+      "min": 0.66,
+      "max": 4.16
+    },
+    "Y__WARPING_PET_12H_CM": {
+      "valid_count": 371,
+      "missing_count": 29,
+      "missing_rate": 0.0725,
+      "min": 0.0,
+      "max": 4.69
+    },
+    "Y__HARDNESS_PET_1KG_ORD": {
+      "valid_count": 386,
+      "missing_count": 14,
+      "missing_rate": 0.035,
+      "min": 1.0,
+      "max": 3.0
+    },
+    "Y__STEEL_WOOL_500G_CYCLES": {
+      "valid_count": 380,
+      "missing_count": 20,
+      "missing_rate": 0.05,
+      "min": 5.0,
+      "max": 784.0
+    },
+    "Y__STEEL_WOOL_1KG_CYCLES": {
+      "valid_count": 306,
+      "missing_count": 94,
+      "missing_rate": 0.235,
+      "min": 5.0,
+      "max": 230.0
+    }
+  },
+  "missing_strategy": {
+    "numeric_targets": "IEEE_NAN",
+    "note": "NaN means not tested; never convert to zero."
+  },
+  "validation_strategy_hint": {
+    "group_key": "formula_lineage_group",
+    "rule": "A formula lineage group must not be split across train and validation folds."
+  },
+  "artifacts": {
+    "measurements.parquet": {
+      "sha256": "041aea56cf0b7c969c102ff5c3d8298a8f204c1ee5f523b66bdc7edbc06d5c70",
+      "rows": 400,
+      "columns": 24,
+      "format": "PARQUET",
+      "writer": "pyarrow"
+    },
+    "source-map.parquet": {
+      "sha256": "6d95a955b5e5c4b9f0d6dc25de17facbf8a1bfbb018a1de0f7a36691cfcd2366",
+      "rows": 400,
+      "columns": 16,
+      "format": "PARQUET",
+      "writer": "pyarrow"
+    }
+  }
+}

@@ -1,0 +1,128 @@
+{
+  "contractVersion": "formula-model.v1",
+  "requestId": "uvpu-manual-score-001",
+  "modelBundleSha256": "d6c56b40d8775268c4f8387c4ad627ba2d17a52eec45e8fa4ab00bdb41b5b1b6",
+  "rows": [
+    {
+      "rowId": "MANUAL-X-001",
+      "predictions": [
+        {
+          "targetCode": "Y__WARPING_PET_INITIAL_CM",
+          "expected": 2.586652512327504,
+          "lower": 2.1907253890926004,
+          "upper": 2.9825796355624075,
+          "unit": "cm",
+          "scorerType": "GAUSSIAN_PROCESS",
+          "intervalMethod": "CALIBRATED_CONFORMAL",
+          "applicabilityDomain": {
+            "status": "IN_DOMAIN",
+            "modelUsable": true,
+            "nearestTrainingRowId": "SYN-UVPU-APP-0306-V1",
+            "nearestDistance": 0.4491746773421753,
+            "nearBoundaryThreshold": 0.6427259124632313,
+            "outOfDomainThreshold": 0.7098401101065511,
+            "unknownCategories": [],
+            "outsideObservedRange": [],
+            "nearBoundaryFeatures": [],
+            "reasons": []
+          }
+        },
+        {
+          "targetCode": "Y__WARPING_PET_12H_CM",
+          "expected": 3.089626657511829,
+          "lower": 2.5535712980713,
+          "upper": 3.625682016952358,
+          "unit": "cm",
+          "scorerType": "GAUSSIAN_PROCESS",
+          "intervalMethod": "CALIBRATED_CONFORMAL",
+          "applicabilityDomain": {
+            "status": "IN_DOMAIN",
+            "modelUsable": true,
+            "nearestTrainingRowId": "SYN-UVPU-APP-0306-V1",
+            "nearestDistance": 0.44951355178366226,
+            "nearBoundaryThreshold": 0.6272346233238832,
+            "outOfDomainThreshold": 0.7042777231439282,
+            "unknownCategories": [],
+            "outsideObservedRange": [],
+            "nearBoundaryFeatures": [],
+            "reasons": []
+          }
+        },
+        {
+          "targetCode": "Y__STEEL_WOOL_500G_CYCLES",
+          "expected": 226.28822200886324,
+          "lower": 161.55069979606523,
+          "upper": 291.0257442216613,
+          "unit": "cycles",
+          "scorerType": "GAUSSIAN_PROCESS",
+          "intervalMethod": "CALIBRATED_CONFORMAL",
+          "applicabilityDomain": {
+            "status": "IN_DOMAIN",
+            "modelUsable": true,
+            "nearestTrainingRowId": "SYN-UVPU-APP-0306-V1",
+            "nearestDistance": 0.44863373063649453,
+            "nearBoundaryThreshold": 0.625396147168782,
+            "outOfDomainThreshold": 0.7018500575228057,
+            "unknownCategories": [],
+            "outsideObservedRange": [],
+            "nearBoundaryFeatures": [],
+            "reasons": []
+          }
+        },
+        {
+          "targetCode": "Y__STEEL_WOOL_1KG_CYCLES",
+          "expected": 52.629756694502866,
+          "lower": 18.268776143803613,
+          "upper": 86.99073724520213,
+          "unit": "cycles",
+          "scorerType": "GAUSSIAN_PROCESS",
+          "intervalMethod": "CALIBRATED_CONFORMAL",
+          "applicabilityDomain": {
+            "status": "IN_DOMAIN",
+            "modelUsable": true,
+            "nearestTrainingRowId": "SYN-UVPU-APP-0326-V1",
+            "nearestDistance": 0.49339961394998944,
+            "nearBoundaryThreshold": 0.6521027553235045,
+            "outOfDomainThreshold": 0.7211929255546987,
+            "unknownCategories": [],
+            "outsideObservedRange": [],
+            "nearBoundaryFeatures": [],
+            "reasons": []
+          }
+        }
+      ],
+      "ordinalPredictions": [
+        {
+          "targetCode": "Y__HARDNESS_PET_1KG_ORD",
+          "predictedClass": "2H",
+          "classProbabilities": {
+            "H": 0.002739683507114954,
+            "2H": 0.933094608869372,
+            "3H": 0.06416570762351301,
+            "4H": 0.0
+          },
+          "lowerClass90": "2H",
+          "upperClass90": "3H",
+          "scorerType": "ORDINAL_CUMULATIVE_LOGIT",
+          "applicabilityDomain": {
+            "status": "IN_DOMAIN",
+            "modelUsable": true,
+            "nearestTrainingRowId": "SYN-UVPU-APP-0306-V1",
+            "nearestDistance": 0.4488836792851282,
+            "nearBoundaryThreshold": 0.6289915147696481,
+            "outOfDomainThreshold": 0.7012244717066047,
+            "unknownCategories": [],
+            "outsideObservedRange": [],
+            "nearBoundaryFeatures": [],
+            "reasons": []
+          }
+        }
+      ],
+      "classificationPredictions": [],
+      "domainStatus": "IN_DOMAIN",
+      "modelUsable": true,
+      "fallbackReasons": []
+    }
+  ],
+  "unsupportedTargets": []
+}

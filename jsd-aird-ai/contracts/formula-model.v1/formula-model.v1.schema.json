@@ -1,0 +1,3916 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jsd.internal/contracts/formula-model.v1/schema.json",
+  "title": "JSD-AIRD Formula Model Contract v1",
+  "$defs": {
+    "AlgorithmMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "modelType": {
+          "$ref": "#/$defs/ModelType"
+        },
+        "library": {
+          "title": "Library",
+          "type": "string"
+        },
+        "libraryVersion": {
+          "title": "Libraryversion",
+          "type": "string"
+        },
+        "finalParams": {
+          "additionalProperties": true,
+          "title": "Finalparams",
+          "type": "object"
+        },
+        "seed": {
+          "title": "Seed",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "modelType",
+        "library",
+        "libraryVersion",
+        "seed"
+      ],
+      "title": "AlgorithmMetadata",
+      "type": "object"
+    },
+    "ApplicabilityDomainEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/DomainStatus"
+        },
+        "modelUsable": {
+          "title": "Modelusable",
+          "type": "boolean"
+        },
+        "nearestTrainingRowId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Nearesttrainingrowid"
+        },
+        "nearestDistance": {
+          "minimum": 0.0,
+          "title": "Nearestdistance",
+          "type": "number"
+        },
+        "nearBoundaryThreshold": {
+          "minimum": 0.0,
+          "title": "Nearboundarythreshold",
+          "type": "number"
+        },
+        "outOfDomainThreshold": {
+          "minimum": 0.0,
+          "title": "Outofdomainthreshold",
+          "type": "number"
+        },
+        "unknownCategories": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Unknowncategories",
+          "type": "array"
+        },
+        "outsideObservedRange": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Outsideobservedrange",
+          "type": "array"
+        },
+        "nearBoundaryFeatures": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Nearboundaryfeatures",
+          "type": "array"
+        },
+        "reasons": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Reasons",
+          "type": "array"
+        }
+      },
+      "required": [
+        "status",
+        "modelUsable",
+        "nearestDistance",
+        "nearBoundaryThreshold",
+        "outOfDomainThreshold"
+      ],
+      "title": "ApplicabilityDomainEvidence",
+      "type": "object"
+    },
+    "ApplicabilityDomainPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "robustLowerQuantile": {
+          "default": 0.01,
+          "exclusiveMaximum": 0.5,
+          "minimum": 0.0,
+          "title": "Robustlowerquantile",
+          "type": "number"
+        },
+        "robustUpperQuantile": {
+          "default": 0.99,
+          "exclusiveMinimum": 0.5,
+          "maximum": 1.0,
+          "title": "Robustupperquantile",
+          "type": "number"
+        },
+        "nearBoundaryDistanceQuantile": {
+          "default": 0.95,
+          "exclusiveMaximum": 1.0,
+          "exclusiveMinimum": 0.5,
+          "title": "Nearboundarydistancequantile",
+          "type": "number"
+        },
+        "outOfDomainDistanceQuantile": {
+          "default": 0.99,
+          "exclusiveMinimum": 0.5,
+          "maximum": 1.0,
+          "title": "Outofdomaindistancequantile",
+          "type": "number"
+        },
+        "outOfDomainRequiresFallback": {
+          "default": true,
+          "title": "Outofdomainrequiresfallback",
+          "type": "boolean"
+        }
+      },
+      "title": "ApplicabilityDomainPolicy",
+      "type": "object"
+    },
+    "ApplicabilityDomainSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "method": {
+          "const": "GROUP_ISOLATED_NEAREST_DISTANCE",
+          "default": "GROUP_ISOLATED_NEAREST_DISTANCE",
+          "title": "Method",
+          "type": "string"
+        },
+        "referenceRows": {
+          "minimum": 1,
+          "title": "Referencerows",
+          "type": "integer"
+        },
+        "nearBoundaryThreshold": {
+          "minimum": 0.0,
+          "title": "Nearboundarythreshold",
+          "type": "number"
+        },
+        "outOfDomainThreshold": {
+          "minimum": 0.0,
+          "title": "Outofdomainthreshold",
+          "type": "number"
+        },
+        "numericFeatures": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Numericfeatures",
+          "type": "array"
+        },
+        "categoricalFeatures": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Categoricalfeatures",
+          "type": "array"
+        }
+      },
+      "required": [
+        "referenceRows",
+        "nearBoundaryThreshold",
+        "outOfDomainThreshold"
+      ],
+      "title": "ApplicabilityDomainSummary",
+      "type": "object"
+    },
+    "ArtifactReadRef": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 180,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "url": {
+          "format": "uri",
+          "minLength": 1,
+          "title": "Url",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "url",
+        "sha256"
+      ],
+      "title": "ArtifactReadRef",
+      "type": "object"
+    },
+    "ArtifactWriteRef": {
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "format": "uri",
+          "minLength": 1,
+          "title": "Url",
+          "type": "string"
+        },
+        "contentType": {
+          "default": "application/zip",
+          "title": "Contenttype",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "title": "ArtifactWriteRef",
+      "type": "object"
+    },
+    "BaselineMetrics": {
+      "additionalProperties": false,
+      "properties": {
+        "lineageNmae": {
+          "title": "Lineagenmae",
+          "type": "number"
+        },
+        "sheetNmae": {
+          "title": "Sheetnmae",
+          "type": "number"
+        }
+      },
+      "required": [
+        "lineageNmae",
+        "sheetNmae"
+      ],
+      "title": "BaselineMetrics",
+      "type": "object"
+    },
+    "BaselineSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/BaselineType"
+        },
+        "version": {
+          "title": "Version",
+          "type": "string"
+        },
+        "metrics": {
+          "$ref": "#/$defs/BaselineMetrics"
+        }
+      },
+      "required": [
+        "type",
+        "version",
+        "metrics"
+      ],
+      "title": "BaselineSummary",
+      "type": "object"
+    },
+    "BaselineType": {
+      "enum": [
+        "DEVELOPMENT_KNN",
+        "T06_SIMILAR_CASE"
+      ],
+      "title": "BaselineType",
+      "type": "string"
+    },
+    "BinaryMetricSet": {
+      "additionalProperties": false,
+      "properties": {
+        "rocAuc": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Rocauc",
+          "type": "number"
+        },
+        "prAuc": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Prauc",
+          "type": "number"
+        },
+        "precision": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Precision",
+          "type": "number"
+        },
+        "recall": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Recall",
+          "type": "number"
+        },
+        "f1": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "F1",
+          "type": "number"
+        },
+        "minorityClass": {
+          "title": "Minorityclass",
+          "type": "string"
+        },
+        "minorityClassRecall": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Minorityclassrecall",
+          "type": "number"
+        },
+        "confusionMatrix": {
+          "items": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "title": "Confusionmatrix",
+          "type": "array"
+        },
+        "rawProbabilityQuality": {
+          "$ref": "#/$defs/ProbabilityQuality"
+        },
+        "calibratedProbabilityQuality": {
+          "$ref": "#/$defs/ProbabilityQuality"
+        },
+        "decisionThreshold": {
+          "exclusiveMaximum": 1.0,
+          "exclusiveMinimum": 0.0,
+          "title": "Decisionthreshold",
+          "type": "number"
+        }
+      },
+      "required": [
+        "rocAuc",
+        "prAuc",
+        "precision",
+        "recall",
+        "f1",
+        "minorityClass",
+        "minorityClassRecall",
+        "confusionMatrix",
+        "rawProbabilityQuality",
+        "calibratedProbabilityQuality",
+        "decisionThreshold"
+      ],
+      "title": "BinaryMetricSet",
+      "type": "object"
+    },
+    "BinaryReadinessThreshold": {
+      "additionalProperties": false,
+      "properties": {
+        "minSamples": {
+          "default": 80,
+          "minimum": 1,
+          "title": "Minsamples",
+          "type": "integer"
+        },
+        "minMinorityClassSamples": {
+          "default": 20,
+          "minimum": 1,
+          "title": "Minminorityclasssamples",
+          "type": "integer"
+        },
+        "minGroups": {
+          "default": 12,
+          "minimum": 2,
+          "title": "Mingroups",
+          "type": "integer"
+        },
+        "minRocAuc": {
+          "default": 0.65,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Minrocauc",
+          "type": "number"
+        },
+        "minPrAuc": {
+          "default": 0.5,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Minprauc",
+          "type": "number"
+        },
+        "minF1": {
+          "default": 0.5,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Minf1",
+          "type": "number"
+        },
+        "maxLogLoss": {
+          "default": 0.7,
+          "exclusiveMinimum": 0.0,
+          "title": "Maxlogloss",
+          "type": "number"
+        },
+        "maxBrierScore": {
+          "default": 0.25,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Maxbrierscore",
+          "type": "number"
+        }
+      },
+      "title": "BinaryReadinessThreshold",
+      "type": "object"
+    },
+    "CandidateModelMetric": {
+      "additionalProperties": false,
+      "properties": {
+        "modelType": {
+          "$ref": "#/$defs/ModelType"
+        },
+        "status": {
+          "enum": [
+            "ELIGIBLE",
+            "SKIPPED_INSUFFICIENT_SAMPLES",
+            "TRAINING_FAILED"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "lineageCv": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MetricSet"
+            },
+            {
+              "$ref": "#/$defs/BinaryMetricSet"
+            },
+            {
+              "$ref": "#/$defs/CategoricalMetricSet"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lineagecv"
+        },
+        "sheetCv": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MetricSet"
+            },
+            {
+              "$ref": "#/$defs/BinaryMetricSet"
+            },
+            {
+              "$ref": "#/$defs/CategoricalMetricSet"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sheetcv"
+        },
+        "randomKfoldDiagnostic": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MetricSet"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "finalParams": {
+          "additionalProperties": true,
+          "title": "Finalparams",
+          "type": "object"
+        },
+        "trainingTimeSeconds": {
+          "default": 0.0,
+          "minimum": 0.0,
+          "title": "Trainingtimeseconds",
+          "type": "number"
+        },
+        "predictionTimeSeconds": {
+          "default": 0.0,
+          "minimum": 0.0,
+          "title": "Predictiontimeseconds",
+          "type": "number"
+        },
+        "failureReason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Failurereason"
+        },
+        "algorithm": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AlgorithmMetadata"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "lineageFoldNmae": {
+          "items": {
+            "type": "number"
+          },
+          "title": "Lineagefoldnmae",
+          "type": "array"
+        },
+        "sheetFoldNmae": {
+          "items": {
+            "type": "number"
+          },
+          "title": "Sheetfoldnmae",
+          "type": "array"
+        },
+        "lineageFoldScores": {
+          "items": {
+            "type": "number"
+          },
+          "title": "Lineagefoldscores",
+          "type": "array"
+        },
+        "sheetFoldScores": {
+          "items": {
+            "type": "number"
+          },
+          "title": "Sheetfoldscores",
+          "type": "array"
+        }
+      },
+      "required": [
+        "modelType",
+        "status"
+      ],
+      "title": "CandidateModelMetric",
+      "type": "object"
+    },
+    "CandidatePolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "maximumPoolSize": {
+          "default": 20000,
+          "maximum": 100000,
+          "minimum": 100,
+          "title": "Maximumpoolsize",
+          "type": "integer"
+        },
+        "minimumL1Distance": {
+          "default": 2.0,
+          "minimum": 0.0,
+          "title": "Minimuml1Distance",
+          "type": "number"
+        },
+        "conservativeMaximumL1Distance": {
+          "default": 10.0,
+          "exclusiveMinimum": 0.0,
+          "title": "Conservativemaximuml1Distance",
+          "type": "number"
+        },
+        "defaultCount": {
+          "default": 4,
+          "maximum": 16,
+          "minimum": 1,
+          "title": "Defaultcount",
+          "type": "integer"
+        }
+      },
+      "title": "CandidatePolicy",
+      "type": "object"
+    },
+    "CategoricalMetricSet": {
+      "additionalProperties": false,
+      "properties": {
+        "macroF1": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Macrof1",
+          "type": "number"
+        },
+        "weightedF1": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Weightedf1",
+          "type": "number"
+        },
+        "balancedAccuracy": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Balancedaccuracy",
+          "type": "number"
+        },
+        "perClass": {
+          "additionalProperties": {
+            "$ref": "#/$defs/PerClassMetric"
+          },
+          "title": "Perclass",
+          "type": "object"
+        },
+        "confusionMatrix": {
+          "items": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "title": "Confusionmatrix",
+          "type": "array"
+        },
+        "rawProbabilityQuality": {
+          "$ref": "#/$defs/ProbabilityQuality"
+        },
+        "calibratedProbabilityQuality": {
+          "$ref": "#/$defs/ProbabilityQuality"
+        }
+      },
+      "required": [
+        "macroF1",
+        "weightedF1",
+        "balancedAccuracy",
+        "perClass",
+        "confusionMatrix",
+        "rawProbabilityQuality",
+        "calibratedProbabilityQuality"
+      ],
+      "title": "CategoricalMetricSet",
+      "type": "object"
+    },
+    "CategoricalReadinessThreshold": {
+      "additionalProperties": false,
+      "properties": {
+        "minSamples": {
+          "default": 80,
+          "minimum": 1,
+          "title": "Minsamples",
+          "type": "integer"
+        },
+        "minSamplesPerObservedClass": {
+          "default": 10,
+          "minimum": 1,
+          "title": "Minsamplesperobservedclass",
+          "type": "integer"
+        },
+        "minObservedClasses": {
+          "default": 2,
+          "minimum": 2,
+          "title": "Minobservedclasses",
+          "type": "integer"
+        },
+        "minGroups": {
+          "default": 12,
+          "minimum": 2,
+          "title": "Mingroups",
+          "type": "integer"
+        },
+        "minMacroF1": {
+          "default": 0.4,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Minmacrof1",
+          "type": "number"
+        },
+        "minBalancedAccuracy": {
+          "default": 0.4,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Minbalancedaccuracy",
+          "type": "number"
+        },
+        "maxLogLoss": {
+          "default": 1.5,
+          "exclusiveMinimum": 0.0,
+          "title": "Maxlogloss",
+          "type": "number"
+        }
+      },
+      "title": "CategoricalReadinessThreshold",
+      "type": "object"
+    },
+    "ClassificationModelEligibilityProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "LOGISTIC_REGRESSION": {
+          "$ref": "#/$defs/ModelEligibilityRule"
+        },
+        "RF": {
+          "$ref": "#/$defs/ModelEligibilityRule"
+        },
+        "LIGHTGBM": {
+          "$ref": "#/$defs/ModelEligibilityRule"
+        },
+        "XGBOOST": {
+          "$ref": "#/$defs/ModelEligibilityRule"
+        },
+        "CATBOOST": {
+          "$ref": "#/$defs/ModelEligibilityRule"
+        }
+      },
+      "title": "ClassificationModelEligibilityProfile",
+      "type": "object"
+    },
+    "ClassificationModelSelectionPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "tieScoreTolerance": {
+          "default": 0.01,
+          "minimum": 0.0,
+          "title": "Tiescoretolerance",
+          "type": "number"
+        },
+        "binaryTieBreakOrder": {
+          "items": {
+            "$ref": "#/$defs/ModelType"
+          },
+          "title": "Binarytiebreakorder",
+          "type": "array"
+        },
+        "categoricalTieBreakOrder": {
+          "items": {
+            "$ref": "#/$defs/ModelType"
+          },
+          "title": "Categoricaltiebreakorder",
+          "type": "array"
+        }
+      },
+      "title": "ClassificationModelSelectionPolicy",
+      "type": "object"
+    },
+    "ClassificationPrediction": {
+      "additionalProperties": false,
+      "properties": {
+        "targetCode": {
+          "title": "Targetcode",
+          "type": "string"
+        },
+        "targetType": {
+          "enum": [
+            "BINARY",
+            "CATEGORICAL"
+          ],
+          "title": "Targettype",
+          "type": "string"
+        },
+        "predictedClass": {
+          "title": "Predictedclass",
+          "type": "string"
+        },
+        "classProbabilities": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Classprobabilities",
+          "type": "object"
+        },
+        "rawClassProbabilities": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Rawclassprobabilities",
+          "type": "object"
+        },
+        "confidence": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "positiveClass": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Positiveclass"
+        },
+        "rawPositiveProbability": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawpositiveprobability"
+        },
+        "calibratedPositiveProbability": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Calibratedpositiveprobability"
+        },
+        "decisionThreshold": {
+          "anyOf": [
+            {
+              "exclusiveMaximum": 1.0,
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Decisionthreshold"
+        },
+        "calibrationMethod": {
+          "enum": [
+            "PLATT",
+            "ISOTONIC"
+          ],
+          "title": "Calibrationmethod",
+          "type": "string"
+        },
+        "scorerType": {
+          "$ref": "#/$defs/ModelType"
+        },
+        "applicabilityDomain": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApplicabilityDomainEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "targetCode",
+        "targetType",
+        "predictedClass",
+        "classProbabilities",
+        "rawClassProbabilities",
+        "confidence",
+        "calibrationMethod",
+        "scorerType"
+      ],
+      "title": "ClassificationPrediction",
+      "type": "object"
+    },
+    "ClassificationTrainingSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "targetType": {
+          "enum": [
+            "BINARY",
+            "CATEGORICAL"
+          ],
+          "title": "Targettype",
+          "type": "string"
+        },
+        "configuredClasses": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Configuredclasses",
+          "type": "array"
+        },
+        "observedClasses": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Observedclasses",
+          "type": "array"
+        },
+        "positiveClass": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Positiveclass"
+        },
+        "decisionThreshold": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Decisionthreshold"
+        },
+        "calibrationMethod": {
+          "enum": [
+            "PLATT",
+            "ISOTONIC"
+          ],
+          "title": "Calibrationmethod",
+          "type": "string"
+        },
+        "calibrationSampleSource": {
+          "const": "GROUP_ISOLATED_OOF",
+          "default": "GROUP_ISOLATED_OOF",
+          "title": "Calibrationsamplesource",
+          "type": "string"
+        },
+        "lineageCv": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BinaryMetricSet"
+            },
+            {
+              "$ref": "#/$defs/CategoricalMetricSet"
+            }
+          ],
+          "title": "Lineagecv"
+        },
+        "sheetCv": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BinaryMetricSet"
+            },
+            {
+              "$ref": "#/$defs/CategoricalMetricSet"
+            }
+          ],
+          "title": "Sheetcv"
+        },
+        "classProbabilitiesSupported": {
+          "default": true,
+          "title": "Classprobabilitiessupported",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "targetType",
+        "configuredClasses",
+        "observedClasses",
+        "calibrationMethod",
+        "lineageCv",
+        "sheetCv"
+      ],
+      "title": "ClassificationTrainingSummary",
+      "type": "object"
+    },
+    "ContextFeatureSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "column": {
+          "title": "Column",
+          "type": "string"
+        },
+        "valueType": {
+          "$ref": "#/$defs/FeatureType"
+        },
+        "adjustable": {
+          "default": false,
+          "title": "Adjustable",
+          "type": "boolean"
+        },
+        "sharedWithinSourceGroup": {
+          "default": true,
+          "title": "Sharedwithinsourcegroup",
+          "type": "boolean"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unit"
+        }
+      },
+      "required": [
+        "code",
+        "column",
+        "valueType"
+      ],
+      "title": "ContextFeatureSpec",
+      "type": "object"
+    },
+    "ContinuousReadinessThreshold": {
+      "additionalProperties": false,
+      "properties": {
+        "minSamples": {
+          "default": 80,
+          "minimum": 1,
+          "title": "Minsamples",
+          "type": "integer"
+        },
+        "minGroups": {
+          "default": 12,
+          "minimum": 2,
+          "title": "Mingroups",
+          "type": "integer"
+        },
+        "minBaselineImprovement": {
+          "default": 0.1,
+          "minimum": 0.0,
+          "title": "Minbaselineimprovement",
+          "type": "number"
+        },
+        "maxNmae": {
+          "default": 0.2,
+          "exclusiveMinimum": 0.0,
+          "title": "Maxnmae",
+          "type": "number"
+        },
+        "minIntervalCoverage": {
+          "default": 0.85,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Minintervalcoverage",
+          "type": "number"
+        },
+        "maxIntervalCoverage": {
+          "default": 0.95,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Maxintervalcoverage",
+          "type": "number"
+        },
+        "requiredBaselineType": {
+          "$ref": "#/$defs/BaselineType",
+          "default": "T06_SIMILAR_CASE"
+        }
+      },
+      "title": "ContinuousReadinessThreshold",
+      "type": "object"
+    },
+    "DevelopmentReadinessThreshold": {
+      "additionalProperties": false,
+      "properties": {
+        "minSamples": {
+          "default": 30,
+          "minimum": 1,
+          "title": "Minsamples",
+          "type": "integer"
+        },
+        "minGroups": {
+          "default": 5,
+          "minimum": 2,
+          "title": "Mingroups",
+          "type": "integer"
+        }
+      },
+      "title": "DevelopmentReadinessThreshold",
+      "type": "object"
+    },
+    "Direction": {
+      "enum": [
+        "MINIMIZE",
+        "MAXIMIZE"
+      ],
+      "title": "Direction",
+      "type": "string"
+    },
+    "DomainStatus": {
+      "enum": [
+        "IN_DOMAIN",
+        "NEAR_BOUNDARY",
+        "OUT_OF_DOMAIN"
+      ],
+      "title": "DomainStatus",
+      "type": "string"
+    },
+    "ErrorResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "contractVersion": {
+          "const": "formula-model.v1",
+          "default": "formula-model.v1",
+          "title": "Contractversion",
+          "type": "string"
+        },
+        "requestId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Requestid"
+        },
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "retryable": {
+          "default": false,
+          "title": "Retryable",
+          "type": "boolean"
+        },
+        "details": {
+          "additionalProperties": true,
+          "title": "Details",
+          "type": "object"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "ErrorResponse",
+      "type": "object"
+    },
+    "FeatureType": {
+      "enum": [
+        "NUMERIC",
+        "CATEGORICAL"
+      ],
+      "title": "FeatureType",
+      "type": "string"
+    },
+    "FormulaDifference": {
+      "additionalProperties": false,
+      "properties": {
+        "materialCode": {
+          "title": "Materialcode",
+          "type": "string"
+        },
+        "baselineValue": {
+          "title": "Baselinevalue",
+          "type": "number"
+        },
+        "candidateValue": {
+          "title": "Candidatevalue",
+          "type": "number"
+        },
+        "delta": {
+          "title": "Delta",
+          "type": "number"
+        }
+      },
+      "required": [
+        "materialCode",
+        "baselineValue",
+        "candidateValue",
+        "delta"
+      ],
+      "title": "FormulaDifference",
+      "type": "object"
+    },
+    "FormulaSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "basis": {
+          "const": "PERCENT_SUM_100",
+          "default": "PERCENT_SUM_100",
+          "title": "Basis",
+          "type": "string"
+        },
+        "total": {
+          "default": 100.0,
+          "title": "Total",
+          "type": "number"
+        },
+        "sumTolerance": {
+          "default": 0.02,
+          "exclusiveMinimum": 0.0,
+          "title": "Sumtolerance",
+          "type": "number"
+        },
+        "balanceMaterialCode": {
+          "title": "Balancematerialcode",
+          "type": "string"
+        },
+        "mainResinCodes": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Mainresincodes",
+          "type": "array"
+        },
+        "materials": {
+          "items": {
+            "$ref": "#/$defs/MaterialSpec"
+          },
+          "minItems": 2,
+          "title": "Materials",
+          "type": "array"
+        }
+      },
+      "required": [
+        "balanceMaterialCode",
+        "mainResinCodes",
+        "materials"
+      ],
+      "title": "FormulaSpec",
+      "type": "object"
+    },
+    "GroupStabilitySummary": {
+      "additionalProperties": false,
+      "properties": {
+        "foldNmaeMean": {
+          "minimum": 0.0,
+          "title": "Foldnmaemean",
+          "type": "number"
+        },
+        "foldNmaeStd": {
+          "minimum": 0.0,
+          "title": "Foldnmaestd",
+          "type": "number"
+        },
+        "foldNmaeMin": {
+          "minimum": 0.0,
+          "title": "Foldnmaemin",
+          "type": "number"
+        },
+        "foldNmaeMax": {
+          "minimum": 0.0,
+          "title": "Foldnmaemax",
+          "type": "number"
+        }
+      },
+      "required": [
+        "foldNmaeMean",
+        "foldNmaeStd",
+        "foldNmaeMin",
+        "foldNmaeMax"
+      ],
+      "title": "GroupStabilitySummary",
+      "type": "object"
+    },
+    "MaterialConstraint": {
+      "additionalProperties": false,
+      "properties": {
+        "materialCode": {
+          "title": "Materialcode",
+          "type": "string"
+        },
+        "minimum": {
+          "anyOf": [
+            {
+              "maximum": 100.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Minimum"
+        },
+        "maximum": {
+          "anyOf": [
+            {
+              "maximum": 100.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Maximum"
+        },
+        "fixed": {
+          "anyOf": [
+            {
+              "maximum": 100.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fixed"
+        }
+      },
+      "required": [
+        "materialCode"
+      ],
+      "title": "MaterialConstraint",
+      "type": "object"
+    },
+    "MaterialSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "column": {
+          "minLength": 1,
+          "title": "Column",
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "MAIN_RESIN",
+            "ADDITIVE",
+            "BALANCE"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "minimum": {
+          "maximum": 100.0,
+          "minimum": 0.0,
+          "title": "Minimum",
+          "type": "number"
+        },
+        "maximum": {
+          "maximum": 100.0,
+          "minimum": 0.0,
+          "title": "Maximum",
+          "type": "number"
+        },
+        "step": {
+          "exclusiveMinimum": 0.0,
+          "maximum": 100.0,
+          "title": "Step",
+          "type": "number"
+        }
+      },
+      "required": [
+        "code",
+        "column",
+        "role",
+        "minimum",
+        "maximum",
+        "step"
+      ],
+      "title": "MaterialSpec",
+      "type": "object"
+    },
+    "MetricSet": {
+      "additionalProperties": false,
+      "properties": {
+        "mae": {
+          "title": "Mae",
+          "type": "number"
+        },
+        "rmse": {
+          "title": "Rmse",
+          "type": "number"
+        },
+        "nmae": {
+          "title": "Nmae",
+          "type": "number"
+        },
+        "r2": {
+          "title": "R2",
+          "type": "number"
+        },
+        "spearman": {
+          "title": "Spearman",
+          "type": "number"
+        },
+        "intervalCoverage": {
+          "title": "Intervalcoverage",
+          "type": "number"
+        },
+        "meanIntervalWidth": {
+          "title": "Meanintervalwidth",
+          "type": "number"
+        },
+        "rawIntervalCoverage": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawintervalcoverage"
+        },
+        "rawMeanIntervalWidth": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawmeanintervalwidth"
+        },
+        "calibratedRadius": {
+          "minimum": 0.0,
+          "title": "Calibratedradius",
+          "type": "number"
+        },
+        "calibrationSampleSource": {
+          "const": "INNER_GROUP_OOF",
+          "default": "INNER_GROUP_OOF",
+          "title": "Calibrationsamplesource",
+          "type": "string"
+        },
+        "evaluationRadiusMean": {
+          "default": 0.0,
+          "minimum": 0.0,
+          "title": "Evaluationradiusmean",
+          "type": "number"
+        },
+        "evaluationRadiusMax": {
+          "default": 0.0,
+          "minimum": 0.0,
+          "title": "Evaluationradiusmax",
+          "type": "number"
+        }
+      },
+      "required": [
+        "mae",
+        "rmse",
+        "nmae",
+        "r2",
+        "spearman",
+        "intervalCoverage",
+        "meanIntervalWidth",
+        "calibratedRadius"
+      ],
+      "title": "MetricSet",
+      "type": "object"
+    },
+    "ModelBundleRef": {
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "format": "uri",
+          "minLength": 1,
+          "title": "Url",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "sha256"
+      ],
+      "title": "ModelBundleRef",
+      "type": "object"
+    },
+    "ModelEligibilityProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "GP": {
+          "$ref": "#/$defs/ModelEligibilityRule"
+        },
+        "RF": {
+          "$ref": "#/$defs/ModelEligibilityRule"
+        },
+        "LIGHTGBM": {
+          "$ref": "#/$defs/ModelEligibilityRule"
+        },
+        "XGBOOST": {
+          "$ref": "#/$defs/ModelEligibilityRule"
+        },
+        "CATBOOST": {
+          "$ref": "#/$defs/ModelEligibilityRule"
+        }
+      },
+      "required": [
+        "GP",
+        "RF",
+        "LIGHTGBM",
+        "XGBOOST",
+        "CATBOOST"
+      ],
+      "title": "ModelEligibilityProfile",
+      "type": "object"
+    },
+    "ModelEligibilityRule": {
+      "additionalProperties": false,
+      "properties": {
+        "minSamples": {
+          "minimum": 1,
+          "title": "Minsamples",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "minSamples"
+      ],
+      "title": "ModelEligibilityRule",
+      "type": "object"
+    },
+    "ModelSelectionPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "tieNmaeTolerance": {
+          "default": 0.01,
+          "minimum": 0.0,
+          "title": "Tienmaetolerance",
+          "type": "number"
+        },
+        "modelTieBreakOrder": {
+          "items": {
+            "$ref": "#/$defs/ModelType"
+          },
+          "minItems": 5,
+          "title": "Modeltiebreakorder",
+          "type": "array"
+        }
+      },
+      "required": [
+        "modelTieBreakOrder"
+      ],
+      "title": "ModelSelectionPolicy",
+      "type": "object"
+    },
+    "ModelSelectionSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "eligibleModels": {
+          "items": {
+            "$ref": "#/$defs/ModelType"
+          },
+          "title": "Eligiblemodels",
+          "type": "array"
+        },
+        "skippedModels": {
+          "items": {
+            "$ref": "#/$defs/ModelType"
+          },
+          "title": "Skippedmodels",
+          "type": "array"
+        },
+        "failedModels": {
+          "items": {
+            "$ref": "#/$defs/ModelType"
+          },
+          "title": "Failedmodels",
+          "type": "array"
+        },
+        "candidateMetrics": {
+          "items": {
+            "$ref": "#/$defs/CandidateModelMetric"
+          },
+          "title": "Candidatemetrics",
+          "type": "array"
+        },
+        "championModel": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelType"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "selectionReason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Selectionreason"
+        }
+      },
+      "title": "ModelSelectionSummary",
+      "type": "object"
+    },
+    "ModelType": {
+      "enum": [
+        "LOGISTIC_REGRESSION",
+        "GAUSSIAN_PROCESS",
+        "RANDOM_FOREST",
+        "LIGHTGBM",
+        "XGBOOST",
+        "CATBOOST",
+        "ORDINAL_CUMULATIVE_LOGIT"
+      ],
+      "title": "ModelType",
+      "type": "string"
+    },
+    "OrdinalMetricSet": {
+      "additionalProperties": false,
+      "properties": {
+        "gradeMae": {
+          "minimum": 0.0,
+          "title": "Grademae",
+          "type": "number"
+        },
+        "plusMinusOneAccuracy": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Plusminusoneaccuracy",
+          "type": "number"
+        },
+        "spearman": {
+          "title": "Spearman",
+          "type": "number"
+        },
+        "confusionMatrix": {
+          "items": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "title": "Confusionmatrix",
+          "type": "array"
+        },
+        "intervalCoverage": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Intervalcoverage",
+          "type": "number"
+        },
+        "meanIntervalWidth": {
+          "minimum": 0.0,
+          "title": "Meanintervalwidth",
+          "type": "number"
+        }
+      },
+      "required": [
+        "gradeMae",
+        "plusMinusOneAccuracy",
+        "spearman",
+        "confusionMatrix",
+        "intervalCoverage",
+        "meanIntervalWidth"
+      ],
+      "title": "OrdinalMetricSet",
+      "type": "object"
+    },
+    "OrdinalPrediction": {
+      "additionalProperties": false,
+      "properties": {
+        "targetCode": {
+          "title": "Targetcode",
+          "type": "string"
+        },
+        "predictedClass": {
+          "title": "Predictedclass",
+          "type": "string"
+        },
+        "classProbabilities": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Classprobabilities",
+          "type": "object"
+        },
+        "lowerClass90": {
+          "title": "Lowerclass90",
+          "type": "string"
+        },
+        "upperClass90": {
+          "title": "Upperclass90",
+          "type": "string"
+        },
+        "scorerType": {
+          "const": "ORDINAL_CUMULATIVE_LOGIT",
+          "default": "ORDINAL_CUMULATIVE_LOGIT",
+          "title": "Scorertype",
+          "type": "string"
+        },
+        "applicabilityDomain": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApplicabilityDomainEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "targetCode",
+        "predictedClass",
+        "classProbabilities",
+        "lowerClass90",
+        "upperClass90"
+      ],
+      "title": "OrdinalPrediction",
+      "type": "object"
+    },
+    "OrdinalReadinessThreshold": {
+      "additionalProperties": false,
+      "properties": {
+        "minSamples": {
+          "default": 100,
+          "minimum": 1,
+          "title": "Minsamples",
+          "type": "integer"
+        },
+        "minSamplesPerObservedClass": {
+          "default": 10,
+          "minimum": 1,
+          "title": "Minsamplesperobservedclass",
+          "type": "integer"
+        },
+        "minGroups": {
+          "default": 12,
+          "minimum": 2,
+          "title": "Mingroups",
+          "type": "integer"
+        },
+        "maxGradeMae": {
+          "default": 1.0,
+          "minimum": 0.0,
+          "title": "Maxgrademae",
+          "type": "number"
+        },
+        "minPlusMinusOneAccuracy": {
+          "default": 0.85,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Minplusminusoneaccuracy",
+          "type": "number"
+        }
+      },
+      "title": "OrdinalReadinessThreshold",
+      "type": "object"
+    },
+    "OrdinalTrainingSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "orderedClasses": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Orderedclasses",
+          "type": "array"
+        },
+        "observedClasses": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Observedclasses",
+          "type": "array"
+        },
+        "lineageCv": {
+          "$ref": "#/$defs/OrdinalMetricSet"
+        },
+        "sheetCv": {
+          "$ref": "#/$defs/OrdinalMetricSet"
+        },
+        "classProbabilitiesSupported": {
+          "default": true,
+          "title": "Classprobabilitiessupported",
+          "type": "boolean"
+        },
+        "algorithm": {
+          "$ref": "#/$defs/AlgorithmMetadata"
+        },
+        "trainingTimeSeconds": {
+          "default": 0.0,
+          "minimum": 0.0,
+          "title": "Trainingtimeseconds",
+          "type": "number"
+        },
+        "predictionTimeSeconds": {
+          "default": 0.0,
+          "minimum": 0.0,
+          "title": "Predictiontimeseconds",
+          "type": "number"
+        }
+      },
+      "required": [
+        "orderedClasses",
+        "observedClasses",
+        "lineageCv",
+        "sheetCv",
+        "algorithm"
+      ],
+      "title": "OrdinalTrainingSummary",
+      "type": "object"
+    },
+    "PerClassMetric": {
+      "additionalProperties": false,
+      "properties": {
+        "precision": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Precision",
+          "type": "number"
+        },
+        "recall": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Recall",
+          "type": "number"
+        },
+        "f1": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "F1",
+          "type": "number"
+        },
+        "support": {
+          "minimum": 0,
+          "title": "Support",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "precision",
+        "recall",
+        "f1",
+        "support"
+      ],
+      "title": "PerClassMetric",
+      "type": "object"
+    },
+    "Prediction": {
+      "additionalProperties": false,
+      "properties": {
+        "targetCode": {
+          "title": "Targetcode",
+          "type": "string"
+        },
+        "expected": {
+          "title": "Expected",
+          "type": "number"
+        },
+        "lower": {
+          "title": "Lower",
+          "type": "number"
+        },
+        "upper": {
+          "title": "Upper",
+          "type": "number"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Unit"
+        },
+        "scorerType": {
+          "$ref": "#/$defs/ModelType"
+        },
+        "intervalMethod": {
+          "const": "CALIBRATED_CONFORMAL",
+          "default": "CALIBRATED_CONFORMAL",
+          "title": "Intervalmethod",
+          "type": "string"
+        },
+        "applicabilityDomain": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApplicabilityDomainEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "targetCode",
+        "expected",
+        "lower",
+        "upper",
+        "unit",
+        "scorerType"
+      ],
+      "title": "Prediction",
+      "type": "object"
+    },
+    "ProbabilityCalibrationPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "method": {
+          "default": "PLATT",
+          "enum": [
+            "PLATT",
+            "ISOTONIC"
+          ],
+          "title": "Method",
+          "type": "string"
+        },
+        "calibrationFolds": {
+          "default": 3,
+          "maximum": 5,
+          "minimum": 2,
+          "title": "Calibrationfolds",
+          "type": "integer"
+        },
+        "expectedCalibrationErrorBins": {
+          "default": 10,
+          "maximum": 50,
+          "minimum": 5,
+          "title": "Expectedcalibrationerrorbins",
+          "type": "integer"
+        }
+      },
+      "title": "ProbabilityCalibrationPolicy",
+      "type": "object"
+    },
+    "ProbabilityQuality": {
+      "additionalProperties": false,
+      "properties": {
+        "logLoss": {
+          "minimum": 0.0,
+          "title": "Logloss",
+          "type": "number"
+        },
+        "brierScore": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Brierscore"
+        },
+        "expectedCalibrationError": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Expectedcalibrationerror",
+          "type": "number"
+        }
+      },
+      "required": [
+        "logLoss",
+        "expectedCalibrationError"
+      ],
+      "title": "ProbabilityQuality",
+      "type": "object"
+    },
+    "ReadinessThresholdProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "development": {
+          "$ref": "#/$defs/DevelopmentReadinessThreshold"
+        },
+        "productionContinuous": {
+          "$ref": "#/$defs/ContinuousReadinessThreshold"
+        },
+        "productionOrdinal": {
+          "$ref": "#/$defs/OrdinalReadinessThreshold"
+        },
+        "productionBinary": {
+          "$ref": "#/$defs/BinaryReadinessThreshold"
+        },
+        "productionCategorical": {
+          "$ref": "#/$defs/CategoricalReadinessThreshold"
+        }
+      },
+      "title": "ReadinessThresholdProfile",
+      "type": "object"
+    },
+    "RecommendRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "contractVersion": {
+          "const": "formula-model.v1",
+          "default": "formula-model.v1",
+          "title": "Contractversion",
+          "type": "string"
+        },
+        "requestId": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Requestid",
+          "type": "string"
+        },
+        "taskProfileHash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Taskprofilehash",
+          "type": "string"
+        },
+        "snapshotHash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Snapshothash",
+          "type": "string"
+        },
+        "seed": {
+          "default": 20260903,
+          "title": "Seed",
+          "type": "integer"
+        },
+        "taskProfile": {
+          "$ref": "#/$defs/TaskProfile"
+        },
+        "modelBundleHash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Modelbundlehash",
+          "type": "string"
+        },
+        "modelBundle": {
+          "$ref": "#/$defs/ModelBundleRef"
+        },
+        "baselineFormula": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Baselineformula",
+          "type": "object"
+        },
+        "context": {
+          "additionalProperties": true,
+          "title": "Context",
+          "type": "object"
+        },
+        "targets": {
+          "items": {
+            "$ref": "#/$defs/RequestedTarget"
+          },
+          "minItems": 1,
+          "title": "Targets",
+          "type": "array"
+        },
+        "materialConstraints": {
+          "items": {
+            "$ref": "#/$defs/MaterialConstraint"
+          },
+          "title": "Materialconstraints",
+          "type": "array"
+        },
+        "count": {
+          "default": 4,
+          "maximum": 16,
+          "minimum": 1,
+          "title": "Count",
+          "type": "integer"
+        },
+        "recommendationMode": {
+          "$ref": "#/$defs/RecommendationMode",
+          "default": "EXPERIMENT_OPTIMIZATION"
+        },
+        "minimumPotentialDesirability": {
+          "default": 0.2,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Minimumpotentialdesirability",
+          "type": "number"
+        }
+      },
+      "required": [
+        "requestId",
+        "taskProfileHash",
+        "snapshotHash",
+        "taskProfile",
+        "modelBundleHash",
+        "modelBundle",
+        "baselineFormula",
+        "context",
+        "targets"
+      ],
+      "title": "RecommendRequest",
+      "type": "object"
+    },
+    "RecommendResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "contractVersion": {
+          "const": "formula-model.v1",
+          "default": "formula-model.v1",
+          "title": "Contractversion",
+          "type": "string"
+        },
+        "requestId": {
+          "title": "Requestid",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "READY",
+            "PARTIAL"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "modelBundleSha256": {
+          "title": "Modelbundlesha256",
+          "type": "string"
+        },
+        "candidates": {
+          "items": {
+            "$ref": "#/$defs/RecommendedCandidate"
+          },
+          "title": "Candidates",
+          "type": "array"
+        },
+        "missingStrategies": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Missingstrategies",
+          "type": "array"
+        },
+        "missingStrategyReasons": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Missingstrategyreasons",
+          "type": "object"
+        },
+        "unsupportedTargets": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Unsupportedtargets",
+          "type": "array"
+        },
+        "unavailableTargets": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Unavailabletargets",
+          "type": "array"
+        },
+        "recommendationMode": {
+          "$ref": "#/$defs/RecommendationMode",
+          "default": "EXPERIMENT_OPTIMIZATION"
+        },
+        "searchSpace": {
+          "$ref": "#/$defs/SearchSpaceStatistics"
+        },
+        "targetConflicts": {
+          "items": {
+            "$ref": "#/$defs/TargetConflict"
+          },
+          "title": "Targetconflicts",
+          "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Warnings",
+          "type": "array"
+        }
+      },
+      "required": [
+        "requestId",
+        "status",
+        "modelBundleSha256",
+        "candidates"
+      ],
+      "title": "RecommendResponse",
+      "type": "object"
+    },
+    "RecommendationMode": {
+      "enum": [
+        "FORMULA_PREDICTION",
+        "EXPERIMENT_OPTIMIZATION"
+      ],
+      "title": "RecommendationMode",
+      "type": "string"
+    },
+    "RecommendedCandidate": {
+      "additionalProperties": false,
+      "properties": {
+        "candidateId": {
+          "title": "Candidateid",
+          "type": "string"
+        },
+        "strategy": {
+          "enum": [
+            "CONTROL",
+            "CONSERVATIVE",
+            "BALANCED",
+            "EXPLORATORY"
+          ],
+          "title": "Strategy",
+          "type": "string"
+        },
+        "formula": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Formula",
+          "type": "object"
+        },
+        "predictions": {
+          "items": {
+            "$ref": "#/$defs/Prediction"
+          },
+          "title": "Predictions",
+          "type": "array"
+        },
+        "desirability": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Desirability",
+          "type": "number"
+        },
+        "l1DistanceFromBaseline": {
+          "minimum": 0.0,
+          "title": "L1Distancefrombaseline",
+          "type": "number"
+        },
+        "reasons": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Reasons",
+          "type": "array"
+        },
+        "recommendationMode": {
+          "$ref": "#/$defs/RecommendationMode",
+          "default": "EXPERIMENT_OPTIMIZATION"
+        },
+        "domainStatus": {
+          "$ref": "#/$defs/DomainStatus",
+          "default": "IN_DOMAIN"
+        },
+        "nearestTrainingDistance": {
+          "default": 0.0,
+          "minimum": 0.0,
+          "title": "Nearesttrainingdistance",
+          "type": "number"
+        },
+        "l1DistanceFromHistory": {
+          "default": 0.0,
+          "minimum": 0.0,
+          "title": "L1Distancefromhistory",
+          "type": "number"
+        },
+        "l1DistanceFromBatch": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "L1Distancefrombatch"
+        },
+        "conservativeDesirability": {
+          "default": 0.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Conservativedesirability",
+          "type": "number"
+        },
+        "explorationValue": {
+          "default": 0.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Explorationvalue",
+          "type": "number"
+        },
+        "formulaDifferences": {
+          "items": {
+            "$ref": "#/$defs/FormulaDifference"
+          },
+          "title": "Formuladifferences",
+          "type": "array"
+        },
+        "targetTradeoffs": {
+          "items": {
+            "$ref": "#/$defs/TargetTradeoff"
+          },
+          "title": "Targettradeoffs",
+          "type": "array"
+        },
+        "conflicts": {
+          "items": {
+            "$ref": "#/$defs/TargetConflict"
+          },
+          "title": "Conflicts",
+          "type": "array"
+        },
+        "controlSource": {
+          "anyOf": [
+            {
+              "enum": [
+                "EXACT_BASELINE",
+                "NEAREST_FEASIBLE_BASELINE"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Controlsource"
+        },
+        "selectionReason": {
+          "default": "",
+          "title": "Selectionreason",
+          "type": "string"
+        },
+        "risks": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Risks",
+          "type": "array"
+        }
+      },
+      "required": [
+        "candidateId",
+        "strategy",
+        "formula",
+        "predictions",
+        "desirability",
+        "l1DistanceFromBaseline"
+      ],
+      "title": "RecommendedCandidate",
+      "type": "object"
+    },
+    "RequestedTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/$defs/TargetMode"
+        },
+        "mandatory": {
+          "default": false,
+          "title": "Mandatory",
+          "type": "boolean"
+        },
+        "weight": {
+          "default": 1.0,
+          "exclusiveMinimum": 0.0,
+          "title": "Weight",
+          "type": "number"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Value"
+        },
+        "minimum": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Minimum"
+        },
+        "maximum": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Maximum"
+        },
+        "tolerance": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tolerance"
+        }
+      },
+      "required": [
+        "code",
+        "mode"
+      ],
+      "title": "RequestedTarget",
+      "type": "object"
+    },
+    "ScoreRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "contractVersion": {
+          "const": "formula-model.v1",
+          "default": "formula-model.v1",
+          "title": "Contractversion",
+          "type": "string"
+        },
+        "requestId": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Requestid",
+          "type": "string"
+        },
+        "taskProfileHash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Taskprofilehash",
+          "type": "string"
+        },
+        "snapshotHash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Snapshothash",
+          "type": "string"
+        },
+        "seed": {
+          "default": 20260903,
+          "title": "Seed",
+          "type": "integer"
+        },
+        "taskProfile": {
+          "$ref": "#/$defs/TaskProfile"
+        },
+        "modelBundleHash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Modelbundlehash",
+          "type": "string"
+        },
+        "modelBundle": {
+          "$ref": "#/$defs/ModelBundleRef"
+        },
+        "rows": {
+          "items": {
+            "$ref": "#/$defs/ScoreRow"
+          },
+          "maxItems": 20000,
+          "minItems": 1,
+          "title": "Rows",
+          "type": "array"
+        },
+        "targetCodes": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Targetcodes",
+          "type": "array"
+        }
+      },
+      "required": [
+        "requestId",
+        "taskProfileHash",
+        "snapshotHash",
+        "taskProfile",
+        "modelBundleHash",
+        "modelBundle",
+        "rows",
+        "targetCodes"
+      ],
+      "title": "ScoreRequest",
+      "type": "object"
+    },
+    "ScoreResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "contractVersion": {
+          "const": "formula-model.v1",
+          "default": "formula-model.v1",
+          "title": "Contractversion",
+          "type": "string"
+        },
+        "requestId": {
+          "title": "Requestid",
+          "type": "string"
+        },
+        "modelBundleSha256": {
+          "title": "Modelbundlesha256",
+          "type": "string"
+        },
+        "rows": {
+          "items": {
+            "$ref": "#/$defs/ScoredRow"
+          },
+          "title": "Rows",
+          "type": "array"
+        },
+        "unsupportedTargets": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Unsupportedtargets",
+          "type": "array"
+        }
+      },
+      "required": [
+        "requestId",
+        "modelBundleSha256",
+        "rows"
+      ],
+      "title": "ScoreResponse",
+      "type": "object"
+    },
+    "ScoreRow": {
+      "additionalProperties": false,
+      "properties": {
+        "rowId": {
+          "title": "Rowid",
+          "type": "string"
+        },
+        "formula": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Formula",
+          "type": "object"
+        },
+        "context": {
+          "additionalProperties": true,
+          "title": "Context",
+          "type": "object"
+        }
+      },
+      "required": [
+        "rowId",
+        "formula",
+        "context"
+      ],
+      "title": "ScoreRow",
+      "type": "object"
+    },
+    "ScoredRow": {
+      "additionalProperties": false,
+      "properties": {
+        "rowId": {
+          "title": "Rowid",
+          "type": "string"
+        },
+        "predictions": {
+          "items": {
+            "$ref": "#/$defs/Prediction"
+          },
+          "title": "Predictions",
+          "type": "array"
+        },
+        "ordinalPredictions": {
+          "items": {
+            "$ref": "#/$defs/OrdinalPrediction"
+          },
+          "title": "Ordinalpredictions",
+          "type": "array"
+        },
+        "classificationPredictions": {
+          "items": {
+            "$ref": "#/$defs/ClassificationPrediction"
+          },
+          "title": "Classificationpredictions",
+          "type": "array"
+        },
+        "domainStatus": {
+          "$ref": "#/$defs/DomainStatus",
+          "default": "IN_DOMAIN"
+        },
+        "modelUsable": {
+          "default": true,
+          "title": "Modelusable",
+          "type": "boolean"
+        },
+        "fallbackReasons": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Fallbackreasons",
+          "type": "array"
+        }
+      },
+      "required": [
+        "rowId",
+        "predictions"
+      ],
+      "title": "ScoredRow",
+      "type": "object"
+    },
+    "SearchSpaceStatistics": {
+      "additionalProperties": false,
+      "properties": {
+        "rawCandidateCount": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Rawcandidatecount",
+          "type": "integer"
+        },
+        "materialConstraintRejectedCount": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Materialconstraintrejectedcount",
+          "type": "integer"
+        },
+        "duplicateCandidateCount": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Duplicatecandidatecount",
+          "type": "integer"
+        },
+        "acceptedAfterConstraintsCount": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Acceptedafterconstraintscount",
+          "type": "integer"
+        },
+        "outOfDomainRejectedCount": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Outofdomainrejectedcount",
+          "type": "integer"
+        },
+        "nearBoundaryCount": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Nearboundarycount",
+          "type": "integer"
+        },
+        "inDomainCount": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Indomaincount",
+          "type": "integer"
+        },
+        "finalScoreableCandidateCount": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Finalscoreablecandidatecount",
+          "type": "integer"
+        },
+        "baybeShortlistCount": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Baybeshortlistcount",
+          "type": "integer"
+        },
+        "coverageRatio": {
+          "default": 0.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Coverageratio",
+          "type": "number"
+        },
+        "insufficientSpaceReasons": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Insufficientspacereasons",
+          "type": "array"
+        }
+      },
+      "title": "SearchSpaceStatistics",
+      "type": "object"
+    },
+    "SnapshotArtifacts": {
+      "additionalProperties": false,
+      "properties": {
+        "manifest": {
+          "$ref": "#/$defs/ArtifactReadRef"
+        },
+        "measurements": {
+          "$ref": "#/$defs/ArtifactReadRef"
+        },
+        "sourceMap": {
+          "$ref": "#/$defs/ArtifactReadRef"
+        }
+      },
+      "required": [
+        "manifest",
+        "measurements",
+        "sourceMap"
+      ],
+      "title": "SnapshotArtifacts",
+      "type": "object"
+    },
+    "SnapshotValidationResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "contractVersion": {
+          "const": "formula-model.v1",
+          "default": "formula-model.v1",
+          "title": "Contractversion",
+          "type": "string"
+        },
+        "requestId": {
+          "title": "Requestid",
+          "type": "string"
+        },
+        "snapshotId": {
+          "title": "Snapshotid",
+          "type": "string"
+        },
+        "snapshotHash": {
+          "title": "Snapshothash",
+          "type": "string"
+        },
+        "valid": {
+          "title": "Valid",
+          "type": "boolean"
+        },
+        "productionEligible": {
+          "title": "Productioneligible",
+          "type": "boolean"
+        },
+        "rows": {
+          "minimum": 0,
+          "title": "Rows",
+          "type": "integer"
+        },
+        "groups": {
+          "minimum": 0,
+          "title": "Groups",
+          "type": "integer"
+        },
+        "sourceSheets": {
+          "minimum": 0,
+          "title": "Sourcesheets",
+          "type": "integer"
+        },
+        "sourceSheetStats": {
+          "$ref": "#/$defs/SourceSheetStats"
+        },
+        "dataNature": {
+          "title": "Datanature",
+          "type": "string"
+        },
+        "snapshotPurpose": {
+          "title": "Snapshotpurpose",
+          "type": "string"
+        },
+        "targets": {
+          "items": {
+            "$ref": "#/$defs/TargetCoverage"
+          },
+          "title": "Targets",
+          "type": "array"
+        },
+        "errors": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Errors",
+          "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Warnings",
+          "type": "array"
+        }
+      },
+      "required": [
+        "requestId",
+        "snapshotId",
+        "snapshotHash",
+        "valid",
+        "productionEligible",
+        "rows",
+        "groups",
+        "sourceSheets",
+        "sourceSheetStats",
+        "dataNature",
+        "snapshotPurpose",
+        "targets"
+      ],
+      "title": "SnapshotValidationResponse",
+      "type": "object"
+    },
+    "SourceSheetStats": {
+      "additionalProperties": false,
+      "properties": {
+        "totalSheets": {
+          "minimum": 0,
+          "title": "Totalsheets",
+          "type": "integer"
+        },
+        "sheetsWithMultipleLineages": {
+          "minimum": 0,
+          "title": "Sheetswithmultiplelineages",
+          "type": "integer"
+        },
+        "maxLineagesPerSheet": {
+          "minimum": 0,
+          "title": "Maxlineagespersheet",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "totalSheets",
+        "sheetsWithMultipleLineages",
+        "maxLineagesPerSheet"
+      ],
+      "title": "SourceSheetStats",
+      "type": "object"
+    },
+    "StabilitySummary": {
+      "additionalProperties": false,
+      "properties": {
+        "method": {
+          "const": "HELD_OUT_GROUP_FOLD_DISPERSION",
+          "default": "HELD_OUT_GROUP_FOLD_DISPERSION",
+          "title": "Method",
+          "type": "string"
+        },
+        "lineageCv": {
+          "$ref": "#/$defs/GroupStabilitySummary"
+        },
+        "sheetCv": {
+          "$ref": "#/$defs/GroupStabilitySummary"
+        }
+      },
+      "required": [
+        "lineageCv",
+        "sheetCv"
+      ],
+      "title": "StabilitySummary",
+      "type": "object"
+    },
+    "TargetConflict": {
+      "additionalProperties": false,
+      "properties": {
+        "targetCodes": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 2,
+          "title": "Targetcodes",
+          "type": "array"
+        },
+        "conflictType": {
+          "enum": [
+            "PARETO_TRADE_OFF",
+            "NO_JOINT_IMPROVEMENT"
+          ],
+          "title": "Conflicttype",
+          "type": "string"
+        },
+        "explanation": {
+          "title": "Explanation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "targetCodes",
+        "conflictType",
+        "explanation"
+      ],
+      "title": "TargetConflict",
+      "type": "object"
+    },
+    "TargetCoverage": {
+      "additionalProperties": false,
+      "properties": {
+        "targetCode": {
+          "title": "Targetcode",
+          "type": "string"
+        },
+        "valueType": {
+          "$ref": "#/$defs/ValueType"
+        },
+        "validRows": {
+          "minimum": 0,
+          "title": "Validrows",
+          "type": "integer"
+        },
+        "missingRows": {
+          "minimum": 0,
+          "title": "Missingrows",
+          "type": "integer"
+        },
+        "groups": {
+          "minimum": 0,
+          "title": "Groups",
+          "type": "integer"
+        },
+        "sourceGroups": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Sourcegroups",
+          "type": "integer"
+        },
+        "status": {
+          "enum": [
+            "SUPPORTED",
+            "INSUFFICIENT_DATA",
+            "UNSUPPORTED_TARGET_TYPE",
+            "CENSORED_MODEL_NOT_IMPLEMENTED",
+            "MODEL_NOT_READY"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "targetCode",
+        "valueType",
+        "validRows",
+        "missingRows",
+        "groups",
+        "status"
+      ],
+      "title": "TargetCoverage",
+      "type": "object"
+    },
+    "TargetMode": {
+      "enum": [
+        "AT_LEAST",
+        "AT_MOST",
+        "MATCH",
+        "RANGE",
+        "MAXIMIZE",
+        "MINIMIZE"
+      ],
+      "title": "TargetMode",
+      "type": "string"
+    },
+    "TargetReadiness": {
+      "additionalProperties": false,
+      "properties": {
+        "thresholdProfile": {
+          "$ref": "#/$defs/ReadinessThresholdProfile"
+        },
+        "checks": {
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "title": "Checks",
+          "type": "object"
+        },
+        "blockingReasons": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Blockingreasons",
+          "type": "array"
+        }
+      },
+      "required": [
+        "thresholdProfile"
+      ],
+      "title": "TargetReadiness",
+      "type": "object"
+    },
+    "TargetSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "targetKey": {
+          "title": "Targetkey",
+          "type": "string"
+        },
+        "valueType": {
+          "$ref": "#/$defs/ValueType"
+        },
+        "direction": {
+          "$ref": "#/$defs/Direction"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unit"
+        },
+        "testMethod": {
+          "title": "Testmethod",
+          "type": "string"
+        },
+        "substrate": {
+          "title": "Substrate",
+          "type": "string"
+        },
+        "mandatory": {
+          "default": false,
+          "title": "Mandatory",
+          "type": "boolean"
+        },
+        "weight": {
+          "default": 1.0,
+          "exclusiveMinimum": 0.0,
+          "title": "Weight",
+          "type": "number"
+        },
+        "ordinalValues": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ordinalvalues"
+        },
+        "ordinalLabels": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ordinallabels"
+        },
+        "classLabels": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Classlabels"
+        },
+        "positiveClass": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Positiveclass"
+        },
+        "decisionThreshold": {
+          "default": 0.5,
+          "exclusiveMaximum": 1.0,
+          "exclusiveMinimum": 0.0,
+          "title": "Decisionthreshold",
+          "type": "number"
+        },
+        "censoredColumn": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Censoredcolumn"
+        },
+        "censorTypeColumn": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Censortypecolumn"
+        }
+      },
+      "required": [
+        "code",
+        "targetKey",
+        "valueType",
+        "direction",
+        "testMethod",
+        "substrate"
+      ],
+      "title": "TargetSpec",
+      "type": "object"
+    },
+    "TargetTradeoff": {
+      "additionalProperties": false,
+      "properties": {
+        "targetCode": {
+          "title": "Targetcode",
+          "type": "string"
+        },
+        "outcome": {
+          "enum": [
+            "IMPROVES",
+            "TRADES_OFF",
+            "UNCHANGED",
+            "NO_BASELINE"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "expected": {
+          "title": "Expected",
+          "type": "number"
+        },
+        "baselineExpected": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Baselineexpected"
+        },
+        "desirabilityDelta": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Desirabilitydelta"
+        },
+        "explanation": {
+          "title": "Explanation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "targetCode",
+        "outcome",
+        "expected",
+        "explanation"
+      ],
+      "title": "TargetTradeoff",
+      "type": "object"
+    },
+    "TargetTrainingResult": {
+      "additionalProperties": false,
+      "properties": {
+        "targetCode": {
+          "title": "Targetcode",
+          "type": "string"
+        },
+        "targetType": {
+          "$ref": "#/$defs/ValueType"
+        },
+        "status": {
+          "enum": [
+            "READY",
+            "INSUFFICIENT_DATA",
+            "UNSUPPORTED_TARGET_TYPE",
+            "MODEL_NOT_READY",
+            "FAILED"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "scorerType": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelType"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "metrics": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MetricSet"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "lineageCv": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MetricSet"
+            },
+            {
+              "$ref": "#/$defs/BinaryMetricSet"
+            },
+            {
+              "$ref": "#/$defs/CategoricalMetricSet"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lineagecv"
+        },
+        "sheetCv": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MetricSet"
+            },
+            {
+              "$ref": "#/$defs/BinaryMetricSet"
+            },
+            {
+              "$ref": "#/$defs/CategoricalMetricSet"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sheetcv"
+        },
+        "baselineNmae": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Baselinenmae"
+        },
+        "baselineImprovement": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Baselineimprovement"
+        },
+        "sourceGroupAuditNmae": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourcegroupauditnmae"
+        },
+        "baseline": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BaselineSummary"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "modelSelection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelSelectionSummary"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "uncertainty": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UncertaintySummary"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "ordinal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OrdinalTrainingSummary"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "classification": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClassificationTrainingSummary"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "readiness": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TargetReadiness"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "validationManifest": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ValidationManifest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "stability": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StabilitySummary"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "applicabilityDomain": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApplicabilityDomainSummary"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "validRows": {
+          "default": 0,
+          "title": "Validrows",
+          "type": "integer"
+        },
+        "groups": {
+          "default": 0,
+          "title": "Groups",
+          "type": "integer"
+        },
+        "sourceGroups": {
+          "default": 0,
+          "title": "Sourcegroups",
+          "type": "integer"
+        },
+        "developmentEligible": {
+          "default": false,
+          "title": "Developmenteligible",
+          "type": "boolean"
+        },
+        "productionEligible": {
+          "default": false,
+          "title": "Productioneligible",
+          "type": "boolean"
+        },
+        "reasons": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Reasons",
+          "type": "array"
+        }
+      },
+      "required": [
+        "targetCode",
+        "targetType",
+        "status"
+      ],
+      "title": "TargetTrainingResult",
+      "type": "object"
+    },
+    "TaskProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "contractVersion": {
+          "const": "formula-model.v1",
+          "default": "formula-model.v1",
+          "title": "Contractversion",
+          "type": "string"
+        },
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "version": {
+          "title": "Version",
+          "type": "string"
+        },
+        "schemaHash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Schemahash",
+          "type": "string"
+        },
+        "ruleVersion": {
+          "title": "Ruleversion",
+          "type": "string"
+        },
+        "formula": {
+          "$ref": "#/$defs/FormulaSpec"
+        },
+        "contextFeatures": {
+          "items": {
+            "$ref": "#/$defs/ContextFeatureSpec"
+          },
+          "title": "Contextfeatures",
+          "type": "array"
+        },
+        "targets": {
+          "items": {
+            "$ref": "#/$defs/TargetSpec"
+          },
+          "title": "Targets",
+          "type": "array"
+        },
+        "validation": {
+          "$ref": "#/$defs/ValidationPolicy"
+        },
+        "readinessThresholds": {
+          "$ref": "#/$defs/ReadinessThresholdProfile"
+        },
+        "modelEligibility": {
+          "$ref": "#/$defs/ModelEligibilityProfile"
+        },
+        "modelSelection": {
+          "$ref": "#/$defs/ModelSelectionPolicy"
+        },
+        "classificationModelEligibility": {
+          "$ref": "#/$defs/ClassificationModelEligibilityProfile"
+        },
+        "classificationModelSelection": {
+          "$ref": "#/$defs/ClassificationModelSelectionPolicy"
+        },
+        "probabilityCalibration": {
+          "$ref": "#/$defs/ProbabilityCalibrationPolicy"
+        },
+        "applicabilityDomain": {
+          "$ref": "#/$defs/ApplicabilityDomainPolicy"
+        },
+        "candidate": {
+          "$ref": "#/$defs/CandidatePolicy"
+        }
+      },
+      "required": [
+        "code",
+        "version",
+        "schemaHash",
+        "ruleVersion",
+        "formula",
+        "contextFeatures",
+        "targets",
+        "modelEligibility",
+        "modelSelection"
+      ],
+      "title": "TaskProfile",
+      "type": "object"
+    },
+    "TrainRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "contractVersion": {
+          "const": "formula-model.v1",
+          "default": "formula-model.v1",
+          "title": "Contractversion",
+          "type": "string"
+        },
+        "requestId": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Requestid",
+          "type": "string"
+        },
+        "taskProfileHash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Taskprofilehash",
+          "type": "string"
+        },
+        "snapshotHash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Snapshothash",
+          "type": "string"
+        },
+        "seed": {
+          "default": 20260903,
+          "title": "Seed",
+          "type": "integer"
+        },
+        "taskProfile": {
+          "$ref": "#/$defs/TaskProfile"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/SnapshotArtifacts"
+        },
+        "output": {
+          "$ref": "#/$defs/ArtifactWriteRef"
+        }
+      },
+      "required": [
+        "requestId",
+        "taskProfileHash",
+        "snapshotHash",
+        "taskProfile",
+        "snapshot",
+        "output"
+      ],
+      "title": "TrainRequest",
+      "type": "object"
+    },
+    "TrainResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "contractVersion": {
+          "const": "formula-model.v1",
+          "default": "formula-model.v1",
+          "title": "Contractversion",
+          "type": "string"
+        },
+        "requestId": {
+          "title": "Requestid",
+          "type": "string"
+        },
+        "snapshotId": {
+          "title": "Snapshotid",
+          "type": "string"
+        },
+        "snapshotHash": {
+          "title": "Snapshothash",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "READY",
+            "PARTIAL",
+            "REJECTED"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "modelBundleSha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Modelbundlesha256",
+          "type": "string"
+        },
+        "modelBundleSize": {
+          "minimum": 0,
+          "title": "Modelbundlesize",
+          "type": "integer"
+        },
+        "uploaded": {
+          "title": "Uploaded",
+          "type": "boolean"
+        },
+        "targets": {
+          "items": {
+            "$ref": "#/$defs/TargetTrainingResult"
+          },
+          "title": "Targets",
+          "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Warnings",
+          "type": "array"
+        }
+      },
+      "required": [
+        "requestId",
+        "snapshotId",
+        "snapshotHash",
+        "status",
+        "modelBundleSha256",
+        "modelBundleSize",
+        "uploaded",
+        "targets"
+      ],
+      "title": "TrainResponse",
+      "type": "object"
+    },
+    "UncertaintySummary": {
+      "additionalProperties": false,
+      "properties": {
+        "method": {
+          "const": "NESTED_GROUP_CONFORMAL_ABSOLUTE_RESIDUAL",
+          "default": "NESTED_GROUP_CONFORMAL_ABSOLUTE_RESIDUAL",
+          "title": "Method",
+          "type": "string"
+        },
+        "rawCoverage": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawcoverage"
+        },
+        "calibratedCoverage": {
+          "title": "Calibratedcoverage",
+          "type": "number"
+        },
+        "calibratedRadius": {
+          "minimum": 0.0,
+          "title": "Calibratedradius",
+          "type": "number"
+        }
+      },
+      "required": [
+        "calibratedCoverage",
+        "calibratedRadius"
+      ],
+      "title": "UncertaintySummary",
+      "type": "object"
+    },
+    "ValidateSnapshotRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "contractVersion": {
+          "const": "formula-model.v1",
+          "default": "formula-model.v1",
+          "title": "Contractversion",
+          "type": "string"
+        },
+        "requestId": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Requestid",
+          "type": "string"
+        },
+        "taskProfileHash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Taskprofilehash",
+          "type": "string"
+        },
+        "snapshotHash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Snapshothash",
+          "type": "string"
+        },
+        "seed": {
+          "default": 20260903,
+          "title": "Seed",
+          "type": "integer"
+        },
+        "taskProfile": {
+          "$ref": "#/$defs/TaskProfile"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/SnapshotArtifacts"
+        }
+      },
+      "required": [
+        "requestId",
+        "taskProfileHash",
+        "snapshotHash",
+        "taskProfile",
+        "snapshot"
+      ],
+      "title": "ValidateSnapshotRequest",
+      "type": "object"
+    },
+    "ValidationManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "effectiveRowCount": {
+          "minimum": 0,
+          "title": "Effectiverowcount",
+          "type": "integer"
+        },
+        "effectiveRowIdsSha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Effectiverowidssha256",
+          "type": "string"
+        },
+        "lineageFoldsSha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Lineagefoldssha256",
+          "type": "string"
+        },
+        "sheetFoldsSha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sheetfoldssha256",
+          "type": "string"
+        },
+        "lineageFoldSizes": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Lineagefoldsizes",
+          "type": "array"
+        },
+        "sheetFoldSizes": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Sheetfoldsizes",
+          "type": "array"
+        }
+      },
+      "required": [
+        "effectiveRowCount",
+        "effectiveRowIdsSha256",
+        "lineageFoldsSha256",
+        "sheetFoldsSha256"
+      ],
+      "title": "ValidationManifest",
+      "type": "object"
+    },
+    "ValidationPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "groupColumn": {
+          "default": "formula_lineage_group",
+          "title": "Groupcolumn",
+          "type": "string"
+        },
+        "sourceGroupColumn": {
+          "default": "source_sheet",
+          "title": "Sourcegroupcolumn",
+          "type": "string"
+        },
+        "folds": {
+          "default": 5,
+          "maximum": 10,
+          "minimum": 2,
+          "title": "Folds",
+          "type": "integer"
+        },
+        "intervalLevel": {
+          "default": 0.9,
+          "exclusiveMaximum": 1.0,
+          "exclusiveMinimum": 0.5,
+          "title": "Intervallevel",
+          "type": "number"
+        },
+        "randomKfoldDiagnostic": {
+          "default": false,
+          "title": "Randomkfolddiagnostic",
+          "type": "boolean"
+        }
+      },
+      "title": "ValidationPolicy",
+      "type": "object"
+    },
+    "ValueType": {
+      "enum": [
+        "CONTINUOUS",
+        "ORDINAL",
+        "BINARY",
+        "CATEGORICAL",
+        "CENSORED_COUNT"
+      ],
+      "title": "ValueType",
+      "type": "string"
+    }
+  },
+  "anyOf": [
+    {
+      "$ref": "#/$defs/ValidateSnapshotRequest"
+    },
+    {
+      "$ref": "#/$defs/TrainRequest"
+    },
+    {
+      "$ref": "#/$defs/ScoreRequest"
+    },
+    {
+      "$ref": "#/$defs/RecommendRequest"
+    },
+    {
+      "$ref": "#/$defs/SnapshotValidationResponse"
+    },
+    {
+      "$ref": "#/$defs/TrainResponse"
+    },
+    {
+      "$ref": "#/$defs/ScoreResponse"
+    },
+    {
+      "$ref": "#/$defs/RecommendResponse"
+    },
+    {
+      "$ref": "#/$defs/ErrorResponse"
+    }
+  ]
+}

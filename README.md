@@ -6,13 +6,15 @@
 
 - `jsd-aird-web`：React 管理端基础外壳。
 - `jsd-aird-api`：Java/Spring Boot 模块化单体。
-- `compose.yaml`：提供 Linux/CI 可选的 PostgreSQL 18/pgvector 基线；Windows 本地开发不依赖 Docker。
+- `jsd-aird-ai`：T07-PRE 独立 Python 配方模型计算服务，已完成A.2～A.5算法门禁、适用域、实验优化与分类目标Pipeline。
+- `compose.yaml`：提供 PostgreSQL 18/pgvector、MinIO、Worker 与 AI 计算服务的容器编排。
 
-当前版本是基础设施可运行脚手架，不包含登录、权限、模板、实验、生产、库存、知识库、AI、文件存储或异步任务等业务功能。
+T07-A 仅新增算法、适用域、不可变制品和跨语言契约，不接入 T03–T06 尚未合并的客户接口和数据库结构。
 
 ## 环境要求
 
 - Java 21
+- Python 3.12（仅在本机运行 `jsd-aird-ai` 时需要）
 - Node.js 20.19 或更高的 Node 20 版本
 - npm 10+
 - Windows：本机 PostgreSQL 16、17 或 18，以及匹配版本的 pgvector 扩展（推荐 PostgreSQL 18）
@@ -57,6 +59,7 @@ Copy-Item .env.example .env
 - 前端：http://localhost:5173
 - 后端健康检查：http://localhost:8080/actuator/health
 - Swagger UI：http://localhost:8080/swagger-ui.html
+- AI 服务探活：http://localhost:8090/internal/v1/health/ready
 
 ## 校验
 
@@ -111,7 +114,6 @@ Spring Modulith 使用显式注解检测。业务模块只有在根包的 `packa
 
 ## 当前边界
 
-- PostgreSQL/Flyway 仅创建 `vector` 扩展和 11 个 Schema。
-- `export` 是 Java 模块，但没有独立数据库 Schema。
-- 不提供自定义业务 HTTP API，系统探活使用 Spring Boot Actuator。
-- 不创建 Worker、Python 服务、RabbitMQ、Redis、MinIO、Kubernetes 或 Helm。
+- T07-A Python 服务不能访问 PostgreSQL，也不对浏览器暴露客户接口。
+- T07 只冻结 `formula-model.v1` 传输契约；正式持久化、异步任务和 T06 降级集成属于 T07-B。
+- Python 返回的候选必须在 T07-B 由 Java 规则引擎终审，不能自动发布配方或修改正式实验。

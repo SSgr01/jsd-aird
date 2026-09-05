@@ -20,6 +20,10 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -30,6 +34,7 @@ import com.jsd.aird.kb.domain.DocumentParser;
 import com.jsd.aird.kb.domain.OcrMode;
 import com.jsd.aird.ops.application.port.FileStorageFacade;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -63,6 +68,9 @@ public final class MineruDocumentParser implements DocumentParser {
     private final FileStorageFacade storage;
     private final MineruDocumentAdapter adapter;
     private final PdfOcrDecider ocrDecider = new PdfOcrDecider();
+    private final PdfPartitioner pdfPartitioner = new PdfPartitioner();
+    private final ExecutorService precisePartExecutor = Executors.newFixedThreadPool(2,
+            Thread.ofPlatform().daemon().name("mineru-part-", 0).factory());
 
     public MineruDocumentParser(
             @Value("${app.ai.mineru.enabled:true}") boolean enabled,
@@ -98,6 +106,11 @@ public final class MineruDocumentParser implements DocumentParser {
         log.info("MinerU configuration: enabled={}, preciseConfigured={}, fallbackCapability={}, defaultOcrMode={}",
                 enabled, StringUtils.hasText(token), systemParsingPolicy.agentFallbackEnabled(),
                 systemParsingPolicy.defaultOcrMode());
+    }
+
+    @PreDestroy
+    void shutdownPartExecutor() {
+        precisePartExecutor.shutdownNow();
     }
 
     @Override
@@ -165,6 +178,51 @@ public final class MineruDocumentParser implements DocumentParser {
 
     private ParsedDocument parsePrecise(Path sourceFile, String fileName, ParseContext context,
                                         OcrMode requestedMode, PdfOcrDecider.Decision decision) {
+        PdfPartitioner.PartitionedPdf partitioned;
+        try {
+            partitioned = pdfPartitioner.partition(sourceFile);
+        } catch (IOException exception) {
+            // Keep provider-side validation authoritative for malformed or non-standard PDFs.
+            // PDFBox is only used to decide whether a valid document needs splitting.
+            log.debug("PDF page counting unavailable; submitting original file to MinerU: fileName={}", fileName);
+            return parsePreciseSingle(sourceFile, fileName, context, requestedMode, decision);
+        }
+        try (partitioned) {
+            if (!partitioned.split()) {
+                return parsePreciseSingle(sourceFile, fileName, context, requestedMode, decision);
+            }
+            var futures = partitioned.parts().stream().map(part -> CompletableFuture.supplyAsync(() -> {
+                // MinerU validates the file type from the submitted name. Keep
+                // the PDF extension after adding the internal part marker;
+                // names such as "document.pdf.part-001" are rejected as an
+                // unsupported file type by the provider.
+                var partName = splitPdfFileName(fileName, part.index());
+                return parsePreciseSingle(part.path(), partName, context, requestedMode, decision);
+            }, precisePartExecutor)).toList();
+            var parsedParts = new ArrayList<ParsedDocument>(futures.size());
+            for (var future : futures) {
+                try { parsedParts.add(future.join()); }
+                catch (CompletionException exception) {
+                    var cause = exception.getCause();
+                    if (cause instanceof RuntimeException runtime) throw runtime;
+                    throw new MineruException("MinerU 分片解析失败", null, "PART_FAILURE", null,
+                            false, false, cause);
+                }
+            }
+            return mergePreciseParts(fileName, context, partitioned, parsedParts);
+        }
+    }
+
+    static String splitPdfFileName(String fileName, int partIndex) {
+        var safe = safeFileName(fileName);
+        var extension = ".pdf";
+        var base = safe.toLowerCase(Locale.ROOT).endsWith(extension)
+                ? safe.substring(0, safe.length() - extension.length()) : safe;
+        return base + ".part-" + String.format(Locale.ROOT, "%03d", partIndex) + extension;
+    }
+
+    private ParsedDocument parsePreciseSingle(Path sourceFile, String fileName, ParseContext context,
+                                              OcrMode requestedMode, PdfOcrDecider.Decision decision) {
         var request = new LinkedHashMap<String, Object>();
         request.put("files", List.of(Map.of(
                 "name", safeFileName(fileName),
@@ -198,7 +256,7 @@ public final class MineruDocumentParser implements DocumentParser {
             var resultFileId = persistResult(context, fileName, ".mineru.zip", "application/zip",
                     "KB_MINERU_RESULT", resultFile);
             var adapted = adapter.parsePrecise(resultFile, fileName, resultFileId, Map.of());
-            var artifacts = persistZipArtifacts(context, fileName, resultFile);
+            var artifacts = persistZipArtifacts(context, fileName, resultFile, resultFileId);
             var blocks = attachAssetFileIds(adapted.blocks(), artifacts.assetFileIds());
             var metadata = baseMetadata(adapted.metadata(), requestedMode, decision);
             metadata.put("taskId", batchId);
@@ -212,6 +270,148 @@ public final class MineruDocumentParser implements DocumentParser {
             throw MineruException.adapter("MinerU 结果临时文件处理失败", exception);
         } finally {
             deleteQuietly(resultFile);
+        }
+    }
+
+    private ParsedDocument mergePreciseParts(String fileName, ParseContext context,
+                                             PdfPartitioner.PartitionedPdf partitioned,
+                                             List<ParsedDocument> parsedParts) {
+        var blocks = new ArrayList<DocumentParser.TextBlock>();
+        var seenBlocks = new HashSet<String>();
+        var tasks = new ArrayList<String>();
+        var resultFileIds = new ArrayList<String>();
+        var markdownFileIds = new ArrayList<String>();
+        var partMetadata = new ArrayList<Map<String, Object>>();
+        var sourceTables = new ArrayList<DocumentParser.SourceTable>();
+        var pagesByNumber = new LinkedHashMap<Integer, Map<String, Object>>();
+        var resultAssets = new ArrayList<Map<String, Object>>();
+        for (var index = 0; index < parsedParts.size(); index++) {
+            var part = partitioned.parts().get(index);
+            var parsed = parsedParts.get(index);
+            var taskId = parsed.providerTaskId();
+            if (StringUtils.hasText(taskId)) tasks.add(taskId);
+            var resultFileId = parsed.metadata().get("resultFileId");
+            if (resultFileId != null) resultFileIds.add(String.valueOf(resultFileId));
+            var markdownFileId = parsed.metadata().get("markdownFileId");
+            if (markdownFileId != null) markdownFileIds.add(String.valueOf(markdownFileId));
+            var partPages = parsed.metadata().get("pages");
+            if (partPages instanceof List<?> pageList) {
+                for (var value : pageList) {
+                    if (!(value instanceof Map<?, ?> rawPage)) continue;
+                    var page = new LinkedHashMap<String, Object>();
+                    rawPage.forEach((key, item) -> page.put(String.valueOf(key), item));
+                    var partPageNo = page.get("pageNo");
+                    if (partPageNo instanceof Number number) {
+                        var sourcePage = part.pageOffset() + number.intValue();
+                        page.put("pageNo", sourcePage);
+                        pagesByNumber.putIfAbsent(sourcePage, Map.copyOf(page));
+                    }
+                }
+            }
+            var partAssets = parsed.metadata().get("resultAssets");
+            if (partAssets instanceof List<?> assetList) {
+                for (var value : assetList) {
+                    if (value instanceof Map<?, ?> rawAsset) {
+                        var asset = new LinkedHashMap<String, Object>();
+                        rawAsset.forEach((key, item) -> asset.put(String.valueOf(key), item));
+                        resultAssets.add(Map.copyOf(asset));
+                    }
+                }
+            }
+            var partInfo = new LinkedHashMap<String, Object>();
+            partInfo.put("partIndex", part.index());
+            partInfo.put("sourceStartPage", part.sourceStartPage());
+            partInfo.put("sourceEndPage", part.sourceEndPage());
+            partInfo.put("logicalStartPage", part.logicalStartPage());
+            partInfo.put("logicalEndPage", part.logicalEndPage());
+            if (StringUtils.hasText(taskId)) partInfo.put("taskId", taskId);
+            if (resultFileId != null) partInfo.put("resultFileId", String.valueOf(resultFileId));
+            if (markdownFileId != null) partInfo.put("markdownFileId", String.valueOf(markdownFileId));
+            partMetadata.add(Map.copyOf(partInfo));
+            for (var block : parsed.blocks()) {
+                var remapped = remapBlock(block, part);
+                if (isDuplicateOverlapBlock(remapped, part, seenBlocks)) continue;
+                blocks.add(remapped);
+            }
+            sourceTables.addAll(parsed.sourceTables());
+        }
+        if (blocks.stream().noneMatch(block -> block.content() != null && !block.content().isBlank())) {
+            throw MineruException.contract("MinerU 分片结果没有非空有效内容", tasks.isEmpty() ? null : tasks.getFirst());
+        }
+        var metadata = new LinkedHashMap<String, Object>();
+        var first = parsedParts.isEmpty() ? Map.<String, Object>of() : parsedParts.getFirst().metadata();
+        metadata.putAll(first);
+        metadata.put("pageCount", partitioned.originalPageCount());
+        metadata.put("originalPageCount", partitioned.originalPageCount());
+        metadata.put("pages", List.copyOf(pagesByNumber.values()));
+        metadata.put("resultAssets", List.copyOf(resultAssets));
+        metadata.put("split", true);
+        metadata.put("splitPageLimit", PdfPartitioner.MAX_PAGES_PER_PART);
+        metadata.put("splitOverlapPages", PdfPartitioner.OVERLAP_PAGES);
+        metadata.put("parts", List.copyOf(partMetadata));
+        metadata.put("taskIds", List.copyOf(tasks));
+        metadata.put("resultFileIds", List.copyOf(resultFileIds));
+        metadata.put("markdownFileIds", List.copyOf(markdownFileIds));
+        if (!resultFileIds.isEmpty()) metadata.put("resultFileId", resultFileIds.getFirst());
+        var mergedMarkdown = persistMergedMarkdown(context, fileName, markdownFileIds);
+        if (mergedMarkdown != null) metadata.put("markdownFileId", mergedMarkdown.toString());
+        var parserTaskId = tasks.isEmpty() ? null : String.join(",", tasks);
+        return new ParsedDocument(List.copyOf(blocks), "mineru-precision-v2-split", parserTaskId,
+                metadata, List.copyOf(sourceTables));
+    }
+
+    private DocumentParser.TextBlock remapBlock(DocumentParser.TextBlock block, PdfPart part) {
+        if (block == null) return null;
+        var originalPage = block.pageNo() == null ? null : part.pageOffset() + block.pageNo();
+        var attributes = new LinkedHashMap<>(block.attributes());
+        if (originalPage != null) {
+            attributes.put("pageNo", originalPage);
+            attributes.put("sourcePage", originalPage);
+            attributes.put("partPageNo", block.pageNo());
+        }
+        attributes.put("partIndex", part.index());
+        attributes.put("partSourceStartPage", part.sourceStartPage());
+        attributes.put("partSourceEndPage", part.sourceEndPage());
+        return new DocumentParser.TextBlock(originalPage, block.section(), block.content(), block.sheetName(),
+                block.cellRange(), block.paragraphId(), block.bbox(), block.startTimeMs(), block.endTimeMs(),
+                block.confidence(), attributes);
+    }
+
+    private boolean isDuplicateOverlapBlock(DocumentParser.TextBlock block, PdfPart part,
+                                             Set<String> seenBlocks) {
+        if (block == null || block.pageNo() == null) return false;
+        var key = block.pageNo() + "|" + String.valueOf(block.section()) + "|"
+                + String.valueOf(block.content()).strip() + "|" + block.bbox();
+        if (part.overlapsPreviousPart() && block.pageNo() < part.logicalStartPage()
+                && seenBlocks.contains(key)) return true;
+        seenBlocks.add(key);
+        return false;
+    }
+
+    private UUID persistMergedMarkdown(ParseContext context, String fileName, List<String> markdownFileIds) {
+        if (context == null || context.organizationId() == null || context.actorId() == null
+                || markdownFileIds == null || markdownFileIds.isEmpty()) return null;
+        Path merged = null;
+        try {
+            merged = Files.createTempFile("mineru-merged-", ".md");
+            try (var output = Files.newOutputStream(merged)) {
+                for (var value : markdownFileIds) {
+                    UUID fileId;
+                    try { fileId = UUID.fromString(value); }
+                    catch (IllegalArgumentException ignored) { continue; }
+                    try (var stored = storage.open(context.organizationId(), fileId);
+                         var input = stored.stream()) {
+                        input.transferTo(output);
+                    }
+                    output.write("\n\n".getBytes(StandardCharsets.UTF_8));
+                }
+            }
+            return persistResult(context, fileName, ".mineru.full.md", "text/markdown",
+                    "KB_MINERU_MARKDOWN_RESULT", merged);
+        } catch (Exception exception) {
+            throw MineruException.adapter("MinerU 合并 Markdown 持久化失败", exception);
+        } finally {
+            deleteQuietly(merged);
         }
     }
 
@@ -294,7 +494,8 @@ public final class MineruDocumentParser implements DocumentParser {
         }
     }
 
-    private ZipArtifacts persistZipArtifacts(ParseContext context, String fileName, Path zipPath) {
+    private ZipArtifacts persistZipArtifacts(ParseContext context, String fileName, Path zipPath,
+                                             UUID resultFileId) {
         if (context == null || context.organizationId() == null || context.actorId() == null) {
             return new ZipArtifacts(Map.of(), null, List.of());
         }
@@ -345,8 +546,13 @@ public final class MineruDocumentParser implements DocumentParser {
                             "KB_MINERU_RESULT_ASSET", input);
                     var assetId = staged.fileId();
                     assetIds.put(path, assetId);
-                    assets.add(Map.of("assetFileId", assetId.toString(), "entryPath", path,
-                            "contentType", contentType, "size", staged.size()));
+                    var asset = new LinkedHashMap<String, Object>();
+                    asset.put("assetFileId", assetId.toString());
+                    asset.put("entryPath", path);
+                    asset.put("contentType", contentType);
+                    asset.put("size", staged.size());
+                    if (resultFileId != null) asset.put("resultFileId", resultFileId.toString());
+                    assets.add(Map.copyOf(asset));
                 }
             }
             return new ZipArtifacts(Map.copyOf(assetIds), markdownFileId, List.copyOf(assets));
@@ -573,7 +779,7 @@ public final class MineruDocumentParser implements DocumentParser {
         return value.strip().replaceAll("/+$", "");
     }
 
-    private String safeFileName(String value) { return StringUtils.hasText(value) ? value : "document.pdf"; }
+    private static String safeFileName(String value) { return StringUtils.hasText(value) ? value : "document.pdf"; }
 
     private void deleteQuietly(Path value) {
         if (value != null) try { Files.deleteIfExists(value); } catch (IOException ignored) { }

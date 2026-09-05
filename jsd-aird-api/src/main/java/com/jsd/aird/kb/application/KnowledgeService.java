@@ -339,7 +339,7 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         var file = storage.open(actor.organizationId(), command.fileId());
         try {
             var duplicate = governance.exactMatches(actor.organizationId(), file.sha256());
-            if (!duplicate.isEmpty()) {
+            if (!duplicate.isEmpty() && duplicate.stream().noneMatch(match -> documentId.equals(match.documentId()))) {
                 throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,
                         "相同文件已存在：" + duplicate.getFirst().title() + " V" + duplicate.getFirst().versionNo());
             }

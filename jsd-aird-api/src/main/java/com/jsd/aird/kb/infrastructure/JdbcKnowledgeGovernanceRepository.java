@@ -279,11 +279,10 @@ public class JdbcKnowledgeGovernanceRepository implements KnowledgeGovernanceRep
                 SELECT p.id, p.document_id, p.document_version_id, p.parse_run_id, p.review_revision_id,
                        p.publication_no, p.status, coalesce(g.status, 'PENDING') AS ai_status, p.published_at,
                        v.file_object_id, v.original_name, v.content_type, v.size_bytes,
-                       pr.source_document_jsonb, rr.confirmed_document_jsonb, rr.excluded_review_node_ids
+                       rr.confirmed_document_jsonb, rr.excluded_review_node_ids
                 FROM kb.publication p
                 JOIN kb.document_version v ON v.id = p.document_version_id
                 JOIN kb.document_review_revision rr ON rr.id = p.review_revision_id
-                JOIN kb.document_parse_run pr ON pr.id = rr.parse_run_id
                 LEFT JOIN kb.document_ai_grant g ON g.document_id = p.document_id
                 WHERE p.organization_id = ? AND p.document_id = ?
                 """ + publicationFilter, (rs, ignored) -> {
@@ -291,8 +290,7 @@ public class JdbcKnowledgeGovernanceRepository implements KnowledgeGovernanceRep
             var sourceNodes = sourceNodes(publication.parseRunId());
             return new PublishedContentView(publication, rs.getObject("file_object_id", UUID.class),
                     rs.getString("original_name"), rs.getString("content_type"), rs.getLong("size_bytes"),
-                    read(rs.getString("source_document_jsonb")), sourceNodes,
-                    read(rs.getString("confirmed_document_jsonb")),
+                    sourceNodes, read(rs.getString("confirmed_document_jsonb")),
                     uuidList(rs.getString("excluded_review_node_ids")));
         }, args).stream().findFirst();
     }

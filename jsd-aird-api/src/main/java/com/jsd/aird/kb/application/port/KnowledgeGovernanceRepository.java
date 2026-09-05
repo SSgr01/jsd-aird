@@ -78,8 +78,8 @@ public interface KnowledgeGovernanceRepository {
                       ReviewRevisionView reviewRevision, List<ParseIssueView> issues,
                       List<String> tags) { }
     record PublishedContentView(PublicationRow publication, UUID fileObjectId, String originalName,
-                                String contentType, long size, JsonNode sourceDocument,
-                                List<SourceNodeView> sourceNodes, JsonNode confirmedDocument,
+                                String contentType, long size, List<SourceNodeView> sourceNodes,
+                                JsonNode confirmedDocument,
                                 List<UUID> excludedReviewNodeIds) { }
     record TableCellView(int rowNo, int columnNo, String value, boolean patched) { }
     record TableWindow(UUID sourceTableId, String sheetKey, String sheetName, int rowCount,

@@ -1194,7 +1194,7 @@ public class DocxStructureParser implements OfficeStructureParser, WordDocumentP
         if (footers.size() > 0) documentStyle.put("defaultFooterId", footers.fieldNames().next());
         snapshot.set("wordImport", objectMapper.createObjectNode()
                 .put("sourceFormat", "DOCX")
-                .put("parserVersion", "docx-univer-v5")
+                .put("parserVersion", "docx-univer-v6")
                 .put("sourceHash", sha256(packageBytes))
                 .put("paragraphCount", count(document, "p"))
                 .put("tableCount", count(document, "tbl"))
@@ -1605,7 +1605,10 @@ public class DocxStructureParser implements OfficeStructureParser, WordDocumentP
             if (stream.length() > start) {
                 var runNode = objectMapper.createObjectNode()
                         .put("st", start)
-                        .put("ed", stream.length() - 1);
+                        // Univer text runs use an exclusive end offset. Using
+                        // the last character index leaves every run's final
+                        // character without its imported Word style.
+                        .put("ed", stream.length());
                 var style = styleCatalog.runStyle(inheritedStyle, properties);
                 if (!style.isEmpty()) runNode.set("ts", style);
                 textRuns.add(runNode);

@@ -12,7 +12,7 @@ import {
   UniverDocsCorePreset,
 } from '@univerjs/preset-docs-core';
 import UniverPresetDocsCoreZhCN from '@univerjs/preset-docs-core/locales/zh-CN';
-import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from 'react';
 
 import { generateUUID } from '@/utils/uuid';
 
@@ -24,6 +24,7 @@ import type {
   EditorHandle,
   TemplateBinding,
 } from './types';
+import { upgradeLegacyDocxTextRunEnds } from './word-snapshot-compatibility';
 
 interface Props {
   snapshot: Record<string, unknown>;
@@ -43,13 +44,14 @@ export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverD
   },
   ref,
 ) {
+  const normalizedSnapshot = useMemo(() => normalizeDocumentSnapshot(snapshot), [snapshot]);
   const containerRef = useRef<HTMLDivElement>(null);
   const univerRef = useRef<ReturnType<typeof createUniver>['univer']>();
   const apiRef = useRef<FUniver>();
-  const sourceSnapshotRef = useRef(snapshot);
+  const sourceSnapshotRef = useRef(normalizedSnapshot as unknown as Record<string, unknown>);
   const bindingsRef = useRef(bindings);
   const callbacksRef = useRef({ onDirty, onEditorValue });
-  sourceSnapshotRef.current = snapshot;
+  sourceSnapshotRef.current = normalizedSnapshot as unknown as Record<string, unknown>;
   bindingsRef.current = bindings;
   callbacksRef.current = { onDirty, onEditorValue };
 
@@ -117,7 +119,7 @@ export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverD
         ownedApi = univerAPI;
         univerRef.current = univer;
         apiRef.current = univerAPI;
-        const document = univerAPI.createUniverDoc(normalizeDocumentSnapshot(snapshot));
+        const document = univerAPI.createUniverDoc(normalizedSnapshot);
         lastDocumentSignature = documentContentSignature(document.getSnapshot());
         // Docs disables paragraph commands until it has an active text range.
         // Put the editable surface at a valid caret position so alignment and
@@ -125,8 +127,8 @@ export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverD
         // The first call can happen before the document skeleton has rendered,
         // so repeat it after the first layout pass.
         if (editable) {
-          const body = snapshot.body && typeof snapshot.body === 'object'
-            ? snapshot.body as { dataStream?: unknown }
+          const body = normalizedSnapshot.body && typeof normalizedSnapshot.body === 'object'
+            ? normalizedSnapshot.body as { dataStream?: unknown }
             : undefined;
           const dataStream = typeof body?.dataStream === 'string' ? body.dataStream : '';
           const initialOffset = Math.max(0, dataStream.length - 2);
@@ -209,7 +211,7 @@ export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverD
         if (host.parentNode) host.parentNode.removeChild(host);
       }, 32);
     };
-  }, [snapshot, editable]);
+  }, [normalizedSnapshot, editable]);
 
   useImperativeHandle(
     ref,
@@ -314,6 +316,7 @@ function toEditorText(value: unknown) {
 
 function normalizeDocumentSnapshot(snapshot: Record<string, unknown>) {
   const result = structuredClone(snapshot) as unknown as IDocumentData;
+  upgradeLegacyDocxTextRunEnds(result as unknown as Record<string, unknown>);
   // Univer's segment-aware document commands expect these collections to be
   // present even when the imported DOCX has no headers or footers. Keep them
   // empty for the body-only case so native tables, lists and styles can use

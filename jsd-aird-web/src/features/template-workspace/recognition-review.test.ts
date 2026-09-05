@@ -3,7 +3,11 @@ import { describe, expect, it } from 'vitest';
 import type { RecognitionReview, RecognitionReviewItem } from '@/services/templates/template-api';
 
 import { readFieldModel } from './field-model';
-import { acceptRecognitionReviewItem, mergeRecognitionReview } from './recognition-review';
+import {
+  acceptRecognitionReviewItem,
+  isRecognitionRegionRoot,
+  mergeRecognitionReview,
+} from './recognition-review';
 
 describe('recognition review draft merge', () => {
   it('shows pending results as candidates without adding formal schema or mappings', () => {
@@ -59,8 +63,24 @@ describe('recognition review draft merge', () => {
       },
     });
     const merged = mergeRecognitionReview(schema, [], readFieldModel(schema, []), createReview(root));
+    expect(isRecognitionRegionRoot(root)).toBe(true);
     expect(merged.model.fields).toHaveLength(0);
     expect(merged.mapping).toHaveLength(0);
+  });
+
+  it('does not classify a repeat child as a structural root', () => {
+    const child = createItem({
+      child: true,
+      payload: {
+        ...createItem().payload,
+        kind: 'SCALAR',
+        mappingKind: 'REPEAT_FIELD',
+        suggestionLevel: 'CHILD',
+        parentBindingId: 'parent-binding',
+      },
+    });
+
+    expect(isRecognitionRegionRoot(child)).toBe(false);
   });
 
   it('replaces candidates from an older recognition run instead of accumulating them', () => {

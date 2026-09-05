@@ -61,6 +61,7 @@ import {
 } from '@/features/template-workspace/group-normalizer';
 import {
   acceptRecognitionReviewItem,
+  isRecognitionRegionRoot,
   mergeRecognitionReview,
 } from '@/features/template-workspace/recognition-review';
 import { getAtPath, setAtPath } from '@/features/template-workspace/path-utils';
@@ -1006,6 +1007,7 @@ export function TemplateWorkspacePage() {
     if (!recognitionReview) return;
     const targets = recognitionReview.items.filter(
       (item) => (item.status === 'PENDING' || item.status === 'CONFLICT')
+        && !isRecognitionRegionRoot(item)
         && !requiresServerStructureConfirmation(item, recognitionReview),
     );
     if (!targets.length) {
@@ -2281,6 +2283,7 @@ function RecognitionStatusBar({
             !editable ||
             !review?.items.some((item) =>
               (item.status === 'PENDING' || item.status === 'CONFLICT')
+                && !isRecognitionRegionRoot(item)
                 && !requiresServerStructureConfirmation(item, review),
             )
           }

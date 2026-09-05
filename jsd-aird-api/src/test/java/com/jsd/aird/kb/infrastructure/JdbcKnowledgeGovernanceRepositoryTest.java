@@ -35,6 +35,25 @@ class JdbcKnowledgeGovernanceRepositoryTest {
     }
 
     @Test
+    void publishedContentDoesNotLoadTheUnusedSourceDocumentSnapshot() {
+        var jdbc = mock(JdbcTemplate.class);
+        when(jdbc.query(any(String.class), any(org.springframework.jdbc.core.RowMapper.class),
+                any(Object[].class))).thenReturn(java.util.List.of());
+        var repository = new JdbcKnowledgeGovernanceRepository(
+                jdbc, mock(ObjectMapper.class), mock(StructuredDocumentCodec.class));
+
+        repository.publishedContent(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID());
+
+        var sql = ArgumentCaptor.forClass(String.class);
+        verify(jdbc).query(sql.capture(), any(org.springframework.jdbc.core.RowMapper.class),
+                any(Object[].class));
+        assertThat(sql.getValue())
+                .contains("rr.confirmed_document_jsonb")
+                .doesNotContain("source_document_jsonb")
+                .doesNotContain("JOIN kb.document_parse_run");
+    }
+
+    @Test
     void revokeChecksExistingGrantWithoutRequiringActiveLifecycle() {
         var jdbc = mock(JdbcTemplate.class);
         when(jdbc.queryForObject(any(String.class), eq(Boolean.class), any(Object[].class)))

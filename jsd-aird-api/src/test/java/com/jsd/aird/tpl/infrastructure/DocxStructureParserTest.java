@@ -47,6 +47,34 @@ class DocxStructureParserTest {
     }
 
     @Test
+    void usesExclusiveTextRunEndOffsetsSoTheLastCharacterKeepsItsStyle() throws Exception {
+        var title = "生产试制申请记录";
+        var source = minimalDocx(
+                """
+                <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                  <w:body>
+                    <w:p><w:r><w:rPr><w:b/><w:sz w:val="40"/></w:rPr><w:t>生产试制申请记录</w:t></w:r></w:p>
+                    <w:sectPr/>
+                  </w:body>
+                </w:document>
+                """,
+                """
+                <w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>
+                """
+        );
+
+        var snapshot = parser.parse(new ByteArrayInputStream(source)).initialEditorSnapshot();
+        var titleRun = snapshot.path("body").path("textRuns").get(0);
+
+        assertThat(snapshot.path("body").path("dataStream").asText()).startsWith(title);
+        assertThat(titleRun.path("st").asInt()).isZero();
+        assertThat(titleRun.path("ed").asInt()).isEqualTo(title.length());
+        assertThat(titleRun.path("ts").path("fs").asInt()).isEqualTo(20);
+        assertThat(snapshot.path("wordImport").path("parserVersion").asText())
+                .isEqualTo("docx-univer-v6");
+    }
+
+    @Test
     void recognizesCustomOutlineStylesAndGenericTableSectionHeadings() throws Exception {
         var source = minimalDocx(
                 """

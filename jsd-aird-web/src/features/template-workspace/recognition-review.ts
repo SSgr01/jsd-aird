@@ -43,7 +43,7 @@ export function mergeRecognitionReview(
   const activeByKey = new Map<string, RecognitionReviewItem>();
   review.items
     .filter((item) => item.status !== 'IGNORED')
-    .filter((item) => !isRegionRoot(item) && !isRuntimeSlot(item.payload))
+    .filter((item) => !isRecognitionRegionRoot(item) && !isRuntimeSlot(item.payload))
     .filter((item) => !isProtocolRejected(item.payload) && !isAuditOnly(item.payload))
     .forEach((item) => {
       const key = effectiveFieldKey(item);
@@ -59,7 +59,7 @@ export function mergeRecognitionReview(
     // kept in RecognitionReview.regions for the review panel; importing them
     // into fieldModel here made “基本信息区域/重复记录区域” appear as array
     // fields and allowed the properties tab to edit a structure as a field.
-    if (isRegionRoot(item) || isRuntimeSlot(item.payload)) continue;
+    if (isRecognitionRegionRoot(item) || isRuntimeSlot(item.payload)) continue;
     if (isProtocolRejected(item.payload) || isAuditOnly(item.payload)) continue;
     const existingIndex = nextModel.fields.findIndex((field) =>
       fieldMatchesIdentity(field, {
@@ -335,7 +335,7 @@ function isProtocolRejected(payload: RecognitionReviewItem['payload']) {
     || payload.pendingReason === 'PROTOCOL_REVIEW_REQUIRED';
 }
 
-function isRegionRoot(item: RecognitionReviewItem) {
+export function isRecognitionRegionRoot(item: RecognitionReviewItem) {
   const kind = item.payload.kind === 'SCALAR'
     && item.payload.blockType === 'FORM_REGION'
     && item.payload.role === 'REPEAT_REGION'

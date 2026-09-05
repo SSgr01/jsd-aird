@@ -46,4 +46,35 @@ describe('knowledge API', () => {
       },
     );
   });
+
+  it('uses a large-document timeout for published content', async () => {
+    httpMock.get.mockResolvedValue({ data: { data: { publication: { id: 'publication-1' } } } });
+
+    await knowledgeApi.publishedContent('document-1', 'publication-1');
+
+    expect(httpMock.get).toHaveBeenCalledWith(
+      '/api/v1/knowledge/documents/document-1/published-content',
+      { params: { publicationId: 'publication-1' }, timeout: 120_000 },
+    );
+  });
+
+  it('deduplicates and reuses a recently loaded original file', async () => {
+    const blob = new Blob(['knowledge-content'], { type: 'application/pdf' });
+    httpMock.get.mockResolvedValue({ data: blob });
+
+    const [first, second] = await Promise.all([
+      knowledgeApi.contentBlob('document-cache-test', 'version-1'),
+      knowledgeApi.contentBlob('document-cache-test', 'version-1'),
+    ]);
+    const third = await knowledgeApi.contentBlob('document-cache-test', 'version-1');
+
+    expect(first).toBe(blob);
+    expect(second).toBe(blob);
+    expect(third).toBe(blob);
+    expect(httpMock.get).toHaveBeenCalledTimes(1);
+    expect(httpMock.get).toHaveBeenCalledWith(
+      '/api/v1/knowledge/documents/document-cache-test/versions/version-1/content',
+      { responseType: 'blob', timeout: 120_000 },
+    );
+  });
 });

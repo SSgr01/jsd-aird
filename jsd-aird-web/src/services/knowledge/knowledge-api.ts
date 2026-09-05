@@ -23,7 +23,7 @@ export interface ReviewRevision { id: string; parseRunId: string; revisionNo: nu
 export interface KnowledgeReview { documentId: string; title: string; libraryScope: 'INTERNAL' | 'EXTERNAL'; categoryId?: string; categoryName?: string; lifecycleStatus: string; versionId: string; versionNo: number; fileObjectId: string; originalName: string; contentType: string; size: number; processingStatus: string; reviewStatus: string; sourceInfo: Record<string, unknown>; parseRun?: ParseRun; sourceNodes: SourceNode[]; reviewRevision?: ReviewRevision; issues: ParseIssue[]; tags: string[] }
 export interface ReviewQueueItem { documentId: string; title: string; versionId: string; versionNo: number; originalName: string; processingStatus: string; reviewStatus: string; reviewRevisionStatus?: ReviewRevisionStatus; reviewRevision: number; categoryName?: string; updatedAt: string }
 export interface Publication { id: string; documentId: string; versionId: string; parseRunId: string; reviewRevisionId: string; publicationNo: number; status: string; aiStatus: AiStatus; publishedAt: string }
-export interface PublishedContent { publication: Publication; fileObjectId: string; originalName: string; contentType: string; size: number; sourceDocument: StructuredDocument; sourceNodes: SourceNode[]; confirmedDocument: StructuredDocument; excludedReviewNodeIds: string[] }
+export interface PublishedContent { publication: Publication; fileObjectId: string; originalName: string; contentType: string; size: number; sourceNodes: SourceNode[]; confirmedDocument: StructuredDocument; excludedReviewNodeIds: string[] }
 export interface IndexBuildView { documentId: string; versionId: string; reviewRevisionId: string; status: 'BUILDING' }
 export interface BatchResult { documentId: string; success: boolean; errorCode?: string; message?: string }
 export interface IssueAction { issueId: string; status: 'OPEN' | 'RESOLVED' | 'IGNORED'; resolution?: string }
@@ -35,6 +35,29 @@ const reviewPayload = (review: KnowledgeReview, issueActions: IssueAction[] = []
   return { documentId: review.documentId, versionId: review.versionId, reviewRevisionId: review.reviewRevision.id, lockVersion: review.reviewRevision.lockVersion, basePublicationId: review.reviewRevision.basePublicationId, title: review.title, libraryScope: review.libraryScope, categoryId: review.categoryId, tags: review.tags, confirmedDocument: review.reviewRevision.confirmedDocument, excludedReviewNodeIds: review.reviewRevision.excludedReviewNodeIds, issueActions };
 };
 
+const LARGE_DOCUMENT_TIMEOUT_MS = 120_000;
+const MAX_CACHED_CONTENT_BYTES = 64 * 1024 * 1024;
+let recentContent: { path: string; blob: Blob } | undefined;
+const contentRequests = new Map<string, Promise<Blob>>();
+
+function loadContentBlob(path: string): Promise<Blob> {
+  if (recentContent?.path === path) return Promise.resolve(recentContent.blob);
+  const pending = contentRequests.get(path);
+  if (pending) return pending;
+
+  const request = httpClient.get<Blob>(path, {
+    responseType: 'blob',
+    timeout: LARGE_DOCUMENT_TIMEOUT_MS,
+  }).then((response) => {
+    if (response.data.size <= MAX_CACHED_CONTENT_BYTES) {
+      recentContent = { path, blob: response.data };
+    }
+    return response.data;
+  }).finally(() => contentRequests.delete(path));
+  contentRequests.set(path, request);
+  return request;
+}
+
 export const knowledgeApi = {
   async list(params: { keyword?: string; status?: string; scope?: string; categoryId?: string; lifecycleStatus?: string; reviewStatus?: string; projectId?: string; page?: number; size?: number } = {}) { const response = await httpClient.get<ApiResponse<PageResponse<KnowledgeDocument>>>('/api/v1/knowledge/documents', { params }); return response.data.data; },
   async categories(scope?: 'INTERNAL' | 'EXTERNAL') { const response = await httpClient.get<ApiResponse<KnowledgeCategory[]>>('/api/v1/knowledge/categories', { params: scope ? { scope } : undefined }); return response.data.data; },
@@ -44,22 +67,22 @@ export const knowledgeApi = {
   async assignCategory(documentId: string, categoryId: string) { await httpClient.put(`/api/v1/knowledge/documents/${documentId}/category`, { categoryId }); },
   async rename(id: string, title: string) { const response = await httpClient.put<ApiResponse<KnowledgeDocument>>(`/api/v1/knowledge/documents/${id}`, { title }); return response.data.data; },
   async remove(id: string) { await httpClient.delete(`/api/v1/knowledge/documents/${id}`); },
-  async exportDocuments(documentIds: string[]) { const response = await httpClient.post<Blob>('/api/v1/knowledge/documents/export', { documentIds }, { responseType: 'blob' }); return response.data; },
+  async exportDocuments(documentIds: string[]) { const response = await httpClient.post<Blob>('/api/v1/knowledge/documents/export', { documentIds }, { responseType: 'blob', timeout: LARGE_DOCUMENT_TIMEOUT_MS }); return response.data; },
   async get(id: string) { const response = await httpClient.get<ApiResponse<KnowledgeDocument>>(`/api/v1/knowledge/documents/${id}`); return response.data.data; },
   async processing(id: string) { const response = await httpClient.get<ApiResponse<KnowledgeProcessing>>(`/api/v1/knowledge/documents/${id}/processing`); return response.data.data; },
   async versions(id: string) { const response = await httpClient.get<ApiResponse<KnowledgeVersion[]>>(`/api/v1/knowledge/documents/${id}/versions`); return response.data.data; },
-  async contentBlob(documentId: string, versionId?: string) { const path = versionId ? `/api/v1/knowledge/documents/${documentId}/versions/${versionId}/content` : `/api/v1/knowledge/documents/${documentId}/content`; const response = await httpClient.get<Blob>(path, { responseType: 'blob' }); return response.data; },
+  async contentBlob(documentId: string, versionId?: string) { const path = versionId ? `/api/v1/knowledge/documents/${documentId}/versions/${versionId}/content` : `/api/v1/knowledge/documents/${documentId}/content`; return loadContentBlob(path); },
   async grant(id: string, action: 'APPROVE' | 'REJECT' | 'REVOKE', reason?: string) { const response = await httpClient.post<ApiResponse<KnowledgeDocument>>(`/api/v1/knowledge/documents/${id}/ai-grant`, { action, reason }); return response.data.data; },
   async preflight(fileId: string, categoryId: string) { const response = await httpClient.post<ApiResponse<UploadPreflight>>('/api/v1/knowledge/uploads/preflight', { fileId, categoryId }); return response.data.data; },
   async createGoverned(input: { fileId: string; title?: string; libraryScope: string; categoryId: string; tags?: string[]; resolution?: 'NEW_DOCUMENT' | 'NEW_VERSION'; targetDocumentId?: string; sourceInfo?: Record<string, unknown>; projectRelations?: Array<{ projectId: string; stageId?: string; taskId?: string }> }) { const response = await httpClient.post<ApiResponse<KnowledgeDocument>>('/api/v1/knowledge/documents', input); return response.data.data; },
   async reviewQueue(status?: string) { const response = await httpClient.get<ApiResponse<ReviewQueueItem[]>>('/api/v1/knowledge/review-queue', { params: status ? { status } : undefined }); return response.data.data; },
-  async review(documentId: string, versionId: string) { const response = await httpClient.get<ApiResponse<KnowledgeReview>>(`/api/v1/knowledge/documents/${documentId}/versions/${versionId}/review`); return response.data.data; },
-  async saveReview(review: KnowledgeReview, issueActions?: IssueAction[]) { const response = await httpClient.put<ApiResponse<KnowledgeReview>>(`/api/v1/knowledge/documents/${review.documentId}/versions/${review.versionId}/review`, reviewPayload(review, issueActions)); return response.data.data; },
+  async review(documentId: string, versionId: string) { const response = await httpClient.get<ApiResponse<KnowledgeReview>>(`/api/v1/knowledge/documents/${documentId}/versions/${versionId}/review`, { timeout: LARGE_DOCUMENT_TIMEOUT_MS }); return response.data.data; },
+  async saveReview(review: KnowledgeReview, issueActions?: IssueAction[]) { const response = await httpClient.put<ApiResponse<KnowledgeReview>>(`/api/v1/knowledge/documents/${review.documentId}/versions/${review.versionId}/review`, reviewPayload(review, issueActions), { timeout: LARGE_DOCUMENT_TIMEOUT_MS }); return response.data.data; },
   async publish(review: KnowledgeReview) { if (!review.reviewRevision) throw new Error('当前没有可发布的校对版本'); const revision = review.reviewRevision; const response = await httpClient.post<ApiResponse<IndexBuildView>>(`/api/v1/knowledge/documents/${review.documentId}/versions/${review.versionId}/publish`, { reviewRevisionId: revision.id, lockVersion: revision.lockVersion, basePublicationId: revision.basePublicationId }); return response.data.data; },
-  async createRevision(documentId: string, basePublicationId: string) { const response = await httpClient.post<ApiResponse<KnowledgeReview>>(`/api/v1/knowledge/documents/${documentId}/revisions`, { basePublicationId }); return response.data.data; },
+  async createRevision(documentId: string, basePublicationId: string) { const response = await httpClient.post<ApiResponse<KnowledgeReview>>(`/api/v1/knowledge/documents/${documentId}/revisions`, { basePublicationId }, { timeout: LARGE_DOCUMENT_TIMEOUT_MS }); return response.data.data; },
   async reject(review: KnowledgeReview, reason: string) { if (!review.reviewRevision) throw new Error('当前没有可驳回的校对版本'); await httpClient.post(`/api/v1/knowledge/documents/${review.documentId}/versions/${review.versionId}/reject`, { reviewRevisionId: review.reviewRevision.id, lockVersion: review.reviewRevision.lockVersion, reason }); },
   async reparse(review: KnowledgeReview) { const response = await httpClient.post<ApiResponse<KnowledgeDocument>>(`/api/v1/knowledge/documents/${review.documentId}/versions/${review.versionId}/reparse`, { reviewRevisionId: review.reviewRevision?.id ?? null, lockVersion: review.reviewRevision?.lockVersion ?? null }); return response.data.data; },
-  async publishedContent(documentId: string, publicationId?: string) { const response = await httpClient.get<ApiResponse<PublishedContent>>(`/api/v1/knowledge/documents/${documentId}/published-content`, { params: publicationId ? { publicationId } : undefined }); return response.data.data; },
+  async publishedContent(documentId: string, publicationId?: string) { const response = await httpClient.get<ApiResponse<PublishedContent>>(`/api/v1/knowledge/documents/${documentId}/published-content`, { params: publicationId ? { publicationId } : undefined, timeout: LARGE_DOCUMENT_TIMEOUT_MS }); return response.data.data; },
   async reviewTable(documentId: string, versionId: string, reviewRevisionId: string, sourceTableId: string, params: { rowOffset?: number; rowLimit?: number; columnOffset?: number; columnLimit?: number } = {}) { const response = await httpClient.get<ApiResponse<TableWindow>>(`/api/v1/knowledge/documents/${documentId}/versions/${versionId}/review/${reviewRevisionId}/tables/${sourceTableId}`, { params }); return response.data.data; },
   async publishedTable(documentId: string, publicationId: string, sourceTableId: string, params: { rowOffset?: number; rowLimit?: number; columnOffset?: number; columnLimit?: number } = {}) { const response = await httpClient.get<ApiResponse<TableWindow>>(`/api/v1/knowledge/documents/${documentId}/publications/${publicationId}/tables/${sourceTableId}`, { params }); return response.data.data; },
   async saveReviewTable(documentId: string, versionId: string, reviewRevisionId: string, sourceTableId: string, input: { lockVersion: number; patches: Array<{ rowNo: number; columnNo: number; value: string }>; rows: Array<{ rowNo: number; excluded: boolean; header: boolean }>; rowOffset?: number; rowLimit?: number; columnOffset?: number; columnLimit?: number }) { const response = await httpClient.put<ApiResponse<TableWindow>>(`/api/v1/knowledge/documents/${documentId}/versions/${versionId}/review/${reviewRevisionId}/tables/${sourceTableId}`, input); return response.data.data; },

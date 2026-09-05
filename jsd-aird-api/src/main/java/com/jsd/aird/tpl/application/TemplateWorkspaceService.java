@@ -1152,7 +1152,7 @@ public class TemplateWorkspaceService {
         }
     }
 
-    private void validateRepeatMappings(JsonNode mapping, Map<String, JsonNode> bindingsById) {
+    void validateRepeatMappings(JsonNode mapping, Map<String, JsonNode> bindingsById) {
         var childrenByParent = new HashMap<String, List<JsonNode>>();
         for (var binding : mapping) {
             var kind = binding.path("mappingKind").asText("");
@@ -1185,7 +1185,13 @@ public class TemplateWorkspaceService {
                 }
                 validateTermination(parent.path("termination"));
             }
-            var parentRange = rangeFromLocator(parent.path("locator"), "dataRange");
+            var parentSheetId = parent.path("locator").path("sheetId").asText("");
+            var childSheetId = binding.path("locator").path("sheetId").asText("");
+            if (!parentSheetId.equals(childSheetId)) {
+                throw new ApiException(ApiErrorCode.INVALID_SCHEMA,
+                        "明细字段与父级重复区域不在同一工作表");
+            }
+            var parentRange = repeatParentRange(parent);
             var childRange = repeatChildRange(binding);
             if (parentRange != null && childRange != null && !contains(parentRange, childRange)) {
                 throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "明细字段位置超出了父级重复区域");
@@ -1203,6 +1209,19 @@ public class TemplateWorkspaceService {
                 }
             }
         }
+    }
+
+    private int[] repeatParentRange(JsonNode parent) {
+        var locator = parent.path("locator");
+        if ("COLUMN".equals(parent.path("repeatAxis").asText(""))) {
+            // A column-oriented table can use its header row as the first
+            // record identity field. That row is outside dataRange by design,
+            // but it must still stay inside the physical repeat region.
+            var overallRange = rangeFromLocator(locator, "recordRange");
+            if (overallRange == null) overallRange = rangeFromLocator(locator, "range");
+            if (overallRange != null) return overallRange;
+        }
+        return rangeFromLocator(locator, "dataRange");
     }
 
     private void validateTermination(JsonNode termination) {

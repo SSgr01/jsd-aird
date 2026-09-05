@@ -77,8 +77,8 @@ export const routeConfig: RouteObject[] = [
       { path: 'knowledge/library', element: <PagePermissionGate permission="knowledge.upload"><KnowledgeLibraryPage /></PagePermissionGate> },
       { path: 'knowledge/view', element: <KnowledgeViewPage /> },
       { path: 'knowledge/search', element: <KnowledgeSearchPage /> },
-      { path: 'knowledge/review', element: <KnowledgeReviewQueuePage /> },
-      { path: 'knowledge/review/:documentId/:versionId', element: <KnowledgeReviewPage /> },
+      { path: 'knowledge/review', element: <PagePermissionGate permission="knowledge.review"><KnowledgeReviewQueuePage /></PagePermissionGate> },
+      { path: 'knowledge/review/:documentId/:versionId', element: <PagePermissionGate permission="knowledge.review"><KnowledgeReviewPage /></PagePermissionGate> },
       { path: 'knowledge/documents/:id', element: <KnowledgeDocumentPage /> },
       { path: 'assistant', element: <AssistantPage /> },
       {

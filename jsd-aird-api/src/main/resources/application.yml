@@ -50,6 +50,10 @@ spring:
 server:
   port: ${SERVER_PORT:8080}
   shutdown: graceful
+  compression:
+    enabled: ${JSD_AIRD_HTTP_COMPRESSION_ENABLED:true}
+    min-response-size: ${JSD_AIRD_HTTP_COMPRESSION_MIN_SIZE:2KB}
+    mime-types: application/json,application/xml,text/html,text/plain,text/css,application/javascript
 
 management:
   endpoints:

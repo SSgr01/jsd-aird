@@ -3627,6 +3627,10 @@ a:active,
 .catalog-knowledge-table .ant-table-cell:first-child { overflow: hidden; text-overflow: ellipsis; }
 .catalog-data-table .ant-table-cell .ant-space,
 .catalog-knowledge-table .ant-table-cell .ant-space { max-width: 100%; }
+.catalog-knowledge-table .knowledge-related-projects-column { overflow: hidden; }
+.knowledge-related-projects { display: flex; min-width: 0; max-width: 100%; align-items: center; gap: 4px; overflow: hidden; }
+.knowledge-related-project-tag { flex: 1 1 auto; min-width: 0; max-width: 100%; margin-inline-end: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.knowledge-related-project-count.ant-btn { flex: 0 0 auto; height: 22px; min-width: 34px; padding-inline: 6px; border: 1px solid var(--app-border); border-radius: 5px; background: var(--app-bg); line-height: 20px; }
 .search-workspace-page { display: grid; gap: 20px; width: 100%; max-width: 1440px; margin: 0 auto; }
 .search-hero { display: grid; gap: 14px; padding: 24px; background: var(--app-primary-soft); }
 .search-hero-row { display: flex; gap: 12px; align-items: stretch; }

@@ -243,7 +243,8 @@ export function UploadWorkspace({
           )}
 
           <div className="upload-workspace-records" aria-live="polite">
-            {recordsLoading ? <div className="upload-workspace-records-loading"><Spin /></div> : records.length ? records.map((record) => (
+            {recordsLoading && records.length > 0 && <div className="upload-workspace-records-refreshing"><Spin size="small" /> <Typography.Text type="secondary">正在刷新任务状态…</Typography.Text></div>}
+            {records.length ? records.map((record) => (
               <article className="upload-workspace-record" key={record.id}>
                 <div className="upload-workspace-record-main">
                   <span className="upload-workspace-record-icon">{record.icon || <FileTextOutlined />}</span>
@@ -257,7 +258,7 @@ export function UploadWorkspace({
                 </div>
                 {record.actions && <div className="upload-workspace-record-actions">{record.actions}</div>}
               </article>
-            )) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={`暂无${rightTitle}`} />}
+            )) : recordsLoading ? <div className="upload-workspace-records-loading"><Spin /></div> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={`暂无${rightTitle}`} />}
           </div>
 
           {pagination && onPageChange && (

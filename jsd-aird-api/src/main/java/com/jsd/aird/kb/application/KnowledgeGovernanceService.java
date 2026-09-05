@@ -105,12 +105,18 @@ public class KnowledgeGovernanceService {
         var scope = normalizeScope(command.libraryScope());
         var categoryId = requireCategory(actor.organizationId(), command.categoryId(), scope);
         var checked = preflight(new PreflightCommand(command.fileId(), categoryId));
-        if ("EXACT_DUPLICATE".equals(checked.decision())) {
-            var duplicate = checked.exactMatches().getFirst();
-            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,
-                    "相同文件已存在：" + duplicate.title() + " V" + duplicate.versionNo());
-        }
         var resolution = normalizeResolution(command.resolution());
+        if ("EXACT_DUPLICATE".equals(checked.decision())) {
+            var replacesSameDocument = "NEW_VERSION".equals(resolution)
+                    && command.targetDocumentId() != null
+                    && checked.exactMatches().stream()
+                    .anyMatch(match -> command.targetDocumentId().equals(match.documentId()));
+            if (!replacesSameDocument) {
+                var duplicate = checked.exactMatches().getFirst();
+                throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,
+                        "相同文件已存在：" + duplicate.title() + " V" + duplicate.versionNo());
+            }
+        }
         if ("POSSIBLE_VERSION".equals(checked.decision()) && resolution == null) {
             throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "疑似已有文档的新版本，请明确上传方式");
         }

@@ -3033,6 +3033,7 @@ a:active,
 .upload-workspace-filters button.is-active { color: var(--app-primary); background: var(--app-primary-soft); border-color: transparent; font-weight: 600; }
 .upload-workspace-records { display: flex; min-height: 0; flex: 1; flex-direction: column; gap: 12px; }
 .upload-workspace-records-loading { display: grid; min-height: 180px; place-items: center; }
+.upload-workspace-records-refreshing { display: flex; align-items: center; gap: 8px; min-height: 28px; }
 .upload-workspace-record {
   padding: 13px 14px;
   border: 1px solid var(--app-border);

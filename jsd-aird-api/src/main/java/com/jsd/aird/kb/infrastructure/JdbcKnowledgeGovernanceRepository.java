@@ -181,12 +181,13 @@ public class JdbcKnowledgeGovernanceRepository implements KnowledgeGovernanceRep
     private void persistResultAssets(UUID organizationId, UUID documentId, UUID versionId,
                                      JsonNode diagnosticResult, List<StructuredDocumentCodec.SourceNodeDraft> sourceNodes) {
         if (diagnosticResult == null || !diagnosticResult.path("resultAssets").isArray()) return;
-        UUID resultFileId = uuid(diagnosticResult.path("resultFileId").asText(null));
-        if (resultFileId == null) return;
+        UUID defaultResultFileId = uuid(diagnosticResult.path("resultFileId").asText(null));
         for (var asset : diagnosticResult.path("resultAssets")) {
+            UUID resultFileId = uuid(asset.path("resultFileId").asText(null));
+            if (resultFileId == null) resultFileId = defaultResultFileId;
             UUID assetFileId = uuid(asset.path("assetFileId").asText(null));
             String entryPath = asset.path("entryPath").asText(null);
-            if (assetFileId == null || entryPath == null || entryPath.isBlank()) continue;
+            if (resultFileId == null || assetFileId == null || entryPath == null || entryPath.isBlank()) continue;
             jdbc.update("""
                     INSERT INTO kb.document_result_asset (
                         id, organization_id, document_id, document_version_id, result_file_id,

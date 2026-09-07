@@ -1,9 +1,12 @@
 import { createUniver, LocaleType, mergeLocales, type FUniver } from '@univerjs/presets';
 import { UniverSheetsCorePreset } from '@univerjs/preset-sheets-core';
 import UniverPresetSheetsCoreZhCN from '@univerjs/preset-sheets-core/locales/zh-CN';
+import { UniverSheetsDrawingPreset } from '@univerjs/preset-sheets-drawing';
+import UniverPresetSheetsDrawingZhCN from '@univerjs/preset-sheets-drawing/locales/zh-CN';
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 
 import '@univerjs/preset-sheets-core/lib/index.css';
+import '@univerjs/preset-sheets-drawing/lib/index.css';
 
 import { isCellMutationCommand, isNewFieldLabelChange, isSingleCellAddress } from './live-field-discovery';
 import { locatorValueRange } from './locator';
@@ -118,7 +121,10 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
       const { univer, univerAPI } = createUniver({
         locale: LocaleType.ZH_CN,
         locales: {
-          [LocaleType.ZH_CN]: mergeLocales(UniverPresetSheetsCoreZhCN),
+          [LocaleType.ZH_CN]: mergeLocales(
+            UniverPresetSheetsCoreZhCN,
+            UniverPresetSheetsDrawingZhCN,
+          ),
         },
         presets: [
           UniverSheetsCorePreset({
@@ -126,6 +132,9 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
             ribbonType: 'collapsed',
             footer: { sheetBar: true, statisticBar: true },
           }),
+          // Required for OCR workbooks: the original source image is stored
+          // as a native SHEET_DRAWING_PLUGIN resource on the OCR原文 sheet.
+          UniverSheetsDrawingPreset(),
         ],
       });
       ownedUniver = univer;

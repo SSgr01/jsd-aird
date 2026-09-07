@@ -16,7 +16,7 @@ public final class ExperimentModels {
             return AllowedActions.experiment(status == null ? null : status.name());
         }
     }
-    public record Detail(Summary summary, UUID currentVersionId, UUID templateVersionId, String templateSnapshotHash,
+    public record Detail(Summary summary, UUID currentVersionId, UUID sourceFileId, UUID templateVersionId, String templateSnapshotHash,
                          JsonNode templateSnapshot, JsonNode editModel, List<Review> reviews,
                          List<Attachment> attachments) {}
     public record Version(UUID id, int versionNo, String status, UUID templateVersionId, String snapshotHash,

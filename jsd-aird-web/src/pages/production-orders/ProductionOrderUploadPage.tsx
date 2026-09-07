@@ -4,15 +4,17 @@ import {
   DownloadOutlined,
   EyeOutlined,
   FileTextOutlined,
+  ReloadOutlined,
 } from '@ant-design/icons';
-import { App, Button, Form, Modal, Select, Space, TreeSelect, Upload } from 'antd';
+import { App, Button, Checkbox, Form, Modal, Select, Space, Upload } from 'antd';
 import type { UploadFile, UploadProps } from 'antd';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { UploadWorkspace, type UploadWorkspaceRecord } from '@/components/upload-workspace';
 import { usePermission } from '@/components/auth/usePermission';
-import { getProjectStages, getProjects, getStageTasks } from '@/services/project/project-api';
+import { ProjectRelationPicker } from '@/components/project-relations/ProjectRelationPicker';
+import type { ProjectRelationTarget } from '@/services/project/project-resource-api';
 import { downloadFile, stageFile } from '@/services/files/file-api';
 import { templateApi } from '@/services/templates/template-api';
 import {
@@ -20,49 +22,6 @@ import {
   type ProductionUpload,
   type ProductionUploadVisibility,
 } from '@/services/production-orders/production-upload-api';
-
-type LinkNode = {
-  value: string;
-  label: string;
-  isLeaf?: boolean;
-  selectable?: boolean;
-  children?: LinkNode[];
-};
-
-type LinkMeta = {
-  projectId?: string;
-  projectName?: string;
-  stageId?: string;
-  stageName?: string;
-  taskId?: string;
-  taskName?: string;
-};
-
-function findLink(nodes: LinkNode[], target: string, parents: LinkMeta = {}): LinkMeta {
-  for (const node of nodes) {
-    const [type, id] = node.value.split(':');
-    const current = {
-      ...parents,
-      ...(type === 'project' ? { projectId: id, projectName: node.label } : {}),
-      ...(type === 'stage' ? { stageId: id, stageName: node.label } : {}),
-      ...(type === 'task' ? { taskId: id, taskName: node.label } : {}),
-    };
-    if (node.value === target) return current;
-    const child = findLink(node.children ?? [], target, current);
-    if (child.projectId || child.stageId || child.taskId) return child;
-  }
-  return {};
-}
-
-function attachChildren(nodes: LinkNode[], target: string, children: LinkNode[]): LinkNode[] {
-  return nodes.map((node) =>
-    node.value === target
-      ? { ...node, children }
-      : node.children
-        ? { ...node, children: attachChildren(node.children, target, children) }
-        : node,
-  );
-}
 
 const visibilityOptions: Array<{ value: ProductionUploadVisibility; label: string }> = [
   { value: 'ALL', label: '全员可见' },
@@ -75,13 +34,48 @@ const saveLocationOptions = [{ value: 'PRODUCTION_ORDER', label: '生产单' }];
 const statusFilters = [
   { key: 'ALL', label: '全部' },
   { key: 'PARSING', label: '解析中' },
-  { key: 'REVIEW_REQUIRED', label: '待复核' },
-  { key: 'PUBLISHED', label: '已发布' },
+  { key: 'PARSED', label: '已解析' },
   { key: 'FAILED', label: '失败' },
 ];
 
+const recognitionStageLabels: Record<string, string> = {
+  QUEUED: '等待解析任务',
+  LOADING_SOURCE: '正在读取源文件',
+  PARSING_STRUCTURE: '正在分析文件结构',
+  MATCHING_TEMPLATE: '正在匹配生产单模板',
+  WAITING_TEMPLATE: '等待选择模板',
+  EXTRACTING_VALUES: '正在提取字段',
+  RECOGNIZING_IMAGE_VALUES: '正在识别图片字段',
+  BUILDING_PREVIEW: '正在生成预览',
+  REVIEW_REQUIRED: '解析完成',
+  COMPLETED: '解析完成',
+  FAILED: '解析失败',
+};
+
 function visibilityText(value: ProductionUploadVisibility) {
   return visibilityOptions.find((item) => item.value === value)?.label || '全员可见';
+}
+
+function recognitionStageText(upload: ProductionUpload) {
+  const stage = upload.currentStage ? recognitionStageLabels[upload.currentStage] : undefined;
+  if (stage) return stage;
+  if (upload.status === 'FAILED') return '解析失败';
+  if (['REVIEW_REQUIRED', 'SAVED', 'PUBLISHED'].includes(upload.status)) return '解析完成';
+  return '等待解析';
+}
+
+function isViewableUpload(upload: ProductionUpload) {
+  return (
+    ['SAVED', 'PUBLISHED'].includes(upload.status) ||
+    (upload.status === 'REVIEW_REQUIRED' &&
+      [
+        'EXACT_MANIFEST',
+        'SIMILAR_AUTO',
+        'USER_SELECTED_TEMPLATE',
+        'NO_TEMPLATE',
+        'USER_REVIEW',
+      ].includes(upload.matchMode ?? ''))
+  );
 }
 
 async function readProductionMetadata(file: File) {
@@ -89,24 +83,81 @@ async function readProductionMetadata(file: File) {
   if (!/\.xlsx$/i.test(file.name)) return fallback;
   try {
     const XLSX = await import('xlsx');
-    const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: false });
-    const rows = workbook.SheetNames.flatMap((name) => {
+    const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
+    const cells = workbook.SheetNames.flatMap((name) => {
       const sheet = workbook.Sheets[name];
-      return sheet ? XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: '' }) : [];
-    }).slice(0, 120);
-    const values = rows.flat().map((value) => String(value ?? '').trim()).filter(Boolean);
+      if (!sheet) return [];
+      return XLSX.utils
+        .sheet_to_json<unknown[]>(sheet, { header: 1, defval: '', raw: true })
+        .slice(0, 300)
+        .flatMap((row, rowIndex) =>
+          row.map((value, columnIndex) => ({ value, rowIndex, columnIndex })),
+        );
+    });
+    const text = (value: unknown) => {
+      if (value instanceof Date) {
+        const year = value.getFullYear();
+        const month = String(value.getMonth() + 1).padStart(2, '0');
+        const day = String(value.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+      }
+      if (value == null) return '';
+      if (
+        typeof value === 'string' ||
+        typeof value === 'number' ||
+        typeof value === 'boolean' ||
+        typeof value === 'bigint'
+      ) {
+        return String(value).trim();
+      }
+      return '';
+    };
+    const normalize = (value: string) => value.replace(/[\s：:（）()_-]/g, '').toLowerCase();
     const findValue = (labels: string[]) => {
-      const label = values.findIndex((value) => labels.some((item) => value.replace(/[：:]/g, '').includes(item)));
-      if (label < 0) return undefined;
-      const row = rows.flatMap((item) => item.map((value) => String(value ?? '').trim()));
-      return row[label + 1] || undefined;
+      const normalizedLabels = labels.map(normalize);
+      const labelCell = cells.find((cell) => {
+        const value = normalize(text(cell.value));
+        return value && normalizedLabels.some((label) => value === label || value.includes(label));
+      });
+      if (!labelCell) return undefined;
+
+      // Support both the common "label | value" layout and a vertical
+      // "label" followed by its value.  The previous implementation flattened
+      // non-empty cells before indexing, so a blank cell anywhere before the
+      // label shifted the lookup and silently returned the wrong field.
+      const sameRow = cells
+        .filter(
+          (cell) =>
+            cell.rowIndex === labelCell.rowIndex && cell.columnIndex > labelCell.columnIndex,
+        )
+        .sort((left, right) => left.columnIndex - right.columnIndex)
+        .find((cell) => text(cell.value));
+      if (sameRow) return text(sameRow.value);
+      const sameColumn = cells
+        .filter(
+          (cell) =>
+            cell.columnIndex === labelCell.columnIndex && cell.rowIndex > labelCell.rowIndex,
+        )
+        .sort((left, right) => left.rowIndex - right.rowIndex)
+        .find((cell) => text(cell.value));
+      if (sameColumn) return text(sameColumn.value);
+
+      // Inline labels such as "订单号：PO-001" have no adjacent value cell.
+      const inline = text(labelCell.value).match(/[：:]\s*(.+)$/);
+      return inline?.[1]?.trim() || undefined;
+    };
+    const normalizeDate = (value?: string) => {
+      if (!value) return value;
+      const match = value.match(/^(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})/);
+      const [, year = '', month = '', day = ''] = match ?? [];
+      return match ? `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}` : value;
     };
     return {
       productionName: fallback.productionName,
       orderNo: findValue(['订单号', '生产单号', '单号']),
       productName: findValue(['品名', '产品名称', '产品']),
       category: findValue(['类别', '产品类别']),
-      manufactureDate: findValue(['制造日期', '生产日期', '日期']),
+      manufactureDate: normalizeDate(findValue(['制造日期', '生产日期', '日期'])),
     };
   } catch {
     return fallback;
@@ -119,20 +170,21 @@ export function ProductionOrderUploadPage() {
   const canCreate = usePermission('production.create') && usePermission('ops.file.upload');
   const canDelete = usePermission('production.delete');
   const [files, setFiles] = useState<UploadFile[]>([]);
-  const [link, setLink] = useState<string>();
-  const [linkTree, setLinkTree] = useState<LinkNode[]>([]);
-  const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
+  const [projectRelations, setProjectRelations] = useState<ProjectRelationTarget[]>([]);
   const [saveLocation, setSaveLocation] = useState('PRODUCTION_ORDER');
   const [visibility, setVisibility] = useState<ProductionUploadVisibility>('ALL');
   const [templateVersionId, setTemplateVersionId] = useState<string>();
-  const [templates, setTemplates] = useState<Array<{
-    versionId: string;
-    currentPublishedVersionId?: string;
-    currentPublishedVersionNo?: number;
-    templateCode: string;
-    name: string;
-    versionNo: number;
-  }>>([]);
+  const [replaceExisting, setReplaceExisting] = useState(false);
+  const [templates, setTemplates] = useState<
+    Array<{
+      versionId: string;
+      currentPublishedVersionId?: string;
+      currentPublishedVersionNo?: number;
+      templateCode: string;
+      name: string;
+      versionNo: number;
+    }>
+  >([]);
   const [uploads, setUploads] = useState<ProductionUpload[]>([]);
   const [keyword, setKeyword] = useState('');
   const [uploadStatus, setUploadStatus] = useState('ALL');
@@ -141,7 +193,7 @@ export function ProductionOrderUploadPage() {
   const [uploading, setUploading] = useState(false);
   const [downloadingId, setDownloadingId] = useState<string>();
   const [deletingId, setDeletingId] = useState<string>();
-  const previousExpanded = useRef<string[]>([]);
+  const [retryingId, setRetryingId] = useState<string>();
 
   const loadUploads = useCallback(async () => {
     setLoading(true);
@@ -167,26 +219,8 @@ export function ProductionOrderUploadPage() {
   }, [keyword, message, page.current, page.pageSize, uploadStatus]);
 
   useEffect(() => {
-    void getProjects({ page: 1, size: 200 })
-      .then((result) =>
-        setLinkTree(
-          result.items.map((project) => ({
-            value: `project:${project.id}`,
-            label: `${project.projectCode}·${project.name}`,
-            // A project may legitimately have no stages yet. Keep the project
-            // node selectable so the upload can still retain the stable link.
-            selectable: true,
-            isLeaf: false,
-          })),
-        ),
-      )
-      .catch((error) => {
-        void message.error(error instanceof Error ? error.message : '项目列表加载失败');
-      });
-  }, [message]);
-
-  useEffect(() => {
-    void templateApi.list({ format: 'XLSX', status: 'PUBLISHED', page: 1, size: 100 })
+    void templateApi
+      .list({ format: 'XLSX', status: 'PUBLISHED', page: 1, size: 100 })
       .then((result) => setTemplates(result.items))
       .catch((error) => {
         void message.error(error instanceof Error ? error.message : '已发布模板加载失败');
@@ -196,41 +230,6 @@ export function ProductionOrderUploadPage() {
   useEffect(() => {
     void loadUploads();
   }, [loadUploads]);
-
-  const expandRelation = (keys: Array<string | number>) => {
-    const values = keys.map(String);
-    const target = values.find((key) => !previousExpanded.current.includes(key));
-    setExpandedKeys(values);
-    previousExpanded.current = values;
-    if (!target) return;
-    const [type, id] = target.split(':');
-    if (!id) return;
-    const request =
-      type === 'project'
-        ? getProjectStages(id).then((items) =>
-            items.map<LinkNode>((stage) => ({
-              value: `stage:${stage.id}`,
-              label: stage.name,
-              selectable: true,
-              isLeaf: false,
-            })),
-          )
-        : type === 'stage'
-          ? getStageTasks(id).then((items) =>
-              items.map<LinkNode>((task) => ({
-                value: `task:${task.id}`,
-                label: task.name,
-                selectable: true,
-                isLeaf: true,
-              })),
-            )
-          : Promise.resolve<LinkNode[]>([]);
-    void request
-      .then((children) => setLinkTree((current) => attachChildren(current, target, children)))
-      .catch((error) => {
-        void message.error(error instanceof Error ? error.message : '项目阶段任务加载失败');
-      });
-  };
 
   const validateFile: UploadProps['beforeUpload'] = (file) => {
     if (!/\.(xlsx|docx|png|jpe?g|gif|webp|bmp|tiff?)$/i.test(file.name) || file.size === 0) {
@@ -254,7 +253,12 @@ export function ProductionOrderUploadPage() {
   };
 
   useEffect(() => {
-    if (!uploads.some((item) => ['QUEUED', 'PARSING', 'MATCHING_TEMPLATE', 'EXTRACTING'].includes(item.status))) return;
+    if (
+      !uploads.some((item) =>
+        ['QUEUED', 'PARSING', 'MATCHING_TEMPLATE', 'EXTRACTING'].includes(item.status),
+      )
+    )
+      return;
     const timer = window.setInterval(() => void loadUploads(), 2000);
     return () => window.clearInterval(timer);
   }, [loadUploads, uploads]);
@@ -265,7 +269,7 @@ export function ProductionOrderUploadPage() {
       void message.warning('请先选择生产单文件');
       return;
     }
-    const relation = link ? findLink(linkTree, link) : {};
+    const relation = projectRelations.find((item) => item.projectId) ?? {};
     setUploading(true);
     let failed = 0;
     for (const file of sourceFiles) {
@@ -276,6 +280,7 @@ export function ProductionOrderUploadPage() {
           fileId: staged.fileId,
           sourceType: /\.xlsx$/i.test(file.name) ? 'XLSX' : 'PHOTO',
           templateVersionId,
+          replaceExisting,
           ...metadata,
           ...relation,
           visibility,
@@ -298,11 +303,28 @@ export function ProductionOrderUploadPage() {
     }
   };
 
+  const retry = async (upload: ProductionUpload) => {
+    setRetryingId(upload.id);
+    try {
+      await productionUploadApi.retry(upload.id);
+      void message.success(`“${upload.originalName}”已重新提交解析`);
+      await loadUploads();
+    } catch (error) {
+      void message.error(error instanceof Error ? error.message : '重复解析失败');
+    } finally {
+      setRetryingId(undefined);
+    }
+  };
+
   const removeUpload = (upload: ProductionUpload) => {
     Modal.confirm({
       title: '删除上传记录？',
-      content: `将删除“${upload.originalName}”的上传记录，原始文件不会被物理删除。`,
-      okText: '确认删除',
+      content: ['QUEUED', 'PARSING', 'MATCHING_TEMPLATE', 'EXTRACTING'].includes(upload.status)
+        ? `将取消“${upload.originalName}”的解析任务并删除上传记录，原始文件不会被物理删除。`
+        : `将删除“${upload.originalName}”的上传记录，原始文件不会被物理删除。`,
+      okText: ['QUEUED', 'PARSING', 'MATCHING_TEMPLATE', 'EXTRACTING'].includes(upload.status)
+        ? '取消解析并删除'
+        : '确认删除',
       cancelText: '取消',
       okButtonProps: { danger: true },
       onOk: async () => {
@@ -328,22 +350,30 @@ export function ProductionOrderUploadPage() {
       [upload.productionName, upload.orderNo, upload.productName, upload.category]
         .filter(Boolean)
         .join(' · ') || '生产单文件',
-    detail: `保存位置：生产单 · 关联项目：${[upload.projectName, upload.stageName, upload.taskName].filter(Boolean).join(' · ') || '未关联项目'} · ${visibilityText(upload.visibility)}`,
-    status: upload.status === 'FAILED'
-      ? { label: '识别失败', color: 'error' }
-      : upload.status === 'REVIEW_REQUIRED'
-        ? { label: upload.matchMode === 'USER_REVIEW' ? '待选择模板' : '待复核', color: 'warning' }
-        : ['SAVED', 'PUBLISHED'].includes(upload.status)
-          ? { label: upload.status === 'PUBLISHED' ? '已发布' : '已保存', color: 'success' }
-          : { label: '识别中', color: 'processing' },
-    progress: ['QUEUED', 'PARSING', 'MATCHING_TEMPLATE', 'EXTRACTING'].includes(upload.status)
-      ? upload.recognitionProgress : undefined,
+    detail: `保存位置：生产单 · 关联项目：${[upload.projectName, upload.stageName, upload.taskName].filter(Boolean).join(' · ') || '未关联项目'} · ${visibilityText(upload.visibility)} · ${recognitionStageText(upload)} · 已完成 ${['REVIEW_REQUIRED', 'SAVED', 'PUBLISHED'].includes(upload.status) ? 100 : (upload.recognitionProgress ?? 0)}%${upload.failureMessage ? ` · 失败原因：${upload.failureMessage}` : ''}`,
+    status:
+      upload.status === 'FAILED'
+        ? { label: '识别失败', color: 'error' }
+        : ['REVIEW_REQUIRED', 'SAVED', 'PUBLISHED'].includes(upload.status)
+          ? { label: '已解析', color: 'success' }
+          : {
+              label: `${recognitionStageText(upload)}${upload.recognitionProgress ? ` ${upload.recognitionProgress}%` : ''}`,
+              color: 'processing',
+            },
+    // Keep the progress track visible for every uploaded record, matching the
+    // quality-upload workspace. Terminal records are complete; active records
+    // use the recognition progress reported by the parser.
+    progress: ['REVIEW_REQUIRED', 'SAVED', 'PUBLISHED'].includes(upload.status)
+      ? 100
+      : upload.status === 'FAILED'
+        ? 0
+        : (upload.recognitionProgress ?? 0),
     actions: (
       <Space size={2}>
         <Button
           type="link"
           icon={<EyeOutlined />}
-          disabled={!['REVIEW_REQUIRED', 'SAVED', 'PUBLISHED'].includes(upload.status)}
+          disabled={!isViewableUpload(upload)}
           onClick={() => navigate(`/production-orders/uploads/${upload.id}/workspace`)}
         >
           查看
@@ -364,7 +394,17 @@ export function ProductionOrderUploadPage() {
         >
           下载
         </Button>
-        {canDelete && upload.allowedActions?.includes('DELETE') && (
+        {canCreate && (
+          <Button
+            type="link"
+            icon={<ReloadOutlined />}
+            loading={retryingId === upload.id}
+            onClick={() => void retry(upload)}
+          >
+            重试
+          </Button>
+        )}
+        {canDelete && (
           <Button
             type="link"
             danger
@@ -402,31 +442,34 @@ export function ProductionOrderUploadPage() {
               />
             </Form.Item>
             <Form.Item label="关联项目 / 阶段 / 任务">
-              <TreeSelect
-                value={link}
-                onChange={setLink}
-                allowClear
-                placeholder="未关联项目"
-                treeData={linkTree}
-                treeExpandedKeys={expandedKeys}
-                treeNodeFilterProp="label"
-                onTreeExpand={expandRelation}
+              <ProjectRelationPicker
+                value={projectRelations}
+                onChange={setProjectRelations}
+                multiple={false}
               />
             </Form.Item>
             <Form.Item label="权限可见">
               <Select value={visibility} onChange={setVisibility} options={visibilityOptions} />
             </Form.Item>
-            <Form.Item label="生产单模板">
+            <Form.Item label="生产单模板（可选）">
               <Select
                 allowClear
                 value={templateVersionId}
                 onChange={setTemplateVersionId}
-                placeholder="未选择，上传后自动匹配"
+                placeholder="可不选择，直接按原文件解析"
                 options={templates.map((item) => ({
                   value: item.currentPublishedVersionId ?? item.versionId,
                   label: `${item.templateCode} · ${item.name} · V${item.currentPublishedVersionNo ?? item.versionNo}`,
                 }))}
               />
+            </Form.Item>
+            <Form.Item>
+              <Checkbox
+                checked={replaceExisting}
+                onChange={(event) => setReplaceExisting(event.target.checked)}
+              >
+                同内容文件已存在时重新上传并替换旧记录
+              </Checkbox>
             </Form.Item>
           </Form>
         }
@@ -441,7 +484,7 @@ export function ProductionOrderUploadPage() {
         }
         onClearFiles={() => setFiles([])}
         uploadMainText="拖拽文件到此处，或点击选择文件"
-        uploadHint="支持 XLSX、DOCX 或图片；Excel 自动解析，图片需选择已发布模板后进行识别。"
+        uploadHint="支持 XLSX、DOCX 或图片；模板可不选，原文件会直接生成可查看记录，模板仅用于辅助字段提取。"
         submitLabel="开始上传"
         submitIcon={<CloudUploadOutlined />}
         onSubmit={() => void submit()}

@@ -17,7 +17,6 @@ import {
   DatePicker,
   Form,
   Input,
-  Modal,
   Select,
   Skeleton,
   Tabs,
@@ -30,7 +29,6 @@ import dayjs from '@/utils/dayjs';
 
 import {
   formatProjectStatus,
-  deleteProjects,
   getProject,
   getProjects,
   projectPriorities,
@@ -39,8 +37,11 @@ import {
   type Project,
   type ProjectInput,
 } from '@/services/project/project-api';
+import { getPartner } from '@/services/partners/partner-api';
+import { getProjectRequirements } from '@/services/partners/crm-api';
 
 import './project-detail.css';
+import '@/styles/management-list.css';
 import { CustomerRequirementTab } from './CustomerRequirementTab';
 import { MeetingMinutesTab } from './MeetingMinutesTab';
 import { ProjectMaterialsTab } from './ProjectMaterialsTab';
@@ -74,11 +75,38 @@ export function ProjectDetailPage() {
   const [messageApi, holder] = message.useMessage();
   const [form] = Form.useForm<InfoFormValues>();
 
-  const loadProject = (projectId: string) =>
-    getProject(projectId)
-      .then(setProject)
-      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : '项目加载失败'))
-      .finally(() => setLoading(false));
+  const loadProject = async (projectId: string) => {
+    try {
+      const detail = await getProject(projectId);
+      if (!detail.partnerName) {
+        try {
+          const requirements = await getProjectRequirements(projectId, { page: 1, size: 100 });
+          const partnerIds = [...new Set(
+            requirements.items
+              .map((item) => item.partnerId)
+              .filter((partnerId): partnerId is string => Boolean(partnerId)),
+          )];
+          const firstPartnerId = partnerIds[0];
+          if (firstPartnerId && partnerIds.length === 1) {
+            const partner = await getPartner(firstPartnerId);
+            setProject({ ...detail, partnerId: partner.id, partnerName: partner.name });
+            return;
+          }
+          if (partnerIds.length > 1) {
+            setProject({ ...detail, partnerName: `多个客户（${partnerIds.length}）` });
+            return;
+          }
+        } catch {
+          // 关系补充失败不应阻断项目详情本身的加载。
+        }
+      }
+      setProject(detail);
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : '项目加载失败');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (!id) return;
@@ -162,24 +190,6 @@ export function ProjectDetailPage() {
     } finally {
       setSaving(false);
     }
-  };
-
-  const handleLifecycle = () => {
-    if (!project) return;
-    const archive = project.allowedActions?.includes('ARCHIVE');
-    if (!archive && !project.allowedActions?.includes('DELETE')) return;
-    Modal.confirm({
-      title: `${archive ? '归档' : '删除'}项目“${project.name}”？`,
-      content: archive ? '归档后项目不再出现在默认列表。' : '项目将从默认列表中隐藏。',
-      okText: archive ? '归档' : '删除',
-      okButtonProps: { danger: true },
-      cancelText: '取消',
-      onOk: async () => {
-        await deleteProjects([project.id]);
-        messageApi.success(archive ? '项目已归档' : '项目已删除');
-        navigate('/projects/list');
-      },
-    });
   };
 
   if (loading) return <Skeleton active paragraph={{ rows: 12 }} />;
@@ -323,9 +333,6 @@ export function ProjectDetailPage() {
         <h2>{project.name}</h2>
         <Tag color="blue">{formatProjectStatus(project.status)}</Tag>
         <span className="pm-detail-partner">关联客户：{project.partnerName ?? '—'}</span>
-        <span style={{ marginLeft: 'auto' }}>
-          {project.allowedActions?.includes('ARCHIVE') || project.allowedActions?.includes('DELETE') ? <Button danger={project.allowedActions?.includes('DELETE')} icon={project.allowedActions?.includes('ARCHIVE') ? undefined : <DeleteOutlined />} onClick={handleLifecycle}>{project.allowedActions?.includes('ARCHIVE') ? '归档' : '删除'}</Button> : null}
-        </span>
       </div>
 
       <ProjectStageBoard projectId={id ?? project.id} />

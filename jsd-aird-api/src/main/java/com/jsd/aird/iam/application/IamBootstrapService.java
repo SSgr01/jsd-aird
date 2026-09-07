@@ -75,7 +75,7 @@ public class IamBootstrapService {
         var all = IamPermissionCatalog.definitions().stream().map(def -> def.code()).toList();
         var responsibility = List.of(
                 "customer.view", "customer.create", "customer.update",
-                "project.view", "project.create", "project.update", "project.copy", "project.delete", "project.assign",
+                "project.view", "project.export", "project.create", "project.update", "project.copy", "project.delete", "project.assign",
                 "template.view", "template.create", "template.update", "template.upload", "template.copy",
                 "template.recognition", "template.review", "template.publish", "template.rollback",
                 "template.delete", "template.export", "category.create", "category.update",
@@ -104,7 +104,7 @@ public class IamBootstrapService {
         all.forEach(code -> store.ensureRoleBinding(organizationId, roles.get("SYSTEM_ADMIN").id(), new Binding(code, "ALLOW", "ALL", List.of())));
         responsibility.forEach(code -> store.ensureRoleBinding(organizationId, roles.get("RND_MANAGER").id(), new Binding(code, "ALLOW", defaultScope(code), List.of())));
         inventory.forEach(code -> store.ensureRoleBinding(organizationId, roles.get("RND_MANAGER").id(), new Binding(code, "ALLOW", defaultScope(code), List.of())));
-        responsibility.stream().filter(code -> Set.of("customer.view", "project.view", "project.create", "project.update",
+                responsibility.stream().filter(code -> Set.of("customer.view", "project.view", "project.export", "project.create", "project.update",
                         "template.view", "template.create", "template.update", "template.upload", "template.copy",
                         "template.recognition", "experiment.view", "experiment.create", "experiment.update",
                         "experiment.submit", "knowledge.view", "knowledge.upload", "knowledge.create",

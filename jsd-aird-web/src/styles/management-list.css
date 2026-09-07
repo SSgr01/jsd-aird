@@ -3,12 +3,13 @@
   display: flex;
   min-width: 0;
   max-width: 100%;
+  margin: 0;
   flex-direction: column;
   gap: 16px;
   overflow: hidden;
   padding: 0;
   background: transparent;
-  color: #1f2937;
+  color: var(--app-text);
 }
 
 .pm-unified-list-page > * {
@@ -44,7 +45,7 @@
 .pm-unified-list-page .pm-page-head h3,
 .pm-unified-list-page .cm-page-head h3 {
   margin: 0 0 5px;
-  color: #1f2937;
+  color: var(--app-text);
   font-size: 20px;
   font-weight: 700;
   line-height: 1.35;
@@ -56,7 +57,7 @@
 .pm-unified-list-page .pm-page-head p,
 .pm-unified-list-page .cm-page-head p {
   margin: 0;
-  color: #667085;
+  color: var(--app-text-secondary);
   font-size: 13px;
   line-height: 1.6;
 }
@@ -70,9 +71,10 @@
 .pm-unified-list-page .cm-table-card {
   min-width: 0;
   max-width: 100%;
-  border: 1px solid #e1e7ef;
-  border-radius: 10px;
-  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-card);
+  background: var(--app-surface);
+  box-shadow: var(--app-shadow);
 }
 
 .pm-unified-list-page .research-test-filter,
@@ -119,27 +121,249 @@
 }
 
 .pm-unified-list-page .ant-table-thead > tr > th {
-  background: #f7f9fc;
-  border-bottom-color: #e1e7ef;
-  color: #667085;
-  font-size: 12px;
-  font-weight: 600;
+  padding: 13px 16px;
+  background: var(--app-surface-subtle);
+  border-bottom-color: var(--app-border);
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-size-caption);
+  font-weight: 650;
   white-space: nowrap;
 }
 
 .pm-unified-list-page .ant-table-tbody > tr > td {
-  border-bottom-color: #edf0f5;
-  color: #1f2937;
+  padding: 14px 16px;
+  border-bottom-color: var(--app-border);
+  color: var(--app-text);
+  font-size: var(--app-font-size-label);
+  line-height: 1.55;
   white-space: nowrap;
 }
 
 .pm-unified-list-page .ant-table-tbody > tr:hover > td {
-  background: #f8faff;
+  background: color-mix(in srgb, var(--app-primary) 3%, var(--app-surface));
 }
 
 .pm-unified-list-page .ant-table-cell-fix-right-first::after,
 .pm-unified-list-page .ant-table-cell-fix-right-last::after {
-  box-shadow: -6px 0 10px rgba(15, 23, 42, 0.06);
+  box-shadow: -6px 0 12px rgb(15 23 42 / 6%);
+}
+
+/* The template catalog table is the visual baseline for the management lists. */
+.pm-unified-list-page .ant-table {
+  color: var(--app-text);
+  font-size: var(--app-font-size-label);
+}
+
+.pm-unified-list-page .ant-table-cell-fix-right {
+  background: var(--app-surface);
+  box-shadow: -6px 0 12px rgb(15 23 42 / 6%);
+}
+
+.pm-unified-list-page .ant-table-thead > tr > .ant-table-cell-fix-right {
+  background: var(--app-surface-subtle);
+}
+
+.pm-unified-list-page .ant-table-tbody > tr:hover > .ant-table-cell-fix-right {
+  background: color-mix(in srgb, var(--app-primary) 3%, var(--app-surface));
+}
+
+.pm-unified-list-page .ant-table a,
+.pm-unified-list-page .ant-btn-link {
+  color: var(--app-primary);
+  font-size: var(--app-font-size-label);
+}
+
+/* Keep every customer/project/phase/task name hover consistent with the
+   project list baseline, regardless of whether the name is a link or button. */
+.pm-unified-list-page .pm-name-link:hover,
+.pm-unified-list-page .cm-customer-link:hover,
+.pm-unified-list-page .pm-name-column .ant-btn:hover,
+.pm-unified-list-page .pm-card-title a:hover,
+.pm-unified-list-page .pm-card-title .ant-btn:hover,
+.pm-unified-list-page .cm-customer-card-name:hover {
+  color: #1677ff !important;
+  text-decoration: underline !important;
+}
+
+.pm-unified-list-page .eln-name-cell .pm-name-link {
+  color: #1677ff;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.pm-unified-list-page .ant-btn-link.ant-btn-dangerous {
+  color: var(--app-danger);
+}
+
+/* Give both pages the same bordered page-intro surface as the project list. */
+.pm-unified-list-page.research-test-page .research-test-page-intro,
+.pm-unified-list-page.production-order-page .production-order-page-intro {
+  padding: 18px 20px;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-card);
+  background: var(--app-surface);
+  box-shadow: var(--app-shadow);
+}
+
+.pm-unified-list-page.research-test-page .research-test-page-intro .ant-breadcrumb,
+.pm-unified-list-page.production-order-page .production-order-page-intro .ant-breadcrumb {
+  margin-bottom: 8px;
+}
+
+.pm-unified-list-page.research-test-page .research-test-page-intro h3,
+.pm-unified-list-page.production-order-page .production-order-page-intro h2 {
+  margin: 0 0 5px;
+  color: var(--app-text);
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.025em;
+  line-height: 1.35;
+}
+
+.pm-unified-list-page .pm-phase-filters,
+.pm-unified-list-page .pm-task-filters,
+.pm-unified-list-page .pm-phase-content,
+.pm-unified-list-page .pm-task-content {
+  border-color: var(--app-border);
+  border-radius: var(--app-radius-card);
+  background: var(--app-surface);
+  box-shadow: var(--app-shadow);
+}
+
+.pm-unified-list-page .pm-phase-filters,
+.pm-unified-list-page .pm-task-filters {
+  color: var(--app-text);
+  font-size: var(--app-font-size-label);
+}
+
+.pm-unified-list-page .pm-phase-pagination,
+.pm-unified-list-page .pm-task-pagination {
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-size-caption);
+}
+
+/* Reuse the project list's exact tag palette on customer status displays. */
+.pm-unified-list-page.pm-project-list-page .pm-tag,
+.pm-unified-list-page.cm-customer-list-page .pm-tag,
+.cm-partner-detail-page .pm-tag {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  font-size: var(--app-font-size-label);
+  font-weight: 400;
+  line-height: 22px;
+  white-space: nowrap;
+}
+
+.pm-unified-list-page.pm-project-list-page .pm-tag.priority-high,
+.pm-unified-list-page.cm-customer-list-page .pm-tag.priority-high,
+.cm-partner-detail-page .pm-tag.priority-high,
+.pm-unified-list-page.pm-project-list-page .pm-tag.status-cancelled,
+.pm-unified-list-page.cm-customer-list-page .pm-tag.status-cancelled,
+.cm-partner-detail-page .pm-tag.status-cancelled {
+  background: #fff1f0;
+  border-color: #ffa39e;
+  color: #d4380d;
+}
+
+.pm-unified-list-page.pm-project-list-page .pm-tag.priority-medium,
+.pm-unified-list-page.cm-customer-list-page .pm-tag.priority-medium,
+.cm-partner-detail-page .pm-tag.priority-medium,
+.pm-unified-list-page.pm-project-list-page .pm-tag.status-pending,
+.pm-unified-list-page.cm-customer-list-page .pm-tag.status-pending,
+.cm-partner-detail-page .pm-tag.status-pending {
+  background: #fffbe6;
+  border-color: #ffe58f;
+  color: #d48806;
+}
+
+.pm-unified-list-page.pm-project-list-page .pm-tag.priority-low,
+.pm-unified-list-page.cm-customer-list-page .pm-tag.priority-low,
+.cm-partner-detail-page .pm-tag.priority-low,
+.pm-unified-list-page.pm-project-list-page .pm-tag.status-in_progress,
+.pm-unified-list-page.cm-customer-list-page .pm-tag.status-in_progress,
+.cm-partner-detail-page .pm-tag.status-in_progress {
+  background: #e6f4ff;
+  border-color: #91caff;
+  color: #0958d9;
+}
+
+.pm-unified-list-page.pm-project-list-page .pm-tag.status-completed,
+.pm-unified-list-page.cm-customer-list-page .pm-tag.status-completed,
+.cm-partner-detail-page .pm-tag.status-completed {
+  background: #f6ffed;
+  border-color: #b7eb8f;
+  color: #389e0d;
+}
+
+.pm-unified-list-page.pm-project-list-page .pm-tag.status-paused,
+.pm-unified-list-page.cm-customer-list-page .pm-tag.status-paused,
+.cm-partner-detail-page .pm-tag.status-paused {
+  background: #fff7e6;
+  border-color: #ffd591;
+  color: #d46b08;
+}
+
+.pm-unified-list-page.pm-project-list-page .pm-tag.status-not_started,
+.pm-unified-list-page.cm-customer-list-page .pm-tag.status-not_started,
+.cm-partner-detail-page .pm-tag.status-not_started {
+  background: #f5f5f5;
+  border-color: #d9d9d9;
+  color: #595959;
+}
+
+/* Reuse the project list status palette for phase and task status tags. */
+.pm-unified-list-page .ant-tag.pm-status-tag {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  margin-inline-end: 0;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  font-size: var(--app-font-size-label);
+  font-weight: 400;
+  line-height: 22px;
+  white-space: nowrap;
+}
+
+.pm-unified-list-page .ant-tag.pm-status-tag.status-cancelled {
+  background: #fff1f0;
+  border-color: #ffa39e;
+  color: #d4380d;
+}
+
+.pm-unified-list-page .ant-tag.pm-status-tag.status-in_progress {
+  background: #e6f4ff;
+  border-color: #91caff;
+  color: #0958d9;
+}
+
+.pm-unified-list-page .ant-tag.pm-status-tag.status-completed {
+  background: #f6ffed;
+  border-color: #b7eb8f;
+  color: #389e0d;
+}
+
+.pm-unified-list-page .ant-tag.pm-status-tag.status-paused {
+  background: #fff7e6;
+  border-color: #ffd591;
+  color: #d46b08;
+}
+
+.pm-unified-list-page .ant-tag.pm-status-tag.status-not_started {
+  background: #f5f5f5;
+  border-color: #d9d9d9;
+  color: #595959;
+}
+
+.cm-partner-detail-page .pm-tag.status-custom {
+  background: #f9f0ff;
+  border-color: #d3adf7;
+  color: #722ed1;
 }
 
 .pm-unified-list-page .quality-grid-wrap {
@@ -151,51 +375,34 @@
 
 .pm-unified-list-page .quality-grid {
   min-width: 980px;
-  border-color: #e1e7ef;
+  border-color: var(--app-border);
   border-collapse: separate;
   border-spacing: 0;
-  font-size: 13px;
+  font-size: var(--app-font-size-label);
 }
 
 .pm-unified-list-page .quality-grid th {
-  padding: 12px 14px;
-  background: #f7f9fc;
-  border-bottom: 1px solid #e1e7ef;
-  color: #667085;
-  font-size: 12px;
-  font-weight: 600;
+  padding: 13px 16px;
+  background: var(--app-surface-subtle);
+  border-bottom: 1px solid var(--app-border);
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-size-caption);
+  font-weight: 650;
   white-space: nowrap;
 }
 
 .pm-unified-list-page .quality-grid td {
-  padding: 12px 14px;
-  border-bottom: 1px solid #edf0f5;
-  color: #1f2937;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--app-border);
+  color: var(--app-text);
+  font-size: var(--app-font-size-label);
+  line-height: 1.55;
   vertical-align: middle;
   white-space: nowrap;
 }
 
 .pm-unified-list-page .quality-grid tbody tr:hover td {
-  background: #f8faff;
-}
-
-.pm-unified-list-page .quality-grid th:last-child,
-.pm-unified-list-page .quality-grid td:last-child {
-  position: sticky;
-  right: 0;
-  z-index: 1;
-  min-width: 190px;
-  background: #fff;
-  box-shadow: -6px 0 10px rgba(15, 23, 42, 0.06);
-}
-
-.pm-unified-list-page .quality-grid th:last-child {
-  z-index: 2;
-  background: #f7f9fc;
-}
-
-.pm-unified-list-page .quality-grid tbody tr:hover td:last-child {
-  background: #f8faff;
+  background: color-mix(in srgb, var(--app-primary) 3%, var(--app-surface));
 }
 
 .pm-unified-list-page .quality-tabs {
@@ -204,9 +411,9 @@
   gap: 4px;
   padding: 4px;
   overflow-x: auto;
-  border: 1px solid #e1e7ef;
-  border-radius: 10px;
-  background: #fff;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-card);
+  background: var(--app-surface);
 }
 
 /* InventoryShell and the inventory control console share the same outer
@@ -311,6 +518,203 @@
 
 @media (max-width: 520px) {
   .pm-unified-list-page .quality-categories {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Keep query controls at one desktop width across the management lists. */
+.pm-unified-list-page.pm-project-list-page .pm-filter-row > .ant-input-affix-wrapper,
+.pm-unified-list-page.pm-project-list-page .pm-filter-row > .ant-picker-range,
+.pm-unified-list-page.pm-project-list-page .pm-filter-row > .ant-select,
+.pm-unified-list-page.cm-customer-list-page .cm-filter-row > .ant-input-affix-wrapper,
+.pm-unified-list-page.cm-customer-list-page .cm-filter-row > .ant-select,
+.pm-unified-list-page.eln-prototype-page .eln-filter-row > .ant-input-affix-wrapper,
+.pm-unified-list-page.eln-prototype-page .eln-filter-row > .ant-select {
+  width: 220px !important;
+  min-width: 220px;
+  max-width: 220px;
+  flex: 0 0 220px;
+}
+
+.pm-unified-list-page.eln-prototype-page .eln-filter-row > .ant-select:nth-of-type(2) {
+  width: 220px !important;
+  min-width: 220px;
+  max-width: 220px;
+  flex-basis: 220px;
+}
+
+.pm-unified-list-page .pm-phase-filters {
+  grid-template-columns: repeat(5, minmax(0, 1fr)) auto;
+}
+
+.pm-unified-list-page .pm-task-filters {
+  grid-template-columns: repeat(6, minmax(0, 1fr)) auto;
+}
+
+.pm-unified-list-page .pm-phase-toolbar > .ant-btn,
+.pm-unified-list-page .pm-task-toolbar > .ant-btn,
+.pm-unified-list-page .pm-batch-actions > .ant-btn,
+.pm-unified-list-page .cm-batch-actions > .ant-btn,
+.pm-unified-list-page .eln-batch-row > .ant-btn {
+  height: 32px;
+  min-height: 32px;
+}
+
+@media (max-width: 1100px) {
+  .pm-unified-list-page.pm-project-list-page .pm-filter-row > .ant-input-affix-wrapper,
+  .pm-unified-list-page.pm-project-list-page .pm-filter-row > .ant-picker-range,
+  .pm-unified-list-page.pm-project-list-page .pm-filter-row > .ant-select,
+  .pm-unified-list-page.cm-customer-list-page .cm-filter-row > .ant-input-affix-wrapper,
+  .pm-unified-list-page.cm-customer-list-page .cm-filter-row > .ant-select,
+  .pm-unified-list-page.eln-prototype-page .eln-filter-row > .ant-input-affix-wrapper,
+  .pm-unified-list-page.eln-prototype-page .eln-filter-row > .ant-select {
+    width: calc(33.333% - 7px) !important;
+    min-width: 0;
+    max-width: none;
+    flex: 1 1 180px;
+  }
+
+  .pm-unified-list-page .pm-phase-filters,
+  .pm-unified-list-page .pm-task-filters {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .pm-unified-list-page.pm-project-list-page .pm-filter-row > .ant-input-affix-wrapper,
+  .pm-unified-list-page.pm-project-list-page .pm-filter-row > .ant-picker-range,
+  .pm-unified-list-page.pm-project-list-page .pm-filter-row > .ant-select,
+  .pm-unified-list-page.cm-customer-list-page .cm-filter-row > .ant-input-affix-wrapper,
+  .pm-unified-list-page.cm-customer-list-page .cm-filter-row > .ant-select,
+  .pm-unified-list-page.eln-prototype-page .eln-filter-row > .ant-input-affix-wrapper,
+  .pm-unified-list-page.eln-prototype-page .eln-filter-row > .ant-select {
+    width: 100% !important;
+    min-width: 0;
+    max-width: none;
+    flex-basis: 100%;
+  }
+
+  .pm-unified-list-page .pm-phase-filters,
+  .pm-unified-list-page .pm-task-filters {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Keep operation links consistent across customer, project and experiment tables. */
+.pm-unified-list-page .management-table-actions,
+.cm-partner-detail-page .management-table-actions,
+.pm-detail-page .management-table-actions {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.pm-unified-list-page .management-table-actions > .ant-space-item,
+.cm-partner-detail-page .management-table-actions > .ant-space-item,
+.pm-detail-page .management-table-actions > .ant-space-item {
+  display: inline-flex;
+  align-items: center;
+}
+
+.pm-unified-list-page .management-table-actions > a,
+.pm-unified-list-page .management-table-actions .cm-link-button,
+.pm-unified-list-page .management-table-actions .ant-btn-link,
+.cm-partner-detail-page .management-table-actions > a,
+.cm-partner-detail-page .management-table-actions .cm-link-button,
+.cm-partner-detail-page .management-table-actions .ant-btn-link,
+.pm-detail-page .management-table-actions > a,
+.pm-detail-page .management-table-actions .cm-link-button,
+.pm-detail-page .management-table-actions .ant-btn-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
+  min-height: 22px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  color: var(--app-primary);
+  font-size: var(--app-font-size-label);
+  line-height: 22px;
+  white-space: nowrap;
+}
+
+.pm-unified-list-page .management-table-actions .ant-btn-dangerous,
+.cm-partner-detail-page .management-table-actions .ant-btn-dangerous,
+.pm-unified-list-page .management-table-actions .ant-btn-link.ant-btn-dangerous,
+.cm-partner-detail-page .management-table-actions .ant-btn-link.ant-btn-dangerous,
+.pm-detail-page .management-table-actions .ant-btn-dangerous,
+.pm-detail-page .management-table-actions .ant-btn-link.ant-btn-dangerous {
+  color: var(--app-danger);
+}
+
+.pm-unified-list-page .management-table-actions > a:hover,
+.pm-unified-list-page .management-table-actions .cm-link-button:hover,
+.pm-unified-list-page .management-table-actions .ant-btn-link:not(.ant-btn-dangerous):hover,
+.cm-partner-detail-page .management-table-actions > a:hover,
+.cm-partner-detail-page .management-table-actions .cm-link-button:hover,
+.cm-partner-detail-page .management-table-actions .ant-btn-link:not(.ant-btn-dangerous):hover,
+.pm-detail-page .management-table-actions > a:hover,
+.pm-detail-page .management-table-actions .cm-link-button:hover,
+.pm-detail-page .management-table-actions .ant-btn-link:not(.ant-btn-dangerous):hover {
+  color: var(--app-primary-hover, #0958d9);
+}
+
+.pm-unified-list-page .management-table-actions .ant-btn-dangerous:hover,
+.cm-partner-detail-page .management-table-actions .ant-btn-dangerous:hover,
+.pm-detail-page .management-table-actions .ant-btn-dangerous:hover {
+  color: var(--app-danger);
+}
+
+/* Experiment filters need to wrap before the controls become too narrow. */
+.pm-unified-list-page.eln-prototype-page .eln-filter-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.5fr) repeat(6, minmax(120px, 1fr)) auto;
+  align-items: center;
+  overflow: visible;
+}
+
+.pm-unified-list-page.eln-prototype-page .eln-filter-row > .ant-input-affix-wrapper,
+.pm-unified-list-page.eln-prototype-page .eln-filter-row > .ant-select {
+  width: 100% !important;
+  min-width: 0;
+  max-width: none;
+  flex: none;
+}
+
+.pm-unified-list-page.eln-prototype-page .eln-filter-row > .ant-btn {
+  width: auto;
+  min-width: 88px;
+  justify-self: start;
+}
+
+@media (max-width: 1400px) {
+  .pm-unified-list-page.eln-prototype-page .eln-filter-row {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .pm-unified-list-page.eln-prototype-page .eln-filter-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .pm-unified-list-page.eln-prototype-page .eln-filter-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .pm-unified-list-page.eln-prototype-page .eln-filter-row > .ant-btn {
+    width: 100%;
+    justify-self: stretch;
+  }
+}
+
+@media (max-width: 540px) {
+  .pm-unified-list-page.eln-prototype-page .eln-filter-row {
     grid-template-columns: 1fr;
   }
 }

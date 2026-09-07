@@ -528,7 +528,7 @@ function RequirementModal({ partner, requirement, open, onClose, onSaved }: Omit
       }
     >
       <Form form={form} layout="vertical">
-        <Row gutter={24}>
+        <Row className="cm-form-row" gutter={24}>
           <Col span={12}>
             <Form.Item name="title" label="需求名称" rules={[{ required: true }]}>
               <Input placeholder="未命名记录" />
@@ -550,7 +550,7 @@ function RequirementModal({ partner, requirement, open, onClose, onSaved }: Omit
             </Form.Item>
           </Col>
         </Row>
-        <Row gutter={24}>
+        <Row className="cm-form-row" gutter={24}>
           <Col span={6}>
             <Form.Item name="raisedAt" label="提出日期">
               <DatePicker format="YYYY/MM/DD" style={{ width: '100%' }} />
@@ -692,7 +692,7 @@ function FollowupModal({ partner, communication, open, onClose, onSaved }: Omit<
       }
     >
       <Form form={form} layout="vertical">
-        <Row gutter={24}>
+        <Row className="cm-form-row" gutter={24}>
           <Col span={6}>
             <Form.Item name="name" label="跟进名称" rules={[{ required: true }]}>
               <Input placeholder="请输入跟进名称" />

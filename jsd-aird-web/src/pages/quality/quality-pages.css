@@ -280,8 +280,7 @@
   padding: 16px 20px;
   margin-bottom: 12px;
 }
-.quality-record-editor,
-.quality-version-panel {
+.quality-record-editor {
   background: #fff;
   border: 1px solid #dbe5f4;
   border-radius: 12px;
@@ -311,46 +310,6 @@
 }
 .quality-record-fields label > span {
   font-size: 13px;
-}
-.quality-version-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin-top: 22px;
-}
-.quality-version-card {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  width: 100%;
-  padding: 14px 16px;
-  text-align: left;
-  background: #fafcff;
-  border: 1px solid #dbe5f4;
-  border-radius: 10px;
-  cursor: pointer;
-}
-.quality-version-card:hover {
-  border-color: #3974ef;
-  background: #f4f8ff;
-}
-.quality-version-no {
-  display: grid;
-  place-items: center;
-  width: 42px;
-  height: 42px;
-  border-radius: 50%;
-  background: #e7efff;
-  color: #2f66e8;
-  font-weight: 700;
-}
-.quality-version-card small {
-  display: block;
-  color: #8796ad;
-  margin-top: 4px;
-}
-.quality-version-panel > .ant-typography {
-  display: block;
 }
 @media (max-width: 700px) {
   .quality-workspace-header {
@@ -383,6 +342,98 @@
 .quality-excel-workspace .workspace-main-stage {
   min-height: 0;
 }
+.production-upload-workspace .workspace-main-stage {
+  gap: 16px;
+  overflow: auto;
+}
+.production-upload-workspace .workspace-main-stage.is-business-tab {
+  padding: 16px;
+  background: var(--workspace-bg, #f5f8fc);
+}
+.production-upload-workspace .workspace-main-stage.is-business-tab > .production-business-panel-standalone {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  box-sizing: border-box;
+  overflow: auto;
+}
+.production-upload-workspace .production-business-panel {
+  flex: 0 0 auto;
+  padding: 16px;
+  border: 1px solid var(--color-border, #e5e7eb);
+  border-radius: 12px;
+  background: var(--color-surface, #fff);
+}
+.production-photo-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 14px;
+}
+.production-photo-card {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #dbe5f4;
+  border-radius: 10px;
+  background: #fafcff;
+}
+.production-photo-card .ant-image,
+.production-photo-card .ant-image-img,
+.production-photo-placeholder {
+  display: block;
+  width: 100%;
+  height: 150px;
+  border-radius: 8px;
+}
+.production-photo-card .ant-image-img {
+  object-fit: cover;
+}
+.production-photo-placeholder {
+  display: grid;
+  place-items: center;
+  color: #8796ad;
+  background: #eef3fa;
+  font-size: 32px;
+}
+.production-attachment-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+  margin-top: 6px;
+}
+.production-attachment-actions .ant-btn {
+  flex: 1 1 0;
+}
+.production-attachment-meta {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 8px;
+}
+.production-file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.production-file-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid #dbe5f4;
+  border-radius: 10px;
+  background: #fafcff;
+}
+.production-file-row .production-attachment-meta {
+  margin-top: 0;
+}
+.production-file-icon {
+  flex: 0 0 auto;
+  color: #3974ef;
+  font-size: 24px;
+}
 .quality-single-workspace-grid {
   grid-template-columns: minmax(0, 1fr);
 }
@@ -409,4 +460,49 @@
 .quality-excel-workspace .quality-record-fields {
   max-width: 1100px;
   margin: 0 auto;
+}
+
+@media (max-width: 720px) {
+  .production-upload-workspace .workspace-header {
+    min-height: 0;
+    align-items: stretch;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 16px;
+  }
+  .production-upload-workspace .workspace-identity {
+    align-items: center;
+    gap: 8px;
+  }
+  .production-upload-workspace .production-upload-title-block {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+  .production-upload-workspace .production-upload-title-block > .ant-typography {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .production-upload-workspace .production-upload-title-block > .ant-typography:last-child {
+    font-size: 16px;
+  }
+  .production-upload-workspace .workspace-header > .ant-space {
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 8px !important;
+  }
+  .production-upload-workspace .workspace-header > .ant-space .ant-btn {
+    padding-inline: 10px;
+  }
+  .production-upload-workspace .workspace-main-stage:not(.is-business-tab) > .workspace-canvas {
+    flex: 1 1 auto;
+  }
+  .production-photo-list {
+    grid-template-columns: 1fr;
+  }
+  .production-file-row {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
 }

@@ -1,8 +1,9 @@
 import { ArrowLeftOutlined, ArrowRightOutlined, CaretDownOutlined, CaretRightOutlined, DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
-import { Alert, Button, DatePicker, Empty, Form, Input, Modal, Select, Skeleton, Space, Tag, message } from 'antd';
+import { Alert, Button, DatePicker, Empty, Form, Input, Modal, Popconfirm, Select, Skeleton, Space, Tag, message } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import dayjs from '@/utils/dayjs';
+import { Can } from '@/components/auth/Can';
 import { ProjectTaskBoard } from './ProjectTaskBoard';
 
 import {
@@ -34,6 +35,7 @@ export function ProjectStageBoard({ projectId }: { projectId: string }) {
   const [collapsedStageId, setCollapsedStageId] = useState<string>();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string>();
   const [editing, setEditing] = useState<ProjectStage>();
   const [open, setOpen] = useState(false);
@@ -44,19 +46,21 @@ export function ProjectStageBoard({ projectId }: { projectId: string }) {
   const [form] = Form.useForm<StageFormValues>();
   const [messageApi, holder] = message.useMessage();
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (): Promise<ProjectStage[] | undefined> => {
     setLoading(true);
     setError(undefined);
     try {
       const data = await getProjectStages(projectId);
       setStages(data);
       setSelectedStageId((value) => value && data.some(({ id }) => id === value) ? value : (focusedId && data.some(({ id }) => id === focusedId) ? focusedId : data[0]?.id));
+      return data;
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '阶段加载失败');
+      return undefined;
     } finally {
       setLoading(false);
     }
-  }, [projectId]);
+  }, [focusedId, projectId]);
 
   useEffect(() => { void load(); }, [load]);
   useEffect(() => {
@@ -91,6 +95,23 @@ export function ProjectStageBoard({ projectId }: { projectId: string }) {
     setOpen(true);
   };
 
+  const deleteSelectedStage = async () => {
+    const stage = stages.find(({ id }) => id === selectedStageId);
+    if (!stage) return;
+    setDeleting(true);
+    try {
+      await deleteStage(stage.id, stage.version);
+      setSelectedStageId(undefined);
+      setCollapsedStageId(undefined);
+      messageApi.success('阶段已删除');
+      await load();
+    } catch (reason) {
+      messageApi.error(reason instanceof Error ? reason.message : '阶段删除失败');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const submit = async () => {
     let values: StageFormValues;
     try {
@@ -122,12 +143,6 @@ export function ProjectStageBoard({ projectId }: { projectId: string }) {
     catch (reason) { setStages(previous); messageApi.error(reason instanceof Error ? reason.message : '排序失败，请刷新后重试'); }
   };
 
-  const removeSelected = () => {
-    const stage = stages.find(({ id }) => id === selectedStageId);
-    if (!stage?.allowedActions?.includes('DELETE')) return;
-    Modal.confirm({ title: `删除阶段“${stage.name}”？`, content: '仅删除没有任务或关联资料的阶段。', okText: '删除', okButtonProps: { danger: true }, cancelText: '取消', onOk: async () => { await deleteStage(stage.id, stage.version); messageApi.success('阶段已删除'); await load(); } });
-  };
-
   const dropOn = (targetId: string) => {
     if (!dragId || dragId === targetId) return;
     const from = stages.findIndex(({ id }) => id === dragId);
@@ -152,12 +167,20 @@ export function ProjectStageBoard({ projectId }: { projectId: string }) {
     void saveOrder(next);
   };
 
+  const handleTaskSaved = useCallback(async (stageId: string) => {
+    const data = await load();
+    if (data?.some(({ id }) => id === stageId)) {
+      setSelectedStageId(stageId);
+      setCollapsedStageId(undefined);
+    }
+  }, [load]);
+
   return (
     <section className="pm-stage-overview" aria-label="项目阶段预览">
       {holder}
       <div className="pm-stage-overview-head">
         <div className="pm-stage-overview-title"><strong>项目预览图</strong><span>拖拽或使用左右按钮调整顺序</span></div>
-        <Space.Compact>
+        <Space.Compact className="pm-stage-overview-actions">
           <Button
             icon={<ArrowLeftOutlined />}
             disabled={!selectedStageId || stages.findIndex(({ id }) => id === selectedStageId) <= 0}
@@ -176,7 +199,20 @@ export function ProjectStageBoard({ projectId }: { projectId: string }) {
           <Button icon={<EditOutlined />} disabled={!selectedStageId} onClick={openEditSelected}>
             编辑阶段
           </Button>
-          <Button danger icon={<DeleteOutlined />} disabled={!stages.find(({ id }) => id === selectedStageId)?.allowedActions?.includes('DELETE')} onClick={removeSelected}>删除阶段</Button>
+          <Can permission="project.delete">
+            <Popconfirm
+              title="确认删除当前阶段？"
+              description="阶段下存在任务时不能删除。"
+              okText="删除"
+              cancelText="取消"
+              okButtonProps={{ danger: true }}
+              onConfirm={() => void deleteSelectedStage()}
+            >
+              <Button danger icon={<DeleteOutlined />} disabled={!selectedStageId || deleting} loading={deleting}>
+                删除阶段
+              </Button>
+            </Popconfirm>
+          </Can>
         </Space.Compact>
       </div>
       {loading ? <div className="pm-stage-loading"><Skeleton active paragraph={{ rows: 2 }} /></div> : null}
@@ -223,7 +259,11 @@ export function ProjectStageBoard({ projectId }: { projectId: string }) {
         </div>
       ) : null}
       {stages.find(({ id }) => id === selectedStageId) && collapsedStageId !== selectedStageId ? (
-        <ProjectTaskBoard projectId={projectId} stage={stages.find(({ id }) => id === selectedStageId)!} />
+        <ProjectTaskBoard
+          projectId={projectId}
+          stage={stages.find(({ id }) => id === selectedStageId)!}
+          onTaskSaved={handleTaskSaved}
+        />
       ) : null}
 
       <Modal title={editing ? '编辑阶段' : '新增阶段'} open={open} confirmLoading={saving}

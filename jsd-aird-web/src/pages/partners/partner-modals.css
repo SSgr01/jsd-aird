@@ -248,3 +248,58 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Keep the customer requirement/follow-up forms aligned with the project
+   form on narrow screens. Ant Design's fixed span columns otherwise leave
+   four compact fields side by side and make labels/controls overlap. */
+@media (max-width: 640px) {
+  .cm-form-modal,
+  .cm-follow-modal {
+    width: calc(100vw - 16px) !important;
+    max-width: calc(100vw - 16px);
+    margin: 0 auto;
+  }
+
+  .cm-form-modal .ant-modal-content,
+  .cm-follow-modal .ant-modal-content {
+    display: flex;
+    max-height: calc(100dvh - 32px);
+    flex-direction: column;
+  }
+
+  .cm-form-modal .ant-modal-header,
+  .cm-follow-modal .ant-modal-header {
+    flex: 0 0 auto;
+  }
+
+  .cm-form-modal .ant-modal-body,
+  .cm-follow-modal .ant-modal-body {
+    min-height: 0;
+    max-height: none;
+    flex: 1 1 auto;
+    overflow-y: auto;
+  }
+
+  .cm-form-modal .ant-modal-footer,
+  .cm-follow-modal .ant-modal-footer {
+    flex: 0 0 auto;
+  }
+
+  .cm-form-modal .cm-form-row,
+  .cm-follow-modal .cm-form-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+    margin-right: 0;
+    margin-left: 0;
+  }
+
+  .cm-form-modal .cm-form-row > .ant-col,
+  .cm-follow-modal .cm-form-row > .ant-col {
+    width: 100%;
+    max-width: 100%;
+    flex: 0 0 100%;
+    padding-right: 0;
+    padding-left: 0;
+  }
+}

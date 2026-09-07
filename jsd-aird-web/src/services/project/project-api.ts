@@ -121,7 +121,6 @@ export interface TaskQuery {
   size?: number;
 }
 
-export interface ProjectExperiment { id:string; experimentCode:string; projectId:string; stageId:string; taskId:string; title:string; category?:string; owner:string; experimentDate:string; status:string; templateName?:string; templateVersion?:string; workbookContent?:string; version:number; allowedActions?: string[] }
 
 export type ProjectPriority = 'HIGH' | 'MEDIUM' | 'LOW';
 export type ProjectStatus =
@@ -342,14 +341,6 @@ export async function createProjectTask(projectId:string,input:{stageId:string;n
 export async function getProjectTask(taskId:string):Promise<ProjectTask>{const {data}=await httpClient.get<ApiResponse<ProjectTask>>(`/api/v1/tasks/${taskId}`);return data.data;}
 export async function updateProjectTask(taskId:string,input:{stageId:string;name:string;owner?:string;plannedDate?:string;status?:string;version:number}):Promise<ProjectTask>{const {data}=await httpClient.put<ApiResponse<ProjectTask>>(`/api/v1/tasks/${taskId}`,input);return data.data;}
 export async function deleteProjectTask(taskId:string, version:number):Promise<void>{await httpClient.delete(`/api/v1/tasks/${taskId}`,{params:{version}});}
-/** @deprecated Project details now reads experiments from the canonical ELN experiment API. */
-export async function getTaskExperiments(taskId:string):Promise<ProjectExperiment[]>{const {data}=await httpClient.get<ApiResponse<ProjectExperiment[]>>(`/api/v1/tasks/${taskId}/experiments`);return data.data;}
-/** @deprecated Project details now creates experiments through the canonical ELN experiment API. */
-export async function createTaskExperiment(taskId:string,input:{experimentCode?:string;title:string;category?:string;owner:string;experimentDate:string;templateName?:string;templateVersion?:string;workbookContent?:string}):Promise<ProjectExperiment>{const {data}=await httpClient.post<ApiResponse<ProjectExperiment>>(`/api/v1/tasks/${taskId}/experiments`,input);return data.data;}
-/** @deprecated Project experiments are maintained by the ELN workspace. */
-export async function updateTaskExperiment(id:string,input:{experimentCode?:string;title:string;category?:string;owner:string;experimentDate:string;version:number}):Promise<ProjectExperiment>{const {data}=await httpClient.put<ApiResponse<ProjectExperiment>>(`/api/v1/experiments/${id}`,input);return data.data;}
-/** @deprecated Project experiments are maintained by the ELN workspace. */
-export async function deleteTaskExperiment(id:string,version:number):Promise<void>{const {data}=await httpClient.delete<ApiResponse<void>>(`/api/v1/experiments/${id}`,{params:{version}});return data.data;}
 export async function getTasks(query: TaskQuery = {}): Promise<PageData<ProjectTask>> {
   const { data } = await httpClient.get<ApiResponse<PageData<ProjectTask>>>('/api/v1/tasks', {
     params: cleanParams(query),

@@ -1,0 +1,329 @@
+.production-order-page {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.production-order-page .page-heading {
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.production-order-page .page-heading > div {
+  min-width: 0;
+}
+
+.production-order-page .page-heading > .ant-space {
+  max-width: 100%;
+  justify-content: flex-end;
+}
+
+.production-order-page .production-order-page-intro {
+  padding: 18px 20px;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-card);
+  background: var(--app-surface);
+  box-shadow: var(--app-shadow);
+}
+
+.production-order-page .production-order-page-intro .ant-breadcrumb {
+  margin-bottom: 8px;
+}
+
+.production-order-toolbar {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-card);
+  background: var(--app-surface);
+  box-shadow: var(--app-shadow);
+  flex-wrap: wrap;
+}
+
+.production-order-toolbar .pm-batch-summary,
+.production-order-toolbar .pm-batch-actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.production-order-toolbar .pm-batch-summary {
+  gap: 8px;
+}
+
+.production-order-toolbar .pm-selected {
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-size-caption);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.production-order-toolbar .pm-batch-summary .ant-btn-link {
+  height: auto;
+  min-height: 0;
+  padding: 0;
+  color: var(--app-primary);
+  font-size: var(--app-font-size-label);
+  line-height: 22px;
+}
+
+.production-order-toolbar .pm-batch-actions {
+  justify-content: flex-end;
+}
+
+.production-order-toolbar .pm-batch-actions .ant-btn {
+  height: 32px;
+  min-height: 32px;
+}
+
+.production-order-toolbar .ant-space {
+  max-width: 100%;
+}
+
+.production-order-filter {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.production-order-filter .ant-card-body {
+  min-width: 0;
+}
+
+.production-order-filter .ant-space {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 10px;
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+
+.production-order-filter .ant-space-item {
+  min-width: 0;
+}
+
+.production-order-filter .ant-input-search,
+.production-order-filter .ant-select {
+  max-width: 100%;
+}
+
+.production-order-filter .ant-space-item:first-child {
+  width: 300px;
+  min-width: 220px;
+  flex: 1 1 300px;
+}
+
+.production-order-filter .ant-space-item:nth-child(2) {
+  width: 160px;
+  min-width: 140px;
+  flex: 0 1 160px;
+}
+
+.production-order-filter .ant-space-item:nth-child(n + 3) {
+  flex: 0 0 auto;
+}
+
+.production-order-filter .ant-space-item:first-child .ant-input-search,
+.production-order-filter .ant-space-item:nth-child(2) .ant-select {
+  width: 100% !important;
+}
+
+.production-order-table-card {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.production-order-table-card .ant-table-wrapper {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.production-order-table-card .ant-table {
+  table-layout: fixed;
+}
+
+.production-order-table-card .ant-table-cell {
+  overflow: hidden;
+}
+
+.production-order-view-toggle .ant-btn {
+  width: 34px;
+  padding-inline: 0;
+}
+
+.production-order-card-view .ant-card-body {
+  padding: 16px;
+}
+
+.production-order-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px;
+}
+
+.production-order-card {
+  display: flex;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--app-border);
+  border-radius: 10px;
+  background: var(--app-surface);
+  flex-direction: column;
+}
+
+.production-order-card-head {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.production-order-card-icon {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  border-radius: 8px;
+  background: var(--app-primary-soft, #edf3ff);
+  color: var(--app-primary);
+  font-size: 18px;
+  place-items: center;
+}
+
+.production-order-card-title {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 3px;
+}
+
+.production-order-card-title .ant-typography {
+  display: block;
+  min-width: 0;
+}
+
+.production-order-card-head > .ant-tag {
+  flex: 0 0 auto;
+  margin-inline-start: 4px;
+}
+
+.production-order-card-head > .ant-checkbox-wrapper {
+  flex: 0 0 auto;
+  margin-inline-start: 2px;
+}
+
+.production-order-card-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 16px;
+  margin-top: 16px;
+}
+
+.production-order-card-fields > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.production-order-card-fields > div > span {
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-size-caption);
+}
+
+.production-order-card-fields .ant-typography {
+  min-width: 0;
+}
+
+.production-order-card-field-wide {
+  grid-column: 1 / -1;
+}
+
+.production-order-card-meta {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--app-border);
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-size-caption);
+}
+
+.production-order-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.production-order-card-actions .ant-btn-link {
+  padding-inline: 0;
+}
+
+.production-order-card-loading {
+  display: grid;
+  min-height: 260px;
+  place-items: center;
+}
+
+.production-order-card-pagination {
+  margin-top: 16px;
+  text-align: right;
+}
+
+.production-order-cell-text {
+  display: block;
+  max-width: 100%;
+}
+
+.production-order-file-cell {
+  display: flex !important;
+  width: 100%;
+  min-width: 0;
+}
+
+.production-order-file-cell .production-order-cell-text {
+  min-width: 0;
+  flex: 1;
+}
+
+@media (max-width: 720px) {
+  .production-order-page .page-heading > .ant-space {
+    justify-content: flex-start;
+  }
+
+  .production-order-toolbar {
+    align-items: flex-start;
+  }
+
+  .production-order-toolbar .pm-batch-actions {
+    justify-content: flex-start;
+  }
+
+  .production-order-filter .ant-space {
+    width: 100%;
+  }
+
+  .production-order-filter .ant-space-item:first-child,
+  .production-order-filter .ant-space-item:nth-child(2) {
+    width: 100%;
+    min-width: 0;
+    flex-basis: 100%;
+  }
+
+  .production-order-card-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .production-order-card-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .production-order-card-field-wide {
+    grid-column: auto;
+  }
+}

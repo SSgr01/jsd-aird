@@ -1,14 +1,17 @@
+/* eslint-disable react-refresh/only-export-components */
 import {
   CheckCircleOutlined,
   DeleteOutlined,
+  FileOutlined,
   LinkOutlined,
   PlusOutlined,
   RollbackOutlined,
   UploadOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Card, Col, Input, InputNumber, Row, Select, Space, Tag, Typography } from 'antd';
-import { useRef } from 'react';
+import { Alert, Button, Card, Col, Empty, Image, Input, InputNumber, Row, Select, Space, Tag, Typography, message } from 'antd';
+import { useRef, useState } from 'react';
 
+import { stageFile } from '@/services/files/file-api';
 import { useAuthStore } from '@/stores/auth-store';
 
 export type ProductionBusinessStatus = 'NOT_ORDERED' | 'ORDERED' | 'MASS_PRODUCED' | 'VOID';
@@ -61,7 +64,14 @@ export interface ProductionBusinessSnapshot {
   outputRows: ProductionOutputRow[];
   formula: { expression: string; ratio: number; tolerance: number };
   signatures: { operator: string; quality: string; reviewer: string; signedAt: string };
-  attachments: Array<{ id: string; name: string; kind: 'MATERIAL_PHOTO' | 'PROCESS_ATTACHMENT' }>;
+  attachments: Array<{
+    id: string;
+    name: string;
+    kind: 'MATERIAL_PHOTO' | 'PROCESS_ATTACHMENT';
+    fileId?: string;
+    contentType?: string;
+    size?: number;
+  }>;
   links: {
     rawMaterialIssued: boolean;
     finishedGoodsStored: boolean;
@@ -146,7 +156,14 @@ export function normalizeBusinessSnapshot(value: unknown): ProductionBusinessSna
     })) : [],
     formula: { ...empty.formula, ...(source.formula || {}), expression: asString(source.formula?.expression), ratio: asNumber(source.formula?.ratio), tolerance: asNumber(source.formula?.tolerance) },
     signatures: { ...empty.signatures, ...(source.signatures || {}) },
-    attachments: Array.isArray(source.attachments) ? source.attachments.map((item) => ({ id: asString(item.id) || crypto.randomUUID(), name: asString(item.name), kind: item.kind || 'PROCESS_ATTACHMENT' })) : [],
+    attachments: Array.isArray(source.attachments) ? source.attachments.map((item) => ({
+      id: asString(item.id) || crypto.randomUUID(),
+      name: asString(item.name),
+      kind: item.kind || 'PROCESS_ATTACHMENT',
+      fileId: asString(item.fileId) || undefined,
+      contentType: asString(item.contentType) || undefined,
+      size: typeof item.size === 'number' ? item.size : undefined,
+    })) : [],
     links: { ...empty.links, ...(source.links || {}) },
     audit: Array.isArray(source.audit) ? source.audit : [],
   };
@@ -173,15 +190,27 @@ export function validateBusinessSnapshot(value: ProductionBusinessSnapshot): str
   return undefined;
 }
 
+export type ProductionBusinessPanelSection = 'all' | 'material' | 'attachments';
+
 interface ProductionBusinessPanelProps {
   value: ProductionBusinessSnapshot;
   editable: boolean;
   onChange: (value: ProductionBusinessSnapshot) => void;
+  onAttachmentsChange?: (value: ProductionBusinessSnapshot) => Promise<boolean>;
+  section?: ProductionBusinessPanelSection;
 }
 
-export function ProductionBusinessPanel({ value, editable, onChange }: ProductionBusinessPanelProps) {
-  const attachmentInput = useRef<HTMLInputElement>(null);
+export function ProductionBusinessPanel({ value, editable, onChange, onAttachmentsChange, section = 'all' }: ProductionBusinessPanelProps) {
+  const photoInput = useRef<HTMLInputElement>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [uploadingKind, setUploadingKind] = useState<'MATERIAL_PHOTO' | 'PROCESS_ATTACHMENT'>();
+  const [deletingAttachmentId, setDeletingAttachmentId] = useState<string>();
+  const [msg, holder] = message.useMessage();
   const operator = useAuthStore((state) => state.user?.displayName || state.user?.username || '当前登录用户');
+  const showAll = section === 'all';
+  const showMaterials = showAll;
+  const showMaterialPhotos = showAll || section === 'material';
+  const showProcessAttachments = showAll || section === 'attachments';
   const commit = (next: ProductionBusinessSnapshot, action: string, detail: string) => {
     onChange({
       ...next,
@@ -199,8 +228,73 @@ export function ProductionBusinessPanel({ value, editable, onChange }: Productio
   const addInspection = () => update('inspectionRows', [...value.inspectionRows, { id: crypto.randomUUID(), date: '', inspector: '', result: 'PENDING', note: '' }]);
   const addOutput = () => update('outputRows', [...value.outputRows, { id: crypto.randomUUID(), batch: '', quantity: 0, packageSpec: '', packageDate: '' }]);
 
+  const persistAttachments = async (attachments: ProductionBusinessSnapshot['attachments']) => {
+    const next = { ...value, attachments };
+    onChange(next);
+    return onAttachmentsChange ? onAttachmentsChange(next) : true;
+  };
+
+  const uploadAttachment = async (
+    file: File | undefined,
+    kind: 'MATERIAL_PHOTO' | 'PROCESS_ATTACHMENT',
+    input: HTMLInputElement,
+  ) => {
+    if (!file) return;
+    if (kind === 'MATERIAL_PHOTO' && !file.type.startsWith('image/')) {
+      msg.error('实际投料单只支持上传图片');
+      input.value = '';
+      return;
+    }
+    if (value.attachments.some((item) => item.kind === kind && item.name === file.name)) {
+      msg.warning('列表中已存在同名文件');
+      input.value = '';
+      return;
+    }
+    setUploadingKind(kind);
+    try {
+      const staged = await stageFile(file, 'PRODUCTION_SOURCE');
+      const saved = await persistAttachments([...value.attachments, {
+        id: crypto.randomUUID(),
+        name: staged.originalName || file.name,
+        kind,
+        fileId: staged.fileId,
+        contentType: staged.contentType || file.type,
+        size: staged.size || file.size,
+      }]);
+      if (saved) {
+        msg.success(kind === 'MATERIAL_PHOTO' ? '图片已上传并自动保存' : '文件已上传并自动保存');
+      } else {
+        msg.warning('文件已上传，但自动保存失败，请点击“保存草稿”重试');
+      }
+    } catch (reason) {
+      msg.error(reason instanceof Error ? reason.message : '上传失败');
+    } finally {
+      setUploadingKind(undefined);
+      input.value = '';
+    }
+  };
+
+  const removeAttachment = async (id: string) => {
+    setDeletingAttachmentId(id);
+    try {
+      const saved = await persistAttachments(value.attachments.filter((item) => item.id !== id));
+      if (saved) msg.success('附件已删除并自动保存');
+    } finally {
+      setDeletingAttachmentId(undefined);
+    }
+  };
+
+  const materialPhotos = value.attachments.filter((item) => item.kind === 'MATERIAL_PHOTO');
+  const processAttachments = value.attachments.filter((item) => item.kind === 'PROCESS_ATTACHMENT');
+  const fileSize = (size?: number) => size === undefined
+    ? '大小未知'
+    : size < 1024 * 1024
+      ? `${Math.max(1, Math.round(size / 1024))} KB`
+      : `${(size / 1024 / 1024).toFixed(1)} MB`;
+
   return <Space direction="vertical" size={16} style={{ width: '100%' }}>
-    <Card size="small" title="业务状态与流程" extra={<Tag color={value.status === 'VOID' ? 'error' : value.status === 'MASS_PRODUCED' ? 'success' : 'processing'}>{statusLabels[value.status]}</Tag>}>
+    {holder}
+    {showAll && <Card size="small" title="业务状态与流程" extra={<Tag color={value.status === 'VOID' ? 'error' : value.status === 'MASS_PRODUCED' ? 'success' : 'processing'}>{statusLabels[value.status]}</Tag>}>
       <Space wrap>
         <Select disabled={!editable} value={value.status} style={{ width: 140 }} options={allowedStatusTransitions[value.status].map((key) => ({ value: key, label: statusLabels[key] }))} onChange={(status: ProductionBusinessStatus) => commit({ ...value, status }, '业务状态变更', `状态变更为${statusLabels[status]}`)} />
         <Button disabled={!editable || value.status !== 'NOT_ORDERED'} onClick={() => commit({ ...value, status: 'ORDERED' }, '提交下单', '生产单已进入已下单状态')}>提交下单</Button>
@@ -209,9 +303,9 @@ export function ProductionBusinessPanel({ value, editable, onChange }: Productio
         <Button icon={<RollbackOutlined />} disabled={!editable || value.status !== 'VOID'} onClick={() => commit({ ...value, status: 'NOT_ORDERED' }, '撤销作废', '生产单恢复为未下单')}>撤销作废</Button>
       </Space>
       <Alert style={{ marginTop: 12 }} type="info" showIcon message="所有状态变更都会写入操作留痕；已量产和已作废记录仍可查看历史版本。" />
-    </Card>
+    </Card>}
 
-    <Card size="small" title="生产任务单 / 工序" extra={<Space size={6}><Button size="small" icon={<PlusOutlined />} disabled={!editable} onClick={addTask}>新增任务</Button><Button size="small" disabled={!editable || !value.taskRows.length} onClick={() => commit({ ...value, taskRows: value.taskRows.map((row) => ({ ...row, status: 'COMPLETED' })) }, '批量完成工序', `已批量完成${value.taskRows.length}条工序`)}>批量完成工序</Button></Space>}>
+    {showAll && <Card size="small" title="生产任务单 / 工序" extra={<Space size={6}><Button size="small" icon={<PlusOutlined />} disabled={!editable} onClick={addTask}>新增任务</Button><Button size="small" disabled={!editable || !value.taskRows.length} onClick={() => commit({ ...value, taskRows: value.taskRows.map((row) => ({ ...row, status: 'COMPLETED' })) }, '批量完成工序', `已批量完成${value.taskRows.length}条工序`)}>批量完成工序</Button></Space>}>
       {value.taskRows.length ? value.taskRows.map((row, index) => <Row gutter={8} key={row.id} style={{ marginBottom: 8 }}>
         <Col flex="1 1 180px"><Input disabled={!editable} aria-label={`工序-${index + 1}`} placeholder="工序名称" value={row.process} onChange={(e) => update('taskRows', value.taskRows.map((item) => item.id === row.id ? { ...item, process: e.target.value } : item))} /></Col>
         <Col flex="1 1 140px"><Input disabled={!editable} aria-label={`负责人-${index + 1}`} placeholder="负责人" value={row.owner} onChange={(e) => update('taskRows', value.taskRows.map((item) => item.id === row.id ? { ...item, owner: e.target.value } : item))} /></Col>
@@ -219,9 +313,9 @@ export function ProductionBusinessPanel({ value, editable, onChange }: Productio
         <Col flex="0 1 145px"><Input disabled={!editable} type="date" aria-label={`计划日期-${index + 1}`} value={row.plannedDate} onChange={(e) => update('taskRows', value.taskRows.map((item) => item.id === row.id ? { ...item, plannedDate: e.target.value } : item))} /></Col>
         <Col flex="0 0 36px"><Button danger type="text" aria-label={`删除任务-${index + 1}`} icon={<DeleteOutlined />} disabled={!editable} onClick={() => update('taskRows', value.taskRows.filter((item) => item.id !== row.id))} /></Col>
       </Row>) : <Typography.Text type="secondary">暂无生产任务，点击“新增任务”建立工序和负责人。</Typography.Text>}
-    </Card>
+    </Card>}
 
-    <Card size="small" title="投料记录 / 原料批次与实际投料" extra={<Space size={6}><Button size="small" icon={<PlusOutlined />} disabled={!editable} onClick={addMaterial}>新增投料</Button><Button size="small" disabled={!editable || !value.materialRows.length} onClick={() => commit(value, '批量确认投料', `已批量确认${value.materialRows.length}条投料记录`)}>批量确认投料</Button></Space>}>
+    {showMaterials && <Card size="small" title="投料记录 / 原料批次与实际投料" extra={<Space size={6}><Button size="small" icon={<PlusOutlined />} disabled={!editable} onClick={addMaterial}>新增投料</Button><Button size="small" disabled={!editable || !value.materialRows.length} onClick={() => commit(value, '批量确认投料', `已批量确认${value.materialRows.length}条投料记录`)}>批量确认投料</Button></Space>}>
       {value.materialRows.length ? value.materialRows.map((row, index) => <Row gutter={8} key={row.id} style={{ marginBottom: 8 }}>
         <Col flex="1 1 170px"><Input disabled={!editable} aria-label={`原料-${index + 1}`} placeholder="原料名称" value={row.material} onChange={(e) => update('materialRows', value.materialRows.map((item) => item.id === row.id ? { ...item, material: e.target.value } : item))} /></Col>
         <Col flex="1 1 150px"><Input disabled={!editable} aria-label={`批次-${index + 1}`} placeholder="原料批次" value={row.batch} onChange={(e) => update('materialRows', value.materialRows.map((item) => item.id === row.id ? { ...item, batch: e.target.value } : item))} /></Col>
@@ -229,9 +323,9 @@ export function ProductionBusinessPanel({ value, editable, onChange }: Productio
         <Col flex="0 1 120px"><InputNumber disabled={!editable} aria-label={`实际用量-${index + 1}`} min={0} style={{ width: '100%' }} placeholder="实际用量" value={row.actual} onChange={(actual) => update('materialRows', value.materialRows.map((item) => item.id === row.id ? { ...item, actual: Number(actual || 0) } : item))} /></Col>
         <Col flex="0 0 36px"><Button danger type="text" aria-label={`删除投料-${index + 1}`} icon={<DeleteOutlined />} disabled={!editable} onClick={() => update('materialRows', value.materialRows.filter((item) => item.id !== row.id))} /></Col>
       </Row>) : <Typography.Text type="secondary">暂无投料记录。</Typography.Text>}
-    </Card>
+    </Card>}
 
-    <Card size="small" title="M687 配方比例与公式 / 实际产量与包装">
+    {showAll && <Card size="small" title="M687 配方比例与公式 / 实际产量与包装">
       <Row gutter={12}>
         <Col xs={24} md={12}><Typography.Text type="secondary">计算公式</Typography.Text><Input disabled={!editable} placeholder="例如 A / B * 100%" value={value.formula.expression} onChange={(e) => update('formula', { ...value.formula, expression: e.target.value })} /></Col>
         <Col xs={12} md={6}><Typography.Text type="secondary">配方比例（%）</Typography.Text><InputNumber disabled={!editable} min={0} max={100} style={{ width: '100%' }} value={value.formula.ratio} onChange={(ratio) => update('formula', { ...value.formula, ratio: Number(ratio || 0) })} /></Col>
@@ -245,9 +339,9 @@ export function ProductionBusinessPanel({ value, editable, onChange }: Productio
         <Col flex="0 1 145px"><Input disabled={!editable} type="date" aria-label={`包装日期-${index + 1}`} value={row.packageDate} onChange={(e) => update('outputRows', value.outputRows.map((item) => item.id === row.id ? { ...item, packageDate: e.target.value } : item))} /></Col>
         <Col flex="0 0 36px"><Button danger type="text" aria-label={`删除产量-${index + 1}`} icon={<DeleteOutlined />} disabled={!editable} onClick={() => update('outputRows', value.outputRows.filter((item) => item.id !== row.id))} /></Col>
       </Row>)}
-    </Card>
+    </Card>}
 
-    <Card size="small" title="巡检记录" extra={<Space size={6}><Button size="small" icon={<PlusOutlined />} disabled={!editable} onClick={addInspection}>新增巡检</Button><Button size="small" disabled={!editable || !value.inspectionRows.length} onClick={() => commit(value, '批量确认巡检', `已批量确认${value.inspectionRows.length}条巡检记录`)}>批量确认巡检</Button></Space>}>
+    {showAll && <Card size="small" title="巡检记录" extra={<Space size={6}><Button size="small" icon={<PlusOutlined />} disabled={!editable} onClick={addInspection}>新增巡检</Button><Button size="small" disabled={!editable || !value.inspectionRows.length} onClick={() => commit(value, '批量确认巡检', `已批量确认${value.inspectionRows.length}条巡检记录`)}>批量确认巡检</Button></Space>}>
       {value.inspectionRows.length ? value.inspectionRows.map((row, index) => <Row gutter={8} key={row.id} style={{ marginBottom: 8 }}>
         <Col flex="0 1 145px"><Input disabled={!editable} type="date" aria-label={`巡检日期-${index + 1}`} value={row.date} onChange={(e) => update('inspectionRows', value.inspectionRows.map((item) => item.id === row.id ? { ...item, date: e.target.value } : item))} /></Col>
         <Col flex="1 1 140px"><Input disabled={!editable} aria-label={`巡检人-${index + 1}`} placeholder="巡检人" value={row.inspector} onChange={(e) => update('inspectionRows', value.inspectionRows.map((item) => item.id === row.id ? { ...item, inspector: e.target.value } : item))} /></Col>
@@ -255,23 +349,43 @@ export function ProductionBusinessPanel({ value, editable, onChange }: Productio
         <Col flex="1 1 220px"><Input disabled={!editable} placeholder="巡检备注" value={row.note} onChange={(e) => update('inspectionRows', value.inspectionRows.map((item) => item.id === row.id ? { ...item, note: e.target.value } : item))} /></Col>
         <Col flex="0 0 36px"><Button danger type="text" aria-label={`删除巡检-${index + 1}`} icon={<DeleteOutlined />} disabled={!editable} onClick={() => update('inspectionRows', value.inspectionRows.filter((item) => item.id !== row.id))} /></Col>
       </Row>) : <Typography.Text type="secondary">暂无巡检记录。</Typography.Text>}
-    </Card>
+    </Card>}
 
-    <Card size="small" title="附件与签名审计">
-      <Space wrap>
-        <Button icon={<UploadOutlined />} disabled={!editable} onClick={() => attachmentInput.current?.click()}>上传实际投料单照片/工艺附件</Button>
-        <input ref={attachmentInput} hidden type="file" accept="image/*,.pdf,.doc,.docx,.xlsx" onChange={(event) => {
-          const file = event.target.files?.[0];
-          if (!file) return;
-          if (value.attachments.some((item) => item.name === file.name)) {
-            event.target.value = '';
-            return;
-          }
-          update('attachments', [...value.attachments, { id: crypto.randomUUID(), name: file.name, kind: file.type.startsWith('image/') ? 'MATERIAL_PHOTO' : 'PROCESS_ATTACHMENT' }]);
-          event.target.value = '';
-        }} />
-        {value.attachments.map((item) => <Tag key={item.id} closable={editable} onClose={() => update('attachments', value.attachments.filter((entry) => entry.id !== item.id))}>{item.kind === 'MATERIAL_PHOTO' ? '投料照片' : '工艺附件'} · {item.name}</Tag>)}
-      </Space>
+    {showMaterialPhotos && <Card
+      size="small"
+      title="实际投料单图片"
+      extra={<Button icon={<UploadOutlined />} disabled={!editable || Boolean(uploadingKind)} loading={uploadingKind === 'MATERIAL_PHOTO'} onClick={() => photoInput.current?.click()}>上传图片</Button>}
+    >
+      <input ref={photoInput} hidden type="file" accept="image/*" onChange={(event) => void uploadAttachment(event.target.files?.[0], 'MATERIAL_PHOTO', event.currentTarget)} />
+      {materialPhotos.length ? <div className="production-photo-list">
+        {materialPhotos.map((item) => <div className="production-photo-card" key={item.id}>
+          {item.fileId ? <Image src={`/api/v1/files/${encodeURIComponent(item.fileId)}/content`} alt={item.name} /> : <div className="production-photo-placeholder"><FileOutlined /></div>}
+          <div className="production-attachment-meta"><Typography.Text ellipsis title={item.name}>{item.name}</Typography.Text><Typography.Text type="secondary">{fileSize(item.size)}</Typography.Text></div>
+          <div className="production-attachment-actions">
+            {item.fileId && <Button type="link" href={`/api/v1/files/${encodeURIComponent(item.fileId)}/content`} download={item.name}>下载</Button>}
+            <Button danger type="text" loading={deletingAttachmentId === item.id} disabled={!editable || Boolean(deletingAttachmentId)} onClick={() => void removeAttachment(item.id)}>删除</Button>
+          </div>
+        </div>)}
+      </div> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无实际投料单图片" />}
+    </Card>}
+
+    {showProcessAttachments && <Card
+      size="small"
+      title="工艺附件文件"
+      extra={<Button icon={<UploadOutlined />} disabled={!editable || Boolean(uploadingKind)} loading={uploadingKind === 'PROCESS_ATTACHMENT'} onClick={() => fileInput.current?.click()}>上传文件</Button>}
+    >
+      <input ref={fileInput} hidden type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.zip,.rar" onChange={(event) => void uploadAttachment(event.target.files?.[0], 'PROCESS_ATTACHMENT', event.currentTarget)} />
+      {processAttachments.length ? <div className="production-file-list">
+        {processAttachments.map((item) => <div className="production-file-row" key={item.id}>
+          <FileOutlined className="production-file-icon" />
+          <div className="production-attachment-meta"><Typography.Text ellipsis title={item.name}>{item.name}</Typography.Text><Typography.Text type="secondary">{item.contentType || '文件'} · {fileSize(item.size)}</Typography.Text></div>
+          {item.fileId && <Button type="link" href={`/api/v1/files/${encodeURIComponent(item.fileId)}/content`} download={item.name}>下载</Button>}
+          <Button danger type="text" loading={deletingAttachmentId === item.id} disabled={!editable || Boolean(deletingAttachmentId)} onClick={() => void removeAttachment(item.id)}>删除</Button>
+        </div>)}
+      </div> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无工艺附件" />}
+    </Card>}
+
+    {showAll && <Card size="small" title="签名审计">
       <Row gutter={8} style={{ marginTop: 12 }}>
         <Col xs={24} md={6}><Input disabled={!editable} placeholder="生产操作人签名" value={value.signatures.operator} onChange={(e) => update('signatures', { ...value.signatures, operator: e.target.value })} /></Col>
         <Col xs={24} md={6}><Input disabled={!editable} placeholder="品管签名" value={value.signatures.quality} onChange={(e) => update('signatures', { ...value.signatures, quality: e.target.value })} /></Col>
@@ -279,9 +393,9 @@ export function ProductionBusinessPanel({ value, editable, onChange }: Productio
         <Col xs={24} md={6}><Input disabled={!editable} type="datetime-local" value={value.signatures.signedAt} onChange={(e) => update('signatures', { ...value.signatures, signedAt: e.target.value })} /></Col>
       </Row>
       <Button style={{ marginTop: 12 }} icon={<CheckCircleOutlined />} disabled={!editable || !value.signatures.operator || !value.signatures.quality} onClick={() => commit(value, '签名确认', '生产操作人与品管签名已确认')}>确认签名并写入审计</Button>
-    </Card>
+    </Card>}
 
-    <Card size="small" title="库存与研发联动">
+    {showAll && <Card size="small" title="库存与研发联动">
       <Space wrap>
         {([
           ['rawMaterialIssued', '原料扣减', '原料库存已扣减'],
@@ -291,10 +405,10 @@ export function ProductionBusinessPanel({ value, editable, onChange }: Productio
         ] as const).map(([key, label, detail]) => <Button key={key} icon={<LinkOutlined />} disabled={!editable || value.links[key]} onClick={() => commit({ ...value, links: { ...value.links, [key]: true } }, label, detail)}>{value.links[key] ? `已${label}` : label}</Button>)}
       </Space>
       <Typography.Paragraph type="secondary" style={{ margin: '12px 0 0' }}>联动动作按生产单快照幂等：同一动作再次点击不会重复生成扣减、入库或过账记录。</Typography.Paragraph>
-    </Card>
+    </Card>}
 
-    <Card size="small" title="操作留痕">
+    {showAll && <Card size="small" title="操作留痕">
       {value.audit.length ? value.audit.slice().reverse().map((item) => <div key={item.id} style={{ padding: '8px 0', borderBottom: '1px solid #f0f0f0' }}><Typography.Text strong>{item.action}</Typography.Text><Typography.Text type="secondary"> · {item.operator} · {new Date(item.createdAt).toLocaleString('zh-CN')}</Typography.Text><div><Typography.Text type="secondary">{item.detail}</Typography.Text></div></div>) : <Typography.Text type="secondary">暂无业务操作留痕。</Typography.Text>}
-    </Card>
+    </Card>}
   </Space>;
 }

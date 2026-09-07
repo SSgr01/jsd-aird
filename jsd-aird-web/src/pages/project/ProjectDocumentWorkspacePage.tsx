@@ -1,5 +1,5 @@
 import { ArrowLeftOutlined, CloudUploadOutlined, DownloadOutlined, EyeOutlined, HistoryOutlined, SaveOutlined } from '@ant-design/icons';
-import { Button, Empty, Result, Skeleton, Space, Tabs, Tag, Typography, message } from 'antd';
+import { Button, Result, Skeleton, Space, Tabs, Tag, Typography, message } from 'antd';
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import type { DocumentStructure, EditorHandle, TemplateBinding } from '@/features/template-workspace/types';
@@ -9,6 +9,7 @@ import { templateApi } from '@/services/templates/template-api';
 import { projectDocumentApi, type ProjectDocumentDetail, type ProjectDocumentVersion } from '@/services/project/project-document-api';
 import { formatTime } from '@/utils/date';
 import { SaveStateBadge, type SaveState } from '@/components/SaveStateBadge';
+import { VersionHistoryPanel } from '@/components/version-history/VersionHistoryPanel';
 import { downloadBlob } from '@/services/files/file-api';
 
 const SheetsEditor = lazy(async () => ({ default: (await import('@/features/template-workspace/UniverSheetsEditor')).UniverSheetsEditor }));
@@ -222,27 +223,18 @@ export function ProjectDocumentWorkspacePage() {
         <main className="workspace-canvas project-versions-panel">
           {versionLoading ? <Skeleton active paragraph={{ rows: 8 }} /> : (
             <div className="project-versions-content">
-              {selectedVersion ? <HistoricalProjectVersion version={selectedVersion} word={word} onBack={() => setSelectedVersion(undefined)} /> : <><header className="project-versions-header">
-                <Typography.Title level={4} style={{ marginBottom: 4 }}>版本记录</Typography.Title>
-                <Typography.Text type="secondary">每次发布都会生成正式版本，历史版本只读，当前工作副本可继续编辑。</Typography.Text>
-              </header>
-              <section className="project-versions-list">
-                {versions.length === 0 ? <Empty description="暂无版本快照（保存文档后将自动记录）" /> : versions.map((item) => (
-                  <article key={item.id} className="project-version-card" role="button" tabIndex={0} onClick={() => setSelectedVersion(item)} onKeyDown={(event) => { if (event.key === 'Enter') setSelectedVersion(item); }}>
-                    <div className="project-version-bubble">V{item.versionNo}</div>
-                    <div className="project-version-meta">
-                      <div className="project-version-title">
-                        <span>版本 V{item.versionNo}</span>
-                        <Tag color={item.status === 'DRAFT' ? 'default' : item.status === 'PUBLISHED' ? 'green' : 'orange'}>{item.status}</Tag>
-                        {item.snapshotReason && <Typography.Text type="secondary">· {item.snapshotReason}</Typography.Text>}
-                      </div>
-                      <div className="project-version-time">
-                        最近更新：{formatTime(item.createdAt)}（{item.createdBy ?? '未知'}）
-                      </div>
-                    </div>
-                  </article>
-                ))}
-              </section></>}
+              {selectedVersion ? <HistoricalProjectVersion version={selectedVersion} word={word} onBack={() => setSelectedVersion(undefined)} /> : (
+                <VersionHistoryPanel
+                  versions={versions}
+                  onSelect={setSelectedVersion}
+                  emptyDescription="暂无版本记录"
+                  getLabel={(item) => item.status === 'PUBLISHED'
+                    ? '发布版本'
+                    : item.status === 'DRAFT'
+                      ? '草稿版本'
+                      : '归档版本'}
+                />
+              )}
             </div>
           )}
         </main>
@@ -260,9 +252,17 @@ export function ProjectDocumentWorkspacePage() {
 }
 
 function HistoricalProjectVersion({ version, word, onBack }: { version: ProjectDocumentVersion; word: boolean; onBack: () => void }) {
-  const content = version.contentJsonb ?? {};
-  const historicalSnapshot = readVersionJson<Record<string, unknown>>(content.contentSnapshot, {});
-  const historicalMapping = readVersionJson<TemplateBinding[]>(content.contentMapping, []);
+  const content = readVersionRecord(version.contentJsonb);
+  const historicalSnapshot = readVersionRecord(
+    content.contentSnapshot
+      ?? content.content_snapshot
+      ?? content.snapshot
+      ?? (hasSnapshotShape(content) ? content : undefined),
+    blankSnapshot(word ? 'DOCX' : 'XLSX', version.documentId, `版本 V${version.versionNo}`),
+  );
+  const historicalMapping = readVersionArray<TemplateBinding>(
+    content.contentMapping ?? content.content_mapping ?? content.mapping,
+  );
   return <div className="project-version-preview">
     <header className="project-versions-header"><Button onClick={onBack}>返回版本列表</Button><Typography.Title level={4}>版本 V{version.versionNo}</Typography.Title><Typography.Text type="secondary">{formatTime(version.createdAt)} · {version.createdBy ?? '未知'}</Typography.Text></header>
     <main className="workspace-canvas document-readonly"><Suspense fallback={<Skeleton active />}>{word
@@ -271,7 +271,21 @@ function HistoricalProjectVersion({ version, word, onBack }: { version: ProjectD
   </div>;
 }
 
-function readVersionJson<T>(value: unknown, fallback: T): T {
-  if (typeof value !== 'string') return (value as T | undefined) ?? fallback;
-  try { return JSON.parse(value) as T; } catch { return fallback; }
+function readVersionRecord(value: unknown, fallback: Record<string, unknown> = {}): Record<string, unknown> {
+  const parsed = parseVersionJson(value);
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : fallback;
+}
+
+function readVersionArray<T>(value: unknown, fallback: T[] = []): T[] {
+  const parsed = parseVersionJson(value);
+  return Array.isArray(parsed) ? parsed as T[] : fallback;
+}
+
+function parseVersionJson(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+  try { return JSON.parse(value); } catch { return undefined; }
+}
+
+function hasSnapshotShape(value: Record<string, unknown>) {
+  return 'body' in value || 'sheets' in value || 'sheetOrder' in value;
 }

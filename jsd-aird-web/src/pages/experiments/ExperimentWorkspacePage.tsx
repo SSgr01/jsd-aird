@@ -1,6 +1,5 @@
 import {
   ArrowLeftOutlined,
-  DeleteOutlined,
   DownloadOutlined,
   EyeOutlined,
   LoadingOutlined,
@@ -8,6 +7,7 @@ import {
 } from '@ant-design/icons';
 import { formatTime } from '@/utils/date';
 import { SaveStateBadge, type SaveState } from '@/components/SaveStateBadge';
+import { VersionHistoryPanel } from '@/components/version-history/VersionHistoryPanel';
 import {
   App,
   Button,
@@ -25,12 +25,10 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { buildExperimentSnapshot, parseExperimentSnapshot } from '@/features/experiment-workspace/experiment-workbook';
 import type { EditorHandle } from '@/features/template-workspace/types';
 import {
-  actExperiment,
   createRevision,
-  deleteExperiment,
   getExperiment,
   listVersions,
-  rollbackVersion,
+  publishExperiment,
   saveExperiment,
   type ExperimentDetail,
   type ExperimentModel,
@@ -49,8 +47,6 @@ const DocsEditor = lazy(async () => ({
 }));
 
 type WorkspaceView = 'preview' | 'edit' | 'versions';
-type PublishAction = 'start' | 'submit-review' | 'approve';
-
 const STATUS_TEXT: Record<string, string> = {
   DRAFT: '草稿',
   PENDING: '待开始',
@@ -59,16 +55,6 @@ const STATUS_TEXT: Record<string, string> = {
   RETURNED: '已退回',
   COMPLETED: '已完成',
   VOIDED: '已作废',
-};
-
-const STATUS_COLOR: Record<string, string> = {
-  DRAFT: 'gold',
-  PENDING: 'blue',
-  IN_PROGRESS: 'processing',
-  PENDING_REVIEW: 'purple',
-  RETURNED: 'orange',
-  COMPLETED: 'green',
-  VOIDED: 'default',
 };
 
 export function ExperimentWorkspacePage() {
@@ -138,6 +124,7 @@ export function ExperimentWorkspacePage() {
         revision: detail.summary.revision,
         experimentNo: detail.summary.experimentNo,
         title: v,
+        categoryId: detail.summary.categoryId,
         categoryName: detail.summary.categoryName,
         projectId: detail.summary.projectId,
         stageId: detail.summary.stageId,
@@ -164,17 +151,19 @@ export function ExperimentWorkspacePage() {
     }
   };
 
-  const act = async (action: PublishAction) => {
+  const publish = async () => {
     if (!detail) return;
     if (saveState !== 'SAVED') {
-      void message.warning('当前内容尚未保存，请先保存后再执行流程操作');
+      void message.warning('当前内容尚未保存，请先保存后再发布');
       return;
     }
     setBusy(true);
     try {
-      await actExperiment(id, action, detail.summary.revision);
-      void message.success('状态已更新');
+      await publishExperiment(id, detail.summary.revision);
+      void message.success('实验已发布，发布后不可编辑');
       await load();
+    } catch (error) {
+      void message.error(error instanceof Error ? error.message : '实验发布失败');
     } finally {
       setBusy(false);
     }
@@ -200,24 +189,14 @@ export function ExperimentWorkspacePage() {
     });
   };
 
-  const removeOrVoid = () => {
-    if (!detail) return;
-    if (detail.summary.allowedActions?.includes('VOID')) {
-      modal.confirm({ title: '作废该实验？', content: '作废后保留审计记录，不再作为有效实验使用。', okText: '作废', okButtonProps: { danger: true }, cancelText: '取消', onOk: async () => { await actExperiment(id, 'void', detail.summary.revision, '用户作废'); await load(); } });
-      return;
-    }
-    if (detail.summary.allowedActions?.includes('DELETE')) {
-      modal.confirm({ title: '删除该实验？', content: '仅删除未完成且未产生业务引用的实验。', okText: '删除', okButtonProps: { danger: true }, cancelText: '取消', onOk: async () => { await deleteExperiment(id, detail.summary.revision); void message.success('实验已删除'); goBack(); } });
-    }
-  };
-
   const exportRecord = async () => {
     if (!detail) return;
     setExporting(true);
     try {
       const blob = await exportExperiment(id);
       const extension = detail.editModel.documentFormat === 'word' ? 'docx' : 'xlsx';
-      downloadBlob(blob, `${detail.summary.title || detail.summary.experimentNo}-V${detail.summary.versionNo}.${extension}`);
+      const versionSuffix = versions.length > 0 ? `-V${versions[0]?.versionNo ?? detail.summary.versionNo}` : '';
+      downloadBlob(blob, `${detail.summary.title || detail.summary.experimentNo}${versionSuffix}.${extension}`);
       void message.success('实验已导出');
     } catch (error) {
       void message.error(error instanceof Error ? error.message : '实验导出失败');
@@ -227,6 +206,10 @@ export function ExperimentWorkspacePage() {
   };
 
   const changeView = (key: WorkspaceView) => {
+    if (key === 'versions' && versions.length === 0) {
+      void message.info('发布后才会生成版本记录');
+      return;
+    }
     if (saveState !== 'SAVED' && key === 'versions') {
       void message.warning('当前内容尚未保存，请先保存后再查看版本记录');
       return;
@@ -250,10 +233,10 @@ export function ExperimentWorkspacePage() {
   const status = detail.summary.status;
   const readonly = ['COMPLETED', 'VOIDED', 'PENDING_REVIEW'].includes(status);
   const editable = !readonly && isDesktop && view === 'edit';
-  const publishAction: PublishAction | undefined =
-    status === 'DRAFT' || status === 'PENDING' ? 'start' :
-    status === 'IN_PROGRESS' || status === 'RETURNED' ? 'submit-review' :
-    status === 'PENDING_REVIEW' ? 'approve' : undefined;
+  const canPublish = !['COMPLETED', 'VOIDED'].includes(status)
+    && saveState === 'SAVED'
+    && view !== 'versions'
+    && !selectedVersion;
 
   return (
     <section className="workspace-shell template-business-workspace experiment-workspace-shell" aria-label={`${detail.summary.title}实验工作台`}>
@@ -268,17 +251,18 @@ export function ExperimentWorkspacePage() {
             </Typography.Text>
             <Typography.Text strong>{detail.summary.title}</Typography.Text>
           </span>
-          <Tag color="blue">V{detail.summary.versionNo}</Tag>
+          <Tag color={versions.length > 0 ? 'blue' : 'default'}>
+            {versions.length > 0 ? `V${versions[0]?.versionNo ?? detail.summary.versionNo}` : '未发布'}
+          </Tag>
         </div>
         <Space wrap>
           <SaveStateBadge state={saveState} />
           <Button className="workspace-export-button" icon={<DownloadOutlined />} loading={exporting} onClick={() => void exportRecord()}>导出</Button>
-          {detail.summary.allowedActions?.includes('DELETE') || detail.summary.allowedActions?.includes('VOID') ? <Button danger icon={<DeleteOutlined />} onClick={removeOrVoid}>{detail.summary.allowedActions?.includes('VOID') ? '作废' : '删除'}</Button> : null}
           {status === 'COMPLETED' && (
             <Button loading={busy} onClick={reviseCompletedExperiment}>创建修订</Button>
           )}
           <Button
-            className="workspace-save-button"
+            type="primary"
             icon={<SaveOutlined />}
             disabled={!editable}
             loading={saveState === 'SAVING'}
@@ -290,8 +274,8 @@ export function ExperimentWorkspacePage() {
             type="primary"
             className="workspace-publish-button"
             loading={busy}
-            disabled={!editable || saveState !== 'SAVED' || !publishAction}
-            onClick={() => { if (publishAction) void act(publishAction); }}
+            disabled={!canPublish}
+            onClick={() => void publish()}
           >
             发布
           </Button>
@@ -305,17 +289,13 @@ export function ExperimentWorkspacePage() {
           items={[
             { key: 'preview', label: <><EyeOutlined /> 预览</> },
             { key: 'edit', label: '编辑', disabled: readonly },
-            { key: 'versions', label: '版本记录' },
+            ...(versions.length > 0 ? [{ key: 'versions', label: '版本记录' }] : []),
           ]}
         />
       </nav>
 
       {view === 'versions' ? (
-        selectedVersion ? <ExperimentHistoricalVersion version={selectedVersion} onBack={() => setSelectedVersion(undefined)} /> : <VersionView detail={detail} versions={versions} onChangeVersion={setSelectedVersion} onRollback={async (versionNo) => {
-          await rollbackVersion(id, detail.summary.revision, versionNo, `回退到版本 V${versionNo}`);
-          void message.success(`已基于版本 V${versionNo} 创建新的修订草稿`);
-          await load();
-        }} />
+        selectedVersion ? <ExperimentHistoricalVersion version={selectedVersion} onBack={() => setSelectedVersion(undefined)} /> : <VersionView versions={versions} onChangeVersion={setSelectedVersion} />
       ) : (
         <div className="workspace-main-stage">
           <div className="template-workspace-grid prototype-workspace-grid">
@@ -352,54 +332,21 @@ export function ExperimentWorkspacePage() {
 }
 
 function VersionView({
-  detail,
   versions,
   onChangeVersion,
-  onRollback,
 }: {
-  detail: ExperimentDetail;
   versions: ExperimentVersion[];
   onChangeVersion: (version: ExperimentVersion) => void;
-  onRollback: (versionNo: number) => Promise<void>;
 }) {
-  const displayList: ExperimentVersion[] = versions.length ? versions : [{
-    id: detail.currentVersionId ?? detail.summary.id,
-    versionNo: detail.summary.versionNo,
-    status: detail.summary.status,
-    createdAt: detail.summary.updatedAt,
-    editModel: detail.editModel,
-    templateSnapshot: detail.templateSnapshot,
-  }];
-
   return (
     <main className="workspace-canvas project-versions-panel">
       <div className="project-versions-content">
-        <header className="project-versions-header">
-          <Typography.Title level={4} style={{ marginBottom: 4 }}>版本记录</Typography.Title>
-          <Typography.Text type="secondary">实验本按版本管理，正式版本发布后锁定，修订会创建新的草稿版本。</Typography.Text>
-        </header>
-        <section className="project-versions-list">
-          {displayList.map((item) => (
-            <article key={String(item.id ?? item.versionNo)} className="project-version-card" role="button" tabIndex={0} onClick={() => onChangeVersion(item)} onKeyDown={(event) => { if (event.key === 'Enter') onChangeVersion(item); }}>
-              <div className="project-version-bubble">V{String(item.versionNo)}</div>
-              <div className="project-version-meta">
-                <div className="project-version-title">
-                  <span>版本 V{String(item.versionNo)}</span>
-                  <Tag color={STATUS_COLOR[String(item.status)] ?? 'blue'}>
-                    {STATUS_TEXT[String(item.status)] ?? String(item.status)}
-                  </Tag>
-                  {item.revisionReason && (
-                    <Typography.Text type="secondary">· {item.revisionReason}</Typography.Text>
-                  )}
-                </div>
-                <div className="project-version-time">
-                  最近更新：{formatTime(String(item.createdAt ?? item.publishedAt))}（{String(item.createdBy ?? '未知')}）
-                  {detail.summary.status === 'COMPLETED' && <Button type="link" size="small" onClick={(event) => { event.stopPropagation(); void onRollback(item.versionNo); }}>回退到此版本</Button>}
-                </div>
-              </div>
-            </article>
-          ))}
-        </section>
+        <VersionHistoryPanel
+          versions={versions}
+          onSelect={onChangeVersion}
+          description="每次发布都会保留完整数据快照，可追溯发布人和发布时间。"
+          getLabel={(item) => STATUS_TEXT[item.status] ?? item.status}
+        />
       </div>
     </main>
   );

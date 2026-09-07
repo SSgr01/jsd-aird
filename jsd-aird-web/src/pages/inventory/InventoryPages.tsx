@@ -1,4 +1,4 @@
-import { DownloadOutlined, EditOutlined, PlusOutlined, UploadOutlined } from '@ant-design/icons';
+import { DownloadOutlined, PlusOutlined, UploadOutlined } from '@ant-design/icons';
 import {
   Button,
   Card,
@@ -38,6 +38,7 @@ import type { InventoryProductOption } from '@/services/inventory/inventory-api'
 import { getPartners, type BusinessPartner } from '@/services/partners/partner-api';
 import { errorMessage } from '@/services/http/errors';
 import './inventory-pages.css';
+import '@/styles/management-list.css';
 
 const scopeLabels: Record<InventoryScope, string> = { RND: '研发库存', PRODUCTION: '生产库存' };
 const alertLabels: Record<AlertStatus, string> = {
@@ -191,6 +192,7 @@ export function InventoryQueryPage() {
     },
     {
       title: '操作',
+      width: 100,
       render: (_, r) => (
         <Button type="link" onClick={() => setSelected(r)}>
           查看
@@ -226,6 +228,7 @@ export function InventoryQueryPage() {
           loading={loading}
           columns={columns}
           dataSource={data?.items}
+          scroll={{ x: 'max-content' }}
           pagination={{
             current: data?.page,
             total: data?.total,
@@ -309,6 +312,7 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
   const [products, setProducts] = useState<InventoryProductOption[]>([]);
   const [productSearch, setProductSearch] = useState('');
   const [saving, setSaving] = useState(false);
+  const [readOnly] = useState(() => inventoryIsReadOnly());
   const [detail, setDetail] = useState<InventoryTransaction>();
   const [editing, setEditing] = useState<InventoryTransaction>();
   const load = useCallback(
@@ -345,7 +349,7 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
   const direction = Form.useWatch('direction', form) || 'INBOUND';
   const save = async () => {
     const v = await form.validateFields();
-    if (inventoryIsReadOnly()) {
+    if (readOnly) {
       message.error('当前角色为只读用户，不能修改库存流水');
       return;
     }
@@ -421,6 +425,7 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
     { title: '经办人', dataIndex: 'actorName' },
     {
       title: '操作',
+      width: 250,
       render: (_, r) => (
         <Space>
           <Button type="link" onClick={() => setDetail(r)}>
@@ -428,8 +433,7 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
           </Button>
           <Button
             type="link"
-            icon={<EditOutlined />}
-            disabled={inventoryIsReadOnly() || r.reversed || !!r.reversalOf}
+            disabled={readOnly || r.reversed || !!r.reversalOf}
             onClick={() => {
               form.setFieldsValue({
                 businessDate: dayjs(r.businessDate),
@@ -455,7 +459,7 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
                 await load();
               }}
             >
-              <Button type="link" danger>
+              <Button type="link" danger disabled={readOnly}>
                 冲销
               </Button>
             </Popconfirm>
@@ -474,13 +478,14 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
       }
       extra={
         <Space>
-          <InitialStockImport scope={scope} onDone={load} />
+          <InitialStockImport scope={scope} onDone={load} disabled={readOnly} />
           <Button icon={<DownloadOutlined />} onClick={() => void exportTransactions(scope)}>
             导出
           </Button>
           <Button
             type="primary"
             icon={<PlusOutlined />}
+            disabled={readOnly}
             onClick={() => {
               setEditing(undefined);
               form.setFieldsValue({
@@ -517,7 +522,7 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
           rowKey="id"
           columns={columns}
           dataSource={data?.items}
-          scroll={{ x: 1200 }}
+          scroll={{ x: 'max-content' }}
           pagination={{
             current: data?.page,
             total: data?.total,
@@ -533,6 +538,7 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
         okText="保存"
         cancelText="取消"
         confirmLoading={saving}
+        okButtonProps={{ disabled: readOnly }}
         onCancel={() => {
           setOpen(false);
           setEditing(undefined);
@@ -662,6 +668,7 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
   const [customers, setCustomers] = useState<BusinessPartner[]>([]);
   const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState<SampleDispatch | Shipment>();
+  const [readOnly] = useState(() => inventoryIsReadOnly());
   const load = useCallback(
     async () => setData(sample ? await inventoryApi.samples() : await inventoryApi.shipments()),
     [sample],
@@ -736,9 +743,17 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
         await load();
         return;
       }
-      const input = { ...v, businessDate: v.businessDate.format('YYYY-MM-DD') };
-      if (sample) await inventoryApi.createSample(input);
-      else await inventoryApi.createShipment(input);
+      if (sample) {
+        await inventoryApi.createSample({ ...v, businessDate: v.businessDate.format('YYYY-MM-DD') });
+      } else {
+        const { batchNo, coaNo, note, ...shipmentValues } = v;
+        const traceNote = [
+          note,
+          batchNo ? `批号=${batchNo}` : '',
+          coaNo ? `COA=${coaNo}` : '',
+        ].filter(Boolean).join('；');
+        await inventoryApi.createShipment({ ...shipmentValues, note: traceNote, coaNo, batchNo, businessDate: v.businessDate.format('YYYY-MM-DD') });
+      }
       message.success(sample ? '发样记录已保存并扣减研发库存' : '出货记录已保存并扣减生产库存');
       setOpen(false);
       form.resetFields();
@@ -764,11 +779,11 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
             { title: '发样人', dataIndex: 'operator' },
             {
               title: '操作',
+              width: 180,
               render: (_: unknown, record: SampleDispatch | Shipment) => (
                 <Button
                   type="link"
-                  icon={<EditOutlined />}
-                  disabled={inventoryIsReadOnly()}
+                  disabled={readOnly}
                   onClick={() => openEdit(record)}
                 >
                   编辑
@@ -786,10 +801,10 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
             { title: '备注', dataIndex: 'note' },
             {
               title: '操作',
+              width: 180,
               render: (_: unknown, record: SampleDispatch | Shipment) => (
                 <Button
                   type="link"
-                  icon={<EditOutlined />}
                   disabled={inventoryIsReadOnly()}
                   onClick={() => openEdit(record)}
                 >
@@ -806,7 +821,7 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
       description={
         sample
           ? '新增发样后自动扣减研发库存并生成研发库存流水。'
-          : '新增出货后自动扣减生产库存并生成生产库存流水。'
+          : '新增出货后自动校验已签发 COA（如填写）并扣减生产库存，业务编号和批号可追溯。'
       }
       extra={
         <Space>
@@ -815,10 +830,12 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
             products={products}
             customers={customers}
             onDone={load}
+            disabled={readOnly}
           />
           <Button
             type="primary"
             icon={<PlusOutlined />}
+            disabled={readOnly}
             onClick={() => {
               setEditing(undefined);
               form.setFieldsValue({ businessDate: dayjs() });
@@ -831,7 +848,7 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
       }
     >
       <Card>
-        <Table rowKey="id" columns={columns} dataSource={data?.items} />
+        <Table rowKey="id" columns={columns} dataSource={data?.items} scroll={{ x: 'max-content' }} />
       </Card>
       <Modal
         width={650}
@@ -840,6 +857,7 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
         okText="保存"
         cancelText="取消"
         confirmLoading={saving}
+        okButtonProps={{ disabled: readOnly }}
         onCancel={() => {
           setOpen(false);
           setEditing(undefined);
@@ -927,9 +945,23 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
             </>
           )}
           {!sample && (
-            <Form.Item name="note" label="备注">
-              <Input.TextArea />
-            </Form.Item>
+            <>
+              <Row gutter={16}>
+                <Col span={12}>
+                  <Form.Item name="batchNo" label="批号">
+                    <Input placeholder="可选，用于批次追溯" />
+                  </Form.Item>
+                </Col>
+                <Col span={12}>
+                  <Form.Item name="coaNo" label="已签发 COA 编号">
+                    <Input placeholder="填写后仅允许已签发 COA 放行" />
+                  </Form.Item>
+                </Col>
+              </Row>
+              <Form.Item name="note" label="备注">
+                <Input.TextArea />
+              </Form.Item>
+            </>
           )}
         </Form>
       </Modal>
@@ -991,11 +1023,13 @@ function BusinessImportExport({
   products,
   customers,
   onDone,
+  disabled = false,
 }: {
   type: 'sample' | 'shipment';
   products: InventoryProductOption[];
   customers: BusinessPartner[];
   onDone: () => void | Promise<void>;
+  disabled?: boolean;
 }) {
   const sample = type === 'sample';
   const template = () => {
@@ -1148,7 +1182,7 @@ function BusinessImportExport({
           return false;
         }}
       >
-        <Button icon={<UploadOutlined />}>导入</Button>
+        <Button icon={<UploadOutlined />} disabled={disabled}>导入</Button>
       </Upload>
       <Button icon={<DownloadOutlined />} onClick={() => void exportRows()}>
         导出
@@ -1160,9 +1194,11 @@ function BusinessImportExport({
 function InitialStockImport({
   scope,
   onDone,
+  disabled = false,
 }: {
   scope: InventoryScope;
   onDone: () => void | Promise<void>;
+  disabled?: boolean;
 }) {
   const [current, setCurrent] = useState<Awaited<ReturnType<typeof inventoryApi.uploadInitial>>>();
   const download = () => {
@@ -1201,13 +1237,13 @@ function InitialStockImport({
           return false;
         }}
       >
-        <Button icon={<UploadOutlined />}>导入</Button>
+        <Button icon={<UploadOutlined />} disabled={disabled}>导入</Button>
       </Upload>
       <Modal
         open={!!current}
         title="期初库存校验结果"
         onCancel={() => setCurrent(undefined)}
-        okButtonProps={{ disabled: current?.status !== 'VALIDATED' }}
+        okButtonProps={{ disabled: disabled || current?.status !== 'VALIDATED' }}
         okText="确认入账"
         onOk={async () => {
           if (!current) return;
@@ -1244,7 +1280,7 @@ function InventoryShell({
   children: React.ReactNode;
 }) {
   return (
-    <div className="inventory-page">
+    <div className="inventory-page pm-unified-list-page">
       <div className="inventory-heading">
         <div>
           <h1>{title}</h1>

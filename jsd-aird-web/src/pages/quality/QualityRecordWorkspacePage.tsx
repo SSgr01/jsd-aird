@@ -8,7 +8,6 @@ import {
 import {
   Alert,
   Button,
-  Empty,
   Input,
   Select,
   Space,
@@ -19,6 +18,7 @@ import {
   message,
 } from 'antd';
 import { SaveStateBadge, type SaveState } from '@/components/SaveStateBadge';
+import { VersionHistoryPanel } from '@/components/version-history/VersionHistoryPanel';
 import {
   lazy,
   Suspense,
@@ -132,14 +132,56 @@ function parseQualityWorkbookData(
   current: Record<string, unknown>,
 ): Record<string, unknown> {
   const sheets = snapshot.sheets as Record<string, Record<string, unknown>> | undefined;
-  const sheet = sheets?.['quality-record'];
-  if (!sheet) return current;
-  const cellData = (sheet.cellData as Record<string, Record<string, { v?: unknown }>>) ?? {};
   const next = { ...current };
-  type.fields.forEach((field, index) => {
-    const value = cellData[String(index + 1)]?.['1']?.v;
-    if (value !== undefined) next[field.key] = textValue(value);
-  });
+  const normalize = (value: unknown) => textValue(value).trim().toLowerCase()
+    .replace(/[\s:_\-（）()[\]]/g, '').replace(/\//g, '');
+  const orderedIds = Array.isArray(snapshot.sheetOrder)
+    ? (snapshot.sheetOrder as unknown[]).map(String)
+    : Object.keys(sheets ?? {});
+  const orderedSheets = orderedIds.map((id) => sheets?.[id]).filter(Boolean) as Record<string, unknown>[];
+  // Generated quality templates use a vertical label/value layout.
+  const generated = sheets?.['quality-record'];
+  if (generated) {
+    const cellData = (generated.cellData as Record<string, Record<string, { v?: unknown }>>) ?? {};
+    type.fields.forEach((field, index) => {
+      const value = cellData[String(index + 1)]?.['1']?.v;
+      if (value !== undefined) next[field.key] = textValue(value);
+    });
+  }
+  // Uploaded workbooks keep their original sheet ids and layout. Resolve
+  // field labels against both a horizontal header row and label/value pairs so
+  // editing an imported workbook also updates the structured record fields.
+  for (const field of type.fields) {
+    const labels = new Set([normalize(field.label), normalize(field.key)]);
+    let resolved: string | undefined;
+    for (const sheet of orderedSheets) {
+      const rows = (sheet.cellData as Record<string, Record<string, { v?: unknown }>>) ?? {};
+      const rowEntries = Object.entries(rows).sort(([left], [right]) => Number(left) - Number(right));
+      for (let rowIndex = 0; rowIndex < rowEntries.length; rowIndex += 1) {
+        const rowEntry = rowEntries[rowIndex];
+        if (!rowEntry) continue;
+        const row = rowEntry[1];
+        const cells = Object.entries(row).sort(([left], [right]) => Number(left) - Number(right));
+        for (let index = 0; index < cells.length; index += 1) {
+          const cellEntry = cells[index];
+          if (!cellEntry) continue;
+          const [column, cell] = cellEntry;
+          if (!labels.has(normalize(cell?.v))) continue;
+          const right = cells[index + 1]?.[1]?.v;
+          if (right !== undefined && textValue(right).trim()) {
+            resolved = textValue(right).trim();
+            break;
+          }
+          const below = rowEntries[rowIndex + 1]?.[1]?.[column]?.v;
+          if (below !== undefined && textValue(below).trim()) resolved = textValue(below).trim();
+          if (resolved) break;
+        }
+        if (resolved) break;
+      }
+      if (resolved) break;
+    }
+    if (resolved) next[field.key] = resolved;
+  }
   return next;
 }
 
@@ -170,9 +212,14 @@ export function QualityRecordWorkspacePage() {
       ]);
       setRecord(detail);
       setDraft({ ...detail.data });
-      let initialWorkbook = detail.workbookSnapshot;
+      let initialWorkbook = detail.workbookSnapshot && Object.keys(detail.workbookSnapshot).length
+        ? detail.workbookSnapshot
+        : undefined;
       let sourceWorkbook: Record<string, unknown> | undefined;
-      if (detail.sourceFileId) {
+      // XLSX uploads are parsed server-side into a Univer snapshot that keeps
+      // sheets, merged cells, dimensions and styles. Only fall back to the
+      // lightweight browser parser when an older record has no stored snapshot.
+      if (detail.sourceFileId && !initialWorkbook && /\.(xls|xlsx)$/i.test(detail.sourceFileName || '')) {
         try {
           sourceWorkbook = await parseExcelSnapshot(
             await fetchFileBlob(detail.sourceFileId),
@@ -312,6 +359,10 @@ export function QualityRecordWorkspacePage() {
     }
   };
   const switchView = (next: ViewMode) => {
+    if (next === 'versions' && versions.length === 0) {
+      msg.info('发布后才会生成版本记录');
+      return;
+    }
     if (next === 'versions' && dirty) {
       msg.warning('当前内容尚未保存，请先保存后再查看版本记录');
       return;
@@ -357,7 +408,7 @@ export function QualityRecordWorkspacePage() {
           <div>
             <Typography.Text type="secondary">品管部数据 / {record.categoryName}</Typography.Text>
             <Typography.Title level={4} style={{ margin: 0 }}>
-              {record.sourceFileName || record.businessNo}
+              {record.displayName || record.sourceFileName || record.businessNo}
             </Typography.Title>
             <Typography.Text type="secondary">
               源文件：{record.sourceFileName || '未关联'} · 关联项目：
@@ -415,14 +466,16 @@ export function QualityRecordWorkspacePage() {
               ),
             },
             { key: 'edit', label: '编辑', disabled: !isDesktop },
-            {
-              key: 'versions',
-              label: (
-                <>
-                  <HistoryOutlined /> 版本记录
-                </>
-              ),
-            },
+            ...(versions.length > 0
+              ? [{
+                key: 'versions',
+                label: (
+                  <>
+                    <HistoryOutlined /> 版本记录
+                  </>
+                ),
+              }]
+              : []),
           ]}
         />
       </nav>
@@ -430,41 +483,17 @@ export function QualityRecordWorkspacePage() {
         <div className="template-workspace-grid quality-single-workspace-grid">
           <main className={`workspace-canvas ${view === 'preview' ? 'is-preview' : ''}`}>
             {view === 'versions' && !selectedVersion ? (
-              <section className="quality-version-panel">
-                <Typography.Title level={4}>版本记录</Typography.Title>
-                <Typography.Text type="secondary">
-                  每次发布都会保留完整数据快照，可追溯发布人和发布时间。
-                </Typography.Text>
-                {versions.length ? (
-                  <div className="quality-version-list">
-                    {versions.map((item) => (
-                      <button
-                        className="quality-version-card"
-                        key={item.id}
-                        onClick={() => setSelectedVersion(item)}
-                      >
-                        <span className="quality-version-no">V{item.versionNo}</span>
-                        <span>
-                          <b>
-                            {item.changeType === 'INITIAL'
-                              ? '初始版本'
-                              : item.changeType === 'PUBLISH'
-                                ? '发布版本'
-                                : item.changeType === 'UPLOAD'
-                                  ? '上传生成'
-                                  : '编辑保存'}
-                          </b>
-                          <small>
-                            {item.createdBy} · {new Date(item.createdAt).toLocaleString()}
-                          </small>
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <Empty description="暂无版本记录" />
-                )}
-              </section>
+              <VersionHistoryPanel
+                versions={versions}
+                onSelect={setSelectedVersion}
+                getLabel={(item) => item.changeType === 'INITIAL'
+                  ? '初始版本'
+                  : item.changeType === 'PUBLISH'
+                    ? '发布版本'
+                    : item.changeType === 'UPLOAD'
+                      ? '上传生成'
+                      : '编辑保存'}
+              />
             ) : (
               <section className="quality-record-editor">
                 <div className="quality-record-editor-title">
@@ -504,6 +533,7 @@ export function QualityRecordWorkspacePage() {
                         snapshot={displayedWorkbook}
                         bindings={[]}
                         editable={editable}
+                        permissionDialogVisible={editable}
                         onDirty={() => setDirty(true)}
                         onEditorValue={() => undefined}
                       />

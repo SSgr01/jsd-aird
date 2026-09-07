@@ -1500,7 +1500,9 @@ public class DocxStructureParser implements OfficeStructureParser, WordDocumentP
         private final com.fasterxml.jackson.databind.node.ArrayNode sectionBreaks = objectMapper.createArrayNode();
         private final ObjectNode tableSource = objectMapper.createObjectNode();
         private final com.fasterxml.jackson.databind.node.ArrayNode customBlocks = objectMapper.createArrayNode();
+        private final List<Element> deferredNestedTables = new ArrayList<>();
         private int tableSequence;
+        private int tableDepth;
 
         private FlowBuilder(Document document, Element root, ImageInventory images, WordStyleCatalog styleCatalog) {
             this.document = document;
@@ -1613,6 +1615,7 @@ public class DocxStructureParser implements OfficeStructureParser, WordDocumentP
         }
 
         private void appendTable(Element table) {
+            tableDepth++;
             if (stream.length() > 0 && stream.charAt(stream.length() - 1) != '\r') {
                 paragraphs.add(objectMapper.createObjectNode().put("startIndex", stream.length()).put("paragraphIndex", 0));
                 stream.append('\r');
@@ -1753,6 +1756,16 @@ public class DocxStructureParser implements OfficeStructureParser, WordDocumentP
             position.set("positionV", objectMapper.createObjectNode().put("relativeFrom", 0).put("posOffset", 0));
             source.set("position", position);
             tableSource.set(tableId, source);
+            tableDepth--;
+            // Univer Docs currently drops table tokens nested inside another
+            // table cell. Keep the Word structure in documentIR, but place the
+            // editable copy of each nested table immediately after its outer
+            // table so all rows and cells remain visible and editable.
+            if (tableDepth == 0 && !deferredNestedTables.isEmpty()) {
+                var pending = List.copyOf(deferredNestedTables);
+                deferredNestedTables.clear();
+                for (var nested : pending) appendTable(nested);
+            }
         }
 
         private void appendCoveredCell(com.fasterxml.jackson.databind.node.ArrayNode cells, ObjectNode margin) {

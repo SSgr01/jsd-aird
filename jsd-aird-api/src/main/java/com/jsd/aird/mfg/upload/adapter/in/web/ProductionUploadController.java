@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -38,7 +39,7 @@ public class ProductionUploadController {
                 request.fileId(), request.productionName(), request.orderNo(), request.productName(),
                 request.category(), request.manufactureDate(), request.projectId(), request.projectName(),
                 request.stageId(), request.stageName(), request.taskId(), request.taskName(), request.visibility(),
-                request.sourceType(), request.templateVersionId())));
+                request.sourceType(), request.templateVersionId(), request.replaceExisting())));
     }
 
     @GetMapping
@@ -46,9 +47,10 @@ public class ProductionUploadController {
             @RequestParam(required = false) String keyword,
             @RequestParam(required = false) String status,
             @RequestParam(required = false) UUID projectId,
+            @RequestParam(defaultValue = "false") boolean viewableOnly,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size) {
-        return success(service.list(keyword, status, projectId, page, size));
+        return success(service.list(keyword, status, projectId, viewableOnly, page, size));
     }
 
     @GetMapping("/{id}")
@@ -62,10 +64,23 @@ public class ProductionUploadController {
         return success(service.fields(id));
     }
 
+    @PutMapping("/{id}/rename")
+    public ApiResponse<ProductionUploadRepository.UploadView> rename(
+            @PathVariable UUID id, @Valid @RequestBody RenameRequest request) {
+        return success(service.rename(id, new ProductionUploadService.RenameCommand(
+                request.revision(), request.name(), request.projectId(), request.projectName(),
+                request.stageId(), request.stageName(), request.taskId(), request.taskName())));
+    }
+
     @PostMapping("/{id}/select-template")
     public ApiResponse<ProductionUploadRepository.UploadView> selectTemplate(
             @PathVariable UUID id, @Valid @RequestBody SelectTemplateRequest request) {
         return success(service.selectTemplate(id, request.templateVersionId()));
+    }
+
+    @PostMapping("/{id}/retry")
+    public ApiResponse<ProductionUploadRepository.UploadView> retry(@PathVariable UUID id) {
+        return success(service.retry(id));
     }
 
     @DeleteMapping("/{id}")
@@ -93,11 +108,24 @@ public class ProductionUploadController {
             String taskName,
             @NotBlank String visibility,
             String sourceType,
-            UUID templateVersionId
+            UUID templateVersionId,
+            boolean replaceExisting
     ) {
     }
 
     public record SelectTemplateRequest(@NotNull UUID templateVersionId) {
+    }
+
+    public record RenameRequest(
+            @NotNull Long revision,
+            @NotBlank @Size(max = 200) String name,
+            UUID projectId,
+            String projectName,
+            UUID stageId,
+            String stageName,
+            UUID taskId,
+            String taskName
+    ) {
     }
 
 }

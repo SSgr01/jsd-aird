@@ -126,7 +126,17 @@ export interface InventoryProductOption {
   category: string;
   status: string;
 }
-const key = () => crypto.randomUUID();
+/**
+ * Keep a user operation's idempotency key stable across a retry.
+ *
+ * The API already de-duplicates by this header, but generating a new UUID for
+ * every call meant a browser retry could create a second inventory movement.
+ * Business document numbers are unique in the domain, so they are a suitable
+ * client-side retry key; callers can still provide an explicit key when a
+ * document number is not available.
+ */
+const key = (input: Record<string, unknown>, fallback: string) =>
+  String(input.idempotencyKey ?? (fallback || crypto.randomUUID()));
 export const inventoryApi = {
   async createCustomProduct(name: string, scope: InventoryScope) {
     return (
@@ -174,7 +184,14 @@ export const inventoryApi = {
       await httpClient.post<ApiResponse<InventoryTransaction>>(
         '/api/v1/inventory/transactions',
         input,
-        { headers: { 'Idempotency-Key': key() } },
+        {
+          headers: {
+            'Idempotency-Key': key(
+              input,
+              `${String(input.businessType ?? 'INVENTORY')}:${String(input.documentNo ?? '')}`,
+            ),
+          },
+        },
       )
     ).data.data;
   },
@@ -183,7 +200,7 @@ export const inventoryApi = {
       await httpClient.post<ApiResponse<InventoryTransaction>>(
         `/api/v1/inventory/transactions/${id}/reverse`,
         { note },
-        { headers: { 'Idempotency-Key': key() } },
+        { headers: { 'Idempotency-Key': `REVERSAL:${id}` } },
       )
     ).data.data;
   },
@@ -205,7 +222,7 @@ export const inventoryApi = {
   async createSample(input: Record<string, unknown>) {
     return (
       await httpClient.post<ApiResponse<SampleDispatch>>('/api/v1/inventory/samples', input, {
-        headers: { 'Idempotency-Key': key() },
+        headers: { 'Idempotency-Key': key(input, `SAMPLE:${String(input.dispatchNo ?? '')}`) },
       })
     ).data.data;
   },
@@ -222,7 +239,7 @@ export const inventoryApi = {
   async createShipment(input: Record<string, unknown>) {
     return (
       await httpClient.post<ApiResponse<Shipment>>('/api/v1/inventory/shipments', input, {
-        headers: { 'Idempotency-Key': key() },
+        headers: { 'Idempotency-Key': key(input, `SHIPMENT:${String(input.shipmentNo ?? '')}`) },
       })
     ).data.data;
   },

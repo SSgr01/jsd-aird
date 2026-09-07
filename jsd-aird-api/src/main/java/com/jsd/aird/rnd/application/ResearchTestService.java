@@ -1,6 +1,8 @@
 package com.jsd.aird.rnd.application;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.ops.application.port.FileStorageFacade;
 import com.jsd.aird.rnd.application.port.ResearchTestRepository;
 import com.jsd.aird.rnd.domain.ResearchTestModels.*;
@@ -26,7 +28,14 @@ public class ResearchTestService {
     @Autowired public ResearchTestService(ResearchTestRepository repository,FileStorageFacade files,ExperimentImportService sourceParser){this.repository=repository;this.files=files;this.sourceParser=sourceParser;}
     public PageResponse<Summary> search(Type type,String keyword,String category,String status,String owner,UUID projectId,LocalDate from,LocalDate to,int page,int size){var a=ActorContext.required();return repository.search(a.organizationId(),new ResearchTestRepository.Search(type,keyword,category,status,owner,projectId,from,to,Math.max(1,page),Math.min(100,Math.max(1,size))));}
     public Detail detail(UUID id){var a=ActorContext.required();return repository.detail(a.organizationId(),id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"研发测试记录不存在"));}
-    public Detail create(CreateCommand c){var a=ActorContext.required();validateCreate(c);return repository.create(new ResearchTestRepository.Create(a.organizationId(),a.userId(),a.username(),c.type(),c.businessNo(),c.name(),c.category(),c.scope(),blank(c.ownerName())?a.username():c.ownerName(),c.date()==null?LocalDate.now():c.date(),upper(c.format()),upper(c.sourceType()),blank(c.visibility())?"ALL":upper(c.visibility()),c.projectId(),c.stageId(),c.taskId(),c.sourceFileId(),c.templateVersionId(),c.templateHash(),c.templateSnapshot(),c.editModel(),c.memberSnapshot(),c.effectiveFrom(),c.effectiveTo()));}
+    public Detail create(CreateCommand c){
+        var a=ActorContext.required();
+        validateCreate(c);
+        var editModel=importedEditModel(a.organizationId(),c);
+        var detail=repository.create(new ResearchTestRepository.Create(a.organizationId(),a.userId(),a.username(),c.type(),c.businessNo(),c.name(),c.category(),c.scope(),blank(c.ownerName())?a.username():c.ownerName(),c.date()==null?LocalDate.now():c.date(),upper(c.format()),upper(c.sourceType()),blank(c.visibility())?"ALL":upper(c.visibility()),c.projectId(),c.stageId(),c.taskId(),c.sourceFileId(),c.templateVersionId(),c.templateHash(),c.templateSnapshot(),editModel,c.memberSnapshot(),c.effectiveFrom(),c.effectiveTo()));
+        if(c.sourceFileId()!=null&&"IMPORT".equalsIgnoreCase(c.sourceType()))files.activate(c.sourceFileId());
+        return detail;
+    }
     public Detail save(UUID id,ResearchTestRepository.Draft d){var a=ActorContext.required();if(blank(d.businessNo())||blank(d.name()))invalid("编号和名称不能为空");validateDates(d.effectiveFrom(),d.effectiveTo());return repository.save(a.organizationId(),id,d,a.userId(),a.username());}
     public Detail rename(UUID id, RenameCommand c){
         var a=ActorContext.required();
@@ -56,7 +65,27 @@ public class ResearchTestService {
         return repository.retryUpload(a.organizationId(),id);
     }
     public void deleteUpload(UUID id){repository.deleteUpload(ActorContext.required().organizationId(),id);}
-    private void validateCreate(CreateCommand c){if(c.type()==null||blank(c.name()))invalid("类型和名称不能为空");if(!List.of("WORD","EXCEL").contains(upper(c.format())))invalid("文档格式仅支持 WORD 或 EXCEL");if(c.type()==Type.STANDARD&&blank(c.businessNo()))invalid("标准编号不能为空");if(c.type()==Type.STANDARD&&c.effectiveFrom()==null)invalid("测试标准必须填写生效日期");validateDates(c.effectiveFrom(),c.effectiveTo());}
+    private JsonNode importedEditModel(UUID organizationId,CreateCommand c){
+        if(sourceParser==null||c.type()!=Type.STANDARD||c.sourceFileId()==null||!"IMPORT".equalsIgnoreCase(c.sourceType()))return c.editModel();
+        var sourceName=c.editModel()!=null?c.editModel().path("sourceFileName").asText(""):"";
+        if(blank(sourceName))sourceName=c.name()+("EXCEL".equalsIgnoreCase(c.format())?".xlsx":".docx");
+        var sourceHash=c.editModel()!=null?c.editModel().path("sourceFileSha256").asText(null):null;
+        var parsed=sourceParser.parseSourceFile(organizationId,c.sourceFileId(),sourceName,sourceHash,formatOf(sourceName));
+        if(parsed==null||parsed.initialEditorSnapshot()==null||!parsed.initialEditorSnapshot().isObject())return c.editModel();
+        var model=c.editModel()!=null&&c.editModel().isObject()?(ObjectNode)c.editModel().deepCopy():JsonNodeFactory.instance.objectNode();
+        model.set("documentSnapshot",parsed.initialEditorSnapshot());
+        model.put("sourceFileName",sourceName);
+        return model;
+    }
+    private void validateCreate(CreateCommand c){
+        if(c.type()==null||blank(c.name()))invalid("类型和名称不能为空");
+        if(!List.of("WORD","EXCEL").contains(upper(c.format())))invalid("文档格式仅支持 WORD 或 EXCEL");
+        if(!List.of("BLANK","TEMPLATE","UPLOAD","GENERATED","IMPORT").contains(upper(c.sourceType())))invalid("来源类型不支持");
+        if(c.type()==Type.STANDARD&&blank(c.businessNo()))invalid("标准编号不能为空");
+        if(c.type()==Type.STANDARD&&c.effectiveFrom()==null)invalid("测试标准必须填写生效日期");
+        if(c.type()==Type.STANDARD&&"IMPORT".equalsIgnoreCase(c.sourceType())&&c.sourceFileId()==null)invalid("导入型测试标准必须关联源文件");
+        validateDates(c.effectiveFrom(),c.effectiveTo());
+    }
     private void validateDates(LocalDate from,LocalDate to){if(from!=null&&to!=null&&to.isBefore(from))invalid("失效日期不能早于生效日期");}
     private void validateFile(UploadCommand c){if(c.fileId()==null||blank(c.originalName())||c.size()<=0)invalid("文件不能为空");if(c.size()>MAX_FILE_SIZE)invalid("单个文件不能超过 100MB");var n=c.originalName().toLowerCase(Locale.ROOT);if(!n.matches(".*\\.(pdf|doc|docx|xls|xlsx|csv|png|jpg|jpeg|gif|webp|bmp|tif|tiff)$"))invalid("不支持的文件格式");}
     private static boolean isExcel(String n){return n.toLowerCase(Locale.ROOT).matches(".*\\.(xls|xlsx|csv)$");}

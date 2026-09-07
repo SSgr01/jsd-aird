@@ -53,6 +53,11 @@ public class MyBatisCustomerRequirementRepository implements CustomerRequirement
             requirement.version(), operator) == 1;
     }
 
+    @Override
+    public boolean deleteRequirement(UUID id, long version) {
+        return mapper.deleteRequirement(id, version) == 1;
+    }
+
     private static CustomerRequirement toDomain(RequirementRow r) {
         return new CustomerRequirement(r.id(), r.requirementCode(), r.partnerId(), r.title(), r.rawRequirement(),
             r.urgency(), r.raisedAt(), r.deliveryDate(),

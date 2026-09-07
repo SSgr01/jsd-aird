@@ -2,6 +2,8 @@ import { DeleteOutlined, FolderOpenOutlined, PlusOutlined } from '@ant-design/ic
 import { Button, Checkbox, Empty, Input, message, Modal, Pagination, Select, Space } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { ProjectRelationPicker } from '@/components/project-relations/ProjectRelationPicker';
+import type { ProjectRelationTarget } from '@/services/project/project-resource-api';
 import {
   qualityApi,
   type QualityCategory,
@@ -10,6 +12,7 @@ import {
   type QualityTypeId,
 } from '@/services/quality/quality-api';
 import './quality-pages.css';
+import '@/styles/management-list.css';
 
 type Draft = QualityRecord & { newRow?: boolean };
 function textValue(value: unknown, fallback = '') {
@@ -39,6 +42,11 @@ export function QualityDataPage() {
     [size, setSize] = useState(10),
     [total, setTotal] = useState(0);
   const [filters, setFilters] = useState<Record<string, string>>({});
+  const [renameOpen, setRenameOpen] = useState(false),
+    [renameSaving, setRenameSaving] = useState(false),
+    [renaming, setRenaming] = useState<QualityRecord>(),
+    [renameName, setRenameName] = useState(''),
+    [renameRelations, setRenameRelations] = useState<ProjectRelationTarget[]>([]);
   const [msg, holder] = message.useMessage();
   const type = types.find((t) => t.id === typeId);
   const activeRows = editing ? draft : rows;
@@ -73,6 +81,51 @@ export function QualityDataPage() {
   useEffect(() => {
     void loadRows();
   }, [loadRows]);
+  const openRename = (row: QualityRecord) => {
+    setRenaming(row);
+    setRenameName(row.displayName || row.sourceFileName || row.businessNo);
+    setRenameRelations(
+      row.projectId
+        ? [{
+            projectId: row.projectId,
+            projectName: row.projectName,
+            stageId: row.stageId,
+            stageName: row.stageName,
+            taskId: row.taskId,
+            taskName: row.taskName,
+          }]
+        : [],
+    );
+    setRenameOpen(true);
+  };
+  const saveRename = async () => {
+    if (!renaming || !renameName.trim()) {
+      msg.warning('请输入品管数据名称');
+      return;
+    }
+    const relation = renameRelations[0];
+    setRenameSaving(true);
+    try {
+      await qualityApi.renameRecord(renaming.id, {
+        revision: renaming.lockVersion,
+        name: renameName.trim(),
+        projectId: relation?.projectId,
+        projectName: relation?.projectName,
+        stageId: relation?.stageId,
+        stageName: relation?.stageName,
+        taskId: relation?.taskId,
+        taskName: relation?.taskName,
+      });
+      msg.success('品管数据名称和项目关联已更新');
+      setRenameOpen(false);
+      setRenaming(undefined);
+      await loadRows();
+    } catch (error) {
+      msg.error(error instanceof Error ? error.message : '品管数据保存失败');
+    } finally {
+      setRenameSaving(false);
+    }
+  };
   const guard = () => !dirty || window.confirm('当前表格有未保存修改，确定放弃吗？');
   const switchType = (id: QualityTypeId) => {
     if (!guard()) return;
@@ -243,7 +296,7 @@ export function QualityDataPage() {
   const fields = type?.fields || [];
   const allSelected = visibleRows.length > 0 && visibleRows.every((r) => selected.has(r.id));
   return (
-    <div className="quality-page">
+    <div className="quality-page pm-unified-list-page">
       {holder}
       <div className="quality-tabs">
         {types.map((t) => (
@@ -291,7 +344,7 @@ export function QualityDataPage() {
                   >
                     编辑
                   </Button>
-                  {c.allowedActions?.includes('DELETE') ? <Button
+                  <Button
                     type="link"
                     size="small"
                     danger
@@ -308,7 +361,7 @@ export function QualityDataPage() {
                     }
                   >
                     删除
-                  </Button> : null}
+                  </Button>
                 </span>
               </span>
             </span>
@@ -454,10 +507,8 @@ export function QualityDataPage() {
                   danger
                   disabled={!selected.size}
                   onClick={() => {
-                    const deletable = [...selected].filter((id) => draft.some((row) => row.id === id && row.allowedActions?.includes('DELETE')));
-                    if (!deletable.length) { msg.warning('当前选择没有可删除的数据'); return; }
-                    setDeleted((v) => [...v, ...deletable]);
-                    setDraft((v) => v.filter((r) => !deletable.includes(r.id)));
+                    setDeleted((v) => [...v, ...selected]);
+                    setDraft((v) => v.filter((r) => !selected.has(r.id)));
                     setSelected(new Set());
                     setDirty(true);
                   }}
@@ -491,6 +542,8 @@ export function QualityDataPage() {
                       }
                     />
                   </th>
+                  <th>名称</th>
+                  <th>关联项目 / 阶段 / 任务</th>
                   {fields.map((f) => (
                     <th key={f.key}>
                       {f.label}
@@ -516,6 +569,12 @@ export function QualityDataPage() {
                           })
                         }
                       />
+                    </td>
+                    <td title={r.displayName || r.sourceFileName || r.businessNo}>
+                      {r.displayName || r.sourceFileName || r.businessNo}
+                    </td>
+                    <td>
+                      {[r.projectName, r.stageName, r.taskName].filter(Boolean).join(' · ') || '未关联项目'}
                     </td>
                     {fields.map((f) => (
                       <td key={f.key}>
@@ -550,6 +609,9 @@ export function QualityDataPage() {
                       <Button type="link" onClick={() => navigate(`/quality/records/${r.id}`)}>
                         查看
                       </Button>
+                      <Button type="link" disabled={r.newRow || editing} onClick={() => openRename(r)}>
+                        重命名
+                      </Button>
                       {typeId === 'record' && textValue(r.data.judgement) === '不合格' && !editing && (
                         <Button
                           type="link"
@@ -563,7 +625,7 @@ export function QualityDataPage() {
                           生成不良报告
                         </Button>
                       )}
-                      {r.allowedActions?.includes('DELETE') ? <Button
+                      <Button
                         type="link"
                         danger
                         icon={typeId === 'standard' ? undefined : <DeleteOutlined />}
@@ -588,7 +650,7 @@ export function QualityDataPage() {
                         }
                       >
                         删除
-                      </Button> : null}
+                      </Button>
                     </td>
                   </tr>
                 ))}
@@ -612,6 +674,38 @@ export function QualityDataPage() {
           />
         </div>
       </section>
+      <Modal
+        open={renameOpen}
+        title="重命名并关联项目"
+        width={720}
+        confirmLoading={renameSaving}
+        okText="保存"
+        cancelText="取消"
+        onCancel={() => setRenameOpen(false)}
+        onOk={() => void saveRename()}
+      >
+        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+          <div>
+            <span className="ant-form-item-label"><label>品管数据名称</label></span>
+            <Input
+              value={renameName}
+              maxLength={300}
+              placeholder="请输入品管数据名称"
+              onChange={(event) => setRenameName(event.target.value)}
+            />
+          </div>
+          <div>
+            <span className="ant-form-item-label"><label>关联项目 / 阶段 / 任务</label></span>
+            <div style={{ marginTop: 8 }}>
+              <ProjectRelationPicker
+                value={renameRelations}
+                onChange={setRenameRelations}
+                multiple={false}
+              />
+            </div>
+          </div>
+        </Space>
+      </Modal>
     </div>
   );
 }

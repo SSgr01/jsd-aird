@@ -143,4 +143,20 @@ describe('experiment-workbook round trip', () => {
     expect(buildExperimentSnapshot(templateModel, 'exp-template', templateSnapshot)).toBe(templateSnapshot);
     expect(parseExperimentSnapshot(templateSnapshot, templateModel).documentSnapshot).toBe(templateSnapshot);
   });
+
+  it('keeps a blank experiment free of starter content', () => {
+    const blankWord = buildExperimentSnapshot(
+      { title: '空白 Word 实验', documentFormat: 'word', blankDocument: true },
+      'exp-blank-word',
+    );
+    expect((blankWord.body as Record<string, unknown>)?.dataStream).toBe('\r\n');
+
+    const blankExcel = buildExperimentSnapshot(
+      { title: '空白 Excel 实验', documentFormat: 'excel', blankDocument: true },
+      'exp-blank-excel',
+    );
+    const sheets = blankExcel.sheets as Record<string, Record<string, unknown>>;
+    expect(blankExcel.sheetOrder).toEqual(['sheet-1']);
+    expect(sheets['sheet-1']?.cellData).toEqual({});
+  });
 });

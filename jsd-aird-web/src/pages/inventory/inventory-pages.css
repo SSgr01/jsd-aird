@@ -1,12 +1,20 @@
 .inventory-page {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
   padding: 24px;
 }
 .inventory-heading {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
+  min-width: 0;
+  gap: 16px;
+  flex-wrap: wrap;
   margin-bottom: 20px;
 }
+.inventory-heading > div { min-width: 0; }
+.inventory-heading > .ant-space { max-width: 100%; flex-wrap: wrap; }
 .inventory-heading h1 {
   font-size: 24px;
   margin: 0 0 6px;
@@ -19,16 +27,35 @@
   margin-bottom: 16px;
 }
 .inventory-filters {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  grid-template-columns: minmax(220px, 2fr) repeat(2, minmax(150px, 1fr));
+  gap: 10px;
+  align-items: center;
   margin-bottom: 16px;
-  flex-wrap: wrap;
 }
-.inventory-filters .ant-input-search {
-  width: 280px;
-}
+.inventory-filters .ant-space-item { min-width: 0; }
+.inventory-filters .ant-input-search,
+.inventory-filters .ant-select { width: 100%; min-width: 0; }
+.inventory-page .ant-card { min-width: 0; max-width: 100%; }
+.inventory-page .ant-table-wrapper { min-width: 0; max-width: 100%; overflow: hidden; }
+.inventory-page .ant-table { min-width: 0; }
 .inventory-full {
   width: 100%;
 }
 .inventory-error {
   color: #dc2626;
   margin: 6px 0;
+}
+
+@media (max-width: 900px) {
+  .inventory-page { padding: 20px 16px; }
+  .inventory-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .inventory-summary .ant-col { max-width: 50%; flex: 0 0 50%; }
+}
+
+@media (max-width: 600px) {
+  .inventory-filters { grid-template-columns: 1fr; }
+  .inventory-summary .ant-col { max-width: 100%; flex: 0 0 100%; }
 }

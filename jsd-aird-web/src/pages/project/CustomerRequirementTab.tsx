@@ -1,18 +1,20 @@
-import { Button, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag, message } from 'antd';
+import { Button, DatePicker, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
+import { CloseCircleFilled, PlusOutlined } from '@ant-design/icons';
 import { useEffect, useMemo, useState } from 'react';
+import dayjs from '@/utils/dayjs';
 
 import {
-  createRequirement,
-  deleteRequirement,
-  getRequirements,
-  updateRequirement,
+  createProjectRequirement,
+  deleteProjectRequirement,
+  getProjectRequirements,
+  updateProjectRequirement,
   type Requirement,
   type RequirementInput,
 } from '@/services/partners/crm-api';
 
 import './customer-requirement-tab.css';
+import '@/styles/management-list.css';
 
 interface Props {
   projectId: string;
@@ -24,8 +26,8 @@ interface CreateFormValues {
   title?: string;
   rawRequirement?: string;
   urgency?: Requirement['urgency'];
-  raisedAt?: string;
-  deliveryDate?: string;
+  raisedAt?: dayjs.Dayjs | null;
+  deliveryDate?: dayjs.Dayjs | null;
   status: Requirement['status'];
   customStatusName?: string;
 }
@@ -70,6 +72,41 @@ function formatStatus(value?: string) {
   return STATUS_LABELS[value] ?? value;
 }
 
+function ClearableRequirementDatePicker({
+  value,
+  onChange,
+  ariaLabel,
+}: {
+  value?: dayjs.Dayjs | null;
+  onChange?: (value: dayjs.Dayjs | null) => void;
+  ariaLabel: string;
+}) {
+  return (
+    <div className="pm-cr-date-picker">
+      <DatePicker
+        value={value}
+        onChange={(nextValue) => onChange?.(nextValue)}
+        format="YYYY/MM/DD"
+        style={{ width: '100%', paddingRight: value ? 34 : undefined }}
+        placeholder="年/月/日"
+        allowClear={false}
+        inputReadOnly={false}
+      />
+      {value ? (
+        <button
+          type="button"
+          className="pm-cr-date-clear"
+          aria-label={`清除${ariaLabel}`}
+          title={`清除${ariaLabel}`}
+          onClick={() => onChange?.(null)}
+        >
+          <CloseCircleFilled />
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 export function CustomerRequirementTab({ projectId, projectName, partnerId }: Props) {
   const [items, setItems] = useState<Requirement[]>([]);
   const [loading, setLoading] = useState(false);
@@ -84,7 +121,7 @@ export function CustomerRequirementTab({ projectId, projectName, partnerId }: Pr
   const load = async () => {
     setLoading(true);
     try {
-      const data = await getRequirements({ projectId, page: 1, size: 100 });
+      const data = await getProjectRequirements(projectId, { page: 1, size: 100 });
       setItems(data.items ?? []);
     } catch (reason) {
       messageApi.error(reason instanceof Error ? reason.message : '客户需求加载失败');
@@ -117,7 +154,7 @@ export function CustomerRequirementTab({ projectId, projectName, partnerId }: Pr
     form.setFieldsValue({
       status: 'DRAFT',
       urgency: 'MEDIUM',
-      raisedAt: new Date().toISOString().slice(0, 10),
+      raisedAt: dayjs(),
     });
     fillCustomFields(null);
     setModalOpen(true);
@@ -131,8 +168,8 @@ export function CustomerRequirementTab({ projectId, projectName, partnerId }: Pr
       title: record.title ?? '',
       rawRequirement: record.rawRequirement,
       urgency: record.urgency,
-      raisedAt: record.raisedAt,
-      deliveryDate: record.deliveryDate,
+      raisedAt: record.raisedAt ? dayjs(record.raisedAt) : undefined,
+      deliveryDate: record.deliveryDate ? dayjs(record.deliveryDate) : undefined,
       status: record.status,
       customStatusName: record.customStatusName,
     });
@@ -155,7 +192,7 @@ export function CustomerRequirementTab({ projectId, projectName, partnerId }: Pr
 
   const handleDelete = async (record: Requirement) => {
     try {
-      await deleteRequirement(record.id, record.version ?? 0);
+      await deleteProjectRequirement(projectId, record.id, record.version ?? 0);
       messageApi.success('客户需求已删除');
       await load();
     } catch (reason) {
@@ -165,6 +202,10 @@ export function CustomerRequirementTab({ projectId, projectName, partnerId }: Pr
 
   const handleSubmit = async () => {
     const values = await form.validateFields();
+    if (values.raisedAt && values.deliveryDate && values.raisedAt.isAfter(values.deliveryDate)) {
+      messageApi.error('提出日期不能大于预计完成日期');
+      return;
+    }
     const customFields: Record<string, string> = {} as Record<string, string>;
     const rows: { name?: string; value?: string }[] = customFieldRows ?? [];
     for (const row of rows) {
@@ -183,8 +224,8 @@ export function CustomerRequirementTab({ projectId, projectName, partnerId }: Pr
         status: values.status,
         customStatusName: undefined,
         urgency: values.urgency,
-        raisedAt: values.raisedAt,
-        deliveryDate: values.deliveryDate,
+        raisedAt: values.raisedAt ? values.raisedAt.format('YYYY-MM-DD') : null,
+        deliveryDate: values.deliveryDate ? values.deliveryDate.format('YYYY-MM-DD') : null,
         projectId: projectId ?? undefined,
         projectIds: editingRecord?.projectIds?.length
           ? editingRecord.projectIds
@@ -194,10 +235,10 @@ export function CustomerRequirementTab({ projectId, projectName, partnerId }: Pr
         version: mode === 'edit' && editingRecord ? editingRecord.version ?? 0 : 0,
       };
       if (mode === 'edit' && editingRecord) {
-        await updateRequirement(editingRecord.id, payload);
+        await updateProjectRequirement(projectId, editingRecord.id, payload);
         messageApi.success('客户需求已更新');
       } else {
-        await createRequirement(payload);
+        await createProjectRequirement(projectId, payload);
         messageApi.success('客户需求已创建');
       }
       setModalOpen(false);
@@ -232,24 +273,23 @@ export function CustomerRequirementTab({ projectId, projectName, partnerId }: Pr
       {
         title: '操作',
         key: 'actions',
-        width: 130,
-        fixed: 'right',
+        width: 120,
         render: (_, record) => (
-          <Space size={0}>
+          <Space className="management-table-actions" size={0}>
             <Button type="link" size="small" onClick={() => openEdit(record)}>
               编辑
             </Button>
-            {record.allowedActions?.includes('DELETE') && <Popconfirm
+            <Popconfirm
               title="确认删除该客户需求？"
               okText="删除"
               cancelText="取消"
               okButtonProps={{ danger: true }}
               onConfirm={() => handleDelete(record)}
             >
-              <Button type="link" size="small" danger icon={<DeleteOutlined />}>
+              <Button type="link" size="small" danger>
                 删除
               </Button>
-            </Popconfirm>}
+            </Popconfirm>
           </Space>
         ),
       },
@@ -303,10 +343,10 @@ export function CustomerRequirementTab({ projectId, projectName, partnerId }: Pr
 
           <div className="pm-cr-grid-2">
             <Form.Item name="raisedAt" label="提出日期">
-              <Input type="date" />
+              <ClearableRequirementDatePicker ariaLabel="提出日期" />
             </Form.Item>
             <Form.Item name="deliveryDate" label="预计完成日期">
-              <Input type="date" />
+              <ClearableRequirementDatePicker ariaLabel="预计完成日期" />
             </Form.Item>
             <Form.Item name="urgency" label="紧急程度">
               <Select

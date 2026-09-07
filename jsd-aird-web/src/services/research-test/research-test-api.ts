@@ -74,6 +74,13 @@ export interface ResearchTestUpload {
   taskName?: string;
   createdAt: string;
 }
+export interface StagedResearchTestFile {
+  fileId: string;
+  originalName: string;
+  contentType: string;
+  size: number;
+  sha256: string;
+}
 const root = (type: ResearchTestType) =>
   type === 'REPORT' ? '/api/v1/comprehensive-reports' : '/api/v1/test-standards';
 const data = <T>(r: { data: ApiResponse<T> }) => r.data.data;
@@ -144,7 +151,10 @@ export async function createResearchTestRevision(
     }),
   );
 }
-export async function stageResearchTestFile(file: File, signal?: AbortSignal) {
+export async function stageResearchTestFile(
+  file: File,
+  signal?: AbortSignal,
+): Promise<StagedResearchTestFile> {
   const body = new FormData();
   body.append('file', file);
   return data(

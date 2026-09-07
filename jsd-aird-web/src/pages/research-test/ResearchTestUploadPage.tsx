@@ -23,7 +23,7 @@ import {
 } from '@/services/research-test/research-test-api';
 
 const allowed = /\.(pdf|doc|docx|xls|xlsx|csv|png|jpe?g|gif|webp|bmp|tiff?)$/i;
-const categories = ['综合性能测试', '原料检测', '中间体检测', '成品检测', '客户送样测试'];
+const reportTypeOptions = [{ value: '综合测试报告', label: '综合测试报告' }];
 const visibilityOptions = [
   { value: 'ALL', label: '全员可见' },
   { value: 'RND', label: '仅研发部门' },
@@ -43,7 +43,7 @@ export function ResearchTestUploadPage() {
   const navigate = useNavigate();
   const [files, setFiles] = useState<UploadFile[]>([]);
   const [rows, setRows] = useState<ResearchTestUpload[]>([]);
-  const [category, setCategory] = useState(categories[0]);
+  const [reportType, setReportType] = useState(reportTypeOptions[0]?.value ?? '综合测试报告');
   const [visibility, setVisibility] = useState('ALL');
   const [relations, setRelations] = useState<ProjectRelationTarget[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -119,7 +119,7 @@ export function ResearchTestUploadPage() {
           );
           await registerResearchTestUpload({
             ...staged,
-            category,
+            category: reportType,
             visibility,
             projectId: relation?.projectId,
             stageId: relation?.stageId,
@@ -204,7 +204,7 @@ export function ResearchTestUploadPage() {
       id: task.id,
       name: task.file.name,
       meta: `${formatLabel(task.file.name)} · ${(task.file.size / 1024 / 1024).toFixed(2)} MB`,
-      detail: `${task.stage} · 保存位置：${category} · ${relationLabel(relations)} · ${visibilityLabel(visibility)}${task.error ? ` · 失败原因：${task.error}` : ''}`,
+      detail: `${task.stage} · 保存位置：${reportType} · ${relationLabel(relations)} · ${visibilityLabel(visibility)}${task.error ? ` · 失败原因：${task.error}` : ''}`,
       status:
         task.status === 'FAILED'
           ? { label: '失败', color: 'error' }
@@ -217,7 +217,7 @@ export function ResearchTestUploadPage() {
           loading={retryingTaskId === task.id}
           onClick={() => void retryTask(task)}
         >
-          重新解析
+          重试
         </Button>
       ),
     }));
@@ -256,7 +256,7 @@ export function ResearchTestUploadPage() {
             loading={retryingUploadId === row.id}
             onClick={() => void retryUploadedRow(row)}
           >
-            重新解析
+            重试
           </Button>
           <Button
             type="link"
@@ -294,11 +294,11 @@ export function ResearchTestUploadPage() {
         leftTitle="基础分类"
         classification={
           <Form layout="vertical" component={false}>
-            <Form.Item label="报告分类">
+            <Form.Item label="报告种类">
               <Select
-                value={category}
-                onChange={setCategory}
-                options={categories.map((value) => ({ value, label: value }))}
+                value={reportType}
+                onChange={setReportType}
+                options={reportTypeOptions}
               />
             </Form.Item>
             <Form.Item label="关联项目 / 阶段 / 任务">

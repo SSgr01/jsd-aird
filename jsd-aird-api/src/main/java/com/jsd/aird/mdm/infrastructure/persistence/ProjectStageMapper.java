@@ -16,8 +16,12 @@ public interface ProjectStageMapper {
         "s.planned_end plannedEnd,s.actual_start actualStart,s.actual_end actualEnd," +
         "mdm.project_stage_task_count(s.id) taskCount,mdm.project_stage_open_task_count(s.id) openTaskCount," +
         "(SELECT count(*) FROM rnd.experiment e WHERE e.stage_id=s.id AND e.deleted=false) experimentCount," +
-        "(SELECT count(*) FROM quality.upload_file q WHERE q.stage_id=s.id AND q.deleted=false) + " +
-        "(SELECT count(*) FROM mfg.production_upload pu WHERE pu.stage_id=s.id AND pu.status != 'DELETED') materialCount," +
+        "(SELECT count(*) FROM quality.upload_file q WHERE q.stage_id=s.id AND q.project_id=s.project_id AND q.deleted=false) + " +
+        "(SELECT count(*) FROM mfg.production_upload pu JOIN ops.file_object fo ON fo.id=pu.file_id " +
+        "WHERE pu.stage_id=s.id AND pu.project_id=s.project_id AND " +
+        "(pu.status IN ('SAVED','PUBLISHED') OR " +
+        "(pu.status='REVIEW_REQUIRED' AND pu.match_mode IN ('EXACT_MANIFEST','SIMILAR_AUTO','USER_SELECTED_TEMPLATE')))) + " +
+        "(SELECT count(*) FROM rnd.research_test_record r WHERE r.stage_id=s.id AND r.project_id=s.project_id AND r.record_type='REPORT' AND r.deleted=false) materialCount," +
         "s.version,s.created_at createdAt,s.updated_at updatedAt FROM mdm.project_stage s " +
         "JOIN mdm.project p ON p.id=s.project_id ";
 

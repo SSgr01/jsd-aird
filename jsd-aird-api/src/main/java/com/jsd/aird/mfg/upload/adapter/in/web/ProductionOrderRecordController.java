@@ -32,7 +32,7 @@ public class ProductionOrderRecordController {
 
     @GetMapping("/{id}")
     public ApiResponse<ProductionUploadRepository.UploadView> get(@PathVariable UUID id) {
-        return success(service.get(id));
+        return success(service.getViewable(id));
     }
 
     @PutMapping("/batch")

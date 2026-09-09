@@ -6,6 +6,7 @@ import com.jsd.aird.ops.application.port.FileStorageFacade;
 import com.jsd.aird.ops.application.port.OpsAsyncFacade;
 import com.jsd.aird.kb.domain.DocumentParser;
 import com.jsd.aird.kb.domain.MediaExtractionProvider;
+import com.jsd.aird.kb.domain.OrderedDocumentProjector;
 import com.jsd.aird.rnd.application.port.ExperimentImportRepository;
 import com.jsd.aird.rnd.domain.ExperimentModels.Summary;
 import com.jsd.aird.shared.error.ApiErrorCode;
@@ -20,7 +21,6 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDate;
 import java.nio.charset.StandardCharsets;
 import java.io.ByteArrayInputStream;
-import javax.imageio.ImageIO;
 import java.util.Base64;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -41,6 +41,7 @@ public class ExperimentImportService {
     private final ObjectMapper objectMapper;
     private final OpsAsyncFacade asyncJobs;
     private final TemplateOfficeNormalizationFacade fileNormalizer;
+    private final OrderedDocumentProjector documentProjector;
 
     public ExperimentImportService(ExperimentImportRepository imports, ExperimentService experiments,
                                    FileStorageFacade files, List<OfficeStructureParser> parsers,
@@ -55,6 +56,7 @@ public class ExperimentImportService {
         this.objectMapper = objectMapper;
         this.asyncJobs = asyncJobs;
         this.fileNormalizer = fileNormalizer;
+        this.documentProjector = new OrderedDocumentProjector();
     }
 
     @Transactional
@@ -455,12 +457,13 @@ public class ExperimentImportService {
      * image upload opens in the same Excel editor as a normal experiment.
      * Table rows retain their cell boundaries when the OCR provider supplies
      * the converter's table-cell attributes; ordinary text is kept on a
-     * separate 识别文本 sheet, and the original image is kept on OCR原文 for
-     * visual traceability.
+     * separate 识别文本 sheet. The original source remains available through
+     * the experiment's source-file download instead of being duplicated here.
      */
     private OfficeStructureParser.ParseResult ocrWorkbookResult(
             String fileName, String sourceContentType, byte[] sourceBytes,
             DocumentParser.ParsedDocument extracted) {
+        var projection = documentProjector.project(extracted.blocks());
         var summary = objectMapper.createObjectNode()
                 .put("format", "OCR_IMPORT")
                 .put("outputFormat", "XLSX")
@@ -469,7 +472,9 @@ public class ExperimentImportService {
                 .put("sourceFileName", fileName)
                 .put("reviewRequired", true)
                 .put("ocrStatus", "REVIEW_REQUIRED")
-                .put("recognizedBlockCount", extracted.blocks().size());
+                .put("recognizedBlockCount", extracted.blocks().size())
+                .put("structureScore", projection.structureScore());
+        summary.set("structureIssues", objectMapper.valueToTree(projection.issues()));
         var blocks = summary.putArray("textBlocks");
         extracted.blocks().forEach(block -> {
             var node = blocks.addObject()
@@ -482,163 +487,133 @@ public class ExperimentImportService {
             }
         });
         return new OfficeStructureParser.ParseResult(summary,
-                ocrWorkbookSnapshot(fileName, sourceContentType, sourceBytes, extracted.blocks()), List.of());
+                ocrWorkbookSnapshot(fileName, projection), List.of());
     }
 
     ObjectNode ocrWorkbookSnapshot(String fileName, List<DocumentParser.TextBlock> blocks) {
-        return ocrWorkbookSnapshot(fileName, null, null, blocks);
+        return ocrWorkbookSnapshot(fileName, documentProjector.project(blocks));
     }
 
     /**
      * Creates the workbook used by image OCR imports. The OCR text/table
-     * sheets are editable, while the original source image is kept as a
-     * native Univer drawing on the dedicated {@code OCR原文} sheet. Keeping
-     * the image in the workbook snapshot makes the original visual layout
-     * available next to the normalized OCR result and survives draft saves.
+     * sheets are editable. The original image is retained by file storage and
+     * downloaded from the experiment workspace when the user needs it.
      */
     ObjectNode ocrWorkbookSnapshot(String fileName, String sourceContentType, byte[] sourceBytes,
                                    List<DocumentParser.TextBlock> blocks) {
+        return ocrWorkbookSnapshot(fileName, documentProjector.project(blocks));
+    }
+
+    private ObjectNode ocrWorkbookSnapshot(String fileName, OrderedDocumentProjector.Projection projection) {
         var snapshot = objectMapper.createObjectNode()
                 .put("id", UUID.randomUUID().toString())
                 .put("snapshotFormatVersion", 3)
                 .put("name", fileName + " · OCR结果")
                 .put("appVersion", "univer-0.25.1");
-        var sheetOrder = objectMapper.createArrayNode();
-        var sheets = objectMapper.createObjectNode();
         var styles = objectMapper.createObjectNode();
-
-        var textRows = new ArrayList<List<String>>();
-        textRows.add(List.of("页码", "类型", "识别内容", "置信度"));
-        var tableGroups = new LinkedHashMap<String, List<DocumentParser.TextBlock>>();
-        for (var block : blocks == null ? List.<DocumentParser.TextBlock>of() : blocks) {
-            var group = stringAttribute(block.attributes(), "tableGroup");
-            if (!group.isBlank() && block.section() != null
-                    && block.section().toLowerCase(java.util.Locale.ROOT).endsWith("table-row")) {
-                tableGroups.computeIfAbsent(group, ignored -> new ArrayList<>()).add(block);
-            } else if (block.content() != null && !block.content().isBlank()) {
-                // Keep non-tabular OCR text available for correction without
-                // mixing it into OCR原文, which is reserved for the source
-                // image itself.
-                textRows.add(List.of(
-                        block.pageNo() == null ? "" : String.valueOf(block.pageNo()),
-                        block.section() == null ? "" : block.section(),
-                        block.content(),
-                        block.confidence() == null ? "" : String.format(java.util.Locale.ROOT, "%.2f", block.confidence())
-                ));
-            }
-        }
-        var tableIndex = 0;
-        for (var rows : tableGroups.values()) {
-            if (rows.isEmpty()) continue;
-            rows.sort(java.util.Comparator.comparingInt(this::tableRowOrder));
-            var sheetId = "sheet-ocr-table-" + (++tableIndex);
-            var sheetName = tableIndex == 1 ? "识别结果" : "识别结果" + tableIndex;
-            var tableSheet = workbookTableSheet(sheetId, sheetName, rows, styles);
-            tableSheet.put("ocrTable", 1);
-            tableSheet.put("tableGroup", String.valueOf(rows.getFirst().attributes().getOrDefault("tableGroup", "")));
-            sheetOrder.add(sheetId);
-            sheets.set(sheetId, tableSheet);
-        }
-        // OCR原文 is intentionally reserved for the original image. The
-        // recognized text remains available in the summary and result sheets;
-        // putting it here as cells made the source layout impossible to audit.
-        var textSheet = workbookImageSheet("sheet-ocr-text", "OCR原文", styles);
-        sheetOrder.add("sheet-ocr-text");
-        sheets.set("sheet-ocr-text", textSheet);
-        if (textRows.size() > 1) {
-            var recognizedTextSheet = workbookTextSheet("sheet-ocr-text-content", "识别文本", textRows, styles);
-            sheetOrder.add("sheet-ocr-text-content");
-            sheets.set("sheet-ocr-text-content", recognizedTextSheet);
-        }
-        snapshot.set("sheetOrder", sheetOrder);
-        snapshot.set("sheets", sheets);
+        var sheetId = "sheet-ocr-result";
+        snapshot.putArray("sheetOrder").add(sheetId);
+        snapshot.putObject("sheets").set(sheetId, workbookOrderedSheet(sheetId, projection, styles));
         snapshot.set("styles", styles);
-        if (sourceBytes != null && sourceBytes.length > 0) {
-            addOcrSourceImage(snapshot, sourceContentType, sourceBytes);
-        }
         return snapshot;
     }
 
-    private ObjectNode workbookImageSheet(String id, String name, ObjectNode styles) {
+    private ObjectNode workbookOrderedSheet(String id, OrderedDocumentProjector.Projection projection,
+                                             ObjectNode styles) {
         ensureOcrStyles(styles);
-        var sheet = objectMapper.createObjectNode()
-                .put("id", id)
-                .put("name", name)
-                .put("rowCount", 80)
-                .put("columnCount", 20)
-                .put("defaultRowHeight", 26)
-                .put("defaultColumnWidth", 100)
-                .put("showGridlines", 1);
-        sheet.set("cellData", objectMapper.createObjectNode());
-        sheet.set("mergeData", objectMapper.createArrayNode());
-        sheet.set("rowData", objectMapper.createObjectNode());
-        sheet.set("columnData", objectMapper.createObjectNode());
+        var cellData = objectMapper.createObjectNode();
+        var mergeData = objectMapper.createArrayNode();
+        var rowData = objectMapper.createObjectNode();
+        var columnWidths = new ArrayList<Integer>();
+        var currentRow = 0;
+        var maximumColumns = projection.sections().stream()
+                .filter(OrderedDocumentProjector.Table.class::isInstance)
+                .map(OrderedDocumentProjector.Table.class::cast)
+                .mapToInt(OrderedDocumentProjector.Table::columnCount).max().orElse(8);
+        for (var section : projection.sections()) {
+            if (section instanceof OrderedDocumentProjector.Paragraph paragraph) {
+                var text = paragraph.text();
+                var cell = objectMapper.createObjectNode().put("v", text)
+                        .put("s", paragraph.type() != null && paragraph.type().startsWith("heading")
+                                ? "ocr-header" : "ocr-text");
+                cellData.withObject("/" + currentRow).set("0", cell);
+                if (maximumColumns > 1) mergeData.addObject().put("startRow", currentRow).put("endRow", currentRow)
+                        .put("startColumn", 0).put("endColumn", maximumColumns - 1);
+                var lines = Math.max(1, (text.length() + 79) / 80);
+                rowData.set(String.valueOf(currentRow), objectMapper.createObjectNode().put("h", Math.min(120, 28 * lines)));
+                currentRow++;
+                continue;
+            }
+            var table = (OrderedDocumentProjector.Table) section;
+            var tableStart = currentRow;
+            // Materialize the complete logical rectangle first. Empty and merge-covered cells
+            // need styles too; otherwise Univer renders broken borders around sparse OCR rows.
+            for (var logicalRow = 0; logicalRow < table.rowCount(); logicalRow++) {
+                var targetRow = cellData.withObject("/" + (tableStart + logicalRow));
+                for (var logicalColumn = 0; logicalColumn < table.columnCount(); logicalColumn++) {
+                    targetRow.set(String.valueOf(logicalColumn), objectMapper.createObjectNode()
+                            .put("v", "").put("s", "ocr-table"));
+                }
+            }
+            for (var placement : table.cells()) {
+                var row = tableStart + placement.row();
+                cellData.withObject("/" + row).set(String.valueOf(placement.column()), objectMapper.createObjectNode()
+                        .put("v", placement.text()).put("s", placement.header() ? "ocr-header" : "ocr-table"));
+                if (placement.rowSpan() > 1 || placement.columnSpan() > 1) {
+                    mergeData.addObject().put("startRow", row).put("endRow", row + placement.rowSpan() - 1)
+                            .put("startColumn", placement.column())
+                            .put("endColumn", placement.column() + placement.columnSpan() - 1);
+                }
+                while (columnWidths.size() < placement.column() + placement.columnSpan()) columnWidths.add(34);
+                var pixelWidth = geometryNumber(placement.geometry(), "pixelRight")
+                        - geometryNumber(placement.geometry(), "pixelLeft");
+                var width = pixelWidth > 0 ? Math.min(220, Math.max(34,
+                        (int) Math.round(pixelWidth * .72 / placement.columnSpan())))
+                        : Math.min(180, Math.max(76, 20 + placement.text().length() * 13 / placement.columnSpan()));
+                for (var offset = 0; offset < placement.columnSpan(); offset++) {
+                    columnWidths.set(placement.column() + offset,
+                            Math.max(columnWidths.get(placement.column() + offset), width));
+                }
+                var pixelHeight = geometryNumber(placement.geometry(), "pixelBottom")
+                        - geometryNumber(placement.geometry(), "pixelTop");
+                if (pixelHeight > 0) {
+                    var targetHeight = Math.min(120, Math.max(22, (int) Math.round(pixelHeight * .72)));
+                    var existingHeight = rowData.path(String.valueOf(row)).path("h").asInt(0);
+                    if (targetHeight > existingHeight) rowData.set(String.valueOf(row),
+                            objectMapper.createObjectNode().put("h", targetHeight));
+                }
+            }
+            for (var abnormal : table.abnormalRows()) {
+                rowData.withObject("/" + (tableStart + abnormal)).put("ocrReviewRequired", 1);
+            }
+            currentRow += table.rowCount();
+        }
+        var sheet = objectMapper.createObjectNode().put("id", id).put("name", "识别结果")
+                .put("rowCount", Math.max(200, currentRow + 20))
+                .put("columnCount", Math.max(12, maximumColumns + 3))
+                .put("defaultRowHeight", 30).put("defaultColumnWidth", 76)
+                .put("showGridlines", 0).put("detectedColumnCount", maximumColumns)
+                .put("ocrStructureScore", projection.structureScore());
+        sheet.set("cellData", cellData);
+        sheet.set("mergeData", mergeData);
+        sheet.set("rowData", rowData);
+        var columnData = objectMapper.createObjectNode();
+        for (var column = 0; column < columnWidths.size(); column++) {
+            columnData.set(String.valueOf(column), objectMapper.createObjectNode().put("w", columnWidths.get(column)));
+        }
+        sheet.set("columnData", columnData);
+        sheet.set("freeze", objectMapper.createObjectNode().put("startRow", -1).put("startColumn", -1).put("xSplit", 0).put("ySplit", 0));
+        sheet.set("rowHeader", objectMapper.createObjectNode().put("width", 46));
+        sheet.set("columnHeader", objectMapper.createObjectNode().put("height", 20));
         return sheet;
     }
 
-    private void addOcrSourceImage(ObjectNode snapshot, String sourceContentType, byte[] sourceBytes) {
-        var workbookId = snapshot.path("id").asText();
-        var contentType = sourceContentType == null || sourceContentType.isBlank()
-                ? "image/png" : sourceContentType;
-        var dataUrl = "data:" + contentType + ";base64,"
-                + Base64.getEncoder().encodeToString(sourceBytes);
-
-        // SHEET_DRAWING_PLUGIN resources are keyed by sheet id and contain
-        // the same map produced by Univer's SheetDrawingService. Univer will
-        // calculate the pixel transform from sheetTransform after loading the
-        // workbook, so the snapshot remains portable across viewport sizes.
-        var imageSize = imageDisplaySize(sourceBytes);
-        var from = objectMapper.createObjectNode()
-                .put("column", 0).put("columnOffset", 0)
-                .put("row", 0).put("rowOffset", 0);
-        var to = objectMapper.createObjectNode()
-                .put("column", imageSize[0] / 100)
-                .put("columnOffset", imageSize[0] % 100)
-                .put("row", imageSize[1] / 26)
-                .put("rowOffset", imageSize[1] % 26);
-        ObjectNode sheetTransform = objectMapper.createObjectNode();
-        sheetTransform.set("from", from);
-        sheetTransform.set("to", to);
-        ObjectNode image = objectMapper.createObjectNode();
-        image.put("unitId", workbookId);
-        image.put("subUnitId", "sheet-ocr-text");
-        image.put("drawingId", "ocr-source-image");
-        image.put("drawingType", 0);
-        image.put("imageSourceType", "BASE64");
-        image.put("source", dataUrl);
-        image.set("sheetTransform", sheetTransform.deepCopy());
-        image.set("axisAlignSheetTransform", sheetTransform.deepCopy());
-        ObjectNode data = objectMapper.createObjectNode();
-        data.set("ocr-source-image", image);
-        ObjectNode subUnit = objectMapper.createObjectNode();
-        subUnit.set("data", data);
-        subUnit.set("order", objectMapper.createArrayNode().add("ocr-source-image"));
-        ObjectNode unit = objectMapper.createObjectNode();
-        unit.set("sheet-ocr-text", subUnit);
-        snapshot.putArray("resources").addObject()
-                .put("name", "SHEET_DRAWING_PLUGIN")
-                .put("data", unit.toString());
-    }
-
-    /** Returns a bounded display size while preserving the source aspect ratio. */
-    private int[] imageDisplaySize(byte[] bytes) {
-        var width = 1000;
-        var height = 650;
-        try (var input = new ByteArrayInputStream(bytes)) {
-            var image = ImageIO.read(input);
-            if (image != null && image.getWidth() > 0 && image.getHeight() > 0) {
-                var scale = Math.min(1000d / image.getWidth(), 650d / image.getHeight());
-                // Do not enlarge small source images; they remain crisp in the
-                // original proportions when opened in the OCR原文 sheet.
-                scale = Math.min(1d, scale);
-                width = Math.max(1, (int) Math.round(image.getWidth() * scale));
-                height = Math.max(1, (int) Math.round(image.getHeight() * scale));
-            }
-        } catch (Exception ignored) {
-            // Unsupported image codecs (for example an optional TIFF plugin)
-            // still get a visible bounded drawing using the conservative size.
-        }
-        return new int[]{width, height};
+    private double geometryNumber(Map<String, Object> geometry, String key) {
+        if (geometry == null) return 0d;
+        var value = geometry.get(key);
+        if (value instanceof Number number) return number.doubleValue();
+        try { return Double.parseDouble(String.valueOf(value)); }
+        catch (RuntimeException ignored) { return 0d; }
     }
 
     private ObjectNode workbookTextSheet(String id, String name, List<List<String>> rows, ObjectNode styles) {
@@ -657,7 +632,7 @@ public class ExperimentImportService {
             var row = rows.get(rowIndex);
             for (var columnIndex = 0; columnIndex < row.size(); columnIndex++) {
                 rowData.set(String.valueOf(columnIndex), objectMapper.createObjectNode()
-                        .put("v", row.get(columnIndex)).put("t", 1)
+                        .put("v", row.get(columnIndex))
                         .put("s", rowIndex == 0 ? "ocr-header" : "ocr-text"));
             }
             cellData.set(String.valueOf(rowIndex), rowData);
@@ -716,7 +691,7 @@ public class ExperimentImportService {
             var cell = placement.cell();
             var row = cellData.withObject("/" + placement.row());
             row.set(String.valueOf(placement.column()), objectMapper.createObjectNode()
-                    .put("v", cell.text()).put("t", 1)
+                    .put("v", cell.text())
                     .put("s", cell.header() ? "ocr-header" : "ocr-table"));
             if (cell.rowSpan() > 1 || cell.columnSpan() > 1) {
                 mergeData.add(objectMapper.createObjectNode()

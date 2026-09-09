@@ -1,6 +1,7 @@
 package com.jsd.aird.mfg.upload.adapter.in.web;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.jsd.aird.mfg.upload.application.ProductionUploadExportService;
 import com.jsd.aird.mfg.upload.application.ProductionUploadService;
 import com.jsd.aird.mfg.upload.application.port.ProductionUploadRepository;
 import com.jsd.aird.platform.web.RequestIdHolder;
@@ -16,7 +17,12 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.UUID;
 
@@ -25,9 +31,12 @@ import java.util.UUID;
 public class ProductionOrderRecordController {
 
     private final ProductionUploadService service;
+    private final ProductionUploadExportService exportService;
 
-    public ProductionOrderRecordController(ProductionUploadService service) {
+    public ProductionOrderRecordController(ProductionUploadService service,
+                                           ProductionUploadExportService exportService) {
         this.service = service;
+        this.exportService = exportService;
     }
 
     @GetMapping("/{id}")
@@ -49,6 +58,19 @@ public class ProductionOrderRecordController {
     @GetMapping("/{id}/versions")
     public ApiResponse<List<ProductionUploadRepository.VersionView>> versions(@PathVariable UUID id) {
         return success(service.versions(id));
+    }
+
+    @GetMapping("/{id}/export")
+    public ResponseEntity<byte[]> export(@PathVariable UUID id) {
+        var file = exportService.export(id);
+        var disposition = ContentDisposition.attachment()
+                .filename(file.fileName(), StandardCharsets.UTF_8)
+                .build();
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType(file.contentType()))
+                .header(HttpHeaders.CONTENT_DISPOSITION, disposition.toString())
+                .contentLength(file.content().length)
+                .body(file.content());
     }
 
     @PostMapping("/{id}/publish")

@@ -16,7 +16,6 @@ import {
   Tag,
   Typography,
   Tooltip,
-  Upload,
 } from 'antd';
 import {
   AppstoreOutlined,
@@ -42,12 +41,17 @@ import {
   getResearchTest,
   listResearchTests,
   renameResearchTest,
-  stageResearchTestFile,
   type ResearchTestSummary,
   type ResearchTestType,
 } from '@/services/research-test/research-test-api';
-import { ProjectRelationPicker } from '@/components/project-relations/ProjectRelationPicker';
-import type { ProjectRelationTarget } from '@/services/project/project-resource-api';
+import {
+  getProjectStages,
+  getProjects,
+  getStageTasks,
+  type Project,
+  type ProjectStage,
+  type ProjectTask,
+} from '@/services/project/project-api';
 import './research-test.css';
 import '@/styles/management-list.css';
 
@@ -58,8 +62,11 @@ interface CreateFormValues {
   scope?: string;
   ownerName?: string;
   date: dayjs.Dayjs;
+  projectId?: string;
+  stageId?: string;
+  taskId?: string;
   format: 'WORD' | 'EXCEL';
-  sourceType: 'BLANK' | 'TEMPLATE' | 'IMPORT';
+  sourceType: 'BLANK' | 'TEMPLATE';
   visibility: string;
   templateVersionId?: string;
   effectiveFrom?: dayjs.Dayjs;
@@ -74,16 +81,6 @@ const statusText: Record<string, string> = {
   ARCHIVED: '已归档',
 };
 const standardCategories = ['国家标准', '行业标准', '企业标准', '客户标准', '内部测试方法'];
-function importedResearchTestFormat(file?: File): 'WORD' | 'EXCEL' | undefined {
-  const name = file?.name.toLowerCase() || '';
-  if (/\.(doc|docx)$/.test(name)) return 'WORD';
-  if (/\.(xls|xlsx)$/.test(name)) return 'EXCEL';
-  return undefined;
-}
-
-function importedResearchTestName(file: File) {
-  return file.name.replace(/\.[^.]+$/, '');
-}
 export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
   const report = type === 'REPORT',
     nav = useNavigate(),
@@ -107,12 +104,26 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
     [renameSaving, setRenameSaving] = useState(false),
     [renaming, setRenaming] = useState<ResearchTestSummary>(),
     [renameName, setRenameName] = useState(''),
-    [renameRelations, setRenameRelations] = useState<ProjectRelationTarget[]>([]);
-  const [importFile, setImportFile] = useState<File>(),
-    [importFileId, setImportFileId] = useState<string>(),
-    [importFileContentType, setImportFileContentType] = useState(''),
-    [importFileSha256, setImportFileSha256] = useState(''),
-    [importUploading, setImportUploading] = useState(false);
+    [renameBusinessNo, setRenameBusinessNo] = useState(''),
+    [renameOwnerName, setRenameOwnerName] = useState(''),
+    [renameDate, setRenameDate] = useState<dayjs.Dayjs>(),
+    [renameCategory, setRenameCategory] = useState(''),
+    [renameScope, setRenameScope] = useState(''),
+    [renameEffectiveFrom, setRenameEffectiveFrom] = useState<dayjs.Dayjs>(),
+    [renameEffectiveTo, setRenameEffectiveTo] = useState<dayjs.Dayjs>(),
+    [renameProjectId, setRenameProjectId] = useState<string>(),
+    [renameStageId, setRenameStageId] = useState<string>(),
+    [renameTaskId, setRenameTaskId] = useState<string>();
+  const [reportProjects, setReportProjects] = useState<Project[]>([]),
+    [reportProjectsLoading, setReportProjectsLoading] = useState(false),
+    [createStages, setCreateStages] = useState<ProjectStage[]>([]),
+    [createTasks, setCreateTasks] = useState<ProjectTask[]>([]),
+    [createStagesLoading, setCreateStagesLoading] = useState(false),
+    [createTasksLoading, setCreateTasksLoading] = useState(false),
+    [renameStages, setRenameStages] = useState<ProjectStage[]>([]),
+    [renameTasks, setRenameTasks] = useState<ProjectTask[]>([]),
+    [renameStagesLoading, setRenameStagesLoading] = useState(false),
+    [renameTasksLoading, setRenameTasksLoading] = useState(false);
   const [selected, setSelected] = useState<string[]>([]),
     [copying, setCopying] = useState(false),
     [exporting, setExporting] = useState(false),
@@ -149,47 +160,84 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
   useEffect(() => {
     setSelected((current) => current.filter((id) => rows.some((row) => row.id === id)));
   }, [rows]);
-  const clearImportFile = () => {
-    setImportFile(undefined);
-    setImportFileId(undefined);
-    setImportFileContentType('');
-    setImportFileSha256('');
-    setImportUploading(false);
-  };
-  const stageImportFile = async (file: File) => {
-    const format = importedResearchTestFormat(file);
-    if (!format) {
-      message.error('仅支持导入 Word 或 Excel 文件');
-      return;
-    }
-    if (!file.size) {
-      message.error('导入文件不能为空');
-      return;
-    }
-    setImportFile(file);
-    setImportFileId(undefined);
-    setImportFileContentType(file.type);
-    setImportUploading(true);
+  const loadReportProjects = async () => {
+    if (!report || reportProjects.length || reportProjectsLoading) return;
+    setReportProjectsLoading(true);
     try {
-      const staged = await stageResearchTestFile(file);
-      setImportFileId(staged.fileId);
-      setImportFileContentType(staged.contentType || file.type);
-      setImportFileSha256(staged.sha256);
-      form.setFieldsValue({
-        name: importedResearchTestName(file),
-        format,
-      });
-      message.success('文件已上传，可创建测试标准');
+      const result = await getProjects({ page: 1, size: 200 });
+      setReportProjects(result.items);
     } catch (error) {
-      clearImportFile();
-      message.error(error instanceof Error ? error.message : '文件上传失败');
+      message.error(error instanceof Error ? error.message : '项目列表加载失败');
     } finally {
-      setImportUploading(false);
+      setReportProjectsLoading(false);
     }
+  };
+  const changeCreateProject = (projectId?: string) => {
+    form.setFieldsValue({ projectId, stageId: undefined, taskId: undefined });
+    setCreateStages([]);
+    setCreateTasks([]);
+    if (!projectId) return;
+    setCreateStagesLoading(true);
+    void getProjectStages(projectId)
+      .then(setCreateStages)
+      .catch((error) => message.error(error instanceof Error ? error.message : '阶段列表加载失败'))
+      .finally(() => setCreateStagesLoading(false));
+  };
+  const changeCreateStage = (stageId?: string) => {
+    form.setFieldsValue({ stageId, taskId: undefined });
+    setCreateTasks([]);
+    if (!stageId) return;
+    setCreateTasksLoading(true);
+    void getStageTasks(stageId)
+      .then(setCreateTasks)
+      .catch((error) => message.error(error instanceof Error ? error.message : '任务列表加载失败'))
+      .finally(() => setCreateTasksLoading(false));
+  };
+  const loadRenameRelations = async (projectId?: string, stageId?: string) => {
+    setRenameStages([]);
+    setRenameTasks([]);
+    if (projectId) {
+      setRenameStagesLoading(true);
+      try {
+        setRenameStages(await getProjectStages(projectId));
+      } catch (error) {
+        message.error(error instanceof Error ? error.message : '阶段列表加载失败');
+      } finally {
+        setRenameStagesLoading(false);
+      }
+    }
+    if (stageId) {
+      setRenameTasksLoading(true);
+      try {
+        setRenameTasks(await getStageTasks(stageId));
+      } catch (error) {
+        message.error(error instanceof Error ? error.message : '任务列表加载失败');
+      } finally {
+        setRenameTasksLoading(false);
+      }
+    }
+  };
+  const changeRenameProject = (projectId?: string) => {
+    setRenameProjectId(projectId);
+    setRenameStageId(undefined);
+    setRenameTaskId(undefined);
+    void loadRenameRelations(projectId);
+  };
+  const changeRenameStage = (stageId?: string) => {
+    setRenameStageId(stageId);
+    setRenameTaskId(undefined);
+    setRenameTasks([]);
+    if (!stageId) return;
+    setRenameTasksLoading(true);
+    void getStageTasks(stageId)
+      .then(setRenameTasks)
+      .catch((error) => message.error(error instanceof Error ? error.message : '任务列表加载失败'))
+      .finally(() => setRenameTasksLoading(false));
   };
   const showCreate = () => {
     form.resetFields();
-    clearImportFile();
+    setCreateStages([]);
+    setCreateTasks([]);
     setOpen(true);
     form.setFieldsValue({
       date: dayjs(),
@@ -200,6 +248,7 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
       businessNo: report ? undefined : 'STD-' + dayjs().format('YYYYMMDD') + '-001',
       effectiveFrom: report ? undefined : dayjs(),
     });
+    void loadReportProjects();
     void templateApi
       .list({ status: 'PUBLISHED', page: 1, size: 100 })
       .then((x) => setTemplates(x.items.filter((item) => matchesResearchTestTemplate(item, type))));
@@ -208,11 +257,6 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
     setSubmitting(true);
     try {
       const v = await form.validateFields();
-      const importedFormat = importedResearchTestFormat(importFile);
-      if (!report && v.sourceType === 'IMPORT' && (!importFile || !importFileId || !importedFormat)) {
-        message.warning(importUploading ? '文件上传中，请稍候' : '请先选择并上传要导入的 Word 或 Excel 文件');
-        return;
-      }
       let templateSnapshot: Record<string, unknown> | undefined, templateHash: string | undefined;
       const selected = templates.find((x) => x.versionId === v.templateVersionId);
       if (v.sourceType === 'TEMPLATE') {
@@ -225,40 +269,35 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
         templateHash = w.snapshotHash ?? w.workspaceHash;
         if (!templateSnapshot) throw new Error('所选模板没有可用的文档内容');
       }
-      const format: 'WORD' | 'EXCEL' =
-        v.sourceType === 'IMPORT'
-          ? importedFormat || v.format
-          : selected?.format === 'XLSX'
-            ? 'EXCEL'
-            : selected?.format === 'DOCX'
-              ? 'WORD'
-              : v.format;
+      const format: 'WORD' | 'EXCEL' = selected?.format === 'XLSX'
+        ? 'EXCEL'
+        : selected?.format === 'DOCX'
+          ? 'WORD'
+          : v.format;
       const result = await createResearchTest(type, {
         ...v,
+        ...(report
+          ? {
+              projectId: v.projectId || undefined,
+              stageId: v.stageId || undefined,
+              taskId: v.taskId || undefined,
+            }
+          : {}),
         date: report ? v.date?.format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD'),
         effectiveFrom: v.effectiveFrom?.format('YYYY-MM-DD'),
         effectiveTo: v.effectiveTo?.format('YYYY-MM-DD'),
         format,
-        sourceFileId: v.sourceType === 'IMPORT' ? importFileId : undefined,
+        sourceFileId: undefined,
         templateSnapshot,
         templateHash,
         editModel: {
           title: v.name,
           documentFormat: format.toLowerCase(),
-          ...(v.sourceType === 'IMPORT' && importFileId
-            ? {
-                sourceFileId: importFileId,
-                sourceFileName: importFile?.name,
-                sourceContentType: importFileContentType || importFile?.type,
-                sourceFileSha256: importFileSha256,
-              }
-            : {}),
           documentSnapshot: templateSnapshot,
         },
       });
       message.success(report ? '报告已创建' : '测试标准已创建');
       setOpen(false);
-      clearImportFile();
       nav(`/research-test/${report ? 'reports' : 'standards'}/${result.summary.id}`);
     } catch (error) {
       const validation = error as { errorFields?: Array<{ errors?: string[] }> };
@@ -285,36 +324,35 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
   const openRename = async (r: ResearchTestSummary) => {
     setRenaming(r);
     setRenameName(r.name);
-    setRenameRelations(
-      r.projectId
-        ? [{
-            projectId: r.projectId,
-            projectName: r.projectName,
-            stageId: r.stageId,
-            stageName: r.stageName,
-            taskId: r.taskId,
-            taskName: r.taskName,
-          }]
-        : [],
-    );
+    setRenameBusinessNo(r.businessNo || '');
+    setRenameOwnerName(report ? r.ownerName || '' : '');
+    setRenameDate(report && r.businessDate ? dayjs(r.businessDate) : undefined);
+    setRenameCategory(report ? '' : r.category || '');
+    setRenameScope(report ? '' : r.applicableScope || '');
+    setRenameEffectiveFrom(undefined);
+    setRenameEffectiveTo(undefined);
+    setRenameProjectId(report ? r.projectId : undefined);
+    setRenameStageId(report ? r.stageId : undefined);
+    setRenameTaskId(report ? r.taskId : undefined);
     setRenameOpen(true);
+    void loadReportProjects();
+    if (report) void loadRenameRelations(r.projectId, r.stageId);
     try {
       const detail = await getResearchTest(type, r.id);
       const summary = detail.summary;
       setRenaming(summary);
       setRenameName(summary.name);
-      setRenameRelations(
-        summary.projectId
-          ? [{
-              projectId: summary.projectId,
-              projectName: summary.projectName,
-              stageId: summary.stageId,
-              stageName: summary.stageName,
-              taskId: summary.taskId,
-              taskName: summary.taskName,
-            }]
-          : [],
-      );
+      setRenameBusinessNo(summary.businessNo || '');
+      setRenameOwnerName(report ? summary.ownerName || '' : '');
+      setRenameDate(report && summary.businessDate ? dayjs(summary.businessDate) : undefined);
+      setRenameCategory(report ? '' : summary.category || '');
+      setRenameScope(report ? '' : summary.applicableScope || '');
+      setRenameEffectiveFrom(!report && detail.effectiveFrom ? dayjs(detail.effectiveFrom) : undefined);
+      setRenameEffectiveTo(!report && detail.effectiveTo ? dayjs(detail.effectiveTo) : undefined);
+      setRenameProjectId(report ? summary.projectId : undefined);
+      setRenameStageId(report ? summary.stageId : undefined);
+      setRenameTaskId(report ? summary.taskId : undefined);
+      if (report) void loadRenameRelations(summary.projectId, summary.stageId);
     } catch (error) {
       message.error(error instanceof Error ? error.message : `${report ? '报告' : '测试标准'}信息加载失败`);
       setRenameOpen(false);
@@ -325,7 +363,34 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
       message.warning(`请输入${report ? '报告' : '测试标准'}名称`);
       return;
     }
-    const relation = renameRelations[0];
+    if (report && !renameBusinessNo.trim()) {
+      message.warning('请输入报告编号');
+      return;
+    }
+    if (report && !renameOwnerName.trim()) {
+      message.warning('请输入负责人');
+      return;
+    }
+    if (report && !renameDate) {
+      message.warning('请选择日期');
+      return;
+    }
+    if (!report && !renameBusinessNo.trim()) {
+      message.warning('请输入标准编号');
+      return;
+    }
+    if (!report && !renameCategory.trim()) {
+      message.warning('请选择标准类别');
+      return;
+    }
+    if (!report && !renameEffectiveFrom) {
+      message.warning('请选择生效日期');
+      return;
+    }
+    if (!report && renameEffectiveFrom && renameEffectiveTo && renameEffectiveTo.isBefore(renameEffectiveFrom, 'day')) {
+      message.warning('失效日期不能早于生效日期');
+      return;
+    }
     setRenameSaving(true);
     try {
       await renameResearchTest(type, renaming.id, {
@@ -333,13 +398,26 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
         name: renameName.trim(),
         ...(report
           ? {
-              projectId: relation?.projectId || undefined,
-              stageId: relation?.stageId || undefined,
-              taskId: relation?.taskId || undefined,
+              businessNo: renameBusinessNo.trim(),
+              ownerName: renameOwnerName.trim(),
+              date: renameDate?.format('YYYY-MM-DD'),
+            }
+          : {
+              businessNo: renameBusinessNo.trim(),
+              category: renameCategory.trim(),
+              scope: renameScope.trim(),
+              effectiveFrom: renameEffectiveFrom?.format('YYYY-MM-DD'),
+              effectiveTo: renameEffectiveTo?.format('YYYY-MM-DD'),
+            }),
+        ...(report
+          ? {
+              projectId: renameProjectId || undefined,
+              stageId: renameStageId || undefined,
+              taskId: renameTaskId || undefined,
             }
           : {}),
       });
-      message.success(report ? '报告名称和项目关联已更新' : '测试标准名称已更新');
+      message.success(report ? '报告信息和项目关联已更新' : '测试标准信息已更新');
       setRenameOpen(false);
       setRenaming(undefined);
       await load();
@@ -430,7 +508,7 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
   };
   const columns = useMemo(
     () => [
-      { title: report ? '报告编号' : '标准编号', dataIndex: 'businessNo', width: report ? 170 : 145 },
+      { title: report ? '报告编号' : '标准编号', dataIndex: 'businessNo', className: report ? undefined : 'research-test-number-column', width: report ? 170 : 145 },
       {
         title: report ? '报告名称' : '标准名称',
         dataIndex: 'name',
@@ -628,7 +706,6 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
             </Button>
             <Button
               icon={<EditOutlined />}
-              disabled={selected.length !== 1}
               onClick={renameSelected}
             >
               重命名
@@ -650,11 +727,9 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
             >
               删除
             </Button>
-            {report && (
-              <Button icon={<UploadOutlined />} onClick={() => nav('/research-test/upload')}>
-                上传报告
-              </Button>
-            )}
+            <Button icon={<UploadOutlined />} onClick={() => nav(report ? '/research-test/upload' : '/research-test/standard-upload')}>
+              {report ? '上传报告' : '测试标准上传'}
+            </Button>
             <Button type="primary" icon={<PlusOutlined />} onClick={showCreate}>
               {report ? '新增报告' : '新增测试标准'}
             </Button>
@@ -686,7 +761,17 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
             ? { gutter: 16, xs: 1, sm: 2, md: 3, lg: 4, xl: 5, xxl: 5 }
             : { gutter: 16, xs: 1, sm: 1, md: 2, lg: 3 }}
           dataSource={rows}
-          pagination={{ current: page, pageSize: size, total, onChange: setPage }}
+          pagination={{
+            current: page,
+            pageSize: size,
+            total,
+            showSizeChanger: true,
+            showTotal: (value) => `共 ${value} 条记录`,
+            onChange: (current, pageSize) => {
+              setPage(current);
+              setSize(pageSize);
+            },
+          }}
           header={rows.length > 0 ? (
             <div className="research-test-card-select-all">
               <Checkbox
@@ -814,6 +899,7 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
               pageSize: size,
               total,
               showSizeChanger: true,
+              showTotal: (value) => `共 ${value} 条记录`,
               onChange: (p, s) => {
                 setPage(p);
                 setSize(s);
@@ -826,7 +912,7 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
         rootClassName={report ? 'research-test-create-modal research-test-report-modal' : 'research-test-create-modal'}
         open={open}
         title={report ? '新增报告' : '新增测试标准'}
-        width={report ? 760 : 598}
+        width={598}
         okText="创建并进入编辑"
         confirmLoading={submitting}
         okButtonProps={{ disabled: submitting }}
@@ -881,6 +967,45 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
               </>
             )}
           </div>
+          {report && (
+            <div className="research-test-report-relations-grid">
+              <Form.Item name="projectId" label="关联项目">
+                <Select
+                  allowClear
+                  showSearch
+                  optionFilterProp="label"
+                  loading={reportProjectsLoading}
+                  popupMatchSelectWidth={false}
+                  classNames={{ popup: { root: 'research-test-project-relation-dropdown' } }}
+                  placeholder="不关联项目"
+                  options={reportProjects.map((item) => ({
+                    value: item.id,
+                    label: `${item.projectCode} · ${item.name}`,
+                  }))}
+                  onChange={changeCreateProject}
+                />
+              </Form.Item>
+              <Form.Item name="stageId" label="阶段">
+                <Select
+                  allowClear
+                  loading={createStagesLoading}
+                  disabled={!form.getFieldValue('projectId')}
+                  placeholder="不关联阶段"
+                  options={createStages.map((item) => ({ value: item.id, label: item.name }))}
+                  onChange={changeCreateStage}
+                />
+              </Form.Item>
+              <Form.Item name="taskId" label="任务">
+                <Select
+                  allowClear
+                  loading={createTasksLoading}
+                  disabled={!form.getFieldValue('stageId')}
+                  placeholder="不关联任务"
+                  options={createTasks.map((item) => ({ value: item.id, label: item.name }))}
+                />
+              </Form.Item>
+            </div>
+          )}
           <CreateChoice
             label="选择新建"
             value={sourceType || 'BLANK'}
@@ -895,56 +1020,13 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
                 title: '选择模板新建',
                 desc: `复制已发布模板形成独立${report ? '报告' : '测试标准'}副本`,
               },
-              ...(!report
-                ? [{
-                    key: 'IMPORT',
-                    title: '导入文件',
-                    desc: '导入 Word 或 Excel 作为测试标准初始内容',
-                  }]
-                : []),
             ]}
             onChange={(value) => {
               form.setFieldValue('sourceType', value);
               form.setFieldValue('templateVersionId', undefined);
-              if (value !== 'IMPORT') clearImportFile();
             }}
           />
-          {sourceType === 'IMPORT' && !report ? (
-            <div className="research-test-import-section">
-              <label>
-                <i>*</i>
-                选择导入文件
-              </label>
-              <Upload
-                accept=".doc,.docx,.xls,.xlsx"
-                maxCount={1}
-                beforeUpload={(file) => {
-                  void stageImportFile(file);
-                  return false;
-                }}
-                onRemove={() => {
-                  clearImportFile();
-                  return true;
-                }}
-                fileList={
-                  importFile
-                    ? [{
-                        uid: '-research-test-import',
-                        name: importFile.name,
-                        status: importUploading ? 'uploading' : importFileId ? 'done' : 'error',
-                      }]
-                    : []
-                }
-              >
-                <Button loading={importUploading} icon={<UploadOutlined />}>
-                  选择 Word / Excel 文件
-                </Button>
-              </Upload>
-              <Typography.Text type="secondary">
-                支持 DOC、DOCX、XLS、XLSX；文件上传后将作为测试标准的原始文件保存，并进入编辑工作区。
-              </Typography.Text>
-            </div>
-          ) : sourceType === 'TEMPLATE' ? (
+          {sourceType === 'TEMPLATE' ? (
             <PublishedTemplatePicker
               templates={templates}
               documentName={report ? '报告' : '测试标准'}
@@ -971,40 +1053,148 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
         </Form>
       </Modal>
       <Modal
-        rootClassName="research-test-create-modal"
+        rootClassName="research-test-rename-modal"
         open={renameOpen}
-        title={report ? '重命名并关联项目' : '重命名测试标准'}
-        width={report ? 720 : 480}
+        title={report ? '编辑报告' : '编辑测试标准'}
+        width={598}
         confirmLoading={renameSaving}
         okText="保存"
         cancelText="取消"
         onCancel={() => setRenameOpen(false)}
         onOk={() => void saveRename()}
       >
-        <Space direction="vertical" size={16} style={{ width: '100%' }}>
-          <div>
-            <Typography.Text strong>{report ? '报告名称' : '标准名称'}</Typography.Text>
-            <Input
-              value={renameName}
-              maxLength={300}
-              placeholder={report ? '请输入报告名称' : '请输入测试标准名称'}
-              onChange={(event) => setRenameName(event.target.value)}
-              style={{ marginTop: 8 }}
-            />
-          </div>
-          {report && (
-            <div>
-              <Typography.Text strong>关联项目 / 阶段 / 任务</Typography.Text>
-              <div style={{ marginTop: 8 }}>
-                <ProjectRelationPicker
-                  value={renameRelations}
-                  onChange={setRenameRelations}
-                  multiple={false}
+        <Form layout="vertical" className="research-test-rename-form">
+          {report ? (
+            <div className="research-test-rename-form-grid">
+              <Form.Item label="报告编号">
+                <Input
+                  value={renameBusinessNo}
+                  maxLength={120}
+                  placeholder="请输入报告编号"
+                  onChange={(event) => setRenameBusinessNo(event.target.value)}
                 />
-              </div>
+              </Form.Item>
+              <Form.Item label="报告名称">
+                <Input
+                  value={renameName}
+                  maxLength={300}
+                  placeholder="请输入报告名称"
+                  onChange={(event) => setRenameName(event.target.value)}
+                />
+              </Form.Item>
+              <Form.Item label="负责人">
+                <Input
+                  value={renameOwnerName}
+                  maxLength={120}
+                  placeholder="请输入负责人"
+                  onChange={(event) => setRenameOwnerName(event.target.value)}
+                />
+              </Form.Item>
+              <Form.Item label="日期">
+                <DatePicker
+                  value={renameDate}
+                  format="YYYY/MM/DD"
+                  onChange={setRenameDate}
+                  style={{ width: '100%' }}
+                />
+              </Form.Item>
+            </div>
+          ) : (
+            <div className="research-test-rename-form-grid research-test-standard-rename-grid">
+              <Form.Item label="标准编号">
+                <Input
+                  value={renameBusinessNo}
+                  maxLength={120}
+                  placeholder="请输入标准编号"
+                  onChange={(event) => setRenameBusinessNo(event.target.value)}
+                />
+              </Form.Item>
+              <Form.Item label="标准名称">
+                <Input
+                  value={renameName}
+                  maxLength={300}
+                  placeholder="请输入测试标准名称"
+                  onChange={(event) => setRenameName(event.target.value)}
+                />
+              </Form.Item>
+              <Form.Item label="标准类别">
+                <Select
+                  value={renameCategory || undefined}
+                  placeholder="请选择标准类别"
+                  options={standardCategories.map((value) => ({ value, label: value }))}
+                  onChange={(value) => setRenameCategory(value || '')}
+                />
+              </Form.Item>
+              <Form.Item label="适用对象">
+                <Input
+                  value={renameScope}
+                  maxLength={300}
+                  placeholder="请输入适用对象（选填）"
+                  onChange={(event) => setRenameScope(event.target.value)}
+                />
+              </Form.Item>
+              <Form.Item label="生效日期">
+                <DatePicker
+                  value={renameEffectiveFrom}
+                  format="YYYY/MM/DD"
+                  onChange={setRenameEffectiveFrom}
+                  style={{ width: '100%' }}
+                />
+              </Form.Item>
+              <Form.Item label="失效日期">
+                <DatePicker
+                  value={renameEffectiveTo}
+                  format="YYYY/MM/DD"
+                  onChange={setRenameEffectiveTo}
+                  style={{ width: '100%' }}
+                />
+              </Form.Item>
             </div>
           )}
-        </Space>
+          {report && (
+            <div className="research-test-report-relations-grid research-test-rename-relations">
+              <Form.Item label="关联项目">
+                <Select
+                  allowClear
+                  showSearch
+                  optionFilterProp="label"
+                  loading={reportProjectsLoading}
+                  popupMatchSelectWidth={false}
+                  classNames={{ popup: { root: 'research-test-project-relation-dropdown' } }}
+                  placeholder="不关联项目"
+                  value={renameProjectId}
+                  options={reportProjects.map((item) => ({
+                    value: item.id,
+                    label: `${item.projectCode} · ${item.name}`,
+                  }))}
+                  onChange={changeRenameProject}
+                />
+              </Form.Item>
+              <Form.Item label="阶段">
+                <Select
+                  allowClear
+                  loading={renameStagesLoading}
+                  disabled={!renameProjectId}
+                  placeholder="不关联阶段"
+                  value={renameStageId}
+                  options={renameStages.map((item) => ({ value: item.id, label: item.name }))}
+                  onChange={changeRenameStage}
+                />
+              </Form.Item>
+              <Form.Item label="任务">
+                <Select
+                  allowClear
+                  loading={renameTasksLoading}
+                  disabled={!renameStageId}
+                  placeholder="不关联任务"
+                  value={renameTaskId}
+                  options={renameTasks.map((item) => ({ value: item.id, label: item.name }))}
+                  onChange={setRenameTaskId}
+                />
+              </Form.Item>
+            </div>
+          )}
+        </Form>
       </Modal>
     </section>
   );

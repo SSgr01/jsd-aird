@@ -41,7 +41,7 @@ public class QualityDataController {
     @DeleteMapping("/records/{id}") public ApiResponse<Void> deleteRecord(@PathVariable UUID id){service.deleteRecord(id);return ok(null);}
     @PostMapping("/records/{id}/publish") public ApiResponse<QualityDataStore.VersionView> publishRecord(@PathVariable UUID id){return ok(service.publishRecord(id));}
     @GetMapping("/records/{id}/versions") public ApiResponse<List<QualityDataStore.VersionView>> versions(@PathVariable UUID id){return ok(service.versions(id));}
-    @PutMapping("/records/batch") public ApiResponse<Void> save(@Valid @RequestBody BatchRequest r){service.saveBatch(r.type(),r.categoryId(),r.records().stream().map(x->new QualityDataService.RecordInput(x.id(),x.businessNo(),x.data(),x.workbookSnapshot(),x.lockVersion())).toList(),r.deleteIds());return ok(null);}
+    @PutMapping("/records/batch") public ApiResponse<Void> save(@Valid @RequestBody BatchRequest r){service.saveBatch(r.type(),r.categoryId(),r.records().stream().map(x->new QualityDataService.RecordInput(x.id(),x.businessNo(),x.data(),x.workbookSnapshot(),x.projectId(),x.projectName(),x.stageId(),x.stageName(),x.taskId(),x.taskName(),x.lockVersion())).toList(),r.deleteIds());return ok(null);}
     @PostMapping("/records/move") public ApiResponse<Void> move(@Valid @RequestBody MoveRequest r){service.move(r.ids(),r.categoryId());return ok(null);}
     @PostMapping("/records/{id}/create-defect") public ApiResponse<QualityDataStore.RecordView> createDefect(@PathVariable UUID id){return ok(service.createDefectFromRecord(id));}
     @PostMapping("/uploads") public ApiResponse<QualityDataStore.UploadView> upload(@Valid @RequestBody UploadRequest r){return ok(service.upload(new QualityDataService.UploadInput(r.fileId(),r.categoryId(),r.originalName(),r.contentType(),r.size(),r.sha256(),r.projectId(),r.projectName(),r.stageId(),r.stageName(),r.taskId(),r.taskName(),r.visibility())));}
@@ -64,7 +64,9 @@ public class QualityDataController {
     public record CategoryRequest(@NotBlank String type,@NotBlank @Size(max=20) String name,@NotBlank @Size(max=80) String description){}
     public record RenameCategoryRequest(@NotBlank @Size(max=20) String name,@NotBlank @Size(max=80) String description){}
     public record RenameRecordRequest(@NotNull Long revision,@NotBlank @Size(max=300) String name,UUID projectId,String projectName,UUID stageId,String stageName,UUID taskId,String taskName){}
-    public record RecordRequest(UUID id,@NotBlank String businessNo,@NotNull JsonNode data,JsonNode workbookSnapshot,long lockVersion){}
+    public record RecordRequest(UUID id,@NotBlank String businessNo,@NotNull JsonNode data,JsonNode workbookSnapshot,
+                                UUID projectId,String projectName,UUID stageId,String stageName,
+                                UUID taskId,String taskName,long lockVersion){}
     public record BatchRequest(@NotBlank String type,@NotNull UUID categoryId,@NotNull List<@Valid RecordRequest> records,List<UUID> deleteIds){}
     public record MoveRequest(@NotNull List<@NotNull UUID> ids,@NotNull UUID categoryId){}
         public record UploadRequest(@NotNull UUID fileId,@NotNull UUID categoryId,@NotBlank String originalName,String contentType,long size,String sha256,UUID projectId,String projectName,UUID stageId,String stageName,UUID taskId,String taskName,@NotBlank String visibility){}

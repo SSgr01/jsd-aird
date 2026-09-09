@@ -380,7 +380,7 @@ export function ProductionWorkspacePage() {
   return (
     <section className="workspace-shell production-workspace">
       <header className="workspace-header">
-        <Space>
+        <Space className="production-workspace-identity" wrap>
           <Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate('/production-orders/list')}>返回</Button>
           <span>
             <Typography.Text strong>{workspace.orderNo}</Typography.Text>
@@ -391,7 +391,7 @@ export function ProductionWorkspacePage() {
             {editable ? '填写中' : workspace.status === 'SUBMITTED' ? '已提交' : '已取消'}
           </Tag>
         </Space>
-        <Space>
+        <Space className="production-workspace-actions" wrap>
           {dirty && <Typography.Text type="warning">有未保存内容</Typography.Text>}
           <Button
             icon={<PlusOutlined />}

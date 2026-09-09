@@ -131,6 +131,15 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
             container: host,
             ribbonType: 'collapsed',
             footer: { sheetBar: true, statisticBar: true },
+            sheets: {
+              // Imported OCR/legacy snapshots can legitimately contain numeric-looking
+              // text. Univer 0.25.1 renders those cells with a force-string alert whose
+              // zh-CN locale entry is missing, exposing the internal translation key.
+              // The marker is not actionable for our document-style workbooks, so keep
+              // the cell value editable without showing the misleading error UI.
+              disableForceStringAlert: true,
+              disableForceStringMark: true,
+            },
           }),
           // Required for OCR workbooks: the original source image is stored
           // as a native SHEET_DRAWING_PLUGIN resource on the OCR原文 sheet.

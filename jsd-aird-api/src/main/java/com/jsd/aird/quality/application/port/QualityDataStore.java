@@ -56,7 +56,9 @@ public interface QualityDataStore {
     RecordView record(UUID organizationId, String role, UUID recordId);
     List<VersionView> versions(UUID organizationId, UUID recordId);
     RecordView upsert(UUID organizationId, UUID userId, String type, UUID categoryId, UUID recordId,
-                      String businessNo, JsonNode data, JsonNode workbookSnapshot, long lockVersion);
+                      String businessNo, JsonNode data, JsonNode workbookSnapshot,
+                      UUID projectId, String projectName, UUID stageId, String stageName,
+                      UUID taskId, String taskName, long lockVersion);
     RecordView rename(UUID organizationId, UUID userId, UUID recordId, String displayName,
                       UUID projectId, String projectName, UUID stageId, String stageName,
                       UUID taskId, String taskName, long lockVersion);

@@ -84,6 +84,7 @@ const route = {
       routes: [
         { path: '/research-test/upload', name: '报告上传', icon: <UploadOutlined /> },
         { path: '/research-test/reports', name: '报告查看', icon: <EyeOutlined /> },
+        { path: '/research-test/standard-upload', name: '测试标准上传', icon: <UploadOutlined /> },
         { path: '/research-test/standards', name: '测试标准方法', icon: <FileTextOutlined /> },
       ],
     },
@@ -258,6 +259,7 @@ export function BasicLayout() {
   const location = useLocation();
   const isTemplateWorkspace = /^\/templates\/[^/]+\/workspace$/.test(location.pathname);
   const isDataWorkspace = /^\/data\/(?:import-jobs|assets)\/[^/]+$/.test(location.pathname);
+  const isProjectDocumentWorkspace = /^\/projects\/[^/]+\/documents\/[^/]+$/.test(location.pathname);
   const isWorkspace = isTemplateWorkspace || isDataWorkspace;
   const collapsed = useAppStore((state) => state.sidebarCollapsed);
   const setCollapsed = useAppStore((state) => state.setSidebarCollapsed);
@@ -287,10 +289,10 @@ export function BasicLayout() {
         actionsRender={false}
         rightContentRender={() => null}
         contentStyle={{ minHeight: 'calc(100dvh - 64px)', padding: 0 }}
-        menuItemRender={(item, dom) => (item.path ? <Link to={item.path}>{dom}</Link> : dom)}
+        menuItemRender={(item, dom, menuProps) => (item.path ? <Link to={item.path} onClick={menuProps.isMobile ? item.onClick : undefined}>{dom}</Link> : dom)}
       >
         <main
-          className={`app-content${isWorkspace ? ' app-content-workspace' : ''}`}
+          className={`app-content${isWorkspace ? ' app-content-workspace' : ''}${isProjectDocumentWorkspace ? ' app-content-project-document-workspace' : ''}`}
           id="main-content"
         >
           {requiredPermission && !canViewPath(location.pathname, permissions) ? <AccessDenied permissions={permissions} /> : <Outlet />}

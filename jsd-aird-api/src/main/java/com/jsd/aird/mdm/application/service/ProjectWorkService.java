@@ -19,7 +19,7 @@ public class ProjectWorkService {
  public ProjectTask createTask(UUID projectId,TaskInput input){
   if(!mapper.stageBelongs(input.stageId(),projectId)) throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"所选阶段不属于当前项目");
   String name=required(input.name(),"任务名称不能为空"); Instant now=Instant.now();
-  var task=new ProjectTask(UUID.randomUUID(),code("TASK"),projectId,input.stageId(),name,clean(input.owner()),input.plannedDate(),input.status()==null?"PENDING":input.status(),0,0,now,now);
+  var task=new ProjectTask(UUID.randomUUID(),code("TASK"),projectId,input.stageId(),name,clean(input.owner()),input.priority()==null?ProjectPriority.MEDIUM:input.priority(),input.plannedDate(),input.status()==null?"PENDING":input.status(),0,0,now,now);
   mapper.insertTask(task); return task;
  }
  public ProjectTask getTask(UUID id){return mapper.task(id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"任务不存在"));}
@@ -28,7 +28,7 @@ public class ProjectWorkService {
   ProjectTask existing=mapper.task(id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"任务不存在"));
   if(!mapper.stageBelongs(input.stageId(),existing.projectId())) throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"所选阶段不属于当前项目");
   long version=input.version()==null?existing.version():input.version();
-  var task=new ProjectTask(id,existing.taskCode(),existing.projectId(),input.stageId(),required(input.name(),"任务名称不能为空"),clean(input.owner()),input.plannedDate(),input.status()==null?"PENDING":input.status(),existing.experimentCount(),version,existing.createdAt(),existing.updatedAt());
+  var task=new ProjectTask(id,existing.taskCode(),existing.projectId(),input.stageId(),required(input.name(),"任务名称不能为空"),clean(input.owner()),input.priority()==null?existing.priority():input.priority(),input.plannedDate(),input.status()==null?"PENDING":input.status(),existing.experimentCount(),version,existing.createdAt(),existing.updatedAt());
   int rows=mapper.updateTask(task);
   if(rows==0) throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"任务已被他人修改，请刷新后重试");
   return getTask(id);
@@ -65,5 +65,5 @@ public class ProjectWorkService {
 private static String code(String prefix){return prefix+"-"+LocalDate.now().toString().replace("-","")+"-"+UUID.randomUUID().toString().substring(0,5).toUpperCase();}
  private static String clean(String v){return v==null||v.isBlank()?null:v.trim();}
  private static String required(String v,String message){String x=clean(v);if(x==null)throw new ApiException(ApiErrorCode.VALIDATION_ERROR,message);return x;}
- public record TaskInput(UUID stageId,String name,String owner,LocalDate plannedDate,String status,Long version){}
+ public record TaskInput(UUID stageId,String name,String owner,ProjectPriority priority,LocalDate plannedDate,String status,Long version){}
 }

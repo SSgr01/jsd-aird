@@ -2,8 +2,36 @@
 .iam-stat-card, .iam-card { border: 1px solid var(--app-border); border-radius: var(--app-radius-card) !important; box-shadow: var(--app-shadow); }
 .iam-stat-card .ant-statistic-title { color: var(--app-text-secondary); }
 .iam-stat-card .ant-statistic-content { color: var(--app-text); font-weight: 700; }
-.iam-card .ant-card-body { padding: var(--iam-card-padding); }
+.iam-card .ant-card-body { min-width: 0; padding: var(--iam-card-padding); }
 .iam-toolbar, .iam-context-bar, .iam-role-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+.iam-user-management-page .iam-toolbar { display: grid; grid-template-columns: minmax(0, 360px) minmax(0, 1fr); align-items: center; }
+.iam-user-management-page .iam-toolbar .ant-input-search { width: 100%; max-width: none !important; }
+.iam-user-management-page .iam-toolbar > .ant-typography { justify-self: end; }
+.iam-user-management-page .ant-table-wrapper { min-width: 0; }
+.iam-audit-page .iam-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+.iam-audit-page .iam-toolbar > .ant-space-item:first-child { min-width: 0; }
+.iam-audit-page .iam-toolbar .ant-input { width: 100%; min-width: 0; }
+.iam-audit-page .iam-audit-table .ant-table-cell { vertical-align: top; }
+.iam-audit-page .iam-audit-detail { display: block; max-width: 360px; white-space: normal; overflow-wrap: anywhere; line-height: 1.55; }
+.iam-audit-mobile-list { display: none; }
+.iam-audit-mobile-item { padding: 14px; border: 1px solid var(--app-border); border-radius: var(--app-radius-control); background: var(--app-surface); }
+.iam-audit-mobile-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.iam-audit-mobile-header .ant-typography { min-width: 0; color: var(--app-text-secondary); font-size: 12px; }
+.iam-audit-mobile-header .ant-tag { flex: 0 0 auto; margin-inline-end: 0; }
+.iam-audit-mobile-fields { display: grid; gap: 10px; margin: 0; }
+.iam-audit-mobile-field { display: grid; grid-template-columns: 48px minmax(0, 1fr); gap: 12px; margin: 0; }
+.iam-audit-mobile-field dt { color: var(--app-text-secondary); font-size: 12px; line-height: 1.55; }
+.iam-audit-mobile-field dd { min-width: 0; margin: 0; color: var(--app-text); font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; }
+.iam-audit-mobile-detail { display: block; white-space: normal; overflow-wrap: anywhere; line-height: 1.55; }
+.iam-audit-mobile-state { display: grid; min-height: 140px; place-items: center; align-content: center; gap: 8px; }
+.iam-role-permissions-page { min-width: 0; max-width: 100%; }
+.iam-role-permissions-page .page-heading > div { min-width: 0; }
+.iam-role-permissions-page .page-heading > .ant-space { max-width: 100%; }
+.iam-role-permissions-page .iam-role-toolbar { min-width: 0; align-items: flex-start; }
+.iam-role-permissions-page .iam-role-toolbar .ant-tabs { min-width: 0; }
+.iam-role-permissions-page .iam-role-toolbar > .ant-space { flex: 0 0 auto; }
+.iam-page .page-heading > .ant-space { flex-wrap: nowrap; }
+.iam-page .page-heading > .ant-space > .ant-space-item { flex: 0 0 auto; }
 .iam-role-toolbar .ant-tabs { flex: 1; min-width: 280px; margin-bottom: -1px; }
 .iam-user-name { color: var(--app-text); font-weight: 650; }
 .iam-password-item { margin-bottom: 24px; }
@@ -24,4 +52,21 @@
 .iam-permission-row .ant-typography { font-size: 12px; }
 .iam-inheritance-note { margin-bottom: 16px; padding: 10px 12px; color: var(--app-text-secondary); background: var(--app-primary-soft); border-radius: var(--app-radius-control); }
 .iam-loading { display: grid; min-height: 360px; place-items: center; }
-@media (max-width: 700px) { .iam-permission-row { grid-template-columns: 1fr; gap: 6px; padding: 12px; } .iam-permission-row .ant-select { width: 100%; } .iam-card .ant-card-body { padding: 14px; } }
+@media (max-width: 700px) {
+  .iam-page .page-heading { flex-direction: column; }
+  .iam-page .page-heading > .ant-space { width: 100%; max-width: 100%; justify-content: flex-start; gap: 8px; overflow-x: auto; padding-bottom: 2px; }
+  .iam-page .page-heading > .ant-space .ant-btn { flex: 0 0 auto; padding-inline: 10px; }
+  .iam-permission-row { grid-template-columns: 1fr; gap: 6px; padding: 12px; }
+  .iam-permission-row .ant-select { width: 100%; }
+  .iam-card .ant-card-body { padding: 14px; }
+  .iam-user-management-page .iam-toolbar { grid-template-columns: 1fr; align-items: stretch; gap: 8px; }
+  .iam-user-management-page .iam-toolbar > .ant-typography { justify-self: start; }
+  .iam-audit-page .iam-toolbar { grid-template-columns: minmax(0, 1fr) auto; }
+  .iam-audit-page .iam-audit-table { display: none; }
+  .iam-audit-page .iam-audit-mobile-list { display: grid; gap: 12px; }
+  .iam-role-permissions-page .iam-role-toolbar { align-items: stretch; }
+  .iam-role-permissions-page .iam-role-toolbar .ant-tabs { width: 100%; min-width: 0; flex: 1 1 100%; overflow: hidden; }
+  .iam-role-permissions-page .iam-role-toolbar .ant-tabs-nav { overflow-x: auto; }
+  .iam-role-permissions-page .iam-role-toolbar .ant-tabs-nav-list { min-width: max-content; }
+  .iam-role-permissions-page .iam-role-toolbar > .ant-space { width: 100%; justify-content: flex-start; flex-wrap: nowrap; overflow-x: auto; }
+}

@@ -4,8 +4,62 @@
   gap: 0 16px;
 }
 
+.eln-rename-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 16px;
+}
+
+.eln-rename-grid > .ant-form-item {
+  min-width: 0;
+}
+
+.eln-relation-grid > .ant-form-item {
+  min-width: 0;
+}
+
 .eln-relation-grid .ant-select {
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.eln-relation-grid .ant-select-selector {
+  min-width: 0;
+}
+
+/* Project names are longer than the three-column control on desktop. Keep
+   the control compact while allowing its option popup to size to the label. */
+.eln-project-relation-dropdown {
+  width: max-content;
+  min-width: 360px;
+  max-width: min(640px, calc(100vw - 32px));
+}
+
+.eln-project-relation-dropdown .ant-select-item-option-content {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .eln-rename-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .eln-project-relation-dropdown {
+    min-width: 0;
+    width: calc(100vw - 32px);
+    max-width: calc(100vw - 32px);
+  }
+
+  .eln-relation-grid .ant-select-selection-item,
+  .eln-relation-grid .ant-select-selection-placeholder {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 }
 
 @media (max-width: 640px) {

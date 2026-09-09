@@ -337,9 +337,9 @@ export async function getProjectLogs(projectId: string, query: ProjectLogQuery =
 }
 
 export async function getStageTasks(stageId:string):Promise<ProjectTask[]>{const {data}=await httpClient.get<ApiResponse<ProjectTask[]>>(`/api/v1/stages/${stageId}/tasks`);return data.data;}
-export async function createProjectTask(projectId:string,input:{stageId:string;name:string;owner?:string;plannedDate?:string;status?:string}):Promise<ProjectTask>{const {data}=await httpClient.post<ApiResponse<ProjectTask>>(`/api/v1/projects/${projectId}/tasks`,input);return data.data;}
+export async function createProjectTask(projectId:string,input:{stageId:string;name:string;owner?:string;priority?:ProjectPriority;plannedDate?:string;status?:string}):Promise<ProjectTask>{const {data}=await httpClient.post<ApiResponse<ProjectTask>>(`/api/v1/projects/${projectId}/tasks`,input);return data.data;}
 export async function getProjectTask(taskId:string):Promise<ProjectTask>{const {data}=await httpClient.get<ApiResponse<ProjectTask>>(`/api/v1/tasks/${taskId}`);return data.data;}
-export async function updateProjectTask(taskId:string,input:{stageId:string;name:string;owner?:string;plannedDate?:string;status?:string;version:number}):Promise<ProjectTask>{const {data}=await httpClient.put<ApiResponse<ProjectTask>>(`/api/v1/tasks/${taskId}`,input);return data.data;}
+export async function updateProjectTask(taskId:string,input:{stageId:string;name:string;owner?:string;priority?:ProjectPriority;plannedDate?:string;status?:string;version:number}):Promise<ProjectTask>{const {data}=await httpClient.put<ApiResponse<ProjectTask>>(`/api/v1/tasks/${taskId}`,input);return data.data;}
 export async function deleteProjectTask(taskId:string, version:number):Promise<void>{await httpClient.delete(`/api/v1/tasks/${taskId}`,{params:{version}});}
 export async function getTasks(query: TaskQuery = {}): Promise<PageData<ProjectTask>> {
   const { data } = await httpClient.get<ApiResponse<PageData<ProjectTask>>>('/api/v1/tasks', {

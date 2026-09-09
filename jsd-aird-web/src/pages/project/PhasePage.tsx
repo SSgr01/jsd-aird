@@ -15,9 +15,6 @@ const PAGE_SIZE_OPTIONS = [10, 20, 30, 50];
 type RangeValue = Parameters<NonNullable<React.ComponentProps<typeof DatePicker.RangePicker>['onChange']>>[0];
 type ViewMode = 'card' | 'list';
 
-const isMobileViewport = () => typeof window !== 'undefined'
-  && window.matchMedia?.('(max-width: 720px)').matches === true;
-
 function statusTagClass(status: StageStatus) {
   const normalized = status === 'PENDING' ? 'not_started' : status.toLowerCase();
   return `pm-status-tag status-${normalized}`;
@@ -29,7 +26,7 @@ export function PhasePage() {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
-  const [view, setView] = useState<ViewMode>(() => (isMobileViewport() ? 'card' : 'list'));
+  const [view, setView] = useState<ViewMode>('list');
   const [loading, setLoading] = useState(false);
   const [keyword, setKeyword] = useState('');
   const [projectId, setProjectId] = useState<string>();

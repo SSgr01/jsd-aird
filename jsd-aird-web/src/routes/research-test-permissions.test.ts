@@ -3,6 +3,9 @@ import { canViewPath, hasPermission, requiredPermissionForPath } from './route-p
 describe('research test route permissions', () => {
   it('maps report and standard routes independently', () => {
     expect(requiredPermissionForPath('/research-test/upload')).toBe('research-test.report.create');
+    expect(requiredPermissionForPath('/research-test/standard-upload')).toBe(
+      'research-test.standard.create',
+    );
     expect(requiredPermissionForPath('/research-test/reports')).toBe('research-test.report.view');
     expect(requiredPermissionForPath('/research-test/standards')).toBe(
       'research-test.standard.view',

@@ -6,7 +6,7 @@ import {
   FileTextOutlined,
   ReloadOutlined,
 } from '@ant-design/icons';
-import { App, Button, Checkbox, Form, Modal, Select, Space, Upload } from 'antd';
+import { App, Button, Form, Modal, Select, Space, Upload } from 'antd';
 import type { UploadFile, UploadProps } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -16,7 +16,6 @@ import { usePermission } from '@/components/auth/usePermission';
 import { ProjectRelationPicker } from '@/components/project-relations/ProjectRelationPicker';
 import type { ProjectRelationTarget } from '@/services/project/project-resource-api';
 import { downloadFile, stageFile } from '@/services/files/file-api';
-import { templateApi } from '@/services/templates/template-api';
 import {
   productionUploadApi,
   type ProductionUpload,
@@ -173,18 +172,6 @@ export function ProductionOrderUploadPage() {
   const [projectRelations, setProjectRelations] = useState<ProjectRelationTarget[]>([]);
   const [saveLocation, setSaveLocation] = useState('PRODUCTION_ORDER');
   const [visibility, setVisibility] = useState<ProductionUploadVisibility>('ALL');
-  const [templateVersionId, setTemplateVersionId] = useState<string>();
-  const [replaceExisting, setReplaceExisting] = useState(false);
-  const [templates, setTemplates] = useState<
-    Array<{
-      versionId: string;
-      currentPublishedVersionId?: string;
-      currentPublishedVersionNo?: number;
-      templateCode: string;
-      name: string;
-      versionNo: number;
-    }>
-  >([]);
   const [uploads, setUploads] = useState<ProductionUpload[]>([]);
   const [keyword, setKeyword] = useState('');
   const [uploadStatus, setUploadStatus] = useState('ALL');
@@ -217,15 +204,6 @@ export function ProductionOrderUploadPage() {
       setLoading(false);
     }
   }, [keyword, message, page.current, page.pageSize, uploadStatus]);
-
-  useEffect(() => {
-    void templateApi
-      .list({ format: 'XLSX', status: 'PUBLISHED', page: 1, size: 100 })
-      .then((result) => setTemplates(result.items))
-      .catch((error) => {
-        void message.error(error instanceof Error ? error.message : '已发布模板加载失败');
-      });
-  }, [message]);
 
   useEffect(() => {
     void loadUploads();
@@ -279,8 +257,6 @@ export function ProductionOrderUploadPage() {
         await productionUploadApi.create({
           fileId: staged.fileId,
           sourceType: /\.xlsx$/i.test(file.name) ? 'XLSX' : 'PHOTO',
-          templateVersionId,
-          replaceExisting,
           ...metadata,
           ...relation,
           visibility,
@@ -425,7 +401,6 @@ export function ProductionOrderUploadPage() {
       <UploadWorkspace
         breadcrumbs={[{ title: '生产单管理' }, { title: '生产单上传' }]}
         title="生产单上传"
-        description="关联项目和设置可见权限后，上传 XLSX、DOCX 或生产单图片。"
         headerActions={
           <Button type="primary" onClick={() => navigate('/production-orders/list')}>
             生产单列表
@@ -451,26 +426,6 @@ export function ProductionOrderUploadPage() {
             <Form.Item label="权限可见">
               <Select value={visibility} onChange={setVisibility} options={visibilityOptions} />
             </Form.Item>
-            <Form.Item label="生产单模板（可选）">
-              <Select
-                allowClear
-                value={templateVersionId}
-                onChange={setTemplateVersionId}
-                placeholder="可不选择，直接按原文件解析"
-                options={templates.map((item) => ({
-                  value: item.currentPublishedVersionId ?? item.versionId,
-                  label: `${item.templateCode} · ${item.name} · V${item.currentPublishedVersionNo ?? item.versionNo}`,
-                }))}
-              />
-            </Form.Item>
-            <Form.Item>
-              <Checkbox
-                checked={replaceExisting}
-                onChange={(event) => setReplaceExisting(event.target.checked)}
-              >
-                同内容文件已存在时重新上传并替换旧记录
-              </Checkbox>
-            </Form.Item>
           </Form>
         }
         accept=".xlsx,.docx,.png,.jpg,.jpeg,.gif,.webp,.bmp,.tif,.tiff"
@@ -484,7 +439,7 @@ export function ProductionOrderUploadPage() {
         }
         onClearFiles={() => setFiles([])}
         uploadMainText="拖拽文件到此处，或点击选择文件"
-        uploadHint="支持 XLSX、DOCX 或图片；模板可不选，原文件会直接生成可查看记录，模板仅用于辅助字段提取。"
+        uploadHint="支持 XLSX、DOCX 或图片，上传后自动解析并生成可查看记录。"
         submitLabel="开始上传"
         submitIcon={<CloudUploadOutlined />}
         onSubmit={() => void submit()}

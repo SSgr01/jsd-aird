@@ -3,6 +3,7 @@ import {
   DownloadOutlined,
   EyeOutlined,
   LoadingOutlined,
+  FileOutlined,
   SaveOutlined,
 } from '@ant-design/icons';
 import { formatTime } from '@/utils/date';
@@ -35,7 +36,7 @@ import {
   type ExperimentVersion,
   exportExperiment,
 } from '@/services/experiments/experiment-api';
-import { downloadBlob } from '@/services/files/file-api';
+import { downloadBlob, fetchFileBlob } from '@/services/files/file-api';
 import './experiments.css';
 
 const SheetsEditor = lazy(async () => ({
@@ -73,6 +74,7 @@ export function ExperimentWorkspacePage() {
   const [view, setView] = useState<WorkspaceView>('preview');
   const [busy, setBusy] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [downloadingSource, setDownloadingSource] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>('SAVED');
   const [loadError, setLoadError] = useState<string>();
   const isDesktop = useDesktopEditing();
@@ -205,6 +207,20 @@ export function ExperimentWorkspacePage() {
     }
   };
 
+  const downloadSource = async () => {
+    if (!detail?.sourceFileId) return;
+    setDownloadingSource(true);
+    try {
+      const blob = await fetchFileBlob(detail.sourceFileId);
+      downloadBlob(blob, detail.editModel.sourceFileName || detail.summary.title || '实验原文');
+      void message.success('原文已下载');
+    } catch (error) {
+      void message.error(error instanceof Error ? error.message : '原文下载失败');
+    } finally {
+      setDownloadingSource(false);
+    }
+  };
+
   const changeView = (key: WorkspaceView) => {
     if (key === 'versions' && versions.length === 0) {
       void message.info('发布后才会生成版本记录');
@@ -258,6 +274,9 @@ export function ExperimentWorkspacePage() {
         <Space wrap>
           <SaveStateBadge state={saveState} />
           <Button className="workspace-export-button" icon={<DownloadOutlined />} loading={exporting} onClick={() => void exportRecord()}>导出</Button>
+          {detail.sourceFileId && (
+            <Button icon={<FileOutlined />} loading={downloadingSource} onClick={() => void downloadSource()}>原文</Button>
+          )}
           {status === 'COMPLETED' && (
             <Button loading={busy} onClick={reviseCompletedExperiment}>创建修订</Button>
           )}

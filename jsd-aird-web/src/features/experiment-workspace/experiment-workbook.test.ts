@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildExperimentSnapshot,
   parseExperimentSnapshot,
+  withoutOcrSourceSheet,
 } from '@/features/experiment-workspace/experiment-workbook';
 import type { ExperimentModel } from '@/services/experiments/experiment-api';
 
@@ -158,5 +159,24 @@ describe('experiment-workbook round trip', () => {
     const sheets = blankExcel.sheets as Record<string, Record<string, unknown>>;
     expect(blankExcel.sheetOrder).toEqual(['sheet-1']);
     expect(sheets['sheet-1']?.cellData).toEqual({});
+  });
+
+  it('removes the legacy OCR source sheet and its drawing resource', () => {
+    const snapshot = {
+      sheetOrder: ['sheet-result', 'sheet-ocr-text', 'sheet-content'],
+      sheets: {
+        'sheet-result': { id: 'sheet-result', name: '识别结果' },
+        'sheet-ocr-text': { id: 'sheet-ocr-text', name: 'OCR原文' },
+        'sheet-content': { id: 'sheet-content', name: '识别文本' },
+      },
+      resources: [
+        { name: 'SHEET_DRAWING_PLUGIN', data: '{"sheet-ocr-text":{}}' },
+        { name: 'OTHER_PLUGIN', data: '{}' },
+      ],
+    };
+    const sanitized = withoutOcrSourceSheet(snapshot);
+    expect(sanitized.sheetOrder).toEqual(['sheet-result', 'sheet-content']);
+    expect((sanitized.sheets as Record<string, unknown>)['sheet-ocr-text']).toBeUndefined();
+    expect(sanitized.resources).toEqual([{ name: 'OTHER_PLUGIN', data: '{}' }]);
   });
 });

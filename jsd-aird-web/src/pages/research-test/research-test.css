@@ -98,6 +98,7 @@
   color: var(--app-text-secondary);
   font-size: var(--app-font-size-caption);
 }
+
 .research-test-report-card-list {
   min-width: 0;
   max-width: 100%;
@@ -352,9 +353,7 @@
   gap: 12px;
 }
 .research-test-form-grid label {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
+  display: block;
 }
 .relation-box {
   display: flex;
@@ -424,6 +423,18 @@
     min-width: 1280px;
     table-layout: fixed;
   }
+  .pm-unified-list-page .research-test-standard-table .research-test-number-column,
+  .pm-unified-list-page .research-test-standard-table .research-test-name-column,
+  .pm-unified-list-page .research-test-standard-table .research-test-name-column .ant-btn {
+    white-space: nowrap !important;
+    word-break: keep-all;
+  }
+  .pm-unified-list-page .research-test-standard-table .research-test-name-column .ant-btn {
+    display: block;
+    width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   .pm-unified-list-page .research-test-standard-table .ant-table-thead > tr > th.research-test-category-column,
   .pm-unified-list-page .research-test-standard-table .ant-table-tbody > tr > td.research-test-category-column,
   .pm-unified-list-page .research-test-standard-table .research-test-category-column .ant-table-cell-content {
@@ -457,6 +468,63 @@
   margin: 0;
   padding: 16px 20px;
   border-top: 1px solid #dfe6f0;
+}
+.research-test-rename-modal .ant-modal-content {
+  padding: 0;
+  overflow: hidden;
+  border-radius: 12px;
+}
+.research-test-rename-modal .ant-modal-header {
+  margin: 0;
+  padding: 20px 24px;
+  border-bottom: 1px solid #dfe6f0;
+}
+.research-test-rename-modal .ant-modal-title {
+  font-size: 20px;
+  font-weight: 700;
+}
+.research-test-rename-modal .ant-modal-body {
+  padding: 24px;
+}
+.research-test-rename-modal .ant-modal-footer {
+  margin: 0;
+  padding: 16px 20px;
+  border-top: 1px solid #dfe6f0;
+}
+.research-test-rename-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.research-test-rename-form-grid > .ant-form-item,
+.research-test-rename-single-field {
+  min-width: 0;
+  margin-bottom: 0;
+}
+.research-test-rename-form .ant-form-item-control,
+.research-test-rename-form .ant-form-item-control-input,
+.research-test-rename-form .ant-input,
+.research-test-rename-form .ant-picker,
+.research-test-rename-form .ant-select {
+  min-width: 0;
+  width: 100%;
+}
+.research-test-rename-form .ant-input,
+.research-test-rename-form .ant-picker,
+.research-test-rename-form .ant-select-selector {
+  min-height: 38px;
+  border-radius: 8px;
+}
+.research-test-rename-form .ant-form-item-label {
+  padding-bottom: 6px;
+}
+.research-test-rename-form .ant-form-item-label > label {
+  color: var(--app-text);
+  font-size: var(--app-font-size-label);
+  font-weight: 650;
+}
+.research-test-rename-modal .research-test-rename-relations {
+  margin-top: 16px;
 }
 .research-test-report-modal .ant-modal-content {
   border: 1px solid #dbe5f3;
@@ -563,6 +631,38 @@
 .research-test-create-grid .ant-picker {
   width: 100%;
 }
+.research-test-report-relations-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0 16px;
+  margin-top: 2px;
+}
+.research-test-report-relations-grid > .ant-form-item,
+.research-test-report-relations-grid > div {
+  min-width: 0;
+  margin-bottom: 14px;
+}
+.research-test-report-relations-grid .ant-select,
+.research-test-report-relations-grid .ant-select-selector {
+  width: 100%;
+  min-width: 0;
+}
+.research-test-report-relations-grid .ant-select-selection-item,
+.research-test-report-relations-grid .ant-select-selection-placeholder {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.research-test-project-relation-dropdown {
+  width: max-content;
+  min-width: 360px;
+  max-width: min(640px, calc(100vw - 32px));
+}
+.research-test-project-relation-dropdown .ant-select-item-option-content {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .research-test-choice-section > label {
   display: block;
   margin: 1px 0 8px;
@@ -613,45 +713,188 @@
   font-size: 11px;
   font-weight: 400;
 }
-.research-test-import-section {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin: 0 0 16px;
-  padding: 14px 16px;
-  border: 1px dashed #c9d8ed;
-  border-radius: 10px;
-  background: #f8fbff;
-}
-.research-test-import-section > label {
-  color: var(--app-text);
-  font-size: 14px;
-  font-weight: 600;
-}
-.research-test-import-section > label i {
-  margin-right: 3px;
-  color: #e5484d;
-  font-style: normal;
-}
-.research-test-import-section .ant-upload-wrapper {
-  width: 100%;
-}
-.research-test-import-section .ant-upload-list {
-  margin-top: 8px;
-}
-.research-test-import-section .ant-typography {
-  font-size: 12px;
-  line-height: 1.5;
-}
 @media (max-width: 720px) {
+  /* Keep the standard-create dialog single-column on phones so every field
+     occupies one readable row, matching the report and experiment forms. */
+  .research-test-create-modal:not(.research-test-report-modal) .research-test-create-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+    column-gap: 0;
+  }
+  .research-test-create-modal:not(.research-test-report-modal) .research-test-create-grid > .ant-form-item {
+    min-width: 0;
+  }
+  .research-test-create-modal:not(.research-test-report-modal) .ant-form-item-label > label {
+    white-space: nowrap;
+    font-size: 12px;
+  }
+  .research-test-create-modal:not(.research-test-report-modal) .ant-form-item-control,
+  .research-test-create-modal:not(.research-test-report-modal) .ant-form-item-control-input {
+    min-width: 0;
+  }
   .research-test-report-modal .ant-modal-body {
     max-height: calc(100vh - 150px);
     padding: 18px 16px 8px;
   }
-  .research-test-report-modal .research-test-choice-section > div {
+  .research-test-rename-modal .ant-modal-body {
+    padding: 18px 16px 10px;
+  }
+  .research-test-rename-modal .ant-modal-header {
+    padding: 18px 16px;
+  }
+  .research-test-rename-modal .research-test-rename-relations {
+    margin-top: 12px;
+  }
+  .research-test-rename-modal .research-test-rename-form-grid {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 0;
+  }
+  .research-test-rename-modal .research-test-rename-form-grid > .ant-form-item {
+    min-width: 0;
+    width: 100%;
+    margin-bottom: 12px;
+    grid-column: auto !important;
+  }
+  .research-test-rename-modal .research-test-rename-form-grid > .ant-form-item:last-child {
+    margin-bottom: 0;
+  }
+  .research-test-rename-modal .research-test-rename-form-grid .ant-form-item-label > label {
+    white-space: nowrap !important;
+  }
+  /* On phones each report field occupies its own row, matching the
+     experiment form's single-column mobile layout. */
+  .research-test-report-modal .research-test-form-grid {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    column-gap: 0;
+    row-gap: 0;
+  }
+  .research-test-report-modal .research-test-form-grid > .ant-form-item {
+    min-width: 0;
+    width: 100%;
+    grid-column: auto !important;
+  }
+  .research-test-report-modal .research-test-form-grid .ant-form-item-label,
+  .research-test-report-modal .research-test-form-grid .ant-form-item-label > label {
+    min-width: 0;
+    white-space: nowrap !important;
+  }
+  .research-test-report-modal .research-test-form-grid .ant-form-item-control,
+  .research-test-report-modal .research-test-form-grid .ant-form-item-control-input,
+  .research-test-report-modal .research-test-form-grid .ant-input,
+  .research-test-report-modal .research-test-form-grid .ant-picker {
+    min-width: 0;
+    max-width: 100%;
+  }
+  .research-test-report-modal .research-test-form-grid .ant-form-item {
+    margin-bottom: 9px;
+  }
+  .research-test-report-modal .ant-form-item-label {
+    padding-bottom: 4px;
+  }
+  .research-test-report-modal .research-test-form-grid .ant-form-item-label > label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0;
+    white-space: nowrap;
+  }
+  .research-test-report-relations-grid {
     grid-template-columns: 1fr;
+    gap: 0;
+  }
+  .research-test-report-relations-grid > .ant-form-item,
+  .research-test-report-relations-grid > div {
+    margin-bottom: 9px;
+  }
+  .research-test-project-relation-dropdown {
+    width: calc(100vw - 32px);
+    min-width: 0;
+    max-width: calc(100vw - 32px);
+  }
+  .research-test-report-modal .research-test-choice-section > div {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .research-test-report-modal .research-test-choice-section button {
+    min-height: 64px;
+    padding: 9px 8px;
+  }
+  .research-test-report-modal .research-test-choice-section button > span {
+    width: 28px;
+    height: 28px;
+    margin-right: 7px;
+    flex: 0 0 auto;
+  }
+  .research-test-report-modal .research-test-choice-section button b {
+    min-width: 0;
+    font-size: 12px;
+  }
+  .research-test-report-modal .research-test-choice-section button small {
+    font-size: 10px;
+    line-height: 1.25;
   }
   .research-test-report-modal .ant-modal-footer {
     padding: 12px 16px;
+  }
+}
+
+/* Match the experiment workspace header on phones: keep one concise title
+   row and let the action controls wrap below it without colliding. */
+@media (max-width: 720px) {
+  .research-test-workspace .workspace-header {
+    flex: 0 0 auto;
+    min-height: 0;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px;
+  }
+  .research-test-workspace .workspace-view-tabs {
+    flex: 0 0 auto;
+  }
+  .research-test-workspace .workspace-header .workspace-identity {
+    width: 100%;
+    min-width: 0;
+    align-items: center;
+  }
+  .research-test-workspace .workspace-title-block {
+    display: flex;
+    min-width: 0;
+    flex: 1 1 auto;
+    align-items: flex-start;
+    gap: 0;
+  }
+  .research-test-workspace .workspace-title-block .workspace-breadcrumb {
+    display: none;
+  }
+  .research-test-workspace .workspace-title-block > span:last-child {
+    display: block;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    font-size: 14px;
+    line-height: 1.4;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .research-test-workspace .research-test-status-tag {
+    display: none;
+  }
+  .research-test-workspace .workspace-header > .research-test-workspace-actions {
+    width: 100%;
+    max-width: none;
+    min-width: 0;
+    flex: 1 1 100%;
+    box-sizing: border-box;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    gap: 6px !important;
+  }
+  .research-test-workspace .workspace-header > .research-test-workspace-actions .ant-space-item {
+    flex: 0 0 auto;
+  }
+  .research-test-workspace .workspace-header > .research-test-workspace-actions .ant-btn {
+    max-width: 100%;
   }
 }

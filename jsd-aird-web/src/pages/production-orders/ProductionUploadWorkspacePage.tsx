@@ -1,4 +1,9 @@
-import { ArrowLeftOutlined, SaveOutlined } from '@ant-design/icons';
+import {
+  ArrowLeftOutlined,
+  DownloadOutlined,
+  FileOutlined,
+  SaveOutlined,
+} from '@ant-design/icons';
 import {
   Alert,
   Button,
@@ -17,9 +22,10 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom';
 
 import { SaveStateBadge, type SaveState } from '@/components/SaveStateBadge';
+import { FilePreviewModal } from '@/components/file-preview/FilePreviewModal';
 import { VersionHistoryPanel } from '@/components/version-history/VersionHistoryPanel';
 import { usePermission } from '@/components/auth/usePermission';
-import { fetchFileBlob } from '@/services/files/file-api';
+import { downloadBlob, fetchFileBlob } from '@/services/files/file-api';
 import type { EditorHandle } from '@/features/template-workspace/types';
 import { WordNativePreview } from '@/features/template-workspace/WordNativePreview';
 import {
@@ -140,6 +146,8 @@ export function ProductionUploadWorkspacePage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [publishing, setPublishing] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [sourcePreviewOpen, setSourcePreviewOpen] = useState(false);
   const [selectingTemplate, setSelectingTemplate] = useState<string>();
   const [error, setError] = useState<string>();
   const [photoUrl, setPhotoUrl] = useState<string>();
@@ -349,6 +357,27 @@ export function ProductionUploadWorkspacePage() {
     setView(next);
   };
 
+  const exportRecord = async () => {
+    if (!record) return;
+    setExporting(true);
+    try {
+      const blob = await productionOrderRecordApi.export(record.id);
+      const extension = record.originalName.includes('.')
+        ? record.originalName.slice(record.originalName.lastIndexOf('.'))
+        : '';
+      const baseName = record.productionName || record.originalName || '生产单';
+      const fileName = extension && !baseName.toLowerCase().endsWith(extension.toLowerCase())
+        ? `${baseName}${extension}`
+        : baseName;
+      downloadBlob(blob, fileName);
+      msg.success('生产单已导出');
+    } catch (reason) {
+      msg.error(reason instanceof Error ? reason.message : '生产单导出失败');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   if (loading)
     return (
       <div className="workspace-shell">
@@ -375,10 +404,39 @@ export function ProductionUploadWorkspacePage() {
   const editable = (isExcel || format === 'DOCX') && !readonly && canUpdate;
   const waitingForEditor = isExcel && view === 'edit' && !editorReady;
   const saveState: SaveState = saving ? 'SAVING' : dirty ? 'DIRTY' : 'SAVED';
-  const meta = [record.productionName, record.orderNo, record.productName, record.category]
-    .filter(Boolean)
-    .join(' · ');
-
+  const workspaceActions = () => (
+    <>
+      <SaveStateBadge state={saveState} />
+      <Button icon={<DownloadOutlined />} loading={exporting} onClick={() => void exportRecord()}>
+        导出
+      </Button>
+      <Button icon={<FileOutlined />} onClick={() => setSourcePreviewOpen(true)}>
+        原文
+      </Button>
+      {selectedVersion && <Button onClick={() => setSelectedVersion(undefined)}>返回</Button>}
+      {!selectedVersion && (
+        <>
+          <Button
+            type="primary"
+            icon={<SaveOutlined />}
+            loading={saving}
+            disabled={!editable || waitingForEditor}
+            onClick={() => void saveDraft()}
+          >
+            保存草稿
+          </Button>
+          <Button
+            type="primary"
+            loading={publishing}
+            disabled={!editable || !canSubmit || dirty || saving}
+            onClick={() => void publish()}
+          >
+            发布
+          </Button>
+        </>
+      )}
+    </>
+  );
   return (
     <section className="workspace-shell template-business-workspace quality-excel-workspace production-upload-workspace">
       {holder}
@@ -391,48 +449,25 @@ export function ProductionUploadWorkspacePage() {
           >
             返回
           </Button>
-          <div className="production-upload-title-block">
-            <Typography.Text type="secondary">生产单管理 / 生产单查看</Typography.Text>
-            <Typography.Title level={4} style={{ margin: 0 }}>
+          <span className="workspace-title-block">
+            <Typography.Text type="secondary" className="workspace-breadcrumb">
+              生产单管理 / 生产单查看
+            </Typography.Text>
+            <Typography.Text strong>
               {record.originalName}
-            </Typography.Title>
-            {(meta || record.manufactureDate) && (
-              <Typography.Text type="secondary">
-                {meta}
-                {record.manufactureDate ? ` · 制造日期 ${record.manufactureDate}` : ''}
-              </Typography.Text>
-            )}
-          </div>
+            </Typography.Text>
+          </span>
           <Tag color={latestVersion ? 'blue' : 'default'}>
             {latestVersion ? `V${latestVersion.versionNo}` : '未发布'}
           </Tag>
         </div>
-        <Space>
-          <SaveStateBadge state={saveState} />
-          {selectedVersion && <Button onClick={() => setSelectedVersion(undefined)}>返回</Button>}
-          {!selectedVersion && (
-            <>
-              <Button
-                type="primary"
-                icon={<SaveOutlined />}
-                loading={saving}
-                disabled={!editable || waitingForEditor}
-                onClick={() => void saveDraft()}
-              >
-                保存草稿
-              </Button>
-              <Button
-                type="primary"
-                loading={publishing}
-                disabled={!editable || !canSubmit || dirty || saving}
-                onClick={() => void publish()}
-              >
-                发布
-              </Button>
-            </>
-          )}
+        <Space className="production-workspace-actions production-desktop-actions" wrap>
+          {workspaceActions()}
         </Space>
       </header>
+      <Space className="production-mobile-actions" wrap>
+        {workspaceActions()}
+      </Space>
       <nav className="workspace-view-tabs" aria-label="生产单文件工作区">
         <Tabs
           activeKey={view}
@@ -630,6 +665,16 @@ export function ProductionUploadWorkspacePage() {
           )}
         </main>
       </div>
+      <FilePreviewModal
+        open={sourcePreviewOpen}
+        onClose={() => setSourcePreviewOpen(false)}
+        file={{
+          fileName: record.originalName,
+          contentType: record.contentType,
+          size: record.size,
+          load: () => fetchFileBlob(record.fileId),
+        }}
+      />
     </section>
   );
 }

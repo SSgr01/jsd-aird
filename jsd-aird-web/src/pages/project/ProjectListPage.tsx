@@ -352,6 +352,7 @@ export function ProjectListPage() {
 
       <div className="pm-filter-row">
         <Input
+          className="pm-project-keyword-filter"
           prefix={<SearchOutlined />}
           placeholder="项目名称 / 项目编号 / 公司名称"
           value={keyword}

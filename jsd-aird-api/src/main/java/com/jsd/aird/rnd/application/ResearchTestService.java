@@ -40,7 +40,18 @@ public class ResearchTestService {
     public Detail rename(UUID id, RenameCommand c){
         var a=ActorContext.required();
         if (blank(c.name())) invalid("名称不能为空");
-        return repository.rename(a.organizationId(), id, c.name().trim(), c.projectId(), c.stageId(), c.taskId(),
+        var current=repository.detail(a.organizationId(), id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"研发测试记录不存在"));
+        if (current.summary().recordType()==Type.REPORT && blank(c.businessNo())) invalid("报告编号不能为空");
+        if (current.summary().recordType()==Type.REPORT && blank(c.ownerName())) invalid("负责人不能为空");
+        if (current.summary().recordType()==Type.REPORT && c.date()==null) invalid("日期不能为空");
+        if (current.summary().recordType()==Type.STANDARD && blank(c.businessNo())) invalid("标准编号不能为空");
+        if (current.summary().recordType()==Type.STANDARD && blank(c.category())) invalid("标准类别不能为空");
+        if (current.summary().recordType()==Type.STANDARD && c.effectiveFrom()==null) invalid("生效日期不能为空");
+        if (current.summary().recordType()==Type.STANDARD) validateDates(c.effectiveFrom(), c.effectiveTo());
+        return repository.rename(a.organizationId(), id, c.name().trim(), blank(c.businessNo())?null:c.businessNo().trim(),
+                blank(c.ownerName())?null:c.ownerName().trim(), c.date(),
+                blank(c.category())?null:c.category().trim(), c.scope()==null?null:c.scope().trim(), c.effectiveFrom(), c.effectiveTo(),
+                c.projectId(), c.stageId(), c.taskId(),
                 c.revision(), a.userId(), a.username());
     }
     public Detail transition(UUID id,long revision,Status status,String comment){var a=ActorContext.required();return repository.transition(a.organizationId(),id,revision,status,comment,a.userId(),a.username());}
@@ -54,17 +65,19 @@ public class ResearchTestService {
         var format=sourceFormat==TemplateFormat.IMAGE?"EXCEL":isExcel(c.originalName())?"EXCEL":"WORD";
         var edit=com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode().put("documentFormat",format.toLowerCase(Locale.ROOT)).put("sourceFileId",c.fileId().toString()).put("sourceFileName",c.originalName()).put("sourceContentType",c.contentType());
         if(sourceParser!=null){var parsed=sourceParser.parseSourceFile(a.organizationId(),c.fileId(),c.originalName(),c.sha256(),sourceFormat);if(parsed.initialEditorSnapshot()!=null&&parsed.initialEditorSnapshot().isObject())edit.set("documentSnapshot",parsed.initialEditorSnapshot());if((sourceFormat==TemplateFormat.IMAGE||sourceFormat==TemplateFormat.PDF)&&parsed.structureSummary()!=null)edit.set("ocrResult",parsed.structureSummary());}
-        var detail=create(new CreateCommand(Type.REPORT,null,baseName(c.originalName()),c.category(),null,c.ownerName(),LocalDate.now(),format,"UPLOAD",c.visibility(),c.projectId(),c.stageId(),c.taskId(),c.fileId(),null,null,null,edit,null,null,null));
-        return repository.addUpload(a.organizationId(),a.userId(),detail.summary().id(),c.fileId(),c.originalName(),c.contentType(),c.size(),c.sha256());}
-    public PageResponse<Upload> uploads(String keyword,int page,int size){var a=ActorContext.required();return repository.uploads(a.organizationId(),keyword,Math.max(1,page),Math.min(100,Math.max(1,size)));}
+        var detail=create(new CreateCommand(c.type(),c.type()==Type.STANDARD?standardUploadNumber():null,baseName(c.originalName()),c.category(),c.scope(),c.ownerName(),LocalDate.now(),format,"UPLOAD",c.visibility(),c.projectId(),c.stageId(),c.taskId(),c.fileId(),null,null,null,edit,null,c.type()==Type.STANDARD?(c.effectiveFrom()==null?LocalDate.now():c.effectiveFrom()):null,c.type()==Type.STANDARD?c.effectiveTo():null));
+        var upload=repository.addUpload(a.organizationId(),a.userId(),detail.summary().id(),c.fileId(),c.originalName(),c.contentType(),c.size(),c.sha256());files.activate(c.fileId());return upload;}
+    public PageResponse<Upload> uploads(Type type,String keyword,int page,int size){var a=ActorContext.required();return repository.uploads(a.organizationId(),type,keyword,Math.max(1,page),Math.min(100,Math.max(1,size)));}
     /** Revalidates the source attachment and refreshes the upload ledger row. */
-    public Upload retryUpload(UUID id){
+    public Upload retryUpload(Type type,UUID id){
         var a=ActorContext.required();
         var current=repository.findUpload(a.organizationId(),id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"研发测试上传记录不存在"));
+        requireUploadType(a.organizationId(),current,type);
         try(var ignored=files.open(a.organizationId(),current.fileId())){}catch(ApiException e){throw e;}catch(Exception e){throw new ApiException(ApiErrorCode.FILE_NOT_READY,"上传文件不可读取");}
         return repository.retryUpload(a.organizationId(),id);
     }
-    public void deleteUpload(UUID id){repository.deleteUpload(ActorContext.required().organizationId(),id);}
+    public void deleteUpload(Type type,UUID id){var a=ActorContext.required();var current=repository.findUpload(a.organizationId(),id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"研发测试上传记录不存在"));requireUploadType(a.organizationId(),current,type);repository.deleteUpload(a.organizationId(),id);}
+    private void requireUploadType(UUID organizationId,Upload upload,Type expected){var detail=repository.detail(organizationId,upload.recordId()).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"研发测试记录不存在"));if(detail.summary().recordType()!=expected)throw new ApiException(ApiErrorCode.NOT_FOUND,"研发测试上传记录不存在");}
     private JsonNode importedEditModel(UUID organizationId,CreateCommand c){
         if(sourceParser==null||c.type()!=Type.STANDARD||c.sourceFileId()==null||!"IMPORT".equalsIgnoreCase(c.sourceType()))return c.editModel();
         var sourceName=c.editModel()!=null?c.editModel().path("sourceFileName").asText(""):"";
@@ -91,7 +104,10 @@ public class ResearchTestService {
     private static boolean isExcel(String n){return n.toLowerCase(Locale.ROOT).matches(".*\\.(xls|xlsx|csv)$");}
     private static TemplateFormat formatOf(String name){var n=name.toLowerCase(Locale.ROOT);if(n.endsWith(".xlsx"))return TemplateFormat.XLSX;if(n.endsWith(".xls"))return TemplateFormat.XLS;if(n.endsWith(".csv"))return TemplateFormat.CSV;if(n.endsWith(".doc")||n.endsWith(".docx"))return TemplateFormat.DOCX;if(n.endsWith(".pdf"))return TemplateFormat.PDF;return TemplateFormat.IMAGE;}
     private static String baseName(String n){return n.replaceFirst("(?i)\\.[^.]+$","");}private static boolean blank(String s){return s==null||s.isBlank();}private static String upper(String s){return s==null?"":s.toUpperCase(Locale.ROOT);}private static void invalid(String m){throw new ApiException(ApiErrorCode.VALIDATION_ERROR,m);}
+    private static String standardUploadNumber(){return "STD-"+LocalDate.now().format(java.time.format.DateTimeFormatter.BASIC_ISO_DATE)+"-"+UUID.randomUUID().toString().substring(0,6).toUpperCase(Locale.ROOT);}
     public record CreateCommand(Type type,String businessNo,String name,String category,String scope,String ownerName,LocalDate date,String format,String sourceType,String visibility,UUID projectId,UUID stageId,UUID taskId,UUID sourceFileId,UUID templateVersionId,String templateHash,JsonNode templateSnapshot,JsonNode editModel,JsonNode memberSnapshot,LocalDate effectiveFrom,LocalDate effectiveTo){}
-    public record RenameCommand(long revision, String name, UUID projectId, UUID stageId, UUID taskId) {}
-    public record UploadCommand(UUID fileId,String originalName,String contentType,long size,String sha256,String category,String ownerName,String visibility,UUID projectId,UUID stageId,UUID taskId){}
+    public record RenameCommand(long revision, String name, String businessNo, String ownerName, LocalDate date,
+                                String category, String scope, LocalDate effectiveFrom, LocalDate effectiveTo,
+                                UUID projectId, UUID stageId, UUID taskId) {}
+    public record UploadCommand(Type type,UUID fileId,String originalName,String contentType,long size,String sha256,String category,String scope,String ownerName,String visibility,UUID projectId,UUID stageId,UUID taskId,LocalDate effectiveFrom,LocalDate effectiveTo){}
 }

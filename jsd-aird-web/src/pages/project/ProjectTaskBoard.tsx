@@ -8,7 +8,7 @@ import { projectTemplateApi, type ProjectTemplateOption } from '@/services/proje
 import {
   createProjectTask, deleteProjectTask, getProjectStages, getProjectTask, getStageTasks,
   updateProjectTask,
-  type ProjectStage, type ProjectTask,
+  projectPriorities, type ProjectPriority, type ProjectStage, type ProjectTask,
 } from '@/services/project/project-api';
 import '../experiments/experiments.css';
 import '@/styles/management-list.css';
@@ -37,6 +37,7 @@ interface TaskFormValues {
   stageId: string;
   name: string;
   owner?: string;
+  priority: ProjectPriority;
   plannedDate: dayjs.Dayjs;
   status: string;
 }
@@ -179,7 +180,8 @@ export function ProjectTaskBoard({ projectId, stage, onTaskSaved }: {
 
   const openNewTask = () => {
     setEditingTask(undefined);
-    taskForm.setFieldsValue({ stageId: stage.id, owner: '', plannedDate: dayjs(), status: 'PENDING' });
+    taskForm.resetFields();
+    taskForm.setFieldsValue({ stageId: stage.id, owner: '', priority: 'MEDIUM', plannedDate: dayjs(), status: 'PENDING' });
     setTaskOpen(true);
   };
 
@@ -188,7 +190,7 @@ export function ProjectTaskBoard({ projectId, stage, onTaskSaved }: {
     setEditingTask(data);
     taskForm.setFieldsValue({
       stageId: data.stageId, name: data.name, owner: data.owner,
-      plannedDate: data.plannedDate ? dayjs(data.plannedDate) : dayjs(), status: data.status || 'PENDING',
+      priority: data.priority || 'MEDIUM', plannedDate: data.plannedDate ? dayjs(data.plannedDate) : dayjs(), status: data.status || 'PENDING',
     });
     setTaskOpen(true);
   };
@@ -204,7 +206,7 @@ export function ProjectTaskBoard({ projectId, stage, onTaskSaved }: {
     try {
       const payload = {
         stageId: values.stageId, name: values.name.trim(), owner: values.owner?.trim() || '',
-        plannedDate: values.plannedDate.format('YYYY-MM-DD'), status: values.status,
+        priority: values.priority, plannedDate: values.plannedDate.format('YYYY-MM-DD'), status: values.status,
       };
       const savedTask = editingTask
         ? await updateProjectTask(editingTask.id, { ...payload, version: editingTask.version })
@@ -267,8 +269,8 @@ export function ProjectTaskBoard({ projectId, stage, onTaskSaved }: {
       <div>
         <Form form={form} layout="vertical" requiredMark>
           <div className="eln-create-grid">
-            <Form.Item name="experimentNo" label="实验编号" rules={[{ required: true, message: '请输入实验编号' }, { max: 100 }]}><Input placeholder="请输入实验编号" /></Form.Item>
-            <Form.Item name="title" label="实验名称" rules={[{ required: true, whitespace: true, message: '请输入实验名称' }, { max: 300 }]}><Input placeholder="请输入实验名称" /></Form.Item>
+            <Form.Item className="eln-create-primary-field" name="experimentNo" label="实验编号" rules={[{ required: true, message: '请输入实验编号' }, { max: 100 }]}><Input placeholder="请输入实验编号" /></Form.Item>
+            <Form.Item className="eln-create-primary-field" name="title" label="实验名称" rules={[{ required: true, whitespace: true, message: '请输入实验名称' }, { max: 300 }]}><Input placeholder="请输入实验名称" /></Form.Item>
             <Form.Item name="ownerName" label="实验人" rules={[{ required: true, whitespace: true, message: '请输入实验人' }]}><Input placeholder="请输入实验人" /></Form.Item>
             <Form.Item name="experimentDate" label="日期" rules={[{ required: true, message: '请选择日期' }]}><DatePicker style={{ width: '100%' }} format="YYYY/MM/DD" /></Form.Item>
           </div>
@@ -316,6 +318,9 @@ export function ProjectTaskBoard({ projectId, stage, onTaskSaved }: {
           </Form.Item>
           <Form.Item name="owner" label={<FieldLabel text="负责人" />}>
             <Input placeholder="请输入负责人" />
+          </Form.Item>
+          <Form.Item name="priority" label={<FieldLabel text="优先级" required />} rules={[{ required: true, message: '请选择优先级' }]}>
+            <Select placeholder="请选择优先级" options={projectPriorities} />
           </Form.Item>
           <Form.Item name="plannedDate" label={<FieldLabel text="计划日期" required />} rules={[{ required: true, message: '请选择计划日期' }]}>
             <DatePicker style={{ width: '100%' }} format="YYYY/MM/DD" />

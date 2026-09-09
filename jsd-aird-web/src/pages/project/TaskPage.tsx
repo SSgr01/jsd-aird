@@ -40,9 +40,6 @@ import '@/styles/management-list.css';
 
 type ViewMode = 'card' | 'list';
 
-const isMobileViewport = () => typeof window !== 'undefined'
-  && window.matchMedia?.('(max-width: 720px)').matches === true;
-
 const defaultQuery: TaskQuery = {
   keyword: '',
   projectId: undefined,
@@ -75,7 +72,7 @@ export default function TaskPage() {
   const [tasks, setTasks] = useState<ProjectTask[]>([]);
   const [total, setTotal] = useState(0);
   const [query, setQuery] = useState<TaskQuery>({ ...defaultQuery });
-  const [view, setView] = useState<ViewMode>(() => (isMobileViewport() ? 'card' : 'list'));
+  const [view, setView] = useState<ViewMode>('list');
 
   const [projects, setProjects] = useState<Project[]>([]);
   const [stages, setStages] = useState<ProjectStage[]>([]);

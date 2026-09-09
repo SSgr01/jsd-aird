@@ -188,6 +188,12 @@ export const qualityApi = {
       businessNo: string;
       data: Record<string, unknown>;
       workbookSnapshot?: Record<string, unknown>;
+      projectId?: string;
+      projectName?: string;
+      stageId?: string;
+      stageName?: string;
+      taskId?: string;
+      taskName?: string;
       lockVersion: number;
     }>;
     deleteIds: string[];

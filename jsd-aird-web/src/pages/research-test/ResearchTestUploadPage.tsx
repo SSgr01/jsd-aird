@@ -5,7 +5,7 @@ import {
   EyeOutlined,
   ReloadOutlined,
 } from '@ant-design/icons';
-import { App, Button, Form, Modal, Select, Space, Upload } from 'antd';
+import { App, Button, DatePicker, Form, Input, Modal, Select, Space, Upload } from 'antd';
 import type { UploadFile, UploadProps } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -20,10 +20,13 @@ import {
   retryResearchTestUpload,
   stageResearchTestFile,
   type ResearchTestUpload,
+  type ResearchTestType,
 } from '@/services/research-test/research-test-api';
 
 const allowed = /\.(pdf|doc|docx|xls|xlsx|csv|png|jpe?g|gif|webp|bmp|tiff?)$/i;
 const reportTypeOptions = [{ value: '综合测试报告', label: '综合测试报告' }];
+const standardCategoryOptions = ['国家标准', '行业标准', '企业标准', '客户标准', '内部测试方法']
+  .map((value) => ({ value, label: value }));
 const visibilityOptions = [
   { value: 'ALL', label: '全员可见' },
   { value: 'RND', label: '仅研发部门' },
@@ -38,12 +41,17 @@ type UploadTask = {
   error?: string;
 };
 
-export function ResearchTestUploadPage() {
+export function ResearchTestUploadPage({ type = 'REPORT' }: { type?: ResearchTestType }) {
+  const standard = type === 'STANDARD';
   const { message } = App.useApp();
   const navigate = useNavigate();
   const [files, setFiles] = useState<UploadFile[]>([]);
   const [rows, setRows] = useState<ResearchTestUpload[]>([]);
   const [reportType, setReportType] = useState(reportTypeOptions[0]?.value ?? '综合测试报告');
+  const [standardCategory, setStandardCategory] = useState<string>();
+  const [scope, setScope] = useState('');
+  const [effectiveFrom, setEffectiveFrom] = useState<string>();
+  const [effectiveTo, setEffectiveTo] = useState<string>();
   const [visibility, setVisibility] = useState('ALL');
   const [relations, setRelations] = useState<ProjectRelationTarget[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -59,7 +67,7 @@ export function ResearchTestUploadPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const result = await listResearchTestUploads({
+      const result = await listResearchTestUploads(type, {
         keyword,
         page: page.current,
         size: page.pageSize,
@@ -71,7 +79,7 @@ export function ResearchTestUploadPage() {
     } finally {
       setLoading(false);
     }
-  }, [keyword, message, page.current, page.pageSize]);
+  }, [keyword, message, page.current, page.pageSize, type]);
   useEffect(() => {
     void load();
   }, [load]);
@@ -94,7 +102,15 @@ export function ResearchTestUploadPage() {
 
   const uploadFiles = async (sourceFiles: File[]) => {
     if (!sourceFiles.length) {
-      void message.warning('请先选择报告文件');
+      void message.warning(`请先选择${standard ? '测试方法' : '报告'}文件`);
+      return;
+    }
+    if (standard && !standardCategory) {
+      void message.warning('请选择标准类别');
+      return;
+    }
+    if (standard && !effectiveFrom) {
+      void message.warning('请选择生效日期');
       return;
     }
     const relation = relations.find((item) => item.projectId);
@@ -111,15 +127,18 @@ export function ResearchTestUploadPage() {
           ...current.filter((task) => !(task.file.name === file.name && task.status === 'FAILED')),
         ]);
         try {
-          const staged = await stageResearchTestFile(file, controller.signal);
+          const staged = await stageResearchTestFile(file, type, controller.signal);
           setTasks((current) =>
             current.map((task) =>
-              task.id === taskId ? { ...task, progress: 65, stage: '正在生成报告草稿' } : task,
+              task.id === taskId ? { ...task, progress: 65, stage: `正在生成${standard ? '测试方法' : '报告'}草稿` } : task,
             ),
           );
-          await registerResearchTestUpload({
+          await registerResearchTestUpload(type, {
             ...staged,
-            category: reportType,
+            category: standard ? standardCategory : reportType,
+            scope: standard ? scope : undefined,
+            effectiveFrom: standard ? effectiveFrom : undefined,
+            effectiveTo: standard ? effectiveTo : undefined,
             visibility,
             projectId: relation?.projectId,
             stageId: relation?.stageId,
@@ -155,7 +174,7 @@ export function ResearchTestUploadPage() {
       await load();
       const succeeded = sourceFiles.length - failed;
       if (failed) void message.warning(`${succeeded} 个文件上传成功，${failed} 个失败`);
-      else void message.success(`已上传 ${succeeded} 个文件并生成报告草稿`);
+      else void message.success(`已上传 ${succeeded} 个文件并生成${standard ? '测试方法' : '报告'}草稿`);
     } finally {
       setUploading(false);
     }
@@ -183,7 +202,7 @@ export function ResearchTestUploadPage() {
   const retryUploadedRow = async (row: ResearchTestUpload) => {
     setRetryingUploadId(row.id);
     try {
-      await retryResearchTestUpload(row.id);
+      await retryResearchTestUpload(type, row.id);
       await load();
       void message.success(`“${row.originalName}”已重新提交处理`);
     } catch (error) {
@@ -204,7 +223,7 @@ export function ResearchTestUploadPage() {
       id: task.id,
       name: task.file.name,
       meta: `${formatLabel(task.file.name)} · ${(task.file.size / 1024 / 1024).toFixed(2)} MB`,
-      detail: `${task.stage} · 保存位置：${reportType} · ${relationLabel(relations)} · ${visibilityLabel(visibility)}${task.error ? ` · 失败原因：${task.error}` : ''}`,
+      detail: `${task.stage} · 保存位置：${standard ? standardCategory || '未选择标准类别' : reportType} · ${relationLabel(relations)} · ${visibilityLabel(visibility)}${task.error ? ` · 失败原因：${task.error}` : ''}`,
       status:
         task.status === 'FAILED'
           ? { label: '失败', color: 'error' }
@@ -227,7 +246,7 @@ export function ResearchTestUploadPage() {
       id: row.id,
       name: row.originalName,
       meta: `${formatLabel(row.originalName)} · ${new Date(row.createdAt).toLocaleString('zh-CN')}`,
-      detail: `解析完成，已生成测试报告草稿 · 保存位置：${row.category || '未分类'} · ${[row.projectName, row.stageName, row.taskName].filter(Boolean).join(' · ') || '未关联项目'} · ${visibilityLabel(row.visibility)}`,
+      detail: `解析完成，已生成${standard ? '测试方法' : '测试报告'}草稿 · 保存位置：${row.category || '未分类'} · ${[row.projectName, row.stageName, row.taskName].filter(Boolean).join(' · ') || '未关联项目'} · ${visibilityLabel(row.visibility)}`,
       status: { label: '已解析', color: 'success' },
       progress: 100,
       actions: (
@@ -235,7 +254,7 @@ export function ResearchTestUploadPage() {
           <Button
             type="link"
             icon={<EyeOutlined />}
-            onClick={() => navigate(`/research-test/reports/${row.recordId}`)}
+            onClick={() => navigate(`/research-test/${standard ? 'standards' : 'reports'}/${row.recordId}`)}
           >
             查看
           </Button>
@@ -270,7 +289,7 @@ export function ResearchTestUploadPage() {
                 cancelText: '取消',
                 okButtonProps: { danger: true },
                 onOk: async () => {
-                  await deleteResearchTestUpload(row.id);
+                  await deleteResearchTestUpload(type, row.id);
                   await load();
                   void message.success('上传记录已删除，报告草稿仍保留');
                 },
@@ -287,20 +306,29 @@ export function ResearchTestUploadPage() {
   return (
     <>
       <UploadWorkspace
-        breadcrumbs={[{ title: '研发测试中心' }, { title: '报告上传' }]}
-        title="报告上传"
-        description="Excel 报告按原表格布局打开；图片自动调用 OCR 转为可维护的 Excel 草稿，原始文件和项目关联信息会完整保留。"
-        headerActions={<Button type="primary" onClick={() => navigate('/research-test/reports')}>报告列表</Button>}
+        breadcrumbs={[{ title: '研发测试中心' }, { title: standard ? '测试标准上传' : '报告上传' }]}
+        title={standard ? '测试标准上传' : '报告上传'}
+        description={`${standard ? '测试方法' : 'Excel 报告'}按原文档格式打开；图片自动调用 OCR 转为可维护的 Excel 草稿，原始文件和项目关联信息会完整保留。`}
+        headerActions={<Button type="primary" onClick={() => navigate(`/research-test/${standard ? 'standards' : 'reports'}`)}>{standard ? '测试标准方法列表' : '报告列表'}</Button>}
         leftTitle="基础分类"
         classification={
           <Form layout="vertical" component={false}>
-            <Form.Item label="报告种类">
-              <Select
-                value={reportType}
-                onChange={setReportType}
-                options={reportTypeOptions}
-              />
-            </Form.Item>
+            {standard ? <>
+              <Form.Item label="标准类别" required>
+                <Select value={standardCategory} onChange={setStandardCategory} options={standardCategoryOptions} placeholder="请选择标准类别" />
+              </Form.Item>
+              <Form.Item label="适用对象">
+                <Input value={scope} onChange={(event) => setScope(event.target.value)} placeholder="请输入适用对象（选填）" />
+              </Form.Item>
+              <Form.Item label="生效日期" required>
+                <DatePicker style={{ width: '100%' }} onChange={(_, value) => setEffectiveFrom(Array.isArray(value) ? value[0] : value || undefined)} />
+              </Form.Item>
+              <Form.Item label="失效日期">
+                <DatePicker style={{ width: '100%' }} onChange={(_, value) => setEffectiveTo(Array.isArray(value) ? value[0] : value || undefined)} />
+              </Form.Item>
+            </> : <Form.Item label="报告种类">
+              <Select value={reportType} onChange={setReportType} options={reportTypeOptions} />
+            </Form.Item>}
             <Form.Item label="关联项目 / 阶段 / 任务">
               <ProjectRelationPicker value={relations} onChange={setRelations} multiple={false} />
             </Form.Item>

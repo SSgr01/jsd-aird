@@ -84,7 +84,8 @@ public class QualityDataService {
             if (current != null && isFinalized(current.data()) && !current.data().equals(row.data()))
                 throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"正式质量记录已生效，请通过修订流程修改");
             validateDraft(def,row.data());
-            repository.upsert(a.organizationId(),a.userId(),type,categoryId,row.id(),row.businessNo(),row.data(),row.workbookSnapshot(),row.lockVersion());
+            repository.upsert(a.organizationId(),a.userId(),type,categoryId,row.id(),row.businessNo(),row.data(),row.workbookSnapshot(),
+                    row.projectId(),row.projectName(),row.stageId(),row.stageName(),row.taskId(),row.taskName(),row.lockVersion());
         }
         repository.softDelete(a.organizationId(),deleteIds==null?List.of():deleteIds);
     }
@@ -116,7 +117,7 @@ public class QualityDataService {
         data.put("status", "待处理");
         validateDraft(requireType("defect"), data);
         return repository.upsert(actor.organizationId(), actor.userId(), "defect", category.id(), null,
-                no, data, null, 0);
+                no, data, null, null, null, null, null, null, null, 0);
     }
 
     @Transactional public QualityDataStore.UploadView upload(UploadInput input) {
@@ -220,7 +221,9 @@ public class QualityDataService {
             } else {
                 var currentRecord = repository.record(actor.organizationId(), existingRecordId);
                 repository.upsert(actor.organizationId(), actor.userId(), definition.id(), input.categoryId(),
-                        existingRecordId, businessNo, data, workbookSnapshot, currentRecord.lockVersion());
+                        existingRecordId, businessNo, data, workbookSnapshot,
+                        currentRecord.projectId(), currentRecord.projectName(), currentRecord.stageId(), currentRecord.stageName(),
+                        currentRecord.taskId(), currentRecord.taskName(), currentRecord.lockVersion());
             }
             storage.activate(input.fileId());
             return repository.updateUploadStatus(actor.organizationId(), id, "DRAFT_CREATED", existingRecordId, null);
@@ -362,7 +365,9 @@ public class QualityDataService {
         var status = data == null ? "" : data.path("status").asText("").trim();
         return Set.of("已签发", "有效", "已关闭", "已归档").contains(status);
     }
-    public record RecordInput(UUID id,String businessNo,JsonNode data,JsonNode workbookSnapshot,long lockVersion) {}
+    public record RecordInput(UUID id,String businessNo,JsonNode data,JsonNode workbookSnapshot,
+                              UUID projectId,String projectName,UUID stageId,String stageName,
+                              UUID taskId,String taskName,long lockVersion) {}
     public record UploadInput(UUID fileId,UUID categoryId,String originalName,String contentType,long size,String sha256,UUID projectId,String projectName,UUID stageId,String stageName,UUID taskId,String taskName,String visibility) {}
     public record RenameCommand(long lockVersion, String displayName, UUID projectId, String projectName,
                                 UUID stageId, String stageName, UUID taskId, String taskName) {}

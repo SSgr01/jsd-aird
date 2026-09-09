@@ -338,6 +338,8 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
                 return permission("experiment.create", "EXPERIMENT", "WRITE");
             if ("RESEARCH_TEST_SOURCE".equalsIgnoreCase(request.getParameter("kind")))
                 return permission("research-test.report.create", "RESEARCH_TEST", "WRITE");
+            if ("RESEARCH_TEST_STANDARD_SOURCE".equalsIgnoreCase(request.getParameter("kind")))
+                return permission("research-test.standard.create", "RESEARCH_TEST", "WRITE");
         }
         if (path.startsWith("/api/v1/files")) {
             if (path.endsWith("/content")) return permission("ops.file.download", "FILE", "READ");

@@ -25,7 +25,9 @@ public interface ResearchTestRepository {
     Optional<Detail> detail(UUID organizationId, UUID id);
     Detail create(Create command);
     Detail save(UUID organizationId,UUID id,Draft draft,UUID actor,String actorName);
-    Detail rename(UUID organizationId, UUID id, String name, UUID projectId, UUID stageId, UUID taskId,
+    Detail rename(UUID organizationId, UUID id, String name, String businessNo, String ownerName, LocalDate date,
+                  String category, String scope, LocalDate effectiveFrom, LocalDate effectiveTo,
+                  UUID projectId, UUID stageId, UUID taskId,
                   long lockVersion, UUID actor, String actorName);
     Detail transition(UUID organizationId,UUID id,long lockVersion,Status status,String comment,UUID actor,String actorName);
     Detail createRevision(UUID organizationId,UUID id,long lockVersion,String reason,UUID actor,String actorName);
@@ -36,6 +38,6 @@ public interface ResearchTestRepository {
     Upload addUpload(UUID organizationId,UUID actor,UUID recordId,UUID fileId,String name,String contentType,long size,String sha256);
     Optional<Upload> findUpload(UUID organizationId, UUID id);
     Upload retryUpload(UUID organizationId, UUID id);
-    PageResponse<Upload> uploads(UUID organizationId,String keyword,int page,int size);
+    PageResponse<Upload> uploads(UUID organizationId,Type type,String keyword,int page,int size);
     void deleteUpload(UUID organizationId,UUID id);
 }

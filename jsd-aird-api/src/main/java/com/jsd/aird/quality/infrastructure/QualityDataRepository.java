@@ -35,7 +35,23 @@ public class QualityDataRepository implements QualityDataStore {
     public RecordView record(UUID org,UUID id){return record(org,"ADMIN",id);}
     public RecordView record(UUID org,String role,UUID id){var rows=jdbc.query("SELECT r.*,(SELECT name FROM quality.data_category c WHERE c.id=r.category_id) category_name,COALESCE((SELECT original_name FROM ops.file_object f WHERE f.id=r.source_file_id AND f.status <> 'DELETED'),(SELECT original_name FROM quality.upload_file u WHERE u.generated_record_id=r.id AND u.deleted=false ORDER BY u.created_at LIMIT 1)) source_file_name FROM quality.data_record r WHERE r.organization_id=? AND r.id=? AND r.deleted=false AND (r.visibility='ALL' OR ? IN ('ADMIN','SYSTEM_ADMIN') OR (?='QUALITY_MANAGER' AND r.visibility IN ('QUALITY','PROJECT')) OR (? LIKE 'RND%' AND r.visibility='RND'))",(rs,n)->record(rs),org,id,role,role,role);if(rows.isEmpty())throw new ApiException(ApiErrorCode.NOT_FOUND,"品管数据不存在");return rows.getFirst();}
     public List<VersionView> versions(UUID org,UUID recordId){return jdbc.query("SELECT v.*,coalesce(u.display_name,u.username,'未知用户') created_by_name FROM quality.data_record_version v LEFT JOIN iam.app_user u ON u.id=v.created_by WHERE v.organization_id=? AND v.record_id=? AND v.change_type='PUBLISH' ORDER BY v.version_no DESC",(rs,n)->version(rs),org,recordId);}
-    public RecordView upsert(UUID org,UUID user,String type,UUID cat,UUID id,String no,JsonNode data,JsonNode workbookSnapshot,long version){try{UUID recordId=id;if(id==null){recordId=UUID.randomUUID();jdbc.update("INSERT INTO quality.data_record(id,organization_id,business_type,category_id,business_no,data_jsonb,workbook_snapshot_jsonb,created_by,updated_by) VALUES(?,?,?,?,?,?,?,?,?)",recordId,org,type,cat,no,pg(data),pgOrNull(workbookSnapshot),user,user);}else{record(org,id);if(jdbc.update("UPDATE quality.data_record SET category_id=?,business_no=?,data_jsonb=?,workbook_snapshot_jsonb=?,updated_by=?,lock_version=lock_version+1,updated_at=now() WHERE id=? AND organization_id=? AND lock_version=? AND deleted=false",cat,no,pg(data),pgOrNull(workbookSnapshot),user,id,org,version)==0)throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT,"品管数据已被其他用户修改");}return record(org,recordId);}catch(DuplicateKeyException e){throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"编号不能为空或重复");}}
+    public RecordView upsert(UUID org,UUID user,String type,UUID cat,UUID id,String no,JsonNode data,JsonNode workbookSnapshot,
+                             UUID projectId,String projectName,UUID stageId,String stageName,UUID taskId,String taskName,long version){
+        try {
+            UUID recordId=id;
+            if(id==null){
+                recordId=UUID.randomUUID();
+                jdbc.update("INSERT INTO quality.data_record(id,organization_id,business_type,category_id,business_no,data_jsonb,workbook_snapshot_jsonb,project_id,project_name,stage_id,stage_name,task_id,task_name,created_by,updated_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        recordId,org,type,cat,no,pg(data),pgOrNull(workbookSnapshot),projectId,projectName,stageId,stageName,taskId,taskName,user,user);
+            }else{
+                record(org,id);
+                if(jdbc.update("UPDATE quality.data_record SET category_id=?,business_no=?,data_jsonb=?,workbook_snapshot_jsonb=?,project_id=?,project_name=?,stage_id=?,stage_name=?,task_id=?,task_name=?,updated_by=?,lock_version=lock_version+1,updated_at=now() WHERE id=? AND organization_id=? AND lock_version=? AND deleted=false",
+                        cat,no,pg(data),pgOrNull(workbookSnapshot),projectId,projectName,stageId,stageName,taskId,taskName,user,id,org,version)==0)
+                    throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT,"品管数据已被其他用户修改");
+            }
+            return record(org,recordId);
+        }catch(DuplicateKeyException e){throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"编号不能为空或重复");}
+    }
     public RecordView rename(UUID org,UUID user,UUID id,String displayName,UUID projectId,String projectName,UUID stageId,String stageName,UUID taskId,String taskName,long version){
         var updated=jdbc.update("UPDATE quality.data_record SET display_name=?,project_id=?,project_name=?,stage_id=?,stage_name=?,task_id=?,task_name=?,updated_by=?,lock_version=lock_version+1,updated_at=now() WHERE organization_id=? AND id=? AND lock_version=? AND deleted=false",displayName,projectId,projectName,stageId,stageName,taskId,taskName,user,org,id,version);
         if(updated==0) throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT,"品管数据已被其他用户修改");

@@ -3,6 +3,7 @@ package com.jsd.aird.mdm.adapter.in.web;
 import com.jsd.aird.mdm.application.query.ProjectTaskQuery;
 import com.jsd.aird.mdm.application.query.ProjectTaskSummary;
 import com.jsd.aird.mdm.application.service.ProjectWorkService;
+import com.jsd.aird.mdm.domain.model.ProjectPriority;
 import com.jsd.aird.mdm.domain.model.ProjectTask;
 import com.jsd.aird.platform.web.RequestIdHolder;
 import com.jsd.aird.shared.api.*;
@@ -29,7 +30,7 @@ public class ProjectWorkController {
 
     @PostMapping("/projects/{projectId}/tasks")
     public ApiResponse<ProjectTask> createTask(@PathVariable UUID projectId, @Valid @RequestBody TaskRequest r) {
-        return ok(service.createTask(projectId, new ProjectWorkService.TaskInput(r.stageId, r.name, r.owner, r.plannedDate, r.status, null)));
+        return ok(service.createTask(projectId, new ProjectWorkService.TaskInput(r.stageId, r.name, r.owner, r.priority, r.plannedDate, r.status, null)));
     }
 
     @GetMapping("/tasks/{taskId}")
@@ -39,7 +40,7 @@ public class ProjectWorkController {
 
     @PutMapping("/tasks/{taskId}")
     public ApiResponse<ProjectTask> updateTask(@PathVariable UUID taskId, @Valid @RequestBody TaskRequest r) {
-        return ok(service.updateTask(taskId, new ProjectWorkService.TaskInput(r.stageId, r.name, r.owner, r.plannedDate, r.status, r.version)));
+        return ok(service.updateTask(taskId, new ProjectWorkService.TaskInput(r.stageId, r.name, r.owner, r.priority, r.plannedDate, r.status, r.version)));
     }
 
     @DeleteMapping("/tasks/{taskId}")
@@ -75,7 +76,8 @@ public class ProjectWorkController {
     }
 
     public record TaskRequest(@NotNull UUID stageId, @NotBlank @Size(max = 300) String name,
-                              @Size(max = 100) String owner, LocalDate plannedDate, String status, Long version) {
+                              @Size(max = 100) String owner, ProjectPriority priority, LocalDate plannedDate,
+                              String status, Long version) {
     }
 
 }

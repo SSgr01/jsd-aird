@@ -264,6 +264,7 @@ export default function ProjectDocumentsTab({
             pagination={false}
             dataSource={documents}
             columns={columns}
+            scroll={{ x: 1100 }}
             onRow={(doc) => ({
               style: { cursor: 'pointer' },
               onDoubleClick: () => navigate(`/projects/${projectId}/documents/${doc.id}`),

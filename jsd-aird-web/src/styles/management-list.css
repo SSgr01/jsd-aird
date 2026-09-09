@@ -671,13 +671,23 @@
 /* Experiment filters need to wrap before the controls become too narrow. */
 .pm-unified-list-page.eln-prototype-page .eln-filter-row {
   display: grid;
-  grid-template-columns: minmax(220px, 1.5fr) repeat(6, minmax(120px, 1fr)) auto;
+  grid-template-columns: minmax(220px, 280px) repeat(6, minmax(120px, 155px)) auto;
   align-items: center;
+  justify-content: start;
+  gap: 0;
   overflow: visible;
 }
 
 .pm-unified-list-page.eln-prototype-page .eln-filter-row > .ant-input-affix-wrapper,
 .pm-unified-list-page.eln-prototype-page .eln-filter-row > .ant-select {
+  width: 100% !important;
+  min-width: 0;
+  max-width: none;
+  flex: none;
+}
+
+/* Override the legacy second-select width so status and project stay side by side. */
+.pm-unified-list-page.eln-prototype-page .eln-filter-row > .ant-select:nth-of-type(2) {
   width: 100% !important;
   min-width: 0;
   max-width: none;
@@ -717,4 +727,50 @@
   .pm-unified-list-page.eln-prototype-page .eln-filter-row {
     grid-template-columns: 1fr;
   }
+}
+
+/* The project name query is the primary search field, so give it more room
+   on desktop without changing the compact responsive filter layout. */
+@media (min-width: 1101px) {
+  .pm-unified-list-page.pm-project-list-page .pm-filter-row > .pm-project-keyword-filter {
+    width: 300px !important;
+    min-width: 280px;
+    max-width: 360px;
+    flex: 1 1 300px;
+  }
+}
+
+/* Keep the customer, project and experiment query controls visually aligned.
+   This comes after the page-specific legacy rules so the experiment grid
+   cannot reset its spacing to zero. */
+.pm-unified-list-page.cm-customer-list-page .cm-filter-row,
+.pm-unified-list-page.pm-project-list-page .pm-filter-row,
+.pm-unified-list-page.eln-prototype-page .eln-filter-row {
+  align-items: center;
+  column-gap: 10px;
+  row-gap: 10px;
+}
+
+.pm-unified-list-page.cm-customer-list-page .cm-filter-row > .ant-input-affix-wrapper,
+.pm-unified-list-page.cm-customer-list-page .cm-filter-row > .ant-select,
+.pm-unified-list-page.cm-customer-list-page .cm-filter-row > .ant-btn,
+.pm-unified-list-page.pm-project-list-page .pm-filter-row > .ant-input-affix-wrapper,
+.pm-unified-list-page.pm-project-list-page .pm-filter-row > .ant-picker,
+.pm-unified-list-page.pm-project-list-page .pm-filter-row > .ant-select,
+.pm-unified-list-page.pm-project-list-page .pm-filter-row > .ant-btn,
+.pm-unified-list-page.eln-prototype-page .eln-filter-row > .ant-input-affix-wrapper,
+.pm-unified-list-page.eln-prototype-page .eln-filter-row > .ant-select,
+.pm-unified-list-page.eln-prototype-page .eln-filter-row > .ant-btn {
+  box-sizing: border-box;
+  height: 36px;
+  min-height: 36px;
+}
+
+.pm-unified-list-page.cm-customer-list-page .cm-filter-row > .ant-select .ant-select-selector,
+.pm-unified-list-page.pm-project-list-page .pm-filter-row > .ant-select .ant-select-selector,
+.pm-unified-list-page.eln-prototype-page .eln-filter-row > .ant-select .ant-select-selector {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  box-sizing: border-box;
 }

@@ -224,6 +224,14 @@ export const productionOrderRecordApi = {
     return response.data.data;
   },
 
+  async export(id: string) {
+    const response = await httpClient.get<Blob>(
+      `/api/v1/production-orders/records/${id}/export`,
+      { responseType: 'blob' },
+    );
+    return response.data;
+  },
+
   async publish(id: string) {
     const response = await httpClient.post<ApiResponse<ProductionUploadVersion>>(
       `/api/v1/production-orders/records/${id}/publish`,

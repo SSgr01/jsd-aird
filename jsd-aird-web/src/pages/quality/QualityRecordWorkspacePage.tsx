@@ -2,6 +2,7 @@ import {
   ArrowLeftOutlined,
   DownloadOutlined,
   EyeOutlined,
+  FileOutlined,
   HistoryOutlined,
   SaveOutlined,
 } from '@ant-design/icons';
@@ -197,6 +198,7 @@ export function QualityRecordWorkspacePage() {
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [publishing, setPublishing] = useState(false);
+  const [downloadingSource, setDownloadingSource] = useState(false);
   const [error, setError] = useState<string>();
   const [workbook, setWorkbook] = useState<Record<string, unknown>>();
   const editorRef = useRef<EditorHandle>(null);
@@ -265,6 +267,20 @@ export function QualityRecordWorkspacePage() {
       msg.success('品管数据已导出');
     } catch (reason) {
       msg.error(reason instanceof Error ? reason.message : '品管数据导出失败');
+    }
+  };
+
+  const downloadSource = async () => {
+    if (!record?.sourceFileId) return;
+    setDownloadingSource(true);
+    try {
+      const blob = await fetchFileBlob(record.sourceFileId);
+      downloadBlob(blob, record.sourceFileName || record.displayName || record.businessNo || '品管原文');
+      msg.success('原文已下载');
+    } catch (reason) {
+      msg.error(reason instanceof Error ? reason.message : '原文下载失败');
+    } finally {
+      setDownloadingSource(false);
     }
   };
 
@@ -405,16 +421,14 @@ export function QualityRecordWorkspacePage() {
           >
             返回
           </Button>
-          <div>
-            <Typography.Text type="secondary">品管部数据 / {record.categoryName}</Typography.Text>
-            <Typography.Title level={4} style={{ margin: 0 }}>
-              {record.displayName || record.sourceFileName || record.businessNo}
-            </Typography.Title>
-            <Typography.Text type="secondary">
-              源文件：{record.sourceFileName || '未关联'} · 关联项目：
-              {[record.projectName, record.stageName, record.taskName].filter(Boolean).join(' · ') || '未关联项目'}
+          <span className="workspace-title-block">
+            <Typography.Text type="secondary" className="workspace-breadcrumb">
+              品管部数据 / {record.categoryName || '数据查看'}
             </Typography.Text>
-          </div>
+            <Typography.Text strong>
+              {record.displayName || record.sourceFileName || record.businessNo}
+            </Typography.Text>
+          </span>
           <Tag color={versions.length ? 'blue' : 'default'}>
             {versions.length ? `V${versions[0]?.versionNo ?? ''}` : '未发布'}
           </Tag>
@@ -424,6 +438,11 @@ export function QualityRecordWorkspacePage() {
           <Button icon={<DownloadOutlined />} onClick={() => void exportRecord()}>
             导出
           </Button>
+          {record.sourceFileId && (
+            <Button icon={<FileOutlined />} loading={downloadingSource} onClick={() => void downloadSource()}>
+              原文
+            </Button>
+          )}
           {selectedVersion && (
             <Button onClick={() => setSelectedVersion(undefined)}>
               返回

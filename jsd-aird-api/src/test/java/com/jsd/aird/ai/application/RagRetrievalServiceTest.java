@@ -107,7 +107,8 @@ class RagRetrievalServiceTest {
             return new KnowledgeSearchFacade.SearchResult(List.of(),
                     new KnowledgeSearchFacade.RetrievalTrace("test", 0, 0, 0, List.of()));
         });
-        when(data.search(any(), any(), anyList(), anyInt())).thenAnswer(ignored -> {
+        when(data.search(any(), any(), anyList(), any(DataSourceFileSearchFacade.AccessScope.class), anyInt()))
+                .thenAnswer(ignored -> {
             dataStarted.countDown();
             assertThat(knowledgeStarted.await(1, TimeUnit.SECONDS)).isTrue();
             return List.of();
@@ -122,7 +123,8 @@ class RagRetrievalServiceTest {
             assertThat(retrieval.trace().channels()).extracting(RagRetrievalService.ChannelTrace::status)
                     .contains("EMPTY");
             verify(knowledge).search(any(KnowledgeSearchFacade.SearchRequest.class));
-            verify(data).search(any(), eq("question"), anyList(), eq(8));
+            verify(data).search(any(), eq("question"), anyList(),
+                    any(DataSourceFileSearchFacade.AccessScope.class), eq(10));
         } finally {
             executor.shutdownNow();
         }

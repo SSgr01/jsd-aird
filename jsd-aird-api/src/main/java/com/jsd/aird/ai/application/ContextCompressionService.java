@@ -69,6 +69,11 @@ public class ContextCompressionService {
             var excerpt = evidenceText.length() <= remaining ? evidenceText
                     : evidenceText.substring(0, Math.max(0, remaining - 1)) + "…";
             chunks.add("[source=data,file=" + hit.originalName()
+                    + ",record=" + safe(hit.recordKey())
+                    + ",field=" + safe(hit.fieldName())
+                    + ",fieldCode=" + safe(hit.fieldCode())
+                    + ",sheet=" + safe(hit.sheetName())
+                    + ",cell=" + safe(hit.cellAddress())
                     + ",row=" + hit.rowNumber() + ",column=" + hit.columnName() + "] " + excerpt);
             if (excerpt.contains("[evidenceRef=" + evidenceRef + "]")) includedEvidenceRefs.add(evidenceRef);
             used += excerpt.length();
@@ -81,6 +86,10 @@ public class ContextCompressionService {
 
     private String normalized(String value) {
         return value == null ? "" : value.replaceAll("[\\r\\n\\t]+", " ").strip();
+    }
+
+    private String safe(String value) {
+        return value == null ? "" : value.replaceAll("[\\r\\n\\t,=\\]]+", " ").strip();
     }
 
     private String imageMarkdown(KnowledgeSearchFacade.SearchHit hit) {

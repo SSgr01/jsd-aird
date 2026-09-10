@@ -5,8 +5,12 @@ export type ProjectResourceType = 'KNOWLEDGE_DOCUMENT' | 'DATA_IMPORT_JOB';
 
 export interface ProjectRelationTarget {
   projectId: string;
+  /** Client-side display values; write APIs send only the hierarchy ids. */
+  projectName?: string;
   stageId?: string;
+  stageName?: string;
   taskId?: string;
+  taskName?: string;
 }
 
 export interface RelatedProjectView extends ProjectRelationTarget {
@@ -53,7 +57,7 @@ export const projectResourceApi = {
   async replaceLinks(resourceType: ProjectResourceType, resourceId: string, targets: ProjectRelationTarget[]) {
     const response = await httpClient.put<ApiResponse<RelatedProjectView[]>>(
       `/api/v1/project-resource-links/${resourceType}/${resourceId}`,
-      { targets },
+      { targets: targets.map(({ projectId, stageId, taskId }) => ({ projectId, stageId, taskId })) },
     );
     return response.data.data;
   },
@@ -61,7 +65,7 @@ export const projectResourceApi = {
     const response = await httpClient.post<ApiResponse<ProjectReference[]>>('/api/v1/project-references', {
       resourceType,
       resourceId,
-      targets,
+      targets: targets.map(({ projectId, stageId, taskId }) => ({ projectId, stageId, taskId })),
       summary,
     });
     return response.data.data;

@@ -68,7 +68,7 @@ const QUICK_MENU: QuickMenuItem[] = [
     label: 'AI 配方预测',
     icon: <BranchesOutlined />,
     color: '#f59e0b',
-    to: '/assistant?mode=formula',
+    to: '/assistant/formula-prediction',
   },
 ];
 

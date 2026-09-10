@@ -15,6 +15,7 @@ import type { MutableRefObject } from 'react';
 
 import type {
   BusinessField,
+  ExperimentImportConfiguration,
   FieldModel,
   TemplateBinding,
   TemplateFormat,
@@ -30,10 +31,12 @@ import type {
 
 import { normalizeAddress, validateAddress } from './coordinates';
 import { RecognitionReviewPanel } from './RecognitionReviewPanel';
+import { ExperimentSemanticsPanel } from './ExperimentSemanticsPanel';
+import type { ProjectionRangeTarget } from './ExperimentSemanticsPanel';
 import { locatorLabelRange, locatorValueRange, mergeLocators } from '@/features/template-workspace/locator';
 
 export type CoordinateTarget = 'labelAddress' | 'address';
-export type FieldManagerTab = 'recognition' | 'structure' | 'properties';
+export type FieldManagerTab = 'recognition' | 'structure' | 'properties' | 'experiment';
 
 interface Props {
   editable: boolean;
@@ -47,6 +50,8 @@ interface Props {
   activeTab: FieldManagerTab;
   recognitionReview?: RecognitionReview;
   recognitionBusy?: boolean;
+  experimentConfiguration: ExperimentImportConfiguration;
+  onExperimentConfigurationChange: (configuration: ExperimentImportConfiguration) => void;
   onActiveTabChange: (tab: FieldManagerTab) => void;
   onSelectRecognitionItem: (item: RecognitionReviewItem) => void;
   onConfirmRecognitionItem: (item: RecognitionReviewItem, selectedAlternativeId?: string) => void;
@@ -61,6 +66,7 @@ interface Props {
   onUpdateField: (fieldId: string, update: Partial<BusinessField>) => void;
   onUpdateCoordinates: (fieldId: string, update: Partial<Record<CoordinateTarget, string>>) => void;
   onPickCoordinate: (fieldId: string, target: CoordinateTarget) => void;
+  onPickProjectionRange: (projectionId: string, target: ProjectionRangeTarget) => void;
   onAddField: (groupId?: string) => void;
   onAddStructuredField: (
     parent: BusinessField,
@@ -94,6 +100,8 @@ export function TemplateFieldManager({
   activeTab,
   recognitionReview,
   recognitionBusy,
+  experimentConfiguration,
+  onExperimentConfigurationChange,
   onActiveTabChange,
   onSelectRecognitionItem,
   onConfirmRecognitionItem,
@@ -108,6 +116,7 @@ export function TemplateFieldManager({
   onUpdateField,
   onUpdateCoordinates,
   onPickCoordinate,
+  onPickProjectionRange,
   onAddField,
   onAddStructuredField,
   onDeleteField,
@@ -154,6 +163,16 @@ export function TemplateFieldManager({
         >
           字段属性
         </button>
+        {format === 'XLSX' && (
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'experiment'}
+            onClick={() => onActiveTabChange('experiment')}
+          >
+            实验语义
+          </button>
+        )}
       </div>
 
       {activeTab === 'recognition' && recognitionReview?.recognitionRunId && editable ? (
@@ -172,6 +191,16 @@ export function TemplateFieldManager({
           onApplyQualityIssue={onApplyQualityIssue}
           onIgnoreQualityIssue={onIgnoreQualityIssue}
           onRollbackQualityIssue={onRollbackQualityIssue}
+        />
+      ) : activeTab === 'experiment' && format === 'XLSX' ? (
+        <ExperimentSemanticsPanel
+          editable={editable}
+          configuration={experimentConfiguration}
+          fieldModel={fieldModel}
+          mapping={mapping}
+          onChange={onExperimentConfigurationChange}
+          onUpdateField={onUpdateField}
+          onPickProjectionRange={onPickProjectionRange}
         />
       ) : activeTab === 'structure' ? (
         <FieldStructure

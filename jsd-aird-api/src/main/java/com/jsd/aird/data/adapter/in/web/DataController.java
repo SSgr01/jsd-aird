@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.jsd.aird.core.api.ProjectResourceFacade.ProjectRelationTarget;
 import com.jsd.aird.data.application.DataImportService;
 import com.jsd.aird.data.application.DataWorkbookService;
+import com.jsd.aird.data.application.ExperimentAssemblyService;
 import com.jsd.aird.data.application.port.DataRepository;
 import com.jsd.aird.platform.web.RequestIdHolder;
 import com.jsd.aird.shared.api.ApiResponse;
@@ -34,15 +35,18 @@ public class DataController {
     private final com.jsd.aird.data.application.DataProjectionService projectionService;
     private final DataWorkbookService workbookService;
     private final com.jsd.aird.data.application.DataCategoryService categoryService;
+    private final ExperimentAssemblyService experimentAssemblyService;
 
     public DataController(DataImportService service,
                           com.jsd.aird.data.application.DataCategoryService categoryService,
                           com.jsd.aird.data.application.DataProjectionService projectionService,
-                          DataWorkbookService workbookService) {
+                          DataWorkbookService workbookService,
+                          ExperimentAssemblyService experimentAssemblyService) {
         this.service = service;
         this.categoryService = categoryService;
         this.projectionService = projectionService;
         this.workbookService = workbookService;
+        this.experimentAssemblyService = experimentAssemblyService;
     }
 
     @GetMapping("/templates")
@@ -54,7 +58,8 @@ public class DataController {
     public ApiResponse<DataRepository.Job> create(@Valid @RequestBody CreateRequest request) {
         return success(service.create(new DataImportService.CreateCommand(
                 request.sourceFileId(), request.templateVersionId(), request.categoryId(),
-                request.duplicateOverride(), targets(request.projectRelations()))));
+                request.duplicateOverride(), targets(request.projectRelations()),
+                request.importPurpose(), request.targetExperimentCategoryId())));
     }
 
     @GetMapping("/import-jobs/{id}")
@@ -169,7 +174,31 @@ public class DataController {
     @PostMapping("/import-jobs/{id}/commit")
     public ApiResponse<DataRepository.Job> commit(@PathVariable UUID id) {
         service.commit(id);
-        return success(service.get(id));
+        var job = service.get(id);
+        if ("EXPERIMENT_DRAFT".equals(job.importPurpose())) {
+            var plan = experimentAssemblyService.preview(id);
+            if (plan.readyCount() > 0 && plan.reviewCount() == 0 && plan.blockedCount() == 0) {
+                experimentAssemblyService.sync(id, job.targetExperimentCategoryId(), null);
+            }
+        }
+        return success(job);
+    }
+
+    @GetMapping("/import-jobs/{id}/experiments")
+    public ApiResponse<com.jsd.aird.data.application.ExperimentImportAssembler.AssemblyPlan> experimentPlan(
+            @PathVariable UUID id) {
+        return success(experimentAssemblyService.preview(id));
+    }
+
+    @PostMapping("/import-jobs/{id}/experiment-sync")
+    public ApiResponse<ExperimentAssemblyService.SyncResult> syncExperiments(
+            @PathVariable UUID id, @Valid @RequestBody ExperimentSyncRequest request) {
+        return success(experimentAssemblyService.sync(id, request.categoryId(), request.assemblyKeys()));
+    }
+
+    @GetMapping("/import-jobs/{id}/experiment-sync-status")
+    public ApiResponse<ExperimentAssemblyService.SyncStatus> experimentSyncStatus(@PathVariable UUID id) {
+        return success(experimentAssemblyService.status(id));
     }
 
     @GetMapping("/training-datasets/{id}")
@@ -242,7 +271,8 @@ public class DataController {
 
     public record CreateRequest(@NotNull UUID sourceFileId, @NotNull UUID templateVersionId,
                                 UUID categoryId, boolean duplicateOverride,
-                                List<@Valid ProjectRelationRequest> projectRelations) {}
+                                List<@Valid ProjectRelationRequest> projectRelations,
+                                String importPurpose, UUID targetExperimentCategoryId) {}
     public record ProjectRelationRequest(@NotNull UUID projectId, UUID stageId, UUID taskId) {}
 
     public record CategoryRequest(@NotBlank String name, @Size(max = 240) String description) {}
@@ -264,6 +294,7 @@ public class DataController {
     public record ExcludeRecordRequest(boolean excluded, String reason) {}
     public record ComponentAnchorRequest(@NotBlank String sheetId, @NotBlank String sourceRange,
                                          @NotBlank @Size(max = 500) String reason) {}
+    public record ExperimentSyncRequest(@NotNull UUID categoryId, List<String> assemblyKeys) {}
     public record FieldRequest(String fieldId, @NotBlank String displayName, String valueType,
                                String uiType, String groupCode, String description) {}
 }

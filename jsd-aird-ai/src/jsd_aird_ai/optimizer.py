@@ -35,6 +35,7 @@ from jsd_aird_ai.contracts import (
 )
 from jsd_aird_ai.digests import canonical_sha256
 from jsd_aird_ai.errors import ErrorCode, FormulaModelError
+from jsd_aird_ai.feature_views import base_feature_view
 from jsd_aird_ai.features import FeatureBuilder, MAIN_RESIN_CODE, MAIN_RESIN_PCT
 from jsd_aird_ai.modeling import ModelBundle
 
@@ -297,9 +298,15 @@ class RecommendationEngine:
         self._baybe = baybe_adapter or BaybeOptimizerAdapter()
 
     def recommend(self, request: RecommendRequest, bundle: ModelBundle) -> RecommendationResult:
+        feature_view = getattr(bundle, "feature_view", None) or base_feature_view(request.task_profile)
+        if feature_view.scope != "BASE":
+            raise FormulaModelError(
+                ErrorCode.MODEL_NOT_READY,
+                "enhanced resin-batch models are for development scoring only; recommendations use BASE_V1",
+            )
         pool = self._pool.generate(request)
         formulas = pool.formulas
-        builder = FeatureBuilder(request.task_profile)
+        builder = FeatureBuilder(request.task_profile, feature_view)
         all_features = builder.from_api_rows(formulas, [request.context] * len(formulas))
         domain_by_target: dict[str, list[ApplicabilityDomainEvidence]] = {}
         supported_payloads: dict[str, dict[str, Any]] = {}

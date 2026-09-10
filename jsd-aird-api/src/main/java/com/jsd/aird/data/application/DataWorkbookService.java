@@ -65,6 +65,18 @@ public class DataWorkbookService {
                 fieldDefinitions, fields, definition);
     }
 
+    /** Returns the uploaded workbook instance used by the background T04 assembler. */
+    JsonNode sourceSnapshotForExperiment(UUID organizationId, UUID importJobId) {
+        var job = repository.findJob(organizationId, importJobId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "导入任务不存在"));
+        var file = requireFile(organizationId, job.sourceFileId());
+        var snapshot = sourceSnapshot(file, job.sourceFormat(), repository.listSheets(organizationId, importJobId));
+        if (snapshot == null || !snapshot.isObject() || snapshot.isEmpty()) {
+            throw new ApiException(ApiErrorCode.FILE_NOT_READY, "导入文件缺少可编辑工作簿快照");
+        }
+        return snapshot.deepCopy();
+    }
+
     private FileObjectRepository.FileObject requireFile(UUID organizationId, UUID fileId) {
         return files.find(organizationId, fileId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.FILE_NOT_READY, "原始数据文件不存在"));

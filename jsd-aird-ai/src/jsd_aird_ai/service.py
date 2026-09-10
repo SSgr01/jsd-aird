@@ -4,6 +4,8 @@ from jsd_aird_ai.artifacts import ArtifactClient, LruCache
 from jsd_aird_ai.contracts import (
     ClassificationPrediction,
     DomainStatus,
+    GenerateValidationFoldsRequest,
+    GenerateValidationFoldsResponse,
     Prediction,
     OrdinalPrediction,
     RecommendRequest,
@@ -24,6 +26,7 @@ from jsd_aird_ai.modeling import ModelBundle, ModelTrainer, load_bundle
 from jsd_aird_ai.optimizer import RecommendationEngine
 from jsd_aird_ai.settings import Settings
 from jsd_aird_ai.snapshot import SnapshotValidator
+from jsd_aird_ai.validation_folds import ValidationFoldService, load_validation_artifacts
 
 
 class FormulaModelService:
@@ -31,20 +34,39 @@ class FormulaModelService:
         self._artifacts = ArtifactClient(settings)
         self._snapshots = SnapshotValidator(self._artifacts)
         self._trainer = ModelTrainer(thread_count=settings.model_threads)
+        self._validation_folds = ValidationFoldService(self._artifacts)
         self._recommendations = RecommendationEngine()
         self._cache: LruCache[ModelBundle] = LruCache(settings.model_cache_entries)
 
     def validate_snapshot(self, request: ValidateSnapshotRequest) -> SnapshotValidationResponse:
         return self._snapshots.load_and_validate(request).response
 
+    def generate_validation_folds(
+        self, request: GenerateValidationFoldsRequest
+    ) -> GenerateValidationFoldsResponse:
+        snapshot = self._snapshots.load_and_validate(request)
+        return self._validation_folds.generate(request, snapshot)
+
     def train(self, request: TrainRequest) -> TrainResponse:
         snapshot = self._snapshots.load_and_validate(request)
+        validation_artifacts = load_validation_artifacts(
+            self._artifacts,
+            snapshot=snapshot,
+            task_profile=request.task_profile,
+            task_profile_hash=request.task_profile_hash,
+            snapshot_hash=request.snapshot_hash,
+            seed=request.seed,
+            validation_folds_ref=request.validation_folds,
+            baseline_ref=request.t06_baseline,
+        )
         bundle_bytes, target_results, warnings = self._trainer.train(
             snapshot,
             request.task_profile,
             request.task_profile_hash,
             request.snapshot_hash,
             request.seed,
+            validation_artifacts,
+            request.feature_view,
         )
         digest = sha256_bytes(bundle_bytes)
         self._artifacts.write(request.output, bundle_bytes)
@@ -66,7 +88,7 @@ class FormulaModelService:
 
     def score(self, request: ScoreRequest) -> ScoreResponse:
         bundle = self._bundle(request)
-        builder = FeatureBuilder(request.task_profile)
+        builder = FeatureBuilder(bundle.profile, bundle.feature_view)
         features = builder.from_api_rows(
             [row.formula for row in request.rows],
             [row.context for row in request.rows],

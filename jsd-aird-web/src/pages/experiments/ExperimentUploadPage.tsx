@@ -21,6 +21,7 @@ import {
   type ProjectTask,
 } from '@/services/project/project-api';
 import { downloadFile } from '@/services/files/file-api';
+import { dataApi, type DataTemplateOption } from '@/services/data/data-api';
 
 type LinkNode = {
   value: string;
@@ -82,6 +83,8 @@ export function ExperimentUploadPage() {
   const [ocrOpen, setOcrOpen] = useState(false);
   const [ocrFiles, setOcrFiles] = useState<UploadFile[]>([]);
   const [ocrSubmitting, setOcrSubmitting] = useState(false);
+  const [experimentTemplates, setExperimentTemplates] = useState<DataTemplateOption[]>([]);
+  const [templateVersionId, setTemplateVersionId] = useState<string>();
   const previousExpanded = useRef<string[]>([]);
   const load = useCallback(async () => {
     setLoading(true);
@@ -110,6 +113,10 @@ export function ExperimentUploadPage() {
           })),
         ),
       ),
+      dataApi.listTemplates().then((items) => {
+        const values = items.filter((item) => item.importContractVersion === 9 && item.templateUsage === 'EXPERIMENT_DATA');
+        setExperimentTemplates(values); setTemplateVersionId((current) => current ?? values[0]?.versionId);
+      }),
     ]);
   }, [load]);
   const expandRelation = (keys: Array<string | number>) => {
@@ -167,8 +174,21 @@ export function ExperimentUploadPage() {
     }
     setUploading(true);
     let failed = 0;
+    let firstDataJobId: string | undefined;
     for (const file of sourceFiles) {
       try {
+        if (/\.(xlsx|xls|csv)$/i.test(file.name)) {
+          if (!templateVersionId) throw new Error('请先选择已发布的实验数据模板');
+          const category = categories.find((item) => item.name === location);
+          if (!category) throw new Error('请先选择实验分类');
+          const staged = await dataApi.stageSource(file);
+          const relation = link ? findLink(linkTree, link) : {};
+          const job = await dataApi.createJob({ sourceFileId: staged.fileId, templateVersionId,
+            importPurpose: 'EXPERIMENT_DRAFT', targetExperimentCategoryId: category.id,
+            projectRelations: relation.projectId ? [{ projectId: relation.projectId, stageId: relation.stageId, taskId: relation.taskId }] : [] });
+          firstDataJobId ??= job.id;
+          continue;
+        }
         const staged = await stageExperimentFile(file);
         const category = categories.find((item) => item.name === location);
         await importExperimentFile({
@@ -192,6 +212,7 @@ export function ExperimentUploadPage() {
     setUploading(false);
     setFiles([]);
     await load();
+    if (firstDataJobId) navigate(`/data/import-jobs/${firstDataJobId}`);
     if (failed)
       void message.warning(`${sourceFiles.length - failed} 个文件导入成功，${failed} 个失败`);
     else void message.success(`已成功导入 ${sourceFiles.length} 个实验文件`);
@@ -325,6 +346,10 @@ export function ExperimentUploadPage() {
           </Form.Item>
           <Form.Item label="权限可见">
             <Select value={visibility} onChange={setVisibility} options={visibilityOptions} />
+          </Form.Item>
+          <Form.Item label="Excel实验模板" extra="XLSX / XLS / CSV 将进入数据中心完成预览和确认；Word、PDF和图片继续原实验导入流程。">
+            <Select showSearch optionFilterProp="label" value={templateVersionId} onChange={setTemplateVersionId}
+              placeholder="选择已发布的实验数据模板" options={experimentTemplates.map((item) => ({ value: item.versionId, label: `${item.name} · V${item.versionNo}` }))} />
           </Form.Item>
         </Form>
       }

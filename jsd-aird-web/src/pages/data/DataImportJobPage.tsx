@@ -45,8 +45,11 @@ import {
   type DataMapping,
   type DataPreview,
   type DataWorkbookSnapshot,
+  type ExperimentAssemblyPlan,
+  type ExperimentAssemblyLink,
 } from '@/services/data/data-api';
 import { projectResourceApi, type ProjectRelationTarget, type RelatedProjectView } from '@/services/project/project-resource-api';
+import { listCategories as listExperimentCategories, type Category as ExperimentCategory } from '@/services/experiments/experiment-api';
 
 type PanelTab = 'data' | 'structure' | 'mapping';
 
@@ -85,9 +88,15 @@ export function DataImportJobPage() {
   const [relatedProjects, setRelatedProjects] = useState<RelatedProjectView[]>([]);
   const [projectRelations, setProjectRelations] = useState<ProjectRelationTarget[]>([]);
   const [relationOpen, setRelationOpen] = useState(false);
+  const [assemblyPlan, setAssemblyPlan] = useState<ExperimentAssemblyPlan>();
+  const [assemblyLinks, setAssemblyLinks] = useState<ExperimentAssemblyLink[]>([]);
+  const [experimentCategories, setExperimentCategories] = useState<ExperimentCategory[]>([]);
+  const [experimentCategoryId, setExperimentCategoryId] = useState<string>();
+  const [assemblyLoading, setAssemblyLoading] = useState(false);
   const canUpdate = usePermission('data.update');
   const canAssign = usePermission('project.assign');
   const canCreate = usePermission('data.create');
+  const canCreateExperiment = usePermission('experiment.create');
 
   const load = useCallback(async (options: { silent?: boolean; preserveSnapshot?: boolean; skipWorkbook?: boolean } = {}) => {
     if (!options.silent) setLoading(true);
@@ -124,6 +133,23 @@ export function DataImportJobPage() {
     if (!preview?.job.categoryId) { setCategoryName(undefined); return; }
     void dataApi.listCategories().then((items) => setCategoryName(items.find((item) => item.id === preview.job.categoryId)?.name)).catch(() => setCategoryName(undefined));
   }, [preview?.job.categoryId]);
+
+  const loadAssembly = useCallback(async () => {
+    if (preview?.job.status !== 'COMPLETED' || preview.templateContract?.importContractVersion !== 9) return;
+    try {
+      const [sync, categories] = await Promise.all([dataApi.experimentSyncStatus(id), listExperimentCategories()]);
+      setAssemblyPlan(sync.plan); setAssemblyLinks(sync.links); setExperimentCategories(categories);
+      setExperimentCategoryId((current) => current || preview.job.targetExperimentCategoryId || categories[0]?.id);
+    } catch (error) {
+      void message.error(error instanceof Error ? error.message : '实验草稿组装计划加载失败');
+    }
+  }, [id, message, preview]);
+  useEffect(() => { void loadAssembly(); }, [loadAssembly]);
+  useEffect(() => {
+    if (!assemblyLinks.some((item) => item.status === 'RUNNING')) return undefined;
+    const timer = window.setInterval(() => void loadAssembly(), 1600);
+    return () => window.clearInterval(timer);
+  }, [assemblyLinks, loadAssembly]);
 
   const processing = Boolean(preview && ['PARSING', 'VALIDATING', 'COMMITTING'].includes(preview.job.status));
   useEffect(() => {
@@ -291,6 +317,18 @@ export function DataImportJobPage() {
   };
 
   const compatibility = preview.job.compatibilityStatus || 'LEGACY';
+  const syncExperimentDrafts = async () => {
+    if (!experimentCategoryId) { void message.warning('请先选择实验分类'); return; }
+    setAssemblyLoading(true);
+    try {
+      const result = await dataApi.syncExperiments(id, { categoryId: experimentCategoryId });
+      void message.success(result.acceptedCount === 1 ? '已提交实验草稿创建任务' : '没有重复提交实验草稿');
+      await loadAssembly();
+      window.setTimeout(() => { void loadAssembly(); }, 1000);
+    }
+    catch (error) { void message.error(error instanceof Error ? error.message : '实验草稿创建失败'); }
+    finally { setAssemblyLoading(false); }
+  };
   const saveProjectRelations = async () => {
     setSaving(true);
     try {
@@ -408,7 +446,17 @@ export function DataImportJobPage() {
         ) : null}
       </>}
       footer={preview.job.status === 'COMPLETED' ? (
-        <Space><CheckCircleOutlined className="data-success-icon" /><Typography.Text strong>导入已完成，来源文件已归档</Typography.Text><Button type="primary" onClick={() => navigate('/data/view')}>查看来源文件</Button></Space>
+        <Space direction="vertical" style={{ width: '100%' }} size={12}>
+          <Space><CheckCircleOutlined className="data-success-icon" /><Typography.Text strong>导入已完成，来源文件已归档</Typography.Text><Button onClick={() => navigate('/data/view')}>查看来源文件</Button></Space>
+          {preview.templateContract?.importContractVersion === 9 && assemblyPlan ? <div style={{ width: '100%' }}>
+            <Typography.Title level={5}>生成实验草稿</Typography.Title>
+            <Alert style={{ marginTop: 8 }} type="info" showIcon message="整份文件生成一条实验草稿" description={`已保留 ${assemblyPlan.sourceRecordCount} 条物理来源记录，形成 ${assemblyPlan.sourceGroupCount} 个独立来源组和 ${assemblyPlan.sourceContextCount} 个 Sheet 上下文；其中有 ${assemblyPlan.sourceIdentityCount} 个不同来源编号，编号重复不会自动合并。`} />
+            <Space wrap style={{ marginTop: 8 }}><Tag color="green">可创建 {assemblyPlan.readyCount}</Tag><Tag color={assemblyPlan.blockedCount ? 'red' : 'default'}>阻断 {assemblyPlan.blockedCount}</Tag></Space>
+            {assemblyPlan.candidates.filter((item) => item.status === 'BLOCKED').map((item) => <Alert key={item.assemblyKey} style={{ marginTop: 8 }} type="error" showIcon message="当前文件无法生成实验草稿" description={<Space direction="vertical">{item.conflicts.map((issue) => <span key={issue.code}>{issue.message}</span>)}</Space>} />)}
+            {assemblyLinks.filter((item) => item.experimentId).map((item) => <Button key={item.assemblyKey} type="link" onClick={() => navigate(`/experiments/${item.experimentId}`)}>{item.experimentNo} · 查看实验草稿</Button>)}
+            {canCreateExperiment && assemblyPlan.readyCount > 0 ? <Space style={{ marginTop: 10 }} wrap><Select style={{ width: 240 }} placeholder="选择实验分类" value={experimentCategoryId} options={experimentCategories.map((item) => ({ value: item.id, label: item.name }))} onChange={setExperimentCategoryId} /><Button type="primary" loading={assemblyLoading} onClick={() => void syncExperimentDrafts()}>创建实验草稿</Button></Space> : null}
+          </div> : null}
+        </Space>
       ) : undefined}
     >
       <FilePreviewModal open={Boolean(previewFile)} file={previewFile} onClose={() => setPreviewFile(undefined)} showSpreadsheetMerges={false} />
@@ -458,7 +506,20 @@ function WorkbenchNotice({ preview, processing }: { preview: DataPreview; proces
   if (preview.job.status === 'FAILED') return <Alert banner showIcon type="error" message={preview.job.errorMessage || '文件处理失败，请检查原文件。'} />;
   if (preview.job.compatibilityStatus === 'INCOMPATIBLE') return <Alert banner showIcon type="error" message="当前文件与所选模板不匹配，请选择正确模板或检查表头。" />;
   if (preview.job.compatibilityStatus === 'REVIEW_REQUIRED') return <Alert banner showIcon type="warning" message="文件已读取，部分字段位置需要确认。请先确认右侧字段映射，通常不需要重新制作模板。" />;
-  return <Alert banner showIcon type="success" message="文件已读取，请确认字段对应关系和实际数据。" />;
+  const contract = preview.templateContract?.contract;
+  const experimentReady = preview.templateContract?.importContractVersion === 9
+    && contract?.templateUsage === 'EXPERIMENT_DATA';
+  return <Alert
+    banner
+    showIcon
+    type="success"
+    message={experimentReady ? '文件已读取 · 实验数据模板' : '文件已读取，请确认字段对应关系和实际数据。'}
+    description={experimentReady
+      ? preview.job.importPurpose === 'EXPERIMENT_DRAFT'
+        ? '整份文件对应一个实验；文件内编号只是来源标签和关联证据，不会自动合并跨 Sheet 记录。数据提交后自动生成一条实验草稿。'
+        : '整份文件对应一个实验；文件内编号只是来源标签和关联证据，不会自动合并跨 Sheet 记录。当前只保存数据和来源信息。'
+      : undefined}
+  />;
 }
 
 function CompatibilityPanel({ preview, readOnly, onLocateComponent, onFocus }: {

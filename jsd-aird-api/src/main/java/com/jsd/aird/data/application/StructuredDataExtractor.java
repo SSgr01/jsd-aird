@@ -37,6 +37,20 @@ final class StructuredDataExtractor {
             int dataStart,
             int dataEnd
     ) {
+        return extract(sheet, definitions, bindings, dataStart, dataEnd, 8, null);
+    }
+
+    Optional<Result> extract(
+            TemplateDataImportFacade.ParsedSheet sheet,
+            List<TemplateDataImportFacade.FieldDefinition> definitions,
+            List<TemplateDataImportFacade.ImportBinding> bindings,
+            int dataStart,
+            int dataEnd,
+            int importContractVersion,
+            JsonNode importContract
+    ) {
+        var v9Experiment = importContractVersion >= 9 && importContract != null
+                && "EXPERIMENT_DATA".equals(importContract.path("templateUsage").asText(""));
         var sheetBindings = bindings.stream()
                 .filter(binding -> sameSheet(binding, sheet.sheetId(), sheet.sheetName()))
                 .toList();
@@ -48,6 +62,8 @@ final class StructuredDataExtractor {
         for (var entry : components.entrySet()) {
             var componentId = entry.getKey();
             var component = entry.getValue();
+            var identityRule = identityRule(importContract, componentId);
+            var listProjections = listProjections(importContract, componentId);
             var hasFormRegion = component.stream().anyMatch(binding ->
                     binding.mappingKind() != null
                             && binding.mappingKind().toUpperCase(Locale.ROOT).contains("FORM_REGION"));
@@ -55,15 +71,18 @@ final class StructuredDataExtractor {
                             || hasFormRegion && !isStructuredField(binding))
                     .filter(binding -> binding.fieldCode() != null && !binding.fieldCode().isBlank()).toList();
             if (!formFields.isEmpty()) {
-                var form = extractFormRegion(sheet, definitions, componentId, component, formFields, dataStart, dataEnd);
+                var form = extractFormRegion(sheet, definitions, componentId, component, formFields, dataStart, dataEnd,
+                        v9Experiment, identityRule);
                 if (!form.rows().isEmpty()) formResults.put(entry.getKey(), form);
             }
             var structuredFields = component.stream().filter(this::isStructuredField).toList();
             Result structured = null;
             if (!structuredFields.isEmpty()) {
                 structured = structuredFields.stream().anyMatch(this::isColumnBinding)
-                        ? extractColumnTable(sheet, definitions, componentId, structuredFields, dataStart, dataEnd)
-                        : extractRowTable(sheet, definitions, componentId, structuredFields, dataStart, dataEnd);
+                        ? extractColumnTable(sheet, definitions, componentId, structuredFields, dataStart, dataEnd,
+                        v9Experiment, identityRule, listProjections)
+                        : extractRowTable(sheet, definitions, componentId, structuredFields, dataStart, dataEnd,
+                        v9Experiment, identityRule, listProjections);
             }
             if (structured != null && !structured.rows().isEmpty()) {
                 var form = declaredFormContext(entry.getKey(), component, formResults);
@@ -147,7 +166,9 @@ final class StructuredDataExtractor {
             List<TemplateDataImportFacade.ImportBinding> allBindings,
             List<TemplateDataImportFacade.ImportBinding> fields,
             int dataStart,
-            int dataEnd
+            int dataEnd,
+            boolean v9Experiment,
+            JsonNode identityRule
     ) {
         var region = allBindings.stream().filter(binding -> binding.mappingKind().toUpperCase(Locale.ROOT)
                 .contains("FORM_REGION")).findFirst().orElse(null);
@@ -192,12 +213,11 @@ final class StructuredDataExtractor {
                 raw.put(key, valueCell.value());
                 putCell(metadata, key, cellMetadata(sheet, valueCell.row(), valueCell.column(), binding));
                 nonBlank |= !valueCell.value().isBlank();
-                if (binding.identity() && !valueCell.value().isBlank()) identity = valueCell.value();
+                if (isIdentityBinding(binding, v9Experiment) && !valueCell.value().isBlank()) identity = valueCell.value();
             }
             if (!nonBlank) continue;
-            metadata.put("recordKey", identity == null || identity.isBlank()
-                    ? sheet.sheetId() + ":" + componentId + ":form:" + block : identity);
-            metadata.put("identitySynthetic", identity == null || identity.isBlank());
+            putRecordIdentity(metadata, sheet.sheetId(), componentId, "FORM", block + 1,
+                    identity, identityRule, v9Experiment);
             rows.add(row(raw, metadata, sheet.sheetId(), regionRange.get().startRow() + block * stride));
         }
         return new Result(shape, mappings, rows);
@@ -235,14 +255,18 @@ final class StructuredDataExtractor {
             String componentId,
             List<TemplateDataImportFacade.ImportBinding> fields,
             int dataStart,
-            int dataEnd
+            int dataEnd,
+            boolean v9Experiment,
+            JsonNode identityRule,
+            List<ListProjection> listProjections
     ) {
         var ranges = fields.stream().map(binding -> range(binding.locator(), false))
                 .filter(Optional::isPresent).map(Optional::get).toList();
         if (ranges.isEmpty()) return new Result("ROW_TABLE", List.of(), List.of());
         var start = Math.max(dataStart, ranges.stream().mapToInt(Range::startRow).min().orElse(dataStart));
         var end = Math.min(dataEnd, ranges.stream().mapToInt(Range::endRow).max().orElse(dataEnd));
-        var mappings = fieldMappings(sheet.sheetId(), componentId, fields, definitions, "ROW_TABLE");
+        var mappings = new ArrayList<>(fieldMappings(sheet.sheetId(), componentId, fields, definitions, "ROW_TABLE"));
+        mappings.addAll(listProjectionMappings(sheet, componentId, listProjections));
         var rows = new ArrayList<DataRepository.Row>();
         for (int rowNumber = start; rowNumber <= end; rowNumber++) {
             var raw = objectMapper.createObjectNode();
@@ -259,15 +283,18 @@ final class StructuredDataExtractor {
                 putCell(metadata, key, cellMetadata(sheet, rowNumber, fieldRange.startColumn(), binding));
                 nonBlank |= !value.isBlank();
                 nonSequenceBlank |= !value.isBlank() && !isGeneratedSequenceField(binding);
-                if (binding.identity() && !value.isBlank()) identity = value;
+                if (isIdentityBinding(binding, v9Experiment) && !value.isBlank()) identity = value;
             }
+            var projected = projectListItems(sheet, componentId, listProjections, "ROW", rowNumber,
+                    raw, metadata);
+            nonBlank |= projected;
+            nonSequenceBlank |= projected;
             // Preformatted templates commonly pre-fill the row sequence while
             // leaving every business input blank. Such reserved rows are not
             // records and must not enter review, RAG or training projections.
             if (!nonBlank || !nonSequenceBlank || aggregateRow(raw)) continue;
-            metadata.put("recordKey", identity == null || identity.isBlank()
-                    ? sheet.sheetId() + ":" + componentId + ":row:" + rowNumber : identity);
-            metadata.put("identitySynthetic", identity == null || identity.isBlank());
+            putRecordIdentity(metadata, sheet.sheetId(), componentId, "ROW", rowNumber - start + 1,
+                    identity, identityRule, v9Experiment);
             rows.add(row(raw, metadata, sheet.sheetId(), rowNumber));
         }
         return new Result("ROW_TABLE", mappings, rows);
@@ -279,14 +306,18 @@ final class StructuredDataExtractor {
             String componentId,
             List<TemplateDataImportFacade.ImportBinding> fields,
             int dataStart,
-            int dataEnd
+            int dataEnd,
+            boolean v9Experiment,
+            JsonNode identityRule,
+            List<ListProjection> listProjections
     ) {
         var ranges = fields.stream().map(binding -> range(binding.locator(), false))
                 .filter(Optional::isPresent).map(Optional::get).toList();
         if (ranges.isEmpty()) return new Result("COLUMN_TABLE", List.of(), List.of());
         var start = ranges.stream().mapToInt(Range::startColumn).min().orElse(1);
         var end = ranges.stream().mapToInt(Range::endColumn).max().orElse(start);
-        var mappings = fieldMappings(sheet.sheetId(), componentId, fields, definitions, "COLUMN_TABLE");
+        var mappings = new ArrayList<>(fieldMappings(sheet.sheetId(), componentId, fields, definitions, "COLUMN_TABLE"));
+        mappings.addAll(listProjectionMappings(sheet, componentId, listProjections));
         var rows = new ArrayList<DataRepository.Row>();
         int recordIndex = 0;
         for (int column = start; column <= end; column++) {
@@ -303,16 +334,246 @@ final class StructuredDataExtractor {
                 raw.put(key, value);
                 putCell(metadata, key, cellMetadata(sheet, sourceRow, column, binding));
                 nonBlank |= !value.isBlank();
-                if (binding.identity() && !value.isBlank()) identity = value;
+                if (isIdentityBinding(binding, v9Experiment) && !value.isBlank()) identity = value;
             }
+            nonBlank |= projectListItems(sheet, componentId, listProjections, "COLUMN", column,
+                    raw, metadata);
             if (!nonBlank || aggregateRow(raw)) continue;
             recordIndex++;
-            metadata.put("recordKey", identity == null || identity.isBlank()
-                    ? sheet.sheetId() + ":" + componentId + ":column:" + column : identity);
-            metadata.put("identitySynthetic", identity == null || identity.isBlank());
+            putRecordIdentity(metadata, sheet.sheetId(), componentId, "COLUMN", column - start + 1,
+                    identity, identityRule, v9Experiment);
             rows.add(row(raw, metadata, sheet.sheetId(), recordIndex));
         }
         return new Result("COLUMN_TABLE", mappings, rows);
+    }
+
+    private JsonNode identityRule(JsonNode contract, String componentId) {
+        if (contract == null) return objectMapper.createObjectNode();
+        for (var identity : contract.path("experimentImport").path("identities")) {
+            if (componentId.equals(identity.path("componentId").asText(""))) return identity;
+        }
+        return objectMapper.createObjectNode();
+    }
+
+    private List<ListProjection> listProjections(JsonNode contract, String componentId) {
+        var result = new ArrayList<ListProjection>();
+        if (contract == null) return result;
+        for (var projection : contract.path("listProjections")) {
+            if (!componentId.equals(projection.path("componentId").asText(""))) continue;
+            var labelRange = parseRange(projection.path("labelRange").asText(""));
+            var valueRange = parseRange(projection.path("valueRange").asText(""));
+            if (labelRange.isEmpty() || valueRange.isEmpty()) continue;
+            var unitRange = parseRange(projection.path("unitRange").asText(""));
+            result.add(new ListProjection(
+                    projection.path("listProjectionId").asText(""),
+                    projection.path("domain").asText("OTHER"),
+                    componentId,
+                    projection.path("parentBindingId").asText(componentId),
+                    projection.path("recordAxis").asText(""),
+                    projection.path("itemAxis").asText(""),
+                    labelRange.get(), valueRange.get(), unitRange.orElse(null),
+                    projection.path("labelSemantic").asText("DYNAMIC_VALUE"),
+                    projection.path("valueSemantic").asText("DYNAMIC_VALUE")));
+        }
+        return List.copyOf(result);
+    }
+
+    private List<DataRepository.Mapping> listProjectionMappings(
+            TemplateDataImportFacade.ParsedSheet sheet,
+            String componentId,
+            List<ListProjection> projections
+    ) {
+        var result = new ArrayList<DataRepository.Mapping>();
+        for (var projection : projections) {
+            var itemCount = "ROW".equals(projection.itemAxis())
+                    ? projection.labelRange().endRow() - projection.labelRange().startRow() + 1
+                    : projection.labelRange().endColumn() - projection.labelRange().startColumn() + 1;
+            for (int offset = 0; offset < itemCount; offset++) {
+                var labelRow = projection.labelRange().startRow() + ("ROW".equals(projection.itemAxis()) ? offset : 0);
+                var labelColumn = projection.labelRange().startColumn() + ("COLUMN".equals(projection.itemAxis()) ? offset : 0);
+                var label = value(sheet.rows(), labelRow, labelColumn);
+                if (label.isBlank()) continue;
+                var unitCell = projectionUnitCell(projection, offset);
+                var rawUnit = unitCell == null ? "" : value(sheet.rows(), unitCell.row(), unitCell.column());
+                var ordinal = offset + 1;
+                var bindingId = matrixBindingId(projection.id(), ordinal);
+                var itemSourceKey = "MATRIX:" + projection.id() + ":" + ordinal;
+                var dataPath = "/x-jsd-list-projections/" + projection.id() + "/" + ordinal
+                        + "/" + projection.valueSemantic().toLowerCase(Locale.ROOT);
+                var detail = objectMapper.createObjectNode()
+                        .put("dataPath", dataPath)
+                        .put("structured", true)
+                        .put("componentId", componentId)
+                        .put("shape", "LIST_MATRIX")
+                        .put("bindingId", bindingId)
+                        .put("parentBindingId", projection.parentBindingId())
+                        .put("mappingKind", "LIST_PROJECTION")
+                        .put("identity", false)
+                        .put("required", false)
+                        .put("trainingEligible", false)
+                        .put("trainingRole", "EXCLUDE")
+                        .put("ragEligible", true)
+                        .put("labelPath", label)
+                        .put("valueSource", "INPUT")
+                        .put("listProjectionId", projection.id())
+                        .put("itemSourceKey", itemSourceKey)
+                        .put("itemLabel", label)
+                        .put("targetPath", targetPath(projection.domain(), projection.valueSemantic()));
+                detail.set("experimentField", objectMapper.createObjectNode()
+                        .put("domain", projection.domain()).put("field", projection.valueSemantic()));
+                detail.set("itemLabelField", objectMapper.createObjectNode()
+                        .put("domain", projection.domain()).put("field", projection.labelSemantic()));
+                detail.set("labelSource", cellMetadata(sheet, labelRow, labelColumn));
+                if (unitCell != null) {
+                    detail.set("unitSource", cellMetadata(sheet, unitCell.row(), unitCell.column()));
+                }
+                result.add(new DataRepository.Mapping(null, sheet.sheetId(), matrixKey(projection.id(), ordinal),
+                        label, projection.domain() + "." + projection.valueSemantic(), label, "MAP", "TEXT",
+                        rawUnit.isBlank() ? null : rawUnit, rawUnit.isBlank() ? null : rawUnit,
+                        detail, "MATCHED"));
+            }
+        }
+        return List.copyOf(result);
+    }
+
+    private boolean projectListItems(
+            TemplateDataImportFacade.ParsedSheet sheet,
+            String componentId,
+            List<ListProjection> projections,
+            String recordAxis,
+            int recordCoordinate,
+            ObjectNode raw,
+            ObjectNode metadata
+    ) {
+        var emitted = false;
+        for (var projection : projections) {
+            if (!recordAxis.equals(projection.recordAxis())) continue;
+            if ("COLUMN".equals(recordAxis)
+                    && (recordCoordinate < projection.valueRange().startColumn()
+                    || recordCoordinate > projection.valueRange().endColumn())) continue;
+            if ("ROW".equals(recordAxis)
+                    && (recordCoordinate < projection.valueRange().startRow()
+                    || recordCoordinate > projection.valueRange().endRow())) continue;
+            var itemCount = "ROW".equals(projection.itemAxis())
+                    ? projection.labelRange().endRow() - projection.labelRange().startRow() + 1
+                    : projection.labelRange().endColumn() - projection.labelRange().startColumn() + 1;
+            for (int offset = 0; offset < itemCount; offset++) {
+                var labelRow = projection.labelRange().startRow() + ("ROW".equals(projection.itemAxis()) ? offset : 0);
+                var labelColumn = projection.labelRange().startColumn() + ("COLUMN".equals(projection.itemAxis()) ? offset : 0);
+                var label = value(sheet.rows(), labelRow, labelColumn);
+                if (label.isBlank()) continue;
+                var unitCell = projectionUnitCell(projection, offset);
+                var rawUnit = unitCell == null ? "" : value(sheet.rows(), unitCell.row(), unitCell.column());
+                var valueRow = "ROW".equals(projection.itemAxis())
+                        ? projection.valueRange().startRow() + offset : recordCoordinate;
+                var valueColumn = "COLUMN".equals(projection.itemAxis())
+                        ? projection.valueRange().startColumn() + offset : recordCoordinate;
+                var rawValue = value(sheet.rows(), valueRow, valueColumn);
+                var ordinal = offset + 1;
+                var key = matrixKey(projection.id(), ordinal);
+                raw.put(key, rawValue);
+                var bindingId = matrixBindingId(projection.id(), ordinal);
+                var itemSourceKey = "MATRIX:" + projection.id() + ":" + ordinal;
+                var dataPath = "/x-jsd-list-projections/" + projection.id() + "/" + ordinal
+                        + "/" + projection.valueSemantic().toLowerCase(Locale.ROOT);
+                var cell = cellMetadata(sheet, valueRow, valueColumn)
+                        .put("bindingId", bindingId)
+                        .put("parentBindingId", projection.parentBindingId())
+                        .put("valuePath", dataPath)
+                        .put("valueSource", "INPUT")
+                        .put("labelPath", label)
+                        .put("ragEligible", true)
+                        .put("componentId", componentId)
+                        .put("listProjectionId", projection.id())
+                        .put("itemSourceKey", itemSourceKey)
+                        .put("itemLabel", label)
+                        .put("rawUnit", rawUnit)
+                        .put("targetPath", targetPath(projection.domain(), projection.valueSemantic()));
+                cell.set("experimentField", objectMapper.createObjectNode()
+                        .put("domain", projection.domain()).put("field", projection.valueSemantic()));
+                cell.set("itemLabelField", objectMapper.createObjectNode()
+                        .put("domain", projection.domain()).put("field", projection.labelSemantic()));
+                cell.set("labelSource", cellMetadata(sheet, labelRow, labelColumn));
+                if (unitCell != null) {
+                    cell.set("unitSource", cellMetadata(sheet, unitCell.row(), unitCell.column()));
+                }
+                metadata.with("cells").set(key, cell);
+                emitted |= !rawValue.isBlank();
+            }
+        }
+        return emitted;
+    }
+
+    private Cell projectionUnitCell(ListProjection projection, int itemOffset) {
+        var range = projection.unitRange();
+        if (range == null) return null;
+        if (range.startRow() == range.endRow() && range.startColumn() == range.endColumn()) {
+            return new Cell(range.startRow(), range.startColumn());
+        }
+        return "ROW".equals(projection.itemAxis())
+                ? new Cell(range.startRow() + itemOffset, range.startColumn())
+                : new Cell(range.startRow(), range.startColumn() + itemOffset);
+    }
+
+    private void putRecordIdentity(ObjectNode metadata, String sheetId, String componentId, String shape,
+                                   int ordinal, String identity, JsonNode identityRule, boolean v9Experiment) {
+        if (!v9Experiment) {
+            metadata.put("recordKey", identity == null || identity.isBlank()
+                    ? sheetId + ":" + componentId + ":" + shape.toLowerCase(Locale.ROOT) + ":" + ordinal
+                    : identity);
+            metadata.put("identitySynthetic", identity == null || identity.isBlank());
+            return;
+        }
+        var recordKey = structuralRecordKey(sheetId, componentId, shape, ordinal);
+        metadata.put("recordKey", recordKey)
+                .put("recordKeyKind", "STRUCTURAL")
+                .put("sourceIdentity", identity == null ? "" : identity)
+                .put("sourceIdentityType", identityRule.path("identityType").asText(""))
+                .put("sourceIdentityBindingId", identityRule.path("bindingId").asText(""))
+                .put("sourceIdentityPresent", identity != null && !identity.isBlank())
+                .put("identitySynthetic", false);
+    }
+
+    private String structuralRecordKey(String sheetId, String componentId, String shape, int ordinal) {
+        var value = "IMPORT:STRUCT:" + sheetId + ":" + componentId + ":" + shape + ":" + ordinal;
+        if (value.length() <= 260) return value;
+        return value.substring(0, 237) + ":" + shortHash(value);
+    }
+
+    private boolean isIdentityBinding(TemplateDataImportFacade.ImportBinding binding, boolean v9Experiment) {
+        if (!v9Experiment) return binding.identity();
+        return binding.experimentField() != null
+                && "BASIC".equals(binding.experimentField().path("domain").asText(""))
+                && "SOURCE_IDENTITY".equals(binding.experimentField().path("field").asText(""));
+    }
+
+    private String matrixKey(String projectionId, int ordinal) {
+        return "m_" + shortHash(projectionId + "|" + ordinal);
+    }
+
+    private String matrixBindingId(String projectionId, int ordinal) {
+        return "matrix-" + shortHash(projectionId + "|" + ordinal);
+    }
+
+    private String targetPath(String domain, String field) {
+        var name = lowerCamel(field);
+        return switch (domain) {
+            case "FORMULA" -> "/editModel/formulaItems/*/" + name;
+            case "PROCESS" -> "/editModel/processSteps/*/" + name;
+            case "TEST" -> "/editModel/testResults/*/" + name;
+            default -> "/editModel/dynamicValues/*";
+        };
+    }
+
+    private String lowerCamel(String value) {
+        var parts = value.toLowerCase(Locale.ROOT).split("_");
+        var result = new StringBuilder(parts[0]);
+        for (int index = 1; index < parts.length; index++) {
+            if (!parts[index].isBlank()) {
+                result.append(Character.toUpperCase(parts[index].charAt(0))).append(parts[index].substring(1));
+            }
+        }
+        return result.toString();
     }
 
     private List<DataRepository.Mapping> fieldMappings(
@@ -334,13 +595,24 @@ final class StructuredDataExtractor {
                     .put("bindingId", binding.bindingId())
                     .put("mappingKind", binding.mappingKind())
                     .put("repeatAxis", binding.repeatAxis())
-                    .put("identity", binding.identity() || definition != null && definition.identity())
+                     .put("identity", binding.identity() || definition != null && definition.identity()
+                             || binding.experimentField() != null
+                             && "BASIC".equals(binding.experimentField().path("domain").asText(""))
+                             && "SOURCE_IDENTITY".equals(binding.experimentField().path("field").asText("")))
                     .put("required", binding.required() || definition != null && definition.required())
                     .put("trainingEligible", binding.trainingEligible())
                     .put("trainingRole", binding.trainingRole())
                     .put("ragEligible", binding.ragEligible())
-                    .put("labelPath", binding.labelPath() == null ? "" : binding.labelPath())
-                    .put("valueSource", binding.valueSource());
+                     .put("labelPath", binding.labelPath() == null ? "" : binding.labelPath())
+                    .put("valueSource", binding.valueSource())
+                    .put("itemSourceKey", "BINDING:"
+                            + (binding.parentBindingId() == null ? "" : binding.parentBindingId())
+                            + ":" + binding.bindingId());
+            detail.set("labelPathSegments", objectMapper.valueToTree(binding.labelPathSegments()));
+            if (binding.experimentField() != null && binding.experimentField().isObject()) {
+                detail.set("experimentField", binding.experimentField().deepCopy());
+                detail.put("targetPath", binding.targetPath() == null ? "" : binding.targetPath());
+            }
             detail.set("locator", binding.locator() == null ? objectMapper.createObjectNode() : binding.locator().deepCopy());
             return new DataRepository.Mapping(null, sheetId, bindingKey(binding),
                     definition == null ? binding.fieldCode() : definition.displayName(), binding.fieldCode(),
@@ -364,13 +636,15 @@ final class StructuredDataExtractor {
     }
 
     private ObjectNode cellMetadata(TemplateDataImportFacade.ParsedSheet sheet, int row, int column) {
-        return objectMapper.createObjectNode()
+        var metadata = objectMapper.createObjectNode()
                 .put("sheetId", sheet.sheetId())
                 .put("sheetName", sheet.sheetName())
                 .put("rowNumber", row)
                 .put("columnNumber", column)
                 .put("columnName", columnName(column))
                 .put("cellAddress", columnName(column) + row);
+        copyCellEvidence(sheet, metadata, columnName(column) + row);
+        return metadata;
     }
 
     private ObjectNode cellMetadata(TemplateDataImportFacade.ParsedSheet sheet, int row, int column,
@@ -380,21 +654,30 @@ final class StructuredDataExtractor {
                 .put("valuePath", binding.dataPath())
                 .put("valueSource", binding.valueSource() == null ? "INPUT" : binding.valueSource())
                 .put("labelPath", binding.labelPath() == null ? "" : binding.labelPath())
-                .put("ragEligible", binding.ragEligible());
-        var address = columnName(column) + row;
-        if (sheet.layoutIr() != null) {
-            for (var cell : sheet.layoutIr().path("cells")) {
-                if (!address.equalsIgnoreCase(cell.path("address").asText(""))) continue;
-                if ("FORMULA".equals(cell.path("valueSource").asText())) {
-                    for (var key : List.of("formulaExpression", "cachedValue", "calculationSource", "calculationStatus", "formulaTrustStatus")) {
-                        if (cell.has(key)) metadata.set(key, cell.path(key).deepCopy());
-                    }
-                    metadata.put("valueSource", "FORMULA");
-                }
-                break;
-            }
+                .put("ragEligible", binding.ragEligible())
+                .put("itemSourceKey", "BINDING:"
+                        + (binding.parentBindingId() == null ? "" : binding.parentBindingId())
+                        + ":" + binding.bindingId());
+        metadata.set("labelPathSegments", objectMapper.valueToTree(binding.labelPathSegments()));
+        if (binding.experimentField() != null && binding.experimentField().isObject()) {
+            metadata.set("experimentField", binding.experimentField().deepCopy());
+            metadata.put("targetPath", binding.targetPath() == null ? "" : binding.targetPath());
         }
         return metadata;
+    }
+
+    private void copyCellEvidence(TemplateDataImportFacade.ParsedSheet sheet, ObjectNode metadata, String address) {
+        if (sheet.layoutIr() == null) return;
+        for (var cell : sheet.layoutIr().path("cells")) {
+            if (!address.equalsIgnoreCase(cell.path("address").asText(""))) continue;
+            for (var key : List.of("cellValueType", "rawNumericValue", "displayValue", "numberFormat",
+                    "fractionRepresentation", "formulaExpression", "cachedValue", "calculationSource",
+                    "calculationStatus", "formulaTrustStatus")) {
+                if (cell.has(key)) metadata.set(key, cell.path(key).deepCopy());
+            }
+            if ("FORMULA".equals(cell.path("valueSource").asText())) metadata.put("valueSource", "FORMULA");
+            break;
+        }
     }
 
     private boolean aggregateRow(ObjectNode raw) {
@@ -551,12 +834,19 @@ final class StructuredDataExtractor {
     private String inlineValue(TemplateDataImportFacade.ImportBinding binding, String value) {
         if (binding.locator() == null
                 || !"INLINE".equalsIgnoreCase(binding.locator().path("valueMode").asText(""))) return value;
-        var colon = Math.max(value.indexOf('：'), value.indexOf(':'));
+        var chineseColon = value.indexOf('：');
+        var asciiColon = value.indexOf(':');
+        var colon = chineseColon < 0 ? asciiColon
+                : asciiColon < 0 ? chineseColon : Math.min(chineseColon, asciiColon);
         if (colon < 0 || colon + 1 >= value.length()) return "";
         return value.substring(colon + 1).trim();
     }
 
     record Result(String shape, List<DataRepository.Mapping> mappings, List<DataRepository.Row> rows) {}
+
+    private record ListProjection(String id, String domain, String componentId, String parentBindingId,
+                                  String recordAxis, String itemAxis, Range labelRange, Range valueRange,
+                                  Range unitRange, String labelSemantic, String valueSemantic) {}
 
     private record Range(int startRow, int endRow, int startColumn, int endColumn) {
         boolean contains(int row, int column) {

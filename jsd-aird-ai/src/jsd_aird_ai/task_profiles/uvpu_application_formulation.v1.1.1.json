@@ -1,0 +1,56 @@
+{
+  "contractVersion": "formula-model.v1",
+  "code": "UVPU_APPLICATION_FORMULATION",
+  "version": "1.1.1",
+  "schemaHash": "6c37a8db437fbc8dd53806b5e9361c76ba68f2466bfa1984c02b7f38f8d23dd1",
+  "ruleVersion": "uvpu-application-v1.1.1",
+  "formula": {
+    "basis": "PERCENT_SUM_100", "total": 100.0, "sumTolerance": 0.02,
+    "balanceMaterialCode": "S-48",
+    "mainResinCodes": ["SJ-230", "SJ-231", "SJ-232", "SJ-230-WASHED", "SJ-231-WASHED", "SJ-232-WASHED"],
+    "materials": [
+      {"code":"SJ-230","column":"X_FORMULA__SJ_230_PCT","role":"MAIN_RESIN","minimum":45.0,"maximum":75.0,"step":0.1},
+      {"code":"SJ-231","column":"X_FORMULA__SJ_231_PCT","role":"MAIN_RESIN","minimum":45.0,"maximum":75.0,"step":0.1},
+      {"code":"SJ-232","column":"X_FORMULA__SJ_232_PCT","role":"MAIN_RESIN","minimum":45.0,"maximum":75.0,"step":0.1},
+      {"code":"SJ-230-WASHED","column":"X_FORMULA__SJ_230_WASHED_PCT","role":"MAIN_RESIN","minimum":45.0,"maximum":75.0,"step":0.1},
+      {"code":"SJ-231-WASHED","column":"X_FORMULA__SJ_231_WASHED_PCT","role":"MAIN_RESIN","minimum":45.0,"maximum":75.0,"step":0.1},
+      {"code":"SJ-232-WASHED","column":"X_FORMULA__SJ_232_WASHED_PCT","role":"MAIN_RESIN","minimum":45.0,"maximum":75.0,"step":0.1},
+      {"code":"DSP-3315","column":"X_FORMULA__DSP_3315_PCT","role":"ADDITIVE","minimum":0.8,"maximum":2.3,"step":0.1},
+      {"code":"SS059/PC=1/1","column":"X_FORMULA__SS059_PC_1_1_PCT","role":"ADDITIVE","minimum":0.8,"maximum":1.8,"step":0.1},
+      {"code":"S-48","column":"X_FORMULA__S_48_PCT","role":"BALANCE","minimum":20.0,"maximum":55.0,"step":0.1}
+    ]
+  },
+  "contextFeatures": [
+    {"code":"coatingSolidsPct","column":"X_PROCESS__COATING_SOLIDS_PCT","valueType":"NUMERIC","adjustable":false,"sharedWithinSourceGroup":true,"unit":"%"},
+    {"code":"uvaIntensityMwCm2","column":"X_PROCESS__UVA_INTENSITY_MW_CM2","valueType":"NUMERIC","adjustable":false,"sharedWithinSourceGroup":true,"unit":"mW/cm2"},
+    {"code":"uvEnergyMjCm2","column":"X_PROCESS__UV_ENERGY_MJ_CM2","valueType":"NUMERIC","adjustable":false,"sharedWithinSourceGroup":true,"unit":"mJ/cm2"},
+    {"code":"applicatorSpecUm","column":"X_PROCESS__APPLICATOR_SPEC_UM","valueType":"NUMERIC","adjustable":false,"sharedWithinSourceGroup":true,"unit":"um"},
+    {"code":"temperatureC","column":"X_ENV__TEMPERATURE_C","valueType":"NUMERIC","adjustable":false,"sharedWithinSourceGroup":true,"unit":"degC"},
+    {"code":"humidityRhPct","column":"X_ENV__HUMIDITY_RH_PCT","valueType":"NUMERIC","adjustable":false,"sharedWithinSourceGroup":true,"unit":"%"},
+    {"code":"substrate","column":"X_CONTEXT__SUBSTRATE","valueType":"CATEGORICAL","adjustable":false,"sharedWithinSourceGroup":true,"unit":null},
+    {"code":"applicationMethod","column":"X_CONTEXT__APPLICATION_METHOD","valueType":"CATEGORICAL","adjustable":false,"sharedWithinSourceGroup":true,"unit":null},
+    {"code":"curingSource","column":"X_CONTEXT__CURING_SOURCE","valueType":"CATEGORICAL","adjustable":false,"sharedWithinSourceGroup":true,"unit":null}
+  ],
+  "targets": [
+    {"code":"Y__WARPING_PET_INITIAL_CM","targetKey":"APP.WARPING.HEIGHT@substrate=PET_100UM;stage=UV_IMMEDIATE","valueType":"CONTINUOUS","direction":"MINIMIZE","unit":"cm","testMethod":"APP_WARPING_HEIGHT","substrate":"PET_100UM_OPTICAL","mandatory":true,"weight":3.0,"ordinalValues":null,"decisionThreshold":0.5},
+    {"code":"Y__WARPING_PET_12H_CM","targetKey":"APP.WARPING.HEIGHT@substrate=PET_100UM;stage=ROOM_12H","valueType":"CONTINUOUS","direction":"MINIMIZE","unit":"cm","testMethod":"APP_WARPING_HEIGHT","substrate":"PET_100UM_OPTICAL","mandatory":true,"weight":3.0,"ordinalValues":null,"decisionThreshold":0.5},
+    {"code":"Y__HARDNESS_PET_1KG_ORD","targetKey":"APP.HARDNESS.PENCIL@substrate=PET_100UM;load=1KG","valueType":"ORDINAL","direction":"MAXIMIZE","unit":null,"testMethod":"APP_PENCIL_HARDNESS","substrate":"PET_100UM_OPTICAL","mandatory":false,"weight":1.0,"ordinalValues":[1.0,2.0,3.0,4.0],"ordinalLabels":["H","2H","3H","4H"],"decisionThreshold":0.5},
+    {"code":"Y__STEEL_WOOL_500G_CYCLES","targetKey":"APP.ABRASION.STEELWOOL@substrate=PET_100UM;load=500G;contact=1X1_UNSPECIFIED","valueType":"CONTINUOUS","direction":"MAXIMIZE","unit":"cycles","testMethod":"APP_STEEL_WOOL_ABRASION","substrate":"PET_100UM_OPTICAL","mandatory":false,"weight":1.0,"ordinalValues":null,"decisionThreshold":0.5},
+    {"code":"Y__STEEL_WOOL_1KG_CYCLES","targetKey":"APP.ABRASION.STEELWOOL@substrate=PET_100UM;load=1KG;contact=1X1_UNSPECIFIED","valueType":"CONTINUOUS","direction":"MAXIMIZE","unit":"cycles","testMethod":"APP_STEEL_WOOL_ABRASION","substrate":"PET_100UM_OPTICAL","mandatory":false,"weight":1.0,"ordinalValues":null,"decisionThreshold":0.5}
+  ],
+  "validation": {"groupColumn":"formula_lineage_group","sourceGroupColumn":"source_context_group","folds":5,"intervalLevel":0.9,"randomKfoldDiagnostic":false},
+  "readinessThresholds": {
+    "development":{"minSamples":30,"minGroups":5},
+    "productionContinuous":{"minSamples":80,"minGroups":12,"minBaselineImprovement":0.1,"maxNmae":0.2,"minIntervalCoverage":0.85,"maxIntervalCoverage":0.95,"requiredBaselineType":"T06_SIMILAR_CASE"},
+    "productionOrdinal":{"minSamples":100,"minSamplesPerObservedClass":10,"minGroups":12,"maxGradeMae":1.0,"minPlusMinusOneAccuracy":0.85},
+    "productionBinary":{"minSamples":80,"minMinorityClassSamples":20,"minGroups":12,"minRocAuc":0.65,"minPrAuc":0.50,"minF1":0.50,"maxLogLoss":0.70,"maxBrierScore":0.25},
+    "productionCategorical":{"minSamples":80,"minSamplesPerObservedClass":10,"minObservedClasses":2,"minGroups":12,"minMacroF1":0.40,"minBalancedAccuracy":0.40,"maxLogLoss":1.50}
+  },
+  "modelEligibility":{"GP":{"minSamples":30},"RF":{"minSamples":30},"LIGHTGBM":{"minSamples":150},"XGBOOST":{"minSamples":150},"CATBOOST":{"minSamples":150}},
+  "modelSelection":{"tieNmaeTolerance":0.01,"modelTieBreakOrder":["GAUSSIAN_PROCESS","CATBOOST","XGBOOST","LIGHTGBM","RANDOM_FOREST"]},
+  "classificationModelEligibility":{"LOGISTIC_REGRESSION":{"minSamples":30},"RF":{"minSamples":30},"LIGHTGBM":{"minSamples":80},"XGBOOST":{"minSamples":80},"CATBOOST":{"minSamples":80}},
+  "classificationModelSelection":{"tieScoreTolerance":0.01,"binaryTieBreakOrder":["LOGISTIC_REGRESSION","CATBOOST","XGBOOST","LIGHTGBM","RANDOM_FOREST"],"categoricalTieBreakOrder":["CATBOOST","XGBOOST","LIGHTGBM","RANDOM_FOREST","LOGISTIC_REGRESSION"]},
+  "probabilityCalibration":{"method":"PLATT","calibrationFolds":3,"expectedCalibrationErrorBins":10},
+  "applicabilityDomain":{"enabled":true,"robustLowerQuantile":0.01,"robustUpperQuantile":0.99,"nearBoundaryDistanceQuantile":0.95,"outOfDomainDistanceQuantile":0.99,"outOfDomainRequiresFallback":true},
+  "candidate":{"maximumPoolSize":20000,"minimumL1Distance":2.0,"conservativeMaximumL1Distance":10.0,"defaultCount":4}
+}

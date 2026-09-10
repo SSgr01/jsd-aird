@@ -120,13 +120,6 @@ public class ExperimentService {
         if (command.title() == null || command.title().isBlank()) {
             throw validation("实验名称不能为空");
         }
-        if (command.ownerName() == null || command.ownerName().isBlank()) {
-            throw validation("实验负责人不能为空");
-        }
-        if (command.experimentDate() == null) {
-            throw validation("实验日期不能为空");
-        }
-
         return normalize(repository.saveDraft(
                 actor.organizationId(),
                 id,
@@ -139,7 +132,7 @@ public class ExperimentService {
                         command.projectId(),
                         command.stageId(),
                         command.taskId(),
-                        command.ownerName().strip(),
+                        blankToNull(command.ownerName()),
                         command.experimentDate(),
                         command.templateVersionId(),
                         blankToNull(command.templateSnapshotHash()),

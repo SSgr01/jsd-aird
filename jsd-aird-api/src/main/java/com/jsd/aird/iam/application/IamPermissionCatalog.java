@@ -127,6 +127,7 @@ public final class IamPermissionCatalog {
                 p("spectrum.export", "spectrum", "导出图谱", "HIGH", "ALL"),
                 p("spectrum.download", "spectrum", "下载谱图数据", "HIGH", "ALL"),
                 p("ai.use", "ai", "使用 AI 能力", "MEDIUM", "ALL"),
+                p("ai.model.manage", "ai", "管理配方模型", "CRITICAL", "ALL"),
                 p("ai.external", "ai", "允许知识文档 AI 授权", "CRITICAL", "SELECTED"),
                 p("ops.file.view", "ops", "查看文件", "LOW", "ALL"),
                 p("ops.file.upload", "ops", "上传文件", "MEDIUM", "SELF"),

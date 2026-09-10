@@ -24,6 +24,7 @@ from jsd_aird_ai.contracts import (
     ApplicabilityDomainSummary,
     CandidateModelMetric,
     ClassificationTrainingSummary,
+    FeatureViewSpec,
     GroupStabilitySummary,
     ModelType,
     OrdinalTrainingSummary,
@@ -47,6 +48,7 @@ from jsd_aird_ai.classification import (
 from jsd_aird_ai.digests import canonical_json_bytes, canonical_sha256, sha256_bytes
 from jsd_aird_ai.errors import ErrorCode, FormulaModelError
 from jsd_aird_ai.features import FeatureBuilder
+from jsd_aird_ai.feature_views import base_feature_view, feature_view_hash, feature_view_json
 from jsd_aird_ai.model_adapters import ModelAdapter, default_model_adapters
 from jsd_aird_ai.ordinal import evaluate_ordinal, fit_ordinal_model
 from jsd_aird_ai.readiness import (
@@ -63,6 +65,13 @@ from jsd_aird_ai.validation import (
     group_folds,
     random_folds,
     select_champion,
+)
+from jsd_aird_ai.validation_folds import (
+    FORMULA_LINEAGE,
+    SOURCE_CONTEXT,
+    LoadedValidationArtifacts,
+    validate_baseline_target,
+    validated_baseline_summary,
 )
 
 
@@ -83,6 +92,14 @@ class ModelBundle:
     @property
     def targets(self) -> dict[str, dict[str, Any]]:
         return self.payload["targets"]
+
+    @property
+    def feature_view(self) -> FeatureViewSpec:
+        """Return the view captured by this bundle; old bundles default to BASE_V1."""
+        value = self.payload.get("feature_view")
+        if value is None:
+            return base_feature_view(self.profile)
+        return FeatureViewSpec.model_validate(value)
 
 
 @dataclass(frozen=True)
@@ -147,9 +164,12 @@ class ModelTrainer:
         task_profile_hash: str,
         snapshot_hash: str,
         seed: int,
+        validation_artifacts: LoadedValidationArtifacts | None = None,
+        feature_view: FeatureViewSpec | None = None,
     ) -> tuple[bytes, list[TargetTrainingResult], list[str]]:
         require_valid_snapshot(snapshot)
-        builder = FeatureBuilder(profile)
+        effective_view = feature_view or base_feature_view(profile)
+        builder = FeatureBuilder(profile, effective_view)
         all_features = builder.from_snapshot(snapshot.measurements)
         feature_valid = builder.valid_feature_mask(all_features)
         lineage_values = snapshot.joined[profile.validation.group_column].to_numpy()
@@ -185,7 +205,7 @@ class ModelTrainer:
             target_lineages = lineage_values[mask.to_numpy()]
             target_sheets = sheet_values[mask.to_numpy()]
             target_row_ids = snapshot.measurements.loc[
-                mask, "experiment_version_id"
+                mask, snapshot.identity_column
             ].astype(str).to_numpy()
             lineage_groups = int(pd.Series(target_lineages).nunique())
             sheet_groups = int(pd.Series(target_sheets).nunique())
@@ -215,8 +235,29 @@ class ModelTrainer:
                 if classification_target
                 else target_series.loc[mask].to_numpy(dtype=float)
             )
-            lineage_folds = group_folds(target_lineages, profile.validation.folds)
-            sheet_folds = group_folds(target_sheets, profile.validation.folds)
+            if validation_artifacts is None:
+                lineage_folds = group_folds(target_lineages, profile.validation.folds)
+                sheet_folds = group_folds(target_sheets, profile.validation.folds)
+            else:
+                lineage_folds = validation_artifacts.folds_for(
+                    target_key=target_spec.target_key,
+                    validation_scheme=FORMULA_LINEAGE,
+                    row_ids=target_row_ids,
+                    groups=target_lineages,
+                )
+                sheet_folds = validation_artifacts.folds_for(
+                    target_key=target_spec.target_key,
+                    validation_scheme=SOURCE_CONTEXT,
+                    row_ids=target_row_ids,
+                    groups=target_sheets,
+                )
+                validate_baseline_target(
+                    validation_artifacts,
+                    target_key=target_spec.target_key,
+                    target_code=target_spec.code,
+                    row_ids=target_row_ids,
+                    actual_values=target,
+                )
 
             if classification_target:
                 result, payload = self._train_classification_target(
@@ -271,6 +312,7 @@ class ModelTrainer:
                     lineage_groups=lineage_groups,
                     sheet_groups=sheet_groups,
                     seed=seed,
+                    validation_artifacts=validation_artifacts,
                 )
             results.append(result)
             if payload is not None:
@@ -299,6 +341,7 @@ class ModelTrainer:
             "snapshot_hash": snapshot_hash,
             "snapshot_id": snapshot.response.snapshot_id,
             "seed": seed,
+            "feature_view": feature_view_json(effective_view),
             "layout": builder.layout,
             "targets": target_payloads,
             "history": history,
@@ -309,6 +352,11 @@ class ModelTrainer:
             "snapshotHash": snapshot_hash,
             "taskProfileHash": task_profile_hash,
             "seed": seed,
+            "featureViewCode": effective_view.code,
+            "featureViewHash": feature_view_hash(effective_view),
+            "featureViewScope": effective_view.scope,
+            "featureViewDevelopmentOnly": effective_view.development_only,
+            "featureView": feature_view_json(effective_view),
             "dataNature": snapshot.response.data_nature,
             "snapshotPurpose": snapshot.response.snapshot_purpose,
             "sourceSheetStats": snapshot.response.source_sheet_stats.model_dump(
@@ -327,10 +375,14 @@ class ModelTrainer:
                 "nonDeterministicRuntimeMetricsExcluded": True,
             },
         }
+        if validation_artifacts is not None:
+            card["validationFoldsHash"] = validation_artifacts.folds_artifact_hash
+            card["t06BaselineHash"] = validation_artifacts.baseline_artifact_hash
         identity = {
             "contractVersion": card["contractVersion"],
             "snapshotHash": snapshot_hash,
             "taskProfileHash": task_profile_hash,
+            "featureViewHash": feature_view_hash(effective_view),
             "seed": seed,
             "targets": card["targets"],
             "runtime": card["runtime"],
@@ -358,14 +410,23 @@ class ModelTrainer:
         lineage_groups: int,
         sheet_groups: int,
         seed: int,
+        validation_artifacts: LoadedValidationArtifacts | None,
     ) -> tuple[TargetTrainingResult, dict[str, Any] | None]:
-        baseline = development_baseline(
-            features,
-            target,
-            lineage_folds,
-            sheet_folds,
-            builder.layout,
+        baseline = validated_baseline_summary(
+            validation_artifacts,
+            target_key=target_spec.target_key,
+            target_code=target_spec.code,
+            row_ids=target_row_ids,
+            actual_values=target,
         )
+        if baseline is None:
+            baseline = development_baseline(
+                features,
+                target,
+                lineage_folds,
+                sheet_folds,
+                builder.layout,
+            )
         candidate_metrics: list[CandidateModelMetric] = []
         evaluations: dict[ModelType, _ContinuousCandidate] = {}
         diagnostic_folds = (
@@ -1317,6 +1378,7 @@ def rebind_bundle_schema(
         "contractVersion": card["contractVersion"],
         "snapshotHash": card["snapshotHash"],
         "taskProfileHash": task_profile_hash,
+        "featureViewHash": card.get("featureViewHash"),
         "seed": card["seed"],
         "targets": card["targets"],
         "runtime": card["runtime"],

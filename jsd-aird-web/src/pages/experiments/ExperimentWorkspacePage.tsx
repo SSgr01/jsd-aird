@@ -11,6 +11,9 @@ import { SaveStateBadge, type SaveState } from '@/components/SaveStateBadge';
 import {
   App,
   Button,
+  Form,
+  Input,
+  Modal,
   Result,
   Skeleton,
   Space,
@@ -24,6 +27,12 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom';
 
 import { buildExperimentSnapshot, parseExperimentSnapshot } from '@/features/experiment-workspace/experiment-workbook';
 import type { EditorHandle } from '@/features/template-workspace/types';
+import {
+  reviewInformation,
+  reviewInformationMissing,
+  withReviewInformation,
+  type ReviewInformation,
+} from './experiment-review-information';
 import {
   actExperiment,
   createRevision,
@@ -89,6 +98,8 @@ export function ExperimentWorkspacePage() {
   const [exporting, setExporting] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>('SAVED');
   const [loadError, setLoadError] = useState<string>();
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewForm] = Form.useForm<ReviewInformation>();
   const isDesktop = useDesktopEditing();
 
   const load = useCallback(async () => {
@@ -117,51 +128,106 @@ export function ExperimentWorkspacePage() {
     void load();
   }, [load]);
 
+  const currentDraftModel = () => {
+    if (!detail) return editModel;
+    // Keep saving functional while the lazy Univer editor is starting by
+    // using the last loaded snapshot as the document baseline; once the
+    // editor is ready its live snapshot remains authoritative.
+    const currentSnapshot = editorRef.current?.getSnapshot()
+      ?? snapshot
+      ?? buildExperimentSnapshot(editModel, detail.currentVersionId ?? id, detail.templateSnapshot);
+    return parseExperimentSnapshot(currentSnapshot, editModel);
+  };
+
+  const persistDraft = async (nextModel: ExperimentModel, successText?: string) => {
+    if (!detail) return undefined;
+    const title = nextModel.title ?? detail.summary.title;
+    if (!title.trim()) {
+      void message.warning('实验标题不能为空');
+      return undefined;
+    }
+    const savedDetail = await saveExperiment(id, {
+      revision: detail.summary.revision,
+      experimentNo: detail.summary.experimentNo,
+      title,
+      categoryName: detail.summary.categoryName,
+      projectId: detail.summary.projectId,
+      stageId: detail.summary.stageId,
+      taskId: detail.summary.taskId,
+      ownerName: detail.summary.ownerName,
+      experimentDate: detail.summary.experimentDate,
+      templateVersionId: detail.templateVersionId,
+      templateSnapshotHash: detail.templateSnapshotHash,
+      templateSnapshot: detail.templateSnapshot,
+      editModel: nextModel,
+    });
+    // Keep the live editor mounted after a draft save. Updating `snapshot`
+    // here would trigger UniverSheetsEditor’s snapshot effect, destroy the
+    // current workspace, and recreate it from a possibly stale response.
+    setDetail(savedDetail);
+    setEditModel(nextModel);
+    setSaveState('SAVED');
+    if (successText) void message.success(successText);
+    return savedDetail;
+  };
+
   const save = async () => {
     if (!detail) return false;
     setSaveState('SAVING');
     try {
-      // Keep saving functional while the lazy Univer editor is starting by
-      // using the last loaded snapshot as the document baseline; once the
-      // editor is ready its live snapshot remains authoritative.
-      const currentSnapshot = editorRef.current?.getSnapshot()
-        ?? snapshot
-        ?? buildExperimentSnapshot(editModel, detail.currentVersionId ?? id, detail.templateSnapshot);
-      const nextModel = parseExperimentSnapshot(currentSnapshot, editModel);
-      const v = nextModel.title ?? detail.summary.title;
-      if (!v.trim()) {
-        void message.warning('实验标题不能为空');
+      const savedDetail = await persistDraft(currentDraftModel(), '草稿已保存');
+      if (!savedDetail) {
         setSaveState('DIRTY');
         return false;
       }
-      const savedDetail = await saveExperiment(id, {
-        revision: detail.summary.revision,
-        experimentNo: detail.summary.experimentNo,
-        title: v,
-        categoryName: detail.summary.categoryName,
-        projectId: detail.summary.projectId,
-        stageId: detail.summary.stageId,
-        taskId: detail.summary.taskId,
-        ownerName: detail.summary.ownerName,
-        experimentDate: detail.summary.experimentDate,
-        templateVersionId: detail.templateVersionId,
-        templateSnapshotHash: detail.templateSnapshotHash,
-        templateSnapshot: detail.templateSnapshot,
-        editModel: nextModel,
-      });
-      // Keep the live editor mounted after a draft save. Updating `snapshot`
-      // here would trigger UniverSheetsEditor’s snapshot effect, destroy the
-      // current workspace, and recreate it from a possibly stale response.
-      setDetail(savedDetail);
-      setEditModel(nextModel);
-      setSaveState('SAVED');
-      void message.success('草稿已保存');
       return true;
     } catch (error) {
       setSaveState('DIRTY');
       void message.error(error instanceof Error ? error.message : '保存失败，本地内容仍然保留');
       return false;
     }
+  };
+
+  const openReviewInformation = () => {
+    reviewForm.setFieldsValue(reviewInformation(editModel));
+    setReviewOpen(true);
+  };
+
+  const submitReviewWithInformation = async () => {
+    if (!detail) return;
+    let values: ReviewInformation;
+    try {
+      values = await reviewForm.validateFields();
+    } catch {
+      return;
+    }
+    setBusy(true);
+    setSaveState('SAVING');
+    try {
+      const nextModel = withReviewInformation(currentDraftModel(), values);
+      const savedDetail = await persistDraft(nextModel);
+      if (!savedDetail) {
+        setSaveState('DIRTY');
+        return;
+      }
+      await actExperiment(id, 'submit-review', savedDetail.summary.revision);
+      setReviewOpen(false);
+      void message.success('已提交审核');
+      await load();
+    } catch (error) {
+      setSaveState('DIRTY');
+      void message.error(error instanceof Error ? error.message : '提交审核失败');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const publish = (action: PublishAction) => {
+    if (action === 'submit-review' && reviewInformationMissing(editModel)) {
+      openReviewInformation();
+      return;
+    }
+    void act(action);
   };
 
   const act = async (action: PublishAction) => {
@@ -290,8 +356,8 @@ export function ExperimentWorkspacePage() {
             type="primary"
             className="workspace-publish-button"
             loading={busy}
-            disabled={!editable || saveState !== 'SAVED' || !publishAction}
-            onClick={() => { if (publishAction) void act(publishAction); }}
+            disabled={(publishAction !== 'approve' && !editable) || saveState !== 'SAVED' || !publishAction}
+            onClick={() => { if (publishAction) publish(publishAction); }}
           >
             发布
           </Button>
@@ -347,6 +413,37 @@ export function ExperimentWorkspacePage() {
           </div>
         </div>
       )}
+
+      <Modal
+        title="审核信息"
+        open={reviewOpen}
+        okText="保存并提交审核"
+        cancelText="取消"
+        confirmLoading={busy}
+        onCancel={() => setReviewOpen(false)}
+        onOk={() => void submitReviewWithInformation()}
+        destroyOnClose
+      >
+        <Typography.Paragraph type="secondary">
+          这两项属于实验审核信息，不会改变已冻结的实验模板版式。
+        </Typography.Paragraph>
+        <Form form={reviewForm} layout="vertical" preserve={false}>
+          <Form.Item
+            name="purpose"
+            label="实验目的"
+            rules={[{ required: true, whitespace: true, message: '请填写实验目的' }]}
+          >
+            <Input.TextArea rows={3} placeholder="说明本次实验需要验证的目标" />
+          </Form.Item>
+          <Form.Item
+            name="mainConclusion"
+            label="主要结论"
+            rules={[{ required: true, whitespace: true, message: '请填写主要结论' }]}
+          >
+            <Input.TextArea rows={4} placeholder="填写真实实验完成后得到的主要结论" />
+          </Form.Item>
+        </Form>
+      </Modal>
     </section>
   );
 }

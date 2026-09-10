@@ -91,7 +91,15 @@ public interface DataRepository {
 
     record NewJob(UUID id, UUID organizationId, UUID sourceFileId, String sourceSha256, String sourceFileName,
                   String sourceFormat, UUID templateVersionId, UUID categoryId,
-                  boolean duplicateOverride, UUID actorId, Integer importContractVersion, String contractHash) {
+                  boolean duplicateOverride, UUID actorId, Integer importContractVersion, String contractHash,
+                  String importPurpose, UUID targetExperimentCategoryId) {
+        public NewJob(UUID id, UUID organizationId, UUID sourceFileId, String sourceSha256, String sourceFileName,
+                      String sourceFormat, UUID templateVersionId, UUID categoryId,
+                      boolean duplicateOverride, UUID actorId, Integer importContractVersion, String contractHash) {
+            this(id, organizationId, sourceFileId, sourceSha256, sourceFileName, sourceFormat, templateVersionId,
+                    categoryId, duplicateOverride, actorId, importContractVersion, contractHash,
+                    "DATA_ONLY", null);
+        }
         public NewJob(UUID id, UUID organizationId, UUID sourceFileId, String sourceSha256, String sourceFileName,
                       String sourceFormat, UUID templateVersionId, UUID categoryId,
                       boolean duplicateOverride, UUID actorId) {
@@ -109,20 +117,29 @@ public interface DataRepository {
     record Job(UUID id, UUID sourceFileId, String sourceSha256, String sourceFileName, String sourceFormat,
                UUID templateVersionId, UUID categoryId, String status, int progress,
                String currentStage, String parserVersion, String errorMessage, Instant createdAt, Instant updatedAt,
-               Integer importContractVersion, String contractHash, String compatibilityStatus) {
+               Integer importContractVersion, String contractHash, String compatibilityStatus,
+               String importPurpose, UUID targetExperimentCategoryId) {
+        public Job(UUID id, UUID sourceFileId, String sourceSha256, String sourceFileName, String sourceFormat,
+                   UUID templateVersionId, UUID categoryId, String status, int progress,
+                   String currentStage, String parserVersion, String errorMessage, Instant createdAt, Instant updatedAt,
+                   Integer importContractVersion, String contractHash, String compatibilityStatus) {
+            this(id, sourceFileId, sourceSha256, sourceFileName, sourceFormat, templateVersionId, categoryId,
+                    status, progress, currentStage, parserVersion, errorMessage, createdAt, updatedAt,
+                    importContractVersion, contractHash, compatibilityStatus, "DATA_ONLY", null);
+        }
         public Job(UUID id, UUID sourceFileId, String sourceSha256, String sourceFileName, String sourceFormat,
                    UUID templateVersionId, UUID categoryId, String status, int progress,
                    String currentStage, String parserVersion, String errorMessage, Instant createdAt, Instant updatedAt) {
             this(id, sourceFileId, sourceSha256, sourceFileName, sourceFormat, templateVersionId,
                      categoryId, status, progress, currentStage, parserVersion, errorMessage, createdAt, updatedAt,
-                     null, null, "LEGACY");
+                     null, null, "LEGACY", "DATA_ONLY", null);
         }
         public Job(UUID id, UUID sourceFileId, String sourceSha256, String sourceFileName, String sourceFormat,
                    UUID templateVersionId, String status, int progress, String currentStage,
                    String parserVersion, String errorMessage, Instant createdAt, Instant updatedAt) {
             this(id, sourceFileId, sourceSha256, sourceFileName, sourceFormat, templateVersionId,
                      null, status, progress, currentStage, parserVersion, errorMessage, createdAt, updatedAt,
-                     null, null, "LEGACY");
+                     null, null, "LEGACY", "DATA_ONLY", null);
         }
     }
 

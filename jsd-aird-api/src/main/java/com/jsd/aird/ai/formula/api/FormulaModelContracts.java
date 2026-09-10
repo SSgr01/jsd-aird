@@ -1,5 +1,7 @@
 package com.jsd.aird.ai.formula.api;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.databind.JsonNode;
 import java.util.List;
 import java.util.Map;
 
@@ -38,6 +40,8 @@ public final class FormulaModelContracts {
 
     public enum TargetMode { AT_LEAST, AT_MOST, MATCH, RANGE, MAXIMIZE, MINIMIZE }
 
+    public enum RecommendationMode { FORMULA_PREDICTION, EXPERIMENT_OPTIMIZATION }
+
     public record ArtifactReadRef(String name, String url, String sha256) {
     }
 
@@ -48,6 +52,67 @@ public final class FormulaModelContracts {
             ArtifactReadRef manifest,
             ArtifactReadRef measurements,
             ArtifactReadRef sourceMap
+    ) {
+    }
+
+    public record ValidationFoldAssignment(
+            String analysisRowId,
+            String targetKey,
+            int foldIndex,
+            String groupKey
+    ) {
+    }
+
+    public record ValidationFoldScheme(
+            String validationScheme,
+            int foldCount,
+            List<ValidationFoldAssignment> assignments
+    ) {
+    }
+
+    public record ValidationFoldsDocument(
+            String schemaVersion,
+            String snapshotHash,
+            String taskProfileHash,
+            long seed,
+            List<ValidationFoldScheme> schemes,
+            String contentHash
+    ) {
+    }
+
+    public record T06BaselineObservation(
+            String analysisRowId,
+            String targetKey,
+            String validationScheme,
+            int foldIndex,
+            String groupKey,
+            Object actual,
+            Object predicted,
+            Map<String, Double> classProbabilities,
+            int eligibleNeighborCount,
+            String sampleHash
+    ) {
+    }
+
+    public record T06TargetBaseline(
+            String targetKey,
+            String targetCode,
+            ValueType valueType,
+            Map<String, Map<String, Double>> metricsByScheme,
+            List<T06BaselineObservation> observations,
+            String sampleHash
+    ) {
+    }
+
+    public record T06BaselineDocument(
+            String schemaVersion,
+            String baselineType,
+            String baselineVersion,
+            String snapshotHash,
+            String taskProfileHash,
+            String validationFoldsHash,
+            List<T06TargetBaseline> targets,
+            String contentHash
     ) {
     }
 
@@ -95,10 +160,15 @@ public final class FormulaModelContracts {
             List<String> ordinalLabels,
             List<String> classLabels,
             String positiveClass,
-            double decisionThreshold,
+            Double decisionThreshold,
             String censoredColumn,
             String censorTypeColumn
     ) {
+        public TargetSpec {
+            // Mirrors the language-neutral contract default. A nullable wrapper
+            // distinguishes an omitted JSON property from an explicit invalid 0.
+            if (decisionThreshold == null) decisionThreshold = 0.50d;
+        }
     }
 
     public record ValidationPolicy(
@@ -238,6 +308,37 @@ public final class FormulaModelContracts {
     ) {
     }
 
+    public record GenerateValidationFoldsRequest(
+            String contractVersion,
+            String requestId,
+            String taskProfileHash,
+            String snapshotHash,
+            long seed,
+            TaskProfile taskProfile,
+            SnapshotArtifacts snapshot,
+            ArtifactWriteRef output
+    ) {
+    }
+
+    public record ValidationFoldTargetSummary(
+            String targetKey,
+            int eligibleRows,
+            int formulaLineageFolds,
+            int sourceContextFolds
+    ) {
+    }
+
+    public record GenerateValidationFoldsResponse(
+            String contractVersion,
+            String requestId,
+            String snapshotHash,
+            String validationFoldsSha256,
+            long validationFoldsSize,
+            boolean uploaded,
+            List<ValidationFoldTargetSummary> targets
+    ) {
+    }
+
     public record TargetCoverage(
             String targetCode,
             ValueType valueType,
@@ -283,8 +384,18 @@ public final class FormulaModelContracts {
             long seed,
             TaskProfile taskProfile,
             SnapshotArtifacts snapshot,
-            ArtifactWriteRef output
+            ArtifactWriteRef output,
+            ArtifactReadRef validationFolds,
+            ArtifactReadRef t06Baseline,
+            JsonNode featureView
     ) {
+        public TrainRequest(String contractVersion, String requestId, String taskProfileHash,
+                            String snapshotHash, long seed, TaskProfile taskProfile,
+                            SnapshotArtifacts snapshot, ArtifactWriteRef output,
+                            ArtifactReadRef validationFolds, ArtifactReadRef t06Baseline) {
+            this(contractVersion, requestId, taskProfileHash, snapshotHash, seed, taskProfile,
+                    snapshot, output, validationFolds, t06Baseline, null);
+        }
     }
 
     public record MetricSet(
@@ -553,8 +664,13 @@ public final class FormulaModelContracts {
             Double value,
             Double minimum,
             Double maximum,
-            Double tolerance
+            Double tolerance,
+            Double minimumProbability
     ) {
+        public RequestedTarget(String code, TargetMode mode, boolean mandatory, double weight,
+                               Double value, Double minimum, Double maximum, Double tolerance) {
+            this(code, mode, mandatory, weight, value, minimum, maximum, tolerance, null);
+        }
     }
 
     public record MaterialConstraint(
@@ -578,7 +694,9 @@ public final class FormulaModelContracts {
             Map<String, Object> context,
             List<RequestedTarget> targets,
             List<MaterialConstraint> materialConstraints,
-            int count
+            int count,
+            RecommendationMode recommendationMode,
+            double minimumPotentialDesirability
     ) {
     }
 
@@ -656,6 +774,7 @@ public final class FormulaModelContracts {
     ) {
     }
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public record RecommendedCandidate(
             String candidateId,
             String strategy,
@@ -667,6 +786,7 @@ public final class FormulaModelContracts {
     ) {
     }
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public record RecommendResponse(
             String contractVersion,
             String requestId,

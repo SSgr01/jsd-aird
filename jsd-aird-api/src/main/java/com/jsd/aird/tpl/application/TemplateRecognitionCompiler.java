@@ -180,6 +180,9 @@ public class TemplateRecognitionCompiler {
                     }
                     field.set("locator", locator.deepCopy());
                      copyStandardMetadata(field, payload);
+                    copyIfPresent(payload, field, "labelPath", "labelPathSegments", "experimentField",
+                            "experimentItemLabel", "experimentSemanticConfidence", "experimentSemanticStatus",
+                            "experimentSemanticSource", "experimentSemanticAlternatives", "experimentSemanticIssue");
                     if (StringUtils.hasText(payload.path("parentFieldId").asText())) {
                         field.put("parentFieldId", payload.path("parentFieldId").asText());
                     }
@@ -195,6 +198,9 @@ public class TemplateRecognitionCompiler {
                     }
                     if (payload.path("tableModel").isObject()) {
                         field.set("tableModel", payload.path("tableModel").deepCopy());
+                    }
+                    if (payload.path("listProjections").isArray()) {
+                        field.set("listProjections", payload.path("listProjections").deepCopy());
                     }
                     fields.add(field);
                     if (("ROW_TABLE".equals(kind) || "COLUMN_TABLE".equals(kind))
@@ -232,6 +238,7 @@ public class TemplateRecognitionCompiler {
         baseSchema.set(FIELD_MODEL_KEY, fieldModel);
         TemplateLocatorNormalizer.normalizeFieldModel(objectMapper, baseSchema);
         fieldModel = (ObjectNode) baseSchema.path(FIELD_MODEL_KEY);
+        new ExperimentTemplateSemanticCompiler(objectMapper).apply(baseSchema, mapping, fieldModel);
         return new CompiledRecognition(baseSchema, mapping, fieldModel);
     }
 
@@ -257,8 +264,10 @@ public class TemplateRecognitionCompiler {
                 ? "TABLE_COLUMN" : ("SCALAR".equals(kind) ? "FIELD" : "REGION"));
         var componentId = firstText(payload, "componentId", "regionId", "blockId", "parentBlockId");
         if (StringUtils.hasText(componentId)) binding.put("componentId", componentId);
-        copyIfPresent(payload, binding, "labelPath", "required", "identity", "trainingRole",
-                "trainingEligible", "ragEligible", "valueSource", "valueType", "unit");
+        copyIfPresent(payload, binding, "labelPath", "labelPathSegments", "required", "identity", "trainingRole",
+                "trainingEligible", "ragEligible", "valueSource", "valueType", "unit", "experimentField",
+                "experimentItemLabel", "experimentSemanticConfidence", "experimentSemanticStatus",
+                "experimentSemanticSource", "experimentSemanticAlternatives", "experimentSemanticIssue");
         if (StringUtils.hasText(payload.path("parentBindingId").asText())) {
             binding.put("parentBindingId", payload.path("parentBindingId").asText());
         }
@@ -588,6 +597,9 @@ public class TemplateRecognitionCompiler {
                      .put("valueRange", column.path("valueRange").asText(""))
                      .put("dataStartRow", column.path("dataStartRow").asInt(0));
              copyStandardMetadata(child, column);
+            copyIfPresent(column, child, "labelPath", "labelPathSegments", "experimentField",
+                    "experimentItemLabel", "experimentSemanticConfidence", "experimentSemanticStatus",
+                    "experimentSemanticSource", "experimentSemanticAlternatives", "experimentSemanticIssue");
             var locator = objectMapper.createObjectNode()
                     .put("sheetId", payload.path("locator").path("sheetId").asText(""))
                     .put("sheetName", payload.path("locator").path("sheetName").asText(""))

@@ -2017,6 +2017,80 @@ a:active,
 .required-property { align-content: start; }
 .required-property .ant-switch { margin-top: 7px; }
 .field-property-section-title { color: var(--app-text); font-size: 13px; }
+
+.experiment-semantics-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: 100%;
+  overflow: auto;
+  padding: 12px;
+}
+
+.experiment-semantic-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  overflow: hidden;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-surface);
+}
+
+.experiment-semantic-summary > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 12px;
+  border-right: 1px solid var(--app-border);
+  border-bottom: 1px solid var(--app-border);
+}
+
+.experiment-semantic-summary > div:nth-child(2n) { border-right: 0; }
+.experiment-semantic-summary > div:nth-last-child(-n + 2) { border-bottom: 0; }
+.experiment-semantic-summary span { color: var(--app-text-secondary); font-size: 11px; }
+.experiment-semantic-summary strong { color: var(--app-text); font-size: 14px; }
+.experiment-semantic-summary .has-issue strong { color: var(--app-warning); }
+
+.experiment-semantics-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.experiment-semantics-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--app-border);
+  border-radius: 6px;
+  background: var(--app-surface);
+}
+
+.experiment-semantics-card small { color: var(--app-text-secondary); line-height: 1.55; }
+.experiment-semantic-domain-list,
+.experiment-semantics-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.experiment-semantics-card-title,
+.experiment-semantic-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.experiment-semantic-field > span {
+  min-width: 88px;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.experiment-semantic-field .ant-select {
+  flex: 1;
+  min-width: 0;
+}
 .field-sheet-name { color: var(--app-text-secondary); font-size: 12px; }
 
 .coordinate-input-row {

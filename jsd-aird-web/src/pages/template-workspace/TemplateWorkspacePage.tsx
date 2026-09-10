@@ -50,6 +50,10 @@ import {
   writeFieldModel,
 } from '@/features/template-workspace/field-model';
 import {
+  readExperimentImport,
+  writeExperimentImport,
+} from '@/features/template-workspace/experiment-semantics';
+import {
   synchronizeStructuredData,
   type BindingValuePair,
 } from '@/features/template-workspace/structured-data';
@@ -121,6 +125,7 @@ import {
   type FieldManagerTab,
   TemplateFieldManager,
 } from './TemplateFieldManager';
+import type { ProjectionRangeTarget } from './ExperimentSemanticsPanel';
 import { normalizeAddress, validateAddress } from './coordinates';
 
 const SheetsEditor = lazy(async () => {
@@ -170,6 +175,10 @@ export function TemplateWorkspacePage() {
   const [loadError, setLoadError] = useState<string>();
   const [versionHistory, setVersionHistory] = useState<TemplateVersionHistoryItem[]>([]);
   const [picking, setPicking] = useState<{ fieldId: string; target: CoordinateTarget }>();
+  const [projectionPicking, setProjectionPicking] = useState<{
+    projectionId: string;
+    target: ProjectionRangeTarget;
+  }>();
   const [groupManagerOpen, setGroupManagerOpen] = useState(false);
   const [groupDrafts, setGroupDrafts] = useState<FieldModel['groups']>([]);
   const [fieldManagerTab, setFieldManagerTab] = useState<FieldManagerTab>('structure');
@@ -1103,6 +1112,7 @@ export function TemplateWorkspacePage() {
   const updateField = (fieldId: string, update: Partial<BusinessField>) => {
     let currentField = fieldModel.fields.find((field) => field.id === fieldId);
     if (!currentField) return;
+    let recognitionItemIdToConfirm = currentField.recognitionItemId;
     let baseSchema = schema;
     let baseMapping = mapping;
     let baseModel = fieldModel;
@@ -1116,6 +1126,7 @@ export function TemplateWorkspacePage() {
         }),
       );
       if (!reviewItem) return;
+      recognitionItemIdToConfirm = reviewItem.id;
       const accepted = acceptRecognitionReviewItem(schema, mapping, fieldModel, reviewItem);
       baseSchema = accepted.schema;
       baseMapping = accepted.mapping;
@@ -1191,6 +1202,27 @@ export function TemplateWorkspacePage() {
               ...(Object.prototype.hasOwnProperty.call(update, 'requiresStandardConfirmation')
                 ? { requiresStandardConfirmation: update.requiresStandardConfirmation }
                 : {}),
+              ...(Object.prototype.hasOwnProperty.call(update, 'experimentField')
+                ? { experimentField: update.experimentField }
+                : {}),
+              ...(Object.prototype.hasOwnProperty.call(update, 'experimentItemLabel')
+                ? { experimentItemLabel: update.experimentItemLabel }
+                : {}),
+              ...(Object.prototype.hasOwnProperty.call(update, 'experimentSemanticConfidence')
+                ? { experimentSemanticConfidence: update.experimentSemanticConfidence }
+                : {}),
+              ...(Object.prototype.hasOwnProperty.call(update, 'experimentSemanticStatus')
+                ? { experimentSemanticStatus: update.experimentSemanticStatus }
+                : {}),
+              ...(Object.prototype.hasOwnProperty.call(update, 'experimentSemanticSource')
+                ? { experimentSemanticSource: update.experimentSemanticSource }
+                : {}),
+              ...(Object.prototype.hasOwnProperty.call(update, 'experimentSemanticAlternatives')
+                ? { experimentSemanticAlternatives: update.experimentSemanticAlternatives }
+                : {}),
+              ...(Object.prototype.hasOwnProperty.call(update, 'experimentSemanticIssue')
+                ? { experimentSemanticIssue: update.experimentSemanticIssue }
+                : {}),
               semanticConflict:
                 updated.model.fields.find((field) => field.id === currentField.id)
                   ?.semanticConflict ?? false,
@@ -1211,7 +1243,14 @@ export function TemplateWorkspacePage() {
         });
       }
     }
-    recordRecognitionAction(currentField.recognitionItemId, 'CONFIRM', 'CONFIRMED');
+    recordRecognitionAction(recognitionItemIdToConfirm, 'CONFIRM', 'CONFIRMED');
+    markDirty();
+  };
+
+  const updateExperimentConfiguration = (
+    configuration: ReturnType<typeof readExperimentImport>,
+  ) => {
+    setSchema((current) => writeExperimentImport(current, configuration));
     markDirty();
   };
 
@@ -1315,6 +1354,22 @@ export function TemplateWorkspacePage() {
 
   const handleSelection = useCallback(
     (selection: EditorSelection) => {
+      if (projectionPicking) {
+        setSchema((current) => {
+          const configuration = readExperimentImport(current);
+          return writeExperimentImport(current, {
+            ...configuration,
+            listProjections: configuration.listProjections.map((projection) =>
+              projection.listProjectionId === projectionPicking.projectionId
+                ? { ...projection, [projectionPicking.target]: normalizeAddress(selection.address) }
+                : projection),
+          });
+        });
+        setProjectionPicking(undefined);
+        markDirty();
+        void message.success('配方区域已更新');
+        return;
+      }
       if (picking) {
         const pickingField = fieldModel.fields.find((item) => item.id === picking.fieldId);
         const address =
@@ -1363,7 +1418,7 @@ export function TemplateWorkspacePage() {
         );
       }
     },
-    [fieldModel.fields, mapping, message, picking, recognitionReview?.items],
+    [fieldModel.fields, mapping, message, picking, projectionPicking, recognitionReview?.items],
   );
 
   const handleUnboundCellChange = useCallback(
@@ -1919,6 +1974,18 @@ export function TemplateWorkspacePage() {
                   <Button onClick={() => setPicking(undefined)}>取消选择</Button>
                 </div>
               )}
+              {projectionPicking && (
+                <div className="selection-guide" role="status">
+                  <div>
+                    <strong>
+                      请在 Excel 中框选
+                      {projectionPicking.target === 'labelRange' ? '材料名称区域' : '配方数值区域'}
+                    </strong>
+                    <span>拖动选择连续区域，系统会自动保存范围。</span>
+                  </div>
+                  <Button onClick={() => setProjectionPicking(undefined)}>取消选择</Button>
+                </div>
+              )}
               <Suspense
                 fallback={
                   <Spin indicator={<LoadingOutlined spin />} tip="正在加载文档" fullscreen />
@@ -1962,6 +2029,8 @@ export function TemplateWorkspacePage() {
                 activeTab={fieldManagerTab}
                 recognitionReview={recognitionReview}
                 recognitionBusy={recognitionBusy}
+                experimentConfiguration={readExperimentImport(schema)}
+                onExperimentConfigurationChange={updateExperimentConfiguration}
                 onActiveTabChange={setFieldManagerTab}
                 onSelectRecognitionItem={focusRecognitionItem}
                 onConfirmRecognitionItem={(item, alternativeId) => {
@@ -1978,6 +2047,10 @@ export function TemplateWorkspacePage() {
                 onUpdateField={updateField}
                 onUpdateCoordinates={updateCoordinates}
                 onPickCoordinate={(fieldId, target) => setPicking({ fieldId, target })}
+                onPickProjectionRange={(projectionId, target) => {
+                  setPicking(undefined);
+                  setProjectionPicking({ projectionId, target });
+                }}
                 onAddField={addField}
                 onAddStructuredField={addStructuredField}
                 onDeleteField={deleteField}

@@ -177,4 +177,12 @@ def build_synthetic_classification_fixture(
             "row_count": len(measurements),
         },
     }
-    return LoadedSnapshot(manifest, measurements, source_map, joined, response), profile
+    return LoadedSnapshot(
+        manifest=manifest,
+        measurements=measurements,
+        source_map=source_map,
+        joined=joined,
+        response=response,
+        identity_column="experiment_version_id",
+        schema_version="1.0",
+    ), profile

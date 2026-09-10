@@ -103,6 +103,14 @@ public class ExperimentEditModelNormalizer {
                 throw validation("editModel." + fieldName + "存在重复itemId：" + itemId);
             }
             normalizeSourceRefs(item, fieldName, index);
+            // Optional child grouping fields keep multiple samples/formulas inside one
+            // experiment aggregate aligned without breaking legacy V2 models.
+            putTextDefault(item, "sourceGroupKey");
+            putTextDefault(item, "sampleKey");
+            putTextDefault(item, "sourceIdentity");
+            putTextDefault(item, "sourceIdentityType");
+            putTextDefault(item, "sourceRecordKey");
+            putTextDefault(item, "sourceContextKey");
             kind.addDefaults(item);
             normalized.add(item);
             index++;

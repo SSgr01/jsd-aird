@@ -2,23 +2,41 @@ package com.jsd.aird.tpl.application;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.shared.json.JsonCanonicalizer;
+import com.jsd.aird.shared.error.ApiErrorCode;
+import com.jsd.aird.shared.error.ApiException;
 import org.springframework.stereotype.Component;
 
 /** Compiles the immutable execution contract consumed by the data center. */
 @Component
 public class TemplateImportContractCompiler {
 
-    public static final int IMPORT_CONTRACT_VERSION = 8;
+    public static final int BASE_IMPORT_CONTRACT_VERSION = 8;
+    public static final int EXPERIMENT_IMPORT_CONTRACT_VERSION = 9;
+    /** Kept for source compatibility; ordinary templates still use V8. */
+    public static final int IMPORT_CONTRACT_VERSION = BASE_IMPORT_CONTRACT_VERSION;
     public static final int CURRENT_LAYOUT_STRUCTURE_VERSION = 7;
+    public static final String EXPERIMENT_IMPORT_SCHEMA_KEY = "x-jsd-experiment-import";
+
+    private static final Map<String, Set<String>> EXPERIMENT_FIELDS = Map.of(
+            "BASIC", Set.of("SOURCE_IDENTITY", "TITLE", "PURPOSE", "PLAN", "EXPERIMENT_DATE", "OWNER"),
+            "FORMULA", Set.of("MATERIAL_ID", "MATERIAL_CODE", "MATERIAL_NAME", "RATIO", "ACTUAL_QTY", "UNIT", "RAW_VALUE", "RAW_UNIT"),
+            "PROCESS", Set.of("STEP_NO", "OPERATION", "TEMPERATURE", "DURATION", "APPLICATION_CONDITION", "OTHER"),
+            "TEST", Set.of("TEST_ITEM", "VALUE", "UNIT", "JUDGEMENT", "TEST_METHOD", "TEST_CONDITION", "SUBSTRATE"),
+            "CONCLUSION", Set.of("RESULT_STATUS", "MAIN_CONCLUSION", "FAILURE_CATEGORY"),
+            "OTHER", Set.of("DYNAMIC_VALUE")
+    );
 
     private final ObjectMapper objectMapper;
     private final JsonCanonicalizer canonicalizer;
@@ -30,18 +48,34 @@ public class TemplateImportContractCompiler {
 
     public CompiledContract compile(JsonNode layoutSummary, JsonNode schema, JsonNode mappings) {
         var layoutVersion = layoutStructureVersion(layoutSummary);
+        var experimentConfiguration = schema == null
+                ? objectMapper.createObjectNode() : schema.path(EXPERIMENT_IMPORT_SCHEMA_KEY);
+        var experimentTemplate = "EXPERIMENT_DATA".equalsIgnoreCase(
+                experimentConfiguration.path("templateUsage").asText(""));
+        var contractVersion = experimentTemplate
+                ? EXPERIMENT_IMPORT_CONTRACT_VERSION : BASE_IMPORT_CONTRACT_VERSION;
         var contract = objectMapper.createObjectNode()
-                .put("importContractVersion", IMPORT_CONTRACT_VERSION)
+                .put("importContractVersion", contractVersion)
                 .put("layoutStructureVersion", layoutVersion)
                 .put("identityFallback", "IMPORT_SCOPED")
                 .put("compatibilityPolicy", "STRICT_SIMPLE_REGIONS");
         contract.set("fields", contractFields(schema));
-        var components = components(mappings, schema);
+        var components = components(mappings, schema, experimentTemplate);
         attachSheetFingerprints(components, layoutSummary);
+        if (experimentTemplate) {
+            var experimentImport = compileExperimentImport(experimentConfiguration, components);
+            markIdentitySemantics(components, experimentImport);
+            validateSingleValueSemantics(components);
+            summarizeBusinessTypes(components);
+            contract.put("templateUsage", "EXPERIMENT_DATA")
+                    .put("recordKeyPolicy", "STRUCTURAL");
+            contract.set("experimentImport", experimentImport);
+            contract.set("listProjections", compileListProjections(experimentConfiguration, components, experimentImport));
+        }
         contract.set("components", components);
         var hash = canonicalizer.hash(contract);
         contract.put("contractHash", hash);
-        return new CompiledContract(IMPORT_CONTRACT_VERSION, layoutVersion, hash, contract);
+        return new CompiledContract(contractVersion, layoutVersion, hash, contract);
     }
 
     private int layoutStructureVersion(JsonNode layoutSummary) {
@@ -73,7 +107,7 @@ public class TemplateImportContractCompiler {
         return result;
     }
 
-    private JsonNode components(JsonNode mappings, JsonNode schema) {
+    private ArrayNode components(JsonNode mappings, JsonNode schema, boolean includeExperimentSemantics) {
         var groups = new LinkedHashMap<String, ObjectNode>();
         if (mappings == null || !mappings.isArray()) return objectMapper.createArrayNode();
         var fieldNames = fieldNames(schema);
@@ -114,7 +148,22 @@ public class TemplateImportContractCompiler {
             copy(mapping, binding, "bindingId", "parentBindingId", "fieldCode", "dataPath", "mappingKind",
                     "repeatAxis", "recordHeight", "recordWidth", "recordStride", "required", "identity",
                     "trainingRole", "trainingEligible", "ragEligible", "valueSource", "valueType", "unit",
-                    "valuePath", "formulaTrustStatus", "fieldType");
+                     "valuePath", "formulaTrustStatus", "fieldType");
+            if (includeExperimentSemantics) {
+                var experimentField = normalizedExperimentField(mapping);
+                if (experimentField == null && !isComponentRoot(mapping)
+                        && !mapping.path("fieldCode").asText("").isBlank()) {
+                    experimentField = objectMapper.createObjectNode()
+                            .put("domain", "OTHER").put("field", "DYNAMIC_VALUE");
+                }
+                if (experimentField != null) {
+                    binding.set("experimentField", experimentField);
+                    binding.put("targetPath", targetPath(experimentField));
+                    copy(mapping, binding, "experimentItemLabel", "experimentSemanticConfidence",
+                            "experimentSemanticStatus", "experimentSemanticSource",
+                            "experimentSemanticAlternatives", "experimentSemanticIssue");
+                }
+            }
             var labelPath = labelPath(mapping, fieldNames);
             if (!labelPath.isBlank()) binding.put("labelPath", labelPath);
             if (mapping.path("labelPathSegments").isArray()) {
@@ -297,6 +346,324 @@ public class TemplateImportContractCompiler {
             }
         }
         return names;
+    }
+
+    private ObjectNode compileExperimentImport(JsonNode configuration, ArrayNode components) {
+        var recordMode = configuration.path("recordMode").asText("").trim().toUpperCase(Locale.ROOT);
+        if (!Set.of("SINGLE_FILE", "BY_IDENTITY").contains(recordMode)) {
+            throw experimentError("实验数据模板必须选择有效的实验拆分方式");
+        }
+        var compiled = objectMapper.createObjectNode().put("recordMode", recordMode);
+        var identities = objectMapper.createArrayNode();
+        var componentIdentities = new HashSet<String>();
+        if (configuration.path("identities").isArray()) {
+            for (var source : configuration.path("identities")) {
+                var componentId = source.path("componentId").asText("").trim();
+                var sourceKind = source.path("sourceKind").asText("BINDING").trim().toUpperCase(Locale.ROOT);
+                var identityType = source.path("identityType").asText("").trim().toUpperCase(Locale.ROOT);
+                if (!Set.of("EXPERIMENT_NO", "SAMPLE_NO", "FORMULA_NO", "BATCH_NO").contains(identityType)) {
+                    throw experimentError("来源标识类型无效：" + identityType);
+                }
+                if (!Set.of("BINDING", "RECORD_IDENTITY").contains(sourceKind)) {
+                    throw experimentError("来源标识方式无效：" + sourceKind);
+                }
+                var component = findComponent(components, componentId);
+                if (component == null) throw experimentError("来源标识引用的数据区域不存在：" + componentId);
+                var bindingId = source.path("bindingId").asText("").trim();
+                if ("RECORD_IDENTITY".equals(sourceKind) && bindingId.isBlank()) {
+                    bindingId = firstIdentityBinding(component);
+                }
+                if (bindingId.isBlank() || findBinding(component, bindingId) == null) {
+                    throw experimentError("来源标识引用的字段不存在：" + bindingId);
+                }
+                if (!componentIdentities.add(componentId)) {
+                    throw experimentError("同一个数据区域只能配置一个主来源标识：" + componentId);
+                }
+                identities.add(objectMapper.createObjectNode()
+                        .put("identityType", identityType)
+                        .put("sourceKind", sourceKind)
+                        .put("componentId", componentId)
+                        .put("bindingId", bindingId));
+            }
+        }
+        if ("BY_IDENTITY".equals(recordMode) && identities.isEmpty()) {
+            throw experimentError("按来源标识拆分时至少需要配置一个有效标识字段");
+        }
+        var sorted = new ArrayList<JsonNode>();
+        identities.forEach(sorted::add);
+        sorted.sort(Comparator.comparing(item -> item.path("componentId").asText("")
+                + "|" + item.path("bindingId").asText("")));
+        var stable = objectMapper.createArrayNode();
+        sorted.forEach(stable::add);
+        compiled.set("identities", stable);
+        return compiled;
+    }
+
+    private void markIdentitySemantics(ArrayNode components, ObjectNode experimentImport) {
+        for (var identity : experimentImport.path("identities")) {
+            var component = findComponent(components, identity.path("componentId").asText(""));
+            var binding = component == null ? null : findBinding(component, identity.path("bindingId").asText(""));
+            if (binding == null) continue;
+            var current = binding.path("experimentField");
+            if (current.isObject() && !"OTHER".equals(current.path("domain").asText(""))
+                    && !("BASIC".equals(current.path("domain").asText(""))
+                    && "SOURCE_IDENTITY".equals(current.path("field").asText("")))) {
+                throw experimentError("来源标识字段不能同时映射为其他实验字段："
+                        + binding.path("bindingId").asText(""));
+            }
+            var semantic = objectMapper.createObjectNode()
+                    .put("domain", "BASIC").put("field", "SOURCE_IDENTITY");
+            ((ObjectNode) binding).set("experimentField", semantic);
+            ((ObjectNode) binding).put("targetPath", targetPath(semantic))
+                    .put("sourceIdentity", true)
+                    .put("sourceIdentityType", identity.path("identityType").asText(""));
+        }
+    }
+
+    private ArrayNode compileListProjections(JsonNode configuration, ArrayNode components,
+                                             ObjectNode experimentImport) {
+        var result = objectMapper.createArrayNode();
+        var ids = new HashSet<String>();
+        if (!configuration.path("listProjections").isArray()) return result;
+        for (var source : configuration.path("listProjections")) {
+            var componentId = source.path("componentId").asText("").trim();
+            var component = findComponent(components, componentId);
+            if (component == null) throw experimentError("列表投影引用的数据区域不存在：" + componentId);
+            var domain = source.path("domain").asText("").trim().toUpperCase(Locale.ROOT);
+            var labelSemantic = source.path("labelSemantic").asText("").trim().toUpperCase(Locale.ROOT);
+            var valueSemantic = source.path("valueSemantic").asText("").trim().toUpperCase(Locale.ROOT);
+            validateExperimentField(domain, labelSemantic);
+            validateExperimentField(domain, valueSemantic);
+            var recordAxis = source.path("recordAxis").asText("").trim().toUpperCase(Locale.ROOT);
+            var itemAxis = source.path("itemAxis").asText("").trim().toUpperCase(Locale.ROOT);
+            if (!Set.of("ROW", "COLUMN").contains(recordAxis)
+                    || !Set.of("ROW", "COLUMN").contains(itemAxis) || recordAxis.equals(itemAxis)) {
+                throw experimentError("列表投影的记录方向和明细方向必须是互相垂直的行/列");
+            }
+            var labelRangeText = source.path("labelRange").asText("").trim().toUpperCase(Locale.ROOT);
+            var valueRangeText = source.path("valueRange").asText("").trim().toUpperCase(Locale.ROOT);
+            var labelRange = parseA1Range(labelRangeText);
+            var valueRange = parseA1Range(valueRangeText);
+            var componentRange = parseA1Range(component.path("range").asText(""));
+            if (labelRange == null || valueRange == null || componentRange == null) {
+                throw experimentError("列表投影必须配置有效的标签、数值和所属区域范围");
+            }
+            if (!componentRange.contains(labelRange) || !componentRange.contains(valueRange)) {
+                throw experimentError("列表投影范围必须位于所属数据区域内：" + componentId);
+            }
+            if ("ROW".equals(itemAxis)) {
+                if (labelRange.rows() != valueRange.rows() || labelRange.columns() != 1) {
+                    throw experimentError("按行排列的明细标签必须是单列，并与数值区域行数一致");
+                }
+            } else if (labelRange.columns() != valueRange.columns() || labelRange.rows() != 1) {
+                throw experimentError("按列排列的明细标签必须是单行，并与数值区域列数一致");
+            }
+            if (overlapsIdentity(valueRange, component, experimentImport)
+                    || overlapsIdentity(labelRange, component, experimentImport)) {
+                throw experimentError("列表投影不能覆盖来源标识单元格");
+            }
+            var parentBindingId = source.path("parentBindingId").asText(componentId).trim();
+            if (parentBindingId.isBlank() || findBinding(component, parentBindingId) == null) {
+                throw experimentError("列表投影引用的父区域字段不存在：" + parentBindingId);
+            }
+            var unitRangeText = source.path("unitRange").asText("").trim().toUpperCase(Locale.ROOT);
+            if (!unitRangeText.isBlank()) {
+                var unitRange = parseA1Range(unitRangeText);
+                if (unitRange == null || !componentRange.contains(unitRange)) {
+                    throw experimentError("列表投影单位区域必须位于所属数据区域内：" + componentId);
+                }
+                var scalarUnit = unitRange.rows() == 1 && unitRange.columns() == 1;
+                var alignedUnit = "ROW".equals(itemAxis)
+                        ? unitRange.rows() == labelRange.rows() && unitRange.columns() == 1
+                        : unitRange.columns() == labelRange.columns() && unitRange.rows() == 1;
+                if (!scalarUnit && !alignedUnit) {
+                    throw experimentError("列表投影单位区域必须是单个共用单位，或与标签逐项对应");
+                }
+                if (overlapsIdentity(unitRange, component, experimentImport)) {
+                    throw experimentError("列表投影单位区域不能覆盖来源标识单元格");
+                }
+            }
+            var projectionId = source.path("listProjectionId").asText("").trim();
+            if (projectionId.isBlank()) {
+                var basis = objectMapper.createObjectNode().put("componentId", componentId)
+                        .put("domain", domain).put("labelRange", labelRangeText).put("valueRange", valueRangeText);
+                projectionId = "list-" + canonicalizer.hash(basis).substring(0, 16);
+            }
+            if (!ids.add(projectionId)) throw experimentError("listProjectionId必须唯一：" + projectionId);
+            var projection = objectMapper.createObjectNode()
+                    .put("listProjectionId", projectionId)
+                    .put("domain", domain)
+                    .put("componentId", componentId)
+                    .put("parentBindingId", parentBindingId)
+                    .put("recordAxis", recordAxis)
+                    .put("itemAxis", itemAxis)
+                    .put("labelRange", labelRangeText)
+                    .put("valueRange", valueRangeText)
+                    .put("labelSemantic", labelSemantic)
+                    .put("valueSemantic", valueSemantic)
+                    .put("itemSourceKeyPattern", "MATRIX:" + projectionId + ":{relativeItemOrdinal}");
+            if (!unitRangeText.isBlank()) projection.put("unitRange", unitRangeText);
+            var fingerprintBasis = projection.deepCopy();
+            projection.put("projectionFingerprint", canonicalizer.hash(fingerprintBasis));
+            result.add(projection);
+        }
+        var sorted = new ArrayList<JsonNode>();
+        result.forEach(sorted::add);
+        sorted.sort(Comparator.comparing(item -> item.path("listProjectionId").asText("")));
+        var stable = objectMapper.createArrayNode();
+        sorted.forEach(stable::add);
+        return stable;
+    }
+
+    private boolean overlapsIdentity(A1Range range, ObjectNode component, ObjectNode experimentImport) {
+        for (var identity : experimentImport.path("identities")) {
+            if (!component.path("componentId").asText("").equals(identity.path("componentId").asText(""))) continue;
+            var binding = findBinding(component, identity.path("bindingId").asText(""));
+            if (binding == null) continue;
+            var identityRange = locatorRange(binding.path("locator"));
+            if (identityRange != null && range.overlaps(identityRange)) return true;
+        }
+        return false;
+    }
+
+    private void validateSingleValueSemantics(ArrayNode components) {
+        for (var component : components) {
+            var seen = new HashSet<String>();
+            for (var binding : component.path("bindings")) {
+                var semantic = binding.path("experimentField");
+                var domain = semantic.path("domain").asText("");
+                var field = semantic.path("field").asText("");
+                if (!Set.of("BASIC", "CONCLUSION").contains(domain)) continue;
+                var key = domain + "." + field;
+                if (!seen.add(key)) throw experimentError("同一数据区域的单值实验字段重复映射：" + key);
+            }
+        }
+    }
+
+    private void summarizeBusinessTypes(ArrayNode components) {
+        for (var component : components) {
+            var values = new java.util.TreeSet<String>();
+            component.path("bindings").forEach(binding -> {
+                var domain = binding.path("experimentField").path("domain").asText("");
+                if (!domain.isBlank()) values.add(domain);
+            });
+            var array = ((ObjectNode) component).putArray("businessTypes");
+            values.forEach(array::add);
+        }
+    }
+
+    private ObjectNode normalizedExperimentField(JsonNode mapping) {
+        var source = mapping.path("experimentField").isObject()
+                ? mapping.path("experimentField") : mapping.path("diagnostic").path("experimentField");
+        if (!source.isObject()) return null;
+        var domain = source.path("domain").asText("").trim().toUpperCase(Locale.ROOT);
+        var field = source.path("field").asText("").trim().toUpperCase(Locale.ROOT);
+        validateExperimentField(domain, field);
+        return objectMapper.createObjectNode().put("domain", domain).put("field", field);
+    }
+
+    private void validateExperimentField(String domain, String field) {
+        if (!EXPERIMENT_FIELDS.containsKey(domain) || !EXPERIMENT_FIELDS.get(domain).contains(field)) {
+            throw experimentError("实验字段语义无效：" + domain + "." + field);
+        }
+    }
+
+    private String targetPath(JsonNode semantic) {
+        var domain = semantic.path("domain").asText("");
+        var field = semantic.path("field").asText("");
+        if ("BASIC".equals(domain)) return switch (field) {
+            case "SOURCE_IDENTITY" -> "/sourceIdentity";
+            case "TITLE" -> "/title";
+            case "OWNER" -> "/ownerName";
+            case "EXPERIMENT_DATE" -> "/experimentDate";
+            case "PURPOSE" -> "/editModel/purpose";
+            case "PLAN" -> "/editModel/plan";
+            default -> "/editModel/dynamicValues/*";
+        };
+        if ("FORMULA".equals(domain)) return "/editModel/formulaItems/*/" + lowerCamel(field);
+        if ("PROCESS".equals(domain)) return "/editModel/processSteps/*/" + lowerCamel(field);
+        if ("TEST".equals(domain)) return "/editModel/testResults/*/" + lowerCamel(field);
+        if ("CONCLUSION".equals(domain)) return "/editModel/conclusion/" + lowerCamel(field);
+        return "/editModel/dynamicValues/*";
+    }
+
+    private String lowerCamel(String value) {
+        var parts = value.toLowerCase(Locale.ROOT).split("_");
+        var result = new StringBuilder(parts[0]);
+        for (int index = 1; index < parts.length; index++) {
+            if (parts[index].isBlank()) continue;
+            result.append(Character.toUpperCase(parts[index].charAt(0))).append(parts[index].substring(1));
+        }
+        return result.toString();
+    }
+
+    private ObjectNode findComponent(ArrayNode components, String componentId) {
+        for (var component : components) {
+            if (componentId.equals(component.path("componentId").asText(""))) return (ObjectNode) component;
+        }
+        return null;
+    }
+
+    private ObjectNode findBinding(ObjectNode component, String bindingId) {
+        for (var binding : component.path("bindings")) {
+            if (bindingId.equals(binding.path("bindingId").asText(""))) return (ObjectNode) binding;
+        }
+        return null;
+    }
+
+    private String firstIdentityBinding(ObjectNode component) {
+        for (var binding : component.path("bindings")) {
+            if (binding.path("identity").asBoolean(false)) return binding.path("bindingId").asText("");
+        }
+        return "";
+    }
+
+    private A1Range locatorRange(JsonNode locator) {
+        for (var key : List.of("logicalInputRange", "valueRange", "recordRange", "dataRange", "address", "range", "sourceRange")) {
+            var parsed = parseA1Range(locator.path(key).asText(""));
+            if (parsed != null) return parsed;
+        }
+        return null;
+    }
+
+    private A1Range parseA1Range(String source) {
+        if (source == null || source.isBlank()) return null;
+        var normalized = source.replace("$", "").replace(" ", "").toUpperCase(Locale.ROOT);
+        var bang = normalized.lastIndexOf('!');
+        if (bang >= 0) normalized = normalized.substring(bang + 1);
+        var parts = normalized.split(":", 2);
+        var first = parseA1Cell(parts[0]);
+        var last = parseA1Cell(parts.length == 1 ? parts[0] : parts[1]);
+        if (first == null || last == null) return null;
+        return new A1Range(Math.min(first.row(), last.row()), Math.max(first.row(), last.row()),
+                Math.min(first.column(), last.column()), Math.max(first.column(), last.column()));
+    }
+
+    private A1Cell parseA1Cell(String source) {
+        var matcher = java.util.regex.Pattern.compile("^([A-Z]+)([1-9][0-9]*)$").matcher(source);
+        if (!matcher.matches()) return null;
+        var column = 0;
+        for (var letter : matcher.group(1).toCharArray()) column = column * 26 + letter - 'A' + 1;
+        return new A1Cell(Integer.parseInt(matcher.group(2)), column);
+    }
+
+    private ApiException experimentError(String message) {
+        return new ApiException(ApiErrorCode.TEMPLATE_EXPERIMENT_SEMANTICS_INVALID, message);
+    }
+
+    private record A1Cell(int row, int column) {}
+
+    private record A1Range(int startRow, int endRow, int startColumn, int endColumn) {
+        int rows() { return endRow - startRow + 1; }
+        int columns() { return endColumn - startColumn + 1; }
+        boolean contains(A1Range other) {
+            return other.startRow >= startRow && other.endRow <= endRow
+                    && other.startColumn >= startColumn && other.endColumn <= endColumn;
+        }
+        boolean overlaps(A1Range other) {
+            return startRow <= other.endRow && endRow >= other.startRow
+                    && startColumn <= other.endColumn && endColumn >= other.startColumn;
+        }
     }
 
     private String componentFingerprint(JsonNode component) {

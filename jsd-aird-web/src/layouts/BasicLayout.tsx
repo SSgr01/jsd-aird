@@ -24,6 +24,7 @@ import {
   SettingOutlined,
   UserOutlined,
   SearchOutlined,
+  AimOutlined,
 } from '@ant-design/icons';
 import { ProLayout } from '@ant-design/pro-components';
 import { Avatar, Button, Dropdown, Input, Result, Tooltip, Typography, type InputRef } from 'antd';
@@ -74,6 +75,8 @@ const route = {
       icon: <RobotOutlined />,
       routes: [
         { path: '/assistant', name: 'AI问答', icon: <RobotOutlined /> },
+        { path: '/assistant/formula-prediction', name: 'AI配方预测', icon: <AimOutlined /> },
+        { path: '/assistant/experiment-optimization', name: 'AI实验优化', icon: <ExperimentOutlined /> },
         { path: '/knowledge/search', name: '文件检索', icon: <FileSearchOutlined /> },
       ],
     },

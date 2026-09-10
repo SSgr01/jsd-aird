@@ -39,6 +39,35 @@ public class JdbcExperimentRepository implements ExperimentRepository {
     }
     @Override public Optional<Detail> detail(UUID org,UUID id){return jdbc.query(BASE+" WHERE e.organization_id=? AND e.id=? AND e.deleted=false",(rs,n)->detailRow(rs),org,id).stream().findFirst();}
 
+    @Override public List<CompletedFactsRow> completedFacts(UUID org, CompletedFactsSearch q) {
+        var query = completedFactsWhere(org, q);
+        var args = new ArrayList<>(query.args());
+        args.add(q.size());
+        args.add(Math.max(0, q.page() - 1) * q.size());
+        return jdbc.query("""
+                SELECT e.id AS experiment_id,e.current_version_id AS experiment_version_id,
+                       e.experiment_no,e.title,e.source_type,e.project_id,e.stage_id,e.task_id,
+                       e.category_id,e.category_name,e.experiment_date,v.edit_model_jsonb
+                  FROM rnd.experiment e
+                  JOIN rnd.experiment_version v ON v.id=e.current_version_id AND v.organization_id=e.organization_id
+                """ + query.where() + " ORDER BY e.id,e.current_version_id LIMIT ? OFFSET ?", (rs, n) ->
+                new CompletedFactsRow(
+                        rs.getObject("experiment_id", UUID.class), rs.getObject("experiment_version_id", UUID.class),
+                        rs.getString("experiment_no"), rs.getString("title"), rs.getString("source_type"),
+                        rs.getObject("project_id", UUID.class), rs.getObject("stage_id", UUID.class),
+                        rs.getObject("task_id", UUID.class), rs.getObject("category_id", UUID.class),
+                        rs.getString("category_name"), rs.getObject("experiment_date", LocalDate.class),
+                        node(rs, "edit_model_jsonb")), args.toArray());
+    }
+
+    @Override public long countCompletedFacts(UUID org, CompletedFactsSearch q) {
+        var query = completedFactsWhere(org, q);
+        return Optional.ofNullable(jdbc.queryForObject("""
+                SELECT count(*) FROM rnd.experiment e
+                JOIN rnd.experiment_version v ON v.id=e.current_version_id AND v.organization_id=e.organization_id
+                """ + query.where(), Long.class, query.args().toArray())).orElse(0L);
+    }
+
     @Override @Transactional public Summary create(Create c){
         String no = c.experimentNo();
         if (!text(no)) no = "EXP-" + LocalDate.now().format(java.time.format.DateTimeFormatter.BASIC_ISO_DATE) + "-" + UUID.randomUUID().toString().substring(0, 6).toUpperCase();
@@ -115,6 +144,45 @@ public class JdbcExperimentRepository implements ExperimentRepository {
     @Override @Transactional public Category setCategoryActive(UUID org,UUID id,long rev,boolean active){if(!active&&Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM rnd.experiment WHERE organization_id=? AND category_id=? AND deleted=false)",Boolean.class,org,id)))conflict("该分类仍有关联实验，请先移动或删除实验");int n=jdbc.update("UPDATE rnd.experiment_category SET active=?,revision=revision+1,updated_at=now() WHERE organization_id=? AND id=? AND revision=?",active,org,id,rev);lock(n);return categories(org,true).stream().filter(x->x.id().equals(id)).findFirst().orElseThrow();}
 
     private Detail required(UUID o,UUID id){return detail(o,id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"实验不存在"));}
+
+    private CompletedQuery completedFactsWhere(UUID org, CompletedFactsSearch q) {
+        var where = new StringBuilder(" WHERE e.organization_id=? AND e.deleted=false AND e.status='COMPLETED' AND v.status='COMPLETED'");
+        var args = new ArrayList<Object>();
+        args.add(org);
+        if (!q.experimentIds().isEmpty()) appendIn(where, args, "e.id", q.experimentIds());
+        if (q.projectId() != null) { where.append(" AND e.project_id=?"); args.add(q.projectId()); }
+        if (q.categoryId() != null) { where.append(" AND e.category_id=?"); args.add(q.categoryId()); }
+        var scope = q.scope();
+        switch (scope.type()) {
+            case "ALL" -> { }
+            case "SELF" -> {
+                where.append(" AND (e.created_by=? OR e.owner_id=?)");
+                args.add(scope.actorId());
+                args.add(scope.actorId());
+            }
+            case "ASSIGNED" -> {
+                where.append(" AND e.owner_id=?");
+                args.add(scope.actorId());
+            }
+            case "PROJECT" -> appendIn(where, args, "e.project_id", scope.targetIds());
+            case "CATEGORY" -> appendIn(where, args, "e.category_id", scope.targetIds());
+            case "SELECTED" -> appendIn(where, args, "e.id", scope.targetIds());
+            default -> where.append(" AND 1=0");
+        }
+        return new CompletedQuery(where.toString(), List.copyOf(args));
+    }
+
+    private void appendIn(StringBuilder where, List<Object> args, String column, Set<UUID> ids) {
+        if (ids == null || ids.isEmpty()) {
+            where.append(" AND 1=0");
+            return;
+        }
+        where.append(" AND ").append(column).append(" IN (")
+                .append(String.join(",", ids.stream().map(ignored -> "?").toList())).append(')');
+        args.addAll(ids);
+    }
+
+    private record CompletedQuery(String where, List<Object> args) {}
     private String generateExperimentNo(){
         long seq = jdbc.queryForObject("SELECT nextval('rnd.experiment_no_seq')", Long.class);
         return "EXP-" + LocalDate.now().format(java.time.format.DateTimeFormatter.BASIC_ISO_DATE) + "-" + seq;

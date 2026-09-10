@@ -6,7 +6,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from jsd_aird_ai.contracts import FeatureType, TaskProfile
+from jsd_aird_ai.contracts import FeatureType, FeatureViewSpec, TaskProfile
+from jsd_aird_ai.feature_views import validate_feature_view
 from jsd_aird_ai.errors import ErrorCode, FormulaModelError
 
 
@@ -25,8 +26,11 @@ class FeatureLayout:
 
 
 class FeatureBuilder:
-    def __init__(self, profile: TaskProfile) -> None:
+    def __init__(self, profile: TaskProfile, feature_view: FeatureViewSpec | None = None) -> None:
         self.profile = profile
+        self.feature_view = feature_view
+        if feature_view is not None:
+            validate_feature_view(feature_view, profile)
         self.material_by_code = {item.code: item for item in profile.formula.materials}
         self.context_by_code = {item.code: item for item in profile.context_features}
         self.main_materials = [
@@ -45,13 +49,25 @@ class FeatureBuilder:
             for item in profile.context_features
             if item.value_type == FeatureType.CATEGORICAL
         ]
+        extra_numeric = [
+            item.column
+            for item in (feature_view.additional_features if feature_view is not None else [])
+            if item.value_type == FeatureType.NUMERIC
+        ]
+        extra_categorical = [
+            item.column
+            for item in (feature_view.additional_features if feature_view is not None else [])
+            if item.value_type == FeatureType.CATEGORICAL
+        ]
+        self.additional_features = list(feature_view.additional_features) if feature_view is not None else []
         self.layout = FeatureLayout(
             numeric=[
                 MAIN_RESIN_PCT,
                 *[item.column for item in self.non_main_materials],
                 *numeric_context,
+                *extra_numeric,
             ],
-            categorical=[MAIN_RESIN_CODE, *categorical_context],
+            categorical=[MAIN_RESIN_CODE, *categorical_context, *extra_categorical],
         )
 
     def from_snapshot(self, measurements: pd.DataFrame) -> pd.DataFrame:
@@ -72,6 +88,13 @@ class FeatureBuilder:
             result[material.column] = measurements[material.column]
         for context in self.profile.context_features:
             result[context.column] = measurements[context.column]
+        for feature in self.additional_features:
+            if feature.column not in measurements:
+                result[feature.column] = np.nan
+            elif feature.value_type == FeatureType.NUMERIC:
+                result[feature.column] = pd.to_numeric(measurements[feature.column], errors="coerce")
+            else:
+                result[feature.column] = measurements[feature.column]
         return result[self.layout.all]
 
     def from_api_rows(
@@ -143,7 +166,7 @@ class FeatureBuilder:
                 details={"total": total},
             )
 
-        expected_context = set(self.context_by_code)
+        expected_context = set(self.context_by_code) | {item.code for item in self.additional_features}
         actual_context = set(context)
         if actual_context != expected_context:
             raise FormulaModelError(
@@ -168,6 +191,21 @@ class FeatureBuilder:
                     f"context feature {code} is missing",
                 )
             row[spec.column] = value
+        for feature in self.additional_features:
+            value = context[feature.code]
+            if feature.value_type == FeatureType.NUMERIC:
+                value = float(value)
+                if not np.isfinite(value):
+                    raise FormulaModelError(
+                        ErrorCode.INVALID_SNAPSHOT,
+                        f"feature view value {feature.code} is missing or invalid",
+                    )
+            elif value is None or not str(value).strip():
+                raise FormulaModelError(
+                    ErrorCode.INVALID_SNAPSHOT,
+                    f"feature view value {feature.code} is missing or invalid",
+                )
+            row[feature.column] = value
         return row
 
     def valid_feature_mask(self, features: pd.DataFrame) -> pd.Series:

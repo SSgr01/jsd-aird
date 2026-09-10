@@ -41,6 +41,7 @@ public class PostgresWorker {
     private final String workerId;
     private final Duration leaseDuration;
     private final Duration jobTimeout;
+    private final Duration formulaModelBuildTimeout;
     private final java.util.concurrent.ExecutorService jobExecutor =
             Executors.newVirtualThreadPerTaskExecutor();
     private final ScheduledExecutorService heartbeatExecutor =
@@ -55,7 +56,8 @@ public class PostgresWorker {
             List<AsyncJobHandler> jobHandlers,
             @Value("${app.worker.id}") String workerId,
             @Value("${app.worker.lease-duration}") Duration leaseDuration,
-            @Value("${app.worker.job-timeout:15m}") Duration jobTimeout
+            @Value("${app.worker.job-timeout:15m}") Duration jobTimeout,
+            @Value("${app.worker.formula-model-build-timeout:4h}") Duration formulaModelBuildTimeout
     ) {
         this.workRepository = workRepository;
         this.fileRepository = fileRepository;
@@ -64,6 +66,21 @@ public class PostgresWorker {
         this.workerId = workerId;
         this.leaseDuration = leaseDuration;
         this.jobTimeout = jobTimeout;
+        this.formulaModelBuildTimeout = formulaModelBuildTimeout;
+    }
+
+    /** Kept for focused unit tests and small embedded callers. */
+    public PostgresWorker(
+            WorkRepository workRepository,
+            FileObjectRepository fileRepository,
+            ObjectMapper objectMapper,
+            List<AsyncJobHandler> jobHandlers,
+            String workerId,
+            Duration leaseDuration,
+            Duration jobTimeout
+    ) {
+        this(workRepository, fileRepository, objectMapper, jobHandlers, workerId, leaseDuration,
+                jobTimeout, Duration.ofHours(4));
     }
 
     /** Kept for focused unit tests and small embedded callers. */
@@ -76,7 +93,7 @@ public class PostgresWorker {
             Duration leaseDuration
     ) {
         this(workRepository, fileRepository, objectMapper, jobHandlers, workerId, leaseDuration,
-                Duration.ofMinutes(15));
+                Duration.ofMinutes(15), Duration.ofHours(4));
     }
 
     @PostConstruct
@@ -163,13 +180,15 @@ public class PostgresWorker {
             throw new JobCancelledException();
         }
         Future<com.fasterxml.jackson.databind.JsonNode> future = jobExecutor.submit(() -> {
-            try (var ignored = JobDeadline.start(jobTimeout)) {
+            var timeout = timeoutFor(job);
+            try (var ignored = JobDeadline.start(timeout)) {
                 return execute(job);
             }
         });
         try {
+            var timeout = timeoutFor(job);
             var deadline = System.nanoTime()
-                    + TimeUnit.MILLISECONDS.toNanos(Math.max(1, jobTimeout.toMillis()));
+                    + TimeUnit.MILLISECONDS.toNanos(Math.max(1, timeout.toMillis()));
             while (true) {
                 if (workRepository.isCancelled(job.id())) {
                     future.cancel(true);
@@ -178,7 +197,7 @@ public class PostgresWorker {
                 var remainingNanos = deadline - System.nanoTime();
                 if (remainingNanos <= 0) {
                     future.cancel(true);
-                    throw new JobTimeoutException(job, jobTimeout, liveStage(job));
+                    throw new JobTimeoutException(job, timeout, liveStage(job));
                 }
                 try {
                     var waitMillis = Math.max(1L,
@@ -191,12 +210,16 @@ public class PostgresWorker {
         } catch (InterruptedException exception) {
             future.cancel(true);
             Thread.currentThread().interrupt();
-            throw new JobTimeoutException(job, jobTimeout, liveStage(job) + "，Worker 线程被中断");
+            throw new JobTimeoutException(job, timeoutFor(job), liveStage(job) + "，Worker 线程被中断");
         } catch (ExecutionException exception) {
             var cause = exception.getCause();
             if (cause instanceof Exception nested) throw nested;
             throw new IllegalStateException("异步任务执行失败", cause);
         }
+    }
+
+    private Duration timeoutFor(WorkRepository.AsyncJob job) {
+        return "FORMULA_MODEL_BUILD".equals(job.jobType()) ? formulaModelBuildTimeout : jobTimeout;
     }
 
     private String liveStage(WorkRepository.AsyncJob job) {

@@ -50,11 +50,35 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade {
 
     @Override
     public List<DataTemplateOption> listPublished(UUID organizationId) {
-        return repository.findPublishedDataTemplates(organizationId).stream()
-                .map(item -> new DataTemplateOption(
-                        item.templateId(), item.versionId(), item.templateCode(), item.name(),
-                        item.category(), item.versionNo(), item.format().name()))
+        var items = repository.findPublishedDataTemplates(organizationId);
+        var contracts = repository.findImportContracts(organizationId,
+                items.stream().map(TemplateRepository.TemplateListItem::versionId).toList());
+        return items.stream()
+                .map(item -> option(item, contracts.get(item.versionId())))
                 .toList();
+    }
+
+    private DataTemplateOption option(TemplateRepository.TemplateListItem item,
+                                      TemplateRepository.ImportContract stored) {
+        var contract = stored == null ? null : stored.contract();
+        var experimentImport = contract == null ? null : contract.path("experimentImport");
+        var recordMode = experimentImport == null ? "" : experimentImport.path("recordMode").asText("");
+        var identityTypes = new java.util.LinkedHashSet<String>();
+        if (experimentImport != null && experimentImport.path("identities").isArray()) {
+            experimentImport.path("identities").forEach(identity -> {
+                var type = identity.path("identityType").asText("");
+                if (!type.isBlank()) identityTypes.add(type);
+            });
+        }
+        var version = stored == null ? 0 : stored.importContractVersion();
+        var usage = version >= TemplateImportContractCompiler.EXPERIMENT_IMPORT_CONTRACT_VERSION
+                && contract != null ? contract.path("templateUsage").asText("GENERAL_DATA") : "GENERAL_DATA";
+        var ready = "EXPERIMENT_DATA".equals(usage)
+                && ("SINGLE_FILE".equals(recordMode) || !identityTypes.isEmpty());
+        return new DataTemplateOption(item.templateId(), item.versionId(), item.templateCode(), item.name(),
+                item.category(), item.versionNo(), item.format().name(), version, usage, ready,
+                recordMode.isBlank() ? null : recordMode, List.copyOf(identityTypes),
+                experimentImport == null ? 0 : experimentImport.path("identities").size());
     }
 
     @Override
@@ -62,6 +86,54 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade {
         var workspace = repository.findPublishedDataTemplate(organizationId, templateVersionId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "数据中心模板不存在或未发布"));
         return definition(organizationId, workspace);
+    }
+
+    @Override
+    public PublishedExperimentTemplate getPublishedExperimentTemplate(UUID organizationId, String templateCode) {
+        if (templateCode == null || templateCode.isBlank()) {
+            throw new ApiException(ApiErrorCode.EXPERIMENT_TEMPLATE_REQUIRED, "AI任务未配置实验模板编码");
+        }
+        var item = repository.findPublishedDataTemplates(organizationId).stream()
+                .filter(candidate -> templateCode.strip().equals(candidate.templateCode()))
+                .findFirst()
+                .orElseThrow(() -> new ApiException(ApiErrorCode.EXPERIMENT_TEMPLATE_REQUIRED,
+                        "未找到已发布的实验模板：" + templateCode.strip()));
+        var workspace = repository.findPublishedDataTemplate(organizationId, item.versionId())
+                .orElseThrow(() -> new ApiException(ApiErrorCode.EXPERIMENT_TEMPLATE_REQUIRED,
+                        "实验模板当前发布版本不可用：" + templateCode.strip()));
+        return experimentTemplate(organizationId, workspace, templateCode.strip());
+    }
+
+    @Override
+    public PublishedExperimentTemplate getExperimentTemplateVersion(UUID organizationId, UUID templateVersionId) {
+        var workspace = repository.findWorkspace(organizationId, templateVersionId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.EXPERIMENT_TEMPLATE_REQUIRED,
+                        "导入任务引用的实验模板版本不存在"));
+        return experimentTemplate(organizationId, workspace, workspace.templateCode());
+    }
+
+    private PublishedExperimentTemplate experimentTemplate(UUID organizationId,
+                                                           TemplateRepository.TemplateWorkspace workspace,
+                                                           String templateCode) {
+        var stored = repository.findImportContract(organizationId, workspace.versionId()).orElse(null);
+        var contract = stored == null ? null : stored.contract();
+        var validExperimentTemplate = workspace.format() == TemplateFormat.XLSX
+                && stored != null
+                && stored.importContractVersion() >= TemplateImportContractCompiler.EXPERIMENT_IMPORT_CONTRACT_VERSION
+                && contract != null
+                && "EXPERIMENT_DATA".equals(contract.path("templateUsage").asText());
+        if (!validExperimentTemplate) {
+            throw new ApiException(ApiErrorCode.EXPERIMENT_TEMPLATE_REQUIRED,
+                    "模板未发布为可生成实验草稿的V9实验模板：" + templateCode);
+        }
+        if (workspace.snapshotHash() == null || workspace.snapshotHash().isBlank()) {
+            throw new ApiException(ApiErrorCode.EXPERIMENT_TEMPLATE_REQUIRED,
+                    "已发布实验模板缺少不可变快照哈希：" + templateCode);
+        }
+        return new PublishedExperimentTemplate(workspace.templateId(), workspace.versionId(),
+                workspace.templateCode(), workspace.name(), workspace.versionNo(), workspace.snapshotHash(),
+                readSnapshot(organizationId, workspace).deepCopy(), workspace.mapping().deepCopy(),
+                contract.deepCopy());
     }
 
     @Override
@@ -87,11 +159,14 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade {
 
     private List<ImportBinding> bindings(UUID organizationId, TemplateRepository.TemplateWorkspace workspace) {
         var result = new ArrayList<ImportBinding>();
-        if (workspace.mapping() == null || !workspace.mapping().isArray()) return result;
-        var componentByBinding = componentByBinding(
-                repository.findImportContract(organizationId, workspace.versionId())
-                        .map(TemplateRepository.ImportContract::contract).orElse(null));
-        for (JsonNode item : workspace.mapping()) {
+        var storedContract = repository.findImportContract(organizationId, workspace.versionId()).orElse(null);
+        var contract = storedContract == null ? null : storedContract.contract();
+        var sourceBindings = storedContract != null
+                && storedContract.importContractVersion() >= TemplateImportContractCompiler.EXPERIMENT_IMPORT_CONTRACT_VERSION
+                ? contractBindings(contract) : workspace.mapping();
+        if (sourceBindings == null || !sourceBindings.isArray()) return result;
+        var componentByBinding = componentByBinding(contract);
+        for (JsonNode item : sourceBindings) {
             var fieldCode = firstText(item, "fieldCode", "field_code");
             if (fieldCode.isBlank() && !item.path("mappingKind").asText("").contains("REGION")) continue;
             var valueSource = firstText(item, "valueSource", "value_source", "INPUT");
@@ -120,11 +195,29 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade {
                     item.path("trainingEligible").asBoolean(!"FORMULA".equalsIgnoreCase(valueSource)),
                     valueSource, firstText(item, "valueType", "dataType", "TEXT"),
                     firstText(item, "unit", "defaultUnit", ""),
-                    labelPath(item), firstText(item, "trainingRole", "training_role",
+                    labelPath(item), labelPathSegments(item), firstText(item, "trainingRole", "training_role",
                             item.path("trainingEligible").asBoolean(true) ? "FEATURE" : "EXCLUDE"),
-                    item.path("ragEligible").asBoolean(true)));
+                    item.path("ragEligible").asBoolean(true),
+                    item.path("experimentField").isObject() ? item.path("experimentField").deepCopy() : null,
+                    firstText(item, "targetPath", "target_path")));
         }
         return List.copyOf(result);
+    }
+
+    private JsonNode contractBindings(JsonNode contract) {
+        var result = objectMapper.createArrayNode();
+        if (contract == null || !contract.path("components").isArray()) return result;
+        for (var component : contract.path("components")) {
+            var componentId = component.path("componentId").asText("");
+            for (var binding : component.path("bindings")) {
+                var copy = binding.deepCopy();
+                if (copy instanceof ObjectNode object && !componentId.isBlank()) {
+                    object.withObject("locator").put("componentId", componentId);
+                }
+                result.add(copy);
+            }
+        }
+        return result;
     }
 
     private LinkedHashMap<String, String> componentByBinding(JsonNode contract) {
@@ -153,6 +246,25 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade {
             if (!labels.isEmpty()) return String.join(" > ", labels);
         }
         return firstText(item, "fieldName", "displayName", "fieldCode");
+    }
+
+    private List<String> labelPathSegments(JsonNode item) {
+        var result = new ArrayList<String>();
+        var source = item.path("labelPathSegments");
+        if (!source.isArray()) source = item.path("diagnostic").path("labelPathSegments");
+        if (source.isArray()) source.forEach(value -> {
+            var segment = value.asText("").strip();
+            if (!segment.isBlank()) result.add(segment);
+        });
+        if (result.isEmpty()) {
+            var path = labelPath(item);
+            if (!path.isBlank()) {
+                for (var segment : path.split("\\s*>\\s*")) {
+                    if (!segment.isBlank()) result.add(segment.strip());
+                }
+            }
+        }
+        return List.copyOf(result);
     }
 
     /**

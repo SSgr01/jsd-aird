@@ -19,8 +19,8 @@ export interface ExperimentSummary {
   stageName?: string;
   taskId?: string;
   taskName?: string;
-  ownerName: string;
-  experimentDate: string;
+  ownerName: string | null;
+  experimentDate: string | null;
   versionNo: number;
   revision: number;
   updatedAt: string;
@@ -35,10 +35,43 @@ export interface ExperimentSourceRef extends Record<string, unknown> {
   sheetId?: string;
   cellRange?: string;
   sourceHash?: string;
+  recordKey?: string;
+  sourceIdentity?: string;
+  sourceIdentityType?: string;
+  sourceGroupKey?: string;
+  sampleKey?: string;
+  logicalSampleKey?: string | null;
+  sourceContextKey?: string;
 }
 export interface ExperimentItem extends Record<string, unknown> {
   itemId: string;
   sourceRefs: ExperimentSourceRef[];
+  sourceGroupKey?: string;
+  sampleKey?: string;
+  logicalSampleKey?: string | null;
+  sourceIdentity?: string;
+  sourceIdentityType?: string;
+  sourceRecordKey?: string;
+  sourceContextKey?: string;
+}
+export interface ExperimentSampleGroup extends Record<string, unknown> {
+  sourceGroupKey?: string;
+  sampleKey: string;
+  logicalSampleKey?: string | null;
+  sourceIdentity: string;
+  sourceIdentityType: string;
+  sourceRecordKeys: string[];
+  sourceSheets?: string[];
+  sourceContextKey?: string;
+}
+export type ExperimentSourceGroup = ExperimentSampleGroup;
+export interface ExperimentSourceContext extends Record<string, unknown> {
+  sourceContextKey: string;
+  sheetId?: string;
+  sheetName?: string;
+  sourceRecordKeys: string[];
+  sharedContextRecordKeys: string[];
+  facts?: Array<Record<string, unknown>>;
 }
 export interface FormulaItem extends ExperimentItem {
   materialId?: string | null;
@@ -62,6 +95,9 @@ export interface ExperimentModel extends Record<string, unknown> {
   documentFormat?: 'word' | 'excel';
   documentSnapshot?: Record<string, unknown>;
   dynamicValues?: Record<string, unknown>;
+  sourceGroups?: ExperimentSourceGroup[];
+  sourceContexts?: ExperimentSourceContext[];
+  sampleGroups?: ExperimentSampleGroup[];
   formulaItems?: FormulaItem[];
   processSteps?: ProcessStep[];
   testResults?: TestResult[];

@@ -169,6 +169,10 @@ export function buildExperimentSnapshot(
     return buildBlankDocumentSnapshot(id, editModel.title);
   }
 
+  if (templateSnapshot?.sheets && typeof templateSnapshot.sheets === 'object') {
+    return templateSnapshot;
+  }
+
   const sheets: Record<string, Record<string, unknown>> = {};
 
   const recordRows: Array<[string, unknown]> = [
@@ -278,7 +282,16 @@ export function parseExperimentRecords(snapshot: Record<string, unknown>, editMo
       layout.columns.forEach((column, columnIndex) => {
         const value = readCell(sheet, row, columnIndex);
         if (value.trim() !== '') hasValue = true;
-        record[column.key] = value;
+        // An imported missing value is represented by JSON null while its
+        // source text (for example "/") remains in rawValue. Rendering the
+        // cell as blank and saving it unchanged must not turn that null into
+        // an empty string, otherwise later data-quality projection loses the
+        // distinction between a missing measurement and entered text.
+        const sourceMissing = (column.key === 'value' || column.key === 'ratio')
+          && previous?.rawValue === '/';
+        record[column.key] = value === '' && (previous?.[column.key] === null || sourceMissing)
+          ? null
+          : value;
       });
       if (!hasValue) break;
       if (hasStableItemId(layout.key)) {

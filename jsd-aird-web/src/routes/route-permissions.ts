@@ -127,7 +127,7 @@ export function requiredPermissionForPath(pathname: string): string | undefined 
   // Pure menu group: its visibility is determined by accessible children.
   if (pathname === '/research-test-root') return undefined;
   const path = pathname.replace(/\/$/, '') || '/';
-  if (path === '/assistant' || path === '/knowledge/search') return 'ai.use';
+  if (path === '/assistant' || path.startsWith('/assistant/') || path === '/knowledge/search') return 'ai.use';
   if (path === '/knowledge/library') return 'knowledge.upload';
   if (path === '/data/upload') return 'data.create';
   if (path === '/quality/upload') return 'quality.upload';

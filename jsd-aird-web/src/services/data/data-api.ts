@@ -3,8 +3,22 @@ import { httpClient } from '@/services/http/client';
 import { fetchFileBlob } from '@/services/files';
 import type { ProjectRelationTarget, RelatedProjectView } from '@/services/project/project-resource-api';
 
-export interface DataTemplateOption { templateId: string; versionId: string; templateCode: string; name: string; category?: string; versionNo: number; format: 'XLSX' | 'DOCX' }
-export interface DataJob { id: string; sourceFileId: string; sourceSha256: string; sourceFileName: string; sourceFormat: string; templateVersionId: string; categoryId?: string; status: string; progress: number; currentStage?: string; parserVersion?: string; errorMessage?: string; createdAt: string; updatedAt: string; importContractVersion?: number; contractHash?: string; compatibilityStatus?: 'LEGACY' | 'EXACT' | 'COMPATIBLE' | 'REVIEW_REQUIRED' | 'INCOMPATIBLE' }
+export interface DataTemplateOption {
+  templateId: string;
+  versionId: string;
+  templateCode: string;
+  name: string;
+  category?: string;
+  versionNo: number;
+  format: 'XLSX' | 'DOCX';
+  importContractVersion?: number;
+  templateUsage?: 'GENERAL_DATA' | 'EXPERIMENT_DATA';
+  experimentImportReady?: boolean;
+  recordMode?: 'SINGLE_FILE' | 'BY_IDENTITY';
+  identityTypes?: string[];
+  identityCount?: number;
+}
+export interface DataJob { id: string; sourceFileId: string; sourceSha256: string; sourceFileName: string; sourceFormat: string; templateVersionId: string; categoryId?: string; status: string; progress: number; currentStage?: string; parserVersion?: string; errorMessage?: string; createdAt: string; updatedAt: string; importContractVersion?: number; contractHash?: string; compatibilityStatus?: 'LEGACY' | 'EXACT' | 'COMPATIBLE' | 'REVIEW_REQUIRED' | 'INCOMPATIBLE'; importPurpose?: 'DATA_ONLY' | 'EXPERIMENT_DRAFT'; targetExperimentCategoryId?: string }
 export interface DataSheet { id: string; sheetId: string; sheetName: string; sheetOrder: number; selected: boolean; headerRows: number[]; dataStartRow?: number; dataEndRow?: number; structure: Record<string, unknown>; confirmationStatus: string }
 export interface DataMapping { id?: string; sheetId: string; sourceColumn: string; sourceHeader?: string; fieldCode?: string; fieldName?: string; action: string; valueType?: string; sourceUnit?: string; standardUnit?: string; detail?: Record<string, unknown>; status?: string }
 export interface NormalizedValue { fieldCode?: string; bindingId?: string; valuePath?: string; labelPath?: string; rawValue?: unknown; normalizedValue?: unknown; correctedValue?: unknown; normalizedUnit?: string; valueSource?: string; calculationStatus?: string; formulaTrustStatus?: string }
@@ -27,6 +41,10 @@ export interface DataWorkbookRecord { recordId: string; regionId: string; label:
 export interface DataWorkbookFieldDefinition { componentId: string; bindingId: string; parentBindingId?: string; fieldCode: string; displayName: string; description?: string; labelPath?: string; mappingKind?: string; repeatAxis?: string; valueType?: string; unit?: string; required: boolean; identity: boolean; groupPath?: string; sheetId?: string; sheetName?: string; sourceRange?: string }
 export interface DataFieldValueView { recordId?: string; fieldCode: string; fieldName: string; labelPath?: string; bindingId: string; valuePath: string; valueSource: string; valueStatus: string; valueType?: string; unit?: string; required: boolean; identity: boolean; trainingEligible: boolean; ragEligible: boolean; sheetId?: string; sheetName?: string; rowNumber?: number; address?: string; rawValue?: unknown; normalizedValue?: unknown; correctedValue?: unknown; effectiveValue?: unknown; editable: boolean; excluded: boolean; exclusionReason?: string; componentId?: string; mappingKind?: string; repeatAxis?: string; parentBindingId?: string; groupPath?: string; recordKey?: string; dimensions?: Record<string, unknown>; recordGroupId?: string }
 export interface DataWorkbookSnapshot { fileName: string; contentType?: string; sourceFileHash?: string; format: string; snapshot: Record<string, unknown>; sheets: DataWorkbookSheet[]; selectedSheetId?: string; editable: boolean; regions: DataWorkbookRegion[]; fieldDefinitions?: DataWorkbookFieldDefinition[]; records: DataWorkbookRecord[]; fields: DataFieldValueView[] }
+export interface ExperimentAssemblyCandidate { assemblyKey: string; parentAssemblyKey?: string; sourceIdentity?: string; sourceIdentityType: string; status: 'READY' | 'NEEDS_REVIEW' | 'BLOCKED' | 'RUNNING' | 'SYNCED' | 'ALREADY_CREATED' | 'FAILED' | 'SKIPPED'; sourceRecordKeys: string[]; sharedContextRecordKeys: string[]; conflicts: Array<{ code: string; message: string }>; warnings: Array<{ code: string; message: string }>; editModel: Record<string, unknown>; planHash: string; contentHash: string }
+export interface ExperimentAssemblyPlan { importJobId: string; candidates: ExperimentAssemblyCandidate[]; readyCount: number; reviewCount: number; blockedCount: number; sourceRecordCount: number; sampleGroupCount: number; sourceGroupCount: number; sourceContextCount: number; sourceIdentityCount: number; logicalSampleCount: number }
+export interface ExperimentAssemblyLink { assemblyKey: string; parentAssemblyKey?: string; status: string; resolutionAction?: string; resolutionReason?: string; experimentId?: string; experimentVersionId?: string; experimentNo?: string; planHash: string; contentHash: string; errorMessage?: string }
+export interface ExperimentSyncStatus { plan: ExperimentAssemblyPlan; links: ExperimentAssemblyLink[] }
 
 export const dataApi = {
   async listTemplates() {
@@ -38,7 +56,7 @@ export const dataApi = {
     const response = await httpClient.post<ApiResponse<{ fileId: string; sha256: string; status: string }>>('/api/v1/files/staged?kind=DATA_SOURCE', body);
     return response.data.data;
   },
-  async createJob(input: { sourceFileId: string; templateVersionId: string; categoryId?: string; duplicateOverride?: boolean; projectRelations?: ProjectRelationTarget[] }) {
+  async createJob(input: { sourceFileId: string; templateVersionId: string; categoryId?: string; duplicateOverride?: boolean; projectRelations?: ProjectRelationTarget[]; importPurpose?: 'DATA_ONLY' | 'EXPERIMENT_DRAFT'; targetExperimentCategoryId?: string }) {
     const response = await httpClient.post<ApiResponse<DataJob>>('/api/v1/data/import-jobs', input); return response.data.data;
   },
   async getJob(id: string) { const response = await httpClient.get<ApiResponse<DataJob>>(`/api/v1/data/import-jobs/${id}`); return response.data.data; },
@@ -61,6 +79,9 @@ export const dataApi = {
   async reanchorComponent(id: string, componentId: string, input: { sheetId: string; sourceRange: string; reason: string }) { const response = await httpClient.put<ApiResponse<DataJob>>(`/api/v1/data/import-jobs/${id}/components/${encodeURIComponent(componentId)}/anchor`, input); return response.data.data; },
   async requestField(id: string, input: { fieldId?: string; displayName: string; valueType?: string; uiType?: string; groupCode?: string; description?: string }) { const response = await httpClient.post<ApiResponse<{ id: string; status: string }>>(`/api/v1/data/import-jobs/${id}/field-requests`, input); return response.data.data; },
   async commit(id: string) { const response = await httpClient.post<ApiResponse<DataJob>>(`/api/v1/data/import-jobs/${id}/commit`); return response.data.data; },
+  async experimentPlan(id: string) { const response = await httpClient.get<ApiResponse<ExperimentAssemblyPlan>>(`/api/v1/data/import-jobs/${id}/experiments`); return response.data.data; },
+  async syncExperiments(id: string, input: { categoryId: string; assemblyKeys?: string[] }) { const response = await httpClient.post<ApiResponse<{ acceptedCount: number; jobIds: string[] }>>(`/api/v1/data/import-jobs/${id}/experiment-sync`, input); return response.data.data; },
+  async experimentSyncStatus(id: string) { const response = await httpClient.get<ApiResponse<ExperimentSyncStatus>>(`/api/v1/data/import-jobs/${id}/experiment-sync-status`); return response.data.data; },
   async listSourceFiles(params: { categoryId?: string; status?: string; keyword?: string; projectId?: string; page?: number; size?: number } = {}) { const response = await httpClient.get<ApiResponse<PageResponse<DataSourceFile>>>('/api/v1/data/sources', { params }); return response.data.data; },
   async listCategories() { const response = await httpClient.get<ApiResponse<DataCategory[]>>('/api/v1/data/categories'); return response.data.data; },
   async createCategory(input: { name: string; description?: string }) { const response = await httpClient.post<ApiResponse<DataCategory>>('/api/v1/data/categories', input); return response.data.data; },

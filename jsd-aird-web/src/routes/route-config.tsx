@@ -8,6 +8,8 @@ import { NotFoundPage } from '@/pages/not-found';
 import { AuthorizedHomeRedirect, PagePermissionGate } from '@/routes/route-guards';
 
 const AssistantPage = lazy(async () => ({ default: (await import('@/pages/assistant')).AssistantPage }));
+const FormulaPredictionPage = lazy(async () => ({ default: (await import('@/pages/formula-research')).FormulaPredictionPage }));
+const ExperimentOptimizationPage = lazy(async () => ({ default: (await import('@/pages/formula-research')).ExperimentOptimizationPage }));
 const DashboardPage = lazy(async () => ({ default: (await import('@/pages/dashboard')).DashboardPage }));
 const DataImportJobPage = lazy(async () => ({ default: (await import('@/pages/data')).DataImportJobPage }));
 const DataUploadPage = lazy(async () => ({ default: (await import('@/pages/data')).DataUploadPage }));
@@ -81,6 +83,8 @@ export const routeConfig: RouteObject[] = [
       { path: 'knowledge/review/:documentId/:versionId', element: <PagePermissionGate permission="knowledge.review"><KnowledgeReviewPage /></PagePermissionGate> },
       { path: 'knowledge/documents/:id', element: <KnowledgeDocumentPage /> },
       { path: 'assistant', element: <AssistantPage /> },
+      { path: 'assistant/formula-prediction', element: <PagePermissionGate permission="ai.use"><FormulaPredictionPage /></PagePermissionGate> },
+      { path: 'assistant/experiment-optimization', element: <PagePermissionGate permission="ai.use"><ExperimentOptimizationPage /></PagePermissionGate> },
       {
         path: 'templates',
         element: <Navigate to="/templates/upload" replace />,

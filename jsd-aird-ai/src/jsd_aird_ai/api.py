@@ -18,6 +18,8 @@ from jsd_aird_ai import __version__
 from jsd_aird_ai.contracts import (
     CONTRACT_VERSION,
     ErrorResponse,
+    GenerateValidationFoldsRequest,
+    GenerateValidationFoldsResponse,
     RecommendRequest,
     RecommendResponse,
     ScoreRequest,
@@ -85,11 +87,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+        # Keep signed artifact URLs and request payloads out of logs, but retain
+        # field locations/types so Java/Python contract drift can be diagnosed.
+        validation_errors = exc.errors()
+        log.warning(
+            "formula_model_request_validation_failed path=%s errors=%s",
+            request.url.path,
+            [
+                {
+                    "loc": item.get("loc"),
+                    "type": item.get("type"),
+                    "msg": item.get("msg"),
+                }
+                for item in validation_errors
+            ],
+        )
         body = ErrorResponse(
             request_id=request.headers.get("x-request-id"),
             code=ErrorCode.UNSUPPORTED_CONTRACT,
             message="request does not satisfy formula-model.v1",
-            details={"errors": exc.errors(include_url=False, include_context=False)},
+            # FastAPI's RequestValidationError exposes a stable no-argument
+            # errors() API across the locked Starlette/Pydantic combination.
+            # Passing BaseModel-only keyword arguments here masks the actual
+            # 422 contract details with a secondary 500 response.
+            details={"errors": validation_errors},
         )
         return JSONResponse(status_code=422, content=body.model_dump(mode="json", by_alias=True))
 
@@ -132,6 +153,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     def validate_snapshot(payload: ValidateSnapshotRequest) -> SnapshotValidationResponse:
         return service.validate_snapshot(payload)
+
+    @app.post(
+        "/internal/v1/snapshots/validation-folds",
+        response_model=GenerateValidationFoldsResponse,
+        dependencies=secured,
+    )
+    def generate_validation_folds(
+        payload: GenerateValidationFoldsRequest,
+    ) -> GenerateValidationFoldsResponse:
+        return service.generate_validation_folds(payload)
 
     @app.post(
         "/internal/v1/models/train",

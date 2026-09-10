@@ -113,6 +113,7 @@ app:
     poll-delay: ${JSD_AIRD_WORKER_POLL_DELAY:2s}
     lease-duration: ${JSD_AIRD_WORKER_LEASE_DURATION:60s}
     job-timeout: ${JSD_AIRD_WORKER_JOB_TIMEOUT:15m}
+    formula-model-build-timeout: ${JSD_AIRD_FORMULA_MODEL_BUILD_TIMEOUT:4h}
   model:
     base-url: ${JSD_AIRD_MODEL_BASE_URL:}
     api-key: ${JSD_AIRD_MODEL_API_KEY:}
@@ -128,6 +129,11 @@ app:
     auto-retry-count: ${JSD_AIRD_MODEL_AUTO_RETRY_COUNT:2}
     visual-mode: ${JSD_AIRD_MODEL_VISUAL_MODE:auto}
   ai:
+    formula-model:
+      base-url: ${JSD_AIRD_FORMULA_MODEL_BASE_URL:http://127.0.0.1:8090}
+      token: ${JSD_AIRD_FORMULA_MODEL_TOKEN:}
+      feedback-cron: ${JSD_AIRD_AI_FEEDBACK_CRON:0 30 2 * * *}
+      rebuild-check-cron: ${JSD_AIRD_AI_REBUILD_CHECK_CRON:0 0 2 * * SUN}
     prompt-version: ${JSD_AIRD_AI_PROMPT_VERSION:research-assistant-v2-grounded}
     query-rewrite:
       enabled: ${JSD_AIRD_QUERY_REWRITE_ENABLED:true}
@@ -141,6 +147,12 @@ app:
       enabled: ${JSD_AIRD_AI_CONVERSATION_TITLE_ENABLED:true}
       max-length: ${JSD_AIRD_AI_CONVERSATION_TITLE_MAX_LENGTH:30}
       prompt-version: ${JSD_AIRD_AI_CONVERSATION_TITLE_PROMPT_VERSION:conversation-title-v1}
+    formula-research-interpretation:
+      enabled: ${JSD_AIRD_FORMULA_RESEARCH_LLM_ENABLED:true}
+      model: ${JSD_AIRD_FORMULA_RESEARCH_LLM_MODEL:${app.model.model:}}
+      timeout: ${JSD_AIRD_FORMULA_RESEARCH_LLM_TIMEOUT:8s}
+      max-completion-tokens: ${JSD_AIRD_FORMULA_RESEARCH_LLM_MAX_COMPLETION_TOKENS:900}
+      prompt-version: ${JSD_AIRD_FORMULA_RESEARCH_LLM_PROMPT_VERSION:formula-research-interpretation-v1}
     circuit-breaker:
       failure-threshold: ${JSD_AIRD_AI_CIRCUIT_BREAKER_FAILURE_THRESHOLD:3}
       open-seconds: ${JSD_AIRD_AI_CIRCUIT_BREAKER_OPEN_SECONDS:30}

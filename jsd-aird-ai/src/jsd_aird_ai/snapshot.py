@@ -28,6 +28,8 @@ class LoadedSnapshot:
     source_map: pd.DataFrame
     joined: pd.DataFrame
     response: SnapshotValidationResponse
+    identity_column: str
+    schema_version: str
 
 
 class SnapshotValidator:
@@ -71,7 +73,19 @@ class SnapshotValidator:
             measurements,
             source_map,
         )
-        return LoadedSnapshot(manifest, measurements, source_map, joined, response)
+        schema_version = str(manifest.get("snapshot_schema_version", ""))
+        identity_column = (
+            "analysis_row_id" if schema_version == "1.1" else "experiment_version_id"
+        )
+        return LoadedSnapshot(
+            manifest,
+            measurements,
+            source_map,
+            joined,
+            response,
+            identity_column,
+            schema_version,
+        )
 
     def _validate_frames(
         self,
@@ -85,8 +99,9 @@ class SnapshotValidator:
         warnings: list[str] = []
 
         snapshot_id = str(manifest.get("snapshot_id", ""))
-        if manifest.get("snapshot_schema_version") != "1.0":
-            errors.append("snapshot_schema_version must be 1.0")
+        schema_version = str(manifest.get("snapshot_schema_version", ""))
+        if schema_version not in {"1.0", "1.1"}:
+            errors.append("snapshot_schema_version must be 1.0 or 1.1")
         if manifest.get("task_profile_code") != profile.code:
             errors.append("manifest task_profile_code does not match task profile")
         if manifest.get("task_profile_version") != profile.version:
@@ -125,7 +140,7 @@ class SnapshotValidator:
             if actual_hash != expected_hash:
                 errors.append(f"manifest hash mismatch for {name}")
 
-        identity = "experiment_version_id"
+        identity = "analysis_row_id" if schema_version == "1.1" else "experiment_version_id"
         if identity not in measurements.columns:
             errors.append(f"measurements is missing {identity}")
         if identity not in source_map.columns:
@@ -162,6 +177,8 @@ class SnapshotValidator:
             "data_nature",
             "snapshot_purpose",
         }
+        if schema_version == "1.1":
+            required_source_columns.add("experiment_version_id")
         missing_source_columns = sorted(required_source_columns - set(source_map.columns))
         if missing_source_columns:
             errors.append("source-map missing columns: " + ", ".join(missing_source_columns))
@@ -169,9 +186,9 @@ class SnapshotValidator:
         joined = pd.DataFrame()
         if identity in measurements.columns and identity in source_map.columns:
             if measurements[identity].astype(str).duplicated().any():
-                errors.append("measurements contains duplicate experiment_version_id")
+                errors.append(f"measurements contains duplicate {identity}")
             if source_map[identity].astype(str).duplicated().any():
-                errors.append("source-map contains duplicate experiment_version_id")
+                errors.append(f"source-map contains duplicate {identity}")
             joined = measurements.merge(
                 source_map,
                 on=identity,
@@ -287,7 +304,11 @@ class SnapshotValidator:
                         f"{int(invalid_non_missing.sum())} values for {target.code} are not finite numbers"
                     )
                 valid_mask = numeric_target.notna() & np.isfinite(numeric_target)
-            if substrate_feature is not None and substrate_feature.column in measurements.columns:
+            if (
+                target.substrate.strip()
+                and substrate_feature is not None
+                and substrate_feature.column in measurements.columns
+            ):
                 incompatible = valid_mask & (
                     measurements[substrate_feature.column].astype(str) != target.substrate
                 )
@@ -306,7 +327,6 @@ class SnapshotValidator:
                     joined.loc[valid_mask.to_numpy(), source_group_column].nunique()
                 )
             if target.value_type == ValueType.ORDINAL:
-                status = "SUPPORTED"
                 if target.ordinal_values:
                     actual = set(numeric_target.loc[valid_mask].astype(float).unique())
                     unexpected = sorted(actual - set(target.ordinal_values))
@@ -314,6 +334,14 @@ class SnapshotValidator:
                         errors.append(
                             f"ordinal target {target.code} contains invalid values: {unexpected}"
                         )
+                if (
+                    valid_rows < profile.readiness_thresholds.development.min_samples
+                    or groups < profile.readiness_thresholds.development.min_groups
+                    or source_groups < profile.readiness_thresholds.development.min_groups
+                ):
+                    status = "INSUFFICIENT_DATA"
+                else:
+                    status = "SUPPORTED"
             elif target.value_type == ValueType.CENSORED_COUNT:
                 status = "CENSORED_MODEL_NOT_IMPLEMENTED"
                 if target.censored_column in measurements.columns:

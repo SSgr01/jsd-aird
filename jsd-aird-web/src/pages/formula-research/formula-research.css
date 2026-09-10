@@ -1,0 +1,37 @@
+.formula-research-page { padding: 24px; }
+.formula-research-hero { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+.formula-research-hero h2 { margin: 0 0 4px !important; }
+.formula-research-hero p { margin: 0 !important; }
+.formula-research-icon { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 12px; color: #1677ff; background: #eaf3ff; font-size: 22px; }
+.formula-research-mode-alert { margin-bottom: 16px; }
+.formula-research-page .ai-conversation-workspace { height: calc(100dvh - 242px); min-height: 660px; border: 1px solid #e8ebf0; border-radius: 14px; overflow: hidden; background: #fff; }
+.formula-research-page .ai-conversation-main { background: #f7f8fa; }
+.formula-research-page .ai-conversation-messages { padding-bottom: 28px; }
+.formula-research-page .ai-message-assistant-body { max-width: 100%; }
+.formula-research-page .ai-message-assistant { width: min(1040px, 100%); }
+.formula-research-full { width: 100%; }
+.formula-research-loading { min-height: 420px; display: grid; place-items: center; }
+.formula-research-running { margin-top: 16px; text-align: center; }
+.formula-research-running .ant-card-body { display: flex; justify-content: center; gap: 12px; }
+.formula-research-chat-text { margin: 0 !important; white-space: pre-wrap; }
+.formula-research-confirmation { border-color: #d5e5fa; background: #fbfdff; }
+.formula-research-confirm-grid { display: grid; gap: 14px; }
+.formula-research-confirm-grid > div { display: grid; gap: 6px; }
+.formula-research-confirmation .ant-alert { margin-top: 10px; }
+.formula-research-confirm-actions { margin-top: 16px; }
+.formula-research-summary { margin: 10px 0 8px !important; }
+.formula-research-evidence-alert, .formula-research-warning { margin-top: 10px; }
+.formula-research-stat-card details { margin-top: 10px; }
+.formula-research-stat-card summary { cursor: pointer; color: #1677ff; }
+.formula-research-candidates-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 22px 0 10px; }
+.formula-research-candidates-head h4 { margin: 0 !important; }
+.formula-research-candidate .ant-table-wrapper { margin-bottom: 6px; }
+.formula-research-draft-form { margin-top: 16px; }
+.formula-research-drawer-section { margin-top: 20px; }
+@media (max-width: 768px) {
+  .formula-research-page { padding: 14px; }
+  .formula-research-hero { flex-direction: column; }
+  .formula-research-page .ai-conversation-workspace { height: calc(100dvh - 220px); min-height: 560px; }
+  .formula-research-confirm-actions { align-items: stretch; display: flex; flex-direction: column; }
+  .formula-research-candidates-head { align-items: stretch; flex-direction: column; }
+}

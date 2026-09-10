@@ -311,7 +311,9 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
             if (method.equals("POST")) return permission("spectrum.create", "SPECTRUM", "WRITE");
             return null;
         }
-        if (path.startsWith("/api/v1/assistant") || path.startsWith("/api/v1/search"))
+        if (path.startsWith("/api/v1/ai/formula-models"))
+            return permission("ai.model.manage", "AI_MODEL", "MANAGE");
+        if (path.startsWith("/api/v1/ai") || path.startsWith("/api/v1/assistant") || path.startsWith("/api/v1/search"))
             return permission("ai.use", "AI", "USE");
         if (path.startsWith("/api/v1/files/staged")) {
             if ("TEMPLATE_SOURCE".equalsIgnoreCase(request.getParameter("kind")))

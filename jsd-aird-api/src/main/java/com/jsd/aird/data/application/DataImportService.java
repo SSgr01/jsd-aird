@@ -95,6 +95,17 @@ public class DataImportService {
     public DataRepository.Job create(CreateCommand command) {
         var actor = ActorContext.required();
         var template = templates.getPublished(actor.organizationId(), command.templateVersionId());
+        var importPurpose = normalizeImportPurpose(command.importPurpose());
+        if ("EXPERIMENT_DRAFT".equals(importPurpose)) {
+            if (template.importContractVersion() != 9
+                    || template.importContract() == null
+                    || !"EXPERIMENT_DATA".equals(template.importContract().path("templateUsage").asText())) {
+                throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "生成实验草稿必须选择已发布的V9实验数据模板");
+            }
+            if (command.targetExperimentCategoryId() == null) {
+                throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "生成实验草稿必须选择实验分类");
+            }
+        }
         var file = files.find(actor.organizationId(), command.sourceFileId())
                 .orElseThrow(() -> new ApiException(ApiErrorCode.FILE_NOT_READY, "数据源文件不存在"));
         var format = sourceFormat(file.originalName());
@@ -115,7 +126,7 @@ public class DataImportService {
                 id, actor.organizationId(), command.sourceFileId(), file.sha256(), file.originalName(), format,
                 command.templateVersionId(), categoryId, command.duplicateOverride(), actor.userId(),
                 template.importContractVersion() > 0 ? template.importContractVersion() : null,
-                template.contractHash()));
+                template.contractHash(), importPurpose, command.targetExperimentCategoryId()));
         repository.enqueueParse(UUID.randomUUID(), actor.organizationId(), id);
         if (projectResources != null) {
             projectResources.replaceLinks(actor, ResourceType.DATA_IMPORT_JOB, id,
@@ -250,7 +261,8 @@ public class DataImportService {
                 // Structured template bindings are executable import instructions. They
                 // must run before the generic header mapper, otherwise a horizontal table
                 // or repeated table would be mistaken for a scalar row and lose its dimensions.
-                var structured = structuredExtractor.extract(parsedSheet, definition.fields(), bindings, dataStart, dataEnd);
+                var structured = structuredExtractor.extract(parsedSheet, definition.fields(), bindings, dataStart, dataEnd,
+                        definition.importContractVersion(), definition.importContract());
                 if (structured.isPresent()) {
                     mappings.addAll(structured.get().mappings());
                     rows.addAll(structured.get().rows());
@@ -459,8 +471,12 @@ public class DataImportService {
                         .put("trainingEligible", mapping.detail().path("trainingEligible").asBoolean(true));
                 var cell = row.sourceMetadata() == null ? null : row.sourceMetadata().path("cells").path(entry.getKey());
                 if (cell != null && cell.isObject()) {
-                    for (var key : List.of("bindingId", "valuePath", "labelPath", "valueSource",
-                            "calculationSource", "calculationStatus", "formulaTrustStatus", "formulaExpression")) {
+                    for (var key : List.of("bindingId", "parentBindingId", "valuePath", "labelPath", "valueSource",
+                            "calculationSource", "calculationStatus", "formulaTrustStatus", "formulaExpression",
+                            "experimentField", "targetPath", "itemSourceKey", "listProjectionId", "itemLabel",
+                            "labelPathSegments",
+                            "itemLabelField", "labelSource", "unitSource", "cellValueType", "rawNumericValue",
+                            "displayValue", "numberFormat", "fractionRepresentation")) {
                         if (cell.has(key)) value.set(key, cell.path(key).deepCopy());
                     }
                 }
@@ -700,7 +716,9 @@ public class DataImportService {
             // Structured projections already computed the logical record key. It must
             // win over a form-level identity field so each detail row remains its own
             // source record after common form fields are merged into it.
-            var recordKey = structuredKey.isBlank()
+            var recordKey = "STRUCTURAL".equals(metadata.path("recordKeyKind").asText(""))
+                    ? structuredKey
+                    : structuredKey.isBlank()
                     ? (identity == null || identity.isBlank()
                     ? importScopedKey(job.id(), row) : identity)
                     : metadata.path("identitySynthetic").asBoolean(false)
@@ -1154,15 +1172,33 @@ public class DataImportService {
         return false;
     }
 
+    private String normalizeImportPurpose(String value) {
+        if (value == null || value.isBlank()) return "DATA_ONLY";
+        var normalized = value.strip().toUpperCase(Locale.ROOT);
+        if (!Set.of("DATA_ONLY", "EXPERIMENT_DRAFT").contains(normalized)) {
+            throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "导入用途必须是DATA_ONLY或EXPERIMENT_DRAFT");
+        }
+        return normalized;
+    }
+
     public record CreateCommand(UUID sourceFileId, UUID templateVersionId,
                                 UUID categoryId, boolean duplicateOverride,
-                                List<ProjectRelationTarget> projectRelations) {
+                                List<ProjectRelationTarget> projectRelations,
+                                String importPurpose, UUID targetExperimentCategoryId) {
+        public CreateCommand(UUID sourceFileId, UUID templateVersionId,
+                             UUID categoryId, boolean duplicateOverride,
+                             List<ProjectRelationTarget> projectRelations) {
+            this(sourceFileId, templateVersionId, categoryId, duplicateOverride, projectRelations,
+                    "DATA_ONLY", null);
+        }
         public CreateCommand(UUID sourceFileId, UUID templateVersionId,
                              UUID categoryId, boolean duplicateOverride) {
-            this(sourceFileId, templateVersionId, categoryId, duplicateOverride, List.of());
+            this(sourceFileId, templateVersionId, categoryId, duplicateOverride, List.of(),
+                    "DATA_ONLY", null);
         }
         public CreateCommand(UUID sourceFileId, UUID templateVersionId, boolean duplicateOverride) {
-            this(sourceFileId, templateVersionId, null, duplicateOverride, List.of());
+            this(sourceFileId, templateVersionId, null, duplicateOverride, List.of(),
+                    "DATA_ONLY", null);
         }
     }
     public record FieldRequestCommand(String fieldId, String displayName, String valueType,

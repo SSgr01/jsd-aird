@@ -1,0 +1,14 @@
+{
+  "taskProfileCode": "UVPU_APPLICATION_FORMULATION",
+  "researchProfileVersion": "uvpu-research.v1",
+  "similarCaseBaselineVersion": "T06_SIMILAR_CASE.v1",
+  "targets": [
+    {"targetKey":"APP.WARPING.HEIGHT@substrate=PET_100UM;stage=UV_IMMEDIATE","name":"初始翘曲","valueType":"CONTINUOUS","unit":"cm","direction":"MINIMIZE","aliases":["初始翘曲","UV后翘曲"]},
+    {"targetKey":"APP.WARPING.HEIGHT@substrate=PET_100UM;stage=ROOM_12H","name":"12小时翘曲","valueType":"CONTINUOUS","unit":"cm","direction":"MINIMIZE","aliases":["12小时翘曲","12h翘曲"]},
+    {"targetKey":"APP.HARDNESS.PENCIL@substrate=PET_100UM;load=1KG","name":"铅笔硬度（1KG，PET膜）","valueType":"ORDINAL","unit":"","direction":"MAXIMIZE","aliases":["铅笔硬度","硬度"]},
+    {"targetKey":"APP.ABRASION.STEELWOOL@substrate=PET_100UM;load=500G;contact=1X1_UNSPECIFIED","name":"钢丝绒耐磨（500g）","valueType":"CONTINUOUS","unit":"cycles","direction":"MAXIMIZE","aliases":["钢丝绒500g","500g耐磨"]},
+    {"targetKey":"APP.ABRASION.STEELWOOL@substrate=PET_100UM;load=1KG;contact=1X1_UNSPECIFIED","name":"钢丝绒耐磨（1KG）","valueType":"CONTINUOUS","unit":"cycles","direction":"MAXIMIZE","aliases":["钢丝绒1kg","1kg耐磨"]},
+    {"targetKey":"APP.SURFACE_DRYNESS@stage=UV_CURED","name":"UV固化后表干性","valueType":"BINARY","unit":"","direction":"MAXIMIZE","aliases":["UV表干","UV固化后表干"]},
+    {"targetKey":"APP.ELONGATION@substrate=PC;unit=PCT","name":"PC拉伸率","valueType":"CONTINUOUS","unit":"%","direction":"MAXIMIZE","aliases":["PC拉伸率","拉伸率（PC）"]}
+  ]
+}

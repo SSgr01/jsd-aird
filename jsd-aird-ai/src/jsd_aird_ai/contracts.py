@@ -89,6 +89,63 @@ class SnapshotArtifacts(ContractModel):
     source_map: ArtifactReadRef
 
 
+class ValidationFoldAssignment(ContractModel):
+    analysis_row_id: str = Field(min_length=1)
+    target_key: str = Field(min_length=1)
+    fold_index: int = Field(ge=0)
+    group_key: str = Field(min_length=1)
+
+
+class ValidationFoldScheme(ContractModel):
+    validation_scheme: Literal["FORMULA_LINEAGE", "SOURCE_CONTEXT"]
+    fold_count: int = Field(ge=2, le=10)
+    assignments: list[ValidationFoldAssignment] = Field(default_factory=list)
+
+
+class ValidationFoldsDocument(ContractModel):
+    schema_version: Literal["validation-folds.v1"] = "validation-folds.v1"
+    snapshot_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    task_profile_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    seed: int
+    schemes: list[ValidationFoldScheme] = Field(min_length=2, max_length=2)
+    content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class T06BaselineObservation(ContractModel):
+    analysis_row_id: str = Field(min_length=1)
+    target_key: str = Field(min_length=1)
+    validation_scheme: Literal["FORMULA_LINEAGE", "SOURCE_CONTEXT"]
+    fold_index: int = Field(ge=0)
+    group_key: str = Field(min_length=1)
+    actual: float | str
+    predicted: float | str | None = None
+    class_probabilities: dict[str, float] = Field(default_factory=dict)
+    eligible_neighbor_count: int = Field(default=0, ge=0, le=20)
+    sample_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class T06TargetBaseline(ContractModel):
+    target_key: str = Field(min_length=1)
+    target_code: str = Field(min_length=1)
+    value_type: ValueType
+    metrics_by_scheme: dict[str, dict[str, float]] = Field(default_factory=dict)
+    observations: list[T06BaselineObservation] = Field(default_factory=list)
+    sample_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class T06BaselineDocument(ContractModel):
+    schema_version: Literal["t06-similar-case-baseline.v1"] = (
+        "t06-similar-case-baseline.v1"
+    )
+    baseline_type: Literal["T06_SIMILAR_CASE"] = "T06_SIMILAR_CASE"
+    baseline_version: str = Field(min_length=1)
+    snapshot_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    task_profile_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    validation_folds_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    targets: list[T06TargetBaseline]
+    content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class MaterialSpec(ContractModel):
     code: str = Field(min_length=1)
     column: str = Field(min_length=1)
@@ -461,6 +518,27 @@ class ValidateSnapshotRequest(SnapshotRequest):
     pass
 
 
+class GenerateValidationFoldsRequest(SnapshotRequest):
+    output: ArtifactWriteRef
+
+
+class ValidationFoldTargetSummary(ContractModel):
+    target_key: str
+    eligible_rows: int = Field(ge=0)
+    formula_lineage_folds: int = Field(ge=0)
+    source_context_folds: int = Field(ge=0)
+
+
+class GenerateValidationFoldsResponse(ContractModel):
+    contract_version: Literal[CONTRACT_VERSION] = CONTRACT_VERSION
+    request_id: str
+    snapshot_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    validation_folds_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    validation_folds_size: int = Field(ge=0)
+    uploaded: bool
+    targets: list[ValidationFoldTargetSummary]
+
+
 class TargetCoverage(ContractModel):
     target_code: str
     value_type: ValueType
@@ -501,8 +579,38 @@ class SnapshotValidationResponse(ContractModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class FeatureViewFeature(ContractModel):
+    """An auditable feature added by a versioned model view."""
+
+    code: str = Field(min_length=1)
+    column: str = Field(min_length=1)
+    value_type: FeatureType
+    source: Literal["TASK_PROFILE", "SYNTHETIC_GENERATOR_V3_ONLY"]
+    required: bool = True
+    unit: str | None = None
+
+
+class FeatureViewSpec(ContractModel):
+    """A hashable overlay describing the columns consumed by a model bundle."""
+
+    schema_version: Literal["model-feature-view.v1"] = "model-feature-view.v1"
+    code: str = Field(min_length=1)
+    task_profile_code: str = Field(min_length=1)
+    task_profile_version: str = Field(min_length=1)
+    task_profile_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    scope: Literal["BASE", "SYNTHETIC_GENERATOR_V3_ONLY"] = "BASE"
+    development_only: bool = False
+    included_numeric_columns: list[str] = Field(default_factory=list)
+    included_categorical_columns: list[str] = Field(default_factory=list)
+    additional_features: list[FeatureViewFeature] = Field(default_factory=list)
+    content_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+
 class TrainRequest(SnapshotRequest):
     output: ArtifactWriteRef
+    validation_folds: ArtifactReadRef | None = None
+    t06_baseline: ArtifactReadRef | None = None
+    feature_view: FeatureViewSpec | None = None
 
 
 class MetricSet(ContractModel):
@@ -841,6 +949,7 @@ class RequestedTarget(ContractModel):
     minimum: float | None = None
     maximum: float | None = None
     tolerance: float | None = Field(default=None, ge=0.0)
+    minimum_probability: float | None = Field(default=None, gt=0.0, lt=1.0)
 
     @model_validator(mode="after")
     def validate_goal(self) -> "RequestedTarget":

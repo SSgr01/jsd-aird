@@ -1,5 +1,5 @@
 import { DownloadOutlined, EyeOutlined, FileExcelOutlined, RightOutlined } from '@ant-design/icons';
-import { App, Button, Form, Select } from 'antd';
+import { Alert, App, Button, Form, Select } from 'antd';
 import type { UploadFile } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -169,6 +169,14 @@ export function DataUploadPage() {
             notFoundContent="暂无已发布模板"
           />
         </Form.Item>
+        {chosen && <Alert
+          showIcon
+          type={chosen.experimentImportReady ? 'success' : 'info'}
+          message={chosen.experimentImportReady ? '实验数据模板 · 可生成实验草稿' : '普通数据模板'}
+          description={chosen.experimentImportReady
+            ? `整份文件一个实验${chosen.identityTypes?.length ? ` · 文件内关联标识：${chosen.identityTypes.map(identityTypeLabel).join('、')}` : ''}`
+            : '本次导入只保存数据中心记录和来源信息。'}
+        />}
         <Form.Item label="归档分类" help="只用于目录归档，不限制模板字段或数据结构。">
           <Select allowClear value={categoryId} onChange={setCategoryId} placeholder="选择归档分类" options={categories.map((item) => ({ value: item.id, label: item.name }))} />
         </Form.Item>
@@ -204,4 +212,13 @@ export function DataUploadPage() {
       <FilePreviewModal open={Boolean(previewFile)} file={previewFile} onClose={() => setPreviewFile(undefined)} showSpreadsheetMerges={false} />
     </>
   );
+}
+
+function identityTypeLabel(value: string) {
+  return ({
+    EXPERIMENT_NO: '实验编号',
+    SAMPLE_NO: '样品编号',
+    FORMULA_NO: '配方编号',
+    BATCH_NO: '批次编号',
+  } as Record<string, string>)[value] ?? value;
 }

@@ -6,6 +6,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.HashSet;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -553,6 +554,12 @@ public class TemplateWorkspaceService {
                 TemplateLocatorNormalizer.normalizeFieldModel(objectMapper, schemaObject);
             }
             normalizedMapping = normalizeMapping(command.mapping(), normalizedSchema);
+            if (normalizedSchema instanceof ObjectNode schemaObject
+                    && normalizedMapping instanceof ArrayNode mappingArray
+                    && schemaObject.path(TemplateRecognitionCompiler.FIELD_MODEL_KEY) instanceof ObjectNode model) {
+                new ExperimentTemplateSemanticCompiler(objectMapper).apply(schemaObject, mappingArray, model);
+                mergeRecognizedListProjections(actor.organizationId(), current, schemaObject);
+            }
             validateSchema(normalizedSchema);
             standardFieldService.validateFormalFields(normalizedSchema);
             reconciliationRequired = validateMappings(current.format(), normalizedMapping);
@@ -732,6 +739,51 @@ public class TemplateWorkspaceService {
                 documentStructure == null ? null : documentStructure.deepCopy());
     }
 
+    /**
+     * Region roots are deliberately hidden from the editable business-field
+     * model. Formula matrix projections live on those roots, so persist them
+     * from the accepted recognition snapshot instead of asking the browser to
+     * round-trip hidden structural metadata.
+     */
+    private void mergeRecognizedListProjections(
+            UUID organizationId,
+            TemplateRepository.TemplateWorkspace current,
+            ObjectNode schema
+    ) {
+        if (current.recognitionRunId() == null || current.format() != TemplateFormat.XLSX) return;
+        var suggestions = importRepository.listSuggestions(organizationId, current.recognitionRunId());
+        if (suggestions.isEmpty()) return;
+        var recognizedSchema = recognitionCompiler.compile(
+                objectMapper.createObjectNode(), suggestions, current.format()).schema();
+        var recognizedConfiguration = recognizedSchema.path(
+                TemplateImportContractCompiler.EXPERIMENT_IMPORT_SCHEMA_KEY);
+        if (!recognizedConfiguration.isObject()
+                || !recognizedConfiguration.path("listProjections").isArray()) return;
+
+        var currentConfiguration = schema.path(TemplateImportContractCompiler.EXPERIMENT_IMPORT_SCHEMA_KEY);
+        if (!(currentConfiguration instanceof ObjectNode configuration)) {
+            schema.set(TemplateImportContractCompiler.EXPERIMENT_IMPORT_SCHEMA_KEY,
+                    recognizedConfiguration.deepCopy());
+            return;
+        }
+
+        var projections = new LinkedHashMap<String, JsonNode>();
+        for (var projection : configuration.path("listProjections")) {
+            var id = projection.path("listProjectionId").asText("");
+            if (!id.isBlank()) projections.put(id, projection.deepCopy());
+        }
+        for (var projection : recognizedConfiguration.path("listProjections")) {
+            var id = projection.path("listProjectionId").asText("");
+            if (!id.isBlank()) projections.putIfAbsent(id, projection.deepCopy());
+        }
+        var array = configuration.putArray("listProjections");
+        projections.entrySet().stream().sorted(Map.Entry.comparingByKey())
+                .forEach(entry -> array.add(entry.getValue()));
+        if (configuration.path("recognitionSummary") instanceof ObjectNode summary) {
+            summary.put("matrixCount", projections.size());
+        }
+    }
+
     private ObjectNode normalizeFieldGroups(JsonNode schema) {
         var normalized = (ObjectNode) schema.deepCopy();
         var fieldModel = normalized.path(TemplateRecognitionCompiler.FIELD_MODEL_KEY);
@@ -774,11 +826,35 @@ public class TemplateWorkspaceService {
         var model = schema.path(TemplateRecognitionCompiler.FIELD_MODEL_KEY);
         var names = new java.util.HashMap<String, String>();
         var groups = new java.util.HashMap<String, String>();
+        var experimentFields = new java.util.HashMap<String, JsonNode>();
+        var experimentMetadata = new java.util.HashMap<String, JsonNode>();
         for (var group : model.path("groups")) groups.put(group.path("id").asText(""), group.path("name").asText(""));
-        for (var field : model.path("fields")) names.put(field.path("fieldId").asText(""),
-                groups.getOrDefault(field.path("groupId").asText(""), GroupNameNormalizer.BASIC_INFORMATION));
+        for (var field : model.path("fields")) {
+            names.put(field.path("fieldId").asText(""),
+                    groups.getOrDefault(field.path("groupId").asText(""), GroupNameNormalizer.BASIC_INFORMATION));
+            var bindingId = field.path("bindingId").asText("");
+            if (!bindingId.isBlank() && field.path("experimentField").isObject()) {
+                experimentFields.put(bindingId, field.path("experimentField").deepCopy());
+                experimentMetadata.put(bindingId, field);
+            }
+        }
         for (var binding : result) {
             if (!(binding instanceof ObjectNode object)) continue;
+            // targetPath is a derived V9 contract detail. Draft clients cannot
+            // author or persist it as a source of business semantics.
+            object.remove("targetPath");
+            var experimentField = experimentFields.get(object.path("bindingId").asText(""));
+            if (experimentField == null) object.remove("experimentField");
+            else object.set("experimentField", experimentField);
+            var semanticMetadata = experimentMetadata.get(object.path("bindingId").asText(""));
+            if (semanticMetadata != null) {
+                for (var key : java.util.List.of("experimentItemLabel", "experimentSemanticConfidence",
+                        "experimentSemanticStatus", "experimentSemanticSource",
+                        "experimentSemanticAlternatives", "experimentSemanticIssue")) {
+                    if (semanticMetadata.has(key)) object.set(key, semanticMetadata.path(key).deepCopy());
+                    else object.remove(key);
+                }
+            }
             var groupName = names.get(object.path("fieldId").asText(""));
             if (groupName != null) object.withObject("diagnostic").put("groupName", groupName);
         }

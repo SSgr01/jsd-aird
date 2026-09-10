@@ -35,11 +35,68 @@ public final class PhysicalStructureFieldCompiler {
         if (Set.of("ROW_TABLE", "COLUMN_TABLE").contains(kind)) {
             ensureComponentDataPath(parent);
             var columns = parent.withArray("columns");
+            var physicalColumns = buildColumns(parent, region, facts);
             if (columns.isEmpty()) {
-                columns.addAll(buildColumns(parent, region, facts));
+                columns.addAll(physicalColumns);
+            } else {
+                enrichExistingColumnsFromPhysicalGeometry(columns, physicalColumns);
             }
             ensureTableModel(parent, region);
         }
+    }
+
+    /**
+     * Model-enriched table columns may already exist before the deterministic
+     * physical pass runs.  Their names and types are useful, but the workbook
+     * geometry remains authoritative for the complete hierarchical label path.
+     * Never leave a leaf such as "PC膜" detached from its enclosing
+     * "附着力" or treatment-condition label.
+     */
+    private void enrichExistingColumnsFromPhysicalGeometry(ArrayNode columns, ArrayNode physicalColumns) {
+        for (var value : columns) {
+            if (!(value instanceof ObjectNode column)) continue;
+            var physical = matchingPhysicalColumn(column, physicalColumns);
+            if (physical == null) continue;
+            if (physical.path("labelPathSegments").isArray()
+                    && !physical.path("labelPathSegments").isEmpty()) {
+                column.set("labelPathSegments", physical.path("labelPathSegments").deepCopy());
+                column.put("labelPath", physical.path("labelPath").asText(
+                        joinSegments(physical.path("labelPathSegments"))));
+            }
+            for (var key : List.of("labelRange", "parentRange")) {
+                if (column.path(key).asText("").isBlank()
+                        && !physical.path(key).asText("").isBlank()) {
+                    column.set(key, physical.path(key).deepCopy());
+                }
+            }
+        }
+    }
+
+    private JsonNode matchingPhysicalColumn(JsonNode column, ArrayNode physicalColumns) {
+        var valueRange = column.path("valueRange").asText("");
+        var labelRange = column.path("labelRange").asText("");
+        for (var physical : physicalColumns) {
+            if (samePhysicalRange(valueRange, physical.path("valueRange").asText(""))) return physical;
+        }
+        for (var physical : physicalColumns) {
+            if (samePhysicalRange(labelRange, physical.path("labelRange").asText(""))) return physical;
+        }
+        return null;
+    }
+
+    private boolean samePhysicalRange(String first, String second) {
+        return !first.isBlank() && !second.isBlank()
+                && RecognitionIdentity.normalizeRange(first)
+                .equals(RecognitionIdentity.normalizeRange(second));
+    }
+
+    private String joinSegments(JsonNode values) {
+        var result = new ArrayList<String>();
+        for (var value : values) {
+            var text = value.asText("").strip();
+            if (!text.isBlank() && !result.contains(text)) result.add(text);
+        }
+        return String.join(" > ", result);
     }
 
     private void ensureComponentDataPath(ObjectNode parent) {

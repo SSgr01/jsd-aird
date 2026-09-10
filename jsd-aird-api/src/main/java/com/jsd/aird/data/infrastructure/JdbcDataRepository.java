@@ -37,12 +37,13 @@ public class JdbcDataRepository implements DataRepository {
                     id, organization_id, source_file_id, source_sha256, source_file_name,
                     source_format, template_version_id, category_id, status,
                     duplicate_override, created_by, import_contract_version, contract_hash,
-                    source_file_hash, compatibility_status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'CREATED', ?, ?, ?, ?, ?, ?)
+                    source_file_hash, compatibility_status, import_purpose, target_experiment_category_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'CREATED', ?, ?, ?, ?, ?, ?, ?, ?)
                 """, job.id(), job.organizationId(), job.sourceFileId(), job.sourceSha256(), job.sourceFileName(),
                 job.sourceFormat(), job.templateVersionId(), job.categoryId(),
                 job.duplicateOverride(), job.actorId(), job.importContractVersion(), job.contractHash(),
-                job.sourceSha256(), job.importContractVersion() == null ? "LEGACY" : "REVIEW_REQUIRED");
+                job.sourceSha256(), job.importContractVersion() == null ? "LEGACY" : "REVIEW_REQUIRED",
+                job.importPurpose(), job.targetExperimentCategoryId());
     }
 
     @Override
@@ -64,7 +65,8 @@ public class JdbcDataRepository implements DataRepository {
                        template_version_id, status, progress, current_stage,
                        category_id,
                        parser_version, error_message, created_at, updated_at,
-                       import_contract_version, contract_hash, compatibility_status
+                       import_contract_version, contract_hash, compatibility_status,
+                       import_purpose, target_experiment_category_id
                 FROM data.import_job WHERE organization_id = ? AND id = ?
                 """, this::mapJob, organizationId, importJobId).stream().findFirst();
     }
@@ -100,7 +102,8 @@ public class JdbcDataRepository implements DataRepository {
                        template_version_id, status, progress, current_stage,
                        category_id,
                        parser_version, error_message, created_at, updated_at,
-                       import_contract_version, contract_hash, compatibility_status
+                       import_contract_version, contract_hash, compatibility_status,
+                       import_purpose, target_experiment_category_id
                 FROM data.import_job
                 WHERE
                 """ + where + " ORDER BY created_at DESC LIMIT ? OFFSET ?", this::mapJob, rows.toArray());
@@ -179,7 +182,8 @@ public class JdbcDataRepository implements DataRepository {
                        template_version_id, status, progress, current_stage,
                        category_id,
                        parser_version, error_message, created_at, updated_at,
-                       import_contract_version, contract_hash, compatibility_status
+                       import_contract_version, contract_hash, compatibility_status,
+                       import_purpose, target_experiment_category_id
                 FROM data.import_job WHERE organization_id = ? AND id = ? FOR UPDATE
                 """, this::mapJob, organizationId, importJobId).stream().findFirst();
     }
@@ -191,7 +195,8 @@ public class JdbcDataRepository implements DataRepository {
                        template_version_id, status, progress, current_stage,
                        category_id,
                        parser_version, error_message, created_at, updated_at,
-                       import_contract_version, contract_hash, compatibility_status
+                       import_contract_version, contract_hash, compatibility_status,
+                       import_purpose, target_experiment_category_id
                 FROM data.import_job
                 WHERE organization_id = ? AND source_sha256 = ? AND template_version_id = ?
                   AND status = 'COMPLETED'
@@ -607,7 +612,8 @@ public class JdbcDataRepository implements DataRepository {
                 rs.getInt("progress"), rs.getString("current_stage"), rs.getString("parser_version"),
                 rs.getString("error_message"), rs.getTimestamp("created_at").toInstant(), rs.getTimestamp("updated_at").toInstant(),
                 (Integer) rs.getObject("import_contract_version"), rs.getString("contract_hash"),
-                rs.getString("compatibility_status"));
+                rs.getString("compatibility_status"), rs.getString("import_purpose"),
+                rs.getObject("target_experiment_category_id", UUID.class));
     }
 
     private List<Integer> ints(JsonNode node) {

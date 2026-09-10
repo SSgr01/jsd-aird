@@ -78,6 +78,13 @@ export function bindingForField(
     syncDirection: 'TWO_WAY',
     primaryBinding: false,
     bindingStatus: 'VALID',
+    experimentField: field.experimentField,
+    experimentItemLabel: field.experimentItemLabel,
+    experimentSemanticConfidence: field.experimentSemanticConfidence,
+    experimentSemanticStatus: field.experimentSemanticStatus,
+    experimentSemanticSource: field.experimentSemanticSource,
+    experimentSemanticAlternatives: field.experimentSemanticAlternatives,
+    experimentSemanticIssue: field.experimentSemanticIssue,
   };
 }
 
@@ -149,6 +156,13 @@ export function readFieldModel(
         (stringValue(binding.diagnostic?.editability) as BusinessField['editability']) || 'UNKNOWN',
       valueSource:
         (stringValue(binding.diagnostic?.valueSource) as BusinessField['valueSource']) || 'UNKNOWN',
+      experimentField: binding.experimentField,
+      experimentItemLabel: binding.experimentItemLabel,
+      experimentSemanticConfidence: binding.experimentSemanticConfidence,
+      experimentSemanticStatus: binding.experimentSemanticStatus,
+      experimentSemanticSource: binding.experimentSemanticSource,
+      experimentSemanticAlternatives: binding.experimentSemanticAlternatives,
+      experimentSemanticIssue: binding.experimentSemanticIssue,
     })),
     blocks: [],
     semanticAnnotations: [],
@@ -441,9 +455,28 @@ export function prepareFormalMappings(
       .filter((field) => !field.candidate && field.bindingId)
       .map((field) => field.bindingId as string),
   );
+  const requiredParentBindingIds = new Set(
+    mapping
+      .filter((binding) => formalBindingIds.has(binding.bindingId) && binding.parentBindingId)
+      .map((binding) => binding.parentBindingId as string),
+  );
   return mapping.filter((binding) => {
     const recognitionItemId = stringValue(binding.diagnostic?.recognitionItemId);
-    return !recognitionItemId || formalBindingIds.has(binding.bindingId);
+    return !recognitionItemId
+      || formalBindingIds.has(binding.bindingId)
+      || requiredParentBindingIds.has(binding.bindingId);
+  }).map((binding) => {
+    const field = fieldModel.fields.find((item) => item.bindingId === binding.bindingId);
+    const next = structuredClone(binding) as TemplateBinding & { targetPath?: unknown };
+    delete next.targetPath;
+    next.experimentField = field?.experimentField;
+    next.experimentItemLabel = field?.experimentItemLabel;
+    next.experimentSemanticConfidence = field?.experimentSemanticConfidence;
+    next.experimentSemanticStatus = field?.experimentSemanticStatus;
+    next.experimentSemanticSource = field?.experimentSemanticSource;
+    next.experimentSemanticAlternatives = field?.experimentSemanticAlternatives;
+    next.experimentSemanticIssue = field?.experimentSemanticIssue;
+    return next;
   });
 }
 
@@ -521,6 +554,14 @@ export function addRecognitionCandidate(
     parentBlockId: suggestion.payload.parentBlockId,
     columns: suggestion.payload.columns,
     tableModel: suggestion.payload.tableModel,
+    experimentField: suggestion.payload.experimentField,
+    experimentItemLabel: suggestion.payload.experimentItemLabel,
+    experimentSemanticConfidence: suggestion.payload.experimentSemanticConfidence,
+    experimentSemanticStatus: suggestion.payload.experimentSemanticStatus,
+    experimentSemanticSource: suggestion.payload.experimentSemanticSource,
+    experimentSemanticAlternatives: suggestion.payload.experimentSemanticAlternatives,
+    experimentSemanticIssue: suggestion.payload.experimentSemanticIssue,
+    listProjections: suggestion.payload.listProjections,
     locator: structuredClone(suggestion.payload.locator),
     candidate: true,
     candidateLocatorType: suggestion.payload.locatorType,
@@ -593,6 +634,13 @@ function tableChildFields(
       reviewStatus: candidate ? 'NEEDS_CONFIRMATION' : 'CONFIRMED',
       editability: column.editability,
       valueSource: column.valueSource,
+      experimentField: column.experimentField,
+      experimentItemLabel: column.experimentItemLabel,
+      experimentSemanticConfidence: column.experimentSemanticConfidence,
+      experimentSemanticStatus: column.experimentSemanticStatus,
+      experimentSemanticSource: column.experimentSemanticSource,
+      experimentSemanticAlternatives: column.experimentSemanticAlternatives,
+      experimentSemanticIssue: column.experimentSemanticIssue,
       mappingKind: 'REPEAT_FIELD',
       repeatAxis: parent.repeatAxis || 'ROW',
       recordHeight: parent.recordHeight,

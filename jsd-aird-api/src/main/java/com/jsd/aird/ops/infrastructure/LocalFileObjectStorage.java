@@ -60,7 +60,12 @@ public class LocalFileObjectStorage implements ObjectStorage {
 
     @Override
     public Optional<String> presignedGetUrl(String objectKey, Duration expiry) {
-        return Optional.empty();
+        return Optional.of(resolve(objectKey).toUri().toString());
+    }
+
+    @Override
+    public Optional<String> presignedPutUrl(String objectKey, Duration expiry) {
+        return Optional.of(resolve(objectKey).toUri().toString());
     }
 
     @Override

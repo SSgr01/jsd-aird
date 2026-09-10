@@ -12,6 +12,7 @@ import java.util.UUID;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.ops.application.port.JobDeadline;
 import com.jsd.aird.ops.application.port.FileObjectRepository;
@@ -56,6 +57,7 @@ public class TemplateImportService {
     private final StructureProposalResolver structureProposalResolver;
     private final PhysicalStructureFieldCompiler physicalFieldCompiler;
     private final ColumnTableLayoutCompiler columnTableLayoutCompiler;
+    private final ExperimentMatrixCandidateDetector experimentMatrixCandidateDetector;
 
     public TemplateImportService(
             TemplateImportRepository repository,
@@ -88,6 +90,7 @@ public class TemplateImportService {
         this.structureProposalResolver = new StructureProposalResolver(objectMapper);
         this.physicalFieldCompiler = new PhysicalStructureFieldCompiler(objectMapper);
         this.columnTableLayoutCompiler = new ColumnTableLayoutCompiler(objectMapper);
+        this.experimentMatrixCandidateDetector = new ExperimentMatrixCandidateDetector(objectMapper);
     }
 
     @Transactional
@@ -1148,6 +1151,7 @@ public class TemplateImportService {
         if ("COLUMN_TABLE".equals(result.path("type").asText())) {
             enrichColumnSemanticGeometry(result, physicalFacts);
         }
+        result.set("matrixCandidates", experimentMatrixCandidateDetector.detect(result, physicalFacts));
         result.set("resolution", region.path("resolution").deepCopy());
         for (var key : List.of("candidateOnly", "physicalStructureOnly", "reviewRequired",
                 "structureConflict", "resolutionGroupId", "resolutionAlternativeId", "pendingReason",
@@ -1169,6 +1173,7 @@ public class TemplateImportService {
             if (!(payload instanceof ObjectNode object)
                     || "PHYSICAL_STRUCTURE".equals(object.path("recognitionOrigin").asText(""))) continue;
             object.put("reviewRequired", true)
+                    .put("autoAccept", false)
                     .put("recognitionCoverageStatus", status);
             if (object.path("pendingReason").asText("").isBlank()) {
                 object.put("pendingReason", "RECOGNITION_COVERAGE_INCOMPLETE");
@@ -1430,6 +1435,14 @@ public class TemplateImportService {
         var sheetId = region.path("sheetId").asText("");
         var range = region.path("range").asText("");
         var type = region.path("type").asText("");
+        var semanticParent = accumulator.suggestions.stream()
+                .filter(item -> isTableSuggestion(item))
+                .filter(item -> sheetId.equals(item.payload().path("locator").path("sheetId").asText(
+                        item.payload().path("sheetId").asText(""))))
+                .filter(item -> fieldRanges(item.payload()).stream().anyMatch(itemRange ->
+                        rangesOverlap(range, itemRange)))
+                .max(java.util.Comparator.comparingDouble(
+                        RecognitionModelClient.ModelSuggestion::confidence)).orElse(null);
         var semantic = accumulator.suggestions.stream()
                 .filter(item -> !"SEMANTIC_MODEL".equals(item.suggestionType()))
                 .filter(item -> sheetId.equals(item.payload().path("locator").path("sheetId").asText(
@@ -1456,8 +1469,11 @@ public class TemplateImportService {
                 .put("physicalStructureOnly", false)
                 .put("structureConflict", false)
                 .put("reviewRequired", false)
+                .put("autoAccept", true)
                 .put("publishable", true)
                 .put("recognitionOrigin", "DETERMINATE_PHYSICAL_COMPONENT");
+        if (semanticParent != null) mergeExperimentSemanticMetadata(parent, semanticParent.payload());
+        appendDeterministicFormulaProjections(parent, region, structure);
         var parentType = "FORM_REGION".equals(type) && "SCALAR".equals(parent.path("kind").asText(""))
                 ? "SCALAR_FIELD" : parent.path("kind").asText(type);
         accumulator.suggestions.add(new RecognitionModelClient.ModelSuggestion(
@@ -1478,14 +1494,20 @@ public class TemplateImportService {
                     .max(java.util.Comparator.comparingDouble(
                             RecognitionModelClient.ModelSuggestion::confidence)).orElse(null);
             if (bestSemantic != null) mergeSemanticFieldPresentation(payload, bestSemantic.payload());
+            new ExperimentSemanticResolver(objectMapper).resolveField(payload, payload, parent);
+            var semanticAutoAccept = "AUTO_CONFIRMED".equals(
+                    payload.path("experimentSemanticStatus").asText(""))
+                    && payload.path("experimentSemanticIssue").asText("").isBlank();
+            payload.put("autoAccept", semanticAutoAccept);
             payload.put("canonicalStatus", "CONFIRMED")
                     .put("structureStatus", "CONFIRMED")
                     .put("candidateOnly", false)
                     .put("physicalStructureOnly", false)
                     .put("structureConflict", false)
-                    .put("reviewRequired", true)
-                    .put("pendingReason", "FIELD_CONFIRMATION_REQUIRED")
+                    .put("reviewRequired", !semanticAutoAccept)
                     .put("recognitionOrigin", "DETERMINATE_PHYSICAL_FIELD");
+            if (semanticAutoAccept) payload.remove("pendingReason");
+            else payload.put("pendingReason", "FIELD_CONFIRMATION_REQUIRED");
             accumulator.suggestions.add(new RecognitionModelClient.ModelSuggestion(
                     physicalChild.suggestionType(), payload,
                     Math.max(physicalChild.confidence(), bestSemantic == null ? 0 : bestSemantic.confidence()),
@@ -1518,6 +1540,63 @@ public class TemplateImportService {
             if (semantic.has(key) && !semantic.path(key).asText("").isBlank()) {
                 target.set(key, semantic.path(key).deepCopy());
             }
+        }
+        mergeExperimentSemanticMetadata(target, semantic);
+        // The physical workbook hierarchy is authoritative. A model response
+        // may supply a path only when geometry did not; it must never replace
+        // a complete physical path with a shorter or empty path.
+        if ((!target.path("labelPathSegments").isArray()
+                || target.path("labelPathSegments").isEmpty())
+                && semantic.path("labelPathSegments").isArray()
+                && !semantic.path("labelPathSegments").isEmpty()) {
+            target.set("labelPathSegments", semantic.path("labelPathSegments").deepCopy());
+        }
+        if (target.path("labelPath").asText("").isBlank()
+                && !semantic.path("labelPath").asText("").isBlank()) {
+            target.put("labelPath", semantic.path("labelPath").asText());
+        }
+    }
+
+    private void mergeExperimentSemanticMetadata(ObjectNode target, JsonNode semantic) {
+        for (var key : List.of("experimentField", "experimentItemLabel",
+                "experimentSemanticConfidence", "experimentSemanticStatus",
+                "experimentSemanticSource", "experimentSemanticAlternatives",
+                "experimentSemanticIssue", "autoAccept", "listProjections")) {
+            if (semantic.has(key)) target.set(key, semantic.path(key).deepCopy());
+        }
+    }
+
+    private void appendDeterministicFormulaProjections(
+            ObjectNode parent, JsonNode region, JsonNode structure
+    ) {
+        var projections = parent.path("listProjections").isArray()
+                ? (ArrayNode) parent.path("listProjections") : parent.putArray("listProjections");
+        var resolver = new ExperimentSemanticResolver(objectMapper);
+        for (var candidate : experimentMatrixCandidateDetector.detect(region, structure)) {
+            if (!resolver.exactFormulaGroup(candidate)) continue;
+            var id = candidate.path("candidateRef").asText("");
+            var exists = false;
+            for (var projection : projections) {
+                if (id.equals(projection.path("listProjectionId").asText(""))) {
+                    exists = true;
+                    break;
+                }
+            }
+            if (exists || id.isBlank()) continue;
+            projections.add(objectMapper.createObjectNode()
+                    .put("listProjectionId", id)
+                    .put("domain", "FORMULA")
+                    .put("componentId", candidate.path("componentId").asText(
+                            region.path("regionId").asText("")))
+                    .put("recordAxis", candidate.path("recordAxis").asText("COLUMN"))
+                    .put("itemAxis", candidate.path("itemAxis").asText("ROW"))
+                    .put("labelRange", candidate.path("labelRange").asText(""))
+                    .put("valueRange", candidate.path("valueRange").asText(""))
+                    .put("totalRange", candidate.path("totalRange").asText(""))
+                    .put("labelSemantic", "MATERIAL_NAME")
+                    .put("valueSemantic", "RATIO")
+                    .put("semanticStatus", "AUTO_CONFIRMED")
+                    .put("confidence", candidate.path("geometryConfidence").asDouble(0.95d)));
         }
     }
 
@@ -1870,8 +1949,12 @@ public class TemplateImportService {
     ) {
         var physical = "PHYSICAL".equals(origin);
         var suggestions = batch.suggestions().stream()
-                .filter(item -> physical == "PHYSICAL_STRUCTURE".equals(
-                        item.payload().path("recognitionOrigin").asText("")))
+                .filter(item -> {
+                    var recognitionOrigin = item.payload().path("recognitionOrigin").asText("");
+                    var physicalSuggestion = "PHYSICAL_STRUCTURE".equals(recognitionOrigin)
+                            || recognitionOrigin.startsWith("DETERMINATE_PHYSICAL_");
+                    return physical == physicalSuggestion;
+                })
                 .toList();
         return new RecognitionModelClient.RecognitionBatch(
                 suggestions,

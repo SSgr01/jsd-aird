@@ -481,7 +481,7 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
         if (structurePhase) schemaName = "template_structure_proposal_v2";
         else if (isDocxStructurePhase(request.callPhase())) schemaName = "template_docx_structure_discovery_v1";
         else if (isDocxFieldPhase(request.callPhase())) schemaName = "template_docx_three_region_v2";
-        else if (request.callPhase().contains("REGION_FIELDS")) schemaName = "template_region_semantic_batch_v3";
+        else if (request.callPhase().contains("REGION_FIELDS")) schemaName = "template_region_semantic_batch_v4";
         else throw new IllegalArgumentException("不支持旧的全局语义识别阶段：" + request.callPhase());
         if ("json_schema".equals(responseFormat)) {
             body.set("response_format", objectMapper.createObjectNode()
@@ -538,9 +538,9 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
                     : phase.contains("STRUCTURE_DISCOVERY")
                     ? "第一阶段：只根据物理事实独立提出结构 proposals。不要确认或引用后端候选，不要输出 candidateRef、verdict、fieldRelations、tables、bindings 或后端派生投影。"
                     : phase.contains("REGION_FIELDS")
-                    ? "第二阶段：只增强 semanticRegions.fieldCandidates 中已有候选的字段名称、类型、单位和分组。每个 fieldRelation 必须携带 candidateRef；不得新增候选、返回或修改坐标、方向、区域范围、editability 或 valueSource。"
+                    ? "第二阶段：只增强 semanticRegions.fieldCandidates 与 matrixCandidates 中已有候选。除字段名称、类型、单位和分组外，同时建议实验业务语义、模板用途、拆分方式和配方矩阵类型。每个关系必须携带已有 candidateRef；不得新增候选、返回或修改坐标、方向、区域范围、editability 或 valueSource。"
                     : "按当前识别阶段完成结构和字段识别。";
-            var protocolVersion = phase.contains("REGION_FIELDS") ? "3"
+            var protocolVersion = phase.contains("REGION_FIELDS") ? "4"
                     : phase.contains("STRUCTURE_DISCOVERY") ? "2" : "1";
             return "识别协议版本：" + protocolVersion + "；结构评估和区域语义按当前调用阶段的独立响应约定返回\n"
                     + "文件名：" + safeFileName(request.sourceFileName()) + "\n"
@@ -599,10 +599,13 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
         if (phase.contains("REGION_FIELDS")) {
             return """
                     你是企业 Excel 模板的批量区域语义识别器。本次只增强 semanticRegions.fieldCandidates 中的已有候选。
-                    只能返回 RegionSemanticBatchResponse：recognitionProtocolVersion=3、regions、qualityIssues。
-                    每个 region 必须包含 regionId、businessName、fieldRelations、qualityIssues。
+                    只能返回 RegionSemanticBatchResponse：recognitionProtocolVersion=4、experimentTemplateSuggestion、regions、qualityIssues。
+                    每个 region 必须包含 regionId、businessName、fieldRelations、matrixRelations、qualityIssues。
                     不得返回区域 geometry、tables、businessBlocks、tableKind、recordAxis、bindings 或派生投影。
-                    每个字段关系必须引用 fieldCandidates 中的 candidateRef；只能返回或补充 fieldName（或 businessName）、valueType、unit、groupName。不得返回 labelRange、valueRange、headerRange、dataRange、recordAxis、repeatAxis、mappingKind、editability 或 valueSource；无法确定时省略该关系并保留待核对问题。
+                    每个字段关系必须引用 fieldCandidates 中的 candidateRef；只能返回或补充 fieldName（或 businessName）、valueType、unit、groupName、experimentFieldSuggestion。实验语义优先根据完整 labelPathSegments 的分组判断，再用字段名称处理例外；最多给出两个 alternatives。不得返回 targetPath、数据库ID、labelRange、valueRange、headerRange、dataRange、recordAxis、repeatAxis、mappingKind、editability、valueSource 或 autoAccept。
+                    experimentFieldSuggestion 只说明字段在实验中的业务含义，不判断机器学习 X/Y。性能测试值使用 TEST.VALUE，并在 itemLabel 中保留完整项目名；涂料固含、UV能量、施工方式属于 PROCESS.APPLICATION_CONDITION，实测固含属于 TEST.VALUE。
+                    matrixRelations 只能引用输入 matrixCandidates 的 candidateRef。材料标签列与实验数值列构成配方二维交叉关系时建议 FORMULA_MATRIX；不得自行返回或发明 C17:C25 等坐标。
+                    experimentTemplateSuggestion 只建议 GENERAL_DATA/EXPERIMENT_DATA；实验数据文件统一按 SINGLE_FILE 生成一条实验。实验编号、样品编号、配方编号或批次编号属于 BASIC.SOURCE_IDENTITY，只用于文件内部配方、工艺和测试结果关联，不能决定实验拆分。
                     COLUMN_TABLE 的候选值位置由输入的 fieldCandidates 固定，不能把左侧标签列本身当成新的字段候选。
                     editability 与 valueSource 分开判断，公式值使用 READ_ONLY+FORMULA；合计/平均等派生行不要作为普通训练数据。
                     """;
@@ -767,7 +770,7 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
     private String promptVersion(String phase) {
         if (isDocxPhase(phase)) return "docx-three-region-v2";
         if (phase.contains("STRUCTURE_DISCOVERY")) return "structure-three-region-v3";
-        if (phase.contains("REGION_FIELDS")) return "region-semantics-three-region-v3";
+        if (phase.contains("REGION_FIELDS")) return "region-semantics-group-first-v4";
         return PROMPT_VERSION;
     }
 

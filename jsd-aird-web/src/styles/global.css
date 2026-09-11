@@ -6405,6 +6405,13 @@ a:active,
   min-height: 36px;
   padding-inline: 6px;
 }
+.upload-workspace-progress-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 6px;
+  font-size: 12px;
+}
 .upload-workspace-progress {
   height: 6px;
   margin-top: 6px;
@@ -6575,6 +6582,37 @@ a:active,
 .catalog-data-table .ant-table-cell .ant-space,
 .catalog-knowledge-table .ant-table-cell .ant-space {
   max-width: 100%;
+}
+.catalog-knowledge-table .knowledge-related-projects-column {
+  overflow: hidden;
+}
+.knowledge-related-projects {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+}
+.knowledge-related-project-tag {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  margin-inline-end: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.knowledge-related-project-count.ant-btn {
+  flex: 0 0 auto;
+  height: 22px;
+  min-width: 34px;
+  padding-inline: 6px;
+  border: 1px solid var(--app-border);
+  border-radius: 5px;
+  background: var(--app-bg);
+  line-height: 20px;
 }
 .catalog-spectrum-table .ant-table-cell .ant-space {
   max-width: 100%;

@@ -428,7 +428,7 @@ export function ProductionOrderUploadPage() {
             </Form.Item>
           </Form>
         }
-        accept=".xlsx,.docx,.png,.jpg,.jpeg,.gif,.webp,.bmp,.tif,.tiff"
+        accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.png,.jpg,.jpeg,.gif,.webp,.bmp,.tif,.tiff"
         uploadDisabled={!canCreate}
         beforeUpload={validateFile}
         multiple
@@ -438,8 +438,8 @@ export function ProductionOrderUploadPage() {
           setFiles((current) => current.filter((item) => item.uid !== file.uid))
         }
         onClearFiles={() => setFiles([])}
-        uploadMainText="拖拽文件到此处，或点击选择文件"
-        uploadHint="支持 XLSX、DOCX 或图片，上传后自动解析并生成可查看记录。"
+        uploadMainText="拖拽文件到此处/点击选择文件/点击拍照上传"
+        uploadHint="支持 PDF / Office / CSV / 图片，可批量上传，单个文件最大100M。"
         submitLabel="开始上传"
         submitIcon={<CloudUploadOutlined />}
         onSubmit={() => void submit()}

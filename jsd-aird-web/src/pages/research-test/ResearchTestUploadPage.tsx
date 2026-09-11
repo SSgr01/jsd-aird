@@ -346,7 +346,8 @@ export function ResearchTestUploadPage({ type = 'REPORT' }: { type?: ResearchTes
           setFiles((current) => current.filter((item) => item.uid !== file.uid))
         }
         onClearFiles={() => setFiles([])}
-        uploadHint="支持 PDF / Word / Excel / CSV / JPG / PNG / TIF，支持批量上传；图片会调用 OCR 生成 Excel，原始文件会保留。"
+        uploadMainText="拖拽文件到此处/点击选择文件/点击拍照上传"
+        uploadHint="支持 PDF / Office / CSV / 图片，可批量上传，单个文件最大100M。"
         submitLabel="开始上传"
         submitIcon={<CloudUploadOutlined />}
         onSubmit={() =>

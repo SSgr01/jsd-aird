@@ -233,7 +233,7 @@ export function ExperimentUploadPage() {
     <UploadWorkspace
       breadcrumbs={[{ title: '电子实验记录本' }, { title: '实验上传' }]}
       title="实验上传"
-      description="上传 Word / Excel 或实验记录图片；图片将复用模板中心 OCR 识别并生成可编辑的 Excel 实验草稿。"
+      description="上传 Word / Excel 或实验记录图片"
       headerActions={<Button type="primary" onClick={() => navigate('/experiments')}>实验列表</Button>}
       leftTitle="基础分类"
       classification={
@@ -253,7 +253,7 @@ export function ExperimentUploadPage() {
           </Form.Item>
         </Form>
       }
-      accept=".xlsx,.xls,.csv,.doc,.docx,.pdf,.jpg,.jpeg,.png,.tif,.tiff"
+      accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.png,.jpg,.jpeg,.gif,.webp,.bmp,.tif,.tiff"
       beforeUpload={validate}
       multiple
       files={files}
@@ -262,7 +262,8 @@ export function ExperimentUploadPage() {
         setFiles((current) => current.filter((item) => item.uid !== file.uid))
       }
       onClearFiles={() => setFiles([])}
-      uploadHint="支持 XLSX / XLS / CSV / DOCX / PDF / JPG / PNG / TIF，图片会通过模板中心 OCR 生成 Excel；原始文件会保留。"
+      uploadMainText="拖拽文件到此处/点击选择文件/点击拍照上传"
+      uploadHint="支持 PDF / Office / CSV / 图片，可批量上传，单个文件最大100M。"
       submitLabel="开始上传"
       submitIcon={<CloudUploadOutlined />}
       onSubmit={() => void submit()}

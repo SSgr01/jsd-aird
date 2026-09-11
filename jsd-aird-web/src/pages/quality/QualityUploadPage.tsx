@@ -402,8 +402,8 @@ export function QualityUploadPage() {
           setFiles((current) => current.filter((item) => item.uid !== file.uid))
         }
         onClearFiles={() => setFiles([])}
-        uploadMainText="拖拽文件到此处，或点击选择文件"
-        uploadHint="支持 PDF / Word / Excel / CSV / JPG / PNG / TIF；支持批量上传。文件重复会自动提示。"
+        uploadMainText="拖拽文件到此处/点击选择文件/点击拍照上传"
+        uploadHint="支持 PDF / Office / CSV / 图片，可批量上传，单个文件最大100M。"
         submitLabel="开始上传"
         submitIcon={<CloudUploadOutlined />}
         onSubmit={() => void submit()}

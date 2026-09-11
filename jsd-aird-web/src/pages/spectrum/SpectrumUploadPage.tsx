@@ -148,7 +148,7 @@ export function SpectrumUploadPage() {
       multiple files={fileList} onFilesChange={setFileList}
       onRemoveFile={(file) => setFileList((current) => current.filter((item) => item.uid !== file.uid))}
       onClearFiles={() => setFileList([])}
-      uploadMainText="拖拽 PDF 或图谱图片到此处"
+      uploadMainText="拖拽文件到此次，或点击选择文件"
       uploadHint="支持 PDF / PNG / JPG / JPEG / TIF / TIFF，单文件最大 100 MB。"
       submitLabel="保存并开始使用" submitIcon={<UploadOutlined />} onSubmit={() => void upload()} submitting={uploading}
       rightTitle="已上传图谱" rightCount={page.total}

@@ -7,6 +7,10 @@ import java.nio.file.Path;
 import java.util.List;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jsd.aird.ai.formula.application.FormulaModelTaskProfileRegistry;
+import com.jsd.aird.ai.formula.application.UvpuAnalysisProfile;
+import com.jsd.aird.ai.formula.application.UvpuResearchProfile;
+import com.jsd.aird.shared.json.JsonCanonicalizer;
 import org.junit.jupiter.api.Test;
 
 class FormulaModelContractsTest {
@@ -49,6 +53,67 @@ class FormulaModelContractsTest {
     }
 
     @Test
+    void productionProfilePatchDoesNotRequireActualFilmThicknessAndMaterializesContractDefaults() throws Exception {
+        var profile = json.readValue(Files.readString(locateProfile("uvpu_application_formulation.v1.1.2.json")),
+                FormulaModelContracts.TaskProfile.class);
+
+        assertThat(profile.version()).isEqualTo("1.1.2");
+        assertThat(profile.contextFeatures()).extracting(FormulaModelContracts.ContextFeatureSpec::code)
+                .contains("applicatorSpecUm")
+                .doesNotContain("actualFilmThicknessUm", "filmThicknessUm");
+        assertThat(profile.targets()).hasSize(5);
+        assertThat(profile.targets()).allSatisfy(target -> assertThat(target.decisionThreshold()).isEqualTo(0.50d));
+        assertThat(profile.formula().sumTolerance()).isEqualTo(0.02d);
+
+        var registry = new FormulaModelTaskProfileRegistry(json, new JsonCanonicalizer(json));
+        assertThat(registry.productionJson().path("targets").get(0).path("decisionThreshold").asDouble())
+                .isEqualTo(0.50d);
+        assertThat(registry.productionHash()).isEqualTo(new JsonCanonicalizer(json).hash(registry.productionJson()));
+    }
+
+    @Test
+    void candidateProfileAddsNewTargetsWithoutChangingTheProductionDefault() {
+        var canonicalizer = new JsonCanonicalizer(json);
+        var registry = new FormulaModelTaskProfileRegistry(json, canonicalizer);
+
+        assertThat(registry.production().version()).isEqualTo("1.1.2");
+        assertThat(registry.production().targets()).hasSize(5);
+        assertThat(registry.byVersion("1.2").version()).isEqualTo("1.2");
+        assertThat(registry.byVersion("1.2").targets()).hasSize(18)
+                .extracting(FormulaModelContracts.TargetSpec::targetKey)
+                .contains(
+                        "APP.WARPING.CURL_ANGLE@substrate=PC_FILM_170UM;stage=UV_IMMEDIATE",
+                        "APP.WARPING.CURL_ANGLE@substrate=PET_100UM;stage=UV_IMMEDIATE",
+                        "APP.ELONGATION@substrate=PC_FILM_170UM;method=HOT_DRAW;unit=PCT",
+                        "APP.SURFACE_DRYNESS@stage=UV_CURED",
+                        "APP.ADHESION.B_GRADE@substrate=PMMA_PC_COMPOSITE_0_64MM;condition=WATER_85C_1H"
+                );
+        assertThat(registry.byVersion("1.2").contextFeatures())
+                .extracting(FormulaModelContracts.ContextFeatureSpec::code)
+                .doesNotContain("actualFilmThicknessUm", "filmThicknessUm");
+        assertThat(registry.candidateHash()).isEqualTo(canonicalizer.hash(registry.candidateJson()));
+    }
+
+    @Test
+    void candidateTargetsAlignWithAnalysisAndResearchProfiles() {
+        var registry = new FormulaModelTaskProfileRegistry(json, new JsonCanonicalizer(json));
+        var analysis = new UvpuAnalysisProfile(json);
+        var research = new UvpuResearchProfile(json);
+
+        var candidateKeys = registry.byVersion("1.2").targets().stream()
+                .map(FormulaModelContracts.TargetSpec::targetKey)
+                .collect(java.util.stream.Collectors.toSet());
+        var analysisKeys = analysis.definition().targets().stream()
+                .map(UvpuAnalysisProfile.TargetDefinition::targetKey)
+                .collect(java.util.stream.Collectors.toSet());
+        var researchKeys = research.definition().targets().stream()
+                .map(UvpuResearchProfile.Target::targetKey)
+                .collect(java.util.stream.Collectors.toSet());
+
+        assertThat(candidateKeys).hasSize(18).isEqualTo(analysisKeys).isEqualTo(researchKeys);
+    }
+
+    @Test
     void readsTheSharedScoreGoldenRequestAndResponse() throws Exception {
         var request = json.readValue(
                 Files.readString(locateContractExample("score-request.uvpu-synthetic.golden.json")),
@@ -75,11 +140,15 @@ class FormulaModelContractsTest {
     }
 
     private Path locateProfile() {
+        return locateProfile("uvpu_application_formulation.v1.json");
+    }
+
+    private Path locateProfile(String name) {
         return List.of(
                         Path.of("..", "jsd-aird-ai", "src", "jsd_aird_ai", "task_profiles",
-                                "uvpu_application_formulation.v1.json"),
+                                name),
                         Path.of("jsd-aird-ai", "src", "jsd_aird_ai", "task_profiles",
-                                "uvpu_application_formulation.v1.json")
+                                name)
                 ).stream()
                 .filter(Files::isRegularFile)
                 .findFirst()

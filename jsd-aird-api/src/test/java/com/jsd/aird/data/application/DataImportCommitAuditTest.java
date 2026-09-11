@@ -127,4 +127,42 @@ class DataImportCommitAuditTest {
         assertThat(committed.getValue()).singleElement()
                 .extracting(DataRepository.CommittedRow::recordKey).isEqualTo("NEW-001");
     }
+
+    @Test
+    void preservesV9StructuralRecordKeyInsteadOfUsingSourceIdentity() {
+        ActorContext.set(new com.jsd.aird.shared.security.Actor(ORGANIZATION_ID, USER_ID, "developer"));
+        var mapper = new ObjectMapper();
+        var structuralKey = "IMPORT:STRUCT:sheet-1:component-a:COLUMN:1";
+        var normalizedWrapper = mapper.createObjectNode()
+                .put("fieldCode", "EXPERIMENT.NO").put("bindingId", "experiment-no")
+                .put("valuePath", "/experimentNo").put("normalizedValue", "G-6563");
+        var metadata = mapper.createObjectNode()
+                .put("recordKey", structuralKey)
+                .put("recordKeyKind", "STRUCTURAL")
+                .put("sourceIdentity", "G-6563")
+                .put("sourceIdentityType", "EXPERIMENT_NO");
+        var row = new DataRepository.Row(UUID.randomUUID(), "sheet-1", 1,
+                mapper.createObjectNode().put("A", "G-6563"),
+                mapper.createObjectNode().set("EXPERIMENT.NO", normalizedWrapper),
+                mapper.createObjectNode(), "VALID", metadata);
+        var mappingDetail = mapper.createObjectNode().put("identity", true)
+                .put("bindingId", "experiment-no").put("dataPath", "/experimentNo");
+        var mapping = new DataRepository.Mapping(UUID.randomUUID(), "sheet-1", "A", "实验编号",
+                "EXPERIMENT.NO", "实验编号", "MAP", "TEXT", null, null, mappingDetail, "CONFIRMED");
+        when(repository.findJobForUpdate(ORGANIZATION_ID, importJobId)).thenReturn(Optional.of(job));
+        when(repository.listIssues(ORGANIZATION_ID, importJobId)).thenReturn(List.of());
+        when(repository.listRows(ORGANIZATION_ID, importJobId)).thenReturn(List.of(row));
+        when(repository.listMappings(ORGANIZATION_ID, importJobId)).thenReturn(List.of(mapping));
+        when(repository.listSheets(ORGANIZATION_ID, importJobId)).thenReturn(List.of());
+        when(repository.commit(eq(ORGANIZATION_ID), eq(importJobId), eq(USER_ID), any()))
+                .thenReturn(new DataRepository.CommitResult(List.of(), 1));
+
+        service.commit(importJobId);
+
+        @SuppressWarnings("unchecked")
+        var committed = (ArgumentCaptor<List<DataRepository.CommittedRow>>) (ArgumentCaptor<?>) ArgumentCaptor.forClass(List.class);
+        verify(repository).commit(eq(ORGANIZATION_ID), eq(importJobId), eq(USER_ID), committed.capture());
+        assertThat(committed.getValue()).singleElement()
+                .extracting(DataRepository.CommittedRow::recordKey).isEqualTo(structuralKey);
+    }
 }

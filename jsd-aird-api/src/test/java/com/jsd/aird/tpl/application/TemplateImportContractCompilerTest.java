@@ -1,6 +1,7 @@
 package com.jsd.aird.tpl.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.shared.json.JsonCanonicalizer;
@@ -32,7 +33,7 @@ class TemplateImportContractCompilerTest {
 
         var result = compiler.compile(layout, schema, mappings);
 
-        assertThat(result.importContractVersion()).isEqualTo(7);
+        assertThat(result.importContractVersion()).isEqualTo(8);
         assertThat(result.layoutStructureVersion()).isEqualTo(6);
         assertThat(result.contract().has("targetDataType")).isFalse();
         assertThat(result.contract().path("components")).singleElement().satisfies(component -> {
@@ -41,6 +42,67 @@ class TemplateImportContractCompilerTest {
             assertThat(component.path("range").asText()).isEqualTo("A6:G22");
             assertThat(component.path("bindings")).hasSize(2);
         });
+    }
+
+    @Test
+    void keepsOrdinaryTemplatesOnV8WithoutAddingExperimentFields() {
+        var mappings = objectMapper.createArrayNode().add(scalar(
+                "name", "MATERIAL.NAME", "产品名称", "A1", "B1"));
+
+        var result = compiler.compile(objectMapper.createObjectNode(), objectMapper.createObjectNode(), mappings);
+
+        assertThat(result.importContractVersion()).isEqualTo(8);
+        assertThat(result.contract().has("templateUsage")).isFalse();
+        assertThat(result.contract().has("experimentImport")).isFalse();
+        assertThat(result.contract().path("components").get(0).path("bindings").get(0)
+                .has("experimentField")).isFalse();
+        assertThat(result.contractHash()).isEqualTo(
+                "405b70a4542a071acf3436cf91f9283c847dd955586cb64cc45817f9a600965a");
+    }
+
+    @Test
+    void compilesV9WithMultipleIdentityBindingsAndDerivedTargetPaths() {
+        var schema = experimentSchema("BY_IDENTITY");
+        var config = (com.fasterxml.jackson.databind.node.ObjectNode) schema.path(
+                TemplateImportContractCompiler.EXPERIMENT_IMPORT_SCHEMA_KEY);
+        var mappings = objectMapper.createArrayNode();
+        addApplicationComponent(mappings, config, "sheet-1", "component-1", "identity-1");
+        addApplicationComponent(mappings, config, "sheet-2", "component-2", "identity-2");
+        ((com.fasterxml.jackson.databind.node.ObjectNode) mappings.get(1))
+                .put("targetPath", "/client/must/not/win")
+                .set("experimentField", objectMapper.createObjectNode()
+                        .put("domain", "BASIC").put("field", "SOURCE_IDENTITY"));
+
+        var result = compiler.compile(objectMapper.createObjectNode(), schema, mappings);
+
+        assertThat(result.importContractVersion()).isEqualTo(9);
+        assertThat(result.contract().path("templateUsage").asText()).isEqualTo("EXPERIMENT_DATA");
+        assertThat(result.contract().path("recordKeyPolicy").asText()).isEqualTo("STRUCTURAL");
+        assertThat(result.contract().path("experimentImport").path("identities")).hasSize(2);
+        assertThat(result.contract().path("listProjections")).hasSize(2);
+        var identity = result.contract().path("components").get(0).path("bindings").get(1);
+        assertThat(identity.path("experimentField").path("field").asText()).isEqualTo("SOURCE_IDENTITY");
+        assertThat(identity.path("targetPath").asText()).isEqualTo("/sourceIdentity");
+        assertThat(identity.path("targetPath").asText()).isNotEqualTo("/client/must/not/win");
+    }
+
+    @Test
+    void rejectsByIdentityExperimentTemplateWithoutIdentityBinding() {
+        var schema = experimentSchema("BY_IDENTITY");
+
+        assertThatThrownBy(() -> compiler.compile(
+                objectMapper.createObjectNode(), schema, objectMapper.createArrayNode()))
+                .hasMessageContaining("至少需要配置一个有效标识字段");
+    }
+
+    @Test
+    void singleFileExperimentTemplateDoesNotRequireIdentity() {
+        var schema = experimentSchema("SINGLE_FILE");
+
+        var result = compiler.compile(objectMapper.createObjectNode(), schema, objectMapper.createArrayNode());
+
+        assertThat(result.importContractVersion()).isEqualTo(9);
+        assertThat(result.contract().path("experimentImport").path("identities")).isEmpty();
     }
 
     @Test
@@ -149,5 +211,45 @@ class TemplateImportContractCompilerTest {
                 .put("fieldId", fieldId);
         mapping.putObject("diagnostic").put("blockId", blockId).put("kind", "FORM_REGION");
         return mapping;
+    }
+
+    private com.fasterxml.jackson.databind.node.ObjectNode experimentSchema(String recordMode) {
+        var schema = objectMapper.createObjectNode();
+        schema.putObject(TemplateRecognitionCompiler.FIELD_MODEL_KEY).putArray("fields");
+        var config = schema.putObject(TemplateImportContractCompiler.EXPERIMENT_IMPORT_SCHEMA_KEY)
+                .put("templateUsage", "EXPERIMENT_DATA")
+                .put("recordMode", recordMode);
+        config.putArray("identities");
+        config.putArray("listProjections");
+        return schema;
+    }
+
+    private void addApplicationComponent(com.fasterxml.jackson.databind.node.ArrayNode mappings,
+                                         com.fasterxml.jackson.databind.node.ObjectNode config,
+                                         String sheetId, String componentId, String identityBindingId) {
+        var root = objectMapper.createObjectNode().put("bindingId", componentId)
+                .put("componentId", componentId).put("mappingKind", "REPEAT_REGION")
+                .put("repeatAxis", "COLUMN");
+        root.putObject("diagnostic").put("kind", "COLUMN_TABLE").put("displayName", sheetId);
+        root.set("locator", objectMapper.createObjectNode().put("sheetId", sheetId)
+                .put("componentId", componentId).put("range", "C16:I36"));
+        mappings.add(root);
+        var identity = objectMapper.createObjectNode().put("bindingId", identityBindingId)
+                .put("parentBindingId", componentId).put("fieldCode", "EXPERIMENT.NO")
+                .put("dataPath", "/experimentNo").put("mappingKind", "REPEAT_FIELD")
+                .put("repeatAxis", "COLUMN");
+        identity.set("locator", objectMapper.createObjectNode().put("sheetId", sheetId)
+                .put("componentId", componentId).put("valueRange", "D16:I16"));
+        mappings.add(identity);
+        config.withArray("identities").add(objectMapper.createObjectNode()
+                .put("identityType", "EXPERIMENT_NO").put("sourceKind", "BINDING")
+                .put("componentId", componentId).put("bindingId", identityBindingId));
+        config.withArray("listProjections").add(objectMapper.createObjectNode()
+                .put("listProjectionId", "formula-" + componentId)
+                .put("domain", "FORMULA").put("componentId", componentId)
+                .put("parentBindingId", componentId).put("recordAxis", "COLUMN")
+                .put("itemAxis", "ROW").put("labelRange", "C17:C25")
+                .put("valueRange", "D17:I25").put("labelSemantic", "MATERIAL_NAME")
+                .put("valueSemantic", "RATIO"));
     }
 }

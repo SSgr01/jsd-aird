@@ -105,6 +105,42 @@ describe('experiment-workbook round trip', () => {
     expect(round.formulaItems?.[1]?.sourceRefs).toEqual(model.formulaItems?.[0]?.sourceRefs);
   });
 
+  it('preserves imported null values and their original missing marker', () => {
+    const importedModel: ExperimentModel = {
+      ...model,
+      formulaItems: [{
+        itemId: 'formula-missing',
+        sourceRefs: [{ sheetId: 'Sheet1', cell: 'D20' }],
+        materialName: 'SJ-230',
+        ratio: null,
+        rawValue: '/',
+        rawUnit: '',
+      }],
+      testResults: [{
+        itemId: 'test-missing',
+        sourceRefs: [{ sheetId: 'Sheet1', cell: 'D30' }],
+        testItem: '附着力',
+        value: null,
+        rawValue: '/',
+        unit: '',
+        judgement: '',
+      }],
+    };
+
+    const snapshot = buildExperimentSnapshot(importedModel, 'exp-imported');
+    const round = parseExperimentSnapshot(snapshot, importedModel);
+
+    expect(round.formulaItems?.[0]?.ratio).toBeNull();
+    expect(round.formulaItems?.[0]?.rawValue).toBe('/');
+    expect(round.testResults?.[0]?.value).toBeNull();
+    expect(round.testResults?.[0]?.rawValue).toBe('/');
+
+    const secondSnapshot = buildExperimentSnapshot(round, 'exp-imported');
+    const secondRound = parseExperimentSnapshot(secondSnapshot, round);
+    expect(secondRound.formulaItems?.[0]?.ratio).toBeNull();
+    expect(secondRound.testResults?.[0]?.value).toBeNull();
+  });
+
   it('renders record sheet with key-value layout', () => {
     const snapshot = buildExperimentSnapshot(model, 'exp-1');
     const sheets = snapshot.sheets as Record<string, Record<string, unknown>>;
@@ -137,7 +173,6 @@ describe('experiment-workbook round trip', () => {
     const templateModel: ExperimentModel = {
       title: '模板实验',
       documentFormat: 'excel',
-      documentSnapshot: templateSnapshot,
     };
 
     expect(buildExperimentSnapshot(templateModel, 'exp-template', templateSnapshot)).toBe(templateSnapshot);

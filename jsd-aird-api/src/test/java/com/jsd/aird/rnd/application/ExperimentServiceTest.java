@@ -17,6 +17,7 @@ import java.util.UUID;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.ops.application.port.FileStorageFacade;
 import com.jsd.aird.rnd.application.port.ExperimentRepository;
+import com.jsd.aird.rnd.domain.ExperimentModels.Detail;
 import com.jsd.aird.rnd.domain.ExperimentModels.Summary;
 import com.jsd.aird.rnd.domain.ExperimentStatus;
 import com.jsd.aird.shared.error.ApiErrorCode;
@@ -148,6 +149,47 @@ class ExperimentServiceTest {
                 .isInstanceOfSatisfying(ApiException.class,
                         error -> assertThat(error.errorCode()).isEqualTo(ApiErrorCode.NOT_FOUND))
                 .hasMessage("实验不存在");
+    }
+
+    @Test
+    void savesImportedDraftWithoutInventingOwnerOrExperimentDate() {
+        var experimentId = UUID.randomUUID();
+        var versionId = UUID.randomUUID();
+        var summary = new Summary(
+                experimentId, "EXP-IMPORT-001", "应用测试报告", null, null,
+                "EXCEL_IMPORT", ExperimentStatus.DRAFT, null, null, null, null, null, null,
+                null, null, 1, 1, Instant.now()
+        );
+        when(repository.saveDraft(
+                org.mockito.ArgumentMatchers.eq(ORGANIZATION_ID),
+                org.mockito.ArgumentMatchers.eq(experimentId),
+                org.mockito.ArgumentMatchers.eq(1L),
+                any(),
+                org.mockito.ArgumentMatchers.eq(USER_ID),
+                org.mockito.ArgumentMatchers.eq("creator")
+        )).thenAnswer(invocation -> {
+            var draft = invocation.<ExperimentRepository.Draft>getArgument(3);
+            return new Detail(summary, versionId, null, null, mapper.createObjectNode(), draft.editModel(),
+                    List.of(), List.of());
+        });
+
+        service.save(experimentId, 1, new ExperimentService.DraftCommand(
+                "EXP-IMPORT-001", "应用测试报告", null, null,
+                null, null, null, null, null, null, null,
+                mapper.createObjectNode(), mapper.createObjectNode()
+        ));
+
+        var captor = ArgumentCaptor.forClass(ExperimentRepository.Draft.class);
+        verify(repository).saveDraft(
+                org.mockito.ArgumentMatchers.eq(ORGANIZATION_ID),
+                org.mockito.ArgumentMatchers.eq(experimentId),
+                org.mockito.ArgumentMatchers.eq(1L),
+                captor.capture(),
+                org.mockito.ArgumentMatchers.eq(USER_ID),
+                org.mockito.ArgumentMatchers.eq("creator")
+        );
+        assertThat(captor.getValue().ownerName()).isNull();
+        assertThat(captor.getValue().experimentDate()).isNull();
     }
 
     private Summary summary(ExperimentRepository.Create command) {

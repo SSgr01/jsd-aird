@@ -71,6 +71,12 @@ class PermissionRouteFilterTest {
         assertThat(code("POST", "/api/v1/knowledge/assistant")).isEqualTo("ai.use");
         assertThat(code("POST", "/api/v1/assistant/qa/stream")).isEqualTo("ai.use");
         assertThat(code("POST", "/api/v1/search/files")).isEqualTo("ai.use");
+        assertThat(code("GET", "/api/v1/ai/formulation-readiness")).isEqualTo("ai.use");
+        assertThat(code("POST", "/api/v1/ai/formula-predictions")).isEqualTo("ai.use");
+        assertThat(code("POST", "/api/v1/ai/experiment-optimizations")).isEqualTo("ai.use");
+        assertThat(code("POST", "/api/v1/ai/formula-models/builds")).isEqualTo("ai.model.manage");
+        assertThat(code("POST", "/api/v1/ai/formula-models/00000000-0000-0000-0000-000000000000/targets/target/activate"))
+                .isEqualTo("ai.model.manage");
         assertThat(code("POST", "/api/v1/knowledge/documents/00000000-0000-0000-0000-000000000000/ai-grant"))
                 .isEqualTo("ai.external");
         assertThat(code("POST", "/api/v1/knowledge/documents/00000000-0000-0000-0000-000000000000/versions/00000000-0000-0000-0000-000000000000/reparse"))
@@ -97,6 +103,8 @@ class PermissionRouteFilterTest {
                 .isEqualTo("experiment.create");
         assertThat(codeWithKind("POST", "/api/v1/files/staged", "TEMPLATE_SOURCE"))
                 .isEqualTo("template.upload");
+        assertThat(code("POST", "/api/v1/data/import-jobs/00000000-0000-0000-0000-000000000001/experiment-sync"))
+                .isEqualTo("data.create");
     }
 
     @Test

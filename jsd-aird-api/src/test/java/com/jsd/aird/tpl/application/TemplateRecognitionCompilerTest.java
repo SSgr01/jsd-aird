@@ -321,6 +321,93 @@ class TemplateRecognitionCompilerTest {
         assertThat(result.fieldModel().path("fields")).isEmpty();
     }
 
+    @Test
+    void materializesV9ExperimentConfigurationFromAcceptedBackendSemantics() throws Exception {
+        var schema = objectMapper.createObjectNode().put("type", "object");
+        schema.set("properties", objectMapper.createObjectNode());
+        var identity = suggestion("ACCEPTED", "/records/component_a/experimentNo", "实验编号", "实验配方", 0.99);
+        var identityPayload = (com.fasterxml.jackson.databind.node.ObjectNode) identity.payload();
+        identityPayload.put("componentId", "component-a")
+                .put("experimentItemLabel", "实验编号")
+                .put("experimentSemanticConfidence", 0.99)
+                .put("experimentSemanticStatus", "AUTO_CONFIRMED")
+                .set("experimentField", objectMapper.createObjectNode()
+                        .put("domain", "BASIC").put("field", "SOURCE_IDENTITY"));
+        var testValue = suggestion("ACCEPTED", "/records/component_a/adhesion", "附着力", "性能测试", 0.96);
+        var testPayload = (com.fasterxml.jackson.databind.node.ObjectNode) testValue.payload();
+        testPayload.put("componentId", "component-a")
+                .put("experimentItemLabel", "性能测试 > 附着力")
+                .put("experimentSemanticConfidence", 0.96)
+                .put("experimentSemanticStatus", "CONFIRMED")
+                .put("experimentSemanticSource", "HUMAN")
+                .set("experimentField", objectMapper.createObjectNode()
+                        .put("domain", "TEST").put("field", "VALUE"));
+
+        var result = compiler.compile(schema, List.of(identity, testValue), TemplateFormat.XLSX);
+        var configuration = result.schema().path(TemplateImportContractCompiler.EXPERIMENT_IMPORT_SCHEMA_KEY);
+
+        assertThat(configuration.path("templateUsage").asText()).isEqualTo("EXPERIMENT_DATA");
+        assertThat(configuration.path("recordMode").asText()).isEqualTo("SINGLE_FILE");
+        assertThat(configuration.path("identities")).singleElement().satisfies(rule -> {
+            assertThat(rule.path("componentId").asText()).isEqualTo("component-a");
+            assertThat(rule.path("identityType").asText()).isEqualTo("EXPERIMENT_NO");
+        });
+        assertThat(configuration.path("recognitionSummary").path("needsReviewCount").asInt()).isZero();
+        assertThat(result.mapping()).allSatisfy(binding -> assertThat(binding.has("targetPath")).isFalse());
+    }
+
+    @Test
+    void preservesBackendGeneratedFormulaProjectionFromHiddenRegionRoot() throws Exception {
+        var schema = objectMapper.createObjectNode().put("type", "object");
+        schema.set("properties", objectMapper.createObjectNode());
+        var identity = suggestion("ACCEPTED", "/records/component_a/experimentNo", "实验编号", "实验配方", 0.99);
+        var identityPayload = (com.fasterxml.jackson.databind.node.ObjectNode) identity.payload();
+        identityPayload.put("componentId", "component-a")
+                .put("experimentSemanticConfidence", 0.99)
+                .put("experimentSemanticStatus", "AUTO_CONFIRMED")
+                .set("experimentField", objectMapper.createObjectNode()
+                        .put("domain", "BASIC").put("field", "SOURCE_IDENTITY"));
+
+        var regionPayload = objectMapper.createObjectNode()
+                .put("fieldName", "实验配方区域")
+                .put("dataPath", "/records/component_a")
+                .put("relationId", "formula-region")
+                .put("componentId", "component-a")
+                .put("kind", "COLUMN_TABLE")
+                .put("role", "REPEAT_REGION")
+                .put("mappingKind", "REPEAT_REGION")
+                .put("repeatAxis", "COLUMN")
+                .put("canonicalStatus", "CONFIRMED")
+                .put("structureStatus", "CONFIRMED");
+        regionPayload.set("locator", objectMapper.createObjectNode()
+                .put("sheetId", "sheet-1").put("range", "C16:I26").put("address", "C16:I26"));
+        regionPayload.set("listProjections", objectMapper.createArrayNode().add(
+                objectMapper.createObjectNode()
+                        .put("listProjectionId", "matrix-formula-sheet-1")
+                        .put("domain", "FORMULA")
+                        .put("componentId", "component-a")
+                        .put("recordAxis", "COLUMN")
+                        .put("itemAxis", "ROW")
+                        .put("labelRange", "C17:C25")
+                        .put("valueRange", "D17:I25")
+                        .put("totalRange", "C26:I26")
+                        .put("labelSemantic", "MATERIAL_NAME")
+                        .put("valueSemantic", "RATIO")
+                        .put("semanticStatus", "AUTO_CONFIRMED")));
+        var region = new TemplateImportRepository.RecognitionSuggestionView(
+                UUID.randomUUID(), UUID.randomUUID(), "RULE", "COLUMN_TABLE", regionPayload,
+                0.98, objectMapper.createArrayNode(), "ACCEPTED", "rule", "v4", "v4", Instant.now());
+
+        var result = compiler.compile(schema, List.of(region, identity), TemplateFormat.XLSX);
+
+        assertThat(result.schema().path(TemplateImportContractCompiler.EXPERIMENT_IMPORT_SCHEMA_KEY)
+                .path("listProjections")).singleElement().satisfies(projection -> {
+            assertThat(projection.path("listProjectionId").asText()).isEqualTo("matrix-formula-sheet-1");
+            assertThat(projection.path("labelRange").asText()).isEqualTo("C17:C25");
+            assertThat(projection.path("valueRange").asText()).isEqualTo("D17:I25");
+        });
+    }
+
     private TemplateImportRepository.RecognitionSuggestionView suggestion(
             String decision, String dataPath, String name, String group
     ) throws Exception {

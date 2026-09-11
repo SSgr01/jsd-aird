@@ -499,6 +499,26 @@ T07-B应复用现有Target Registry、Feature/Validation/UQ/OOD/Selection、Mode
 FastAPI，只替换T05 REAL Snapshot并接T06正式Baseline、Java规则、对象存储授权、异步训练、
 数据库历史、人工激活/回退、客户任务和正式反馈。
 
+## T07-A.6 第5批整体回放与冻结（2026-09-10）
+
+第5批使用第1～4批已经冻结的Synthetic/Development制品执行整体回放，没有重新训练模型、没有使用CatBoost、没有激活模型，也没有修改历史快照、历史模型包、候选档案1.2或T07-B生产档案。
+
+独立回放制品位于：
+
+`UVPU_APPLICATION_FORMULATION_Synthetic_Model_Development_Batch5_Replay_V1_PyArrow`
+
+回放覆盖历史Schema 1.0、Extended Schema 1.1、18个目标列、PC/PET与附着力条件隔离、范围/缺失/结构零/删失语义、基础/增强模型卡哈希、T06同折案例基线、正向评分和5轮优化回放。
+
+关键结果：
+
+- 历史V3 Excel、旧快照三制品及第4批模型制品哈希保持不变。
+- Extended V1保持400条唯一`analysis_row_id`；UV表干为`322 OK / 78 NOT_OK`；12个新增目标保持`INSUFFICIENT_DATA`。
+- T06回放使用同一不可变验证折，验证样本不会成为自身邻居，输出4316条按目标/fold组织的观察记录。
+- 5轮Synthetic优化回放通过，输入快照前后未发生变化。
+- 所有Synthetic模型仍为`productionEligible=false`、`NOT ACTIVE`。
+
+本批已知限制继续保留：第4批按要求省略CatBoost；UV表干Logistic候选因PR-AUC浮点边界校验失败而隔离；仓库既有全量Python回归的历史Schema哈希基线不一致未在本批改写。详细证据见[第5批整体回放与冻结实施报告](./AI配方预测与实验优化_T07-A.6第5批整体回放与冻结实施报告.md)。
+
 ```ini
 T07-A/A.1/A.2/A.3/A.4/A.5 = COMPLETED
 T07-B = PENDING

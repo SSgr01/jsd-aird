@@ -18,6 +18,8 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m jsd_aird_ai.main
 ```
 
+Windows/CPU部署固定使用`xgboost-cpu==3.2.0`。它与同版本标准包提供相同的Python模块和CPU训练接口，但不加载本服务不需要的GPU运行路径。
+
 默认监听 `127.0.0.1:8090`。容器内监听 `0.0.0.0:8090`。
 
 本地文件 URL 默认关闭。只有测试或离线黄金数据运行时才设置：
@@ -36,10 +38,16 @@ $env:JSD_AIRD_AI_ALLOW_FILE_URLS='true'
 内部接口为：
 
 - `POST /internal/v1/snapshots/validate`
+- `POST /internal/v1/snapshots/validation-folds`
 - `POST /internal/v1/models/train`
 - `POST /internal/v1/models/score`
 - `POST /internal/v1/models/recommend`
 - `GET /internal/v1/health/live` 和 `GET /internal/v1/health/ready`
+
+T07-B生产集成继续使用`formula-model.v1`核心契约，并用
+`contracts/formula-model.v1/production-integration.v1.schema.json`描述Schema 1.1快照、
+不可变验证折、同折T06基线及带制品引用的训练请求。原`formula-model.v1.schema.json`及其
+哈希保持不变，用于兼容已冻结的T07-A 1.0任务档案和黄金样本。
 
 ## T07-A.1：可重复的X→多Y开发调用
 

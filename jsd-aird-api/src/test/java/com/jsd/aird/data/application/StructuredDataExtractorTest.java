@@ -79,6 +79,27 @@ class StructuredDataExtractorTest {
     }
 
     @Test
+    void inlineFieldUsesFirstLabelSeparatorAndKeepsLaterRangeColon() {
+        var sheet = sheet("form", List.of(List.of(
+                "固化条件：汞灯UV固化，UVA能量：750mJ/cm²（本页D:I实验共用）")));
+        var locator = mapper.createObjectNode().put("sheetId", "form")
+                .put("valueRange", "A1").put("valueMode", "INLINE");
+        var region = new TemplateDataImportFacade.ImportBinding("form", "", "", "FORM_REGION",
+                "", "", 1, 1, 1, mapper.createObjectNode(), mapper.createObjectNode()
+                .put("sheetId", "form").put("range", "A1"), false, false, true,
+                "INPUT", "OBJECT", "");
+        var field = new TemplateDataImportFacade.ImportBinding("cure", "process.cure", "/process/cure",
+                "SCALAR", "form", "", 1, 1, 1, mapper.createObjectNode(), locator,
+                false, false, true, "INPUT", "TEXT", "");
+
+        var result = extractor.extract(sheet, definitions("process.cure"), List.of(region, field), 1, 1)
+                .orElseThrow();
+
+        assertThat(result.rows().getFirst().rawValues().path("b_cure").asText())
+                .isEqualTo("汞灯UV固化，UVA能量：750mJ/cm²（本页D:I实验共用）");
+    }
+
+    @Test
     void expandsHorizontalColumnTableIntoLogicalRecords() {
         var sheet = sheet("columns", List.of(
                 List.of("指标", "产品A", "产品B"),
@@ -97,6 +118,28 @@ class StructuredDataExtractorTest {
         assertThat(result.rows().get(1).rawValues().path("b_amount").asText()).isEqualTo("20");
         assertThat(result.rows().get(1).sourceMetadata().path("cells").path("b_amount")
                 .path("cellAddress").asText()).isEqualTo("C3");
+    }
+
+    @Test
+    void copiesExcelNumericFormatEvidenceIntoExtractedCellMetadata() {
+        var rows = List.of(List.of("固含"), List.of("40.00%"));
+        var layout = mapper.createObjectNode();
+        layout.putArray("cells").addObject().put("address", "A2").put("cellValueType", "NUMERIC")
+                .put("rawNumericValue", "0.4").put("displayValue", "40.00%")
+                .put("numberFormat", "0.00%").put("fractionRepresentation", true);
+        var sheet = new TemplateDataImportFacade.ParsedSheet("rows", "rows", 1, 1, 2, 1, 1,
+                List.of(1), 1, 2, rows, layout, "fingerprint");
+
+        var result = extractor.extract(sheet, definitions("process.solids"),
+                List.of(binding("solids", "process.solids", "固含", "A2:A2", "ROW", false)), 2, 2)
+                .orElseThrow();
+        var cell = result.rows().getFirst().sourceMetadata().path("cells").path("b_solids");
+
+        assertThat(cell.path("cellValueType").asText()).isEqualTo("NUMERIC");
+        assertThat(cell.path("rawNumericValue").asText()).isEqualTo("0.4");
+        assertThat(cell.path("displayValue").asText()).isEqualTo("40.00%");
+        assertThat(cell.path("numberFormat").asText()).isEqualTo("0.00%");
+        assertThat(cell.path("fractionRepresentation").asBoolean()).isTrue();
     }
 
     @Test
@@ -174,6 +217,53 @@ class StructuredDataExtractorTest {
         assertThat(result.mappings()).allMatch(item -> item.sourceColumn().length() <= 32);
     }
 
+    @Test
+    void v9KeepsPhysicalRecordKeysSeparateWhilePreservingSharedSourceIdentity() {
+        var rows = List.of(
+                List.of("实验编号", "G-6563", "G-6564"),
+                List.of("UA-1117", "56", "58"),
+                List.of("", "1", "2"));
+        var contract = mapper.createObjectNode().put("templateUsage", "EXPERIMENT_DATA");
+        var experimentImport = contract.putObject("experimentImport").put("recordMode", "BY_IDENTITY");
+        var identities = experimentImport.putArray("identities");
+        var projections = contract.putArray("listProjections");
+        var sheet1Binding = v9IdentityBinding("sheet-1", "component-1", "identity-1");
+        var sheet2Binding = v9IdentityBinding("sheet-2", "component-2", "identity-2");
+        addV9ContractPart(identities, projections, "component-1", "identity-1");
+        addV9ContractPart(identities, projections, "component-2", "identity-2");
+
+        var first = extractor.extract(sheet("sheet-1", rows), definitions("EXPERIMENT.NO"),
+                List.of(sheet1Binding), 1, 3, 9, contract).orElseThrow();
+        var second = extractor.extract(sheet("sheet-2", rows), definitions("EXPERIMENT.NO"),
+                List.of(sheet2Binding), 1, 3, 9, contract).orElseThrow();
+
+        assertThat(first.rows()).hasSize(2);
+        assertThat(second.rows()).hasSize(2);
+        assertThat(first.rows().getFirst().sourceMetadata().path("sourceIdentity").asText())
+                .isEqualTo("G-6563");
+        assertThat(second.rows().getFirst().sourceMetadata().path("sourceIdentity").asText())
+                .isEqualTo("G-6563");
+        assertThat(first.rows().getFirst().sourceMetadata().path("recordKey").asText())
+                .isEqualTo("IMPORT:STRUCT:sheet-1:component-1:COLUMN:1")
+                .isNotEqualTo(second.rows().getFirst().sourceMetadata().path("recordKey").asText());
+        assertThat(first.rows()).extracting(row -> row.sourceMetadata().path("recordKey").asText())
+                .doesNotHaveDuplicates();
+        assertThat(first.mappings()).anySatisfy(mapping -> {
+            assertThat(mapping.fieldName()).isEqualTo("UA-1117");
+            assertThat(mapping.detail().path("itemSourceKey").asText())
+                    .isEqualTo("MATRIX:formula-component-1:1");
+            assertThat(mapping.detail().path("labelSource").path("cellAddress").asText()).isEqualTo("A2");
+        });
+        assertThat(first.mappings()).noneMatch(mapping -> mapping.fieldName() != null && mapping.fieldName().isBlank());
+        var formulaCell = first.rows().getFirst().sourceMetadata().path("cells").properties().stream()
+                .map(java.util.Map.Entry::getValue)
+                .filter(cell -> "FORMULA".equals(cell.path("experimentField").path("domain").asText("")))
+                .findFirst().orElseThrow();
+        assertThat(formulaCell.path("itemLabel").asText()).isEqualTo("UA-1117");
+        assertThat(formulaCell.path("cellAddress").asText()).isEqualTo("B2");
+        assertThat(formulaCell.path("labelSource").path("cellAddress").asText()).isEqualTo("A2");
+    }
+
     private TemplateDataImportFacade.ImportBinding regionBinding(String componentId, String kind,
                                                                  String range, String axis) {
         var locator = mapper.createObjectNode().put("sheetId", "mixed-components")
@@ -222,5 +312,30 @@ class StructuredDataExtractorTest {
         return new TemplateDataImportFacade.ImportBinding(id, code, "/" + code, "REPEAT_FIELD", "region",
                 "ROW", 1, 1, 1, mapper.createObjectNode(), locator, false, code.endsWith("code"), true,
                 "INPUT", "TEXT", "");
+    }
+
+    private TemplateDataImportFacade.ImportBinding v9IdentityBinding(
+            String sheetId, String componentId, String bindingId
+    ) {
+        var locator = mapper.createObjectNode().put("sheetId", sheetId)
+                .put("componentId", componentId).put("valueRange", "B1:C1");
+        return new TemplateDataImportFacade.ImportBinding(bindingId, "EXPERIMENT.NO", "/experimentNo",
+                "REPEAT_FIELD", componentId, "COLUMN", 1, 1, 1, mapper.createObjectNode(), locator,
+                false, false, true, "INPUT", "TEXT", "", "实验编号", "CONTEXT", true,
+                mapper.createObjectNode().put("domain", "BASIC").put("field", "SOURCE_IDENTITY"),
+                "/sourceIdentity");
+    }
+
+    private void addV9ContractPart(com.fasterxml.jackson.databind.node.ArrayNode identities,
+                                   com.fasterxml.jackson.databind.node.ArrayNode projections,
+                                   String componentId, String bindingId) {
+        identities.add(mapper.createObjectNode().put("identityType", "EXPERIMENT_NO")
+                .put("sourceKind", "BINDING").put("componentId", componentId)
+                .put("bindingId", bindingId));
+        projections.add(mapper.createObjectNode().put("listProjectionId", "formula-" + componentId)
+                .put("domain", "FORMULA").put("componentId", componentId)
+                .put("parentBindingId", componentId).put("recordAxis", "COLUMN")
+                .put("itemAxis", "ROW").put("labelRange", "A2:A3").put("valueRange", "B2:C3")
+                .put("labelSemantic", "MATERIAL_NAME").put("valueSemantic", "RATIO"));
     }
 }

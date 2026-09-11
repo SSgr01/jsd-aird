@@ -46,6 +46,9 @@ class ExperimentEditModelNormalizerTest {
         assertThat(first.path("formulaItems").path(0).path("materialCode").asText()).isEmpty();
         assertThat(first.path("formulaItems").path(0).path("rawValue").isNull()).isTrue();
         assertThat(first.path("formulaItems").path(0).path("rawUnit").asText()).isEmpty();
+        assertThat(first.path("formulaItems").path(0).path("sampleKey").asText()).isEmpty();
+        assertThat(first.path("formulaItems").path(0).path("sourceIdentity").asText()).isEmpty();
+        assertThat(first.path("formulaItems").path(0).path("sourceRecordKey").asText()).isEmpty();
         assertThat(first.path("testResults").path(0).path("testMethod").asText()).isEmpty();
         assertThat(first.path("testResults").path(0).path("testCondition").asText()).isEmpty();
         assertThat(first.path("testResults").path(0).path("substrate").asText()).isEmpty();

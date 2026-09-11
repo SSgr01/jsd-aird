@@ -18,7 +18,43 @@ class AssistantDataDetailTest {
 
         assertThat(answer).contains("### 数据明细")
                 .contains("| 记录 | 字段 | 值 | 单位 | 来源 |")
-                .contains("|REC-001|密度（density）|1.08|g/cm³|检测报告.xlsx / Sheet1!C12|");
+                .contains("|REC-001|密度|1.08|g/cm³|检测报告.xlsx / Sheet1!C12|")
+                .doesNotContain("density");
+    }
+
+    @Test
+    void rendersAFileOverviewOnceWithoutInternalIdentifiers() {
+        var hit = hit("SYN-UVPU-APP-0031", "TABLE.COLUMN.粘度", "粘度", "208", null,
+                "NUMBER", "Sheet1", "G13");
+        var result = new DataSourceFileSearchFacade.DataDetailResult(
+                DataSourceFileSearchFacade.DataQueryMode.FILE_OVERVIEW, UUID.randomUUID(), UUID.randomUUID(),
+                "应用测试报告.xlsx", 14, 296, List.of(hit), false);
+
+        var answer = AssistantService.dataDetailAnswer(result);
+
+        assertThat(answer).contains("14 条来源记录、296 个非空可检索值")
+                .contains("| 记录 | 字段 | 值 | 单位 | 位置 |")
+                .contains("|SYN-UVPU-APP-0031|粘度|208|—|Sheet1!G13|")
+                .doesNotContain("检测报告.xlsx / Sheet1!G13")
+                .containsOnlyOnce("### 数据明细")
+                .doesNotContain("IMPORT:STRUCT", "TABLE.COLUMN", "bindingId", "valuePath");
+    }
+
+    @Test
+    void buildsACompactAnalysisPromptFromBusinessDataOnly() {
+        var hit = hit("SYN-UVPU-APP-0031", "TABLE.COLUMN.粘度", "粘度", "208", null,
+                "NUMBER", "Sheet1", "G13");
+        var result = new DataSourceFileSearchFacade.DataDetailResult(
+                DataSourceFileSearchFacade.DataQueryMode.FIELD_LOOKUP, UUID.randomUUID(), UUID.randomUUID(),
+                "应用测试报告.xlsx", 14, 296, List.of(hit), false);
+
+        var prompt = AssistantService.dataDetailAnalysisPrompt("SJ-230水洗后的粘度是多少？", result);
+        var answer = AssistantService.mergeDataDetailAnswer("SJ-230水洗后的粘度为 208。", AssistantService.dataDetailAnswer(result));
+
+        assertThat(prompt).contains("字段=粘度；值=208；单位=—；位置=Sheet1!G13")
+                .doesNotContain("TABLE.COLUMN", "IMPORT:STRUCT", "bindingId", "valuePath");
+        assertThat(answer).startsWith("### 简要分析\n\nSJ-230水洗后的粘度为 208。")
+                .contains("|SYN-UVPU-APP-0031|粘度|208|—|Sheet1!G13|");
     }
 
     @Test

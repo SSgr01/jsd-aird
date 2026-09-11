@@ -41,6 +41,8 @@ class JdbcDataSourceFileSearchRepositoryTest {
         assertThat(sql.getValue()).contains("JOIN data.data_value v")
                 .contains("v.rag_eligible = true")
                 .contains("v.value_source <> 'FORMULA' OR v.calculation_status = 'VALID'")
+                .contains("candidate.value_path = v.value_path")
+                .contains("m.mapping_jsonb->>'dataPath' = v.value_path")
                 .contains("meta.field_name")
                 .contains("j.category_id IN (?)")
                 .doesNotContain("staging_row", "raw_values_jsonb");

@@ -9,6 +9,7 @@ import java.time.Duration;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
 
 import com.jsd.aird.ai.application.port.AssistantRepository;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -27,7 +28,7 @@ public class QueryRewriteService {
             你是企业研发知识库的检索规划器。只改写用户查询和制定检索计划，不回答问题，也不得在规划阶段推断答案。
 
             只返回一个合法 JSON 对象，不要 Markdown 代码块，不要解释文字，不要换行前缀。
-            JSON 只包含：rewrittenQuery、subQueries、retrievalTerms、requiredFacts、webQueries。
+            JSON 只包含：rewrittenQuery、subQueries、retrievalTerms、requiredFacts、dataRequest、webQueries。
 
             rewrittenQuery 必须是非空字符串；
             subQueries 最多 6 条；
@@ -40,6 +41,12 @@ public class QueryRewriteService {
 
             requiredFacts 的每一项格式为：
             {"label":"用户要求的事实","retrievalQuery":"用于寻找该事实的查询"}。
+
+            dataRequest 用于数据中心结构化查询，格式为：
+            {"intent":"NONE|FILE_OVERVIEW|RECORD_DETAIL|FIELD_LOOKUP","fileName":"原始文件名","recordTerms":["记录标识"],"fieldTerms":["字段名"]}。
+            仅查询知识资料时 intent=NONE。用户只要求查看某个数据文件的内容、记录或字段清单时使用 FILE_OVERVIEW。
+            用户指定实验编号、样品、树脂等记录并查看其全部数据时使用 RECORD_DETAIL；同时指定目标字段时使用 FIELD_LOOKUP。
+            fileName、recordTerms、fieldTerms 只能复制用户问题或近期对话中明确出现的原文，不得推测、翻译或补充同义词。
 
             对于普通概念术语，可以根据当前问题动态生成必要的中英文表达、常见缩写、全称和公式写法，不要依赖固定专业词典。
 
@@ -90,6 +97,12 @@ public class QueryRewriteService {
     private static final int MAX_TERM_LENGTH = 160;
     private static final int MAX_LABEL_LENGTH = 120;
     private static final int MAX_WEB_QUERY_LENGTH = 300;
+    private static final int MAX_DATA_TERMS = 8;
+    private static final Set<String> DATA_INTENTS = Set.of("NONE", "FILE_OVERVIEW", "RECORD_DETAIL", "FIELD_LOOKUP");
+    private static final Pattern QUOTED_DATA_FILE = Pattern.compile("[“\\\"《]([^”\\\"》\\r\\n]{1,260}\\.(?:xlsx|xls|csv))[”\\\"》]",
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+    private static final Pattern BARE_DATA_FILE = Pattern.compile("([^\\s，。；;“”\\\"]{1,260}\\.(?:xlsx|xls|csv))",
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
     private static final Set<String> TERM_KINDS = Set.of("PHRASE", "FORMULA", "MEASUREMENT", "ABBREVIATION");
     private static final Set<String> WEB_TOPICS = Set.of("GENERAL", "NEWS");
     private static final Set<String> WEB_TIME_RANGES = Set.of("ALL", "DAY", "WEEK", "MONTH", "YEAR");
@@ -125,7 +138,7 @@ public class QueryRewriteService {
         var fallbackWebQueries = webSearchEnabled && StringUtils.hasText(question)
                 ? List.of(new WebQuery(bounded(question, MAX_WEB_QUERY_LENGTH), "GENERAL", "ALL")) : List.<WebQuery>of();
         var fallback = new QueryPlan(question, question, List.of(), List.of(), List.of(), Map.of(), "",
-                fallbackWebQueries);
+                fallbackWebQueries, fallbackDataRequest(question));
         var builder = clients.getIfAvailable();
         if (!enabled || builder == null || !StringUtils.hasText(model)) {
             return new Result(fallback, "MODEL_UNAVAILABLE", model, false);
@@ -144,10 +157,13 @@ public class QueryRewriteService {
                     .limit(MAX_SUB_QUERIES).forEach(queries::add);
             var webQueries = webSearchEnabled ? sanitizeWebQueries(response.webQueries()) : List.<WebQuery>of();
             if (webSearchEnabled && webQueries.isEmpty()) webQueries = fallbackWebQueries;
+            var sourceText = question + "\n" + (history == null ? "" : history.stream()
+                    .filter(item -> "USER".equals(item.role()) || "SUMMARY".equals(item.role()))
+                    .map(AssistantRepository.MessageRow::content).reduce((a, b) -> a + "\n" + b).orElse(""));
             return new Result(new QueryPlan(question, bounded(response.rewrittenQuery(), MAX_QUERY_LENGTH),
                     List.copyOf(queries), sanitizeTerms(response.retrievalTerms()), sanitizeFacts(response.requiredFacts()),
                     response.filters() == null ? Map.of() : response.filters(), response.timeRange(),
-                    webQueries), "MODEL", model, false);
+                    webQueries, sanitizeDataRequest(response.dataRequest(), sourceText, question)), "MODEL", model, false);
         } catch (Exception ignored) {
             return new Result(fallback, "FALLBACK_ORIGINAL_QUERY", model, false);
         }
@@ -189,6 +205,7 @@ public class QueryRewriteService {
                 || plan.retrievalTerms().stream().anyMatch(value -> !validTerm(value)))) return false;
         if (plan.requiredFacts() != null && (plan.requiredFacts().size() > MAX_REQUIRED_FACTS
                 || plan.requiredFacts().stream().anyMatch(value -> !validFact(value)))) return false;
+        if (plan.dataRequest() != null && !validDataRequest(plan.dataRequest())) return false;
         return plan.webQueries() == null || (plan.webQueries().size() <= MAX_WEB_QUERIES
                 && plan.webQueries().stream().allMatch(QueryRewriteService::validWebQuery));
     }
@@ -244,6 +261,80 @@ public class QueryRewriteService {
         return List.copyOf(result);
     }
 
+    static DataRequest sanitizeDataRequest(DataRequest value, String sourceText, String question) {
+        if (value == null) return fallbackDataRequest(question);
+        var intent = normalizedEnum(value.intent(), DATA_INTENTS, "NONE");
+        // The user message and the persisted conversation context are authoritative. A planner may wrap or
+        // paraphrase the filename, so only use its proposal when no actual filename exists in either source.
+        var fileName = extractDataFile(question);
+        if (fileName.isBlank()) fileName = extractDataFile(sourceText);
+        if (fileName.isBlank()) {
+            var proposedFileName = extractDataFile(value.fileName());
+            if (supportedSourceText(proposedFileName, sourceText)) fileName = proposedFileName;
+        }
+        var recordTerms = sanitizeDataTerms(value.recordTerms(), sourceText);
+        var fieldTerms = sanitizeDataTerms(value.fieldTerms(), sourceText);
+        if ("NONE".equals(intent) && !fileName.isBlank()) {
+            if (looksLikeOverview(question)) intent = "FILE_OVERVIEW";
+            else if (!recordTerms.isEmpty() || !fieldTerms.isEmpty() || looksLikeStructuredDataQuestion(question)) {
+                intent = "FIELD_LOOKUP";
+            }
+        }
+        if (!"NONE".equals(intent) && fileName.isBlank() && recordTerms.isEmpty() && fieldTerms.isEmpty()) intent = "NONE";
+        return new DataRequest(intent, fileName, recordTerms, fieldTerms);
+    }
+
+    private static DataRequest fallbackDataRequest(String question) {
+        var fileName = extractDataFile(question);
+        var intent = !fileName.isBlank() && looksLikeOverview(question) ? "FILE_OVERVIEW" : "NONE";
+        return new DataRequest(intent, fileName, List.of(), List.of());
+    }
+
+    private static String extractDataFile(String value) {
+        if (!StringUtils.hasText(value)) return "";
+        var quoted = QUOTED_DATA_FILE.matcher(value);
+        if (quoted.find()) return bounded(quoted.group(1), 260);
+        var bare = BARE_DATA_FILE.matcher(value);
+        return bare.find() ? bounded(bare.group(1), 260) : "";
+    }
+
+    private static boolean looksLikeOverview(String value) {
+        if (!StringUtils.hasText(value)) return false;
+        return List.of("列出", "概览", "全部内容", "文件内容", "数据明细", "有哪些记录", "记录、字段")
+                .stream().anyMatch(value::contains);
+    }
+
+    private static boolean looksLikeStructuredDataQuestion(String value) {
+        if (!StringUtils.hasText(value)) return false;
+        return List.of("实验编号", "树脂编号", "样品编号", "试样编号", "记录编号", "配方", "比例", "粘度",
+                        "固含", "外观", "表干性", "耐磨", "硬度", "附着力", "光泽", "色差", "酸值", "羟值",
+                        "测试结果", "实验结果", "数据字段", "单元格")
+                .stream().anyMatch(value::contains);
+    }
+
+    private static List<String> sanitizeDataTerms(List<String> values, String sourceText) {
+        if (values == null || values.isEmpty()) return List.of();
+        var result = new LinkedHashSet<String>();
+        for (var value : values) {
+            var term = bounded(value, MAX_TERM_LENGTH);
+            if (!StringUtils.hasText(term) || !supportedSourceText(term, sourceText)) continue;
+            result.add(term);
+            if (result.size() >= MAX_DATA_TERMS) break;
+        }
+        return List.copyOf(result);
+    }
+
+    private static boolean supportedSourceText(String value, String sourceText) {
+        if (!StringUtils.hasText(value) || !StringUtils.hasText(sourceText)) return false;
+        var normalizedValue = normalizeForEvidence(value);
+        return normalizedValue.length() >= 2 && normalizeForEvidence(sourceText).contains(normalizedValue);
+    }
+
+    private static String normalizeForEvidence(String value) {
+        return value == null ? "" : value.toUpperCase(java.util.Locale.ROOT)
+                .replaceAll("[^A-Z0-9\\u4E00-\\u9FFF]", "");
+    }
+
     private static boolean validTerm(RetrievalTerm value) {
         if (value == null || !StringUtils.hasText(value.text()) || value.text().length() > MAX_TERM_LENGTH) return false;
         return value.aliases() == null || value.aliases().size() <= MAX_ALIASES_PER_TERM;
@@ -257,6 +348,19 @@ public class QueryRewriteService {
     private static boolean validWebQuery(WebQuery value) {
         return value != null && StringUtils.hasText(value.query())
                 && value.query().length() <= MAX_WEB_QUERY_LENGTH;
+    }
+
+    private static boolean validDataRequest(DataRequest value) {
+        if (value == null) return true;
+        var intent = value.intent() == null ? "NONE" : value.intent().strip().toUpperCase(java.util.Locale.ROOT);
+        return DATA_INTENTS.contains(intent)
+                && (value.fileName() == null || value.fileName().length() <= 260)
+                && validDataTerms(value.recordTerms()) && validDataTerms(value.fieldTerms());
+    }
+
+    private static boolean validDataTerms(List<String> values) {
+        return values == null || values.size() <= MAX_DATA_TERMS
+                && values.stream().allMatch(value -> value != null && value.length() <= MAX_TERM_LENGTH);
     }
 
     private static String normalizedEnum(String value, Set<String> allowed, String fallback) {
@@ -280,13 +384,21 @@ public class QueryRewriteService {
     public record QueryPlan(String originalQuery, String rewrittenQuery, List<String> subQueries,
                             List<RetrievalTerm> retrievalTerms, List<RequiredFact> requiredFacts,
                             Map<String, JsonNode> filters, String timeRange,
-                            List<WebQuery> webQueries) {
+                            List<WebQuery> webQueries, DataRequest dataRequest) {
+        public QueryPlan(String originalQuery, String rewrittenQuery, List<String> subQueries,
+                         List<RetrievalTerm> retrievalTerms, List<RequiredFact> requiredFacts,
+                         Map<String, JsonNode> filters, String timeRange, List<WebQuery> webQueries) {
+            this(originalQuery, rewrittenQuery, subQueries, retrievalTerms, requiredFacts, filters, timeRange,
+                    webQueries, new DataRequest("NONE", "", List.of(), List.of()));
+        }
+
         public QueryPlan {
             subQueries = subQueries == null ? List.of() : List.copyOf(subQueries);
             retrievalTerms = retrievalTerms == null ? List.of() : List.copyOf(retrievalTerms);
             requiredFacts = requiredFacts == null ? List.of() : List.copyOf(requiredFacts);
             filters = filters == null ? Map.of() : Map.copyOf(filters);
             webQueries = webQueries == null ? List.of() : List.copyOf(webQueries);
+            dataRequest = dataRequest == null ? new DataRequest("NONE", "", List.of(), List.of()) : dataRequest;
         }
     }
 
@@ -295,4 +407,13 @@ public class QueryRewriteService {
     public record RequiredFact(String label, String retrievalQuery) { }
 
     public record WebQuery(String query, String topic, String timeRange) { }
+
+    public record DataRequest(String intent, String fileName, List<String> recordTerms, List<String> fieldTerms) {
+        public DataRequest {
+            intent = intent == null ? "NONE" : intent.strip().toUpperCase(java.util.Locale.ROOT);
+            fileName = fileName == null ? "" : fileName.strip();
+            recordTerms = recordTerms == null ? List.of() : List.copyOf(recordTerms);
+            fieldTerms = fieldTerms == null ? List.of() : List.copyOf(fieldTerms);
+        }
+    }
 }

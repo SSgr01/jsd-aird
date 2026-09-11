@@ -9,6 +9,9 @@ import java.util.UUID;
 /** Read-only boundary for searching immutable, projected data-center record values and their source files. */
 public interface DataSourceFileSearchFacade {
 
+    DataDetailResult queryDetails(UUID organizationId, DataDetailQuery query, List<UUID> categoryIds,
+                                  AccessScope accessScope);
+
     List<SourceFileMatch> searchSourceFiles(UUID organizationId, String query, List<UUID> categoryIds, int limit);
 
     default List<SourceFileMatch> searchSourceFiles(UUID organizationId, String query, List<UUID> categoryIds,
@@ -68,6 +71,49 @@ public interface DataSourceFileSearchFacade {
                              String sourceLocator) {
             this(hitId, fileObjectId, importJobId, rowNumber, columnName, originalName, content, score,
                     sourceLocator, null, null, null, null, null, null, null, null);
+        }
+    }
+
+    enum DataQueryMode {
+        NONE,
+        FILE_OVERVIEW,
+        RECORD_DETAIL,
+        FIELD_LOOKUP
+    }
+
+    record DataDetailQuery(DataQueryMode mode, String fileName, List<String> recordTerms,
+                           List<String> fieldTerms, int recordLimit, int fieldsPerRecord, int valueLimit) {
+        public DataDetailQuery {
+            mode = mode == null ? DataQueryMode.NONE : mode;
+            fileName = fileName == null ? "" : fileName.strip();
+            recordTerms = recordTerms == null ? List.of() : recordTerms.stream()
+                    .filter(value -> value != null && !value.isBlank()).map(String::strip).distinct().limit(8).toList();
+            fieldTerms = fieldTerms == null ? List.of() : fieldTerms.stream()
+                    .filter(value -> value != null && !value.isBlank()).map(String::strip).distinct().limit(8).toList();
+            recordLimit = Math.min(20, Math.max(1, recordLimit));
+            fieldsPerRecord = Math.min(20, Math.max(1, fieldsPerRecord));
+            valueLimit = Math.min(50, Math.max(1, valueLimit));
+        }
+
+        public static DataDetailQuery none() {
+            return new DataDetailQuery(DataQueryMode.NONE, "", List.of(), List.of(), 5, 5, 50);
+        }
+    }
+
+    record DataDetailResult(DataQueryMode mode, UUID fileObjectId, UUID importJobId, String originalName,
+                            long sourceRecordCount, long searchableValueCount,
+                            List<SourceFileHit> hits, boolean truncated) {
+        public DataDetailResult {
+            mode = mode == null ? DataQueryMode.NONE : mode;
+            hits = hits == null ? List.of() : List.copyOf(hits);
+        }
+
+        public static DataDetailResult empty(DataQueryMode mode) {
+            return new DataDetailResult(mode, null, null, "", 0, 0, List.of(), false);
+        }
+
+        public boolean found() {
+            return importJobId != null;
         }
     }
 

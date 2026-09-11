@@ -14,6 +14,17 @@ describe('MarkdownContent images', () => {
   });
 });
 
+describe('MarkdownContent escaped inline text', () => {
+  it('shows backend-escaped file names literally without triggering emphasis', () => {
+    const { container } = render(
+      <MarkdownContent value={'应用测试报告&#95;Synthetic&#95;10&#95;T07B.xlsx 与 A&amp;B'} />,
+    );
+
+    expect(container).toHaveTextContent('应用测试报告_Synthetic_10_T07B.xlsx 与 A&B');
+    expect(container.querySelector('em')).toBeNull();
+  });
+});
+
 describe('MarkdownContent math', () => {
   it('renders model-emphasized LaTeX as math and normalizes escaped subscripts', () => {
     const { container } = render(

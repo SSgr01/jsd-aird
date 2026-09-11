@@ -1,6 +1,7 @@
 package com.jsd.aird.ai.infrastructure;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -80,6 +81,20 @@ public class JdbcAssistantRepository implements AssistantRepository {
                 """, (rs, rowNum) -> new MessageRow(rs.getObject("id", UUID.class), rs.getString("role"), rs.getString("content"),
                         readJson(rs.getString("citations_jsonb"))),
                 organizationId, conversationId, limit).reversed();
+    }
+
+    @Override
+    public Optional<String> recentDataFileMention(UUID organizationId, UUID conversationId) {
+        return jdbc.query("""
+                SELECT m.content
+                FROM ai.assistant_message m
+                JOIN ai.assistant_conversation c ON c.id = m.conversation_id
+                WHERE c.organization_id = ? AND c.id = ? AND m.role = 'USER'
+                  AND m.content ~* '\\.(xlsx|xls|csv)([[:space:]，。；;]|$)'
+                ORDER BY m.created_at DESC
+                LIMIT 1
+                """, (rs, rowNum) -> rs.getString("content"), organizationId, conversationId)
+                .stream().filter(org.springframework.util.StringUtils::hasText).findFirst();
     }
 
     @Override

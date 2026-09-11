@@ -39,4 +39,37 @@ class QueryRewriteServiceTest {
                 List.of(new QueryRewriteService.WebQuery("x".repeat(301), "GENERAL", "ALL"))))).isFalse();
     }
 
+    @Test
+    void acceptsAnExplicitStructuredDataRequest() {
+        var plan = new QueryRewriteService.QueryPlan("SJ-230水洗后的粘度", "SJ-230水洗后的粘度",
+                List.of(), List.of(), List.of(), Map.of(), "不限", List.of(),
+                new QueryRewriteService.DataRequest("FIELD_LOOKUP", "应用测试报告.xlsx",
+                        List.of("SJ-230水洗后"), List.of("粘度")));
+
+        assertThat(QueryRewriteService.isUsable(plan)).isTrue();
+    }
+
+    @Test
+    void keepsTheRecentDataFileForAContextualFollowUp() {
+        var request = QueryRewriteService.sanitizeDataRequest(
+                new QueryRewriteService.DataRequest("FIELD_LOOKUP",
+                        "基于文件《应用测试报告_Synthetic_10_T07B真实页面验收_V1.xlsx》",
+                        List.of("TEST-NOT-FOUND-999"), List.of("粘度")),
+                "TEST-NOT-FOUND-999 的粘度是多少？\n请概览文件 应用测试报告_Synthetic_10_T07B真实页面验收_V1.xlsx 的数据明细",
+                "TEST-NOT-FOUND-999 的粘度是多少？");
+
+        assertThat(request.fileName()).isEqualTo("应用测试报告_Synthetic_10_T07B真实页面验收_V1.xlsx");
+    }
+
+    @Test
+    void forcesAnObviousDataFollowUpThroughStructuredRetrievalWhenPlannerSaysNone() {
+        var request = QueryRewriteService.sanitizeDataRequest(
+                new QueryRewriteService.DataRequest("NONE", "", List.of(), List.of()),
+                "SJ-230水洗后的粘度是多少？请用自然语言简单分析\n当前数据文件上下文：应用测试报告.xlsx",
+                "SJ-230水洗后的粘度是多少？请用自然语言简单分析");
+
+        assertThat(request.intent()).isEqualTo("FIELD_LOOKUP");
+        assertThat(request.fileName()).isEqualTo("应用测试报告.xlsx");
+    }
+
 }

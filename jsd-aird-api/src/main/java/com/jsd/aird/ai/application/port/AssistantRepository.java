@@ -1,6 +1,7 @@
 package com.jsd.aird.ai.application.port;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -30,6 +31,10 @@ public interface AssistantRepository {
     }
 
     List<MessageRow> recentMessages(UUID organizationId, UUID conversationId, int limit);
+
+    default Optional<String> recentDataFileMention(UUID organizationId, UUID conversationId) {
+        return Optional.empty();
+    }
 
     default ConversationMeta conversation(UUID organizationId, UUID conversationId) {
         return new ConversationMeta(conversationId, "", null, null, 0, null);

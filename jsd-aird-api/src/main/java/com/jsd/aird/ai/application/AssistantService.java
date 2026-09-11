@@ -45,6 +45,18 @@ public class AssistantService {
 
     private static final Logger log = LoggerFactory.getLogger(AssistantService.class);
     private static final Pattern IMAGE_REFERENCE = Pattern.compile("!\\[([^]]*)\\]\\((/api/v1/knowledge/assets/([0-9a-fA-F-]{36})/content)\\)");
+    private static final Pattern INTERNAL_DATA_MARKER = Pattern.compile(
+            "(?i)IMPORT:STRUCT|fieldCode|bindingId|valuePath|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}");
+    private static final String DATA_DETAIL_ANALYSIS_SYSTEM_PROMPT = """
+            你是企业研发实验数据简析助手。请只根据用户问题和后端提供的精确数据，用简洁自然的中文直接回答。
+
+            要求：
+            1. 先回答用户最关心的结果，再做必要的简单归纳；总共 2 到 4 句话。
+            2. 数值、单位、实验编号和单元格位置必须原样保留，不得改写、补算或编造。
+            3. 没有对照组、标准范围或足够样本时，不评价高低优劣，不推断原因、趋势或因果。
+            4. 文件概览只能概括记录数量、可检索值数量和预览内容，必须说明分析基于预览。
+            5. 不要重复完整文件名，不要输出标题、列表、表格、JSON、引用编号或内部技术标识。
+            """;
 
     private final AssistantRepository repository;
     private final KnowledgeSearchFacade knowledge;
@@ -157,6 +169,15 @@ public class AssistantService {
                                 String traceId, String runId, Map<String, Long> initialTimings) {
         send(emitter, "thinking", "SEARCHING");
         var prepared = prepare(actor, command, dataAccessScope, initialTimings);
+        if (prepared.retrieval().dataDetail().mode() != DataSourceFileSearchFacade.DataQueryMode.NONE) {
+            if (prepared.retrieval().dataDetail().found() && !prepared.retrieval().dataDetail().hits().isEmpty()) {
+                send(emitter, "thinking", "COMPOSING");
+            }
+            var answer = dataDetailResponse(actor, prepared);
+            send(emitter, "done", answer);
+            emitter.complete();
+            return;
+        }
         if (prepared.fieldAmbiguity() != null) {
             var answer = clarificationResponse(actor, prepared);
             send(emitter, "done", answer);
@@ -317,6 +338,8 @@ public class AssistantService {
         var history = new ArrayList<AssistantRepository.MessageRow>();
         var meta = repository.conversation(organizationId, conversationId);
         if (meta != null && StringUtils.hasText(meta.summary())) history.add(new AssistantRepository.MessageRow("SUMMARY", meta.summary()));
+        repository.recentDataFileMention(organizationId, conversationId)
+                .ifPresent(mention -> history.add(new AssistantRepository.MessageRow("SUMMARY", "当前数据文件上下文：" + mention)));
         history.addAll(repository.recentMessages(organizationId, conversationId, 8));
         timings.put("conversationDatabaseMs", elapsedMs(databaseStarted));
         var retrievalStarted = System.nanoTime();
@@ -499,10 +522,7 @@ public class AssistantService {
                 .append("| 记录 | 字段 | 值 | 单位 | 来源 |\n")
                 .append("|---|---|---|---|---|\n");
         for (var hit : rows) {
-            var field = StringUtils.hasText(hit.fieldName()) ? hit.fieldName() : hit.fieldCode();
-            if (StringUtils.hasText(hit.fieldCode()) && !hit.fieldCode().equals(field)) {
-                field += "（" + hit.fieldCode() + "）";
-            }
+            var field = StringUtils.hasText(hit.fieldName()) ? hit.fieldName() : "未命名字段";
             var position = StringUtils.hasText(hit.sheetName()) ? hit.sheetName() : "";
             if (StringUtils.hasText(hit.cellAddress())) position += (position.isBlank() ? "" : "!") + hit.cellAddress();
             else if (hit.rowNumber() != null) position += (position.isBlank() ? "" : "，") + "第 " + hit.rowNumber() + " 行";
@@ -514,6 +534,162 @@ public class AssistantService {
                     .append('|').append(markdownCell(source, "—")).append("|\n");
         }
         return (answer == null ? "" : answer.strip()) + table;
+    }
+
+    private AssistantResponse dataDetailResponse(Actor actor, Prepared prepared) {
+        var detail = prepared.retrieval().dataDetail();
+        var analysisStarted = System.nanoTime();
+        var analysis = analyzeDataDetail(prepared.retrieval().plan().originalQuery(), detail);
+        prepared.timings().put("dataAnalysisMs", elapsedMs(analysisStarted));
+        var answer = mergeDataDetailAnswer(analysis.text(), dataDetailAnswer(detail));
+        var citations = detail.hits().stream().collect(java.util.stream.Collectors.toMap(
+                        DataSourceFileSearchFacade.SourceFileHit::hitId, this::dataCitation,
+                        (left, right) -> left, LinkedHashMap::new))
+                .values().stream().toList();
+        var status = !detail.found() || detail.hits().isEmpty() ? "NOT_FOUND" : "ANSWERED";
+        var trace = retrievalTrace(prepared, Map.of());
+        trace.put("answerStatus", status).put("answerMode", detail.mode().name())
+                .put("dataAnalysisStatus", analysis.status());
+        var persistenceStarted = System.nanoTime();
+        var messageId = repository.insertMessageReturningId(prepared.conversationId(), "ASSISTANT", answer,
+                objectMapper.valueToTree(citations), objectMapper.valueToTree(prepared.retrieval().plan()), trace);
+        prepared.timings().put("messagePersistenceMs", elapsedMs(persistenceStarted));
+        prepared.timings().put("qaTotalMs", prepared.timings().getOrDefault("prepareMs", 0L)
+                + prepared.timings().getOrDefault("messagePersistenceMs", 0L));
+        var finalTrace = retrievalTrace(prepared, Map.of());
+        finalTrace.put("answerStatus", status).put("answerMode", detail.mode().name())
+                .put("dataAnalysisStatus", analysis.status());
+        if (messageId != null) repository.updateMessageRetrievalTrace(messageId, finalTrace);
+        logRequestDiagnostics(prepared, RequestIdHolder.currentOrUnknown(), "SUCCEEDED");
+        repository.insertCallAudit(actor.organizationId(), actor.userId(), prepared.conversationId(), "QA_DATA_DETAIL",
+                configuredModel, promptVersion, analysis.requestHash(), sha256(answer),
+                analysis.usage().inputTokens(), analysis.usage().outputTokens(), analysis.usage().totalTokens(),
+                "SUCCEEDED", "FALLBACK".equals(analysis.status()) ? analysis.error() : null);
+        memory.maybeSummarize(actor.organizationId(), prepared.conversationId());
+        return new AssistantResponse(prepared.conversationId(), answer, citations, false,
+                RequestIdHolder.currentOrUnknown(), analysis.usage());
+    }
+
+    private DataDetailAnalysis analyzeDataDetail(String question,
+                                                 DataSourceFileSearchFacade.DataDetailResult detail) {
+        if (detail == null || !detail.found() || detail.hits().isEmpty()) {
+            return new DataDetailAnalysis("", new Usage(0, 0, 0), "SKIPPED",
+                    sha256(question == null ? "" : question), null);
+        }
+        var prompt = dataDetailAnalysisPrompt(question, detail);
+        try {
+            var builder = clients.getIfAvailable();
+            if (builder == null) throw new IllegalStateException("AI model client unavailable");
+            var response = builder.build().prompt()
+                    .system(DATA_DETAIL_ANALYSIS_SYSTEM_PROMPT)
+                    .user(prompt)
+                    .call().chatResponse();
+            var raw = response == null || response.getResult() == null || response.getResult().getOutput() == null
+                    ? "" : response.getResult().getOutput().getText();
+            var text = safeDataAnalysis(raw);
+            if (!StringUtils.hasText(text)) throw new IllegalStateException("实验数据简析为空或包含内部标识");
+            circuitBreaker.success("chat");
+            return new DataDetailAnalysis(text, usage(response), "MODEL", sha256(prompt), null);
+        } catch (Exception exception) {
+            circuitBreaker.failure("chat");
+            log.warn("data_detail_analysis_fallback requestId={} detail={}",
+                    RequestIdHolder.currentOrUnknown(), safeError(exception));
+            return new DataDetailAnalysis("", new Usage(0, 0, 0), "FALLBACK", sha256(prompt), safeError(exception));
+        }
+    }
+
+    static String dataDetailAnalysisPrompt(String question,
+                                           DataSourceFileSearchFacade.DataDetailResult detail) {
+        var prompt = new StringBuilder("用户问题：")
+                .append(promptText(question, "查看实验数据"))
+                .append("\n查询类型：").append(detail.mode().name())
+                .append("\n来源记录数：").append(detail.sourceRecordCount())
+                .append("\n非空可检索值数：").append(detail.searchableValueCount())
+                .append("\n以下是后端已核验的精确数据：\n");
+        for (var hit : detail.hits()) {
+            var position = StringUtils.hasText(hit.sheetName()) ? hit.sheetName() : "";
+            if (StringUtils.hasText(hit.cellAddress())) position += (position.isBlank() ? "" : "!") + hit.cellAddress();
+            else if (hit.rowNumber() != null) position += (position.isBlank() ? "" : "，") + "第 " + hit.rowNumber() + " 行";
+            prompt.append("记录=").append(promptText(hit.recordKey(), "未命名记录"))
+                    .append("；字段=").append(promptText(hit.fieldName(), "未命名字段"))
+                    .append("；值=").append(promptText(hit.fieldValue(), "—"))
+                    .append("；单位=").append(promptText(hit.unit(), "—"))
+                    .append("；位置=").append(promptText(position, "—")).append('\n');
+        }
+        if (detail.truncated()) prompt.append("注意：结果已截断，不能概括未展示数据。\n");
+        return prompt.toString().strip();
+    }
+
+    static String mergeDataDetailAnswer(String analysis, String exactAnswer) {
+        if (!StringUtils.hasText(analysis)) return exactAnswer;
+        return analysis.strip() + "\n\n" + exactAnswer;
+    }
+
+    private static String safeDataAnalysis(String value) {
+        if (!StringUtils.hasText(value)) return "";
+        var normalized = value.replaceAll("[\\p{Cntrl}]+", " ").replaceAll("\\s{2,}", " ").strip();
+        if (INTERNAL_DATA_MARKER.matcher(normalized).find()) return "";
+        return normalized.length() <= 600 ? normalized : normalized.substring(0, 599).strip() + "…";
+    }
+
+    private static String promptText(String value, String fallback) {
+        if (!StringUtils.hasText(value)) return fallback;
+        return value.replaceAll("[\\r\\n\\t]+", " ").strip();
+    }
+
+    static String dataDetailAnswer(DataSourceFileSearchFacade.DataDetailResult detail) {
+        if (detail == null || detail.mode() == DataSourceFileSearchFacade.DataQueryMode.NONE) return "";
+        var fileName = safeDisplayText(detail.originalName(), "指定文件");
+        if (!detail.found()) return "未找到名为“" + fileName + "”的已完成导入数据文件。";
+        var answer = new StringBuilder();
+        if (detail.mode() == DataSourceFileSearchFacade.DataQueryMode.FILE_OVERVIEW) {
+            answer.append("数据文件“").append(fileName).append("”共有 ")
+                    .append(detail.sourceRecordCount()).append(" 条来源记录、")
+                    .append(detail.searchableValueCount()).append(" 个非空可检索值。");
+            if (!detail.hits().isEmpty()) {
+                var records = detail.hits().stream().map(DataSourceFileSearchFacade.SourceFileHit::recordKey)
+                        .filter(StringUtils::hasText).distinct().count();
+                answer.append("以下预览前 ").append(records).append(" 条记录，每条最多 5 个字段。");
+            }
+        } else if (detail.hits().isEmpty()) {
+            return "在数据文件“" + fileName + "”中没有找到符合指定记录或字段的非空可信值。";
+        } else {
+            answer.append("在数据文件“").append(fileName).append("”中找到 ")
+                    .append(detail.hits().size()).append(" 个精确值。");
+        }
+        if (!detail.hits().isEmpty()) appendDataRows(answer, detail.hits());
+        if (detail.truncated() && detail.mode() != DataSourceFileSearchFacade.DataQueryMode.FILE_OVERVIEW) {
+            answer.append("\n\n结果超过当前上限，请继续指定实验编号、树脂编号或字段名以缩小范围。");
+        } else if (detail.mode() == DataSourceFileSearchFacade.DataQueryMode.FILE_OVERVIEW
+                && detail.searchableValueCount() > detail.hits().size()) {
+            answer.append("\n\n如需完整明细，请指定实验编号、树脂编号或字段名。");
+        }
+        return answer.toString();
+    }
+
+    private static void appendDataRows(StringBuilder answer,
+                                       List<DataSourceFileSearchFacade.SourceFileHit> hits) {
+        var unique = new LinkedHashMap<UUID, DataSourceFileSearchFacade.SourceFileHit>();
+        hits.forEach(hit -> unique.putIfAbsent(hit.hitId(), hit));
+        answer.append("\n\n### 数据明细\n\n")
+                .append("| 记录 | 字段 | 值 | 单位 | 位置 |\n")
+                .append("|---|---|---|---|---|\n");
+        for (var hit : unique.values()) {
+            var position = StringUtils.hasText(hit.sheetName()) ? hit.sheetName() : "";
+            if (StringUtils.hasText(hit.cellAddress())) position += (position.isBlank() ? "" : "!") + hit.cellAddress();
+            else if (hit.rowNumber() != null) position += (position.isBlank() ? "" : "，") + "第 " + hit.rowNumber() + " 行";
+            var source = position.isBlank() ? hit.originalName() : position;
+            answer.append('|').append(markdownCell(hit.recordKey(), "未命名记录"))
+                    .append('|').append(markdownCell(hit.fieldName(), "未命名字段"))
+                    .append('|').append(markdownCell(hit.fieldValue(), "—"))
+                    .append('|').append(markdownCell(hit.unit(), "—"))
+                    .append('|').append(markdownCell(source, "—")).append("|\n");
+        }
+    }
+
+    private static String safeDisplayText(String value, String fallback) {
+        if (!StringUtils.hasText(value)) return fallback;
+        return escapeMarkdown(value.replaceAll("[\\p{Cntrl}]+", " ").strip());
     }
 
     static FieldAmbiguity detectFieldAmbiguity(String question,
@@ -548,7 +724,12 @@ public class AssistantService {
     private static String markdownCell(String value, String fallback) {
         var normalized = StringUtils.hasText(value) ? value.strip() : fallback;
         normalized = normalized.replace('|', '｜').replaceAll("[\\r\\n\\t]+", " / ");
+        normalized = escapeMarkdown(normalized);
         return normalized.length() <= 240 ? normalized : normalized.substring(0, 239) + "…";
+    }
+
+    private static String escapeMarkdown(String value) {
+        return value.replace("&", "&amp;").replace("*", "&#42;").replace("_", "&#95;").replace("`", "&#96;");
     }
 
     private static String safeText(String value) {
@@ -902,6 +1083,7 @@ public class AssistantService {
                             DataSourceFileSearchFacade.SourceFileHit dataHit) { }
     private record PromptBundle(String text, Map<String, Evidence> evidence) { }
     private record ExternalContext(String text, List<String> evidenceRefs) { }
+    private record DataDetailAnalysis(String text, Usage usage, String status, String requestHash, String error) { }
     private record NormalizedAnswer(String answer, List<Citation> citations, boolean usedWebSearch,
                                     String answerStatus, List<String> usedEvidenceRefs) { }
 }

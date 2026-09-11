@@ -25,6 +25,14 @@ function MathExpression({ value, displayMode = false }: { value: string; display
   );
 }
 
+function decodeEscapedInlineText(value: string) {
+  return value
+    .replaceAll('&#42;', '*')
+    .replaceAll('&#95;', '_')
+    .replaceAll('&#96;', '`')
+    .replaceAll('&amp;', '&');
+}
+
 function parseInline(value: string, keyPrefix: string): ReactNode[] {
   const tokenPattern = /(\*\*[^*\n]+\*\*|__[^_\n]+__|`[^`\n]+`|!\[[^\]\n]*\]\([^\n)]+\)|\[[^\]\n]+\]\([^\n)]+\)|\\\([^\n]+?\\\)|\\\[[^\n]+?\\\]|\$[^$\n]+\$|\*[^*\n]+\*|_[^_\n]+_)/g;
   const nodes: ReactNode[] = [];
@@ -33,7 +41,7 @@ function parseInline(value: string, keyPrefix: string): ReactNode[] {
   let tokenIndex = 0;
 
   while ((match = tokenPattern.exec(value))) {
-    if (match.index > cursor) nodes.push(value.slice(cursor, match.index));
+    if (match.index > cursor) nodes.push(decodeEscapedInlineText(value.slice(cursor, match.index)));
     const token = match[0];
     const key = `${keyPrefix}-${tokenIndex}`;
     tokenIndex += 1;
@@ -71,7 +79,7 @@ function parseInline(value: string, keyPrefix: string): ReactNode[] {
     cursor = match.index + token.length;
   }
 
-  if (cursor < value.length) nodes.push(value.slice(cursor));
+  if (cursor < value.length) nodes.push(decodeEscapedInlineText(value.slice(cursor)));
   return nodes;
 }
 

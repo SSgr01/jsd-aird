@@ -29,6 +29,22 @@ import org.junit.jupiter.api.Test;
 class RagRetrievalServiceTest {
 
     @Test
+    void infersRecordAndFieldFromChinesePossessiveLookup() {
+        var inferred = RagRetrievalService.inferFieldLookup("SJ-230水洗后的粘度是多少？");
+
+        assertThat(inferred.recordTerm()).isEqualTo("SJ-230水洗后");
+        assertThat(inferred.fieldTerm()).isEqualTo("粘度");
+    }
+
+    @Test
+    void ignoresNaturalLanguageAnalysisInstructionWhenInferringTheField() {
+        var inferred = RagRetrievalService.inferFieldLookup("SJ-230水洗后的粘度是多少？请用自然语言简单分析");
+
+        assertThat(inferred.recordTerm()).isEqualTo("SJ-230水洗后");
+        assertThat(inferred.fieldTerm()).isEqualTo("粘度");
+    }
+
+    @Test
     void explicitEmptyScopesDoNotSearchAnySource() {
         var knowledge = mock(KnowledgeSearchFacade.class);
         var data = mock(DataSourceFileSearchFacade.class);

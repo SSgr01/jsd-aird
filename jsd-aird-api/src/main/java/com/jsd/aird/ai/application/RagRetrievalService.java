@@ -127,14 +127,17 @@ public class RagRetrievalService {
         var knowledgeFilters = knowledgeCategoryIds == null ? List.<UUID>of() : knowledgeCategoryIds;
         var dataFilters = dataCategoryIds == null ? List.<UUID>of() : dataCategoryIds;
         var dataQueries = searchData ? dataQueries(question, plan.plan()) : List.<String>of();
+        var dataDetailQuery = dataDetailQuery(plan.plan());
         CompletableFuture<DataChannelResult> dataFuture;
         try {
             dataFuture = CompletableFuture.supplyAsync(
-                    () -> searchDataChannel(organizationId, dataQueries, dataFilters, dataAccessScope, searchData),
+                    () -> searchDataChannel(organizationId, dataQueries, dataDetailQuery,
+                            dataFilters, dataAccessScope, searchData),
                     retrievalExecutor);
         } catch (RejectedExecutionException exception) {
             dataFuture = CompletableFuture.completedFuture(new DataChannelResult(List.of(), dataQueries.size(),
-                    dataQueries.size(), 0, searchData ? "FAILED" : "SKIPPED"));
+                    dataQueries.size(), 0, searchData ? "FAILED" : "SKIPPED",
+                    DataSourceFileSearchFacade.DataDetailResult.empty(dataDetailQuery.mode())));
         }
         var internalFallbacks = new ArrayList<String>();
         var knowledgeChannelStatus = searchKnowledge ? "SUCCEEDED" : "SKIPPED";
@@ -173,10 +176,11 @@ public class RagRetrievalService {
             dataResult = dataFuture.join();
         } catch (RuntimeException exception) {
             dataResult = new DataChannelResult(List.of(), dataQueries.size(), dataQueries.size(), 0,
-                    searchData ? "FAILED" : "SKIPPED");
+                    searchData ? "FAILED" : "SKIPPED",
+                    DataSourceFileSearchFacade.DataDetailResult.empty(dataDetailQuery.mode()));
         }
         var dataFailureCount = dataResult.failureCount();
-        if (dataFailureCount > 0) internalFallbacks.add(dataFailureCount >= dataQueries.size()
+        if (dataFailureCount > 0) internalFallbacks.add(dataFailureCount >= Math.max(1, dataResult.queryCount())
                 ? "DATA_SEARCH_ERROR" : "DATA_SEARCH_PARTIAL");
         var data = dataResult.hits();
         timings.put("dataSearchMs", dataResult.elapsedMs());
@@ -205,11 +209,11 @@ public class RagRetrievalService {
             fallbacks.add("WEB_SEARCH_" + webResult.trace().status());
         }
         if (knowledgeHits.isEmpty() && data.isEmpty() && webResult.hits().isEmpty()) fallbacks.add("NO_RETRIEVAL_RESULT");
-        return new Retrieval(plan.plan(), knowledgeHits, data, webResult.hits(), new Trace(
+        return new Retrieval(plan.plan(), knowledgeHits, data, dataResult.detail(), webResult.hits(), new Trace(
                 plan.status(), plan.model(), plan.thinkingEnabled(), knowledgeResult.trace().strategy(), knowledgeResult.trace().bm25Candidates(),
                 knowledgeResult.trace().vectorCandidates(), knowledgeResult.trace().mergedCandidates(),
                 knowledgeResult.trace().variantCount(), data.size(), reranked.outcome().status(), fallbacks,
-                dataQueries.size(), List.of(
+                dataResult.queryCount(), List.of(
                         new ChannelTrace("KNOWLEDGE_KEYWORD_VECTOR", knowledgeChannelStatus, knowledgeResult.trace().mergedCandidates()),
                         new ChannelTrace("DATA_CENTER_ROW", dataResult.status(), data.size()),
                         new ChannelTrace("WEB_PUBLIC", webResult.trace().status(), webResult.hits().size())),
@@ -217,11 +221,25 @@ public class RagRetrievalService {
                 webResult.trace()));
     }
 
-    private DataChannelResult searchDataChannel(UUID organizationId, List<String> queries, List<UUID> filters,
+    private DataChannelResult searchDataChannel(UUID organizationId, List<String> queries,
+                                                DataSourceFileSearchFacade.DataDetailQuery detailQuery,
+                                                List<UUID> filters,
                                                 DataSourceFileSearchFacade.AccessScope accessScope,
                                                 boolean enabled) {
-        if (!enabled) return new DataChannelResult(List.of(), 0, 0, 0, "SKIPPED");
+        if (!enabled) return new DataChannelResult(List.of(), 0, 0, 0, "SKIPPED",
+                DataSourceFileSearchFacade.DataDetailResult.empty(detailQuery.mode()));
         var started = System.nanoTime();
+        if (detailQuery.mode() != DataSourceFileSearchFacade.DataQueryMode.NONE) {
+            try {
+                var detail = dataFiles.queryDetails(organizationId, detailQuery, filters, accessScope);
+                var status = detail.found() && !detail.hits().isEmpty() ? "SUCCEEDED"
+                        : detail.found() ? "EMPTY" : "NOT_FOUND";
+                return new DataChannelResult(detail.hits(), 0, 1, elapsedMs(started), status, detail);
+            } catch (RuntimeException exception) {
+                return new DataChannelResult(List.of(), 1, 1, elapsedMs(started), "FAILED",
+                        DataSourceFileSearchFacade.DataDetailResult.empty(detailQuery.mode()));
+            }
+        }
         var byHit = new LinkedHashMap<UUID, DataHitAccumulator>();
         var failures = 0;
         for (var query : queries) {
@@ -238,7 +256,46 @@ public class RagRetrievalService {
                 .sorted(Comparator.comparingDouble(DataSourceFileSearchFacade.SourceFileHit::score).reversed())
                 .limit(maxDataHits).toList();
         return new DataChannelResult(hits, failures, queries.size(), elapsedMs(started),
-                dataChannelStatus(true, hits, failures, queries.size()));
+                dataChannelStatus(true, hits, failures, queries.size()),
+                DataSourceFileSearchFacade.DataDetailResult.empty(detailQuery.mode()));
+    }
+
+    private DataSourceFileSearchFacade.DataDetailQuery dataDetailQuery(QueryRewriteService.QueryPlan plan) {
+        var value = plan == null ? null : plan.dataRequest();
+        var request = value == null ? new QueryRewriteService.DataRequest("NONE", "", List.of(), List.of()) : value;
+        DataSourceFileSearchFacade.DataQueryMode mode;
+        try {
+            mode = DataSourceFileSearchFacade.DataQueryMode.valueOf(request.intent());
+        } catch (IllegalArgumentException exception) {
+            mode = DataSourceFileSearchFacade.DataQueryMode.NONE;
+        }
+        var recordTerms = new LinkedHashSet<>(request.recordTerms());
+        var fieldTerms = new LinkedHashSet<>(request.fieldTerms());
+        if (mode == DataSourceFileSearchFacade.DataQueryMode.FIELD_LOOKUP) {
+            var inferred = inferFieldLookup(plan == null ? "" : plan.originalQuery());
+            if (!inferred.recordTerm().isBlank()) recordTerms.add(inferred.recordTerm());
+            if (!inferred.fieldTerm().isBlank()) fieldTerms.add(inferred.fieldTerm());
+        }
+        var recordLimit = mode == DataSourceFileSearchFacade.DataQueryMode.FILE_OVERVIEW ? 5 : 1;
+        return new DataSourceFileSearchFacade.DataDetailQuery(mode, request.fileName(), List.copyOf(recordTerms),
+                List.copyOf(fieldTerms), recordLimit, 5, 50);
+    }
+
+    static InferredFieldLookup inferFieldLookup(String question) {
+        if (question == null || question.isBlank()) return new InferredFieldLookup("", "");
+        var normalized = question.strip()
+                .replaceAll("[，,；;。！？?]*(?:请)?(?:用自然语言)?(?:简单|简要)?(?:分析|说明|解读)(?:一下)?[。！？?]*$", "")
+                .replaceAll("[？?。！!]+$", "");
+        var separator = normalized.lastIndexOf('的');
+        if (separator <= 0 || separator >= normalized.length() - 1) return new InferredFieldLookup("", "");
+        var record = normalized.substring(0, separator)
+                .replaceFirst("^(?:请问|请查询|查询|查看)", "")
+                .replaceFirst("^(?:实验编号|树脂编号|样品编号|试样编号|记录编号)[：:\\s]*", "").strip();
+        var field = normalized.substring(separator + 1)
+                .replaceFirst("(?:是多少|是什么|为多少|数值|数据|结果|情况|值)$", "").strip();
+        if (record.length() > 120 || !record.matches(".*[A-Za-z0-9].*")) record = "";
+        if (field.length() > 80) field = "";
+        return new InferredFieldLookup(record, field);
     }
 
     private long elapsedMs(long started) {
@@ -512,10 +569,21 @@ public class RagRetrievalService {
     }
 
     public record Retrieval(QueryRewriteService.QueryPlan plan, List<KnowledgeSearchFacade.SearchHit> knowledgeHits,
-                            List<DataSourceFileSearchFacade.SourceFileHit> dataHits, List<WebHit> webHits, Trace trace) {
+                            List<DataSourceFileSearchFacade.SourceFileHit> dataHits,
+                            DataSourceFileSearchFacade.DataDetailResult dataDetail,
+                            List<WebHit> webHits, Trace trace) {
+        public Retrieval(QueryRewriteService.QueryPlan plan, List<KnowledgeSearchFacade.SearchHit> knowledgeHits,
+                         List<DataSourceFileSearchFacade.SourceFileHit> dataHits, List<WebHit> webHits, Trace trace) {
+            this(plan, knowledgeHits, dataHits,
+                    DataSourceFileSearchFacade.DataDetailResult.empty(DataSourceFileSearchFacade.DataQueryMode.NONE),
+                    webHits, trace);
+        }
+
         public Retrieval {
             knowledgeHits = knowledgeHits == null ? List.of() : List.copyOf(knowledgeHits);
             dataHits = dataHits == null ? List.of() : List.copyOf(dataHits);
+            dataDetail = dataDetail == null ? DataSourceFileSearchFacade.DataDetailResult.empty(
+                    DataSourceFileSearchFacade.DataQueryMode.NONE) : dataDetail;
             webHits = webHits == null ? List.of() : List.copyOf(webHits);
         }
     }
@@ -558,6 +626,8 @@ public class RagRetrievalService {
     public record WebTrace(boolean webSearchRequested, boolean webSearchSucceeded, String status, long webSearchMs,
                            int queryCount, int candidateCount, long providerResponseMs, String failureReason) { }
 
+    record InferredFieldLookup(String recordTerm, String fieldTerm) { }
+
     private record Reranked(List<KnowledgeSearchFacade.SearchHit> hits,
                             RerankerProvider.RerankOutcome outcome) { }
 
@@ -565,9 +635,12 @@ public class RagRetrievalService {
                                      List<FactCoverageTrace> coverage) { }
 
     private record DataChannelResult(List<DataSourceFileSearchFacade.SourceFileHit> hits, int failureCount,
-                                     int queryCount, long elapsedMs, String status) {
+                                     int queryCount, long elapsedMs, String status,
+                                     DataSourceFileSearchFacade.DataDetailResult detail) {
         private DataChannelResult {
             hits = hits == null ? List.of() : List.copyOf(hits);
+            detail = detail == null ? DataSourceFileSearchFacade.DataDetailResult.empty(
+                    DataSourceFileSearchFacade.DataQueryMode.NONE) : detail;
         }
     }
 

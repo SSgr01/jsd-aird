@@ -88,10 +88,13 @@ public class JdbcDataProjectionRepository implements DataProjectionRepository {
         int longValueCount = 0;
         int eligibleRecordCount = 0;
         var bindingsByField = bindings.stream().filter(item -> item.fieldCode() != null && !item.fieldCode().isBlank())
-                .collect(java.util.stream.Collectors.toMap(TemplateDataImportFacade.ImportBinding::fieldCode,
-                        item -> item, (left, right) -> left));
+                .collect(java.util.stream.Collectors.groupingBy(TemplateDataImportFacade.ImportBinding::fieldCode,
+                        LinkedHashMap::new, java.util.stream.Collectors.toList()));
         var bindingsById = bindings.stream().filter(item -> item.bindingId() != null && !item.bindingId().isBlank())
                 .collect(java.util.stream.Collectors.toMap(TemplateDataImportFacade.ImportBinding::bindingId,
+                        item -> item, (left, right) -> left));
+        var bindingsByPath = bindings.stream().filter(item -> item.dataPath() != null && !item.dataPath().isBlank())
+                .collect(java.util.stream.Collectors.toMap(TemplateDataImportFacade.ImportBinding::dataPath,
                         item -> item, (left, right) -> left));
         for (var item : records) {
             var anchors = anchors(item.id());
@@ -108,24 +111,31 @@ public class JdbcDataProjectionRepository implements DataProjectionRepository {
             while (values.hasNext()) {
                 var entry = values.next();
                 var fieldCode = entry.getValue().path("fieldCode").asText(entry.getKey().split("@", 2)[0]);
-                var binding = bindingsById.get(entry.getValue().path("bindingId").asText(""));
-                if (binding == null) binding = bindingsByField.get(fieldCode);
+                var wrapperBindingId = entry.getValue().path("bindingId").asText("");
+                var wrapperValuePath = entry.getValue().path("valuePath")
+                        .asText(entry.getValue().path("dataPath").asText(""));
+                var binding = bindingsById.get(wrapperBindingId);
+                if (binding == null) binding = bindingsByPath.get(wrapperValuePath);
+                if (binding == null && bindingsByField.getOrDefault(fieldCode, List.of()).size() == 1) {
+                    binding = bindingsByField.get(fieldCode).getFirst();
+                }
                 if (binding != null) {
                     dimensions.put(entry.getKey() + ".mappingKind", binding.mappingKind());
                     if (binding.repeatAxis() != null && !binding.repeatAxis().isBlank()) {
                         dimensions.put(entry.getKey() + ".repeatAxis", binding.repeatAxis());
                     }
                 }
-                var dataPath = binding == null || binding.dataPath().isBlank()
-                        ? entry.getValue().path("dataPath").asText("/" + escape(entry.getKey()))
-                        : binding.dataPath();
+                var dataPath = !wrapperValuePath.isBlank() ? wrapperValuePath
+                        : binding == null || binding.dataPath().isBlank()
+                        ? "/" + escape(entry.getKey()) : binding.dataPath();
                 var effectiveValue = effectiveValue(entry.getValue());
                 if (binding == null && dataPath.startsWith("/dimensions/")) {
                     dimensions.put(dataPath.substring("/dimensions/".length()), effectiveValue.asText(""));
                 }
                 var dimensionOnly = binding == null && dataPath.startsWith("/dimensions/");
+                var valueAnchors = matchingAnchors(anchors, wrapperBindingId, dataPath, fieldCode);
                 var result = appendValues(organizationId, recordId, fieldCode, dataPath,
-                        entry.getValue(), anchors.getOrDefault(entry.getKey(), List.of()),
+                        entry.getValue(), valueAnchors,
                         dimensionOnly ? objectMapper.createObjectNode() : measures,
                         binding == null || binding.trainingEligible(), binding);
                 recordValueCount += result.count();
@@ -235,20 +245,31 @@ public class JdbcDataProjectionRepository implements DataProjectionRepository {
                 rs.getInt("record_count"), rs.getInt("eligible_count"));
     }
 
-    private Map<String, List<Anchor>> anchors(UUID recordId) {
-        var result = new LinkedHashMap<String, List<Anchor>>();
-        jdbc.query("""
-                SELECT id, field_code, sheet_id, sheet_name, row_number, column_name, cell_address
+    private List<Anchor> anchors(UUID recordId) {
+        return jdbc.query("""
+                SELECT id, field_code, binding_id, value_path, sheet_id, sheet_name,
+                       row_number, column_name, cell_address
                 FROM data.source_anchor WHERE record_id = ? ORDER BY row_number, column_number
                 """, (rs, rowNum) -> {
             var anchor = new Anchor(rs.getObject("id", UUID.class), rs.getString("field_code"),
+                    rs.getString("binding_id"), rs.getString("value_path"),
                     rs.getString("sheet_id"), rs.getString("sheet_name"),
                     (Integer) rs.getObject("row_number"), rs.getString("column_name"),
                     rs.getString("cell_address"));
-            result.computeIfAbsent(anchor.fieldCode(), ignored -> new ArrayList<>()).add(anchor);
             return anchor;
         }, recordId);
-        return result;
+    }
+
+    static List<Anchor> matchingAnchors(List<Anchor> anchors, String bindingId,
+                                        String valuePath, String fieldCode) {
+        var byPath = anchors.stream().filter(anchor -> valuePath != null && !valuePath.isBlank()
+                && valuePath.equals(anchor.valuePath())).toList();
+        if (!byPath.isEmpty()) return byPath;
+        var byBinding = anchors.stream().filter(anchor -> bindingId != null && !bindingId.isBlank()
+                && bindingId.equals(anchor.bindingId())).toList();
+        if (!byBinding.isEmpty()) return byBinding;
+        var byField = anchors.stream().filter(anchor -> fieldCode != null && fieldCode.equals(anchor.fieldCode())).toList();
+        return byField.size() == 1 ? byField : List.of();
     }
 
     private AppendResult appendValues(UUID organizationId, UUID recordId, String fieldCode, String dataPath,
@@ -296,7 +317,9 @@ public class JdbcDataProjectionRepository implements DataProjectionRepository {
         }
         var anchor = anchors.isEmpty() ? null : anchors.getFirst();
         var anchorId = anchor == null ? null : anchor.id();
-        var effectiveBindingId = binding == null || binding.bindingId() == null || binding.bindingId().isBlank()
+        var wrapperBindingId = wrapper == null ? "" : wrapper.path("bindingId").asText("");
+        var effectiveBindingId = !wrapperBindingId.isBlank() ? wrapperBindingId
+                : binding == null || binding.bindingId() == null || binding.bindingId().isBlank()
                 ? fieldCode : binding.bindingId();
         var labelPath = binding == null ? wrapper == null ? null : wrapper.path("labelPath").asText(null) : binding.labelPath();
         var ragEligible = binding == null ? wrapper == null || wrapper.path("ragEligible").asBoolean(true) : binding.ragEligible();
@@ -361,30 +384,26 @@ public class JdbcDataProjectionRepository implements DataProjectionRepository {
                 .put("columnName", anchor.columnName()).put("address", anchor.address());
     }
 
-    private ArrayNode anchorArray(Map<String, List<Anchor>> anchors) {
+    private ArrayNode anchorArray(List<Anchor> anchors) {
         var result = objectMapper.createArrayNode();
-        anchors.values().stream().flatMap(List::stream).forEach(anchor -> result.add(anchorJson(anchor)));
+        anchors.forEach(anchor -> result.add(anchorJson(anchor)));
         return result;
     }
 
-    private Anchor primaryAnchor(Map<String, List<Anchor>> anchors,
-                                 Map<String, TemplateDataImportFacade.ImportBinding> bindingsByField) {
-        var structured = anchors.entrySet().stream()
-                .filter(entry -> !entry.getKey().startsWith("DATA.DIMENSION."))
-                .filter(entry -> {
-                    var binding = bindingsByField.get(entry.getKey());
-                    if (binding == null || binding.mappingKind() == null) return false;
-                    var kind = binding.mappingKind().toUpperCase(java.util.Locale.ROOT);
-                    return kind.contains("REPEAT") || kind.contains("TABLE");
-                })
-                .flatMap(entry -> entry.getValue().stream())
+    private Anchor primaryAnchor(List<Anchor> anchors,
+                                 Map<String, List<TemplateDataImportFacade.ImportBinding>> bindingsByField) {
+        var structured = anchors.stream()
+                .filter(anchor -> anchor.fieldCode() != null && !anchor.fieldCode().startsWith("DATA.DIMENSION."))
+                .filter(anchor -> bindingsByField.getOrDefault(anchor.fieldCode(), List.of()).stream()
+                        .anyMatch(binding -> binding.mappingKind() != null
+                                && (binding.mappingKind().toUpperCase(java.util.Locale.ROOT).contains("REPEAT")
+                                || binding.mappingKind().toUpperCase(java.util.Locale.ROOT).contains("TABLE"))))
                 .findFirst();
         if (structured.isPresent()) return structured.get();
-        return anchors.entrySet().stream()
-                .filter(entry -> !entry.getKey().startsWith("DATA.DIMENSION."))
-                .flatMap(entry -> entry.getValue().stream())
+        return anchors.stream()
+                .filter(anchor -> anchor.fieldCode() != null && !anchor.fieldCode().startsWith("DATA.DIMENSION."))
                 .findFirst()
-                .orElseGet(() -> anchors.values().stream().flatMap(List::stream).findFirst().orElse(null));
+                .orElseGet(() -> anchors.stream().findFirst().orElse(null));
     }
 
     private String escape(String value) {
@@ -409,7 +428,8 @@ public class JdbcDataProjectionRepository implements DataProjectionRepository {
     }
 
     private record Record(UUID id, String recordKey, JsonNode raw, JsonNode normalized, JsonNode corrected) {}
-    private record Anchor(UUID id, String fieldCode, String sheetId, String sheetName, Integer rowNumber,
+    record Anchor(UUID id, String fieldCode, String bindingId, String valuePath,
+                          String sheetId, String sheetName, Integer rowNumber,
                           String columnName, String address) {}
     private record AppendResult(int count, boolean eligible) {}
     private record ContractRef(Integer version, String hash) {}

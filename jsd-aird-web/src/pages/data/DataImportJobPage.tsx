@@ -47,6 +47,7 @@ import {
   type DataWorkbookSnapshot,
 } from '@/services/data/data-api';
 import { projectResourceApi, type ProjectRelationTarget, type RelatedProjectView } from '@/services/project/project-resource-api';
+import { dataParseProgress } from '@/services/data/data-progress';
 
 type PanelTab = 'data' | 'structure' | 'mapping';
 
@@ -309,7 +310,7 @@ export function DataImportJobPage() {
       <Tag color={compatibility === 'EXACT' ? 'success' : compatibility === 'COMPATIBLE' ? 'blue' : 'warning'}>
         {compatibilityLabels[compatibility] || '需要确认'}
       </Tag>
-      <Typography.Text type="secondary">进度 {preview.job.progress}%</Typography.Text>
+      <Typography.Text type="secondary">解析进度 {dataParseProgress(preview.job)}%</Typography.Text>
       {relatedProjects.map((relation) => <Tag color="blue" key={`${relation.projectId}-${relation.stageId || ''}-${relation.taskId || ''}`}>{relation.projectName}{relation.stageName ? ` / ${relation.stageName}` : ''}{relation.taskName ? ` / ${relation.taskName}` : ''}</Tag>)}
     </Space>
   );

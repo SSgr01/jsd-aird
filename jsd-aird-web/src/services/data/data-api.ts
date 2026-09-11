@@ -33,9 +33,18 @@ export const dataApi = {
     const response = await httpClient.get<ApiResponse<DataTemplateOption[]>>('/api/v1/data/templates');
     return response.data.data;
   },
-  async stageSource(file: File) {
+  async stageSource(file: File, onProgress?: (percent: number) => void) {
     const body = new FormData(); body.append('file', file);
-    const response = await httpClient.post<ApiResponse<{ fileId: string; sha256: string; status: string }>>('/api/v1/files/staged?kind=DATA_SOURCE', body);
+    const response = await httpClient.post<ApiResponse<{ fileId: string; sha256: string; status: string }>>(
+      '/api/v1/files/staged?kind=DATA_SOURCE',
+      body,
+      {
+        onUploadProgress: (event) => {
+          const total = event.total || file.size;
+          if (total > 0) onProgress?.(Math.min(100, Math.round((event.loaded / total) * 100)));
+        },
+      },
+    );
     return response.data.data;
   },
   async createJob(input: { sourceFileId: string; templateVersionId: string; categoryId?: string; duplicateOverride?: boolean; projectRelations?: ProjectRelationTarget[] }) {

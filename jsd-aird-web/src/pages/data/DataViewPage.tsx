@@ -1,5 +1,5 @@
 import { DatabaseOutlined, DownloadOutlined, EyeOutlined, LinkOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons';
-import { App, Button, Dropdown, Empty, Input, Modal, Select, Space, Table, Tag, Typography } from 'antd';
+import { App, Button, Dropdown, Empty, Input, Modal, Progress, Select, Space, Table, Tag, Typography } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
@@ -11,6 +11,7 @@ import { Can } from '@/components/auth/Can';
 import { usePermission } from '@/components/auth/usePermission';
 import { ProjectRelationPicker } from '@/components/project-relations/ProjectRelationPicker';
 import { dataApi, type DataCategory, type DataSourceFile } from '@/services/data/data-api';
+import { dataParseProgress } from '@/services/data/data-progress';
 import { getProjects, type Project } from '@/services/project/project-api';
 import { projectResourceApi, type ProjectRelationTarget } from '@/services/project/project-resource-api';
 
@@ -124,6 +125,7 @@ export function DataViewPage() {
         { title: '关联项目', width: 260, render: (_: unknown, record: DataSourceFile) => <Space size={[0, 4]} wrap>{record.relatedProjects?.length ? record.relatedProjects.map((relation) => <Tag color="blue" key={`${relation.projectId}-${relation.stageId || ''}-${relation.taskId || ''}`} onClick={() => navigate(`/projects/${relation.projectId}`)} style={{ cursor: 'pointer' }}>{relation.projectName}{relation.stageName ? ` / ${relation.stageName}` : ''}{relation.taskName ? ` / ${relation.taskName}` : ''}</Tag>) : '—'}</Space> },
         { title: '导入模板', dataIndex: 'templateVersionId', width: 320, ellipsis: true, render: (value: string) => { const item = templates.find((candidate) => candidate.versionId === value); return item ? `${item.name} · ${item.templateCode} · V${item.versionNo}` : `版本 ${value.slice(0, 8)}`; } },
         { title: '状态', dataIndex: 'status', width: 130, render: (value: string) => <Tag color={statusLabels[value]?.[1]}>{statusLabels[value]?.[0] || value}</Tag> },
+        { title: '解析进度', dataIndex: 'progress', width: 170, render: (_: number, record: DataSourceFile) => { const percent = dataParseProgress(record); return <Progress percent={percent} size="small" status={record.status === 'FAILED' ? 'exception' : percent === 100 ? 'success' : 'active'} format={(value) => `${value ?? 0}%`} />; } },
         { title: '最近更新', dataIndex: 'updatedAt', width: 180, render: (value: string) => new Date(value).toLocaleString('zh-CN') },
         { title: '操作', width: 440, render: (_: unknown, record: DataSourceFile) => <Space wrap><Button type="link" icon={<EyeOutlined />} onClick={() => setPreviewFile(resolveFile(record))}>预览</Button><Button type="link" icon={<DownloadOutlined />} onClick={() => void downloadPreviewFile(resolveFile(record))}>下载</Button><Button type="link" onClick={() => navigate(`/data/import-jobs/${record.importJobId}`)}>查看详情</Button><Can permission="data.update"><Dropdown trigger={['click']} menu={{ items: categories.map((category) => ({ key: category.id, label: category.name, onClick: () => void moveSource(record, category.id) })) }}><Button type="link">移动分类</Button></Dropdown></Can><Can permission="project.assign"><Button type="link" icon={<LinkOutlined />} onClick={() => setRelationEditor({ item: record, targets: (record.relatedProjects || []).map((relation) => ({ projectId: relation.projectId, stageId: relation.stageId, taskId: relation.taskId })) })}>关联项目</Button></Can></Space> },
       ]} />

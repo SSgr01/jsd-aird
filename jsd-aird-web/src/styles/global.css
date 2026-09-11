@@ -3578,6 +3578,7 @@ a:active,
 .upload-workspace-record-main > .ant-tag { flex: 0 0 auto; margin-top: 2px; }
 .upload-workspace-record-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--app-border); }
 .upload-workspace-record-actions .ant-btn { min-height: 36px; padding-inline: 6px; }
+.upload-workspace-progress-label { display: flex; justify-content: space-between; gap: 12px; margin-top: 6px; font-size: 12px; }
 .upload-workspace-progress { height: 6px; margin-top: 6px; overflow: hidden; background: var(--app-surface-subtle); border-radius: 999px; }
 .upload-workspace-progress span { display: block; height: 100%; background: var(--app-primary); border-radius: inherit; transition: width 180ms ease; }
 .upload-workspace-pagination { margin-top: 18px; text-align: right; }

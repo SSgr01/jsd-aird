@@ -35,7 +35,9 @@ import { knowledgeApi, type KnowledgeCategory } from '@/services/knowledge';
 import {
   citationEvidenceLabel,
   citationPagesLabel,
+  dataFileSelectionQuestion,
   groupAssistantCitations,
+  partitionAssistantCitations,
 } from './citation-utils';
 
 interface ChatMessage {
@@ -44,6 +46,8 @@ interface ChatMessage {
   content: string;
   citations?: AssistantCitation[];
 }
+
+const UNCATEGORIZED_DATA_SCOPE_ID = '00000000-0000-0000-0000-000000000000';
 
 function displayAnswer(value: string) {
   const text = value?.trim() || '';
@@ -125,11 +129,33 @@ function renderAssistantContent(
   onPreview: (citation: AssistantCitation) => void,
   onDownload: (citation: AssistantCitation) => void,
   hasOriginalFile: (citation: AssistantCitation) => boolean,
+  onSelectDataFile: (citation: AssistantCitation) => void,
+  candidateDisabled: boolean,
 ) {
-  const citationGroups = groupAssistantCitations(message.citations);
+  const { candidates, evidence } = partitionAssistantCitations(message.citations);
+  const citationGroups = groupAssistantCitations(evidence);
   return (
     <div>
       <MarkdownContent value={displayAnswer(message.content)} />
+      {candidates.length ? (
+        <div className="ai-message-file-candidates">
+          <Typography.Text type="secondary">请选择数据文件</Typography.Text>
+          <div className="ai-message-file-candidate-list">
+            {candidates.map((citation) => (
+              <Button
+                key={citation.originalName || citation.title}
+                size="small"
+                icon={<FileTextOutlined />}
+                disabled={candidateDisabled}
+                title={citation.originalName || citation.title}
+                onClick={() => onSelectDataFile(citation)}
+              >
+                {citation.originalName || citation.title}
+              </Button>
+            ))}
+          </div>
+        </div>
+      ) : null}
       {citationGroups.length ? (
         <div className="ai-message-citations">
           <Typography.Text type="secondary">参考来源</Typography.Text>
@@ -220,14 +246,29 @@ export function AssistantPage() {
       assistantApi.conversations(),
       knowledgeApi.categories(),
       dataApi.listCategories(),
+      dataApi.listSourceFiles({ page: 1, size: 1 }),
       assistantApi.capabilities().catch(() => ({ webSearchAvailable: false })),
     ])
-      .then(([conversationList, knowledgeList, dataList, capabilities]) => {
+      .then(([conversationList, knowledgeList, dataList, sourcePage, capabilities]) => {
+        const categorizedSourceCount = dataList.reduce((total, item) => total + item.sourceCount, 0);
+        const uncategorizedSourceCount = Math.max(0, sourcePage.total - categorizedSourceCount);
+        const assistantDataList = uncategorizedSourceCount > 0
+          ? [
+              ...dataList,
+              {
+                id: UNCATEGORIZED_DATA_SCOPE_ID,
+                name: '未分类',
+                description: '尚未归入数据分类的来源文件',
+                sortOrder: Number.MAX_SAFE_INTEGER,
+                sourceCount: uncategorizedSourceCount,
+              },
+            ]
+          : dataList;
         setConversations(conversationList);
         setKnowledgeCategories(knowledgeList);
-        setDataCategories(dataList);
+        setDataCategories(assistantDataList);
         setSelectedKnowledge(knowledgeList.map((item) => item.id));
-        setSelectedData(dataList.map((item) => item.id));
+        setSelectedData(assistantDataList.map((item) => item.id));
         setWebSearchAvailable(Boolean(capabilities.webSearchAvailable));
       })
       .catch(() => toast.error('AI 问答范围加载失败'));
@@ -271,8 +312,8 @@ export function AssistantPage() {
   const setChatMessages = (items: ChatMessage[]) => setMessages(items);
   const hasSelectedScope = selectedKnowledge.length > 0 || selectedData.length > 0;
 
-  const send = async () => {
-    const value = question.trim();
+  const send = async (questionOverride?: string) => {
+    const value = (questionOverride ?? question).trim();
     if (!value || loading || streaming || !hasSelectedScope) return;
     setQuestion('');
     setLoading(true);
@@ -431,7 +472,7 @@ export function AssistantPage() {
     }
   };
 
-  const viewMessages: ConversationMessage[] = messages.map((item) => ({
+  const viewMessages: ConversationMessage[] = messages.map((item, messageIndex) => ({
     id: item.id,
     role: item.role,
     pending: item.role === 'ASSISTANT' && streaming && !item.content,
@@ -449,6 +490,16 @@ export function AssistantPage() {
                 citation.sourceType === 'DATA_SOURCE_FILE' ||
                 citationSources[citationSourceKey(citation)],
               ),
+            (citation) => {
+              const fileName = citation.originalName || citation.title;
+              const originalQuestion = messages
+                .slice(0, messageIndex)
+                .reverse()
+                .find((candidate) => candidate.role === 'USER')?.content;
+              if (!fileName || !originalQuestion) return;
+              void send(dataFileSelectionQuestion(fileName, originalQuestion));
+            },
+            loading || streaming,
           )
         ) : null
       ) : (

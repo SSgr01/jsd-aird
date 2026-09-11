@@ -542,13 +542,21 @@ public class AssistantService {
         var analysis = analyzeDataDetail(prepared.retrieval().plan().originalQuery(), detail);
         prepared.timings().put("dataAnalysisMs", elapsedMs(analysisStarted));
         var answer = mergeDataDetailAnswer(analysis.text(), dataDetailAnswer(detail));
-        var citations = detail.hits().stream().collect(java.util.stream.Collectors.toMap(
-                        DataSourceFileSearchFacade.SourceFileHit::hitId, this::dataCitation,
-                        (left, right) -> left, LinkedHashMap::new))
-                .values().stream().toList();
-        var status = !detail.found() || detail.hits().isEmpty() ? "NOT_FOUND" : "ANSWERED";
+        var citations = detail.requiresFileSelection()
+                ? detail.candidates().stream().map(this::dataFileCandidateCitation).toList()
+                : detail.hits().stream().collect(java.util.stream.Collectors.toMap(
+                                DataSourceFileSearchFacade.SourceFileHit::hitId, this::dataCitation,
+                                (left, right) -> left, LinkedHashMap::new))
+                        .values().stream().toList();
+        var status = switch (detail.resolution()) {
+            case AMBIGUOUS -> "NEEDS_FILE_SELECTION";
+            case FILE_REQUIRED -> "NEEDS_FILE_NAME";
+            case RESOLVED -> detail.hits().isEmpty() ? "NOT_FOUND" : "ANSWERED";
+            default -> "NOT_FOUND";
+        };
         var trace = retrievalTrace(prepared, Map.of());
         trace.put("answerStatus", status).put("answerMode", detail.mode().name())
+                .put("dataResolution", detail.resolution().name())
                 .put("dataAnalysisStatus", analysis.status());
         var persistenceStarted = System.nanoTime();
         var messageId = repository.insertMessageReturningId(prepared.conversationId(), "ASSISTANT", answer,
@@ -558,6 +566,7 @@ public class AssistantService {
                 + prepared.timings().getOrDefault("messagePersistenceMs", 0L));
         var finalTrace = retrievalTrace(prepared, Map.of());
         finalTrace.put("answerStatus", status).put("answerMode", detail.mode().name())
+                .put("dataResolution", detail.resolution().name())
                 .put("dataAnalysisStatus", analysis.status());
         if (messageId != null) repository.updateMessageRetrievalTrace(messageId, finalTrace);
         logRequestDiagnostics(prepared, RequestIdHolder.currentOrUnknown(), "SUCCEEDED");
@@ -639,8 +648,20 @@ public class AssistantService {
 
     static String dataDetailAnswer(DataSourceFileSearchFacade.DataDetailResult detail) {
         if (detail == null || detail.mode() == DataSourceFileSearchFacade.DataQueryMode.NONE) return "";
+        if (detail.resolution() == DataSourceFileSearchFacade.DataResolution.FILE_REQUIRED) {
+            return "查看整文件概览需要指定文件名；查询实验编号、树脂型号或字段时可以直接提问。";
+        }
+        if (detail.resolution() == DataSourceFileSearchFacade.DataResolution.AMBIGUOUS) {
+            return detail.candidatesTruncated()
+                    ? "找到多个同等匹配的数据文件。候选超过 10 个，请补充实验编号或字段名缩小范围。"
+                    : "找到多个同等匹配的数据文件，请选择下方文件继续查询。";
+        }
         var fileName = safeDisplayText(detail.originalName(), "指定文件");
-        if (!detail.found()) return "未找到名为“" + fileName + "”的已完成导入数据文件。";
+        if (!detail.found()) {
+            return StringUtils.hasText(detail.originalName())
+                    ? "未找到名为“" + fileName + "”的已完成导入数据文件。"
+                    : "在已授权的已完成导入数据中没有找到符合指定记录或字段的非空可信值。";
+        }
         var answer = new StringBuilder();
         if (detail.mode() == DataSourceFileSearchFacade.DataQueryMode.FILE_OVERVIEW) {
             answer.append("数据文件“").append(fileName).append("”共有 ")
@@ -789,6 +810,12 @@ public class AssistantService {
                 StringUtils.hasText(hit.fieldName()) ? hit.fieldName() : hit.columnName(),
                 preview(hit.content(), 240), hit.score(), hit.score(), hit.score(), hit.sourceLocator(), null,
                 List.of(), List.of(), List.of(), null, null, null, null, null);
+    }
+
+    private Citation dataFileCandidateCitation(DataSourceFileSearchFacade.DataFileCandidate candidate) {
+        return new Citation("DATA_SOURCE_FILE_CANDIDATE", null, null, null, null, null, null,
+                candidate.originalName(), candidate.originalName(), null, null, "候选数据文件",
+                0, 0, 0, null, null, List.of(), List.of(), List.of(), null, null, null, null, null);
     }
 
     private Citation webCitation(RagRetrievalService.WebHit hit) {

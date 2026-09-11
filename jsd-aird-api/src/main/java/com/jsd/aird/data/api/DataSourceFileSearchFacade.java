@@ -81,11 +81,33 @@ public interface DataSourceFileSearchFacade {
         FIELD_LOOKUP
     }
 
-    record DataDetailQuery(DataQueryMode mode, String fileName, List<String> recordTerms,
+    enum DataFileScope {
+        EXPLICIT,
+        CONTEXT,
+        AUTO
+    }
+
+    enum DataResolution {
+        NOT_REQUESTED,
+        RESOLVED,
+        AMBIGUOUS,
+        NOT_FOUND,
+        FILE_REQUIRED
+    }
+
+    record DataDetailQuery(DataQueryMode mode, String fileName, DataFileScope fileScope, List<String> recordTerms,
                            List<String> fieldTerms, int recordLimit, int fieldsPerRecord, int valueLimit) {
+        public DataDetailQuery(DataQueryMode mode, String fileName, List<String> recordTerms,
+                               List<String> fieldTerms, int recordLimit, int fieldsPerRecord, int valueLimit) {
+            this(mode, fileName, fileName == null || fileName.isBlank() ? DataFileScope.AUTO : DataFileScope.EXPLICIT,
+                    recordTerms, fieldTerms, recordLimit, fieldsPerRecord, valueLimit);
+        }
+
         public DataDetailQuery {
             mode = mode == null ? DataQueryMode.NONE : mode;
             fileName = fileName == null ? "" : fileName.strip();
+            fileScope = fileScope == null ? (fileName.isBlank() ? DataFileScope.AUTO : DataFileScope.EXPLICIT)
+                    : fileScope;
             recordTerms = recordTerms == null ? List.of() : recordTerms.stream()
                     .filter(value -> value != null && !value.isBlank()).map(String::strip).distinct().limit(8).toList();
             fieldTerms = fieldTerms == null ? List.of() : fieldTerms.stream()
@@ -96,24 +118,50 @@ public interface DataSourceFileSearchFacade {
         }
 
         public static DataDetailQuery none() {
-            return new DataDetailQuery(DataQueryMode.NONE, "", List.of(), List.of(), 5, 5, 50);
+            return new DataDetailQuery(DataQueryMode.NONE, "", DataFileScope.AUTO,
+                    List.of(), List.of(), 5, 5, 50);
         }
     }
 
-    record DataDetailResult(DataQueryMode mode, UUID fileObjectId, UUID importJobId, String originalName,
+    record DataFileCandidate(String originalName) {
+        public DataFileCandidate {
+            originalName = originalName == null ? "" : originalName.strip();
+        }
+    }
+
+    record DataDetailResult(DataQueryMode mode, DataResolution resolution,
+                            UUID fileObjectId, UUID importJobId, String originalName,
                             long sourceRecordCount, long searchableValueCount,
-                            List<SourceFileHit> hits, boolean truncated) {
+                            List<SourceFileHit> hits, boolean truncated,
+                            List<DataFileCandidate> candidates, boolean candidatesTruncated) {
+        public DataDetailResult(DataQueryMode mode, UUID fileObjectId, UUID importJobId, String originalName,
+                                long sourceRecordCount, long searchableValueCount,
+                                List<SourceFileHit> hits, boolean truncated) {
+            this(mode, importJobId == null ? DataResolution.NOT_FOUND : DataResolution.RESOLVED,
+                    fileObjectId, importJobId, originalName, sourceRecordCount, searchableValueCount,
+                    hits, truncated, List.of(), false);
+        }
+
         public DataDetailResult {
             mode = mode == null ? DataQueryMode.NONE : mode;
+            resolution = resolution == null ? (mode == DataQueryMode.NONE
+                    ? DataResolution.NOT_REQUESTED : DataResolution.NOT_FOUND) : resolution;
             hits = hits == null ? List.of() : List.copyOf(hits);
+            candidates = candidates == null ? List.of() : List.copyOf(candidates);
         }
 
         public static DataDetailResult empty(DataQueryMode mode) {
-            return new DataDetailResult(mode, null, null, "", 0, 0, List.of(), false);
+            return new DataDetailResult(mode, mode == null || mode == DataQueryMode.NONE
+                    ? DataResolution.NOT_REQUESTED : DataResolution.NOT_FOUND,
+                    null, null, "", 0, 0, List.of(), false, List.of(), false);
         }
 
         public boolean found() {
-            return importJobId != null;
+            return resolution == DataResolution.RESOLVED && importJobId != null;
+        }
+
+        public boolean requiresFileSelection() {
+            return resolution == DataResolution.AMBIGUOUS && !candidates.isEmpty();
         }
     }
 

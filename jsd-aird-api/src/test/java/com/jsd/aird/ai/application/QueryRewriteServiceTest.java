@@ -70,6 +70,30 @@ class QueryRewriteServiceTest {
 
         assertThat(request.intent()).isEqualTo("FIELD_LOOKUP");
         assertThat(request.fileName()).isEqualTo("应用测试报告.xlsx");
+        assertThat(request.fileScope()).isEqualTo("CONTEXT");
+    }
+
+    @Test
+    void allowsAnObviousDataQuestionWithoutAFileName() {
+        var request = QueryRewriteService.sanitizeDataRequest(
+                new QueryRewriteService.DataRequest("NONE", "", List.of(), List.of()),
+                "SJ-230水洗后的粘度是多少？",
+                "SJ-230水洗后的粘度是多少？");
+
+        assertThat(request.intent()).isEqualTo("FIELD_LOOKUP");
+        assertThat(request.fileName()).isEmpty();
+        assertThat(request.fileScope()).isEqualTo("AUTO");
+    }
+
+    @Test
+    void marksAFileNamedInTheCurrentQuestionAsExplicit() {
+        var request = QueryRewriteService.sanitizeDataRequest(
+                new QueryRewriteService.DataRequest("FIELD_LOOKUP", "", List.of("SJ-230水洗后"), List.of("粘度")),
+                "在数据文件《应用测试报告.xlsx》中查询：SJ-230水洗后的粘度是多少？",
+                "在数据文件《应用测试报告.xlsx》中查询：SJ-230水洗后的粘度是多少？");
+
+        assertThat(request.fileName()).isEqualTo("应用测试报告.xlsx");
+        assertThat(request.fileScope()).isEqualTo("EXPLICIT");
     }
 
 }

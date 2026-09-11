@@ -99,9 +99,10 @@ public class QueryRewriteService {
     private static final int MAX_WEB_QUERY_LENGTH = 300;
     private static final int MAX_DATA_TERMS = 8;
     private static final Set<String> DATA_INTENTS = Set.of("NONE", "FILE_OVERVIEW", "RECORD_DETAIL", "FIELD_LOOKUP");
+    private static final Set<String> DATA_FILE_SCOPES = Set.of("EXPLICIT", "CONTEXT", "AUTO");
     private static final Pattern QUOTED_DATA_FILE = Pattern.compile("[“\\\"《]([^”\\\"》\\r\\n]{1,260}\\.(?:xlsx|xls|csv))[”\\\"》]",
             Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
-    private static final Pattern BARE_DATA_FILE = Pattern.compile("([^\\s，。；;“”\\\"]{1,260}\\.(?:xlsx|xls|csv))",
+    private static final Pattern BARE_DATA_FILE = Pattern.compile("([^\\s，。；;：:“”\\\"]{1,260}\\.(?:xlsx|xls|csv))",
             Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
     private static final Set<String> TERM_KINDS = Set.of("PHRASE", "FORMULA", "MEASUREMENT", "ABBREVIATION");
     private static final Set<String> WEB_TOPICS = Set.of("GENERAL", "NEWS");
@@ -137,8 +138,9 @@ public class QueryRewriteService {
     public Result rewrite(String question, List<AssistantRepository.MessageRow> history, boolean webSearchEnabled) {
         var fallbackWebQueries = webSearchEnabled && StringUtils.hasText(question)
                 ? List.of(new WebQuery(bounded(question, MAX_WEB_QUERY_LENGTH), "GENERAL", "ALL")) : List.<WebQuery>of();
+        var sourceText = dataSourceText(question, history);
         var fallback = new QueryPlan(question, question, List.of(), List.of(), List.of(), Map.of(), "",
-                fallbackWebQueries, fallbackDataRequest(question));
+                fallbackWebQueries, sanitizeDataRequest(null, sourceText, question));
         var builder = clients.getIfAvailable();
         if (!enabled || builder == null || !StringUtils.hasText(model)) {
             return new Result(fallback, "MODEL_UNAVAILABLE", model, false);
@@ -157,9 +159,6 @@ public class QueryRewriteService {
                     .limit(MAX_SUB_QUERIES).forEach(queries::add);
             var webQueries = webSearchEnabled ? sanitizeWebQueries(response.webQueries()) : List.<WebQuery>of();
             if (webSearchEnabled && webQueries.isEmpty()) webQueries = fallbackWebQueries;
-            var sourceText = question + "\n" + (history == null ? "" : history.stream()
-                    .filter(item -> "USER".equals(item.role()) || "SUMMARY".equals(item.role()))
-                    .map(AssistantRepository.MessageRow::content).reduce((a, b) -> a + "\n" + b).orElse(""));
             return new Result(new QueryPlan(question, bounded(response.rewrittenQuery(), MAX_QUERY_LENGTH),
                     List.copyOf(queries), sanitizeTerms(response.retrievalTerms()), sanitizeFacts(response.requiredFacts()),
                     response.filters() == null ? Map.of() : response.filters(), response.timeRange(),
@@ -262,32 +261,42 @@ public class QueryRewriteService {
     }
 
     static DataRequest sanitizeDataRequest(DataRequest value, String sourceText, String question) {
-        if (value == null) return fallbackDataRequest(question);
-        var intent = normalizedEnum(value.intent(), DATA_INTENTS, "NONE");
+        var proposed = value == null ? new DataRequest("NONE", "", List.of(), List.of()) : value;
+        var intent = normalizedEnum(proposed.intent(), DATA_INTENTS, "NONE");
         // The user message and the persisted conversation context are authoritative. A planner may wrap or
         // paraphrase the filename, so only use its proposal when no actual filename exists in either source.
-        var fileName = extractDataFile(question);
-        if (fileName.isBlank()) fileName = extractDataFile(sourceText);
+        var explicitFileName = extractDataFile(question);
+        var fileName = explicitFileName;
+        var fileScope = explicitFileName.isBlank() ? "AUTO" : "EXPLICIT";
         if (fileName.isBlank()) {
-            var proposedFileName = extractDataFile(value.fileName());
-            if (supportedSourceText(proposedFileName, sourceText)) fileName = proposedFileName;
+            fileName = extractDataFile(sourceText);
+            if (!fileName.isBlank()) fileScope = "CONTEXT";
         }
-        var recordTerms = sanitizeDataTerms(value.recordTerms(), sourceText);
-        var fieldTerms = sanitizeDataTerms(value.fieldTerms(), sourceText);
-        if ("NONE".equals(intent) && !fileName.isBlank()) {
+        if (fileName.isBlank()) {
+            var proposedFileName = extractDataFile(proposed.fileName());
+            if (supportedSourceText(proposedFileName, sourceText)) {
+                fileName = proposedFileName;
+                fileScope = "CONTEXT";
+            }
+        }
+        var recordTerms = sanitizeDataTerms(proposed.recordTerms(), sourceText);
+        var fieldTerms = sanitizeDataTerms(proposed.fieldTerms(), sourceText);
+        if ("NONE".equals(intent)) {
             if (looksLikeOverview(question)) intent = "FILE_OVERVIEW";
+            else if (looksLikeRecordDetail(question)) intent = "RECORD_DETAIL";
             else if (!recordTerms.isEmpty() || !fieldTerms.isEmpty() || looksLikeStructuredDataQuestion(question)) {
                 intent = "FIELD_LOOKUP";
             }
         }
-        if (!"NONE".equals(intent) && fileName.isBlank() && recordTerms.isEmpty() && fieldTerms.isEmpty()) intent = "NONE";
-        return new DataRequest(intent, fileName, recordTerms, fieldTerms);
+        if (!"NONE".equals(intent) && fileName.isBlank() && recordTerms.isEmpty() && fieldTerms.isEmpty()
+                && !looksLikeStructuredDataQuestion(question) && !looksLikeOverview(question)) intent = "NONE";
+        return new DataRequest(intent, fileName, fileScope, recordTerms, fieldTerms);
     }
 
-    private static DataRequest fallbackDataRequest(String question) {
-        var fileName = extractDataFile(question);
-        var intent = !fileName.isBlank() && looksLikeOverview(question) ? "FILE_OVERVIEW" : "NONE";
-        return new DataRequest(intent, fileName, List.of(), List.of());
+    private static String dataSourceText(String question, List<AssistantRepository.MessageRow> history) {
+        return (question == null ? "" : question) + "\n" + (history == null ? "" : history.stream()
+                .filter(item -> "USER".equals(item.role()) || "SUMMARY".equals(item.role()))
+                .map(AssistantRepository.MessageRow::content).reduce((a, b) -> a + "\n" + b).orElse(""));
     }
 
     private static String extractDataFile(String value) {
@@ -309,6 +318,12 @@ public class QueryRewriteService {
         return List.of("实验编号", "树脂编号", "样品编号", "试样编号", "记录编号", "配方", "比例", "粘度",
                         "固含", "外观", "表干性", "耐磨", "硬度", "附着力", "光泽", "色差", "酸值", "羟值",
                         "测试结果", "实验结果", "数据字段", "单元格")
+                .stream().anyMatch(value::contains);
+    }
+
+    private static boolean looksLikeRecordDetail(String value) {
+        if (!StringUtils.hasText(value)) return false;
+        return List.of("全部数据", "所有数据", "完整数据", "全部字段", "所有字段", "完整记录", "记录详情")
                 .stream().anyMatch(value::contains);
     }
 
@@ -354,6 +369,7 @@ public class QueryRewriteService {
         if (value == null) return true;
         var intent = value.intent() == null ? "NONE" : value.intent().strip().toUpperCase(java.util.Locale.ROOT);
         return DATA_INTENTS.contains(intent)
+                && DATA_FILE_SCOPES.contains(value.fileScope())
                 && (value.fileName() == null || value.fileName().length() <= 260)
                 && validDataTerms(value.recordTerms()) && validDataTerms(value.fieldTerms());
     }
@@ -408,10 +424,17 @@ public class QueryRewriteService {
 
     public record WebQuery(String query, String topic, String timeRange) { }
 
-    public record DataRequest(String intent, String fileName, List<String> recordTerms, List<String> fieldTerms) {
+    public record DataRequest(String intent, String fileName, String fileScope,
+                              List<String> recordTerms, List<String> fieldTerms) {
+        public DataRequest(String intent, String fileName, List<String> recordTerms, List<String> fieldTerms) {
+            this(intent, fileName, fileName == null || fileName.isBlank() ? "AUTO" : "EXPLICIT",
+                    recordTerms, fieldTerms);
+        }
+
         public DataRequest {
             intent = intent == null ? "NONE" : intent.strip().toUpperCase(java.util.Locale.ROOT);
             fileName = fileName == null ? "" : fileName.strip();
+            fileScope = normalizedEnum(fileScope, DATA_FILE_SCOPES, fileName.isBlank() ? "AUTO" : "EXPLICIT");
             recordTerms = recordTerms == null ? List.of() : List.copyOf(recordTerms);
             fieldTerms = fieldTerms == null ? List.of() : List.copyOf(fieldTerms);
         }

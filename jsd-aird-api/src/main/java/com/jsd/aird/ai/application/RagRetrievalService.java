@@ -275,19 +275,31 @@ public class RagRetrievalService {
             var inferred = inferFieldLookup(plan == null ? "" : plan.originalQuery());
             if (!inferred.recordTerm().isBlank()) recordTerms.add(inferred.recordTerm());
             if (!inferred.fieldTerm().isBlank()) fieldTerms.add(inferred.fieldTerm());
+        } else if (mode == DataSourceFileSearchFacade.DataQueryMode.RECORD_DETAIL) {
+            var recordTerm = inferRecordLookup(plan == null ? "" : plan.originalQuery());
+            if (!recordTerm.isBlank()) recordTerms.add(recordTerm);
         }
         var recordLimit = mode == DataSourceFileSearchFacade.DataQueryMode.FILE_OVERVIEW ? 5 : 1;
-        return new DataSourceFileSearchFacade.DataDetailQuery(mode, request.fileName(), List.copyOf(recordTerms),
-                List.copyOf(fieldTerms), recordLimit, 5, 50);
+        DataSourceFileSearchFacade.DataFileScope fileScope;
+        try {
+            fileScope = DataSourceFileSearchFacade.DataFileScope.valueOf(request.fileScope());
+        } catch (IllegalArgumentException exception) {
+            fileScope = request.fileName().isBlank() ? DataSourceFileSearchFacade.DataFileScope.AUTO
+                    : DataSourceFileSearchFacade.DataFileScope.EXPLICIT;
+        }
+        return new DataSourceFileSearchFacade.DataDetailQuery(mode, request.fileName(), fileScope,
+                List.copyOf(recordTerms), List.copyOf(fieldTerms), recordLimit, 5, 50);
     }
 
     static InferredFieldLookup inferFieldLookup(String question) {
         if (question == null || question.isBlank()) return new InferredFieldLookup("", "");
-        var normalized = question.strip()
+        var normalized = stripDataSelectionPrefix(question).strip()
                 .replaceAll("[，,；;。！？?]*(?:请)?(?:用自然语言)?(?:简单|简要)?(?:分析|说明|解读)(?:一下)?[。！？?]*$", "")
                 .replaceAll("[？?。！!]+$", "");
         var separator = normalized.lastIndexOf('的');
-        if (separator <= 0 || separator >= normalized.length() - 1) return new InferredFieldLookup("", "");
+        if (separator <= 0 || separator >= normalized.length() - 1) {
+            return new InferredFieldLookup("", inferStandaloneField(normalized));
+        }
         var record = normalized.substring(0, separator)
                 .replaceFirst("^(?:请问|请查询|查询|查看)", "")
                 .replaceFirst("^(?:实验编号|树脂编号|样品编号|试样编号|记录编号)[：:\\s]*", "").strip();
@@ -296,6 +308,31 @@ public class RagRetrievalService {
         if (record.length() > 120 || !record.matches(".*[A-Za-z0-9].*")) record = "";
         if (field.length() > 80) field = "";
         return new InferredFieldLookup(record, field);
+    }
+
+    static String inferRecordLookup(String question) {
+        if (question == null || question.isBlank()) return "";
+        var normalized = stripDataSelectionPrefix(question).strip();
+        var labeled = java.util.regex.Pattern.compile(
+                        "(?:实验编号|树脂编号|样品编号|试样编号|记录编号)[：:\\s]*([A-Za-z0-9][A-Za-z0-9._/-]{1,120})",
+                        java.util.regex.Pattern.CASE_INSENSITIVE)
+                .matcher(normalized);
+        if (labeled.find()) return labeled.group(1).strip();
+        var inferred = inferFieldLookup(normalized);
+        return inferred.recordTerm();
+    }
+
+    private static String inferStandaloneField(String question) {
+        if (question == null) return "";
+        for (var field : List.of("配方比例", "表干性", "实测固含", "固含", "粘度", "外观", "耐磨", "硬度",
+                "附着力", "光泽", "色差", "酸值", "羟值")) {
+            if (question.contains(field)) return field;
+        }
+        return "";
+    }
+
+    private static String stripDataSelectionPrefix(String question) {
+        return question.replaceFirst("^在数据文件[《“\\\"]?[^》”\\\"\\r\\n]+\\.(?:xlsx|xls|csv)[》”\\\"]?中(?:查询)?[：:]\\s*", "");
     }
 
     private long elapsedMs(long started) {

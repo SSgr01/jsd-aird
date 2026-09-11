@@ -109,4 +109,66 @@ class JdbcDataSourceFileSearchRepositoryTest {
         assertThat(result).isEmpty();
         verify(jdbc, never()).query(anyString(), any(RowMapper.class), any(Object[].class));
     }
+
+    @Test
+    void anOverviewWithoutAFileNameDoesNotReachTheDatabase() {
+        var jdbc = mock(JdbcTemplate.class);
+        var query = new DataSourceFileSearchFacade.DataDetailQuery(
+                DataSourceFileSearchFacade.DataQueryMode.FILE_OVERVIEW, "",
+                DataSourceFileSearchFacade.DataFileScope.AUTO, List.of(), List.of(), 5, 5, 50);
+
+        var result = new JdbcDataSourceFileSearchRepository(jdbc).queryDetails(
+                UUID.randomUUID(), query, List.of(UUID.randomUUID()), DataSourceFileSearchFacade.AccessScope.all());
+
+        assertThat(result.resolution()).isEqualTo(DataSourceFileSearchFacade.DataResolution.FILE_REQUIRED);
+        verify(jdbc, never()).query(anyString(), any(RowMapper.class), any(Object[].class));
+    }
+
+    @Test
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void automaticLookupUsesLatestAuthorizedFilesAndExactValueAssociations() {
+        var jdbc = mock(JdbcTemplate.class);
+        when(jdbc.query(anyString(), any(RowMapper.class), any(Object[].class))).thenReturn(List.of());
+        var query = new DataSourceFileSearchFacade.DataDetailQuery(
+                DataSourceFileSearchFacade.DataQueryMode.FIELD_LOOKUP, "",
+                DataSourceFileSearchFacade.DataFileScope.AUTO, List.of("SJ-230水洗后"), List.of("粘度"),
+                5, 5, 50);
+
+        new JdbcDataSourceFileSearchRepository(jdbc).queryDetails(
+                UUID.randomUUID(), query, List.of(UUID.randomUUID()), DataSourceFileSearchFacade.AccessScope.all());
+
+        var sql = ArgumentCaptor.forClass(String.class);
+        verify(jdbc).query(sql.capture(), any(RowMapper.class), any(Object[].class));
+        assertThat(sql.getValue())
+                .contains("row_number() OVER (PARTITION BY lower(j.source_file_name)")
+                .contains("SELECT * FROM ranked_files WHERE latest_rank = 1")
+                .contains("record_value.record_id = r.id")
+                .contains("mapping.mapping_jsonb->>'dataPath' = v.value_path")
+                .contains("coalesce(mapping.mapping_jsonb->>'bindingId', mapping.field_code) = v.binding_id")
+                .doesNotContain("OR mapping.field_code = v.field_code")
+                .contains("v.rag_eligible = true")
+                .contains("v.calculation_status = 'VALID'");
+    }
+
+    @Test
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void assistantUncategorizedScopeIncludesNullCategoryWithoutBindingTheScopeToken() {
+        var jdbc = mock(JdbcTemplate.class);
+        when(jdbc.query(anyString(), any(RowMapper.class), any(Object[].class))).thenReturn(List.of());
+        var categorized = UUID.randomUUID();
+        var query = new DataSourceFileSearchFacade.DataDetailQuery(
+                DataSourceFileSearchFacade.DataQueryMode.FIELD_LOOKUP, "",
+                DataSourceFileSearchFacade.DataFileScope.AUTO, List.of(), List.of("外观"), 5, 5, 50);
+
+        new JdbcDataSourceFileSearchRepository(jdbc).queryDetails(UUID.randomUUID(), query,
+                List.of(categorized, JdbcDataSourceFileSearchRepository.UNCATEGORIZED_SCOPE_ID),
+                DataSourceFileSearchFacade.AccessScope.all());
+
+        var sql = ArgumentCaptor.forClass(String.class);
+        var args = ArgumentCaptor.forClass(Object[].class);
+        verify(jdbc).query(sql.capture(), any(RowMapper.class), args.capture());
+        assertThat(sql.getValue()).contains("AND (j.category_id IN (?) OR j.category_id IS NULL)");
+        assertThat(java.util.Arrays.asList(args.getValue())).contains(categorized)
+                .doesNotContain(JdbcDataSourceFileSearchRepository.UNCATEGORIZED_SCOPE_ID);
+    }
 }

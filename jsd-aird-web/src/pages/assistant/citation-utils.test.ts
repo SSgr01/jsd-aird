@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import {
   citationEvidenceLabel,
   citationPagesLabel,
+  dataFileSelectionQuestion,
   groupAssistantCitations,
+  partitionAssistantCitations,
 } from './citation-utils';
 
 describe('citationEvidenceLabel', () => {
@@ -63,5 +65,38 @@ describe('citationEvidenceLabel', () => {
 
     expect(groups).toHaveLength(1);
     expect(groups[0]?.evidenceCount).toBe(2);
+  });
+
+  it('separates persisted data-file candidates from evidence citations', () => {
+    const candidate = {
+      sourceType: 'DATA_SOURCE_FILE_CANDIDATE',
+      title: '测试数据.xlsx',
+      originalName: '测试数据.xlsx',
+      snippet: '候选数据文件',
+      retrievalScore: 0,
+      rrfScore: 0,
+      rerankScore: 0,
+    };
+    const evidence = {
+      sourceType: 'DATA_SOURCE_FILE',
+      fileObjectId: 'file-1',
+      title: '结果.xlsx',
+      originalName: '结果.xlsx',
+      snippet: '粘度 208',
+      retrievalScore: 1,
+      rrfScore: 1,
+      rerankScore: 1,
+    };
+
+    const partition = partitionAssistantCitations([candidate, candidate, evidence]);
+
+    expect(partition.candidates).toEqual([candidate]);
+    expect(partition.evidence).toEqual([evidence]);
+  });
+
+  it('builds a natural follow-up using the existing question protocol', () => {
+    expect(dataFileSelectionQuestion('测试\n数据.xlsx', ' 粘度是多少？ ')).toBe(
+      '在数据文件《测试 数据.xlsx》中查询：粘度是多少？',
+    );
   });
 });

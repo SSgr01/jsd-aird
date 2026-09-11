@@ -334,8 +334,8 @@ export function TemplateUploadPage() {
         onFilesChange={setFiles}
         onRemoveFile={(file) => setFiles((current) => current.filter((item) => item.uid !== file.uid))}
         onClearFiles={() => setFiles([])}
-        uploadMainText="拖拽文件到此处，或点击选择文件"
-        uploadHint="支持 XLSX、XLS、CSV、DOCX、DOC；支持批量上传。"
+        uploadMainText="拖拽文件到此处/点击选择文件/点击拍照上传"
+        uploadHint="支持 XLSX、XLS、CSV、DOCX、DOC；可批量上传，单个文件最大100M。"
         submitLabel="开始识别"
         submitIcon={<CloudUploadOutlined />}
         onSubmit={() => void startUpload()}

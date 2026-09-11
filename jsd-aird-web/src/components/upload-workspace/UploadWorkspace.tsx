@@ -117,7 +117,7 @@ export function UploadWorkspace({
   onFilesChange,
   onRemoveFile,
   onClearFiles,
-  uploadMainText = '拖拽文件到此处，或点击选择文件',
+  uploadMainText = '拖拽文件到此处/点击选择文件/点击拍照上传',
   uploadHint,
   uploadDisabled = false,
   uploadIcon,

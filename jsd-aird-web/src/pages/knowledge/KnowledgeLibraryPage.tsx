@@ -254,8 +254,8 @@ export function KnowledgeLibraryPage() {
       multiple files={fileList} onFilesChange={setFileList}
       onRemoveFile={(file) => setFileList((current) => current.filter((item) => item.uid !== file.uid))}
       onClearFiles={() => setFileList([])}
-      uploadMainText="拖拽文件到此处，或点击选择文件"
-      uploadHint="支持 PDF / Office / CSV / TXT / 图片 / 音频，支持批量上传与逐文件重复判定。"
+      uploadMainText="拖拽文件到此处/点击选择文件/点击拍照上传"
+      uploadHint="支持 PDF / Office / CSV / TXT / 图片 / 音频，可批量上传，单个文件最大100M。"
       submitLabel="开始上传" submitIcon={<UploadOutlined />} onSubmit={() => void upload()} submitting={uploading}
       rightTitle="已上传文件" rightCount={page.total + taskRecords.length}
       rightFilters={[{ key: 'ALL', label: '全部' }, { key: 'PROCESSING', label: '解析中' }, { key: 'READY', label: '解析完成' }, { key: 'FAILED', label: '失败' }]}

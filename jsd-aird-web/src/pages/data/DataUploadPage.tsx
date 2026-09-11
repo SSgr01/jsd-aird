@@ -192,8 +192,8 @@ export function DataUploadPage() {
       onFilesChange={setFiles}
       onRemoveFile={(file) => setFiles((current) => current.filter((item) => item.uid !== file.uid))}
       onClearFiles={() => setFiles([])}
-      uploadMainText="拖拽文件到此处，或点击选择文件"
-      uploadHint="支持 XLS / XLSX / CSV；原文件会保留并用于后续来源追溯。"
+      uploadMainText="拖拽文件到此处/点击选择文件/点击拍照上传"
+      uploadHint="支持 XLS / XLSX / CSV；可批量上传，单个文件最大100M。"
       uploadDisabled={loading}
       previewEmptyText="暂无待导入文件，点击上方区域选择文件"
       submitLabel="创建导入任务"

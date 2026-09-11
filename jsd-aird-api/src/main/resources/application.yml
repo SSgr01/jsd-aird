@@ -143,6 +143,7 @@ app:
     retrieval:
       executor-threads: ${JSD_AIRD_RETRIEVAL_EXECUTOR_THREADS:8}
       queue-capacity: ${JSD_AIRD_RETRIEVAL_QUEUE_CAPACITY:64}
+      data-max-hits: ${JSD_AIRD_DATA_RETRIEVAL_MAX_HITS:16}
     conversation-title:
       enabled: ${JSD_AIRD_AI_CONVERSATION_TITLE_ENABLED:true}
       max-length: ${JSD_AIRD_AI_CONVERSATION_TITLE_MAX_LENGTH:30}

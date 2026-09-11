@@ -45,10 +45,13 @@ public interface ProductionUploadRepository {
 
     Optional<UploadView> find(UUID organizationId, UUID uploadId);
 
+    Optional<UUID> findAsyncJobId(UUID organizationId, UUID uploadId);
+
     /** Returns the latest active record for a file content hash. */
     Optional<UploadView> findActiveBySha256(UUID organizationId, String sha256);
 
-    PageResult<UploadView> list(UUID organizationId, String keyword, String status, UUID projectId, int page, int size);
+    PageResult<UploadView> list(UUID organizationId, String keyword, String status, UUID projectId,
+                                boolean viewableOnly, int page, int size);
 
     int delete(UUID organizationId, UUID uploadId);
 
@@ -58,6 +61,11 @@ public interface ProductionUploadRepository {
     Optional<UploadView> updateMetadata(UUID organizationId, UUID actorId, UUID uploadId,
                                         String productionName, String orderNo, String productName,
                                         String category, LocalDate manufactureDate, long lockVersion);
+
+    Optional<UploadView> rename(UUID organizationId, UUID actorId, UUID uploadId,
+                                String productionName, UUID projectId, String projectName,
+                                UUID stageId, String stageName, UUID taskId, String taskName,
+                                long lockVersion);
 
     List<VersionView> versions(UUID organizationId, UUID uploadId);
 

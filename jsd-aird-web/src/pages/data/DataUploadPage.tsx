@@ -8,6 +8,7 @@ import { UploadWorkspace, type UploadWorkspaceRecord } from '@/components/upload
 import { ProjectRelationPicker } from '@/components/project-relations/ProjectRelationPicker';
 import { FilePreviewModal, downloadPreviewFile, type FilePreviewDescriptor } from '@/components/file-preview';
 import { dataApi, type DataCategory, type DataJob, type DataTemplateOption } from '@/services/data/data-api';
+import { dataParseProgress, dataParseStageLabel } from '@/services/data/data-progress';
 import type { ProjectRelationTarget } from '@/services/project/project-resource-api';
 
 const statusFilters = [
@@ -34,14 +35,16 @@ const statusView: Record<string, { label: string; color: string }> = {
 
 function jobRecord(job: DataJob, navigate: (path: string) => void, onPreview: (job: DataJob) => void, onDownload: (job: DataJob) => void): UploadWorkspaceRecord {
   const status = statusView[job.status] || { label: job.status, color: 'default' };
+  const parseProgress = dataParseProgress(job);
   return {
     id: job.id,
     name: job.sourceFileName,
     icon: <FileExcelOutlined />,
     meta: `模板版本 ${job.templateVersionId}`,
-    detail: `${new Date(job.createdAt).toLocaleString('zh-CN')} · ${job.currentStage || '等待处理'}`,
+    detail: `${new Date(job.createdAt).toLocaleString('zh-CN')} · ${dataParseStageLabel(job)}`,
     status,
-    progress: job.progress,
+    progress: parseProgress,
+    progressLabel: '解析进度',
     actions: <><Button type="link" icon={<EyeOutlined />} onClick={() => onPreview(job)}>预览</Button><Button type="link" icon={<DownloadOutlined />} onClick={() => onDownload(job)}>下载</Button><Button type="link" icon={<RightOutlined />} onClick={() => navigate(`/data/import-jobs/${job.id}`)}>查看导入任务</Button></>,
   };
 }
@@ -106,8 +109,16 @@ export function DataUploadPage() {
     const file = files[0]?.originFileObj;
     if (!chosen || !file) { void message.warning('请选择已发布模板和数据文件'); return; }
     setLoading(true);
+    const fileUid = files[0]?.uid;
+    const updateUploadFile = (status: UploadFile['status'], percent: number) => {
+      setFiles((current) => current.map((item) => item.uid === fileUid ? { ...item, status, percent } : item));
+    };
+    updateUploadFile('uploading', 0);
+    let uploadCompleted = false;
     try {
-      const staged = await dataApi.stageSource(file);
+      const staged = await dataApi.stageSource(file, (percent) => updateUploadFile('uploading', percent));
+      uploadCompleted = true;
+      updateUploadFile('done', 100);
       const create = async (duplicateOverride: boolean) => dataApi.createJob({ sourceFileId: staged.fileId, templateVersionId: chosen.versionId, categoryId, duplicateOverride, projectRelations });
       try {
         const job = await create(false);
@@ -136,6 +147,7 @@ export function DataUploadPage() {
       setFiles([]);
       await loadJobs();
     } catch (error) {
+      updateUploadFile(uploadCompleted ? 'done' : 'error', uploadCompleted ? 100 : 0);
       void message.error(error instanceof Error ? error.message : '创建导入任务失败');
     } finally {
       setLoading(false);
@@ -190,6 +202,7 @@ export function DataUploadPage() {
       onClearFiles={() => setFiles([])}
       uploadMainText="拖拽文件到此处，或点击选择文件"
       uploadHint="支持 XLS / XLSX / CSV；原文件会保留并用于后续来源追溯。"
+      uploadDisabled={loading}
       previewEmptyText="暂无待导入文件，点击上方区域选择文件"
       submitLabel="创建导入任务"
       submitIcon={<RightOutlined />}

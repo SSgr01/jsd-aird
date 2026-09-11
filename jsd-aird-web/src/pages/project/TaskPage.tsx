@@ -1,22 +1,28 @@
+import { AppstoreOutlined, ReloadOutlined, SearchOutlined, UnorderedListOutlined } from '@ant-design/icons';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Badge,
+  Breadcrumb,
   Button,
-  Flex,
+  Empty,
   Input,
   message,
   Pagination,
+  Popconfirm,
   Select,
+  Space,
+  Spin,
   Table,
-  Typography,
+  Tag,
+  Tooltip,
 } from 'antd';
-import { SearchOutlined, ReloadOutlined, EyeOutlined } from '@ant-design/icons';
+import type { ColumnsType } from 'antd/es/table';
 import {
   getProjects,
   getStages,
   getTasks,
   getTaskOwners,
+  deleteProjectTask,
   formatProjectPriority,
   formatTaskStatus,
   projectPriorities,
@@ -28,9 +34,11 @@ import {
   type TaskQuery,
 } from '@/services/project/project-api';
 
+import './project-pages.css';
 import './task-page.css';
+import '@/styles/management-list.css';
 
-const { Title, Text } = Typography;
+type ViewMode = 'card' | 'list';
 
 const defaultQuery: TaskQuery = {
   keyword: '',
@@ -43,16 +51,33 @@ const defaultQuery: TaskQuery = {
   size: 10,
 };
 
+function priorityColor(value?: ProjectPriority) {
+  return value === 'HIGH' ? 'red' : value === 'MEDIUM' ? 'gold' : value === 'LOW' ? 'green' : 'default';
+}
+
+function statusTagClass(value?: string) {
+  const normalized = value === 'COMPLETED'
+    ? 'completed'
+    : value === 'IN_PROGRESS'
+      ? 'in_progress'
+      : value === 'CANCELLED'
+        ? 'cancelled'
+        : 'not_started';
+  return `pm-status-tag status-${normalized}`;
+}
+
 export default function TaskPage() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [tasks, setTasks] = useState<ProjectTask[]>([]);
   const [total, setTotal] = useState(0);
   const [query, setQuery] = useState<TaskQuery>({ ...defaultQuery });
+  const [view, setView] = useState<ViewMode>('list');
 
   const [projects, setProjects] = useState<Project[]>([]);
   const [stages, setStages] = useState<ProjectStage[]>([]);
   const [owners, setOwners] = useState<string[]>([]);
+  const [deletingTaskId, setDeletingTaskId] = useState<string>();
 
   // Load filter options
   useEffect(() => {
@@ -104,7 +129,6 @@ export default function TaskPage() {
 
   useEffect(() => {
     loadTasks(query);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query.page, query.size, query.keyword, query.projectId, query.stageId, query.status, query.owner, query.priority]);
 
   const handleFilterChange = <K extends keyof TaskQuery>(key: K, value: TaskQuery[K]) => {
@@ -124,6 +148,19 @@ export default function TaskPage() {
   const handleView = (task: ProjectTask) => {
     if (task.projectId) {
       navigate(`/projects/${task.projectId}?section=tasks&stageId=${task.stageId}&taskId=${task.id}`);
+    }
+  };
+
+  const handleDelete = async (task: ProjectTask) => {
+    setDeletingTaskId(task.id);
+    try {
+      await deleteProjectTask(task.id, task.version);
+      message.success('任务已删除');
+      await loadTasks(query);
+    } catch (reason) {
+      message.error(reason instanceof Error ? reason.message : '任务删除失败');
+    } finally {
+      setDeletingTaskId(undefined);
     }
   };
 
@@ -157,22 +194,28 @@ export default function TaskPage() {
     [owners],
   );
 
-  const columns = [
+  const columns: ColumnsType<ProjectTask> = [
     {
       title: '任务编号',
       dataIndex: 'taskCode',
+      className: 'pm-code-column',
       width: 200,
     },
     {
       title: '任务名称',
       dataIndex: 'name',
-      ellipsis: true,
+      className: 'pm-name-column',
+      render: (value: string, record: ProjectTask) => (
+        <Button type="link" className="pm-task-name-link" onClick={() => handleView(record)}>
+          {value}
+        </Button>
+      ),
     },
     {
       title: '所属项目',
       dataIndex: 'projectName',
-      ellipsis: true,
-      render: (value: string | undefined) => value || '—',
+      className: 'pm-project-column',
+      render: (value: string | undefined) => <div className="pm-task-project">{value || '—'}</div>,
     },
     {
       title: '所属阶段',
@@ -192,8 +235,16 @@ export default function TaskPage() {
       width: 100,
       render: (value: string | undefined) => {
         const label = formatProjectPriority(value as 'HIGH' | 'MEDIUM' | 'LOW');
-        const color = value === 'HIGH' ? 'red' : value === 'MEDIUM' ? 'orange' : 'green';
-        return value ? <Badge color={color} text={label} /> : '—';
+        return value ? <Tag color={priorityColor(value as ProjectPriority)}>{label}</Tag> : '—';
+      },
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      width: 110,
+      render: (value: string) => {
+        const label = formatTaskStatus(value);
+        return <Tag className={statusTagClass(value)}>{label}</Tag>;
       },
     },
     {
@@ -203,40 +254,61 @@ export default function TaskPage() {
       align: 'center' as const,
     },
     {
-      title: '状态',
-      dataIndex: 'status',
-      width: 110,
-      render: (value: string) => {
-        const label = formatTaskStatus(value);
-        const color = value === 'COMPLETED' ? 'success' : value === 'IN_PROGRESS' ? 'processing' : 'default';
-        return <Badge status={color as any} text={label} />;
-      },
-    },
-    {
       title: '操作',
       key: 'action',
-      width: 100,
+      width: 120,
       render: (_: unknown, record: ProjectTask) => (
-        <Button type="link" icon={<EyeOutlined />} onClick={() => handleView(record)}>
-          查看
-        </Button>
+        <Space className="management-table-actions" size={0}>
+          <Button type="link" onClick={() => handleView(record)}>查看</Button>
+          <Popconfirm
+            title="确认删除该任务？"
+            description={record.experimentCount > 0 ? '任务下存在实验，不能删除。' : '删除后不可恢复。'}
+            disabled={record.experimentCount > 0}
+            onConfirm={() => void handleDelete(record)}
+          >
+            <Button type="link" danger disabled={record.experimentCount > 0 || deletingTaskId === record.id} loading={deletingTaskId === record.id}>
+              删除
+            </Button>
+          </Popconfirm>
+        </Space>
       ),
     },
   ];
 
   return (
-    <Flex vertical gap={16} style={{ padding: 24 }}>
-      <Flex justify="space-between" align="flex-start">
+    <div className="pm-page pm-unified-list-page pm-task-page">
+      <div className="pm-page-head">
         <div>
-          <Title level={4} style={{ marginBottom: 4 }}>
-            任务
-          </Title>
-          <Text type="secondary">集中查看并筛选全部项目任务，数据来自项目管理原有项目结构。</Text>
+          <Breadcrumb items={[{ title: '项目管理' }, { title: '任务' }]} />
+          <h3>任务</h3>
+          <p>集中查看并筛选全部项目任务，数据来自项目管理原有项目结构。</p>
         </div>
-        <Button type="primary" onClick={() => navigate('/projects/list')}>
-          项目列表
-        </Button>
-      </Flex>
+      </div>
+      <div className="pm-task-toolbar">
+        <Space size={8}>
+          <Button type="primary" onClick={() => navigate('/projects/list')}>
+            项目列表
+          </Button>
+          <Space.Compact>
+            <Tooltip title="卡片视图">
+              <Button
+                aria-label="卡片视图"
+                className={view === 'card' ? 'pm-view-btn active' : 'pm-view-btn'}
+                icon={<AppstoreOutlined />}
+                onClick={() => setView('card')}
+              />
+            </Tooltip>
+            <Tooltip title="列表视图">
+              <Button
+                aria-label="列表视图"
+                className={view === 'list' ? 'pm-view-btn active' : 'pm-view-btn'}
+                icon={<UnorderedListOutlined />}
+                onClick={() => setView('list')}
+              />
+            </Tooltip>
+          </Space.Compact>
+        </Space>
+      </div>
 
       <div className="pm-task-filters">
         <Input
@@ -295,28 +367,84 @@ export default function TaskPage() {
         </Button>
       </div>
 
-        <Table
-          className="pm-task-page"
-          rowKey="id"
-          loading={loading}
-          size="small"
-          columns={columns}
-          dataSource={tasks}
-          pagination={false}
-          scroll={{ x: 1100 }}
-        />
+      <div className="pm-task-content">
+        {view === 'card' ? (
+          <Spin spinning={loading}>
+            <div className="pm-card-grid pm-task-card-grid">
+              {tasks.map((task) => (
+                <div className="pm-card pm-task-card" key={task.id}>
+                  <div className="pm-card-head">
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <h4 className="pm-card-title" title={task.name}>
+                        <Button type="link" onClick={() => handleView(task)}>{task.name}</Button>
+                      </h4>
+                      <div className="pm-card-code">{task.taskCode}</div>
+                    </div>
+                    <div className="pm-card-tags">
+                      {task.priority && <Tag color={priorityColor(task.priority)}>{formatProjectPriority(task.priority)}</Tag>}
+                      <Tag className={statusTagClass(task.status)}>{formatTaskStatus(task.status)}</Tag>
+                    </div>
+                  </div>
+                  <div className="pm-card-info-grid">
+                    <div className="pm-card-info-item">
+                      <span className="pm-card-info-label">所属项目</span>
+                      <strong className="pm-card-info-value" title={task.projectName}>{task.projectName || '—'}</strong>
+                    </div>
+                    <div className="pm-card-info-item">
+                      <span className="pm-card-info-label">所属阶段</span>
+                      <strong className="pm-card-info-value" title={task.stageName}>{task.stageName || '—'}</strong>
+                    </div>
+                    <div className="pm-card-info-item">
+                      <span className="pm-card-info-label">执行人</span>
+                      <strong className="pm-card-info-value">{task.owner || '—'}</strong>
+                    </div>
+                    <div className="pm-card-info-item">
+                      <span className="pm-card-info-label">实验数</span>
+                      <strong className="pm-card-info-value">{task.experimentCount}</strong>
+                    </div>
+                  </div>
+                  <div className="pm-card-actions">
+                    <Button type="link" onClick={() => handleView(task)}>查看</Button>
+                    <Popconfirm
+                      title="确认删除该任务？"
+                      description={task.experimentCount > 0 ? '任务下存在实验，不能删除。' : '删除后不可恢复。'}
+                      disabled={task.experimentCount > 0}
+                      onConfirm={() => void handleDelete(task)}
+                    >
+                      <Button type="link" danger disabled={task.experimentCount > 0 || deletingTaskId === task.id} loading={deletingTaskId === task.id}>删除</Button>
+                    </Popconfirm>
+                  </div>
+                </div>
+              ))}
+              {!loading && !tasks.length && <Empty description="暂无符合条件的任务" />}
+            </div>
+          </Spin>
+        ) : (
+          <div className="pm-table-scroll">
+            <Table
+              rowKey="id"
+              loading={loading}
+              size="small"
+              columns={columns}
+              dataSource={tasks}
+              pagination={false}
+              scroll={{ x: 1360 }}
+            />
+          </div>
+        )}
+      </div>
 
-        <Flex justify="flex-end" style={{ marginTop: 16 }}>
-          <Pagination
-            current={query.page}
-            pageSize={query.size}
-            total={total}
-            showSizeChanger
-            pageSizeOptions={[10, 20, 30, 50]}
-            showTotal={(t) => `共 ${t} 条`}
-            onChange={(page, size) => setQuery((prev) => ({ ...prev, page, size }))}
-          />
-        </Flex>
-    </Flex>
+      <div className="pm-task-pagination">
+        <Pagination
+          current={query.page}
+          pageSize={query.size}
+          total={total}
+          showSizeChanger
+          pageSizeOptions={[10, 20, 30, 50]}
+          showTotal={(t) => `共 ${t} 条`}
+          onChange={(page, size) => setQuery((prev) => ({ ...prev, page, size }))}
+        />
+      </div>
+    </div>
   );
 }

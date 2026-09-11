@@ -7,7 +7,7 @@ public class ProjectWorkSqlProvider {
 
     private static final String TASK_COLUMNS =
         "t.id, t.task_code taskCode, t.project_id projectId, p.name projectName, " +
-        "t.stage_id stageId, s.name stageName, t.name, t.owner, p.priority, " +
+        "t.stage_id stageId, s.name stageName, t.name, t.owner, t.priority, " +
         "t.planned_date plannedDate, t.status, " +
         "(SELECT count(*) FROM rnd.experiment e WHERE e.task_id = t.id AND e.deleted = false) experimentCount, " +
         "t.version, t.created_at createdAt, t.updated_at updatedAt";
@@ -32,7 +32,7 @@ public class ProjectWorkSqlProvider {
             sql.WHERE("t.owner = #{query.owner}");
         }
         if (query.priority() != null && !query.priority().isBlank()) {
-            sql.WHERE("p.priority = #{query.priority}");
+            sql.WHERE("t.priority = #{query.priority}");
         }
     }
 

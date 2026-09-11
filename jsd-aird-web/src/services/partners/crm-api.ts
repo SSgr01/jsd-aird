@@ -60,7 +60,10 @@ export interface Requirement {
   customFields?: Record<string, unknown>;
   allowedActions?: string[];
 }
-export type RequirementInput = Omit<Requirement, 'id' | 'requirementCode'>;
+export type RequirementInput = Omit<Requirement, 'id' | 'requirementCode' | 'raisedAt' | 'deliveryDate'> & {
+  raisedAt?: string | null;
+  deliveryDate?: string | null;
+};
 async function list<T>(path: string, params: Record<string, unknown>) {
   const { data } = await httpClient.get<ApiResponse<PageData<T>>>(path, { params });
   return data.data;
@@ -69,6 +72,8 @@ export const getCommunications = (params: Record<string, unknown>) =>
   list<Communication>('/api/v1/crm/communications', params);
 export const getRequirements = (params: Record<string, unknown>) =>
   list<Requirement>('/api/v1/crm/requirements', params);
+export const getProjectRequirements = (projectId: string, params: Record<string, unknown> = {}) =>
+  list<Requirement>(`/api/v1/projects/${projectId}/requirements`, params);
 export async function createCommunication(v: CommunicationInput) {
   await httpClient.post('/api/v1/crm/communications', v);
 }
@@ -82,9 +87,18 @@ export async function deleteCommunication(id: string, version: number) {
 export async function createRequirement(v: RequirementInput) {
   await httpClient.post('/api/v1/crm/requirements', v);
 }
+export async function createProjectRequirement(projectId: string, v: RequirementInput) {
+  await httpClient.post(`/api/v1/projects/${projectId}/requirements`, v);
+}
 export async function updateRequirement(id: string, v: RequirementInput) {
   await httpClient.put(`/api/v1/crm/requirements/${id}`, v);
 }
+export async function updateProjectRequirement(projectId: string, id: string, v: RequirementInput) {
+  await httpClient.put(`/api/v1/projects/${projectId}/requirements/${id}`, v);
+}
 export async function deleteRequirement(id: string, version: number) {
   await httpClient.delete(`/api/v1/crm/requirements/${id}?version=${version}`);
+}
+export async function deleteProjectRequirement(projectId: string, id: string, version: number) {
+  await httpClient.delete(`/api/v1/projects/${projectId}/requirements/${id}?version=${version}`);
 }

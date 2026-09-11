@@ -53,6 +53,7 @@ public interface DataRepository {
     void saveMappingProfile(UUID organizationId, UUID templateVersionId, String sourceFingerprint,
                             JsonNode mappings, UUID actorId);
 
+    /** Progress measures source parsing only and remains 100 after parsed data has been saved. */
     void updateJobStatus(UUID organizationId, UUID importJobId, String status, int progress, String stage, String error);
 
     void updateCompatibility(UUID organizationId, UUID importJobId, String compatibilityStatus);

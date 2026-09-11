@@ -213,9 +213,10 @@ public class DataImportService {
         var job = repository.findJob(organizationId, importJobId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "导入任务不存在"));
         if (!force && List.of("WAITING_MAPPING", "VALIDATING", "WAITING_CONFIRM", "COMPLETED").contains(job.status())) return;
-        repository.updateJobStatus(organizationId, importJobId, "PARSING", 10, "PARSING", null);
+        repository.updateJobStatus(organizationId, importJobId, "PARSING", 10, "READING_SOURCE", null);
         try {
             var parsed = templates.parse(organizationId, job.templateVersionId(), job.sourceFileId());
+            repository.updateJobStatus(organizationId, importJobId, "PARSING", 45, "ANALYZING_STRUCTURE", null);
             var definition = templates.getVersion(organizationId, job.templateVersionId());
             var originalBindings = templates.getBindings(organizationId, job.templateVersionId());
             var overrides = repository.listComponentOverrides(organizationId, importJobId);
@@ -233,6 +234,7 @@ public class DataImportService {
             var sheets = new ArrayList<DataRepository.Sheet>();
             var mappings = new ArrayList<DataRepository.Mapping>();
             var rows = new ArrayList<DataRepository.Row>();
+            repository.updateJobStatus(organizationId, importJobId, "PARSING", 65, "EXTRACTING_DATA", null);
             for (var parsedSheet : parsed.sheets()) {
                 var previous = configured.get(parsedSheet.sheetId());
                 var selected = previous == null || previous.selected();
@@ -372,6 +374,7 @@ public class DataImportService {
                             raw.deepCopy(), "STAGED", metadata));
                 }
             }
+            repository.updateJobStatus(organizationId, importJobId, "PARSING", 95, "SAVING_PARSED_DATA", null);
             repository.saveParsed(importJobId, parsed.parserVersion(), sheets, mappings, rows, importJobId);
         } catch (RuntimeException exception) {
             repository.updateJobStatus(organizationId, importJobId, "FAILED", 0, "FAILED", safeMessage(exception));
@@ -698,7 +701,7 @@ public class DataImportService {
                 .anyMatch(item -> "BLOCKER".equals(item.severity())
                         && !excludedIds.contains(issueRecordId(item)));
         if (blockers) throw new ApiException(ApiErrorCode.BAD_REQUEST, "仍有阻断异常未处理");
-        repository.updateJobStatus(actor.organizationId(), importJobId, "COMMITTING", 90, "COMMITTING", null);
+        repository.updateJobStatus(actor.organizationId(), importJobId, "COMMITTING", 100, "COMMITTING", null);
         var mappings = repository.listMappings(actor.organizationId(), importJobId);
         var sheetNames = repository.listSheets(actor.organizationId(), importJobId).stream()
                 .collect(java.util.stream.Collectors.toMap(DataRepository.Sheet::sheetId, DataRepository.Sheet::sheetName));

@@ -1,8 +1,8 @@
 import { AppstoreOutlined, ArrowLeftOutlined, DeleteOutlined, EditOutlined, PlusOutlined, UnorderedListOutlined, UpOutlined } from '@ant-design/icons';
-import { App, Breadcrumb, Button, Empty, Input, Modal, Popconfirm, Select, Space, Spin, Tabs, Tag, Tooltip } from 'antd';
+import { App, Breadcrumb, Button, Empty, Input, Modal, Popconfirm, Select, Space, Spin, Tabs, Tooltip } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useBlocker, useParams } from 'react-router-dom';
-import { changeContactStatus, changePartnerStatus, createContact, getContactProjectVectors, getPartner, getPartnerAudits, getPartnerContacts, updateContact, updatePartner, type ContactProjectVector, type PartnerAuditEntry } from '@/services/partners/partner-api';
+import { changeContactStatus, createContact, getContactProjectVectors, getPartner, getPartnerAudits, getPartnerContacts, updateContact, updatePartner, type ContactProjectVector, type PartnerAuditEntry } from '@/services/partners/partner-api';
 import type { BusinessPartner, ContactInput, PartnerContact, PartnerInput } from '@/services/partners/partner-api';
 import { deleteCommunication, getCommunications, getRequirements, updateRequirement } from '@/services/partners/crm-api';
 import type { Communication, Requirement } from '@/services/partners/crm-api';
@@ -13,6 +13,7 @@ import './partner-modals.css';
 import './partner-pages.css';
 import './partner-0730.css';
 import './partner-prototype.css';
+import '@/styles/management-list.css';
 import { PartnerPrototypeModal } from './PartnerPrototypeModals';
 
 // 合并所选项目的团队成员：手动成员 + 所选项目的成员，去重；多个项目合并
@@ -24,20 +25,56 @@ function mergeProjectMembers(manual: string[], projectIds: string[], projects: P
 
 const TIME_FORMAT = 'YYYY-MM-DD HH:mm';
 const fmtTime = (t?: string) => (t ? dayjs(t).format(TIME_FORMAT) : '—');
-const cooperationStatusColors: Record<string, string> = {
-  合作中: 'green',
-  需求沟通: 'orange',
-  暂停: 'volcano',
-  已结束: 'default',
-  潜在客户: 'default',
+const cooperationStatusTagClasses: Record<string, string> = {
+  合作中: 'status-in_progress',
+  需求沟通: 'status-pending',
+  暂停: 'status-paused',
+  已结束: 'status-completed',
+  潜在客户: 'status-not_started',
 };
-const customerLevelColors: Record<string, string> = {
-  重点客户: 'red',
-  重要: 'red',
-  普通客户: 'blue',
-  普通: 'blue',
-  潜在客户: 'default',
-  潜在: 'default',
+const customerLevelTagClasses: Record<string, string> = {
+  重点客户: 'priority-high',
+  重要: 'priority-high',
+  普通客户: 'priority-low',
+  普通: 'priority-low',
+  潜在客户: 'status-not_started',
+  潜在: 'status-not_started',
+};
+const requirementUrgencyTagClasses: Record<string, string> = {
+  高: 'priority-high',
+  中: 'priority-medium',
+  低: 'priority-low',
+};
+const requirementStatusTagClasses: Record<Requirement['status'], string> = {
+  DRAFT: 'status-not_started',
+  CONFIRMED: 'status-pending',
+  IN_PROJECT: 'status-in_progress',
+  COMPLETED: 'status-completed',
+  CANCELLED: 'status-cancelled',
+};
+const requirementStateName: Record<Requirement['status'], string> = {
+  DRAFT: '草稿',
+  CONFIRMED: '已确认',
+  IN_PROJECT: '已立项',
+  COMPLETED: '已完成',
+  CANCELLED: '已取消',
+};
+const requirementDisplayStatusTagClasses: Record<string, string> = {
+  草稿: 'status-not_started',
+  未开始: 'status-not_started',
+  待开始: 'status-pending',
+  已确认: 'status-pending',
+  进行中: 'status-in_progress',
+  已立项: 'status-in_progress',
+  已完成: 'status-completed',
+  已取消: 'status-cancelled',
+};
+const projectStatusTagClasses: Record<string, string> = {
+  NOT_STARTED: 'status-not_started',
+  IN_PROGRESS: 'status-in_progress',
+  PAUSED: 'status-paused',
+  COMPLETED: 'status-completed',
+  CANCELLED: 'status-cancelled',
 };
 
 export function PartnerDetailPage() {
@@ -56,7 +93,7 @@ export function PartnerDetailPage() {
   const hasUnsavedCompanyChanges = () => partner ? companyFields(partner) !== savedSnapshot : false;
   const [requirements, setRequirements] = useState<Requirement[]>([]);
   const [communications, setCommunications] = useState<Communication[]>([]);
-  const [audits, setAudits] = useState<PartnerAuditEntry[]>([]);
+  const [, setAudits] = useState<PartnerAuditEntry[]>([]);
   const [projects, setProjects] = useState<ContactProjectVector[]>([]);
   const uniqueProjects = useMemo(() => {
     const map = new Map<string, ContactProjectVector>();
@@ -92,7 +129,7 @@ export function PartnerDetailPage() {
       ]);
       const value: BusinessPartner = {
         ...base,
-        contacts: contacts.map((c) => ({
+        contacts: contacts.filter((c) => c.status === 'ACTIVE').map((c) => ({
           ...c,
           manualTeamMembers: (c.members ?? '').split(/[,，]/).map((s) => s.trim()).filter(Boolean),
         })),
@@ -321,12 +358,6 @@ export function PartnerDetailPage() {
       return next;
     });
   };
-  const changePartnerLifecycle = () => {
-    if (!partner || (!partner.allowedActions?.includes('DISABLE') && !partner.allowedActions?.includes('RESTORE'))) return;
-    const restoring = partner.allowedActions.includes('RESTORE');
-    Modal.confirm({ title: `${restoring ? '恢复' : '停用'}客户“${partner.name}”？`, okText: restoring ? '恢复' : '停用', cancelText: '取消', okButtonProps: { danger: !restoring }, onOk: async () => { await changePartnerStatus(partner.id, restoring ? 'ACTIVE' : 'INACTIVE', partner.version); msg.success(restoring ? '客户已恢复' : '客户已停用'); await load(); } });
-  };
-  const requirementStateName = { DRAFT: '草稿', CONFIRMED: '已确认', IN_PROJECT: '已立项', COMPLETED: '已完成', CANCELLED: '已取消' } as const;
   // 负责项目选项调用 project 接口获取全量项目列表（见 load 中的 getProjects）
   const overview = <div className="cm-customer-modal cm-modal-columns cm-customer-columns">
     <section className="cm-modal-panel">
@@ -344,7 +375,7 @@ export function PartnerDetailPage() {
         <label>合作状态<Select value={partner.cooperationStatus ?? '潜在客户'} options={cooperationStatuses.map((value) => ({ value }))} onChange={(value) => setPartner({ ...partner, cooperationStatus: value })} /></label>
         <label>所在地区<Input value={partner.address ?? ''} maxLength={30} showCount onChange={(e) => setPartner({ ...partner, address: e.target.value })} /></label>
       </div>
-      <label className="cm-block-field">主营业务<Input value={partner.mainBusiness ?? ''} maxLength={200} showCount onChange={(e) => setPartner({ ...partner, mainBusiness: e.target.value })} /></label>
+      <label className="cm-block-field">主营业务<Input.TextArea rows={4} value={partner.mainBusiness ?? ''} maxLength={200} showCount onChange={(e) => setPartner({ ...partner, mainBusiness: e.target.value })} /></label>
       <div className="cm-edit-divider"><span>拓展字段</span></div>
       <div className="cm-custom-fields">
         {extFields.map((field, index) => (
@@ -430,8 +461,8 @@ export function PartnerDetailPage() {
             </label>
             <div className="cm-edit-divider"><span>拓展字段</span></div>
             <div className="cm-custom-fields">
-              {Object.entries(person.customFields ?? {}).map(([key, value]) => (
-                <div className="cm-custom-field-row" key={`p-ext-${key}`}>
+              {Object.entries(person.customFields ?? {}).map(([key, value], index) => (
+                <div className="cm-custom-field-row" key={`p-ext-${person.id}-${index}`}>
                   <Input value={key} placeholder="字段名" onChange={(e) => { const next: Record<string, string> = { ...(person.customFields as Record<string, string> ?? {}) }; delete next[key]; next[e.target.value] = String(value ?? ''); setField('customFields', next); }} />
                   <Input value={String(value ?? '')} placeholder="值" onChange={(e) => { const next: Record<string, string> = { ...(person.customFields as Record<string, string> ?? {}) }; next[key] = e.target.value; setField('customFields', next); }} />
                   <Button danger icon={<DeleteOutlined />} onClick={() => { const next: Record<string, string> = { ...(person.customFields as Record<string, string> ?? {}) }; delete next[key]; setField('customFields', next); }} />
@@ -445,17 +476,17 @@ export function PartnerDetailPage() {
               <Space size={8}>
                 {isNew
                   ? <Button danger type="primary" icon={<DeleteOutlined />} onClick={() => cancelNewContact(person.id)}>删除</Button>
-                  : <Popconfirm title={person.allowedActions?.includes('RESTORE') ? '恢复该负责人？' : '停用该负责人？'} description="历史业务关联将继续保留；客户至少保留一位负责人。" onConfirm={() => void (async () => {
+                  : <Popconfirm title="停用该负责人？" description="历史业务关联将继续保留；客户至少保留一位负责人。" onConfirm={() => void (async () => {
                     const activeContactCount = partner.contacts.filter((contact) => contact.status === 'ACTIVE').length;
-                    if (!person.allowedActions?.includes('RESTORE') && activeContactCount <= 1) {
+                    if (activeContactCount <= 1) {
                       msg.warning('至少保留一位负责人，当前负责人不可停用');
                       return;
                     }
                     await changeContactStatus(id, person);
-                    msg.success(person.allowedActions?.includes('RESTORE') ? '负责人已恢复' : '负责人已停用');
+                    msg.success('负责人已停用');
                     await load();
                   })()}>
-                    <Button danger={!person.allowedActions?.includes('RESTORE')} type="primary" icon={<DeleteOutlined />} disabled={!person.allowedActions?.includes('DISABLE') && !person.allowedActions?.includes('RESTORE')} onClick={(e) => e.stopPropagation()}>{person.allowedActions?.includes('RESTORE') ? '恢复' : '停用'}</Button>
+                    <Button danger type="primary" icon={<DeleteOutlined />} disabled={person.status === 'INACTIVE'} onClick={(e) => e.stopPropagation()}>删除</Button>
                   </Popconfirm>}
                 <Button type="primary" icon={<EditOutlined />} loading={savingContactIds.has(person.id)} disabled={(!isNew && person.status === 'INACTIVE') || savingContactIds.has(person.id)} onClick={() => void savePersonSnapshot(person)}>保存</Button>
               </Space>
@@ -466,9 +497,9 @@ export function PartnerDetailPage() {
     </section>
   </div>;
 
-  return <div className="cm-page">
+  return <div className="cm-page cm-partner-detail-page">
     <Breadcrumb items={[{ title: '客户管理' }, { title: partner.name }, { title: tabLabelMap[activeKey] ?? '公司概览' }]} />
-    <div className="cm-detail-head"><div className="cm-back-title"><Link className="cm-back" to="/partners"><ArrowLeftOutlined /></Link><div className="cm-detail-title"><h3>{partner.name} {partner.customerLevel && <Tag color={customerLevelColors[partner.customerLevel] ?? 'default'}>{partner.customerLevel}</Tag>}<Tag color={cooperationStatusColors[partner.cooperationStatus ?? ''] ?? 'default'}>{partner.cooperationStatus || '潜在客户'}</Tag></h3><div className="cm-detail-meta"><span>客户编号：{partner.partnerCode}</span><span>所属行业：{partner.industry || '—'}</span><span>客户等级：{partner.customerLevel || '—'}</span></div></div></div><div style={{ marginLeft: 'auto' }}>{partner.allowedActions?.includes('DISABLE') || partner.allowedActions?.includes('RESTORE') ? <Button danger={partner.allowedActions?.includes('DISABLE')} onClick={changePartnerLifecycle}>{partner.allowedActions?.includes('RESTORE') ? '恢复' : '停用'}</Button> : null}</div></div>
+    <div className="cm-detail-head"><div className="cm-back-title"><Link className="cm-back" to="/partners"><ArrowLeftOutlined /></Link><div className="cm-detail-title"><h3><span className="cm-detail-name">{partner.name}</span>{partner.customerLevel && <span className={`pm-tag ${customerLevelTagClasses[partner.customerLevel] ?? 'status-not_started'}`}>{partner.customerLevel}</span>}<span className={`pm-tag ${cooperationStatusTagClasses[partner.cooperationStatus ?? ''] ?? 'status-not_started'}`}>{partner.cooperationStatus || '潜在客户'}</span></h3><div className="cm-detail-meta"><span>客户编号：{partner.partnerCode}</span><span>所属行业：{partner.industry || '—'}</span></div></div></div></div>
     <div className="cm-tabs-shell"><Tabs className="cm-tabs" activeKey={activeKey} onChange={setActiveKey} items={[
       { key: 'overview', label: '公司概览', children: <div className="cm-tab-body">{overview}</div> },
       {
@@ -504,10 +535,10 @@ export function PartnerDetailPage() {
                           })()}</td>
                           <td>{row.raisedAt || '—'}</td>
                           <td>{row.deliveryDate || '—'}</td>
-                          <td>{row.urgency || '—'}</td>
-                          <td><Tag>{row.customStatusName || requirementStateName[row.status]}</Tag></td>
+                          <td>{row.urgency ? <span className={`pm-tag ${requirementUrgencyTagClasses[row.urgency] ?? 'status-not_started'}`}>{row.urgency}</span> : '—'}</td>
+                          <td><span className={`pm-tag ${requirementDisplayStatusTagClasses[row.customStatusName?.trim() || ''] ?? (row.customStatusName ? 'status-custom' : requirementStatusTagClasses[row.status])}`}>{row.customStatusName || requirementStateName[row.status]}</span></td>
                           <td>
-                            <div className="cm-row-actions">
+                            <div className="cm-row-actions management-table-actions">
                               <button className="cm-link-button" onClick={() => setBusinessModal({ mode: 'requirement', edit: row })}>编辑</button>
                               <Popconfirm title="取消该客户需求？" description="历史业务关联将继续保留。" onConfirm={() => void (async () => { await updateRequirement(row.id, { ...row, status: 'CANCELLED', version: row.version }); msg.success('客户需求已取消'); await load(); })()}>
                                 <Button danger type="text" disabled={row.status === 'CANCELLED'} onClick={(e) => e.stopPropagation()}>删除</Button>
@@ -547,9 +578,9 @@ export function PartnerDetailPage() {
                         <td>{row.projectOwner || '—'}</td>
                         <td>{row.currentStageName || '—'}</td>
                         <td>
-                          <Tag color={row.projectStatus === 'IN_PROGRESS' ? 'green' : 'default'}>
+                          <span className={`pm-tag ${projectStatusTagClasses[row.projectStatus ?? ''] ?? 'status-not_started'}`}>
                             {formatProjectStatus(row.projectStatus)}
-                          </Tag>
+                          </span>
                         </td>
                         <td>{row.progress ?? 0}%</td>
                         <td>
@@ -612,11 +643,11 @@ export function PartnerDetailPage() {
                           <td>{row.communicationMethod || '—'}</td>
                           <td>{row.internalParticipants || '—'}</td>
                           <td>
-                            <div className="cm-row-actions">
+                            <div className="cm-row-actions management-table-actions">
                               <button className="cm-link-button" onClick={() => setBusinessModal({ mode: 'followup', edit: row })}>编辑</button>
-                              {row.allowedActions?.includes('DELETE') && <Popconfirm title="删除该跟进记录？" description="历史业务关联将继续保留。" onConfirm={() => void (async () => { await deleteCommunication(row.id, row.version); msg.success('跟进记录已删除'); await load(); })()}>
+                              <Popconfirm title="删除该跟进记录？" description="历史业务关联将继续保留。" onConfirm={() => void (async () => { await deleteCommunication(row.id, row.version); msg.success('跟进记录已删除'); await load(); })()}>
                                 <Button danger type="text" onClick={(e) => e.stopPropagation()}>删除</Button>
-                              </Popconfirm>}
+                              </Popconfirm>
                             </div>
                           </td>
                         </tr>
@@ -649,9 +680,9 @@ export function PartnerDetailPage() {
                           {row.content && <div className="cm-timeline-text">{row.content}</div>}
                           <div className="cm-timeline-actions">
                             <button className="cm-link-button" onClick={() => setBusinessModal({ mode: 'followup', edit: row })}>编辑</button>
-                            {row.allowedActions?.includes('DELETE') && <Popconfirm title="删除该跟进记录？" description="历史业务关联将继续保留。" onConfirm={() => void (async () => { await deleteCommunication(row.id, row.version); msg.success('跟进记录已删除'); await load(); })()}>
+                            <Popconfirm title="删除该跟进记录？" description="历史业务关联将继续保留。" onConfirm={() => void (async () => { await deleteCommunication(row.id, row.version); msg.success('跟进记录已删除'); await load(); })()}>
                               <Button danger type="text" size="small">删除</Button>
-                            </Popconfirm>}
+                            </Popconfirm>
                           </div>
                         </div>
                       </div>
@@ -663,6 +694,7 @@ export function PartnerDetailPage() {
           </div>
         ),
       },
+      /* 暂时隐藏操作记录 Tab，保留实现便于后续恢复。
       {
         key: 'audit',
         label: '操作记录',
@@ -692,6 +724,7 @@ export function PartnerDetailPage() {
           </div>
         ),
       },
+      */
     ]} /></div>
     {businessModal && <PartnerPrototypeModal mode={businessModal.mode} partner={partner} requirement={businessModal.edit instanceof Object && 'requirementCode' in businessModal.edit ? (businessModal.edit as Requirement) : undefined} communication={businessModal.edit instanceof Object && 'recordCode' in businessModal.edit ? (businessModal.edit as Communication) : undefined} open onClose={() => setBusinessModal(undefined)} onSaved={async () => { if (businessModal.mode === 'requirement') { setRequirementsLoaded(false); await ensureRequirements(); } else { setCommunicationsLoaded(false); await ensureCommunications(); } }} />}
   </div>;

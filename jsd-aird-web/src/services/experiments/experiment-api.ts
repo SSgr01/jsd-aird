@@ -93,6 +93,8 @@ export interface ExperimentModel extends Record<string, unknown> {
   purpose?: string;
   plan?: string;
   documentFormat?: 'word' | 'excel';
+  /** True only for an experiment created from the blank option. */
+  blankDocument?: boolean;
   documentSnapshot?: Record<string, unknown>;
   dynamicValues?: Record<string, unknown>;
   sourceGroups?: ExperimentSourceGroup[];
@@ -107,6 +109,7 @@ export interface ExperimentModel extends Record<string, unknown> {
 export interface ExperimentDetail {
   summary: ExperimentSummary;
   currentVersionId: string;
+  sourceFileId?: string;
   templateVersionId?: string;
   templateSnapshotHash?: string;
   templateSnapshot: Record<string, unknown>;
@@ -150,6 +153,15 @@ export async function listExperiments(params: Record<string, unknown>) {
     await httpClient.get<ApiResponse<Page<ExperimentSummary>>>('/api/v1/experiments', { params }),
   );
 }
+/** Project-detail experiment list. The project id is part of the resource path. */
+export async function listProjectExperiments(projectId: string, params: Record<string, unknown> = {}) {
+  return data(
+    await httpClient.get<ApiResponse<Page<ExperimentSummary>>>(
+      `/api/v1/projects/${projectId}/experiments`,
+      { params },
+    ),
+  );
+}
 export async function getExperiment(id: string) {
   return data(
     await httpClient.get<ApiResponse<ExperimentDetail>>(`/api/v1/experiments/${id}/edit-model`),
@@ -165,6 +177,15 @@ export async function exportExperiment(id: string) {
 export async function createExperiment(input: Record<string, unknown>) {
   return data(await httpClient.post<ApiResponse<ExperimentSummary>>('/api/v1/experiments', input));
 }
+/** Create an experiment from a project detail page. */
+export async function createProjectExperiment(projectId: string, input: Record<string, unknown>) {
+  return data(
+    await httpClient.post<ApiResponse<ExperimentSummary>>(
+      `/api/v1/projects/${projectId}/experiments`,
+      input,
+    ),
+  );
+}
 export async function copyExperiment(id: string) {
   return data(await httpClient.post<ApiResponse<ExperimentSummary>>(`/api/v1/experiments/${id}/copy`));
 }
@@ -175,6 +196,18 @@ export async function saveExperiment(id: string, input: Record<string, unknown>)
 }
 export async function deleteExperiment(id: string, revision: number) {
   return data(await httpClient.delete<ApiResponse<null>>(`/api/v1/experiments/${id}/eln-delete`, { params: { revision } }));
+}
+/** Delete an experiment through its project-scoped endpoint. */
+export async function deleteProjectExperiment(projectId: string, id: string, revision: number) {
+  return data(
+    await httpClient.delete<ApiResponse<null>>(
+      `/api/v1/projects/${projectId}/experiments/${id}`,
+      { params: { revision } },
+    ),
+  );
+}
+export async function publishExperiment(id: string, revision: number) {
+  return data(await httpClient.post<ApiResponse<ExperimentDetail>>(`/api/v1/experiments/${id}/publish`, { revision }));
 }
 export async function actExperiment(
   id: string,
@@ -249,6 +282,10 @@ export interface StagedFile {
   sha256: string;
   status: 'STAGED';
 }
+export interface ExperimentImportAccepted {
+  jobId: string;
+  status: 'PARSING';
+}
 export async function stageExperimentFile(file: File) {
   const body = new FormData();
   body.append('file', file);
@@ -273,7 +310,7 @@ export async function importExperimentFile(input: {
   visibility?: 'ALL' | 'QUALITY' | 'PROJECT';
 }) {
   return data(
-    await httpClient.post<ApiResponse<ExperimentSummary>>('/api/v1/experiment-imports', input),
+    await httpClient.post<ApiResponse<ExperimentImportAccepted>>('/api/v1/experiment-imports', input),
   );
 }
 export interface ExperimentImportJob {
@@ -281,7 +318,9 @@ export interface ExperimentImportJob {
   sourceFileId: string;
   sourceFileName: string;
   sourceFormat: string;
-  status: 'PARSING' | 'COMPLETED' | 'FAILED';
+  status: 'PARSING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+  progress?: number;
+  currentStage?: string;
   experimentId?: string;
   errorMessage?: string;
   categoryName?: string;
@@ -298,6 +337,11 @@ export interface ExperimentImportJob {
 export async function listExperimentImports() {
   return data(
     await httpClient.get<ApiResponse<ExperimentImportJob[]>>('/api/v1/experiment-imports'),
+  );
+}
+export async function retryExperimentImport(id: string) {
+  return data(
+    await httpClient.post<ApiResponse<ExperimentImportAccepted>>(`/api/v1/experiment-imports/${id}/retry`),
   );
 }
 export async function deleteExperimentImport(id: string) {

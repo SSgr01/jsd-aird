@@ -1,13 +1,11 @@
 import {
   ArrowLeftOutlined,
   CheckCircleOutlined,
-  DeleteOutlined,
   DownOutlined,
   LoadingOutlined,
   PlusOutlined,
   SaveOutlined,
   SendOutlined,
-  StopOutlined,
 } from '@ant-design/icons';
 import {
   Alert,
@@ -291,27 +289,6 @@ export function ProductionWorkspacePage() {
     });
   };
 
-  const removeOrCancel = () => {
-    if (!workspace || !orderId) return;
-    const canDelete = workspace.allowedActions?.includes('DELETE');
-    const canCancel = workspace.allowedActions?.includes('CANCEL');
-    if (!canDelete && !canCancel) return;
-    const action = canCancel ? 'CANCEL' : 'DELETE';
-    modal.confirm({
-      title: action === 'CANCEL' ? '确认取消生产单？' : '确认删除生产单？',
-      content: action === 'CANCEL' ? '取消后将保留业务记录，不能继续提交。' : '仅删除未发布且未产生引用的生产单。',
-      okText: action === 'CANCEL' ? '确认取消' : '确认删除',
-      okButtonProps: { danger: true },
-      cancelText: '返回',
-      onOk: async () => {
-        if (action === 'CANCEL') await productionOrderApi.cancel(orderId);
-        else await productionOrderApi.delete(orderId);
-        void message.success(action === 'CANCEL' ? '生产单已取消' : '生产单已删除');
-        navigate('/production-orders/list');
-      },
-    });
-  };
-
   const handleStructureChange = useCallback((operation: WorkbookStructureOperation) => {
     if (!workspace || !fieldModel) return;
     const migrated = migrateWorkspaceStructure(workspace.mapping, fieldModel, operation);
@@ -403,7 +380,7 @@ export function ProductionWorkspacePage() {
   return (
     <section className="workspace-shell production-workspace">
       <header className="workspace-header">
-        <Space>
+        <Space className="production-workspace-identity" wrap>
           <Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate('/production-orders/list')}>返回</Button>
           <span>
             <Typography.Text strong>{workspace.orderNo}</Typography.Text>
@@ -414,7 +391,7 @@ export function ProductionWorkspacePage() {
             {editable ? '填写中' : workspace.status === 'SUBMITTED' ? '已提交' : '已取消'}
           </Tag>
         </Space>
-        <Space>
+        <Space className="production-workspace-actions" wrap>
           {dirty && <Typography.Text type="warning">有未保存内容</Typography.Text>}
           <Button
             icon={<PlusOutlined />}
@@ -444,7 +421,6 @@ export function ProductionWorkspacePage() {
           </Dropdown>
           <Button icon={<SaveOutlined />} disabled={!editable || !dirty} loading={saving} onClick={() => void save()}>保存</Button>
           <Button type="primary" icon={<SendOutlined />} disabled={!editable || workspace.reconciliationRequired} onClick={submit}>提交生产单</Button>
-          {workspace.allowedActions?.includes('CANCEL') || workspace.allowedActions?.includes('DELETE') ? <Button danger icon={workspace.allowedActions.includes('CANCEL') ? <StopOutlined /> : <DeleteOutlined />} onClick={removeOrCancel}>{workspace.allowedActions.includes('CANCEL') ? '取消生产单' : '删除生产单'}</Button> : null}
         </Space>
       </header>
 

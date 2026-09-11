@@ -42,12 +42,23 @@
   color: #55708f;
 }
 .cm-filter {
-  grid-template-columns: minmax(310px, 1.7fr) repeat(4, minmax(145px, 0.8fr)) 82px;
+  display: flex;
+  flex-wrap: nowrap;
   min-height: 67px;
   padding: 14px;
   border-color: #d7e2f0;
   border-radius: 10px;
   box-shadow: 0 5px 16px rgba(42, 72, 110, 0.08);
+}
+.cm-filter > * {
+  min-width: 0;
+}
+.cm-filter > .ant-input-affix-wrapper {
+  flex: 1.7 1 0;
+  min-width: 220px;
+}
+.cm-filter > .ant-select {
+  flex: 0.8 1 0;
 }
 .cm-filter .ant-input-affix-wrapper,
 .cm-filter .ant-select-selector,
@@ -328,10 +339,15 @@
   font-size: 15px;
   color: #11233f;
   font-weight: 600;
+  text-decoration: none;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 220px;
+}
+.cm-customer-card-name:hover {
+  color: #1677ff;
+  text-decoration: underline;
 }
 .cm-customer-card-subline {
   display: flex;
@@ -381,8 +397,8 @@
 }
 
 @media (max-width: 1300px) {
-  .cm-filter {
-    grid-template-columns: minmax(260px, 1.5fr) repeat(2, minmax(140px, 0.8fr));
+  .cm-filter > .ant-input-affix-wrapper {
+    min-width: 190px;
   }
   .cm-page {
     margin: -16px;
@@ -395,7 +411,9 @@
     padding: 18px 12px;
   }
   .cm-filter {
+    display: grid;
     grid-template-columns: 1fr;
+    flex-wrap: wrap;
   }
   .cm-page-head {
     min-height: auto;
@@ -407,4 +425,396 @@
   .cm-toolbar-right {
     width: 100%;
   }
+}
+
+/* Customer list follows the experiment catalog surface and action layout. */
+.pm-unified-list-page.cm-customer-list-page {
+  min-height: auto;
+  margin: 0;
+  padding: 0;
+  background: var(--app-background);
+  color: var(--app-text);
+}
+
+.pm-unified-list-page.cm-customer-list-page .cm-customer-page-intro {
+  min-width: 0;
+  padding: 18px 20px;
+  background: var(--app-surface);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-card);
+  box-shadow: var(--app-shadow);
+}
+
+.pm-unified-list-page.cm-customer-list-page .cm-customer-page-intro > div {
+  min-width: 0;
+}
+
+.pm-unified-list-page.cm-customer-list-page .cm-customer-page-intro .ant-breadcrumb {
+  margin-bottom: 8px;
+}
+
+.pm-unified-list-page.cm-customer-list-page .cm-customer-page-intro h3 {
+  margin: 0 0 5px;
+  color: var(--app-text);
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.025em;
+  line-height: 1.35;
+}
+
+.pm-unified-list-page.cm-customer-list-page .cm-customer-page-intro p {
+  margin: 0;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-size-label);
+  line-height: 1.6;
+}
+
+.pm-unified-list-page.cm-customer-list-page .cm-filter-row {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 0;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  padding: 14px;
+  background: var(--app-surface);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-card);
+  box-shadow: var(--app-shadow);
+}
+
+.pm-unified-list-page.cm-customer-list-page .cm-filter-row > * {
+  min-width: 0;
+}
+
+.pm-unified-list-page.cm-customer-list-page .cm-filter-row > .ant-input-affix-wrapper {
+  width: 230px !important;
+  min-width: 200px;
+  flex: 1 1 230px;
+}
+
+.pm-unified-list-page.cm-customer-list-page .cm-filter-row > .ant-select {
+  width: 140px !important;
+  min-width: 125px;
+  flex: 0 1 140px;
+}
+
+.pm-unified-list-page.cm-customer-list-page .cm-filter-row > .cm-filter-reset {
+  width: auto !important;
+  min-width: 88px;
+  max-width: none;
+  flex: 0 0 auto;
+  padding: 0 14px;
+}
+
+.pm-unified-list-page.cm-customer-list-page .cm-batch-row {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--app-surface);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-card);
+  box-shadow: var(--app-shadow);
+}
+
+.pm-unified-list-page.cm-customer-list-page .cm-batch-summary {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.pm-unified-list-page.cm-customer-list-page .cm-batch-summary .cm-muted {
+  flex: 0 0 auto;
+  margin: 0;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-size-caption);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.pm-unified-list-page.cm-customer-list-page .cm-batch-actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.pm-unified-list-page.cm-customer-list-page .cm-batch-actions .ant-btn {
+  flex: 0 0 auto;
+}
+
+.pm-unified-list-page.cm-customer-list-page .cm-table-card {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  background: var(--app-surface);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-card);
+  box-shadow: var(--app-shadow);
+}
+
+.pm-unified-list-page.cm-customer-list-page .cm-table-wrap {
+  min-width: 0;
+  max-width: 100%;
+  overflow: auto;
+}
+
+.pm-unified-list-page.cm-customer-list-page .cm-table {
+  min-width: 1430px;
+  background: transparent;
+  color: var(--app-text);
+  font-size: var(--app-font-size-label);
+}
+
+.pm-unified-list-page.cm-customer-list-page .cm-table th {
+  height: auto;
+  padding: 13px 16px;
+  background: var(--app-surface-subtle);
+  border-bottom-color: var(--app-border);
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-size-caption);
+  font-weight: 650;
+}
+
+.pm-unified-list-page.cm-customer-list-page .cm-table td {
+  height: auto;
+  padding: 14px 16px;
+  border-bottom-color: var(--app-border);
+  color: var(--app-text);
+  font-size: var(--app-font-size-label);
+  line-height: 1.55;
+}
+
+.pm-unified-list-page.cm-customer-list-page .cm-table tbody tr:hover td {
+  background: color-mix(in srgb, var(--app-primary) 3%, var(--app-surface));
+}
+
+.pm-unified-list-page.cm-customer-list-page .cm-row-actions {
+  gap: 8px;
+}
+
+.pm-unified-list-page.cm-customer-list-page .cm-row-actions > a,
+.pm-unified-list-page.cm-customer-list-page .cm-row-actions .ant-btn-link {
+  color: var(--app-primary);
+  font-size: var(--app-font-size-label);
+}
+
+.pm-unified-list-page.cm-customer-list-page .cm-row-actions .ant-btn-link.ant-btn-dangerous {
+  color: var(--app-danger);
+}
+
+.pm-unified-list-page.cm-customer-list-page .cm-customer-cards {
+  padding: 16px;
+}
+
+.pm-unified-list-page.cm-customer-list-page .cm-customer-card {
+  border-color: var(--app-border);
+  border-radius: var(--app-radius-card);
+  background: var(--app-surface-elevated);
+  box-shadow: var(--app-shadow);
+}
+
+.pm-unified-list-page.cm-customer-list-page .cm-customer-card:hover {
+  border-color: color-mix(in srgb, var(--app-primary) 48%, var(--app-border));
+  box-shadow: var(--app-shadow-hover);
+}
+
+.pm-unified-list-page.cm-customer-list-page .cm-customer-card.is-selected {
+  border-color: var(--app-primary);
+  background: linear-gradient(135deg, #f7f9ff, var(--app-primary-soft));
+  box-shadow: inset 0 0 0 1px rgb(49 92 246 / 8%), var(--app-shadow);
+}
+
+.pm-unified-list-page.cm-customer-list-page .cm-customer-card-name {
+  color: var(--app-text);
+  font-size: var(--app-font-size-label);
+}
+
+.pm-unified-list-page.cm-customer-list-page .cm-customer-card-subline,
+.pm-unified-list-page.cm-customer-list-page .cm-customer-card-owner,
+.pm-unified-list-page.cm-customer-list-page .cm-customer-card-stats,
+.pm-unified-list-page.cm-customer-list-page .cm-customer-card-foot {
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-size-caption);
+}
+
+.pm-unified-list-page.cm-customer-list-page .cm-customer-card-stats {
+  background: var(--app-surface-subtle);
+}
+
+.pm-unified-list-page.cm-customer-list-page .cm-pagination {
+  padding: 14px 16px;
+  border-top-color: var(--app-border);
+  background: var(--app-surface);
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-size-caption);
+}
+
+@media (max-width: 1100px) {
+  .pm-unified-list-page.cm-customer-list-page .cm-filter-row {
+    flex-wrap: wrap;
+  }
+
+  .pm-unified-list-page.cm-customer-list-page .cm-filter-row > .ant-input-affix-wrapper,
+  .pm-unified-list-page.cm-customer-list-page .cm-filter-row > .ant-select {
+    width: calc(33.333% - 7px) !important;
+    min-width: 0;
+    flex: 1 1 180px;
+  }
+}
+
+@media (max-width: 720px) {
+  .pm-unified-list-page.cm-customer-list-page .cm-customer-page-intro {
+    padding: 16px;
+  }
+
+  .pm-unified-list-page.cm-customer-list-page .cm-customer-page-intro h3 {
+    font-size: 20px;
+  }
+
+  .pm-unified-list-page.cm-customer-list-page .cm-batch-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .pm-unified-list-page.cm-customer-list-page .cm-batch-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 560px) {
+  .pm-unified-list-page.cm-customer-list-page .cm-filter-row > .ant-input-affix-wrapper,
+  .pm-unified-list-page.cm-customer-list-page .cm-filter-row > .ant-select,
+  .pm-unified-list-page.cm-customer-list-page .cm-filter-row > .cm-filter-reset {
+    width: 100% !important;
+    min-width: 0;
+    flex-basis: 100%;
+  }
+
+  .pm-unified-list-page.cm-customer-list-page .cm-batch-actions > .ant-btn {
+    flex: 1 1 calc(50% - 5px);
+  }
+
+  .pm-unified-list-page.cm-customer-list-page .cm-batch-actions .ant-space-compact {
+    flex: 0 0 auto;
+  }
+}
+
+/* Customer detail data tables follow the customer list/table baseline. */
+.cm-partner-detail-page .cm-table-card {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-card);
+  background: var(--app-surface);
+  box-shadow: var(--app-shadow);
+}
+
+.cm-partner-detail-page .cm-table-wrap {
+  min-width: 0;
+  max-width: 100%;
+  overflow: auto;
+}
+
+.cm-partner-detail-page .cm-table {
+  min-width: 100%;
+  background: transparent;
+  color: var(--app-text);
+  font-size: var(--app-font-size-label);
+}
+
+.cm-partner-detail-page .cm-table th {
+  height: auto;
+  padding: 13px 16px;
+  background: var(--app-surface-subtle);
+  border-bottom: 1px solid var(--app-border);
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-size-caption);
+  font-weight: 650;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.cm-partner-detail-page .cm-table td {
+  height: auto;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--app-border);
+  color: var(--app-text);
+  font-size: var(--app-font-size-label);
+  line-height: 1.55;
+  vertical-align: middle;
+}
+
+.cm-partner-detail-page .cm-table tbody tr:hover td {
+  background: color-mix(in srgb, var(--app-primary) 3%, var(--app-surface));
+}
+
+.cm-partner-detail-page .cm-table a,
+.cm-partner-detail-page .cm-table .cm-link-button,
+.cm-partner-detail-page .cm-table .ant-btn-link {
+  color: var(--app-primary);
+  font-size: var(--app-font-size-label);
+}
+
+.cm-partner-detail-page .cm-table .cm-row-actions {
+  gap: 8px;
+}
+
+.cm-partner-detail-page .cm-table .cm-row-actions .ant-btn-dangerous,
+.cm-partner-detail-page .cm-table .cm-row-actions .ant-btn-dangerous:hover {
+  color: var(--app-danger);
+}
+
+.cm-partner-detail-page .cm-table .ant-tag {
+  margin-inline-end: 0;
+  font-size: var(--app-font-size-label);
+}
+
+.cm-partner-detail-page .cm-section-title h5 {
+  color: var(--app-text);
+  font-size: var(--app-font-size-label);
+}
+
+.cm-partner-detail-page .cm-section-title small {
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-size-caption);
+  font-weight: 400;
+}
+
+/* Keep customer badges in the title's inline flow so mobile layouts follow
+   the company name instead of pushing the badges into a side column. */
+.cm-partner-detail-page .cm-back-title,
+.cm-partner-detail-page .cm-detail-title {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.cm-partner-detail-page .cm-detail-title h3 {
+  display: block;
+  max-width: 100%;
+  color: var(--app-text);
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.cm-partner-detail-page .cm-detail-title h3 .cm-detail-name {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.cm-partner-detail-page .cm-detail-title h3 .pm-tag {
+  margin: 0 0 4px 8px;
+  vertical-align: middle;
 }

@@ -39,6 +39,7 @@ import {
 
 import './inventory-pages.css';
 import './inventory-control.css';
+import '@/styles/management-list.css';
 
 type ControlMode =
   | 'products'
@@ -104,6 +105,9 @@ export function InventoryControlPage({ mode }: { mode: ControlMode }) {
   const [transactions, setTransactions] = useState<InventoryTransaction[]>([]);
   const [records, setRecords] = useState<ControlRecord[]>(readRecords);
   const [saving, setSaving] = useState(false);
+  const [inventoryRole, setInventoryRole] = useState(
+    () => window.localStorage.getItem('inventory-role') || 'WAREHOUSE_ADMIN',
+  );
   const [form] = Form.useForm();
 
   const reload = useCallback(async () => {
@@ -136,9 +140,9 @@ export function InventoryControlPage({ mode }: { mode: ControlMode }) {
       businessDate: dayjs(),
       expiryDate: dayjs().add(1, 'year'),
       defaultLowStock: Number(window.localStorage.getItem('inventory-default-low-stock') || 0),
-      role: 'WAREHOUSE_ADMIN',
+      role: inventoryRole,
     });
-  }, [form, mode]);
+  }, [form, inventoryRole, mode]);
 
   const productsByScope = useMemo(
     () => ({
@@ -150,7 +154,7 @@ export function InventoryControlPage({ mode }: { mode: ControlMode }) {
   const selectedScope = (Form.useWatch('scope', form) || 'RND') as InventoryScope;
   const sourceScope = (Form.useWatch('sourceScope', form) || 'RND') as InventoryScope;
   const targetScope = (Form.useWatch('targetScope', form) || 'PRODUCTION') as InventoryScope;
-  const selectedRole = Form.useWatch('role', form) || 'WAREHOUSE_ADMIN';
+  const selectedRole = inventoryRole;
 
   useEffect(() => {
     if (!products.length) return;
@@ -172,7 +176,7 @@ export function InventoryControlPage({ mode }: { mode: ControlMode }) {
 
   const save = async () => {
     const values = await form.validateFields();
-    if (mode !== 'permissions' && mode !== 'audit' && window.localStorage.getItem('inventory-role') === 'READ_ONLY') {
+    if (mode !== 'permissions' && mode !== 'audit' && inventoryRole === 'READ_ONLY') {
       message.error('当前角色为只读用户，不能执行库存写入操作');
       return;
     }
@@ -269,7 +273,7 @@ export function InventoryControlPage({ mode }: { mode: ControlMode }) {
       return <Card title="库存参数联动" extra={<SettingOutlined />}><Form.Item name="defaultLowStock" label="全局默认低库存阈值（KG）" rules={[{ required: true, message: '请输入默认阈值' }]}><InputNumber min={0} precision={6} className="inventory-full" /></Form.Item><Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={() => void save()}>保存参数</Button></Card>;
     }
     if (mode === 'permissions') {
-      return <Card title="库存权限" extra={<SafetyCertificateOutlined />}><Form.Item name="role" label="当前测试角色"><Select onChange={(role) => window.localStorage.setItem('inventory-role', role)} options={[{ value: 'WAREHOUSE_ADMIN', label: '仓库管理员（可读写）' }, { value: 'PRODUCTION_USER', label: '生产人员（生产域读写）' }, { value: 'RND_USER', label: '研发工程师（研发域读写）' }, { value: 'READ_ONLY', label: '只读用户（仅查询）' }]} /></Form.Item><div className="inventory-permission-grid"><Tag color="green">库存查询：允许</Tag><Tag color={selectedRole === 'READ_ONLY' ? 'default' : 'green'}>新增流水：{selectedRole === 'READ_ONLY' ? '拒绝' : '允许'}</Tag><Tag color={selectedRole === 'READ_ONLY' ? 'default' : 'green'}>调拨：{selectedRole === 'READ_ONLY' ? '拒绝' : '允许'}</Tag><Tag color={selectedRole === 'READ_ONLY' ? 'default' : 'green'}>冲销：{selectedRole === 'READ_ONLY' ? '拒绝' : '允许'}</Tag></div><Alert type="info" showIcon message="只读角色在库存控制台禁用写入动作；所有操作仍按业务单号写入可追溯流水。" /></Card>;
+      return <Card title="库存权限" extra={<SafetyCertificateOutlined />}><Form.Item label="当前测试角色"><Select value={inventoryRole} onChange={(role) => { setInventoryRole(role); window.localStorage.setItem('inventory-role', role); }} options={[{ value: 'WAREHOUSE_ADMIN', label: '仓库管理员（可读写）' }, { value: 'PRODUCTION_USER', label: '生产人员（生产域读写）' }, { value: 'RND_USER', label: '研发工程师（研发域读写）' }, { value: 'READ_ONLY', label: '只读用户（仅查询）' }]} /></Form.Item><div className="inventory-permission-grid"><Tag color="green">库存查询：允许</Tag><Tag color={selectedRole === 'READ_ONLY' ? 'default' : 'green'}>新增流水：{selectedRole === 'READ_ONLY' ? '拒绝' : '允许'}</Tag><Tag color={selectedRole === 'READ_ONLY' ? 'default' : 'green'}>调拨：{selectedRole === 'READ_ONLY' ? '拒绝' : '允许'}</Tag><Tag color={selectedRole === 'READ_ONLY' ? 'default' : 'green'}>冲销：{selectedRole === 'READ_ONLY' ? '拒绝' : '允许'}</Tag></div><Alert type="info" showIcon message="只读角色在库存控制台禁用写入动作；所有操作仍按业务单号写入可追溯流水。" /></Card>;
     }
     return null;
   };
@@ -291,5 +295,5 @@ export function InventoryControlPage({ mode }: { mode: ControlMode }) {
     { title: '经办人', dataIndex: 'actorName' },
   ];
 
-  return <div className="inventory-page inventory-control-page"><div className="inventory-heading"><div><h1>{title}</h1><p>{descriptions[mode]}</p></div><Space><Button icon={<AuditOutlined />} onClick={() => setRecords(readRecords())}>刷新记录</Button><Button type="link" href="/inventory/query">返回库存查询</Button></Space></div><Tabs activeKey={mode} items={[{ key: mode, label: title }]} /><Form form={form} layout="vertical">{renderForm()}</Form>{mode === 'permissions' ? null : <><Divider orientation="left">当前数据</Divider>{mode === 'warnings' ? <Table rowKey={(row) => `${row.scope}-${row.productId}`} columns={balanceColumns} dataSource={balances} pagination={{ pageSize: 10 }} /> : mode === 'audit' ? <Table rowKey="id" columns={transactionColumns} dataSource={transactions} pagination={{ pageSize: 10 }} /> : <Table rowKey="id" columns={[{ title: '类型', dataIndex: 'kind' }, { title: '单号/标识', dataIndex: 'documentNo' }, { title: '产品', dataIndex: 'productName' }, { title: '备注', dataIndex: 'note' }, { title: '创建时间', dataIndex: 'createdAt' }]} dataSource={records.filter((record) => record.kind === title || (mode === 'batches' && record.kind === '批次管理') || (mode === 'expiry' && record.kind === '有效期与重测'))} pagination={{ pageSize: 10 }} />}</>}</div>;
+  return <div className="inventory-page inventory-control-page"><div className="inventory-heading"><div><h1>{title}</h1><p>{descriptions[mode]}</p></div><Space wrap><Button icon={<AuditOutlined />} onClick={() => setRecords(readRecords())}>刷新记录</Button><Button type="link" href="/inventory/query">返回库存查询</Button></Space></div><Tabs activeKey={mode} items={[{ key: mode, label: title }]} /><Form form={form} layout="vertical">{renderForm()}</Form>{mode === 'permissions' ? null : <><Divider orientation="left">当前数据</Divider>{mode === 'warnings' ? <Table rowKey={(row) => `${row.scope}-${row.productId}`} columns={balanceColumns} dataSource={balances} scroll={{ x: 'max-content' }} pagination={{ pageSize: 10 }} /> : mode === 'audit' ? <Table rowKey="id" columns={transactionColumns} dataSource={transactions} scroll={{ x: 'max-content' }} pagination={{ pageSize: 10 }} /> : <Table rowKey="id" columns={[{ title: '类型', dataIndex: 'kind' }, { title: '单号/标识', dataIndex: 'documentNo' }, { title: '产品', dataIndex: 'productName' }, { title: '备注', dataIndex: 'note' }, { title: '创建时间', dataIndex: 'createdAt' }]} dataSource={records.filter((record) => record.kind === title || (mode === 'batches' && record.kind === '批次管理') || (mode === 'expiry' && record.kind === '有效期与重测'))} scroll={{ x: 'max-content' }} pagination={{ pageSize: 10 }} />}</>}</div>;
 }

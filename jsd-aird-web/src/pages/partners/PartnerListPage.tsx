@@ -11,6 +11,7 @@ import { PartnerPrototypeModal } from './PartnerPrototypeModals';
 import './partner-pages.css';
 import './partner-0730.css';
 import './partner-prototype.css';
+import '@/styles/management-list.css';
 
 const customerLevels = ['未分类', '重点客户', '普通客户', '潜在客户'];
 const cooperationStatuses = ['潜在客户', '需求沟通', '合作中', '暂停', '已结束'];
@@ -19,13 +20,14 @@ const levelColorMap: Record<string, string> = {
   普通客户: 'blue',
   潜在客户: 'default',
 };
-const statusColorMap: Record<string, string> = {
-  合作中: 'green',
-  需求沟通: 'orange',
-  暂停: 'volcano',
-  已结束: 'default',
-  潜在客户: 'default',
+const statusTagClassMap: Record<string, string> = {
+  合作中: 'status-in_progress',
+  需求沟通: 'status-pending',
+  暂停: 'status-paused',
+  已结束: 'status-completed',
+  潜在客户: 'status-not_started',
 };
+const statusTagClass = (value?: string) => `pm-tag ${statusTagClassMap[value ?? ''] ?? 'status-not_started'}`;
 const DEFAULT_PAGE_SIZE = 10;
 
 type PartnerFilterOptions = {
@@ -51,6 +53,7 @@ export function PartnerListPage() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [copying, setCopying] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const copyingRef = useRef(false);
   const [filterOptions, setFilterOptions] = useState<PartnerFilterOptions>({
     industries: [],
@@ -64,7 +67,7 @@ export function PartnerListPage() {
   }>();
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [selectedPartnersById, setSelectedPartnersById] = useState<Record<string, BusinessPartner>>({});
-  const [viewMode, setViewMode] = useState<'table' | 'card'>('card');
+  const [viewMode, setViewMode] = useState<'table' | 'card'>('table');
   const { message: msg } = App.useApp();
   const query = useMemo(() => ({
     keyword: keyword || undefined,
@@ -162,22 +165,16 @@ export function PartnerListPage() {
     try {
       await Promise.all(
         targets
-          .filter((x) => x.allowedActions?.includes('DISABLE'))
+          .filter((x) => x.status === 'ACTIVE')
           .map((x) => changePartnerStatus(x.id, 'INACTIVE', x.version)),
       );
-      msg.success('停用成功');
+      msg.success('删除成功');
       setSelectedIds([]);
       setSelectedPartnersById({});
       await load();
     } catch (error) {
-      msg.error(errorMessage(error, '停用失败'));
+      msg.error(errorMessage(error, '删除失败'));
     }
-  };
-  const changeLifecycle = async (target: BusinessPartner) => {
-    const restoring = target.allowedActions?.includes('RESTORE');
-    if (!restoring && !target.allowedActions?.includes('DISABLE')) return;
-    try { await changePartnerStatus(target.id, restoring ? 'ACTIVE' : 'INACTIVE', target.version); msg.success(restoring ? '客户已恢复' : '客户已停用'); await load(); }
-    catch (error) { msg.error(errorMessage(error, restoring ? '恢复失败' : '停用失败')); }
   };
   const selectedPartners = selectedIds
     .map((id) => selectedPartnersById[id])
@@ -218,40 +215,60 @@ export function PartnerListPage() {
     }
   };
   const batchDeactivate = async () => {
-    const targets = selectedPartners.filter((x) => x.allowedActions?.includes('DISABLE'));
+    const targets = selectedPartners.filter((x) => x.status === 'ACTIVE');
     if (!targets.length) {
-      msg.warning('没有可停用的客户');
+      msg.warning('没有可删除的客户');
       return;
     }
     await deactivate(targets);
   };
-  const exportRows = () => {
-    if (!selectedPartners.length) {
-      msg.warning('请先选择要导出的客户');
-      return;
+  const exportRows = async () => {
+    setExporting(true);
+    try {
+      let exportPartners = selectedPartners;
+      if (!exportPartners.length) {
+        const pageSizeForExport = 200;
+        const firstPage = await getPartners({ ...query, page: 1, size: pageSizeForExport });
+        const pageCount = Math.ceil(firstPage.total / pageSizeForExport);
+        const remainingPages = await Promise.all(
+          Array.from({ length: Math.max(0, pageCount - 1) }, (_, index) => getPartners({
+            ...query,
+            page: index + 2,
+            size: pageSizeForExport,
+          })),
+        );
+        exportPartners = [firstPage, ...remainingPages]
+          .flatMap((result) => result.items)
+          .slice(0, firstPage.total);
+      }
+      const data = exportPartners.map((x) => ({
+        客户编号: x.partnerCode,
+        客户名称: x.name,
+        所属行业: x.industry || '',
+        客户等级: x.customerLevel || '',
+        负责人: (x.ownerNames ?? []).join('、'),
+        合作状态: x.cooperationStatus || '',
+        客户需求: x.requirementCount ?? 0,
+        关联项目: x.projectCount ?? 0,
+        最近跟进: x.latestFollowUpAt
+          ? dayjs(x.latestFollowUpAt).format('YYYY-MM-DD HH:mm')
+          : '',
+      }));
+      const ws = XLSX.utils.json_to_sheet(data);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, '客户列表');
+      XLSX.writeFile(wb, `客户列表_${selectedPartners.length ? '选中_' : ''}${dayjs().format('YYYYMMDD_HHmmss')}.xlsx`);
+      msg.success(`已导出 ${exportPartners.length} 个客户`);
+    } catch (error) {
+      msg.error(errorMessage(error, '客户列表导出失败'));
+    } finally {
+      setExporting(false);
     }
-    const data = selectedPartners.map((x) => ({
-      客户编号: x.partnerCode,
-      客户名称: x.name,
-      所属行业: x.industry || '',
-      客户等级: x.customerLevel || '',
-      负责人: (x.ownerNames ?? []).join('、'),
-      合作状态: x.cooperationStatus || '',
-      客户需求: x.requirementCount ?? 0,
-      关联项目: x.projectCount ?? 0,
-      最近跟进: x.latestFollowUpAt
-        ? dayjs(x.latestFollowUpAt).format('YYYY-MM-DD HH:mm')
-        : '',
-    }));
-    const ws = XLSX.utils.json_to_sheet(data);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, '客户列表');
-    XLSX.writeFile(wb, `客户列表_${dayjs().format('YYYYMMDD_HHmmss')}.xlsx`);
   };
 
   return (
-    <div className="cm-page">
-      <div className="cm-page-head">
+    <div className="cm-page pm-unified-list-page cm-customer-list-page">
+      <div className="cm-page-head cm-customer-page-intro">
         <div>
           <Breadcrumb items={[{ title: '客户管理' }, { title: '客户列表' }]} />
           <h3>客户列表</h3>
@@ -259,59 +276,7 @@ export function PartnerListPage() {
         </div>
       </div>
 
-      <div className="cm-toolbar">
-        <div className="cm-toolbar-left">
-          <span className="cm-muted">已选 {selectedIds.length} 项</span>
-          {selectedIds.length > 0 && (
-            <Button type="link" size="small" onClick={() => setSelectedIds([])}>
-              清除已选
-            </Button>
-          )}
-        </div>
-        <Space className="cm-toolbar-right" size={8}>
-          <Button icon={<DownloadOutlined />} onClick={exportRows} disabled={!selectedIds.length}>
-            导出
-          </Button>
-          <Button icon={<CopyOutlined />} onClick={() => void copySelected()} disabled={!selectedIds.length} loading={copying}>
-            复制
-          </Button>
-          <Popconfirm
-            title={`批量删除 ${selectedIds.length} 个客户？`}
-            description="历史关联数据不会被删除。"
-            disabled={selectedIds.length === 0}
-            onConfirm={() => void batchDeactivate()}
-          >
-            <Button danger disabled={selectedIds.length === 0}>
-              批量删除
-            </Button>
-          </Popconfirm>
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={() => setModal({ mode: 'customer' })}
-          >
-            新建客户
-          </Button>
-          <Space.Compact>
-            <Tooltip title="卡片视图">
-              <Button
-                className={viewMode === 'card' ? 'cm-view-btn active' : 'cm-view-btn'}
-                icon={<AppstoreOutlined />}
-                onClick={() => setViewMode('card')}
-              />
-            </Tooltip>
-            <Tooltip title="表格视图">
-              <Button
-                className={viewMode === 'table' ? 'cm-view-btn active' : 'cm-view-btn'}
-                icon={<UnorderedListOutlined />}
-                onClick={() => setViewMode('table')}
-              />
-            </Tooltip>
-          </Space.Compact>
-        </Space>
-      </div>
-
-      <div className="cm-filter">
+      <div className="cm-filter cm-filter-row">
         <Input
           prefix={<SearchOutlined />}
           placeholder="搜索公司名称、简称、负责人"
@@ -368,6 +333,58 @@ export function PartnerListPage() {
           重置
         </Button>
       </div>
+
+      <div className="cm-batch-row">
+        <div className="cm-batch-summary">
+          <span className="cm-muted">已选 {selectedIds.length} 项</span>
+          {selectedIds.length > 0 && (
+            <Button type="link" size="small" onClick={() => setSelectedIds([])}>
+              清除已选
+            </Button>
+          )}
+        </div>
+        <div className="cm-batch-actions">
+          <Button icon={<DownloadOutlined />} onClick={() => void exportRows()} loading={exporting}>
+            导出
+          </Button>
+          <Button icon={<CopyOutlined />} onClick={() => void copySelected()} disabled={!selectedIds.length} loading={copying}>
+            复制
+          </Button>
+          <Popconfirm
+            title={`批量删除 ${selectedIds.length} 个客户？`}
+            description="历史关联数据不会被删除。"
+            disabled={selectedIds.length === 0}
+            onConfirm={() => void batchDeactivate()}
+          >
+            <Button danger disabled={selectedIds.length === 0}>
+              删除
+            </Button>
+          </Popconfirm>
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => setModal({ mode: 'customer' })}
+          >
+            新建客户
+          </Button>
+          <Space.Compact>
+            <Tooltip title="卡片视图">
+              <Button
+                className={viewMode === 'card' ? 'cm-view-btn active' : 'cm-view-btn'}
+                icon={<AppstoreOutlined />}
+                onClick={() => setViewMode('card')}
+              />
+            </Tooltip>
+            <Tooltip title="表格视图">
+              <Button
+                className={viewMode === 'table' ? 'cm-view-btn active' : 'cm-view-btn'}
+                icon={<UnorderedListOutlined />}
+                onClick={() => setViewMode('table')}
+              />
+            </Tooltip>
+            </Space.Compact>
+          </div>
+        </div>
       <div className="cm-table-card" aria-busy={loading}>
         {viewMode === 'table' ? (
           <div className="cm-table-wrap">
@@ -404,7 +421,7 @@ export function PartnerListPage() {
                         <Checkbox
                           checked={selectedIds.includes(x.id)}
                           onChange={(e) => toggleOne(x.id, e.target.checked)}
-                          disabled={x.allowedActions?.includes('RESTORE')}
+                          disabled={x.status === 'INACTIVE'}
                         />
                       </td>
                       <td>{x.partnerCode}</td>
@@ -419,14 +436,23 @@ export function PartnerListPage() {
                       <td>
                         {owners.length > 0 ? owners.join('、') : '—'}
                       </td>
-                      <td>{x.cooperationStatus ? <Tag color={statusColorMap[x.cooperationStatus] ?? 'default'}>{x.cooperationStatus}</Tag> : '—'}</td>
+                      <td>{x.cooperationStatus ? <span className={statusTagClass(x.cooperationStatus)}>{x.cooperationStatus}</span> : '—'}</td>
                       <td>{x.requirementCount ?? 0} 条</td>
                       <td>{x.projectCount ?? 0} 个</td>
                       <td>{x.latestFollowUpAt ? dayjs(x.latestFollowUpAt).format('YYYY-MM-DD HH:mm') : '—'}</td>
                       <td>
-                        <div className="cm-row-actions">
+                        <div className="cm-row-actions management-table-actions">
                           <Link to={`/partners/${x.id}`}>查看</Link>
-                          {x.allowedActions?.includes('DISABLE') || x.allowedActions?.includes('RESTORE') ? <Popconfirm title={x.allowedActions?.includes('RESTORE') ? '恢复该公司？' : '停用该公司？'} description="历史关联数据不会被删除。" onConfirm={() => void changeLifecycle(x)}><Button danger={x.allowedActions?.includes('DISABLE')} type="link" size="small">{x.allowedActions?.includes('RESTORE') ? '恢复' : '停用'}</Button></Popconfirm> : null}
+                          <Popconfirm
+                            title="删除该公司？"
+                            description="历史关联数据不会被删除。"
+                            disabled={x.status === 'INACTIVE'}
+                            onConfirm={() => void deactivate([x])}
+                          >
+                            <Button danger type="link" size="small" disabled={x.status === 'INACTIVE'}>
+                              删除
+                            </Button>
+                          </Popconfirm>
                         </div>
                       </td>
                     </tr>
@@ -453,25 +479,24 @@ export function PartnerListPage() {
                   ? x.ownerNames
                   : [x.contacts[0]?.name].filter(Boolean) as string[];
                 const levelColor = levelColorMap[x.customerLevel ?? ''] ?? 'default';
-                const statusColor = statusColorMap[x.cooperationStatus ?? ''] ?? 'default';
                 return (
                   <div className={`cm-customer-card ${selectedIds.includes(x.id) ? 'is-selected' : ''}`} key={x.id}>
                     <div className="cm-customer-card-check">
                       <Checkbox
                         checked={selectedIds.includes(x.id)}
                         onChange={(e) => toggleOne(x.id, e.target.checked)}
-                        disabled={x.allowedActions?.includes('RESTORE')}
+                        disabled={x.status === 'INACTIVE'}
                       />
                     </div>
                     <div className="cm-customer-card-head">
                       <div className="cm-customer-card-titleline">
-                        <strong className="cm-customer-card-name">{x.name}</strong>
+                        <Link className="cm-customer-card-name" to={`/partners/${x.id}`} title={x.name}>{x.name}</Link>
                         <div className="cm-customer-card-tags">
                           {x.customerLevel && (
                             <Tag color={levelColor}>{x.customerLevel}</Tag>
                           )}
                           {x.cooperationStatus && (
-                            <Tag color={statusColor}>{x.cooperationStatus}</Tag>
+                            <span className={statusTagClass(x.cooperationStatus)}>{x.cooperationStatus}</span>
                           )}
                         </div>
                       </div>
@@ -496,7 +521,16 @@ export function PartnerListPage() {
                       </span>
                       <Space size={8}>
                         <Link className="cm-link-button" to={`/partners/${x.id}`}>查看</Link>
-                        {x.allowedActions?.includes('DISABLE') || x.allowedActions?.includes('RESTORE') ? <Popconfirm title={x.allowedActions?.includes('RESTORE') ? '恢复该公司？' : '停用该公司？'} description="历史关联数据不会被删除。" onConfirm={() => void changeLifecycle(x)}><Button danger={x.allowedActions?.includes('DISABLE')} type="link" size="small">{x.allowedActions?.includes('RESTORE') ? '恢复' : '停用'}</Button></Popconfirm> : null}
+                        <Popconfirm
+                          title="删除该公司？"
+                          description="历史关联数据不会被删除。"
+                          disabled={x.status === 'INACTIVE'}
+                          onConfirm={() => void deactivate([x])}
+                        >
+                          <Button danger type="link" size="small" disabled={x.status === 'INACTIVE'}>
+                            删除
+                          </Button>
+                        </Popconfirm>
                       </Space>
                     </div>
                   </div>

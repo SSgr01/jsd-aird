@@ -14,13 +14,14 @@ import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.office.SnapshotWorkbookExporter;
 import com.jsd.aird.tpl.api.TemplateDataImportFacade;
+import com.jsd.aird.tpl.api.ProjectTemplateFacade;
 import com.jsd.aird.tpl.application.port.TabularStructureParser;
 import com.jsd.aird.tpl.application.port.TemplateRepository;
 import com.jsd.aird.tpl.domain.TemplateFormat;
 import org.springframework.stereotype.Service;
 
 @Service
-public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade {
+public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade, ProjectTemplateFacade {
 
     private final TemplateRepository repository;
     private final FileObjectRepository files;
@@ -79,6 +80,27 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade {
                 item.category(), item.versionNo(), item.format().name(), version, usage, ready,
                 recordMode.isBlank() ? null : recordMode, List.copyOf(identityTypes),
                 experimentImport == null ? 0 : experimentImport.path("identities").size());
+    }
+
+    @Override
+    public List<ProjectTemplateOption> listPublishedForProject(UUID organizationId) {
+        // Reuse the same published-template query as the data-center adapter;
+        // project detail only changes the public entry point and permission
+        // boundary, not the template selection rules.
+        return listPublished(organizationId).stream()
+                .map(item -> new ProjectTemplateOption(
+                        item.templateId(), item.versionId(), item.templateCode(), item.name(),
+                        item.category(), item.versionNo(), item.format()))
+                .toList();
+    }
+
+    @Override
+    public ProjectTemplateEditModel getPublishedEditModel(UUID organizationId, UUID versionId) {
+        var workspace = repository.findPublishedDataTemplate(organizationId, versionId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "项目模板不存在或未发布"));
+        return new ProjectTemplateEditModel(
+                workspace.templateId(), workspace.versionId(), workspace.templateCode(), workspace.name(),
+                workspace.format().name(), readSnapshot(organizationId, workspace), workspace.snapshotHash());
     }
 
     @Override

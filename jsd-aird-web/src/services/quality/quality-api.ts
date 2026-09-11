@@ -2,7 +2,7 @@ import { httpClient } from '@/services/http/client';
 import type { ApiResponse } from '@/types/api';
 
 export type QualityTypeId = 'standard' | 'record' | 'coa' | 'defect' | 'manual' | 'msds' | 'label';
-export type QualityUploadStatus = 'UPLOADED' | 'PARSING' | 'DRAFT_CREATED' | 'FAILED';
+export type QualityUploadStatus = 'UPLOADED' | 'QUEUED' | 'PARSING' | 'DRAFT_CREATED' | 'FAILED';
 export type QualityVisibility = 'ALL' | 'RND' | 'QUALITY' | 'PROJECT';
 export interface QualityField {
   key: string;
@@ -33,12 +33,15 @@ export interface QualityRecord {
   categoryId: string;
   categoryName: string;
   businessNo: string;
+  displayName?: string;
   data: Record<string, unknown>;
   sourceFileId?: string;
   sourceFileName?: string;
   projectId?: string;
   projectName?: string;
+  stageId?: string;
   stageName?: string;
+  taskId?: string;
   taskName?: string;
   visibility?: QualityVisibility;
   workbookSnapshot?: Record<string, unknown>;
@@ -69,12 +72,15 @@ export interface QualityUpload {
   contentType: string;
   size: number;
   status: QualityUploadStatus;
-  generatedRecordId: string;
+  generatedRecordId?: string;
   projectId?: string;
   projectName?: string;
+  stageId?: string;
   stageName?: string;
+  taskId?: string;
   taskName?: string;
   visibility: QualityVisibility;
+  errorMessage?: string;
   createdAt: string;
   allowedActions?: string[];
 }
@@ -138,6 +144,22 @@ export const qualityApi = {
     ),
   record: async (id: string) =>
     data(await httpClient.get<ApiResponse<QualityRecord>>(`/api/v1/quality/records/${id}`)),
+  renameRecord: async (id: string, input: {
+    revision: number;
+    name: string;
+    projectId?: string;
+    projectName?: string;
+    stageId?: string;
+    stageName?: string;
+    taskId?: string;
+    taskName?: string;
+  }) =>
+    data(
+      await httpClient.put<ApiResponse<QualityRecord>>(
+        `/api/v1/quality/records/${id}/rename`,
+        input,
+      ),
+    ),
   exportRecord: async (id: string) => {
     const response = await httpClient.get<Blob>(`/api/v1/quality/records/${id}/export`, {
       responseType: 'blob',
@@ -166,6 +188,12 @@ export const qualityApi = {
       businessNo: string;
       data: Record<string, unknown>;
       workbookSnapshot?: Record<string, unknown>;
+      projectId?: string;
+      projectName?: string;
+      stageId?: string;
+      stageName?: string;
+      taskId?: string;
+      taskName?: string;
       lockVersion: number;
     }>;
     deleteIds: string[];
@@ -183,4 +211,6 @@ export const qualityApi = {
   createUpload: async (input: QualityUploadInput) =>
     data(await httpClient.post<ApiResponse<QualityUpload>>('/api/v1/quality/uploads', input)),
   deleteUpload: async (id: string) => httpClient.delete(`/api/v1/quality/uploads/${id}`),
+  retryUpload: async (id: string) =>
+    data(await httpClient.post<ApiResponse<QualityUpload>>(`/api/v1/quality/uploads/${id}/retry`)),
 };

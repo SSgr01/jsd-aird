@@ -11,6 +11,7 @@ import {
   type ProjectTask,
 } from '@/services/project/project-api';
 import type { ProjectRelationTarget } from '@/services/project/project-resource-api';
+import './project-relation-picker.css';
 
 interface Props {
   value: ProjectRelationTarget[];
@@ -70,6 +71,8 @@ export function ProjectRelationPicker({
       <Select
         showSearch
         optionFilterProp="label"
+        popupMatchSelectWidth={false}
+        classNames={{ popup: { root: 'project-relation-picker-dropdown' } }}
         placeholder="选择项目"
         value={item.projectId || undefined}
         disabled={disabled}
@@ -90,6 +93,8 @@ export function ProjectRelationPicker({
       />
       <Select
         allowClear
+        popupMatchSelectWidth={false}
+        classNames={{ popup: { root: 'project-relation-picker-dropdown' } }}
         placeholder="阶段（可选）"
         value={item.stageId}
         disabled={disabled || !item.projectId}
@@ -108,6 +113,8 @@ export function ProjectRelationPicker({
       />
       <Select
         allowClear
+        popupMatchSelectWidth={false}
+        classNames={{ popup: { root: 'project-relation-picker-dropdown' } }}
         placeholder="任务（可选）"
         value={item.taskId}
         disabled={disabled || !item.stageId}

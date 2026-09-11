@@ -29,8 +29,9 @@ public class ExperimentController {
     @GetMapping("/experiments/{id}/edit-model") public ApiResponse<?> edit(@PathVariable UUID id){return ok(service.detail(id));}
     @GetMapping("/experiments/{id}/export") public ResponseEntity<byte[]> export(@PathVariable UUID id){return download(exportService.export(id));}
     @PostMapping("/experiments/{id}/draft") public ApiResponse<?> draft(@PathVariable UUID id,@Valid @RequestBody DraftRequest r){return ok(service.save(id,r.revision,new ExperimentService.DraftCommand(r.experimentNo,r.title,r.categoryId,r.categoryName,r.projectId,r.stageId,r.taskId,r.ownerName,r.experimentDate,r.templateVersionId,r.templateSnapshotHash,r.templateSnapshot,r.editModel)));}
-    /** ELN soft-delete endpoint. The legacy project experiment controller owns DELETE /experiments/{id}. */
+    /** ELN soft-delete endpoint. Project-scoped callers use ProjectExperimentController. */
     @DeleteMapping("/experiments/{id}/eln-delete") public ApiResponse<?> delete(@PathVariable UUID id,@RequestParam long revision){service.delete(id,revision);return ok(null);}
+    @PostMapping("/experiments/{id}/publish") public ApiResponse<?> publish(@PathVariable UUID id,@Valid @RequestBody ActionRequest r){return ok(service.publish(id,r.revision));}
     @PostMapping("/experiments/{id}/start") public ApiResponse<?> start(@PathVariable UUID id,@Valid @RequestBody ActionRequest r){return ok(service.transition(id,r.revision,ExperimentStatus.IN_PROGRESS,r.comment));}
     @PostMapping("/experiments/{id}/submit-review") public ApiResponse<?> submit(@PathVariable UUID id,@Valid @RequestBody ActionRequest r){return ok(service.transition(id,r.revision,ExperimentStatus.PENDING_REVIEW,r.comment));}
     @PostMapping("/experiments/{id}/approve") public ApiResponse<?> approve(@PathVariable UUID id,@Valid @RequestBody ActionRequest r){return ok(service.transition(id,r.revision,ExperimentStatus.COMPLETED,r.comment));}

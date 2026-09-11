@@ -47,6 +47,8 @@ describe('DataViewPage source-file list', () => {
     expect(await screen.findByText('检测报告.xlsx')).toBeInTheDocument();
     expect(screen.getAllByText('检测标准').length).toBeGreaterThan(0);
     expect(screen.getByText('检测模板 · test · V1')).toBeInTheDocument();
+    expect(screen.getByText('解析进度', { selector: 'th' })).toBeInTheDocument();
+    expect(screen.getByText('100%')).toBeInTheDocument();
     expect(screen.queryByText('工作表', { selector: 'th' })).not.toBeInTheDocument();
     expect(screen.queryByText('识别记录', { selector: 'th' })).not.toBeInTheDocument();
     expect(screen.queryByText('字段值', { selector: 'th' })).not.toBeInTheDocument();

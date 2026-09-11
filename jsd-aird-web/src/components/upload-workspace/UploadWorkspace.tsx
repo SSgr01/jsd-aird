@@ -37,6 +37,7 @@ export interface UploadWorkspaceRecord {
   detail?: ReactNode;
   status?: { label: string; color?: string };
   progress?: number;
+  progressLabel?: ReactNode;
   actions?: ReactNode;
 }
 
@@ -194,6 +195,13 @@ export function UploadWorkspace({
                 <span className="upload-workspace-file-main">
                   <Typography.Text ellipsis={{ tooltip: file.name }}>{file.name}</Typography.Text>
                   <Typography.Text type="secondary">{formatSize(file.size)}</Typography.Text>
+                  {file.percent !== undefined && ['uploading', 'done', 'error'].includes(file.status || '') ? <>
+                    <div className="upload-workspace-progress-label">
+                      <Typography.Text type="secondary">上传进度</Typography.Text>
+                      <Typography.Text type="secondary">{Math.round(file.percent)}%</Typography.Text>
+                    </div>
+                    <div className="upload-workspace-progress"><span style={{ width: `${Math.min(100, Math.max(0, file.percent))}%` }} /></div>
+                  </> : null}
                 </span>
                 <Button
                   type="text"
@@ -252,7 +260,13 @@ export function UploadWorkspace({
                     <Typography.Text strong ellipsis={{ tooltip: record.name }}>{record.name}</Typography.Text>
                     {record.meta && <Typography.Text type="secondary">{record.meta}</Typography.Text>}
                     {record.detail && <Typography.Text type="secondary">{record.detail}</Typography.Text>}
-                    {record.progress !== undefined && <div className="upload-workspace-progress"><span style={{ width: `${Math.min(100, Math.max(0, record.progress))}%` }} /></div>}
+                    {record.progress !== undefined && <>
+                      {record.progressLabel && <div className="upload-workspace-progress-label">
+                        <Typography.Text type="secondary">{record.progressLabel}</Typography.Text>
+                        <Typography.Text type="secondary">{Math.round(record.progress)}%</Typography.Text>
+                      </div>}
+                      <div className="upload-workspace-progress"><span style={{ width: `${Math.min(100, Math.max(0, record.progress))}%` }} /></div>
+                    </>}
                   </div>
                   {record.status && <Tag color={record.status.color}>{record.status.label}</Tag>}
                 </div>

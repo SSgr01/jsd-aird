@@ -11,7 +11,7 @@ describe('UploadWorkspace', () => {
     const onFilterChange = vi.fn();
     const onSearchChange = vi.fn();
     const onSubmit = vi.fn();
-    const file: UploadFile = { uid: 'file-1', name: '原料导入.xlsx', size: 2048, status: 'done' };
+    const file: UploadFile = { uid: 'file-1', name: '原料导入.xlsx', size: 2048, status: 'uploading', percent: 42 };
 
     render(
       <UploadWorkspace
@@ -41,6 +41,8 @@ describe('UploadWorkspace', () => {
       .toHaveTextContent('文件预览区 (1)');
     expect(document.querySelector('.upload-workspace-right-heading .upload-workspace-section-title'))
       .toHaveTextContent('已上传数据 (1)');
+    expect(screen.getByText('上传进度')).toBeInTheDocument();
+    expect(screen.getByText('42%')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '移除 原料导入.xlsx' }));
     fireEvent.click(screen.getByRole('button', { name: /清\s*空/ }));

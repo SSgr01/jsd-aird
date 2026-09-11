@@ -166,6 +166,7 @@ export const routeConfig: RouteObject[] = [
       { path: 'experiments/:id', element: <ExperimentWorkspacePage /> },
       { path: 'research-test', element: <Navigate to="/research-test/reports" replace /> },
       { path: 'research-test/upload', element: <PagePermissionGate permission="research-test.report.create"><ResearchTestUploadPage /></PagePermissionGate> },
+      { path: 'research-test/standard-upload', element: <PagePermissionGate permission="research-test.standard.create"><ResearchTestUploadPage type="STANDARD" /></PagePermissionGate> },
       { path: 'research-test/reports', element: <PagePermissionGate permission="research-test.report.view"><ResearchTestListPage type="REPORT" /></PagePermissionGate> },
       { path: 'research-test/reports/:id', element: <PagePermissionGate permission="research-test.report.view"><ResearchTestWorkspacePage type="REPORT" /></PagePermissionGate> },
       { path: 'research-test/standards', element: <PagePermissionGate permission="research-test.standard.view"><ResearchTestListPage type="STANDARD" /></PagePermissionGate> },

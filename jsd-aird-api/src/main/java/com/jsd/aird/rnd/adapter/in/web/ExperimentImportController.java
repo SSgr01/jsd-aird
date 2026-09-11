@@ -40,6 +40,11 @@ public class ExperimentImportController {
         return ResponseFactory.success(service.list(), RequestIdHolder.currentOrUnknown());
     }
 
+    @PostMapping("/{id}/retry")
+    public ApiResponse<?> retry(@PathVariable UUID id) {
+        return ResponseFactory.success(service.retry(id), RequestIdHolder.currentOrUnknown());
+    }
+
     @DeleteMapping("/{id}")
     public ApiResponse<?> delete(@PathVariable UUID id) {
         service.delete(id);

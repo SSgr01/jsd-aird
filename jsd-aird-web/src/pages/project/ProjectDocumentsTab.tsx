@@ -27,14 +27,14 @@ import { httpClient } from '@/services/http/client';
 import type { ApiResponse } from '@/types/api';
 import { projectDocumentApi } from '@/services/project/project-document-api';
 import { downloadBlob } from '@/services/files/file-api';
-import { templateApi } from '@/services/templates/template-api';
+import { projectTemplateApi, type ProjectTemplateOption } from '@/services/project/project-template-api';
 import TemplateVersionPreview from '@/features/template-workspace/TemplateVersionPreview';
-import type { TemplateListItem } from '@/features/template-workspace/types';
 import type {
   CreateProjectDocumentInput,
   ProjectDocumentFormat,
   ProjectDocumentSummary,
 } from '@/services/project/project-document-api';
+import '@/styles/management-list.css';
 
 type CreateMode = 'TEMPLATE' | 'BLANK' | 'IMPORT';
 
@@ -181,9 +181,9 @@ export default function ProjectDocumentsTab({
     {
       title: '操作',
       key: 'action',
-      width: 180,
+      width: 150,
       render: (_, doc) => (
-        <Space size={0}>
+        <Space className="management-table-actions" size={0}>
           <Button
             size="small"
             type="link"
@@ -199,7 +199,14 @@ export default function ProjectDocumentsTab({
           >
             下载
           </Button>
-          {doc.allowedActions?.includes('DELETE') ? <Button size="small" type="link" danger onClick={() => removeDocument(doc)}>删除</Button> : null}
+          <Button
+            size="small"
+            type="link"
+            danger
+            onClick={() => removeDocument(doc)}
+          >
+            删除
+          </Button>
         </Space>
       ),
     },
@@ -257,6 +264,7 @@ export default function ProjectDocumentsTab({
             pagination={false}
             dataSource={documents}
             columns={columns}
+            scroll={{ x: 1100 }}
             onRow={(doc) => ({
               style: { cursor: 'pointer' },
               onDoubleClick: () => navigate(`/projects/${projectId}/documents/${doc.id}`),
@@ -290,7 +298,7 @@ interface NewDocumentModalProps {
 function NewDocumentModal({ open, projectLabel, projectId, onCancel, onCreate, onImported }: NewDocumentModalProps) {
   const [mode, setMode] = useState<CreateMode>('TEMPLATE');
   const [form] = Form.useForm();
-  const [templates, setTemplates] = useState<TemplateListItem[]>([]);
+  const [templates, setTemplates] = useState<ProjectTemplateOption[]>([]);
   const [loadingTpl, setLoadingTpl] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [file, setFile] = useState<File | null>(null);
@@ -311,10 +319,10 @@ function NewDocumentModal({ open, projectLabel, projectId, onCancel, onCreate, o
     // 切到模板模式时从模板中心接口读取已发布的文档模板（DOCX / XLSX）
     if (mode === 'TEMPLATE') {
       setLoadingTpl(true);
-      templateApi
-        .list()
-        .then((res) => {
-          const filtered = res.items.filter(
+      projectTemplateApi
+        .list(projectId)
+        .then((items) => {
+          const filtered = items.filter(
             (t) => t.format === 'DOCX' || t.format === 'XLSX',
           );
           setTemplates(filtered);

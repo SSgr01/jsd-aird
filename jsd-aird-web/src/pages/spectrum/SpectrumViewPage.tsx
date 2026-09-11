@@ -81,7 +81,7 @@ export function SpectrumViewPage() {
     });
   };
 
-  return <div className="business-page">
+  return <div className="business-page spectrum-view-page">
     <div className="page-heading">
       <div><Typography.Title level={2}>图谱查看</Typography.Title><Typography.Text type="secondary">按 IR、UV、HPLC/GPC、GC、纳米粒径和力学等分类查看，分类可继续扩展。</Typography.Text></div>
       <Button type="primary" icon={<UploadOutlined />} onClick={() => navigate('/spectrum/upload')}>上传图谱</Button>
@@ -94,13 +94,13 @@ export function SpectrumViewPage() {
     <CatalogListPanel title={cards.find((item) => item.id === categoryId)?.name || '图谱'} count={page.total}
       filters={<Space wrap><Input.Search allowClear placeholder="搜索图谱名称、样品或批号" value={keyword} onChange={(event) => { setKeyword(event.target.value); setPage((value) => ({ ...value, current: 1 })); }} onSearch={() => void load()} /><Select allowClear placeholder="全部状态" value={status} onChange={(value) => { setStatus(value); setPage((value) => ({ ...value, current: 1 })); }} options={[{ value: 'READY', label: '可分析' }, { value: 'DELETED', label: '已删除' }]} /><Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button></Space>}
       loading={loading}>
-      <Table<SpectrumChart> rowKey="id" dataSource={items} pagination={{ current: page.current, pageSize: page.pageSize, total: page.total, showSizeChanger: true, onChange: (current, pageSize) => setPage({ current, pageSize, total: page.total }) }} locale={{ emptyText: <Empty description="暂无图谱" /> }} columns={[
-        { title: '图谱', dataIndex: 'title', render: (value: string, record) => <Space><LineChartOutlined /><span><Typography.Text strong>{value}</Typography.Text><br /><Typography.Text type="secondary">{record.originalName}</Typography.Text></span></Space> },
-        { title: '分类', dataIndex: 'categoryName' },
-        { title: '样品 / 批号', render: (_: unknown, record) => <span>{record.sampleName || '未填写'}{record.batchNo ? ` · ${record.batchNo}` : ''}</span> },
-        { title: '文件', render: (_: unknown, record) => `${record.contentType || '图谱文件'} · ${formatSize(record.size)} · ${record.pageCount} 页` },
-        { title: '状态', dataIndex: 'status', render: (value: string) => <Tag color={value === 'READY' ? 'success' : 'default'}>{value === 'READY' ? '可分析' : value}</Tag> },
-        { title: '最近更新', dataIndex: 'updatedAt', render: (value: string) => new Date(value).toLocaleString('zh-CN') },
+      <Table<SpectrumChart> className="catalog-spectrum-table" rowKey="id" dataSource={items} scroll={{ x: 1240 }} pagination={{ current: page.current, pageSize: page.pageSize, total: page.total, showSizeChanger: true, onChange: (current, pageSize) => setPage({ current, pageSize, total: page.total }) }} locale={{ emptyText: <Empty description="暂无图谱" /> }} columns={[
+        { title: '图谱', dataIndex: 'title', width: 280, ellipsis: true, render: (value: string, record) => <Space><LineChartOutlined /><span><Typography.Text strong ellipsis={{ tooltip: value }}>{value}</Typography.Text><br /><Typography.Text type="secondary">{record.originalName}</Typography.Text></span></Space> },
+        { title: '分类', dataIndex: 'categoryName', width: 140, ellipsis: true },
+        { title: '样品 / 批号', width: 200, ellipsis: true, render: (_: unknown, record) => <span>{record.sampleName || '未填写'}{record.batchNo ? ` · ${record.batchNo}` : ''}</span> },
+        { title: '文件', width: 250, render: (_: unknown, record) => `${record.contentType || '图谱文件'} · ${formatSize(record.size)} · ${record.pageCount} 页` },
+        { title: '状态', dataIndex: 'status', width: 110, render: (value: string) => <Tag color={value === 'READY' ? 'success' : 'default'}>{value === 'READY' ? '可分析' : value}</Tag> },
+        { title: '最近更新', dataIndex: 'updatedAt', width: 180, render: (value: string) => new Date(value).toLocaleString('zh-CN') },
         { title: '操作', width: 360, render: (_: unknown, record) => <Space wrap><Button type="link" icon={<EyeOutlined />} onClick={() => setPreviewFile(descriptor(record))}>预览</Button><Button type="link" icon={<MessageOutlined />} onClick={() => navigate(`/spectrum/chat?chartIds=${record.id}`)}>AI 对话</Button><Button type="link" onClick={() => void downloadPreviewFile(descriptor(record))}>下载</Button>{record.allowedActions?.includes('DELETE') ? <Button type="link" danger icon={<DeleteOutlined />} onClick={() => removeChart(record)}>删除</Button> : null}</Space> },
       ]} />
     </CatalogListPanel>

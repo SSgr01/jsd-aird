@@ -49,6 +49,7 @@ public class AssistantService {
     private final AssistantRepository repository;
     private final KnowledgeSearchFacade knowledge;
     private final RagRetrievalService rag;
+    private final DataSearchAuthorizationService dataAuthorization;
     private final ConversationMemoryService memory;
     private final ContextCompressionService contextCompression;
     private final ObjectProvider<ChatClient.Builder> clients;
@@ -67,6 +68,7 @@ public class AssistantService {
             AssistantRepository repository,
             KnowledgeSearchFacade knowledge,
             RagRetrievalService rag,
+            DataSearchAuthorizationService dataAuthorization,
             ConversationMemoryService memory,
             ContextCompressionService contextCompression,
             ObjectProvider<ChatClient.Builder> clients,
@@ -84,6 +86,7 @@ public class AssistantService {
         this.repository = repository;
         this.knowledge = knowledge;
         this.rag = rag;
+        this.dataAuthorization = dataAuthorization;
         this.memory = memory;
         this.contextCompression = contextCompression;
         this.clients = clients;
@@ -111,6 +114,9 @@ public class AssistantService {
         var started = System.nanoTime();
         var actor = ActorContext.required();
         validateCommand(command);
+        var dataAccessScope = command.dataCategoryIds().isEmpty()
+                ? DataSourceFileSearchFacade.AccessScope.all()
+                : dataAuthorization.requireDataView(actor);
         requireModelConfiguration();
         if (clients.getIfAvailable() == null) throw new ApiException(ApiErrorCode.AI_MODEL_NOT_CONFIGURED,
                 ApiErrorCode.AI_MODEL_NOT_CONFIGURED.defaultMessage());
@@ -129,7 +135,7 @@ public class AssistantService {
             RequestIdHolder.set(traceId);
             RequestTimingHolder.set(initialTimings);
             try {
-                streamPrepared(actor, command, emitter, traceId, runId, initialTimings);
+                streamPrepared(actor, command, dataAccessScope, emitter, traceId, runId, initialTimings);
             } catch (Throwable exception) {
                 var code = providerErrorCode(exception);
                 send(emitter, "error", Map.of("code", code.code(),
@@ -146,10 +152,17 @@ public class AssistantService {
         return emitter;
     }
 
-    private void streamPrepared(Actor actor, AskCommand command, SseEmitter emitter,
+    private void streamPrepared(Actor actor, AskCommand command,
+                                DataSourceFileSearchFacade.AccessScope dataAccessScope, SseEmitter emitter,
                                 String traceId, String runId, Map<String, Long> initialTimings) {
         send(emitter, "thinking", "SEARCHING");
-        var prepared = prepare(actor.organizationId(), actor.userId(), command, initialTimings);
+        var prepared = prepare(actor, command, dataAccessScope, initialTimings);
+        if (prepared.fieldAmbiguity() != null) {
+            var answer = clarificationResponse(actor, prepared);
+            send(emitter, "done", answer);
+            emitter.complete();
+            return;
+        }
         if (noEvidence(prepared)) {
             var answer = noEvidenceResponse(actor, prepared);
             send(emitter, "done", answer);
@@ -282,14 +295,13 @@ public class AssistantService {
         return new Capabilities(rag.webSearchAvailable());
     }
 
-    private Prepared prepare(UUID organizationId, UUID actorId, AskCommand command) {
-        return prepare(organizationId, actorId, command, RequestTimingHolder.snapshot());
-    }
-
-    private Prepared prepare(UUID organizationId, UUID actorId, AskCommand command, Map<String, Long> initialTimings) {
+    private Prepared prepare(Actor actor, AskCommand command, DataSourceFileSearchFacade.AccessScope dataAccessScope,
+                             Map<String, Long> initialTimings) {
         var started = System.nanoTime();
         var timings = new LinkedHashMap<>(initialTimings == null ? Map.of() : initialTimings);
         validateCommand(command);
+        var organizationId = actor.organizationId();
+        var actorId = actor.userId();
         UUID conversationId = command.conversationId();
         var databaseStarted = System.nanoTime();
         boolean newConversation = false;
@@ -309,7 +321,8 @@ public class AssistantService {
         timings.put("conversationDatabaseMs", elapsedMs(databaseStarted));
         var retrievalStarted = System.nanoTime();
         var retrieval = rag.retrieve(organizationId, command.question(), history,
-                command.knowledgeCategoryIds(), command.dataCategoryIds(), true, command.webSearchEnabled());
+                command.knowledgeCategoryIds(), command.dataCategoryIds(), true, command.webSearchEnabled(),
+                dataAccessScope);
         timings.put("ragRetrieveMs", elapsedMs(retrievalStarted));
         if (!retrieval.trace().fallbacks().isEmpty()) {
             log.warn("assistant_retrieval_degraded traceId={} conversationId={} fallbacks={} rewriteStatus={} reranker={}",
@@ -318,13 +331,14 @@ public class AssistantService {
         }
         var hits = retrieval.knowledgeHits();
         var dataHits = retrieval.dataHits();
+        var fieldAmbiguity = detectFieldAmbiguity(command.question(), dataHits);
         audit.append(organizationId, actorId, "AI_QA_STARTED", "AI_CONVERSATION", conversationId,
                 objectMapper.createObjectNode().put("queryHash", sha256(command.question()))
                         .put("approvedHitCount", hits.size()).put("dataFileHitCount", dataHits.size())
                         .put("webSearchRequested", command.webSearchEnabled())
                         .put("webCandidateCount", retrieval.webHits().size()));
         timings.put("prepareMs", elapsedMs(started));
-        return new Prepared(conversationId, history, hits, dataHits, retrieval, timings);
+        return new Prepared(conversationId, history, hits, dataHits, fieldAmbiguity, retrieval, timings);
     }
 
     private void validateCommand(AskCommand command) {
@@ -358,6 +372,8 @@ public class AssistantService {
                 - 产品型号、化学式、CAS、数值、单位、缩写和英文专业名称都是不可改写的原文数据。只有证据明确给出双语对应关系时才可翻译；否则必须逐字保留英文名称，不能在其前后添加中文猜译。
                 - 回答实验材料、试剂或产品时，同一直接证据明确给出的浓度、剂量、等级或规格应一并保留。
                 - 图片只有在其 OCR 或 caption 直接包含结论文字时才能作为依据；主题相关图片不能代替正文或表格。
+                - 数据中心明细必须由 D 类证据支持。问题询问具体记录、字段或来源数据而没有 D 类证据时，不得用 K/E 类资料猜测或替代。
+                - D 类证据中的字段值、单位、记录和来源位置必须保持原样。不要在 answer 中自行制作数据明细表，系统会在回答后追加经过校验的表格。
 
                 外部证据规则：
                 - E 类证据不能覆盖 K/D 类内部确认事实；冲突时分别说明并分别引用。
@@ -394,6 +410,7 @@ public class AssistantService {
                 + "\n\n本轮输出前复核：每个实体的字段值只能取自明确属于该实体的同一表格行或正文陈述，"
                 + "不得拼接同页其他实体的属性；表格标题中的规格标签按原文整体保留，不扩写设备或机理；"
                 + "证据只有英文技术名称时，answer 只能逐字使用该英文名称，禁止生成证据中没有的中文译名；"
+                + "具体数据记录只能由数据中心证据支持；不要自行生成数据明细表；"
                 + "answer 必须为非空字符串。";
         return new PromptBundle(text, evidenceCatalog(compressed.evidenceRefs(), external.evidenceRefs(), hits,
                 dataHits, retrieval.webHits()));
@@ -430,15 +447,21 @@ public class AssistantService {
         var result = new LinkedHashMap<String, Evidence>();
         for (var index = 0; index < hits.size(); index++) {
             var ref = "K" + (index + 1);
-            if (included.contains(ref)) result.put(ref, new Evidence(fallbackCitation(hits.get(index)), hits.get(index)));
+            if (included.contains(ref)) {
+                result.put(ref, new Evidence(fallbackCitation(hits.get(index)), hits.get(index), null));
+            }
         }
         for (var index = 0; index < dataHits.size(); index++) {
             var ref = "D" + (index + 1);
-            if (included.contains(ref)) result.put(ref, new Evidence(dataCitation(dataHits.get(index)), null));
+            if (included.contains(ref)) {
+                result.put(ref, new Evidence(dataCitation(dataHits.get(index)), null, dataHits.get(index)));
+            }
         }
         for (var index = 0; index < webHits.size(); index++) {
             var ref = "E" + (index + 1);
-            if (includedExternal.contains(ref)) result.put(ref, new Evidence(webCitation(webHits.get(index)), null));
+            if (includedExternal.contains(ref)) {
+                result.put(ref, new Evidence(webCitation(webHits.get(index)), null, null));
+            }
         }
         return java.util.Collections.unmodifiableMap(result);
     }
@@ -453,6 +476,8 @@ public class AssistantService {
                 .map(Evidence::knowledgeHit).filter(java.util.Objects::nonNull).toList());
         var sanitized = sanitizeImageReferences(answer, allowedImageAssets);
         if (!sanitized.equals(answer)) answer = sanitized;
+        answer = appendDataDetailTable(answer, selectedEvidence.stream()
+                .map(Evidence::dataHit).filter(java.util.Objects::nonNull).toList());
         var citations = selectedEvidence.stream().map(Evidence::citation).toList();
         return new NormalizedAnswer(answer, citations, usedEvidenceRefs.stream().anyMatch(ref -> ref.startsWith("E")),
                 answerStatus, usedEvidenceRefs);
@@ -462,6 +487,72 @@ public class AssistantService {
         if (!StringUtils.hasText(value)) return "ANSWERED";
         var normalized = value.strip().toUpperCase(Locale.ROOT);
         return Set.of("ANSWERED", "PARTIAL", "NOT_FOUND").contains(normalized) ? normalized : "ANSWERED";
+    }
+
+    static String appendDataDetailTable(String answer, List<DataSourceFileSearchFacade.SourceFileHit> hits) {
+        if (hits == null || hits.isEmpty()) return answer;
+        var unique = new LinkedHashMap<UUID, DataSourceFileSearchFacade.SourceFileHit>();
+        hits.forEach(hit -> unique.putIfAbsent(hit.hitId(), hit));
+        var rows = unique.values().stream().filter(hit -> StringUtils.hasText(hit.fieldValue())).limit(10).toList();
+        if (rows.isEmpty()) return answer;
+        var table = new StringBuilder("\n\n### 数据明细\n\n")
+                .append("| 记录 | 字段 | 值 | 单位 | 来源 |\n")
+                .append("|---|---|---|---|---|\n");
+        for (var hit : rows) {
+            var field = StringUtils.hasText(hit.fieldName()) ? hit.fieldName() : hit.fieldCode();
+            if (StringUtils.hasText(hit.fieldCode()) && !hit.fieldCode().equals(field)) {
+                field += "（" + hit.fieldCode() + "）";
+            }
+            var position = StringUtils.hasText(hit.sheetName()) ? hit.sheetName() : "";
+            if (StringUtils.hasText(hit.cellAddress())) position += (position.isBlank() ? "" : "!") + hit.cellAddress();
+            else if (hit.rowNumber() != null) position += (position.isBlank() ? "" : "，") + "第 " + hit.rowNumber() + " 行";
+            var source = hit.originalName() + (position.isBlank() ? "" : " / " + position);
+            table.append('|').append(markdownCell(hit.recordKey(), "未命名记录"))
+                    .append('|').append(markdownCell(field, "未命名字段"))
+                    .append('|').append(markdownCell(hit.fieldValue(), "未填写"))
+                    .append('|').append(markdownCell(hit.unit(), "—"))
+                    .append('|').append(markdownCell(source, "—")).append("|\n");
+        }
+        return (answer == null ? "" : answer.strip()) + table;
+    }
+
+    static FieldAmbiguity detectFieldAmbiguity(String question,
+                                                List<DataSourceFileSearchFacade.SourceFileHit> hits) {
+        var normalizedQuestion = normalizeLookup(question);
+        if (normalizedQuestion.isBlank() || hits == null || hits.isEmpty()) return null;
+        var grouped = new LinkedHashMap<String, LinkedHashMap<String, FieldCandidate>>();
+        for (var hit : hits) {
+            if (!StringUtils.hasText(hit.fieldName()) || !StringUtils.hasText(hit.fieldCode())) continue;
+            var normalizedName = normalizeLookup(hit.fieldName());
+            var normalizedCode = normalizeLookup(hit.fieldCode());
+            if (normalizedName.length() < 2
+                    || !(normalizedQuestion.contains(normalizedName) || normalizedQuestion.contains(normalizedCode))) {
+                continue;
+            }
+            var candidate = new FieldCandidate(hit.fieldCode(), hit.valueType(), hit.unit());
+            var signature = String.join("|", candidate.code(), safeText(candidate.valueType()), safeText(candidate.unit()));
+            grouped.computeIfAbsent(hit.fieldName(), ignored -> new LinkedHashMap<>()).putIfAbsent(signature, candidate);
+        }
+        return grouped.entrySet().stream()
+                .filter(entry -> entry.getValue().size() > 1)
+                .sorted(Map.Entry.comparingByKey())
+                .map(entry -> new FieldAmbiguity(entry.getKey(), entry.getValue().values().stream()
+                        .sorted(java.util.Comparator.comparing(FieldCandidate::code)).toList()))
+                .findFirst().orElse(null);
+    }
+
+    private static String normalizeLookup(String value) {
+        return value == null ? "" : value.toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9\\u4E00-\\u9FFF]", "");
+    }
+
+    private static String markdownCell(String value, String fallback) {
+        var normalized = StringUtils.hasText(value) ? value.strip() : fallback;
+        normalized = normalized.replace('|', '｜').replaceAll("[\\r\\n\\t]+", " / ");
+        return normalized.length() <= 240 ? normalized : normalized.substring(0, 239) + "…";
+    }
+
+    private static String safeText(String value) {
+        return value == null ? "" : value;
     }
 
     static List<String> selectEvidenceRefs(String answerStatus, List<String> requested, Set<String> available) {
@@ -513,7 +604,8 @@ public class AssistantService {
 
     private Citation dataCitation(DataSourceFileSearchFacade.SourceFileHit hit) {
         return new Citation("DATA_SOURCE_FILE", hit.hitId().toString(), null, null, hit.fileObjectId().toString(),
-                hit.importJobId().toString(), hit.rowNumber(), hit.originalName(), hit.originalName(), null, hit.columnName(),
+                hit.importJobId().toString(), hit.rowNumber(), hit.originalName(), hit.originalName(), null,
+                StringUtils.hasText(hit.fieldName()) ? hit.fieldName() : hit.columnName(),
                 preview(hit.content(), 240), hit.score(), hit.score(), hit.score(), hit.sourceLocator(), null,
                 List.of(), List.of(), List.of(), null, null, null, null, null);
     }
@@ -568,6 +660,28 @@ public class AssistantService {
 
     private boolean noEvidence(Prepared prepared) {
         return prepared.hits().isEmpty() && prepared.dataHits().isEmpty() && prepared.retrieval().webHits().isEmpty();
+    }
+
+    private AssistantResponse clarificationResponse(Actor actor, Prepared prepared) {
+        var ambiguity = prepared.fieldAmbiguity();
+        var options = ambiguity.candidates().stream().map(candidate -> {
+            var metadata = new ArrayList<String>();
+            if (StringUtils.hasText(candidate.valueType())) metadata.add(candidate.valueType());
+            if (StringUtils.hasText(candidate.unit())) metadata.add(candidate.unit());
+            return "- `" + candidate.code() + "`" + (metadata.isEmpty() ? "" : "（" + String.join("，", metadata) + "）");
+        }).toList();
+        var answer = "“" + ambiguity.fieldName() + "”对应多个不同字段，请指定要查询的字段编码：\n\n"
+                + String.join("\n", options);
+        var trace = retrievalTrace(prepared, Map.of());
+        trace.put("answerStatus", "PARTIAL").put("clarificationReason", "AMBIGUOUS_DATA_FIELD");
+        var messageId = repository.insertMessageReturningId(prepared.conversationId(), "ASSISTANT", answer,
+                objectMapper.createArrayNode(), objectMapper.valueToTree(prepared.retrieval().plan()), trace);
+        if (messageId != null) repository.updateMessageRetrievalTrace(messageId, trace);
+        repository.insertCallAudit(actor.organizationId(), actor.userId(), prepared.conversationId(), "QA",
+                configuredModel, promptVersion, sha256(prepared.retrieval().plan().originalQuery()), sha256(answer),
+                0, 0, 0, "SUCCEEDED", null);
+        return new AssistantResponse(prepared.conversationId(), answer, List.of(), false,
+                RequestIdHolder.currentOrUnknown(), new Usage(0, 0, 0));
     }
 
     private AssistantResponse noEvidenceResponse(Actor actor, Prepared prepared) {
@@ -772,7 +886,8 @@ public class AssistantService {
     public record ModelAnswer(String answer, String answerStatus, List<String> usedEvidenceRefs) { }
     private record Prepared(UUID conversationId, List<AssistantRepository.MessageRow> history,
                             List<KnowledgeSearchFacade.SearchHit> hits, List<DataSourceFileSearchFacade.SourceFileHit> dataHits,
-                            RagRetrievalService.Retrieval retrieval, Map<String, Long> timings) {
+                            FieldAmbiguity fieldAmbiguity, RagRetrievalService.Retrieval retrieval,
+                            Map<String, Long> timings) {
         private Prepared {
             // The stream adds first-SSE and prompt/context timings after the
             // retrieval phase has completed. Keep this request-local map
@@ -781,7 +896,10 @@ public class AssistantService {
         }
     }
 
-    private record Evidence(Citation citation, KnowledgeSearchFacade.SearchHit knowledgeHit) { }
+    record FieldCandidate(String code, String valueType, String unit) { }
+    record FieldAmbiguity(String fieldName, List<FieldCandidate> candidates) { }
+    private record Evidence(Citation citation, KnowledgeSearchFacade.SearchHit knowledgeHit,
+                            DataSourceFileSearchFacade.SourceFileHit dataHit) { }
     private record PromptBundle(String text, Map<String, Evidence> evidence) { }
     private record ExternalContext(String text, List<String> evidenceRefs) { }
     private record NormalizedAnswer(String answer, List<Citation> citations, boolean usedWebSearch,

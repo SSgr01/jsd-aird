@@ -25,8 +25,8 @@ public interface InventoryRepository {
     void insertSample(UUID org,Sample sample,UUID actor);
     void insertShipment(UUID org,Shipment shipment,UUID actor);
     Optional<String> activeCustomerName(UUID customerId);
-    Page<Sample> samples(UUID org,int page,int size);
-    Page<Shipment> shipments(UUID org,int page,int size);
+    Page<Sample> samples(UUID org,String keyword,int page,int size);
+    Page<Shipment> shipments(UUID org,String keyword,int page,int size);
     Optional<Sample> sampleByTransaction(UUID org,UUID tx);
     Optional<Shipment> shipmentByTransaction(UUID org,UUID tx);
     Optional<Sample> findSample(UUID org,UUID id);

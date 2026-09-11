@@ -11,4 +11,8 @@
 .pm-cr-custom-title{font-size:13px;font-weight:600;color:#1f2937;margin-bottom:8px}
 .pm-cr-field-row{display:grid;grid-template-columns:1fr 1fr 32px;gap:8px;margin-bottom:8px}
 .pm-muted{color:#9ca3af}
+.pm-cr-date-picker{position:relative;width:100%}
+.pm-cr-date-picker .ant-picker{width:100%}
+.pm-cr-date-clear{position:absolute;top:50%;right:8px;z-index:2;display:flex;width:20px;height:20px;padding:0;border:0;transform:translateY(-50%);align-items:center;justify-content:center;color:rgba(0,0,0,.25);background:#fff;cursor:pointer;font-size:14px;line-height:1}
+.pm-cr-date-clear:hover{color:rgba(0,0,0,.45)}
 @media(max-width:760px){.pm-cr-grid,.pm-cr-grid-2{grid-template-columns:1fr}}

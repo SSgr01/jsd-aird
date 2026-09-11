@@ -1,17 +1,17 @@
-import { Button, DatePicker, Empty, Form, Input, Modal, Select, Table, Tag, message, Popconfirm } from 'antd';
-import { DeleteOutlined } from '@ant-design/icons';
+import { Button, DatePicker, Empty, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag, message } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import dayjs from '@/utils/dayjs';
-import { createExperiment, listExperiments, type ExperimentSummary } from '@/services/experiments/experiment-api';
-import { templateApi } from '@/services/templates/template-api';
-import type { TemplateListItem } from '@/features/template-workspace/types';
+import { Can } from '@/components/auth/Can';
+import { createProjectExperiment, deleteProjectExperiment, listProjectExperiments, type ExperimentSummary } from '@/services/experiments/experiment-api';
+import { projectTemplateApi, type ProjectTemplateOption } from '@/services/project/project-template-api';
 import {
   createProjectTask, deleteProjectTask, getProjectStages, getProjectTask, getStageTasks,
   updateProjectTask,
-  type ProjectStage, type ProjectTask,
+  projectPriorities, type ProjectPriority, type ProjectStage, type ProjectTask,
 } from '@/services/project/project-api';
 import '../experiments/experiments.css';
+import '@/styles/management-list.css';
 
 const taskStatuses: Record<string, string> = { PENDING: '待开始', IN_PROGRESS: '进行中', COMPLETED: '已完成', CANCELLED: '已取消' };
 const formatTaskStatus = (s: string) => taskStatuses[s] ?? s;
@@ -37,11 +37,16 @@ interface TaskFormValues {
   stageId: string;
   name: string;
   owner?: string;
+  priority: ProjectPriority;
   plannedDate: dayjs.Dayjs;
   status: string;
 }
 
-export function ProjectTaskBoard({ projectId, stage }: { projectId: string; stage: ProjectStage }) {
+export function ProjectTaskBoard({ projectId, stage, onTaskSaved }: {
+  projectId: string;
+  stage: ProjectStage;
+  onTaskSaved?: (stageId: string) => void | Promise<void>;
+}) {
   const nav = useNavigate();
   const location = useLocation();
   const [tasks, setTasks] = useState<ProjectTask[]>([]);
@@ -54,7 +59,7 @@ export function ProjectTaskBoard({ projectId, stage }: { projectId: string; stag
   const draftCode = useMemo(() => `EXP-${dayjs().format('YYYYMMDD')}-${Math.random().toString(36).slice(2, 7).toUpperCase()}`, [open]);
   const [createMode, setCreateMode] = useState<CreateMode>('blank');
   const [format, setFormat] = useState<DocumentFormat>('word');
-  const [templates, setTemplates] = useState<TemplateListItem[]>([]);
+  const [templates, setTemplates] = useState<ProjectTemplateOption[]>([]);
   const [templatesLoading, setTemplatesLoading] = useState(false);
 
   const [stages, setStages] = useState<ProjectStage[]>([]);
@@ -64,6 +69,8 @@ export function ProjectTaskBoard({ projectId, stage }: { projectId: string; stag
   const focusedTaskRef = useRef<HTMLButtonElement>(null);
   const [taskOpen, setTaskOpen] = useState(false);
   const [taskSaving, setTaskSaving] = useState(false);
+  const [deletingTaskId, setDeletingTaskId] = useState<string>();
+  const [deletingExperimentId, setDeletingExperimentId] = useState<string>();
   const [editingTask, setEditingTask] = useState<ProjectTask>();
   const [taskForm] = Form.useForm<TaskFormValues>();
 
@@ -85,14 +92,19 @@ export function ProjectTaskBoard({ projectId, stage }: { projectId: string; stag
     }
   }, [focusedTaskId, tasks]);
   useEffect(() => { void getProjectStages(projectId).then(setStages).catch(() => setStages([])); }, [projectId]);
-  useEffect(() => {
-    if (selected) {
-      void listExperiments({ projectId, stageId: stage.id, taskId: selected.id, page: 1, size: 100 })
-        .then((result) => setExperiments(result.items))
-        .catch(() => setExperiments([]));
+  const refreshExperiments = useCallback(async (taskId = selected?.id) => {
+    if (!taskId) {
+      setExperiments([]);
+      return;
     }
-    else setExperiments([]);
-  }, [projectId, selected, stage.id]);
+    try {
+      const result = await listProjectExperiments(projectId, { stageId: stage.id, taskId, page: 1, size: 100 });
+      setExperiments(result.items);
+    } catch {
+      setExperiments([]);
+    }
+  }, [projectId, selected?.id, stage.id]);
+  useEffect(() => { void refreshExperiments(); }, [refreshExperiments]);
 
   const showExperiment = () => {
     if (!selected) return;
@@ -117,8 +129,8 @@ export function ProjectTaskBoard({ projectId, stage }: { projectId: string; stag
     form.setFieldValue('templateVersionId', undefined);
     if (mode === 'template' && !templates.length) {
       setTemplatesLoading(true);
-      void templateApi.list({ status: 'PUBLISHED', page: 1, size: 100 })
-        .then((result) => setTemplates(result.items))
+      void projectTemplateApi.list(projectId)
+        .then(setTemplates)
         .catch(() => messageApi.error('模板列表加载失败'))
         .finally(() => setTemplatesLoading(false));
     }
@@ -136,19 +148,17 @@ export function ProjectTaskBoard({ projectId, stage }: { projectId: string; stag
       let templateSnapshotHash: string | undefined;
       if (createMode === 'template') {
         if (!values.templateVersionId || !selectedTemplate) throw new Error('请选择实验模板');
-        const workspace = await templateApi.getEditModel(values.templateVersionId);
-        templateSnapshot = workspace.snapshotFileId && workspace.snapshotHash
-          ? await templateApi.downloadSnapshot(workspace.snapshotFileId)
-          : workspace.inlineSnapshot;
-        templateSnapshotHash = workspace.snapshotHash ?? workspace.workspaceHash;
+        const template = await projectTemplateApi.getEditModel(projectId, values.templateVersionId);
+        templateSnapshot = template.snapshot;
+        templateSnapshotHash = template.snapshotHash;
         if (!templateSnapshot) throw new Error('所选模板没有可用的文档内容');
       }
       const documentFormat: DocumentFormat = selectedTemplate?.format === 'XLSX'
         ? 'excel' : selectedTemplate?.format === 'DOCX' ? 'word' : format;
-      const item = await createExperiment({
+      await createProjectExperiment(projectId, {
         experimentNo: values.experimentNo.trim(), title: values.title.trim(),
         categoryName: values.category?.trim() || undefined, sourceType: createMode === 'template' ? 'TEMPLATE' : 'PROJECT',
-        projectId, stageId: values.stageId, taskId: values.taskId, ownerName: values.ownerName.trim(),
+        stageId: values.stageId, taskId: values.taskId, ownerName: values.ownerName.trim(),
         experimentDate: values.experimentDate.format('YYYY-MM-DD'),
         templateVersionId: values.templateVersionId,
         templateSnapshotHash, templateSnapshot,
@@ -161,7 +171,8 @@ export function ProjectTaskBoard({ projectId, stage }: { projectId: string; stag
       messageApi.success('实验已创建');
       setOpen(false);
       form.resetFields();
-      nav(`/experiments/${item.id}`, { state: { returnTo: `${location.pathname}${location.search}` } });
+      await refreshExperiments(selected.id);
+      await load();
     } catch (reason) {
       messageApi.error(reason instanceof Error ? reason.message : '实验保存失败');
     } finally { setSaving(false); }
@@ -169,7 +180,8 @@ export function ProjectTaskBoard({ projectId, stage }: { projectId: string; stag
 
   const openNewTask = () => {
     setEditingTask(undefined);
-    taskForm.setFieldsValue({ stageId: stage.id, owner: '', plannedDate: dayjs(), status: 'PENDING' });
+    taskForm.resetFields();
+    taskForm.setFieldsValue({ stageId: stage.id, owner: '', priority: 'MEDIUM', plannedDate: dayjs(), status: 'PENDING' });
     setTaskOpen(true);
   };
 
@@ -178,7 +190,7 @@ export function ProjectTaskBoard({ projectId, stage }: { projectId: string; stag
     setEditingTask(data);
     taskForm.setFieldsValue({
       stageId: data.stageId, name: data.name, owner: data.owner,
-      plannedDate: data.plannedDate ? dayjs(data.plannedDate) : dayjs(), status: data.status || 'PENDING',
+      priority: data.priority || 'MEDIUM', plannedDate: data.plannedDate ? dayjs(data.plannedDate) : dayjs(), status: data.status || 'PENDING',
     });
     setTaskOpen(true);
   };
@@ -194,43 +206,71 @@ export function ProjectTaskBoard({ projectId, stage }: { projectId: string; stag
     try {
       const payload = {
         stageId: values.stageId, name: values.name.trim(), owner: values.owner?.trim() || '',
-        plannedDate: values.plannedDate.format('YYYY-MM-DD'), status: values.status,
+        priority: values.priority, plannedDate: values.plannedDate.format('YYYY-MM-DD'), status: values.status,
       };
-      if (editingTask) await updateProjectTask(editingTask.id, { ...payload, version: editingTask.version });
-      else await createProjectTask(projectId, payload);
+      const savedTask = editingTask
+        ? await updateProjectTask(editingTask.id, { ...payload, version: editingTask.version })
+        : await createProjectTask(projectId, payload);
       messageApi.success(editingTask ? '任务已更新' : '任务已创建并记录日志');
       setTaskOpen(false);
       taskForm.resetFields();
       setEditingTask(undefined);
-      void load();
+      // The stage-level callback refreshes stage metadata (for example task
+      // counts), but it does not remount this board. Always reload the task
+      // list here so a newly created/updated task is visible immediately.
+      if (onTaskSaved) await onTaskSaved(savedTask.stageId);
+      await load();
     } catch (reason) {
       messageApi.error(reason instanceof Error ? reason.message : '保存失败');
     } finally { setTaskSaving(false); }
   };
 
-  const removeTask = async (task: ProjectTask) => {
-    if (!task.allowedActions?.includes('DELETE')) return;
-    try { await deleteProjectTask(task.id, task.version); messageApi.success('任务已删除'); await load(); }
-    catch (reason) { messageApi.error(reason instanceof Error ? reason.message : '任务删除失败'); }
+  const deleteTask = async (task: ProjectTask) => {
+    setDeletingTaskId(task.id);
+    try {
+      await deleteProjectTask(task.id, task.version);
+      messageApi.success('任务已删除');
+      setSelected(undefined);
+      setExperiments([]);
+      await load();
+    } catch (reason) {
+      messageApi.error(reason instanceof Error ? reason.message : '任务删除失败');
+    } finally {
+      setDeletingTaskId(undefined);
+    }
+  };
+
+  const deleteExperiment = async (experiment: ExperimentSummary) => {
+    setDeletingExperimentId(experiment.id);
+    try {
+      await deleteProjectExperiment(projectId, experiment.id, experiment.revision);
+      setExperiments((current) => current.filter(({ id }) => id !== experiment.id));
+      messageApi.success('实验已删除');
+      await load();
+    } catch (reason) {
+      messageApi.error(reason instanceof Error ? reason.message : '实验删除失败');
+    } finally {
+      setDeletingExperimentId(undefined);
+    }
   };
 
   return <div className="pm-stage-work">
     {holder}
     <div className="pm-stage-work-head"><div><b>{stage.name}任务</b><small>项目 &gt; {stage.name} &gt; {tasks.length}个任务 &gt; {totalExperiments}个实验</small></div><Button type="primary" onClick={openNewTask}>＋ 新增任务</Button></div>
-    <div className="pm-task-cards">{tasks.map((task) => <button key={task.id} ref={task.id === focusedTaskId ? focusedTaskRef : undefined} className={`${selected?.id === task.id ? 'active' : ''}${task.id === focusedTaskId ? ' pm-task-focused' : ''}`} onClick={() => setSelected(task)}><div className="pm-task-card-head"><b title={task.name}>{task.name}</b><span className="pm-task-card-edit" onClick={(e) => { e.stopPropagation(); void openEditTask(task.id); }}>编辑</span>{task.allowedActions?.includes('DELETE') ? <Popconfirm title="确认删除该任务？" onConfirm={() => void removeTask(task)}><DeleteOutlined onClick={(e) => e.stopPropagation()} style={{ color: '#ff4d4f', marginLeft: 8 }} /></Popconfirm> : null}</div><div className="pm-task-card-body"><span>{task.owner || '未设置'}</span><Tag>{task.experimentCount}实验</Tag></div><div className="pm-task-card-status"><span className={`pm-dot pm-dot-${task.status.toLowerCase()}`} />{formatTaskStatus(task.status)}</div></button>)}</div>
-    {selected ? <><div className="pm-stage-work-head"><b>当前任务：{selected.name}</b><Button type="primary" onClick={showExperiment}>＋ 新增实验</Button></div><Table rowKey="id" pagination={false} dataSource={experiments} columns={[{ title: '实验编号', dataIndex: 'experimentNo' }, { title: '实验名称', dataIndex: 'title' }, { title: '日期', dataIndex: 'experimentDate' }, { title: '负责人', dataIndex: 'ownerName' }, { title: '状态', dataIndex: 'status', render: (status: string) => formatExperimentStatus(status) }, { title: '操作', key: 'action', render: (_, experiment) => <Button type="link" size="small" onClick={() => nav(`/experiments/${experiment.id}`, { state: { returnTo: `${location.pathname}${location.search}` } })}>查看</Button> }]} /></> : <Empty description="当前阶段暂无任务" />}
+    <div className="pm-task-cards">{tasks.map((task) => <button key={task.id} ref={task.id === focusedTaskId ? focusedTaskRef : undefined} className={`${selected?.id === task.id ? 'active' : ''}${task.id === focusedTaskId ? ' pm-task-focused' : ''}`} onClick={() => setSelected(task)}><div className="pm-task-card-head"><b title={task.name}>{task.name}</b><span className="pm-task-card-edit" onClick={(e) => { e.stopPropagation(); void openEditTask(task.id); }}>编辑</span><Can permission="project.delete"><Popconfirm title="确认删除该任务？" description="任务下存在实验时不能删除。" okText="删除" cancelText="取消" okButtonProps={{ danger: true, loading: deletingTaskId === task.id }} onConfirm={() => void deleteTask(task)}><span className="pm-task-card-delete" role="button" tabIndex={0} aria-label={`删除任务${task.name}`} onClick={(e) => e.stopPropagation()}>删除</span></Popconfirm></Can></div><div className="pm-task-card-body"><span>{task.owner || '未设置'}</span><Tag>{task.experimentCount}实验</Tag></div><div className="pm-task-card-status"><span className={`pm-dot pm-dot-${task.status.toLowerCase()}`} />{formatTaskStatus(task.status)}</div></button>)}</div>
+    {selected ? <><div className="pm-stage-work-head"><b>当前任务：{selected.name}</b><Button type="primary" onClick={showExperiment}>＋ 新增实验</Button></div><Table rowKey="id" pagination={false} dataSource={experiments} columns={[{ title: '实验编号', dataIndex: 'experimentNo' }, { title: '实验名称', dataIndex: 'title' }, { title: '日期', dataIndex: 'experimentDate' }, { title: '负责人', dataIndex: 'ownerName' }, { title: '状态', dataIndex: 'status', render: (status: string) => formatExperimentStatus(status) }, { title: '操作', key: 'action', width: 120, fixed: 'right', render: (_, experiment) => <Space className="management-table-actions" size={0}><Button type="link" size="small" onClick={() => nav(`/experiments/${experiment.id}`, { state: { returnTo: `${location.pathname}${location.search}` } })}>查看</Button><Can permission="project.delete"><Popconfirm title="确认删除该实验？" description="删除后实验记录将从列表中移除。" okText="删除" cancelText="取消" okButtonProps={{ danger: true, loading: deletingExperimentId === experiment.id }} onConfirm={() => void deleteExperiment(experiment)}><Button type="link" danger size="small">删除</Button></Popconfirm></Can></Space> }]} /></> : <Empty description="当前阶段暂无任务" />}
 
     <Modal rootClassName="eln-create-modal" width={598} centered title="新增实验" open={open} closable
       styles={{ body: { maxHeight: 'calc(100vh - 240px)', overflowY: 'auto' } }}
       onCancel={() => setOpen(false)} destroyOnClose footer={<div className="pm-experiment-footer">
         <Button onClick={() => setOpen(false)}>取消</Button>
-        <Button type="primary" loading={saving} onClick={() => void saveExperiment()}>创建并进入编辑</Button>
+        <Button type="primary" loading={saving} onClick={() => void saveExperiment()}>创建</Button>
       </div>}>
       <div>
         <Form form={form} layout="vertical" requiredMark>
           <div className="eln-create-grid">
-            <Form.Item name="experimentNo" label="实验编号" rules={[{ required: true, message: '请输入实验编号' }, { max: 100 }]}><Input placeholder="请输入实验编号" /></Form.Item>
-            <Form.Item name="title" label="实验名称" rules={[{ required: true, whitespace: true, message: '请输入实验名称' }, { max: 300 }]}><Input placeholder="请输入实验名称" /></Form.Item>
+            <Form.Item className="eln-create-primary-field" name="experimentNo" label="实验编号" rules={[{ required: true, message: '请输入实验编号' }, { max: 100 }]}><Input placeholder="请输入实验编号" /></Form.Item>
+            <Form.Item className="eln-create-primary-field" name="title" label="实验名称" rules={[{ required: true, whitespace: true, message: '请输入实验名称' }, { max: 300 }]}><Input placeholder="请输入实验名称" /></Form.Item>
             <Form.Item name="ownerName" label="实验人" rules={[{ required: true, whitespace: true, message: '请输入实验人' }]}><Input placeholder="请输入实验人" /></Form.Item>
             <Form.Item name="experimentDate" label="日期" rules={[{ required: true, message: '请选择日期' }]}><DatePicker style={{ width: '100%' }} format="YYYY/MM/DD" /></Form.Item>
           </div>
@@ -278,6 +318,9 @@ export function ProjectTaskBoard({ projectId, stage }: { projectId: string; stag
           </Form.Item>
           <Form.Item name="owner" label={<FieldLabel text="负责人" />}>
             <Input placeholder="请输入负责人" />
+          </Form.Item>
+          <Form.Item name="priority" label={<FieldLabel text="优先级" required />} rules={[{ required: true, message: '请选择优先级' }]}>
+            <Select placeholder="请选择优先级" options={projectPriorities} />
           </Form.Item>
           <Form.Item name="plannedDate" label={<FieldLabel text="计划日期" required />} rules={[{ required: true, message: '请选择计划日期' }]}>
             <DatePicker style={{ width: '100%' }} format="YYYY/MM/DD" />

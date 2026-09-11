@@ -43,6 +43,7 @@ public interface ExperimentRepository {
     Summary copy(UUID organizationId, UUID sourceId, UUID actorId, String actorName);
     Detail saveDraft(UUID organizationId, UUID id, long revision, Draft draft, UUID actorId, String actorName);
     void delete(UUID organizationId, UUID id, long revision, UUID actorId, String actorName);
+    Detail publish(UUID organizationId, UUID id, long revision, UUID actorId, String actorName);
     Detail transition(UUID organizationId, UUID id, long revision, ExperimentStatus target, String comment,
                       UUID actorId, String actorName);
     List<Version> versions(UUID organizationId, UUID id);

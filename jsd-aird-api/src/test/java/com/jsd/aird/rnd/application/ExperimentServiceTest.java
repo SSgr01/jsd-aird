@@ -169,7 +169,7 @@ class ExperimentServiceTest {
                 org.mockito.ArgumentMatchers.eq("creator")
         )).thenAnswer(invocation -> {
             var draft = invocation.<ExperimentRepository.Draft>getArgument(3);
-            return new Detail(summary, versionId, null, null, mapper.createObjectNode(), draft.editModel(),
+            return new Detail(summary, versionId, null, null, null, mapper.createObjectNode(), draft.editModel(),
                     List.of(), List.of());
         });
 

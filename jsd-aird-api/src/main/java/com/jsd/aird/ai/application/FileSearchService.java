@@ -20,6 +20,7 @@ import com.jsd.aird.shared.error.ApiException;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import com.jsd.aird.shared.security.Actor;
+import org.springframework.beans.factory.annotation.Autowired;
 
 @Service
 public class FileSearchService {
@@ -28,12 +29,21 @@ public class FileSearchService {
     private final KnowledgeFileSearchFacade knowledge;
     private final DataSourceFileSearchFacade dataSources;
     private final ProjectResourceFacade projectResources;
+    private final DataSearchAuthorizationService dataAuthorization;
 
+    @Autowired
     public FileSearchService(KnowledgeFileSearchFacade knowledge, DataSourceFileSearchFacade dataSources,
-                             ProjectResourceFacade projectResources) {
+                             ProjectResourceFacade projectResources,
+                             DataSearchAuthorizationService dataAuthorization) {
         this.knowledge = knowledge;
         this.dataSources = dataSources;
         this.projectResources = projectResources;
+        this.dataAuthorization = dataAuthorization;
+    }
+
+    FileSearchService(KnowledgeFileSearchFacade knowledge, DataSourceFileSearchFacade dataSources,
+                      ProjectResourceFacade projectResources) {
+        this(knowledge, dataSources, projectResources, null);
     }
 
     public FileSearchResponse search(Actor actor, SearchCommand command) {
@@ -46,11 +56,16 @@ public class FileSearchService {
                 : projectResources.resourceIdsForProject(actor, ResourceType.KNOWLEDGE_DOCUMENT, command.projectId());
         Set<UUID> allowedData = command.projectId() == null ? null
                 : projectResources.resourceIdsForProject(actor, ResourceType.DATA_IMPORT_JOB, command.projectId());
+        var dataAccessScope = safe(command.dataCategoryIds()).isEmpty() || dataAuthorization == null
+                ? DataSourceFileSearchFacade.AccessScope.all()
+                : dataAuthorization.requireDataView(actor);
         knowledge.searchFiles(actor.organizationId(), query, safe(command.knowledgeCategoryIds()), allowedKnowledge, limit)
                 .stream().map(file -> knowledgeFile(file, query)).filter(Objects::nonNull).forEach(candidates::add);
         var dataFilesById = new LinkedHashMap<UUID, DataSourceFileSearchFacade.SourceFileMatch>();
         for (var term : searchTerms(query, identifierQuery)) {
-            dataSources.searchSourceFiles(actor.organizationId(), term, safe(command.dataCategoryIds()), allowedData, limit)
+            dataSources.searchSourceFiles(actor.organizationId(), term, safe(command.dataCategoryIds()),
+                            dataAccessScope, limit).stream()
+                    .filter(file -> allowedData == null || allowedData.contains(file.importJobId()))
                     .forEach(file -> dataFilesById.merge(file.fileObjectId(), file, this::mergeDataFile));
         }
         dataFilesById.values().stream().map(file -> dataFile(file, query)).filter(Objects::nonNull).forEach(candidates::add);

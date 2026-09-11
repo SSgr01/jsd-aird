@@ -152,7 +152,7 @@ class JdbcExperimentRepositoryTest {
         return new Detail(
                 new Summary(experimentId, "EXP-001", "实验", null, null, "MANUAL", status,
                         null, null, null, null, null, null, "owner", LocalDate.now(), 1, 0, Instant.now()),
-                versionId, null, null, mapper.createObjectNode(), model, List.of(), List.of()
+                versionId, null, null, null, mapper.createObjectNode(), model, List.of(), List.of()
         );
     }
 }

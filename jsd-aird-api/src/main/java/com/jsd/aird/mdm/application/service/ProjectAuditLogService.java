@@ -52,7 +52,7 @@ public class ProjectAuditLogService {
                            WHEN 'PROJECT' THEN p.name
                            WHEN 'PROJECT_STAGE' THEN s.name
                            WHEN 'PROJECT_TASK' THEN t.name
-                           WHEN 'PROJECT_EXPERIMENT' THEN e.title
+                           WHEN 'EXPERIMENT' THEN e.title
                            WHEN 'PROJECT_DOCUMENT' THEN d.title
                            ELSE COALESCE(al.detail_jsonb ->> 'objectName', al.detail_jsonb ->> 'name')
                        END AS object_name
@@ -123,7 +123,7 @@ public class ProjectAuditLogService {
                 "(al.aggregate_type = 'PROJECT' AND al.aggregate_id = ?)" +
                 " OR (al.aggregate_type = 'PROJECT_STAGE' AND EXISTS (SELECT 1 FROM mdm.project_stage ps WHERE ps.id = al.aggregate_id AND ps.project_id = ?))" +
                 " OR (al.aggregate_type = 'PROJECT_TASK' AND EXISTS (SELECT 1 FROM mdm.project_task pt WHERE pt.id = al.aggregate_id AND pt.project_id = ?))" +
-                " OR (al.aggregate_type = 'PROJECT_EXPERIMENT' AND EXISTS (SELECT 1 FROM mdm.project_experiment pe WHERE pe.id = al.aggregate_id AND pe.project_id = ?))" +
+                " OR (al.aggregate_type = 'EXPERIMENT' AND EXISTS (SELECT 1 FROM rnd.experiment re WHERE re.id = al.aggregate_id AND re.project_id = ? AND re.deleted = false))" +
                 " OR (al.aggregate_type = 'PROJECT_DOCUMENT' AND EXISTS (SELECT 1 FROM mdm.project_document pd WHERE pd.id = al.aggregate_id AND pd.project_id = ?) )" +
                 " OR al.detail_jsonb ->> 'projectId' = ?" +
                 " OR al.detail_jsonb ->> 'project_id' = ?" +
@@ -135,7 +135,7 @@ public class ProjectAuditLogService {
                 " LEFT JOIN mdm.project p ON al.aggregate_type = 'PROJECT' AND p.id = al.aggregate_id" +
                 " LEFT JOIN mdm.project_stage s ON al.aggregate_type = 'PROJECT_STAGE' AND s.id = al.aggregate_id" +
                 " LEFT JOIN mdm.project_task t ON al.aggregate_type = 'PROJECT_TASK' AND t.id = al.aggregate_id" +
-                " LEFT JOIN mdm.project_experiment e ON al.aggregate_type = 'PROJECT_EXPERIMENT' AND e.id = al.aggregate_id" +
+                " LEFT JOIN rnd.experiment e ON al.aggregate_type = 'EXPERIMENT' AND e.id = al.aggregate_id AND e.deleted = false" +
                 " LEFT JOIN mdm.project_document d ON al.aggregate_type = 'PROJECT_DOCUMENT' AND d.id = al.aggregate_id";
     }
 

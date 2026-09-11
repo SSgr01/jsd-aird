@@ -20,10 +20,17 @@ import java.io.ByteArrayInputStream;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
 import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+import java.time.temporal.TemporalAccessor;
+
+import com.jsd.aird.tpl.application.StandardFieldDictionary;
 
 @Service
 public class ProductionUploadRecognitionService {
@@ -102,13 +109,17 @@ public class ProductionUploadRecognitionService {
         var userSelected = requestedTemplateVersionId != null;
         var auto = selected != null && (userSelected || exact || selected.score() >= .90d && margin(matches) >= .10d);
         var matchMode = userSelected ? "USER_SELECTED_TEMPLATE"
-                : exact ? "EXACT_MANIFEST" : auto ? "SIMILAR_AUTO" : "USER_REVIEW";
+                : exact ? "EXACT_MANIFEST" : auto ? "SIMILAR_AUTO" : "NO_TEMPLATE";
 
         uploads.updateRecognitionProgress(uploadId, "EXTRACTING", 70, "EXTRACTING_VALUES");
         var result = objectMapper.createObjectNode();
         result.put("sourceType", "XLSX");
         result.put("matchMode", matchMode);
-        result.put("requiresTemplateSelection", !auto);
+        // A template improves field extraction, but it is not required to open
+        // and edit an uploaded workbook.  When matching is inconclusive, keep
+        // the parsed source snapshot and continue as a template-free draft.
+        result.put("requiresTemplateSelection", false);
+        if (!auto) result.put("message", "未选择模板，已按原文件生成可编辑生产单");
         result.set("templateCandidates", candidates(matches));
         result.set("issues", objectMapper.valueToTree(parsed.issues()));
 
@@ -124,6 +135,13 @@ public class ProductionUploadRecognitionService {
             result.set("data", extraction.data());
             result.set("mapping", template.mapping().deepCopy());
             result.set("items", objectMapper.valueToTree(extraction.items()));
+            // A template can contain a perfectly valid physical mapping while
+            // its field is still carrying an AUTO.* code (for example when the
+            // template was imported before standard-field confirmation).  The
+            // extractor has already found the value; normalize the semantic
+            // code before persisting the upload so the production list columns
+            // can consume it.
+            normalizeStandardFieldCodes(result, template.mapping());
         } else {
             result.put("templateMatchScore", 0d);
             result.set("data", objectMapper.createObjectNode());
@@ -148,14 +166,14 @@ public class ProductionUploadRecognitionService {
                                   UUID requestedTemplateVersionId) {
         if (!photoEnabled) throw new IllegalArgumentException("生产单图片识别功能尚未启用");
         if (!isImage(file)) throw new IllegalArgumentException("生产单图片来源必须是图片文件");
-        uploads.updateRecognitionProgress(uploadId, "MATCHING_TEMPLATE", 35, "WAITING_TEMPLATE");
+        uploads.updateRecognitionProgress(uploadId, "MATCHING_TEMPLATE", 35, "MATCHING_TEMPLATE");
         if (requestedTemplateVersionId == null) {
             var result = objectMapper.createObjectNode();
             result.put("sourceType", "PHOTO");
             result.put("matchMode", "USER_REVIEW");
             result.put("templateMatchScore", 0d);
-            result.put("requiresTemplateSelection", true);
-            result.put("message", "图片识别需要先选择已发布模板");
+            result.put("requiresTemplateSelection", false);
+            result.put("message", "未选择模板，已保存原图并可直接预览；选择模板后可继续识别字段");
             result.set("templateCandidates", photoCandidates(orders.listPublishedTemplates(organizationId)));
             result.set("data", objectMapper.createObjectNode());
             result.set("mapping", objectMapper.createArrayNode());
@@ -247,7 +265,7 @@ public class ProductionUploadRecognitionService {
     private String firstValue(JsonNode result, String fieldCode) {
         for (var item : result.path("items")) {
             if (fieldCode.equals(item.path("fieldCode").asText(""))) {
-                var value = item.has("value") ? item.path("value") : item.path("normalizedValue");
+                var value = itemValue(item);
                 if (value.isValueNode() && !value.isNull()) return value.asText("").trim();
             }
         }
@@ -255,9 +273,93 @@ public class ProductionUploadRecognitionService {
     }
 
     private LocalDate firstDate(JsonNode result, String fieldCode) {
-        var value = firstValue(result, fieldCode);
-        if (value.isBlank()) return null;
-        try { return LocalDate.parse(value); } catch (RuntimeException ignored) { return null; }
+        for (var item : result.path("items")) {
+            if (!fieldCode.equals(item.path("fieldCode").asText(""))) continue;
+            var value = itemValue(item);
+            var date = parseDate(value);
+            if (date != null) return date;
+        }
+        return null;
+    }
+
+    /**
+     * Make template-center mappings usable by the production-upload summary.
+     * The summary columns are backed by the versioned standard field codes,
+     * while imported templates may still expose a local field code.  Resolve
+     * the code from the binding label/data path without changing the original
+     * template mapping stored in the recognition result.
+     */
+    private void normalizeStandardFieldCodes(JsonNode result, JsonNode mapping) {
+        if (!result.path("items").isArray() || !mapping.isArray()) return;
+        var bindings = new HashMap<String, JsonNode>();
+        mapping.forEach(binding -> {
+            var id = binding.path("bindingId").asText("");
+            if (!id.isBlank()) bindings.put(id, binding);
+        });
+        for (var itemNode : result.path("items")) {
+            if (!(itemNode instanceof com.fasterxml.jackson.databind.node.ObjectNode item)) continue;
+            var binding = bindings.get(item.path("bindingId").asText(""));
+            var current = item.path("fieldCode").asText("");
+            var resolved = standardFieldCode(
+                    current,
+                    binding == null ? "" : binding.path("standardFieldName").asText(""),
+                    binding == null ? "" : binding.path("fieldName").asText(""),
+                    binding == null ? "" : binding.path("name").asText(""),
+                    binding == null ? "" : binding.path("dataPath").asText(""),
+                    item.path("dataPath").asText("")
+            );
+            if (!resolved.isBlank()) item.put("fieldCode", resolved);
+        }
+    }
+
+    private String standardFieldCode(String... candidates) {
+        for (var candidate : candidates) {
+            if (candidate == null || candidate.isBlank()) continue;
+            if (candidate.startsWith("PRODUCTION.")) return candidate;
+            var matched = StandardFieldDictionary.match(candidate);
+            if (matched.isPresent()) return matched.get().fieldCode();
+            var compact = candidate
+                    .replace("/", "")
+                    .replace("_", "")
+                    .replace("-", "")
+                    .replace(" ", "")
+                    .toLowerCase(Locale.ROOT);
+            if (compact.endsWith("orderno")) return "PRODUCTION.ORDER_NO";
+            if (compact.endsWith("productname")) return "PRODUCTION.PRODUCT_NAME";
+            if (compact.endsWith("category")) return "PRODUCTION.CATEGORY";
+            if (compact.endsWith("manufacturedate") || compact.endsWith("productiondate")) {
+                return "PRODUCTION.MANUFACTURE_DATE";
+            }
+        }
+        return "";
+    }
+
+    private LocalDate parseDate(JsonNode value) {
+        if (value == null || value.isNull()) return null;
+        if (value.isNumber()) {
+            // Excel's default 1900 date system (including its historical
+            // 1900-leap-year compatibility offset).
+            var serial = value.asDouble();
+            if (serial >= 1d && serial < 300000d) {
+                return LocalDate.of(1899, 12, 30).plusDays((long) Math.floor(serial));
+            }
+        }
+        var text = value.asText("").trim();
+        if (text.isBlank()) return null;
+        try { return LocalDate.parse(text); } catch (DateTimeParseException ignored) { }
+        for (var pattern : List.of("yyyy/M/d", "yyyy/M/d H:mm", "yyyy-MM-dd HH:mm:ss", "yyyy年M月d日")) {
+            try {
+                TemporalAccessor parsed = DateTimeFormatter.ofPattern(pattern).parse(text);
+                return LocalDate.from(parsed);
+            } catch (RuntimeException ignored) { }
+        }
+        try {
+            var serial = Double.parseDouble(text);
+            if (serial >= 1d && serial < 300000d) {
+                return LocalDate.of(1899, 12, 30).plusDays((long) Math.floor(serial));
+            }
+        } catch (NumberFormatException ignored) { }
+        return null;
     }
 
     private JsonNode itemValue(JsonNode item) {

@@ -55,7 +55,7 @@ public class JdbcDataRepository implements DataRepository {
                 INSERT INTO ops.async_job (id, organization_id, job_type, status, payload_jsonb, priority, idempotency_key)
                 VALUES (?, ?, 'DATA_IMPORT_PARSE', 'READY', ?, 50, ?)
                 """, asyncJobId, organizationId, pgJson(payload), "data-import-parse:" + importJobId);
-        updateJobStatus(organizationId, importJobId, "QUEUED", 1, "QUEUED", null);
+        updateJobStatus(organizationId, importJobId, "QUEUED", 0, "QUEUED", null);
     }
 
     @Override
@@ -248,7 +248,7 @@ public class JdbcDataRepository implements DataRepository {
                     pgJson(row.sourceMetadata()), hash(row.rawValues()), row.status());
         }
         jdbc.update("""
-                UPDATE data.import_job SET parser_version = ?, status = 'WAITING_MAPPING', progress = 35,
+                UPDATE data.import_job SET parser_version = ?, status = 'WAITING_MAPPING', progress = 100,
                     current_stage = 'WAITING_MAPPING', updated_at = now()
                 WHERE id = ?
                 """, parserVersion, importJobId);
@@ -359,7 +359,7 @@ public class JdbcDataRepository implements DataRepository {
                     mapping.sourceUnit(), mapping.standardUnit(), pgJson(mapping.detail()), mapping.status());
         }
         jdbc.update("""
-                UPDATE data.import_job SET status = 'VALIDATING', progress = 55, current_stage = 'VALIDATING', updated_at = now()
+                UPDATE data.import_job SET status = 'VALIDATING', progress = 100, current_stage = 'VALIDATING', updated_at = now()
                 WHERE organization_id = ? AND id = ?
                 """, organizationId, importJobId);
     }
@@ -433,7 +433,7 @@ public class JdbcDataRepository implements DataRepository {
                     issue.issueType(), issue.rowNumber(), issue.column(), issue.address(), issue.message(), pgJson(issue.detail()),
                     issue.status());
         }
-        updateJobStatus(organizationId, importJobId, status, "WAITING_CONFIRM".equals(status) ? 85 : 55,
+        updateJobStatus(organizationId, importJobId, status, 100,
                 "WAITING_CONFIRM".equals(status) ? "WAITING_CONFIRM" : "VALIDATING", null);
     }
 

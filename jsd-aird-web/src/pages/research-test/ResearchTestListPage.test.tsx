@@ -50,7 +50,7 @@ describe('ResearchTestListPage', () => {
         </MemoryRouter>
       </AppProviders>,
     );
-    expect(await screen.findByText('综合测试报告')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: '综合测试报告' })).toBeInTheDocument();
     await waitFor(() => expect(listMock).toHaveBeenCalled());
     expect(screen.getByRole('button', { name: /新增报告/ })).toBeInTheDocument();
     expect(screen.getByText('CTR-001')).toBeInTheDocument();
@@ -71,4 +71,17 @@ describe('ResearchTestListPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /Excel 测试标准/ }));
     expect(screen.getByRole('button', { name: /Excel 测试标准/ })).toHaveClass('active');
   }, 15_000);
+
+  it('offers file import mode for a new standard', async () => {
+    render(
+      <AppProviders>
+        <MemoryRouter>
+          <ResearchTestListPage type="STANDARD" />
+        </MemoryRouter>
+      </AppProviders>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: /新增测试标准/ }));
+    fireEvent.click(screen.getByRole('button', { name: /导入文件/ }));
+    expect(screen.getByText(/支持 DOC、DOCX、XLS、XLSX/)).toBeInTheDocument();
+  });
 });

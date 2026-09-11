@@ -113,6 +113,32 @@ export function isDocumentSnapshot(snapshot: Record<string, unknown> | null | un
   return 'body' in snapshot || 'documentStyle' in snapshot || 'editorMode' in snapshot;
 }
 
+/** Remove the legacy image-only OCR source sheet; the source file is downloaded separately. */
+export function withoutOcrSourceSheet(snapshot: Record<string, unknown>): Record<string, unknown> {
+  const sourceSheets = snapshot.sheets as Record<string, Record<string, unknown>> | undefined;
+  if (!sourceSheets) return snapshot;
+  const removedIds = Object.entries(sourceSheets)
+    .filter(([sheetId, sheet]) => sheetId === 'sheet-ocr-text' || sheet.name === 'OCR原文')
+    .map(([sheetId]) => sheetId);
+  if (removedIds.length === 0) return snapshot;
+  const removed = new Set(removedIds);
+  const sheets = Object.fromEntries(Object.entries(sourceSheets).filter(([sheetId]) => !removed.has(sheetId)));
+  const sheetOrder = Array.isArray(snapshot.sheetOrder)
+    ? snapshot.sheetOrder.filter((sheetId) => typeof sheetId !== 'string' || !removed.has(sheetId))
+    : snapshot.sheetOrder;
+  const resources = Array.isArray(snapshot.resources)
+    ? snapshot.resources.filter((resource) => {
+        if (!resource || typeof resource !== 'object') return true;
+        const item = resource as Record<string, unknown>;
+        const resourceData = item.data;
+        return item.name !== 'SHEET_DRAWING_PLUGIN'
+          || typeof resourceData !== 'string'
+          || !removedIds.some((sheetId) => resourceData.includes(`\"${sheetId}\"`));
+      })
+    : snapshot.resources;
+  return { ...snapshot, sheets, sheetOrder, resources };
+}
+
 function buildBlankDocumentSnapshot(id: string, title?: string): Record<string, unknown> {
   const content = title?.trim() ? title.trim() : '';
   const textLength = content.length;
@@ -145,6 +171,26 @@ function buildBlankDocumentSnapshot(id: string, title?: string): Record<string, 
   };
 }
 
+function buildBlankWorkbookSnapshot(id: string): Record<string, unknown> {
+  const sheetId = 'sheet-1';
+  return {
+    id,
+    snapshotFormatVersion: 3,
+    name: 'Sheet1',
+    sheetOrder: [sheetId],
+    sheets: {
+      [sheetId]: {
+        id: sheetId,
+        name: 'Sheet1',
+        rowCount: DEFAULT_ROW_CAPACITY,
+        columnCount: 26,
+        cellData: {},
+      },
+    },
+    styles: {},
+  };
+}
+
 /**
  * 将实验本 editModel 构建为 Univer 编辑器可直接渲染的快照。
  * - Word 实验：返回文档快照（已有 documentSnapshot/模板快照时复用，否则生成空白文档）。
@@ -156,7 +202,12 @@ export function buildExperimentSnapshot(
   templateSnapshot?: Record<string, unknown> | null,
 ): Record<string, unknown> {
   if (editModel.documentSnapshot && Object.keys(editModel.documentSnapshot).length > 0) {
-    return editModel.documentSnapshot;
+    return withoutOcrSourceSheet(editModel.documentSnapshot);
+  }
+  if (editModel.blankDocument === true) {
+    return editModel.documentFormat === 'word'
+      ? buildBlankDocumentSnapshot(id)
+      : buildBlankWorkbookSnapshot(id);
   }
   const isWord =
     editModel.documentFormat === 'word' ||

@@ -33,6 +33,7 @@ public final class IamPermissionCatalog {
                 p("customer.delete", "customer", "删除客户资料", "HIGH", "SELF"),
 
                 p("project.view", "project", "查看项目", "LOW", "ALL"),
+                p("project.export", "project", "导出项目", "HIGH", "ALL"),
                 p("project.create", "project", "新建项目", "MEDIUM", "SELF"),
                 p("project.update", "project", "编辑项目", "MEDIUM", "SELF"),
                 p("project.copy", "project", "复制项目", "MEDIUM", "SELF"),

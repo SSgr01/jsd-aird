@@ -47,6 +47,7 @@ public class RagRetrievalService {
     private final Executor retrievalExecutor;
     private final Duration webSearchTimeout;
     private final int maxWebCandidates;
+    private final int maxDataHits;
 
     @Autowired
     public RagRetrievalService(KnowledgeSearchFacade knowledge, DataSourceFileSearchFacade dataFiles,
@@ -55,7 +56,8 @@ public class RagRetrievalService {
                                @Qualifier("webSearchExecutor") Executor webSearchExecutor,
                                @Qualifier("ragRetrievalExecutor") Executor retrievalExecutor,
                                @Value("${app.ai.tavily.timeout:5s}") Duration webSearchTimeout,
-                               @Value("${app.ai.tavily.max-candidates:6}") int maxWebCandidates) {
+                               @Value("${app.ai.tavily.max-candidates:6}") int maxWebCandidates,
+                               @Value("${app.ai.retrieval.data-max-hits:16}") int maxDataHits) {
         this.knowledge = knowledge;
         this.dataFiles = dataFiles;
         this.rewrite = rewrite;
@@ -66,19 +68,28 @@ public class RagRetrievalService {
         this.webSearchTimeout = webSearchTimeout == null || webSearchTimeout.isNegative() || webSearchTimeout.isZero()
                 ? Duration.ofSeconds(5) : webSearchTimeout;
         this.maxWebCandidates = Math.max(1, Math.min(12, maxWebCandidates));
+        this.maxDataHits = Math.max(1, Math.min(100, maxDataHits));
     }
 
     RagRetrievalService(KnowledgeSearchFacade knowledge, DataSourceFileSearchFacade dataFiles,
                         QueryRewriteService rewrite, RerankerProvider reranker) {
         this(knowledge, dataFiles, rewrite, reranker, NO_WEB, Runnable::run, Runnable::run,
-                Duration.ofSeconds(5), 6);
+                Duration.ofSeconds(5), 6, 16);
     }
 
     RagRetrievalService(KnowledgeSearchFacade knowledge, DataSourceFileSearchFacade dataFiles,
                         QueryRewriteService rewrite, RerankerProvider reranker, WebSearchProvider webSearch,
                         Executor webSearchExecutor, Duration webSearchTimeout, int maxWebCandidates) {
         this(knowledge, dataFiles, rewrite, reranker, webSearch, webSearchExecutor, webSearchExecutor,
-                webSearchTimeout, maxWebCandidates);
+                webSearchTimeout, maxWebCandidates, 16);
+    }
+
+    RagRetrievalService(KnowledgeSearchFacade knowledge, DataSourceFileSearchFacade dataFiles,
+                        QueryRewriteService rewrite, RerankerProvider reranker, WebSearchProvider webSearch,
+                        Executor webSearchExecutor, Executor retrievalExecutor, Duration webSearchTimeout,
+                        int maxWebCandidates) {
+        this(knowledge, dataFiles, rewrite, reranker, webSearch, webSearchExecutor, retrievalExecutor,
+                webSearchTimeout, maxWebCandidates, 16);
     }
 
     public boolean webSearchAvailable() {
@@ -94,6 +105,13 @@ public class RagRetrievalService {
     public Retrieval retrieve(UUID organizationId, String question, List<AssistantRepository.MessageRow> history,
                               List<UUID> knowledgeCategoryIds,
                               List<UUID> dataCategoryIds, boolean aiOnly, boolean webSearchEnabled) {
+        return retrieve(organizationId, question, history, knowledgeCategoryIds, dataCategoryIds, aiOnly,
+                webSearchEnabled, DataSourceFileSearchFacade.AccessScope.all());
+    }
+
+    public Retrieval retrieve(UUID organizationId, String question, List<AssistantRepository.MessageRow> history,
+                              List<UUID> knowledgeCategoryIds, List<UUID> dataCategoryIds, boolean aiOnly,
+                              boolean webSearchEnabled, DataSourceFileSearchFacade.AccessScope dataAccessScope) {
         var started = System.nanoTime();
         var timings = new LinkedHashMap<String, Long>();
         var stage = System.nanoTime();
@@ -112,7 +130,8 @@ public class RagRetrievalService {
         CompletableFuture<DataChannelResult> dataFuture;
         try {
             dataFuture = CompletableFuture.supplyAsync(
-                    () -> searchDataChannel(organizationId, dataQueries, dataFilters, searchData), retrievalExecutor);
+                    () -> searchDataChannel(organizationId, dataQueries, dataFilters, dataAccessScope, searchData),
+                    retrievalExecutor);
         } catch (RejectedExecutionException exception) {
             dataFuture = CompletableFuture.completedFuture(new DataChannelResult(List.of(), dataQueries.size(),
                     dataQueries.size(), 0, searchData ? "FAILED" : "SKIPPED"));
@@ -199,22 +218,25 @@ public class RagRetrievalService {
     }
 
     private DataChannelResult searchDataChannel(UUID organizationId, List<String> queries, List<UUID> filters,
+                                                DataSourceFileSearchFacade.AccessScope accessScope,
                                                 boolean enabled) {
         if (!enabled) return new DataChannelResult(List.of(), 0, 0, 0, "SKIPPED");
         var started = System.nanoTime();
-        var byHit = new LinkedHashMap<UUID, DataSourceFileSearchFacade.SourceFileHit>();
+        var byHit = new LinkedHashMap<UUID, DataHitAccumulator>();
         var failures = 0;
         for (var query : queries) {
             try {
-                dataFiles.search(organizationId, query, filters, 8)
-                        .forEach(hit -> byHit.putIfAbsent(hit.hitId(), hit));
+                dataFiles.search(organizationId, query, filters, accessScope,
+                                Math.max(1, Math.min(10, maxDataHits)))
+                        .forEach(hit -> byHit.computeIfAbsent(hit.hitId(), ignored -> new DataHitAccumulator(hit))
+                                .add(hit.score()));
             } catch (RuntimeException exception) {
                 failures++;
             }
         }
-        var hits = byHit.values().stream()
+        var hits = byHit.values().stream().map(DataHitAccumulator::result)
                 .sorted(Comparator.comparingDouble(DataSourceFileSearchFacade.SourceFileHit::score).reversed())
-                .limit(16).toList();
+                .limit(maxDataHits).toList();
         return new DataChannelResult(hits, failures, queries.size(), elapsedMs(started),
                 dataChannelStatus(true, hits, failures, queries.size()));
     }
@@ -546,6 +568,29 @@ public class RagRetrievalService {
                                      int queryCount, long elapsedMs, String status) {
         private DataChannelResult {
             hits = hits == null ? List.of() : List.copyOf(hits);
+        }
+    }
+
+    private static final class DataHitAccumulator {
+        private final DataSourceFileSearchFacade.SourceFileHit hit;
+        private double bestScore;
+        private int matches;
+
+        private DataHitAccumulator(DataSourceFileSearchFacade.SourceFileHit hit) {
+            this.hit = hit;
+        }
+
+        private void add(double score) {
+            bestScore = Math.max(bestScore, score);
+            matches++;
+        }
+
+        private DataSourceFileSearchFacade.SourceFileHit result() {
+            var combinedScore = bestScore + Math.min(2d, Math.max(0, matches - 1) * 0.35d);
+            return new DataSourceFileSearchFacade.SourceFileHit(hit.hitId(), hit.fileObjectId(), hit.importJobId(),
+                    hit.rowNumber(), hit.columnName(), hit.originalName(), hit.content(), combinedScore,
+                    hit.sourceLocator(), hit.recordKey(), hit.fieldCode(), hit.fieldName(), hit.fieldValue(),
+                    hit.unit(), hit.valueType(), hit.sheetName(), hit.cellAddress());
         }
     }
 

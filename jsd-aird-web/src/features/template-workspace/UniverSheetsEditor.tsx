@@ -1,9 +1,12 @@
 import { createUniver, LocaleType, mergeLocales, type FUniver } from '@univerjs/presets';
 import { UniverSheetsCorePreset } from '@univerjs/preset-sheets-core';
 import UniverPresetSheetsCoreZhCN from '@univerjs/preset-sheets-core/locales/zh-CN';
+import { UniverSheetsDrawingPreset } from '@univerjs/preset-sheets-drawing';
+import UniverPresetSheetsDrawingZhCN from '@univerjs/preset-sheets-drawing/locales/zh-CN';
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 
 import '@univerjs/preset-sheets-core/lib/index.css';
+import '@univerjs/preset-sheets-drawing/lib/index.css';
 
 import { isCellMutationCommand, isNewFieldLabelChange, isSingleCellAddress } from './live-field-discovery';
 import { locatorValueRange } from './locator';
@@ -118,14 +121,29 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
       const { univer, univerAPI } = createUniver({
         locale: LocaleType.ZH_CN,
         locales: {
-          [LocaleType.ZH_CN]: mergeLocales(UniverPresetSheetsCoreZhCN),
+          [LocaleType.ZH_CN]: mergeLocales(
+            UniverPresetSheetsCoreZhCN,
+            UniverPresetSheetsDrawingZhCN,
+          ),
         },
         presets: [
           UniverSheetsCorePreset({
             container: host,
             ribbonType: 'collapsed',
             footer: { sheetBar: true, statisticBar: true },
+            sheets: {
+              // Imported OCR/legacy snapshots can legitimately contain numeric-looking
+              // text. Univer 0.25.1 renders those cells with a force-string alert whose
+              // zh-CN locale entry is missing, exposing the internal translation key.
+              // The marker is not actionable for our document-style workbooks, so keep
+              // the cell value editable without showing the misleading error UI.
+              disableForceStringAlert: true,
+              disableForceStringMark: true,
+            },
           }),
+          // Required for OCR workbooks: the original source image is stored
+          // as a native SHEET_DRAWING_PLUGIN resource on the OCR原文 sheet.
+          UniverSheetsDrawingPreset(),
         ],
       });
       ownedUniver = univer;

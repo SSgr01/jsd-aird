@@ -219,7 +219,7 @@ export function RolePermissionsPage() {
       </div>
     );
   return (
-    <div className="iam-page">
+    <div className="iam-page iam-role-permissions-page">
       <div className="page-heading">
         <div>
           <Typography.Title level={2}>角色权限配置</Typography.Title>

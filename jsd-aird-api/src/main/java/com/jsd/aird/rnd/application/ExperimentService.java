@@ -39,7 +39,6 @@ public class ExperimentService {
     }
 
     public PageResponse<Summary> search(ExperimentRepository.Search query) {
-        ExperimentAccessPolicy.requireRead();
         var actor = ActorContext.required();
         var normalized = normalize(query);
         var items = repository.search(actor.organizationId(), normalized);
@@ -49,7 +48,6 @@ public class ExperimentService {
     }
 
     public Detail detail(UUID id) {
-        ExperimentAccessPolicy.requireRead();
         var actor = ActorContext.required();
         return normalize(repository.detail(actor.organizationId(), id)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "实验不存在")));
@@ -57,7 +55,6 @@ public class ExperimentService {
 
     @Transactional
     public Summary create(CreateCommand command) {
-        ExperimentAccessPolicy.requireWrite();
         var actor = ActorContext.required();
         if (command == null || command.title() == null || command.title().isBlank()) {
             throw validation("实验名称不能为空");
@@ -75,6 +72,11 @@ public class ExperimentService {
         var editModel = command.editModel() == null
                 ? editModels.empty(title, versionId)
                 : editModels.normalize(object(command.editModel(), "editModel"), versionId);
+        if (command.sourceFileId() != null) {
+            // Keep the relational source reference and the version snapshot
+            // aligned for newly-created experiments.
+            editModel.put("sourceFileId", command.sourceFileId().toString());
+        }
 
         var summary = repository.create(new ExperimentRepository.Create(
                 id,
@@ -106,13 +108,11 @@ public class ExperimentService {
     }
 
     public Summary copy(UUID id) {
-        ExperimentAccessPolicy.requireWrite();
         var actor = ActorContext.required();
         return repository.copy(actor.organizationId(), id, actor.userId(), actor.username());
     }
 
     public Detail save(UUID id, long revision, DraftCommand command) {
-        ExperimentAccessPolicy.requireWrite();
         var actor = ActorContext.required();
         if (command == null || command.experimentNo() == null || command.experimentNo().isBlank()) {
             throw validation("实验编号不能为空");
@@ -152,19 +152,18 @@ public class ExperimentService {
     }
 
     public void delete(UUID id, long revision) {
-        ExperimentAccessPolicy.requireDelete();
         var actor = ActorContext.required();
         repository.delete(actor.organizationId(), id, revision, actor.userId(), actor.username());
+    }
+
+    public Detail publish(UUID id, long revision) {
+        var actor = ActorContext.required();
+        return normalize(repository.publish(actor.organizationId(), id, revision, actor.userId(), actor.username()));
     }
 
     public Detail transition(UUID id, long revision, ExperimentStatus target, String comment) {
         if (target == null) {
             throw validation("实验目标状态不能为空");
-        }
-        if (target == ExperimentStatus.COMPLETED || target == ExperimentStatus.RETURNED) {
-            ExperimentAccessPolicy.requireReview();
-        } else {
-            ExperimentAccessPolicy.requireWrite();
         }
         var actor = ActorContext.required();
         return normalize(repository.transition(
@@ -172,45 +171,38 @@ public class ExperimentService {
     }
 
     public Detail revision(UUID id, long revision, String reason) {
-        ExperimentAccessPolicy.requireWrite();
         var actor = ActorContext.required();
         return normalize(repository.createRevision(
                 actor.organizationId(), id, revision, reason, actor.userId(), actor.username()));
     }
 
     public Detail rollback(UUID id, long revision, int targetVersion, String reason) {
-        ExperimentAccessPolicy.requireWrite();
         var actor = ActorContext.required();
         return normalize(repository.rollback(
                 actor.organizationId(), id, revision, targetVersion, reason, actor.userId(), actor.username()));
     }
 
     public List<Version> versions(UUID id) {
-        ExperimentAccessPolicy.requireRead();
         var actor = ActorContext.required();
         return repository.versions(actor.organizationId(), id).stream().map(this::normalize).toList();
     }
 
     public JsonNode compare(UUID id, int from, int to) {
-        ExperimentAccessPolicy.requireRead();
         var actor = ActorContext.required();
         return repository.compare(actor.organizationId(), id, from, to);
     }
 
     public List<Audit> audits(UUID id) {
-        ExperimentAccessPolicy.requireRead();
         var actor = ActorContext.required();
         return repository.audits(actor.organizationId(), id);
     }
 
     public List<Category> categories(boolean includeInactive) {
-        ExperimentAccessPolicy.requireRead();
         var actor = ActorContext.required();
         return repository.categories(actor.organizationId(), includeInactive);
     }
 
     public Category createCategory(String code, String name, String description) {
-        ExperimentAccessPolicy.requireWrite();
         var actor = ActorContext.required();
         return repository.createCategory(
                 actor.organizationId(), requiredText(code, "分类编码不能为空"),
@@ -219,7 +211,6 @@ public class ExperimentService {
     }
 
     public Category updateCategory(UUID id, long revision, String name, String description) {
-        ExperimentAccessPolicy.requireWrite();
         var actor = ActorContext.required();
         return repository.updateCategory(
                 actor.organizationId(), id, revision, requiredText(name, "分类名称不能为空"),
@@ -227,7 +218,6 @@ public class ExperimentService {
     }
 
     public Category categoryActive(UUID id, long revision, boolean active) {
-        ExperimentAccessPolicy.requireWrite();
         var actor = ActorContext.required();
         return repository.setCategoryActive(actor.organizationId(), id, revision, active);
     }
@@ -280,7 +270,7 @@ public class ExperimentService {
     }
 
     private Detail normalize(Detail detail) {
-        return new Detail(detail.summary(), detail.currentVersionId(), detail.templateVersionId(),
+        return new Detail(detail.summary(), detail.currentVersionId(), detail.sourceFileId(), detail.templateVersionId(),
                 detail.templateSnapshotHash(), detail.templateSnapshot(),
                 editModels.normalize(detail.editModel(), detail.currentVersionId()),
                 detail.reviews(), detail.attachments());

@@ -6,6 +6,7 @@ import { generateAdminPassword } from '@/services/auth/password-generator';
 import { iamApi, type IamRole, type IamUser } from '@/services/iam/iam-api';
 import { HttpError } from '@/services/http/errors';
 import './iam.css';
+import '@/styles/management-list.css';
 
 interface UserForm {
   username: string;
@@ -158,10 +159,10 @@ export function UserManagementPage() {
     { title: '操作', key: 'actions', render: (_: unknown, user: IamUser) => <Space><Button type="link" icon={<EditOutlined />} onClick={() => openEdit(user)}>编辑</Button><Dropdown trigger={['click']} menu={{ items: [{ key: user.status === 'ACTIVE' ? 'disable' : 'enable', label: user.status === 'ACTIVE' ? '停用账号' : '启用账号', danger: user.status === 'ACTIVE' }, { key: 'reset', label: '重置密码' }, { key: 'logout', label: '强制下线' }], onClick: ({ key }) => void action(key, user) }}><Button type="text" icon={<MoreOutlined />} /></Dropdown></Space> },
   ];
 
-  return <div className="iam-page">
+  return <div className="iam-page pm-unified-list-page iam-user-management-page">
     <div className="page-heading"><div><Typography.Title level={2}>用户管理</Typography.Title><Typography.Text type="secondary">维护系统账号、部门归属和主角色，账号状态变化会立即影响当前会话。</Typography.Text></div><Space><Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button><Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增用户</Button></Space></div>
-    <Row gutter={[16, 16]}><Col xs={24} sm={12} lg={6}><Card className="iam-stat-card"><Statistic title="用户总数" value={total} prefix={<UserOutlined />} /></Card></Col><Col xs={24} sm={12} lg={6}><Card className="iam-stat-card"><Statistic title="启用账号" value={users.filter((user) => user.status === 'ACTIVE').length} /></Card></Col><Col xs={24} sm={12} lg={6}><Card className="iam-stat-card"><Statistic title="部门数量" value={departments} /></Card></Col><Col xs={24} sm={12} lg={6}><Card className="iam-stat-card"><Statistic title="系统角色" value={roles.length} /></Card></Col></Row>
-    <Card className="iam-card" variant="borderless"><div className="iam-toolbar"><Input.Search allowClear value={keyword} onChange={(event) => setKeyword(event.target.value)} onSearch={() => void load()} placeholder="搜索用户名、姓名或部门" style={{ maxWidth: 360 }} /><Typography.Text type="secondary">共 {total} 个账号</Typography.Text></div><Table rowKey="id" loading={loading} columns={columns} dataSource={users} pagination={{ total, pageSize: 20 }} /></Card>
+    <Row gutter={[12, 12]}><Col xs={12} sm={12} lg={6}><Card className="iam-stat-card"><Statistic title="用户总数" value={total} prefix={<UserOutlined />} /></Card></Col><Col xs={12} sm={12} lg={6}><Card className="iam-stat-card"><Statistic title="启用账号" value={users.filter((user) => user.status === 'ACTIVE').length} /></Card></Col><Col xs={12} sm={12} lg={6}><Card className="iam-stat-card"><Statistic title="部门数量" value={departments} /></Card></Col><Col xs={12} sm={12} lg={6}><Card className="iam-stat-card"><Statistic title="系统角色" value={roles.length} /></Card></Col></Row>
+    <Card className="iam-card" variant="borderless"><div className="iam-toolbar"><Input.Search allowClear value={keyword} onChange={(event) => setKeyword(event.target.value)} onSearch={() => void load()} placeholder="搜索用户名、姓名或部门" /><Typography.Text type="secondary">共 {total} 个账号</Typography.Text></div><Table rowKey="id" loading={loading} columns={columns} dataSource={users} scroll={{ x: 'max-content' }} pagination={{ total, pageSize: 20 }} /></Card>
     <Modal title={editing ? '编辑用户' : '新增用户'} open={modalOpen} onCancel={() => { setModalOpen(false); clearPasswordInputs(); }} destroyOnHidden width={520} footer={<Space><Button onClick={() => { setModalOpen(false); clearPasswordInputs(); }}>取消</Button><Button type="primary" htmlType="submit" form="iam-user-form">保存</Button></Space>}>
       <Form<UserForm> id="iam-user-form" layout="vertical" initialValues={{ username: editing?.username, displayName: editing?.displayName, email: editing?.email, phone: editing?.phone, departmentName: editing?.departmentName, roleId: editing?.roleId ?? roles[0]?.id }} onFinish={(values) => void submit(values)} requiredMark={false}>
         <Form.Item name="username" label="账号" rules={[{ required: true, message: '请输入账号' }]}><Input disabled={Boolean(editing)} /></Form.Item>

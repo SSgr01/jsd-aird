@@ -56,7 +56,7 @@ public class JdbcProductionUploadRepository implements ProductionUploadRepositor
                     selected_template_version_id = ?, match_mode = NULL, template_match_score = NULL,
                     recognition_result_jsonb = NULL, structure_summary_jsonb = NULL,
                     failure_message = NULL, recognized_at = NULL, updated_at = now()
-                WHERE id = ? AND status NOT IN ('DELETED', 'PUBLISHED')
+                WHERE id = ? AND status <> 'DELETED'
                 """, selectedTemplateVersionId, uploadId);
     }
 
@@ -76,8 +76,13 @@ public class JdbcProductionUploadRepository implements ProductionUploadRepositor
                                     JsonNode recognitionResult) {
         jdbcTemplate.update("""
                 UPDATE mfg.production_upload
-                SET status = 'REVIEW_REQUIRED', recognition_progress = 100,
-                    current_stage = 'REVIEW_REQUIRED', selected_template_version_id = ?,
+                -- Recognition produces an editable production-order draft.  A
+                -- human review is not a separate upload status; review/editing
+                -- happens in the workspace and publication creates the first
+                -- version.  Keep REVIEW_REQUIRED readable below for records
+                -- written by older deployments.
+                SET status = 'SAVED', recognition_progress = 100,
+                    current_stage = 'COMPLETED', selected_template_version_id = ?,
                     match_mode = ?, template_match_score = ?, structure_summary_jsonb = ?,
                     workbook_snapshot_jsonb = ?, recognition_result_jsonb = ?,
                     failure_message = NULL, recognized_at = now(), updated_at = now()
@@ -164,6 +169,14 @@ public class JdbcProductionUploadRepository implements ProductionUploadRepositor
     }
 
     @Override
+    public Optional<UUID> findAsyncJobId(UUID organizationId, UUID uploadId) {
+        return jdbcTemplate.query(
+                "SELECT async_job_id FROM mfg.production_upload WHERE organization_id = ? AND id = ?",
+                (rs, rowNum) -> rs.getObject("async_job_id", UUID.class), organizationId, uploadId)
+                .stream().findFirst();
+    }
+
+    @Override
     public Optional<UploadView> findActiveBySha256(UUID organizationId, String sha256) {
         if (sha256 == null || sha256.isBlank()) return Optional.empty();
         return jdbcTemplate.query(selectSql()
@@ -173,7 +186,8 @@ public class JdbcProductionUploadRepository implements ProductionUploadRepositor
     }
 
     @Override
-    public PageResult<UploadView> list(UUID organizationId, String keyword, String status, UUID projectId, int page, int size) {
+    public PageResult<UploadView> list(UUID organizationId, String keyword, String status, UUID projectId,
+                                      boolean viewableOnly, int page, int size) {
         var where = new StringBuilder(" WHERE pu.organization_id = ? ");
         var args = new ArrayList<Object>();
         args.add(organizationId);
@@ -182,10 +196,27 @@ public class JdbcProductionUploadRepository implements ProductionUploadRepositor
             args.add(projectId);
         }
         if (status != null && !status.isBlank()) {
-            where.append(" AND pu.status = ?");
-            args.add(status);
+            if ("PARSED".equalsIgnoreCase(status)) {
+                // REVIEW_REQUIRED is the legacy name used before recognition
+                // completion was folded into the saved-draft state. PARSED is
+                // the upload-list filter that groups every completed record.
+                where.append(" AND pu.status IN ('SAVED', 'PUBLISHED', 'REVIEW_REQUIRED')");
+            } else if ("SAVED".equalsIgnoreCase(status)) {
+                // Preserve the existing saved-draft filter semantics for
+                // callers that still need to distinguish published records.
+                where.append(" AND pu.status IN ('SAVED', 'REVIEW_REQUIRED')");
+            } else {
+                where.append(" AND pu.status = ?");
+                args.add(status);
+            }
         } else {
             where.append(" AND pu.status <> 'DELETED'");
+        }
+        if (viewableOnly) {
+            // REVIEW_REQUIRED is a legacy completion state.  Treat it as a
+            // saved draft so old uploads remain visible after the workflow
+            // moves to parse -> save -> publish.
+            where.append(" AND pu.status IN ('SAVED', 'PUBLISHED', 'REVIEW_REQUIRED')");
         }
         if (keyword != null && !keyword.isBlank()) {
             where.append(" AND (lower(pu.production_name) LIKE ? OR lower(pu.order_no) LIKE ? " +
@@ -222,7 +253,11 @@ public class JdbcProductionUploadRepository implements ProductionUploadRepositor
                 UPDATE mfg.production_upload
                 SET workbook_snapshot_jsonb = ?, updated_by = ?,
                     lock_version = lock_version + 1, updated_at = now()
-                WHERE organization_id = ? AND id = ? AND status IN ('REVIEW_REQUIRED', 'SAVED') AND lock_version = ?
+                -- The workspace keeps the edit action available for published
+                -- records so business snapshots can be corrected after release.
+                -- Keep optimistic locking, but do not turn that supported UI
+                -- path into a 409 merely because the record is published.
+                WHERE organization_id = ? AND id = ? AND status IN ('REVIEW_REQUIRED', 'SAVED', 'PUBLISHED') AND lock_version = ?
                 """, pg(workbookSnapshot), actorId, organizationId, uploadId, lockVersion);
         if (updated == 0) {
             if (find(organizationId, uploadId).isEmpty()) return Optional.empty();
@@ -241,9 +276,30 @@ public class JdbcProductionUploadRepository implements ProductionUploadRepositor
                 SET production_name = ?, order_no = ?, product_name = ?, category = ?,
                     manufacture_date = ?, updated_by = ?, lock_version = lock_version + 1,
                     updated_at = now()
-                WHERE organization_id = ? AND id = ? AND status IN ('REVIEW_REQUIRED', 'SAVED') AND lock_version = ?
+                WHERE organization_id = ? AND id = ? AND status IN ('REVIEW_REQUIRED', 'SAVED', 'PUBLISHED') AND lock_version = ?
                 """, productionName, orderNo, productName, category, manufactureDate, actorId,
                 organizationId, uploadId, lockVersion);
+        if (updated == 0) {
+            if (find(organizationId, uploadId).isEmpty()) return Optional.empty();
+            throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT, "生产单已被其他用户修改");
+        }
+        return find(organizationId, uploadId);
+    }
+
+    @Override
+    public Optional<UploadView> rename(UUID organizationId, UUID actorId, UUID uploadId,
+                                       String productionName, UUID projectId, String projectName,
+                                       UUID stageId, String stageName, UUID taskId, String taskName,
+                                       long lockVersion) {
+        var updated = jdbcTemplate.update("""
+                UPDATE mfg.production_upload
+                SET production_name = ?, project_id = ?, project_name = ?, stage_id = ?, stage_name = ?,
+                    task_id = ?, task_name = ?, updated_by = ?, lock_version = lock_version + 1,
+                    updated_at = now()
+                WHERE organization_id = ? AND id = ? AND status IN ('REVIEW_REQUIRED', 'SAVED', 'PUBLISHED')
+                  AND lock_version = ?
+                """, productionName, projectId, projectName, stageId, stageName, taskId, taskName,
+                actorId, organizationId, uploadId, lockVersion);
         if (updated == 0) {
             if (find(organizationId, uploadId).isEmpty()) return Optional.empty();
             throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT, "生产单已被其他用户修改");

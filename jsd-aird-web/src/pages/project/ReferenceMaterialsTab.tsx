@@ -1,4 +1,4 @@
-import { DatabaseOutlined, FileSearchOutlined, FileTextOutlined } from '@ant-design/icons';
+import { DatabaseOutlined, FileTextOutlined } from '@ant-design/icons';
 import { App, Button, Input, Select, Space, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
@@ -18,6 +18,7 @@ import {
 } from '@/services/project/reference-api';
 
 import './reference-materials-tab.css';
+import '@/styles/management-list.css';
 
 export function ReferenceMaterialsTab({ projectId }: { projectId: string }) {
   const { message, modal } = App.useApp();
@@ -58,7 +59,7 @@ export function ReferenceMaterialsTab({ projectId }: { projectId: string }) {
       : `/data/import-jobs/${record.resourceId}`);
   };
   const changeStatus = (record: ReferenceMaterial) => {
-    const restoring = record.allowedActions?.includes('RESTORE');
+    const restoring = record.status === 'REMOVED';
     modal.confirm({
       title: restoring ? `恢复“${record.title}”？` : `移除“${record.title}”？`,
       content: restoring ? '恢复后重新显示在活动资料参考中。' : '仅移除项目资料参考，普通项目关联会保留。',
@@ -79,7 +80,7 @@ export function ReferenceMaterialsTab({ projectId }: { projectId: string }) {
     { title: '添加人', dataIndex: 'addedByName', width: 110, render: (value?: string, record?: ReferenceMaterial) => value || record?.addedBy || '—' },
     { title: '添加时间', dataIndex: 'addedAt', width: 160, render: (value: string) => dayjs(value).format('YYYY-MM-DD HH:mm') },
     { title: '状态', dataIndex: 'status', width: 90, render: (value: string) => <Tag color={value === 'ACTIVE' ? 'success' : 'default'}>{value === 'ACTIVE' ? '有效' : '已移除'}</Tag> },
-    { title: '操作', fixed: 'right', width: 190, render: (_: unknown, record) => <Space size={0}><Button type="link" disabled={!record.sourceAvailable} onClick={() => source(record)}>查看来源</Button><Can permission="project.assign">{record.allowedActions?.includes('DISABLE') || record.allowedActions?.includes('RESTORE') ? <Button type="link" danger={record.allowedActions.includes('DISABLE')} onClick={() => changeStatus(record)}>{record.allowedActions.includes('DISABLE') ? '移除' : '恢复'}</Button> : null}</Can></Space> },
+    { title: '操作', width: 150, render: (_: unknown, record) => <Space className="management-table-actions" size={0}><Button type="link" disabled={!record.sourceAvailable} onClick={() => source(record)}>查看来源</Button><Can permission="project.assign"><Button type="link" danger={record.status === 'ACTIVE'} onClick={() => changeStatus(record)}>{record.status === 'ACTIVE' ? '移除' : '恢复'}</Button></Can></Space> },
   ];
 
   return <div className="pm-ref-tab">
@@ -90,7 +91,6 @@ export function ReferenceMaterialsTab({ projectId }: { projectId: string }) {
       <Select allowClear placeholder="任务" style={{ minWidth: 150 }} disabled={!filters.stageId} options={tasks.map((item) => ({ value: item.id, label: item.name }))} value={filters.taskId} onChange={(taskId) => setFilters((current) => ({ ...current, taskId, page: 1 }))} />
       <Select allowClear placeholder="添加人" style={{ minWidth: 120 }} options={addedByOptions} value={filters.addedBy} onChange={(addedBy) => setFilters((current) => ({ ...current, addedBy, page: 1 }))} />
       <Select placeholder="状态" style={{ minWidth: 110 }} options={REFERENCE_STATUS_OPTIONS} value={filters.status} onChange={(status) => setFilters((current) => ({ ...current, status, page: 1 }))} />
-      <Can permission="project.assign"><Button type="primary" icon={<FileSearchOutlined />} onClick={() => navigate(`/knowledge/search?projectId=${projectId}&reference=1`)}>从文件检索添加</Button></Can>
     </div>
     <Table rowKey="id" columns={columns} dataSource={items} loading={loading} size="middle" scroll={{ x: 1050 }} locale={{ emptyText: <Typography.Text type="secondary">暂无真实资料参考</Typography.Text> }} pagination={{ current: filters.page, pageSize: filters.size, total, showSizeChanger: true, onChange: (page, size) => setFilters((current) => ({ ...current, page, size })) }} />
   </div>;

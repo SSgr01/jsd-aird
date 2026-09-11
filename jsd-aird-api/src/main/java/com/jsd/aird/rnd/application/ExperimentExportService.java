@@ -9,6 +9,7 @@ import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.office.SnapshotWorkbookExporter;
 import com.jsd.aird.shared.security.ActorContext;
+import com.jsd.aird.tpl.application.port.BlankWordDocumentFactory;
 import com.jsd.aird.tpl.application.port.TemplateRepository;
 import com.jsd.aird.tpl.application.port.WordOoxmlPatcher;
 import org.springframework.stereotype.Service;
@@ -29,6 +30,7 @@ public class ExperimentExportService {
     private final ObjectMapper objectMapper;
     private final SnapshotWorkbookExporter workbookExporter;
     private final WordOoxmlPatcher wordOoxmlPatcher;
+    private final BlankWordDocumentFactory blankWordDocumentFactory;
 
     public ExperimentExportService(
             ExperimentRepository repository,
@@ -36,7 +38,8 @@ public class ExperimentExportService {
             TemplateRepository templateRepository,
             ObjectMapper objectMapper,
             SnapshotWorkbookExporter workbookExporter,
-            WordOoxmlPatcher wordOoxmlPatcher
+            WordOoxmlPatcher wordOoxmlPatcher,
+            BlankWordDocumentFactory blankWordDocumentFactory
     ) {
         this.repository = repository;
         this.fileStorage = fileStorage;
@@ -44,6 +47,7 @@ public class ExperimentExportService {
         this.objectMapper = objectMapper;
         this.workbookExporter = workbookExporter;
         this.wordOoxmlPatcher = wordOoxmlPatcher;
+        this.blankWordDocumentFactory = blankWordDocumentFactory;
     }
 
     public Download export(UUID id) {

@@ -74,6 +74,13 @@ export interface ResearchTestUpload {
   taskName?: string;
   createdAt: string;
 }
+export interface StagedResearchTestFile {
+  fileId: string;
+  originalName: string;
+  contentType: string;
+  size: number;
+  sha256: string;
+}
 const root = (type: ResearchTestType) =>
   type === 'REPORT' ? '/api/v1/comprehensive-reports' : '/api/v1/test-standards';
 const data = <T>(r: { data: ApiResponse<T> }) => r.data.data;
@@ -100,7 +107,20 @@ export async function saveResearchTest(
 export async function renameResearchTest(
   type: ResearchTestType,
   id: string,
-  input: { revision: number; name: string; projectId?: string; stageId?: string; taskId?: string },
+  input: {
+    revision: number;
+    name: string;
+    businessNo?: string;
+    ownerName?: string;
+    date?: string;
+    category?: string;
+    scope?: string;
+    effectiveFrom?: string;
+    effectiveTo?: string;
+    projectId?: string;
+    stageId?: string;
+    taskId?: string;
+  },
 ) {
   return data(
     await httpClient.put<ApiResponse<ResearchTestDetail>>(`${root(type)}/${id}/rename`, input),
@@ -144,7 +164,11 @@ export async function createResearchTestRevision(
     }),
   );
 }
-export async function stageResearchTestFile(file: File, signal?: AbortSignal) {
+export async function stageResearchTestFile(
+  file: File,
+  type: ResearchTestType = 'REPORT',
+  signal?: AbortSignal,
+): Promise<StagedResearchTestFile> {
   const body = new FormData();
   body.append('file', file);
   return data(
@@ -156,35 +180,35 @@ export async function stageResearchTestFile(file: File, signal?: AbortSignal) {
         size: number;
         sha256: string;
       }>
-    >('/api/v1/files/staged?kind=RESEARCH_TEST_SOURCE', body, { signal }),
+    >(`/api/v1/files/staged?kind=${type === 'STANDARD' ? 'RESEARCH_TEST_STANDARD_SOURCE' : 'RESEARCH_TEST_SOURCE'}`, body, { signal }),
   );
 }
-export async function registerResearchTestUpload(input: Record<string, unknown>, signal?: AbortSignal) {
+export async function registerResearchTestUpload(type: ResearchTestType, input: Record<string, unknown>, signal?: AbortSignal) {
   return data(
     await httpClient.post<ApiResponse<ResearchTestUpload>>(
-      '/api/v1/comprehensive-reports/uploads',
+      `${root(type)}/uploads`,
       input,
       { signal },
     ),
   );
 }
-export async function listResearchTestUploads(params: Record<string, unknown>) {
+export async function listResearchTestUploads(type: ResearchTestType, params: Record<string, unknown>) {
   return data(
     await httpClient.get<ApiResponse<PageResponse<ResearchTestUpload>>>(
-      '/api/v1/comprehensive-reports/uploads',
+      `${root(type)}/uploads`,
       { params },
     ),
   );
 }
-export async function retryResearchTestUpload(id: string) {
+export async function retryResearchTestUpload(type: ResearchTestType, id: string) {
   return data(
     await httpClient.post<ApiResponse<ResearchTestUpload>>(
-      `/api/v1/comprehensive-reports/uploads/${id}/retry`,
+      `${root(type)}/uploads/${id}/retry`,
     ),
   );
 }
-export async function deleteResearchTestUpload(id: string) {
-  await httpClient.delete(`/api/v1/comprehensive-reports/uploads/${id}`);
+export async function deleteResearchTestUpload(type: ResearchTestType, id: string) {
+  await httpClient.delete(`${root(type)}/uploads/${id}`);
 }
 
 export async function downloadResearchTest(

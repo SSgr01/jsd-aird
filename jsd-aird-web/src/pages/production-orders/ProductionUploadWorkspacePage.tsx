@@ -1,11 +1,31 @@
-import { ArrowLeftOutlined, DeleteOutlined, HistoryOutlined, EyeOutlined, SaveOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Empty, Modal, Result, Skeleton, Space, Spin, Tabs, Tag, Typography, message } from 'antd';
+import {
+  ArrowLeftOutlined,
+  DownloadOutlined,
+  FileOutlined,
+  SaveOutlined,
+} from '@ant-design/icons';
+import {
+  Alert,
+  Button,
+  Card,
+  Empty,
+  Result,
+  Skeleton,
+  Space,
+  Spin,
+  Tabs,
+  Tag,
+  Typography,
+  message,
+} from 'antd';
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 
 import { SaveStateBadge, type SaveState } from '@/components/SaveStateBadge';
+import { FilePreviewModal } from '@/components/file-preview/FilePreviewModal';
+import { VersionHistoryPanel } from '@/components/version-history/VersionHistoryPanel';
 import { usePermission } from '@/components/auth/usePermission';
-import { fetchFileBlob } from '@/services/files/file-api';
+import { downloadBlob, fetchFileBlob } from '@/services/files/file-api';
 import type { EditorHandle } from '@/features/template-workspace/types';
 import { WordNativePreview } from '@/features/template-workspace/WordNativePreview';
 import {
@@ -27,7 +47,29 @@ const SheetsEditor = lazy(async () => ({
   default: (await import('@/features/template-workspace/UniverSheetsEditor')).UniverSheetsEditor,
 }));
 
-type WorkspaceView = 'recognition' | 'preview' | 'edit' | 'business' | 'versions';
+type WorkspaceView = 'recognition' | 'preview' | 'edit' | 'material' | 'attachments' | 'versions';
+
+function isWorkbookSnapshot(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  const sheets = candidate.sheets;
+  const sheetOrder = candidate.sheetOrder;
+  return Boolean(
+    sheets &&
+    typeof sheets === 'object' &&
+    !Array.isArray(sheets) &&
+    Object.keys(sheets).length &&
+    Array.isArray(sheetOrder) &&
+    sheetOrder.length,
+  );
+}
+
+function withBusinessSnapshot(
+  workbook: Record<string, unknown>,
+  business: ProductionBusinessSnapshot,
+) {
+  return { ...workbook, productionBusiness: business };
+}
 
 function formatOf(fileName: string): 'XLSX' | 'PHOTO' | 'DOCX' {
   if (/\.xlsx?$/i.test(fileName)) return 'XLSX';
@@ -98,11 +140,14 @@ export function ProductionUploadWorkspacePage() {
   const [selectedVersion, setSelectedVersion] = useState<ProductionUploadVersion>();
   const [snapshot, setSnapshot] = useState<Record<string, unknown>>();
   const [business, setBusiness] = useState<ProductionBusinessSnapshot>(createEmptyBusinessSnapshot);
-  const [view, setView] = useState<WorkspaceView>('recognition');
+  const [view, setView] = useState<WorkspaceView>('preview');
+  const [editorReady, setEditorReady] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [publishing, setPublishing] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [sourcePreviewOpen, setSourcePreviewOpen] = useState(false);
   const [selectingTemplate, setSelectingTemplate] = useState<string>();
   const [error, setError] = useState<string>();
   const [photoUrl, setPhotoUrl] = useState<string>();
@@ -110,9 +155,13 @@ export function ProductionUploadWorkspacePage() {
 
   const load = useCallback(async () => {
     setLoading(true);
+    setDirty(false);
+    setSelectedVersion(undefined);
+    setView('preview');
+    setEditorReady(false);
     try {
       const [detail, history] = await Promise.all([
-        productionOrderRecordApi.get(uploadId).catch(() => productionUploadApi.get(uploadId)),
+        productionOrderRecordApi.get(uploadId),
         productionOrderRecordApi.versions(uploadId).catch(() => []),
       ]);
       setRecord(detail);
@@ -126,10 +175,27 @@ export function ProductionUploadWorkspacePage() {
         });
       }
       if (formatOf(detail.originalName) === 'XLSX') {
-        const loadedSnapshot = detail.workbookSnapshot ??
-          (await parseExcelSnapshot(await fetchFileBlob(detail.fileId), detail.originalName));
-        setSnapshot(loadedSnapshot);
-        setBusiness(normalizeBusinessSnapshot(loadedSnapshot.productionBusiness));
+        const storedSnapshot = detail.workbookSnapshot;
+        const storedBusiness = storedSnapshot?.productionBusiness;
+        let loadedSnapshot = storedSnapshot;
+        if (!isWorkbookSnapshot(loadedSnapshot)) {
+          loadedSnapshot = history.find((item) =>
+            isWorkbookSnapshot(item.workbookSnapshot),
+          )?.workbookSnapshot;
+        }
+        if (!isWorkbookSnapshot(loadedSnapshot)) {
+          loadedSnapshot = await parseExcelSnapshot(
+            await fetchFileBlob(detail.fileId),
+            detail.originalName,
+          );
+        }
+        const recoveredSnapshot = {
+          ...loadedSnapshot,
+          productionBusiness: storedBusiness ?? loadedSnapshot.productionBusiness,
+        };
+        setSnapshot(recoveredSnapshot);
+        setBusiness(normalizeBusinessSnapshot(recoveredSnapshot.productionBusiness));
+        setEditorReady(false);
       } else if (formatOf(detail.originalName) === 'DOCX') {
         setSnapshot(detail.workbookSnapshot ?? { wordPatches: [] });
       }
@@ -141,33 +207,55 @@ export function ProductionUploadWorkspacePage() {
     }
   }, [uploadId]);
 
-  useEffect(() => () => {
-    if (photoUrl) URL.revokeObjectURL(photoUrl);
-  }, [photoUrl]);
+  useEffect(
+    () => () => {
+      if (photoUrl) URL.revokeObjectURL(photoUrl);
+    },
+    [photoUrl],
+  );
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const saveDraft = async (): Promise<boolean> => {
-    if (!record || !snapshot || !['XLSX', 'DOCX'].includes(formatOf(record.originalName))) return false;
-    const validationError = validateBusinessSnapshot(business);
+  const saveDraft = async (
+    businessOverride: ProductionBusinessSnapshot = business,
+    silent = false,
+  ): Promise<boolean> => {
+    if (!record || !snapshot || !['XLSX', 'DOCX'].includes(formatOf(record.originalName)))
+      return false;
+    const validationError = validateBusinessSnapshot(businessOverride);
     if (validationError) {
       msg.error(validationError);
       return false;
     }
     setSaving(true);
     try {
-      const current = editorRef.current?.getSnapshot() ?? snapshot;
-      const nextSnapshot = { ...current, productionBusiness: business };
+      const liveSnapshot = editorRef.current?.getSnapshot();
+      const current =
+        formatOf(record.originalName) === 'XLSX'
+          ? isWorkbookSnapshot(liveSnapshot)
+            ? liveSnapshot
+            : isWorkbookSnapshot(snapshot)
+              ? snapshot
+              : undefined
+          : (liveSnapshot ?? snapshot);
+      if (!current) {
+        msg.error('工作簿尚未加载完成，为避免覆盖原数据，本次未保存，请稍后重试');
+        return false;
+      }
+      const nextSnapshot = withBusinessSnapshot(current, businessOverride);
       await productionOrderRecordApi.saveBatch({
-        records: [{ id: record.id, workbookSnapshot: nextSnapshot, lockVersion: record.lockVersion }],
+        records: [
+          { id: record.id, workbookSnapshot: nextSnapshot, lockVersion: record.lockVersion },
+        ],
       });
       const saved = await productionOrderRecordApi.get(record.id);
       setRecord(saved);
       setSnapshot(nextSnapshot);
+      setBusiness(businessOverride);
       setDirty(false);
-      msg.success('生产单草稿已保存');
+      if (!silent) msg.success('生产单草稿已保存');
       return true;
     } catch (reason) {
       msg.error(reason instanceof Error ? reason.message : '保存失败');
@@ -239,18 +327,55 @@ export function ProductionUploadWorkspacePage() {
     setSnapshot(version.workbookSnapshot);
     setBusiness(normalizeBusinessSnapshot(version.workbookSnapshot.productionBusiness));
     setSelectedVersion(undefined);
-    setView('business');
+    setView('edit');
+    setEditorReady(false);
     setDirty(true);
     msg.info(`已载入版本 V${version.versionNo}，保存草稿后生效`);
   };
 
   const switchView = (next: WorkspaceView) => {
+    if (next === 'versions' && versions.length === 0) {
+      msg.info('发布后才会生成版本记录');
+      return;
+    }
     if (next === 'versions' && dirty) {
       msg.warning('当前内容尚未保存，请先保存后再查看版本记录');
       return;
     }
+    const leavingWorkbook =
+      ['preview', 'edit'].includes(view) && !['preview', 'edit'].includes(next);
+    const enteringWorkbook =
+      !['preview', 'edit'].includes(view) && ['preview', 'edit'].includes(next);
+    if (leavingWorkbook) {
+      const current = editorRef.current?.getSnapshot();
+      if (isWorkbookSnapshot(current)) {
+        setSnapshot(withBusinessSnapshot(current, business));
+      }
+    }
+    if (leavingWorkbook || enteringWorkbook) setEditorReady(false);
     setSelectedVersion(undefined);
     setView(next);
+  };
+
+  const exportRecord = async () => {
+    if (!record) return;
+    setExporting(true);
+    try {
+      const blob = await productionOrderRecordApi.export(record.id);
+      const extension = record.originalName.includes('.')
+        ? record.originalName.slice(record.originalName.lastIndexOf('.'))
+        : '';
+      const baseName = record.productionName || record.originalName || '生产单';
+      const fileName = extension && !baseName.toLowerCase().endsWith(extension.toLowerCase())
+        ? `${baseName}${extension}`
+        : baseName;
+      downloadBlob(blob, fileName);
+      msg.success('生产单已导出');
+    } catch (reason) {
+      msg.error(reason instanceof Error ? reason.message : '生产单导出失败');
+    } finally {
+      setExporting(false);
+    }
   };
 
   if (loading)
@@ -275,28 +400,43 @@ export function ProductionUploadWorkspacePage() {
   const isPhoto = format === 'PHOTO';
   const displayedSnapshot = selectedVersion?.workbookSnapshot ?? snapshot;
   const latestVersion = versions[0];
-  const readonly = !['edit', 'business'].includes(view) || Boolean(selectedVersion);
+  const readonly = !['edit', 'material', 'attachments'].includes(view) || Boolean(selectedVersion);
   const editable = (isExcel || format === 'DOCX') && !readonly && canUpdate;
+  const waitingForEditor = isExcel && view === 'edit' && !editorReady;
   const saveState: SaveState = saving ? 'SAVING' : dirty ? 'DIRTY' : 'SAVED';
-  const meta = [record.productionName, record.orderNo, record.productName, record.category]
-    .filter(Boolean)
-    .join(' · ');
-  const removeUpload = () => {
-    if (!record.allowedActions?.includes('DELETE')) return;
-    Modal.confirm({
-      title: '删除生产单上传记录？',
-      content: '仅删除未生成业务数据的上传记录，原始文件保留。',
-      okText: '确认删除',
-      okButtonProps: { danger: true },
-      cancelText: '返回',
-      onOk: async () => {
-        await productionUploadApi.delete(record.id);
-        message.success('上传记录已删除');
-        navigate('/production-orders/upload');
-      },
-    });
-  };
-
+  const workspaceActions = () => (
+    <>
+      <SaveStateBadge state={saveState} />
+      <Button icon={<DownloadOutlined />} loading={exporting} onClick={() => void exportRecord()}>
+        导出
+      </Button>
+      <Button icon={<FileOutlined />} onClick={() => setSourcePreviewOpen(true)}>
+        原文
+      </Button>
+      {selectedVersion && <Button onClick={() => setSelectedVersion(undefined)}>返回</Button>}
+      {!selectedVersion && (
+        <>
+          <Button
+            type="primary"
+            icon={<SaveOutlined />}
+            loading={saving}
+            disabled={!editable || waitingForEditor}
+            onClick={() => void saveDraft()}
+          >
+            保存草稿
+          </Button>
+          <Button
+            type="primary"
+            loading={publishing}
+            disabled={!editable || !canSubmit || dirty || saving}
+            onClick={() => void publish()}
+          >
+            发布
+          </Button>
+        </>
+      )}
+    </>
+  );
   return (
     <section className="workspace-shell template-business-workspace quality-excel-workspace production-upload-workspace">
       {holder}
@@ -309,97 +449,88 @@ export function ProductionUploadWorkspacePage() {
           >
             返回
           </Button>
-          <div>
-            <Typography.Text type="secondary">生产单管理 / 生产单查看</Typography.Text>
-            <Typography.Title level={4} style={{ margin: 0 }}>
+          <span className="workspace-title-block">
+            <Typography.Text type="secondary" className="workspace-breadcrumb">
+              生产单管理 / 生产单查看
+            </Typography.Text>
+            <Typography.Text strong>
               {record.originalName}
-            </Typography.Title>
-            {(meta || record.manufactureDate) && (
-              <Typography.Text type="secondary">
-                {meta}
-                {record.manufactureDate ? ` · 制造日期 ${record.manufactureDate}` : ''}
-              </Typography.Text>
-            )}
-          </div>
+            </Typography.Text>
+          </span>
           <Tag color={latestVersion ? 'blue' : 'default'}>
             {latestVersion ? `V${latestVersion.versionNo}` : '未发布'}
           </Tag>
         </div>
-        <Space>
-          <SaveStateBadge state={saveState} />
-          {selectedVersion && <Button onClick={() => setSelectedVersion(undefined)}>返回</Button>}
-          {!selectedVersion && (
-            <>
-              <Button
-                type="primary"
-                icon={<SaveOutlined />}
-                loading={saving}
-                disabled={!editable}
-                onClick={() => void saveDraft()}
-              >
-                保存草稿
-              </Button>
-              <Button
-                type="primary"
-                loading={publishing}
-                disabled={!editable || !canSubmit || dirty || saving}
-                onClick={() => void publish()}
-              >
-                发布
-              </Button>
-              {record.allowedActions?.includes('DELETE') && <Button danger icon={<DeleteOutlined />} onClick={removeUpload}>删除</Button>}
-            </>
-          )}
+        <Space className="production-workspace-actions production-desktop-actions" wrap>
+          {workspaceActions()}
         </Space>
       </header>
+      <Space className="production-mobile-actions" wrap>
+        {workspaceActions()}
+      </Space>
       <nav className="workspace-view-tabs" aria-label="生产单文件工作区">
         <Tabs
           activeKey={view}
           onChange={(key) => switchView(key as WorkspaceView)}
           items={[
-            { key: 'recognition', label: '识别结果' },
-            {
-              key: 'preview',
-              label: (
-                <>
-                  <EyeOutlined /> 预览
-                </>
-              ),
-            },
+            { key: 'preview', label: '预览' },
             { key: 'edit', label: '编辑', disabled: !isExcel && format !== 'DOCX' },
-            { key: 'business', label: '业务数据', disabled: !isExcel },
-            {
-              key: 'versions',
-              label: (
-                <>
-                  <HistoryOutlined /> 版本记录
-                </>
-              ),
-            },
+            ...(versions.length > 0 ? [{ key: 'versions', label: '版本记录' }] : []),
+            { key: 'material', label: '实际投料单', disabled: !isExcel },
+            { key: 'attachments', label: '工艺附件', disabled: !isExcel },
           ]}
         />
       </nav>
-      <div className="workspace-main-stage">
-        <main className={`workspace-canvas ${view === 'preview' ? 'is-preview' : ''}`}>
+      <div
+        className={`workspace-main-stage ${['material', 'attachments'].includes(view) ? 'is-business-tab' : ''}`}
+      >
+        <main
+          className={`workspace-canvas ${view === 'preview' ? 'is-preview' : ''} ${['material', 'attachments'].includes(view) ? 'production-business-panel-standalone' : ''}`}
+        >
           {view === 'recognition' ? (
             <section className="quality-version-panel">
-              <Typography.Title level={4}>{isPhoto ? '图片识别结果' : 'XLSX 识别结果'}</Typography.Title>
+              <Typography.Title level={4}>
+                {isPhoto ? '图片识别结果' : 'XLSX 识别结果'}
+              </Typography.Title>
               <Alert
-                type={record.matchMode === 'USER_REVIEW' ? 'warning' : 'success'}
+                type={isPhoto && record.matchMode === 'USER_REVIEW' ? 'warning' : 'success'}
                 showIcon
-                message={record.matchMode === 'EXACT_MANIFEST' ? '已通过模板清单精确匹配'
-                  : record.matchMode === 'SIMILAR_AUTO' ? '已自动匹配相似模板'
-                    : '需要人工确认模板'}
-                description={record.failureMessage ?? (isPhoto && record.matchMode === 'USER_REVIEW'
-                  ? '图片识别需要先选择已发布模板，确认后才会调用图片识别模型。'
-                  : `匹配分数：${Math.round((record.templateMatchScore ?? 0) * 100)}%`)}
+                message={
+                  record.matchMode === 'EXACT_MANIFEST'
+                    ? '已通过模板清单精确匹配'
+                    : record.matchMode === 'SIMILAR_AUTO'
+                      ? '已自动匹配相似模板'
+                      : record.matchMode === 'USER_SELECTED_TEMPLATE'
+                        ? '已使用所选模板解析'
+                        : isPhoto
+                          ? '需要选择图片识别模板'
+                          : '未使用模板，已按原文件解析'
+                }
+                description={
+                  record.failureMessage ??
+                  record.recognitionResult?.message ??
+                  (isPhoto && record.matchMode === 'USER_REVIEW'
+                    ? '图片识别需要先选择已发布模板，确认后才会调用图片识别模型。'
+                    : `匹配分数：${Math.round((record.templateMatchScore ?? 0) * 100)}%`)
+                }
               />
               <Card size="small" title="候选模板" style={{ marginTop: 16 }}>
-                {(record.recognitionResult?.templateCandidates ?? []).length
-                  ? record.recognitionResult?.templateCandidates?.map((item) => (
-                    <div key={item.templateVersionId} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-                      <span><b>{item.templateName}</b> · {item.templateCode} · {Math.round(item.score * 100)}%</span>
-                      {record.matchMode === 'USER_REVIEW' && (
+                {(record.recognitionResult?.templateCandidates ?? []).length ? (
+                  record.recognitionResult?.templateCandidates?.map((item) => (
+                    <div
+                      key={item.templateVersionId}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 12,
+                      }}
+                    >
+                      <span>
+                        <b>{item.templateName}</b> · {item.templateCode} ·{' '}
+                        {Math.round(item.score * 100)}%
+                      </span>
+                      {['USER_REVIEW', 'NO_TEMPLATE'].includes(record.matchMode ?? '') && (
                         <Button
                           size="small"
                           type="primary"
@@ -412,7 +543,9 @@ export function ProductionUploadWorkspacePage() {
                       )}
                     </div>
                   ))
-                  : <Empty description="没有可匹配的已发布 XLSX 模板" />}
+                ) : (
+                  <Empty description="没有可匹配的已发布 XLSX 模板" />
+                )}
               </Card>
               <Card size="small" title="抽取数据" style={{ marginTop: 16 }}>
                 <pre style={{ whiteSpace: 'pre-wrap', margin: 0 }}>
@@ -421,42 +554,28 @@ export function ProductionUploadWorkspacePage() {
               </Card>
             </section>
           ) : view === 'versions' && !selectedVersion ? (
-            <section className="quality-version-panel">
-              <Typography.Title level={4}>版本记录</Typography.Title>
-              <Typography.Text type="secondary">
-                每次发布都会保留完整数据快照，可追溯发布人和发布时间。
-              </Typography.Text>
-              {versions.length ? (
-                <div className="quality-version-list">
-                  {versions.map((item) => (
-                    <button
-                      className="quality-version-card"
-                      key={item.id}
-                      onClick={() => setSelectedVersion(item)}
-                    >
-                      <span className="quality-version-no">V{item.versionNo}</span>
-                      <span>
-                        <b>发布版本</b>
-                        <small>
-                          {item.createdBy} · {new Date(item.createdAt).toLocaleString()}
-                        </small>
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <Empty description="暂无版本记录" />
-              )}
-            </section>
-          ) : view === 'business' ? (
+            <VersionHistoryPanel
+              versions={versions}
+              onSelect={setSelectedVersion}
+              getLabel={() => '发布版本'}
+            />
+          ) : view === 'material' || view === 'attachments' ? (
             <section className="quality-record-editor production-business-panel-shell">
               <div className="quality-record-editor-title">
-                <Typography.Title level={4} style={{ margin: 0 }}>生产业务数据</Typography.Title>
-                <Typography.Text type="secondary">生产任务、投料、M687 配方、巡检、签名、库存及研发联动</Typography.Text>
+                <Typography.Title level={4} style={{ margin: 0 }}>
+                  {view === 'material' ? '实际投料单' : '工艺附件'}
+                </Typography.Title>
+                <Typography.Text type="secondary">
+                  {view === 'material'
+                    ? '上传并查看实际投料单图片'
+                    : '上传、下载并管理生产工艺文件'}
+                </Typography.Text>
               </div>
               <ProductionBusinessPanel
                 value={business}
                 editable={editable}
+                section={view === 'material' ? 'material' : 'attachments'}
+                onAttachmentsChange={(next) => saveDraft(next, true)}
                 onChange={(next) => {
                   setBusiness(next);
                   setDirty(true);
@@ -501,7 +620,10 @@ export function ProductionUploadWorkspacePage() {
                       snapshot={displayedSnapshot}
                       bindings={[]}
                       editable={editable}
-                      onDirty={() => setDirty(true)}
+                      onReady={() => setEditorReady(true)}
+                      onDirty={() => {
+                        if (editorReady) setDirty(true);
+                      }}
                       onEditorValue={() => undefined}
                     />
                   </Suspense>
@@ -509,9 +631,15 @@ export function ProductionUploadWorkspacePage() {
               ) : isPhoto ? (
                 photoUrl ? (
                   <div style={{ padding: 24, textAlign: 'center' }}>
-                    <img src={photoUrl} alt={record.originalName} style={{ maxWidth: '100%', maxHeight: '72vh', objectFit: 'contain' }} />
+                    <img
+                      src={photoUrl}
+                      alt={record.originalName}
+                      style={{ maxWidth: '100%', maxHeight: '72vh', objectFit: 'contain' }}
+                    />
                   </div>
-                ) : <Empty description="图片预览加载中" />
+                ) : (
+                  <Empty description="图片预览加载中" />
+                )
               ) : (
                 <WordNativePreview
                   versionId={record.id}
@@ -521,10 +649,15 @@ export function ProductionUploadWorkspacePage() {
                   bindings={[]}
                   onDirty={() => setDirty(true)}
                   onEditorValue={() => undefined}
-                  onPatch={(operation) => setSnapshot((current) => ({
-                    ...(current ?? {}),
-                    wordPatches: [...(((current ?? {}).wordPatches as unknown[]) ?? []), operation],
-                  }))}
+                  onPatch={(operation) =>
+                    setSnapshot((current) => ({
+                      ...(current ?? {}),
+                      wordPatches: [
+                        ...(((current ?? {}).wordPatches as unknown[]) ?? []),
+                        operation,
+                      ],
+                    }))
+                  }
                   loadPreview={() => fetchFileBlob(record.fileId)}
                 />
               )}
@@ -532,6 +665,16 @@ export function ProductionUploadWorkspacePage() {
           )}
         </main>
       </div>
+      <FilePreviewModal
+        open={sourcePreviewOpen}
+        onClose={() => setSourcePreviewOpen(false)}
+        file={{
+          fileName: record.originalName,
+          contentType: record.contentType,
+          size: record.size,
+          load: () => fetchFileBlob(record.fileId),
+        }}
+      />
     </section>
   );
 }

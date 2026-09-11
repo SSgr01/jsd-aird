@@ -1,65 +1,73 @@
 import {
+  AppstoreOutlined,
+  CopyOutlined,
   DeleteOutlined,
   DownloadOutlined,
-  EyeOutlined,
-  FileExcelOutlined,
-  FileWordOutlined,
-  HistoryOutlined,
-  CopyOutlined,
+  EditOutlined,
   PlusOutlined,
-  ReloadOutlined,
+  RedoOutlined,
+  UnorderedListOutlined,
+  UploadOutlined,
 } from '@ant-design/icons';
 import {
   App,
   Button,
+  Breadcrumb,
   Card,
-  Descriptions,
-  Drawer,
+  Checkbox,
   Empty,
   Form,
   Input,
-  InputNumber,
   Modal,
+  Pagination,
   Select,
   Space,
+  Spin,
   Table,
-  Tag,
-  Timeline,
   Typography,
 } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-import { downloadFile } from '@/services/files/file-api';
+import type { ProjectRelationTarget } from '@/services/project/project-resource-api';
+import {
+  getProjects,
+  getProjectStages,
+  getStageTasks,
+  type Project,
+  type ProjectStage,
+  type ProjectTask,
+} from '@/services/project/project-api';
 import { usePermission } from '@/components/auth/usePermission';
+import { downloadBlob, stageFile } from '@/services/files/file-api';
 import { templateApi } from '@/services/templates/template-api';
 import {
   productionUploadApi,
   productionOrderRecordApi,
   type ProductionUpload,
-  type ProductionUploadVersion,
-  type ProductionUploadVisibility,
 } from '@/services/production-orders/production-upload-api';
-import { productionOrderApi } from '@/services/production-orders/production-order-api';
-
-const visibilityText: Record<ProductionUploadVisibility, string> = {
-  ALL: '全员可见',
-  QUALITY: '品管部可见',
-  PROJECT: '项目组可见',
-};
+import './production-order-list.css';
+import '@/styles/management-list.css';
 
 const statusOptions = [
-  { value: 'QUEUED', label: '排队中' },
-  { value: 'PARSING', label: '解析中' },
-  { value: 'REVIEW_REQUIRED', label: '待复核' },
   { value: 'SAVED', label: '已保存' },
   { value: 'PUBLISHED', label: '已发布' },
-  { value: 'FAILED', label: '失败' },
 ];
 
-const statusText: Record<string, string> = Object.fromEntries(
-  statusOptions.map((item) => [item.value, item.label]),
-);
+type ViewMode = 'card' | 'list';
+
+const renderCellText = (value?: string | null, strong = false) => {
+  const text = value || '—';
+  return (
+    <Typography.Text
+      className="production-order-cell-text"
+      strong={strong}
+      ellipsis={{ tooltip: text }}
+    >
+      {text}
+    </Typography.Text>
+  );
+};
 
 export function ProductionOrderListPage() {
   const { message } = App.useApp();
@@ -71,30 +79,38 @@ export function ProductionOrderListPage() {
   const [loading, setLoading] = useState(true);
   const [keyword, setKeyword] = useState('');
   const [status, setStatus] = useState<string>();
-  const [page, setPage] = useState({ current: 1, pageSize: 20, total: 0 });
-  const [downloadingId, setDownloadingId] = useState<string>();
-  const [editing, setEditing] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [drafts, setDrafts] = useState<Record<string, ProductionUpload>>({});
+  const [page, setPage] = useState({ current: 1, pageSize: 10, total: 0 });
   const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
-  const [audit, setAudit] = useState<{ item: ProductionUpload; versions: ProductionUploadVersion[] }>();
+  const [view, setView] = useState<ViewMode>('list');
   const [createOpen, setCreateOpen] = useState(false);
-  const [copying, setCopying] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [templateOptions, setTemplateOptions] = useState<Array<{
-    versionId: string;
-    currentPublishedVersionId?: string;
-    currentPublishedVersionNo?: number;
-    templateCode: string;
-    name: string;
-    versionNo: number;
-  }>>([]);
+  const [copying, setCopying] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameSaving, setRenameSaving] = useState(false);
+  const [renaming, setRenaming] = useState<ProductionUpload>();
+  const [renameRelations, setRenameRelations] = useState<ProjectRelationTarget[]>([]);
+  const [createRelations, setCreateRelations] = useState<ProjectRelationTarget[]>([]);
+  const [createMode, setCreateMode] = useState<'BLANK' | 'TEMPLATE'>('BLANK');
+  const [createFormat, setCreateFormat] = useState<'WORD' | 'XLSX'>('XLSX');
+  const [createTemplateVersionId, setCreateTemplateVersionId] = useState<string>();
+  const [createTemplates, setCreateTemplates] = useState<
+    Array<{ versionId: string; templateCode: string; name: string; versionNo: number }>
+  >([]);
+  const [createTemplatesLoading, setCreateTemplatesLoading] = useState(false);
   const [createForm] = Form.useForm<{
+    productionName: string;
     orderNo: string;
-    templateVersionId: string;
-    quantity?: number;
-    unitCode?: string;
-    plannedDate?: string;
+    productName: string;
+    category: string;
+    manufactureDate: string;
+  }>();
+  const [renameForm] = Form.useForm<{
+    productionName: string;
+    orderNo: string;
+    productName: string;
+    category: string;
+    manufactureDate: string;
   }>();
 
   const load = useCallback(async () => {
@@ -103,6 +119,7 @@ export function ProductionOrderListPage() {
       const result = await productionUploadApi.list({
         keyword: keyword || undefined,
         status: status || undefined,
+        viewableOnly: true,
         page: page.current,
         size: page.pageSize,
       });
@@ -124,32 +141,17 @@ export function ProductionOrderListPage() {
     void load();
   }, [load]);
 
-  const saveFile = (item: ProductionUpload) => {
-    setDownloadingId(item.id);
-    void downloadFile(item.fileId, item.originalName)
-      .then(() => void message.success('文件下载已开始'))
-      .catch((error) => void message.error(error instanceof Error ? error.message : '文件下载失败'))
-      .finally(() => setDownloadingId(undefined));
-  };
-
-  const startEdit = () => {
-    setDrafts(Object.fromEntries(items.map((item) => [item.id, { ...item }])));
-    setEditing(true);
-  };
-
   const deleteSelected = () => {
     if (!selectedKeys.length) return;
-    const deletableIds = selectedKeys.filter((id) => items.find((item) => item.id === id)?.allowedActions?.includes('DELETE'));
-    if (!deletableIds.length) { void message.warning('当前选择没有可删除的记录'); return; }
     Modal.confirm({
-      title: `确认删除 ${deletableIds.length} 条生产单记录？`,
+      title: `确认删除 ${selectedKeys.length} 条生产单记录？`,
       content: '删除后记录会进入作废状态，原始文件不会被物理删除。',
       okText: '确认删除',
       cancelText: '取消',
       okButtonProps: { danger: true },
       onOk: async () => {
         try {
-          await Promise.all(deletableIds.map((id) => productionUploadApi.delete(id)));
+          await Promise.all(selectedKeys.map((id) => productionUploadApi.delete(id)));
           setSelectedKeys([]);
           void message.success('选中的生产单记录已作废');
           await load();
@@ -160,48 +162,297 @@ export function ProductionOrderListPage() {
     });
   };
 
-  const openAudit = async (item: ProductionUpload) => {
+  const selectedItems = items.filter((item) => selectedKeys.includes(item.id));
+
+  const renameSelected = () => {
+    if (selectedItems.length !== 1) {
+      void message.warning('请只选择一条生产单后重命名');
+      return;
+    }
+    openRename(selectedItems[0]!);
+  };
+
+  const exportSelected = async () => {
+    if (!selectedItems.length) return;
+    setExporting(true);
     try {
-      const versions = await productionOrderRecordApi.versions(item.id);
-      setAudit({ item, versions });
+      await Promise.all(
+        selectedItems.map(async (item) => {
+          const blob = await productionOrderRecordApi.export(item.id);
+          downloadBlob(blob, item.originalName || `${item.productionName || '生产单'}.xlsx`);
+        }),
+      );
+      void message.success(`已导出 ${selectedItems.length} 条生产单`);
     } catch (error) {
-      void message.error(error instanceof Error ? error.message : '操作留痕加载失败');
+      void message.error(error instanceof Error ? error.message : '生产单导出失败');
+    } finally {
+      setExporting(false);
     }
   };
 
-  const openCreate = async () => {
-    setCopying(false);
-    setCreateOpen(true);
+  const copySelected = async () => {
+    if (!selectedItems.length) return;
+    const unsupported = selectedItems.filter((item) => !/\.xlsx$/i.test(item.originalName));
+    if (unsupported.length) {
+      void message.warning('当前仅支持复制 Excel 生产单');
+      return;
+    }
+    setCopying(true);
     try {
-      const result = await templateApi.list({ format: 'XLSX', status: 'PUBLISHED', page: 1, size: 100 });
-      setTemplateOptions(result.items);
+      const XLSX = await import('xlsx');
+      const copies = await Promise.all(
+        selectedItems.map(async (item) => {
+          const source = await productionOrderRecordApi.export(item.id);
+          const workbook = XLSX.read(await source.arrayBuffer(), { type: 'array' });
+          workbook.Props = {
+            ...workbook.Props,
+            Subject: `生产单副本-${crypto.randomUUID()}`,
+          };
+          const content = XLSX.write(workbook, {
+            bookType: 'xlsx',
+            type: 'array',
+          }) as ArrayBuffer;
+          const productionName = `${item.productionName || item.originalName.replace(/\.xlsx$/i, '')} - 副本`;
+          const staged = await stageFile(
+            new File([content], `${productionName}.xlsx`, {
+              type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            }),
+            'PRODUCTION_SOURCE',
+          );
+          return productionUploadApi.create({
+            fileId: staged.fileId,
+            sourceType: 'XLSX',
+            productionName,
+            orderNo: item.orderNo,
+            productName: item.productName,
+            category: item.category,
+            manufactureDate: item.manufactureDate,
+            projectId: item.projectId,
+            projectName: item.projectName,
+            stageId: item.stageId,
+            stageName: item.stageName,
+            taskId: item.taskId,
+            taskName: item.taskName,
+            visibility: item.visibility,
+          });
+        }),
+      );
+      for (const copy of copies) {
+        for (let attempt = 0; attempt < 30; attempt += 1) {
+          const current = await productionUploadApi.get(copy.id);
+          if (['SAVED', 'PUBLISHED', 'REVIEW_REQUIRED', 'FAILED'].includes(current.status)) break;
+          await new Promise((resolve) => window.setTimeout(resolve, 500));
+        }
+      }
+      setSelectedKeys([]);
+      await load();
+      void message.success(`已复制 ${copies.length} 条生产单`);
+    } catch (error) {
+      void message.error(error instanceof Error ? error.message : '生产单复制失败');
+    } finally {
+      setCopying(false);
+    }
+  };
+
+  const deleteItem = (item: ProductionUpload) => {
+    Modal.confirm({
+      title: `确认删除生产单“${item.productionName || item.orderNo || item.originalName}”？`,
+      content: '删除后记录会进入作废状态，原始文件不会被物理删除。',
+      okText: '删除',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        try {
+          await productionUploadApi.delete(item.id);
+          setSelectedKeys((current) => current.filter((id) => id !== item.id));
+          void message.success('生产单记录已作废');
+          await load();
+        } catch (error) {
+          void message.error(error instanceof Error ? error.message : '删除失败');
+        }
+      },
+    });
+  };
+
+  const openRename = (item: ProductionUpload) => {
+    setRenaming(item);
+    renameForm.setFieldsValue({
+      productionName: item.productionName || item.orderNo || item.originalName,
+      orderNo: item.orderNo || '',
+      productName: item.productName || '',
+      category: item.category || '',
+      manufactureDate: item.manufactureDate || '',
+    });
+    setRenameRelations(
+      item.projectId
+        ? [
+            {
+              projectId: item.projectId,
+              projectName: item.projectName,
+              stageId: item.stageId,
+              stageName: item.stageName,
+              taskId: item.taskId,
+              taskName: item.taskName,
+            },
+          ]
+        : [{ projectId: '' }],
+    );
+    setRenameOpen(true);
+  };
+
+  const saveRename = async () => {
+    try {
+      if (!renaming) return;
+      const values = await renameForm.validateFields();
+      const relation = renameRelations[0];
+      setRenameSaving(true);
+      await productionOrderRecordApi.saveBatch({
+        records: [
+          {
+            id: renaming.id,
+            lockVersion: renaming.lockVersion,
+            productionName: values.productionName.trim(),
+            orderNo: values.orderNo.trim(),
+            productName: values.productName.trim(),
+            category: values.category.trim(),
+            manufactureDate: values.manufactureDate,
+          },
+        ],
+      });
+      const updated = await productionOrderRecordApi.get(renaming.id);
+      await productionUploadApi.rename(renaming.id, {
+        revision: updated.lockVersion,
+        name: values.productionName.trim(),
+        projectId: relation?.projectId,
+        projectName: relation?.projectName,
+        stageId: relation?.stageId,
+        stageName: relation?.stageName,
+        taskId: relation?.taskId,
+        taskName: relation?.taskName,
+      });
+      message.success('生产单信息已更新');
+      setRenameOpen(false);
+      setRenaming(undefined);
+      renameForm.resetFields();
+      await load();
+    } catch (error) {
+      if (error && typeof error === 'object' && 'errorFields' in error) return;
+      message.error(error instanceof Error ? error.message : '生产单信息保存失败');
+    } finally {
+      setRenameSaving(false);
+    }
+  };
+
+  const openCreate = () => {
+    createForm.resetFields();
+    setCreateRelations([{ projectId: '' }]);
+    setCreateMode('BLANK');
+    setCreateFormat('XLSX');
+    setCreateTemplateVersionId(undefined);
+    setCreateOpen(true);
+  };
+
+  const selectCreateMode = async (value: 'BLANK' | 'TEMPLATE') => {
+    setCreateMode(value);
+    setCreateFormat('XLSX');
+    setCreateTemplateVersionId(undefined);
+    if (value !== 'TEMPLATE' || createTemplates.length) return;
+    setCreateTemplatesLoading(true);
+    try {
+      const result = await templateApi.list({
+        format: 'XLSX',
+        status: 'PUBLISHED',
+        page: 1,
+        size: 100,
+      });
+      setCreateTemplates(
+        result.items.map((item) => ({
+          versionId: item.currentPublishedVersionId ?? item.versionId,
+          templateCode: item.templateCode,
+          name: item.name,
+          versionNo: item.currentPublishedVersionNo ?? item.versionNo,
+        })),
+      );
     } catch (error) {
       void message.error(error instanceof Error ? error.message : '已发布模板加载失败');
+    } finally {
+      setCreateTemplatesLoading(false);
     }
-  };
-
-  const openCopy = async (item: ProductionUpload) => {
-    setCopying(true);
-    createForm.setFieldsValue({
-      orderNo: `${item.orderNo || item.id}-COPY`,
-      templateVersionId: item.selectedTemplateVersionId,
-    });
-    await openCreate();
-    setCopying(true);
   };
 
   const createOrder = async () => {
     try {
       const values = await createForm.validateFields();
+      if (createMode === 'BLANK' && createFormat === 'WORD') {
+        message.warning('生产单工作区当前仅支持 Excel 格式');
+        return;
+      }
+      if (createMode === 'TEMPLATE' && !createTemplateVersionId) {
+        message.warning('请选择已发布的 XLSX 模板');
+        return;
+      }
       setCreating(true);
-      const workspace = await productionOrderApi.create({
-        ...values,
-        templateVersionId: values.templateVersionId,
+      const XLSX = await import('xlsx');
+      const workbook = XLSX.utils.book_new();
+      const worksheet = XLSX.utils.aoa_to_sheet([
+        ['生产单名称', values.productionName],
+        ['订单号', values.orderNo],
+        ['品名', values.productName],
+        ['类别', values.category],
+        ['制造日期', values.manufactureDate],
+      ]);
+      worksheet['!cols'] = [{ wch: 16 }, { wch: 40 }];
+      XLSX.utils.book_append_sheet(workbook, worksheet, '生产单');
+      const content = XLSX.write(workbook, {
+        bookType: 'xlsx',
+        type: 'array',
+      }) as ArrayBuffer;
+      const safeName = values.productionName.replace(/[\\/:*?"<>|]/g, '_').trim() || '生产单';
+      const file = new File([content], `${safeName}.xlsx`, {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+      const staged = await stageFile(file, 'PRODUCTION_SOURCE');
+      const relation = createRelations[0];
+      const created = await productionUploadApi.create({
+        fileId: staged.fileId,
+        sourceType: 'XLSX',
+        templateVersionId: createTemplateVersionId,
+        productionName: values.productionName.trim(),
+        orderNo: values.orderNo.trim(),
+        productName: values.productName.trim(),
+        category: values.category.trim(),
+        manufactureDate: values.manufactureDate,
+        projectId: relation?.projectId,
+        projectName: relation?.projectName,
+        stageId: relation?.stageId,
+        stageName: relation?.stageName,
+        taskId: relation?.taskId,
+        taskName: relation?.taskName,
+        visibility: 'ALL',
       });
       setCreateOpen(false);
       createForm.resetFields();
-      void message.success('生产单草稿已创建');
-      navigate(`/production-orders/${workspace.id}/workspace`);
+      setCreateRelations([{ projectId: '' }]);
+      setCreateMode('BLANK');
+      setCreateFormat('XLSX');
+      setCreateTemplateVersionId(undefined);
+      void message.success('生产单已创建，正在生成预览');
+      let ready = created;
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        if (['SAVED', 'PUBLISHED', 'REVIEW_REQUIRED'].includes(ready.status)) break;
+        if (ready.status === 'FAILED') {
+          throw new Error(ready.failureMessage || '生产单预览生成失败');
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 500));
+        ready = await productionUploadApi.get(created.id);
+      }
+      await load();
+      if (['SAVED', 'PUBLISHED', 'REVIEW_REQUIRED'].includes(ready.status)) {
+        navigate(`/production-orders/uploads/${created.id}/workspace`);
+      } else {
+        void message.info('生产单仍在后台生成，可稍后从上传页面查看进度');
+        navigate('/production-orders/upload');
+      }
     } catch (error) {
       if (error && typeof error === 'object' && 'errorFields' in error) return;
       void message.error(error instanceof Error ? error.message : '生产单创建失败');
@@ -210,90 +461,110 @@ export function ProductionOrderListPage() {
     }
   };
 
-  const updateDraft = (id: string, field: keyof ProductionUpload, value: string) => {
-    setDrafts((current) => ({
-      ...current,
-      [id]: { ...(current[id] ?? items.find((item) => item.id === id)!), [field]: value },
-    }));
+  const resetFilters = () => {
+    setKeyword('');
+    setStatus(undefined);
+    setPage((current) => ({ ...current, current: 1 }));
   };
 
-  const saveTable = async () => {
-    setSaving(true);
-    try {
-      await productionOrderRecordApi.saveBatch({
-        records: items.map((item) => {
-          const draft = drafts[item.id] ?? item;
-          return {
-            id: item.id,
-            lockVersion: item.lockVersion ?? 0,
-            productionName: draft.productionName,
-            orderNo: draft.orderNo,
-            productName: draft.productName,
-            category: draft.category,
-            manufactureDate: draft.manufactureDate,
-          };
-        }),
-      });
-      void message.success('生产单表格已保存');
-      setEditing(false);
-      setDrafts({});
-      await load();
-    } catch (error) {
-      void message.error(error instanceof Error ? error.message : '生产单表格保存失败');
-    } finally {
-      setSaving(false);
-    }
+  const changeView = (nextView: ViewMode) => {
+    if (nextView !== view) setSelectedKeys([]);
+    setView(nextView);
+  };
+
+  const toggleSelected = (id: string) => {
+    setSelectedKeys((current) =>
+      current.includes(id) ? current.filter((key) => key !== id) : [...current, id],
+    );
+  };
+
+  const openWorkspace = (id: string) => {
+    navigate(`/production-orders/uploads/${id}/workspace`);
+  };
+
+  const renderProductionCard = (item: ProductionUpload) => {
+    const relation =
+      [item.projectName, item.stageName, item.taskName].filter(Boolean).join(' · ') || '未关联项目';
+    return (
+      <article className="production-order-card" key={item.id}>
+        <div className="production-order-card-head">
+          <div className="production-order-card-title">
+            <Typography.Link
+              strong
+              className="production-order-card-name-link"
+              ellipsis
+              title={item.productionName || item.orderNo || '未命名生产单'}
+              onClick={() => openWorkspace(item.id)}
+            >
+              {item.productionName || item.orderNo || '未命名生产单'}
+            </Typography.Link>
+          </div>
+          <Checkbox
+            aria-label={`选择生产单 ${item.productionName || item.orderNo || '未命名生产单'}`}
+            checked={selectedKeys.includes(item.id)}
+            onChange={() => toggleSelected(item.id)}
+          />
+        </div>
+        <div className="production-order-card-fields">
+          <div>
+            <span>订单号</span>
+            <Typography.Text ellipsis={{ tooltip: item.orderNo || '—' }}>
+              {item.orderNo || '—'}
+            </Typography.Text>
+          </div>
+          <div>
+            <span>品名</span>
+            <Typography.Text ellipsis={{ tooltip: item.productName || '—' }}>
+              {item.productName || '—'}
+            </Typography.Text>
+          </div>
+          <div>
+            <span>类别</span>
+            <Typography.Text ellipsis={{ tooltip: item.category || '—' }}>
+              {item.category || '—'}
+            </Typography.Text>
+          </div>
+          <div>
+            <span>制造日期</span>
+            <Typography.Text>{item.manufactureDate || '—'}</Typography.Text>
+          </div>
+          <div className="production-order-card-field-wide">
+            <span>关联项目 / 阶段 / 任务</span>
+            <Typography.Text ellipsis={{ tooltip: relation }}>{relation}</Typography.Text>
+          </div>
+        </div>
+        <div className="production-order-card-meta">
+          上传于 {new Date(item.createdAt).toLocaleString('zh-CN')}
+        </div>
+        <div className="production-order-card-actions">
+          <Button type="link" onClick={() => openWorkspace(item.id)}>
+            查看
+          </Button>
+          <Button type="link" disabled={!canUpdate} onClick={() => openRename(item)}>
+            重命名
+          </Button>
+          <Button type="link" danger disabled={!canDelete} onClick={() => deleteItem(item)}>
+            删除
+          </Button>
+        </div>
+      </article>
+    );
   };
 
   return (
     <>
-      <div className="business-page">
-        <div className="page-heading">
+      <div className="business-page production-order-page pm-unified-list-page">
+        <div className="page-heading production-order-page-intro">
           <div>
+            <Breadcrumb items={[{ title: '生产单管理' }, { title: '生产单查看' }]} />
             <Typography.Title level={2}>生产单查看</Typography.Title>
             <Typography.Text type="secondary">
               查看已上传的生产单资料，当前不进入模板填写或提交流程。
             </Typography.Text>
           </div>
-          <Space>
-            {editing ? (
-              <>
-                <Button
-                  onClick={() => {
-                    setEditing(false);
-                    setDrafts({});
-                  }}
-                >
-                  取消
-                </Button>
-                <Button type="primary" loading={saving} onClick={() => void saveTable()}>
-                  保存
-                </Button>
-              </>
-            ) : (
-              <Button onClick={startEdit} disabled={!items.length || !canUpdate}>
-                编辑表格
-              </Button>
-            )}
-            <Button
-              type="primary"
-              icon={<PlusOutlined />}
-              disabled={!canCreate}
-              onClick={() => void openCreate()}
-            >
-              新建生产单
-            </Button>
-            <Button
-              icon={<PlusOutlined />}
-              disabled={!canCreate}
-              onClick={() => navigate('/production-orders/upload')}
-            >
-              上传生产单
-            </Button>
-          </Space>
         </div>
 
-        <Card className="content-card filter-card">
+        <Card className="content-card filter-card production-order-filter">
           <Space wrap>
             <Input.Search
               allowClear
@@ -303,7 +574,7 @@ export function ProductionOrderListPage() {
                 setKeyword(event.target.value);
                 setPage((current) => ({ ...current, current: 1 }));
               }}
-              style={{ width: 300 }}
+              style={{ width: 'min(300px, 100%)' }}
             />
             <Select
               allowClear
@@ -314,295 +585,537 @@ export function ProductionOrderListPage() {
                 setPage((current) => ({ ...current, current: 1 }));
               }}
               options={statusOptions}
-              style={{ width: 140 }}
+              style={{ width: 'min(140px, 100%)' }}
             />
-            <Typography.Text type="secondary">已选 {selectedKeys.length} 条</Typography.Text>
-            <Button
-              danger
-              icon={<DeleteOutlined />}
-              disabled={!selectedKeys.some((id) => items.find((item) => item.id === id)?.allowedActions?.includes('DELETE')) || editing || !canDelete}
-              onClick={deleteSelected}
-            >
-              批量作废
-            </Button>
-            <Button disabled={!selectedKeys.length} onClick={() => setSelectedKeys([])}>
-              清除选择
-            </Button>
-            <Button icon={<ReloadOutlined />} onClick={() => void load()}>
-              刷新
+            <Button icon={<RedoOutlined />} onClick={resetFilters}>
+              重置
             </Button>
           </Space>
         </Card>
 
-        <Card className="content-card" styles={{ body: { padding: 0 } }}>
-          <Table
-            rowKey="id"
-            rowSelection={{
-              selectedRowKeys: selectedKeys,
-              onChange: (keys) => setSelectedKeys(keys.map(String)),
-              getCheckboxProps: () => ({ disabled: editing }),
-            }}
-            loading={loading}
-            dataSource={items}
-            locale={{ emptyText: <Empty description="暂无已保存的生产单" /> }}
-            pagination={{
-              current: page.current,
-              pageSize: page.pageSize,
-              total: page.total,
-              showSizeChanger: true,
-              onChange: (current, pageSize) =>
-                setPage((value) => ({ ...value, current, pageSize })),
-            }}
-            columns={[
-              {
-                title: '生产单名称',
-                dataIndex: 'productionName',
-                render: (value: string, item: ProductionUpload) =>
-                  editing ? (
-                    <Input
-                      value={drafts[item.id]?.productionName ?? value ?? ''}
-                      onChange={(event) =>
-                        updateDraft(item.id, 'productionName', event.target.value)
-                      }
-                    />
-                  ) : (
-                    <Typography.Text strong>{value || '—'}</Typography.Text>
-                  ),
-              },
-              {
-                title: '订单号',
-                dataIndex: 'orderNo',
-                render: (value: string, item: ProductionUpload) =>
-                  editing ? (
-                    <Input
-                      value={drafts[item.id]?.orderNo ?? value ?? ''}
-                      onChange={(event) => updateDraft(item.id, 'orderNo', event.target.value)}
-                    />
-                  ) : (
-                    value || '—'
-                  ),
-              },
-              {
-                title: '品名',
-                dataIndex: 'productName',
-                render: (value: string, item: ProductionUpload) =>
-                  editing ? (
-                    <Input
-                      value={drafts[item.id]?.productName ?? value ?? ''}
-                      onChange={(event) => updateDraft(item.id, 'productName', event.target.value)}
-                    />
-                  ) : (
-                    value || '—'
-                  ),
-              },
-              {
-                title: '类别',
-                dataIndex: 'category',
-                render: (value: string, item: ProductionUpload) =>
-                  editing ? (
-                    <Input
-                      value={drafts[item.id]?.category ?? value ?? ''}
-                      onChange={(event) => updateDraft(item.id, 'category', event.target.value)}
-                    />
-                  ) : (
-                    value || '—'
-                  ),
-              },
-              {
-                title: '制造日期',
-                dataIndex: 'manufactureDate',
-                width: 150,
-                render: (value: string, item: ProductionUpload) =>
-                  editing ? (
-                    <Input
-                      type="date"
-                      value={drafts[item.id]?.manufactureDate ?? value ?? ''}
-                      onChange={(event) =>
-                        updateDraft(item.id, 'manufactureDate', event.target.value)
-                      }
-                    />
-                  ) : (
-                    value || '—'
-                  ),
-              },
-              {
-                title: '关联项目 / 阶段 / 任务',
-                width: 220,
-                render: (_: unknown, item: ProductionUpload) =>
-                  [item.projectName, item.stageName, item.taskName].filter(Boolean).join(' · ') ||
-                  '未关联项目',
-              },
-              {
-                title: '权限可见',
-                width: 120,
-                render: (value: ProductionUploadVisibility) => <Tag>{visibilityText[value]}</Tag>,
-              },
-              {
-                title: '业务状态',
-                dataIndex: 'status',
-                width: 110,
-                render: (value: string) => (
-                  <Tag color={value === 'PUBLISHED' ? 'success' : value === 'FAILED' ? 'error' : 'processing'}>
-                    {statusText[value] || value}
-                  </Tag>
-                ),
-              },
-              {
-                title: '文件',
-                width: 230,
-                render: (_: unknown, item: ProductionUpload) => (
-                  <Space>
-                    {/\.docx?$/i.test(item.originalName) ? (
-                      <FileWordOutlined className="excel-icon" />
-                    ) : (
-                      <FileExcelOutlined className="excel-icon" />
-                    )}
-                    <Typography.Text ellipsis={{ tooltip: item.originalName }}>
-                      {item.originalName}
-                    </Typography.Text>
-                  </Space>
-                ),
-              },
-              {
-                title: '上传时间',
-                width: 170,
-                render: (_: unknown, item: ProductionUpload) =>
-                  new Date(item.createdAt).toLocaleString('zh-CN'),
-              },
-              {
-                title: '操作',
-                width: 320,
-                fixed: 'right' as const,
-                render: (_: unknown, item: ProductionUpload) => (
-                  <Space>
-                    <Button
-                      type="link"
-                      icon={<EyeOutlined />}
-                      disabled={editing}
-                      onClick={() => navigate(`/production-orders/uploads/${item.id}/workspace`)}
+        <div className="production-order-toolbar pm-batch-row">
+          <div className="pm-batch-summary">
+            <span className="pm-selected">已选 {selectedKeys.length} 条</span>
+            {selectedKeys.length > 0 && (
+              <Button type="link" size="small" onClick={() => setSelectedKeys([])}>
+                清除已选
+              </Button>
+            )}
+          </div>
+          <div className="pm-batch-actions">
+            <Button
+              icon={<CopyOutlined />}
+              disabled={!selectedKeys.length}
+              loading={copying}
+              onClick={() => void copySelected()}
+            >
+              复制
+            </Button>
+            <Button icon={<EditOutlined />} onClick={renameSelected}>
+              重命名
+            </Button>
+            <Button
+              icon={<DownloadOutlined />}
+              disabled={!selectedKeys.length}
+              loading={exporting}
+              onClick={() => void exportSelected()}
+            >
+              导出
+            </Button>
+            <Button
+              danger
+              icon={<DeleteOutlined />}
+              disabled={!selectedKeys.length || !canDelete}
+              onClick={deleteSelected}
+            >
+              删除
+            </Button>
+            <Button
+              icon={<UploadOutlined />}
+              disabled={!canCreate}
+              onClick={() => navigate('/production-orders/upload')}
+            >
+              上传生产单
+            </Button>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              disabled={!canCreate}
+              onClick={openCreate}
+            >
+              新建生产单
+            </Button>
+            <Space.Compact className="production-order-view-toggle">
+              <Button
+                aria-label="卡片视图"
+                aria-pressed={view === 'card'}
+                title="卡片视图"
+                type={view === 'card' ? 'primary' : 'default'}
+                icon={<AppstoreOutlined />}
+                onClick={() => changeView('card')}
+              />
+              <Button
+                aria-label="列表视图"
+                aria-pressed={view === 'list'}
+                title="列表视图"
+                type={view === 'list' ? 'primary' : 'default'}
+                icon={<UnorderedListOutlined />}
+                onClick={() => changeView('list')}
+              />
+            </Space.Compact>
+          </div>
+        </div>
+
+        {view === 'card' ? (
+          <Card className="content-card production-order-card-view">
+            {loading ? (
+              <div className="production-order-card-loading">
+                <Spin />
+              </div>
+            ) : items.length ? (
+              <div className="production-order-card-grid">{items.map(renderProductionCard)}</div>
+            ) : (
+              <Empty description="暂无已保存的生产单" />
+            )}
+            {!loading && items.length > 0 && (
+              <Pagination
+                className="production-order-card-pagination"
+                current={page.current}
+                pageSize={page.pageSize}
+                total={page.total}
+                showSizeChanger
+                showTotal={(total) => `共 ${total} 条记录`}
+                onChange={(current, pageSize) =>
+                  setPage((value) => ({ ...value, current, pageSize }))
+                }
+              />
+            )}
+          </Card>
+        ) : (
+          <Card
+            className="content-card production-order-table-card"
+            styles={{ body: { padding: 0 } }}
+          >
+            <Table
+              rowKey="id"
+              rowSelection={{
+                selectedRowKeys: selectedKeys,
+                onChange: (keys) => setSelectedKeys(keys.map(String)),
+              }}
+              loading={loading}
+              dataSource={items}
+              locale={{ emptyText: <Empty description="暂无已保存的生产单" /> }}
+              tableLayout="fixed"
+              pagination={{
+                current: page.current,
+                pageSize: page.pageSize,
+                total: page.total,
+                showSizeChanger: true,
+                showTotal: (total) => `共 ${total} 条记录`,
+                onChange: (current, pageSize) =>
+                  setPage((value) => ({ ...value, current, pageSize })),
+              }}
+              columns={[
+                {
+                  title: '生产单名称',
+                  dataIndex: 'productionName',
+                  width: 280,
+                  render: (value: string, item: ProductionUpload) => (
+                    <Typography.Link
+                      className="production-order-cell-text production-order-name-link"
+                      strong
+                      ellipsis
+                      title={value || '—'}
+                      onClick={() => openWorkspace(item.id)}
                     >
-                      查看
-                    </Button>
-                    <Button
-                      type="link"
-                      icon={<DownloadOutlined />}
-                      loading={downloadingId === item.id}
-                      disabled={editing}
-                      onClick={() => saveFile(item)}
-                    >
-                      下载
-                    </Button>
-                    <Button
-                      type="link"
-                      icon={<HistoryOutlined />}
-                      disabled={editing}
-                      onClick={() => void openAudit(item)}
-                    >
-                      留痕
-                    </Button>
-                    <Button
-                      type="link"
-                      icon={<CopyOutlined />}
-                      disabled={editing || !canCreate}
-                      onClick={() => void openCopy(item)}
-                    >
-                      复制
-                    </Button>
-                  </Space>
-                ),
-              },
-            ]}
-            scroll={{ x: 1650 }}
-          />
-        </Card>
-      </div>
-      <Drawer
-        title={audit ? `生产单留痕 · ${audit.item.originalName}` : '生产单留痕'}
-        open={Boolean(audit)}
-        onClose={() => setAudit(undefined)}
-        width={520}
-      >
-        {audit && (
-          <Space direction="vertical" size={16} style={{ width: '100%' }}>
-            <Descriptions size="small" column={1} bordered items={[
-              { key: 'created', label: '创建人', children: audit.item.createdBy },
-              { key: 'createdAt', label: '创建时间', children: new Date(audit.item.createdAt).toLocaleString('zh-CN') },
-              { key: 'updatedAt', label: '最近更新', children: new Date(audit.item.updatedAt).toLocaleString('zh-CN') },
-              { key: 'status', label: '当前状态', children: statusText[audit.item.status] || audit.item.status },
-            ]} />
-            <Typography.Title level={5} style={{ margin: 0 }}>版本与操作记录</Typography.Title>
-            <Timeline items={[
-              { color: 'blue', children: `创建 · ${new Date(audit.item.createdAt).toLocaleString('zh-CN')}` },
-              ...audit.versions.map((item) => ({
-                color: 'green',
-                children: `发布 V${item.versionNo} · ${item.createdBy} · ${new Date(item.createdAt).toLocaleString('zh-CN')}`,
-              })),
-              ...(audit.item.updatedAt !== audit.item.createdAt ? [{
-                color: 'gray',
-                children: `最近编辑 · ${new Date(audit.item.updatedAt).toLocaleString('zh-CN')}`,
-              }] : []),
-            ]} />
-          </Space>
+                      {value || '—'}
+                    </Typography.Link>
+                  ),
+                },
+                {
+                  title: '订单号',
+                  dataIndex: 'orderNo',
+                  width: 135,
+                  render: (value: string) => renderCellText(value),
+                },
+                {
+                  title: '品名',
+                  dataIndex: 'productName',
+                  width: 180,
+                  render: (value: string) => renderCellText(value),
+                },
+                {
+                  title: '类别',
+                  dataIndex: 'category',
+                  width: 135,
+                  render: (value: string) => renderCellText(value),
+                },
+                {
+                  title: '制造日期',
+                  dataIndex: 'manufactureDate',
+                  width: 135,
+                  render: (value: string) => renderCellText(value),
+                },
+                {
+                  title: '关联项目 / 阶段 / 任务',
+                  width: 320,
+                  render: (_: unknown, item: ProductionUpload) =>
+                    renderCellText(
+                      [item.projectName, item.stageName, item.taskName]
+                        .filter(Boolean)
+                        .join(' · ') || '未关联项目',
+                    ),
+                },
+                {
+                  title: '上传时间',
+                  width: 170,
+                  render: (_: unknown, item: ProductionUpload) =>
+                    renderCellText(new Date(item.createdAt).toLocaleString('zh-CN')),
+                },
+                {
+                  title: '操作',
+                  width: 150,
+                  render: (_: unknown, item: ProductionUpload) => (
+                    <Space className="management-table-actions" size={0}>
+                      <Button type="link" size="small" onClick={() => openWorkspace(item.id)}>
+                        查看
+                      </Button>
+                      <Button
+                        type="link"
+                        size="small"
+                        disabled={!canUpdate}
+                        onClick={() => openRename(item)}
+                      >
+                        重命名
+                      </Button>
+                      <Button
+                        type="link"
+                        size="small"
+                        danger
+                        disabled={!canDelete}
+                        onClick={() => deleteItem(item)}
+                      >
+                        删除
+                      </Button>
+                    </Space>
+                  ),
+                },
+              ]}
+              scroll={{ x: 'max-content' }}
+            />
+          </Card>
         )}
-      </Drawer>
+      </div>
       <Modal
-        title={copying ? '复制生产单（状态重置为未下单）' : '新建生产单'}
+        rootClassName="production-order-create-modal"
+        title="新建生产单"
         open={createOpen}
         confirmLoading={creating}
-        okText="创建并进入工作台"
+        okText="创建并进入工作区"
         cancelText="取消"
         onOk={() => void createOrder()}
         onCancel={() => {
           setCreateOpen(false);
           createForm.resetFields();
+          setCreateRelations([{ projectId: '' }]);
+          setCreateMode('BLANK');
+          setCreateFormat('XLSX');
+          setCreateTemplateVersionId(undefined);
         }}
         destroyOnHidden
+        width={598}
       >
-          <Form form={createForm} layout="vertical">
-          <Form.Item
-            name="orderNo"
-            label="生产单号"
-            rules={[{ required: true, whitespace: true, message: '请输入生产单号' }]}
-          >
-            <Input placeholder="例如 PO-20260824-001" maxLength={80} />
-          </Form.Item>
-          <Form.Item
-            name="templateVersionId"
-            label="生产模板"
-            rules={[{ required: true, message: '请选择已发布的 XLSX 模板' }]}
-          >
-            <Select
-              showSearch
-              optionFilterProp="label"
-              placeholder="选择已发布模板"
-              options={templateOptions.map((item) => ({
-                value: item.currentPublishedVersionId ?? item.versionId,
-                label: `${item.templateCode} · ${item.name} · V${item.currentPublishedVersionNo ?? item.versionNo}`,
-              }))}
-            />
-          </Form.Item>
-          <Space style={{ width: '100%' }} align="start">
-            <Form.Item name="quantity" label="计划数量">
-              <InputNumber min={0} precision={3} style={{ width: 160 }} />
+        <Form form={createForm} layout="vertical">
+          <div className="production-order-create-grid">
+            <Form.Item
+              name="productionName"
+              label="生产单名称"
+              rules={[{ required: true, whitespace: true, message: '请输入生产单名称' }]}
+            >
+              <Input placeholder="请输入生产单名称" maxLength={200} />
             </Form.Item>
-            <Form.Item name="unitCode" label="单位">
-              <Select allowClear style={{ width: 120 }} options={[
-                { value: 'kg', label: 'kg' },
-                { value: 't', label: 't' },
-                { value: 'L', label: 'L' },
-                { value: 'pcs', label: 'pcs' },
-              ]} />
+            <Form.Item
+              name="orderNo"
+              label="订单号"
+              rules={[{ required: true, whitespace: true, message: '请输入订单号' }]}
+            >
+              <Input placeholder="请输入订单号" maxLength={120} />
             </Form.Item>
-            <Form.Item name="plannedDate" label="计划日期">
+            <Form.Item
+              name="productName"
+              label="品名"
+              rules={[{ required: true, whitespace: true, message: '请输入品名' }]}
+            >
+              <Input placeholder="请输入品名" maxLength={200} />
+            </Form.Item>
+            <Form.Item
+              name="category"
+              label="类别"
+              rules={[{ required: true, whitespace: true, message: '请输入类别' }]}
+            >
+              <Input placeholder="请输入类别" maxLength={100} />
+            </Form.Item>
+            <Form.Item
+              name="manufactureDate"
+              label="制造日期"
+              rules={[{ required: true, message: '请选择制造日期' }]}
+            >
               <Input type="date" />
             </Form.Item>
-          </Space>
-          {!templateOptions.length && (
-            <Typography.Text type="warning">当前没有已发布的 XLSX 模板，请先到模板中心完成发布。</Typography.Text>
+            <Form.Item className="production-order-relation-field">
+              <ProductionRelationFields value={createRelations} onChange={setCreateRelations} />
+            </Form.Item>
+          </div>
+          <ProductionCreateChoice
+            label="选择新建"
+            value={createMode}
+            options={[
+              { key: 'BLANK', title: '空白新建', desc: '创建空白生产单工作区' },
+              { key: 'TEMPLATE', title: '选择模板新建', desc: '基于已发布模板创建生产单副本' },
+            ]}
+            onChange={(value) => void selectCreateMode(value as 'BLANK' | 'TEMPLATE')}
+          />
+          {createMode === 'TEMPLATE' && (
+            <Form.Item
+              label="业务模板"
+              required
+              validateStatus={
+                !createTemplateVersionId && createTemplates.length === 0 ? 'warning' : undefined
+              }
+              help={
+                createTemplates.length === 0 && !createTemplatesLoading
+                  ? '请选择已发布的 XLSX 模板'
+                  : undefined
+              }
+            >
+              <Select
+                showSearch
+                optionFilterProp="label"
+                loading={createTemplatesLoading}
+                value={createTemplateVersionId}
+                placeholder="选择已发布模板"
+                onChange={setCreateTemplateVersionId}
+                options={createTemplates.map((item) => ({
+                  value: item.versionId,
+                  label: `${item.templateCode} · ${item.name} · V${item.versionNo}`,
+                }))}
+              />
+            </Form.Item>
           )}
-          </Form>
-          {copying && <Typography.Text type="secondary">将复制基础信息和模板关系；新记录不继承已发布状态、库存联动、签名和操作留痕。</Typography.Text>}
+          {createMode === 'BLANK' && (
+            <ProductionCreateChoice
+              label="文档格式"
+              value={createFormat}
+              options={[
+                { key: 'WORD', title: 'Word 生产单', desc: '正文、章节与文档结构编辑' },
+                { key: 'XLSX', title: 'Excel 生产单', desc: '表格、单元格与字段结构编辑' },
+              ]}
+              onChange={(value) => setCreateFormat(value as 'WORD' | 'XLSX')}
+            />
+          )}
+        </Form>
+      </Modal>
+      <Modal
+        open={renameOpen}
+        title="编辑生产单信息"
+        width={720}
+        confirmLoading={renameSaving}
+        okText="保存"
+        cancelText="取消"
+        onCancel={() => {
+          setRenameOpen(false);
+          setRenaming(undefined);
+          renameForm.resetFields();
+          setRenameRelations([]);
+        }}
+        onOk={() => void saveRename()}
+      >
+        <Form form={renameForm} layout="vertical">
+          <div className="production-order-create-grid">
+            <Form.Item
+              name="productionName"
+              label="生产单名称"
+              rules={[{ required: true, whitespace: true, message: '请输入生产单名称' }]}
+            >
+              <Input placeholder="请输入生产单名称" maxLength={200} />
+            </Form.Item>
+            <Form.Item
+              name="orderNo"
+              label="订单号"
+              rules={[{ required: true, whitespace: true, message: '请输入订单号' }]}
+            >
+              <Input placeholder="请输入订单号" maxLength={120} />
+            </Form.Item>
+            <Form.Item
+              name="productName"
+              label="品名"
+              rules={[{ required: true, whitespace: true, message: '请输入品名' }]}
+            >
+              <Input placeholder="请输入品名" maxLength={200} />
+            </Form.Item>
+            <Form.Item
+              name="category"
+              label="类别"
+              rules={[{ required: true, whitespace: true, message: '请输入类别' }]}
+            >
+              <Input placeholder="请输入类别" maxLength={100} />
+            </Form.Item>
+            <Form.Item
+              name="manufactureDate"
+              label="制造日期"
+              rules={[{ required: true, message: '请选择制造日期' }]}
+            >
+              <Input type="date" />
+            </Form.Item>
+            <Form.Item className="production-order-relation-field">
+              <ProductionRelationFields value={renameRelations} onChange={setRenameRelations} />
+            </Form.Item>
+          </div>
+        </Form>
       </Modal>
     </>
+  );
+}
+
+function ProductionRelationFields({
+  value,
+  onChange,
+}: {
+  value: ProjectRelationTarget[];
+  onChange: (value: ProjectRelationTarget[]) => void;
+}) {
+  const target = value[0] ?? { projectId: '' };
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [stages, setStages] = useState<ProjectStage[]>([]);
+  const [tasks, setTasks] = useState<ProjectTask[]>([]);
+
+  useEffect(() => {
+    let active = true;
+    void getProjects({ page: 1, size: 100 }).then((result) => {
+      if (active) setProjects(result.items);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    setStages([]);
+    setTasks([]);
+    if (!target.projectId) return;
+    void getProjectStages(target.projectId).then(setStages);
+  }, [target.projectId]);
+
+  useEffect(() => {
+    if (!target.stageId) return;
+    void getStageTasks(target.stageId).then(setTasks);
+  }, [target.stageId]);
+
+  const update = (patch: Partial<ProjectRelationTarget>) => {
+    onChange([{ ...target, ...patch }]);
+  };
+
+  return (
+    <div className="production-order-relation-fields">
+      <div>
+        <label>关联项目</label>
+        <Select
+          allowClear
+          showSearch
+          optionFilterProp="label"
+          placeholder="不关联项目"
+          value={target.projectId || undefined}
+          popupMatchSelectWidth={false}
+          classNames={{ popup: { root: 'production-project-relation-dropdown' } }}
+          options={projects.map((project) => ({
+            value: project.id,
+            label: `${project.projectCode} · ${project.name}`,
+          }))}
+          onChange={(projectId) => {
+            const project = projects.find((item) => item.id === projectId);
+            update({
+              projectId: projectId || '',
+              projectName: project ? `${project.projectCode}·${project.name}` : undefined,
+              stageId: undefined,
+              stageName: undefined,
+              taskId: undefined,
+              taskName: undefined,
+            });
+          }}
+        />
+      </div>
+      <div>
+        <label>阶段</label>
+        <Select
+          allowClear
+          placeholder="不关联阶段"
+          disabled={!target.projectId}
+          value={target.stageId}
+          popupMatchSelectWidth={false}
+          options={stages.map((stage) => ({ value: stage.id, label: stage.name }))}
+          onChange={(stageId) => {
+            const stage = stages.find((item) => item.id === stageId);
+            update({
+              stageId,
+              stageName: stage?.name,
+              taskId: undefined,
+              taskName: undefined,
+            });
+          }}
+        />
+      </div>
+      <div>
+        <label>任务</label>
+        <Select
+          allowClear
+          placeholder="不关联任务"
+          disabled={!target.stageId}
+          value={target.taskId}
+          popupMatchSelectWidth={false}
+          options={tasks.map((task) => ({ value: task.id, label: task.name }))}
+          onChange={(taskId) => {
+            const task = tasks.find((item) => item.id === taskId);
+            update({ taskId, taskName: task?.name });
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function ProductionCreateChoice({
+  label,
+  options,
+  value,
+  onChange,
+}: {
+  label: string;
+  options: Array<{ key: string; title: string; desc: string }>;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="production-order-choice-section">
+      <label>
+        <i>*</i>
+        {label}
+      </label>
+      <div>
+        {options.map((option, index) => (
+          <button
+            key={option.key}
+            type="button"
+            className={value === option.key ? 'active' : ''}
+            onClick={() => onChange(option.key)}
+          >
+            <span>{index === 0 ? '▣' : '↪'}</span>
+            <b>
+              {option.title}
+              <small>{option.desc}</small>
+            </b>
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }

@@ -5,8 +5,11 @@ export type ProjectResourceType = 'KNOWLEDGE_DOCUMENT' | 'DATA_IMPORT_JOB';
 
 export interface ProjectRelationTarget {
   projectId: string;
+  projectName?: string;
   stageId?: string;
+  stageName?: string;
   taskId?: string;
+  taskName?: string;
 }
 
 export interface RelatedProjectView extends ProjectRelationTarget {
@@ -53,7 +56,7 @@ export const projectResourceApi = {
   async replaceLinks(resourceType: ProjectResourceType, resourceId: string, targets: ProjectRelationTarget[]) {
     const response = await httpClient.put<ApiResponse<RelatedProjectView[]>>(
       `/api/v1/project-resource-links/${resourceType}/${resourceId}`,
-      { targets },
+      { targets: targets.map(toTarget) },
     );
     return response.data.data;
   },
@@ -61,7 +64,7 @@ export const projectResourceApi = {
     const response = await httpClient.post<ApiResponse<ProjectReference[]>>('/api/v1/project-references', {
       resourceType,
       resourceId,
-      targets,
+      targets: targets.map(toTarget),
       summary,
     });
     return response.data.data;
@@ -90,3 +93,7 @@ export const projectResourceApi = {
     return response.data.data;
   },
 };
+
+function toTarget(target: ProjectRelationTarget): ProjectRelationTarget {
+  return { projectId: target.projectId, stageId: target.stageId, taskId: target.taskId };
+}

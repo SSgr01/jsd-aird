@@ -4,15 +4,17 @@ import {
   DownloadOutlined,
   EyeOutlined,
   FileTextOutlined,
+  ReloadOutlined,
 } from '@ant-design/icons';
-import { App, Button, Form, Modal, Select, Space, TreeSelect, Upload } from 'antd';
+import { App, Button, Form, Modal, Select, Space, Upload } from 'antd';
 import type { UploadFile, UploadProps } from 'antd';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { downloadFile, stageFile } from '@/services/files/file-api';
 import { UploadWorkspace, type UploadWorkspaceRecord } from '@/components/upload-workspace';
-import { getProjectStages, getProjects, getStageTasks } from '@/services/project/project-api';
+import { ProjectRelationPicker } from '@/components/project-relations/ProjectRelationPicker';
+import type { ProjectRelationTarget } from '@/services/project/project-resource-api';
 import {
   qualityApi,
   type QualityCategory,
@@ -21,23 +23,7 @@ import {
   type QualityUpload,
   type QualityVisibility,
 } from '@/services/quality/quality-api';
-import './quality-pages.css';
 
-type LinkNode = {
-  value: string;
-  label: string;
-  isLeaf?: boolean;
-  selectable?: boolean;
-  children?: LinkNode[];
-};
-type LinkMeta = {
-  projectId?: string;
-  projectName?: string;
-  stageId?: string;
-  stageName?: string;
-  taskId?: string;
-  taskName?: string;
-};
 type QualityCategoryOption = QualityCategory & { typeId: QualityTypeId };
 
 const accept = '.pdf,.doc,.docx,.xls,.xlsx,.csv,.jpg,.jpeg,.png,.tif,.tiff';
@@ -55,6 +41,13 @@ const statusView: Record<string, { label: string; color: string }> = {
   FAILED: { label: '失败', color: 'error' },
   QUEUED: { label: '排队中', color: 'processing' },
 };
+const progressDescriptions: Record<string, string> = {
+  UPLOADED: '等待开始解析',
+  QUEUED: '等待解析任务',
+  PARSING: '正在读取并解析源文件',
+  DRAFT_CREATED: '解析完成，已生成品管草稿',
+  FAILED: '解析失败，可点击重试',
+};
 const visibilityOptions = [
   { value: 'ALL', label: '全员可见' },
   { value: 'RND', label: '研发部可见' },
@@ -62,39 +55,14 @@ const visibilityOptions = [
   { value: 'PROJECT', label: '项目组可见' },
 ];
 
-function findLink(nodes: LinkNode[], target: string, parents: LinkMeta = {}): LinkMeta {
-  for (const node of nodes) {
-    const [type, id] = node.value.split(':');
-    const current = {
-      ...parents,
-      ...(type === 'project' ? { projectId: id } : {}),
-      ...(type === 'project' ? { projectName: node.label } : {}),
-      ...(type === 'stage' ? { stageId: id } : {}),
-      ...(type === 'stage' ? { stageName: node.label } : {}),
-      ...(type === 'task' ? { taskId: id } : {}),
-      ...(type === 'task' ? { taskName: node.label } : {}),
-    };
-    if (node.value === target) return current;
-    const child = findLink(node.children ?? [], target, current);
-    if (child.projectId || child.stageId || child.taskId) return child;
-  }
-  return {};
-}
-
-function attachChildren(nodes: LinkNode[], target: string, children: LinkNode[]): LinkNode[] {
-  return nodes.map((node) =>
-    node.value === target
-      ? { ...node, children }
-      : node.children
-        ? { ...node, children: attachChildren(node.children, target, children) }
-        : node,
-  );
-}
-
 function formatUploadStatus(upload: QualityUpload) {
   const status = statusView[upload.status] || { label: upload.status || '未知', color: 'default' };
-  const progress = upload.status === 'FAILED' ? 0 : upload.status === 'DRAFT_CREATED' ? 100 : 50;
-  return { status, progress };
+  const progress = upload.status === 'FAILED' || upload.status === 'UPLOADED'
+    ? 0
+    : upload.status === 'QUEUED' ? 10
+      : upload.status === 'DRAFT_CREATED' ? 100 : 50;
+  const description = progressDescriptions[upload.status] || '等待处理';
+  return { status, progress, description };
 }
 
 function visibilityText(value?: string) {
@@ -124,10 +92,7 @@ export function QualityUploadPage() {
   const [categories, setCategories] = useState<QualityCategoryOption[]>([]);
   const [categoryId, setCategoryId] = useState<string>();
   const [files, setFiles] = useState<UploadFile[]>([]);
-  const [linkTree, setLinkTree] = useState<LinkNode[]>([]);
-  const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
-  const previousExpanded = useRef<string[]>([]);
-  const [link, setLink] = useState<string>();
+  const [projectRelations, setProjectRelations] = useState<ProjectRelationTarget[]>([]);
   const [visibility, setVisibility] = useState<QualityVisibility>('ALL');
   const [uploads, setUploads] = useState<QualityUpload[]>([]);
   const [keyword, setKeyword] = useState('');
@@ -137,6 +102,7 @@ export function QualityUploadPage() {
   const [uploading, setUploading] = useState(false);
   const [downloadingId, setDownloadingId] = useState<string>();
   const [deletingId, setDeletingId] = useState<string>();
+  const [retryingId, setRetryingId] = useState<string>();
 
   const categoryOptions = useMemo(
     () =>
@@ -168,7 +134,7 @@ export function QualityUploadPage() {
     }
   }, [message]);
 
-  const loadUploads = useCallback(async () => {
+  const loadUploads = useCallback(async (targetPage = page.current, targetPageSize = page.pageSize) => {
     setLoading(true);
     try {
       const result = await qualityApi.uploads({
@@ -179,8 +145,8 @@ export function QualityUploadPage() {
             : uploadStatus === 'COMPLETED'
               ? 'DRAFT_CREATED'
               : uploadStatus,
-        page: page.current,
-        size: page.pageSize,
+        page: targetPage,
+        size: targetPageSize,
       });
       setUploads(result.items);
       setPage((current) => ({
@@ -196,58 +162,9 @@ export function QualityUploadPage() {
     }
   }, [keyword, message, page.current, page.pageSize, uploadStatus]);
 
-  const loadProjects = useCallback(async () => {
-    try {
-      const result = await getProjects({ page: 1, size: 200 });
-      setLinkTree(
-        result.items.map((project) => ({
-          value: `project:${project.id}`,
-          label: `${project.projectCode}·${project.name}`,
-          selectable: false,
-          isLeaf: false,
-        })),
-      );
-    } catch {
-      message.error('项目列表加载失败');
-    }
-  }, [message]);
-
   useEffect(() => {
-    void Promise.all([loadCatalog(), loadProjects()]);
-  }, [loadCatalog, loadProjects]);
-
-  const expandRelation = (keys: Array<string | number>) => {
-    const values = keys.map(String);
-    const target = values.find((key) => !previousExpanded.current.includes(key));
-    setExpandedKeys(values);
-    previousExpanded.current = values;
-    if (!target) return;
-    const [type, id] = target.split(':');
-    if (!id) return;
-    const request =
-      type === 'project'
-        ? getProjectStages(id).then((items) =>
-            items.map<LinkNode>((stage) => ({
-              value: `stage:${stage.id}`,
-              label: stage.name,
-              selectable: false,
-              isLeaf: false,
-            })),
-          )
-        : type === 'stage'
-          ? getStageTasks(id).then((items) =>
-              items.map<LinkNode>((task) => ({
-                value: `task:${task.id}`,
-                label: task.name,
-                selectable: true,
-                isLeaf: true,
-              })),
-            )
-          : Promise.resolve<LinkNode[]>([]);
-    void request.then((children) =>
-      setLinkTree((current) => attachChildren(current, target, children)),
-    );
-  };
+    void loadCatalog();
+  }, [loadCatalog]);
 
   const validate: UploadProps['beforeUpload'] = (file) => {
     const name = file.name.toLowerCase();
@@ -281,8 +198,8 @@ export function QualityUploadPage() {
       void message.warning('请选择保存位置');
       return;
     }
-    const selected = link ? findLink(linkTree, link) : {};
-    if (visibility === 'PROJECT' && !selected.projectId) {
+    const selected = projectRelations.find((item) => item.projectId);
+    if (visibility === 'PROJECT' && !selected?.projectId) {
       void message.warning('项目组可见必须先关联项目');
       return;
     }
@@ -292,21 +209,30 @@ export function QualityUploadPage() {
       for (const file of sourceFiles) {
         try {
           const staged = await stageFile(file, 'QUALITY_SOURCE');
-          await qualityApi.createUpload({
+          const submitted = await qualityApi.createUpload({
             fileId: staged.fileId,
             categoryId,
             originalName: staged.originalName,
             contentType: staged.contentType,
             size: staged.size,
             sha256: staged.sha256,
-            projectId: selected.projectId,
-            projectName: selected.projectName,
-            stageId: selected.stageId,
-            stageName: selected.stageName,
-            taskId: selected.taskId,
-            taskName: selected.taskName,
+            projectId: selected?.projectId,
+            projectName: selected?.projectName,
+            stageId: selected?.stageId,
+            stageName: selected?.stageName,
+            taskId: selected?.taskId,
+            taskName: selected?.taskName,
             visibility,
           });
+          // The API returns HTTP 200 even when source parsing has failed so
+          // the upload ledger can retain the failed file and offer retry.
+          // Do not report that case as a successful submission.
+          if (submitted.status === 'FAILED') {
+            failed += 1;
+            void message.error(
+              `${file.name}：解析失败${submitted.errorMessage ? `：${submitted.errorMessage}` : ''}`,
+            );
+          }
         } catch (error) {
           failed += 1;
           void message.error(
@@ -351,9 +277,31 @@ export function QualityUploadPage() {
     });
   };
 
+  const retryUpload = async (upload: QualityUpload) => {
+    setRetryingId(upload.id);
+    try {
+      await qualityApi.retryUpload(upload.id);
+      message.success(`“${upload.originalName}”已重新提交解析`);
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '品管文件重试失败');
+    } finally {
+      setRetryingId(undefined);
+      // Refresh page 1 explicitly; relying on the state update above can leave
+      // the request on the previous page and make a successful upload appear
+      // to be missing when the user had been browsing a later page.
+      await loadUploads(1, page.pageSize);
+    }
+  };
+
   useEffect(() => {
     void loadUploads();
   }, [loadUploads, page.current, page.pageSize, uploadStatus, keyword]);
+
+  useEffect(() => {
+    if (!uploads.some((item) => ['UPLOADED', 'QUEUED', 'PARSING'].includes(item.status))) return;
+    const timer = window.setInterval(() => void loadUploads(), 2000);
+    return () => window.clearInterval(timer);
+  }, [loadUploads, uploads]);
 
   const records: UploadWorkspaceRecord[] = uploads.map((upload) => {
     const status = formatUploadStatus(upload);
@@ -365,7 +313,7 @@ export function QualityUploadPage() {
       name: upload.originalName,
       icon: <FileTextOutlined />,
       meta: `${fileTypeText(upload.originalName)} · ${formatSize(upload.size)} · ${new Date(upload.createdAt).toLocaleString('zh-CN')}`,
-      detail: `保存位置：${upload.categoryName || '未分类'} · ${path} · ${visibilityText(upload.visibility)} · 文件大小：${formatSize(upload.size)}`,
+      detail: `保存位置：${upload.categoryName || '未分类'} · ${path} · ${visibilityText(upload.visibility)} · 文件大小：${formatSize(upload.size)} · ${status.description}${upload.errorMessage ? ` · 失败原因：${upload.errorMessage}` : ''}`,
       status: status.status,
       progress: status.progress,
       actions: (
@@ -394,7 +342,15 @@ export function QualityUploadPage() {
           >
             下载
           </Button>
-          {upload.allowedActions?.includes('DELETE') ? <Button
+          <Button
+            type="link"
+            icon={<ReloadOutlined />}
+            loading={retryingId === upload.id}
+            onClick={() => void retryUpload(upload)}
+          >
+            重试
+          </Button>
+          <Button
             type="link"
             danger
             icon={<DeleteOutlined />}
@@ -402,15 +358,14 @@ export function QualityUploadPage() {
             onClick={() => removeUpload(upload)}
           >
             删除
-          </Button> : null}
+          </Button>
         </Space>
       ),
     };
   });
 
   return (
-    <div className="quality-page">
-      <UploadWorkspace
+    <UploadWorkspace
         breadcrumbs={[{ title: '品管部数据中心' }, { title: '数据上传' }]}
         title="品管部数据上传"
         description="上传原始文件后自动生成品管数据草稿，并可与项目/阶段/任务绑定追溯。"
@@ -431,16 +386,7 @@ export function QualityUploadPage() {
               />
             </Form.Item>
             <Form.Item label="关联项目 / 阶段 / 任务">
-              <TreeSelect
-                value={link}
-                onChange={setLink}
-                allowClear
-                placeholder="未关联项目"
-                treeData={linkTree}
-                treeExpandedKeys={expandedKeys}
-                treeNodeFilterProp="label"
-                onTreeExpand={expandRelation}
-              />
+              <ProjectRelationPicker value={projectRelations} onChange={setProjectRelations} multiple={false} />
             </Form.Item>
             <Form.Item label="权限可见">
               <Select value={visibility} onChange={setVisibility} options={visibilityOptions} />
@@ -481,7 +427,6 @@ export function QualityUploadPage() {
         recordsLoading={loading}
         pagination={{ current: page.current, pageSize: page.pageSize, total: page.total }}
         onPageChange={(current, pageSize) => setPage((value) => ({ ...value, current, pageSize }))}
-      />
-    </div>
+    />
   );
 }

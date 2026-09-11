@@ -1,0 +1,11 @@
+.project-relation-picker-dropdown {
+  max-width: min(720px, calc(100vw - 32px));
+}
+
+.project-relation-picker-dropdown .ant-select-item-option-content {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}

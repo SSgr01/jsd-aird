@@ -1,6 +1,5 @@
 import {
   AppstoreOutlined,
-  InboxOutlined,
   DeleteOutlined,
   CopyOutlined,
   DownloadOutlined,
@@ -28,17 +27,20 @@ import {
   Tooltip,
 } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
-import type dayjs from '@/utils/dayjs';
+import { Link, useSearchParams } from 'react-router-dom';
+import * as XLSX from 'xlsx';
+import dayjs from '@/utils/dayjs';
 import './project-pages.css';
 import './project-list.css';
 import '@/pages/partners/partner-prototype.css';
+import '@/styles/management-list.css';
 import {
   copyProjects,
   createProject,
   deleteProjects,
   formatProjectPriority,
   formatProjectStatus,
+  getProject,
   getProjects,
   exportProjects,
   projectPriorities,
@@ -78,17 +80,13 @@ function statusClass(value: ProjectStatus) {
   return `pm-tag status-${value.toLowerCase()}`;
 }
 
-function ellipsisName(name: string, max = 18) {
-  return name.length > max ? `${name.slice(0, max)}...` : name;
-}
-
 export function ProjectListPage() {
   const [rows, setRows] = useState<Project[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
-  const [view, setView] = useState<ViewMode>('card');
+  const [view, setView] = useState<ViewMode>('list');
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const [keyword, setKeyword] = useState('');
@@ -105,6 +103,7 @@ export function ProjectListPage() {
   const [form] = Form.useForm<ProjectFormValues>();
 
   const [msg, holder] = message.useMessage();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -133,6 +132,21 @@ export function ProjectListPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (searchParams.get('create') !== '1') return;
+    setPendingFormValues({
+      priority: 'MEDIUM',
+      status: 'NOT_STARTED',
+      teamMembers: [],
+      customFields: [],
+    });
+    setDrawerOpen(true);
+    setSearchParams((current) => {
+      current.delete('create');
+      return current;
+    }, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   // 当 Modal 打开完成（动画结束）后再回写表单值，避免 destroyOnClose 导致 Form 还未挂载时赋值被丢弃
   const handleModalAfterOpenChange = (open: boolean) => {
@@ -189,15 +203,38 @@ export function ProjectListPage() {
   const handleExport = async () => {
     setExporting(true);
     try {
-      await exportProjects({
-        keyword: keyword || undefined,
-        owner,
-        priority,
-        status,
-        startDateFrom: dateRange?.[0]?.format('YYYY-MM-DD') || undefined,
-        startDateTo: dateRange?.[1]?.format('YYYY-MM-DD') || undefined,
-      });
-      msg.success('项目列表已导出');
+      if (selected.size > 0) {
+        const projects = await Promise.all([...selected].map(async (id) => {
+          const current = rows.find((item) => item.id === id);
+          return current ?? getProject(id);
+        }));
+        const data = projects.map((project) => ({
+          项目编号: project.projectCode,
+          项目名称: project.name,
+          所属客户: project.partnerName || '',
+          负责人: project.owner || '',
+          开始日期: project.startDate || '',
+          结束日期: project.endDate || '',
+          优先级: formatProjectPriority(project.priority),
+          状态: formatProjectStatus(project.status),
+          团队成员: project.teamMembers?.join('、') || '',
+        }));
+        const ws = XLSX.utils.json_to_sheet(data);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, '项目列表');
+        XLSX.writeFile(wb, `项目列表_选中_${dayjs().format('YYYYMMDD_HHmmss')}.xlsx`);
+        msg.success(`已导出 ${projects.length} 个选中项目`);
+      } else {
+        await exportProjects({
+          keyword: keyword || undefined,
+          owner,
+          priority,
+          status,
+          startDateFrom: dateRange?.[0]?.format('YYYY-MM-DD') || undefined,
+          startDateTo: dateRange?.[1]?.format('YYYY-MM-DD') || undefined,
+        });
+        msg.success('项目查询结果已导出');
+      }
     } catch (error) {
       msg.error(error instanceof Error ? error.message : '项目列表导出失败');
     } finally {
@@ -217,16 +254,15 @@ export function ProjectListPage() {
   };
 
   const handleDelete = () => {
-    const ids = rows.filter((row) => selected.has(row.id) && row.allowedActions?.includes('DELETE')).map((row) => row.id);
-    if (!ids.length) { msg.warning('当前选择没有可删除的项目'); return; }
+    if (!selected.size) return;
     Modal.confirm({
       title: '删除选中的项目？',
-      content: `已选择 ${ids.length} 个可删除项目，删除后项目将从列表中隐藏。`,
+      content: `已选择 ${selected.size} 个项目，删除后不可恢复。`,
       okText: '删除',
       okType: 'danger',
       onOk: async () => {
         try {
-          await deleteProjects(ids);
+          await deleteProjects([...selected]);
           msg.success('项目已删除');
           await load();
         } catch {
@@ -237,8 +273,6 @@ export function ProjectListPage() {
   };
 
   const handleDeleteRow = async (id: string) => {
-    const row = rows.find((item) => item.id === id);
-    if (!row || (!row.allowedActions?.includes('DELETE') && !row.allowedActions?.includes('ARCHIVE'))) return;
     try {
       await deleteProjects([id]);
       msg.success('项目已删除');
@@ -306,9 +340,9 @@ export function ProjectListPage() {
   };
 
   return (
-    <div className="pm-page">
+    <div className="pm-page pm-unified-list-page pm-project-list-page">
       {holder}
-      <div className="pm-page-head">
+      <div className="pm-page-head pm-project-page-intro">
         <div>
           <Breadcrumb items={[{ title: '项目管理' }, { title: '项目列表' }]} />
           <h3>项目列表</h3>
@@ -316,44 +350,9 @@ export function ProjectListPage() {
         </div>
       </div>
 
-      <div className="pm-toolbar">
-        <div className="pm-toolbar-left">
-          <span className="pm-selected">已选 {selected.size} 项</span>
-        </div>
-        <div className="pm-toolbar-right">
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-            新建项目
-          </Button>
-          <Button icon={<DownloadOutlined />} loading={exporting} onClick={() => void handleExport()}>
-            导出
-          </Button>
-          <Button icon={<CopyOutlined />} disabled={!selected.size} onClick={handleCopy}>
-            复制
-          </Button>
-          <Button danger disabled={!rows.some((row) => selected.has(row.id) && row.allowedActions?.includes('DELETE'))} onClick={handleDelete}>
-            删除
-          </Button>
-          <Space.Compact>
-            <Tooltip title="卡片视图">
-              <Button
-                className={view === 'card' ? 'pm-view-btn active' : 'pm-view-btn'}
-                icon={<AppstoreOutlined />}
-                onClick={() => setView('card')}
-              />
-            </Tooltip>
-            <Tooltip title="列表视图">
-              <Button
-                className={view === 'list' ? 'pm-view-btn active' : 'pm-view-btn'}
-                icon={<UnorderedListOutlined />}
-                onClick={() => setView('list')}
-              />
-            </Tooltip>
-          </Space.Compact>
-        </div>
-      </div>
-
-      <div className="pm-filter">
+      <div className="pm-filter-row">
         <Input
+          className="pm-project-keyword-filter"
           prefix={<SearchOutlined />}
           placeholder="项目名称 / 项目编号 / 公司名称"
           value={keyword}
@@ -401,9 +400,50 @@ export function ProjectListPage() {
           allowClear
           options={projectStatuses.map(({ value, label }) => ({ value, label }))}
         />
-        <Button icon={<ReloadOutlined />} onClick={reset}>
+        <Button className="pm-filter-reset" icon={<ReloadOutlined />} onClick={reset}>
           重置
         </Button>
+      </div>
+
+      <div className="pm-batch-row">
+        <div className="pm-batch-summary">
+          <span className="pm-selected">已选 {selected.size} 项</span>
+          {selected.size > 0 && (
+            <Button type="link" size="small" onClick={() => setSelected(new Set())}>
+              清除已选
+            </Button>
+          )}
+        </div>
+        <div className="pm-batch-actions">
+          <Button icon={<DownloadOutlined />} loading={exporting} onClick={() => void handleExport()}>
+            导出
+          </Button>
+          <Button icon={<CopyOutlined />} disabled={!selected.size} onClick={handleCopy}>
+            复制
+          </Button>
+          <Button danger disabled={!selected.size} onClick={handleDelete}>
+            删除
+          </Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+            新建项目
+          </Button>
+          <Space.Compact>
+            <Tooltip title="卡片视图">
+              <Button
+                className={view === 'card' ? 'pm-view-btn active' : 'pm-view-btn'}
+                icon={<AppstoreOutlined />}
+                onClick={() => setView('card')}
+              />
+            </Tooltip>
+            <Tooltip title="列表视图">
+              <Button
+                className={view === 'list' ? 'pm-view-btn active' : 'pm-view-btn'}
+                icon={<UnorderedListOutlined />}
+                onClick={() => setView('list')}
+              />
+            </Tooltip>
+          </Space.Compact>
+        </div>
       </div>
 
       <div className="pm-content" aria-busy={loading}>
@@ -432,7 +472,6 @@ export function ProjectListPage() {
                       </h4>
                       <div className="pm-card-code">
                         {row.projectCode}
-                        {row.owner ? ` · ${row.owner}` : ''}
                       </div>
                     </div>
                     <Checkbox
@@ -441,6 +480,10 @@ export function ProjectListPage() {
                     />
                   </div>
                   <div className="pm-card-info-grid">
+                    <div className="pm-card-info-item">
+                      <span className="pm-card-info-label">负责人</span>
+                      <strong className="pm-card-info-value" title={row.owner}>{row.owner ?? '—'}</strong>
+                    </div>
                     <div className="pm-card-info-item">
                       <span className="pm-card-info-label">开始日期</span>
                       <strong className="pm-card-info-value">{row.startDate ?? '未设置'}</strong>
@@ -456,7 +499,11 @@ export function ProjectListPage() {
                   </div>
                   <div className="pm-card-actions">
                     <Link to={`/projects/${row.id}`}>查看</Link>
-                    {row.allowedActions?.includes('DELETE') ? <Popconfirm title="确认删除该项目？" description="项目将从默认列表中隐藏。" onConfirm={() => handleDeleteRow(row.id)}><Button type="link" danger>删除</Button></Popconfirm> : row.allowedActions?.includes('ARCHIVE') ? <Popconfirm title="确认归档该项目？" description="归档后项目不再出现在默认列表。" onConfirm={() => handleDeleteRow(row.id)}><Button type="link" icon={<InboxOutlined />}>归档</Button></Popconfirm> : null}
+                    <Popconfirm title="确认删除该项目？" description="删除后不可恢复。" onConfirm={() => handleDeleteRow(row.id)}>
+                      <Button type="link" danger>
+                        删除
+                      </Button>
+                    </Popconfirm>
                   </div>
                 </div>
               ))}
@@ -470,9 +517,9 @@ export function ProjectListPage() {
                   <th>
                     <Checkbox checked={allSelected} indeterminate={indeterminate} onChange={toggleSelectAll} />
                   </th>
-                  <th>项目编号</th>
-                  <th>项目名称</th>
-                  <th>负责人</th>
+                  <th className="pm-code-column">项目编号</th>
+                  <th className="pm-name-column pm-project-name-column">项目名称</th>
+                  <th className="pm-owner-column">负责人</th>
                   <th>开始日期</th>
                   <th>优先级</th>
                   <th>状态</th>
@@ -489,13 +536,13 @@ export function ProjectListPage() {
                         onChange={() => toggleSelect(row.id)}
                       />
                     </td>
-                    <td>{row.projectCode}</td>
-                    <td>
+                    <td className="pm-code-column">{row.projectCode}</td>
+                    <td className="pm-name-column pm-project-name-column">
                       <Link className="pm-name-link" to={`/projects/${row.id}`} title={row.name}>
-                        {ellipsisName(row.name)}
+                        {row.name}
                       </Link>
                     </td>
-                    <td>{row.owner ?? '—'}</td>
+                    <td className="pm-owner-column">{row.owner ?? '—'}</td>
                     <td>{row.startDate ?? '—'}</td>
                     <td>
                       <span className={priorityClass(row.priority)}>
@@ -507,9 +554,13 @@ export function ProjectListPage() {
                     </td>
                     <td>{(row.teamMembers ?? []).length} 人</td>
                     <td>
-                      <div className="cm-row-actions">
+                      <div className="cm-row-actions management-table-actions">
                         <Link to={`/projects/${row.id}`}>查看</Link>
-                        {row.allowedActions?.includes('DELETE') ? <Popconfirm title="确认删除该项目？" description="项目将从默认列表中隐藏。" onConfirm={() => handleDeleteRow(row.id)}><Button type="link" size="small" danger>删除</Button></Popconfirm> : row.allowedActions?.includes('ARCHIVE') ? <Popconfirm title="确认归档该项目？" description="归档后项目不再出现在默认列表。" onConfirm={() => void handleDeleteRow(row.id)}><Button type="link" size="small" icon={<InboxOutlined />}>归档</Button></Popconfirm> : null}
+                        <Popconfirm title="确认删除该项目？" description="删除后不可恢复。" onConfirm={() => handleDeleteRow(row.id)}>
+                          <Button type="link" size="small" danger>
+                            删除
+                          </Button>
+                        </Popconfirm>
                       </div>
                     </td>
                   </tr>
@@ -556,17 +607,6 @@ export function ProjectListPage() {
           <div className="pm-form-basics">
             <div className="pm-section-head">
               <h4 className="pm-section-title">基础信息</h4>
-              <Button
-                type="dashed"
-                size="small"
-                icon={<PlusOutlined />}
-                onClick={() => {
-                  const list = form.getFieldValue('customFields') as CustomField[] | undefined;
-                  form.setFieldsValue({ customFields: [...(list ?? []), { key: '', value: '' }] });
-                }}
-              >
-                添加字段
-              </Button>
             </div>
 
             <div className="pm-form-grid">
@@ -614,15 +654,17 @@ export function ProjectListPage() {
                 />
               </Form.Item>
             </div>
+            <div className="pm-form-desc">
+              <Form.Item name="background" label="项目描述">
+                <Input.TextArea rows={4} placeholder="请输入项目描述" />
+              </Form.Item>
+            </div>
           </div>
 
-          <Form.Item
-            name="customFields"
-            style={{ marginBottom: 0 }}
-          >
-            <Form.List name="customFields">
-              {(fields, { remove }) =>
-                fields.length > 0 ? (
+          <Form.List name="customFields">
+            {(fields, { remove }) => (
+              <div className="pm-custom-fields-block">
+                {fields.length > 0 && (
                   <div className="pm-custom-fields">
                     <div className="pm-section-head">
                       <h4 className="pm-section-title">自定义字段</h4>
@@ -641,16 +683,19 @@ export function ProjectListPage() {
                       ))}
                     </div>
                   </div>
-                ) : null
-              }
-            </Form.List>
-          </Form.Item>
-
-          <div className="pm-form-desc">
-            <Form.Item name="background" label="项目描述">
-              <Input.TextArea rows={4} placeholder="请输入项目描述" />
-            </Form.Item>
-          </div>
+                )}
+                <Button
+                  type="dashed"
+                  size="small"
+                  icon={<PlusOutlined />}
+                  style={{ marginTop: fields.length > 0 ? 12 : 0 }}
+                  onClick={() => form.setFieldsValue({ customFields: [...(form.getFieldValue('customFields') ?? []), { key: '', value: '' }] })}
+                >
+                  添加字段
+                </Button>
+              </div>
+            )}
+          </Form.List>
         </Form>
       </Modal>
 

@@ -24,24 +24,37 @@ export interface ProductionUpload {
   visibility: ProductionUploadVisibility;
   sourceType: 'XLSX' | 'PHOTO';
   status:
-    | 'QUEUED' | 'PARSING' | 'MATCHING_TEMPLATE' | 'EXTRACTING'
-    | 'REVIEW_REQUIRED' | 'SAVED' | 'PUBLISHED' | 'FAILED' | 'DELETED';
+    | 'QUEUED'
+    | 'PARSING'
+    | 'MATCHING_TEMPLATE'
+    | 'EXTRACTING'
+    | 'REVIEW_REQUIRED'
+    | 'SAVED'
+    | 'PUBLISHED'
+    | 'FAILED'
+    | 'DELETED';
   createdBy: string;
   createdAt: string;
   workbookSnapshot?: Record<string, unknown>;
   recognitionProgress: number;
   currentStage?: string;
   selectedTemplateVersionId?: string;
-  matchMode?: 'EXACT_MANIFEST' | 'SIMILAR_AUTO' | 'USER_REVIEW' | 'USER_SELECTED_TEMPLATE';
+  matchMode?:
+    'EXACT_MANIFEST' | 'SIMILAR_AUTO' | 'USER_REVIEW' | 'USER_SELECTED_TEMPLATE' | 'NO_TEMPLATE';
   templateMatchScore?: number;
   recognitionResult?: {
     sourceType?: 'XLSX' | 'PHOTO';
     model?: string;
+    message?: string;
     data?: Record<string, unknown>;
     items?: Array<Record<string, unknown>>;
     issues?: Array<Record<string, unknown>>;
     templateCandidates?: Array<{
-      templateVersionId: string; templateCode: string; templateName: string; score: number; exact: boolean;
+      templateVersionId: string;
+      templateCode: string;
+      templateName: string;
+      score: number;
+      exact: boolean;
     }>;
     requiresTemplateSelection?: boolean;
   };
@@ -91,6 +104,7 @@ export interface CreateProductionUploadInput {
   fileId: string;
   sourceType?: 'XLSX' | 'PHOTO';
   templateVersionId?: string;
+  replaceExisting?: boolean;
   productionName?: string;
   orderNo?: string;
   productName?: string;
@@ -117,6 +131,7 @@ export const productionUploadApi = {
     keyword?: string;
     status?: string;
     projectId?: string;
+    viewableOnly?: boolean;
     page: number;
     size: number;
   }) {
@@ -130,6 +145,23 @@ export const productionUploadApi = {
   async create(input: CreateProductionUploadInput) {
     const response = await httpClient.post<ApiResponse<ProductionUpload>>(
       '/api/v1/production-uploads',
+      input,
+    );
+    return response.data.data;
+  },
+
+  async rename(id: string, input: {
+    revision: number;
+    name: string;
+    projectId?: string;
+    projectName?: string;
+    stageId?: string;
+    stageName?: string;
+    taskId?: string;
+    taskName?: string;
+  }) {
+    const response = await httpClient.put<ApiResponse<ProductionUpload>>(
+      `/api/v1/production-uploads/${id}/rename`,
       input,
     );
     return response.data.data;
@@ -150,6 +182,13 @@ export const productionUploadApi = {
     const response = await httpClient.post<ApiResponse<ProductionUpload>>(
       `/api/v1/production-uploads/${id}/select-template`,
       { templateVersionId },
+    );
+    return response.data.data;
+  },
+
+  async retry(id: string) {
+    const response = await httpClient.post<ApiResponse<ProductionUpload>>(
+      `/api/v1/production-uploads/${id}/retry`,
     );
     return response.data.data;
   },
@@ -183,6 +222,14 @@ export const productionOrderRecordApi = {
       `/api/v1/production-orders/records/${id}/versions`,
     );
     return response.data.data;
+  },
+
+  async export(id: string) {
+    const response = await httpClient.get<Blob>(
+      `/api/v1/production-orders/records/${id}/export`,
+      { responseType: 'blob' },
+    );
+    return response.data;
   },
 
   async publish(id: string) {

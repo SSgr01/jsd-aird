@@ -33,10 +33,10 @@ public class InventoryController {
     @PostMapping("/transactions") ApiResponse<?> move(@RequestBody Movement request,@RequestHeader(value="Idempotency-Key",required=false)String key){return ok(service.move(request,key));}
     @PutMapping("/transactions/{id}") ApiResponse<?> updateTransaction(@PathVariable UUID id,@RequestBody TransactionUpdateInput request){return ok(service.updateTransaction(id,request));}
     @PostMapping("/transactions/{id}/reverse") ApiResponse<?> reverse(@PathVariable UUID id,@RequestBody(required=false)ReverseRequest request,@RequestHeader(value="Idempotency-Key",required=false)String key){return ok(service.reverse(id,request==null?null:request.note(),key));}
-    @GetMapping("/samples") ApiResponse<?> samples(@RequestParam(defaultValue="1")int page,@RequestParam(defaultValue="20")int size){return ok(service.samples(page,size));}
+    @GetMapping("/samples") ApiResponse<?> samples(@RequestParam(required=false)String keyword,@RequestParam(defaultValue="1")int page,@RequestParam(defaultValue="20")int size){return ok(service.samples(keyword,page,size));}
     @PostMapping("/samples") ApiResponse<?> sample(@RequestBody SampleInput request,@RequestHeader(value="Idempotency-Key",required=false)String key){return ok(service.createSample(request,key));}
     @PutMapping("/samples/{id}") ApiResponse<?> updateSample(@PathVariable UUID id,@RequestBody SampleUpdateInput request){return ok(service.updateSample(id,request));}
-    @GetMapping("/shipments") ApiResponse<?> shipments(@RequestParam(defaultValue="1")int page,@RequestParam(defaultValue="20")int size){return ok(service.shipments(page,size));}
+    @GetMapping("/shipments") ApiResponse<?> shipments(@RequestParam(required=false)String keyword,@RequestParam(defaultValue="1")int page,@RequestParam(defaultValue="20")int size){return ok(service.shipments(keyword,page,size));}
     @PostMapping("/shipments") ApiResponse<?> shipment(@RequestBody ShipmentInput request,@RequestHeader(value="Idempotency-Key",required=false)String key){return ok(service.createShipment(request,key));}
     @PutMapping("/shipments/{id}") ApiResponse<?> updateShipment(@PathVariable UUID id,@RequestBody ShipmentUpdateInput request){return ok(service.updateShipment(id,request));}
     @PostMapping(value="/initial-stock/imports",consumes="multipart/form-data") ApiResponse<?> upload(@RequestPart("file")MultipartFile file){return ok(imports.upload(file));}

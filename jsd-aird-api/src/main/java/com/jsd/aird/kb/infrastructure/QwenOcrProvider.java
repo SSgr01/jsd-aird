@@ -139,7 +139,7 @@ public class QwenOcrProvider implements MediaExtractionProvider {
             // generic vision response (often a Markdown image link).
             request.put("input", Map.of("messages", List.of(Map.of("role", "user", "content", List.of(
                     Map.of("image", dataUrl, "min_pixels", 3072, "max_pixels", 8388608,
-                            "enable_rotate", false))))));
+                            "enable_rotate", true))))));
             request.put("parameters", Map.of("ocr_options", Map.of("task", task)));
         } else {
             request.put("ocr_options", Map.of("task", task));
@@ -162,7 +162,7 @@ public class QwenOcrProvider implements MediaExtractionProvider {
         request.put("model", model);
         request.put("input", Map.of("messages", List.of(Map.of("role", "user", "content", List.of(
                 Map.of("image", dataUrl, "min_pixels", 3072, "max_pixels", 8388608,
-                        "enable_rotate", false))))));
+                        "enable_rotate", true))))));
         request.put("parameters", Map.of("ocr_options", Map.of("task", task)));
         return request;
     }

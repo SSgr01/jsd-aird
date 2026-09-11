@@ -25,6 +25,7 @@ import java.util.concurrent.TimeUnit;
 import com.jsd.aird.ops.application.port.FileStorageFacade;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
+import com.jsd.aird.tpl.api.TemplateOfficeNormalizationFacade.NormalizedOfficeFile;
 import org.apache.poi.hwpf.HWPFDocument;
 import org.apache.poi.hwpf.usermodel.Table;
 import org.apache.poi.hwpf.usermodel.TableCell;
@@ -53,7 +54,7 @@ import org.springframework.stereotype.Service;
  * discarded; the returned normalized file is the one used by recognition.
  */
 @Service
-public class TemplateFileNormalizationService {
+public class TemplateFileNormalizationService implements com.jsd.aird.tpl.api.TemplateOfficeNormalizationFacade {
 
     private static final String XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
     private static final String DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
@@ -91,6 +92,14 @@ public class TemplateFileNormalizationService {
             default -> throw new ApiException(ApiErrorCode.BAD_REQUEST,
                     "模板中心仅支持 XLSX、DOCX、XLS、CSV 或 DOC 文件");
         };
+    }
+
+    @Override
+    public NormalizedOfficeFile normalizeOfficeFile(String originalName, String contentType, byte[] source) {
+        var result = normalize(originalName, contentType, source);
+        return new NormalizedOfficeFile(result.originalName(), result.normalizedName(), result.normalizedContentType(),
+                result.originalFormat(), result.normalizedFormat(), result.normalizedBytes(),
+                result.normalizationStatus(), result.normalizationMessage());
     }
 
     private Result passthrough(String name, String contentType, byte[] bytes, String format) {

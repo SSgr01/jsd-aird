@@ -99,6 +99,20 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
             return null;
         }
 
+        // Project-detail experiments use the canonical ELN service, but the
+        // project detail entry point is governed by project permissions.
+        if (path.matches("/api/v1/projects/[0-9a-f-]{36}/experiments(/.*)?")) {
+            if (read) return permission("project.view", "PROJECT", "READ");
+            if (method.equals("DELETE")) return permission("project.delete", "PROJECT", "WRITE");
+            if (path.endsWith("/draft") || path.contains("/versions") || path.endsWith("/publish")
+                    || path.endsWith("/start") || path.endsWith("/submit-review")
+                    || path.endsWith("/approve") || path.endsWith("/return") || path.endsWith("/void"))
+                return permission("project.update", "PROJECT", "WRITE");
+            if (method.equals("POST")) return permission("project.create", "PROJECT", "WRITE");
+            if (method.equals("PUT") || method.equals("PATCH")) return permission("project.update", "PROJECT", "WRITE");
+            return null;
+        }
+
         // Experiment routes can be nested under a project task, so check them before the project prefix.
         if (path.startsWith("/api/v1/experiments") || path.startsWith("/api/v1/experiment-categories")
                 || path.contains("/experiments/") || path.endsWith("/experiments")) {
@@ -144,19 +158,21 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
             if (path.contains("/meetings/") && path.endsWith("/archive-to-kb"))
                 return permission("project.update", "PROJECT", "WRITE");
             if (path.equals("/api/v1/projects/copy")) return permission("project.copy", "PROJECT", "WRITE");
+            if (path.equals("/api/v1/projects/export") || path.equals("/api/v1/projects/export.csv"))
+                return permission("project.export", "PROJECT", "READ");
             if (read && (path.equals("/api/v1/projects") || path.matches("/api/v1/projects/[0-9a-f-]{36}")
-                    || path.matches("/api/v1/projects/[0-9a-f-]{36}/(stages|tasks|materials|documents|meetings|logs)(/.*)?")
+                    || path.matches("/api/v1/projects/[0-9a-f-]{36}/(stages|tasks|materials|documents|meetings|logs|templates|requirements)(/.*)?")
                     || path.matches("/api/v1/(tasks|stages|materials|project-stages|meetings)(/.*)?")))
                 return permission("project.view", "PROJECT", "READ");
             if (method.equals("DELETE") && (path.matches("/api/v1/projects/[0-9a-f-]{36}")
-                    || path.matches("/api/v1/projects/[0-9a-f-]{36}/(stages|tasks|materials|documents|meetings)/.*")
+                    || path.matches("/api/v1/projects/[0-9a-f-]{36}/(stages|tasks|materials|documents|meetings|requirements)/.*")
                     || path.matches("/api/v1/(tasks|stages|materials)(/[0-9a-f-]{36})?"))) return permission("project.delete", "PROJECT", "WRITE");
             if (method.equals("POST") && (path.equals("/api/v1/projects")
-                    || path.matches("/api/v1/projects/[0-9a-f-]{36}/(stages|tasks|documents|meetings)(/.*)?")
+                    || path.matches("/api/v1/projects/[0-9a-f-]{36}/(stages|tasks|documents|meetings|requirements)(/.*)?")
                     || path.matches("/api/v1/(tasks|materials|meetings)(/.*)?"))) return permission("project.create", "PROJECT", "WRITE");
             if ((method.equals("PUT") || method.equals("PATCH")) && (path.matches("/api/v1/projects/[0-9a-f-]{36}")
                     || path.matches("/api/v1/projects/[0-9a-f-]{36}/stages/reorder")
-                    || path.matches("/api/v1/projects/[0-9a-f-]{36}/(stages|tasks|materials|documents|meetings)/.*")
+                    || path.matches("/api/v1/projects/[0-9a-f-]{36}/(stages|tasks|materials|documents|meetings|requirements)/.*")
                     || path.matches("/api/v1/(tasks|stages|materials|meetings)/[0-9a-f-]{36}"))) return permission("project.update", "PROJECT", "WRITE");
             return null;
         }
@@ -314,12 +330,16 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
         if (path.startsWith("/api/v1/assistant") || path.startsWith("/api/v1/search"))
             return permission("ai.use", "AI", "USE");
         if (path.startsWith("/api/v1/files/staged")) {
+            if ("PROJECT_DOCUMENT".equalsIgnoreCase(request.getParameter("kind")))
+                return permission("project.create", "PROJECT", "WRITE");
             if ("TEMPLATE_SOURCE".equalsIgnoreCase(request.getParameter("kind")))
                 return permission("template.upload", "TEMPLATE", "WRITE");
             if ("EXPERIMENT_SOURCE".equalsIgnoreCase(request.getParameter("kind")))
                 return permission("experiment.create", "EXPERIMENT", "WRITE");
             if ("RESEARCH_TEST_SOURCE".equalsIgnoreCase(request.getParameter("kind")))
                 return permission("research-test.report.create", "RESEARCH_TEST", "WRITE");
+            if ("RESEARCH_TEST_STANDARD_SOURCE".equalsIgnoreCase(request.getParameter("kind")))
+                return permission("research-test.standard.create", "RESEARCH_TEST", "WRITE");
         }
         if (path.startsWith("/api/v1/files")) {
             if (path.endsWith("/content")) return permission("ops.file.download", "FILE", "READ");

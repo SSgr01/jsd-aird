@@ -60,4 +60,7 @@ public interface CustomerRequirementMapper {
                           @Param("projectId") UUID projectId, @Param("assignedProjectIds") String assignedProjectIds,
                           @Param("customFields") String customFields,
                           @Param("version") long version, @Param("operator") String operator);
+
+    @Delete("DELETE FROM mdm.customer_requirement WHERE id=#{id} AND version=#{version}")
+    int deleteRequirement(@Param("id") UUID id, @Param("version") long version);
 }

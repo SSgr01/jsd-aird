@@ -140,6 +140,7 @@ export function requiredPermissionForPath(pathname: string): string | undefined 
   if (path === '/experiments/upload') return 'experiment.create';
   if (path.startsWith('/experiments')) return 'experiment.view';
   if (path === '/research-test/upload') return 'research-test.report.create';
+  if (path === '/research-test/standard-upload') return 'research-test.standard.create';
   if (path.startsWith('/research-test/standards')) return 'research-test.standard.view';
   if (path.startsWith('/research-test')) return 'research-test.report.view';
   if (path.startsWith('/knowledge/review')) return 'knowledge.review';

@@ -1,5 +1,5 @@
 import { DeleteOutlined, PlusOutlined, SaveOutlined, UpOutlined } from '@ant-design/icons';
-import { App, Button, Col, DatePicker, Form, Input, Modal, Row, Select } from 'antd';
+import { App, Button, Col, DatePicker, Form, Input, Modal, Row, Select, Space } from 'antd';
 import dayjs from '@/utils/dayjs';
 import type { Dayjs } from 'dayjs';
 import { useEffect, useRef, useState } from 'react';
@@ -271,9 +271,12 @@ function CustomerModal({ partner, open, onClose, onSaved }: Omit<Props, 'mode'>)
       onCancel={onClose}
       title={partner ? '编辑客户' : '新建客户'}
       footer={
-        <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={() => void save()}>
-          保存
-        </Button>
+        <>
+          <Button onClick={onClose}>取消</Button>
+          <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={() => void save()}>
+            保存
+          </Button>
+        </>
       }
     >
       <div className="cm-modal-columns cm-customer-columns">
@@ -311,9 +314,11 @@ function CustomerModal({ partner, open, onClose, onSaved }: Omit<Props, 'mode'>)
               <h3>负责人</h3>
               <p>维护负责人资料，并从项目列表选择负责项目。</p>
             </div>
-            <Button icon={<PlusOutlined />} onClick={() => setPeople([...people, emptyPerson()])}>
-              新增负责人
-            </Button>
+            <Space size={6}>
+              <Button type="primary" icon={<PlusOutlined />} onClick={() => setPeople([...people, emptyPerson()])}>
+                新增负责人
+              </Button>
+            </Space>
           </div>
           {people.length === 0 && <div className="cm-related-empty">暂无负责人，可按需新增</div>}
           {people.map((person, index) => (
@@ -528,7 +533,7 @@ function RequirementModal({ partner, requirement, open, onClose, onSaved }: Omit
       }
     >
       <Form form={form} layout="vertical">
-        <Row gutter={24}>
+        <Row className="cm-form-row" gutter={24}>
           <Col span={12}>
             <Form.Item name="title" label="需求名称" rules={[{ required: true }]}>
               <Input placeholder="未命名记录" />
@@ -550,7 +555,7 @@ function RequirementModal({ partner, requirement, open, onClose, onSaved }: Omit
             </Form.Item>
           </Col>
         </Row>
-        <Row gutter={24}>
+        <Row className="cm-form-row" gutter={24}>
           <Col span={6}>
             <Form.Item name="raisedAt" label="提出日期">
               <DatePicker format="YYYY/MM/DD" style={{ width: '100%' }} />
@@ -692,7 +697,7 @@ function FollowupModal({ partner, communication, open, onClose, onSaved }: Omit<
       }
     >
       <Form form={form} layout="vertical">
-        <Row gutter={24}>
+        <Row className="cm-form-row" gutter={24}>
           <Col span={6}>
             <Form.Item name="name" label="跟进名称" rules={[{ required: true }]}>
               <Input placeholder="请输入跟进名称" />

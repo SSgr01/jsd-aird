@@ -1,5 +1,6 @@
 import { CheckOutlined, DeleteOutlined, EditOutlined, FolderAddOutlined, PlusOutlined } from '@ant-design/icons';
 import { Button, Card, Empty, Space, Typography } from 'antd';
+import { useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
 
 export interface CatalogCategoryCard {
@@ -25,8 +26,19 @@ interface CategoryCardGridProps {
 }
 
 export function CategoryCardGrid({ categories, activeId, addLabel = '新增分类', countLabel = '条记录', onSelect, onCreate, onRename, onDelete }: CategoryCardGridProps) {
+  const gridRef = useRef<HTMLDivElement>(null);
+  const categorySignature = categories.map((category) => category.id).join('|');
+
+  // When a second-level category set is loaded or switched on a narrow
+  // viewport, start at the first real category. Without this reset, the
+  // browser can retain the previous horizontal scroll position and land on
+  // the trailing “新增分类” card.
+  useEffect(() => {
+    if (gridRef.current) gridRef.current.scrollLeft = 0;
+  }, [categorySignature]);
+
   return (
-    <div className="catalog-category-grid" aria-label="分类列表">
+    <div ref={gridRef} className="catalog-category-grid" aria-label="分类列表">
       {categories.map((category) => (
         <Card
           key={category.id}

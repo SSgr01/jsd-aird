@@ -1,11 +1,10 @@
-import { DownloadOutlined, EditOutlined, PlusOutlined, UploadOutlined } from '@ant-design/icons';
+import { DownloadOutlined, PlusOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons';
 import {
   Button,
   Card,
   Col,
   DatePicker,
   Descriptions,
-  Drawer,
   Form,
   Input,
   InputNumber,
@@ -38,6 +37,7 @@ import type { InventoryProductOption } from '@/services/inventory/inventory-api'
 import { getPartners, type BusinessPartner } from '@/services/partners/partner-api';
 import { errorMessage } from '@/services/http/errors';
 import './inventory-pages.css';
+import '@/styles/management-list.css';
 
 const scopeLabels: Record<InventoryScope, string> = { RND: '研发库存', PRODUCTION: '生产库存' };
 const alertLabels: Record<AlertStatus, string> = {
@@ -102,18 +102,18 @@ function SummaryCards({
   };
 }) {
   return (
-    <Row gutter={16} className="inventory-summary">
-      <Col span={6}>
+    <Row gutter={[12, 12]} className="inventory-summary">
+      <Col xs={12} md={6}>
         <Card>
           <Statistic title="库存总量" value={summary?.totalKg || 0} suffix="KG" />
         </Card>
       </Col>
-      <Col span={6}>
+      <Col xs={12} md={6}>
         <Card>
           <Statistic title="库存项" value={summary?.productCount || 0} />
         </Card>
       </Col>
-      <Col span={6}>
+      <Col xs={12} md={6}>
         <Card>
           <Statistic
             title="低库存"
@@ -122,7 +122,7 @@ function SummaryCards({
           />
         </Card>
       </Col>
-      <Col span={6}>
+      <Col xs={12} md={6}>
         <Card>
           <Statistic
             title="无库存"
@@ -138,7 +138,7 @@ function SummaryCards({
 export function InventoryQueryPage() {
   const [data, setData] = useState<Awaited<ReturnType<typeof inventoryApi.balances>>>();
   const [loading, setLoading] = useState(false);
-  const [filters, setFilters] = useState<Record<string, unknown>>({ page: 1, size: 20 });
+  const [filters, setFilters] = useState<Record<string, unknown>>({ page: 1, size: 10 });
   const [selected, setSelected] = useState<InventoryBalance>();
   const [policyForm] = Form.useForm();
   const load = useCallback(async () => {
@@ -191,6 +191,7 @@ export function InventoryQueryPage() {
     },
     {
       title: '操作',
+      width: 100,
       render: (_, r) => (
         <Button type="link" onClick={() => setSelected(r)}>
           查看
@@ -201,7 +202,7 @@ export function InventoryQueryPage() {
   return (
     <InventoryShell title="库存查询">
       <SummaryCards summary={data?.summary} />
-      <Card>
+      <Card className="inventory-table-card">
         <Space className="inventory-filters">
           <Input.Search
             allowClear
@@ -226,41 +227,46 @@ export function InventoryQueryPage() {
           loading={loading}
           columns={columns}
           dataSource={data?.items}
+          scroll={{ x: 'max-content' }}
           pagination={{
             current: data?.page,
             total: data?.total,
             pageSize: data?.size,
+            showSizeChanger: true,
+            showTotal: (total) => `共 ${total} 条记录`,
             onChange: (page, size) => setFilters((x) => ({ ...x, page, size })),
           }}
         />
       </Card>
-      <Drawer
+      <Modal
         open={!!selected}
-        onClose={() => setSelected(undefined)}
+        onCancel={() => setSelected(undefined)}
         title="库存详情"
-        extra={
-          <Button
-            type="primary"
-            onClick={async () => {
-              if (!selected) return;
-              if (inventoryIsReadOnly()) {
-                message.error('当前角色为只读用户，不能修改库存策略');
-                return;
-              }
-              const values = await policyForm.validateFields();
-              const updated = await inventoryApi.updatePolicy(
-                selected.productId,
-                selected.scope,
-                values,
-              );
-              setSelected(updated);
-              message.success('库存策略已保存');
-              await load();
-            }}
-          >
-            保存策略
-          </Button>
-        }
+        width={560}
+        okText="保存策略"
+        cancelText="关闭"
+        okButtonProps={{ disabled: inventoryIsReadOnly() }}
+        onOk={async () => {
+          if (!selected) return;
+          if (inventoryIsReadOnly()) {
+            message.error('当前角色为只读用户，不能修改库存策略');
+            return;
+          }
+          try {
+            const values = await policyForm.validateFields();
+            const updated = await inventoryApi.updatePolicy(
+              selected.productId,
+              selected.scope,
+              values,
+            );
+            setSelected(updated);
+            message.success('库存策略已保存');
+            await load();
+          } catch (error) {
+            message.error(errorMessage(error, '库存策略保存失败，请稍后重试'));
+          }
+        }}
+        destroyOnClose
       >
         <Descriptions
           column={1}
@@ -296,27 +302,32 @@ export function InventoryQueryPage() {
             </Form.Item>
           </Form>
         )}
-      </Drawer>
+      </Modal>
     </InventoryShell>
   );
 }
 
 export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
   const [data, setData] = useState<Awaited<ReturnType<typeof inventoryApi.transactions>>>();
-  const [filters, setFilters] = useState<Record<string, unknown>>({ scope, page: 1, size: 20 });
+  const [filters, setFilters] = useState<Record<string, unknown>>({ scope, page: 1, size: 10 });
   const [open, setOpen] = useState(false);
   const [form] = Form.useForm();
   const [products, setProducts] = useState<InventoryProductOption[]>([]);
   const [productSearch, setProductSearch] = useState('');
   const [saving, setSaving] = useState(false);
+  const [readOnly] = useState(() => inventoryIsReadOnly());
   const [detail, setDetail] = useState<InventoryTransaction>();
   const [editing, setEditing] = useState<InventoryTransaction>();
+  const [searchKeyword, setSearchKeyword] = useState('');
+  const [searchDirection, setSearchDirection] = useState<InventoryDirection>();
   const load = useCallback(
     async () => setData(await inventoryApi.transactions({ ...filters, scope })),
     [filters, scope],
   );
   useEffect(() => {
-    setFilters({ scope, page: 1, size: 20 });
+    setFilters({ scope, page: 1, size: 10 });
+    setSearchKeyword('');
+    setSearchDirection(undefined);
     setOpen(false);
     setDetail(undefined);
     setEditing(undefined);
@@ -345,7 +356,7 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
   const direction = Form.useWatch('direction', form) || 'INBOUND';
   const save = async () => {
     const v = await form.validateFields();
-    if (inventoryIsReadOnly()) {
+    if (readOnly) {
       message.error('当前角色为只读用户，不能修改库存流水');
       return;
     }
@@ -421,15 +432,15 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
     { title: '经办人', dataIndex: 'actorName' },
     {
       title: '操作',
+      width: 250,
       render: (_, r) => (
-        <Space>
+        <Space className="management-table-actions">
           <Button type="link" onClick={() => setDetail(r)}>
             查看
           </Button>
           <Button
             type="link"
-            icon={<EditOutlined />}
-            disabled={inventoryIsReadOnly() || r.reversed || !!r.reversalOf}
+            disabled={readOnly || r.reversed || !!r.reversalOf}
             onClick={() => {
               form.setFieldsValue({
                 businessDate: dayjs(r.businessDate),
@@ -455,7 +466,7 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
                 await load();
               }}
             >
-              <Button type="link" danger>
+              <Button type="link" danger disabled={readOnly}>
                 冲销
               </Button>
             </Popconfirm>
@@ -474,13 +485,11 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
       }
       extra={
         <Space>
-          <InitialStockImport scope={scope} onDone={load} />
-          <Button icon={<DownloadOutlined />} onClick={() => void exportTransactions(scope)}>
-            导出
-          </Button>
+          <LedgerImportExport scope={scope} products={products} onDone={load} disabled={readOnly} />
           <Button
             type="primary"
             icon={<PlusOutlined />}
+            disabled={readOnly}
             onClick={() => {
               setEditing(undefined);
               form.setFieldsValue({
@@ -496,32 +505,54 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
         </Space>
       }
     >
-      <Card>
-        <Space className="inventory-filters">
+      <Card className="inventory-table-card">
+        <div className="inventory-filters inventory-ledger-filters">
           <Input.Search
             allowClear
+            value={searchKeyword}
             placeholder="搜索单号、产品或备注"
-            onSearch={(keyword) => setFilters((x) => ({ ...x, keyword, page: 1 }))}
+            onChange={(event) => {
+              const value = event.target.value;
+              setSearchKeyword(value);
+              if (!value) setFilters((current) => ({ ...current, keyword: '', page: 1 }));
+            }}
+            onSearch={(keyword) => setFilters((current) => ({ ...current, keyword, page: 1 }))}
           />
           <Select
             allowClear
             placeholder="变动方向"
+            value={searchDirection}
             options={[
               { value: 'INBOUND', label: '入库' },
               { value: 'OUTBOUND', label: '扣减' },
             ]}
-            onChange={(direction) => setFilters((x) => ({ ...x, direction, page: 1 }))}
+            onChange={(value) => {
+              setSearchDirection(value);
+              setFilters((current) => ({ ...current, direction: value, page: 1 }));
+            }}
           />
-        </Space>
+          <Button
+            icon={<ReloadOutlined />}
+            onClick={() => {
+              setSearchKeyword('');
+              setSearchDirection(undefined);
+              setFilters({ scope, page: 1, size: 10 });
+            }}
+          >
+            重置
+          </Button>
+        </div>
         <Table
           rowKey="id"
           columns={columns}
           dataSource={data?.items}
-          scroll={{ x: 1200 }}
+          scroll={{ x: 'max-content' }}
           pagination={{
             current: data?.page,
             total: data?.total,
             pageSize: data?.size,
+            showSizeChanger: true,
+            showTotal: (total) => `共 ${total} 条记录`,
             onChange: (page, size) => setFilters((x) => ({ ...x, page, size })),
           }}
         />
@@ -530,9 +561,11 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
         title={`${editing ? '编辑' : '新增'}${scopeLabels[scope]}变动`}
         open={open}
         width={640}
+        className="inventory-entry-modal"
         okText="保存"
         cancelText="取消"
         confirmLoading={saving}
+        okButtonProps={{ disabled: readOnly }}
         onCancel={() => {
           setOpen(false);
           setEditing(undefined);
@@ -556,8 +589,8 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
             </Col>
             <Col span={12}>
               <Form.Item name="productId" label="产品" rules={[{ required: true }]}>
-                  <Select
-                    disabled={!!editing}
+                <Select
+                  disabled={!!editing}
                   labelInValue
                   showSearch
                   filterOption
@@ -662,9 +695,13 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
   const [customers, setCustomers] = useState<BusinessPartner[]>([]);
   const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState<SampleDispatch | Shipment>();
+  const [readOnly] = useState(() => inventoryIsReadOnly());
+  const [searchKeyword, setSearchKeyword] = useState('');
+  const [filters, setFilters] = useState({ keyword: '', page: 1, size: 10 });
   const load = useCallback(
-    async () => setData(sample ? await inventoryApi.samples() : await inventoryApi.shipments()),
-    [sample],
+    async () =>
+      setData(sample ? await inventoryApi.samples(filters) : await inventoryApi.shipments(filters)),
+    [filters, sample],
   );
   useEffect(() => {
     void load();
@@ -736,9 +773,24 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
         await load();
         return;
       }
-      const input = { ...v, businessDate: v.businessDate.format('YYYY-MM-DD') };
-      if (sample) await inventoryApi.createSample(input);
-      else await inventoryApi.createShipment(input);
+      if (sample) {
+        await inventoryApi.createSample({
+          ...v,
+          businessDate: v.businessDate.format('YYYY-MM-DD'),
+        });
+      } else {
+        const { batchNo, coaNo, note, ...shipmentValues } = v;
+        const traceNote = [note, batchNo ? `批号=${batchNo}` : '', coaNo ? `COA=${coaNo}` : '']
+          .filter(Boolean)
+          .join('；');
+        await inventoryApi.createShipment({
+          ...shipmentValues,
+          note: traceNote,
+          coaNo,
+          batchNo,
+          businessDate: v.businessDate.format('YYYY-MM-DD'),
+        });
+      }
       message.success(sample ? '发样记录已保存并扣减研发库存' : '出货记录已保存并扣减生产库存');
       setOpen(false);
       form.resetFields();
@@ -759,20 +811,16 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
             { title: '收件人', dataIndex: 'recipientName' },
             { title: '发样产品', dataIndex: 'productName' },
             { title: '数量', dataIndex: 'quantityKg', render: kg },
-            { title: '快递公司', dataIndex: 'courierCompany' },
-            { title: '快递单号', dataIndex: 'trackingNo' },
             { title: '发样人', dataIndex: 'operator' },
             {
               title: '操作',
+              width: 100,
               render: (_: unknown, record: SampleDispatch | Shipment) => (
-                <Button
-                  type="link"
-                  icon={<EditOutlined />}
-                  disabled={inventoryIsReadOnly()}
-                  onClick={() => openEdit(record)}
-                >
-                  编辑
-                </Button>
+                <Space className="management-table-actions">
+                  <Button type="link" disabled={readOnly} onClick={() => openEdit(record)}>
+                    编辑
+                  </Button>
+                </Space>
               ),
             },
           ]
@@ -783,18 +831,26 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
             { title: '客户', dataIndex: 'customerName' },
             { title: '数量', dataIndex: 'quantityKg', render: kg },
             { title: '经办人', dataIndex: 'operator' },
-            { title: '备注', dataIndex: 'note' },
+            {
+              title: '备注',
+              dataIndex: 'note',
+              width: 280,
+              render: (value: string | undefined) =>
+                value ? <span className="inventory-cell-wrap">{value}</span> : '—',
+            },
             {
               title: '操作',
+              width: 100,
               render: (_: unknown, record: SampleDispatch | Shipment) => (
-                <Button
-                  type="link"
-                  icon={<EditOutlined />}
-                  disabled={inventoryIsReadOnly()}
-                  onClick={() => openEdit(record)}
-                >
-                  编辑
-                </Button>
+                <Space className="management-table-actions">
+                  <Button
+                    type="link"
+                    disabled={inventoryIsReadOnly()}
+                    onClick={() => openEdit(record)}
+                  >
+                    编辑
+                  </Button>
+                </Space>
               ),
             },
           ],
@@ -815,10 +871,12 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
             products={products}
             customers={customers}
             onDone={load}
+            disabled={readOnly}
           />
           <Button
             type="primary"
             icon={<PlusOutlined />}
+            disabled={readOnly}
             onClick={() => {
               setEditing(undefined);
               form.setFieldsValue({ businessDate: dayjs() });
@@ -830,16 +888,55 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
         </Space>
       }
     >
-      <Card>
-        <Table rowKey="id" columns={columns} dataSource={data?.items} />
+      <Card className="inventory-table-card">
+        <div className="inventory-filters inventory-record-filters">
+          <Input.Search
+            allowClear
+            value={searchKeyword}
+            placeholder={
+              sample ? '搜索发样单号、产品、客户、收件人' : '搜索出货单号、产品、客户、备注'
+            }
+            onChange={(event) => {
+              const value = event.target.value;
+              setSearchKeyword(value);
+              if (!value) setFilters((current) => ({ ...current, keyword: '', page: 1 }));
+            }}
+            onSearch={(value) => setFilters((current) => ({ ...current, keyword: value, page: 1 }))}
+          />
+          <Button
+            icon={<ReloadOutlined />}
+            onClick={() => {
+              setSearchKeyword('');
+              setFilters((current) => ({ ...current, keyword: '', page: 1 }));
+            }}
+          >
+            重置
+          </Button>
+        </div>
+        <Table
+          rowKey="id"
+          columns={columns}
+          dataSource={data?.items}
+          scroll={{ x: 'max-content' }}
+          pagination={{
+            current: data?.page,
+            total: data?.total,
+            pageSize: data?.size,
+            showSizeChanger: true,
+            showTotal: (total) => `共 ${total} 条记录`,
+            onChange: (page, size) => setFilters((current) => ({ ...current, page, size })),
+          }}
+        />
       </Card>
       <Modal
         width={650}
+        className="inventory-entry-modal"
         title={`${editing ? '编辑' : '新增'}${sample ? '发样' : '出货'}`}
         open={open}
         okText="保存"
         cancelText="取消"
         confirmLoading={saving}
+        okButtonProps={{ disabled: readOnly }}
         onCancel={() => {
           setOpen(false);
           setEditing(undefined);
@@ -864,45 +961,66 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
               </Form.Item>
             </Col>
           </Row>
-          <Form.Item name="productId" label="产品" rules={[{ required: true }]}>
-            <Select
-              disabled={!!editing}
-              showSearch
-              optionFilterProp="label"
-              options={products.map((p) => ({
-                value: p.id,
-                label: `${p.code} · ${p.name} · ${p.category}`,
-              }))}
-            />
-          </Form.Item>
-          <Form.Item name="quantityKg" label="数量 KG" rules={[{ required: true }]}>
-            <InputNumber
-              min={0.000001}
-              precision={6}
-              className="inventory-full"
-              disabled={!!editing}
-            />
-          </Form.Item>
-          <Form.Item name="customerId" label="客户名称" rules={[{ required: true }]}>
-            <Select
-              showSearch
-              allowClear
-              optionFilterProp="label"
-              placeholder="请选择客户"
-              options={customers.map((customer) => ({
-                value: customer.id,
-                label: `${customer.partnerCode} · ${customer.name}`,
-              }))}
-            />
-          </Form.Item>
           {sample && (
             <>
-              <Form.Item name="recipientName" label="收件人" rules={[{ required: true }]}>
-                <Input />
-              </Form.Item>
-              <Form.Item name="sampleAddress" label="发样地址">
-                <Input />
-              </Form.Item>
+              <Row gutter={16}>
+                <Col span={12}>
+                  <Form.Item name="productId" label="产品" rules={[{ required: true }]}>
+                    <Select
+                      disabled={!!editing}
+                      showSearch
+                      optionFilterProp="label"
+                      options={products.map((p) => ({
+                        value: p.id,
+                        label: `${p.code} · ${p.name} · ${p.category}`,
+                      }))}
+                    />
+                  </Form.Item>
+                </Col>
+                <Col span={12}>
+                  <Form.Item name="quantityKg" label="数量 KG" rules={[{ required: true }]}>
+                    <InputNumber
+                      min={0.000001}
+                      precision={6}
+                      className="inventory-full"
+                      disabled={!!editing}
+                    />
+                  </Form.Item>
+                </Col>
+              </Row>
+              <Row gutter={16}>
+                <Col span={12}>
+                  <Form.Item name="customerId" label="客户名称" rules={[{ required: true }]}>
+                    <Select
+                      showSearch
+                      allowClear
+                      optionFilterProp="label"
+                      placeholder="请选择客户"
+                      options={customers.map((customer) => ({
+                        value: customer.id,
+                        label: `${customer.partnerCode} · ${customer.name}`,
+                      }))}
+                    />
+                  </Form.Item>
+                </Col>
+                <Col span={12}>
+                  <Form.Item name="recipientName" label="收件人" rules={[{ required: true }]}>
+                    <Input />
+                  </Form.Item>
+                </Col>
+              </Row>
+              <Row gutter={16}>
+                <Col span={12}>
+                  <Form.Item name="sampleAddress" label="发样地址">
+                    <Input />
+                  </Form.Item>
+                </Col>
+                <Col span={12}>
+                  <Form.Item name="clientContact" label="客户端联系人">
+                    <Input />
+                  </Form.Item>
+                </Col>
+              </Row>
               <Row gutter={16}>
                 <Col span={12}>
                   <Form.Item name="courierCompany" label="快递公司">
@@ -915,21 +1033,85 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
                   </Form.Item>
                 </Col>
               </Row>
-              <Form.Item name="clientContact" label="客户端联系人">
-                <Input />
-              </Form.Item>
-              <Form.Item name="customerRequirement" label="客户要求">
-                <Input.TextArea />
-              </Form.Item>
-              <Form.Item name="customerFeedback" label="客户测试反馈">
-                <Input.TextArea />
-              </Form.Item>
+              <Row gutter={16}>
+                <Col span={12}>
+                  <Form.Item name="customerRequirement" label="客户要求">
+                    <Input.TextArea />
+                  </Form.Item>
+                </Col>
+                <Col span={12}>
+                  <Form.Item name="customerFeedback" label="客户测试反馈">
+                    <Input.TextArea />
+                  </Form.Item>
+                </Col>
+              </Row>
             </>
           )}
           {!sample && (
-            <Form.Item name="note" label="备注">
-              <Input.TextArea />
-            </Form.Item>
+            <>
+              <Row gutter={16}>
+                <Col span={12}>
+                  <Form.Item name="productId" label="产品" rules={[{ required: true }]}>
+                    <Select
+                      disabled={!!editing}
+                      showSearch
+                      optionFilterProp="label"
+                      options={products.map((p) => ({
+                        value: p.id,
+                        label: `${p.code} · ${p.name} · ${p.category}`,
+                      }))}
+                    />
+                  </Form.Item>
+                </Col>
+                <Col span={12}>
+                  <Form.Item name="quantityKg" label="数量 KG" rules={[{ required: true }]}>
+                    <InputNumber
+                      min={0.000001}
+                      precision={6}
+                      className="inventory-full"
+                      disabled={!!editing}
+                    />
+                  </Form.Item>
+                </Col>
+              </Row>
+              <Row gutter={16}>
+                <Col span={12}>
+                  <Form.Item name="customerId" label="客户名称" rules={[{ required: true }]}>
+                    <Select
+                      showSearch
+                      allowClear
+                      optionFilterProp="label"
+                      placeholder="请选择客户"
+                      options={customers.map((customer) => ({
+                        value: customer.id,
+                        label: `${customer.partnerCode} · ${customer.name}`,
+                      }))}
+                    />
+                  </Form.Item>
+                </Col>
+                <Col span={12}>
+                  <Form.Item name="batchNo" label="批号">
+                    <Input placeholder="可选，用于批次追溯" />
+                  </Form.Item>
+                </Col>
+              </Row>
+            </>
+          )}
+          {!sample && (
+            <>
+              <Row gutter={16}>
+                <Col span={12}>
+                  <Form.Item name="coaNo" label="已签发 COA 编号">
+                    <Input placeholder="填写后仅允许已签发 COA 放行" />
+                  </Form.Item>
+                </Col>
+                <Col span={12}>
+                  <Form.Item name="note" label="备注">
+                    <Input.TextArea />
+                  </Form.Item>
+                </Col>
+              </Row>
+            </>
           )}
         </Form>
       </Modal>
@@ -991,11 +1173,13 @@ function BusinessImportExport({
   products,
   customers,
   onDone,
+  disabled = false,
 }: {
   type: 'sample' | 'shipment';
   products: InventoryProductOption[];
   customers: BusinessPartner[];
   onDone: () => void | Promise<void>;
+  disabled?: boolean;
 }) {
   const sample = type === 'sample';
   const template = () => {
@@ -1003,9 +1187,9 @@ function BusinessImportExport({
       ? [
           '日期',
           '发样单号',
-          '产品编码',
-          '数量KG',
-          '客户编码',
+          '产品',
+          '数量 KG',
+          '客户名称',
           '收件人',
           '发样地址',
           '快递公司',
@@ -1014,7 +1198,7 @@ function BusinessImportExport({
           '客户要求',
           '客户测试反馈',
         ]
-      : ['日期', '出货单号', '产品编码', '数量KG', '客户编码', '备注'];
+      : ['日期', '出货单号', '产品', '数量 KG', '客户名称', '批号', '已签发 COA 编号', '备注'];
     writeWorkbook(`${sample ? '发样' : '出货'}导入模板.xlsx`, sample ? '发样记录' : '出货记录', [
       header,
     ]);
@@ -1036,8 +1220,8 @@ function BusinessImportExport({
           '日期',
           '发样单号',
           '产品',
-          '客户',
-          '数量KG',
+          '客户名称',
+          '数量 KG',
           '收件人',
           '发样地址',
           '快递公司',
@@ -1059,15 +1243,19 @@ function BusinessImportExport({
       ]);
     } else {
       writeWorkbook('出货记录.xlsx', '出货记录', [
-        ['日期', '出货单号', '产品', '客户', '数量KG', '经办人', '备注'],
+        ['日期', '出货单号', '产品', '数量 KG', '客户名称', '批号', '已签发 COA 编号', '备注'],
         ...(rows as Shipment[]).map((row) => [
           row.businessDate,
           row.shipmentNo,
           row.productName,
-          row.customerName,
           row.quantityKg,
-          row.operator,
-          row.note || '',
+          row.customerName,
+          row.note?.match(/(?:^|[；;])批号=([^；;]*)/)?.[1] || '',
+          row.note?.match(/(?:^|[；;])COA=([^；;]*)/)?.[1] || '',
+          row.note
+            ?.replace(/(?:^|[；;])批号=[^；;]*/g, '')
+            .replace(/(?:^|[；;])COA=[^；;]*/g, '')
+            .replace(/^[；;]+|[；;]+$/g, '') || '',
         ]),
       ]);
     }
@@ -1081,27 +1269,41 @@ function BusinessImportExport({
     const records = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' });
     if (!records.length) throw new Error('导入文件没有数据');
     const inputs = records.map((row, index) => {
-      const product = products.find((item) => item.code === String(row['产品编码']).trim());
-      const customer = customers.find(
-        (item) => item.partnerCode === String(row['客户编码']).trim(),
+      const rawProduct = String(row['产品'] ?? row['产品编码'] ?? '').trim();
+      const rawCustomer = String(row['客户名称'] ?? row['客户'] ?? row['客户编码'] ?? '').trim();
+      const product = products.find(
+        (item) =>
+          item.code === rawProduct ||
+          item.name === rawProduct ||
+          item.id === rawProduct ||
+          rawProduct.startsWith(`${item.code} · `),
       );
-      const quantityKg = Number(row['数量KG']);
+      const customer = customers.find(
+        (item) =>
+          item.partnerCode === rawCustomer ||
+          item.name === rawCustomer ||
+          item.id === rawCustomer ||
+          rawCustomer.startsWith(`${item.partnerCode} · `),
+      );
+      const quantityKg = Number(row['数量 KG'] ?? row['数量KG']);
       const rawDate = row['日期'];
       const parsedDate =
         typeof rawDate === 'number' ? XLSX.SSF.parse_date_code(rawDate) : undefined;
       const businessDate = parsedDate
         ? dayjs(`${parsedDate.y}-${parsedDate.m}-${parsedDate.d}`).format('YYYY-MM-DD')
-        : String(rawDate).trim();
-      const documentNo = String(row[sample ? '发样单号' : '出货单号']).trim();
-      if (!product) throw new Error(`第 ${index + 2} 行：产品编码不存在`);
-      if (!customer) throw new Error(`第 ${index + 2} 行：客户编码不存在或未启用`);
+        : String(rawDate ?? '').trim();
+      const documentNo = String(row[sample ? '发样单号' : '出货单号'] ?? '').trim();
+      if (!product) throw new Error(`第 ${index + 2} 行：产品不存在`);
+      if (!customer) throw new Error(`第 ${index + 2} 行：客户不存在或未启用`);
       if (!businessDate) throw new Error(`第 ${index + 2} 行：日期不能为空`);
       if (!documentNo)
         throw new Error(`第 ${index + 2} 行：${sample ? '发样' : '出货'}单号不能为空`);
       if (!Number.isFinite(quantityKg) || quantityKg <= 0)
         throw new Error(`第 ${index + 2} 行：数量必须大于 0`);
-      if (sample && !String(row['收件人']).trim())
+      if (sample && !String(row['收件人'] ?? '').trim())
         throw new Error(`第 ${index + 2} 行：收件人不能为空`);
+      const batchNo = String(row['批号'] ?? '').trim();
+      const coaNo = String(row['已签发 COA 编号'] ?? '').trim();
       return sample
         ? {
             businessDate,
@@ -1109,13 +1311,13 @@ function BusinessImportExport({
             productId: product.id,
             quantityKg,
             customerId: customer.id,
-            recipientName: String(row['收件人']).trim(),
-            sampleAddress: String(row['发样地址']).trim(),
-            courierCompany: String(row['快递公司']).trim(),
-            trackingNo: String(row['快递单号']).trim(),
-            clientContact: String(row['客户端联系人']).trim(),
-            customerRequirement: String(row['客户要求']).trim(),
-            customerFeedback: String(row['客户测试反馈']).trim(),
+            recipientName: String(row['收件人'] ?? '').trim(),
+            sampleAddress: String(row['发样地址'] ?? '').trim(),
+            courierCompany: String(row['快递公司'] ?? '').trim(),
+            trackingNo: String(row['快递单号'] ?? '').trim(),
+            clientContact: String(row['客户端联系人'] ?? '').trim(),
+            customerRequirement: String(row['客户要求'] ?? '').trim(),
+            customerFeedback: String(row['客户测试反馈'] ?? '').trim(),
           }
         : {
             businessDate,
@@ -1123,7 +1325,15 @@ function BusinessImportExport({
             productId: product.id,
             quantityKg,
             customerId: customer.id,
-            note: String(row['备注']).trim(),
+            note: [
+              String(row['备注'] ?? '').trim(),
+              batchNo ? `批号=${batchNo}` : '',
+              coaNo ? `COA=${coaNo}` : '',
+            ]
+              .filter(Boolean)
+              .join('；'),
+            batchNo: batchNo || undefined,
+            coaNo: coaNo || undefined,
           };
     });
     for (const input of inputs) {
@@ -1148,7 +1358,9 @@ function BusinessImportExport({
           return false;
         }}
       >
-        <Button icon={<UploadOutlined />}>导入</Button>
+        <Button icon={<UploadOutlined />} disabled={disabled}>
+          导入
+        </Button>
       </Upload>
       <Button icon={<DownloadOutlined />} onClick={() => void exportRows()}>
         导出
@@ -1157,22 +1369,104 @@ function BusinessImportExport({
   );
 }
 
-function InitialStockImport({
+function LedgerImportExport({
   scope,
+  products,
   onDone,
+  disabled = false,
 }: {
   scope: InventoryScope;
+  products: InventoryProductOption[];
   onDone: () => void | Promise<void>;
+  disabled?: boolean;
 }) {
-  const [current, setCurrent] = useState<Awaited<ReturnType<typeof inventoryApi.uploadInitial>>>();
   const download = () => {
-    const ws = XLSX.utils.aoa_to_sheet([
-      ['产品编码', '库存域', '数量KG', '业务日期'],
-      [scope === 'RND' ? 'RD-示例' : 'PD-示例', scope, 100, dayjs().format('YYYY-MM-DD')],
+    const direction = '入库';
+    const reasonCode = reasonOptions[scope].INBOUND[0] ?? '';
+    const reason = reasonLabels[reasonCode] ?? reasonCode;
+    writeWorkbook(`${scopeLabels[scope]}流水导入模板.xlsx`, scopeLabels[scope], [
+      ['日期', '单号', '产品', '变动方向', '业务原因', '数量 KG', '备注'],
+      [
+        dayjs().format('YYYY/MM/DD'),
+        `${scope === 'RND' ? 'RD' : 'PD'}-示例`,
+        '',
+        direction,
+        reason,
+        '',
+        '',
+      ],
     ]);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, scopeLabels[scope]);
-    XLSX.writeFile(wb, `${scopeLabels[scope]}导入模板.xlsx`);
+  };
+  const exportRows = async () => exportTransactions(scope);
+  const importFile = async (file: File) => {
+    const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+    const firstSheetName = workbook.SheetNames[0];
+    if (!firstSheetName) throw new Error('导入文件没有工作表');
+    const sheet = workbook.Sheets[firstSheetName];
+    if (!sheet) throw new Error('无法读取导入工作表');
+    const records = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' });
+    if (!records.length) throw new Error('导入文件没有数据');
+    const inputs = records.map((row, index) => {
+      const rawProduct = String(row['产品'] ?? row['产品编码'] ?? '').trim();
+      const product = products.find(
+        (item) =>
+          item.code === rawProduct ||
+          item.name === rawProduct ||
+          rawProduct.startsWith(`${item.code} · `),
+      );
+      const directionValue = String(row['变动方向']).trim();
+      const direction =
+        directionValue === '入库'
+          ? 'INBOUND'
+          : directionValue === '扣减'
+            ? 'OUTBOUND'
+            : directionValue;
+      const reasons = reasonOptions[scope][direction as InventoryDirection] || [];
+      const reasonValue = String(row['业务原因']).trim();
+      const reason = reasons.find(
+        (value) => value === reasonValue || reasonLabels[value] === reasonValue,
+      );
+      const quantityKg = Number(row['数量 KG'] ?? row['数量KG']);
+      const dateValue = row['日期'];
+      const parsedDate =
+        typeof dateValue === 'number' ? XLSX.SSF.parse_date_code(dateValue) : undefined;
+      const businessDate = parsedDate
+        ? dayjs(`${parsedDate.y}-${parsedDate.m}-${parsedDate.d}`).format('YYYY-MM-DD')
+        : String(dateValue ?? '').trim();
+      const documentNo = String(row['单号'] ?? '').trim();
+      if (!rawProduct) throw new Error(`第 ${index + 2} 行：产品不能为空`);
+      if (!businessDate) throw new Error(`第 ${index + 2} 行：日期不能为空`);
+      if (!documentNo) throw new Error(`第 ${index + 2} 行：单号不能为空`);
+      if (!['INBOUND', 'OUTBOUND'].includes(direction))
+        throw new Error(`第 ${index + 2} 行：变动方向必须为入库或扣减`);
+      if (!reason) throw new Error(`第 ${index + 2} 行：业务原因无效`);
+      if (!Number.isFinite(quantityKg) || quantityKg <= 0)
+        throw new Error(`第 ${index + 2} 行：数量必须大于 0`);
+      return {
+        businessDate,
+        documentNo,
+        rawProduct,
+        productId: product?.id,
+        direction,
+        reason,
+        quantityKg,
+        note: String(row['备注'] ?? '').trim(),
+      };
+    });
+    const createdProducts = new Map<string, string>();
+    for (const input of inputs) {
+      const productKey = input.rawProduct.toLocaleLowerCase();
+      const productId =
+        input.productId ??
+        createdProducts.get(productKey) ??
+        (await inventoryApi.createCustomProduct(input.rawProduct, scope));
+      if (!input.productId) createdProducts.set(productKey, productId);
+      const movement = { ...input, productId, scope };
+      delete (movement as Record<string, unknown>).rawProduct;
+      await inventoryApi.move(movement);
+    }
+    message.success(`成功导入 ${inputs.length} 条库存变动`);
+    await onDone();
   };
   return (
     <Space>
@@ -1182,53 +1476,20 @@ function InitialStockImport({
       <Upload
         showUploadList={false}
         accept=".xlsx"
-        beforeUpload={async (file) => {
-          try {
-            const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
-            const firstSheetName = workbook.SheetNames[0];
-            const sheet = firstSheetName ? workbook.Sheets[firstSheetName] : undefined;
-            if (!sheet) throw new Error('无法读取导入工作表');
-            const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' });
-            const wrongScopeRow = rows.findIndex(
-              (row) => String(row['库存域']).trim().toUpperCase() !== scope,
-            );
-            if (wrongScopeRow >= 0)
-              throw new Error(`第 ${wrongScopeRow + 2} 行库存域必须为 ${scope}`);
-            setCurrent(await inventoryApi.uploadInitial(file));
-          } catch (e) {
-            message.error(e instanceof Error ? e.message : '导入失败');
-          }
+        beforeUpload={(file) => {
+          void importFile(file).catch((error: unknown) =>
+            message.error(error instanceof Error ? error.message : '导入失败'),
+          );
           return false;
         }}
       >
-        <Button icon={<UploadOutlined />}>导入</Button>
+        <Button icon={<UploadOutlined />} disabled={disabled}>
+          导入
+        </Button>
       </Upload>
-      <Modal
-        open={!!current}
-        title="期初库存校验结果"
-        onCancel={() => setCurrent(undefined)}
-        okButtonProps={{ disabled: current?.status !== 'VALIDATED' }}
-        okText="确认入账"
-        onOk={async () => {
-          if (!current) return;
-          await inventoryApi.commitInitial(current.id);
-          message.success('期初库存已入账');
-          setCurrent(undefined);
-          await onDone();
-        }}
-      >
-        <Tag color={current?.status === 'VALIDATED' ? 'green' : 'red'}>
-          {current?.status === 'VALIDATED' ? '校验通过' : '校验失败'}
-        </Tag>
-        <p>
-          数据行：{current?.rows.length || 0}，错误：{current?.errors.length || 0}
-        </p>
-        {current?.errors.map((e) => (
-          <p key={`${e.rowNumber}-${e.field}`} className="inventory-error">
-            第 {e.rowNumber} 行：{e.message}
-          </p>
-        ))}
-      </Modal>
+      <Button icon={<DownloadOutlined />} onClick={() => void exportRows()}>
+        导出
+      </Button>
     </Space>
   );
 }
@@ -1244,7 +1505,7 @@ function InventoryShell({
   children: React.ReactNode;
 }) {
   return (
-    <div className="inventory-page">
+    <div className="inventory-page pm-unified-list-page">
       <div className="inventory-heading">
         <div>
           <h1>{title}</h1>

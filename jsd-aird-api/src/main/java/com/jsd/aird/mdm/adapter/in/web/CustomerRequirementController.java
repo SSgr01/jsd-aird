@@ -52,6 +52,14 @@ public class CustomerRequirementController {
         return ok(null);
     }
 
+    @DeleteMapping("/requirements/{id}")
+    @Operation(summary = "删除客户需求", description = "按版本号删除客户需求，历史审计记录继续保留")
+    ApiResponse<Void> deleteRequirement(@Parameter(description = "需求 ID") @PathVariable UUID id,
+                                        @RequestParam @PositiveOrZero long version) {
+        service.deleteRequirement(id, version);
+        return ok(null);
+    }
+
     private static <T> ApiResponse<T> ok(T data) {
         return ResponseFactory.success(data, RequestIdHolder.currentOrUnknown());
     }
@@ -63,9 +71,17 @@ public class CustomerRequirementController {
                                      @Size(max = 50) String customStatusName, UUID projectId, List<UUID> projectIds, JsonNode customFields,
                                      @PositiveOrZero Long version) {
         CustomerRequirement toDomain() {
-            var ids = projectIds == null || projectIds.isEmpty()
+            return toDomain(null);
+        }
+
+        CustomerRequirement toDomain(UUID scopedProjectId) {
+            var requestedIds = projectIds == null || projectIds.isEmpty()
                 ? (projectId == null ? List.<UUID>of() : List.of(projectId))
                 : projectIds.stream().filter(java.util.Objects::nonNull).distinct().toList();
+            var ids = scopedProjectId == null
+                ? requestedIds
+                : java.util.stream.Stream.concat(java.util.stream.Stream.of(scopedProjectId), requestedIds.stream())
+                    .distinct().toList();
             return new CustomerRequirement(null, null, partnerId, title, rawRequirement, urgency, raisedAt, deliveryDate, status == null ? CustomerRequirement.RequirementStatus.DRAFT : status, customStatusName, ids.isEmpty() ? null : ids.get(0), ids, customFields, version == null ? 0 : version, null, null);
         }
     }

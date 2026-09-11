@@ -46,8 +46,8 @@ public class JdbcExperimentRepository implements ExperimentRepository {
                 "SELECT EXISTS(SELECT 1 FROM rnd.experiment WHERE organization_id=? AND experiment_no=? AND deleted=false)",
                 Boolean.class, c.organizationId(), no)))
             throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "实验编号 " + no + " 已存在");
-        jdbc.update("INSERT INTO rnd.experiment(id,organization_id,experiment_no,title,category_id,category_name,source_type,status,project_id,stage_id,task_id,owner_id,owner_name,experiment_date,current_version_id,created_by,updated_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?)",
-                c.id(),c.organizationId(),no,c.title(),c.categoryId(),c.categoryName(),c.sourceType(),c.status().name(),c.projectId(),c.stageId(),c.taskId(),c.ownerId(),c.ownerName(),c.experimentDate(),c.actorId(),c.actorId());
+        jdbc.update("INSERT INTO rnd.experiment(id,organization_id,experiment_no,title,category_id,category_name,source_type,status,project_id,stage_id,task_id,owner_id,owner_name,experiment_date,source_file_id,current_version_id,created_by,updated_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?)",
+                c.id(),c.organizationId(),no,c.title(),c.categoryId(),c.categoryName(),c.sourceType(),c.status().name(),c.projectId(),c.stageId(),c.taskId(),c.ownerId(),c.ownerName(),c.experimentDate(),sourceFileId(c.editModel()),c.actorId(),c.actorId());
         jdbc.update("INSERT INTO rnd.experiment_version(id,organization_id,experiment_id,version_no,status,template_version_id,template_snapshot_hash,template_snapshot_jsonb,edit_model_jsonb,created_by) VALUES(?,?,?,1,?,?,?,?,?,?)",
                 c.versionId(),c.organizationId(),c.id(),c.status().name(),c.templateVersionId(),c.templateHash(),pg(c.templateSnapshot()),pg(c.editModel()),c.actorId());
         jdbc.update("UPDATE rnd.experiment SET current_version_id=? WHERE id=?",c.versionId(),c.id());
@@ -60,8 +60,8 @@ public class JdbcExperimentRepository implements ExperimentRepository {
         var versionId = UUID.randomUUID();
         var title = source.summary().title() + "-副本";
         var no = "EXP-" + LocalDate.now().format(java.time.format.DateTimeFormatter.BASIC_ISO_DATE) + "-" + UUID.randomUUID().toString().substring(0, 6).toUpperCase();
-        jdbc.update("INSERT INTO rnd.experiment(id,organization_id,experiment_no,title,category_id,category_name,source_type,status,project_id,stage_id,task_id,owner_id,owner_name,experiment_date,current_version_id,created_by,updated_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?)",
-                id,org,no,title,source.summary().categoryId(),source.summary().categoryName(),"MANUAL","DRAFT",source.summary().projectId(),source.summary().stageId(),source.summary().taskId(),actor,source.summary().ownerName(),source.summary().experimentDate(),actor,actor);
+        jdbc.update("INSERT INTO rnd.experiment(id,organization_id,experiment_no,title,category_id,category_name,source_type,status,project_id,stage_id,task_id,owner_id,owner_name,experiment_date,source_file_id,current_version_id,created_by,updated_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?)",
+                id,org,no,title,source.summary().categoryId(),source.summary().categoryName(),"MANUAL","DRAFT",source.summary().projectId(),source.summary().stageId(),source.summary().taskId(),actor,source.summary().ownerName(),source.summary().experimentDate(),sourceFileId(source.editModel()),actor,actor);
         jdbc.update("INSERT INTO rnd.experiment_version(id,organization_id,experiment_id,version_no,status,template_version_id,template_snapshot_hash,template_snapshot_jsonb,edit_model_jsonb,created_by) VALUES(?,?,?,1,'DRAFT',?,?,?,?,?)",
                 versionId,org,id,source.templateVersionId(),source.templateSnapshotHash(),pg(source.templateSnapshot()),pg(source.editModel()),actor);
         jdbc.update("UPDATE rnd.experiment SET current_version_id=? WHERE id=?",versionId,id);
@@ -78,6 +78,7 @@ public class JdbcExperimentRepository implements ExperimentRepository {
         audit(org,id,old.currentVersionId(),"DRAFT_SAVED",old.editModel(),d.editModel(),actor,name); return required(org,id);
     }
     @Override @Transactional public void delete(UUID org,UUID id,long revision,UUID actor,String name){var old=required(org,id);if(old.summary().status()==ExperimentStatus.COMPLETED)conflict("已完成实验不可删除，请使用作废");int n=jdbc.update("UPDATE rnd.experiment SET deleted=true,revision=revision+1,updated_by=?,updated_at=now() WHERE organization_id=? AND id=? AND revision=? AND deleted=false",actor,org,id,revision);lock(n);audit(org,id,old.currentVersionId(),"DELETED",old.editModel(),null,actor,name);}
+    @Override @Transactional public Detail publish(UUID org,UUID id,long revision,UUID actor,String name){var old=required(org,id);if(old.summary().status()==ExperimentStatus.COMPLETED||old.summary().status()==ExperimentStatus.VOIDED)conflict("当前实验不可发布");int n=jdbc.update("UPDATE rnd.experiment SET status='COMPLETED',revision=revision+1,updated_by=?,updated_at=now() WHERE organization_id=? AND id=? AND revision=?",actor,org,id,revision);lock(n);jdbc.update("UPDATE rnd.experiment_version SET status='COMPLETED',published_at=now() WHERE id=?",old.currentVersionId());audit(org,id,old.currentVersionId(),"PUBLISHED",old.editModel(),old.editModel(),actor,name);event(org,id,ExperimentEvents.PUBLISHED,old.currentVersionId(),old.summary().versionNo());return required(org,id);}
     @Override @Transactional public Detail transition(UUID org,UUID id,long revision,ExperimentStatus target,String comment,UUID actor,String name){
         var old=required(org,id); if(!old.summary().status().canTransitionTo(target)) conflict("不允许从 "+old.summary().status()+" 转换到 "+target);
         validate(old,target,comment); int n=jdbc.update("UPDATE rnd.experiment SET status=?,revision=revision+1,void_reason=?,updated_by=?,updated_at=now() WHERE organization_id=? AND id=? AND revision=?",target.name(),target==ExperimentStatus.VOIDED?comment:null,actor,org,id,revision);lock(n);
@@ -86,7 +87,7 @@ public class JdbcExperimentRepository implements ExperimentRepository {
         String ev=target==ExperimentStatus.PENDING_REVIEW?ExperimentEvents.SUBMITTED:target==ExperimentStatus.COMPLETED?ExperimentEvents.PUBLISHED:target==ExperimentStatus.VOIDED?ExperimentEvents.VOIDED:null;if(ev!=null)event(org,id,ev,old.currentVersionId(),old.summary().versionNo());
         audit(org,id,old.currentVersionId(),"STATUS_"+target,old.editModel(),old.editModel(),actor,name);return required(org,id);
     }
-    @Override public List<Version> versions(UUID org,UUID id){return jdbc.query("SELECT * FROM rnd.experiment_version WHERE organization_id=? AND experiment_id=? ORDER BY version_no DESC",this::version,org,id);}
+    @Override public List<Version> versions(UUID org,UUID id){return jdbc.query("SELECT * FROM rnd.experiment_version WHERE organization_id=? AND experiment_id=? AND (status='COMPLETED' OR (status='VOIDED' AND published_at IS NOT NULL)) ORDER BY version_no DESC",this::version,org,id);}
     @Override @Transactional public Detail createRevision(UUID org,UUID id,long revision,String reason,UUID actor,String name){
         var old=required(org,id);if(old.summary().status()!=ExperimentStatus.COMPLETED)conflict("仅已完成实验可创建修订版本");if(!text(reason))invalid("必须填写修订原因");var vid=UUID.randomUUID();int next=old.summary().versionNo()+1;
         int n=jdbc.update("UPDATE rnd.experiment SET status='DRAFT',current_version_id=NULL,revision=revision+1,updated_by=?,updated_at=now() WHERE organization_id=? AND id=? AND revision=?",actor,org,id,revision);lock(n);
@@ -115,12 +116,18 @@ public class JdbcExperimentRepository implements ExperimentRepository {
     @Override @Transactional public Category setCategoryActive(UUID org,UUID id,long rev,boolean active){if(!active&&Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM rnd.experiment WHERE organization_id=? AND category_id=? AND deleted=false)",Boolean.class,org,id)))conflict("该分类仍有关联实验，请先移动或删除实验");int n=jdbc.update("UPDATE rnd.experiment_category SET active=?,revision=revision+1,updated_at=now() WHERE organization_id=? AND id=? AND revision=?",active,org,id,rev);lock(n);return categories(org,true).stream().filter(x->x.id().equals(id)).findFirst().orElseThrow();}
 
     private Detail required(UUID o,UUID id){return detail(o,id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"实验不存在"));}
+    private static UUID sourceFileId(JsonNode model){
+        if(model==null)return null;
+        var raw=model.path("sourceFileId").asText(null);
+        if(raw==null||raw.isBlank())return null;
+        try{return UUID.fromString(raw.trim());}catch(IllegalArgumentException ignored){return null;}
+    }
     private String generateExperimentNo(){
         long seq = jdbc.queryForObject("SELECT nextval('rnd.experiment_no_seq')", Long.class);
         return "EXP-" + LocalDate.now().format(java.time.format.DateTimeFormatter.BASIC_ISO_DATE) + "-" + seq;
     }
     private void validate(Detail d,ExperimentStatus t,String comment){if(t==ExperimentStatus.PENDING_REVIEW||t==ExperimentStatus.COMPLETED){var m=d.editModel();if(!text(m.path("purpose").asText())||!text(m.path("conclusion").path("mainConclusion").asText()))invalid("提交审核前必须填写实验目的和主要结论");if("FAILED".equals(m.path("conclusion").path("resultStatus").asText())&&!text(m.path("conclusion").path("failureCategory").asText()))invalid("失败实验必须填写失败原因分类");}if(t==ExperimentStatus.RETURNED&&!text(comment))invalid("退回必须填写原因");if(t==ExperimentStatus.VOIDED&&!text(comment))invalid("作废必须填写原因");}
-    private Detail detailRow(ResultSet r)throws SQLException{var s=summary(r,0);var vid=r.getObject("current_version_id",UUID.class);return new Detail(s,vid,r.getObject("template_version_id",UUID.class),r.getString("template_snapshot_hash"),node(r,"template_snapshot_jsonb"),node(r,"edit_model_jsonb"),reviews(s.id()),attachments(s.id()));}
+    private Detail detailRow(ResultSet r)throws SQLException{var s=summary(r,0);var vid=r.getObject("current_version_id",UUID.class);return new Detail(s,vid,r.getObject("source_file_id",UUID.class),r.getObject("template_version_id",UUID.class),r.getString("template_snapshot_hash"),node(r,"template_snapshot_jsonb"),node(r,"edit_model_jsonb"),reviews(s.id()),attachments(s.id()));}
     private List<Review> reviews(UUID id){return jdbc.query("SELECT * FROM rnd.experiment_review WHERE experiment_id=? ORDER BY created_at DESC",(r,n)->new Review(r.getObject("id",UUID.class),r.getString("action"),r.getString("comment"),r.getString("operator_name"),r.getTimestamp("created_at").toInstant()),id);}
     private List<Attachment> attachments(UUID id){return jdbc.query("SELECT * FROM rnd.experiment_attachment WHERE experiment_id=? ORDER BY created_at DESC",(r,n)->new Attachment(r.getObject("id",UUID.class),r.getObject("file_id",UUID.class),r.getObject("file_version_id",UUID.class),r.getString("attachment_type"),r.getString("section_key"),r.getString("file_name"),r.getString("description"),r.getTimestamp("created_at").toInstant()),id);}
     private Summary summary(ResultSet r,int n)throws SQLException{return new Summary(r.getObject("id",UUID.class),r.getString("experiment_no"),r.getString("title"),r.getObject("category_id",UUID.class),r.getString("category_name"),r.getString("source_type"),ExperimentStatus.valueOf(r.getString("status")),r.getObject("project_id",UUID.class),r.getString("project_name"),r.getObject("stage_id",UUID.class),r.getString("stage_name"),r.getObject("task_id",UUID.class),r.getString("task_name"),r.getString("owner_name"),r.getObject("experiment_date",LocalDate.class),r.getInt("version_no"),r.getLong("revision"),r.getTimestamp("updated_at").toInstant());}

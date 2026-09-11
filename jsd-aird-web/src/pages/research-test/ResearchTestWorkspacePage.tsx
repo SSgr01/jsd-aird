@@ -1,6 +1,7 @@
 import {
   ArrowLeftOutlined,
   DownloadOutlined,
+  FileOutlined,
   EyeOutlined,
   LoadingOutlined,
   SaveOutlined,
@@ -390,7 +391,7 @@ export function ResearchTestWorkspacePage({ type }: { type: ResearchTestType }) 
             返回
           </Button>
           <span className="workspace-title-block">
-            <Typography.Text type="secondary">
+            <Typography.Text type="secondary" className="workspace-breadcrumb">
               研发测试中心 / {type === 'REPORT' ? '综合测试报告' : '测试标准方法'}
             </Typography.Text>
             <Typography.Text strong>{detail.summary.name}</Typography.Text>
@@ -398,16 +399,16 @@ export function ResearchTestWorkspacePage({ type }: { type: ResearchTestType }) 
           <Tag color={versions.length > 0 ? 'blue' : 'default'}>
             {versions.length > 0 ? `V${versions[0]?.versionNo ?? detail.summary.versionNo}` : '未发布'}
           </Tag>
-          <Tag>{text[detail.summary.status]}</Tag>
+          <Tag className="research-test-status-tag">{text[detail.summary.status]}</Tag>
         </div>
-        <Space wrap>
+        <Space className="research-test-workspace-actions" wrap>
           <SaveStateBadge state={saveState} />
-          <Button icon={<DownloadOutlined />} onClick={() => void exportFile()}>
+          <Button className="workspace-export-button" icon={<DownloadOutlined />} onClick={() => void exportFile()}>
             导出
           </Button>
           {(detail.summary.sourceFileId || stringValue(detail.editModel.sourceFileId)) && (
-            <Button icon={<EyeOutlined />} onClick={() => setPreviewOpen(true)}>
-              原文件
+            <Button icon={<FileOutlined />} onClick={() => setPreviewOpen(true)}>
+              原文
             </Button>
           )}
           {['PUBLISHED', 'ARCHIVED'].includes(detail.summary.status) && (
@@ -423,8 +424,13 @@ export function ResearchTestWorkspacePage({ type }: { type: ResearchTestType }) 
             保存草稿
           </Button>
           {['DRAFT', 'RETURNED'].includes(detail.summary.status) && (
-            <Button type="primary" loading={busy} onClick={() => void action('submit-review')}>
-              提交审核
+            <Button
+              type="primary"
+              className="workspace-publish-button"
+              loading={busy}
+              onClick={() => void action('submit-review')}
+            >
+              发布
             </Button>
           )}
           {detail.summary.status === 'PENDING_REVIEW' && (
@@ -433,7 +439,7 @@ export function ResearchTestWorkspacePage({ type }: { type: ResearchTestType }) 
                 驳回
               </Button>
               <Button type="primary" loading={busy} onClick={() => void action('approve')}>
-                审核并发布
+                发布
               </Button>
             </>
           )}

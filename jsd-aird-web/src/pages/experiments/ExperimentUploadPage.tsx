@@ -1,59 +1,22 @@
-import { CloudUploadOutlined, DeleteOutlined, DownloadOutlined, EyeOutlined, PictureOutlined } from '@ant-design/icons';
-import { App, Button, Form, Modal, Select, Space, TreeSelect, Typography, Upload } from 'antd';
+import { CloudUploadOutlined, DeleteOutlined, DownloadOutlined, EyeOutlined, ReloadOutlined } from '@ant-design/icons';
+import { App, Button, Form, Modal, Select, Space, Upload } from 'antd';
 import type { UploadFile, UploadProps } from 'antd';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { ProjectRelationPicker } from '@/components/project-relations/ProjectRelationPicker';
+import type { ProjectRelationTarget } from '@/services/project/project-resource-api';
 import { UploadWorkspace, type UploadWorkspaceRecord } from '@/components/upload-workspace';
 import {
   importExperimentFile,
   deleteExperimentImport,
   listCategories,
   listExperimentImports,
+  retryExperimentImport,
   stageExperimentFile,
   type Category,
   type ExperimentImportJob,
 } from '@/services/experiments/experiment-api';
-import {
-  getProjectStages,
-  getProjects,
-  getStageTasks,
-  type ProjectStage,
-  type ProjectTask,
-} from '@/services/project/project-api';
 import { downloadFile } from '@/services/files/file-api';
-
-type LinkNode = {
-  value: string;
-  label: string;
-  isLeaf?: boolean;
-  selectable?: boolean;
-  children?: LinkNode[];
-};
-type ExperimentLink = { projectId?: string; stageId?: string; taskId?: string };
-function findLink(nodes: LinkNode[], target: string, parents: ExperimentLink = {}): ExperimentLink {
-  for (const node of nodes) {
-    const [type, id] = node.value.split(':');
-    const current = {
-      ...parents,
-      ...(type === 'project' ? { projectId: id } : {}),
-      ...(type === 'stage' ? { stageId: id } : {}),
-      ...(type === 'task' ? { taskId: id } : {}),
-    };
-    if (node.value === target) return current;
-    const child = findLink(node.children ?? [], target, current);
-    if (child.projectId || child.stageId || child.taskId) return child;
-  }
-  return {};
-}
-function attachChildren(nodes: LinkNode[], target: string, children: LinkNode[]): LinkNode[] {
-  return nodes.map((node) =>
-    node.value === target
-      ? { ...node, children }
-      : node.children
-        ? { ...node, children: attachChildren(node.children, target, children) }
-        : node,
-  );
-}
 
 const visibilityOptions = [
   { value: 'ALL' as const, label: '全员可见' },
@@ -70,27 +33,22 @@ export function ExperimentUploadPage() {
   const [jobs, setJobs] = useState<ExperimentImportJob[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [location, setLocation] = useState<string>();
-  const [link, setLink] = useState<string>();
-  const [linkTree, setLinkTree] = useState<LinkNode[]>([]);
-  const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
+  const [projectRelations, setProjectRelations] = useState<ProjectRelationTarget[]>([]);
   const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [filter, setFilter] = useState('ALL');
   const [keyword, setKeyword] = useState('');
   const [page, setPage] = useState({ current: 1, pageSize: 8 });
   const [visibility, setVisibility] = useState<'ALL' | 'QUALITY' | 'PROJECT'>('ALL');
-  const [ocrOpen, setOcrOpen] = useState(false);
-  const [ocrFiles, setOcrFiles] = useState<UploadFile[]>([]);
-  const [ocrSubmitting, setOcrSubmitting] = useState(false);
-  const previousExpanded = useRef<string[]>([]);
-  const load = useCallback(async () => {
-    setLoading(true);
+  const [retryingId, setRetryingId] = useState<string>();
+  const load = useCallback(async (showLoading = true) => {
+    if (showLoading) setLoading(true);
     try {
       setJobs(await listExperimentImports());
     } catch (error) {
       void message.error(error instanceof Error ? error.message : '实验上传记录加载失败');
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
   }, [message]);
   useEffect(() => {
@@ -100,50 +58,14 @@ export function ExperimentUploadPage() {
         setLocation((current) => current ?? items[0]?.name);
       }),
       load(),
-      getProjects({ page: 1, size: 200 }).then((result) =>
-        setLinkTree(
-          result.items.map((project) => ({
-            value: `project:${project.id}`,
-            label: `${project.projectCode}·${project.name}`,
-            selectable: false,
-            isLeaf: false,
-          })),
-        ),
-      ),
     ]);
   }, [load]);
-  const expandRelation = (keys: Array<string | number>) => {
-    const values = keys.map(String);
-    const target = values.find((key) => !previousExpanded.current.includes(key));
-    setExpandedKeys(values);
-    previousExpanded.current = values;
-    if (!target) return;
-    const [type, id] = target.split(':');
-    if (!id) return;
-    const request =
-      type === 'project'
-        ? getProjectStages(id).then((items: ProjectStage[]) =>
-            items.map<LinkNode>((stage) => ({
-              value: `stage:${stage.id}`,
-              label: stage.name,
-              selectable: false,
-              isLeaf: false,
-            })),
-          )
-        : type === 'stage'
-          ? getStageTasks(id).then((items: ProjectTask[]) =>
-              items.map<LinkNode>((task) => ({
-                value: `task:${task.id}`,
-                label: task.name,
-                selectable: true,
-                isLeaf: true,
-              })),
-            )
-          : Promise.resolve([]);
-    void request.then((children) =>
-      setLinkTree((current) => attachChildren(current, target, children)),
-    );
-  };
+  const running = useMemo(() => jobs.some((job) => job.status === 'PARSING'), [jobs]);
+  useEffect(() => {
+    if (!running) return;
+    const timer = window.setInterval(() => void load(false), 2000);
+    return () => window.clearInterval(timer);
+  }, [load, running]);
   const validate: UploadProps['beforeUpload'] = (file) => {
     if (file.size === 0 || !/\.(xlsx|xls|csv|doc|docx|pdf|jpg|jpeg|png|tif|tiff)$/i.test(file.name)) {
       void message.error('仅支持 XLSX / XLS / CSV / DOCX / PDF / JPG / PNG / TIF 文件，且文件不能为空');
@@ -165,6 +87,7 @@ export function ExperimentUploadPage() {
       void message.warning('请先选择实验文件');
       return;
     }
+    const relation = projectRelations.find((item) => item.projectId);
     setUploading(true);
     let failed = 0;
     for (const file of sourceFiles) {
@@ -178,7 +101,7 @@ export function ExperimentUploadPage() {
           format: formatForFile(file.name),
           categoryId: category?.id,
           categoryName: category?.name,
-          ...(link ? findLink(linkTree, link) : {}),
+          ...(relation ? { projectId: relation.projectId, stageId: relation.stageId, taskId: relation.taskId } : {}),
           experimentDate: new Date().toISOString().slice(0, 10),
           visibility,
         });
@@ -193,30 +116,20 @@ export function ExperimentUploadPage() {
     setFiles([]);
     await load();
     if (failed)
-      void message.warning(`${sourceFiles.length - failed} 个文件导入成功，${failed} 个失败`);
-    else void message.success(`已成功导入 ${sourceFiles.length} 个实验文件`);
+      void message.warning(`${sourceFiles.length - failed} 个文件已提交解析，${failed} 个提交失败`);
+    else void message.success(`已提交 ${sourceFiles.length} 个实验文件，后台解析中`);
   };
-  const openOcr = () => { setOcrFiles([]); setOcrOpen(true); };
-  const submitOcr = async () => {
-    const sourceFiles = ocrFiles.flatMap((item) => (item.originFileObj ? [item.originFileObj] : []));
-    if (!sourceFiles.length) return;
-    setOcrSubmitting(true);
-    let failed = 0;
+  const retry = async (job: ExperimentImportJob) => {
+    setRetryingId(job.id);
     try {
-      const category = categories.find((item) => item.name === location);
-      for (const file of sourceFiles) {
-        try {
-          const staged = await stageExperimentFile(file);
-          await importExperimentFile({ fileId: staged.fileId, fileName: staged.originalName, sha256: staged.sha256,
-            format: formatForFile(file.name), categoryId: category?.id, categoryName: category?.name,
-            ...(link ? findLink(linkTree, link) : {}), experimentDate: new Date().toISOString().slice(0, 10), visibility });
-        } catch { failed += 1; }
-      }
+      await retryExperimentImport(job.id);
       await load();
-      if (failed) void message.warning(`${sourceFiles.length - failed} 个识别任务已提交，${failed} 个失败`);
-      else void message.success(`已提交 ${sourceFiles.length} 个 OCR 识别任务`);
-      setOcrFiles([]); setOcrOpen(false);
-    } finally { setOcrSubmitting(false); }
+      void message.success(`“${job.sourceFileName}”已提交重新解析，后台处理中`);
+    } catch (error) {
+      void message.error(error instanceof Error ? error.message : '重新解析失败，请稍后再试');
+    } finally {
+      setRetryingId(undefined);
+    }
   };
   const filtered = useMemo(
     () =>
@@ -229,20 +142,30 @@ export function ExperimentUploadPage() {
   );
   const records: UploadWorkspaceRecord[] = filtered
     .slice((page.current - 1) * page.pageSize, page.current * page.pageSize)
-    .map((job) => ({
-      id: job.id,
-      name: job.sourceFileName,
-      meta: `${formatLabel(job.sourceFormat)} · ${new Date(job.createdAt).toLocaleString('zh-CN')}`,
-      detail: `保存位置：${job.categoryName || '未分类'} · ${[job.projectName, job.stageName, job.taskName].filter(Boolean).join(' · ') || '未关联项目'} · ${visibilityText(job.visibility)}${job.errorMessage ? ` · ${job.errorMessage}` : ''}`,
-      status:
-        job.status === 'COMPLETED'
-          ? { label: '已解析', color: 'success' }
+    .map((job) => {
+      const progress = job.status === 'COMPLETED'
+        ? 100
+        : job.status === 'FAILED'
+          ? 0
+          : Math.min(99, Math.max(0, job.progress ?? 0));
+      return {
+        id: job.id,
+        name: job.sourceFileName,
+        meta: `${formatLabel(job.sourceFormat)} · ${new Date(job.createdAt).toLocaleString('zh-CN')}`,
+        detail: [
+          experimentImportProgressDescription(job, progress),
+          `保存位置：${job.categoryName || '未分类'} · ${[job.projectName, job.stageName, job.taskName].filter(Boolean).join(' · ') || '未关联项目'} · ${visibilityText(job.visibility)}`,
+          job.errorMessage ? `失败原因：${job.errorMessage}` : null,
+        ].filter(Boolean).join(' · '),
+        status:
+          job.status === 'COMPLETED'
+            ? { label: '已解析', color: 'success' }
           : job.status === 'FAILED'
             ? { label: '解析失败', color: 'error' }
-            : { label: '解析中', color: 'processing' },
-      progress: job.status === 'COMPLETED' ? 100 : job.status === 'FAILED' ? 0 : 50,
-      actions: (
-        <Space size={2}>
+            : { label: `解析中 ${progress}%`, color: 'processing' },
+        progress,
+        actions: (
+          <Space size={2}>
           <Button
             type="link"
             icon={<EyeOutlined />}
@@ -267,22 +190,32 @@ export function ExperimentUploadPage() {
           </Button>
           <Button
             type="link"
+            icon={<ReloadOutlined />}
+            loading={retryingId === job.id}
+            onClick={() => void retry(job)}
+          >
+            重试
+          </Button>
+          <Button
+            type="link"
             danger
             icon={<DeleteOutlined />}
-            disabled={!job.allowedActions?.includes('DELETE')}
+            disabled={!['PARSING', 'COMPLETED', 'FAILED'].includes(job.status)}
             onClick={() => Modal.confirm({
               title: `删除“${job.sourceFileName}”的上传记录？`,
-              content: job.experimentId
+              content: job.status === 'PARSING'
+                ? '删除后将取消后台解析任务，原始文件仍保留在文件存储中。'
+                : job.experimentId
                 ? '仅删除上传记录，不删除已生成的实验草稿、原始附件或来源追溯关系。'
                 : '仅删除上传记录，不删除原始附件。',
-              okText: '删除',
+              okText: job.status === 'PARSING' ? '取消解析并删除' : '删除',
               cancelText: '取消',
               okButtonProps: { danger: true },
               onOk: async () => {
                 try {
                   await deleteExperimentImport(job.id);
                   await load();
-                  void message.success('上传记录已删除，实验草稿仍保留');
+                  void message.success(job.status === 'PARSING' ? '解析任务已取消，上传记录已删除' : '上传记录已删除，实验草稿仍保留');
                 } catch (error) {
                   void message.error(error instanceof Error ? error.message : '上传记录删除失败');
                 }
@@ -292,15 +225,16 @@ export function ExperimentUploadPage() {
             删除
           </Button>
         </Space>
-      ),
-    }));
+        ),
+      };
+    });
   return (
     <>
     <UploadWorkspace
       breadcrumbs={[{ title: '电子实验记录本' }, { title: '实验上传' }]}
       title="实验上传"
-      description="上传后自动解析 Word / Excel 并生成独立实验文件；数据不会写入模板中心。"
-      headerActions={<Space><Button icon={<PictureOutlined />} onClick={openOcr}>拍照录入</Button><Button type="primary" onClick={() => navigate('/experiments')}>实验列表</Button></Space>}
+      description="上传 Word / Excel 或实验记录图片；图片将复用模板中心 OCR 识别并生成可编辑的 Excel 实验草稿。"
+      headerActions={<Button type="primary" onClick={() => navigate('/experiments')}>实验列表</Button>}
       leftTitle="基础分类"
       classification={
         <Form layout="vertical" component={false}>
@@ -312,16 +246,7 @@ export function ExperimentUploadPage() {
             />
           </Form.Item>
           <Form.Item label="关联项目 / 阶段 / 任务">
-            <TreeSelect
-              value={link}
-              onChange={setLink}
-              allowClear
-              placeholder="未关联项目"
-              treeData={linkTree}
-              treeExpandedKeys={expandedKeys}
-              onTreeExpand={expandRelation}
-              treeNodeFilterProp="label"
-            />
+            <ProjectRelationPicker value={projectRelations} onChange={setProjectRelations} multiple={false} />
           </Form.Item>
           <Form.Item label="权限可见">
             <Select value={visibility} onChange={setVisibility} options={visibilityOptions} />
@@ -337,7 +262,7 @@ export function ExperimentUploadPage() {
         setFiles((current) => current.filter((item) => item.uid !== file.uid))
       }
       onClearFiles={() => setFiles([])}
-      uploadHint="支持 XLSX / XLS / CSV / DOCX / PDF / JPG / PNG / TIF，支持批量上传；原始文件会保留。"
+      uploadHint="支持 XLSX / XLS / CSV / DOCX / PDF / JPG / PNG / TIF，图片会通过模板中心 OCR 生成 Excel；原始文件会保留。"
       submitLabel="开始上传"
       submitIcon={<CloudUploadOutlined />}
       onSubmit={() => void submit()}
@@ -365,15 +290,6 @@ export function ExperimentUploadPage() {
       pagination={{ ...page, total: filtered.length }}
       onPageChange={(current, pageSize) => setPage({ current, pageSize })}
     />
-    <Modal title="拍照 / OCR录入" open={ocrOpen} onCancel={() => setOcrOpen(false)} footer={null} width={620}>
-      <Typography.Text type="secondary">选择纸质实验记录照片或扫描 PDF，提交后生成可人工复核的实验草稿。</Typography.Text>
-      <Upload.Dragger className="ocr-upload-dragger" accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff" multiple fileList={ocrFiles} showUploadList beforeUpload={(file) => {
-        if (!file.size || !/\.(pdf|jpg|jpeg|png|tif|tiff)$/i.test(file.name)) { void message.error('OCR仅支持 PDF / JPG / PNG / TIF'); return Upload.LIST_IGNORE; }
-        if (ocrFiles.some((item) => item.name === file.name && item.size === file.size)) return Upload.LIST_IGNORE;
-        return false;
-      }} onChange={({ fileList }) => setOcrFiles(fileList)}><p><PictureOutlined /> 点击或拖拽照片 / PDF 到此处</p><p>支持多页图片，识别后请在实验工作台人工复核</p></Upload.Dragger>
-      <Space style={{ marginTop: 16, width: '100%', justifyContent: 'flex-end' }}><Button onClick={() => setOcrOpen(false)}>取消</Button><Button type="primary" disabled={!ocrFiles.length} loading={ocrSubmitting} onClick={() => void submitOcr()}>开始分析</Button></Space>
-    </Modal>
     </>
   );
 }
@@ -389,5 +305,26 @@ function formatForFile(name: string) {
 }
 
 function formatLabel(format: string) {
-  return ({ XLSX: 'Excel', XLS: '旧版 Excel', CSV: 'CSV', DOCX: 'Word', PDF: 'PDF 扫描件', IMAGE: '图片 OCR' } as Record<string, string>)[format] ?? format;
+  return ({ XLSX: 'Excel', XLS: '旧版 Excel', CSV: 'CSV', DOCX: 'Word', PDF: 'PDF 扫描件', IMAGE: '图片 OCR → Excel' } as Record<string, string>)[format] ?? format;
+}
+
+function experimentImportStageLabel(stage?: string) {
+  const labels: Record<string, string> = {
+    PREPARING: '正在准备任务',
+    LOADING_FILE: '正在读取文件',
+    READING_STRUCTURE: '正在分析文件结构',
+    PARSING_COMPLETED: '文件解析完成，正在生成实验',
+    BUILDING_EXPERIMENT: '正在生成实验记事本',
+    PERSISTING_RESULT: '正在保存解析结果',
+    DUPLICATE_RESOLVED: '发现已有结果，正在复用',
+  };
+  return labels[stage ?? ''] ?? '等待后台处理';
+}
+
+function experimentImportProgressDescription(job: ExperimentImportJob, progress: number) {
+  if (job.status === 'PARSING') return `${experimentImportStageLabel(job.currentStage)} · 已完成 ${progress}%`;
+  if (job.status === 'COMPLETED') return '解析完成，已生成实验记录本';
+  if (job.status === 'FAILED') return '解析失败，可点击重试';
+  if (job.status === 'CANCELLED') return '解析任务已取消';
+  return '等待后台解析任务';
 }

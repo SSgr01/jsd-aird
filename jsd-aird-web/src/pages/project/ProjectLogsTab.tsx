@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import dayjs from '@/utils/dayjs';
 import { getProjectLogs, type ProjectAuditLog, type ProjectLogAction, type ProjectLogObjectType } from '@/services/project/project-api';
 
-const objectLabels: Record<string, string> = { PROJECT: '项目', PROJECT_STAGE: '项目阶段', PROJECT_TASK: '项目任务', PROJECT_EXPERIMENT: '项目实验', PROJECT_DOCUMENT: '项目文档' };
+const objectLabels: Record<string, string> = { PROJECT: '项目', PROJECT_STAGE: '项目阶段', PROJECT_TASK: '项目任务', EXPERIMENT: '实验', PROJECT_DOCUMENT: '项目文档' };
 const actionLabels: Record<string, string> = { CREATE: '新增', UPDATE: '编辑', REOPEN: '重新打开', DELETE: '删除', REORDER: '调整顺序' };
 const actionColors: Record<string, string> = { CREATE: 'green', UPDATE: 'blue', REOPEN: 'orange', DELETE: 'red', REORDER: 'purple' };
 
@@ -43,7 +43,7 @@ export function ProjectLogsTab({ projectId }: { projectId: string }) {
       <Input allowClear prefix={<SearchOutlined />} value={keyword} placeholder="搜索对象名称或日志内容"
         onChange={(event) => setKeyword(event.target.value)} onPressEnter={() => { setPage(1); void load(); }} />
       <Select allowClear value={objectType} placeholder="全部对象" onChange={(value) => { setObjectType(value); setPage(1); }}
-        options={[{ value: 'PROJECT', label: '项目' }, { value: 'PROJECT_STAGE', label: '项目阶段' }, { value: 'PROJECT_TASK', label: '项目任务' }, { value: 'PROJECT_EXPERIMENT', label: '项目实验' }, { value: 'PROJECT_DOCUMENT', label: '项目文档' }]} />
+        options={[{ value: 'PROJECT', label: '项目' }, { value: 'PROJECT_STAGE', label: '项目阶段' }, { value: 'PROJECT_TASK', label: '项目任务' }, { value: 'EXPERIMENT', label: '实验' }, { value: 'PROJECT_DOCUMENT', label: '项目文档' }]} />
       <Select allowClear value={action} placeholder="全部操作" onChange={(value) => { setAction(value); setPage(1); }}
         options={Object.entries(actionLabels).map(([value, label]) => ({ value, label }))} />
       <Input allowClear value={operator} placeholder="操作人" onChange={(event) => setOperator(event.target.value)} />

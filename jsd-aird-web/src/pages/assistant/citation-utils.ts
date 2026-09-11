@@ -8,6 +8,33 @@ export interface AssistantCitationGroup {
   evidenceCount: number;
 }
 
+export interface AssistantCitationPartition {
+  candidates: AssistantCitation[];
+  evidence: AssistantCitation[];
+}
+
+export function partitionAssistantCitations(
+  citations: AssistantCitation[] | undefined,
+): AssistantCitationPartition {
+  const candidates = new Map<string, AssistantCitation>();
+  const evidence: AssistantCitation[] = [];
+  for (const citation of citations || []) {
+    if (citation.sourceType === 'DATA_SOURCE_FILE_CANDIDATE') {
+      const name = (citation.originalName || citation.title || '').trim();
+      if (name) candidates.set(name.toLocaleLowerCase(), citation);
+    } else {
+      evidence.push(citation);
+    }
+  }
+  return { candidates: Array.from(candidates.values()), evidence };
+}
+
+export function dataFileSelectionQuestion(fileName: string, originalQuestion: string): string {
+  const safeFileName = fileName.replace(/[\r\n]+/g, ' ').trim();
+  const question = originalQuestion.trim();
+  return `在数据文件《${safeFileName}》中查询：${question}`;
+}
+
 function citationDocumentKey(citation: AssistantCitation): string {
   if (citation.sourceType === 'EXTERNAL_REFERENCE' && citation.url) {
     try {

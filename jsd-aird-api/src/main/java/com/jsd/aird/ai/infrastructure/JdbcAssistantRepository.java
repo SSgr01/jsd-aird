@@ -86,14 +86,26 @@ public class JdbcAssistantRepository implements AssistantRepository {
     @Override
     public Optional<String> recentDataFileMention(UUID organizationId, UUID conversationId) {
         return jdbc.query("""
-                SELECT m.content
-                FROM ai.assistant_message m
-                JOIN ai.assistant_conversation c ON c.id = m.conversation_id
-                WHERE c.organization_id = ? AND c.id = ? AND m.role = 'USER'
-                  AND m.content ~* '\\.(xlsx|xls|csv)([[:space:]，。；;]|$)'
-                ORDER BY m.created_at DESC
+                SELECT source_text
+                FROM (
+                    SELECT m.created_at, 1 AS source_priority, m.content AS source_text
+                    FROM ai.assistant_message m
+                    JOIN ai.assistant_conversation c ON c.id = m.conversation_id
+                    WHERE c.organization_id = ? AND c.id = ? AND m.role = 'USER'
+                      AND m.content ~* '\\.(xlsx|xls|csv)([》”"[:space:]，。；;：:]|$)'
+                    UNION ALL
+                    SELECT m.created_at, 2 AS source_priority, citation ->> 'originalName' AS source_text
+                    FROM ai.assistant_message m
+                    JOIN ai.assistant_conversation c ON c.id = m.conversation_id
+                    CROSS JOIN LATERAL jsonb_array_elements(COALESCE(m.citations_jsonb, '[]'::jsonb)) citation
+                    WHERE c.organization_id = ? AND c.id = ? AND m.role = 'ASSISTANT'
+                      AND citation ->> 'sourceType' = 'DATA_SOURCE_FILE'
+                      AND citation ->> 'originalName' ~* '\\.(xlsx|xls|csv)$'
+                ) context_file
+                ORDER BY created_at DESC, source_priority DESC
                 LIMIT 1
-                """, (rs, rowNum) -> rs.getString("content"), organizationId, conversationId)
+                """, (rs, rowNum) -> rs.getString("source_text"),
+                organizationId, conversationId, organizationId, conversationId)
                 .stream().filter(org.springframework.util.StringUtils::hasText).findFirst();
     }
 

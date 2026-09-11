@@ -45,6 +45,23 @@ class RagRetrievalServiceTest {
     }
 
     @Test
+    void ignoresTheSelectedFilePrefixWhenInferringRecordAndField() {
+        var inferred = RagRetrievalService.inferFieldLookup(
+                "在数据文件《应用测试报告.xlsx》中查询：SJ-230水洗后的粘度是多少？");
+
+        assertThat(inferred.recordTerm()).isEqualTo("SJ-230水洗后");
+        assertThat(inferred.fieldTerm()).isEqualTo("粘度");
+    }
+
+    @Test
+    void recognizesAStandaloneBusinessField() {
+        var inferred = RagRetrievalService.inferFieldLookup("粘度是多少？");
+
+        assertThat(inferred.recordTerm()).isEmpty();
+        assertThat(inferred.fieldTerm()).isEqualTo("粘度");
+    }
+
+    @Test
     void explicitEmptyScopesDoNotSearchAnySource() {
         var knowledge = mock(KnowledgeSearchFacade.class);
         var data = mock(DataSourceFileSearchFacade.class);

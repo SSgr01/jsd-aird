@@ -6827,6 +6827,27 @@ a:active,
   margin-top: 20px;
 }
 
+.ai-message-file-candidates {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.ai-message-file-candidate-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ai-message-file-candidate-list .ant-btn {
+  max-width: min(100%, 520px);
+  height: auto;
+  min-height: 30px;
+  padding-block: 4px;
+  white-space: normal;
+  text-align: left;
+}
+
 .ai-message-citations > .ant-typography {
   color: var(--app-text);
   font-size: 14px;

@@ -78,6 +78,32 @@ class AssistantDataDetailTest {
         assertThat(AssistantService.detectFieldAmbiguity("查询密度", List.of(first, second))).isNull();
     }
 
+    @Test
+    void asksForAFileChoiceWithoutExposingInternalIdentifiers() {
+        var result = new DataSourceFileSearchFacade.DataDetailResult(
+                DataSourceFileSearchFacade.DataQueryMode.FIELD_LOOKUP,
+                DataSourceFileSearchFacade.DataResolution.AMBIGUOUS,
+                null, null, "", 0, 0, List.of(), false,
+                List.of(new DataSourceFileSearchFacade.DataFileCandidate("测试数据A.xlsx"),
+                        new DataSourceFileSearchFacade.DataFileCandidate("测试数据B.xlsx")), false);
+
+        assertThat(AssistantService.dataDetailAnswer(result))
+                .isEqualTo("找到多个同等匹配的数据文件，请选择下方文件继续查询。")
+                .doesNotContain("UUID", "importJobId", "bindingId", "valuePath");
+    }
+
+    @Test
+    void requiresAFileNameOnlyForAFileOverview() {
+        var result = new DataSourceFileSearchFacade.DataDetailResult(
+                DataSourceFileSearchFacade.DataQueryMode.FILE_OVERVIEW,
+                DataSourceFileSearchFacade.DataResolution.FILE_REQUIRED,
+                null, null, "", 0, 0, List.of(), false, List.of(), false);
+
+        assertThat(AssistantService.dataDetailAnswer(result))
+                .contains("整文件概览需要指定文件名")
+                .contains("实验编号、树脂型号或字段时可以直接提问");
+    }
+
     private DataSourceFileSearchFacade.SourceFileHit hit(String recordKey, String fieldCode, String fieldName,
                                                           String value, String unit, String valueType,
                                                           String sheet, String cell) {

@@ -18,6 +18,15 @@ export const httpClient = axios.create({
   },
 });
 
+/**
+ * Requests whose payload scales with file size (upload/download of original
+ * documents, published structured content, review snapshots) cannot share the
+ * 15s interactive timeout: a knowledge file may be hundreds of megabytes, so
+ * the transfer legitimately takes minutes. 0 disables the axios timeout — a
+ * dropped connection still rejects the promise.
+ */
+export const LARGE_PAYLOAD_TIMEOUT = 0;
+
 let csrfRefresh: Promise<unknown> | null = null;
 let csrfToken: string | null = null;
 

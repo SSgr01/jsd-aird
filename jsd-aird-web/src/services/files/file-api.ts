@@ -1,4 +1,4 @@
-import { httpClient } from '@/services/http/client';
+import { httpClient, LARGE_PAYLOAD_TIMEOUT } from '@/services/http/client';
 import type { ApiResponse } from '@/types/api';
 
 export interface StagedFile {
@@ -10,19 +10,35 @@ export interface StagedFile {
   status: string;
 }
 
+export interface StageFileOptions {
+  onProgress?: (percent: number) => void;
+}
+
 export async function stageFile(
   file: File,
   kind: 'KNOWLEDGE' | 'SNAPSHOT' | 'IMPORT' | 'QUALITY_SOURCE' | 'PRODUCTION_SOURCE' | 'SPC_CHART' | 'RESEARCH_TEST_SOURCE' = 'KNOWLEDGE',
+  options: StageFileOptions = {},
 ) {
   const body = new FormData();
   body.append('file', file);
-  const response = await httpClient.post<ApiResponse<StagedFile>>('/api/v1/files/staged', body, { params: { kind } });
+  const response = await httpClient.post<ApiResponse<StagedFile>>('/api/v1/files/staged', body, {
+    params: { kind },
+    timeout: LARGE_PAYLOAD_TIMEOUT,
+    onUploadProgress: options.onProgress
+      ? (event) => {
+          const total = event.total || file.size;
+          if (!total) return;
+          options.onProgress?.(Math.min(100, Math.round((event.loaded / total) * 100)));
+        }
+      : undefined,
+  });
   return response.data.data;
 }
 
 export async function fetchFileBlob(fileId: string) {
   const response = await httpClient.get<Blob>(`/api/v1/files/${fileId}/content`, {
     responseType: 'blob',
+    timeout: LARGE_PAYLOAD_TIMEOUT,
   });
   return response.data;
 }

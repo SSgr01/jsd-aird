@@ -87,8 +87,32 @@ export interface FileSearchResult {
     matchType: 'EXACT_FILENAME' | 'EXACT_IDENTIFIER' | 'CONTENT' | 'FULL_TEXT';
     matchedFields: string[];
     matchedTerms: string[];
-    relatedProjects: Array<{ projectId: string; projectCode: string; projectName: string; stageId?: string; stageName?: string; taskId?: string; taskName?: string }>;
-    hits: Array<{ id: string; snippet: string; score: number; anchor: { pageNo?: number; sheetName?: string; cellRange?: string; paragraphId?: string; bbox?: number[]; startTimeMs?: number; endTimeMs?: number; section?: string; rowNumber?: number; columnName?: string } }>;
+    relatedProjects: Array<{
+      projectId: string;
+      projectCode: string;
+      projectName: string;
+      stageId?: string;
+      stageName?: string;
+      taskId?: string;
+      taskName?: string;
+    }>;
+    hits: Array<{
+      id: string;
+      snippet: string;
+      score: number;
+      anchor: {
+        pageNo?: number;
+        sheetName?: string;
+        cellRange?: string;
+        paragraphId?: string;
+        bbox?: number[];
+        startTimeMs?: number;
+        endTimeMs?: number;
+        section?: string;
+        rowNumber?: number;
+        columnName?: string;
+      };
+    }>;
   }>;
 }
 
@@ -103,15 +127,21 @@ export function parseAssistantSseData(data: string): unknown {
 
 export const assistantApi = {
   async capabilities() {
-    const response = await httpClient.get<ApiResponse<AssistantCapabilities>>('/api/v1/assistant/capabilities');
+    const response = await httpClient.get<ApiResponse<AssistantCapabilities>>(
+      '/api/v1/assistant/capabilities',
+    );
     return response.data.data;
   },
   async conversation(id: string) {
-    const response = await httpClient.get<ApiResponse<ConversationView>>(`/api/v1/assistant/conversations/${id}`);
+    const response = await httpClient.get<ApiResponse<ConversationView>>(
+      `/api/v1/assistant/conversations/${id}`,
+    );
     return response.data.data;
   },
   async conversations() {
-    const response = await httpClient.get<ApiResponse<ConversationMeta[]>>('/api/v1/assistant/conversations');
+    const response = await httpClient.get<ApiResponse<ConversationMeta[]>>(
+      '/api/v1/assistant/conversations',
+    );
     return response.data.data;
   },
   async renameConversation(id: string, title: string) {
@@ -120,8 +150,18 @@ export const assistantApi = {
   async deleteConversation(id: string) {
     await httpClient.delete(`/api/v1/assistant/conversations/${id}`);
   },
-  async fileSearch(input: { query: string; aiOnly?: boolean; limit?: number; knowledgeCategoryIds?: string[]; dataCategoryIds?: string[]; projectId?: string }) {
-    const response = await httpClient.post<ApiResponse<FileSearchResult>>('/api/v1/search/files', input);
+  async fileSearch(input: {
+    query: string;
+    aiOnly?: boolean;
+    limit?: number;
+    knowledgeCategoryIds?: string[];
+    dataCategoryIds?: string[];
+    projectId?: string;
+  }) {
+    const response = await httpClient.post<ApiResponse<FileSearchResult>>(
+      '/api/v1/search/files',
+      input,
+    );
     return response.data.data;
   },
   async stream(
@@ -134,17 +174,24 @@ export const assistantApi = {
     onDone: (response: AssistantResponse) => void,
     onStage?: (event: string, data: unknown) => void,
   ) {
-    const requestStream = async (csrfToken: string) => fetch(`${appEnv.apiBaseUrl}/api/v1/assistant/qa/stream`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: {
-        Accept: 'text/event-stream',
-        'Content-Type': 'application/json',
-        'X-Request-Id': generateUUID(),
-        'X-XSRF-TOKEN': csrfToken,
-      },
-      body: JSON.stringify({ question, conversationId, knowledgeCategoryIds, dataCategoryIds, webSearchEnabled }),
-    });
+    const requestStream = async (csrfToken: string) =>
+      fetch(`${appEnv.apiBaseUrl}/api/v1/assistant/qa/stream`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          Accept: 'text/event-stream',
+          'Content-Type': 'application/json',
+          'X-Request-Id': generateUUID(),
+          'X-XSRF-TOKEN': csrfToken,
+        },
+        body: JSON.stringify({
+          question,
+          conversationId,
+          knowledgeCategoryIds,
+          dataCategoryIds,
+          webSearchEnabled,
+        }),
+      });
     let csrfToken = await ensureCsrfToken();
     let response = await requestStream(csrfToken);
     if (!response.ok || !response.body) {
@@ -153,18 +200,34 @@ export const assistantApi = {
       let code = 'AI_REQUEST_FAILED';
       let traceId: string | undefined;
       try {
-        const payload = JSON.parse(await response.text()) as { message?: string; code?: string; traceId?: string };
+        const payload = JSON.parse(await response.text()) as {
+          message?: string;
+          code?: string;
+          traceId?: string;
+        };
         if (payload.message) message = payload.message;
         if (payload.code) code = payload.code;
         traceId = payload.traceId;
-      } catch { /* 保留 HTTP 状态提示 */ }
+      } catch {
+        /* 保留 HTTP 状态提示 */
+      }
       if (response.status === 403 && code === 'CSRF_TOKEN_INVALID') {
         csrfToken = await refreshCsrfToken();
         response = await requestStream(csrfToken);
         if (response.ok && response.body) {
           // Continue with the retried stream below.
         } else {
-          throw new AssistantRequestError('页面安全令牌已失效，请刷新页面后重试', 'CSRF_TOKEN_INVALID', response.status, traceId);
+          // A token that remains invalid after refreshing means the current
+          // session can no longer be trusted. Clear the auth state so the
+          // route guard sends the user to login instead of rendering a
+          // misleading assistant error message.
+          notifyAuthRequired();
+          throw new AssistantRequestError(
+            '登录状态已失效，请重新登录。',
+            'AUTH_REQUIRED',
+            response.status,
+            traceId,
+          );
         }
       } else {
         throw new AssistantRequestError(message, code, response.status, traceId);
@@ -187,27 +250,41 @@ export const assistantApi = {
         if (!data) continue;
         const parsed = parseAssistantSseData(data);
         if (event === 'error') {
-          const errorPayload = parsed && typeof parsed === 'object' ? parsed as {
-            message?: unknown;
-            code?: unknown;
-            requestId?: unknown;
-            traceId?: unknown;
-          } : {};
+          const errorPayload =
+            parsed && typeof parsed === 'object'
+              ? (parsed as {
+                  message?: unknown;
+                  code?: unknown;
+                  requestId?: unknown;
+                  traceId?: unknown;
+                })
+              : {};
+          const errorCode =
+            typeof errorPayload.code === 'string' ? errorPayload.code : 'AI_REQUEST_FAILED';
+          if (errorCode === 'AUTH_REQUIRED' || errorCode === 'CSRF_TOKEN_INVALID') {
+            notifyAuthRequired();
+          }
           throw new AssistantRequestError(
             typeof errorPayload.message === 'string' ? errorPayload.message : 'AI 问答失败',
-            typeof errorPayload.code === 'string' ? errorPayload.code : 'AI_REQUEST_FAILED',
+            errorCode,
             undefined,
             typeof errorPayload.traceId === 'string'
               ? errorPayload.traceId
-              : typeof errorPayload.requestId === 'string' ? errorPayload.requestId : undefined,
+              : typeof errorPayload.requestId === 'string'
+                ? errorPayload.requestId
+                : undefined,
           );
         }
         if (event === 'token') {
-          const token = typeof parsed === 'string'
-            ? parsed
-            : parsed && typeof parsed === 'object' && 'delta' in parsed && typeof parsed.delta === 'string'
-              ? parsed.delta
-              : '';
+          const token =
+            typeof parsed === 'string'
+              ? parsed
+              : parsed &&
+                  typeof parsed === 'object' &&
+                  'delta' in parsed &&
+                  typeof parsed.delta === 'string'
+                ? parsed.delta
+                : '';
           if (token) onToken(token);
         }
         if (event === 'done') onDone(parsed as AssistantResponse);

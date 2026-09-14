@@ -9,7 +9,7 @@ import {
 } from '@ant-design/icons';
 import { App, Button, Checkbox, Collapse, Space, Tag, Typography } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 import {
   AiConversationWorkspace,
@@ -93,12 +93,6 @@ function assistantFailure(error: unknown): string {
   if (code === 'AI_PERMISSION_DENIED' || code === 'PERMISSION_DENIED') {
     return '当前账号没有使用 AI 问答的权限，请联系系统管理员开通。';
   }
-  if (code === 'CSRF_TOKEN_INVALID') {
-    return '页面安全令牌已失效，请刷新页面后重试。';
-  }
-  if (code === 'AUTH_REQUIRED') {
-    return '登录状态已失效，请重新登录后再试。';
-  }
   if (code === 'AI_MODEL_NOT_CONFIGURED' || code === 'AI_NOT_CONFIGURED') {
     return 'AI 模型网关尚未配置，暂时无法生成回答。';
   }
@@ -121,6 +115,13 @@ function assistantFailure(error: unknown): string {
     return '请求被安全策略拒绝，请刷新页面后重试；如仍失败请联系管理员。';
   }
   return error instanceof Error ? error.message : 'AI 问答失败，请稍后重试。';
+}
+
+function isAuthenticationFailure(error: unknown) {
+  if (!(error instanceof AssistantRequestError || error instanceof HttpError)) return false;
+  return (
+    error.status === 401 || error.code === 'AUTH_REQUIRED' || error.code === 'CSRF_TOKEN_INVALID'
+  );
 }
 
 function renderAssistantContent(
@@ -164,55 +165,56 @@ function renderAssistantContent(
               const citation = group.citation;
               const external = citation.sourceType === 'EXTERNAL_REFERENCE';
               return (
-              <div
-                className="ai-message-citation-row"
-                key={group.key}
-              >
-                {external ? <GlobalOutlined aria-hidden="true" /> : <FileTextOutlined aria-hidden="true" />}
-                <button
-                  type="button"
-                  className="ai-message-citation-title"
-                  disabled={!citation.documentId && !citation.fileObjectId && !citation.url}
-                  onClick={() => {
-                    if (citation.documentId)
-                      navigate(`/knowledge/documents/${citation.documentId}`);
-                    else if (citation.fileObjectId) navigate('/data/view');
-                    else if (citation.url) {
-                      const opened = window.open(citation.url, '_blank', 'noopener,noreferrer');
-                      if (opened) opened.opener = null;
-                    }
-                  }}
-                >
-                  <span className="ai-message-citation-name">
-                    {citation.title || citation.originalName || '来源文件'}
-                  </span>
-                  <span className="ai-message-citation-summary">
-                    {external
-                      ? ` · 互联网来源${citation.siteName ? ` · ${citation.siteName}` : ''}`
-                      : `${citationPagesLabel(group.pages)}${citationEvidenceLabel(group.evidenceCount)}`}
-                  </span>
-                </button>
-                {hasOriginalFile(citation) && (
-                  <div className="ai-message-citation-actions">
-                    <Button
-                      size="small"
-                      type="text"
-                      icon={<EyeOutlined />}
-                      onClick={() => onPreview(citation)}
-                    >
-                      预览
-                    </Button>
-                    <Button
-                      size="small"
-                      type="text"
-                      icon={<DownloadOutlined />}
-                      onClick={() => onDownload(citation)}
-                    >
-                      下载
-                    </Button>
-                  </div>
-                )}
-              </div>
+                <div className="ai-message-citation-row" key={group.key}>
+                  {external ? (
+                    <GlobalOutlined aria-hidden="true" />
+                  ) : (
+                    <FileTextOutlined aria-hidden="true" />
+                  )}
+                  <button
+                    type="button"
+                    className="ai-message-citation-title"
+                    disabled={!citation.documentId && !citation.fileObjectId && !citation.url}
+                    onClick={() => {
+                      if (citation.documentId)
+                        navigate(`/knowledge/documents/${citation.documentId}`);
+                      else if (citation.fileObjectId) navigate('/data/view');
+                      else if (citation.url) {
+                        const opened = window.open(citation.url, '_blank', 'noopener,noreferrer');
+                        if (opened) opened.opener = null;
+                      }
+                    }}
+                  >
+                    <span className="ai-message-citation-name">
+                      {citation.title || citation.originalName || '来源文件'}
+                    </span>
+                    <span className="ai-message-citation-summary">
+                      {external
+                        ? ` · 互联网来源${citation.siteName ? ` · ${citation.siteName}` : ''}`
+                        : `${citationPagesLabel(group.pages)}${citationEvidenceLabel(group.evidenceCount)}`}
+                    </span>
+                  </button>
+                  {hasOriginalFile(citation) && (
+                    <div className="ai-message-citation-actions">
+                      <Button
+                        size="small"
+                        type="text"
+                        icon={<EyeOutlined />}
+                        onClick={() => onPreview(citation)}
+                      >
+                        预览
+                      </Button>
+                      <Button
+                        size="small"
+                        type="text"
+                        icon={<DownloadOutlined />}
+                        onClick={() => onDownload(citation)}
+                      >
+                        下载
+                      </Button>
+                    </div>
+                  )}
+                </div>
               );
             })}
           </div>
@@ -225,6 +227,7 @@ function renderAssistantContent(
 export function AssistantPage() {
   const { message: toast } = App.useApp();
   const navigate = useNavigate();
+  const location = useLocation();
   const [question, setQuestion] = useState('');
   const [conversationId, setConversationId] = useState<string>();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -250,20 +253,24 @@ export function AssistantPage() {
       assistantApi.capabilities().catch(() => ({ webSearchAvailable: false })),
     ])
       .then(([conversationList, knowledgeList, dataList, sourcePage, capabilities]) => {
-        const categorizedSourceCount = dataList.reduce((total, item) => total + item.sourceCount, 0);
+        const categorizedSourceCount = dataList.reduce(
+          (total, item) => total + item.sourceCount,
+          0,
+        );
         const uncategorizedSourceCount = Math.max(0, sourcePage.total - categorizedSourceCount);
-        const assistantDataList = uncategorizedSourceCount > 0
-          ? [
-              ...dataList,
-              {
-                id: UNCATEGORIZED_DATA_SCOPE_ID,
-                name: '未分类',
-                description: '尚未归入数据分类的来源文件',
-                sortOrder: Number.MAX_SAFE_INTEGER,
-                sourceCount: uncategorizedSourceCount,
-              },
-            ]
-          : dataList;
+        const assistantDataList =
+          uncategorizedSourceCount > 0
+            ? [
+                ...dataList,
+                {
+                  id: UNCATEGORIZED_DATA_SCOPE_ID,
+                  name: '未分类',
+                  description: '尚未归入数据分类的来源文件',
+                  sortOrder: Number.MAX_SAFE_INTEGER,
+                  sourceCount: uncategorizedSourceCount,
+                },
+              ]
+            : dataList;
         setConversations(conversationList);
         setKnowledgeCategories(knowledgeList);
         setDataCategories(assistantDataList);
@@ -370,6 +377,13 @@ export function AssistantPage() {
         },
       );
     } catch (error) {
+      if (isAuthenticationFailure(error)) {
+        navigate('/login', {
+          replace: true,
+          state: { from: `${location.pathname}${location.search}` },
+        });
+        return;
+      }
       const failure = assistantFailure(error);
       setMessages((current) =>
         current.map((item, itemIndex) =>
@@ -674,7 +688,7 @@ export function AssistantPage() {
         messages={viewMessages}
         scopeContent={scopeContent}
         composerTopContent={composerScopeContent}
-        composerActions={(
+        composerActions={
           <Button
             icon={<GlobalOutlined />}
             type={webSearchEnabled ? 'primary' : 'default'}
@@ -686,7 +700,7 @@ export function AssistantPage() {
           >
             联网搜索
           </Button>
-        )}
+        }
         scopeSummary={
           <Typography.Text type="secondary">
             {allAuthorizedSelected

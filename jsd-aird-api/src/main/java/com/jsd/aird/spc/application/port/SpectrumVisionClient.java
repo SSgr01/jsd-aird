@@ -15,7 +15,17 @@ public interface SpectrumVisionClient {
 
     boolean isConfigured();
 
-    VisionResult analyze(VisionRequest request);
+    default VisionResult analyze(VisionRequest request) {
+        return analyze(request, StreamObserver.NOOP);
+    }
+
+    VisionResult analyze(VisionRequest request, StreamObserver observer);
+
+    interface StreamObserver {
+        StreamObserver NOOP = new StreamObserver() { };
+
+        default void onOutputTextDelta(String delta) { }
+    }
 
     record VisionRequest(String prompt, List<VisionImage> images, String scenarioTemplate) { }
 

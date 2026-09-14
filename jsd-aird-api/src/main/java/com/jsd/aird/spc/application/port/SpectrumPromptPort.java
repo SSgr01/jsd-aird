@@ -6,8 +6,8 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 
 public interface SpectrumPromptPort {
 
-    String GENERIC_VERSION = "spectrum-chat-v1";
-    String COMPETITOR_VERSION = "competitor-decomposition-v1";
+    String GENERIC_VERSION = "spectrum-chat-v2-responses";
+    String COMPETITOR_VERSION = "competitor-decomposition-v2-responses";
 
     String build(SpectrumAnalysisPromptContext context);
 

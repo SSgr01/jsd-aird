@@ -52,12 +52,27 @@ export interface SpectrumCitation {
   title: string;
   region?: string;
 }
+export type SpectrumAnswerIntent =
+  | 'ATTRIBUTION'
+  | 'COMPARISON'
+  | 'FEATURE_INTERPRETATION'
+  | 'VALIDATION'
+  | 'OVERVIEW';
+export interface SpectrumResultPresentation {
+  version: number;
+  primaryIntent: SpectrumAnswerIntent;
+  conclusion: string;
+  keyFindings: string[];
+  validationSteps: string[];
+  detailSectionKeys: string[];
+}
 export interface SpectrumResult {
   analysisStatus?: 'SUCCEEDED' | 'PARTIAL' | 'FAILED';
   errorMessage?: string;
   answerMarkdown?: string;
   observations?: unknown[];
   comparisons?: unknown[];
+  peakMappings?: unknown[];
   candidateInterpretations?: unknown[];
   unmatchedFeatures?: unknown[];
   overlapCandidates?: unknown[];
@@ -75,6 +90,7 @@ export interface SpectrumResult {
     statement?: string;
   };
   conclusionBoundary?: string;
+  presentation?: SpectrumResultPresentation;
   [key: string]: unknown;
 }
 export interface SpectrumMessage {

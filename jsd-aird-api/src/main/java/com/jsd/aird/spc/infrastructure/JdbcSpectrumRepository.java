@@ -311,14 +311,17 @@ public class JdbcSpectrumRepository implements SpectrumRepository {
 
     @Override
     public void updateAnalysisFinished(UUID organizationId, UUID analysisId, String status, String resultJson,
-                                       String rawResponseJson, String warningJson, String errorMessage) {
+                                       String rawResponseJson, String warningJson, String errorMessage,
+                                       String actualModel, String actualPromptVersion) {
         jdbc.update("""
                 UPDATE spc.analysis_run SET status = ?, progress = ?, current_stage = ?, result_jsonb = ?,
-                    raw_response_jsonb = ?, warning_jsonb = ?, error_message = ?, completed_at = now()
+                    raw_response_jsonb = ?, warning_jsonb = ?, error_message = ?, model = ?, prompt_version = ?,
+                    completed_at = now()
                 WHERE organization_id = ? AND id = ?
                 """, status, "SUCCEEDED".equals(status) || "PARTIAL".equals(status) ? 100 : 0,
                 "SUCCEEDED".equals(status) || "PARTIAL".equals(status) ? "COMPLETED" : "FAILED",
-                json(resultJson), json(rawResponseJson), json(warningJson), errorMessage, organizationId, analysisId);
+                json(resultJson), json(rawResponseJson), json(warningJson), errorMessage,
+                actualModel, actualPromptVersion, organizationId, analysisId);
     }
 
     @Override

@@ -38,7 +38,8 @@ public interface SpectrumRepository {
     void updateAnalysisStarted(UUID organizationId, UUID analysisId, String stage);
     void updateAnalysisProgress(UUID organizationId, UUID analysisId, int progress, String stage);
     void updateAnalysisFinished(UUID organizationId, UUID analysisId, String status, String resultJson,
-                                 String rawResponseJson, String warningJson, String errorMessage);
+                                 String rawResponseJson, String warningJson, String errorMessage,
+                                 String actualModel, String actualPromptVersion);
     long appendAnalysisEvent(UUID organizationId, UUID analysisId, String eventType, String payloadJson);
     List<AnalysisEventRow> listAnalysisEvents(UUID organizationId, UUID analysisId, long afterId, int limit);
 

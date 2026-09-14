@@ -35,12 +35,25 @@ import {
   type SpectrumChart,
   type SpectrumMessage,
   type SpectrumResult,
+  type SpectrumResultPresentation,
   type SpectrumSession,
 } from '@/services/spectrum';
+import {
+  isRepeatedSpectrumText,
+  remainingSpectrumDetails,
+  resolveSpectrumPresentation,
+} from './spectrum-result-presentation';
 
 const competitorQuestion = /竞品|单峰|叠加|可靠参考|明确归因|官能团|成分/;
 const wait = (milliseconds: number) =>
   new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+const findingLabels: Record<SpectrumResultPresentation['primaryIntent'], string> = {
+  ATTRIBUTION: '归因依据',
+  COMPARISON: '主要差异',
+  FEATURE_INTERPRETATION: '特征解释',
+  VALIDATION: '判断依据',
+  OVERVIEW: '主要观察',
+};
 const resultFieldLabels: Record<string, string> = {
   evidence: '依据',
   confidence: '置信度',
@@ -54,12 +67,52 @@ const resultFieldLabels: Record<string, string> = {
   candidateComponent: '候选成分',
   functionalGroup: '可能官能团',
   overlapReason: '叠加原因',
+  feature: '图谱特征',
+  region: '区域',
+  description: '说明',
+  observation: '观察结果',
+  comparison: '差异说明',
+  possibleInterpretation: '可能解释',
+  reason: '判断依据',
+  experiment: '验证实验',
+  purpose: '验证目的',
+  samplePeak: '样品峰',
+  referencePeak: '参考峰',
+  deviation: '偏差',
+  supportLevel: '支持度',
+  possibleOverlap: '可能叠加',
 };
-const evidenceSufficiencyLabels: Record<string, string> = {
+const structuredValueLabels: Record<string, string> = {
+  LOW: '低',
+  MEDIUM: '中等',
+  HIGH: '高',
   SUFFICIENT: '证据较充分',
   PARTIALLY_SUFFICIENT: '证据部分充分',
   INSUFFICIENT: '证据不足',
+  INSUFFICIENT_FOR_MAPPING: '不足以建立峰位映射',
+  INSUFFICIENT_FOR_INTERPRETATION: '不足以解释',
+  SUFFICIENT_FOR_POSSIBLE_INTERPRETATION_ONLY: '仅支持候选解释',
 };
+const boundaryLabels: Record<string, string> = {
+  POSSIBLE_INTERPRETATIONS_ONLY_NO_DEFINITIVE_FORMULA: '仅支持候选解释，不能据此确定配方或唯一化学归因。',
+};
+const hiddenResultFields = new Set([
+  'evidenceId',
+  'evidenceIds',
+  'referenceChartId',
+  'referenceChartIds',
+]);
+const itemTitleFields = [
+  'feature',
+  'region',
+  'peak',
+  'peakPosition',
+  'samplePeak',
+  'candidateComponent',
+  'functionalGroup',
+  'title',
+  'name',
+];
 
 function printValue(value: unknown) {
   if (value === undefined || value === null || value === '') return '';
@@ -93,11 +146,20 @@ function fieldLabel(key: string) {
   );
 }
 
+function visibleObjectEntries(value: Record<string, unknown>, excluded: string[] = []) {
+  return Object.entries(value).filter(
+    ([key]) => !hiddenResultFields.has(key) && !excluded.includes(key),
+  );
+}
+
 function StructuredValue({ value }: { value: unknown }) {
   if (typeof value === 'string') {
     const structured = parseStructuredObject(value);
     if (structured) return <StructuredValue value={structured} />;
+    const localized = structuredValueLabels[value.trim().toUpperCase()];
+    if (localized) return <MarkdownContent value={localized} />;
   }
+  if (typeof value === 'boolean') return <MarkdownContent value={value ? '是' : '否'} />;
   if (isUnknownArray(value)) {
     return (
       <ul className="spectrum-result-nested-list">
@@ -112,7 +174,7 @@ function StructuredValue({ value }: { value: unknown }) {
   if (isRecord(value)) {
     return (
       <div className="spectrum-result-nested">
-        {Object.entries(value).map(([key, item]) => (
+        {visibleObjectEntries(value).map(([key, item]) => (
           <div key={key} className="spectrum-result-field spectrum-result-field-nested">
             <Typography.Text type="secondary">{fieldLabel(key)}</Typography.Text>
             <StructuredValue value={item} />
@@ -124,7 +186,7 @@ function StructuredValue({ value }: { value: unknown }) {
   return <MarkdownContent value={printValue(value)} />;
 }
 
-function StructuredResultItem({ item, index }: { item: unknown; index: number }) {
+function StructuredResultItem({ item }: { item: unknown }) {
   const object = parseStructuredObject(item);
   if (!object)
     return (
@@ -132,17 +194,23 @@ function StructuredResultItem({ item, index }: { item: unknown; index: number })
         <StructuredValue value={item} />
       </div>
     );
+  const titleKey = itemTitleFields.find((key) => {
+    const value = object[key];
+    return (typeof value === 'string' || typeof value === 'number') && String(value).trim();
+  });
+  const title = titleKey ? String(object[titleKey]) : '';
+  const entries = visibleObjectEntries(object, titleKey ? [titleKey] : []);
   return (
     <article className="spectrum-result-item-card">
-      <div className="spectrum-result-item-index">分析项 {index + 1}</div>
-      <div className="spectrum-result-fields">
-        {Object.entries(object).map(([key, value]) => (
+      {title ? <div className="spectrum-result-item-title">{title}</div> : null}
+      {entries.length ? <div className="spectrum-result-fields">
+        {entries.map(([key, value]) => (
           <div key={key} className="spectrum-result-field">
             <Typography.Text type="secondary">{fieldLabel(key)}</Typography.Text>
             <StructuredValue value={value} />
           </div>
         ))}
-      </div>
+      </div> : null}
     </article>
   );
 }
@@ -154,7 +222,7 @@ function ResultSection({ title, value }: { title: string; value: unknown }) {
       <Typography.Text strong>{title}</Typography.Text>
       <div className="spectrum-result-list">
         {value.map((item, index) => (
-          <StructuredResultItem key={`result-item-${index}`} item={item} index={index} />
+          <StructuredResultItem key={`result-item-${index}`} item={item} />
         ))}
       </div>
     </div>
@@ -210,7 +278,7 @@ function PeakMappingTable({ value }: { value: unknown }) {
   );
 }
 
-function AssistantResult({
+export function AssistantResult({
   result,
   fallbackContent,
   warnings,
@@ -223,16 +291,19 @@ function AssistantResult({
   citations: SpectrumMessage['citations'];
   onPreview: (chartId: string) => void;
 }) {
-  const confidence = printValue(result.confidence);
   const failed = result.analysisStatus === 'FAILED';
   const partial = result.analysisStatus === 'PARTIAL';
-  const hasReferenceAnalysis = Boolean(result.referenceAvailability);
-  const hasSinglePeakReferences = result.referenceAvailability?.hasSinglePeakReferences === true;
-  const mappingStatement =
-    result.referenceAvailability?.statement ||
-    '当前材料不足以建立样品峰与单峰参考峰的映射，只能描述谱形相似性。';
-  const summaryObject = parseStructuredObject(result.answerMarkdown);
-  const detailSections = [
+  const presentation = resolveSpectrumPresentation(result, fallbackContent);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  useEffect(() => {
+    setDetailsOpen(false);
+  }, [presentation.conclusion, presentation.version]);
+  const displayedTexts = [
+    presentation.conclusion,
+    ...presentation.keyFindings,
+    ...presentation.validationSteps,
+  ];
+  const rawDetailSections = [
     ['observations', '主要观察结果', result.observations],
     ['comparisons', '整体谱形与批次差异', result.comparisons],
     ['candidateInterpretations', '候选特征、基团或成分解释', result.candidateInterpretations],
@@ -246,9 +317,35 @@ function AssistantResult({
         : result.uncertainty,
     ],
     ['suggestedValidationExperiments', '建议验证实验', result.suggestedValidationExperiments],
-    ['evidence', '分析依据', result.evidence],
     ['testConditionLimitations', '测试条件限制', result.testConditionLimitations],
-  ].filter(([, , value]) => isUnknownArray(value) && value.length) as [string, string, unknown][];
+    ['aiReviewFocus', 'AI 建议复核重点', result.aiReviewFocus],
+  ] as [string, string, unknown][];
+  const detailSections = rawDetailSections
+    .filter(([key]) => presentation.detailSectionKeys.includes(key))
+    .map(([key, title, value]) => [
+      key,
+      key === 'suggestedValidationExperiments' && presentation.validationSteps.length
+        ? '更多验证实验'
+        : title,
+      isUnknownArray(value) ? remainingSpectrumDetails(value, displayedTexts) : [],
+    ] as [string, string, unknown[]])
+    .filter(([, , value]) => value.length);
+  const mappingStatement = result.referenceAvailability?.statement || '';
+  const showMappingStatement =
+    result.referenceAvailability?.hasSinglePeakReferences === true &&
+    mappingStatement &&
+    !isRepeatedSpectrumText(mappingStatement, displayedTexts);
+  const boundary = result.conclusionBoundary
+    ? boundaryLabels[result.conclusionBoundary] ||
+      (/^[A-Z0-9_]+$/.test(result.conclusionBoundary) ? '' : result.conclusionBoundary)
+    : '';
+  const showBoundary =
+    boundary &&
+    !result.evidenceSufficiency?.startsWith('INSUFFICIENT') &&
+    !isRepeatedSpectrumText(boundary, displayedTexts);
+  const hasPeakMappings = isUnknownArray(result.peakMappings) && result.peakMappings.length > 0;
+  const hasDetails =
+    hasPeakMappings || detailSections.length > 0 || Boolean(showMappingStatement) || Boolean(showBoundary);
   return (
     <div className="spectrum-result-shell">
       {failed ? (
@@ -261,37 +358,6 @@ function AssistantResult({
           }
         />
       ) : null}
-      {!failed ? (
-        <div className="spectrum-result-status">
-          <div className="spectrum-result-status-main">
-            <div className="spectrum-result-status-copy">
-              <span className="spectrum-result-status-icon" aria-hidden="true">
-                <LineChartOutlined />
-              </span>
-              <div>
-                <Typography.Text strong>图谱分析结果</Typography.Text>
-                <Typography.Paragraph type="secondary">
-                  {partial ? '部分结果已按证据边界过滤' : '分析已完成，结论仅供专业人员复核'}
-                </Typography.Paragraph>
-              </div>
-            </div>
-            <Space wrap>
-              <Tag color={partial ? 'orange' : 'green'}>{partial ? '部分结果' : '已完成'}</Tag>
-              <Tag color="gold">待专业人员复核</Tag>
-              {confidence && <Tag color="blue">置信度：{confidence}</Tag>}
-              {result.evidenceSufficiency && (
-                <Tag>
-                  {evidenceSufficiencyLabels[result.evidenceSufficiency] ||
-                    result.evidenceSufficiency.replaceAll('_', ' ')}
-                </Tag>
-              )}
-            </Space>
-          </div>
-          {hasReferenceAnalysis && hasSinglePeakReferences ? (
-            <Typography.Text type="secondary">{mappingStatement}</Typography.Text>
-          ) : null}
-        </div>
-      ) : null}
       {partial && warnings.length ? (
         <Alert
           type="warning"
@@ -301,53 +367,62 @@ function AssistantResult({
         />
       ) : null}
       {!failed && (
-        <MarkdownContent
-          value={
-            summaryObject
-              ? '模型返回了结构化分析内容，以下展示已通过证据校验的分析项。'
-              : result.answerMarkdown || fallbackContent || '模型未返回有效分析摘要，请重新分析。'
-          }
-        />
+        <section className="spectrum-result-summary" aria-label="分析结论">
+          <MarkdownContent value={presentation.conclusion} />
+        </section>
       )}
-      {!failed && hasReferenceAnalysis && !hasSinglePeakReferences && (
-        <Alert type="info" showIcon message="暂不能建立峰位映射" description={mappingStatement} />
-      )}
-      {!failed && isUnknownArray(result.aiReviewFocus) && result.aiReviewFocus.length ? (
-        <section className="spectrum-result-focus">
-          <div className="spectrum-result-section-heading">
-            <div>
-              <Typography.Text strong>AI建议复核重点</Typography.Text>
-              <Typography.Text type="secondary">
-                这些是待实验或专业人员确认的事项，不代表已完成复核
-              </Typography.Text>
-            </div>
-          </div>
+      {!failed && presentation.keyFindings.length ? (
+        <section className="spectrum-result-key-points">
+          <Typography.Text strong>{findingLabels[presentation.primaryIntent]}</Typography.Text>
           <ul>
-            {result.aiReviewFocus.map((item, index) => (
-              <li key={`focus-${index}`}>
-                <StructuredValue value={item} />
-              </li>
+            {presentation.keyFindings.map((item) => (
+              <li key={item}>{item}</li>
             ))}
           </ul>
         </section>
       ) : null}
-      {!failed && <PeakMappingTable value={result.peakMappings} />}
-      {!failed && detailSections.length ? (
+      {!failed && presentation.validationSteps.length ? (
+        <section className="spectrum-result-validation">
+          <Typography.Text strong>建议验证实验</Typography.Text>
+          <ol>
+            {presentation.validationSteps.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ol>
+        </section>
+      ) : null}
+      {!failed && hasDetails ? (
         <Collapse
           className="spectrum-result-details"
           ghost
-          items={detailSections.map(([key, title, value]) => ({
-            key,
-            label: title,
-            children: <ResultSection title={title} value={value} />,
-          }))}
+          activeKey={detailsOpen ? ['analysis-details'] : []}
+          onChange={(keys) =>
+            setDetailsOpen((Array.isArray(keys) ? keys : [keys]).includes('analysis-details'))
+          }
+          items={[
+            {
+              key: 'analysis-details',
+              label: '查看分析详情',
+              children: (
+                <div className="spectrum-result-detail-body">
+                  {showMappingStatement ? (
+                    <Typography.Text type="secondary">{mappingStatement}</Typography.Text>
+                  ) : null}
+                  {hasPeakMappings ? <PeakMappingTable value={result.peakMappings} /> : null}
+                  {detailSections.map(([key, title, value]) => (
+                    <ResultSection key={key} title={title} value={value} />
+                  ))}
+                  {showBoundary ? (
+                    <Typography.Text type="secondary" className="spectrum-result-boundary">
+                      结论边界：{boundary}
+                    </Typography.Text>
+                  ) : null}
+                </div>
+              ),
+            },
+          ]}
         />
       ) : null}
-      {result.conclusionBoundary && (
-        <Typography.Text type="secondary" className="spectrum-result-boundary">
-          结论边界：{result.conclusionBoundary}
-        </Typography.Text>
-      )}
       {citations.length ? (
         <div className="spectrum-result-citations">
           <Typography.Text strong>依据图谱</Typography.Text>
@@ -379,6 +454,32 @@ function AssistantResult({
   );
 }
 
+export function StreamingSpectrumResult({ answer }: { answer: string }) {
+  return (
+    <div className="spectrum-result-shell spectrum-result-streaming" aria-live="polite">
+      {answer ? (
+        <>
+          <div className="spectrum-streaming-progress" role="status">
+            <Spin size="small" />
+            <div>
+              <Typography.Text strong>完整分析仍在生成</Typography.Text>
+              <Typography.Text type="secondary">
+                以下是已校验的阶段性结论，完整结果完成后会自动更新。
+              </Typography.Text>
+            </div>
+          </div>
+          <section
+            className="spectrum-result-summary spectrum-streaming-answer"
+            aria-label="阶段性分析结论"
+          >
+            <MarkdownContent value={answer} />
+          </section>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 export function SpectrumChatPage() {
   const { message: toast } = App.useApp();
   const navigate = useNavigate();
@@ -395,6 +496,8 @@ export function SpectrumChatPage() {
   const [loading, setLoading] = useState(true);
   const [streaming, setStreaming] = useState(false);
   const [streamStage, setStreamStage] = useState('正在读取图谱文件');
+  const [streamingAssistantId, setStreamingAssistantId] = useState<string>();
+  const [streamAnswer, setStreamAnswer] = useState('');
   const [pageChart, setPageChart] = useState<SpectrumChart>();
   const [pageOptions, setPageOptions] = useState<number[]>([]);
   const [pageValue, setPageValue] = useState<number[]>([]);
@@ -657,11 +760,16 @@ export function SpectrumChatPage() {
     pending:
       item.role === 'ASSISTANT' &&
       streaming &&
+      item.id !== streamingAssistantId &&
       !item.content &&
       !Object.keys(item.result || {}).length,
     content:
       item.role === 'ASSISTANT' ? (
-        Object.keys(item.result || {}).length ? (
+        item.id === streamingAssistantId && streaming ? (
+          streamAnswer ? (
+            <StreamingSpectrumResult answer={streamAnswer} />
+          ) : null
+        ) : Object.keys(item.result || {}).length ? (
           <AssistantResult
             result={item.result}
             fallbackContent={item.content}
@@ -687,6 +795,7 @@ export function SpectrumChatPage() {
     if (!question.trim()) return;
     setStreaming(true);
     setStreamStage('正在读取图谱文件');
+    setStreamAnswer('');
     const optimisticUser: SpectrumMessage = {
       id: `local-user-${Date.now()}`,
       role: 'USER',
@@ -705,6 +814,7 @@ export function SpectrumChatPage() {
       warnings: [],
       createdAt: new Date().toISOString(),
     };
+    setStreamingAssistantId(optimisticAssistant.id);
     setMessages((current) => [...current, optimisticUser, optimisticAssistant]);
     const scenarioTemplate = competitorQuestion.test(question)
       ? 'COMPETITOR_DECOMPOSITION'
@@ -729,7 +839,15 @@ export function SpectrumChatPage() {
           }
           if (event === 'error' && data && typeof data === 'object') {
             const error = data as { message?: unknown };
+            setStreamAnswer('');
             if (typeof error.message === 'string') setStreamStage(error.message);
+          }
+          if (event === 'answer_delta' && data && typeof data === 'object') {
+            const answerDelta = data as { delta?: unknown };
+            const delta = answerDelta.delta;
+            if (typeof delta === 'string') {
+              setStreamAnswer((current) => current + delta);
+            }
           }
         });
       } catch {
@@ -738,7 +856,7 @@ export function SpectrumChatPage() {
       let analysis = await spectrumApi.analysis(submitted.analysisRunId);
       for (
         let attempt = 0;
-        attempt < 80 && !['SUCCEEDED', 'PARTIAL', 'FAILED', 'CANCELLED'].includes(analysis.status);
+        attempt < 900 && !['SUCCEEDED', 'PARTIAL', 'FAILED', 'CANCELLED'].includes(analysis.status);
         attempt += 1
       ) {
         await wait(1000);
@@ -767,6 +885,8 @@ export function SpectrumChatPage() {
       );
     } finally {
       setStreaming(false);
+      setStreamingAssistantId(undefined);
+      setStreamAnswer('');
       setStreamStage('正在读取图谱文件');
     }
   };

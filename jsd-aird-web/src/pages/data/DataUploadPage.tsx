@@ -77,7 +77,7 @@ export function DataUploadPage() {
     void dataApi.listCategories().then(setCategories).catch(() => setCategories([]));
   }, []);
 
-  const loadJobs = useCallback(async () => {
+  const loadJobs = useCallback(async (_options: { silent?: boolean } = {}) => {
     setJobsLoading(true);
     try {
       const page = await dataApi.listJobs({
@@ -88,7 +88,7 @@ export function DataUploadPage() {
       });
       setJobs({ items: page.items, page: page.page, size: page.size, total: page.total });
     } catch (error) {
-      void message.error(error instanceof Error ? error.message : '导入任务加载失败');
+      if (!_options.silent) void message.error(error instanceof Error ? error.message : '导入任务加载失败');
     } finally {
       setJobsLoading(false);
     }
@@ -99,7 +99,7 @@ export function DataUploadPage() {
   useEffect(() => {
     const hasActiveJob = jobs.items.some((job) => !['COMPLETED', 'FAILED', 'CANCELLED'].includes(job.status));
     if (!hasActiveJob) return undefined;
-    const timer = window.setInterval(() => void loadJobs(), 3000);
+    const timer = window.setInterval(() => void loadJobs({ silent: true }), 3000);
     return () => window.clearInterval(timer);
   }, [jobs.items, loadJobs]);
 
@@ -210,7 +210,7 @@ export function DataUploadPage() {
       onSearchChange={(value) => { setJobKeyword(value); setJobs((current) => ({ ...current, page: 1 })); }}
       searchPlaceholder="搜索文件名称"
       records={records}
-      recordsLoading={jobsLoading}
+      recordsLoading={jobsLoading && jobs.items.length === 0}
       pagination={{ current: jobs.page, pageSize: jobs.size, total: jobs.total }}
       onPageChange={(page, pageSize) => setJobs((current) => ({ ...current, page, size: pageSize }))}
       />

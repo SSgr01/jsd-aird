@@ -30,6 +30,7 @@ import {
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
+import { AiEmployeePanel } from '@/components/ai-employee';
 import { readFieldModel, writeFieldModel } from '@/features/template-workspace/field-model';
 import { createCustomFieldWorkspace } from '@/features/template-workspace/custom-field-operations';
 import { getAtPath, setAtPath } from '@/features/template-workspace/path-utils';
@@ -378,6 +379,7 @@ export function ProductionWorkspacePage() {
   if (!workspace || !snapshot || !fieldModel) return <Skeleton active paragraph={{ rows: 14 }} />;
 
   return (
+    <div className="production-workspace-host">
     <section className="workspace-shell production-workspace">
       <header className="workspace-header">
         <Space className="production-workspace-identity" wrap>
@@ -670,6 +672,8 @@ export function ProductionWorkspacePage() {
         ) : null}
       </Modal>
     </section>
+    <AiEmployeePanel standalone />
+    </div>
   );
 }
 

@@ -66,7 +66,7 @@ interface CreateFormValues {
   stageId?: string;
   taskId?: string;
   format: 'WORD' | 'EXCEL';
-  sourceType: 'BLANK' | 'TEMPLATE';
+  sourceType: 'BLANK' | 'TEMPLATE' | 'UPLOAD';
   visibility: string;
   templateVersionId?: string;
   effectiveFrom?: dayjs.Dayjs;
@@ -254,6 +254,14 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
       .then((x) => setTemplates(x.items.filter((item) => matchesResearchTestTemplate(item, type))));
   };
   const submit = async () => {
+    // File imports use the dedicated upload workflow. Keep this entry point
+    // available from the create dialog without attempting to create a blank
+    // record or validating fields that belong to the editor workflow.
+    if (form.getFieldValue('sourceType') === 'UPLOAD') {
+      setOpen(false);
+      nav(report ? '/research-test/upload' : '/research-test/standard-upload');
+      return;
+    }
     setSubmitting(true);
     try {
       const v = await form.validateFields();
@@ -269,11 +277,8 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
         templateHash = w.snapshotHash ?? w.workspaceHash;
         if (!templateSnapshot) throw new Error('所选模板没有可用的文档内容');
       }
-      const format: 'WORD' | 'EXCEL' = selected?.format === 'XLSX'
-        ? 'EXCEL'
-        : selected?.format === 'DOCX'
-          ? 'WORD'
-          : v.format;
+      const format: 'WORD' | 'EXCEL' =
+        selected?.format === 'XLSX' ? 'EXCEL' : selected?.format === 'DOCX' ? 'WORD' : v.format;
       const result = await createResearchTest(type, {
         ...v,
         ...(report
@@ -347,14 +352,18 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
       setRenameDate(report && summary.businessDate ? dayjs(summary.businessDate) : undefined);
       setRenameCategory(report ? '' : summary.category || '');
       setRenameScope(report ? '' : summary.applicableScope || '');
-      setRenameEffectiveFrom(!report && detail.effectiveFrom ? dayjs(detail.effectiveFrom) : undefined);
+      setRenameEffectiveFrom(
+        !report && detail.effectiveFrom ? dayjs(detail.effectiveFrom) : undefined,
+      );
       setRenameEffectiveTo(!report && detail.effectiveTo ? dayjs(detail.effectiveTo) : undefined);
       setRenameProjectId(report ? summary.projectId : undefined);
       setRenameStageId(report ? summary.stageId : undefined);
       setRenameTaskId(report ? summary.taskId : undefined);
       if (report) void loadRenameRelations(summary.projectId, summary.stageId);
     } catch (error) {
-      message.error(error instanceof Error ? error.message : `${report ? '报告' : '测试标准'}信息加载失败`);
+      message.error(
+        error instanceof Error ? error.message : `${report ? '报告' : '测试标准'}信息加载失败`,
+      );
       setRenameOpen(false);
     }
   };
@@ -387,7 +396,12 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
       message.warning('请选择生效日期');
       return;
     }
-    if (!report && renameEffectiveFrom && renameEffectiveTo && renameEffectiveTo.isBefore(renameEffectiveFrom, 'day')) {
+    if (
+      !report &&
+      renameEffectiveFrom &&
+      renameEffectiveTo &&
+      renameEffectiveTo.isBefore(renameEffectiveFrom, 'day')
+    ) {
       message.warning('失效日期不能早于生效日期');
       return;
     }
@@ -422,15 +436,18 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
       setRenaming(undefined);
       await load();
     } catch (error) {
-      message.error(error instanceof Error ? error.message : `${report ? '报告' : '测试标准'}信息保存失败`);
+      message.error(
+        error instanceof Error ? error.message : `${report ? '报告' : '测试标准'}信息保存失败`,
+      );
     } finally {
       setRenameSaving(false);
     }
   };
   const selectedRows = useMemo(
-    () => selected
-      .map((id) => rows.find((row) => row.id === id))
-      .filter((row): row is ResearchTestSummary => Boolean(row)),
+    () =>
+      selected
+        .map((id) => rows.find((row) => row.id === id))
+        .filter((row): row is ResearchTestSummary => Boolean(row)),
     [rows, selected],
   );
   const allSelected = rows.length > 0 && rows.every((row) => selected.includes(row.id));
@@ -463,16 +480,84 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
     const row = selectedRows[0];
     if (row) void openRename(row);
   };
-  const exportSelected = async () => {
+  const exportSelected = () => {
     if (!selectedRows.length) return;
     setExporting(true);
     try {
-      await Promise.all(
-        selectedRows.map((row) =>
-          downloadResearchTest(type, row.id, row.name, row.documentFormat),
-        ),
-      );
-      message.success(`已导出 ${selectedRows.length} 条${report ? '报告' : '测试标准'}`);
+      // 批量导出只导出列表数据，不调用单条记录的文档导出接口。
+      // 行内“下载”仍用于下载当前记录的 Word/Excel 文件。
+      const header = report
+        ? [
+            '报告编号',
+            '报告名称',
+            '所属项目',
+            '阶段',
+            '任务',
+            '负责人',
+            '日期',
+            '使用状态',
+            '文档格式',
+            '来源',
+            '版本',
+          ]
+        : [
+            '标准编号',
+            '标准名称',
+            '标准类别',
+            '适用对象',
+            '发布日期',
+            '使用状态',
+            '文档格式',
+            '来源',
+            '版本',
+          ];
+      const records = selectedRows.map((row) => {
+        const status = statusText[row.status] || row.status;
+        const format = row.documentFormat === 'EXCEL' ? 'Excel' : 'Word';
+        const source =
+          row.sourceType === 'TEMPLATE'
+            ? '模板新建'
+            : row.sourceType === 'UPLOAD'
+              ? '上传'
+              : '空白新建';
+        const version = row.versionNo > 0 ? `V${row.versionNo}` : '';
+        return report
+          ? [
+              row.businessNo,
+              row.name,
+              row.projectName || '',
+              row.stageName || '',
+              row.taskName || '',
+              row.ownerName || '',
+              row.businessDate || '',
+              status,
+              format,
+              source,
+              version,
+            ]
+          : [
+              row.businessNo,
+              row.name,
+              row.category || '',
+              row.applicableScope || '',
+              row.businessDate || '',
+              status,
+              format,
+              source,
+              version,
+            ];
+      });
+      const csv = [header, ...records].map((row) => row.map(csvCell).join(',')).join('\r\n');
+      const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `${report ? '综合测试报告' : '测试标准方法'}列表_${dayjs().format('YYYYMMDD_HHmmss')}.csv`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      message.success(`已导出 ${selectedRows.length} 条${report ? '报告' : '测试标准'}列表数据`);
     } catch (error) {
       message.error(error instanceof Error ? error.message : '导出失败');
     } finally {
@@ -494,7 +579,9 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
       onOk: async () => {
         setDeleting(true);
         try {
-          await Promise.all(deletable.map((row) => deleteResearchTest(type, row.id, row.lockVersion)));
+          await Promise.all(
+            deletable.map((row) => deleteResearchTest(type, row.id, row.lockVersion)),
+          );
           message.success(`已删除 ${deletable.length} 条${report ? '报告' : '测试标准'}`);
           setSelected([]);
           await load();
@@ -508,7 +595,12 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
   };
   const columns = useMemo(
     () => [
-      { title: report ? '报告编号' : '标准编号', dataIndex: 'businessNo', className: report ? undefined : 'research-test-number-column', width: report ? 170 : 145 },
+      {
+        title: report ? '报告编号' : '标准编号',
+        dataIndex: 'businessNo',
+        className: report ? undefined : 'research-test-number-column',
+        width: report ? 170 : 145,
+      },
       {
         title: report ? '报告名称' : '标准名称',
         dataIndex: 'name',
@@ -529,17 +621,19 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
         dataIndex: report ? 'projectName' : 'category',
         className: report ? 'research-test-project-column' : 'research-test-category-column',
         width: report ? 300 : 150,
-        render: (v?: string) => report ? (v || '未关联项目') : (v || '—'),
+        render: (v?: string) => (report ? v || '未关联项目' : v || '—'),
       },
       ...(report
         ? [{ title: '负责人', dataIndex: 'ownerName', width: 110 }]
-        : [{
-            title: '适用对象',
-            dataIndex: 'applicableScope',
-            className: 'research-test-scope-column',
-            width: 220,
-            render: (v?: string) => v || '—',
-          }]),
+        : [
+            {
+              title: '适用对象',
+              dataIndex: 'applicableScope',
+              className: 'research-test-scope-column',
+              width: 220,
+              render: (v?: string) => v || '—',
+            },
+          ]),
       {
         title: report ? '日期' : '发布日期',
         dataIndex: 'businessDate',
@@ -587,7 +681,7 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
                 ).catch((e) => message.error(e instanceof Error ? e.message : '下载失败'))
               }
             >
-              导出
+              下载
             </Button>
             <Popconfirm
               title={`确认删除${report ? '该报告' : '该测试标准'}？`}
@@ -616,7 +710,9 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
     <section className="research-test-page pm-unified-list-page">
       <header className="research-test-head research-test-page-intro">
         <div>
-          <Breadcrumb items={[{ title: '研发测试中心' }, { title: report ? '综合测试报告' : '测试标准方法' }]} />
+          <Breadcrumb
+            items={[{ title: '研发测试中心' }, { title: report ? '综合测试报告' : '测试标准方法' }]}
+          />
           <Typography.Title level={3}>{report ? '综合测试报告' : '测试标准方法'}</Typography.Title>
           <Typography.Text type="secondary">统一管理测试文档、发布版本与审核同步。</Typography.Text>
         </div>
@@ -687,79 +783,81 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
         </Space>
       </Card>
       <div className="research-test-batch-row pm-batch-row">
-          <div className="pm-batch-summary">
-            <span className="pm-selected">已选 {selected.length} 项</span>
-            {selected.length > 0 && (
-              <Button type="link" size="small" onClick={() => setSelected([])}>
-                清除已选
-              </Button>
-            )}
-          </div>
-          <div className="pm-batch-actions">
-            <Button
-              icon={<CopyOutlined />}
-              disabled={!selected.length}
-              loading={copying}
-              onClick={() => void copySelected()}
-            >
-              复制
+        <div className="pm-batch-summary">
+          <span className="pm-selected">已选 {selected.length} 项</span>
+          {selected.length > 0 && (
+            <Button type="link" size="small" onClick={() => setSelected([])}>
+              清除已选
             </Button>
-            <Button
-              icon={<EditOutlined />}
-              onClick={renameSelected}
-            >
-              重命名
-            </Button>
-            <Button
-              icon={<DownloadOutlined />}
-              disabled={!selected.length}
-              loading={exporting}
-              onClick={() => void exportSelected()}
-            >
-              导出
-            </Button>
-            <Button
-              danger
-              icon={<DeleteOutlined />}
-              disabled={!selected.length}
-              loading={deleting}
-              onClick={deleteSelected}
-            >
-              删除
-            </Button>
-            <Button icon={<UploadOutlined />} onClick={() => nav(report ? '/research-test/upload' : '/research-test/standard-upload')}>
-              {report ? '上传报告' : '测试标准上传'}
-            </Button>
-            <Button type="primary" icon={<PlusOutlined />} onClick={showCreate}>
-              {report ? '新增报告' : '新增测试标准'}
-            </Button>
-            <Space.Compact>
-              <Tooltip title="卡片视图">
-                <Button
-                  aria-label="卡片视图"
-                  className={mode === 'card' ? 'pm-view-btn active' : 'pm-view-btn'}
-                  icon={<AppstoreOutlined />}
-                  onClick={() => setMode('card')}
-                />
-              </Tooltip>
-              <Tooltip title="列表视图">
-                <Button
-                  aria-label="列表视图"
-                  className={mode === 'list' ? 'pm-view-btn active' : 'pm-view-btn'}
-                  icon={<UnorderedListOutlined />}
-                  onClick={() => setMode('list')}
-                />
-              </Tooltip>
-            </Space.Compact>
-          </div>
+          )}
+        </div>
+        <div className="pm-batch-actions">
+          <Button
+            icon={<CopyOutlined />}
+            disabled={!selected.length}
+            loading={copying}
+            onClick={() => void copySelected()}
+          >
+            复制
+          </Button>
+          <Button icon={<EditOutlined />} onClick={renameSelected}>
+            重命名
+          </Button>
+          <Button
+            icon={<DownloadOutlined />}
+            disabled={!selected.length}
+            loading={exporting}
+            onClick={() => void exportSelected()}
+          >
+            导出
+          </Button>
+          <Button
+            danger
+            icon={<DeleteOutlined />}
+            disabled={!selected.length}
+            loading={deleting}
+            onClick={deleteSelected}
+          >
+            删除
+          </Button>
+          <Button
+            icon={<UploadOutlined />}
+            onClick={() => nav(report ? '/research-test/upload' : '/research-test/standard-upload')}
+          >
+            {report ? '上传报告' : '测试标准上传'}
+          </Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={showCreate}>
+            {report ? '新增报告' : '新增测试标准'}
+          </Button>
+          <Space.Compact>
+            <Tooltip title="卡片视图">
+              <Button
+                aria-label="卡片视图"
+                className={mode === 'card' ? 'pm-view-btn active' : 'pm-view-btn'}
+                icon={<AppstoreOutlined />}
+                onClick={() => setMode('card')}
+              />
+            </Tooltip>
+            <Tooltip title="列表视图">
+              <Button
+                aria-label="列表视图"
+                className={mode === 'list' ? 'pm-view-btn active' : 'pm-view-btn'}
+                icon={<UnorderedListOutlined />}
+                onClick={() => setMode('list')}
+              />
+            </Tooltip>
+          </Space.Compact>
+        </div>
       </div>
       {mode === 'card' ? (
         <List
           className={report ? 'research-test-report-card-list' : undefined}
           loading={loading}
-          grid={report
-            ? { gutter: 16, xs: 1, sm: 2, md: 3, lg: 4, xl: 5, xxl: 5 }
-            : { gutter: 16, xs: 1, sm: 1, md: 2, lg: 3 }}
+          grid={
+            report
+              ? { gutter: 16, xs: 1, sm: 2, md: 3, lg: 4, xl: 5, xxl: 5 }
+              : { gutter: 16, xs: 1, sm: 1, md: 2, lg: 3 }
+          }
           dataSource={rows}
           pagination={{
             current: page,
@@ -772,16 +870,18 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
               setSize(pageSize);
             },
           }}
-          header={rows.length > 0 ? (
-            <div className="research-test-card-select-all">
-              <Checkbox
-                checked={allSelected}
-                indeterminate={indeterminate}
-                onChange={toggleSelectAll}
-              />
-              <span>全选当前页</span>
-            </div>
-          ) : undefined}
+          header={
+            rows.length > 0 ? (
+              <div className="research-test-card-select-all">
+                <Checkbox
+                  checked={allSelected}
+                  indeterminate={indeterminate}
+                  onChange={toggleSelectAll}
+                />
+                <span>全选当前页</span>
+              </div>
+            ) : undefined
+          }
           renderItem={(r) => (
             <List.Item>
               {report ? (
@@ -800,7 +900,7 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
                   onCopy={() => void copy(r)}
                   onExport={() =>
                     void downloadResearchTest(type, r.id, r.name, r.documentFormat).catch((e) =>
-                      message.error(e instanceof Error ? e.message : '导出失败'),
+                      message.error(e instanceof Error ? e.message : '下载失败'),
                     )
                   }
                   onDelete={() => void remove(r)}
@@ -842,11 +942,11 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
                       type="link"
                       onClick={() =>
                         void downloadResearchTest(type, r.id, r.name, r.documentFormat).catch((e) =>
-                          message.error(e instanceof Error ? e.message : '导出失败'),
+                          message.error(e instanceof Error ? e.message : '下载失败'),
                         )
                       }
                     >
-                      导出
+                      下载
                     </Button>,
                     <Popconfirm
                       key="delete"
@@ -909,7 +1009,11 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
         </div>
       )}
       <Modal
-        rootClassName={report ? 'research-test-create-modal research-test-report-modal' : 'research-test-create-modal'}
+        rootClassName={
+          report
+            ? 'research-test-create-modal research-test-report-modal'
+            : 'research-test-create-modal'
+        }
         open={open}
         title={report ? '新增报告' : '新增测试标准'}
         width={598}
@@ -1020,13 +1124,22 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
                 title: '选择模板新建',
                 desc: `复制已发布模板形成独立${report ? '报告' : '测试标准'}副本`,
               },
+              {
+                key: 'UPLOAD',
+                title: '导入文件',
+                desc: '进入文件上传工作台生成草稿',
+              },
             ]}
             onChange={(value) => {
               form.setFieldValue('sourceType', value);
               form.setFieldValue('templateVersionId', undefined);
             }}
           />
-          {sourceType === 'TEMPLATE' ? (
+          {sourceType === 'UPLOAD' ? (
+            <div className="research-test-import-hint">
+              支持 DOC、DOCX、XLS、XLSX 文件导入，请前往上传页面完成解析。
+            </div>
+          ) : sourceType === 'TEMPLATE' ? (
             <PublishedTemplatePicker
               templates={templates}
               documentName={report ? '报告' : '测试标准'}
@@ -1257,7 +1370,9 @@ function ResearchTestReportCard({
   onDelete: () => void;
 }) {
   return (
-    <article className={selected ? 'research-test-report-card is-selected' : 'research-test-report-card'}>
+    <article
+      className={selected ? 'research-test-report-card is-selected' : 'research-test-report-card'}
+    >
       <div className="research-test-card-head">
         <div className="research-test-card-heading">
           <h4 className="research-test-card-title" title={row.name}>
@@ -1287,21 +1402,38 @@ function ResearchTestReportCard({
         <div className="research-test-card-info-item">
           <span className="research-test-card-info-label">阶段 / 任务</span>
           <strong className="research-test-card-info-value">
-            {row.stageName || '未选择'}{row.taskName ? ` / ${row.taskName}` : ''}
+            {row.stageName || '未选择'}
+            {row.taskName ? ` / ${row.taskName}` : ''}
           </strong>
         </div>
       </div>
       <div className="research-test-card-tags">
-        <Tag color={row.status === 'PUBLISHED' ? 'green' : row.status === 'PENDING_REVIEW' ? 'orange' : 'blue'}>
+        <Tag
+          color={
+            row.status === 'PUBLISHED'
+              ? 'green'
+              : row.status === 'PENDING_REVIEW'
+                ? 'orange'
+                : 'blue'
+          }
+        >
           {statusText[row.status] || row.status}
         </Tag>
         <Tag>{row.documentFormat === 'EXCEL' ? 'Excel' : 'Word'}</Tag>
       </div>
       <div className="research-test-card-actions">
-        <Button type="link" onClick={onView}>查看</Button>
-        <Button type="link" onClick={onRename}>重命名</Button>
-        <Button type="link" onClick={onCopy}>复制</Button>
-        <Button type="link" onClick={onExport}>导出</Button>
+        <Button type="link" onClick={onView}>
+          查看
+        </Button>
+        <Button type="link" onClick={onRename}>
+          重命名
+        </Button>
+        <Button type="link" onClick={onCopy}>
+          复制
+        </Button>
+        <Button type="link" onClick={onExport}>
+          下载
+        </Button>
         <Popconfirm
           title="确认删除该报告？"
           description="删除后记录将从列表中移除。"
@@ -1374,4 +1506,14 @@ function matchesResearchTestTemplate(item: TemplateListItem, type: ResearchTestT
   return type === 'STANDARD'
     ? /(测试|检测|检验|标准|方法)/.test(searchable)
     : /(测试|检测|检验|报告)/.test(searchable);
+}
+
+function csvCell(value: unknown) {
+  const text =
+    value == null
+      ? ''
+      : typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
+        ? String(value)
+        : (JSON.stringify(value) ?? '');
+  return `"${text.replace(/"/g, '""')}"`;
 }

@@ -1,4 +1,4 @@
-import { Button, DatePicker, Empty, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag, message } from 'antd';
+import { Button, DatePicker, Empty, Form, Input, Modal, Popconfirm, Select, Space, Table, message } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import dayjs from '@/utils/dayjs';
@@ -256,8 +256,19 @@ export function ProjectTaskBoard({ projectId, stage, onTaskSaved }: {
 
   return <div className="pm-stage-work">
     {holder}
-    <div className="pm-stage-work-head"><div><b>{stage.name}任务</b><small>项目 &gt; {stage.name} &gt; {tasks.length}个任务 &gt; {totalExperiments}个实验</small></div><Button type="primary" onClick={openNewTask}>＋ 新增任务</Button></div>
-    <div className="pm-task-cards">{tasks.map((task) => <button key={task.id} ref={task.id === focusedTaskId ? focusedTaskRef : undefined} className={`${selected?.id === task.id ? 'active' : ''}${task.id === focusedTaskId ? ' pm-task-focused' : ''}`} onClick={() => setSelected(task)}><div className="pm-task-card-head"><b title={task.name}>{task.name}</b><span className="pm-task-card-edit" onClick={(e) => { e.stopPropagation(); void openEditTask(task.id); }}>编辑</span><Can permission="project.delete"><Popconfirm title="确认删除该任务？" description="任务下存在实验时不能删除。" okText="删除" cancelText="取消" okButtonProps={{ danger: true, loading: deletingTaskId === task.id }} onConfirm={() => void deleteTask(task)}><span className="pm-task-card-delete" role="button" tabIndex={0} aria-label={`删除任务${task.name}`} onClick={(e) => e.stopPropagation()}>删除</span></Popconfirm></Can></div><div className="pm-task-card-body"><span>{task.owner || '未设置'}</span><Tag>{task.experimentCount}实验</Tag></div><div className="pm-task-card-status"><span className={`pm-dot pm-dot-${task.status.toLowerCase()}`} />{formatTaskStatus(task.status)}</div></button>)}</div>
+    <div className="pm-stage-work-head"><div><b>当前阶段：{stage.name}</b><small>项目 &gt; {stage.name} &gt; {tasks.length}个任务 &gt; {totalExperiments}个实验</small></div><Button type="primary" onClick={openNewTask}>＋ 新增任务</Button></div>
+    <div className="pm-task-cards">{tasks.map((task) => <button key={task.id} ref={task.id === focusedTaskId ? focusedTaskRef : undefined} className={`pm-task-card${selected?.id === task.id ? ' active' : ''}${task.id === focusedTaskId ? ' pm-task-focused' : ''}`} onClick={() => setSelected(task)}>
+      <div className="pm-task-card-head"><b title={task.name}>{task.name}</b></div>
+      <div className="pm-task-card-body"><span>{task.owner || '未设置'}</span><span className="pm-task-card-experiments">{task.experimentCount}实验</span></div>
+      <div className="pm-task-card-status">
+        <span className={`pm-dot pm-dot-${task.status.toLowerCase()}`} />
+        <span className="pm-task-card-status-label">{formatTaskStatus(task.status)}</span>
+        <div className="pm-task-card-actions" onClick={(e) => e.stopPropagation()}>
+          <span className="pm-task-card-edit" onClick={() => void openEditTask(task.id)}>编辑</span>
+          <Can permission="project.delete"><Popconfirm title="确认删除该任务？" description="任务下存在实验时不能删除。" okText="删除" cancelText="取消" okButtonProps={{ danger: true, loading: deletingTaskId === task.id }} onConfirm={() => void deleteTask(task)}><span className="pm-task-card-delete" role="button" tabIndex={0} aria-label={`删除任务${task.name}`}>删除</span></Popconfirm></Can>
+        </div>
+      </div>
+    </button>)}</div>
     {selected ? <><div className="pm-stage-work-head"><b>当前任务：{selected.name}</b><Button type="primary" onClick={showExperiment}>＋ 新增实验</Button></div><Table rowKey="id" pagination={false} dataSource={experiments} columns={[{ title: '实验编号', dataIndex: 'experimentNo' }, { title: '实验名称', dataIndex: 'title' }, { title: '日期', dataIndex: 'experimentDate' }, { title: '负责人', dataIndex: 'ownerName' }, { title: '状态', dataIndex: 'status', render: (status: string) => formatExperimentStatus(status) }, { title: '操作', key: 'action', width: 120, fixed: 'right', render: (_, experiment) => <Space className="management-table-actions" size={0}><Button type="link" size="small" onClick={() => nav(`/experiments/${experiment.id}`, { state: { returnTo: `${location.pathname}${location.search}` } })}>查看</Button><Can permission="project.delete"><Popconfirm title="确认删除该实验？" description="删除后实验记录将从列表中移除。" okText="删除" cancelText="取消" okButtonProps={{ danger: true, loading: deletingExperimentId === experiment.id }} onConfirm={() => void deleteExperiment(experiment)}><Button type="link" danger size="small">删除</Button></Popconfirm></Can></Space> }]} /></> : <Empty description="当前阶段暂无任务" />}
 
     <Modal rootClassName="eln-create-modal" width={598} centered title="新增实验" open={open} closable

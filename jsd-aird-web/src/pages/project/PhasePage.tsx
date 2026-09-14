@@ -110,7 +110,7 @@ export function PhasePage() {
       {holder}
       <div className="pm-page-head">
         <div>
-          <Breadcrumb items={[{ title: '项目管理' }, { title: '阶段' }]} />
+          <Breadcrumb items={[{ title: '项目管理' }, { title: '项目阶段' }]} />
           <h3>项目阶段</h3>
           <p>跨项目查询、跟踪并定位研发阶段。</p>
         </div>

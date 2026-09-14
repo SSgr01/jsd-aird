@@ -355,6 +355,17 @@ a:active,
   overflow: hidden;
 }
 
+.production-workspace-host {
+  min-height: 100dvh;
+  padding-right: var(--ai-employee-panel-width);
+}
+
+@media (max-width: 1120px) {
+  .production-workspace-host {
+    padding-right: var(--ai-employee-panel-rail);
+  }
+}
+
 /* Data import review uses one focused spreadsheet workbench. */
 .data-workbench {
   display: grid;

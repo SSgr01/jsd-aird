@@ -62,7 +62,7 @@ export interface StageQuery {
   size?: number;
 }
 
-export type ProjectLogObjectType = 'PROJECT_STAGE' | 'PROJECT_TASK' | 'PROJECT_EXPERIMENT' | 'PROJECT_DOCUMENT' | 'PROJECT';
+export type ProjectLogObjectType = 'PROJECT_STAGE' | 'PROJECT_TASK' | 'PROJECT_EXPERIMENT' | 'EXPERIMENT' | 'PROJECT_DOCUMENT' | 'PROJECT';
 export type ProjectLogAction = 'CREATE' | 'UPDATE' | 'REOPEN' | 'DELETE' | 'REORDER';
 
 export interface ProjectAuditLog {

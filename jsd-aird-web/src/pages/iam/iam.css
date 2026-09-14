@@ -15,9 +15,9 @@
 .iam-audit-page .iam-audit-detail { display: block; max-width: 360px; white-space: normal; overflow-wrap: anywhere; line-height: 1.55; }
 .iam-audit-mobile-list { display: none; }
 .iam-audit-mobile-item { padding: 14px; border: 1px solid var(--app-border); border-radius: var(--app-radius-control); background: var(--app-surface); }
-.iam-audit-mobile-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
-.iam-audit-mobile-header .ant-typography { min-width: 0; color: var(--app-text-secondary); font-size: 12px; }
-.iam-audit-mobile-header .ant-tag { flex: 0 0 auto; margin-inline-end: 0; }
+.iam-audit-mobile-header { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: start; gap: 12px; margin-bottom: 12px; }
+.iam-audit-mobile-header .ant-typography { min-width: max-content; color: var(--app-text-secondary); font-size: 12px; white-space: nowrap; }
+.iam-audit-mobile-header .ant-tag { min-width: 0; max-width: 100%; margin-inline-end: 0; white-space: normal; overflow-wrap: anywhere; text-align: right; }
 .iam-audit-mobile-fields { display: grid; gap: 10px; margin: 0; }
 .iam-audit-mobile-field { display: grid; grid-template-columns: 48px minmax(0, 1fr); gap: 12px; margin: 0; }
 .iam-audit-mobile-field dt { color: var(--app-text-secondary); font-size: 12px; line-height: 1.55; }

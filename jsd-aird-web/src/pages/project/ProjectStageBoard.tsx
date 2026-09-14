@@ -1,4 +1,4 @@
-import { ArrowLeftOutlined, ArrowRightOutlined, CaretDownOutlined, CaretRightOutlined, DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, ArrowRightOutlined, DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
 import { Alert, Button, DatePicker, Empty, Form, Input, Modal, Popconfirm, Select, Skeleton, Space, Tag, message } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
@@ -237,7 +237,6 @@ export function ProjectStageBoard({ projectId }: { projectId: string }) {
                 }}
               >
                 <div className="pm-stage-card-head">
-                  <span className="pm-stage-card-toggle">{stage.id === selectedStageId && collapsedStageId === stage.id ? <CaretRightOutlined /> : <CaretDownOutlined />}</span>
                   <strong title={stage.name}>{stage.name}</strong>
                   <Tag>阶段{stage.orderNo}</Tag>
                 </div>

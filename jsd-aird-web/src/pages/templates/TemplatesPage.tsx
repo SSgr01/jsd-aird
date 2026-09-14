@@ -13,7 +13,7 @@ import {
   StopOutlined,
 } from '@ant-design/icons';
 import {
-  App, Button, Card, DatePicker, Dropdown, Empty, Form, Input, Modal, Radio,
+  App, Button, DatePicker, Dropdown, Empty, Form, Input, Modal, Radio,
   Select, Space, Table, Tag, Typography,
 } from 'antd';
 import type { TableColumnsType, TablePaginationConfig } from 'antd';
@@ -21,7 +21,7 @@ import type { Dayjs } from 'dayjs';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-import { CategoryCardGrid, type CatalogCategoryCard } from '@/components/catalog-workspace';
+import { CategoryCardGrid, CatalogListPanel, type CatalogCategoryCard } from '@/components/catalog-workspace';
 import type { TemplateFormat, TemplateListItem, TemplateStatus } from '@/features/template-workspace/types';
 import {
   templateApi,
@@ -328,7 +328,7 @@ export function TemplatesPage() {
   };
 
   const tablePagination: TablePaginationConfig = {
-    current: page, pageSize, total, showSizeChanger: true, showTotal: (value) => `共 ${value} 个模板`,
+    current: page, pageSize, total, showSizeChanger: true,
     onChange: (nextPage, nextSize) => { setPage(nextSize === pageSize ? nextPage : 1); setPageSize(nextSize); },
   };
 
@@ -359,12 +359,8 @@ export function TemplatesPage() {
     },
   ];
 
-  return <Space direction="vertical" size={16} className="page-stack templates-catalog-page">
-    <Card className="content-card"><Space direction="vertical" size={4}>
-      <Typography.Title level={2} className="page-title">模板库</Typography.Title>
-      <Typography.Text type="secondary">一条记录代表一个模板；状态与发布、草稿版本分列显示。</Typography.Text>
-    </Space></Card>
-
+  return <div className="business-page templates-catalog-page">
+    <div className="page-heading"><div><Typography.Title level={2}>模板查看</Typography.Title><Typography.Text type="secondary">管理模板、发布版本和草稿版本；每个模板仅展示一条记录。</Typography.Text></div><Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新建模板</Button></div>
     <CategoryCardGrid categories={categoryCards} activeId={uncategorized ? 'UNCATEGORIZED' : categoryId ?? 'ALL'}
       onSelect={(id) => changeFilter(() => { setCategoryId(id === 'ALL' || id === 'UNCATEGORIZED' ? undefined : id); setUncategorized(id === 'UNCATEGORIZED'); })}
       onCreate={() => { categoryForm.resetFields(); setCategoryEditor('NEW'); }}
@@ -372,42 +368,43 @@ export function TemplatesPage() {
       onDelete={(item) => setDeletingCategory(categoryItems.find((value) => value.id === item.id))}
       countLabel="个模板" />
 
-    <Card className="content-card"><Space wrap size={10}>
-      <Input.Search allowClear placeholder="名称或编码" value={searchInput}
-        onChange={(event) => { setSearchInput(event.target.value); clearSelection(); }}
-        onClear={() => applySearch('')} onSearch={applySearch} style={{ width: 230 }} />
-      <Select allowClear placeholder="全部分类" value={uncategorized ? 'UNCATEGORIZED' : categoryId} onChange={(value) => changeFilter(() => { setUncategorized(value === 'UNCATEGORIZED'); setCategoryId(value === 'UNCATEGORIZED' ? undefined : value); })} options={[...categoryItems.map((item) => ({ value: item.id, label: item.name })), { value: 'UNCATEGORIZED', label: '未分类' }]} style={{ width: 150 }} />
-      <Select allowClear placeholder="全部格式" value={format} onChange={(value) => changeFilter(() => setFormat(value))} options={[{ value: 'XLSX', label: 'Excel' }, { value: 'DOCX', label: 'Word' }]} style={{ width: 130 }} />
-      <Select allowClear placeholder="全部状态" value={status} onChange={(value) => changeFilter(() => setStatus(value))} options={Object.entries(statusLabels).map(([value, item]) => ({ value, label: item.label }))} style={{ width: 130 }} />
-      <Select allowClear placeholder="创建人" value={createdBy} onChange={(value) => changeFilter(() => setCreatedBy(value))} options={creatorOptions.map((item) => ({ value: item.id, label: item.displayName }))} style={{ width: 140 }} />
-      <RangePicker value={updatedRange} onChange={(values) => changeFilter(() => setUpdatedRange(values ? [values[0]!, values[1]!] : null))} />
-      <Select value={sortBy} onChange={(value) => changeFilter(() => setSortBy(value))} options={[{ value: 'UPDATED_AT', label: '最近更新' }, { value: 'CREATED_AT', label: '创建时间' }, { value: 'NAME', label: '名称' }]} style={{ width: 130 }} />
-      <Select value={sortDirection} onChange={(value) => changeFilter(() => setSortDirection(value))} options={[{ value: 'DESC', label: '降序' }, { value: 'ASC', label: '升序' }]} style={{ width: 100 }} />
-      <Button onClick={resetFilters}>重置</Button><Button icon={<ReloadOutlined />} onClick={() => void refreshCatalog()}>刷新</Button>
-      <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新建模板</Button>
-      <Button icon={<DownloadOutlined />} loading={exporting} onClick={() => void exportTemplates(listParams)}>导出当前筛选结果</Button>
-    </Space></Card>
-
-    {selected.length > 0 && <Card size="small" className="content-card"><Space wrap>
-      <Typography.Text strong>已选择 {selected.length} 个模板</Typography.Text>
-      <Button icon={<CopyOutlined />} loading={batchOperating} onClick={() => void runBatch('COPY')}>批量复制</Button>
-      <Button icon={<FolderAddOutlined />} disabled={batchOperating} onClick={() => setBatchMoveOpen(true)}>移动分类</Button>
-      <Button danger icon={<DeleteOutlined />} disabled={!selected.some((item) => item.allowedActions?.includes('DELETE'))} loading={batchOperating} onClick={() => void runBatch('DELETE_DRAFT')}>删除纯草稿</Button>
-      <Button danger icon={<StopOutlined />} disabled={!selected.some((item) => item.allowedActions?.includes('RETIRE'))} loading={batchOperating} onClick={() => void runBatch('RETIRE')}>停用发布版</Button>
-      <Button icon={<DownloadOutlined />} loading={exporting} onClick={() => void exportTemplates({ ...listParams, templateIds: selected.map((item) => item.templateId) })}>导出选中</Button>
-      <Button type="link" disabled={batchOperating} onClick={clearSelection}>取消选择</Button>
-    </Space></Card>}
-
-    <Card className="content-card" styles={{ body: { padding: 0 } }}><Table rowKey="templateId" loading={loading} dataSource={items}
-      locale={{ emptyText: <Empty description="暂无模板" /> }} pagination={tablePagination}
-      rowSelection={{ selectedRowKeys: Object.keys(selectedRecords), preserveSelectedRowKeys: true,
-        onChange: (keys, rows) => setSelectedRecords((current) => {
-          const next = { ...current }; const currentPageIds = new Set(items.map((item) => item.templateId));
-          currentPageIds.forEach((id) => { if (!keys.includes(id)) delete next[id]; }); rows.forEach((item) => { next[item.templateId] = item; }); return next;
-        }) }}
-      onRow={(record) => ({ onDoubleClick: () => navigate(`/templates/${record.versionId}/workspace`) })}
-      columns={columns} />
-    </Card>
+    <CatalogListPanel title="模板列表" count={total} countLabel="个模板"
+      filters={<Space wrap size={10}>
+        <Input.Search allowClear placeholder="名称或编码" value={searchInput}
+          onChange={(event) => { setSearchInput(event.target.value); clearSelection(); }}
+          onClear={() => applySearch('')} onSearch={applySearch} style={{ width: 230 }} />
+        <Select allowClear placeholder="全部分类" value={uncategorized ? 'UNCATEGORIZED' : categoryId} onChange={(value) => changeFilter(() => { setUncategorized(value === 'UNCATEGORIZED'); setCategoryId(value === 'UNCATEGORIZED' ? undefined : value); })} options={[...categoryItems.map((item) => ({ value: item.id, label: item.name })), { value: 'UNCATEGORIZED', label: '未分类' }]} style={{ width: 150 }} />
+        <Select allowClear placeholder="全部格式" value={format} onChange={(value) => changeFilter(() => setFormat(value))} options={[{ value: 'XLSX', label: 'Excel' }, { value: 'DOCX', label: 'Word' }]} style={{ width: 130 }} />
+        <Select allowClear placeholder="全部状态" value={status} onChange={(value) => changeFilter(() => setStatus(value))} options={Object.entries(statusLabels).map(([value, item]) => ({ value, label: item.label }))} style={{ width: 130 }} />
+        <Select allowClear placeholder="创建人" value={createdBy} onChange={(value) => changeFilter(() => setCreatedBy(value))} options={creatorOptions.map((item) => ({ value: item.id, label: item.displayName }))} style={{ width: 140 }} />
+        <RangePicker value={updatedRange} onChange={(values) => changeFilter(() => setUpdatedRange(values ? [values[0]!, values[1]!] : null))} />
+        <Select value={sortBy} onChange={(value) => changeFilter(() => setSortBy(value))} options={[{ value: 'UPDATED_AT', label: '最近更新' }, { value: 'CREATED_AT', label: '创建时间' }, { value: 'NAME', label: '名称' }]} style={{ width: 130 }} />
+        <Select value={sortDirection} onChange={(value) => changeFilter(() => setSortDirection(value))} options={[{ value: 'DESC', label: '降序' }, { value: 'ASC', label: '升序' }]} style={{ width: 100 }} />
+        <Button onClick={resetFilters}>重置</Button><Button icon={<ReloadOutlined />} onClick={() => void refreshCatalog()}>刷新</Button>
+      </Space>}
+      actions={<>
+        <Typography.Text type="secondary">已选 {selected.length} 个模板</Typography.Text>
+        {selected.length > 0 && <>
+          <Button icon={<CopyOutlined />} loading={batchOperating} onClick={() => void runBatch('COPY')}>批量复制</Button>
+          <Button icon={<FolderAddOutlined />} disabled={batchOperating} onClick={() => setBatchMoveOpen(true)}>移动分类</Button>
+          <Button danger icon={<DeleteOutlined />} disabled={!selected.some((item) => item.allowedActions?.includes('DELETE'))} loading={batchOperating} onClick={() => void runBatch('DELETE_DRAFT')}>删除纯草稿</Button>
+          <Button danger icon={<StopOutlined />} disabled={!selected.some((item) => item.allowedActions?.includes('RETIRE'))} loading={batchOperating} onClick={() => void runBatch('RETIRE')}>停用发布版</Button>
+          <Button icon={<DownloadOutlined />} loading={exporting} onClick={() => void exportTemplates({ ...listParams, templateIds: selected.map((item) => item.templateId) })}>导出选中</Button>
+          <Button type="link" disabled={batchOperating} onClick={clearSelection}>取消选择</Button>
+        </>}
+        <Button icon={<DownloadOutlined />} loading={exporting} onClick={() => void exportTemplates(listParams)}>导出当前筛选结果</Button>
+      </>}
+    >
+      <Table className="catalog-template-table" rowKey="templateId" loading={loading} dataSource={items}
+        scroll={{ x: 980 }} locale={{ emptyText: <Empty description="暂无模板" /> }} pagination={tablePagination}
+        rowSelection={{ selectedRowKeys: Object.keys(selectedRecords), preserveSelectedRowKeys: true,
+          onChange: (keys, rows) => setSelectedRecords((current) => {
+            const next = { ...current }; const currentPageIds = new Set(items.map((item) => item.templateId));
+            currentPageIds.forEach((id) => { if (!keys.includes(id)) delete next[id]; }); rows.forEach((item) => { next[item.templateId] = item; }); return next;
+          }) }}
+        onRow={(record) => ({ onDoubleClick: () => navigate(`/templates/${record.versionId}/workspace`) })}
+        columns={columns} />
+    </CatalogListPanel>
 
     <Modal title="新建模板" open={createOpen} confirmLoading={creating} okText={createMode === 'BLANK' ? '创建并进入工作台' : '前往文件导入'} onOk={() => void create()} onCancel={() => setCreateOpen(false)} destroyOnHidden>
       <Radio.Group value={createMode} onChange={(event) => setCreateMode(event.target.value as CreateMode)} optionType="button" buttonStyle="solid" options={[{ value: 'BLANK', label: '空白新建' }, { value: 'IMPORT', label: 'Word、Excel 文件导入' }]} style={{ marginBottom: 20 }} />
@@ -436,5 +433,5 @@ export function TemplatesPage() {
     </Modal>
 
     <Modal title="批量移动分类" open={batchMoveOpen} confirmLoading={batchOperating} onOk={() => void runBatch('MOVE', batchCategoryId)} onCancel={() => setBatchMoveOpen(false)}><Select allowClear placeholder="未分类" value={batchCategoryId} onChange={setBatchCategoryId} options={categoryItems.map((item) => ({ value: item.id, label: item.name }))} style={{ width: '100%' }} /></Modal>
-  </Space>;
+  </div>;
 }

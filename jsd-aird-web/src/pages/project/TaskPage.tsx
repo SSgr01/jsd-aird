@@ -279,7 +279,7 @@ export default function TaskPage() {
     <div className="pm-page pm-unified-list-page pm-task-page">
       <div className="pm-page-head">
         <div>
-          <Breadcrumb items={[{ title: '项目管理' }, { title: '任务' }]} />
+          <Breadcrumb items={[{ title: '项目管理' }, { title: '项目任务' }]} />
           <h3>任务</h3>
           <p>集中查看并筛选全部项目任务，数据来自项目管理原有项目结构。</p>
         </div>

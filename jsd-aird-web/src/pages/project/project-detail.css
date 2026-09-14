@@ -11,7 +11,99 @@
 .pm-experiment-context strong{display:block;overflow:hidden;color:#1f3150;font-size:13px;text-overflow:ellipsis;white-space:nowrap}
 @media(max-width:600px){.pm-experiment-context{grid-template-columns:1fr}}
 .pm-task-card-delete{flex-shrink:0;color:#ff4d4f;font-size:12px}.pm-task-card-delete:hover{color:#d9363e;text-decoration:underline}
+.pm-task-card-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:2px}
 @media(max-width:760px){.pm-stage-overview-actions>*{min-width:0}.pm-stage-overview-actions>* .ant-btn{width:100%}.pm-stage-work{padding:12px}.pm-stage-work-head{align-items:flex-start;flex-wrap:wrap;gap:8px}}
 @media(max-width:760px){.pm-detail-tabs .ant-tabs-nav{margin-bottom:8px}.pm-detail-tabs .ant-tabs-nav-list{gap:0}.pm-detail-tabs .ant-tabs-tab{margin:0!important;padding:6px 2px}.pm-detail-tabs .ant-tabs-tab+.ant-tabs-tab{margin-left:12px!important}}
 @media(min-width:761px){.pm-task-form-body .ant-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 16px}.pm-task-form-body .ant-form-item{min-width:0}}
 @media(max-width:760px){.pm-task-form-body .ant-form{display:grid;grid-template-columns:1fr}}
+
+/* Keep the stage sequence label pinned to the card edge while allowing long
+   stage names to wrap instead of disappearing behind an ellipsis. */
+.pm-stage-card .pm-stage-card-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+  overflow: visible;
+}
+
+.pm-stage-card .pm-stage-card-head strong {
+  display: block;
+  min-width: 0;
+  max-width: none;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+  text-overflow: clip;
+}
+
+.pm-stage-card .pm-stage-card-head .ant-tag {
+  margin-inline-start: auto;
+  flex: none;
+  justify-self: end;
+}
+
+.pm-stage-flow .pm-stage-card {
+  width: 204px;
+}
+
+/* Keep stage-card copy in the same readable scale as task-card copy. */
+.pm-stage-card,
+.pm-stage-card .pm-stage-card-head strong,
+.pm-stage-card .pm-stage-card-body,
+.pm-stage-card .pm-stage-card-stats {
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+/* Task names may span multiple lines; keep their actions with the status row. */
+.pm-task-card .pm-task-card-head b {
+  display: block;
+  min-width: 0;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+  text-overflow: clip;
+}
+
+.pm-task-card .pm-task-card-status {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+}
+
+.pm-task-card .pm-task-card-status-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pm-task-card .pm-task-card-status .pm-task-card-actions {
+  min-width: 0;
+  flex: 0 0 auto;
+  margin: 0 0 0 auto;
+  white-space: nowrap;
+}
+
+.pm-task-cards > .pm-task-card {
+  width: 204px;
+}
+
+.pm-task-card .pm-task-card-body {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pm-task-card .pm-task-card-experiments {
+  margin-inline-start: auto;
+  color: #52637a;
+  text-align: right;
+  white-space: nowrap;
+}

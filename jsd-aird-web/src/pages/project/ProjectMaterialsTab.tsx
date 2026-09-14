@@ -4,8 +4,7 @@ import { useEffect, useState } from 'react';
 import { downloadFile } from '@/services/files/file-api';
 import { qualityApi, type QualityUpload } from '@/services/quality/quality-api';
 import { productionUploadApi, type ProductionUpload } from '@/services/production-orders/production-upload-api';
-import { listResearchTests, type ResearchTestSummary } from '@/services/research-test/research-test-api';
-import { useNavigate } from 'react-router-dom';
+import { downloadResearchTest, listResearchTests, type ResearchTestSummary } from '@/services/research-test/research-test-api';
 
 import './project-materials-tab.css';
 
@@ -19,7 +18,6 @@ function formatDate(value?: string) {
 
 export function ProjectMaterialsTab({ projectId }: Props) {
   const { message } = App.useApp();
-  const navigate = useNavigate();
   const [qualityItems, setQualityItems] = useState<QualityUpload[]>([]);
   const [productionItems, setProductionItems] = useState<ProductionUpload[]>([]);
   const [reportItems, setReportItems] = useState<ResearchTestSummary[]>([]);
@@ -46,8 +44,14 @@ export function ProjectMaterialsTab({ projectId }: Props) {
 
   const download = (fileId: string, name: string) => {
     void downloadFile(fileId, name)
-      .then(() => message.success('文件读取已开始'))
-      .catch((reason) => message.error(reason instanceof Error ? reason.message : '文件读取失败'));
+      .then(() => message.success('文件下载已开始'))
+      .catch((reason) => message.error(reason instanceof Error ? reason.message : '文件下载失败'));
+  };
+
+  const downloadReport = (report: ResearchTestSummary) => {
+    void downloadResearchTest('REPORT', report.id, report.name, report.documentFormat)
+      .then(() => message.success('测试报告下载已开始'))
+      .catch((reason) => message.error(reason instanceof Error ? reason.message : '测试报告下载失败'));
   };
 
   const qualityColumns = [
@@ -56,7 +60,7 @@ export function ProjectMaterialsTab({ projectId }: Props) {
     { title: '阶段 / 任务', key: 'relation', render: (_: unknown, row: QualityUpload) => `${row.stageName || '—'} / ${row.taskName || '—'}` },
     { title: '可见范围', dataIndex: 'visibility', render: (value: string) => <Tag>{value === 'PROJECT' ? '项目组可见' : value === 'QUALITY' ? '品管部可见' : '全员可见'}</Tag> },
     { title: '上传时间', dataIndex: 'createdAt', render: (value: string) => formatDate(value) },
-    { title: '读取', key: 'read', width: 80, render: (_: unknown, row: QualityUpload) => <a onClick={() => download(row.fileId, row.originalName)}>读取</a> },
+    { title: '操作', key: 'action', width: 80, render: (_: unknown, row: QualityUpload) => <a onClick={() => download(row.fileId, row.originalName)}>下载</a> },
   ];
 
   const productionColumns = [
@@ -66,7 +70,7 @@ export function ProjectMaterialsTab({ projectId }: Props) {
     { title: '品名', dataIndex: 'productName', render: (value: string) => value || '—' },
     { title: '阶段 / 任务', key: 'relation', render: (_: unknown, row: ProductionUpload) => `${row.stageName || '—'} / ${row.taskName || '—'}` },
     { title: '上传时间', dataIndex: 'createdAt', render: (value: string) => formatDate(value) },
-    { title: '读取', key: 'read', width: 80, render: (_: unknown, row: ProductionUpload) => <a onClick={() => download(row.fileId, row.originalName)}>读取</a> },
+    { title: '操作', key: 'action', width: 80, render: (_: unknown, row: ProductionUpload) => <a onClick={() => download(row.fileId, row.originalName)}>下载</a> },
   ];
   const reportColumns = [
     { title: '报告编号', dataIndex: 'businessNo' },
@@ -74,13 +78,13 @@ export function ProjectMaterialsTab({ projectId }: Props) {
     { title: '阶段 / 任务', key: 'relation', render: (_: unknown, row: ResearchTestSummary) => `${row.stageName || '—'} / ${row.taskName || '—'}` },
     { title: '负责人', dataIndex: 'ownerName', render: (value?: string) => value || '—' },
     { title: '状态', dataIndex: 'status', render: (value: string) => <Tag color={value === 'PUBLISHED' ? 'green' : 'blue'}>{value === 'PUBLISHED' ? '已发布' : '草稿/审核中'}</Tag> },
-    { title: '查看', key: 'read', width: 80, render: (_: unknown, row: ResearchTestSummary) => <a onClick={() => navigate(`/research-test/reports/${row.id}`, { state: { returnTo: `/projects/${projectId}?section=assets` } })}>查看</a> },
+    { title: '操作', key: 'action', width: 80, render: (_: unknown, row: ResearchTestSummary) => <a onClick={() => downloadReport(row)}>下载</a> },
   ];
 
   return (
     <div className="pm-pm-tab pm-readonly-materials-tab">
       <Typography.Paragraph type="secondary" className="pm-readonly-materials-tip">
-        以下资料由品管部、生产单和研发测试模块维护，项目详情提供只读查看。
+        以下资料由品管部、生产单和研发测试模块维护，项目详情提供只读下载。
       </Typography.Paragraph>
       <Tabs items={[
         { key: 'quality', label: `品管部（${qualityItems.length}）`, children: <Table rowKey="id" loading={loading} columns={qualityColumns} dataSource={qualityItems} pagination={false} scroll={{ x: 920 }} locale={{ emptyText: <Empty description="暂无品管部资料" /> }} /> },

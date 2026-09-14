@@ -86,6 +86,7 @@ export function ProductionOrderListPage() {
   const [creating, setCreating] = useState(false);
   const [copying, setCopying] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [downloadingId, setDownloadingId] = useState<string>();
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameSaving, setRenameSaving] = useState(false);
   const [renaming, setRenaming] = useState<ProductionUpload>();
@@ -172,21 +173,56 @@ export function ProductionOrderListPage() {
     openRename(selectedItems[0]!);
   };
 
-  const exportSelected = async () => {
+  const exportSelected = () => {
     if (!selectedItems.length) return;
     setExporting(true);
     try {
-      await Promise.all(
-        selectedItems.map(async (item) => {
-          const blob = await productionOrderRecordApi.export(item.id);
-          downloadBlob(blob, item.originalName || `${item.productionName || '生产单'}.xlsx`);
-        }),
+      const rows = selectedItems.map((item) => [
+        item.productionName || '',
+        item.orderNo || '',
+        item.productName || '',
+        item.category || '',
+        item.manufactureDate || '',
+        item.projectName || '',
+        item.stageName || '',
+        item.taskName || '',
+        new Date(item.createdAt).toLocaleString('zh-CN'),
+      ]);
+      const header = [
+        '生产单名称',
+        '订单号',
+        '品名',
+        '类别',
+        '制造日期',
+        '关联项目',
+        '阶段',
+        '任务',
+        '上传时间',
+      ];
+      const csv = [header, ...rows].map((row) => row.map(csvCell).join(',')).join('\r\n');
+      downloadBlob(
+        new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8;' }),
+        `生产单列表_${new Date().toISOString().slice(0, 10)}.csv`,
       );
       void message.success(`已导出 ${selectedItems.length} 条生产单`);
     } catch (error) {
       void message.error(error instanceof Error ? error.message : '生产单导出失败');
     } finally {
       setExporting(false);
+    }
+  };
+
+  const downloadItem = async (item: ProductionUpload) => {
+    setDownloadingId(item.id);
+    try {
+      const blob = await productionOrderRecordApi.export(item.id);
+      const extension = /\.docx?$/i.test(item.originalName) ? '.docx' : '.xlsx';
+      downloadBlob(blob, `${item.productionName || item.orderNo || '生产单'}${extension}`);
+      void message.success('生产单下载已开始');
+    } catch (error) {
+      void message.error(error instanceof Error ? error.message : '生产单下载失败');
+    } finally {
+      setDownloadingId(undefined);
     }
   };
 
@@ -528,9 +564,17 @@ export function ProductionOrderListPage() {
             <span>制造日期</span>
             <Typography.Text>{item.manufactureDate || '—'}</Typography.Text>
           </div>
-          <div className="production-order-card-field-wide">
-            <span>关联项目 / 阶段 / 任务</span>
-            <Typography.Text ellipsis={{ tooltip: relation }}>{relation}</Typography.Text>
+          <div>
+            <span>关联项目</span>
+            <Typography.Text ellipsis={{ tooltip: item.projectName || '未关联项目' }}>
+              {item.projectName || '未关联项目'}
+            </Typography.Text>
+          </div>
+          <div>
+            <span>阶段 / 任务</span>
+            <Typography.Text ellipsis={{ tooltip: relation }}>
+              {[item.stageName, item.taskName].filter(Boolean).join(' · ') || '未选择'}
+            </Typography.Text>
           </div>
         </div>
         <div className="production-order-card-meta">
@@ -757,14 +801,24 @@ export function ProductionOrderListPage() {
                   render: (value: string) => renderCellText(value),
                 },
                 {
-                  title: '关联项目 / 阶段 / 任务',
+                  title: '关联项目',
+                  className: 'production-order-project-column',
                   width: 320,
-                  render: (_: unknown, item: ProductionUpload) =>
-                    renderCellText(
-                      [item.projectName, item.stageName, item.taskName]
-                        .filter(Boolean)
-                        .join(' · ') || '未关联项目',
-                    ),
+                  render: (_: unknown, item: ProductionUpload) => (
+                    <span className="production-order-project-cell">
+                      {item.projectName || '未关联项目'}
+                    </span>
+                  ),
+                },
+                {
+                  title: '阶段 / 任务',
+                  width: 220,
+                  render: (_: unknown, item: ProductionUpload) => (
+                    <span className="production-order-relation-cell">
+                      <span>{item.stageName || '未选择'}</span>
+                      <small>{item.taskName || '未选择'}</small>
+                    </span>
+                  ),
                 },
                 {
                   title: '上传时间',
@@ -787,6 +841,16 @@ export function ProductionOrderListPage() {
                         onClick={() => openRename(item)}
                       >
                         重命名
+                      </Button>
+                      <Button
+                        type="link"
+                        size="small"
+                        icon={<DownloadOutlined />}
+                        loading={downloadingId === item.id}
+                        disabled={Boolean(downloadingId && downloadingId !== item.id)}
+                        onClick={() => void downloadItem(item)}
+                      >
+                        下载
                       </Button>
                       <Button
                         type="link"
@@ -1081,6 +1145,16 @@ function ProductionRelationFields({
       </div>
     </div>
   );
+}
+
+function csvCell(value: unknown) {
+  const text =
+    value == null
+      ? ''
+      : typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
+        ? String(value)
+        : (JSON.stringify(value) ?? '');
+  return `"${text.replace(/"/g, '""')}"`;
 }
 
 function ProductionCreateChoice({

@@ -39,7 +39,7 @@ import {
   type ProjectStage,
   type ProjectTask,
 } from '@/services/project/project-api';
-import { downloadBlob } from '@/services/files/file-api';
+import { downloadBlob, fetchFileBlob } from '@/services/files/file-api';
 import {
   qualityApi,
   type QualityCategory,
@@ -108,7 +108,8 @@ export function QualityDataPage() {
     [editing, setEditing] = useState(false),
     [dirty, setDirty] = useState(false);
   const [view, setView] = useState<ViewMode>('list');
-  const [exporting, setExporting] = useState(false);
+  const [exporting, setExporting] = useState(false),
+    [downloadingId, setDownloadingId] = useState<string>();
   const [keyword, setKeyword] = useState(''),
     [page, setPage] = useState(1),
     [size, setSize] = useState(10),
@@ -578,6 +579,19 @@ export function QualityDataPage() {
     }
     openRename(chosen[0]!);
   };
+  const downloadRow = async (row: QualityRecord) => {
+    if (row.newRow || editing || !row.sourceFileId) return;
+    setDownloadingId(row.id);
+    try {
+      const blob = await fetchFileBlob(row.sourceFileId);
+      downloadBlob(blob, row.sourceFileName || row.displayName || row.businessNo || '品管原文');
+      msg.success('原文已下载');
+    } catch (error) {
+      msg.error(error instanceof Error ? error.message : '原文下载失败');
+    } finally {
+      setDownloadingId(undefined);
+    }
+  };
   const exportSelected = async () => {
     const chosen = rows.filter((row) => selected.has(row.id));
     if (!chosen.length) return;
@@ -703,6 +717,14 @@ export function QualityDataPage() {
               生成不良报告
             </Button>
           )}
+          <Button
+            type="link"
+            loading={downloadingId === row.id}
+            disabled={!row.sourceFileId || row.newRow || editing || (downloadingId !== undefined && downloadingId !== row.id)}
+            onClick={() => void downloadRow(row)}
+          >
+            下载
+          </Button>
           <Button type="link" danger onClick={() => deleteRecord(row)}>
             删除
           </Button>
@@ -1112,6 +1134,15 @@ export function QualityDataPage() {
                                 生成不良报告
                               </Button>
                             )}
+                          <Button
+                            type="link"
+                            size="small"
+                            loading={downloadingId === r.id}
+                            disabled={!r.sourceFileId || r.newRow || editing || (downloadingId !== undefined && downloadingId !== r.id)}
+                            onClick={() => void downloadRow(r)}
+                          >
+                            下载
+                          </Button>
                           <Button
                             type="link"
                             size="small"

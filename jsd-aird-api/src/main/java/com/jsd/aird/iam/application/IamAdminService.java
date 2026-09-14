@@ -26,13 +26,15 @@ public class IamAdminService {
     private final AuthorizationService authorization;
     private final PasswordEncoder passwordEncoder;
     private final AuditLogFacade audit;
+    private final AuditLogPresentationService auditPresentation;
 
     public IamAdminService(IamStore store, AuthorizationService authorization, PasswordEncoder passwordEncoder,
-                           AuditLogFacade audit) {
+                           AuditLogFacade audit, AuditLogPresentationService auditPresentation) {
         this.store = store;
         this.authorization = authorization;
         this.passwordEncoder = passwordEncoder;
         this.audit = audit;
+        this.auditPresentation = auditPresentation;
     }
 
     public PageResponse<UserView> users(Actor actor, String keyword, int page, int size) {
@@ -187,9 +189,10 @@ public class IamAdminService {
         return store.permissionDefinitions();
     }
 
-    public List<AuditLogFacade.AuditEntry> auditLogs(Actor actor, UUID actorId, String action, Instant from, Instant to, int limit) {
+    public PageResponse<AuditLogPresentationService.AuditLogView> presentedAuditLogs(
+            Actor actor, AuditLogPresentationService.AuditLogQuery query) {
         require(actor, "system.audit.view");
-        return audit.search(actor.organizationId(), actorId, action, from, to, limit);
+        return auditPresentation.page(actor.organizationId(), query);
     }
 
     private void require(Actor actor, String permission) {

@@ -19,6 +19,24 @@ export interface IamUser {
 export interface IamRole { id: string; code: string; name: string; builtin: boolean; enabled: boolean; policyVersion: number; }
 export interface PermissionDefinition { code: string; module: string; name: string; risk: string; defaultScope: string; }
 export interface PermissionBinding { permissionCode: string; effect: 'ALLOW' | 'DENY'; scopeType: string; targetIds: string[]; }
+export interface AuditLogTechnicalDetail {
+  auditId: string;
+  actionCode: string;
+  aggregateType: string;
+  aggregateId: string;
+  fields: Record<string, string>;
+}
+export interface AuditLogView {
+  id: string;
+  createdAt: string;
+  module: string;
+  operation: string;
+  operator: string;
+  objectType: string;
+  objectName: string;
+  summary: string;
+  technical: AuditLogTechnicalDetail;
+}
 
 const responseData = async <T>(request: Promise<{ data: ApiResponse<T> }>) => (await request).data.data;
 
@@ -40,5 +58,5 @@ export const iamApi = {
   userPermissions: (id: string) => responseData<{ version: number; bindings: PermissionBinding[] }>(httpClient.get(`/api/v1/iam/users/${id}/permissions`)),
   saveUserPermissions: (id: string, expectedVersion: number, bindings: PermissionBinding[]) => responseData<{ version: number }>(httpClient.put(`/api/v1/iam/users/${id}/permissions`, { expectedVersion, bindings })),
   restoreUserPermission: (id: string, code: string) => responseData<void>(httpClient.delete(`/api/v1/iam/users/${id}/permissions/${encodeURIComponent(code)}`)),
-  auditLogs: (params?: { action?: string; limit?: number }) => responseData<Array<{ id: string; actorId?: string; action: string; aggregateType: string; aggregateId: string; detail: Record<string, unknown>; createdAt: string }>>(httpClient.get('/api/v1/iam/audit-logs', { params })),
+  auditLogs: (params?: { keyword?: string; module?: string; operation?: string; operator?: string; from?: string; to?: string; page?: number; size?: number }) => responseData<PageResponse<AuditLogView>>(httpClient.get('/api/v1/iam/audit-logs', { params })),
 };

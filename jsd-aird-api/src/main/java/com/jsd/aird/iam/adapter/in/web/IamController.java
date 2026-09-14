@@ -5,8 +5,8 @@ import java.util.List;
 import java.util.UUID;
 
 import com.jsd.aird.iam.application.IamAdminService;
+import com.jsd.aird.iam.application.AuditLogPresentationService;
 import com.jsd.aird.iam.application.port.IamStore.Binding;
-import com.jsd.aird.ops.application.port.AuditLogFacade;
 import com.jsd.aird.platform.web.RequestIdHolder;
 import com.jsd.aird.shared.api.ApiResponse;
 import com.jsd.aird.shared.api.PageResponse;
@@ -128,13 +128,17 @@ public class IamController {
     }
 
     @GetMapping("/audit-logs")
-    public ApiResponse<List<AuditLogFacade.AuditEntry>> auditLogs(
-            @RequestParam(required = false) UUID actorId,
-            @RequestParam(required = false) String action,
+    public ApiResponse<PageResponse<AuditLogPresentationService.AuditLogView>> auditLogs(
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String module,
+            @RequestParam(required = false) String operation,
+            @RequestParam(required = false) String operator,
             @RequestParam(required = false) Instant from,
             @RequestParam(required = false) Instant to,
-            @RequestParam(defaultValue = "100") int limit) {
-        return success(service.auditLogs(ActorContext.required(), actorId, action, from, to, limit));
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        return success(service.presentedAuditLogs(ActorContext.required(), new AuditLogPresentationService.AuditLogQuery(
+                keyword, module, operation, operator, from, to, page, size)));
     }
 
     private List<Binding> toBindings(List<BindingRequest> requests) {

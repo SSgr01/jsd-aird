@@ -2,7 +2,10 @@ package com.jsd.aird.rnd.application;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.ops.application.port.FileStorageFacade;
+import com.jsd.aird.ops.application.port.AuditLogFacade;
 import com.jsd.aird.rnd.application.port.ExperimentRepository;
 import com.jsd.aird.rnd.domain.ExperimentModels.Audit;
 import com.jsd.aird.rnd.domain.ExperimentModels.Category;
@@ -15,6 +18,7 @@ import com.jsd.aird.shared.api.PageResponse;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.security.ActorContext;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -29,13 +33,21 @@ public class ExperimentService {
     private final ObjectMapper json;
     private final FileStorageFacade files;
     private final ExperimentEditModelNormalizer editModels;
+    private final AuditLogFacade audit;
 
+    @Autowired
     public ExperimentService(ExperimentRepository repository, ObjectMapper json, FileStorageFacade files,
                              ExperimentEditModelNormalizer editModels) {
+        this(repository, json, files, editModels, null);
+    }
+
+    public ExperimentService(ExperimentRepository repository, ObjectMapper json, FileStorageFacade files,
+                             ExperimentEditModelNormalizer editModels, AuditLogFacade audit) {
         this.repository = repository;
         this.json = json;
         this.files = files;
         this.editModels = editModels;
+        this.audit = audit;
     }
 
     public PageResponse<Summary> search(ExperimentRepository.Search query) {
@@ -109,7 +121,8 @@ public class ExperimentService {
 
     public Summary copy(UUID id) {
         var actor = ActorContext.required();
-        return repository.copy(actor.organizationId(), id, actor.userId(), actor.username());
+        var result = repository.copy(actor.organizationId(), id, actor.userId(), actor.username());
+        return result;
     }
 
     public Detail save(UUID id, long revision, DraftCommand command) {
@@ -127,7 +140,7 @@ public class ExperimentService {
             throw validation("实验日期不能为空");
         }
 
-        return normalize(repository.saveDraft(
+        var result = normalize(repository.saveDraft(
                 actor.organizationId(),
                 id,
                 revision,
@@ -149,6 +162,7 @@ public class ExperimentService {
                 actor.userId(),
                 actor.username()
         ));
+        return result;
     }
 
     public void delete(UUID id, long revision) {
@@ -158,7 +172,8 @@ public class ExperimentService {
 
     public Detail publish(UUID id, long revision) {
         var actor = ActorContext.required();
-        return normalize(repository.publish(actor.organizationId(), id, revision, actor.userId(), actor.username()));
+        var result = normalize(repository.publish(actor.organizationId(), id, revision, actor.userId(), actor.username()));
+        return result;
     }
 
     public Detail transition(UUID id, long revision, ExperimentStatus target, String comment) {
@@ -166,20 +181,23 @@ public class ExperimentService {
             throw validation("实验目标状态不能为空");
         }
         var actor = ActorContext.required();
-        return normalize(repository.transition(
+        var result = normalize(repository.transition(
                 actor.organizationId(), id, revision, target, comment, actor.userId(), actor.username()));
+        return result;
     }
 
     public Detail revision(UUID id, long revision, String reason) {
         var actor = ActorContext.required();
-        return normalize(repository.createRevision(
+        var result = normalize(repository.createRevision(
                 actor.organizationId(), id, revision, reason, actor.userId(), actor.username()));
+        return result;
     }
 
     public Detail rollback(UUID id, long revision, int targetVersion, String reason) {
         var actor = ActorContext.required();
-        return normalize(repository.rollback(
+        var result = normalize(repository.rollback(
                 actor.organizationId(), id, revision, targetVersion, reason, actor.userId(), actor.username()));
+        return result;
     }
 
     public List<Version> versions(UUID id) {
@@ -204,22 +222,35 @@ public class ExperimentService {
 
     public Category createCategory(String code, String name, String description) {
         var actor = ActorContext.required();
-        return repository.createCategory(
+        var result = repository.createCategory(
                 actor.organizationId(), requiredText(code, "分类编码不能为空"),
                 requiredText(name, "分类名称不能为空"), requiredText(description, "分类说明不能为空"),
                 actor.userId());
+        audit(actor, "EXPERIMENT_CATEGORY_CREATED", "EXPERIMENT_CATEGORY", result.id(), result.name());
+        return result;
     }
 
     public Category updateCategory(UUID id, long revision, String name, String description) {
         var actor = ActorContext.required();
-        return repository.updateCategory(
+        var result = repository.updateCategory(
                 actor.organizationId(), id, revision, requiredText(name, "分类名称不能为空"),
                 requiredText(description, "分类说明不能为空"), actor.userId());
+        audit(actor, "EXPERIMENT_CATEGORY_UPDATED", "EXPERIMENT_CATEGORY", id, result.name());
+        return result;
     }
 
     public Category categoryActive(UUID id, long revision, boolean active) {
         var actor = ActorContext.required();
-        return repository.setCategoryActive(actor.organizationId(), id, revision, active);
+        var result = repository.setCategoryActive(actor.organizationId(), id, revision, active);
+        audit(actor, "EXPERIMENT_CATEGORY_STATUS_CHANGED", "EXPERIMENT_CATEGORY", id, result.name());
+        return result;
+    }
+
+    private void audit(com.jsd.aird.shared.security.Actor actor, String action, String type, UUID id, String name) {
+        if (audit == null) return;
+        ObjectNode detail = JsonNodeFactory.instance.objectNode();
+        if (name != null && !name.isBlank()) detail.put("objectName", name);
+        audit.append(actor.organizationId(), actor.userId(), action, type, id, detail);
     }
 
     private ExperimentRepository.Search normalize(ExperimentRepository.Search query) {

@@ -41,6 +41,7 @@ class IamAdminServiceTest {
     private final IamStore store = mock(IamStore.class);
     private final PasswordEncoder passwordEncoder = mock(PasswordEncoder.class);
     private final AuditLogFacade audit = mock(AuditLogFacade.class);
+    private final AuditLogPresentationService auditPresentation = mock(AuditLogPresentationService.class);
     private final Actor actor = new Actor(ORGANIZATION_ID, ACTOR_ID, "admin");
     private final AuthorizationService authorization = check ->
             new PermissionDecision(true, check.permissionCode(), "ALLOW", "ALL", "TEST");
@@ -48,7 +49,7 @@ class IamAdminServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new IamAdminService(store, authorization, passwordEncoder, audit);
+        service = new IamAdminService(store, authorization, passwordEncoder, audit, auditPresentation);
     }
 
     @Test

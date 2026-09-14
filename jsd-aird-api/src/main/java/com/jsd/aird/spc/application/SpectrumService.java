@@ -10,6 +10,9 @@ import java.util.UUID;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.jsd.aird.ops.application.port.AuditLogFacade;
 import com.jsd.aird.ops.application.port.FileStorageFacade;
 import com.jsd.aird.spc.application.port.SpectrumRepository;
 import com.jsd.aird.shared.api.PageResponse;
@@ -19,6 +22,7 @@ import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.security.ActorContext;
 import org.apache.pdfbox.Loader;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -38,11 +42,19 @@ public class SpectrumService {
     private final SpectrumRepository repository;
     private final FileStorageFacade storage;
     private final ObjectMapper objectMapper;
+    private final AuditLogFacade audit;
 
     public SpectrumService(SpectrumRepository repository, FileStorageFacade storage, ObjectMapper objectMapper) {
+        this(repository, storage, objectMapper, null);
+    }
+
+    @Autowired
+    public SpectrumService(SpectrumRepository repository, FileStorageFacade storage, ObjectMapper objectMapper,
+                           AuditLogFacade audit) {
         this.repository = repository;
         this.storage = storage;
         this.objectMapper = objectMapper;
+        this.audit = audit;
     }
 
     @Transactional
@@ -59,10 +71,12 @@ public class SpectrumService {
         if (repository.findCategoryByCode(actor.organizationId(), code).isPresent()) {
             throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "图谱分类编码已存在");
         }
-        return categoryView(repository.createCategory(new SpectrumRepository.NewCategory(
+        var result = categoryView(repository.createCategory(new SpectrumRepository.NewCategory(
                 UUID.randomUUID(), actor.organizationId(), code, required(command.name(), "分类名称不能为空"),
                 trim(command.description()), trim(command.analysisHint()), validJsonArray(command.fields()),
                 1000, false, actor.userId())));
+        audit(actor, "SPECTRUM_CATEGORY_CREATED", "SPECTRUM_CATEGORY", result.id(), result.name());
+        return result;
     }
 
     @Transactional
@@ -70,9 +84,11 @@ public class SpectrumService {
         var actor = ActorContext.required();
         var category = requireCategory(actor.organizationId(), categoryId);
         if (category.systemCategory()) throw new ApiException(ApiErrorCode.BAD_REQUEST, "内置图谱分类不可修改");
-        return categoryView(repository.renameCategory(actor.organizationId(), categoryId,
+        var result = categoryView(repository.renameCategory(actor.organizationId(), categoryId,
                 required(command.name(), "分类名称不能为空"), trim(command.description()), trim(command.analysisHint()),
                 validJsonArray(command.fields())));
+        audit(actor, "SPECTRUM_CATEGORY_UPDATED", "SPECTRUM_CATEGORY", categoryId, result.name());
+        return result;
     }
 
     @Transactional
@@ -82,6 +98,7 @@ public class SpectrumService {
         if (category.systemCategory()) throw new ApiException(ApiErrorCode.BAD_REQUEST, "内置图谱分类不可删除");
         if (category.chartCount() > 0) throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "分类中仍有图谱，请先移动图谱");
         repository.deleteCategory(actor.organizationId(), categoryId);
+        audit(actor, "SPECTRUM_CATEGORY_DELETED", "SPECTRUM_CATEGORY", categoryId, category.name());
     }
 
     @Transactional
@@ -102,6 +119,7 @@ public class SpectrumService {
                     file.contentType(), file.size(), file.sha256(), trim(command.sampleName()), trim(command.batchNo()),
                     trim(command.testConditions()), validJsonObject(command.metadata()), pageCount, actor.userId()));
             storage.activate(fileId);
+            audit(actor, "SPECTRUM_CHART_CREATED", "SPECTRUM_CHART", chart.id(), chart.title());
             return chartView(chart);
         } catch (DataIntegrityViolationException exception) {
             throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "图谱文件已被其他上传请求创建");
@@ -138,6 +156,7 @@ public class SpectrumService {
         requireChart(actor.organizationId(), chartId);
         repository.updateChart(actor.organizationId(), chartId, required(command.title(), "图谱名称不能为空"),
                 trim(command.sampleName()), trim(command.batchNo()), trim(command.testConditions()), validJsonObject(command.metadata()));
+        audit(actor, "SPECTRUM_CHART_UPDATED", "SPECTRUM_CHART", chartId, command.title());
         return chart(chartId);
     }
 
@@ -146,6 +165,7 @@ public class SpectrumService {
         var actor = ActorContext.required();
         requireChart(actor.organizationId(), chartId);
         repository.deleteChart(actor.organizationId(), chartId);
+        audit(actor, "SPECTRUM_CHART_DELETED", "SPECTRUM_CHART", chartId, null);
     }
 
     public StoredChartFile openChart(UUID chartId) {
@@ -172,6 +192,7 @@ public class SpectrumService {
     public SessionView createSession() {
         var actor = ActorContext.required();
         var id = repository.createSession(actor.organizationId(), actor.userId(), "新的图谱分析对话");
+        audit(actor, "SPECTRUM_SESSION_CREATED", "SPECTRUM_SESSION", id, "新的图谱分析对话");
         return new SessionView(id, "新的图谱分析对话", Instant.now(), Instant.now(), List.of());
     }
 
@@ -201,6 +222,7 @@ public class SpectrumService {
             throw new ApiException(ApiErrorCode.NOT_FOUND, "图谱对话不存在");
         }
         repository.renameSession(actor.organizationId(), actor.userId(), sessionId, title.strip());
+        audit(actor, "SPECTRUM_SESSION_RENAMED", "SPECTRUM_SESSION", sessionId, title.strip());
     }
 
     @Transactional
@@ -210,6 +232,14 @@ public class SpectrumService {
             throw new ApiException(ApiErrorCode.NOT_FOUND, "图谱对话不存在");
         }
         repository.deleteSession(actor.organizationId(), actor.userId(), sessionId);
+        audit(actor, "SPECTRUM_SESSION_DELETED", "SPECTRUM_SESSION", sessionId, null);
+    }
+
+    private void audit(com.jsd.aird.shared.security.Actor actor, String action, String type, UUID id, String name) {
+        if (audit == null) return;
+        ObjectNode detail = JsonNodeFactory.instance.objectNode();
+        if (name != null && !name.isBlank()) detail.put("objectName", name);
+        audit.append(actor.organizationId(), actor.userId(), action, type, id, detail);
     }
 
     public SpectrumRepository.CategoryRow requireCategory(UUID organizationId, UUID categoryId) {

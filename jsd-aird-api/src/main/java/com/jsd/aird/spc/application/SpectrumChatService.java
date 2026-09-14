@@ -19,6 +19,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.ops.application.port.FileStorageFacade;
+import com.jsd.aird.ops.application.port.AuditLogFacade;
 import com.jsd.aird.ops.application.port.OpsAsyncFacade;
 import com.jsd.aird.spc.application.port.SpectrumRepository;
 import com.jsd.aird.spc.application.port.SpectrumPromptPort;
@@ -56,11 +57,21 @@ public class SpectrumChatService {
     private final SpectrumPromptPort prompts;
     private final SpectrumResultValidator resultValidator;
     private final SpectrumResultPresenter resultPresenter;
+    private final AuditLogFacade audit;
     private final String model;
 
     public SpectrumChatService(SpectrumRepository repository, SpectrumService charts, ObjectMapper objectMapper,
                                OpsAsyncFacade async, SpectrumVisionClient vision, SpectrumPromptPort prompts,
                                SpectrumResultValidator resultValidator, SpectrumResultPresenter resultPresenter,
+                               @org.springframework.beans.factory.annotation.Value("${app.spectrum.model.name:}") String model) {
+        this(repository, charts, objectMapper, async, vision, prompts, resultValidator, resultPresenter, null, model);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public SpectrumChatService(SpectrumRepository repository, SpectrumService charts, ObjectMapper objectMapper,
+                               OpsAsyncFacade async, SpectrumVisionClient vision, SpectrumPromptPort prompts,
+                               SpectrumResultValidator resultValidator, SpectrumResultPresenter resultPresenter,
+                               AuditLogFacade audit,
                                @org.springframework.beans.factory.annotation.Value("${app.spectrum.model.name:}") String model) {
         this.repository = repository;
         this.charts = charts;
@@ -70,6 +81,7 @@ public class SpectrumChatService {
         this.prompts = prompts;
         this.resultValidator = resultValidator;
         this.resultPresenter = resultPresenter;
+        this.audit = audit;
         this.model = model == null ? "" : model;
     }
 
@@ -89,7 +101,13 @@ public class SpectrumChatService {
         var rows = chartIds.stream().map(id -> charts.requireChart(actor.organizationId(), id)).toList();
         var pageSelections = normalizedPageSelections(rows, command.pageSelections());
         UUID sessionId = command.sessionId();
-        if (sessionId == null) sessionId = repository.createSession(actor.organizationId(), actor.userId(), title(command.question()));
+        if (sessionId == null) {
+            sessionId = repository.createSession(actor.organizationId(), actor.userId(), title(command.question()));
+            if (audit != null) {
+                var detail = objectMapper.createObjectNode().put("objectName", title(command.question()));
+                audit.append(actor.organizationId(), actor.userId(), "SPECTRUM_SESSION_CREATED", "SPECTRUM_SESSION", sessionId, detail);
+            }
+        }
         else if (!repository.sessionExists(actor.organizationId(), actor.userId(), sessionId)) throw new ApiException(ApiErrorCode.NOT_FOUND, "图谱对话不存在");
         var categoryNames = objectMapper.createArrayNode();
         rows.stream().map(SpectrumRepository.ChartRow::categoryName).distinct().forEach(categoryNames::add);
@@ -101,6 +119,10 @@ public class SpectrumChatService {
                 categoryNames.toString(), scenario, actor.userId(),
                 scenario == null ? SpectrumPromptPort.GENERIC_VERSION : SpectrumPromptPort.COMPETITOR_VERSION,
                 model));
+        if (audit != null) {
+            var detail = objectMapper.createObjectNode().put("objectName", command.question().trim());
+            audit.append(actor.organizationId(), actor.userId(), "SPECTRUM_ANALYSIS_STARTED", "SPECTRUM_ANALYSIS", analysis.id(), detail);
+        }
         var userMessage = repository.insertMessage(new SpectrumRepository.NewMessage(
                 UUID.randomUUID(), actor.organizationId(), sessionId, analysis.id(), "USER", command.question().trim(),
                 "[]", "{}", "[]"));

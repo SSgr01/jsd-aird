@@ -3,6 +3,7 @@ package com.jsd.aird.rnd.application;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.jsd.aird.ops.application.port.AuditLogFacade;
 import com.jsd.aird.ops.application.port.FileStorageFacade;
 import com.jsd.aird.rnd.application.port.ResearchTestRepository;
 import com.jsd.aird.rnd.domain.ResearchTestModels.*;
@@ -24,8 +25,9 @@ public class ResearchTestService {
     private static final long MAX_FILE_SIZE=100L*1024*1024;
     private final ResearchTestRepository repository;private final FileStorageFacade files;
     private final ExperimentImportService sourceParser;
-    public ResearchTestService(ResearchTestRepository repository,FileStorageFacade files){this(repository,files,null);}
-    @Autowired public ResearchTestService(ResearchTestRepository repository,FileStorageFacade files,ExperimentImportService sourceParser){this.repository=repository;this.files=files;this.sourceParser=sourceParser;}
+    private final AuditLogFacade audit;
+    public ResearchTestService(ResearchTestRepository repository,FileStorageFacade files){this(repository,files,null,null);}
+    @Autowired public ResearchTestService(ResearchTestRepository repository,FileStorageFacade files,ExperimentImportService sourceParser,AuditLogFacade audit){this.repository=repository;this.files=files;this.sourceParser=sourceParser;this.audit=audit;}
     public PageResponse<Summary> search(Type type,String keyword,String category,String status,String owner,UUID projectId,LocalDate from,LocalDate to,int page,int size){var a=ActorContext.required();return repository.search(a.organizationId(),new ResearchTestRepository.Search(type,keyword,category,status,owner,projectId,from,to,Math.max(1,page),Math.min(100,Math.max(1,size))));}
     public Detail detail(UUID id){var a=ActorContext.required();return repository.detail(a.organizationId(),id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"研发测试记录不存在"));}
     public Detail create(CreateCommand c){
@@ -34,9 +36,10 @@ public class ResearchTestService {
         var editModel=importedEditModel(a.organizationId(),c);
         var detail=repository.create(new ResearchTestRepository.Create(a.organizationId(),a.userId(),a.username(),c.type(),c.businessNo(),c.name(),c.category(),c.scope(),blank(c.ownerName())?a.username():c.ownerName(),c.date()==null?LocalDate.now():c.date(),upper(c.format()),upper(c.sourceType()),blank(c.visibility())?"ALL":upper(c.visibility()),c.projectId(),c.stageId(),c.taskId(),c.sourceFileId(),c.templateVersionId(),c.templateHash(),c.templateSnapshot(),editModel,c.memberSnapshot(),c.effectiveFrom(),c.effectiveTo()));
         if(c.sourceFileId()!=null&&"IMPORT".equalsIgnoreCase(c.sourceType()))files.activate(c.sourceFileId());
+        audit(a, "RESEARCH_TEST_CREATED", "RESEARCH_TEST", detail.summary().id(), detail.summary().name());
         return detail;
     }
-    public Detail save(UUID id,ResearchTestRepository.Draft d){var a=ActorContext.required();if(blank(d.businessNo())||blank(d.name()))invalid("编号和名称不能为空");validateDates(d.effectiveFrom(),d.effectiveTo());return repository.save(a.organizationId(),id,d,a.userId(),a.username());}
+    public Detail save(UUID id,ResearchTestRepository.Draft d){var a=ActorContext.required();if(blank(d.businessNo())||blank(d.name()))invalid("编号和名称不能为空");validateDates(d.effectiveFrom(),d.effectiveTo());var result=repository.save(a.organizationId(),id,d,a.userId(),a.username());audit(a,"RESEARCH_TEST_SAVED","RESEARCH_TEST",id,result.summary().name());return result;}
     public Detail rename(UUID id, RenameCommand c){
         var a=ActorContext.required();
         if (blank(c.name())) invalid("名称不能为空");
@@ -48,16 +51,18 @@ public class ResearchTestService {
         if (current.summary().recordType()==Type.STANDARD && blank(c.category())) invalid("标准类别不能为空");
         if (current.summary().recordType()==Type.STANDARD && c.effectiveFrom()==null) invalid("生效日期不能为空");
         if (current.summary().recordType()==Type.STANDARD) validateDates(c.effectiveFrom(), c.effectiveTo());
-        return repository.rename(a.organizationId(), id, c.name().trim(), blank(c.businessNo())?null:c.businessNo().trim(),
+        var result = repository.rename(a.organizationId(), id, c.name().trim(), blank(c.businessNo())?null:c.businessNo().trim(),
                 blank(c.ownerName())?null:c.ownerName().trim(), c.date(),
                 blank(c.category())?null:c.category().trim(), c.scope()==null?null:c.scope().trim(), c.effectiveFrom(), c.effectiveTo(),
                 c.projectId(), c.stageId(), c.taskId(),
                 c.revision(), a.userId(), a.username());
+        audit(a,"RESEARCH_TEST_RENAMED","RESEARCH_TEST",id,result.summary().name());
+        return result;
     }
-    public Detail transition(UUID id,long revision,Status status,String comment){var a=ActorContext.required();return repository.transition(a.organizationId(),id,revision,status,comment,a.userId(),a.username());}
-    public Detail revision(UUID id,long revision,String reason){var a=ActorContext.required();return repository.createRevision(a.organizationId(),id,revision,reason,a.userId(),a.username());}
-    public Detail copy(UUID id){var a=ActorContext.required();return repository.copy(a.organizationId(),id,a.userId(),a.username());}
-    public void delete(UUID id,long revision){var a=ActorContext.required();repository.delete(a.organizationId(),id,revision,a.userId(),a.username());}
+    public Detail transition(UUID id,long revision,Status status,String comment){var a=ActorContext.required();var result=repository.transition(a.organizationId(),id,revision,status,comment,a.userId(),a.username());audit(a,"RESEARCH_TEST_STATUS_CHANGED","RESEARCH_TEST",id,result.summary().name());return result;}
+    public Detail revision(UUID id,long revision,String reason){var a=ActorContext.required();var result=repository.createRevision(a.organizationId(),id,revision,reason,a.userId(),a.username());audit(a,"RESEARCH_TEST_REVISION_CREATED","RESEARCH_TEST",id,result.summary().name());return result;}
+    public Detail copy(UUID id){var a=ActorContext.required();var result=repository.copy(a.organizationId(),id,a.userId(),a.username());audit(a,"RESEARCH_TEST_COPIED","RESEARCH_TEST",result.summary().id(),result.summary().name());return result;}
+    public void delete(UUID id,long revision){var a=ActorContext.required();repository.delete(a.organizationId(),id,revision,a.userId(),a.username());audit(a,"RESEARCH_TEST_DELETED","RESEARCH_TEST",id,null);}
     public List<Version> versions(UUID id){var a=ActorContext.required();return repository.versions(a.organizationId(),id);}
     public List<Audit> audits(UUID id){var a=ActorContext.required();return repository.audits(a.organizationId(),id);}
     @Transactional public Upload upload(UploadCommand c){var a=ActorContext.required();validateFile(c);try(var ignored=files.open(a.organizationId(),c.fileId())){}catch(ApiException e){throw e;}catch(Exception e){throw new ApiException(ApiErrorCode.FILE_NOT_READY,"上传文件不可读取");}
@@ -66,7 +71,7 @@ public class ResearchTestService {
         var edit=com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode().put("documentFormat",format.toLowerCase(Locale.ROOT)).put("sourceFileId",c.fileId().toString()).put("sourceFileName",c.originalName()).put("sourceContentType",c.contentType());
         if(sourceParser!=null){var parsed=sourceParser.parseSourceFile(a.organizationId(),c.fileId(),c.originalName(),c.sha256(),sourceFormat);if(parsed.initialEditorSnapshot()!=null&&parsed.initialEditorSnapshot().isObject())edit.set("documentSnapshot",parsed.initialEditorSnapshot());if((sourceFormat==TemplateFormat.IMAGE||sourceFormat==TemplateFormat.PDF)&&parsed.structureSummary()!=null)edit.set("ocrResult",parsed.structureSummary());}
         var detail=create(new CreateCommand(c.type(),c.type()==Type.STANDARD?standardUploadNumber():null,baseName(c.originalName()),c.category(),c.scope(),c.ownerName(),LocalDate.now(),format,"UPLOAD",c.visibility(),c.projectId(),c.stageId(),c.taskId(),c.fileId(),null,null,null,edit,null,c.type()==Type.STANDARD?(c.effectiveFrom()==null?LocalDate.now():c.effectiveFrom()):null,c.type()==Type.STANDARD?c.effectiveTo():null));
-        var upload=repository.addUpload(a.organizationId(),a.userId(),detail.summary().id(),c.fileId(),c.originalName(),c.contentType(),c.size(),c.sha256());files.activate(c.fileId());return upload;}
+        var upload=repository.addUpload(a.organizationId(),a.userId(),detail.summary().id(),c.fileId(),c.originalName(),c.contentType(),c.size(),c.sha256());files.activate(c.fileId());audit(a,"RESEARCH_TEST_UPLOAD_CREATED","RESEARCH_TEST_UPLOAD",upload.id(),c.originalName());return upload;}
     public PageResponse<Upload> uploads(Type type,String keyword,int page,int size){var a=ActorContext.required();return repository.uploads(a.organizationId(),type,keyword,Math.max(1,page),Math.min(100,Math.max(1,size)));}
     /** Revalidates the source attachment and refreshes the upload ledger row. */
     public Upload retryUpload(Type type,UUID id){
@@ -74,10 +79,13 @@ public class ResearchTestService {
         var current=repository.findUpload(a.organizationId(),id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"研发测试上传记录不存在"));
         requireUploadType(a.organizationId(),current,type);
         try(var ignored=files.open(a.organizationId(),current.fileId())){}catch(ApiException e){throw e;}catch(Exception e){throw new ApiException(ApiErrorCode.FILE_NOT_READY,"上传文件不可读取");}
-        return repository.retryUpload(a.organizationId(),id);
+        var result = repository.retryUpload(a.organizationId(),id);
+        audit(a,"RESEARCH_TEST_UPLOAD_RETRIED","RESEARCH_TEST_UPLOAD",id,current.originalName());
+        return result;
     }
-    public void deleteUpload(Type type,UUID id){var a=ActorContext.required();var current=repository.findUpload(a.organizationId(),id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"研发测试上传记录不存在"));requireUploadType(a.organizationId(),current,type);repository.deleteUpload(a.organizationId(),id);}
+    public void deleteUpload(Type type,UUID id){var a=ActorContext.required();var current=repository.findUpload(a.organizationId(),id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"研发测试上传记录不存在"));requireUploadType(a.organizationId(),current,type);repository.deleteUpload(a.organizationId(),id);audit(a,"RESEARCH_TEST_UPLOAD_DELETED","RESEARCH_TEST_UPLOAD",id,current.originalName());}
     private void requireUploadType(UUID organizationId,Upload upload,Type expected){var detail=repository.detail(organizationId,upload.recordId()).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"研发测试记录不存在"));if(detail.summary().recordType()!=expected)throw new ApiException(ApiErrorCode.NOT_FOUND,"研发测试上传记录不存在");}
+    private void audit(com.jsd.aird.shared.security.Actor actor,String action,String type,UUID id,String name){if(audit==null)return;var detail=JsonNodeFactory.instance.objectNode();if(name!=null&&!name.isBlank())detail.put("objectName",name);audit.append(actor.organizationId(),actor.userId(),action,type,id,detail);}
     private JsonNode importedEditModel(UUID organizationId,CreateCommand c){
         if(sourceParser==null||c.type()!=Type.STANDARD||c.sourceFileId()==null||!"IMPORT".equalsIgnoreCase(c.sourceType()))return c.editModel();
         var sourceName=c.editModel()!=null?c.editModel().path("sourceFileName").asText(""):"";

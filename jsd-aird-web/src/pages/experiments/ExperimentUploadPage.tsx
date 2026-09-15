@@ -3,9 +3,11 @@ import { App, Button, Form, Modal, Select, Space, Upload } from 'antd';
 import type { UploadFile, UploadProps } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { UploadWorkspace, type UploadWorkspaceRecord } from '@/components/upload-workspace';
 import { ProjectRelationPicker } from '@/components/project-relations/ProjectRelationPicker';
 import type { ProjectRelationTarget } from '@/services/project/project-resource-api';
-import { UploadWorkspace, type UploadWorkspaceRecord } from '@/components/upload-workspace';
+import { templateApi } from '@/services/templates/template-api';
+import type { TemplateListItem } from '@/features/template-workspace/types';
 import {
   importExperimentFile,
   deleteExperimentImport,
@@ -17,6 +19,7 @@ import {
   type ExperimentImportJob,
 } from '@/services/experiments/experiment-api';
 import { downloadFile } from '@/services/files/file-api';
+import './experiments.css';
 
 const visibilityOptions = [
   { value: 'ALL' as const, label: '全员可见' },
@@ -34,6 +37,8 @@ export function ExperimentUploadPage() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [location, setLocation] = useState<string>();
   const [projectRelations, setProjectRelations] = useState<ProjectRelationTarget[]>([]);
+  const [templates, setTemplates] = useState<TemplateListItem[]>([]);
+  const [templateVersionId, setTemplateVersionId] = useState<string>();
   const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [filter, setFilter] = useState('ALL');
@@ -46,7 +51,7 @@ export function ExperimentUploadPage() {
     try {
       setJobs(await listExperimentImports());
     } catch (error) {
-      void message.error(error instanceof Error ? error.message : '实验上传记录加载失败');
+      void message.error(error instanceof Error ? error.message : '实验导入记录加载失败');
     } finally {
       if (showLoading) setLoading(false);
     }
@@ -57,6 +62,7 @@ export function ExperimentUploadPage() {
         setCategories(items);
         setLocation((current) => current ?? items[0]?.name);
       }),
+      templateApi.list({ status: 'PUBLISHED', page: 1, size: 100 }).then((result) => setTemplates(result.items)),
       load(),
     ]);
   }, [load]);
@@ -140,6 +146,24 @@ export function ExperimentUploadPage() {
       ),
     [filter, jobs, keyword],
   );
+  const templateOptions = useMemo(() => {
+    const groups = new Map<string, TemplateListItem[]>();
+    templates.forEach((item) => {
+      const category = item.category?.trim() || '未分类';
+      groups.set(category, [...(groups.get(category) || []), item]);
+    });
+    return [...groups.entries()]
+      .sort(([left], [right]) => left.localeCompare(right, 'zh-CN'))
+      .map(([label, items]) => ({
+        label,
+        options: items
+          .sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'))
+          .map((item) => ({
+            value: item.versionId,
+            label: `${item.name}（${item.format === 'XLSX' ? 'Excel' : 'Word'} · V${item.versionNo}）`,
+          })),
+      }));
+  }, [templates]);
   const records: UploadWorkspaceRecord[] = filtered
     .slice((page.current - 1) * page.pageSize, page.current * page.pageSize)
     .map((job) => {
@@ -202,12 +226,12 @@ export function ExperimentUploadPage() {
             icon={<DeleteOutlined />}
             disabled={!['PARSING', 'COMPLETED', 'FAILED'].includes(job.status)}
             onClick={() => Modal.confirm({
-              title: `删除“${job.sourceFileName}”的上传记录？`,
+              title: `删除“${job.sourceFileName}”的导入记录？`,
               content: job.status === 'PARSING'
                 ? '删除后将取消后台解析任务，原始文件仍保留在文件存储中。'
                 : job.experimentId
-                ? '仅删除上传记录，不删除已生成的实验草稿、原始附件或来源追溯关系。'
-                : '仅删除上传记录，不删除原始附件。',
+                ? '仅删除导入记录，不删除已生成的实验草稿、原始附件或来源追溯关系。'
+                : '仅删除导入记录，不删除原始附件。',
               okText: job.status === 'PARSING' ? '取消解析并删除' : '删除',
               cancelText: '取消',
               okButtonProps: { danger: true },
@@ -215,9 +239,9 @@ export function ExperimentUploadPage() {
                 try {
                   await deleteExperimentImport(job.id);
                   await load();
-                  void message.success(job.status === 'PARSING' ? '解析任务已取消，上传记录已删除' : '上传记录已删除，实验草稿仍保留');
+                  void message.success(job.status === 'PARSING' ? '解析任务已取消，导入记录已删除' : '导入记录已删除，实验草稿仍保留');
                 } catch (error) {
-                  void message.error(error instanceof Error ? error.message : '上传记录删除失败');
+                  void message.error(error instanceof Error ? error.message : '导入记录删除失败');
                 }
               },
             })}
@@ -231,25 +255,32 @@ export function ExperimentUploadPage() {
   return (
     <>
     <UploadWorkspace
-      breadcrumbs={[{ title: '电子实验记录本' }, { title: '实验上传' }]}
-      title="实验上传"
-      description="上传 Word / Excel 或实验记录图片"
+      breadcrumbs={[{ title: '电子实验记录本' }, { title: '实验导入' }]}
+      title="实验导入"
+      description="导入 Word / Excel 或实验记录图片"
       headerActions={<Button type="primary" onClick={() => navigate('/experiments')}>实验列表</Button>}
       leftTitle="基础分类"
       classification={
         <Form layout="vertical" component={false}>
-          <Form.Item label="保存位置">
+          <div className="experiment-import-fields">
+          <Form.Item label="实验分类">
             <Select
               value={location}
               onChange={setLocation}
+              popupMatchSelectWidth={false}
+              classNames={{ popup: { root: 'experiment-import-dropdown' } }}
               options={categories.map((item) => ({ value: item.name, label: item.name }))}
             />
           </Form.Item>
-          <Form.Item label="关联项目 / 阶段 / 任务">
-            <ProjectRelationPicker value={projectRelations} onChange={setProjectRelations} multiple={false} />
+          <Form.Item label="模板选择">
+            <Select allowClear showSearch optionFilterProp="label" value={templateVersionId} onChange={setTemplateVersionId} placeholder="不指定模板" popupMatchSelectWidth={false} classNames={{ popup: { root: 'experiment-import-dropdown experiment-template-dropdown' } }} options={templateOptions} />
           </Form.Item>
           <Form.Item label="权限可见">
-            <Select value={visibility} onChange={setVisibility} options={visibilityOptions} />
+            <Select value={visibility} onChange={setVisibility} popupMatchSelectWidth={false} classNames={{ popup: { root: 'experiment-import-dropdown' } }} options={visibilityOptions} />
+          </Form.Item>
+          </div>
+          <Form.Item label="关联项目 / 阶段 / 任务">
+            <ProjectRelationPicker value={projectRelations} onChange={setProjectRelations} multiple={false} />
           </Form.Item>
         </Form>
       }
@@ -264,11 +295,11 @@ export function ExperimentUploadPage() {
       onClearFiles={() => setFiles([])}
       uploadMainText="拖拽文件到此处/点击选择文件/点击拍照上传"
       uploadHint="支持 PDF / Office / CSV / 图片，可批量上传，单个文件最大100M。"
-      submitLabel="开始上传"
+      submitLabel="开始导入"
       submitIcon={<CloudUploadOutlined />}
       onSubmit={() => void submit()}
       submitting={uploading}
-      rightTitle="已上传文件"
+      rightTitle="已导入文件"
       rightCount={filtered.length}
       rightFilters={[
         { key: 'ALL', label: '全部' },

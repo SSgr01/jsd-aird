@@ -43,6 +43,7 @@ const TaskPage = lazy(async () => ({ default: (await import('@/pages/project')).
 const ProjectDocumentWorkspacePage = lazy(async () => ({ default: (await import('@/pages/project/ProjectDocumentWorkspacePage')).ProjectDocumentWorkspacePage }));
 const ExperimentListPage = lazy(async () => ({ default: (await import('@/pages/experiments')).ExperimentListPage }));
 const ExperimentUploadPage = lazy(async () => ({ default: (await import('@/pages/experiments')).ExperimentUploadPage }));
+const NewExperimentPage = lazy(async () => ({ default: (await import('@/pages/experiments')).NewExperimentPage }));
 const ExperimentWorkspacePage = lazy(async () => ({ default: (await import('@/pages/experiments')).ExperimentWorkspacePage }));
 const ResearchTestListPage = lazy(async () => ({ default: (await import('@/pages/research-test')).ResearchTestListPage }));
 const ResearchTestUploadPage = lazy(async () => ({ default: (await import('@/pages/research-test')).ResearchTestUploadPage }));
@@ -158,6 +159,7 @@ export const routeConfig: RouteObject[] = [
       { path: 'projects/tasks', element: <TaskPage /> },
       { path: 'experiments', element: <Navigate to="/experiments/list" replace /> },
       { path: 'experiments/list', element: <ExperimentListPage /> },
+      { path: 'experiments/new', element: <NewExperimentPage /> },
       { path: 'experiments/upload', element: <ExperimentUploadPage /> },
       { path: 'experiments/:id', element: <ExperimentWorkspacePage /> },
       { path: 'research-test', element: <Navigate to="/research-test/reports" replace /> },

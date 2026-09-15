@@ -24,8 +24,9 @@ import {
   SettingOutlined,
   UserOutlined,
   SearchOutlined,
+  PlusOutlined,
 } from '@ant-design/icons';
-import { ProLayout } from '@ant-design/pro-components';
+import { ProLayout, type MenuDataItem } from '@ant-design/pro-components';
 import { Avatar, Button, Dropdown, Input, Result, Tooltip, Typography, type InputRef } from 'antd';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useEffect, useMemo, useRef } from 'react';
@@ -34,7 +35,7 @@ import { appEnv } from '@/app/config/env';
 import { AuthGate } from '@/components/auth/AuthGate';
 import { useAppStore } from '@/stores/app-store';
 import { useAuthStore } from '@/stores/auth-store';
-import { canViewPath, filterMenuRoute, firstAccessiblePath, requiredPermissionForPath } from '@/routes/route-permissions';
+import { canViewPathWithMenus, filterMenuRoute, firstAccessiblePath, requiredPermissionForPath } from '@/routes/route-permissions';
 
 const route = {
   path: '/',
@@ -48,6 +49,15 @@ const route = {
       path: '/partners',
       name: '客户管理',
       icon: <BankOutlined />,
+    },
+    {
+      path: '/templates',
+      name: '模板中心',
+      icon: <FileTextOutlined />,
+      routes: [
+        { path: '/templates/upload', name: '模板上传', icon: <UploadOutlined /> },
+        { path: '/templates/library', name: '模板查看', icon: <EyeOutlined /> },
+      ],
     },
     {
       path: '/projects',
@@ -64,17 +74,9 @@ const route = {
       name: '电子实验记录本',
       icon: <ExperimentOutlined />,
       routes: [
-        { path: '/experiments/upload', name: '实验上传', icon: <UploadOutlined /> },
+        { path: '/experiments/new', name: '新增实验', icon: <PlusOutlined /> },
+        { path: '/experiments/upload', name: '实验导入', icon: <UploadOutlined /> },
         { path: '/experiments/list', name: '实验查看', icon: <EyeOutlined /> },
-      ],
-    },
-    {
-      path: '/ai-assistant',
-      name: 'AI研发助手',
-      icon: <RobotOutlined />,
-      routes: [
-        { path: '/assistant', name: 'AI问答', icon: <RobotOutlined /> },
-        { path: '/knowledge/search', name: '文件检索', icon: <FileSearchOutlined /> },
       ],
     },
     {
@@ -89,25 +91,6 @@ const route = {
       ],
     },
     {
-      path: '/knowledge',
-      name: '研发知识库',
-      icon: <FolderOpenOutlined />,
-      routes: [
-        { path: '/knowledge/library', name: '资料上传', icon: <FolderOpenOutlined /> },
-        { path: '/knowledge/view', name: '知识库查看', icon: <EyeOutlined /> },
-        { path: '/knowledge/review', name: '审核工作台', icon: <AuditOutlined /> },
-      ],
-    },
-    {
-      path: '/templates',
-      name: '模板中心',
-      icon: <FileTextOutlined />,
-      routes: [
-        { path: '/templates/upload', name: '模板上传', icon: <UploadOutlined /> },
-        { path: '/templates/library', name: '模板查看', icon: <EyeOutlined /> },
-      ],
-    },
-    {
       path: '/quality',
       name: '品管部数据',
       icon: <SafetyCertificateOutlined />,
@@ -117,12 +100,50 @@ const route = {
       ],
     },
     {
+      path: '/spectrum',
+      name: 'AI图谱中心',
+      icon: <LineChartOutlined />,
+      routes: [
+        { path: '/spectrum/upload', name: '图谱上传', icon: <UploadOutlined /> },
+        { path: '/spectrum/view', name: '图谱查看', icon: <EyeOutlined /> },
+        { path: '/spectrum/chat', name: 'AI图谱分析', icon: <RobotOutlined /> },
+      ],
+    },
+    {
       path: '/production-orders',
       name: '生产单管理',
       icon: <OrderedListOutlined />,
       routes: [
         { path: '/production-orders/upload', name: '生产单上传', icon: <InboxOutlined /> },
         { path: '/production-orders/list', name: '生产单查看', icon: <EyeOutlined /> },
+      ],
+    },
+    {
+      path: '/ai-assistant',
+      name: 'AI研发助手',
+      icon: <RobotOutlined />,
+      routes: [
+        { path: '/knowledge/search', name: '文件检索', icon: <FileSearchOutlined /> },
+        { path: '/assistant', name: 'AI问答', icon: <RobotOutlined /> },
+      ],
+    },
+    {
+      path: '/knowledge',
+      name: '研发知识库',
+      icon: <FolderOpenOutlined />,
+      routes: [
+        { path: '/knowledge/review', name: '审核工作台', icon: <AuditOutlined /> },
+        { path: '/knowledge/library', name: '资料上传', icon: <FolderOpenOutlined /> },
+        { path: '/knowledge/view', name: '知识库查看', icon: <EyeOutlined /> },
+      ],
+    },
+    {
+      path: '/data',
+      name: '数据中心',
+      icon: <DatabaseOutlined />,
+      routes: [
+        { path: '/data/upload', name: '数据上传', icon: <UploadOutlined /> },
+        { path: '/data/view', name: '数据查看', icon: <EyeOutlined /> },
       ],
     },
     {
@@ -138,34 +159,14 @@ const route = {
       ],
     },
     {
-      path: '/data',
-      name: '数据中心',
-      icon: <DatabaseOutlined />,
-      routes: [
-        { path: '/data/upload', name: '数据上传', icon: <UploadOutlined /> },
-        { path: '/data/view', name: '数据查看', icon: <EyeOutlined /> },
-      ],
-    },
-    {
-      path: '/spectrum',
-      name: 'AI图谱中心',
-      icon: <LineChartOutlined />,
-      routes: [
-        { path: '/spectrum/upload', name: '图谱上传', icon: <UploadOutlined /> },
-        { path: '/spectrum/view', name: '图谱查看', icon: <EyeOutlined /> },
-        { path: '/spectrum/chat', name: 'AI图谱分析', icon: <RobotOutlined /> },
-      ],
-    },
-    {
       path: '/system',
       name: '系统设置',
       icon: <SettingOutlined />,
       routes: [
         { path: '/system/users', name: '用户管理', icon: <UserOutlined /> },
-        { path: '/system/roles', name: '角色权限配置', icon: <SettingOutlined /> },
         { path: '/system/user-permissions', name: '用户权限配置', icon: <SettingOutlined /> },
-        { path: '/system/audit-logs', name: '操作日志', icon: <AuditOutlined /> },
         { path: '/system/dictionary', name: '基础字典', icon: <FileTextOutlined /> },
+        { path: '/system/audit-logs', name: '操作日志', icon: <AuditOutlined /> },
         { path: '/system/parameters', name: '系统参数', icon: <SettingOutlined /> },
       ],
     },
@@ -186,7 +187,7 @@ function UserMenu() {
   ];
   return <Dropdown
     trigger={['click']}
-    menu={{ items, onClick: ({ key }) => {
+    menu={{ items, onClick: ({ key }: { key: string }) => {
       if (key === 'workbench') navigate('/dashboard');
       if (key === 'change-password') navigate('/change-password');
       if (key === 'logout') void logout();
@@ -200,7 +201,7 @@ function UserMenu() {
   </Dropdown>;
 }
 
-function AppHeaderTools({ permissions }: { permissions: string[] }) {
+function AppHeaderTools({ permissions, menuKeys }: { permissions: string[]; menuKeys: string[] }) {
   const navigate = useNavigate();
   const searchRef = useRef<InputRef>(null);
 
@@ -233,7 +234,7 @@ function AppHeaderTools({ permissions }: { permissions: string[] }) {
         suffix={<kbd>Ctrl K</kbd>}
         onPressEnter={(event) => search(event.currentTarget.value)}
       />
-      {canViewPath('/system/users', permissions) && (
+      {canViewPathWithMenus('/system/users', permissions, menuKeys) && (
         <Tooltip title="系统设置">
           <Button
             type="text"
@@ -249,9 +250,9 @@ function AppHeaderTools({ permissions }: { permissions: string[] }) {
   );
 }
 
-function AccessDenied({ permissions }: { permissions: string[] }) {
+function AccessDenied({ permissions, menuKeys }: { permissions: string[]; menuKeys: string[] }) {
   const navigate = useNavigate();
-  const home = firstAccessiblePath(permissions);
+  const home = firstAccessiblePath(permissions, menuKeys);
   return <Result status="403" title="暂无权限访问此页面" subTitle="请联系系统管理员开通查看权限" extra={<Button type="primary" onClick={() => navigate(home || '/login', { replace: true })}>{home ? '返回工作台' : '返回登录'}</Button>} />;
 }
 
@@ -260,19 +261,21 @@ export function BasicLayout() {
   const isTemplateWorkspace = /^\/templates\/[^/]+\/workspace$/.test(location.pathname);
   const isDataWorkspace = /^\/data\/(?:import-jobs|assets)\/[^/]+$/.test(location.pathname);
   const isProjectDocumentWorkspace = /^\/projects\/[^/]+\/documents\/[^/]+$/.test(location.pathname);
+  const isPermissionManagement = location.pathname.startsWith('/system/user-permissions');
   const isWorkspace = isTemplateWorkspace || isDataWorkspace;
   const collapsed = useAppStore((state) => state.sidebarCollapsed);
   const setCollapsed = useAppStore((state) => state.setSidebarCollapsed);
   const user = useAuthStore((state) => state.user);
   const permissions = user?.permissions ?? [];
-  const visibleRoute = useMemo(() => filterMenuRoute(route, permissions) ?? { path: '/', routes: [] }, [permissions]);
+  const menuKeys = user?.menuKeys ?? [];
+  const visibleRoute = useMemo(() => filterMenuRoute(route, permissions, menuKeys) ?? { path: '/', routes: [] }, [permissions, menuKeys]);
   const requiredPermission = requiredPermissionForPath(location.pathname);
 
   return (
     <AuthGate>
-      <div className={`app-shell${collapsed ? ' app-shell-sidebar-collapsed' : ''}`}>
+      <div className={`app-shell${collapsed ? ' app-shell-sidebar-collapsed' : ''}${isPermissionManagement ? ' permission-management-shell' : ''}`}>
       <div className="app-topbar" aria-label="全局工具区">
-        <AppHeaderTools permissions={permissions} />
+        <AppHeaderTools permissions={permissions} menuKeys={menuKeys} />
       </div>
       <ProLayout
         title={appEnv.title}
@@ -289,13 +292,13 @@ export function BasicLayout() {
         actionsRender={false}
         rightContentRender={() => null}
         contentStyle={{ minHeight: 'calc(100dvh - 64px)', padding: 0 }}
-        menuItemRender={(item, dom, menuProps) => (item.path ? <Link to={item.path} onClick={menuProps.isMobile ? item.onClick : undefined}>{dom}</Link> : dom)}
+        menuItemRender={(item: MenuDataItem & { isUrl: boolean; onClick: () => void }, dom: React.ReactNode, menuProps: { isMobile?: boolean }) => (item.path ? <Link to={item.path} onClick={menuProps.isMobile ? item.onClick : undefined}>{dom}</Link> : dom)}
       >
         <main
-          className={`app-content${isWorkspace ? ' app-content-workspace' : ''}${isProjectDocumentWorkspace ? ' app-content-project-document-workspace' : ''}`}
+          className={`app-content${isWorkspace ? ' app-content-workspace' : ''}${isProjectDocumentWorkspace ? ' app-content-project-document-workspace' : ''}${isPermissionManagement ? ' app-content-permission-management' : ''}`}
           id="main-content"
         >
-          {requiredPermission && !canViewPath(location.pathname, permissions) ? <AccessDenied permissions={permissions} /> : <Outlet />}
+          {requiredPermission && !canViewPathWithMenus(location.pathname, permissions, menuKeys) ? <AccessDenied permissions={permissions} menuKeys={menuKeys} /> : <Outlet />}
         </main>
       </ProLayout>
       </div>

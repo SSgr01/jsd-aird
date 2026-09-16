@@ -32,6 +32,22 @@ class JdbcDataScopeResolverTest {
     }
 
     @Test
+    void normalizedOrganizationScopeAllowsWithoutObjectLookup() {
+        var result = resolver.resolve(check("PROJECT"), new Binding("project.view", "ALLOW", "ORG", List.of()));
+
+        assertThat(result.allowed()).isTrue();
+        assertThat(result.scopeType()).isEqualTo("ORG");
+    }
+
+    @Test
+    void unsupportedScopeDefaultsToDeny() {
+        var result = resolver.resolve(check("UNKNOWN_RESOURCE"), new Binding("test.permission", "ALLOW", "CREATOR", List.of()));
+
+        assertThat(result.allowed()).isFalse();
+        assertThat(result.reason()).isEqualTo("RESOURCE_SCOPE_UNSUPPORTED");
+    }
+
+    @Test
     void selectedScopeDeniesListsAndAllowsOnlySelectedObjects() {
         var binding = new Binding("template.view", "ALLOW", "SELECTED", List.of(resourceId));
 
@@ -46,6 +62,17 @@ class JdbcDataScopeResolverTest {
     void selfScopeUsesDatabaseOwnershipAndDoesNotDefaultToAll() {
         when(jdbc.queryForObject(anyString(), eq(Boolean.class), any(Object[].class))).thenReturn(true);
         var result = resolver.resolve(check("KNOWLEDGE"), new Binding("knowledge.manage", "ALLOW", "SELF", List.of()));
+
+        assertThat(result.allowed()).isTrue();
+        assertThat(result.scopeType()).isEqualTo("SELF");
+    }
+
+    @Test
+    void creatorScopeSupportsProjects() {
+        when(jdbc.queryForObject(anyString(), eq(Boolean.class), any(Object[].class))).thenReturn(true);
+
+        var result = resolver.resolve(check("PROJECT"),
+                new Binding("project.view", "ALLOW", "CREATOR", List.of()));
 
         assertThat(result.allowed()).isTrue();
         assertThat(result.scopeType()).isEqualTo("SELF");

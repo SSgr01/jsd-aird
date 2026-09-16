@@ -1,5 +1,7 @@
 package com.jsd.aird.mdm.application.service;
 
+import com.jsd.aird.iam.api.AuthorizationService;
+import com.jsd.aird.iam.api.PermissionCheck;
 import com.jsd.aird.mdm.application.command.ProjectCommands;
 import com.jsd.aird.mdm.application.port.ProjectRepository;
 import com.jsd.aird.mdm.application.query.ProjectQuery;
@@ -8,6 +10,7 @@ import com.jsd.aird.mdm.domain.model.ProjectPriority;
 import com.jsd.aird.mdm.domain.model.ProjectStatus;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
+import com.jsd.aird.shared.security.ActorContext;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.apache.poi.ss.usermodel.Row;
@@ -22,30 +25,33 @@ import java.util.UUID;
 @Service
 public class ProjectService {
 
-    static final String OPERATOR = "system";
-
     private final ProjectRepository repository;
+    private final AuthorizationService authorization;
 
-    public ProjectService(ProjectRepository repository) {
+    public ProjectService(ProjectRepository repository, AuthorizationService authorization) {
         this.repository = repository;
+        this.authorization = authorization;
     }
 
     public List<Project> search(ProjectQuery query) {
-        return repository.findPage(query);
+        return repository.findPage(scoped(query));
     }
 
     public long count(ProjectQuery query) {
-        return repository.count(query);
+        return repository.count(scoped(query));
     }
 
     public byte[] exportXlsx(ProjectQuery query) {
-        var total = repository.count(query);
+        var scopedQuery = scoped(query);
+        var total = repository.count(scopedQuery);
         var projects = new java.util.ArrayList<Project>();
         var pageSize = 200;
         var pages = (int) Math.ceil((double) total / pageSize);
         for (var page = 1; page <= pages; page++) {
             var pageQuery = new ProjectQuery(query.keyword(), query.owner(), query.priority(), query.status(),
-                query.startDateFrom(), query.startDateTo(), query.partnerId(), page, pageSize);
+                query.startDateFrom(), query.startDateTo(), query.partnerId(), page, pageSize)
+                .withDataScope(scopedQuery.organizationId(), scopedQuery.scopeType(), scopedQuery.scopeUserId(),
+                    scopedQuery.scopeTargetIds());
             projects.addAll(repository.findPage(pageQuery));
         }
         try (var workbook = new XSSFWorkbook(); var output = new ByteArrayOutputStream()) {
@@ -108,7 +114,8 @@ public class ProjectService {
             command.status() == null ? ProjectStatus.NOT_STARTED : command.status(),
             command.teamSize() == null ? 0 : Math.max(command.teamSize(), 0),
             command.background(), command.customFields(), command.teamMembers(), 0, now, now);
-        repository.insert(project, OPERATOR);
+        var actor = ActorContext.required();
+        repository.insert(project, actor.organizationId(), actor.userId().toString());
         return new ProjectCommands.Created(project.id(), 0);
     }
 
@@ -132,12 +139,12 @@ public class ProjectService {
             current.version(), current.createdAt(), Instant.now());
 
         var version = command.version() == null ? current.version() : command.version();
-        if (!repository.update(project, version, OPERATOR)) conflict();
+        if (!repository.update(project, version, operator())) conflict();
     }
 
     @Transactional
     public void delete(UUID id) {
-        if (!repository.softDelete(id, OPERATOR))
+        if (!repository.softDelete(id, operator()))
             throw new ApiException(ApiErrorCode.NOT_FOUND, "项目不存在");
     }
 
@@ -157,7 +164,8 @@ public class ProjectService {
                 truncate(source.name() + "（副本）"), source.partnerId(), source.partnerName(), source.owner(),
                 source.startDate(), source.endDate(), source.priority(), ProjectStatus.NOT_STARTED,
                 source.teamSize(), source.background(), source.customFields(), source.teamMembers(), 0, now, now);
-            repository.insert(copy, OPERATOR);
+            var actor = ActorContext.required();
+            repository.insert(copy, actor.organizationId(), actor.userId().toString());
             return new ProjectCommands.Created(copy.id(), 0);
         }).toList();
     }
@@ -166,6 +174,20 @@ public class ProjectService {
         return projectCode == null || projectCode.isBlank()
             ? repository.nextProjectCode(LocalDate.now().getYear())
             : projectCode.trim();
+    }
+
+    private ProjectQuery scoped(ProjectQuery query) {
+        var actor = ActorContext.required();
+        var scope = authorization.resolveScope(new PermissionCheck(actor.organizationId(), actor.userId(),
+            "project.view", "PROJECT", null, "READ", "project.list"));
+        if (!scope.allowed()) {
+            throw new ApiException(ApiErrorCode.PERMISSION_DENIED, "当前用户没有项目查看权限");
+        }
+        return query.withDataScope(actor.organizationId(), scope.scopeType(), actor.userId(), scope.targetIds());
+    }
+
+    private static String operator() {
+        return ActorContext.required().userId().toString();
     }
 
     private static void validate(ProjectCommands.SaveProject command) {

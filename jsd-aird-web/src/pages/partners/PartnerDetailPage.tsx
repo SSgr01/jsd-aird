@@ -7,6 +7,7 @@ import type { BusinessPartner, ContactInput, PartnerContact, PartnerInput } from
 import { deleteCommunication, getCommunications, getRequirements, updateRequirement } from '@/services/partners/crm-api';
 import type { Communication, Requirement } from '@/services/partners/crm-api';
 import { formatProjectStatus, getProjects, type Project } from '@/services/project/project-api';
+import { useAuthStore } from '@/stores/auth-store';
 import dayjs from '@/utils/dayjs';
 import { errorMessage } from '@/services/http/errors';
 import './partner-modals.css';
@@ -106,6 +107,17 @@ export function PartnerDetailPage() {
   const [communicationsLoading, setCommunicationsLoading] = useState(false);
   const [businessModal, setBusinessModal] = useState<{ mode: 'requirement' | 'followup'; edit?: Requirement | Communication }>();
   const [activeKey, setActiveKey] = useState<string>('overview');
+  const authUser = useAuthStore((state) => state.user);
+  const menuKeys = authUser?.menuKeys ?? [];
+  const tabMenuKeys: Record<string, string> = {
+    overview: 'customer.overview',
+    requirements: 'customer.needs',
+    projects: 'customer.projects',
+    meetings: 'customer.followup',
+  };
+  const allowedTabKeys = useMemo(() => Object.entries(tabMenuKeys)
+    .filter(([, menuKey]) => menuKeys.length === 0 || menuKeys.includes(menuKey))
+    .map(([tabKey]) => tabKey), [menuKeys]);
   const [followupViewMode, setFollowupViewMode] = useState<'table' | 'card'>('card');
   const [projectOptions, setProjectOptions] = useState<{ value: string; label: string }[]>([]);
   const [allProjects, setAllProjects] = useState<Project[]>([]);
@@ -173,6 +185,9 @@ export function PartnerDetailPage() {
     }
   }, [id]);
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    if (!allowedTabKeys.includes(activeKey)) setActiveKey(allowedTabKeys[0] ?? '');
+  }, [activeKey, allowedTabKeys]);
 
   const ensureRequirements = useCallback(async () => {
     if (!id || requirementsLoaded) return;
@@ -500,7 +515,7 @@ export function PartnerDetailPage() {
   return <div className="cm-page cm-partner-detail-page">
     <Breadcrumb items={[{ title: '客户管理' }, { title: partner.name }, { title: tabLabelMap[activeKey] ?? '公司概览' }]} />
     <div className="cm-detail-head"><div className="cm-back-title"><Link className="cm-back" to="/partners"><ArrowLeftOutlined /></Link><div className="cm-detail-title"><h3><span className="cm-detail-name">{partner.name}</span>{partner.customerLevel && <span className={`pm-tag ${customerLevelTagClasses[partner.customerLevel] ?? 'status-not_started'}`}>{partner.customerLevel}</span>}<span className={`pm-tag ${cooperationStatusTagClasses[partner.cooperationStatus ?? ''] ?? 'status-not_started'}`}>{partner.cooperationStatus || '潜在客户'}</span></h3><div className="cm-detail-meta"><span>客户编号：{partner.partnerCode}</span><span>所属行业：{partner.industry || '—'}</span></div></div></div></div>
-    <div className="cm-tabs-shell"><Tabs className="cm-tabs" activeKey={activeKey} onChange={setActiveKey} items={[
+    <div className="cm-tabs-shell">{allowedTabKeys.length ? <Tabs className="cm-tabs" activeKey={activeKey} onChange={setActiveKey} items={[
       { key: 'overview', label: '公司概览', children: <div className="cm-tab-body">{overview}</div> },
       {
         key: 'requirements',
@@ -725,7 +740,7 @@ export function PartnerDetailPage() {
         ),
       },
       */
-    ]} /></div>
+    ].filter((item) => allowedTabKeys.includes(item.key))} /> : <Empty description="当前业务角色未授权客户详情功能" />}</div>
     {businessModal && <PartnerPrototypeModal mode={businessModal.mode} partner={partner} requirement={businessModal.edit instanceof Object && 'requirementCode' in businessModal.edit ? (businessModal.edit as Requirement) : undefined} communication={businessModal.edit instanceof Object && 'recordCode' in businessModal.edit ? (businessModal.edit as Communication) : undefined} open onClose={() => setBusinessModal(undefined)} onSaved={async () => { if (businessModal.mode === 'requirement') { setRequirementsLoaded(false); await ensureRequirements(); } else { setCommunicationsLoaded(false); await ensureCommunications(); } }} />}
   </div>;
 }

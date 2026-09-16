@@ -23,12 +23,14 @@ public class JdbcDataScopeResolver implements DataScopeResolver {
     public ResolvedDataScope resolve(PermissionCheck check, Binding binding) {
         var scope = binding.scopeType() == null ? "ALL" : binding.scopeType().toUpperCase(Locale.ROOT);
         if ("ALL".equals(scope)) return ResolvedDataScope.allow(scope);
+        if ("ORG".equals(scope)) return ResolvedDataScope.allow(scope);
         if (check.resourceId() == null) {
             return switch (scope) {
                 case "SELECTED", "PROJECT", "CATEGORY" -> binding.targetIds().isEmpty()
                         ? ResolvedDataScope.deny(scope, "EMPTY_SCOPE")
                         : ResolvedDataScope.allow(scope, Set.copyOf(binding.targetIds()));
-                case "SELF", "ASSIGNED" -> ResolvedDataScope.allow(scope);
+                case "SELF", "ASSIGNED", "CREATOR", "OWNER", "MANAGER", "PARTICIPANT", "PROJECT_GROUP"
+                        -> ResolvedDataScope.allow(scope);
                 default -> ResolvedDataScope.deny(scope, "UNKNOWN_DATA_SCOPE");
             };
         }
@@ -39,8 +41,11 @@ public class JdbcDataScopeResolver implements DataScopeResolver {
         }
         var resourceType = check.resourceType() == null ? "" : check.resourceType().toUpperCase(Locale.ROOT);
         return switch (scope) {
-            case "SELF" -> self(resourceType, check);
+            case "SELF", "CREATOR" -> self(resourceType, check);
             case "ASSIGNED" -> assigned(resourceType, check);
+            case "OWNER" -> relationOwner(resourceType, check, "OWNER");
+            case "MANAGER" -> relationOwner(resourceType, check, "MANAGER");
+            case "PARTICIPANT", "PROJECT_GROUP" -> participant(resourceType, check);
             case "PROJECT" -> "PROJECT".equals(resourceType)
                     ? selectedProject(check, Set.copyOf(binding.targetIds()))
                     : relationScope(resourceType, check, Set.copyOf(binding.targetIds()), "project_id", "NOT_IN_SELECTED_PROJECT");
@@ -90,6 +95,10 @@ public class JdbcDataScopeResolver implements DataScopeResolver {
                 sql = "SELECT EXISTS (SELECT 1 FROM mfg.production_order WHERE organization_id = ? AND (created_by = ? OR owner_id = ?) AND id = ?)";
                 args = new Object[]{check.organizationId(), check.userId(), check.userId(), check.resourceId()};
             }
+            case "PROJECT" -> {
+                sql = "SELECT EXISTS (SELECT 1 FROM mdm.project WHERE organization_id = ? AND created_by::text = ? AND id = ? AND deleted = false)";
+                args = new Object[]{check.organizationId(), check.userId().toString(), check.resourceId()};
+            }
             case "FILE" -> {
                 sql = "SELECT EXISTS (SELECT 1 FROM ops.file_object WHERE organization_id = ? AND created_by = ? AND id = ?)";
                 args = new Object[]{check.organizationId(), check.userId(), check.resourceId()};
@@ -111,6 +120,45 @@ public class JdbcDataScopeResolver implements DataScopeResolver {
                     new Object[]{check.organizationId(), check.userId(), check.resourceId()}, "ASSIGNED", "NOT_ASSIGNED");
             default -> ResolvedDataScope.deny("ASSIGNED", "RESOURCE_SCOPE_UNSUPPORTED");
         };
+    }
+
+    private ResolvedDataScope relationOwner(String resourceType, PermissionCheck check, String relationType) {
+        Boolean found = jdbc.queryForObject("""
+                SELECT EXISTS (
+                    SELECT 1 FROM iam.resource_owner_identity
+                    WHERE organization_id = ? AND resource_type = ? AND resource_id = ?
+                      AND user_id = ? AND relation_type = ?
+                )
+                """, Boolean.class, check.organizationId(), resourceType, check.resourceId(), check.userId(), relationType);
+        return Boolean.TRUE.equals(found)
+                ? ResolvedDataScope.allow(relationType)
+                : ResolvedDataScope.deny(relationType, "NOT_IN_RESOURCE_RELATION");
+    }
+
+    private ResolvedDataScope participant(String resourceType, PermissionCheck check) {
+        if ("PROJECT".equals(resourceType)) {
+            Boolean found = jdbc.queryForObject("""
+                    SELECT EXISTS (SELECT 1 FROM iam.project_member
+                                   WHERE organization_id = ? AND project_id = ? AND user_id = ?)
+                    """, Boolean.class, check.organizationId(), check.resourceId(), check.userId());
+            return Boolean.TRUE.equals(found)
+                    ? ResolvedDataScope.allow("PROJECT_GROUP")
+                    : ResolvedDataScope.deny("PROJECT_GROUP", "NOT_PROJECT_MEMBER");
+        }
+        var sql = """
+                SELECT EXISTS (
+                    SELECT 1 FROM core.project_resource_link l
+                    JOIN iam.project_member m ON m.organization_id = l.organization_id
+                                               AND m.project_id = l.project_id
+                                               AND m.user_id = ?
+                    WHERE l.organization_id = ? AND l.resource_type = ? AND l.resource_id = ?
+                )
+                """;
+        Boolean found = jdbc.queryForObject(sql, Boolean.class, check.userId(), check.organizationId(), resourceType,
+                check.resourceId());
+        return Boolean.TRUE.equals(found)
+                ? ResolvedDataScope.allow("PROJECT_GROUP")
+                : ResolvedDataScope.deny("PROJECT_GROUP", "NOT_PROJECT_MEMBER");
     }
 
     private ResolvedDataScope relationScope(String resourceType, PermissionCheck check, Set<UUID> targetIds,

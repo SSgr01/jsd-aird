@@ -165,9 +165,8 @@ export function requiredMenuForPath(pathname: string): string | undefined {
   if (path === '/projects/phases') return 'project.stage';
   if (path === '/projects/tasks') return 'project.task';
   if (path.startsWith('/projects')) return 'project.list';
+  if (path === '/experiments/new') return 'eln.create';
   if (path === '/experiments/upload') return 'eln.upload';
-  // New records and file imports share the existing ELN create menu grant.
-  if (path === '/experiments/new') return 'eln.upload';
   if (path.startsWith('/experiments')) return 'eln.view';
   if (path.startsWith('/knowledge/search')) return 'ai.search';
   if (path.startsWith('/assistant')) return 'ai.qa';

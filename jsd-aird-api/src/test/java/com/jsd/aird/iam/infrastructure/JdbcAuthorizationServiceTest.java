@@ -35,6 +35,7 @@ class JdbcAuthorizationServiceTest {
         when(store.user(userId)).thenReturn(Optional.of(user));
         when(store.permissionDefinitions()).thenReturn(List.of(
                 new PermissionDefinition("project.view", "project", "查看项目", "LOW", "ALL"),
+                new PermissionDefinition("experiment.view", "experiment", "查看实验记录本", "LOW", "ALL"),
                 new PermissionDefinition("knowledge.view", "knowledge", "查看知识", "LOW", "SELECTED"),
                 new PermissionDefinition("template.publish", "template", "发布模板", "HIGH", "ALL"),
                 new PermissionDefinition("template.delete", "template", "删除模板", "CRITICAL", "ALL")));
@@ -104,5 +105,105 @@ class JdbcAuthorizationServiceTest {
                 .allowed()).isFalse();
         assertThat(authorization.check(new PermissionCheck(organizationId, userId, "template.manage", "TEMPLATE", null, "WRITE"))
                 .allowed()).isFalse();
+    }
+
+    @Test
+    void v2UsesOptionalLevelAndPersonalOperationDenyHasPriority() {
+        var levelId = UUID.randomUUID();
+        var level = new IamStore.PermissionLevel(levelId, organizationId, "L1_OPERATOR", "L1", "", true, true, 1, 3);
+        when(store.userRoles(organizationId, userId)).thenReturn(List.of(role));
+        when(store.userPermissionLevel(organizationId, userId)).thenReturn(Optional.of(levelId));
+        when(store.permissionLevel(organizationId, levelId)).thenReturn(Optional.of(level));
+        when(store.permissionLevelBindings(organizationId, levelId)).thenReturn(List.of(
+                new IamStore.PermissionLevelBinding(null, "project.view", "ALLOW", "ALL", List.of())));
+        when(store.userOperationOverrides(organizationId, userId)).thenReturn(List.of(
+                new Binding("project.view", "DENY", "ORG", List.of())));
+        when(store.userScopeOverrides(organizationId, userId)).thenReturn(List.of());
+
+        var decision = authorization.check(new PermissionCheck(organizationId, userId, "project.view", "PROJECT", null, "READ"));
+
+        assertThat(decision.allowed()).isFalse();
+        assertThat(decision.effect()).isEqualTo("DENY");
+        assertThat(decision.source()).isEqualTo("USER_OPERATION_OVERRIDE");
+    }
+
+    @Test
+    void v2ScopeOverrideReplacesInheritedScope() {
+        var levelId = UUID.randomUUID();
+        var selected = UUID.randomUUID();
+        var level = new IamStore.PermissionLevel(levelId, organizationId, "L0_VIEWER", "L0", "", true, true, 0, 1);
+        when(store.userRoles(organizationId, userId)).thenReturn(List.of(role));
+        when(store.userPermissionLevel(organizationId, userId)).thenReturn(Optional.of(levelId));
+        when(store.permissionLevel(organizationId, levelId)).thenReturn(Optional.of(level));
+        when(store.permissionLevelBindings(organizationId, levelId)).thenReturn(List.of(
+                new IamStore.PermissionLevelBinding(null, "knowledge.view", "ALLOW", "ALL", List.of())));
+        when(store.userOperationOverrides(organizationId, userId)).thenReturn(List.of());
+        when(store.userScopeOverrides(organizationId, userId)).thenReturn(List.of(
+                new Binding("knowledge.view", "ALLOW", "SELECTED", List.of(selected))));
+
+        assertThat(authorization.check(new PermissionCheck(organizationId, userId, "knowledge.view", "KNOWLEDGE",
+                UUID.randomUUID(), "READ")).allowed()).isFalse();
+        assertThat(authorization.check(new PermissionCheck(organizationId, userId, "knowledge.view", "KNOWLEDGE",
+                selected, "READ")).allowed()).isTrue();
+    }
+
+    @Test
+    void v2UsesBroadestPersonalScopeWhenPermissionAppearsOnSeveralMenuRows() {
+        var levelId = UUID.randomUUID();
+        var level = new IamStore.PermissionLevel(levelId, organizationId, "L0_VIEWER", "L0", "", true, true, 0, 1);
+        when(store.userRoles(organizationId, userId)).thenReturn(List.of(role));
+        when(store.userPermissionLevel(organizationId, userId)).thenReturn(Optional.of(levelId));
+        when(store.permissionLevel(organizationId, levelId)).thenReturn(Optional.of(level));
+        when(store.permissionLevelBindings(organizationId, levelId)).thenReturn(List.of(
+                new IamStore.PermissionLevelBinding("project.list", "project.view", "ALLOW", "ORG", List.of())));
+        when(store.userOperationOverrides(organizationId, userId)).thenReturn(List.of());
+        when(store.userScopeOverrides(organizationId, userId)).thenReturn(List.of(
+                new Binding("project.info", "project.view", "ALLOW", "CREATOR", List.of()),
+                new Binding("project.list", "project.view", "ALLOW", "ORG", List.of())));
+
+        var decision = authorization.check(new PermissionCheck(
+                organizationId, userId, "project.view", "PROJECT", null, "READ"));
+
+        assertThat(decision.allowed()).isTrue();
+        assertThat(decision.scopeType()).isEqualTo("ORG");
+    }
+
+    @Test
+    void v2UsesOnlyTheRequestedMenuRowsPersonalScope() {
+        var levelId = UUID.randomUUID();
+        var level = new IamStore.PermissionLevel(levelId, organizationId, "L0_VIEWER", "L0", "", true, true, 0, 1);
+        when(store.userRoles(organizationId, userId)).thenReturn(List.of(role));
+        when(store.userPermissionLevel(organizationId, userId)).thenReturn(Optional.of(levelId));
+        when(store.permissionLevel(organizationId, levelId)).thenReturn(Optional.of(level));
+        when(store.permissionLevelBindings(organizationId, levelId)).thenReturn(List.of(
+                new IamStore.PermissionLevelBinding("project.list", "project.view", "ALLOW", "ORG", List.of())));
+        when(store.userOperationOverrides(organizationId, userId)).thenReturn(List.of());
+        when(store.userScopeOverrides(organizationId, userId)).thenReturn(List.of(
+                new Binding("project.document", "project.view", "ALLOW", "CREATOR", List.of())));
+
+        var decision = authorization.check(new PermissionCheck(
+                organizationId, userId, "project.view", "PROJECT", null, "READ", "project.list"));
+
+        assertThat(decision.allowed()).isTrue();
+        assertThat(decision.scopeType()).isEqualTo("ORG");
+    }
+
+    @Test
+    void v2AcceptsExperimentPermissionStoredOnAnElnMenuRow() {
+        var levelId = UUID.randomUUID();
+        var level = new IamStore.PermissionLevel(levelId, organizationId, "L0_VIEWER", "L0", "", true, true, 0, 1);
+        when(store.userRoles(organizationId, userId)).thenReturn(List.of(role));
+        when(store.userPermissionLevel(organizationId, userId)).thenReturn(Optional.of(levelId));
+        when(store.permissionLevel(organizationId, levelId)).thenReturn(Optional.of(level));
+        when(store.permissionLevelBindings(organizationId, levelId)).thenReturn(List.of(
+                new IamStore.PermissionLevelBinding("eln.view", "experiment.view", "ALLOW", "ORG", List.of())));
+        when(store.userOperationOverrides(organizationId, userId)).thenReturn(List.of());
+        when(store.userScopeOverrides(organizationId, userId)).thenReturn(List.of());
+
+        var decision = authorization.check(new PermissionCheck(
+                organizationId, userId, "experiment.view", "EXPERIMENT", null, "READ"));
+
+        assertThat(decision.allowed()).isTrue();
+        assertThat(decision.source()).isEqualTo("PERMISSION_LEVEL:L0_VIEWER");
     }
 }

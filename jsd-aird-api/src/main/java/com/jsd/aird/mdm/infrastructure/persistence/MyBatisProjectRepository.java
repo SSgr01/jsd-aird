@@ -29,14 +29,16 @@ public class MyBatisProjectRepository implements ProjectRepository {
     @Override
     public List<Project> findPage(ProjectQuery query) {
         return mapper.findPage(query.keyword(), query.owner(), name(query.priority()), name(query.status()),
-                query.partnerId(), query.startDateFrom(), query.startDateTo(), query.offset(), query.size())
+                query.partnerId(), query.startDateFrom(), query.startDateTo(), query.offset(), query.size(),
+                query.organizationId(), query.scopeType(), query.scopeUserId(), query.scopeTargetIds())
             .stream().map(MyBatisProjectRepository::toProject).toList();
     }
 
     @Override
     public long count(ProjectQuery query) {
         return mapper.count(query.keyword(), query.owner(), name(query.priority()), name(query.status()),
-            query.partnerId(), query.startDateFrom(), query.startDateTo());
+            query.partnerId(), query.startDateFrom(), query.startDateTo(), query.organizationId(),
+            query.scopeType(), query.scopeUserId(), query.scopeTargetIds());
     }
 
     @Override
@@ -56,8 +58,8 @@ public class MyBatisProjectRepository implements ProjectRepository {
     }
 
     @Override
-    public void insert(Project project, String operator) {
-        mapper.insert(project.id(), project.projectCode(), project.name(), project.partnerId(),
+    public void insert(Project project, UUID organizationId, String operator) {
+        mapper.insert(project.id(), organizationId, project.projectCode(), project.name(), project.partnerId(),
             project.partnerName(), project.owner(), project.startDate(), project.endDate(),
             project.priority().name(), project.status().name(), project.teamSize(), project.background(),
             json(project.customFields()), json(project.teamMembers()), Instant.now(), operator);

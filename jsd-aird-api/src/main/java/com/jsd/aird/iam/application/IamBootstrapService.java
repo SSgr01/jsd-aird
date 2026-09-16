@@ -6,6 +6,7 @@ import java.util.UUID;
 
 import com.jsd.aird.iam.application.port.IamStore;
 import com.jsd.aird.iam.application.port.IamStore.Binding;
+import com.jsd.aird.iam.application.port.IamStore.PermissionLevelBinding;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -55,9 +56,14 @@ public class IamBootstrapService {
         IamPermissionCatalog.definitions().forEach(store::ensurePermission);
         var roles = seedRoles(organization.id());
         seedRolePermissions(organization.id(), roles);
+        seedPermissionModel(organization.id(), roles);
 
         if (enabled && !store.hasSystemAdmin(organization.id())) {
             createBootstrapAdmin(organization.id(), roles.get("SYSTEM_ADMIN").id());
+            // The bootstrap account is inserted after the initial seed; run
+            // the idempotent v2 backfill once more so its role/level profile
+            // is available without waiting for the next restart.
+            seedPermissionModel(organization.id(), roles);
         }
     }
 
@@ -138,5 +144,95 @@ public class IamBootstrapService {
         store.insertUser(UUID.randomUUID(), organizationId, adminUsername, "系统管理员", null, null,
                 null, adminRoleId, passwordEncoder.encode(adminPassword));
         log.info("IAM 首个管理员账号已初始化：{}（密码不会写入日志）", adminUsername);
+    }
+
+    private void seedPermissionModel(UUID organizationId, java.util.Map<String, IamStore.Role> roles) {
+        var allRoles = store.roles(organizationId);
+        allRoles.forEach(role -> {
+            if (role.policyVersion() == 0 && store.roleMenus(organizationId, role.id()).isEmpty()) {
+                store.replaceRoleMenus(organizationId, role.id(), role.policyVersion(),
+                        PermissionModelCatalog.presetMenus(role.code()));
+            }
+        });
+        var definitions = IamPermissionCatalog.definitions();
+        var levels = new java.util.LinkedHashMap<String, IamStore.PermissionLevel>();
+        PermissionModelCatalog.levels().forEach(level -> {
+            var stored = store.ensurePermissionLevel(organizationId, level.code(), level.name(), level.description(),
+                    level.builtin(), level.tier());
+            levels.put(level.code(), stored);
+            if (store.permissionLevelBindings(organizationId, stored.id()).isEmpty()) {
+                store.replacePermissionLevelBindings(organizationId, stored.id(), stored.policyVersion(),
+                    PermissionModelCatalog.presetLevelBindings(level.code(), definitions).stream()
+                            .map(this::globalLevelBinding).toList());
+            }
+        });
+        // Legacy role bindings are copied into a generated level per role. This
+        // preserves the old effective grant exactly instead of silently
+        // widening it to one of the new shared presets.
+        var migratedRoleLevels = new java.util.HashMap<UUID, IamStore.PermissionLevel>();
+        allRoles.forEach(role -> {
+            var legacy = store.roleBindings(organizationId, role.id());
+            if (legacy.isEmpty() || "SYSTEM_ADMIN".equals(role.code())) return;
+            var code = "MIGRATED_" + role.code();
+            var generated = store.ensurePermissionLevel(organizationId, code,
+                    "迁移：" + role.name(), "由旧版角色权限自动生成，确认后可调整。", false, 1);
+            if (store.permissionLevelBindings(organizationId, generated.id()).isEmpty()) {
+                store.replacePermissionLevelBindings(organizationId, generated.id(), generated.policyVersion(),
+                        legacy.stream().filter(binding -> "ALLOW".equals(binding.effect()))
+                                .map(binding -> {
+                                    var normalized = legacyLevelBinding(binding);
+                                    return new PermissionLevelBinding(null, normalized.permissionCode(), normalized.effect(),
+                                            normalized.scopeType(), normalized.targetIds());
+                                })
+                                .toList());
+            }
+            migratedRoleLevels.put(role.id(), generated);
+        });
+        store.users(organizationId, null, 1, 10000).forEach(user -> {
+            var assignedRoles = store.userRoles(organizationId, user.id());
+            if ((assignedRoles == null || assignedRoles.isEmpty()) && user.roleId() != null) {
+                try { store.replaceUserRoles(organizationId, user.id(), List.of(user.roleId()), user.roleId()); }
+                catch (IamStore.PolicyVersionConflict ignored) { /* another startup/admin won the race */ }
+                assignedRoles = store.userRoles(organizationId, user.id());
+            }
+            var roleCode = user.roleCode() == null ? "USER" : user.roleCode();
+            var roleId = user.roleId();
+            var level = migratedRoleLevels.get(roleId);
+            if (level == null) level = levels.get(PermissionModelCatalog.defaultLevelCode(roleCode));
+            var assignedLevel = store.userPermissionLevel(organizationId, user.id());
+            if (level != null && (assignedLevel == null || assignedLevel.isEmpty())) {
+                var currentUser = store.user(user.id()).orElse(user);
+                try { store.saveUserPermissionLevel(organizationId, user.id(), currentUser.authVersion(), level.id()); }
+                catch (IamStore.PolicyVersionConflict ignored) { /* another startup/admin won the race */ }
+            }
+            var legacyOverrides = store.userOverrides(organizationId, user.id());
+            var operationOverrides = store.userOperationOverrides(organizationId, user.id());
+            var scopeOverrides = store.userScopeOverrides(organizationId, user.id());
+            if (!legacyOverrides.isEmpty() && (operationOverrides == null || operationOverrides.isEmpty())
+                    && (scopeOverrides == null || scopeOverrides.isEmpty())) {
+                var operations = legacyOverrides.stream()
+                        .map(binding -> new Binding(binding.permissionCode(), binding.effect(), "ORG", List.of())).toList();
+                var scopes = legacyOverrides.stream().filter(binding -> "ALLOW".equals(binding.effect()))
+                        .map(this::legacyLevelBinding).toList();
+                try { store.replaceUserModelOverrides(organizationId, user.id(), List.of(), operations, scopes); }
+                catch (IamStore.PolicyVersionConflict ignored) { /* another startup/admin won the race */ }
+            }
+        });
+    }
+
+    private Binding legacyLevelBinding(Binding binding) {
+        var scope = switch (binding.scopeType()) {
+            case "ALL" -> "ORG";
+            case "SELF" -> "CREATOR";
+            case "PROJECT" -> binding.targetIds() == null || binding.targetIds().isEmpty() ? "PROJECT_GROUP" : "PROJECT";
+            default -> binding.scopeType();
+        };
+        return new Binding(binding.permissionCode(), "ALLOW", scope,
+                binding.targetIds() == null ? List.of() : binding.targetIds());
+    }
+
+    private PermissionLevelBinding globalLevelBinding(Binding binding) {
+        return new PermissionLevelBinding(null, binding.permissionCode(), binding.effect(), binding.scopeType(),
+                binding.targetIds() == null ? List.of() : binding.targetIds());
     }
 }

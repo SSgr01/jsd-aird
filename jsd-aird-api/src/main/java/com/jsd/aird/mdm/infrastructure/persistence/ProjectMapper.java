@@ -17,7 +17,15 @@ public interface ProjectMapper {
         "p.team_size teamSize, p.background, p.custom_fields::text customFields, p.team_members::text teamMembers, p.version, " +
         "p.created_at createdAt, p.updated_at updatedAt FROM mdm.project p ";
 
-    String FILTERS = "<if test='keyword != null'> AND (p.name ILIKE concat('%',#{keyword},'%') " +
+    String SCOPE_FILTER = "<choose>" +
+        "<when test='scopeType == &quot;SELF&quot; or scopeType == &quot;CREATOR&quot;'> AND p.created_by::text = CAST(#{scopeUserId} AS text)</when>" +
+        "<when test='scopeType == &quot;OWNER&quot; or scopeType == &quot;MANAGER&quot;'> AND EXISTS (SELECT 1 FROM iam.resource_owner_identity roi WHERE roi.organization_id=p.organization_id AND roi.resource_type='PROJECT' AND roi.resource_id=p.id AND roi.user_id=#{scopeUserId} AND roi.relation_type=#{scopeType})</when>" +
+        "<when test='scopeType == &quot;PARTICIPANT&quot; or scopeType == &quot;PROJECT_GROUP&quot;'> AND EXISTS (SELECT 1 FROM iam.project_member pm WHERE pm.organization_id=p.organization_id AND pm.project_id=p.id AND pm.user_id=#{scopeUserId})</when>" +
+        "<when test='scopeType == &quot;SELECTED&quot; or scopeType == &quot;PROJECT&quot;'> AND p.id IN <foreach collection='scopeTargetIds' item='scopeId' open='(' separator=',' close=')'>#{scopeId,jdbcType=OTHER}</foreach></when>" +
+        "</choose>";
+
+    String FILTERS = "<if test='organizationId != null'> AND p.organization_id = #{organizationId}</if>" + SCOPE_FILTER +
+        "<if test='keyword != null'> AND (p.name ILIKE concat('%',#{keyword},'%') " +
         "OR p.project_code ILIKE concat('%',#{keyword},'%') OR p.partner_name ILIKE concat('%',#{keyword},'%') " +
         "OR p.owner ILIKE concat('%',#{keyword},'%'))</if>" +
         "<if test='owner != null'> AND p.owner = #{owner}</if>" +
@@ -33,13 +41,17 @@ public interface ProjectMapper {
                               @Param("priority") String priority, @Param("status") String status,
                               @Param("partnerId") UUID partnerId,
                               @Param("startDateFrom") LocalDate startDateFrom, @Param("startDateTo") LocalDate startDateTo,
-                              @Param("offset") int offset, @Param("size") int size);
+                              @Param("offset") int offset, @Param("size") int size,
+                              @Param("organizationId") UUID organizationId, @Param("scopeType") String scopeType,
+                              @Param("scopeUserId") UUID scopeUserId, @Param("scopeTargetIds") java.util.Set<UUID> scopeTargetIds);
 
     @Select("<script>SELECT count(*) FROM mdm.project p WHERE p.deleted = false " + FILTERS + "</script>")
     long count(@Param("keyword") String keyword, @Param("owner") String owner,
                @Param("priority") String priority, @Param("status") String status,
                @Param("partnerId") UUID partnerId,
-               @Param("startDateFrom") LocalDate startDateFrom, @Param("startDateTo") LocalDate startDateTo);
+               @Param("startDateFrom") LocalDate startDateFrom, @Param("startDateTo") LocalDate startDateTo,
+               @Param("organizationId") UUID organizationId, @Param("scopeType") String scopeType,
+               @Param("scopeUserId") UUID scopeUserId, @Param("scopeTargetIds") java.util.Set<UUID> scopeTargetIds);
 
     @Select(SELECT_COLUMNS + "WHERE p.id = #{id} AND p.deleted = false")
     Optional<ProjectRow> findById(@Param("id") UUID id);
@@ -57,11 +69,12 @@ public interface ProjectMapper {
         "WHERE project_code LIKE #{prefix} || '%'")
     int maxSequence(@Param("prefix") String prefix);
 
-    @Insert("INSERT INTO mdm.project(id,project_code,name,partner_id,partner_name,owner,start_date,end_date," +
+    @Insert("INSERT INTO mdm.project(id,organization_id,project_code,name,partner_id,partner_name,owner,start_date,end_date," +
         "priority,status,team_size,background,custom_fields,team_members,version,created_at,updated_at,created_by,updated_by) " +
-        "VALUES(#{id},#{projectCode},#{name},#{partnerId},#{partnerName},#{owner},#{startDate},#{endDate}," +
+        "VALUES(#{id},#{organizationId},#{projectCode},#{name},#{partnerId},#{partnerName},#{owner},#{startDate},#{endDate}," +
         "#{priority},#{status},#{teamSize},#{background},CAST(#{customFields} AS jsonb),CAST(#{teamMembers} AS jsonb),0,#{now},#{now},#{operator},#{operator})")
-    void insert(@Param("id") UUID id, @Param("projectCode") String projectCode, @Param("name") String name,
+    void insert(@Param("id") UUID id, @Param("organizationId") UUID organizationId,
+                @Param("projectCode") String projectCode, @Param("name") String name,
                 @Param("partnerId") UUID partnerId, @Param("partnerName") String partnerName,
                 @Param("owner") String owner, @Param("startDate") LocalDate startDate, @Param("endDate") LocalDate endDate,
                 @Param("priority") String priority, @Param("status") String status, @Param("teamSize") int teamSize,

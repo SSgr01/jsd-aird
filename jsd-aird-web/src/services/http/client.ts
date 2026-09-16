@@ -2,7 +2,7 @@ import axios from 'axios';
 import type { AxiosResponse } from 'axios';
 
 import { appEnv } from '@/app/config/env';
-import { HttpError } from '@/services/http/errors';
+import { HttpError, httpErrorMessage } from '@/services/http/errors';
 import type { ApiErrorResponse } from '@/services/http/types';
 import { notifyAuthRequired } from '@/services/http/auth-events';
 import { generateUUID } from '@/utils/uuid';
@@ -66,7 +66,7 @@ httpClient.interceptors.response.use(
       const isLoginRequest = response?.config.url?.endsWith('/api/v1/auth/login') ?? false;
       if (response?.status === 401 && !isLoginRequest) notifyAuthRequired();
       throw new HttpError(
-        response?.data?.message || error.message || '请求失败',
+        httpErrorMessage(response?.status, response?.data?.code, response?.data?.message, error.message),
         response?.data?.code || 'HTTP_REQUEST_FAILED',
         response?.status,
         response?.data?.traceId,

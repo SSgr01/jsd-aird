@@ -1,9 +1,9 @@
 import { Select, Typography } from 'antd';
-import { useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 
 import { dataApi } from '@/services/data/data-api';
 import { knowledgeApi } from '@/services/knowledge/knowledge-api';
-import { getProjects } from '@/services/project/project-api';
+import { getProject, getProjects } from '@/services/project/project-api';
 import { spectrumApi } from '@/services/spectrum/spectrum-api';
 import { templateApi } from '@/services/templates/template-api';
 
@@ -37,10 +37,12 @@ export function PermissionTargetPicker({
 }: PermissionTargetPickerProps) {
   const [options, setOptions] = useState<TargetOption[]>([]);
   const [loading, setLoading] = useState(false);
-  const [loaded, setLoaded] = useState(false);
+  const loadingRef = useRef(false);
+  const loadedRef = useRef(false);
 
   const loadOptions = async () => {
-    if (loaded || loading) return;
+    if (loadedRef.current || loadingRef.current) return;
+    loadingRef.current = true;
     setLoading(true);
     try {
       let next: TargetOption[] = [];
@@ -75,19 +77,33 @@ export function PermissionTargetPicker({
         const page = await getProjects({ size: 100 });
         next = page.items.map((item) => ({ value: item.id, label: `${item.projectCode} ${item.name}` }));
       }
+      const missingProjectIds = (scopeType === 'PROJECT' || (!isModule(permissionCode, 'template')
+        && !isModule(permissionCode, 'knowledge') && !isModule(permissionCode, 'data')
+        && !isModule(permissionCode, 'spectrum')))
+        ? value.filter((id) => !next.some((option) => option.value === id))
+        : [];
+      if (missingProjectIds.length) {
+        const selectedProjects = await Promise.allSettled(missingProjectIds.map((id) => getProject(id)));
+        selectedProjects.forEach((result) => {
+          if (result.status === 'fulfilled') {
+            next.push({ value: result.value.id, label: `${result.value.projectCode} ${result.value.name}` });
+          }
+        });
+      }
       setOptions(next);
-      setLoaded(true);
+      loadedRef.current = true;
     } catch {
       setOptions([]);
     } finally {
+      loadingRef.current = false;
       setLoading(false);
     }
   };
 
-  const mergedOptions = [
+  const mergedOptions = useMemo(() => [
     ...value.filter((id) => !options.some((option) => option.value === id)).map((id) => ({ value: id, label: id })),
     ...options,
-  ];
+  ], [options, value]);
   const placeholder = scopeType === 'PROJECT' ? '选择项目' : scopeType === 'CATEGORY' ? '选择分类' : '选择对象';
   const help = scopeType === 'PROJECT' ? '仅授权所选项目及其关联数据' : scopeType === 'CATEGORY' ? '仅授权所选分类及其子分类' : '仅授权所选对象';
 
@@ -102,12 +118,16 @@ export function PermissionTargetPicker({
         loading={loading}
         showSearch
         optionFilterProp="label"
-        maxTagCount="responsive"
+        maxTagCount={2}
+        maxTagTextLength={24}
+        popupMatchSelectWidth={false}
+        listHeight={320}
+        classNames={{ popup: { root: 'iam-scope-target-dropdown' } }}
         onOpenChange={(open) => {
           if (open) void loadOptions();
         }}
         onChange={onChange}
-        style={{ minWidth: 220 }}
+        style={{ width: '100%', minWidth: 260 }}
       />
       <Typography.Text type="secondary" className="iam-scope-target-help">
         {help}

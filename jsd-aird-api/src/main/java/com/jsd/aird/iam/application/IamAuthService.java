@@ -10,6 +10,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 import com.jsd.aird.iam.application.port.IamStore;
 import com.jsd.aird.iam.application.port.IamStore.Binding;
@@ -144,9 +146,40 @@ public class IamAuthService {
 
     private MeView profile(IamStore.User user, IamStore.Organization organization) {
         var bindings = new LinkedHashMap<String, Binding>();
-        if (user.roleId() != null) store.role(organization.id(), user.roleId()).ifPresent(role ->
-                store.roleBindings(organization.id(), role.id()).forEach(binding -> bindings.put(binding.permissionCode(), binding)));
-        store.userOverrides(organization.id(), user.id()).forEach(binding -> bindings.put(binding.permissionCode(), binding));
+        var menuKeys = new LinkedHashSet<String>();
+        var v2Roles = store.userRoles(organization.id(), user.id());
+        if (v2Roles != null && !v2Roles.isEmpty()) {
+            v2Roles.forEach(role -> store.roleMenus(organization.id(), role.id()).forEach(menuKeys::add));
+        } else if (user.roleId() != null) {
+            store.role(organization.id(), user.roleId()).ifPresent(role -> {
+                store.roleBindings(organization.id(), role.id()).forEach(binding -> bindings.put(binding.permissionCode(), binding));
+                menuKeys.addAll(PermissionModelCatalog.presetMenus(role.code()));
+            });
+        }
+        var levelId = store.userPermissionLevel(organization.id(), user.id());
+        if (levelId != null && levelId.isPresent()) {
+            store.permissionLevel(organization.id(), levelId.get()).ifPresent(level ->
+                    store.permissionLevelBindings(organization.id(), level.id()).forEach(binding -> bindings.put(binding.permissionCode(),
+                            new Binding(binding.permissionCode(), binding.effect(), binding.scopeType(), binding.targetIds()))));
+        }
+        var operationOverrides = store.userOperationOverrides(organization.id(), user.id());
+        if (operationOverrides != null) operationOverrides.forEach(binding -> {
+            if ("ALLOW".equals(binding.effect())) bindings.put(binding.permissionCode(), binding);
+            else bindings.remove(binding.permissionCode());
+        });
+        var menuOverrides = store.userMenuOverrides(organization.id(), user.id());
+        if (menuOverrides != null) menuOverrides.forEach(override -> {
+            if ("ALLOW".equals(override.effect())) menuKeys.add(override.menuKey());
+            else menuKeys.remove(override.menuKey());
+        });
+        if ((v2Roles == null || v2Roles.isEmpty()) && (levelId == null || levelId.isEmpty())) {
+            store.userOverrides(organization.id(), user.id()).forEach(binding -> bindings.put(binding.permissionCode(), binding));
+        }
+        if (v2Roles != null && v2Roles.stream().anyMatch(role -> "SYSTEM_ADMIN".equals(role.code()))) {
+            menuKeys.addAll(PermissionModelCatalog.allMenuKeys());
+            store.permissionDefinitions().forEach(definition -> bindings.put(definition.code(),
+                    new Binding(definition.code(), "ALLOW", "ORG", List.of())));
+        }
         // DevelopmentIdentityFilter/JdbcAuthorizationService intentionally allow
         // every permission in local development mode. Return the same effective
         // permission set to the web client; otherwise the UI hides all protected
@@ -154,9 +187,10 @@ public class IamAuthService {
         var permissions = developmentMode
                 ? store.permissionDefinitions().stream().map(definition -> definition.code()).toList()
                 : bindings.values().stream().filter(b -> "ALLOW".equals(b.effect())).map(Binding::permissionCode).toList();
+        if (developmentMode) menuKeys.addAll(PermissionModelCatalog.allMenuKeys());
         return new MeView(user.id(), organization.id(), organization.name(), user.username(), user.displayName(),
                 user.email(), user.departmentName(), user.roleId(), user.roleCode(), user.roleName(), user.status(),
-                user.authVersion(), permissions);
+                user.authVersion(), permissions, List.copyOf(menuKeys));
     }
 
     private String hash(String token) {
@@ -173,5 +207,5 @@ public class IamAuthService {
     public record MeView(UUID userId, UUID organizationId, String organizationName,
                          String username, String displayName, String email, String departmentName, UUID roleId,
                          String roleCode, String roleName, String status, long authVersion,
-                         List<String> permissions) { }
+                         List<String> permissions, List<String> menuKeys) { }
 }

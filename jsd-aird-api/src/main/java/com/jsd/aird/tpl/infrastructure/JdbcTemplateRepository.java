@@ -232,9 +232,9 @@ public class JdbcTemplateRepository implements TemplateRepository {
 
     private void appendScopeFilter(StringBuilder sql, MapSqlParameterSource parameters,
                                    TemplateRepository.DataScopeFilter scope) {
-        if (scope == null || "ALL".equals(scope.type())) return;
+        if (scope == null || "ALL".equals(scope.type()) || "ORG".equals(scope.type())) return;
         switch (scope.type()) {
-            case "SELF" -> {
+            case "SELF", "CREATOR" -> {
                 sql.append(" AND lt.created_by = :scopeActorId\n");
                 parameters.addValue("scopeActorId", scope.actorId());
             }
@@ -254,7 +254,7 @@ public class JdbcTemplateRepository implements TemplateRepository {
             }
             // A template has no assignee/project relation in the current model.
             // Returning an empty set is safer than broadening access.
-            case "ASSIGNED", "PROJECT" -> sql.append(" AND 1 = 0\n");
+            case "ASSIGNED", "PROJECT", "OWNER", "MANAGER", "PARTICIPANT", "PROJECT_GROUP" -> sql.append(" AND 1 = 0\n");
             default -> sql.append(" AND 1 = 0\n");
         }
     }

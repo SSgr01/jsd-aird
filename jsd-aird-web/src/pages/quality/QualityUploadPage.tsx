@@ -51,9 +51,10 @@ const progressDescriptions: Record<string, string> = {
 const visibilityOptions = [
   { value: 'ALL', label: '全员可见' },
   { value: 'RND', label: '研发部可见' },
-  { value: 'QUALITY', label: '品管部可见' },
   { value: 'PROJECT', label: '项目组可见' },
 ];
+// 品管部可见为历史数据兼容展示，下拉框不再提供该选项。
+const legacyVisibilityLabels: Record<string, string> = { QUALITY: '品管部可见' };
 
 function formatUploadStatus(upload: QualityUpload) {
   const status = statusView[upload.status] || { label: upload.status || '未知', color: 'default' };
@@ -67,7 +68,7 @@ function formatUploadStatus(upload: QualityUpload) {
 
 function visibilityText(value?: string) {
   const option = visibilityOptions.find((item) => item.value === value);
-  return option?.label || value || '全员可见';
+  return option?.label || legacyVisibilityLabels[value || ''] || value || '全员可见';
 }
 
 function fileTypeText(name: string) {

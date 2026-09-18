@@ -24,9 +24,11 @@ import {
 
 const visibilityOptions: Array<{ value: ProductionUploadVisibility; label: string }> = [
   { value: 'ALL', label: '全员可见' },
-  { value: 'QUALITY', label: '品管部可见' },
+  { value: 'RND', label: '研发部可见' },
   { value: 'PROJECT', label: '项目组可见' },
 ];
+// 品管部可见为历史数据兼容展示，下拉框不再提供该选项。
+const legacyVisibilityLabels: Record<string, string> = { QUALITY: '品管部可见' };
 
 const saveLocationOptions = [{ value: 'PRODUCTION_ORDER', label: '生产单' }];
 
@@ -52,7 +54,8 @@ const recognitionStageLabels: Record<string, string> = {
 };
 
 function visibilityText(value: ProductionUploadVisibility) {
-  return visibilityOptions.find((item) => item.value === value)?.label || '全员可见';
+  return visibilityOptions.find((item) => item.value === value)?.label
+    || legacyVisibilityLabels[value] || '全员可见';
 }
 
 function recognitionStageText(upload: ProductionUpload) {

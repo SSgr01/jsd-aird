@@ -6,7 +6,7 @@ import {
   PictureOutlined,
   ReloadOutlined,
 } from '@ant-design/icons';
-import { Alert, App, Button, Form, Modal, Radio, Select, Space, Upload } from 'antd';
+import { Alert, App, Button, Col, Form, Modal, Radio, Row, Select, Space, Upload } from 'antd';
 import type { UploadFile, UploadProps } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -32,11 +32,13 @@ import { downloadFile } from '@/services/files/file-api';
 
 const visibilityOptions = [
   { value: 'ALL' as const, label: '全员可见' },
-  { value: 'QUALITY' as const, label: '品管部可见' },
+  { value: 'RND' as const, label: '研发部可见' },
   { value: 'PROJECT' as const, label: '项目组可见' },
 ];
-const visibilityText = (value?: 'ALL' | 'QUALITY' | 'PROJECT') =>
-  visibilityOptions.find((item) => item.value === value)?.label || '全员可见';
+const visibilityText = (value?: 'ALL' | 'RND' | 'QUALITY' | 'PROJECT') =>
+  visibilityOptions.find((item) => item.value === value)?.label
+  || (value === 'QUALITY' ? '品管部可见' : undefined)
+  || '全员可见';
 
 type UploadMode = 'FREEFORM' | 'TEMPLATE';
 type UnifiedJob =
@@ -56,7 +58,7 @@ export function ExperimentUploadPage() {
   const [templateVersionId, setTemplateVersionId] = useState<string>();
   const [experimentCategoryId, setExperimentCategoryId] = useState<string>();
   const [projectRelations, setProjectRelations] = useState<ProjectRelationTarget[]>([]);
-  const [visibility, setVisibility] = useState<'ALL' | 'QUALITY' | 'PROJECT'>('ALL');
+  const [visibility, setVisibility] = useState<'ALL' | 'RND' | 'QUALITY' | 'PROJECT'>('ALL');
   const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [filter, setFilter] = useState('ALL');
@@ -238,29 +240,36 @@ export function ExperimentUploadPage() {
 
   return <>
     <UploadWorkspace
-      breadcrumbs={[{ title: '电子实验记录本' }, { title: '实验上传' }]}
-      title="实验上传"
+      breadcrumbs={[{ title: '电子实验记录本' }, { title: '实验数据导入' }]}
+      title="实验数据导入"
       description="上传 Word / Excel 或实验记录图片；按模板导入时复用数据中心字段映射工作台"
       headerActions={<Space>
         {mode === 'FREEFORM' ? <Button icon={<PictureOutlined />} onClick={() => { setOcrFiles([]); setOcrOpen(true); }}>拍照录入</Button> : null}
         <Button type="primary" onClick={() => navigate('/experiments')}>实验列表</Button>
       </Space>}
-      leftTitle="录入方式"
+      leftTitle="基础信息"
       classification={<Form layout="vertical" component={false}>
         <Form.Item label="录入方式" required>
           <Radio.Group value={mode} onChange={(event) => { setMode(event.target.value as UploadMode); setFiles([]); }} optionType="button" buttonStyle="solid" options={[{ value: 'FREEFORM', label: '自由上传' }, { value: 'TEMPLATE', label: '按模板导入' }]} />
         </Form.Item>
-        <Form.Item label="实验分类" required>
-          <Select value={experimentCategoryId} onChange={setExperimentCategoryId} options={categories.map((item) => ({ value: item.id, label: item.name }))} placeholder="请选择实验分类" />
-        </Form.Item>
+        <Row gutter={12}>
+          <Col span={12}>
+            <Form.Item label="实验分类" required>
+              <Select value={experimentCategoryId} onChange={setExperimentCategoryId} options={categories.map((item) => ({ value: item.id, label: item.name }))} placeholder="请选择实验分类" />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item label="权限可见">
+              <Select value={visibility} onChange={setVisibility} options={visibilityOptions} />
+            </Form.Item>
+          </Col>
+        </Row>
         {mode === 'TEMPLATE' ? <>
           <Form.Item label="实验数据模板" required>
             <Select showSearch optionFilterProp="label" loading={templatesLoading} value={templateVersionId} onChange={setTemplateVersionId} options={templates.map((item) => ({ value: item.versionId, label: `${item.name} · ${item.templateCode} · V${item.versionNo}` }))} placeholder="请选择实验数据模板" notFoundContent="暂无已发布 Excel 模板" />
           </Form.Item>
           {chosenTemplate ? <Alert showIcon type="info" message={`按“${chosenTemplate.name}”模板创建实验草稿`} /> : null}
-        </> : <>
-          <Form.Item label="权限可见"><Select value={visibility} onChange={setVisibility} options={visibilityOptions} /></Form.Item>
-        </>}
+        </> : null}
         <Form.Item label="关联项目 / 阶段 / 任务"><ProjectRelationPicker value={projectRelations} onChange={setProjectRelations} multiple={false} /></Form.Item>
       </Form>}
       accept={mode === 'TEMPLATE' ? '.xls,.xlsx,.csv' : '.xlsx,.xls,.csv,.doc,.docx,.pdf,.jpg,.jpeg,.png,.gif,.webp,.bmp,.tif,.tiff'}
@@ -326,7 +335,7 @@ export function ExperimentUploadPage() {
 
 function ModalShell({ open, onClose, files, setFiles, submitting, onSubmit }: { open: boolean; onClose: () => void; files: UploadFile[]; setFiles: (files: UploadFile[]) => void; submitting: boolean; onSubmit: () => void }) {
   return <Modal title="拍照 / OCR录入" open={open} onCancel={onClose} footer={null} width={620}>
-    <Upload.Dragger accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff" multiple fileList={files} showUploadList beforeUpload={(file) => { if (!file.size || !/\.(pdf|jpg|jpeg|png|tif|tiff)$/i.test(file.name)) return Upload.LIST_IGNORE; return false; }} onChange={({ fileList }) => setFiles(fileList)}><p><PictureOutlined /> 点击或拖拽照片 / PDF 到此处</p></Upload.Dragger>
+    <Upload.Dragger accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff" multiple fileList={files} showUploadList beforeUpload={(file) => { if (!file.size || !/\.(pdf|jpg|jpeg|png|tif|tiff)$/i.test(file.name)) return Upload.LIST_IGNORE; return false; }} onChange={({ fileList }) => setFiles(fileList)}><p><PictureOutlined /> 点击选择文件/点击拍照上传</p></Upload.Dragger>
     <Space style={{ marginTop: 16, width: '100%', justifyContent: 'flex-end' }}><Button onClick={onClose}>取消</Button><Button type="primary" disabled={!files.length} loading={submitting} onClick={onSubmit}>开始上传</Button></Space>
   </Modal>;
 }

@@ -522,18 +522,28 @@
   }
 }
 
-/* Keep query controls at one desktop width across the management lists. */
-.pm-unified-list-page.pm-project-list-page .pm-filter-row > .ant-input-affix-wrapper,
-.pm-unified-list-page.pm-project-list-page .pm-filter-row > .ant-picker-range,
-.pm-unified-list-page.pm-project-list-page .pm-filter-row > .ant-select,
-.pm-unified-list-page.cm-customer-list-page .cm-filter-row > .ant-input-affix-wrapper,
-.pm-unified-list-page.cm-customer-list-page .cm-filter-row > .ant-select,
+/* The experiment list keeps fixed bases because its own grid rules below
+   take over the layout. */
 .pm-unified-list-page.eln-prototype-page .eln-filter-row > .ant-input-affix-wrapper,
 .pm-unified-list-page.eln-prototype-page .eln-filter-row > .ant-select {
   width: 220px !important;
   min-width: 220px;
   max-width: 220px;
   flex: 0 0 220px;
+}
+
+/* Project/customer query controls use a flexible basis so they follow the
+   window width: they stretch on wide screens, shrink on narrow ones and
+   wrap (see flex-wrap on the row below) instead of overflowing. */
+.pm-unified-list-page.pm-project-list-page .pm-filter-row > .ant-input-affix-wrapper,
+.pm-unified-list-page.pm-project-list-page .pm-filter-row > .ant-picker-range,
+.pm-unified-list-page.pm-project-list-page .pm-filter-row > .ant-select,
+.pm-unified-list-page.cm-customer-list-page .cm-filter-row > .ant-input-affix-wrapper,
+.pm-unified-list-page.cm-customer-list-page .cm-filter-row > .ant-select {
+  width: 220px !important;
+  min-width: 150px;
+  max-width: 360px;
+  flex: 1 1 220px;
 }
 
 .pm-unified-list-page.eln-prototype-page .eln-filter-row > .ant-select:nth-of-type(2) {
@@ -543,12 +553,61 @@
   flex-basis: 220px;
 }
 
-.pm-unified-list-page .pm-phase-filters {
-  grid-template-columns: repeat(5, minmax(0, 1fr)) auto;
+/* Phase / Task filter rows: use flex-wrap so controls wrap automatically when
+   the window gets narrower, instead of being squeezed flat like the old
+   fixed-column grid did. Overrides display:grid set by page-level CSS. */
+.pm-unified-list-page .pm-phase-filters,
+.pm-unified-list-page .pm-task-filters {
+  display: flex !important;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 10px;
+  row-gap: 10px;
+  padding: 14px;
 }
 
-.pm-unified-list-page .pm-task-filters {
-  grid-template-columns: repeat(6, minmax(0, 1fr)) auto;
+.pm-unified-list-page .pm-phase-filters > *,
+.pm-unified-list-page .pm-task-filters > * {
+  box-sizing: border-box;
+  min-width: 150px;
+  max-width: 360px;
+  flex: 1 1 200px;
+  height: 36px;
+  min-height: 36px;
+}
+
+/* Primary search box consumes more free space on wide windows. */
+.pm-unified-list-page .pm-phase-filters > .ant-input-affix-wrapper:first-child,
+.pm-unified-list-page .pm-task-filters  > .ant-input-affix-wrapper:first-child {
+  min-width: 200px;
+  max-width: 480px;
+  flex: 2 1 280px;
+}
+
+/* RangePicker (only on the Stage page) is naturally wider than selects. */
+.pm-unified-list-page .pm-phase-filters > .ant-picker-range {
+  min-width: 200px;
+  flex: 1 1 260px;
+}
+
+/* Reset button stays compact and does not participate in free-space shares. */
+.pm-unified-list-page .pm-phase-filters > .ant-btn:last-child,
+.pm-unified-list-page .pm-task-filters  > .ant-btn:last-child {
+  max-width: none;
+  flex: 0 0 auto;
+  padding: 0 14px;
+}
+
+.pm-unified-list-page .pm-phase-filters > .ant-select .ant-select-selector,
+.pm-unified-list-page .pm-task-filters  > .ant-select .ant-select-selector,
+.pm-unified-list-page .pm-phase-filters > .ant-input-affix-wrapper,
+.pm-unified-list-page .pm-task-filters  > .ant-input-affix-wrapper,
+.pm-unified-list-page .pm-phase-filters > .ant-picker,
+.pm-unified-list-page .pm-task-filters  > .ant-picker {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  box-sizing: border-box;
 }
 
 .pm-unified-list-page .pm-phase-toolbar > .ant-btn,
@@ -571,12 +630,32 @@
     width: calc(33.333% - 7px) !important;
     min-width: 0;
     max-width: none;
-    flex: 1 1 180px;
+    flex: 1 1 160px;
   }
 
-  .pm-unified-list-page .pm-phase-filters,
-  .pm-unified-list-page .pm-task-filters {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+  /* The primary keyword search gets more flex share so it keeps breathing
+     room on narrow windows instead of being squeezed to a sliver together
+     with the selects. */
+  .pm-unified-list-page.pm-project-list-page .pm-filter-row > .pm-project-keyword-filter,
+  .pm-unified-list-page.cm-customer-list-page .cm-filter-row > .ant-input-affix-wrapper {
+    width: calc(50% - 5px) !important;
+    min-width: 200px;
+    flex: 2 1 220px;
+  }
+
+  .pm-unified-list-page .pm-phase-filters > *,
+  .pm-unified-list-page .pm-task-filters  > * {
+    min-width: 120px;
+    flex: 1 1 170px;
+  }
+
+  .pm-unified-list-page .pm-phase-filters > .ant-input-affix-wrapper:first-child,
+  .pm-unified-list-page .pm-task-filters  > .ant-input-affix-wrapper:first-child {
+    flex: 2 1 240px;
+  }
+
+  .pm-unified-list-page .pm-phase-filters > .ant-picker-range {
+    flex: 1 1 200px;
   }
 }
 
@@ -594,9 +673,11 @@
     flex-basis: 100%;
   }
 
-  .pm-unified-list-page .pm-phase-filters,
-  .pm-unified-list-page .pm-task-filters {
-    grid-template-columns: 1fr;
+  .pm-unified-list-page .pm-phase-filters > *,
+  .pm-unified-list-page .pm-task-filters  > * {
+    min-width: 0;
+    max-width: none;
+    flex: 1 1 100%;
   }
 }
 
@@ -729,14 +810,39 @@
   }
 }
 
-/* The project name query is the primary search field, so give it more room
-   on desktop without changing the compact responsive filter layout. */
+/* The primary search fields (project keyword / customer keyword) absorb
+   more of the free space on wide windows, but stay shrinkable so the
+   whole row never overflows on narrower windows. Aligned to the
+   260-420px reference used by the inventory 发样记录 page. */
 @media (min-width: 1101px) {
+  .pm-unified-list-page.pm-project-list-page .pm-filter-row > .pm-project-keyword-filter,
+  .pm-unified-list-page.cm-customer-list-page .cm-filter-row > .ant-input-affix-wrapper {
+    min-width: 260px;
+    max-width: 420px;
+    flex: 2 1 320px;
+  }
+
   .pm-unified-list-page.pm-project-list-page .pm-filter-row > .pm-project-keyword-filter {
-    width: 300px !important;
-    min-width: 280px;
-    max-width: 360px;
-    flex: 1 1 300px;
+    width: 320px !important;
+  }
+
+  .pm-unified-list-page.cm-customer-list-page .cm-filter-row > .ant-input-affix-wrapper {
+    width: 320px !important;
+  }
+
+  /* RangePicker on the project list needs a slightly wider desktop base to
+     keep its two date inputs legible next to the primary search box. */
+  .pm-unified-list-page.pm-project-list-page .pm-filter-row > .ant-picker-range {
+    min-width: 220px;
+    flex: 1 1 260px;
+  }
+
+  /* Selects stay at the inventory-page 150-240px reference. */
+  .pm-unified-list-page.pm-project-list-page .pm-filter-row > .ant-select,
+  .pm-unified-list-page.cm-customer-list-page .cm-filter-row > .ant-select {
+    min-width: 150px;
+    max-width: 240px;
+    flex: 1 1 180px;
   }
 }
 
@@ -747,6 +853,7 @@
 .pm-unified-list-page.pm-project-list-page .pm-filter-row,
 .pm-unified-list-page.eln-prototype-page .eln-filter-row {
   align-items: center;
+  flex-wrap: wrap;
   column-gap: 10px;
   row-gap: 10px;
 }

@@ -56,32 +56,71 @@
   margin-bottom: 16px;
 }
 .inventory-filters {
-  display: grid;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   width: 100%;
   min-width: 0;
-  grid-template-columns: minmax(220px, 2fr) repeat(2, minmax(150px, 1fr));
   gap: 10px;
-  align-items: center;
   margin-bottom: 16px;
+}
+.inventory-filters > * {
+  box-sizing: border-box;
+  min-width: 150px;
+  height: 36px;
+  min-height: 36px;
+  flex: 1 1 200px;
 }
 .inventory-filters .ant-space-item {
   min-width: 0;
 }
+/* Primary search box (first child) on every inventory page matches the
+   reference 发样记录表 .inventory-record-filters 260-420px range and
+   claims more free space than the selects around it. */
+.inventory-filters > .ant-input-search:first-child,
+.inventory-filters > .ant-input-affix-wrapper:first-child,
+.inventory-filters > .ant-input-search {
+  min-width: 260px;
+  max-width: 420px;
+  flex: 2 1 320px;
+  width: 320px;
+}
+.inventory-filters > .ant-select {
+  min-width: 150px;
+  max-width: 240px;
+  flex: 1 1 180px;
+}
+.inventory-filters > .ant-select .ant-select-selector {
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+  box-sizing: border-box;
+}
+.inventory-filters > .ant-btn {
+  flex: 0 0 auto;
+  padding: 0 14px;
+  max-width: none;
+}
 .inventory-filters .ant-input-search,
 .inventory-filters .ant-select {
-  width: 100%;
+  width: auto;
   min-width: 0;
 }
+/* 发样 / 出货：保持搜索框 260-420px + 按钮 auto 的 2 控件布局。 */
 .inventory-record-filters {
-  grid-template-columns: minmax(260px, 420px) auto;
-  justify-content: start;
+  grid-template-columns: none;
+  justify-content: flex-start;
 }
-.inventory-ledger-filters {
-  grid-template-columns: minmax(220px, 2fr) minmax(150px, 1fr) auto;
-  justify-content: start;
+.inventory-record-filters > .ant-input-search {
+  flex: 1 1 320px;
 }
-.inventory-record-filters .ant-input-search {
-  width: 100%;
+/* 研发 / 生产库存表：搜索框 + Select + 重置按钮。 */
+.inventory-ledger-filters > .ant-input-search {
+  flex: 2 1 300px;
+}
+/* 库存查询：搜索框 + 2 个 Select（空间够时 3 列一行）。 */
+.inventory-filters:not(.inventory-record-filters):not(.inventory-ledger-filters) > .ant-input-search {
+  flex: 2 1 300px;
 }
 .inventory-page .ant-card {
   min-width: 0;
@@ -114,8 +153,15 @@
   .inventory-page {
     padding: 20px 16px;
   }
-  .inventory-filters {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .inventory-filters > * {
+    min-width: 130px;
+    flex: 1 1 160px;
+  }
+  .inventory-filters > .ant-input-search:first-child,
+  .inventory-filters > .ant-input-search {
+    min-width: 200px;
+    max-width: none;
+    flex: 1 1 220px;
   }
   .inventory-summary .ant-col {
     max-width: 50%;
@@ -132,8 +178,10 @@
     max-height: calc(100vh - 180px);
     overflow-y: auto;
   }
-  .inventory-filters {
-    grid-template-columns: 1fr;
+  .inventory-filters > * {
+    min-width: 0;
+    max-width: none;
+    flex: 1 1 100%;
   }
   .inventory-summary .ant-col {
     max-width: 50%;

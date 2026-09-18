@@ -203,7 +203,7 @@ export function InventoryQueryPage() {
     <InventoryShell title="库存查询">
       <SummaryCards summary={data?.summary} />
       <Card className="inventory-table-card">
-        <Space className="inventory-filters">
+        <div className="inventory-filters">
           <Input.Search
             allowClear
             placeholder="搜索名称、编码或类别"
@@ -221,7 +221,7 @@ export function InventoryQueryPage() {
             options={Object.entries(alertLabels).map(([value, label]) => ({ value, label }))}
             onChange={(alert) => setFilters((x) => ({ ...x, alert, page: 1 }))}
           />
-        </Space>
+        </div>
         <Table
           rowKey={(r) => `${r.productId}-${r.scope}`}
           loading={loading}

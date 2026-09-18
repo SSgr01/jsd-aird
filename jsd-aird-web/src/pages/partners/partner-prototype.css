@@ -511,26 +511,6 @@
   min-width: 0;
 }
 
-.pm-unified-list-page.cm-customer-list-page .cm-filter-row > .ant-input-affix-wrapper {
-  width: 230px !important;
-  min-width: 200px;
-  flex: 1 1 230px;
-}
-
-.pm-unified-list-page.cm-customer-list-page .cm-filter-row > .ant-select {
-  width: 140px !important;
-  min-width: 125px;
-  flex: 0 1 140px;
-}
-
-.pm-unified-list-page.cm-customer-list-page .cm-filter-row > .cm-filter-reset {
-  width: auto !important;
-  min-width: 88px;
-  max-width: none;
-  flex: 0 0 auto;
-  padding: 0 14px;
-}
-
 .pm-unified-list-page.cm-customer-list-page .cm-batch-row {
   display: flex;
   min-width: 0;
@@ -681,19 +661,6 @@
   font-size: var(--app-font-size-caption);
 }
 
-@media (max-width: 1100px) {
-  .pm-unified-list-page.cm-customer-list-page .cm-filter-row {
-    flex-wrap: wrap;
-  }
-
-  .pm-unified-list-page.cm-customer-list-page .cm-filter-row > .ant-input-affix-wrapper,
-  .pm-unified-list-page.cm-customer-list-page .cm-filter-row > .ant-select {
-    width: calc(33.333% - 7px) !important;
-    min-width: 0;
-    flex: 1 1 180px;
-  }
-}
-
 @media (max-width: 720px) {
   .pm-unified-list-page.cm-customer-list-page .cm-customer-page-intro {
     padding: 16px;
@@ -715,14 +682,6 @@
 }
 
 @media (max-width: 560px) {
-  .pm-unified-list-page.cm-customer-list-page .cm-filter-row > .ant-input-affix-wrapper,
-  .pm-unified-list-page.cm-customer-list-page .cm-filter-row > .ant-select,
-  .pm-unified-list-page.cm-customer-list-page .cm-filter-row > .cm-filter-reset {
-    width: 100% !important;
-    min-width: 0;
-    flex-basis: 100%;
-  }
-
   .pm-unified-list-page.cm-customer-list-page .cm-batch-actions > .ant-btn {
     flex: 1 1 calc(50% - 5px);
   }

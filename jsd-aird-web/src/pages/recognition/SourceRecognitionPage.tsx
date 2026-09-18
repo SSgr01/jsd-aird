@@ -26,6 +26,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 
 import { FilePreviewModal } from '@/components/file-preview';
+import { fetchFilePreviewBlob, fileContentUrl } from '@/services/files';
 import {
   DataFieldDataBrowser,
   DataFieldStructureBrowser,
@@ -622,7 +623,8 @@ function SourceRecognitionPage({ owner }: { owner: SourceOwner }) {
         onClose={() => setPreviewOpen(false)}
         file={{
           fileName: job.sourceFileName,
-          load: () => sourceRecognitionApi.sourceBlob(job.sourceFileId),
+          load: () => fetchFilePreviewBlob(job.sourceFileId),
+          downloadUrl: fileContentUrl(job.sourceFileId),
         }}
       />
     </DataWorkbenchShell>

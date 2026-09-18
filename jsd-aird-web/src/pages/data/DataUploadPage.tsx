@@ -164,7 +164,11 @@ export function DataUploadPage() {
     }
   };
 
-  const fileDescriptor = (job: DataJob): FilePreviewDescriptor => ({ fileName: job.sourceFileName, load: () => dataApi.sourceBlob(job.sourceFileId) });
+  const fileDescriptor = (job: DataJob): FilePreviewDescriptor => ({
+    fileName: job.sourceFileName,
+    load: () => dataApi.sourcePreviewBlob(job.sourceFileId),
+    downloadUrl: `/api/v1/files/${encodeURIComponent(job.sourceFileId)}/content`,
+  });
   const openPreview = (job: DataJob) => setPreviewFile(fileDescriptor(job));
   const downloadJob = async (job: DataJob) => {
     try { await downloadPreviewFile(fileDescriptor(job)); void message.success('原文件下载已开始'); }

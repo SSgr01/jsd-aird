@@ -16,6 +16,9 @@ git checkout -B feature/jsd-aird-ai backup/feature/jsd-aird-ai
 
 当前业务状态：R00～R09 已完成，R10 仍在进行中，R11 等待真实生产输入。演示模型和数据都标记为 `SYNTHETIC_DEMO`，即使本机启用也不代表生产模型已经验收。
 
+客户《测试方法及结果清单.xls》对应的正式字段/Y 初始数据已随交接提交，文件为
+`scripts/sql/test_field_y_formal_seed_v58.sql`。它不是独立的测试项目目录，也不导入示例结果；脚本只把客户表中的测试项目和方法写入标准字段，并创建待补充的 Y 草稿，示例结果不会被当作训练标签。脚本已做幂等处理，重复执行不会重复创建。
+
 ## 依赖
 
 安装以下版本：
@@ -53,6 +56,15 @@ notepad .env.demo
 ```powershell
 .\scripts\demo\bootstrap-demo.ps1 -EnvFile .env.demo -Reset -InstallDependencies -StartServices
 ```
+
+如果需要在演示库中加载客户测试项目和方法，先确认数据库已经完成迁移，再执行：
+
+```powershell
+psql -X -v ON_ERROR_STOP=1 -h 127.0.0.1 -p 5432 -U postgres -d jsd_aird_demo `
+  -f scripts/sql/test_field_y_formal_seed_v58.sql
+```
+
+执行后在“模型中心 → 建模设置”查看 Y 草稿；补齐 SOP、测试阶段、正式值域/类别、来源映射和输入方案后，才允许发布和训练。不要把这份脚本连接到测试环境或生产数据库。
 
 首次运行会创建或重建已校验的 `_demo` 数据库、执行应用迁移，创建 Python 虚拟环境、安装 `requirements.lock.txt`、执行 Maven 编译、安装 Web 依赖并启动四个本地进程。日志和 PID 在 `.runtime/demo`。已有演示数据时不要再次使用 `-Reset`，改用下面不带 `-Reset` 的启动命令。服务探活：
 

@@ -49,7 +49,7 @@ export function SpectrumViewPage() {
     ...categories.map((item) => ({ id: item.id, name: item.name, count: item.chartCount, description: item.description, icon: <LineChartOutlined />, tone: 'blue' as const, editable: !item.systemCategory, allowedActions: item.allowedActions })),
   ], [allChartCount, categories]);
 
-  const descriptor = (item: SpectrumChart): FilePreviewDescriptor => ({ fileName: item.originalName, contentType: item.contentType, size: item.size, load: () => spectrumApi.contentBlob(item.id) });
+  const descriptor = (item: SpectrumChart): FilePreviewDescriptor => ({ fileName: item.originalName, contentType: item.contentType, size: item.size, load: () => spectrumApi.previewBlob(item.id), downloadUrl: spectrumApi.contentUrl(item.id) });
 
   const saveCategory = async (value: CategoryEditorValue) => {
     setSaving(true);

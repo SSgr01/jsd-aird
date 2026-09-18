@@ -78,7 +78,11 @@ export function DataViewPage() {
 
   const resolveFile = (item: DataSourceFile): FilePreviewDescriptor => {
     if (!item.fileObjectId) throw new Error('该正式实验没有来源文件')
-    return { fileName: item.originalName, load: () => dataApi.sourceBlob(item.fileObjectId!), downloadUrl: `/api/v1/files/${encodeURIComponent(item.fileObjectId)}/content` }
+    return {
+      fileName: item.originalName,
+      load: () => dataApi.sourcePreviewBlob(item.fileObjectId!),
+      downloadUrl: `/api/v1/files/${encodeURIComponent(item.fileObjectId)}/content`,
+    }
   };
   const sourceRoute = (item: DataSourceFile) => item.entryType === 'EXPERIMENT_FACT' && item.experimentId
     ? `/experiments/${item.experimentId}` : item.recognitionMode === 'FREEFORM'

@@ -63,6 +63,10 @@ public class ExperimentImportService {
     public Accepted importFile(Command command) {
         var actor = ActorContext.required();
         var normalized = normalize(command);
+        if (!normalized.duplicateOverride()) {
+            var existing = imports.findCompletedBySourceHash(actor.organizationId(), normalized.sha256());
+            if (existing.isPresent()) return new Accepted(existing.get().id(), "COMPLETED");
+        }
         var jobId = UUID.randomUUID();
         imports.create(jobId, actor.organizationId(), normalized.fileId(), normalized.fileName(),
                 normalized.sha256(), normalized.format().name(), normalized.categoryName(), normalized.projectId(),
@@ -189,6 +193,26 @@ public class ExperimentImportService {
                         command.projectId(), command.stageId(), command.taskId(), actor.username(),
                         command.experimentDate(), command.fileId(), null, command.sha256(),
                         parsed.initialEditorSnapshot(), editModel));
+                // Free uploads do not enter the field-mapping workbench, but
+                // their immutable file/boundary evidence must still follow the
+                // experiment into the unified fact projection. The RND import
+                // job is the owner for this reference; no Data Submission is
+                // created.
+                var sourceCoordinates = objectMapper.createObjectNode()
+                        .put("kind", "WHOLE_FILE")
+                        .put("sourceFileId", command.fileId().toString())
+                        .put("sourceFileName", command.fileName());
+                var recognitionSnapshot = objectMapper.createObjectNode()
+                        .put("sourceOwner", "EXPERIMENT")
+                        .put("recognitionMode", "FREEFORM")
+                        .put("parserVersion", parsed.structureSummary() == null ? "experiment-import-v1"
+                                : parsed.structureSummary().path("parserVersion").asText("experiment-import-v1"))
+                        .set("documentSnapshot", parsed.initialEditorSnapshot().deepCopy());
+                imports.linkSourceReference(actor.organizationId(), jobId, summary.id(),
+                        experiments.detail(summary.id()).currentVersionId(),
+                        "experiment-1", "sample-1", "EXPERIMENT:" + jobId + ":sample-1",
+                        List.of("file:" + command.sha256()), sourceCoordinates, recognitionSnapshot,
+                        command.sha256(), actor.userId());
                 updateProgress(actor.organizationId(), asyncIdempotencyKey, 95, "PERSISTING_RESULT");
                 imports.complete(jobId, summary.id(), parsed.initialEditorSnapshot());
                 return summary;
@@ -242,7 +266,7 @@ public class ExperimentImportService {
         }
         return new Command(command.fileId(), command.fileName().strip(), command.sha256().strip(), command.format(),
                 command.categoryId(), command.categoryName(), command.projectId(), command.stageId(), command.taskId(),
-                command.experimentDate(), visibility);
+                command.experimentDate(), visibility, command.duplicateOverride());
     }
 
     private TemplateFormat parseFormat(String value) {
@@ -270,6 +294,13 @@ public class ExperimentImportService {
         return imports.list(actor.organizationId()).stream()
                 .map(job -> enrichProgress(actor.organizationId(), job))
                 .toList();
+    }
+
+    public ExperimentImportRepository.Job get(UUID id) {
+        var actor = ActorContext.required();
+        var job = imports.find(actor.organizationId(), id)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "上传记录不存在"));
+        return enrichProgress(actor.organizationId(), job);
     }
 
     private ExperimentImportRepository.Job enrichProgress(UUID organizationId, ExperimentImportRepository.Job job) {
@@ -335,7 +366,15 @@ public class ExperimentImportService {
 
     public record Command(UUID fileId, String fileName, String sha256, TemplateFormat format,
                           UUID categoryId, String categoryName, UUID projectId, UUID stageId,
-                          UUID taskId, LocalDate experimentDate, String visibility) {}
+                          UUID taskId, LocalDate experimentDate, String visibility,
+                          boolean duplicateOverride) {
+        public Command(UUID fileId, String fileName, String sha256, TemplateFormat format,
+                       UUID categoryId, String categoryName, UUID projectId, UUID stageId,
+                       UUID taskId, LocalDate experimentDate, String visibility) {
+            this(fileId, fileName, sha256, format, categoryId, categoryName, projectId, stageId,
+                    taskId, experimentDate, visibility, false);
+        }
+    }
 
     public record Accepted(UUID jobId, String status) {}
 

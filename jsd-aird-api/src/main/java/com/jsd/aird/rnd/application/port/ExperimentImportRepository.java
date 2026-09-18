@@ -14,12 +14,19 @@ public interface ExperimentImportRepository {
     void complete(UUID id, UUID experimentId, JsonNode parseResult);
     void fail(UUID id, String errorMessage);
     Optional<Job> find(UUID organizationId, UUID id);
+    Optional<Job> findCompletedBySourceHash(UUID organizationId, String sourceSha256);
     int markRetrying(UUID organizationId, UUID id);
     /** Marks an in-flight parse as cancelled so a worker cannot publish its result. */
     int cancel(UUID organizationId, UUID id);
     boolean isParsing(UUID organizationId, UUID id);
     int delete(UUID organizationId, UUID id);
     List<Job> list(UUID organizationId);
+    /** Free uploads keep their owner in RND and still need an immutable source reference. */
+    void linkSourceReference(UUID organizationId, UUID importJobId, UUID experimentId,
+                             UUID experimentVersionId, String experimentBoundaryId,
+                             String sampleBoundaryId, String logicalSampleKey,
+                             List<String> sourceGroupKeys, JsonNode sourceCoordinates,
+                             JsonNode recognitionSnapshot, String contentHash, UUID actorId);
 
     record Job(UUID id, UUID sourceFileId, String sourceFileName, String sourceSha256, String sourceFormat,
                String status, UUID experimentId, String errorMessage, String categoryName,

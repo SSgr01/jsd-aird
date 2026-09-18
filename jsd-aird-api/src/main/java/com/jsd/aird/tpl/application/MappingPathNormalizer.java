@@ -28,17 +28,26 @@ public final class MappingPathNormalizer {
         if (mapping == null || !mapping.isArray()) return mapping;
         var result = (ArrayNode) mapping.deepCopy();
         var paths = new HashMap<String, String>();
-        var usedPaths = new HashSet<String>();
+        var usedScopedPaths = new HashSet<String>();
         var inferredParentPaths = inferParentPaths(result);
 
-        // Keep every explicit path exactly as the user or compiler supplied it.
+        // Keep explicit paths stable, but repair legacy workbooks that reused a
+        // primary semantic path for two physical fields on the same worksheet.
+        // The worksheet is part of the physical binding scope; the same path on
+        // another worksheet is valid and remains unchanged.
         for (JsonNode node : result) {
             if (!(node instanceof ObjectNode object)) continue;
             var bindingId = object.path("bindingId").asText("");
             var path = object.path("dataPath").asText("");
             if (StringUtils.hasText(bindingId) && StringUtils.hasText(path)) {
-                paths.put(bindingId, path);
-                usedPaths.add(path);
+                var normalizedPath = path;
+                if (object.path("primaryBinding").asBoolean(true)) {
+                    normalizedPath = uniqueScopedPath(object, path, bindingId, usedScopedPaths);
+                    if (!normalizedPath.equals(path)) object.put("dataPath", normalizedPath);
+                } else {
+                    usedScopedPaths.add(scopedPath(object, path));
+                }
+                paths.put(bindingId, normalizedPath);
             }
         }
 
@@ -72,7 +81,7 @@ public final class MappingPathNormalizer {
                 } else {
                     generated = "/recognized/" + key;
                 }
-                generated = uniquePath(generated, bindingId, usedPaths);
+                generated = uniqueScopedPath(object, generated, bindingId, usedScopedPaths);
                 object.put("dataPath", generated);
                 object.withObject("diagnostic")
                         .put("dataPathSource", "BACKEND_STABLE_FALLBACK");
@@ -141,5 +150,33 @@ public final class MappingPathNormalizer {
         var ordinal = 2;
         while (!usedPaths.add(candidate)) candidate = base + "__" + suffix + "_" + ordinal++;
         return candidate;
+    }
+
+    private static String uniqueScopedPath(
+            ObjectNode object,
+            String base,
+            String bindingId,
+            Set<String> usedScopedPaths
+    ) {
+        var scope = worksheetScope(object);
+        var scopedBase = scope + "\u0000" + base;
+        if (usedScopedPaths.add(scopedBase)) return base;
+        var suffix = RecognitionIdentity.shortHash(bindingId + "|" + base, 10);
+        var candidate = base + "__" + suffix;
+        var ordinal = 2;
+        while (!usedScopedPaths.add(scope + "\u0000" + candidate)) {
+            candidate = base + "__" + suffix + "_" + ordinal++;
+        }
+        return candidate;
+    }
+
+    private static String scopedPath(ObjectNode object, String path) {
+        return worksheetScope(object) + "\u0000" + path;
+    }
+
+    private static String worksheetScope(ObjectNode object) {
+        var locator = object.path("locator");
+        var sheet = locator.path("sheetId").asText(locator.path("sheetName").asText(""));
+        return sheet == null ? "" : sheet;
     }
 }

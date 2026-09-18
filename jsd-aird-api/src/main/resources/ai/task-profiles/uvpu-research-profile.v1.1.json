@@ -1,0 +1,25 @@
+{
+  "taskProfileCode": "UVPU_APPLICATION_FORMULATION",
+  "researchProfileVersion": "uvpu-research.v1.1",
+  "similarCaseBaselineVersion": "T06_SIMILAR_CASE.v1",
+  "targets": [
+    {"targetKey":"APP.WARPING.HEIGHT@substrate=PET_100UM;stage=UV_IMMEDIATE","name":"PET膜UV后即时翘曲高度","valueType":"CONTINUOUS","unit":"cm","direction":"MINIMIZE","aliases":["初始翘曲","PET初始翘曲高度","PET膜即时翘曲","PET膜UV后翘曲高度"]},
+    {"targetKey":"APP.WARPING.HEIGHT@substrate=PET_100UM;stage=ROOM_12H","name":"PET膜12小时翘曲高度","valueType":"CONTINUOUS","unit":"cm","direction":"MINIMIZE","aliases":["PET 12小时翘曲","PET膜12h翘曲"]},
+    {"targetKey":"APP.WARPING.CURL_ANGLE@substrate=PC_FILM_170UM;stage=UV_IMMEDIATE","name":"PC膜UV后即时卷曲角度","valueType":"CONTINUOUS","unit":"°","direction":"MINIMIZE","aliases":["PC膜卷曲角度","PC卷曲180度"]},
+    {"targetKey":"APP.WARPING.CURL_ANGLE@substrate=PET_100UM;stage=UV_IMMEDIATE","name":"PET膜UV后即时卷曲角度","valueType":"CONTINUOUS","unit":"°","direction":"MINIMIZE","aliases":["PET膜卷曲角度","PET卷曲180度"]},
+    {"targetKey":"APP.HARDNESS.PENCIL@substrate=PET_100UM;load=1KG","name":"铅笔硬度（1KG，PET膜）","valueType":"ORDINAL","unit":"","direction":"MAXIMIZE","aliases":["铅笔硬度","硬度","硬度至少2H","硬度至少3H"]},
+    {"targetKey":"APP.ABRASION.STEELWOOL@substrate=PET_100UM;load=500G;contact=1X1_UNSPECIFIED","name":"钢丝绒耐磨（500g）","valueType":"CONTINUOUS","unit":"cycles","direction":"MAXIMIZE","aliases":["钢丝绒500g","500g耐磨"]},
+    {"targetKey":"APP.ABRASION.STEELWOOL@substrate=PET_100UM;load=1KG;contact=1X1_UNSPECIFIED","name":"钢丝绒耐磨（1KG）","valueType":"CONTINUOUS","unit":"cycles","direction":"MAXIMIZE","aliases":["钢丝绒1kg","1kg耐磨"]},
+    {"targetKey":"APP.SURFACE_DRYNESS@stage=UV_CURED","name":"UV固化后表干性","valueType":"BINARY","unit":"","direction":"MAXIMIZE","aliases":["UV表干","UV固化后表干","UV后表干合格"]},
+    {"targetKey":"APP.ELONGATION@substrate=PC_FILM_170UM;method=HOT_DRAW;unit=PCT","name":"PC膜热拉伸率","valueType":"CONTINUOUS","unit":"%","direction":"MAXIMIZE","aliases":["PC拉伸率","PC膜热拉伸率","拉伸率（PC膜，热拉）"]},
+    {"targetKey":"APP.ADHESION.B_GRADE@substrate=PC_FILM_170UM;condition=INITIAL","name":"PC膜初始附着力","valueType":"ORDINAL","unit":"B","direction":"MAXIMIZE","aliases":["PC膜初始附着力"]},
+    {"targetKey":"APP.ADHESION.B_GRADE@substrate=PET_100UM;condition=INITIAL","name":"PET膜初始附着力","valueType":"ORDINAL","unit":"B","direction":"MAXIMIZE","aliases":["PET膜初始附着力"]},
+    {"targetKey":"APP.ADHESION.B_GRADE@substrate=PMMA_PC_COMPOSITE_0_64MM;condition=INITIAL","name":"PMMA/PC复合板初始附着力","valueType":"ORDINAL","unit":"B","direction":"MAXIMIZE","aliases":["PMMA/PC复合板初始附着力"]},
+    {"targetKey":"APP.ADHESION.B_GRADE@substrate=PC_FILM_170UM;condition=WATER_85C_1H","name":"PC膜85℃水煮1小时附着力","valueType":"ORDINAL","unit":"B","direction":"MAXIMIZE","aliases":["PC膜85度水煮附着力","PC膜85℃水煮1小时附着力"]},
+    {"targetKey":"APP.ADHESION.B_GRADE@substrate=PET_100UM;condition=WATER_85C_1H","name":"PET膜85℃水煮1小时附着力","valueType":"ORDINAL","unit":"B","direction":"MAXIMIZE","aliases":["PET膜85度水煮附着力","PET膜85℃水煮1小时附着力"]},
+    {"targetKey":"APP.ADHESION.B_GRADE@substrate=PMMA_PC_COMPOSITE_0_64MM;condition=WATER_85C_1H","name":"PMMA/PC复合板85℃水煮1小时附着力","valueType":"ORDINAL","unit":"B","direction":"MAXIMIZE","aliases":["PMMA/PC复合板85度水煮附着力","PMMA/PC复合板85℃水煮1小时附着力"]},
+    {"targetKey":"APP.ADHESION.B_GRADE@substrate=PC_FILM_170UM;condition=REBOIL_WATER_1H","name":"PC膜再沸水煮1小时附着力","valueType":"ORDINAL","unit":"B","direction":"MAXIMIZE","aliases":["PC膜再沸水煮附着力","PC膜再次沸水煮附着力"]},
+    {"targetKey":"APP.ADHESION.B_GRADE@substrate=PET_100UM;condition=REBOIL_WATER_1H","name":"PET膜再沸水煮1小时附着力","valueType":"ORDINAL","unit":"B","direction":"MAXIMIZE","aliases":["PET膜再沸水煮附着力","PET膜再次沸水煮附着力"]},
+    {"targetKey":"APP.ADHESION.B_GRADE@substrate=PMMA_PC_COMPOSITE_0_64MM;condition=REBOIL_WATER_1H","name":"PMMA/PC复合板再沸水煮1小时附着力","valueType":"ORDINAL","unit":"B","direction":"MAXIMIZE","aliases":["PMMA/PC复合板再沸水煮附着力","PMMA/PC复合板再次沸水煮附着力"]}
+  ]
+}

@@ -1,0 +1,1891 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jsd.internal/contracts/formula-model.v2/schema.json",
+  "title": "JSD-AIRD Formula Model Contract v2",
+  "$defs": {
+    "ApplicabilityV2": {
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/DomainStatusV2"
+        },
+        "distance": {
+          "minimum": 0,
+          "title": "Distance",
+          "type": "number"
+        },
+        "reasons": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Reasons",
+          "type": "array"
+        }
+      },
+      "required": [
+        "status",
+        "distance"
+      ],
+      "title": "ApplicabilityV2",
+      "type": "object"
+    },
+    "ArtifactRefV2": {
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "format": "uri",
+          "minLength": 1,
+          "title": "Url",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "sha256"
+      ],
+      "title": "ArtifactRefV2",
+      "type": "object"
+    },
+    "BinaryResultV2": {
+      "additionalProperties": false,
+      "properties": {
+        "resultType": {
+          "const": "BINARY",
+          "default": "BINARY",
+          "title": "Resulttype",
+          "type": "string"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "positiveClass": {
+          "title": "Positiveclass",
+          "type": "string"
+        },
+        "probability": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Probability",
+          "type": "number"
+        },
+        "decisionThreshold": {
+          "exclusiveMaximum": 1,
+          "exclusiveMinimum": 0,
+          "title": "Decisionthreshold",
+          "type": "number"
+        }
+      },
+      "required": [
+        "label",
+        "positiveClass",
+        "probability",
+        "decisionThreshold"
+      ],
+      "title": "BinaryResultV2",
+      "type": "object"
+    },
+    "CategoricalResultV2": {
+      "additionalProperties": false,
+      "properties": {
+        "resultType": {
+          "const": "CATEGORICAL",
+          "default": "CATEGORICAL",
+          "title": "Resulttype",
+          "type": "string"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "probabilities": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Probabilities",
+          "type": "object"
+        }
+      },
+      "required": [
+        "label",
+        "probabilities"
+      ],
+      "title": "CategoricalResultV2",
+      "type": "object"
+    },
+    "ContinuousResultV2": {
+      "additionalProperties": false,
+      "properties": {
+        "resultType": {
+          "const": "CONTINUOUS",
+          "default": "CONTINUOUS",
+          "title": "Resulttype",
+          "type": "string"
+        },
+        "value": {
+          "title": "Value",
+          "type": "number"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unit"
+        },
+        "lower": {
+          "title": "Lower",
+          "type": "number"
+        },
+        "upper": {
+          "title": "Upper",
+          "type": "number"
+        },
+        "coverageLevel": {
+          "exclusiveMaximum": 1,
+          "exclusiveMinimum": 0,
+          "title": "Coveragelevel",
+          "type": "number"
+        }
+      },
+      "required": [
+        "value",
+        "lower",
+        "upper",
+        "coverageLevel"
+      ],
+      "title": "ContinuousResultV2",
+      "type": "object"
+    },
+    "DomainStatusV2": {
+      "enum": [
+        "IN_DOMAIN",
+        "NEAR_BOUNDARY",
+        "OUT_OF_DOMAIN"
+      ],
+      "title": "DomainStatusV2",
+      "type": "string"
+    },
+    "ErrorResponseV2": {
+      "additionalProperties": false,
+      "properties": {
+        "contractVersion": {
+          "const": "formula-model.v2",
+          "default": "formula-model.v2",
+          "title": "Contractversion",
+          "type": "string"
+        },
+        "requestId": {
+          "title": "Requestid",
+          "type": "string"
+        },
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "retryable": {
+          "default": false,
+          "title": "Retryable",
+          "type": "boolean"
+        },
+        "detail": {
+          "additionalProperties": true,
+          "title": "Detail",
+          "type": "object"
+        }
+      },
+      "required": [
+        "requestId",
+        "code",
+        "message"
+      ],
+      "title": "ErrorResponseV2",
+      "type": "object"
+    },
+    "FoldAssignmentV2": {
+      "additionalProperties": false,
+      "properties": {
+        "rowId": {
+          "title": "Rowid",
+          "type": "string"
+        },
+        "groupKey": {
+          "title": "Groupkey",
+          "type": "string"
+        },
+        "fold": {
+          "minimum": 0,
+          "title": "Fold",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "rowId",
+        "groupKey",
+        "fold"
+      ],
+      "title": "FoldAssignmentV2",
+      "type": "object"
+    },
+    "FormulaComponentV2": {
+      "additionalProperties": false,
+      "properties": {
+        "materialId": {
+          "title": "Materialid",
+          "type": "string"
+        },
+        "ratio": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ratio"
+        },
+        "unit": {
+          "title": "Unit",
+          "type": "string"
+        },
+        "amountKnown": {
+          "title": "Amountknown",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "materialId",
+        "unit",
+        "amountKnown"
+      ],
+      "title": "FormulaComponentV2",
+      "type": "object"
+    },
+    "FormulaV2": {
+      "additionalProperties": false,
+      "properties": {
+        "basis": {
+          "enum": [
+            "MASS_PERCENT",
+            "MASS_PART",
+            "ABSOLUTE_MASS"
+          ],
+          "title": "Basis",
+          "type": "string"
+        },
+        "compositionComplete": {
+          "title": "Compositioncomplete",
+          "type": "boolean"
+        },
+        "components": {
+          "items": {
+            "$ref": "#/$defs/FormulaComponentV2"
+          },
+          "minItems": 1,
+          "title": "Components",
+          "type": "array"
+        },
+        "recordedTotal": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Recordedtotal"
+        }
+      },
+      "required": [
+        "basis",
+        "compositionComplete",
+        "components"
+      ],
+      "title": "FormulaV2",
+      "type": "object"
+    },
+    "FrozenContextV2": {
+      "additionalProperties": false,
+      "properties": {
+        "targetDefinition": {
+          "$ref": "#/$defs/TargetDefinitionV2"
+        },
+        "inputScheme": {
+          "$ref": "#/$defs/InputSchemeV2"
+        },
+        "materialDictionary": {
+          "$ref": "#/$defs/MaterialDictionaryV2"
+        },
+        "preprocessing": {
+          "$ref": "#/$defs/PreprocessingV2"
+        },
+        "trainingPolicy": {
+          "$ref": "#/$defs/TrainingPolicyV2"
+        }
+      },
+      "required": [
+        "targetDefinition",
+        "inputScheme",
+        "materialDictionary",
+        "preprocessing",
+        "trainingPolicy"
+      ],
+      "title": "FrozenContextV2",
+      "type": "object"
+    },
+    "InputFieldV2": {
+      "additionalProperties": false,
+      "properties": {
+        "fieldVersionId": {
+          "minLength": 1,
+          "title": "Fieldversionid",
+          "type": "string"
+        },
+        "code": {
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unit"
+        },
+        "ordinal": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ordinal"
+        },
+        "valueType": {
+          "enum": [
+            "NUMBER",
+            "STRING",
+            "BOOLEAN",
+            "CATEGORY",
+            "COMPOSITION"
+          ],
+          "title": "Valuetype",
+          "type": "string"
+        },
+        "required": {
+          "title": "Required",
+          "type": "boolean"
+        },
+        "acquisitionTiming": {
+          "enum": [
+            "PRE_EXPERIMENT",
+            "POST_EXPERIMENT"
+          ],
+          "title": "Acquisitiontiming",
+          "type": "string"
+        },
+        "encoding": {
+          "additionalProperties": true,
+          "title": "Encoding",
+          "type": "object"
+        }
+      },
+      "required": [
+        "fieldVersionId",
+        "code",
+        "valueType",
+        "required",
+        "acquisitionTiming"
+      ],
+      "title": "InputFieldV2",
+      "type": "object"
+    },
+    "InputSchemeV2": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "version": {
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "targetVersionId": {
+          "title": "Targetversionid",
+          "type": "string"
+        },
+        "fields": {
+          "items": {
+            "$ref": "#/$defs/InputFieldV2"
+          },
+          "minItems": 1,
+          "title": "Fields",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "sha256",
+        "targetVersionId",
+        "fields"
+      ],
+      "title": "InputSchemeV2",
+      "type": "object"
+    },
+    "MaterialDictionaryV2": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "version": {
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "materials": {
+          "items": {
+            "$ref": "#/$defs/MaterialV2"
+          },
+          "minItems": 1,
+          "title": "Materials",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "sha256",
+        "materials"
+      ],
+      "title": "MaterialDictionaryV2",
+      "type": "object"
+    },
+    "MaterialV2": {
+      "additionalProperties": false,
+      "properties": {
+        "materialId": {
+          "title": "Materialid",
+          "type": "string"
+        },
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "role": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Role"
+        },
+        "encoderIndex": {
+          "minimum": 0,
+          "title": "Encoderindex",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "materialId",
+        "code",
+        "encoderIndex"
+      ],
+      "title": "MaterialV2",
+      "type": "object"
+    },
+    "ModelBindingV2": {
+      "additionalProperties": false,
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/TargetDefinitionV2"
+        },
+        "modelVersionId": {
+          "title": "Modelversionid",
+          "type": "string"
+        },
+        "modelBundle": {
+          "$ref": "#/$defs/ArtifactRefV2"
+        },
+        "inputScheme": {
+          "$ref": "#/$defs/InputSchemeV2"
+        },
+        "materialDictionary": {
+          "$ref": "#/$defs/MaterialDictionaryV2"
+        },
+        "preprocessing": {
+          "$ref": "#/$defs/PreprocessingV2"
+        },
+        "applicabilityDomain": {
+          "additionalProperties": true,
+          "title": "Applicabilitydomain",
+          "type": "object"
+        }
+      },
+      "required": [
+        "target",
+        "modelVersionId",
+        "modelBundle",
+        "inputScheme",
+        "materialDictionary",
+        "preprocessing",
+        "applicabilityDomain"
+      ],
+      "title": "ModelBindingV2",
+      "type": "object"
+    },
+    "OrdinalResultV2": {
+      "additionalProperties": false,
+      "properties": {
+        "resultType": {
+          "const": "ORDINAL",
+          "default": "ORDINAL",
+          "title": "Resulttype",
+          "type": "string"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "probabilities": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Probabilities",
+          "type": "object"
+        },
+        "thresholdProbability": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Thresholdprobability",
+          "type": "number"
+        }
+      },
+      "required": [
+        "label",
+        "probabilities",
+        "thresholdProbability"
+      ],
+      "title": "OrdinalResultV2",
+      "type": "object"
+    },
+    "PreprocessingV2": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "version": {
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "config": {
+          "additionalProperties": true,
+          "title": "Config",
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "sha256",
+        "config"
+      ],
+      "title": "PreprocessingV2",
+      "type": "object"
+    },
+    "RecommendRequestV2": {
+      "additionalProperties": false,
+      "properties": {
+        "contractVersion": {
+          "const": "formula-model.v2",
+          "default": "formula-model.v2",
+          "title": "Contractversion",
+          "type": "string"
+        },
+        "requestId": {
+          "minLength": 1,
+          "title": "Requestid",
+          "type": "string"
+        },
+        "seed": {
+          "title": "Seed",
+          "type": "integer"
+        },
+        "runId": {
+          "title": "Runid",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "FORMULA_PREDICTION",
+            "EXPERIMENT_OPTIMIZATION"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "baselineFormula": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FormulaV2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "fixedInputs": {
+          "additionalProperties": true,
+          "title": "Fixedinputs",
+          "type": "object"
+        },
+        "goals": {
+          "items": {
+            "$ref": "#/$defs/TypedGoalV2"
+          },
+          "minItems": 1,
+          "title": "Goals",
+          "type": "array"
+        },
+        "constraints": {
+          "additionalProperties": true,
+          "title": "Constraints",
+          "type": "object"
+        },
+        "searchSpace": {
+          "additionalProperties": true,
+          "title": "Searchspace",
+          "type": "object"
+        },
+        "modelBindings": {
+          "items": {
+            "$ref": "#/$defs/ModelBindingV2"
+          },
+          "minItems": 1,
+          "title": "Modelbindings",
+          "type": "array"
+        },
+        "candidateCount": {
+          "default": 4,
+          "maximum": 16,
+          "minimum": 1,
+          "title": "Candidatecount",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "requestId",
+        "seed",
+        "runId",
+        "mode",
+        "fixedInputs",
+        "goals",
+        "constraints",
+        "modelBindings"
+      ],
+      "title": "RecommendRequestV2",
+      "type": "object"
+    },
+    "RecommendResponseV2": {
+      "additionalProperties": false,
+      "properties": {
+        "contractVersion": {
+          "const": "formula-model.v2",
+          "default": "formula-model.v2",
+          "title": "Contractversion",
+          "type": "string"
+        },
+        "requestId": {
+          "title": "Requestid",
+          "type": "string"
+        },
+        "runId": {
+          "title": "Runid",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "READY",
+            "PARTIAL",
+            "NO_FEASIBLE_CANDIDATE",
+            "FAILED"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "executionStatus": {
+          "default": "SUCCEEDED",
+          "enum": [
+            "SUCCEEDED",
+            "FAILED"
+          ],
+          "title": "Executionstatus",
+          "type": "string"
+        },
+        "outcomeStatus": {
+          "anyOf": [
+            {
+              "enum": [
+                "SUCCEEDED",
+                "PARTIAL",
+                "BLOCKED"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Outcomestatus"
+        },
+        "candidates": {
+          "items": {
+            "$ref": "#/$defs/RecommendedCandidateV2"
+          },
+          "title": "Candidates",
+          "type": "array"
+        },
+        "missingStrategies": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Missingstrategies",
+          "type": "array"
+        },
+        "missingStrategyReasons": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Missingstrategyreasons",
+          "type": "object"
+        },
+        "blockedTargets": {
+          "items": {
+            "$ref": "#/$defs/TargetBlockedV2"
+          },
+          "title": "Blockedtargets",
+          "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "$ref": "#/$defs/ValidationIssueV2"
+          },
+          "title": "Warnings",
+          "type": "array"
+        },
+        "shortfallReason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Shortfallreason"
+        },
+        "shortfallReasonCode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Shortfallreasoncode"
+        },
+        "rejectionSummary": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Rejectionsummary",
+          "type": "object"
+        },
+        "actionHints": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Actionhints",
+          "type": "array"
+        },
+        "code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Code"
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Message"
+        },
+        "searchEngine": {
+          "default": "DETERMINISTIC_CANDIDATE_POOL",
+          "enum": [
+            "BAYBE",
+            "DETERMINISTIC_CANDIDATE_POOL"
+          ],
+          "title": "Searchengine",
+          "type": "string"
+        },
+        "searchStrategy": {
+          "default": "DISCRETE_DETERMINISTIC_POOL",
+          "enum": [
+            "CONTINUOUS_BAYBE",
+            "DISCRETE_DETERMINISTIC_POOL"
+          ],
+          "title": "Searchstrategy",
+          "type": "string"
+        },
+        "searchEvidence": {
+          "additionalProperties": true,
+          "title": "Searchevidence",
+          "type": "object"
+        }
+      },
+      "required": [
+        "requestId",
+        "runId",
+        "status",
+        "candidates"
+      ],
+      "title": "RecommendResponseV2",
+      "type": "object"
+    },
+    "RecommendedCandidateV2": {
+      "additionalProperties": false,
+      "properties": {
+        "candidateId": {
+          "title": "Candidateid",
+          "type": "string"
+        },
+        "formula": {
+          "$ref": "#/$defs/FormulaV2"
+        },
+        "results": {
+          "items": {
+            "$ref": "#/$defs/TargetSuccessV2"
+          },
+          "title": "Results",
+          "type": "array"
+        },
+        "score": {
+          "title": "Score",
+          "type": "number"
+        },
+        "ruleCheck": {
+          "additionalProperties": true,
+          "title": "Rulecheck",
+          "type": "object"
+        },
+        "strategy": {
+          "default": "CONTROLLED_POOL",
+          "enum": [
+            "CONTROLLED_POOL",
+            "CONTROL",
+            "CONSERVATIVE",
+            "BALANCED",
+            "EXPLORATORY"
+          ],
+          "title": "Strategy",
+          "type": "string"
+        },
+        "inputs": {
+          "additionalProperties": true,
+          "title": "Inputs",
+          "type": "object"
+        },
+        "quality": {
+          "additionalProperties": true,
+          "title": "Quality",
+          "type": "object"
+        },
+        "applicability": {
+          "additionalProperties": true,
+          "title": "Applicability",
+          "type": "object"
+        },
+        "baselineDistance": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Baselinedistance",
+          "type": "number"
+        },
+        "changeSummary": {
+          "additionalProperties": true,
+          "title": "Changesummary",
+          "type": "object"
+        },
+        "strategyEvidence": {
+          "additionalProperties": true,
+          "title": "Strategyevidence",
+          "type": "object"
+        },
+        "riskFlags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Riskflags",
+          "type": "array"
+        }
+      },
+      "required": [
+        "candidateId",
+        "formula",
+        "results",
+        "score",
+        "ruleCheck"
+      ],
+      "title": "RecommendedCandidateV2",
+      "type": "object"
+    },
+    "ScoreRequestV2": {
+      "additionalProperties": false,
+      "properties": {
+        "contractVersion": {
+          "const": "formula-model.v2",
+          "default": "formula-model.v2",
+          "title": "Contractversion",
+          "type": "string"
+        },
+        "requestId": {
+          "minLength": 1,
+          "title": "Requestid",
+          "type": "string"
+        },
+        "seed": {
+          "title": "Seed",
+          "type": "integer"
+        },
+        "runId": {
+          "title": "Runid",
+          "type": "string"
+        },
+        "formula": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FormulaV2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "inputs": {
+          "additionalProperties": true,
+          "title": "Inputs",
+          "type": "object"
+        },
+        "modelBindings": {
+          "items": {
+            "$ref": "#/$defs/ModelBindingV2"
+          },
+          "minItems": 1,
+          "title": "Modelbindings",
+          "type": "array"
+        }
+      },
+      "required": [
+        "requestId",
+        "seed",
+        "runId",
+        "inputs",
+        "modelBindings"
+      ],
+      "title": "ScoreRequestV2",
+      "type": "object"
+    },
+    "ScoreResponseV2": {
+      "additionalProperties": false,
+      "properties": {
+        "contractVersion": {
+          "const": "formula-model.v2",
+          "default": "formula-model.v2",
+          "title": "Contractversion",
+          "type": "string"
+        },
+        "requestId": {
+          "title": "Requestid",
+          "type": "string"
+        },
+        "runId": {
+          "title": "Runid",
+          "type": "string"
+        },
+        "executionStatus": {
+          "enum": [
+            "SUCCEEDED",
+            "FAILED"
+          ],
+          "title": "Executionstatus",
+          "type": "string"
+        },
+        "outcomeStatus": {
+          "anyOf": [
+            {
+              "enum": [
+                "SUCCEEDED",
+                "PARTIAL",
+                "BLOCKED"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Outcomestatus"
+        },
+        "results": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "BLOCKED": "#/$defs/TargetBlockedV2",
+                "FAILED": "#/$defs/TargetFailedV2",
+                "SUCCEEDED": "#/$defs/TargetSuccessV2"
+              },
+              "propertyName": "status"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/TargetSuccessV2"
+              },
+              {
+                "$ref": "#/$defs/TargetBlockedV2"
+              },
+              {
+                "$ref": "#/$defs/TargetFailedV2"
+              }
+            ]
+          },
+          "title": "Results",
+          "type": "array"
+        }
+      },
+      "required": [
+        "requestId",
+        "runId",
+        "executionStatus",
+        "results"
+      ],
+      "title": "ScoreResponseV2",
+      "type": "object"
+    },
+    "SnapshotRefV2": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "version": {
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "manifest": {
+          "$ref": "#/$defs/ArtifactRefV2"
+        },
+        "rows": {
+          "$ref": "#/$defs/ArtifactRefV2"
+        },
+        "sourceMap": {
+          "$ref": "#/$defs/ArtifactRefV2"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "sha256",
+        "manifest",
+        "rows",
+        "sourceMap"
+      ],
+      "title": "SnapshotRefV2",
+      "type": "object"
+    },
+    "TargetBlockedV2": {
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "const": "BLOCKED",
+          "default": "BLOCKED",
+          "title": "Status",
+          "type": "string"
+        },
+        "targetId": {
+          "title": "Targetid",
+          "type": "string"
+        },
+        "modelVersionId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Modelversionid"
+        },
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "detail": {
+          "additionalProperties": true,
+          "title": "Detail",
+          "type": "object"
+        }
+      },
+      "required": [
+        "targetId",
+        "code",
+        "message"
+      ],
+      "title": "TargetBlockedV2",
+      "type": "object"
+    },
+    "TargetDefinitionV2": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "version": {
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "code": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "valueType": {
+          "$ref": "#/$defs/ValueTypeV2"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unit"
+        },
+        "classes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Classes",
+          "type": "array"
+        },
+        "positiveClass": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Positiveclass"
+        },
+        "observationSemantics": {
+          "additionalProperties": true,
+          "title": "Observationsemantics",
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "sha256",
+        "code",
+        "valueType"
+      ],
+      "title": "TargetDefinitionV2",
+      "type": "object"
+    },
+    "TargetFailedV2": {
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "const": "FAILED",
+          "default": "FAILED",
+          "title": "Status",
+          "type": "string"
+        },
+        "targetId": {
+          "title": "Targetid",
+          "type": "string"
+        },
+        "modelVersionId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Modelversionid"
+        },
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "detail": {
+          "additionalProperties": true,
+          "title": "Detail",
+          "type": "object"
+        }
+      },
+      "required": [
+        "targetId",
+        "code",
+        "message"
+      ],
+      "title": "TargetFailedV2",
+      "type": "object"
+    },
+    "TargetSuccessV2": {
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "const": "SUCCEEDED",
+          "default": "SUCCEEDED",
+          "title": "Status",
+          "type": "string"
+        },
+        "targetId": {
+          "title": "Targetid",
+          "type": "string"
+        },
+        "modelVersionId": {
+          "title": "Modelversionid",
+          "type": "string"
+        },
+        "result": {
+          "discriminator": {
+            "mapping": {
+              "BINARY": "#/$defs/BinaryResultV2",
+              "CATEGORICAL": "#/$defs/CategoricalResultV2",
+              "CONTINUOUS": "#/$defs/ContinuousResultV2",
+              "ORDINAL": "#/$defs/OrdinalResultV2"
+            },
+            "propertyName": "resultType"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/ContinuousResultV2"
+            },
+            {
+              "$ref": "#/$defs/OrdinalResultV2"
+            },
+            {
+              "$ref": "#/$defs/BinaryResultV2"
+            },
+            {
+              "$ref": "#/$defs/CategoricalResultV2"
+            }
+          ],
+          "title": "Result"
+        },
+        "applicability": {
+          "$ref": "#/$defs/ApplicabilityV2"
+        },
+        "warnings": {
+          "items": {
+            "$ref": "#/$defs/ValidationIssueV2"
+          },
+          "title": "Warnings",
+          "type": "array"
+        }
+      },
+      "required": [
+        "targetId",
+        "modelVersionId",
+        "result",
+        "applicability"
+      ],
+      "title": "TargetSuccessV2",
+      "type": "object"
+    },
+    "TrainRequestV2": {
+      "additionalProperties": false,
+      "properties": {
+        "contractVersion": {
+          "const": "formula-model.v2",
+          "default": "formula-model.v2",
+          "title": "Contractversion",
+          "type": "string"
+        },
+        "requestId": {
+          "minLength": 1,
+          "title": "Requestid",
+          "type": "string"
+        },
+        "seed": {
+          "title": "Seed",
+          "type": "integer"
+        },
+        "jobId": {
+          "title": "Jobid",
+          "type": "string"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/SnapshotRefV2"
+        },
+        "context": {
+          "$ref": "#/$defs/FrozenContextV2"
+        },
+        "validationFolds": {
+          "$ref": "#/$defs/ArtifactRefV2"
+        },
+        "output": {
+          "format": "uri",
+          "minLength": 1,
+          "title": "Output",
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "seed",
+        "jobId",
+        "snapshot",
+        "context",
+        "validationFolds",
+        "output"
+      ],
+      "title": "TrainRequestV2",
+      "type": "object"
+    },
+    "TrainResponseV2": {
+      "additionalProperties": false,
+      "properties": {
+        "contractVersion": {
+          "const": "formula-model.v2",
+          "default": "formula-model.v2",
+          "title": "Contractversion",
+          "type": "string"
+        },
+        "requestId": {
+          "title": "Requestid",
+          "type": "string"
+        },
+        "jobId": {
+          "title": "Jobid",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "CANDIDATE",
+            "REJECTED",
+            "FAILED"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "modelBundle": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactRefV2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "metrics": {
+          "additionalProperties": true,
+          "title": "Metrics",
+          "type": "object"
+        },
+        "applicabilityDomain": {
+          "additionalProperties": true,
+          "title": "Applicabilitydomain",
+          "type": "object"
+        },
+        "reasons": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Reasons",
+          "type": "array"
+        }
+      },
+      "required": [
+        "requestId",
+        "jobId",
+        "status"
+      ],
+      "title": "TrainResponseV2",
+      "type": "object"
+    },
+    "TrainingPolicyV2": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "version": {
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "config": {
+          "additionalProperties": true,
+          "title": "Config",
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "sha256",
+        "config"
+      ],
+      "title": "TrainingPolicyV2",
+      "type": "object"
+    },
+    "TypedGoalV2": {
+      "additionalProperties": false,
+      "properties": {
+        "targetId": {
+          "title": "Targetid",
+          "type": "string"
+        },
+        "operator": {
+          "enum": [
+            "AT_LEAST",
+            "AT_MOST",
+            "MATCH",
+            "RANGE",
+            "MAXIMIZE",
+            "MINIMIZE"
+          ],
+          "title": "Operator",
+          "type": "string"
+        },
+        "value": {
+          "default": null,
+          "title": "Value"
+        },
+        "mandatory": {
+          "default": false,
+          "title": "Mandatory",
+          "type": "boolean"
+        },
+        "weight": {
+          "default": 1,
+          "exclusiveMinimum": 0,
+          "title": "Weight",
+          "type": "number"
+        },
+        "minimumProbability": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Minimumprobability"
+        }
+      },
+      "required": [
+        "targetId",
+        "operator"
+      ],
+      "title": "TypedGoalV2",
+      "type": "object"
+    },
+    "ValidateRequestV2": {
+      "additionalProperties": false,
+      "properties": {
+        "contractVersion": {
+          "const": "formula-model.v2",
+          "default": "formula-model.v2",
+          "title": "Contractversion",
+          "type": "string"
+        },
+        "requestId": {
+          "minLength": 1,
+          "title": "Requestid",
+          "type": "string"
+        },
+        "seed": {
+          "title": "Seed",
+          "type": "integer"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/SnapshotRefV2"
+        },
+        "context": {
+          "$ref": "#/$defs/FrozenContextV2"
+        }
+      },
+      "required": [
+        "requestId",
+        "seed",
+        "snapshot",
+        "context"
+      ],
+      "title": "ValidateRequestV2",
+      "type": "object"
+    },
+    "ValidateResponseV2": {
+      "additionalProperties": false,
+      "properties": {
+        "contractVersion": {
+          "const": "formula-model.v2",
+          "default": "formula-model.v2",
+          "title": "Contractversion",
+          "type": "string"
+        },
+        "requestId": {
+          "title": "Requestid",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "VALID",
+            "REJECTED"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "snapshotHash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Snapshothash",
+          "type": "string"
+        },
+        "issues": {
+          "items": {
+            "$ref": "#/$defs/ValidationIssueV2"
+          },
+          "title": "Issues",
+          "type": "array"
+        }
+      },
+      "required": [
+        "requestId",
+        "status",
+        "snapshotHash"
+      ],
+      "title": "ValidateResponseV2",
+      "type": "object"
+    },
+    "ValidationFoldsRequestV2": {
+      "additionalProperties": false,
+      "properties": {
+        "contractVersion": {
+          "const": "formula-model.v2",
+          "default": "formula-model.v2",
+          "title": "Contractversion",
+          "type": "string"
+        },
+        "requestId": {
+          "minLength": 1,
+          "title": "Requestid",
+          "type": "string"
+        },
+        "seed": {
+          "title": "Seed",
+          "type": "integer"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/SnapshotRefV2"
+        },
+        "context": {
+          "$ref": "#/$defs/FrozenContextV2"
+        },
+        "foldCount": {
+          "maximum": 10,
+          "minimum": 2,
+          "title": "Foldcount",
+          "type": "integer"
+        },
+        "groupFields": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Groupfields",
+          "type": "array"
+        }
+      },
+      "required": [
+        "requestId",
+        "seed",
+        "snapshot",
+        "context",
+        "foldCount",
+        "groupFields"
+      ],
+      "title": "ValidationFoldsRequestV2",
+      "type": "object"
+    },
+    "ValidationFoldsResponseV2": {
+      "additionalProperties": false,
+      "properties": {
+        "contractVersion": {
+          "const": "formula-model.v2",
+          "default": "formula-model.v2",
+          "title": "Contractversion",
+          "type": "string"
+        },
+        "requestId": {
+          "title": "Requestid",
+          "type": "string"
+        },
+        "snapshotHash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Snapshothash",
+          "type": "string"
+        },
+        "assignmentsHash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Assignmentshash",
+          "type": "string"
+        },
+        "assignments": {
+          "items": {
+            "$ref": "#/$defs/FoldAssignmentV2"
+          },
+          "title": "Assignments",
+          "type": "array"
+        }
+      },
+      "required": [
+        "requestId",
+        "snapshotHash",
+        "assignmentsHash",
+        "assignments"
+      ],
+      "title": "ValidationFoldsResponseV2",
+      "type": "object"
+    },
+    "ValidationIssueV2": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "rowId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rowid"
+        },
+        "fieldCode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fieldcode"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "ValidationIssueV2",
+      "type": "object"
+    },
+    "ValueTypeV2": {
+      "enum": [
+        "CONTINUOUS",
+        "ORDINAL",
+        "BINARY",
+        "CATEGORICAL"
+      ],
+      "title": "ValueTypeV2",
+      "type": "string"
+    }
+  },
+  "anyOf": [
+    {
+      "$ref": "#/$defs/ValidateRequestV2"
+    },
+    {
+      "$ref": "#/$defs/ValidateResponseV2"
+    },
+    {
+      "$ref": "#/$defs/ValidationFoldsRequestV2"
+    },
+    {
+      "$ref": "#/$defs/ValidationFoldsResponseV2"
+    },
+    {
+      "$ref": "#/$defs/TrainRequestV2"
+    },
+    {
+      "$ref": "#/$defs/TrainResponseV2"
+    },
+    {
+      "$ref": "#/$defs/ScoreRequestV2"
+    },
+    {
+      "$ref": "#/$defs/ScoreResponseV2"
+    },
+    {
+      "$ref": "#/$defs/RecommendRequestV2"
+    },
+    {
+      "$ref": "#/$defs/RecommendResponseV2"
+    },
+    {
+      "$ref": "#/$defs/ErrorResponseV2"
+    }
+  ]
+}

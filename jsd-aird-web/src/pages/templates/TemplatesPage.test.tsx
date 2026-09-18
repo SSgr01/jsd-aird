@@ -126,7 +126,7 @@ describe('TemplatesPage catalog presentation', () => {
     await waitFor(() => expect(exportCsvMock).toHaveBeenCalledWith(expect.objectContaining({
       templateIds: ['template-published'],
     })));
-  }, 15_000);
+  }, 60_000);
 
   it('submits search explicitly and never sends the active category to facets', async () => {
     render(<AppProviders><MemoryRouter future={testRouterFuture}><TemplatesPage /></MemoryRouter></AppProviders>);

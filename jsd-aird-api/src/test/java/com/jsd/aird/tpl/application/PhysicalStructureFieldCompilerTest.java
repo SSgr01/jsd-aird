@@ -431,6 +431,48 @@ class PhysicalStructureFieldCompilerTest {
     }
 
     @Test
+    void enrichesExistingColumnWithCompleteMergedLabelPath() throws Exception {
+        var facts = objectMapper.readTree("""
+                {"sheets":[{"id":"s1","semanticCells":[
+                  {"address":"A9","mergedRange":"A9:A16","value":"涂料配方"},
+                  {"address":"B9","mergedRange":"B9:C9","value":"实验编号"},
+                  {"address":"D9","value":"G-6488"},{"address":"E9","value":"G-6489"},
+                  {"address":"A17","mergedRange":"A17:A35","value":"测试数据记录"},
+                  {"address":"B21","mergedRange":"B21:B22","value":"UV后干膜翘曲度"},
+                  {"address":"C21","value":"PC膜"},{"address":"C22","value":"PET膜"},
+                  {"address":"D21","value":"平整，不翘曲"},{"address":"E21","value":"反翘曲"},
+                  {"address":"D22","value":"5cm"},{"address":"E22","value":"4.5cm"},
+                  {"address":"B29","mergedRange":"B29:B31","value":"85度水煮1小时后的附着力"},
+                  {"address":"C29","value":"PC膜"},{"address":"C30","value":"PMMA/PC复合板"},
+                  {"address":"C31","value":"PET膜"},{"address":"D29","value":"5B"},
+                  {"address":"E29","value":"5B"},{"address":"D30","value":"/"},
+                  {"address":"E30","value":"/"},{"address":"D31","value":"5B"},
+                  {"address":"E31","value":"5B"}
+                ]}]}
+                """);
+        var region = objectMapper.readTree("""
+                {"type":"COLUMN_TABLE","sheetId":"s1","range":"A9:E35",
+                 "structure":{"headerRange":"A9:E9","dataRange":"A10:E35","repeatAxis":"COLUMN"}}
+                """);
+        var parent = tableParent("s1", "A9:E35", "nested-relation", "nested-binding");
+        parent.putObject("locator").put("sheetId", "s1").put("range", "A9:E35")
+                .put("headerRange", "A9:E9").put("dataRange", "A10:E35");
+        parent.putArray("columns").add(objectMapper.createObjectNode()
+                .put("code", "pc_warping").put("name", "PC膜")
+                .put("labelRange", "C21").put("valueRange", "D21:E21")
+                .put("valueType", "string"));
+
+        var children = compiler.children(parent, region, facts);
+
+        assertThat(children).singleElement().satisfies(item -> {
+            assertThat(item.payload().path("labelPathSegments")).extracting(node -> node.asText())
+                    .containsExactly("测试数据记录", "UV后干膜翘曲度", "PC膜");
+            assertThat(item.payload().path("labelPath").asText())
+                    .isEqualTo("测试数据记录 > UV后干膜翘曲度 > PC膜");
+        });
+    }
+
+    @Test
     void keepsSampleIdentityRowInsideOneColumnRegion() throws Exception {
         var facts = objectMapper.readTree("""
                 {"sheets":[{"id":"s1","semanticCells":[

@@ -27,6 +27,7 @@ public class ExperimentController {
     @PostMapping("/experiments/{id}/copy") public ApiResponse<?> copy(@PathVariable UUID id){return ok(service.copy(id));}
     @GetMapping("/experiments/{id}") public ApiResponse<?> detail(@PathVariable UUID id){return ok(service.detail(id));}
     @GetMapping("/experiments/{id}/edit-model") public ApiResponse<?> edit(@PathVariable UUID id){return ok(service.detail(id));}
+    @GetMapping("/experiments/{id}/sources") public ApiResponse<?> sources(@PathVariable UUID id){return ok(service.sourceReferences(id));}
     @GetMapping("/experiments/{id}/export") public ResponseEntity<byte[]> export(@PathVariable UUID id){return download(exportService.export(id));}
     @PostMapping("/experiments/{id}/draft") public ApiResponse<?> draft(@PathVariable UUID id,@Valid @RequestBody DraftRequest r){return ok(service.save(id,r.revision,new ExperimentService.DraftCommand(r.experimentNo,r.title,r.categoryId,r.categoryName,r.projectId,r.stageId,r.taskId,r.ownerName,r.experimentDate,r.templateVersionId,r.templateSnapshotHash,r.templateSnapshot,r.editModel)));}
     /** ELN soft-delete endpoint. Project-scoped callers use ProjectExperimentController. */
@@ -53,6 +54,6 @@ public class ExperimentController {
                 .header(HttpHeaders.CONTENT_DISPOSITION,disposition.toString()).contentLength(file.content().length).body(file.content());
     }
     public record CreateRequest(String experimentNo,@NotBlank String title,UUID categoryId,String categoryName,String sourceType,UUID projectId,UUID stageId,UUID taskId,@NotBlank String ownerName,LocalDate experimentDate,UUID sourceFileId,UUID templateVersionId,String templateSnapshotHash,JsonNode templateSnapshot,JsonNode editModel){}
-    public record DraftRequest(@NotNull Long revision,@NotBlank String experimentNo,@NotBlank String title,UUID categoryId,String categoryName,UUID projectId,UUID stageId,UUID taskId,@NotBlank String ownerName,@NotNull LocalDate experimentDate,UUID templateVersionId,String templateSnapshotHash,JsonNode templateSnapshot,@NotNull JsonNode editModel){}
+    public record DraftRequest(@NotNull Long revision,@NotBlank String experimentNo,@NotBlank String title,UUID categoryId,String categoryName,UUID projectId,UUID stageId,UUID taskId,String ownerName,LocalDate experimentDate,UUID templateVersionId,String templateSnapshotHash,JsonNode templateSnapshot,@NotNull JsonNode editModel){}
     public record ActionRequest(@NotNull Long revision,String comment){} public record RevisionRequest(@NotNull Long revision,@NotBlank String reason){}public record CategoryRequest(@NotBlank String code,@NotBlank @Size(max=100) String name,@NotBlank @Size(max=500) String description){}public record CategoryUpdateRequest(@NotNull Long revision,@NotBlank @Size(max=100) String name,@NotBlank @Size(max=500) String description){}public record CategoryActiveRequest(@NotNull Long revision,boolean active){}
 }

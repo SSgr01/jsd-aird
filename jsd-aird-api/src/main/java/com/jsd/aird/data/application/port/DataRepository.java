@@ -20,7 +20,7 @@ public interface DataRepository {
     Optional<Job> findJob(UUID organizationId, UUID importJobId);
 
     PageResponse<Job> listJobs(UUID organizationId, UUID templateVersionId,
-                               String status, String keyword, int page, int size);
+                               String status, String keyword, String sourceOwner, int page, int size);
 
     PageResponse<SourceFile> listSourceFiles(UUID organizationId, UUID categoryId, String status,
                                              String keyword, int page, int size);
@@ -38,6 +38,8 @@ public interface DataRepository {
     }
 
     int assignSourceCategory(UUID organizationId, UUID importJobId, UUID categoryId);
+
+    Optional<String> findSourceOwner(UUID organizationId, UUID importJobId);
 
     Optional<Job> findJobForUpdate(UUID organizationId, UUID importJobId);
 
@@ -92,38 +94,55 @@ public interface DataRepository {
 
     record NewJob(UUID id, UUID organizationId, UUID sourceFileId, String sourceSha256, String sourceFileName,
                   String sourceFormat, UUID templateVersionId, UUID categoryId,
-                  boolean duplicateOverride, UUID actorId, Integer importContractVersion, String contractHash) {
+                  boolean duplicateOverride, UUID actorId, Integer importContractVersion, String contractHash,
+                  String importPurpose, UUID targetExperimentCategoryId, String sourceOwner) {
+        public NewJob(UUID id, UUID organizationId, UUID sourceFileId, String sourceSha256, String sourceFileName,
+                      String sourceFormat, UUID templateVersionId, UUID categoryId,
+                      boolean duplicateOverride, UUID actorId, Integer importContractVersion, String contractHash) {
+            this(id, organizationId, sourceFileId, sourceSha256, sourceFileName, sourceFormat, templateVersionId,
+                    categoryId, duplicateOverride, actorId, importContractVersion, contractHash,
+                    "DATA_ONLY", null, "DATA_CENTER");
+        }
         public NewJob(UUID id, UUID organizationId, UUID sourceFileId, String sourceSha256, String sourceFileName,
                       String sourceFormat, UUID templateVersionId, UUID categoryId,
                       boolean duplicateOverride, UUID actorId) {
             this(id, organizationId, sourceFileId, sourceSha256, sourceFileName, sourceFormat, templateVersionId,
-                    categoryId, duplicateOverride, actorId, null, null);
+                    categoryId, duplicateOverride, actorId, null, null, "DATA_ONLY", null, "DATA_CENTER");
         }
         public NewJob(UUID id, UUID organizationId, UUID sourceFileId, String sourceSha256, String sourceFileName,
                       String sourceFormat, UUID templateVersionId, boolean duplicateOverride,
                       UUID actorId) {
             this(id, organizationId, sourceFileId, sourceSha256, sourceFileName, sourceFormat, templateVersionId,
-                    null, duplicateOverride, actorId, null, null);
+                    null, duplicateOverride, actorId, null, null, "DATA_ONLY", null, "DATA_CENTER");
         }
     }
 
     record Job(UUID id, UUID sourceFileId, String sourceSha256, String sourceFileName, String sourceFormat,
                UUID templateVersionId, UUID categoryId, String status, int progress,
                String currentStage, String parserVersion, String errorMessage, Instant createdAt, Instant updatedAt,
-               Integer importContractVersion, String contractHash, String compatibilityStatus) {
+               Integer importContractVersion, String contractHash, String compatibilityStatus,
+               String importPurpose, UUID targetExperimentCategoryId) {
+        public Job(UUID id, UUID sourceFileId, String sourceSha256, String sourceFileName, String sourceFormat,
+                   UUID templateVersionId, UUID categoryId, String status, int progress,
+                   String currentStage, String parserVersion, String errorMessage, Instant createdAt, Instant updatedAt,
+                   Integer importContractVersion, String contractHash, String compatibilityStatus) {
+            this(id, sourceFileId, sourceSha256, sourceFileName, sourceFormat, templateVersionId, categoryId,
+                    status, progress, currentStage, parserVersion, errorMessage, createdAt, updatedAt,
+                    importContractVersion, contractHash, compatibilityStatus, "DATA_ONLY", null);
+        }
         public Job(UUID id, UUID sourceFileId, String sourceSha256, String sourceFileName, String sourceFormat,
                    UUID templateVersionId, UUID categoryId, String status, int progress,
                    String currentStage, String parserVersion, String errorMessage, Instant createdAt, Instant updatedAt) {
             this(id, sourceFileId, sourceSha256, sourceFileName, sourceFormat, templateVersionId,
                      categoryId, status, progress, currentStage, parserVersion, errorMessage, createdAt, updatedAt,
-                     null, null, "LEGACY");
+                     null, null, "LEGACY", "DATA_ONLY", null);
         }
         public Job(UUID id, UUID sourceFileId, String sourceSha256, String sourceFileName, String sourceFormat,
                    UUID templateVersionId, String status, int progress, String currentStage,
                    String parserVersion, String errorMessage, Instant createdAt, Instant updatedAt) {
             this(id, sourceFileId, sourceSha256, sourceFileName, sourceFormat, templateVersionId,
                      null, status, progress, currentStage, parserVersion, errorMessage, createdAt, updatedAt,
-                     null, null, "LEGACY");
+                     null, null, "LEGACY", "DATA_ONLY", null);
         }
     }
 
@@ -178,12 +197,23 @@ public interface DataRepository {
     record SourceFile(UUID importJobId, UUID fileObjectId, String originalName, String sourceFormat,
                       UUID templateVersionId, UUID categoryId, String categoryName, String status,
                       int progress, Instant createdAt, Instant updatedAt,
-                      List<RelatedProjectView> relatedProjects) {
+                      List<RelatedProjectView> relatedProjects, String sourceOwner,
+                      String recognitionMode, String importPurpose, String formalStatus,
+                      UUID experimentId, UUID experimentVersionId, String entryType) {
+        public SourceFile(UUID importJobId, UUID fileObjectId, String originalName, String sourceFormat,
+                          UUID templateVersionId, UUID categoryId, String categoryName, String status,
+                          int progress, Instant createdAt, Instant updatedAt,
+                          List<RelatedProjectView> relatedProjects) {
+            this(importJobId, fileObjectId, originalName, sourceFormat, templateVersionId, categoryId,
+                    categoryName, status, progress, createdAt, updatedAt, relatedProjects,
+                    "DATA_CENTER", "TEMPLATE_GUIDED", "DATA_ONLY", "NOT_CONFIRMED", null, null, "SOURCE_UPLOAD");
+        }
         public SourceFile(UUID importJobId, UUID fileObjectId, String originalName, String sourceFormat,
                           UUID templateVersionId, UUID categoryId, String categoryName, String status,
                           int progress, Instant createdAt, Instant updatedAt) {
             this(importJobId, fileObjectId, originalName, sourceFormat, templateVersionId, categoryId,
-                    categoryName, status, progress, createdAt, updatedAt, List.of());
+                    categoryName, status, progress, createdAt, updatedAt, List.of(),
+                    "DATA_CENTER", "TEMPLATE_GUIDED", "DATA_ONLY", "NOT_CONFIRMED", null, null, "SOURCE_UPLOAD");
         }
     }
 }

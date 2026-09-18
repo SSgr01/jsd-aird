@@ -9,8 +9,10 @@ import java.util.UUID;
 /** Read-only boundary for searching immutable, projected data-center record values and their source files. */
 public interface DataSourceFileSearchFacade {
 
-    DataDetailResult queryDetails(UUID organizationId, DataDetailQuery query, List<UUID> categoryIds,
-                                  AccessScope accessScope);
+    default DataDetailResult queryDetails(UUID organizationId, DataDetailQuery query, List<UUID> categoryIds,
+                                           AccessScope accessScope) {
+        return DataDetailResult.empty(query == null ? DataQueryMode.NONE : query.mode());
+    }
 
     List<SourceFileMatch> searchSourceFiles(UUID organizationId, String query, List<UUID> categoryIds, int limit);
 

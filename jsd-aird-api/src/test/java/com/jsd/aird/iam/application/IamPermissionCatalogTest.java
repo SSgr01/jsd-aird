@@ -2,6 +2,7 @@ package com.jsd.aird.iam.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 class IamPermissionCatalogTest {
@@ -18,9 +19,12 @@ class IamPermissionCatalogTest {
                 "template.delete", "template.export", "category.create", "category.update",
                 "category.delete", "project.create", "project.update", "project.copy",
                 "project.delete", "project.assign");
+        var explicitlyDesignedManagementPermissions = Set.of(
+                "ai.modeling.manage", "ai.config.manage");
         assertThat(codes.stream()
                 .filter(code -> !code.startsWith("system."))
-                .filter(code -> code.endsWith(".manage")))
+                .filter(code -> code.endsWith(".manage"))
+                .filter(code -> !explicitlyDesignedManagementPermissions.contains(code)))
                 .isEmpty();
     }
 

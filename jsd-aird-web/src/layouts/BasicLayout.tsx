@@ -25,6 +25,7 @@ import {
   UserOutlined,
   SearchOutlined,
   PlusOutlined,
+  AimOutlined,
 } from '@ant-design/icons';
 import { ProLayout, type MenuDataItem } from '@ant-design/pro-components';
 import { Avatar, Button, Dropdown, Input, Result, Tooltip, Typography, type InputRef } from 'antd';
@@ -125,6 +126,10 @@ const route = {
       routes: [
         { path: '/knowledge/search', name: '文件检索', icon: <FileSearchOutlined /> },
         { path: '/assistant', name: 'AI问答', icon: <RobotOutlined /> },
+        { path: '/assistant/formula-prediction', name: 'AI配方预测', icon: <AimOutlined /> },
+        { path: '/assistant/performance-prediction', name: '性能预测', icon: <LineChartOutlined /> },
+        { path: '/assistant/experiment-optimization', name: 'AI实验优化', icon: <ExperimentOutlined /> },
+        { path: '/assistant/model-center', name: '模型中心', icon: <LineChartOutlined /> },
       ],
     },
     {
@@ -282,6 +287,7 @@ export function BasicLayout() {
         logo={<AppstoreOutlined />}
         route={visibleRoute}
         location={{ pathname: location.pathname }}
+        selectedKeys={[location.pathname.startsWith('/assistant/model-center') ? '/assistant/model-center' : location.pathname]}
         collapsed={collapsed}
         onCollapse={setCollapsed}
         layout="side"

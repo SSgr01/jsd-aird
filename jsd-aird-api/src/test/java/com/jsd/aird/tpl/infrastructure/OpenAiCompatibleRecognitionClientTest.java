@@ -66,8 +66,11 @@ class OpenAiCompatibleRecognitionClientTest {
     void acceptsOnlyCandidateSemanticBatchProtocol() throws Exception {
         var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/v1/chat/completions", exchange -> {
-            var response = modelResponse(objectMapper.readTree(
-                    "{\"recognitionProtocolVersion\":3,\"regions\":[],\"qualityIssues\":[]}"));
+            var response = modelResponse(objectMapper.readTree("""
+                    {"recognitionProtocolVersion":4,
+                     "experimentTemplateSuggestion":{"templateUsage":"GENERAL_DATA","recordMode":"UNKNOWN","confidence":0.5,"alternatives":[]},
+                     "regions":[],"qualityIssues":[]}
+                    """));
             var bytes = objectMapper.writeValueAsBytes(response);
             exchange.getResponseHeaders().add("Content-Type", "application/json");
             exchange.sendResponseHeaders(200, bytes.length);
@@ -87,7 +90,7 @@ class OpenAiCompatibleRecognitionClientTest {
                     "模板.xlsx", "workbook-regions", context, null, "REGION_FIELDS"));
             assertThat(batch.suggestions()).extracting(RecognitionModelClient.ModelSuggestion::suggestionType)
                     .containsExactly("SEMANTIC_MODEL");
-            assertThat(batch.promptVersion()).isEqualTo("region-semantics-three-region-v3");
+            assertThat(batch.promptVersion()).isEqualTo("region-semantics-group-first-v4");
         } finally {
             server.stop(0);
         }

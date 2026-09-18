@@ -3,6 +3,7 @@ package com.jsd.aird.ops.application;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -14,6 +15,7 @@ import java.util.concurrent.TimeoutException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.ops.application.port.FileObjectRepository;
 import com.jsd.aird.ops.application.port.AsyncJobHandler;
+import com.jsd.aird.ops.application.port.OutboxEventHandler;
 import com.jsd.aird.ops.application.port.WorkRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,9 +40,11 @@ public class PostgresWorker {
     private final FileObjectRepository fileRepository;
     private final ObjectMapper objectMapper;
     private final List<AsyncJobHandler> jobHandlers;
+    private final List<OutboxEventHandler> outboxHandlers;
     private final String workerId;
     private final Duration leaseDuration;
     private final Duration jobTimeout;
+    private final Duration formulaModelBuildTimeout;
     private final java.util.concurrent.ExecutorService jobExecutor =
             Executors.newVirtualThreadPerTaskExecutor();
     private final ScheduledExecutorService heartbeatExecutor =
@@ -53,17 +57,35 @@ public class PostgresWorker {
             FileObjectRepository fileRepository,
             ObjectMapper objectMapper,
             List<AsyncJobHandler> jobHandlers,
+            List<OutboxEventHandler> outboxHandlers,
             @Value("${app.worker.id}") String workerId,
             @Value("${app.worker.lease-duration}") Duration leaseDuration,
-            @Value("${app.worker.job-timeout:15m}") Duration jobTimeout
+            @Value("${app.worker.job-timeout:15m}") Duration jobTimeout,
+            @Value("${app.worker.formula-model-build-timeout:4h}") Duration formulaModelBuildTimeout
     ) {
         this.workRepository = workRepository;
         this.fileRepository = fileRepository;
         this.objectMapper = objectMapper;
         this.jobHandlers = List.copyOf(jobHandlers);
+        this.outboxHandlers = List.copyOf(outboxHandlers);
         this.workerId = workerId;
         this.leaseDuration = leaseDuration;
         this.jobTimeout = jobTimeout;
+        this.formulaModelBuildTimeout = formulaModelBuildTimeout;
+    }
+
+    /** Kept for focused unit tests and small embedded callers. */
+    public PostgresWorker(
+            WorkRepository workRepository,
+            FileObjectRepository fileRepository,
+            ObjectMapper objectMapper,
+            List<AsyncJobHandler> jobHandlers,
+            String workerId,
+            Duration leaseDuration,
+            Duration jobTimeout
+    ) {
+        this(workRepository, fileRepository, objectMapper, jobHandlers, List.of(), workerId, leaseDuration,
+                jobTimeout, Duration.ofHours(4));
     }
 
     /** Kept for focused unit tests and small embedded callers. */
@@ -75,8 +97,8 @@ public class PostgresWorker {
             String workerId,
             Duration leaseDuration
     ) {
-        this(workRepository, fileRepository, objectMapper, jobHandlers, workerId, leaseDuration,
-                Duration.ofMinutes(15));
+        this(workRepository, fileRepository, objectMapper, jobHandlers, List.of(), workerId, leaseDuration,
+                Duration.ofMinutes(15), Duration.ofHours(4));
     }
 
     @PostConstruct
@@ -118,6 +140,11 @@ public class PostgresWorker {
         try {
             if ("FILE_ACTIVATION_REQUESTED".equals(event.eventType())) {
                 fileRepository.activate(event.aggregateId());
+            } else {
+                var handler = outboxHandlers.stream()
+                        .filter(candidate -> candidate.supports(event.eventType()))
+                        .findFirst().orElse(null);
+                if (handler != null) handler.handle(event.aggregateId(), event.payload());
             }
             workRepository.completeOutbox(event.id());
         } catch (Exception exception) {
@@ -130,7 +157,9 @@ public class PostgresWorker {
         var heartbeat = scheduleHeartbeat(job);
         try {
             var result = executeWithTimeout(job);
-            workRepository.completeJob(job.id(), result);
+            if (!workRepository.completeClaimedJob(job, result)) {
+                log.warn("Async job {} completion ignored because its lease is stale", job.id());
+            }
         } catch (JobCancelledException exception) {
             // The owning request already marked this row CANCELLED. Do not
             // convert cancellation into a retry or terminal failure.
@@ -163,13 +192,15 @@ public class PostgresWorker {
             throw new JobCancelledException();
         }
         Future<com.fasterxml.jackson.databind.JsonNode> future = jobExecutor.submit(() -> {
-            try (var ignored = JobDeadline.start(jobTimeout)) {
+            var timeout = timeoutFor(job);
+            try (var ignored = JobDeadline.start(timeout)) {
                 return execute(job);
             }
         });
         try {
+            var timeout = timeoutFor(job);
             var deadline = System.nanoTime()
-                    + TimeUnit.MILLISECONDS.toNanos(Math.max(1, jobTimeout.toMillis()));
+                    + TimeUnit.MILLISECONDS.toNanos(Math.max(1, timeout.toMillis()));
             while (true) {
                 if (workRepository.isCancelled(job.id())) {
                     future.cancel(true);
@@ -178,7 +209,7 @@ public class PostgresWorker {
                 var remainingNanos = deadline - System.nanoTime();
                 if (remainingNanos <= 0) {
                     future.cancel(true);
-                    throw new JobTimeoutException(job, jobTimeout, liveStage(job));
+                    throw new JobTimeoutException(job, timeout, liveStage(job));
                 }
                 try {
                     var waitMillis = Math.max(1L,
@@ -191,12 +222,18 @@ public class PostgresWorker {
         } catch (InterruptedException exception) {
             future.cancel(true);
             Thread.currentThread().interrupt();
-            throw new JobTimeoutException(job, jobTimeout, liveStage(job) + "，Worker 线程被中断");
+            throw new JobTimeoutException(job, timeoutFor(job), liveStage(job) + "，Worker 线程被中断");
         } catch (ExecutionException exception) {
             var cause = exception.getCause();
             if (cause instanceof Exception nested) throw nested;
             throw new IllegalStateException("异步任务执行失败", cause);
         }
+    }
+
+    private Duration timeoutFor(WorkRepository.AsyncJob job) {
+        return Set.of("AI_MODEL_TRAIN_V2", "AI_FORMULA_DESIGN_V2", "AI_EXPERIMENT_OPTIMIZATION_V2")
+                .contains(job.jobType())
+                ? formulaModelBuildTimeout : jobTimeout;
     }
 
     private String liveStage(WorkRepository.AsyncJob job) {
@@ -226,7 +263,9 @@ public class PostgresWorker {
                         .orElseThrow(() -> new IllegalArgumentException(
                                 "Unsupported job type: " + job.jobType()
                         ));
-                result = handler.handle(job.payload());
+                result = handler.handle(job.payload(), new AsyncJobHandler.ExecutionContext(
+                        job.id(), job.organizationId(), job.attemptCount(), job.leaseToken(),
+                        job.leaseGeneration(), () -> workRepository.isCancelled(job.id())));
             }
         }
         return result;
@@ -236,7 +275,9 @@ public class PostgresWorker {
         var seconds = Math.max(1L, Math.min(15L, Math.max(1L, leaseDuration.toSeconds() / 3)));
         return heartbeatExecutor.scheduleAtFixedRate(() -> {
             try {
-                workRepository.heartbeatJob(job.id(), workerId, leaseDuration);
+                if (!workRepository.heartbeatClaimedJob(job, workerId, leaseDuration)) {
+                    log.warn("Async job {} heartbeat rejected because its lease is stale", job.id());
+                }
             } catch (Exception exception) {
                 log.warn("Async job {} heartbeat failed", job.id(), exception);
             }

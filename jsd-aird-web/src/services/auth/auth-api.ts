@@ -15,6 +15,7 @@ export interface AuthUser {
   status: 'ACTIVE' | 'DISABLED';
   authVersion: number;
   permissions: string[];
+  menuKeys?: string[];
 }
 
 export interface LoginRequest {

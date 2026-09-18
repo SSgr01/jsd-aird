@@ -17,7 +17,7 @@ import {
   Select, Space, Table, Tag, Typography,
 } from 'antd';
 import type { TableColumnsType, TablePaginationConfig } from 'antd';
-import type { Dayjs } from 'dayjs';
+import type { RangePickerProps } from 'antd/es/date-picker';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
@@ -38,6 +38,7 @@ const statusLabels: Record<TemplateStatus, { label: string; color: string }> = {
 };
 
 type CreateMode = 'BLANK' | 'IMPORT';
+type TemplateDateRange = Parameters<NonNullable<RangePickerProps['onChange']>>[0];
 type EditOperation = { type: 'RENAME' | 'COPY'; item: TemplateListItem };
 
 function templateStatus(record: TemplateListItem) {
@@ -79,7 +80,7 @@ export function TemplatesPage() {
   const [categoryId, setCategoryId] = useState<string>();
   const [uncategorized, setUncategorized] = useState(false);
   const [createdBy, setCreatedBy] = useState<string>();
-  const [updatedRange, setUpdatedRange] = useState<[Dayjs, Dayjs] | null>(null);
+  const [updatedRange, setUpdatedRange] = useState<TemplateDateRange>(null);
   const [sortBy, setSortBy] = useState<'UPDATED_AT' | 'CREATED_AT' | 'NAME'>('UPDATED_AT');
   const [sortDirection, setSortDirection] = useState<'ASC' | 'DESC'>('DESC');
   const [categoryItems, setCategoryItems] = useState<TemplateCategory[]>([]);
@@ -111,13 +112,13 @@ export function TemplatesPage() {
 
   const listParams = useMemo(() => ({
     keyword: keyword.trim() || undefined, categoryId, uncategorized: uncategorized || undefined, format, status, createdBy,
-    updatedFrom: updatedRange?.[0].startOf('day').toISOString(), updatedTo: updatedRange?.[1].endOf('day').toISOString(),
+    updatedFrom: updatedRange?.[0]?.startOf('day').toISOString(), updatedTo: updatedRange?.[1]?.endOf('day').toISOString(),
     sortBy, sortDirection, page, size: pageSize,
   }), [categoryId, createdBy, format, keyword, page, pageSize, sortBy, sortDirection, status, uncategorized, updatedRange]);
 
   const facetParams = useMemo(() => ({
     keyword: keyword.trim() || undefined, format, status, createdBy,
-    updatedFrom: updatedRange?.[0].startOf('day').toISOString(), updatedTo: updatedRange?.[1].endOf('day').toISOString(),
+    updatedFrom: updatedRange?.[0]?.startOf('day').toISOString(), updatedTo: updatedRange?.[1]?.endOf('day').toISOString(),
   }), [createdBy, format, keyword, status, updatedRange]);
 
   const load = useCallback(async () => {

@@ -3,6 +3,7 @@ package com.jsd.aird.tpl.application;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
 
 class MappingPathNormalizerTest {
@@ -75,5 +76,44 @@ class MappingPathNormalizerTest {
         assertThat(normalized.get(0).path("dataPath").asText()).isEqualTo("/formulaItems");
         assertThat(normalized.get(1).path("dataPath").asText())
                 .isEqualTo("/formulaItems/*/sequence");
+    }
+
+    @Test
+    void repairsDuplicatePrimaryPathOnSameWorksheet() {
+        var first = scalar("binding-1", "sheet-1", "A1");
+        var second = scalar("binding-2", "sheet-1", "B1");
+
+        var normalized = MappingPathNormalizer.normalize(
+                objectMapper.createArrayNode().add(first).add(second));
+
+        assertThat(normalized.get(0).path("dataPath").asText()).isEqualTo("/fields/备注");
+        assertThat(normalized.get(1).path("dataPath").asText())
+                .startsWith("/fields/备注__")
+                .isNotEqualTo("/fields/备注");
+    }
+
+    @Test
+    void preservesDuplicatePrimaryPathAcrossWorksheets() {
+        var first = scalar("binding-1", "sheet-1", "A1");
+        var second = scalar("binding-2", "sheet-2", "A1");
+
+        var normalized = MappingPathNormalizer.normalize(
+                objectMapper.createArrayNode().add(first).add(second));
+
+        assertThat(normalized.get(0).path("dataPath").asText()).isEqualTo("/fields/备注");
+        assertThat(normalized.get(1).path("dataPath").asText()).isEqualTo("/fields/备注");
+    }
+
+    private ObjectNode scalar(String bindingId, String sheetId, String address) {
+        var binding = objectMapper.createObjectNode()
+                .put("bindingId", bindingId)
+                .put("dataPath", "/fields/备注")
+                .put("mappingKind", "SCALAR")
+                .put("primaryBinding", true)
+                .put("locatorType", "CELL_RANGE");
+        binding.set("locator", objectMapper.createObjectNode()
+                .put("sheetId", sheetId)
+                .put("address", address));
+        return binding;
     }
 }

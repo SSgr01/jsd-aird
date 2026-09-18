@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.jsd.aird.ops.application.port.OpsAsyncFacade;
 import org.postgresql.util.PGobject;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
@@ -25,13 +26,30 @@ public class JdbcOpsAsyncFacade implements OpsAsyncFacade {
     @Override
     @Transactional
     public UUID enqueue(UUID organizationId, String jobType, JsonNode payload, String idempotencyKey, int priority) {
+        return enqueue(organizationId, jobType, payload, idempotencyKey, priority, 5);
+    }
+
+    @Override
+    @Transactional
+    public UUID enqueue(UUID organizationId, String jobType, JsonNode payload, String idempotencyKey,
+                        int priority, int maxAttempts) {
+        if (maxAttempts < 1) throw new IllegalArgumentException("maxAttempts must be positive");
         var id = UUID.randomUUID();
-        jdbc.update("""
-                INSERT INTO ops.async_job (id, organization_id, job_type, status, payload_jsonb, priority, idempotency_key)
-                VALUES (?, ?, ?, 'READY', ?, ?, ?)
-                ON CONFLICT (organization_id, idempotency_key) DO NOTHING
-                """, id, organizationId, jobType, json(payload), priority, idempotencyKey);
-        return id;
+        try {
+            return jdbc.queryForObject("""
+                    INSERT INTO ops.async_job (id, organization_id, job_type, status, payload_jsonb, priority, idempotency_key, max_attempts)
+                    VALUES (?, ?, ?, 'READY', ?, ?, ?, ?)
+                    ON CONFLICT (organization_id, idempotency_key) DO NOTHING
+                    RETURNING id
+                    """, UUID.class, id, organizationId, jobType, json(payload), priority, idempotencyKey, maxAttempts);
+        } catch (EmptyResultDataAccessException conflict) {
+            // A concurrent caller won the idempotency race. Return its real job id;
+            // never leak the unused UUID generated above into a business run record.
+            return jdbc.queryForObject("""
+                    SELECT id FROM ops.async_job
+                    WHERE organization_id=? AND idempotency_key=?
+                    """, UUID.class, organizationId, idempotencyKey);
+        }
     }
 
     @Override
@@ -71,6 +89,20 @@ public class JdbcOpsAsyncFacade implements OpsAsyncFacade {
                 INSERT INTO ops.outbox_event (id, aggregate_type, aggregate_id, event_type, payload_jsonb)
                 VALUES (?, ?, ?, ?, ?)
                 """, UUID.randomUUID(), aggregateType, aggregateId, eventType, json(payload));
+    }
+
+    @Override
+    public void appendOutbox(UUID organizationId, String aggregateType, UUID aggregateId,
+                             String eventType, String idempotencyKey, JsonNode payload) {
+        jdbc.update("""
+                INSERT INTO ops.outbox_event
+                    (id, organization_id, aggregate_type, aggregate_id, event_type, idempotency_key, payload_jsonb)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (organization_id, idempotency_key)
+                    WHERE organization_id IS NOT NULL AND idempotency_key IS NOT NULL
+                DO NOTHING
+                """, UUID.randomUUID(), organizationId, aggregateType, aggregateId,
+                eventType, idempotencyKey, json(payload));
     }
 
     @Override

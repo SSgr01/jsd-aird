@@ -53,6 +53,32 @@ public class JdbcExperimentImportRepository implements ExperimentImportRepositor
     }
 
     @Override
+    public Optional<Job> findCompletedBySourceHash(UUID organizationId, String sourceSha256) {
+        return jdbc.query("""
+                SELECT j.id, j.source_file_id, j.source_file_name, j.source_sha256, j.source_format, j.status,
+                       j.experiment_id, j.error_message, j.category_name, j.project_id,
+                       p.name project_name, j.stage_id, s.name stage_name,
+                       j.task_id, t.name task_name, j.visibility, j.created_at
+                FROM rnd.experiment_import_job j
+                LEFT JOIN mdm.project p ON p.id=j.project_id
+                LEFT JOIN mdm.project_stage s ON s.id=j.stage_id
+                LEFT JOIN mdm.project_task t ON t.id=j.task_id
+                WHERE j.organization_id=? AND j.source_sha256=? AND j.status='COMPLETED'
+                ORDER BY j.created_at DESC LIMIT 1
+                """, (result, row) -> new Job(
+                result.getObject("id", UUID.class), result.getObject("source_file_id", UUID.class),
+                result.getString("source_file_name"), result.getString("source_sha256"),
+                result.getString("source_format"), result.getString("status"),
+                result.getObject("experiment_id", UUID.class), result.getString("error_message"),
+                result.getString("category_name"), result.getObject("project_id", UUID.class),
+                result.getString("project_name"), result.getObject("stage_id", UUID.class),
+                result.getString("stage_name"), result.getObject("task_id", UUID.class),
+                result.getString("task_name"), result.getString("visibility"),
+                result.getTimestamp("created_at").toInstant(), 0, null), organizationId, sourceSha256)
+                .stream().findFirst();
+    }
+
+    @Override
     public int markRetrying(UUID organizationId, UUID id) {
         return jdbc.update("""
                 UPDATE rnd.experiment_import_job
@@ -86,8 +112,17 @@ public class JdbcExperimentImportRepository implements ExperimentImportRepositor
 
     @Override
     public int delete(UUID organizationId, UUID id) {
-        return jdbc.update("DELETE FROM rnd.experiment_import_job WHERE organization_id=? AND id=? AND status IN ('COMPLETED', 'FAILED', 'CANCELLED')",
-                organizationId, id);
+        // Once a free upload has produced an experiment source reference the
+        // import row is part of the immutable evidence chain and cannot be
+        // physically removed. Keep the original delete behavior for failed
+        // or cancelled jobs that never created an experiment.
+        return jdbc.update("""
+                DELETE FROM rnd.experiment_import_job j
+                WHERE j.organization_id=? AND j.id=? AND j.status IN ('COMPLETED', 'FAILED', 'CANCELLED')
+                  AND NOT EXISTS (SELECT 1 FROM rnd.experiment_source_reference r
+                                  WHERE r.organization_id=j.organization_id
+                                    AND r.experiment_import_job_id=j.id)
+                """, organizationId, id);
     }
 
     @Override
@@ -121,6 +156,34 @@ public class JdbcExperimentImportRepository implements ExperimentImportRepositor
                 result.getString("task_name"),
                 result.getString("visibility"),
                 result.getTimestamp("created_at").toInstant(), 0, null), organizationId);
+    }
+
+    @Override
+    public void linkSourceReference(UUID organizationId, UUID importJobId, UUID experimentId,
+                                    UUID experimentVersionId, String experimentBoundaryId,
+                                    String sampleBoundaryId, String logicalSampleKey,
+                                    List<String> sourceGroupKeys, JsonNode sourceCoordinates,
+                                    JsonNode recognitionSnapshot, String contentHash, UUID actorId) {
+        var job = jdbc.query("""
+                SELECT source_file_id,source_sha256 FROM rnd.experiment_import_job
+                WHERE organization_id=? AND id=?
+                """, (rs, ignored) -> new Object[]{
+                rs.getObject("source_file_id", UUID.class), rs.getString("source_sha256")
+        }, organizationId, importJobId).stream().findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("实验上传任务不存在"));
+        jdbc.update("""
+                INSERT INTO rnd.experiment_source_reference(
+                    id,organization_id,experiment_id,experiment_version_id,
+                    recognition_job_id,experiment_import_job_id,confirmed_submission_id,
+                    experiment_boundary_id,sample_boundary_id,logical_sample_key,
+                    source_group_keys_jsonb,source_file_id,source_file_sha256,
+                    source_coordinates_jsonb,recognition_snapshot_jsonb,content_hash,created_by)
+                VALUES(gen_random_uuid(),?,?,?,NULL,?,NULL,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT DO NOTHING
+                """, organizationId, experimentId, experimentVersionId, importJobId,
+                experimentBoundaryId, sampleBoundaryId, logicalSampleKey,
+                json(objectMapper.valueToTree(sourceGroupKeys)), job[0], job[1],
+                json(sourceCoordinates), json(recognitionSnapshot), contentHash, actorId);
     }
 
     private PGobject json(JsonNode value) {

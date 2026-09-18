@@ -14,8 +14,10 @@ import { useNavigate } from 'react-router-dom';
 import { ProjectRelationPicker } from '@/components/project-relations/ProjectRelationPicker';
 import type { ProjectRelationTarget } from '@/services/project/project-resource-api';
 import { UploadWorkspace, type UploadWorkspaceRecord } from '@/components/upload-workspace';
-import { dataApi, type DataJob, type DataTemplateOption } from '@/services/data/data-api';
+import { dataApi, type DataJob } from '@/services/data/data-api';
 import { dataParseProgress, dataParseStageLabel } from '@/services/data/data-progress';
+import { templateApi } from '@/services/templates/template-api';
+import type { TemplateListItem } from '@/features/template-workspace/types';
 import {
   deleteExperimentImport,
   importExperimentFile,
@@ -49,7 +51,8 @@ export function ExperimentUploadPage() {
   const [freeJobs, setFreeJobs] = useState<ExperimentImportJob[]>([]);
   const [templateJobs, setTemplateJobs] = useState<DataJob[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
-  const [templates, setTemplates] = useState<DataTemplateOption[]>([]);
+  const [templates, setTemplates] = useState<TemplateListItem[]>([]);
+  const [templatesLoading, setTemplatesLoading] = useState(false);
   const [templateVersionId, setTemplateVersionId] = useState<string>();
   const [experimentCategoryId, setExperimentCategoryId] = useState<string>();
   const [projectRelations, setProjectRelations] = useState<ProjectRelationTarget[]>([]);
@@ -81,16 +84,17 @@ export function ExperimentUploadPage() {
   }, [message]);
 
   useEffect(() => {
+    setTemplatesLoading(true);
     void Promise.all([
       listCategories().then((items) => {
         setCategories(items);
         setExperimentCategoryId((current) => current ?? items[0]?.id);
       }).catch((error) => void message.error(error instanceof Error ? error.message : '实验分类加载失败')),
-      dataApi.listTemplates().then((items) => {
-        const experimentTemplates = items.filter((item) => item.format === 'XLSX' && item.experimentImportReady);
-        setTemplates(experimentTemplates);
-        setTemplateVersionId((current) => current ?? experimentTemplates[0]?.versionId);
-      }).catch((error) => void message.error(error instanceof Error ? error.message : '实验模板加载失败')),
+      templateApi.list({ status: 'PUBLISHED', page: 1, size: 100 }).then((result) => {
+        const publishedExcelTemplates = result.items.filter((item) => item.format === 'XLSX');
+        setTemplates(publishedExcelTemplates);
+        setTemplateVersionId((current) => current ?? publishedExcelTemplates[0]?.versionId);
+      }).catch((error) => void message.error(error instanceof Error ? error.message : '实验模板加载失败')).finally(() => setTemplatesLoading(false)),
       load(),
     ]);
   }, [load]);
@@ -251,7 +255,7 @@ export function ExperimentUploadPage() {
         </Form.Item>
         {mode === 'TEMPLATE' ? <>
           <Form.Item label="实验数据模板" required>
-            <Select showSearch optionFilterProp="label" value={templateVersionId} onChange={setTemplateVersionId} options={templates.map((item) => ({ value: item.versionId, label: `${item.name} · ${item.templateCode} · V${item.versionNo}` }))} placeholder="请选择实验数据模板" notFoundContent="暂无已发布实验数据模板" />
+            <Select showSearch optionFilterProp="label" loading={templatesLoading} value={templateVersionId} onChange={setTemplateVersionId} options={templates.map((item) => ({ value: item.versionId, label: `${item.name} · ${item.templateCode} · V${item.versionNo}` }))} placeholder="请选择实验数据模板" notFoundContent="暂无已发布 Excel 模板" />
           </Form.Item>
           {chosenTemplate ? <Alert showIcon type="info" message={`按“${chosenTemplate.name}”模板创建实验草稿`} /> : null}
         </> : <>

@@ -29,6 +29,7 @@ const SheetsEditor = lazy(async () => {
 interface ShellProps {
   breadcrumb: string;
   title: string;
+  canvasLabel?: string;
   leading?: ReactNode;
   meta?: ReactNode;
   actions?: ReactNode;
@@ -39,7 +40,7 @@ interface ShellProps {
   children?: ReactNode;
 }
 
-export function DataWorkbenchShell({ breadcrumb, title, leading, meta, actions, notice, canvas, panel, footer, children }: ShellProps) {
+export function DataWorkbenchShell({ breadcrumb, title, canvasLabel = 'Excel 工作区', leading, meta, actions, notice, canvas, panel, footer, children }: ShellProps) {
   return (
     <section className="data-workbench" aria-label={`${title}数据工作台`}>
       <header className="data-workbench-header">
@@ -57,7 +58,7 @@ export function DataWorkbenchShell({ breadcrumb, title, leading, meta, actions, 
       </header>
       {notice ? <div className="data-workbench-notice">{notice}</div> : null}
       <div className="data-workbench-grid">
-        <section className="data-workbook-canvas" aria-label="Excel 工作区">{canvas}</section>
+        <section className="data-workbook-canvas" aria-label={canvasLabel}>{canvas}</section>
         <aside className="data-workbench-panel">{panel}</aside>
       </div>
       {footer ? <footer className="data-workbench-footer">{footer}</footer> : null}
@@ -69,13 +70,14 @@ export function DataWorkbenchShell({ breadcrumb, title, leading, meta, actions, 
 interface CanvasProps {
   workbook?: DataWorkbookSnapshot;
   loading?: boolean;
+  editorLabel?: string;
   editable?: boolean;
   onSelectionChange?: (selection: EditorSelection) => void;
   onCellChange?: (change: EditorCellChange) => void;
 }
 
 export const DataWorkbookCanvas = forwardRef<EditorHandle, CanvasProps>(function DataWorkbookCanvas(
-  { workbook, loading, editable, onSelectionChange, onCellChange },
+  { workbook, loading, editorLabel = 'Excel 模板编辑器', editable, onSelectionChange, onCellChange },
   ref,
 ) {
   if (loading) return <div className="data-workbook-state"><Skeleton active paragraph={{ rows: 10 }} /></div>;
@@ -86,6 +88,7 @@ export const DataWorkbookCanvas = forwardRef<EditorHandle, CanvasProps>(function
     <Suspense fallback={<div className="data-workbook-state"><Spin indicator={<LoadingOutlined spin />} /></div>}>
       <SheetsEditor
         ref={ref}
+        ariaLabel={editorLabel}
         snapshot={workbook.snapshot}
         bindings={[]}
         editable={Boolean(editable && workbook.editable)}
@@ -184,7 +187,7 @@ export function DataFieldDataBrowser({
   renderFieldExtra,
   renderFieldMeta,
   headerExtra,
-  emptyDescription = '文件解析和字段匹配完成后显示实际数据',
+  emptyDescription = '暂无字段数据',
 }: FieldDataBrowserProps) {
   const fields = workbook?.fields || [];
   const regions = useMemo(() => normalizeRegions(workbook), [workbook]);
@@ -324,17 +327,18 @@ export function DataFieldDataBrowser({
 interface FieldStructureBrowserProps {
   workbook?: DataWorkbookSnapshot;
   selectedBindingId?: string;
+  description?: string;
   onSelectField: (field: DataWorkbookFieldDefinition) => void;
 }
 
-export function DataFieldStructureBrowser({ workbook, selectedBindingId, onSelectField }: FieldStructureBrowserProps) {
+export function DataFieldStructureBrowser({ workbook, selectedBindingId, description = '结构来自已发布模板，每个字段只显示一次', onSelectField }: FieldStructureBrowserProps) {
   const definitions = useMemo(() => normalizeDefinitions(workbook), [workbook]);
   const regions = useMemo(() => normalizeRegions(workbook), [workbook]);
   if (!definitions.length) {
     return <div className="data-panel-body"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前模板没有可展示的字段结构" /></div>;
   }
   return <div className="data-panel-body data-field-structure-browser">
-    <WorkbenchPanelHeader title="字段结构" description="结构来自已发布模板，每个字段只显示一次" />
+    <WorkbenchPanelHeader title="字段结构" description={description} />
     <div className="field-region-tree">
       {regions.map((region) => {
         const regionFields = definitions.filter((field) => field.componentId === region.regionId);

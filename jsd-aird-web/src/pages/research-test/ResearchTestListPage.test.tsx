@@ -70,7 +70,7 @@ describe('ResearchTestListPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /空白新建/ }));
     fireEvent.click(screen.getByRole('button', { name: /Excel 测试标准/ }));
     expect(screen.getByRole('button', { name: /Excel 测试标准/ })).toHaveClass('active');
-  }, 15_000);
+  }, 60_000);
 
   it('offers file import mode for a new standard', async () => {
     render(

@@ -1,8 +1,6 @@
 package com.jsd.aird.data.application;
 
 import java.math.BigDecimal;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -44,7 +42,6 @@ public class DataImportService {
     private final StructuredDataExtractor structuredExtractor;
     private final ImportCompatibilityEvaluator compatibilityEvaluator;
     private final ProjectResourceFacade projectResources;
-
     @Autowired
     public DataImportService(
             DataRepository repository,
@@ -93,8 +90,28 @@ public class DataImportService {
 
     @Transactional
     public DataRepository.Job create(CreateCommand command) {
+        return create(command, "DATA_CENTER");
+    }
+
+    @Transactional
+    public DataRepository.Job createExperiment(CreateCommand command) {
+        return create(command, "EXPERIMENT");
+    }
+
+    private DataRepository.Job create(CreateCommand command, String sourceOwner) {
         var actor = ActorContext.required();
         var template = templates.getPublished(actor.organizationId(), command.templateVersionId());
+        var importPurpose = normalizeImportPurpose(command.importPurpose());
+        if ("EXPERIMENT_DRAFT".equals(importPurpose)) {
+            if (template.importContractVersion() != 9
+                    || template.importContract() == null
+                    || !"EXPERIMENT_DATA".equals(template.importContract().path("templateUsage").asText())) {
+                throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "生成实验草稿必须选择已发布的V9实验数据模板");
+            }
+            if (command.targetExperimentCategoryId() == null) {
+                throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "生成实验草稿必须选择实验分类");
+            }
+        }
         var file = files.find(actor.organizationId(), command.sourceFileId())
                 .orElseThrow(() -> new ApiException(ApiErrorCode.FILE_NOT_READY, "数据源文件不存在"));
         var format = sourceFormat(file.originalName());
@@ -115,7 +132,7 @@ public class DataImportService {
                 id, actor.organizationId(), command.sourceFileId(), file.sha256(), file.originalName(), format,
                 command.templateVersionId(), categoryId, command.duplicateOverride(), actor.userId(),
                 template.importContractVersion() > 0 ? template.importContractVersion() : null,
-                template.contractHash()));
+                template.contractHash(), importPurpose, command.targetExperimentCategoryId(), sourceOwner));
         repository.enqueueParse(UUID.randomUUID(), actor.organizationId(), id);
         if (projectResources != null) {
             projectResources.replaceLinks(actor, ResourceType.DATA_IMPORT_JOB, id,
@@ -131,11 +148,21 @@ public class DataImportService {
 
     public PageResponse<DataRepository.Job> listJobs(UUID templateVersionId,
                                                       String status, String keyword, int page, int size) {
+        return listJobs(templateVersionId, status, keyword, "DATA_CENTER", page, size);
+    }
+
+    public PageResponse<DataRepository.Job> listExperimentJobs(UUID templateVersionId,
+                                                               String status, String keyword, int page, int size) {
+        return listJobs(templateVersionId, status, keyword, "EXPERIMENT", page, size);
+    }
+
+    private PageResponse<DataRepository.Job> listJobs(UUID templateVersionId,
+                                                      String status, String keyword, String sourceOwner, int page, int size) {
         var actor = ActorContext.required();
         var safePage = Math.max(1, page);
         var safeSize = Math.min(100, Math.max(1, size));
         return repository.listJobs(actor.organizationId(), templateVersionId, status,
-                keyword, safePage, safeSize);
+                keyword, sourceOwner, safePage, safeSize);
     }
 
     public List<TemplateDataImportFacade.DataTemplateOption> listTemplates() {
@@ -156,7 +183,9 @@ public class DataImportService {
                 item.importJobId(), item.fileObjectId(), item.originalName(), item.sourceFormat(),
                 item.templateVersionId(), item.categoryId(), item.categoryName(), item.status(), item.progress(),
                 item.createdAt(), item.updatedAt(),
-                links.getOrDefault(item.importJobId(), List.of()))).toList();
+                links.getOrDefault(item.importJobId(), List.of()), item.sourceOwner(), item.recognitionMode(),
+                item.importPurpose(), item.formalStatus(), item.experimentId(), item.experimentVersionId(),
+                item.entryType())).toList();
         return new PageResponse<>(items, result.page(), result.size(), result.total(), result.totalPages());
     }
 
@@ -168,6 +197,11 @@ public class DataImportService {
     @Transactional
     public void assignSourceCategory(UUID importJobId, UUID categoryId) {
         var actor = ActorContext.required();
+        var sourceOwner = repository.findSourceOwner(actor.organizationId(), importJobId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "来源文件不存在"));
+        if (!"DATA_CENTER".equals(sourceOwner)) {
+            throw new ApiException(ApiErrorCode.PERMISSION_DENIED, "实验本来源只能在实验记录本中维护");
+        }
         if (categories != null) categories.list().stream().filter(item -> item.id().equals(categoryId)).findFirst()
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "数据分类不存在"));
         if (repository.assignSourceCategory(actor.organizationId(), importJobId, categoryId) == 0) {
@@ -252,7 +286,8 @@ public class DataImportService {
                 // Structured template bindings are executable import instructions. They
                 // must run before the generic header mapper, otherwise a horizontal table
                 // or repeated table would be mistaken for a scalar row and lose its dimensions.
-                var structured = structuredExtractor.extract(parsedSheet, definition.fields(), bindings, dataStart, dataEnd);
+                var structured = structuredExtractor.extract(parsedSheet, definition.fields(), bindings, dataStart, dataEnd,
+                        definition.importContractVersion(), definition.importContract());
                 if (structured.isPresent()) {
                     mappings.addAll(structured.get().mappings());
                     rows.addAll(structured.get().rows());
@@ -462,8 +497,12 @@ public class DataImportService {
                         .put("trainingEligible", mapping.detail().path("trainingEligible").asBoolean(true));
                 var cell = row.sourceMetadata() == null ? null : row.sourceMetadata().path("cells").path(entry.getKey());
                 if (cell != null && cell.isObject()) {
-                    for (var key : List.of("bindingId", "valuePath", "labelPath", "valueSource",
-                            "calculationSource", "calculationStatus", "formulaTrustStatus", "formulaExpression")) {
+                    for (var key : List.of("bindingId", "parentBindingId", "valuePath", "labelPath", "valueSource",
+                            "calculationSource", "calculationStatus", "formulaTrustStatus", "formulaExpression",
+                            "experimentField", "targetPath", "itemSourceKey", "listProjectionId", "itemLabel",
+                            "labelPathSegments",
+                            "itemLabelField", "labelSource", "unitSource", "cellValueType", "rawNumericValue",
+                            "displayValue", "numberFormat", "fractionRepresentation")) {
                         if (cell.has(key)) value.set(key, cell.path(key).deepCopy());
                     }
                 }
@@ -703,7 +742,9 @@ public class DataImportService {
             // Structured projections already computed the logical record key. It must
             // win over a form-level identity field so each detail row remains its own
             // source record after common form fields are merged into it.
-            var recordKey = structuredKey.isBlank()
+            var recordKey = "STRUCTURAL".equals(metadata.path("recordKeyKind").asText(""))
+                    ? structuredKey
+                    : structuredKey.isBlank()
                     ? (identity == null || identity.isBlank()
                     ? importScopedKey(job.id(), row) : identity)
                     : metadata.path("identitySynthetic").asBoolean(false)
@@ -717,6 +758,7 @@ public class DataImportService {
 
     private void appendCommitAuditAndOutbox(UUID organizationId, UUID actorId, DataRepository.Job job,
                                             DataRepository.CommitResult result) {
+        var sourceOwner = repository.findSourceOwner(organizationId, job.id()).orElse("DATA_CENTER");
         var records = objectMapper.createArrayNode();
         for (var item : result.records()) {
             records.add(objectMapper.createObjectNode()
@@ -737,6 +779,7 @@ public class DataImportService {
         var eventPayload = objectMapper.createObjectNode()
                 .put("organizationId", organizationId.toString())
                 .put("actorId", actorId.toString())
+                .put("sourceOwner", sourceOwner)
                 .put("templateVersionId", job.templateVersionId().toString())
                 .put("importJobId", job.id().toString())
                 .put("sourceSha256", job.sourceSha256())
@@ -744,25 +787,8 @@ public class DataImportService {
                 .put("rowCount", result.rowCount())
                 .set("records", records.deepCopy());
         opsAsync.appendOutbox("DATA_IMPORT_JOB", job.id(), "DATA_RECORDS_COMMITTED", eventPayload);
-        var recordSetKey = recordSetKey(result);
-        opsAsync.enqueue(organizationId, "DATA_PROJECT_IMPORT", eventPayload,
-                "data-project:" + job.id() + ":" + recordSetKey, 30);
-    }
-
-    private String recordSetKey(DataRepository.CommitResult result) {
-        var records = result.records().stream()
-                .map(DataRepository.CommittedRecord::recordId)
-                .map(UUID::toString)
-                .sorted()
-                .collect(java.util.stream.Collectors.joining(","));
-        try {
-            var digest = MessageDigest.getInstance("SHA-256").digest(records.getBytes(StandardCharsets.UTF_8));
-            var hex = new StringBuilder(digest.length * 2);
-            for (var item : digest) hex.append(String.format("%02x", item));
-            return hex.toString();
-        } catch (java.security.NoSuchAlgorithmException exception) {
-            throw new IllegalStateException("JDK 不支持 SHA-256", exception);
-        }
+        // R03 freezes committed data through confirmed_submission and the unified
+        // fact projection. New work must no longer write the legacy training_dataset.
     }
 
     private String importScopedKey(UUID importJobId, DataRepository.Row row) {
@@ -846,7 +872,32 @@ public class DataImportService {
         var type = mapping.valueType() == null ? "TEXT" : mapping.valueType().toUpperCase(Locale.ROOT);
         BigDecimal numeric = null;
         if (type.contains("NUM") || type.contains("DECIMAL")) {
-            try { numeric = new BigDecimal(raw.trim().replace(",", "")); }
+            try {
+                var numericText = raw.trim().replace(",", "");
+                // Excel percentage cells may arrive from the renderer as their
+                // formatted text (for example, "62.50%"). Keep the source
+                // unit in the mapping and parse the numeric part here so a
+                // valid percentage does not become a false TYPE_ERROR.
+                if (numericText.endsWith("%")) numericText = numericText.substring(0, numericText.length() - 1).trim();
+                else {
+                    // Customer workbooks commonly keep the displayed unit in the
+                    // cell (for example "1193 mPa·s", "0.62 mm" or
+                    // "5055 g/mol").  The template already carries the unit
+                    // contract, so accept the numeric prefix only when the
+                    // suffix agrees with that contract.  This preserves the
+                    // original value/coordinate while making the normalized
+                    // value usable by the downstream facts projection.
+                    var withUnit = java.util.regex.Pattern.compile(
+                            "^([+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+))\\s+(.+)$")
+                            .matcher(numericText);
+                    if (withUnit.matches()) {
+                        var suffix = canonicalUnit(withUnit.group(2));
+                        var expected = canonicalUnit(mapping.standardUnit());
+                        if (!expected.isBlank() && suffix.equals(expected)) numericText = withUnit.group(1);
+                    }
+                }
+                numeric = new BigDecimal(numericText);
+            }
             catch (NumberFormatException exception) {
                 issues.add(issue(row, mapping, "BLOCKER", "TYPE_ERROR", "数值字段无法解析：" + raw));
             }
@@ -881,6 +932,16 @@ public class DataImportService {
             } else numeric = numeric.multiply(factor);
         }
         return numeric == null ? raw.trim() : numeric.stripTrailingZeros().toPlainString();
+    }
+
+    private String canonicalUnit(String value) {
+        if (value == null) return "";
+        return value.trim().toLowerCase(Locale.ROOT)
+                .replace('·', '.')
+                .replace('⋅', '.')
+                .replace(" ", "")
+                .replace("μ", "u")
+                .replace("µ", "u");
     }
 
     private BigDecimal conversionFactor(String source, String target) {
@@ -1157,15 +1218,33 @@ public class DataImportService {
         return false;
     }
 
+    private String normalizeImportPurpose(String value) {
+        if (value == null || value.isBlank()) return "DATA_ONLY";
+        var normalized = value.strip().toUpperCase(Locale.ROOT);
+        if (!Set.of("DATA_ONLY", "EXPERIMENT_DRAFT").contains(normalized)) {
+            throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "导入用途必须是DATA_ONLY或EXPERIMENT_DRAFT");
+        }
+        return normalized;
+    }
+
     public record CreateCommand(UUID sourceFileId, UUID templateVersionId,
                                 UUID categoryId, boolean duplicateOverride,
-                                List<ProjectRelationTarget> projectRelations) {
+                                List<ProjectRelationTarget> projectRelations,
+                                String importPurpose, UUID targetExperimentCategoryId) {
+        public CreateCommand(UUID sourceFileId, UUID templateVersionId,
+                             UUID categoryId, boolean duplicateOverride,
+                             List<ProjectRelationTarget> projectRelations) {
+            this(sourceFileId, templateVersionId, categoryId, duplicateOverride, projectRelations,
+                    "DATA_ONLY", null);
+        }
         public CreateCommand(UUID sourceFileId, UUID templateVersionId,
                              UUID categoryId, boolean duplicateOverride) {
-            this(sourceFileId, templateVersionId, categoryId, duplicateOverride, List.of());
+            this(sourceFileId, templateVersionId, categoryId, duplicateOverride, List.of(),
+                    "DATA_ONLY", null);
         }
         public CreateCommand(UUID sourceFileId, UUID templateVersionId, boolean duplicateOverride) {
-            this(sourceFileId, templateVersionId, null, duplicateOverride, List.of());
+            this(sourceFileId, templateVersionId, null, duplicateOverride, List.of(),
+                    "DATA_ONLY", null);
         }
     }
     public record FieldRequestCommand(String fieldId, String displayName, String valueType,

@@ -65,6 +65,13 @@ public class ExperimentService {
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "实验不存在")));
     }
 
+    public List<ExperimentRepository.SourceReference> sourceReferences(UUID id) {
+        var actor = ActorContext.required();
+        repository.detail(actor.organizationId(), id)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "实验不存在"));
+        return repository.sourceReferences(actor.organizationId(), id);
+    }
+
     @Transactional
     public Summary create(CreateCommand command) {
         var actor = ActorContext.required();
@@ -152,7 +159,7 @@ public class ExperimentService {
                         command.projectId(),
                         command.stageId(),
                         command.taskId(),
-                        command.ownerName().strip(),
+                        blankToNull(command.ownerName()),
                         command.experimentDate(),
                         command.templateVersionId(),
                         blankToNull(command.templateSnapshotHash()),

@@ -19,8 +19,8 @@ export interface ExperimentSummary {
   stageName?: string;
   taskId?: string;
   taskName?: string;
-  ownerName: string;
-  experimentDate: string;
+  ownerName: string | null;
+  experimentDate: string | null;
   versionNo: number;
   revision: number;
   updatedAt: string;
@@ -35,10 +35,43 @@ export interface ExperimentSourceRef extends Record<string, unknown> {
   sheetId?: string;
   cellRange?: string;
   sourceHash?: string;
+  recordKey?: string;
+  sourceIdentity?: string;
+  sourceIdentityType?: string;
+  sourceGroupKey?: string;
+  sampleKey?: string;
+  logicalSampleKey?: string | null;
+  sourceContextKey?: string;
 }
 export interface ExperimentItem extends Record<string, unknown> {
   itemId: string;
   sourceRefs: ExperimentSourceRef[];
+  sourceGroupKey?: string;
+  sampleKey?: string;
+  logicalSampleKey?: string | null;
+  sourceIdentity?: string;
+  sourceIdentityType?: string;
+  sourceRecordKey?: string;
+  sourceContextKey?: string;
+}
+export interface ExperimentSampleGroup extends Record<string, unknown> {
+  sourceGroupKey?: string;
+  sampleKey: string;
+  logicalSampleKey?: string | null;
+  sourceIdentity: string;
+  sourceIdentityType: string;
+  sourceRecordKeys: string[];
+  sourceSheets?: string[];
+  sourceContextKey?: string;
+}
+export type ExperimentSourceGroup = ExperimentSampleGroup;
+export interface ExperimentSourceContext extends Record<string, unknown> {
+  sourceContextKey: string;
+  sheetId?: string;
+  sheetName?: string;
+  sourceRecordKeys: string[];
+  sharedContextRecordKeys: string[];
+  facts?: Array<Record<string, unknown>>;
 }
 export interface FormulaItem extends ExperimentItem {
   materialId?: string | null;
@@ -64,6 +97,9 @@ export interface ExperimentModel extends Record<string, unknown> {
   blankDocument?: boolean;
   documentSnapshot?: Record<string, unknown>;
   dynamicValues?: Record<string, unknown>;
+  sourceGroups?: ExperimentSourceGroup[];
+  sourceContexts?: ExperimentSourceContext[];
+  sampleGroups?: ExperimentSampleGroup[];
   formulaItems?: FormulaItem[];
   processSteps?: ProcessStep[];
   testResults?: TestResult[];
@@ -80,6 +116,28 @@ export interface ExperimentDetail {
   editModel: ExperimentModel;
   reviews: Array<Record<string, unknown>>;
   attachments: Array<Record<string, unknown>>;
+}
+export interface ExperimentSourceReference {
+  id: string;
+  recognitionJobId: string;
+  confirmedSubmissionId?: string;
+  submissionRevision?: number;
+  currentSubmissionId?: string;
+  currentSubmissionRevision?: number;
+  sourceOwner: 'DATA_CENTER' | 'EXPERIMENT';
+  recognitionMode: 'FREEFORM' | 'TEMPLATE_GUIDED';
+  sourceFileId: string;
+  sourceFileName: string;
+  sourceFileSha256: string;
+  experimentBoundaryId: string;
+  sampleBoundaryId: string;
+  logicalSampleKey: string;
+  sourceGroupKeys: string[];
+  sourceCoordinates: Record<string, unknown>;
+  recognitionSnapshot: Record<string, unknown>;
+  contentHash: string;
+  sourceUpdated: boolean;
+  createdAt: string;
 }
 export interface ExperimentVersion {
   id: string;
@@ -129,6 +187,11 @@ export async function listProjectExperiments(projectId: string, params: Record<s
 export async function getExperiment(id: string) {
   return data(
     await httpClient.get<ApiResponse<ExperimentDetail>>(`/api/v1/experiments/${id}/edit-model`),
+  );
+}
+export async function getExperimentSources(id: string) {
+  return data(
+    await httpClient.get<ApiResponse<ExperimentSourceReference[]>>(`/api/v1/experiments/${id}/sources`),
   );
 }
 export async function exportExperiment(id: string) {
@@ -246,9 +309,27 @@ export interface StagedFile {
   sha256: string;
   status: 'STAGED';
 }
-export interface ExperimentImportAccepted {
-  jobId: string;
-  status: 'PARSING';
+export interface ExperimentImportAccepted { jobId: string; status: string }
+export interface ExperimentImportJob {
+  id: string;
+  sourceFileId: string;
+  sourceFileName: string;
+  sourceSha256: string;
+  sourceFormat: string;
+  status: string;
+  experimentId?: string;
+  errorMessage?: string;
+  categoryName?: string;
+  projectId?: string;
+  projectName?: string;
+  stageId?: string;
+  stageName?: string;
+  taskId?: string;
+  taskName?: string;
+  visibility?: 'ALL' | 'QUALITY' | 'PROJECT';
+  createdAt: string;
+  progress: number;
+  currentStage?: string;
 }
 export async function stageExperimentFile(file: File) {
   const body = new FormData();
@@ -272,36 +353,21 @@ export async function importExperimentFile(input: {
   taskId?: string;
   experimentDate: string;
   visibility?: 'ALL' | 'QUALITY' | 'PROJECT';
+  recognitionMode?: 'FREEFORM' | 'TEMPLATE_GUIDED';
+  templateVersionId?: string;
+  duplicateOverride?: boolean;
 }) {
   return data(
     await httpClient.post<ApiResponse<ExperimentImportAccepted>>('/api/v1/experiment-imports', input),
   );
 }
-export interface ExperimentImportJob {
-  id: string;
-  sourceFileId: string;
-  sourceFileName: string;
-  sourceFormat: string;
-  status: 'PARSING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
-  progress?: number;
-  currentStage?: string;
-  experimentId?: string;
-  errorMessage?: string;
-  categoryName?: string;
-  projectId?: string;
-  projectName?: string;
-  stageId?: string;
-  stageName?: string;
-  taskId?: string;
-  taskName?: string;
-  visibility?: 'ALL' | 'QUALITY' | 'PROJECT';
-  createdAt: string;
-  allowedActions?: string[];
-}
 export async function listExperimentImports() {
   return data(
     await httpClient.get<ApiResponse<ExperimentImportJob[]>>('/api/v1/experiment-imports'),
   );
+}
+export async function getExperimentImport(id: string) {
+  return data(await httpClient.get<ApiResponse<ExperimentImportJob>>(`/api/v1/experiment-imports/${id}`));
 }
 export async function retryExperimentImport(id: string) {
   return data(

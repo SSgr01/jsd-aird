@@ -1,0 +1,1693 @@
+openapi: 3.1.0
+info:
+  title: JSD-AIRD AI研发业务契约
+  version: ai-rnd.v1
+  description: R01冻结、R02落地的AI研发契约；建模配置接口返回真实持久化状态。
+servers:
+  - url: /api/v1/ai/rnd
+security:
+  - sessionCookie: []
+tags:
+  - {name: Modeling}
+  - {name: Eligibility}
+  - {name: Models}
+  - {name: Prediction}
+  - {name: Research}
+paths:
+  /targets:
+    get: {$ref: '#/components/x-operations/readTargets'}
+    post: {$ref: '#/components/x-operations/createTarget'}
+  /targets/{id}:
+    get: {$ref: '#/components/x-operations/readTarget'}
+  /targets/{id}/versions:
+    get: {$ref: '#/components/x-operations/readTargetVersions'}
+    post: {$ref: '#/components/x-operations/createTargetVersion'}
+  /target-versions/{id}:
+    patch: {$ref: '#/components/x-operations/updateTargetVersion'}
+  /target-versions/{id}/publish:
+    post: {$ref: '#/components/x-operations/publishTargetVersion'}
+  /targets/{id}/retire:
+    post: {$ref: '#/components/x-operations/retireTarget'}
+  /input-fields:
+    get: {$ref: '#/components/x-operations/readInputFields'}
+    post: {$ref: '#/components/x-operations/createInputField'}
+  /input-fields/{id}:
+    get: {$ref: '#/components/x-operations/readInputField'}
+  /input-fields/{id}/versions:
+    get: {$ref: '#/components/x-operations/readInputFieldVersions'}
+    post: {$ref: '#/components/x-operations/createInputFieldVersion'}
+  /input-field-versions/{id}/publish:
+    post: {$ref: '#/components/x-operations/publishInputFieldVersion'}
+  /targets/{id}/source-mappings:
+    get: {$ref: '#/components/x-operations/readSourceMappings'}
+    post: {$ref: '#/components/x-operations/createSourceMapping'}
+  /targets/{id}/source-mapping-suggestions:
+    get: {$ref: '#/components/x-operations/readSourceMappingSuggestions'}
+  /targets/{id}/source-mappings/confirm:
+    post: {$ref: '#/components/x-operations/confirmSourceMapping'}
+  /source-mappings/{id}/publish:
+    post: {$ref: '#/components/x-operations/publishSourceMapping'}
+  /targets/{id}/input-schemes:
+    get: {$ref: '#/components/x-operations/readInputSchemes'}
+    post: {$ref: '#/components/x-operations/createInputScheme'}
+  /input-schemes/{id}/preview:
+    post: {$ref: '#/components/x-operations/previewInputScheme'}
+  /input-schemes/{id}/freeze:
+    post: {$ref: '#/components/x-operations/freezeInputScheme'}
+  /eligibility/summary:
+    get: {$ref: '#/components/x-operations/readEligibilitySummary'}
+  /eligibility:
+    get: {$ref: '#/components/x-operations/readEligibility'}
+  /eligibility/{id}:
+    get: {$ref: '#/components/x-operations/readEligibilityItem'}
+  /reviews/{id}/decisions:
+    post: {$ref: '#/components/x-operations/decideReview'}
+  /training-settings:
+    get: {$ref: '#/components/x-operations/readTrainingSettings'}
+    put: {$ref: '#/components/x-operations/updateTrainingSettings'}
+  /training-jobs/evaluate:
+    post: {$ref: '#/components/x-operations/evaluateTrainingTargets'}
+  /training-jobs:
+    get: {$ref: '#/components/x-operations/readTrainingJobs'}
+  /training-jobs/{id}:
+    get: {$ref: '#/components/x-operations/readTrainingJob'}
+  /targets/{id}/reevaluate:
+    post: {$ref: '#/components/x-operations/reevaluateTarget'}
+  /training-jobs/{id}/retry:
+    post: {$ref: '#/components/x-operations/retryTrainingJob'}
+  /training-jobs/{id}/cancel:
+    post: {$ref: '#/components/x-operations/cancelTrainingJob'}
+  /models:
+    get: {$ref: '#/components/x-operations/readModels'}
+  /models/{id}:
+    get: {$ref: '#/components/x-operations/readModel'}
+  /models/{id}/comparison:
+    get: {$ref: '#/components/x-operations/compareModel'}
+  /models/{id}/activate:
+    post: {$ref: '#/components/x-operations/activateModel'}
+  /models/{id}/rollback:
+    post: {$ref: '#/components/x-operations/rollbackModel'}
+  /models/{id}/pause:
+    post: {$ref: '#/components/x-operations/pauseModel'}
+  /snapshots/{id}:
+    get: {$ref: '#/components/x-operations/readSnapshot'}
+  /snapshots/{id}/items:
+    get: {$ref: '#/components/x-operations/readSnapshotItems'}
+  /training-policies:
+    get: {$ref: '#/components/x-operations/readTrainingPolicies'}
+    post: {$ref: '#/components/x-operations/createTrainingPolicy'}
+  /training-policies/{id}/publish:
+    post: {$ref: '#/components/x-operations/publishTrainingPolicy'}
+  /reference/standard-fields:
+    get: {$ref: '#/components/x-operations/readStandardFieldReferences'}
+  /reference/materials:
+    get: {$ref: '#/components/x-operations/readMaterialReferences'}
+  /material-aliases:
+    get: {$ref: '#/components/x-operations/readMaterialAliases'}
+    post: {$ref: '#/components/x-operations/createMaterialAlias'}
+  /material-aliases/{id}/retire:
+    post: {$ref: '#/components/x-operations/retireMaterialAlias'}
+  /material-dictionaries:
+    get: {$ref: '#/components/x-operations/readMaterialDictionaries'}
+    post: {$ref: '#/components/x-operations/createMaterialDictionary'}
+  /material-dictionaries/{id}/freeze:
+    post: {$ref: '#/components/x-operations/freezeMaterialDictionary'}
+  /material-dictionaries/{id}/retire:
+    post: {$ref: '#/components/x-operations/retireMaterialDictionary'}
+  /samples:
+    get: {$ref: '#/components/x-operations/readSamples'}
+  /samples/{id}:
+    get: {$ref: '#/components/x-operations/readSample'}
+  /facts/reconcile:
+    post: {$ref: '#/components/x-operations/reconcileFacts'}
+  /prediction-context:
+    get: {$ref: '#/components/x-operations/readPredictionContext'}
+  /targets/{id}/quality-policies:
+    get: {$ref: '#/components/x-operations/readQualityPolicies'}
+    post: {$ref: '#/components/x-operations/createQualityPolicy'}
+  /quality-policies/{id}/publish:
+    post: {$ref: '#/components/x-operations/publishQualityPolicy'}
+  /predictions:
+    post: {$ref: '#/components/x-operations/createPrediction'}
+  /formula-designs:
+    post: {$ref: '#/components/x-operations/createFormulaDesign'}
+  /experiment-optimizations:
+    post: {$ref: '#/components/x-operations/createOptimization'}
+  /experiment-optimizations/{id}:
+    get: {$ref: '#/components/x-operations/readOptimization'}
+  /optimization-baselines:
+    get: {$ref: '#/components/x-operations/readOptimizationBaselines'}
+  /optimization-context:
+    get: {$ref: '#/components/x-operations/readOptimizationContext'}
+  /research-runs:
+    get: {$ref: '#/components/x-operations/readResearchRuns'}
+  /research-runs/{id}:
+    get: {$ref: '#/components/x-operations/readResearchRun'}
+  /research-runs/{id}/experiment-drafts:
+    post: {$ref: '#/components/x-operations/createExperimentDrafts'}
+  /research-runs/{id}/experiment-links:
+    get: {$ref: '#/components/x-operations/readExperimentLinks'}
+  /research-runs/{id}/feedback:
+    get: {$ref: '#/components/x-operations/readOptimizationFeedback'}
+  /prediction-records/{id}:
+    get: {$ref: '#/components/x-operations/readPredictionRecord'}
+components:
+  securitySchemes:
+    sessionCookie: {type: apiKey, in: cookie, name: JSESSIONID}
+  parameters:
+    Id: {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+    Page: {name: page, in: query, schema: {type: integer, minimum: 1, default: 1}}
+    Size: {name: size, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 20}}
+    Keyword: {name: keyword, in: query, schema: {type: string, maxLength: 200}}
+    Status: {name: status, in: query, schema: {type: string, maxLength: 40}}
+    ValueType: {name: valueType, in: query, schema: {type: string, maxLength: 40}}
+    Category: {name: category, in: query, schema: {type: string, maxLength: 160}}
+    TargetId: {name: targetId, in: query, schema: {type: string, format: uuid}}
+    TargetIds: {name: targetId, in: query, style: form, explode: true, schema: {type: array, items: {type: string, format: uuid}}}
+    RequestId: {name: X-Request-Id, in: header, required: true, schema: {type: string, minLength: 1, maxLength: 160}}
+    IdempotencyKey: {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 1, maxLength: 200}}
+  schemas:
+    JsonObject: {type: object, additionalProperties: true}
+    Page:
+      type: object
+      required: [items, total, page, size]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/JsonObject'}}
+        total: {type: integer, minimum: 0}
+        page: {type: integer, minimum: 1}
+        size: {type: integer, minimum: 1, maximum: 100}
+    VersionCommand:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision]
+      properties: {expectedRevision: {type: integer, minimum: 0}}
+    RetireCommand:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision, reason]
+      properties:
+        expectedRevision: {type: integer, minimum: 0}
+        reason: {type: string, minLength: 1, maxLength: 1000}
+    TargetCommand:
+      type: object
+      additionalProperties: false
+      required: [code, name, category, valueType, classes, definition, observationSemantics]
+      properties:
+        code: {type: string, minLength: 1, maxLength: 160}
+        name: {type: string, minLength: 1, maxLength: 240}
+        category: {type: string, minLength: 1, maxLength: 160}
+        valueType: {enum: [CONTINUOUS, ORDINAL, BINARY, CATEGORICAL]}
+        unit: {type: [string, 'null'], maxLength: 80}
+        classes: {type: array, items: {type: string}}
+        definition: {$ref: '#/components/schemas/JsonObject'}
+        observationSemantics: {$ref: '#/components/schemas/JsonObject'}
+        expectedRevision: {type: [integer, 'null'], minimum: 0}
+        resultStandardFieldCode: {type: [string, 'null'], maxLength: 100, description: Stable result data-field binding code}
+        catalogProposalId: {type: [string, 'null'], format: uuid, description: Optional customer-catalog proposal evidence}
+    TargetSummary:
+      type: object
+      additionalProperties: false
+      required: [id, code, name, category, valueType, status, evaluationStatus, trainingStatus, revision, updatedAt]
+      properties:
+        id: {type: string, format: uuid}
+        code: {type: string}
+        name: {type: string}
+        category: {type: string}
+        valueType: {enum: [CONTINUOUS, ORDINAL, BINARY, CATEGORICAL]}
+        status: {enum: [DRAFT, ACTIVE, PAUSED, RETIRED]}
+        currentVersionId: {type: [string, 'null'], format: uuid}
+        currentVersion: {type: [integer, 'null']}
+        currentInputSchemeId: {type: [string, 'null'], format: uuid}
+        currentInputSchemeName: {type: [string, 'null']}
+        activeModelVersionId: {type: [string, 'null'], format: uuid}
+        evaluationStatus: {enum: [NOT_EVALUATED, EVALUATED]}
+        trainingStatus: {enum: [NOT_TRAINED, ACTIVE]}
+        revision: {type: integer, minimum: 0}
+        updatedAt: {type: string, format: date-time}
+    InputFieldCommand:
+      type: object
+      additionalProperties: false
+      required: [code, name, valueType, availabilityStage, definition, preprocessing]
+      properties:
+        code: {type: string, minLength: 1, maxLength: 160}
+        name: {type: string, minLength: 1, maxLength: 240}
+        valueType: {enum: [NUMBER, STRING, BOOLEAN, CATEGORY, COMPOSITION]}
+        unit: {type: [string, 'null'], maxLength: 80}
+        availabilityStage: {enum: [PRE_EXPERIMENT, POST_EXPERIMENT]}
+        standardFieldDictionaryId: {type: [string, 'null'], format: uuid}
+        definition: {$ref: '#/components/schemas/JsonObject'}
+        preprocessing: {$ref: '#/components/schemas/JsonObject'}
+        expectedRevision: {type: [integer, 'null'], minimum: 0}
+    InputFieldSummary:
+      type: object
+      additionalProperties: false
+      required: [id, code, name, valueType, availabilityStage, status, revision, updatedAt]
+      properties:
+        id: {type: string, format: uuid}
+        code: {type: string}
+        name: {type: string}
+        valueType: {enum: [NUMBER, STRING, BOOLEAN, CATEGORY, COMPOSITION]}
+        unit: {type: [string, 'null']}
+        availabilityStage: {enum: [PRE_EXPERIMENT, POST_EXPERIMENT]}
+        status: {enum: [DRAFT, ACTIVE, PAUSED, RETIRED]}
+        currentVersionId: {type: [string, 'null'], format: uuid}
+        currentVersion: {type: [integer, 'null']}
+        standardFieldCode: {type: [string, 'null']}
+        revision: {type: integer, minimum: 0}
+        updatedAt: {type: string, format: date-time}
+    SourceMappingCommand:
+      type: object
+      additionalProperties: false
+      required: [targetVersionId, sourceType, mapping, expectedRevision]
+      properties:
+        targetVersionId: {type: string, format: uuid}
+        sourceType: {enum: [DATA_CENTER, EXPERIMENT]}
+        mapping: {$ref: '#/components/schemas/JsonObject'}
+        expectedRevision: {type: integer, minimum: 0}
+    InputSchemeFieldCommand:
+      type: object
+      additionalProperties: false
+      required: [inputFieldVersionId, required, ordinal, override]
+      properties:
+        inputFieldVersionId: {type: string, format: uuid}
+        required: {const: true}
+        ordinal: {type: integer, minimum: 0}
+        override: {$ref: '#/components/schemas/JsonObject'}
+    InputSchemeCommand:
+      type: object
+      additionalProperties: false
+      required: [targetVersionId, code, name, fields, preprocessing, expectedRevision]
+      properties:
+        targetVersionId: {type: string, format: uuid}
+        materialDictionaryVersionId: {type: [string, 'null'], format: uuid}
+        code: {type: string, minLength: 1, maxLength: 160}
+        name: {type: string, minLength: 1, maxLength: 240}
+        fields: {type: array, minItems: 1, items: {$ref: '#/components/schemas/InputSchemeFieldCommand'}}
+        preprocessing: {$ref: '#/components/schemas/JsonObject'}
+        expectedRevision: {type: integer, minimum: 0}
+    CoveragePreview:
+      type: object
+      additionalProperties: false
+      required: [evaluationStatus, unavailableReason, validationIssues, schemaHash, changedSampleIds]
+      properties:
+        evaluationStatus: {const: NOT_EVALUATED}
+        unavailableReason: {const: DATA_PIPELINE_NOT_READY}
+        validationIssues: {type: array, items: {$ref: '#/components/schemas/JsonObject'}}
+        schemaHash: {type: string, pattern: '^[0-9a-f]{64}$'}
+        candidateSamples: {type: 'null'}
+        trainable: {type: 'null'}
+        excluded: {type: 'null'}
+        reviewRequired: {type: 'null'}
+        changedSampleIds: {type: array, maxItems: 0}
+    FunnelStep:
+      type: object
+      required: [code, label, count, denominator]
+      properties:
+        code: {type: string}
+        label: {type: string}
+        count: {type: integer, minimum: 0}
+        denominator: {type: integer, minimum: 0}
+    FieldCoverage:
+      type: object
+      required: [fieldCode, fieldName, available, denominator, ratio, reasonCodes]
+      properties:
+        fieldCode: {type: string}
+        fieldName: {type: string}
+        available: {type: integer, minimum: 0}
+        denominator: {type: integer, minimum: 0}
+        ratio: {type: number, minimum: 0, maximum: 1}
+        reasonCodes: {type: array, items: {type: string}}
+    EligibilityReason:
+      type: object
+      required: [code, message, evidence]
+      properties:
+        code: {type: string}
+        message: {type: string}
+        fieldCode: {type: [string, 'null']}
+        evidence: {$ref: '#/components/schemas/JsonObject'}
+    EligibilityEvaluationRun:
+      type: object
+      required: [id, targetId, targetVersionId, inputSchemeId, ruleFingerprint, status]
+      properties:
+        id: {type: string, format: uuid}
+        targetId: {type: string, format: uuid}
+        targetVersionId: {type: string, format: uuid}
+        inputSchemeId: {type: string, format: uuid}
+        modelingPolicyVersionId: {type: [string, 'null'], format: uuid}
+        ruleFingerprint: {type: string, pattern: '^[0-9a-f]{64}$'}
+        asyncJobId: {type: [string, 'null'], format: uuid}
+        status: {enum: [QUEUED, RUNNING, SUCCEEDED, FAILED, CANCELLED]}
+        totalSamples: {type: [integer, 'null']}
+        trainable: {type: [integer, 'null']}
+        excluded: {type: [integer, 'null']}
+        reviewRequired: {type: [integer, 'null']}
+        funnel: {type: array, items: {$ref: '#/components/schemas/FunnelStep'}}
+        errorCode: {type: [string, 'null']}
+        errorMessage: {type: [string, 'null']}
+    EligibilitySummary:
+      type: object
+      required: [evaluationStatus, reasonCounts, funnel, fieldCoverage]
+      properties:
+        evaluationStatus: {enum: [NOT_EVALUATED, RUNNING, COMPLETED, FAILED]}
+        unavailableReason: {type: [string, 'null']}
+        latestRun: {oneOf: [{$ref: '#/components/schemas/EligibilityEvaluationRun'}, {type: 'null'}]}
+        total: {type: [integer, 'null']}
+        trainable: {type: [integer, 'null']}
+        excluded: {type: [integer, 'null']}
+        reviewRequired: {type: [integer, 'null']}
+        reasonCounts: {type: object, additionalProperties: {type: integer}}
+        funnel: {type: array, items: {$ref: '#/components/schemas/FunnelStep'}}
+        fieldCoverage: {type: array, items: {$ref: '#/components/schemas/FieldCoverage'}}
+        evaluatedAt: {type: [string, 'null'], format: date-time}
+    EligibilityItem:
+      type: object
+      required: [id, state, reasons, warnings]
+      properties:
+        id: {type: string, format: uuid}
+        evaluationRunId: {type: string, format: uuid}
+        sampleRevisionId: {type: string, format: uuid}
+        targetVersionId: {type: string, format: uuid}
+        inputSchemeId: {type: string, format: uuid}
+        state: {enum: [TRAINABLE, EXCLUDED, REVIEW_REQUIRED]}
+        primaryReasonCode: {type: [string, 'null']}
+        reasons: {type: array, items: {$ref: '#/components/schemas/EligibilityReason'}}
+        warnings: {type: array, items: {$ref: '#/components/schemas/EligibilityReason'}}
+        logicalSampleKey: {type: [string, 'null']}
+        authoritySourceType: {type: [string, 'null']}
+        revision: {type: integer}
+        evaluatedAt: {type: string, format: date-time}
+    EligibilityDetail:
+      type: object
+      required: [eligibility, sample, reviews]
+      properties:
+        eligibility: {$ref: '#/components/schemas/EligibilityItem'}
+        sample: {$ref: '#/components/schemas/JsonObject'}
+        reviews: {type: array, items: {$ref: '#/components/schemas/JsonObject'}}
+    ReviewDecisionCommand:
+      type: object
+      required: [decision, reason, expectedRevision]
+      properties:
+        decision: {enum: [KEEP, EXCLUDE, MERGE, KEEP_SEPARATE, REMAP]}
+        reason: {type: string, minLength: 1}
+        materialId: {type: [string, 'null'], format: uuid}
+        expectedRevision: {type: integer, minimum: 0}
+    RecomputeAccepted:
+      type: object
+      required: [runId, asyncJobId, targetId, targetVersionId, inputSchemeId, status, ruleFingerprint]
+      properties:
+        runId: {type: string, format: uuid}
+        asyncJobId: {type: string, format: uuid}
+        targetId: {type: string, format: uuid}
+        targetVersionId: {type: string, format: uuid}
+        inputSchemeId: {type: string, format: uuid}
+        status: {enum: [QUEUED, RUNNING, SUCCEEDED, FAILED, CANCELLED]}
+        ruleFingerprint: {type: string, pattern: '^[0-9a-f]{64}$'}
+    TrainingPolicyCommand:
+      type: object
+      additionalProperties: false
+      required: [targetId, qualification, validation, training, expectedRevision]
+      properties:
+        targetId: {type: string, format: uuid}
+        qualification: {$ref: '#/components/schemas/JsonObject'}
+        validation: {$ref: '#/components/schemas/JsonObject'}
+        training: {$ref: '#/components/schemas/JsonObject'}
+        expectedRevision: {type: integer, minimum: 0}
+    MaterialAliasCommand:
+      type: object
+      additionalProperties: false
+      required: [materialId, alias]
+      properties:
+        materialId: {type: string, format: uuid}
+        alias: {type: string, minLength: 1, maxLength: 240}
+        expectedRevision: {type: [integer, 'null'], minimum: 0}
+    MaterialDictionaryItem:
+      type: object
+      additionalProperties: false
+      required: [materialId, role, ordinal, token]
+      properties:
+        materialId: {type: string, format: uuid}
+        role: {type: string, minLength: 1}
+        ordinal: {type: integer, minimum: 0}
+        token: {type: string, minLength: 1}
+    MaterialDictionaryCommand:
+      type: object
+      additionalProperties: false
+      required: [code, items, encoder]
+      properties:
+        code: {type: string, minLength: 1, maxLength: 160}
+        items: {type: array, minItems: 1, items: {$ref: '#/components/schemas/MaterialDictionaryItem'}}
+        encoder: {$ref: '#/components/schemas/JsonObject'}
+        expectedRevision: {type: [integer, 'null'], minimum: 0}
+    TargetVersion:
+      type: object
+      additionalProperties: false
+      required: [id, targetId, version, status, valueType, classes, definition, observationSemantics, configHash, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        targetId: {type: string, format: uuid}
+        version: {type: integer, minimum: 1}
+        status: {enum: [DRAFT, PUBLISHED, RETIRED]}
+        valueType: {enum: [CONTINUOUS, ORDINAL, BINARY, CATEGORICAL]}
+        unit: {type: [string, 'null']}
+        classes: {type: array, items: {type: string}}
+        definition: {$ref: '#/components/schemas/JsonObject'}
+        observationSemantics: {$ref: '#/components/schemas/JsonObject'}
+        configHash: {type: string, pattern: '^[0-9a-f]{64}$'}
+        resultStandardFieldDictionaryId: {type: [string, 'null'], format: uuid}
+        catalogProposalId: {type: [string, 'null'], format: uuid}
+        publishedAt: {type: [string, 'null'], format: date-time}
+        createdAt: {type: string, format: date-time}
+    InputFieldVersion:
+      type: object
+      additionalProperties: false
+      required: [id, inputFieldId, version, status, valueType, availabilityStage, definition, preprocessing, configHash, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        inputFieldId: {type: string, format: uuid}
+        version: {type: integer, minimum: 1}
+        status: {enum: [DRAFT, PUBLISHED, RETIRED]}
+        valueType: {enum: [NUMBER, STRING, BOOLEAN, CATEGORY, COMPOSITION]}
+        unit: {type: [string, 'null']}
+        availabilityStage: {enum: [PRE_EXPERIMENT, POST_EXPERIMENT]}
+        standardFieldDictionaryId: {type: [string, 'null'], format: uuid}
+        standardFieldCode: {type: [string, 'null']}
+        definition: {$ref: '#/components/schemas/JsonObject'}
+        preprocessing: {$ref: '#/components/schemas/JsonObject'}
+        configHash: {type: string, pattern: '^[0-9a-f]{64}$'}
+        publishedAt: {type: [string, 'null'], format: date-time}
+        createdAt: {type: string, format: date-time}
+    SourceMapping:
+      type: object
+      additionalProperties: false
+      required: [id, targetId, targetVersionId, sourceType, version, status, mapping, mappingHash, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        targetId: {type: string, format: uuid}
+        targetVersionId: {type: string, format: uuid}
+        sourceType: {enum: [DATA_CENTER, EXPERIMENT]}
+        version: {type: integer, minimum: 1}
+        status: {enum: [DRAFT, PUBLISHED, RETIRED]}
+        mapping: {$ref: '#/components/schemas/JsonObject'}
+        mappingHash: {type: string, pattern: '^[0-9a-f]{64}$'}
+        publishedAt: {type: [string, 'null'], format: date-time}
+        createdAt: {type: string, format: date-time}
+    InputSchemeField:
+      type: object
+      additionalProperties: false
+      required: [inputFieldVersionId, required, ordinal, override]
+      properties:
+        inputFieldVersionId: {type: string, format: uuid}
+        fieldCode: {type: [string, 'null']}
+        fieldName: {type: [string, 'null']}
+        valueType: {type: [string, 'null']}
+        unit: {type: [string, 'null']}
+        availabilityStage: {type: [string, 'null']}
+        required: {type: boolean}
+        ordinal: {type: integer, minimum: 0}
+        override: {$ref: '#/components/schemas/JsonObject'}
+    InputScheme:
+      type: object
+      additionalProperties: false
+      required: [id, targetId, targetVersionId, code, name, version, status, fields, preprocessing, configHash, revision, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        targetId: {type: string, format: uuid}
+        targetVersionId: {type: string, format: uuid}
+        materialDictionaryVersionId: {type: [string, 'null'], format: uuid}
+        materialDictionaryCode: {type: [string, 'null']}
+        code: {type: string}
+        name: {type: string}
+        version: {type: integer, minimum: 1}
+        status: {enum: [DRAFT, FROZEN, RETIRED]}
+        fields: {type: array, items: {$ref: '#/components/schemas/InputSchemeField'}}
+        preprocessing: {$ref: '#/components/schemas/JsonObject'}
+        configHash: {type: string, pattern: '^[0-9a-f]{64}$'}
+        revision: {type: integer, minimum: 0}
+        frozenAt: {type: [string, 'null'], format: date-time}
+        createdAt: {type: string, format: date-time}
+    FreezeResult:
+      type: object
+      additionalProperties: false
+      required: [id, status, recomputeStatus, currentInputSchemeId, targetRevision]
+      properties:
+        id: {type: string, format: uuid}
+        status: {const: FROZEN}
+        recomputeStatus: {const: DEFERRED}
+        currentInputSchemeId: {type: string, format: uuid}
+        targetRevision: {type: integer, minimum: 0}
+    TrainingPolicy:
+      type: object
+      additionalProperties: false
+      required: [id, targetId, version, status, qualification, validation, training, policyHash, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        targetId: {type: string, format: uuid}
+        version: {type: integer, minimum: 1}
+        status: {enum: [DRAFT, PUBLISHED, RETIRED]}
+        qualification: {$ref: '#/components/schemas/JsonObject'}
+        validation: {$ref: '#/components/schemas/JsonObject'}
+        training: {$ref: '#/components/schemas/JsonObject'}
+        policyHash: {type: string, pattern: '^[0-9a-f]{64}$'}
+        publishedAt: {type: [string, 'null'], format: date-time}
+        createdAt: {type: string, format: date-time}
+    TrainingSettings:
+      type: object
+      additionalProperties: false
+      required: [autoLearningEnabled, revision]
+      properties:
+        autoLearningEnabled: {type: boolean}
+        lastEvaluatedAt: {type: [string, 'null'], format: date-time}
+        revision: {type: integer, minimum: 0}
+        updatedAt: {type: [string, 'null'], format: date-time}
+    UpdateTrainingSettings:
+      type: object
+      additionalProperties: false
+      required: [autoLearningEnabled, expectedRevision]
+      properties:
+        autoLearningEnabled: {type: boolean}
+        expectedRevision: {type: integer, minimum: 0}
+    TargetTrainingEvaluation:
+      type: object
+      additionalProperties: false
+      required: [targetId, targetName, result]
+      properties:
+        targetId: {type: string, format: uuid}
+        targetName: {type: string}
+        result: {enum: [QUEUED, EXISTING, BLOCKED]}
+        code: {type: [string, 'null']}
+        trainingJobId: {type: [string, 'null'], format: uuid}
+        snapshotId: {type: [string, 'null'], format: uuid}
+    TrainingEvaluationResult:
+      type: object
+      additionalProperties: false
+      required: [targetsChecked, jobsCreated, blocked, targets]
+      properties:
+        targetsChecked: {type: integer, minimum: 0}
+        jobsCreated: {type: integer, minimum: 0}
+        blocked: {type: integer, minimum: 0}
+        targets: {type: array, items: {$ref: '#/components/schemas/TargetTrainingEvaluation'}}
+    TrainingJobSummary:
+      type: object
+      additionalProperties: false
+      required: [id, targetId, targetName, valueType, status, stage, progress, attemptCount, maxAttempts, snapshotId, createdAt, revision]
+      properties:
+        id: {type: string, format: uuid}
+        targetId: {type: string, format: uuid}
+        targetName: {type: string}
+        category: {type: [string, 'null']}
+        valueType: {enum: [CONTINUOUS, ORDINAL, BINARY, CATEGORICAL]}
+        status: {enum: [QUEUED, MATERIALIZING, SNAPSHOT_VALIDATING, FOLDING, TRAINING, VALIDATING, SUCCEEDED, FAILED, CANCELLED]}
+        stage: {type: string}
+        progress: {type: integer, minimum: 0, maximum: 100}
+        attemptCount: {type: integer, minimum: 0}
+        maxAttempts: {type: integer, minimum: 1}
+        snapshotId: {type: string, format: uuid}
+        candidateModelId: {type: [string, 'null'], format: uuid}
+        errorCode: {type: [string, 'null']}
+        errorMessage: {type: [string, 'null']}
+        createdAt: {type: string, format: date-time}
+        startedAt: {type: [string, 'null'], format: date-time}
+        finishedAt: {type: [string, 'null'], format: date-time}
+        revision: {type: integer, minimum: 0}
+    TrainingAttempt:
+      type: object
+      additionalProperties: false
+      required: [id, attemptNo, status, stage, progress, artifacts]
+      properties:
+        id: {type: string, format: uuid}
+        attemptNo: {type: integer, minimum: 1}
+        status: {enum: [RUNNING, SUCCEEDED, FAILED, INTERRUPTED, CANCELLED, STALE]}
+        stage: {type: string}
+        progress: {type: integer, minimum: 0, maximum: 100}
+        workerId: {type: [string, 'null']}
+        startedAt: {type: [string, 'null'], format: date-time}
+        heartbeatAt: {type: [string, 'null'], format: date-time}
+        finishedAt: {type: [string, 'null'], format: date-time}
+        errorCode: {type: [string, 'null']}
+        errorMessage: {type: [string, 'null']}
+        artifacts: {$ref: '#/components/schemas/JsonObject'}
+    TrainingSnapshotSummary:
+      type: object
+      additionalProperties: false
+      required: [id, targetId, targetVersionId, inputSchemeId, eligibilityRunId, sampleCount, dataNature, snapshotHash, businessFingerprint, frozenAt]
+      properties:
+        id: {type: string, format: uuid}
+        targetId: {type: string, format: uuid}
+        targetVersionId: {type: string, format: uuid}
+        inputSchemeId: {type: string, format: uuid}
+        eligibilityRunId: {type: string, format: uuid}
+        sampleCount: {type: integer, minimum: 0}
+        dataNature: {enum: [REAL, SYNTHETIC]}
+        snapshotHash: {type: string, pattern: '^[0-9a-f]{64}$'}
+        businessFingerprint: {type: string, pattern: '^[0-9a-f]{64}$'}
+        frozenAt: {type: string, format: date-time}
+    TrainingJobDetail:
+      type: object
+      additionalProperties: false
+      required: [job, snapshot, attempts, policy, frozenConfiguration]
+      properties:
+        job: {$ref: '#/components/schemas/TrainingJobSummary'}
+        snapshot: {$ref: '#/components/schemas/TrainingSnapshotSummary'}
+        attempts: {type: array, items: {$ref: '#/components/schemas/TrainingAttempt'}}
+        policy: {$ref: '#/components/schemas/JsonObject'}
+        frozenConfiguration: {$ref: '#/components/schemas/JsonObject'}
+    TrainingSnapshot:
+      type: object
+      additionalProperties: false
+      required: [summary, targetDefinition, inputScheme, materialDictionary, sourceMappings, preprocessing, trainingPolicy, authorizationScope, validationGroups, manifest]
+      properties:
+        summary: {$ref: '#/components/schemas/TrainingSnapshotSummary'}
+        targetDefinition: {$ref: '#/components/schemas/JsonObject'}
+        inputScheme: {$ref: '#/components/schemas/JsonObject'}
+        materialDictionary: {$ref: '#/components/schemas/JsonObject'}
+        sourceMappings: {type: array, items: {$ref: '#/components/schemas/JsonObject'}}
+        preprocessing: {$ref: '#/components/schemas/JsonObject'}
+        trainingPolicy: {$ref: '#/components/schemas/JsonObject'}
+        authorizationScope: {$ref: '#/components/schemas/JsonObject'}
+        validationGroups: {$ref: '#/components/schemas/JsonObject'}
+        manifest: {$ref: '#/components/schemas/JsonObject'}
+    TrainingSnapshotItem:
+      type: object
+      additionalProperties: false
+      required: [sampleRevisionId, trainingSampleId, ordinal, splitGroup, rowHash, row, observationIds, replicateGroupKeys, sourceReferences, validationGroups]
+      properties:
+        sampleRevisionId: {type: string, format: uuid}
+        trainingSampleId: {type: string, format: uuid}
+        ordinal: {type: integer, minimum: 0}
+        splitGroup: {type: string}
+        rowHash: {type: string, pattern: '^[0-9a-f]{64}$'}
+        row: {$ref: '#/components/schemas/JsonObject'}
+        observationIds: {type: array, items: {type: string}}
+        replicateGroupKeys: {type: array, items: {type: string}}
+        sourceReferences: {$ref: '#/components/schemas/JsonObject'}
+        validationGroups: {$ref: '#/components/schemas/JsonObject'}
+    ModelVersion:
+      type: object
+      additionalProperties: false
+      required: [id, targetId, targetName, valueType, version, status, modelType, dataNature, productionEligible, comparisonStatus, metrics, trainableSamples, trainingJobId, createdAt, updatedAt, revision]
+      properties:
+        id: {type: string, format: uuid}
+        targetId: {type: string, format: uuid}
+        targetName: {type: string}
+        category: {type: [string, 'null']}
+        valueType: {enum: [CONTINUOUS, ORDINAL, BINARY, CATEGORICAL]}
+        version: {type: integer, minimum: 1}
+        status: {enum: [CANDIDATE, ACTIVE, PAUSED, RETIRED, REJECTED]}
+        modelType: {type: string}
+        dataNature: {enum: [REAL, SYNTHETIC]}
+        productionEligible: {type: boolean}
+        comparisonStatus: {enum: [BETTER, WORSE, EQUIVALENT, NOT_COMPARABLE]}
+        metrics: {$ref: '#/components/schemas/JsonObject'}
+        trainableSamples: {type: integer, minimum: 0}
+        trainingJobId: {type: string, format: uuid}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+        revision: {type: integer, minimum: 0}
+    ModelRelease:
+      type: object
+      additionalProperties: false
+      required: [id, action, modelVersionId, reason, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        action: {enum: [ACTIVATE, PAUSE, ROLLBACK, REPLACE]}
+        modelVersionId: {type: string, format: uuid}
+        previousModelVersionId: {type: [string, 'null'], format: uuid}
+        reason: {type: string}
+        createdAt: {type: string, format: date-time}
+    ModelDetail:
+      type: object
+      additionalProperties: false
+      required: [model, snapshot, applicabilityDomain, modelCard, rejectionReasons, releases]
+      properties:
+        model: {$ref: '#/components/schemas/ModelVersion'}
+        snapshot: {$ref: '#/components/schemas/TrainingSnapshotSummary'}
+        applicabilityDomain: {$ref: '#/components/schemas/JsonObject'}
+        modelCard: {$ref: '#/components/schemas/JsonObject'}
+        rejectionReasons: {type: array, items: {type: string}}
+        releases: {type: array, items: {$ref: '#/components/schemas/ModelRelease'}}
+    ModelComparison:
+      type: object
+      additionalProperties: false
+      required: [candidateId, status, sameComparisonSet, candidateMetrics, activeMetrics, baselineMetrics, reasons]
+      properties:
+        candidateId: {type: string, format: uuid}
+        activeModelId: {type: [string, 'null'], format: uuid}
+        status: {enum: [BETTER, WORSE, EQUIVALENT, NOT_COMPARABLE]}
+        sameComparisonSet: {type: boolean}
+        candidateMetrics: {$ref: '#/components/schemas/JsonObject'}
+        activeMetrics: {$ref: '#/components/schemas/JsonObject'}
+        baselineMetrics: {$ref: '#/components/schemas/JsonObject'}
+        reasons: {type: array, items: {type: string}}
+    ModelActionCommand:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision, reason]
+      properties:
+        expectedRevision: {type: integer, minimum: 0}
+        expectedActiveModelVersionId: {type: [string, 'null'], format: uuid}
+        reason: {type: string, minLength: 1, maxLength: 300}
+    ModelActionResult:
+      type: object
+      additionalProperties: false
+      required: [modelVersionId, status, revision, changedAt]
+      properties:
+        modelVersionId: {type: string, format: uuid}
+        status: {enum: [ACTIVE, PAUSED]}
+        activeModelVersionId: {type: [string, 'null'], format: uuid}
+        revision: {type: integer, minimum: 0}
+        changedAt: {type: string, format: date-time}
+    RetryTrainingCommand:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision]
+      properties: {expectedRevision: {type: integer, minimum: 0}}
+    CancelTrainingCommand:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision, reason]
+      properties:
+        expectedRevision: {type: integer, minimum: 0}
+        reason: {type: string, minLength: 1, maxLength: 300}
+    TrainingJobActionResult:
+      type: object
+      additionalProperties: false
+      required: [jobId, status, attemptCount, revision]
+      properties:
+        jobId: {type: string, format: uuid}
+        status: {enum: [QUEUED, CANCELLED]}
+        asyncJobId: {type: [string, 'null'], format: uuid}
+        attemptCount: {type: integer, minimum: 0}
+        revision: {type: integer, minimum: 0}
+    StandardFieldReference:
+      type: object
+      additionalProperties: false
+      required: [id, code, version, name, valueType]
+      properties:
+        id: {type: string, format: uuid}
+        code: {type: string}
+        version: {type: integer, minimum: 1}
+        name: {type: string}
+        valueType: {type: string}
+        unit: {type: [string, 'null']}
+        groupCode: {type: [string, 'null']}
+    MaterialReference:
+      type: object
+      additionalProperties: false
+      required: [id, code, name, status]
+      properties:
+        id: {type: string, format: uuid}
+        code: {type: string}
+        name: {type: string}
+        category: {type: [string, 'null']}
+        status: {type: string}
+    MaterialAlias:
+      type: object
+      additionalProperties: false
+      required: [id, materialId, materialCode, materialName, alias, normalizedAlias, status, revision, updatedAt]
+      properties:
+        id: {type: string, format: uuid}
+        materialId: {type: string, format: uuid}
+        materialCode: {type: string}
+        materialName: {type: string}
+        alias: {type: string}
+        normalizedAlias: {type: string}
+        status: {enum: [ACTIVE, RETIRED]}
+        revision: {type: integer, minimum: 0}
+        updatedAt: {type: string, format: date-time}
+    MaterialDictionary:
+      type: object
+      additionalProperties: false
+      required: [id, code, version, status, items, encoder, dictionaryHash, revision, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        code: {type: string}
+        version: {type: integer, minimum: 1}
+        status: {enum: [DRAFT, FROZEN, RETIRED]}
+        items: {type: array, items: {$ref: '#/components/schemas/MaterialDictionaryItem'}}
+        encoder: {$ref: '#/components/schemas/JsonObject'}
+        dictionaryHash: {type: string, pattern: '^[0-9a-f]{64}$'}
+        revision: {type: integer, minimum: 0}
+        frozenAt: {type: [string, 'null'], format: date-time}
+        createdAt: {type: string, format: date-time}
+    TargetPage:
+      type: object
+      required: [items, page, size, total, totalPages]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/TargetSummary'}}
+        page: {type: integer, minimum: 1}
+        size: {type: integer, minimum: 1, maximum: 100}
+        total: {type: integer, minimum: 0}
+        totalPages: {type: integer, minimum: 0}
+    InputFieldPage:
+      type: object
+      required: [items, page, size, total, totalPages]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/InputFieldSummary'}}
+        page: {type: integer, minimum: 1}
+        size: {type: integer, minimum: 1, maximum: 100}
+        total: {type: integer, minimum: 0}
+        totalPages: {type: integer, minimum: 0}
+    ResponseMetadata:
+      type: object
+      required: [code, message, traceId, timestamp]
+      properties:
+        code: {type: string}
+        message: {type: string}
+        traceId: {type: string}
+        timestamp: {type: string, format: date-time}
+    TargetResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/TargetSummary'}}}]}
+    TargetPageResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/TargetPage'}}}]}
+    TargetVersionResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/TargetVersion'}}}]}
+    TargetVersionListResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {type: array, items: {$ref: '#/components/schemas/TargetVersion'}}}}]}
+    InputFieldResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/InputFieldSummary'}}}]}
+    InputFieldPageResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/InputFieldPage'}}}]}
+    InputFieldVersionResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/InputFieldVersion'}}}]}
+    InputFieldVersionListResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {type: array, items: {$ref: '#/components/schemas/InputFieldVersion'}}}}]}
+    SourceMappingResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/SourceMapping'}}}]}
+    SourceMappingListResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {type: array, items: {$ref: '#/components/schemas/SourceMapping'}}}}]}
+    InputSchemeResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/InputScheme'}}}]}
+    InputSchemeListResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {type: array, items: {$ref: '#/components/schemas/InputScheme'}}}}]}
+    CoveragePreviewResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/CoveragePreview'}}}]}
+    EligibilitySummaryResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/EligibilitySummary'}}}]}
+    EligibilityPageResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {type: object, required: [items, page, size, total, totalPages], properties: {items: {type: array, items: {$ref: '#/components/schemas/EligibilityItem'}}, page: {type: integer}, size: {type: integer}, total: {type: integer}, totalPages: {type: integer}}}}}]}
+    EligibilityDetailResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/EligibilityDetail'}}}]}
+    RecomputeAcceptedResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/RecomputeAccepted'}}}]}
+    ReviewDecisionResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/JsonObject'}}}]}
+    FreezeResultResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/FreezeResult'}}}]}
+    TrainingPolicyResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/TrainingPolicy'}}}]}
+    TrainingPolicyListResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {type: array, items: {$ref: '#/components/schemas/TrainingPolicy'}}}}]}
+    StandardFieldListResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {type: array, items: {$ref: '#/components/schemas/StandardFieldReference'}}}}]}
+    MaterialReferenceListResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {type: array, items: {$ref: '#/components/schemas/MaterialReference'}}}}]}
+    MaterialAliasResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/MaterialAlias'}}}]}
+    MaterialAliasListResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {type: array, items: {$ref: '#/components/schemas/MaterialAlias'}}}}]}
+    MaterialDictionaryResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/MaterialDictionary'}}}]}
+    MaterialDictionaryListResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {type: array, items: {$ref: '#/components/schemas/MaterialDictionary'}}}}]}
+    TrainingSettingsResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/TrainingSettings'}}}]}
+    TrainingEvaluationResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/TrainingEvaluationResult'}}}]}
+    TrainingJobPage:
+      type: object
+      required: [items, page, size, total, totalPages]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/TrainingJobSummary'}}
+        page: {type: integer, minimum: 1}
+        size: {type: integer, minimum: 1, maximum: 100}
+        total: {type: integer, minimum: 0}
+        totalPages: {type: integer, minimum: 0}
+    TrainingJobPageResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/TrainingJobPage'}}}]}
+    TrainingJobDetailResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/TrainingJobDetail'}}}]}
+    TrainingJobActionResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/TrainingJobActionResult'}}}]}
+    TrainingSnapshotResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/TrainingSnapshot'}}}]}
+    TrainingSnapshotItemsResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {type: array, items: {$ref: '#/components/schemas/TrainingSnapshotItem'}}}}]}
+    ModelPage:
+      type: object
+      required: [items, page, size, total, totalPages]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/ModelVersion'}}
+        page: {type: integer, minimum: 1}
+        size: {type: integer, minimum: 1, maximum: 100}
+        total: {type: integer, minimum: 0}
+        totalPages: {type: integer, minimum: 0}
+    ModelPageResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/ModelPage'}}}]}
+    ModelDetailResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/ModelDetail'}}}]}
+    ModelComparisonResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/ModelComparison'}}}]}
+    ModelActionResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/ModelActionResult'}}}]}
+    Error:
+      type: object
+      additionalProperties: false
+      required: [code, message, requestId]
+      properties:
+        code: {type: string}
+        message: {type: string}
+        requestId: {type: string}
+        detail: {$ref: '#/components/schemas/JsonObject'}
+    PredictionRequest:
+      type: object
+      additionalProperties: false
+      required: [inputs, targets]
+      properties:
+        formula: {$ref: '#/components/schemas/PredictionFormula'}
+        inputs: {$ref: '#/components/schemas/JsonObject'}
+        targets: {type: array, minItems: 1, uniqueItems: true, items: {$ref: '#/components/schemas/PredictionTargetBinding'}}
+    PredictionFormula:
+      type: object
+      additionalProperties: false
+      required: [basis, compositionComplete, components]
+      properties:
+        basis: {enum: [MASS_PERCENT, MASS_PART, ABSOLUTE_MASS]}
+        compositionComplete: {type: boolean}
+        recordedTotal: {type: [number, 'null'], minimum: 0}
+        components:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [materialId, unit, amountKnown]
+            properties:
+              materialId: {type: string, format: uuid}
+              ratio: {type: [number, 'null'], minimum: 0}
+              unit: {type: string, minLength: 1}
+              amountKnown: {type: boolean}
+    PredictionTargetBinding:
+      type: object
+      additionalProperties: false
+      required: [targetId]
+      properties:
+        targetId: {type: string, format: uuid}
+        expectedModelVersionId: {type: [string, 'null'], format: uuid}
+    TypedPrediction:
+      oneOf:
+        - $ref: '#/components/schemas/ContinuousPrediction'
+        - $ref: '#/components/schemas/OrdinalPrediction'
+        - $ref: '#/components/schemas/BinaryPrediction'
+        - $ref: '#/components/schemas/CategoricalPrediction'
+      discriminator: {propertyName: resultType}
+    ContinuousPrediction:
+      type: object
+      additionalProperties: false
+      required: [resultType, value]
+      properties:
+        resultType: {const: CONTINUOUS}
+        value: {type: number}
+        unit: {type: [string, 'null']}
+        interval:
+          type: [object, 'null']
+          properties:
+            lower: {type: number}
+            upper: {type: number}
+            coverageLevel: {type: number, exclusiveMinimum: 0, exclusiveMaximum: 1}
+    OrdinalPrediction:
+      type: object
+      additionalProperties: false
+      required: [resultType, label, probabilities]
+      properties:
+        resultType: {const: ORDINAL}
+        label: {type: string}
+        probabilities: {type: object, additionalProperties: {type: number, minimum: 0, maximum: 1}}
+        thresholdProbability: {type: [number, 'null'], minimum: 0, maximum: 1}
+    BinaryPrediction:
+      type: object
+      additionalProperties: false
+      required: [resultType, label, positiveClass, probability, decisionThreshold]
+      properties:
+        resultType: {const: BINARY}
+        label: {type: string}
+        positiveClass: {type: string}
+        probability: {type: number, minimum: 0, maximum: 1}
+        decisionThreshold: {type: number, exclusiveMinimum: 0, exclusiveMaximum: 1}
+    CategoricalPrediction:
+      type: object
+      additionalProperties: false
+      required: [resultType, label, probabilities]
+      properties:
+        resultType: {const: CATEGORICAL}
+        label: {type: string}
+        probabilities: {type: object, additionalProperties: {type: number, minimum: 0, maximum: 1}}
+    TargetResult:
+      oneOf:
+        - $ref: '#/components/schemas/TargetSuccess'
+        - $ref: '#/components/schemas/TargetBlocked'
+        - $ref: '#/components/schemas/TargetFailed'
+      discriminator: {propertyName: status}
+    TargetSuccess:
+      type: object
+      additionalProperties: false
+      required: [targetId, status, prediction, modelVersionId, targetVersionId, inputSchemeId, snapshotId]
+      properties:
+        targetId: {type: string, format: uuid}
+        status: {const: SUCCEEDED}
+        prediction: {$ref: '#/components/schemas/TypedPrediction'}
+        modelVersionId: {type: string, format: uuid}
+        targetVersionId: {type: string, format: uuid}
+        inputSchemeId: {type: string, format: uuid}
+        snapshotId: {type: string, format: uuid}
+    TargetBlocked:
+      type: object
+      additionalProperties: false
+      required: [targetId, status, errorCode, message]
+      properties:
+        targetId: {type: string, format: uuid}
+        status: {const: BLOCKED}
+        errorCode: {type: string}
+        message: {type: string}
+        detail: {$ref: '#/components/schemas/JsonObject'}
+    TargetFailed:
+      type: object
+      additionalProperties: false
+      required: [targetId, status, errorCode, message, detail]
+      properties:
+        targetId: {type: string, format: uuid}
+        status: {const: FAILED}
+        modelVersionId: {type: [string, 'null'], format: uuid}
+        errorCode: {type: string}
+        message: {type: string}
+        detail: {$ref: '#/components/schemas/JsonObject'}
+    PredictionResponse:
+      type: object
+      required: [requestId, predictionId, executionStatus, outcomeStatus, results]
+      properties:
+        requestId: {type: string}
+        predictionId: {type: string, format: uuid}
+        executionStatus: {enum: [SUCCEEDED, FAILED]}
+        outcomeStatus: {type: [string, 'null'], enum: [SUCCEEDED, PARTIAL, BLOCKED, null]}
+        results: {type: array, items: {$ref: '#/components/schemas/TargetResult'}}
+        warnings: {type: array, items: {$ref: '#/components/schemas/JsonObject'}}
+    PredictionRunning:
+      type: object
+      additionalProperties: false
+      required: [predictionRecordId, requestId, executionStatus, outcomeStatus, pollAfterMs]
+      properties:
+        predictionRecordId: {type: string, format: uuid}
+        requestId: {type: string}
+        executionStatus: {const: RUNNING}
+        outcomeStatus: {type: 'null'}
+        pollAfterMs: {type: integer, minimum: 100}
+    QualityRule:
+      type: object
+      additionalProperties: false
+      required: [code, priority, when, trustLevel, explanation]
+      properties:
+        code: {type: string, minLength: 1}
+        priority: {type: integer, minimum: 0}
+        when: {$ref: '#/components/schemas/JsonObject'}
+        trustLevel: {enum: [HIGH, MEDIUM, LOW]}
+        explanation: {type: string, minLength: 1}
+    QualityPolicyCommand:
+      type: object
+      additionalProperties: false
+      required: [defaultTrustLevel, defaultExplanation, rules, expectedRevision]
+      properties:
+        defaultTrustLevel: {enum: [HIGH, MEDIUM, LOW]}
+        defaultExplanation: {type: string, minLength: 1}
+        rules: {type: array, items: {$ref: '#/components/schemas/QualityRule'}}
+        expectedRevision: {type: integer, minimum: 0}
+    QualityPolicy:
+      type: object
+      additionalProperties: false
+      required: [id, targetId, version, status, kind, defaultTrustLevel, defaultExplanation, rules, policyHash, revision, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        targetId: {type: string, format: uuid}
+        version: {type: integer, minimum: 1}
+        status: {enum: [DRAFT, PUBLISHED, RETIRED]}
+        kind: {const: QUALITY}
+        defaultTrustLevel: {enum: [HIGH, MEDIUM, LOW]}
+        defaultExplanation: {type: string}
+        rules: {type: array, items: {$ref: '#/components/schemas/QualityRule'}}
+        policyHash: {type: string, pattern: '^[0-9a-f]{64}$'}
+        revision: {type: integer, minimum: 0}
+        publishedAt: {type: [string, 'null'], format: date-time}
+        createdAt: {type: string, format: date-time}
+    SampleSummary:
+      type: object
+      additionalProperties: false
+      required: [id, logicalSampleKey, identityVersion, status, revision, sourceCount, updatedAt]
+      properties:
+        id: {type: string, format: uuid}
+        logicalSampleKey: {type: string}
+        identityVersion: {type: integer, minimum: 1}
+        authoritySourceType: {type: [string, 'null'], enum: [DATA_CENTER, EXPERIMENT, null]}
+        status: {enum: [ACTIVE, SUSPENDED, INVALIDATED]}
+        takeoverExperimentId: {type: [string, 'null'], format: uuid}
+        takeoverExperimentVersionId: {type: [string, 'null'], format: uuid}
+        revision: {type: integer, minimum: 0}
+        sourceCount: {type: integer, minimum: 0}
+        updatedAt: {type: string, format: date-time}
+    SampleSource:
+      type: object
+      additionalProperties: false
+      required: [id, sourceType, sourceBusinessKey, sampleBoundaryId, logicalSampleKey, sourceGroupKeys, sourceVersion, sourceSequence, contentHash, status, createdAt, redacted]
+      properties:
+        id: {type: string, format: uuid}
+        sourceType: {enum: [DATA_CENTER, EXPERIMENT]}
+        sourceBusinessKey: {type: string}
+        sampleBoundaryId: {type: string}
+        logicalSampleKey: {type: string}
+        sourceGroupKeys: {type: array, minItems: 1, items: {type: string}}
+        sourceVersion: {type: string}
+        sourceSequence: {type: integer, minimum: 1}
+        contentHash: {type: string, pattern: '^[0-9a-f]{64}$'}
+        status: {enum: [CURRENT, SUPERSEDED, TAKEN_OVER, INVALIDATED]}
+        confirmedSubmissionItemId: {type: [string, 'null'], format: uuid}
+        experimentVersionId: {type: [string, 'null'], format: uuid}
+        recognitionJobId: {type: [string, 'null'], format: uuid}
+        experimentId: {type: [string, 'null'], format: uuid}
+        revisionId: {type: [string, 'null'], format: uuid}
+        composition: {oneOf: [{$ref: '#/components/schemas/JsonObject'}, {type: 'null'}]}
+        process: {oneOf: [{$ref: '#/components/schemas/JsonObject'}, {type: 'null'}]}
+        conditions: {oneOf: [{$ref: '#/components/schemas/JsonObject'}, {type: 'null'}]}
+        observations: {oneOf: [{$ref: '#/components/schemas/JsonObject'}, {type: 'null'}]}
+        facts: {oneOf: [{$ref: '#/components/schemas/JsonObject'}, {type: 'null'}]}
+        permissionScope: {oneOf: [{$ref: '#/components/schemas/JsonObject'}, {type: 'null'}]}
+        sourceCoordinates: {oneOf: [{$ref: '#/components/schemas/JsonObject'}, {type: 'null'}]}
+        factHash: {type: [string, 'null']}
+        createdAt: {type: string, format: date-time}
+        redacted: {type: boolean}
+    IdentityIssue:
+      type: object
+      additionalProperties: false
+      required: [id, issueType, status, evidence, revision, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        issueType: {type: string}
+        status: {enum: [OPEN, CONFIRMED_SAME, CONFIRMED_DISTINCT, DISMISSED]}
+        evidence: {$ref: '#/components/schemas/JsonObject'}
+        resolution: {oneOf: [{$ref: '#/components/schemas/JsonObject'}, {type: 'null'}]}
+        revision: {type: integer, minimum: 0}
+        createdAt: {type: string, format: date-time}
+        resolvedAt: {type: [string, 'null'], format: date-time}
+    SamplePage:
+      type: object
+      required: [items, page, size, total, totalPages]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/SampleSummary'}}
+        page: {type: integer, minimum: 1}
+        size: {type: integer, minimum: 1, maximum: 100}
+        total: {type: integer, minimum: 0}
+        totalPages: {type: integer, minimum: 0}
+    SampleDetail:
+      type: object
+      additionalProperties: false
+      required: [summary, sources, identityIssues]
+      properties:
+        summary: {$ref: '#/components/schemas/SampleSummary'}
+        sources: {type: array, items: {$ref: '#/components/schemas/SampleSource'}}
+        identityIssues: {type: array, items: {$ref: '#/components/schemas/IdentityIssue'}}
+    ReconcileResult:
+      type: object
+      additionalProperties: false
+      required: [projectedSubmissionItems, projectedExperimentSamples, scannedSources]
+      properties:
+        projectedSubmissionItems: {type: integer, minimum: 0}
+        projectedExperimentSamples: {type: integer, minimum: 0}
+        scannedSources: {type: integer, minimum: 0}
+    FormulaGoal:
+      type: object
+      additionalProperties: false
+      required: [targetId, valueType, operator, value, mandatory, weight]
+      properties:
+        targetId: {type: string, format: uuid}
+        valueType: {enum: [CONTINUOUS, ORDINAL, BINARY, CATEGORICAL]}
+        operator: {enum: [AT_LEAST, AT_MOST, RANGE, MATCH, MAXIMIZE, MINIMIZE]}
+        value: {}
+        mandatory: {type: boolean}
+        weight: {type: number, exclusiveMinimum: 0}
+        minimumProbability: {type: [number, 'null'], minimum: 0, maximum: 1}
+        expectedModelVersionId: {type: [string, 'null'], format: uuid}
+    FormulaDesignRequest:
+      type: object
+      additionalProperties: false
+      required: [typedGoals, targetTotal, formulaBasis, baselineFormula, fixedInputs, searchSpace, constraints, candidateCount]
+      properties:
+        typedGoals: {type: array, minItems: 1, items: {$ref: '#/components/schemas/FormulaGoal'}}
+        targetTotal: {type: number, exclusiveMinimum: 0}
+        formulaBasis: {enum: [MASS_PERCENT]}
+        baselineFormula: {$ref: '#/components/schemas/PredictionFormula'}
+        fixedInputs: {$ref: '#/components/schemas/JsonObject'}
+        searchSpace: {$ref: '#/components/schemas/JsonObject'}
+        constraints: {$ref: '#/components/schemas/JsonObject'}
+        candidateCount: {type: integer, minimum: 1, maximum: 16, default: 4}
+    FormulaDesignAccepted:
+      type: object
+      additionalProperties: false
+      required: [runId, asyncJobId, executionStatus, modelBindings, pollAfterMs]
+      properties:
+        runId: {type: string, format: uuid}
+        asyncJobId: {type: string, format: uuid}
+        executionStatus: {enum: [QUEUED, RUNNING]}
+        modelBindings: {type: object, additionalProperties: {type: string, format: uuid}}
+        pollAfterMs: {type: integer, minimum: 100}
+    OptimizationBaselineRef:
+      type: object
+      additionalProperties: false
+      required: [type, id, versionId]
+      properties:
+        type: {enum: [EXPERIMENT_VERSION, DATA_SAMPLE_REVISION, RESEARCH_CANDIDATE]}
+        id: {type: string, format: uuid}
+        versionId: {type: string, format: uuid}
+        contentHash: {type: [string, 'null'], pattern: '^[0-9a-f]{64}$'}
+    OptimizationVariable:
+      type: object
+      additionalProperties: true
+      required: [minimum, maximum]
+      properties:
+        materialId: {type: [string, 'null'], format: uuid}
+        code: {type: [string, 'null']}
+        minimum: {type: number}
+        maximum: {type: number}
+        step: {type: [number, 'null'], exclusiveMinimum: 0}
+    OptimizationRequest:
+      type: object
+      additionalProperties: false
+      required: [baselineRef, typedGoals, targetTotal, variableMaterials, variableInputs, constraints]
+      properties:
+        baselineRef: {$ref: '#/components/schemas/OptimizationBaselineRef'}
+        typedGoals: {type: array, minItems: 1, items: {$ref: '#/components/schemas/FormulaGoal'}}
+        targetTotal: {type: number, exclusiveMinimum: 0}
+        variableMaterials: {type: array, items: {$ref: '#/components/schemas/OptimizationVariable'}}
+        variableInputs: {type: array, items: {$ref: '#/components/schemas/OptimizationVariable'}}
+        constraints: {$ref: '#/components/schemas/JsonObject'}
+        candidateCount: {const: 4}
+    ExperimentDraftCommand:
+      type: object
+      additionalProperties: false
+      required: [candidateIds, categoryId, plannedExperimentDate]
+      properties:
+        candidateIds: {type: array, minItems: 1, maxItems: 4, uniqueItems: true, items: {type: string, format: uuid}}
+        categoryId: {type: string, format: uuid}
+        plannedExperimentDate: {type: string, format: date}
+        projectId: {type: [string, 'null'], format: uuid}
+        stageId: {type: [string, 'null'], format: uuid}
+        taskId: {type: [string, 'null'], format: uuid}
+        ownerName: {type: [string, 'null'], maxLength: 100}
+    ResearchCandidate:
+      type: object
+      additionalProperties: false
+      required: [id, candidateNo, title, formula, targetResults, quality, applicability, ruleCheck, score]
+      properties:
+        id: {type: string, format: uuid}
+        candidateNo: {type: integer, minimum: 1}
+        title: {type: string}
+        formula: {$ref: '#/components/schemas/PredictionFormula'}
+        targetResults: {$ref: '#/components/schemas/JsonObject'}
+        quality: {$ref: '#/components/schemas/JsonObject'}
+        applicability: {$ref: '#/components/schemas/JsonObject'}
+        ruleCheck: {$ref: '#/components/schemas/JsonObject'}
+        score: {type: number}
+    ResearchRun:
+      type: object
+      additionalProperties: false
+      required: [id, runType, executionStatus, outcomeStatus, progress, requestedCandidateCount, actualCandidateCount, candidates, modelBindings, requestId]
+      properties:
+        id: {type: string, format: uuid}
+        runType: {const: FORMULA_PREDICTION}
+        executionStatus: {enum: [QUEUED, RUNNING, SUCCEEDED, FAILED, CANCELLED]}
+        outcomeStatus: {type: [string, 'null'], enum: [SUCCEEDED, PARTIAL, BLOCKED, null]}
+        progress: {type: integer, minimum: 0, maximum: 100}
+        currentStage: {type: [string, 'null']}
+        requestedCandidateCount: {type: integer, minimum: 1}
+        actualCandidateCount: {type: integer, minimum: 0}
+        candidates: {type: array, items: {$ref: '#/components/schemas/ResearchCandidate'}}
+        shortfallReason: {type: [string, 'null']}
+        modelBindings: {type: object, additionalProperties: {type: string, format: uuid}}
+        frozenEvidence: {$ref: '#/components/schemas/JsonObject'}
+        requestId: {type: string}
+        updatedAt: {type: [string, 'null'], format: date-time}
+    ResearchPage:
+      type: object
+      additionalProperties: false
+      required: [items, total, page, size]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/ResearchRun'}}
+        total: {type: integer, minimum: 0}
+        page: {type: integer, minimum: 0}
+        size: {type: integer, minimum: 1, maximum: 100}
+    SamplePageResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/SamplePage'}}}]}
+    SampleDetailResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/SampleDetail'}}}]}
+    ReconcileResultResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/ReconcileResult'}}}]}
+    FormulaDesignAcceptedResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/FormulaDesignAccepted'}}}]}
+    ResearchPageResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/ResearchPage'}}}]}
+    ResearchRunResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/ResearchRun'}}}]}
+  x-operation-templates:
+    readPage: &readPage {operationId: templateReadPage, tags: [Modeling], x-permission: ai.modeling.read, parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/Page'}, {$ref: '#/components/parameters/Size'}], responses: {'200': {$ref: '#/components/responses/Page'}, '403': {$ref: '#/components/responses/Forbidden'}}}
+    readOne: &readOne {operationId: templateReadOne, tags: [Modeling], x-permission: ai.modeling.read, parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/Id'}], responses: {'200': {$ref: '#/components/responses/Ok'}, '403': {$ref: '#/components/responses/Forbidden'}, '404': {$ref: '#/components/responses/NotFound'}}}
+    modelWrite: &modelWrite {operationId: templateModelWrite, tags: [Modeling], x-permission: ai.modeling.manage, parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/JsonObject'}}}}, responses: {'200': {$ref: '#/components/responses/Ok'}, '400': {$ref: '#/components/responses/BadRequest'}, '403': {$ref: '#/components/responses/Forbidden'}, '409': {$ref: '#/components/responses/Conflict'}, '422': {$ref: '#/components/responses/Blocked'}}}
+  responses:
+    Ok: {description: Success, content: {application/json: {schema: {$ref: '#/components/schemas/JsonObject'}}}}
+    Page: {description: Stable page ordered by updatedAt and id, content: {application/json: {schema: {$ref: '#/components/schemas/Page'}}}}
+    Target: {description: Prediction target, content: {application/json: {schema: {$ref: '#/components/schemas/TargetResponse'}}}}
+    TargetPage: {description: Stable target page, content: {application/json: {schema: {$ref: '#/components/schemas/TargetPageResponse'}}}}
+    TargetVersion: {description: Target definition version, content: {application/json: {schema: {$ref: '#/components/schemas/TargetVersionResponse'}}}}
+    TargetVersionList: {description: Target definition version history, content: {application/json: {schema: {$ref: '#/components/schemas/TargetVersionListResponse'}}}}
+    InputField: {description: Input field, content: {application/json: {schema: {$ref: '#/components/schemas/InputFieldResponse'}}}}
+    InputFieldPage: {description: Stable input field page, content: {application/json: {schema: {$ref: '#/components/schemas/InputFieldPageResponse'}}}}
+    InputFieldVersion: {description: Input field version, content: {application/json: {schema: {$ref: '#/components/schemas/InputFieldVersionResponse'}}}}
+    InputFieldVersionList: {description: Input field version history, content: {application/json: {schema: {$ref: '#/components/schemas/InputFieldVersionListResponse'}}}}
+    SourceMapping: {description: Source mapping version, content: {application/json: {schema: {$ref: '#/components/schemas/SourceMappingResponse'}}}}
+    SourceMappingList: {description: Source mapping versions, content: {application/json: {schema: {$ref: '#/components/schemas/SourceMappingListResponse'}}}}
+    InputScheme: {description: Input scheme, content: {application/json: {schema: {$ref: '#/components/schemas/InputSchemeResponse'}}}}
+    InputSchemeList: {description: Input schemes, content: {application/json: {schema: {$ref: '#/components/schemas/InputSchemeListResponse'}}}}
+    CoveragePreview: {description: Configuration preview without sample counts before R04, content: {application/json: {schema: {$ref: '#/components/schemas/CoveragePreviewResponse'}}}}
+    EligibilitySummary: {description: Qualification summary and funnel, content: {application/json: {schema: {$ref: '#/components/schemas/EligibilitySummaryResponse'}}}}
+    EligibilityPage: {description: Stable qualification page, content: {application/json: {schema: {$ref: '#/components/schemas/EligibilityPageResponse'}}}}
+    EligibilityDetail: {description: Qualification detail and reviews, content: {application/json: {schema: {$ref: '#/components/schemas/EligibilityDetailResponse'}}}}
+    RecomputeAccepted: {description: Qualification recomputation queued, content: {application/json: {schema: {$ref: '#/components/schemas/RecomputeAcceptedResponse'}}}}
+    ReviewDecision: {description: Review decision result, content: {application/json: {schema: {$ref: '#/components/schemas/ReviewDecisionResponse'}}}}
+    FreezeResult: {description: Frozen scheme and deferred recompute state, content: {application/json: {schema: {$ref: '#/components/schemas/FreezeResultResponse'}}}}
+    TrainingPolicy: {description: Training policy version, content: {application/json: {schema: {$ref: '#/components/schemas/TrainingPolicyResponse'}}}}
+    TrainingPolicyList: {description: Training policy versions, content: {application/json: {schema: {$ref: '#/components/schemas/TrainingPolicyListResponse'}}}}
+    StandardFieldList: {description: Active standard field projection, content: {application/json: {schema: {$ref: '#/components/schemas/StandardFieldListResponse'}}}}
+    MaterialReferenceList: {description: Active MDM material projection, content: {application/json: {schema: {$ref: '#/components/schemas/MaterialReferenceListResponse'}}}}
+    MaterialAlias: {description: Material alias, content: {application/json: {schema: {$ref: '#/components/schemas/MaterialAliasResponse'}}}}
+    MaterialAliasList: {description: Material aliases, content: {application/json: {schema: {$ref: '#/components/schemas/MaterialAliasListResponse'}}}}
+    MaterialDictionary: {description: Material dictionary version, content: {application/json: {schema: {$ref: '#/components/schemas/MaterialDictionaryResponse'}}}}
+    MaterialDictionaryList: {description: Material dictionary versions, content: {application/json: {schema: {$ref: '#/components/schemas/MaterialDictionaryListResponse'}}}}
+    Bootstrap: {description: Idempotent UV/PU catalog bootstrap result, content: {application/json: {schema: {$ref: '#/components/schemas/BootstrapResponse'}}}}
+    TrainingSettings: {description: Organization training scheduler settings, content: {application/json: {schema: {$ref: '#/components/schemas/TrainingSettingsResponse'}}}}
+    TrainingEvaluation: {description: Per-target result of checking ready training configurations, content: {application/json: {schema: {$ref: '#/components/schemas/TrainingEvaluationResponse'}}}}
+    TrainingJobPage: {description: Stable training job page, content: {application/json: {schema: {$ref: '#/components/schemas/TrainingJobPageResponse'}}}}
+    TrainingJobDetail: {description: Training job, immutable snapshot summary and attempts, content: {application/json: {schema: {$ref: '#/components/schemas/TrainingJobDetailResponse'}}}}
+    TrainingJobAction: {description: Retry or cancellation result, content: {application/json: {schema: {$ref: '#/components/schemas/TrainingJobActionResponse'}}}}
+    TrainingSnapshot: {description: Immutable training snapshot, content: {application/json: {schema: {$ref: '#/components/schemas/TrainingSnapshotResponse'}}}}
+    TrainingSnapshotItems: {description: Immutable snapshot items in stable ordinal order, content: {application/json: {schema: {$ref: '#/components/schemas/TrainingSnapshotItemsResponse'}}}}
+    ModelPage: {description: Stable model version page, content: {application/json: {schema: {$ref: '#/components/schemas/ModelPageResponse'}}}}
+    ModelDetail: {description: Model version with validation, domain, card and release history, content: {application/json: {schema: {$ref: '#/components/schemas/ModelDetailResponse'}}}}
+    ModelComparison: {description: Candidate, active and baseline comparison evidence, content: {application/json: {schema: {$ref: '#/components/schemas/ModelComparisonResponse'}}}}
+    ModelAction: {description: Atomic activation, pause or rollback result, content: {application/json: {schema: {$ref: '#/components/schemas/ModelActionResponse'}}}}
+    SamplePage: {description: Unified logical samples in stable updatedAt/id order, content: {application/json: {schema: {$ref: '#/components/schemas/SamplePageResponse'}}}}
+    SampleDetail: {description: Unified sample lineage with values redacted when source permission is absent, content: {application/json: {schema: {$ref: '#/components/schemas/SampleDetailResponse'}}}}
+    ReconcileResult: {description: Fact projection reconciliation result, content: {application/json: {schema: {$ref: '#/components/schemas/ReconcileResultResponse'}}}}
+    Accepted: {description: Accepted immutable model-bound run, content: {application/json: {schema: {$ref: '#/components/schemas/JsonObject'}}}}
+    BadRequest: {description: Malformed request, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    Forbidden: {description: Permission denied, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    NotFound: {description: Missing or inaccessible resource, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    Conflict: {description: Version or idempotency conflict, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    Blocked: {description: Business gate blocked, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    Unavailable: {description: Compute or artifact unavailable, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  x-operations:
+    readTargets: {operationId: readTargets, tags: [Modeling], x-permission: ai.modeling.read, parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/Page'}, {$ref: '#/components/parameters/Size'}, {$ref: '#/components/parameters/Keyword'}, {$ref: '#/components/parameters/Status'}, {$ref: '#/components/parameters/ValueType'}, {$ref: '#/components/parameters/Category'}], responses: {'200': {$ref: '#/components/responses/TargetPage'}, '403': {$ref: '#/components/responses/Forbidden'}}}
+    readTarget: {operationId: readTarget, tags: [Modeling], x-permission: ai.modeling.read, parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/Id'}], responses: {'200': {$ref: '#/components/responses/Target'}, '403': {$ref: '#/components/responses/Forbidden'}, '404': {$ref: '#/components/responses/NotFound'}}}
+    createTarget: {operationId: createTarget, tags: [Modeling], x-permission: ai.modeling.manage, parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/TargetCommand'}}}}, responses: {'200': {$ref: '#/components/responses/Target'}, '400': {$ref: '#/components/responses/BadRequest'}, '403': {$ref: '#/components/responses/Forbidden'}, '409': {$ref: '#/components/responses/Conflict'}, '422': {$ref: '#/components/responses/Blocked'}}}
+    readTargetVersions:
+      operationId: readTargetVersions
+      tags: [Modeling]
+      x-permission: ai.modeling.read
+      parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/Id'}]
+      responses: {'200': {$ref: '#/components/responses/TargetVersionList'}, '403': {$ref: '#/components/responses/Forbidden'}, '404': {$ref: '#/components/responses/NotFound'}}
+    createTargetVersion: {<<: *modelWrite, operationId: createTargetVersion, parameters: [{$ref: '#/components/parameters/Id'}, {$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/TargetCommand'}}}}, responses: {'200': {$ref: '#/components/responses/TargetVersion'}, '400': {$ref: '#/components/responses/BadRequest'}, '403': {$ref: '#/components/responses/Forbidden'}, '409': {$ref: '#/components/responses/Conflict'}}}
+    updateTargetVersion: {<<: *modelWrite, operationId: updateTargetVersion, parameters: [{$ref: '#/components/parameters/Id'}, {$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/TargetCommand'}}}}, responses: {'200': {$ref: '#/components/responses/TargetVersion'}, '400': {$ref: '#/components/responses/BadRequest'}, '403': {$ref: '#/components/responses/Forbidden'}, '409': {$ref: '#/components/responses/Conflict'}}}
+    publishTargetVersion: {<<: *modelWrite, operationId: publishTargetVersion, parameters: [{$ref: '#/components/parameters/Id'}, {$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/VersionCommand'}}}}, responses: {'200': {$ref: '#/components/responses/Target'}, '400': {$ref: '#/components/responses/BadRequest'}, '403': {$ref: '#/components/responses/Forbidden'}, '409': {$ref: '#/components/responses/Conflict'}, '422': {$ref: '#/components/responses/Blocked'}}}
+    retireTarget: {<<: *modelWrite, operationId: retireTarget, parameters: [{$ref: '#/components/parameters/Id'}, {$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RetireCommand'}}}}, responses: {'200': {$ref: '#/components/responses/Target'}, '400': {$ref: '#/components/responses/BadRequest'}, '403': {$ref: '#/components/responses/Forbidden'}, '409': {$ref: '#/components/responses/Conflict'}}}
+    readInputFields: {<<: *readPage, operationId: readInputFields, parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/Page'}, {$ref: '#/components/parameters/Size'}, {$ref: '#/components/parameters/Keyword'}, {$ref: '#/components/parameters/Status'}, {$ref: '#/components/parameters/ValueType'}], responses: {'200': {$ref: '#/components/responses/InputFieldPage'}, '403': {$ref: '#/components/responses/Forbidden'}}}
+    readInputField:
+      operationId: readInputField
+      tags: [Modeling]
+      x-permission: ai.modeling.read
+      parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/Id'}]
+      responses: {'200': {$ref: '#/components/responses/InputField'}, '403': {$ref: '#/components/responses/Forbidden'}, '404': {$ref: '#/components/responses/NotFound'}}
+    readInputFieldVersions:
+      operationId: readInputFieldVersions
+      tags: [Modeling]
+      x-permission: ai.modeling.read
+      parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/Id'}]
+      responses: {'200': {$ref: '#/components/responses/InputFieldVersionList'}, '403': {$ref: '#/components/responses/Forbidden'}, '404': {$ref: '#/components/responses/NotFound'}}
+    createInputField: {<<: *modelWrite, operationId: createInputField, requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/InputFieldCommand'}}}}, responses: {'200': {$ref: '#/components/responses/InputField'}, '400': {$ref: '#/components/responses/BadRequest'}, '403': {$ref: '#/components/responses/Forbidden'}, '409': {$ref: '#/components/responses/Conflict'}}}
+    createInputFieldVersion: {<<: *modelWrite, operationId: createInputFieldVersion, parameters: [{$ref: '#/components/parameters/Id'}, {$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/InputFieldCommand'}}}}, responses: {'200': {$ref: '#/components/responses/InputFieldVersion'}, '400': {$ref: '#/components/responses/BadRequest'}, '403': {$ref: '#/components/responses/Forbidden'}, '409': {$ref: '#/components/responses/Conflict'}}}
+    publishInputFieldVersion: {<<: *modelWrite, operationId: publishInputFieldVersion, parameters: [{$ref: '#/components/parameters/Id'}, {$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/VersionCommand'}}}}, responses: {'200': {$ref: '#/components/responses/InputField'}, '400': {$ref: '#/components/responses/BadRequest'}, '403': {$ref: '#/components/responses/Forbidden'}, '409': {$ref: '#/components/responses/Conflict'}}}
+    readSourceMappings: {<<: *readPage, operationId: readSourceMappings, parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/Id'}], responses: {'200': {$ref: '#/components/responses/SourceMappingList'}, '403': {$ref: '#/components/responses/Forbidden'}, '404': {$ref: '#/components/responses/NotFound'}}}
+    readSourceMappingSuggestions: {<<: *readPage, operationId: readSourceMappingSuggestions, parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/Id'}, {name: targetVersionId, in: query, schema: {type: string, format: uuid}}], responses: {'200': {$ref: '#/components/responses/Ok'}, '403': {$ref: '#/components/responses/Forbidden'}, '404': {$ref: '#/components/responses/NotFound'}}}
+    confirmSourceMapping: {<<: *modelWrite, operationId: confirmSourceMapping, parameters: [{$ref: '#/components/parameters/Id'}, {$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/JsonObject'}}}}, responses: {'200': {$ref: '#/components/responses/Ok'}, '400': {$ref: '#/components/responses/BadRequest'}, '403': {$ref: '#/components/responses/Forbidden'}, '409': {$ref: '#/components/responses/Conflict'}}}
+    createSourceMapping: {<<: *modelWrite, operationId: createSourceMapping, parameters: [{$ref: '#/components/parameters/Id'}, {$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/SourceMappingCommand'}}}}, responses: {'200': {$ref: '#/components/responses/SourceMapping'}, '400': {$ref: '#/components/responses/BadRequest'}, '403': {$ref: '#/components/responses/Forbidden'}, '409': {$ref: '#/components/responses/Conflict'}}}
+    publishSourceMapping: {<<: *modelWrite, operationId: publishSourceMapping, parameters: [{$ref: '#/components/parameters/Id'}, {$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/VersionCommand'}}}}, responses: {'200': {$ref: '#/components/responses/SourceMapping'}, '400': {$ref: '#/components/responses/BadRequest'}, '403': {$ref: '#/components/responses/Forbidden'}, '409': {$ref: '#/components/responses/Conflict'}}}
+    readInputSchemes: {<<: *readPage, operationId: readInputSchemes, parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/Id'}], responses: {'200': {$ref: '#/components/responses/InputSchemeList'}, '403': {$ref: '#/components/responses/Forbidden'}, '404': {$ref: '#/components/responses/NotFound'}}}
+    createInputScheme: {<<: *modelWrite, operationId: createInputScheme, parameters: [{$ref: '#/components/parameters/Id'}, {$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/InputSchemeCommand'}}}}, responses: {'200': {$ref: '#/components/responses/InputScheme'}, '400': {$ref: '#/components/responses/BadRequest'}, '403': {$ref: '#/components/responses/Forbidden'}, '409': {$ref: '#/components/responses/Conflict'}}}
+    previewInputScheme: {<<: *modelWrite, operationId: previewInputScheme, x-permission: ai.modeling.read, parameters: [{$ref: '#/components/parameters/Id'}, {$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: null, responses: {'200': {$ref: '#/components/responses/CoveragePreview'}, '403': {$ref: '#/components/responses/Forbidden'}, '404': {$ref: '#/components/responses/NotFound'}}}
+    freezeInputScheme: {<<: *modelWrite, operationId: freezeInputScheme, parameters: [{$ref: '#/components/parameters/Id'}, {$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/VersionCommand'}}}}, responses: {'200': {$ref: '#/components/responses/FreezeResult'}, '400': {$ref: '#/components/responses/BadRequest'}, '403': {$ref: '#/components/responses/Forbidden'}, '409': {$ref: '#/components/responses/Conflict'}, '422': {$ref: '#/components/responses/Blocked'}}}
+    readEligibilitySummary:
+      operationId: readEligibilitySummary
+      tags: [Eligibility]
+      x-permission: ai.modeling.read
+      parameters: [{$ref: '#/components/parameters/RequestId'}, {name: targetVersionId, in: query, required: true, schema: {type: string, format: uuid}}, {name: inputSchemeId, in: query, required: true, schema: {type: string, format: uuid}}]
+      responses: {'200': {$ref: '#/components/responses/EligibilitySummary'}, '403': {$ref: '#/components/responses/Forbidden'}}
+    readEligibility:
+      operationId: readEligibility
+      tags: [Eligibility]
+      x-permission: ai.modeling.read
+      parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/Page'}, {$ref: '#/components/parameters/Size'}, {name: targetVersionId, in: query, required: true, schema: {type: string, format: uuid}}, {name: inputSchemeId, in: query, required: true, schema: {type: string, format: uuid}}, {name: state, in: query, schema: {type: string}}, {name: reasonCode, in: query, schema: {type: string}}, {name: sourceType, in: query, schema: {type: string}}, {$ref: '#/components/parameters/Keyword'}]
+      responses: {'200': {$ref: '#/components/responses/EligibilityPage'}, '403': {$ref: '#/components/responses/Forbidden'}}
+    readEligibilityItem:
+      operationId: readEligibilityItem
+      tags: [Eligibility]
+      x-permission: ai.modeling.read
+      parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/Id'}]
+      responses: {'200': {$ref: '#/components/responses/EligibilityDetail'}, '403': {$ref: '#/components/responses/Forbidden'}, '404': {$ref: '#/components/responses/NotFound'}}
+    decideReview: {<<: *modelWrite, operationId: decideReview, tags: [Eligibility], x-permission: ai.data.review, parameters: [{$ref: '#/components/parameters/Id'}, {$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ReviewDecisionCommand'}}}}, responses: {'200': {$ref: '#/components/responses/ReviewDecision'}, '403': {$ref: '#/components/responses/Forbidden'}, '409': {$ref: '#/components/responses/Conflict'}}}
+    readTrainingSettings:
+      operationId: readTrainingSettings
+      tags: [Models]
+      x-permission: ai.model.read
+      parameters: [{$ref: '#/components/parameters/RequestId'}]
+      responses: {'200': {$ref: '#/components/responses/TrainingSettings'}, '403': {$ref: '#/components/responses/Forbidden'}}
+    updateTrainingSettings:
+      operationId: updateTrainingSettings
+      tags: [Models]
+      x-permission: ai.training.operate
+      parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateTrainingSettings'}}}}
+      responses: {'200': {$ref: '#/components/responses/TrainingSettings'}, '403': {$ref: '#/components/responses/Forbidden'}, '409': {$ref: '#/components/responses/Conflict'}}
+    evaluateTrainingTargets:
+      operationId: evaluateTrainingTargets
+      tags: [Models]
+      x-permission: ai.training.operate
+      parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      responses: {'200': {$ref: '#/components/responses/TrainingEvaluation'}, '403': {$ref: '#/components/responses/Forbidden'}, '409': {$ref: '#/components/responses/Conflict'}, '422': {$ref: '#/components/responses/Blocked'}}
+    readTrainingJobs:
+      operationId: readTrainingJobs
+      tags: [Models]
+      x-permission: ai.model.read
+      parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/Page'}, {$ref: '#/components/parameters/Size'}, {$ref: '#/components/parameters/Status'}, {$ref: '#/components/parameters/Keyword'}]
+      responses: {'200': {$ref: '#/components/responses/TrainingJobPage'}, '403': {$ref: '#/components/responses/Forbidden'}}
+    readTrainingJob:
+      operationId: readTrainingJob
+      tags: [Models]
+      x-permission: ai.model.read
+      parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/Id'}]
+      responses: {'200': {$ref: '#/components/responses/TrainingJobDetail'}, '403': {$ref: '#/components/responses/Forbidden'}, '404': {$ref: '#/components/responses/NotFound'}}
+    reevaluateTarget: {<<: *modelWrite, operationId: reevaluateTarget, x-permission: ai.modeling.manage, tags: [Eligibility], parameters: [{$ref: '#/components/parameters/Id'}, {$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/IdempotencyKey'}], responses: {'202': {$ref: '#/components/responses/RecomputeAccepted'}, '403': {$ref: '#/components/responses/Forbidden'}, '409': {$ref: '#/components/responses/Conflict'}, '422': {$ref: '#/components/responses/Blocked'}}}
+    retryTrainingJob: &trainingWrite
+      operationId: retryTrainingJob
+      tags: [Models]
+      x-permission: ai.training.operate
+      parameters: [{$ref: '#/components/parameters/Id'}, {$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RetryTrainingCommand'}}}}
+      responses: {'200': {$ref: '#/components/responses/TrainingJobAction'}, '403': {$ref: '#/components/responses/Forbidden'}, '404': {$ref: '#/components/responses/NotFound'}, '409': {$ref: '#/components/responses/Conflict'}}
+    cancelTrainingJob:
+      <<: *trainingWrite
+      operationId: cancelTrainingJob
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CancelTrainingCommand'}}}}
+    readModels: &modelReadPage
+      operationId: readModels
+      tags: [Models]
+      x-permission: ai.model.read
+      parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/Page'}, {$ref: '#/components/parameters/Size'}, {$ref: '#/components/parameters/Status'}, {$ref: '#/components/parameters/Category'}, {$ref: '#/components/parameters/Keyword'}]
+      responses: {'200': {$ref: '#/components/responses/ModelPage'}, '403': {$ref: '#/components/responses/Forbidden'}}
+    readModel: &modelReadOne
+      operationId: readModel
+      tags: [Models]
+      x-permission: ai.model.read
+      parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/Id'}]
+      responses: {'200': {$ref: '#/components/responses/ModelDetail'}, '403': {$ref: '#/components/responses/Forbidden'}, '404': {$ref: '#/components/responses/NotFound'}}
+    compareModel:
+      operationId: compareModel
+      tags: [Models]
+      x-permission: ai.model.read
+      parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/Id'}]
+      responses: {'200': {$ref: '#/components/responses/ModelComparison'}, '403': {$ref: '#/components/responses/Forbidden'}, '404': {$ref: '#/components/responses/NotFound'}}
+    activateModel: &publishModel
+      operationId: activateModel
+      tags: [Models]
+      x-permission: ai.model.publish
+      parameters: [{$ref: '#/components/parameters/Id'}, {$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ModelActionCommand'}}}}
+      responses: {'200': {$ref: '#/components/responses/ModelAction'}, '403': {$ref: '#/components/responses/Forbidden'}, '404': {$ref: '#/components/responses/NotFound'}, '409': {$ref: '#/components/responses/Conflict'}, '422': {$ref: '#/components/responses/Blocked'}, '503': {$ref: '#/components/responses/Unavailable'}}
+    rollbackModel: {<<: *publishModel, operationId: rollbackModel}
+    pauseModel: {<<: *publishModel, operationId: pauseModel}
+    readSnapshot:
+      operationId: readSnapshot
+      tags: [Models]
+      x-permission: ai.model.read
+      parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/Id'}]
+      responses: {'200': {$ref: '#/components/responses/TrainingSnapshot'}, '403': {$ref: '#/components/responses/Forbidden'}, '404': {$ref: '#/components/responses/NotFound'}}
+    readSnapshotItems:
+      operationId: readSnapshotItems
+      tags: [Models]
+      x-permission: ai.model.read
+      parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/Id'}, {$ref: '#/components/parameters/Page'}, {$ref: '#/components/parameters/Size'}]
+      responses: {'200': {$ref: '#/components/responses/TrainingSnapshotItems'}, '403': {$ref: '#/components/responses/Forbidden'}, '404': {$ref: '#/components/responses/NotFound'}}
+    readTrainingPolicies: {<<: *modelReadPage, operationId: readTrainingPolicies, x-permission: ai.modeling.read, parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/TargetId'}], responses: {'200': {$ref: '#/components/responses/TrainingPolicyList'}, '403': {$ref: '#/components/responses/Forbidden'}}}
+    createTrainingPolicy: {<<: *modelWrite, operationId: createTrainingPolicy, x-permission: ai.config.manage, requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/TrainingPolicyCommand'}}}}, responses: {'200': {$ref: '#/components/responses/TrainingPolicy'}, '400': {$ref: '#/components/responses/BadRequest'}, '403': {$ref: '#/components/responses/Forbidden'}, '409': {$ref: '#/components/responses/Conflict'}}}
+    publishTrainingPolicy: {<<: *modelWrite, operationId: publishTrainingPolicy, x-permission: ai.config.manage, parameters: [{$ref: '#/components/parameters/Id'}, {$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/VersionCommand'}}}}, responses: {'200': {$ref: '#/components/responses/TrainingPolicy'}, '400': {$ref: '#/components/responses/BadRequest'}, '403': {$ref: '#/components/responses/Forbidden'}, '409': {$ref: '#/components/responses/Conflict'}}}
+    readStandardFieldReferences:
+      operationId: readStandardFieldReferences
+      tags: [Modeling]
+      x-permission: ai.modeling.read
+      parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/Keyword'}]
+      responses: {'200': {$ref: '#/components/responses/StandardFieldList'}, '403': {$ref: '#/components/responses/Forbidden'}}
+    readMaterialReferences:
+      operationId: readMaterialReferences
+      tags: [Modeling]
+      x-permission: ai.modeling.read
+      parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/Keyword'}]
+      responses: {'200': {$ref: '#/components/responses/MaterialReferenceList'}, '403': {$ref: '#/components/responses/Forbidden'}}
+    readMaterialAliases:
+      operationId: readMaterialAliases
+      tags: [Modeling]
+      x-permission: ai.modeling.read
+      parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/Keyword'}]
+      responses: {'200': {$ref: '#/components/responses/MaterialAliasList'}, '403': {$ref: '#/components/responses/Forbidden'}}
+    createMaterialAlias:
+      operationId: createMaterialAlias
+      tags: [Modeling]
+      x-permission: ai.config.manage
+      parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/MaterialAliasCommand'}}}}
+      responses: {'200': {$ref: '#/components/responses/MaterialAlias'}, '400': {$ref: '#/components/responses/BadRequest'}, '403': {$ref: '#/components/responses/Forbidden'}, '409': {$ref: '#/components/responses/Conflict'}}
+    retireMaterialAlias:
+      operationId: retireMaterialAlias
+      tags: [Modeling]
+      x-permission: ai.config.manage
+      parameters: [{$ref: '#/components/parameters/Id'}, {$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RetireCommand'}}}}
+      responses: {'200': {$ref: '#/components/responses/MaterialAlias'}, '400': {$ref: '#/components/responses/BadRequest'}, '403': {$ref: '#/components/responses/Forbidden'}, '404': {$ref: '#/components/responses/NotFound'}, '409': {$ref: '#/components/responses/Conflict'}}
+    readMaterialDictionaries:
+      operationId: readMaterialDictionaries
+      tags: [Modeling]
+      x-permission: ai.modeling.read
+      parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      responses: {'200': {$ref: '#/components/responses/MaterialDictionaryList'}, '403': {$ref: '#/components/responses/Forbidden'}}
+    createMaterialDictionary:
+      operationId: createMaterialDictionary
+      tags: [Modeling]
+      x-permission: ai.config.manage
+      parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/MaterialDictionaryCommand'}}}}
+      responses: {'200': {$ref: '#/components/responses/MaterialDictionary'}, '400': {$ref: '#/components/responses/BadRequest'}, '403': {$ref: '#/components/responses/Forbidden'}, '409': {$ref: '#/components/responses/Conflict'}}
+    freezeMaterialDictionary:
+      operationId: freezeMaterialDictionary
+      tags: [Modeling]
+      x-permission: ai.config.manage
+      parameters: [{$ref: '#/components/parameters/Id'}, {$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/VersionCommand'}}}}
+      responses: {'200': {$ref: '#/components/responses/MaterialDictionary'}, '400': {$ref: '#/components/responses/BadRequest'}, '403': {$ref: '#/components/responses/Forbidden'}, '404': {$ref: '#/components/responses/NotFound'}, '409': {$ref: '#/components/responses/Conflict'}}
+    retireMaterialDictionary:
+      operationId: retireMaterialDictionary
+      tags: [Modeling]
+      x-permission: ai.config.manage
+      parameters: [{$ref: '#/components/parameters/Id'}, {$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RetireCommand'}}}}
+      responses: {'200': {$ref: '#/components/responses/MaterialDictionary'}, '400': {$ref: '#/components/responses/BadRequest'}, '403': {$ref: '#/components/responses/Forbidden'}, '404': {$ref: '#/components/responses/NotFound'}, '409': {$ref: '#/components/responses/Conflict'}}
+    readSamples:
+      operationId: readSamples
+      tags: [Eligibility]
+      x-permission: ai.modeling.read
+      parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/Page'}, {$ref: '#/components/parameters/Size'}, {$ref: '#/components/parameters/Keyword'}, {$ref: '#/components/parameters/Status'}, {name: sourceType, in: query, schema: {type: string, enum: [DATA_CENTER, EXPERIMENT]}}]
+      responses: {'200': {$ref: '#/components/responses/SamplePage'}, '403': {$ref: '#/components/responses/Forbidden'}}
+    readSample:
+      operationId: readSample
+      tags: [Eligibility]
+      x-permission: ai.modeling.read
+      parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/Id'}]
+      responses: {'200': {$ref: '#/components/responses/SampleDetail'}, '403': {$ref: '#/components/responses/Forbidden'}, '404': {$ref: '#/components/responses/NotFound'}}
+    reconcileFacts:
+      operationId: reconcileFacts
+      tags: [Eligibility]
+      x-permission: ai.data.review
+      parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      responses: {'200': {$ref: '#/components/responses/ReconcileResult'}, '403': {$ref: '#/components/responses/Forbidden'}}
+    readPredictionContext: {operationId: readPredictionContext, tags: [Prediction], x-permission: ai.performance.predict, parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/TargetIds'}], responses: {'200': {$ref: '#/components/responses/Ok'}, '403': {$ref: '#/components/responses/Forbidden'}}}
+    readQualityPolicies:
+      operationId: readQualityPolicies
+      tags: [Prediction configuration]
+      x-permission: ai.modeling.read
+      parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/Id'}]
+      responses:
+        '200': {description: Quality policy history, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/QualityPolicy'}}}}}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    createQualityPolicy:
+      operationId: createQualityPolicy
+      tags: [Prediction configuration]
+      x-permission: ai.config.manage
+      parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/Id'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/QualityPolicyCommand'}}}}
+      responses:
+        '200': {description: Quality policy draft, content: {application/json: {schema: {$ref: '#/components/schemas/QualityPolicy'}}}}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Blocked'}
+    publishQualityPolicy:
+      operationId: publishQualityPolicy
+      tags: [Prediction configuration]
+      x-permission: ai.config.manage
+      parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/Id'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/VersionCommand'}}}}
+      responses:
+        '200': {description: Published quality policy, content: {application/json: {schema: {$ref: '#/components/schemas/QualityPolicy'}}}}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Blocked'}
+    createPrediction:
+      operationId: createPrediction
+      tags: [Prediction]
+      x-permission: ai.performance.predict
+      parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PredictionRequest'}}}}
+      responses:
+        '200': {description: Terminal multi-target result, content: {application/json: {schema: {$ref: '#/components/schemas/PredictionResponse'}}}}
+        '202': {description: Identical request is already running, content: {application/json: {schema: {$ref: '#/components/schemas/PredictionRunning'}}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {description: Single target was blocked, content: {application/json: {schema: {$ref: '#/components/schemas/PredictionResponse'}}}}
+        '503': {description: Prediction execution failed, content: {application/json: {schema: {$ref: '#/components/schemas/PredictionResponse'}}}}
+    createFormulaDesign: &researchAccepted
+      operationId: createFormulaDesign
+      tags: [Research]
+      x-permission: ai.formula.predict
+      parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/FormulaDesignRequest'}}}}
+      responses:
+        '200': {description: Frozen terminal formula design, content: {application/json: {schema: {$ref: '#/components/schemas/ResearchRunResponse'}}}}
+        '202': {description: Formula design accepted or already running, content: {application/json: {schema: {$ref: '#/components/schemas/FormulaDesignAccepted'}}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Blocked'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+    createOptimization:
+      <<: *researchAccepted
+      operationId: createOptimization
+      x-permission: ai.experiment.optimize
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/OptimizationRequest'}}}}
+    readOptimizationBaselines:
+      operationId: readOptimizationBaselines
+      tags: [Research]
+      x-permission: ai.experiment.optimize
+      x-additional-permission: baseline source permission
+      parameters: [{$ref: '#/components/parameters/RequestId'}, {name: sourceType, in: query, schema: {enum: [EXPERIMENT_VERSION, DATA_SAMPLE_REVISION, RESEARCH_CANDIDATE]}}, {$ref: '#/components/parameters/Keyword'}, {$ref: '#/components/parameters/Page'}, {$ref: '#/components/parameters/Size'}]
+      responses: {'200': {$ref: '#/components/responses/Ok'}, '403': {$ref: '#/components/responses/Forbidden'}}
+    readOptimizationContext:
+      operationId: readOptimizationContext
+      tags: [Research]
+      x-permission: ai.experiment.optimize
+      parameters: [{$ref: '#/components/parameters/RequestId'}, {name: baselineType, in: query, required: true, schema: {enum: [EXPERIMENT_VERSION, DATA_SAMPLE_REVISION, RESEARCH_CANDIDATE]}}, {name: baselineId, in: query, required: true, schema: {type: string, format: uuid}}, {$ref: '#/components/parameters/TargetIds'}]
+      responses: {'200': {$ref: '#/components/responses/Ok'}, '403': {$ref: '#/components/responses/Forbidden'}, '409': {$ref: '#/components/responses/Conflict'}, '422': {$ref: '#/components/responses/Blocked'}}
+    readOptimization:
+      operationId: readOptimization
+      tags: [Research]
+      x-permission: ai.experiment.optimize
+      parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/Id'}]
+      responses: {'200': {$ref: '#/components/responses/Ok'}, '403': {$ref: '#/components/responses/Forbidden'}, '404': {$ref: '#/components/responses/NotFound'}}
+    readResearchRuns:
+      operationId: readResearchRuns
+      tags: [Research]
+      x-permission: ai.formula.predict
+      parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/Page'}, {$ref: '#/components/parameters/Size'}, {$ref: '#/components/parameters/Status'}]
+      responses: {'200': {$ref: '#/components/responses/ResearchPage'}, '403': {$ref: '#/components/responses/Forbidden'}}
+    readResearchRun:
+      operationId: readResearchRun
+      tags: [Research]
+      x-permission: ai.formula.predict
+      parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/Id'}]
+      responses: {'200': {$ref: '#/components/responses/ResearchRun'}, '403': {$ref: '#/components/responses/Forbidden'}, '404': {$ref: '#/components/responses/NotFound'}}
+    createExperimentDrafts: {<<: *modelWrite, operationId: createExperimentDrafts, tags: [Research], x-permission: experiment.create, x-additional-permission: ai.experiment.optimize, parameters: [{$ref: '#/components/parameters/Id'}, {$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ExperimentDraftCommand'}}}}}
+    readExperimentLinks: {operationId: readExperimentLinks, tags: [Research], x-permission: ai.experiment.optimize, parameters: [{$ref: '#/components/parameters/Id'}, {$ref: '#/components/parameters/RequestId'}], responses: {'200': {$ref: '#/components/responses/Ok'}, '403': {$ref: '#/components/responses/Forbidden'}}}
+    readOptimizationFeedback: {operationId: readOptimizationFeedback, tags: [Research], x-permission: ai.experiment.optimize, parameters: [{$ref: '#/components/parameters/Id'}, {$ref: '#/components/parameters/RequestId'}], responses: {'200': {$ref: '#/components/responses/Ok'}, '403': {$ref: '#/components/responses/Forbidden'}}}
+    readPredictionRecord:
+      operationId: readPredictionRecord
+      tags: [Prediction]
+      x-permission: ai.performance.predict
+      parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/Id'}]
+      responses:
+        '200': {description: Current or terminal prediction record, content: {application/json: {schema: {oneOf: [{$ref: '#/components/schemas/PredictionRunning'}, {$ref: '#/components/schemas/PredictionResponse'}]}}}}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}

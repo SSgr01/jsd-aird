@@ -94,6 +94,16 @@ export const permissionLabels: Record<string, string> = {
   'spectrum.export': '导出图谱（spectrum.export）',
   'spectrum.download': '下载谱图数据（spectrum.download）',
   'ai.use': '使用 AI 研发助手',
+  'ai.modeling.read': '查看建模设置',
+  'ai.modeling.manage': '管理建模设置',
+  'ai.config.manage': '管理 AI 配置',
+  'ai.model.read': '查看模型',
+  'ai.model.publish': '发布与回退模型',
+  'ai.training.operate': '操作训练任务',
+  'ai.data.review': '审查训练数据',
+  'ai.performance.predict': '性能预测',
+  'ai.formula.predict': '配方预测',
+  'ai.experiment.optimize': '实验优化',
   'ops.file.upload': '上传文件（ops.file.upload）',
   'ops.file.download': '下载文件（ops.file.download）',
 };
@@ -127,7 +137,13 @@ export function requiredPermissionForPath(pathname: string): string | undefined 
   // Pure menu group: its visibility is determined by accessible children.
   if (pathname === '/research-test-root') return undefined;
   const path = pathname.replace(/\/$/, '') || '/';
-  if (path === '/assistant' || path === '/knowledge/search') return 'ai.use';
+  if (path === '/assistant/model-center') return undefined;
+  if (path === '/assistant/modeling-settings') return 'ai.modeling.read';
+  if (path === '/assistant/model-management') return 'ai.model.read';
+  if (path === '/assistant/performance-prediction') return 'ai.performance.predict';
+  if (path === '/assistant/formula-prediction') return 'ai.formula.predict';
+  if (path === '/assistant/experiment-optimization') return 'ai.experiment.optimize';
+  if (path === '/assistant' || path.startsWith('/assistant/') || path === '/knowledge/search') return 'ai.use';
   if (path === '/knowledge/library') return 'knowledge.upload';
   if (path === '/data/upload') return 'data.create';
   if (path === '/quality/upload') return 'quality.upload';
@@ -155,6 +171,9 @@ export function requiredPermissionForPath(pathname: string): string | undefined 
 }
 
 export function canViewPath(pathname: string, permissions: string[]): boolean {
+  if ((pathname.replace(/\/$/, '') || '/') === '/assistant/model-center') {
+    return hasPermission('ai.model.read', permissions) || hasPermission('ai.modeling.read', permissions);
+  }
   const required = requiredPermissionForPath(pathname);
   return !required || hasPermission(required, permissions);
 }
@@ -185,8 +204,13 @@ export function hasPermission(required: string, permissions: string[]): boolean 
 }
 
 export function firstAccessiblePath(permissions: string[]): string | null {
+  if (hasPermission('ai.model.read', permissions) || hasPermission('ai.modeling.read', permissions)) return '/assistant/model-center';
   const candidates = [
     ['/assistant', 'ai.use'],
+    ['/assistant/model-center', 'ai.model.read'],
+    ['/assistant/modeling-settings', 'ai.modeling.read'],
+    ['/assistant/model-management', 'ai.model.read'],
+    ['/assistant/performance-prediction', 'ai.performance.predict'],
     ['/projects/list', 'project.view'],
     ['/templates/library', 'template.view'],
     ['/knowledge/view', 'knowledge.view'],
@@ -212,8 +236,7 @@ type MenuRoute = {
 
 export function filterMenuRoute(route: MenuRoute, permissions: string[]): MenuRoute | null {
   const children = route.routes?.map((child) => filterMenuRoute(child, permissions)).filter((child): child is MenuRoute => child !== null);
-  const permission = route.path ? requiredPermissionForPath(route.path) : undefined;
-  if (permission && !hasPermission(permission, permissions)) return null;
+  if (route.path && !canViewPath(route.path, permissions)) return null;
   if (route.routes && (!children || children.length === 0)) return null;
   return { ...route, ...(route.routes ? { routes: children } : {}) };
 }

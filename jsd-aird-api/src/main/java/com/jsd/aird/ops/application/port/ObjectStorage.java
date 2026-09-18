@@ -14,6 +14,10 @@ public interface ObjectStorage {
         return Optional.empty();
     }
 
+    default Optional<String> presignedPutUrl(String objectKey, Duration expiry) {
+        return Optional.empty();
+    }
+
     void delete(String objectKey);
 
     record StoredObject(InputStream stream, long size, String contentType) implements AutoCloseable {

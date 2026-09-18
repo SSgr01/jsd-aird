@@ -365,7 +365,9 @@ export function ProjectListPage() {
         <DatePicker.RangePicker
           value={dateRange}
           onChange={(v) => {
-            setDateRange(v);
+            // Ant Design and the local dayjs barrel can resolve separate pnpm copies; the
+            // runtime value is the same Dayjs shape, so narrow the boundary once here.
+            setDateRange(v as unknown as [dayjs.Dayjs | null, dayjs.Dayjs | null] | null);
             setPage(1);
           }}
           placeholder={['开始日期', '结束日期']}

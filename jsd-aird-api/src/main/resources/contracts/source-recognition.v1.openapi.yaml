@@ -1,0 +1,262 @@
+openapi: 3.1.0
+info:
+  title: JSD-AIRD 共享来源识别契约
+  version: source-recognition.v1
+  description: Data 与 RND 使用同一识别工作区服务；入口权限和数据所有权保持独立。
+servers:
+  - url: /api/v1
+security:
+  - sessionCookie: []
+paths:
+  /data/recognition-jobs:
+    post: {$ref: '#/components/x-operations/createDataRecognition'}
+  /data/recognition-jobs/{id}/workspace:
+    get: {$ref: '#/components/x-operations/readDataWorkspace'}
+  /data/recognition-jobs/{id}/boundaries:
+    put: {$ref: '#/components/x-operations/updateDataBoundaries'}
+  /data/recognition-jobs/{id}/mappings:
+    put: {$ref: '#/components/x-operations/updateDataMappings'}
+  /data/recognition-jobs/{id}/recognition-profiles:
+    post: {$ref: '#/components/x-operations/saveDataProfile'}
+  /data/recognition-jobs/{id}/retry:
+    post: {$ref: '#/components/x-operations/retryDataRecognition'}
+  /data/recognition-jobs/{id}/finalize:
+    post: {$ref: '#/components/x-operations/finalizeDataRecognition'}
+  /experiment-imports:
+    get: {$ref: '#/components/x-operations/listExperimentRecognition'}
+    post: {$ref: '#/components/x-operations/createExperimentRecognition'}
+  /experiment-imports/{id}:
+    get: {$ref: '#/components/x-operations/readExperimentRecognition'}
+    delete: {$ref: '#/components/x-operations/cancelExperimentRecognition'}
+  /experiment-imports/{id}/workspace:
+    get: {$ref: '#/components/x-operations/readExperimentWorkspace'}
+  /experiment-imports/{id}/boundaries:
+    put: {$ref: '#/components/x-operations/updateExperimentBoundaries'}
+  /experiment-imports/{id}/mappings:
+    put: {$ref: '#/components/x-operations/updateExperimentMappings'}
+  /experiment-imports/{id}/recognition-profiles:
+    post: {$ref: '#/components/x-operations/saveExperimentProfile'}
+  /experiment-imports/{id}/retry:
+    post: {$ref: '#/components/x-operations/retryExperimentRecognition'}
+  /experiment-imports/{id}/finalize:
+    post: {$ref: '#/components/x-operations/finalizeExperimentRecognition'}
+components:
+  securitySchemes:
+    sessionCookie: {type: apiKey, in: cookie, name: JSESSIONID}
+  parameters:
+    Id: {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+    RequestId: {name: X-Request-Id, in: header, required: true, schema: {type: string, minLength: 1, maxLength: 160}}
+    IdempotencyKey: {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 1, maxLength: 200}}
+  schemas:
+    JsonObject: {type: object, additionalProperties: true}
+    Coordinate:
+      type: object
+      additionalProperties: true
+      required: [kind]
+      properties:
+        kind: {enum: [CELL, PAGE, DOCUMENT_BLOCK, WHOLE_FILE]}
+        sheetId: {type: [string, 'null']}
+        sheetName: {type: [string, 'null']}
+        order: {type: [integer, 'null']}
+        address: {type: [string, 'null']}
+        pageNo: {type: [integer, 'null']}
+    Candidate:
+      type: object
+      additionalProperties: false
+      required: [candidateId, category, fieldCode, rawText, parsedValue, sourceCoordinate, confidence, parserVersion, status, experimentBoundaryId, sampleBoundaryId, sourceGroupKey]
+      properties:
+        candidateId: {type: string}
+        category: {enum: [BASIC, FORMULA, PROCESS, TEST, OTHER]}
+        fieldCode: {type: string}
+        labelPath: {type: [string, 'null']}
+        rawText: {type: string}
+        parsedValue: {}
+        correctedValue: {}
+        rawUnit: {type: [string, 'null']}
+        standardUnit: {type: [string, 'null']}
+        sourceCoordinate: {$ref: '#/components/schemas/Coordinate'}
+        confidence: {type: number, minimum: 0, maximum: 1}
+        parserVersion: {type: string}
+        status: {enum: [SUGGESTED, CONFIRMED, CORRECTED, REVIEW_REQUIRED, IGNORED]}
+        experimentBoundaryId: {type: string, minLength: 1, maxLength: 240}
+        sampleBoundaryId: {type: string, minLength: 1, maxLength: 240}
+        sourceGroupKey: {type: string, minLength: 1, maxLength: 320}
+        observationId: {type: [string, 'null']}
+        replicateGroupKey: {type: [string, 'null']}
+        measurementIndex: {type: [integer, 'null'], minimum: 1}
+      allOf:
+        - if: {properties: {category: {const: TEST}}}
+          then: {required: [observationId, replicateGroupKey, measurementIndex]}
+    SampleBoundary:
+      type: object
+      additionalProperties: false
+      required: [sampleBoundaryId, logicalSampleKey, sourceGroupKeys, title]
+      properties:
+        sampleBoundaryId: {type: string, minLength: 1, maxLength: 240}
+        logicalSampleKey: {type: string, minLength: 1, maxLength: 320}
+        sourceGroupKeys: {type: array, minItems: 1, uniqueItems: true, items: {type: string, minLength: 1}}
+        title: {type: string}
+    ExperimentBoundary:
+      type: object
+      additionalProperties: false
+      required: [experimentBoundaryId, title, confirmed, sourceCoordinates, samples, sharedConditions]
+      properties:
+        experimentBoundaryId: {type: string, minLength: 1, maxLength: 240}
+        title: {type: string}
+        confirmed: {type: boolean}
+        sourceCoordinates: {$ref: '#/components/schemas/Coordinate'}
+        samples: {type: array, minItems: 1, items: {$ref: '#/components/schemas/SampleBoundary'}}
+        sharedConditions: {type: array, items: {}}
+    RecognitionWorkspace:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, sourceOwner, recognitionMode, candidates, unrecognizedFragments, issues, experiments]
+      properties:
+        schemaVersion: {const: 1}
+        sourceOwner: {enum: [DATA_CENTER, EXPERIMENT]}
+        recognitionMode: {enum: [FREEFORM, TEMPLATE_GUIDED]}
+        sourceFileId: {type: string, format: uuid}
+        sourceFileName: {type: string}
+        sourceFileSha256: {type: string, pattern: '^[0-9a-f]{64}$'}
+        sourceFormat: {enum: [XLS, XLSX, CSV, DOCX, PDF, IMAGE]}
+        documentSnapshot: {$ref: '#/components/schemas/JsonObject'}
+        structureSummary: {$ref: '#/components/schemas/JsonObject'}
+        candidates: {type: array, items: {$ref: '#/components/schemas/Candidate'}}
+        unrecognizedFragments: {type: array, items: {$ref: '#/components/schemas/JsonObject'}}
+        issues: {type: array, items: {$ref: '#/components/schemas/JsonObject'}}
+        experiments: {type: array, minItems: 1, items: {$ref: '#/components/schemas/ExperimentBoundary'}}
+    RecognitionJob:
+      type: object
+      additionalProperties: false
+      required: [id, sourceFileId, sourceFileName, sourceFormat, sourceOwner, recognitionMode, importPurpose, status, progress, recognitionRevision, sourceSequence, workspace, boundaries, createdAt, updatedAt]
+      properties:
+        id: {type: string, format: uuid}
+        sourceFileId: {type: string, format: uuid}
+        sourceFileName: {type: string}
+        sourceFormat: {enum: [XLS, XLSX, CSV, DOCX, PDF, IMAGE]}
+        sourceOwner: {enum: [DATA_CENTER, EXPERIMENT]}
+        recognitionMode: {enum: [FREEFORM, TEMPLATE_GUIDED]}
+        importPurpose: {enum: [DATA_ONLY, EXPERIMENT_DRAFT]}
+        status: {enum: [QUEUED, PARSING, WAITING_MAPPING, COMMITTING, COMPLETED, FAILED, CANCELLED]}
+        progress: {type: integer, minimum: 0, maximum: 100}
+        recognitionRevision: {type: integer, minimum: 0}
+        sourceSequence: {type: integer, minimum: 0}
+        workspace: {$ref: '#/components/schemas/RecognitionWorkspace'}
+        boundaries: {type: array, items: {$ref: '#/components/schemas/ExperimentBoundary'}}
+        finalizedAt: {type: [string, 'null'], format: date-time}
+        errorMessage: {type: [string, 'null']}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    CreateRecognitionCommand:
+      type: object
+      additionalProperties: false
+      required: [sourceFileId, recognitionMode, importPurpose]
+      properties:
+        sourceFileId: {type: string, format: uuid}
+        sourceFormat: {type: [string, 'null']}
+        recognitionMode: {enum: [FREEFORM, TEMPLATE_GUIDED]}
+        templateVersionId: {type: [string, 'null'], format: uuid}
+        categoryId: {type: [string, 'null'], format: uuid}
+        duplicateOverride: {type: boolean, default: false}
+        importPurpose: {enum: [DATA_ONLY, EXPERIMENT_DRAFT]}
+        targetExperimentCategoryId: {type: [string, 'null'], format: uuid}
+        projectRelations: {type: array, items: {$ref: '#/components/schemas/JsonObject'}}
+        experimentDate: {type: [string, 'null'], format: date}
+    CreateExperimentRecognitionCommand:
+      type: object
+      additionalProperties: false
+      required: [fileId, format, categoryId]
+      properties:
+        fileId: {type: string, format: uuid}
+        format: {enum: [XLS, XLSX, CSV, DOCX, PDF, IMAGE]}
+        categoryId: {type: string, format: uuid}
+        projectId: {type: [string, 'null'], format: uuid}
+        stageId: {type: [string, 'null'], format: uuid}
+        taskId: {type: [string, 'null'], format: uuid}
+        experimentDate: {type: [string, 'null'], format: date}
+        visibility: {enum: [ALL, QUALITY, PROJECT]}
+        recognitionMode: {enum: [FREEFORM, TEMPLATE_GUIDED]}
+        templateVersionId: {type: [string, 'null'], format: uuid}
+        duplicateOverride: {type: boolean, default: false}
+    RevisionCommand:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision]
+      properties: {expectedRevision: {type: integer, minimum: 0}}
+    BoundaryCommand:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision, items]
+      properties:
+        expectedRevision: {type: integer, minimum: 0}
+        items: {type: array, minItems: 1, items: {$ref: '#/components/schemas/ExperimentBoundary'}}
+    MappingCommand:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision, candidates]
+      properties:
+        expectedRevision: {type: integer, minimum: 0}
+        candidates: {type: array, items: {$ref: '#/components/schemas/Candidate'}}
+        unrecognizedFragments: {type: array, items: {$ref: '#/components/schemas/JsonObject'}}
+    ProfileCommand:
+      type: object
+      additionalProperties: false
+      required: [name, expectedRevision]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 240}
+        expectedRevision: {type: integer, minimum: 0}
+    FinalizeResult:
+      type: object
+      required: [recognitionJobId, drafts]
+      properties:
+        recognitionJobId: {type: string, format: uuid}
+        confirmedSubmissionId: {type: [string, 'null'], format: uuid}
+        submissionRevision: {type: [integer, 'null'], minimum: 1}
+        drafts:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [experimentId, experimentVersionId, experimentNo, title, experimentBoundaryId, logicalSampleKeys]
+            properties:
+              experimentId: {type: string, format: uuid}
+              experimentVersionId: {type: string, format: uuid}
+              experimentNo: {type: string}
+              title: {type: string}
+              experimentBoundaryId: {type: string}
+              logicalSampleKeys: {type: array, minItems: 1, items: {type: string}}
+    Response:
+      type: object
+      required: [code, message, traceId, timestamp, data]
+      properties:
+        code: {type: string}
+        message: {type: string}
+        traceId: {type: string}
+        timestamp: {type: string, format: date-time}
+        data: {}
+  responses:
+    Success: {description: Success, content: {application/json: {schema: {$ref: '#/components/schemas/Response'}}}}
+    BadRequest: {description: Invalid recognition or boundary state}
+    Forbidden: {description: Permission or source-owner mismatch}
+    Conflict: {description: Revision or duplicate conflict}
+  x-operation-templates:
+    read: &read {tags: [Recognition], parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/Id'}], responses: {'200': {$ref: '#/components/responses/Success'}, '403': {$ref: '#/components/responses/Forbidden'}}}
+    write: &write {tags: [Recognition], parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/Id'}, {$ref: '#/components/parameters/IdempotencyKey'}], responses: {'200': {$ref: '#/components/responses/Success'}, '400': {$ref: '#/components/responses/BadRequest'}, '403': {$ref: '#/components/responses/Forbidden'}, '409': {$ref: '#/components/responses/Conflict'}}}
+  x-operations:
+    createDataRecognition: {<<: *write, operationId: createDataRecognition, x-permission: data.create, parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateRecognitionCommand'}}}}}
+    readDataWorkspace: {<<: *read, operationId: readDataWorkspace, x-permission: data.view}
+    updateDataBoundaries: {<<: *write, operationId: updateDataBoundaries, x-permission: data.update, requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/BoundaryCommand'}}}}}
+    updateDataMappings: {<<: *write, operationId: updateDataMappings, x-permission: data.update, requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/MappingCommand'}}}}}
+    saveDataProfile: {<<: *write, operationId: saveDataProfile, x-permission: data.update, requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ProfileCommand'}}}}}
+    retryDataRecognition: {<<: *write, operationId: retryDataRecognition, x-permission: data.update}
+    finalizeDataRecognition: {<<: *write, operationId: finalizeDataRecognition, x-permission: data.submit, requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RevisionCommand'}}}}}
+    listExperimentRecognition: {<<: *read, operationId: listExperimentRecognition, x-permission: experiment.view, parameters: [{$ref: '#/components/parameters/RequestId'}]}
+    createExperimentRecognition: {<<: *write, operationId: createExperimentRecognition, x-permission: experiment.create, parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateExperimentRecognitionCommand'}}}}}
+    readExperimentRecognition: {<<: *read, operationId: readExperimentRecognition, x-permission: experiment.view}
+    cancelExperimentRecognition: {<<: *write, operationId: cancelExperimentRecognition, x-permission: experiment.update}
+    readExperimentWorkspace: {<<: *read, operationId: readExperimentWorkspace, x-permission: experiment.view}
+    updateExperimentBoundaries: {<<: *write, operationId: updateExperimentBoundaries, x-permission: experiment.update, requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/BoundaryCommand'}}}}}
+    updateExperimentMappings: {<<: *write, operationId: updateExperimentMappings, x-permission: experiment.update, requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/MappingCommand'}}}}}
+    saveExperimentProfile: {<<: *write, operationId: saveExperimentProfile, x-permission: experiment.update, requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ProfileCommand'}}}}}
+    retryExperimentRecognition: {<<: *write, operationId: retryExperimentRecognition, x-permission: experiment.update}
+    finalizeExperimentRecognition: {<<: *write, operationId: finalizeExperimentRecognition, x-permission: experiment.create, requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RevisionCommand'}}}}}

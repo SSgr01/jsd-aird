@@ -38,6 +38,76 @@ public class JdbcExperimentRepository implements ExperimentRepository {
         return Optional.ofNullable(jdbc.queryForObject("SELECT count(*) FROM rnd.experiment"+where,Long.class,args.toArray())).orElse(0L);
     }
     @Override public Optional<Detail> detail(UUID org,UUID id){return jdbc.query(BASE+" WHERE e.organization_id=? AND e.id=? AND e.deleted=false",(rs,n)->detailRow(rs),org,id).stream().findFirst();}
+    @Override public List<SourceReference> sourceReferences(UUID org, UUID experimentId) {
+        return jdbc.query("""
+                SELECT r.id,coalesce(r.recognition_job_id,r.experiment_import_job_id) source_job_id,
+                    r.confirmed_submission_id,cs.revision_no submission_revision,
+                    h.confirmed_submission_id current_submission_id,current_cs.revision_no current_submission_revision,
+                    coalesce(j.source_owner,'EXPERIMENT') source_owner,
+                    coalesce(j.recognition_mode,'FREEFORM') recognition_mode,
+                    r.source_file_id,coalesce(j.source_file_name,ej.source_file_name) source_file_name,r.source_file_sha256,
+                    r.experiment_boundary_id,r.sample_boundary_id,r.logical_sample_key,r.source_group_keys_jsonb,
+                    r.source_coordinates_jsonb,r.recognition_snapshot_jsonb,r.content_hash,r.created_at,
+                    coalesce(l.source_updated,false) OR
+                        (h.confirmed_submission_id IS DISTINCT FROM r.confirmed_submission_id
+                         AND h.confirmed_submission_id IS NOT NULL) source_updated
+                FROM rnd.experiment_source_reference r
+                LEFT JOIN data.import_job j ON j.organization_id=r.organization_id AND j.id=r.recognition_job_id
+                LEFT JOIN rnd.experiment_import_job ej ON ej.organization_id=r.organization_id
+                    AND ej.id=r.experiment_import_job_id
+                LEFT JOIN data.confirmed_submission cs ON cs.organization_id=r.organization_id
+                    AND cs.id=r.confirmed_submission_id
+                LEFT JOIN data.confirmed_submission_head h ON h.organization_id=r.organization_id
+                    AND h.import_job_id=r.recognition_job_id
+                LEFT JOIN data.confirmed_submission current_cs ON current_cs.organization_id=r.organization_id
+                    AND current_cs.id=h.confirmed_submission_id
+                LEFT JOIN data.import_experiment_link l ON l.organization_id=r.organization_id
+                    AND l.recognition_job_id=r.recognition_job_id AND l.experiment_id=r.experiment_id
+                    AND l.experiment_boundary_id=r.experiment_boundary_id
+                WHERE r.organization_id=? AND r.experiment_id=?
+                ORDER BY r.created_at DESC,r.id
+                """, (rs, ignored) -> new SourceReference(rs.getObject("id",UUID.class),
+                rs.getObject("source_job_id",UUID.class),rs.getObject("confirmed_submission_id",UUID.class),
+                (Integer)rs.getObject("submission_revision"),rs.getObject("current_submission_id",UUID.class),
+                (Integer)rs.getObject("current_submission_revision"),rs.getString("source_owner"),
+                rs.getString("recognition_mode"),rs.getObject("source_file_id",UUID.class),
+                rs.getString("source_file_name"),
+                rs.getString("source_file_sha256"),rs.getString("experiment_boundary_id"),
+                rs.getString("sample_boundary_id"),rs.getString("logical_sample_key"),
+                strings(node(rs,"source_group_keys_jsonb")),
+                node(rs,"source_coordinates_jsonb"),node(rs,"recognition_snapshot_jsonb"),
+                rs.getString("content_hash"),rs.getBoolean("source_updated"),
+                rs.getTimestamp("created_at").toInstant()), org, experimentId);
+    }
+
+    @Override public List<CompletedFactsRow> completedFacts(UUID org, CompletedFactsSearch q) {
+        var query = completedFactsWhere(org, q);
+        var args = new ArrayList<>(query.args());
+        args.add(q.size());
+        args.add(Math.max(0, q.page() - 1) * q.size());
+        return jdbc.query("""
+                SELECT e.id AS experiment_id,e.current_version_id AS experiment_version_id,
+                       e.experiment_no,e.title,e.source_type,e.project_id,e.stage_id,e.task_id,
+                       e.category_id,e.category_name,e.experiment_date,v.edit_model_jsonb
+                  FROM rnd.experiment e
+                  JOIN rnd.experiment_version v ON v.id=e.current_version_id AND v.organization_id=e.organization_id
+                """ + query.where() + " ORDER BY e.id,e.current_version_id LIMIT ? OFFSET ?", (rs, n) ->
+                new CompletedFactsRow(
+                        rs.getObject("experiment_id", UUID.class), rs.getObject("experiment_version_id", UUID.class),
+                        rs.getString("experiment_no"), rs.getString("title"), rs.getString("source_type"),
+                        rs.getObject("project_id", UUID.class), rs.getObject("stage_id", UUID.class),
+                        rs.getObject("task_id", UUID.class), rs.getObject("category_id", UUID.class),
+                        rs.getString("category_name"), rs.getObject("experiment_date", LocalDate.class),
+                        node(rs, "edit_model_jsonb")), args.toArray());
+    }
+
+    @Override public long countCompletedFacts(UUID org, CompletedFactsSearch q) {
+        var query = completedFactsWhere(org, q);
+        return Optional.ofNullable(jdbc.queryForObject("""
+                SELECT count(*) FROM rnd.experiment e
+                JOIN rnd.experiment_version v ON v.id=e.current_version_id AND v.organization_id=e.organization_id
+                """ + query.where(), Long.class, query.args().toArray())).orElse(0L);
+    }
 
     @Override @Transactional public Summary create(Create c){
         String no = c.experimentNo();
@@ -92,7 +162,7 @@ public class JdbcExperimentRepository implements ExperimentRepository {
         var old=required(org,id);if(old.summary().status()!=ExperimentStatus.COMPLETED)conflict("仅已完成实验可创建修订版本");if(!text(reason))invalid("必须填写修订原因");var vid=UUID.randomUUID();int next=old.summary().versionNo()+1;
         int n=jdbc.update("UPDATE rnd.experiment SET status='DRAFT',current_version_id=NULL,revision=revision+1,updated_by=?,updated_at=now() WHERE organization_id=? AND id=? AND revision=?",actor,org,id,revision);lock(n);
         jdbc.update("INSERT INTO rnd.experiment_version(id,organization_id,experiment_id,version_no,status,template_version_id,template_snapshot_hash,template_snapshot_jsonb,edit_model_jsonb,revision_reason,created_by) VALUES(?,?,?,?,'DRAFT',?,?,?,?,?,?)",vid,org,id,next,old.templateVersionId(),old.templateSnapshotHash(),pg(old.templateSnapshot()),pg(old.editModel()),reason,actor);
-        jdbc.update("UPDATE rnd.experiment SET current_version_id=? WHERE id=?",vid,id);audit(org,id,vid,"REVISION_CREATED",null,old.editModel(),actor,name);return required(org,id);
+        jdbc.update("UPDATE rnd.experiment SET current_version_id=? WHERE id=?",vid,id);audit(org,id,vid,"REVISION_CREATED",null,old.editModel(),actor,name);event(org,id,ExperimentEvents.REVISION_STARTED,vid,next);return required(org,id);
     }
     @Override @Transactional public Detail rollback(UUID org,UUID id,long revision,int targetVersion,String reason,UUID actor,String name){
         var old=required(org,id);
@@ -106,6 +176,7 @@ public class JdbcExperimentRepository implements ExperimentRepository {
         jdbc.update("INSERT INTO rnd.experiment_version(id,organization_id,experiment_id,version_no,status,template_version_id,template_snapshot_hash,template_snapshot_jsonb,edit_model_jsonb,revision_reason,created_by) VALUES(?,?,?,?,'DRAFT',?,?,?,?,?,?)",vid,org,id,next,target.templateVersionId(),target.snapshotHash(),pg(target.templateSnapshot()),pg(target.editModel()),reason,actor);
         jdbc.update("UPDATE rnd.experiment SET current_version_id=? WHERE id=?",vid,id);
         audit(org,id,vid,"ROLLED_BACK",null,target.editModel(),actor,name);
+        event(org,id,ExperimentEvents.REVISION_STARTED,vid,next);
         return required(org,id);
     }
     @Override public JsonNode compare(UUID org,UUID id,int from,int to){var vs=versions(org,id);var a=vs.stream().filter(v->v.versionNo()==from).findFirst().orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND));var b=vs.stream().filter(v->v.versionNo()==to).findFirst().orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND));var out=json.createObjectNode();out.put("from",from);out.put("to",to);out.set("before",a.editModel());out.set("after",b.editModel());out.put("changed",!a.editModel().equals(b.editModel()));return out;}
@@ -116,6 +187,45 @@ public class JdbcExperimentRepository implements ExperimentRepository {
     @Override @Transactional public Category setCategoryActive(UUID org,UUID id,long rev,boolean active){if(!active&&Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM rnd.experiment WHERE organization_id=? AND category_id=? AND deleted=false)",Boolean.class,org,id)))conflict("该分类仍有关联实验，请先移动或删除实验");int n=jdbc.update("UPDATE rnd.experiment_category SET active=?,revision=revision+1,updated_at=now() WHERE organization_id=? AND id=? AND revision=?",active,org,id,rev);lock(n);return categories(org,true).stream().filter(x->x.id().equals(id)).findFirst().orElseThrow();}
 
     private Detail required(UUID o,UUID id){return detail(o,id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"实验不存在"));}
+    private CompletedQuery completedFactsWhere(UUID org, CompletedFactsSearch q) {
+        var where = new StringBuilder(" WHERE e.organization_id=? AND e.deleted=false AND e.status='COMPLETED' AND v.status='COMPLETED'");
+        var args = new ArrayList<Object>();
+        args.add(org);
+        if (!q.experimentIds().isEmpty()) appendIn(where, args, "e.id", q.experimentIds());
+        if (q.projectId() != null) { where.append(" AND e.project_id=?"); args.add(q.projectId()); }
+        if (q.categoryId() != null) { where.append(" AND e.category_id=?"); args.add(q.categoryId()); }
+        var scope = q.scope();
+        switch (scope.type()) {
+            case "ALL" -> { }
+            case "SELF" -> {
+                where.append(" AND (e.created_by=? OR e.owner_id=?)");
+                args.add(scope.actorId());
+                args.add(scope.actorId());
+            }
+            case "ASSIGNED" -> {
+                where.append(" AND e.owner_id=?");
+                args.add(scope.actorId());
+            }
+            case "PROJECT" -> appendIn(where, args, "e.project_id", scope.targetIds());
+            case "CATEGORY" -> appendIn(where, args, "e.category_id", scope.targetIds());
+            case "SELECTED" -> appendIn(where, args, "e.id", scope.targetIds());
+            default -> where.append(" AND 1=0");
+        }
+        return new CompletedQuery(where.toString(), List.copyOf(args));
+    }
+
+    private void appendIn(StringBuilder where, List<Object> args, String column, Set<UUID> ids) {
+        if (ids == null || ids.isEmpty()) {
+            where.append(" AND 1=0");
+            return;
+        }
+        where.append(" AND ").append(column).append(" IN (")
+                .append(String.join(",", ids.stream().map(ignored -> "?").toList())).append(')');
+        args.addAll(ids);
+    }
+
+    private record CompletedQuery(String where, List<Object> args) {}
+
     private static UUID sourceFileId(JsonNode model){
         if(model==null)return null;
         var raw=model.path("sourceFileId").asText(null);
@@ -135,6 +245,7 @@ public class JdbcExperimentRepository implements ExperimentRepository {
     private void audit(UUID o,UUID e,UUID v,String a,JsonNode before,JsonNode after,UUID actor,String name){jdbc.update("INSERT INTO rnd.experiment_audit(id,organization_id,experiment_id,experiment_version_id,action,before_jsonb,after_jsonb,operator_id,operator_name) VALUES(?,?,?,?,?,?,?,?,?)",UUID.randomUUID(),o,e,v,a,pg(before),pg(after),actor,name);}
     private void event(UUID o,UUID e,String type,UUID v,int no){var p=json.createObjectNode().put("experimentId",e.toString()).put("versionId",v.toString()).put("versionNo",no);jdbc.update("INSERT INTO rnd.experiment_outbox(id,organization_id,aggregate_id,event_type,payload_jsonb) VALUES(?,?,?,?,?)",UUID.randomUUID(),o,e,type,pg(p));}
     private JsonNode node(ResultSet r,String c)throws SQLException{var value=r.getString(c);if(value==null||value.isBlank())return null;try{return json.readTree(value);}catch(Exception e){throw new SQLException("Invalid JSON in "+c,e);}}private PGobject pg(JsonNode n){if(n==null)return null;try{var p=new PGobject();p.setType("jsonb");p.setValue(json.writeValueAsString(n));return p;}catch(Exception e){throw new IllegalArgumentException(e);}}
+    private static List<String> strings(JsonNode value){if(value==null||!value.isArray())return List.of();var result=new ArrayList<String>();value.forEach(item->{var text=item.asText("").trim();if(!text.isEmpty()&&!result.contains(text))result.add(text);});return List.copyOf(result);}
     private static Instant instant(ResultSet r,String c)throws SQLException{var t=r.getTimestamp(c);return t==null?null:t.toInstant();}private static boolean text(String s){return s!=null&&!s.isBlank();}private static void lock(int n){if(n!=1)throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT,"实验已被其他会话修改，请刷新后重试");}private static void conflict(String m){throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,m);}private static void invalid(String m){throw new ApiException(ApiErrorCode.VALIDATION_ERROR,m);}
     private static final String BASE="SELECT e.*,p.name AS project_name,s.name AS stage_name,t.name AS task_name,v.version_no,v.template_version_id,v.template_snapshot_hash,v.template_snapshot_jsonb,v.edit_model_jsonb FROM rnd.experiment e LEFT JOIN mdm.project p ON p.id=e.project_id AND p.deleted=false LEFT JOIN mdm.project_stage s ON s.id=e.stage_id AND s.deleted=false LEFT JOIN mdm.project_task t ON t.id=e.task_id AND t.deleted=false JOIN rnd.experiment_version v ON v.id=e.current_version_id";
 }

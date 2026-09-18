@@ -21,6 +21,7 @@ import type {
 
 interface Props {
   snapshot: Record<string, unknown>;
+  ariaLabel?: string;
   onDirty: () => void;
   onEditorValue: (binding: TemplateBinding, value: unknown) => void;
   onEditorLabel?: (binding: TemplateBinding, value: unknown) => void;
@@ -38,6 +39,7 @@ interface Props {
 export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function UniverSheetsEditor(
   {
     snapshot,
+    ariaLabel = 'Excel 模板编辑器',
     onDirty,
     onEditorValue,
     onEditorLabel,
@@ -655,7 +657,7 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
     [],
   );
 
-  return <div ref={containerRef} className="univer-editor-surface" aria-label="Excel 模板编辑器" />;
+  return <div ref={containerRef} className="univer-editor-surface" aria-label={ariaLabel} />;
 });
 
 function resolveSheet(api: FUniver | undefined, binding: TemplateBinding) {
@@ -676,6 +678,10 @@ function focusWorkbookRange(api: FUniver | undefined, sheetId: string, address: 
   const range = sheet.getRange(address);
   workbook.setActiveSheet(sheet);
   sheet.setActiveRange(range);
+  // Selection alone does not move the viewport when the workbook is already
+  // scrolled. Keep the source-location action useful for both data-center and
+  // freeform recognition workbenches by bringing the active cell into view.
+  sheet.scrollToCell(range.getRow(), range.getColumn());
 }
 
 function resolveRange(api: FUniver | undefined, binding: TemplateBinding) {

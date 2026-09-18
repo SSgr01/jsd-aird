@@ -1,5 +1,6 @@
 package com.jsd.aird.data.adapter.in.web;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
@@ -7,11 +8,15 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.jsd.aird.core.api.ProjectResourceFacade.ProjectRelationTarget;
 import com.jsd.aird.data.application.DataImportService;
 import com.jsd.aird.data.application.DataWorkbookService;
+import com.jsd.aird.data.application.ExperimentAssemblyService;
+import com.jsd.aird.recognition.application.SourceRecognitionService;
 import com.jsd.aird.data.application.port.DataRepository;
 import com.jsd.aird.platform.web.RequestIdHolder;
 import com.jsd.aird.shared.api.ApiResponse;
 import com.jsd.aird.shared.api.PageResponse;
 import com.jsd.aird.shared.api.ResponseFactory;
+import com.jsd.aird.shared.error.ApiErrorCode;
+import com.jsd.aird.shared.error.ApiException;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -31,18 +36,21 @@ import org.springframework.web.bind.annotation.RestController;
 public class DataController {
 
     private final DataImportService service;
-    private final com.jsd.aird.data.application.DataProjectionService projectionService;
     private final DataWorkbookService workbookService;
     private final com.jsd.aird.data.application.DataCategoryService categoryService;
+    private final ExperimentAssemblyService experimentAssemblyService;
+    private final SourceRecognitionService recognitionService;
 
     public DataController(DataImportService service,
                           com.jsd.aird.data.application.DataCategoryService categoryService,
-                          com.jsd.aird.data.application.DataProjectionService projectionService,
-                          DataWorkbookService workbookService) {
+                          DataWorkbookService workbookService,
+                          ExperimentAssemblyService experimentAssemblyService,
+                          SourceRecognitionService recognitionService) {
         this.service = service;
         this.categoryService = categoryService;
-        this.projectionService = projectionService;
         this.workbookService = workbookService;
+        this.experimentAssemblyService = experimentAssemblyService;
+        this.recognitionService = recognitionService;
     }
 
     @GetMapping("/templates")
@@ -52,9 +60,88 @@ public class DataController {
 
     @PostMapping("/import-jobs")
     public ApiResponse<DataRepository.Job> create(@Valid @RequestBody CreateRequest request) {
+        if ("FREEFORM".equalsIgnoreCase(request.recognitionMode())) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST,
+                    "自由识别请使用 /api/v1/data/recognition-jobs");
+        }
         return success(service.create(new DataImportService.CreateCommand(
                 request.sourceFileId(), request.templateVersionId(), request.categoryId(),
-                request.duplicateOverride(), targets(request.projectRelations()))));
+                request.duplicateOverride(), targets(request.projectRelations()),
+                request.importPurpose(), request.targetExperimentCategoryId())));
+    }
+
+    /** Template-guided uploads started from the experiment notebook keep the
+     * same Data mapping workspace, but the source owner remains EXPERIMENT. */
+    @PostMapping("/experiment-import-jobs")
+    public ApiResponse<DataRepository.Job> createExperimentImport(@Valid @RequestBody CreateRequest request) {
+        if (!"EXPERIMENT_DRAFT".equalsIgnoreCase(request.importPurpose())) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "实验记录本模板导入必须使用EXPERIMENT_DRAFT");
+        }
+        return success(service.createExperiment(new DataImportService.CreateCommand(
+                request.sourceFileId(), request.templateVersionId(), request.categoryId(),
+                request.duplicateOverride(), targets(request.projectRelations()),
+                request.importPurpose(), request.targetExperimentCategoryId())));
+    }
+
+    @GetMapping("/experiment-import-jobs")
+    public ApiResponse<PageResponse<DataRepository.Job>> experimentImportJobs(
+            @RequestParam(required = false) UUID templateVersionId,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        return success(service.listExperimentJobs(templateVersionId, status, keyword, page, size));
+    }
+
+    @PostMapping("/recognition-jobs")
+    public ApiResponse<?> createRecognition(@Valid @RequestBody RecognitionCreateRequest request) {
+        var relation = request.projectRelations() == null ? null
+                : request.projectRelations().stream().findFirst().orElse(null);
+        return success(recognitionService.create(SourceRecognitionService.DATA_CENTER,
+                new SourceRecognitionService.CreateCommand(request.sourceFileId(), request.sourceFormat(),
+                        request.recognitionMode(), request.templateVersionId(), request.categoryId(),
+                        request.importPurpose(), request.targetExperimentCategoryId(),
+                        relation == null ? null : relation.projectId(), relation == null ? null : relation.stageId(),
+                        relation == null ? null : relation.taskId(), request.experimentDate(), "ALL",
+                        request.duplicateOverride())));
+    }
+
+    @GetMapping("/recognition-jobs/{id}/workspace")
+    public ApiResponse<?> recognitionWorkspace(@PathVariable UUID id) {
+        return success(recognitionService.get(SourceRecognitionService.DATA_CENTER, id));
+    }
+
+    @PutMapping("/recognition-jobs/{id}/boundaries")
+    public ApiResponse<?> recognitionBoundaries(@PathVariable UUID id,
+            @Valid @RequestBody RecognitionBoundariesRequest request) {
+        return success(recognitionService.updateBoundaries(SourceRecognitionService.DATA_CENTER, id,
+                request.expectedRevision(), request.items()));
+    }
+
+    @PutMapping("/recognition-jobs/{id}/mappings")
+    public ApiResponse<?> recognitionMappings(@PathVariable UUID id,
+            @Valid @RequestBody RecognitionMappingsRequest request) {
+        return success(recognitionService.updateMappings(SourceRecognitionService.DATA_CENTER, id,
+                request.expectedRevision(), request.candidates(), request.unrecognizedFragments(), request.issues()));
+    }
+
+    @PostMapping("/recognition-jobs/{id}/recognition-profiles")
+    public ApiResponse<?> recognitionProfile(@PathVariable UUID id,
+            @Valid @RequestBody RecognitionProfileRequest request) {
+        return success(recognitionService.saveProfile(SourceRecognitionService.DATA_CENTER, id,
+                request.name(), request.expectedRevision()));
+    }
+
+    @PostMapping("/recognition-jobs/{id}/retry")
+    public ApiResponse<?> retryRecognition(@PathVariable UUID id) {
+        return success(recognitionService.retry(SourceRecognitionService.DATA_CENTER, id));
+    }
+
+    @PostMapping("/recognition-jobs/{id}/finalize")
+    public ApiResponse<?> finalizeRecognition(@PathVariable UUID id,
+            @Valid @RequestBody RecognitionRevisionRequest request) {
+        return success(recognitionService.finalizeWorkspace(SourceRecognitionService.DATA_CENTER, id,
+                request.expectedRevision()));
     }
 
     @GetMapping("/import-jobs/{id}")
@@ -133,18 +220,7 @@ public class DataController {
 
     @GetMapping("/import-jobs/{id}/preview")
     public ApiResponse<DataImportService.Preview> preview(@PathVariable UUID id) {
-        var preview = service.preview(id);
-        try {
-            var dataset = projectionService.latest(id);
-            preview = new DataImportService.Preview(preview.job(), preview.sheets(), preview.mappings(), preview.rows(),
-                    preview.issues(), preview.templateContract(), new DataImportService.ProjectionSummary(
-                    dataset.id(), dataset.status(), dataset.recordCount(),
-                    dataset.qualitySummary().path("longValueCount").asInt(0), dataset.eligibleRecordCount()),
-                    preview.compatibilityReport(), preview.componentOverrides());
-        } catch (com.jsd.aird.shared.error.ApiException ignored) {
-            // A job may legitimately have no committed projection yet.
-        }
-        return success(preview);
+        return success(service.preview(id));
     }
 
     @GetMapping("/import-jobs/{id}/workbook-snapshot")
@@ -160,34 +236,34 @@ public class DataController {
         return success(service.get(id));
     }
 
-    @GetMapping("/import-jobs/{id}/training-dataset")
-    public ApiResponse<com.jsd.aird.data.application.port.DataProjectionRepository.TrainingDataset> trainingDatasetForJob(
-            @PathVariable UUID id) {
-        return success(projectionService.latest(id));
-    }
-
     @PostMapping("/import-jobs/{id}/commit")
     public ApiResponse<DataRepository.Job> commit(@PathVariable UUID id) {
         service.commit(id);
-        return success(service.get(id));
+        var job = service.get(id);
+        if ("EXPERIMENT_DRAFT".equals(job.importPurpose())) {
+            var plan = experimentAssemblyService.preview(id);
+            if (plan.readyCount() > 0 && plan.reviewCount() == 0 && plan.blockedCount() == 0) {
+                experimentAssemblyService.sync(id, job.targetExperimentCategoryId(), null);
+            }
+        }
+        return success(job);
     }
 
-    @GetMapping("/training-datasets/{id}")
-    public ApiResponse<com.jsd.aird.data.application.port.DataProjectionRepository.TrainingDataset> trainingDataset(
+    @GetMapping("/import-jobs/{id}/experiments")
+    public ApiResponse<com.jsd.aird.data.application.ExperimentImportAssembler.AssemblyPlan> experimentPlan(
             @PathVariable UUID id) {
-        return success(projectionService.dataset(id));
+        return success(experimentAssemblyService.preview(id));
     }
 
-    @PostMapping("/training-datasets/{id}/approve")
-    public ApiResponse<Void> approveTrainingDataset(@PathVariable UUID id) {
-        projectionService.updateStatus(id, "APPROVED");
-        return success(null);
+    @PostMapping("/import-jobs/{id}/experiment-sync")
+    public ApiResponse<ExperimentAssemblyService.SyncResult> syncExperiments(
+            @PathVariable UUID id, @Valid @RequestBody ExperimentSyncRequest request) {
+        return success(experimentAssemblyService.sync(id, request.categoryId(), request.assemblyKeys()));
     }
 
-    @PostMapping("/training-datasets/{id}/rebuild")
-    public ApiResponse<DataImportService.ProjectionSummary> rebuildTrainingDataset(@PathVariable UUID id) {
-        var dataset = projectionService.dataset(id);
-        return success(projectionService.project(dataset.importJobId()));
+    @GetMapping("/import-jobs/{id}/experiment-sync-status")
+    public ApiResponse<ExperimentAssemblyService.SyncStatus> experimentSyncStatus(@PathVariable UUID id) {
+        return success(experimentAssemblyService.status(id));
     }
 
     /** The data-center list is one card per source file/import batch, never one card per field. */
@@ -242,7 +318,19 @@ public class DataController {
 
     public record CreateRequest(@NotNull UUID sourceFileId, @NotNull UUID templateVersionId,
                                 UUID categoryId, boolean duplicateOverride,
-                                List<@Valid ProjectRelationRequest> projectRelations) {}
+                                List<@Valid ProjectRelationRequest> projectRelations,
+                                String importPurpose, UUID targetExperimentCategoryId,
+                                String recognitionMode) {}
+    public record RecognitionCreateRequest(@NotNull UUID sourceFileId, String sourceFormat,
+                                           String recognitionMode, UUID templateVersionId, UUID categoryId,
+                                           String importPurpose, UUID targetExperimentCategoryId,
+                                           List<@Valid ProjectRelationRequest> projectRelations,
+                                           LocalDate experimentDate, boolean duplicateOverride) {}
+    public record RecognitionBoundariesRequest(long expectedRevision, @NotNull JsonNode items) {}
+    public record RecognitionMappingsRequest(long expectedRevision, @NotNull JsonNode candidates,
+                                             @NotNull JsonNode unrecognizedFragments, @NotNull JsonNode issues) {}
+    public record RecognitionProfileRequest(@NotBlank String name, long expectedRevision) {}
+    public record RecognitionRevisionRequest(long expectedRevision) {}
     public record ProjectRelationRequest(@NotNull UUID projectId, UUID stageId, UUID taskId) {}
 
     public record CategoryRequest(@NotBlank String name, @Size(max = 240) String description) {}
@@ -264,6 +352,7 @@ public class DataController {
     public record ExcludeRecordRequest(boolean excluded, String reason) {}
     public record ComponentAnchorRequest(@NotBlank String sheetId, @NotBlank String sourceRange,
                                          @NotBlank @Size(max = 500) String reason) {}
+    public record ExperimentSyncRequest(@NotNull UUID categoryId, List<String> assemblyKeys) {}
     public record FieldRequest(String fieldId, @NotBlank String displayName, String valueType,
                                String uiType, String groupCode, String description) {}
 }

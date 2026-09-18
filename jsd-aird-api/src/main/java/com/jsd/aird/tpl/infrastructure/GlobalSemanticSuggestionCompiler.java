@@ -15,6 +15,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.tpl.application.GroupNameNormalizer;
+import com.jsd.aird.tpl.application.ExperimentSemanticResolver;
 import com.jsd.aird.tpl.application.RecognitionIdentity;
 import com.jsd.aird.tpl.application.StandardFieldDictionary;
 import com.jsd.aird.tpl.application.port.RecognitionModelClient;
@@ -29,6 +30,7 @@ final class GlobalSemanticSuggestionCompiler {
 
     private final ObjectMapper objectMapper;
     private final StandardFieldRepository standardFieldRepository;
+    private final ExperimentSemanticResolver experimentSemanticResolver;
 
     GlobalSemanticSuggestionCompiler(ObjectMapper objectMapper) {
         this(objectMapper, null);
@@ -37,6 +39,7 @@ final class GlobalSemanticSuggestionCompiler {
     GlobalSemanticSuggestionCompiler(ObjectMapper objectMapper, StandardFieldRepository standardFieldRepository) {
         this.objectMapper = objectMapper;
         this.standardFieldRepository = standardFieldRepository;
+        this.experimentSemanticResolver = new ExperimentSemanticResolver(objectMapper);
     }
 
     private Compiled compileInternal(ObjectNode response, JsonNode physicalFacts) {
@@ -47,7 +50,11 @@ final class GlobalSemanticSuggestionCompiler {
         var semanticModel = objectMapper.createObjectNode()
                 .put("kind", "SEMANTIC_MODEL")
                 .put("recognitionMode", "FAITHFUL")
-                .put("recognitionProtocolVersion", 3);
+                .put("recognitionProtocolVersion", response.path("recognitionProtocolVersion").asInt(3));
+        if (response.path("experimentTemplateSuggestion").isObject()) {
+            semanticModel.set("experimentTemplateSuggestion",
+                    response.path("experimentTemplateSuggestion").deepCopy());
+        }
         var semanticAnnotations = remapAnnotations(response.path("semanticAnnotations"), blocks);
         semanticModel.set("semanticAnnotations", semanticAnnotations);
         var stableBlockArray = objectMapper.createArrayNode();
@@ -111,7 +118,7 @@ final class GlobalSemanticSuggestionCompiler {
     }
 
     /**
-     * Compiles the validated v3 semantic patch without sending it through the
+     * Compiles the validated semantic patch without sending it through the
      * transport validator again. The compiler creates its internal persistence
      * shape only after physical candidate validation has completed.
      */
@@ -120,7 +127,9 @@ final class GlobalSemanticSuggestionCompiler {
     }
 
     private ObjectNode regionCompilerEnvelope(ObjectNode normalized, JsonNode context) {
-        var result = objectMapper.createObjectNode().put("recognitionProtocolVersion", 3);
+        var result = objectMapper.createObjectNode().put("recognitionProtocolVersion", 4);
+        result.set("experimentTemplateSuggestion",
+                normalized.path("experimentTemplateSuggestion").deepCopy());
         result.putArray("semanticAnnotations");
         var blocks = result.putArray("businessBlocks");
         var relations = result.putArray("fieldRelations");
@@ -139,6 +148,8 @@ final class GlobalSemanticSuggestionCompiler {
             var sheetId = geometry.path("sheetId").asText();
             var range = geometry.path("range").asText();
             var type = geometry.path("type").asText("UNKNOWN");
+            var templateAuto = normalized.path("experimentTemplateSuggestion")
+                    .path("autoAccept").asBoolean(false);
             if (!BUSINESS_REGION_TYPES.contains(type)) {
                 qualityIssues.add(objectMapper.createObjectNode()
                         .put("temporaryId", "structure-unclear-" + id)
@@ -182,6 +193,27 @@ final class GlobalSemanticSuggestionCompiler {
                         .put("regionId", id)
                         .put("blockId", blockId)
                         .put("parentBlockId", geometry.path("parentBlockId").asText(""));
+                var experimentTemplate = normalized.path("experimentTemplateSuggestion");
+                table.put("autoAccept", templateAuto)
+                        .put("experimentSemanticStatus", experimentTemplate.path("experimentSemanticStatus")
+                                .asText(templateAuto ? "AUTO_CONFIRMED" : "NEEDS_REVIEW"));
+                var projections = table.putArray("listProjections");
+                for (var matrix : semantic.path("matrixRelations")) {
+                    if (!"FORMULA_MATRIX".equals(matrix.path("matrixType").asText(""))) continue;
+                    projections.add(objectMapper.createObjectNode()
+                            .put("listProjectionId", matrix.path("candidateRef").asText(""))
+                            .put("domain", "FORMULA")
+                            .put("componentId", id)
+                            .put("recordAxis", matrix.path("recordAxis").asText("COLUMN"))
+                            .put("itemAxis", matrix.path("itemAxis").asText("ROW"))
+                            .put("labelRange", matrix.path("labelRange").asText(""))
+                            .put("valueRange", matrix.path("valueRange").asText(""))
+                            .put("totalRange", matrix.path("totalRange").asText(""))
+                            .put("labelSemantic", matrix.path("labelSemantic").asText("MATERIAL_NAME"))
+                            .put("valueSemantic", matrix.path("valueSemantic").asText("RATIO"))
+                            .put("semanticStatus", matrix.path("experimentSemanticStatus").asText("NEEDS_REVIEW"))
+                            .put("confidence", matrix.path("confidence").asDouble(0d)));
+                }
                 for (var key : List.of("canonicalStatus", "structureStatus", "candidateOnly",
                         "physicalStructureOnly", "reviewRequired", "structureConflict",
                         "resolutionGroupId", "resolutionAlternativeId", "resolutionStatus",
@@ -211,8 +243,11 @@ final class GlobalSemanticSuggestionCompiler {
                         relationCopy.put("sheetId", sheetId).put("blockTemporaryId", blockId)
                                 .put("regionId", id)
                                 .put("blockId", blockId);
+                        ensureExperimentSemantics(relationCopy, physical, geometry);
+                        relationCopy.put("autoAccept",
+                                templateAuto && relationCopy.path("autoAccept").asBoolean(false));
                         relations.add(relationCopy);
-                        columns.add(objectMapper.createObjectNode()
+                        var column = objectMapper.createObjectNode()
                                 .put("temporaryId", relation.path("temporaryId").asText("column-" + columns.size()))
                                 .put("candidateRef", relationCopy.path("candidateRef").asText(""))
                                 .put("name", relation.path("businessName").asText("待确认列"))
@@ -229,7 +264,10 @@ final class GlobalSemanticSuggestionCompiler {
                                 .put("condition", relation.path("condition").asText(""))
                                 .put("nameSource", relation.path("nameSource").asText("MODEL"))
                                 .put("semanticFallback", relation.path("semanticFallback").asBoolean(false))
-                                .put("reviewRequired", relation.path("reviewRequired").asBoolean(false)));
+                                .put("reviewRequired", relation.path("reviewRequired").asBoolean(false))
+                                .put("autoAccept", relationCopy.path("autoAccept").asBoolean(false));
+                        copyExperimentSemantics(relationCopy, column);
+                        columns.add(column);
                 }
                 if (columns.isEmpty() && "COLUMN_TABLE".equals(type)) {
                     appendPhysicalColumnFallbacks(columns, relations, geometry, table, sheetId, blockId);
@@ -263,6 +301,9 @@ final class GlobalSemanticSuggestionCompiler {
                     }
                     relationCopy.put("sheetId", sheetId).put("blockTemporaryId", blockId)
                             .put("formExpectedFieldCount", formRelations.size());
+                    ensureExperimentSemantics(relationCopy, physical, geometry);
+                    relationCopy.put("autoAccept",
+                            templateAuto && relationCopy.path("autoAccept").asBoolean(false));
                     relations.add(relationCopy);
                 }
             }
@@ -319,6 +360,7 @@ final class GlobalSemanticSuggestionCompiler {
                     .put("nameSource", "PHYSICAL_HEADER_FALLBACK")
                     .put("semanticFallback", true)
                     .put("reviewRequired", true);
+            ensureExperimentSemantics(relation, candidate, geometry);
             relations.add(relation.deepCopy());
             columns.add(objectMapper.createObjectNode()
                     .put("temporaryId", relation.path("temporaryId").asText())
@@ -489,7 +531,8 @@ final class GlobalSemanticSuggestionCompiler {
                 .put("condition", source.path("condition").asText(""))
                 .put("reason", "根据完整工作簿的标签和值关系识别")
                  .put("interpretation", "系统认为这里用于填写或读取“"
-                         + businessName + "”。");
+                          + businessName + "”。");
+        copyExperimentSemantics(source, payload);
         if (source.path("positionPending").asBoolean(false)) {
             payload.put("positionPending", true)
                     .put("candidateOnly", true)
@@ -571,7 +614,14 @@ final class GlobalSemanticSuggestionCompiler {
                 .put("reason", "根据完整工作簿的表头、数据区和业务上下文识别")
                 .put("interpretation", "ROW_TABLE".equals(kind)
                         ? "系统认为这里按行填写或读取“" + source.path("businessName").asText() + "”记录。"
-                        : "系统认为这里按列填写或读取“" + source.path("businessName").asText() + "”记录。");
+                         : "系统认为这里按列填写或读取“" + source.path("businessName").asText() + "”记录。");
+        if (source.path("listProjections").isArray()) {
+            payload.set("listProjections", source.path("listProjections").deepCopy());
+        }
+        if (source.has("autoAccept")) payload.put("autoAccept", source.path("autoAccept").asBoolean(false));
+        if (source.has("experimentSemanticStatus")) {
+            payload.put("experimentSemanticStatus", source.path("experimentSemanticStatus").asText(""));
+        }
         var locator = locator(sheetId, sheetNames.getOrDefault(sheetId, sheetId),
                 source.path("headerRange").asText(), source.path("range").asText(), "ARRAY");
         locator.put("headerRange", source.path("headerRange").asText());
@@ -673,6 +723,7 @@ final class GlobalSemanticSuggestionCompiler {
                                 .put("fieldCode", "FORMULA.ITEM.THEORETICAL_KG")
                                 .put("name", "理论投料量")));
             }
+            copyExperimentSemantics(sourceColumn, column);
             columns.add(column);
         }
         payload.put("editability", tableEditability).put("valueSource", tableValueSource);
@@ -784,8 +835,15 @@ final class GlobalSemanticSuggestionCompiler {
                              || payload.path("reviewRequired").asBoolean(false))
                      .put("reason", "这是“" + payload.path("fieldName").asText("明细")
                             + "”中的独立明细字段，可单独确认和同步。")
-                     .put("interpretation", "系统认为这里填写每条记录的“"
-                             + column.path("name").asText(code) + "”。");
+                      .put("interpretation", "系统认为这里填写每条记录的“"
+                              + column.path("name").asText(code) + "”。");
+            copyExperimentSemantics(column, childPayload);
+            if (column.path("labelPathSegments").isArray()) {
+                childPayload.set("labelPathSegments", column.path("labelPathSegments").deepCopy());
+            }
+            if (!column.path("labelPath").asText("").isBlank()) {
+                childPayload.put("labelPath", column.path("labelPath").asText());
+            }
             childPayload.put("columnOffset", column.path("columnOffset").asInt(0))
                     .put("columnSpan", column.path("columnSpan").asInt(1));
             if (column.has("physicalColumnRanges")) {
@@ -828,6 +886,25 @@ final class GlobalSemanticSuggestionCompiler {
             ));
         }
         return List.copyOf(result);
+    }
+
+    private void copyExperimentSemantics(JsonNode source, ObjectNode target) {
+        for (var key : List.of("experimentField", "experimentItemLabel", "experimentSemanticConfidence",
+                "experimentSemanticStatus", "experimentSemanticSource", "experimentSemanticAlternatives",
+                "experimentSemanticIssue", "autoAccept")) {
+            if (source.has(key)) target.set(key, source.path(key).deepCopy());
+        }
+        if (source.path("labelPathSegments").isArray()) {
+            target.set("labelPathSegments", source.path("labelPathSegments").deepCopy());
+        }
+        if (!source.path("labelPath").asText("").isBlank()) {
+            target.put("labelPath", source.path("labelPath").asText());
+        }
+    }
+
+    private void ensureExperimentSemantics(ObjectNode relation, JsonNode physical, JsonNode geometry) {
+        if (relation.path("experimentField").isObject()) return;
+        experimentSemanticResolver.resolveField(relation, physical == null ? relation : physical, geometry);
     }
 
     private JsonNode physicalCell(JsonNode physicalFacts, String sheetId, int column, int row) {

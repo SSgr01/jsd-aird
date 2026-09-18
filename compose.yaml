@@ -46,6 +46,33 @@ services:
       start_period: 10s
     restart: unless-stopped
 
+  jsd-aird-ai:
+    build:
+      context: ./jsd-aird-ai
+      dockerfile: Dockerfile
+    image: jsd-aird-ai:0.5.0
+    container_name: jsd-aird-ai
+    environment:
+      JSD_AIRD_AI_HOST: 0.0.0.0
+      JSD_AIRD_AI_PORT: 8090
+      JSD_AIRD_AI_INTERNAL_TOKEN: ${JSD_AIRD_AI_INTERNAL_TOKEN:-}
+      JSD_AIRD_AI_ALLOW_FILE_URLS: "false"
+      JSD_AIRD_AI_TMP: /tmp/jsd-aird-ai
+      JSD_AIRD_AI_MAX_ARTIFACT_BYTES: ${JSD_AIRD_AI_MAX_ARTIFACT_BYTES:-536870912}
+      JSD_AIRD_AI_MODEL_CACHE_ENTRIES: ${JSD_AIRD_AI_MODEL_CACHE_ENTRIES:-4}
+      JSD_AIRD_AI_MODEL_THREADS: ${JSD_AIRD_AI_MODEL_THREADS:-2}
+    ports:
+      - "${JSD_AIRD_AI_PORT:-8090}:8090"
+    read_only: true
+    tmpfs:
+      - /tmp/jsd-aird-ai:size=1g,mode=1770,uid=10001,gid=10001
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    restart: unless-stopped
+
 volumes:
   postgres-data:
     name: jsd-aird-postgres-data

@@ -37,12 +37,14 @@ public class JdbcDataRepository implements DataRepository {
                     id, organization_id, source_file_id, source_sha256, source_file_name,
                     source_format, template_version_id, category_id, status,
                     duplicate_override, created_by, import_contract_version, contract_hash,
-                    source_file_hash, compatibility_status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'CREATED', ?, ?, ?, ?, ?, ?)
+                    source_file_hash, compatibility_status, import_purpose, target_experiment_category_id,
+                    source_owner
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'CREATED', ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, job.id(), job.organizationId(), job.sourceFileId(), job.sourceSha256(), job.sourceFileName(),
                 job.sourceFormat(), job.templateVersionId(), job.categoryId(),
                 job.duplicateOverride(), job.actorId(), job.importContractVersion(), job.contractHash(),
-                job.sourceSha256(), job.importContractVersion() == null ? "LEGACY" : "REVIEW_REQUIRED");
+                job.sourceSha256(), job.importContractVersion() == null ? "LEGACY" : "REVIEW_REQUIRED",
+                job.importPurpose(), job.targetExperimentCategoryId(), job.sourceOwner());
     }
 
     @Override
@@ -64,18 +66,21 @@ public class JdbcDataRepository implements DataRepository {
                        template_version_id, status, progress, current_stage,
                        category_id,
                        parser_version, error_message, created_at, updated_at,
-                       import_contract_version, contract_hash, compatibility_status
+                       import_contract_version, contract_hash, compatibility_status,
+                       import_purpose, target_experiment_category_id
                 FROM data.import_job WHERE organization_id = ? AND id = ?
                 """, this::mapJob, organizationId, importJobId).stream().findFirst();
     }
 
     @Override
     public PageResponse<Job> listJobs(UUID organizationId, UUID templateVersionId,
-                                      String status, String keyword, int page, int size) {
+                                      String status, String keyword, String sourceOwner, int page, int size) {
         var conditions = new ArrayList<String>();
         var parameters = new ArrayList<Object>();
         conditions.add("organization_id = ?");
         parameters.add(organizationId);
+        conditions.add("source_owner = ?");
+        parameters.add(sourceOwner == null || sourceOwner.isBlank() ? "DATA_CENTER" : sourceOwner);
         if (templateVersionId != null) {
             conditions.add("template_version_id = ?");
             parameters.add(templateVersionId);
@@ -100,7 +105,8 @@ public class JdbcDataRepository implements DataRepository {
                        template_version_id, status, progress, current_stage,
                        category_id,
                        parser_version, error_message, created_at, updated_at,
-                       import_contract_version, contract_hash, compatibility_status
+                       import_contract_version, contract_hash, compatibility_status,
+                       import_purpose, target_experiment_category_id
                 FROM data.import_job
                 WHERE
                 """ + where + " ORDER BY created_at DESC LIMIT ? OFFSET ?", this::mapJob, rows.toArray());
@@ -123,43 +129,83 @@ public class JdbcDataRepository implements DataRepository {
         }
         var conditions = new ArrayList<String>();
         var parameters = new ArrayList<Object>();
-        conditions.add("j.organization_id = ?");
+        conditions.add("organization_id = ?");
         parameters.add(organizationId);
         if (categoryId != null) {
-            conditions.add("j.category_id = ?");
+            conditions.add("category_id = ?");
             parameters.add(categoryId);
         }
         if (status != null && !status.isBlank()) {
-            conditions.add("j.status = ?");
+            conditions.add("status = ?");
             parameters.add(status);
         }
         if (keyword != null && !keyword.isBlank()) {
-            conditions.add("lower(j.source_file_name) LIKE lower(?)");
+            conditions.add("lower(source_file_name) LIKE lower(?)");
             parameters.add("%" + keyword.trim() + "%");
         }
         if (allowedImportJobIds != null) {
-            conditions.add("j.id IN (" + String.join(",", java.util.Collections.nCopies(allowedImportJobIds.size(), "?")) + ")");
+            conditions.add("entry_id IN (" + String.join(",", java.util.Collections.nCopies(allowedImportJobIds.size(), "?")) + ")");
             parameters.addAll(allowedImportJobIds);
         }
         var where = String.join(" AND ", conditions);
-        var total = jdbc.queryForObject("SELECT count(*) FROM data.import_job j WHERE " + where,
+        var sourceEntries = """
+                WITH source_entries AS (
+                    SELECT j.id entry_id,j.source_file_id,j.source_file_name,j.source_format,
+                        j.template_version_id,j.category_id,c.name category_name,j.status,j.progress,
+                        j.created_at,j.updated_at,j.source_owner,j.recognition_mode,j.import_purpose,
+                        coalesce((SELECT s.status FROM data.confirmed_submission_head h
+                            JOIN data.confirmed_submission s ON s.organization_id=h.organization_id
+                                AND s.id=h.confirmed_submission_id
+                            WHERE h.organization_id=j.organization_id AND h.import_job_id=j.id),
+                            CASE WHEN j.source_owner='EXPERIMENT' THEN 'EXPERIMENT_SOURCE' ELSE 'NOT_CONFIRMED' END) formal_status,
+                        (SELECT l.experiment_id FROM data.import_experiment_link l
+                            WHERE l.organization_id=j.organization_id AND l.import_job_id=j.id
+                                AND l.experiment_id IS NOT NULL ORDER BY l.updated_at DESC LIMIT 1) experiment_id,
+                        (SELECT l.experiment_version_id FROM data.import_experiment_link l
+                            WHERE l.organization_id=j.organization_id AND l.import_job_id=j.id
+                                AND l.experiment_version_id IS NOT NULL ORDER BY l.updated_at DESC LIMIT 1) experiment_version_id,
+                    'SOURCE_UPLOAD' entry_type,j.organization_id
+                    FROM data.import_job j LEFT JOIN data.data_category c ON c.id=j.category_id
+                    UNION ALL
+                    SELECT j.id,j.source_file_id,j.source_file_name,j.source_format,
+                        NULL,NULL,NULL,j.status,
+                        CASE WHEN j.status='COMPLETED' THEN 100 ELSE 0 END,
+                        j.created_at,j.updated_at,'EXPERIMENT','FREEFORM','EXPERIMENT_DRAFT',
+                        CASE WHEN e.status='COMPLETED' THEN 'EXPERIMENT_SOURCE' ELSE 'NOT_CONFIRMED' END,
+                        j.experiment_id,e.current_version_id,'SOURCE_UPLOAD',j.organization_id
+                    FROM rnd.experiment_import_job j
+                    LEFT JOIN rnd.experiment e ON e.organization_id=j.organization_id
+                        AND e.id=j.experiment_id AND e.deleted=false
+                    UNION ALL
+                    SELECT e.id,e.source_file_id,coalesce(f.original_name,e.title),'EXPERIMENT',
+                        NULL,NULL,NULL,e.status,100,e.created_at,e.updated_at,'EXPERIMENT','FREEFORM',
+                        'EXPERIMENT_DRAFT','EXPERIMENT_SOURCE',e.id,e.current_version_id,
+                        'EXPERIMENT_FACT',e.organization_id
+                    FROM rnd.experiment e LEFT JOIN ops.file_object f ON f.id=e.source_file_id
+                    WHERE e.status='COMPLETED' AND e.deleted=false
+                        -- Upload-owned rows above already expose template and
+                        -- free experiment sources. This branch is for manual
+                        -- completed experiments that have no source reference.
+                        AND NOT EXISTS (SELECT 1 FROM rnd.experiment_source_reference r
+                            WHERE r.organization_id=e.organization_id AND r.experiment_id=e.id)
+                )
+                """;
+        var total = jdbc.queryForObject(sourceEntries + " SELECT count(*) FROM source_entries WHERE " + where,
                 Long.class, parameters.toArray());
         var args = new ArrayList<>(parameters);
         args.add(size);
         args.add(Math.max(0, page - 1) * size);
-        var items = jdbc.query("""
-                SELECT j.id AS import_job_id, j.source_file_id, j.source_file_name, j.source_format,
-                       j.template_version_id, j.category_id, c.name AS category_name, j.status, j.progress,
-                       j.created_at, j.updated_at
-                FROM data.import_job j
-                LEFT JOIN data.data_category c ON c.id = j.category_id
-                 WHERE """ + " " + where + " ORDER BY j.updated_at DESC, j.created_at DESC LIMIT ? OFFSET ?",
-                (rs, n) -> new SourceFile(rs.getObject("import_job_id", UUID.class),
+        var items = jdbc.query(sourceEntries + " SELECT * FROM source_entries WHERE " + where
+                        + " ORDER BY updated_at DESC,created_at DESC,entry_id LIMIT ? OFFSET ?",
+                (rs, n) -> new SourceFile(rs.getObject("entry_id", UUID.class),
                         rs.getObject("source_file_id", UUID.class), rs.getString("source_file_name"),
                         rs.getString("source_format"), rs.getObject("template_version_id", UUID.class),
                         rs.getObject("category_id", UUID.class), rs.getString("category_name"),
                         rs.getString("status"), rs.getInt("progress"),
-                        rs.getTimestamp("created_at").toInstant(), rs.getTimestamp("updated_at").toInstant()),
+                        rs.getTimestamp("created_at").toInstant(), rs.getTimestamp("updated_at").toInstant(), List.of(),
+                        rs.getString("source_owner"),rs.getString("recognition_mode"),rs.getString("import_purpose"),
+                        rs.getString("formal_status"),rs.getObject("experiment_id",UUID.class),
+                        rs.getObject("experiment_version_id",UUID.class),rs.getString("entry_type")),
                 args.toArray());
         var totalValue = total == null ? 0L : total;
         return new PageResponse<>(items, page, size, totalValue, (totalValue + size - 1) / size);
@@ -173,13 +219,25 @@ public class JdbcDataRepository implements DataRepository {
     }
 
     @Override
+    public Optional<String> findSourceOwner(UUID organizationId, UUID importJobId) {
+        return jdbc.query("""
+                SELECT source_owner FROM data.import_job WHERE organization_id=? AND id=?
+                UNION ALL
+                SELECT 'EXPERIMENT' FROM rnd.experiment_import_job WHERE organization_id=? AND id=?
+                LIMIT 1
+                """, (rs, ignored) -> rs.getString(1), organizationId, importJobId,
+                organizationId, importJobId).stream().findFirst();
+    }
+
+    @Override
     public Optional<Job> findJobForUpdate(UUID organizationId, UUID importJobId) {
         return jdbc.query("""
                 SELECT id, source_file_id, source_sha256, source_file_name, source_format,
                        template_version_id, status, progress, current_stage,
                        category_id,
                        parser_version, error_message, created_at, updated_at,
-                       import_contract_version, contract_hash, compatibility_status
+                       import_contract_version, contract_hash, compatibility_status,
+                       import_purpose, target_experiment_category_id
                 FROM data.import_job WHERE organization_id = ? AND id = ? FOR UPDATE
                 """, this::mapJob, organizationId, importJobId).stream().findFirst();
     }
@@ -191,7 +249,8 @@ public class JdbcDataRepository implements DataRepository {
                        template_version_id, status, progress, current_stage,
                        category_id,
                        parser_version, error_message, created_at, updated_at,
-                       import_contract_version, contract_hash, compatibility_status
+                       import_contract_version, contract_hash, compatibility_status,
+                       import_purpose, target_experiment_category_id
                 FROM data.import_job
                 WHERE organization_id = ? AND source_sha256 = ? AND template_version_id = ?
                   AND status = 'COMPLETED'
@@ -607,7 +666,8 @@ public class JdbcDataRepository implements DataRepository {
                 rs.getInt("progress"), rs.getString("current_stage"), rs.getString("parser_version"),
                 rs.getString("error_message"), rs.getTimestamp("created_at").toInstant(), rs.getTimestamp("updated_at").toInstant(),
                 (Integer) rs.getObject("import_contract_version"), rs.getString("contract_hash"),
-                rs.getString("compatibility_status"));
+                rs.getString("compatibility_status"), rs.getString("import_purpose"),
+                rs.getObject("target_experiment_category_id", UUID.class));
     }
 
     private List<Integer> ints(JsonNode node) {

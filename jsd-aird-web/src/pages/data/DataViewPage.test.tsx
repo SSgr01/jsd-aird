@@ -34,6 +34,8 @@ describe('DataViewPage source-file list', () => {
       items: [{
         importJobId: 'job-1', fileObjectId: 'file-1', originalName: '检测报告.xlsx', sourceFormat: 'XLSX',
         templateVersionId: 'version-1', categoryId: 'cat-1', categoryName: '检测标准', status: 'COMPLETED', progress: 100,
+        sourceOwner: 'DATA_CENTER', recognitionMode: 'TEMPLATE_GUIDED', importPurpose: 'DATA_ONLY',
+        formalStatus: 'CONFIRMED', entryType: 'SOURCE_UPLOAD',
         createdAt: '2026-08-10T00:00:00Z', updatedAt: '2026-08-10T00:00:00Z',
       }], page: 1, size: 20, total: 1, totalPages: 1,
     });

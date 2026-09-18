@@ -12,6 +12,9 @@ import { VersionHistoryPanel } from '@/components/version-history/VersionHistory
 import {
   App,
   Button,
+  Form,
+  Input,
+  Modal,
   Result,
   Skeleton,
   Space,
@@ -26,10 +29,16 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { buildExperimentSnapshot, parseExperimentSnapshot } from '@/features/experiment-workspace/experiment-workbook';
 import type { EditorHandle } from '@/features/template-workspace/types';
 import {
+  reviewInformation,
+  reviewInformationMissing,
+  withReviewInformation,
+  type ReviewInformation,
+} from './experiment-review-information';
+import {
+  actExperiment,
   createRevision,
   getExperiment,
   listVersions,
-  publishExperiment,
   saveExperiment,
   type ExperimentDetail,
   type ExperimentModel,
@@ -48,6 +57,7 @@ const DocsEditor = lazy(async () => ({
 }));
 
 type WorkspaceView = 'preview' | 'edit' | 'versions';
+type PublishAction = 'start' | 'submit-review' | 'approve';
 const STATUS_TEXT: Record<string, string> = {
   DRAFT: '草稿',
   PENDING: '待开始',
@@ -77,12 +87,17 @@ export function ExperimentWorkspacePage() {
   const [downloadingSource, setDownloadingSource] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>('SAVED');
   const [loadError, setLoadError] = useState<string>();
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewForm] = Form.useForm<ReviewInformation>();
   const isDesktop = useDesktopEditing();
 
   const load = useCallback(async () => {
     setSaveState('SAVED');
     try {
-      const d = await getExperiment(id);
+      const [d, v] = await Promise.all([
+        getExperiment(id),
+        listVersions(id),
+      ]);
       const nextModel: ExperimentModel = { ...(d.editModel ?? {}) };
       if (nextModel.documentFormat === 'word' && d.templateSnapshot && !nextModel.documentSnapshot) {
         nextModel.documentSnapshot = d.templateSnapshot;
@@ -91,7 +106,6 @@ export function ExperimentWorkspacePage() {
       setEditModel(nextModel);
       const initialSnapshot = buildExperimentSnapshot(nextModel, d.currentVersionId ?? id, d.templateSnapshot);
       setSnapshot(initialSnapshot);
-      const v = await listVersions(id);
       setVersions(v);
       const editable = !['COMPLETED', 'VOIDED', 'PENDING_REVIEW'].includes(d.summary.status);
       setView(editable ? 'edit' : 'preview');
@@ -105,46 +119,59 @@ export function ExperimentWorkspacePage() {
     void load();
   }, [load]);
 
+  const currentDraftModel = () => {
+    if (!detail) return editModel;
+    // Keep saving functional while the lazy Univer editor is starting by
+    // using the last loaded snapshot as the document baseline; once the
+    // editor is ready its live snapshot remains authoritative.
+    const currentSnapshot = editorRef.current?.getSnapshot()
+      ?? snapshot
+      ?? buildExperimentSnapshot(editModel, detail.currentVersionId ?? id, detail.templateSnapshot);
+    return parseExperimentSnapshot(currentSnapshot, editModel);
+  };
+
+  const persistDraft = async (nextModel: ExperimentModel, successText?: string) => {
+    if (!detail) return undefined;
+    const title = nextModel.title ?? detail.summary.title;
+    if (!title.trim()) {
+      void message.warning('实验标题不能为空');
+      return undefined;
+    }
+    const savedDetail = await saveExperiment(id, {
+      revision: detail.summary.revision,
+      experimentNo: detail.summary.experimentNo,
+      title,
+      categoryId: detail.summary.categoryId,
+      categoryName: detail.summary.categoryName,
+      projectId: detail.summary.projectId,
+      stageId: detail.summary.stageId,
+      taskId: detail.summary.taskId,
+      ownerName: detail.summary.ownerName,
+      experimentDate: detail.summary.experimentDate,
+      templateVersionId: detail.templateVersionId,
+      templateSnapshotHash: detail.templateSnapshotHash,
+      templateSnapshot: detail.templateSnapshot,
+      editModel: nextModel,
+    });
+    // Keep the live editor mounted after a draft save. Updating `snapshot`
+    // here would trigger UniverSheetsEditor’s snapshot effect, destroy the
+    // current workspace, and recreate it from a possibly stale response.
+    setDetail(savedDetail);
+    setEditModel(nextModel);
+    setSaveState('SAVED');
+    if (successText) void message.success(successText);
+    return savedDetail;
+  };
+
   const save = async () => {
     if (!detail) return false;
     setSaveState('SAVING');
     try {
-      // Keep saving functional while the lazy Univer editor is starting by
-      // using the last loaded snapshot as the document baseline; once the
-      // editor is ready its live snapshot remains authoritative.
-      const currentSnapshot = editorRef.current?.getSnapshot()
-        ?? snapshot
-        ?? buildExperimentSnapshot(editModel, detail.currentVersionId ?? id, detail.templateSnapshot);
-      const nextModel = parseExperimentSnapshot(currentSnapshot, editModel);
-      const v = nextModel.title ?? detail.summary.title;
-      if (!v.trim()) {
-        void message.warning('实验标题不能为空');
+      const savedDetail = await persistDraft(currentDraftModel(), '草稿已保存');
+      if (!savedDetail) {
         setSaveState('DIRTY');
         return false;
       }
-      const savedDetail = await saveExperiment(id, {
-        revision: detail.summary.revision,
-        experimentNo: detail.summary.experimentNo,
-        title: v,
-        categoryId: detail.summary.categoryId,
-        categoryName: detail.summary.categoryName,
-        projectId: detail.summary.projectId,
-        stageId: detail.summary.stageId,
-        taskId: detail.summary.taskId,
-        ownerName: detail.summary.ownerName,
-        experimentDate: detail.summary.experimentDate,
-        templateVersionId: detail.templateVersionId,
-        templateSnapshotHash: detail.templateSnapshotHash,
-        templateSnapshot: detail.templateSnapshot,
-        editModel: nextModel,
-      });
-      // Keep the live editor mounted after a draft save. Updating `snapshot`
-      // here would trigger UniverSheetsEditor’s snapshot effect, destroy the
-      // current workspace, and recreate it from a possibly stale response.
-      setDetail(savedDetail);
-      setEditModel(nextModel);
-      setSaveState('SAVED');
-      void message.success('草稿已保存');
       return true;
     } catch (error) {
       setSaveState('DIRTY');
@@ -153,19 +180,61 @@ export function ExperimentWorkspacePage() {
     }
   };
 
-  const publish = async () => {
+  const openReviewInformation = () => {
+    reviewForm.setFieldsValue(reviewInformation(editModel));
+    setReviewOpen(true);
+  };
+
+  const submitReviewWithInformation = async () => {
+    if (!detail) return;
+    let values: ReviewInformation;
+    try {
+      values = await reviewForm.validateFields();
+    } catch {
+      return;
+    }
+    setBusy(true);
+    setSaveState('SAVING');
+    try {
+      const nextModel = withReviewInformation(currentDraftModel(), values);
+      const savedDetail = await persistDraft(nextModel);
+      if (!savedDetail) {
+        setSaveState('DIRTY');
+        return;
+      }
+      await actExperiment(id, 'submit-review', savedDetail.summary.revision);
+      setReviewOpen(false);
+      void message.success('已提交审核');
+      await load();
+    } catch (error) {
+      setSaveState('DIRTY');
+      void message.error(error instanceof Error ? error.message : '提交审核失败');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const publish = (action: PublishAction) => {
+    if (action === 'submit-review' && reviewInformationMissing(editModel)) {
+      openReviewInformation();
+      return;
+    }
+    void act(action);
+  };
+
+  const act = async (action: PublishAction) => {
     if (!detail) return;
     if (saveState !== 'SAVED') {
-      void message.warning('当前内容尚未保存，请先保存后再发布');
+      void message.warning('当前内容尚未保存，请先保存后再执行流程操作');
       return;
     }
     setBusy(true);
     try {
-      await publishExperiment(id, detail.summary.revision);
-      void message.success('实验已发布，发布后不可编辑');
+      await actExperiment(id, action, detail.summary.revision);
+      void message.success('状态已更新');
       await load();
     } catch (error) {
-      void message.error(error instanceof Error ? error.message : '实验发布失败');
+      void message.error(error instanceof Error ? error.message : '实验状态更新失败');
     } finally {
       setBusy(false);
     }
@@ -249,11 +318,10 @@ export function ExperimentWorkspacePage() {
   const status = detail.summary.status;
   const readonly = ['COMPLETED', 'VOIDED', 'PENDING_REVIEW'].includes(status);
   const editable = !readonly && isDesktop && view === 'edit';
-  const canPublish = !['COMPLETED', 'VOIDED'].includes(status)
-    && saveState === 'SAVED'
-    && view !== 'versions'
-    && !selectedVersion;
-
+  const publishAction: PublishAction | undefined =
+    status === 'DRAFT' || status === 'PENDING' ? 'start' :
+    status === 'IN_PROGRESS' || status === 'RETURNED' ? 'submit-review' :
+    status === 'PENDING_REVIEW' ? 'approve' : undefined;
   return (
     <section className="workspace-shell template-business-workspace experiment-workspace-shell" aria-label={`${detail.summary.title}实验工作台`}>
       <header className="workspace-header">
@@ -268,7 +336,7 @@ export function ExperimentWorkspacePage() {
             <Typography.Text strong>{detail.summary.title}</Typography.Text>
           </span>
           <Tag color={versions.length > 0 ? 'blue' : 'default'}>
-            {versions.length > 0 ? `V${versions[0]?.versionNo ?? detail.summary.versionNo}` : '未发布'}
+            {versions.length > 0 ? `V${versions[0]?.versionNo ?? detail.summary.versionNo}` : (STATUS_TEXT[status] ?? status)}
           </Tag>
         </div>
         <Space wrap>
@@ -293,8 +361,8 @@ export function ExperimentWorkspacePage() {
             type="primary"
             className="workspace-publish-button"
             loading={busy}
-            disabled={!canPublish}
-            onClick={() => void publish()}
+            disabled={(publishAction !== 'approve' && !editable) || saveState !== 'SAVED' || !publishAction}
+            onClick={() => { if (publishAction) publish(publishAction); }}
           >
             发布
           </Button>
@@ -346,6 +414,37 @@ export function ExperimentWorkspacePage() {
           </div>
         </div>
       )}
+
+      <Modal
+        title="审核信息"
+        open={reviewOpen}
+        okText="保存并提交审核"
+        cancelText="取消"
+        confirmLoading={busy}
+        onCancel={() => setReviewOpen(false)}
+        onOk={() => void submitReviewWithInformation()}
+        destroyOnClose
+      >
+        <Typography.Paragraph type="secondary">
+          这两项属于实验审核信息，不会改变已冻结的实验模板版式。
+        </Typography.Paragraph>
+        <Form form={reviewForm} layout="vertical" preserve={false}>
+          <Form.Item
+            name="purpose"
+            label="实验目的"
+            rules={[{ required: true, whitespace: true, message: '请填写实验目的' }]}
+          >
+            <Input.TextArea rows={3} placeholder="说明本次实验需要验证的目标" />
+          </Form.Item>
+          <Form.Item
+            name="mainConclusion"
+            label="主要结论"
+            rules={[{ required: true, whitespace: true, message: '请填写主要结论' }]}
+          >
+            <Input.TextArea rows={4} placeholder="填写真实实验完成后得到的主要结论" />
+          </Form.Item>
+        </Form>
+      </Modal>
     </section>
   );
 }
@@ -383,9 +482,13 @@ function ExperimentHistoricalVersion({ version, onBack }: { version: ExperimentV
 }
 
 function useDesktopEditing() {
-  const [matches, setMatches] = useState(() => window.matchMedia('(min-width: 1100px)').matches);
+  // The experiment editor remains usable in the compact single-column
+  // workspace.  The action guard must follow the actual editor breakpoint;
+  // using 1100px disabled save/review actions in the 1008px browser viewport
+  // even though Univer was fully loaded and editable.
+  const [matches, setMatches] = useState(() => window.matchMedia('(min-width: 768px)').matches);
   useEffect(() => {
-    const media = window.matchMedia('(min-width: 1100px)');
+    const media = window.matchMedia('(min-width: 768px)');
     const update = () => setMatches(media.matches);
     media.addEventListener('change', update);
     return () => media.removeEventListener('change', update);

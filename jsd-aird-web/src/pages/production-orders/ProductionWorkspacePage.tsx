@@ -30,7 +30,6 @@ import {
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
-import { AiEmployeePanel } from '@/components/ai-employee';
 import { readFieldModel, writeFieldModel } from '@/features/template-workspace/field-model';
 import { createCustomFieldWorkspace } from '@/features/template-workspace/custom-field-operations';
 import { getAtPath, setAtPath } from '@/features/template-workspace/path-utils';
@@ -672,7 +671,7 @@ export function ProductionWorkspacePage() {
         ) : null}
       </Modal>
     </section>
-    <AiEmployeePanel standalone />
+    <Alert type="info" showIcon message="AI 助手" description="当前演示环境未配置 AI 助手。" />
     </div>
   );
 }

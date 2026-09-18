@@ -2,6 +2,7 @@ package com.jsd.aird.tpl.application.port;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -96,6 +97,8 @@ public interface TemplateRepository {
                             int layoutStructureVersion, String contractHash, JsonNode contract, UUID actorId);
 
     Optional<ImportContract> findImportContract(UUID organizationId, UUID versionId);
+
+    Map<UUID, ImportContract> findImportContracts(UUID organizationId, List<UUID> versionIds);
 
     int updatePublishedWordDocument(UUID organizationId, UUID versionId, JsonNode wordDocument);
 

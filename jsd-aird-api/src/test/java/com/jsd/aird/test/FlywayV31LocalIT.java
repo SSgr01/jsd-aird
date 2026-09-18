@@ -8,6 +8,8 @@ import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.MigrationVersion;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.jdbc.datasource.init.ScriptUtils;
 
 /** Optional local-Postgres migration test used when Docker/Testcontainers is unavailable. */
 class FlywayV31LocalIT {
@@ -102,6 +104,11 @@ class FlywayV31LocalIT {
                     """);
         }
 
+        Flyway.configure().dataSource(url, username, password).locations("classpath:db/migration")
+                .target(MigrationVersion.fromVersion("52")).load().migrate();
+        try (var connection = DriverManager.getConnection(url, username, password)) {
+            ScriptUtils.executeSqlScript(connection, new ClassPathResource("db/foundation/mdm_rnd_foundation.sql"));
+        }
         Flyway.configure().dataSource(url, username, password).locations("classpath:db/migration").load().migrate();
 
         try (var connection = DriverManager.getConnection(url, username, password)) {

@@ -7,6 +7,8 @@ import type { ApiErrorResponse } from '@/services/http/types';
 import { notifyAuthRequired } from '@/services/http/auth-events';
 import { generateUUID } from '@/utils/uuid';
 
+type RetriableRequestConfig = AxiosResponse['config'] & { _csrfRetried?: boolean };
+
 export const httpClient = axios.create({
   baseURL: appEnv.apiBaseUrl,
   timeout: 15_000,
@@ -64,6 +66,16 @@ httpClient.interceptors.response.use(
     if (axios.isAxiosError<ApiErrorResponse>(error)) {
       const response = error.response;
       const isLoginRequest = response?.config.url?.endsWith('/api/v1/auth/login') ?? false;
+      const method = (response?.config.method || 'get').toLowerCase();
+      const isUnsafe = ['post', 'put', 'patch', 'delete'].includes(method);
+      const requestConfig = response?.config as RetriableRequestConfig | undefined;
+      if (response?.status === 403 && isUnsafe && !isLoginRequest && requestConfig && !requestConfig._csrfRetried) {
+        requestConfig._csrfRetried = true;
+        return refreshCsrfToken().then((token) => {
+          requestConfig.headers.set('X-XSRF-TOKEN', token);
+          return httpClient.request(requestConfig);
+        });
+      }
       if (response?.status === 401 && !isLoginRequest) notifyAuthRequired();
       throw new HttpError(
         response?.data?.message || error.message || '请求失败',

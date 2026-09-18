@@ -57,7 +57,7 @@ class PostgresWorkerTest {
         var handler = mock(AsyncJobHandler.class);
         when(handler.supports("SLOW_JOB")).thenReturn(true);
         when(handler.isRetryable(any())).thenReturn(true);
-        when(handler.handle(any())).thenAnswer(invocation -> {
+        when(handler.handle(any(), any())).thenAnswer(invocation -> {
             Thread.sleep(5_000);
             return mapper.createObjectNode();
         });

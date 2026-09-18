@@ -1,0 +1,18 @@
+.summary-strip {
+  overflow: hidden;
+  border: 1px solid #e3e8ef;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, .03);
+  margin-bottom: 18px;
+}
+.summary-strip .ant-card-body { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); padding:0; }
+.summary-strip .sum-item { padding: 13px 14px; border-right: 1px solid #edf1f6; }
+.summary-strip .sum-item:last-child { border-right: 0; }
+.summary-strip .sum-item span { display:block; font-size:10px; color:#8491a3; }
+.summary-strip .sum-item b { display:block; margin-top:4px; color:#273b58; font-size:13px; }
+@media (max-width: 900px) {
+  .summary-strip .ant-card-body { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .summary-strip .sum-item:nth-child(2n) { border-right: 0; }
+  .summary-strip .sum-item:last-child { grid-column: span 2; }
+}

@@ -1,5 +1,5 @@
 import { DownloadOutlined, EyeOutlined, FileExcelOutlined, RightOutlined } from '@ant-design/icons';
-import { App, Button, Form, Select } from 'antd';
+import { Alert, App, Button, Form, Select } from 'antd';
 import type { UploadFile } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -7,9 +7,10 @@ import { useNavigate } from 'react-router-dom';
 import { UploadWorkspace, type UploadWorkspaceRecord } from '@/components/upload-workspace';
 import { ProjectRelationPicker } from '@/components/project-relations/ProjectRelationPicker';
 import { FilePreviewModal, downloadPreviewFile, type FilePreviewDescriptor } from '@/components/file-preview';
-import { dataApi, type DataCategory, type DataJob, type DataTemplateOption } from '@/services/data/data-api';
+import { dataApi, type DataJob, type DataTemplateOption } from '@/services/data/data-api';
 import { dataParseProgress, dataParseStageLabel } from '@/services/data/data-progress';
 import type { ProjectRelationTarget } from '@/services/project/project-resource-api';
+import { listCategories } from '@/services/experiments/experiment-api';
 
 const statusFilters = [
   { key: 'ALL', label: '全部' },
@@ -40,12 +41,12 @@ function jobRecord(job: DataJob, navigate: (path: string) => void, onPreview: (j
     id: job.id,
     name: job.sourceFileName,
     icon: <FileExcelOutlined />,
-    meta: `模板版本 ${job.templateVersionId}`,
+    meta: job.templateVersionId ? `模板版本 ${job.templateVersionId}` : '自由实验识别',
     detail: `${new Date(job.createdAt).toLocaleString('zh-CN')} · ${dataParseStageLabel(job)}`,
     status,
     progress: parseProgress,
     progressLabel: '解析进度',
-    actions: <><Button type="link" icon={<EyeOutlined />} onClick={() => onPreview(job)}>预览</Button><Button type="link" icon={<DownloadOutlined />} onClick={() => onDownload(job)}>下载</Button><Button type="link" icon={<RightOutlined />} onClick={() => navigate(`/data/import-jobs/${job.id}`)}>查看导入任务</Button></>,
+    actions: <><Button type="link" icon={<EyeOutlined />} onClick={() => onPreview(job)}>预览</Button><Button type="link" icon={<DownloadOutlined />} onClick={() => onDownload(job)}>下载</Button><Button type="link" icon={<RightOutlined />} onClick={() => navigate(job.templateVersionId ? `/data/import-jobs/${job.id}` : `/data/recognition-jobs/${job.id}`)}>查看导入任务</Button></>,
   };
 }
 
@@ -54,8 +55,6 @@ export function DataUploadPage() {
   const navigate = useNavigate();
   const [templates, setTemplates] = useState<DataTemplateOption[]>([]);
   const [templateVersionId, setTemplateVersionId] = useState<string>();
-  const [categoryId, setCategoryId] = useState<string>();
-  const [categories, setCategories] = useState<DataCategory[]>([]);
   const [files, setFiles] = useState<UploadFile[]>([]);
   const [loading, setLoading] = useState(false);
   const [jobs, setJobs] = useState<{ items: DataJob[]; page: number; size: number; total: number }>({ items: [], page: 1, size: 8, total: 0 });
@@ -64,17 +63,19 @@ export function DataUploadPage() {
   const [jobsLoading, setJobsLoading] = useState(false);
   const [previewFile, setPreviewFile] = useState<FilePreviewDescriptor>();
   const [projectRelations, setProjectRelations] = useState<ProjectRelationTarget[]>([]);
+  const [experimentCategoryId, setExperimentCategoryId] = useState<string>();
 
   useEffect(() => {
     setTemplateVersionId(undefined);
-    setCategoryId(undefined);
     void dataApi.listTemplates()
       .then((items) => setTemplates(items.filter((item) => item.format === 'XLSX')))
       .catch((error) => void message.error(error instanceof Error ? error.message : '模板加载失败'));
   }, [message]);
 
   useEffect(() => {
-    void dataApi.listCategories().then(setCategories).catch(() => setCategories([]));
+    void Promise.all([
+      listCategories().then((items) => { setExperimentCategoryId((value) => value || items[0]?.id); }).catch(() => undefined),
+    ]);
   }, []);
 
   const loadJobs = useCallback(async (_options: { silent?: boolean } = {}) => {
@@ -107,7 +108,9 @@ export function DataUploadPage() {
 
   const submit = async () => {
     const file = files[0]?.originFileObj;
-    if (!chosen || !file) { void message.warning('请选择已发布模板和数据文件'); return; }
+    if (!file) { void message.warning('请选择数据文件'); return; }
+    if (!chosen) { void message.warning('请选择已发布模板'); return; }
+    if (chosen.experimentImportReady && !experimentCategoryId) { void message.warning('实验模板暂未配置默认实验分类'); return; }
     setLoading(true);
     const fileUid = files[0]?.uid;
     const updateUploadFile = (status: UploadFile['status'], percent: number) => {
@@ -119,7 +122,14 @@ export function DataUploadPage() {
       const staged = await dataApi.stageSource(file, (percent) => updateUploadFile('uploading', percent));
       uploadCompleted = true;
       updateUploadFile('done', 100);
-      const create = async (duplicateOverride: boolean) => dataApi.createJob({ sourceFileId: staged.fileId, templateVersionId: chosen.versionId, categoryId, duplicateOverride, projectRelations });
+      const create = async (duplicateOverride: boolean) => dataApi.createJob({
+        sourceFileId: staged.fileId,
+        templateVersionId: chosen.versionId,
+        duplicateOverride,
+        projectRelations,
+        importPurpose: chosen.experimentImportReady ? 'EXPERIMENT_DRAFT' : 'DATA_ONLY',
+        targetExperimentCategoryId: chosen.experimentImportReady ? experimentCategoryId : undefined,
+      });
       try {
         const job = await create(false);
         navigate(`/data/import-jobs/${job.id}`);
@@ -167,23 +177,28 @@ export function DataUploadPage() {
       <UploadWorkspace
       breadcrumbs={[{ title: '数据中心' }, { title: '数据上传' }]}
       title="数据上传"
-      description="选择已发布的数据中心模板，上传后按 Sheet、字段和质量问题逐步确认。"
-      leftTitle="数据分类"
+      description="普通业务数据和实验数据均按已发布模板导入，并在同一字段映射工作台完成确认。"
+      leftTitle="选择导入模板"
       classification={<Form layout="vertical" component={false}>
-        <Form.Item label="导入模板" required help="显示已发布的 XLSX 模板；模板自身定义字段和数据结构。">
+        <Form.Item label="导入模板" required help="显示已发布模板；模板自身定义字段和数据结构。">
           <Select
             showSearch
             optionFilterProp="label"
-            placeholder="请选择数据中心模板"
+            placeholder="请选择已发布模板"
             value={templateVersionId}
             onChange={setTemplateVersionId}
             options={templates.map((item) => ({ value: item.versionId, label: `${item.name} · ${item.templateCode} · V${item.versionNo}` }))}
             notFoundContent="暂无已发布模板"
           />
         </Form.Item>
-        <Form.Item label="归档分类" help="只用于目录归档，不限制模板字段或数据结构。">
-          <Select allowClear value={categoryId} onChange={setCategoryId} placeholder="选择归档分类" options={categories.map((item) => ({ value: item.id, label: item.name }))} />
-        </Form.Item>
+        {chosen && <Alert
+          showIcon
+          type={chosen.experimentImportReady ? 'success' : 'info'}
+          message={chosen.experimentImportReady ? '实验数据模板 · 可生成实验草稿' : '普通数据模板'}
+          description={chosen.experimentImportReady
+            ? `整份文件一个实验${chosen.identityTypes?.length ? ` · 文件内关联标识：${chosen.identityTypes.map(identityTypeLabel).join('、')}` : ''}`
+            : '本次导入只保存数据中心记录和来源信息。'}
+        />}
         <Form.Item label="关联项目 / 阶段 / 任务" extra="关系保存到本次导入任务，工作表、数据行和源文件会继承。"><ProjectRelationPicker value={projectRelations} onChange={setProjectRelations} /></Form.Item>
       </Form>}
       accept=".xls,.xlsx,.csv"
@@ -200,7 +215,7 @@ export function DataUploadPage() {
       submitIcon={<RightOutlined />}
       onSubmit={() => void submit()}
       submitting={loading}
-      submitDisabled={!chosen}
+      submitDisabled={!chosen || (chosen?.experimentImportReady === true && !experimentCategoryId)}
       rightTitle="已上传数据"
       rightCount={jobs.total}
       rightFilters={statusFilters}
@@ -217,4 +232,13 @@ export function DataUploadPage() {
       <FilePreviewModal open={Boolean(previewFile)} file={previewFile} onClose={() => setPreviewFile(undefined)} showSpreadsheetMerges={false} />
     </>
   );
+}
+
+function identityTypeLabel(value: string) {
+  return ({
+    EXPERIMENT_NO: '实验编号',
+    SAMPLE_NO: '样品编号',
+    FORMULA_NO: '配方编号',
+    BATCH_NO: '批次编号',
+  } as Record<string, string>)[value] ?? value;
 }

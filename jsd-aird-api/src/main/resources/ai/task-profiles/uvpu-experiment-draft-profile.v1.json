@@ -1,0 +1,16 @@
+{
+  "taskProfileCode": "UVPU_APPLICATION_FORMULATION",
+  "draftProfileVersion": "uvpu-experiment-draft.v1",
+  "templateCode": "TPL-20260904-21458C",
+  "processFacts": [
+    {"code":"coatingSolidsPct","displayName":"涂料固含","unit":"%"},
+    {"code":"uvaIntensityMwCm2","displayName":"UVA光强","unit":"mW/cm²"},
+    {"code":"uvEnergyMjCm2","displayName":"UV能量","unit":"mJ/cm²"},
+    {"code":"applicatorSpecUm","displayName":"绕丝棒规格","unit":"μm"},
+    {"code":"temperatureC","displayName":"温度","unit":"℃"},
+    {"code":"humidityRhPct","displayName":"湿度","unit":"%RH"},
+    {"code":"substrate","displayName":"测试基材","unit":""},
+    {"code":"applicationMethod","displayName":"施工方式","unit":""},
+    {"code":"curingSource","displayName":"固化光源","unit":""}
+  ]
+}

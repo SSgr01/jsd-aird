@@ -11,6 +11,45 @@ export type FieldOrigin = 'STANDARD' | 'TEMPLATE_LOCAL' | 'ORDER_LOCAL' | 'PENDI
 export type FieldUiType = 'TEXT' | 'SIGNATURE';
 export type TemplateFieldType = 'FIELD' | 'TABLE_COLUMN' | 'REGION' | 'MANUAL_VALUE';
 export type LabelStatus = 'RESOLVED' | 'UNRESOLVED' | 'NOT_APPLICABLE';
+export type ExperimentDomain = 'BASIC' | 'FORMULA' | 'PROCESS' | 'TEST' | 'CONCLUSION' | 'OTHER';
+export interface ExperimentFieldSemantic { domain: ExperimentDomain; field: string }
+export type ExperimentSemanticStatus = 'AUTO_CONFIRMED' | 'NEEDS_REVIEW' | 'CONFIRMED';
+export interface ExperimentIdentityRule {
+  identityType: 'EXPERIMENT_NO' | 'SAMPLE_NO' | 'FORMULA_NO' | 'BATCH_NO';
+  sourceKind: 'BINDING' | 'RECORD_IDENTITY';
+  componentId: string;
+  bindingId: string;
+}
+export interface ExperimentListProjection {
+  listProjectionId: string;
+  domain: 'FORMULA' | 'PROCESS' | 'TEST';
+  componentId: string;
+  parentBindingId?: string;
+  recordAxis: 'ROW' | 'COLUMN';
+  itemAxis: 'ROW' | 'COLUMN';
+  labelRange: string;
+  valueRange: string;
+  unitRange?: string;
+  totalRange?: string;
+  labelSemantic: string;
+  valueSemantic: string;
+  semanticStatus?: ExperimentSemanticStatus;
+  confidence?: number;
+}
+export interface ExperimentImportConfiguration {
+  templateUsage: 'GENERAL_DATA' | 'EXPERIMENT_DATA';
+  recordMode?: 'SINGLE_FILE' | 'BY_IDENTITY';
+  identities: ExperimentIdentityRule[];
+  listProjections: ExperimentListProjection[];
+  recognitionSummary?: {
+    status: ExperimentSemanticStatus;
+    autoConfirmedCount: number;
+    needsReviewCount: number;
+    identityCount: number;
+    matrixCount: number;
+    domains?: ExperimentDomain[];
+  };
+}
 
 export interface TemplateListItem {
   templateId: string;
@@ -39,6 +78,7 @@ export interface TemplateListItem {
 
 export interface TemplateBinding {
   bindingId: string;
+  componentId?: string;
   fieldId?: string;
   relationId?: string;
   parentBindingId?: string;
@@ -61,6 +101,13 @@ export interface TemplateBinding {
   primaryBinding: boolean;
   bindingStatus: BindingStatus;
   diagnostic?: Record<string, unknown>;
+  experimentField?: ExperimentFieldSemantic;
+  experimentItemLabel?: string;
+  experimentSemanticConfidence?: number;
+  experimentSemanticStatus?: ExperimentSemanticStatus;
+  experimentSemanticSource?: string;
+  experimentSemanticAlternatives?: ExperimentFieldSemantic[];
+  experimentSemanticIssue?: string;
 }
 
 export type FieldKind = 'SCALAR' | 'FORM_REGION' | 'ROW_TABLE' | 'COLUMN_TABLE';
@@ -131,6 +178,14 @@ export interface BusinessField {
   valueRange?: string;
   dataStartRow?: number;
   locator?: Record<string, unknown>;
+  experimentField?: ExperimentFieldSemantic;
+  experimentItemLabel?: string;
+  experimentSemanticConfidence?: number;
+  experimentSemanticStatus?: ExperimentSemanticStatus;
+  experimentSemanticSource?: string;
+  experimentSemanticAlternatives?: ExperimentFieldSemantic[];
+  experimentSemanticIssue?: string;
+  listProjections?: ExperimentListProjection[];
   columns?: Array<{
     code: string;
     bindingId?: string;
@@ -146,6 +201,13 @@ export interface BusinessField {
     editability?: Editability;
     valueSource?: ValueSource;
     condition?: string;
+    experimentField?: ExperimentFieldSemantic;
+    experimentItemLabel?: string;
+    experimentSemanticConfidence?: number;
+    experimentSemanticStatus?: ExperimentSemanticStatus;
+    experimentSemanticSource?: string;
+    experimentSemanticAlternatives?: ExperimentFieldSemantic[];
+    experimentSemanticIssue?: string;
     required?: boolean;
     dataStartRow?: number;
     semanticConflict?: boolean;

@@ -1,0 +1,192 @@
+.recognition-state,
+.recognition-document-empty {
+  display: grid;
+  min-height: 420px;
+  place-items: center;
+}
+
+.recognition-document-text {
+  height: 100%;
+  min-height: 520px;
+  margin: 0;
+  padding: 24px;
+  overflow: auto;
+  white-space: pre-wrap;
+  background: var(--app-surface);
+  font:
+    13px/1.75 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+}
+
+.recognition-mapping-panel,
+.recognition-boundary-panel {
+  padding-top: 12px;
+}
+
+.recognition-mapping-list {
+  display: grid;
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid var(--app-border);
+  border-radius: 9px;
+}
+
+.recognition-mapping-list > button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 54px;
+  padding: 9px 10px;
+  color: inherit;
+  text-align: left;
+  background: var(--app-surface);
+  border: 0;
+  border-bottom: 1px solid var(--app-border);
+  cursor: pointer;
+}
+
+.recognition-mapping-list > button:last-child {
+  border-bottom: 0;
+}
+
+.recognition-mapping-list > button:hover,
+.recognition-mapping-list > button.is-active {
+  background: color-mix(in srgb, var(--app-primary) 6%, var(--app-surface));
+}
+
+.recognition-mapping-list > button.is-active {
+  box-shadow: inset 3px 0 0 var(--app-primary);
+}
+
+.recognition-mapping-list > button > span:first-child,
+.recognition-fragment-list article > span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.recognition-mapping-list strong,
+.recognition-fragment-list strong {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recognition-mapping-list small,
+.recognition-fragment-list small {
+  color: var(--app-text-secondary);
+  font-size: 11px;
+}
+
+.recognition-field-editor {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 12px;
+  background: var(--app-surface-subtle);
+  border: 1px solid var(--app-border);
+  border-radius: 9px;
+}
+
+.recognition-field-editor > label {
+  display: grid;
+  gap: 5px;
+  color: var(--app-text-secondary);
+  font-size: 12px;
+}
+
+.recognition-field-editor .ant-input-number,
+.recognition-field-editor .ant-select {
+  width: 100%;
+}
+
+.recognition-editor-wide {
+  grid-column: 1 / -1;
+}
+
+.recognition-source-detail {
+  display: grid;
+  gap: 5px;
+  padding: 9px 10px;
+  color: var(--app-text-secondary);
+  font-size: 12px;
+  background: var(--app-surface);
+  border-radius: 7px;
+}
+
+.recognition-source-detail > span {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.recognition-fragment-list article {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+}
+
+.recognition-boundary-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  background: var(--app-surface-subtle);
+  border: 1px solid var(--app-border);
+  border-radius: 9px;
+}
+
+.recognition-boundary-card > header,
+.recognition-sample-list > section > div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.recognition-sample-list {
+  display: grid;
+  gap: 8px;
+}
+
+.recognition-sample-list > section {
+  display: grid;
+  gap: 7px;
+  padding: 10px;
+  background: var(--app-surface);
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+}
+
+.recognition-source-groups {
+  display: grid;
+  gap: 5px;
+}
+
+.recognition-source-groups .ant-tag {
+  max-width: 100%;
+  margin-block: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.recognition-issues {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+}
+
+@media (max-width: 720px) {
+  .recognition-field-editor {
+    grid-template-columns: 1fr;
+  }
+
+  .recognition-editor-wide {
+    grid-column: auto;
+  }
+}

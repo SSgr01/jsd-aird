@@ -24,7 +24,7 @@ import {
   type ResearchTestVersion,
 } from '@/services/research-test/research-test-api';
 import { httpClient } from '@/services/http/client';
-import { downloadBlob, fetchFileBlob } from '@/services/files/file-api';
+import { downloadBlob, fetchFileBlob, fetchFilePreviewBlob, fileContentUrl } from '@/services/files/file-api';
 import { FilePreviewModal } from '@/components/file-preview';
 import './research-test.css';
 const SheetsEditor = lazy(async () => ({
@@ -527,9 +527,12 @@ export function ResearchTestWorkspacePage({ type }: { type: ResearchTestType }) 
                   'application/octet-stream',
                 ),
                 load: () =>
-                  fetchFileBlob(
+                  fetchFilePreviewBlob(
                     detail.summary.sourceFileId || stringValue(detail.editModel.sourceFileId),
                   ),
+                downloadUrl: fileContentUrl(
+                  detail.summary.sourceFileId || stringValue(detail.editModel.sourceFileId),
+                ),
               }
             : undefined
         }

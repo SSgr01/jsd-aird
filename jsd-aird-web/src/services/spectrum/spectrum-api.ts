@@ -231,6 +231,15 @@ export const spectrumApi = {
     });
     return response.data;
   },
+  async previewBlob(id: string) {
+    const response = await httpClient.get<Blob>(`/api/v1/spc/charts/${id}/preview`, {
+      responseType: 'blob',
+    });
+    return response.data;
+  },
+  contentUrl(id: string) {
+    return `/api/v1/spc/charts/${id}/content`;
+  },
   async sessions(limit = 50) {
     const response = await httpClient.get<ApiResponse<SpectrumSession[]>>(
       '/api/v1/spc/chat/sessions',

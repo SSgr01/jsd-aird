@@ -1,6 +1,6 @@
 import type { ApiResponse, PageResponse } from '@/types/api';
 import { httpClient } from '@/services/http/client';
-import { fetchFileBlob } from '@/services/files';
+import { fetchFileBlob, fetchFilePreviewBlob } from '@/services/files';
 import type { ProjectRelationTarget, RelatedProjectView } from '@/services/project/project-resource-api';
 import type { RecognitionJob } from '@/services/source-recognition';
 
@@ -106,4 +106,5 @@ export const dataApi = {
   async deleteCategory(id: string, replacementCategoryId?: string) { await httpClient.delete(`/api/v1/data/categories/${id}`, { params: replacementCategoryId ? { replacementCategoryId } : undefined }); },
   async assignSourceCategory(importJobId: string, categoryId: string) { await httpClient.put(`/api/v1/data/sources/${importJobId}/category`, { categoryId }); },
   async sourceBlob(fileId: string) { return fetchFileBlob(fileId); },
+  async sourcePreviewBlob(fileId: string) { return fetchFilePreviewBlob(fileId); },
 };

@@ -25,7 +25,7 @@ import { SaveStateBadge, type SaveState } from '@/components/SaveStateBadge';
 import { FilePreviewModal } from '@/components/file-preview/FilePreviewModal';
 import { VersionHistoryPanel } from '@/components/version-history/VersionHistoryPanel';
 import { usePermission } from '@/components/auth/usePermission';
-import { downloadBlob, fetchFileBlob } from '@/services/files/file-api';
+import { downloadBlob, fetchFileBlob, fetchFilePreviewBlob, fileContentUrl } from '@/services/files/file-api';
 import type { EditorHandle } from '@/features/template-workspace/types';
 import { WordNativePreview } from '@/features/template-workspace/WordNativePreview';
 import {
@@ -658,7 +658,7 @@ export function ProductionUploadWorkspacePage() {
                       ],
                     }))
                   }
-                  loadPreview={() => fetchFileBlob(record.fileId)}
+                  loadPreview={() => fetchFilePreviewBlob(record.fileId)}
                 />
               )}
             </section>
@@ -672,7 +672,8 @@ export function ProductionUploadWorkspacePage() {
           fileName: record.originalName,
           contentType: record.contentType,
           size: record.size,
-          load: () => fetchFileBlob(record.fileId),
+          load: () => fetchFilePreviewBlob(record.fileId),
+          downloadUrl: fileContentUrl(record.fileId),
         }}
       />
     </section>

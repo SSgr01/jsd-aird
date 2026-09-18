@@ -31,6 +31,7 @@ import {
 } from '@/services/assistant';
 import { HttpError } from '@/services/http/errors';
 import { dataApi, type DataCategory } from '@/services/data/data-api';
+import { fileContentUrl, fetchFilePreviewBlob } from '@/services/files';
 import { knowledgeApi, type KnowledgeCategory } from '@/services/knowledge';
 import {
   citationEvidenceLabel,
@@ -463,7 +464,8 @@ export function AssistantPage() {
     if (citation.sourceType === 'DATA_SOURCE_FILE' && citation.fileObjectId) {
       return {
         fileName: citation.originalName || citation.title || 'source-file',
-        load: () => dataApi.sourceBlob(citation.fileObjectId as string),
+        load: () => fetchFilePreviewBlob(citation.fileObjectId as string),
+        downloadUrl: fileContentUrl(citation.fileObjectId as string),
       };
     }
     throw new Error('当前引用没有可定位的原始文件');

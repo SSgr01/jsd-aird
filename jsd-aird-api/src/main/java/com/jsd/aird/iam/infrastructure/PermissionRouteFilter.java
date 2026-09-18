@@ -411,6 +411,8 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
             return permission("ai.performance.predict", "AI_PERFORMANCE", "READ");
         if (path.equals("/api/v1/ai/rnd/prediction-context") && read)
             return permission("ai.performance.predict", "AI_PERFORMANCE", "READ");
+        if (path.equals("/api/v1/ai/rnd/formula-design-context") && read)
+            return permission("ai.formula.predict", "AI_FORMULA", "READ");
         if (path.startsWith("/api/v1/ai/rnd/reviews/") && path.endsWith("/decisions") && method.equals("POST"))
             return permission("ai.data.review", "AI_DATA", "REVIEW");
         if (path.equals("/api/v1/ai/rnd/training-settings"))

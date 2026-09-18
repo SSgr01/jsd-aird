@@ -17,6 +17,7 @@ const predictionErrorLabels: Record<string, string> = {
   MATERIAL_NOT_IN_MODEL: '材料已识别，但当前模型未覆盖', OUT_OF_DOMAIN: '当前配方或条件超出模型适用范围',
 }
 const resultTypeLabels = { CONTINUOUS: '连续数值', ORDINAL: '有序等级', BINARY: '二分类', CATEGORICAL: '多分类' }
+const inputGroupLabels: Record<string, string> = { FORMULA: '配方组成', PROCESS: '工艺条件', CONDITION: '环境与基材', OTHER: '其他实验前条件' }
 const trust = { HIGH: { text: '可信度高', color: 'green' }, MEDIUM: { text: '可信度中等', color: 'gold' }, LOW: { text: '可信度较低', color: 'orange' } }
 const materialRoleLabels: Record<string, string> = {
   RESIN: '树脂', ADDITIVE: '助剂', CROSSLINKER: '交联剂', SOLVENT: '溶剂',
@@ -105,7 +106,7 @@ export function PerformancePredictionPage() {
 
     <section className="prediction-gates">
       <div className="section-title"><span>选择预测目标</span><small>每个性能独立检查模型、输入、材料和适用范围</small></div>
-      <Select mode="multiple" value={targets} onChange={(value)=>{setTargets(value);setComplete(false)}} loading={loading} placeholder="按性能名称选择，可多选" maxTagCount="responsive" optionFilterProp="label" options={catalog?.targets.map((item)=>({ value:item.targetId,label:`${item.name} · ${resultTypeLabels[item.valueType]}`, disabled:item.targetStatus==='RETIRED' }))} />
+      <Select mode="multiple" value={targets} onChange={(value)=>{setTargets(value);setComplete(false)}} loading={loading} placeholder="按性能名称选择，可多选" maxTagCount="responsive" optionFilterProp="label" options={catalog?.targets.map((item)=>({ value:item.targetId,label:`${item.name} · ${resultTypeLabels[item.valueType]}${item.formalPredictionAvailable?'':' · 暂不可预测'}`, disabled:item.targetStatus==='RETIRED'||!item.formalPredictionAvailable }))} />
       {targets.length>0&&<div className="gate-grid">{targets.map((id)=>{const item=selectedById.get(id);const base=catalog?.targets.find((target)=>target.targetId===id);const available=item?.available;const reasons=item?.unavailableReasons??base?.unavailableReasons??[];return <div key={id} className={`gate-card ${available?'ready':'blocked'}`}><div>{available?<CheckCircleFilled />:<CloseCircleFilled />}<strong>{item?.name??base?.name??'未知目标'}</strong><Tag>{resultTypeLabels[(item?.valueType??base?.valueType) as keyof typeof resultTypeLabels]}</Tag></div><span>{available?'正式模型、输入方案和策略已固定':reasons.map((reason)=>unavailableLabels[reason]??reason).join('；')}</span></div>})}</div>}
       {!!context?.configurationConflicts?.length&&<Alert type="error" showIcon message="所选模型对同一输入字段的类型或单位要求冲突，请调整目标组合" />}
     </section>
@@ -120,7 +121,12 @@ export function PerformancePredictionPage() {
           <Checkbox checked={complete} onChange={(event)=>setComplete(event.target.checked)}>已录入全部配方成分</Checkbox>
         </Card>:<Card size="small"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="所选模型不使用配方组成，可直接填写实验前条件"/></Card>}
         <Card size="small" title="实验前条件" className="condition-card">
-          {!context?.requiredInputs.length?<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="选择可用目标后显示模型需要的条件"/>:<div className="condition-grid">{context.requiredInputs.map((field)=><label key={field.code}><span>{field.name||field.code}{field.required&&<em>*</em>} {field.unit&&<small>{field.unit}</small>}</span>{field.valueType==='NUMBER'?<InputNumber value={inputs[field.code] as number|undefined} onChange={(value)=>setInputs((old)=>({...old,[field.code]:value}))} />:field.valueType==='BOOLEAN'?<Select value={inputs[field.code] as boolean|undefined} onChange={(value)=>setInputs((old)=>({...old,[field.code]:value}))} options={[{value:true,label:'是'},{value:false,label:'否'}]}/>:<Input value={inputs[field.code] as string|undefined} onChange={(event)=>setInputs((old)=>({...old,[field.code]:event.target.value||undefined}))} />}</label>)}</div>}
+          {!context?.requiredInputs.length?<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="选择可用目标后显示模型需要的条件"/>:<div className="condition-groups">{(['PROCESS','CONDITION','OTHER'] as const).map((group)=><div key={group} className="condition-group"><div className="condition-group-title">{inputGroupLabels[group]}</div><div className="condition-grid">{context.requiredInputs.filter((field)=>field.inputGroup===group || (!field.inputGroup&&group==='OTHER')).map((field)=><label key={field.code}>
+            <span>{field.name||field.sourceLabel||field.code}{field.required&&<em>*</em>} {field.unit&&<small>{field.unit}</small>}</span>
+            {field.valueType==='NUMBER'?<InputNumber value={inputs[field.code] as number|undefined} onChange={(value)=>setInputs((old)=>({...old,[field.code]:value}))} />:field.valueType==='BOOLEAN'?<Select value={inputs[field.code] as boolean|undefined} onChange={(value)=>setInputs((old)=>({...old,[field.code]:value}))} options={[{value:true,label:'是'},{value:false,label:'否'}]}/>:field.valueType==='CATEGORY'?<Select allowClear value={inputs[field.code] as string|undefined} onChange={(value)=>setInputs((old)=>({...old,[field.code]:value}))} options={(field.allowedValues??(field.encoding?.allowedValues as Array<string|number>|undefined)??[]).map((value)=>({value:String(value),label:String(value)}))} placeholder="请选择"/>:<Input value={inputs[field.code] as string|undefined} onChange={(event)=>setInputs((old)=>({...old,[field.code]:event.target.value||undefined}))} />}
+            <small className="input-source-hint">{field.requiredByTargets?.length ? `用于：${field.requiredByTargets.map((target)=>target.targetName).join('、')}` : field.sourceLabel}</small>
+          </label>)}</div></div>)}</div>}
+          {context?.selected.some((target)=>Object.keys(target.fixedConditions??{}).length>0)&&<Alert type="info" showIcon message="测试方法、阶段和固定条件已按各目标模型固定" description={context.selected.filter((target)=>Object.keys(target.fixedConditions??{}).length>0).map((target)=>`${target.name}：${Object.values(target.fixedConditions??{}).filter(Boolean).join(' · ')}`).join('；')} />}
         </Card>
         <Button className="predict-button" size="large" type="primary" icon={<AimOutlined />} loading={predicting} disabled={!canPredict||Boolean(runningRecord)} onClick={()=>void predict()}>开始性能预测</Button>
       </section>

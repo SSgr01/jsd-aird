@@ -134,7 +134,12 @@ public class PredictionRepository {
 
     public PGobject pg(JsonNode value){try{var p=new PGobject();p.setType("jsonb");p.setValue((value==null?json.nullNode():value).toString());return p;}catch(Exception e){throw new IllegalArgumentException(e);}}
     private JsonNode node(ResultSet rs,String name)throws SQLException{var raw=rs.getString(name);try{return raw==null?json.nullNode():json.readTree(raw);}catch(Exception e){throw new SQLException(e);}}
-    private UUID uuid(ResultSet rs,String name)throws SQLException{return rs.getObject(name,UUID.class);}
+    private UUID uuid(ResultSet rs,String name)throws SQLException{
+        Object value = rs.getObject(name);
+        if (value == null) return null;
+        if (value instanceof UUID uuid) return uuid;
+        return UUID.fromString(value.toString());
+    }
     private Instant instant(ResultSet rs,String name)throws SQLException{var t=rs.getTimestamp(name);return t==null?null:t.toInstant();}
 
     private PredictionContracts.QualityPolicyView qualityPolicy(ResultSet rs,int n)throws SQLException{

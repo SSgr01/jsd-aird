@@ -43,6 +43,7 @@ public class ModelingConfigurationController {
     @PostMapping("/source-mappings/{id}/publish") public ApiResponse<?> publishMapping(@PathVariable UUID id,@RequestBody VersionCommand body,@RequestHeader("Idempotency-Key")String key){return ok(service.publishSourceMapping(id,body,key));}
 
     @GetMapping("/targets/{id}/input-schemes") public ApiResponse<?> schemes(@PathVariable UUID id){return ok(service.inputSchemes(id));}
+    @GetMapping("/targets/{id}/input-suggestions") public ApiResponse<?> inputSuggestions(@PathVariable UUID id,@RequestParam(required=false)UUID targetVersionId,@RequestParam(required=false)String keyword,@RequestParam(defaultValue="1")int page,@RequestParam(defaultValue="30")int size){return ok(service.inputSuggestions(id,targetVersionId,keyword,page,size));}
     @PostMapping("/targets/{id}/input-schemes") public ApiResponse<?> createScheme(@PathVariable UUID id,@RequestBody InputSchemeCommand body,@RequestHeader("Idempotency-Key")String key){return ok(service.createInputScheme(id,body,key));}
     @PostMapping("/input-schemes/{id}/preview") public ApiResponse<?> previewScheme(@PathVariable UUID id,@RequestHeader("Idempotency-Key")String ignoredKey){return ok(service.previewInputScheme(id));}
     @PostMapping("/input-schemes/{id}/freeze") public ApiResponse<?> freezeScheme(@PathVariable UUID id,@RequestBody VersionCommand body,@RequestHeader("Idempotency-Key")String key){return ok(service.freezeInputScheme(id,body,key));}

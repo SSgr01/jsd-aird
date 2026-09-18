@@ -51,7 +51,10 @@ def fill_sheet(sheet, start: int, rng: Random, owner: str) -> None:
             set_value(sheet, 32, col, "")
     set_value(sheet, 6, 2, ("线棒涂布", "刮涂", "旋涂")[start % 3])
     set_value(sheet, 7, 2, f"UV条件：{650 + (start * 31) % 500} mW/cm²；温度：{22 + start % 8}°C；湿度：{45 + (start * 3) % 31}%RH")
-    set_value(sheet, 39 if sheet.max_row < 40 else 40, 1, f"SYNTHETIC_DEMO；来源={owner}；客户模板原生布局。")
+    # Keep the workbook looking like a normal customer record.  The isolated
+    # demo database marks synthetic rows in metadata; that marker must not be
+    # written into the business-facing worksheet.
+    set_value(sheet, 39 if sheet.max_row < 40 else 40, 1, f"应用测试记录；来源={('数据中心' if owner == 'DATA_CENTER' else '实验记录本')}；原始模板记录。")
 
 
 def main() -> None:
@@ -71,7 +74,7 @@ def main() -> None:
         index = 1 if kind == "data" else 241
         for sheet in workbook.worksheets:
             fill_sheet(sheet, index, Random(20260917 + index), owner)
-        path = out / f"SYNTHETIC_DEMO_{kind}_{count}.xlsx"
+        path = out / f"应用测试数据_{('数据中心' if kind == 'data' else '实验记录本')}_{count}.xlsx"
         workbook.save(path)
         generated.append(str(path))
     print("\n".join(generated))

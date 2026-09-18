@@ -246,6 +246,24 @@ public class JdbcModelingConfigurationRepository {
                 """, this::dictionary, organizationId);
     }
 
+    public List<SampleFactRow> currentSampleFacts(UUID organizationId) {
+        return jdbc.query("""
+                SELECT ts.logical_sample_key,coalesce(ts.authority_source_type,ss.source_type) source_type,
+                       sr.composition_jsonb,sr.process_jsonb,sr.conditions_jsonb,sr.facts_jsonb,sr.source_coordinates_jsonb
+                FROM ai.training_sample ts
+                JOIN ai.sample_revision sr ON sr.organization_id=ts.organization_id
+                    AND sr.id=ts.current_sample_revision_id AND sr.status='CURRENT'
+                JOIN ai.sample_source ss ON ss.organization_id=ts.organization_id
+                    AND ss.id=sr.sample_source_id AND ss.status IN ('CURRENT','TAKEN_OVER')
+                WHERE ts.organization_id=? AND ts.status IN ('ACTIVE','TAKEN_OVER')
+                ORDER BY ts.logical_sample_key,ss.source_type
+                """,(rs,n)->new SampleFactRow(rs.getString("logical_sample_key"),rs.getString("source_type"),
+                json(rs,"composition_jsonb"),json(rs,"process_jsonb"),json(rs,"conditions_jsonb"),json(rs,"facts_jsonb"),json(rs,"source_coordinates_jsonb")),organizationId);
+    }
+
+    public record SampleFactRow(String logicalSampleKey, String sourceType, JsonNode composition,
+                                JsonNode process, JsonNode conditions, JsonNode facts, JsonNode coordinates) { }
+
     public Optional<MaterialDictionaryView> materialDictionary(UUID organizationId, UUID id) {
         return jdbc.query("SELECT * FROM ai.material_dictionary_version WHERE organization_id=? AND id=?",
                 this::dictionary, organizationId, id).stream().findFirst();

@@ -75,6 +75,20 @@ public final class ModelingContracts {
                                         JsonNode definition, JsonNode preprocessing,
                                         String configHash, Instant publishedAt, Instant createdAt) { }
 
+    /** A field discovered from current authoritative unified facts.  It is a
+     * runtime suggestion only; modelEligible is true only for a published,
+     * formally mapped structured X version. Raw text and unconfirmed fields
+     * remain visible but cannot be selected for a model scheme. */
+    public record InputSuggestion(String candidateKey, String name, String valueType, String unit,
+                                  String availabilityStage, long dataCenterCoverage, long experimentCoverage,
+                                  long totalCoverage, List<String> observedValues, JsonNode observedRange,
+                                  List<String> sourcePaths, UUID existingInputFieldId,
+                                  UUID existingInputFieldVersionId, String matchStatus,
+                                  List<String> conflicts, boolean modelEligible,
+                                  long estimatedTrainableSamples) { }
+    public record InputSuggestionPage(List<InputSuggestion> content, int page, int size,
+                                      long totalPages, long totalElements) { }
+
     public record SchemeFieldCommand(UUID inputFieldVersionId, boolean required, int ordinal,
                                      JsonNode override) { }
 

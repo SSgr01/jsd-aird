@@ -238,10 +238,16 @@ export interface PredictionResponse {
 }
 export interface PredictionRunning { predictionRecordId: string; requestId: string; executionStatus: 'RUNNING'; outcomeStatus?: never; pollAfterMs: number }
 export interface PredictionCatalogTarget { targetId: string; code: string; name: string; category: string; valueType: ValueType; targetStatus: string; formalPredictionAvailable: boolean; unavailableReasons: string[] }
-export interface PredictionContextTarget { targetId: string; name: string; category: string; valueType: ValueType; available: boolean; modelVersionId?: string; unavailableReasons: string[]; formulaRequirement: 'REQUIRED' | 'NOT_USED'; evidence: Record<string, string> }
-export interface PredictionInputField { fieldVersionId: string; code: string; name: string; valueType: 'NUMBER' | 'STRING' | 'BOOLEAN' | 'CATEGORY' | 'COMPOSITION'; unit?: string; required: boolean; encoding?: Record<string, unknown> }
+export interface PredictionContextTarget { targetId: string; name: string; category: string; valueType: ValueType; available: boolean; modelVersionId?: string; unavailableReasons: string[]; formulaRequirement: 'REQUIRED' | 'NOT_USED'; fixedConditions?: Record<string, unknown>; evidence: Record<string, string> }
+export interface PredictionInputField {
+  fieldVersionId: string; code: string; name: string; valueType: 'NUMBER' | 'STRING' | 'BOOLEAN' | 'CATEGORY' | 'COMPOSITION'; unit?: string; required: boolean;
+  encoding?: Record<string, unknown>; allowedValues?: Array<string | number>; sourceLabel?: string; inputGroup?: 'FORMULA' | 'PROCESS' | 'CONDITION' | 'OTHER';
+  fixedByTargetDefinition?: boolean; requiredByTargets?: Array<{ targetId: string; targetName: string }>
+}
 export interface PredictionMaterial { materialId: string; code: string; name?: string; category?: string; role: string; encoderIndex: number }
 export interface PredictionContext { targets: PredictionCatalogTarget[]; selected: PredictionContextTarget[]; requiredInputs: PredictionInputField[]; materials: PredictionMaterial[]; configurationConflicts?: Array<{ fieldCode: string; definitions: string[] }> }
+export interface InputSuggestion { candidateKey: string; name: string; valueType: InputValueType; unit?: string; availabilityStage: AvailabilityStage; dataCenterCoverage: number; experimentCoverage: number; totalCoverage: number; observedValues: string[]; observedRange: Record<string, unknown>; sourcePaths: string[]; existingInputFieldId?: string; existingInputFieldVersionId?: string; matchStatus: string; conflicts: string[]; modelEligible: boolean; estimatedTrainableSamples: number }
+export interface InputSuggestionPage { content: InputSuggestion[]; page: number; size: number; totalPages: number; totalElements: number }
 export interface QualityRule { code: string; priority: number; when: Record<string, unknown>; trustLevel: 'HIGH' | 'MEDIUM' | 'LOW'; explanation: string }
 export interface QualityPolicy { id: string; targetId: string; version: number; status: 'DRAFT' | 'PUBLISHED' | 'RETIRED'; kind: 'QUALITY'; defaultTrustLevel: 'HIGH' | 'MEDIUM' | 'LOW'; defaultExplanation: string; rules: QualityRule[]; policyHash: string; revision: number; publishedAt?: string; createdAt: string }
 

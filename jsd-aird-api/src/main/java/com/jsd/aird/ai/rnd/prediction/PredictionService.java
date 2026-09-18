@@ -74,7 +74,7 @@ public class PredictionService {
         var bindings=repository.targetBindings(actor.organizationId(),distinct(targetIds));
         var selected=json.createArrayNode();var inputs=new LinkedHashMap<String,JsonNode>();var materials=new LinkedHashMap<String,JsonNode>();
         for(var binding:bindings){var entry=bindingSummary(binding);selected.add(entry);
-            binding.frozenInputScheme().path("fields").forEach(field->{if(!"COMPOSITION".equals(field.path("valueType").asText()))inputs.putIfAbsent(field.path("code").asText(),field);});
+            binding.frozenInputScheme().path("fields").forEach(field->{if(!"COMPOSITION".equals(field.path("valueType").asText()))mergeInputField(inputs,field,binding);});
             binding.frozenDictionary().path("materials").forEach(material->{var enriched=material.deepCopy();repository.material(material.path("materialId").asText()).ifPresent(m->{if(enriched instanceof ObjectNode o){o.put("code",m.code());o.put("name",m.name());o.put("category",m.category());}});materials.putIfAbsent(material.path("materialId").asText(),enriched);});}
         root.set("selected",selected);root.set("requiredInputs",json.valueToTree(inputs.values()));root.set("materials",json.valueToTree(materials.values()));
         root.set("configurationConflicts",conflicts(bindings));return root;
@@ -277,7 +277,29 @@ public class PredictionService {
         }
         return false;
     }
-    private ObjectNode bindingSummary(PredictionRepository.TargetBinding b){var x=json.createObjectNode().put("targetId",b.targetId().toString()).put("name",b.targetName()).put("category",b.category()).put("valueType",b.valueType()).put("available",gateAvailability(b).isEmpty()).put("formulaRequirement",formulaRequired(b)?"REQUIRED":"NOT_USED");if(b.modelId()!=null)x.put("modelVersionId",b.modelId().toString());x.set("unavailableReasons",json.valueToTree(gateAvailability(b)));x.set("evidence",b.modelId()==null?json.createObjectNode():evidence(b));return x;}
+    private ObjectNode bindingSummary(PredictionRepository.TargetBinding b){var x=json.createObjectNode().put("targetId",b.targetId().toString()).put("name",b.targetName()).put("category",b.category()).put("valueType",b.valueType()).put("available",gateAvailability(b).isEmpty()).put("formulaRequirement",formulaRequired(b)?"REQUIRED":"NOT_USED");if(b.modelId()!=null)x.put("modelVersionId",b.modelId().toString());x.set("unavailableReasons",json.valueToTree(gateAvailability(b)));x.set("fixedConditions",fixedConditions(b));x.set("evidence",b.modelId()==null?json.createObjectNode():evidence(b));return x;}
+    private void mergeInputField(Map<String,JsonNode> inputs,JsonNode raw,PredictionRepository.TargetBinding binding){
+        var code=raw.path("code").asText();if(code.isBlank())return;
+        var field=raw.deepCopy();
+        if(field instanceof ObjectNode object){
+            var requiredBy=object.withArray("requiredByTargets");
+            var target=json.createObjectNode().put("targetId",binding.targetId().toString()).put("targetName",binding.targetName());
+            var duplicate=false;for(var existing:requiredBy)if(existing.path("targetId").asText().equals(binding.targetId().toString()))duplicate=true;
+            if(!duplicate)requiredBy.add(target);
+            var encoding=object.path("encoding");
+            if(!object.has("sourceLabel")||object.path("sourceLabel").asText().isBlank())object.put("sourceLabel",encoding.path("sourceLabel").asText(object.path("name").asText(code)));
+            if(!object.has("inputGroup")||object.path("inputGroup").asText().isBlank())object.put("inputGroup",encoding.path("inputGroup").asText(inputGroup(code,object.path("valueType").asText())));
+            var allowed=object.path("allowedValues");if(!allowed.isArray())allowed=encoding.path("allowedValues");if(!allowed.isArray())allowed=encoding.path("categoryValues");if(allowed.isArray())object.set("allowedValues",allowed);
+            object.put("fixedByTargetDefinition",isFixedByTargetDefinition(binding,code));
+        }
+        var current=inputs.get(code);if(current==null){inputs.put(code,field);return;}
+        if(current instanceof ObjectNode object){
+            var target=current.path("requiredByTargets");var from=field.path("requiredByTargets");if(target instanceof ArrayNode targetArray&&from.isArray())for(var item:from){var duplicate=false;for(var existing:targetArray)if(existing.path("targetId").asText().equals(item.path("targetId").asText()))duplicate=true;if(!duplicate)targetArray.add(item);}
+        }
+    }
+    private String inputGroup(String code,String type){return "COMPOSITION".equals(type)?"FORMULA":"OTHER";}
+    private boolean isFixedByTargetDefinition(PredictionRepository.TargetBinding binding,String code){var fixed=binding.definition().path("fixedInputs");return fixed.isObject()&&fixed.has(code);}
+    private ObjectNode fixedConditions(PredictionRepository.TargetBinding b){var fixed=json.createObjectNode();var definition=b.definition();for(var key:new String[]{"testMethod","testStage","pretreatment","fixedCondition","fixedConditions","load","substrate","angle"})if(definition.hasNonNull(key))fixed.set(key,definition.get(key));return fixed;}
     private List<String> gateAvailability(PredictionRepository.TargetBinding b){var out=new ArrayList<String>();if(!modelAvailable(b))out.add("NO_ACTIVE_MODEL");if(b.qualityPolicyId()==null)out.add("QUALITY_POLICY_NOT_READY");if(b.domainPolicyId()==null||!domainReady(b))out.add("DOMAIN_POLICY_NOT_READY");return out;}
     private boolean modelAvailable(PredictionRepository.TargetBinding b){return b.modelId()!=null&&(b.productionEligible()&&"REAL".equals(b.dataNature())||(allowSyntheticPrediction&&"SYNTHETIC".equals(b.dataNature())));}
     private List<String> reasons(UUID model,UUID quality,UUID domain){var out=new ArrayList<String>();if(model==null)out.add("NO_ACTIVE_MODEL");if(quality==null)out.add("QUALITY_POLICY_NOT_READY");if(domain==null)out.add("DOMAIN_POLICY_NOT_READY");return out;}

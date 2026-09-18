@@ -85,7 +85,7 @@ if ($SeedModels) {
     Push-Location $Root
     try {
         & $python scripts/testdata/r07_synthetic_15y_train_and_predict.py --database-url $dbUrl --base-url $baseUrl --psql $psqlCommand --output-dir (Join-Path $runtime 'r07-synthetic-15y')
-        & $python scripts/testdata/r07_register_15y_candidates.py --database-url $dbUrl --psql $psqlCommand --output-sql (Join-Path $runtime 'r07-synthetic-15y/register-candidates.sql')
+        & $python scripts/testdata/r07_register_15y_candidates.py --database-url $dbUrl --psql $psqlCommand --storage-root (Join-Path $runtime 'storage') --output-sql (Join-Path $runtime 'r07-synthetic-15y/register-candidates.sql')
         $psql = $psqlCommand
         $sql = "UPDATE ai.model_version SET status='ACTIVE', revision=revision+1, updated_at=now() WHERE organization_id=(SELECT organization_id FROM iam.app_user WHERE username='$($env:JSD_AIRD_IAM_ADMIN_USERNAME)' LIMIT 1) AND data_nature='SYNTHETIC';"
         & $psql $dbUrl -v ON_ERROR_STOP=1 -c $sql

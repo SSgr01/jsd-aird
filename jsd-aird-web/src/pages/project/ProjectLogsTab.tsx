@@ -102,7 +102,7 @@ export function ProjectLogsTab({ projectId }: { projectId: string }) {
       <Select allowClear value={action} placeholder="全部操作" onChange={(value) => { setAction(value); setPage(1); }}
         options={actionFilterOptions} />
       <Input allowClear value={operator} placeholder="操作人" onChange={(event) => setOperator(event.target.value)} />
-      <DatePicker.RangePicker value={dates} onChange={(value) => { setDates(value); setPage(1); }} />
+      <DatePicker.RangePicker value={dates} onChange={(value) => { setDates(value as unknown as [dayjs.Dayjs | null, dayjs.Dayjs | null] | null); setPage(1); }} />
       <Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button>
     </div>
     {loading ? <Skeleton active paragraph={{ rows: 8 }} /> : error ?

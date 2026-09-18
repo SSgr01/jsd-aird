@@ -1,0 +1,445 @@
+{
+  "contractVersion": "formula-model.v1",
+  "requestId": "uvpu-manual-score-001",
+  "taskProfileHash": "0f7b83313310dee15d6d75469852b28ecf5cd26b33e5dba4768a5afbf2f77666",
+  "snapshotHash": "7d6bacda2b75821e446d763856c0ee38e509019c1feacbd2d665f26e01f92cde",
+  "seed": 20260903,
+  "taskProfile": {
+    "contractVersion": "formula-model.v1",
+    "code": "UVPU_APPLICATION_FORMULATION",
+    "version": "1.0",
+    "schemaHash": "6c37a8db437fbc8dd53806b5e9361c76ba68f2466bfa1984c02b7f38f8d23dd1",
+    "ruleVersion": "uvpu-application-v1",
+    "formula": {
+      "basis": "PERCENT_SUM_100",
+      "total": 100.0,
+      "sumTolerance": 0.02,
+      "balanceMaterialCode": "S-48",
+      "mainResinCodes": [
+        "SJ-230",
+        "SJ-231",
+        "SJ-232",
+        "SJ-230-WASHED",
+        "SJ-231-WASHED",
+        "SJ-232-WASHED"
+      ],
+      "materials": [
+        {
+          "code": "SJ-230",
+          "column": "X_FORMULA__SJ_230_PCT",
+          "role": "MAIN_RESIN",
+          "minimum": 45.0,
+          "maximum": 75.0,
+          "step": 0.1
+        },
+        {
+          "code": "SJ-231",
+          "column": "X_FORMULA__SJ_231_PCT",
+          "role": "MAIN_RESIN",
+          "minimum": 45.0,
+          "maximum": 75.0,
+          "step": 0.1
+        },
+        {
+          "code": "SJ-232",
+          "column": "X_FORMULA__SJ_232_PCT",
+          "role": "MAIN_RESIN",
+          "minimum": 45.0,
+          "maximum": 75.0,
+          "step": 0.1
+        },
+        {
+          "code": "SJ-230-WASHED",
+          "column": "X_FORMULA__SJ_230_WASHED_PCT",
+          "role": "MAIN_RESIN",
+          "minimum": 45.0,
+          "maximum": 75.0,
+          "step": 0.1
+        },
+        {
+          "code": "SJ-231-WASHED",
+          "column": "X_FORMULA__SJ_231_WASHED_PCT",
+          "role": "MAIN_RESIN",
+          "minimum": 45.0,
+          "maximum": 75.0,
+          "step": 0.1
+        },
+        {
+          "code": "SJ-232-WASHED",
+          "column": "X_FORMULA__SJ_232_WASHED_PCT",
+          "role": "MAIN_RESIN",
+          "minimum": 45.0,
+          "maximum": 75.0,
+          "step": 0.1
+        },
+        {
+          "code": "DSP-3315",
+          "column": "X_FORMULA__DSP_3315_PCT",
+          "role": "ADDITIVE",
+          "minimum": 0.8,
+          "maximum": 2.3,
+          "step": 0.1
+        },
+        {
+          "code": "SS059/PC=1/1",
+          "column": "X_FORMULA__SS059_PC_1_1_PCT",
+          "role": "ADDITIVE",
+          "minimum": 0.8,
+          "maximum": 1.8,
+          "step": 0.1
+        },
+        {
+          "code": "S-48",
+          "column": "X_FORMULA__S_48_PCT",
+          "role": "BALANCE",
+          "minimum": 20.0,
+          "maximum": 55.0,
+          "step": 0.1
+        }
+      ]
+    },
+    "contextFeatures": [
+      {
+        "code": "coatingSolidsPct",
+        "column": "X_PROCESS__COATING_SOLIDS_PCT",
+        "valueType": "NUMERIC",
+        "adjustable": false,
+        "sharedWithinSourceGroup": true,
+        "unit": "%"
+      },
+      {
+        "code": "uvaIntensityMwCm2",
+        "column": "X_PROCESS__UVA_INTENSITY_MW_CM2",
+        "valueType": "NUMERIC",
+        "adjustable": false,
+        "sharedWithinSourceGroup": true,
+        "unit": "mW/cm2"
+      },
+      {
+        "code": "uvEnergyMjCm2",
+        "column": "X_PROCESS__UV_ENERGY_MJ_CM2",
+        "valueType": "NUMERIC",
+        "adjustable": false,
+        "sharedWithinSourceGroup": true,
+        "unit": "mJ/cm2"
+      },
+      {
+        "code": "filmThicknessUm",
+        "column": "X_PROCESS__FILM_THICKNESS_UM",
+        "valueType": "NUMERIC",
+        "adjustable": false,
+        "sharedWithinSourceGroup": false,
+        "unit": "um"
+      },
+      {
+        "code": "temperatureC",
+        "column": "X_ENV__TEMPERATURE_C",
+        "valueType": "NUMERIC",
+        "adjustable": false,
+        "sharedWithinSourceGroup": true,
+        "unit": "degC"
+      },
+      {
+        "code": "humidityRhPct",
+        "column": "X_ENV__HUMIDITY_RH_PCT",
+        "valueType": "NUMERIC",
+        "adjustable": false,
+        "sharedWithinSourceGroup": true,
+        "unit": "%"
+      },
+      {
+        "code": "substrate",
+        "column": "X_CONTEXT__SUBSTRATE",
+        "valueType": "CATEGORICAL",
+        "adjustable": false,
+        "sharedWithinSourceGroup": true,
+        "unit": null
+      },
+      {
+        "code": "applicationMethod",
+        "column": "X_CONTEXT__APPLICATION_METHOD",
+        "valueType": "CATEGORICAL",
+        "adjustable": false,
+        "sharedWithinSourceGroup": true,
+        "unit": null
+      },
+      {
+        "code": "curingSource",
+        "column": "X_CONTEXT__CURING_SOURCE",
+        "valueType": "CATEGORICAL",
+        "adjustable": false,
+        "sharedWithinSourceGroup": true,
+        "unit": null
+      }
+    ],
+    "targets": [
+      {
+        "code": "Y__WARPING_PET_INITIAL_CM",
+        "targetKey": "APP.WARPING.HEIGHT@substrate=PET_100UM;stage=UV_IMMEDIATE",
+        "valueType": "CONTINUOUS",
+        "direction": "MINIMIZE",
+        "unit": "cm",
+        "testMethod": "APP_WARPING_HEIGHT",
+        "substrate": "PET_100UM_OPTICAL",
+        "mandatory": true,
+        "weight": 3.0,
+        "ordinalValues": null,
+        "ordinalLabels": null,
+        "classLabels": null,
+        "positiveClass": null,
+        "decisionThreshold": 0.5,
+        "censoredColumn": null,
+        "censorTypeColumn": null
+      },
+      {
+        "code": "Y__WARPING_PET_12H_CM",
+        "targetKey": "APP.WARPING.HEIGHT@substrate=PET_100UM;stage=ROOM_12H",
+        "valueType": "CONTINUOUS",
+        "direction": "MINIMIZE",
+        "unit": "cm",
+        "testMethod": "APP_WARPING_HEIGHT",
+        "substrate": "PET_100UM_OPTICAL",
+        "mandatory": true,
+        "weight": 3.0,
+        "ordinalValues": null,
+        "ordinalLabels": null,
+        "classLabels": null,
+        "positiveClass": null,
+        "decisionThreshold": 0.5,
+        "censoredColumn": null,
+        "censorTypeColumn": null
+      },
+      {
+        "code": "Y__HARDNESS_PET_1KG_ORD",
+        "targetKey": "APP.HARDNESS.PENCIL@substrate=PET_100UM;load=1KG",
+        "valueType": "ORDINAL",
+        "direction": "MAXIMIZE",
+        "unit": null,
+        "testMethod": "APP_PENCIL_HARDNESS",
+        "substrate": "PET_100UM_OPTICAL",
+        "mandatory": false,
+        "weight": 1.0,
+        "ordinalValues": [
+          1.0,
+          2.0,
+          3.0,
+          4.0
+        ],
+        "ordinalLabels": [
+          "H",
+          "2H",
+          "3H",
+          "4H"
+        ],
+        "classLabels": null,
+        "positiveClass": null,
+        "decisionThreshold": 0.5,
+        "censoredColumn": null,
+        "censorTypeColumn": null
+      },
+      {
+        "code": "Y__STEEL_WOOL_500G_CYCLES",
+        "targetKey": "APP.ABRASION.STEELWOOL@substrate=PET_100UM;load=500G;contact=1X1_UNSPECIFIED",
+        "valueType": "CONTINUOUS",
+        "direction": "MAXIMIZE",
+        "unit": "cycles",
+        "testMethod": "APP_STEEL_WOOL_ABRASION",
+        "substrate": "PET_100UM_OPTICAL",
+        "mandatory": false,
+        "weight": 1.0,
+        "ordinalValues": null,
+        "ordinalLabels": null,
+        "classLabels": null,
+        "positiveClass": null,
+        "decisionThreshold": 0.5,
+        "censoredColumn": null,
+        "censorTypeColumn": null
+      },
+      {
+        "code": "Y__STEEL_WOOL_1KG_CYCLES",
+        "targetKey": "APP.ABRASION.STEELWOOL@substrate=PET_100UM;load=1KG;contact=1X1_UNSPECIFIED",
+        "valueType": "CONTINUOUS",
+        "direction": "MAXIMIZE",
+        "unit": "cycles",
+        "testMethod": "APP_STEEL_WOOL_ABRASION",
+        "substrate": "PET_100UM_OPTICAL",
+        "mandatory": false,
+        "weight": 1.0,
+        "ordinalValues": null,
+        "ordinalLabels": null,
+        "classLabels": null,
+        "positiveClass": null,
+        "decisionThreshold": 0.5,
+        "censoredColumn": null,
+        "censorTypeColumn": null
+      }
+    ],
+    "validation": {
+      "groupColumn": "formula_lineage_group",
+      "sourceGroupColumn": "source_sheet",
+      "folds": 5,
+      "intervalLevel": 0.9,
+      "randomKfoldDiagnostic": false
+    },
+    "readinessThresholds": {
+      "development": {
+        "minSamples": 30,
+        "minGroups": 5
+      },
+      "productionContinuous": {
+        "minSamples": 80,
+        "minGroups": 12,
+        "minBaselineImprovement": 0.1,
+        "maxNmae": 0.2,
+        "minIntervalCoverage": 0.85,
+        "maxIntervalCoverage": 0.95,
+        "requiredBaselineType": "T06_SIMILAR_CASE"
+      },
+      "productionOrdinal": {
+        "minSamples": 100,
+        "minSamplesPerObservedClass": 10,
+        "minGroups": 12,
+        "maxGradeMae": 1.0,
+        "minPlusMinusOneAccuracy": 0.85
+      },
+      "productionBinary": {
+        "minSamples": 80,
+        "minMinorityClassSamples": 20,
+        "minGroups": 12,
+        "minRocAuc": 0.65,
+        "minPrAuc": 0.5,
+        "minF1": 0.5,
+        "maxLogLoss": 0.7,
+        "maxBrierScore": 0.25
+      },
+      "productionCategorical": {
+        "minSamples": 80,
+        "minSamplesPerObservedClass": 10,
+        "minObservedClasses": 2,
+        "minGroups": 12,
+        "minMacroF1": 0.4,
+        "minBalancedAccuracy": 0.4,
+        "maxLogLoss": 1.5
+      }
+    },
+    "modelEligibility": {
+      "GP": {
+        "minSamples": 30
+      },
+      "RF": {
+        "minSamples": 30
+      },
+      "LIGHTGBM": {
+        "minSamples": 150
+      },
+      "XGBOOST": {
+        "minSamples": 150
+      },
+      "CATBOOST": {
+        "minSamples": 150
+      }
+    },
+    "modelSelection": {
+      "tieNmaeTolerance": 0.01,
+      "modelTieBreakOrder": [
+        "GAUSSIAN_PROCESS",
+        "CATBOOST",
+        "XGBOOST",
+        "LIGHTGBM",
+        "RANDOM_FOREST"
+      ]
+    },
+    "classificationModelEligibility": {
+      "LOGISTIC_REGRESSION": {
+        "minSamples": 30
+      },
+      "RF": {
+        "minSamples": 30
+      },
+      "LIGHTGBM": {
+        "minSamples": 80
+      },
+      "XGBOOST": {
+        "minSamples": 80
+      },
+      "CATBOOST": {
+        "minSamples": 80
+      }
+    },
+    "classificationModelSelection": {
+      "tieScoreTolerance": 0.01,
+      "binaryTieBreakOrder": [
+        "LOGISTIC_REGRESSION",
+        "CATBOOST",
+        "XGBOOST",
+        "LIGHTGBM",
+        "RANDOM_FOREST"
+      ],
+      "categoricalTieBreakOrder": [
+        "CATBOOST",
+        "XGBOOST",
+        "LIGHTGBM",
+        "RANDOM_FOREST",
+        "LOGISTIC_REGRESSION"
+      ]
+    },
+    "probabilityCalibration": {
+      "method": "PLATT",
+      "calibrationFolds": 3,
+      "expectedCalibrationErrorBins": 10
+    },
+    "applicabilityDomain": {
+      "enabled": true,
+      "robustLowerQuantile": 0.01,
+      "robustUpperQuantile": 0.99,
+      "nearBoundaryDistanceQuantile": 0.95,
+      "outOfDomainDistanceQuantile": 0.99,
+      "outOfDomainRequiresFallback": true
+    },
+    "candidate": {
+      "maximumPoolSize": 20000,
+      "minimumL1Distance": 2.0,
+      "conservativeMaximumL1Distance": 10.0,
+      "defaultCount": 4
+    }
+  },
+  "modelBundleHash": "d6c56b40d8775268c4f8387c4ad627ba2d17a52eec45e8fa4ab00bdb41b5b1b6",
+  "modelBundle": {
+    "url": "file:///D:/Projects/IdeaProjects/jsd-aird/.runtime/formula-models/UVPU_APPLICATION_FORMULATION/1.0/synthetic-development/models/UVPU_APPLICATION_FORMULATION-1.0-d6c56b40d8775268.zip",
+    "sha256": "d6c56b40d8775268c4f8387c4ad627ba2d17a52eec45e8fa4ab00bdb41b5b1b6"
+  },
+  "rows": [
+    {
+      "rowId": "MANUAL-X-001",
+      "formula": {
+        "SJ-230": 58.0,
+        "SJ-231": 0.0,
+        "SJ-232": 0.0,
+        "SJ-230-WASHED": 0.0,
+        "SJ-231-WASHED": 0.0,
+        "SJ-232-WASHED": 0.0,
+        "DSP-3315": 1.5,
+        "SS059/PC=1/1": 1.2,
+        "S-48": 39.3
+      },
+      "context": {
+        "coatingSolidsPct": 40.0,
+        "uvaIntensityMwCm2": 150.0,
+        "uvEnergyMjCm2": 800.0,
+        "filmThicknessUm": 10.0,
+        "temperatureC": 23.0,
+        "humidityRhPct": 50.0,
+        "substrate": "PET_100UM_OPTICAL",
+        "applicationMethod": "WIRE_BAR_ROLL_COAT_40UM",
+        "curingSource": "MERCURY_LAMP_UV"
+      }
+    }
+  ],
+  "targetCodes": [
+    "Y__WARPING_PET_INITIAL_CM",
+    "Y__WARPING_PET_12H_CM",
+    "Y__HARDNESS_PET_1KG_ORD",
+    "Y__STEEL_WOOL_500G_CYCLES",
+    "Y__STEEL_WOOL_1KG_CYCLES"
+  ]
+}

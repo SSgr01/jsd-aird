@@ -13,6 +13,11 @@ public interface WorkRepository {
     /** Renews the lease and records a heartbeat while a handler is running. */
     void heartbeatJob(UUID jobId, String workerId, Duration leaseDuration);
 
+    default boolean heartbeatClaimedJob(AsyncJob job, String workerId, Duration leaseDuration) {
+        heartbeatJob(job.id(), workerId, leaseDuration);
+        return true;
+    }
+
     /** Reads the live stage so timeout diagnostics do not use a stale claim snapshot. */
     String currentStage(UUID jobId);
 
@@ -22,6 +27,11 @@ public interface WorkRepository {
     }
 
     void completeJob(UUID jobId, JsonNode result);
+
+    default boolean completeClaimedJob(AsyncJob job, JsonNode result) {
+        completeJob(job.id(), result);
+        return true;
+    }
 
     void failJob(AsyncJob job, Exception exception);
 
@@ -39,10 +49,17 @@ public interface WorkRepository {
             JsonNode payload,
             int attemptCount,
             int maxAttempts,
-            String currentStage
+            String currentStage,
+            UUID organizationId,
+            UUID leaseToken,
+            long leaseGeneration
     ) {
         public AsyncJob(UUID id, String jobType, JsonNode payload, int attemptCount, int maxAttempts) {
-            this(id, jobType, payload, attemptCount, maxAttempts, "");
+            this(id, jobType, payload, attemptCount, maxAttempts, "", null, null, 0);
+        }
+        public AsyncJob(UUID id, String jobType, JsonNode payload, int attemptCount, int maxAttempts,
+                        String currentStage) {
+            this(id, jobType, payload, attemptCount, maxAttempts, currentStage, null, null, 0);
         }
     }
 

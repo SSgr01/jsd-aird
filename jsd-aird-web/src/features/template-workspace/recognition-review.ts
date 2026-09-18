@@ -11,7 +11,7 @@ import {
   fieldMatchesIdentity,
   writeFieldModel,
 } from './field-model';
-import type { FieldModel, TemplateBinding } from './types';
+import type { BusinessField, FieldModel, TemplateBinding } from './types';
 
 export function mergeRecognitionReview(
   schema: Record<string, unknown>,
@@ -158,6 +158,8 @@ export function mergeRecognitionReview(
       || Boolean(diff);
     return {
       ...field,
+      recognitionItemId: item.id,
+      ...refreshedExperimentSemantics(field, item.payload),
       ...(path?.length
         ? {
             name: overrides.has('name') ? field.name : path.at(-1) || field.name,
@@ -195,6 +197,7 @@ export function mergeRecognitionReview(
     const diff = recognitionLocatorDiff(binding.locator, item.payload.locator);
     return {
       ...binding,
+      diagnostic: { ...binding.diagnostic, recognitionItemId: item.id },
       ...(protectedPath?.length
         ? { labelPath: protectedPath.join(' > '), labelPathSegments: protectedPath }
         : {}),
@@ -203,6 +206,7 @@ export function mergeRecognitionReview(
             bindingStatus: 'AMBIGUOUS' as const,
             diagnostic: {
               ...binding.diagnostic,
+              recognitionItemId: item.id,
               recognitionDiff: diff ?? { status: 'STRUCTURE_CONFLICT' },
               recognitionConflict: true,
             },
@@ -212,6 +216,27 @@ export function mergeRecognitionReview(
   });
   nextSchema = writeFieldModel(nextSchema, nextModel);
   return { schema: nextSchema, mapping: nextMapping, model: nextModel };
+}
+
+function refreshedExperimentSemantics(
+  field: BusinessField,
+  payload: RecognitionReviewItem['payload'],
+): Partial<BusinessField> {
+  // A human decision is durable. Everything else is an automatic result and
+  // should be refreshed when a new REGION_FIELDS V4 run returns better
+  // evidence; otherwise stale NEEDS_REVIEW flags survive forever.
+  if (field.experimentSemanticSource === 'HUMAN' || !payload.experimentField) return {};
+  return {
+    experimentField: structuredClone(payload.experimentField),
+    experimentItemLabel: payload.experimentItemLabel,
+    experimentSemanticConfidence: payload.experimentSemanticConfidence,
+    experimentSemanticStatus: payload.experimentSemanticStatus,
+    experimentSemanticSource: payload.experimentSemanticSource,
+    experimentSemanticAlternatives: payload.experimentSemanticAlternatives
+      ? structuredClone(payload.experimentSemanticAlternatives)
+      : undefined,
+    experimentSemanticIssue: payload.experimentSemanticIssue,
+  };
 }
 
 function reviewItemMatchesField(field: FieldModel['fields'][number], item: RecognitionReviewItem) {
@@ -287,19 +312,21 @@ function effectiveFieldKey(item: RecognitionReviewItem) {
   const locator = item.payload.locator ?? {};
   const valueCellPaths = Array.isArray(locator.valueCellPaths) ? locator.valueCellPaths : [];
   const valueNodeIds = Array.isArray(locator.valueNodeIds) ? locator.valueNodeIds : [];
-  const range = locator.valueRange
-    || locator.logicalInputRange
-    || locator.dataRange
-    || locator.address
-    || locator.range
-    || locator.nodeId
-    || locator.valueAnchor
-    || locator.sourcePath
-    || valueCellPaths[0]
-    || valueNodeIds[0]
-    || item.address
-    || item.payload.relationId
-    || item.id;
+  const range = [
+    locator.valueRange,
+    locator.logicalInputRange,
+    locator.dataRange,
+    locator.address,
+    locator.range,
+    locator.nodeId,
+    locator.valueAnchor,
+    locator.sourcePath,
+    valueCellPaths[0],
+    valueNodeIds[0],
+    item.address,
+    item.payload.relationId,
+    item.id,
+  ].find((value): value is string => typeof value === 'string' && value.length > 0) ?? '';
   return [
     keyPart(locator.sheetId) || item.sheetId || '',
     keyPart(item.payload.regionId

@@ -15,6 +15,9 @@ import type {
   StaticRegion,
   DocumentStructure,
   TemplateBinding,
+  ExperimentFieldSemantic,
+  ExperimentSemanticStatus,
+  ExperimentListProjection,
 } from '@/features/template-workspace/types';
 import { httpClient } from '@/services/http/client';
 
@@ -252,6 +255,14 @@ export interface RecognitionSuggestionPayload {
   activeGenerationId?: string;
   labelPath?: string;
   autoAccept?: boolean;
+  experimentField?: ExperimentFieldSemantic;
+  experimentItemLabel?: string;
+  experimentSemanticConfidence?: number;
+  experimentSemanticStatus?: ExperimentSemanticStatus;
+  experimentSemanticSource?: string;
+  experimentSemanticAlternatives?: ExperimentFieldSemantic[];
+  experimentSemanticIssue?: string;
+  listProjections?: ExperimentListProjection[];
   nameSource?: 'MODEL' | 'ROW_ATTRIBUTE_FALLBACK' | 'PHYSICAL_HEADER_FALLBACK'
     | 'GENERATED_PLACEHOLDER' | 'RUNTIME_SLOT';
   semanticFallback?: boolean;
@@ -292,6 +303,13 @@ export interface RecognitionSuggestionPayload {
     editability?: Editability;
     valueSource?: ValueSource;
     condition?: string;
+    experimentField?: ExperimentFieldSemantic;
+    experimentItemLabel?: string;
+    experimentSemanticConfidence?: number;
+    experimentSemanticStatus?: ExperimentSemanticStatus;
+    experimentSemanticSource?: string;
+    experimentSemanticAlternatives?: ExperimentFieldSemantic[];
+    experimentSemanticIssue?: string;
     required?: boolean;
     dataStartRow?: number;
     semanticConflict?: boolean;

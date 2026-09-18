@@ -11,6 +11,11 @@ public interface OpsAsyncFacade {
 
     UUID enqueue(UUID organizationId, String jobType, JsonNode payload, String idempotencyKey, int priority);
 
+    default UUID enqueue(UUID organizationId, String jobType, JsonNode payload, String idempotencyKey,
+                         int priority, int maxAttempts) {
+        return enqueue(organizationId, jobType, payload, idempotencyKey, priority);
+    }
+
     /**
      * Cancels a queued or running job. Running handlers may finish their current
      * step, but terminal completion/failure must not overwrite CANCELLED.
@@ -24,6 +29,11 @@ public interface OpsAsyncFacade {
     }
 
     void appendOutbox(String aggregateType, UUID aggregateId, String eventType, JsonNode payload);
+
+    default void appendOutbox(UUID organizationId, String aggregateType, UUID aggregateId,
+                              String eventType, String idempotencyKey, JsonNode payload) {
+        appendOutbox(aggregateType, aggregateId, eventType, payload);
+    }
 
     default Optional<AsyncJobView> findJob(UUID organizationId, String idempotencyKey) {
         return Optional.empty();

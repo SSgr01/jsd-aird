@@ -66,7 +66,7 @@ interface CreateFormValues {
   stageId?: string;
   taskId?: string;
   format: 'WORD' | 'EXCEL';
-  sourceType: 'BLANK' | 'TEMPLATE' | 'UPLOAD';
+  sourceType: 'BLANK' | 'TEMPLATE' | 'UPLOAD' | 'IMPORT';
   visibility: string;
   templateVersionId?: string;
   effectiveFrom?: dayjs.Dayjs;
@@ -257,7 +257,7 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
     // File imports use the dedicated upload workflow. Keep this entry point
     // available from the create dialog without attempting to create a blank
     // record or validating fields that belong to the editor workflow.
-    if (form.getFieldValue('sourceType') === 'UPLOAD') {
+    if (['UPLOAD', 'IMPORT'].includes(form.getFieldValue('sourceType'))) {
       setOpen(false);
       nav(report ? '/research-test/upload' : '/research-test/standard-upload');
       return;
@@ -265,6 +265,11 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
     setSubmitting(true);
     try {
       const v = await form.validateFields();
+      if (v.sourceType === 'IMPORT' || v.sourceType === 'UPLOAD') {
+        setOpen(false);
+        nav(report ? '/research-test/upload' : '/research-test/standard-upload');
+        return;
+      }
       let templateSnapshot: Record<string, unknown> | undefined, templateHash: string | undefined;
       const selected = templates.find((x) => x.versionId === v.templateVersionId);
       if (v.sourceType === 'TEMPLATE') {
@@ -1135,7 +1140,7 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
               form.setFieldValue('templateVersionId', undefined);
             }}
           />
-          {sourceType === 'UPLOAD' ? (
+          {sourceType === 'UPLOAD' || sourceType === 'IMPORT' ? (
             <div className="research-test-import-hint">
               支持 DOC、DOCX、XLS、XLSX 文件导入，请前往上传页面完成解析。
             </div>

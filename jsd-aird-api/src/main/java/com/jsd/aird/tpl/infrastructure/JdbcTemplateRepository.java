@@ -503,6 +503,13 @@ public class JdbcTemplateRepository implements TemplateRepository {
             copyMappingMetadata(binding, diagnostic, "identity");
             copyMappingMetadata(binding, diagnostic, "trainingEligible");
             copyMappingMetadata(binding, diagnostic, "valueSource");
+            copyMappingMetadata(binding, diagnostic, "experimentField");
+            copyMappingMetadata(binding, diagnostic, "experimentItemLabel");
+            copyMappingMetadata(binding, diagnostic, "experimentSemanticConfidence");
+            copyMappingMetadata(binding, diagnostic, "experimentSemanticStatus");
+            copyMappingMetadata(binding, diagnostic, "experimentSemanticSource");
+            copyMappingMetadata(binding, diagnostic, "experimentSemanticAlternatives");
+            copyMappingMetadata(binding, diagnostic, "experimentSemanticIssue");
             if (binding.path("aliases").isArray()) diagnostic.set("aliases", binding.path("aliases"));
             arguments.add(new Object[]{
                     UUID.randomUUID(),
@@ -931,6 +938,33 @@ public class JdbcTemplateRepository implements TemplateRepository {
     }
 
     @Override
+    public Map<UUID, ImportContract> findImportContracts(UUID organizationId, List<UUID> versionIds) {
+        if (versionIds == null || versionIds.isEmpty()) return Map.of();
+        var parameters = new MapSqlParameterSource()
+                .addValue("organizationId", organizationId)
+                .addValue("versionIds", versionIds);
+        return namedJdbcTemplate.query("""
+                SELECT c.template_version_id, c.import_contract_version, c.layout_structure_version,
+                       c.contract_hash, c.contract_jsonb
+                FROM tpl.template_import_contract c
+                JOIN tpl.template_version tv ON tv.id = c.template_version_id
+                JOIN tpl.template t ON t.id = tv.template_id
+                WHERE t.organization_id = :organizationId
+                  AND c.template_version_id IN (:versionIds)
+                """, parameters, resultSet -> {
+            var result = new java.util.LinkedHashMap<UUID, ImportContract>();
+            while (resultSet.next()) {
+                result.put(resultSet.getObject("template_version_id", UUID.class), new ImportContract(
+                        resultSet.getInt("import_contract_version"),
+                        resultSet.getInt("layout_structure_version"),
+                        resultSet.getString("contract_hash"),
+                        parseJson(resultSet.getString("contract_jsonb"))));
+            }
+            return result;
+        });
+    }
+
+    @Override
     public void appendAudit(
             UUID organizationId,
             UUID actorId,
@@ -1004,8 +1038,11 @@ public class JdbcTemplateRepository implements TemplateRepository {
                     var diagnostic = parseJson(rs.getString("diagnostic_jsonb"));
                     binding.set("diagnostic", diagnostic);
                     for (String metadata : List.of(
-                            "fieldName", "valueType", "unit", "required", "identity",
-                            "trainingEligible", "valueSource", "aliases")) {
+                             "fieldName", "valueType", "unit", "required", "identity",
+                             "trainingEligible", "valueSource", "aliases", "experimentField",
+                             "experimentItemLabel", "experimentSemanticConfidence", "experimentSemanticStatus",
+                             "experimentSemanticSource", "experimentSemanticAlternatives",
+                             "experimentSemanticIssue")) {
                         if (!binding.has(metadata) && diagnostic.has(metadata)) {
                             binding.set(metadata, diagnostic.path(metadata));
                         }

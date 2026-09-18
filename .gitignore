@@ -37,3 +37,24 @@ Thumbs.db
 /.codex-tmp/
 /qa/
 /docs/
+/tmp/
+
+# Local AI/demo runtime output
+/catboost_info/
+**/catboost_info/
+**/__pycache__/
+**/.pytest_cache/
+/.runtime/demo/
+
+# Local one-off scripts and alternate package-manager metadata. The committed
+# demo entry points above are explicitly re-included for cross-computer setup.
+/jsd-aird-web/pnpm-lock.yaml
+/jsd-aird-web/pnpm-workspace.yaml
+/scripts/sql/
+/scripts/testdata/*
+!/scripts/testdata/r07_register_15y_candidates.py
+!/scripts/testdata/r07_synthetic_15y_train_and_predict.py
+!/scripts/testdata/r07_synthetic_prediction_data.py
+!/scripts/testdata/r10_bulk_client_template_import.py
+!/scripts/testdata/r10_noformula_bundle.py
+!/scripts/testdata/r10_register_noformula_model.sql

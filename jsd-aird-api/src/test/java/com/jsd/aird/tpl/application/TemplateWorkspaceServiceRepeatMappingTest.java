@@ -13,6 +13,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.shared.error.ApiException;
+import com.jsd.aird.tpl.domain.TemplateFormat;
 import org.junit.jupiter.api.Test;
 
 class TemplateWorkspaceServiceRepeatMappingTest {
@@ -44,6 +45,39 @@ class TemplateWorkspaceServiceRepeatMappingTest {
         assertThatThrownBy(() -> validate(mapping))
                 .isInstanceOf(ApiException.class)
                 .hasMessageContaining("明细字段与父级重复区域不在同一工作表");
+    }
+
+    @Test
+    void allowsSameSemanticPathOnDifferentWorksheets() {
+        var mapping = objectMapper.createArrayNode()
+                .add(scalarMapping("binding-1", "sheet-1", "A1"))
+                .add(scalarMapping("binding-2", "sheet-2", "A1"));
+
+        assertThatCode(() -> service.validateMappings(TemplateFormat.XLSX, mapping))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void rejectsDuplicatePrimaryPathOnSameWorksheet() {
+        var mapping = objectMapper.createArrayNode()
+                .add(scalarMapping("binding-1", "sheet-1", "A1"))
+                .add(scalarMapping("binding-2", "sheet-1", "B1"));
+
+        assertThatThrownBy(() -> service.validateMappings(TemplateFormat.XLSX, mapping))
+                .isInstanceOf(ApiException.class)
+                .hasMessageContaining("同一路径只能有一个主绑定");
+    }
+
+    private ObjectNode scalarMapping(String bindingId, String sheetId, String address) {
+        return objectMapper.createObjectNode()
+                .put("bindingId", bindingId)
+                .put("dataPath", "/fields/备注")
+                .put("locatorType", "CELL_RANGE")
+                .put("syncDirection", "TWO_WAY")
+                .put("primaryBinding", true)
+                .set("locator", objectMapper.createObjectNode()
+                        .put("sheetId", sheetId)
+                        .put("address", address));
     }
 
     private void validate(ArrayNode mapping) {

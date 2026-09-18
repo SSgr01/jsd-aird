@@ -58,7 +58,7 @@ export function ProjectMaterialsTab({ projectId }: Props) {
     { title: '文件名称', dataIndex: 'originalName', render: (value: string) => <Typography.Text strong>{value || '—'}</Typography.Text> },
     { title: '资料分类', dataIndex: 'categoryName', render: (value: string) => value || '—' },
     { title: '阶段 / 任务', key: 'relation', render: (_: unknown, row: QualityUpload) => `${row.stageName || '—'} / ${row.taskName || '—'}` },
-    { title: '可见范围', dataIndex: 'visibility', render: (value: string) => <Tag>{value === 'PROJECT' ? '项目组可见' : value === 'QUALITY' ? '品管部可见' : '全员可见'}</Tag> },
+    { title: '可见范围', dataIndex: 'visibility', render: (value: string) => <Tag>{value === 'PROJECT' ? '项目组可见' : value === 'RND' ? '研发部可见' : value === 'QUALITY' ? '品管部可见' : '全员可见'}</Tag> },
     { title: '上传时间', dataIndex: 'createdAt', render: (value: string) => formatDate(value) },
     { title: '操作', key: 'action', width: 80, render: (_: unknown, row: QualityUpload) => <a onClick={() => download(row.fileId, row.originalName)}>下载</a> },
   ];

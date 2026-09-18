@@ -47,7 +47,7 @@ export function ExperimentImportStatusPage() {
     <Space direction="vertical" size={18} style={{ width: '100%', maxWidth: 880, margin: '0 auto' }}>
       <Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate('/experiments/upload')}>返回实验上传</Button>
       <Typography.Title level={2} style={{ margin: 0 }}>{job.sourceFileName}</Typography.Title>
-      <Space wrap><Tag color="blue">自由上传</Tag><Tag>{job.sourceFormat}</Tag><Tag>{job.visibility === 'PROJECT' ? '项目组可见' : job.visibility === 'QUALITY' ? '品管部可见' : '全员可见'}</Tag></Space>
+      <Space wrap><Tag color="blue">自由上传</Tag><Tag>{job.sourceFormat}</Tag><Tag>{job.visibility === 'PROJECT' ? '项目组可见' : job.visibility === 'RND' ? '研发部可见' : job.visibility === 'QUALITY' ? '品管部可见' : '全员可见'}</Tag></Space>
       {job.status === 'PARSING' ? <Alert type="info" showIcon message="正在生成实验工作台" /> : null}
       {job.status === 'FAILED' ? <Alert type="error" showIcon message="自由上传解析失败" description={job.errorMessage || '请重试或检查原文件。'} /> : null}
       <Progress percent={progress} status={job.status === 'FAILED' ? 'exception' : job.status === 'COMPLETED' ? 'success' : 'active'} />

@@ -75,8 +75,8 @@ const route = {
       name: '电子实验记录本',
       icon: <ExperimentOutlined />,
       routes: [
-        { path: '/experiments/new', name: '新增实验', icon: <PlusOutlined /> },
-        { path: '/experiments/upload', name: '实验上传', icon: <UploadOutlined /> },
+        { path: '/experiments/new', name: '实验在线记录', icon: <PlusOutlined /> },
+        { path: '/experiments/upload', name: '实验数据导入', icon: <UploadOutlined /> },
         { path: '/experiments/list', name: '实验查看', icon: <EyeOutlined /> },
       ],
     },

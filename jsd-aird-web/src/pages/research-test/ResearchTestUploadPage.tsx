@@ -29,8 +29,8 @@ const standardCategoryOptions = ['国家标准', '行业标准', '企业标准',
   .map((value) => ({ value, label: value }));
 const visibilityOptions = [
   { value: 'ALL', label: '全员可见' },
-  { value: 'RND', label: '仅研发部门' },
-  { value: 'PROJECT', label: '仅关联项目' },
+  { value: 'RND', label: '研发部可见' },
+  { value: 'PROJECT', label: '项目组可见' },
 ];
 type UploadTask = {
   id: string;

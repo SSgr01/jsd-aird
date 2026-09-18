@@ -1,7 +1,7 @@
 import { httpClient } from '@/services/http/client';
 import type { ApiResponse } from '@/types/api';
 
-export type ProductionUploadVisibility = 'ALL' | 'QUALITY' | 'PROJECT';
+export type ProductionUploadVisibility = 'ALL' | 'RND' | 'QUALITY' | 'PROJECT';
 
 export interface ProductionUpload {
   id: string;

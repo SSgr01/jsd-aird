@@ -326,7 +326,7 @@ export interface ExperimentImportJob {
   stageName?: string;
   taskId?: string;
   taskName?: string;
-  visibility?: 'ALL' | 'QUALITY' | 'PROJECT';
+  visibility?: 'ALL' | 'RND' | 'QUALITY' | 'PROJECT';
   createdAt: string;
   progress: number;
   currentStage?: string;
@@ -352,7 +352,7 @@ export async function importExperimentFile(input: {
   stageId?: string;
   taskId?: string;
   experimentDate: string;
-  visibility?: 'ALL' | 'QUALITY' | 'PROJECT';
+  visibility?: 'ALL' | 'RND' | 'QUALITY' | 'PROJECT';
   recognitionMode?: 'FREEFORM' | 'TEMPLATE_GUIDED';
   templateVersionId?: string;
   duplicateOverride?: boolean;

@@ -292,11 +292,13 @@
 }
 .cm-customer-cards-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
   gap: 14px;
 }
 .cm-customer-card {
   position: relative;
+  min-width: 0;
+  container-type: inline-size;
   background: #fff;
   border: 1px solid #e6ecf4;
   border-radius: 10px;
@@ -327,6 +329,7 @@
   align-items: center;
   gap: 8px;
   margin-bottom: 4px;
+  min-width: 0;
   flex-wrap: wrap;
 }
 .cm-customer-card-tags {
@@ -336,6 +339,8 @@
   flex-wrap: wrap;
 }
 .cm-customer-card-name {
+  display: block;
+  min-width: 0;
   font-size: 15px;
   color: #11233f;
   font-weight: 600;
@@ -353,6 +358,8 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
+  flex-wrap: wrap;
   color: #7b8ba5;
   font-size: 12px;
 }
@@ -363,12 +370,16 @@
   display: flex;
   align-items: baseline;
   gap: 6px;
+  min-width: 0;
   margin-bottom: 10px;
   font-size: 13px;
 }
 .cm-customer-card-owner-value {
+  min-width: 0;
   color: #1f2937;
   font-weight: 600;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .cm-customer-card-stats {
   display: flex;
@@ -394,6 +405,18 @@
 }
 .cm-customer-card-foot .cm-link-button {
   color: #1677ff;
+}
+
+@container (max-width: 360px) {
+  .cm-customer-card-titleline {
+    align-items: flex-start;
+  }
+
+  .cm-customer-card-foot {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
 }
 
 @media (max-width: 1300px) {

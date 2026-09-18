@@ -851,13 +851,13 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
       </div>
       {mode === 'card' ? (
         <List
-          className={report ? 'research-test-report-card-list' : undefined}
-          loading={loading}
-          grid={
+          className={
             report
-              ? { gutter: 16, xs: 1, sm: 2, md: 3, lg: 4, xl: 5, xxl: 5 }
-              : { gutter: 16, xs: 1, sm: 1, md: 2, lg: 3 }
+              ? 'research-test-card-list research-test-report-card-list'
+              : 'research-test-card-list'
           }
+          loading={loading}
+          grid={{ gutter: 0 }}
           dataSource={rows}
           pagination={{
             current: page,
@@ -907,6 +907,7 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
                 />
               ) : (
                 <Card
+                  className="research-test-standard-card"
                   title={<span title={r.name}>{r.name}</span>}
                   extra={
                     <Space size={8}>

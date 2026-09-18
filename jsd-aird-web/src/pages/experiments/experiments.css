@@ -695,3 +695,22 @@
 .experiment-template-dropdown .ant-select-item-option-grouped{padding-inline-start:24px}
 .experiment-template-dropdown .ant-select-item-option-selected{border-radius:7px;background:#edf4ff;font-weight:600}
 @media(max-width:900px){.experiment-import-fields{grid-template-columns:1fr}}
+
+.eln-prototype-page .eln-card-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+}
+
+.eln-prototype-page .eln-card-heading,
+.eln-prototype-page .eln-card-info-item,
+.eln-prototype-page .eln-card-info-value {
+  min-width: 0;
+}
+
+.eln-prototype-page .eln-card-title a {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.eln-prototype-page .eln-card-info-value {
+  max-width: 100%;
+}

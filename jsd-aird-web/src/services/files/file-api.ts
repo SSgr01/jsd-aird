@@ -43,6 +43,18 @@ export async function fetchFileBlob(fileId: string) {
   return response.data;
 }
 
+export async function fetchFilePreviewBlob(fileId: string) {
+  const response = await httpClient.get<Blob>(`/api/v1/files/${encodeURIComponent(fileId)}/preview`, {
+    responseType: 'blob',
+    timeout: LARGE_PAYLOAD_TIMEOUT,
+  });
+  return response.data;
+}
+
+export function fileContentUrl(fileId: string) {
+  return `/api/v1/files/${encodeURIComponent(fileId)}/content`;
+}
+
 export function downloadBlob(blob: Blob, fileName: string) {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
@@ -73,6 +85,6 @@ export function triggerNativeDownload(path: string, fileName?: string) {
 }
 
 export function downloadFile(fileId: string, fileName: string): Promise<void> {
-  triggerNativeDownload(`/api/v1/files/${encodeURIComponent(fileId)}/content`, fileName);
+  triggerNativeDownload(fileContentUrl(fileId), fileName);
   return Promise.resolve();
 }

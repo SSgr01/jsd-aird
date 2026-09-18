@@ -742,7 +742,8 @@ export function SpectrumChatPage() {
     fileName: chart.originalName,
     contentType: chart.contentType,
     size: chart.size,
-    load: () => spectrumApi.contentBlob(chart.id),
+    load: () => spectrumApi.previewBlob(chart.id),
+    downloadUrl: spectrumApi.contentUrl(chart.id),
   });
   const previewById = (chartId: string) => {
     const chart = charts.find((item) => item.id === chartId);

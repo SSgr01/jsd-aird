@@ -2,8 +2,9 @@ import { DownloadOutlined, FileOutlined, LoadingOutlined } from '@ant-design/ico
 import { Alert, Button, Empty, Modal, Spin, Table, Tabs, Tag, Typography, type TableColumnsType } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-import { downloadBlob } from '@/services/files';
+import { downloadBlob, triggerNativeDownload } from '@/services/files';
 import { buildSpreadsheetPreview, detectPreviewMode, excelColumnLabel, type FilePreviewDescriptor, type FilePreviewMode, type SpreadsheetCell, type SpreadsheetPreview } from './file-preview-utils';
+import { PdfCanvasPreview } from './PdfCanvasPreview';
 
 const MAX_PREVIEW_BYTES = 50 * 1024 * 1024;
 const MAX_ROWS = 200;
@@ -70,7 +71,7 @@ export function FilePreviewModal({ open, file, onClose, showSpreadsheetMerges = 
           throw new Error('文件超过 50 MB，暂不支持在线预览，请下载原文件查看。');
         }
         setBlob(loaded);
-        if (nextMode === 'pdf' || nextMode === 'image' || nextMode === 'audio') {
+        if (nextMode === 'image' || nextMode === 'audio') {
           nextObjectUrl = URL.createObjectURL(loaded);
           setObjectUrl(nextObjectUrl);
         } else if (nextMode === 'text') {
@@ -134,6 +135,10 @@ export function FilePreviewModal({ open, file, onClose, showSpreadsheetMerges = 
   const download = async () => {
     if (!file) return;
     try {
+      if (file.downloadUrl) {
+        triggerNativeDownload(file.downloadUrl, file.fileName);
+        return;
+      }
       downloadBlob(blob || await file.load(), file.fileName);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '原文件下载失败');
@@ -179,8 +184,8 @@ export function FilePreviewModal({ open, file, onClose, showSpreadsheetMerges = 
         <div className="file-preview-state"><Spin indicator={<LoadingOutlined spin />} /><Typography.Text type="secondary">正在生成预览…</Typography.Text></div>
       ) : error ? (
         <div className="file-preview-state"><Alert type="warning" showIcon message={error} /><Button icon={<DownloadOutlined />} onClick={() => void download()}>下载原文件</Button></div>
-      ) : mode === 'pdf' && objectUrl ? (
-        <iframe className="file-preview-frame" title={`${file.fileName} 预览`} src={objectUrl} />
+      ) : mode === 'pdf' && blob ? (
+        <PdfCanvasPreview blob={blob} />
       ) : mode === 'image' && objectUrl ? (
         <div className="file-preview-image-wrap"><img className="file-preview-image" src={objectUrl} alt={file.fileName} /></div>
       ) : mode === 'audio' && objectUrl ? (

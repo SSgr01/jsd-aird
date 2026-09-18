@@ -103,7 +103,8 @@ export function SpectrumUploadPage() {
     fileName: item.originalName,
     contentType: item.contentType,
     size: item.size,
-    load: () => spectrumApi.contentBlob(item.id),
+    load: () => spectrumApi.previewBlob(item.id),
+    downloadUrl: spectrumApi.contentUrl(item.id),
   });
 
   const upload = async () => {

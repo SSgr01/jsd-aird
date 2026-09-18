@@ -3,6 +3,7 @@ import { buildSpreadsheetPreview, detectPreviewMode, downloadPreviewFile, excelC
 
 vi.mock('@/services/files', () => ({
   downloadBlob: vi.fn(),
+  triggerNativeDownload: vi.fn(),
 }));
 
 describe('file preview utilities', () => {

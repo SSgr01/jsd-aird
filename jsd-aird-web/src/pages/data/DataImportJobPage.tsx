@@ -162,7 +162,8 @@ export function DataImportJobPage({ workspaceMode = 'DATA' }: { workspaceMode?: 
 
   const sourceFile: FilePreviewDescriptor = {
     fileName: preview.job.sourceFileName,
-    load: () => dataApi.sourceBlob(preview.job.sourceFileId),
+    load: () => dataApi.sourcePreviewBlob(preview.job.sourceFileId),
+    downloadUrl: `/api/v1/files/${encodeURIComponent(preview.job.sourceFileId)}/content`,
   };
 
   const selectField = (field: DataFieldValueView) => {

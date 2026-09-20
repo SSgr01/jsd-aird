@@ -1,4 +1,5 @@
 import type { ExperimentModel } from '@/services/experiments/experiment-api';
+import { generateUUID } from '@/utils/uuid';
 
 type ExperimentListKey = 'formulaItems' | 'processSteps' | 'testResults' | 'events';
 type StableItemListKey = Exclude<ExperimentListKey, 'events'>;
@@ -63,8 +64,7 @@ function hasStableItemId(key: ExperimentListKey): key is StableItemListKey {
 }
 
 function createItemId(): string {
-  if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID();
-  return `item-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return generateUUID();
 }
 
 function makeSheet(sheetId: string, name: string, header: string[]): Record<string, unknown> {

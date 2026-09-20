@@ -1,5 +1,6 @@
 import { httpClient } from '@/services/http/client';
 import type { ApiResponse } from '@/types/api';
+import { generateUUID } from '@/utils/uuid';
 
 export type InventoryScope = 'RND' | 'PRODUCTION';
 export type InventoryDirection = 'INBOUND' | 'OUTBOUND';
@@ -136,7 +137,7 @@ export interface InventoryProductOption {
  * document number is not available.
  */
 const key = (input: Record<string, unknown>, fallback: string) =>
-  String(input.idempotencyKey ?? (fallback || crypto.randomUUID()));
+  String(input.idempotencyKey ?? (fallback || generateUUID()));
 export const inventoryApi = {
   async createCustomProduct(name: string, scope: InventoryScope) {
     return (

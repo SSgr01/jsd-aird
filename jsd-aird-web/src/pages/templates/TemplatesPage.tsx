@@ -336,7 +336,7 @@ export function TemplatesPage() {
   const columns: TableColumnsType<TemplateListItem> = [
     {
       title: '模板', dataIndex: 'name',
-      render: (_, record) => <Space>{record.format === 'XLSX' ? <FileExcelOutlined /> : <FileWordOutlined />}<span><Typography.Text strong>{record.name}</Typography.Text><span className="binding-path">{record.templateCode}</span></span></Space>,
+      render: (_, record) => <Space>{record.format === 'XLSX' ? <FileExcelOutlined /> : <FileWordOutlined />}<span><Typography.Link strong onClick={(event) => { event.stopPropagation(); navigate(`/templates/${record.versionId}/workspace`); }}>{record.name}</Typography.Link><span className="binding-path">{record.templateCode}</span></span></Space>,
     },
     { title: '分类', dataIndex: 'category', render: (_, record) => record.category || '未分类' },
     { title: '状态', key: 'status', render: (_, record) => templateStatus(record) },

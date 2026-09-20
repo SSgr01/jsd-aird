@@ -13,6 +13,7 @@ import { useRef, useState } from 'react';
 
 import { stageFile } from '@/services/files/file-api';
 import { useAuthStore } from '@/stores/auth-store';
+import { generateUUID } from '@/utils/uuid';
 
 export type ProductionBusinessStatus = 'NOT_ORDERED' | 'ORDERED' | 'MASS_PRODUCED' | 'VOID';
 
@@ -138,26 +139,26 @@ export function normalizeBusinessSnapshot(value: unknown): ProductionBusinessSna
     ...empty,
     ...source,
     taskRows: Array.isArray(source.taskRows) ? source.taskRows.map((row) => ({
-      id: asString(row.id) || crypto.randomUUID(),
+      id: asString(row.id) || generateUUID(),
       process: asString(row.process), owner: asString(row.owner),
       status: row.status || 'PENDING', plannedDate: asString(row.plannedDate),
     })) : [],
     materialRows: Array.isArray(source.materialRows) ? source.materialRows.map((row) => ({
-      id: asString(row.id) || crypto.randomUUID(), material: asString(row.material),
+      id: asString(row.id) || generateUUID(), material: asString(row.material),
       batch: asString(row.batch), theoretical: asNumber(row.theoretical), actual: asNumber(row.actual),
     })) : [],
     inspectionRows: Array.isArray(source.inspectionRows) ? source.inspectionRows.map((row) => ({
-      id: asString(row.id) || crypto.randomUUID(), date: asString(row.date),
+      id: asString(row.id) || generateUUID(), date: asString(row.date),
       inspector: asString(row.inspector), result: row.result || 'PENDING', note: asString(row.note),
     })) : [],
     outputRows: Array.isArray(source.outputRows) ? source.outputRows.map((row) => ({
-      id: asString(row.id) || crypto.randomUUID(), batch: asString(row.batch),
+      id: asString(row.id) || generateUUID(), batch: asString(row.batch),
       quantity: asNumber(row.quantity), packageSpec: asString(row.packageSpec), packageDate: asString(row.packageDate),
     })) : [],
     formula: { ...empty.formula, ...(source.formula || {}), expression: asString(source.formula?.expression), ratio: asNumber(source.formula?.ratio), tolerance: asNumber(source.formula?.tolerance) },
     signatures: { ...empty.signatures, ...(source.signatures || {}) },
     attachments: Array.isArray(source.attachments) ? source.attachments.map((item) => ({
-      id: asString(item.id) || crypto.randomUUID(),
+      id: asString(item.id) || generateUUID(),
       name: asString(item.name),
       kind: item.kind || 'PROCESS_ATTACHMENT',
       fileId: asString(item.fileId) || undefined,
@@ -215,7 +216,7 @@ export function ProductionBusinessPanel({ value, editable, onChange, onAttachmen
     onChange({
       ...next,
       audit: [...next.audit, {
-        id: crypto.randomUUID(), action, detail,
+        id: generateUUID(), action, detail,
         createdAt: new Date().toISOString(), operator,
       }],
     });
@@ -223,10 +224,10 @@ export function ProductionBusinessPanel({ value, editable, onChange, onAttachmen
   const update = <K extends keyof ProductionBusinessSnapshot>(key: K, next: ProductionBusinessSnapshot[K]) => {
     onChange({ ...value, [key]: next });
   };
-  const addTask = () => update('taskRows', [...value.taskRows, { id: crypto.randomUUID(), process: '', owner: '', status: 'PENDING', plannedDate: '' }]);
-  const addMaterial = () => update('materialRows', [...value.materialRows, { id: crypto.randomUUID(), material: '', batch: '', theoretical: 0, actual: 0 }]);
-  const addInspection = () => update('inspectionRows', [...value.inspectionRows, { id: crypto.randomUUID(), date: '', inspector: '', result: 'PENDING', note: '' }]);
-  const addOutput = () => update('outputRows', [...value.outputRows, { id: crypto.randomUUID(), batch: '', quantity: 0, packageSpec: '', packageDate: '' }]);
+  const addTask = () => update('taskRows', [...value.taskRows, { id: generateUUID(), process: '', owner: '', status: 'PENDING', plannedDate: '' }]);
+  const addMaterial = () => update('materialRows', [...value.materialRows, { id: generateUUID(), material: '', batch: '', theoretical: 0, actual: 0 }]);
+  const addInspection = () => update('inspectionRows', [...value.inspectionRows, { id: generateUUID(), date: '', inspector: '', result: 'PENDING', note: '' }]);
+  const addOutput = () => update('outputRows', [...value.outputRows, { id: generateUUID(), batch: '', quantity: 0, packageSpec: '', packageDate: '' }]);
 
   const persistAttachments = async (attachments: ProductionBusinessSnapshot['attachments']) => {
     const next = { ...value, attachments };
@@ -254,7 +255,7 @@ export function ProductionBusinessPanel({ value, editable, onChange, onAttachmen
     try {
       const staged = await stageFile(file, 'PRODUCTION_SOURCE');
       const saved = await persistAttachments([...value.attachments, {
-        id: crypto.randomUUID(),
+        id: generateUUID(),
         name: staged.originalName || file.name,
         kind,
         fileId: staged.fileId,

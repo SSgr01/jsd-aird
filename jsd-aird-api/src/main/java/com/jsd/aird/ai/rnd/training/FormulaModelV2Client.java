@@ -49,11 +49,15 @@ public class FormulaModelV2Client {
                     HttpResponse.BodyHandlers.ofByteArray());
             var body = json.readTree(response.body());
             if (response.statusCode() / 100 == 2) return body;
+            var detail = body.path("detail");
             var message = body.path("message").asText("formula-model.v2契约校验失败");
+            if (!detail.isMissingNode() && !detail.isNull() && !detail.isEmpty()) {
+                message = message + "（" + detail.toString() + "）";
+            }
             var code = body.path("code").asText();
             if (response.statusCode() >= 500) throw new ComputeTransportException(message);
             throw new ApiException(SetCodes.ARTIFACT.contains(code) ? ApiErrorCode.AI_MODEL_ARTIFACT_INVALID
-                    : ApiErrorCode.INVALID_SCHEMA, message, body.path("detail"));
+                    : ApiErrorCode.INVALID_SCHEMA, message, detail);
         } catch (HttpTimeoutException exception) {
             throw new ApiException(ApiErrorCode.TRAINING_TIMEOUT, "formula-model.v2训练超时");
         } catch (InterruptedException exception) {

@@ -14,6 +14,12 @@ public interface DataSourceFileSearchFacade {
         return DataDetailResult.empty(query == null ? DataQueryMode.NONE : query.mode());
     }
 
+    default DataDetailResult queryDetails(UUID organizationId, DataDetailQuery query, List<UUID> categoryIds,
+                                           RetrievalAccessScope accessScope) {
+        return queryDetails(organizationId, query, categoryIds,
+                accessScope == null ? AccessScope.denied() : accessScope.dataScope());
+    }
+
     List<SourceFileMatch> searchSourceFiles(UUID organizationId, String query, List<UUID> categoryIds, int limit);
 
     default List<SourceFileMatch> searchSourceFiles(UUID organizationId, String query, List<UUID> categoryIds,
@@ -33,6 +39,13 @@ public interface DataSourceFileSearchFacade {
                 .toList();
     }
 
+    default List<SourceFileMatch> searchSourceFiles(UUID organizationId, String query, List<UUID> categoryIds,
+                                                    RetrievalAccessScope accessScope, int limit) {
+        var scope = accessScope == null ? RetrievalAccessScope.all() : accessScope;
+        if (scope.deniesAll()) return List.of();
+        return searchSourceFiles(organizationId, query, categoryIds, scope.dataScope(), limit);
+    }
+
     default List<SourceFileHit> search(UUID organizationId, String query, List<UUID> categoryIds, int limit) {
         return search(organizationId, query, categoryIds, AccessScope.all(), limit);
     }
@@ -43,15 +56,42 @@ public interface DataSourceFileSearchFacade {
                 .flatMap(file -> file.hits().stream().map(hit -> new SourceFileHit(
                         hit.hitId(), file.fileObjectId(), file.importJobId(), hit.rowNumber(), hit.columnName(),
                         file.originalName(), hit.snippet(), hit.score(),
-                        "DATA_CENTER:" + (hit.sheetName() == null ? "" : hit.sheetName())
-                                + ":" + (hit.cellAddress() == null ? "" : hit.cellAddress()),
+                        sourceLocator(file, hit),
                         hit.recordKey(), hit.fieldCode(), hit.fieldName(), hit.fieldValue(), hit.unit(),
                         hit.valueType(), hit.sheetName(), hit.cellAddress())))
                 .toList();
     }
 
+    default List<SourceFileHit> search(UUID organizationId, String query, List<UUID> categoryIds,
+                                       RetrievalAccessScope accessScope, int limit) {
+        return searchSourceFiles(organizationId, query, categoryIds, accessScope, limit).stream()
+                .flatMap(file -> file.hits().stream().map(hit -> new SourceFileHit(
+                        hit.hitId(), file.fileObjectId(), file.importJobId(), hit.rowNumber(), hit.columnName(),
+                        file.originalName(), hit.snippet(), hit.score(),
+                        sourceLocator(file, hit),
+                        hit.recordKey(), hit.fieldCode(), hit.fieldName(), hit.fieldValue(), hit.unit(),
+                        hit.valueType(), hit.sheetName(), hit.cellAddress(), file.sourceOwner(),
+                        file.recognitionMode(), file.experimentId(), file.experimentVersionId())))
+                .toList();
+    }
+
+    private static String sourceLocator(SourceFileMatch file, Hit hit) {
+        var owner = "EXPERIMENT".equalsIgnoreCase(file.sourceOwner())
+                ? "EXPERIMENT_TEMPLATE" : "DATA_CENTER";
+        return owner + ":" + (hit.sheetName() == null ? "" : hit.sheetName())
+                + ":" + (hit.cellAddress() == null ? "" : hit.cellAddress());
+    }
+
     record SourceFileMatch(UUID fileObjectId, UUID importJobId, String originalName, String contentType,
-                           long size, Instant updatedAt, List<Hit> hits, List<String> matchedTerms) { }
+                           long size, Instant updatedAt, List<Hit> hits, List<String> matchedTerms,
+                           String sourceOwner, String recognitionMode, UUID experimentId,
+                           UUID experimentVersionId) {
+        public SourceFileMatch(UUID fileObjectId, UUID importJobId, String originalName, String contentType,
+                               long size, Instant updatedAt, List<Hit> hits, List<String> matchedTerms) {
+            this(fileObjectId, importJobId, originalName, contentType, size, updatedAt, hits, matchedTerms,
+                    "DATA_CENTER", "TEMPLATE_GUIDED", null, null);
+        }
+    }
 
     record Hit(UUID hitId, String snippet, double score, String sheetName, Integer rowNumber,
                String columnName, String cellAddress, String recordKey, String fieldCode,
@@ -67,12 +107,43 @@ public interface DataSourceFileSearchFacade {
                          String columnName, String originalName, String content, double score,
                          String sourceLocator, String recordKey, String fieldCode, String fieldName,
                          String fieldValue, String unit, String valueType, String sheetName,
-                         String cellAddress) {
+                         String cellAddress, String sourceOwner, String recognitionMode,
+                         UUID experimentId, UUID experimentVersionId) {
         public SourceFileHit(UUID hitId, UUID fileObjectId, UUID importJobId, Integer rowNumber,
                              String columnName, String originalName, String content, double score,
                              String sourceLocator) {
             this(hitId, fileObjectId, importJobId, rowNumber, columnName, originalName, content, score,
-                    sourceLocator, null, null, null, null, null, null, null, null);
+                    sourceLocator, null, null, null, null, null, null, null, null,
+                    "DATA_CENTER", "TEMPLATE_GUIDED", null, null);
+        }
+
+        public SourceFileHit(UUID hitId, UUID fileObjectId, UUID importJobId, Integer rowNumber,
+                             String columnName, String originalName, String content, double score,
+                             String sourceLocator, String recordKey, String fieldCode, String fieldName,
+                             String fieldValue, String unit, String valueType, String sheetName,
+                             String cellAddress) {
+            this(hitId, fileObjectId, importJobId, rowNumber, columnName, originalName, content, score,
+                    sourceLocator, recordKey, fieldCode, fieldName, fieldValue, unit, valueType, sheetName,
+                    cellAddress, "DATA_CENTER", "TEMPLATE_GUIDED", null, null);
+        }
+    }
+
+    record RetrievalAccessScope(AccessScope dataScope, AccessScope experimentScope) {
+        public RetrievalAccessScope {
+            dataScope = dataScope == null ? AccessScope.denied() : dataScope;
+            experimentScope = experimentScope == null ? AccessScope.denied() : experimentScope;
+        }
+
+        public static RetrievalAccessScope all() {
+            return new RetrievalAccessScope(AccessScope.all(), AccessScope.all());
+        }
+
+        public static RetrievalAccessScope denied() {
+            return new RetrievalAccessScope(AccessScope.denied(), AccessScope.denied());
+        }
+
+        public boolean deniesAll() {
+            return dataScope.deniesAll() && experimentScope.deniesAll();
         }
     }
 
@@ -179,6 +250,10 @@ public interface DataSourceFileSearchFacade {
 
         public static AccessScope selected(Set<UUID> importJobIds) {
             return new AccessScope("SELECTED", null, importJobIds);
+        }
+
+        public static AccessScope denied() {
+            return new AccessScope("DENIED", null, Set.of());
         }
 
         public boolean deniesAll() {

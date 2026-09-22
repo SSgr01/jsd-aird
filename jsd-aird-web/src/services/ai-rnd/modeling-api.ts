@@ -8,6 +8,7 @@ import type {
   TrainingPolicyCommand,
   TrainingSampleDetail, TrainingSampleSummary,
   EligibilitySummary, EligibilityPage, EligibilityDetail, ReviewDecisionCommand, ReviewDecision, RecomputeAccepted,
+  InputSuggestionPage,
 } from './ai-rnd-types'
 
 interface ApiResponse<T> { data: T }
@@ -39,6 +40,7 @@ export const modelingApi = {
   async createSourceMapping(targetId: string, input: SourceMappingCommand) { return data(await httpClient.post<ApiResponse<SourceMappingVersion>>(`${root}/targets/${targetId}/source-mappings`, input, key())) },
   async publishSourceMapping(id: string, expectedRevision: number) { return data(await httpClient.post<ApiResponse<SourceMappingVersion>>(`${root}/source-mappings/${id}/publish`, { expectedRevision }, key())) },
   async inputSchemes(targetId: string) { return data(await httpClient.get<ApiResponse<InputScheme[]>>(`${root}/targets/${targetId}/input-schemes`)) },
+  async inputSuggestions(targetId: string, params: { targetVersionId?: string; keyword?: string; page?: number; size?: number } = {}) { return data(await httpClient.get<ApiResponse<InputSuggestionPage>>(`${root}/targets/${targetId}/input-suggestions`, { params })) },
   async createInputScheme(targetId: string, input: InputSchemeCommand) { return data(await httpClient.post<ApiResponse<InputScheme>>(`${root}/targets/${targetId}/input-schemes`, input, key())) },
   async previewInputScheme(id: string) { return data(await httpClient.post<ApiResponse<CoveragePreview>>(`${root}/input-schemes/${id}/preview`, undefined, key())) },
   async freezeInputScheme(id: string, expectedRevision: number) { return data(await httpClient.post<ApiResponse<FreezeResult>>(`${root}/input-schemes/${id}/freeze`, { expectedRevision }, key())) },

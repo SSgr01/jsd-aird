@@ -209,6 +209,8 @@ def train_uvpu_development_model(
     os.close(descriptor)
     staging_path = Path(staging_name)
     try:
+        validation_folds_path = snapshot_dir.resolve() / "validation-folds.json"
+        validation_folds_ref = _read_ref(validation_folds_path) if validation_folds_path.is_file() else None
         request = TrainRequest(
             request_id="uvpu-development-model-build",
             task_profile_hash=profile_hash,
@@ -216,6 +218,7 @@ def train_uvpu_development_model(
             seed=seed,
             task_profile=profile,
             snapshot=snapshot,
+            validation_folds=validation_folds_ref,
             output={"url": staging_path.resolve().as_uri(), "contentType": "application/zip"},
         )
         service = FormulaModelService(

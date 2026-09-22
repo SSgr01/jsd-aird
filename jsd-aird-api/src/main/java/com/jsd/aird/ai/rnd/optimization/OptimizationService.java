@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.ai.rnd.modeling.ConfigurationHashing;
+import com.jsd.aird.ai.rnd.formula.FormulaNormalizationService;
+import com.jsd.aird.ai.rnd.catalog.RegisteredUvpuTargetCatalog;
 import com.jsd.aird.ai.rnd.prediction.PredictionRepository;
 import com.jsd.aird.ai.rnd.research.FormulaDesignService;
 import com.jsd.aird.ai.rnd.training.FormulaModelV2Client;
@@ -21,6 +23,8 @@ import com.jsd.aird.shared.security.ActorContext;
 import com.jsd.aird.tpl.api.TemplateDataImportFacade;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -38,6 +42,7 @@ import static com.jsd.aird.ai.rnd.optimization.OptimizationContracts.*;
 
 @Service
 public class OptimizationService {
+    private static final Logger log = LoggerFactory.getLogger(OptimizationService.class);
     private static final List<String> STRATEGIES=List.of("CONTROL","CONSERVATIVE","BALANCED","EXPLORATORY");
     private final OptimizationRepository repository;
     private final PredictionRepository predictions;
@@ -50,6 +55,7 @@ public class OptimizationService {
     private final ExperimentDraftFacade drafts;
     private final TemplateDataImportFacade templates;
     private final ObjectMapper json;
+    private final FormulaNormalizationService formulaNormalization;
     private final boolean inlineWorker;
 
     public OptimizationService(OptimizationRepository repository, PredictionRepository predictions,
@@ -57,18 +63,25 @@ public class OptimizationService {
                                 ConfigurationHashing hashing, OpsAsyncFacade jobs, AuditLogFacade audit,
                                 AuthorizationService authorization, ExperimentDraftFacade drafts,
                                 TemplateDataImportFacade templates, ObjectMapper json,
+                                FormulaNormalizationService formulaNormalization,
                                 @Value("${JSD_AIRD_R09_INLINE_ACCEPTANCE_WORKER:false}") boolean inlineWorker) {
         this.repository=repository;this.predictions=predictions;this.formulaDesign=formulaDesign;this.compute=compute;
         this.hashing=hashing;this.jobs=jobs;this.audit=audit;this.authorization=authorization;this.drafts=drafts;
         this.templates=templates;
-        this.json=json;this.inlineWorker=inlineWorker;
+        this.json=json;this.formulaNormalization=formulaNormalization;this.inlineWorker=inlineWorker;
     }
 
     public BaselinePage baselines(String type,String keyword,int page,int size){
         var a=actor();require(a,"ai.experiment.optimize","AI_EXPERIMENT_OPTIMIZATION",null,"READ");
         var p=Math.max(0,page);var s=Math.min(100,Math.max(1,size));
+        // A baseline catalog is allowed to contain historical/incomplete rows.
+        // One malformed formula must not make the whole source selector fail;
+        // only rows that can be normalized into an optimization formula are
+        // selectable. The detailed baseline view still reports the actionable
+        // error when a caller tries to open an invalid row directly.
         var rows=repository.baselines(a.organizationId(),a.userId(),type,keyword,p,s).stream()
-                .filter(row->canReadBaseline(a,row.type())).map(row->summary(a.organizationId(),row)).toList();
+                .filter(row->canReadBaseline(a,row.type())).map(row->safeSummary(a.organizationId(),row))
+                .filter(Objects::nonNull).toList();
         return new BaselinePage(rows,p,s);
     }
 
@@ -80,6 +93,7 @@ public class OptimizationService {
                 .put("targetId",t.id().toString()).put("code",t.code()).put("name",t.name()).put("category",Objects.toString(t.category(),"未分类"))
                 .put("valueType",t.valueType()).put("available",t.modelId()!=null&&t.qualityPolicyId()!=null&&t.domainPolicyId()!=null)));
         root.set("targets",catalog);
+        RegisteredUvpuTargetCatalog.append(json, catalog);
         var templateOptions=json.createArrayNode();
         try {
             templates.listPublished(a.organizationId()).stream()
@@ -218,10 +232,17 @@ public class OptimizationService {
 
     private OptimizationRepository.BaselineRow resolveBaseline(Actor a,String type,UUID id){if(type==null||type.isBlank()||id==null)throw new ApiException(ApiErrorCode.BASELINE_REQUIRED);if(!canReadBaseline(a,type))throw new ApiException(ApiErrorCode.PERMISSION_DENIED);return repository.baseline(a.organizationId(),a.userId(),type,id).orElseThrow(()->new ApiException(ApiErrorCode.BASELINE_NOT_CURRENT));}
     private boolean canReadBaseline(Actor a,String type){var permission=switch(type){case "EXPERIMENT_VERSION"->"experiment.view";case "DATA_SAMPLE_REVISION"->"data.view";case "RESEARCH_CANDIDATE"->"ai.formula.predict";default->null;};return permission!=null&&authorization.check(new PermissionCheck(a.organizationId(),a.userId(),permission,"AI_OPTIMIZATION_BASELINE",null,"READ")).allowed();}
-    private BaselineSummary summary(UUID org,OptimizationRepository.BaselineRow row){var snap=baselineSnapshot(org,row);return new BaselineSummary(row.type(),row.entityId(),row.versionId(),row.title(),row.sourceLabel(),snap.path("formula").path("recordedTotal").asDouble(),snap.path("formula").path("components"),snap.path("inputs"),snap.path("results"),hashing.hash(snap),row.updatedAt());}
+    private BaselineSummary safeSummary(UUID org,OptimizationRepository.BaselineRow row){
+        try{return summary(org,row);}
+        catch(ApiException ignored){
+            log.debug("Skipping incomplete optimization baseline type={} id={} title={} reason={}",row.type(),row.entityId(),row.title(),ignored.getMessage());
+            return null;
+        }
+    }
+    private BaselineSummary summary(UUID org,OptimizationRepository.BaselineRow row){var snap=baselineSnapshot(org,row);var formula=snap.path("formula");var rawTotal=formula.path("rawFormulaTotal").isNumber()?formula.path("rawFormulaTotal").asDouble():formula.path("recordedTotal").asDouble();return new BaselineSummary(row.type(),row.entityId(),row.versionId(),row.title(),row.sourceLabel(),rawTotal,formula.path("components"),snap.path("inputs"),snap.path("results"),hashing.hash(snap),row.updatedAt());}
     private ObjectNode baselineSnapshot(UUID org,OptimizationRepository.BaselineRow row){var out=json.createObjectNode().put("type",row.type()).put("entityId",row.entityId().toString()).put("versionId",row.versionId().toString()).put("title",row.title());var payload=row.payload();JsonNode formula;JsonNode inputs;JsonNode results;
         if("EXPERIMENT_VERSION".equals(row.type())){formula=formulaFromExperiment(payload.path("formulaItems"));inputs=payload.path("dynamicValues");results=payload.path("testResults");}else{formula=payload.path("formula");inputs=payload.path("inputs");results=payload.has("predictions")?payload.path("predictions"):observationsForBaseline(org,payload.path("observations"));}
-        out.set("formula",normalizeFormula(formula));out.set("inputs",inputs.isObject()?inputs.deepCopy():json.createObjectNode());out.set("results",results.deepCopy());if(row.templateVersionId()!=null)out.put("templateVersionId",row.templateVersionId().toString());if(row.templateSnapshotHash()!=null)out.put("templateSnapshotHash",row.templateSnapshotHash());out.set("templateSnapshot",row.templateSnapshot());return out;}
+        try{out.set("formula",normalizeFormula(formula));}catch(ApiException ignored){throw new ApiException(ApiErrorCode.BASELINE_DATA_INCOMPLETE,"该基线的材料配方尚未结构化，暂不能用于实验优化");}out.set("inputs",inputs.isObject()?inputs.deepCopy():json.createObjectNode());out.set("results",results.deepCopy());if(row.templateVersionId()!=null)out.put("templateVersionId",row.templateVersionId().toString());if(row.templateSnapshotHash()!=null)out.put("templateSnapshotHash",row.templateSnapshotHash());out.set("templateSnapshot",row.templateSnapshot());return out;}
     private JsonNode observationsForBaseline(UUID org,JsonNode raw){
         if(raw==null||raw.isMissingNode()||raw.isNull())return json.createObjectNode().putArray("targets");
         if(raw.isArray()||(raw.isObject()&&raw.path("targets").isArray()))return raw;
@@ -230,9 +251,20 @@ public class OptimizationService {
         return json.createObjectNode().set("targets",targets);
     }
     private ObjectNode formulaFromExperiment(JsonNode items){var f=json.createObjectNode().put("basis","MASS_PERCENT").put("compositionComplete",true);var components=f.putArray("components");double total=0;if(items.isArray())for(var item:items){var ratio=number(item,"ratio","value","rawValue","amount");if(ratio==null)continue;var c=components.addObject().put("materialId",item.path("materialId").asText(item.path("materialCode").asText())).put("materialCode",item.path("materialCode").asText()).put("ratio",ratio).put("unit","PERCENT").put("amountKnown",true);total+=ratio;}f.put("recordedTotal",total);return f;}
-    private ObjectNode normalizeFormula(JsonNode value){if(value.isObject()&&(value.path("components").isArray()||value.path("items").isArray())){var copy=(ObjectNode)value.deepCopy();if(!copy.has("components"))copy.set("components",copy.path("items").deepCopy());copy.remove("items");if(!copy.has("basis"))copy.put("basis","MASS_PERCENT");if(!copy.has("compositionComplete"))copy.put("compositionComplete",true);if(!copy.has("recordedTotal")){double sum=0;for(var c:copy.path("components"))sum+=c.path("ratio").asDouble();copy.put("recordedTotal",sum);}for(var component:copy.withArray("components")){if(component instanceof ObjectNode c){if(!c.has("unit"))c.put("unit","PERCENT");if(!c.has("amountKnown"))c.put("amountKnown",true);}}return copy;}return formulaFromExperiment(value);}
+    private ObjectNode normalizeFormula(JsonNode value){
+        ObjectNode copy;
+        if(value != null && value.isObject() && (value.path("components").isArray() || value.path("items").isArray())){
+            copy=(ObjectNode)value.deepCopy();
+            if(!copy.has("components"))copy.set("components",copy.path("items").deepCopy());
+            copy.remove("items");
+            if(!copy.has("basis"))copy.put("basis","MASS_PERCENT");
+            if(!copy.has("compositionComplete"))copy.put("compositionComplete",true);
+            for(var component:copy.withArray("components"))if(component instanceof ObjectNode c){if(!c.has("unit"))c.put("unit","PERCENT");if(!c.has("amountKnown"))c.put("amountKnown",c.hasNonNull("ratio"));}
+        } else copy=formulaFromExperiment(value);
+        return formulaNormalization.requireValid(copy).formula();
+    }
     private void precheckBaseline(JsonNode snapshot,ArrayNode bindings,String requestId){var p=json.createObjectNode().put("contractVersion","formula-model.v2").put("requestId",requestId+":baseline").put("seed",7).put("runId",UUID.randomUUID().toString());p.set("formula",formulaForCompute(snapshot.path("formula")));p.set("inputs",alignedInputs(snapshot.path("inputs"),bindings));p.set("modelBindings",bindings);JsonNode result;try{result=compute.score(p);}catch(FormulaModelV2Client.ComputeTransportException e){throw new ApiException(ApiErrorCode.COMPUTE_UNAVAILABLE,"formula-model.v2计算服务暂不可用",e);}if("FAILED".equals(result.path("executionStatus").asText())){var failed=result.path("results").isArray()&&!result.path("results").isEmpty()?result.path("results").get(0):json.createObjectNode();throw new ApiException(ApiErrorCode.MODEL_ARTIFACT_INVALID,failed.path("code").asText("MODEL_LOAD_FAILED")+"："+failed.path("message").asText("基线模型评分失败"));}for(var item:result.path("results")){if("BLOCKED".equals(item.path("status").asText())&&"OUT_OF_DOMAIN".equals(item.path("code").asText()))throw new ApiException(ApiErrorCode.BASELINE_OUT_OF_DOMAIN);if(!"SUCCEEDED".equals(item.path("status").asText()))throw new ApiException(ApiErrorCode.BASELINE_DATA_INCOMPLETE,item.path("message").asText("基线输入不完整"));}}
-    private void validateSpace(JsonNode body,JsonNode snapshot,List<PredictionRepository.TargetBinding> bindings){var formula=snapshot.path("formula");if(!formula.path("components").isArray()||formula.path("components").isEmpty()||!formula.path("recordedTotal").isNumber())throw new ApiException(ApiErrorCode.BASELINE_DATA_INCOMPLETE);var targetTotal=body.path("targetTotal").asDouble(formula.path("recordedTotal").asDouble());if(!Double.isFinite(targetTotal)||targetTotal<=0)throw new ApiException(ApiErrorCode.TARGET_TOTAL_CONFLICT);var materials=body.path("variableMaterials");var inputs=body.path("variableInputs");if((!materials.isArray()||materials.isEmpty())&&(!inputs.isArray()||inputs.isEmpty()))throw new ApiException(ApiErrorCode.NO_ADJUSTABLE_INPUT);for(var v:materials){if(v.path("minimum").asDouble()>v.path("maximum").asDouble())throw new ApiException(ApiErrorCode.OPTIMIZATION_SPACE_CONFLICT);}for(var v:inputs){var timing=v.path("availabilityTiming").asText(v.path("acquisitionTiming").asText());if("POST_EXPERIMENT".equals(timing))throw new ApiException(ApiErrorCode.INPUT_SPACE_CONFLICT,"实验后字段不能作为优化变量");}}
+    private void validateSpace(JsonNode body,JsonNode snapshot,List<PredictionRepository.TargetBinding> bindings){var formula=snapshot.path("formula");if(!formula.path("components").isArray()||formula.path("components").isEmpty()||!formula.path("recordedTotal").isNumber())throw new ApiException(ApiErrorCode.BASELINE_DATA_INCOMPLETE);var targetTotal="MASS_PERCENT".equals(formula.path("basis").asText())?formula.path("recordedTotal").asDouble():body.path("targetTotal").asDouble(formula.path("recordedTotal").asDouble());if(!Double.isFinite(targetTotal)||targetTotal<=0)throw new ApiException(ApiErrorCode.TARGET_TOTAL_CONFLICT);var materials=body.path("variableMaterials");var inputs=body.path("variableInputs");if((!materials.isArray()||materials.isEmpty())&&(!inputs.isArray()||inputs.isEmpty()))throw new ApiException(ApiErrorCode.NO_ADJUSTABLE_INPUT);for(var v:materials){var minimum=v.path("minimum");var maximum=v.path("maximum");if(!minimum.isNumber()||!maximum.isNumber()||!Double.isFinite(minimum.asDouble())||!Double.isFinite(maximum.asDouble())||minimum.asDouble()>=maximum.asDouble())throw new ApiException(ApiErrorCode.OPTIMIZATION_SPACE_CONFLICT,"请为每个可调整材料填写有效的最小值和最大值");}for(var v:inputs){var timing=v.path("availabilityTiming").asText(v.path("acquisitionTiming").asText());if("POST_EXPERIMENT".equals(timing))throw new ApiException(ApiErrorCode.INPUT_SPACE_CONFLICT,"实验后字段不能作为优化变量");}}
     private ObjectNode recommendPayload(UUID org,OptimizationRepository.RunRow run){
         var p=(ObjectNode)run.request().deepCopy();
         p.put("contractVersion","formula-model.v2").put("requestId",run.requestId()).put("seed",run.seed()).put("runId",run.id().toString()).put("mode","EXPERIMENT_OPTIMIZATION").put("candidateCount",4);
@@ -263,12 +295,60 @@ public class OptimizationService {
         p.remove("baselineRef");p.remove("targetTotal");p.remove("variableMaterials");p.remove("variableInputs");
         return p;
     }
-    private JsonNode formulaForCompute(JsonNode value){var copy=value==null?json.createObjectNode():value.deepCopy();if(copy.isObject()&&copy.path("components").isArray())for(var c:copy.path("components"))if(c.isObject())((ObjectNode)c).remove("materialCode");return copy;}
-    private ObjectNode alignedInputs(JsonNode raw,ArrayNode bindings){var out=json.createObjectNode();for(var binding:bindings)for(var field:binding.path("inputScheme").path("fields")){var code=field.path("code").asText();if(code.isBlank()||out.hasNonNull(code))continue;var wanted=normalizeKey(code);var fields=raw==null?java.util.Collections.<Map.Entry<String,JsonNode>>emptyIterator():raw.fields();while(fields.hasNext()){var entry=fields.next();var actual=normalizeKey(entry.getKey());if(actual.equals(wanted)||wanted.endsWith(actual)||actual.endsWith(wanted)){out.set(code,entry.getValue());break;}}}return out;}
+    private JsonNode formulaForCompute(JsonNode value){return formulaNormalization.forModelCompute(value);}
+    private ObjectNode alignedInputs(JsonNode raw,ArrayNode bindings){
+        var out=json.createObjectNode();
+        for(var binding:bindings)for(var field:binding.path("inputScheme").path("fields")){
+            var code=field.path("code").asText();if(code.isBlank()||out.hasNonNull(code))continue;
+            var wanted=normalizeKey(code);var fields=raw==null?java.util.Collections.<Map.Entry<String,JsonNode>>emptyIterator():raw.fields();
+            while(fields.hasNext()){
+                var entry=fields.next();var actual=normalizeKey(entry.getKey());
+                if(actual.equals(wanted)||wanted.endsWith(actual)||actual.endsWith(wanted)){
+                    out.set(code,canonicalInputValue(code,entry.getValue()));break;
+                }
+            }
+        }
+        return out;
+    }
+    /** Convert customer-facing labels from older experiment versions to the
+     * immutable category codes used by the model bundles. New imports already
+     * carry codes and pass through unchanged. */
+    private JsonNode canonicalInputValue(String code,JsonNode value){
+        if(value==null||!value.isTextual())return value;
+        var raw=value.asText().strip();var normalized=normalizeKey(raw);var field=normalizeKey(code);
+        if(field.contains("SUBSTRATE")){
+            if(normalized.contains("PMMAPC")||raw.contains("复合板"))return json.getNodeFactory().textNode("PMMA_PC_COMPOSITE_064");
+            if(normalized.contains("PC")&&!normalized.contains("PET"))return json.getNodeFactory().textNode("PC_170UM");
+            if(normalized.contains("PET"))return json.getNodeFactory().textNode("PET_100UM_OPTICAL");
+        }
+        if(field.contains("APPLICATIONMETHOD")){
+            if(normalized.contains("WIREBAR")||raw.contains("绕丝棒"))return json.getNodeFactory().textNode("WIRE_BAR_ROLL_COAT_40UM");
+            if(normalized.contains("SPRAY")||raw.contains("喷涂"))return json.getNodeFactory().textNode("SPRAY_COATING");
+        }
+        if(field.contains("CURINGSOURCE")){
+            if(normalized.contains("MERCURY")||raw.contains("汞灯"))return json.getNodeFactory().textNode("MERCURY_LAMP_UV");
+            if(normalized.contains("LED"))return json.getNodeFactory().textNode("LED_UV");
+        }
+        return value;
+    }
     private String normalizeKey(String value){return value==null?"":value.toUpperCase(java.util.Locale.ROOT).replace("TEST_","").replace("PROCESS_","").replaceAll("[^A-Z0-9]","");}
     private OptimizationRun view(UUID org,OptimizationRepository.RunRow run){var candidates=repository.candidates(org,run.id()).stream().map(c->new OptimizationCandidate(c.id(),c.candidateNo(),c.strategy(),c.title(),c.formula(),c.inputs(),c.results(),c.quality(),c.applicability(),c.ruleCheck(),c.score(),c.targetTotal(),c.distance(),c.changes(),c.strategyEvidence(),c.risks())).toList();var missing=STRATEGIES.stream().filter(s->candidates.stream().noneMatch(c->s.equals(c.strategy()))).toList();var map=new LinkedHashMap<UUID,UUID>();run.bindings().fields().forEachRemaining(e->map.put(UUID.fromString(e.getKey()),UUID.fromString(e.getValue().asText())));var result=run.result();return new OptimizationRun(run.id(),run.executionStatus(),run.outcomeStatus(),run.progress(),run.stage(),4,candidates.size(),missing,result.path("missingStrategyReasons"),candidates,run.error(),run.baseline(),run.request(),map,run.requestId(),run.updatedAt(),result.path("searchEngine").asText(null),result.path("searchStrategy").asText(null),result.path("searchEvidence"));}
     private OptimizationAccepted accepted(OptimizationRepository.RunRow run){var map=new LinkedHashMap<UUID,UUID>();run.bindings().fields().forEachRemaining(e->map.put(UUID.fromString(e.getKey()),UUID.fromString(e.getValue().asText())));var status=List.of("QUEUED","RUNNING").contains(run.executionStatus())?"RUNNING":run.executionStatus();return new OptimizationAccepted(run.id(),run.opsJobId(),status,map,1000);}
-    private ObjectNode targetView(PredictionRepository.TargetBinding b){var n=json.createObjectNode().put("targetId",b.targetId().toString()).put("name",b.targetName()).put("valueType",b.valueType()).put("available",formulaDesign.modelAvailable(b));if(b.modelId()!=null)n.put("modelVersionId",b.modelId().toString());n.set("classes",b.classes());return n;}
+    private ObjectNode targetView(PredictionRepository.TargetBinding b){
+        var n=json.createObjectNode().put("targetId",b.targetId().toString()).put("name",b.targetName())
+                .put("valueType",b.valueType()).put("available",formulaDesign.modelAvailable(b));
+        if(b.modelId()!=null)n.put("modelVersionId",b.modelId().toString());
+        n.set("classes",b.classes()==null?json.createArrayNode():b.classes());
+        if(b.definition()!=null&&b.definition().isObject()){
+            var direction=b.definition().path("optimizationDirection").asText("");
+            if(!direction.isBlank())n.put("direction",direction);
+            var positive=b.definition().path("positiveClass").asText("");
+            if(!positive.isBlank())n.put("positiveClass",positive);
+            var threshold=b.observationSemantics()==null?null:b.observationSemantics().path("decisionThreshold");
+            if(threshold!=null&&threshold.isNumber())n.put("decisionThreshold",threshold.asDouble());
+        }
+        return n;
+    }
     private ObjectNode editModel(OptimizationRepository.CandidateRow c,OptimizationRepository.RunRow run){var m=json.createObjectNode().put("title","AI实验优化-"+strategyTitle(c.strategy())).put("purpose","验证"+strategyTitle(c.strategy())+"方案的实际表现").put("plan","按候选配方和实验前条件执行并补录实测结果");m.set("dynamicValues",c.inputs().deepCopy());m.set("tables",json.createArrayNode());var items=m.putArray("formulaItems");for(var component:c.formula().path("components"))items.add(json.createObjectNode().put("materialId",component.path("materialId").asText()).put("materialCode",component.path("materialCode").asText(component.path("materialId").asText())).put("rawValue",component.path("ratio").asDouble()).put("rawUnit","%").put("ratio",component.path("ratio").asDouble()));m.set("processSteps",json.createArrayNode());m.set("testResults",json.createArrayNode());m.set("events",json.createArrayNode());m.set("conclusion",json.createObjectNode().put("resultStatus","").put("mainConclusion","").put("failureCategory",""));m.set("aiSource",json.createObjectNode().put("runId",run.id().toString()).put("candidateId",c.id().toString()).put("strategy",c.strategy()).set("predictions",c.results()));return m;}
     private JsonNode resultsObject(JsonNode value,UUID org,JsonNode bindings){var out=json.createObjectNode();var targets=out.putArray("targets");var names=new LinkedHashMap<String,String>();var modelToTarget=new LinkedHashMap<String,String>();predictions.targetCatalog(org).forEach(t->names.put(t.id().toString(),t.name()));if(bindings!=null&&bindings.isObject())bindings.fields().forEachRemaining(e->modelToTarget.put(e.getValue().asText(),e.getKey()));var source=value!=null&&value.isObject()&&value.path("targets").isArray()?value.path("targets"):value;if(source!=null&&source.isArray())source.forEach(v->{var c=v.deepCopy();if(c.isObject()){var modelId=c.path("modelVersionId").asText();var canonical=modelToTarget.get(modelId);if(canonical!=null)((ObjectNode)c).put("targetId",canonical);var n=names.get(c.path("targetId").asText());if(n!=null)((ObjectNode)c).put("targetName",n);}targets.add(c);});return out;}
     private DraftLink linkView(OptimizationRepository.LinkRow l){return new DraftLink(l.candidateId(),l.experimentId(),l.experimentVersionId(),l.experimentNo(),l.status(),"/experiments/"+l.experimentId(),l.createdAt());}

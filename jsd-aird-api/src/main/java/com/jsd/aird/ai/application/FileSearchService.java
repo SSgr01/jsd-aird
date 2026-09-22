@@ -56,15 +56,17 @@ public class FileSearchService {
                 : projectResources.resourceIdsForProject(actor, ResourceType.KNOWLEDGE_DOCUMENT, command.projectId());
         Set<UUID> allowedData = command.projectId() == null ? null
                 : projectResources.resourceIdsForProject(actor, ResourceType.DATA_IMPORT_JOB, command.projectId());
-        var dataAccessScope = safe(command.dataCategoryIds()).isEmpty() || dataAuthorization == null
-                ? DataSourceFileSearchFacade.AccessScope.all()
-                : dataAuthorization.requireDataView(actor);
+        var dataEnabled = !safe(command.dataCategoryIds()).isEmpty();
+        var retrievalAccessScope = !dataEnabled ? DataSourceFileSearchFacade.RetrievalAccessScope.denied()
+                : dataAuthorization == null
+                ? DataSourceFileSearchFacade.RetrievalAccessScope.all()
+                : dataAuthorization.requireRetrievalScopes(actor);
         knowledge.searchFiles(actor.organizationId(), query, safe(command.knowledgeCategoryIds()), allowedKnowledge, limit)
                 .stream().map(file -> knowledgeFile(file, query)).filter(Objects::nonNull).forEach(candidates::add);
         var dataFilesById = new LinkedHashMap<UUID, DataSourceFileSearchFacade.SourceFileMatch>();
-        for (var term : searchTerms(query, identifierQuery)) {
+        for (var term : dataEnabled ? searchTerms(query, identifierQuery) : List.<String>of()) {
             dataSources.searchSourceFiles(actor.organizationId(), term, safe(command.dataCategoryIds()),
-                            dataAccessScope, limit).stream()
+                            retrievalAccessScope, limit).stream()
                     .filter(file -> allowedData == null || allowedData.contains(file.importJobId()))
                     .forEach(file -> dataFilesById.merge(file.fileObjectId(), file, this::mergeDataFile));
         }
@@ -96,7 +98,8 @@ public class FileSearchService {
         return new FileResult(file.fileObjectId(), file.logicalDocumentId(), file.fileVersionId(),
                 ResourceType.KNOWLEDGE_DOCUMENT.name(), file.logicalDocumentId(), "KNOWLEDGE",
                 file.title(), file.originalName(), file.contentType(), file.size(), file.version(), file.tags(),
-                file.updatedAt(), hits, classification.type(), classification.fields(), classification.terms(), List.of());
+                file.updatedAt(), hits, classification.type(), classification.fields(), classification.terms(), List.of(),
+                null, null, null, null);
     }
 
     private FileResult dataFile(DataSourceFileSearchFacade.SourceFileMatch file, String query) {
@@ -109,7 +112,8 @@ public class FileSearchService {
         return new FileResult(file.fileObjectId(), null, file.importJobId(), ResourceType.DATA_IMPORT_JOB.name(),
                 file.importJobId(), "DATA_CENTER", file.originalName(),
                 file.originalName(), file.contentType(), file.size(), 1, List.of(), file.updatedAt(), hits,
-                classification.type(), classification.fields(), classification.terms(), List.of());
+                classification.type(), classification.fields(), classification.terms(), List.of(),
+                file.sourceOwner(), file.recognitionMode(), file.experimentId(), file.experimentVersionId());
     }
 
     private double bestScore(FileResult file) {
@@ -132,7 +136,8 @@ public class FileSearchService {
         return new DataSourceFileSearchFacade.SourceFileMatch(left.fileObjectId(), left.importJobId(),
                 left.originalName(), left.contentType(), left.size(),
                 left.updatedAt().isAfter(right.updatedAt()) ? left.updatedAt() : right.updatedAt(), merged,
-                java.util.stream.Stream.concat(left.matchedTerms().stream(), right.matchedTerms().stream()).distinct().toList());
+                java.util.stream.Stream.concat(left.matchedTerms().stream(), right.matchedTerms().stream()).distinct().toList(),
+                left.sourceOwner(), left.recognitionMode(), left.experimentId(), left.experimentVersionId());
     }
 
     private List<String> searchTerms(String query, boolean identifierQuery) {
@@ -189,7 +194,8 @@ public class FileSearchService {
         return new FileResult(file.fileObjectId(), file.logicalDocumentId(), file.fileVersionId(), file.resourceType(),
                 file.resourceId(), file.sourceModule(), file.title(), file.originalName(), file.contentType(), file.size(),
                 file.version(), file.tags(), file.updatedAt(), file.hits(), file.matchType(), file.matchedFields(),
-                file.matchedTerms(), projects);
+                file.matchedTerms(), projects, file.sourceOwner(), file.recognitionMode(), file.experimentId(),
+                file.experimentVersionId());
     }
 
     private String normalize(String value) {
@@ -213,7 +219,9 @@ public class FileSearchService {
                              List<String> tags, Instant updatedAt,
                              List<Hit> hits, String matchType, List<String> matchedFields,
                              List<String> matchedTerms,
-                             List<ProjectResourceFacade.RelatedProjectView> relatedProjects) { }
+                             List<ProjectResourceFacade.RelatedProjectView> relatedProjects,
+                             String sourceOwner, String recognitionMode, UUID experimentId,
+                             UUID experimentVersionId) { }
     private record MatchClassification(String type, List<String> fields, List<String> terms) { }
     public record Hit(UUID id, String snippet, double score, SourceAnchor anchor) { }
     public record SourceAnchor(Integer pageNo, String sheetName, String cellRange, String paragraphId,

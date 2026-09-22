@@ -10,7 +10,7 @@ const unwrap = <T>(response: { data: ApiResponse<T> }) => response.data.data
 
 export type FormulaTarget = {
   targetId: string; code: string; name: string; category?: string; valueType: 'CONTINUOUS'|'ORDINAL'|'BINARY'|'CATEGORICAL'
-  available: boolean; modelVersionId?: string; operators?: string[]; unavailableReasons: string[]; unit?: string; classes?: string[]; positiveClass?: string
+  available: boolean; modelVersionId?: string; operators?: string[]; unavailableReasons: string[]; unit?: string; classes?: string[]; positiveClass?: string; registered?: boolean; statusLabel?: string; decisionThreshold?: number
 }
 export type FormulaContext = {
   targets: FormulaTarget[]

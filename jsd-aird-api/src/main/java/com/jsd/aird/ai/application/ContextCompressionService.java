@@ -68,7 +68,9 @@ public class ContextCompressionService {
             var evidenceText = "[evidenceRef=" + evidenceRef + "] " + text;
             var excerpt = evidenceText.length() <= remaining ? evidenceText
                     : evidenceText.substring(0, Math.max(0, remaining - 1)) + "…";
-            chunks.add("[source=data,file=" + hit.originalName()
+            var sourceType = "EXPERIMENT".equalsIgnoreCase(hit.sourceOwner())
+                    ? "EXPERIMENT_TEMPLATE_SOURCE" : "DATA_SOURCE_FILE";
+            chunks.add("[source=data,sourceType=" + sourceType + ",file=" + hit.originalName()
                     + ",record=" + safe(hit.recordKey())
                     + ",field=" + safe(hit.fieldName())
                     + ",fieldCode=" + safe(hit.fieldCode())

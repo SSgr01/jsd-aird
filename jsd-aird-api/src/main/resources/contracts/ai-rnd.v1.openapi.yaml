@@ -50,6 +50,8 @@ paths:
   /targets/{id}/input-schemes:
     get: {$ref: '#/components/x-operations/readInputSchemes'}
     post: {$ref: '#/components/x-operations/createInputScheme'}
+  /targets/{id}/input-suggestions:
+    get: {$ref: '#/components/x-operations/readInputSuggestions'}
   /input-schemes/{id}/preview:
     post: {$ref: '#/components/x-operations/previewInputScheme'}
   /input-schemes/{id}/freeze:
@@ -847,6 +849,36 @@ components:
         size: {type: integer, minimum: 1, maximum: 100}
         total: {type: integer, minimum: 0}
         totalPages: {type: integer, minimum: 0}
+    InputSuggestion:
+      type: object
+      required: [candidateKey, name, valueType, availabilityStage, dataCenterCoverage, experimentCoverage, totalCoverage, observedValues, observedRange, sourcePaths, matchStatus, conflicts, modelEligible, estimatedTrainableSamples]
+      properties:
+        candidateKey: {type: string}
+        name: {type: string}
+        valueType: {enum: [NUMBER, STRING, BOOLEAN, CATEGORY, COMPOSITION]}
+        unit: {type: [string, 'null']}
+        availabilityStage: {enum: [PRE_EXPERIMENT, POST_EXPERIMENT]}
+        dataCenterCoverage: {type: integer, minimum: 0}
+        experimentCoverage: {type: integer, minimum: 0}
+        totalCoverage: {type: integer, minimum: 0}
+        observedValues: {type: array, items: {type: string}}
+        observedRange: {$ref: '#/components/schemas/JsonObject'}
+        sourcePaths: {type: array, items: {type: string}}
+        existingInputFieldId: {type: [string, 'null'], format: uuid}
+        existingInputFieldVersionId: {type: [string, 'null'], format: uuid}
+        matchStatus: {enum: [NEW_CANDIDATE, REUSABLE, CONFLICT]}
+        conflicts: {type: array, items: {type: string}}
+        modelEligible: {type: boolean}
+        estimatedTrainableSamples: {type: integer, minimum: 0}
+    InputSuggestionPage:
+      type: object
+      required: [content, page, size, totalPages, totalElements]
+      properties:
+        content: {type: array, items: {$ref: '#/components/schemas/InputSuggestion'}}
+        page: {type: integer, minimum: 1}
+        size: {type: integer, minimum: 1, maximum: 100}
+        totalPages: {type: integer, minimum: 0}
+        totalElements: {type: integer, minimum: 0}
     ResponseMetadata:
       type: object
       required: [code, message, traceId, timestamp]
@@ -861,6 +893,7 @@ components:
     TargetVersionListResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {type: array, items: {$ref: '#/components/schemas/TargetVersion'}}}}]}
     InputFieldResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/InputFieldSummary'}}}]}
     InputFieldPageResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/InputFieldPage'}}}]}
+    InputSuggestionPageResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/InputSuggestionPage'}}}]}
     InputFieldVersionResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/InputFieldVersion'}}}]}
     InputFieldVersionListResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {type: array, items: {$ref: '#/components/schemas/InputFieldVersion'}}}}]}
     SourceMappingResponse: {allOf: [{$ref: '#/components/schemas/ResponseMetadata'}, {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/SourceMapping'}}}]}
@@ -1321,6 +1354,7 @@ components:
     TargetVersionList: {description: Target definition version history, content: {application/json: {schema: {$ref: '#/components/schemas/TargetVersionListResponse'}}}}
     InputField: {description: Input field, content: {application/json: {schema: {$ref: '#/components/schemas/InputFieldResponse'}}}}
     InputFieldPage: {description: Stable input field page, content: {application/json: {schema: {$ref: '#/components/schemas/InputFieldPageResponse'}}}}
+    InputSuggestionPage: {description: X candidates discovered from current authoritative facts, content: {application/json: {schema: {$ref: '#/components/schemas/InputSuggestionPageResponse'}}}}
     InputFieldVersion: {description: Input field version, content: {application/json: {schema: {$ref: '#/components/schemas/InputFieldVersionResponse'}}}}
     InputFieldVersionList: {description: Input field version history, content: {application/json: {schema: {$ref: '#/components/schemas/InputFieldVersionListResponse'}}}}
     SourceMapping: {description: Source mapping version, content: {application/json: {schema: {$ref: '#/components/schemas/SourceMappingResponse'}}}}
@@ -1400,6 +1434,7 @@ components:
     createSourceMapping: {<<: *modelWrite, operationId: createSourceMapping, parameters: [{$ref: '#/components/parameters/Id'}, {$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/SourceMappingCommand'}}}}, responses: {'200': {$ref: '#/components/responses/SourceMapping'}, '400': {$ref: '#/components/responses/BadRequest'}, '403': {$ref: '#/components/responses/Forbidden'}, '409': {$ref: '#/components/responses/Conflict'}}}
     publishSourceMapping: {<<: *modelWrite, operationId: publishSourceMapping, parameters: [{$ref: '#/components/parameters/Id'}, {$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/VersionCommand'}}}}, responses: {'200': {$ref: '#/components/responses/SourceMapping'}, '400': {$ref: '#/components/responses/BadRequest'}, '403': {$ref: '#/components/responses/Forbidden'}, '409': {$ref: '#/components/responses/Conflict'}}}
     readInputSchemes: {<<: *readPage, operationId: readInputSchemes, parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/Id'}], responses: {'200': {$ref: '#/components/responses/InputSchemeList'}, '403': {$ref: '#/components/responses/Forbidden'}, '404': {$ref: '#/components/responses/NotFound'}}}
+    readInputSuggestions: {operationId: readInputSuggestions, tags: [Modeling], x-permission: ai.modeling.read, parameters: [{$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/Id'}, {name: targetVersionId, in: query, schema: {type: string, format: uuid}}, {$ref: '#/components/parameters/Page'}, {$ref: '#/components/parameters/Size'}, {$ref: '#/components/parameters/Keyword'}], responses: {'200': {$ref: '#/components/responses/InputSuggestionPage'}, '403': {$ref: '#/components/responses/Forbidden'}, '404': {$ref: '#/components/responses/NotFound'}}}
     createInputScheme: {<<: *modelWrite, operationId: createInputScheme, parameters: [{$ref: '#/components/parameters/Id'}, {$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/InputSchemeCommand'}}}}, responses: {'200': {$ref: '#/components/responses/InputScheme'}, '400': {$ref: '#/components/responses/BadRequest'}, '403': {$ref: '#/components/responses/Forbidden'}, '409': {$ref: '#/components/responses/Conflict'}}}
     previewInputScheme: {<<: *modelWrite, operationId: previewInputScheme, x-permission: ai.modeling.read, parameters: [{$ref: '#/components/parameters/Id'}, {$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: null, responses: {'200': {$ref: '#/components/responses/CoveragePreview'}, '403': {$ref: '#/components/responses/Forbidden'}, '404': {$ref: '#/components/responses/NotFound'}}}
     freezeInputScheme: {<<: *modelWrite, operationId: freezeInputScheme, parameters: [{$ref: '#/components/parameters/Id'}, {$ref: '#/components/parameters/RequestId'}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/VersionCommand'}}}}, responses: {'200': {$ref: '#/components/responses/FreezeResult'}, '400': {$ref: '#/components/responses/BadRequest'}, '403': {$ref: '#/components/responses/Forbidden'}, '409': {$ref: '#/components/responses/Conflict'}, '422': {$ref: '#/components/responses/Blocked'}}}

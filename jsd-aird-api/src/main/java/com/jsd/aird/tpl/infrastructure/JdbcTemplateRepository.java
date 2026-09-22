@@ -510,6 +510,12 @@ public class JdbcTemplateRepository implements TemplateRepository {
             copyMappingMetadata(binding, diagnostic, "experimentSemanticSource");
             copyMappingMetadata(binding, diagnostic, "experimentSemanticAlternatives");
             copyMappingMetadata(binding, diagnostic, "experimentSemanticIssue");
+            // Hierarchy is part of the executable import contract.  Keep it in
+            // the diagnostic JSON as well as the in-memory mapping so a
+            // save/reload round-trip cannot collapse a qualified test field
+            // (for example, PC film adhesion) to its leaf label only.
+            copyMappingMetadata(binding, diagnostic, "labelPath");
+            copyMappingMetadata(binding, diagnostic, "labelPathSegments");
             if (binding.path("aliases").isArray()) diagnostic.set("aliases", binding.path("aliases"));
             arguments.add(new Object[]{
                     UUID.randomUUID(),
@@ -1042,7 +1048,7 @@ public class JdbcTemplateRepository implements TemplateRepository {
                              "trainingEligible", "valueSource", "aliases", "experimentField",
                              "experimentItemLabel", "experimentSemanticConfidence", "experimentSemanticStatus",
                              "experimentSemanticSource", "experimentSemanticAlternatives",
-                             "experimentSemanticIssue")) {
+                             "experimentSemanticIssue", "labelPath", "labelPathSegments")) {
                         if (!binding.has(metadata) && diagnostic.has(metadata)) {
                             binding.set(metadata, diagnostic.path(metadata));
                         }

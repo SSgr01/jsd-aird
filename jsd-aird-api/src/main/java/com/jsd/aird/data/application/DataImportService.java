@@ -896,7 +896,7 @@ public class DataImportService {
                         if (!expected.isBlank() && suffix.equals(expected)) numericText = withUnit.group(1);
                     }
                 }
-                numeric = new BigDecimal(numericText);
+                numeric = parseStructuredNumeric(numericText, mapping);
             }
             catch (NumberFormatException exception) {
                 issues.add(issue(row, mapping, "BLOCKER", "TYPE_ERROR", "数值字段无法解析：" + raw));
@@ -932,6 +932,46 @@ public class DataImportService {
             } else numeric = numeric.multiply(factor);
         }
         return numeric == null ? raw.trim() : numeric.stripTrailingZeros().toPlainString();
+    }
+
+    /**
+     * Customer reports often keep a numeric observation together with its
+     * direction/label (for example "正向翘曲1.4cm", "卷曲20°") or as a
+     * measured range ("8.8-9.8").  The import layer must accept those
+     * representations without discarding the original text; the raw value is
+     * retained in the source evidence and the returned normalized value is
+     * only the deterministic scalar used by downstream projections.
+     */
+    private BigDecimal parseStructuredNumeric(String text, DataRepository.Mapping mapping) {
+        try {
+            return new BigDecimal(text);
+        } catch (NumberFormatException ignored) {
+            var number = "([+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+))";
+            var range = java.util.regex.Pattern.compile(
+                    ".*?" + number + "\\s*(?:-|–|—|~|至)\\s*" + number + ".*")
+                    .matcher(text);
+            if (range.matches()) {
+                return new BigDecimal(range.group(1))
+                        .add(new BigDecimal(range.group(2)))
+                        .divide(BigDecimal.valueOf(2), java.math.MathContext.DECIMAL64);
+            }
+
+            var expected = canonicalUnit(mapping.standardUnit());
+            if (!expected.isBlank()) {
+                var decorated = java.util.regex.Pattern.compile(
+                        ".*?" + number + "\\s*" + java.util.regex.Pattern.quote(mapping.standardUnit()) + ".*")
+                        .matcher(text);
+                if (decorated.matches()) return new BigDecimal(decorated.group(1));
+                // Accept equivalent micro/degree spellings after unit
+                // canonicalization, while still requiring a unit in the cell.
+                var withUnit = java.util.regex.Pattern.compile(
+                        ".*?" + number + "\\s*([^0-9\\s].*)").matcher(text);
+                if (withUnit.matches() && expected.equals(canonicalUnit(withUnit.group(2)))) {
+                    return new BigDecimal(withUnit.group(1));
+                }
+            }
+            throw ignored;
+        }
     }
 
     private String canonicalUnit(String value) {

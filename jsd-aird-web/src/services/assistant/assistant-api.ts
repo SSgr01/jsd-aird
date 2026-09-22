@@ -42,6 +42,10 @@ export interface AssistantCitation {
   publishedAt?: string;
   fetchedAt?: string;
   contentHash?: string;
+  sourceOwner?: 'DATA_CENTER' | 'EXPERIMENT';
+  recognitionMode?: 'FREEFORM' | 'TEMPLATE_GUIDED';
+  experimentId?: string;
+  experimentVersionId?: string;
 }
 
 export interface AssistantResponse {
@@ -96,6 +100,10 @@ export interface FileSearchResult {
       taskId?: string;
       taskName?: string;
     }>;
+    sourceOwner?: 'DATA_CENTER' | 'EXPERIMENT';
+    recognitionMode?: 'FREEFORM' | 'TEMPLATE_GUIDED';
+    experimentId?: string;
+    experimentVersionId?: string;
     hits: Array<{
       id: string;
       snippet: string;

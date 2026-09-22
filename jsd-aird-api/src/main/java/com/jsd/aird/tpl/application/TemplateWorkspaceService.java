@@ -558,7 +558,7 @@ public class TemplateWorkspaceService {
                     && normalizedMapping instanceof ArrayNode mappingArray
                     && schemaObject.path(TemplateRecognitionCompiler.FIELD_MODEL_KEY) instanceof ObjectNode model) {
                 new ExperimentTemplateSemanticCompiler(objectMapper).apply(schemaObject, mappingArray, model);
-                mergeRecognizedListProjections(actor.organizationId(), current, schemaObject);
+                mergeRecognizedListProjections(actor.organizationId(), current, schemaObject, mappingArray);
             }
             validateSchema(normalizedSchema);
             standardFieldService.validateFormalFields(normalizedSchema);
@@ -748,13 +748,34 @@ public class TemplateWorkspaceService {
     private void mergeRecognizedListProjections(
             UUID organizationId,
             TemplateRepository.TemplateWorkspace current,
-            ObjectNode schema
+            ObjectNode schema,
+            ArrayNode mapping
     ) {
-        if (current.recognitionRunId() == null || current.format() != TemplateFormat.XLSX) return;
-        var suggestions = importRepository.listSuggestions(organizationId, current.recognitionRunId());
+        if (current.format() != TemplateFormat.XLSX) return;
+        // The repository lookup is scoped by import job, not by the generated
+        // recognition-run id.  Using the latter silently returned no reviewed
+        // suggestions and caused the executable mapping to lose hierarchy.
+        var importJob = importRepository.findLatestForVersion(organizationId, current.versionId()).orElse(null);
+        var suggestions = importJob == null
+                ? List.<TemplateImportRepository.RecognitionSuggestionView>of()
+                : importRepository.listSuggestions(organizationId, importJob.id());
+        // Recognition runs started directly from a copied workbook do not
+        // always have a template-import job row.  Keep the run-id fallback so
+        // the reviewed hierarchy is still available for draft compilation.
+        if (suggestions.isEmpty() && current.recognitionRunId() != null) {
+            suggestions = importRepository.listSuggestions(organizationId, current.recognitionRunId());
+        }
         if (suggestions.isEmpty()) return;
-        var recognizedSchema = recognitionCompiler.compile(
-                objectMapper.createObjectNode(), suggestions, current.format()).schema();
+        var recognized = recognitionCompiler.compile(
+                objectMapper.createObjectNode(), suggestions, current.format());
+        var recognizedSchema = recognized.schema();
+        mergeRecognizedBindingMetadata(mapping, suggestions);
+        // The review projection enriches physical children with the complete
+        // hierarchy assembled from their region tree.  Raw persistence
+        // suggestions may contain only the leaf label, so use the same
+        // reviewed payload that the UI displays when it is available.
+        var review = recognitionReviewService.get(current.versionId());
+        mergeRecognizedReviewMetadata(mapping, review.items());
         var recognizedConfiguration = recognizedSchema.path(
                 TemplateImportContractCompiler.EXPERIMENT_IMPORT_SCHEMA_KEY);
         if (!recognizedConfiguration.isObject()
@@ -781,6 +802,76 @@ public class TemplateWorkspaceService {
                 .forEach(entry -> array.add(entry.getValue()));
         if (configuration.path("recognitionSummary") instanceof ObjectNode summary) {
             summary.put("matrixCount", projections.size());
+        }
+    }
+
+    private void mergeRecognizedBindingMetadata(
+            ArrayNode target,
+            List<TemplateImportRepository.RecognitionSuggestionView> recognized
+    ) {
+        var byBinding = new java.util.HashMap<String, JsonNode>();
+        var byAddress = new java.util.HashMap<String, JsonNode>();
+        for (var item : recognized) {
+            var source = item.payload();
+            var bindingId = source.path("bindingId").asText("");
+            if (!bindingId.isBlank()) byBinding.put(bindingId, source);
+            var locator = source.path("locator");
+            var address = locator.path("address").asText(locator.path("valueRange").asText(""));
+            if (!address.isBlank()) byAddress.put(address, source);
+        }
+        for (var value : target) {
+            if (!(value instanceof ObjectNode object)) continue;
+            var source = byBinding.get(object.path("bindingId").asText(""));
+            if (source == null) {
+                var locator = object.path("locator");
+                source = byAddress.get(locator.path("address").asText(locator.path("valueRange").asText("")));
+            }
+            if (source == null) continue;
+            for (var key : List.of("labelPath", "labelPathSegments", "experimentField",
+                    "experimentItemLabel", "experimentSemanticConfidence",
+                    "experimentSemanticStatus", "experimentSemanticSource",
+                    "experimentSemanticAlternatives", "experimentSemanticIssue")) {
+                // A reviewed/edited mapping is authoritative.  Recognition is
+                // allowed to fill missing hierarchy, but an older suggestion
+                // must not overwrite a confirmed TEST/PROCESS/BASIC semantic
+                // with its fallback OTHER.DYNAMIC_VALUE classification.
+                if ("experimentField".equals(key)
+                        && object.path("experimentField").isObject()
+                        && !"OTHER".equals(object.path("experimentField").path("domain").asText(""))) {
+                    continue;
+                }
+                if (source.has(key)) object.set(key, source.path(key).deepCopy());
+            }
+        }
+    }
+
+    private void mergeRecognizedReviewMetadata(
+            ArrayNode target,
+            List<TemplateRecognitionReviewService.RecognitionReviewItem> reviewItems
+    ) {
+        var byBinding = new java.util.HashMap<String, JsonNode>();
+        var byAddress = new java.util.HashMap<String, JsonNode>();
+        for (var item : reviewItems) {
+            var source = item.payload();
+            if (source == null || !source.path("labelPathSegments").isArray()
+                    || source.path("labelPathSegments").isEmpty()) continue;
+            var bindingId = source.path("bindingId").asText("");
+            if (!bindingId.isBlank()) byBinding.put(bindingId, source);
+            var locator = source.path("locator");
+            var address = locator.path("address").asText(locator.path("valueRange").asText(""));
+            if (!address.isBlank()) byAddress.put(address, source);
+        }
+        for (var value : target) {
+            if (!(value instanceof ObjectNode object)) continue;
+            var source = byBinding.get(object.path("bindingId").asText(""));
+            if (source == null) {
+                var locator = object.path("locator");
+                source = byAddress.get(locator.path("address").asText(locator.path("valueRange").asText("")));
+            }
+            if (source == null) continue;
+            for (var key : List.of("labelPath", "labelPathSegments")) {
+                if (source.has(key)) object.set(key, source.path(key).deepCopy());
+            }
         }
     }
 

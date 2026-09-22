@@ -30,9 +30,14 @@ export function PdfCanvasPreview({ blob }: PdfCanvasPreviewProps) {
     setError(undefined);
 
     void (async () => {
-      const pdfjs = await import('pdfjs-dist');
+      // The standard pdfjs build uses Promise.withResolvers directly. That
+      // API is missing in older Safari/Chrome versions and many embedded
+      // WebViews, which made the preview fail before a PDF was even parsed.
+      // The legacy build includes the compatibility polyfills needed by
+      // those browsers while keeping the same canvas API.
+      const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
       pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-        'pdfjs-dist/build/pdf.worker.min.mjs',
+        'pdfjs-dist/legacy/build/pdf.worker.min.mjs',
         import.meta.url,
       ).toString();
       const data = new Uint8Array(await blob.arrayBuffer());

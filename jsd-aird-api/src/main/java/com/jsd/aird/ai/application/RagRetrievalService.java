@@ -11,6 +11,7 @@ import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
@@ -112,6 +113,23 @@ public class RagRetrievalService {
     public Retrieval retrieve(UUID organizationId, String question, List<AssistantRepository.MessageRow> history,
                               List<UUID> knowledgeCategoryIds, List<UUID> dataCategoryIds, boolean aiOnly,
                               boolean webSearchEnabled, DataSourceFileSearchFacade.AccessScope dataAccessScope) {
+        return retrieveInternal(organizationId, question, history, knowledgeCategoryIds, dataCategoryIds, aiOnly,
+                webSearchEnabled, new DataSourceFileSearchFacade.RetrievalAccessScope(dataAccessScope, dataAccessScope),
+                true);
+    }
+
+    public Retrieval retrieve(UUID organizationId, String question, List<AssistantRepository.MessageRow> history,
+                              List<UUID> knowledgeCategoryIds, List<UUID> dataCategoryIds, boolean aiOnly,
+                              boolean webSearchEnabled, DataSourceFileSearchFacade.RetrievalAccessScope accessScope) {
+        return retrieveInternal(organizationId, question, history, knowledgeCategoryIds, dataCategoryIds, aiOnly,
+                webSearchEnabled, accessScope == null ? DataSourceFileSearchFacade.RetrievalAccessScope.denied() : accessScope,
+                false);
+    }
+
+    private Retrieval retrieveInternal(UUID organizationId, String question, List<AssistantRepository.MessageRow> history,
+                              List<UUID> knowledgeCategoryIds, List<UUID> dataCategoryIds, boolean aiOnly,
+                              boolean webSearchEnabled, DataSourceFileSearchFacade.RetrievalAccessScope accessScope,
+                              boolean legacyFacadeCalls) {
         var started = System.nanoTime();
         var timings = new LinkedHashMap<String, Long>();
         var stage = System.nanoTime();
@@ -132,7 +150,7 @@ public class RagRetrievalService {
         try {
             dataFuture = CompletableFuture.supplyAsync(
                     () -> searchDataChannel(organizationId, dataQueries, dataDetailQuery,
-                            dataFilters, dataAccessScope, searchData),
+                            dataFilters, accessScope, searchData, legacyFacadeCalls),
                     retrievalExecutor);
         } catch (RejectedExecutionException exception) {
             dataFuture = CompletableFuture.completedFuture(new DataChannelResult(List.of(), dataQueries.size(),
@@ -224,14 +242,16 @@ public class RagRetrievalService {
     private DataChannelResult searchDataChannel(UUID organizationId, List<String> queries,
                                                 DataSourceFileSearchFacade.DataDetailQuery detailQuery,
                                                 List<UUID> filters,
-                                                DataSourceFileSearchFacade.AccessScope accessScope,
-                                                boolean enabled) {
+                                                DataSourceFileSearchFacade.RetrievalAccessScope accessScope,
+                                                boolean enabled, boolean legacyFacadeCalls) {
         if (!enabled) return new DataChannelResult(List.of(), 0, 0, 0, "SKIPPED",
                 DataSourceFileSearchFacade.DataDetailResult.empty(detailQuery.mode()));
         var started = System.nanoTime();
         if (detailQuery.mode() != DataSourceFileSearchFacade.DataQueryMode.NONE) {
             try {
-                var detail = dataFiles.queryDetails(organizationId, detailQuery, filters, accessScope);
+                var detail = legacyFacadeCalls
+                        ? dataFiles.queryDetails(organizationId, detailQuery, filters, accessScope.dataScope())
+                        : dataFiles.queryDetails(organizationId, detailQuery, filters, accessScope);
                 var status = detail.found() && !detail.hits().isEmpty() ? "SUCCEEDED"
                         : detail.found() ? "EMPTY" : "NOT_FOUND";
                 return new DataChannelResult(detail.hits(), 0, 1, elapsedMs(started), status, detail);
@@ -244,8 +264,12 @@ public class RagRetrievalService {
         var failures = 0;
         for (var query : queries) {
             try {
-                dataFiles.search(organizationId, query, filters, accessScope,
-                                Math.max(1, Math.min(10, maxDataHits)))
+                var found = legacyFacadeCalls
+                        ? dataFiles.search(organizationId, query, filters, accessScope.dataScope(),
+                        Math.max(1, Math.min(10, maxDataHits)))
+                        : dataFiles.search(organizationId, query, filters, accessScope,
+                        Math.max(1, Math.min(10, maxDataHits)));
+                found
                         .forEach(hit -> byHit.computeIfAbsent(hit.hitId(), ignored -> new DataHitAccumulator(hit))
                                 .add(hit.score()));
             } catch (RuntimeException exception) {
@@ -271,6 +295,8 @@ public class RagRetrievalService {
         }
         var recordTerms = new LinkedHashSet<>(request.recordTerms());
         var fieldTerms = new LinkedHashSet<>(request.fieldTerms());
+        extractStructuredQueryTerms(plan == null ? "" : plan.originalQuery(), request.recordTerms()).entities()
+                .forEach(recordTerms::add);
         if (mode == DataSourceFileSearchFacade.DataQueryMode.FIELD_LOOKUP) {
             var inferred = inferFieldLookup(plan == null ? "" : plan.originalQuery());
             if (!inferred.recordTerm().isBlank()) recordTerms.add(inferred.recordTerm());
@@ -279,6 +305,8 @@ public class RagRetrievalService {
             var recordTerm = inferRecordLookup(plan == null ? "" : plan.originalQuery());
             if (!recordTerm.isBlank()) recordTerms.add(recordTerm);
         }
+        recordTerms = new LinkedHashSet<>(longestSpecificTerms(recordTerms));
+        fieldTerms = new LinkedHashSet<>(longestSpecificTerms(fieldTerms));
         var recordLimit = mode == DataSourceFileSearchFacade.DataQueryMode.FILE_OVERVIEW ? 5 : 1;
         DataSourceFileSearchFacade.DataFileScope fileScope;
         try {
@@ -320,6 +348,119 @@ public class RagRetrievalService {
         if (labeled.find()) return labeled.group(1).strip();
         var inferred = inferFieldLookup(normalized);
         return inferred.recordTerm();
+    }
+
+    /**
+     * Deterministic, deliberately small Chinese entity extraction for the
+     * structured row index. It keeps user-provided identifiers intact and only
+     * recognizes entities around explicit experiment/data language; it does not
+     * create a full Chinese n-gram index.
+     */
+    static StructuredQueryTerms extractStructuredQueryTerms(String question) {
+        return extractStructuredQueryTerms(question, List.of());
+    }
+
+    /**
+     * Extracts terms using a maximum-specificity pass.  The seed terms come
+     * from the rewrite model, but they are only accepted when they are literal
+     * text from the user/context; the deterministic pass then prefers a whole
+     * identifier, model/combination name, or labeled value over shorter terms
+     * contained inside it.
+     */
+    static StructuredQueryTerms extractStructuredQueryTerms(String question, List<String> seedTerms) {
+        if (question == null || question.isBlank()) return new StructuredQueryTerms(List.of());
+        var normalized = stripDataSelectionPrefix(question).strip();
+        var candidates = new LinkedHashSet<String>();
+        var labeled = java.util.regex.Pattern.compile(
+                        "(?:实验人|负责人|实验者|操作者|样品(?:名称|名)?|物料|材料|原料|实验编号|样品编号|试样编号|记录编号)[：:\\s]*([A-Za-z0-9\\u4E00-\\u9FFF._/\\-+&·、()（）\\[\\]【】#%]{2,120})")
+                .matcher(normalized);
+        while (labeled.find()) addStructuredEntity(candidates, labeled.group(1));
+
+        var owner = java.util.regex.Pattern.compile("([\\u4E00-\\u9FFF]{2,24})的实验(?:有什么|有哪些|数据|结果|记录|情况)?")
+                .matcher(normalized);
+        while (owner.find()) addStructuredEntity(candidates, owner.group(1));
+
+        var experiment = java.util.regex.Pattern.compile(
+                        "(?:分析|查询|检索|查找|查看|了解|统计|研究|请问|请查询)?(?:一下)?([\\u4E00-\\u9FFF]{2,24})实验(?:的|数据|结果|记录|有哪些|有什么)")
+                .matcher(normalized);
+        while (experiment.find()) {
+            var value = ownerPrefix(experiment.group(1));
+            addStructuredEntity(candidates, value);
+            if (!normalized.contains(value + "的实验")) addStructuredEntity(candidates, value + "实验");
+        }
+
+        var mixedIdentifier = java.util.regex.Pattern.compile("(?i)(?<![A-Za-z0-9])[A-Za-z0-9][A-Za-z0-9._/-]{1,120}(?![A-Za-z0-9])")
+                .matcher(normalized);
+        while (mixedIdentifier.find()) addStructuredEntity(candidates, mixedIdentifier.group());
+
+        // Query-rewrite terms are the dynamic domain dictionary for this
+        // request. QueryRewriteService has already restricted them to literal
+        // text from the user question or recent conversation; keeping them
+        // here lets follow-up questions reuse a complete identifier/model.
+        if (seedTerms != null) seedTerms.stream()
+                .filter(value -> value != null && !value.isBlank())
+                .map(String::strip)
+                .forEach(value -> addStructuredEntity(candidates, value));
+
+        return new StructuredQueryTerms(longestSpecificTerms(candidates));
+    }
+
+    /**
+     * Maximum matching over the candidate dictionary.  A shorter candidate is
+     * removed only when it is fully contained in a longer candidate, so
+     * unrelated entities remain independently searchable.  This keeps
+     * `UV-01A` and `甲油胶耐磨实验` intact while still allowing two separate
+     * entities such as `陈琪` and `UV-01A` to coexist.
+     */
+    private static List<String> longestSpecificTerms(Set<String> candidates) {
+        var ordered = candidates == null ? List.<String>of() : candidates.stream()
+                .filter(value -> value != null && !value.isBlank())
+                .map(String::strip)
+                .distinct()
+                .sorted(Comparator.comparingInt((String value) -> containsAsciiOrDigit(value) ? 0 : 1)
+                        .thenComparing(Comparator.comparingInt(String::length).reversed()))
+                .toList();
+        var selected = new ArrayList<String>();
+        for (var candidate : ordered) {
+            var compact = compactTerm(candidate);
+            if (compact.length() < 2) continue;
+            var covered = selected.stream().map(RagRetrievalService::compactTerm)
+                    .anyMatch(existing -> existing.length() > compact.length() && existing.contains(compact));
+            if (!covered) selected.add(candidate);
+            if (selected.size() >= 12) break;
+        }
+        return List.copyOf(selected);
+    }
+
+    private static String compactTerm(String value) {
+        return value == null ? "" : value.replaceAll("\\s+", "").strip();
+    }
+
+    private static boolean containsAsciiOrDigit(String value) {
+        return value != null && value.matches(".*[A-Za-z0-9].*");
+    }
+
+    private static String ownerPrefix(String value) {
+        if (value == null) return "";
+        var result = value.strip();
+        if (result.endsWith("的")) result = result.substring(0, result.length() - 1).strip();
+        return result.startsWith("分析") || result.startsWith("查询") || result.startsWith("查找")
+                ? result.substring(2) : result;
+    }
+
+    private static void addStructuredEntity(Set<String> entities, String value) {
+        if (value == null) return;
+        var normalized = value.replaceAll("^[请问请查询分析查询检索查找查看了解统计研究]+|[的，,。；;：:?？!！]+$", "").strip();
+        if (normalized.length() >= 2 && normalized.length() <= 120
+                && !Set.of("实验有什么", "实验数据", "实验结果", "实验记录").contains(normalized)) {
+            entities.add(normalized);
+        }
+    }
+
+    record StructuredQueryTerms(List<String> entities) {
+        StructuredQueryTerms {
+            entities = entities == null ? List.of() : List.copyOf(entities);
+        }
     }
 
     private static String inferStandaloneField(String question) {
@@ -543,6 +684,15 @@ public class RagRetrievalService {
                 if (term != null && term.aliases() != null) term.aliases().stream()
                         .filter(value -> value != null && !value.isBlank()).map(String::strip).forEach(queries::add);
             });
+            if (plan.dataRequest() != null) {
+                plan.dataRequest().recordTerms().stream().filter(value -> value != null && !value.isBlank())
+                        .map(String::strip).forEach(queries::add);
+                plan.dataRequest().fieldTerms().stream().filter(value -> value != null && !value.isBlank())
+                        .map(String::strip).forEach(queries::add);
+            }
+            var seedTerms = new ArrayList<String>();
+            if (plan.dataRequest() != null) seedTerms.addAll(plan.dataRequest().recordTerms());
+            extractStructuredQueryTerms(question, seedTerms).entities().forEach(queries::add);
         }
         return queries.stream().limit(20).toList();
     }
@@ -700,7 +850,8 @@ public class RagRetrievalService {
             return new DataSourceFileSearchFacade.SourceFileHit(hit.hitId(), hit.fileObjectId(), hit.importJobId(),
                     hit.rowNumber(), hit.columnName(), hit.originalName(), hit.content(), combinedScore,
                     hit.sourceLocator(), hit.recordKey(), hit.fieldCode(), hit.fieldName(), hit.fieldValue(),
-                    hit.unit(), hit.valueType(), hit.sheetName(), hit.cellAddress());
+                    hit.unit(), hit.valueType(), hit.sheetName(), hit.cellAddress(), hit.sourceOwner(),
+                    hit.recognitionMode(), hit.experimentId(), hit.experimentVersionId());
         }
     }
 

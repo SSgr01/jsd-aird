@@ -140,7 +140,7 @@ export function ProductionUploadWorkspacePage() {
   const [selectedVersion, setSelectedVersion] = useState<ProductionUploadVersion>();
   const [snapshot, setSnapshot] = useState<Record<string, unknown>>();
   const [business, setBusiness] = useState<ProductionBusinessSnapshot>(createEmptyBusinessSnapshot);
-  const [view, setView] = useState<WorkspaceView>('preview');
+  const [view, setView] = useState<WorkspaceView>('edit');
   const [editorReady, setEditorReady] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -157,7 +157,6 @@ export function ProductionUploadWorkspacePage() {
     setLoading(true);
     setDirty(false);
     setSelectedVersion(undefined);
-    setView('preview');
     setEditorReady(false);
     try {
       const [detail, history] = await Promise.all([
@@ -166,6 +165,8 @@ export function ProductionUploadWorkspacePage() {
       ]);
       setRecord(detail);
       setVersions(history);
+      // 默认停在编辑页签，图片生产单没有可编辑内容时才回到预览。
+      setView(formatOf(detail.originalName) === 'PHOTO' ? 'preview' : 'edit');
       if (formatOf(detail.originalName) === 'PHOTO') {
         const blob = await fetchFileBlob(detail.fileId);
         const url = URL.createObjectURL(blob);
@@ -271,27 +272,11 @@ export function ProductionUploadWorkspacePage() {
       msg.error('发布前请先填写生产单名称和订单号');
       return;
     }
-    const businessError = validateBusinessSnapshot(business);
-    if (businessError) {
-      msg.error(businessError);
-      return;
-    }
-    if (business.status === 'NOT_ORDERED') {
-      msg.error('请先提交下单，再发布生产单');
-      return;
-    }
-    if (business.status === 'VOID') {
-      msg.error('已作废生产单不能发布');
-      return;
-    }
-    if (dirty) {
-      msg.warning('当前内容尚未保存，请先保存草稿后再发布');
-      return;
-    }
     setPublishing(true);
     try {
-      if (!record.workbookSnapshot) {
-        const saved = await saveDraft();
+      // 编辑中的内容随发布一起落库，不需要先手动保存草稿。
+      if (dirty || !record.workbookSnapshot) {
+        const saved = await saveDraft(business, true);
         if (!saved) return;
       }
       await productionOrderRecordApi.publish(record.id);
@@ -334,10 +319,6 @@ export function ProductionUploadWorkspacePage() {
   };
 
   const switchView = (next: WorkspaceView) => {
-    if (next === 'versions' && versions.length === 0) {
-      msg.info('发布后才会生成版本记录');
-      return;
-    }
     if (next === 'versions' && dirty) {
       msg.warning('当前内容尚未保存，请先保存后再查看版本记录');
       return;
@@ -428,7 +409,7 @@ export function ProductionUploadWorkspacePage() {
           <Button
             type="primary"
             loading={publishing}
-            disabled={!editable || !canSubmit || dirty || saving}
+            disabled={!canSubmit || saving}
             onClick={() => void publish()}
           >
             发布
@@ -475,7 +456,7 @@ export function ProductionUploadWorkspacePage() {
           items={[
             { key: 'preview', label: '预览' },
             { key: 'edit', label: '编辑', disabled: !isExcel && format !== 'DOCX' },
-            ...(versions.length > 0 ? [{ key: 'versions', label: '版本记录' }] : []),
+            { key: 'versions', label: '版本记录' },
             { key: 'material', label: '实际投料单', disabled: !isExcel },
             { key: 'attachments', label: '工艺附件', disabled: !isExcel },
           ]}

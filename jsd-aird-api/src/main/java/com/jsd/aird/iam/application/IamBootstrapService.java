@@ -175,7 +175,7 @@ public class IamBootstrapService {
             if (legacy.isEmpty() || "SYSTEM_ADMIN".equals(role.code())) return;
             var code = "MIGRATED_" + role.code();
             var generated = store.ensurePermissionLevel(organizationId, code,
-                    "迁移：" + role.name(), "由旧版角色权限自动生成，确认后可调整。", false, 1);
+                    "迁移：" + role.name(), "", false, 1);
             if (store.permissionLevelBindings(organizationId, generated.id()).isEmpty()) {
                 store.replacePermissionLevelBindings(organizationId, generated.id(), generated.policyVersion(),
                         legacy.stream().filter(binding -> "ALLOW".equals(binding.effect()))

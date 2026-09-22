@@ -440,6 +440,17 @@ export function PermissionManagementPage({ initialMode = 'user' }: PermissionMan
     message.info('未保存的个人权限变更已取消');
   };
 
+  const resetRole = () => {
+    const locked = activeRole?.code === 'SYSTEM_ADMIN';
+    setRoleMenus(locked ? (model?.menus ?? []).map((menu) => menu.key) : []);
+    message.info(locked ? '系统管理员固定开放全部功能入口' : activeRole?.builtin ? '已清空当前内置角色的菜单变更，请保存后生效' : '已清空当前业务角色菜单，请保存后生效');
+  };
+
+  const resetLevel = () => {
+    setLevelBindings({});
+    message.info(activeLevel?.builtin ? '已清空当前内置等级的编辑结果，请保存后生效' : '已清空当前权限等级，请保存后生效');
+  };
+
   const createRole = () => {
     let code = '';
     let name = '';
@@ -602,48 +613,34 @@ export function PermissionManagementPage({ initialMode = 'user' }: PermissionMan
     </div></div>;
   };
 
-  const renderPersonalMatrix = () => <div className="permission-v4-table-wrap"><table className="permission-v4-table"><thead><tr><th>功能权限</th><th>操作权限</th><th>数据范围权限</th></tr></thead><tbody>{matrixRows.map((row) => <tr className={row.menu.parent ? 'child-row' : 'parent-row'} key={row.menu.key}>
+  const renderPersonalMatrix = () => <div className="permission-v4-table-wrap"><table className="permission-v4-table permission-v4-personal-table"><thead><tr><th>功能权限</th><th>操作权限</th><th>数据范围权限</th></tr></thead><tbody>{matrixRows.map((row) => <tr className={row.menu.parent ? 'child-row' : 'parent-row'} key={row.menu.key}>
     <td>{renderMenuCell(row, true)}</td>
     <td>{row.operations.length ? <div className="permission-v4-checks">{row.operations.map((definition) => { const key = levelBindingKey(row.menu.key, definition.code); const overridden = Boolean(operationOverrides[key]); return <label className={`permission-v4-check${overridden ? ' manual' : ''}`} key={definition.code} title={overridden ? '个人覆盖' : '继承权限等级'}><input type="checkbox" checked={userOperationValue(row.menu.key, definition)} onChange={(event) => setOperationOverride(row.menu.key, definition, event.target.checked)} /><span>{operationDisplayLabel(row.menu.key, definition)}</span></label>; })}</div> : <span className="permission-v4-muted">—</span>}</td>
     <td>{renderPersonalScopeCell(row)}</td>
   </tr>)}</tbody></table></div>;
 
   const renderPersonal = () => {
-    const levelDescription = model?.levels.find((level) => level.id === levelId)?.description || (levelId ? '继承当前权限等级的操作与数据范围。' : '未选择等级：操作权限和数据范围均可直接在个人权限中配置。');
     return <div className="permission-v4-panel permission-v4-personal-panel">
       <div className="permission-v4-user-config">
         <div className="permission-v4-user-toolbar">
           <label className="permission-v4-config-field"><span>搜索用户</span><Select showSearch value={activeUserId} onChange={setActiveUserId} optionFilterProp="label" options={users.map((user) => ({ value: user.id, label: `${user.displayName} · ${user.username}`, email: user.email }))} placeholder="输入姓名、编号或邮箱搜索" /></label>
           <label className="permission-v4-config-field"><span>业务角色 <small>可多选；不选择时菜单权限由个人手工配置</small></span><Select mode="multiple" value={roleIds} onChange={setRoleIds} options={roles.map((role) => ({ value: role.id, label: `${role.name}${role.builtin ? '（内置）' : ''}` }))} placeholder="不选择业务角色" maxTagCount="responsive" /></label>
-          <label className="permission-v4-config-field"><span>权限等级</span><Select allowClear value={levelId} onChange={setLevelId} options={(model?.levels ?? []).map((level) => ({ value: level.id, label: `${level.name}（${level.code}）` }))} placeholder="不选择权限等级（手工配置）" /><small className="permission-v4-level-description">{levelDescription}</small></label>
+          <label className="permission-v4-config-field"><span>权限等级 </span><Select allowClear value={levelId} onChange={setLevelId} options={(model?.levels ?? []).map((level) => ({ value: level.id, label: `${level.name}（${level.code}）` }))} placeholder="不选择权限等级（手工配置）" /></label>
         </div>
-        {activeUser && <div className="permission-v4-user-meta"><span>{activeUser.displayName} · {activeUser.username}</span><span className={activeUser.status === 'ACTIVE' ? 'ok' : 'off'}>{activeUser.status === 'ACTIVE' ? '启用' : '停用'}</span><span>{activeUser.departmentName || '未设置部门'}</span><span>{roleIds.length ? `${roleIds.length} 个业务角色` : '未设置业务角色'}</span><span className={levelId ? 'inherit' : 'manual'}>{levelId ? '继承权限等级' : '个人手工配置'}</span></div>}
       </div>
       {renderPersonalMatrix()}
-      <div className="permission-v4-savebar"><span><i className="permission-v4-info-dot">i</i> 菜单继承业务角色；操作与数据范围继承权限等级。黄色标记为个人覆盖，个人覆盖优先。</span><div><PermissionButton onClick={resetUserOverrides} disabled={!activeUserId || saving}><ReloadOutlined />恢复角色/等级默认</PermissionButton><PermissionButton onClick={() => void cancelUserChanges()} disabled={!activeUserId || saving}>取消变更</PermissionButton><PermissionButton primary onClick={() => void saveUser()} disabled={!activeUserId || !userModel} loading={saving}><SaveOutlined />保存个人权限</PermissionButton></div></div>
     </div>;
   };
 
   const renderRole = () => {
-    const locked = activeRole?.code === 'SYSTEM_ADMIN';
-    const isBuiltin = Boolean(activeRole?.builtin);
-    const resetRole = () => {
-      setRoleMenus(locked ? (model?.menus ?? []).map((menu) => menu.key) : []);
-      message.info(locked ? '系统管理员固定开放全部功能入口' : isBuiltin ? '已清空当前内置角色的菜单变更，请保存后生效' : '已清空当前业务角色菜单，请保存后生效');
-    };
     return <div className="permission-v4-workarea permission-v4-role-workarea">
-      <div className="permission-v4-tabbar"><div className="permission-v4-template-tabs">{roles.map((role) => <button type="button" className={`permission-v4-tab${role.id === activeRoleId ? ' active' : ''}`} key={role.id} onClick={() => setActiveRoleId(role.id)}>{role.name}</button>)}</div><div className="permission-v4-actions"><PermissionButton onClick={createRole}><PlusOutlined />新增角色</PermissionButton>{activeRole && !activeRole.builtin && <PermissionButton onClick={renameRole}><EditOutlined />重命名</PermissionButton>}<PermissionButton danger onClick={deleteRole} disabled={!activeRole || activeRole.builtin}><DeleteOutlined />删除角色</PermissionButton></div></div>
+      <div className="permission-v4-tabbar"><div className="permission-v4-template-tabs">{roles.map((role) => <button type="button" className={`permission-v4-tab${role.id === activeRoleId ? ' active' : ''}`} key={role.id} onClick={() => setActiveRoleId(role.id)}>{role.name}</button>)}</div></div>
       <div className="permission-v4-template-note"><strong>{activeRole?.name || '未选择角色'}</strong><span>业务角色仅定义一级模块和二级功能/区域的默认入口权限，不参与操作权限和数据范围计算。</span></div>
-      <div className="permission-v4-panel permission-v4-matrix-panel"><div className="permission-v4-table-wrap"><table className="permission-v4-table permission-v4-role-table"><thead><tr><th>功能权限</th><th>类型</th><th>说明</th></tr></thead><tbody>{matrixRows.map((row) => <tr className={row.menu.parent ? 'child-row' : 'parent-row'} key={row.menu.key}><td>{renderMenuCell(row, false)}</td><td><Tag color={row.menu.parent ? 'blue' : 'green'}>{row.menu.parent ? '二级功能/区域' : '一级模块'}</Tag></td><td className="permission-v4-muted">{menuDescription(row.menu)}</td></tr>)}</tbody></table></div><div className="permission-v4-savebar"><span><i className="permission-v4-info-dot">i</i> {locked ? '系统管理员为内置角色，固定开放全部功能入口。' : isBuiltin ? '普通用户为内置基础角色，可调整菜单但不能删除。' : '业务角色可作为多人复用的菜单权限模板。'}</span><div><PermissionButton onClick={resetRole} disabled={locked}><ReloadOutlined />{isBuiltin ? '恢复内置默认' : '清空菜单'}</PermissionButton><PermissionButton primary onClick={() => void saveRole()} disabled={!activeRoleId || locked} loading={saving}><SaveOutlined />保存业务角色</PermissionButton></div></div></div>
+      <div className="permission-v4-panel permission-v4-matrix-panel"><div className="permission-v4-table-wrap"><table className="permission-v4-table permission-v4-role-table"><thead><tr><th>功能权限</th><th>类型</th><th>说明</th></tr></thead><tbody>{matrixRows.map((row) => <tr className={row.menu.parent ? 'child-row' : 'parent-row'} key={row.menu.key}><td>{renderMenuCell(row, false)}</td><td><Tag color={row.menu.parent ? 'blue' : 'green'}>{row.menu.parent ? '二级功能/区域' : '一级模块'}</Tag></td><td className="permission-v4-muted">{menuDescription(row.menu)}</td></tr>)}</tbody></table></div></div>
     </div>;
   };
 
   const renderLevel = () => {
-    const isBuiltin = Boolean(activeLevel?.builtin);
-    const resetLevel = () => {
-      setLevelBindings({});
-      message.info(isBuiltin ? '已清空当前内置等级的编辑结果，请保存后生效' : '已清空当前权限等级，请保存后生效');
-    };
     const renderLevelScope = (row: PermissionMatrixRow) => {
       if (!row.operations.length) return <span className="permission-v4-muted">—</span>;
       const selectedDefinition = row.operations.find((definition) => Boolean(levelBindings[levelBindingKey(row.menu.key, definition.code)]));
@@ -660,13 +657,8 @@ export function PermissionManagementPage({ initialMode = 'user' }: PermissionMan
         <div className="permission-v4-template-tabs">
           {(model?.levels ?? []).map((level) => <button type="button" className={`permission-v4-tab${level.id === activeLevelId ? ' active' : ''}`} key={level.id} onClick={() => setActiveLevelId(level.id)}>{level.name}</button>)}
         </div>
-        <div className="permission-v4-actions">
-          <PermissionButton onClick={createLevel}><PlusOutlined />新增等级</PermissionButton>
-          {activeLevel && !activeLevel.builtin && <><PermissionButton primary onClick={() => void saveLevel()} disabled={!activeLevelId} loading={saving}><SaveOutlined />保存</PermissionButton><PermissionButton onClick={renameLevel}><EditOutlined />重命名</PermissionButton></>}
-          <PermissionButton danger onClick={deleteLevel} disabled={!activeLevel || activeLevel.builtin}><DeleteOutlined />删除等级</PermissionButton>
-        </div>
       </div>
-      <div className="permission-v4-level-summary"><div><strong>{activeLevel?.name || '未选择等级'}</strong></div><p>{activeLevel?.description || '自定义权限等级：请在下方配置默认操作权限和数据范围。'}</p></div>
+      <div className="permission-v4-level-summary"><strong>{activeLevel?.name || '未选择等级'}</strong><span>{activeLevel?.description || '自定义权限等级：请在下方配置默认操作权限和数据范围。'}</span></div>
       <div className="permission-v4-panel permission-v4-matrix-panel">
         <div className="permission-v4-table-wrap">
           <table className="permission-v4-table permission-v4-level-table">
@@ -686,14 +678,13 @@ export function PermissionManagementPage({ initialMode = 'user' }: PermissionMan
             </tbody>
           </table>
         </div>
-        <div className="permission-v4-savebar"><span><i className="permission-v4-info-dot">i</i> 权限等级不开放任何菜单，只定义进入已授权功能后默认可以执行的操作和可访问的数据范围。</span><div><PermissionButton onClick={resetLevel}><ReloadOutlined />{isBuiltin ? '恢复内置默认' : '清空权限'}</PermissionButton><PermissionButton primary onClick={() => void saveLevel()} disabled={!activeLevelId || activeLevel?.code === 'L3_ADMIN'} loading={saving}><SaveOutlined />保存权限等级</PermissionButton></div></div>
       </div>
     </div>;
   };
 
   if (loading) return <div className="iam-loading"><Spin /><span>加载权限模型…</span></div>;
   return <div className="iam-page permission-v4-page">
-    <div className="page-heading"><div><Typography.Title level={2}>用户权限配置</Typography.Title><Typography.Text type="secondary">业务角色决定一级/二级功能入口；权限等级决定操作权限和数据范围；个人权限可继承、覆盖或完全独立配置。</Typography.Text></div></div>
+    <div className="page-heading"><div><Typography.Title level={2}>用户权限配置</Typography.Title><Typography.Text type="secondary">业务角色决定一级/二级功能入口；权限等级决定操作权限和数据范围；个人权限可继承、覆盖或完全独立配置。</Typography.Text></div>{mode === 'user' ? <div className="permission-v4-heading-actions"><PermissionButton onClick={resetUserOverrides} disabled={!activeUserId || saving}><ReloadOutlined />恢复默认</PermissionButton><PermissionButton onClick={() => void cancelUserChanges()} disabled={!activeUserId || saving}>取消变更</PermissionButton><PermissionButton primary onClick={() => void saveUser()} disabled={!activeUserId || !userModel} loading={saving}><SaveOutlined />保存</PermissionButton></div> : mode === 'role' ? <div className="permission-v4-heading-actions"><PermissionButton onClick={createRole}><PlusOutlined />新增角色</PermissionButton>{activeRole && !activeRole.builtin && <PermissionButton onClick={renameRole}><EditOutlined />重命名</PermissionButton>}<PermissionButton danger onClick={deleteRole} disabled={!activeRole || activeRole.builtin}><DeleteOutlined />删除角色</PermissionButton><PermissionButton onClick={resetRole} disabled={activeRole?.code === 'SYSTEM_ADMIN'}><ReloadOutlined />{activeRole?.builtin ? '恢复默认' : '清空菜单'}</PermissionButton><PermissionButton primary onClick={() => void saveRole()} disabled={!activeRoleId || activeRole?.code === 'SYSTEM_ADMIN'} loading={saving}><SaveOutlined />保存</PermissionButton></div> : <div className="permission-v4-heading-actions"><PermissionButton onClick={createLevel}><PlusOutlined />新增等级</PermissionButton>{activeLevel && !activeLevel.builtin && <PermissionButton onClick={renameLevel}><EditOutlined />重命名</PermissionButton>}<PermissionButton danger onClick={deleteLevel} disabled={!activeLevel || activeLevel.builtin}><DeleteOutlined />删除等级</PermissionButton><PermissionButton onClick={resetLevel}><ReloadOutlined />{activeLevel?.builtin ? '恢复默认' : '清空权限'}</PermissionButton><PermissionButton primary onClick={() => void saveLevel()} disabled={!activeLevelId || activeLevel?.code === 'L3_ADMIN'} loading={saving}><SaveOutlined />保存</PermissionButton></div>}</div>
     <div className="permission-v4-mode-tabs"><button type="button" className={mode === 'user' ? 'active' : ''} onClick={() => setMode('user')}>个人权限</button><button type="button" className={mode === 'role' ? 'active' : ''} onClick={() => setMode('role')}>业务角色</button><button type="button" className={mode === 'level' ? 'active' : ''} onClick={() => setMode('level')}>权限等级</button></div>
     {mode === 'user' ? renderPersonal() : mode === 'role' ? renderRole() : renderLevel()}
   </div>;

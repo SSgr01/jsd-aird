@@ -98,7 +98,7 @@ export function ProjectLogsTab({ projectId }: { projectId: string }) {
       <Input allowClear prefix={<SearchOutlined />} value={keyword} placeholder="搜索对象名称或日志内容"
         onChange={(event) => setKeyword(event.target.value)} onPressEnter={() => { setPage(1); void load(); }} />
       <Select allowClear value={objectType} placeholder="全部对象" onChange={(value) => { setObjectType(value); setPage(1); }}
-        options={[{ value: 'PROJECT', label: '项目' }, { value: 'PROJECT_STAGE', label: '项目阶段' }, { value: 'PROJECT_TASK', label: '项目任务' }, { value: 'EXPERIMENT', label: '实验' }, { value: 'PROJECT_DOCUMENT', label: '项目文档' }]} />
+        options={[{ value: 'PROJECT', label: '项目' }, { value: 'PROJECT_STAGE', label: '项目阶段' }, { value: 'PROJECT_TASK', label: '项目任务' }, { value: 'EXPERIMENT', label: '实验' }, { value: 'PROJECT_DOCUMENT', label: '项目文档' }, { value: 'CUSTOMER_REQUIREMENT', label: '客户需求' }]} />
       <Select allowClear value={action} placeholder="全部操作" onChange={(value) => { setAction(value); setPage(1); }}
         options={actionFilterOptions} />
       <Input allowClear value={operator} placeholder="操作人" onChange={(event) => setOperator(event.target.value)} />

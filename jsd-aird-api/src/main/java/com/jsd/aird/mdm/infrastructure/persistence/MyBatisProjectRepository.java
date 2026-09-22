@@ -8,6 +8,7 @@ import com.jsd.aird.mdm.domain.model.Project;
 import com.jsd.aird.mdm.domain.model.ProjectPriority;
 import com.jsd.aird.mdm.domain.model.ProjectStatus;
 import com.jsd.aird.mdm.infrastructure.model.ProjectRow;
+import com.jsd.aird.shared.security.ActorContext;
 import org.springframework.stereotype.Repository;
 
 import java.time.Instant;
@@ -57,7 +58,7 @@ public class MyBatisProjectRepository implements ProjectRepository {
 
     @Override
     public void insert(Project project, String operator) {
-        mapper.insert(project.id(), project.projectCode(), project.name(), project.partnerId(),
+        mapper.insert(ActorContext.required().organizationId(), project.id(), project.projectCode(), project.name(), project.partnerId(),
             project.partnerName(), project.owner(), project.startDate(), project.endDate(),
             project.priority().name(), project.status().name(), project.teamSize(), project.background(),
             json(project.customFields()), json(project.teamMembers()), Instant.now(), operator);

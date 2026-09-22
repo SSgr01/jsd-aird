@@ -173,6 +173,8 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
                 return permission("project.assign", "PROJECT", "WRITE");
             if (path.contains("/meetings/") && path.endsWith("/archive-to-kb"))
                 return permission("project.update", "PROJECT", "WRITE");
+            if (path.equals("/api/v1/projects/import") || path.equals("/api/v1/projects/import/commit"))
+                return permission("project.create", "PROJECT", "WRITE");
             if (path.equals("/api/v1/projects/copy")) return permission("project.copy", "PROJECT", "WRITE");
             if (path.equals("/api/v1/projects/export") || path.equals("/api/v1/projects/export.csv"))
                 return permission("project.export", "PROJECT", "READ");

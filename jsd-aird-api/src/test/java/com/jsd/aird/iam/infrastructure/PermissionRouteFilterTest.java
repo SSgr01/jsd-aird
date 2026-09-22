@@ -38,6 +38,8 @@ class PermissionRouteFilterTest {
     @Test
     void mapsProjectActionsAndRejectsUnknownBusinessWrites() {
         assertThat(code("POST", "/api/v1/projects")).isEqualTo("project.create");
+        assertThat(code("POST", "/api/v1/projects/import")).isEqualTo("project.create");
+        assertThat(code("POST", "/api/v1/projects/import/commit")).isEqualTo("project.create");
         assertThat(code("PUT", "/api/v1/projects/00000000-0000-0000-0000-000000000001")).isEqualTo("project.update");
         assertThat(code("POST", "/api/v1/projects/copy")).isEqualTo("project.copy");
         assertThat(code("POST", "/api/v1/projects/00000000-0000-0000-0000-000000000001/materials/link"))

@@ -13,7 +13,7 @@ import org.springframework.stereotype.Component;
 public class BasicFileSafetyScanner implements FileSafetyScanner {
 
     private static final Set<String> SUPPORTED = Set.of(
-            "pdf", "docx", "xlsx", "xls", "pptx", "ppt", "csv", "txt", "md",
+            "pdf", "doc", "docx", "xlsx", "xls", "pptx", "ppt", "csv", "txt", "md",
             "png", "jpg", "jpeg", "gif", "wav", "mp3", "m4a"
     );
     private static final int MAX_ZIP_ENTRIES = 20_000;
@@ -71,7 +71,7 @@ public class BasicFileSafetyScanner implements FileSafetyScanner {
         }
         if ("pdf".equals(extension)) return startsWith(bytes, new byte[]{'%', 'P', 'D', 'F', '-'});
         if (Set.of("docx", "xlsx", "pptx").contains(extension)) return zipMagic(bytes);
-        if (Set.of("xls", "ppt").contains(extension)) {
+        if (Set.of("doc", "xls", "ppt").contains(extension)) {
             return startsWith(bytes, new byte[]{(byte) 0xD0, (byte) 0xCF, 0x11, (byte) 0xE0, (byte) 0xA1, (byte) 0xB1, 0x1A, (byte) 0xE1});
         }
         if ("png".equals(extension)) return startsWith(bytes, new byte[]{(byte) 0x89, 'P', 'N', 'G'});

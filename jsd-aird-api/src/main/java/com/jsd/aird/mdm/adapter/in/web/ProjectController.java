@@ -5,6 +5,7 @@ import com.jsd.aird.platform.web.RequestIdHolder;
 import com.jsd.aird.mdm.application.command.ProjectCommands;
 import com.jsd.aird.mdm.application.query.ProjectQuery;
 import com.jsd.aird.mdm.application.service.ProjectService;
+import com.jsd.aird.mdm.application.service.ProjectImportService;
 import com.jsd.aird.mdm.application.service.ProjectAuditLogService;
 import com.jsd.aird.mdm.application.service.CustomerRequirementService;
 import com.jsd.aird.mdm.domain.model.CustomerRequirement;
@@ -25,6 +26,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -33,6 +35,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.time.LocalDate;
 import java.time.Instant;
@@ -46,17 +49,34 @@ import java.util.UUID;
 public class ProjectController {
 
     private final ProjectService service;
+    private final ProjectImportService projectImportService;
     private final ProjectAuditLogService auditLogService;
     private final ProjectTemplateFacade projectTemplateFacade;
     private final CustomerRequirementService customerRequirementService;
 
-    public ProjectController(ProjectService service, ProjectAuditLogService auditLogService,
+    public ProjectController(ProjectService service, ProjectImportService projectImportService,
+                             ProjectAuditLogService auditLogService,
                              ProjectTemplateFacade projectTemplateFacade,
                              CustomerRequirementService customerRequirementService) {
         this.service = service;
+        this.projectImportService = projectImportService;
         this.auditLogService = auditLogService;
         this.projectTemplateFacade = projectTemplateFacade;
         this.customerRequirementService = customerRequirementService;
+    }
+
+    @PostMapping(value = "/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @Operation(summary = "AI 导入项目", description = "上传 DOC 或 DOCX 文档并使用 AI 提取项目字段，返回待确认的项目草稿")
+    public ApiResponse<ProjectImportService.ProjectImportDraft> importFromWord(
+            @RequestPart("file") MultipartFile file) {
+        return ok(projectImportService.analyze(file));
+    }
+
+    @PostMapping("/import/commit")
+    @Operation(summary = "提交 AI 导入项目", description = "确认项目、客户需求和会议纪要识别结果并一次性写入系统")
+    public ApiResponse<ProjectImportService.ProjectImportCommitResult> commitImport(
+            @Valid @RequestBody ImportCommitRequest request) {
+        return ok(projectImportService.commit(request.toCommand()));
     }
 
     @GetMapping
@@ -262,6 +282,20 @@ public class ProjectController {
     }
 
     public record CopyProjectsRequest(@NotEmpty List<UUID> ids) {
+    }
+
+    public record ImportCommitRequest(@NotNull @Valid SaveProjectRequest project,
+                                      List<ProjectImportService.ProjectImportRequirement> requirements,
+                                      List<ProjectImportService.ProjectImportMeeting> meetings) {
+        ProjectImportService.ProjectImportCommitCommand toCommand() {
+            var value = project;
+            return new ProjectImportService.ProjectImportCommitCommand(
+                    new ProjectImportService.ProjectImportProject(
+                            value.projectCode(), value.name(), value.partnerId(), value.partnerName(), value.owner(),
+                            value.startDate(), value.endDate(), value.priority(), value.status(), value.teamSize(),
+                            value.background(), value.customFields(), value.teamMembers()),
+                    requirements, meetings);
+        }
     }
 
     public record ProjectResponse(UUID id, String projectCode, String name, UUID partnerId, String partnerName,

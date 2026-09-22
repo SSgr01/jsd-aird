@@ -172,6 +172,10 @@ app:
       timeout: ${JSD_AIRD_FORMULA_RESEARCH_LLM_TIMEOUT:8s}
       max-completion-tokens: ${JSD_AIRD_FORMULA_RESEARCH_LLM_MAX_COMPLETION_TOKENS:900}
       prompt-version: ${JSD_AIRD_FORMULA_RESEARCH_LLM_PROMPT_VERSION:formula-research-interpretation-v1}
+    project-import:
+      enabled: ${JSD_AIRD_PROJECT_IMPORT_AI_ENABLED:true}
+      model: ${JSD_AIRD_PROJECT_IMPORT_AI_MODEL:${app.model.model:}}
+      max-completion-tokens: ${JSD_AIRD_PROJECT_IMPORT_AI_MAX_COMPLETION_TOKENS:1200}
     circuit-breaker:
       failure-threshold: ${JSD_AIRD_AI_CIRCUIT_BREAKER_FAILURE_THRESHOLD:3}
       open-seconds: ${JSD_AIRD_AI_CIRCUIT_BREAKER_OPEN_SECONDS:30}

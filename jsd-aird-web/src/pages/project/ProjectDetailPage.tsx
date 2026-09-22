@@ -285,27 +285,29 @@ export function ProjectDetailPage() {
                 {fields.length === 0 ? (
                   <div className="pm-custom-field-empty">未设置字段</div>
                 ) : (
-                  fields.map((field) => (
-                    <div key={field.key} className="pm-custom-field-row">
-                      <Form.Item
-                        name={[field.name, 'key']}
-                        rules={[{ required: true, message: '请输入字段名' }]}
-                      >
-                        <Input placeholder="字段名" maxLength={80} />
-                      </Form.Item>
-                      <Form.Item name={[field.name, 'value']}>
-                        <Input placeholder="字段值" />
-                      </Form.Item>
-                      <Button
-                        type="link"
-                        size="small"
-                        className="pm-custom-field-remove"
-                        icon={<DeleteOutlined />}
-                        onClick={() => remove(field.name)}
-                        danger
-                      />
-                    </div>
-                  ))
+                  <div className="pm-custom-fields-grid">
+                    {fields.map((field) => (
+                      <div key={field.key} className="pm-custom-field-row">
+                        <Form.Item
+                          name={[field.name, 'key']}
+                          rules={[{ required: true, message: '请输入字段名' }]}
+                        >
+                          <Input placeholder="字段名" maxLength={80} />
+                        </Form.Item>
+                        <Form.Item name={[field.name, 'value']}>
+                          <Input placeholder="字段值" />
+                        </Form.Item>
+                        <Button
+                          type="link"
+                          size="small"
+                          className="pm-custom-field-remove"
+                          icon={<DeleteOutlined />}
+                          onClick={() => remove(field.name)}
+                          danger
+                        />
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
             )}

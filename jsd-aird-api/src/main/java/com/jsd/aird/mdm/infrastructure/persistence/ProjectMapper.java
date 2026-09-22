@@ -57,11 +57,12 @@ public interface ProjectMapper {
         "WHERE project_code LIKE #{prefix} || '%'")
     int maxSequence(@Param("prefix") String prefix);
 
-    @Insert("INSERT INTO mdm.project(id,project_code,name,partner_id,partner_name,owner,start_date,end_date," +
+    @Insert("INSERT INTO mdm.project(organization_id,id,project_code,name,partner_id,partner_name,owner,start_date,end_date," +
         "priority,status,team_size,background,custom_fields,team_members,version,created_at,updated_at,created_by,updated_by) " +
-        "VALUES(#{id},#{projectCode},#{name},#{partnerId},#{partnerName},#{owner},#{startDate},#{endDate}," +
+        "VALUES(#{organizationId},#{id},#{projectCode},#{name},#{partnerId},#{partnerName},#{owner},#{startDate},#{endDate}," +
         "#{priority},#{status},#{teamSize},#{background},CAST(#{customFields} AS jsonb),CAST(#{teamMembers} AS jsonb),0,#{now},#{now},#{operator},#{operator})")
-    void insert(@Param("id") UUID id, @Param("projectCode") String projectCode, @Param("name") String name,
+    void insert(@Param("organizationId") UUID organizationId, @Param("id") UUID id,
+                @Param("projectCode") String projectCode, @Param("name") String name,
                 @Param("partnerId") UUID partnerId, @Param("partnerName") String partnerName,
                 @Param("owner") String owner, @Param("startDate") LocalDate startDate, @Param("endDate") LocalDate endDate,
                 @Param("priority") String priority, @Param("status") String status, @Param("teamSize") int teamSize,

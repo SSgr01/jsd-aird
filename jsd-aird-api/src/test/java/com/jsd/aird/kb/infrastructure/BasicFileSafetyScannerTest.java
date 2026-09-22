@@ -28,6 +28,14 @@ class BasicFileSafetyScannerTest {
     }
 
     @Test
+    void acceptsLegacyWordDocument() {
+        var result = scanner.scan(new ByteArrayInputStream(oleHeader()),
+                "project-brief.doc", "application/msword", 512);
+
+        assertThat(result.status()).isEqualTo(BasicFileSafetyScanner.ScanResult.Status.SAFE);
+    }
+
+    @Test
     void rejectsOfficeArchiveContainingMacroProject() {
         var result = scanner.scan(new ByteArrayInputStream(zipBytes("word/vbaProject.bin")),
                 "payload.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", 128);
@@ -47,5 +55,10 @@ class BasicFileSafetyScannerTest {
         } catch (java.io.IOException exception) {
             throw new AssertionError(exception);
         }
+    }
+
+    private byte[] oleHeader() {
+        return new byte[] {(byte) 0xD0, (byte) 0xCF, 0x11, (byte) 0xE0,
+                (byte) 0xA1, (byte) 0xB1, 0x1A, (byte) 0xE1};
     }
 }

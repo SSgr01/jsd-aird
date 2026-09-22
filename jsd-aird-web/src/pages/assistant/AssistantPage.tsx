@@ -51,6 +51,8 @@ interface ChatMessage {
 const UNCATEGORIZED_DATA_SCOPE_ID = '00000000-0000-0000-0000-000000000000';
 
 function displayAnswer(value: string) {
+  const stripLegacyStatus = (answer: string) =>
+    answer.replace(/(?:\r?\n|^)[ \t]*(?:ANSWERED|PARTIAL|NOT_FOUND)[ \t]*$/i, '').trim();
   const text = value?.trim() || '';
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
@@ -63,13 +65,13 @@ function displayAnswer(value: string) {
         !Array.isArray(parsed) &&
         typeof (parsed as { answer?: unknown }).answer === 'string'
       ) {
-        return (parsed as { answer: string }).answer;
+        return stripLegacyStatus((parsed as { answer: string }).answer);
       }
     } catch {
       /* keep the original Markdown */
     }
   }
-  return value;
+  return stripLegacyStatus(value);
 }
 
 function citationSourceKey(citation: AssistantCitation) {
@@ -108,6 +110,9 @@ function assistantFailure(error: unknown): string {
   }
   if (code === 'AI_MODEL_EMPTY_RESPONSE') {
     return 'AI 模型没有返回有效回答，请稍后重试。';
+  }
+  if (code === 'AI_MODEL_RESPONSE_INVALID') {
+    return 'AI 模型返回格式无效，未保存本次回答，请稍后重试。';
   }
   if (code === 'AI_PROVIDER_UNAVAILABLE') {
     return 'AI 模型服务暂时不可用，请稍后重试。';
@@ -179,6 +184,7 @@ function renderAssistantContent(
                     onClick={() => {
                       if (citation.documentId)
                         navigate(`/knowledge/documents/${citation.documentId}`);
+                      else if (citation.experimentId) navigate(`/experiments/${citation.experimentId}`);
                       else if (citation.fileObjectId) navigate('/data/view');
                       else if (citation.url) {
                         const opened = window.open(citation.url, '_blank', 'noopener,noreferrer');
@@ -300,7 +306,8 @@ export function AssistantPage() {
       try {
         return [
           citationSourceKey(citation),
-          citation.sourceType === 'DATA_SOURCE_FILE' && Boolean(citation.fileObjectId),
+          ['DATA_SOURCE_FILE', 'EXPERIMENT_TEMPLATE_SOURCE'].includes(citation.sourceType) &&
+            Boolean(citation.fileObjectId),
         ] as const;
       } catch {
         return [citationSourceKey(citation), false] as const;
@@ -461,7 +468,10 @@ export function AssistantPage() {
         load: () => knowledgeApi.contentBlob(citation.documentId as string, citation.versionId),
       };
     }
-    if (citation.sourceType === 'DATA_SOURCE_FILE' && citation.fileObjectId) {
+    if (
+      ['DATA_SOURCE_FILE', 'EXPERIMENT_TEMPLATE_SOURCE'].includes(citation.sourceType) &&
+      citation.fileObjectId
+    ) {
       return {
         fileName: citation.originalName || citation.title || 'source-file',
         load: () => fetchFilePreviewBlob(citation.fileObjectId as string),
@@ -503,7 +513,7 @@ export function AssistantPage() {
             (citation) =>
               Boolean(
                 citation.documentId ||
-                citation.sourceType === 'DATA_SOURCE_FILE' ||
+                ['DATA_SOURCE_FILE', 'EXPERIMENT_TEMPLATE_SOURCE'].includes(citation.sourceType) ||
                 citationSources[citationSourceKey(citation)],
               ),
             (citation) => {

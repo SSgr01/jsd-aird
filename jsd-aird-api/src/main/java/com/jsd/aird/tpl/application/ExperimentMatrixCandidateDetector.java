@@ -46,12 +46,51 @@ public final class ExperimentMatrixCandidateDetector {
             var recordColumnLimit = identityValueBounds == null
                     ? regionBounds[2] : Math.min(identityValueBounds[2], regionBounds[2]);
 
+            /*
+             * Some customer reports have two header bands:
+             *
+             *   B9=涂料配方 / B9:C9=实验编号 / D9:I9=old sample labels
+             *   B10=实验配方 / C10=first material / D10:I10=actual experiment ids
+             *
+             * The generic identity binding points at the first band.  If we
+             * use it blindly, the matrix consumes the experiment ids as the
+             * first material row and drops the last material.  Prefer the
+             * explicit “实验配方” band and the first row of record-like ids.
+             */
+            var originalFirstRecordColumn = firstRecordColumn;
+            var formulaHeader = formulaHeader(cells, regionBounds, identityRow + 1, originalFirstRecordColumn);
+            if (formulaHeader != null) {
+                var headerBounds = bounds(cellRange(formulaHeader));
+                var headerColumn = headerBounds == null ? regionBounds[0] : headerBounds[0];
+                var headerRow = headerBounds == null ? identityRow + 1 : headerBounds[1];
+                var detectedFirstRecord = firstRecordColumnAfterHeader(cells, headerColumn, headerRow, regionBounds[2]);
+                // If the reusable template has blank record headers and the
+                // parser did not emit separate empty cells, preserve the
+                // original identity value start (for example D9:I9).  The
+                // formula header is still authoritative for moving the item
+                // rows down one band, so this is deterministic geometry, not
+                // an invented sample id.
+                if (detectedFirstRecord <= headerColumn
+                        && originalFirstRecordColumn > headerColumn
+                        && originalFirstRecordColumn <= regionBounds[2]) {
+                    detectedFirstRecord = originalFirstRecordColumn;
+                }
+                if (detectedFirstRecord > headerColumn) {
+                    identityRow = headerRow;
+                    labelColumn = headerColumn;
+                    firstRecordColumn = detectedFirstRecord;
+                    recordColumnLimit = regionBounds[2];
+                    identityBounds = headerBounds == null ? identityBounds : headerBounds;
+                    identityValueBounds = null;
+                }
+            }
+
             var labels = new ArrayList<JsonNode>();
             var totalRow = -1;
             for (int row = identityRow + 1; row <= Math.min(groupBounds[3], regionBounds[3]); row++) {
                 var label = cellAt(cells, labelColumn, row);
                 var labelText = text(label);
-                if (isTotal(labelText)) {
+                if (isTotal(labelText) || hasTotalLabel(cells, row, labelColumn, firstRecordColumn)) {
                     totalRow = row;
                     break;
                 }
@@ -127,6 +166,50 @@ public final class ExperimentMatrixCandidateDetector {
             }
         }
         return selected;
+    }
+
+    private JsonNode formulaHeader(List<JsonNode> cells, int[] region, int row, int originalFirstRecordColumn) {
+        for (int column = region[0]; column < Math.max(originalFirstRecordColumn, region[2]); column++) {
+            var cell = cellAt(cells, column, row);
+            if (cell == null || !containsFormulaGroup(text(cell))) continue;
+            return cell;
+        }
+        return null;
+    }
+
+    private int firstRecordColumnAfterHeader(List<JsonNode> cells, int headerColumn, int row, int regionEnd) {
+        for (int column = headerColumn + 1; column <= regionEnd; column++) {
+            var cell = cellAt(cells, column, row);
+            if (cell == null || text(cell).isBlank()) continue;
+            if (looksLikeRecordValue(text(cell))) return column;
+        }
+        // A reusable template normally has no experiment ids yet.  In that
+        // case the record header cells are blank, but the editable cells still
+        // carry border/input facts.  Do not make the first blank label column
+        // (for example C10 in a merged B10:C10 header) the record axis; use
+        // the first surfaced cell after that merged header instead.
+        for (int column = headerColumn + 1; column <= regionEnd; column++) {
+            var cell = cellAt(cells, column, row);
+            if (cell == null || !text(cell).isBlank()) continue;
+            if (surface(cell)) return column;
+        }
+        return -1;
+    }
+
+    private boolean looksLikeRecordValue(String value) {
+        var normalized = value == null ? "" : value.strip();
+        if (normalized.isBlank() || isTotal(normalized) || containsFormulaGroup(normalized)) return false;
+        // Customer experiment/sample ids normally contain a digit and a
+        // separator (G-6488, CR-001-1, S-230).  Requiring a digit avoids
+        // mistaking a second material header for the record surface.
+        return normalized.matches(".*\\d.*") && normalized.matches(".*[-_/].*");
+    }
+
+    private boolean hasTotalLabel(List<JsonNode> cells, int row, int labelColumn, int firstRecordColumn) {
+        for (int column = Math.max(1, labelColumn - 1); column < firstRecordColumn; column++) {
+            if (isTotal(text(cellAt(cells, column, row)))) return true;
+        }
+        return false;
     }
 
     private JsonNode identityField(JsonNode region) {

@@ -8,6 +8,8 @@ import com.jsd.aird.ai.formula.application.FormulaModelArtifactStore;
 import com.jsd.aird.ai.rnd.prediction.PredictionRepository;
 import com.jsd.aird.ai.rnd.training.FormulaModelV2Client;
 import com.jsd.aird.ai.rnd.modeling.ConfigurationHashing;
+import com.jsd.aird.ai.rnd.formula.FormulaNormalizationService;
+import com.jsd.aird.ai.rnd.catalog.RegisteredUvpuTargetCatalog;
 import com.jsd.aird.ops.application.port.AuditLogFacade;
 import com.jsd.aird.ops.application.port.OpsAsyncFacade;
 import com.jsd.aird.platform.web.RequestIdHolder;
@@ -41,17 +43,18 @@ public class FormulaDesignService {
     private final OpsAsyncFacade jobs;
     private final AuditLogFacade audit;
     private final ObjectMapper json;
+    private final FormulaNormalizationService formulaNormalization;
     private final boolean allowSynthetic;
     private final boolean inlineAcceptanceWorker;
 
     public FormulaDesignService(FormulaDesignRepository repository, PredictionRepository predictions,
                                 FormulaModelArtifactStore artifacts, FormulaModelV2Client compute,
                                 ConfigurationHashing hashing, OpsAsyncFacade jobs, AuditLogFacade audit,
-                                ObjectMapper json,
+                                ObjectMapper json, FormulaNormalizationService formulaNormalization,
                                 @Value("${JSD_AIRD_AI_ALLOW_SYNTHETIC_PREDICTION:false}") boolean allowSynthetic,
                                 @Value("${JSD_AIRD_R08_INLINE_ACCEPTANCE_WORKER:false}") boolean inlineAcceptanceWorker) {
         this.repository=repository; this.predictions=predictions; this.artifacts=artifacts; this.compute=compute;
-        this.hashing=hashing; this.jobs=jobs; this.audit=audit; this.json=json; this.allowSynthetic=allowSynthetic; this.inlineAcceptanceWorker=inlineAcceptanceWorker;
+        this.hashing=hashing; this.jobs=jobs; this.audit=audit; this.json=json; this.formulaNormalization=formulaNormalization; this.allowSynthetic=allowSynthetic; this.inlineAcceptanceWorker=inlineAcceptanceWorker;
     }
 
     public JsonNode context(List<UUID> targetIds) {
@@ -62,6 +65,7 @@ public class FormulaDesignService {
                     .put("available",t.modelId()!=null&&t.qualityPolicyId()!=null&&t.domainPolicyId()!=null);
             var reasons=json.createArrayNode(); if(t.modelId()==null)reasons.add("NO_ACTIVE_MODEL"); if(t.qualityPolicyId()==null)reasons.add("QUALITY_POLICY_NOT_READY"); if(t.domainPolicyId()==null)reasons.add("DOMAIN_POLICY_NOT_READY"); n.set("unavailableReasons",reasons); catalog.add(n);
         });
+        RegisteredUvpuTargetCatalog.append(json, catalog);
         root.set("targets",catalog);
         if(targetIds==null||targetIds.isEmpty()){root.set("selected",json.createArrayNode());return root;}
         var bindings=predictions.targetBindings(actor.organizationId(),targetIds.stream().filter(Objects::nonNull).distinct().toList());
@@ -73,6 +77,7 @@ public class FormulaDesignService {
 
     public RunAccepted submit(JsonNode body, String idempotencyKey) {
         var actor=actor(); requireKey(idempotencyKey); if(body==null||!body.isObject())throw validation("配方预测请求不能为空");
+        body=normalizeDesignRequest(body);
         var goals=body.path("typedGoals"); if(!goals.isArray()||goals.isEmpty())throw validation("至少选择一个研发目标");
         var targetIds=new ArrayList<UUID>(); for(var goal:goals){var id=uuid(goal,"targetId");if(!targetIds.contains(id))targetIds.add(id);}
         var bindings=predictions.targetBindings(actor.organizationId(),targetIds); if(bindings.size()!=targetIds.size())throw new ApiException(ApiErrorCode.NOT_FOUND,"存在不存在的研发目标");
@@ -97,16 +102,31 @@ public class FormulaDesignService {
 
     public JsonNode execute(UUID org,UUID runId){var row=repository.any(org,runId).orElseThrow();if(!repository.markRunning(org,runId))return row.result();try{repository.progress(org,runId,15,"CHECKING_CONDITIONS");var request=row.request().deepCopy();var payload=buildRecommendPayload(org,row,request);var targetNames=targetNames(org,row);repository.progress(org,runId,35,"SEARCHING");var response=compute.recommend(payload);repository.progress(org,runId,85,"RULE_CHECKING");if("FAILED".equals(response.path("executionStatus").asText())){repository.fail(org,runId,response.path("code").asText("COMPUTE_UNAVAILABLE"),response.path("message").asText("计算服务执行失败"));return response;}var candidates=response.path("candidates");var saved=0;for(var c:candidates){if(!c.isObject())continue;var f=c.path("formula");var hash=hashing.hash(f);var resultNode=(ObjectNode)resultsObject(c.path("results"),targetNames);normalizeResultTargetIds(resultNode,row.bindings());var quality=c.path("quality");if(!quality.isObject()||quality.isEmpty())quality=qualityResults(org,row,resultNode);repository.saveCandidate(org,runId,++saved,f,c.path("process"),resultNode,quality,c.path("applicability"),c.path("ruleCheck"),c.path("evidence"),c.path("score").asDouble(),hash,request.path("fixedInputs"),request.path("searchSpace"),c.path("targetGate"),c.path("preferenceScore").asDouble(0),c.path("diversityScore").asDouble(0),request.path("targetTotal").asDouble(100));}var summary=json.createObjectNode().put("requestedCandidateCount",request.path("candidateCount").asInt(4)).put("actualCandidateCount",saved);for(var name:List.of("shortfallReason","shortfallReasonCode","rejectionSummary","actionHints","searchEngine","searchStrategy","searchEvidence"))if(response.has(name))summary.set(name,response.path(name));summary.set("candidates",repositoryCandidates(repository.candidates(org,runId)));var outcome=saved==0?"BLOCKED":saved<request.path("candidateCount").asInt(4)?"PARTIAL":"SUCCEEDED";repository.complete(org,runId,outcome,summary,null);return summary;}catch(Exception e){repository.fail(org,runId,e instanceof ApiException a?a.errorCode().code():"COMPUTE_UNAVAILABLE",String.valueOf(e.getMessage()));throw e instanceof RuntimeException r?r:new IllegalStateException(e);}}
 
-    private JsonNode buildRecommendPayload(UUID org,FormulaDesignRepository.Row row,JsonNode request){ObjectNode p=(ObjectNode)request.deepCopy();p.put("contractVersion","formula-model.v2").put("requestId",row.requestId()).put("seed",row.seed()).put("runId",row.id().toString()).put("mode",RUN_TYPE);var bindings=json.createArrayNode();var orderedGoals=json.createArrayNode();var originalGoals=p.path("typedGoals");var goalsByTarget=new LinkedHashMap<String,JsonNode>();if(originalGoals.isArray())originalGoals.forEach(g->{if(g.isObject())goalsByTarget.put(g.path("targetId").asText(),g);});var it=row.bindings().fields();while(it.hasNext()){var e=it.next();var id=UUID.fromString(e.getKey());var b=predictions.targetBindings(org,List.of(id)).stream().findFirst().orElseThrow();bindings.add(binding(b));var goal=goalsByTarget.get(id.toString());if(goal!=null){var copy=goal.deepCopy();if(copy.isObject()){((ObjectNode)copy).put("targetId",b.targetVersionId().toString());((ObjectNode)copy).remove("expectedModelVersionId");((ObjectNode)copy).remove("valueType");}orderedGoals.add(copy);}}if(orderedGoals.isEmpty()&&originalGoals.isArray())originalGoals.forEach(g->{if(g.isObject()){var copy=g.deepCopy();((ObjectNode)copy).remove("expectedModelVersionId");((ObjectNode)copy).remove("valueType");orderedGoals.add(copy);}});p.set("goals",orderedGoals);p.remove("typedGoals");p.remove("targetTotal");p.remove("formulaBasis");p.set("modelBindings",bindings);if(!p.has("candidateCount"))p.put("candidateCount",4);if(!p.has("fixedInputs"))p.set("fixedInputs",json.createObjectNode());if(!p.has("constraints"))p.set("constraints",json.createObjectNode());if(!p.has("searchSpace"))p.set("searchSpace",json.createObjectNode());if(!p.has("baselineFormula"))p.set("baselineFormula",defaultFormula(bindings,request.path("targetTotal").asDouble(100)));return p;}
-    public ObjectNode frozenModelBinding(PredictionRepository.TargetBinding b){var n=json.createObjectNode().put("modelVersionId",b.modelId().toString());var target=json.createObjectNode().put("id",b.targetVersionId().toString()).put("version",b.targetVersion()).put("sha256",Objects.toString(b.targetHash(),"0000000000000000000000000000000000000000000000000000000000000000")).put("code",b.targetCode()).put("valueType",b.valueType()).put("unit",Objects.toString(b.unit(),""));target.set("classes",b.classes());if("BINARY".equals(b.valueType()))target.put("positiveClass",b.definition().path("positiveClass").asText(b.classes().path(0).asText()));else target.putNull("positiveClass");target.set("observationSemantics",b.observationSemantics());n.set("target",target);try{var ref=artifacts.readRef("model",b.artifactKey(),b.artifactSha());n.set("modelBundle",json.createObjectNode().put("url",ref.url()).put("sha256",ref.sha256()));}catch(Exception e){throw new ApiException(ApiErrorCode.MODEL_ARTIFACT_INVALID,"模型制品无法读取");}
+    private JsonNode buildRecommendPayload(UUID org,FormulaDesignRepository.Row row,JsonNode request){ObjectNode p=(ObjectNode)request.deepCopy();p.put("contractVersion","formula-model.v2").put("requestId",row.requestId()).put("seed",row.seed()).put("runId",row.id().toString()).put("mode",RUN_TYPE);var bindings=json.createArrayNode();var orderedGoals=json.createArrayNode();var originalGoals=p.path("typedGoals");var goalsByTarget=new LinkedHashMap<String,JsonNode>();if(originalGoals.isArray())originalGoals.forEach(g->{if(g.isObject())goalsByTarget.put(g.path("targetId").asText(),g);});var it=row.bindings().fields();while(it.hasNext()){var e=it.next();var id=UUID.fromString(e.getKey());var b=predictions.targetBindings(org,List.of(id)).stream().findFirst().orElseThrow();bindings.add(binding(b));var goal=goalsByTarget.get(id.toString());if(goal!=null){var copy=goal.deepCopy();if(copy.isObject()){((ObjectNode)copy).put("targetId",b.targetVersionId().toString());((ObjectNode)copy).remove("expectedModelVersionId");((ObjectNode)copy).remove("valueType");}orderedGoals.add(copy);}}if(orderedGoals.isEmpty()&&originalGoals.isArray())originalGoals.forEach(g->{if(g.isObject()){var copy=g.deepCopy();((ObjectNode)copy).remove("expectedModelVersionId");((ObjectNode)copy).remove("valueType");orderedGoals.add(copy);}});p.set("goals",orderedGoals);p.remove("typedGoals");p.remove("targetTotal");p.remove("formulaBasis");p.set("modelBindings",bindings);if(!p.has("candidateCount"))p.put("candidateCount",4);if(!p.has("fixedInputs"))p.set("fixedInputs",json.createObjectNode());if(!p.has("constraints"))p.set("constraints",json.createObjectNode());if(!p.has("searchSpace"))p.set("searchSpace",json.createObjectNode());if(!p.has("baselineFormula"))p.set("baselineFormula",defaultFormula(bindings,request.path("targetTotal").asDouble(100)));else p.set("baselineFormula",formulaNormalization.forModelCompute(p.path("baselineFormula")));return p;}
+    public ObjectNode frozenModelBinding(PredictionRepository.TargetBinding b){var n=json.createObjectNode().put("modelVersionId",b.modelId().toString());var target=json.createObjectNode().put("id",b.targetVersionId().toString()).put("version",b.targetVersion()).put("sha256",Objects.toString(b.targetHash(),"0000000000000000000000000000000000000000000000000000000000000000")).put("code",b.targetCode()).put("valueType",b.valueType()).put("unit",Objects.toString(b.unit(),""));target.set("classes","CONTINUOUS".equals(b.valueType())?json.createArrayNode():b.classes());if("BINARY".equals(b.valueType()))target.put("positiveClass",b.definition().path("positiveClass").asText(b.classes().path(0).asText()));else target.putNull("positiveClass");target.set("observationSemantics",b.observationSemantics());n.set("target",target);try{var ref=artifacts.readRef("model",b.artifactKey(),b.artifactSha());n.set("modelBundle",json.createObjectNode().put("url",ref.url()).put("sha256",ref.sha256()));}catch(Exception e){throw new ApiException(ApiErrorCode.MODEL_ARTIFACT_INVALID,"模型制品无法读取");}
         // The database snapshot keeps display fields for the UI.  The Python
         // contract receives only the frozen, typed fields so old snapshots and
         // newly created schemes use the same payload shape.
-        var scheme=b.frozenInputScheme()==null?json.createObjectNode():(ObjectNode)b.frozenInputScheme().deepCopy();
+        var scheme=v2InputScheme(b);
         scheme.remove("name");scheme.remove("code");scheme.remove("status");scheme.remove("targetId");scheme.remove("materialDictionaryVersionId");
         var dictionary=json.createObjectNode();var sourceDictionary=b.frozenDictionary();if(sourceDictionary!=null&&sourceDictionary.isObject()){dictionary.put("id",sourceDictionary.path("id").asText("material-dictionary-v1"));dictionary.put("version",Math.max(1,sourceDictionary.path("version").asInt(1)));dictionary.put("sha256",sourceDictionary.path("sha256").asText("0".repeat(64)));var materials=dictionary.putArray("materials");for(var item:sourceDictionary.path("materials")){var material=materials.addObject().put("materialId",item.path("materialId").asText());material.put("code",item.path("code").asText(item.path("token").asText(item.path("materialId").asText())));if(item.hasNonNull("role"))material.put("role",item.path("role").asText());material.put("encoderIndex",item.path("encoderIndex").isNumber()?item.path("encoderIndex").asInt():item.path("ordinal").asInt(materials.size()-1));}}else{dictionary.put("id","material-dictionary-v1").put("version",1).put("sha256","0".repeat(64)).putArray("materials").addObject().put("materialId","UNUSED").put("code","UNUSED").put("encoderIndex",0);}
         var preprocessing=b.frozenPreprocessing()==null?json.createObjectNode():(ObjectNode)b.frozenPreprocessing().deepCopy();if(!preprocessing.has("id"))preprocessing.put("id","preprocessing-v1");if(!preprocessing.has("version"))preprocessing.put("version",1);if(!preprocessing.has("sha256"))preprocessing.put("sha256","0".repeat(64));if(!preprocessing.has("config"))preprocessing.set("config",json.createObjectNode());
         n.set("inputScheme",scheme);n.set("materialDictionary",dictionary);n.set("preprocessing",preprocessing);n.set("applicabilityDomain",mergedDomain(b));return n;}
+    private ObjectNode v2InputScheme(PredictionRepository.TargetBinding b){
+        var source=b.frozenInputScheme();
+        var out=source!=null&&source.isObject()?((ObjectNode)source).deepCopy():json.createObjectNode();
+        out.put("targetVersionId",b.targetVersionId().toString());
+        var fields=json.createArrayNode();
+        if(source!=null)source.path("fields").forEach(raw->{
+            var field=json.createObjectNode();var code=raw.path("code").asText("");if(code.isBlank())return;
+            field.put("fieldVersionId",raw.path("fieldVersionId").asText("legacy-field-"+code));field.put("code",code);
+            if(raw.hasNonNull("name"))field.put("name",raw.path("name").asText());if(raw.hasNonNull("unit"))field.put("unit",raw.path("unit").asText());
+            if(raw.has("ordinal"))field.put("ordinal",raw.path("ordinal").asInt());field.put("valueType",raw.path("valueType").asText("STRING"));
+            field.put("required",raw.path("required").asBoolean(false));field.put("acquisitionTiming",raw.path("acquisitionTiming").asText(raw.path("availabilityStage").asText("PRE_EXPERIMENT")));
+            if(raw.has("encoding")&&raw.path("encoding").isObject())field.set("encoding",raw.path("encoding"));else field.set("encoding",json.createObjectNode());fields.add(field);
+        });
+        out.set("fields",fields);return out;
+    }
     private ObjectNode binding(PredictionRepository.TargetBinding b){return frozenModelBinding(b);}
     private ObjectNode mergedDomain(PredictionRepository.TargetBinding b){var n=b.modelDomain()!=null&&b.modelDomain().isObject()?((ObjectNode)b.modelDomain()).deepCopy():json.createObjectNode();if(b.domainPolicy()!=null&&b.domainPolicy().isObject())b.domainPolicy().fields().forEachRemaining(e->{if(!List.of("features","minimum","maximum").contains(e.getKey()))n.set(e.getKey(),e.getValue());});return n;}
     private ArrayNode operators(String type){var a=json.createArrayNode();if("CONTINUOUS".equals(type))List.of("AT_LEAST","AT_MOST","RANGE","MATCH","MAXIMIZE","MINIMIZE").forEach(a::add);else if("ORDINAL".equals(type))List.of("AT_LEAST","AT_MOST","MATCH").forEach(a::add);else a.add("MATCH");return a;}
@@ -153,9 +173,9 @@ public class FormulaDesignService {
         var total=body.path("targetTotal"); if(!total.isNumber()||!Double.isFinite(total.asDouble())||total.asDouble()<=0)throw new ApiException(ApiErrorCode.FIXED_CONSTRAINT_CONFLICT,"目标合计必须是大于0的有限数值");
         if(!"MASS_PERCENT".equals(body.path("formulaBasis").asText("MASS_PERCENT")))throw new ApiException(ApiErrorCode.FORMULA_BASIS_UNRESOLVED,"当前配方预测只支持质量百分比基准");
         var formula=body.path("baselineFormula"); var components=formula.path("components"); if(!components.isArray()||components.isEmpty())throw new ApiException(ApiErrorCode.FIXED_CONSTRAINT_CONFLICT,"至少需要一种配方材料");
-        var recorded=formula.path("recordedTotal"); if(!recorded.isNumber()||Math.abs(recorded.asDouble()-total.asDouble())>1e-6)throw new ApiException(ApiErrorCode.FIXED_CONSTRAINT_CONFLICT,"配方记录总量必须与目标合计一致");
+        var recorded=formula.path("recordedTotal"); if(!recorded.isNumber()||Math.abs(recorded.asDouble()-total.asDouble())>1e-6)throw new ApiException(ApiErrorCode.FIXED_CONSTRAINT_CONFLICT,"配方归一化后的总量必须与目标合计一致");
         double sum=0; for(var c:components){if(!c.path("amountKnown").asBoolean(false)||!c.path("ratio").isNumber())throw new ApiException(ApiErrorCode.FIXED_CONSTRAINT_CONFLICT,"材料用量必须明确填写，空值不能作为搜索条件");if(c.path("ratio").asDouble()<0)throw new ApiException(ApiErrorCode.FIXED_CONSTRAINT_CONFLICT,"材料比例不能为负数");sum+=c.path("ratio").asDouble();}
-        if(Math.abs(sum-total.asDouble())>1e-6)throw new ApiException(ApiErrorCode.FIXED_CONSTRAINT_CONFLICT,"固定配方比例合计必须等于目标合计");
+        if(Math.abs(sum-total.asDouble())>1e-6)throw new ApiException(ApiErrorCode.FIXED_CONSTRAINT_CONFLICT,"配方归一化后的比例合计必须等于目标合计");
         var intersection=new LinkedHashSet<String>(); boolean first=true; for(var binding:bindings){var ids=new LinkedHashSet<String>();binding.frozenDictionary().path("materials").forEach(m->ids.add(m.path("materialId").asText()));if(first){intersection.addAll(ids);first=false;}else intersection.retainAll(ids);}for(var c:components)if(!intersection.contains(c.path("materialId").asText()))throw new ApiException(ApiErrorCode.MATERIAL_SPACE_CONFLICT,"配方材料不在所选目标共同材料空间");
         var variableMaterials=body.path("searchSpace").path("variableMaterials");if(!variableMaterials.isArray()||variableMaterials.isEmpty())throw new ApiException(ApiErrorCode.MATERIAL_SPACE_CONFLICT,"至少需要一种允许调整的材料");
         for(var variable:variableMaterials){var id=variable.path("materialId").asText();if(!intersection.contains(id))throw new ApiException(ApiErrorCode.MATERIAL_SPACE_CONFLICT,"可变材料不在所选目标共同材料空间");if(!finite(variable.path("minimum"))||!finite(variable.path("maximum"))||variable.path("minimum").asDouble()<0||variable.path("minimum").asDouble()>variable.path("maximum").asDouble())throw new ApiException(ApiErrorCode.MATERIAL_SPACE_CONFLICT,"材料比例范围无效");}
@@ -164,6 +184,13 @@ public class FormulaDesignService {
         if(!body.path("candidateCount").isMissingNode()&&(body.path("candidateCount").asInt()<1||body.path("candidateCount").asInt()>16))throw new ApiException(ApiErrorCode.FIXED_CONSTRAINT_CONFLICT,"候选数量必须在1到16之间");
     }
     private ObjectNode defaultFormula(ArrayNode bindings,double total){var f=json.createObjectNode().put("basis","MASS_PERCENT").put("compositionComplete",true).put("recordedTotal",total);var cs=f.putArray("components");var seen=new LinkedHashSet<String>();bindings.forEach(b->b.path("materialDictionary").path("materials").forEach(m->{if(seen.add(m.path("materialId").asText())&&seen.size()<=3){} }));if(seen.isEmpty())seen.add("UNKNOWN");double ratio=total/seen.size();for(var id:seen)cs.add(json.createObjectNode().put("materialId",id).put("ratio",ratio).put("unit","PERCENT").put("amountKnown",true));return f;}
+    private JsonNode normalizeDesignRequest(JsonNode body){
+        var copy=(ObjectNode)body.deepCopy();
+        var result=formulaNormalization.requireValid(copy.path("baselineFormula"));
+        copy.set("baselineFormula",result.formula());
+        if("MASS_PERCENT".equals(copy.path("formulaBasis").asText("MASS_PERCENT"))) copy.put("targetTotal",100);
+        return copy;
+    }
     private void validateGoal(JsonNode g,PredictionRepository.TargetBinding b){
         if(b==null)throw new ApiException(ApiErrorCode.NOT_FOUND,"研发目标不存在");
         var op=g.path("operator").asText();var allowed=operators(b.valueType());var supported=false;for(var x:allowed)if(op.equals(x.asText()))supported=true;

@@ -6,6 +6,8 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.ai.formula.application.FormulaModelArtifactStore;
 import com.jsd.aird.ai.rnd.api.AiRndContracts.PredictionRequest;
+import com.jsd.aird.ai.rnd.formula.FormulaNormalizationService;
+import com.jsd.aird.ai.rnd.catalog.RegisteredUvpuTargetCatalog;
 import com.jsd.aird.ai.rnd.modeling.ConfigurationHashing;
 import com.jsd.aird.ai.rnd.training.FormulaModelV2Client;
 import com.jsd.aird.ops.application.port.AuditLogFacade;
@@ -46,6 +48,7 @@ public class PredictionService {
     private final QualityPolicyEvaluator quality;
     private final ObjectMapper json;
     private final AuditLogFacade audit;
+    private final FormulaNormalizationService formulaNormalization;
     private final TransactionTemplate transactions;
     private final Duration staleAfter;
     private final boolean allowSyntheticPrediction;
@@ -53,11 +56,13 @@ public class PredictionService {
     public PredictionService(PredictionRepository repository, FormulaModelArtifactStore artifacts,
                              FormulaModelV2Client compute, ConfigurationHashing hashing,
                              QualityPolicyEvaluator quality, ObjectMapper json, AuditLogFacade audit,
+                             FormulaNormalizationService formulaNormalization,
                              PlatformTransactionManager tx,
                              @Value("${app.ai.rnd.prediction-stale-after:PT3M}") Duration staleAfter,
                              @Value("${JSD_AIRD_AI_ALLOW_SYNTHETIC_PREDICTION:false}") boolean allowSyntheticPrediction) {
         this.repository=repository;this.artifacts=artifacts;this.compute=compute;this.hashing=hashing;
         this.quality=quality;this.json=json;this.audit=audit;this.transactions=new TransactionTemplate(tx);
+        this.formulaNormalization=formulaNormalization;
         this.staleAfter=staleAfter;this.allowSyntheticPrediction=allowSyntheticPrediction;
     }
 
@@ -69,6 +74,7 @@ public class PredictionService {
                     .put("targetStatus",item.status()).put("formalPredictionAvailable",item.modelId()!=null&&item.qualityPolicyId()!=null&&item.domainPolicyId()!=null);
             var unavailable=reasons(item.modelId(),item.qualityPolicyId(),item.domainPolicyId());value.set("unavailableReasons",json.valueToTree(unavailable));catalog.add(value);
         }
+        RegisteredUvpuTargetCatalog.append(json, catalog);
         root.set("targets",catalog);
         if(targetIds==null||targetIds.isEmpty()){root.set("selected",json.createArrayNode());root.set("requiredInputs",json.createArrayNode());root.set("materials",json.createArrayNode());return root;}
         var bindings=repository.targetBindings(actor.organizationId(),distinct(targetIds));
@@ -118,8 +124,12 @@ public class PredictionService {
 
     public PredictionHttpResult predict(PredictionRequest request,String idempotencyKey){
         var a=actor();requireKey(idempotencyKey);validateRequest(request);var started=System.nanoTime();
+        var requestNode=(ObjectNode)json.valueToTree(request);
+        var formulaResult=request.formula()==null?null:formulaNormalization.requireValid(requestNode.path("formula"));
+        if (formulaResult != null) requestNode.set("formula", formulaResult.formula());
+        var effectiveRequest=json.convertValue(requestNode, PredictionRequest.class);
         var targetIds=request.targets().stream().map(x->x.targetId()).toList();var bindings=repository.targetBindings(a.organizationId(),distinct(targetIds));
-        var frozen=bindingDocument(bindings);var requestNode=json.valueToTree(request);var normalized=normalized(requestNode);var requestHash=hashing.hash(normalized);
+        var frozen=bindingDocument(bindings);var normalized=normalized(requestNode);var requestHash=hashing.hash(normalized);
         var id=UUID.randomUUID();var requestId=RequestIdHolder.currentOrUnknown();
         var won=Boolean.TRUE.equals(transactions.execute(ignored->repository.insertRunning(id,a.organizationId(),a.userId(),idempotencyKey,requestId,requestHash,normalized,frozen)));
         if(!won){var old=repository.byKey(a.organizationId(),a.userId(),idempotencyKey).orElseThrow();
@@ -127,7 +137,7 @@ public class PredictionService {
             if("RUNNING".equals(old.executionStatus()))return new PredictionHttpResult(202,running(old.id(),old.requestId()));
             return new PredictionHttpResult(old.terminalHttpStatus(),old.terminalResponse());}
         audit.append(a.organizationId(),a.userId(),"AI_PERFORMANCE_PREDICTION_STARTED","AI_PREDICTION",id,frozen);
-        var result=execute(id,requestId,request,bindings,started);
+        var result=execute(id,requestId,effectiveRequest,requestNode,bindings,started);
         var row=repository.byId(a.organizationId(),a.userId(),id).orElseThrow();
         if("RUNNING".equals(row.executionStatus())){
             var duration=Duration.ofNanos(System.nanoTime()-started).toMillis();var response=result.body();
@@ -146,10 +156,10 @@ public class PredictionService {
     @Scheduled(fixedDelayString="${app.ai.rnd.prediction-reconcile-delay:PT1M}")
     public void reconcileStale(){repository.failStale(Instant.now().minus(staleAfter));}
 
-    private PredictionHttpResult execute(UUID id,String requestId,PredictionRequest request,List<PredictionRepository.TargetBinding> bindings,long started){
+    private PredictionHttpResult execute(UUID id,String requestId,PredictionRequest request,JsonNode normalizedRequest,List<PredictionRepository.TargetBinding> bindings,long started){
         var byTarget=new HashMap<UUID,PredictionRepository.TargetBinding>();bindings.forEach(x->byTarget.put(x.targetId(),x));
         var results=json.createArrayNode();var scoreBindings=json.createArrayNode();var modelToBinding=new HashMap<String,PredictionRepository.TargetBinding>();
-        var warnings=formulaWarnings(request);var total=formulaTotal(request);
+        var warnings=formulaWarnings(request, normalizedRequest);var total=formulaTotal(request);
         for(var wanted:request.targets()){
             var b=byTarget.get(wanted.targetId());if(b==null){results.add(blocked(wanted.targetId(),null,"TARGET_NOT_FOUND","预测目标不存在",json.createObjectNode()));continue;}
             var reason=gate(b,wanted.expectedModelVersionId(),request);
@@ -159,7 +169,7 @@ public class PredictionService {
         }
         if(!scoreBindings.isEmpty()){
             var score=json.createObjectNode().put("contractVersion","formula-model.v2").put("requestId",requestId).put("seed",0).put("runId",id.toString());
-            if(request.formula()==null) score.putNull("formula"); else score.set("formula",json.valueToTree(request.formula()));
+            if(request.formula()==null) score.putNull("formula"); else score.set("formula",formulaNormalization.forModelCompute(normalizedRequest.path("formula")));
             score.set("inputs",json.valueToTree(request.inputs()));score.set("modelBindings",scoreBindings);
             try{var computed=compute.score(score);var returned=new HashSet<String>();
                 for(var item:computed.path("results")){var modelId=item.path("modelVersionId").asText();returned.add(modelId);var b=modelToBinding.get(modelId);
@@ -210,8 +220,31 @@ public class PredictionService {
         }
         return null;
     }
-    private boolean domainReady(PredictionRepository.TargetBinding b){var merged=mergedDomain(b);return merged.has("features")&&merged.has("minimum")&&merged.has("maximum")&&merged.path("nearBoundaryRatio").isNumber();}
-    private ObjectNode scoreBinding(PredictionRepository.TargetBinding b){var ref=artifacts.readRef(b.artifactKey(),b.artifactKey(),b.artifactSha());var out=json.createObjectNode();out.set("target",scoreTarget(b));out.put("modelVersionId",b.modelId().toString());out.set("modelBundle",json.createObjectNode().put("url",ref.url()).put("sha256",ref.sha256()));out.set("inputScheme",b.frozenInputScheme());out.set("materialDictionary",v2MaterialDictionary(b.frozenDictionary()));out.set("preprocessing",v2Preprocessing(b.frozenPreprocessing()));out.set("applicabilityDomain",mergedDomain(b));return out;}
+    private boolean domainReady(PredictionRepository.TargetBinding b){
+        var merged=mergedDomain(b);
+        // Accept both the frozen v2 domain shape and the current development
+        // bundle shape.  The latter names numeric/categorical feature lists
+        // explicitly and stores the boundary thresholds as numbers.
+        var legacy=merged.has("features")&&merged.has("minimum")&&merged.has("maximum")&&merged.path("nearBoundaryRatio").isNumber();
+        var current=merged.path("numeric_features").isArray()
+                && merged.path("categorical_features").isArray()
+                && merged.path("near_boundary_threshold").isNumber()
+                && merged.path("out_of_domain_threshold").isNumber();
+        return legacy||current;
+    }
+    private ObjectNode scoreBinding(PredictionRepository.TargetBinding b){var ref=artifacts.readRef(b.artifactKey(),b.artifactKey(),b.artifactSha());var out=json.createObjectNode();out.set("target",scoreTarget(b));out.put("modelVersionId",b.modelId().toString());out.set("modelBundle",json.createObjectNode().put("url",ref.url()).put("sha256",ref.sha256()));out.set("inputScheme",v2InputScheme(b));out.set("materialDictionary",v2MaterialDictionary(b.frozenDictionary()));out.set("preprocessing",v2Preprocessing(b.frozenPreprocessing()));out.set("applicabilityDomain",mergedDomain(b));return out;}
+    private ObjectNode v2InputScheme(PredictionRepository.TargetBinding b){
+        var source=b.frozenInputScheme();var out=source!=null&&source.isObject()?((ObjectNode)source).deepCopy():json.createObjectNode();
+        // The database keeps display/authoring metadata on the input scheme,
+        // but formula-model.v2 accepts only the frozen versioned reference,
+        // targetVersionId and typed fields.  In particular,
+        // materialDictionaryVersionId belongs to the Java-side binding and
+        // must not cross the Python scoring boundary.
+        out.remove("name");out.remove("code");out.remove("status");out.remove("targetId");out.remove("materialDictionaryVersionId");
+        out.put("targetVersionId",b.targetVersionId().toString());var fields=json.createArrayNode();
+        if(source!=null)source.path("fields").forEach(raw->{var field=json.createObjectNode();var code=raw.path("code").asText("");if(code.isBlank())return;field.put("fieldVersionId",raw.path("fieldVersionId").asText("legacy-field-"+code));field.put("code",code);if(raw.hasNonNull("name"))field.put("name",raw.path("name").asText());if(raw.hasNonNull("unit"))field.put("unit",raw.path("unit").asText());if(raw.has("ordinal"))field.put("ordinal",raw.path("ordinal").asInt());field.put("valueType",raw.path("valueType").asText("STRING"));field.put("required",raw.path("required").asBoolean(false));field.put("acquisitionTiming",raw.path("acquisitionTiming").asText(raw.path("availabilityStage").asText("PRE_EXPERIMENT")));if(raw.has("encoding")&&raw.path("encoding").isObject())field.set("encoding",raw.path("encoding"));else field.set("encoding",json.createObjectNode());fields.add(field);});
+        out.set("fields",fields);return out;
+    }
     /** Normalize older frozen snapshots at the Java/Python boundary. The database snapshot remains immutable. */
     private ObjectNode v2MaterialDictionary(JsonNode source){
         var out=json.createObjectNode();
@@ -244,7 +277,7 @@ public class PredictionService {
                 .put("version",b.targetVersion()).put("sha256",targetHash)
                 .put("code",b.targetCode()).put("valueType",b.valueType());
         if(b.unit()!=null) target.put("unit",b.unit()); else target.putNull("unit");
-        target.set("classes",b.classes()==null?json.createArrayNode():b.classes());
+        target.set("classes", "CONTINUOUS".equals(b.valueType()) ? json.createArrayNode() : (b.classes()==null?json.createArrayNode():b.classes()));
         if ("BINARY".equals(b.valueType())) {
             var positiveClass = b.definition() == null ? null : b.definition().path("positiveClass");
             if (positiveClass != null && positiveClass.isTextual() && !positiveClass.asText().isBlank()) {
@@ -264,7 +297,7 @@ public class PredictionService {
     private ObjectNode rewriteTarget(JsonNode source,UUID target){var out=((ObjectNode)source).deepCopy();out.put("targetId",target.toString());return out;}
     private ObjectNode blocked(UUID target,UUID model,String code,String message,JsonNode detail){var x=json.createObjectNode().put("targetId",target.toString()).put("status","BLOCKED").put("errorCode",code).put("message",message);if(model!=null)x.put("modelVersionId",model.toString());x.set("detail",detail);return x;}
     private ObjectNode failed(UUID target,UUID model,String code,String message,JsonNode detail){var x=json.createObjectNode().put("targetId",target.toString()).put("status","FAILED").put("errorCode",code).put("message",message);if(model!=null)x.put("modelVersionId",model.toString());x.set("detail",detail);return x;}
-    private ArrayNode formulaWarnings(PredictionRequest request){var warnings=json.createArrayNode();if(request.formula()==null)return warnings;var total=formulaTotal(request);if("MASS_PERCENT".equals(request.formula().basis())&&total!=null&&total.compareTo(new BigDecimal("100"))!=0){var item=json.createObjectNode().put("code","FORMULA_TOTAL_WARNING").put("message","配方合计为 "+total.stripTrailingZeros().toPlainString()+"%");item.set("detail",json.createObjectNode().put("recordedTotal",total));warnings.add(item);}return warnings;}
+    private ArrayNode formulaWarnings(PredictionRequest request, JsonNode normalizedRequest){var warnings=json.createArrayNode();if(request.formula()==null)return warnings;var formula=normalizedRequest.path("formula");if(formula.path("normalizationApplied").asBoolean(false)){var raw=formula.path("rawFormulaTotal").decimalValue();var item=json.createObjectNode().put("code","FORMULA_NORMALIZED").put("message","配方合计为 "+raw.stripTrailingZeros().toPlainString()+"%，系统已按相对比例归一化到100%");item.set("detail",json.createObjectNode().put("rawFormulaTotal",raw).put("normalizedFormulaTotal",100).put("normalizationFactor",formula.path("normalizationFactor")));warnings.add(item);}return warnings;}
     private BigDecimal formulaTotal(PredictionRequest request){if(request.formula()==null)return null;if(request.formula().recordedTotal()!=null)return request.formula().recordedTotal();BigDecimal total=BigDecimal.ZERO;for(var x:request.formula().components()){if(x.ratio()==null)return null;total=total.add(x.ratio());}return total;}
     private String formulaProblem(PredictionRequest request){if(request.formula()==null||!request.formula().compositionComplete())return "FORMULA_INCOMPLETE";if(request.formula().components()==null||request.formula().components().isEmpty())return "FORMULA_INCOMPLETE";for(var x:request.formula().components()){if(x.materialId()==null||x.ratio()==null)return "FORMULA_AMOUNT_MISSING";if(x.unit()==null||x.unit().isBlank())return "FORMULA_UNIT_UNRESOLVED";}return null;}
     private boolean formulaRequired(PredictionRepository.TargetBinding b){

@@ -100,6 +100,44 @@ final class ExperimentTemplateSemanticCompiler {
             }
         }
 
+        // The physical table root is intentionally not always exposed as a
+        // field-model entry (older recognition runs persisted only the repeat
+        // child bindings).  The mapping is nevertheless the authoritative
+        // executable representation, so collect projections from it as well.
+        // This keeps a reviewed matrix such as material rows x experiment
+        // columns available to the published import contract.
+        for (var value : mappings) {
+            if (!(value instanceof ObjectNode mapping) || !mapping.path("listProjections").isArray()) continue;
+            var copyRoot = mapping.deepCopy();
+            var componentId = componentId(mapping, mapping);
+            for (var projection : mapping.path("listProjections")) {
+                if (!(projection instanceof ObjectNode source)) continue;
+                var copy = source.deepCopy();
+                // The contract component is keyed by the executable root
+                // binding, not by the recognition block id.
+                copy.put("componentId", componentId);
+                copy.put("parentBindingId", mapping.path("bindingId").asText(""));
+                var id = copy.path("listProjectionId").asText("");
+                if (!id.isBlank()) projections.putIfAbsent(id, copy);
+            }
+        }
+
+        // Preserve the complete physical hierarchy on executable bindings.
+        // The UI may show the leaf label, but import/sync must retain the
+        // parent semantics (test item, condition and substrate).
+        var fieldsByBinding = new LinkedHashMap<String, JsonNode>();
+        for (var value : fieldModel.path("fields")) {
+            if (value instanceof ObjectNode field) {
+                var id = field.path("bindingId").asText("");
+                if (!id.isBlank()) fieldsByBinding.put(id, field);
+            }
+        }
+        for (var value : mappings) {
+            if (!(value instanceof ObjectNode mapping)) continue;
+            var field = fieldsByBinding.get(mapping.path("bindingId").asText(""));
+            if (field != null) copyIfPresent(field, mapping, "labelPath", "labelPathSegments");
+        }
+
         var existing = schema.path(TemplateImportContractCompiler.EXPERIMENT_IMPORT_SCHEMA_KEY);
         if (existing.path("listProjections").isArray()) {
             for (var value : existing.path("listProjections")) {

@@ -237,7 +237,7 @@ export interface PredictionResponse {
   warnings?: Array<{ code: string; message: string; detail: Record<string, unknown> }>
 }
 export interface PredictionRunning { predictionRecordId: string; requestId: string; executionStatus: 'RUNNING'; outcomeStatus?: never; pollAfterMs: number }
-export interface PredictionCatalogTarget { targetId: string; code: string; name: string; category: string; valueType: ValueType; targetStatus: string; formalPredictionAvailable: boolean; unavailableReasons: string[] }
+export interface PredictionCatalogTarget { targetId: string; code: string; name: string; category: string; valueType: ValueType; targetStatus: string; formalPredictionAvailable: boolean; unavailableReasons: string[]; registered?: boolean; statusLabel?: string; unit?: string }
 export interface PredictionContextTarget { targetId: string; name: string; category: string; valueType: ValueType; available: boolean; modelVersionId?: string; unavailableReasons: string[]; formulaRequirement: 'REQUIRED' | 'NOT_USED'; fixedConditions?: Record<string, unknown>; evidence: Record<string, string> }
 export interface PredictionInputField {
   fieldVersionId: string; code: string; name: string; valueType: 'NUMBER' | 'STRING' | 'BOOLEAN' | 'CATEGORY' | 'COMPOSITION'; unit?: string; required: boolean;

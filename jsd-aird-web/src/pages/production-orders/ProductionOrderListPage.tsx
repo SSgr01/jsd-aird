@@ -46,6 +46,7 @@ import {
   productionOrderRecordApi,
   type ProductionUpload,
 } from '@/services/production-orders/production-upload-api';
+import { generateUUID } from '@/utils/uuid';
 import './production-order-list.css';
 import '@/styles/management-list.css';
 
@@ -242,7 +243,7 @@ export function ProductionOrderListPage() {
           const workbook = XLSX.read(await source.arrayBuffer(), { type: 'array' });
           workbook.Props = {
             ...workbook.Props,
-            Subject: `生产单副本-${crypto.randomUUID()}`,
+            Subject: `生产单副本-${generateUUID()}`,
           };
           const content = XLSX.write(workbook, {
             bookType: 'xlsx',

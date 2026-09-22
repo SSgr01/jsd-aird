@@ -49,6 +49,7 @@ import {
 } from '@/services/quality/quality-api';
 import { templateApi } from '@/services/templates/template-api';
 import type { TemplateListItem } from '@/features/template-workspace/types';
+import { generateUUID } from '@/utils/uuid';
 import './quality-pages.css';
 import '@/styles/management-list.css';
 
@@ -382,7 +383,7 @@ export function QualityDataPage() {
       const task = createTasks.find((item) => item.id === createTaskId);
       const sameScope = createTypeId === typeId && createCategoryId === categoryId;
       const row: Draft = {
-        id: `new-${crypto.randomUUID()}`,
+        id: `new-${generateUUID()}`,
         businessType: createTypeId,
         categoryId: createCategoryId,
         categoryName,
@@ -431,7 +432,7 @@ export function QualityDataPage() {
     setDraft((v) => [
       ...v,
       {
-        id: `new-${crypto.randomUUID()}`,
+        id: `new-${generateUUID()}`,
         businessType: typeId,
         categoryId,
         categoryName: '',
@@ -559,7 +560,7 @@ export function QualityDataPage() {
         const no = newNo();
         return {
           ...r,
-          id: `new-${crypto.randomUUID()}`,
+          id: `new-${generateUUID()}`,
           businessNo: no,
           data: { ...r.data, [idKey]: no },
           newRow: true,

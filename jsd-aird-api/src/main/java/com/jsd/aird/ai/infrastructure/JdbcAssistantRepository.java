@@ -70,13 +70,81 @@ public class JdbcAssistantRepository implements AssistantRepository {
     }
 
     @Override
+    public ConversationRewriteResult replaceQuestion(UUID organizationId, UUID conversationId, UUID targetMessageId,
+                                                     UUID expectedLastMessageId, String replacementQuestion) {
+        var titleSource = jdbc.query("""
+                SELECT title_source
+                FROM ai.assistant_conversation
+                WHERE organization_id = ? AND id = ?
+                FOR UPDATE
+                """, (rs, rowNum) -> rs.getString("title_source"), organizationId, conversationId)
+                .stream().findFirst();
+        if (titleSource.isEmpty()) {
+            return ConversationRewriteResult.rejected(ConversationRewriteStatus.CONVERSATION_NOT_FOUND);
+        }
+
+        record OrderedMessage(UUID id, String role) { }
+        var ordered = jdbc.query("""
+                SELECT id, role
+                FROM ai.assistant_message
+                WHERE conversation_id = ?
+                ORDER BY created_at, id
+                """, (rs, rowNum) -> new OrderedMessage(rs.getObject("id", UUID.class), rs.getString("role")),
+                conversationId);
+        if (ordered.isEmpty() || expectedLastMessageId == null
+                || !expectedLastMessageId.equals(ordered.getLast().id())) {
+            return ConversationRewriteResult.rejected(ConversationRewriteStatus.STALE_CONVERSATION);
+        }
+
+        var targetIndex = -1;
+        for (var index = 0; index < ordered.size(); index++) {
+            if (targetMessageId.equals(ordered.get(index).id())) {
+                targetIndex = index;
+                break;
+            }
+        }
+        if (targetIndex < 0) {
+            return ConversationRewriteResult.rejected(ConversationRewriteStatus.MESSAGE_NOT_FOUND);
+        }
+        if (!"USER".equals(ordered.get(targetIndex).role())) {
+            return ConversationRewriteResult.rejected(ConversationRewriteStatus.TARGET_NOT_USER);
+        }
+
+        var firstQuestionReplaced = ordered.subList(0, targetIndex).stream()
+                .noneMatch(message -> "USER".equals(message.role()));
+        var deleted = ordered.subList(targetIndex, ordered.size());
+        jdbc.batchUpdate("DELETE FROM ai.assistant_message WHERE conversation_id = ? AND id = ?",
+                deleted.stream().map(message -> new Object[]{conversationId, message.id()}).toList());
+
+        var automaticTitleReset = firstQuestionReplaced && !"USER".equalsIgnoreCase(titleSource.get());
+        var replacementTitle = replacementQuestion.substring(0, Math.min(80, replacementQuestion.length()));
+        jdbc.update("""
+                UPDATE ai.assistant_conversation
+                SET summary = NULL,
+                    summary_version = NULL,
+                    summary_token_count = 0,
+                    last_summarized_message_id = NULL,
+                    title = CASE WHEN ? THEN ? ELSE title END,
+                    title_source = CASE WHEN ? THEN 'FIRST_QUESTION' ELSE title_source END,
+                    updated_at = now()
+                WHERE organization_id = ? AND id = ?
+                """, automaticTitleReset, replacementTitle, automaticTitleReset, organizationId, conversationId);
+        var replacementMessageId = insertMessageReturningId(conversationId, "USER", replacementQuestion,
+                com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.arrayNode(),
+                com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode(),
+                com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode());
+        return new ConversationRewriteResult(ConversationRewriteStatus.UPDATED, replacementMessageId,
+                deleted.size(), firstQuestionReplaced, automaticTitleReset);
+    }
+
+    @Override
     public List<MessageRow> recentMessages(UUID organizationId, UUID conversationId, int limit) {
         return jdbc.query("""
                 SELECT m.id, m.role, m.content, m.citations_jsonb
                 FROM ai.assistant_message m
                 JOIN ai.assistant_conversation c ON c.id = m.conversation_id
                 WHERE c.organization_id = ? AND c.id = ?
-                ORDER BY m.created_at DESC
+                ORDER BY m.created_at DESC, m.id DESC
                 LIMIT ?
                 """, (rs, rowNum) -> new MessageRow(rs.getObject("id", UUID.class), rs.getString("role"), rs.getString("content"),
                         readJson(rs.getString("citations_jsonb"))),

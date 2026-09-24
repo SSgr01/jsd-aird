@@ -44,7 +44,8 @@ public final class EligibilityContracts {
                                  UUID targetVersionId, UUID inputSchemeId, State state,
                                  String primaryReasonCode, List<QualificationReason> reasons,
                                  List<QualificationReason> warnings, String logicalSampleKey,
-                                 String authoritySourceType, long revision, Instant evaluatedAt) { }
+                                 String authoritySourceType, JsonNode sample,
+                                 long revision, Instant evaluatedAt) { }
 
     public record EligibilityDetail(Eligibility eligibility, JsonNode sample,
                                     List<Review> reviews) { }

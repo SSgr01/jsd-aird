@@ -85,9 +85,7 @@ public class OpenAiCompatibleSpectrumVisionClient implements SpectrumVisionClien
             }
             var result = parseJson(parsed.outputText());
             var returnedModel = parsed.response().path("model").asText(model);
-            return new VisionResult(result, parsed.response(), returnedModel,
-                    "COMPETITOR_DECOMPOSITION".equals(request.scenarioTemplate())
-                            ? SpectrumPromptPort.COMPETITOR_VERSION : SpectrumPromptPort.GENERIC_VERSION);
+            return new VisionResult(result, parsed.response(), returnedModel, SpectrumPromptPort.V3_VERSION);
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("图谱模型调用被中断", exception);
@@ -102,7 +100,7 @@ public class OpenAiCompatibleSpectrumVisionClient implements SpectrumVisionClien
         var body = objectMapper.createObjectNode();
         body.put("model", model);
         body.put("instructions", "请严格执行输入中的图谱分析规则，只输出一个 JSON 对象。"
-                + "所有面向用户的文本必须使用简体中文，不得输出内部 ID。");
+                + "所有自然语言必须使用简体中文；不要输出服务端校验字段或模型思维过程。");
         body.put("max_output_tokens", maxOutputTokens);
         body.put("stream", true);
         var reasoning = body.putObject("reasoning");
@@ -112,6 +110,7 @@ public class OpenAiCompatibleSpectrumVisionClient implements SpectrumVisionClien
         var content = user.putArray("content");
         content.addObject().put("type", "input_text").put("text", request.prompt());
         for (var image : request.images()) {
+            content.addObject().put("type", "input_text").put("text", image.caption());
             content.addObject().put("type", "input_image").put("image_url", image.dataUri()).put("detail", "high");
         }
         return body;

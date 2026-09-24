@@ -20,7 +20,10 @@ const predictionErrorLabels: Record<string, string> = {
   FORMULA_RATIO_NOT_NUMERIC: '材料比例必须是数字，请检查输入内容',
   FORMULA_TOTAL_NON_POSITIVE: '配方合计必须大于0，当前无法归一化',
   FORMULA_UNIT_UNRESOLVED: '配方用量单位不明确', MISSING_REQUIRED_X: '缺少模型要求的实验前条件',
-  MATERIAL_NOT_IN_MODEL: '材料已识别，但当前模型未覆盖', OUT_OF_DOMAIN: '当前配方或条件超出模型适用范围',
+  MATERIAL_NOT_IN_MODEL: '材料已识别，但当前模型未覆盖', OUT_OF_DOMAIN: '当前配方或实验条件超出模型覆盖范围，请调整输入后重试',
+  COMPUTE_UNAVAILABLE: '预测服务暂时未连接；请稍后重试，模型和输入设置不会丢失',
+  MODEL_ARTIFACT_UNAVAILABLE: '模型文件暂时不可用，请联系管理员检查模型制品',
+  MODEL_CONTRACT_MISMATCH: '当前模型版本与预测输入不匹配，请刷新后重试',
 }
 const resultTypeLabels = { CONTINUOUS: '连续数值', ORDINAL: '有序等级', BINARY: '二分类', CATEGORICAL: '多分类' }
 const targetOptionLabel = (target: { name: string; valueType: string; unit?: string | null }) => `${target.name} · ${resultTypeLabels[target.valueType as keyof typeof resultTypeLabels] ?? '预测目标'}${target.unit ? `（${target.unit}）` : ''}`

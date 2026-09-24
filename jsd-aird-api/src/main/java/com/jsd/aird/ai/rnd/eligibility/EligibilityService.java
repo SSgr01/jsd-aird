@@ -78,8 +78,12 @@ public class EligibilityService {
                                               String reasonCode, String sourceType, String keyword,
                                               int page, int size) {
         var actor = actor();
-        return repository.page(actor.organizationId(), targetVersionId, inputSchemeId, state,
-                reasonCode, sourceType, keyword, Math.max(1, page), Math.min(100, Math.max(1, size)));
+        var run = repository.latestRun(actor.organizationId(), targetVersionId, inputSchemeId);
+        var safePage = Math.max(1, page);
+        var safeSize = Math.min(500, Math.max(1, size));
+        if (run.isEmpty()) return new PageResponse<>(List.of(), safePage, safeSize, 0, 0);
+        return repository.page(actor.organizationId(), run.get().id(), targetVersionId, inputSchemeId, state,
+                reasonCode, sourceType, keyword, safePage, safeSize);
     }
 
     public EligibilityDetail detail(UUID id) {

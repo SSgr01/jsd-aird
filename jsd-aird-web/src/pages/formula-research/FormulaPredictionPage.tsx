@@ -171,7 +171,11 @@ export function FormulaPredictionPage() {
   const registeredTargets = availableTargets.filter((target) => target.registered)
   useEffect(() => {
     if (!materials.length) return
-    setMaterialRatios((current) => Object.keys(current).length ? current : Object.fromEntries(materials.slice(0, 3).map((material) => [material.materialId, targetTotal / Math.min(3, materials.length)])))
+    // Do not invent a starting recipe.  The previous UI filled the first three
+    // materials with equal shares, which looked like customer-provided data and
+    // made the total appear valid while the remaining materials were blank.
+    // Leave all ratios empty until the user deliberately enters them.
+    setMaterialRatios((current) => Object.keys(current).length ? current : Object.fromEntries(materials.map((material) => [material.materialId, undefined])))
     setMaterialModes((current) => Object.keys(current).length ? current : Object.fromEntries(materials.map((material) => [material.materialId, 'VARIABLE'])))
     setMaterialBounds((current) => Object.keys(current).length ? current : Object.fromEntries(materials.map((material) => [material.materialId, { minimum: 0, maximum: targetTotal }])))
     setInputs((current) => Object.keys(current).length ? current : Object.fromEntries((context?.requiredInputs ?? []).map((field) => [field.code, field.valueType === 'NUMBER' ? 25 : ''])))

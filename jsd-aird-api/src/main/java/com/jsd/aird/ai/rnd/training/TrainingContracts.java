@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 public final class TrainingContracts {
@@ -12,6 +13,8 @@ public final class TrainingContracts {
     public record TrainingSettings(boolean autoLearningEnabled, Instant lastEvaluatedAt,
                                    long revision, Instant updatedAt) { }
     public record UpdateTrainingSettings(boolean autoLearningEnabled, long expectedRevision) { }
+    /** Optional per-target sample selection for a manual training request. Empty means all eligible samples. */
+    public record EvaluateCommand(Map<UUID, List<UUID>> selectedSampleRevisionIdsByTarget) { }
     public record EvaluateResult(int targetsChecked, int jobsCreated, int blocked,
                                  List<TargetEvaluation> targets) { }
     public record TargetEvaluation(UUID targetId, String targetName, String result, String code,

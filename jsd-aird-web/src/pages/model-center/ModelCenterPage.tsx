@@ -1,7 +1,7 @@
 import { Button, Space, Tabs, Typography } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
 import { useCallback, useEffect, useMemo } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 
 import { useAuthStore } from '@/stores/auth-store'
 import { ModelManagementPage } from '@/pages/model-management'
@@ -12,6 +12,7 @@ const { Title, Text } = Typography
 
 export function ModelCenterPage() {
   const [searchParams, setSearchParams] = useSearchParams()
+  const navigate = useNavigate()
   const canModels = useAuthStore((state) => state.can('ai.model.read'))
   const canSettings = useAuthStore((state) => state.can('ai.modeling.read'))
   const canManageSettings = useAuthStore((state) => state.can('ai.modeling.manage'))
@@ -33,13 +34,19 @@ export function ModelCenterPage() {
   }, [searchParams, setSearchParams])
 
   useEffect(() => {
+    // Target configuration is a full-page workflow. Keep old deep links working
+    // by redirecting the previous query-string form to the page route.
+    if (targetId && requestedTab === 'settings') {
+      navigate(`/assistant/model-center/targets/${encodeURIComponent(targetId)}`, { replace: true })
+      return
+    }
     if (action === 'create-target' && canSettings && requestedTab !== 'settings') { update({ tab: 'settings' }); return }
     if (!requestedTab || (requestedTab === 'models' && canModels) || (requestedTab === 'settings' && canSettings)) return
     update({ tab: activeTab })
-  }, [action, activeTab, canModels, canSettings, requestedTab, update])
+  }, [action, activeTab, canModels, canSettings, navigate, requestedTab, targetId, update])
 
   const openCreateTarget = () => update({ tab: 'settings', action: 'create-target', targetId: undefined })
-  const openSettings = (id: string) => update({ tab: 'settings', targetId: id, action: undefined })
+  const openSettings = (id: string) => navigate(`/assistant/model-center/targets/${encodeURIComponent(id)}`)
   const openModels = (id?: string) => update({ tab: 'models', targetId: id, action: undefined })
   const setTab = (key: string) => update({ tab: key, action: undefined })
   const setView = (view: 'models' | 'jobs') => update({ view })

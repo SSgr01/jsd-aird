@@ -16,7 +16,7 @@ public class TrainingController {
     public TrainingController(TrainingService service){this.service=service;}
     @GetMapping("/training-settings") public ApiResponse<?> settings(){return ok(service.settings());}
     @PutMapping("/training-settings") public ApiResponse<?> updateSettings(@RequestBody UpdateTrainingSettings body,@RequestHeader("Idempotency-Key") String key){return ok(service.updateSettings(body,key));}
-    @PostMapping("/training-jobs/evaluate") public ApiResponse<?> evaluate(@RequestHeader("Idempotency-Key") String key){return ok(service.evaluateAll(key));}
+    @PostMapping("/training-jobs/evaluate") public ApiResponse<?> evaluate(@RequestBody(required = false) EvaluateCommand body,@RequestHeader("Idempotency-Key") String key){return ok(service.evaluateAll(key, body == null ? new EvaluateCommand(java.util.Map.of()) : body));}
     @GetMapping("/training-jobs") public ApiResponse<?> jobs(@RequestParam(required=false)String status,@RequestParam(required=false)String keyword,@RequestParam(defaultValue="1")int page,@RequestParam(defaultValue="20")int size){return ok(service.jobs(status,keyword,page,size));}
     @GetMapping("/training-jobs/{id}") public ApiResponse<?> job(@PathVariable UUID id){return ok(service.job(id));}
     @PostMapping("/training-jobs/{id}/retry") public ApiResponse<?> retry(@PathVariable UUID id,@RequestBody RetryCommand body,@RequestHeader("Idempotency-Key") String key){return ok(service.retry(id,body,key));}

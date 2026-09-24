@@ -233,7 +233,8 @@ public class EligibilityRepository {
                               WHERE i.organization_id=s.organization_id
                                 AND (i.training_sample_id=s.id OR i.left_sample_source_id=src.id
                                      OR i.right_sample_source_id=src.id)
-                                AND i.status='OPEN') identity_conflict
+                                AND i.status='OPEN'
+                                AND i.issue_type<>'SIMILAR_SOURCE') identity_conflict
                 FROM ai.training_sample s
                 JOIN ai.sample_revision r ON r.organization_id=s.organization_id
                     AND r.id=s.current_sample_revision_id AND r.status='CURRENT'
@@ -349,11 +350,12 @@ public class EligibilityRepository {
                 """, rs -> { var result=new LinkedHashMap<String,Long>(); while(rs.next()) result.put(rs.getString(1),rs.getLong(2)); return result; }, organizationId, runId);
     }
 
-    public PageResponse<EligibilityRow> page(UUID organizationId, UUID targetVersionId, UUID inputSchemeId,
+    public PageResponse<EligibilityRow> page(UUID organizationId, UUID evaluationRunId,
+                                             UUID targetVersionId, UUID inputSchemeId,
                                              String state, String reasonCode, String sourceType,
                                              String keyword, int page, int size) {
-        var where=new StringBuilder(" WHERE e.organization_id=? AND e.target_version_id=? AND e.input_scheme_id=?");
-        var args=new ArrayList<Object>(List.of(organizationId,targetVersionId,inputSchemeId));
+        var where=new StringBuilder(" WHERE e.organization_id=? AND e.evaluation_run_id=? AND e.target_version_id=? AND e.input_scheme_id=?");
+        var args=new ArrayList<Object>(List.of(organizationId,evaluationRunId,targetVersionId,inputSchemeId));
         if(state!=null&&!state.isBlank()){where.append(" AND e.state=?");args.add(state);}
         if(sourceType!=null&&!sourceType.isBlank()){where.append(" AND s.authority_source_type=?");args.add(sourceType);}
         if(keyword!=null&&!keyword.isBlank()){where.append(" AND lower(s.logical_sample_key) LIKE lower(?)");args.add("%"+keyword.strip()+"%");}
@@ -365,10 +367,29 @@ public class EligibilityRepository {
                 """+where,Long.class,args.toArray());
         var queryArgs=new ArrayList<>(args);queryArgs.add(size);queryArgs.add((page-1)*size);
         var rows=jdbc.query("""
-                SELECT e.*,s.logical_sample_key,s.authority_source_type
+                SELECT e.*,s.logical_sample_key,s.authority_source_type,
+                       jsonb_build_object(
+                         'sampleId',s.id,
+                         'logicalSampleKey',s.logical_sample_key,
+                         'status',s.status,
+                         'authoritySourceType',s.authority_source_type,
+                         'revisionId',r.id,
+                         'revisionNo',r.revision_no,
+                         'composition',r.composition_jsonb,
+                         'process',r.process_jsonb,
+                         'conditions',r.conditions_jsonb,
+                         'observations',r.observations_jsonb,
+                         'facts',r.facts_jsonb,
+                         'sourceCoordinates',r.source_coordinates_jsonb,
+                         'sourceType',src.source_type,
+                         'sourceBusinessKey',src.source_business_key,
+                         'sourceGroupKeys',src.source_group_keys_jsonb,
+                         'targetEvidence',e.evidence_jsonb
+                       ) sample_jsonb
                 FROM ai.training_eligibility e
                 JOIN ai.sample_revision r ON r.organization_id=e.organization_id AND r.id=e.sample_revision_id
                 JOIN ai.training_sample s ON s.organization_id=r.organization_id AND s.current_sample_revision_id=r.id
+                JOIN ai.sample_source src ON src.organization_id=r.organization_id AND src.id=r.sample_source_id
                 """+where+" ORDER BY e.evaluated_at DESC,e.id LIMIT ? OFFSET ?",this::eligibilityRow,queryArgs.toArray());
         long count=total==null?0:total;return new PageResponse<>(rows,page,size,count,count==0?0:(count+size-1)/size);
     }
@@ -449,7 +470,7 @@ public class EligibilityRepository {
                 rs.getString("error_code"),rs.getString("error_message"));
     }
     private SampleRow sampleRow(ResultSet rs,int ignored)throws java.sql.SQLException{return new SampleRow(rs.getObject("sample_id",UUID.class),rs.getString("logical_sample_key"),rs.getString("sample_status"),rs.getString("authority_source_type"),rs.getObject("revision_id",UUID.class),rs.getInt("revision_no"),node(rs,"composition_jsonb"),node(rs,"process_jsonb"),node(rs,"conditions_jsonb"),node(rs,"observations_jsonb"),node(rs,"facts_jsonb"),node(rs,"source_coordinates_jsonb"),rs.getString("source_type"),rs.getString("source_status"),rs.getBoolean("identity_conflict"));}
-    private EligibilityRow eligibilityRow(ResultSet rs,int ignored)throws java.sql.SQLException{var reasons=reasonList(node(rs,"reasons_jsonb"));var warnings=reasonList(node(rs,"warnings_jsonb"));return new EligibilityRow(rs.getObject("id",UUID.class),rs.getObject("evaluation_run_id",UUID.class),rs.getObject("sample_revision_id",UUID.class),rs.getObject("target_version_id",UUID.class),rs.getObject("input_scheme_id",UUID.class),State.valueOf(rs.getString("state")),reasons.isEmpty()?null:reasons.getFirst().code(),reasons,warnings,rs.getString("logical_sample_key"),rs.getString("authority_source_type"),rs.getLong("revision"),instant(rs.getTimestamp("evaluated_at")));}
+    private EligibilityRow eligibilityRow(ResultSet rs,int ignored)throws java.sql.SQLException{var reasons=reasonList(node(rs,"reasons_jsonb"));var warnings=reasonList(node(rs,"warnings_jsonb"));return new EligibilityRow(rs.getObject("id",UUID.class),rs.getObject("evaluation_run_id",UUID.class),rs.getObject("sample_revision_id",UUID.class),rs.getObject("target_version_id",UUID.class),rs.getObject("input_scheme_id",UUID.class),State.valueOf(rs.getString("state")),reasons.isEmpty()?null:reasons.getFirst().code(),reasons,warnings,rs.getString("logical_sample_key"),rs.getString("authority_source_type"),node(rs,"sample_jsonb"),rs.getLong("revision"),instant(rs.getTimestamp("evaluated_at")));}
     private Eligibility eligibility(ResultSet rs,int ignored)throws java.sql.SQLException{var reasons=reasonList(node(rs,"reasons_jsonb"));return new Eligibility(rs.getObject("id",UUID.class),rs.getObject("evaluation_run_id",UUID.class),rs.getObject("sample_revision_id",UUID.class),rs.getObject("target_version_id",UUID.class),rs.getObject("input_scheme_id",UUID.class),State.valueOf(rs.getString("state")),reasons.isEmpty()?null:reasons.getFirst().code(),reasons,reasonList(node(rs,"warnings_jsonb")),node(rs,"evidence_jsonb"),rs.getLong("revision"),instant(rs.getTimestamp("evaluated_at")));}
     private Review review(ResultSet rs,int ignored)throws java.sql.SQLException{return new Review(rs.getObject("id",UUID.class),rs.getString("review_type"),rs.getString("reason_code"),rs.getString("status"),rs.getShort("priority"),node(rs,"evidence_jsonb"),rs.getLong("revision"),instant(rs.getTimestamp("created_at")),instant(rs.getTimestamp("updated_at")));}
     private ReviewRow reviewRow(ResultSet rs,int ignored)throws java.sql.SQLException{return new ReviewRow(rs.getObject("id",UUID.class),rs.getObject("eligibility_id",UUID.class),rs.getString("review_type"),rs.getString("reason_code"),rs.getString("status"),rs.getLong("revision"),node(rs,"evidence_jsonb"));}

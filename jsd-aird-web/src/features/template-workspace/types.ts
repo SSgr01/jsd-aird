@@ -294,6 +294,12 @@ export interface TemplateWorkspace {
   templateId: string;
   versionId: string;
   recognitionRunId?: string;
+  origin?: {
+    type: 'EXPERIMENT' | string;
+    experimentId?: string;
+    experimentNo?: string;
+    experimentTitle?: string;
+  };
   templateCode: string;
   name: string;
   format: TemplateFormat;
@@ -473,6 +479,10 @@ export interface EditorHandle {
   focusCell?(sheetId: string, address: string): void;
   focusRange?(sheetId: string, address: string): void;
   writeCell?(sheetId: string, address: string, value: unknown): Promise<void>;
+  clearRangeConstants?(sheetId: string, address: string): Promise<{
+    cleared: number;
+    formulasKept: number;
+  }>;
   focusNode?(node: DocumentStructureNode): void;
   appendRepeatRecord?(binding: TemplateBinding): Promise<void>;
   applyCellPatch?(patch: Record<string, unknown>): Promise<void>;

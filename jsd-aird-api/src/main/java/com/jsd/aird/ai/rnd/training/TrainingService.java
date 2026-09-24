@@ -66,13 +66,23 @@ public class TrainingService {
 
     @Transactional
     public EvaluateResult evaluateAll(String key){
-        return idempotent("EVALUATE_TRAINING_TARGETS",key,Map.of("scope","ALL_READY_TARGETS"),EvaluateResult.class,this::doEvaluateAll);
+        return evaluateAll(key, new EvaluateCommand(Map.of()));
     }
 
-    private EvaluateResult doEvaluateAll(){
+    @Transactional
+    public EvaluateResult evaluateAll(String key, EvaluateCommand command){
+        var request = command == null ? new EvaluateCommand(Map.of()) : command;
+        return idempotent("EVALUATE_TRAINING_TARGETS",key,request,EvaluateResult.class,() -> doEvaluateAll(request));
+    }
+
+    private EvaluateResult doEvaluateAll(EvaluateCommand command){
         var a=actor();var results=new ArrayList<TargetEvaluation>();int created=0,blocked=0;
-        for(var target:repository.candidateTargets(a.organizationId())){
-            var result=schedule(a.organizationId(),a.userId(),target,false);results.add(result);
+        var candidates = repository.candidateTargets(a.organizationId());
+        if(command.selectedSampleRevisionIdsByTarget() != null && !command.selectedSampleRevisionIdsByTarget().isEmpty())
+            candidates = candidates.stream().filter(target -> command.selectedSampleRevisionIdsByTarget().containsKey(target.targetId())).toList();
+        for(var target:candidates){
+            var requested = command.selectedSampleRevisionIdsByTarget() == null ? List.<UUID>of() : command.selectedSampleRevisionIdsByTarget().getOrDefault(target.targetId(), List.of());
+            var result=schedule(a.organizationId(),a.userId(),target,false,requested == null ? Set.of() : new HashSet<>(requested));results.add(result);
             if("QUEUED".equals(result.result()))created++;else blocked++;
         }
         repository.touchEvaluation(a.organizationId());
@@ -87,11 +97,16 @@ public class TrainingService {
         var user=repository.jdbc().query("SELECT id FROM iam.app_user WHERE organization_id=? ORDER BY created_at,id LIMIT 1",
                 (rs,n)->rs.getObject(1,UUID.class),organizationId).stream().findFirst().orElse(null);
         if(user==null)return new TargetEvaluation(targetId,target.targetName(),"BLOCKED","ACTOR_NOT_AVAILABLE",null,null);
-        return schedule(organizationId,user,target,automatic);
+        return schedule(organizationId,user,target,automatic,Set.of());
     }
 
     @Transactional
     public TargetEvaluation schedule(UUID org,UUID user,CandidateTarget target,boolean automatic){
+        return schedule(org,user,target,automatic,Set.of());
+    }
+
+    @Transactional
+    public TargetEvaluation schedule(UUID org,UUID user,CandidateTarget target,boolean automatic,Set<UUID> selectedSampleRevisionIds){
         if(target.eligibilityRunId()==null)return blocked(org,target,"ELIGIBILITY_NOT_EVALUATED");
         if(target.dictionaryId()==null)return blocked(org,target,"MATERIAL_DICTIONARY_REQUIRED");
         var policyIssues=TrainingPolicyRules.validate(target.valueType(),target.qualification(),target.validation(),target.training());
@@ -99,6 +114,8 @@ public class TrainingService {
         if(automatic&&(!repository.settings(org).autoLearningEnabled()||!target.training().path("autoTrainingEnabled").asBoolean(false)))
             return blocked(org,target,"AUTO_TRAINING_DISABLED");
         var samples=repository.eligibleSamples(org,target.eligibilityRunId());
+        if(selectedSampleRevisionIds != null && !selectedSampleRevisionIds.isEmpty())
+            samples=samples.stream().filter(sample -> selectedSampleRevisionIds.contains(sample.revisionId())).toList();
         var gate=sampleGate(target,samples);if(gate!=null)return blocked(org,target,gate);
         var config=repository.frozenConfig(org,target);if(config.dictionary()==null)return blocked(org,target,"MATERIAL_DICTIONARY_NOT_FROZEN");
         var rows=rows(target,samples);

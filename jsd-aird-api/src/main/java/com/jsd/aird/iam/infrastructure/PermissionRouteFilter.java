@@ -132,6 +132,8 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
         // Experiment routes can be nested under a project task, so check them before the project prefix.
         if (path.startsWith("/api/v1/experiments") || path.startsWith("/api/v1/experiment-categories")
                 || path.contains("/experiments/") || path.endsWith("/experiments")) {
+            if (method.equals("POST") && path.matches("/api/v1/experiments/[0-9a-f-]{36}/template-drafts"))
+                return permission("experiment.view", "EXPERIMENT", "READ");
             if (read) return permission("experiment.view", "EXPERIMENT", "READ");
             if (path.contains("/submit-review")) return permission("experiment.submit", "EXPERIMENT", "WRITE");
             if (path.contains("/approve")) return permission("experiment.approve", "EXPERIMENT", "WRITE");

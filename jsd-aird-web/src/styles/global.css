@@ -3108,6 +3108,28 @@ a:active,
   font-size: 14px;
 }
 
+.template-business-workspace .template-cleanup-strip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  background: #fffaf0;
+  border-bottom: 1px solid #f1dfb5;
+}
+
+.template-business-workspace .template-origin-warning {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 10px;
+  border: 0;
+  background: transparent;
+}
+
+.template-business-workspace .template-cleanup-actions {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .template-business-workspace .recognition-status-bar {
   min-height: 48px;
   gap: 10px;
@@ -5169,6 +5191,7 @@ a:active,
   font-variant-numeric: tabular-nums;
 }
 .ai-conversation-main {
+  position: relative;
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
   min-width: 0;
@@ -5296,6 +5319,25 @@ a:active,
 .ai-message-user .ai-message-meta {
   text-align: right;
 }
+.ai-message-user-heading {
+  display: flex;
+  min-height: 28px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.ai-message-edit-button {
+  opacity: 0;
+  color: var(--app-text-secondary);
+  transition: opacity 160ms ease;
+}
+
+.ai-message-user:hover .ai-message-edit-button,
+.ai-message-user:focus-within .ai-message-edit-button {
+  opacity: 1;
+}
+
 .ai-message-user .ai-message-body {
   padding: 14px 18px;
   border: 1px solid #d8e3fb;
@@ -5304,6 +5346,42 @@ a:active,
   box-shadow: 0 6px 18px rgb(49 92 246 / 5%);
   font-size: var(--app-font-size-base);
   line-height: 1.7;
+}
+.ai-message-editor {
+  display: grid;
+  width: min(680px, 52vw);
+  max-width: 100%;
+  gap: 10px;
+}
+
+.ai-message-editor .ant-input {
+  border-color: color-mix(in srgb, var(--app-primary) 44%, var(--app-border));
+  border-radius: 10px;
+  line-height: 1.7;
+}
+
+.ai-message-editor-actions {
+  justify-content: flex-end;
+}
+
+.ai-conversation-jump-latest {
+  position: absolute;
+  z-index: 5;
+  right: clamp(28px, 3vw, 54px);
+  bottom: 174px;
+  width: 42px;
+  height: 42px;
+  color: var(--app-primary);
+  border-color: #d8e3fb;
+  background: rgb(255 255 255 / 96%);
+  box-shadow: 0 10px 28px rgb(36 68 116 / 18%);
+}
+
+.ai-conversation-jump-latest:hover,
+.ai-conversation-jump-latest:focus-visible {
+  color: #fff;
+  border-color: var(--app-primary);
+  background: var(--app-primary);
 }
 .ai-thinking {
   display: inline-flex;
@@ -5584,6 +5662,42 @@ a:active,
 .spectrum-result-validation {
   display: grid;
   gap: 8px;
+}
+.spectrum-result-v3-section {
+  display: grid;
+  gap: 8px;
+}
+.spectrum-result-v3-section ul,
+.spectrum-result-v3-section ol {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 22px;
+  color: var(--app-text);
+  line-height: 1.65;
+}
+.spectrum-result-assessment {
+  display: grid;
+  gap: 10px;
+  padding: 13px 14px;
+  border: 1px solid color-mix(in srgb, var(--app-primary) 16%, var(--app-border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--app-primary) 3%, var(--app-surface));
+}
+.spectrum-result-assessment-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+}
+.spectrum-result-assessment-item {
+  display: grid;
+  gap: 3px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  background: var(--app-surface);
+}
+.spectrum-result-assessment-item .ant-typography-secondary {
+  font-size: var(--app-font-size-caption);
 }
 .spectrum-result-key-points ul,
 .spectrum-result-validation ol {
@@ -6206,6 +6320,16 @@ a:active,
   align-items: center;
   gap: 8px;
 }
+.spectrum-composer-intent {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 12px;
+  border-right: 1px solid var(--app-border);
+}
+.spectrum-composer-intent .ant-select {
+  min-width: 154px;
+}
 .spectrum-composer-selection-label {
   flex: 0 0 auto;
   color: var(--app-text-secondary);
@@ -6358,6 +6482,12 @@ a:active,
   .ai-message-user .ai-message-content {
     max-width: 84%;
   }
+  .ai-message-edit-button {
+    opacity: 1;
+  }
+  .ai-message-editor {
+    width: min(76vw, 620px);
+  }
   .ai-message-assistant {
     padding-top: 22px;
   }
@@ -6397,6 +6527,10 @@ a:active,
   }
   .ai-conversation-composer-row .ant-input {
     min-height: 64px;
+  }
+  .ai-conversation-jump-latest {
+    right: 18px;
+    bottom: 154px;
   }
   .spectrum-composer-selection {
     gap: 6px;

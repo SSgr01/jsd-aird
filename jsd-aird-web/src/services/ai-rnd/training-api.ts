@@ -1,6 +1,6 @@
 import { httpClient } from '@/services/http/client'
 import { generateUUID } from '@/utils/uuid'
-import type { ModelActionCommand, ModelActionResult, ModelComparison, ModelDetail, ModelVersion, Page, TrainingEvaluationResult, TrainingJobDetail, TrainingJobSummary, TrainingSettings } from './ai-rnd-types'
+import type { ModelActionCommand, ModelActionResult, ModelComparison, ModelDetail, ModelVersion, Page, TrainingEvaluationCommand, TrainingEvaluationResult, TrainingJobDetail, TrainingJobSummary, TrainingSettings } from './ai-rnd-types'
 
 interface ApiResponse<T> { data: T }
 const root = '/api/v1/ai/rnd'
@@ -10,7 +10,7 @@ const key = () => ({ headers: { 'Idempotency-Key': generateUUID() } })
 export const trainingApi = {
   async settings() { return data(await httpClient.get<ApiResponse<TrainingSettings>>(`${root}/training-settings`)) },
   async updateSettings(input: { autoLearningEnabled: boolean; expectedRevision: number }) { return data(await httpClient.put<ApiResponse<TrainingSettings>>(`${root}/training-settings`, input, key())) },
-  async evaluate() { return data(await httpClient.post<ApiResponse<TrainingEvaluationResult>>(`${root}/training-jobs/evaluate`, undefined, key())) },
+  async evaluate(command: TrainingEvaluationCommand = {}) { return data(await httpClient.post<ApiResponse<TrainingEvaluationResult>>(`${root}/training-jobs/evaluate`, command, key())) },
   async jobs(params: { status?: string; keyword?: string; page?: number; size?: number } = {}) { return data(await httpClient.get<ApiResponse<Page<TrainingJobSummary>>>(`${root}/training-jobs`, { params })) },
   async job(id: string) { return data(await httpClient.get<ApiResponse<TrainingJobDetail>>(`${root}/training-jobs/${id}`)) },
   async retry(id: string, expectedRevision: number) { return data(await httpClient.post<ApiResponse<unknown>>(`${root}/training-jobs/${id}/retry`, { expectedRevision }, key())) },

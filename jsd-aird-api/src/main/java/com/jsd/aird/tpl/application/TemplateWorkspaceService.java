@@ -35,6 +35,9 @@ import com.jsd.aird.tpl.domain.TemplateStatus;
 import com.jsd.aird.tpl.application.port.BlankWordDocumentFactory;
 import com.jsd.aird.tpl.application.port.WordOoxmlPatcher;
 import com.jsd.aird.tpl.application.port.WordDocumentParser;
+import com.jsd.aird.rnd.application.port.ExperimentRepository;
+import com.jsd.aird.rnd.domain.ExperimentStatus;
+import com.jsd.aird.rnd.domain.ExperimentModels.Detail;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -65,6 +68,7 @@ public class TemplateWorkspaceService {
     private final WordOoxmlPatcher wordOoxmlPatchService;
     private final WordDocumentParser wordDocumentParser;
     private final TemplateImportContractCompiler importContractCompiler;
+    private final ExperimentRepository experimentRepository;
     private final TransactionTemplate transactionTemplate;
     private final String storageBucket;
 
@@ -84,6 +88,7 @@ public class TemplateWorkspaceService {
             WordOoxmlPatcher wordOoxmlPatchService,
             WordDocumentParser wordDocumentParser,
             TemplateImportContractCompiler importContractCompiler,
+            ExperimentRepository experimentRepository,
             PlatformTransactionManager transactionManager,
             @Value("${app.storage.bucket}") String storageBucket
     ) {
@@ -102,6 +107,7 @@ public class TemplateWorkspaceService {
         this.wordOoxmlPatchService = wordOoxmlPatchService;
         this.wordDocumentParser = wordDocumentParser;
         this.importContractCompiler = importContractCompiler;
+        this.experimentRepository = experimentRepository;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
         this.storageBucket = storageBucket;
     }
@@ -410,6 +416,146 @@ public class TemplateWorkspaceService {
         return get(versionId);
     }
 
+    /**
+     * Creates a template draft by copying the experiment's current persisted
+     * editor snapshot. This path intentionally does not invoke recognition or
+     * infer any fields from the copied document.
+     */
+    @Transactional
+    public TemplateRepository.TemplateWorkspace createFromExperiment(
+            UUID experimentId, String requestedName, UUID categoryId) {
+        var actor = ActorContext.required();
+        authorizationService.require(new PermissionCheck(
+                actor.organizationId(), actor.userId(), "experiment.view", "EXPERIMENT", experimentId, "READ"));
+        authorizationService.require(new PermissionCheck(
+                actor.organizationId(), actor.userId(), "template.create", "TEMPLATE", null, "WRITE"));
+        if (experimentRepository == null) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "实验模板复制服务未配置");
+        }
+
+        var experiment = experimentRepository.detail(actor.organizationId(), experimentId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "实验不存在"));
+        if (experiment.summary().status() == ExperimentStatus.VOIDED) {
+            throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN, "作废实验不支持另存为模板");
+        }
+        var name = trimToNull(requestedName);
+        if (name == null) throw new ApiException(ApiErrorCode.BAD_REQUEST, "模板名称不能为空");
+        if (name.length() > 160) throw new ApiException(ApiErrorCode.BAD_REQUEST, "模板名称不能超过 160 个字符");
+        var category = categoryId == null
+                ? null
+                : repository.findCategory(actor.organizationId(), categoryId)
+                        .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "模板分类不存在"));
+        if (category == null) throw new ApiException(ApiErrorCode.BAD_REQUEST, "请选择模板分类");
+
+        var format = experimentFormat(experiment.editModel());
+        var snapshot = currentExperimentSnapshot(experiment);
+        if (snapshot == null || !snapshot.isObject() || snapshot.isEmpty()) {
+            throw new ApiException(ApiErrorCode.FILE_NOT_READY, "当前实验没有可复制的文档内容");
+        }
+
+        var templateId = UUID.randomUUID();
+        var versionId = UUID.randomUUID();
+        var code = "TPL-" + LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE)
+                + "-" + templateId.toString().substring(0, 6).toUpperCase(Locale.ROOT);
+        var schema = blankSchema(code);
+        var mapping = objectMapper.createArrayNode();
+        var data = objectMapper.createObjectNode();
+        var layout = objectMapper.createObjectNode();
+        layout.set("initialSnapshot", snapshot.deepCopy());
+        layout.set("origin", objectMapper.createObjectNode()
+                .put("type", "EXPERIMENT")
+                .put("experimentId", experiment.summary().id().toString())
+                .put("experimentNo", experiment.summary().experimentNo())
+                .put("experimentTitle", experiment.summary().title()));
+
+        UUID stagedWordFileId = null;
+        if (format == TemplateFormat.DOCX) {
+            try {
+                var base = experimentWordBase(experiment, actor);
+                var patched = wordOoxmlPatchService.applySnapshot(base, snapshot);
+                var parsed = wordDocumentParser.parse(new ByteArrayInputStream(patched));
+                var documentStructure = parsed.structureSummary().path("documentIR").deepCopy();
+                var staged = stageWordDocument(patched, name, actor);
+                stagedWordFileId = staged.id();
+                layout.set("documentStructure", documentStructure);
+                layout.set("wordDocument", wordDocument(staged.id(), staged.sha256(), documentStructure));
+            } catch (ApiException exception) {
+                throw exception;
+            } catch (Exception exception) {
+                throw new ApiException(ApiErrorCode.SNAPSHOT_PERSIST_FAILED, "Word 模板底稿复制失败");
+            }
+        }
+
+        var schemaHash = canonicalizer.hash(schema);
+        var mappingHash = canonicalizer.hash(mapping);
+        var dataHash = canonicalizer.hash(data);
+        var snapshotHash = canonicalizer.hash(snapshot);
+        var pluginHash = canonicalizer.hashText(PLUGIN_MANIFEST);
+        var workspaceHash = canonicalizer.workspaceHash(
+                versionId.toString(), schema, mapping, data, snapshotHash, EDITOR_APP_VERSION, pluginHash);
+        repository.insertTemplate(new TemplateRepository.NewTemplate(
+                templateId, actor.organizationId(), code, name, category.name(), format, actor.userId()));
+        repository.insertVersion(new TemplateRepository.NewVersion(
+                versionId, templateId, schema, layout, format.snapshotKind(), EDITOR_APP_VERSION,
+                pluginHash, schemaHash, mappingHash, dataHash, workspaceHash, actor.userId()));
+        repository.replaceMappings(versionId, format, mapping);
+        if (stagedWordFileId != null) requestFileActivation(stagedWordFileId);
+        repository.appendAudit(actor.organizationId(), actor.userId(), "TEMPLATE_DRAFT_CREATED_FROM_EXPERIMENT",
+                "TEMPLATE_VERSION", versionId, objectMapper.createObjectNode()
+                        .put("experimentId", experimentId.toString())
+                        .put("format", format.name()));
+        return get(versionId);
+    }
+
+    private TemplateFormat experimentFormat(JsonNode editModel) {
+        var value = editModel == null ? "" : editModel.path("documentFormat").asText("");
+        if ("word".equalsIgnoreCase(value) || "docx".equalsIgnoreCase(value)) return TemplateFormat.DOCX;
+        if ("excel".equalsIgnoreCase(value) || "xlsx".equalsIgnoreCase(value)) return TemplateFormat.XLSX;
+        throw new ApiException(ApiErrorCode.BAD_REQUEST, "当前实验文档格式不支持另存为模板");
+    }
+
+    private JsonNode currentExperimentSnapshot(Detail experiment) {
+        var saved = experiment.editModel() == null ? null : experiment.editModel().path("documentSnapshot");
+        if (saved != null && saved.isObject() && !saved.isEmpty()) return saved;
+        var template = experiment.templateSnapshot();
+        return template != null && template.isObject() && !template.isEmpty() ? template : null;
+    }
+
+    private byte[] experimentWordBase(Detail experiment, Actor actor) throws Exception {
+        UUID sourceFileId = experiment.sourceFileId();
+        if (sourceFileId == null) {
+            sourceFileId = uuidFrom(experiment.editModel() == null
+                    ? null : experiment.editModel().path("sourceFileId"));
+        }
+        if (sourceFileId == null && experiment.templateVersionId() != null) {
+            var sourceTemplate = repository.findWorkspace(actor.organizationId(), experiment.templateVersionId())
+                    .orElse(null);
+            sourceFileId = uuidFrom(sourceTemplate == null ? null
+                    : sourceTemplate.wordDocument().path("workingDocxFileId"));
+            if (sourceFileId == null && sourceTemplate != null) {
+                sourceFileId = uuidFrom(sourceTemplate.wordDocument().path("sourceDocxFileId"));
+            }
+        }
+        if (sourceFileId != null) {
+            var source = fileRepository.find(actor.organizationId(), sourceFileId)
+                    .orElseThrow(() -> new ApiException(ApiErrorCode.FILE_NOT_READY, "Word 原生文档不存在"));
+            try (var stored = objectStorage.get(source.objectKey())) {
+                return stored.stream().readAllBytes();
+            }
+        }
+        return blankWordDocumentFactory.create(experiment.summary().title());
+    }
+
+    private UUID uuidFrom(JsonNode node) {
+        var value = node == null ? "" : node.asText("");
+        if (value.isBlank()) return null;
+        try {
+            return UUID.fromString(value);
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
+    }
+
     public TemplateRepository.TemplateWorkspace get(UUID versionId) {
         return repository.findWorkspace(ActorContext.required().organizationId(), versionId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "模板版本不存在"));
@@ -455,6 +601,7 @@ public class TemplateWorkspaceService {
         if (source.inlineSnapshot().isObject()) layout.set("initialSnapshot", source.inlineSnapshot().deepCopy());
         if (source.documentStructure().isObject()) layout.set("documentStructure", source.documentStructure().deepCopy());
         if (source.wordDocument().isObject()) layout.set("wordDocument", source.wordDocument().deepCopy());
+        if (source.origin() != null && source.origin().isObject()) layout.set("origin", source.origin().deepCopy());
         var workspaceHash = canonicalizer.workspaceHash(versionId.toString(), source.schema(), source.mapping(), data,
                 source.snapshotHash(), source.editorAppVersion(), source.pluginManifestHash());
         repository.insertTemplate(new TemplateRepository.NewTemplate(templateId, actor.organizationId(), code, name,
@@ -682,6 +829,7 @@ public class TemplateWorkspaceService {
             layoutSummary.set("documentStructure", documentStructure);
         }
         if (wordDocument != null) layoutSummary.set("wordDocument", wordDocument);
+        if (current.origin() != null && current.origin().isObject()) layoutSummary.set("origin", current.origin().deepCopy());
 
         var updated = repository.updateDraft(new TemplateRepository.DraftUpdate(
                 actor.organizationId(),
@@ -1503,6 +1651,7 @@ public class TemplateWorkspaceService {
                 .put("reconciliationRequired", source.reconciliationRequired())
                 .put("derivedFromVersionId", sourceVersionId.toString());
         if (source.documentStructure().isObject()) layoutSummary.set("documentStructure", source.documentStructure().deepCopy());
+        if (source.origin() != null && source.origin().isObject()) layoutSummary.set("origin", source.origin().deepCopy());
         if (source.wordDocument().isObject()) {
             var word = (ObjectNode) source.wordDocument().deepCopy();
             word.put("workingDocxFileId", word.path("publishedDocxFileId")

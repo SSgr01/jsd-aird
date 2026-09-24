@@ -34,7 +34,7 @@ public class SpectrumChatController {
     @PostMapping("/chat/messages")
     public ApiResponse<SpectrumChatService.SubmitView> submit(@Valid @RequestBody ChatRequest request) {
         return success(service.submit(new SpectrumChatService.ChatCommand(request.sessionId(), request.question(),
-                request.chartIds(), request.pageSelections(), request.scenarioTemplate())));
+                request.chartIds(), request.pageSelections(), request.analysisIntent(), request.scenarioTemplate())));
     }
 
     @GetMapping("/analysis-runs/{analysisId}")
@@ -53,5 +53,6 @@ public class SpectrumChatController {
 
     public record ChatRequest(UUID sessionId, @NotBlank @Size(max = 3000) String question,
                               @NotEmpty @Size(max = 12) List<UUID> chartIds,
-                              JsonNode pageSelections, @Size(max = 80) String scenarioTemplate) { }
+                              JsonNode pageSelections, @Size(max = 40) String analysisIntent,
+                              @Size(max = 80) String scenarioTemplate) { }
 }

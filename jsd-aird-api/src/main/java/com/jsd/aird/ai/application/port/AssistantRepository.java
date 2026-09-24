@@ -30,6 +30,9 @@ public interface AssistantRepository {
     default void updateMessageRetrievalTrace(UUID messageId, JsonNode retrievalTrace) {
     }
 
+    ConversationRewriteResult replaceQuestion(UUID organizationId, UUID conversationId, UUID targetMessageId,
+                                              UUID expectedLastMessageId, String replacementQuestion);
+
     List<MessageRow> recentMessages(UUID organizationId, UUID conversationId, int limit);
 
     default Optional<String> recentDataFileMention(UUID organizationId, UUID conversationId) {
@@ -61,6 +64,22 @@ public interface AssistantRepository {
     record MessageRow(UUID id, String role, String content, JsonNode citations) {
         public MessageRow(String role, String content) {
             this(null, role, content, null);
+        }
+    }
+
+    enum ConversationRewriteStatus {
+        UPDATED,
+        CONVERSATION_NOT_FOUND,
+        MESSAGE_NOT_FOUND,
+        TARGET_NOT_USER,
+        STALE_CONVERSATION
+    }
+
+    record ConversationRewriteResult(ConversationRewriteStatus status, UUID replacementMessageId,
+                                     int deletedMessageCount, boolean firstQuestionReplaced,
+                                     boolean automaticTitleReset) {
+        public static ConversationRewriteResult rejected(ConversationRewriteStatus status) {
+            return new ConversationRewriteResult(status, null, 0, false, false);
         }
     }
 

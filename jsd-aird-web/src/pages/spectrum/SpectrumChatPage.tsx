@@ -14,6 +14,7 @@ import {
   Empty,
   Input,
   Modal,
+  Select,
   Space,
   Spin,
   Tag,
@@ -31,6 +32,7 @@ import { FilePreviewModal, type FilePreviewDescriptor } from '@/components/file-
 import { MarkdownContent } from '@/components/markdown/MarkdownContent';
 import {
   spectrumApi,
+  type SpectrumAnalysisIntent,
   type SpectrumCategory,
   type SpectrumChart,
   type SpectrumMessage,
@@ -44,9 +46,20 @@ import {
   resolveSpectrumPresentation,
 } from './spectrum-result-presentation';
 
-const competitorQuestion = /竞品|单峰|叠加|可靠参考|明确归因|官能团|成分/;
 const wait = (milliseconds: number) =>
   new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+const intentOptions: { value: SpectrumAnalysisIntent; label: string }[] = [
+  { value: 'AUTO', label: '自动判断（保守）' },
+  { value: 'OVERVIEW', label: '整体概览' },
+  { value: 'PEAK_INTERPRETATION', label: '峰与特征解释' },
+  { value: 'SAMPLE_COMPARISON', label: '样品比较' },
+  { value: 'CONCENTRATION_CHECK', label: '浓度检查' },
+  { value: 'PURITY_CHECK', label: '纯度检查' },
+  { value: 'IDENTIFICATION', label: '样品鉴定' },
+  { value: 'REFERENCE_MAPPING', label: '参考谱对应' },
+  { value: 'METHOD_VALIDATION', label: '方法适用性' },
+  { value: 'ANOMALY_DIAGNOSIS', label: '异常诊断' },
+];
 const findingLabels: Record<SpectrumResultPresentation['primaryIntent'], string> = {
   ATTRIBUTION: '归因依据',
   COMPARISON: '主要差异',
@@ -278,19 +291,179 @@ function PeakMappingTable({ value }: { value: unknown }) {
   );
 }
 
-export function AssistantResult({
-  result,
-  fallbackContent,
-  warnings,
-  citations,
-  onPreview,
-}: {
+type AssistantResultProps = {
   result: SpectrumResult;
   fallbackContent?: string;
   warnings: string[];
   citations: SpectrumMessage['citations'];
   onPreview: (chartId: string) => void;
+};
+
+function CitationList({
+  citations,
+  onPreview,
+}: Pick<AssistantResultProps, 'citations' | 'onPreview'>) {
+  if (!citations.length) return null;
+  return (
+    <div className="spectrum-result-citations">
+      <Typography.Text strong>依据图谱</Typography.Text>
+      <div className="spectrum-result-citation-list">
+        {citations.map((item) => (
+          <div className="spectrum-result-citation-row" key={`${item.chartId}-${item.page}`}>
+            <FileImageOutlined aria-hidden="true" />
+            <button
+              type="button"
+              className="spectrum-result-citation-title"
+              onClick={() => onPreview(item.chartId)}
+            >
+              {item.title} · 第 {item.page} 页
+            </button>
+            <Button
+              size="small"
+              type="text"
+              icon={<EyeOutlined />}
+              onClick={() => onPreview(item.chartId)}
+            >
+              预览
+            </Button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function V3StringSection({
+  title,
+  values,
+  limit,
+  ordered = false,
+}: {
+  title: string;
+  values: string[];
+  limit?: number;
+  ordered?: boolean;
 }) {
+  const displayed = typeof limit === 'number' ? values.slice(0, limit) : values;
+  if (!displayed.length) return null;
+  const List = ordered ? 'ol' : 'ul';
+  return (
+    <section className="spectrum-result-v3-section">
+      <Typography.Text strong>{title}</Typography.Text>
+      <List>
+        {displayed.map((value, index) => (
+          <li key={`${title}-${index}`}>{value}</li>
+        ))}
+      </List>
+    </section>
+  );
+}
+
+function V3AssistantResult({ result, warnings, citations, onPreview }: AssistantResultProps) {
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const answer = result.answer || {
+    confirmed: [],
+    notConfirmed: [],
+    reasonableInference: [],
+    missingEvidence: [],
+    nextStep: [],
+  };
+  const details = result.details || {
+    confirmed: answer.confirmed,
+    reasonableInference: answer.reasonableInference,
+    limitations: answer.notConfirmed,
+  };
+  const failed = result.analysisStatus === 'FAILED';
+  const partial = result.analysisStatus === 'PARTIAL';
+  const hasMore =
+    details.confirmed.length > 4 ||
+    details.reasonableInference.length > 3 ||
+    details.limitations.length > 2;
+  useEffect(() => {
+    setDetailsOpen(false);
+  }, [result.answer]);
+
+  return (
+    <div className="spectrum-result-shell spectrum-result-v3">
+      {failed ? (
+        <Alert
+          type="error"
+          showIcon
+          message="图谱 AI 分析失败"
+          description={result.errorMessage || answer.notConfirmed[0] || '模型未返回有效分析结果，请重新分析。'}
+        />
+      ) : null}
+      {partial && warnings.length ? (
+        <Alert
+          type="warning"
+          showIcon
+          message="部分问题暂时无法确认"
+          description={warnings.join('；')}
+        />
+      ) : null}
+      {!failed && result.assessment?.items?.length ? (
+        <section className="spectrum-result-assessment">
+          <Typography.Text strong>{result.assessment.title}</Typography.Text>
+          <div className="spectrum-result-assessment-grid">
+            {result.assessment.items.map((item, index) => (
+              <div key={`${item.label}-${index}`} className="spectrum-result-assessment-item">
+                <Typography.Text type="secondary">{item.label}</Typography.Text>
+                <Typography.Text>{item.value}</Typography.Text>
+                {item.source ? <Typography.Text type="secondary">来源：{item.source}</Typography.Text> : null}
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+      {!failed ? <V3StringSection title="目前能确定" values={answer.confirmed} limit={4} /> : null}
+      {!failed ? (
+        <V3StringSection title="合理判断" values={answer.reasonableInference} limit={3} />
+      ) : null}
+      {!failed ? <V3StringSection title="暂不能确认" values={answer.notConfirmed} limit={2} /> : null}
+      {!failed ? <V3StringSection title="还需要" values={answer.missingEvidence} limit={4} /> : null}
+      {!failed ? <V3StringSection title="建议下一步" values={answer.nextStep} limit={3} ordered /> : null}
+      {!failed && hasMore ? (
+        <Collapse
+          className="spectrum-result-details"
+          ghost
+          activeKey={detailsOpen ? ['v3-details'] : []}
+          onChange={(keys) =>
+            setDetailsOpen((Array.isArray(keys) ? keys : [keys]).includes('v3-details'))
+          }
+          items={[
+            {
+              key: 'v3-details',
+              label: '查看完整分析',
+              children: (
+                <div className="spectrum-result-detail-body">
+                  <V3StringSection title="全部已确认内容" values={details.confirmed} />
+                  <V3StringSection title="全部合理判断" values={details.reasonableInference} />
+                  <V3StringSection title="全部限制" values={details.limitations} />
+                </div>
+              ),
+            },
+          ]}
+        />
+      ) : null}
+      <CitationList citations={citations} onPreview={onPreview} />
+    </div>
+  );
+}
+
+export function AssistantResult(props: AssistantResultProps) {
+  if (props.result.schemaVersion === 3 && props.result.answer) {
+    return <V3AssistantResult {...props} />;
+  }
+  return <LegacyAssistantResult {...props} />;
+}
+
+function LegacyAssistantResult({
+  result,
+  fallbackContent,
+  warnings,
+  citations,
+  onPreview,
+}: AssistantResultProps) {
   const failed = result.analysisStatus === 'FAILED';
   const partial = result.analysisStatus === 'PARTIAL';
   const presentation = resolveSpectrumPresentation(result, fallbackContent);
@@ -423,33 +596,7 @@ export function AssistantResult({
           ]}
         />
       ) : null}
-      {citations.length ? (
-        <div className="spectrum-result-citations">
-          <Typography.Text strong>依据图谱</Typography.Text>
-          <div className="spectrum-result-citation-list">
-            {citations.map((item) => (
-              <div className="spectrum-result-citation-row" key={`${item.chartId}-${item.page}`}>
-                <FileImageOutlined aria-hidden="true" />
-                <button
-                  type="button"
-                  className="spectrum-result-citation-title"
-                  onClick={() => onPreview(item.chartId)}
-                >
-                  {item.title} · 第 {item.page} 页
-                </button>
-                <Button
-                  size="small"
-                  type="text"
-                  icon={<EyeOutlined />}
-                  onClick={() => onPreview(item.chartId)}
-                >
-                  预览
-                </Button>
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
+      <CitationList citations={citations} onPreview={onPreview} />
     </div>
   );
 }
@@ -491,6 +638,7 @@ export function SpectrumChatPage() {
   const [messages, setMessages] = useState<SpectrumMessage[]>([]);
   const [selectedCharts, setSelectedCharts] = useState<string[]>([]);
   const [pageSelections, setPageSelections] = useState<Record<string, number[]>>({});
+  const [analysisIntent, setAnalysisIntent] = useState<SpectrumAnalysisIntent>('AUTO');
   const [scopeKeyword, setScopeKeyword] = useState('');
   const [question, setQuestion] = useState('');
   const [loading, setLoading] = useState(true);
@@ -550,6 +698,7 @@ export function SpectrumChatPage() {
       setActiveSessionId(session.id);
       setMessages([]);
       setQuestion('');
+      setAnalysisIntent('AUTO');
     } catch {
       setActiveSessionId(undefined);
     }
@@ -714,8 +863,18 @@ export function SpectrumChatPage() {
   );
 
   const composerTopContent = (
-    <div className="spectrum-composer-selection" aria-label="已选择的图谱">
-      <Typography.Text className="spectrum-composer-selection-label">本次分析图谱</Typography.Text>
+    <div className="spectrum-composer-selection" aria-label="分析设置与已选择的图谱">
+      <div className="spectrum-composer-intent">
+        <Typography.Text className="spectrum-composer-selection-label">分析目的</Typography.Text>
+        <Select
+          aria-label="分析目的"
+          value={analysisIntent}
+          options={intentOptions}
+          onChange={setAnalysisIntent}
+          popupMatchSelectWidth={false}
+        />
+      </div>
+      <Typography.Text className="spectrum-composer-selection-label">本次图谱</Typography.Text>
       <div className="spectrum-composer-selection-list">
         {selectedChartItems.length ? (
           selectedChartItems.map((item) => (
@@ -817,16 +976,13 @@ export function SpectrumChatPage() {
     };
     setStreamingAssistantId(optimisticAssistant.id);
     setMessages((current) => [...current, optimisticUser, optimisticAssistant]);
-    const scenarioTemplate = competitorQuestion.test(question)
-      ? 'COMPETITOR_DECOMPOSITION'
-      : undefined;
     try {
       const submitted = await spectrumApi.submitChat({
         sessionId: activeSessionId,
         question,
         chartIds: selectedCharts,
         pageSelections,
-        scenarioTemplate,
+        analysisIntent,
       });
       setActiveSessionId(submitted.sessionId);
       setQuestion('');

@@ -5,7 +5,9 @@ import java.security.MessageDigest;
 import java.sql.ResultSet;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -640,22 +642,94 @@ public class JdbcDataRepository implements DataRepository {
                     row.sheetId(), row.sheetName(), row.rowNumber(), pgJson(row.raw()),
                     pgJson(row.normalized()), pgJson(row.corrected()), pgJson(row.normalized()),
                     row.recordKey().startsWith("IMPORT:"));
+            var anchorIds = new HashMap<String, UUID>();
             for (Anchor anchor : row.anchors()) {
+                var anchorId = UUID.randomUUID();
                 jdbc.update("""
                     INSERT INTO data.source_anchor (
                             id, record_id, import_job_id, field_code, binding_id, value_path,
                             label_path, value_source, value_status, file_id, sheet_id, sheet_name,
                             row_number, column_number, column_name, cell_address, raw_value_jsonb
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, UUID.randomUUID(), recordId, importJobId, anchor.fieldCode(), anchor.bindingId(),
+                        """, anchorId, recordId, importJobId, anchor.fieldCode(), anchor.bindingId(),
                         anchor.valuePath(), anchor.labelPath(), anchor.valueSource(), anchor.valueStatus(),
                         job.sourceFileId(), anchor.sheetId(), anchor.sheetName(), anchor.rowNumber(),
                         anchor.columnNumber(), anchor.columnName(), anchor.address(), pgJson(anchor.rawValue()));
+                anchorIds.put(anchorKey(anchor.fieldCode(), anchor.bindingId(), anchor.valuePath()), anchorId);
             }
+            insertSearchValues(organizationId, recordId, row.normalized(), anchorIds);
             committedRecords.add(new CommittedRecord(recordId, row.recordKey(), dataHash));
         }
         updateJobStatus(organizationId, importJobId, "COMPLETED", 100, "COMPLETED", null);
         return new CommitResult(List.copyOf(committedRecords), rows.size());
+    }
+
+    /** Keep the value-oriented assistant index in sync with the committed JSON snapshot. */
+    private void insertSearchValues(UUID organizationId, UUID recordId, JsonNode normalized,
+                                    Map<String, UUID> anchorIds) {
+        if (normalized == null || !normalized.isObject()) return;
+        var entries = normalized.fields();
+        while (entries.hasNext()) {
+            var entry = entries.next();
+            var wrapper = entry.getValue();
+            var fieldCode = text(wrapper, "fieldCode", entry.getKey());
+            var bindingId = text(wrapper, "bindingId", fieldCode);
+            var valuePath = text(wrapper, "valuePath", text(wrapper, "dataPath", "/" + fieldCode));
+            var value = firstText(wrapper, "normalizedValue", "displayValue", "rawValue");
+            if (value.isBlank()) continue;
+            var valueJson = firstNode(wrapper, "normalizedValue", "rawValue");
+            if (valueJson == null || valueJson.isMissingNode()) {
+                valueJson = objectMapper.getNodeFactory().textNode(value);
+            }
+            var anchorId = anchorIds.get(anchorKey(fieldCode, bindingId, valuePath));
+            jdbc.update("""
+                    INSERT INTO data.data_value(
+                        id, organization_id, record_id, field_code, binding_id, value_path, data_path, value_jsonb,
+                        value_text, normalized_unit, source_anchor_id, training_eligible)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(record_id, binding_id, value_path)
+                        WHERE binding_id IS NOT NULL AND value_path IS NOT NULL DO UPDATE SET
+                        data_path=excluded.data_path,
+                        value_jsonb=excluded.value_jsonb,
+                        value_text=excluded.value_text,
+                        normalized_unit=excluded.normalized_unit,
+                        source_anchor_id=excluded.source_anchor_id,
+                        training_eligible=excluded.training_eligible
+                    """, UUID.randomUUID(), organizationId, recordId, fieldCode, bindingId, valuePath, valuePath,
+                    pgJson(valueJson), value, blankToNull(wrapper.path("normalizedUnit").asText("")), anchorId,
+                    wrapper.path("trainingEligible").asBoolean(true));
+        }
+    }
+
+    private String anchorKey(String fieldCode, String bindingId, String valuePath) {
+        return (fieldCode == null ? "" : fieldCode) + "\u0000"
+                + (bindingId == null ? "" : bindingId) + "\u0000"
+                + (valuePath == null ? "" : valuePath);
+    }
+
+    private String text(JsonNode node, String field, String fallback) {
+        var value = node == null ? "" : node.path(field).asText("");
+        return value.isBlank() ? fallback : value;
+    }
+
+    private String firstText(JsonNode node, String... fields) {
+        for (var field : fields) {
+            var value = node == null ? "" : node.path(field).asText("");
+            if (!value.isBlank()) return value;
+        }
+        return "";
+    }
+
+    private JsonNode firstNode(JsonNode node, String... fields) {
+        for (var field : fields) {
+            var value = node == null ? null : node.get(field);
+            if (value != null && !value.isNull() && !value.isMissingNode()) return value;
+        }
+        return null;
+    }
+
+    private String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
     }
 
     private Job mapJob(ResultSet rs, int rowNum) throws java.sql.SQLException {

@@ -108,13 +108,17 @@ public interface DataSourceFileSearchFacade {
                          String sourceLocator, String recordKey, String fieldCode, String fieldName,
                          String fieldValue, String unit, String valueType, String sheetName,
                          String cellAddress, String sourceOwner, String recognitionMode,
-                         UUID experimentId, UUID experimentVersionId) {
+                         UUID experimentId, UUID experimentVersionId, String sourceStatus,
+                         String sourceLabel, String semanticDomain, String semanticField,
+                         String declaredCondition, String sourceUnit, String standardUnit,
+                         String mappingKind, String contextRelation) {
         public SourceFileHit(UUID hitId, UUID fileObjectId, UUID importJobId, Integer rowNumber,
                              String columnName, String originalName, String content, double score,
                              String sourceLocator) {
             this(hitId, fileObjectId, importJobId, rowNumber, columnName, originalName, content, score,
                     sourceLocator, null, null, null, null, null, null, null, null,
-                    "DATA_CENTER", "TEMPLATE_GUIDED", null, null);
+                    "DATA_CENTER", "TEMPLATE_GUIDED", null, null, "UNKNOWN",
+                    null, null, null, null, null, null, null, "TARGET");
         }
 
         public SourceFileHit(UUID hitId, UUID fileObjectId, UUID importJobId, Integer rowNumber,
@@ -124,7 +128,20 @@ public interface DataSourceFileSearchFacade {
                              String cellAddress) {
             this(hitId, fileObjectId, importJobId, rowNumber, columnName, originalName, content, score,
                     sourceLocator, recordKey, fieldCode, fieldName, fieldValue, unit, valueType, sheetName,
-                    cellAddress, "DATA_CENTER", "TEMPLATE_GUIDED", null, null);
+                    cellAddress, "DATA_CENTER", "TEMPLATE_GUIDED", null, null, "UNKNOWN",
+                    null, null, null, null, null, null, null, "TARGET");
+        }
+
+        public SourceFileHit(UUID hitId, UUID fileObjectId, UUID importJobId, Integer rowNumber,
+                             String columnName, String originalName, String content, double score,
+                             String sourceLocator, String recordKey, String fieldCode, String fieldName,
+                             String fieldValue, String unit, String valueType, String sheetName,
+                             String cellAddress, String sourceOwner, String recognitionMode,
+                             UUID experimentId, UUID experimentVersionId) {
+            this(hitId, fileObjectId, importJobId, rowNumber, columnName, originalName, content, score,
+                    sourceLocator, recordKey, fieldCode, fieldName, fieldValue, unit, valueType, sheetName,
+                    cellAddress, sourceOwner, recognitionMode, experimentId, experimentVersionId, "UNKNOWN",
+                    null, null, null, null, null, null, null, "TARGET");
         }
     }
 
@@ -168,12 +185,48 @@ public interface DataSourceFileSearchFacade {
         FILE_REQUIRED
     }
 
+    enum RecordTermMatch {
+        ALL,
+        ANY
+    }
+
+    /** Restricts evidence by the lifecycle state that makes it usable as a source. */
+    enum EvidenceFilter {
+        ANY,
+        CONFIRMED_DATA,
+        COMPLETED_EXPERIMENT,
+        FORMAL
+    }
+
+    enum ContextMode {
+        MINIMAL,
+        ANALYTIC,
+        COMPARABLE
+    }
+
     record DataDetailQuery(DataQueryMode mode, String fileName, DataFileScope fileScope, List<String> recordTerms,
-                           List<String> fieldTerms, int recordLimit, int fieldsPerRecord, int valueLimit) {
+                           List<String> fieldTerms, RecordTermMatch recordTermMatch, EvidenceFilter evidenceFilter,
+                           int recordLimit, int fieldsPerRecord, int valueLimit, ContextMode contextMode,
+                           int contextFieldLimit, int comparisonRecordLimit, String analysisGoal) {
         public DataDetailQuery(DataQueryMode mode, String fileName, List<String> recordTerms,
                                List<String> fieldTerms, int recordLimit, int fieldsPerRecord, int valueLimit) {
             this(mode, fileName, fileName == null || fileName.isBlank() ? DataFileScope.AUTO : DataFileScope.EXPLICIT,
-                    recordTerms, fieldTerms, recordLimit, fieldsPerRecord, valueLimit);
+                    recordTerms, fieldTerms, RecordTermMatch.ALL, EvidenceFilter.ANY,
+                    recordLimit, fieldsPerRecord, valueLimit, ContextMode.MINIMAL, 32, 5, "VALUE");
+        }
+
+        public DataDetailQuery(DataQueryMode mode, String fileName, DataFileScope fileScope,
+                               List<String> recordTerms, List<String> fieldTerms,
+                               int recordLimit, int fieldsPerRecord, int valueLimit) {
+            this(mode, fileName, fileScope, recordTerms, fieldTerms, RecordTermMatch.ALL, EvidenceFilter.ANY,
+                    recordLimit, fieldsPerRecord, valueLimit, ContextMode.MINIMAL, 32, 5, "VALUE");
+        }
+
+        public DataDetailQuery(DataQueryMode mode, String fileName, DataFileScope fileScope,
+                               List<String> recordTerms, List<String> fieldTerms, RecordTermMatch recordTermMatch,
+                               int recordLimit, int fieldsPerRecord, int valueLimit) {
+            this(mode, fileName, fileScope, recordTerms, fieldTerms, recordTermMatch, EvidenceFilter.ANY,
+                    recordLimit, fieldsPerRecord, valueLimit, ContextMode.MINIMAL, 32, 5, "VALUE");
         }
 
         public DataDetailQuery {
@@ -185,14 +238,21 @@ public interface DataSourceFileSearchFacade {
                     .filter(value -> value != null && !value.isBlank()).map(String::strip).distinct().limit(8).toList();
             fieldTerms = fieldTerms == null ? List.of() : fieldTerms.stream()
                     .filter(value -> value != null && !value.isBlank()).map(String::strip).distinct().limit(8).toList();
+            recordTermMatch = recordTermMatch == null ? RecordTermMatch.ALL : recordTermMatch;
+            evidenceFilter = evidenceFilter == null ? EvidenceFilter.ANY : evidenceFilter;
             recordLimit = Math.min(20, Math.max(1, recordLimit));
             fieldsPerRecord = Math.min(20, Math.max(1, fieldsPerRecord));
             valueLimit = Math.min(50, Math.max(1, valueLimit));
+            contextMode = contextMode == null ? ContextMode.MINIMAL : contextMode;
+            contextFieldLimit = Math.min(32, Math.max(4, contextFieldLimit));
+            comparisonRecordLimit = Math.min(5, Math.max(1, comparisonRecordLimit));
+            analysisGoal = analysisGoal == null || analysisGoal.isBlank() ? "VALUE" : analysisGoal.strip().toUpperCase(Locale.ROOT);
         }
 
         public static DataDetailQuery none() {
             return new DataDetailQuery(DataQueryMode.NONE, "", DataFileScope.AUTO,
-                    List.of(), List.of(), 5, 5, 50);
+                    List.of(), List.of(), RecordTermMatch.ALL, EvidenceFilter.ANY, 5, 5, 50,
+                    ContextMode.MINIMAL, 32, 5, "VALUE");
         }
     }
 
@@ -206,13 +266,23 @@ public interface DataSourceFileSearchFacade {
                             UUID fileObjectId, UUID importJobId, String originalName,
                             long sourceRecordCount, long searchableValueCount,
                             List<SourceFileHit> hits, boolean truncated,
-                            List<DataFileCandidate> candidates, boolean candidatesTruncated) {
+                            List<DataFileCandidate> candidates, boolean candidatesTruncated,
+                            List<RecordContext> recordContexts, String analysisGoal) {
         public DataDetailResult(DataQueryMode mode, UUID fileObjectId, UUID importJobId, String originalName,
                                 long sourceRecordCount, long searchableValueCount,
                                 List<SourceFileHit> hits, boolean truncated) {
             this(mode, importJobId == null ? DataResolution.NOT_FOUND : DataResolution.RESOLVED,
                     fileObjectId, importJobId, originalName, sourceRecordCount, searchableValueCount,
-                    hits, truncated, List.of(), false);
+                    hits, truncated, List.of(), false, List.of(), "VALUE");
+        }
+
+        public DataDetailResult(DataQueryMode mode, DataResolution resolution,
+                                UUID fileObjectId, UUID importJobId, String originalName,
+                                long sourceRecordCount, long searchableValueCount,
+                                List<SourceFileHit> hits, boolean truncated,
+                                List<DataFileCandidate> candidates, boolean candidatesTruncated) {
+            this(mode, resolution, fileObjectId, importJobId, originalName, sourceRecordCount, searchableValueCount,
+                    hits, truncated, candidates, candidatesTruncated, List.of(), "VALUE");
         }
 
         public DataDetailResult {
@@ -221,12 +291,14 @@ public interface DataSourceFileSearchFacade {
                     ? DataResolution.NOT_REQUESTED : DataResolution.NOT_FOUND) : resolution;
             hits = hits == null ? List.of() : List.copyOf(hits);
             candidates = candidates == null ? List.of() : List.copyOf(candidates);
+            recordContexts = recordContexts == null ? List.of() : List.copyOf(recordContexts);
+            analysisGoal = analysisGoal == null || analysisGoal.isBlank() ? "VALUE" : analysisGoal.strip().toUpperCase(Locale.ROOT);
         }
 
         public static DataDetailResult empty(DataQueryMode mode) {
             return new DataDetailResult(mode, mode == null || mode == DataQueryMode.NONE
                     ? DataResolution.NOT_REQUESTED : DataResolution.NOT_FOUND,
-                    null, null, "", 0, 0, List.of(), false, List.of(), false);
+                    null, null, "", 0, 0, List.of(), false, List.of(), false, List.of(), "VALUE");
         }
 
         public boolean found() {
@@ -235,6 +307,19 @@ public interface DataSourceFileSearchFacade {
 
         public boolean requiresFileSelection() {
             return resolution == DataResolution.AMBIGUOUS && !candidates.isEmpty();
+        }
+    }
+
+    /** Context grouped around one target observation; no database identifiers are exposed here. */
+    record RecordContext(String recordKey, String sheetName, List<SourceFileHit> targetHits,
+                         List<SourceFileHit> contextHits, boolean contextTruncated,
+                         boolean comparable, String comparisonReason) {
+        public RecordContext {
+            recordKey = recordKey == null ? "" : recordKey;
+            sheetName = sheetName == null ? "" : sheetName;
+            targetHits = targetHits == null ? List.of() : List.copyOf(targetHits);
+            contextHits = contextHits == null ? List.of() : List.copyOf(contextHits);
+            comparisonReason = comparisonReason == null ? "" : comparisonReason;
         }
     }
 

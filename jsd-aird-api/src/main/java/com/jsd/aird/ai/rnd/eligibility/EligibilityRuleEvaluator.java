@@ -100,7 +100,11 @@ public class EligibilityRuleEvaluator {
         aliases.removeIf(String::isBlank);
         var found = new ArrayList<TargetValue>();
         collectObservations(sample.observations(), aliases, mapping, found, java.util.Collections.newSetFromMap(new IdentityHashMap<>()));
-        collectObservations(sample.facts(), aliases, mapping, found, java.util.Collections.newSetFromMap(new IdentityHashMap<>()));
+        // facts_jsonb contains the immutable source fact as well as the already projected observations.
+        // Only use it as a fallback; scanning both trees would count one physical result twice and turn a
+        // uniquely matched Y into an artificial ambiguity.
+        if (found.isEmpty())
+            collectObservations(sample.facts(), aliases, mapping, found, java.util.Collections.newSetFromMap(new IdentityHashMap<>()));
         return found;
     }
 
@@ -127,7 +131,8 @@ public class EligibilityRuleEvaluator {
                 else collectObservations(value, aliases, mapping, found, visited);
             }
         }
-        var label = text(node,"name","label","labelPath","fieldCode","targetCode","testMethod","item","sourceFieldCode");
+        var label = text(node,"name","label","labelPath","fieldCode","targetCode","testMethod","testItem",
+                "testCondition","operation","itemLabel","item","sourceFieldCode");
         if (!label.isBlank() && matches(label, aliases, mapping) && (node.has("value") || node.has("rawValue") || node.has("result")))
             found.add(extractTargetValue(node));
         for (var entry : iterable(node.fields())) collectObservations(entry.getValue(), aliases, mapping, found, visited);
@@ -143,7 +148,7 @@ public class EligibilityRuleEvaluator {
         // (for example, "1500次无明显划痕").  Preserve the original metadata,
         // but expose the leading measured number to the typed Y validator.
         if (value.isTextual()) {
-            var m = java.util.regex.Pattern.compile("^\\s*([-+]?\\d+(?:\\.\\d+)?)").matcher(value.asText());
+            var m = java.util.regex.Pattern.compile("([-+]?\\d+(?:\\.\\d+)?)").matcher(value.asText());
             if (m.find()) {
                 try { value = json.getNodeFactory().numberNode(new BigDecimal(m.group(1))); }
                 catch (NumberFormatException ignored) { }
@@ -255,7 +260,8 @@ public class EligibilityRuleEvaluator {
         if (node == null || node.isNull()) return null;
         if (node.isArray()) { for (var item : node) { var v = findLabeledValue(item, code, name); if (v != null) return v; } return null; }
         if (!node.isObject()) return null;
-        var label = text(node, "labelPath", "label", "name", "fieldCode");
+        var label = text(node, "labelPath", "label", "name", "fieldCode", "operation", "itemLabel",
+                "testItem", "testCondition");
         if (sameSemantic(label, code, name) && (node.has("rawValue") || node.has("normalizedValue") || node.has("rawNumericValue") || node.has("displayValue") || node.has("value"))) {
             if (node.hasNonNull("normalizedValue") && !node.path("normalizedValue").asText().isBlank()) return node.get("normalizedValue");
             if (node.hasNonNull("rawNumericValue")) return node.get("rawNumericValue");
@@ -320,8 +326,26 @@ public class EligibilityRuleEvaluator {
 
     private void checkMaterials(Configuration c,SampleRow sample,List<QualificationReason> reasons){
         var items=sample.composition()==null?null:sample.composition().path("items");if(items==null||!items.isArray())return;
-        var dictionaryIds=new HashSet<String>();if(c.dictionary()!=null&&c.dictionary().isArray())for(var d:c.dictionary()) {if(d.hasNonNull("materialId"))dictionaryIds.add(d.path("materialId").asText());if(d.hasNonNull("token"))dictionaryIds.add(d.path("token").asText().toLowerCase(Locale.ROOT));}
-        for(var item:items){var material=item.path("materialId").asText(item.path("materialCode").asText(item.path("name").asText("")));if(material.isBlank())review(reasons,"UNKNOWN_MATERIAL","无法识别配方材料身份","FORMULA",item);else if(!dictionaryIds.isEmpty()&&!dictionaryIds.contains(material)&&!dictionaryIds.contains(material.toLowerCase(Locale.ROOT)))exclude(reasons,"MATERIAL_NOT_IN_MODEL","材料不在当前冻结材料字典中","FORMULA",material);}
+        var dictionaryIds=new HashSet<String>();if(c.dictionary()!=null&&c.dictionary().isArray())for(var d:c.dictionary()) {
+            for(var key:List.of("materialId","token","code"))if(d.hasNonNull(key))dictionaryIds.add(normalizeMaterial(d.path(key).asText()));
+        }
+        for(var item:items){
+            var material=text(item,"materialId","materialCode","materialName","name");
+            if(material.isBlank()){
+                review(reasons,"UNKNOWN_MATERIAL","无法识别配方材料身份","FORMULA",item);
+                continue;
+            }
+            // A closed formula matrix keeps non-added materials as explicit structural zeroes.
+            // Such rows are provenance, not active model components, so an older material dictionary
+            // must not reject the whole sample merely because it does not list that zero-valued option.
+            if(item.path("ratio").isNumber()&&item.path("ratio").decimalValue().signum()==0)continue;
+            if(!dictionaryIds.isEmpty()&&!dictionaryIds.contains(normalizeMaterial(material)))
+                exclude(reasons,"MATERIAL_NOT_IN_MODEL","材料不在当前冻结材料字典中","FORMULA",material);
+        }
+    }
+
+    private String normalizeMaterial(String value){
+        return value==null?"":value.toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9]","");
     }
 
     private void checkAnomaly(Configuration c,SampleRow sample,List<QualificationReason> reasons){
@@ -344,7 +368,7 @@ public class EligibilityRuleEvaluator {
     private void exclude(List<QualificationReason> reasons,String code,String message,String field,Object evidence){reasons.add(reason(code,message,field,evidence));}
     private void review(List<QualificationReason> reasons,String code,String message,String field,Object evidence){reasons.add(reason(code,message,field,evidence));}
     private QualificationReason reason(String code,String message,String field,Object evidence){return new QualificationReason(code,message,field,json.valueToTree(evidence));}
-    private String text(JsonNode node,String... keys){for(var key:keys)if(node.hasNonNull(key))return node.path(key).asText();return "";}
+    private String text(JsonNode node,String... keys){for(var key:keys)if(node.hasNonNull(key)){var value=node.path(key).asText();if(!value.isBlank())return value;}return "";}
     private <T> Iterable<T> iterable(Iterator<T> iterator){return () -> iterator;}
 
     private record TargetValue(JsonNode value, JsonNode metadata, String reasonCode, String reasonMessage) { }

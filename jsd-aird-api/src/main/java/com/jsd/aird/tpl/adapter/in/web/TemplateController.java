@@ -224,6 +224,14 @@ public class TemplateController {
         )));
     }
 
+    @PostMapping("/experiments/{experimentId}/template-drafts")
+    public ApiResponse<TemplateRepository.TemplateWorkspace> createFromExperiment(
+            @PathVariable UUID experimentId,
+            @Valid @RequestBody ExperimentTemplateDraftRequest request
+    ) {
+        return success(service.createFromExperiment(experimentId, request.name(), request.categoryId()));
+    }
+
     @GetMapping("/template-versions/{versionId}/edit-model")
     public ApiResponse<TemplateRepository.TemplateWorkspace> editModel(@PathVariable UUID versionId) {
         return success(service.get(versionId));
@@ -325,8 +333,10 @@ public class TemplateController {
     }
 
     @PostMapping("/template-versions/{versionId}/review/submit")
-    public ApiResponse<TemplateVersionReviewService.View> submitReview(@PathVariable UUID versionId) {
-        return success(templateVersionReviewService.submit(versionId));
+    public ApiResponse<TemplateVersionReviewService.View> submitReview(
+            @PathVariable UUID versionId, @RequestBody(required = false) ReviewSubmitRequest request) {
+        return success(templateVersionReviewService.submit(versionId,
+                request != null && Boolean.TRUE.equals(request.dataCleanupConfirmed())));
     }
 
     @PostMapping("/template-versions/{versionId}/review/approve")
@@ -357,9 +367,16 @@ public class TemplateController {
 
     public record ReviewCommentRequest(String comment) {}
 
+    public record ReviewSubmitRequest(Boolean dataCleanupConfirmed) {}
+
     public record ReviewReasonRequest(@NotBlank @Size(max = 2000) String reason) {}
 
     public record CopyTemplateRequest(String name, UUID categoryId) {}
+
+    public record ExperimentTemplateDraftRequest(
+            @NotBlank @Size(max = 160) String name,
+            @NotNull UUID categoryId
+    ) {}
 
     public record BatchActionItemRequest(@NotNull UUID templateId, UUID versionId, String name) {}
 

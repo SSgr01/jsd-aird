@@ -1,25 +1,27 @@
 import {
-  ApiOutlined, DatabaseOutlined, EditOutlined, InfoCircleOutlined, PlusOutlined, SafetyCertificateOutlined,
+  ApiOutlined, ArrowLeftOutlined, DatabaseOutlined, EditOutlined, InfoCircleOutlined, PlusOutlined, SafetyCertificateOutlined,
   SettingOutlined,
 } from '@ant-design/icons'
 import {
-  Alert, App, Button, Card, Collapse, Descriptions, Divider, Drawer, Empty, Form, Input, InputNumber,
-  Modal, Select, Space, Switch, Table, Tabs, Tag, Typography,
+  Alert, App, Button, Card, Checkbox, Collapse, Descriptions, Divider, Drawer, Empty, Form, Input, InputNumber,
+  Modal, Select, Space, Spin, Switch, Table, Tabs, Tag, Typography,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import { modelingApi } from '@/services/ai-rnd/modeling-api'
 import { predictionApi } from '@/services/ai-rnd/prediction-api'
+import { trainingApi } from '@/services/ai-rnd/training-api'
 import type {
   AvailabilityStage, InputFieldCommand, InputFieldSummary, InputFieldVersion, InputScheme,
   InputValueType, MaterialAlias, MaterialDictionary, MaterialReference, PredictionTargetSummary,
-  SourceMappingVersion, TargetCommand, TargetVersion, TrainingPolicy, ValueType,
-  SourceMappingSuggestions, SourceMappingSuggestion, EligibilitySummary, EligibilityPage, EligibilityDetail, EligibilityReview, QualityPolicy,
+  TargetCommand, TargetVersion, ValueType,
+  SourceMappingSuggestions, SourceMappingSuggestion, SourceSamplePreview, EligibilitySummary, EligibilityPage, EligibilityDetail, EligibilityReview,
   InputSuggestionPage,
 } from '@/services/ai-rnd/ai-rnd-types'
 import { useAuthStore } from '@/stores/auth-store'
+import { ModelingTargetWorkflow } from './ModelingTargetWorkflow'
 import './modeling-settings.css'
 
 const { Text, Title } = Typography
@@ -36,6 +38,11 @@ const displaySchemeName = (value?: string) => {
     .replace(/隔离验收/g, '默认')
     .replace(/合成验收/g, '默认')
 }
+const modelStatusLabel = (trainingStatus: PredictionTargetSummary['trainingStatus'], evaluationStatus: PredictionTargetSummary['evaluationStatus']) => {
+  if (trainingStatus !== 'ACTIVE') return <Text type="secondary">尚未训练</Text>
+  if (evaluationStatus === 'COMPLETED') return <Tag color="green">已有可用模型</Tag>
+  return <Tag color="gold">已有模型 · 数据待复核</Tag>
+}
 const eligibilityFunnelLabels: Record<string, string> = {
   SOURCE_OBSERVATIONS: '来源记录', DEDUPLICATED_SAMPLES: '去重后样本', Y_MATCHED: '匹配到目标结果',
   Y_VALID_VALUE: '目标结果有效', X_COMPLETE: '输入条件齐全', MATERIAL_REVIEW_PASSED: '材料与审查通过', TRAINABLE: '最终可训练',
@@ -50,6 +57,11 @@ const eligibilityReasonLabels: Record<string, string> = {
 }
 const eligibilityStateLabels: Record<string, string> = { TRAINABLE: '可训练', EXCLUDED: '已排除', REVIEW_REQUIRED: '待人工审查' }
 const sourceTypeLabels: Record<string, string> = { DATA_CENTER: '数据中心', EXPERIMENT: '实验记录本' }
+const sourceRecordColumns: ColumnsType<SourceSamplePreview> = [
+  { title: '实际结果', dataIndex: 'value', width: 150, ellipsis: true },
+  { title: '记录', dataIndex: 'sampleName', width: 220, ellipsis: true },
+  { title: '来源', dataIndex: 'sourceType', width: 120, render: (value: string) => sourceTypeLabels[value] ?? value },
+]
 const lifecycleOptions = ['DRAFT', 'ACTIVE', 'PAUSED', 'RETIRED'].map((value) => ({ value, label: lifecycleLabels[value] ?? value }))
 
 type TargetFormValue = {
@@ -89,12 +101,14 @@ type QualityFormValue = {
 type ModelingSettingsPageProps = {
   embedded?: boolean
   initialTargetId?: string
+  /** Render a selected target as a full-page workflow instead of a side drawer. */
+  fullPageTarget?: boolean
   openCreateTarget?: boolean
   onCreateTargetOpened?: () => void
   onOpenModels?: (targetId: string) => void
 }
 
-export function ModelingSettingsPage({ embedded = false, initialTargetId, openCreateTarget, onCreateTargetOpened, onOpenModels }: ModelingSettingsPageProps = {}) {
+export function ModelingSettingsPage({ embedded = false, initialTargetId, fullPageTarget = false, openCreateTarget, onCreateTargetOpened, onOpenModels }: ModelingSettingsPageProps = {}) {
   const navigate = useNavigate()
   const { message, modal } = App.useApp()
   const canModel = useAuthStore((state) => state.can('ai.modeling.manage'))
@@ -119,18 +133,22 @@ export function ModelingSettingsPage({ embedded = false, initialTargetId, openCr
   const [dictionaries, setDictionaries] = useState<MaterialDictionary[]>([])
 
   const [selectedTarget, setSelectedTarget] = useState<PredictionTargetSummary>()
+  const [detailTab, setDetailTab] = useState('definition')
   const [targetVersions, setTargetVersions] = useState<TargetVersion[]>([])
-  const [mappings, setMappings] = useState<SourceMappingVersion[]>([])
   const [mappingSuggestions, setMappingSuggestions] = useState<SourceMappingSuggestions>()
   const [schemes, setSchemes] = useState<InputScheme[]>([])
-  const [policies, setPolicies] = useState<TrainingPolicy[]>([])
-  const [qualityPolicies, setQualityPolicies] = useState<QualityPolicy[]>([])
-  const [inputSuggestions, setInputSuggestions] = useState<InputSuggestionPage>()
+  const [draftInputFieldIds, setDraftInputFieldIds] = useState<string[]>([])
   const [eligibilitySummary, setEligibilitySummary] = useState<EligibilitySummary>()
   const [eligibilityPage, setEligibilityPage] = useState<EligibilityPage>()
   const [eligibilityLoading, setEligibilityLoading] = useState(false)
   const [eligibilityDetail, setEligibilityDetail] = useState<EligibilityDetail>()
   const [eligibilityDetailLoading, setEligibilityDetailLoading] = useState(false)
+  const [expandedEligibilityDetails, setExpandedEligibilityDetails] = useState<Record<string, EligibilityDetail>>({})
+  const [expandedEligibilityLoading, setExpandedEligibilityLoading] = useState<Record<string, boolean>>({})
+  const [selectedSampleRevisionIds, setSelectedSampleRevisionIds] = useState<Record<string, string[]>>({})
+  const [trainingSelectionLoading, setTrainingSelectionLoading] = useState(false)
+  const [sampleKeyword, setSampleKeyword] = useState('')
+  const [sampleView, setSampleView] = useState<'ALL' | 'SELECTED' | 'UNAVAILABLE'>('ALL')
   const [reviewTarget, setReviewTarget] = useState<EligibilityReview>()
   const [reviewForm] = Form.useForm<{ decision: 'KEEP' | 'EXCLUDE' | 'MERGE' | 'KEEP_SEPARATE' | 'REMAP'; reason: string; materialId?: string }>()
   const [selectedField, setSelectedField] = useState<InputFieldSummary>()
@@ -143,6 +161,7 @@ export function ModelingSettingsPage({ embedded = false, initialTargetId, openCr
   const [qualityOpen, setQualityOpen] = useState(false)
   const [aliasOpen, setAliasOpen] = useState(false)
   const [dictionaryOpen, setDictionaryOpen] = useState(false)
+  const [openingTargetId, setOpeningTargetId] = useState<string>()
   const [targetForm] = Form.useForm<TargetFormValue>()
   const [fieldForm] = Form.useForm<FieldFormValue>()
   const [mappingForm] = Form.useForm<MappingFormValue>()
@@ -153,6 +172,7 @@ export function ModelingSettingsPage({ embedded = false, initialTargetId, openCr
   const [dictionaryForm] = Form.useForm<DictionaryFormValue>()
   const watchedFieldType = Form.useWatch('valueType', fieldForm)
   const openedTargetRef = useRef<string>()
+  const openingTargetRef = useRef<string>()
 
   const report = useCallback((error: unknown) => { void message.error(error instanceof Error ? error.message : '操作失败') }, [message])
 
@@ -186,13 +206,28 @@ export function ModelingSettingsPage({ embedded = false, initialTargetId, openCr
   useEffect(() => { void loadReferencesAndMaterials() }, [loadReferencesAndMaterials])
 
   const openTarget = async (row: PredictionTargetSummary) => {
+    // A target detail is one workflow surface.  Ignore repeated clicks while
+    // its three dependent requests are still loading; otherwise fast clicks
+    // can mount competing drawers and leave stale detail content behind.
+    if (openingTargetRef.current === row.id) return
+    if (selectedTarget?.id === row.id && !fullPageTarget) {
+      setDetailTab('definition')
+      return
+    }
+    openingTargetRef.current = row.id
+    setOpeningTargetId(row.id)
     try {
-      const [fresh, versions, sourceMappings, suggestions, inputSchemes, trainingPolicies, qualityRows, discoveredInputs] = await Promise.all([
-        modelingApi.target(row.id), modelingApi.targetVersions(row.id), modelingApi.sourceMappings(row.id),
-        modelingApi.sourceMappingSuggestions(row.id), modelingApi.inputSchemes(row.id), modelingApi.trainingPolicies(row.id), predictionApi.qualityPolicies(row.id), modelingApi.inputSuggestions(row.id, { targetVersionId: row.currentVersionId ?? undefined }),
+      // The list row can carry a stale currentVersionId after a target was
+      // revised.  Resolve the target first, then use that response as the
+      // single version source for every dependent request.
+      const fresh = await modelingApi.target(row.id)
+      const targetVersionId = fresh.currentVersionId ?? undefined
+      const [versions, suggestions, inputSchemes] = await Promise.all([
+        modelingApi.targetVersions(row.id),
+        modelingApi.sourceMappingSuggestions(row.id, targetVersionId), modelingApi.inputSchemes(row.id),
       ])
-      setSelectedTarget(fresh); setTargetVersions(versions); setMappings(sourceMappings);setMappingSuggestions(suggestions); setSchemes(inputSchemes); setPolicies(trainingPolicies); setQualityPolicies(qualityRows); setInputSuggestions(discoveredInputs)
-    } catch (error) { report(error) }
+      setSelectedTarget(fresh); setDetailTab('definition'); setTargetVersions(versions); setMappingSuggestions(suggestions); setSchemes(inputSchemes)
+    } catch (error) { report(error) } finally { openingTargetRef.current = undefined; setOpeningTargetId(undefined) }
   }
 
   const loadEligibility = useCallback(async (target?: PredictionTargetSummary) => {
@@ -201,9 +236,13 @@ export function ModelingSettingsPage({ embedded = false, initialTargetId, openCr
     try {
       const [summary, page] = await Promise.all([
         modelingApi.eligibilitySummary(target.currentVersionId, target.currentInputSchemeId),
-        modelingApi.eligibilityPage({ targetVersionId: target.currentVersionId, inputSchemeId: target.currentInputSchemeId, page: 1, size: 20 }),
+        modelingApi.eligibilityPage({ targetVersionId: target.currentVersionId, inputSchemeId: target.currentInputSchemeId, page: 1, size: 500 }),
       ])
       setEligibilitySummary(summary); setEligibilityPage(page)
+      setSelectedSampleRevisionIds((current) => current[target.id] ? current : {
+        ...current,
+        [target.id]: page.items.filter((item) => item.state === 'TRAINABLE').map((item) => item.sampleRevisionId),
+      })
     } catch (error) { report(error) } finally { setEligibilityLoading(false) }
   }, [report])
 
@@ -213,6 +252,55 @@ export function ModelingSettingsPage({ embedded = false, initialTargetId, openCr
     if (!selectedTarget) return
     try { await modelingApi.reevaluateTarget(selectedTarget.id); void message.success('资格重算已加入后台任务'); await loadEligibility(selectedTarget) }
     catch (error) { report(error) }
+  }
+
+  const startSelectedTraining = async () => {
+    if (!selectedTarget) return
+    const selected = selectedSampleRevisionIds[selectedTarget.id] ?? []
+    if (!selected.length) { void message.warning('请至少选择一条可用于训练的实验记录'); return }
+    setTrainingSelectionLoading(true)
+    try {
+      const result = await trainingApi.evaluate({ selectedSampleRevisionIdsByTarget: { [selectedTarget.id]: selected } })
+      if (result.jobsCreated > 0) void message.success(`已按选中的 ${selected.length} 条记录创建训练任务`)
+      else void message.warning(result.targets?.[0]?.code === 'INSUFFICIENT_DATA' ? '选中的记录数量未达到训练要求' : '当前选择没有创建新的训练任务')
+    } catch (error) { report(error) } finally { setTrainingSelectionLoading(false) }
+  }
+
+  const currentTrainableIds = selectedTarget ? (eligibilityPage?.items ?? []).filter((item) => item.state === 'TRAINABLE').map((item) => item.sampleRevisionId) : []
+  const currentSelectedIds = selectedTarget ? (selectedSampleRevisionIds[selectedTarget.id] ?? []) : []
+  const visibleEligibilityItems = useMemo(() => {
+    const keyword = sampleKeyword.trim().toLowerCase()
+    return (eligibilityPage?.items ?? []).filter((item) => {
+      const selected = currentSelectedIds.includes(item.sampleRevisionId)
+      const available = item.state === 'TRAINABLE'
+      const matchesView = sampleView === 'ALL' || (sampleView === 'SELECTED' ? selected : !available)
+      const text = `${item.logicalSampleKey ?? ''} ${item.authoritySourceType ?? ''} ${item.primaryReasonCode ?? ''}`.toLowerCase()
+      return matchesView && (!keyword || text.includes(keyword))
+    })
+  }, [currentSelectedIds, eligibilityPage?.items, sampleKeyword, sampleView])
+  const toggleTrainingSample = (sampleRevisionId: string, checked: boolean) => {
+    if (!selectedTarget) return
+    setSelectedSampleRevisionIds((current) => {
+      const selected = new Set(current[selectedTarget.id] ?? [])
+      if (checked) selected.add(sampleRevisionId); else selected.delete(sampleRevisionId)
+      return { ...current, [selectedTarget.id]: Array.from(selected) }
+    })
+  }
+  const selectAllTrainingSamples = () => {
+    if (!selectedTarget) return
+    const visibleTrainableIds = visibleEligibilityItems.filter((item) => item.state === 'TRAINABLE').map((item) => item.sampleRevisionId)
+    setSelectedSampleRevisionIds((current) => ({ ...current, [selectedTarget.id]: Array.from(new Set([...currentSelectedIds, ...visibleTrainableIds])) }))
+  }
+  const selectTrainingSamples = (sampleRevisionIds: string[]) => {
+    if (!selectedTarget) return
+    setSelectedSampleRevisionIds((current) => ({
+      ...current,
+      [selectedTarget.id]: Array.from(new Set([...(current[selectedTarget.id] ?? []), ...sampleRevisionIds])),
+    }))
+  }
+  const clearTrainingSamples = () => {
+    if (!selectedTarget) return
+    setSelectedSampleRevisionIds((current) => ({ ...current, [selectedTarget.id]: [] }))
   }
 
   const openEligibilityDetail = async (id: string) => {
@@ -236,17 +324,40 @@ export function ModelingSettingsPage({ embedded = false, initialTargetId, openCr
     await loadTargets()
   }
 
+  const loadExpandedEligibilityDetail = async (id: string) => {
+    if (expandedEligibilityDetails[id]) return
+    setExpandedEligibilityLoading((current) => ({ ...current, [id]: true }))
+    try {
+      const detail = await modelingApi.eligibilityDetail(id)
+      setExpandedEligibilityDetails((current) => ({ ...current, [id]: detail }))
+    } catch (error) { report(error) } finally {
+      setExpandedEligibilityLoading((current) => ({ ...current, [id]: false }))
+    }
+  }
+
+  const renderEligibilityRowPreview = (row: EligibilityPage['items'][number]) => {
+    const detail = expandedEligibilityDetails[row.id]
+    if (expandedEligibilityLoading[row.id] && !detail) return <div className="eligibility-row-preview-loading"><Spin size="small" /> <span>正在加载这条记录的完整 X + Y 数据…</span></div>
+    if (!detail) return <div className="eligibility-row-preview-loading"><Text type="secondary">展开后加载完整数据</Text></div>
+    const sample = detail.sample
+    return <div className="eligibility-row-preview">
+      <div className="eligibility-row-preview-head"><strong>整条训练数据</strong><span>这一行同时包含模型输入 X、预测目标 Y 和原始来源，不是只显示结果值。</span><Button type="link" size="small" onClick={()=>void openEligibilityDetail(row.id)}>查看来源与审查详情</Button></div>
+      <div className="eligibility-row-preview-grid">
+        <div><small>输入 X · 配方</small><pre>{pretty(sample.composition)}</pre></div>
+        <div><small>输入 X · 工艺与条件</small><pre>{pretty({ process: sample.process, conditions: sample.conditions, facts: sample.facts })}</pre></div>
+        <div><small>输出 Y · 测试结果</small><pre>{pretty(sample.observations)}</pre></div>
+      </div>
+    </div>
+  }
+
+  const focusSchemeSection = (sectionId?: string) => {
+    setDetailTab('scheme')
+    if (sectionId) window.setTimeout(() => document.getElementById(sectionId)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0)
+  }
+
 
   const openField = async (row: InputFieldSummary) => {
     try { setSelectedField(row); setFieldVersions(await modelingApi.inputFieldVersions(row.id)) } catch (error) { report(error) }
-  }
-
-  const createFieldFromSuggestion = (row: InputSuggestionPage['content'][number]) => {
-    if (!canModel || row.valueType === 'STRING' || row.matchStatus !== 'NEW_CANDIDATE') return
-    const code = row.candidateKey.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '').toUpperCase() || 'DISCOVERED_INPUT'
-    setFieldEditor({ suggestion: row })
-    fieldForm.resetFields()
-    fieldForm.setFieldsValue({ code, name: row.name, valueType: row.valueType as InputValueType, unit: row.unit ?? undefined, availabilityStage: 'PRE_EXPERIMENT' })
   }
 
   const showTargetEditor = (target?: PredictionTargetSummary, version?: TargetVersion) => {
@@ -370,7 +481,9 @@ export function ModelingSettingsPage({ embedded = false, initialTargetId, openCr
         },
         validation: { foldCount: v.foldCount, primaryMetric: v.primaryMetric, metricThreshold: v.metricThreshold, requireFairComparison: v.requireFairComparison },
         training: {
-          autoTrainingEnabled: v.autoTrainingEnabled, dataNature: v.dataNature,
+          // Training is a system-managed automatic step. Keep the contract
+          // explicit for the API, but do not expose a redundant customer toggle.
+          autoTrainingEnabled: true, dataNature: v.dataNature,
           retrainMinimumNewSamples: v.retrainMinimumNewSamples, minimumIntervalHours: v.minimumIntervalHours,
           replicateHandling: v.replicateHandling, candidateAlgorithms: v.candidateAlgorithms,
           seed: v.seed, timeoutMinutes: v.timeoutMinutes,
@@ -417,21 +530,19 @@ export function ModelingSettingsPage({ embedded = false, initialTargetId, openCr
 
   const targetColumns: ColumnsType<PredictionTargetSummary> = [
     { title: '性能分类', dataIndex: 'category', width: 130, render: (value: string) => <Tag>{displayCategory(value)}</Tag> },
-    { title: '预测目标 Y', dataIndex: 'name', render: (_: unknown, row) => <div><strong>{row.name}</strong><div className="modeling-muted">{valueTypeLabels[row.valueType]} · {row.currentInputSchemeName ? '已配置输入方案' : '尚未配置输入方案'}</div></div> },
-    { title: '结果类型', dataIndex: 'valueType', width: 120, render: (v: ValueType) => valueTypeLabels[v] },
-    { title: '定义状态', dataIndex: 'status', width: 105, render: (value: string) => <Tag color={statusColor[value]}>{lifecycleLabels[value] ?? value}</Tag> },
-    { title: '当前训练方案', width: 170, render: (_: unknown, row) => row.currentInputSchemeName ? displaySchemeName(row.currentInputSchemeName) : <Text type="secondary">尚未冻结</Text> },
-    { title: '数据与训练', width: 150, render: (_: unknown, row) => <div className="modeling-status-cell"><Text type="secondary">{row.evaluationStatus === 'COMPLETED' ? '已完成' : row.evaluationStatus === 'RUNNING' ? '评估中' : row.evaluationStatus === 'FAILED' ? '评估失败' : '待评估'}</Text><Text type="secondary">{row.trainingStatus === 'ACTIVE' ? '已有正式模型' : '尚未训练'}</Text></div> },
-    { title: '操作', width: 90, render: (_: unknown, row) => <Button type="link" onClick={() => void openTarget(row)}>查看配置</Button> },
+    { title: '要预测的性能', dataIndex: 'name', render: (_: unknown, row) => <div><strong>{row.name}</strong><div className="modeling-muted">{valueTypeLabels[row.valueType]}</div></div> },
+    { title: '数据准备情况', width: 150, render: (_: unknown, row) => row.evaluationStatus === 'COMPLETED' ? <Tag color="green">数据已检查</Tag> : row.evaluationStatus === 'RUNNING' ? <Tag color="blue">正在检查</Tag> : row.evaluationStatus === 'FAILED' ? <Tag color="red">需要处理</Tag> : <Tag>待检查</Tag> },
+    { title: '模型状态', width: 170, render: (_: unknown, row) => modelStatusLabel(row.trainingStatus, row.evaluationStatus) },
+    { title: '下一步', width: 110, render: (_: unknown, row) => <Button type="link" loading={openingTargetId === row.id} onClick={(event) => { event.stopPropagation(); void openTarget(row) }}>开始配置</Button> },
   ]
   const fieldColumns: ColumnsType<InputFieldSummary> = [
-    { title: '输入字段 X', dataIndex: 'name', render: (_: unknown, row) => <div><strong>{row.name}</strong><div className="modeling-code">{row.code}</div></div> },
+    { title: '输入字段 X', dataIndex: 'name', render: (_: unknown, row) => <strong>{row.name}</strong> },
     { title: '类型', dataIndex: 'valueType', width: 130, render: (v: InputValueType) => fieldTypeLabels[v] },
     { title: '单位', dataIndex: 'unit', width: 100, render: (value?: string) => value || '—' },
     { title: '可用时点', dataIndex: 'availabilityStage', width: 140, render: (value: AvailabilityStage) => <Tag color={value === 'PRE_EXPERIMENT' ? 'blue' : 'orange'}>{value === 'PRE_EXPERIMENT' ? '实验前' : '实验后'}</Tag> },
     { title: '来源状态', render: (_:unknown,row) => row.standardFieldName ? <Tag color="green">已有来源</Tag> : row.valueType==='COMPOSITION'?<Tag color="blue">材料与比例</Tag>:<Text type="warning">待系统匹配</Text> },
-    { title: '状态', dataIndex: 'status', width: 100, render: (value: string) => <Tag color={statusColor[value]}>{lifecycleLabels[value] ?? value}</Tag> },
-    { title: '操作', width: 80, render: (_: unknown, row) => <Button type="link" onClick={() => void openField(row)}>详情</Button> },
+    { title: '是否可用', dataIndex: 'status', width: 100, render: (value: string) => <Tag color={statusColor[value]}>{value === 'ACTIVE' ? '可使用' : lifecycleLabels[value] ?? value}</Tag> },
+    { title: '操作', width: 80, render: (_: unknown, row) => <Button type="link" onClick={() => void openField(row)}>查看</Button> },
   ]
 
   const aliasColumns: ColumnsType<MaterialAlias> = [
@@ -446,45 +557,59 @@ export function ModelingSettingsPage({ embedded = false, initialTargetId, openCr
     { title: '状态', dataIndex: 'status', width: 100, render: (value: string) => <Tag color={statusColor[value]}>{lifecycleLabels[value] ?? value}</Tag> },
     { title: '操作', render: (_: unknown, version) => <Space>{canModel && version.status === 'DRAFT' && <Button size="small" icon={<EditOutlined />} onClick={() => showTargetEditor(selectedTarget, version)}>编辑</Button>}{canModel && version.status === 'DRAFT' && <Button size="small" onClick={() => void (async () => { try { await modelingApi.publishTargetVersion(version.id, selectedTarget?.revision ?? 0); await refreshTarget(); void message.success('Y版本已发布') } catch (error) { report(error) } })()}>发布</Button>}</Space> },
   ]
-  const mappingColumns: ColumnsType<SourceMappingVersion> = [
-    { title: '来源', dataIndex: 'sourceType', render: (value: string) => sourceTypeLabels[value] ?? value },
-    { title: '已识别字段', render: (_:unknown,row) => display(row.mapping?.sourceFieldCode ?? row.mapping?.targetFieldCode ?? '已配置') },
-    { title: '版本', dataIndex: 'version', width: 70, render: (value: number) => `v${value}` },
-    { title: '状态', dataIndex: 'status', width: 100, render: (value: string) => <Tag color={statusColor[value]}>{lifecycleLabels[value] ?? value}</Tag> },
-    { title: '操作', width: 90, render: (_: unknown, mapping) => canModel && mapping.status === 'DRAFT' ? <Button type="link" onClick={() => void (async () => { try { await modelingApi.publishSourceMapping(mapping.id, selectedTarget?.revision ?? 0); await refreshTarget(); void message.success('来源映射已发布') } catch (error) { report(error) } })()}>发布</Button> : null },
-  ]
-  const schemeColumns: ColumnsType<InputScheme> = [
-    { title: '方案', render: (_: unknown, scheme) => <div>{displaySchemeName(scheme.name)}<div className="modeling-code">{scheme.code} · v{scheme.version}</div></div> },
-    { title: '字段', render: (_: unknown, scheme) => scheme.fields.map((field) => field.fieldName ?? field.inputFieldVersionId).join('、') },
-    { title: '状态', dataIndex: 'status', width: 100, render: (value: string) => <Tag color={statusColor[value]}>{lifecycleLabels[value] ?? value}</Tag> },
-    { title: '操作', width: 150, render: (_: unknown, scheme) => <Space><Button type="link" onClick={() => void (async () => { try { const preview = await modelingApi.previewInputScheme(scheme.id); modal.info({ title: '输入方案预览', content: <div><p>评估状态：待评估</p><p>原因：{preview.unavailableReason}</p>{preview.validationIssues.map((issue) => <p key={issue.code + issue.fieldCode}>{issue.fieldCode ? `${issue.fieldCode}：` : ''}{issue.message}</p>)}</div> }) } catch (error) { report(error) } })()}>预览</Button>{canModel && scheme.status === 'DRAFT' && <Button type="link" onClick={() => void (async () => { try { await modelingApi.freezeInputScheme(scheme.id, scheme.revision); await refreshTarget(); void message.success('方案已冻结，资格重算暂缓') } catch (error) { report(error) } })()}>冻结</Button>}</Space> },
-  ]
-  const policyColumns: ColumnsType<TrainingPolicy> = [
-    { title: '版本', dataIndex: 'version', width: 80, render: (value: number) => `v${value}` },
-    { title: '状态', dataIndex: 'status', render: (value: string) => <Tag color={statusColor[value]}>{lifecycleLabels[value] ?? value}</Tag> },
-    { title: '策略版本', render: (_: unknown, policy) => <span className="modeling-policy-hash">配置已锁定 · {policy.policyHash.slice(0, 8)}…</span> },
-    { title: '操作', width: 80, render: (_: unknown, policy) => canConfig && policy.status === 'DRAFT' ? <Button type="link" onClick={() => void (async () => { try { await modelingApi.publishTrainingPolicy(policy.id, selectedTarget?.revision ?? 0); await refreshTarget(); void message.success('训练策略已发布') } catch (error) { report(error) } })()}>发布</Button> : null },
-  ]
-  const qualityColumns: ColumnsType<QualityPolicy> = [
-    { title: '版本', dataIndex: 'version', width: 75, render: (value: number) => `v${value}` },
-    { title: '默认可信等级', dataIndex: 'defaultTrustLevel', width: 130, render: (value: string) => <Tag color={value === 'HIGH' ? 'green' : value === 'MEDIUM' ? 'gold' : 'orange'}>{value === 'HIGH' ? '高' : value === 'MEDIUM' ? '中' : '低'}</Tag> },
-    { title: '规则', render: (_: unknown, row) => `${row.rules.length} 条 · ${row.defaultExplanation}` },
-    { title: '状态', dataIndex: 'status', width: 90, render: (value: string) => <Tag color={statusColor[value]}>{lifecycleLabels[value] ?? value}</Tag> },
-    { title: '操作', width: 80, render: (_: unknown, row) => canConfig && row.status === 'DRAFT' ? <Button type="link" onClick={() => void (async () => { try { await predictionApi.publishQualityPolicy(row.id, selectedTarget?.revision ?? 0); await refreshTarget(); void message.success('质量策略已发布') } catch (error) { report(error) } })()}>发布</Button> : null },
-  ]
   const fieldVersionColumns: ColumnsType<InputFieldVersion> = [
     { title: '版本', dataIndex: 'version', width: 70, render: (value: number) => `v${value}` },
-    { title: '类型', dataIndex: 'valueType' },
-    { title: '来源状态', render: (_:unknown,row) => row.standardFieldName ? '已有来源' : row.valueType==='COMPOSITION'?'材料与比例':'待系统匹配' },
-    { title: '状态', dataIndex: 'status', render: (value: string) => <Tag color={statusColor[value]}>{value}</Tag> },
+    { title: '类型', dataIndex: 'valueType', render: (value: InputValueType) => fieldTypeLabels[value] ?? value },
+    { title: '来源状态', render: (_:unknown,row) => row.standardFieldName ? '已有来源' : row.valueType==='COMPOSITION'?'材料与比例':'系统自动匹配' },
+    { title: '状态', dataIndex: 'status', render: (value: string) => <Tag color={statusColor[value]}>{lifecycleLabels[value] ?? value}</Tag> },
     { title: '操作', render: (_: unknown, version) => canModel && version.status === 'DRAFT' ? <Button type="link" onClick={() => void (async () => { try { await modelingApi.publishInputFieldVersion(version.id, selectedField?.revision ?? 0); await Promise.all([loadFields(), selectedField ? openField(selectedField) : Promise.resolve()]); void message.success('X字段版本已发布') } catch (error) { report(error) } })()}>发布</Button> : null },
   ]
 
   const categories = useMemo(() => [...new Set(targets.map((item) => item.category))].map((value) => ({ label: displayCategory(value), value })), [targets])
+  const orderedTargets = useMemo(() => [...targets].sort((a, b) => {
+    const rank = (item: PredictionTargetSummary) => {
+      if (item.evaluationStatus === 'COMPLETED' && item.trainingStatus === 'ACTIVE') return 0
+      if (item.trainingStatus === 'ACTIVE') return 1
+      return 2
+    }
+    return rank(a) - rank(b) || a.name.localeCompare(b.name, 'zh-CN')
+  }), [targets])
   const publishedFields = fields.filter((item) => item.currentVersionId && item.status === 'ACTIVE')
   const publishedFieldOptions = publishedFields.flatMap((field) => field.currentVersionId
     ? [{ value: field.currentVersionId, label: `${field.name} · ${field.code}` }]
     : [])
+  const currentInputScheme = selectedTarget?.currentInputSchemeId
+    ? schemes.find((scheme) => scheme.id === selectedTarget.currentInputSchemeId)
+    : schemes.find((scheme) => scheme.status === 'FROZEN')
+  const inlineInputFields = publishedFields.filter((field) => field.availabilityStage === 'PRE_EXPERIMENT' && field.currentVersionId)
+
+  useEffect(() => {
+    setDraftInputFieldIds(currentInputScheme?.fields.map((field) => field.inputFieldVersionId) ?? [])
+  }, [currentInputScheme?.id, currentInputScheme?.version])
+
+  const toggleInlineInputField = (fieldVersionId: string) => {
+    setDraftInputFieldIds((current) => current.includes(fieldVersionId)
+      ? current.filter((id) => id !== fieldVersionId)
+      : [...current, fieldVersionId])
+  }
+
+  const saveInlineInputSelection = async () => {
+    if (!selectedTarget?.currentVersionId) return
+    if (!draftInputFieldIds.length) { void message.warning('请至少选择一项输入 X'); return }
+    try {
+      const code = currentInputScheme?.code ?? `${selectedTarget.code}_INPUT`
+      const name = currentInputScheme?.name ?? `${selectedTarget.name}输入方案`
+      const created = await modelingApi.createInputScheme(selectedTarget.id, {
+        targetVersionId: selectedTarget.currentVersionId,
+        materialDictionaryVersionId: currentInputScheme?.materialDictionaryVersionId,
+        code, name, expectedRevision: selectedTarget.revision,
+        fields: draftInputFieldIds.map((id, ordinal) => ({ inputFieldVersionId: id, required: true, ordinal, override: {} })), preprocessing: {},
+      })
+      await modelingApi.freezeInputScheme(created.id, created.revision)
+      await refreshTarget()
+      void message.success('输入 X 已保存并生效')
+    } catch (error) { report(error) }
+  }
 
   const confirmRetireDictionary = (dictionary: MaterialDictionary) => {
     modal.confirm({
@@ -494,31 +619,83 @@ export function ModelingSettingsPage({ embedded = false, initialTargetId, openCr
     })
   }
 
+  if (fullPageTarget) {
+    return <div className="modeling-settings-page modeling-target-route-page">
+      {selectedTarget ? <ModelingTargetWorkflow
+        target={selectedTarget}
+        versions={targetVersions}
+        mappingSuggestions={mappingSuggestions}
+        inputFields={inlineInputFields}
+        selectedInputFieldIds={draftInputFieldIds}
+        eligibilitySummary={eligibilitySummary}
+        eligibilityPage={eligibilityPage}
+        selectedSampleRevisionIds={currentSelectedIds}
+        eligibilityLoading={eligibilityLoading}
+        trainingLoading={trainingSelectionLoading}
+        canManage={canModel}
+        modelAvailable={selectedTarget.trainingStatus === 'ACTIVE'}
+        activeLegacyStep={detailTab}
+        onBack={() => navigate('/assistant/model-center?tab=settings')}
+        onStepChange={setDetailTab}
+        onToggleInput={toggleInlineInputField}
+        onSaveInputs={() => void saveInlineInputSelection()}
+        onReevaluate={() => void requestEligibility()}
+        onToggleSample={toggleTrainingSample}
+        onSelectSamples={selectTrainingSamples}
+        onClearSamples={clearTrainingSamples}
+        onStartTraining={() => void startSelectedTraining()}
+        onConfirmMapping={(suggestion) => void confirmSuggestedMapping(suggestion)}
+        onOpenModels={onOpenModels ? () => onOpenModels(selectedTarget.id) : undefined}
+      /> : <div className="modeling-target-loading"><Spin size="large" /><Text type="secondary">正在加载目标、完整记录和输入 X…</Text></div>}
+    </div>
+  }
+
+  const TargetDetailShell = ({ children }: { children: ReactNode }) => fullPageTarget
+    ? <section className="modeling-target-page-surface"><header className="modeling-target-page-header"><Button type="link" icon={<ArrowLeftOutlined />} onClick={() => navigate('/assistant/model-center?tab=settings')}>返回建模设置</Button><div><strong>{selectedTarget?.name ?? '预测目标'}</strong><span>按步骤选择 Y、选择输入 X、选择训练记录，再开始训练</span></div></header>{children}</section>
+    : <Drawer width={760} title={selectedTarget?.name} open={Boolean(selectedTarget)} onClose={()=>setSelectedTarget(undefined)} destroyOnHidden>{children}</Drawer>
+
   return <div className={`modeling-settings-page${embedded ? ' modeling-settings-panel' : ''}`}>
     {!embedded && <div className="modeling-header"><div><Title level={2}>建模设置</Title><Text className="modeling-muted">定义模型要预测的 Y，并维护可复用的输入字段库 X。</Text></div><Space><Button icon={<DatabaseOutlined />} onClick={() => navigate('/assistant/model-center/samples')}>样本来源</Button><Tag icon={<SafetyCertificateOutlined />} color="blue">配置版本可追溯</Tag></Space></div>}
     {!canModel && <Alert className="modeling-warning" type="info" showIcon message="当前为只读模式" description="你可以查看全部建模配置，但不能创建、发布或冻结版本。" />}
-    <div className="modeling-hierarchy"><div className="modeling-hierarchy-item"><b>预测目标 Y</b><span>模型要预测什么结果</span></div><i>→</i><div className="modeling-hierarchy-item"><b>输入字段库 X</b><span>哪些实验信息可以作为输入</span></div><div className="modeling-hierarchy-note">具体 Y 的输入方案在目标详情中冻结；达到资格后由模型管理承接训练。</div></div>
+    {embedded && <div className="modeling-quick-start"><div><b>1. 选择要预测的性能</b><span>例如翘曲、硬度或耐磨</span></div><i>→</i><div><b>2. 确认训练数据和输入信息</b><span>系统会检查数据是否完整</span></div><i>→</i><div><b>3. 查看模型结果</b><span>满足条件后再开始训练</span></div></div>}
+    {!embedded && <div className="modeling-hierarchy"><div className="modeling-hierarchy-item"><b>预测目标 Y</b><span>模型要预测什么结果</span></div><i>→</i><div className="modeling-hierarchy-item"><b>输入字段库 X</b><span>哪些实验信息可以作为输入</span></div><div className="modeling-hierarchy-note">具体 Y 的输入方案在目标详情中冻结；达到资格后由模型管理承接训练。</div></div>}
     <Card className="modeling-card" styles={{ body: { paddingTop: 8 } }}>
       <Tabs activeKey={tab} onChange={setTab} items={[
         { key:'targets',label:<span><ApiOutlined /> 预测目标 Y</span>,children:<>
-          <div className="modeling-toolbar"><div className="modeling-toolbar-filters"><Input.Search allowClear placeholder="搜索目标名称或编码" style={{width:240}} onSearch={(value: string)=>{setTargetKeyword(value);setTargetPage(1)}}/><Select allowClear placeholder="状态" style={{width:120}} options={lifecycleOptions} onChange={(value: string | undefined)=>{setTargetStatus(value);setTargetPage(1)}}/><Select allowClear placeholder="结果类型" style={{width:140}} options={Object.entries(valueTypeLabels).map(([value,label])=>({value,label}))} onChange={(value: string | undefined)=>{setTargetType(value);setTargetPage(1)}}/><Select allowClear placeholder="性能分类" style={{width:140}} options={categories} onChange={(value: string | undefined)=>{setTargetCategory(value);setTargetPage(1)}}/></div><Space><Button icon={<DatabaseOutlined />} onClick={() => navigate('/assistant/model-center/samples')}>样本来源</Button><Tag icon={<SafetyCertificateOutlined />} color="blue">配置版本可追溯</Tag></Space></div>
-          {targets.length===0&&!loading?<Empty className="modeling-empty" description="当前组织尚未建立预测目标目录"/>:<Table rowKey="id" loading={loading} columns={targetColumns} dataSource={targets} scroll={{x:1080}} pagination={{current:targetPage,pageSize:20,total:targetTotal,onChange:setTargetPage,showSizeChanger:false}}/>}
+          <div className="modeling-toolbar"><div className="modeling-toolbar-filters"><Input.Search allowClear placeholder={embedded ? '搜索性能名称' : '搜索目标名称或编码'} style={{width:240}} onSearch={(value: string)=>{setTargetKeyword(value);setTargetPage(1)}}/><Select allowClear placeholder="状态" style={{width:120}} options={lifecycleOptions} onChange={(value: string | undefined)=>{setTargetStatus(value);setTargetPage(1)}}/><Select allowClear placeholder="结果类型" style={{width:140}} options={Object.entries(valueTypeLabels).map(([value,label])=>({value,label}))} onChange={(value: string | undefined)=>{setTargetType(value);setTargetPage(1)}}/><Select allowClear placeholder="性能分类" style={{width:140}} options={categories} onChange={(value: string | undefined)=>{setTargetCategory(value);setTargetPage(1)}}/></div><Space><Button icon={<DatabaseOutlined />} onClick={() => navigate('/assistant/model-center/samples')}>样本来源</Button>{!embedded && <Tag icon={<SafetyCertificateOutlined />} color="blue">配置版本可追溯</Tag>}</Space></div>
+          {targets.length===0&&!loading?<Empty className="modeling-empty" description="当前组织尚未建立预测目标目录"/>:<Table rowKey="id" loading={loading} columns={targetColumns} dataSource={orderedTargets} scroll={{x:1080}} pagination={{current:targetPage,pageSize:20,total:targetTotal,onChange:setTargetPage,showSizeChanger:false}}/>}
         </>},
         { key:'fields',label:<span><SettingOutlined /> 输入字段库 X</span>,children:<>
-          <div className="modeling-toolbar"><div className="modeling-toolbar-filters"><Input.Search allowClear placeholder="搜索字段名称或编码" style={{width:240}} onSearch={(value: string)=>{setFieldKeyword(value);setFieldPage(1)}}/><Select allowClear placeholder="状态" style={{width:120}} options={lifecycleOptions} onChange={(value: string | undefined)=>{setFieldStatus(value);setFieldPage(1)}}/><Select allowClear placeholder="字段类型" style={{width:140}} options={Object.entries(fieldTypeLabels).map(([value,label])=>({value,label}))} onChange={(value: string | undefined)=>{setFieldType(value);setFieldPage(1)}}/></div>{canModel&&<Button type="primary" icon={<PlusOutlined />} onClick={()=>{setFieldEditor({});fieldForm.resetFields();fieldForm.setFieldValue('availabilityStage','PRE_EXPERIMENT')}}>新增X</Button>}</div>
+          <div className="modeling-toolbar"><div className="modeling-toolbar-filters"><Input.Search allowClear placeholder={embedded ? '搜索输入信息' : '搜索字段名称或编码'} style={{width:240}} onSearch={(value: string)=>{setFieldKeyword(value);setFieldPage(1)}}/><Select allowClear placeholder="状态" style={{width:120}} options={lifecycleOptions} onChange={(value: string | undefined)=>{setFieldStatus(value);setFieldPage(1)}}/><Select allowClear placeholder="字段类型" style={{width:140}} options={Object.entries(fieldTypeLabels).map(([value,label])=>({value,label}))} onChange={(value: string | undefined)=>{setFieldType(value);setFieldPage(1)}}/></div>{canModel&&<Button type="primary" icon={<PlusOutlined />} onClick={()=>{setFieldEditor({});fieldForm.resetFields();fieldForm.setFieldValue('availabilityStage','PRE_EXPERIMENT')}}>{embedded ? '新增输入信息' : '新增X'}</Button>}</div>
           <Table rowKey="id" loading={loading} columns={fieldColumns} dataSource={fields} scroll={{x:980}} pagination={{current:fieldPage,pageSize:20,total:fieldTotal,onChange:setFieldPage,showSizeChanger:false}}/>
         </>},
       ]}/>
     </Card>
 
-    <Drawer width={760} title={selectedTarget?.name} open={Boolean(selectedTarget)} onClose={()=>setSelectedTarget(undefined)} destroyOnHidden>
-      {selectedTarget&&<><div className="modeling-detail-summary"><div><label>业务编码</label><span>{selectedTarget.code}</span></div><div><label>性能分类</label><span>{displayCategory(selectedTarget.category)}</span></div><div><label>当前训练方案</label><span>{displaySchemeName(selectedTarget.currentInputSchemeName)}</span></div><div><label>样本／训练状态</label><span>{selectedTarget.evaluationStatus === 'COMPLETED' ? '已完成' : selectedTarget.evaluationStatus === 'RUNNING' ? '评估中' : selectedTarget.evaluationStatus === 'FAILED' ? '评估失败' : '待评估'}／{selectedTarget.trainingStatus==='ACTIVE'?'已有正式模型':'尚未训练'}</span></div></div><div className="modeling-detail-pipeline"><div className="active"><b>1</b><span>定义 Y</span></div><i>→</i><div className={selectedTarget.currentInputSchemeId?'active':''}><b>2</b><span>冻结输入 X</span></div><i>→</i>{onOpenModels ? <button type="button" className={`modeling-pipeline-link ${selectedTarget.trainingStatus==='ACTIVE'?'active':''}`} onClick={() => onOpenModels(selectedTarget.id)}><b>3</b><span>模型列表</span></button> : <div className={selectedTarget.trainingStatus==='ACTIVE'?'active':''}><b>3</b><span>模型列表</span></div>}</div>
-      <Tabs items={[
-        {key:'definition',label:'定义',children:<><div className="modeling-section-head"><strong>定义版本</strong>{canModel&&<Button icon={<PlusOutlined/>} onClick={()=>showTargetEditor(selectedTarget)}>新建版本</Button>}</div><Table size="small" rowKey="id" pagination={false} dataSource={targetVersions} columns={targetVersionColumns} /></>},
-        {key:'mapping',label:'数据来源',children:<><div className="source-summary-grid"><Card size="small"><Text type="secondary">数据中心找到</Text><Title level={3}>{mappingSuggestions?.dataCenterCount??0}<small> 条</small></Title></Card><Card size="small"><Text type="secondary">实验记录本找到</Text><Title level={3}>{mappingSuggestions?.experimentCount??0}<small> 条</small></Title></Card><Card size="small"><Text type="secondary">待确认</Text><Title level={3}>{mappingSuggestions?.pendingConfirmationCount??0}<small> 项</small></Title></Card></div>{mappingSuggestions?.suggestions.length?<Table size="small" rowKey="candidateKey" pagination={false} dataSource={mappingSuggestions.suggestions} columns={[{title:'识别到的结果',render:(_:unknown,row)=><div><strong>{row.fieldName}</strong><div className="modeling-muted">{[row.testMethod,row.load,row.substrate,row.stage,row.unit].filter(Boolean).join(' · ')||'没有额外测试条件'}</div></div>},{title:'覆盖',render:(_:unknown,row)=>`数据中心 ${row.dataCenterCount} · 实验本 ${row.experimentCount}`},{title:'样本示例',render:(_:unknown,row)=>row.samples.slice(0,2).map((sample)=><div key={`${sample.sourceType}-${sample.sampleName}`}>{sample.value} · {sample.location}</div>)},{title:'操作',width:100,render:(_:unknown,row)=><Button type="link" disabled={!canModel} onClick={()=>void confirmSuggestedMapping(row)}>确认对应</Button>}]} />:<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未从正式数据或已完成实验中找到相近结果"/>}<Collapse ghost items={[{key:'advanced',label:'高级配置',children:<><div className="modeling-section-head"><strong>已发布适配版本</strong>{canModel&&<Button icon={<PlusOutlined/>} onClick={()=>setMappingOpen(true)}>手工配置</Button>}</div><Table size="small" rowKey="id" pagination={false} dataSource={mappings} columns={mappingColumns}/></>}]} /></>},
-        {key:'scheme',label:'训练数据与输入X',children:<>
+    <TargetDetailShell>
+      {selectedTarget&&<><div className="modeling-detail-summary"><div className="modeling-detail-summary-primary"><label>当前预测目标 Y</label><strong>{selectedTarget.name}</strong><span>{displayCategory(selectedTarget.category)}</span></div><div><label>输入字段 X</label><strong>{currentInputScheme ? `${currentInputScheme.fields.length} 项` : '尚未选择'}</strong><span>{currentInputScheme ? displaySchemeName(currentInputScheme.name) : '先选择要提供给模型的信息'}</span></div><div><label>训练记录</label><strong>{eligibilitySummary?.evaluationStatus === 'COMPLETED' ? `${eligibilitySummary.trainable ?? 0} 条可用` : '待检查'}</strong><span>{eligibilitySummary?.evaluationStatus === 'COMPLETED' ? `共 ${eligibilitySummary.total ?? 0} 条有效记录` : '确认 X 后查看可用记录'}</span></div><div><label>模型状态</label><strong>{modelStatusLabel(selectedTarget.trainingStatus, selectedTarget.evaluationStatus)}</strong><span>{selectedTarget.evaluationStatus === 'COMPLETED' ? '当前数据已检查' : selectedTarget.evaluationStatus === 'RUNNING' ? '正在检查当前数据' : selectedTarget.evaluationStatus === 'FAILED' ? '当前数据需要处理' : '模型沿用上一版，当前数据尚未复核'}</span></div></div><div className="modeling-detail-pipeline"><button type="button" className={`modeling-pipeline-link ${detailTab==='definition'?'active':''}`} onClick={()=>setDetailTab('definition')}><b>1</b><span>选择目标 Y</span></button><i>→</i><button type="button" className={`modeling-pipeline-link ${detailTab==='scheme'?'active':''}`} onClick={()=>focusSchemeSection('input-selection')}><b>2</b><span>选择输入字段 X</span></button><i>→</i><button type="button" className={`modeling-pipeline-link ${detailTab==='scheme'?'active':''}`} onClick={()=>focusSchemeSection('training-selection')}><b>3</b><span>选择训练记录</span></button><i>→</i>{onOpenModels && selectedTarget.trainingStatus==='ACTIVE' ? <button type="button" className="modeling-pipeline-link active" onClick={() => onOpenModels(selectedTarget.id)}><b>4</b><span>查看模型结果</span></button> : <button type="button" className="modeling-pipeline-link" onClick={()=>focusSchemeSection('training-selection')}><b>4</b><span>开始训练</span></button>}</div>
+      <Tabs className="modeling-detail-tabs" activeKey={detailTab} onChange={setDetailTab} items={[
+        {key:'definition',label:<span className="modeling-detail-tab-label"><b>1</b><span>目标 Y</span></span>,children:<><div className="modeling-section-head"><strong>预测目标 Y</strong>{canModel&&<Button icon={<PlusOutlined/>} onClick={()=>showTargetEditor(selectedTarget)}>新建版本</Button>}</div><Alert type="info" showIcon message="这一步只确认要预测什么" description="当前目标的名称、单位、测试方法和适用条件会被冻结；历史模型不会被修改。"/><Table size="small" rowKey="id" pagination={false} dataSource={targetVersions} columns={targetVersionColumns} /></>},
+        {key:'mapping',label:'数据来源',children:<><Alert type="info" showIcon message="系统已找到与当前目标对应的数据" description="下面只显示这一项性能结果的实际记录。展开后可直接核对结果、记录编号和来源；确认正确的一组后，系统才会把它纳入训练。"/><div className="source-summary-grid"><Card size="small"><Text type="secondary">数据中心样本</Text><Title level={3}>{mappingSuggestions?.dataCenterCount??0}<small> 条</small></Title></Card><Card size="small"><Text type="secondary">实验本样本</Text><Title level={3}>{mappingSuggestions?.experimentCount??0}<small> 条</small></Title></Card><Card size="small"><Text type="secondary">需要确认</Text><Title level={3}>{mappingSuggestions?.pendingConfirmationCount??0}<small> 项</small></Title></Card></div>{mappingSuggestions?.suggestions.length?<div className="mapping-candidate-list">{mappingSuggestions.suggestions.map((row)=>{const records=row.records??row.samples??[];return <Card size="small" className="mapping-candidate-card" key={row.candidateKey}><div className="mapping-candidate-head"><div><strong>{row.fieldName}</strong><span>{[row.testMethod,row.load,row.substrate,row.stage,row.unit].filter(Boolean).join(' · ')||'条件未单独记录'}</span></div><Tag color={row.confirmationRequired?'orange':'green'}>{row.confirmationRequired?'需要确认':'已自动匹配'}</Tag></div><div className="mapping-candidate-meta"><span>数据中心 {row.dataCenterCount} 个样本</span><span>实验本 {row.experimentCount} 个样本</span><span>匹配度 {row.confidence}%</span></div><div className="mapping-candidate-values"><span>结果示例</span>{row.samples.slice(0,3).map((sample)=><Tag key={`${sample.sourceType}-${sample.sampleName}`}>{sample.value}</Tag>)}</div><Collapse ghost items={[{key:'records',label:`查看具体记录（${records.length}${records.length>=200?'+':''}条）`,children:<Table size="small" rowKey={(_,index)=>`${row.candidateKey}-${index}`} dataSource={records} columns={sourceRecordColumns} pagination={{pageSize:10,showSizeChanger:false,showTotal:(total)=>`共 ${total} 条`}}/>}]} /><div className="mapping-candidate-actions"><Text type="secondary">确认正确来源后，训练记录会重新计算</Text><Button type="link" disabled={!canModel || !row.confirmationRequired} onClick={()=>void confirmSuggestedMapping(row)}>{row.confirmationRequired?'确认对应':'已自动匹配'}</Button></div></Card>})}</div>:<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未找到与当前目标对应的数据"/>}</>},
+        {key:'scheme',label:<span className="modeling-detail-tab-label"><b>2–3</b><span>输入 X 与训练记录</span></span>,children:<>
+          <div id="input-selection" className="modeling-workflow-card">
+            <div className="modeling-workflow-card-head"><div><strong>第 2 步：选择输入字段 X</strong><span>点击字段即可加入或取消，系统只使用实验前能确定的信息。</span></div><Space size="small"><Tag color="blue">已选 {draftInputFieldIds.length} 项</Tag>{canModel&&<Button type="primary" size="small" disabled={!draftInputFieldIds.length} onClick={()=>void saveInlineInputSelection()}>保存选择</Button>}{canModel&&<Button size="small" onClick={()=>setSchemeOpen(true)}>方案设置</Button>}</Space></div>
+            <div className="modeling-input-picker">
+              {inlineInputFields.length ? inlineInputFields.map((field) => {
+                const id = field.currentVersionId as string
+                const selected = draftInputFieldIds.includes(id)
+                return <button type="button" className={`modeling-input-option${selected ? ' selected' : ''}`} aria-pressed={selected} key={id} onClick={()=>toggleInlineInputField(id)}>
+                  <span className="modeling-input-option-mark">{selected ? '✓' : ''}</span>
+                  <span className="modeling-input-option-copy"><strong>{field.name}</strong><small>{fieldTypeLabels[field.valueType] ?? field.valueType}{field.unit ? ` · ${field.unit}` : ''}</small></span>
+                  <Tag color={selected ? 'blue' : 'default'}>{selected ? '已选择' : '可加入'}</Tag>
+                </button>
+              }) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂时没有可选择的输入字段" />}
+            </div>
+            <Alert type="info" showIcon message="输入 X 会用于计算预测" description="系统会自动统一单位；缺少必要信息时会提示，不会擅自补值。" />
+          </div>
+          <div id="training-selection" className="modeling-workflow-card modeling-training-step-intro"><div className="modeling-workflow-card-head"><div><strong>第 3 步：选择训练记录</strong><span>只影响本次模型，不会修改实验本原始数据。</span></div><Tag color="blue">按记录选择</Tag></div></div>
           <Card size="small" loading={eligibilityLoading} title={<Space><span>资格评估</span>{eligibilitySummary?.evaluationStatus === 'COMPLETED' && <Tag color="green">已完成</Tag>}{eligibilitySummary?.evaluationStatus === 'RUNNING' && <Tag color="blue">评估中</Tag>}{eligibilitySummary?.evaluationStatus === 'FAILED' && <Tag color="red">失败</Tag>}</Space>} extra={<Button size="small" disabled={!canModel || !selectedTarget?.currentInputSchemeId} onClick={()=>void requestEligibility()}>重新评估</Button>}>
-            {!eligibilitySummary || eligibilitySummary.evaluationStatus === 'NOT_EVALUATED' ? <Alert type="info" showIcon message="还没有计算训练资格" description="冻结输入方案、来源映射和训练策略后，管理员可以开始评估。评估前不显示虚假的样本数量。"/> : <>
+            {!eligibilitySummary || eligibilitySummary.evaluationStatus === 'NOT_EVALUATED' ? <Alert type="info" showIcon message="还没有计算训练资格" description="冻结输入方案、来源映射和训练策略后，就可以开始评估。评估前不显示虚假的样本数量。"/> : <>
               {eligibilitySummary.evaluationStatus === 'FAILED' && <Alert type="error" showIcon message="资格评估失败" description={eligibilitySummary.unavailableReason ?? '请检查配置后重试。'}/>}
               {eligibilitySummary.evaluationStatus === 'RUNNING' && <Alert type="info" showIcon message="正在计算训练资格" description="后台正在按当前配置逐条检查样本，完成后刷新此页面。"/>}
               {eligibilitySummary.evaluationStatus === 'COMPLETED' && <>
@@ -528,26 +705,36 @@ export function ModelingSettingsPage({ embedded = false, initialTargetId, openCr
                   <div className="eligibility-stat danger"><span>暂不纳入</span><strong>{eligibilitySummary.excluded ?? '—'}</strong><small>需要补数据或修正映射</small></div>
                   <div className="eligibility-stat warning"><span>等待人工处理</span><strong>{eligibilitySummary.reviewRequired ?? '—'}</strong><small>材料、异常或身份问题</small></div>
                 </div>
+                <Alert
+                  className="eligibility-count-explanation"
+                  type="info"
+                  showIcon
+                  message="为什么导入了几百条，这里却只有几十条？"
+                  description={(() => {
+                    const count = (code: string) => eligibilitySummary.funnel.find((step) => step.code === code)?.count ?? 0
+                    const denominator = (code: string) => eligibilitySummary.funnel.find((step) => step.code === code)?.denominator ?? 0
+                    return `这里按当前预测目标 Y 和当前输入 X 方案单独筛选：全部来源 ${count('SOURCE_OBSERVATIONS') || denominator('SOURCE_OBSERVATIONS')} 条 → 有效目标结果 ${count('Y_VALID_VALUE')} 条 → 输入条件齐全 ${count('X_COMPLETE')} 条 → 最终可训练 ${eligibilitySummary.trainable ?? 0} 条。其他目标的数据不会混到当前目标里。`
+                  })()}
+                />
                 <div className="eligibility-section-title"><strong>资格检查进度</strong><span>每一步都以当前有效样本为分母</span></div>
                 <div className="eligibility-funnel">{eligibilitySummary.funnel.map((step) => <div className="eligibility-funnel-row" key={step.code}><span>{eligibilityFunnelLabels[step.code] ?? step.label}</span><div className="eligibility-bar"><i style={{width:`${step.denominator ? Math.min(100, step.count / step.denominator * 100) : 0}%`}} /></div><b>{step.count}<em>/{step.denominator}</em></b></div>)}</div>
                 <div className="eligibility-section-title"><strong>输入字段覆盖率</strong><span>各字段单独计算，不能把百分比直接相加</span></div>
                 <div className="eligibility-coverage-grid">{eligibilitySummary.fieldCoverage.map((field) => <div className="eligibility-coverage" key={field.fieldCode}><div><strong>{field.fieldName}</strong><small>{field.available}/{field.denominator} 条样本有值</small></div><b>{(field.ratio * 100).toFixed(1)}%</b><span>{field.reasonCodes.map((code) => eligibilityReasonLabels[code] ?? code).join('、') || '没有缺失'}</span></div>)}</div>
-                <div className="eligibility-section-title"><strong>需要处理的样本</strong><span>打开样本详情可以追溯来源文件、实验版本和原始坐标</span></div>
-                <Table size="small" rowKey="id" pagination={{pageSize:10}} dataSource={eligibilityPage?.items ?? []} columns={[{title:'样本',dataIndex:'logicalSampleKey',render:(v:string)=><span className="eligibility-sample-key">{v?.startsWith('SOURCE:') ? '来源样本' : v}</span>},{title:'来源',dataIndex:'authoritySourceType',render:(v:string)=>sourceTypeLabels[v] ?? v},{title:'资格状态',dataIndex:'state',render:(v:string)=><Tag color={v==='TRAINABLE'?'green':v==='REVIEW_REQUIRED'?'orange':'red'}>{eligibilityStateLabels[v] ?? v}</Tag>},{title:'主要原因',dataIndex:'primaryReasonCode',render:(v?:string)=>v ? (eligibilityReasonLabels[v] ?? v) : '—'},{title:'操作',width:90,render:(_:unknown,row)=> <Button type="link" onClick={()=>void openEligibilityDetail(row.id)}>查看详情</Button>}]}/>
+                <div className="eligibility-section-title"><div><strong>选择本次训练记录</strong><span>默认选中全部可用记录；取消选择只影响本次模型，不修改实验本原始数据。</span></div><Space size="small"><Button size="small" onClick={selectAllTrainingSamples}>选中当前筛选结果</Button><Button size="small" onClick={clearTrainingSamples}>清空选择</Button><Button size="small" type="primary" loading={trainingSelectionLoading} onClick={()=>void startSelectedTraining()}>按选中记录开始训练</Button></Space></div>
+                <Alert type="info" showIcon message={`已选择 ${currentSelectedIds.length} 条 / 当前可用 ${currentTrainableIds.length} 条`} description="暂不可用的记录不能加入训练，并会显示具体原因。训练开始后，本次记录范围会被冻结。" />
+                <Space className="eligibility-sample-filters" wrap size="small"><Input.Search allowClear placeholder="搜索实验记录或来源" value={sampleKeyword} onChange={(event)=>setSampleKeyword(event.target.value)} style={{width:240}}/><Select value={sampleView} onChange={setSampleView} options={[{value:'ALL',label:'全部记录'},{value:'SELECTED',label:'只看已选择'},{value:'UNAVAILABLE',label:'只看暂不可用'}]} style={{width:140}}/></Space>
+                <Table size="small" rowKey="id" pagination={{pageSize:10}} dataSource={visibleEligibilityItems} expandable={{
+                  expandedRowRender: (row) => renderEligibilityRowPreview(row),
+                  onExpand: (expanded, row) => { if (expanded) void loadExpandedEligibilityDetail(row.id) },
+                  expandRowByClick: true,
+                }} columns={[{title:'选择',width:56,render:(_:unknown,row)=><Checkbox disabled={row.state!=='TRAINABLE'} checked={currentSelectedIds.includes(row.sampleRevisionId)} onChange={(event)=>toggleTrainingSample(row.sampleRevisionId,event.target.checked)}/>},{title:'实验记录',dataIndex:'logicalSampleKey',render:(v:string)=><span className="eligibility-sample-key">{v?.startsWith('SOURCE:') ? '来源样本' : v}</span>},{title:'来源',dataIndex:'authoritySourceType',render:(v:string)=>sourceTypeLabels[v] ?? v},{title:'是否可用',dataIndex:'state',render:(v:string)=><Tag color={v==='TRAINABLE'?'green':v==='REVIEW_REQUIRED'?'orange':'red'}>{eligibilityStateLabels[v] ?? v}</Tag>},{title:'说明',dataIndex:'primaryReasonCode',render:(v?:string)=>v ? (eligibilityReasonLabels[v] ?? v) : '可以用于本次训练'},{title:'操作',width:110,render:(_:unknown,row)=><Button type="link" onClick={(event)=>{ event.stopPropagation(); void openEligibilityDetail(row.id) }}>查看完整数据</Button>}]}/>
               </>}
             </>}
           </Card>
-          <div className="modeling-section-head"><div><strong>系统发现的可用字段</strong><div className="modeling-muted">扫描当前权威逻辑样本；数据中心和实验本只作为来源统计，不重复计数。未确认标准映射的字段只能作为待处理建议。</div></div><Tag>{inputSuggestions?.totalElements ?? 0} 个候选</Tag></div>
-          {inputSuggestions?.content.length ? <Table size="small" rowKey="candidateKey" pagination={false} dataSource={inputSuggestions.content} columns={[
-            { title: '字段', render: (_: unknown, row: InputSuggestionPage['content'][number]) => <div><strong>{row.name}</strong><div className="modeling-code">{row.candidateKey} · {fieldTypeLabels[row.valueType] ?? row.valueType}</div></div> },
-            { title: '覆盖率', render: (_: unknown, row: InputSuggestionPage['content'][number]) => `${row.totalCoverage} 条（数据中心 ${row.dataCenterCoverage} · 实验本 ${row.experimentCoverage}）` },
-            { title: '观察到的值', render: (_: unknown, row: InputSuggestionPage['content'][number]) => row.valueType === 'NUMBER' && row.observedRange.minimum !== undefined ? `${row.observedRange.minimum} ～ ${row.observedRange.maximum}` : row.observedValues.slice(0, 5).join('、') || '—' },
-            { title: '状态', render: (_: unknown, row: InputSuggestionPage['content'][number]) => <Space><Tag color={!row.modelEligible ? 'default' : row.matchStatus === 'REUSABLE' ? 'green' : row.matchStatus === 'CONFLICT' ? 'orange' : 'blue'}>{!row.modelEligible && row.matchStatus === 'NEW_CANDIDATE' ? '待确认数据字段' : !row.modelEligible ? '暂不可建模' : row.matchStatus === 'REUSABLE' ? '可复用已有X' : row.matchStatus === 'CONFLICT' ? '存在定义冲突' : '可创建X草稿'}</Tag>{row.conflicts.map((item) => <span className="modeling-muted" key={item}>{item}</span>)}</Space> },
-            { title: '操作', width: 170, render: (_: unknown, row: InputSuggestionPage['content'][number]) => row.existingInputFieldVersionId ? <Button type="link" disabled={!canModel || !row.modelEligible} onClick={() => { const current = schemeForm.getFieldValue('inputFieldVersionIds') ?? []; schemeForm.setFieldsValue({ targetVersionId: selectedTarget?.currentVersionId, inputFieldVersionIds: Array.from(new Set([...current, row.existingInputFieldVersionId!])) }); setSchemeOpen(true) }}>加入输入方案</Button> : <Button type="link" disabled={!canModel || row.valueType === 'STRING' || row.matchStatus === 'CONFLICT'} onClick={() => createFieldFromSuggestion(row)}>建立X草稿</Button> },
-          ]} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前事实中尚未发现可用实验前字段" />}
-          <div className="modeling-section-head"><strong>输入方案</strong>{canModel&&<Button icon={<PlusOutlined/>} onClick={()=>setSchemeOpen(true)}>新建方案</Button>}</div><Table size="small" rowKey="id" pagination={false} dataSource={schemes} columns={schemeColumns} /><Divider/><div className="modeling-section-head"><strong>训练策略（高级设置）</strong>{canConfig&&<Button onClick={()=>{policyForm.resetFields();policyForm.setFieldsValue({requireFairComparison:true,autoTrainingEnabled:false,dataNature:'REAL'});setPolicyOpen(true)}}>新建策略</Button>}</div><Table size="small" rowKey="id" pagination={false} dataSource={policies} columns={policyColumns} /><Divider/><div className="modeling-section-head"><div><strong>预测质量策略</strong><div className="modeling-muted">根据验证表现、适用域、证据覆盖和警告决定结果可信等级。</div></div>{canConfig&&<Button onClick={()=>{qualityForm.resetFields();qualityForm.setFieldsValue({defaultTrustLevel:'MEDIUM'});setQualityOpen(true)}}>新建策略</Button>}</div><Table size="small" rowKey="id" pagination={false} dataSource={qualityPolicies} columns={qualityColumns} /></>},
+          <Alert type="info" showIcon message="输入和训练记录已在上方选择" description="这里不再展示系统内部字段候选和高级策略。需要调整输入时，点击“调整输入 X”；需要控制训练范围时，直接勾选或取消上方记录。" />
+        </>},
       ]}/></>}
-    </Drawer>
+    </TargetDetailShell>
 
     <Drawer width={760} title="样本详情" open={Boolean(eligibilityDetail)} loading={eligibilityDetailLoading} onClose={()=>setEligibilityDetail(undefined)} destroyOnHidden>
       {eligibilityDetail&&<>
@@ -570,7 +757,69 @@ export function ModelingSettingsPage({ embedded = false, initialTargetId, openCr
       </>}
     </Drawer>
 
-    <Drawer width={680} title={selectedField?.name} open={Boolean(selectedField)} onClose={()=>setSelectedField(undefined)} destroyOnHidden>{selectedField&&<><Descriptions column={2} bordered size="small" items={[{key:'code',label:'字段编码',children:selectedField.code},{key:'stage',label:'可用时点',children:selectedField.availabilityStage==='PRE_EXPERIMENT'?'实验前':'实验后'},{key:'source',label:'来源状态',children:selectedField.standardFieldName??(selectedField.valueType==='COMPOSITION'?'材料编码与比例':'系统待匹配')},{key:'status',label:'状态',children:<Tag color={statusColor[selectedField.status]}>{selectedField.status}</Tag>}]} /><div className="modeling-section-head"><strong>字段版本</strong>{canModel&&<Button onClick={()=>{setFieldEditor({field:selectedField});fieldForm.setFieldsValue({code:selectedField.code,name:selectedField.name,valueType:selectedField.valueType,unit:selectedField.unit,availabilityStage:selectedField.availabilityStage,standardFieldDictionaryId:undefined})}}>新建版本</Button>}</div><Table size="small" rowKey="id" pagination={false} dataSource={fieldVersions} columns={fieldVersionColumns} />{selectedField.valueType==='COMPOSITION'&&<><Divider/><div className="modeling-section-head"><div><strong>材料匹配与模型覆盖</strong><div className="modeling-muted">系统按材料编码、名称和有效别名自动识别，只需处理未识别项。</div></div>{canConfig&&<Space><Button onClick={()=>setAliasOpen(true)}>处理未识别材料</Button><Button onClick={()=>setDictionaryOpen(true)}>维护模型覆盖</Button></Space>}</div><Table size="small" rowKey="id" pagination={false} dataSource={aliases.slice(0,8)} columns={aliasColumns}/><Space wrap>{dictionaries.map((dictionary)=><Card size="small" key={dictionary.id} title={`${dictionary.code} · v${dictionary.version}`} extra={<Tag color={statusColor[dictionary.status]}>{dictionary.status}</Tag>}><div>{dictionary.items.length} 种已覆盖材料</div>{canConfig&&dictionary.status==='DRAFT'&&<Button type="link" onClick={()=>void (async()=>{try{await modelingApi.freezeMaterialDictionary(dictionary.id,dictionary.revision);await loadReferencesAndMaterials();void message.success('材料覆盖版本已冻结')}catch(error){report(error)}})()}>冻结</Button>}{canConfig&&dictionary.status!=='RETIRED'&&<Button type="link" danger onClick={()=>confirmRetireDictionary(dictionary)}>停用</Button>}</Card>)}</Space></>}</>}</Drawer>
+    <Drawer width={680} title={selectedField ? `${selectedField.name}（输入字段 X）` : '输入字段 X'} open={Boolean(selectedField)} onClose={()=>setSelectedField(undefined)} destroyOnHidden>
+      {selectedField&&<>
+        <Alert
+          className="input-field-detail-explain"
+          type="info"
+          showIcon
+          message={selectedField.availabilityStage === 'PRE_EXPERIMENT' ? '这是预测前需要提供的信息' : '这是实验完成后才能获得的信息'}
+          description={selectedField.availabilityStage === 'PRE_EXPERIMENT'
+            ? '模型会把它作为输入 X，用来计算预测结果。没有这项信息时，系统可能无法完成预测。'
+            : '它会保留在实验记录中用于分析，但不会被当作基础模型的必填输入。'}
+        />
+        <div className="input-field-detail-summary">
+          <Card size="small" className="input-field-detail-card" title="它是什么">
+            <strong>{fieldTypeLabels[selectedField.valueType] ?? selectedField.valueType}</strong>
+            <Text type="secondary">这是模型使用的输入字段 X。</Text>
+          </Card>
+          <Card size="small" className="input-field-detail-card" title="什么时候提供">
+            <strong>{selectedField.availabilityStage === 'PRE_EXPERIMENT' ? '实验前' : '实验后'}</strong>
+            <Text type="secondary">{selectedField.availabilityStage === 'PRE_EXPERIMENT' ? '开始实验或预测前即可确定' : '实验完成后才会产生'}</Text>
+          </Card>
+          <Card size="small" className="input-field-detail-card" title="单位">
+            <strong>{selectedField.unit || '未设置'}</strong>
+            <Text type="secondary">输入值会按这个单位统一处理</Text>
+          </Card>
+          <Card size="small" className="input-field-detail-card" title="当前状态">
+            <Tag color={statusColor[selectedField.status]}>{selectedField.status === 'ACTIVE' ? '可以使用' : lifecycleLabels[selectedField.status] ?? selectedField.status}</Tag>
+            <Text type="secondary">{selectedField.standardFieldName ? `来源：${selectedField.standardFieldName}` : selectedField.valueType === 'COMPOSITION' ? '来源：材料名称和比例' : '系统会自动匹配来源'}</Text>
+          </Card>
+        </div>
+        <Card size="small" className="input-field-detail-card input-field-detail-how" title="系统会怎么用">
+          <ul>
+            <li>从实验记录和已确认的数据来源中读取这项信息。</li>
+            <li>先统一单位和格式，再交给模型作为输入 X。</li>
+            <li>来源不明确或缺失时，系统会提示处理，不会擅自补值。</li>
+          </ul>
+          {selectedField.valueType === 'COMPOSITION' && <Text type="secondary">配方类输入会继续识别材料编码、名称和比例；未识别材料需要单独处理。</Text>}
+        </Card>
+        <Collapse
+          className="input-field-detail-advanced"
+          ghost
+          items={[{
+            key: 'advanced',
+            label: '更多信息与变更记录',
+            children: <>
+              <Descriptions column={2} bordered size="small" items={[
+                {key:'code',label:'字段编码',children:selectedField.code},
+                {key:'status',label:'配置状态',children:<Tag color={statusColor[selectedField.status]}>{lifecycleLabels[selectedField.status] ?? selectedField.status}</Tag>},
+                {key:'revision',label:'当前修订号',children:selectedField.revision},
+                {key:'source',label:'标准来源',children:selectedField.standardFieldName ?? '尚未绑定'},
+              ]} />
+              <div className="modeling-section-head"><strong>变更记录</strong>{canModel&&<Button onClick={()=>{setFieldEditor({field:selectedField});fieldForm.setFieldsValue({code:selectedField.code,name:selectedField.name,valueType:selectedField.valueType,unit:selectedField.unit,availabilityStage:selectedField.availabilityStage,standardFieldDictionaryId:undefined})}}>新建版本</Button>}</div>
+              <Table size="small" rowKey="id" pagination={false} dataSource={fieldVersions} columns={fieldVersionColumns} />
+              {selectedField.valueType==='COMPOSITION'&&<>
+                <Divider />
+                <div className="modeling-section-head"><div><strong>材料匹配设置</strong><div className="modeling-muted">系统按材料编码、名称和有效别名自动识别。</div></div>{canConfig&&<Space><Button onClick={()=>setAliasOpen(true)}>处理未识别材料</Button><Button onClick={()=>setDictionaryOpen(true)}>维护模型覆盖</Button></Space>}</div>
+                <Table size="small" rowKey="id" pagination={false} dataSource={aliases.slice(0,8)} columns={aliasColumns}/>
+                <Space wrap>{dictionaries.map((dictionary)=><Card size="small" key={dictionary.id} title={`${dictionary.code} · v${dictionary.version}`} extra={<Tag color={statusColor[dictionary.status]}>{lifecycleLabels[dictionary.status] ?? dictionary.status}</Tag>}><div>{dictionary.items.length} 种已覆盖材料</div>{canConfig&&dictionary.status==='DRAFT'&&<Button type="link" onClick={()=>void (async()=>{try{await modelingApi.freezeMaterialDictionary(dictionary.id,dictionary.revision);await loadReferencesAndMaterials();void message.success('材料覆盖版本已冻结')}catch(error){report(error)}})()}>冻结</Button>}{canConfig&&dictionary.status!=='RETIRED'&&<Button type="link" danger onClick={()=>confirmRetireDictionary(dictionary)}>停用</Button>}</Card>)}</Space>
+              </>}
+            </>
+          }]}
+        />
+      </>}
+    </Drawer>
 
     <Modal title="处理人工审查" open={Boolean(reviewTarget)} onCancel={()=>{setReviewTarget(undefined);reviewForm.resetFields()}} onOk={()=>void submitReviewDecision()} destroyOnHidden>
       <Alert type="info" showIcon message="决定只影响当前资格结果" description="原始事实不会在这里被修改；需要补值或修正来源时，请回到来源数据修订。"/>
@@ -646,7 +895,6 @@ export function ModelingSettingsPage({ embedded = false, initialTargetId, openCr
           <Form.Item name="timeoutMinutes" label="单次训练超时（分钟）" rules={[{required:true,message:'请填写超时时间'}]}><InputNumber min={1} precision={0}/></Form.Item>
           <Form.Item name="retrainMinimumNewSamples" label="至少新增多少样本再重训" rules={[{required:true,message:'请填写新增量'}]}><InputNumber min={0} precision={0}/></Form.Item>
           <Form.Item name="minimumIntervalHours" label="两次训练最短间隔（小时）" rules={[{required:true,message:'请填写间隔'}]}><InputNumber min={0} precision={0}/></Form.Item>
-          <Form.Item name="autoTrainingEnabled" label="允许自动创建训练任务" valuePropName="checked"><Switch/></Form.Item>
         </div>
         <h4>异常值审查规则（可选）</h4><Form.List name="anomalyRules">{(fields,{add,remove})=><><Space direction="vertical" className="policy-anomaly-list">{fields.map(({key,name})=><Space key={key} align="baseline"><Form.Item name={[name,'fieldCode']} rules={[{required:true,message:'请选择字段'}]}><Select showSearch placeholder="输入字段" options={publishedFields.map((field)=>({value:field.code,label:field.name}))} style={{width:220}}/></Form.Item><Form.Item name={[name,'minimum']}><InputNumber placeholder="最小值"/></Form.Item><Form.Item name={[name,'maximum']}><InputNumber placeholder="最大值"/></Form.Item><Button type="link" danger onClick={()=>remove(name)}>删除</Button></Space>)}</Space><Button onClick={()=>add()}>添加异常规则</Button></>}</Form.List>
       </Form>

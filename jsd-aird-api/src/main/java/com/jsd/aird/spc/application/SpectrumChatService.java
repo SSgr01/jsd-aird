@@ -9,7 +9,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Pattern;
 
 import javax.imageio.ImageIO;
@@ -57,6 +56,8 @@ public class SpectrumChatService {
     private final SpectrumPromptPort prompts;
     private final SpectrumResultValidator resultValidator;
     private final SpectrumResultPresenter resultPresenter;
+    private final SpectrumIntentResolver intentResolver;
+    private final SpectrumProtocolResolver protocolResolver;
     private final AuditLogFacade audit;
     private final String model;
 
@@ -64,7 +65,8 @@ public class SpectrumChatService {
                                OpsAsyncFacade async, SpectrumVisionClient vision, SpectrumPromptPort prompts,
                                SpectrumResultValidator resultValidator, SpectrumResultPresenter resultPresenter,
                                @org.springframework.beans.factory.annotation.Value("${app.spectrum.model.name:}") String model) {
-        this(repository, charts, objectMapper, async, vision, prompts, resultValidator, resultPresenter, null, model);
+        this(repository, charts, objectMapper, async, vision, prompts, resultValidator, resultPresenter,
+                null, model, new SpectrumIntentResolver(), new SpectrumProtocolResolver(objectMapper));
     }
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -72,7 +74,18 @@ public class SpectrumChatService {
                                OpsAsyncFacade async, SpectrumVisionClient vision, SpectrumPromptPort prompts,
                                SpectrumResultValidator resultValidator, SpectrumResultPresenter resultPresenter,
                                AuditLogFacade audit,
+                               SpectrumIntentResolver intentResolver,
+                               SpectrumProtocolResolver protocolResolver,
                                @org.springframework.beans.factory.annotation.Value("${app.spectrum.model.name:}") String model) {
+        this(repository, charts, objectMapper, async, vision, prompts, resultValidator, resultPresenter,
+                audit, model, intentResolver, protocolResolver);
+    }
+
+    SpectrumChatService(SpectrumRepository repository, SpectrumService charts, ObjectMapper objectMapper,
+                        OpsAsyncFacade async, SpectrumVisionClient vision, SpectrumPromptPort prompts,
+                        SpectrumResultValidator resultValidator, SpectrumResultPresenter resultPresenter,
+                        AuditLogFacade audit, String model, SpectrumIntentResolver intentResolver,
+                        SpectrumProtocolResolver protocolResolver) {
         this.repository = repository;
         this.charts = charts;
         this.objectMapper = objectMapper;
@@ -81,6 +94,8 @@ public class SpectrumChatService {
         this.prompts = prompts;
         this.resultValidator = resultValidator;
         this.resultPresenter = resultPresenter;
+        this.intentResolver = intentResolver;
+        this.protocolResolver = protocolResolver;
         this.audit = audit;
         this.model = model == null ? "" : model;
     }
@@ -112,12 +127,14 @@ public class SpectrumChatService {
         var categoryNames = objectMapper.createArrayNode();
         rows.stream().map(SpectrumRepository.ChartRow::categoryName).distinct().forEach(categoryNames::add);
         var analysisId = UUID.randomUUID();
-        var scenario = StringUtils.hasText(command.scenarioTemplate()) ? command.scenarioTemplate().trim() : null;
+        var routing = intentResolver.resolve(command.analysisIntent(), command.scenarioTemplate(),
+                command.question(), rows);
+        var resolvedIntent = routing.resolvedIntent().name();
         var analysis = repository.insertAnalysis(new SpectrumRepository.NewAnalysis(
-                analysisId, actor.organizationId(), sessionId, scenario == null ? "AI_CHAT" : "OPTIONAL_SCENARIO",
+                analysisId, actor.organizationId(), sessionId,
+                "USER_SELECTED".equals(routing.resolution()) ? "INTENT_GUIDED" : "AI_CHAT",
                 command.question().trim(), objectMapper.valueToTree(chartIds).toString(), pageSelections.toString(),
-                categoryNames.toString(), scenario, actor.userId(),
-                scenario == null ? SpectrumPromptPort.GENERIC_VERSION : SpectrumPromptPort.COMPETITOR_VERSION,
+                categoryNames.toString(), resolvedIntent, actor.userId(), SpectrumPromptPort.V3_VERSION,
                 model));
         if (audit != null) {
             var detail = objectMapper.createObjectNode().put("objectName", command.question().trim());
@@ -163,62 +180,81 @@ public class SpectrumChatService {
             var images = new ArrayList<SpectrumVisionClient.VisionImage>();
             var context = new StringBuilder();
             var pageContext = new StringBuilder();
-            var spectrumTypes = new ArrayList<String>();
             var referenceChartIds = new ArrayList<String>();
             var explicitSampleRelations = new ArrayList<String>();
-            var availableEvidenceIds = new ArrayList<String>();
+            var evidenceSourceTypes = new LinkedHashMap<String, String>();
             var sampleNames = new ArrayList<String>();
+            var categoryHints = new ArrayList<String>();
+            var routing = intentResolver.resolve("INTENT_GUIDED".equals(analysis.mode())
+                            ? analysis.scenarioTemplate() : "AUTO",
+                    "COMPETITOR_DECOMPOSITION".equals(analysis.scenarioTemplate())
+                            ? analysis.scenarioTemplate() : null,
+                    analysis.question(), rows);
+            var protocols = protocolResolver.resolve(analysis.question(), rows);
             for (var row : rows) {
-                spectrumTypes.add(row.categoryCode());
-                if (hasSinglePeakReference(row.metadataJson())) referenceChartIds.add(row.id().toString());
+                var reference = hasSinglePeakReference(row.metadataJson());
+                if (reference) referenceChartIds.add(row.id().toString());
                 explicitSampleRelations.addAll(explicitSampleRelations(row.metadataJson()));
                 if (StringUtils.hasText(row.sampleName())) sampleNames.add(row.sampleName().trim());
+                var category = charts.requireCategory(organizationId, row.categoryId());
+                if (StringUtils.hasText(category.analysisHint())) {
+                    categoryHints.add(category.name() + "：" + category.analysisHint().trim());
+                }
+                var titleEvidenceId = metadataEvidenceId(row.id(), "title");
+                evidenceSourceTypes.put(titleEvidenceId, "DOCUMENT_METADATA");
                 context.append("图谱ID=").append(row.id()).append("；类别=").append(row.categoryName())
-                        .append("；标题=").append(row.title()).append("；样品=").append(nullToUnknown(row.sampleName()))
+                        .append("；标题=").append(row.title()).append("（证据=").append(titleEvidenceId).append("）")
+                        .append("；样品=").append(nullToUnknown(row.sampleName()))
                         .append("；批号=").append(nullToUnknown(row.batchNo())).append("；测试条件=")
                         .append(nullToUnknown(row.testConditions())).append("；类别元数据=").append(row.metadataJson()).append("\n");
+                addMetadataEvidence(evidenceSourceTypes, row, "sampleName", row.sampleName());
+                addMetadataEvidence(evidenceSourceTypes, row, "batchNo", row.batchNo());
+                addMetadataEvidence(evidenceSourceTypes, row, "testConditions", row.testConditions());
                 var pages = pageSelections.getOrDefault(row.id(), List.of(1));
                 pageContext.append(row.id()).append(" -> ").append(pages).append("\n");
-                pages.forEach(page -> availableEvidenceIds.add(row.id() + "/page-" + page));
                 try (var stored = charts.openChart(organizationId, row.id()).file()) {
                     var bytes = stored.stream().readAllBytes();
                     for (var page : pages) {
-                        images.addAll(render(row, bytes, page));
+                        var evidenceId = pageEvidenceId(row.id(), page);
+                        evidenceSourceTypes.put(evidenceId, reference
+                                ? "OBSERVED_DATA,REFERENCE_SPECTRUM" : "OBSERVED_DATA");
+                        images.addAll(render(row, bytes, page, evidenceId));
                     }
                 }
             }
             repository.updateAnalysisProgress(organizationId, analysisId, 40, "调用视觉模型");
             appendEvent(organizationId, analysisId, "status", statusPayload("RUNNING", 40, "调用视觉模型"));
             var promptContext = new SpectrumAnalysisPromptContext(
-                    analysis.question(), context.toString(), pageContext.toString(), analysis.scenarioTemplate(),
-                    spectrumTypes.stream().distinct().toList(), !referenceChartIds.isEmpty(),
+                    analysis.question(), context.toString(), pageContext.toString(),
+                    routing.requestedIntent().name(), routing.resolvedIntent().name(), routing.resolution(),
+                    routing.reasonCode(), protocols, categoryHints.stream().distinct().toList(), evidenceSourceTypes,
                     referenceChartIds.stream().distinct().toList(), explicitSampleRelations.stream().distinct().toList(),
-                    availableEvidenceIds.stream().distinct().toList(), sampleNames.stream().distinct().toList());
+                    sampleNames.stream().distinct().toList());
             var prompt = prompts.build(promptContext);
-            var streaming = new SafeStreamingObserver(organizationId, analysisId, promptContext, analysis.question());
             var response = vision.analyze(
-                    new SpectrumVisionClient.VisionRequest(prompt, images, analysis.scenarioTemplate()), streaming);
+                    new SpectrumVisionClient.VisionRequest(prompt, images, routing.resolvedIntent().name()),
+                    SpectrumVisionClient.StreamObserver.NOOP);
             repository.updateAnalysisProgress(organizationId, analysisId, 85, "保存结构化结果");
             appendEvent(organizationId, analysisId, "status", statusPayload("RUNNING", 85, "保存结构化结果"));
-            var result = normalizeResult(response.result());
-            if ("FAILED".equals(result.path("analysisStatus").asText())) {
-                throw new IllegalStateException(result.path("answerMarkdown").asText("视觉模型未返回有效结果"));
+            var modelResult = normalizeResult(response.result());
+            if ("FAILED".equals(modelResult.path("analysisStatus").asText())) {
+                throw new IllegalStateException("视觉模型未返回有效的 Claim 结果");
             }
-            var validation = resultValidator.validate(result, promptContext);
-            result = resultPresenter.present(validation.result(), analysis.question());
-            streaming.publishFinalAnswerIfMissing(result);
+            var validation = resultValidator.validate(modelResult, promptContext);
+            var internalResult = validation.result();
+            var publicResult = resultPresenter.present(internalResult, analysis.question());
             var warnings = objectMapper.createArrayNode();
             validation.warnings().forEach(warnings::add);
-            var finalStatus = "PARTIAL".equals(result.path("analysisStatus").asText()) ? "PARTIAL" : "SUCCEEDED";
+            var finalStatus = "PARTIAL".equals(internalResult.path("analysisStatus").asText()) ? "PARTIAL" : "SUCCEEDED";
             var citations = citations(rows, pageSelections);
-            repository.updateAnalysisFinished(organizationId, analysisId, finalStatus, result.toString(),
+            repository.updateAnalysisFinished(organizationId, analysisId, finalStatus, internalResult.toString(),
                     response.rawResponse().toString(), warnings.toString(), null,
                     response.model(), response.promptVersion());
             appendEvent(organizationId, analysisId, "done", statusPayload(finalStatus, 100,
-                    "PARTIAL".equals(finalStatus) ? "分析完成，部分内容已按证据边界过滤" : "分析完成"));
+                    "PARTIAL".equals(finalStatus) ? "分析完成，部分结论因依据不足未列入结果" : "分析完成"));
             repository.insertMessage(new SpectrumRepository.NewMessage(
                     UUID.randomUUID(), organizationId, analysis.sessionId(), analysisId, "ASSISTANT",
-                    answer(result), citations.toString(), result.toString(), warnings.toString()));
+                    answer(publicResult), citations.toString(), publicResult.toString(), warnings.toString()));
             repository.touchSession(organizationId, analysis.sessionId(), null);
         } catch (Exception exception) {
             throw exception instanceof RuntimeException runtime ? runtime : new IllegalStateException(exception);
@@ -237,18 +273,18 @@ public class SpectrumChatService {
     public void failInternal(UUID organizationId, UUID analysisId, Exception exception) {
         var analysis = repository.findAnalysis(organizationId, analysisId).orElse(null);
         if (analysis == null) return;
-        var failureMessage = "图谱 AI 分析失败：" + safeMessage(exception);
-        var warning = objectMapper.createArrayNode().add(failureMessage);
-        var result = prompts.emptyResult(failureMessage, failureMessage);
-        result.put("analysisStatus", "FAILED");
-        result.put("errorMessage", safeMessage(exception));
-        result.put("answerMarkdown", failureMessage);
-        repository.updateAnalysisFinished(organizationId, analysisId, "FAILED", result.toString(), "{}",
+        var publicFailureMessage = "图谱分析未完成，请稍后重试。";
+        var warning = objectMapper.createArrayNode().add(publicFailureMessage);
+        var internalResult = prompts.emptyResult(publicFailureMessage, publicFailureMessage);
+        internalResult.put("analysisStatus", "FAILED");
+        internalResult.put("errorMessage", safeMessage(exception));
+        var publicResult = resultPresenter.present(internalResult, analysis.question());
+        repository.updateAnalysisFinished(organizationId, analysisId, "FAILED", internalResult.toString(), "{}",
                 warning.toString(), safeMessage(exception), analysis.model(), analysis.promptVersion());
-        appendEvent(organizationId, analysisId, "error", statusPayload("FAILED", 0, failureMessage));
+        appendEvent(organizationId, analysisId, "error", statusPayload("FAILED", 0, publicFailureMessage));
         repository.insertMessage(new SpectrumRepository.NewMessage(
                 UUID.randomUUID(), organizationId, analysis.sessionId(), analysisId, "ASSISTANT",
-                failureMessage, "[]", result.toString(), warning.toString()));
+                publicFailureMessage, "[]", publicResult.toString(), warning.toString()));
     }
 
     public boolean retryable(Exception exception) {
@@ -307,20 +343,23 @@ public class SpectrumChatService {
         } catch (Exception exception) { throw new IllegalStateException("图谱引用数据无效", exception); }
     }
 
-    private List<SpectrumVisionClient.VisionImage> render(SpectrumRepository.ChartRow row, byte[] bytes, int page) throws IOException {
+    private List<SpectrumVisionClient.VisionImage> render(SpectrumRepository.ChartRow row, byte[] bytes, int page,
+                                                          String evidenceId) throws IOException {
         var result = new ArrayList<SpectrumVisionClient.VisionImage>();
+        var caption = "下面图片对应图谱“" + row.title() + "”，类别“" + row.categoryName()
+                + "”，第 " + page + " 页，可引用证据 ID：" + evidenceId + "。";
         if (isPdf(row)) {
             try (var document = Loader.loadPDF(bytes)) {
                 var renderer = new PDFRenderer(document);
                 BufferedImage image = renderer.renderImageWithDPI(page - 1, 150, ImageType.RGB);
                 try (var output = new ByteArrayOutputStream()) {
                     ImageIO.write(image, "png", output);
-                    result.add(new SpectrumVisionClient.VisionImage(row.id(), row.categoryName(), page,
+                    result.add(new SpectrumVisionClient.VisionImage(row.id(), row.categoryName(), page, caption,
                             SpectrumVisionClient.dataUri("image/png", output.toByteArray())));
                 }
             }
         } else if (page == 1) {
-            result.add(new SpectrumVisionClient.VisionImage(row.id(), row.categoryName(), 1,
+            result.add(new SpectrumVisionClient.VisionImage(row.id(), row.categoryName(), 1, caption,
                     SpectrumVisionClient.dataUri(row.contentType(), bytes)));
         }
         return result;
@@ -329,11 +368,12 @@ public class SpectrumChatService {
     private ObjectNode normalizeResult(JsonNode source) {
         var result = source != null && source.isObject() ? (ObjectNode) source.deepCopy()
                 : prompts.emptyResult("模型没有返回可解析的结构化结果。", "模型响应格式不完整");
+        result.put("schemaVersion", 3);
         if (source == null || !source.isObject() || source.size() == 0) result.put("analysisStatus", "FAILED");
-        if (!result.has("answerMarkdown")) result.put("answerMarkdown", "模型返回的结构化结果缺少分析摘要，请重新分析。");
-        if (!result.has("conclusionBoundary")) result.put("conclusionBoundary", "POSSIBLE_INTERPRETATIONS_ONLY_NO_DEFINITIVE_FORMULA");
+        if (!result.path("claims").isArray()) result.set("claims", objectMapper.createArrayNode());
+        if (!result.path("limitations").isArray()) result.set("limitations", objectMapper.createArrayNode());
+        if (!result.path("assessment").isObject()) result.set("assessment", objectMapper.createObjectNode());
         normalizeConfidence(result);
-        normalizeArrayFields(result);
         return result;
     }
 
@@ -356,23 +396,13 @@ public class SpectrumChatService {
         result.put("confidence", value);
     }
 
-    private void normalizeArrayFields(ObjectNode result) {
-        for (var field : List.of("observations", "comparisons", "peakMappings", "candidateInterpretations",
-                "unmatchedFeatures", "overlapCandidates", "conflicts", "suggestedValidationExperiments",
-                "evidence", "uncertainty", "testConditionLimitations", "aiReviewFocus")) {
-            var value = result.get(field);
-            if (value == null || value.isNull()) {
-                result.set(field, objectMapper.createArrayNode());
-            } else if (!value.isArray()) {
-                var array = objectMapper.createArrayNode();
-                array.add(value);
-                result.set(field, array);
-            }
-        }
-    }
-
     private String answer(ObjectNode result) {
-        return result.path("answerMarkdown").asText("图谱分析结果不完整，请查看已通过证据校验的内容。");
+        var answer = result.path("answer");
+        for (var field : List.of("confirmed", "notConfirmed", "reasonableInference", "nextStep")) {
+            var values = answer.path(field);
+            if (values.isArray() && !values.isEmpty()) return values.get(0).asText();
+        }
+        return result.path("errorMessage").asText("图谱分析结果不完整，请重新分析。");
     }
 
     private boolean hasSinglePeakReference(String metadataJson) {
@@ -408,11 +438,30 @@ public class SpectrumChatService {
         return result;
     }
 
+    private String pageEvidenceId(UUID chartId, int page) {
+        return "chart:" + chartId + ":page:" + page;
+    }
+
+    private String metadataEvidenceId(UUID chartId, String field) {
+        return "chart:" + chartId + ":metadata:" + field;
+    }
+
+    private void addMetadataEvidence(Map<String, String> evidenceSourceTypes, SpectrumRepository.ChartRow row,
+                                     String field, String value) {
+        if (StringUtils.hasText(value)) {
+            evidenceSourceTypes.put(metadataEvidenceId(row.id(), field), "DOCUMENT_METADATA");
+        }
+    }
+
     private AnalysisView analysisView(SpectrumRepository.AnalysisRow row) {
+        var stored = parse(row.resultJson(), objectMapper.createObjectNode());
+        var publicResult = stored.isObject() ? resultPresenter.present((ObjectNode) stored, row.question()) : stored;
         return new AnalysisView(row.id(), row.sessionId(), row.mode(), row.question(), parse(row.chartIdsJson(), objectMapper.createArrayNode()),
                 parse(row.pageSelectionsJson(), objectMapper.createObjectNode()), parse(row.categoriesJson(), objectMapper.createArrayNode()),
-                row.scenarioTemplate(), row.status(), row.progress(), row.currentStage(), parse(row.resultJson(), objectMapper.createObjectNode()),
-                parse(row.warningJson(), objectMapper.createArrayNode()), row.errorMessage(), row.createdAt(), row.startedAt(), row.completedAt());
+                row.scenarioTemplate(), row.status(), row.progress(), row.currentStage(), publicResult,
+                parse(row.warningJson(), objectMapper.createArrayNode()),
+                StringUtils.hasText(row.errorMessage()) ? "图谱分析未完成，请稍后重试。" : null,
+                row.createdAt(), row.startedAt(), row.completedAt());
     }
 
     private JsonNode parse(String value, JsonNode fallback) {
@@ -500,55 +549,6 @@ public class SpectrumChatService {
         return cleaned;
     }
 
-    private final class SafeStreamingObserver implements SpectrumVisionClient.StreamObserver {
-        private static final int ANSWER_CHUNK_SIZE = 120;
-
-        private final UUID organizationId;
-        private final UUID analysisId;
-        private final SpectrumAnalysisPromptContext promptContext;
-        private final String question;
-        private final AtomicLong sequence = new AtomicLong();
-        private final FirstJsonStringField answerField = new FirstJsonStringField(objectMapper, "answerMarkdown");
-        private boolean answerPublished;
-
-        private SafeStreamingObserver(UUID organizationId, UUID analysisId,
-                                      SpectrumAnalysisPromptContext promptContext, String question) {
-            this.organizationId = organizationId;
-            this.analysisId = analysisId;
-            this.promptContext = promptContext;
-            this.question = question;
-        }
-
-        @Override
-        public void onOutputTextDelta(String delta) {
-            if (answerPublished || !answerField.append(delta)) return;
-            var provisional = prompts.emptyResult(answerField.value(), "分析尚在生成");
-            provisional.put("analysisStatus", "SUCCEEDED");
-            var validated = resultValidator.validate(provisional, promptContext);
-            var presented = resultPresenter.present(validated.result(), question);
-            publishAnswer(presented.path("presentation").path("conclusion").asText(""));
-        }
-
-        private void publishFinalAnswerIfMissing(ObjectNode result) {
-            if (answerPublished) return;
-            publishAnswer(result.path("presentation").path("conclusion")
-                    .asText(result.path("answerMarkdown").asText("")));
-        }
-
-        private void publishAnswer(String value) {
-            var safe = sanitizeStreamText(value);
-            if (!StringUtils.hasText(safe)) return;
-            for (var offset = 0; offset < safe.length(); offset += ANSWER_CHUNK_SIZE) {
-                var end = Math.min(safe.length(), offset + ANSWER_CHUNK_SIZE);
-                var payload = objectMapper.createObjectNode()
-                        .put("sequence", sequence.incrementAndGet())
-                        .put("delta", safe.substring(offset, end));
-                appendEvent(organizationId, analysisId, "answer_delta", payload.toString());
-            }
-            answerPublished = true;
-        }
-    }
-
     static final class FirstJsonStringField {
         private final ObjectMapper mapper;
         private final String marker;
@@ -595,12 +595,12 @@ public class SpectrumChatService {
     }
 
     public record ChatCommand(UUID sessionId, String question, List<UUID> chartIds, JsonNode pageSelections,
-                              String scenarioTemplate) { }
+                              String analysisIntent, String scenarioTemplate) { }
 
     public record SubmitView(UUID sessionId, UUID messageId, UUID analysisRunId, String status) { }
 
     public record AnalysisView(UUID id, UUID sessionId, String mode, String question, JsonNode chartIds,
-                               JsonNode pageSelections, JsonNode categories, String scenarioTemplate, String status,
+                               JsonNode pageSelections, JsonNode categories, String analysisIntent, String status,
                                int progress, String currentStage, JsonNode result, JsonNode warnings, String errorMessage,
                                java.time.Instant createdAt, java.time.Instant startedAt, java.time.Instant completedAt) { }
 }

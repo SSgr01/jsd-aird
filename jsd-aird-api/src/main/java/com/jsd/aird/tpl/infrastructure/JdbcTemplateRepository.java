@@ -1089,7 +1089,8 @@ public class JdbcTemplateRepository implements TemplateRepository {
                 rs.getString("data_hash"),
                 rs.getString("workspace_hash"),
                 rs.getLong("lock_version"),
-                layoutSummary.path("reconciliationRequired").asBoolean(false)
+                layoutSummary.path("reconciliationRequired").asBoolean(false),
+                layoutSummary.path("origin")
         );
     }
 

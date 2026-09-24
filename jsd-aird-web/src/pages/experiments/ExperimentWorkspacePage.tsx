@@ -11,6 +11,7 @@ import { SaveStateBadge, type SaveState } from '@/components/SaveStateBadge';
 import { VersionHistoryPanel } from '@/components/version-history/VersionHistoryPanel';
 import {
   App,
+  Alert,
   Button,
   Form,
   Input,
@@ -19,6 +20,7 @@ import {
   Skeleton,
   Space,
   Spin,
+  Select,
   Tabs,
   Tag,
   Typography,
@@ -46,6 +48,8 @@ import {
   exportExperiment,
 } from '@/services/experiments/experiment-api';
 import { downloadBlob, fetchFileBlob } from '@/services/files/file-api';
+import { Can } from '@/components/auth/Can';
+import { templateApi, type TemplateCategory } from '@/services/templates/template-api';
 import './experiments.css';
 
 const SheetsEditor = lazy(async () => ({
@@ -89,6 +93,10 @@ export function ExperimentWorkspacePage() {
   const [loadError, setLoadError] = useState<string>();
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewForm] = Form.useForm<ReviewInformation>();
+  const [templateDraftOpen, setTemplateDraftOpen] = useState(false);
+  const [templateDraftSaving, setTemplateDraftSaving] = useState(false);
+  const [templateCategories, setTemplateCategories] = useState<TemplateCategory[]>([]);
+  const [templateDraftForm] = Form.useForm<{ name: string; categoryId: string }>();
   const isDesktop = useDesktopEditing();
 
   const load = useCallback(async () => {
@@ -290,6 +298,61 @@ export function ExperimentWorkspacePage() {
     }
   };
 
+  const openTemplateDraft = async () => {
+    if (!detail || view === 'versions' || statusIsVoided(detail.summary.status)) return;
+    templateDraftForm.setFieldsValue({ name: `${detail.summary.title}模板`.slice(0, 160) });
+    setTemplateDraftOpen(true);
+    try {
+      setTemplateCategories(await templateApi.listCategories());
+    } catch (error) {
+      void message.error(error instanceof Error ? error.message : '模板分类加载失败');
+    }
+  };
+
+  const createTemplateDraft = async () => {
+    if (!detail || templateDraftSaving) return;
+    let values: { name: string; categoryId: string };
+    try {
+      values = await templateDraftForm.validateFields();
+    } catch {
+      return;
+    }
+    const proceed = async () => {
+      setTemplateDraftSaving(true);
+      try {
+        const draft = await templateApi.createFromExperiment(id, {
+          name: values.name.trim(),
+          categoryId: values.categoryId,
+        });
+        setTemplateDraftOpen(false);
+        void message.success('模板草稿已生成');
+        navigate(`/templates/${draft.versionId}/workspace`);
+      } catch (error) {
+        void message.error(error instanceof Error ? error.message : '生成模板草稿失败');
+      } finally {
+        setTemplateDraftSaving(false);
+      }
+    };
+    if (saveState !== 'SAVED') {
+      modal.confirm({
+        title: '先保存当前实验？',
+        content: '当前实验内容尚未保存。确认后系统会先保存，保存成功后再生成模板草稿。',
+        okText: '保存并生成',
+        cancelText: '取消',
+        onOk: async () => {
+          setTemplateDraftSaving(true);
+          try {
+            if (await save()) await proceed();
+          } finally {
+            setTemplateDraftSaving(false);
+          }
+        },
+      });
+      return;
+    }
+    await proceed();
+  };
+
   const changeView = (key: WorkspaceView) => {
     if (key === 'versions' && versions.length === 0) {
       void message.info('发布后才会生成版本记录');
@@ -348,6 +411,14 @@ export function ExperimentWorkspacePage() {
           {status === 'COMPLETED' && (
             <Button loading={busy} onClick={reviseCompletedExperiment}>创建修订</Button>
           )}
+          <Can permission="template.create">
+            <Button
+              disabled={view === 'versions' || status === 'VOIDED'}
+              onClick={() => void openTemplateDraft()}
+            >
+              另存为模板
+            </Button>
+          </Can>
           <Button
             type="primary"
             icon={<SaveOutlined />}
@@ -368,6 +439,43 @@ export function ExperimentWorkspacePage() {
           </Button>
         </Space>
       </header>
+
+      <Modal
+        title="另存为模板"
+        open={templateDraftOpen}
+        okText="生成模板草稿"
+        cancelText="取消"
+        confirmLoading={templateDraftSaving}
+        onCancel={() => setTemplateDraftOpen(false)}
+        onOk={() => void createTemplateDraft()}
+        destroyOnClose
+      >
+        <Form form={templateDraftForm} layout="vertical" preserve={false}>
+          <Form.Item
+            name="name"
+            label="模板名称"
+            rules={[{ required: true, whitespace: true, message: '请输入模板名称' }]}
+          >
+            <Input maxLength={160} showCount placeholder="请输入模板名称" />
+          </Form.Item>
+          <Form.Item
+            name="categoryId"
+            label="模板分类"
+            rules={[{ required: true, message: '请选择模板分类' }]}
+          >
+            <Select
+              placeholder="请选择现有模板分类"
+              options={templateCategories.map((category) => ({ value: category.id, label: category.name }))}
+              notFoundContent="暂无可用模板分类"
+            />
+          </Form.Item>
+          <Alert
+            type="warning"
+            showIcon
+            message="将复制当前实验的版式和正文。系统仅不带入实验编号、日期、负责人及项目关联等平台信息；文档中的实验值会原样保留，请在模板编辑页清理后再提交审核。"
+          />
+        </Form>
+      </Modal>
 
       <nav className="workspace-view-tabs" aria-label="实验页面">
         <Tabs
@@ -447,6 +555,10 @@ export function ExperimentWorkspacePage() {
       </Modal>
     </section>
   );
+}
+
+function statusIsVoided(status: string) {
+  return status === 'VOIDED';
 }
 
 function VersionView({

@@ -58,6 +58,38 @@ export type SpectrumAnswerIntent =
   | 'FEATURE_INTERPRETATION'
   | 'VALIDATION'
   | 'OVERVIEW';
+export type SpectrumAnalysisIntent =
+  | 'AUTO'
+  | 'OVERVIEW'
+  | 'PEAK_INTERPRETATION'
+  | 'SAMPLE_COMPARISON'
+  | 'CONCENTRATION_CHECK'
+  | 'PURITY_CHECK'
+  | 'IDENTIFICATION'
+  | 'REFERENCE_MAPPING'
+  | 'METHOD_VALIDATION'
+  | 'ANOMALY_DIAGNOSIS';
+export interface SpectrumAnswerV3 {
+  confirmed: string[];
+  notConfirmed: string[];
+  reasonableInference: string[];
+  missingEvidence: string[];
+  nextStep: string[];
+}
+export interface SpectrumPublicAssessmentItem {
+  label: string;
+  value: string;
+  source?: string;
+}
+export interface SpectrumPublicAssessment {
+  title: string;
+  items: SpectrumPublicAssessmentItem[];
+}
+export interface SpectrumDetailsV3 {
+  confirmed: string[];
+  reasonableInference: string[];
+  limitations: string[];
+}
 export interface SpectrumResultPresentation {
   version: number;
   primaryIntent: SpectrumAnswerIntent;
@@ -67,8 +99,12 @@ export interface SpectrumResultPresentation {
   detailSectionKeys: string[];
 }
 export interface SpectrumResult {
+  schemaVersion?: number;
   analysisStatus?: 'SUCCEEDED' | 'PARTIAL' | 'FAILED';
   errorMessage?: string;
+  answer?: SpectrumAnswerV3;
+  assessment?: SpectrumPublicAssessment;
+  details?: SpectrumDetailsV3;
   answerMarkdown?: string;
   observations?: unknown[];
   comparisons?: unknown[];
@@ -118,7 +154,7 @@ export interface SpectrumAnalysis {
   chartIds: string[];
   pageSelections: Record<string, number[]>;
   categories: string[];
-  scenarioTemplate?: string;
+  analysisIntent?: SpectrumAnalysisIntent;
   status: string;
   progress: number;
   currentStage?: string;
@@ -270,6 +306,7 @@ export const spectrumApi = {
     question: string;
     chartIds: string[];
     pageSelections?: Record<string, number[]>;
+    analysisIntent?: SpectrumAnalysisIntent;
     scenarioTemplate?: string;
   }) {
     const response = await httpClient.post<

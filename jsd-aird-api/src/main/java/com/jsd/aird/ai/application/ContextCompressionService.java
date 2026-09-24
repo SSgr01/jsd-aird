@@ -72,6 +72,7 @@ public class ContextCompressionService {
                     ? "EXPERIMENT_TEMPLATE_SOURCE" : "DATA_SOURCE_FILE";
             chunks.add("[source=data,sourceType=" + sourceType + ",file=" + hit.originalName()
                     + ",record=" + safe(hit.recordKey())
+                    + ",entity=" + safe(hit.recordKey())
                     + ",field=" + safe(hit.fieldName())
                     + ",fieldCode=" + safe(hit.fieldCode())
                     + ",sheet=" + safe(hit.sheetName())

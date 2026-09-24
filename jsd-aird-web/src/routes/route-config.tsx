@@ -13,6 +13,7 @@ const ExperimentOptimizationPage = lazy(async () => ({ default: (await import('@
 const ModelingSettingsPage = lazy(async () => ({ default: (await import('@/pages/modeling-settings')).ModelingSettingsPage }));
 const ModelManagementPage = lazy(async () => ({ default: (await import('@/pages/model-management')).ModelManagementPage }));
 const ModelCenterPage = lazy(async () => ({ default: (await import('@/pages/model-center')).ModelCenterPage }));
+const ModelTargetPage = lazy(async () => ({ default: (await import('@/pages/model-center')).ModelTargetPage }));
 const PerformancePredictionPage = lazy(async () => ({ default: (await import('@/pages/performance-prediction')).PerformancePredictionPage }));
 const SampleSourcePage = lazy(async () => ({ default: (await import('@/pages/modeling-settings')).SampleSourcePage }));
 const DashboardPage = lazy(async () => ({ default: (await import('@/pages/dashboard')).DashboardPage }));
@@ -95,6 +96,7 @@ export const routeConfig: RouteObject[] = [
       { path: 'assistant/performance-prediction', element: <PagePermissionGate permission="ai.performance.predict"><PerformancePredictionPage /></PagePermissionGate> },
       { path: 'assistant/experiment-optimization', element: <PagePermissionGate permission="ai.experiment.optimize"><ExperimentOptimizationPage /></PagePermissionGate> },
       { path: 'assistant/model-center', element: <PageAnyPermissionGate permissions={['ai.model.read', 'ai.modeling.read']}><ModelCenterPage /></PageAnyPermissionGate> },
+      { path: 'assistant/model-center/targets/:targetId', element: <PagePermissionGate permission="ai.modeling.read"><ModelTargetPage /></PagePermissionGate> },
       { path: 'assistant/model-center/samples', element: <PagePermissionGate permission="ai.modeling.read"><SampleSourcePage /></PagePermissionGate> },
       { path: 'assistant/model-center/samples/:id', element: <PagePermissionGate permission="ai.modeling.read"><SampleSourcePage /></PagePermissionGate> },
       { path: 'assistant/modeling-settings', element: <PagePermissionGate permission="ai.modeling.read"><ModelingSettingsPage /></PagePermissionGate> },

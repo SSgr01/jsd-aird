@@ -48,7 +48,8 @@ public final class ModelingContracts {
     public record SourceMappingSuggestion(String candidateKey, String fieldName, String unit,
                                           String testMethod, String load, String substrate, String stage,
                                           long dataCenterCount, long experimentCount, int confidence,
-                                          boolean confirmationRequired, List<SourceSamplePreview> samples) { }
+                                          boolean confirmationRequired, List<SourceSamplePreview> samples,
+                                          List<SourceSamplePreview> records) { }
     public record SourceMappingSuggestions(UUID targetId, UUID targetVersionId,
                                            long dataCenterCount, long experimentCount,
                                            int pendingConfirmationCount,

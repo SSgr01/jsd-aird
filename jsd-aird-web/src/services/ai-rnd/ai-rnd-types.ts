@@ -85,7 +85,7 @@ export interface SourceMappingVersion {
 export interface SourceSamplePreview { sourceType: 'DATA_CENTER'|'EXPERIMENT'; sampleName: string; value: string; location: string }
 export interface SourceMappingSuggestion {
   candidateKey: string; fieldName: string; unit?: string; testMethod?: string; load?: string; substrate?: string; stage?: string
-  dataCenterCount: number; experimentCount: number; confidence: number; confirmationRequired: boolean; samples: SourceSamplePreview[]
+  dataCenterCount: number; experimentCount: number; confidence: number; confirmationRequired: boolean; samples: SourceSamplePreview[]; records?: SourceSamplePreview[]
 }
 export interface SourceMappingSuggestions {
   targetId: string; targetVersionId: string; dataCenterCount: number; experimentCount: number; pendingConfirmationCount: number; suggestions: SourceMappingSuggestion[]
@@ -167,7 +167,12 @@ export interface EligibilitySummary {
   latestRun?: EligibilityEvaluationRun; total?: number; trainable?: number; excluded?: number; reviewRequired?: number
   reasonCounts: Record<string, number>; funnel: FunnelStep[]; fieldCoverage: FieldCoverage[]; evaluatedAt?: string
 }
-export type EligibilityPage = Page<Eligibility & { logicalSampleKey?: string; authoritySourceType?: string }>
+export type EligibilityPage = Page<Eligibility & {
+  logicalSampleKey?: string
+  authoritySourceType?: string
+  /** Complete business row used by the modeling table. */
+  sample?: Record<string, unknown>
+}>
 export interface EligibilityReview { id: string; reviewType: string; reasonCode?: string; status: string; priority: number; evidence: Record<string, unknown>; revision: number; createdAt: string; updatedAt: string }
 export interface EligibilityDetail { eligibility: Eligibility; sample: Record<string, unknown>; reviews: EligibilityReview[] }
 export interface ReviewDecisionCommand extends VersionCommand { decision: 'KEEP' | 'EXCLUDE' | 'MERGE' | 'KEEP_SEPARATE' | 'REMAP'; reason: string; materialId?: string }
@@ -175,6 +180,7 @@ export interface ReviewDecision { reviewId: string; decision: string; reason: st
 export interface RecomputeAccepted { runId: string; asyncJobId: string; targetId: string; targetVersionId: string; inputSchemeId: string; status: EligibilityEvaluationRun['status']; ruleFingerprint: string }
 
 export interface TrainingSettings { autoLearningEnabled: boolean; lastEvaluatedAt?: string; revision: number; updatedAt?: string }
+export interface TrainingEvaluationCommand { selectedSampleRevisionIdsByTarget?: Record<string, string[]> }
 export interface TargetTrainingEvaluation { targetId: string; targetName: string; result: 'QUEUED' | 'BLOCKED' | 'EXISTING'; code?: string; trainingJobId?: string; snapshotId?: string }
 export interface TrainingEvaluationResult { targetsChecked: number; jobsCreated: number; blocked: number; targets: TargetTrainingEvaluation[] }
 export type TrainingJobStatus = 'QUEUED' | 'MATERIALIZING' | 'SNAPSHOT_VALIDATING' | 'FOLDING' | 'TRAINING' | 'VALIDATING' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED'

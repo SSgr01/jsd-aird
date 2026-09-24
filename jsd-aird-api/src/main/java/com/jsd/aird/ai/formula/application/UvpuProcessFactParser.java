@@ -35,9 +35,38 @@ public class UvpuProcessFactParser {
     public Projection parse(List<JsonNode> processFacts, List<JsonNode> testFacts) {
         var process = new LinkedHashMap<String, StandardFact>();
         var context = new LinkedHashMap<String, StandardFact>();
-        for (var fact : processFacts) parseProcessFact(fact, process, context);
-        for (var fact : testFacts) parseExplicitFilmThickness(fact, process);
+        for (var fact : processFacts) {
+            parseProcessFact(fact, process, context);
+            // Template-guided imports may preserve substrate as an application
+            // condition rather than as a test-result row.  Both are explicit
+            // PROCESS/CONTEXT facts and must use the same deterministic parser.
+            parseSubstrate(fact, context);
+        }
+        for (var fact : testFacts) {
+            parseExplicitFilmThickness(fact, process);
+            parseSubstrate(fact, context);
+        }
         return new Projection(Map.copyOf(process), Map.copyOf(context));
+    }
+
+    private void parseSubstrate(JsonNode fact, Map<String, StandardFact> context) {
+        var label = text(fact, "testItem", text(fact, "itemLabel",
+                text(fact, "operation", text(fact, "labelPath", ""))));
+        var normalizedLabel = UvpuAnalysisProfile.normalize(label);
+        if (!normalizedLabel.contains("测试用素材") && !normalizedLabel.contains("基材")) return;
+        var raw = raw(fact);
+        var normalized = UvpuAnalysisProfile.normalize(raw);
+        var code = "";
+        if (normalized.contains("PMMA/PC") || normalized.contains("PMMAPC复合")) {
+            code = normalized.contains("0.64") ? "PMMA_PC_COMPOSITE_0_64MM" : "PMMA_PC_COMPOSITE";
+        } else if (normalized.contains("PC膜") || normalized.contains("PCFILM")) {
+            code = normalized.contains("170") ? "PC_FILM_170UM" : "PC_FILM";
+        } else if (normalized.contains("PET")) {
+            code = normalized.contains("100") || normalized.contains("光学") ? "PET_100UM_OPTICAL" : "PET_FILM";
+        }
+        if (!code.isBlank()) {
+            context.putIfAbsent("substrate", textFact("substrate", code, fact, raw, "SUBSTRATE_V1"));
+        }
     }
 
     private void parseProcessFact(JsonNode fact, Map<String, StandardFact> process, Map<String, StandardFact> context) {

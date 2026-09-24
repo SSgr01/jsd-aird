@@ -26,6 +26,7 @@ import {
   AssistantRequestError,
   assistantApi,
   type AssistantCitation,
+  type AssistantMessageReplacement,
   type AssistantResponse,
   type ConversationMeta,
 } from '@/services/assistant';
@@ -125,9 +126,7 @@ function assistantFailure(error: unknown): string {
 
 function isAuthenticationFailure(error: unknown) {
   if (!(error instanceof AssistantRequestError || error instanceof HttpError)) return false;
-  return (
-    error.status === 401 || error.code === 'AUTH_REQUIRED' || error.code === 'CSRF_TOKEN_INVALID'
-  );
+  return error.status === 401 || error.code === 'AUTH_REQUIRED';
 }
 
 function renderAssistantContent(
@@ -327,18 +326,27 @@ export function AssistantPage() {
   const setChatMessages = (items: ChatMessage[]) => setMessages(items);
   const hasSelectedScope = selectedKnowledge.length > 0 || selectedData.length > 0;
 
-  const send = async (questionOverride?: string) => {
+  const send = async (
+    questionOverride?: string,
+    replacement?: AssistantMessageReplacement,
+  ) => {
     const value = (questionOverride ?? question).trim();
     if (!value || loading || streaming || !hasSelectedScope) return;
-    setQuestion('');
+    if (!replacement) setQuestion('');
     setLoading(true);
     setStreamStage('正在思考…');
-    const index = messages.length + 1;
-    setMessages((current) => [
-      ...current,
-      { id: `${Date.now()}-user`, role: 'USER', content: value },
-      { id: `${Date.now()}-assistant`, role: 'ASSISTANT', content: '' },
-    ]);
+    const runId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const userPlaceholderId = `pending-user-${runId}`;
+    const assistantPlaceholderId = `pending-assistant-${runId}`;
+    setMessages((current) => {
+      const nextMessages: ChatMessage[] = [
+        { id: userPlaceholderId, role: 'USER', content: value },
+        { id: assistantPlaceholderId, role: 'ASSISTANT', content: '' },
+      ];
+      if (!replacement) return [...current, ...nextMessages];
+      const targetIndex = current.findIndex((item) => item.id === replacement.replaceFromMessageId);
+      return targetIndex < 0 ? current : [...current.slice(0, targetIndex), ...nextMessages];
+    });
     try {
       setStreaming(true);
       let answer = '';
@@ -351,23 +359,27 @@ export function AssistantPage() {
         (token) => {
           answer += token;
           setMessages((current) =>
-            current.map((item, itemIndex) =>
-              itemIndex === index ? { ...item, content: answer } : item,
+            current.map((item) =>
+              item.id === assistantPlaceholderId ? { ...item, content: answer } : item,
             ),
           );
         },
         (response: AssistantResponse) => {
           setConversationId(response.conversationId);
           setMessages((current) =>
-            current.map((item, itemIndex) =>
-              itemIndex === index
+            current.map((item) => {
+              if (item.id === userPlaceholderId) {
+                return { ...item, id: response.userMessageId || userPlaceholderId };
+              }
+              return item.id === assistantPlaceholderId
                 ? {
                     ...item,
+                    id: response.assistantMessageId || assistantPlaceholderId,
                     content: response.answer || answer,
                     citations: response.citations,
                   }
-                : item,
-            ),
+                : item;
+            }),
           );
           void assistantApi
             .conversations()
@@ -383,6 +395,7 @@ export function AssistantPage() {
         (event, data) => {
           if (event === 'thinking') setStreamStage(thinkingLabel(data));
         },
+        replacement,
       );
     } catch (error) {
       if (isAuthenticationFailure(error)) {
@@ -393,16 +406,32 @@ export function AssistantPage() {
         return;
       }
       const failure = assistantFailure(error);
-      setMessages((current) =>
-        current.map((item, itemIndex) =>
-          itemIndex === index
-            ? {
-                ...item,
-                content: failure,
-              }
-            : item,
-        ),
-      );
+      if (replacement && conversationId) {
+        void toast.error(failure);
+        try {
+          const conversation = await assistantApi.conversation(conversationId);
+          setMessages(
+            conversation.messages.map((item) => ({
+              id: item.id,
+              role: item.role === 'USER' ? 'USER' : 'ASSISTANT',
+              content: item.content,
+              citations: item.citations,
+            })),
+          );
+        } catch {
+          setMessages((current) =>
+            current.map((item) =>
+              item.id === assistantPlaceholderId ? { ...item, content: failure } : item,
+            ),
+          );
+        }
+      } else {
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantPlaceholderId ? { ...item, content: failure } : item,
+          ),
+        );
+      }
     } finally {
       setLoading(false);
       setStreaming(false);
@@ -424,8 +453,8 @@ export function AssistantPage() {
       const conversation = await assistantApi.conversation(id);
       setConversationId(id);
       setMessages(
-        conversation.messages.map((item, index) => ({
-          id: `${id}-${index}`,
+        conversation.messages.map((item) => ({
+          id: item.id,
           role: item.role === 'USER' ? 'USER' : 'ASSISTANT',
           content: item.content,
           citations: item.citations,
@@ -468,14 +497,15 @@ export function AssistantPage() {
         load: () => knowledgeApi.contentBlob(citation.documentId as string, citation.versionId),
       };
     }
+    const fileObjectId = citation.fileObjectId;
     if (
       ['DATA_SOURCE_FILE', 'EXPERIMENT_TEMPLATE_SOURCE'].includes(citation.sourceType) &&
-      citation.fileObjectId
+      fileObjectId
     ) {
       return {
         fileName: citation.originalName || citation.title || 'source-file',
-        load: () => fetchFilePreviewBlob(citation.fileObjectId as string),
-        downloadUrl: fileContentUrl(citation.fileObjectId as string),
+        load: () => fetchFilePreviewBlob(fileObjectId),
+        downloadUrl: fileContentUrl(fileObjectId),
       };
     }
     throw new Error('当前引用没有可定位的原始文件');
@@ -501,6 +531,7 @@ export function AssistantPage() {
   const viewMessages: ConversationMessage[] = messages.map((item, messageIndex) => ({
     id: item.id,
     role: item.role,
+    editableText: item.role === 'USER' ? item.content : undefined,
     pending: item.role === 'ASSISTANT' && streaming && !item.content,
     content:
       item.role === 'ASSISTANT' ? (
@@ -731,6 +762,17 @@ export function AssistantPage() {
         onSelectConversation={(id) => void openConversation(id)}
         onRenameConversation={renameConversation}
         onDeleteConversation={deleteConversation}
+        onEditMessage={(item, value) => {
+          const expectedLastMessageId = messages.at(-1)?.id;
+          if (!conversationId || !expectedLastMessageId) {
+            void toast.error('当前会话尚未保存完成，请稍后重试');
+            return;
+          }
+          void send(value, {
+            replaceFromMessageId: item.id,
+            expectedLastMessageId,
+          });
+        }}
         onQuestionChange={setQuestion}
         onSubmit={() => void send()}
       />

@@ -193,6 +193,7 @@ export function TemplateWorkspacePage() {
   const [qualityActions, setQualityActions] = useState<Record<string, QualityAction>>({});
   const [selectedQualityIssueId, setSelectedQualityIssueId] = useState<string>();
   const [selectedWordNodeId, setSelectedWordNodeId] = useState<string>();
+  const [activeSelection, setActiveSelection] = useState<EditorSelection>();
   const [recognitionJob, setRecognitionJob] = useState<TemplateImportJob>();
   const [recognitionBusy, setRecognitionBusy] = useState(false);
   const [structureOperations, setStructureOperations] = useState<WorkbookStructureOperation[]>([]);
@@ -305,6 +306,38 @@ export function TemplateWorkspacePage() {
   const markDirty = useCallback(() => {
     setSaveState((current) => (current === 'SAVING' ? current : 'DIRTY'));
   }, []);
+
+  const clearSelectedExperimentValues = useCallback(() => {
+    const clearRangeConstants = editorRef.current?.clearRangeConstants;
+    if (!activeSelection || workspace?.format !== 'XLSX' || !clearRangeConstants) {
+      return;
+    }
+    modal.confirm({
+      title: '清空选区中的实验值？',
+      content: '只清空选中区域里的文字、数字和日期，不判断字段类型；公式、格式和合并关系保留。',
+      okText: '一键清空',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          const result = await clearRangeConstants(
+            activeSelection.sheetId,
+            activeSelection.address,
+          );
+          if (!result) return;
+          if (result.cleared === 0) {
+            void message.info('选区中没有可清理的常量内容');
+          } else {
+            markDirty();
+            void message.success(
+              `已清空 ${result.cleared} 个内容${result.formulasKept ? `，保留 ${result.formulasKept} 个公式` : ''}`,
+            );
+          }
+        } catch (error) {
+          void message.error(error instanceof Error ? error.message : '清理选区失败');
+        }
+      },
+    });
+  }, [activeSelection, markDirty, message, modal, workspace?.format]);
 
   const handleEditorDirty = useCallback(() => {
     // Saving updates the parent model and refreshes the review panel. Those
@@ -600,10 +633,23 @@ export function TemplateWorkspacePage() {
     }
   };
 
-  const submitTemplateReview = async () => {
+  const submitTemplateReview = async (cleanupConfirmed = false) => {
     if (!versionId) return;
+    if (workspace?.origin?.type === 'EXPERIMENT' && !cleanupConfirmed) {
+      modal.confirm({
+        title: '确认已清理实验数据？',
+        content: '我已检查并清理实际实验数据，保留的内容均为模板结构、实验方法、公式或示例值。',
+        okText: '确认并提交审核',
+        cancelText: '返回清理',
+        onOk: () => submitTemplateReview(true),
+      });
+      return;
+    }
     try {
-      setTemplateReview(await templateApi.submitReview(versionId));
+      setTemplateReview(await templateApi.submitReview(
+        versionId,
+        workspace?.origin?.type === 'EXPERIMENT' ? true : undefined,
+      ));
       void message.success('模板已提交审核');
     } catch (error) {
       void message.error(error instanceof Error ? error.message : '提交审核失败');
@@ -1354,6 +1400,7 @@ export function TemplateWorkspacePage() {
 
   const handleSelection = useCallback(
     (selection: EditorSelection) => {
+      setActiveSelection(selection);
       if (projectionPicking) {
         setSchema((current) => {
           const configuration = readExperimentImport(current);
@@ -1886,7 +1933,32 @@ export function TemplateWorkspacePage() {
             发布
          </Button>
          </Space>
-       </header>
+        </header>
+
+        {workspace.origin?.type === 'EXPERIMENT' && (
+          <div className="template-cleanup-strip">
+            <Alert
+              className="template-origin-warning"
+              type="warning"
+              showIcon
+              message="请检查并清理可能保留的实验数据，确认后再提交审核。"
+            />
+            {workspace.format === 'XLSX' && editable && (
+              <Space size={8} className="template-cleanup-actions">
+                <Typography.Text type="secondary">
+                  只框选实验值区域（不要包含表头、标签或方法说明）
+                </Typography.Text>
+                <Button
+                  size="small"
+                  disabled={!activeSelection}
+                  onClick={clearSelectedExperimentValues}
+                >
+                  一键清空选区
+                </Button>
+              </Space>
+            )}
+          </div>
+        )}
 
        <Modal
          title="驳回模板审核"
@@ -2309,7 +2381,7 @@ function RecognitionStatusBar({
               ? 'AI 识别已完成'
               : review?.recognitionRunId
                 ? 'AI 识别待确认'
-                : '尚未生成识别结果';
+                : '等待启动字段识别';
   return (
     <div className="recognition-status-bar" data-tone={tone} role="status">
       <div className="recognition-status-content">
@@ -2333,6 +2405,8 @@ function RecognitionStatusBar({
           <span>
             区域 {review?.statistics?.regionCount ?? 0} ｜ 字段 {review?.statistics?.fieldCount ?? 0}
           </span>
+        ) : !review?.recognitionRunId ? (
+          <span>请先清理实验值，点击“开始识别”生成模板字段</span>
         ) : (
           <span>
             区域 {review?.statistics?.regionCount ?? 0} ｜ 字段 {review?.statistics?.fieldCount ?? 0} ｜
@@ -2383,7 +2457,7 @@ function RecognitionStatusBar({
             disabled={!editable}
             onClick={onRestart}
           >
-            重新识别
+            {review?.recognitionRunId ? '重新识别' : '开始识别'}
           </Button>
         )}
       </Space>

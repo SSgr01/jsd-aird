@@ -538,6 +538,39 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
           suppressUnboundRef.current = false;
         });
       },
+      clearRangeConstants(sheetId, address) {
+        const workbook = apiRef.current?.getActiveWorkbook();
+        const sheet = workbook?.getSheetBySheetId(sheetId) ?? workbook?.getSheetByName(sheetId);
+        const range = sheet && validRange(address) ? sheet.getRange(address) : null;
+        if (!sheet || !range) return Promise.reject(new Error(`无法定位清理区域 ${address}`));
+        suppressUnboundRef.current = true;
+        try {
+          const formulas = range.getFormulas();
+          const values = range.getValues();
+          const parsed = parseA1Range(address);
+          if (!parsed) return Promise.reject(new Error(`无法解析清理区域 ${address}`));
+          let cleared = 0;
+          let formulasKept = 0;
+          formulas.forEach((row, rowIndex) => row.forEach((formula, columnIndex) => {
+            if (formula) {
+              formulasKept += 1;
+              return;
+            }
+            const value = values[rowIndex]?.[columnIndex];
+            if (value === '' || value == null) return;
+            sheet.getRange(formatA1Range({
+              startColumn: parsed.startColumn + columnIndex,
+              endColumn: parsed.startColumn + columnIndex,
+              startRow: parsed.startRow + rowIndex,
+              endRow: parsed.startRow + rowIndex,
+            })).setValue('');
+            cleared += 1;
+          }));
+          return Promise.resolve({ cleared, formulasKept });
+        } finally {
+          suppressUnboundRef.current = false;
+        }
+      },
       async appendRepeatRecord(binding) {
         if (!['REPEAT_REGION', 'REPEAT_FIELD']
           .includes(binding.mappingKind || '')) {

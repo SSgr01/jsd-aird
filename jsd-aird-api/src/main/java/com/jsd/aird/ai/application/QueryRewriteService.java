@@ -43,9 +43,13 @@ public class QueryRewriteService {
             {"label":"用户要求的事实","retrievalQuery":"用于寻找该事实的查询"}。
 
             dataRequest 用于数据中心结构化查询，格式为：
-            {"intent":"NONE|FILE_OVERVIEW|RECORD_DETAIL|FIELD_LOOKUP","fileName":"原始文件名","recordTerms":["记录标识"],"fieldTerms":["字段名"]}。
+            {"intent":"NONE|FILE_OVERVIEW|RECORD_DETAIL|FIELD_LOOKUP","analysisGoal":"VALUE|EXPLAIN|COMPARE|EVALUATE","fileName":"原始文件名","recordTerms":["记录标识"],"fieldTerms":["字段名"]}。
             仅查询知识资料时 intent=NONE。用户只要求查看某个数据文件的内容、记录或字段清单时使用 FILE_OVERVIEW。
             用户指定实验编号、样品、树脂等记录并查看其全部数据时使用 RECORD_DETAIL；同时指定目标字段时使用 FIELD_LOOKUP。
+            用户要求比较多个记录的目标字段时也使用 FIELD_LOOKUP，并在 recordTerms 中保留所有明确出现的记录标识。
+            analysisGoal 用于说明数据回答目的：是多少/是什么使用 VALUE；怎么理解/为什么使用 EXPLAIN；明确比较多个记录使用 COMPARE；怎么样、是否好、是否达标、稳定性使用 EVALUATE。
+            没有明确评价或比较意图时不要使用 EVALUATE；不能因为命中多个值就自动评价。
+            用户询问推荐、排名、最好/最优、稳定性原因、因果或评分规则，但没有明确文件、记录和目标字段时，dataRequest.intent 必须为 NONE；这类问题不是文件概览，也不要为了填充字段而猜测检索对象。
             fileName、recordTerms、fieldTerms 只能复制用户问题或近期对话中明确出现的原文，不得推测、翻译或补充同义词。
 
             对于普通概念术语，可以根据当前问题动态生成必要的中英文表达、常见缩写、全称和公式写法，不要依赖固定专业词典。
@@ -99,6 +103,7 @@ public class QueryRewriteService {
     private static final int MAX_WEB_QUERY_LENGTH = 300;
     private static final int MAX_DATA_TERMS = 8;
     private static final Set<String> DATA_INTENTS = Set.of("NONE", "FILE_OVERVIEW", "RECORD_DETAIL", "FIELD_LOOKUP");
+    private static final Set<String> DATA_ANALYSIS_GOALS = Set.of("VALUE", "EXPLAIN", "COMPARE", "EVALUATE");
     private static final Set<String> DATA_FILE_SCOPES = Set.of("EXPLICIT", "CONTEXT", "AUTO");
     private static final Pattern QUOTED_DATA_FILE = Pattern.compile("[“\\\"《]([^”\\\"》\\r\\n]{1,260}\\.(?:xlsx|xls|csv))[”\\\"》]",
             Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
@@ -268,11 +273,16 @@ public class QueryRewriteService {
         var explicitFileName = extractDataFile(question);
         var fileName = explicitFileName;
         var fileScope = explicitFileName.isBlank() ? "AUTO" : "EXPLICIT";
-        if (fileName.isBlank()) {
+        // A source selector in the current question is stronger than a file
+        // carried by the previous conversation turn. Otherwise a question
+        // such as "只查实验本：..." can silently keep querying the last data
+        // center workbook before it ever reaches the experiment source.
+        var sourceScopeSelected = hasDataSourceScopeSelector(question);
+        if (fileName.isBlank() && !sourceScopeSelected) {
             fileName = extractDataFile(sourceText);
             if (!fileName.isBlank()) fileScope = "CONTEXT";
         }
-        if (fileName.isBlank()) {
+        if (fileName.isBlank() && !sourceScopeSelected) {
             var proposedFileName = extractDataFile(proposed.fileName());
             if (supportedSourceText(proposedFileName, sourceText)) {
                 fileName = proposedFileName;
@@ -281,8 +291,16 @@ public class QueryRewriteService {
         }
         var recordTerms = sanitizeDataTerms(proposed.recordTerms(), sourceText);
         var fieldTerms = sanitizeDataTerms(proposed.fieldTerms(), sourceText);
+        // A comparison of named records and metrics is a field lookup even when the
+        // planner is distracted by phrases such as "不要展示数据明细" and labels it
+        // as a file overview. Retrieval can recover identifiers and fields from the
+        // original query, so do not let the incorrect overview intent short-circuit it.
+        if ("FILE_OVERVIEW".equals(intent) && looksLikeRecordComparison(question)) {
+            intent = "FIELD_LOOKUP";
+        }
         if ("NONE".equals(intent)) {
-            if (looksLikeOverview(question)) intent = "FILE_OVERVIEW";
+            if (looksLikeRecordComparison(question)) intent = "FIELD_LOOKUP";
+            else if (looksLikeOverview(question)) intent = "FILE_OVERVIEW";
             else if (looksLikeRecordDetail(question)) intent = "RECORD_DETAIL";
             else if (!recordTerms.isEmpty() || !fieldTerms.isEmpty() || looksLikeStructuredDataQuestion(question)) {
                 intent = "FIELD_LOOKUP";
@@ -290,7 +308,30 @@ public class QueryRewriteService {
         }
         if (!"NONE".equals(intent) && fileName.isBlank() && recordTerms.isEmpty() && fieldTerms.isEmpty()
                 && !looksLikeStructuredDataQuestion(question) && !looksLikeOverview(question)) intent = "NONE";
-        return new DataRequest(intent, fileName, fileScope, recordTerms, fieldTerms);
+        // Do not send a structured-data request with no concrete target. The
+        // model can supply the target terms when they are present; when it
+        // cannot, the assistant should handle the question as an evidence gap
+        // instead of asking for a file name that the user never requested.
+        if (fileName.isBlank() && recordTerms.isEmpty() && fieldTerms.isEmpty()
+                && !looksLikeOverview(question) && !looksLikeRecordDetail(question)
+                && !looksLikeStructuredDataQuestion(question)) {
+            intent = "NONE";
+        }
+        // A file overview is only meaningful when a file or an overview request
+        // is actually present. Run this after the generic NONE inference so a
+        // model-proposed record/field term cannot turn the guard back into a
+        // lookup for a free-form question with no target.
+        if ("FILE_OVERVIEW".equals(intent) && !looksLikeOverview(question)) {
+            intent = "NONE";
+        }
+        var goal = normalizedEnum(proposed.analysisGoal(), DATA_ANALYSIS_GOALS, "VALUE");
+        return new DataRequest(intent, goal, fileName, fileScope, recordTerms, fieldTerms);
+    }
+
+    private static boolean hasDataSourceScopeSelector(String value) {
+        if (!StringUtils.hasText(value)) return false;
+        return value.contains("数据中心") || value.contains("实验本")
+                || value.contains("电子实验记录本") || value.contains("实验记录本");
     }
 
     private static String dataSourceText(String question, List<AssistantRepository.MessageRow> history) {
@@ -313,9 +354,16 @@ public class QueryRewriteService {
                 .stream().anyMatch(value::contains);
     }
 
+    private static boolean looksLikeRecordComparison(String value) {
+        if (!looksLikeStructuredDataQuestion(value)) return false;
+        var normalized = value.replaceAll("\\s+", "").toLowerCase(java.util.Locale.ROOT);
+        return List.of("比较", "对比", "相比", "差异", "分别", "相同字段", "哪个", "哪一个", "谁更", "vs", "versus")
+                .stream().anyMatch(normalized::contains);
+    }
+
     private static boolean looksLikeStructuredDataQuestion(String value) {
         if (!StringUtils.hasText(value)) return false;
-        return List.of("实验编号", "树脂编号", "样品编号", "试样编号", "记录编号", "配方", "比例", "粘度",
+        return List.of("实验编号", "树脂编号", "样品编号", "试样编号", "记录编号", "比例", "粘度",
                         "固含", "外观", "表干性", "耐磨", "硬度", "附着力", "光泽", "色差", "酸值", "羟值",
                         "测试结果", "实验结果", "数据字段", "单元格")
                 .stream().anyMatch(value::contains);
@@ -369,6 +417,7 @@ public class QueryRewriteService {
         if (value == null) return true;
         var intent = value.intent() == null ? "NONE" : value.intent().strip().toUpperCase(java.util.Locale.ROOT);
         return DATA_INTENTS.contains(intent)
+                && DATA_ANALYSIS_GOALS.contains(value.analysisGoal())
                 && DATA_FILE_SCOPES.contains(value.fileScope())
                 && (value.fileName() == null || value.fileName().length() <= 260)
                 && validDataTerms(value.recordTerms()) && validDataTerms(value.fieldTerms());
@@ -424,15 +473,16 @@ public class QueryRewriteService {
 
     public record WebQuery(String query, String topic, String timeRange) { }
 
-    public record DataRequest(String intent, String fileName, String fileScope,
+    public record DataRequest(String intent, String analysisGoal, String fileName, String fileScope,
                               List<String> recordTerms, List<String> fieldTerms) {
         public DataRequest(String intent, String fileName, List<String> recordTerms, List<String> fieldTerms) {
-            this(intent, fileName, fileName == null || fileName.isBlank() ? "AUTO" : "EXPLICIT",
+            this(intent, "VALUE", fileName, fileName == null || fileName.isBlank() ? "AUTO" : "EXPLICIT",
                     recordTerms, fieldTerms);
         }
 
         public DataRequest {
             intent = intent == null ? "NONE" : intent.strip().toUpperCase(java.util.Locale.ROOT);
+            analysisGoal = normalizedEnum(analysisGoal, DATA_ANALYSIS_GOALS, "VALUE");
             fileName = fileName == null ? "" : fileName.strip();
             fileScope = normalizedEnum(fileScope, DATA_FILE_SCOPES, fileName.isBlank() ? "AUTO" : "EXPLICIT");
             recordTerms = recordTerms == null ? List.of() : List.copyOf(recordTerms);

@@ -10,6 +10,7 @@ import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -27,10 +28,14 @@ import com.jsd.aird.kb.api.KnowledgeSearchFacade;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 @Service
 public class RagRetrievalService {
+
+    private static final Logger log = LoggerFactory.getLogger(RagRetrievalService.class);
 
     private static final WebSearchProvider NO_WEB = new WebSearchProvider() {
         @Override public boolean isAvailable() { return false; }
@@ -256,6 +261,10 @@ public class RagRetrievalService {
                         : detail.found() ? "EMPTY" : "NOT_FOUND";
                 return new DataChannelResult(detail.hits(), 0, 1, elapsedMs(started), status, detail);
             } catch (RuntimeException exception) {
+                log.warn("assistant_data_detail_lookup_failed organizationId={} mode={} fileName={} fileScope={} recordTerms={} fieldTerms={} categoryIds={} exceptionType={} detail={}",
+                        organizationId, detailQuery.mode(), detailQuery.fileName(), detailQuery.fileScope(),
+                        detailQuery.recordTerms(), detailQuery.fieldTerms(), filters,
+                        exception.getClass().getSimpleName(), rootCauseText(exception));
                 return new DataChannelResult(List.of(), 1, 1, elapsedMs(started), "FAILED",
                         DataSourceFileSearchFacade.DataDetailResult.empty(detailQuery.mode()));
             }
@@ -287,6 +296,9 @@ public class RagRetrievalService {
     private DataSourceFileSearchFacade.DataDetailQuery dataDetailQuery(QueryRewriteService.QueryPlan plan) {
         var value = plan == null ? null : plan.dataRequest();
         var request = value == null ? new QueryRewriteService.DataRequest("NONE", "", List.of(), List.of()) : value;
+        var originalQuestion = plan == null ? "" : plan.originalQuery();
+        var analysisGoal = request.analysisGoal();
+        var comparisonQuestion = "COMPARE".equals(analysisGoal) || isComparisonQuestion(originalQuestion);
         DataSourceFileSearchFacade.DataQueryMode mode;
         try {
             mode = DataSourceFileSearchFacade.DataQueryMode.valueOf(request.intent());
@@ -295,19 +307,54 @@ public class RagRetrievalService {
         }
         var recordTerms = new LinkedHashSet<>(request.recordTerms());
         var fieldTerms = new LinkedHashSet<>(request.fieldTerms());
-        extractStructuredQueryTerms(plan == null ? "" : plan.originalQuery(), request.recordTerms()).entities()
-                .forEach(recordTerms::add);
+        var structuredQuestion = stripDataFileReferences(originalQuestion);
+        var explicitQuestionTerms = extractStructuredQueryTerms(structuredQuestion).entities();
+        if (comparisonQuestion && explicitQuestionTerms.size() > 1) {
+            // Prefer the independent opaque identifiers found in the original
+            // question. A rewrite model can otherwise return one aggregate term
+            // such as "比较 APP-001 和 APP-002", which cannot match any record.
+            recordTerms.clear();
+            explicitQuestionTerms.stream().filter(RagRetrievalService::isStrongExplicitRecordTerm)
+                    .forEach(recordTerms::add);
+        } else if (!explicitQuestionTerms.isEmpty()) {
+            // Prefer identifiers and numeric lookup values explicitly present in
+            // the current question. A rewrite model may wrap a value in a broad
+            // phrase such as "粘度/黏度 887.4"; keeping the explicit token 887.4
+            // makes reverse lookup work without trusting the broad phrase as a
+            // record identifier.
+            recordTerms.clear();
+            explicitQuestionTerms.stream().filter(RagRetrievalService::isStrongExplicitRecordTerm)
+                    .forEach(recordTerms::add);
+        } else {
+            extractStructuredQueryTerms(structuredQuestion,
+                    removeFileNameFragments(request.recordTerms(), request.fileName())).entities()
+                    .forEach(recordTerms::add);
+        }
         if (mode == DataSourceFileSearchFacade.DataQueryMode.FIELD_LOOKUP) {
-            var inferred = inferFieldLookup(plan == null ? "" : plan.originalQuery());
-            if (!inferred.recordTerm().isBlank()) recordTerms.add(inferred.recordTerm());
-            if (!inferred.fieldTerm().isBlank()) fieldTerms.add(inferred.fieldTerm());
+            var inferred = inferFieldLookup(structuredQuestion);
+            if (!comparisonQuestion && !inferred.recordTerm().isBlank()) recordTerms.add(inferred.recordTerm());
+            if (usableInferredField(inferred.fieldTerm())) fieldTerms.add(inferred.fieldTerm());
+            inferRequestedFields(originalQuestion).forEach(fieldTerms::add);
         } else if (mode == DataSourceFileSearchFacade.DataQueryMode.RECORD_DETAIL) {
-            var recordTerm = inferRecordLookup(plan == null ? "" : plan.originalQuery());
+            var recordTerm = inferRecordLookup(structuredQuestion);
             if (!recordTerm.isBlank()) recordTerms.add(recordTerm);
         }
+        recordTerms = new LinkedHashSet<>(canonicalRecordTerms(recordTerms));
         recordTerms = new LinkedHashSet<>(longestSpecificTerms(recordTerms));
-        fieldTerms = new LinkedHashSet<>(longestSpecificTerms(fieldTerms));
-        var recordLimit = mode == DataSourceFileSearchFacade.DataQueryMode.FILE_OVERVIEW ? 5 : 1;
+        // Apply deterministic field aliases for every detail mode. In
+        // particular, a planner may emit the broad literal "粘度/黏度" while
+        // the stored field is simply "粘度"; RECORD_DETAIL used to skip this
+        // canonical field inference and then resolve a file with zero hits.
+        inferRequestedFields(originalQuestion).forEach(fieldTerms::add);
+        // Field matching is an OR query. Keep shorter canonical names inferred
+        // from the user's wording because a planner-added suffix such as
+        // "观察值" is more specific linguistically but may not exist in the
+        // stored field name.
+        fieldTerms = fieldTerms.stream().filter(term -> term != null && !term.isBlank())
+                .map(String::strip).distinct().limit(20)
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        var recordLimit = mode == DataSourceFileSearchFacade.DataQueryMode.FILE_OVERVIEW
+                || "COMPARE".equals(analysisGoal) || "EVALUATE".equals(analysisGoal) ? 5 : 1;
         DataSourceFileSearchFacade.DataFileScope fileScope;
         try {
             fileScope = DataSourceFileSearchFacade.DataFileScope.valueOf(request.fileScope());
@@ -315,8 +362,103 @@ public class RagRetrievalService {
             fileScope = request.fileName().isBlank() ? DataSourceFileSearchFacade.DataFileScope.AUTO
                     : DataSourceFileSearchFacade.DataFileScope.EXPLICIT;
         }
+        var recordTermMatch = comparisonQuestion
+                && recordTerms.size() > 1
+                ? DataSourceFileSearchFacade.RecordTermMatch.ANY
+                : DataSourceFileSearchFacade.RecordTermMatch.ALL;
+        var evidenceFilter = inferEvidenceFilter(originalQuestion);
+        var contextMode = switch (analysisGoal) {
+            case "COMPARE", "EVALUATE" -> DataSourceFileSearchFacade.ContextMode.COMPARABLE;
+            case "EXPLAIN" -> DataSourceFileSearchFacade.ContextMode.ANALYTIC;
+            default -> DataSourceFileSearchFacade.ContextMode.MINIMAL;
+        };
         return new DataSourceFileSearchFacade.DataDetailQuery(mode, request.fileName(), fileScope,
-                List.copyOf(recordTerms), List.copyOf(fieldTerms), recordLimit, 5, 50);
+                List.copyOf(recordTerms), List.copyOf(fieldTerms), recordTermMatch, evidenceFilter, recordLimit, 5, 50,
+                contextMode, 32, request.analysisGoal().equals("EVALUATE") ? 5 : 1, request.analysisGoal());
+    }
+
+    private static String stripDataFileReferences(String question) {
+        if (question == null || question.isBlank()) return "";
+        var value = question.replaceAll("(?i)[“\\\"《][^”\\\"》\\r\\n]{1,260}\\.(?:xlsx|xls|csv)[”\\\"》]", " ");
+        return value.replaceAll("(?i)[^\\s，。；;：:“”\\\"》]{1,260}\\.(?:xlsx|xls|csv)", " ");
+    }
+
+    private static List<String> removeFileNameFragments(List<String> terms, String fileName) {
+        if (terms == null || terms.isEmpty() || fileName == null || fileName.isBlank()) return terms == null ? List.of() : terms;
+        var fragments = new LinkedHashSet<>(List.of(fileName.split("[^A-Za-z0-9\\u4E00-\\u9FFF]+")));
+        return terms.stream().filter(term -> term != null && !fragments.contains(term.strip())).toList();
+    }
+
+    /**
+     * Lifecycle words in the question are source-boundary requirements, not answer content.
+     * Keep this small and deterministic so a model cannot broaden an explicit formal-data request.
+     */
+    static DataSourceFileSearchFacade.EvidenceFilter inferEvidenceFilter(String question) {
+        if (question == null || question.isBlank()) return DataSourceFileSearchFacade.EvidenceFilter.ANY;
+        var normalized = question.replaceAll("\\s+", "");
+        if (normalized.contains("正式数据中心") || normalized.contains("确认来源")
+                || normalized.contains("已确认数据中心")) {
+            return DataSourceFileSearchFacade.EvidenceFilter.CONFIRMED_DATA;
+        }
+        if (normalized.contains("已完成实验") || normalized.contains("完成的实验")
+                || normalized.contains("正式实验") || normalized.contains("已发布实验")) {
+            return DataSourceFileSearchFacade.EvidenceFilter.COMPLETED_EXPERIMENT;
+        }
+        if (normalized.contains("正式数据") || normalized.contains("已发布数据")) {
+            return DataSourceFileSearchFacade.EvidenceFilter.FORMAL;
+        }
+        return DataSourceFileSearchFacade.EvidenceFilter.ANY;
+    }
+
+    static boolean isComparisonQuestion(String question) {
+        if (question == null || question.isBlank()) return false;
+        var normalized = question.replaceAll("\\s+", "").toLowerCase(Locale.ROOT);
+        return List.of("比较", "对比", "相比", "差异", "分别", "哪个", "哪一个", "谁更", "vs", " versus ")
+                .stream().anyMatch(normalized::contains);
+    }
+
+    private static boolean usableInferredField(String field) {
+        if (field == null || field.isBlank() || field.length() > 40) return false;
+        return !field.contains("、") && !field.contains("，") && !field.contains(",")
+                && !field.contains("和") && !field.contains("请") && !field.contains("来源")
+                && !field.contains("字段") && !field.contains("位置");
+    }
+
+    /**
+     * Keep explicit identifiers and domain-labelled Chinese entities, but do not let
+     * answer instructions such as “原样写出” become mandatory record terms.
+     */
+    private static boolean isStrongExplicitRecordTerm(String value) {
+        if (value == null || value.isBlank()) return false;
+        var normalized = value.replaceAll("\\s+", "").strip();
+        if (containsAsciiOrDigit(normalized)) return true;
+        return List.of("配方", "树脂", "样品", "试样", "材料", "实验")
+                .stream().anyMatch(normalized::contains);
+    }
+
+    private static List<String> canonicalRecordTerms(Set<String> terms) {
+        if (terms == null || terms.isEmpty()) return List.of();
+        var result = new LinkedHashSet<String>();
+        var opaque = java.util.regex.Pattern.compile(
+                "(?i)(?<![A-Za-z0-9])[A-Za-z0-9][A-Za-z0-9._/-]{1,120}(?![A-Za-z0-9])");
+        var labeled = java.util.regex.Pattern.compile(
+                "(?:配方|树脂|样品|试样)[\\u4E00-\\u9FFF]*(?:[-_:#\\s]*)[A-Za-z0-9][A-Za-z0-9._/-]{0,120}");
+        for (var raw : terms) {
+            if (raw == null || raw.isBlank()) continue;
+            var value = raw.strip();
+            var labeledMatch = labeled.matcher(value);
+            if (labeledMatch.find()) {
+                result.add(labeledMatch.group());
+                continue;
+            }
+            var opaqueMatch = opaque.matcher(value);
+            if (opaqueMatch.find()) {
+                result.add(opaqueMatch.group());
+                continue;
+            }
+            result.add(value);
+        }
+        return List.copyOf(result);
     }
 
     static InferredFieldLookup inferFieldLookup(String question) {
@@ -330,6 +472,7 @@ public class RagRetrievalService {
         }
         var record = normalized.substring(0, separator)
                 .replaceFirst("^(?:请问|请查询|查询|查看)", "")
+                .replaceFirst("^(?:只查|仅查|只使用|仅使用)?(?:数据中心|实验本|电子实验记录本)\\s*[：:]?\\s*", "")
                 .replaceFirst("^(?:实验编号|树脂编号|样品编号|试样编号|记录编号)[：:\\s]*", "").strip();
         var field = normalized.substring(separator + 1)
                 .replaceFirst("(?:是多少|是什么|为多少|数值|数据|结果|情况|值)$", "").strip();
@@ -393,6 +536,18 @@ public class RagRetrievalService {
                 .matcher(normalized);
         while (mixedIdentifier.find()) addStructuredEntity(candidates, mixedIdentifier.group());
 
+        // Keep compact Chinese identifiers such as "配方001" and "树脂A12"
+        // searchable even when the stored key uses separators (配方-001-01).
+        var cjkIdentifier = java.util.regex.Pattern.compile(
+                        "(?<![\\u4E00-\\u9FFF A-Za-z0-9])[\\u4E00-\\u9FFF]{1,16}[A-Za-z0-9][A-Za-z0-9._/-]{0,120}(?![A-Za-z0-9])")
+                .matcher(normalized);
+        while (cjkIdentifier.find()) addStructuredEntity(candidates, cjkIdentifier.group());
+
+        var labeledCjkIdentifier = java.util.regex.Pattern.compile(
+                        "(?:配方|树脂|样品|试样)[\\u4E00-\\u9FFF]*(?:[-_:#\\s]*)[A-Za-z0-9][A-Za-z0-9._/-]{0,120}")
+                .matcher(normalized);
+        while (labeledCjkIdentifier.find()) addStructuredEntity(candidates, labeledCjkIdentifier.group());
+
         // Query-rewrite terms are the dynamic domain dictionary for this
         // request. QueryRewriteService has already restricted them to literal
         // text from the user question or recent conversation; keeping them
@@ -451,6 +606,18 @@ public class RagRetrievalService {
     private static void addStructuredEntity(Set<String> entities, String value) {
         if (value == null) return;
         var normalized = value.replaceAll("^[请问请查询分析查询检索查找查看了解统计研究]+|[的，,。；;：:?？!！]+$", "").strip();
+        // A labeled identifier is often followed by the rest of a natural
+        // language question (for example: "实验编号 APP-UV-0001 的粘度").
+        // Keep the opaque identifier instead of turning the whole sentence
+        // into a record term that can never match one source row.
+        if (normalized.matches("^[A-Za-z0-9][A-Za-z0-9._/-]*.*")) {
+            var leadingIdentifier = java.util.regex.Pattern.compile("^[A-Za-z0-9][A-Za-z0-9._/-]*")
+                    .matcher(normalized);
+            if (leadingIdentifier.find()) normalized = leadingIdentifier.group();
+        } else {
+            var separator = java.util.regex.Pattern.compile("的|、|，|,|；|;|。|！|!").matcher(normalized);
+            if (separator.find() && separator.start() > 1) normalized = normalized.substring(0, separator.start()).strip();
+        }
         if (normalized.length() >= 2 && normalized.length() <= 120
                 && !Set.of("实验有什么", "实验数据", "实验结果", "实验记录").contains(normalized)) {
             entities.add(normalized);
@@ -464,12 +631,22 @@ public class RagRetrievalService {
     }
 
     private static String inferStandaloneField(String question) {
-        if (question == null) return "";
-        for (var field : List.of("配方比例", "表干性", "实测固含", "固含", "粘度", "外观", "耐磨", "硬度",
-                "附着力", "光泽", "色差", "酸值", "羟值")) {
-            if (question.contains(field)) return field;
+        var fields = inferRequestedFields(question);
+        return fields.isEmpty() ? "" : fields.getFirst();
+    }
+
+    static List<String> inferRequestedFields(String question) {
+        if (question == null || question.isBlank()) return List.of();
+        var fields = new LinkedHashSet<String>();
+        List.of("配方比例", "表干性", "实测固含", "钢丝绒耐磨", "固含", "粘度", "外观", "耐磨", "硬度",
+                        "附着力", "光泽", "色差", "酸值", "羟值")
+                .stream().filter(question::contains).forEach(fields::add);
+        if (question.contains("黏度")) fields.add("粘度");
+        if (question.contains("磨耗")) {
+            fields.add("耐磨");
+            fields.add("钢丝绒耐磨");
         }
-        return "";
+        return List.copyOf(fields);
     }
 
     private static String stripDataSelectionPrefix(String question) {
@@ -669,6 +846,13 @@ public class RagRetrievalService {
         return hits.isEmpty() ? "EMPTY" : "SUCCEEDED";
     }
 
+    private static String rootCauseText(Throwable exception) {
+        var root = exception;
+        while (root.getCause() != null && root.getCause() != root) root = root.getCause();
+        var message = root.getMessage();
+        return root.getClass().getSimpleName() + (message == null || message.isBlank() ? "" : ": " + message);
+    }
+
     private List<String> dataQueries(String question, QueryRewriteService.QueryPlan plan) {
         var queries = new LinkedHashSet<String>();
         if (question != null && !question.isBlank()) queries.add(question.strip());
@@ -851,7 +1035,9 @@ public class RagRetrievalService {
                     hit.rowNumber(), hit.columnName(), hit.originalName(), hit.content(), combinedScore,
                     hit.sourceLocator(), hit.recordKey(), hit.fieldCode(), hit.fieldName(), hit.fieldValue(),
                     hit.unit(), hit.valueType(), hit.sheetName(), hit.cellAddress(), hit.sourceOwner(),
-                    hit.recognitionMode(), hit.experimentId(), hit.experimentVersionId());
+                    hit.recognitionMode(), hit.experimentId(), hit.experimentVersionId(), hit.sourceStatus(),
+                    hit.sourceLabel(), hit.semanticDomain(), hit.semanticField(), hit.declaredCondition(),
+                    hit.sourceUnit(), hit.standardUnit(), hit.mappingKind(), hit.contextRelation());
         }
     }
 

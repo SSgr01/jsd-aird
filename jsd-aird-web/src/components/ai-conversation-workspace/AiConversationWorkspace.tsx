@@ -1,5 +1,6 @@
 import {
   DeleteOutlined,
+  DownOutlined,
   EditOutlined,
   CloseOutlined,
   MenuOutlined,
@@ -9,7 +10,7 @@ import {
   SendOutlined,
 } from '@ant-design/icons';
 import { Button, Empty, Input, List, Modal, Popconfirm, Space, Spin, Typography } from 'antd';
-import { useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 
 export interface ConversationItem {
   id: string;
@@ -21,6 +22,7 @@ export interface ConversationMessage {
   id: string;
   role: 'USER' | 'ASSISTANT';
   content: ReactNode;
+  editableText?: string;
   pending?: boolean;
 }
 
@@ -46,6 +48,7 @@ interface AiConversationWorkspaceProps {
   onSelectConversation: (id: string) => void;
   onRenameConversation?: (item: ConversationItem, title: string) => void | Promise<void>;
   onDeleteConversation?: (item: ConversationItem) => void | Promise<void>;
+  onEditMessage?: (item: ConversationMessage, value: string) => void;
   onQuestionChange: (value: string) => void;
   onSubmit: () => void;
 }
@@ -85,6 +88,7 @@ export function AiConversationWorkspace({
   onSelectConversation,
   onRenameConversation,
   onDeleteConversation,
+  onEditMessage,
   onQuestionChange,
   onSubmit,
 }: AiConversationWorkspaceProps) {
@@ -92,6 +96,13 @@ export function AiConversationWorkspace({
   const [editingTitle, setEditingTitle] = useState('');
   const [renameLoading, setRenameLoading] = useState(false);
   const [sideOpen, setSideOpen] = useState(false);
+  const [editingMessage, setEditingMessage] = useState<ConversationMessage>();
+  const [editingValue, setEditingValue] = useState('');
+  const [confirmEditOpen, setConfirmEditOpen] = useState(false);
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
+  const messagesRef = useRef<HTMLDivElement>(null);
+  const followLatestRef = useRef(true);
+  const activeConversationRef = useRef<string>();
 
   const openRename = (item: ConversationItem) => {
     setEditingConversation(item);
@@ -110,6 +121,72 @@ export function AiConversationWorkspace({
       setRenameLoading(false);
     }
   };
+
+  const isNearBottom = useCallback(() => {
+    const element = messagesRef.current;
+    if (!element) return true;
+    return element.scrollHeight - element.scrollTop - element.clientHeight <= 64;
+  }, []);
+
+  const scrollToLatest = useCallback((behavior: ScrollBehavior = 'smooth') => {
+    const element = messagesRef.current;
+    if (!element) return;
+    followLatestRef.current = true;
+    if (typeof element.scrollTo === 'function') {
+      element.scrollTo({ top: element.scrollHeight, behavior });
+    } else {
+      element.scrollTop = element.scrollHeight;
+    }
+    setShowJumpToLatest(false);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (activeConversationRef.current !== activeConversationId) {
+      activeConversationRef.current = activeConversationId;
+      followLatestRef.current = true;
+      scrollToLatest('auto');
+      return;
+    }
+    if (followLatestRef.current) {
+      scrollToLatest('auto');
+    } else if (messages.length) {
+      setShowJumpToLatest(!isNearBottom());
+    }
+  }, [activeConversationId, isNearBottom, messages, scrollToLatest]);
+
+  useEffect(() => {
+    if (!messages.length) {
+      followLatestRef.current = true;
+      setShowJumpToLatest(false);
+    }
+  }, [messages.length]);
+
+  const startEditingMessage = (item: ConversationMessage) => {
+    if (!item.editableText || loading || streaming || !onEditMessage) return;
+    setEditingMessage(item);
+    setEditingValue(item.editableText);
+  };
+
+  const cancelEditingMessage = () => {
+    setEditingMessage(undefined);
+    setEditingValue('');
+    setConfirmEditOpen(false);
+  };
+
+  const confirmMessageReplacement = () => {
+    const item = editingMessage;
+    const value = editingValue.trim();
+    if (!item || !value || !onEditMessage) return;
+    setConfirmEditOpen(false);
+    setEditingMessage(undefined);
+    setEditingValue('');
+    onEditMessage(item, value);
+  };
+
+  const editedMessageIndex = editingMessage
+    ? messages.findIndex((item) => item.id === editingMessage.id)
+    : -1;
+  const followingMessageCount = editedMessageIndex < 0 ? 0 : messages.length - editedMessageIndex - 1;
 
   return (
     <div className={`ai-conversation-workspace${sideOpen ? ' is-side-open' : ''}`}>
@@ -220,7 +297,16 @@ export function AiConversationWorkspace({
             对话与范围
           </Button>
         </div>
-        <div className="ai-conversation-messages" aria-live="polite">
+        <div
+          ref={messagesRef}
+          className="ai-conversation-messages"
+          aria-live="polite"
+          onScroll={() => {
+            const nearBottom = isNearBottom();
+            followLatestRef.current = nearBottom;
+            setShowJumpToLatest(!nearBottom && messages.length > 0);
+          }}
+        >
           {!messages.length && !loading && (
             <div className="ai-conversation-welcome">
               <span className="ai-conversation-welcome-mark" aria-hidden="true">
@@ -268,11 +354,57 @@ export function AiConversationWorkspace({
                           {messageBody}
                         </div>
                       </>
+                    ) : editingMessage?.id === item.id ? (
+                      <div className="ai-message-editor">
+                        <Input.TextArea
+                          autoFocus
+                          aria-label="编辑已发送的问题"
+                          autoSize={{ minRows: 2, maxRows: 8 }}
+                          maxLength={2000}
+                          showCount
+                          value={editingValue}
+                          onChange={(event) => setEditingValue(event.target.value)}
+                          onPressEnter={(event) => {
+                            if (!event.shiftKey) {
+                              event.preventDefault();
+                              if (editingValue.trim()) setConfirmEditOpen(true);
+                            }
+                          }}
+                        />
+                        <Space size={8} className="ai-message-editor-actions">
+                          <Button size="small" onClick={cancelEditingMessage}>
+                            取消
+                          </Button>
+                          <Button
+                            size="small"
+                            type="primary"
+                            disabled={!editingValue.trim()}
+                            onClick={() => setConfirmEditOpen(true)}
+                          >
+                            保存并重新发送
+                          </Button>
+                        </Space>
+                      </div>
                     ) : (
                       <>
-                        <Typography.Text strong className="ai-message-meta">
-                          你
-                        </Typography.Text>
+                        <div className="ai-message-user-heading">
+                          <Typography.Text strong className="ai-message-meta">
+                            你
+                          </Typography.Text>
+                          {item.editableText && onEditMessage ? (
+                            <Button
+                              className="ai-message-edit-button"
+                              type="text"
+                              size="small"
+                              icon={<EditOutlined />}
+                              aria-label="编辑并重新发送这条问题"
+                              disabled={Boolean(loading || streaming)}
+                              onClick={() => startEditingMessage(item)}
+                            >
+                              编辑
+                            </Button>
+                          ) : null}
+                        </div>
                         <div className="ai-message-body">{messageBody}</div>
                       </>
                     )}
@@ -282,6 +414,16 @@ export function AiConversationWorkspace({
             }}
           />
         </div>
+        {showJumpToLatest ? (
+          <Button
+            className="ai-conversation-jump-latest"
+            shape="circle"
+            icon={<DownOutlined />}
+            aria-label="跳到最新消息"
+            title="跳到最新消息"
+            onClick={() => scrollToLatest('smooth')}
+          />
+        ) : null}
         <div className="ai-conversation-composer">
           {composerTopContent || composerActions ? (
             <div className="ai-conversation-composer-top">
@@ -317,6 +459,20 @@ export function AiConversationWorkspace({
           </div>
         </div>
       </main>
+      <Modal
+        title="确认编辑并重新发送？"
+        open={confirmEditOpen}
+        okText="替换并重新发送"
+        cancelText="继续编辑"
+        okButtonProps={{ danger: true, disabled: !editingValue.trim() }}
+        onCancel={() => setConfirmEditOpen(false)}
+        onOk={confirmMessageReplacement}
+      >
+        <Typography.Paragraph>
+          当前问题将被修改，它原来的回答以及后续 {followingMessageCount} 条消息将从本会话中删除。
+        </Typography.Paragraph>
+        <Typography.Text type="secondary">此操作不会删除已有的模型调用审计记录。</Typography.Text>
+      </Modal>
       <Modal
         title="编辑会话标题"
         open={Boolean(editingConversation)}

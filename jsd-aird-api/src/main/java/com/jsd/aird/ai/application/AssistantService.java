@@ -48,14 +48,22 @@ public class AssistantService {
     private static final Pattern INTERNAL_DATA_MARKER = Pattern.compile(
             "(?i)IMPORT:STRUCT|fieldCode|bindingId|valuePath|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}");
     private static final String DATA_DETAIL_ANALYSIS_SYSTEM_PROMPT = """
-            你是企业研发实验数据简析助手。请只根据用户问题和后端提供的精确数据，用简洁自然的中文直接回答。
+            你是企业研发数据分析助手。请把目标结果、同记录数据、测试/工艺条件和必要的共享实验上下文联系起来，给出对研发判断有用的自然中文分析；所有判断必须落在后端提供的精确证据上。
 
             要求：
-            1. 先回答用户最关心的结果，再做必要的简单归纳；总共 2 到 4 句话。
-            2. 数值、单位、实验编号和单元格位置必须原样保留，不得改写、补算或编造。
-            3. 没有对照组、标准范围或足够样本时，不评价高低优劣，不推断原因、趋势或因果。
-            4. 文件概览只能概括记录数量、可检索值数量和预览内容，必须说明分析基于预览。
-            5. 不要重复完整文件名，不要输出标题、列表、表格、JSON、引用编号或内部技术标识。
+            1. 结论优先：先回答用户问的值、数量或判断，再结合会改变解释的记录身份、原始标签、测试/工艺条件和同记录上下文。取值问题也要说明结果对应的条件，但不要把无关背景逐项复述。
+            2. 数值、单位、实验编号和原始标签必须原样保留，不得改写、补算或编造。单元格位置只有在用户询问来源、需要消歧或定位异常时才写入回答。
+            3. 同一字段出现在多条观察记录中时，保留所有命中值并说明它们是否属于同一测试条件；值不一致不是错误，不要任选一个、擅自求平均或合并成唯一真值。
+            4. 原始标签、声明条件和同 Sheet 共享条件用于解释结果。先说明这些条件怎样限定结果，再给出能否比较、评价或提出研发判断；相同数值但标签或条件不同，直接说明“数值相同，但测试条件不同，分别保留”，不要改写成抽象的“缺乏标准化单位”“证据边界明确标记为不可比较”等空泛表述。
+            5. 分析要区分“记录事实”“基于上下文的研发解释”和“尚待验证的假设”。可以说明结果对当前配方、工艺或下一步实验的具体意义，但不能把 1KG 等条件称为行业标准，不能把不同条件下的同值说成重复测量、稳定性或双重确认，也不能凭空引入耐磨机理、达标目标、优劣排序或因果关系。
+            6. 证据边界标记为“仅作观察”时，简要说明是草稿或未正式确认数据，并只陈述观察，不输出优劣、稳定性、达标、推荐或最终结论。
+            7. 文件概览才需要记录数和可检索值数；结果被截断时才说明本轮命中不代表全部数据。
+            8. 不要在回答中提及后端、系统标记、检索规则、证据边界标记、内部技术标识或“系统认为不可比较”等实现细节；把它们翻译成用户能用的事实，例如“两个标签条件不同，所以分别解释”。不要输出标题、列表、表格、JSON、引用编号或固定模板式长段落，按问题自然分成简短段落。
+            9. 用户问题包含温度、时间、配比、测试方法或其他筛选条件时，只有证据明确出现并绑定到同一观察记录的条件才算匹配；证据没有该条件或条件不一致时，明确指出缺口，不得把无条件记录回答成条件命中。
+            10. 用户提供的实验编号、样品或配方标识与证据中的业务实体标识不完全一致，但证据通过归一化或候选匹配命中时，说明“查询标识 X 命中正式记录 Y”；不能只给 Y 的数值，也不能把归一化命中说成完全相同。
+            11. Sheet 名、单元格位置和“观察1/观察2”只是来源定位，不是正式记录编号；除非用户询问来源位置，否则不要写入回答。若没有业务实体标识，说明当前无法核对完整编号。
+            12. 即使只命中一条正式记录，也要说明它对应的业务记录和关键条件；只有用户问评价、比较或支撑范围时，才说明单条记录不能推出的研发判断。
+            13. 区分“同记录上下文”和“同 Sheet 共享实验条件”；共享条件没有绑定到样品时，不得写成样品专属条件。只选择能解释当前问题的上下文，不要倾倒整条记录。
             """;
 
     private final AssistantRepository repository;
@@ -63,6 +71,7 @@ public class AssistantService {
     private final RagRetrievalService rag;
     private final DataSearchAuthorizationService dataAuthorization;
     private final ConversationMemoryService memory;
+    private final ConversationRevisionService revisions;
     private final ContextCompressionService contextCompression;
     private final ObjectProvider<ChatClient.Builder> clients;
     private final ObjectMapper objectMapper;
@@ -82,6 +91,7 @@ public class AssistantService {
             RagRetrievalService rag,
             DataSearchAuthorizationService dataAuthorization,
             ConversationMemoryService memory,
+            ConversationRevisionService revisions,
             ContextCompressionService contextCompression,
             ObjectProvider<ChatClient.Builder> clients,
             ObjectMapper objectMapper,
@@ -100,6 +110,7 @@ public class AssistantService {
         this.rag = rag;
         this.dataAuthorization = dataAuthorization;
         this.memory = memory;
+        this.revisions = revisions;
         this.contextCompression = contextCompression;
         this.clients = clients;
         this.objectMapper = objectMapper;
@@ -129,15 +140,24 @@ public class AssistantService {
         var retrievalAccessScope = command.dataCategoryIds().isEmpty()
                 ? DataSourceFileSearchFacade.RetrievalAccessScope.denied()
                 : dataAuthorization.requireRetrievalScopes(actor);
-        requireModelConfiguration();
-        if (clients.getIfAvailable() == null) throw new ApiException(ApiErrorCode.AI_MODEL_NOT_CONFIGURED,
-                ApiErrorCode.AI_MODEL_NOT_CONFIGURED.defaultMessage());
-        if (!circuitBreaker.allow("chat")) {
-            throw new ApiException(ApiErrorCode.AI_PROVIDER_UNAVAILABLE, "AI 模型暂时熔断，请稍后重试");
-        }
         var emitter = new SseEmitter(120_000L);
         var traceId = RequestIdHolder.currentOrUnknown();
         var runId = UUID.randomUUID().toString();
+        try {
+            requireModelConfiguration();
+            if (clients.getIfAvailable() == null) throw new ApiException(ApiErrorCode.AI_MODEL_NOT_CONFIGURED,
+                    ApiErrorCode.AI_MODEL_NOT_CONFIGURED.defaultMessage());
+            if (!circuitBreaker.allow("chat")) {
+                throw new ApiException(ApiErrorCode.AI_PROVIDER_UNAVAILABLE, "AI 模型暂时熔断，请稍后重试");
+            }
+        } catch (ApiException exception) {
+            send(emitter, "error", Map.of("code", exception.errorCode().code(),
+                    "message", exception.getMessage(), "requestId", traceId,
+                    "traceId", traceId, "runId", runId, "stage", "PREPARE", "status", "FAILED",
+                    "provider", providerName(), "retryable", false, "timeoutReason", ""));
+            emitter.complete();
+            return emitter;
+        }
         var initialTimings = new LinkedHashMap<>(RequestTimingHolder.snapshot());
         initialTimings.put("firstSseMs", elapsedMs(started));
         send(emitter, "meta", Map.of("conversationId", command.conversationId() == null ? "" : command.conversationId(),
@@ -172,6 +192,8 @@ public class AssistantService {
         if (prepared.retrieval().dataDetail().mode() != DataSourceFileSearchFacade.DataQueryMode.NONE) {
             if (prepared.retrieval().dataDetail().found() && !prepared.retrieval().dataDetail().hits().isEmpty()) {
                 send(emitter, "thinking", "COMPOSING");
+                streamDataDetailResponse(actor, prepared, emitter, traceId, runId);
+                return;
             }
             var answer = dataDetailResponse(actor, prepared);
             send(emitter, "done", answer);
@@ -180,6 +202,12 @@ public class AssistantService {
         }
         if (prepared.fieldAmbiguity() != null) {
             var answer = clarificationResponse(actor, prepared);
+            send(emitter, "done", answer);
+            emitter.complete();
+            return;
+        }
+        if (isScopeCapabilityQuestion(command.question())) {
+            var answer = scopeCapabilityResponse(actor, prepared);
             send(emitter, "done", answer);
             emitter.complete();
             return;
@@ -303,8 +331,8 @@ public class AssistantService {
                             configuredModel, promptVersion, sha256(userPrompt), sha256(answer), finalUsage.inputTokens(),
                             finalUsage.outputTokens(), finalUsage.totalTokens(), "SUCCEEDED", null);
                     memory.maybeSummarize(actor.organizationId(), prepared.conversationId());
-                    send(emitter, "done", new AssistantResponse(prepared.conversationId(), answer,
-                            normalized.citations(), normalized.usedWebSearch(), traceId, finalUsage));
+                    send(emitter, "done", new AssistantResponse(prepared.conversationId(), prepared.userMessageId(),
+                            messageId, answer, normalized.citations(), normalized.usedWebSearch(), traceId, finalUsage));
                     emitter.complete();
                 }
         );
@@ -335,6 +363,8 @@ public class AssistantService {
         var organizationId = actor.organizationId();
         var actorId = actor.userId();
         UUID conversationId = command.conversationId();
+        log.info("assistant_retrieval_scope conversationId={} knowledgeCategoryIds={} dataCategoryIds={} webSearchEnabled={}",
+                conversationId, command.knowledgeCategoryIds(), command.dataCategoryIds(), command.webSearchEnabled());
         var databaseStarted = System.nanoTime();
         boolean newConversation = false;
         if (conversationId == null) {
@@ -344,8 +374,17 @@ public class AssistantService {
         } else if (!repository.conversationExists(organizationId, conversationId)) {
             throw new ApiException(ApiErrorCode.NOT_FOUND, "会话不存在");
         }
-        repository.insertMessage(conversationId, "USER", command.question().strip(), objectMapper.createArrayNode());
-        if (newConversation) enqueueConversationTitle(organizationId, conversationId);
+        UUID userMessageId;
+        if (command.replaceFromMessageId() != null) {
+            var rewrite = revisions.replaceQuestion(actor, conversationId, command.replaceFromMessageId(),
+                    command.expectedLastMessageId(), command.question());
+            userMessageId = rewrite.replacementMessageId();
+            if (rewrite.automaticTitleReset()) enqueueConversationTitle(organizationId, conversationId, userMessageId);
+        } else {
+            userMessageId = repository.insertMessageReturningId(conversationId, "USER", command.question().strip(),
+                    objectMapper.createArrayNode(), objectMapper.createObjectNode(), objectMapper.createObjectNode());
+            if (newConversation) enqueueConversationTitle(organizationId, conversationId, null);
+        }
         var history = new ArrayList<AssistantRepository.MessageRow>();
         var meta = repository.conversation(organizationId, conversationId);
         if (meta != null && StringUtils.hasText(meta.summary())) history.add(new AssistantRepository.MessageRow("SUMMARY", meta.summary()));
@@ -372,22 +411,29 @@ public class AssistantService {
                         .put("webSearchRequested", command.webSearchEnabled())
                         .put("webCandidateCount", retrieval.webHits().size()));
         timings.put("prepareMs", elapsedMs(started));
-        return new Prepared(conversationId, history, hits, dataHits, fieldAmbiguity, retrieval, timings);
+        return new Prepared(conversationId, userMessageId, history, hits, dataHits, fieldAmbiguity, retrieval, timings);
     }
 
     private void validateCommand(AskCommand command) {
         if (command == null || !StringUtils.hasText(command.question()) || command.question().length() > 3000) {
             throw new ApiException(ApiErrorCode.BAD_REQUEST, "问题不能为空且不能超过 3000 字符");
         }
+        if ((command.replaceFromMessageId() == null) != (command.expectedLastMessageId() == null)) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "编辑重发必须同时提供目标消息和会话最新消息");
+        }
+        if (command.replaceFromMessageId() != null && command.conversationId() == null) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "编辑重发必须指定原会话");
+        }
     }
 
-    private void enqueueConversationTitle(UUID organizationId, UUID conversationId) {
+    private void enqueueConversationTitle(UUID organizationId, UUID conversationId, UUID replacementMessageId) {
         var payload = objectMapper.createObjectNode()
                 .put("organizationId", organizationId.toString())
                 .put("conversationType", "AI_QA")
                 .put("conversationId", conversationId.toString());
         async.enqueue(organizationId, "AI_GENERATE_CONVERSATION_TITLE", payload,
-                "conversation-title:AI_QA:" + conversationId, 80);
+                "conversation-title:AI_QA:" + conversationId
+                        + (replacementMessageId == null ? "" : ":" + replacementMessageId), 80);
     }
 
     private String systemPrompt() {
@@ -407,7 +453,7 @@ public class AssistantService {
                 - 回答实验材料、试剂或产品时，同一直接证据明确给出的浓度、剂量、等级或规格应一并保留。
                 - 图片只有在其 OCR 或 caption 直接包含结论文字时才能作为依据；主题相关图片不能代替正文或表格。
                 - 结构化来源明细必须由 D 类证据支持。问题询问具体记录、字段或来源数据而没有 D 类证据时，不得用 K/E 类资料猜测或替代。
-                - D 类证据中的字段值、单位、记录和来源位置必须保持原样。不要在 answer 中自行制作数据明细表，系统会在回答后追加经过校验的表格。
+                - D 类证据中的字段值、单位、记录和来源位置必须保持原样。不要在 answer 中制作原始数据明细表；只保留回答问题所需的关键数值、比较结果和证据边界。
 
                 外部证据规则：
                 - E 类证据不能覆盖 K/D 类内部确认事实；冲突时分别说明并分别引用。
@@ -445,7 +491,7 @@ public class AssistantService {
                 + "\n\n本轮输出前复核：每个实体的字段值只能取自明确属于该实体的同一表格行或正文陈述，"
                 + "不得拼接同页其他实体的属性；表格标题中的规格标签按原文整体保留，不扩写设备或机理；"
                 + "证据只有英文技术名称时，answer 只能逐字使用该英文名称，禁止生成证据中没有的中文译名；"
-                + "具体数据记录只能由 DATA_SOURCE_FILE 或 EXPERIMENT_TEMPLATE_SOURCE 证据支持；不要自行生成数据明细表；"
+                + "具体数据记录只能由 DATA_SOURCE_FILE 或 EXPERIMENT_TEMPLATE_SOURCE 证据支持；不要生成原始数据明细表；"
                 + "answer 必须为非空字符串。";
         return new PromptBundle(text, evidenceCatalog(compressed.evidenceRefs(), external.evidenceRefs(), hits,
                 dataHits, retrieval.webHits()));
@@ -525,34 +571,19 @@ public class AssistantService {
     }
 
     static String appendDataDetailTable(String answer, List<DataSourceFileSearchFacade.SourceFileHit> hits) {
-        if (hits == null || hits.isEmpty()) return answer;
-        var unique = new LinkedHashMap<UUID, DataSourceFileSearchFacade.SourceFileHit>();
-        hits.forEach(hit -> unique.putIfAbsent(hit.hitId(), hit));
-        var rows = unique.values().stream().filter(hit -> StringUtils.hasText(hit.fieldValue())).limit(10).toList();
-        if (rows.isEmpty()) return answer;
-        var table = new StringBuilder("\n\n### 数据明细\n\n")
-                .append("| 记录 | 字段 | 值 | 单位 | 来源 |\n")
-                .append("|---|---|---|---|---|\n");
-        for (var hit : rows) {
-            var field = StringUtils.hasText(hit.fieldName()) ? hit.fieldName() : "未命名字段";
-            var position = StringUtils.hasText(hit.sheetName()) ? hit.sheetName() : "";
-            if (StringUtils.hasText(hit.cellAddress())) position += (position.isBlank() ? "" : "!") + hit.cellAddress();
-            else if (hit.rowNumber() != null) position += (position.isBlank() ? "" : "，") + "第 " + hit.rowNumber() + " 行";
-            var source = hit.originalName() + (position.isBlank() ? "" : " / " + position);
-            table.append('|').append(markdownCell(hit.recordKey(), "未命名记录"))
-                    .append('|').append(markdownCell(field, "未命名字段"))
-                    .append('|').append(markdownCell(hit.fieldValue(), "未填写"))
-                    .append('|').append(markdownCell(hit.unit(), "—"))
-                    .append('|').append(markdownCell(source, "—")).append("|\n");
-        }
-        return (answer == null ? "" : answer.strip()) + table;
+        return answer == null ? "" : answer.strip();
     }
 
     private AssistantResponse dataDetailResponse(Actor actor, Prepared prepared) {
-        var detail = prepared.retrieval().dataDetail();
         var analysisStarted = System.nanoTime();
-        var analysis = analyzeDataDetail(prepared.retrieval().plan().originalQuery(), detail);
+        var analysis = analyzeDataDetail(prepared.retrieval().plan().originalQuery(), prepared.retrieval().dataDetail());
         prepared.timings().put("dataAnalysisMs", elapsedMs(analysisStarted));
+        return finalizeDataDetailResponse(actor, prepared, analysis);
+    }
+
+    private AssistantResponse finalizeDataDetailResponse(Actor actor, Prepared prepared, DataDetailAnalysis analysis) {
+        var detail = prepared.retrieval().dataDetail();
+        var boundary = dataEvidenceBoundary(detail);
         var answer = mergeDataDetailAnswer(analysis.text(), dataDetailAnswer(detail));
         var citations = detail.requiresFileSelection()
                 ? detail.candidates().stream().map(this::dataFileCandidateCitation).toList()
@@ -563,13 +594,24 @@ public class AssistantService {
         var status = switch (detail.resolution()) {
             case AMBIGUOUS -> "NEEDS_FILE_SELECTION";
             case FILE_REQUIRED -> "NEEDS_FILE_NAME";
-            case RESOLVED -> detail.hits().isEmpty() ? "NOT_FOUND" : "ANSWERED";
+            case RESOLVED -> detail.hits().isEmpty() ? "NOT_FOUND"
+                    : boundary.observationOnly() ? "PARTIAL" : "ANSWERED";
             default -> "NOT_FOUND";
         };
         var trace = retrievalTrace(prepared, Map.of());
         trace.put("answerStatus", status).put("answerMode", detail.mode().name())
                 .put("dataResolution", detail.resolution().name())
-                .put("dataAnalysisStatus", analysis.status());
+                .put("dataAnalysisStatus", analysis.status())
+                .put("analysisGoal", analysisGoalCode(detail))
+                .put("dataEvidenceUse", boundary.observationOnly() ? "OBSERVATION_ONLY" : "RECORDED_FACT")
+                .put("dataBoundaryCount", boundary.recordCount())
+                .put("dataComparableFieldCount", boundary.comparableFieldCount())
+                .put("dataTargetHitCount", detail.hits().size())
+                .put("dataContextCandidateCount", contextCandidateCount(detail))
+                .put("dataContextSelectedCount", contextSelectedCount(detail))
+                .put("dataContextTruncated", contextTruncatedCount(detail))
+                .put("dataConditionConflictCount", conditionConflictCount(detail))
+                .put("dataComparableRecordCount", comparableRecordCount(detail));
         var persistenceStarted = System.nanoTime();
         var messageId = repository.insertMessageReturningId(prepared.conversationId(), "ASSISTANT", answer,
                 objectMapper.valueToTree(citations), objectMapper.valueToTree(prepared.retrieval().plan()), trace);
@@ -579,7 +621,17 @@ public class AssistantService {
         var finalTrace = retrievalTrace(prepared, Map.of());
         finalTrace.put("answerStatus", status).put("answerMode", detail.mode().name())
                 .put("dataResolution", detail.resolution().name())
-                .put("dataAnalysisStatus", analysis.status());
+                .put("dataAnalysisStatus", analysis.status())
+                .put("analysisGoal", analysisGoalCode(detail))
+                .put("dataEvidenceUse", boundary.observationOnly() ? "OBSERVATION_ONLY" : "RECORDED_FACT")
+                .put("dataBoundaryCount", boundary.recordCount())
+                .put("dataComparableFieldCount", boundary.comparableFieldCount())
+                .put("dataTargetHitCount", detail.hits().size())
+                .put("dataContextCandidateCount", contextCandidateCount(detail))
+                .put("dataContextSelectedCount", contextSelectedCount(detail))
+                .put("dataContextTruncated", contextTruncatedCount(detail))
+                .put("dataConditionConflictCount", conditionConflictCount(detail))
+                .put("dataComparableRecordCount", comparableRecordCount(detail));
         if (messageId != null) repository.updateMessageRetrievalTrace(messageId, finalTrace);
         logRequestDiagnostics(prepared, RequestIdHolder.currentOrUnknown(), "SUCCEEDED");
         repository.insertCallAudit(actor.organizationId(), actor.userId(), prepared.conversationId(), "QA_DATA_DETAIL",
@@ -587,8 +639,84 @@ public class AssistantService {
                 analysis.usage().inputTokens(), analysis.usage().outputTokens(), analysis.usage().totalTokens(),
                 "SUCCEEDED", "FALLBACK".equals(analysis.status()) ? analysis.error() : null);
         memory.maybeSummarize(actor.organizationId(), prepared.conversationId());
-        return new AssistantResponse(prepared.conversationId(), answer, citations, false,
-                RequestIdHolder.currentOrUnknown(), analysis.usage());
+        return new AssistantResponse(prepared.conversationId(), prepared.userMessageId(), messageId, answer,
+                citations, false, RequestIdHolder.currentOrUnknown(), analysis.usage());
+    }
+
+    private void streamDataDetailResponse(Actor actor, Prepared prepared, SseEmitter emitter,
+                                          String traceId, String runId) {
+        var detail = prepared.retrieval().dataDetail();
+        var prompt = dataDetailAnalysisPrompt(prepared.retrieval().plan().originalQuery(), detail);
+        var analysisStarted = System.nanoTime();
+        var content = new StringBuilder();
+        var sequence = new int[]{0};
+        var streamUsage = new int[3];
+        try {
+            var builder = clients.getIfAvailable();
+            if (builder == null) throw new IllegalStateException("AI model client unavailable");
+            builder.build().prompt().system(DATA_DETAIL_ANALYSIS_SYSTEM_PROMPT).user(prompt)
+                    .stream().chatClientResponse().subscribe(
+                            response -> {
+                                var chatResponse = response == null ? null : response.chatResponse();
+                                var usage = usage(chatResponse);
+                                if (usage.totalTokens() > 0) {
+                                    streamUsage[0] = usage.inputTokens();
+                                    streamUsage[1] = usage.outputTokens();
+                                    streamUsage[2] = usage.totalTokens();
+                                }
+                                var token = chatResponse == null || chatResponse.getResult() == null
+                                        || chatResponse.getResult().getOutput() == null
+                                        ? "" : chatResponse.getResult().getOutput().getText();
+                                if (!StringUtils.hasText(token)) return;
+                                content.append(token);
+                                send(emitter, "token", Map.of("traceId", traceId, "runId", runId,
+                                        "sequence", sequence[0]++, "delta", token));
+                            },
+                            error -> {
+                                circuitBreaker.failure("chat");
+                                log.warn("data_detail_analysis_stream_fallback requestId={} detail={}",
+                                        RequestIdHolder.currentOrUnknown(), safeError(error));
+                                completeDataDetailStream(actor, prepared, emitter, traceId, analysisStarted,
+                                        new DataDetailAnalysis("", new Usage(streamUsage[0], streamUsage[1], streamUsage[2]),
+                                                "FALLBACK", sha256(prompt), safeError(error)));
+                            },
+                            () -> {
+                                var text = safeDataAnalysis(content.toString());
+                                if (StringUtils.hasText(text)) {
+                                    circuitBreaker.success("chat");
+                                    completeDataDetailStream(actor, prepared, emitter, traceId, analysisStarted,
+                                            new DataDetailAnalysis(text,
+                                                    new Usage(streamUsage[0], streamUsage[1], streamUsage[2]),
+                                                    "MODEL", sha256(prompt), null));
+                                } else {
+                                    circuitBreaker.failure("chat");
+                                    completeDataDetailStream(actor, prepared, emitter, traceId, analysisStarted,
+                                            new DataDetailAnalysis("", new Usage(streamUsage[0], streamUsage[1], streamUsage[2]),
+                                                    "FALLBACK", sha256(prompt), "实验数据简析为空或包含内部标识"));
+                                }
+                            });
+        } catch (Exception exception) {
+            circuitBreaker.failure("chat");
+            completeDataDetailStream(actor, prepared, emitter, traceId, analysisStarted,
+                    new DataDetailAnalysis("", new Usage(0, 0, 0), "FALLBACK", sha256(prompt), safeError(exception)));
+        }
+    }
+
+    private void completeDataDetailStream(Actor actor, Prepared prepared, SseEmitter emitter,
+                                          String traceId, long analysisStarted, DataDetailAnalysis analysis) {
+        RequestIdHolder.set(traceId);
+        try {
+            prepared.timings().put("dataAnalysisMs", elapsedMs(analysisStarted));
+            var response = finalizeDataDetailResponse(actor, prepared, analysis);
+            send(emitter, "done", response);
+        } catch (Exception exception) {
+            send(emitter, "error", Map.of("code", ApiErrorCode.AI_MODEL_RESPONSE_INVALID.code(),
+                    "message", "实验数据分析失败", "requestId", RequestIdHolder.currentOrUnknown(),
+                    "traceId", RequestIdHolder.currentOrUnknown(), "stage", "DATA_ANALYSIS"));
+        } finally {
+            RequestIdHolder.clear();
+            emitter.complete();
+        }
     }
 
     private DataDetailAnalysis analyzeDataDetail(String question,
@@ -621,38 +749,156 @@ public class AssistantService {
 
     static String dataDetailAnalysisPrompt(String question,
                                            DataSourceFileSearchFacade.DataDetailResult detail) {
+        var boundary = dataEvidenceBoundary(detail);
+        var aliases = recordAliases(detail == null ? List.of() : detail.hits());
         var prompt = new StringBuilder("用户问题：")
                 .append(promptText(question, "查看实验数据"))
+                .append("\n分析目的：").append(analysisGoalLabel(detail))
                 .append("\n查询类型：").append(detail.mode().name())
                 .append("\n来源记录数：").append(detail.sourceRecordCount())
                 .append("\n非空可检索值数：").append(detail.searchableValueCount())
-                .append("\n以下是后端已核验的精确数据：\n");
+                .append("\n本轮记录边界数：").append(boundary.recordCount())
+                .append("\n证据用途：").append(boundary.observationOnly() ? "仅作观察" : "已确认记录事实");
+        if (boundary.observationOnly() || !"VALUE".equals(detail.analysisGoal())) {
+            prompt.append("\n边界说明：").append(boundary.description());
+        }
+        prompt.append("\n以下是后端已核验的精确数据（位置仅供核验，通常不要写入回答）：\n");
         for (var hit : detail.hits()) {
             var position = StringUtils.hasText(hit.sheetName()) ? hit.sheetName() : "";
             if (StringUtils.hasText(hit.cellAddress())) position += (position.isBlank() ? "" : "!") + hit.cellAddress();
             else if (hit.rowNumber() != null) position += (position.isBlank() ? "" : "，") + "第 " + hit.rowNumber() + " 行";
-            prompt.append("记录=").append(promptText(hit.recordKey(), "未命名记录"))
-                    .append("；字段=").append(promptText(hit.fieldName(), "未命名字段"))
+            prompt.append("观察=").append(aliases.getOrDefault(recordBoundaryKey(hit), "观察记录"))
+                    .append("；业务记录=").append(promptText(hit.recordKey(), "未提供"))
+                    .append("；来源状态=").append(sourceStatusLabel(hit))
+                    .append("；字段=").append(promptText(sourceLabel(hit), "未命名字段"))
                     .append("；值=").append(promptText(hit.fieldValue(), "—"))
                     .append("；单位=").append(promptText(hit.unit(), "—"))
-                    .append("；位置=").append(promptText(position, "—")).append('\n');
+                    .append("；位置=").append(promptText(position, "—"))
+                    .append("；原始标签=").append(promptText(sourceLabel(hit), "未提供"))
+                    .append("；来源单位=").append(promptText(hit.sourceUnit(), promptText(hit.unit(), "—")))
+                    .append("；标准单位=").append(promptText(hit.standardUnit(), "—"))
+                    .append("；声明条件=").append(promptText(hit.declaredCondition(), "未提供")).append('\n');
+        }
+        appendRecordContexts(prompt, detail, aliases);
+        var comparisons = "VALUE".equals(detail.analysisGoal()) ? List.<String>of()
+                : sameFieldComparisons(detail.hits(), aliases);
+        if (!comparisons.isEmpty()) {
+            prompt.append("同字段比较候选（值不一致也继续比较，不合并成单一真值）：\n");
+            comparisons.forEach(value -> prompt.append(value).append('\n'));
         }
         if (detail.truncated()) prompt.append("注意：结果已截断，不能概括未展示数据。\n");
         return prompt.toString().strip();
     }
 
-    static String mergeDataDetailAnswer(String analysis, String exactAnswer) {
-        if (!StringUtils.hasText(analysis)) return exactAnswer;
-        var normalized = analysis.strip();
-        var heading = normalized.startsWith("### 简要分析") ? "" : "### 简要分析\n\n";
-        return heading + normalized + "\n\n" + exactAnswer;
+    private static void appendRecordContexts(StringBuilder prompt,
+                                              DataSourceFileSearchFacade.DataDetailResult detail,
+                                              Map<String, String> aliases) {
+        if (detail == null || detail.recordContexts() == null || detail.recordContexts().isEmpty()) return;
+        prompt.append("记录级最小充分上下文（仅选择与问题有关的内容，不展示完整明细）：\n");
+        for (var context : detail.recordContexts()) {
+            var alias = context.targetHits().isEmpty() ? "观察记录"
+                    : aliases.getOrDefault(recordBoundaryKey(context.targetHits().getFirst()), "观察记录");
+            prompt.append("观察=").append(alias)
+                    .append("；业务记录=").append(context.targetHits().isEmpty()
+                            ? "未提供" : promptText(context.targetHits().getFirst().recordKey(), "未提供"))
+                    .append("；Sheet=").append(promptText(context.sheetName(), "未提供")).append('\n');
+            if (context.targetHits().stream().anyMatch(hit -> "COMPARISON_CANDIDATE".equals(hit.contextRelation()))) {
+                prompt.append("严格可比参照候选：");
+                context.targetHits().forEach(hit -> prompt.append(sourceLabel(hit)).append("=")
+                        .append(displayValue(hit)).append("；"));
+                prompt.append('\n');
+            }
+            appendContextGroup(prompt, "同记录身份/配方/关联结果", context.contextHits(),
+                    hit -> "SAME_RECORD".equals(hit.contextRelation()));
+            appendContextGroup(prompt, "同 Sheet 共享实验条件", context.contextHits(),
+                    hit -> "SHARED_SHEET".equals(hit.contextRelation()));
+            if (!"VALUE".equals(detail.analysisGoal()) && (!context.comparable() || StringUtils.hasText(context.comparisonReason()))) {
+                prompt.append("条件关系=").append(context.comparable() ? "条件一致，可作为比较依据" : "条件描述不同，只能分别解释")
+                        .append("；说明=").append(promptText(context.comparisonReason(), "原始标签或条件信息未完全一致")).append('\n');
+            }
+            if (context.contextTruncated()) prompt.append("上下文候选已截断，只能基于已选字段分析。\n");
+        }
     }
 
-    private static String safeDataAnalysis(String value) {
+    private static void appendContextGroup(StringBuilder prompt, String title,
+                                           List<DataSourceFileSearchFacade.SourceFileHit> hits,
+                                           java.util.function.Predicate<DataSourceFileSearchFacade.SourceFileHit> predicate) {
+        var selected = hits == null ? List.<DataSourceFileSearchFacade.SourceFileHit>of()
+                : hits.stream().filter(predicate).filter(hit -> StringUtils.hasText(hit.fieldValue())).limit(32).toList();
+        if (selected.isEmpty()) return;
+        prompt.append(title).append("：");
+        for (var hit : selected) {
+            prompt.append(promptText(sourceLabel(hit), "未命名字段"))
+                    .append("=").append(displayValue(hit))
+                    .append("（语义=").append(promptText(hit.semanticDomain(), "未标注"))
+                    .append("/").append(promptText(hit.semanticField(), "未标注"))
+                    .append("；条件=").append(promptText(hit.declaredCondition(), "未提供"))
+                    .append("；来源=").append("SAME_RECORD".equals(hit.contextRelation()) ? "同记录" : "同 Sheet 共享")
+                    .append("）；");
+        }
+        prompt.append('\n');
+    }
+
+    private static String sourceLabel(DataSourceFileSearchFacade.SourceFileHit hit) {
+        return hit == null ? "" : StringUtils.hasText(hit.sourceLabel()) ? hit.sourceLabel() : hit.fieldName();
+    }
+
+    private static String analysisGoalLabel(DataSourceFileSearchFacade.DataDetailResult detail) {
+        var goal = detail == null ? "VALUE" : detail.analysisGoal();
+        return switch (goal) {
+            case "EVALUATE" -> "EVALUATE（评价）";
+            case "COMPARE" -> "COMPARE（明确比较）";
+            case "EXPLAIN" -> "EXPLAIN（解释）";
+            default -> "VALUE（取值）";
+        };
+    }
+
+    private static String analysisGoalCode(DataSourceFileSearchFacade.DataDetailResult detail) {
+        return detail == null ? "VALUE" : detail.analysisGoal();
+    }
+
+    private static int contextCandidateCount(DataSourceFileSearchFacade.DataDetailResult detail) {
+        if (detail == null || detail.recordContexts() == null) return 0;
+        return detail.recordContexts().stream().mapToInt(context -> context.contextHits().size()).sum();
+    }
+
+    private static int contextSelectedCount(DataSourceFileSearchFacade.DataDetailResult detail) {
+        return contextCandidateCount(detail);
+    }
+
+    private static int contextTruncatedCount(DataSourceFileSearchFacade.DataDetailResult detail) {
+        if (detail == null || detail.recordContexts() == null) return 0;
+        return (int) detail.recordContexts().stream().filter(DataSourceFileSearchFacade.RecordContext::contextTruncated).count();
+    }
+
+    private static int comparableRecordCount(DataSourceFileSearchFacade.DataDetailResult detail) {
+        if (detail == null || detail.recordContexts() == null) return 0;
+        return (int) detail.recordContexts().stream().filter(DataSourceFileSearchFacade.RecordContext::comparable).count();
+    }
+
+    private static int conditionConflictCount(DataSourceFileSearchFacade.DataDetailResult detail) {
+        if (detail == null) return 0;
+        var groups = new LinkedHashMap<String, Set<String>>();
+        for (var hit : detail.hits()) groups.computeIfAbsent(fieldGroupKey(hit), ignored -> new java.util.LinkedHashSet<>())
+                .add(comparisonSignature(hit));
+        return (int) groups.values().stream().filter(values -> values.size() > 1).count();
+    }
+
+    static String mergeDataDetailAnswer(String analysis, String exactAnswer) {
+        if (!StringUtils.hasText(analysis)) return exactAnswer;
+        return analysis.strip();
+    }
+
+    static String safeDataAnalysis(String value) {
         if (!StringUtils.hasText(value)) return "";
-        var normalized = value.replaceAll("[\\p{Cntrl}]+", " ").replaceAll("\\s{2,}", " ").strip();
+        var normalized = value.replace("\r\n", "\n").replace('\r', '\n')
+                .replaceAll("[\\p{Cntrl}&&[^\\n\\t]]+", " ")
+                .replaceAll("[ \\t]{2,}", " ")
+                .replaceAll(" *\\n *", "\n")
+                .replaceAll("\\n{3,}", "\n\n")
+                .strip();
         if (INTERNAL_DATA_MARKER.matcher(normalized).find()) return "";
-        return normalized.length() <= 600 ? normalized : normalized.substring(0, 599).strip() + "…";
+        return normalized.length() <= 2000 ? normalized : normalized.substring(0, 1999).strip() + "…";
     }
 
     private static String promptText(String value, String fallback) {
@@ -684,42 +930,166 @@ public class AssistantService {
             if (!detail.hits().isEmpty()) {
                 var records = detail.hits().stream().map(DataSourceFileSearchFacade.SourceFileHit::recordKey)
                         .filter(StringUtils::hasText).distinct().count();
-                answer.append("以下预览前 ").append(records).append(" 条记录，每条最多 5 个字段。");
+                answer.append("本轮读取了前 ").append(records).append(" 条记录用于概览，不展示原始明细。");
             }
         } else if (detail.hits().isEmpty()) {
             return "在数据文件“" + fileName + "”中没有找到符合指定记录或字段的非空可信值。";
         } else {
-            answer.append("在数据文件“").append(fileName).append("”中找到 ")
-                    .append(detail.hits().size()).append(" 个精确值。");
+            answer.append(observationSummary(detail));
         }
-        if (!detail.hits().isEmpty()) appendDataRows(answer, detail.hits());
         if (detail.truncated() && detail.mode() != DataSourceFileSearchFacade.DataQueryMode.FILE_OVERVIEW) {
-            answer.append("\n\n结果超过当前上限，请继续指定实验编号、树脂编号或字段名以缩小范围。");
+            answer.append(" 结果超过当前上限，本次观察仅基于已命中的部分记录；可继续补充实验编号、批次或字段缩小范围。");
         } else if (detail.mode() == DataSourceFileSearchFacade.DataQueryMode.FILE_OVERVIEW
                 && detail.searchableValueCount() > detail.hits().size()) {
-            answer.append("\n\n如需完整明细，请指定实验编号、树脂编号或字段名。");
+            answer.append(" 如需分析，请指定实验编号、树脂编号、配方或目标字段。");
         }
         return answer.toString();
     }
 
-    private static void appendDataRows(StringBuilder answer,
-                                       List<DataSourceFileSearchFacade.SourceFileHit> hits) {
-        var unique = new LinkedHashMap<UUID, DataSourceFileSearchFacade.SourceFileHit>();
-        hits.forEach(hit -> unique.putIfAbsent(hit.hitId(), hit));
-        answer.append("\n\n### 数据明细\n\n")
-                .append("| 记录 | 字段 | 值 | 单位 | 位置 |\n")
-                .append("|---|---|---|---|---|\n");
-        for (var hit : unique.values()) {
-            var position = StringUtils.hasText(hit.sheetName()) ? hit.sheetName() : "";
-            if (StringUtils.hasText(hit.cellAddress())) position += (position.isBlank() ? "" : "!") + hit.cellAddress();
-            else if (hit.rowNumber() != null) position += (position.isBlank() ? "" : "，") + "第 " + hit.rowNumber() + " 行";
-            var source = position.isBlank() ? hit.originalName() : position;
-            answer.append('|').append(markdownCell(hit.recordKey(), "未命名记录"))
-                    .append('|').append(markdownCell(hit.fieldName(), "未命名字段"))
-                    .append('|').append(markdownCell(hit.fieldValue(), "—"))
-                    .append('|').append(markdownCell(hit.unit(), "—"))
-                    .append('|').append(markdownCell(source, "—")).append("|\n");
+    private static String observationSummary(DataSourceFileSearchFacade.DataDetailResult detail) {
+        var boundary = dataEvidenceBoundary(detail);
+        var groups = new LinkedHashMap<String, List<DataSourceFileSearchFacade.SourceFileHit>>();
+        for (var hit : detail.hits()) {
+            if (!StringUtils.hasText(hit.fieldValue())) continue;
+            var groupKey = fieldGroupKey(hit) + "|label=" + normalizeLookup(sourceLabel(hit));
+            groups.computeIfAbsent(groupKey, ignored -> new ArrayList<>()).add(hit);
         }
+        var parts = new ArrayList<String>();
+        for (var hits : groups.values()) {
+            if (parts.size() >= 6) break;
+            var first = hits.getFirst();
+            var field = promptText(sourceLabel(first), "未命名字段");
+            var values = hits.stream().map(AssistantService::displayValue).distinct().limit(6).toList();
+            parts.add(field + (values.size() == 1 ? "为 " : "在不同观察中为 ") + String.join("、", values));
+        }
+        var records = detail.hits().stream().map(DataSourceFileSearchFacade.SourceFileHit::recordKey)
+                .filter(StringUtils::hasText)
+                .filter(value -> !INTERNAL_DATA_MARKER.matcher(value).find())
+                .distinct().limit(3).toList();
+        var prefix = records.size() == 1
+                ? (boundary.observationOnly() ? "草稿记录“" : "正式记录“") + records.getFirst() + "”显示："
+                : boundary.observationOnly() ? "以下仅为草稿或未正式确认数据的观察结果：" : "已确认记录显示：";
+        var result = new StringBuilder(prefix)
+                .append(parts.isEmpty() ? "本轮命中了记录，但没有可直接表述的字段值。" : String.join("；", parts) + "。");
+        if (groups.size() > parts.size()) result.append(" 其余命中未展开。");
+        if ("VALUE".equals(detail.analysisGoal())) return result.toString();
+        if (boundary.observationOnly()) {
+            result.append(" 仅作观察，不作为达标、优劣或推荐依据。");
+        } else if (boundary.comparableFieldCount() > 0) {
+            result.append(" 其中有同语义、同条件的记录可作为比较候选。");
+        } else {
+            result.append(" 当前没有可直接比较的同条件记录。");
+        }
+        return result.toString();
+    }
+
+    private static String displayValue(DataSourceFileSearchFacade.SourceFileHit hit) {
+        var value = promptText(hit.fieldValue(), "—");
+        var unit = promptText(hit.unit(), "");
+        return unit.isBlank() || value.toLowerCase(Locale.ROOT).contains(unit.toLowerCase(Locale.ROOT))
+                ? value : value + " " + unit;
+    }
+
+    static DataEvidenceBoundary dataEvidenceBoundary(DataSourceFileSearchFacade.DataDetailResult detail) {
+        var hits = detail == null || detail.hits() == null ? List.<DataSourceFileSearchFacade.SourceFileHit>of()
+                : detail.hits();
+        var contextHits = detail == null ? List.<DataSourceFileSearchFacade.SourceFileHit>of()
+                : detail.recordContexts().stream().flatMap(context -> context.contextHits().stream()).toList();
+        var allEvidenceHits = new ArrayList<DataSourceFileSearchFacade.SourceFileHit>(hits);
+        allEvidenceHits.addAll(contextHits);
+        var aliases = recordAliases(hits);
+        var draft = allEvidenceHits.stream().anyMatch(hit -> "DRAFT".equalsIgnoreCase(safeText(hit.sourceStatus())));
+        var unconfirmed = allEvidenceHits.stream().anyMatch(AssistantService::observationOnlySource);
+        var grouped = new LinkedHashMap<String, Set<String>>();
+        for (var hit : hits) {
+            grouped.computeIfAbsent(fieldGroupKey(hit), ignored -> new java.util.LinkedHashSet<>())
+                    .add(recordBoundaryKey(hit));
+        }
+        var signatures = new LinkedHashMap<String, Set<String>>();
+        for (var hit : hits) signatures.computeIfAbsent(fieldGroupKey(hit), ignored -> new java.util.LinkedHashSet<>())
+                .add(comparisonSignature(hit));
+        var comparable = (int) grouped.entrySet().stream()
+                .filter(entry -> entry.getValue().size() > 1)
+                .filter(entry -> signatures.getOrDefault(entry.getKey(), Set.of()).size() == 1)
+                .count();
+        var observationOnly = draft || unconfirmed;
+        var description = draft
+                ? "包含草稿实验；只允许陈述和比较观察值，不用于达标、优劣、稳定性、原因或推荐判断。"
+                : unconfirmed
+                ? "包含未正式确认来源；只允许陈述和比较观察值，不用于最终研发判断。"
+                : "来源状态已确认；仍需在单位、测试方法和条件一致时才可比较，不自动推断因果。";
+        return new DataEvidenceBoundary(observationOnly, aliases.size(), comparable, description);
+    }
+
+    private static boolean observationOnlySource(DataSourceFileSearchFacade.SourceFileHit hit) {
+        var status = safeText(hit.sourceStatus()).strip().toUpperCase(Locale.ROOT);
+        return !("CONFIRMED".equals(status) || "COMPLETED".equals(status));
+    }
+
+    private static Map<String, String> recordAliases(List<DataSourceFileSearchFacade.SourceFileHit> hits) {
+        var result = new LinkedHashMap<String, String>();
+        if (hits == null) return result;
+        for (var hit : hits) {
+            var key = recordBoundaryKey(hit);
+            result.computeIfAbsent(key, ignored -> "观察" + (result.size() + 1));
+        }
+        return result;
+    }
+
+    private static String recordBoundaryKey(DataSourceFileSearchFacade.SourceFileHit hit) {
+        if (hit == null) return "UNKNOWN";
+        return safeText(hit.importJobId() == null ? null : hit.importJobId().toString()) + "|"
+                + safeText(hit.recordKey()) + "|" + safeText(hit.sheetName());
+    }
+
+    private static String fieldGroupKey(DataSourceFileSearchFacade.SourceFileHit hit) {
+        if (hit == null) return "UNKNOWN";
+        var semantic = normalizeLookup(hit.semanticDomain()) + "/" + normalizeLookup(hit.semanticField());
+        if (!semantic.equals("/")) return semantic;
+        var name = normalizeLookup(hit.fieldName());
+        return name.isBlank() ? normalizeLookup(hit.fieldCode()) : name;
+    }
+
+    private static String comparisonSignature(DataSourceFileSearchFacade.SourceFileHit hit) {
+        if (hit == null) return "";
+        return fieldGroupKey(hit) + "|label=" + normalizeLookup(sourceLabel(hit))
+                + "|declared=" + normalizeLookup(hit.declaredCondition())
+                + "|unit=" + normalizeLookup(StringUtils.hasText(hit.standardUnit()) ? hit.standardUnit() : hit.unit());
+    }
+
+    private static String sourceStatusLabel(DataSourceFileSearchFacade.SourceFileHit hit) {
+        var status = safeText(hit.sourceStatus()).strip().toUpperCase(Locale.ROOT);
+        return switch (status) {
+            case "DRAFT" -> "草稿";
+            case "CONFIRMED", "COMPLETED" -> "已确认";
+            case "UNCONFIRMED" -> "未正式确认";
+            default -> "状态未知，按未确认处理";
+        };
+    }
+
+    private static List<String> sameFieldComparisons(List<DataSourceFileSearchFacade.SourceFileHit> hits,
+                                                     Map<String, String> aliases) {
+        var groups = new LinkedHashMap<String, List<DataSourceFileSearchFacade.SourceFileHit>>();
+        if (hits != null) {
+            for (var hit : hits) {
+                if (!StringUtils.hasText(hit.fieldValue())) continue;
+                groups.computeIfAbsent(fieldGroupKey(hit), ignored -> new ArrayList<>()).add(hit);
+            }
+        }
+        var result = new ArrayList<String>();
+        for (var group : groups.values()) {
+            var boundaries = group.stream().map(AssistantService::recordBoundaryKey).distinct().toList();
+            if (boundaries.size() < 2) continue;
+            var first = group.getFirst();
+            var entries = group.stream()
+                    .map(hit -> aliases.getOrDefault(recordBoundaryKey(hit), "观察记录") + "=" + displayValue(hit))
+                    .distinct().limit(12).toList();
+            var comparable = group.stream().map(AssistantService::comparisonSignature).distinct().count() == 1;
+            result.add("字段=" + promptText(sourceLabel(first), "未命名字段") + "；" + String.join("；", entries)
+                    + (comparable ? "；条件签名一致，可作数值比较候选" : "；原始标签或条件签名不同，仅作并列观察"));
+            if (result.size() >= 8) break;
+        }
+        return List.copyOf(result);
     }
 
     private static String safeDisplayText(String value, String fallback) {
@@ -887,6 +1257,44 @@ public class AssistantService {
         return prepared.hits().isEmpty() && prepared.dataHits().isEmpty() && prepared.retrieval().webHits().isEmpty();
     }
 
+    static boolean isScopeCapabilityQuestion(String question) {
+        if (!StringUtils.hasText(question)) return false;
+        var normalized = question.replaceAll("\\s+", "");
+        var mentionsSource = normalized.contains("数据中心")
+                || normalized.contains("实验本")
+                || normalized.contains("实验记录本");
+        var asksCapability = normalized.contains("可查询")
+                || normalized.contains("查询范围")
+                || normalized.contains("支持的字段")
+                || normalized.contains("支持字段")
+                || normalized.contains("查询限制")
+                || (normalized.contains("字段") && (normalized.contains("支持") || normalized.contains("范围")
+                || normalized.contains("限制")));
+        return mentionsSource && asksCapability;
+    }
+
+    private AssistantResponse scopeCapabilityResponse(Actor actor, Prepared prepared) {
+        var answer = "当前 AI 研发助手支持查询当前账号已授权、已完成导入并可检索的两类来源：\n\n"
+                + "- 数据中心：来源文件、记录/样本，以及文件中已识别的原始字段值；可按文件名、实验编号、样品或配方、字段和条件查询。\n"
+                + "- 电子实验记录本：已形成结构化来源的实验记录；可按实验编号、样品或配方、实验条件和测试结果查询。\n\n"
+                + "限制：本页勾选的检索范围会决定本轮可见资料；记录尚未完成导入或索引、字段为空、字段名称无法匹配时，会返回未找到或要求补充条件，不会用通用知识替代具体实验记录。查询具体数据时，建议至少提供“实验编号/文件名/样品或配方 + 目标字段”，必要时再补充温度、时间等条件。";
+        var trace = retrievalTrace(prepared, Map.of());
+        trace.put("answerStatus", "ANSWERED").put("responseKind", "SCOPE_CAPABILITY");
+        var messageId = repository.insertMessageReturningId(prepared.conversationId(), "ASSISTANT", answer,
+                objectMapper.createArrayNode(), objectMapper.valueToTree(prepared.retrieval().plan()), trace);
+        prepared.timings().put("messagePersistenceMs", 0L);
+        prepared.timings().put("qaTotalMs", prepared.timings().getOrDefault("prepareMs", 0L));
+        var finalTrace = retrievalTrace(prepared, Map.of());
+        finalTrace.put("answerStatus", "ANSWERED").put("responseKind", "SCOPE_CAPABILITY");
+        if (messageId != null) repository.updateMessageRetrievalTrace(messageId, finalTrace);
+        logRequestDiagnostics(prepared, RequestIdHolder.currentOrUnknown(), "SCOPE_CAPABILITY");
+        repository.insertCallAudit(actor.organizationId(), actor.userId(), prepared.conversationId(), "QA",
+                configuredModel, promptVersion, sha256(prepared.retrieval().plan().originalQuery()), sha256(answer),
+                0, 0, 0, "SUCCEEDED", null);
+        return new AssistantResponse(prepared.conversationId(), prepared.userMessageId(), messageId, answer, List.of(), false,
+                RequestIdHolder.currentOrUnknown(), new Usage(0, 0, 0));
+    }
+
     private AssistantResponse clarificationResponse(Actor actor, Prepared prepared) {
         var ambiguity = prepared.fieldAmbiguity();
         var options = ambiguity.candidates().stream().map(candidate -> {
@@ -905,27 +1313,48 @@ public class AssistantService {
         repository.insertCallAudit(actor.organizationId(), actor.userId(), prepared.conversationId(), "QA",
                 configuredModel, promptVersion, sha256(prepared.retrieval().plan().originalQuery()), sha256(answer),
                 0, 0, 0, "SUCCEEDED", null);
-        return new AssistantResponse(prepared.conversationId(), answer, List.of(), false,
+        return new AssistantResponse(prepared.conversationId(), prepared.userMessageId(), messageId, answer, List.of(), false,
                 RequestIdHolder.currentOrUnknown(), new Usage(0, 0, 0));
     }
 
     private AssistantResponse noEvidenceResponse(Actor actor, Prepared prepared) {
-        var answer = "在选定的检索范围内没有找到可验证依据，暂不生成猜测答案。";
+        var vague = isUnderspecifiedQuestion(prepared.retrieval().plan().originalQuery());
+        var answer = vague
+                ? "当前没有检索到可用于回答的直接记录。这个问题还缺少可定位信息：对象（实验编号、文件名、样品或配方）、目标字段（如黏度、附着力、耐磨）或筛选条件（如温度、时间、数值范围）。请至少补充“对象 + 目标字段”，例如：查某实验编号在 25℃、60 min 下的黏度和附着力。"
+                : "在当前选定的检索范围内没有命中可验证记录。可能原因是：对应的数据中心或实验本资料未被勾选，字段/实验编号/文件名与入库原文不一致，或记录尚未完成导入和索引。请补充实验编号、文件名、样品或配方、目标字段中的一项，并确认对应资料范围。";
         var persistenceStarted = System.nanoTime();
+        var trace = retrievalTrace(prepared, Map.of());
+        trace.put("answerStatus", "NOT_FOUND")
+                .put("responseKind", "NO_EVIDENCE_GUIDANCE")
+                .put("noEvidenceReason", vague ? "UNDERSPECIFIED_QUERY" : "NO_RETRIEVAL_MATCH");
         var messageId = repository.insertMessageReturningId(prepared.conversationId(), "ASSISTANT", answer,
                 objectMapper.createArrayNode(), objectMapper.valueToTree(prepared.retrieval().plan()),
-                retrievalTrace(prepared, Map.of()));
+                trace);
         prepared.timings().put("messagePersistenceMs", elapsedMs(persistenceStarted));
         prepared.timings().put("qaTotalMs", prepared.timings().getOrDefault("prepareMs", 0L)
                 + prepared.timings().getOrDefault("messagePersistenceMs", 0L));
         var finalTrace = retrievalTrace(prepared, Map.of());
+        finalTrace.put("answerStatus", "NOT_FOUND")
+                .put("responseKind", "NO_EVIDENCE_GUIDANCE")
+                .put("noEvidenceReason", vague ? "UNDERSPECIFIED_QUERY" : "NO_RETRIEVAL_MATCH");
         if (messageId != null) repository.updateMessageRetrievalTrace(messageId, finalTrace);
-        logRequestDiagnostics(prepared, RequestIdHolder.currentOrUnknown(), "NO_EVIDENCE");
+        logRequestDiagnostics(prepared, RequestIdHolder.currentOrUnknown(), vague ? "UNDERSPECIFIED_QUERY" : "NO_EVIDENCE");
         repository.insertCallAudit(actor.organizationId(), actor.userId(), prepared.conversationId(), "QA",
                 configuredModel, promptVersion, sha256(prepared.retrieval().plan().originalQuery()), sha256(answer),
                 0, 0, 0, "SUCCEEDED", null);
-        return new AssistantResponse(prepared.conversationId(), answer, List.of(), false,
+        return new AssistantResponse(prepared.conversationId(), prepared.userMessageId(), messageId, answer, List.of(), false,
                 RequestIdHolder.currentOrUnknown(), new Usage(0, 0, 0));
+    }
+
+    static boolean isUnderspecifiedQuestion(String question) {
+        if (!StringUtils.hasText(question)) return false;
+        var normalized = question.replaceAll("\\s+", "").toLowerCase(Locale.ROOT);
+        return normalized.contains("这批") || normalized.contains("那个") || normalized.contains("这个")
+                || normalized.contains("之前") || normalized.contains("最近") || normalized.contains("它")
+                || normalized.contains("怎么样") || normalized.contains("好不好") || normalized.contains("行不行")
+                || normalized.contains("怎么选") || normalized.contains("帮我找个") || normalized.contains("看一下")
+                || normalized.contains("类似") || normalized.contains("更好") || normalized.contains("快一点")
+                || normalized.contains("别太") || normalized.contains("问题不大");
     }
 
     private void send(SseEmitter emitter, String event, Object data) {
@@ -967,6 +1396,7 @@ public class AssistantService {
     private ApiErrorCode providerErrorCode(Throwable exception) {
         var current = exception;
         while (current != null) {
+            if (current instanceof ApiException apiException) return apiException.errorCode();
             var name = current.getClass().getName().toLowerCase(java.util.Locale.ROOT);
             var message = current.getMessage() == null ? "" : current.getMessage().toLowerCase(java.util.Locale.ROOT);
             if (current instanceof TimeoutException || name.contains("timeout") || message.contains("timeout")) {
@@ -989,6 +1419,7 @@ public class AssistantService {
     }
 
     private String providerErrorMessage(Throwable exception) {
+        if (exception instanceof ApiException apiException) return apiException.getMessage();
         var code = providerErrorCode(exception);
         log.warn("AI provider request failed code={} model={} requestId={} detail={}", code.code(), configuredModel,
                 RequestIdHolder.currentOrUnknown(), safeError(exception));
@@ -1087,7 +1518,8 @@ public class AssistantService {
         }
     }
 
-    public record AskCommand(UUID conversationId, String question,
+    public record AskCommand(UUID conversationId, UUID replaceFromMessageId, UUID expectedLastMessageId,
+                             String question,
                              List<UUID> knowledgeCategoryIds, List<UUID> dataCategoryIds,
                              boolean webSearchEnabled) {
         public AskCommand {
@@ -1095,7 +1527,8 @@ public class AssistantService {
             dataCategoryIds = dataCategoryIds == null ? List.of() : List.copyOf(dataCategoryIds);
         }
     }
-    public record AssistantResponse(UUID conversationId, String answer, List<Citation> citations,
+    public record AssistantResponse(UUID conversationId, UUID userMessageId, UUID assistantMessageId,
+                                    String answer, List<Citation> citations,
                                     boolean usedWebSearch, String traceId, Usage usage) { }
     public record Citation(String sourceType, String chunkId, String documentId, String versionId, String fileObjectId,
                            String importJobId, Integer rowNumber, String title, String originalName, Integer pageNo,
@@ -1129,7 +1562,8 @@ public class AssistantService {
     public record Capabilities(boolean webSearchAvailable) { }
     public record ConversationView(UUID conversationId, List<AssistantRepository.MessageRow> messages) { }
     public record ModelAnswer(String answer, String answerStatus, List<String> usedEvidenceRefs) { }
-    private record Prepared(UUID conversationId, List<AssistantRepository.MessageRow> history,
+    private record Prepared(UUID conversationId, UUID userMessageId,
+                            List<AssistantRepository.MessageRow> history,
                             List<KnowledgeSearchFacade.SearchHit> hits, List<DataSourceFileSearchFacade.SourceFileHit> dataHits,
                             FieldAmbiguity fieldAmbiguity, RagRetrievalService.Retrieval retrieval,
                             Map<String, Long> timings) {
@@ -1148,6 +1582,8 @@ public class AssistantService {
     private record PromptBundle(String text, Map<String, Evidence> evidence) { }
     private record ExternalContext(String text, List<String> evidenceRefs) { }
     private record DataDetailAnalysis(String text, Usage usage, String status, String requestHash, String error) { }
+    record DataEvidenceBoundary(boolean observationOnly, int recordCount, int comparableFieldCount,
+                                String description) { }
     private record NormalizedAnswer(String answer, List<Citation> citations, boolean usedWebSearch,
                                     String answerStatus, List<String> usedEvidenceRefs) { }
 }

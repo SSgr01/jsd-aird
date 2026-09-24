@@ -64,10 +64,21 @@ public class ModelingConfigurationService {
         var a=actor();var target=targetRequired(a.organizationId(),id);
         var version=targetVersionId==null?(target.currentVersionId()==null?repository.targetVersions(a.organizationId(),id).stream().findFirst().orElseThrow(()->notFound("目标版本不存在")):targetVersionRequired(a.organizationId(),target.currentVersionId())):targetVersionRequired(a.organizationId(),targetVersionId);
         if(!version.targetId().equals(id))throw validation("目标版本不属于当前Y");
+        var publishedMappings=repository.sourceMappings(a.organizationId(),id).stream()
+                .filter(mapping->"PUBLISHED".equals(mapping.status())&&version.id().equals(mapping.targetVersionId()))
+                .toList();
         var detected=detectSources(a.organizationId(),target,version);var dataSamples=new LinkedHashSet<String>();var experimentSamples=new LinkedHashSet<String>();var suggestions=new ArrayList<SourceMappingSuggestion>();
-        for(var candidate:detected.values()){dataSamples.addAll(candidate.dataSamples);experimentSamples.addAll(candidate.experimentSamples);var samples=candidate.samples.stream().limit(3).toList();suggestions.add(new SourceMappingSuggestion(candidate.key,candidate.fieldName,candidate.unit,candidate.testMethod,candidate.load,candidate.substrate,candidate.stage,candidate.dataSamples.size(),candidate.experimentSamples.size(),candidate.confidence,candidate.confidence<90,samples));}
+        for(var candidate:detected.values()){dataSamples.addAll(candidate.dataSamples);experimentSamples.addAll(candidate.experimentSamples);var samples=candidate.samples.stream().limit(3).toList();var covered=publishedMappings.stream().anyMatch(mapping->mappingCoversCandidate(mapping.mapping(),candidate.fieldName));suggestions.add(new SourceMappingSuggestion(candidate.key,candidate.fieldName,candidate.unit,candidate.testMethod,candidate.load,candidate.substrate,candidate.stage,candidate.dataSamples.size(),candidate.experimentSamples.size(),candidate.confidence,!covered,samples,List.copyOf(candidate.records)));}
         suggestions.sort(java.util.Comparator.comparingInt(SourceMappingSuggestion::confidence).reversed().thenComparing(SourceMappingSuggestion::fieldName));
         return new SourceMappingSuggestions(id,version.id(),dataSamples.size(),experimentSamples.size(),(int)suggestions.stream().filter(SourceMappingSuggestion::confirmationRequired).count(),suggestions);
+    }
+
+    private boolean mappingCoversCandidate(JsonNode mapping,String fieldName){
+        var candidate=normalize(fieldName);
+        if(candidate.isBlank()||mapping==null||mapping.isNull())return false;
+        if(candidate.equals(normalize(mapping.path("sourceFieldCode").asText(""))))return true;
+        for(var alias:mapping.path("sourceAliases"))if(candidate.equals(normalize(alias.asText(""))))return true;
+        return false;
     }
     public List<InputSchemeView> inputSchemes(UUID id) { target(id); return repository.inputSchemes(actor().organizationId(),id); }
 
@@ -563,22 +574,29 @@ public class ModelingConfigurationService {
             """,rs->{while(rs.next()){
                 var source=rs.getString("source_type");var sample=rs.getString("logical_sample_key");var observations=repository.json(rs,"observations_jsonb");var facts=repository.json(rs,"facts_jsonb");var coordinates=repository.json(rs,"source_coordinates_jsonb");
                 scanObservation(observations,"",(node,path)->{
-                    var field=firstText(node,"targetName","name","label","labelPath","fieldName","targetCode","fieldCode","testMethod");var normalized=normalize(field);if(normalized.isBlank())return;
+                    var field=firstText(node,"targetName","testItem","testCondition","itemLabel","name","label","labelPath","fieldName","targetCode","fieldCode","testMethod");var normalized=normalize(field);if(normalized.isBlank())return;
+                    if(!sourceValueCompatible(node,version))return;
+                    var method=firstText(node,"testMethod","method");var unit=firstText(node,"unit","sourceUnit");var load=firstText(node,"load","loadCondition");var substrate=firstText(node,"substrate","substrateType");var stage=firstText(node,"stage","testStage");
+                    if(!matchesTargetContext(target,version,field,method,unit,load,substrate,stage))return;
                     var confidence=semanticConfidence(normalized,targetNeedle,codeNeedle);
-                    var method=firstText(node,"testMethod","method");if(!expectedMethod.isBlank()&&normalize(method).contains(normalize(expectedMethod)))confidence=Math.min(100,confidence+10);
-                    if(confidence<60)return;var unit=firstText(node,"unit","sourceUnit");var load=firstText(node,"load","loadCondition");var substrate=firstText(node,"substrate","substrateType");var stage=firstText(node,"stage","testStage");
-                    var semantic=mapper.createObjectNode().put("field",field).put("unit",unit).put("testMethod",method).put("load",load).put("substrate",substrate).put("stage",stage);var key=hashing.hash(semantic);var found=result.get(key);if(found==null){found=new DetectedSource(key,field,unit,method,load,substrate,stage,confidence);result.put(key,found);}found.confidence=Math.max(found.confidence,confidence);(source.equals("DATA_CENTER")?found.dataSamples:found.experimentSamples).add(sample);if(found.samples.size()<3)found.samples.add(new SourceSamplePreview(source,sample,displayValue(node),displayLocation(coordinates,path)));
+                    if(!expectedMethod.isBlank()&&!method.isBlank()&&normalize(method).contains(normalize(expectedMethod)))confidence=Math.min(100,confidence+10);
+                    if(confidence<60)return;
+
+                    var semantic=mapper.createObjectNode().put("field",field).put("unit",unit).put("testMethod",method).put("load",load).put("substrate",substrate).put("stage",stage);var key=hashing.hash(semantic);var found=result.get(key);if(found==null){found=new DetectedSource(key,field,unit,method,load,substrate,stage,confidence);result.put(key,found);}found.confidence=Math.max(found.confidence,confidence);(source.equals("DATA_CENTER")?found.dataSamples:found.experimentSamples).add(sample);var preview=new SourceSamplePreview(source,displaySampleName(node,sample,source),displayValue(node),displayLocation(coordinates,path));if(found.samples.size()<3)found.samples.add(preview);if(found.records.size()<200)found.records.add(preview);
                 });
                 // R03 facts are stored as a flat field-code map.  Keep the same
                 // detector for both the normalized observation projection and
                 // the immutable facts projection so source suggestions work for
                 // Data Center and Experiment uploads alike.
                 scanObservation(facts,"/facts",(node,path)->{
-                    var field=firstText(node,"targetName","name","label","labelPath","fieldName","targetCode","fieldCode","testMethod");var normalized=normalize(field);if(normalized.isBlank())return;
+                    var field=firstText(node,"targetName","testItem","testCondition","itemLabel","name","label","labelPath","fieldName","targetCode","fieldCode","testMethod");var normalized=normalize(field);if(normalized.isBlank())return;
+                    if(!sourceValueCompatible(node,version))return;
+                    var method=firstText(node,"testMethod","method");var unit=firstText(node,"unit","normalizedUnit","rawUnit","sourceUnit");var load=firstText(node,"load","loadCondition");var substrate=firstText(node,"substrate","substrateType");var stage=firstText(node,"stage","testStage");
+                    if(!matchesTargetContext(target,version,field,method,unit,load,substrate,stage))return;
                     var confidence=semanticConfidence(normalized,targetNeedle,codeNeedle);
-                    var method=firstText(node,"testMethod","method");if(!expectedMethod.isBlank()&&!method.isBlank()&&normalize(method).contains(normalize(expectedMethod)))confidence=Math.min(100,confidence+10);
-                    if(confidence<60)return;var unit=firstText(node,"unit","normalizedUnit","rawUnit","sourceUnit");var load=firstText(node,"load","loadCondition");var substrate=firstText(node,"substrate","substrateType");var stage=firstText(node,"stage","testStage");
-                    var semantic=mapper.createObjectNode().put("field",field).put("unit",unit).put("testMethod",method).put("load",load).put("substrate",substrate).put("stage",stage);var key=hashing.hash(semantic);var found=result.get(key);if(found==null){found=new DetectedSource(key,field,unit,method,load,substrate,stage,confidence);result.put(key,found);}found.confidence=Math.max(found.confidence,confidence);(source.equals("DATA_CENTER")?found.dataSamples:found.experimentSamples).add(sample);if(found.samples.size()<3)found.samples.add(new SourceSamplePreview(source,sample,displayValue(node),displayLocation(coordinates,path)));
+                    if(!expectedMethod.isBlank()&&!method.isBlank()&&normalize(method).contains(normalize(expectedMethod)))confidence=Math.min(100,confidence+10);
+                    if(confidence<60)return;
+                    var semantic=mapper.createObjectNode().put("field",field).put("unit",unit).put("testMethod",method).put("load",load).put("substrate",substrate).put("stage",stage);var key=hashing.hash(semantic);var found=result.get(key);if(found==null){found=new DetectedSource(key,field,unit,method,load,substrate,stage,confidence);result.put(key,found);}found.confidence=Math.max(found.confidence,confidence);(source.equals("DATA_CENTER")?found.dataSamples:found.experimentSamples).add(sample);var preview=new SourceSamplePreview(source,displaySampleName(node,sample,source),displayValue(node),displayLocation(coordinates,path));if(found.samples.size()<3)found.samples.add(preview);if(found.records.size()<200)found.records.add(preview);
                 });
             }return null;},organizationId);
         return result;
@@ -588,6 +606,20 @@ public class ModelingConfigurationService {
     }
     private boolean hasObservationValue(JsonNode node){for(var key:List.of("value","result","parsedValue","effectiveValue","rawValue"))if(node.hasNonNull(key)&&node.path(key).isValueNode())return true;return false;}
     private String displayValue(JsonNode node){for(var key:List.of("value","result","parsedValue","effectiveValue","rawValue"))if(node.hasNonNull(key))return node.path(key).asText()+nullableSuffix(node.path("unit").asText(""));return "";}
+    private String displaySampleName(JsonNode node,String fallback,String source){
+        for(var key:List.of("sourceIdentity","experimentNo","experimentNumber","sampleNo","sampleNumber")){
+            var value=firstText(node,key);
+            if(!value.isBlank())return value;
+        }
+        if(node.path("sourceRefs").isArray())for(var ref:node.path("sourceRefs")){
+            var value=firstText(ref,"sourceIdentity","experimentNo","experimentNumber","sampleNo","sampleNumber");
+            if(!value.isBlank())return value;
+        }
+        var column=fallback==null?"":fallback.replaceFirst(".*:COLUMN:","");
+        if(!column.equals(fallback)&&!column.isBlank())return source.equals("DATA_CENTER")?"数据记录 "+column:"实验记录 "+column;
+        if(fallback!=null&&fallback.startsWith("EXPERIMENT_VERSION:"))return "实验记录 "+fallback.substring("EXPERIMENT_VERSION:".length(),Math.min(fallback.length(),"EXPERIMENT_VERSION:".length()+8));
+        return fallback==null?"":fallback;
+    }
     private String displayLocation(JsonNode coordinates,String fallback){var sheet=firstText(coordinates,"sheetName","sheet","page","fileName");return sheet.isBlank()?fallback:sheet+fallback;}
     private String firstText(JsonNode node,String... names){for(var name:names)if(node!=null&&node.hasNonNull(name)&&node.path(name).isValueNode()&&!node.path(name).asText().isBlank())return node.path(name).asText().strip();return "";}
     private String normalize(String value){if(value==null)return "";return Normalizer.normalize(value,Normalizer.Form.NFKC).toLowerCase(Locale.ROOT).replaceAll("[\\s_\\-/:：()（）]+","");}
@@ -609,10 +641,168 @@ public class ModelingConfigurationService {
         if(best<2)return 0;
         return Math.min(84,60+best*4);
     }
+
+    /**
+     * A source suggestion is useful only when it describes the same measured
+     * performance as the selected Y.  The previous detector used a loose
+     * two-character substring score, so fields such as 120°C surface dryness,
+     * solids, and boiling-water adhesion could appear under a 12-hour warp
+     * target.  Keep the detector tolerant of old facts that omit optional
+     * metadata, but reject explicit semantic mismatches deterministically.
+     */
+    private boolean matchesTargetContext(TargetSummary target,TargetVersionView version,String field,
+                                         String method,String unit,String load,String substrate,String stage){
+        var targetText=normalize(target.name()+" "+target.code()+" "+version.definition().toString());
+        var candidateText=normalize(field+" "+method+" "+unit+" "+load+" "+substrate+" "+stage);
+        if(targetText.isBlank()||candidateText.isBlank())return false;
+
+        // Match the measured concept from the target metadata, not from a
+        // target-specific if/else list.  Import nodes often omit method and
+        // stage metadata, so the item label remains the strongest evidence.
+        // semanticOverlap strips numeric/condition fragments and compares
+        // meaningful CJK/Latin tokens; this keeps “12小时翘曲” compatible with
+        // “UV后干膜室温放置12小时后的翘曲度（PET膜）” without accepting an
+        // unrelated “120度烘烤后的表干性” field.
+        var targetSemantic=target.name()+" "+version.definition().path("semanticFamily").asText("")+" "+version.definition().path("semanticAliases").toString();
+        if(!semanticOverlap(targetSemantic,field))return false;
+
+        // Only use explicit context fields for stage/substrate checks.  The
+        // complete JSON definition also contains parser/SOP words that can
+        // accidentally look like substrate abbreviations (for example `pc`).
+        var targetContextText=normalize(target.name()+" "+target.code()+" "+
+                version.definition().path("testStage").asText("")+" "+
+                version.definition().path("stage").asText("")+" "+
+                version.definition().path("substrate").asText(""));
+        if(!conditionMarkersCompatible(targetContextText,candidateText))return false;
+
+        var targetSubstrate=normalize(version.definition().path("substrate").asText(""));
+        if(!substrateCompatible(targetContextText,targetSubstrate,candidateText,substrate))return false;
+
+        var expectedMethod=normalize(version.definition().path("testMethod").asText(""));
+        var actualMethod=normalize(method);
+        if(!expectedMethod.isBlank()&&!actualMethod.isBlank()
+                &&!actualMethod.contains(expectedMethod)&&!expectedMethod.contains(actualMethod))return false;
+
+        var expectedUnit=canonicalUnit(version.unit());
+        var actualUnit=canonicalUnit(unit);
+        if(!expectedUnit.isBlank()&&!actualUnit.isBlank()&&!expectedUnit.equals(actualUnit))return false;
+        return true;
+    }
+
+    private boolean semanticOverlap(String targetText,String candidateText){
+        var targetTokens=semanticTokens(targetText);
+        if(targetTokens.isEmpty())return false;
+        var candidateTokens=semanticTokens(candidateText);
+        return targetTokens.stream().anyMatch(candidateTokens::contains);
+    }
+
+    /**
+     * Do not suggest a source merely because its label happens to match.  The
+     * value must also be parseable by the target's configured parser.  This is
+     * deliberately parser-code driven, so adding a new target definition does
+     * not require another target-name branch here.
+     */
+    private boolean sourceValueCompatible(JsonNode node,TargetVersionView version){
+        var raw=firstText(node,"value","result","parsedValue","effectiveValue","rawValue");
+        if(raw.isBlank()||"/".equals(raw)||"未测试".equals(raw))return false;
+        var normalized=normalize(raw);
+        var parser=version.definition().path("parserCode").asText("").toUpperCase(Locale.ROOT);
+        return switch(parser){
+            case "WARP_HEIGHT_CM_V1" -> normalized.matches(".*(?:\\d+(?:\\.\\d+)?)(?:cm|厘米).*")
+                    || normalized.contains("不翘")||normalized.contains("平整");
+            case "WARP_CURL_ANGLE_DEG_V1" -> normalized.matches(".*(?:\\d+(?:\\.\\d+)?)(?:°|度).*")
+                    || normalized.contains("不翘")||normalized.contains("平整");
+            case "NUMERIC_V1" -> numericSourceCompatible(normalized,version.unit());
+            case "HARDNESS_H_GRADE_V1" -> normalized.matches(".*(?:\\d+)?h.*");
+            case "ABRASION_CYCLES_V1" -> normalized.matches(".*\\d+.*");
+            case "ADHESION_B_GRADE_V1" -> normalized.matches(".*[0-5]b.*");
+            case "ELONGATION_PERCENT_V1" -> normalized.matches(".*\\d+(?:\\.\\d+)?%.*");
+            case "SURFACE_DRYNESS_BINARY_V1" -> Set.of("ok","表干","不粘","不粘手","干爽","完全表干","notok","nok","未表干","不表干","轻微粘手","粘手","明显粘手","未干").contains(normalized);
+            default -> true;
+        };
+    }
+
+    private boolean numericSourceCompatible(String normalized,String unit){
+        return switch(canonicalUnit(unit)){
+            case "cm" -> normalized.matches(".*(?:\\d+(?:\\.\\d+)?)(?:cm|厘米).*")
+                    || normalized.contains("不翘")||normalized.contains("平整");
+            case "deg" -> normalized.matches(".*(?:\\d+(?:\\.\\d+)?)(?:°|度).*");
+            case "%" -> normalized.matches(".*\\d+(?:\\.\\d+)?%.*");
+            default -> normalized.matches(".*\\d+.*");
+        };
+    }
+    private Set<String> semanticTokens(String text){
+        var normalized=normalize(text)
+                .replaceAll("\\d+(?:\\.\\d+)?(?:小时|分钟|min|秒|h|hr|kg|g|mg|度|℃|%|cm|mm|um|μm)", "")
+                .replaceAll("(?:小时|分钟|min|秒|h|hr|kg|g|mg|度|℃|%|cm|mm|um|μm)", "");
+        var tokens=new LinkedHashSet<String>();
+        var matcher=java.util.regex.Pattern.compile("[\\p{IsHan}]{2,}|[a-z0-9]{3,}").matcher(normalized);
+        while(matcher.find()){
+            var run=matcher.group();tokens.add(run);
+            if(run.codePoints().allMatch(Character::isLetter)){
+                var chars=run.codePoints().toArray();
+                for(var i=0;i+1<chars.length;i++)tokens.add(new String(chars,i,2));
+            }
+        }
+        return tokens;
+    }
+
+    private boolean conditionMarkersCompatible(String targetText,String candidateText){
+        var expected=conditionMarkers(targetText);
+        if(expected.isEmpty())return true;
+        var actual=conditionMarkers(candidateText);
+        return !actual.isEmpty()&&actual.containsAll(expected);
+    }
+
+    /** Normalize explicit numeric conditions without knowing any target name. */
+    private Set<String> conditionMarkers(String text){
+        var markers=new LinkedHashSet<String>();
+        var matcher=java.util.regex.Pattern.compile("(\\d+(?:\\.\\d+)?)(小时|hr|h|分钟|min|秒|s|度|℃|°)",java.util.regex.Pattern.CASE_INSENSITIVE).matcher(normalize(text));
+        while(matcher.find()){
+            var number=matcher.group(1);
+            var unit=matcher.group(2).toLowerCase(Locale.ROOT);
+            var canonical=switch(unit){
+                case "小时","hr","h" -> "time:"+number+"h";
+                case "分钟","min" -> "time:"+number+"min";
+                case "秒","s" -> "time:"+number+"s";
+                case "度","℃","°" -> "condition:"+number+"deg";
+                default -> "condition:"+number+unit;
+            };
+            markers.add(canonical);
+        }
+        return markers;
+    }
+
+    private boolean substrateCompatible(String targetText,String targetSubstrate,String candidateText,String rawCandidateSubstrate){
+        var targetPet=targetText.contains("pet")||targetSubstrate.contains("pet");
+        var targetPc=targetText.contains("pc")||targetSubstrate.contains("pc");
+        var targetComposite=targetText.contains("pmma")||targetText.contains("复合板")||targetSubstrate.contains("pmma");
+        var candidatePet=candidateText.contains("pet")||normalize(rawCandidateSubstrate).contains("pet");
+        var candidatePc=candidateText.contains("pc")||normalize(rawCandidateSubstrate).contains("pc");
+        var candidateComposite=candidateText.contains("pmma")||candidateText.contains("复合板")||normalize(rawCandidateSubstrate).contains("pmma");
+        if(targetComposite)return candidateComposite||(!candidatePet&&!candidatePc);
+        if(targetPet&&candidatePc&&!candidatePet)return false;
+        if(targetPc&&candidatePet&&!candidatePc)return false;
+        return true;
+    }
+
+    private String canonicalUnit(String unit){
+        var value=normalize(unit);
+        if(value.isBlank())return "";
+        return switch(value){
+            case "厘米","cm" -> "cm";
+            case "度","°","deg","degree" -> "deg";
+            case "%","百分比" -> "%";
+            case "b" -> "b";
+            case "h" -> "h";
+            case "次","cycles" -> "cycles";
+            default -> value;
+        };
+    }
     private String nullableSuffix(String value){return value==null||value.isBlank()?"":" "+value;}
     private void putIfText(ObjectNode target,String name,String value){if(value!=null&&!value.isBlank())target.put(name,value);}
     private static final class DetectedSource{
-        final String key,fieldName,unit,testMethod,load,substrate,stage;int confidence;final Set<String> dataSamples=new LinkedHashSet<>(),experimentSamples=new LinkedHashSet<>();final List<SourceSamplePreview> samples=new ArrayList<>();
+        final String key,fieldName,unit,testMethod,load,substrate,stage;int confidence;final Set<String> dataSamples=new LinkedHashSet<>(),experimentSamples=new LinkedHashSet<>();final List<SourceSamplePreview> samples=new ArrayList<>(),records=new ArrayList<>();
         DetectedSource(String key,String fieldName,String unit,String testMethod,String load,String substrate,String stage,int confidence){this.key=key;this.fieldName=fieldName;this.unit=unit;this.testMethod=testMethod;this.load=load;this.substrate=substrate;this.stage=stage;this.confidence=confidence;}
     }
 

@@ -2,7 +2,10 @@ package com.jsd.aird.ai.rnd.facts;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.jsd.aird.ai.formula.application.UvpuAnalysisProfile;
+import com.jsd.aird.ai.formula.application.UvpuProcessFactParser;
 import com.jsd.aird.ai.rnd.modeling.ConfigurationHashing;
 import com.jsd.aird.ai.rnd.eligibility.EligibilityService;
 import com.jsd.aird.iam.api.AuthorizationService;
@@ -21,6 +24,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -32,11 +36,21 @@ public class UnifiedFactService {
     private final ObjectMapper json;
     private final ConfigurationHashing hashing;
     private final AuthorizationService authorization;
+    private final UvpuProcessFactParser processFactParser;
+    private final UvpuAnalysisProfile analysisProfile;
     private EligibilityService eligibilityService;
 
     public UnifiedFactService(JdbcTemplate jdbc, ObjectMapper json, ConfigurationHashing hashing,
                               AuthorizationService authorization) {
+        this(jdbc, json, hashing, authorization, new UvpuProcessFactParser(json), new UvpuAnalysisProfile(json));
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public UnifiedFactService(JdbcTemplate jdbc, ObjectMapper json, ConfigurationHashing hashing,
+                              AuthorizationService authorization, UvpuProcessFactParser processFactParser,
+                              UvpuAnalysisProfile analysisProfile) {
         this.jdbc = jdbc; this.json = json; this.hashing = hashing; this.authorization = authorization;
+        this.processFactParser = processFactParser; this.analysisProfile = analysisProfile;
     }
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -211,15 +225,35 @@ public class UnifiedFactService {
                 FROM rnd.experiment_source_reference
                 WHERE organization_id=? AND experiment_id=? AND experiment_version_id=? ORDER BY sample_boundary_id
                 """, this::sourceRef, organizationId, experimentId, versionId);
-        if (refs.isEmpty()) {
+        if (experiment.editModel().path("sourceGroups").isArray()
+                && !experiment.editModel().path("sourceGroups").isEmpty()) {
+            refs = sourceGroupRefs(experimentId, versionId, experiment.editModel(), refs);
+        } else if (refs.isEmpty()) {
             var sampleBoundaryId = "manual:" + versionId;
             refs = List.of(new SourceRef(null, null, "manual:" + experimentId, sampleBoundaryId,
                     "EXPERIMENT_VERSION:" + versionId, List.of("experiment-version:" + versionId),
                     hashing.hash(List.of(experimentId, versionId)),
                     json.createObjectNode().put("kind", "EXPERIMENT_VERSION"), hashing.hash(experiment.editModel())));
         }
+        jdbc.update("""
+                UPDATE ai.sample_source SET status='SUPERSEDED'
+                WHERE organization_id=? AND source_type='EXPERIMENT' AND experiment_version_id=?
+                    AND status='CURRENT'
+                """, organizationId, versionId);
         for (var ref : refs) projectExperiment(organizationId, experimentId, versionId,
                 sourceSequence, experiment, ref);
+        jdbc.update("""
+                UPDATE ai.training_sample s SET status='INVALIDATED',authority_source_type=NULL,
+                    current_sample_revision_id=NULL,takeover_experiment_id=NULL,
+                    takeover_experiment_version_id=NULL,identity_version=identity_version+1,
+                    revision=revision+1,updated_at=now()
+                WHERE s.organization_id=? AND s.takeover_experiment_version_id=?
+                    AND NOT EXISTS (
+                        SELECT 1 FROM ai.sample_source ss
+                        WHERE ss.organization_id=s.organization_id AND ss.training_sample_id=s.id
+                            AND ss.source_type='EXPERIMENT' AND ss.status='CURRENT'
+                    )
+                """, organizationId, versionId);
         completeReceipt(organizationId, "EXPERIMENT", eventId, "COMPLETED", null);
         if (eligibilityService != null) eligibilityService.scheduleForChangedFacts(organizationId);
         return refs.size();
@@ -318,7 +352,7 @@ public class UnifiedFactService {
                 SELECT o.id,o.aggregate_id,o.event_type,o.payload_jsonb
                 FROM rnd.experiment_outbox o LEFT JOIN ai.fact_projection_receipt r
                     ON r.organization_id=o.organization_id AND r.source_type='EXPERIMENT' AND r.source_event_id=o.id
-                    AND r.status='COMPLETED'
+                    AND r.status IN ('COMPLETED','STALE')
                 WHERE o.organization_id=? AND r.id IS NULL AND o.event_type IN
                     ('experiment.published.v1','experiment.voided.v1','experiment.revision-started.v1')
                 ORDER BY o.created_at,o.id LIMIT ?
@@ -396,20 +430,38 @@ public class UnifiedFactService {
                 organizationId, sourceKey);
         jdbc.update("UPDATE ai.sample_source SET status='TAKEN_OVER' WHERE organization_id=? AND training_sample_id=? AND source_type='DATA_CENTER' AND status='CURRENT'",
                 organizationId, sampleId);
-        var sourceId = UUID.randomUUID();
-        jdbc.update("""
-                INSERT INTO ai.sample_source(id,organization_id,training_sample_id,source_type,experiment_version_id,
-                    source_business_key,sample_boundary_id,logical_sample_key,source_group_keys_jsonb,
-                    physical_identity_hash,source_version,source_sequence,
-                    content_hash,priority,status)
-                VALUES(?,?,?,'EXPERIMENT',?,?,?,?,?,?,?,?,?,100,'CURRENT')
-                """, sourceId, organizationId, sampleId, versionId, sourceKey, ref.sampleBoundaryId(), logicalKey,
-                pg(json.valueToTree(ref.sourceGroupKeys())),
-                hashing.hash(List.of(ref.sourceFileSha256(), ref.sourceGroupKeys(), ref.coordinates())), "experiment-v" + experiment.versionNo(),
-                sourceSequence, ref.contentHash());
+        var sourceVersion = "experiment-v" + experiment.versionNo();
+        var sourceId = jdbc.query("""
+                SELECT id FROM ai.sample_source
+                WHERE organization_id=? AND source_type='EXPERIMENT'
+                    AND source_business_key=? AND source_version=?
+                """, (rs, ignored) -> rs.getObject(1, UUID.class), organizationId, sourceKey, sourceVersion)
+                .stream().findFirst().orElse(null);
+        if (sourceId == null) {
+            sourceId = UUID.randomUUID();
+            jdbc.update("""
+                    INSERT INTO ai.sample_source(id,organization_id,training_sample_id,source_type,experiment_version_id,
+                        source_business_key,sample_boundary_id,logical_sample_key,source_group_keys_jsonb,
+                        physical_identity_hash,source_version,source_sequence,
+                        content_hash,priority,status)
+                    VALUES(?,?,?,'EXPERIMENT',?,?,?,?,?,?,?,?,?,100,'CURRENT')
+                    """, sourceId, organizationId, sampleId, versionId, sourceKey, ref.sampleBoundaryId(), logicalKey,
+                    pg(json.valueToTree(ref.sourceGroupKeys())),
+                    hashing.hash(List.of(ref.sourceFileSha256(), ref.sourceGroupKeys(), ref.coordinates())), sourceVersion,
+                    sourceSequence, ref.contentHash());
+        } else {
+            // Reprojection after a deterministic parser upgrade reuses the immutable source identity and
+            // creates a new derived sample revision. It must not fabricate a second source version merely
+            // to refresh the projection.
+            jdbc.update("""
+                    UPDATE ai.sample_source SET status='CURRENT',source_sequence=?,content_hash=?
+                    WHERE organization_id=? AND id=?
+                    """, sourceSequence, ref.contentHash(), organizationId, sourceId);
+        }
         var permission = json.createObjectNode().put("sourceType", "EXPERIMENT")
                 .put("visibility", experiment.visibility()).put("experimentId", experimentId.toString());
-        var revisionId = insertRevision(organizationId, sampleId, sourceId, experiment.editModel(),
+        var fact = sliceExperimentFact(experiment.editModel(), ref.sampleBoundaryId());
+        var revisionId = insertRevision(organizationId, sampleId, sourceId, fact,
                 ref.coordinates(), permission);
         jdbc.update("""
                 UPDATE ai.training_sample SET authority_source_type='EXPERIMENT',current_sample_revision_id=?,
@@ -417,7 +469,108 @@ public class UnifiedFactService {
                     identity_version=identity_version+1,revision=revision+1,updated_at=now()
                 WHERE organization_id=? AND id=?
                 """, revisionId, experimentId, versionId, organizationId, sampleId);
-        createSimilarityIssue(organizationId, sampleId, sourceId, experiment.title());
+    }
+
+    /**
+     * A completed workbook may contain several independent experiment columns.  The ELN version remains
+     * one immutable document, while the training projection must expose one isolated fact set per source group.
+     */
+    private List<SourceRef> sourceGroupRefs(UUID experimentId, UUID versionId, JsonNode editModel,
+                                            List<SourceRef> storedRefs) {
+        var result = new ArrayList<SourceRef>();
+        var seen = new LinkedHashSet<String>();
+        for (var group : editModel.path("sourceGroups")) {
+            var groupKey = firstText(group, "sampleKey", "sourceGroupKey");
+            if (groupKey.isBlank() || !seen.add(groupKey)) continue;
+            var sourceRecords = strings(group.path("sourceRecordKeys"));
+            var base = storedRefs.stream().filter(ref -> ref.sourceGroupKeys().contains(groupKey)
+                    || ref.sourceGroupKeys().stream().anyMatch(sourceRecords::contains)).findFirst()
+                    .orElse(storedRefs.isEmpty() ? null : storedRefs.getFirst());
+            var logicalKey = group.path("logicalSampleKey").asText("").strip();
+            if (logicalKey.isBlank()) logicalKey = "EXPERIMENT_VERSION:" + versionId + ":" + groupKey;
+            var coordinates = json.createObjectNode().put("kind", "SOURCE_GROUP")
+                    .put("sourceGroupKey", groupKey)
+                    .put("sourceContextKey", group.path("sourceContextKey").asText(""))
+                    .put("sourceIdentity", group.path("sourceIdentity").asText(""));
+            coordinates.set("sourceSheets", group.path("sourceSheets").deepCopy());
+            coordinates.set("sourceRecordKeys", group.path("sourceRecordKeys").deepCopy());
+            var fact = sliceExperimentFact(editModel, groupKey);
+            result.add(new SourceRef(base == null ? null : base.recognitionJobId(),
+                    base == null ? null : base.confirmedSubmissionId(),
+                    base == null ? "manual:" + experimentId : base.experimentBoundaryId(),
+                    groupKey, logicalKey, List.of(groupKey),
+                    base == null ? editModel.path("sourceFileHash").asText(hashing.hash(List.of(experimentId, versionId)))
+                            : base.sourceFileSha256(),
+                    coordinates, hashing.hash(fact)));
+        }
+        return List.copyOf(result);
+    }
+
+    /** Package-visible for the source-group isolation contract test. */
+    JsonNode sliceExperimentFact(JsonNode editModel, String groupKey) {
+        if (!editModel.isObject() || groupKey == null || groupKey.isBlank()) return editModel.deepCopy();
+        JsonNode group = null;
+        for (var candidate : editModel.path("sourceGroups")) {
+            if (groupKey.equals(firstText(candidate, "sampleKey", "sourceGroupKey"))) {
+                group = candidate; break;
+            }
+        }
+        if (group == null) return editModel.deepCopy();
+        var result = ((ObjectNode) editModel).deepCopy();
+        var contextKey = group.path("sourceContextKey").asText("").strip();
+
+        var groups = json.createArrayNode().add(group.deepCopy());
+        result.set("sourceGroups", groups);
+        result.set("sampleGroups", groups.deepCopy());
+
+        var contexts = json.createArrayNode();
+        var allowedRecordKeys = new LinkedHashSet<>(strings(group.path("sourceRecordKeys")));
+        for (var context : editModel.path("sourceContexts")) {
+            if (!contextKey.isBlank() && contextKey.equals(context.path("sourceContextKey").asText(""))) {
+                contexts.add(context.deepCopy());
+                allowedRecordKeys.addAll(strings(context.path("sharedContextRecordKeys")));
+            }
+        }
+        result.set("sourceContexts", contexts);
+        for (var section : List.of("formulaItems", "processSteps", "testResults", "events"))
+            result.set(section, filteredItems(editModel.path(section), groupKey, contextKey));
+
+        var dynamicValues = json.createObjectNode();
+        if (editModel.path("dynamicValues").isObject()) {
+            editModel.path("dynamicValues").fields().forEachRemaining(entry -> {
+                if (allowedRecordKeys.stream().anyMatch(key -> entry.getKey().startsWith(key + ":")))
+                    dynamicValues.set(entry.getKey(), entry.getValue().deepCopy());
+            });
+        }
+        result.set("dynamicValues", dynamicValues);
+        result.set("sourceRecordKeys", json.valueToTree(allowedRecordKeys));
+        // The full workbook snapshot stays on the immutable ExperimentVersion.  Keeping it in each projected
+        // training fact would let another source group's cells be discovered as this row's X or Y.
+        result.remove("documentSnapshot");
+        result.remove("tables");
+        return result;
+    }
+
+    private ArrayNode filteredItems(JsonNode items, String groupKey, String contextKey) {
+        var filtered = json.createArrayNode();
+        if (!items.isArray()) return filtered;
+        for (var item : items) {
+            var itemGroup = firstText(item, "sampleKey", "sourceGroupKey");
+            var itemContext = item.path("sourceContextKey").asText("").strip();
+            var belongsToGroup = groupKey.equals(itemGroup);
+            var belongsToSharedContext = itemGroup.isBlank()
+                    && (itemContext.isBlank() || itemContext.equals(contextKey));
+            if (belongsToGroup || belongsToSharedContext) filtered.add(item.deepCopy());
+        }
+        return filtered;
+    }
+
+    private String firstText(JsonNode node, String... fields) {
+        for (var field : fields) {
+            var value = node.path(field).asText("").strip();
+            if (!value.isBlank()) return value;
+        }
+        return "";
     }
 
     private UUID insertRevision(UUID organizationId, UUID sampleId, UUID sourceId, JsonNode fact,
@@ -426,7 +579,7 @@ public class UnifiedFactService {
         var revision = jdbc.queryForObject("SELECT coalesce(max(revision_no),0)+1 FROM ai.sample_revision WHERE organization_id=? AND training_sample_id=?",
                 Integer.class, organizationId, sampleId);
         var composition = json.createObjectNode();
-        if (fact.has("formulaItems")) composition.set("items", fact.path("formulaItems").deepCopy());
+        if (fact.has("formulaItems")) composition.set("items", normalizedFormulaItems(fact.path("formulaItems")));
         else if (fact.has("composition")) composition.set("value", fact.path("composition").deepCopy());
         var process = json.createObjectNode();
         if (fact.has("processSteps")) process.set("items", fact.path("processSteps").deepCopy());
@@ -436,6 +589,7 @@ public class UnifiedFactService {
         else if (fact.has("testResults")) observations.set("items", fact.path("testResults").deepCopy());
         var conditions = json.createObjectNode();
         if (fact.has("conditions")) conditions.set("value", fact.path("conditions").deepCopy());
+        appendStandardProcessFacts(fact, process, conditions);
         jdbc.update("""
                 INSERT INTO ai.sample_revision(id,organization_id,training_sample_id,sample_source_id,revision_no,
                     composition_jsonb,process_jsonb,conditions_jsonb,observations_jsonb,facts_jsonb,
@@ -444,6 +598,70 @@ public class UnifiedFactService {
                 """, id, organizationId, sampleId, sourceId, revision, pg(composition), pg(process), pg(conditions),
                 pg(observations), pg(fact), pg(permission), pg(coordinates), hashing.hash(fact));
         return id;
+    }
+
+    /** Package-visible for the closed-formula derivation contract test. */
+    ArrayNode normalizedFormulaItems(JsonNode items) {
+        var normalized = json.createArrayNode();
+        if (!items.isArray()) return normalized;
+        for (var source : items) {
+            if (!source.isObject()) continue;
+            var item = ((ObjectNode) source).deepCopy();
+            var mapped = analysisProfile.material(item.path("materialCode").asText(""),
+                    item.path("materialName").asText(item.path("name").asText("")));
+            mapped.ifPresent(material -> item.put("materialCode", material.code()));
+            if (item.path("ratio").isNumber()) {
+                item.put("amountKnown", true);
+                if (!item.hasNonNull("ratioDerivation")) item.put("ratioDerivation", "SOURCE_REPORTED");
+            } else {
+                var raw = item.path("rawValue").asText("").strip();
+                var rule = raw.isBlank() ? analysisProfile.structuralZeroRule(item.path("itemSourceKey").asText(""))
+                        : java.util.Optional.<String>empty();
+                if (rule.isPresent()) {
+                    item.put("ratio", 0);
+                    item.put("amountKnown", true);
+                    item.put("ratioDerivation", "STRUCTURAL_ZERO");
+                    item.put("ratioRuleVersion", rule.get());
+                } else {
+                    item.put("amountKnown", false);
+                }
+            }
+            normalized.add(item);
+        }
+        return normalized;
+    }
+
+    private void appendStandardProcessFacts(JsonNode fact, ObjectNode process, ObjectNode conditions) {
+        var processItems = nodes(fact.path("processSteps"));
+        var testItems = nodes(fact.path("testResults"));
+        var projection = processFactParser.parse(processItems, testItems);
+        var processEvidence = json.createObjectNode();
+        projection.process().forEach((code, value) -> {
+            standardValue(value).ifPresent(node -> process.set(code, node));
+            processEvidence.set(code, json.valueToTree(value));
+        });
+        if (!processEvidence.isEmpty()) process.set("standardizationEvidence", processEvidence);
+        var contextEvidence = json.createObjectNode();
+        projection.context().forEach((code, value) -> {
+            standardValue(value).ifPresent(node -> conditions.set(code, node));
+            contextEvidence.set(code, json.valueToTree(value));
+        });
+        if (!contextEvidence.isEmpty()) conditions.set("standardizationEvidence", contextEvidence);
+    }
+
+    private java.util.Optional<JsonNode> standardValue(
+            com.jsd.aird.ai.formula.api.ExperimentAnalysisFacade.StandardFact value) {
+        if (value.numericValue() != null) return java.util.Optional.of(json.getNodeFactory().numberNode(value.numericValue()));
+        if (value.textValue() != null && !value.textValue().isBlank())
+            return java.util.Optional.of(json.getNodeFactory().textNode(value.textValue()));
+        return java.util.Optional.empty();
+    }
+
+    private List<JsonNode> nodes(JsonNode value) {
+        if (!value.isArray()) return List.of();
+        var result = new ArrayList<JsonNode>();
+        value.forEach(result::add);
+        return result;
     }
 
     private UUID sampleId(UUID organizationId, String logicalKey) {
@@ -470,7 +688,7 @@ public class UnifiedFactService {
     }
 
     private boolean isStaleSource(UUID organizationId, String type, String key, long sequence) {
-        var latest = jdbc.queryForObject("SELECT coalesce(max(source_sequence),0) FROM ai.sample_source WHERE organization_id=? AND source_type=? AND source_business_key=?",
+        var latest = jdbc.queryForObject("SELECT coalesce(max(source_sequence),0) FROM ai.sample_source WHERE organization_id=? AND source_type=? AND source_business_key=? AND status='CURRENT'",
                 Long.class, organizationId, type, key);
         return latest != null && latest >= sequence;
     }
@@ -490,23 +708,6 @@ public class UnifiedFactService {
                 UPDATE ai.fact_projection_receipt SET status=?,error_message=?,processed_at=now(),updated_at=now()
                 WHERE organization_id=? AND source_type=? AND source_event_id=?
                 """, status, error, organizationId, type, eventId);
-    }
-
-    private void createSimilarityIssue(UUID organizationId, UUID sampleId, UUID sourceId, String title) {
-        if (title == null || title.isBlank()) return;
-        var other = jdbc.query("""
-                SELECT ss.id FROM ai.sample_revision sr JOIN ai.sample_source ss ON ss.id=sr.sample_source_id
-                WHERE sr.organization_id=? AND sr.training_sample_id<>?
-                    AND lower(sr.facts_jsonb->>'title')=lower(?) ORDER BY sr.created_at DESC LIMIT 1
-                """, (rs, ignored) -> rs.getObject(1, UUID.class), organizationId, sampleId, title).stream().findFirst().orElse(null);
-        if (other == null) return;
-        var evidence = json.createObjectNode().put("matchedField", "title").put("matchedValue", title)
-                .put("action", "REVIEW_ONLY_NO_AUTOMATIC_MERGE");
-        jdbc.update("""
-                INSERT INTO ai.sample_identity_issue(id,organization_id,training_sample_id,left_sample_source_id,
-                    right_sample_source_id,issue_type,evidence_jsonb)
-                VALUES(gen_random_uuid(),?,?,?,?, 'SIMILAR_SOURCE',?) ON CONFLICT DO NOTHING
-                """, organizationId, sampleId, sourceId, other, pg(evidence));
     }
 
     private boolean canRead(UUID organizationId, UUID actorId, String sourceType) {

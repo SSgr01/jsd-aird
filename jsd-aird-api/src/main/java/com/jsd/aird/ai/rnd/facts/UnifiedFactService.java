@@ -370,6 +370,7 @@ public class UnifiedFactService {
                 submissions.size() + events.size());
     }
 
+    @Transactional
     public ReconcileResult reconcileCurrentOrganization() {
         return reconcile(ActorContext.required().organizationId(), 200);
     }
@@ -696,9 +697,18 @@ public class UnifiedFactService {
     private boolean beginReceipt(UUID organizationId, String type, UUID eventId, String businessKey,
                                  long sequence, String eventType, String hash) {
         var inserted = jdbc.update("""
-                INSERT INTO ai.fact_projection_receipt(id,organization_id,source_type,source_event_id,
+                INSERT INTO ai.fact_projection_receipt AS receipt(id,organization_id,source_type,source_event_id,
                     source_business_key,source_sequence,event_type,payload_hash)
-                VALUES(gen_random_uuid(),?,?,?,?,?,?,?) ON CONFLICT(organization_id,source_type,source_event_id) DO NOTHING
+                VALUES(gen_random_uuid(),?,?,?,?,?,?,?)
+                ON CONFLICT(organization_id,source_type,source_event_id) DO UPDATE SET
+                    source_business_key=excluded.source_business_key,
+                    source_sequence=excluded.source_sequence,
+                    event_type=excluded.event_type,
+                    payload_hash=excluded.payload_hash,
+                    status='PROCESSING',attempt_count=receipt.attempt_count+1,
+                    error_message=NULL,processed_at=NULL,updated_at=now()
+                WHERE receipt.status='FAILED'
+                   OR (receipt.status='PROCESSING' AND receipt.updated_at < now()-interval '15 minutes')
                 """, organizationId, type, eventId, businessKey, sequence, eventType, hash);
         return inserted == 1;
     }

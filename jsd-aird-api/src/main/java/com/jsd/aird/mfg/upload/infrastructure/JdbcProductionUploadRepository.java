@@ -87,8 +87,20 @@ public class JdbcProductionUploadRepository implements ProductionUploadRepositor
                     workbook_snapshot_jsonb = ?, recognition_result_jsonb = ?,
                     failure_message = NULL, recognized_at = now(), updated_at = now()
                 WHERE id = ? AND status <> 'DELETED'
-                """, selectedTemplateVersionId, matchMode, matchScore, pg(structureSummary),
-                pg(workbookSnapshot), pg(recognitionResult), uploadId);
+                """, selectedTemplateVersionId, matchMode, matchScore, pgOrNull(structureSummary),
+                pgOrNull(workbookSnapshot), pgOrNull(recognitionResult), uploadId);
+    }
+
+    @Override
+    public void saveGeneratedWorkbook(UUID uploadId, JsonNode workbookSnapshot) {
+        var updated = jdbcTemplate.update("""
+                UPDATE mfg.production_upload
+                SET workbook_snapshot_jsonb = ?, lock_version = lock_version + 1, updated_at = now()
+                WHERE id = ? AND status <> 'DELETED'
+                """, pg(workbookSnapshot), uploadId);
+        if (updated == 0) {
+            throw new ApiException(ApiErrorCode.NOT_FOUND, "生产单上传记录不存在");
+        }
     }
 
     @Override
@@ -129,14 +141,26 @@ public class JdbcProductionUploadRepository implements ProductionUploadRepositor
     }
 
     @Override
+    public void updateRecognitionResult(UUID uploadId, JsonNode recognitionResult) {
+        var updated = jdbcTemplate.update("""
+                UPDATE mfg.production_upload
+                SET recognition_result_jsonb = ?, lock_version = lock_version + 1, updated_at = now()
+                WHERE id = ? AND status <> 'DELETED'
+                """, pgOrNull(recognitionResult), uploadId);
+        if (updated == 0) {
+            throw new ApiException(ApiErrorCode.NOT_FOUND, "生产单上传记录不存在");
+        }
+    }
+
+    @Override
     public void updateRecognizedMetadata(UUID uploadId, String orderNo, String productName,
                                          String category, java.time.LocalDate manufactureDate) {
         jdbcTemplate.update("""
                 UPDATE mfg.production_upload
-                SET order_no = COALESCE(NULLIF(?, ''), order_no),
-                    product_name = COALESCE(NULLIF(?, ''), product_name),
-                    category = COALESCE(NULLIF(?, ''), category),
-                    manufacture_date = COALESCE(?, manufacture_date), updated_at = now()
+                SET order_no = NULLIF(?, ''),
+                    product_name = NULLIF(?, ''),
+                    category = NULLIF(?, ''),
+                    manufacture_date = ?, updated_at = now()
                 WHERE id = ? AND status <> 'DELETED'
                 """, orderNo, productName, category, manufactureDate, uploadId);
     }
@@ -153,12 +177,12 @@ public class JdbcProductionUploadRepository implements ProductionUploadRepositor
                 rs.getString("binding_id"), rs.getString("field_code"), rs.getString("data_path"),
                 (Integer) rs.getObject("record_index"), jsonNullable(rs.getString("raw_value_jsonb")),
                 jsonNullable(rs.getString("normalized_value_jsonb")), jsonNullable(rs.getString("source_locator_jsonb")),
-                rs.getDouble("confidence"), rs.getString("review_status")));
+                rs.getDouble("confidence"), rs.getString("review_status")), organizationId, uploadId);
     }
 
     private void setJson(java.sql.PreparedStatement statement, int index, JsonNode value)
             throws java.sql.SQLException {
-        if (value == null || value.isNull()) statement.setNull(index, java.sql.Types.OTHER);
+        if (value == null || value.isNull() || value.isMissingNode()) statement.setNull(index, java.sql.Types.OTHER);
         else statement.setObject(index, pg(value));
     }
 
@@ -425,6 +449,16 @@ public class JdbcProductionUploadRepository implements ProductionUploadRepositor
         } catch (Exception ex) {
             throw new IllegalStateException("生产单工作簿快照解析失败", ex);
         }
+    }
+
+    /**
+     * Non-spreadsheet sources (DOC/DOCX, and photos recognized without a
+     * template) carry no workbook snapshot or structure summary.  Those
+     * columns are nullable, so an absent node must be written as SQL NULL
+     * instead of throwing.
+     */
+    private PGobject pgOrNull(JsonNode value) {
+        return value == null || value.isNull() || value.isMissingNode() ? null : pg(value);
     }
 
     private PGobject pg(JsonNode value) {

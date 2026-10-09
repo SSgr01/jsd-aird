@@ -48,7 +48,7 @@ type UnifiedJob =
 export function ExperimentUploadPage() {
   const { message } = App.useApp();
   const navigate = useNavigate();
-  const [mode, setMode] = useState<UploadMode>('FREEFORM');
+  const [mode, setMode] = useState<UploadMode>('TEMPLATE');
   const [files, setFiles] = useState<UploadFile[]>([]);
   const [freeJobs, setFreeJobs] = useState<ExperimentImportJob[]>([]);
   const [templateJobs, setTemplateJobs] = useState<DataJob[]>([]);
@@ -118,16 +118,12 @@ export function ExperimentUploadPage() {
 
   const validate: UploadProps['beforeUpload'] = (file) => {
     const accepted = mode === 'TEMPLATE'
-      ? /\.(xlsx|xls|csv)$/i
+      ? /\.(xlsx|xls|csv|doc|docx|jpg|jpeg|png|gif|webp|bmp|tif|tiff)$/i
       : /\.(xlsx|xls|csv|doc|docx|pdf|jpg|jpeg|png|tif|tiff)$/i;
     if (file.size === 0 || !accepted.test(file.name)) {
       void message.error(mode === 'TEMPLATE'
-        ? '按模板导入仅支持 XLSX / XLS / CSV 文件'
+        ? '按模板导入支持 XLSX / XLS / CSV / DOC / DOCX，图片与 Word 按实验本解析生成实验草稿'
         : '自由上传支持 XLSX / XLS / CSV / DOCX / PDF / JPG / PNG / TIF 文件');
-      return Upload.LIST_IGNORE;
-    }
-    if (files.some((item) => item.name.toLowerCase() === file.name.toLowerCase() && item.size === file.size)) {
-      void message.warning(`“${file.name}”已经在待上传队列中`);
       return Upload.LIST_IGNORE;
     }
     return false;
@@ -137,35 +133,42 @@ export function ExperimentUploadPage() {
     const sourceFiles = files.flatMap((item) => (item.originFileObj ? [item.originFileObj] : []));
     if (!sourceFiles.length) { void message.warning('请先选择实验文件'); return; }
     if (!experimentCategoryId) { void message.warning('请选择实验分类'); return; }
-    if (mode === 'TEMPLATE' && !chosenTemplate) { void message.warning('请选择已发布的实验数据模板'); return; }
+    // 图片和 Word 不经过模板映射，只有表格文件才必须选择模板。
+    if (mode === 'TEMPLATE' && sourceFiles.some((file) => isSpreadsheetFile(file.name)) && !chosenTemplate) {
+      void message.warning('请选择已发布的实验数据模板'); return;
+    }
     const selectedTemplateVersionId = chosenTemplate?.versionId;
-    if (mode === 'TEMPLATE' && !selectedTemplateVersionId) { void message.warning('请选择已发布的实验数据模板'); return; }
     setUploading(true);
     let failed = 0;
-    let firstTemplateJobId: string | undefined;
+    let templateJobCount = 0;
+    let ocrCount = 0;
     try {
       for (const file of sourceFiles) {
         try {
-          if (mode === 'TEMPLATE') {
+          // 按模板导入的表格进入数据中心字段映射工作台；按模板导入时额外
+          // 选择的图片 / Word 仍走实验本既有解析直导路径，直接生成实验草稿。
+          if (mode === 'TEMPLATE' && isSpreadsheetFile(file.name)) {
             // Keep the source owned by the experiment module while the
             // confirmation workspace is shared with Data Center.
             const staged = await stageExperimentFile(file);
-            const job = await dataApi.createExperimentJob({
+            await dataApi.createExperimentJob({
               sourceFileId: staged.fileId,
               templateVersionId: selectedTemplateVersionId!,
+              duplicateOverride: true,
               importPurpose: 'EXPERIMENT_DRAFT',
               targetExperimentCategoryId: experimentCategoryId!,
               projectRelations,
             });
-            firstTemplateJobId ??= job.id;
+            templateJobCount += 1;
           } else {
             const staged = await stageExperimentFile(file);
             const category = categories.find((item) => item.id === experimentCategoryId);
-            const job = await importExperimentFile({
+            await importExperimentFile({
               fileId: staged.fileId,
               fileName: staged.originalName,
               sha256: staged.sha256,
               format: formatForFile(file.name),
+              duplicateOverride: true,
               categoryId: category?.id,
               categoryName: category?.name,
               ...(projectRelations[0] ? {
@@ -176,7 +179,7 @@ export function ExperimentUploadPage() {
               experimentDate: new Date().toISOString().slice(0, 10),
               visibility,
             });
-            if (sourceFiles.length === 1) navigate(`/experiments/imports/${job.jobId}`);
+            ocrCount += 1;
           }
         } catch (error) {
           failed += 1;
@@ -185,9 +188,12 @@ export function ExperimentUploadPage() {
       }
       setFiles([]);
       await load();
-      if (firstTemplateJobId) navigate(`/experiments/template-imports/${firstTemplateJobId}`);
-      if (!failed) void message.success(mode === 'TEMPLATE' ? '已创建模板导入任务' : `已提交 ${sourceFiles.length} 个自由上传文件`);
-      else void message.warning(`${sourceFiles.length - failed} 个文件已提交，${failed} 个失败`);
+      if (!failed) {
+        const parts: string[] = [];
+        if (templateJobCount) parts.push(`${templateJobCount} 个按模板导入任务`);
+        if (ocrCount) parts.push(mode === 'TEMPLATE' ? `${ocrCount} 个图片/Word 解析任务` : `${ocrCount} 个自由上传文件`);
+        void message.success(`已提交 ${parts.join('、') || '0 个文件'}`);
+      } else void message.warning(`${sourceFiles.length - failed} 个文件已提交，${failed} 个失败`);
     } finally {
       setUploading(false);
     }
@@ -203,12 +209,12 @@ export function ExperimentUploadPage() {
       for (const file of sourceFiles) {
         try {
           const staged = await stageExperimentFile(file);
-          const job = await importExperimentFile({
+          await importExperimentFile({
             fileId: staged.fileId, fileName: staged.originalName, sha256: staged.sha256,
-            format: formatForFile(file.name), categoryId: category?.id, categoryName: category?.name,
+            format: formatForFile(file.name), duplicateOverride: true,
+            categoryId: category?.id, categoryName: category?.name,
             experimentDate: new Date().toISOString().slice(0, 10), visibility,
           });
-          if (sourceFiles.length === 1) navigate(`/experiments/imports/${job.jobId}`);
         } catch { failed += 1; }
       }
       await load();
@@ -238,19 +244,22 @@ export function ExperimentUploadPage() {
     .slice((page.current - 1) * page.pageSize, page.current * page.pageSize)
     .map((item) => item.kind === 'TEMPLATE' ? templateRecord(item.job) : freeRecord(item.job));
 
+  // 按模板导入同样允许追加图片：只有表格文件才要求已选模板。
+  const requiresTemplate = mode === 'TEMPLATE' && files.some((item) => isSpreadsheetFile(item.name));
+
   return <>
     <UploadWorkspace
       breadcrumbs={[{ title: '电子实验记录本' }, { title: '实验数据导入' }]}
       title="实验数据导入"
-      description="上传 Word / Excel 或实验记录图片；按模板导入时复用数据中心字段映射工作台"
+      description="自由上传 Excel 后自动识别区域、字段和填写位置，进入实验工作台确认绑定；按模板导入仍使用数据中心字段映射工作台。"
       headerActions={<Space>
-        {mode === 'FREEFORM' ? <Button icon={<PictureOutlined />} onClick={() => { setOcrFiles([]); setOcrOpen(true); }}>拍照录入</Button> : null}
+        <Button icon={<PictureOutlined />} onClick={() => { setOcrFiles([]); setOcrOpen(true); }}>拍照录入</Button>
         <Button type="primary" onClick={() => navigate('/experiments')}>实验列表</Button>
       </Space>}
       leftTitle="基础信息"
       classification={<Form layout="vertical" component={false}>
         <Form.Item label="录入方式" required>
-          <Radio.Group value={mode} onChange={(event) => { setMode(event.target.value as UploadMode); setFiles([]); }} optionType="button" buttonStyle="solid" options={[{ value: 'FREEFORM', label: '自由上传' }, { value: 'TEMPLATE', label: '按模板导入' }]} />
+          <Radio.Group value={mode} onChange={(event) => { setMode(event.target.value as UploadMode); setFiles([]); }} optionType="button" buttonStyle="solid" options={[{ value: 'TEMPLATE', label: '按模板导入' }, { value: 'FREEFORM', label: '自由上传' }]} />
         </Form.Item>
         <Row gutter={12}>
           <Col span={12}>
@@ -268,24 +277,24 @@ export function ExperimentUploadPage() {
           <Form.Item label="实验数据模板" required>
             <Select showSearch optionFilterProp="label" loading={templatesLoading} value={templateVersionId} onChange={setTemplateVersionId} options={templates.map((item) => ({ value: item.versionId, label: `${item.name} · ${item.templateCode} · V${item.versionNo}` }))} placeholder="请选择实验数据模板" notFoundContent="暂无已发布 Excel 模板" />
           </Form.Item>
-          {chosenTemplate ? <Alert showIcon type="info" message={`按“${chosenTemplate.name}”模板创建实验草稿`} /> : null}
+          {chosenTemplate ? <Alert showIcon type="info" message={`按“${chosenTemplate.name}”模板创建实验草稿`} description="Excel 按模板进入字段映射工作台；图片 / Word 解析后直接生成实验草稿。" /> : null}
         </> : null}
         <Form.Item label="关联项目 / 阶段 / 任务"><ProjectRelationPicker value={projectRelations} onChange={setProjectRelations} multiple={false} /></Form.Item>
       </Form>}
-      accept={mode === 'TEMPLATE' ? '.xls,.xlsx,.csv' : '.xlsx,.xls,.csv,.doc,.docx,.pdf,.jpg,.jpeg,.png,.gif,.webp,.bmp,.tif,.tiff'}
+      accept=".doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.gif,.webp,.bmp,.tif,.tiff"
       beforeUpload={validate}
       multiple
       files={files}
       onFilesChange={setFiles}
       onRemoveFile={(file) => setFiles((current) => current.filter((item) => item.uid !== file.uid))}
       onClearFiles={() => setFiles([])}
-      uploadHint={mode === 'TEMPLATE' ? '支持 XLS / XLSX / CSV' : '支持 Excel / Word / PDF / 图片'}
+      uploadHint="支持 XLSX / DOCX / 图片，可批量上传，单个文件最大100M。"
       uploadMainText="拖拽文件到此处/点击选择文件/点击拍照上传"
       submitLabel="开始上传"
       submitIcon={<CloudUploadOutlined />}
       onSubmit={() => void submit()}
       submitting={uploading}
-      submitDisabled={!experimentCategoryId || (mode === 'TEMPLATE' && !chosenTemplate)}
+      submitDisabled={!experimentCategoryId || (requiresTemplate && !chosenTemplate)}
       rightTitle="已上传文件"
       rightCount={jobs.length}
       rightFilters={[{ key: 'ALL', label: '全部' }, { key: 'PARSING', label: '处理中' }, { key: 'WAITING_MAPPING', label: '待确认' }, { key: 'COMPLETED', label: '已完成' }, { key: 'FAILED', label: '失败' }]}
@@ -306,11 +315,11 @@ export function ExperimentUploadPage() {
     return {
       id: `free-${job.id}`,
       name: job.sourceFileName,
-      meta: `${formatLabel(job.sourceFormat)} · 自由上传 · ${new Date(job.createdAt).toLocaleString('zh-CN')}`,
+      meta: `${formatLabel(job.sourceFormat)} · ${job.sourceFormat === 'IMAGE' ? '图片解析' : '自由上传'} · ${new Date(job.createdAt).toLocaleString('zh-CN')}`,
       detail: [job.currentStage || (job.status === 'COMPLETED' ? '已完成' : '等待解析'), `来源归属：实验记录本 · ${visibilityText(job.visibility)}`, job.errorMessage ? `失败原因：${job.errorMessage}` : null].filter(Boolean).join(' · '),
       status: job.status === 'COMPLETED' ? { label: '已创建草稿', color: 'success' } : job.status === 'FAILED' ? { label: '解析失败', color: 'error' } : { label: `处理中 ${progress}%`, color: 'processing' },
       progress,
-      actions: <Space size={2}><Button type="link" icon={<EyeOutlined />} onClick={() => job.experimentId ? navigate(`/experiments/${job.experimentId}`) : navigate(`/experiments/imports/${job.id}`)}>{job.experimentId ? '打开实验' : '查看状态'}</Button><Button type="link" icon={<DownloadOutlined />} onClick={() => void downloadFile(job.sourceFileId, job.sourceFileName).catch((error) => void message.error(error instanceof Error ? error.message : '原文件下载失败'))}>下载原文件</Button><Button type="link" icon={<ReloadOutlined />} loading={retryingId === job.id} onClick={() => void retry(job)}>重试</Button><Button type="link" danger icon={<DeleteOutlined />} disabled={!['QUEUED', 'PARSING', 'COMPLETED', 'FAILED', 'CANCELLED'].includes(job.status)} onClick={() => Modal.confirm({ title: `删除“${job.sourceFileName}”的导入记录？`, content: ['QUEUED', 'PARSING'].includes(job.status) ? '删除后将取消后台解析任务，原始文件仍保留在文件存储中。' : job.experimentId ? '仅删除导入记录，不删除已生成的实验草稿、原始附件或来源追溯关系。' : '仅删除导入记录，不删除原始附件。', okText: ['QUEUED', 'PARSING'].includes(job.status) ? '取消解析并删除' : '删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => deleteFree(job) })}>删除</Button></Space>,
+      actions: <Space size={2}><Button type="link" icon={<EyeOutlined />} onClick={() => job.experimentId ? navigate(`/experiments/${job.experimentId}`) : navigate(`/experiments/imports/${job.id}`)}>{job.experimentId ? (/\.(xlsx|xls|png|jpe?g|gif|webp|bmp|tiff?)$/i.test(job.sourceFileName) ? '确认字段' : '打开实验') : '查看状态'}</Button><Button type="link" icon={<DownloadOutlined />} onClick={() => void downloadFile(job.sourceFileId, job.sourceFileName).catch((error) => void message.error(error instanceof Error ? error.message : '原文件下载失败'))}>下载原文件</Button><Button type="link" icon={<ReloadOutlined />} loading={retryingId === job.id} onClick={() => void retry(job)}>重试</Button><Button type="link" danger icon={<DeleteOutlined />} disabled={!['QUEUED', 'PARSING', 'COMPLETED', 'FAILED', 'CANCELLED'].includes(job.status)} onClick={() => Modal.confirm({ title: `删除“${job.sourceFileName}”的导入记录？`, content: ['QUEUED', 'PARSING'].includes(job.status) ? '删除后将取消后台解析任务，原始文件仍保留在文件存储中。' : job.experimentId ? '仅删除导入记录，不删除已生成的实验草稿、原始附件或来源追溯关系。' : '仅删除导入记录，不删除原始附件。', okText: ['QUEUED', 'PARSING'].includes(job.status) ? '取消解析并删除' : '删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => deleteFree(job) })}>删除</Button></Space>,
     };
   }
 
@@ -338,6 +347,10 @@ function ModalShell({ open, onClose, files, setFiles, submitting, onSubmit }: { 
     <Upload.Dragger accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff" multiple fileList={files} showUploadList beforeUpload={(file) => { if (!file.size || !/\.(pdf|jpg|jpeg|png|tif|tiff)$/i.test(file.name)) return Upload.LIST_IGNORE; return false; }} onChange={({ fileList }) => setFiles(fileList)}><p><PictureOutlined /> 点击选择文件/点击拍照上传</p></Upload.Dragger>
     <Space style={{ marginTop: 16, width: '100%', justifyContent: 'flex-end' }}><Button onClick={onClose}>取消</Button><Button type="primary" disabled={!files.length} loading={submitting} onClick={onSubmit}>开始上传</Button></Space>
   </Modal>;
+}
+
+function isSpreadsheetFile(name: string) {
+  return /\.(xlsx|xls|csv)$/i.test(name);
 }
 
 function formatForFile(name: string) {

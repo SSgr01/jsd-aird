@@ -692,6 +692,7 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
   const [open, setOpen] = useState(false);
   const [form] = Form.useForm();
   const [products, setProducts] = useState<InventoryProductOption[]>([]);
+  const [productSearch, setProductSearch] = useState('');
   const [customers, setCustomers] = useState<BusinessPartner[]>([]);
   const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState<SampleDispatch | Shipment>();
@@ -703,18 +704,22 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
       setData(sample ? await inventoryApi.samples(filters) : await inventoryApi.shipments(filters)),
     [filters, sample],
   );
+  const productScope: InventoryScope = sample ? 'RND' : 'PRODUCTION';
+  const loadProducts = useCallback(async () => {
+    setProducts(await inventoryApi.productOptions(productScope));
+  }, [productScope]);
   useEffect(() => {
     void load();
-    void inventoryApi.productOptions(type === 'sample' ? 'RND' : 'PRODUCTION').then(setProducts);
+    void loadProducts();
     void getPartners({ status: 'ACTIVE', page: 1, size: 100 })
       .then((result) => setCustomers(result.items))
       .catch(() => message.error('客户列表加载失败'));
-  }, [load, type]);
+  }, [load, loadProducts]);
   const openEdit = (record: SampleDispatch | Shipment) => {
     setEditing(record);
     const values: Record<string, unknown> = {
       businessDate: dayjs(record.businessDate),
-      productId: record.productId,
+      productId: { value: record.productId, label: record.productName },
       quantityKg: record.quantityKg,
       customerId: record.customerId,
     };
@@ -773,9 +778,15 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
         await load();
         return;
       }
+      const selectedProduct = String(v.productId.value);
+      const existingProduct = products.find((product) => product.id === selectedProduct);
+      const productId = existingProduct
+        ? existingProduct.id
+        : await inventoryApi.createCustomProduct(selectedProduct, productScope);
       if (sample) {
         await inventoryApi.createSample({
           ...v,
+          productId,
           businessDate: v.businessDate.format('YYYY-MM-DD'),
         });
       } else {
@@ -785,6 +796,7 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
           .join('；');
         await inventoryApi.createShipment({
           ...shipmentValues,
+          productId,
           note: traceNote,
           coaNo,
           batchNo,
@@ -793,14 +805,31 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
       }
       message.success(sample ? '发样记录已保存并扣减研发库存' : '出货记录已保存并扣减生产库存');
       setOpen(false);
+      setProductSearch('');
       form.resetFields();
-      await load();
+      await Promise.all([load(), loadProducts()]);
     } catch (error) {
       message.error(errorMessage(error, `${sample ? '发样' : '出货'}记录保存失败，请稍后重试`));
     } finally {
       setSaving(false);
     }
   };
+  const productOptions = useMemo(() => {
+    const options = products.map((p) => ({
+      value: p.id,
+      label: `${p.code} · ${p.name} · ${p.category}`,
+    }));
+    const keyword = productSearch.trim();
+    if (
+      keyword &&
+      !products.some(
+        (p) => p.name.toLocaleLowerCase() === keyword.toLocaleLowerCase() || p.code === keyword,
+      )
+    ) {
+      options.push({ value: keyword, label: keyword });
+    }
+    return options;
+  }, [productSearch, products]);
   const columns = useMemo<ColumnsType<SampleDispatch | Shipment>>(
     () =>
       sample
@@ -879,7 +908,12 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
             disabled={readOnly}
             onClick={() => {
               setEditing(undefined);
-              form.setFieldsValue({ businessDate: dayjs() });
+              form.setFieldsValue({
+                businessDate: dayjs(),
+                [sample ? 'dispatchNo' : 'shipmentNo']: `${sample ? 'FY' : 'CH'}-${dayjs().format(
+                  'YYYYMMDD-HHmmss',
+                )}`,
+              });
               setOpen(true);
             }}
           >
@@ -940,6 +974,7 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
         onCancel={() => {
           setOpen(false);
           setEditing(undefined);
+          setProductSearch('');
           form.resetFields();
         }}
         onOk={save}
@@ -968,12 +1003,16 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
                   <Form.Item name="productId" label="产品" rules={[{ required: true }]}>
                     <Select
                       disabled={!!editing}
+                      labelInValue
                       showSearch
+                      filterOption
                       optionFilterProp="label"
-                      options={products.map((p) => ({
-                        value: p.id,
-                        label: `${p.code} · ${p.name} · ${p.category}`,
-                      }))}
+                      placeholder="选择或输入自定义产品"
+                      searchValue={productSearch}
+                      onSearch={setProductSearch}
+                      onChange={() => setProductSearch('')}
+                      options={productOptions}
+                      notFoundContent={productSearch ? null : '当前类型暂无库存产品，可输入名称创建'}
                     />
                   </Form.Item>
                 </Col>
@@ -1054,12 +1093,16 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
                   <Form.Item name="productId" label="产品" rules={[{ required: true }]}>
                     <Select
                       disabled={!!editing}
+                      labelInValue
                       showSearch
+                      filterOption
                       optionFilterProp="label"
-                      options={products.map((p) => ({
-                        value: p.id,
-                        label: `${p.code} · ${p.name} · ${p.category}`,
-                      }))}
+                      placeholder="选择或输入自定义产品"
+                      searchValue={productSearch}
+                      onSearch={setProductSearch}
+                      onChange={() => setProductSearch('')}
+                      options={productOptions}
+                      notFoundContent={productSearch ? null : '当前类型暂无库存产品，可输入名称创建'}
                     />
                   </Form.Item>
                 </Col>
@@ -1506,12 +1549,12 @@ function InventoryShell({
 }) {
   return (
     <div className="inventory-page pm-unified-list-page">
-      <div className="inventory-heading">
+      <div className="page-heading inventory-heading">
         <div>
           <h1>{title}</h1>
           <p>{description}</p>
         </div>
-        {extra}
+        <div className="pm-page-actions">{extra}</div>
       </div>
       {children}
     </div>

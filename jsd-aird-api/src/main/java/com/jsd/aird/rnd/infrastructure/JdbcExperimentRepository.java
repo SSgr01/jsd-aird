@@ -38,6 +38,10 @@ public class JdbcExperimentRepository implements ExperimentRepository {
         return Optional.ofNullable(jdbc.queryForObject("SELECT count(*) FROM rnd.experiment"+where,Long.class,args.toArray())).orElse(0L);
     }
     @Override public Optional<Detail> detail(UUID org,UUID id){return jdbc.query(BASE+" WHERE e.organization_id=? AND e.id=? AND e.deleted=false",(rs,n)->detailRow(rs),org,id).stream().findFirst();}
+    @Override public Optional<Detail> detailForUpdate(UUID org, UUID id) {
+        return jdbc.query(BASE + " WHERE e.organization_id=? AND e.id=? AND e.deleted=false FOR UPDATE OF e",
+                (rs, n) -> detailRow(rs), org, id).stream().findFirst();
+    }
     @Override public List<SourceReference> sourceReferences(UUID org, UUID experimentId) {
         return jdbc.query("""
                 SELECT r.id,coalesce(r.recognition_job_id,r.experiment_import_job_id) source_job_id,

@@ -264,10 +264,12 @@ function AccessDenied({ permissions, menuKeys }: { permissions: string[]; menuKe
 export function BasicLayout() {
   const location = useLocation();
   const isTemplateWorkspace = /^\/templates\/[^/]+\/workspace$/.test(location.pathname);
+  const isExperimentPage = ['/experiments/new', '/experiments/upload', '/experiments/list'].includes(location.pathname);
+  const isExperimentWorkspace = /^\/experiments\/(?!imports\/)[^/]+$/.test(location.pathname) && !isExperimentPage;
   const isDataWorkspace = /^\/data\/(?:import-jobs|assets)\/[^/]+$/.test(location.pathname);
   const isProjectDocumentWorkspace = /^\/projects\/[^/]+\/documents\/[^/]+$/.test(location.pathname);
   const isPermissionManagement = location.pathname.startsWith('/system/user-permissions');
-  const isWorkspace = isTemplateWorkspace || isDataWorkspace;
+  const isWorkspace = isTemplateWorkspace || isExperimentWorkspace || isDataWorkspace;
   const collapsed = useAppStore((state) => state.sidebarCollapsed);
   const setCollapsed = useAppStore((state) => state.setSidebarCollapsed);
   const user = useAuthStore((state) => state.user);

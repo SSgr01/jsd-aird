@@ -97,6 +97,43 @@ export interface ExperimentModel extends Record<string, unknown> {
   blankDocument?: boolean;
   documentSnapshot?: Record<string, unknown>;
   dynamicValues?: Record<string, unknown>;
+  recognizedFields?: Array<{
+    id: string;
+    bindingId: string;
+    parentBindingId: string;
+    name: string;
+    groupName: string;
+    regionId: string;
+    fieldCode: string;
+    dataPath: string;
+    mappingKind: string;
+    repeatAxis: string;
+    locatorType: string;
+    standardMatchStatus: string;
+    confirmed: boolean;
+    confidence: number;
+    valueType?: string;
+    unit?: string;
+    required?: boolean;
+    description?: string;
+    locator: Record<string, unknown>;
+  }>;
+  recognizedRegions?: Array<{
+    id: string;
+    bindingId: string;
+    dataPath: string;
+    name: string;
+    kind: string;
+    locatorType: string;
+    confirmed: boolean;
+    locator: Record<string, unknown>;
+  }>;
+  recognitionSummary?: {
+    modelStatus?: string;
+    recognitionStatus?: string;
+    suggestionCount?: number;
+    qualityIssueCount?: number;
+  };
   sourceGroups?: ExperimentSourceGroup[];
   sourceContexts?: ExperimentSourceContext[];
   sampleGroups?: ExperimentSampleGroup[];

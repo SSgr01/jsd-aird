@@ -80,11 +80,19 @@ public class JdbcExperimentImportRepository implements ExperimentImportRepositor
 
     @Override
     public int markRetrying(UUID organizationId, UUID id) {
+        // Keep experiment_id only while it still points at a live, editable
+        // draft. Deleted or published drafts must not make the next async
+        // retry fail with "实验不存在" or "状态不可重试解析".
         return jdbc.update("""
-                UPDATE rnd.experiment_import_job
-                SET status='PARSING', error_message=NULL, experiment_id=NULL,
+                UPDATE rnd.experiment_import_job j
+                SET status='PARSING', error_message=NULL,
+                    experiment_id=(SELECT e.id FROM rnd.experiment e
+                                   WHERE e.organization_id=j.organization_id
+                                     AND e.id=j.experiment_id
+                                     AND e.deleted=false
+                                     AND e.status IN ('DRAFT','PENDING','IN_PROGRESS','RETURNED')),
                     parse_result_jsonb='{}'::jsonb, updated_at=now()
-                WHERE organization_id=? AND id=? AND status IN ('FAILED', 'CANCELLED', 'COMPLETED')
+                WHERE j.organization_id=? AND j.id=? AND j.status IN ('FAILED', 'CANCELLED', 'COMPLETED')
                 """, organizationId, id);
     }
 
@@ -112,10 +120,27 @@ public class JdbcExperimentImportRepository implements ExperimentImportRepositor
 
     @Override
     public int delete(UUID organizationId, UUID id) {
-        // Once a free upload has produced an experiment source reference the
-        // import row is part of the immutable evidence chain and cannot be
-        // physically removed. Keep the original delete behavior for failed
-        // or cancelled jobs that never created an experiment.
+        // A completed free upload may own an immutable source reference. Once
+        // its experiment has been soft-deleted, hide the import row instead of
+        // breaking the evidence chain; the list query intentionally excludes
+        // CANCELLED rows. Keep imports for live experiments protected.
+        var hidden = jdbc.update("""
+                UPDATE rnd.experiment_import_job j
+                SET status='CANCELLED', error_message='用户删除导入记录', updated_at=now()
+                WHERE j.organization_id=? AND j.id=? AND j.status IN ('COMPLETED', 'FAILED', 'CANCELLED')
+                  AND EXISTS (SELECT 1 FROM rnd.experiment_source_reference r
+                              WHERE r.organization_id=j.organization_id
+                                AND r.experiment_import_job_id=j.id)
+                  AND NOT EXISTS (SELECT 1
+                                  FROM rnd.experiment_source_reference r
+                                  JOIN rnd.experiment e
+                                    ON e.organization_id=r.organization_id
+                                   AND e.id=r.experiment_id
+                                  WHERE r.organization_id=j.organization_id
+                                    AND r.experiment_import_job_id=j.id
+                                    AND e.deleted=false)
+                """, organizationId, id);
+        if (hidden > 0) return hidden;
         return jdbc.update("""
                 DELETE FROM rnd.experiment_import_job j
                 WHERE j.organization_id=? AND j.id=? AND j.status IN ('COMPLETED', 'FAILED', 'CANCELLED')

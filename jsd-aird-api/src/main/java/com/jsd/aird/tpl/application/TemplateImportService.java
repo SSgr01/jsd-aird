@@ -98,6 +98,106 @@ public class TemplateImportService {
         return create(fileId, format, null, false, "UPLOAD");
     }
 
+    /** Runs the same Excel recognition pipeline for an experiment-owned upload. */
+    @Transactional(rollbackFor = Exception.class)
+    public ExperimentWorkbookRecognition recognizeForExperiment(
+            UUID organizationId, UUID actorId, UUID fileId, UUID originalFileId
+    ) {
+        var file = fileRepository.find(organizationId, fileId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.FILE_NOT_READY));
+        var importJobId = UUID.randomUUID();
+        repository.enqueueStandalone(new TemplateImportRepository.NewImportJob(
+                importJobId, UUID.randomUUID(), organizationId, fileId, TemplateFormat.XLSX,
+                actorId, "OFFICE_FILE", "WORKBOOK", null, null, null, null,
+                file.sha256(), true, null, "EXPERIMENT_UPLOAD",
+                originalFileId, fileId, originalFileId.equals(fileId) ? "XLSX" : "XLS",
+                "XLSX", originalFileId.equals(fileId) ? "PASSTHROUGH" : "NORMALIZED",
+                "实验 Excel 识别"
+        ));
+        try {
+            var result = process(importJobId, organizationId, fileId, TemplateFormat.XLSX);
+            carryTemplateReviewDecisions(organizationId, actorId, file.sha256(), importJobId);
+            return new ExperimentWorkbookRecognition(result.path("initialEditorSnapshot"), result,
+                    repository.listSuggestions(organizationId, importJobId));
+        } catch (RuntimeException exception) {
+            repository.fail(importJobId, exception.getMessage());
+            throw exception;
+        }
+    }
+
+    /**
+     * Runs the same Excel recognition pipeline over a stored workbook snapshot.
+     * Image experiment imports OCR-project the photo into a workbook snapshot;
+     * staging that snapshot as a JSON file lets this path reuse the whole
+     * recognition pipeline without converting the snapshot back to XLSX.
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public ExperimentWorkbookRecognition recognizeForExperimentSnapshot(
+            UUID organizationId, UUID actorId, UUID snapshotFileId, UUID originalFileId
+    ) {
+        var file = fileRepository.find(organizationId, snapshotFileId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.FILE_NOT_READY));
+        var importJobId = UUID.randomUUID();
+        repository.enqueueStandalone(new TemplateImportRepository.NewImportJob(
+                importJobId, UUID.randomUUID(), organizationId, snapshotFileId, TemplateFormat.XLSX,
+                actorId, "OFFICE_FILE", "WORKBOOK", null, null, null, null,
+                file.sha256(), true, null, "EXPERIMENT_UPLOAD",
+                originalFileId, snapshotFileId, "IMAGE", "SNAPSHOT", "NORMALIZED",
+                "实验图片 OCR 工作簿识别"
+        ));
+        try {
+            var result = processSnapshot(importJobId, organizationId, snapshotFileId);
+            carryTemplateReviewDecisions(organizationId, actorId, file.sha256(), importJobId);
+            return new ExperimentWorkbookRecognition(result.path("initialEditorSnapshot"), result,
+                    repository.listSuggestions(organizationId, importJobId));
+        } catch (RuntimeException exception) {
+            repository.fail(importJobId, exception.getMessage());
+            throw exception;
+        }
+    }
+
+    /** Keep the review result of an already imported identical template workbook. */
+    private void carryTemplateReviewDecisions(
+            UUID organizationId, UUID actorId, String sourceSha256, UUID experimentImportJobId
+    ) {
+        var templateJob = repository.findReviewedTemplateSource(organizationId, sourceSha256, TemplateFormat.XLSX)
+                .orElse(null);
+        if (templateJob == null) return;
+        var reviewedJob = repository.findLatestForVersion(organizationId, templateJob.generatedTemplateVersionId())
+                .orElse(templateJob);
+        var accepted = repository.listSuggestions(organizationId, reviewedJob.id()).stream()
+                .filter(item -> "ACCEPTED".equals(item.decision()))
+                .map(this::reviewPositionKey)
+                .filter(key -> !key.isBlank())
+                .collect(java.util.stream.Collectors.toSet());
+        if (accepted.isEmpty()) return;
+        for (var suggestion : repository.listSuggestions(organizationId, experimentImportJobId)) {
+            if (!"PENDING".equals(suggestion.decision())
+                    || !accepted.contains(reviewPositionKey(suggestion))) continue;
+            repository.decideSuggestion(organizationId, suggestion.recognitionRunId(),
+                    suggestion.id(), "ACCEPTED", actorId);
+        }
+    }
+
+    private String reviewPositionKey(TemplateImportRepository.RecognitionSuggestionView suggestion) {
+        var payload = suggestion.payload();
+        var locator = payload.path("locator");
+        var position = locator.path("labelRange").asText("");
+        if (position.isBlank()) position = locator.path("labelAddress").asText("");
+        if (position.isBlank()) position = locator.path("range").asText("");
+        if (position.isBlank()) position = locator.path("address").asText("");
+        if (position.isBlank()) position = locator.path("valueRange").asText("");
+        if (position.isBlank()) return "";
+        return suggestion.suggestionType() + "|" + locator.path("sheetId").asText("")
+                + "|" + position.toUpperCase(Locale.ROOT) + "|"
+                + payload.path("fieldName").asText("").strip();
+    }
+
+    public record ExperimentWorkbookRecognition(
+            JsonNode snapshot, JsonNode result,
+            List<TemplateImportRepository.RecognitionSuggestionView> suggestions
+    ) { }
+
     @Transactional
     public TemplateImportRepository.ImportJobView create(
             UUID fileId, TemplateFormat format, UUID categoryId, boolean duplicateOverride, String operationSource
@@ -584,7 +684,7 @@ public class TemplateImportService {
         repository.saveRenderSnapshot(importJobId, workingParsed.initialEditorSnapshot());
         repository.updateProgress(importJobId, 48, "RECOGNIZING_FIELDS");
         repository.updateProgress(importJobId, 52, "RENDERING_OPTIONAL_VISUAL");
-        var visualRender = format == TemplateFormat.XLSX
+        var visualRender = format == TemplateFormat.XLSX && !repository.isExperimentUpload(importJobId)
                 ? visualRenderer.render(importJobId)
                 : TemplateVisualRenderer.RenderResult.unavailable(
                         "NOT_APPLICABLE", "当前格式不执行 Excel 视觉渲染"
@@ -732,7 +832,7 @@ public class TemplateImportService {
                     recognitionRunId, repairedSnapshotHash, "RECOGNIZED_AFTER_REPAIR");
             repository.saveRenderSnapshot(importJobId, workingParsed.initialEditorSnapshot());
             repository.updateProgress(importJobId, 52, "RERENDERING_AFTER_REPAIR");
-            visualRender = format == TemplateFormat.XLSX
+            visualRender = format == TemplateFormat.XLSX && !repository.isExperimentUpload(importJobId)
                     ? visualRenderer.render(importJobId)
                     : TemplateVisualRenderer.RenderResult.unavailable(
                             "NOT_APPLICABLE", "当前格式不执行 Excel 视觉渲染"

@@ -492,6 +492,28 @@
   line-height: 1.6;
 }
 
+/* Keep the page-level actions in one horizontal row on desktop. */
+.pm-unified-list-page.cm-customer-list-page .cm-customer-page-actions {
+  display: flex;
+  min-width: max-content;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.pm-unified-list-page.cm-customer-list-page .cm-customer-page-actions > * {
+  flex: 0 0 auto;
+}
+
+.pm-unified-list-page.cm-customer-list-page .cm-customer-page-actions .ant-space-compact {
+  display: inline-flex;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .pm-unified-list-page.cm-customer-list-page .cm-filter-row {
   display: flex;
   min-width: 0;
@@ -664,6 +686,15 @@
 @media (max-width: 720px) {
   .pm-unified-list-page.cm-customer-list-page .cm-customer-page-intro {
     padding: 16px;
+  }
+
+  .pm-unified-list-page.cm-customer-list-page .cm-customer-page-actions {
+    width: 100%;
+    flex-wrap: wrap !important;
+    justify-content: flex-start;
+    min-width: 0;
+    margin-left: 0;
+    white-space: normal;
   }
 
   .pm-unified-list-page.cm-customer-list-page .cm-customer-page-intro h3 {

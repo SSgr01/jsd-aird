@@ -13,6 +13,11 @@ public interface TemplateImportRepository {
 
     void enqueue(NewImportJob job);
 
+    /** Creates an internal recognition job that is processed synchronously by its owner. */
+    void enqueueStandalone(NewImportJob job);
+
+    boolean isExperimentUpload(UUID importJobId);
+
     /** Reuses the import record while preserving every previous recognition run. */
     boolean enqueueRerun(RerunImportJob job);
 
@@ -34,6 +39,9 @@ public interface TemplateImportRepository {
     List<ImportJobView> list(UUID organizationId);
 
     Optional<ImportJobView> findDuplicate(UUID organizationId, String sourceSha256, TemplateFormat format);
+
+    /** Latest actual template version imported from these exact workbook bytes. */
+    Optional<ImportJobView> findReviewedTemplateSource(UUID organizationId, String sourceSha256, TemplateFormat format);
 
     void complete(UUID importJobId, OfficeStructureParser.ParseResult result);
 

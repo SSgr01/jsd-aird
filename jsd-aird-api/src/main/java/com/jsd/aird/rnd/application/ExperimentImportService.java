@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.ops.application.port.FileStorageFacade;
 import com.jsd.aird.ops.application.port.OpsAsyncFacade;
 import com.jsd.aird.kb.domain.DocumentParser;
+import com.jsd.aird.kb.domain.OcrMode;
 import com.jsd.aird.kb.domain.MediaExtractionProvider;
 import com.jsd.aird.kb.domain.OrderedDocumentProjector;
 import com.jsd.aird.rnd.application.port.ExperimentImportRepository;
@@ -15,8 +16,10 @@ import com.jsd.aird.shared.security.Actor;
 import com.jsd.aird.shared.security.ActorContext;
 import com.jsd.aird.tpl.application.port.OfficeStructureParser;
 import com.jsd.aird.tpl.api.TemplateOfficeNormalizationFacade;
+import com.jsd.aird.tpl.api.TemplateOfficeFacade;
 import com.jsd.aird.tpl.domain.TemplateFormat;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDate;
 import java.nio.charset.StandardCharsets;
@@ -38,24 +41,32 @@ public class ExperimentImportService {
     private final FileStorageFacade files;
     private final List<OfficeStructureParser> parsers;
     private final List<MediaExtractionProvider> mediaProviders;
+    private final DocumentParser mineruParser;
     private final ObjectMapper objectMapper;
     private final OpsAsyncFacade asyncJobs;
     private final TemplateOfficeNormalizationFacade fileNormalizer;
+    private final TemplateOfficeFacade officeFacade;
     private final OrderedDocumentProjector documentProjector;
+    private final ExperimentImageTableJoiner imageTableJoiner = new ExperimentImageTableJoiner();
+    private final ExperimentOcrCellText ocrCellText = new ExperimentOcrCellText();
 
     public ExperimentImportService(ExperimentImportRepository imports, ExperimentService experiments,
                                    FileStorageFacade files, List<OfficeStructureParser> parsers,
                                    List<MediaExtractionProvider> mediaProviders,
+                                   @Qualifier("mineruDocumentParser") DocumentParser mineruParser,
                                    ObjectMapper objectMapper, OpsAsyncFacade asyncJobs,
-                                   TemplateOfficeNormalizationFacade fileNormalizer) {
+                                   TemplateOfficeNormalizationFacade fileNormalizer,
+                                   TemplateOfficeFacade officeFacade) {
         this.imports = imports;
         this.experiments = experiments;
         this.files = files;
         this.parsers = List.copyOf(parsers);
         this.mediaProviders = List.copyOf(mediaProviders);
+        this.mineruParser = mineruParser;
         this.objectMapper = objectMapper;
         this.asyncJobs = asyncJobs;
         this.fileNormalizer = fileNormalizer;
+        this.officeFacade = officeFacade;
         this.documentProjector = new OrderedDocumentProjector();
     }
 
@@ -113,10 +124,10 @@ public class ExperimentImportService {
             var bytes = stored.stream().readAllBytes();
             var command = new Command(fileId, fileName, sha256, format,
                     null, null, null, null, null, LocalDate.now(), "ALL");
-            var parser = parsers.stream().filter(item -> item.format() == format).findFirst().orElse(null);
+            var parser = parserFor(format);
             var parseBytes = normalizedOfficeBytes(fileName, stored.contentType(), format, bytes);
             return parser == null
-                    ? parseSource(command, parseBytes)
+                    ? parseSource(command, parseBytes, ActorContext.required())
                     : parser.parse(new ByteArrayInputStream(parseBytes));
         } catch (ApiException exception) {
             throw exception;
@@ -145,9 +156,9 @@ public class ExperimentImportService {
                 updateProgress(actor.organizationId(), asyncIdempotencyKey, 25, "READING_STRUCTURE");
                 var bytes = stored.stream().readAllBytes();
                 var parseBytes = normalizedOfficeBytes(command.fileName(), stored.contentType(), command.format(), bytes);
-                var parser = parsers.stream().filter(item -> item.format() == command.format()).findFirst().orElse(null);
+                var parser = parserFor(command.format());
                 var parsed = parser == null
-                        ? parseSource(command, parseBytes)
+                        ? parseSource(command, parseBytes, actor)
                         : parser.parse(new ByteArrayInputStream(parseBytes));
                 if (parsed == null || parsed.initialEditorSnapshot() == null
                         || !parsed.initialEditorSnapshot().isObject()) {
@@ -159,15 +170,161 @@ public class ExperimentImportService {
                 // creating the experiment aggregate.
                 if (!imports.isParsing(actor.organizationId(), jobId)) return null;
                 updateProgress(actor.organizationId(), asyncIdempotencyKey, 70, "PARSING_COMPLETED");
+                var excelUpload = command.format() == TemplateFormat.XLSX || command.format() == TemplateFormat.XLS;
+                var editorSnapshot = parsed.initialEditorSnapshot();
+                TemplateOfficeFacade.RecognitionBatch recognitionBatch = null;
+                com.fasterxml.jackson.databind.JsonNode recognitionResult = null;
+                if (excelUpload) {
+                    var recognitionFileId = command.fileId();
+                    if (command.format() == TemplateFormat.XLS) {
+                        var normalized = files.stageDerived(actor.organizationId(), actor.userId(),
+                                command.fileName().replaceFirst("(?i)\\.xls$", ".xlsx"),
+                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                "EXPERIMENT_SOURCE", new ByteArrayInputStream(parseBytes));
+                        recognitionFileId = normalized.fileId();
+                    }
+                    var recognized = officeFacade.recognizeExperimentWorkbook(
+                            actor.organizationId(), actor.userId(), recognitionFileId, command.fileId());
+                    recognitionBatch = recognized.batch();
+                    var pipelineResult = recognized.result();
+                    recognitionResult = objectMapper.createObjectNode()
+                            .put("modelStatus", pipelineResult.path("modelStatus").asText(""))
+                            .put("recognitionStatus", pipelineResult.path("recognitionStatus").asText(""))
+                            .put("suggestionCount", pipelineResult.path("suggestionCount").asInt(0))
+                            .put("qualityIssueCount", pipelineResult.path("qualityIssueCount").asInt(0));
+                    if (recognized.snapshot() != null && recognized.snapshot().isObject()) {
+                        editorSnapshot = recognized.snapshot();
+                    }
+                }
+                // An image import first OCR-projects the photo into an editable
+                // workbook; running the shared field recognition over that staged
+                // snapshot gives the draft the same 识别确认 review as an Excel
+                // upload. A recognition failure keeps the OCR draft usable.
+                var ocrWorkbook = command.format() == TemplateFormat.IMAGE
+                        && parsed.structureSummary() != null
+                        && "XLSX".equals(parsed.structureSummary().path("outputFormat").asText(""));
+                if (ocrWorkbook && editorSnapshot != null && editorSnapshot.isObject()) {
+                    try {
+                        var snapshotName = command.fileName().replaceFirst("(?i)\\.[^.]+$", "") + ".snapshot.json";
+                        var stagedSnapshot = files.stageDerived(actor.organizationId(), actor.userId(),
+                                snapshotName, "application/json", "EXPERIMENT_SOURCE",
+                                new ByteArrayInputStream(objectMapper.writeValueAsBytes(editorSnapshot)));
+                        var recognized = officeFacade.recognizeExperimentWorkbookSnapshot(
+                                actor.organizationId(), actor.userId(), stagedSnapshot.fileId(), command.fileId());
+                        recognitionBatch = recognized.batch();
+                        var pipelineResult = recognized.result();
+                        recognitionResult = objectMapper.createObjectNode()
+                                .put("modelStatus", pipelineResult.path("modelStatus").asText(""))
+                                .put("recognitionStatus", pipelineResult.path("recognitionStatus").asText(""))
+                                .put("suggestionCount", pipelineResult.path("suggestionCount").asInt(0))
+                                .put("qualityIssueCount", pipelineResult.path("qualityIssueCount").asInt(0));
+                        if (recognized.snapshot() != null && recognized.snapshot().isObject()) {
+                            editorSnapshot = recognized.snapshot();
+                        }
+                    } catch (RuntimeException exception) {
+                        recognitionResult = objectMapper.createObjectNode()
+                                .put("modelStatus", "FAILED")
+                                .put("recognitionStatus", "FAILED")
+                                .put("suggestionCount", 0)
+                                .put("qualityIssueCount", 0);
+                    }
+                }
                 var editModel = objectMapper.createObjectNode();
                 editModel.put("title", command.fileName());
                 editModel.put("purpose", "");
                 editModel.put("plan", "");
                 // Images are OCR-ed through the shared template/knowledge media
                 // provider and materialized as an Excel workbook for review.
-                editModel.put("documentFormat", command.format() == TemplateFormat.XLSX
-                        || command.format() == TemplateFormat.IMAGE ? "excel" : "word");
-                editModel.set("documentSnapshot", parsed.initialEditorSnapshot());
+                editModel.put("documentFormat", isWorkbookFormat(command.format()) ? "excel" : "word");
+                editModel.set("documentSnapshot", editorSnapshot);
+                var recognizedFields = objectMapper.createArrayNode();
+                var recognizedRegions = objectMapper.createArrayNode();
+                if (recognitionBatch != null) {
+                    var fieldsByKey = new java.util.HashMap<String, com.fasterxml.jackson.databind.node.ObjectNode>();
+                    var regionsByKey = new java.util.HashMap<String, com.fasterxml.jackson.databind.node.ObjectNode>();
+                    for (var suggestion : recognitionBatch.suggestions()) {
+                        var payload = suggestion.payload();
+                        if (payload == null) continue;
+                        if (!List.of("SCALAR_FIELD", "REPEAT_FIELD", "TABLE_CHILD_FIELD")
+                                .contains(suggestion.suggestionType())) {
+                            var kind = payload.path("kind").asText("");
+                            if (!List.of("FORM_REGION", "ROW_TABLE", "COLUMN_TABLE").contains(kind)) continue;
+                            var regionKey = payload.path("regionId").asText(payload.path("relationId").asText(""));
+                            if (regionKey.isBlank()) regionKey = payload.path("locator").path("sheetId").asText("")
+                                    + "|" + payload.path("locator").path("range").asText(payload.path("range").asText(""))
+                                    + "|" + kind;
+                            var existingRegion = regionsByKey.get(regionKey);
+                            if (existingRegion != null) {
+                                if ("ACCEPTED".equals(suggestion.decision())
+                                        && "CONFIRMED".equals(payload.path("canonicalStatus").asText(""))
+                                        && "CONFIRMED".equals(payload.path("structureStatus").asText(""))) {
+                                    existingRegion.put("confirmed", true);
+                                }
+                                continue;
+                            }
+                            var region = objectMapper.createObjectNode()
+                                    .put("id", payload.path("regionId").asText(payload.path("relationId").asText(UUID.randomUUID().toString())))
+                                    .put("bindingId", payload.path("bindingId").asText(""))
+                                    .put("dataPath", payload.path("dataPath").asText(""))
+                                    .put("name", payload.path("fieldName").asText(payload.path("groupName").asText("识别区域")))
+                                    .put("kind", kind)
+                                    .put("locatorType", payload.path("locatorType").asText("TABLE_REGION"))
+                                    .put("confirmed", "ACCEPTED".equals(suggestion.decision())
+                                            && "CONFIRMED".equals(payload.path("canonicalStatus").asText(""))
+                                            && "CONFIRMED".equals(payload.path("structureStatus").asText("")));
+                            var regionLocator = payload.path("locator").isObject()
+                                    ? payload.path("locator").deepCopy()
+                                    : objectMapper.createObjectNode()
+                                            .put("sheetId", payload.path("sheetId").asText(""))
+                                            .put("range", payload.path("range").asText(""));
+                            region.set("locator", regionLocator);
+                            regionsByKey.put(regionKey, region);
+                            recognizedRegions.add(region);
+                            continue;
+                        }
+                        if (payload.path("fieldName").asText("").isBlank()) continue;
+                        var fieldKey = payload.path("fieldId").asText("");
+                        if (fieldKey.isBlank()) fieldKey = payload.path("locator").path("sheetId").asText("")
+                                + "|" + payload.path("locator").path("address").asText("")
+                                + "|" + payload.path("fieldName").asText("");
+                        var existingField = fieldsByKey.get(fieldKey);
+                        if (existingField != null) {
+                            if ("ACCEPTED".equals(suggestion.decision())
+                                    && !payload.path("semanticConflict").asBoolean(false)) {
+                                existingField.put("confirmed", true);
+                            }
+                            continue;
+                        }
+                        var field = objectMapper.createObjectNode()
+                                .put("id", payload.path("fieldId").asText(UUID.randomUUID().toString()))
+                                .put("bindingId", payload.path("bindingId").asText(""))
+                                .put("parentBindingId", payload.path("parentBindingId").asText(""))
+                                .put("name", payload.path("fieldName").asText())
+                                .put("groupName", payload.path("groupName").asText("基本信息"))
+                                .put("regionId", payload.path("regionId").asText(""))
+                                .put("fieldCode", payload.path("fieldCode").asText(""))
+                                .put("dataPath", payload.path("dataPath").asText(""))
+                                .put("mappingKind", payload.path("mappingKind").asText("SCALAR"))
+                                .put("repeatAxis", payload.path("repeatAxis").asText("UNKNOWN"))
+                                .put("locatorType", payload.path("locatorType").asText("CELL_RANGE"))
+                                .put("standardMatchStatus", payload.path("standardMatchStatus").asText("UNMATCHED"))
+                                .put("confirmed", "ACCEPTED".equals(suggestion.decision())
+                                        && !payload.path("semanticConflict").asBoolean(false))
+                                .put("confidence", suggestion.confidence());
+                        field.put("valueType", payload.path("valueType").asText("string"))
+                                .put("unit", payload.path("unit").asText(""))
+                                .put("required", payload.path("required").asBoolean(false))
+                                .put("description", payload.path("description").asText(""));
+                        field.set("locator", payload.path("locator").deepCopy());
+                        fieldsByKey.put(fieldKey, field);
+                        recognizedFields.add(field);
+                    }
+                }
+                if (recognitionBatch != null || recognitionResult != null) {
+                    editModel.set("recognizedFields", recognizedFields);
+                    editModel.set("recognizedRegions", recognizedRegions);
+                    if (recognitionResult != null) editModel.set("recognitionSummary", recognitionResult.deepCopy());
+                }
                 editModel.put("sourceFileId", command.fileId().toString());
                 editModel.put("sourceFileName", command.fileName());
                 editModel.put("sourceFileSha256", command.sha256());
@@ -186,35 +343,47 @@ public class ExperimentImportService {
                 editModel.set("conclusion", conclusion);
                 if (!imports.isParsing(actor.organizationId(), jobId)) return null;
                 updateProgress(actor.organizationId(), asyncIdempotencyKey, 85, "BUILDING_EXPERIMENT");
-                var summary = experiments.create(new ExperimentService.CreateCommand(
+                var importedDraft = new ExperimentService.CreateCommand(
                         null, command.fileName(), command.categoryId(), command.categoryName(),
                         command.format() == TemplateFormat.XLSX || command.format() == TemplateFormat.XLS || command.format() == TemplateFormat.CSV
                                 ? "EXCEL_IMPORT" : "OCR_IMPORT",
                         command.projectId(), command.stageId(), command.taskId(), actor.username(),
                         command.experimentDate(), command.fileId(), null, command.sha256(),
-                        parsed.initialEditorSnapshot(), editModel));
-                // Free uploads do not enter the field-mapping workbench, but
-                // their immutable file/boundary evidence must still follow the
-                // experiment into the unified fact projection. The RND import
-                // job is the owner for this reference; no Data Submission is
-                // created.
+                        editorSnapshot, editModel);
+                // A retry keeps the import job's existing experiment_id. Reuse
+                // that draft in place so the experiment list does not grow by
+                // one row for every retry attempt.
+                var existingJob = imports.find(actor.organizationId(), jobId).orElse(null);
+                var summary = existingJob == null || existingJob.experimentId() == null
+                        ? experiments.create(importedDraft)
+                        : experiments.replaceImportedDraft(existingJob.experimentId(), importedDraft);
+                // The RND import job owns source provenance for this experiment.
+                // Excel recognition uses the template pipeline for candidates,
+                // while the experiment remains the editable aggregate.
                 var sourceCoordinates = objectMapper.createObjectNode()
                         .put("kind", "WHOLE_FILE")
                         .put("sourceFileId", command.fileId().toString())
                         .put("sourceFileName", command.fileName());
                 var recognitionSnapshot = objectMapper.createObjectNode()
                         .put("sourceOwner", "EXPERIMENT")
-                        .put("recognitionMode", "FREEFORM")
+                        .put("recognitionMode", recognitionBatch != null
+                                ? (excelUpload ? "TEMPLATE_PIPELINE" : "OCR_TEMPLATE_PIPELINE")
+                                : excelUpload ? "TEMPLATE_PIPELINE" : "FREEFORM")
                         .put("parserVersion", parsed.structureSummary() == null ? "experiment-import-v1"
-                                : parsed.structureSummary().path("parserVersion").asText("experiment-import-v1"))
-                        .set("documentSnapshot", parsed.initialEditorSnapshot().deepCopy());
+                                : parsed.structureSummary().path("parserVersion").asText("experiment-import-v1"));
+                recognitionSnapshot.set("documentSnapshot", editorSnapshot.deepCopy());
+                if (recognitionBatch != null || recognitionResult != null) {
+                    recognitionSnapshot.set("recognizedFields", recognizedFields.deepCopy());
+                    recognitionSnapshot.set("recognizedRegions", recognizedRegions.deepCopy());
+                    if (recognitionResult != null) recognitionSnapshot.set("recognitionSummary", recognitionResult.deepCopy());
+                }
                 imports.linkSourceReference(actor.organizationId(), jobId, summary.id(),
                         experiments.detail(summary.id()).currentVersionId(),
                         "experiment-1", "sample-1", "EXPERIMENT:" + jobId + ":sample-1",
                         List.of("file:" + command.sha256()), sourceCoordinates, recognitionSnapshot,
                         command.sha256(), actor.userId());
                 updateProgress(actor.organizationId(), asyncIdempotencyKey, 95, "PERSISTING_RESULT");
-                imports.complete(jobId, summary.id(), parsed.initialEditorSnapshot());
+                imports.complete(jobId, summary.id(), editorSnapshot);
                 return summary;
             }
         } catch (Exception exception) {
@@ -390,7 +559,7 @@ public class ExperimentImportService {
                 .put("sourceFileName", fileName)
                 .put("reviewRequired", format == TemplateFormat.PDF || format == TemplateFormat.IMAGE);
         var snapshot = objectMapper.createObjectNode().put("id", UUID.randomUUID().toString());
-        if (format == TemplateFormat.XLS || format == TemplateFormat.CSV) {
+        if (isWorkbookFormat(format) && format != TemplateFormat.IMAGE) {
             snapshot.put("snapshotFormatVersion", 3).put("name", fileName);
             snapshot.putArray("sheetOrder").add("sheet-1");
             var sheet = objectMapper.createObjectNode().put("id", "sheet-1").put("name", "Sheet1")
@@ -441,9 +610,23 @@ public class ExperimentImportService {
         return new OfficeStructureParser.ParseResult(summary, snapshot, List.of());
     }
 
-    private OfficeStructureParser.ParseResult parseSource(Command command, byte[] bytes) {
+    OfficeStructureParser.ParseResult parseSource(Command command, byte[] bytes, Actor actor) {
         if (command.format() != TemplateFormat.PDF && command.format() != TemplateFormat.IMAGE) {
             return genericParse(command.format(), command.fileName(), bytes);
+        }
+        if (command.format() == TemplateFormat.IMAGE && mineruParser.isConfigured()) {
+            try {
+                var pdf = ExperimentImagePdfConverter.convert(bytes);
+                var pdfName = command.fileName().replaceFirst("(?i)\\.[^.]+$", "") + ".pdf";
+                var extracted = mineruParser.parse(new ByteArrayInputStream(pdf), pdfName,
+                        new DocumentParser.ParseContext(actor.organizationId(), actor.userId(),
+                                command.fileId(), "application/pdf", pdf.length, OcrMode.ON, false));
+                if (extracted.blocks().isEmpty()) throw new IllegalStateException("MinerU 未识别到实验图片内容");
+                return ocrWorkbookResult(command.fileName(), contentType(command.format(), command.fileName()),
+                        bytes, extracted);
+            } catch (RuntimeException | java.io.IOException ignored) {
+                // Keep the existing image OCR provider available when MinerU cannot process this image.
+            }
         }
         var provider = mediaProviders.stream()
                 .filter(item -> item.isConfigured() && item.supports(command.fileName(), contentType(command.format(), command.fileName())))
@@ -460,6 +643,24 @@ public class ExperimentImportService {
             // A reviewable source draft is safer than losing the original file when OCR is unavailable.
             return genericParse(command.format(), command.fileName(), bytes);
         }
+    }
+
+    /**
+     * The XLSX parser also supports legacy XLS after converting HSSF to XSSF.
+     * Reuse it for XLS so both Excel formats get the same workbook snapshot
+     * and physical structure instead of the minimal generic fallback.
+     */
+    private OfficeStructureParser parserFor(TemplateFormat format) {
+        return parsers.stream()
+                .filter(item -> item.format() == format
+                        || (format == TemplateFormat.XLS && item.format() == TemplateFormat.XLSX))
+                .findFirst()
+                .orElse(null);
+    }
+
+    private boolean isWorkbookFormat(TemplateFormat format) {
+        return format == TemplateFormat.XLSX || format == TemplateFormat.XLS
+                || format == TemplateFormat.CSV || format == TemplateFormat.IMAGE;
     }
 
     private OfficeStructureParser.ParseResult ocrSnapshot(String fileName, DocumentParser.ParsedDocument extracted) {
@@ -502,7 +703,7 @@ public class ExperimentImportService {
     private OfficeStructureParser.ParseResult ocrWorkbookResult(
             String fileName, String sourceContentType, byte[] sourceBytes,
             DocumentParser.ParsedDocument extracted) {
-        var projection = documentProjector.project(extracted.blocks());
+        var projection = projectImageBlocks(extracted.blocks());
         var summary = objectMapper.createObjectNode()
                 .put("format", "OCR_IMPORT")
                 .put("outputFormat", "XLSX")
@@ -530,7 +731,7 @@ public class ExperimentImportService {
     }
 
     ObjectNode ocrWorkbookSnapshot(String fileName, List<DocumentParser.TextBlock> blocks) {
-        return ocrWorkbookSnapshot(fileName, documentProjector.project(blocks));
+        return ocrWorkbookSnapshot(fileName, projectImageBlocks(blocks));
     }
 
     /**
@@ -540,7 +741,11 @@ public class ExperimentImportService {
      */
     ObjectNode ocrWorkbookSnapshot(String fileName, String sourceContentType, byte[] sourceBytes,
                                    List<DocumentParser.TextBlock> blocks) {
-        return ocrWorkbookSnapshot(fileName, documentProjector.project(blocks));
+        return ocrWorkbookSnapshot(fileName, projectImageBlocks(blocks));
+    }
+
+    private OrderedDocumentProjector.Projection projectImageBlocks(List<DocumentParser.TextBlock> blocks) {
+        return imageTableJoiner.join(blocks, documentProjector.project(blocks));
     }
 
     private ObjectNode ocrWorkbookSnapshot(String fileName, OrderedDocumentProjector.Projection projection) {
@@ -571,7 +776,7 @@ public class ExperimentImportService {
                 .mapToInt(OrderedDocumentProjector.Table::columnCount).max().orElse(8);
         for (var section : projection.sections()) {
             if (section instanceof OrderedDocumentProjector.Paragraph paragraph) {
-                var text = paragraph.text();
+                var text = ocrCellText.display(paragraph.text());
                 var cell = objectMapper.createObjectNode().put("v", text)
                         .put("s", paragraph.type() != null && paragraph.type().startsWith("heading")
                                 ? "ocr-header" : "ocr-text");
@@ -596,8 +801,9 @@ public class ExperimentImportService {
             }
             for (var placement : table.cells()) {
                 var row = tableStart + placement.row();
+                var displayText = ocrCellText.display(placement.text());
                 cellData.withObject("/" + row).set(String.valueOf(placement.column()), objectMapper.createObjectNode()
-                        .put("v", placement.text()).put("s", placement.header() ? "ocr-header" : "ocr-table"));
+                        .put("v", displayText).put("s", placement.header() ? "ocr-header" : "ocr-table"));
                 if (placement.rowSpan() > 1 || placement.columnSpan() > 1) {
                     mergeData.addObject().put("startRow", row).put("endRow", row + placement.rowSpan() - 1)
                             .put("startColumn", placement.column())
@@ -608,7 +814,7 @@ public class ExperimentImportService {
                         - geometryNumber(placement.geometry(), "pixelLeft");
                 var width = pixelWidth > 0 ? Math.min(220, Math.max(34,
                         (int) Math.round(pixelWidth * .72 / placement.columnSpan())))
-                        : Math.min(180, Math.max(76, 20 + placement.text().length() * 13 / placement.columnSpan()));
+                        : Math.min(180, Math.max(76, 20 + displayText.length() * 13 / placement.columnSpan()));
                 for (var offset = 0; offset < placement.columnSpan(); offset++) {
                     columnWidths.set(placement.column() + offset,
                             Math.max(columnWidths.get(placement.column() + offset), width));

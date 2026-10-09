@@ -2,7 +2,6 @@ import { AppstoreOutlined, ReloadOutlined, SearchOutlined, UnorderedListOutlined
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Breadcrumb,
   Button,
   Empty,
   Input,
@@ -277,15 +276,12 @@ export default function TaskPage() {
 
   return (
     <div className="pm-page pm-unified-list-page pm-task-page">
-      <div className="pm-page-head">
+      <div className="page-heading">
         <div>
-          <Breadcrumb items={[{ title: '项目管理' }, { title: '项目任务' }]} />
-          <h3>任务</h3>
+          <h2>任务</h2>
           <p>集中查看并筛选全部项目任务，数据来自项目管理原有项目结构。</p>
         </div>
-      </div>
-      <div className="pm-task-toolbar">
-        <Space size={8}>
+        <div className="pm-page-actions">
           <Button type="primary" onClick={() => navigate('/projects/list')}>
             项目列表
           </Button>
@@ -307,7 +303,7 @@ export default function TaskPage() {
               />
             </Tooltip>
           </Space.Compact>
-        </Space>
+        </div>
       </div>
 
       <div className="pm-task-filters">

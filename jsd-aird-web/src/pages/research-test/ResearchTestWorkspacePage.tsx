@@ -451,10 +451,6 @@ export function ResearchTestWorkspacePage({ type }: { type: ResearchTestType }) 
       <Tabs
         activeKey={view}
         onChange={(key) => {
-          if (key === 'versions' && versions.length === 0) {
-            message.info('发布后才会生成版本记录');
-            return;
-          }
           if (saveState !== 'SAVED' && key === 'versions') {
             message.warning('请先保存当前内容');
             return;
@@ -475,7 +471,7 @@ export function ResearchTestWorkspacePage({ type }: { type: ResearchTestType }) 
             label: '编辑',
             disabled: !['DRAFT', 'RETURNED'].includes(detail.summary.status),
           },
-          ...(versions.length > 0 ? [{ key: 'versions', label: '版本记录' }] : []),
+          { key: 'versions', label: '版本记录' },
         ]}
       />
       {view === 'versions' ? (

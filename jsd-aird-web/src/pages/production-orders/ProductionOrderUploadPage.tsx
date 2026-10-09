@@ -15,9 +15,12 @@ import { UploadWorkspace, type UploadWorkspaceRecord } from '@/components/upload
 import { usePermission } from '@/components/auth/usePermission';
 import { ProjectRelationPicker } from '@/components/project-relations/ProjectRelationPicker';
 import type { ProjectRelationTarget } from '@/services/project/project-resource-api';
+import { templateApi } from '@/services/templates/template-api';
+import type { TemplateListItem } from '@/features/template-workspace/types';
 import { downloadFile, stageFile } from '@/services/files/file-api';
 import {
   productionUploadApi,
+  PRODUCTION_RECOGNITION_STAGE_LABELS,
   type ProductionUpload,
   type ProductionUploadVisibility,
 } from '@/services/production-orders/production-upload-api';
@@ -30,7 +33,6 @@ const visibilityOptions: Array<{ value: ProductionUploadVisibility; label: strin
 // 品管部可见为历史数据兼容展示，下拉框不再提供该选项。
 const legacyVisibilityLabels: Record<string, string> = { QUALITY: '品管部可见' };
 
-const saveLocationOptions = [{ value: 'PRODUCTION_ORDER', label: '生产单' }];
 
 const statusFilters = [
   { key: 'ALL', label: '全部' },
@@ -39,27 +41,15 @@ const statusFilters = [
   { key: 'FAILED', label: '失败' },
 ];
 
-const recognitionStageLabels: Record<string, string> = {
-  QUEUED: '等待解析任务',
-  LOADING_SOURCE: '正在读取源文件',
-  PARSING_STRUCTURE: '正在分析文件结构',
-  MATCHING_TEMPLATE: '正在匹配生产单模板',
-  WAITING_TEMPLATE: '等待选择模板',
-  EXTRACTING_VALUES: '正在提取字段',
-  RECOGNIZING_IMAGE_VALUES: '正在识别图片字段',
-  BUILDING_PREVIEW: '正在生成预览',
-  REVIEW_REQUIRED: '解析完成',
-  COMPLETED: '解析完成',
-  FAILED: '解析失败',
-};
-
 function visibilityText(value: ProductionUploadVisibility) {
   return visibilityOptions.find((item) => item.value === value)?.label
     || legacyVisibilityLabels[value] || '全员可见';
 }
 
 function recognitionStageText(upload: ProductionUpload) {
-  const stage = upload.currentStage ? recognitionStageLabels[upload.currentStage] : undefined;
+  const stage = upload.currentStage
+    ? PRODUCTION_RECOGNITION_STAGE_LABELS[upload.currentStage]
+    : undefined;
   if (stage) return stage;
   if (upload.status === 'FAILED') return '解析失败';
   if (['REVIEW_REQUIRED', 'SAVED', 'PUBLISHED'].includes(upload.status)) return '解析完成';
@@ -173,7 +163,12 @@ export function ProductionOrderUploadPage() {
   const canDelete = usePermission('production.delete');
   const [files, setFiles] = useState<UploadFile[]>([]);
   const [projectRelations, setProjectRelations] = useState<ProjectRelationTarget[]>([]);
-  const [saveLocation, setSaveLocation] = useState('PRODUCTION_ORDER');
+  // Recognition only consumes XLSX templates: their mapping locators are the
+  // cells the recognized values are written into, which is what also turns an
+  // image or Word production order into an Excel workbook.
+  const [templates, setTemplates] = useState<TemplateListItem[]>([]);
+  const [templatesLoading, setTemplatesLoading] = useState(true);
+  const [templateVersionId, setTemplateVersionId] = useState<string>();
   const [visibility, setVisibility] = useState<ProductionUploadVisibility>('ALL');
   const [uploads, setUploads] = useState<ProductionUpload[]>([]);
   const [keyword, setKeyword] = useState('');
@@ -212,8 +207,18 @@ export function ProductionOrderUploadPage() {
     void loadUploads();
   }, [loadUploads]);
 
+  useEffect(() => {
+    void templateApi
+      .list({ status: 'PUBLISHED', page: 1, size: 100 })
+      .then((result) => setTemplates(result.items.filter((item) => item.format === 'XLSX')))
+      .catch((error) =>
+        void message.error(error instanceof Error ? error.message : '识别模板加载失败'),
+      )
+      .finally(() => setTemplatesLoading(false));
+  }, [message]);
+
   const validateFile: UploadProps['beforeUpload'] = (file) => {
-    if (!/\.(xlsx|docx|png|jpe?g|gif|webp|bmp|tiff?)$/i.test(file.name) || file.size === 0) {
+    if (!/\.(xlsx?|docx?|png|jpe?g|gif|webp|bmp|tiff?)$/i.test(file.name) || file.size === 0) {
       void message.error('生产单支持 XLSX、DOCX 或图片文件，且文件不能为空');
       return Upload.LIST_IGNORE;
     }
@@ -245,6 +250,13 @@ export function ProductionOrderUploadPage() {
   }, [loadUploads, uploads]);
 
   const submit = async () => {
+    // Recognition always runs against a template: it supplies the field list the
+    // extractor writes into, and it is what turns an image or Word production
+    // order into an editable Excel record.
+    if (!templateVersionId) {
+      void message.warning('请先选择识别模板');
+      return;
+    }
     const sourceFiles = files.flatMap((item) => (item.originFileObj ? [item.originFileObj] : []));
     if (!sourceFiles.length) {
       void message.warning('请先选择生产单文件');
@@ -259,7 +271,8 @@ export function ProductionOrderUploadPage() {
         const metadata = await readProductionMetadata(file);
         await productionUploadApi.create({
           fileId: staged.fileId,
-          sourceType: /\.xlsx$/i.test(file.name) ? 'XLSX' : 'PHOTO',
+          sourceType: /\.xlsx?$/i.test(file.name) ? 'XLSX' : 'PHOTO',
+          templateVersionId,
           ...metadata,
           ...relation,
           visibility,
@@ -329,7 +342,7 @@ export function ProductionOrderUploadPage() {
       [upload.productionName, upload.orderNo, upload.productName, upload.category]
         .filter(Boolean)
         .join(' · ') || '生产单文件',
-    detail: `保存位置：生产单 · 关联项目：${[upload.projectName, upload.stageName, upload.taskName].filter(Boolean).join(' · ') || '未关联项目'} · ${visibilityText(upload.visibility)} · ${recognitionStageText(upload)} · 已完成 ${['REVIEW_REQUIRED', 'SAVED', 'PUBLISHED'].includes(upload.status) ? 100 : (upload.recognitionProgress ?? 0)}%${upload.failureMessage ? ` · 失败原因：${upload.failureMessage}` : ''}`,
+    detail: `关联项目：${[upload.projectName, upload.stageName, upload.taskName].filter(Boolean).join(' · ') || '未关联项目'} · ${visibilityText(upload.visibility)} · ${recognitionStageText(upload)} · 已完成 ${['REVIEW_REQUIRED', 'SAVED', 'PUBLISHED'].includes(upload.status) ? 100 : (upload.recognitionProgress ?? 0)}%${upload.failureMessage ? ` · 失败原因：${upload.failureMessage}` : ''}`,
     status:
       upload.status === 'FAILED'
         ? { label: '识别失败', color: 'error' }
@@ -355,7 +368,7 @@ export function ProductionOrderUploadPage() {
           disabled={!isViewableUpload(upload)}
           onClick={() => navigate(`/production-orders/uploads/${upload.id}/workspace`)}
         >
-          查看
+          {/\.xlsx?$/i.test(upload.originalName) ? '确认字段' : '查看'}
         </Button>
         <Button
           type="link"
@@ -412,11 +425,28 @@ export function ProductionOrderUploadPage() {
         leftTitle="上传设置"
         classification={
           <Form layout="vertical" component={false}>
-            <Form.Item label="保存位置" required>
+            <Form.Item
+              label="识别模板"
+              required
+              validateStatus={templates.length === 0 && !templatesLoading ? 'error' : undefined}
+              help={
+                templates.length === 0 && !templatesLoading
+                  ? '暂无已发布的 Excel 模板，请先在模板中心发布生产单模板'
+                  : undefined
+              }
+            >
               <Select
-                value={saveLocation}
-                onChange={setSaveLocation}
-                options={saveLocationOptions}
+                showSearch
+                optionFilterProp="label"
+                loading={templatesLoading}
+                value={templateVersionId}
+                onChange={setTemplateVersionId}
+                options={templates.map((item) => ({
+                  value: item.versionId,
+                  label: `${item.name} · ${item.templateCode} · V${item.versionNo}`,
+                }))}
+                placeholder="请选择已发布的 Excel 生产单模板"
+                notFoundContent="暂无已发布的 Excel 模板"
               />
             </Form.Item>
             <Form.Item label="关联项目 / 阶段 / 任务">
@@ -431,7 +461,7 @@ export function ProductionOrderUploadPage() {
             </Form.Item>
           </Form>
         }
-        accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.png,.jpg,.jpeg,.gif,.webp,.bmp,.tif,.tiff"
+        accept=".doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.gif,.webp,.bmp,.tif,.tiff"
         uploadDisabled={!canCreate}
         beforeUpload={validateFile}
         multiple
@@ -442,12 +472,12 @@ export function ProductionOrderUploadPage() {
         }
         onClearFiles={() => setFiles([])}
         uploadMainText="拖拽文件到此处/点击选择文件/点击拍照上传"
-        uploadHint="支持 PDF / Office / CSV / 图片，可批量上传，单个文件最大100M。"
+        uploadHint="支持 XLSX / DOCX / 图片，可批量上传，单个文件最大100M。"
         submitLabel="开始上传"
         submitIcon={<CloudUploadOutlined />}
         onSubmit={() => void submit()}
         submitting={uploading}
-        submitDisabled={!canCreate}
+        submitDisabled={!canCreate || !templateVersionId}
         fileRequired={false}
         rightTitle="已上传文件"
         rightCount={page.total}

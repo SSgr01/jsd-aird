@@ -47,6 +47,8 @@ public interface ExperimentRepository {
     List<Summary> search(UUID organizationId, Search search);
     long count(UUID organizationId, Search search);
     Optional<Detail> detail(UUID organizationId, UUID id);
+    /** Loads an active experiment while serializing against a concurrent delete/edit. */
+    Optional<Detail> detailForUpdate(UUID organizationId, UUID id);
     List<SourceReference> sourceReferences(UUID organizationId, UUID experimentId);
     List<CompletedFactsRow> completedFacts(UUID organizationId, CompletedFactsSearch search);
     long countCompletedFacts(UUID organizationId, CompletedFactsSearch search);

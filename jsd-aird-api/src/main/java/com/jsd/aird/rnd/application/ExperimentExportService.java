@@ -54,8 +54,10 @@ public class ExperimentExportService {
         var actor = ActorContext.required();
         var detail = repository.detail(actor.organizationId(), id)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "实验不存在"));
+        var snapshot = currentSnapshot(detail);
         var format = detail.editModel().path("documentFormat").asText("");
-        if ("word".equalsIgnoreCase(format) || isDocumentSnapshot(currentSnapshot(detail))) {
+        if (!isWorkbookSnapshot(snapshot)
+                && ("word".equalsIgnoreCase(format) || isDocumentSnapshot(snapshot))) {
             return exportWord(detail, actor.organizationId());
         }
         return exportWorkbook(detail, actor.organizationId());
@@ -104,6 +106,10 @@ public class ExperimentExportService {
     private boolean isDocumentSnapshot(JsonNode snapshot) {
         return snapshot != null && snapshot.isObject()
                 && (snapshot.has("body") || snapshot.has("documentStyle") || snapshot.has("editorMode"));
+    }
+
+    private boolean isWorkbookSnapshot(JsonNode snapshot) {
+        return snapshot != null && snapshot.isObject() && snapshot.path("sheets").isObject();
     }
 
     private UUID wordFileId(JsonNode wordDocument) {

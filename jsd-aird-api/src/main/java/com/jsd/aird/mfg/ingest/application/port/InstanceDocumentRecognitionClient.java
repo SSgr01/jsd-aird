@@ -11,6 +11,9 @@ public interface InstanceDocumentRecognitionClient {
 
     Result recognize(JsonNode schema, JsonNode mapping, List<ImageSource> images);
 
+    /** Extract template values from MinerU OCR blocks without sending the source image to the model. */
+    Result recognizeText(JsonNode schema, JsonNode mapping, String recognizedText);
+
     record ImageSource(String contentType, byte[] content) {
     }
 

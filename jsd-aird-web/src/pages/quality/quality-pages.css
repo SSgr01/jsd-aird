@@ -3,6 +3,262 @@
   background: linear-gradient(135deg, #f2f6ff, #f4fbf9);
   min-height: calc(100dvh - 56px);
 }
+
+/* The quality data list uses the same light catalog surface as the
+   electronic experiment list. Keep the data-specific markup, but align its
+   page shell, filters, cards, and table to that visual baseline. */
+.quality-page.pm-unified-list-page {
+  min-height: auto;
+  padding: 0;
+  background: var(--app-background);
+  color: var(--app-text);
+}
+
+.quality-page.pm-unified-list-page .quality-tabs {
+  margin: 0;
+  padding: 4px;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-card);
+  background: var(--app-surface);
+  box-shadow: var(--app-shadow);
+}
+
+.quality-page.pm-unified-list-page .quality-tab {
+  height: 32px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-size-label);
+  font-weight: 500;
+}
+
+.quality-page.pm-unified-list-page .quality-tab:hover {
+  color: var(--app-primary);
+  background: var(--app-primary-soft);
+}
+
+.quality-page.pm-unified-list-page .quality-tab.active {
+  border: 0;
+  background: var(--app-primary-soft);
+  color: var(--app-primary);
+  box-shadow: inset 0 0 0 1px rgb(49 92 246 / 8%);
+}
+
+.quality-page.pm-unified-list-page .quality-filter-card {
+  margin: 0;
+  border-color: var(--app-border);
+  border-radius: var(--app-radius-card);
+  background: var(--app-surface);
+  box-shadow: var(--app-shadow);
+}
+
+.quality-page.pm-unified-list-page .quality-filter-card .ant-card-body {
+  padding: 14px;
+}
+
+.quality-page.pm-unified-list-page .quality-filter-space {
+  display: flex;
+  min-width: 0;
+  width: 100%;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.quality-page.pm-unified-list-page .quality-filter-space .ant-space-item {
+  min-width: 0;
+}
+
+.quality-page.pm-unified-list-page .quality-filter-space .ant-space-item:first-child {
+  width: 320px;
+  min-width: 260px;
+  max-width: 420px;
+  flex: 2 1 320px;
+}
+
+.quality-page.pm-unified-list-page .quality-filter-space .ant-space-item:first-child .ant-input {
+  width: 100% !important;
+}
+
+.quality-page.pm-unified-list-page .quality-filter-space .ant-space-item:first-child .ant-input-affix-wrapper {
+  width: 100% !important;
+}
+
+.quality-page.pm-unified-list-page .quality-filter-space .ant-space-item:not(:first-child):not(:last-child) {
+  width: 130px;
+  min-width: 118px;
+  flex: 0 1 150px;
+}
+
+.quality-page.pm-unified-list-page .quality-filter-space .ant-space-item:nth-child(2) {
+  width: 180px;
+  min-width: 150px;
+  flex: 0 1 180px;
+}
+
+.quality-page.pm-unified-list-page .quality-filter-space .ant-space-item:not(:first-child):not(:last-child) .ant-select {
+  width: 100% !important;
+}
+
+.quality-page.pm-unified-list-page .quality-filter-space .ant-input,
+.quality-page.pm-unified-list-page .quality-filter-space .ant-input-affix-wrapper,
+.quality-page.pm-unified-list-page .quality-filter-space .ant-select,
+.quality-page.pm-unified-list-page .quality-filter-space > .ant-space-item:last-child .ant-btn {
+  box-sizing: border-box;
+  min-height: 36px;
+  height: 36px;
+}
+
+.quality-page.pm-unified-list-page .quality-filter-space .ant-select-selector {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  box-sizing: border-box;
+}
+
+.quality-page.pm-unified-list-page .quality-filter-space > .ant-space-item:last-child {
+  flex: 0 0 auto;
+}
+
+.quality-page.pm-unified-list-page .quality-filter-space > .ant-space-item:last-child .ant-btn {
+  min-width: 88px;
+}
+
+.quality-page.pm-unified-list-page .quality-record-list-card {
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-card);
+  background: var(--app-surface);
+  box-shadow: var(--app-shadow);
+}
+
+.quality-page.pm-unified-list-page .quality-record-list-card .ant-card-body {
+  padding: 0 !important;
+}
+
+.quality-page.pm-unified-list-page .quality-record-card-view {
+  padding: 16px;
+  background: var(--app-surface);
+}
+
+.quality-page.pm-unified-list-page .quality-record-card-grid {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.quality-page.pm-unified-list-page .quality-record-card {
+  padding: 16px;
+  border-color: var(--app-border);
+  border-radius: var(--app-radius-card);
+  background: var(--app-surface-elevated);
+  box-shadow: var(--app-shadow);
+  transition: box-shadow 200ms ease, transform 200ms ease, border-color 200ms ease;
+}
+
+.quality-page.pm-unified-list-page .quality-record-card:hover {
+  border-color: color-mix(in srgb, var(--app-primary) 48%, var(--app-border));
+  box-shadow: var(--app-shadow-hover);
+  transform: translateY(-1px);
+}
+
+.quality-page.pm-unified-list-page .quality-record-card.is-selected {
+  border-color: var(--app-primary);
+  background: linear-gradient(135deg, #f7f9ff, var(--app-primary-soft));
+  box-shadow: inset 0 0 0 1px rgb(49 92 246 / 8%), var(--app-shadow);
+}
+
+.quality-page.pm-unified-list-page .quality-record-card-meta {
+  border-top-color: var(--app-border);
+  color: var(--app-text-secondary);
+}
+
+.quality-page.pm-unified-list-page .quality-record-card-actions {
+  border-top-color: var(--app-border);
+}
+
+.quality-page.pm-unified-list-page .quality-grid-wrap {
+  min-height: 360px;
+  background: var(--app-surface);
+}
+
+.quality-page.pm-unified-list-page .quality-grid {
+  min-width: 1050px;
+  border-collapse: separate;
+  border-spacing: 0;
+  color: var(--app-text);
+  font-size: var(--app-font-size-label);
+}
+
+.quality-page.pm-unified-list-page .quality-grid th {
+  padding: 13px 16px;
+  background: var(--app-surface-subtle);
+  border-bottom: 1px solid var(--app-border);
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-size-caption);
+  font-weight: 650;
+}
+
+.quality-page.pm-unified-list-page .quality-grid td {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--app-border);
+  color: var(--app-text);
+  font-size: var(--app-font-size-label);
+  line-height: 1.55;
+}
+
+.quality-page.pm-unified-list-page .quality-grid tbody tr:hover td {
+  background: color-mix(in srgb, var(--app-primary) 3%, var(--app-surface));
+}
+
+.quality-page.pm-unified-list-page .quality-footer {
+  padding: 14px 16px;
+  border-top: 1px solid var(--app-border);
+  color: var(--app-text-secondary);
+}
+
+@media (max-width: 1200px) {
+  .quality-page.pm-unified-list-page .quality-record-card-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 980px) {
+  .quality-page.pm-unified-list-page .quality-record-card-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .quality-page.pm-unified-list-page .quality-record-card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 700px) {
+  .quality-page.pm-unified-list-page .quality-filter-space .ant-space-item:first-child,
+  .quality-page.pm-unified-list-page .quality-filter-space .ant-space-item:not(:first-child):not(:last-child) {
+    width: 100%;
+    min-width: 0;
+    flex-basis: 100%;
+  }
+}
+
+@media (max-width: 900px) {
+  .quality-page.pm-unified-list-page .quality-filter-space .ant-space-item:first-child {
+    width: auto;
+    min-width: 200px;
+    max-width: none;
+    flex: 1 1 220px;
+  }
+}
+
+@media (max-width: 600px) {
+  .quality-page.pm-unified-list-page .quality-record-card-grid {
+    grid-template-columns: 1fr;
+  }
+}
 .quality-upload-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -766,6 +1022,25 @@
   height: 100%;
   min-height: 0;
 }
+/* Word 生产单用 Univer Docs 编辑。它的编辑面是绝对定位铺满的，需要一个定位
+   容器把编辑区限制在画布盒内，否则会盖住上方的标题行。 */
+.production-word-canvas {
+  position: relative;
+  height: min(72vh, 760px);
+  min-height: 520px;
+  border: 1px solid #dbe5f4;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fff;
+}
+.production-word-canvas .univer-editor-surface {
+  position: absolute;
+  inset: 0;
+}
+.quality-excel-workspace .production-word-canvas {
+  height: 100%;
+  min-height: 520px;
+}
 .quality-excel-loading {
   height: 100%;
   display: grid;
@@ -775,8 +1050,37 @@
   min-height: 0;
 }
 .production-upload-workspace .workspace-main-stage {
-  gap: 16px;
+  /* Keep the recognition strip flush with the editor, matching the template
+     workspace reference; business tabs add their own page padding below. */
+  gap: 0;
   overflow: auto;
+}
+.production-upload-workspace .production-workspace-content {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.production-upload-workspace .production-workspace-content > .workspace-canvas {
+  flex: 1;
+  min-width: 0;
+}
+.production-upload-workspace .production-review-grid {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+}
+.production-upload-workspace .production-review-grid > .workspace-canvas {
+  min-width: 0;
+}
+@media (max-width: 900px) {
+  .production-upload-workspace .production-review-grid {
+    display: flex;
+    flex-direction: column;
+    overflow: auto;
+  }
+  .production-upload-workspace .production-review-grid > .business-field-panel {
+    min-height: 420px;
+  }
 }
 .production-upload-workspace > .production-mobile-actions {
   display: none;

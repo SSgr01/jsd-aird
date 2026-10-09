@@ -721,14 +721,20 @@ public final class PhysicalStructureFieldCompiler {
     }
 
     private int firstColumnRecord(JsonNode facts, String sheetId, int[] header, int[] data) {
+        // The attribute (label) band of a COLUMN_TABLE sits on the left, and every
+        // column after it repeats one record. A merged group title above the record
+        // area - for example C1:G1 "pu-349 拼 pu-57/H:826的测试" spanning the sample
+        // columns - is not an attribute label, so the boundary must never be derived
+        // from it. The per-record title run (1#, 2#, 3# ...) is the only decisive
+        // signal for where the record band begins.
+        var titleStart = perColumnTitleStart(facts, sheetId, header, data);
+        if (titleStart > data[0] && titleStart < data[2]) {
+            return Math.max(verticalLabelEnd(facts, sheetId, data) + 1, titleStart);
+        }
+        var mergedLabel = mergedLeftLabelEnd(facts, sheetId, header, data);
         // A merged left identity label (for example A4:B4) gives an exact
         // record-column split even when every sample title is already filled.
-        for (var cell : cells(facts, sheetId)) {
-            var b = bounds(cellRange(cell));
-            if (b == null || b[0] != data[0] || b[1] != header[1] || b[3] != header[3]
-                    || b[2] <= b[0] || b[2] >= data[2] - 1 || cellText(cell).isBlank()) continue;
-            return b[2] + 1;
-        }
+        if (mergedLabel > data[0]) return mergedLabel + 1;
         var labelEnd = data[0] - 1;
         for (var cell : cells(facts, sheetId)) {
             var b = bounds(cellRange(cell));
@@ -737,6 +743,70 @@ public final class PhysicalStructureFieldCompiler {
             labelEnd = Math.max(labelEnd, b[2]);
         }
         return Math.max(data[0] + 1, Math.min(data[2] - 1, labelEnd + 1));
+    }
+
+    /**
+     * Last column of the left hierarchy band, derived from its row-spanning label
+     * merges (a vertically merged group name is always an attribute label, never a
+     * repeated record).
+     */
+    private int verticalLabelEnd(JsonNode facts, String sheetId, int[] data) {
+        var labelEnd = data[0] - 1;
+        for (var cell : cells(facts, sheetId)) {
+            var b = bounds(cellRange(cell));
+            if (b == null || b[3] <= b[1] || b[0] < data[0] || b[2] >= data[2]
+                    || b[1] < data[1] || b[3] > data[3]) continue;
+            if (cellText(cell).isBlank() || isFormulaCell(cell)) continue;
+            labelEnd = Math.max(labelEnd, b[2]);
+        }
+        return labelEnd;
+    }
+
+    /**
+     * First column of the identity band's per-record title run, or -1 when no row
+     * carries such titles. A qualifying run is the trailing group of at least two
+     * adjacent single-column labels; merged group titles and the label columns
+     * themselves never qualify because they do not start at their own column.
+     */
+    private int perColumnTitleStart(JsonNode facts, String sheetId, int[] header, int[] data) {
+        var lastRow = Math.min(data[3], Math.max(header[3], data[1]) + 1);
+        for (int row = header[1]; row <= lastRow; row++) {
+            var lastTitle = -1;
+            for (int column = data[0]; column <= data[2]; column++) {
+                if (isSingleColumnLabel(facts, sheetId, column, row)) lastTitle = column;
+            }
+            if (lastTitle < 0) continue;
+            var runStart = -1;
+            var runLength = 0;
+            for (int column = data[0]; column <= lastTitle; column++) {
+                if (isSingleColumnLabel(facts, sheetId, column, row)) {
+                    if (runStart < 0) runStart = column;
+                    runLength++;
+                } else {
+                    runStart = -1;
+                    runLength = 0;
+                }
+            }
+            if (runLength >= 2 && runStart + runLength - 1 == lastTitle) return runStart;
+        }
+        return -1;
+    }
+
+    private boolean isSingleColumnLabel(JsonNode facts, String sheetId, int column, int row) {
+        var cell = findCell(facts, sheetId, column, row);
+        if (cell == null || cellText(cell).isBlank() || isFormulaCell(cell)) return false;
+        var b = bounds(cellRange(cell));
+        return b != null && b[0] == column && b[2] == column;
+    }
+
+    private int mergedLeftLabelEnd(JsonNode facts, String sheetId, int[] header, int[] data) {
+        for (var cell : cells(facts, sheetId)) {
+            var b = bounds(cellRange(cell));
+            if (b == null || b[0] != data[0] || b[1] != header[1] || b[3] != header[3]
+                    || b[2] <= b[0] || b[2] >= data[2] - 1 || cellText(cell).isBlank()) continue;
+            return b[2];
+        }
+        return -1;
     }
 
     private boolean hasRecordSurface(JsonNode facts, String sheetId, int startColumn, int endColumn, int row) {

@@ -1618,6 +1618,16 @@ public class DocxStructureParser implements OfficeStructureParser, WordDocumentP
         }
 
         private void appendTable(Element table) {
+            // Univer Docs currently drops table tokens nested inside another
+            // table cell, which silently hides the whole sub-table (for
+            // example the 实验配方 grid of an experiment record). Defer the
+            // editable copy of every nested table and emit it as a top-level
+            // table right after its outer table; documentIR keeps the real
+            // Word nesting (see tableBlock).
+            if (tableDepth > 0) {
+                deferredNestedTables.add(table);
+                return;
+            }
             tableDepth++;
             if (stream.length() > 0 && stream.charAt(stream.length() - 1) != '\r') {
                 paragraphs.add(objectMapper.createObjectNode().put("startIndex", stream.length()).put("paragraphIndex", 0));

@@ -27,6 +27,7 @@ interface Props {
   selectedRecognitionItemId?: string;
   selectedQualityIssueId?: string;
   busy?: boolean;
+  allowIgnore?: boolean;
   onSelect: (item: RecognitionReviewItem) => void;
   onConfirm: (item: RecognitionReviewItem, selectedAlternativeId?: string) => void;
   onModify: (item: RecognitionReviewItem) => void;
@@ -53,6 +54,7 @@ export function RecognitionReviewPanel({
   selectedRecognitionItemId,
   selectedQualityIssueId,
   busy,
+  allowIgnore = true,
   onSelect,
   onConfirm,
   onModify,
@@ -318,6 +320,7 @@ export function RecognitionReviewPanel({
             onModify={onModify}
             onIgnore={onIgnore}
             onRestore={onRestore}
+            allowIgnore={allowIgnore}
           />
         ) : items.map((item) => {
           const selected = item.id === selectedRecognitionItemId;
@@ -524,7 +527,7 @@ export function RecognitionReviewPanel({
                         >
                           修改
                         </Button>
-                        <Popconfirm
+                        {allowIgnore && <Popconfirm
                           title={`忽略“${item.fieldName}”？`}
                           description="只移除字段定义，不会删除 Excel 中的原内容。"
                           okText="忽略"
@@ -541,7 +544,7 @@ export function RecognitionReviewPanel({
                           >
                             忽略
                           </Button>
-                        </Popconfirm>
+                        </Popconfirm>}
                       </>
                     )}
                   </div>
@@ -598,6 +601,7 @@ function RecognitionRegionTree({
   onModify,
   onIgnore,
   onRestore,
+  allowIgnore,
 }: {
   regions: RecognitionRegionNode[];
   review: RecognitionReview;
@@ -611,6 +615,7 @@ function RecognitionRegionTree({
   onModify: (item: RecognitionReviewItem) => void;
   onIgnore: (item: RecognitionReviewItem) => void;
   onRestore: (item: RecognitionReviewItem) => void;
+  allowIgnore: boolean;
 }) {
   if (!regions.length) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有符合条件的区域" />;
   return (
@@ -715,6 +720,7 @@ function RecognitionRegionTree({
                     onModify={onModify}
                     onIgnore={onIgnore}
                     onRestore={onRestore}
+                    allowIgnore={allowIgnore}
                   />
                 ))}
               </div>
@@ -736,6 +742,7 @@ function RegionFieldCard({
   onModify,
   onIgnore,
   onRestore,
+  allowIgnore,
 }: {
   field: RecognitionRegionNode['fields'][number];
   selected: boolean;
@@ -746,6 +753,7 @@ function RegionFieldCard({
   onModify: (item: RecognitionReviewItem) => void;
   onIgnore: (item: RecognitionReviewItem) => void;
   onRestore: (item: RecognitionReviewItem) => void;
+  allowIgnore: boolean;
 }) {
   const attributes = field.attributes ?? field.payload;
   const reviewRequired = field.status !== 'CONFIRMED'
@@ -776,9 +784,9 @@ function RegionFieldCard({
               <>
                 {field.status !== 'CONFIRMED' && <Button size="small" type="primary" icon={<CheckOutlined />} disabled={!editable || busy || (Boolean(field.payload.standardRequired) && Boolean(field.payload.requiresStandardConfirmation))} onClick={() => onConfirm(field)}>确认</Button>}
                 <Button size="small" icon={<EditOutlined />} disabled={!editable || busy} onClick={() => onModify(field)}>修改</Button>
-                <Popconfirm title={`忽略“${field.fieldName || '该字段'}”？`} okText="忽略" cancelText="取消" onConfirm={() => onIgnore(field)}>
+                {allowIgnore && <Popconfirm title={`忽略“${field.fieldName || '该字段'}”？`} okText="忽略" cancelText="取消" onConfirm={() => onIgnore(field)}>
                   <Button size="small" danger type="text" icon={<EyeInvisibleOutlined />} disabled={!editable || busy}>忽略</Button>
-                </Popconfirm>
+                </Popconfirm>}
               </>
             )}
           </div>

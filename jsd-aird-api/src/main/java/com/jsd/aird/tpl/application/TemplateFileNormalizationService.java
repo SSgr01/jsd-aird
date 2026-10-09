@@ -80,7 +80,7 @@ public class TemplateFileNormalizationService implements com.jsd.aird.tpl.api.Te
         this(storage, "soffice", Duration.ofSeconds(90));
     }
 
-    public Result normalize(String originalName, String contentType, byte[] source) {
+    public Result normalize(String originalName, String contentType, byte[] source, boolean lenientPreview) {
         String name = originalName == null || originalName.isBlank() ? "template.bin" : originalName;
         String extension = extension(name);
         return switch (extension) {
@@ -88,7 +88,7 @@ public class TemplateFileNormalizationService implements com.jsd.aird.tpl.api.Te
             case "docx" -> passthrough(name, contentType, source, "DOCX");
             case "xls" -> convertWorkbook(name, source, "XLS");
             case "csv" -> convertCsv(name, source);
-            case "doc" -> convertDoc(name, source);
+            case "doc" -> convertDoc(name, source, lenientPreview);
             default -> throw new ApiException(ApiErrorCode.BAD_REQUEST,
                     "模板中心仅支持 XLSX、DOCX、XLS、CSV 或 DOC 文件");
         };
@@ -96,7 +96,15 @@ public class TemplateFileNormalizationService implements com.jsd.aird.tpl.api.Te
 
     @Override
     public NormalizedOfficeFile normalizeOfficeFile(String originalName, String contentType, byte[] source) {
-        var result = normalize(originalName, contentType, source);
+        var result = normalize(originalName, contentType, source, false);
+        return new NormalizedOfficeFile(result.originalName(), result.normalizedName(), result.normalizedContentType(),
+                result.originalFormat(), result.normalizedFormat(), result.normalizedBytes(),
+                result.normalizationStatus(), result.normalizationMessage());
+    }
+
+    @Override
+    public NormalizedOfficeFile normalizeOfficeFileForPreview(String originalName, String contentType, byte[] source) {
+        var result = normalize(originalName, contentType, source, true);
         return new NormalizedOfficeFile(result.originalName(), result.normalizedName(), result.normalizedContentType(),
                 result.originalFormat(), result.normalizedFormat(), result.normalizedBytes(),
                 result.normalizationStatus(), result.normalizationMessage());
@@ -307,7 +315,7 @@ public class TemplateFileNormalizationService implements com.jsd.aird.tpl.api.Te
         }
     }
 
-    private Result convertDoc(String name, byte[] bytes) {
+    private Result convertDoc(String name, byte[] bytes, boolean lenientPreview) {
         validateMagic("DOC", bytes);
         LegacyDocFacts sourceFacts = legacyDocFacts(bytes);
         Path workDirectory = null;
@@ -348,7 +356,17 @@ public class TemplateFileNormalizationService implements com.jsd.aird.tpl.api.Te
 
             byte[] normalized = Files.readAllBytes(outputFile);
             validateMagic("DOCX", normalized);
-            validateDocConversion(sourceFacts, normalized);
+            try {
+                validateDocConversion(sourceFacts, normalized);
+            } catch (ApiException exception) {
+                if (!lenientPreview) throw exception;
+                // Upload preview only needs a faithful-enough rendering: accept
+                // the converted copy instead of leaving the record unviewable.
+                return new Result(name, replaceExtension(name, "docx"), DOCX_MIME,
+                        "DOC", "DOCX", normalized, "DEGRADED",
+                        "已转换 DOCX，但高保真校验未完全通过（" + exception.getMessage()
+                                + "），预览内容可能与原件存在差异");
+            }
             return new Result(name, replaceExtension(name, "docx"), DOCX_MIME,
                     "DOC", "DOCX", normalized, "NORMALIZED", "已通过 LibreOffice 转换为标准 DOCX 工作区");
         } catch (ApiException exception) {

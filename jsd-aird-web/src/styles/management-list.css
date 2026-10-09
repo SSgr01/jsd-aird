@@ -38,6 +38,39 @@
   min-width: 0;
 }
 
+.pm-unified-list-page .pm-page-actions {
+  display: flex;
+  min-width: max-content;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-left: auto;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+
+.pm-unified-list-page .pm-page-actions > * {
+  flex: 0 0 auto;
+}
+
+.pm-unified-list-page .pm-page-actions .ant-space-compact {
+  display: inline-flex;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.pm-unified-list-page .pm-view-btn.active {
+  color: #1677ff;
+  background: #e6f4ff;
+  border-color: #1677ff;
+}
+
+.pm-unified-list-page .page-heading > .pm-page-actions,
+.pm-unified-list-page .inventory-heading > .pm-page-actions {
+  min-width: max-content;
+}
+
 .pm-unified-list-page .page-heading h1,
 .pm-unified-list-page .page-heading h2,
 .pm-unified-list-page .research-test-head h3,
@@ -501,6 +534,20 @@
   .pm-unified-list-page .inventory-heading > .ant-space {
     width: 100%;
     justify-content: flex-start;
+  }
+
+  .pm-unified-list-page .pm-page-actions {
+    width: 100%;
+    min-width: 0;
+    margin-left: 0;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    white-space: normal;
+  }
+
+  .pm-unified-list-page .page-heading > .pm-page-actions,
+  .pm-unified-list-page .inventory-heading > .pm-page-actions {
+    min-width: 0;
   }
 
   .pm-unified-list-page .research-test-filter .ant-space,

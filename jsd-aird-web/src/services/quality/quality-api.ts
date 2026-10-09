@@ -134,6 +134,7 @@ export const qualityApi = {
     type: QualityTypeId;
     categoryId?: string;
     keyword?: string;
+    projectId?: string;
     page: number;
     size: number;
   }) =>

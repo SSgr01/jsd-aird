@@ -2,7 +2,6 @@ import {
   App,
   Checkbox,
   Button,
-  Breadcrumb,
   Card,
   DatePicker,
   Form,
@@ -44,6 +43,7 @@ import {
   type ResearchTestSummary,
   type ResearchTestType,
 } from '@/services/research-test/research-test-api';
+import '@/components/project-relations/project-relation-picker.css';
 import {
   getProjectStages,
   getProjects,
@@ -713,90 +713,18 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
   );
   return (
     <section className="research-test-page pm-unified-list-page">
-      <header className="research-test-head research-test-page-intro">
+      <header className="page-heading">
         <div>
-          <Breadcrumb
-            items={[{ title: '研发测试中心' }, { title: report ? '综合测试报告' : '测试标准方法' }]}
-          />
-          <Typography.Title level={3}>{report ? '综合测试报告' : '测试标准方法'}</Typography.Title>
+          <Typography.Title level={2}>{report ? '综合测试报告' : '测试标准方法'}</Typography.Title>
           <Typography.Text type="secondary">统一管理测试文档、发布版本与审核同步。</Typography.Text>
         </div>
-      </header>
-      <Card className="research-test-filter">
-        <Space wrap>
-          <Input.Search
-            allowClear
-            placeholder={report ? '搜索报告编号／名称' : '搜索标准编号／名称'}
-            style={{ width: 320 }}
-            onSearch={(v) => {
-              setKeyword(v);
-              setPage(1);
-            }}
-          />
-          <Select<string>
-            allowClear
-            placeholder={report ? '全部项目' : '全部标准类别'}
-            style={{ width: 180 }}
-            options={
-              report
-                ? Array.from(
-                    new Map(
-                      rows
-                        .filter((x) => x.projectId && x.projectName)
-                        .map((x) => [x.projectId as string, x.projectName as string]),
-                    ),
-                  ).map(([value, label]) => ({ value, label }))
-                : standardCategories.map((v) => ({ value: v, label: v }))
-            }
-            onChange={(v) => {
-              if (report) setProjectId(v);
-              else setCategory(v);
-              setPage(1);
-            }}
-          />
-          <Select<string>
-            allowClear
-            placeholder="全部使用状态"
-            style={{ width: 160 }}
-            options={Object.entries(statusText).map(([value, label]) => ({ value, label }))}
-            onChange={(v) => {
-              setStatus(v);
-              setPage(1);
-            }}
-          />
-          <DatePicker
-            value={date}
-            onChange={(v) => {
-              setDate(v);
-              setPage(1);
-            }}
-          />
-          <Button
-            className="pm-filter-reset"
-            icon={<ReloadOutlined />}
-            onClick={() => {
-              setKeyword('');
-              setProjectId(undefined);
-              setCategory(undefined);
-              setStatus(undefined);
-              setDate(undefined);
-              setPage(1);
-            }}
-          >
-            重置
-          </Button>
-        </Space>
-      </Card>
-      <div className="research-test-batch-row pm-batch-row">
-        <div className="pm-batch-summary">
+        <div className="pm-page-actions">
           <span className="pm-selected">已选 {selected.length} 项</span>
           {selected.length > 0 && (
             <Button type="link" size="small" onClick={() => setSelected([])}>
               清除已选
             </Button>
           )}
-        </div>
-        <div className="pm-batch-actions">
           <Button
             icon={<CopyOutlined />}
             disabled={!selected.length}
@@ -853,7 +781,76 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
             </Tooltip>
           </Space.Compact>
         </div>
-      </div>
+      </header>
+      <Card className="research-test-filter">
+        <Space wrap>
+          <Input.Search
+            allowClear
+            placeholder={report ? '搜索报告编号／名称' : '搜索标准编号／名称'}
+            style={{ width: 320 }}
+            onSearch={(v) => {
+              setKeyword(v);
+              setPage(1);
+            }}
+          />
+          <Select<string>
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            placeholder={report ? '全部项目' : '全部标准类别'}
+            style={{ width: 180 }}
+            popupMatchSelectWidth={false}
+            classNames={{ popup: { root: 'project-relation-picker-dropdown' } }}
+            options={
+              report
+                ? Array.from(
+                    new Map(
+                      rows
+                        .filter((x) => x.projectId && x.projectName)
+                        .map((x) => [x.projectId as string, x.projectName as string]),
+                    ),
+                  ).map(([value, label]) => ({ value, label }))
+                : standardCategories.map((v) => ({ value: v, label: v }))
+            }
+            onChange={(v) => {
+              if (report) setProjectId(v);
+              else setCategory(v);
+              setPage(1);
+            }}
+          />
+          <Select<string>
+            allowClear
+            placeholder="全部使用状态"
+            style={{ width: 160 }}
+            options={Object.entries(statusText).map(([value, label]) => ({ value, label }))}
+            onChange={(v) => {
+              setStatus(v);
+              setPage(1);
+            }}
+          />
+          <DatePicker
+            value={date}
+            onChange={(v) => {
+              setDate(v);
+              setPage(1);
+            }}
+          />
+          <Button
+            className="pm-filter-reset"
+            icon={<ReloadOutlined />}
+            onClick={() => {
+              setKeyword('');
+              setProjectId(undefined);
+              setCategory(undefined);
+              setStatus(undefined);
+              setDate(undefined);
+              setPage(1);
+            }}
+          >
+            重置
+          </Button>
+        </Space>
+      </Card>
       {mode === 'card' ? (
         <List
           className={

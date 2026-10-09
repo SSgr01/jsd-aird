@@ -472,6 +472,11 @@ a:active,
   height: 100%;
   min-height: 0;
 }
+/* 画布触摸手势完全交给 Univer 处理：屏蔽浏览器原生的页面滚动、双击缩放与
+   捏合缩放，否则手机端触摸坐标会错位，双击编辑和双指平移也无法生效。 */
+.data-workbook-canvas canvas {
+  touch-action: none;
+}
 .data-workbook-state,
 .data-workbench-loading {
   display: grid;
@@ -1118,6 +1123,12 @@ a:active,
     justify-content: flex-start;
     overflow-x: auto;
     padding-inline: 12px;
+  }
+  /* 手机端扩大工作表标签的触控目标（默认 text-xs 且内边距过小，手指难以点中） */
+  .data-workbook-canvas [data-u-comp='slide-tab-item'] > div {
+    min-height: 32px;
+    padding-inline: 10px;
+    font-size: 13px;
   }
 }
 
@@ -2263,6 +2274,204 @@ a:active,
   grid-template-columns: minmax(0, 1fr);
   height: 100%;
   min-height: 0;
+}
+
+.experiment-workspace-shell .workspace-main-stage > .template-workspace-grid.has-field-bindings {
+  grid-template-columns: minmax(0, 1fr) minmax(410px, 420px);
+}
+
+.experiment-workspace-shell .workspace-main-stage > .template-workspace-grid.has-field-bindings > .experiment-field-manager {
+  grid-column: 2;
+  grid-row: 1;
+  min-height: 0;
+}
+
+@media (max-width: 900px) {
+  .experiment-workspace-shell .workspace-main-stage > .template-workspace-grid.has-field-bindings {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) 220px;
+  }
+
+  .experiment-workspace-shell .workspace-main-stage > .template-workspace-grid.has-field-bindings > .experiment-field-manager {
+    grid-column: 1;
+    grid-row: 2;
+  }
+}
+
+.experiment-workspace-shell .experiment-recognition-status {
+  flex: 0 0 auto;
+  min-height: 62px;
+}
+
+.experiment-workspace-shell .experiment-field-manager {
+  width: 100%;
+  height: 100%;
+}
+
+.experiment-recognition-pane,
+.experiment-structure-pane,
+.experiment-properties-pane {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.experiment-recognition-pane > .ant-alert {
+  margin: 0 8px 10px;
+}
+
+.experiment-recognition-filters {
+  display: flex;
+  gap: 12px;
+  padding: 8px 12px 14px;
+  border-bottom: 1px solid var(--app-border);
+}
+
+.experiment-recognition-filters .ant-btn {
+  flex: 1;
+}
+
+.experiment-recognition-filters .ant-btn-primary {
+  color: var(--app-primary);
+  background: #eff5ff;
+  box-shadow: none;
+}
+
+.experiment-recognition-scroll {
+  padding: 10px 8px 24px;
+}
+
+.experiment-review-section-title {
+  display: flex;
+  justify-content: space-between;
+  margin: 8px 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.experiment-review-section-title span {
+  color: var(--app-text-secondary);
+  font-weight: 400;
+}
+
+.experiment-region-card {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 12px;
+  padding: 14px 12px;
+  border: 1px solid #d9e5f4;
+  border-radius: 6px;
+  background: #f8fbff;
+}
+
+.experiment-region-confirmed-icon,
+.experiment-field-check {
+  color: #17834b;
+}
+
+.experiment-region-confirmed-icon {
+  position: absolute;
+  top: 16px;
+  left: 12px;
+}
+
+.experiment-region-card:has(.experiment-region-confirmed-icon) {
+  position: relative;
+  padding-left: 36px;
+}
+
+.experiment-region-card > .ant-typography {
+  font-size: 12px;
+}
+
+.experiment-region-card > span.pending {
+  color: #b26b00;
+  font-size: 12px;
+}
+
+.experiment-region-card > span.confirmed {
+  color: #17834b;
+  font-size: 12px;
+}
+
+.experiment-region-card .ant-btn {
+  justify-self: start;
+}
+
+.experiment-review-field {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-height: 76px;
+  padding: 9px 10px;
+  border-bottom: 1px solid #e9eef5;
+}
+
+.experiment-field-check {
+  flex: 0 0 14px;
+  margin-top: 8px;
+}
+
+.experiment-field-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  margin-top: 10px;
+  border-radius: 50%;
+  background: #c88718;
+}
+
+.experiment-field-dot.confirmed {
+  background: #1c995a;
+}
+
+.experiment-review-field > div {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+}
+
+.experiment-review-field .ant-btn-link {
+  justify-self: start;
+  padding: 0;
+  color: var(--app-text);
+  font-weight: 600;
+}
+
+.experiment-review-field .ant-typography {
+  font-size: 12px;
+}
+
+.experiment-structure-pane,
+.experiment-properties-pane {
+  padding: 14px 12px;
+}
+
+.experiment-structure-group {
+  margin-bottom: 14px;
+  border: 1px solid #e3eaf4;
+  border-radius: 6px;
+}
+
+.experiment-structure-group > div {
+  padding: 10px;
+  background: #f8fbff;
+}
+
+.experiment-structure-group > div span {
+  float: right;
+}
+
+.experiment-structure-group > .ant-btn {
+  justify-content: flex-start;
+  gap: 10px;
+}
+
+.experiment-properties-pane label {
+  display: grid;
+  gap: 5px;
+  margin: 15px 0;
+  font-size: 12px;
 }
 
 .experiment-workspace-shell .workspace-main-stage > .template-workspace-grid > .workspace-canvas {
@@ -4473,7 +4682,7 @@ a:active,
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(430px, 0.9fr);
   gap: 16px;
-  align-items: stretch;
+  align-items: start;
   min-height: calc(100dvh - 150px);
 }
 
@@ -4481,7 +4690,7 @@ a:active,
   min-width: 0;
   min-height: 620px;
   padding: 18px 20px;
-  overflow: hidden;
+  overflow: visible;
   background: var(--app-surface);
   border: 1px solid var(--app-border);
   border-radius: 12px;

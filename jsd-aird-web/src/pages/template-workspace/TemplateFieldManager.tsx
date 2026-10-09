@@ -20,9 +20,7 @@ import type {
   TemplateBinding,
   TemplateFormat,
 } from '@/features/template-workspace/types';
-import {
-  bindingForField,
-} from '@/features/template-workspace/field-model';
+import { bindingForField } from '@/features/template-workspace/field-model';
 import { isExperimentTemplate } from '@/features/template-workspace/experiment-semantics';
 import type {
   RecognitionReview,
@@ -34,13 +32,20 @@ import { normalizeAddress, validateAddress } from './coordinates';
 import { RecognitionReviewPanel } from './RecognitionReviewPanel';
 import { ExperimentSemanticsPanel } from './ExperimentSemanticsPanel';
 import type { ProjectionRangeTarget } from './ExperimentSemanticsPanel';
-import { locatorLabelRange, locatorValueRange, mergeLocators } from '@/features/template-workspace/locator';
+import {
+  locatorLabelRange,
+  locatorValueRange,
+  mergeLocators,
+} from '@/features/template-workspace/locator';
 
 export type CoordinateTarget = 'labelAddress' | 'address';
 export type FieldManagerTab = 'recognition' | 'structure' | 'properties' | 'experiment';
 
 interface Props {
   editable: boolean;
+  /** Allows production-order review to keep recognition actions editable while
+   * keeping the template's field definition read-only. */
+  fieldDefinitionEditable?: boolean;
   format: TemplateFormat;
   fieldModel: FieldModel;
   mapping: TemplateBinding[];
@@ -69,10 +74,7 @@ interface Props {
   onPickCoordinate: (fieldId: string, target: CoordinateTarget) => void;
   onPickProjectionRange: (projectionId: string, target: ProjectionRangeTarget) => void;
   onAddField: (groupId?: string) => void;
-  onAddStructuredField: (
-    parent: BusinessField,
-    kind: 'REPEAT_FIELD',
-  ) => void;
+  onAddStructuredField: (parent: BusinessField, kind: 'REPEAT_FIELD') => void;
   onDeleteField: (field: BusinessField) => void;
   onManageGroups: () => void;
   onPlaceWordField: (field: BusinessField) => void;
@@ -91,6 +93,7 @@ const VALUE_TYPES = [
 
 export function TemplateFieldManager({
   editable,
+  fieldDefinitionEditable = editable,
   format,
   fieldModel,
   mapping,
@@ -206,7 +209,7 @@ export function TemplateFieldManager({
         />
       ) : activeTab === 'structure' ? (
         <FieldStructure
-          editable={editable}
+          editable={fieldDefinitionEditable}
           fieldModel={fieldModel}
           recognitionReview={recognitionReview}
           selectedFieldId={selectedFieldId}
@@ -218,7 +221,7 @@ export function TemplateFieldManager({
       ) : selectedField ? (
         <FieldProperties
           key={selectedField.id}
-          editable={editable}
+          editable={fieldDefinitionEditable}
           format={format}
           groups={fieldModel.groups}
           field={selectedField}
@@ -237,7 +240,7 @@ export function TemplateFieldManager({
   );
 }
 
-function FieldStructure({
+export function FieldStructure({
   editable,
   fieldModel,
   recognitionReview,
@@ -246,11 +249,18 @@ function FieldStructure({
   onAddField,
   onAddStructuredField,
   onManageGroups,
+  allowGroupManagement = true,
 }: Pick<
   Props,
-    'editable' | 'fieldModel' | 'recognitionReview' | 'selectedFieldId' | 'onSelectField' | 'onAddField'
-    | 'onAddStructuredField' | 'onManageGroups'
->) {
+  | 'editable'
+  | 'fieldModel'
+  | 'recognitionReview'
+  | 'selectedFieldId'
+  | 'onSelectField'
+  | 'onAddField'
+  | 'onAddStructuredField'
+  | 'onManageGroups'
+> & { allowGroupManagement?: boolean }) {
   const fieldRefs = useRef(new Map<string, HTMLButtonElement>());
   const regions = buildFieldRegionViews(fieldModel, recognitionReview);
   const realFieldCount = fieldModel.fields.filter((field) => !isRegionField(field)).length;
@@ -270,7 +280,7 @@ function FieldStructure({
           区域 {regions.length} · 字段 {realFieldCount} · 待确认 {pendingFieldCount}
         </span>
         <div>
-          <Tooltip title="管理业务分组">
+          {allowGroupManagement && <Tooltip title="管理业务分组">
             <Button
               size="small"
               icon={<SettingOutlined />}
@@ -278,7 +288,7 @@ function FieldStructure({
               aria-label="管理业务分组"
               onClick={onManageGroups}
             />
-          </Tooltip>
+          </Tooltip>}
           <Button
             size="small"
             type="primary"
@@ -301,15 +311,15 @@ function FieldStructure({
               <span>
                 <FolderOpenOutlined /> {region.name}
                 <small className="field-region-meta">
-                  {kindLabel(region.kind)}{region.sheet ? ` · ${region.sheet}` : ''}{region.range ? ` · ${region.range}` : ''}
+                  {kindLabel(region.kind)}
+                  {region.sheet ? ` · ${region.sheet}` : ''}
+                  {region.range ? ` · ${region.range}` : ''}
                 </small>
               </span>
               <span className="field-tree-group-meta">
                 <span>{region.fields.length}</span>
                 {editable && ['ROW_TABLE', 'COLUMN_TABLE'].includes(region.kind) && (
-                  <Tooltip title={!region.root
-                    ? '结构区域尚未确认，请先确认结构'
-                    : '新增明细字段'}>
+                  <Tooltip title={!region.root ? '结构区域尚未确认，请先确认结构' : '新增明细字段'}>
                     <button
                       type="button"
                       className="field-tree-group-add"
@@ -367,7 +377,9 @@ type FieldTreeNode = {
 };
 
 function buildFieldTree(fields: BusinessField[]): FieldTreeNode[] {
-  const nodes = new Map(fields.map((field) => [field.id, { field, children: [] as FieldTreeNode[] }]));
+  const nodes = new Map(
+    fields.map((field) => [field.id, { field, children: [] as FieldTreeNode[] }]),
+  );
   const roots: FieldTreeNode[] = [];
   for (const node of nodes.values()) {
     const parent = node.field.parentFieldId ? nodes.get(node.field.parentFieldId) : undefined;
@@ -414,12 +426,17 @@ function FieldTreeNode({
 }
 
 function isRegionField(field: BusinessField) {
-  return field.displayRole === 'REGION'
-    || ['FORM_REGION', 'ROW_TABLE', 'COLUMN_TABLE'].includes(field.kind)
-    || field.mappingKind === 'REPEAT_REGION';
+  return (
+    field.displayRole === 'REGION' ||
+    ['FORM_REGION', 'ROW_TABLE', 'COLUMN_TABLE'].includes(field.kind) ||
+    field.mappingKind === 'REPEAT_REGION'
+  );
 }
 
-function buildFieldRegionViews(fieldModel: FieldModel, review?: RecognitionReview): FieldRegionView[] {
+function buildFieldRegionViews(
+  fieldModel: FieldModel,
+  review?: RecognitionReview,
+): FieldRegionView[] {
   const regionNodes = review?.regions ?? [];
   const roots = fieldModel.fields.filter(isRegionField);
   const used = new Set<string>();
@@ -429,10 +446,11 @@ function buildFieldRegionViews(fieldModel: FieldModel, review?: RecognitionRevie
     const root = roots.find((field) => regionRootMatches(field, region));
     const fields = fieldModel.fields.filter((field) => {
       if (isRegionField(field) || used.has(field.id)) return false;
-      const matched = (root && field.parentFieldId === root.id)
-        || (region.regionId && field.regionId === region.regionId)
-        || (region.blockId && field.blockId === region.blockId)
-        || (region.fields ?? []).some((item) => reviewFieldMatches(field, item));
+      const matched =
+        (root && field.parentFieldId === root.id) ||
+        (region.regionId && field.regionId === region.regionId) ||
+        (region.blockId && field.blockId === region.blockId) ||
+        (region.fields ?? []).some((item) => reviewFieldMatches(field, item));
       if (matched) used.add(field.id);
       return matched;
     });
@@ -448,18 +466,29 @@ function buildFieldRegionViews(fieldModel: FieldModel, review?: RecognitionRevie
   }
 
   for (const root of roots) {
-    if (result.some((region) => region.root?.id === root.id || region.id === root.blockId)) continue;
+    if (result.some((region) => region.root?.id === root.id || region.id === root.blockId))
+      continue;
     const fields = fieldModel.fields.filter((field) => {
       if (isRegionField(field) || used.has(field.id)) return false;
       const matched = field.parentFieldId === root.id || field.blockId === root.blockId;
       if (matched) used.add(field.id);
       return matched;
     });
-    result.push({ id: root.blockId || root.id, name: root.name, kind: root.kind, range: locatorValueRange(root.locator), root, fields });
+    result.push({
+      id: root.blockId || root.id,
+      name: root.name,
+      kind: root.kind,
+      range: locatorValueRange(root.locator),
+      root,
+      fields,
+    });
   }
 
-  const unassigned = fieldModel.fields.filter((field) => !isRegionField(field) && !used.has(field.id));
-  if (unassigned.length) result.push({ id: 'unassigned', name: '未分区字段', kind: 'UNASSIGNED', fields: unassigned });
+  const unassigned = fieldModel.fields.filter(
+    (field) => !isRegionField(field) && !used.has(field.id),
+  );
+  if (unassigned.length)
+    result.push({ id: 'unassigned', name: '未分区字段', kind: 'UNASSIGNED', fields: unassigned });
   return result;
 }
 
@@ -482,18 +511,25 @@ function displaySheetName(
   return reviewName || recognizedName || rootName || regionSheetName || regionSheetId;
 }
 
-function regionRootMatches(field: BusinessField, region: NonNullable<RecognitionReview['regions']>[number]) {
-  return (region.regionId && field.regionId === region.regionId)
-    || (region.blockId && field.blockId === region.blockId)
-    || field.id === region.regionId
-    || field.fieldId === region.regionId;
+function regionRootMatches(
+  field: BusinessField,
+  region: NonNullable<RecognitionReview['regions']>[number],
+) {
+  return (
+    (region.regionId && field.regionId === region.regionId) ||
+    (region.blockId && field.blockId === region.blockId) ||
+    field.id === region.regionId ||
+    field.fieldId === region.regionId
+  );
 }
 
 function reviewFieldMatches(field: BusinessField, item: RecognitionReviewItem) {
-  return field.recognitionItemId === item.id
-    || (item.payload.fieldId && field.fieldId === item.payload.fieldId)
-    || (item.payload.relationId && field.relationId === item.payload.relationId)
-    || (item.payload.bindingId && field.bindingId === item.payload.bindingId);
+  return (
+    field.recognitionItemId === item.id ||
+    (item.payload.fieldId && field.fieldId === item.payload.fieldId) ||
+    (item.payload.relationId && field.relationId === item.payload.relationId) ||
+    (item.payload.bindingId && field.bindingId === item.payload.bindingId)
+  );
 }
 
 function textValue(value: unknown) {
@@ -531,7 +567,8 @@ function FieldTreeButton({
       <span className="field-tree-name">
         <strong title={fieldDisplayPath(field)}>{fieldDisplayPath(field)}</strong>
         <small>
-          {field.standardRequired && (field.requiresStandardConfirmation || field.fieldOrigin === 'PENDING_STANDARD')
+          {field.standardRequired &&
+          (field.requiresStandardConfirmation || field.fieldOrigin === 'PENDING_STANDARD')
             ? '待选择业务字段'
             : field.candidate
               ? '待确认候选'
@@ -541,8 +578,14 @@ function FieldTreeButton({
           {field.unit ? ` · ${field.unit}` : ''}
         </small>
       </span>
-      {field.labelStatus === 'UNRESOLVED' || field.reviewStatus === 'NEEDS_CONFIRMATION' || (field.confidence ?? 1) < 0.85 ? (
-        <span className="field-tree-status needs-review" aria-label={field.labelStatus === 'UNRESOLVED' ? '标签位置待确认' : '建议核对'} title={field.labelStatus === 'UNRESOLVED' ? '标签位置待确认' : '建议核对'}>
+      {field.labelStatus === 'UNRESOLVED' ||
+      field.reviewStatus === 'NEEDS_CONFIRMATION' ||
+      (field.confidence ?? 1) < 0.85 ? (
+        <span
+          className="field-tree-status needs-review"
+          aria-label={field.labelStatus === 'UNRESOLVED' ? '标签位置待确认' : '建议核对'}
+          title={field.labelStatus === 'UNRESOLVED' ? '标签位置待确认' : '建议核对'}
+        >
           <ExclamationCircleOutlined />
         </span>
       ) : (
@@ -570,18 +613,19 @@ function fieldNameInputUpdate(field: BusinessField, value: string) {
     .map((segment) => segment.trim())
     .filter(Boolean);
   const currentPath = (field.pathSegments ?? []).map((segment) => segment.trim()).filter(Boolean);
-  const nextPath = enteredPath.length > 1
-    ? enteredPath
-    : currentPath.length > 1
-      ? [...currentPath.slice(0, -1), entered]
-      : enteredPath;
+  const nextPath =
+    enteredPath.length > 1
+      ? enteredPath
+      : currentPath.length > 1
+        ? [...currentPath.slice(0, -1), entered]
+        : enteredPath;
   return {
     name: nextPath.at(-1) ?? entered,
     pathSegments: nextPath.length ? nextPath : [entered],
   };
 }
 
-function FieldProperties({
+export function FieldProperties({
   editable,
   format,
   groups,
@@ -621,17 +665,21 @@ function FieldProperties({
   const reviewText =
     field.reviewStatus === 'ISSUE'
       ? '该字段存在识别冲突，请核对字段属性或 Excel 位置。'
-      : field.standardRequired && (field.requiresStandardConfirmation || field.fieldOrigin === 'PENDING_STANDARD')
+      : field.standardRequired &&
+          (field.requiresStandardConfirmation || field.fieldOrigin === 'PENDING_STANDARD')
         ? '该字段被要求绑定标准字段，请选择标准字段，或转为模板自定义字段。'
         : field.standardMatchStatus === 'UNMATCHED'
           ? '该字段将作为模板自定义字段保存，尚未匹配标准字段。'
-        : field.reviewStatus === 'NEEDS_CONFIRMATION' || (field.confidence ?? 1) < 0.85
-          ? '系统建议核对名称或位置，修改后会自动记为已确认。'
-          : undefined;
+          : field.reviewStatus === 'NEEDS_CONFIRMATION' || (field.confidence ?? 1) < 0.85
+            ? '系统建议核对名称或位置，修改后会自动记为已确认。'
+            : undefined;
 
   const commitCoordinate = (target: CoordinateTarget, rawValue: string) => {
     const value = normalizeAddress(rawValue);
-    const error = validateAddress(value, target === 'labelAddress' && field.fieldType !== 'TABLE_COLUMN');
+    const error = validateAddress(
+      value,
+      target === 'labelAddress' && field.fieldType !== 'TABLE_COLUMN',
+    );
     if (target === 'labelAddress') {
       setLabelAddress(value);
       setLabelError(error);
@@ -682,8 +730,19 @@ function FieldProperties({
           <div className="field-property-section-title">Excel 位置</div>
           <span className="field-sheet-name">工作表：{sheetName}</span>
           <div className="field-position-meta">
-            <span>定位来源：{locator.source === 'INFERRED' ? '系统推断' : locator.source === 'MANUAL' ? '人工配置' : locator.source === 'UNRESOLVED' ? '待确认' : '识别结果'}</span>
-            {typeof locator.confidence === 'number' && <span>置信度：{Math.round(locator.confidence * 100)}%</span>}
+            <span>
+              定位来源：
+              {locator.source === 'INFERRED'
+                ? '系统推断'
+                : locator.source === 'MANUAL'
+                  ? '人工配置'
+                  : locator.source === 'UNRESOLVED'
+                    ? '待确认'
+                    : '识别结果'}
+            </span>
+            {typeof locator.confidence === 'number' && (
+              <span>置信度：{Math.round(locator.confidence * 100)}%</span>
+            )}
           </div>
           <CoordinateInput
             label="标签位置"
@@ -758,7 +817,9 @@ function BusinessPropertyFields({
             disabled={!editable}
             maxLength={100}
             status={(field.name ?? '').trim() ? undefined : 'error'}
-            onChange={(event) => onUpdateField(field.id, fieldNameInputUpdate(field, event.target.value))}
+            onChange={(event) =>
+              onUpdateField(field.id, fieldNameInputUpdate(field, event.target.value))
+            }
           />
           {!(field.name ?? '').trim() && <small role="alert">字段名称不能为空</small>}
         </label>
@@ -794,7 +855,13 @@ function BusinessPropertyFields({
         <label className="field-property">
           <span>字段类型</span>
           <Input
-            value={field.fieldType === 'TABLE_COLUMN' ? '表格列字段' : field.fieldType === 'MANUAL_VALUE' ? '手工录入字段' : '普通字段'}
+            value={
+              field.fieldType === 'TABLE_COLUMN'
+                ? '表格列字段'
+                : field.fieldType === 'MANUAL_VALUE'
+                  ? '手工录入字段'
+                  : '普通字段'
+            }
             disabled
           />
         </label>

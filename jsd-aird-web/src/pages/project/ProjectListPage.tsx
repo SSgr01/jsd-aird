@@ -12,7 +12,6 @@ import {
 } from '@ant-design/icons';
 import {
   Alert,
-  Breadcrumb,
   Button,
   Checkbox,
   DatePicker,
@@ -415,11 +414,60 @@ export function ProjectListPage() {
   return (
     <div className="pm-page pm-unified-list-page pm-project-list-page">
       {holder}
-      <div className="pm-page-head pm-project-page-intro">
+      <div className="page-heading">
         <div>
-          <Breadcrumb items={[{ title: '项目管理' }, { title: '项目列表' }]} />
-          <h3>项目列表</h3>
+          <h2>项目列表</h2>
           <p>统一管理研发项目、项目阶段、任务及关联实验。</p>
+        </div>
+        <div className="pm-page-actions">
+          <span className="pm-selected">已选 {selected.size} 项</span>
+          {selected.size > 0 && (
+            <Button type="link" size="small" onClick={() => setSelected(new Set())}>
+              清除已选
+            </Button>
+          )}
+          <input
+            ref={importInput}
+            hidden
+            type="file"
+            accept=".doc,.docx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              event.currentTarget.value = '';
+              void handleImport(file);
+            }}
+          />
+          <Button icon={<FileWordOutlined />} loading={importing} onClick={() => importInput.current?.click()}>
+            AI 导入
+          </Button>
+          <Button icon={<DownloadOutlined />} loading={exporting} onClick={() => void handleExport()}>
+            导出
+          </Button>
+          <Button icon={<CopyOutlined />} disabled={!selected.size} onClick={handleCopy}>
+            复制
+          </Button>
+          <Button danger disabled={!selected.size} onClick={handleDelete}>
+            删除
+          </Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+            新建项目
+          </Button>
+          <Space.Compact>
+            <Tooltip title="卡片视图">
+              <Button
+                className={view === 'card' ? 'pm-view-btn active' : 'pm-view-btn'}
+                icon={<AppstoreOutlined />}
+                onClick={() => setView('card')}
+              />
+            </Tooltip>
+            <Tooltip title="列表视图">
+              <Button
+                className={view === 'list' ? 'pm-view-btn active' : 'pm-view-btn'}
+                icon={<UnorderedListOutlined />}
+                onClick={() => setView('list')}
+              />
+            </Tooltip>
+          </Space.Compact>
         </div>
       </div>
 
@@ -478,61 +526,6 @@ export function ProjectListPage() {
         <Button className="pm-filter-reset" icon={<ReloadOutlined />} onClick={reset}>
           重置
         </Button>
-      </div>
-
-      <div className="pm-batch-row">
-        <div className="pm-batch-summary">
-          <span className="pm-selected">已选 {selected.size} 项</span>
-          {selected.size > 0 && (
-            <Button type="link" size="small" onClick={() => setSelected(new Set())}>
-              清除已选
-            </Button>
-          )}
-        </div>
-        <div className="pm-batch-actions">
-          <input
-            ref={importInput}
-            hidden
-            type="file"
-            accept=".doc,.docx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              event.currentTarget.value = '';
-              void handleImport(file);
-            }}
-          />
-          <Button icon={<FileWordOutlined />} loading={importing} onClick={() => importInput.current?.click()}>
-            AI 导入
-          </Button>
-          <Button icon={<DownloadOutlined />} loading={exporting} onClick={() => void handleExport()}>
-            导出
-          </Button>
-          <Button icon={<CopyOutlined />} disabled={!selected.size} onClick={handleCopy}>
-            复制
-          </Button>
-          <Button danger disabled={!selected.size} onClick={handleDelete}>
-            删除
-          </Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-            新建项目
-          </Button>
-          <Space.Compact>
-            <Tooltip title="卡片视图">
-              <Button
-                className={view === 'card' ? 'pm-view-btn active' : 'pm-view-btn'}
-                icon={<AppstoreOutlined />}
-                onClick={() => setView('card')}
-              />
-            </Tooltip>
-            <Tooltip title="列表视图">
-              <Button
-                className={view === 'list' ? 'pm-view-btn active' : 'pm-view-btn'}
-                icon={<UnorderedListOutlined />}
-                onClick={() => setView('list')}
-              />
-            </Tooltip>
-          </Space.Compact>
-        </div>
       </div>
 
       <div className="pm-content" aria-busy={loading}>

@@ -1,10 +1,14 @@
 import {
   ArrowLeftOutlined,
+  CheckCircleOutlined,
   DownloadOutlined,
   EyeOutlined,
+  FileExcelOutlined,
   LoadingOutlined,
-  FileOutlined,
+  ReloadOutlined,
+  RobotOutlined,
   SaveOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons';
 import { formatTime } from '@/utils/date';
 import { SaveStateBadge, type SaveState } from '@/components/SaveStateBadge';
@@ -16,6 +20,7 @@ import {
   Form,
   Input,
   Modal,
+  Progress,
   Result,
   Skeleton,
   Space,
@@ -28,8 +33,12 @@ import {
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 
-import { buildExperimentSnapshot, parseExperimentSnapshot } from '@/features/experiment-workspace/experiment-workbook';
-import type { EditorHandle } from '@/features/template-workspace/types';
+import {
+  buildExperimentSnapshot,
+  parseExperimentSnapshot,
+} from '@/features/experiment-workspace/experiment-workbook';
+import type { EditorHandle, EditorSelection, TemplateBinding } from '@/features/template-workspace/types';
+import { getAtPath, setAtPath } from '@/features/template-workspace/path-utils';
 import {
   reviewInformation,
   reviewInformationMissing,
@@ -40,7 +49,10 @@ import {
   actExperiment,
   createRevision,
   getExperiment,
+  getExperimentImport,
+  listExperimentImports,
   listVersions,
+  retryExperimentImport,
   saveExperiment,
   type ExperimentDetail,
   type ExperimentModel,
@@ -50,6 +62,7 @@ import {
 import { downloadBlob, fetchFileBlob } from '@/services/files/file-api';
 import { Can } from '@/components/auth/Can';
 import { templateApi, type TemplateCategory } from '@/services/templates/template-api';
+import { ExperimentFieldReviewPanel } from './ExperimentFieldReviewPanel';
 import './experiments.css';
 
 const SheetsEditor = lazy(async () => ({
@@ -72,11 +85,35 @@ const STATUS_TEXT: Record<string, string> = {
   VOIDED: '已作废',
 };
 
+function isWorkbookSnapshot(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  return Boolean(
+    candidate.sheets && typeof candidate.sheets === 'object' && !Array.isArray(candidate.sheets),
+  );
+}
+
+function documentFormatOf(
+  model: ExperimentModel,
+  snapshot?: Record<string, unknown>,
+): 'word' | 'excel' {
+  if (
+    model.documentFormat === 'excel' ||
+    isWorkbookSnapshot(model.documentSnapshot) ||
+    isWorkbookSnapshot(snapshot)
+  ) {
+    return 'excel';
+  }
+  const sourceName = typeof model.sourceFileName === 'string' ? model.sourceFileName : '';
+  return /\.(xlsx|xls|csv)$/i.test(sourceName) ? 'excel' : 'word';
+}
+
 export function ExperimentWorkspacePage() {
   const { id = '' } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
-  const returnTo = typeof location.state?.returnTo === 'string' ? location.state.returnTo : '/experiments/list';
+  const returnTo =
+    typeof location.state?.returnTo === 'string' ? location.state.returnTo : '/experiments/list';
   const goBack = () => navigate(returnTo);
   const { message, modal } = App.useApp();
   const editorRef = useRef<EditorHandle>(null);
@@ -92,6 +129,10 @@ export function ExperimentWorkspacePage() {
   const [saveState, setSaveState] = useState<SaveState>('SAVED');
   const [loadError, setLoadError] = useState<string>();
   const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewTrigger, setReviewTrigger] = useState(0);
+  const [coordinatePicking, setCoordinatePicking] = useState<{ fieldId: string; target: 'labelAddress' | 'address' }>();
+  const [recognitionBusy, setRecognitionBusy] = useState(false);
+  const [recognitionProgress, setRecognitionProgress] = useState<number>();
   const [reviewForm] = Form.useForm<ReviewInformation>();
   const [templateDraftOpen, setTemplateDraftOpen] = useState(false);
   const [templateDraftSaving, setTemplateDraftSaving] = useState(false);
@@ -102,17 +143,26 @@ export function ExperimentWorkspacePage() {
   const load = useCallback(async () => {
     setSaveState('SAVED');
     try {
-      const [d, v] = await Promise.all([
-        getExperiment(id),
-        listVersions(id),
-      ]);
+      const [d, v] = await Promise.all([getExperiment(id), listVersions(id)]);
       const nextModel: ExperimentModel = { ...(d.editModel ?? {}) };
-      if (nextModel.documentFormat === 'word' && d.templateSnapshot && !nextModel.documentSnapshot) {
+      // Keep legacy XLS/XLSX imports aligned with the production workspace:
+      // workbook snapshots always use Sheets, even if an older record was
+      // persisted with documentFormat=word.
+      nextModel.documentFormat = documentFormatOf(nextModel);
+      if (
+        nextModel.documentFormat === 'word' &&
+        d.templateSnapshot &&
+        !nextModel.documentSnapshot
+      ) {
         nextModel.documentSnapshot = d.templateSnapshot;
       }
       setDetail(d);
       setEditModel(nextModel);
-      const initialSnapshot = buildExperimentSnapshot(nextModel, d.currentVersionId ?? id, d.templateSnapshot);
+      const initialSnapshot = buildExperimentSnapshot(
+        nextModel,
+        d.currentVersionId ?? id,
+        d.templateSnapshot,
+      );
       setSnapshot(initialSnapshot);
       setVersions(v);
       const editable = !['COMPLETED', 'VOIDED', 'PENDING_REVIEW'].includes(d.summary.status);
@@ -132,10 +182,153 @@ export function ExperimentWorkspacePage() {
     // Keep saving functional while the lazy Univer editor is starting by
     // using the last loaded snapshot as the document baseline; once the
     // editor is ready its live snapshot remains authoritative.
-    const currentSnapshot = editorRef.current?.getSnapshot()
-      ?? snapshot
-      ?? buildExperimentSnapshot(editModel, detail.currentVersionId ?? id, detail.templateSnapshot);
-    return parseExperimentSnapshot(currentSnapshot, editModel);
+    const currentSnapshot =
+      editorRef.current?.getSnapshot() ??
+      snapshot ??
+      buildExperimentSnapshot(editModel, detail.currentVersionId ?? id, detail.templateSnapshot);
+    const model = parseExperimentSnapshot(currentSnapshot, editModel);
+    if (!editorRef.current || !recognizedBindings.length) return model;
+    let values = model.dynamicValues ?? {};
+    for (const binding of recognizedBindings) {
+      if (binding.role !== 'FIELD' || !binding.dataPath) continue;
+      try {
+        const value = editorRef.current.readBinding(binding);
+        if (value !== undefined) values = setAtPath(values, binding.dataPath, value);
+      } catch {
+        // Keep the last saved value if this position is still under review.
+      }
+    }
+    return { ...model, dynamicValues: values };
+  };
+
+  const updateRecognizedField = (fieldId: string, changes: Partial<NonNullable<ExperimentModel['recognizedFields']>[number]>) => {
+    setEditModel((current) => ({
+      ...current,
+      recognizedFields: current.recognizedFields?.map((field) =>
+        field.id === fieldId ? { ...field, ...changes } : field),
+    }));
+    setSaveState('DIRTY');
+  };
+  const updateRecognizedRegion = (regionId: string, confirmed: boolean) => {
+    setEditModel((current) => ({
+      ...current,
+      recognizedRegions: current.recognizedRegions?.map((region) =>
+        region.id === regionId ? { ...region, confirmed } : region),
+    }));
+    setSaveState('DIRTY');
+  };
+  const handleCoordinateSelection = (selection: EditorSelection) => {
+    if (!coordinatePicking) return;
+    const { fieldId, target } = coordinatePicking;
+    setEditModel((current) => ({
+      ...current,
+      recognizedFields: current.recognizedFields?.map((field) => {
+        if (field.id !== fieldId) return field;
+        const locator: Record<string, unknown> = {
+              ...field.locator,
+              sheetId: selection.sheetId,
+              sheetName: selection.sheetName,
+              ...(target === 'labelAddress'
+                ? { labelAddress: selection.address, labelRange: selection.address }
+                : { address: selection.address, valueRange: selection.address }),
+              source: 'MANUAL',
+            };
+        return {
+          ...field,
+          locator,
+          confirmed: Boolean(field.name.trim() && field.fieldCode.trim() && field.dataPath.trim()
+            && (locator.address || locator.anchorAddress || locator.valueRange
+              || locator.dataRange || locator.range)),
+        };
+      }),
+    }));
+    setSaveState('DIRTY');
+    setCoordinatePicking(undefined);
+  };
+  const confirmAllRecognizedFields = () => {
+    if (!editModel.recognizedFields?.some((field) => !field.confirmed)) return;
+    setEditModel((current) => ({
+      ...current,
+      recognizedFields: current.recognizedFields?.map((field) =>
+        field.fieldCode.trim() && field.dataPath.trim()
+          && (field.locator.address || field.locator.anchorAddress || field.locator.range
+            || field.locator.valueRange || field.locator.dataRange)
+          ? { ...field, confirmed: true } : field),
+    }));
+    setSaveState('DIRTY');
+  };
+  const restartRecognition = async () => {
+    if (!detail || recognitionBusy) return;
+    setRecognitionBusy(true);
+    setReviewTrigger((current) => current + 1);
+    try {
+      const jobs = await listExperimentImports();
+      const job = jobs.find((item) => item.experimentId === detail.summary.id);
+      if (!job) throw new Error('当前实验没有可重新识别的上传任务');
+      await retryExperimentImport(job.id);
+      setRecognitionProgress(0);
+      for (let attempt = 0; attempt < 120; attempt++) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1000));
+        const latest = await getExperimentImport(job.id);
+        setRecognitionProgress(latest.progress);
+        if (latest.status === 'COMPLETED') {
+          await load();
+          void message.success('重新识别完成，请核对字段和填写位置');
+          return;
+        }
+        if (['FAILED', 'CANCELLED'].includes(latest.status)) {
+          throw new Error(latest.errorMessage || '重新识别失败');
+        }
+      }
+      throw new Error('重新识别仍在进行，请稍后刷新工作区');
+    } finally {
+      setRecognitionBusy(false);
+      setRecognitionProgress(undefined);
+    }
+  };
+  const imageSource = /\.(png|jpe?g|gif|webp|bmp|tiff?)$/i.test(editModel.sourceFileName || '');
+  const regionBindings: TemplateBinding[] = (editModel.recognizedRegions ?? [])
+    .filter((region) => ['ROW_TABLE', 'COLUMN_TABLE'].includes(region.kind) && region.bindingId)
+    .map((region) => ({
+      bindingId: region.bindingId,
+      dataPath: region.dataPath,
+      role: 'REPEAT_REGION',
+      mappingKind: 'REPEAT_REGION',
+      locatorType: region.locatorType,
+      locator: region.locator,
+      syncDirection: 'DATA_TO_EDITOR',
+      primaryBinding: true,
+      bindingStatus: 'VALID',
+    }));
+  const recognizedBindings: TemplateBinding[] = [
+    ...regionBindings,
+    ...(editModel.recognizedFields ?? [])
+    .filter((field) => field.locator.address || field.locator.anchorAddress
+      || field.locator.valueRange || field.locator.dataRange)
+    .map((field): TemplateBinding => ({
+      bindingId: field.bindingId || field.id,
+      fieldId: field.id,
+      parentBindingId: field.parentBindingId || undefined,
+      fieldCode: field.fieldCode,
+      dataPath: field.dataPath,
+      role: 'FIELD',
+      mappingKind: field.mappingKind === 'REPEAT_FIELD' ? 'REPEAT_FIELD' : 'SCALAR',
+      repeatAxis: field.repeatAxis === 'ROW' || field.repeatAxis === 'COLUMN' ? field.repeatAxis : 'UNKNOWN',
+      locatorType: field.locatorType || 'CELL_RANGE',
+      locator: field.locator,
+      syncDirection: 'TWO_WAY',
+      primaryBinding: true,
+      bindingStatus: 'VALID',
+    })),
+  ];
+  const handleRecognizedValue = (binding: TemplateBinding, value: unknown) => {
+    if (value === undefined || !binding.dataPath) return;
+    setEditModel((current) => {
+      const values = current.dynamicValues ?? {};
+      if (JSON.stringify(getAtPath(values, binding.dataPath)) === JSON.stringify(value)) return current;
+      setSaveState('DIRTY');
+      return { ...current, dynamicValues: setAtPath(values, binding.dataPath, value) };
+    });
   };
 
   const persistDraft = async (nextModel: ExperimentModel, successText?: string) => {
@@ -223,6 +416,14 @@ export function ExperimentWorkspacePage() {
   };
 
   const publish = (action: PublishAction) => {
+    if (action === 'submit-review' && Array.isArray(editModel.recognizedFields)
+      && (!editModel.recognizedFields.length
+        || editModel.recognizedFields.some((field) => !field.confirmed)
+        || editModel.recognizedRegions?.some((region) => !region.confirmed))) {
+      setReviewTrigger((current) => current + 1);
+      void message.warning('请先确认 Excel 识别区域与字段绑定，再提交审核');
+      return;
+    }
     if (action === 'submit-review' && reviewInformationMissing(editModel)) {
       openReviewInformation();
       return;
@@ -273,9 +474,13 @@ export function ExperimentWorkspacePage() {
     setExporting(true);
     try {
       const blob = await exportExperiment(id);
-      const extension = detail.editModel.documentFormat === 'word' ? 'docx' : 'xlsx';
-      const versionSuffix = versions.length > 0 ? `-V${versions[0]?.versionNo ?? detail.summary.versionNo}` : '';
-      downloadBlob(blob, `${detail.summary.title || detail.summary.experimentNo}${versionSuffix}.${extension}`);
+      const extension = documentFormatOf(detail.editModel) === 'word' ? 'docx' : 'xlsx';
+      const versionSuffix =
+        versions.length > 0 ? `-V${versions[0]?.versionNo ?? detail.summary.versionNo}` : '';
+      downloadBlob(
+        blob,
+        `${detail.summary.title || detail.summary.experimentNo}${versionSuffix}.${extension}`,
+      );
       void message.success('实验已导出');
     } catch (error) {
       void message.error(error instanceof Error ? error.message : '实验导出失败');
@@ -354,10 +559,6 @@ export function ExperimentWorkspacePage() {
   };
 
   const changeView = (key: WorkspaceView) => {
-    if (key === 'versions' && versions.length === 0) {
-      void message.info('发布后才会生成版本记录');
-      return;
-    }
     if (saveState !== 'SAVED' && key === 'versions') {
       void message.warning('当前内容尚未保存，请先保存后再查看版本记录');
       return;
@@ -379,14 +580,30 @@ export function ExperimentWorkspacePage() {
   if (!detail || !snapshot) return <Skeleton active paragraph={{ rows: 12 }} />;
 
   const status = detail.summary.status;
+  const sourceIsImage = imageSource;
   const readonly = ['COMPLETED', 'VOIDED', 'PENDING_REVIEW'].includes(status);
   const editable = !readonly && isDesktop && view === 'edit';
+  const showExcelRecognition = documentFormatOf(editModel, snapshot) === 'excel'
+    && Array.isArray(editModel.recognizedFields);
+  const pendingFieldCount = editModel.recognizedFields?.filter((field) => !field.confirmed).length ?? 0;
+  const pendingRegionCount = editModel.recognizedRegions?.filter((region) => !region.confirmed).length ?? 0;
+  const recognitionFailed = editModel.recognitionSummary?.modelStatus === 'FAILED'
+    && !editModel.recognizedFields?.length;
+  const needsRecognitionReview = recognitionFailed || !(editModel.recognizedFields?.length)
+    || pendingFieldCount > 0 || pendingRegionCount > 0;
   const publishAction: PublishAction | undefined =
-    status === 'DRAFT' || status === 'PENDING' ? 'start' :
-    status === 'IN_PROGRESS' || status === 'RETURNED' ? 'submit-review' :
-    status === 'PENDING_REVIEW' ? 'approve' : undefined;
+    status === 'DRAFT' || status === 'PENDING'
+      ? 'start'
+      : status === 'IN_PROGRESS' || status === 'RETURNED'
+        ? 'submit-review'
+        : status === 'PENDING_REVIEW'
+          ? 'approve'
+          : undefined;
   return (
-    <section className="workspace-shell template-business-workspace experiment-workspace-shell" aria-label={`${detail.summary.title}实验工作台`}>
+    <section
+      className="workspace-shell template-business-workspace experiment-workspace-shell"
+      aria-label={`${detail.summary.title}实验工作台`}
+    >
       <header className="workspace-header">
         <div className="workspace-identity">
           <Button type="text" icon={<ArrowLeftOutlined />} onClick={goBack}>
@@ -398,18 +615,34 @@ export function ExperimentWorkspacePage() {
             </Typography.Text>
             <Typography.Text strong>{detail.summary.title}</Typography.Text>
           </span>
-          <Tag color={versions.length > 0 ? 'blue' : 'default'}>
-            {versions.length > 0 ? `V${versions[0]?.versionNo ?? detail.summary.versionNo}` : (STATUS_TEXT[status] ?? status)}
-          </Tag>
+          <span className="workspace-meta-item">V{versions[0]?.versionNo ?? detail.summary.versionNo ?? 1}</span>
+          {showExcelRecognition ? <span className="workspace-meta-item"><FileExcelOutlined /> Excel</span> : null}
+          <Tag color="orange">{STATUS_TEXT[status] ?? status}</Tag>
+          {showExcelRecognition ? <Tag color="blue">审核：{pendingFieldCount || pendingRegionCount ? '待确认' : '已确认'}</Tag> : null}
         </div>
         <Space wrap>
           <SaveStateBadge state={saveState} />
-          <Button className="workspace-export-button" icon={<DownloadOutlined />} loading={exporting} onClick={() => void exportRecord()}>导出</Button>
+          <Button
+            className="workspace-export-button"
+            icon={<DownloadOutlined />}
+            loading={exporting}
+            onClick={() => void exportRecord()}
+          >
+            导出
+          </Button>
           {detail.sourceFileId && (
-            <Button icon={<FileOutlined />} loading={downloadingSource} onClick={() => void downloadSource()}>原文</Button>
+            <Button
+              icon={<DownloadOutlined />}
+              loading={downloadingSource}
+              onClick={() => void downloadSource()}
+            >
+              {sourceIsImage ? '原图下载' : '原文下载'}
+            </Button>
           )}
           {status === 'COMPLETED' && (
-            <Button loading={busy} onClick={reviseCompletedExperiment}>创建修订</Button>
+            <Button loading={busy} onClick={reviseCompletedExperiment}>
+              创建修订
+            </Button>
           )}
           <Can permission="template.create">
             <Button
@@ -432,8 +665,12 @@ export function ExperimentWorkspacePage() {
             type="primary"
             className="workspace-publish-button"
             loading={busy}
-            disabled={(publishAction !== 'approve' && !editable) || saveState !== 'SAVED' || !publishAction}
-            onClick={() => { if (publishAction) publish(publishAction); }}
+            disabled={
+              (publishAction !== 'approve' && !editable) || saveState !== 'SAVED' || !publishAction
+            }
+            onClick={() => {
+              if (publishAction) publish(publishAction);
+            }}
           >
             发布
           </Button>
@@ -482,21 +719,48 @@ export function ExperimentWorkspacePage() {
           activeKey={view}
           onChange={(key) => changeView(key as WorkspaceView)}
           items={[
-            { key: 'preview', label: <><EyeOutlined /> 预览</> },
+            {
+              key: 'preview',
+              label: (
+                <>
+                  <EyeOutlined /> 预览
+                </>
+              ),
+            },
             { key: 'edit', label: '编辑', disabled: readonly },
-            ...(versions.length > 0 ? [{ key: 'versions', label: '版本记录' }] : []),
+            { key: 'versions', label: '版本记录' },
           ]}
         />
       </nav>
 
       {view === 'versions' ? (
-        selectedVersion ? <ExperimentHistoricalVersion version={selectedVersion} onBack={() => setSelectedVersion(undefined)} /> : <VersionView versions={versions} onChangeVersion={setSelectedVersion} />
+        selectedVersion ? (
+          <ExperimentHistoricalVersion
+            version={selectedVersion}
+            onBack={() => setSelectedVersion(undefined)}
+          />
+        ) : (
+          <VersionView versions={versions} onChangeVersion={setSelectedVersion} />
+        )
       ) : (
         <div className="workspace-main-stage">
-          <div className="template-workspace-grid prototype-workspace-grid">
+          {showExcelRecognition ? <div className="experiment-recognition-status recognition-status-bar" data-tone={needsRecognitionReview ? 'pending' : 'complete'} role="status">
+            <div className="recognition-status-content"><span className="recognition-status-icon">{needsRecognitionReview ? <RobotOutlined /> : <CheckCircleOutlined />}</span><strong>{recognitionBusy ? '正在重新识别实验工作簿' : recognitionFailed ? '智能识别未完成' : needsRecognitionReview ? 'AI 识别待确认' : 'AI 识别已完成'}</strong><span>{recognitionBusy ? `识别进度 ${recognitionProgress ?? 0}%` : needsRecognitionReview ? `区域 ${editModel.recognizedRegions?.length ?? 0} ｜ 字段 ${editModel.recognizedFields?.length ?? 0} ｜ 待确认字段 ${pendingFieldCount} ｜ 结构冲突 0` : `区域 ${editModel.recognizedRegions?.length ?? 0} ｜ 字段 ${editModel.recognizedFields?.length ?? 0}`}</span></div>
+            {recognitionBusy ? <Progress className="recognition-inline-progress" percent={recognitionProgress ?? 0} showInfo={false} /> : null}
+            <Space size={6}>
+              <Button size="small" onClick={() => setReviewTrigger((current) => current + 1)}>开始确认</Button>
+              <Button size="small" icon={<ThunderboltOutlined />} disabled={!editable || recognitionBusy || pendingFieldCount === 0} onClick={confirmAllRecognizedFields}>一键确认全部字段</Button>
+              <Button size="small" icon={<ReloadOutlined />} disabled={!editable} loading={recognitionBusy} onClick={() => void restartRecognition().catch((error) => void message.error(error instanceof Error ? error.message : '重新识别失败'))}>重新识别</Button>
+            </Space>
+          </div> : null}
+          <div className={`template-workspace-grid prototype-workspace-grid ${showExcelRecognition ? 'has-field-bindings' : ''}`}>
             <main className={`workspace-canvas ${view === 'preview' ? 'is-preview' : ''}`}>
-              <Suspense fallback={<Spin indicator={<LoadingOutlined spin />} tip="正在加载实验记录" fullscreen />}>
-                {editModel.documentFormat === 'word' ? (
+              <Suspense
+                fallback={
+                  <Spin indicator={<LoadingOutlined spin />} tip="正在加载实验记录" fullscreen />
+                }
+              >
+                {documentFormatOf(editModel, snapshot) === 'word' ? (
                   <div className={view === 'preview' ? 'document-readonly' : undefined}>
                     <DocsEditor
                       ref={editorRef}
@@ -510,15 +774,69 @@ export function ExperimentWorkspacePage() {
                     <SheetsEditor
                       ref={editorRef}
                       snapshot={snapshot}
-                      bindings={[]}
+                      bindings={recognizedBindings}
+                      clearSystemReadOnlyProtection
                       editable={editable}
-                      onEditorValue={() => undefined}
+                      onEditorValue={handleRecognizedValue}
+                      onSelectionChange={handleCoordinateSelection}
                       onDirty={() => setSaveState('DIRTY')}
                     />
                   </div>
                 )}
               </Suspense>
             </main>
+            {showExcelRecognition ? <ExperimentFieldReviewPanel
+              fields={editModel.recognizedFields ?? []}
+              regions={editModel.recognizedRegions ?? []}
+              editable={editable}
+              onUpdateField={updateRecognizedField}
+              onConfirmRegion={updateRecognizedRegion}
+              onFocusField={(fieldId) => {
+                const binding = recognizedBindings.find((item) => item.fieldId === fieldId);
+                if (binding) editorRef.current?.focusBinding(binding);
+              }}
+              onFocusRegion={(regionId) => {
+                const region = editModel.recognizedRegions?.find((item) => item.id === regionId);
+                if (!region) return;
+                editorRef.current?.focusBinding({
+                  bindingId: region.bindingId || region.id,
+                  dataPath: region.dataPath,
+                  role: 'REPEAT_REGION',
+                  mappingKind: 'REPEAT_REGION',
+                  locatorType: region.locatorType || 'TABLE_REGION',
+                  locator: region.locator,
+                  syncDirection: 'DATA_TO_EDITOR',
+                  primaryBinding: true,
+                  bindingStatus: 'VALID',
+                });
+              }}
+              onAddField={(regionId) => {
+                const fieldId = crypto.randomUUID();
+                setEditModel((current) => ({
+                  ...current,
+                  recognizedFields: [...(current.recognizedFields ?? []), {
+                    id: fieldId, bindingId: fieldId, parentBindingId: '',
+                    name: '新字段', groupName: '基本信息', regionId: regionId ?? '',
+                    fieldCode: '', dataPath: '',
+                    mappingKind: regionId ? 'REPEAT_FIELD' : 'SCALAR',
+                    repeatAxis: 'UNKNOWN', locatorType: 'CELL_RANGE',
+                    standardMatchStatus: 'UNMATCHED', confirmed: false,
+                    confidence: 1, locator: {},
+                  }],
+                }));
+                setSaveState('DIRTY');
+              }}
+              onDeleteField={(fieldId) => {
+                setEditModel((current) => ({
+                  ...current,
+                  recognizedFields: current.recognizedFields?.filter((field) => field.id !== fieldId),
+                }));
+                setSaveState('DIRTY');
+              }}
+              picking={coordinatePicking}
+              onPickCoordinate={(fieldId, target) => setCoordinatePicking({ fieldId, target })}
+              reviewTrigger={reviewTrigger}
+            /> : null}
           </div>
         </div>
       )}
@@ -582,15 +900,51 @@ function VersionView({
   );
 }
 
-function ExperimentHistoricalVersion({ version, onBack }: { version: ExperimentVersion; onBack: () => void }) {
-  const historicalSnapshot = buildExperimentSnapshot(version.editModel ?? {}, version.id, version.templateSnapshot);
-  const word = version.editModel?.documentFormat === 'word' || 'body' in historicalSnapshot;
-  return <div className="workspace-main-stage"><div className="project-version-preview">
-    <header className="project-versions-header"><Button onClick={onBack}>返回版本列表</Button><Typography.Title level={4}>版本 V{version.versionNo}</Typography.Title><Typography.Text type="secondary">{formatTime(version.createdAt)} · {version.createdBy ?? '未知'}</Typography.Text></header>
-    <main className="workspace-canvas document-readonly"><Suspense fallback={<Spin indicator={<LoadingOutlined spin />} />}>{word
-      ? <DocsEditor snapshot={historicalSnapshot} editable={false} onDirty={() => undefined} />
-      : <SheetsEditor snapshot={historicalSnapshot} bindings={[]} editable={false} onEditorValue={() => undefined} onDirty={() => undefined} />}</Suspense></main>
-  </div></div>;
+function ExperimentHistoricalVersion({
+  version,
+  onBack,
+}: {
+  version: ExperimentVersion;
+  onBack: () => void;
+}) {
+  const historicalSnapshot = buildExperimentSnapshot(
+    version.editModel ?? {},
+    version.id,
+    version.templateSnapshot,
+  );
+  const word = documentFormatOf(version.editModel ?? {}, historicalSnapshot) === 'word';
+  return (
+    <div className="workspace-main-stage">
+      <div className="project-version-preview">
+        <header className="project-versions-header">
+          <Button onClick={onBack}>返回版本列表</Button>
+          <Typography.Title level={4}>版本 V{version.versionNo}</Typography.Title>
+          <Typography.Text type="secondary">
+            {formatTime(version.createdAt)} · {version.createdBy ?? '未知'}
+          </Typography.Text>
+        </header>
+        <main className="workspace-canvas document-readonly">
+          <Suspense fallback={<Spin indicator={<LoadingOutlined spin />} />}>
+            {word ? (
+              <DocsEditor
+                snapshot={historicalSnapshot}
+                editable={false}
+                onDirty={() => undefined}
+              />
+            ) : (
+              <SheetsEditor
+                snapshot={historicalSnapshot}
+                bindings={[]}
+                editable={false}
+                onEditorValue={() => undefined}
+                onDirty={() => undefined}
+              />
+            )}
+          </Suspense>
+        </main>
+      </div>
+    </div>
+  );
 }
 
 function useDesktopEditing() {

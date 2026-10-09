@@ -7,12 +7,13 @@ import {
   FileOutlined,
   FolderOpenOutlined,
   PlusOutlined,
+  RedoOutlined,
+  SearchOutlined,
   UnorderedListOutlined,
   UploadOutlined,
 } from '@ant-design/icons';
 import {
   Button,
-  Breadcrumb,
   Card,
   Checkbox,
   Empty,
@@ -30,6 +31,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { CategoryCardGrid, type CatalogCategoryCard } from '@/components/catalog-workspace';
 import { ProjectRelationPicker } from '@/components/project-relations/ProjectRelationPicker';
+import '@/components/project-relations/project-relation-picker.css';
 import type { ProjectRelationTarget } from '@/services/project/project-resource-api';
 import {
   getProjects,
@@ -115,6 +117,9 @@ export function QualityDataPage() {
     [page, setPage] = useState(1),
     [size, setSize] = useState(10),
     [total, setTotal] = useState(0);
+  const [projectId, setProjectId] = useState<string>();
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [projectsLoading, setProjectsLoading] = useState(false);
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [renameOpen, setRenameOpen] = useState(false),
     [renameSaving, setRenameSaving] = useState(false),
@@ -156,6 +161,7 @@ export function QualityDataPage() {
         type: typeId,
         categoryId,
         keyword: keyword || undefined,
+        projectId: projectId || undefined,
         page,
         size,
       });
@@ -165,10 +171,27 @@ export function QualityDataPage() {
     } catch {
       msg.error('品管数据加载失败');
     }
-  }, [typeId, categoryId, keyword, page, size, msg]);
+  }, [typeId, categoryId, keyword, projectId, page, size, msg]);
   useEffect(() => {
     void qualityApi.types().then(setTypes);
   }, []);
+  useEffect(() => {
+    let active = true;
+    setProjectsLoading(true);
+    void getProjects({ page: 1, size: 200 })
+      .then((result) => {
+        if (active) setProjects(result.items);
+      })
+      .catch(() => {
+        if (active) msg.error('项目列表加载失败');
+      })
+      .finally(() => {
+        if (active) setProjectsLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [msg]);
   useEffect(() => {
     void loadCategories();
   }, [loadCategories]);
@@ -801,107 +824,20 @@ export function QualityDataPage() {
   return (
     <div className="quality-page pm-unified-list-page">
       {holder}
-      <div className="page-heading quality-data-page-intro">
+      <div className="page-heading">
         <div>
-          <Breadcrumb items={[{ title: '品管部数据中心' }, { title: '数据查看' }]} />
           <Typography.Title level={2}>品管部数据查看</Typography.Title>
           <Typography.Text type="secondary">
             查看已上传并解析的品管部数据，可按分类筛选并进入文档查看页面。
           </Typography.Text>
         </div>
-      </div>
-      <div className="quality-tabs">
-        {types.map((t) => (
-          <button
-            key={t.id}
-            className={`quality-tab${t.id === typeId ? ' active' : ''}`}
-            onClick={() => switchType(t.id)}
-          >
-            {t.name}
-          </button>
-        ))}
-      </div>
-      <CategoryCardGrid
-        categories={categoryCards}
-        activeId={categoryId}
-        countLabel="条数据"
-        onSelect={(id) => {
-          if (!guard()) return;
-          setCategoryId(id);
-          setFilters({});
-          setEditing(false);
-          setDirty(false);
-          setPage(1);
-        }}
-        onCreate={() => categoryModal()}
-        onRename={(item) => {
-          const category = categories.find((candidate) => candidate.id === item.id);
-          if (category) categoryModal(category);
-        }}
-        onDelete={(item) => {
-          const category = categories.find((candidate) => candidate.id === item.id);
-          if (category) void removeCategory(category);
-        }}
-      />
-      <Card className="content-card quality-filter-card">
-        <Space className="quality-filter-space" wrap>
-          <Input
-            value={keyword}
-            placeholder="搜索当前表格"
-            onChange={(e) => {
-              if (!guard()) return;
-              setKeyword(e.target.value);
-              setPage(1);
-            }}
-            style={{ width: 210 }}
-          />
-          {filterFields.map((field) => {
-            const values = Array.from(
-              new Set([
-                ...field.options,
-                ...activeRows.map((row) => textValue(row.data[field.key])).filter(Boolean),
-              ]),
-            );
-            return (
-              <Select
-                key={field.key}
-                allowClear
-                showSearch
-                placeholder={`筛选${field.label}`}
-                aria-label={`筛选${field.label}`}
-                value={filters[field.key] || undefined}
-                options={values.map((value) => ({ value, label: value }))}
-                onChange={(value) => {
-                  if (!guard()) return;
-                  setFilters((current) => ({ ...current, [field.key]: value || '' }));
-                  setPage(1);
-                }}
-                style={{ width: 150 }}
-              />
-            );
-          })}
-          <Button
-            onClick={() => {
-              if (!guard()) return;
-              setKeyword('');
-              setFilters({});
-              setPage(1);
-            }}
-          >
-            重置
-          </Button>
-        </Space>
-      </Card>
-      <div className="quality-list-toolbar pm-batch-row">
-        <div className="quality-list-summary">
+        <div className="pm-page-actions">
           <span className="quality-selected">已选 {selected.size} 条</span>
           {selected.size > 0 && (
             <Button type="link" size="small" onClick={() => setSelected(new Set())}>
               清除已选
             </Button>
           )}
-        </div>
-        <div className="quality-list-actions">
           {editing ? (
             <>
               <Button type="primary" onClick={() => void save()}>
@@ -950,32 +886,135 @@ export function QualityDataPage() {
               <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
                 新增品管数据
               </Button>
+              <Space.Compact className="quality-list-view-toggle">
+                <Button
+                  aria-label="卡片视图"
+                  aria-pressed={view === 'card'}
+                  title="卡片视图"
+                  className={view === 'card' ? 'pm-view-btn active' : 'pm-view-btn'}
+                  icon={<AppstoreOutlined />}
+                  onClick={() => changeView('card')}
+                />
+                <Button
+                  aria-label="列表视图"
+                  aria-pressed={view === 'list'}
+                  title="列表视图"
+                  className={view === 'list' ? 'pm-view-btn active' : 'pm-view-btn'}
+                  icon={<UnorderedListOutlined />}
+                  onClick={() => changeView('list')}
+                />
+              </Space.Compact>
             </>
-          )}
-          {!editing && (
-            <Space.Compact className="quality-list-view-toggle">
-              <Button
-                aria-label="卡片视图"
-                aria-pressed={view === 'card'}
-                title="卡片视图"
-                type={view === 'card' ? 'primary' : 'default'}
-                icon={<AppstoreOutlined />}
-                disabled={editing}
-                onClick={() => changeView('card')}
-              />
-              <Button
-                aria-label="列表视图"
-                aria-pressed={view === 'list'}
-                title="列表视图"
-                type={view === 'list' ? 'primary' : 'default'}
-                icon={<UnorderedListOutlined />}
-                disabled={editing}
-                onClick={() => changeView('list')}
-              />
-            </Space.Compact>
           )}
         </div>
       </div>
+      <div className="catalog-tabs" role="tablist" aria-label="品管数据类型">
+        {types.map((t) => (
+          <Button
+            key={t.id}
+            type={t.id === typeId ? 'primary' : 'default'}
+            role="tab"
+            aria-selected={t.id === typeId}
+            onClick={() => switchType(t.id)}
+          >
+            {t.name}
+          </Button>
+        ))}
+      </div>
+      <CategoryCardGrid
+        categories={categoryCards}
+        activeId={categoryId}
+        countLabel="条数据"
+        onSelect={(id) => {
+          if (!guard()) return;
+          setCategoryId(id);
+          setFilters({});
+          setEditing(false);
+          setDirty(false);
+          setPage(1);
+        }}
+        onCreate={() => categoryModal()}
+        onRename={(item) => {
+          const category = categories.find((candidate) => candidate.id === item.id);
+          if (category) categoryModal(category);
+        }}
+        onDelete={(item) => {
+          const category = categories.find((candidate) => candidate.id === item.id);
+          if (category) void removeCategory(category);
+        }}
+      />
+      <Card className="content-card quality-filter-card">
+        <Space className="quality-filter-space" wrap>
+          <Input
+            value={keyword}
+            prefix={<SearchOutlined />}
+            placeholder="搜索当前表格"
+            onChange={(e) => {
+              if (!guard()) return;
+              setKeyword(e.target.value);
+              setPage(1);
+            }}
+            style={{ width: 210 }}
+          />
+          <Select
+            allowClear
+            showSearch
+            loading={projectsLoading}
+            popupMatchSelectWidth={false}
+            classNames={{ popup: { root: 'project-relation-picker-dropdown' } }}
+            placeholder="全部项目"
+            value={projectId}
+            options={projects.map((project) => ({
+              value: project.id,
+              label: `${project.projectCode} · ${project.name}`,
+            }))}
+            optionFilterProp="label"
+            onChange={(value) => {
+              if (!guard()) return;
+              setProjectId(value);
+              setPage(1);
+            }}
+            style={{ width: 180 }}
+          />
+          {filterFields.map((field) => {
+            const values = Array.from(
+              new Set([
+                ...field.options,
+                ...activeRows.map((row) => textValue(row.data[field.key])).filter(Boolean),
+              ]),
+            );
+            return (
+              <Select
+                key={field.key}
+                allowClear
+                showSearch
+                placeholder={`筛选${field.label}`}
+                aria-label={`筛选${field.label}`}
+                value={filters[field.key] || undefined}
+                options={values.map((value) => ({ value, label: value }))}
+                onChange={(value) => {
+                  if (!guard()) return;
+                  setFilters((current) => ({ ...current, [field.key]: value || '' }));
+                  setPage(1);
+                }}
+                style={{ width: 150 }}
+              />
+            );
+          })}
+          <Button
+            icon={<RedoOutlined />}
+            onClick={() => {
+              if (!guard()) return;
+              setKeyword('');
+              setProjectId(undefined);
+              setFilters({});
+              setPage(1);
+            }}
+          >
+            重置
+          </Button>
+        </Space>
+      </Card>
       <Card className="content-card quality-record-list-card" styles={{ body: { padding: 0 } }}>
         {view === 'card' ? (
           <div className="quality-record-card-view">

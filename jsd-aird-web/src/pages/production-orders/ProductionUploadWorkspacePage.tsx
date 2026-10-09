@@ -1,15 +1,14 @@
-import {
-  ArrowLeftOutlined,
-  DownloadOutlined,
-  FileOutlined,
-  SaveOutlined,
-} from '@ant-design/icons';
+import { ArrowLeftOutlined, DownloadOutlined, SaveOutlined } from '@ant-design/icons';
 import {
   Alert,
   Button,
   Card,
   Empty,
+  Form,
+  Input,
+  Modal,
   Result,
+  Select,
   Skeleton,
   Space,
   Spin,
@@ -22,12 +21,21 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom';
 
 import { SaveStateBadge, type SaveState } from '@/components/SaveStateBadge';
-import { FilePreviewModal } from '@/components/file-preview/FilePreviewModal';
 import { VersionHistoryPanel } from '@/components/version-history/VersionHistoryPanel';
 import { usePermission } from '@/components/auth/usePermission';
-import { downloadBlob, fetchFileBlob, fetchFilePreviewBlob, fileContentUrl } from '@/services/files/file-api';
-import type { EditorHandle } from '@/features/template-workspace/types';
+import {
+  downloadBlob,
+  fetchFileBlob,
+  fetchFilePreviewBlob,
+  stageFile,
+} from '@/services/files/file-api';
+import { templateApi } from '@/services/templates/template-api';
+import type { EditorHandle, TemplateBinding } from '@/features/template-workspace/types';
+import type { RecognitionReviewItem } from '@/services/templates/template-api';
 import { WordNativePreview } from '@/features/template-workspace/WordNativePreview';
+import { ProductionUploadFieldManagerPanel } from './ProductionUploadFieldManagerPanel';
+import { ProductionUploadRecognitionStatusBar } from './ProductionUploadRecognitionStatusBar';
+import type { FieldManagerTab } from '@/pages/template-workspace/TemplateFieldManager';
 import {
   ProductionBusinessPanel,
   createEmptyBusinessSnapshot,
@@ -38,6 +46,7 @@ import {
 import {
   productionUploadApi,
   productionOrderRecordApi,
+  productionStageLabel,
   type ProductionUpload,
   type ProductionUploadVersion,
 } from '@/services/production-orders/production-upload-api';
@@ -48,6 +57,15 @@ const SheetsEditor = lazy(async () => ({
 }));
 
 type WorkspaceView = 'recognition' | 'preview' | 'edit' | 'material' | 'attachments' | 'versions';
+
+/** Statuses the records endpoint answers while recognition is still running. */
+const IN_PROGRESS_STATUSES = ['QUEUED', 'PARSING', 'MATCHING_TEMPLATE', 'EXTRACTING'];
+
+/** The slice of the review contract the status strip and the field panel read. */
+type ProductionRecognitionReview = {
+  summary?: { total?: number; pending?: number; conflict?: number; regionCount?: number };
+  recognitionCoverage?: { unresolvedRegionCount?: number };
+};
 
 function isWorkbookSnapshot(value: unknown): value is Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -75,6 +93,19 @@ function formatOf(fileName: string): 'XLSX' | 'PHOTO' | 'DOCX' {
   if (/\.xlsx?$/i.test(fileName)) return 'XLSX';
   if (/\.(png|jpe?g|gif|webp|bmp|tiff?)$/i.test(fileName)) return 'PHOTO';
   return 'DOCX';
+}
+
+/** How the record is called in confirmations, so an image or Word order is not
+ *  described as an Excel one. */
+function productionOrderKindLabel(fileName: string) {
+  switch (formatOf(fileName)) {
+    case 'XLSX':
+      return 'Excel 生产单';
+    case 'PHOTO':
+      return '图片生产单';
+    default:
+      return 'Word 生产单';
+  }
 }
 
 function textValue(value: unknown) {
@@ -134,6 +165,7 @@ export function ProductionUploadWorkspacePage() {
   const navigate = useNavigate();
   const canUpdate = usePermission('production.update');
   const canSubmit = usePermission('production.submit');
+  const canCreateTemplate = usePermission('template.create');
   const editorRef = useRef<EditorHandle>(null);
   const [record, setRecord] = useState<ProductionUpload>();
   const [versions, setVersions] = useState<ProductionUploadVersion[]>([]);
@@ -141,14 +173,29 @@ export function ProductionUploadWorkspacePage() {
   const [snapshot, setSnapshot] = useState<Record<string, unknown>>();
   const [business, setBusiness] = useState<ProductionBusinessSnapshot>(createEmptyBusinessSnapshot);
   const [view, setView] = useState<WorkspaceView>('edit');
+  const [fieldTab, setFieldTab] = useState<FieldManagerTab>('recognition');
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const [reviewRefreshToken, setReviewRefreshToken] = useState(0);
   const [editorReady, setEditorReady] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const [sourcePreviewOpen, setSourcePreviewOpen] = useState(false);
+  const [downloadingSource, setDownloadingSource] = useState(false);
+  const [templateDraftOpen, setTemplateDraftOpen] = useState(false);
+  const [templateDraftSaving, setTemplateDraftSaving] = useState(false);
+  const [templateCategories, setTemplateCategories] = useState<Array<{ id: string; name: string }>>([]);
+  const [templateDraftForm] = Form.useForm<{ name: string; categoryId: string }>();
   const [selectingTemplate, setSelectingTemplate] = useState<string>();
+  // Recognition runs as an async job; these drive the in-place progress strip so a
+  // restart never has to send the reviewer back to the upload list.
+  const [restarting, setRestarting] = useState(false);
+  const [recognitionProgress, setRecognitionProgress] = useState<number>();
+  const [recognitionStage, setRecognitionStage] = useState<string>();
+  // Re-parsing blanks the stored recognition result on purpose, so the last usable
+  // one is kept here to hold the field panel open until the new result arrives.
+  const [retainedResult, setRetainedResult] = useState<ProductionUpload['recognitionResult']>();
   const [error, setError] = useState<string>();
   const [photoUrl, setPhotoUrl] = useState<string>();
   const [msg, holder] = message.useMessage();
@@ -159,15 +206,45 @@ export function ProductionUploadWorkspacePage() {
     setSelectedVersion(undefined);
     setEditorReady(false);
     try {
-      const [detail, history] = await Promise.all([
+      const [loadedDetail, history] = await Promise.all([
         productionOrderRecordApi.get(uploadId),
         productionOrderRecordApi.versions(uploadId).catch(() => []),
       ]);
+      const detail = (formatOf(loadedDetail.originalName) === 'XLSX'
+        || (formatOf(loadedDetail.originalName) === 'PHOTO' && !!loadedDetail.selectedTemplateVersionId))
+        && !loadedDetail.recognitionResult?.recognitionReview
+        ? await productionUploadApi.ensureFieldReview(uploadId).catch(() => loadedDetail)
+        : loadedDetail;
       setRecord(detail);
       setVersions(history);
-      // 默认停在编辑页签，图片生产单没有可编辑内容时才回到预览。
-      setView(formatOf(detail.originalName) === 'PHOTO' ? 'preview' : 'edit');
-      if (formatOf(detail.originalName) === 'PHOTO') {
+      const detailFormat = formatOf(detail.originalName);
+      let loadedSnapshot = detail.workbookSnapshot;
+      const storedBusiness = loadedSnapshot?.productionBusiness;
+      if (detailFormat === 'XLSX' || detailFormat === 'PHOTO') {
+        if (!isWorkbookSnapshot(loadedSnapshot)) {
+          loadedSnapshot = history.find((item) =>
+            isWorkbookSnapshot(item.workbookSnapshot),
+          )?.workbookSnapshot;
+        }
+        if (detailFormat === 'XLSX' && !isWorkbookSnapshot(loadedSnapshot)) {
+          loadedSnapshot = await parseExcelSnapshot(
+            await fetchFileBlob(detail.fileId),
+            detail.originalName,
+          );
+        }
+        if (isWorkbookSnapshot(loadedSnapshot)) {
+          const recoveredSnapshot = {
+            ...loadedSnapshot,
+            productionBusiness: storedBusiness ?? loadedSnapshot.productionBusiness,
+          };
+          setSnapshot(recoveredSnapshot);
+          setBusiness(normalizeBusinessSnapshot(recoveredSnapshot.productionBusiness));
+        }
+      }
+      // 图片使用所选模板生成工作簿后，也要进入 Excel 编辑页；只有尚未生成
+      // 工作簿的图片才停在原图预览页。
+      setView(detailFormat === 'PHOTO' && !isWorkbookSnapshot(loadedSnapshot) ? 'preview' : 'edit');
+      if (detailFormat === 'PHOTO') {
         const blob = await fetchFileBlob(detail.fileId);
         const url = URL.createObjectURL(blob);
         setPhotoUrl((current) => {
@@ -175,33 +252,23 @@ export function ProductionUploadWorkspacePage() {
           return url;
         });
       }
-      if (formatOf(detail.originalName) === 'XLSX') {
-        const storedSnapshot = detail.workbookSnapshot;
-        const storedBusiness = storedSnapshot?.productionBusiness;
-        let loadedSnapshot = storedSnapshot;
-        if (!isWorkbookSnapshot(loadedSnapshot)) {
-          loadedSnapshot = history.find((item) =>
-            isWorkbookSnapshot(item.workbookSnapshot),
-          )?.workbookSnapshot;
-        }
-        if (!isWorkbookSnapshot(loadedSnapshot)) {
-          loadedSnapshot = await parseExcelSnapshot(
-            await fetchFileBlob(detail.fileId),
-            detail.originalName,
-          );
-        }
-        const recoveredSnapshot = {
-          ...loadedSnapshot,
-          productionBusiness: storedBusiness ?? loadedSnapshot.productionBusiness,
-        };
-        setSnapshot(recoveredSnapshot);
-        setBusiness(normalizeBusinessSnapshot(recoveredSnapshot.productionBusiness));
-        setEditorReady(false);
-      } else if (formatOf(detail.originalName) === 'DOCX') {
+      if (detailFormat === 'DOCX') {
         setSnapshot(detail.workbookSnapshot ?? { wordPatches: [] });
       }
+      setEditorReady(false);
       setError(undefined);
     } catch (reason) {
+      // A reload while recognition is running makes the records endpoint refuse the
+      // upload ("尚未解析完成").  Fall back to the permissive upload endpoint so the
+      // workspace can show the running job instead of an error screen.
+      const running = await productionUploadApi.get(uploadId).catch(() => undefined);
+      if (running && IN_PROGRESS_STATUSES.includes(running.status)) {
+        setRecord(running);
+        setRecognitionProgress(running.recognitionProgress ?? 0);
+        setRecognitionStage(running.currentStage);
+        setError(undefined);
+        return;
+      }
       setError(reason instanceof Error ? reason.message : '生产单文件加载失败');
     } finally {
       setLoading(false);
@@ -223,8 +290,11 @@ export function ProductionUploadWorkspacePage() {
     businessOverride: ProductionBusinessSnapshot = business,
     silent = false,
   ): Promise<boolean> => {
-    if (!record || !snapshot || !['XLSX', 'DOCX'].includes(formatOf(record.originalName)))
-      return false;
+    if (!record || !snapshot) return false;
+    const sourceFormat = formatOf(record.originalName);
+    const usesWorkbookEditor =
+      sourceFormat === 'XLSX' || (sourceFormat === 'PHOTO' && isWorkbookSnapshot(snapshot));
+    if (!usesWorkbookEditor && sourceFormat !== 'DOCX') return false;
     const validationError = validateBusinessSnapshot(businessOverride);
     if (validationError) {
       msg.error(validationError);
@@ -233,14 +303,13 @@ export function ProductionUploadWorkspacePage() {
     setSaving(true);
     try {
       const liveSnapshot = editorRef.current?.getSnapshot();
-      const current =
-        formatOf(record.originalName) === 'XLSX'
-          ? isWorkbookSnapshot(liveSnapshot)
-            ? liveSnapshot
-            : isWorkbookSnapshot(snapshot)
-              ? snapshot
-              : undefined
-          : (liveSnapshot ?? snapshot);
+      const current = usesWorkbookEditor
+        ? isWorkbookSnapshot(liveSnapshot)
+          ? liveSnapshot
+          : isWorkbookSnapshot(snapshot)
+            ? snapshot
+            : undefined
+        : (liveSnapshot ?? snapshot);
       if (!current) {
         msg.error('工作簿尚未加载完成，为避免覆盖原数据，本次未保存，请稍后重试');
         return false;
@@ -274,6 +343,16 @@ export function ProductionUploadWorkspacePage() {
     }
     setPublishing(true);
     try {
+      if (formatOf(record.originalName) === 'XLSX'
+        || (formatOf(record.originalName) === 'PHOTO' && !!record.selectedTemplateVersionId)) {
+        const fields = await productionUploadApi.fields(record.id);
+        if (fields.some((field) => !['CONFIRMED', 'IGNORED'].includes(field.reviewStatus))) {
+          msg.warning('请先确认生产单的全部识别字段');
+          setView('edit');
+          setFieldTab('recognition');
+          return;
+        }
+      }
       // 编辑中的内容随发布一起落库，不需要先手动保存草稿。
       if (dirty || !record.workbookSnapshot) {
         const saved = await saveDraft(business, true);
@@ -294,21 +373,178 @@ export function ProductionUploadWorkspacePage() {
     }
   };
 
+  // Recognition runs as an async job and the records endpoint only serves finished
+  // uploads, so poll the permissive upload endpoint until the job settles instead
+  // of reloading into an error page.  `onProgress` reports every poll so the caller
+  // can show the stage and percentage in place, and the settled record comes back
+  // so the caller can tell success, failure and timeout apart.
+  const waitForRecognition = useCallback(async (
+    attempts = 160,
+    onProgress?: (current: ProductionUpload) => void,
+  ): Promise<ProductionUpload | undefined> => {
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const current = await productionUploadApi.get(uploadId).catch(() => undefined);
+      if (!current) return undefined;
+      onProgress?.(current);
+      if (!IN_PROGRESS_STATUSES.includes(current.status)) return current;
+      await new Promise((resolve) => window.setTimeout(resolve, 1500));
+    }
+    return undefined;
+  }, [uploadId]);
+
+  // A record is recognising either because this page started the job or because
+  // the page was reloaded while that job was still running.  Both keep the
+  // progress strip alive and the conflicting actions locked.
+  const recognizing = restarting || (record ? IN_PROGRESS_STATUSES.includes(record.status) : false);
+
   const chooseTemplate = async (templateVersionId: string) => {
     setSelectingTemplate(templateVersionId);
     try {
       await productionUploadApi.selectTemplate(uploadId, templateVersionId);
-      msg.success('模板已选择，系统开始重新识别');
+      msg.loading({ content: '正在识别图片字段，请稍候…', duration: 0, key: 'photo-recognition' });
+      const finished = await waitForRecognition();
+      msg.destroy('photo-recognition');
+      if (!finished) {
+        msg.warning('字段识别仍在进行，可稍后刷新本页查看识别结果');
+        return;
+      }
+      if (finished.status === 'FAILED') {
+        msg.error(finished.failureMessage || '字段识别失败，请重新选择模板后再试');
+        return;
+      }
+      msg.success('模板已选择，字段识别完成');
       await load();
     } catch (reason) {
+      msg.destroy('photo-recognition');
       msg.error(reason instanceof Error ? reason.message : '模板选择失败');
     } finally {
       setSelectingTemplate(undefined);
     }
   };
 
+  const confirmAllFields = async () => {
+    if (!record) return;
+    setReviewBusy(true);
+    try {
+      const fields = await productionUploadApi.fields(record.id);
+      const pending = fields.filter((field) => !['ROW_TABLE', 'COLUMN_TABLE', 'FORM_REGION'].includes(field.itemKind)
+        && !['CONFIRMED', 'IGNORED'].includes(field.reviewStatus));
+      if (pending.length) {
+        await productionUploadApi.confirmFields(record.id, pending.map((field) => ({
+          fieldCode: field.fieldCode,
+          dataPath: field.dataPath,
+          recordIndex: field.recordIndex,
+          reviewStatus: 'CONFIRMED',
+        })));
+      }
+      msg.success(`已确认 ${pending.length} 个字段`);
+      setRecord(await productionOrderRecordApi.get(record.id));
+      setReviewRefreshToken((current) => current + 1);
+    } catch (reason) {
+      msg.error(reason instanceof Error ? reason.message : '字段确认失败');
+    } finally {
+      setReviewBusy(false);
+    }
+  };
+
+  const restartRecognition = async () => {
+    if (!record || record.status === 'PUBLISHED' || dirty || restarting) return;
+    setRestarting(true);
+    setRecognitionProgress(0);
+    setRecognitionStage(undefined);
+    setFieldTab('recognition');
+    try {
+      const started = await productionUploadApi.retry(record.id);
+      setRecognitionProgress(started.recognitionProgress ?? 0);
+      setRecognitionStage(started.currentStage);
+      const settled = await waitForRecognition(160, (current) => {
+        setRecognitionProgress(current.recognitionProgress ?? 0);
+        setRecognitionStage(current.currentStage);
+      });
+      if (!settled) {
+        msg.warning('重新识别仍在后台进行，可稍后刷新本页查看识别结果');
+        return;
+      }
+      if (settled.status === 'FAILED') {
+        msg.error(settled.failureMessage || '重新识别失败，请稍后重试');
+        return;
+      }
+      msg.success('重新识别完成，请核对新的字段识别结果');
+      await load();
+    } catch (reason) {
+      msg.error(reason instanceof Error ? reason.message : '重新识别失败');
+    } finally {
+      setRestarting(false);
+      setRecognitionProgress(undefined);
+      setRecognitionStage(undefined);
+    }
+  };
+
+  const requestRestartRecognition = () => {
+    if (!record) return;
+    Modal.confirm({
+      title: `重新识别这份${productionOrderKindLabel(record.originalName)}？`,
+      content: '系统会重新读取上传的原文件并生成字段候选，当前草稿中的编辑内容会被识别结果替换。识别期间本页会显示进度，无需离开。',
+      okText: '重新识别',
+      cancelText: '取消',
+      // Return nothing on purpose: antd keeps a dialog open while `onOk` returns a
+      // promise, and the restart now waits for the whole recognition job.  Closing
+      // at once hands the progress to the status strip instead of a modal that
+      // blocks the workspace for minutes.
+      onOk: () => {
+        void restartRecognition();
+      },
+    });
+  };
+
+  const downloadSource = async () => {
+    if (!record) return;
+    setDownloadingSource(true);
+    try {
+      downloadBlob(await fetchFileBlob(record.fileId), record.originalName);
+    } catch (reason) {
+      msg.error(reason instanceof Error ? reason.message : '原文下载失败');
+    } finally {
+      setDownloadingSource(false);
+    }
+  };
+
+  const openTemplateDraft = async () => {
+    if (!record) return;
+    templateDraftForm.setFieldsValue({ name: `${record.productionName || record.originalName.replace(/\.xlsx?$/i, '')}模板`.slice(0, 160) });
+    setTemplateDraftOpen(true);
+    try {
+      setTemplateCategories(await templateApi.listCategories());
+    } catch (reason) {
+      msg.error(reason instanceof Error ? reason.message : '模板分类加载失败');
+    }
+  };
+
+  const createTemplateDraft = async () => {
+    if (!record || templateDraftSaving) return;
+    let values: { name: string; categoryId: string };
+    try { values = await templateDraftForm.validateFields(); } catch { return; }
+    setTemplateDraftSaving(true);
+    try {
+      if (dirty && !await saveDraft(business, true)) return;
+      const blob = await productionOrderRecordApi.export(record.id);
+      const file = new File([blob], `${values.name.trim()}.xlsx`, { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const staged = await stageFile(file, 'IMPORT');
+      await templateApi.createImport(staged.fileId, 'XLSX', {
+        categoryId: values.categoryId, duplicateOverride: true, operationSource: 'PRODUCTION_ORDER',
+      });
+      setTemplateDraftOpen(false);
+      msg.success('已提交模板草稿生成任务');
+      navigate('/templates/upload');
+    } catch (reason) {
+      msg.error(reason instanceof Error ? reason.message : '生成模板草稿失败');
+    } finally {
+      setTemplateDraftSaving(false);
+    }
+  };
+
   const restoreVersion = (version: ProductionUploadVersion) => {
-    if (!isExcel) return;
+    if (!isWorkbook) return;
     setSnapshot(version.workbookSnapshot);
     setBusiness(normalizeBusinessSnapshot(version.workbookSnapshot.productionBusiness));
     setSelectedVersion(undefined);
@@ -343,13 +579,16 @@ export function ProductionUploadWorkspacePage() {
     setExporting(true);
     try {
       const blob = await productionOrderRecordApi.export(record.id);
-      const extension = record.originalName.includes('.')
-        ? record.originalName.slice(record.originalName.lastIndexOf('.'))
-        : '';
+      const extension = isWorkbookSnapshot(record.workbookSnapshot)
+        ? '.xlsx'
+        : record.originalName.includes('.')
+          ? record.originalName.slice(record.originalName.lastIndexOf('.'))
+          : '';
       const baseName = record.productionName || record.originalName || '生产单';
-      const fileName = extension && !baseName.toLowerCase().endsWith(extension.toLowerCase())
-        ? `${baseName}${extension}`
-        : baseName;
+      const fileName =
+        extension && !baseName.toLowerCase().endsWith(extension.toLowerCase())
+          ? `${baseName}${extension}`
+          : baseName;
       downloadBlob(blob, fileName);
       msg.success('生产单已导出');
     } catch (reason) {
@@ -358,6 +597,33 @@ export function ProductionUploadWorkspacePage() {
       setExporting(false);
     }
   };
+
+  // A page reloaded while recognition was still running has no local restart to
+  // await, so follow the job here and refresh once it settles.  `restarting`
+  // already owns its own polling, which keeps the two from doubling up.
+  useEffect(() => {
+    if (!recognizing || restarting || !record) return;
+    let active = true;
+    void (async () => {
+      const settled = await waitForRecognition(160, (current) => {
+        if (!active) return;
+        setRecognitionProgress(current.recognitionProgress ?? 0);
+        setRecognitionStage(current.currentStage);
+      });
+      if (!active || !settled) return;
+      await load();
+    })();
+    return () => {
+      active = false;
+    };
+  }, [load, recognizing, record, restarting, waitForRecognition]);
+
+  // Re-parsing blanks the stored recognition result on purpose, so remember the last
+  // usable one to keep the field panel mounted while recognition runs.
+  useEffect(() => {
+    const current = record?.recognitionResult;
+    if (current?.recognitionReview) setRetainedResult(current);
+  }, [record]);
 
   if (loading)
     return (
@@ -380,10 +646,53 @@ export function ProductionUploadWorkspacePage() {
   const isExcel = format === 'XLSX';
   const isPhoto = format === 'PHOTO';
   const displayedSnapshot = selectedVersion?.workbookSnapshot ?? snapshot;
+  const isWorkbook = isExcel || (isPhoto && isWorkbookSnapshot(displayedSnapshot));
+  const storedRecognitionResult = (isExcel || (isPhoto && !!record.selectedTemplateVersionId))
+    ? record.recognitionResult
+    : undefined;
+  // Recognition clears the stored result before re-parsing, and a reload during the
+  // job reads the same cleared record.  Fall back to the previous run so the panel —
+  // review, structure and mapping alike — stays on screen mid-restart, exactly like
+  // the template center keeps showing the fields it already recognised.
+  const effectiveRecognitionResult = storedRecognitionResult
+    ?? (recognizing ? retainedResult : undefined);
+  const review = effectiveRecognitionResult?.recognitionReview as
+    ProductionRecognitionReview | undefined;
+  // Field review only needs the selected template the values were extracted
+  // against; editing additionally needs the generated workbook.  A photo whose
+  // workbook generation failed can therefore still confirm its fields.
+  const hasFieldReview = isExcel || (isPhoto && !!record.selectedTemplateVersionId);
+  // The preview is what a reviewer checks the recognized values against, so the
+  // field review belongs next to it as well: on a photo upload the workbook only
+  // exists on the edit view, which used to hide the panel exactly where the
+  // original document is still on screen.
+  const showFieldReview = hasFieldReview && !selectedVersion
+    && (view === 'preview' || view === 'edit' || (isPhoto && !isWorkbook));
+  const focusRecognitionItem = (item: RecognitionReviewItem) => {
+    const source = item.payload.locator ?? {};
+    const locator: Record<string, unknown> = {
+      ...source,
+      sheetId: source.sheetId || item.sheetId,
+      sheetName: source.sheetName || item.sheetName,
+      address: source.address || item.address,
+      labelAddress: source.labelAddress || item.labelAddress,
+    };
+    const binding: TemplateBinding = {
+      bindingId: item.payload.bindingId || item.id,
+      dataPath: item.payload.dataPath || '',
+      role: item.kind === 'SCALAR' ? 'FIELD' : 'REPEAT_REGION',
+      locatorType: item.payload.locatorType || (item.kind === 'SCALAR' ? 'CELL_RANGE' : 'TABLE_REGION'),
+      locator,
+      syncDirection: 'DATA_TO_EDITOR',
+      primaryBinding: true,
+      bindingStatus: 'VALID',
+    };
+    editorRef.current?.focusBinding(binding);
+  };
   const latestVersion = versions[0];
   const readonly = !['edit', 'material', 'attachments'].includes(view) || Boolean(selectedVersion);
-  const editable = (isExcel || format === 'DOCX') && !readonly && canUpdate;
-  const waitingForEditor = isExcel && view === 'edit' && !editorReady;
+  const editable = (isWorkbook || format === 'DOCX') && !readonly && canUpdate;
+  const waitingForEditor = isWorkbook && view === 'edit' && !editorReady;
   const saveState: SaveState = saving ? 'SAVING' : dirty ? 'DIRTY' : 'SAVED';
   const workspaceActions = () => (
     <>
@@ -391,9 +700,14 @@ export function ProductionUploadWorkspacePage() {
       <Button icon={<DownloadOutlined />} loading={exporting} onClick={() => void exportRecord()}>
         导出
       </Button>
-      <Button icon={<FileOutlined />} onClick={() => setSourcePreviewOpen(true)}>
-        原文
+      <Button icon={<DownloadOutlined />} loading={downloadingSource} onClick={() => void downloadSource()}>
+        原文下载
       </Button>
+      {isExcel && canCreateTemplate && (
+        <Button disabled={Boolean(selectedVersion)} onClick={() => void openTemplateDraft()}>
+          另存为模板
+        </Button>
+      )}
       {selectedVersion && <Button onClick={() => setSelectedVersion(undefined)}>返回</Button>}
       {!selectedVersion && (
         <>
@@ -401,7 +715,7 @@ export function ProductionUploadWorkspacePage() {
             type="primary"
             icon={<SaveOutlined />}
             loading={saving}
-            disabled={!editable || waitingForEditor}
+            disabled={!editable || waitingForEditor || recognizing}
             onClick={() => void saveDraft()}
           >
             保存草稿
@@ -409,7 +723,7 @@ export function ProductionUploadWorkspacePage() {
           <Button
             type="primary"
             loading={publishing}
-            disabled={!canSubmit || saving}
+            disabled={!canSubmit || saving || recognizing}
             onClick={() => void publish()}
           >
             发布
@@ -434,9 +748,7 @@ export function ProductionUploadWorkspacePage() {
             <Typography.Text type="secondary" className="workspace-breadcrumb">
               生产单管理 / 生产单查看
             </Typography.Text>
-            <Typography.Text strong>
-              {record.originalName}
-            </Typography.Text>
+            <Typography.Text strong>{record.originalName}</Typography.Text>
           </span>
           <Tag color={latestVersion ? 'blue' : 'default'}>
             {latestVersion ? `V${latestVersion.versionNo}` : '未发布'}
@@ -455,16 +767,83 @@ export function ProductionUploadWorkspacePage() {
           onChange={(key) => switchView(key as WorkspaceView)}
           items={[
             { key: 'preview', label: '预览' },
-            { key: 'edit', label: '编辑', disabled: !isExcel && format !== 'DOCX' },
+            { key: 'edit', label: '编辑', disabled: !isWorkbook && format !== 'DOCX' },
             { key: 'versions', label: '版本记录' },
-            { key: 'material', label: '实际投料单', disabled: !isExcel },
-            { key: 'attachments', label: '工艺附件', disabled: !isExcel },
+            { key: 'material', label: '实际投料单', disabled: !isWorkbook },
+            { key: 'attachments', label: '工艺附件', disabled: !isWorkbook },
           ]}
         />
       </nav>
       <div
         className={`workspace-main-stage ${['material', 'attachments'].includes(view) ? 'is-business-tab' : ''}`}
       >
+        {isPhoto && !record.selectedTemplateVersionId && !selectedVersion && (
+          <section style={{ padding: 16, borderBottom: '1px solid #f0f0f0' }}>
+            <Alert
+              type="info"
+              showIcon
+              message="图片字段解析需要先选择识别模板"
+              description="字段解析按模板的字段清单从图片中抽取值，并把结果生成为可编辑的工作簿；未选模板时只保存原图。"
+            />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
+              {(record.recognitionResult?.templateCandidates ?? []).map((item) => (
+                <div
+                  key={item.templateVersionId}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}
+                >
+                  <span>
+                    <b>{item.templateName}</b> · {item.templateCode} · {Math.round(item.score * 100)}%
+                  </span>
+                  <Button
+                    size="small"
+                    type="primary"
+                    loading={selectingTemplate === item.templateVersionId}
+                    disabled={Boolean(selectingTemplate) || !canUpdate}
+                    onClick={() => void chooseTemplate(item.templateVersionId)}
+                  >
+                    选择此模板
+                  </Button>
+                </div>
+              ))}
+              {!(record.recognitionResult?.templateCandidates ?? []).length && (
+                <Empty description="没有可匹配的已发布 XLSX 模板，请先在模板中心发布生产单模板" />
+              )}
+            </div>
+          </section>
+        )}
+        {hasFieldReview && showFieldReview && record.recognitionResult?.recognitionWarning && (
+          <Alert type="warning" showIcon message="完整字段识别未完成"
+            description={record.recognitionResult.recognitionWarning} />
+        )}
+        {showFieldReview && !review && !recognizing && (
+          <Alert type="warning" showIcon message="这条生产单尚未生成字段确认结果"
+            description="可重新生成字段确认；原工作簿和已发布版本会保留。"
+            action={<Button size="small" loading={reviewBusy} onClick={() => {
+              setReviewBusy(true);
+              void productionUploadApi.ensureFieldReview(record.id).then(setRecord)
+                .catch((reason) => msg.error(reason instanceof Error ? reason.message : '生成字段确认失败'))
+                .finally(() => setReviewBusy(false));
+            }}>生成字段确认</Button>} />
+        )}
+        {((showFieldReview && review) || recognizing) && (
+          <ProductionUploadRecognitionStatusBar
+            fieldCount={review?.summary?.total ?? 0}
+            pendingCount={review?.summary?.pending ?? 0}
+            pendingRegionCount={review?.recognitionCoverage?.unresolvedRegionCount ?? 0}
+            conflictCount={review?.summary?.conflict ?? 0}
+            regionCount={review?.summary?.regionCount ?? 0}
+            busy={reviewBusy}
+            running={recognizing}
+            progress={recognitionProgress ?? record.recognitionProgress}
+            stageLabel={productionStageLabel(recognitionStage ?? record.currentStage)}
+            canUpdate={canUpdate}
+            canRestart={canUpdate && record.status !== 'PUBLISHED' && !dirty}
+            onStart={() => setFieldTab('recognition')}
+            onConfirmAll={() => void confirmAllFields()}
+            onRestart={requestRestartRecognition}
+          />
+        )}
+        <div className={showFieldReview && review ? 'template-workspace-grid production-review-grid' : 'production-workspace-content'}>
         <main
           className={`workspace-canvas ${view === 'preview' ? 'is-preview' : ''} ${['material', 'attachments'].includes(view) ? 'production-business-panel-standalone' : ''}`}
         >
@@ -579,7 +958,7 @@ export function ProductionUploadWorkspacePage() {
                       {selectedVersion.createdBy} ·{' '}
                       {new Date(selectedVersion.createdAt).toLocaleString()}
                     </Typography.Text>
-                    {canUpdate && isExcel && (
+                    {canUpdate && isWorkbook && (
                       <Button size="small" onClick={() => restoreVersion(selectedVersion)}>
                         以此版本恢复草稿
                       </Button>
@@ -587,7 +966,7 @@ export function ProductionUploadWorkspacePage() {
                   </Space>
                 )}
               </div>
-              {isExcel && displayedSnapshot ? (
+              {isWorkbook && displayedSnapshot ? (
                 <div className="quality-excel-canvas" key={selectedVersion?.id ?? 'current'}>
                   <Suspense
                     fallback={
@@ -639,24 +1018,49 @@ export function ProductionUploadWorkspacePage() {
                       ],
                     }))
                   }
-                  loadPreview={() => fetchFilePreviewBlob(record.fileId)}
+                  loadPreview={() =>
+                    // A legacy .doc is an OLE2 binary the renderer cannot read, so the
+                    // preview uses the DOCX copy the server staged during recognition.
+                    fetchFilePreviewBlob(
+                      record.recognitionResult?.wordDocument?.workingDocxFileId
+                        ?? record.recognitionResult?.normalizedFileId
+                        ?? record.fileId,
+                    )
+                  }
                 />
               )}
             </section>
           )}
         </main>
+        {showFieldReview && review && (
+          <aside className="business-field-panel">
+            <ProductionUploadFieldManagerPanel
+              uploadId={record.id}
+              format="XLSX"
+              recognitionResult={effectiveRecognitionResult}
+              canUpdate={canUpdate && !recognizing}
+              activeTab={fieldTab}
+              onActiveTabChange={setFieldTab}
+              onFocusItem={focusRecognitionItem}
+              refreshToken={reviewRefreshToken}
+              onSaved={() => void productionOrderRecordApi.get(record.id).then(setRecord)}
+            />
+          </aside>
+        )}
+        </div>
       </div>
-      <FilePreviewModal
-        open={sourcePreviewOpen}
-        onClose={() => setSourcePreviewOpen(false)}
-        file={{
-          fileName: record.originalName,
-          contentType: record.contentType,
-          size: record.size,
-          load: () => fetchFilePreviewBlob(record.fileId),
-          downloadUrl: fileContentUrl(record.fileId),
-        }}
-      />
+      <Modal title="另存为模板" open={templateDraftOpen} okText="生成模板草稿"
+        confirmLoading={templateDraftSaving} onCancel={() => setTemplateDraftOpen(false)}
+        onOk={() => void createTemplateDraft()} destroyOnClose>
+        <Form form={templateDraftForm} layout="vertical" preserve={false}>
+          <Form.Item name="name" label="模板名称" rules={[{ required: true, whitespace: true, message: '请输入模板名称' }]}>
+            <Input maxLength={160} showCount />
+          </Form.Item>
+          <Form.Item name="categoryId" label="模板分类" rules={[{ required: true, message: '请选择模板分类' }]}>
+            <Select options={templateCategories.map((item) => ({ value: item.id, label: item.name }))} placeholder="请选择模板分类" />
+          </Form.Item>
+        </Form>
+      </Modal>
     </section>
   );
 }

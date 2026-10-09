@@ -64,6 +64,22 @@ public class ProductionUploadController {
         return success(service.fields(id));
     }
 
+    @PostMapping("/{id}/field-review")
+    public ApiResponse<ProductionUploadRepository.UploadView> ensureFieldReview(@PathVariable UUID id) {
+        return success(service.ensureFieldReview(id));
+    }
+
+    /** Saves the reviewed recognition fields and writes them into the workbook. */
+    @PutMapping("/{id}/fields")
+    public ApiResponse<ProductionUploadRepository.UploadView> confirmFields(
+            @PathVariable UUID id, @Valid @RequestBody ConfirmFieldsRequest request) {
+        return success(service.confirmFields(id, request.fields().stream()
+                .map(item -> new ProductionUploadService.FieldConfirmation(
+                        item.fieldCode(), item.dataPath(), item.recordIndex(),
+                        item.value(), item.reviewStatus()))
+                .toList()));
+    }
+
     @PutMapping("/{id}/rename")
     public ApiResponse<ProductionUploadRepository.UploadView> rename(
             @PathVariable UUID id, @Valid @RequestBody RenameRequest request) {
@@ -81,6 +97,12 @@ public class ProductionUploadController {
     @PostMapping("/{id}/retry")
     public ApiResponse<ProductionUploadRepository.UploadView> retry(@PathVariable UUID id) {
         return success(service.retry(id));
+    }
+
+    /** Builds the Excel workbook for a photo upload from its recognized values. */
+    @PostMapping("/{id}/workbook")
+    public ApiResponse<ProductionUploadRepository.UploadView> convertToWorkbook(@PathVariable UUID id) {
+        return success(service.convertToWorkbook(id));
     }
 
     @DeleteMapping("/{id}")
@@ -114,6 +136,19 @@ public class ProductionUploadController {
     }
 
     public record SelectTemplateRequest(@NotNull UUID templateVersionId) {
+    }
+
+    public record ConfirmFieldsRequest(@NotNull @Valid java.util.List<FieldDecision> fields) {
+    }
+
+    /** A reviewed field value: only the fields the workspace edited are sent. */
+    public record FieldDecision(
+            String fieldCode,
+            String dataPath,
+            Integer recordIndex,
+            String value,
+            String reviewStatus
+    ) {
     }
 
     public record RenameRequest(

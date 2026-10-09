@@ -126,6 +126,47 @@ public class ExperimentService {
         return summary;
     }
 
+    /**
+     * Replaces the parsed payload of an existing import-owned draft without
+     * creating another experiment aggregate. Retry therefore keeps the
+     * original experiment identity and experiment number.
+     */
+    @Transactional
+    public Summary replaceImportedDraft(UUID id, CreateCommand command) {
+        var actor = ActorContext.required();
+        // An import job can outlive its draft: deleting an experiment is a
+        // soft delete and the job keeps the old experiment_id for traceability.
+        // A retry must not turn that normal lifecycle state into a failed async
+        // job. Only reuse a live, editable draft; otherwise start a new one.
+        var current = repository.detailForUpdate(actor.organizationId(), id).orElse(null);
+        if (current == null || !current.summary().status().isEditable()) {
+            return create(command);
+        }
+
+        var summary = current.summary();
+        var title = defaultText(command == null ? null : command.title(), summary.title());
+        var ownerName = defaultText(command == null ? null : command.ownerName(),
+                defaultText(summary.ownerName(), actor.username()));
+        var experimentDate = command == null || command.experimentDate() == null
+                ? summary.experimentDate() : command.experimentDate();
+        var saved = save(id, summary.revision(), new DraftCommand(
+                summary.experimentNo(),
+                title,
+                command == null || command.categoryId() == null ? summary.categoryId() : command.categoryId(),
+                command == null || command.categoryName() == null ? summary.categoryName() : command.categoryName(),
+                command == null || command.projectId() == null ? summary.projectId() : command.projectId(),
+                command == null || command.stageId() == null ? summary.stageId() : command.stageId(),
+                command == null || command.taskId() == null ? summary.taskId() : command.taskId(),
+                ownerName,
+                experimentDate,
+                command == null ? null : command.templateVersionId(),
+                command == null ? null : command.templateSnapshotHash(),
+                command == null ? current.templateSnapshot() : command.templateSnapshot(),
+                command == null ? current.editModel() : command.editModel()
+        ));
+        return saved.summary();
+    }
+
     public Summary copy(UUID id) {
         var actor = ActorContext.required();
         var result = repository.copy(actor.organizationId(), id, actor.userId(), actor.username());
@@ -186,6 +227,40 @@ public class ExperimentService {
     public Detail transition(UUID id, long revision, ExperimentStatus target, String comment) {
         if (target == null) {
             throw validation("实验目标状态不能为空");
+        }
+        if (target == ExperimentStatus.PENDING_REVIEW) {
+            var model = detail(id).editModel();
+            if (model.path("recognizedFields").isArray()) {
+                var fields = model.path("recognizedFields");
+                if (fields.isEmpty()) throw validation("Excel 尚未识别出可绑定字段，请重新识别");
+                for (var field : fields) {
+                    if (!field.path("confirmed").asBoolean(false)) {
+                        throw validation("请先确认 Excel 识别字段，再提交审核");
+                    }
+                    var locator = field.path("locator");
+                    if (field.path("name").asText("").isBlank()
+                            || field.path("fieldCode").asText("").isBlank()
+                            || field.path("dataPath").asText("").isBlank()
+                            || (locator.path("address").asText("").isBlank()
+                                && locator.path("anchorAddress").asText("").isBlank()
+                                && locator.path("range").asText("").isBlank()
+                                && locator.path("valueRange").asText("").isBlank()
+                                && locator.path("dataRange").asText("").isBlank())) {
+                        throw validation("Excel 字段绑定缺少名称、编码、数据路径或填写位置");
+                    }
+                }
+                for (var region : model.path("recognizedRegions")) {
+                    if (!region.path("confirmed").asBoolean(false)) {
+                        throw validation("请先确认 Excel 识别区域，再提交审核");
+                    }
+                    var locator = region.path("locator");
+                    if (locator.path("range").asText("").isBlank()
+                            && locator.path("address").asText("").isBlank()
+                            && locator.path("dataRange").asText("").isBlank()) {
+                        throw validation("Excel 识别区域缺少位置，请重新识别");
+                    }
+                }
+            }
         }
         var actor = ActorContext.required();
         var result = normalize(repository.transition(

@@ -12,7 +12,6 @@ import {
 import {
   App,
   Button,
-  Breadcrumb,
   Card,
   Checkbox,
   Empty,
@@ -30,6 +29,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import type { ProjectRelationTarget } from '@/services/project/project-resource-api';
+import '@/components/project-relations/project-relation-picker.css';
 import {
   getProjects,
   getProjectStages,
@@ -80,6 +80,9 @@ export function ProductionOrderListPage() {
   const [loading, setLoading] = useState(true);
   const [keyword, setKeyword] = useState('');
   const [status, setStatus] = useState<string>();
+  const [projectId, setProjectId] = useState<string>();
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [projectsLoading, setProjectsLoading] = useState(false);
   const [page, setPage] = useState({ current: 1, pageSize: 10, total: 0 });
   const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
   const [view, setView] = useState<ViewMode>('list');
@@ -121,6 +124,7 @@ export function ProductionOrderListPage() {
       const result = await productionUploadApi.list({
         keyword: keyword || undefined,
         status: status || undefined,
+        projectId: projectId || undefined,
         viewableOnly: true,
         page: page.current,
         size: page.pageSize,
@@ -137,11 +141,29 @@ export function ProductionOrderListPage() {
     } finally {
       setLoading(false);
     }
-  }, [keyword, message, page.current, page.pageSize, status]);
+  }, [keyword, message, page.current, page.pageSize, projectId, status]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    let active = true;
+    setProjectsLoading(true);
+    void getProjects({ page: 1, size: 200 })
+      .then((result) => {
+        if (active) setProjects(result.items);
+      })
+      .catch(() => {
+        if (active) void message.error('项目列表加载失败');
+      })
+      .finally(() => {
+        if (active) setProjectsLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [message]);
 
   const deleteSelected = () => {
     if (!selectedKeys.length) return;
@@ -501,6 +523,7 @@ export function ProductionOrderListPage() {
   const resetFilters = () => {
     setKeyword('');
     setStatus(undefined);
+    setProjectId(undefined);
     setPage((current) => ({ ...current, current: 1 }));
   };
 
@@ -599,55 +622,20 @@ export function ProductionOrderListPage() {
   return (
     <>
       <div className="business-page production-order-page pm-unified-list-page">
-        <div className="page-heading production-order-page-intro">
+        <div className="page-heading">
           <div>
-            <Breadcrumb items={[{ title: '生产单管理' }, { title: '生产单查看' }]} />
             <Typography.Title level={2}>生产单查看</Typography.Title>
             <Typography.Text type="secondary">
               查看已上传的生产单资料，当前不进入模板填写或提交流程。
             </Typography.Text>
           </div>
-        </div>
-
-        <Card className="content-card filter-card production-order-filter">
-          <Space wrap>
-            <Input.Search
-              allowClear
-              placeholder="生产单名称、订单号、品名或文件名"
-              value={keyword}
-              onChange={(event) => {
-                setKeyword(event.target.value);
-                setPage((current) => ({ ...current, current: 1 }));
-              }}
-              style={{ width: 'min(300px, 100%)' }}
-            />
-            <Select
-              allowClear
-              placeholder="全部状态"
-              value={status}
-              onChange={(value) => {
-                setStatus(value);
-                setPage((current) => ({ ...current, current: 1 }));
-              }}
-              options={statusOptions}
-              style={{ width: 'min(140px, 100%)' }}
-            />
-            <Button icon={<RedoOutlined />} onClick={resetFilters}>
-              重置
-            </Button>
-          </Space>
-        </Card>
-
-        <div className="production-order-toolbar pm-batch-row">
-          <div className="pm-batch-summary">
+          <div className="pm-page-actions">
             <span className="pm-selected">已选 {selectedKeys.length} 条</span>
             {selectedKeys.length > 0 && (
               <Button type="link" size="small" onClick={() => setSelectedKeys([])}>
                 清除已选
               </Button>
             )}
-          </div>
-          <div className="pm-batch-actions">
             <Button
               icon={<CopyOutlined />}
               disabled={!selectedKeys.length}
@@ -695,7 +683,7 @@ export function ProductionOrderListPage() {
                 aria-label="卡片视图"
                 aria-pressed={view === 'card'}
                 title="卡片视图"
-                type={view === 'card' ? 'primary' : 'default'}
+                className={view === 'card' ? 'pm-view-btn active' : 'pm-view-btn'}
                 icon={<AppstoreOutlined />}
                 onClick={() => changeView('card')}
               />
@@ -703,13 +691,61 @@ export function ProductionOrderListPage() {
                 aria-label="列表视图"
                 aria-pressed={view === 'list'}
                 title="列表视图"
-                type={view === 'list' ? 'primary' : 'default'}
+                className={view === 'list' ? 'pm-view-btn active' : 'pm-view-btn'}
                 icon={<UnorderedListOutlined />}
                 onClick={() => changeView('list')}
               />
             </Space.Compact>
           </div>
         </div>
+
+        <Card className="content-card filter-card production-order-filter">
+          <Space wrap>
+            <Input.Search
+              allowClear
+              placeholder="生产单名称、订单号、品名或文件名"
+              value={keyword}
+              onChange={(event) => {
+                setKeyword(event.target.value);
+                setPage((current) => ({ ...current, current: 1 }));
+              }}
+              style={{ width: 'min(300px, 100%)' }}
+            />
+            <Select
+              allowClear
+              showSearch
+              loading={projectsLoading}
+              popupMatchSelectWidth={false}
+              classNames={{ popup: { root: 'project-relation-picker-dropdown' } }}
+              placeholder="全部项目"
+              value={projectId}
+              options={projects.map((project) => ({
+                value: project.id,
+                label: `${project.projectCode} · ${project.name}`,
+              }))}
+              optionFilterProp="label"
+              onChange={(value) => {
+                setProjectId(value);
+                setPage((current) => ({ ...current, current: 1 }));
+              }}
+              style={{ width: 'min(180px, 100%)' }}
+            />
+            <Select
+              allowClear
+              placeholder="全部状态"
+              value={status}
+              onChange={(value) => {
+                setStatus(value);
+                setPage((current) => ({ ...current, current: 1 }));
+              }}
+              options={statusOptions}
+              style={{ width: 'min(140px, 100%)' }}
+            />
+            <Button icon={<RedoOutlined />} onClick={resetFilters}>
+              重置
+            </Button>
+          </Space>
+        </Card>
 
         {view === 'card' ? (
           <Card className="content-card production-order-card-view">

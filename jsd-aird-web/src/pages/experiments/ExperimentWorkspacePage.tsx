@@ -775,7 +775,6 @@ export function ExperimentWorkspacePage() {
                       ref={editorRef}
                       snapshot={snapshot}
                       bindings={recognizedBindings}
-                      clearSystemReadOnlyProtection
                       editable={editable}
                       onEditorValue={handleRecognizedValue}
                       onSelectionChange={handleCoordinateSelection}

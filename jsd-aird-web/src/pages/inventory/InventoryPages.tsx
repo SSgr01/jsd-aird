@@ -21,6 +21,7 @@ import {
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
+import type { Dayjs } from 'dayjs';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import * as XLSX from 'xlsx';
 import {
@@ -36,6 +37,7 @@ import {
 import type { InventoryProductOption } from '@/services/inventory/inventory-api';
 import { getPartners, type BusinessPartner } from '@/services/partners/partner-api';
 import { errorMessage } from '@/services/http/errors';
+import { useAuthStore } from '@/stores/auth-store';
 import './inventory-pages.css';
 import '@/styles/management-list.css';
 
@@ -45,28 +47,29 @@ const alertLabels: Record<AlertStatus, string> = {
   LOW_STOCK: '低库存',
   OUT_OF_STOCK: '无库存',
 };
-const reasonOptions: Record<InventoryScope, Record<InventoryDirection, string[]>> = {
-  RND: {
-    INBOUND: [
-      'PURCHASE',
-      'RND_SAMPLE_IN',
-      'SUPPLIER_SAMPLE',
-      'EXPERIMENT_PRODUCT',
-      'OPENING_BALANCE',
-      'COMPENSATION',
-    ],
-    OUTBOUND: ['EXPERIMENT', 'SAMPLE_DISPATCH', 'STOCKTAKE', 'COMPENSATION'],
-  },
-  PRODUCTION: {
-    INBOUND: [
-      'PURCHASE',
-      'FINISHED_PRODUCT',
-      'INTERMEDIATE_PRODUCT',
-      'OPENING_BALANCE',
-      'COMPENSATION',
-    ],
-    OUTBOUND: ['PRODUCTION_ORDER', 'RND_SAMPLE', 'STOCKTAKE', 'SHIPMENT', 'COMPENSATION'],
-  },
+const reasonOptions: Record<InventoryScope, string[]> = {
+  RND: [
+    'PURCHASE',
+    'RND_SAMPLE_IN',
+    'SUPPLIER_SAMPLE',
+    'EXPERIMENT_PRODUCT',
+    'EXPERIMENT',
+    'SAMPLE_DISPATCH',
+    'OPENING_BALANCE',
+    'STOCKTAKE',
+    'COMPENSATION',
+  ],
+  PRODUCTION: [
+    'PURCHASE',
+    'FINISHED_PRODUCT',
+    'INTERMEDIATE_PRODUCT',
+    'PRODUCTION_ORDER',
+    'RND_SAMPLE',
+    'OPENING_BALANCE',
+    'STOCKTAKE',
+    'SHIPMENT',
+    'COMPENSATION',
+  ],
 };
 const reasonLabels: Record<string, string> = {
   PURCHASE: '采购',
@@ -274,7 +277,7 @@ export function InventoryQueryPage() {
           items={
             selected
               ? [
-                  { label: '产品', children: `${selected.productCode} · ${selected.productName}` },
+                  { label: '产品名称', children: `${selected.productCode} · ${selected.productName}` },
                   { label: '库存归属', children: scopeLabels[selected.scope] },
                   { label: '当前库存', children: kg(selected.quantityKg) },
                   {
@@ -320,6 +323,9 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
   const [editing, setEditing] = useState<InventoryTransaction>();
   const [searchKeyword, setSearchKeyword] = useState('');
   const [searchDirection, setSearchDirection] = useState<InventoryDirection>();
+  const currentUserName = useAuthStore((state) => state.user?.displayName ?? '');
+  const [reasonSearch, setReasonSearch] = useState('');
+  const [historyReasons, setHistoryReasons] = useState<string[]>([]);
   const load = useCallback(
     async () => setData(await inventoryApi.transactions({ ...filters, scope })),
     [filters, scope],
@@ -353,7 +359,20 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
   useEffect(() => {
     void loadProducts().catch(() => message.error('库存产品加载失败'));
   }, [loadProducts]);
-  const direction = Form.useWatch('direction', form) || 'INBOUND';
+  useEffect(() => {
+    let cancelled = false;
+    inventoryApi
+      .transactionReasons(scope)
+      .then((reasons) => {
+        if (!cancelled) setHistoryReasons(reasons ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setHistoryReasons([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [scope]);
   const save = async () => {
     const v = await form.validateFields();
     if (readOnly) {
@@ -368,7 +387,11 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
           documentNo: v.documentNo,
           reason: v.reason,
           note: v.note,
+          actorName: v.actorName,
         });
+        setHistoryReasons((prev) =>
+          v.reason && !prev.includes(v.reason) ? [v.reason, ...prev] : prev,
+        );
         message.success('库存流水已更新');
         setOpen(false);
         setEditing(undefined);
@@ -387,6 +410,9 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
         scope,
         businessDate: v.businessDate.format('YYYY-MM-DD'),
       });
+      setHistoryReasons((prev) =>
+        v.reason && !prev.includes(v.reason) ? [v.reason, ...prev] : prev,
+      );
       message.success('库存变动已保存');
       setOpen(false);
       setProductSearch('');
@@ -414,22 +440,44 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
     }
     return options;
   }, [productSearch, products]);
+  const reasonSelectOptions = useMemo(() => {
+    const source = historyReasons.length > 0 ? historyReasons : reasonOptions[scope];
+    const values: string[] = [];
+    for (const value of source) {
+      const trimmed = (value ?? '').trim();
+      if (trimmed && !values.includes(trimmed)) values.push(trimmed);
+    }
+    const base = values.map((value) => ({ value, label: reasonLabels[value] || value }));
+    const keyword = reasonSearch.trim();
+    if (
+      keyword &&
+      !base.some(
+        (option) =>
+          String(option.value).toLowerCase() === keyword.toLowerCase() ||
+          option.label.toLowerCase() === keyword.toLowerCase(),
+      )
+    ) {
+      base.unshift({ value: keyword, label: `${keyword}（自定义）` });
+    }
+    return base;
+  }, [scope, reasonSearch, historyReasons]);
   const columns: ColumnsType<InventoryTransaction> = [
     { title: '日期', dataIndex: 'businessDate' },
     { title: '单号', dataIndex: 'documentNo' },
-    { title: '产品', render: (_, r) => `${r.productCode} · ${r.productName}` },
+    { title: '产品名称', render: (_, r) => `${r.productCode} · ${r.productName}` },
     {
-      title: '方向',
+      title: '变动方向',
       dataIndex: 'direction',
       render: (v) => (
         <Tag color={v === 'INBOUND' ? 'green' : 'orange'}>{v === 'INBOUND' ? '入库' : '扣减'}</Tag>
       ),
     },
-    { title: '原因', dataIndex: 'reason', render: (v) => reasonLabels[v] || v },
-    { title: '数量', dataIndex: 'quantityKg', align: 'right', render: kg },
+    { title: '业务原因', dataIndex: 'reason', render: (v) => reasonLabels[v] || v },
+    { title: '数量 KG', dataIndex: 'quantityKg', align: 'right', render: kg },
     { title: '变动前', dataIndex: 'beforeKg', render: kg },
     { title: '变动后', dataIndex: 'afterKg', render: kg },
     { title: '经办人', dataIndex: 'actorName' },
+    { title: '备注', dataIndex: 'note', render: (v) => v || '—' },
     {
       title: '操作',
       width: 250,
@@ -450,6 +498,7 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
                 reason: r.reason,
                 quantityKg: r.quantityKg,
                 note: r.note,
+                actorName: r.actorName,
               });
               setEditing(r);
               setOpen(true);
@@ -496,6 +545,7 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
                 direction: 'INBOUND',
                 businessDate: dayjs(),
                 documentNo: `${scope === 'RND' ? 'RD' : 'PD'}-${dayjs().format('YYYYMMDD-HHmmss')}`,
+                actorName: currentUserName,
               });
               setOpen(true);
             }}
@@ -588,14 +638,14 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
               </Form.Item>
             </Col>
             <Col span={12}>
-              <Form.Item name="productId" label="产品" rules={[{ required: true }]}>
+              <Form.Item name="productId" label="产品名称" rules={[{ required: true }]}>
                 <Select
                   disabled={!!editing}
                   labelInValue
                   showSearch
                   filterOption
                   optionFilterProp="label"
-                  placeholder="选择或输入自定义产品"
+                  placeholder="选择或输入自定义产品名称"
                   searchValue={productSearch}
                   onSearch={setProductSearch}
                   onChange={() => setProductSearch('')}
@@ -616,12 +666,16 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
               </Form.Item>
             </Col>
             <Col span={12}>
-              <Form.Item name="reason" label="业务原因" rules={[{ required: true }]}>
+              <Form.Item name="reason" label="业务原因" rules={[{ required: true, message: '请选择或输入业务原因' }]}>
                 <Select
-                  options={reasonOptions[scope][direction as InventoryDirection].map((value) => ({
-                    value,
-                    label: reasonLabels[value] || value,
-                  }))}
+                  showSearch
+                  allowClear
+                  placeholder="选择或输入自定义原因"
+                  filterOption={(input, option) =>
+                    (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
+                  }
+                  onSearch={setReasonSearch}
+                  options={reasonSelectOptions}
                 />
               </Form.Item>
             </Col>
@@ -637,8 +691,8 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
               </Form.Item>
             </Col>
             <Col span={12}>
-              <Form.Item label="经办人">
-                <Input value="当前用户" disabled />
+              <Form.Item name="actorName" label="经办人" rules={[{ required: true, message: '请输入经办人' }]}>
+                <Input placeholder="请输入经办人姓名" />
               </Form.Item>
             </Col>
           </Row>
@@ -663,7 +717,7 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
               ? Object.entries({
                   日期: detail.businessDate,
                   单号: detail.documentNo,
-                  产品: detail.productName,
+                  产品名称: detail.productName,
                   方向: detail.direction === 'INBOUND' ? '入库' : '扣减',
                   原因: reasonLabels[detail.reason] || detail.reason,
                   数量: kg(detail.quantityKg),
@@ -686,12 +740,38 @@ export function SampleRecordsPage() {
 export function ShipmentRecordsPage() {
   return <BusinessRecords type="shipment" />;
 }
+type BusinessFormValues = {
+  businessDate: Dayjs;
+  dispatchNo: string;
+  shipmentNo: string;
+  productId: { value: string; label?: string };
+  scope: InventoryScope;
+  quantityKg: number;
+  customerId: string;
+  recipientName: string;
+  recipientPhone: string;
+  sampleAddress?: string;
+  courierCompany?: string;
+  trackingNo?: string;
+  senderName?: string;
+  clientContact?: string;
+  clientContactPhone?: string;
+  customerRequirement?: string;
+  customerFeedback?: string;
+  batchNo?: string;
+  coaNo?: string;
+  note?: string;
+};
+
 function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
   const sample = type === 'sample';
   const [data, setData] = useState<PageData>();
   const [open, setOpen] = useState(false);
   const [form] = Form.useForm();
-  const [products, setProducts] = useState<InventoryProductOption[]>([]);
+  const [productsByScope, setProductsByScope] = useState<
+    Record<InventoryScope, InventoryProductOption[]>
+  >({ RND: [], PRODUCTION: [] });
+  const [formScope, setFormScope] = useState<InventoryScope>(sample ? 'RND' : 'PRODUCTION');
   const [productSearch, setProductSearch] = useState('');
   const [customers, setCustomers] = useState<BusinessPartner[]>([]);
   const [saving, setSaving] = useState(false);
@@ -699,15 +779,27 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
   const [readOnly] = useState(() => inventoryIsReadOnly());
   const [searchKeyword, setSearchKeyword] = useState('');
   const [filters, setFilters] = useState({ keyword: '', page: 1, size: 10 });
+  const currentUserName = useAuthStore((state) => state.user?.displayName ?? '');
   const load = useCallback(
     async () =>
       setData(sample ? await inventoryApi.samples(filters) : await inventoryApi.shipments(filters)),
     [filters, sample],
   );
-  const productScope: InventoryScope = sample ? 'RND' : 'PRODUCTION';
+  const productScope: InventoryScope = formScope;
   const loadProducts = useCallback(async () => {
-    setProducts(await inventoryApi.productOptions(productScope));
-  }, [productScope]);
+    const scopes: InventoryScope[] = ['RND', 'PRODUCTION'];
+    const loaded = await Promise.all(
+      scopes.map(async (scope) => [scope, await inventoryApi.productOptions(scope)] as const),
+    );
+    setProductsByScope((current) => {
+      const next = { ...current };
+      loaded.forEach(([scope, options]) => {
+        next[scope] = options;
+      });
+      return next;
+    });
+  }, []);
+  const products = productsByScope[productScope];
   useEffect(() => {
     void load();
     void loadProducts();
@@ -724,25 +816,35 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
       customerId: record.customerId,
     };
     if ('dispatchNo' in record) {
+      setFormScope(record.scope ?? 'RND');
       Object.assign(values, {
+        scope: record.scope ?? 'RND',
         dispatchNo: record.dispatchNo,
         recipientName: record.recipientName,
+        recipientPhone: record.recipientPhone,
         sampleAddress: record.sampleAddress,
         courierCompany: record.courierCompany,
         trackingNo: record.trackingNo,
+        senderName: record.senderName || record.operator,
         clientContact: record.clientContact,
+        clientContactPhone: record.clientContactPhone,
         customerRequirement: record.customerRequirement,
         customerFeedback: record.customerFeedback,
       });
     } else {
-      values.shipmentNo = record.shipmentNo;
-      values.note = record.note;
+      setFormScope(record.scope ?? 'PRODUCTION');
+      Object.assign(values, {
+        scope: record.scope ?? 'PRODUCTION',
+        shipmentNo: record.shipmentNo,
+        senderName: record.senderName || record.operator,
+        note: record.note,
+      });
     }
     form.setFieldsValue(values);
     setOpen(true);
   };
   const save = async () => {
-    const v = await form.validateFields();
+    const v = (await form.validateFields()) as BusinessFormValues;
     if (inventoryIsReadOnly()) {
       message.error(`当前角色为只读用户，不能修改${sample ? '发样' : '出货'}记录`);
       return;
@@ -756,10 +858,13 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
             businessDate: v.businessDate.format('YYYY-MM-DD'),
             customerId: v.customerId,
             recipientName: v.recipientName,
+            recipientPhone: v.recipientPhone,
             sampleAddress: v.sampleAddress,
             courierCompany: v.courierCompany,
             trackingNo: v.trackingNo,
             clientContact: v.clientContact,
+            clientContactPhone: v.clientContactPhone,
+            senderName: v.senderName,
             customerRequirement: v.customerRequirement,
             customerFeedback: v.customerFeedback,
           });
@@ -768,6 +873,7 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
             shipmentNo: v.shipmentNo,
             businessDate: v.businessDate.format('YYYY-MM-DD'),
             customerId: v.customerId,
+            senderName: v.senderName,
             note: v.note,
           });
         }
@@ -836,11 +942,49 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
         ? [
             { title: '日期', dataIndex: 'businessDate' },
             { title: '发样单号', dataIndex: 'dispatchNo' },
-            { title: '客户', dataIndex: 'customerName' },
+            {
+              title: '库存类型',
+              dataIndex: 'scope',
+              render: (value: InventoryScope | undefined) => scopeLabels[value ?? 'RND'],
+            },
+            { title: '产品名称', dataIndex: 'productName' },
+            { title: '数量 KG', dataIndex: 'quantityKg', align: 'right', render: kg },
+            {
+              title: '本公司发样人',
+              dataIndex: 'senderName',
+              render: (value: string | undefined, record: SampleDispatch | Shipment) =>
+                value || record.operator,
+            },
+            { title: '客户名称', dataIndex: 'customerName' },
             { title: '收件人', dataIndex: 'recipientName' },
-            { title: '发样产品', dataIndex: 'productName' },
-            { title: '数量', dataIndex: 'quantityKg', render: kg },
-            { title: '发样人', dataIndex: 'operator' },
+            { title: '收件人电话', dataIndex: 'recipientPhone', render: (v: string | undefined) => v || '—' },
+            { title: '发样地址', dataIndex: 'sampleAddress', render: (v: string | undefined) => v || '—' },
+            { title: '快递公司', dataIndex: 'courierCompany', render: (v: string | undefined) => v || '—' },
+            { title: '快递单号', dataIndex: 'trackingNo', render: (v: string | undefined) => v || '—' },
+            {
+              title: '客户端联系人',
+              dataIndex: 'clientContact',
+              render: (v: string | undefined) => v || '—',
+            },
+            {
+              title: '客户端联系人电话',
+              dataIndex: 'clientContactPhone',
+              render: (v: string | undefined) => v || '—',
+            },
+            {
+              title: '客户要求',
+              dataIndex: 'customerRequirement',
+              width: 220,
+              render: (value: string | undefined) =>
+                value ? <span className="inventory-cell-wrap">{value}</span> : '—',
+            },
+            {
+              title: '客户测试反馈',
+              dataIndex: 'customerFeedback',
+              width: 220,
+              render: (value: string | undefined) =>
+                value ? <span className="inventory-cell-wrap">{value}</span> : '—',
+            },
             {
               title: '操作',
               width: 100,
@@ -856,10 +1000,20 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
         : [
             { title: '日期', dataIndex: 'businessDate' },
             { title: '出货单号', dataIndex: 'shipmentNo' },
-            { title: '产品', dataIndex: 'productName' },
-            { title: '客户', dataIndex: 'customerName' },
-            { title: '数量', dataIndex: 'quantityKg', render: kg },
-            { title: '经办人', dataIndex: 'operator' },
+            {
+              title: '库存类型',
+              dataIndex: 'scope',
+              render: (value: InventoryScope | undefined) => scopeLabels[value ?? 'PRODUCTION'],
+            },
+            { title: '产品名称', dataIndex: 'productName' },
+            { title: '数量 KG', dataIndex: 'quantityKg', align: 'right', render: kg },
+            { title: '客户名称', dataIndex: 'customerName' },
+            {
+              title: '出货人',
+              dataIndex: 'senderName',
+              render: (value: string | undefined, record: SampleDispatch | Shipment) =>
+                value || record.operator,
+            },
             {
               title: '备注',
               dataIndex: 'note',
@@ -890,14 +1044,14 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
       title={sample ? '发样记录表' : '出货记录表'}
       description={
         sample
-          ? '新增发样后自动扣减研发库存并生成研发库存流水。'
-          : '新增出货后自动扣减生产库存并生成生产库存流水。'
+          ? '新增发样后按所选库存类型扣减研发或生产库存并生成对应库存流水。'
+          : '新增出货后按所选库存类型扣减研发或生产库存并生成对应库存流水。'
       }
       extra={
         <Space>
           <BusinessImportExport
             type={type}
-            products={products}
+            productsByScope={productsByScope}
             customers={customers}
             onDone={load}
             disabled={readOnly}
@@ -908,8 +1062,12 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
             disabled={readOnly}
             onClick={() => {
               setEditing(undefined);
+              setFormScope(sample ? 'RND' : 'PRODUCTION');
+              setProductSearch('');
               form.setFieldsValue({
                 businessDate: dayjs(),
+                scope: 'RND',
+                senderName: currentUserName,
                 [sample ? 'dispatchNo' : 'shipmentNo']: `${sample ? 'FY' : 'CH'}-${dayjs().format(
                   'YYYYMMDD-HHmmss',
                 )}`,
@@ -928,7 +1086,9 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
             allowClear
             value={searchKeyword}
             placeholder={
-              sample ? '搜索发样单号、产品、客户、收件人' : '搜索出货单号、产品、客户、备注'
+              sample
+                ? '搜索发样单号、产品、客户、收件人、电话、快递单号'
+                : '搜索出货单号、产品、客户、出货人、备注'
             }
             onChange={(event) => {
               const value = event.target.value;
@@ -1000,22 +1160,42 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
             <>
               <Row gutter={16}>
                 <Col span={12}>
-                  <Form.Item name="productId" label="产品" rules={[{ required: true }]}>
+                  <Form.Item name="scope" label="库存类型" rules={[{ required: true }]}>
+                    <Select
+                      disabled={!!editing}
+                      options={[
+                        { value: 'RND', label: '研发库存' },
+                        { value: 'PRODUCTION', label: '生产库存' },
+                      ]}
+                      onChange={(value: InventoryScope) => {
+                        setFormScope(value);
+                        setProductSearch('');
+                        form.setFieldValue('productId', undefined);
+                      }}
+                    />
+                  </Form.Item>
+                </Col>
+                <Col span={12}>
+                  <Form.Item name="productId" label="产品名称" rules={[{ required: true }]}>
                     <Select
                       disabled={!!editing}
                       labelInValue
                       showSearch
                       filterOption
                       optionFilterProp="label"
-                      placeholder="选择或输入自定义产品"
+                      placeholder="选择或输入产品名称"
                       searchValue={productSearch}
                       onSearch={setProductSearch}
                       onChange={() => setProductSearch('')}
                       options={productOptions}
-                      notFoundContent={productSearch ? null : '当前类型暂无库存产品，可输入名称创建'}
+                      notFoundContent={
+                        productSearch ? null : '当前类型暂无库存产品，可输入名称创建'
+                      }
                     />
                   </Form.Item>
                 </Col>
+              </Row>
+              <Row gutter={16}>
                 <Col span={12}>
                   <Form.Item name="quantityKg" label="数量 KG" rules={[{ required: true }]}>
                     <InputNumber
@@ -1024,6 +1204,11 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
                       className="inventory-full"
                       disabled={!!editing}
                     />
+                  </Form.Item>
+                </Col>
+                <Col span={12}>
+                  <Form.Item name="senderName" label="本公司发样人">
+                    <Input />
                   </Form.Item>
                 </Col>
               </Row>
@@ -1050,12 +1235,12 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
               </Row>
               <Row gutter={16}>
                 <Col span={12}>
-                  <Form.Item name="sampleAddress" label="发样地址">
+                  <Form.Item name="recipientPhone" label="收件人电话" rules={[{ required: true }]}>
                     <Input />
                   </Form.Item>
                 </Col>
                 <Col span={12}>
-                  <Form.Item name="clientContact" label="客户端联系人">
+                  <Form.Item name="sampleAddress" label="发样地址">
                     <Input />
                   </Form.Item>
                 </Col>
@@ -1068,6 +1253,18 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
                 </Col>
                 <Col span={12}>
                   <Form.Item name="trackingNo" label="快递单号">
+                    <Input />
+                  </Form.Item>
+                </Col>
+              </Row>
+              <Row gutter={16}>
+                <Col span={12}>
+                  <Form.Item name="clientContact" label="客户端联系人">
+                    <Input />
+                  </Form.Item>
+                </Col>
+                <Col span={12}>
+                  <Form.Item name="clientContactPhone" label="客户端联系人电话">
                     <Input />
                   </Form.Item>
                 </Col>
@@ -1090,14 +1287,30 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
             <>
               <Row gutter={16}>
                 <Col span={12}>
-                  <Form.Item name="productId" label="产品" rules={[{ required: true }]}>
+                  <Form.Item name="scope" label="库存类型" rules={[{ required: true }]}>
+                    <Select
+                      disabled={!!editing}
+                      options={[
+                        { value: 'RND', label: '研发库存' },
+                        { value: 'PRODUCTION', label: '生产库存' },
+                      ]}
+                      onChange={(value: InventoryScope) => {
+                        setFormScope(value);
+                        setProductSearch('');
+                        form.setFieldValue('productId', undefined);
+                      }}
+                    />
+                  </Form.Item>
+                </Col>
+                <Col span={12}>
+                  <Form.Item name="productId" label="产品名称" rules={[{ required: true }]}>
                     <Select
                       disabled={!!editing}
                       labelInValue
                       showSearch
                       filterOption
                       optionFilterProp="label"
-                      placeholder="选择或输入自定义产品"
+                      placeholder="选择或输入自定义产品名称"
                       searchValue={productSearch}
                       onSearch={setProductSearch}
                       onChange={() => setProductSearch('')}
@@ -1106,6 +1319,8 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
                     />
                   </Form.Item>
                 </Col>
+              </Row>
+              <Row gutter={16}>
                 <Col span={12}>
                   <Form.Item name="quantityKg" label="数量 KG" rules={[{ required: true }]}>
                     <InputNumber
@@ -1116,8 +1331,6 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
                     />
                   </Form.Item>
                 </Col>
-              </Row>
-              <Row gutter={16}>
                 <Col span={12}>
                   <Form.Item name="customerId" label="客户名称" rules={[{ required: true }]}>
                     <Select
@@ -1130,6 +1343,13 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
                         label: `${customer.partnerCode} · ${customer.name}`,
                       }))}
                     />
+                  </Form.Item>
+                </Col>
+              </Row>
+              <Row gutter={16}>
+                <Col span={12}>
+                  <Form.Item name="senderName" label="出货人">
+                    <Input />
                   </Form.Item>
                 </Col>
                 <Col span={12}>
@@ -1213,13 +1433,13 @@ async function exportTransactions(scope: InventoryScope) {
 
 function BusinessImportExport({
   type,
-  products,
+  productsByScope,
   customers,
   onDone,
   disabled = false,
 }: {
   type: 'sample' | 'shipment';
-  products: InventoryProductOption[];
+  productsByScope: Record<InventoryScope, InventoryProductOption[]>;
   customers: BusinessPartner[];
   onDone: () => void | Promise<void>;
   disabled?: boolean;
@@ -1230,18 +1450,33 @@ function BusinessImportExport({
       ? [
           '日期',
           '发样单号',
-          '产品',
+          '库存类型',
+          '产品名称',
           '数量 KG',
+          '本公司发样人',
           '客户名称',
           '收件人',
+          '收件人电话',
           '发样地址',
           '快递公司',
           '快递单号',
           '客户端联系人',
+          '客户端联系人电话',
           '客户要求',
           '客户测试反馈',
         ]
-      : ['日期', '出货单号', '产品', '数量 KG', '客户名称', '批号', '已签发 COA 编号', '备注'];
+      : [
+          '日期',
+          '出货单号',
+          '库存类型',
+          '产品名称',
+          '数量 KG',
+          '客户名称',
+          '出货人',
+          '批号',
+          '已签发 COA 编号',
+          '备注',
+        ];
     writeWorkbook(`${sample ? '发样' : '出货'}导入模板.xlsx`, sample ? '发样记录' : '出货记录', [
       header,
     ]);
@@ -1262,37 +1497,62 @@ function BusinessImportExport({
         [
           '日期',
           '发样单号',
-          '产品',
-          '客户名称',
+          '库存类型',
+          '产品名称',
           '数量 KG',
+          '本公司发样人',
+          '客户名称',
           '收件人',
+          '收件人电话',
           '发样地址',
           '快递公司',
           '快递单号',
-          '经办人',
+          '客户端联系人',
+          '客户端联系人电话',
+          '客户要求',
+          '客户测试反馈',
         ],
         ...(rows as SampleDispatch[]).map((row) => [
           row.businessDate,
           row.dispatchNo,
-          row.productName,
           row.customerName,
-          row.quantityKg,
           row.recipientName,
+          row.recipientPhone || '',
+          scopeLabels[row.scope ?? 'RND'],
+          row.productName,
+          row.quantityKg,
           row.sampleAddress || '',
           row.courierCompany || '',
           row.trackingNo || '',
-          row.operator,
+          row.senderName || row.operator,
+          row.clientContact || '',
+          row.clientContactPhone || '',
+          row.customerRequirement || '',
+          row.customerFeedback || '',
         ]),
       ]);
     } else {
       writeWorkbook('出货记录.xlsx', '出货记录', [
-        ['日期', '出货单号', '产品', '数量 KG', '客户名称', '批号', '已签发 COA 编号', '备注'],
+        [
+          '日期',
+          '出货单号',
+          '库存类型',
+          '产品名称',
+          '数量 KG',
+          '客户名称',
+          '出货人',
+          '批号',
+          '已签发 COA 编号',
+          '备注',
+        ],
         ...(rows as Shipment[]).map((row) => [
           row.businessDate,
           row.shipmentNo,
+          scopeLabels[row.scope ?? 'PRODUCTION'],
           row.productName,
           row.quantityKg,
           row.customerName,
+          row.senderName || row.operator,
           row.note?.match(/(?:^|[；;])批号=([^；;]*)/)?.[1] || '',
           row.note?.match(/(?:^|[；;])COA=([^；;]*)/)?.[1] || '',
           row.note
@@ -1309,12 +1569,24 @@ function BusinessImportExport({
     if (!firstSheetName) throw new Error('导入文件没有工作表');
     const sheet = workbook.Sheets[firstSheetName];
     if (!sheet) throw new Error('无法读取导入工作表');
-    const records = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' });
+    const records = XLSX.utils.sheet_to_json<Record<string, string | number>>(sheet, {
+      defval: '',
+    });
     if (!records.length) throw new Error('导入文件没有数据');
     const inputs = records.map((row, index) => {
-      const rawProduct = String(row['产品'] ?? row['产品编码'] ?? '').trim();
+      const rawProduct = String(row['产品名称'] ?? row['产品'] ?? row['产品编码'] ?? '').trim();
       const rawCustomer = String(row['客户名称'] ?? row['客户'] ?? row['客户编码'] ?? '').trim();
-      const product = products.find(
+      const rawScope = String(row['库存类型'] ?? '').trim();
+      const scope: InventoryScope =
+        rawScope === '研发库存' || rawScope.toUpperCase() === 'RND'
+          ? 'RND'
+          : rawScope === '生产库存' || rawScope.toUpperCase() === 'PRODUCTION'
+            ? 'PRODUCTION'
+            : sample
+              ? 'RND'
+              : 'PRODUCTION';
+      const productCandidates = productsByScope[scope];
+      const product = productCandidates.find(
         (item) =>
           item.code === rawProduct ||
           item.name === rawProduct ||
@@ -1345,6 +1617,8 @@ function BusinessImportExport({
         throw new Error(`第 ${index + 2} 行：数量必须大于 0`);
       if (sample && !String(row['收件人'] ?? '').trim())
         throw new Error(`第 ${index + 2} 行：收件人不能为空`);
+      if (sample && !String(row['收件人电话'] ?? '').trim())
+        throw new Error(`第 ${index + 2} 行：收件人电话不能为空`);
       const batchNo = String(row['批号'] ?? '').trim();
       const coaNo = String(row['已签发 COA 编号'] ?? '').trim();
       return sample
@@ -1352,13 +1626,17 @@ function BusinessImportExport({
             businessDate,
             dispatchNo: documentNo,
             productId: product.id,
+            scope,
             quantityKg,
             customerId: customer.id,
             recipientName: String(row['收件人'] ?? '').trim(),
+            recipientPhone: String(row['收件人电话'] ?? '').trim(),
             sampleAddress: String(row['发样地址'] ?? '').trim(),
             courierCompany: String(row['快递公司'] ?? '').trim(),
             trackingNo: String(row['快递单号'] ?? '').trim(),
+            senderName: String(row['本公司发样人'] ?? '').trim(),
             clientContact: String(row['客户端联系人'] ?? '').trim(),
+            clientContactPhone: String(row['客户端联系人电话'] ?? '').trim(),
             customerRequirement: String(row['客户要求'] ?? '').trim(),
             customerFeedback: String(row['客户测试反馈'] ?? '').trim(),
           }
@@ -1366,8 +1644,10 @@ function BusinessImportExport({
             businessDate,
             shipmentNo: documentNo,
             productId: product.id,
+            scope,
             quantityKg,
             customerId: customer.id,
+            senderName: String(row['出货人'] ?? '').trim(),
             note: [
               String(row['备注'] ?? '').trim(),
               batchNo ? `批号=${batchNo}` : '',
@@ -1425,16 +1705,17 @@ function LedgerImportExport({
 }) {
   const download = () => {
     const direction = '入库';
-    const reasonCode = reasonOptions[scope].INBOUND[0] ?? '';
+    const reasonCode = reasonOptions[scope][0] ?? '';
     const reason = reasonLabels[reasonCode] ?? reasonCode;
     writeWorkbook(`${scopeLabels[scope]}流水导入模板.xlsx`, scopeLabels[scope], [
-      ['日期', '单号', '产品', '变动方向', '业务原因', '数量 KG', '备注'],
+      ['日期', '单号', '产品名称', '变动方向', '业务原因', '数量 KG', '经办人', '备注'],
       [
         dayjs().format('YYYY/MM/DD'),
         `${scope === 'RND' ? 'RD' : 'PD'}-示例`,
         '',
         direction,
         reason,
+        '',
         '',
         '',
       ],
@@ -1450,7 +1731,7 @@ function LedgerImportExport({
     const records = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' });
     if (!records.length) throw new Error('导入文件没有数据');
     const inputs = records.map((row, index) => {
-      const rawProduct = String(row['产品'] ?? row['产品编码'] ?? '').trim();
+      const rawProduct = String(row['产品名称'] ?? row['产品'] ?? row['产品编码'] ?? '').trim();
       const product = products.find(
         (item) =>
           item.code === rawProduct ||
@@ -1464,7 +1745,7 @@ function LedgerImportExport({
           : directionValue === '扣减'
             ? 'OUTBOUND'
             : directionValue;
-      const reasons = reasonOptions[scope][direction as InventoryDirection] || [];
+      const reasons = reasonOptions[scope];
       const reasonValue = String(row['业务原因']).trim();
       const reason = reasons.find(
         (value) => value === reasonValue || reasonLabels[value] === reasonValue,
@@ -1477,12 +1758,14 @@ function LedgerImportExport({
         ? dayjs(`${parsedDate.y}-${parsedDate.m}-${parsedDate.d}`).format('YYYY-MM-DD')
         : String(dateValue ?? '').trim();
       const documentNo = String(row['单号'] ?? '').trim();
+      const actorName = String(row['经办人'] ?? '').trim();
       if (!rawProduct) throw new Error(`第 ${index + 2} 行：产品不能为空`);
       if (!businessDate) throw new Error(`第 ${index + 2} 行：日期不能为空`);
       if (!documentNo) throw new Error(`第 ${index + 2} 行：单号不能为空`);
       if (!['INBOUND', 'OUTBOUND'].includes(direction))
         throw new Error(`第 ${index + 2} 行：变动方向必须为入库或扣减`);
       if (!reason) throw new Error(`第 ${index + 2} 行：业务原因无效`);
+      if (!actorName) throw new Error(`第 ${index + 2} 行：经办人不能为空`);
       if (!Number.isFinite(quantityKg) || quantityKg <= 0)
         throw new Error(`第 ${index + 2} 行：数量必须大于 0`);
       return {
@@ -1493,6 +1776,7 @@ function LedgerImportExport({
         direction,
         reason,
         quantityKg,
+        actorName,
         note: String(row['备注'] ?? '').trim(),
       };
     });

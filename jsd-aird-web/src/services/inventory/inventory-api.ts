@@ -61,14 +61,18 @@ export interface SampleDispatch {
   businessDate: string;
   productId: string;
   productName: string;
+  scope: InventoryScope;
   quantityKg: number;
   customerId?: string;
   customerName: string;
   recipientName: string;
+  recipientPhone?: string;
   sampleAddress?: string;
   courierCompany?: string;
   trackingNo?: string;
   clientContact?: string;
+  clientContactPhone?: string;
+  senderName?: string;
   customerRequirement?: string;
   customerFeedback?: string;
   transactionId: string;
@@ -81,9 +85,11 @@ export interface Shipment {
   businessDate: string;
   productId: string;
   productName: string;
+  scope: InventoryScope;
   quantityKg: number;
   customerId?: string;
   customerName: string;
+  senderName?: string;
   note?: string;
   transactionId: string;
   operator: string;
@@ -94,16 +100,20 @@ export interface InventoryTransactionUpdateInput {
   documentNo: string;
   reason: string;
   note?: string;
+  actorName?: string;
 }
 export interface SampleDispatchUpdateInput {
   dispatchNo: string;
   businessDate: string;
   customerId: string;
   recipientName: string;
+  recipientPhone?: string;
   sampleAddress?: string;
   courierCompany?: string;
   trackingNo?: string;
   clientContact?: string;
+  clientContactPhone?: string;
+  senderName?: string;
   customerRequirement?: string;
   customerFeedback?: string;
 }
@@ -111,6 +121,7 @@ export interface ShipmentUpdateInput {
   shipmentNo: string;
   businessDate: string;
   customerId: string;
+  senderName?: string;
   note?: string;
 }
 export interface InitialImport {
@@ -165,6 +176,13 @@ export const inventoryApi = {
         '/api/v1/inventory/transactions',
         { params },
       )
+    ).data.data;
+  },
+  async transactionReasons(scope?: InventoryScope) {
+    return (
+      await httpClient.get<ApiResponse<string[]>>('/api/v1/inventory/transaction-reasons', {
+        params: { scope },
+      })
     ).data.data;
   },
   async updatePolicy(

@@ -70,7 +70,9 @@ export type SpectrumAnalysisIntent =
   | 'METHOD_VALIDATION'
   | 'ANOMALY_DIAGNOSIS';
 export interface SpectrumAnswerV3 {
+  summary?: string;
   confirmed: string[];
+  metadata?: string[];
   notConfirmed: string[];
   reasonableInference: string[];
   missingEvidence: string[];
@@ -87,6 +89,7 @@ export interface SpectrumPublicAssessment {
 }
 export interface SpectrumDetailsV3 {
   confirmed: string[];
+  metadata?: string[];
   reasonableInference: string[];
   limitations: string[];
 }
@@ -145,6 +148,12 @@ export interface SpectrumSession {
   createdAt: string;
   updatedAt: string;
   messages: SpectrumMessage[];
+  chartIds: string[];
+  pageSelections: Record<string, number[]>;
+}
+export interface SpectrumMessageReplacement {
+  replaceFromMessageId: string;
+  expectedLastMessageId: string;
 }
 export interface SpectrumAnalysis {
   id: string;
@@ -304,10 +313,12 @@ export const spectrumApi = {
   async submitChat(input: {
     sessionId?: string;
     question: string;
-    chartIds: string[];
+    chartIds?: string[];
     pageSelections?: Record<string, number[]>;
     analysisIntent?: SpectrumAnalysisIntent;
     scenarioTemplate?: string;
+    replaceFromMessageId?: string;
+    expectedLastMessageId?: string;
   }) {
     const response = await httpClient.post<
       ApiResponse<{ sessionId: string; messageId: string; analysisRunId: string; status: string }>
@@ -323,13 +334,19 @@ export const spectrumApi = {
     );
     return response.data.data;
   },
-  async streamAnalysis(id: string, onEvent: (event: string, data: unknown) => void) {
+  async streamAnalysis(
+    id: string,
+    onEvent: (event: string, data: unknown, eventId?: string) => void,
+    lastEventId = 0,
+  ) {
+    const headers: Record<string, string> = {
+      Accept: 'text/event-stream',
+      'X-Request-Id': generateUUID(),
+    };
+    if (lastEventId > 0) headers['Last-Event-ID'] = String(lastEventId);
     const response = await fetch(`${appEnv.apiBaseUrl}/api/v1/spc/analysis-runs/${id}/events`, {
       credentials: 'include',
-      headers: {
-        Accept: 'text/event-stream',
-        'X-Request-Id': generateUUID(),
-      },
+      headers,
     });
     if (response.status === 401) notifyAuthRequired();
     if (!response.ok || !response.body) throw new Error(`图谱进度流连接失败（${response.status}）`);
@@ -343,8 +360,10 @@ export const spectrumApi = {
       buffer = frames.pop() || '';
       for (const frame of frames) {
         let data = '';
+        let eventId: string | undefined;
         for (const line of frame.split(/\r?\n/)) {
           if (line.startsWith('event:')) event = line.slice(6).trim();
+          if (line.startsWith('id:')) eventId = line.slice(3).trim();
           if (line.startsWith('data:')) data += line.slice(5).trim();
         }
         if (data) {
@@ -361,7 +380,7 @@ export const spectrumApi = {
               /* keep the string */
             }
           }
-          onEvent(event, parsed);
+          onEvent(event, parsed, eventId);
         }
         event = 'message';
       }

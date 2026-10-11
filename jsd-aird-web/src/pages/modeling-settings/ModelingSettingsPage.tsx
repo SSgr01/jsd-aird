@@ -103,12 +103,14 @@ type ModelingSettingsPageProps = {
   initialTargetId?: string
   /** Render a selected target as a full-page workflow instead of a side drawer. */
   fullPageTarget?: boolean
+  /** Navigate to the canonical full-page target workflow from an embedded list. */
+  onOpenTarget?: (targetId: string) => void
   openCreateTarget?: boolean
   onCreateTargetOpened?: () => void
   onOpenModels?: (targetId: string) => void
 }
 
-export function ModelingSettingsPage({ embedded = false, initialTargetId, fullPageTarget = false, openCreateTarget, onCreateTargetOpened, onOpenModels }: ModelingSettingsPageProps = {}) {
+export function ModelingSettingsPage({ embedded = false, initialTargetId, fullPageTarget = false, onOpenTarget, openCreateTarget, onCreateTargetOpened, onOpenModels }: ModelingSettingsPageProps = {}) {
   const navigate = useNavigate()
   const { message, modal } = App.useApp()
   const canModel = useAuthStore((state) => state.can('ai.modeling.manage'))
@@ -210,6 +212,14 @@ export function ModelingSettingsPage({ embedded = false, initialTargetId, fullPa
     // its three dependent requests are still loading; otherwise fast clicks
     // can mount competing drawers and leave stale detail content behind.
     if (openingTargetRef.current === row.id) return
+    // The model-center settings list and the model list must enter the same
+    // canonical target workflow.  Embedded settings used to open a drawer
+    // here while the model list navigated to a full page, which made the two
+    // "configure" entry points look like different features.
+    if (onOpenTarget && !fullPageTarget) {
+      onOpenTarget(row.id)
+      return
+    }
     if (selectedTarget?.id === row.id && !fullPageTarget) {
       setDetailTab('definition')
       return

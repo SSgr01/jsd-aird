@@ -106,7 +106,8 @@ public class DataImportService {
             if (template.importContractVersion() != 9
                     || template.importContract() == null
                     || !"EXPERIMENT_DATA".equals(template.importContract().path("templateUsage").asText())) {
-                throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "生成实验草稿必须选择已发布的V9实验数据模板");
+                throw new ApiException(ApiErrorCode.VALIDATION_ERROR,
+                        "生成实验草稿需选择已发布且导入契约版本为 V9、用途为实验数据（EXPERIMENT_DATA）的模板；V9 指导入契约版本，不是模板版本号");
             }
             if (command.targetExperimentCategoryId() == null) {
                 throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "生成实验草稿必须选择实验分类");
@@ -183,9 +184,8 @@ public class DataImportService {
                 item.importJobId(), item.fileObjectId(), item.originalName(), item.sourceFormat(),
                 item.templateVersionId(), item.categoryId(), item.categoryName(), item.status(), item.progress(),
                 item.createdAt(), item.updatedAt(),
-                links.getOrDefault(item.importJobId(), List.of()), item.sourceOwner(), item.recognitionMode(),
-                item.importPurpose(), item.formalStatus(), item.experimentId(), item.experimentVersionId(),
-                item.entryType())).toList();
+                links.getOrDefault(item.importJobId(), List.of()), item.recognitionMode(),
+                item.formalStatus(), item.experimentId(), item.experimentVersionId())).toList();
         return new PageResponse<>(items, result.page(), result.size(), result.total(), result.totalPages());
     }
 

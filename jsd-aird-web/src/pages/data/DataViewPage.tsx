@@ -23,11 +23,9 @@ const statusLabels: Record<string, [string, string]> = {
   COMMITTING: ['入库中', 'processing'], COMPLETED: ['已入库', 'success'],
   FAILED: ['处理失败', 'error'], CANCELLED: ['已取消', 'default'],
 };
-const sourceOwnerLabels = { DATA_CENTER: '数据中心上传', EXPERIMENT: '实验本来源' } as const;
 const formalStatusLabels: Record<string, [string, string]> = {
-  CONFIRMED: ['正式数据', 'success'], SUPERSEDED: ['已有新版本', 'gold'],
-  INVALIDATED: ['已失效', 'error'], EXPERIMENT_SOURCE: ['实验事实', 'blue'],
-  NOT_CONFIRMED: ['尚未正式确认', 'default'],
+  CONFIRMED: ['已确认', 'success'], SUPERSEDED: ['已被新版本替代', 'gold'],
+  INVALIDATED: ['已失效', 'error'], NOT_CONFIRMED: ['未确认', 'default'],
 };
 
 export function DataViewPage() {
@@ -73,21 +71,20 @@ export function DataViewPage() {
   useEffect(() => { void dataApi.listTemplates().then(setTemplates).catch(() => setTemplates([])); }, []);
 
   const cards = useMemo<CatalogCategoryCard[]>(() => [
-    { id: 'ALL', name: '全部来源文件', count: allSourceCount, description: '按上传文件和导入批次查看', icon: <DatabaseOutlined />, tone: 'blue' },
+    { id: 'ALL', name: '全部来源文件', count: allSourceCount, description: '按文件和导入批次查看', icon: <DatabaseOutlined />, tone: 'blue' },
     ...categories.map((item) => ({ id: item.id, name: item.name, count: item.sourceCount, description: item.description, icon: <DatabaseOutlined />, tone: 'blue' as const, editable: true, allowedActions: item.allowedActions })),
   ], [allSourceCount, categories]);
 
   const resolveFile = (item: DataSourceFile): FilePreviewDescriptor => {
-    if (!item.fileObjectId) throw new Error('该正式实验没有来源文件')
+    if (!item.fileObjectId) throw new Error('该导入记录没有关联来源文件')
     return {
       fileName: item.originalName,
       load: () => dataApi.sourcePreviewBlob(item.fileObjectId!),
       downloadUrl: `/api/v1/files/${encodeURIComponent(item.fileObjectId)}/content`,
     }
   };
-  const sourceRoute = (item: DataSourceFile) => item.entryType === 'EXPERIMENT_FACT' && item.experimentId
-    ? `/experiments/${item.experimentId}` : item.recognitionMode === 'FREEFORM'
-    ? item.sourceOwner === 'EXPERIMENT' ? `/experiments/imports/${item.importJobId}` : `/data/recognition-jobs/${item.importJobId}`
+  const sourceRoute = (item: DataSourceFile) => item.recognitionMode === 'FREEFORM'
+    ? `/data/recognition-jobs/${item.importJobId}`
     : `/data/import-jobs/${item.importJobId}`;
   const moveSource = async (item: DataSourceFile, nextCategoryId: string) => {
     try { await dataApi.assignSourceCategory(item.importJobId, nextCategoryId); await load(); void message.success('归档分类已更新'); }
@@ -125,7 +122,7 @@ export function DataViewPage() {
 
   return <div className="business-page">
     <div className="page-heading">
-      <div><Typography.Title level={2}>数据查看</Typography.Title><Typography.Text type="secondary">按归档分类查看已上传的来源文件和导入结果。</Typography.Text></div>
+      <div><Typography.Title level={2}>数据中心</Typography.Title><Typography.Text type="secondary">管理数据中心上传和确认状态。实验本导入及实验记录在电子实验记录本中查看。</Typography.Text></div>
       <Can permission="data.create"><Button type="primary" icon={<UploadOutlined />} onClick={() => navigate('/data/upload')}>数据上传</Button></Can>
     </div>
     <CategoryCardGrid categories={cards} activeId={categoryId}
@@ -133,21 +130,20 @@ export function DataViewPage() {
       onCreate={canUpdate ? () => setEditor({ mode: 'NEW' }) : undefined}
       onRename={canUpdate ? (item) => setEditor({ mode: 'EDIT', item: categories.find((candidate) => candidate.id === item.id) }) : undefined}
       onDelete={canUpdate ? (item) => { const category = categories.find((candidate) => candidate.id === item.id); if (category?.allowedActions?.includes('DELETE')) setDeleteItem(category); } : undefined} />
-    <div className="catalog-sync-note"><ReloadOutlined /> 列表按来源文件聚合；一个 Excel/CSV 只显示一条导入批次记录。</div>
+    <div className="catalog-sync-note"><ReloadOutlined /> 每行对应一次数据中心导入；同名文件的多次导入分别保留。“已入库”只表示导入完成，不代表数据已确认。</div>
     <CatalogListPanel title={cards.find((item) => item.id === categoryId)?.name || '来源文件'} count={page.total}
       filters={<Space wrap><Input.Search allowClear placeholder="搜索来源文件名" value={keyword} onChange={(event) => { setKeyword(event.target.value); setPage((value) => ({ ...value, current: 1 })); }} onSearch={() => void load()} /><Select allowClear showSearch optionFilterProp="label" popupMatchSelectWidth={false} classNames={{ popup: { root: 'project-relation-picker-dropdown' } }} placeholder="全部项目" value={projectId} onChange={(value) => { setProjectId(value); setPage((current) => ({ ...current, current: 1 })); }} options={projects.map((project) => ({ value: project.id, label: `${project.projectCode} · ${project.name}` }))} /><Select allowClear placeholder="全部状态" value={status} onChange={(value) => { setStatus(value); setPage((value) => ({ ...value, current: 1 })); }} options={Object.entries(statusLabels).map(([value, item]) => ({ value, label: item[0] }))} /><Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button></Space>}
       loading={loading}>
       <Table className="catalog-data-table" scroll={{ x: 1660 }} rowKey="importJobId" dataSource={items} pagination={{ current: page.current, pageSize: page.pageSize, total: page.total, showSizeChanger: true, onChange: (current, pageSize) => setPage({ current, pageSize, total: page.total }) }} locale={{ emptyText: <Empty description="暂无来源文件" /> }} onRow={(record) => ({ onDoubleClick: () => navigate(sourceRoute(record)) })} columns={[
         { title: '来源文件', dataIndex: 'originalName', width: 280, ellipsis: true, render: (value: string, record: DataSourceFile) => <Space><DatabaseOutlined /><Typography.Text strong ellipsis={{ tooltip: value }}>{value}</Typography.Text><Typography.Text type="secondary">{record.sourceFormat}</Typography.Text></Space> },
-        { title: '来源', dataIndex: 'sourceOwner', width: 130, render: (value: DataSourceFile['sourceOwner'], record: DataSourceFile) => <Tag color={value === 'EXPERIMENT' ? 'purple' : 'blue'}>{record.entryType === 'EXPERIMENT_FACT' ? '手工实验事实' : sourceOwnerLabels[value]}</Tag> },
-        { title: '正式状态', dataIndex: 'formalStatus', width: 140, render: (value: string) => <Tag color={formalStatusLabels[value]?.[1]}>{formalStatusLabels[value]?.[0] || value}</Tag> },
+        { title: '数据确认', dataIndex: 'formalStatus', width: 150, render: (value: string) => <Tag color={formalStatusLabels[value]?.[1]}>{formalStatusLabels[value]?.[0] || value}</Tag> },
         { title: '归档分类', dataIndex: 'categoryName', width: 150, ellipsis: true, render: (value?: string) => value || '未分类' },
         { title: '关联项目', width: 260, render: (_: unknown, record: DataSourceFile) => <Space size={[0, 4]} wrap>{record.relatedProjects?.length ? record.relatedProjects.map((relation) => <Tag color="blue" key={`${relation.projectId}-${relation.stageId || ''}-${relation.taskId || ''}`} onClick={() => navigate(`/projects/${relation.projectId}`)} style={{ cursor: 'pointer' }}>{relation.projectName}{relation.stageName ? ` / ${relation.stageName}` : ''}{relation.taskName ? ` / ${relation.taskName}` : ''}</Tag>) : '—'}</Space> },
-        { title: '识别方式', dataIndex: 'templateVersionId', width: 320, ellipsis: true, render: (value: string | undefined, record: DataSourceFile) => { if (record.recognitionMode === 'FREEFORM') return record.sourceOwner === 'EXPERIMENT' ? '实验本上传' : '自由识别'; const item = templates.find((candidate) => candidate.versionId === value); return item ? `${item.name} · ${item.templateCode} · V${item.versionNo}` : value ? `版本 ${value.slice(0, 8)}` : '—'; } },
-        { title: '状态', dataIndex: 'status', width: 130, render: (value: string) => <Tag color={statusLabels[value]?.[1]}>{statusLabels[value]?.[0] || value}</Tag> },
+        { title: '识别方式', dataIndex: 'templateVersionId', width: 320, ellipsis: true, render: (value: string | undefined, record: DataSourceFile) => { if (record.recognitionMode === 'FREEFORM') return '自由识别'; const item = templates.find((candidate) => candidate.versionId === value); return item ? `${item.name} · ${item.templateCode} · V${item.versionNo}` : value ? `版本 ${value.slice(0, 8)}` : '—'; } },
+        { title: '导入任务', dataIndex: 'status', width: 130, render: (value: string) => <Tag color={statusLabels[value]?.[1]}>{statusLabels[value]?.[0] || value}</Tag> },
         { title: '解析进度', dataIndex: 'progress', width: 170, render: (_: number, record: DataSourceFile) => { const percent = dataParseProgress(record); return <Progress percent={percent} size="small" status={record.status === 'FAILED' ? 'exception' : percent === 100 ? 'success' : 'active'} format={(value) => `${value ?? 0}%`} />; } },
         { title: '最近更新', dataIndex: 'updatedAt', width: 180, render: (value: string) => new Date(value).toLocaleString('zh-CN') },
-        { title: '操作', width: 500, render: (_: unknown, record: DataSourceFile) => <Space wrap>{record.fileObjectId && <><Button type="link" icon={<EyeOutlined />} onClick={() => setPreviewFile(resolveFile(record))}>预览</Button><Button type="link" icon={<DownloadOutlined />} onClick={() => void downloadPreviewFile(resolveFile(record))}>下载</Button></>}<Button type="link" onClick={() => navigate(sourceRoute(record))}>{record.entryType === 'EXPERIMENT_FACT' ? '查看事实' : record.sourceOwner === 'EXPERIMENT' ? '查看上传' : '查看识别'}</Button>{record.experimentId && record.entryType !== 'EXPERIMENT_FACT' && <Button type="link" onClick={() => navigate(`/experiments/${record.experimentId}`)}>查看实验</Button>}{record.entryType === 'SOURCE_UPLOAD' && record.sourceOwner === 'DATA_CENTER' && <><Can permission="data.update"><Dropdown trigger={['click']} menu={{ items: categories.map((category) => ({ key: category.id, label: category.name, onClick: () => void moveSource(record, category.id) })) }}><Button type="link">移动分类</Button></Dropdown></Can><Can permission="project.assign"><Button type="link" icon={<LinkOutlined />} onClick={() => setRelationEditor({ item: record, targets: (record.relatedProjects || []).map((relation) => ({ projectId: relation.projectId, stageId: relation.stageId, taskId: relation.taskId })) })}>关联项目</Button></Can></>}</Space> },
+        { title: '操作', width: 500, render: (_: unknown, record: DataSourceFile) => <Space wrap>{record.fileObjectId && <><Button type="link" icon={<EyeOutlined />} onClick={() => setPreviewFile(resolveFile(record))}>预览</Button><Button type="link" icon={<DownloadOutlined />} onClick={() => void downloadPreviewFile(resolveFile(record))}>下载</Button></>}<Button type="link" onClick={() => navigate(sourceRoute(record))}>{record.recognitionMode === 'FREEFORM' ? '查看识别' : '查看导入'}</Button>{record.experimentId && <Button type="link" onClick={() => navigate(`/experiments/${record.experimentId}`)}>查看实验</Button>}<Can permission="data.update"><Dropdown trigger={['click']} menu={{ items: categories.map((category) => ({ key: category.id, label: category.name, onClick: () => void moveSource(record, category.id) })) }}><Button type="link">移动分类</Button></Dropdown></Can><Can permission="project.assign"><Button type="link" icon={<LinkOutlined />} onClick={() => setRelationEditor({ item: record, targets: (record.relatedProjects || []).map((relation) => ({ projectId: relation.projectId, stageId: relation.stageId, taskId: relation.taskId })) })}>关联项目</Button></Can></Space> },
       ]} />
     </CatalogListPanel>
     <CategoryEditorModal open={Boolean(editor)} title={editor?.mode === 'NEW' ? '新增归档分类' : '编辑归档分类'} initialValue={editor?.item ? { name: editor.item.name, description: editor.item.description } : { name: '' }} confirmLoading={saving} onCancel={() => setEditor(undefined)} onSubmit={(value) => void saveCategory(value)} />

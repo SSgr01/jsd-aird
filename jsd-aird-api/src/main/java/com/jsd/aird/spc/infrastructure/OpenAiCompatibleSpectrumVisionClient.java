@@ -7,6 +7,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.Locale;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -27,6 +28,7 @@ public class OpenAiCompatibleSpectrumVisionClient implements SpectrumVisionClien
     private final String model;
     private final String responsesPath;
     private final String reasoningEffort;
+    private final String textVerbosity;
     private final int maxOutputTokens;
     private final Duration readTimeout;
 
@@ -37,6 +39,7 @@ public class OpenAiCompatibleSpectrumVisionClient implements SpectrumVisionClien
             @Value("${app.spectrum.model.name:}") String model,
             @Value("${app.spectrum.model.responses-path:/responses}") String responsesPath,
             @Value("${app.spectrum.model.reasoning-effort:high}") String reasoningEffort,
+            @Value("${app.spectrum.model.text-verbosity:high}") String textVerbosity,
             @Value("${app.spectrum.model.max-output-tokens:12000}") int maxOutputTokens,
             @Value("${app.spectrum.model.connect-timeout:10s}") Duration connectTimeout,
             @Value("${app.spectrum.model.read-timeout:10m}") Duration readTimeout) {
@@ -46,6 +49,7 @@ public class OpenAiCompatibleSpectrumVisionClient implements SpectrumVisionClien
         this.model = model == null ? "" : model.strip();
         this.responsesPath = normalizePath(responsesPath);
         this.reasoningEffort = blankDefault(reasoningEffort, "high");
+        this.textVerbosity = normalizeVerbosity(textVerbosity);
         this.maxOutputTokens = Math.max(1000, maxOutputTokens);
         this.readTimeout = readTimeout == null ? Duration.ofMinutes(10) : readTimeout;
         this.httpClient = HttpClient.newBuilder()
@@ -83,9 +87,9 @@ public class OpenAiCompatibleSpectrumVisionClient implements SpectrumVisionClien
             try (InputStream stream = response.body()) {
                 parsed = new SpectrumResponsesStreamParser(objectMapper).parse(stream, safeObserver);
             }
-            var result = parseJson(parsed.outputText());
+            var result = parseOutput(parsed.outputText());
             var returnedModel = parsed.response().path("model").asText(model);
-            return new VisionResult(result, parsed.response(), returnedModel, SpectrumPromptPort.V3_VERSION);
+            return new VisionResult(result, parsed.response(), returnedModel, SpectrumPromptPort.currentVersion());
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("图谱模型调用被中断", exception);
@@ -99,12 +103,13 @@ public class OpenAiCompatibleSpectrumVisionClient implements SpectrumVisionClien
     ObjectNode requestBody(VisionRequest request) {
         var body = objectMapper.createObjectNode();
         body.put("model", model);
-        body.put("instructions", "请严格执行输入中的图谱分析规则，只输出一个 JSON 对象。"
-                + "所有自然语言必须使用简体中文；不要输出服务端校验字段或模型思维过程。");
+        body.put("instructions", "请根据用户问题和图谱资料直接用自然、专业的简体中文回答。"
+                + "按内容需要使用 Markdown 标题、表格或列表，不要求固定结构；不要输出 JSON、claims、内部字段或思维过程。");
         body.put("max_output_tokens", maxOutputTokens);
         body.put("stream", true);
         var reasoning = body.putObject("reasoning");
         reasoning.put("effort", reasoningEffort);
+        body.putObject("text").put("verbosity", textVerbosity);
         var input = body.putArray("input");
         var user = input.addObject().put("role", "user");
         var content = user.putArray("content");
@@ -116,19 +121,19 @@ public class OpenAiCompatibleSpectrumVisionClient implements SpectrumVisionClien
         return body;
     }
 
-    private JsonNode parseJson(String value) {
+    JsonNode parseOutput(String value) {
         var normalized = value == null ? "" : value.strip();
         if (normalized.startsWith("```") && normalized.endsWith("```")) {
-            normalized = normalized.substring(3, normalized.length() - 3).strip();
-            if (normalized.startsWith("json")) normalized = normalized.substring(4).strip();
+            var firstLineEnd = normalized.indexOf('\n');
+            if (firstLineEnd >= 0) normalized = normalized.substring(firstLineEnd + 1, normalized.length() - 3).strip();
+            else normalized = normalized.substring(3, normalized.length() - 3).strip();
         }
-        try {
-            var parsed = objectMapper.readTree(normalized);
-            if (parsed == null || !parsed.isObject()) throw new IllegalArgumentException("根节点不是 JSON 对象");
-            return parsed;
-        } catch (Exception exception) {
-            throw new IllegalStateException("图谱模型未返回合法 JSON", exception);
-        }
+        if (normalized.isBlank()) throw new IllegalStateException("图谱模型未返回可显示的分析内容");
+        var result = objectMapper.createObjectNode();
+        result.put("schemaVersion", 4);
+        result.put("analysisStatus", "SUCCEEDED");
+        result.put("answerMarkdown", normalized);
+        return result;
     }
 
     private String providerError(String responseBody) {
@@ -160,5 +165,13 @@ public class OpenAiCompatibleSpectrumVisionClient implements SpectrumVisionClien
 
     private String blankDefault(String value, String fallback) {
         return value == null || value.isBlank() ? fallback : value.strip();
+    }
+
+    private String normalizeVerbosity(String value) {
+        var normalized = blankDefault(value, "high").toLowerCase(Locale.ROOT);
+        return switch (normalized) {
+            case "low", "medium", "high" -> normalized;
+            default -> "high";
+        };
     }
 }

@@ -57,8 +57,8 @@ public class SpectrumIntentResolver {
                 && hasAny(text, "有效", "适合", "合适", "验证", "可靠", "是否")) {
             matches.add(match(SpectrumAnalysisIntent.METHOD_VALIDATION, "METHOD_SUITABILITY_QUESTION"));
         }
-        if (charts.size() >= 2 && hasAny(text, "比较", "对比", "差异", "一致性", "批次变化")) {
-            matches.add(match(SpectrumAnalysisIntent.SAMPLE_COMPARISON, "MULTI_CHART_COMPARISON_QUESTION"));
+        if (!charts.isEmpty() && isComparisonQuestion(text)) {
+            matches.add(match(SpectrumAnalysisIntent.SAMPLE_COMPARISON, "EXPLICIT_COMPARISON_QUESTION"));
         }
         if (hasAny(text, "什么成分", "什么物质", "是什么成分", "是什么物质", "能否鉴定", "鉴定一下")) {
             matches.add(match(SpectrumAnalysisIntent.IDENTIFICATION, "EXPLICIT_IDENTIFICATION_QUESTION"));
@@ -76,6 +76,14 @@ public class SpectrumIntentResolver {
 
     private boolean hasConcentrationValue(String value) {
         return value.matches(".*\\d+(?:\\.\\d+)?\\s*(?:ppm|mg/l|mg·l-1|μg/ml|ug/ml|wt%|%\\s*[wv]?).*");
+    }
+
+    private boolean isComparisonQuestion(String value) {
+        if (hasAny(value, "不比较", "不要比较", "无需比较", "不需要比较", "不对比", "不要对比", "无需对比", "不需要对比")) {
+            return false;
+        }
+        return hasAny(value, "比较", "对比", "差异", "异同", "一致性", "是否一致", "一致吗", "相同吗",
+                "不同点", "新旧", "批次变化", "曲线对照");
     }
 
     private boolean hasFeatureLocation(String value) {

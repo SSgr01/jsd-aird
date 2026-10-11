@@ -197,23 +197,22 @@ public interface DataRepository {
     record SourceFile(UUID importJobId, UUID fileObjectId, String originalName, String sourceFormat,
                       UUID templateVersionId, UUID categoryId, String categoryName, String status,
                       int progress, Instant createdAt, Instant updatedAt,
-                      List<RelatedProjectView> relatedProjects, String sourceOwner,
-                      String recognitionMode, String importPurpose, String formalStatus,
-                      UUID experimentId, UUID experimentVersionId, String entryType) {
+                      List<RelatedProjectView> relatedProjects, String recognitionMode,
+                      String formalStatus, UUID experimentId, UUID experimentVersionId) {
         public SourceFile(UUID importJobId, UUID fileObjectId, String originalName, String sourceFormat,
                           UUID templateVersionId, UUID categoryId, String categoryName, String status,
                           int progress, Instant createdAt, Instant updatedAt,
                           List<RelatedProjectView> relatedProjects) {
             this(importJobId, fileObjectId, originalName, sourceFormat, templateVersionId, categoryId,
                     categoryName, status, progress, createdAt, updatedAt, relatedProjects,
-                    "DATA_CENTER", "TEMPLATE_GUIDED", "DATA_ONLY", "NOT_CONFIRMED", null, null, "SOURCE_UPLOAD");
+                    "TEMPLATE_GUIDED", "NOT_CONFIRMED", null, null);
         }
         public SourceFile(UUID importJobId, UUID fileObjectId, String originalName, String sourceFormat,
                           UUID templateVersionId, UUID categoryId, String categoryName, String status,
                           int progress, Instant createdAt, Instant updatedAt) {
             this(importJobId, fileObjectId, originalName, sourceFormat, templateVersionId, categoryId,
                     categoryName, status, progress, createdAt, updatedAt, List.of(),
-                    "DATA_CENTER", "TEMPLATE_GUIDED", "DATA_ONLY", "NOT_CONFIRMED", null, null, "SOURCE_UPLOAD");
+                    "TEMPLATE_GUIDED", "NOT_CONFIRMED", null, null);
         }
     }
 }

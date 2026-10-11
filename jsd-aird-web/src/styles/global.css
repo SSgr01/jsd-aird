@@ -5469,6 +5469,12 @@ a:active,
   padding: 0;
 }
 
+.ai-message-user .ai-message-content.is-editing {
+  width: min(760px, 100%);
+  max-width: 100%;
+  flex: 0 1 760px;
+}
+
 .ai-message-assistant {
   padding-top: 46px;
 }
@@ -5533,18 +5539,32 @@ a:active,
   min-height: 28px;
   align-items: center;
   justify-content: flex-end;
-  gap: 6px;
+}
+
+.ai-message-actions {
+  display: flex;
+  min-height: 28px;
+  align-items: center;
+  justify-content: flex-end;
+  margin-top: 3px;
 }
 
 .ai-message-edit-button {
   opacity: 0;
   color: var(--app-text-secondary);
-  transition: opacity 160ms ease;
+  transition:
+    opacity 160ms ease,
+    color 160ms ease,
+    background-color 160ms ease;
 }
 
 .ai-message-user:hover .ai-message-edit-button,
 .ai-message-user:focus-within .ai-message-edit-button {
   opacity: 1;
+}
+
+.ai-message-edit-button:hover {
+  color: var(--app-text);
 }
 
 .ai-message-user .ai-message-body {
@@ -5558,7 +5578,8 @@ a:active,
 }
 .ai-message-editor {
   display: grid;
-  width: min(680px, 52vw);
+  width: 100%;
+  min-width: 0;
   max-width: 100%;
   gap: 10px;
 }
@@ -5571,6 +5592,7 @@ a:active,
 
 .ai-message-editor-actions {
   justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 .ai-conversation-jump-latest {
@@ -6528,16 +6550,7 @@ a:active,
   min-width: 0;
   align-items: center;
   gap: 8px;
-}
-.spectrum-composer-intent {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding-right: 12px;
-  border-right: 1px solid var(--app-border);
-}
-.spectrum-composer-intent .ant-select {
-  min-width: 154px;
+  flex-wrap: wrap;
 }
 .spectrum-composer-selection-label {
   flex: 0 0 auto;
@@ -6579,7 +6592,10 @@ a:active,
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
-
+.spectrum-composer-selection-hint {
+  font-size: var(--app-font-size-caption);
+  line-height: 1.45;
+}
 @media (max-width: 1280px) {
   .catalog-category-grid {
     grid-auto-columns: minmax(250px, 286px);
@@ -6693,9 +6709,6 @@ a:active,
   }
   .ai-message-edit-button {
     opacity: 1;
-  }
-  .ai-message-editor {
-    width: min(76vw, 620px);
   }
   .ai-message-assistant {
     padding-top: 22px;

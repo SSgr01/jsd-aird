@@ -10,13 +10,13 @@ import com.jsd.aird.shared.api.ApiResponse;
 import com.jsd.aird.shared.api.ResponseFactory;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.Size;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.http.MediaType;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -34,7 +34,8 @@ public class SpectrumChatController {
     @PostMapping("/chat/messages")
     public ApiResponse<SpectrumChatService.SubmitView> submit(@Valid @RequestBody ChatRequest request) {
         return success(service.submit(new SpectrumChatService.ChatCommand(request.sessionId(), request.question(),
-                request.chartIds(), request.pageSelections(), request.analysisIntent(), request.scenarioTemplate())));
+                request.chartIds(), request.pageSelections(), request.analysisIntent(), request.scenarioTemplate(),
+                request.replaceFromMessageId(), request.expectedLastMessageId())));
     }
 
     @GetMapping("/analysis-runs/{analysisId}")
@@ -43,8 +44,9 @@ public class SpectrumChatController {
     }
 
     @GetMapping(value = "/analysis-runs/{analysisId}/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter events(@PathVariable UUID analysisId) {
-        return service.stream(analysisId);
+    public SseEmitter events(@PathVariable UUID analysisId,
+                             @RequestHeader(value = "Last-Event-ID", defaultValue = "0") long lastEventId) {
+        return service.stream(analysisId, lastEventId);
     }
 
     private <T> ApiResponse<T> success(T value) {
@@ -52,7 +54,8 @@ public class SpectrumChatController {
     }
 
     public record ChatRequest(UUID sessionId, @NotBlank @Size(max = 3000) String question,
-                              @NotEmpty @Size(max = 12) List<UUID> chartIds,
+                              @Size(max = 12) List<UUID> chartIds,
                               JsonNode pageSelections, @Size(max = 40) String analysisIntent,
-                              @Size(max = 80) String scenarioTemplate) { }
+                              @Size(max = 80) String scenarioTemplate, UUID replaceFromMessageId,
+                              UUID expectedLastMessageId) { }
 }

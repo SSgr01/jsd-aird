@@ -14,13 +14,12 @@ import {
   Empty,
   Input,
   Modal,
-  Select,
   Space,
   Spin,
   Tag,
   Typography,
 } from 'antd';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
 import {
@@ -30,36 +29,31 @@ import {
 } from '@/components/ai-conversation-workspace';
 import { FilePreviewModal, type FilePreviewDescriptor } from '@/components/file-preview';
 import { MarkdownContent } from '@/components/markdown/MarkdownContent';
+import { StreamingMarkdownContent } from '@/components/markdown/StreamingMarkdownContent';
 import {
   spectrumApi,
-  type SpectrumAnalysisIntent,
   type SpectrumCategory,
   type SpectrumChart,
   type SpectrumMessage,
+  type SpectrumMessageReplacement,
   type SpectrumResult,
   type SpectrumResultPresentation,
   type SpectrumSession,
 } from '@/services/spectrum';
+import {
+  getSpectrumAnalysisStreamMetadata,
+  getSpectrumAnalysisStreams,
+  isTerminalSpectrumAnalysisStatus,
+  startSpectrumAnalysisStream,
+  subscribeSpectrumAnalysisStream,
+  subscribeSpectrumAnalysisStreams,
+} from '@/services/spectrum/spectrum-analysis-stream';
 import {
   isRepeatedSpectrumText,
   remainingSpectrumDetails,
   resolveSpectrumPresentation,
 } from './spectrum-result-presentation';
 
-const wait = (milliseconds: number) =>
-  new Promise((resolve) => window.setTimeout(resolve, milliseconds));
-const intentOptions: { value: SpectrumAnalysisIntent; label: string }[] = [
-  { value: 'AUTO', label: '自动判断（保守）' },
-  { value: 'OVERVIEW', label: '整体概览' },
-  { value: 'PEAK_INTERPRETATION', label: '峰与特征解释' },
-  { value: 'SAMPLE_COMPARISON', label: '样品比较' },
-  { value: 'CONCENTRATION_CHECK', label: '浓度检查' },
-  { value: 'PURITY_CHECK', label: '纯度检查' },
-  { value: 'IDENTIFICATION', label: '样品鉴定' },
-  { value: 'REFERENCE_MAPPING', label: '参考谱对应' },
-  { value: 'METHOD_VALIDATION', label: '方法适用性' },
-  { value: 'ANOMALY_DIAGNOSIS', label: '异常诊断' },
-];
 const findingLabels: Record<SpectrumResultPresentation['primaryIntent'], string> = {
   ATTRIBUTION: '归因依据',
   COMPARISON: '主要差异',
@@ -107,7 +101,8 @@ const structuredValueLabels: Record<string, string> = {
   SUFFICIENT_FOR_POSSIBLE_INTERPRETATION_ONLY: '仅支持候选解释',
 };
 const boundaryLabels: Record<string, string> = {
-  POSSIBLE_INTERPRETATIONS_ONLY_NO_DEFINITIVE_FORMULA: '仅支持候选解释，不能据此确定配方或唯一化学归因。',
+  POSSIBLE_INTERPRETATIONS_ONLY_NO_DEFINITIVE_FORMULA:
+    '仅支持候选解释，不能据此确定配方或唯一化学归因。',
 };
 const hiddenResultFields = new Set([
   'evidenceId',
@@ -216,14 +211,16 @@ function StructuredResultItem({ item }: { item: unknown }) {
   return (
     <article className="spectrum-result-item-card">
       {title ? <div className="spectrum-result-item-title">{title}</div> : null}
-      {entries.length ? <div className="spectrum-result-fields">
-        {entries.map(([key, value]) => (
-          <div key={key} className="spectrum-result-field">
-            <Typography.Text type="secondary">{fieldLabel(key)}</Typography.Text>
-            <StructuredValue value={value} />
-          </div>
-        ))}
-      </div> : null}
+      {entries.length ? (
+        <div className="spectrum-result-fields">
+          {entries.map(([key, value]) => (
+            <div key={key} className="spectrum-result-field">
+              <Typography.Text type="secondary">{fieldLabel(key)}</Typography.Text>
+              <StructuredValue value={value} />
+            </div>
+          ))}
+        </div>
+      ) : null}
     </article>
   );
 }
@@ -352,36 +349,26 @@ function V3StringSection({
       <Typography.Text strong>{title}</Typography.Text>
       <List>
         {displayed.map((value, index) => (
-          <li key={`${title}-${index}`}>{value}</li>
+          <li key={`${title}-${index}`}>
+            <MarkdownContent value={value} />
+          </li>
         ))}
       </List>
     </section>
   );
 }
 
-function V3AssistantResult({ result, warnings, citations, onPreview }: AssistantResultProps) {
-  const [detailsOpen, setDetailsOpen] = useState(false);
+function V3AssistantResult({ result, citations, onPreview }: AssistantResultProps) {
   const answer = result.answer || {
+    summary: '',
     confirmed: [],
+    metadata: [],
     notConfirmed: [],
     reasonableInference: [],
     missingEvidence: [],
     nextStep: [],
   };
-  const details = result.details || {
-    confirmed: answer.confirmed,
-    reasonableInference: answer.reasonableInference,
-    limitations: answer.notConfirmed,
-  };
   const failed = result.analysisStatus === 'FAILED';
-  const partial = result.analysisStatus === 'PARTIAL';
-  const hasMore =
-    details.confirmed.length > 4 ||
-    details.reasonableInference.length > 3 ||
-    details.limitations.length > 2;
-  useEffect(() => {
-    setDetailsOpen(false);
-  }, [result.answer]);
 
   return (
     <div className="spectrum-result-shell spectrum-result-v3">
@@ -390,17 +377,18 @@ function V3AssistantResult({ result, warnings, citations, onPreview }: Assistant
           type="error"
           showIcon
           message="图谱 AI 分析失败"
-          description={result.errorMessage || answer.notConfirmed[0] || '模型未返回有效分析结果，请重新分析。'}
+          description={
+            result.errorMessage || answer.notConfirmed[0] || '模型未返回有效分析结果，请重新分析。'
+          }
         />
       ) : null}
-      {partial && warnings.length ? (
-        <Alert
-          type="warning"
-          showIcon
-          message="部分问题暂时无法确认"
-          description={warnings.join('；')}
-        />
+      {!failed && answer.summary ? (
+        <section className="spectrum-result-summary">
+          <Typography.Text strong>分析结论</Typography.Text>
+          <MarkdownContent value={answer.summary} />
+        </section>
       ) : null}
+      {!failed ? <V3StringSection title="图例与样品标记" values={answer.metadata || []} /> : null}
       {!failed && result.assessment?.items?.length ? (
         <section className="spectrum-result-assessment">
           <Typography.Text strong>{result.assessment.title}</Typography.Text>
@@ -409,48 +397,43 @@ function V3AssistantResult({ result, warnings, citations, onPreview }: Assistant
               <div key={`${item.label}-${index}`} className="spectrum-result-assessment-item">
                 <Typography.Text type="secondary">{item.label}</Typography.Text>
                 <Typography.Text>{item.value}</Typography.Text>
-                {item.source ? <Typography.Text type="secondary">来源：{item.source}</Typography.Text> : null}
+                {item.source ? (
+                  <Typography.Text type="secondary">来源：{item.source}</Typography.Text>
+                ) : null}
               </div>
             ))}
           </div>
         </section>
       ) : null}
-      {!failed ? <V3StringSection title="目前能确定" values={answer.confirmed} limit={4} /> : null}
-      {!failed ? (
-        <V3StringSection title="合理判断" values={answer.reasonableInference} limit={3} />
-      ) : null}
-      {!failed ? <V3StringSection title="暂不能确认" values={answer.notConfirmed} limit={2} /> : null}
-      {!failed ? <V3StringSection title="还需要" values={answer.missingEvidence} limit={4} /> : null}
-      {!failed ? <V3StringSection title="建议下一步" values={answer.nextStep} limit={3} ordered /> : null}
-      {!failed && hasMore ? (
-        <Collapse
-          className="spectrum-result-details"
-          ghost
-          activeKey={detailsOpen ? ['v3-details'] : []}
-          onChange={(keys) =>
-            setDetailsOpen((Array.isArray(keys) ? keys : [keys]).includes('v3-details'))
-          }
-          items={[
-            {
-              key: 'v3-details',
-              label: '查看完整分析',
-              children: (
-                <div className="spectrum-result-detail-body">
-                  <V3StringSection title="全部已确认内容" values={details.confirmed} />
-                  <V3StringSection title="全部合理判断" values={details.reasonableInference} />
-                  <V3StringSection title="全部限制" values={details.limitations} />
-                </div>
-              ),
-            },
-          ]}
-        />
-      ) : null}
+      {!failed ? <V3StringSection title="图上观察与对比" values={answer.confirmed} /> : null}
+      {!failed ? <V3StringSection title="方法学判断" values={answer.reasonableInference} /> : null}
+      {!failed ? <V3StringSection title="暂不能确认" values={answer.notConfirmed} /> : null}
+      {!failed ? <V3StringSection title="建议补充的信息" values={answer.missingEvidence} /> : null}
+      {!failed ? <V3StringSection title="建议验证" values={answer.nextStep} ordered /> : null}
       <CitationList citations={citations} onPreview={onPreview} />
     </div>
   );
 }
 
 export function AssistantResult(props: AssistantResultProps) {
+  if ((props.result.schemaVersion ?? 0) >= 4) {
+    const failed = props.result.analysisStatus === 'FAILED';
+    return (
+      <div className="spectrum-result-shell spectrum-result-natural">
+        {failed ? (
+          <Alert
+            type="error"
+            showIcon
+            message="图谱 AI 分析失败"
+            description={props.result.errorMessage || props.result.answerMarkdown}
+          />
+        ) : (
+          <MarkdownContent value={props.result.answerMarkdown} />
+        )}
+        <CitationList citations={props.citations} onPreview={props.onPreview} />
+      </div>
+    );
+  }
   if (props.result.schemaVersion === 3 && props.result.answer) {
     return <V3AssistantResult {...props} />;
   }
@@ -460,12 +443,10 @@ export function AssistantResult(props: AssistantResultProps) {
 function LegacyAssistantResult({
   result,
   fallbackContent,
-  warnings,
   citations,
   onPreview,
 }: AssistantResultProps) {
   const failed = result.analysisStatus === 'FAILED';
-  const partial = result.analysisStatus === 'PARTIAL';
   const presentation = resolveSpectrumPresentation(result, fallbackContent);
   const [detailsOpen, setDetailsOpen] = useState(false);
   useEffect(() => {
@@ -495,13 +476,16 @@ function LegacyAssistantResult({
   ] as [string, string, unknown][];
   const detailSections = rawDetailSections
     .filter(([key]) => presentation.detailSectionKeys.includes(key))
-    .map(([key, title, value]) => [
-      key,
-      key === 'suggestedValidationExperiments' && presentation.validationSteps.length
-        ? '更多验证实验'
-        : title,
-      isUnknownArray(value) ? remainingSpectrumDetails(value, displayedTexts) : [],
-    ] as [string, string, unknown[]])
+    .map(
+      ([key, title, value]) =>
+        [
+          key,
+          key === 'suggestedValidationExperiments' && presentation.validationSteps.length
+            ? '更多验证实验'
+            : title,
+          isUnknownArray(value) ? remainingSpectrumDetails(value, displayedTexts) : [],
+        ] as [string, string, unknown[]],
+    )
     .filter(([, , value]) => value.length);
   const mappingStatement = result.referenceAvailability?.statement || '';
   const showMappingStatement =
@@ -518,7 +502,10 @@ function LegacyAssistantResult({
     !isRepeatedSpectrumText(boundary, displayedTexts);
   const hasPeakMappings = isUnknownArray(result.peakMappings) && result.peakMappings.length > 0;
   const hasDetails =
-    hasPeakMappings || detailSections.length > 0 || Boolean(showMappingStatement) || Boolean(showBoundary);
+    hasPeakMappings ||
+    detailSections.length > 0 ||
+    Boolean(showMappingStatement) ||
+    Boolean(showBoundary);
   return (
     <div className="spectrum-result-shell">
       {failed ? (
@@ -529,14 +516,6 @@ function LegacyAssistantResult({
           description={
             result.errorMessage || result.answerMarkdown || '模型未返回有效分析结果，请重新分析。'
           }
-        />
-      ) : null}
-      {partial && warnings.length ? (
-        <Alert
-          type="warning"
-          showIcon
-          message="部分结果已按证据边界收敛"
-          description={warnings.join('；')}
         />
       ) : null}
       {!failed && (
@@ -601,29 +580,73 @@ function LegacyAssistantResult({
   );
 }
 
-export function StreamingSpectrumResult({ answer }: { answer: string }) {
+export function StreamingSpectrumResult({
+  answer,
+  isStreaming = true,
+  hasConnectionError = false,
+}: {
+  answer: string;
+  isStreaming?: boolean;
+  hasConnectionError?: boolean;
+}) {
   return (
-    <div className="spectrum-result-shell spectrum-result-streaming" aria-live="polite">
+    <div className="spectrum-result-shell spectrum-result-natural spectrum-result-streaming" aria-live="polite">
       {answer ? (
         <>
-          <div className="spectrum-streaming-progress" role="status">
-            <Spin size="small" />
-            <div>
-              <Typography.Text strong>完整分析仍在生成</Typography.Text>
-              <Typography.Text type="secondary">
-                以下是已校验的阶段性结论，完整结果完成后会自动更新。
-              </Typography.Text>
+          {isStreaming ? (
+            <div className="spectrum-streaming-progress" role="status">
+              <Spin size="small" />
+              <div>
+                <Typography.Text strong>正在生成分析回答</Typography.Text>
+                <Typography.Text type="secondary">
+                  {hasConnectionError ? '连接暂时中断，正在尝试恢复…' : '回答内容会实时显示'}
+                </Typography.Text>
+              </div>
             </div>
+          ) : null}
+          <div className="spectrum-streaming-answer" aria-label="分析回答">
+            <StreamingMarkdownContent value={answer} isStreaming={isStreaming} />
           </div>
-          <section
-            className="spectrum-result-summary spectrum-streaming-answer"
-            aria-label="阶段性分析结论"
-          >
-            <MarkdownContent value={answer} />
-          </section>
         </>
+      ) : isStreaming ? (
+        <div className="spectrum-streaming-progress" role="status">
+          <Spin size="small" />
+          <div>
+            <Typography.Text strong>正在生成分析回答</Typography.Text>
+            <Typography.Text type="secondary">
+              {hasConnectionError ? '连接暂时中断，正在尝试恢复…' : '回答内容会实时显示'}
+            </Typography.Text>
+          </div>
+        </div>
       ) : null}
     </div>
+  );
+}
+
+function SpectrumStreamAnswer({
+  analysisRunId,
+  isStreaming,
+  hasConnectionError = false,
+}: {
+  analysisRunId: string;
+  isStreaming: boolean;
+  hasConnectionError?: boolean;
+}) {
+  const subscribe = useCallback(
+    (listener: () => void) => subscribeSpectrumAnalysisStream(analysisRunId, listener),
+    [analysisRunId],
+  );
+  const getSnapshot = useCallback(
+    () => getSpectrumAnalysisStreams().get(analysisRunId)?.answer || '',
+    [analysisRunId],
+  );
+  const answer = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  return (
+    <StreamingSpectrumResult
+      answer={answer}
+      isStreaming={isStreaming}
+      hasConnectionError={hasConnectionError}
+    />
   );
 }
 
@@ -633,73 +656,254 @@ export function SpectrumChatPage() {
   const [searchParams] = useSearchParams();
   const [categories, setCategories] = useState<SpectrumCategory[]>([]);
   const [charts, setCharts] = useState<SpectrumChart[]>([]);
+  const [unavailableChartIds, setUnavailableChartIds] = useState<Set<string>>(() => new Set());
+  const [categoriesLoading, setCategoriesLoading] = useState(true);
+  const [chartsLoading, setChartsLoading] = useState(true);
   const [sessions, setSessions] = useState<SpectrumSession[]>([]);
-  const [activeSessionId, setActiveSessionId] = useState<string>();
+  const [activeSessionId, setActiveSessionId] = useState<string | undefined>(
+    () =>
+      searchParams.get('sessionId') ||
+      window.sessionStorage.getItem('spectrum.chat.activeSessionId') ||
+      undefined,
+  );
   const [messages, setMessages] = useState<SpectrumMessage[]>([]);
+  const [terminalAnalysisRunIds, setTerminalAnalysisRunIds] = useState<Set<string>>(() => new Set());
   const [selectedCharts, setSelectedCharts] = useState<string[]>([]);
   const [pageSelections, setPageSelections] = useState<Record<string, number[]>>({});
-  const [analysisIntent, setAnalysisIntent] = useState<SpectrumAnalysisIntent>('AUTO');
+  const [sessionContextLoading, setSessionContextLoading] = useState(Boolean(activeSessionId));
   const [scopeKeyword, setScopeKeyword] = useState('');
   const [question, setQuestion] = useState('');
   const [loading, setLoading] = useState(true);
-  const [streaming, setStreaming] = useState(false);
-  const [streamStage, setStreamStage] = useState('正在读取图谱文件');
-  const [streamingAssistantId, setStreamingAssistantId] = useState<string>();
-  const [streamAnswer, setStreamAnswer] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const streams = useSyncExternalStore(
+    subscribeSpectrumAnalysisStreams,
+    getSpectrumAnalysisStreamMetadata,
+    getSpectrumAnalysisStreamMetadata,
+  );
   const [pageChart, setPageChart] = useState<SpectrumChart>();
   const [pageOptions, setPageOptions] = useState<number[]>([]);
   const [pageValue, setPageValue] = useState<number[]>([]);
   const [pageLoading, setPageLoading] = useState(false);
   const [previewFile, setPreviewFile] = useState<FilePreviewDescriptor>();
+  const activeSessionRef = useRef(activeSessionId);
+  const chartItemsRef = useRef<SpectrumChart[]>([]);
+  const initialSessionIdRef = useRef(activeSessionId);
+  const sessionLoadSequenceRef = useRef(0);
+  const sessionSelectionVersionRef = useRef(0);
+  const refreshedAnalysisRunsRef = useRef(new Set<string>());
 
   const loadBase = useCallback(async () => {
     setLoading(true);
-    try {
-      const [categoryList, chartPage, sessionList] = await Promise.all([
-        spectrumApi.categories(),
-        spectrumApi.listCharts({ size: 100 }),
-        spectrumApi.sessions(),
-      ]);
-      setCategories(categoryList);
-      setCharts(chartPage.items);
-      setSessions(sessionList);
-      const routeChartIds = searchParams.get('chartIds')?.split(',').filter(Boolean) || [];
-      if (routeChartIds.length)
-        setSelectedCharts(
-          routeChartIds.filter((id) => chartPage.items.some((item) => item.id === id)),
-        );
-    } catch {
-      setCategories([]);
-      setCharts([]);
-      setSessions([]);
-    } finally {
-      setLoading(false);
-    }
+    setCategoriesLoading(true);
+    setChartsLoading(true);
+    const categoryRequest = spectrumApi
+      .categories()
+      .then(setCategories)
+      .catch(() => setCategories([]))
+      .finally(() => setCategoriesLoading(false));
+    const chartRequest = spectrumApi
+      .listCharts({ size: 100 })
+      .then((chartPage) => {
+        const mergedCharts = [
+          ...chartPage.items,
+          ...chartItemsRef.current.filter(
+            (chart) => !chartPage.items.some((item) => item.id === chart.id),
+          ),
+        ];
+        chartItemsRef.current = mergedCharts;
+        setCharts(mergedCharts);
+        const routeChartIds = searchParams.get('chartIds')?.split(',').filter(Boolean) || [];
+        if (!initialSessionIdRef.current && routeChartIds.length)
+          setSelectedCharts(
+            routeChartIds.filter((id) => chartPage.items.some((item) => item.id === id)),
+          );
+      })
+      .catch(() => {
+        setCharts(chartItemsRef.current);
+      })
+      .finally(() => setChartsLoading(false));
+    void spectrumApi.sessions().then(
+      (sessionList) =>
+        setSessions((current) => {
+          const merged = new Map(sessionList.map((item) => [item.id, item]));
+          current.forEach((item) => merged.set(item.id, item));
+          return [...merged.values()].sort(
+            (left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt),
+          );
+        }),
+      () => undefined,
+    );
+    await Promise.all([categoryRequest, chartRequest]);
+    setLoading(false);
   }, [searchParams]);
 
   useEffect(() => {
     void loadBase();
   }, [loadBase]);
 
-  const selectSession = async (id: string) => {
-    setActiveSessionId(id);
+  const loadSessionMessages = useCallback(async (id: string) => {
+    const sequence = ++sessionLoadSequenceRef.current;
     try {
       const session = await spectrumApi.session(id);
+      if (sequence !== sessionLoadSequenceRef.current || activeSessionRef.current !== id) return;
       setMessages(session.messages);
+      const savedChartIds = session.chartIds || [];
+      const routeChartIds = searchParams.get('chartIds')?.split(',').filter(Boolean) || [];
+      const restoredChartIds = savedChartIds.length
+        ? savedChartIds
+        : initialSessionIdRef.current === id
+          ? routeChartIds
+          : [];
+      setSelectedCharts(
+        restoredChartIds,
+      );
+      setPageSelections(session.pageSelections || {});
+      const unresolvedChartIds = restoredChartIds.filter(
+        (chartId) => !chartItemsRef.current.some((chart) => chart.id === chartId),
+      );
+      if (unresolvedChartIds.length) {
+        setSessionContextLoading(true);
+        void Promise.all(
+          unresolvedChartIds.map((chartId) =>
+            spectrumApi.chart(chartId).catch(() => undefined),
+          ),
+        ).then((resolvedCharts) => {
+          if (sequence !== sessionLoadSequenceRef.current || activeSessionRef.current !== id) return;
+          const availableCharts = resolvedCharts.filter(
+            (chart): chart is SpectrumChart => Boolean(chart),
+          );
+          const unavailable = new Set(
+            unresolvedChartIds.filter((chartId) => !availableCharts.some((chart) => chart.id === chartId)),
+          );
+          const mergedCharts = [
+            ...chartItemsRef.current,
+            ...availableCharts.filter(
+              (chart) => !chartItemsRef.current.some((item) => item.id === chart.id),
+            ),
+          ];
+          chartItemsRef.current = mergedCharts;
+          setCharts(mergedCharts);
+          setUnavailableChartIds(unavailable);
+          setSessionContextLoading(false);
+        });
+      } else {
+        setUnavailableChartIds(new Set());
+        setSessionContextLoading(false);
+      }
+      session.messages.forEach((item) => {
+        if (item.role === 'ASSISTANT' && item.analysisRunId)
+          refreshedAnalysisRunsRef.current.add(item.analysisRunId);
+      });
+      const assistantRuns = new Set(
+        session.messages
+          .filter((item) => item.role === 'ASSISTANT' && item.analysisRunId)
+          .map((item) => item.analysisRunId),
+      );
+      const pendingRuns = new Set(
+        session.messages
+          .filter((item) => item.role === 'USER' && item.analysisRunId)
+          .map((item) => item.analysisRunId)
+          .filter((runId): runId is string => Boolean(runId) && !assistantRuns.has(runId)),
+      );
+      pendingRuns.forEach((analysisRunId) => {
+        void spectrumApi
+          .analysis(analysisRunId)
+          .then((analysis) => {
+            if (!isTerminalSpectrumAnalysisStatus(analysis.status)) {
+              void startSpectrumAnalysisStream(id, analysisRunId);
+              return;
+            }
+            setTerminalAnalysisRunIds((current) => new Set(current).add(analysisRunId));
+            void spectrumApi
+              .session(id)
+              .then((latest) => {
+                if (activeSessionRef.current === id) setMessages(latest.messages);
+              })
+              .catch(() => undefined);
+          })
+          .catch(() => undefined);
+      });
     } catch {
-      setMessages([]);
+      if (sequence === sessionLoadSequenceRef.current && activeSessionRef.current === id) {
+        setMessages([]);
+        setSelectedCharts([]);
+        setPageSelections({});
+        setUnavailableChartIds(new Set());
+        setSessionContextLoading(false);
+        window.sessionStorage.removeItem('spectrum.chat.activeSessionId');
+        activeSessionRef.current = undefined;
+        setActiveSessionId(undefined);
+      }
     }
+  }, [searchParams]);
+
+  useEffect(() => {
+    activeSessionRef.current = activeSessionId;
+    if (!activeSessionId) {
+      setMessages([]);
+      setSessionContextLoading(false);
+      return;
+    }
+    void loadSessionMessages(activeSessionId);
+  }, [activeSessionId, loadSessionMessages]);
+
+  useEffect(() => {
+    if (activeSessionId)
+      window.sessionStorage.setItem('spectrum.chat.activeSessionId', activeSessionId);
+    else window.sessionStorage.removeItem('spectrum.chat.activeSessionId');
+  }, [activeSessionId]);
+
+  useEffect(() => {
+    streams.forEach((stream) => {
+      if (
+        stream.sessionId !== activeSessionId ||
+        !isTerminalSpectrumAnalysisStatus(stream.status) ||
+        refreshedAnalysisRunsRef.current.has(stream.analysisRunId)
+      )
+        return;
+      refreshedAnalysisRunsRef.current.add(stream.analysisRunId);
+      void spectrumApi
+        .session(stream.sessionId)
+        .then((session) => {
+          if (activeSessionRef.current === stream.sessionId) setMessages(session.messages);
+        })
+        .catch(() => refreshedAnalysisRunsRef.current.delete(stream.analysisRunId));
+    });
+  }, [activeSessionId, streams]);
+
+  const selectSession = (id: string) => {
+    sessionSelectionVersionRef.current += 1;
+    window.sessionStorage.setItem('spectrum.chat.activeSessionId', id);
+    if (activeSessionRef.current === id) {
+      setSessionContextLoading(true);
+      void loadSessionMessages(id);
+      return;
+    }
+    activeSessionRef.current = id;
+    setMessages([]);
+    setSelectedCharts([]);
+    setPageSelections({});
+    setUnavailableChartIds(new Set());
+    setSessionContextLoading(true);
+    setActiveSessionId(id);
   };
 
   const createConversation = async () => {
     try {
       const session = await spectrumApi.createSession();
       setSessions((current) => [session, ...current]);
+      sessionSelectionVersionRef.current += 1;
+      activeSessionRef.current = session.id;
+      window.sessionStorage.setItem('spectrum.chat.activeSessionId', session.id);
       setActiveSessionId(session.id);
       setMessages([]);
+      setSelectedCharts([]);
+      setPageSelections({});
+      setUnavailableChartIds(new Set());
+      setSessionContextLoading(false);
       setQuestion('');
-      setAnalysisIntent('AUTO');
     } catch {
+      activeSessionRef.current = undefined;
       setActiveSessionId(undefined);
     }
   };
@@ -719,9 +923,16 @@ export function SpectrumChatPage() {
     try {
       await spectrumApi.deleteSession(item.id);
       setSessions(await spectrumApi.sessions());
-      if (activeSessionId === item.id) {
+      if (activeSessionRef.current === item.id) {
+        sessionSelectionVersionRef.current += 1;
+        activeSessionRef.current = undefined;
+        window.sessionStorage.removeItem('spectrum.chat.activeSessionId');
         setActiveSessionId(undefined);
         setMessages([]);
+        setSelectedCharts([]);
+        setPageSelections({});
+        setUnavailableChartIds(new Set());
+        setSessionContextLoading(false);
         setQuestion('');
       }
       toast.success('会话已删除');
@@ -755,6 +966,17 @@ export function SpectrumChatPage() {
     setPageChart(undefined);
   };
 
+  const selectedChartItems = useMemo(
+    () => selectedCharts.map((id) =>
+      charts.find((item) => item.id === id) || {
+        id,
+        title: unavailableChartIds.has(id) ? '图谱不可用，请移除后重新选择' : '正在恢复图谱…',
+      },
+    ),
+    [charts, selectedCharts, unavailableChartIds],
+  );
+  const hasUnavailableCharts = selectedCharts.some((id) => unavailableChartIds.has(id));
+
   const filteredCharts = useMemo(() => {
     const value = scopeKeyword.trim().toLowerCase();
     return value
@@ -776,10 +998,27 @@ export function SpectrumChatPage() {
         .filter((item) => item.charts.length),
     [categories, filteredCharts],
   );
-  const selectedChartItems = useMemo(
-    () => charts.filter((item) => selectedCharts.includes(item.id)),
-    [charts, selectedCharts],
-  );
+
+  const updateChartSelection = (chartId: string, checked: boolean) => {
+    setSelectedCharts((current) => {
+      if (checked) return current.includes(chartId) || current.length >= 12 ? current : [...current, chartId];
+      return current.filter((id) => id !== chartId);
+    });
+    if (!checked) {
+      setUnavailableChartIds((current) => {
+        const next = new Set(current);
+        next.delete(chartId);
+        return next;
+      });
+      setPageSelections((current) => {
+        const next = { ...current };
+        delete next[chartId];
+        return next;
+      });
+    } else if (selectedCharts.length >= 12 && !selectedCharts.includes(chartId)) {
+      toast.warning('每个会话最多引用 12 张图谱');
+    }
+  };
 
   const scopeContent = (
     <div className="spectrum-chat-scope-content">
@@ -796,7 +1035,7 @@ export function SpectrumChatPage() {
         <strong>{selectedCharts.length}</strong>
         <Typography.Text type="secondary">张图谱，可跨分类多选</Typography.Text>
       </div>
-      {loading ? (
+      {categoriesLoading || chartsLoading ? (
         <div className="spectrum-chat-scope-state">
           <Spin size="small" />
           <Typography.Text type="secondary">正在加载图谱</Typography.Text>
@@ -825,22 +1064,13 @@ export function SpectrumChatPage() {
                   >
                     <Checkbox
                       checked={selectedCharts.includes(chart.id)}
-                      onChange={(event) =>
-                        setSelectedCharts((current) =>
-                          event.target.checked
-                            ? [...current, chart.id]
-                            : current.filter((id) => id !== chart.id),
-                        )
-                      }
+                      onChange={(event) => updateChartSelection(chart.id, event.target.checked)}
                     >
                       <span className="spectrum-chat-chart-copy">
                         <Typography.Text ellipsis={{ tooltip: chart.title }}>
                           {chart.title}
                         </Typography.Text>
-                        <Typography.Text
-                          type="secondary"
-                          ellipsis={{ tooltip: chart.originalName }}
-                        >
+                        <Typography.Text type="secondary" ellipsis={{ tooltip: chart.originalName }}>
                           {chart.originalName}
                         </Typography.Text>
                       </span>
@@ -864,16 +1094,6 @@ export function SpectrumChatPage() {
 
   const composerTopContent = (
     <div className="spectrum-composer-selection" aria-label="分析设置与已选择的图谱">
-      <div className="spectrum-composer-intent">
-        <Typography.Text className="spectrum-composer-selection-label">分析目的</Typography.Text>
-        <Select
-          aria-label="分析目的"
-          value={analysisIntent}
-          options={intentOptions}
-          onChange={setAnalysisIntent}
-          popupMatchSelectWidth={false}
-        />
-      </div>
       <Typography.Text className="spectrum-composer-selection-label">本次图谱</Typography.Text>
       <div className="spectrum-composer-selection-list">
         {selectedChartItems.length ? (
@@ -881,19 +1101,38 @@ export function SpectrumChatPage() {
             <Tag
               key={item.id}
               closable
-              onClose={() => setSelectedCharts((current) => current.filter((id) => id !== item.id))}
+              onClose={() => {
+                setSelectedCharts((current) => current.filter((id) => id !== item.id));
+                setUnavailableChartIds((current) => {
+                  const next = new Set(current);
+                  next.delete(item.id);
+                  return next;
+                });
+                setPageSelections((current) => {
+                  const next = { ...current };
+                  delete next[item.id];
+                  return next;
+                });
+              }}
               title={item.title}
             >
               {item.title}
             </Tag>
           ))
         ) : (
-          <Typography.Text type="secondary">请先从左侧选择图谱</Typography.Text>
+          <Typography.Text type="secondary">
+            {sessionContextLoading ? '正在恢复本会话的图谱范围…' : '请先从左侧选择图谱'}
+          </Typography.Text>
         )}
       </div>
       <Typography.Text type="secondary" className="spectrum-composer-selection-count">
         {selectedChartItems.length} 张
       </Typography.Text>
+      {hasUnavailableCharts ? (
+        <Typography.Text type="danger" className="spectrum-composer-selection-hint">
+          部分图谱已删除或无权访问，请移除后重新选择。
+        </Typography.Text>
+      ) : null}
     </div>
   );
 
@@ -914,137 +1153,170 @@ export function SpectrumChatPage() {
     title: item.title,
     updatedAt: item.updatedAt,
   }));
-  const conversationMessages: ConversationMessage[] = messages.map((item) => ({
-    id: item.id,
-    role: item.role,
-    pending:
-      item.role === 'ASSISTANT' &&
-      streaming &&
-      item.id !== streamingAssistantId &&
-      !item.content &&
-      !Object.keys(item.result || {}).length,
-    content:
-      item.role === 'ASSISTANT' ? (
-        item.id === streamingAssistantId && streaming ? (
-          streamAnswer ? (
-            <StreamingSpectrumResult answer={streamAnswer} />
-          ) : null
-        ) : Object.keys(item.result || {}).length ? (
-          <AssistantResult
-            result={item.result}
-            fallbackContent={item.content}
-            warnings={item.warnings}
-            citations={item.citations}
-            onPreview={previewById}
-          />
-        ) : item.content ? (
-          <Alert
-            type={item.warnings.length ? 'error' : 'info'}
-            showIcon
-            message={item.content}
-            description={item.warnings.length ? item.warnings.join('；') : undefined}
+  const assistantRunIds = new Set(
+    messages
+      .filter((item) => item.role === 'ASSISTANT' && item.analysisRunId)
+      .map((item) => item.analysisRunId),
+  );
+  const activeSessionStreams = [...streams.values()].filter(
+    (stream) =>
+      stream.sessionId === activeSessionId && !isTerminalSpectrumAnalysisStatus(stream.status),
+  );
+  const streaming = activeSessionStreams.length > 0;
+  const streamStage = activeSessionStreams.at(-1)?.stage || '正在读取图谱文件';
+  const conversationMessages: ConversationMessage[] = [];
+  messages.forEach((item) => {
+    if (item.role === 'USER') {
+      conversationMessages.push({
+        id: item.id,
+        role: item.role,
+        editableText: item.analysisRunId ? item.content : undefined,
+        content: (
+          <Typography.Paragraph className="ai-message-text">{item.content}</Typography.Paragraph>
+        ),
+      });
+      if (item.analysisRunId && !assistantRunIds.has(item.analysisRunId)) {
+        const stream = streams.get(item.analysisRunId);
+        const terminal =
+          terminalAnalysisRunIds.has(item.analysisRunId) ||
+          (stream ? isTerminalSpectrumAnalysisStatus(stream.status) : false);
+        conversationMessages.push({
+          id: `stream-${item.analysisRunId}`,
+          role: 'ASSISTANT',
+          content: terminal ? (
+            <Typography.Text type="secondary">分析已完成，正在载入完整回答…</Typography.Text>
+          ) : stream ? (
+            <SpectrumStreamAnswer
+              analysisRunId={item.analysisRunId}
+              isStreaming
+              hasConnectionError={Boolean(stream.error)}
+            />
+          ) : null,
+        });
+      }
+      return;
+    }
+    const stream = item.analysisRunId ? streams.get(item.analysisRunId) : undefined;
+    const streamingThisAnswer =
+      stream !== undefined && !isTerminalSpectrumAnalysisStatus(stream.status);
+    conversationMessages.push({
+      id: item.analysisRunId ? `stream-${item.analysisRunId}` : item.id,
+      role: item.role,
+      content: streamingThisAnswer ? (
+        stream ? (
+          <SpectrumStreamAnswer
+            analysisRunId={stream.analysisRunId}
+            isStreaming
+            hasConnectionError={Boolean(stream.error)}
           />
         ) : null
-      ) : (
-        <Typography.Paragraph className="ai-message-text">{item.content}</Typography.Paragraph>
-      ),
-  }));
+      ) : Object.keys(item.result || {}).length ? (
+        <AssistantResult
+          result={item.result}
+          fallbackContent={item.content}
+          warnings={item.warnings}
+          citations={item.citations}
+          onPreview={previewById}
+        />
+      ) : item.content ? (
+        <Alert
+          type={item.warnings.length ? 'error' : 'info'}
+          showIcon
+          message={item.content}
+          description={item.warnings.length ? item.warnings.join('；') : undefined}
+        />
+      ) : null,
+    });
+  });
 
-  const submit = async () => {
-    if (!selectedCharts.length) return;
-    if (!question.trim()) return;
-    setStreaming(true);
-    setStreamStage('正在读取图谱文件');
-    setStreamAnswer('');
+  const submit = async (questionOverride?: string, replacement?: SpectrumMessageReplacement) => {
+    if (!selectedCharts.length || hasUnavailableCharts || sessionContextLoading || submitting || streaming) return;
+    const submittedQuestion = (questionOverride ?? question).trim();
+    if (!submittedQuestion) return;
+    setSubmitting(true);
+    const initialSelectionVersion = sessionSelectionVersionRef.current;
+    const initialSessionId = activeSessionRef.current;
+    const expectedMessages = messages;
     const optimisticUser: SpectrumMessage = {
       id: `local-user-${Date.now()}`,
       role: 'USER',
-      content: question.trim(),
+      content: submittedQuestion,
       citations: [],
       result: {},
       warnings: [],
       createdAt: new Date().toISOString(),
     };
-    const optimisticAssistant: SpectrumMessage = {
-      id: `local-assistant-${Date.now()}`,
-      role: 'ASSISTANT',
-      content: '',
-      citations: [],
-      result: {},
-      warnings: [],
-      createdAt: new Date().toISOString(),
-    };
-    setStreamingAssistantId(optimisticAssistant.id);
-    setMessages((current) => [...current, optimisticUser, optimisticAssistant]);
+    if (replacement) {
+      const targetIndex = messages.findIndex((item) => item.id === replacement.replaceFromMessageId);
+      if (targetIndex < 0) {
+        setSubmitting(false);
+        toast.error('找不到要编辑的问题，请刷新会话后重试');
+        return;
+      }
+      setMessages((current) => [...current.slice(0, targetIndex), optimisticUser]);
+    } else if (initialSessionId) {
+      setMessages((current) => [...current, optimisticUser]);
+    }
     try {
       const submitted = await spectrumApi.submitChat({
-        sessionId: activeSessionId,
-        question,
+        sessionId: initialSessionId,
+        question: submittedQuestion,
         chartIds: selectedCharts,
         pageSelections,
-        analysisIntent,
+        ...replacement,
       });
-      setActiveSessionId(submitted.sessionId);
-      setQuestion('');
-      try {
-        await spectrumApi.streamAnalysis(submitted.analysisRunId, (event, data) => {
-          if ((event === 'status' || event === 'snapshot') && data && typeof data === 'object') {
-            const status = data as { stage?: unknown; progress?: unknown };
-            if (typeof status.stage === 'string' && status.stage) setStreamStage(status.stage);
-            else if (typeof status.progress === 'number')
-              setStreamStage(`正在处理图谱（${status.progress}%）`);
-          }
-          if (event === 'error' && data && typeof data === 'object') {
-            const error = data as { message?: unknown };
-            setStreamAnswer('');
-            if (typeof error.message === 'string') setStreamStage(error.message);
-          }
-          if (event === 'answer_delta' && data && typeof data === 'object') {
-            const answerDelta = data as { delta?: unknown };
-            const delta = answerDelta.delta;
-            if (typeof delta === 'string') {
-              setStreamAnswer((current) => current + delta);
-            }
-          }
-        });
-      } catch {
-        setStreamStage('实时进度连接中断，正在恢复任务状态');
+      if (sessionSelectionVersionRef.current === initialSelectionVersion) {
+        activeSessionRef.current = submitted.sessionId;
+        window.sessionStorage.setItem('spectrum.chat.activeSessionId', submitted.sessionId);
+        setActiveSessionId(submitted.sessionId);
+        setQuestion('');
       }
-      let analysis = await spectrumApi.analysis(submitted.analysisRunId);
-      for (
-        let attempt = 0;
-        attempt < 900 && !['SUCCEEDED', 'PARTIAL', 'FAILED', 'CANCELLED'].includes(analysis.status);
-        attempt += 1
-      ) {
-        await wait(1000);
-        analysis = await spectrumApi.analysis(submitted.analysisRunId);
-      }
-      if (['SUCCEEDED', 'PARTIAL', 'FAILED', 'CANCELLED'].includes(analysis.status)) {
-        const session = await spectrumApi.session(submitted.sessionId);
+      void startSpectrumAnalysisStream(submitted.sessionId, submitted.analysisRunId);
+      void spectrumApi
+        .sessions()
+        .then(setSessions)
+        .catch(() => undefined);
+      setSessions((current) => {
+        const matching = current.find((session) => session.id === submitted.sessionId);
+        if (!matching) return current;
+        return [
+          { ...matching, updatedAt: new Date().toISOString() },
+          ...current.filter((session) => session.id !== submitted.sessionId),
+        ];
+      });
+      const session = await spectrumApi.session(submitted.sessionId);
+      if (activeSessionRef.current === submitted.sessionId) {
         setMessages(session.messages);
-        setSessions(await spectrumApi.sessions());
-        window.setTimeout(() => {
-          void spectrumApi
-            .sessions()
-            .then(setSessions)
-            .catch(() => undefined);
-        }, 1200);
-        if (analysis.status === 'FAILED') setQuestion('');
+        setSelectedCharts(session.chartIds);
+        setPageSelections(session.pageSelections);
+        session.messages.forEach((item) => {
+          if (item.role === 'ASSISTANT' && item.analysisRunId)
+            refreshedAnalysisRunsRef.current.add(item.analysisRunId);
+        });
       }
     } catch (error) {
-      setMessages((current) =>
-        current
-          .filter((item) => item.id !== optimisticAssistant.id)
-          .concat({
-            ...optimisticUser,
-            content: `提交失败：${error instanceof Error ? error.message : '图谱分析任务提交失败'}`,
-          }),
-      );
+      if (replacement && initialSessionId && activeSessionRef.current === initialSessionId) {
+        try {
+          const session = await spectrumApi.session(initialSessionId);
+          setMessages(session.messages);
+          setSelectedCharts(session.chartIds);
+          setPageSelections(session.pageSelections);
+        } catch {
+          setMessages(expectedMessages);
+        }
+        toast.error(error instanceof Error ? error.message : '编辑后重新分析失败');
+      } else if (initialSessionId && activeSessionRef.current === initialSessionId)
+        setMessages((current) =>
+          current
+            .filter((item) => item.id !== optimisticUser.id)
+            .concat({
+              ...optimisticUser,
+              content: `提交失败：${error instanceof Error ? error.message : '图谱分析任务提交失败'}`,
+            }),
+        );
+      else toast.error(error instanceof Error ? error.message : '图谱分析任务提交失败');
     } finally {
-      setStreaming(false);
-      setStreamingAssistantId(undefined);
-      setStreamAnswer('');
-      setStreamStage('正在读取图谱文件');
+      setSubmitting(false);
     }
   };
 
@@ -1074,7 +1346,7 @@ export function SpectrumChatPage() {
             <Typography.Title level={2}>AI图谱分析</Typography.Title>
           </div>
           <Typography.Text type="secondary">
-            从图谱分类中选择文件，引用到 AI 对话中，自定义你的分析问题。
+            把需要分析的图谱加入会话，再直接提问；后续追问会沿用本会话范围。
           </Typography.Text>
         </div>
       </div>
@@ -1082,19 +1354,19 @@ export function SpectrumChatPage() {
         conversations={conversationItems}
         activeConversationId={activeSessionId}
         messages={conversationMessages}
+        loading={loading || submitting}
         scopeContent={scopeContent}
         composerTopContent={composerTopContent}
         assistantLabel="AI图谱助手"
-        submitDisabled={!selectedCharts.length}
+        submitDisabled={!selectedCharts.length || hasUnavailableCharts || sessionContextLoading || submitting}
         scopeTitle="选择参与分析的图谱"
         welcomeTitle="开始图谱分析对话"
-        welcomeDescription="选择一个或多个图谱文件，再输入需要验证的分析问题。"
+        welcomeDescription="新会话先添加一张图谱；同一会话后续提问会沿用当前范围。"
         scopeSummary={
           <div className="spectrum-welcome-boundary">
             <LineChartOutlined aria-hidden="true" />
             <Typography.Text type="secondary">
-              当前已选择 {selectedCharts.length} 张图谱。AI
-              仅在图谱证据边界内提供观察、候选解释和验证建议。
+              回答仅依据本会话引用的图谱提供观察、候选解释和验证建议。
             </Typography.Text>
           </div>
         }
@@ -1112,10 +1384,20 @@ export function SpectrumChatPage() {
           </div>
         }
         question={question}
-        loading={loading}
         streaming={streaming}
         onNewConversation={() => void createConversation()}
         onSelectConversation={(id) => void selectSession(id)}
+        onEditMessage={(item, value) => {
+          const expectedLastMessageId = messages.at(-1)?.id;
+          if (!item.editableText || !item.id || !expectedLastMessageId) {
+            toast.error('该问题没有可恢复的图谱范围，无法安全重跑');
+            return;
+          }
+          void submit(value, {
+            replaceFromMessageId: item.id,
+            expectedLastMessageId,
+          });
+        }}
         onRenameConversation={renameConversation}
         onDeleteConversation={deleteConversation}
         onQuestionChange={setQuestion}

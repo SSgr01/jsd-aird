@@ -75,7 +75,7 @@ export function ExperimentListPage(){
    <div className="page-heading">
     <div>
      <h2>实验记录本</h2>
-     <p>统一管理电子实验记录、分类及关联项目。</p>
+     <p>实验记录本展示实验记录及流程状态；文件导入进度和数据确认状态在数据中心查看。</p>
     </div>
     <div className="pm-page-actions">
      <span className="pm-selected">已选 {selected.length} 项</span>{selected.length>0&&<Button type="link" size="small" onClick={()=>setSelected([])}>清除已选</Button>}

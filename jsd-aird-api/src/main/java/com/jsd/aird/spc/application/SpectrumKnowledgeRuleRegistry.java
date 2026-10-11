@@ -5,12 +5,16 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import org.springframework.stereotype.Component;
 
 @Component
 public class SpectrumKnowledgeRuleRegistry {
+
+    private static final Pattern NUMERIC_RANGE_VALUE = Pattern.compile("\\d+(?:\\.\\d+)?");
 
     private final Map<String, KnowledgeRule> rules;
 
@@ -20,7 +24,7 @@ public class SpectrumKnowledgeRuleRegistry {
                         "当报告吸光度达到较高水平时，应关注当前条件下的定量可靠性，并结合仪器方法、标准曲线和实验室规范判断。",
                         List.of("METHOD_ASSESSMENT", "DATA_QUALITY_ASSESSMENT"), "L2",
                         List.of("CONCENTRATION_CONFIRMATION", "PURITY_CONFIRMATION", "IDENTITY_CONFIRMATION"),
-                        new Applicability(List.of("CONCENTRATION_CHECK", "METHOD_VALIDATION", "OVERVIEW"),
+                        new Applicability(List.of("CONCENTRATION_CHECK", "METHOD_VALIDATION", "SAMPLE_COMPARISON", "OVERVIEW"),
                                 List.of("UV"), true, List.of("OBSERVATION"), List.of(
                                 new Predicate("UV_ABSORBANCE_POINT", "absorbance.value", "GTE", 2.0, "AU")))),
                 existsRule("IR_METHOD_001", "IR", "红外峰位和强度解释需要结合测试模式、分辨率和样品制备条件。",
@@ -72,12 +76,37 @@ public class SpectrumKnowledgeRuleRegistry {
             var facts = dependency.path("structuredFacts");
             if (!facts.isArray()) continue;
             for (var fact : facts) {
-                if (!predicate.factType().equals(fact.path("factType").asText())) continue;
+                if (!predicate.factType().equals(fact.path("factType").asText())
+                        && !isEquivalentMetricFact(predicate, fact.path("factType").asText())) continue;
                 var value = atPath(fact, predicate.field());
                 if (matches(value, predicate)) return true;
+                if (matchesRangeLowerBound(fact, predicate)) return true;
             }
         }
         return false;
+    }
+
+    private boolean matchesRangeLowerBound(JsonNode fact, Predicate predicate) {
+        if (!"GTE".equals(predicate.operator())) return false;
+        var separator = predicate.field().lastIndexOf('.');
+        if (separator < 0) return false;
+        var range = atPath(fact, predicate.field().substring(0, separator) + ".range");
+        if (!range.isTextual()) return false;
+        Matcher matcher = NUMERIC_RANGE_VALUE.matcher(range.asText());
+        BigDecimal lowerBound = null;
+        while (matcher.find()) {
+            var value = new BigDecimal(matcher.group());
+            if (lowerBound == null || value.compareTo(lowerBound) < 0) lowerBound = value;
+        }
+        return lowerBound != null && lowerBound.compareTo(BigDecimal.valueOf(predicate.value())) >= 0;
+    }
+
+    private boolean isEquivalentMetricFact(Predicate predicate, String factType) {
+        // A peak is also an absorbance point. Models commonly encode peak height
+        // as UV_PEAK rather than duplicating it as UV_ABSORBANCE_POINT.
+        return "UV_ABSORBANCE_POINT".equals(predicate.factType())
+                && "UV_PEAK".equals(factType)
+                && "absorbance.value".equals(predicate.field());
     }
 
     private JsonNode atPath(JsonNode node, String path) {

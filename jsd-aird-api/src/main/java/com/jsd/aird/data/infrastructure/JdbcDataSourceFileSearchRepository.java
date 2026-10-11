@@ -56,7 +56,10 @@ public class JdbcDataSourceFileSearchRepository implements DataSourceFileSearchF
                         || request.fileScope() == DataFileScope.EXPLICIT) return result;
             }
         }
-        var matches = findCandidateFiles(organizationId, request, categoryIds, scope, 11);
+        var broadRecordLookup = isBroadRecordLookup(request);
+        var matches = findCandidateFiles(organizationId, request, categoryIds, scope,
+                broadRecordLookup ? 50 : 11);
+        if (broadRecordLookup) matches = latestSourceRevisions(matches);
         var usedRecordOnlyFallback = false;
         if (matches.isEmpty() && !request.recordTerms().isEmpty() && !request.fieldTerms().isEmpty()) {
             // File resolution must not fail just because the requested field
@@ -76,6 +79,10 @@ public class JdbcDataSourceFileSearchRepository implements DataSourceFileSearchF
         var bestConfidence = matches.getFirst().confidence();
         var best = matches.stream().filter(item -> item.confidence() == bestConfidence).toList();
         if (best.size() == 1) return resolved(organizationId, best.getFirst().file(), request, scope);
+        if (canAggregateRecordLookup(request, best)) {
+            var aggregate = aggregateRecordLookup(organizationId, best, request, scope);
+            if (aggregate != null) return aggregate;
+        }
         var distinctNames = best.stream().map(item -> item.file().originalName()).distinct().toList();
         if (distinctNames.size() == 1) {
             // Re-importing a file creates a new import job but keeps the same
@@ -87,6 +94,80 @@ public class JdbcDataSourceFileSearchRepository implements DataSourceFileSearchF
         var candidates = best.stream().limit(10)
                 .map(item -> new DataFileCandidate(item.file().originalName())).toList();
         return unresolved(request, DataResolution.AMBIGUOUS, candidates, candidatesTruncated);
+    }
+
+    private boolean canAggregateRecordLookup(DataDetailQuery request, List<FileCandidateRow> matches) {
+        return request.mode() == DataQueryMode.RECORD_DETAIL
+                && request.fileScope() == DataFileScope.AUTO
+                && request.recordTerms().size() == 1
+                && request.fieldTerms().isEmpty()
+                && matches.size() > 1
+                && matches.size() <= 10;
+    }
+
+    private boolean isBroadRecordLookup(DataDetailQuery request) {
+        return request.mode() == DataQueryMode.RECORD_DETAIL
+                && request.fileScope() == DataFileScope.AUTO
+                && request.recordTerms().size() == 1
+                && request.fieldTerms().isEmpty();
+    }
+
+    private List<FileCandidateRow> latestSourceRevisions(List<FileCandidateRow> matches) {
+        var latest = new LinkedHashMap<String, FileCandidateRow>();
+        for (var candidate : matches) {
+            var key = candidate.file().sourceOwner() + "|" + candidate.file().originalName();
+            var previous = latest.get(key);
+            if (previous == null
+                    || candidate.file().updatedAt().isAfter(previous.file().updatedAt())
+                    || candidate.file().updatedAt().equals(previous.file().updatedAt())
+                    && candidate.confidence() > previous.confidence()) {
+                latest.put(key, candidate);
+            }
+        }
+        return latest.values().stream()
+                .sorted(java.util.Comparator.comparingInt(FileCandidateRow::confidence).reversed()
+                        .thenComparing((FileCandidateRow item) -> item.file().updatedAt(),
+                                java.util.Comparator.reverseOrder())
+                        .thenComparing(item -> item.file().originalName()))
+                .toList();
+    }
+
+    private DataDetailResult aggregateRecordLookup(UUID organizationId, List<FileCandidateRow> matches,
+                                                   DataDetailQuery request, RetrievalAccessScope scope) {
+        var details = new ArrayList<DataDetailResult>();
+        for (var match : matches) {
+            var file = match.file();
+            var fileRequest = new DataDetailQuery(request.mode(), file.originalName(), DataFileScope.EXPLICIT,
+                    request.recordTerms(), request.fieldTerms(), request.recordTermMatch(), request.evidenceFilter(),
+                    request.recordLimit(), request.fieldsPerRecord(), request.valueLimit(), request.contextMode(),
+                    request.contextFieldLimit(), request.comparisonRecordLimit(), request.analysisGoal());
+            var detail = resolved(organizationId, file, fileRequest, scope);
+            if (detail.found() && !detail.hits().isEmpty()) details.add(detail);
+        }
+        if (details.size() < 2) return null;
+
+        var first = details.getFirst();
+        var hits = new LinkedHashMap<UUID, SourceFileHit>();
+        var contexts = new LinkedHashMap<String, RecordContext>();
+        long recordCount = 0;
+        long valueCount = 0;
+        var truncated = false;
+        for (var detail : details) {
+            detail.hits().forEach(hit -> hits.putIfAbsent(hit.hitId(), hit));
+            detail.recordContexts().forEach(context -> {
+                var target = context.targetHits().isEmpty() ? null : context.targetHits().getFirst();
+                var key = (target == null ? "" : target.importJobId() + "|")
+                        + context.recordKey() + "|" + context.sheetName();
+                contexts.putIfAbsent(key, context);
+            });
+            recordCount += detail.sourceRecordCount();
+            valueCount += detail.searchableValueCount();
+            truncated |= detail.truncated();
+        }
+        return new DataDetailResult(request.mode(), DataResolution.RESOLVED,
+                first.fileObjectId(), first.importJobId(), "多个数据文件",
+                recordCount, valueCount, List.copyOf(hits.values()), truncated, List.of(), false,
+                List.copyOf(contexts.values()), request.analysisGoal());
     }
 
     private DataDetailResult resolved(UUID organizationId, FileRow file, DataDetailQuery request,
@@ -722,7 +803,6 @@ public class JdbcDataSourceFileSearchRepository implements DataSourceFileSearchF
         args.addAll(categoryParameters(categoryIds));
         args.addAll(permission.parameters());
         for (var ignored = 0; ignored < 6; ignored++) args.add(normalizedQuery);
-        args.add(normalizedQuery);
         args.add(normalizedQuery);
         args.add(normalizedQuery);
         args.add(normalizedQuery);

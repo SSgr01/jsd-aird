@@ -61,6 +61,6 @@ export function ModelCenterPage() {
       ...(canSettings ? [{ key: 'settings', label: '建模设置' }] : []),
     ]} />
     {activeTab === 'models' && canModels && <ModelManagementPage embedded focusTargetId={targetId} view={modelView} onViewChange={setView} onOpenSettings={canSettings ? openSettings : undefined} />}
-    {activeTab === 'settings' && canSettings && <ModelingSettingsPage embedded initialTargetId={targetId} openCreateTarget={action === 'create-target'} onCreateTargetOpened={() => update({ action: undefined })} onOpenModels={openModels} />}
+    {activeTab === 'settings' && canSettings && <ModelingSettingsPage embedded initialTargetId={targetId} onOpenTarget={openSettings} openCreateTarget={action === 'create-target'} onCreateTargetOpened={() => update({ action: undefined })} onOpenModels={openModels} />}
   </main>
 }

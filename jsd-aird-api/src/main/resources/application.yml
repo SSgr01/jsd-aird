@@ -137,12 +137,14 @@ app:
     auto-retry-count: ${JSD_AIRD_MODEL_AUTO_RETRY_COUNT:2}
     visual-mode: ${JSD_AIRD_MODEL_VISUAL_MODE:auto}
   spectrum:
+    pdf-render-dpi: ${JSD_AIRD_SPECTRUM_PDF_RENDER_DPI:240}
     model:
       base-url: ${JSD_AIRD_SPECTRUM_MODEL_BASE_URL:}
       api-key: ${JSD_AIRD_SPECTRUM_MODEL_API_KEY:}
       name: ${JSD_AIRD_SPECTRUM_MODEL_NAME:}
       responses-path: ${JSD_AIRD_SPECTRUM_MODEL_RESPONSES_PATH:/responses}
-      reasoning-effort: ${JSD_AIRD_SPECTRUM_MODEL_REASONING_EFFORT:high}
+      reasoning-effort: ${JSD_AIRD_SPECTRUM_MODEL_REASONING_EFFORT:medium}
+      text-verbosity: ${JSD_AIRD_SPECTRUM_MODEL_TEXT_VERBOSITY:high}
       max-output-tokens: ${JSD_AIRD_SPECTRUM_MODEL_MAX_OUTPUT_TOKENS:12000}
       connect-timeout: ${JSD_AIRD_SPECTRUM_MODEL_CONNECT_TIMEOUT:10s}
       read-timeout: ${JSD_AIRD_SPECTRUM_MODEL_READ_TIMEOUT:10m}

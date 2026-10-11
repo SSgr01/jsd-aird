@@ -53,20 +53,24 @@ public class OpenAiCompatibleEmbeddingFacade implements KnowledgeEmbeddingFacade
     @Override
     public Optional<String> embedVector(String text) {
         if (!StringUtils.hasText(text)) return Optional.empty();
-        var springModel = springModels.getIfAvailable();
-        if (springModel != null) {
-            try {
-                var values = springModel.embed(text);
-                if (matchesDimension(values)) return Optional.of(toVector(values));
-                if (values != null && values.length > 0) {
-                    log.warn("Embedding provider returned dimension {}, expected {} for model {}",
-                            values.length, dimension, model);
+        var explicitEndpointConfigured = StringUtils.hasText(baseUrl)
+                && StringUtils.hasText(apiKey) && StringUtils.hasText(model);
+        if (!explicitEndpointConfigured) {
+            var springModel = springModels.getIfAvailable();
+            if (springModel != null) {
+                try {
+                    var values = springModel.embed(text);
+                    if (matchesDimension(values)) return Optional.of(toVector(values));
+                    if (values != null && values.length > 0) {
+                        log.warn("Embedding provider returned dimension {}, expected {} for model {}",
+                                values.length, dimension, model);
+                    }
+                } catch (Exception ignored) {
+                    // Use the Spring model only when there is no explicit compatible endpoint.
                 }
-            } catch (Exception ignored) {
-                // Continue with the explicitly configured compatible endpoint below.
             }
         }
-        if (!StringUtils.hasText(baseUrl) || !StringUtils.hasText(apiKey) || !StringUtils.hasText(model)) return Optional.empty();
+        if (!explicitEndpointConfigured) return Optional.empty();
         try {
             var request = client.post().uri(baseUrl + "/embeddings")
                     .header(HttpHeaders.CONTENT_TYPE, "application/json");

@@ -35,6 +35,7 @@ import {
   DataWorkbookCanvas,
   WorkbenchPanelHeader,
 } from '@/features/data-workbench/DataWorkbench';
+import { DataImportQualityNotice } from '@/features/data-workbench/DataImportQualityNotice';
 import type { EditorCellChange, EditorHandle, EditorSelection } from '@/features/template-workspace/types';
 import { importFieldForCell, importFieldInSheetRow } from './data-import-workbench-utils';
 import {
@@ -494,19 +495,21 @@ function MappingPanel({ preview, saving, readOnly, onUpdateMapping, onSaveMappin
 
 function WorkbenchNotice({ preview, processing }: { preview: DataPreview; processing: boolean }) {
   if (processing) return <Alert banner showIcon type="info" message="系统正在读取工作簿并校验字段，完成后自动更新。" />;
-  if (preview.job.status === 'FAILED') return <Alert banner showIcon type="error" message={preview.job.errorMessage || '文件处理失败，请检查原文件。'} />;
-  if (preview.job.compatibilityStatus === 'INCOMPATIBLE') return <Alert banner showIcon type="error" message="当前文件与所选模板不匹配，请选择正确模板或检查表头。" />;
-  if (preview.job.compatibilityStatus === 'REVIEW_REQUIRED') return <Alert banner showIcon type="warning" message="有字段需要确认" />;
+  const statusNotice = preview.job.status === 'FAILED'
+    ? <Alert banner showIcon type="error" message={preview.job.errorMessage || '文件处理失败，请检查原文件。'} />
+    : preview.job.compatibilityStatus === 'INCOMPATIBLE'
+      ? <Alert banner showIcon type="error" message="当前文件与所选模板不匹配，请选择正确模板或检查表头。" />
+      : preview.job.compatibilityStatus === 'REVIEW_REQUIRED'
+        ? <Alert banner showIcon type="warning" message="部分字段位置或映射需要确认。" />
+        : undefined;
   const contract = preview.templateContract?.contract;
   const experimentReady = preview.templateContract?.importContractVersion === 9
     && contract?.templateUsage === 'EXPERIMENT_DATA';
-  if (experimentReady) return null;
-  return <Alert
-    banner
-    showIcon
-    type="success"
-    message="请确认字段对应关系和实际数据"
-  />;
+  return <Space direction="vertical" size={8} style={{ width: '100%' }}>
+    {statusNotice}
+    <DataImportQualityNotice issues={preview.issues} sheets={preview.sheets} />
+    {!statusNotice && !experimentReady ? <Alert banner showIcon type="success" message="请确认字段对应关系和实际数据。" /> : null}
+  </Space>;
 }
 
 function CompatibilityPanel({ preview, readOnly, onLocateComponent, onFocus }: {

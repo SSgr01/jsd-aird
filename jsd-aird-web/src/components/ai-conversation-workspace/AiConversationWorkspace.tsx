@@ -30,7 +30,7 @@ interface AiConversationWorkspaceProps {
   conversations: ConversationItem[];
   activeConversationId?: string;
   messages: ConversationMessage[];
-  scopeContent: ReactNode;
+  scopeContent?: ReactNode;
   question: string;
   loading?: boolean;
   streaming?: boolean;
@@ -132,10 +132,15 @@ export function AiConversationWorkspace({
     const element = messagesRef.current;
     if (!element) return;
     followLatestRef.current = true;
+    const latestTop = element.scrollHeight;
+    if (latestTop - element.scrollTop - element.clientHeight <= 1) {
+      setShowJumpToLatest(false);
+      return;
+    }
     if (typeof element.scrollTo === 'function') {
-      element.scrollTo({ top: element.scrollHeight, behavior });
+      element.scrollTo({ top: latestTop, behavior });
     } else {
-      element.scrollTop = element.scrollHeight;
+      element.scrollTop = latestTop;
     }
     setShowJumpToLatest(false);
   }, []);
@@ -152,7 +157,25 @@ export function AiConversationWorkspace({
     } else if (messages.length) {
       setShowJumpToLatest(!isNearBottom());
     }
-  }, [activeConversationId, isNearBottom, messages, scrollToLatest]);
+  }, [activeConversationId, isNearBottom, messages.length, scrollToLatest]);
+
+  useEffect(() => {
+    const content = messagesRef.current?.querySelector('.ant-list-items');
+    if (!content || typeof ResizeObserver === 'undefined') return;
+    let frame: number | undefined;
+    const observer = new ResizeObserver(() => {
+      if (!followLatestRef.current || frame !== undefined) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = undefined;
+        if (followLatestRef.current) scrollToLatest('auto');
+      });
+    });
+    observer.observe(content);
+    return () => {
+      observer.disconnect();
+      if (frame !== undefined) window.cancelAnimationFrame(frame);
+    };
+  }, [activeConversationId, scrollToLatest]);
 
   useEffect(() => {
     if (!messages.length) {
@@ -278,12 +301,14 @@ export function AiConversationWorkspace({
             <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无历史对话" />
           )}
         </div>
-        <Typography.Text strong className="ai-conversation-section-title">
-          {scopeTitle}
-        </Typography.Text>
-        <div className="ai-conversation-scope">
-          {scopeContent}
-        </div>
+        {scopeContent ? (
+          <>
+            <Typography.Text strong className="ai-conversation-section-title">
+              {scopeTitle}
+            </Typography.Text>
+            <div className="ai-conversation-scope">{scopeContent}</div>
+          </>
+        ) : null}
       </aside>
       <button
         className="ai-conversation-scrim"
@@ -294,7 +319,7 @@ export function AiConversationWorkspace({
       <main className="ai-conversation-main">
         <div className="ai-conversation-mobile-bar">
           <Button type="text" icon={<MenuOutlined />} onClick={() => setSideOpen(true)}>
-            对话与范围
+            {scopeContent ? '对话与范围' : '对话列表'}
           </Button>
         </div>
         <div
@@ -328,6 +353,7 @@ export function AiConversationWorkspace({
             split={false}
             dataSource={messages}
             renderItem={(item) => {
+              const isEditingMessage = editingMessage?.id === item.id;
               const messageBody = item.pending ? (
                 <ThinkingIndicator label={pendingLabel} />
               ) : (
@@ -339,7 +365,7 @@ export function AiConversationWorkspace({
 
               return (
                 <List.Item className={`ai-message ai-message-${item.role.toLowerCase()}`}>
-                  <div className="ai-message-content">
+                  <div className={`ai-message-content${isEditingMessage ? ' is-editing' : ''}`}>
                     {item.role === 'ASSISTANT' ? (
                       <>
                         <div className="ai-message-assistant-heading">
@@ -354,7 +380,7 @@ export function AiConversationWorkspace({
                           {messageBody}
                         </div>
                       </>
-                    ) : editingMessage?.id === item.id ? (
+                    ) : isEditingMessage ? (
                       <div className="ai-message-editor">
                         <Input.TextArea
                           autoFocus
@@ -391,7 +417,10 @@ export function AiConversationWorkspace({
                           <Typography.Text strong className="ai-message-meta">
                             你
                           </Typography.Text>
-                          {item.editableText && onEditMessage ? (
+                        </div>
+                        <div className="ai-message-body">{messageBody}</div>
+                        {item.editableText && onEditMessage ? (
+                          <div className="ai-message-actions">
                             <Button
                               className="ai-message-edit-button"
                               type="text"
@@ -403,9 +432,8 @@ export function AiConversationWorkspace({
                             >
                               编辑
                             </Button>
-                          ) : null}
-                        </div>
-                        <div className="ai-message-body">{messageBody}</div>
+                          </div>
+                        ) : null}
                       </>
                     )}
                   </div>

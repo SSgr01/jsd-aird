@@ -25,11 +25,17 @@ public interface SpectrumRepository {
 
     UUID createSession(UUID organizationId, UUID userId, String title);
     List<SessionRow> listSessions(UUID organizationId, UUID userId, int limit);
+    Optional<SessionRow> findSession(UUID organizationId, UUID userId, UUID sessionId);
     boolean sessionExists(UUID organizationId, UUID userId, UUID sessionId);
+    void lockSessionForUpdate(UUID organizationId, UUID userId, UUID sessionId);
+    void updateSessionChartContext(UUID organizationId, UUID userId, UUID sessionId,
+                                  String chartIdsJson, String pageSelectionsJson);
     void touchSession(UUID organizationId, UUID sessionId, String title);
     void renameSession(UUID organizationId, UUID userId, UUID sessionId, String title);
     void deleteSession(UUID organizationId, UUID userId, UUID sessionId);
     List<MessageRow> listMessages(UUID organizationId, UUID sessionId, int limit);
+    List<MessageRow> listRecentMessagesBeforeAnalysis(UUID organizationId, UUID analysisRunId, int limit);
+    void deleteMessages(UUID organizationId, UUID sessionId, List<UUID> messageIds);
     MessageRow insertMessage(NewMessage command);
 
     AnalysisRow insertAnalysis(NewAnalysis command);
@@ -60,7 +66,8 @@ public interface SpectrumRepository {
                     String originalName, String contentType, long size, String sha256, String sampleName,
                     String batchNo, String testConditions, String metadataJson, int pageCount, UUID createdBy) { }
 
-    record SessionRow(UUID id, String title, Instant createdAt, Instant updatedAt) { }
+    record SessionRow(UUID id, String title, Instant createdAt, Instant updatedAt,
+                      String chartIdsJson, String pageSelectionsJson) { }
 
     record MessageRow(UUID id, UUID analysisRunId, String role, String content, String citationsJson,
                       String resultJson, String warningJson, Instant createdAt) { }

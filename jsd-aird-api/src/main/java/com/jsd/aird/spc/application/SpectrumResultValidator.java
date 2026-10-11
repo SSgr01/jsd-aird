@@ -138,6 +138,16 @@ public class SpectrumResultValidator {
             });
             result.set(field, safe);
         }
+        var declaredSupportingClaims = source.path("supportingClaimIds");
+        var validatedSupportingClaims = result.path("supportingClaimIds");
+        var allSupportingClaimsValid = declaredSupportingClaims.isArray()
+                && !declaredSupportingClaims.isEmpty()
+                && validatedSupportingClaims.isArray()
+                && declaredSupportingClaims.size() == validatedSupportingClaims.size();
+        if (!result.path("focus").asText("").isBlank() && !allSupportingClaimsValid) {
+            result.remove("focus");
+            changed[0] = true;
+        }
         if ("CONCENTRATION_CHECK".equals(context.resolvedIntent())) {
             var concentrationVerified = hasValidClaimType(claims, "CONCENTRATION_CONFIRMATION", "L4");
             if (!concentrationVerified) result.put("actualConcentrationAssessment", "UNVERIFIED");
@@ -487,10 +497,20 @@ public class SpectrumResultValidator {
             safe.set("relatedClaimIds", stringArray(item.path("relatedClaimIds")));
             safe.set("missingEvidence", item.path("missingEvidence").isArray()
                     ? item.path("missingEvidence").deepCopy() : objectMapper.createArrayNode());
-            safe.set("nextSteps", stringArray(item.path("nextSteps")));
+            safe.set("nextSteps", stringArrayOrSingle(item.path("nextSteps")));
             result.add(safe);
         }
         return result;
+    }
+
+    private ArrayNode stringArrayOrSingle(JsonNode source) {
+        if (source.isTextual()) {
+            var value = source.asText().trim();
+            var result = objectMapper.createArrayNode();
+            if (!value.isBlank()) result.add(value);
+            return result;
+        }
+        return stringArray(source);
     }
 
     private ArrayNode deduplicateLimitations(ArrayNode source) {

@@ -18,10 +18,20 @@ public class ContextCompressionService {
 
     public Context compress(List<KnowledgeSearchFacade.SearchHit> knowledge,
                             List<DataSourceFileSearchFacade.SourceFileHit> dataFiles, int maxChars) {
+        return compress(knowledge, dataFiles, maxChars, false);
+    }
+
+    public Context compress(List<KnowledgeSearchFacade.SearchHit> knowledge,
+                            List<DataSourceFileSearchFacade.SourceFileHit> dataFiles, int maxChars,
+                            boolean prioritizeStructuredData) {
         var chunks = new ArrayList<String>();
         var includedEvidenceRefs = new ArrayList<String>();
         var used = 0;
+        var budget = Math.max(0, maxChars);
         var safeKnowledge = knowledge == null ? List.<KnowledgeSearchFacade.SearchHit>of() : knowledge;
+        var safeDataFiles = dataFiles == null ? List.<DataSourceFileSearchFacade.SourceFileHit>of() : dataFiles;
+        var knowledgeBudget = safeDataFiles.isEmpty() ? budget
+                : prioritizeStructuredData ? budget / 3 : budget / 2;
         var knowledgeRefs = new HashMap<java.util.UUID, String>();
         for (var index = 0; index < safeKnowledge.size(); index++) {
             knowledgeRefs.put(safeKnowledge.get(index).chunkId(), "K" + (index + 1));
@@ -33,7 +43,7 @@ public class ContextCompressionService {
             groupedKnowledge.computeIfAbsent(key, ignored -> new ArrayList<>()).add(hit);
         }
         for (var group : groupedKnowledge.values()) {
-            var remaining = Math.max(0, maxChars - used);
+            var remaining = Math.max(0, knowledgeBudget - used);
             if (remaining < 80) break;
             var groupParts = new ArrayList<String>();
             var groupRefs = new ArrayList<String>();
@@ -58,26 +68,25 @@ public class ContextCompressionService {
             }
             used += excerpt.length();
         }
-        var safeDataFiles = dataFiles == null ? List.<DataSourceFileSearchFacade.SourceFileHit>of() : dataFiles;
         for (var index = 0; index < safeDataFiles.size(); index++) {
             var hit = safeDataFiles.get(index);
-            var remaining = Math.max(0, maxChars - used);
+            var remaining = Math.max(0, budget - used);
             if (remaining < 80) break;
             var text = hit.content() == null ? "" : hit.content().replaceAll("[\\r\\n\\t]+", " ").strip();
             var evidenceRef = "D" + (index + 1);
-            var evidenceText = "[evidenceRef=" + evidenceRef + "] " + text;
+            var evidenceText = "[evidenceRef=" + evidenceRef + "] "
+                    + "；来源状态=" + sourceStatusLabel(hit.sourceStatus())
+                    + "；字段=" + cleanValue(hit.sourceLabel() == null ? hit.fieldName() : hit.sourceLabel())
+                    + "；值=" + cleanValue(hit.fieldValue())
+                    + "；单位=" + cleanValue(hit.unit())
+                    + "；条件=" + cleanValue(hit.declaredCondition())
+                    + "；证据关系=" + contextRelationLabel(hit.contextRelation())
+                    + "；原始内容=" + text;
             var excerpt = evidenceText.length() <= remaining ? evidenceText
                     : evidenceText.substring(0, Math.max(0, remaining - 1)) + "…";
-            var sourceType = "EXPERIMENT".equalsIgnoreCase(hit.sourceOwner())
-                    ? "EXPERIMENT_TEMPLATE_SOURCE" : "DATA_SOURCE_FILE";
-            chunks.add("[source=data,sourceType=" + sourceType + ",file=" + hit.originalName()
-                    + ",record=" + safe(hit.recordKey())
-                    + ",entity=" + safe(hit.recordKey())
-                    + ",field=" + safe(hit.fieldName())
-                    + ",fieldCode=" + safe(hit.fieldCode())
-                    + ",sheet=" + safe(hit.sheetName())
-                    + ",cell=" + safe(hit.cellAddress())
-                    + ",row=" + hit.rowNumber() + ",column=" + hit.columnName() + "] " + excerpt);
+            var sourceLabel = "EXPERIMENT".equalsIgnoreCase(hit.sourceOwner()) ? "实验本记录" : "数据中心记录";
+            chunks.add("[来源=" + sourceLabel + "; 文件=" + cleanValue(hit.originalName())
+                    + "; 业务记录=" + cleanValue(hit.recordKey()) + "; 工作表=" + cleanValue(hit.sheetName()) + "] " + excerpt);
             if (excerpt.contains("[evidenceRef=" + evidenceRef + "]")) includedEvidenceRefs.add(evidenceRef);
             used += excerpt.length();
         }
@@ -91,8 +100,29 @@ public class ContextCompressionService {
         return value == null ? "" : value.replaceAll("[\\r\\n\\t]+", " ").strip();
     }
 
-    private String safe(String value) {
-        return value == null ? "" : value.replaceAll("[\\r\\n\\t,=\\]]+", " ").strip();
+    private String cleanValue(String value) {
+        return value == null ? "" : value.replaceAll("[\\r\\n\\t]+", " ").strip();
+    }
+
+    private String sourceStatusLabel(String value) {
+        if (value == null) return "状态未提供";
+        return switch (value.strip().toUpperCase(java.util.Locale.ROOT)) {
+            case "DRAFT" -> "草稿";
+            case "CONFIRMED", "COMPLETED" -> "已确认";
+            case "UNCONFIRMED" -> "未正式确认";
+            default -> "状态未知";
+        };
+    }
+
+    private String contextRelationLabel(String value) {
+        if (value == null) return "未说明";
+        return switch (value.strip().toUpperCase(java.util.Locale.ROOT)) {
+            case "TARGET" -> "本次命中字段";
+            case "SAME_RECORD" -> "同一业务记录上下文";
+            case "SHARED_SHEET" -> "同一工作表共享条件";
+            case "COMPARISON_CANDIDATE" -> "可比记录候选";
+            default -> "未说明";
+        };
     }
 
     private String imageMarkdown(KnowledgeSearchFacade.SearchHit hit) {

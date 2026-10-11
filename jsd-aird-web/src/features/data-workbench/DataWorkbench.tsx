@@ -149,6 +149,10 @@ export function DataFieldCard({ field, active, onSelect, extra, children }: Fiel
             {normalizedChanged ? <div><dt>格式转换值</dt><dd>{normalized || '未填写'}</dd></div> : null}
             {normalizedChanged || effectiveChanged || corrected ? <div><dt>最终采用值</dt><dd>{currentValue || '未填写'}</dd></div> : null}
             {unit ? <div><dt>单位</dt><dd>{unit}</dd></div> : null}
+            {field.sheetName || field.address || field.rowNumber ? <div><dt>来源位置</dt><dd>{[
+              field.sheetName,
+              field.address || (field.rowNumber ? `${field.rowNumber} 行` : undefined),
+            ].filter(Boolean).join(' · ')}</dd></div> : null}
           </dl>
           {!field.excluded && field.valueStatus !== 'VALID' ? (
             <Typography.Text type="warning">

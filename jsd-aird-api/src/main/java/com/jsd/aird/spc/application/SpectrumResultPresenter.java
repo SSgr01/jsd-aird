@@ -13,8 +13,8 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.springframework.stereotype.Component;
 
 /**
- * Builds a compact, deterministic view from the validated model result.
- * The original structured fields stay untouched for audit and detailed review.
+ * Passes through model-authored Markdown and presents legacy structured results
+ * for historical analyses. Legacy source results remain untouched for audit.
  */
 @Component
 public class SpectrumResultPresenter {
@@ -22,6 +22,7 @@ public class SpectrumResultPresenter {
     private static final String PUBLIC_FAILURE_MESSAGE = "图谱分析未完成，请稍后重试。";
     private static final int MAX_FINDINGS = 3;
     private static final int MAX_VALIDATION_STEPS = 3;
+    private static final int MAX_PUBLIC_NEXT_STEPS = 4;
     private static final Pattern SENTENCE = Pattern.compile("[^。！？!?]+[。！？!?]?");
     private static final List<String> DETAIL_FIELDS = List.of(
             "observations", "comparisons", "peakMappings", "candidateInterpretations",
@@ -40,6 +41,13 @@ public class SpectrumResultPresenter {
 
     public ObjectNode present(ObjectNode result, String question) {
         if (result == null) return objectMapper.createObjectNode();
+        if (result.path("schemaVersion").asInt() >= 4) {
+            var publicResult = result.deepCopy();
+            if ("FAILED".equals(publicResult.path("analysisStatus").asText())) {
+                publicResult.put("errorMessage", PUBLIC_FAILURE_MESSAGE);
+            }
+            return publicResult;
+        }
         if (result.path("schemaVersion").asInt() == 3) return presentV3(result);
         var intent = detectIntent(question);
         var presentation = objectMapper.createObjectNode();
@@ -79,6 +87,7 @@ public class SpectrumResultPresenter {
 
         var confirmed = new ArrayList<String>();
         var inferred = new ArrayList<String>();
+        var metadata = new ArrayList<String>();
         var limitations = new ArrayList<String>();
         var missingEvidence = new ArrayList<String>();
         var nextSteps = new ArrayList<String>();
@@ -89,6 +98,10 @@ public class SpectrumResultPresenter {
             if (!Set.of("VALID", "DEMOTED").contains(item.path("status").asText())) continue;
             var text = publicClaimText(item, assessment);
             if (text.isBlank()) continue;
+            if (isMetadataClaim(item)) {
+                addUnique(metadata, text);
+                continue;
+            }
             var level = item.path("effectiveLevel").asText();
             if ("L1".equals(level) || "L4".equals(level)) addUnique(confirmed, text);
             else if ("L2".equals(level) || "L3".equals(level)) addUnique(inferred, text);
@@ -101,11 +114,19 @@ public class SpectrumResultPresenter {
             if (missing.isArray()) missing.forEach(value -> addUnique(missingEvidence,
                     value.isTextual() ? value.asText() : value.path("label").asText("")));
             var steps = item.path("nextSteps");
-            if (steps.isArray()) steps.forEach(value -> addUnique(nextSteps, value.asText("")));
+            if (steps.isArray() && nextSteps.size() < MAX_PUBLIC_NEXT_STEPS) {
+                var before = nextSteps.size();
+                for (var step : steps) {
+                    addUnique(nextSteps, step.asText(""));
+                    if (nextSteps.size() > before) break;
+                }
+            }
         }
 
         var answer = result.putObject("answer");
+        answer.put("summary", publicSummary(assessment, claims));
         answer.set("confirmed", objectMapper.valueToTree(confirmed));
+        answer.set("metadata", objectMapper.valueToTree(metadata));
         answer.set("notConfirmed", objectMapper.valueToTree(limitations));
         answer.set("reasonableInference", objectMapper.valueToTree(inferred));
         answer.set("missingEvidence", objectMapper.valueToTree(missingEvidence));
@@ -113,6 +134,7 @@ public class SpectrumResultPresenter {
 
         var details = result.putObject("details");
         details.set("confirmed", objectMapper.valueToTree(confirmed));
+        details.set("metadata", objectMapper.valueToTree(metadata));
         details.set("reasonableInference", objectMapper.valueToTree(inferred));
         details.set("limitations", objectMapper.valueToTree(limitations));
         result.set("assessment", publicAssessment(assessment));
@@ -123,21 +145,83 @@ public class SpectrumResultPresenter {
     private String publicClaimText(JsonNode claim, JsonNode assessment) {
         var statement = claim.path("effectiveStatement").asText("").trim();
         if (statement.isBlank()) return "";
-        var metadataOnly = true;
-        var refs = claim.path("evidenceRefs");
-        if (!refs.isArray() || refs.isEmpty()) metadataOnly = false;
-        else for (var ref : refs) {
-            if (!"DOCUMENT_METADATA".equals(ref.path("sourceType").asText())) {
-                metadataOnly = false;
-                break;
-            }
-        }
-        if ("REPORTED_METADATA".equals(claim.path("claimType").asText()) || metadataOnly) {
+        if (isMetadataClaim(claim)) {
             var nominal = assessment.path("nominalConcentration").path("value").asText("");
             if (!nominal.isBlank()) return "文件或报告将样品标记为" + nominal + "。";
             return "文档记录：" + statement.replaceAll("[。；;]+$", "") + "。";
         }
         return statement;
+    }
+
+    private boolean isMetadataClaim(JsonNode claim) {
+        if ("REPORTED_METADATA".equals(claim.path("claimType").asText())) return true;
+        var refs = claim.path("evidenceRefs");
+        if (!refs.isArray() || refs.isEmpty()) return false;
+        for (var ref : refs) {
+            if (!"DOCUMENT_METADATA".equals(ref.path("sourceType").asText())) return false;
+        }
+        return true;
+    }
+
+    private String publicSummary(JsonNode assessment, JsonNode claims) {
+        var focus = assessment.path("focus").asText("").trim();
+        if (!focus.isBlank() && hasValidSupportingClaim(assessment, claims) && !looksLikeTaskScope(focus)) {
+            return firstSentences(focus, 2);
+        }
+        if (claims.isArray()) {
+            for (var claim : claims) {
+                if (!validPublicClaim(claim) || isMetadataClaim(claim)) continue;
+                if (hasStructuredFact(claim, "CURVE_COMPARISON")) {
+                    return firstSentences(claim.path("effectiveStatement").asText(""), 2);
+                }
+            }
+            for (var claim : claims) {
+                if (validPublicClaim(claim) && !isMetadataClaim(claim)
+                        && "OBSERVATION".equals(claim.path("claimType").asText())) {
+                    return firstSentences(claim.path("effectiveStatement").asText(""), 2);
+                }
+            }
+        }
+        return "";
+    }
+
+    private boolean hasValidSupportingClaim(JsonNode assessment, JsonNode claims) {
+        var supportingIds = assessment.path("supportingClaimIds");
+        if (!supportingIds.isArray() || supportingIds.isEmpty() || !claims.isArray()) return false;
+        for (var id : supportingIds) {
+            for (var claim : claims) {
+                if (id.asText().equals(claim.path("claimId").asText()) && validPublicClaim(claim)) return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean validPublicClaim(JsonNode claim) {
+        return Set.of("VALID", "DEMOTED").contains(claim.path("status").asText())
+                && !claim.path("effectiveStatement").asText("").isBlank();
+    }
+
+    private boolean hasStructuredFact(JsonNode claim, String factType) {
+        var facts = claim.path("structuredFacts");
+        if (!facts.isArray()) return false;
+        for (var fact : facts) if (factType.equals(fact.path("factType").asText())) return true;
+        return false;
+    }
+
+    private boolean looksLikeTaskScope(String value) {
+        return value.startsWith("概览") || value.startsWith("分析") || value.startsWith("聚焦")
+                || value.startsWith("本次分析") || value.startsWith("本次任务");
+    }
+
+    private String firstSentences(String value, int limit) {
+        var matcher = SENTENCE.matcher(value == null ? "" : value.trim());
+        var result = new StringBuilder();
+        var count = 0;
+        while (matcher.find() && count < limit) {
+            result.append(matcher.group().trim());
+            count++;
+        }
+        return result.isEmpty() ? value == null ? "" : value.trim() : result.toString();
     }
 
     private ObjectNode publicAssessment(JsonNode source) {

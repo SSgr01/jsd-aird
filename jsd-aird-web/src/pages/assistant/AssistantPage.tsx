@@ -8,7 +8,7 @@ import {
   GlobalOutlined,
 } from '@ant-design/icons';
 import { App, Button, Checkbox, Collapse, Space, Tag, Typography } from 'antd';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 import {
@@ -22,14 +22,25 @@ import {
   type FilePreviewDescriptor,
 } from '@/components/file-preview';
 import { MarkdownContent } from '@/components/markdown/MarkdownContent';
+import { StreamingMarkdownContent } from '@/components/markdown/StreamingMarkdownContent';
 import {
   AssistantRequestError,
   assistantApi,
   type AssistantCitation,
   type AssistantMessageReplacement,
-  type AssistantResponse,
   type ConversationMeta,
 } from '@/services/assistant';
+import {
+  claimAssistantAuthRedirect,
+  getAssistantConversationSelection,
+  getAssistantStream,
+  getAssistantStreams,
+  setAssistantConversationSelection,
+  startAssistantStream,
+  subscribeAssistantStream,
+  subscribeAssistantStreams,
+  type AssistantStreamTask,
+} from '@/services/assistant/assistant-streams';
 import { HttpError } from '@/services/http/errors';
 import { dataApi, type DataCategory } from '@/services/data/data-api';
 import { fileContentUrl, fetchFilePreviewBlob } from '@/services/files';
@@ -79,16 +90,6 @@ function citationSourceKey(citation: AssistantCitation) {
   return `${citation.sourceType}-${citation.chunkId || citation.url || citation.title}`;
 }
 
-function thinkingLabel(value: unknown) {
-  return value === 'UNDERSTANDING'
-    ? '正在理解问题…'
-    : value === 'SEARCHING'
-      ? '正在查找资料…'
-      : value === 'COMPOSING'
-        ? '正在组织回答…'
-        : '正在思考…';
-}
-
 function assistantFailure(error: unknown): string {
   const code =
     error instanceof AssistantRequestError || error instanceof HttpError ? error.code : '';
@@ -127,6 +128,85 @@ function assistantFailure(error: unknown): string {
 function isAuthenticationFailure(error: unknown) {
   if (!(error instanceof AssistantRequestError || error instanceof HttpError)) return false;
   return error.status === 401 || error.code === 'AUTH_REQUIRED';
+}
+
+function syncAssistantTaskMessages(messages: ChatMessage[], task: AssistantStreamTask) {
+  const content =
+    task.status === 'RUNNING'
+      ? undefined
+      : task.status === 'FAILED'
+      ? task.answer
+        ? `${task.answer}\n\n回答未完成：${assistantFailure(task.failure)}`
+        : assistantFailure(task.failure)
+      : task.answer;
+  let next = messages.map((item) => {
+    if (
+      item.id === task.localUserMessageId ||
+      (task.userMessageId && item.id === task.userMessageId)
+    ) {
+      return { ...item, id: task.userMessageId || item.id, content: task.question };
+    }
+    if (
+      item.id === task.localAssistantMessageId ||
+      (task.assistantMessageId && item.id === task.assistantMessageId)
+    ) {
+      const next = {
+        ...item,
+        id: task.assistantMessageId || item.id,
+        citations: task.response?.citations || task.citations,
+      };
+      return content === undefined ? next : { ...next, content };
+    }
+    return item;
+  });
+
+  const hasUser = next.some(
+    (item) =>
+      item.id === task.localUserMessageId ||
+      Boolean(task.userMessageId && item.id === task.userMessageId),
+  );
+  if (!hasUser) {
+    next = [
+      ...next,
+      {
+        id: task.userMessageId || task.localUserMessageId,
+        role: 'USER',
+        content: task.question,
+      },
+    ];
+  }
+
+  const hasAssistant = next.some(
+    (item) =>
+      item.id === task.localAssistantMessageId ||
+      Boolean(task.assistantMessageId && item.id === task.assistantMessageId),
+  );
+  if (!hasAssistant) {
+    next = [
+      ...next,
+      {
+        id: task.assistantMessageId || task.localAssistantMessageId,
+        role: 'ASSISTANT',
+        content: content || '',
+        citations: task.response?.citations || task.citations,
+      },
+    ];
+  }
+  return next;
+}
+
+function LiveAssistantAnswer({ runId }: { runId: string }) {
+  const subscribe = useCallback(
+    (listener: () => void) => subscribeAssistantStream(runId, listener),
+    [runId],
+  );
+  const getSnapshot = useCallback(() => getAssistantStream(runId)?.answer || '', [runId]);
+  const answer = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  return answer ? (
+    <StreamingMarkdownContent value={answer} />
+  ) : (
+    <Typography.Text type="secondary">正在生成回答…</Typography.Text>
+  );
 }
 
 function renderAssistantContent(
@@ -183,7 +263,8 @@ function renderAssistantContent(
                     onClick={() => {
                       if (citation.documentId)
                         navigate(`/knowledge/documents/${citation.documentId}`);
-                      else if (citation.experimentId) navigate(`/experiments/${citation.experimentId}`);
+                      else if (citation.experimentId)
+                        navigate(`/experiments/${citation.experimentId}`);
                       else if (citation.fileObjectId) navigate('/data/view');
                       else if (citation.url) {
                         const opened = window.open(citation.url, '_blank', 'noopener,noreferrer');
@@ -238,8 +319,8 @@ export function AssistantPage() {
   const [conversationId, setConversationId] = useState<string>();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(false);
-  const [streaming, setStreaming] = useState(false);
-  const [streamStage, setStreamStage] = useState('正在思考…');
+  const [assistantStreams, setAssistantStreams] = useState(getAssistantStreams());
+  const [selectionKey, setSelectionKey] = useState(getAssistantConversationSelection());
   const [conversations, setConversations] = useState<ConversationMeta[]>([]);
   const [knowledgeCategories, setKnowledgeCategories] = useState<KnowledgeCategory[]>([]);
   const [dataCategories, setDataCategories] = useState<DataCategory[]>([]);
@@ -249,6 +330,62 @@ export function AssistantPage() {
   const [citationSources, setCitationSources] = useState<Record<string, boolean>>({});
   const [webSearchAvailable, setWebSearchAvailable] = useState(false);
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
+  const knownConversationRuns = useRef(new Set<string>());
+
+  const selectConversationState = (value?: string) => {
+    setAssistantConversationSelection(value);
+    setSelectionKey(value);
+  };
+
+  const currentRun = useMemo(() => {
+    if (selectionKey?.startsWith('pending:')) {
+      return assistantStreams.get(selectionKey.slice('pending:'.length));
+    }
+    if (selectionKey) {
+      return [...assistantStreams.values()]
+        .reverse()
+        .find((task) => task.conversationId === selectionKey);
+    }
+    return undefined;
+  }, [assistantStreams, selectionKey]);
+  const streaming = currentRun?.status === 'RUNNING';
+  const streamStage = currentRun?.stage || '正在思考…';
+
+  useEffect(
+    () =>
+      subscribeAssistantStreams(() => {
+        setAssistantStreams(getAssistantStreams());
+        setSelectionKey(getAssistantConversationSelection());
+      }),
+    [],
+  );
+
+  useEffect(() => {
+    if (!currentRun) return;
+    if (currentRun.conversationId && selectionKey === currentRun.conversationId) {
+      setConversationId(currentRun.conversationId);
+    }
+    setMessages((current) => syncAssistantTaskMessages(current, currentRun));
+  }, [currentRun, selectionKey]);
+
+  useEffect(() => {
+    for (const task of assistantStreams.values()) {
+      if (task.conversationId && !knownConversationRuns.current.has(task.id)) {
+        knownConversationRuns.current.add(task.id);
+        void assistantApi
+          .conversations()
+          .then(setConversations)
+          .catch(() => undefined);
+      }
+      if (task.status === 'FAILED' && isAuthenticationFailure(task.failure)) {
+        if (!claimAssistantAuthRedirect(task.id)) continue;
+        navigate('/login', {
+          replace: true,
+          state: { from: `${location.pathname}${location.search}` },
+        });
+      }
+    }
+  }, [assistantStreams, location.pathname, location.search, navigate]);
 
   useEffect(() => {
     void Promise.all([
@@ -286,6 +423,39 @@ export function AssistantPage() {
       })
       .catch(() => toast.error('AI 问答范围加载失败'));
   }, [toast]);
+
+  useEffect(() => {
+    const selection = getAssistantConversationSelection();
+    setSelectionKey(selection);
+    if (!selection) return;
+    if (selection.startsWith('pending:')) {
+      const task = getAssistantStreams().get(selection.slice('pending:'.length));
+      if (!task) {
+        selectConversationState(undefined);
+        return;
+      }
+      setConversationId(task.conversationId);
+      setMessages(syncAssistantTaskMessages([], task));
+      return;
+    }
+    setConversationId(selection);
+    void assistantApi
+      .conversation(selection)
+      .then((conversation) => {
+        if (getAssistantConversationSelection() !== selection) return;
+        const restoredMessages: ChatMessage[] = conversation.messages.map((item) => ({
+          id: item.id,
+          role: item.role === 'USER' ? 'USER' : 'ASSISTANT',
+          content: item.content,
+          citations: item.citations,
+        }));
+        const run = [...getAssistantStreams().values()]
+          .reverse()
+          .find((task) => task.conversationId === selection);
+        setMessages(run ? syncAssistantTaskMessages(restoredMessages, run) : restoredMessages);
+      })
+      .catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -326,15 +496,11 @@ export function AssistantPage() {
   const setChatMessages = (items: ChatMessage[]) => setMessages(items);
   const hasSelectedScope = selectedKnowledge.length > 0 || selectedData.length > 0;
 
-  const send = async (
-    questionOverride?: string,
-    replacement?: AssistantMessageReplacement,
-  ) => {
+  const send = (questionOverride?: string, replacement?: AssistantMessageReplacement) => {
     const value = (questionOverride ?? question).trim();
     if (!value || loading || streaming || !hasSelectedScope) return;
     if (!replacement) setQuestion('');
     setLoading(true);
-    setStreamStage('正在思考…');
     const runId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const userPlaceholderId = `pending-user-${runId}`;
     const assistantPlaceholderId = `pending-assistant-${runId}`;
@@ -347,99 +513,22 @@ export function AssistantPage() {
       const targetIndex = current.findIndex((item) => item.id === replacement.replaceFromMessageId);
       return targetIndex < 0 ? current : [...current.slice(0, targetIndex), ...nextMessages];
     });
-    try {
-      setStreaming(true);
-      let answer = '';
-      await assistantApi.stream(
-        value,
-        conversationId,
-        selectedKnowledge,
-        selectedData,
-        webSearchEnabled,
-        (token) => {
-          answer += token;
-          setMessages((current) =>
-            current.map((item) =>
-              item.id === assistantPlaceholderId ? { ...item, content: answer } : item,
-            ),
-          );
-        },
-        (response: AssistantResponse) => {
-          setConversationId(response.conversationId);
-          setMessages((current) =>
-            current.map((item) => {
-              if (item.id === userPlaceholderId) {
-                return { ...item, id: response.userMessageId || userPlaceholderId };
-              }
-              return item.id === assistantPlaceholderId
-                ? {
-                    ...item,
-                    id: response.assistantMessageId || assistantPlaceholderId,
-                    content: response.answer || answer,
-                    citations: response.citations,
-                  }
-                : item;
-            }),
-          );
-          void assistantApi
-            .conversations()
-            .then(setConversations)
-            .catch(() => undefined);
-          window.setTimeout(() => {
-            void assistantApi
-              .conversations()
-              .then(setConversations)
-              .catch(() => undefined);
-          }, 1200);
-        },
-        (event, data) => {
-          if (event === 'thinking') setStreamStage(thinkingLabel(data));
-        },
-        replacement,
-      );
-    } catch (error) {
-      if (isAuthenticationFailure(error)) {
-        navigate('/login', {
-          replace: true,
-          state: { from: `${location.pathname}${location.search}` },
-        });
-        return;
-      }
-      const failure = assistantFailure(error);
-      if (replacement && conversationId) {
-        void toast.error(failure);
-        try {
-          const conversation = await assistantApi.conversation(conversationId);
-          setMessages(
-            conversation.messages.map((item) => ({
-              id: item.id,
-              role: item.role === 'USER' ? 'USER' : 'ASSISTANT',
-              content: item.content,
-              citations: item.citations,
-            })),
-          );
-        } catch {
-          setMessages((current) =>
-            current.map((item) =>
-              item.id === assistantPlaceholderId ? { ...item, content: failure } : item,
-            ),
-          );
-        }
-      } else {
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantPlaceholderId ? { ...item, content: failure } : item,
-          ),
-        );
-      }
-    } finally {
-      setLoading(false);
-      setStreaming(false);
-      setStreamStage('正在思考…');
-    }
+    const streamId = startAssistantStream({
+      question: value,
+      conversationId,
+      knowledgeCategoryIds: selectedKnowledge,
+      dataCategoryIds: selectedData,
+      webSearchEnabled,
+      replacement,
+      localUserMessageId: userPlaceholderId,
+      localAssistantMessageId: assistantPlaceholderId,
+    });
+    setSelectionKey(conversationId || `pending:${streamId}`);
+    setLoading(false);
   };
 
   const reset = () => {
+    selectConversationState(undefined);
     setConversationId(undefined);
     setChatMessages([]);
     setQuestion('');
@@ -447,23 +536,28 @@ export function AssistantPage() {
   };
 
   const openConversation = async (id: string) => {
+    selectConversationState(id);
+    setConversationId(id);
+    setMessages([]);
     setWebSearchEnabled(false);
     setLoading(true);
     try {
       const conversation = await assistantApi.conversation(id);
-      setConversationId(id);
-      setMessages(
-        conversation.messages.map((item) => ({
-          id: item.id,
-          role: item.role === 'USER' ? 'USER' : 'ASSISTANT',
-          content: item.content,
-          citations: item.citations,
-        })),
-      );
+      if (getAssistantConversationSelection() !== id) return;
+      const loadedMessages: ChatMessage[] = conversation.messages.map((item) => ({
+        id: item.id,
+        role: item.role === 'USER' ? 'USER' : 'ASSISTANT',
+        content: item.content,
+        citations: item.citations,
+      }));
+      const run = [...getAssistantStreams().values()]
+        .reverse()
+        .find((task) => task.conversationId === id);
+      setMessages(run ? syncAssistantTaskMessages(loadedMessages, run) : loadedMessages);
     } catch (error) {
       void toast.error(error instanceof Error ? error.message : '会话加载失败');
     } finally {
-      setLoading(false);
+      if (getAssistantConversationSelection() === id) setLoading(false);
     }
   };
 
@@ -528,41 +622,51 @@ export function AssistantPage() {
     }
   };
 
-  const viewMessages: ConversationMessage[] = messages.map((item, messageIndex) => ({
-    id: item.id,
-    role: item.role,
-    editableText: item.role === 'USER' ? item.content : undefined,
-    pending: item.role === 'ASSISTANT' && streaming && !item.content,
-    content:
-      item.role === 'ASSISTANT' ? (
-        item.content ? (
-          renderAssistantContent(
-            item,
-            navigate,
-            (citation) => void previewCitation(citation),
-            (citation) => void downloadCitation(citation),
-            (citation) =>
-              Boolean(
-                citation.documentId ||
-                ['DATA_SOURCE_FILE', 'EXPERIMENT_TEMPLATE_SOURCE'].includes(citation.sourceType) ||
-                citationSources[citationSourceKey(citation)],
-              ),
-            (citation) => {
-              const fileName = citation.originalName || citation.title;
-              const originalQuestion = messages
-                .slice(0, messageIndex)
-                .reverse()
-                .find((candidate) => candidate.role === 'USER')?.content;
-              if (!fileName || !originalQuestion) return;
-              void send(dataFileSelectionQuestion(fileName, originalQuestion));
-            },
-            loading || streaming,
-          )
-        ) : null
-      ) : (
-        <Typography.Paragraph className="ai-message-text">{item.content}</Typography.Paragraph>
-      ),
-  }));
+  const viewMessages: ConversationMessage[] = messages.map((item, messageIndex) => {
+    const streamTask = item.role === 'ASSISTANT'
+      ? [...assistantStreams.values()].find(
+          (task) => task.localAssistantMessageId === item.id || task.assistantMessageId === item.id,
+        )
+      : undefined;
+    const live = streamTask?.status === 'RUNNING';
+    return {
+      id: item.id,
+      role: item.role,
+      editableText: item.role === 'USER' ? item.content : undefined,
+      pending: item.role === 'ASSISTANT' && streaming && !item.content && !live,
+      content:
+        item.role === 'ASSISTANT' ? (
+          live && streamTask ? (
+            <LiveAssistantAnswer runId={streamTask.id} />
+          ) : item.content ? (
+            renderAssistantContent(
+              item,
+              navigate,
+              (citation) => void previewCitation(citation),
+              (citation) => void downloadCitation(citation),
+              (citation) =>
+                Boolean(
+                  citation.documentId ||
+                  ['DATA_SOURCE_FILE', 'EXPERIMENT_TEMPLATE_SOURCE'].includes(citation.sourceType) ||
+                  citationSources[citationSourceKey(citation)],
+                ),
+              (citation) => {
+                const fileName = citation.originalName || citation.title;
+                const originalQuestion = messages
+                  .slice(0, messageIndex)
+                  .reverse()
+                  .find((candidate) => candidate.role === 'USER')?.content;
+                if (!fileName || !originalQuestion) return;
+                void send(dataFileSelectionQuestion(fileName, originalQuestion));
+              },
+              loading || streaming,
+            )
+          ) : null
+        ) : (
+          <Typography.Paragraph className="ai-message-text">{item.content}</Typography.Paragraph>
+        ),
+    };
+  });
 
   const knowledgeScopeGroups = [
     { scope: 'INTERNAL' as const, label: '内部资料' },

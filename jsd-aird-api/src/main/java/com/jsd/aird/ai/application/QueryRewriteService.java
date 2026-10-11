@@ -13,6 +13,7 @@ import java.util.regex.Pattern;
 
 import com.jsd.aird.ai.application.port.AssistantRepository;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.jsd.aird.platform.web.RequestIdHolder;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.beans.factory.ObjectProvider;
@@ -20,9 +21,13 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Service
 public class QueryRewriteService {
+
+    private static final Logger log = LoggerFactory.getLogger(QueryRewriteService.class);
 
     private static final String PLANNER_SYSTEM_PROMPT = """
             你是企业研发知识库的检索规划器。只改写用户查询和制定检索计划，不回答问题，也不得在规划阶段推断答案。
@@ -102,9 +107,17 @@ public class QueryRewriteService {
     private static final int MAX_LABEL_LENGTH = 120;
     private static final int MAX_WEB_QUERY_LENGTH = 300;
     private static final int MAX_DATA_TERMS = 8;
+    private static final int MAX_DIAGNOSTIC_VALUE_CHARS = 160;
+    private static final int MAX_DIAGNOSTIC_ISSUES = 32;
     private static final Set<String> DATA_INTENTS = Set.of("NONE", "FILE_OVERVIEW", "RECORD_DETAIL", "FIELD_LOOKUP");
     private static final Set<String> DATA_ANALYSIS_GOALS = Set.of("VALUE", "EXPLAIN", "COMPARE", "EVALUATE");
     private static final Set<String> DATA_FILE_SCOPES = Set.of("EXPLICIT", "CONTEXT", "AUTO");
+    private static final Pattern STANDALONE_RECORD_IDENTIFIER = Pattern.compile(
+            "(?i)(?=.*[A-Z0-9])[A-Z0-9\\u4E00-\\u9FFF]+(?:[-_/.][A-Z0-9\\u4E00-\\u9FFF]+)+");
+    private static final Pattern INLINE_RECORD_IDENTIFIER = Pattern.compile(
+            "(?i)(?<![A-Z0-9])[A-Z\\u4E00-\\u9FFF0-9]+(?:[-_/.][A-Z\\u4E00-\\u9FFF0-9]+)+(?![A-Z0-9])");
+    private static final Pattern COMPACT_RECORD_IDENTIFIER = Pattern.compile(
+            "(?i)(?<![A-Z0-9])[A-Z]{1,10}[A-Z0-9]{1,30}(?![A-Z0-9])");
     private static final Pattern QUOTED_DATA_FILE = Pattern.compile("[“\\\"《]([^”\\\"》\\r\\n]{1,260}\\.(?:xlsx|xls|csv))[”\\\"》]",
             Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
     private static final Pattern BARE_DATA_FILE = Pattern.compile("([^\\s，。；;：:“”\\\"]{1,260}\\.(?:xlsx|xls|csv))",
@@ -156,8 +169,20 @@ public class QueryRewriteService {
                     .map(item -> item.role() + ": " + item.content()).reduce((a, b) -> a + "\n" + b).orElse("");
             var userPrompt = "联网检索=" + (webSearchEnabled ? "开启" : "关闭")
                     + "\n近期对话=" + historyText + "\n用户问题=" + question;
-            var response = parsePlan(call(builder, PLANNER_SYSTEM_PROMPT, userPrompt));
-            if (!isUsable(response)) return new Result(fallback, "INVALID_MODEL_OUTPUT", model, false);
+            var modelCallStarted = System.nanoTime();
+            var raw = call(builder, PLANNER_SYSTEM_PROMPT, userPrompt);
+            var parsed = parser.readWithDiagnostics(raw, QueryPlan.class, MAX_DIAGNOSTIC_VALUE_CHARS);
+            if (!parsed.successful()) {
+                var issue = new ValidationIssue(parsed.errorPath(), parsed.errorCode(), parsed.valuePreview());
+                logRejectedOutput(List.of(issue), elapsedMs(modelCallStarted));
+                return new Result(fallback, "INVALID_MODEL_OUTPUT", model, false);
+            }
+            var response = parsed.value();
+            var validationIssues = validationIssues(response);
+            if (!validationIssues.isEmpty()) {
+                logRejectedOutput(validationIssues, elapsedMs(modelCallStarted));
+                return new Result(fallback, "INVALID_MODEL_OUTPUT", model, false);
+            }
             var queries = new LinkedHashSet<String>();
             if (response.subQueries() != null) response.subQueries().stream().filter(StringUtils::hasText)
                     .map(value -> bounded(value, MAX_QUERY_LENGTH)).filter(StringUtils::hasText)
@@ -197,21 +222,149 @@ public class QueryRewriteService {
         }
     }
 
-    private QueryPlan parsePlan(String raw) {
-        return parser.read(raw, QueryPlan.class);
+    private void logRejectedOutput(List<ValidationIssue> issues, long elapsedMs) {
+        var loggedIssues = issues.stream().limit(MAX_DIAGNOSTIC_ISSUES).toList();
+        var omittedIssueCount = Math.max(0, issues.size() - loggedIssues.size());
+        log.warn("query_rewrite_rejected requestId={} model={} elapsedMs={} failureType=INVALID_MODEL_OUTPUT issues={} omittedIssueCount={}",
+                RequestIdHolder.currentOrUnknown(), model, elapsedMs, loggedIssues, omittedIssueCount);
     }
 
     static boolean isUsable(QueryPlan plan) {
-        if (plan == null || !StringUtils.hasText(plan.rewrittenQuery())) return false;
-        if (plan.rewrittenQuery().length() > MAX_QUERY_LENGTH) return false;
-        if (plan.subQueries() != null && plan.subQueries().stream().filter(StringUtils::hasText).count() > MAX_SUB_QUERIES) return false;
-        if (plan.retrievalTerms() != null && (plan.retrievalTerms().size() > MAX_RETRIEVAL_TERMS
-                || plan.retrievalTerms().stream().anyMatch(value -> !validTerm(value)))) return false;
-        if (plan.requiredFacts() != null && (plan.requiredFacts().size() > MAX_REQUIRED_FACTS
-                || plan.requiredFacts().stream().anyMatch(value -> !validFact(value)))) return false;
-        if (plan.dataRequest() != null && !validDataRequest(plan.dataRequest())) return false;
-        return plan.webQueries() == null || (plan.webQueries().size() <= MAX_WEB_QUERIES
-                && plan.webQueries().stream().allMatch(QueryRewriteService::validWebQuery));
+        return validationIssues(plan).isEmpty();
+    }
+
+    static List<ValidationIssue> validationIssues(QueryPlan plan) {
+        var issues = new ArrayList<ValidationIssue>();
+        if (plan == null) {
+            issues.add(issue("$", "EXPECTED_OBJECT", null));
+            return List.copyOf(issues);
+        }
+        if (!StringUtils.hasText(plan.rewrittenQuery())) {
+            issues.add(issue("rewrittenQuery", "REQUIRED_NON_EMPTY", plan.rewrittenQuery()));
+        } else if (plan.rewrittenQuery().length() > MAX_QUERY_LENGTH) {
+            issues.add(issue("rewrittenQuery", "MAX_LENGTH_" + MAX_QUERY_LENGTH, plan.rewrittenQuery()));
+        }
+
+        var nonEmptySubQueryCount = plan.subQueries().stream().filter(StringUtils::hasText).count();
+        if (nonEmptySubQueryCount > MAX_SUB_QUERIES) {
+            issues.add(issue("subQueries", "MAX_NON_EMPTY_ITEMS_" + MAX_SUB_QUERIES,
+                    "count=" + nonEmptySubQueryCount));
+        }
+
+        if (plan.retrievalTerms().size() > MAX_RETRIEVAL_TERMS) {
+            issues.add(issue("retrievalTerms", "MAX_ITEMS_" + MAX_RETRIEVAL_TERMS,
+                    "count=" + plan.retrievalTerms().size()));
+        }
+        for (var index = 0; index < plan.retrievalTerms().size(); index++) {
+            var term = plan.retrievalTerms().get(index);
+            var path = "retrievalTerms[" + index + "]";
+            if (term == null) {
+                issues.add(issue(path, "ITEM_REQUIRED", null));
+                continue;
+            }
+            if (!StringUtils.hasText(term.text())) {
+                issues.add(issue(path + ".text", "REQUIRED_NON_EMPTY", term.text()));
+            } else if (term.text().length() > MAX_TERM_LENGTH) {
+                issues.add(issue(path + ".text", "MAX_LENGTH_" + MAX_TERM_LENGTH, term.text()));
+            }
+            if (term.aliases() != null && term.aliases().size() > MAX_ALIASES_PER_TERM) {
+                issues.add(issue(path + ".aliases", "MAX_ITEMS_" + MAX_ALIASES_PER_TERM,
+                        "count=" + term.aliases().size()));
+            }
+        }
+
+        if (plan.requiredFacts().size() > MAX_REQUIRED_FACTS) {
+            issues.add(issue("requiredFacts", "MAX_ITEMS_" + MAX_REQUIRED_FACTS,
+                    "count=" + plan.requiredFacts().size()));
+        }
+        for (var index = 0; index < plan.requiredFacts().size(); index++) {
+            var fact = plan.requiredFacts().get(index);
+            var path = "requiredFacts[" + index + "]";
+            if (fact == null) {
+                issues.add(issue(path, "ITEM_REQUIRED", null));
+                continue;
+            }
+            if (!StringUtils.hasText(fact.label())) {
+                issues.add(issue(path + ".label", "REQUIRED_NON_EMPTY", fact.label()));
+            } else if (fact.label().length() > MAX_LABEL_LENGTH) {
+                issues.add(issue(path + ".label", "MAX_LENGTH_" + MAX_LABEL_LENGTH, fact.label()));
+            }
+            if (!StringUtils.hasText(fact.retrievalQuery())) {
+                issues.add(issue(path + ".retrievalQuery", "REQUIRED_NON_EMPTY", fact.retrievalQuery()));
+            } else if (fact.retrievalQuery().length() > MAX_QUERY_LENGTH) {
+                issues.add(issue(path + ".retrievalQuery", "MAX_LENGTH_" + MAX_QUERY_LENGTH,
+                        fact.retrievalQuery()));
+            }
+        }
+
+        var dataRequest = plan.dataRequest();
+        if (dataRequest != null) {
+            var intent = dataRequest.intent() == null ? "NONE"
+                    : dataRequest.intent().strip().toUpperCase(java.util.Locale.ROOT);
+            if (!DATA_INTENTS.contains(intent)) {
+                issues.add(issue("dataRequest.intent", "ENUM_" + DATA_INTENTS, dataRequest.intent()));
+            }
+            if (!DATA_ANALYSIS_GOALS.contains(dataRequest.analysisGoal())) {
+                issues.add(issue("dataRequest.analysisGoal", "ENUM_" + DATA_ANALYSIS_GOALS,
+                        dataRequest.analysisGoal()));
+            }
+            if (!DATA_FILE_SCOPES.contains(dataRequest.fileScope())) {
+                issues.add(issue("dataRequest.fileScope", "ENUM_" + DATA_FILE_SCOPES,
+                        dataRequest.fileScope()));
+            }
+            if (dataRequest.fileName() != null && dataRequest.fileName().length() > 260) {
+                issues.add(issue("dataRequest.fileName", "MAX_LENGTH_260", dataRequest.fileName()));
+            }
+            addDataTermIssues(issues, "dataRequest.recordTerms", dataRequest.recordTerms());
+            addDataTermIssues(issues, "dataRequest.fieldTerms", dataRequest.fieldTerms());
+        }
+
+        if (plan.webQueries().size() > MAX_WEB_QUERIES) {
+            issues.add(issue("webQueries", "MAX_ITEMS_" + MAX_WEB_QUERIES,
+                    "count=" + plan.webQueries().size()));
+        }
+        for (var index = 0; index < plan.webQueries().size(); index++) {
+            var query = plan.webQueries().get(index);
+            var path = "webQueries[" + index + "]";
+            if (query == null) {
+                issues.add(issue(path, "ITEM_REQUIRED", null));
+            } else if (!StringUtils.hasText(query.query())) {
+                issues.add(issue(path + ".query", "REQUIRED_NON_EMPTY", query.query()));
+            } else if (query.query().length() > MAX_WEB_QUERY_LENGTH) {
+                issues.add(issue(path + ".query", "MAX_LENGTH_" + MAX_WEB_QUERY_LENGTH, query.query()));
+            }
+        }
+        return List.copyOf(issues);
+    }
+
+    private static void addDataTermIssues(List<ValidationIssue> issues, String path, List<String> values) {
+        if (values == null) return;
+        if (values.size() > MAX_DATA_TERMS) {
+            issues.add(issue(path, "MAX_ITEMS_" + MAX_DATA_TERMS, "count=" + values.size()));
+        }
+        for (var index = 0; index < values.size(); index++) {
+            var value = values.get(index);
+            if (value == null) {
+                issues.add(issue(path + "[" + index + "]", "ITEM_REQUIRED", null));
+            } else if (value.length() > MAX_TERM_LENGTH) {
+                issues.add(issue(path + "[" + index + "]", "MAX_LENGTH_" + MAX_TERM_LENGTH, value));
+            }
+        }
+    }
+
+    private static ValidationIssue issue(String path, String rule, Object actualValue) {
+        return new ValidationIssue(path, rule, diagnosticPreview(actualValue));
+    }
+
+    private static String diagnosticPreview(Object value) {
+        if (value == null) return "<null>";
+        var text = value.toString().replaceAll("[\\p{Cntrl}&&[^\\t]]", " ").replace('\t', ' ');
+        return text.length() <= MAX_DIAGNOSTIC_VALUE_CHARS
+                ? text : text.substring(0, MAX_DIAGNOSTIC_VALUE_CHARS) + "…";
+    }
+
+    private static long elapsedMs(long startedNanos) {
+        return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNanos);
     }
 
     private static List<RetrievalTerm> sanitizeTerms(List<RetrievalTerm> values) {
@@ -291,6 +444,38 @@ public class QueryRewriteService {
         }
         var recordTerms = sanitizeDataTerms(proposed.recordTerms(), sourceText);
         var fieldTerms = sanitizeDataTerms(proposed.fieldTerms(), sourceText);
+        var standaloneIdentifier = standaloneRecordIdentifier(question);
+        var currentIdentifiers = currentTurnIdentifiers(question);
+        if (!standaloneIdentifier.isBlank()) {
+            // A bare identifier is a cross-file record lookup even when the
+            // planner proposes a file from conversation history. Only the
+            // current message is authoritative for this lookup.
+            intent = "RECORD_DETAIL";
+            fileName = "";
+            fileScope = "AUTO";
+            recordTerms = List.of(standaloneIdentifier);
+            fieldTerms = List.of();
+        } else if (!currentIdentifiers.isEmpty()) {
+            // Current-turn identifiers replace an inherited file/field scope.
+            // Retain a recent file when the same identifier is a contextual
+            // follow-up; a different identifier starts a cross-file lookup.
+            var priorIdentifiers = currentTurnIdentifiers(priorContextText(sourceText, question));
+            var replacesPriorEntity = !priorIdentifiers.isEmpty()
+                    && currentIdentifiers.stream().anyMatch(identifier -> !priorIdentifiers.contains(identifier));
+            recordTerms = currentIdentifiers;
+            fieldTerms = sanitizeDataTerms(proposed.fieldTerms(), question);
+            if (explicitFileName.isBlank() && replacesPriorEntity) {
+                fileName = "";
+                fileScope = "AUTO";
+            }
+            if ("NONE".equals(intent)) {
+                intent = fieldTerms.isEmpty() && !looksLikeStructuredDataQuestion(question)
+                        ? "RECORD_DETAIL" : "FIELD_LOOKUP";
+            } else if ("FIELD_LOOKUP".equals(intent) && fieldTerms.isEmpty()
+                    && !looksLikeStructuredDataQuestion(question)) {
+                intent = "RECORD_DETAIL";
+            }
+        }
         // A comparison of named records and metrics is a field lookup even when the
         // planner is distracted by phrases such as "不要展示数据明细" and labels it
         // as a file overview. Retrieval can recover identifiers and fields from the
@@ -398,6 +583,40 @@ public class QueryRewriteService {
                 .replaceAll("[^A-Z0-9\\u4E00-\\u9FFF]", "");
     }
 
+    private static String standaloneRecordIdentifier(String value) {
+        if (!StringUtils.hasText(value)) return "";
+        var candidate = value.strip().replaceAll("^[\\s\\p{Punct}“”‘’《》]+|[\\s\\p{Punct}“”‘’《》]+$", "");
+        if (candidate.length() > 120 || !STANDALONE_RECORD_IDENTIFIER.matcher(candidate).matches()) return "";
+        return candidate;
+    }
+
+    private static List<String> currentTurnIdentifiers(String value) {
+        if (!StringUtils.hasText(value)) return List.of();
+        var filename = extractDataFile(value);
+        var identifierText = StringUtils.hasText(filename) ? value.replace(filename, " ") : value;
+        var result = new LinkedHashSet<String>();
+        addCurrentIdentifiers(result, INLINE_RECORD_IDENTIFIER.matcher(identifierText));
+        addCurrentIdentifiers(result, COMPACT_RECORD_IDENTIFIER.matcher(identifierText));
+        return List.copyOf(result);
+    }
+
+    private static String priorContextText(String sourceText, String question) {
+        if (!StringUtils.hasText(sourceText)) return "";
+        if (StringUtils.hasText(question) && sourceText.startsWith(question)) {
+            return sourceText.substring(question.length());
+        }
+        return sourceText;
+    }
+
+    private static void addCurrentIdentifiers(Set<String> target, java.util.regex.Matcher matcher) {
+        while (matcher.find()) {
+            var value = matcher.group().strip();
+            var hasDigit = value.chars().anyMatch(Character::isDigit);
+            var hasEntityText = value.codePoints().anyMatch(codePoint -> Character.isLetter(codePoint));
+            if (hasDigit && hasEntityText) target.add(value);
+        }
+    }
+
     private static boolean validTerm(RetrievalTerm value) {
         if (value == null || !StringUtils.hasText(value.text()) || value.text().length() > MAX_TERM_LENGTH) return false;
         return value.aliases() == null || value.aliases().size() <= MAX_ALIASES_PER_TERM;
@@ -445,6 +664,8 @@ public class QueryRewriteService {
             this(plan, status, "", false);
         }
     }
+
+    record ValidationIssue(String path, String rule, String actualValuePreview) { }
 
     public record QueryPlan(String originalQuery, String rewrittenQuery, List<String> subQueries,
                             List<RetrievalTerm> retrievalTerms, List<RequiredFact> requiredFacts,

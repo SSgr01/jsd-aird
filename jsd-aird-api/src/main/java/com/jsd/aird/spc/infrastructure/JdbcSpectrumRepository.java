@@ -183,17 +183,47 @@ public class JdbcSpectrumRepository implements SpectrumRepository {
     @Override
     public List<SessionRow> listSessions(UUID organizationId, UUID userId, int limit) {
         return jdbc.query("""
-                SELECT id, title, created_at, updated_at FROM spc.chat_session
+                SELECT id, title, created_at, updated_at, chart_ids_jsonb::text AS chart_ids_json,
+                       page_selections_jsonb::text AS page_selections_json
+                FROM spc.chat_session
                 WHERE organization_id = ? AND created_by = ?
                 ORDER BY updated_at DESC LIMIT ?
-                """, (rs, n) -> new SessionRow(rs.getObject("id", UUID.class), rs.getString("title"),
-                instant(rs, "created_at"), instant(rs, "updated_at")), organizationId, userId, limit);
+                """, this::mapSession, organizationId, userId, limit);
+    }
+
+    @Override
+    public Optional<SessionRow> findSession(UUID organizationId, UUID userId, UUID sessionId) {
+        return jdbc.query("""
+                SELECT id, title, created_at, updated_at, chart_ids_jsonb::text AS chart_ids_json,
+                       page_selections_jsonb::text AS page_selections_json
+                FROM spc.chat_session
+                WHERE organization_id = ? AND created_by = ? AND id = ?
+                """, this::mapSession, organizationId, userId, sessionId).stream().findFirst();
     }
 
     @Override
     public boolean sessionExists(UUID organizationId, UUID userId, UUID sessionId) {
         return Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS (SELECT 1 FROM spc.chat_session WHERE organization_id = ? AND created_by = ? AND id = ?)",
                 Boolean.class, organizationId, userId, sessionId));
+    }
+
+    @Override
+    public void lockSessionForUpdate(UUID organizationId, UUID userId, UUID sessionId) {
+        jdbc.queryForList("""
+                SELECT id FROM spc.chat_session
+                WHERE organization_id = ? AND created_by = ? AND id = ?
+                FOR UPDATE
+                """, UUID.class, organizationId, userId, sessionId);
+    }
+
+    @Override
+    public void updateSessionChartContext(UUID organizationId, UUID userId, UUID sessionId,
+                                          String chartIdsJson, String pageSelectionsJson) {
+        jdbc.update("""
+                UPDATE spc.chat_session
+                SET chart_ids_jsonb = ?, page_selections_jsonb = ?, updated_at = now()
+                WHERE organization_id = ? AND created_by = ? AND id = ?
+                """, json(chartIdsJson), json(pageSelectionsJson), organizationId, userId, sessionId);
     }
 
     @Override
@@ -230,6 +260,40 @@ public class JdbcSpectrumRepository implements SpectrumRepository {
                 rs.getString("role"), rs.getString("content"), rs.getString("citations_jsonb"),
                 rs.getString("result_jsonb"), rs.getString("warning_jsonb"), instant(rs, "created_at")),
                 organizationId, sessionId, limit);
+    }
+
+    @Override
+    public List<MessageRow> listRecentMessagesBeforeAnalysis(UUID organizationId, UUID analysisRunId, int limit) {
+        return jdbc.query("""
+                SELECT m.id, m.analysis_run_id, m.role, m.content, m.citations_jsonb::text,
+                       m.result_jsonb::text, m.warning_jsonb::text, m.created_at
+                FROM spc.chat_message m
+                JOIN spc.analysis_run current_run
+                  ON current_run.organization_id = m.organization_id
+                 AND current_run.session_id = m.session_id
+                WHERE current_run.organization_id = ? AND current_run.id = ?
+                  AND m.analysis_run_id IS DISTINCT FROM current_run.id
+                  AND m.created_at <= current_run.created_at
+                ORDER BY m.created_at DESC, m.id DESC
+                LIMIT ?
+                """, (rs, row) -> new MessageRow(rs.getObject("id", UUID.class),
+                rs.getObject("analysis_run_id", UUID.class), rs.getString("role"), rs.getString("content"),
+                rs.getString("citations_jsonb"), rs.getString("result_jsonb"), rs.getString("warning_jsonb"),
+                instant(rs, "created_at")), organizationId, analysisRunId, Math.max(1, Math.min(limit, 100)));
+    }
+
+    @Override
+    public void deleteMessages(UUID organizationId, UUID sessionId, List<UUID> messageIds) {
+        if (messageIds == null || messageIds.isEmpty()) return;
+        var placeholders = String.join(",", java.util.Collections.nCopies(messageIds.size(), "?"));
+        var args = new java.util.ArrayList<Object>(messageIds.size() + 2);
+        args.add(organizationId);
+        args.add(sessionId);
+        args.addAll(messageIds);
+        jdbc.update("""
+                DELETE FROM spc.chat_message
+                WHERE organization_id = ? AND session_id = ? AND id IN (
+                """ + placeholders + ")", args.toArray());
     }
 
     @Override
@@ -327,10 +391,15 @@ public class JdbcSpectrumRepository implements SpectrumRepository {
     @Override
     public long appendAnalysisEvent(UUID organizationId, UUID analysisId, String eventType, String payloadJson) {
         return jdbc.queryForObject("""
-                INSERT INTO spc.analysis_event (organization_id, analysis_run_id, event_type, payload_jsonb)
-                VALUES (?, ?, ?, ?)
-                RETURNING id
-                """, Long.class, organizationId, analysisId, eventType, json(payloadJson));
+                WITH inserted AS (
+                    INSERT INTO spc.analysis_event (organization_id, analysis_run_id, event_type, payload_jsonb)
+                    VALUES (?, ?, ?, ?)
+                    RETURNING id
+                ), notified AS (
+                    SELECT pg_notify('spectrum_analysis_events', ?) FROM inserted
+                )
+                SELECT id FROM inserted CROSS JOIN notified
+                """, Long.class, organizationId, analysisId, eventType, json(payloadJson), analysisId.toString());
     }
 
     @Override
@@ -383,6 +452,12 @@ public class JdbcSpectrumRepository implements SpectrumRepository {
                 rs.getString("result_json"), rs.getString("raw_response_json"), rs.getString("warning_json"),
                 rs.getString("error_message"), instant(rs, "created_at"), instant(rs, "started_at"),
                 instant(rs, "completed_at"));
+    }
+
+    private SessionRow mapSession(ResultSet rs, int row) throws java.sql.SQLException {
+        return new SessionRow(rs.getObject("id", UUID.class), rs.getString("title"),
+                instant(rs, "created_at"), instant(rs, "updated_at"),
+                rs.getString("chart_ids_json"), rs.getString("page_selections_json"));
     }
 
     private Instant instant(ResultSet rs, String column) throws java.sql.SQLException {

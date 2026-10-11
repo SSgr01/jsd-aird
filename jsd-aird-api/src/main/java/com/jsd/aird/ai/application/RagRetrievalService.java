@@ -283,6 +283,8 @@ public class RagRetrievalService {
                                 .add(hit.score()));
             } catch (RuntimeException exception) {
                 failures++;
+                log.warn("assistant_data_row_lookup_failed organizationId={} query={} categoryIds={} exceptionType={} detail={}",
+                        organizationId, query, filters, exception.getClass().getSimpleName(), rootCauseText(exception));
             }
         }
         var hits = byHit.values().stream().map(DataHitAccumulator::result)

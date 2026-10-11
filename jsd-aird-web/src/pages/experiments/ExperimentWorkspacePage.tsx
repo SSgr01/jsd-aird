@@ -56,14 +56,17 @@ import {
   saveExperiment,
   type ExperimentDetail,
   type ExperimentModel,
+  type ExperimentSourceReference,
   type ExperimentVersion,
   exportExperiment,
+  getExperimentSources,
 } from '@/services/experiments/experiment-api';
 import { downloadBlob, fetchFileBlob } from '@/services/files/file-api';
 import { Can } from '@/components/auth/Can';
 import { templateApi, type TemplateCategory } from '@/services/templates/template-api';
 import { ExperimentFieldReviewPanel } from './ExperimentFieldReviewPanel';
 import './experiments.css';
+import { ExperimentSourcePanel } from './ExperimentSourcePanel';
 
 const SheetsEditor = lazy(async () => ({
   default: (await import('@/features/template-workspace/UniverSheetsEditor')).UniverSheetsEditor,
@@ -121,6 +124,7 @@ export function ExperimentWorkspacePage() {
   const [snapshot, setSnapshot] = useState<Record<string, unknown>>();
   const [editModel, setEditModel] = useState<ExperimentModel>({});
   const [versions, setVersions] = useState<ExperimentVersion[]>([]);
+  const [sourceReferences, setSourceReferences] = useState<ExperimentSourceReference[]>([]);
   const [selectedVersion, setSelectedVersion] = useState<ExperimentVersion>();
   const [view, setView] = useState<WorkspaceView>('preview');
   const [busy, setBusy] = useState(false);
@@ -143,7 +147,11 @@ export function ExperimentWorkspacePage() {
   const load = useCallback(async () => {
     setSaveState('SAVED');
     try {
-      const [d, v] = await Promise.all([getExperiment(id), listVersions(id)]);
+      const [d, v, sources] = await Promise.all([
+        getExperiment(id),
+        listVersions(id),
+        getExperimentSources(id).catch(() => []),
+      ]);
       const nextModel: ExperimentModel = { ...(d.editModel ?? {}) };
       // Keep legacy XLS/XLSX imports aligned with the production workspace:
       // workbook snapshots always use Sheets, even if an older record was
@@ -165,6 +173,7 @@ export function ExperimentWorkspacePage() {
       );
       setSnapshot(initialSnapshot);
       setVersions(v);
+      setSourceReferences(sources);
       const editable = !['COMPLETED', 'VOIDED', 'PENDING_REVIEW'].includes(d.summary.status);
       setView(editable ? 'edit' : 'preview');
       setSaveState('SAVED');
@@ -617,7 +626,9 @@ export function ExperimentWorkspacePage() {
           </span>
           <span className="workspace-meta-item">V{versions[0]?.versionNo ?? detail.summary.versionNo ?? 1}</span>
           {showExcelRecognition ? <span className="workspace-meta-item"><FileExcelOutlined /> Excel</span> : null}
-          <Tag color="orange">{STATUS_TEXT[status] ?? status}</Tag>
+          <Tag color={status === 'COMPLETED' ? 'green' : status === 'VOIDED' ? 'default' : 'blue'}>
+            {STATUS_TEXT[status] ?? status}
+          </Tag>
           {showExcelRecognition ? <Tag color="blue">审核：{pendingFieldCount || pendingRegionCount ? '待确认' : '已确认'}</Tag> : null}
         </div>
         <Space wrap>
@@ -733,6 +744,11 @@ export function ExperimentWorkspacePage() {
         />
       </nav>
 
+      <ExperimentSourcePanel
+        references={sourceReferences}
+        fallbackFileName={detail.editModel.sourceFileName}
+      />
+
       {view === 'versions' ? (
         selectedVersion ? (
           <ExperimentHistoricalVersion
@@ -775,7 +791,6 @@ export function ExperimentWorkspacePage() {
                       ref={editorRef}
                       snapshot={snapshot}
                       bindings={recognizedBindings}
-                      clearSystemReadOnlyProtection
                       editable={editable}
                       onEditorValue={handleRecognizedValue}
                       onSelectionChange={handleCoordinateSelection}

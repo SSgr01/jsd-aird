@@ -133,6 +133,10 @@ public class JdbcDataRepository implements DataRepository {
         var parameters = new ArrayList<Object>();
         conditions.add("organization_id = ?");
         parameters.add(organizationId);
+        // This catalog is the Data Center's import-job view. Experiment imports
+        // and experiment facts have separate ELN endpoints and must never be
+        // projected into this list.
+        conditions.add("source_owner = 'DATA_CENTER'");
         if (categoryId != null) {
             conditions.add("category_id = ?");
             parameters.add(categoryId);
@@ -154,42 +158,20 @@ public class JdbcDataRepository implements DataRepository {
                 WITH source_entries AS (
                     SELECT j.id entry_id,j.source_file_id,j.source_file_name,j.source_format,
                         j.template_version_id,j.category_id,c.name category_name,j.status,j.progress,
-                        j.created_at,j.updated_at,j.source_owner,j.recognition_mode,j.import_purpose,
+                        j.created_at,j.updated_at,j.source_owner,j.recognition_mode,
                         coalesce((SELECT s.status FROM data.confirmed_submission_head h
                             JOIN data.confirmed_submission s ON s.organization_id=h.organization_id
                                 AND s.id=h.confirmed_submission_id
                             WHERE h.organization_id=j.organization_id AND h.import_job_id=j.id),
-                            CASE WHEN j.source_owner='EXPERIMENT' THEN 'EXPERIMENT_SOURCE' ELSE 'NOT_CONFIRMED' END) formal_status,
+                            'NOT_CONFIRMED') formal_status,
                         (SELECT l.experiment_id FROM data.import_experiment_link l
                             WHERE l.organization_id=j.organization_id AND l.import_job_id=j.id
                                 AND l.experiment_id IS NOT NULL ORDER BY l.updated_at DESC LIMIT 1) experiment_id,
                         (SELECT l.experiment_version_id FROM data.import_experiment_link l
                             WHERE l.organization_id=j.organization_id AND l.import_job_id=j.id
                                 AND l.experiment_version_id IS NOT NULL ORDER BY l.updated_at DESC LIMIT 1) experiment_version_id,
-                    'SOURCE_UPLOAD' entry_type,j.organization_id
+                        j.organization_id
                     FROM data.import_job j LEFT JOIN data.data_category c ON c.id=j.category_id
-                    UNION ALL
-                    SELECT j.id,j.source_file_id,j.source_file_name,j.source_format,
-                        NULL,NULL,NULL,j.status,
-                        CASE WHEN j.status='COMPLETED' THEN 100 ELSE 0 END,
-                        j.created_at,j.updated_at,'EXPERIMENT','FREEFORM','EXPERIMENT_DRAFT',
-                        CASE WHEN e.status='COMPLETED' THEN 'EXPERIMENT_SOURCE' ELSE 'NOT_CONFIRMED' END,
-                        j.experiment_id,e.current_version_id,'SOURCE_UPLOAD',j.organization_id
-                    FROM rnd.experiment_import_job j
-                    LEFT JOIN rnd.experiment e ON e.organization_id=j.organization_id
-                        AND e.id=j.experiment_id AND e.deleted=false
-                    UNION ALL
-                    SELECT e.id,e.source_file_id,coalesce(f.original_name,e.title),'EXPERIMENT',
-                        NULL,NULL,NULL,e.status,100,e.created_at,e.updated_at,'EXPERIMENT','FREEFORM',
-                        'EXPERIMENT_DRAFT','EXPERIMENT_SOURCE',e.id,e.current_version_id,
-                        'EXPERIMENT_FACT',e.organization_id
-                    FROM rnd.experiment e LEFT JOIN ops.file_object f ON f.id=e.source_file_id
-                    WHERE e.status='COMPLETED' AND e.deleted=false
-                        -- Upload-owned rows above already expose template and
-                        -- free experiment sources. This branch is for manual
-                        -- completed experiments that have no source reference.
-                        AND NOT EXISTS (SELECT 1 FROM rnd.experiment_source_reference r
-                            WHERE r.organization_id=e.organization_id AND r.experiment_id=e.id)
                 )
                 """;
         var total = jdbc.queryForObject(sourceEntries + " SELECT count(*) FROM source_entries WHERE " + where,
@@ -205,9 +187,8 @@ public class JdbcDataRepository implements DataRepository {
                         rs.getObject("category_id", UUID.class), rs.getString("category_name"),
                         rs.getString("status"), rs.getInt("progress"),
                         rs.getTimestamp("created_at").toInstant(), rs.getTimestamp("updated_at").toInstant(), List.of(),
-                        rs.getString("source_owner"),rs.getString("recognition_mode"),rs.getString("import_purpose"),
-                        rs.getString("formal_status"),rs.getObject("experiment_id",UUID.class),
-                        rs.getObject("experiment_version_id",UUID.class),rs.getString("entry_type")),
+                        rs.getString("recognition_mode"), rs.getString("formal_status"),
+                        rs.getObject("experiment_id",UUID.class), rs.getObject("experiment_version_id",UUID.class)),
                 args.toArray());
         var totalValue = total == null ? 0L : total;
         return new PageResponse<>(items, page, size, totalValue, (totalValue + size - 1) / size);

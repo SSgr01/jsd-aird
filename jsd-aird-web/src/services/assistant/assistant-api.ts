@@ -185,7 +185,7 @@ export const assistantApi = {
     knowledgeCategoryIds: string[] = [],
     dataCategoryIds: string[] = [],
     webSearchEnabled = false,
-    onToken: (token: string) => void,
+    onToken: (token: string, replace?: boolean) => void,
     onDone: (response: AssistantResponse) => void,
     onStage?: (event: string, data: unknown) => void,
     replacement?: AssistantMessageReplacement,
@@ -263,12 +263,7 @@ export const assistantApi = {
               retryTraceId,
             );
           }
-          throw new AssistantRequestError(
-            retryMessage,
-            retryCode,
-            response.status,
-            retryTraceId,
-          );
+          throw new AssistantRequestError(retryMessage, retryCode, response.status, retryTraceId);
         }
       } else {
         throw new AssistantRequestError(message, code, response.status, traceId);
@@ -326,10 +321,15 @@ export const assistantApi = {
                   typeof parsed.delta === 'string'
                 ? parsed.delta
                 : '';
-          if (token) onToken(token);
+          if (token) {
+            const replace =
+              parsed && typeof parsed === 'object' && 'replace' in parsed && parsed.replace === true;
+            if (replace) onToken(token, true);
+            else onToken(token);
+          }
         }
         if (event === 'done') onDone(parsed as AssistantResponse);
-        if (event === 'thinking') onStage?.(event, parsed);
+        if (event === 'thinking' || event === 'context') onStage?.(event, parsed);
         event = 'message';
       }
     };

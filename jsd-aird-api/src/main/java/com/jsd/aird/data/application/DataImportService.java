@@ -244,11 +244,16 @@ public class DataImportService {
             var originalBindings = templates.getBindings(organizationId, job.templateVersionId());
             var overrides = repository.listComponentOverrides(organizationId, importJobId);
             var bindings = applyComponentOverrides(originalBindings, overrides, definition.importContract());
+            var labelResolution = new BindingLabelResolver(objectMapper)
+                    .resolve(bindings, definition.fields(), parsed.sheets());
+            bindings = labelResolution.executableBindings();
             var compatibility = applyCompatibilityOverrides(
-                    compatibilityEvaluator.evaluate(definition.importContract(), parsed.sheets()), overrides);
-            var compatibilityReport = objectMapper.createObjectNode()
-                    .put("status", compatibility.status())
-                    .set("componentMatches", compatibility.componentMatches().deepCopy());
+                    compatibilityEvaluator.evaluate(definition.importContract(), parsed.sheets(),
+                            labelResolution.fieldResolutions()), overrides);
+            var compatibilityReport = objectMapper.createObjectNode();
+            compatibilityReport.put("status", compatibility.status());
+            compatibilityReport.set("componentMatches", compatibility.componentMatches().deepCopy());
+            compatibilityReport.set("fieldResolutions", labelResolution.fieldResolutions().deepCopy());
             repository.saveCompatibilityReport(organizationId, importJobId,
                     compatibility.status(), compatibilityReport);
             var configured = repository.listSheets(organizationId, importJobId).stream()
@@ -1141,7 +1146,8 @@ public class DataImportService {
                     binding.parentBindingId(), binding.repeatAxis(), binding.recordHeight(), binding.recordWidth(),
                     binding.recordStride(), binding.terminationRule(), translated, binding.required(),
                     binding.identity(), binding.trainingEligible(), binding.valueSource(), binding.valueType(),
-                    binding.unit(), binding.labelPath(), binding.trainingRole(), binding.ragEligible());
+                    binding.unit(), binding.labelPath(), binding.labelPathSegments(), binding.trainingRole(),
+                    binding.ragEligible(), binding.experimentField(), binding.targetPath());
         }).toList();
     }
 

@@ -484,7 +484,8 @@ function MappingPanel({ preview, saving, readOnly, onUpdateMapping, onSaveMappin
     {pending.length ? <section className="data-panel-section"><Alert type="warning" showIcon message={`待确认 ${pending.length} 个字段`} />{pending.map(({ item, index }) => <div className="data-mapping-card" key={`${item.sheetId}-${item.sourceColumn}`}><strong>{item.sourceHeader || `位置 ${item.sourceColumn}`}</strong><Select disabled={readOnly} value={item.action} options={actionOptions} onChange={(value) => onUpdateMapping(index, { action: value })} /><Select showSearch optionFilterProp="label" placeholder="选择对应字段" value={item.fieldCode} disabled={readOnly || item.action !== 'MAP'} options={templateFields.map((field) => ({ value: field.fieldCode, label: `${field.displayName}${field.required ? ' · 必填' : ''}` }))} onChange={(value) => { const field = templateFields.find((candidate) => candidate.fieldCode === value); onUpdateMapping(index, { fieldCode: value, fieldName: field?.displayName, valueType: field?.dataType, standardUnit: field?.defaultUnit, detail: { ...(item.detail || {}), dataPath: field?.dataPath, identity: field?.identity, required: field?.required } }); }} /></div>)}{!readOnly && <Button type="primary" block loading={saving} onClick={onSaveMappings}>保存并校验</Button>}</section> : preview.job.status === 'WAITING_MAPPING' ? <section className="data-panel-section"><Alert type="info" showIcon message={`已自动匹配 ${preview.mappings.length} 个字段`} />{!readOnly && <Button type="primary" block loading={saving} onClick={onSaveMappings}>确认并校验</Button>}</section> : <Alert type="success" showIcon message="已确认" />}
     <WorkbenchPanelHeader title="工作表" extra={!readOnly ? <Button size="small" onClick={onReExtract}>重新读取</Button> : undefined} />
     <div className="data-panel-section">{preview.sheets.map((sheet) => <article className="data-sheet-card" key={sheet.sheetId}><div className="data-sheet-card-title"><Checkbox disabled={readOnly} checked={sheet.selected} onChange={(event) => onUpdateSheet(sheet.sheetId, { selected: event.target.checked })}>{sheet.sheetName}</Checkbox><Tag>{sheet.selected ? '已选' : '未选'}</Tag></div><div className="data-sheet-fields"><label>表头<InputNumber disabled={readOnly} min={1} value={sheet.headerRows[0]} onChange={(value) => onUpdateSheet(sheet.sheetId, { headerRows: value ? [value] : [] })} /></label><label>数据起始<InputNumber disabled={readOnly} min={1} value={sheet.dataStartRow} onChange={(value) => onUpdateSheet(sheet.sheetId, { dataStartRow: value ?? undefined })} /></label><label>数据结束<InputNumber disabled={readOnly} min={sheet.dataStartRow || 1} value={sheet.dataEndRow} onChange={(value) => onUpdateSheet(sheet.sheetId, { dataEndRow: value ?? undefined })} /></label></div></article>)}{!readOnly && <Button type="primary" block loading={saving} onClick={onSaveSheets}>保存工作表设置</Button>}</div>
-    {(preview.compatibilityReport?.componentMatches?.some((item) => ['REVIEW_REQUIRED', 'INCOMPATIBLE'].includes(item.status)) || false) ? <CompatibilityPanel
+    {(preview.compatibilityReport?.componentMatches?.some((item) => ['REVIEW_REQUIRED', 'INCOMPATIBLE'].includes(item.status)
+      || item.fieldResolutions?.some((field) => field.status !== 'ORIGINAL')) || false) ? <CompatibilityPanel
       preview={preview}
       readOnly={readOnly}
       onLocateComponent={onLocateComponent}
@@ -545,6 +546,10 @@ function CompatibilityPanel({ preview, readOnly, onLocateComponent, onFocus }: {
             </Tag>
           </div>
           <Typography.Text type="secondary">{compatibilityDetail(item, preview)}</Typography.Text>
+          {item.fieldResolutions?.filter((field) => field.status !== 'ORIGINAL').map((field) => <Typography.Text
+            key={field.bindingId}
+            type={field.status === 'MISSING_REQUIRED' ? 'danger' : field.status === 'AMBIGUOUS' ? 'warning' : 'secondary'}
+          >{fieldResolutionDetail(field)}</Typography.Text>)}
           <Space>
             <Button size="small" disabled={!item.sheetId} onClick={() => item.sheetId && onFocus(item.sheetId, componentRange(preview, item))}>查看位置</Button>
             {!readOnly && <Button size="small" disabled={preview.job.status === 'COMPLETED'} onClick={() => onLocateComponent(item)}>调整位置</Button>}
@@ -553,6 +558,15 @@ function CompatibilityPanel({ preview, readOnly, onLocateComponent, onFocus }: {
       </details>
     </div>
   </section>;
+}
+
+function fieldResolutionDetail(field: NonNullable<ComponentMatch['fieldResolutions']>[number]) {
+  const name = field.displayName || field.fieldCode;
+  if (field.status === 'RELOCATED') return `${name}：已从 ${field.originalLabelRange || '原位置'} 自动迁移至 ${field.resolvedLabelRange || '新位置'}`;
+  if (field.status === 'MISSING_REQUIRED') return `${name}：未找到必填项目，已阻断提交`;
+  if (field.status === 'MISSING_OPTIONAL') return `${name}：未找到可选项目，本次不导入该字段`;
+  if (field.status === 'AMBIGUOUS') return `${name}：找到多个位置（${field.candidateAddresses?.join('、') || '位置未知'}），需要人工确认`;
+  return `${name}：已在原位置匹配`;
 }
 
 function compatibilityDetail(item: ComponentMatch, preview: DataPreview) {

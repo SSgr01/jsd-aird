@@ -1041,6 +1041,11 @@
   height: 100%;
   min-height: 520px;
 }
+/* 工作区画布里编辑 Word 时，编辑区要填满整列，而不是被固定高度截断 */
+.workspace-canvas .production-word-canvas {
+  height: 100%;
+  min-height: 0;
+}
 .quality-excel-loading {
   height: 100%;
   display: grid;

@@ -129,6 +129,34 @@ class JdbcKnowledgeRepositoryTest {
                 "c.id IN (", "?,?)");
     }
 
+    @Test
+    void metadataSearchUsesOnlyCurrentPublishedChunksAndRequiresCurrentAiGrant() {
+        var jdbc = mock(JdbcTemplate.class);
+        var repository = new JdbcKnowledgeRepository(jdbc);
+        var organizationId = UUID.randomUUID();
+        var categoryId = UUID.randomUUID();
+        var documentId = UUID.randomUUID();
+
+        repository.searchPublishedMetadata(organizationId, List.of("NASA-Spec-1009.pdf"), true,
+                List.of(categoryId), java.util.Set.of(documentId), 25);
+
+        var sql = ArgumentCaptor.forClass(String.class);
+        var args = ArgumentCaptor.forClass(Object[].class);
+        verify(jdbc).query(sql.capture(), any(org.springframework.jdbc.core.RowMapper.class), args.capture());
+        assertThat(sql.getValue()).contains(
+                "d.current_version_no", "d.current_publication_id", "p.status = 'CURRENT'",
+                "c.review_revision_id = p.review_revision_id", "c.chunk_role = 'CHILD'",
+                "d.lifecycle_status = 'ACTIVE'", "f.status <> 'DELETED'",
+                "kb.document_ai_grant", "g.organization_id = d.organization_id", "g.status = 'APPROVED'",
+                "normalize(term, NFKC)",
+                "metadata_snapshot_jsonb->>'title'", "v.original_name");
+        assertThat(args.getValue()).hasSize(5);
+        assertThat(args.getValue()[1]).isEqualTo(organizationId);
+        assertThat(args.getValue()[2]).isEqualTo(categoryId);
+        assertThat(args.getValue()[3]).isEqualTo(documentId);
+        assertThat(args.getValue()[4]).isEqualTo(25);
+    }
+
     private KnowledgeRepository.ChunkWrite chunk(String key, String parent, String role, int number,
                                                    List<UUID> reviewIds, List<UUID> sourceIds,
                                                    List<KnowledgeRepository.TermFrequency> terms) {

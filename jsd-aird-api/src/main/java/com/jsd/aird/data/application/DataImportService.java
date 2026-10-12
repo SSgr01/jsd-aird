@@ -172,10 +172,16 @@ public class DataImportService {
 
     public PageResponse<DataRepository.SourceFile> sourceFiles(UUID categoryId, String status, String keyword,
                                                                UUID projectId, int page, int size) {
+        return sourceFiles(categoryId, false, status, keyword, projectId, page, size);
+    }
+
+    public PageResponse<DataRepository.SourceFile> sourceFiles(UUID categoryId, boolean uncategorized,
+                                                               String status, String keyword,
+                                                               UUID projectId, int page, int size) {
         var actor = ActorContext.required();
         var allowed = projectId == null || projectResources == null ? null
                 : projectResources.resourceIdsForProject(actor, ResourceType.DATA_IMPORT_JOB, projectId);
-        var result = repository.listSourceFiles(actor.organizationId(), categoryId, status, keyword, allowed,
+        var result = repository.listSourceFiles(actor.organizationId(), categoryId, uncategorized, status, keyword, allowed,
                 Math.max(1, page), Math.min(100, Math.max(1, size)));
         if (projectResources == null || result.items().isEmpty()) return result;
         var links = projectResources.links(actor, ResourceType.DATA_IMPORT_JOB,

@@ -126,6 +126,13 @@ public class JdbcDataRepository implements DataRepository {
     public PageResponse<SourceFile> listSourceFiles(UUID organizationId, UUID categoryId, String status,
                                                     String keyword, java.util.Set<UUID> allowedImportJobIds,
                                                     int page, int size) {
+        return listSourceFiles(organizationId, categoryId, false, status, keyword, allowedImportJobIds, page, size);
+    }
+
+    @Override
+    public PageResponse<SourceFile> listSourceFiles(UUID organizationId, UUID categoryId, boolean uncategorized,
+                                                    String status, String keyword,
+                                                    java.util.Set<UUID> allowedImportJobIds, int page, int size) {
         if (allowedImportJobIds != null && allowedImportJobIds.isEmpty()) {
             return new PageResponse<>(List.of(), page, size, 0, 0);
         }
@@ -137,7 +144,9 @@ public class JdbcDataRepository implements DataRepository {
         // and experiment facts have separate ELN endpoints and must never be
         // projected into this list.
         conditions.add("source_owner = 'DATA_CENTER'");
-        if (categoryId != null) {
+        if (uncategorized) {
+            conditions.add("category_id IS NULL");
+        } else if (categoryId != null) {
             conditions.add("category_id = ?");
             parameters.add(categoryId);
         }

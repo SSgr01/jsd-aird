@@ -34,6 +34,18 @@ export interface ComponentMatch { componentId: string; status: 'EXACT' | 'COMPAT
 export interface ComponentOverride { componentId: string; sheetId: string; sourceRange: string; reason: string; updatedAt?: string }
 export interface DataPreview { job: DataJob; sheets: DataSheet[]; mappings: DataMapping[]; rows: DataRow[]; issues: DataIssue[]; templateContract?: TemplateContract; projectionSummary?: ProjectionSummary; compatibilityReport?: { status?: string; componentMatches?: ComponentMatch[]; fieldResolutions?: FieldResolution[] }; componentOverrides?: ComponentOverride[] }
 export interface DataCategory { id: string; name: string; description?: string; sortOrder: number; sourceCount: number; allowedActions?: string[] }
+export interface DataSourceFacets { categories: DataCategory[]; totalSourceCount: number; uncategorizedSourceCount: number }
+export interface DataStructuredSearchResult {
+  mode: 'NONE' | 'FILE_OVERVIEW' | 'RECORD_DETAIL' | 'FIELD_LOOKUP';
+  resolution: 'NOT_REQUESTED' | 'RESOLVED' | 'AMBIGUOUS' | 'NOT_FOUND' | 'FILE_REQUIRED';
+  fileObjectId?: string; importJobId?: string; originalName?: string;
+  sourceRecordCount: number; searchableValueCount: number; hits: Array<{
+    hitId: string; importJobId: string; originalName: string; content: string; recordKey?: string;
+    fieldCode?: string; fieldName?: string; fieldValue?: string; unit?: string;
+    sheetName?: string; cellAddress?: string; sourceLocator?: string;
+  }>;
+  truncated: boolean; candidates: Array<{ originalName: string }>; candidatesTruncated: boolean;
+}
 export interface DataSourceFile { importJobId: string; fileObjectId?: string; originalName: string; sourceFormat: string; templateVersionId?: string; categoryId?: string; categoryName?: string; status: string; progress: number; createdAt: string; updatedAt: string; relatedProjects?: RelatedProjectView[]; recognitionMode: 'FREEFORM' | 'TEMPLATE_GUIDED'; formalStatus: 'CONFIRMED' | 'SUPERSEDED' | 'INVALIDATED' | 'NOT_CONFIRMED'; experimentId?: string; experimentVersionId?: string }
 export interface DataWorkbookSheet { sheetId: string; sheetName: string; sheetOrder: number; selected: boolean; confirmationStatus: string }
 export interface DataWorkbookFieldGroup { groupId: string; name: string; fieldCount: number }
@@ -100,8 +112,13 @@ export const dataApi = {
   async experimentPlan(id: string) { const response = await httpClient.get<ApiResponse<ExperimentAssemblyPlan>>(`/api/v1/data/import-jobs/${id}/experiments`); return response.data.data; },
   async syncExperiments(id: string, input: { categoryId: string; assemblyKeys?: string[] }) { const response = await httpClient.post<ApiResponse<{ acceptedCount: number; jobIds: string[] }>>(`/api/v1/data/import-jobs/${id}/experiment-sync`, input); return response.data.data; },
   async experimentSyncStatus(id: string) { const response = await httpClient.get<ApiResponse<ExperimentSyncStatus>>(`/api/v1/data/import-jobs/${id}/experiment-sync-status`); return response.data.data; },
-  async listSourceFiles(params: { categoryId?: string; status?: string; keyword?: string; projectId?: string; page?: number; size?: number } = {}) { const response = await httpClient.get<ApiResponse<PageResponse<DataSourceFile>>>('/api/v1/data/sources', { params }); return response.data.data; },
+  async listSourceFiles(params: { categoryId?: string; uncategorized?: boolean; status?: string; keyword?: string; projectId?: string; page?: number; size?: number } = {}) { const response = await httpClient.get<ApiResponse<PageResponse<DataSourceFile>>>('/api/v1/data/sources', { params }); return response.data.data; },
   async listCategories() { const response = await httpClient.get<ApiResponse<DataCategory[]>>('/api/v1/data/categories'); return response.data.data; },
+  async sourceFacets() { const response = await httpClient.get<ApiResponse<DataSourceFacets>>('/api/v1/data/sources/facets'); return response.data.data; },
+  async structuredSearch(input: { fileName?: string; recordTerms?: string[]; fieldTerms?: string[]; categoryId?: string; uncategorized?: boolean }) {
+    const response = await httpClient.post<ApiResponse<DataStructuredSearchResult>>('/api/v1/data/sources/structured-search', input);
+    return response.data.data;
+  },
   async createCategory(input: { name: string; description?: string }) { const response = await httpClient.post<ApiResponse<DataCategory>>('/api/v1/data/categories', input); return response.data.data; },
   async renameCategory(id: string, input: { name: string; description?: string }) { const response = await httpClient.put<ApiResponse<DataCategory>>(`/api/v1/data/categories/${id}`, input); return response.data.data; },
   async deleteCategory(id: string, replacementCategoryId?: string) { await httpClient.delete(`/api/v1/data/categories/${id}`, { params: replacementCategoryId ? { replacementCategoryId } : undefined }); },

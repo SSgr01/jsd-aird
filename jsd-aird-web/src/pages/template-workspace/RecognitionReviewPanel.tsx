@@ -28,6 +28,8 @@ interface Props {
   selectedQualityIssueId?: string;
   busy?: boolean;
   allowIgnore?: boolean;
+  allowModify?: boolean;
+  wordMode?: boolean;
   onSelect: (item: RecognitionReviewItem) => void;
   onConfirm: (item: RecognitionReviewItem, selectedAlternativeId?: string) => void;
   onModify: (item: RecognitionReviewItem) => void;
@@ -55,6 +57,8 @@ export function RecognitionReviewPanel({
   selectedQualityIssueId,
   busy,
   allowIgnore = true,
+  allowModify = true,
+  wordMode = false,
   onSelect,
   onConfirm,
   onModify,
@@ -321,6 +325,8 @@ export function RecognitionReviewPanel({
             onIgnore={onIgnore}
             onRestore={onRestore}
             allowIgnore={allowIgnore}
+            allowModify={allowModify}
+            wordMode={wordMode}
           />
         ) : items.map((item) => {
           const selected = item.id === selectedRecognitionItemId;
@@ -502,23 +508,23 @@ export function RecognitionReviewPanel({
                             size="small"
                             type="primary"
                             icon={<CheckOutlined />}
-                            aria-label="确认"
+                            aria-label={wordMode ? '插入正文并确认' : '确认'}
                             disabled={
                               !editable ||
                               busy ||
                               Boolean(item.payload.semanticConflict) ||
                               (Boolean(item.payload.standardRequired) && Boolean(item.payload.requiresStandardConfirmation)) ||
-                              (Boolean(item.payload.candidateOnly) && alternatives.length <= 1 && !structuralCandidate) ||
-                              (Boolean(item.payload.reviewRequired) && alternatives.length <= 1 && !structuralCandidate) ||
-                              (Boolean(item.payload.physicalStructureOnly) && alternatives.length <= 1 && !structuralCandidate) ||
+                              (!wordMode && Boolean(item.payload.candidateOnly) && alternatives.length <= 1 && !structuralCandidate) ||
+                              (!wordMode && Boolean(item.payload.reviewRequired) && alternatives.length <= 1 && !structuralCandidate) ||
+                              (!wordMode && Boolean(item.payload.physicalStructureOnly) && alternatives.length <= 1 && !structuralCandidate) ||
                               (Boolean(item.payload.structureConflict) && !selectedAlternativeId)
                             }
                             onClick={() => onConfirm(item, selectedAlternativeId)}
                           >
-                            确认
+                            {wordMode ? '插入正文并确认' : '确认'}
                           </Button>
                         )}
-                        <Button
+                        {allowModify && <Button
                           size="small"
                           icon={<EditOutlined />}
                           aria-label="修改"
@@ -526,10 +532,10 @@ export function RecognitionReviewPanel({
                           onClick={() => onModify(item)}
                         >
                           修改
-                        </Button>
+                        </Button>}
                         {allowIgnore && <Popconfirm
                           title={`忽略“${item.fieldName}”？`}
-                          description="只移除字段定义，不会删除 Excel 中的原内容。"
+                          description={wordMode ? '只忽略这条识别建议，不会删除 Word 正文内容。' : '只移除字段定义，不会删除 Excel 中的原内容。'}
                           okText="忽略"
                           cancelText="取消"
                           onConfirm={() => onIgnore(item)}
@@ -602,6 +608,8 @@ function RecognitionRegionTree({
   onIgnore,
   onRestore,
   allowIgnore,
+  allowModify,
+  wordMode,
 }: {
   regions: RecognitionRegionNode[];
   review: RecognitionReview;
@@ -616,6 +624,8 @@ function RecognitionRegionTree({
   onIgnore: (item: RecognitionReviewItem) => void;
   onRestore: (item: RecognitionReviewItem) => void;
   allowIgnore: boolean;
+  allowModify: boolean;
+  wordMode: boolean;
 }) {
   if (!regions.length) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有符合条件的区域" />;
   return (
@@ -721,6 +731,8 @@ function RecognitionRegionTree({
                     onIgnore={onIgnore}
                     onRestore={onRestore}
                     allowIgnore={allowIgnore}
+                    allowModify={allowModify}
+                    wordMode={wordMode}
                   />
                 ))}
               </div>
@@ -743,6 +755,8 @@ function RegionFieldCard({
   onIgnore,
   onRestore,
   allowIgnore,
+  allowModify,
+  wordMode,
 }: {
   field: RecognitionRegionNode['fields'][number];
   selected: boolean;
@@ -754,6 +768,8 @@ function RegionFieldCard({
   onIgnore: (item: RecognitionReviewItem) => void;
   onRestore: (item: RecognitionReviewItem) => void;
   allowIgnore: boolean;
+  allowModify: boolean;
+  wordMode: boolean;
 }) {
   const attributes = field.attributes ?? field.payload;
   const reviewRequired = field.status !== 'CONFIRMED'
@@ -776,14 +792,14 @@ function RegionFieldCard({
             <div><dt>单位</dt><dd>{attributeText(attributes.unit, field.payload.unit ?? '') || '未设置'}</dd></div>
             <div><dt>单元格位置</dt><dd>{locatorLabelRange(mergeLocators(field.payload.locator, attributes.locator as Record<string, unknown> | undefined, { labelAddress: field.labelAddress })) || '—'} / {locatorValueRange(mergeLocators(field.payload.locator, attributes.locator as Record<string, unknown> | undefined, { address: field.address })) || '—'}</dd></div>
           </dl>
-          {reviewRequired && <div className="field-property-alert full"><strong>字段待确认</strong><span>请确认字段名称和填写位置，确认后才会进入正式模板。</span></div>}
+          {reviewRequired && <div className="field-property-alert full"><strong>字段待确认</strong><span>{wordMode ? '请先在 Word 正文中选择位置，再插入并确认。' : '请确认字段名称和填写位置，确认后才会进入正式模板。'}</span></div>}
           <div className="recognition-review-actions">
             {field.status === 'IGNORED' ? (
               <Button size="small" icon={<ReloadOutlined />} disabled={!editable || busy} onClick={() => onRestore(field)}>恢复</Button>
             ) : (
               <>
-                {field.status !== 'CONFIRMED' && <Button size="small" type="primary" icon={<CheckOutlined />} disabled={!editable || busy || (Boolean(field.payload.standardRequired) && Boolean(field.payload.requiresStandardConfirmation))} onClick={() => onConfirm(field)}>确认</Button>}
-                <Button size="small" icon={<EditOutlined />} disabled={!editable || busy} onClick={() => onModify(field)}>修改</Button>
+                {field.status !== 'CONFIRMED' && <Button size="small" type="primary" icon={<CheckOutlined />} disabled={!editable || busy || (Boolean(field.payload.standardRequired) && Boolean(field.payload.requiresStandardConfirmation))} onClick={() => onConfirm(field)}>{wordMode ? '插入正文并确认' : '确认'}</Button>}
+                {allowModify && <Button size="small" icon={<EditOutlined />} disabled={!editable || busy} onClick={() => onModify(field)}>修改</Button>}
                 {allowIgnore && <Popconfirm title={`忽略“${field.fieldName || '该字段'}”？`} okText="忽略" cancelText="取消" onConfirm={() => onIgnore(field)}>
                   <Button size="small" danger type="text" icon={<EyeInvisibleOutlined />} disabled={!editable || busy}>忽略</Button>
                 </Popconfirm>}

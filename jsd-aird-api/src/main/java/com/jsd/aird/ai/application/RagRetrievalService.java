@@ -172,6 +172,8 @@ public class RagRetrievalService {
                         organizationId, plan.plan().rewrittenQuery(), aiOnly, 30, knowledgeFilters,
                         plan.plan().subQueries(), searchTerms(plan.plan()), requiredFacts(plan.plan()), question));
             } catch (RuntimeException exception) {
+                log.warn("Knowledge retrieval failed; continuing without knowledge evidence errorType={}",
+                        exception.getClass().getSimpleName());
                 knowledgeChannelStatus = "FAILED";
                 knowledgeResult = new KnowledgeSearchFacade.SearchResult(List.of(),
                         new KnowledgeSearchFacade.RetrievalTrace("FAILED", 0, 0, 0,

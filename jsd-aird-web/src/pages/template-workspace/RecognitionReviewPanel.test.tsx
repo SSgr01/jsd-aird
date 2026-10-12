@@ -96,6 +96,27 @@ describe('RecognitionReviewPanel', () => {
     vi.clearAllMocks();
   });
 
+  it('Word 候选从识别确认直接插入正文，不显示字段修改入口', () => {
+    const candidate = {
+      ...review.items[0]!,
+      payload: { ...review.items[0]!.payload, candidateOnly: true, reviewRequired: true },
+    };
+    render(
+      <RecognitionReviewPanel
+        review={{ ...review, items: [candidate], regions: [] }}
+        editable
+        wordMode
+        allowModify={false}
+        selectedRecognitionItemId={candidate.id}
+        {...handlers}
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: '修改' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '插入正文并确认' }));
+    expect(handlers.onConfirm).toHaveBeenCalledWith(candidate, undefined);
+  });
+
   it('识别失败时说明工作簿和原有字段仍被保留', () => {
     render(
       <RecognitionReviewPanel

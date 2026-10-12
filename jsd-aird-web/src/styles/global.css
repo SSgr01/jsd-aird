@@ -4362,6 +4362,9 @@ a:active,
   grid-template-columns: 280px minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
 }
+.template-business-workspace .word-workspace-grid.has-recognition-review {
+  grid-template-columns: 280px minmax(0, 1fr) 370px;
+}
 .template-business-workspace .word-workspace-grid > .document-outline-panel {
   grid-column: 1;
   grid-row: 1;
@@ -4378,6 +4381,26 @@ a:active,
   grid-row: 1;
   min-width: 0;
   overflow: hidden;
+}
+.template-business-workspace .word-workspace-grid > .word-recognition-sidebar {
+  grid-column: 3;
+  grid-row: 1;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--workspace-panel);
+  border-left: 1px solid var(--workspace-border);
+}
+.template-business-workspace .word-recognition-heading {
+  padding: 12px 16px 4px;
+  font-weight: 600;
+}
+.template-business-workspace .word-recognition-hint {
+  margin: 0;
+  padding: 0 16px 12px;
+  color: var(--app-text-secondary);
 }
 .template-business-workspace .workspace-canvas {
   background: #eef1f4;
@@ -4568,6 +4591,10 @@ a:active,
     grid-template-columns: 1fr;
     grid-template-rows: minmax(220px, 30%) minmax(500px, 1fr);
   }
+  .template-business-workspace .word-workspace-grid.has-recognition-review {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(220px, 30%) minmax(500px, 1fr) minmax(260px, auto);
+  }
   .template-business-workspace .word-workspace-grid > .document-outline-panel,
   .template-business-workspace .word-workspace-grid > .workspace-canvas {
     grid-column: 1;
@@ -4580,6 +4607,10 @@ a:active,
   }
   .template-business-workspace .word-workspace-grid > .workspace-canvas {
     grid-row: 2;
+  }
+  .template-business-workspace .word-workspace-grid > .word-recognition-sidebar {
+    grid-column: 1;
+    grid-row: 3;
   }
   .experiment-workspace-shell .workspace-main-stage {
     display: flex;

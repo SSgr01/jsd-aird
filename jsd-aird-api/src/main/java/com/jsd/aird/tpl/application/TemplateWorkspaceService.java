@@ -18,6 +18,7 @@ import java.security.MessageDigest;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
@@ -691,9 +692,15 @@ public class TemplateWorkspaceService {
         boolean reconciliationRequired;
         if (current.format() == TemplateFormat.DOCX) {
             normalizedSchema = normalizeWordSchema(command.schema());
-            normalizedMapping = objectMapper.createArrayNode();
+            if (normalizedSchema instanceof ObjectNode schemaObject) {
+                TemplateLocatorNormalizer.normalizeFieldModel(objectMapper, schemaObject);
+            }
+            normalizedMapping = normalizeMapping(command.mapping(), normalizedSchema);
             validateSchema(normalizedSchema);
-            reconciliationRequired = false;
+            reconciliationRequired = validateMappings(current.format(), normalizedMapping);
+            recognitionReviewService.validateAcceptedMappings(
+                    actor.organizationId(), versionId, normalizedMapping
+            );
         } else {
             normalizedSchema = normalizeFieldGroups(command.schema());
             normalizedSchema = standardFieldService.normalizeDraftFields(normalizedSchema);
@@ -779,7 +786,8 @@ public class TemplateWorkspaceService {
                   var stagedSnapshot = objectStorage.get(snapshotFile.objectKey())) {
                  var snapshot = objectMapper.readTree(stagedSnapshot.stream().readAllBytes());
                  requireCurrentWordSnapshot(snapshot);
-                 var patched = wordOoxmlPatchService.applySnapshot(source.stream().readAllBytes(), snapshot);
+                 var patched = wordOoxmlPatchService.applySnapshot(source.stream().readAllBytes(),
+                         wordSnapshotWithFormalControls(snapshot, normalizedMapping));
                  var parsed = wordDocumentParser.parse(new ByteArrayInputStream(patched));
                 documentStructure = parsed.structureSummary().path("documentIR").deepCopy();
                 var staged = stageWordDocument(patched, currentFile.originalName(), actor);
@@ -1137,7 +1145,7 @@ public class TemplateWorkspaceService {
                 workspace.schema(), workspace.mapping(), workspace.format());
         if (!requiredFieldsWithoutPosition.isEmpty()) {
             var message = workspace.format() == TemplateFormat.DOCX
-                    ? "还有必填 Word 字段未插入正文位置"
+                    ? "还有 Word 字段未插入正文位置"
                     : "还有必填字段没有有效填写位置";
             throw new ApiException(ApiErrorCode.TEMPLATE_REQUIRED_FIELD_UNBOUND, message,
                     requiredFieldsWithoutPosition);
@@ -1147,10 +1155,9 @@ public class TemplateWorkspaceService {
             throw new ApiException(ApiErrorCode.TEMPLATE_FIELD_LABEL_UNRESOLVED,
                     "还有字段没有确认标签位置，请在字段属性中手动选择", unresolvedLabels);
         }
-        if (workspace.format() == TemplateFormat.XLSX
-                && recognitionReviewService.hasIncompleteRecognition(actor.organizationId(), versionId)) {
+        if (recognitionReviewService.hasIncompleteRecognition(actor.organizationId(), versionId)) {
             throw new ApiException(ApiErrorCode.BINDING_INVALID,
-                    "识别结果尚未完成结构确认或人工复核，暂不能发布");
+                    "识别结果仍有待确认字段，暂不能发布");
         }
         if (workspace.format() == TemplateFormat.XLSX
                 && recognitionReviewService.hasOpenConflicts(actor.organizationId(), versionId)) {
@@ -1219,7 +1226,9 @@ public class TemplateWorkspaceService {
             return missing;
         }
         for (JsonNode field : fields) {
-            if (!field.path("required").asBoolean(false)) continue;
+            if ("REGION".equals(field.path("fieldType").asText())
+                    || "REGION".equals(field.path("displayRole").asText())) continue;
+            if (format != TemplateFormat.DOCX && !field.path("required").asBoolean(false)) continue;
             var bindingId = field.path("bindingId").asText("");
             var binding = bindings.get(bindingId);
             if (binding == null) {
@@ -1388,8 +1397,25 @@ public class TemplateWorkspaceService {
         normalized.put("type", "object");
         normalized.put("documentType", "WORD");
         normalized.put("schemaVersion", 1);
-        normalized.remove(TemplateRecognitionCompiler.FIELD_MODEL_KEY);
         return normalized;
+    }
+
+    private JsonNode wordSnapshotWithFormalControls(JsonNode snapshot, JsonNode mapping) {
+        var filtered = snapshot.deepCopy();
+        if (!(filtered.path("body") instanceof ObjectNode body)
+                || !body.path("customRanges").isArray()) return filtered;
+        var markers = new HashSet<String>();
+        for (var binding : mapping) {
+            var markerId = binding.path("markerId").asText("");
+            if (!markerId.isBlank()) markers.add(markerId);
+        }
+        var ranges = JsonNodeFactory.instance.arrayNode();
+        for (var range : body.path("customRanges")) {
+            if (!"JSD_MAPPING".equals(range.path("properties").path("source").asText())
+                    || markers.contains(range.path("rangeId").asText(""))) ranges.add(range.deepCopy());
+        }
+        body.set("customRanges", ranges);
+        return filtered;
     }
 
     private String mappingDescription(JsonNode binding) {
@@ -1647,6 +1673,26 @@ public class TemplateWorkspaceService {
         }
         var versionId = UUID.randomUUID();
         var data = objectMapper.createObjectNode();
+        var revisionSchema = source.schema().deepCopy();
+        var placedWordBindings = new HashSet<String>();
+        if (source.format() == TemplateFormat.DOCX) {
+            for (var binding : source.mapping()) {
+                if (!binding.path("markerId").asText("").isBlank()) {
+                    placedWordBindings.add(binding.path("bindingId").asText(""));
+                }
+            }
+        }
+        for (var field : revisionSchema.path(TemplateRecognitionCompiler.FIELD_MODEL_KEY).path("fields")) {
+            if (field instanceof ObjectNode object) {
+                object.remove(List.of("recognitionItemId", "candidate", "candidateLocator",
+                        "candidateLocatorType"));
+                if (placedWordBindings.contains(object.path("bindingId").asText(""))) {
+                    object.put("reviewStatus", "CONFIRMED");
+                    object.put("labelStatus", "NOT_APPLICABLE");
+                    object.put("confidence", 1.0);
+                }
+            }
+        }
         var layoutSummary = objectMapper.createObjectNode()
                 .put("reconciliationRequired", source.reconciliationRequired())
                 .put("derivedFromVersionId", sourceVersionId.toString());
@@ -1662,14 +1708,14 @@ public class TemplateWorkspaceService {
         var snapshotHash = StringUtils.hasText(source.snapshotHash())
                 ? source.snapshotHash() : canonicalizer.hash(source.inlineSnapshot());
         var workspaceHash = canonicalizer.workspaceHash(
-                versionId.toString(), source.schema(), source.mapping(), data, snapshotHash,
+                versionId.toString(), revisionSchema, source.mapping(), data, snapshotHash,
                 source.editorAppVersion(), source.pluginManifestHash()
         );
         repository.insertRevision(new TemplateRepository.NewRevision(
-                versionId, source.templateId(), sourceVersionId, source.schema(), layoutSummary,
+                versionId, source.templateId(), sourceVersionId, revisionSchema, layoutSummary,
                 source.snapshotFileId(), source.snapshotHash(), source.snapshotKind(),
                 source.editorAppVersion(), source.pluginManifestHash(), source.snapshotFormatVersion(),
-                source.schemaHash(), source.mappingHash(), canonicalizer.hash(data), workspaceHash,
+                canonicalizer.hash(revisionSchema), source.mappingHash(), canonicalizer.hash(data), workspaceHash,
                 actor.userId()
         ));
         // Revisions and rollbacks are derived from a validated immutable

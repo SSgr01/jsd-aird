@@ -54,6 +54,11 @@ export function createCustomFieldWorkspace(
   const valueRange = normalizeRange(input.valueRange);
   const labelRange = normalizeRange(input.labelRange);
   const mappingKind = input.kind;
+  const parentSheet = parentBinding?.locator ?? {};
+  const sheet = input.sheet ?? {
+    sheetId: String(parentSheet.sheetId || ''),
+    sheetName: String(parentSheet.sheetName || ''),
+  };
   const field: BusinessField = {
     id,
     fieldId: id,
@@ -84,7 +89,7 @@ export function createCustomFieldWorkspace(
     standardMatchStatus: 'CONFIRMED',
     requiresStandardConfirmation: false,
     locator: {
-      ...(input.sheet ?? {}),
+      ...sheet,
       labelAddress: firstCell(labelRange),
       labelRange,
       address: valueRange,
@@ -135,6 +140,77 @@ export function createCustomFieldWorkspace(
     schema: writeFieldModel(added.schema, nextModel),
     mapping: [...mapping, binding],
   };
+}
+
+/** Extend a row table by one adjacent column when a new child is positioned there. */
+export function expandAdjacentRepeatRegion(
+  mapping: TemplateBinding[],
+  model: FieldModel,
+  child: TemplateBinding,
+): { mapping: TemplateBinding[]; model: FieldModel } {
+  if (child.mappingKind !== 'REPEAT_FIELD' || !child.parentBindingId) return { mapping, model };
+  const parent = mapping.find((item) => item.bindingId === child.parentBindingId);
+  if (!parent || parent.mappingKind !== 'REPEAT_REGION' || parent.repeatAxis !== 'ROW') {
+    return { mapping, model };
+  }
+  const parentSheet = String(parent.locator.sheetId || parent.locator.sheetName || '');
+  const childSheet = String(child.locator.sheetId || child.locator.sheetName || '');
+  if (!parentSheet || parentSheet !== childSheet) return { mapping, model };
+  const dataRange = parseRange(String(parent.locator.dataRange || parent.locator.range || ''));
+  const childRange = parseRange(String(child.locator.logicalInputRange || child.locator.valueRange || child.locator.address || ''));
+  if (!dataRange || !childRange
+      || (childRange.left !== dataRange.right + 1 && childRange.left !== dataRange.right)
+      || childRange.right !== childRange.left
+      || childRange.top < dataRange.top || childRange.bottom > dataRange.bottom) {
+    return { mapping, model };
+  }
+  const nextLocator = { ...parent.locator };
+  for (const key of ['range', 'recordRange', 'dataRange', 'valueRange', 'logicalInputRange', 'address', 'headerRange'] as const) {
+    const range = parseRange(String(nextLocator[key] || ''));
+    if (range && range.right < childRange.right) nextLocator[key] = formatRange({ ...range, right: childRange.right });
+  }
+  const nestedValue = nextLocator.value;
+  if (nestedValue && typeof nestedValue === 'object' && !Array.isArray(nestedValue)) {
+    const value = { ...nestedValue } as Record<string, unknown>;
+    const valueRange = parseRange(String(value.range || ''));
+    if (valueRange && valueRange.right < childRange.right) {
+      value.range = formatRange({ ...valueRange, right: childRange.right });
+      nextLocator.value = value;
+    }
+  }
+  const nextWidth = Math.max(Number(parent.recordWidth || 0), childRange.right - dataRange.left + 1);
+  return {
+    mapping: mapping.map((item) => item.bindingId === parent.bindingId
+      ? { ...item, locator: nextLocator, recordWidth: nextWidth } : item),
+    model: {
+      ...model,
+      fields: model.fields.map((field) => field.bindingId === parent.bindingId
+        ? { ...field, locator: nextLocator, valueRange: String(nextLocator.valueRange || field.valueRange || ''), recordWidth: nextWidth } : field),
+    },
+  };
+}
+
+function parseRange(value: string) {
+  const match = /^([A-Z]+)([1-9][0-9]*)(?::([A-Z]+)([1-9][0-9]*))?$/i.exec(value);
+  if (!match) return null;
+  const column = (letters: string) => [...letters.toUpperCase()].reduce((total, char) => total * 26 + char.charCodeAt(0) - 64, 0);
+  return {
+    left: column(match[1] || ''),
+    top: Number(match[2] || 0),
+    right: column(match[3] || match[1] || ''),
+    bottom: Number(match[4] || match[2] || 0),
+  };
+}
+
+function formatRange(range: { left: number; top: number; right: number; bottom: number }) {
+  const column = (number: number) => {
+    let result = '';
+    for (let value = number; value > 0; value = Math.floor((value - 1) / 26)) {
+      result = String.fromCharCode(65 + (value - 1) % 26) + result;
+    }
+    return result;
+  };
+  return `${column(range.left)}${range.top}:${column(range.right)}${range.bottom}`;
 }
 
 function appendParentColumn(model: FieldModel, parentId: string, field: BusinessField): FieldModel {

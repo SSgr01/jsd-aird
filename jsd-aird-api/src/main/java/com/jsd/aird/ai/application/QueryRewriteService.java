@@ -164,11 +164,10 @@ public class QueryRewriteService {
             return new Result(fallback, "MODEL_UNAVAILABLE", model, false);
         }
         try {
-            var historyText = history == null ? "" : history.stream()
-                    .filter(item -> "USER".equals(item.role())).limit(6)
-                    .map(item -> item.role() + ": " + item.content()).reduce((a, b) -> a + "\n" + b).orElse("");
+            var historyText = AssistantConversationContext.format(history);
             var userPrompt = "联网检索=" + (webSearchEnabled ? "开启" : "关闭")
-                    + "\n近期对话=" + historyText + "\n用户问题=" + question;
+                    + "\n近期对话（助手历史回答和引用仅用于解析指代；请改写成可重新检索的问题）="
+                    + historyText + "\n用户问题=" + question;
             var modelCallStarted = System.nanoTime();
             var raw = call(builder, PLANNER_SYSTEM_PROMPT, userPrompt);
             var parsed = parser.readWithDiagnostics(raw, QueryPlan.class, MAX_DIAGNOSTIC_VALUE_CHARS);

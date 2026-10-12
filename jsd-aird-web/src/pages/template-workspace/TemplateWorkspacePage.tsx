@@ -57,7 +57,7 @@ import {
   synchronizeStructuredData,
   type BindingValuePair,
 } from '@/features/template-workspace/structured-data';
-import { createCustomFieldWorkspace } from '@/features/template-workspace/custom-field-operations';
+import { createCustomFieldWorkspace, expandAdjacentRepeatRegion } from '@/features/template-workspace/custom-field-operations';
 import {
   groupCode,
   normalizeFieldModel,
@@ -76,6 +76,7 @@ import {
 import {
   publishReadinessBlocker,
   fieldsMissingLabelPosition,
+  hasUnplacedWordFields,
   type PublishReviewSyncState,
 } from '@/features/template-workspace/publish-readiness';
 import { migrateWorkspaceStructure } from '@/features/template-workspace/structure-migration';
@@ -125,6 +126,7 @@ import {
   type FieldManagerTab,
   TemplateFieldManager,
 } from './TemplateFieldManager';
+import { RecognitionReviewPanel } from './RecognitionReviewPanel';
 import type { ProjectionRangeTarget } from './ExperimentSemanticsPanel';
 import { normalizeAddress, validateAddress } from './coordinates';
 
@@ -170,6 +172,7 @@ export function TemplateWorkspacePage() {
   const [selectedFieldId, setSelectedFieldId] = useState<string>();
   const [selectedRecognitionItemId, setSelectedRecognitionItemId] = useState<string>();
   const [saveState, setSaveState] = useState<SaveState>('SAVED');
+  const [editRevision, setEditRevision] = useState(0);
   const [reviewSyncState, setReviewSyncState] = useState<ReviewSyncState>('FRESH');
   const [publishBusy, setPublishBusy] = useState(false);
   const [loadError, setLoadError] = useState<string>();
@@ -198,8 +201,16 @@ export function TemplateWorkspacePage() {
   const [recognitionBusy, setRecognitionBusy] = useState(false);
   const [structureOperations, setStructureOperations] = useState<WorkbookStructureOperation[]>([]);
   const savedSnapshotSignatureRef = useRef<string>();
+  const savingSnapshotSignatureRef = useRef<string>();
   const suppressEditorDirtyRef = useRef(false);
   const pendingEditorOperationsRef = useRef<Set<Promise<void>>>(new Set());
+  const editGenerationRef = useRef(0);
+  const savePromiseRef = useRef<Promise<boolean>>();
+  const saveRef = useRef<(recognitionOverride?: {
+    recognitionItemId: string;
+    action: RecognitionAction;
+    selectedAlternativeId?: string;
+  }) => Promise<boolean>>(async () => false);
   const isDesktop = useDesktopEditing();
 
   useEffect(() => {
@@ -256,6 +267,37 @@ export function TemplateWorkspacePage() {
           ...merged,
           model: readFieldModel(merged.schema, merged.mapping, loadedSnapshot),
         };
+        // Existing revision drafts may still carry source-version recognition ids
+        // even though the revision has no import run of its own.
+        if (model.status === 'DRAFT' && !model.recognitionRunId) {
+          canonicalMerged.model = {
+            ...canonicalMerged.model,
+            fields: canonicalMerged.model.fields.map((field) => {
+              const detached = { ...field };
+              delete detached.recognitionItemId;
+              delete detached.candidate;
+              delete detached.candidateLocator;
+              delete detached.candidateLocatorType;
+              if (model.format === 'DOCX' && canonicalMerged.mapping.some((binding) =>
+                binding.bindingId === field.bindingId && binding.markerId)) {
+                detached.reviewStatus = 'CONFIRMED';
+                detached.labelStatus = 'NOT_APPLICABLE';
+                detached.confidence = 1;
+              }
+              return detached;
+            }),
+          };
+          canonicalMerged.schema = writeFieldModel(canonicalMerged.schema, canonicalMerged.model);
+        }
+        if (model.status === 'DRAFT' && model.format === 'XLSX') {
+          let aligned = { mapping: canonicalMerged.mapping, model: canonicalMerged.model };
+          for (const child of canonicalMerged.mapping.filter((item) => item.mappingKind === 'REPEAT_FIELD')) {
+            aligned = expandAdjacentRepeatRegion(aligned.mapping, aligned.model, child);
+          }
+          canonicalMerged.mapping = aligned.mapping;
+          canonicalMerged.model = aligned.model;
+          canonicalMerged.schema = writeFieldModel(canonicalMerged.schema, aligned.model);
+        }
         setWorkspace(model);
         setSchema(canonicalMerged.schema);
         setMapping(canonicalMerged.mapping);
@@ -279,6 +321,10 @@ export function TemplateWorkspacePage() {
           : requestedView === 'preview' ? 'preview'
             : model.status === 'DRAFT' ? 'edit' : 'preview');
         setSaveState('SAVED');
+        setRecognitionActions({});
+        setRecognitionAlternativeSelections({});
+        editGenerationRef.current = 0;
+        setEditRevision(0);
         setStructureOperations([]);
       } catch (error) {
         if (active) setLoadError(error instanceof Error ? error.message : '工作台加载失败');
@@ -304,6 +350,8 @@ export function TemplateWorkspacePage() {
   }, []);
 
   const markDirty = useCallback(() => {
+    editGenerationRef.current += 1;
+    setEditRevision(editGenerationRef.current);
     setSaveState((current) => (current === 'SAVING' ? current : 'DIRTY'));
   }, []);
 
@@ -342,8 +390,13 @@ export function TemplateWorkspacePage() {
   const handleEditorDirty = useCallback(() => {
     // Saving updates the parent model and refreshes the review panel. Those
     // state changes must not be mistaken for a new Univer edit.
-    if (suppressEditorDirtyRef.current || workspace?.status !== 'DRAFT') return;
+    if (workspace?.status !== 'DRAFT') return;
     const currentSnapshot = editorRef.current?.getSnapshot();
+    if (suppressEditorDirtyRef.current) {
+      if (currentSnapshot && savingSnapshotSignatureRef.current
+          && snapshotSignature(currentSnapshot) !== savingSnapshotSignatureRef.current) markDirty();
+      return;
+    }
     if (
       currentSnapshot &&
       savedSnapshotSignatureRef.current === snapshotSignature(currentSnapshot)
@@ -452,7 +505,7 @@ export function TemplateWorkspacePage() {
     }
   }, []);
 
-  const save = async (recognitionOverride?: {
+  const performSave = async (recognitionOverride?: {
     recognitionItemId: string;
     action: RecognitionAction;
     selectedAlternativeId?: string;
@@ -467,11 +520,15 @@ export function TemplateWorkspacePage() {
       return false;
     }
     suppressEditorDirtyRef.current = true;
+    savingSnapshotSignatureRef.current = snapshotSignature(editorRef.current.getSnapshot());
     setSaveState('SAVING');
+    const saveGeneration = editGenerationRef.current;
     try {
       await waitForPendingEditorOperations();
       const currentSnapshot = editorRef.current.getSnapshot();
-      const formalMapping = prepareFormalMappings(mapping, fieldModel);
+      savingSnapshotSignatureRef.current = snapshotSignature(currentSnapshot);
+      const formalMapping = prepareFormalMappings(mapping, fieldModel)
+        .filter((binding) => workspace.format !== 'DOCX' || Boolean(binding.markerId));
       const synchronized = workspace.format === 'DOCX'
         ? { data, bindingValues: [] as BindingValuePair[] }
         : synchronizeStructuredData(
@@ -557,7 +614,7 @@ export function TemplateWorkspacePage() {
         mapping: persistedMapping,
         model: fieldModel,
       });
-      setSaveState('SAVED');
+      setSaveState(editGenerationRef.current === saveGeneration ? 'SAVED' : 'DIRTY');
       if (reviewRefreshed) {
         void message.success(
           recognitionOverride
@@ -595,8 +652,34 @@ export function TemplateWorkspacePage() {
       return false;
     } finally {
       suppressEditorDirtyRef.current = false;
+      savingSnapshotSignatureRef.current = undefined;
     }
   };
+
+  const save = (recognitionOverride?: {
+    recognitionItemId: string;
+    action: RecognitionAction;
+    selectedAlternativeId?: string;
+  }): Promise<boolean> => {
+    if (savePromiseRef.current) {
+      return recognitionOverride
+        ? savePromiseRef.current.then(() => saveRef.current(recognitionOverride))
+        : savePromiseRef.current;
+    }
+    const pending = performSave(recognitionOverride).finally(() => {
+      if (savePromiseRef.current === pending) savePromiseRef.current = undefined;
+    });
+    savePromiseRef.current = pending;
+    return pending;
+  };
+  saveRef.current = save;
+
+  useEffect(() => {
+    if (workspace?.format !== 'DOCX' || workspace.status !== 'DRAFT'
+        || view !== 'edit' || saveState !== 'DIRTY') return;
+    const timer = window.setTimeout(() => { void saveRef.current(); }, 2000);
+    return () => window.clearTimeout(timer);
+  }, [versionId, workspace?.format, workspace?.status, view, saveState, editRevision]);
 
   function saveErrorMessage(error: unknown) {
     const raw = error instanceof Error ? error.message : '';
@@ -983,6 +1066,15 @@ export function TemplateWorkspacePage() {
   };
 
   const confirmRecognitionItem = async (item: RecognitionReviewItem, selectedAlternativeId?: string) => {
+    if (workspace?.format === 'DOCX' && !isRecognitionRegionRoot(item)) {
+      const field = findFieldForRecognitionItem(item);
+      if (!field) {
+        void message.warning('识别字段已变化，请刷新识别结果后重试');
+        return;
+      }
+      await placeWordField(field, item);
+      return;
+    }
     if (item.payload.structureAlternatives?.length
       || requiresServerStructureConfirmation(item, recognitionReview, true)) {
       recordRecognitionAction(item.id, 'CONFIRM', 'CONFIRMED', selectedAlternativeId);
@@ -1386,9 +1478,10 @@ export function TemplateWorkspacePage() {
       reviewStatus: nextBinding.bindingStatus === 'INVALID' ? 'ISSUE' : 'CONFIRMED',
     };
     const updated = updateBusinessField(baseSchema, baseModel, field.id, modelUpdate);
-    setSchema(updated.schema);
-    setMapping(nextMapping);
-    setFieldModel(updated.model);
+    const expanded = expandAdjacentRepeatRegion(nextMapping, updated.model, nextBinding);
+    setSchema(writeFieldModel(updated.schema, expanded.model));
+    setMapping(expanded.mapping);
+    setFieldModel(expanded.model);
     // Coordinate edits must be visible immediately.  Focusing the freshly
     // built binding also clears the previous overlay, so all editor paths
     // (field properties, recognition confirmation and the cell picker) use
@@ -1669,6 +1762,10 @@ export function TemplateWorkspacePage() {
         name: '新明细字段',
         parentField: parent,
         parentBinding,
+        sheet: {
+          sheetId: String(parentBinding.locator.sheetId || activeSelection?.sheetId || ''),
+          sheetName: String(parentBinding.locator.sheetName || activeSelection?.sheetName || ''),
+        },
       });
       setSchema(created.schema);
       setFieldModel(created.model);
@@ -1703,55 +1800,69 @@ export function TemplateWorkspacePage() {
     });
   };
 
-  const placeWordField = async (field: BusinessField) => {
-    const sourceBinding = mapping.find((binding) => bindingMatchesIdentity(binding, {
-      bindingId: field.bindingId,
-      relationId: field.relationId,
-      fieldId: field.fieldId || field.id,
-    })) ?? candidateBinding(field);
-    if (!sourceBinding || !field.dataPath) {
-      void message.warning('该识别结果缺少可用的正文位置，请先刷新识别结果');
+  const placeWordField = async (field: BusinessField, explicitReviewItem?: RecognitionReviewItem) => {
+    const reviewItem = explicitReviewItem ?? (field.candidate
+      ? recognitionReview?.items.find((item) => item.id === field.recognitionItemId)
+      : undefined);
+    if (field.candidate && !reviewItem) {
+      void message.warning('识别结果已变化，请刷新后重试');
       return;
     }
+    const accepted = reviewItem
+      ? acceptRecognitionReviewItem(schema, mapping, fieldModel, reviewItem)
+      : { schema, mapping, model: fieldModel };
+    const targetField = accepted.model.fields.find((item) => fieldMatchesIdentity(item, {
+      bindingId: field.bindingId || reviewItem?.payload.bindingId,
+      relationId: field.relationId || reviewItem?.payload.relationId,
+      fieldId: field.fieldId || reviewItem?.payload.fieldId || field.id,
+      recognitionItemId: reviewItem?.id,
+    })) ?? field;
+    const dataPath = targetField.dataPath || `/customFields/field_${field.id.replaceAll('-', '')}`;
+    const sourceBinding = accepted.mapping.find((binding) => bindingMatchesIdentity(binding, {
+      bindingId: targetField.bindingId,
+      relationId: targetField.relationId,
+      fieldId: targetField.fieldId || targetField.id,
+    })) ?? candidateBinding(targetField);
     try {
       const inserted = await editorRef.current?.insertWordControl?.(
-        field.kind === 'SCALAR' ? 'FIELD' : 'REPEAT_REGION',
+        targetField.kind === 'SCALAR' ? 'FIELD' : 'REPEAT_REGION',
         `FIELD.${field.id.replaceAll('-', '').slice(0, 12).toUpperCase()}`,
-        field.dataPath,
+        dataPath,
       );
       if (!inserted) throw new Error('请先在 Word 正文中选择插入位置');
-      const bindingId = field.bindingId ?? sourceBinding.bindingId;
+      const bindingId = targetField.bindingId || sourceBinding?.bindingId || generateUUID();
       const formalBinding: TemplateBinding = {
         ...sourceBinding,
         ...inserted,
         bindingId,
-        fieldId: field.fieldId || field.id,
-        dataPath: field.dataPath,
+        fieldId: targetField.fieldId || targetField.id,
+        fieldCode: targetField.fieldCode,
+        dataPath,
+        role: 'FIELD',
         locatorType: 'DOCX_CONTENT_CONTROL',
         syncDirection: 'TWO_WAY',
         primaryBinding: true,
         bindingStatus: 'VALID',
       };
-      setMapping((current) => {
-        const matched = current.some((binding) => bindingMatchesIdentity(binding, {
-          bindingId: field.bindingId,
-          relationId: field.relationId,
-          fieldId: field.fieldId || field.id,
-        }));
-        return matched
-          ? current.map((binding) => bindingMatchesIdentity(binding, {
-              bindingId: field.bindingId,
-              relationId: field.relationId,
-              fieldId: field.fieldId || field.id,
-            }) ? formalBinding : binding)
-          : [...current, formalBinding];
-      });
-      updateField(field.id, {
+      setMapping([
+        ...accepted.mapping.filter((binding) => !bindingMatchesIdentity(binding, {
+          bindingId: bindingId,
+          relationId: targetField.relationId,
+          fieldId: targetField.fieldId || targetField.id,
+        })),
+        formalBinding,
+      ]);
+      const updated = updateBusinessField(accepted.schema, accepted.model, targetField.id, {
         bindingId,
+        dataPath,
         reviewStatus: 'CONFIRMED',
         locator: inserted.locator,
         publishable: true,
       });
+      setSchema(updated.schema);
+      setFieldModel(updated.model);
+      recordRecognitionAction(reviewItem?.id, 'CONFIRM', 'CONFIRMED');
+      markDirty();
       void message.success('Word 正文位置已更新');
     } catch (error) {
       void message.error(error instanceof Error ? error.message : '正文位置更新失败');
@@ -1807,14 +1918,14 @@ export function TemplateWorkspacePage() {
   if (!workspace || !snapshot) return <Skeleton active paragraph={{ rows: 12 }} />;
 
   const editable = workspace.status === 'DRAFT' && isDesktop && view === 'edit';
-  const recognitionBlocksPublish = workspace.format === 'XLSX'
-    && Boolean(recognitionReview?.recognitionRunId)
+  const recognitionBlocksPublish = Boolean(recognitionReview?.recognitionRunId)
     && (reviewSyncState === 'STALE'
       || recognitionReview?.runStatus === 'FAILED'
       || (recognitionReview?.summary.pending ?? 0) > 0
       || (recognitionReview?.summary.conflict ?? 0) > 0
       || (recognitionReview?.summary.blockingIssueCount ?? 0) > 0
-      || (recognitionReview?.statistics?.structureConflictGroups ?? 0) > 0);
+      || (recognitionReview?.statistics?.structureConflictGroups ?? 0) > 0)
+    || (workspace.format === 'DOCX' && hasUnplacedWordFields(fieldModel, mapping));
   const pickingField = picking
     ? fieldModel.fields.find((field) => field.id === picking.fieldId)
     : undefined;
@@ -2030,7 +2141,9 @@ export function TemplateWorkspacePage() {
               editable={editable}
             />
           )}
-          <div className={`template-workspace-grid prototype-workspace-grid ${workspace.format === 'DOCX' ? 'word-workspace-grid' : ''}`}>
+          <div className={`template-workspace-grid prototype-workspace-grid ${workspace.format === 'DOCX'
+            ? `word-workspace-grid${view === 'edit' && editable && recognitionReview?.recognitionRunId ? ' has-recognition-review' : ''}`
+            : ''}`}>
             {workspace.format === 'DOCX' && (
               <DocumentOutlinePanel
                 structure={workspace.documentStructure}
@@ -2101,7 +2214,7 @@ export function TemplateWorkspacePage() {
               </Suspense>
             </main>
 
-            <TemplateFieldManager
+            {workspace.format === 'XLSX' && <TemplateFieldManager
                 editable={editable}
                 format={workspace.format}
                 fieldModel={fieldModel}
@@ -2140,7 +2253,31 @@ export function TemplateWorkspacePage() {
                 onDeleteField={deleteField}
                 onManageGroups={openGroupManager}
                 onPlaceWordField={(field) => void placeWordField(field)}
-              />
+              />}
+            {workspace.format === 'DOCX' && view === 'edit' && editable && recognitionReview?.recognitionRunId && (
+              <aside className="word-recognition-sidebar" aria-label="Word 识别确认">
+                <div className="word-recognition-heading">识别确认</div>
+                <p className="word-recognition-hint">先在正文中选择插入位置，再确认识别项。</p>
+                <RecognitionReviewPanel
+                  review={recognitionReview}
+                  editable={editable}
+                  selectedRecognitionItemId={selectedRecognitionItemId}
+                  selectedQualityIssueId={selectedQualityIssueId}
+                  busy={recognitionBusy}
+                  allowModify={false}
+                  wordMode
+                  onSelect={focusRecognitionItem}
+                  onConfirm={(item, alternativeId) => void confirmRecognitionItem(item, alternativeId)}
+                  onModify={focusRecognitionItem}
+                  onIgnore={ignoreRecognitionItem}
+                  onRestore={restoreRecognitionItem}
+                  onSelectQualityIssue={focusQualityIssue}
+                  onApplyQualityIssue={(issue) => void applyQualityIssue(issue)}
+                  onIgnoreQualityIssue={ignoreQualityIssue}
+                  onRollbackQualityIssue={(issue) => void rollbackQualityIssue(issue)}
+                />
+              </aside>
+            )}
           </div>
         </div>
       )}

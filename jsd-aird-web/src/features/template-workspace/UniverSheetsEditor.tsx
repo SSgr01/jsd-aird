@@ -932,10 +932,17 @@ function stableValueKey(value: unknown) {
 
 function verifyWrite(read: () => unknown, expected: unknown) {
   return new Promise<void>((resolve, reject) => {
-    window.requestAnimationFrame(() => {
-      if (sameValue(read(), expected)) resolve();
-      else reject(new Error('写入后回读的单元格内容不一致'));
-    });
+    let attempt = 0;
+    const check = () => {
+      if (sameValue(read(), expected)) {
+        resolve();
+      } else if (attempt++ < 8) {
+        window.setTimeout(check, 50);
+      } else {
+        reject(new Error('写入后回读的单元格内容不一致'));
+      }
+    };
+    window.requestAnimationFrame(check);
   });
 }
 

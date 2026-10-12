@@ -51,6 +51,7 @@ export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverD
   const sourceSnapshotRef = useRef(normalizedSnapshot as unknown as Record<string, unknown>);
   const bindingsRef = useRef(bindings);
   const callbacksRef = useRef({ onDirty, onEditorValue });
+  const bodySelectionRef = useRef(false);
   sourceSnapshotRef.current = normalizedSnapshot as unknown as Record<string, unknown>;
   bindingsRef.current = bindings;
   callbacksRef.current = { onDirty, onEditorValue };
@@ -61,6 +62,12 @@ export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverD
     const host = document.createElement('div');
     host.className = 'univer-editor-host';
     container.replaceChildren(host);
+    bodySelectionRef.current = false;
+    const trackBodySelection = (event: Event) => {
+      if (event.isTrusted && event.target instanceof HTMLCanvasElement) bodySelectionRef.current = true;
+    };
+    host.addEventListener('pointerdown', trackBodySelection, true);
+    host.addEventListener('mousedown', trackBodySelection, true);
     let cancelled = false;
     let animationFrame = 0;
     let initialSelectionTimer = 0;
@@ -204,6 +211,8 @@ export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverD
       host.removeEventListener('paste', preventReadOnlyInput, true);
       host.removeEventListener('drop', preventReadOnlyInput, true);
       host.removeEventListener('keydown', preventReadOnlyKey, true);
+      host.removeEventListener('pointerdown', trackBodySelection, true);
+      host.removeEventListener('mousedown', trackBodySelection, true);
       if (apiRef.current === ownedApi) apiRef.current = undefined;
       if (univerRef.current === ownedUniver) univerRef.current = undefined;
       window.setTimeout(() => {
@@ -282,6 +291,7 @@ export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverD
       async insertWordControl(role: BindingRole, fieldCode: string, dataPath: string) {
         const document = apiRef.current?.getActiveDocument();
         if (!document) throw new Error('Word 编辑器尚未就绪');
+        if (!bodySelectionRef.current) throw new Error('请先在 Word 正文中选择插入位置');
         const markerId = generateUUID();
         const placeholder = role === 'REPEAT_REGION' ? '重复内容' : role === 'CONDITIONAL' ? '条件内容' : '请输入值';
         const inserted = await apiRef.current?.executeCommand('doc.command.insert-custom-range', {

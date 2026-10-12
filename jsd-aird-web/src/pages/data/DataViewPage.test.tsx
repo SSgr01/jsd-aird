@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 import { AppProviders } from '@/app/providers/AppProviders';
@@ -9,6 +9,8 @@ vi.mock('@/services/data/data-api', () => ({
   dataApi: {
     listSourceFiles: vi.fn(),
     listCategories: vi.fn(),
+    sourceFacets: vi.fn(),
+    structuredSearch: vi.fn(),
     listTemplates: vi.fn(),
     sourceBlob: vi.fn(),
     assignSourceCategory: vi.fn(),
@@ -24,6 +26,8 @@ vi.mock('@/services/project/project-api', () => ({
 
 const listSourceFilesMock = vi.mocked(dataApi.listSourceFiles);
 const listCategoriesMock = vi.mocked(dataApi.listCategories);
+const sourceFacetsMock = vi.mocked(dataApi.sourceFacets);
+const structuredSearchMock = vi.mocked(dataApi.structuredSearch);
 const listTemplatesMock = vi.mocked(dataApi.listTemplates);
 const testRouterFuture = { v7_startTransition: true, v7_relativeSplatPath: true } as const;
 
@@ -34,13 +38,23 @@ describe('DataViewPage source-file list', () => {
       items: [{
         importJobId: 'job-1', fileObjectId: 'file-1', originalName: '检测报告.xlsx', sourceFormat: 'XLSX',
         templateVersionId: 'version-1', categoryId: 'cat-1', categoryName: '检测标准', status: 'COMPLETED', progress: 100,
-        sourceOwner: 'DATA_CENTER', recognitionMode: 'TEMPLATE_GUIDED', importPurpose: 'DATA_ONLY',
-        formalStatus: 'CONFIRMED', entryType: 'SOURCE_UPLOAD',
+        recognitionMode: 'TEMPLATE_GUIDED',
+        formalStatus: 'CONFIRMED',
         createdAt: '2026-08-10T00:00:00Z', updatedAt: '2026-08-10T00:00:00Z',
       }], page: 1, size: 20, total: 1, totalPages: 1,
     });
-    listCategoriesMock.mockResolvedValue([{ id: 'cat-1', name: '检测标准', sortOrder: 1, sourceCount: 1 }]);
+    listCategoriesMock.mockResolvedValue([{ id: 'cat-1', name: '检测标准', sortOrder: 1, sourceCount: 17 }]);
+    sourceFacetsMock.mockResolvedValue({
+      categories: [{ id: 'cat-1', name: '检测标准', sortOrder: 1, sourceCount: 17 }],
+      totalSourceCount: 23,
+      uncategorizedSourceCount: 6,
+    });
     listTemplatesMock.mockResolvedValue([{ templateId: 'tpl-1', versionId: 'version-1', templateCode: 'test', name: '检测模板', category: '检测', versionNo: 1, format: 'XLSX' }]);
+    structuredSearchMock.mockResolvedValue({
+      mode: 'FIELD_LOOKUP', resolution: 'RESOLVED', sourceRecordCount: 1, searchableValueCount: 1,
+      hits: [{ hitId: 'hit-1', importJobId: 'job-1', originalName: '检测报告.xlsx', content: '42', recordKey: 'R-1', fieldName: '粘度', fieldValue: '42', sheetName: '明细', cellAddress: 'D2' }],
+      truncated: false, candidates: [], candidatesTruncated: false,
+    });
   });
 
   it('shows one row for the source file and its import summary', async () => {
@@ -49,6 +63,9 @@ describe('DataViewPage source-file list', () => {
     expect(await screen.findByText('检测报告.xlsx')).toBeInTheDocument();
     expect(screen.getAllByText('检测标准').length).toBeGreaterThan(0);
     expect(screen.getByText('检测模板 · test · V1')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /全部来源文件/ })).toHaveTextContent('23');
+    expect(screen.getByRole('button', { name: /未分类/ })).toHaveTextContent('6');
+    expect(screen.getByRole('button', { name: /检测标准/ })).toHaveTextContent('17');
     expect(screen.getByText('解析进度', { selector: 'th' })).toBeInTheDocument();
     expect(screen.getByText('100%')).toBeInTheDocument();
     expect(screen.queryByText('工作表', { selector: 'th' })).not.toBeInTheDocument();
@@ -64,4 +81,23 @@ describe('DataViewPage source-file list', () => {
     await screen.findByText('检测报告.xlsx');
     expect(listSourceFilesMock).toHaveBeenCalledWith(expect.objectContaining({ categoryId: undefined }));
   }, 10_000);
+
+  it('filters unclassified sources and runs a structured field query', async () => {
+    const { container } = render(<AppProviders><MemoryRouter future={testRouterFuture}><DataViewPage /></MemoryRouter></AppProviders>);
+    await screen.findByText('检测报告.xlsx');
+    fireEvent.click(screen.getByRole('button', { name: /未分类/ }));
+    await waitFor(() => expect(listSourceFilesMock).toHaveBeenLastCalledWith(expect.objectContaining({
+      categoryId: undefined, uncategorized: true,
+    })));
+
+    fireEvent.click(screen.getByRole('button', { name: '结构化业务字段查询' }));
+    const fieldInput = screen.getByLabelText('业务字段（可选）');
+    fireEvent.change(fieldInput, { target: { value: '粘度' } });
+    const form = fieldInput.closest('form');
+    expect(form).not.toBeNull();
+    fireEvent.submit(form!);
+    await screen.findByText('42');
+    expect(structuredSearchMock).toHaveBeenCalledWith(expect.objectContaining({ fieldTerms: ['粘度'], uncategorized: true }));
+    expect(container).toBeInTheDocument();
+  }, 15_000);
 });

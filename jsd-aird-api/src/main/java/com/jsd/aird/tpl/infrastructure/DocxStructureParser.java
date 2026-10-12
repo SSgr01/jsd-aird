@@ -1006,7 +1006,12 @@ public class DocxStructureParser implements OfficeStructureParser, WordDocumentP
         result.put("nodeId", stableNodeId("content-control", control, sequence));
         result.put("sourcePath", sourcePath(control));
         result.put("contentControlId", id == null ? "" : attribute(id, "val"));
-        result.put("markerId", dataBinding == null ? "" : attribute(dataBinding, "storeItemID"));
+        var boundMarker = dataBinding == null ? "" : attribute(dataBinding, "storeItemID");
+        var tagValue = tag == null ? "" : attribute(tag, "val");
+        if (boundMarker.isBlank() && tagValue.matches("(?i)[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}")) {
+            boundMarker = tagValue;
+        }
+        result.put("markerId", boundMarker);
         result.put("tag", tag == null ? "" : attribute(tag, "val"));
         result.put("alias", alias == null ? "" : attribute(alias, "val"));
         result.put("text", text(control));

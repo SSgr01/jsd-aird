@@ -19,7 +19,7 @@ import org.springframework.stereotype.Repository;
 public class JdbcDataSourceFileSearchRepository implements DataSourceFileSearchFacade {
 
     /** Assistant-only scope token for completed imports that have not been assigned a data category. */
-    static final UUID UNCATEGORIZED_SCOPE_ID = new UUID(0L, 0L);
+    static final UUID UNCATEGORIZED_SCOPE_ID = DataSourceFileSearchFacade.UNCATEGORIZED_SCOPE_ID;
     private static final Logger log = LoggerFactory.getLogger(JdbcDataSourceFileSearchRepository.class);
 
     private final JdbcTemplate jdbc;

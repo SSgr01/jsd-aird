@@ -459,7 +459,7 @@ function buildFieldRegionViews(
       name: region.fieldName || '未命名区域',
       kind: region.kind,
       sheet: displaySheetName(region.sheetName, region.sheetId, root, fields, region.fields ?? []),
-      range: region.range,
+      range: root ? locatorValueRange(root.locator) || region.range : region.range,
       root,
       fields,
     });

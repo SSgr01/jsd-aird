@@ -91,6 +91,7 @@ final class WordDocumentSnapshotExporter {
         private final JsonNode snapshot;
         private final String stream;
         private final JsonNode body;
+        private final List<JsonNode> mappingRanges = new ArrayList<>();
         private final List<Element> originalDrawings = new ArrayList<>();
         private int nextDrawing;
 
@@ -100,6 +101,16 @@ final class WordDocumentSnapshotExporter {
             this.snapshot = snapshot;
             this.body = snapshot.path("body");
             this.stream = body.path("dataStream").asText("\r\n");
+            for (var range : body.path("customRanges")) {
+                if ("JSD_MAPPING".equals(range.path("properties").path("source").asText())
+                        && !range.path("rangeId").asText("").isBlank()
+                        && range.path("startIndex").asInt(-1) >= 0
+                        && range.path("endIndex").asInt(-1) >= range.path("startIndex").asInt()) {
+                    mappingRanges.add(range);
+                }
+            }
+            mappingRanges.sort((left, right) -> Integer.compare(
+                    left.path("startIndex").asInt(), right.path("startIndex").asInt()));
             var drawings = original.getElementsByTagNameNS("*", "drawing");
             for (var index = 0; index < drawings.getLength(); index++) {
                 if (drawings.item(index) instanceof Element drawing) originalDrawings.add(drawing);
@@ -187,15 +198,54 @@ final class WordDocumentSnapshotExporter {
             parent.appendChild(paragraph);
             var cursor = start;
             while (cursor < end) {
+                var mapped = mappingRangeStartingAt(cursor, end);
+                if (mapped != null) {
+                    appendContentControl(paragraph, mapped, cursor,
+                            Math.min(end, mapped.path("endIndex").asInt() + 1));
+                    cursor = Math.min(end, mapped.path("endIndex").asInt() + 1);
+                    continue;
+                }
                 if (stream.charAt(cursor) == IMAGE_BLOCK) {
                     appendOriginalDrawing(paragraph);
                     cursor++;
                     continue;
                 }
                 var runStart = cursor;
-                while (cursor < end && stream.charAt(cursor) != IMAGE_BLOCK) cursor++;
+                while (cursor < end && stream.charAt(cursor) != IMAGE_BLOCK
+                        && mappingRangeStartingAt(cursor, end) == null) cursor++;
                 appendStyledText(paragraph, runStart, cursor);
             }
+        }
+
+        private JsonNode mappingRangeStartingAt(int index, int paragraphEnd) {
+            for (var range : mappingRanges) {
+                if (range.path("startIndex").asInt(-1) == index
+                        && range.path("endIndex").asInt(Integer.MAX_VALUE) < paragraphEnd) return range;
+            }
+            return null;
+        }
+
+        private void appendContentControl(Element paragraph, JsonNode range, int start, int end) {
+            var control = target.createElementNS(W, "w:sdt");
+            var properties = target.createElementNS(W, "w:sdtPr");
+            var markerId = range.path("rangeId").asText();
+            var id = target.createElementNS(W, "w:id");
+            id.setAttributeNS(W, "w:val", Integer.toUnsignedString(markerId.hashCode()));
+            properties.appendChild(id);
+            var tag = target.createElementNS(W, "w:tag");
+            tag.setAttributeNS(W, "w:val", markerId);
+            properties.appendChild(tag);
+            var dataBinding = target.createElementNS(W, "w:dataBinding");
+            dataBinding.setAttributeNS(W, "w:storeItemID", markerId);
+            properties.appendChild(dataBinding);
+            var alias = target.createElementNS(W, "w:alias");
+            alias.setAttributeNS(W, "w:val", range.path("properties").path("fieldCode").asText(""));
+            properties.appendChild(alias);
+            control.appendChild(properties);
+            var content = target.createElementNS(W, "w:sdtContent");
+            appendStyledText(content, start, end);
+            control.appendChild(content);
+            paragraph.appendChild(control);
         }
 
         private void appendStyledText(Element paragraph, int start, int end) {

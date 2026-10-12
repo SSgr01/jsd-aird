@@ -24,6 +24,10 @@ public class DataCategoryService {
         return repository.list(ActorContext.required().organizationId());
     }
 
+    public DataCategoryRepository.DataSourceFacets facets() {
+        return repository.facets(ActorContext.required().organizationId());
+    }
+
     @Transactional
     public DataCategoryRepository.Category create(String name, String description) {
         var actor = ActorContext.required();

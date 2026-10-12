@@ -25,6 +25,13 @@ public interface DataRepository {
     PageResponse<SourceFile> listSourceFiles(UUID organizationId, UUID categoryId, String status,
                                              String keyword, int page, int size);
 
+    default PageResponse<SourceFile> listSourceFiles(UUID organizationId, UUID categoryId, boolean uncategorized,
+                                                     String status, String keyword, Set<UUID> allowedImportJobIds,
+                                                     int page, int size) {
+        if (uncategorized) return new PageResponse<>(List.of(), Math.max(1, page), Math.max(1, size), 0, 0);
+        return listSourceFiles(organizationId, categoryId, status, keyword, allowedImportJobIds, page, size);
+    }
+
     default PageResponse<SourceFile> listSourceFiles(UUID organizationId, UUID categoryId, String status,
                                                      String keyword, Set<UUID> allowedImportJobIds,
                                                      int page, int size) {

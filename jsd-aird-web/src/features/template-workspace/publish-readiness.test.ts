@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { publishReadinessBlocker } from './publish-readiness';
+import { hasUnplacedWordFields, publishReadinessBlocker } from './publish-readiness';
+import type { FieldModel, TemplateBinding } from './types';
 
 describe('publish readiness', () => {
   it('requires a saved draft before publishing', () => {
@@ -19,5 +20,12 @@ describe('publish readiness', () => {
     expect(publishReadinessBlocker('SAVED', 'FRESH', 'SUBMITTED')).toBe('模板正在审核中，通过后才能发布');
     expect(publishReadinessBlocker('SAVED', 'FRESH', 'REJECTED')).toBe('模板审核未通过，请修改后重新提交审核');
     expect(publishReadinessBlocker('SAVED', 'FRESH', 'APPROVED')).toBeUndefined();
+  });
+
+  it('blocks a Word field without a persisted content control even when optional', () => {
+    const model = { fields: [{ id: 'field-1', bindingId: 'binding-1', required: false }] } as FieldModel;
+    const mapping = [{ bindingId: 'binding-1' }] as TemplateBinding[];
+    expect(hasUnplacedWordFields(model, mapping)).toBe(true);
+    expect(hasUnplacedWordFields(model, [{ ...mapping[0]!, markerId: 'WORD.MARKER' }])).toBe(false);
   });
 });

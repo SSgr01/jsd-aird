@@ -49,6 +49,9 @@ public class KnowledgeFileSearchService implements KnowledgeFileSearchFacade {
                 categoryIds, allowedDocumentIds, candidateLimit).forEach(row -> rows.putIfAbsent(row.chunkId(), row));
         documents.fullTextSearch(organizationId, query, false, categoryIds, allowedDocumentIds, candidateLimit)
                 .forEach(row -> rows.putIfAbsent(row.chunkId(), row));
+        documents.searchPublishedMetadata(organizationId, List.of(query), false, categoryIds,
+                allowedDocumentIds, Math.min(100, Math.max(10, limit * 5)))
+                .forEach(row -> rows.putIfAbsent(row.chunkId(), row));
         var grouped = new LinkedHashMap<UUID, List<KnowledgeRepository.SearchRow>>();
         for (var hit : rows.values()) grouped.computeIfAbsent(hit.versionId(), ignored -> new ArrayList<>()).add(hit);
         var result = new ArrayList<FileMatch>();

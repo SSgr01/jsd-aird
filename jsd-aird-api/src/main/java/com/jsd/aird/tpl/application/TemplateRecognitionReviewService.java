@@ -1410,8 +1410,8 @@ public class TemplateRecognitionReviewService {
         // AI recognition run. Such bindings have already passed the normal draft/publish
         // mapping validation and must not be blocked by a recognition gate that only
         // applies to recognition-derived candidates.
-        if (hasOnlyManualMappings(workspace.mapping())) return false;
-        if (run == null || run.result() == null) return true;
+        if (run == null) return !hasOnlyManualMappings(workspace.mapping());
+        if (run.result() == null) return true;
         var review = assemble(organizationId, workspace);
         // Publication follows the effective customer-facing review items. The
         // region tree is a projection and may retain stale provisional metadata
@@ -1432,7 +1432,7 @@ public class TemplateRecognitionReviewService {
     }
 
     private boolean hasOnlyManualMappings(JsonNode mapping) {
-        if (mapping == null || !mapping.isArray() || mapping.isEmpty()) return false;
+        if (mapping == null || !mapping.isArray() || mapping.isEmpty()) return true;
         for (JsonNode binding : mapping) {
             if (!binding.path("diagnostic").path("recognitionItemId").asText("").isBlank()) {
                 return false;

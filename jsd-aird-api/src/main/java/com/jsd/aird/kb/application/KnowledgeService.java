@@ -589,6 +589,33 @@ public class KnowledgeService implements KnowledgeSearchFacade {
             }
         }
 
+        var metadataQueries = new java.util.LinkedHashSet<String>();
+        addQuery(metadataQueries, request.originalQuery());
+        addQuery(metadataQueries, request.query());
+        request.queryVariants().forEach(value -> addQuery(metadataQueries, value));
+        request.requiredFacts().forEach(value -> addQuery(metadataQueries, value.retrievalQuery()));
+        request.retrievalTerms().forEach(term -> {
+            addQuery(metadataQueries, term.text());
+            term.aliases().forEach(value -> addQuery(metadataQueries, value));
+        });
+        var metadataStarted = System.nanoTime();
+        try {
+            var metadataRows = repository.searchPublishedMetadata(organizationId, List.copyOf(metadataQueries),
+                    request.aiOnly(), request.categoryIds(), null, 60);
+            for (var row : metadataRows) {
+                fallbackRows.putIfAbsent(row.chunkId(), row);
+                retrievalScores.merge(row.chunkId(), row.score(), Math::max);
+                scores.merge(row.chunkId(), row.score(), Math::max);
+            }
+            queryTraces.add(queryTrace(String.join(" | ", metadataQueries), "DOCUMENT_METADATA", "SUCCEEDED",
+                    metadataRows, metadataStarted, ""));
+        } catch (RuntimeException exception) {
+            fallbacks.add("DOCUMENT_METADATA_ERROR");
+            queryTraces.add(queryTrace(String.join(" | ", metadataQueries), "DOCUMENT_METADATA", "FAILED",
+                    List.of(), metadataStarted, safeTraceError(exception)));
+        }
+        timings.put("metadataSearchMs", elapsedMs(metadataStarted));
+
         var rankedIds = scores.keySet().stream()
                 .sorted((a, b) -> Double.compare(scores.getOrDefault(b, 0.0), scores.getOrDefault(a, 0.0)))
                 .limit(60)
@@ -1294,8 +1321,10 @@ public class KnowledgeService implements KnowledgeSearchFacade {
                                                          double retrieval, double rrf) {
         var provenance = row.provenance();
         var primary = provenance == null ? null : readJsonNullable(provenance.primaryAnchorJson());
-        var pageNo = primary != null && primary.path("page").isNumber()
-                ? primary.path("page").asInt() : row.pageNo();
+        Integer pageNo = row.pageNo();
+        if (primary != null && primary.path("page").isNumber()) {
+            pageNo = primary.path("page").asInt();
+        }
         return new KnowledgeSearchFacade.SearchHit(row.chunkId(), row.documentId(), row.versionId(), row.title(),
                 row.originalName(), pageNo, row.section(), row.content(), rrf, retrieval, rrf, rrf,
                 "KNOWLEDGE_CHUNK", null, null,

@@ -260,7 +260,7 @@ export function ModelingSettingsPage({ embedded = false, initialTargetId, fullPa
 
   const requestEligibility = async () => {
     if (!selectedTarget) return
-    try { await modelingApi.reevaluateTarget(selectedTarget.id); void message.success('资格重算已加入后台任务'); await loadEligibility(selectedTarget) }
+    try { await modelingApi.reevaluateTarget(selectedTarget.id); void message.success('训练记录检查已加入后台任务'); await loadEligibility(selectedTarget) }
     catch (error) { report(error) }
   }
 
@@ -323,7 +323,7 @@ export function ModelingSettingsPage({ embedded = false, initialTargetId, fullPa
     try {
       const values = await reviewForm.validateFields()
       await modelingApi.decideReview(reviewTarget.id, { decision: values.decision, reason: values.reason, materialId: values.materialId, expectedRevision: reviewTarget.revision })
-      setReviewTarget(undefined); reviewForm.resetFields(); void message.success('审查决定已提交，系统将重新计算资格')
+      setReviewTarget(undefined); reviewForm.resetFields(); void message.success('审查决定已提交，系统将重新检查训练记录')
       if (eligibilityDetail?.eligibility.id) await openEligibilityDetail(eligibilityDetail.eligibility.id)
       await loadEligibility(selectedTarget)
     } catch (error) { if (error instanceof Error) report(error) }
@@ -351,7 +351,7 @@ export function ModelingSettingsPage({ embedded = false, initialTargetId, fullPa
     if (!detail) return <div className="eligibility-row-preview-loading"><Text type="secondary">展开后加载完整数据</Text></div>
     const sample = detail.sample
     return <div className="eligibility-row-preview">
-      <div className="eligibility-row-preview-head"><strong>整条训练数据</strong><span>这一行同时包含模型输入 X、预测目标 Y 和原始来源，不是只显示结果值。</span><Button type="link" size="small" onClick={()=>void openEligibilityDetail(row.id)}>查看来源与审查详情</Button></div>
+      <div className="eligibility-row-preview-head"><strong>完整训练记录</strong><span>这一行同时包含模型输入 X、预测目标 Y 和原始来源，不是只显示结果值。</span><Button type="link" size="small" onClick={()=>void openEligibilityDetail(row.id)}>查看来源与处理记录</Button></div>
       <div className="eligibility-row-preview-grid">
         <div><small>输入 X · 配方</small><pre>{pretty(sample.composition)}</pre></div>
         <div><small>输入 X · 工艺与条件</small><pre>{pretty({ process: sample.process, conditions: sample.conditions, facts: sample.facts })}</pre></div>
@@ -453,7 +453,7 @@ export function ModelingSettingsPage({ embedded = false, initialTargetId, fullPa
     if (!selectedTarget || !mappingSuggestions) return
     try {
       const result=await modelingApi.confirmSourceMapping(selectedTarget.id,{targetVersionId:mappingSuggestions.targetVersionId,candidateKey:suggestion.candidateKey,expectedRevision:selectedTarget.revision})
-      void message.success(result.recomputeStatus==='DEFERRED'?'数据来源已确认；输入方案和策略就绪后再评估':'数据来源已确认，历史样本正在重新评估')
+      void message.success(result.recomputeStatus==='DEFERRED'?'数据来源已确认；输入信息和训练要求就绪后再检查':'数据来源已确认，历史记录正在重新检查')
       await refreshTarget()
     } catch(error){report(error)}
   }
@@ -499,7 +499,7 @@ export function ModelingSettingsPage({ embedded = false, initialTargetId, fullPa
           seed: v.seed, timeoutMinutes: v.timeoutMinutes,
         },
       })
-      setPolicyOpen(false); policyForm.resetFields(); await refreshTarget(); void message.success('训练策略草稿已保存')
+      setPolicyOpen(false); policyForm.resetFields(); await refreshTarget(); void message.success('训练要求草稿已保存')
     } catch (error) { if (error instanceof Error) report(error) }
   }
 
@@ -521,7 +521,7 @@ export function ModelingSettingsPage({ embedded = false, initialTargetId, fullPa
           },
         })),
       })
-      setQualityOpen(false);qualityForm.resetFields();await refreshTarget();void message.success('质量策略草稿已保存')
+      setQualityOpen(false);qualityForm.resetFields();await refreshTarget();void message.success('预测可信度设置草稿已保存')
     } catch (error) { if (error instanceof Error) report(error) }
   }
 
@@ -565,7 +565,7 @@ export function ModelingSettingsPage({ embedded = false, initialTargetId, fullPa
     { title: '类型', dataIndex: 'valueType', width: 110, render: (value: ValueType) => valueTypeLabels[value] ?? value },
     { title: '单位', dataIndex: 'unit', width: 80, render: (value?: string) => value || '—' },
     { title: '状态', dataIndex: 'status', width: 100, render: (value: string) => <Tag color={statusColor[value]}>{lifecycleLabels[value] ?? value}</Tag> },
-    { title: '操作', render: (_: unknown, version) => <Space>{canModel && version.status === 'DRAFT' && <Button size="small" icon={<EditOutlined />} onClick={() => showTargetEditor(selectedTarget, version)}>编辑</Button>}{canModel && version.status === 'DRAFT' && <Button size="small" onClick={() => void (async () => { try { await modelingApi.publishTargetVersion(version.id, selectedTarget?.revision ?? 0); await refreshTarget(); void message.success('Y版本已发布') } catch (error) { report(error) } })()}>发布</Button>}</Space> },
+    { title: '操作', render: (_: unknown, version) => <Space>{canModel && version.status === 'DRAFT' && <Button size="small" icon={<EditOutlined />} onClick={() => showTargetEditor(selectedTarget, version)}>编辑</Button>}{canModel && version.status === 'DRAFT' && <Button size="small" onClick={() => void (async () => { try { await modelingApi.publishTargetVersion(version.id, selectedTarget?.revision ?? 0); await refreshTarget(); void message.success('预测目标版本已发布') } catch (error) { report(error) } })()}>发布</Button>}</Space> },
   ]
   const fieldVersionColumns: ColumnsType<InputFieldVersion> = [
     { title: '版本', dataIndex: 'version', width: 70, render: (value: number) => `v${value}` },
@@ -676,7 +676,7 @@ export function ModelingSettingsPage({ embedded = false, initialTargetId, fullPa
           {targets.length===0&&!loading?<Empty className="modeling-empty" description="当前组织尚未建立预测目标目录"/>:<Table rowKey="id" loading={loading} columns={targetColumns} dataSource={orderedTargets} scroll={{x:1080}} pagination={{current:targetPage,pageSize:20,total:targetTotal,onChange:setTargetPage,showSizeChanger:false}}/>}
         </>},
         { key:'fields',label:<span><SettingOutlined /> 输入字段库 X</span>,children:<>
-          <div className="modeling-toolbar"><div className="modeling-toolbar-filters"><Input.Search allowClear placeholder={embedded ? '搜索输入信息' : '搜索字段名称或编码'} style={{width:240}} onSearch={(value: string)=>{setFieldKeyword(value);setFieldPage(1)}}/><Select allowClear placeholder="状态" style={{width:120}} options={lifecycleOptions} onChange={(value: string | undefined)=>{setFieldStatus(value);setFieldPage(1)}}/><Select allowClear placeholder="字段类型" style={{width:140}} options={Object.entries(fieldTypeLabels).map(([value,label])=>({value,label}))} onChange={(value: string | undefined)=>{setFieldType(value);setFieldPage(1)}}/></div>{canModel&&<Button type="primary" icon={<PlusOutlined />} onClick={()=>{setFieldEditor({});fieldForm.resetFields();fieldForm.setFieldValue('availabilityStage','PRE_EXPERIMENT')}}>{embedded ? '新增输入信息' : '新增X'}</Button>}</div>
+          <div className="modeling-toolbar"><div className="modeling-toolbar-filters"><Input.Search allowClear placeholder={embedded ? '搜索输入信息' : '搜索字段名称或编码'} style={{width:240}} onSearch={(value: string)=>{setFieldKeyword(value);setFieldPage(1)}}/><Select allowClear placeholder="状态" style={{width:120}} options={lifecycleOptions} onChange={(value: string | undefined)=>{setFieldStatus(value);setFieldPage(1)}}/><Select allowClear placeholder="字段类型" style={{width:140}} options={Object.entries(fieldTypeLabels).map(([value,label])=>({value,label}))} onChange={(value: string | undefined)=>{setFieldType(value);setFieldPage(1)}}/></div>{canModel&&<Button type="primary" icon={<PlusOutlined />} onClick={()=>{setFieldEditor({});fieldForm.resetFields();fieldForm.setFieldValue('availabilityStage','PRE_EXPERIMENT')}}>新增X</Button>}</div>
           <Table rowKey="id" loading={loading} columns={fieldColumns} dataSource={fields} scroll={{x:980}} pagination={{current:fieldPage,pageSize:20,total:fieldTotal,onChange:setFieldPage,showSizeChanger:false}}/>
         </>},
       ]}/>
@@ -704,14 +704,14 @@ export function ModelingSettingsPage({ embedded = false, initialTargetId, fullPa
             <Alert type="info" showIcon message="输入 X 会用于计算预测" description="系统会自动统一单位；缺少必要信息时会提示，不会擅自补值。" />
           </div>
           <div id="training-selection" className="modeling-workflow-card modeling-training-step-intro"><div className="modeling-workflow-card-head"><div><strong>第 3 步：选择训练记录</strong><span>只影响本次模型，不会修改实验本原始数据。</span></div><Tag color="blue">按记录选择</Tag></div></div>
-          <Card size="small" loading={eligibilityLoading} title={<Space><span>资格评估</span>{eligibilitySummary?.evaluationStatus === 'COMPLETED' && <Tag color="green">已完成</Tag>}{eligibilitySummary?.evaluationStatus === 'RUNNING' && <Tag color="blue">评估中</Tag>}{eligibilitySummary?.evaluationStatus === 'FAILED' && <Tag color="red">失败</Tag>}</Space>} extra={<Button size="small" disabled={!canModel || !selectedTarget?.currentInputSchemeId} onClick={()=>void requestEligibility()}>重新评估</Button>}>
-            {!eligibilitySummary || eligibilitySummary.evaluationStatus === 'NOT_EVALUATED' ? <Alert type="info" showIcon message="还没有计算训练资格" description="冻结输入方案、来源映射和训练策略后，就可以开始评估。评估前不显示虚假的样本数量。"/> : <>
-              {eligibilitySummary.evaluationStatus === 'FAILED' && <Alert type="error" showIcon message="资格评估失败" description={eligibilitySummary.unavailableReason ?? '请检查配置后重试。'}/>}
-              {eligibilitySummary.evaluationStatus === 'RUNNING' && <Alert type="info" showIcon message="正在计算训练资格" description="后台正在按当前配置逐条检查样本，完成后刷新此页面。"/>}
+          <Card size="small" loading={eligibilityLoading} title={<Space><span>训练记录检查</span>{eligibilitySummary?.evaluationStatus === 'COMPLETED' && <Tag color="green">已完成</Tag>}{eligibilitySummary?.evaluationStatus === 'RUNNING' && <Tag color="blue">检查中</Tag>}{eligibilitySummary?.evaluationStatus === 'FAILED' && <Tag color="red">失败</Tag>}</Space>} extra={<Button size="small" disabled={!canModel || !selectedTarget?.currentInputSchemeId} onClick={()=>void requestEligibility()}>重新检查</Button>}>
+            {!eligibilitySummary || eligibilitySummary.evaluationStatus === 'NOT_EVALUATED' ? <Alert type="info" showIcon message="还没有检查哪些记录可用于训练" description="确认模型需要的输入 X，并把结果字段对应到正确的数据来源后，系统就会逐条检查记录。检查前不显示估算的可用数量。"/> : <>
+              {eligibilitySummary.evaluationStatus === 'FAILED' && <Alert type="error" showIcon message="训练记录检查失败" description={eligibilitySummary.unavailableReason ?? '请检查设置后重试。'}/>}
+              {eligibilitySummary.evaluationStatus === 'RUNNING' && <Alert type="info" showIcon message="正在检查训练记录" description="系统正在逐条检查数据是否完整、结果是否匹配；完成后刷新此页面。"/>}
               {eligibilitySummary.evaluationStatus === 'COMPLETED' && <>
                 <div className="eligibility-stat-grid">
                   <div className="eligibility-stat"><span>当前有效样本</span><strong>{eligibilitySummary.total ?? '—'}</strong><small>来源已确认且未失效</small></div>
-                  <div className="eligibility-stat success"><span>可以用于训练</span><strong>{eligibilitySummary.trainable ?? '—'}</strong><small>全部门禁通过</small></div>
+                  <div className="eligibility-stat success"><span>可用于训练的记录</span><strong>{eligibilitySummary.trainable ?? '—'}</strong><small>已通过全部检查</small></div>
                   <div className="eligibility-stat danger"><span>暂不纳入</span><strong>{eligibilitySummary.excluded ?? '—'}</strong><small>需要补数据或修正映射</small></div>
                   <div className="eligibility-stat warning"><span>等待人工处理</span><strong>{eligibilitySummary.reviewRequired ?? '—'}</strong><small>材料、异常或身份问题</small></div>
                 </div>
@@ -726,7 +726,7 @@ export function ModelingSettingsPage({ embedded = false, initialTargetId, fullPa
                     return `这里按当前预测目标 Y 和当前输入 X 方案单独筛选：全部来源 ${count('SOURCE_OBSERVATIONS') || denominator('SOURCE_OBSERVATIONS')} 条 → 有效目标结果 ${count('Y_VALID_VALUE')} 条 → 输入条件齐全 ${count('X_COMPLETE')} 条 → 最终可训练 ${eligibilitySummary.trainable ?? 0} 条。其他目标的数据不会混到当前目标里。`
                   })()}
                 />
-                <div className="eligibility-section-title"><strong>资格检查进度</strong><span>每一步都以当前有效样本为分母</span></div>
+                <div className="eligibility-section-title"><strong>数据检查进度</strong><span>每一步都以当前有效记录为基数</span></div>
                 <div className="eligibility-funnel">{eligibilitySummary.funnel.map((step) => <div className="eligibility-funnel-row" key={step.code}><span>{eligibilityFunnelLabels[step.code] ?? step.label}</span><div className="eligibility-bar"><i style={{width:`${step.denominator ? Math.min(100, step.count / step.denominator * 100) : 0}%`}} /></div><b>{step.count}<em>/{step.denominator}</em></b></div>)}</div>
                 <div className="eligibility-section-title"><strong>输入字段覆盖率</strong><span>各字段单独计算，不能把百分比直接相加</span></div>
                 <div className="eligibility-coverage-grid">{eligibilitySummary.fieldCoverage.map((field) => <div className="eligibility-coverage" key={field.fieldCode}><div><strong>{field.fieldName}</strong><small>{field.available}/{field.denominator} 条样本有值</small></div><b>{(field.ratio * 100).toFixed(1)}%</b><span>{field.reasonCodes.map((code) => eligibilityReasonLabels[code] ?? code).join('、') || '没有缺失'}</span></div>)}</div>
@@ -832,7 +832,7 @@ export function ModelingSettingsPage({ embedded = false, initialTargetId, fullPa
     </Drawer>
 
     <Modal title="处理人工审查" open={Boolean(reviewTarget)} onCancel={()=>{setReviewTarget(undefined);reviewForm.resetFields()}} onOk={()=>void submitReviewDecision()} destroyOnHidden>
-      <Alert type="info" showIcon message="决定只影响当前资格结果" description="原始事实不会在这里被修改；需要补值或修正来源时，请回到来源数据修订。"/>
+      <Alert type="info" showIcon message="此处理只影响训练记录是否可用" description="不会修改原始实验数据；需要补充数据或修正来源时，请回到原始记录中处理。"/>
       <Form form={reviewForm} layout="vertical" style={{marginTop:16}}>
         <Form.Item name="decision" label="处理方式" rules={[{required:true}]}><Select options={(reviewTarget?.reviewType==='UNKNOWN_MATERIAL'?[{value:'REMAP',label:'重新匹配材料'}]:reviewTarget?.reviewType==='IDENTITY_CONFLICT'?[{value:'MERGE',label:'确认合并'},{value:'KEEP_SEPARATE',label:'保留为独立样本'}]:[{value:'KEEP',label:'保留样本'},{value:'EXCLUDE',label:'排除样本'}])}/></Form.Item>
         <Form.Item name="materialId" label="匹配到的材料（重新匹配时填写）"><Select allowClear showSearch optionFilterProp="label" options={materials.map((m)=>({value:m.id,label:`${m.code} · ${m.name}`}))}/></Form.Item>
@@ -844,7 +844,7 @@ export function ModelingSettingsPage({ embedded = false, initialTargetId, fullPa
       className="target-editor-modal"
       title={<div className="target-editor-title"><strong>{targetEditor?.version ? '编辑预测目标 Y' : targetEditor?.target ? '新建预测目标 Y 版本' : '新增预测目标 Y'}</strong><span>先定义“要预测什么”，再在目标详情中选择并冻结模型输入 X。</span></div>}
       open={Boolean(targetEditor)} onCancel={()=>setTargetEditor(undefined)} onOk={()=>void saveTarget()}
-      okText={targetEditor?.version ? '保存版本' : '保存Y草稿'} cancelText="取消" width={1040} destroyOnHidden
+      okText={targetEditor?.version ? '保存版本' : '保存草稿'} cancelText="取消" width={1040} destroyOnHidden
     >
       <Form form={targetForm} layout="vertical" className="target-editor-form">
         <section className="target-editor-section">
@@ -857,7 +857,7 @@ export function ModelingSettingsPage({ embedded = false, initialTargetId, fullPa
             <Form.Item name="minimum" label="合理范围下限"><InputNumber style={{width:'100%'}} placeholder="未确认可留空" /></Form.Item>
             <Form.Item name="maximum" label="合理范围上限"><InputNumber style={{width:'100%'}} placeholder="未确认可留空" /></Form.Item>
             <Form.Item name="testMethod" label="测试方法" rules={[{required:true,message:'请输入测试方法'}]}><Input placeholder="例如：60度角光泽计" /></Form.Item>
-            <Form.Item name="sopCode" label="SOP 编号"><Input placeholder="正式发布前需要绑定" /></Form.Item>
+            <Form.Item name="sopCode" label="测试方法文件编号"><Input placeholder="正式启用前需要绑定" /></Form.Item>
             <Form.Item name="materialScope" label="基材 / 材料范围"><Input placeholder="例如：PET / PC / 按实验记录" /></Form.Item>
             <Form.Item name="testStage" label="测试阶段"><Input placeholder="例如：初始、固化后、水煮后" /></Form.Item>
             <Form.Item name="pretreatment" label="固定前处理 / 测试条件"><Input placeholder="例如：85°C水煮1h；无则填无" /></Form.Item>
@@ -880,27 +880,27 @@ export function ModelingSettingsPage({ embedded = false, initialTargetId, fullPa
       </Form>
     </Modal>
     <Modal title={fieldEditor?.field?'新建X字段版本':'新增输入字段X'} open={Boolean(fieldEditor)} onCancel={()=>setFieldEditor(undefined)} onOk={()=>void saveField()} destroyOnHidden><Form form={fieldForm} layout="vertical"><Form.Item name="code" label="字段编码" rules={[{required:true}]}><Input disabled={Boolean(fieldEditor?.field)}/></Form.Item><Form.Item name="name" label="字段名称" rules={[{required:true}]}><Input/></Form.Item><Form.Item name="valueType" label="字段类型" rules={[{required:true}]}><Select options={Object.entries(fieldTypeLabels).map(([value,label])=>({value,label}))}/></Form.Item><Form.Item name="unit" label="单位"><Input/></Form.Item><Form.Item name="availabilityStage" label="可用时点" rules={[{required:true}]}><Select options={[{value:'PRE_EXPERIMENT',label:'实验前'},{value:'POST_EXPERIMENT',label:'实验后'}]}/></Form.Item><Alert type="info" showIcon message={watchedFieldType==='COMPOSITION'?'材料组成由系统自动匹配材料与比例来源':'系统会按名称、类型、单位和已确认来源自动匹配输入数据'} description="你只需定义可用于建模的 X；来源绑定由系统完成，无法确认时会提示处理。"/></Form></Modal>
-    <Modal title="确认数据来源" open={mappingOpen} onCancel={()=>setMappingOpen(false)} onOk={()=>void saveMapping()} destroyOnHidden><Alert type="info" showIcon message="系统已从数据中心和实验记录本查找匹配结果" description="通常只需确认来源；名称、单位或测试条件存在多个候选时，再补充下面的信息。"/><Form form={mappingForm} layout="vertical" style={{marginTop:16}}><Form.Item name="targetVersionId" label="Y版本" rules={[{required:true}]}><Select options={targetVersions.map((v)=>({value:v.id,label:`v${v.version} · ${v.status}`}))}/></Form.Item><Form.Item name="sourceType" label="来源" rules={[{required:true}]}><Select options={[{value:'DATA_CENTER',label:'数据中心'},{value:'EXPERIMENT',label:'实验记录本'}]}/></Form.Item><Form.Item name="targetFieldCode" label="对应结果" rules={[{required:true}]}><Input placeholder="系统自动匹配；存在多个候选时再确认"/></Form.Item><Form.Item name="sourceAliases" label="文件中的叫法（可选）"><Input/></Form.Item><Form.Item name="sourceUnit" label="单位（可选）"><Input/></Form.Item><Form.Item name="transformation" label="数值处理" initialValue="IDENTITY"><Select options={[{value:'IDENTITY',label:'保持原值'},{value:'NUMERIC',label:'转换为数值'},{value:'CLASS_MAP',label:'映射为等级/类别'}]}/></Form.Item><Form.Item name="fixedConditions" label="测试条件（可选）"><Input placeholder="例如：60°、500g、固化后"/></Form.Item></Form></Modal>
-    <Modal title="新建输入方案" open={schemeOpen} onCancel={()=>setSchemeOpen(false)} onOk={()=>void saveScheme()} destroyOnHidden><Form form={schemeForm} layout="vertical"><Form.Item name="targetVersionId" label="已发布Y版本" rules={[{required:true}]}><Select options={targetVersions.filter((version)=>version.status==='PUBLISHED').map((version)=>({value:version.id,label:`v${version.version} · ${version.valueType}`}))}/></Form.Item><Form.Item name="code" label="方案编码" rules={[{required:true}]}><Input/></Form.Item><Form.Item name="name" label="方案名称" rules={[{required:true}]}><Input/></Form.Item><Form.Item name="inputFieldVersionIds" label="已发布输入字段" rules={[{required:true,type:'array',min:1}]}><Select mode="multiple" optionFilterProp="label" options={publishedFieldOptions}/></Form.Item><Form.Item name="materialDictionaryVersionId" label="冻结材料字典（含配方字段时必填）"><Select allowClear optionFilterProp="label" options={dictionaries.filter((dictionary)=>dictionary.status==='FROZEN').map((dictionary)=>({value:dictionary.id,label:`${dictionary.code} · v${dictionary.version}`}))}/></Form.Item></Form></Modal>
-    <Modal width={900} title={`新建训练策略${selectedTarget ? ` · ${selectedTarget.name}` : ''}`} open={policyOpen} onCancel={()=>setPolicyOpen(false)} onOk={()=>void savePolicy()} destroyOnHidden>
-      <Alert type="info" showIcon message="发布后将按这些规则决定何时训练、如何验证以及是否具备正式启用资格。样本门槛和误差阈值请填写已经确认的业务标准。"/>
+    <Modal title="确认数据来源" open={mappingOpen} onCancel={()=>setMappingOpen(false)} onOk={()=>void saveMapping()} destroyOnHidden><Alert type="info" showIcon message="系统已从数据中心和实验记录本查找匹配结果" description="通常只需确认来源；名称、单位或测试条件存在多个候选时，再补充下面的信息。"/><Form form={mappingForm} layout="vertical" style={{marginTop:16}}><Form.Item name="targetVersionId" label="目标 Y 版本" rules={[{required:true}]}><Select options={targetVersions.map((v)=>({value:v.id,label:`v${v.version} · ${v.status}`}))}/></Form.Item><Form.Item name="sourceType" label="来源" rules={[{required:true}]}><Select options={[{value:'DATA_CENTER',label:'数据中心'},{value:'EXPERIMENT',label:'实验记录本'}]}/></Form.Item><Form.Item name="targetFieldCode" label="对应 Y 结果" rules={[{required:true}]}><Input placeholder="系统自动匹配；存在多个候选时再确认"/></Form.Item><Form.Item name="sourceAliases" label="文件中的叫法（可选）"><Input/></Form.Item><Form.Item name="sourceUnit" label="单位（可选）"><Input/></Form.Item><Form.Item name="transformation" label="数值处理" initialValue="IDENTITY"><Select options={[{value:'IDENTITY',label:'保持原值'},{value:'NUMERIC',label:'转换为数值'},{value:'CLASS_MAP',label:'映射为等级/类别'}]}/></Form.Item><Form.Item name="fixedConditions" label="测试条件（可选）"><Input placeholder="例如：60°、500g、固化后"/></Form.Item></Form></Modal>
+    <Modal title="新建输入方案" open={schemeOpen} onCancel={()=>setSchemeOpen(false)} onOk={()=>void saveScheme()} destroyOnHidden><Form form={schemeForm} layout="vertical"><Form.Item name="targetVersionId" label="已发布Y版本" rules={[{required:true}]}><Select options={targetVersions.filter((version)=>version.status==='PUBLISHED').map((version)=>({value:version.id,label:`v${version.version} · ${version.valueType}`}))}/></Form.Item><Form.Item name="code" label="方案编码" rules={[{required:true}]}><Input/></Form.Item><Form.Item name="name" label="方案名称" rules={[{required:true}]}><Input/></Form.Item><Form.Item name="inputFieldVersionIds" label="已发布输入 X 字段" rules={[{required:true,type:'array',min:1}]}><Select mode="multiple" optionFilterProp="label" options={publishedFieldOptions}/></Form.Item><Form.Item name="materialDictionaryVersionId" label="冻结材料字典（含配方字段时必填）"><Select allowClear optionFilterProp="label" options={dictionaries.filter((dictionary)=>dictionary.status==='FROZEN').map((dictionary)=>({value:dictionary.id,label:`${dictionary.code} · v${dictionary.version}`}))}/></Form.Item></Form></Modal>
+    <Modal width={900} title={`训练和验证要求${selectedTarget ? ` · ${selectedTarget.name}` : ''}`} open={policyOpen} onCancel={()=>setPolicyOpen(false)} onOk={()=>void savePolicy()} destroyOnHidden>
+      <Alert type="info" showIcon message="这里设置系统开始训练所需的数据量，以及训练后检查模型表现的标准。达到这些标准的模型版本才可申请用于正式业务；测试环境的模拟演练仍会单独标记。"/>
       <Form form={policyForm} layout="vertical" className="policy-form">
-        <h4>数据门槛</h4><div className="policy-grid">
-          <Form.Item name="minimumTrainableSamples" label="最低可训练样本数" rules={[{required:true,message:'请填写样本门槛'}]}><InputNumber min={1} precision={0}/></Form.Item>
-          <Form.Item name="minimumIndependentLineages" label="最低独立配方谱系数" rules={[{required:true,message:'请填写谱系门槛'}]}><InputNumber min={1} precision={0}/></Form.Item>
-          <Form.Item name="minimumSourceGroups" label="最低独立来源组数" rules={[{required:true,message:'请填写来源门槛'}]}><InputNumber min={1} precision={0}/></Form.Item>
-          {selectedTarget?.valueType !== 'CONTINUOUS' && <Form.Item name="minimumPerClass" label="每个类别最低样本数" rules={[{required:true,message:'请填写类别样本门槛'}]}><InputNumber min={1} precision={0}/></Form.Item>}
+        <h4>开始训练前的记录要求</h4><div className="policy-grid">
+          <Form.Item name="minimumTrainableSamples" label="可用记录总数下限" rules={[{required:true,message:'请填写记录数量'}]}><InputNumber min={1} precision={0}/></Form.Item>
+          <Form.Item name="minimumIndependentLineages" label="不同配方数量下限" extra="同一配方的重复记录不会被当成多个不同配方。" rules={[{required:true,message:'请填写配方数量'}]}><InputNumber min={1} precision={0}/></Form.Item>
+          <Form.Item name="minimumSourceGroups" label="独立数据来源数量下限" extra="用于避免同一来源被重复拆分后误当成多组独立数据。" rules={[{required:true,message:'请填写来源数量'}]}><InputNumber min={1} precision={0}/></Form.Item>
+          {selectedTarget?.valueType !== 'CONTINUOUS' && <Form.Item name="minimumPerClass" label="每个结果类别至少需要的记录数" rules={[{required:true,message:'请填写类别样本数量'}]}><InputNumber min={1} precision={0}/></Form.Item>}
         </div>
-        <h4>重复测量</h4><Form.Item name="replicateHandling" label="同一样本的多次测量如何进入训练" rules={[{required:true,message:'请选择重复测量处理方式'}]}><Select options={(selectedTarget?.valueType === 'CONTINUOUS' ? [['KEEP_GROUPED','分别保留，验证时保持同组'],['MEAN','取平均值'],['MEDIAN','取中位数']] : selectedTarget?.valueType === 'ORDINAL' ? [['KEEP_GROUPED','分别保留，验证时保持同组'],['MEDIAN_GRADE','取中位等级']] : [['KEEP_GROUPED','分别保留，验证时保持同组'],['MAJORITY','取多数类别'],['CONSENSUS_ONLY','仅接受完全一致']]).map(([value,label])=>({value,label}))}/></Form.Item>
-        <h4>验证与质量门禁</h4><div className="policy-grid">
-          <Form.Item name="foldCount" label="交叉验证折数" rules={[{required:true,message:'请填写2到10折'}]}><InputNumber min={2} max={10} precision={0}/></Form.Item>
+        <h4>同一样本多次测量时</h4><Form.Item name="replicateHandling" label="如何处理重复测量" extra="选择保留、取平均/中位数或按多数结果处理；验证时会避免同一样本同时出现在训练和检查数据中。" rules={[{required:true,message:'请选择处理方式'}]}><Select options={(selectedTarget?.valueType === 'CONTINUOUS' ? [['KEEP_GROUPED','分别保留，但放在同一组检查'],['MEAN','取平均值'],['MEDIAN','取中位数']] : selectedTarget?.valueType === 'ORDINAL' ? [['KEEP_GROUPED','分别保留，但放在同一组检查'],['MEDIAN_GRADE','取中位等级']] : [['KEEP_GROUPED','分别保留，但放在同一组检查'],['MAJORITY','取多数类别'],['CONSENSUS_ONLY','仅接受完全一致']]).map(([value,label])=>({value,label}))}/></Form.Item>
+        <h4>训练完成后，检查模型表现</h4><div className="policy-grid">
+          <Form.Item name="foldCount" label="分组检查次数" extra="系统会多次轮换训练数据和检查数据，查看结果是否稳定。" rules={[{required:true,message:'请填写2到10次'}]}><InputNumber min={2} max={10} precision={0}/></Form.Item>
           <Form.Item name="primaryMetric" label="主验证指标" rules={[{required:true,message:'请选择验证指标'}]}><Select options={(selectedTarget?.valueType === 'CONTINUOUS' ? [['mae','平均绝对误差（MAE）'],['rmse','均方根误差（RMSE）'],['r2','拟合度（R²）']] : selectedTarget?.valueType === 'ORDINAL' ? [['gradeMae','等级误差'],['plusMinusOneAccuracy','相邻等级准确率'],['spearman','等级相关性']] : [['logLoss','概率损失'],['macroF1','宏平均 F1'],['accuracy','准确率']]).map(([value,label])=>({value,label}))}/></Form.Item>
-          <Form.Item name="metricThreshold" label="达到正式资格的指标阈值" rules={[{required:true,message:'请填写已确认的质量阈值'}]}><InputNumber precision={6}/></Form.Item>
-          <Form.Item name="requireFairComparison" label="替换现有模型前要求同口径比较" valuePropName="checked"><Switch/></Form.Item>
+          <Form.Item name="metricThreshold" label="正式业务使用的最低表现标准" extra="系统会结合所选指标判断误差或准确率是否达标；请填写已确认的业务标准。" rules={[{required:true,message:'请填写已确认的最低标准'}]}><InputNumber precision={6}/></Form.Item>
+          <Form.Item name="requireFairComparison" label="替换当前模型前，要求用同一批记录公平对比" valuePropName="checked"><Switch/></Form.Item>
         </div>
-        <h4>训练运行</h4><div className="policy-grid">
-          <Form.Item name="dataNature" label="数据性质" rules={[{required:true}]}><Select options={[{value:'REAL',label:'真实业务数据'},{value:'SYNTHETIC',label:'合成测试数据（不可正式启用）'}]}/></Form.Item>
-          <Form.Item name="candidateAlgorithms" label="候选算法" rules={[{required:true,message:'至少选择一种算法'}]}><Select mode="multiple" options={(selectedTarget?.valueType === 'CONTINUOUS' ? [['GAUSSIAN_PROCESS','高斯过程'],['RANDOM_FOREST','随机森林'],['LIGHTGBM','LightGBM'],['XGBOOST','XGBoost'],['CATBOOST','CatBoost']] : selectedTarget?.valueType === 'ORDINAL' ? [['ORDINAL_CUMULATIVE_LOGIT','序数累计 Logit']] : [['LOGISTIC_REGRESSION','逻辑回归'],['RANDOM_FOREST','随机森林'],['LIGHTGBM','LightGBM'],['XGBOOST','XGBoost'],['CATBOOST','CatBoost']]).map(([value,label])=>({value,label}))}/></Form.Item>
+        <h4>训练方式</h4><div className="policy-grid">
+          <Form.Item name="dataNature" label="训练数据类型" extra="生成数据可在测试环境用于模拟训练；相关模型和预测结果会保留测试标记，不能作为正式业务结论。" rules={[{required:true}]}><Select options={[{value:'REAL',label:'真实实验数据'},{value:'SYNTHETIC',label:'生成的测试数据（仅用于模拟演练）'}]}/></Form.Item>
+          <Form.Item name="candidateAlgorithms" label="尝试使用的预测方法" rules={[{required:true,message:'至少选择一种方法'}]}><Select mode="multiple" options={(selectedTarget?.valueType === 'CONTINUOUS' ? [['GAUSSIAN_PROCESS','高斯过程'],['RANDOM_FOREST','随机森林'],['LIGHTGBM','LightGBM'],['XGBOOST','XGBoost'],['CATBOOST','CatBoost']] : selectedTarget?.valueType === 'ORDINAL' ? [['ORDINAL_CUMULATIVE_LOGIT','序数累计 Logit']] : [['LOGISTIC_REGRESSION','逻辑回归'],['RANDOM_FOREST','随机森林'],['LIGHTGBM','LightGBM'],['XGBOOST','XGBoost'],['CATBOOST','CatBoost']]).map(([value,label])=>({value,label}))}/></Form.Item>
           <Form.Item name="seed" label="随机种子" rules={[{required:true,message:'请填写随机种子'}]}><InputNumber min={1} precision={0}/></Form.Item>
           <Form.Item name="timeoutMinutes" label="单次训练超时（分钟）" rules={[{required:true,message:'请填写超时时间'}]}><InputNumber min={1} precision={0}/></Form.Item>
           <Form.Item name="retrainMinimumNewSamples" label="至少新增多少样本再重训" rules={[{required:true,message:'请填写新增量'}]}><InputNumber min={0} precision={0}/></Form.Item>
@@ -909,11 +909,11 @@ export function ModelingSettingsPage({ embedded = false, initialTargetId, fullPa
         <h4>异常值审查规则（可选）</h4><Form.List name="anomalyRules">{(fields,{add,remove})=><><Space direction="vertical" className="policy-anomaly-list">{fields.map(({key,name})=><Space key={key} align="baseline"><Form.Item name={[name,'fieldCode']} rules={[{required:true,message:'请选择字段'}]}><Select showSearch placeholder="输入字段" options={publishedFields.map((field)=>({value:field.code,label:field.name}))} style={{width:220}}/></Form.Item><Form.Item name={[name,'minimum']}><InputNumber placeholder="最小值"/></Form.Item><Form.Item name={[name,'maximum']}><InputNumber placeholder="最大值"/></Form.Item><Button type="link" danger onClick={()=>remove(name)}>删除</Button></Space>)}</Space><Button onClick={()=>add()}>添加异常规则</Button></>}</Form.List>
       </Form>
     </Modal>
-    <Modal width={900} title={`新建预测质量策略${selectedTarget ? ` · ${selectedTarget.name}` : ''}`} open={qualityOpen} onCancel={()=>setQualityOpen(false)} onOk={()=>void saveQualityPolicy()} destroyOnHidden>
-      <Alert type="info" showIcon message="可信等级完全由此版本化策略产生" description="98.8%等配方合计只作为事实警告输入；是否影响可信度，由下面的规则明确决定。"/>
+    <Modal width={900} title={`预测结果可信度${selectedTarget ? ` · ${selectedTarget.name}` : ''}`} open={qualityOpen} onCancel={()=>setQualityOpen(false)} onOk={()=>void saveQualityPolicy()} destroyOnHidden>
+      <Alert type="info" showIcon message="这项设置决定结果旁显示的可信度等级，不会改变模型计算出的预测值。" description="系统会结合输入信息是否齐全、模型覆盖的材料和条件范围，以及测试警告来标注可信度。"/>
       <Form form={qualityForm} layout="vertical" style={{marginTop:16}}>
-        <div className="policy-grid"><Form.Item name="defaultTrustLevel" label="没有规则命中时" rules={[{required:true}]}><Select options={[{value:'HIGH',label:'可信度高'},{value:'MEDIUM',label:'可信度中等'},{value:'LOW',label:'可信度较低'}]}/></Form.Item><Form.Item name="defaultExplanation" label="默认说明" rules={[{required:true,message:'请说明默认等级的依据'}]}><Input placeholder="例如：模型与输入均满足已发布的常规质量要求"/></Form.Item></div>
-        <h4>按优先级匹配的规则</h4><Form.List name="rules">{(rows,{add,remove})=><><Space direction="vertical" style={{width:'100%'}}>{rows.map(({key,name})=><Card key={key} size="small" title={`规则 ${name+1}`} extra={<Button type="link" danger onClick={()=>remove(name)}>删除</Button>}><div className="policy-grid"><Form.Item name={[name,'code']} label="规则编码" rules={[{required:true}]}><Input/></Form.Item><Form.Item name={[name,'priority']} label="优先级" rules={[{required:true}]}><InputNumber min={0} precision={0}/></Form.Item><Form.Item name={[name,'trustLevel']} label="输出可信等级" rules={[{required:true}]}><Select options={[{value:'HIGH',label:'高'},{value:'MEDIUM',label:'中'},{value:'LOW',label:'低'}]}/></Form.Item><Form.Item name={[name,'explanation']} label="给研发人员的说明" rules={[{required:true}]}><Input/></Form.Item><Form.Item name={[name,'domainStatus']} label="适用域状态"><Select allowClear options={[{value:'IN_DOMAIN',label:'范围内'},{value:'NEAR_BOUNDARY',label:'接近边界'}]}/></Form.Item><Form.Item name={[name,'warningCode']} label="存在警告"><Select allowClear options={[{value:'FORMULA_TOTAL_WARNING',label:'配方合计不是100%'}]}/></Form.Item><Form.Item name={[name,'minimumEvidenceCoverage']} label="最低输入证据覆盖"><InputNumber min={0} max={1} step={0.05}/></Form.Item><Form.Item name={[name,'formulaMinimum']} label="配方合计下限"><InputNumber/></Form.Item><Form.Item name={[name,'formulaMaximum']} label="配方合计上限"><InputNumber/></Form.Item><Form.Item name={[name,'metric']} label="验证指标"><Input placeholder="例如 mae、accuracy"/></Form.Item><Form.Item name={[name,'operator']} label="指标比较"><Select allowClear options={['LT','LTE','GT','GTE','EQ'].map((value)=>({value,label:value}))}/></Form.Item><Form.Item name={[name,'metricValue']} label="指标值"><InputNumber/></Form.Item></div></Card>)}</Space><Button style={{marginTop:10}} type="dashed" block onClick={()=>add({priority:rows.length*10,trustLevel:'MEDIUM'})}>添加质量规则</Button></>}</Form.List>
+        <div className="policy-grid"><Form.Item name="defaultTrustLevel" label="没有特殊情况时显示" rules={[{required:true}]}><Select options={[{value:'HIGH',label:'可信度高'},{value:'MEDIUM',label:'可信度中等'},{value:'LOW',label:'可信度较低'}]}/></Form.Item><Form.Item name="defaultExplanation" label="说明原因" rules={[{required:true,message:'请说明默认等级的依据'}]}><Input placeholder="例如：模型和实验输入均满足常规要求"/></Form.Item></div>
+        <h4>什么时候降低可信度</h4><Form.List name="rules">{(rows,{add,remove})=><><Space direction="vertical" style={{width:'100%'}}>{rows.map(({key,name})=><Card key={key} size="small" title={`条件 ${name+1}`} extra={<Button type="link" danger onClick={()=>remove(name)}>删除</Button>}><div className="policy-grid"><Form.Item name={[name,'code']} label="条件名称" rules={[{required:true}]}><Input placeholder="例如：输入信息不完整"/></Form.Item><Form.Item name={[name,'priority']} label="处理顺序" rules={[{required:true}]}><InputNumber min={0} precision={0}/></Form.Item><Form.Item name={[name,'trustLevel']} label="显示的可信度" rules={[{required:true}]}><Select options={[{value:'HIGH',label:'高'},{value:'MEDIUM',label:'中'},{value:'LOW',label:'低'}]}/></Form.Item><Form.Item name={[name,'explanation']} label="给用户看的说明" rules={[{required:true}]}><Input/></Form.Item><Form.Item name={[name,'domainStatus']} label="模型覆盖范围"><Select allowClear options={[{value:'IN_DOMAIN',label:'范围内'},{value:'NEAR_BOUNDARY',label:'接近边界'}]}/></Form.Item><Form.Item name={[name,'warningCode']} label="出现此类提醒时"><Select allowClear options={[{value:'FORMULA_TOTAL_WARNING',label:'配方合计不是100%'}]}/></Form.Item><Form.Item name={[name,'minimumEvidenceCoverage']} label="输入信息最低完整度"><InputNumber min={0} max={1} step={0.05}/></Form.Item><Form.Item name={[name,'formulaMinimum']} label="配方合计最低值"><InputNumber/></Form.Item><Form.Item name={[name,'formulaMaximum']} label="配方合计最高值"><InputNumber/></Form.Item><Form.Item name={[name,'metric']} label="参考验证指标"><Input placeholder="例如 MAE、准确率"/></Form.Item><Form.Item name={[name,'operator']} label="判断方式"><Select allowClear options={[{value:'LT',label:'小于'},{value:'LTE',label:'小于或等于'},{value:'GT',label:'大于'},{value:'GTE',label:'大于或等于'},{value:'EQ',label:'等于'}]}/></Form.Item><Form.Item name={[name,'metricValue']} label="参考值"><InputNumber/></Form.Item></div></Card>)}</Space><Button style={{marginTop:10}} type="dashed" block onClick={()=>add({priority:rows.length*10,trustLevel:'MEDIUM'})}>添加判断条件</Button></>}</Form.List>
       </Form>
     </Modal>
     <Modal title="新增材料别名" open={aliasOpen} onCancel={()=>setAliasOpen(false)} onOk={()=>void saveAlias()} destroyOnHidden><Form form={aliasForm} layout="vertical"><Form.Item name="materialId" label="MDM材料" rules={[{required:true}]}><Select showSearch optionFilterProp="label" options={materials.map((m)=>({value:m.id,label:`${m.code} · ${m.name}`}))}/></Form.Item><Form.Item name="alias" label="受控别名" rules={[{required:true}]}><Input/></Form.Item></Form></Modal>

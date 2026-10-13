@@ -67,8 +67,8 @@ export function ExperimentUploadPage() {
   const [ocrSubmitting, setOcrSubmitting] = useState(false);
   const [retryingId, setRetryingId] = useState<string>();
 
-  const load = useCallback(async (showLoading = true) => {
-    if (showLoading) setLoading(true);
+  const load = useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
+    if (!silent) setLoading(true);
     try {
       const [free, templatesPage] = await Promise.all([
         listExperimentImports(),
@@ -77,9 +77,9 @@ export function ExperimentUploadPage() {
       setFreeJobs(free);
       setTemplateJobs(templatesPage.items.filter((item) => item.importPurpose === 'EXPERIMENT_DRAFT'));
     } catch (error) {
-      void message.error(error instanceof Error ? error.message : '实验上传记录加载失败');
+      if (!silent) void message.error(error instanceof Error ? error.message : '实验上传记录加载失败');
     } finally {
-      if (showLoading) setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [message]);
 
@@ -111,7 +111,7 @@ export function ExperimentUploadPage() {
   );
   useEffect(() => {
     if (!running) return undefined;
-    const timer = window.setInterval(() => void load(false), 2000);
+    const timer = window.setInterval(() => void load({ silent: true }), 2000);
     return () => window.clearInterval(timer);
   }, [load, running]);
 
@@ -316,7 +316,7 @@ export function ExperimentUploadPage() {
       searchValue={keyword}
       onSearchChange={(value) => { setKeyword(value); setPage((current) => ({ ...current, current: 1 })); }}
       records={records}
-      recordsLoading={loading}
+      recordsLoading={loading && freeJobs.length + templateJobs.length === 0}
       pagination={{ current: page.current, pageSize: page.pageSize, total: jobs.length }}
       onPageChange={(current, pageSize) => setPage({ current, pageSize })}
     />

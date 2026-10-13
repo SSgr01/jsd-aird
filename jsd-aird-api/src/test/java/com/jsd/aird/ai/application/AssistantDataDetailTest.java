@@ -11,56 +11,72 @@ import org.junit.jupiter.api.Test;
 class AssistantDataDetailTest {
 
     @Test
-    void appendsExactDataValuesAsMarkdownInsteadOfRelyingOnTheModel() {
-        var hit = hit("REC-001", "density", "密度", "1.08", "g/cm³", "NUMBER", "Sheet1", "C12");
+    void sendsDataMissesToTheSharedAnswerContextWithARestrictedClaim() {
+        var detail = DataSourceFileSearchFacade.DataDetailResult.empty(
+                DataSourceFileSearchFacade.DataQueryMode.FIELD_LOOKUP);
 
-        var answer = AssistantService.appendDataDetailTable("该记录的密度如下。", List.of(hit));
-
-        assertThat(answer).contains("### 数据明细")
-                .contains("| 记录 | 字段 | 值 | 单位 | 来源 |")
-                .contains("|REC-001|密度|1.08|g/cm³|检测报告.xlsx / Sheet1!C12|")
-                .doesNotContain("density");
+        assertThat(AssistantService.dataLookupContext(detail))
+                .contains("未找到匹配文件或记录")
+                .doesNotContain("可能原因", "数据不存在");
     }
 
     @Test
-    void rendersAFileOverviewOnceWithoutInternalIdentifiers() {
-        var hit = hit("SYN-UVPU-APP-0031", "TABLE.COLUMN.粘度", "粘度", "208", null,
-                "NUMBER", "Sheet1", "G13");
-        var result = new DataSourceFileSearchFacade.DataDetailResult(
-                DataSourceFileSearchFacade.DataQueryMode.FILE_OVERVIEW, UUID.randomUUID(), UUID.randomUUID(),
-                "应用测试报告.xlsx", 14, 296, List.of(hit), false);
+    void doesNotReportADataMissWhenTheDataSourceWasNotSelected() {
+        var detail = DataSourceFileSearchFacade.DataDetailResult.empty(
+                DataSourceFileSearchFacade.DataQueryMode.RECORD_DETAIL);
 
-        var answer = AssistantService.dataDetailAnswer(result);
-
-        assertThat(answer).contains("14 条来源记录、296 个非空可检索值")
-                .contains("| 记录 | 字段 | 值 | 单位 | 位置 |")
-                .contains("|SYN-UVPU-APP-0031|粘度|208|—|Sheet1!G13|")
-                .doesNotContain("检测报告.xlsx / Sheet1!G13")
-                .containsOnlyOnce("### 数据明细")
-                .doesNotContain("IMPORT:STRUCT", "TABLE.COLUMN", "bindingId", "valuePath");
+        assertThat(AssistantService.dataLookupContext(detail, true))
+                .contains("本轮没有检索数据中心", "不包含数据中心")
+                .doesNotContain("未找到匹配文件或记录");
     }
 
     @Test
-    void buildsACompactAnalysisPromptFromBusinessDataOnly() {
-        var hit = hit("SYN-UVPU-APP-0031", "TABLE.COLUMN.粘度", "粘度", "208", null,
-                "NUMBER", "Sheet1", "G13");
+    void addsRecordContextToTheSameEvidenceSetUsedByTheSharedAnswerModel() {
+        var target = hit("APP-UV-0001", "树脂编号", "SJ-231", "CONFIRMED", "TARGET");
+        var sameRecord = hit("APP-UV-0001", "SJ-231（配方占比）", "55.86", "CONFIRMED", "SAME_RECORD");
+        var sharedSheet = hit("APP-UV-0001", "测试基材", "100μm PET 光学膜", "CONFIRMED", "SHARED_SHEET");
+        var detail = new DataSourceFileSearchFacade.DataDetailResult(
+                DataSourceFileSearchFacade.DataQueryMode.RECORD_DETAIL,
+                DataSourceFileSearchFacade.DataResolution.RESOLVED,
+                UUID.randomUUID(), UUID.randomUUID(), "应用配方.xlsx", 1, 3,
+                List.of(target), false, List.of(), false,
+                List.of(new DataSourceFileSearchFacade.RecordContext("APP-UV-0001", "Sheet1",
+                        List.of(target), List.of(sameRecord, sharedSheet), false, false, "")), "VALUE");
+        var retrieval = new RagRetrievalService.Retrieval(null, List.of(), List.of(target), detail, List.of(), null);
+
+        var answerHits = AssistantService.answerDataHits(retrieval);
+        var compressed = new ContextCompressionService().compress(List.of(), answerHits, 2_000, true);
+
+        assertThat(answerHits).containsExactly(target, sameRecord, sharedSheet);
+        assertThat(compressed.evidenceRefs()).containsExactly("D1", "D2", "D3");
+        assertThat(compressed.text()).contains("来源=数据中心记录", "业务记录=APP-UV-0001")
+                .contains("来源状态=已确认")
+                .contains("字段=树脂编号；值=SJ-231")
+                .contains("字段=SJ-231（配方占比）；值=55.86")
+                .contains("证据关系=同一工作表共享条件；原始内容=记录=APP-UV-0001；字段=测试基材；值=100μm PET 光学膜");
+    }
+
+    @Test
+    void preservesMixedSourceStatusesAsAConstraintOnSynthesis() {
+        var confirmed = hit("APP-UV-0001", "树脂编号", "SJ-231", "CONFIRMED", "TARGET");
+        var draft = hit("APP-UV-0241", "树脂编号", "SJ-231", "DRAFT", "TARGET");
         var result = new DataSourceFileSearchFacade.DataDetailResult(
-                DataSourceFileSearchFacade.DataQueryMode.FIELD_LOOKUP, UUID.randomUUID(), UUID.randomUUID(),
-                "应用测试报告.xlsx", 14, 296, List.of(hit), false);
+                DataSourceFileSearchFacade.DataQueryMode.RECORD_DETAIL,
+                DataSourceFileSearchFacade.DataResolution.RESOLVED,
+                UUID.randomUUID(), UUID.randomUUID(), "多来源数据.xlsx", 2, 2,
+                List.of(confirmed, draft), false, List.of(), false, List.of(), "VALUE");
 
-        var prompt = AssistantService.dataDetailAnalysisPrompt("SJ-230水洗后的粘度是多少？", result);
-        var answer = AssistantService.mergeDataDetailAnswer("SJ-230水洗后的粘度为 208。", AssistantService.dataDetailAnswer(result));
+        var boundary = AssistantService.dataEvidenceBoundary(result);
 
-        assertThat(prompt).contains("字段=粘度；值=208；单位=—；位置=Sheet1!G13")
-                .doesNotContain("TABLE.COLUMN", "IMPORT:STRUCT", "bindingId", "valuePath");
-        assertThat(answer).startsWith("### 简要分析\n\nSJ-230水洗后的粘度为 208。")
-                .contains("|SYN-UVPU-APP-0031|粘度|208|—|Sheet1!G13|");
+        assertThat(boundary.observationOnly()).isTrue();
+        assertThat(boundary.description()).contains("已确认记录，也有草稿").contains("逐条注明状态");
+        assertThat(AssistantService.dataLookupContext(result)).contains("找到匹配记录");
     }
 
     @Test
     void asksForClarificationWhenARequestedDisplayNameHasDifferentSemantics() {
-        var massDensity = hit("REC-001", "mass_density", "密度", "1.08", "g/cm³", "NUMBER", "Sheet1", "C12");
-        var opticalDensity = hit("REC-002", "optical_density", "密度", "0.42", null, "NUMBER", "Sheet2", "D8");
+        var massDensity = hit("REC-001", "密度", "1.08", "CONFIRMED", "TARGET", "mass_density", "g/cm³");
+        var opticalDensity = hit("REC-002", "密度", "0.42", "CONFIRMED", "TARGET", "optical_density", "");
 
         var ambiguity = AssistantService.detectFieldAmbiguity("请问密度是什么？", List.of(massDensity, opticalDensity));
 
@@ -72,44 +88,24 @@ class AssistantDataDetailTest {
 
     @Test
     void sameFieldAcrossRecordsIsNotAmbiguous() {
-        var first = hit("REC-001", "density", "密度", "1.08", "g/cm³", "NUMBER", "Sheet1", "C12");
-        var second = hit("REC-002", "density", "密度", "1.12", "g/cm³", "NUMBER", "Sheet1", "C13");
+        var first = hit("REC-001", "密度", "1.08", "CONFIRMED", "TARGET");
+        var second = hit("REC-002", "密度", "1.12", "CONFIRMED", "TARGET");
 
         assertThat(AssistantService.detectFieldAmbiguity("查询密度", List.of(first, second))).isNull();
     }
 
-    @Test
-    void asksForAFileChoiceWithoutExposingInternalIdentifiers() {
-        var result = new DataSourceFileSearchFacade.DataDetailResult(
-                DataSourceFileSearchFacade.DataQueryMode.FIELD_LOOKUP,
-                DataSourceFileSearchFacade.DataResolution.AMBIGUOUS,
-                null, null, "", 0, 0, List.of(), false,
-                List.of(new DataSourceFileSearchFacade.DataFileCandidate("测试数据A.xlsx"),
-                        new DataSourceFileSearchFacade.DataFileCandidate("测试数据B.xlsx")), false);
-
-        assertThat(AssistantService.dataDetailAnswer(result))
-                .isEqualTo("找到多个同等匹配的数据文件，请选择下方文件继续查询。")
-                .doesNotContain("UUID", "importJobId", "bindingId", "valuePath");
+    private DataSourceFileSearchFacade.SourceFileHit hit(String recordKey, String fieldName, String value,
+                                                          String status, String relation) {
+        return hit(recordKey, fieldName, value, status, relation, fieldName, null);
     }
 
-    @Test
-    void requiresAFileNameOnlyForAFileOverview() {
-        var result = new DataSourceFileSearchFacade.DataDetailResult(
-                DataSourceFileSearchFacade.DataQueryMode.FILE_OVERVIEW,
-                DataSourceFileSearchFacade.DataResolution.FILE_REQUIRED,
-                null, null, "", 0, 0, List.of(), false, List.of(), false);
-
-        assertThat(AssistantService.dataDetailAnswer(result))
-                .contains("整文件概览需要指定文件名")
-                .contains("实验编号、树脂型号或字段时可以直接提问");
-    }
-
-    private DataSourceFileSearchFacade.SourceFileHit hit(String recordKey, String fieldCode, String fieldName,
-                                                          String value, String unit, String valueType,
-                                                          String sheet, String cell) {
+    private DataSourceFileSearchFacade.SourceFileHit hit(String recordKey, String fieldName, String value,
+                                                          String status, String relation, String fieldCode,
+                                                          String unit) {
         return new DataSourceFileSearchFacade.SourceFileHit(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
-                12, "C", "检测报告.xlsx", "记录=" + recordKey + "；字段=" + fieldName + "；值=" + value,
-                0.9, "DATA_CENTER:" + sheet + ":" + cell, recordKey, fieldCode, fieldName, value, unit,
-                valueType, sheet, cell);
+                12, "C", "应用配方.xlsx", "记录=" + recordKey + "；字段=" + fieldName + "；值=" + value,
+                0.9, "DATA_CENTER:Sheet1:C12", recordKey, fieldCode, fieldName, value, unit,
+                "TEXT", "Sheet1", "C12", "DATA_CENTER", "TEMPLATE_GUIDED", UUID.randomUUID(), UUID.randomUUID(),
+                status, fieldName, null, null, null, unit, unit, null, relation);
     }
 }

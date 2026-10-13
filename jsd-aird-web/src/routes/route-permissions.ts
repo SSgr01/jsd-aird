@@ -223,6 +223,11 @@ export function hasMenu(required: string, menuKeys: string[]): boolean {
 }
 
 export function canViewPathWithMenus(pathname: string, permissions: string[], menuKeys: string[]): boolean {
+  const path = pathname.split('?')[0]?.replace(/\/$/, '') || '/';
+  if (path === '/knowledge/view') {
+    if (menuKeys.length > 0) return menuKeys.includes('knowledge.view') || menuKeys.includes('knowledge.review');
+    return hasPermission('knowledge.view', permissions) || hasPermission('knowledge.review', permissions);
+  }
   const menu = requiredMenuForPath(pathname);
   // In the v2 model business roles own navigation visibility. Permission
   // levels remain independent and are enforced by page actions and APIs.
@@ -273,6 +278,7 @@ export function firstAccessiblePath(permissions: string[], menuKeys: string[] = 
     ['/projects/list', 'project.view'],
     ['/templates/library', 'template.view'],
     ['/knowledge/view', 'knowledge.view'],
+    ['/knowledge/view', 'knowledge.review'],
     ['/experiments/list', 'experiment.view'],
     ['/research-test/reports', 'research-test.report.view'],
     ['/production-orders/list', 'production.view'],
@@ -298,6 +304,10 @@ export function filterMenuRoute(route: MenuRoute, permissions: string[], menuKey
   // A group route is only a container. Its visibility follows its surviving
   // children; requiring one specific child key here would hide sibling-only roles.
   if (route.path && !route.routes) {
+    if (route.path === '/knowledge/view') {
+      if (!canViewPathWithMenus(route.path, permissions, menuKeys)) return null;
+      return { ...route };
+    }
     const menu = menuKeys.length > 0 ? requiredMenuForPath(route.path) : undefined;
     if (menu && !hasMenu(menu, menuKeys)) return null;
     if (!menu && !canViewPath(route.path, permissions)) return null;

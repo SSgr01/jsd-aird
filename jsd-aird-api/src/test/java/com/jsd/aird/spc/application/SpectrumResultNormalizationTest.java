@@ -11,15 +11,12 @@ import org.junit.jupiter.api.Test;
 class SpectrumResultNormalizationTest {
 
     @Test
-    void normalizesObjectConfidenceAndValidationExperimentWithoutChangingObservedFacts() throws Exception {
+    void normalizesV3ContainerWithoutChangingModelClaims() throws Exception {
         var objectMapper = new ObjectMapper();
         var source = (ObjectNode) objectMapper.readTree("""
-                {
-                  "answerMarkdown":"可见约 295 nm 峰。",
-                  "confidence":{"overallConfidence":"MEDIUM","reason":"图像读数为近似值"},
-                  "observations":[{"description":"主峰约 295 nm","peakNm":295,"absorbance":2.2}],
-                  "suggestedValidationExperiments":{"experiment":"同条件平行复测","purpose":"确认差异"}
-                }
+                {"schemaVersion":3,"confidence":{"overallConfidence":"MEDIUM"},
+                 "claims":[{"claimId":"C1","claimType":"OBSERVATION","statement":"主峰约295 nm"}],
+                 "limitations":[],"assessment":{"type":"OVERVIEW"}}
                 """);
         var original = source.deepCopy();
         var service = new SpectrumChatService(null, null, objectMapper, null, null,
@@ -29,12 +26,42 @@ class SpectrumResultNormalizationTest {
 
         var normalized = (ObjectNode) method.invoke(service, source);
 
+        assertThat(normalized.path("schemaVersion").asInt()).isEqualTo(3);
         assertThat(normalized.path("confidence").asText()).isEqualTo("MEDIUM");
-        assertThat(normalized.path("suggestedValidationExperiments")).hasSize(1);
-        assertThat(normalized.path("suggestedValidationExperiments").path(0).path("experiment").asText())
-                .isEqualTo("同条件平行复测");
-        assertThat(normalized.path("observations").path(0).path("peakNm").asInt()).isEqualTo(295);
-        assertThat(normalized.path("observations").path(0).path("absorbance").asDouble()).isEqualTo(2.2);
+        assertThat(normalized.path("claims").path(0).path("statement").asText()).isEqualTo("主峰约295 nm");
         assertThat(source).isEqualTo(original);
+    }
+
+    @Test
+    void preservesNaturalMarkdownAsTheCompleteV4Result() throws Exception {
+        var objectMapper = new ObjectMapper();
+        var report = """
+                ## 图上观察
+
+                两条曲线的主峰位置接近，旧样峰高略高。这里的读数是图上估读。
+
+                | 特征 | 旧样 | 新样 |
+                |---|---:|---:|
+                | 主峰 | 2.4 Abs | 2.2 Abs |
+
+                ### 结论边界
+
+                单张图片不能确认差异是否可重复。
+                """;
+        var source = objectMapper.createObjectNode()
+                .put("schemaVersion", 4)
+                .put("analysisStatus", "SUCCEEDED")
+                .put("answerMarkdown", report);
+        var service = new SpectrumChatService(null, null, objectMapper, null, null,
+                new SpectrumPromptProvider(objectMapper), null, null, "gpt-5.6-sol");
+        var method = SpectrumChatService.class.getDeclaredMethod("normalizeResult", JsonNode.class);
+        method.setAccessible(true);
+
+        var normalized = (ObjectNode) method.invoke(service, source);
+
+        assertThat(normalized.path("schemaVersion").asInt()).isEqualTo(4);
+        assertThat(normalized.path("analysisStatus").asText()).isEqualTo("SUCCEEDED");
+        assertThat(normalized.path("answerMarkdown").asText()).isEqualTo(report);
+        assertThat(normalized.has("claims")).isFalse();
     }
 }

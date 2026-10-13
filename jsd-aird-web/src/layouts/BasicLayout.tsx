@@ -137,7 +137,6 @@ const route = {
       name: '研发知识库',
       icon: <FolderOpenOutlined />,
       routes: [
-        { path: '/knowledge/review', name: '审核工作台', icon: <AuditOutlined /> },
         { path: '/knowledge/library', name: '资料上传', icon: <FolderOpenOutlined /> },
         { path: '/knowledge/view', name: '知识库查看', icon: <EyeOutlined /> },
       ],

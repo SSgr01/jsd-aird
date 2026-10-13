@@ -18,5 +18,10 @@ public final class PredictionContracts {
                                     List<QualityRule> rules, String policyHash,
                                     long revision, Instant publishedAt, Instant createdAt) { }
 
+    public record DomainPolicyCommand(JsonNode configuration, long expectedRevision) { }
+    public record DomainPolicyView(UUID id, UUID targetId, int version, String status, String kind,
+                                   JsonNode configuration, String policyHash,
+                                   long revision, Instant publishedAt, Instant createdAt) { }
+
     public record PredictionHttpResult(int status, JsonNode body) { }
 }

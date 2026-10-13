@@ -89,9 +89,12 @@ public class OptimizationService {
         var a=actor();require(a,"ai.experiment.optimize","AI_EXPERIMENT_OPTIMIZATION",baselineId,"READ");
         var baseline=resolveBaseline(a,baselineType,baselineId);var snapshot=baselineSnapshot(a.organizationId(),baseline);var root=json.createObjectNode();
         root.set("baseline",json.valueToTree(summary(a.organizationId(),baseline)));root.set("frozenBaseline",snapshot);
+        root.put("simulationAuthorized",formulaDesign.simulationAuthorized());
         var catalog=json.createArrayNode();predictions.targetCatalog(a.organizationId()).forEach(t->catalog.add(json.createObjectNode()
                 .put("targetId",t.id().toString()).put("code",t.code()).put("name",t.name()).put("category",Objects.toString(t.category(),"未分类"))
-                .put("valueType",t.valueType()).put("available",t.modelId()!=null&&t.qualityPolicyId()!=null&&t.domainPolicyId()!=null)));
+                .put("valueType",t.valueType()).put("available",formulaDesign.modelAvailable(t))
+                .put("simulation",formulaDesign.isSimulation(t.sourceDataNature(),t.testOnlySimulation()))
+                .put("testOnlySimulation",t.testOnlySimulation())));
         root.set("targets",catalog);
         RegisteredUvpuTargetCatalog.append(json, catalog);
         var templateOptions=json.createArrayNode();
@@ -158,7 +161,7 @@ public class OptimizationService {
             var response=compute.recommend(payload);repository.progress(org,runId,75,"STRATEGY_SELECTION");
             if("FAILED".equals(response.path("executionStatus").asText())){repository.fail(org,runId,response.path("code").asText("COMPUTE_UNAVAILABLE"),response.path("message").asText("计算服务执行失败"));return response;}
             var savedStrategies=new LinkedHashSet<String>();var no=0;for(var c:response.path("candidates")){if(!c.isObject())continue;var strategy=c.path("strategy").asText();if(!STRATEGIES.contains(strategy)||!savedStrategies.add(strategy))continue;var formula=c.path("formula");var hash=hashing.hash(json.createObjectNode().put("strategy",strategy).set("formula",formula));repository.saveCandidate(org,runId,++no,strategy,strategyTitle(strategy),formula,c.path("inputs"),resultsObject(c.path("results"),org,run.bindings()),c.path("quality"),c.path("applicability"),c.path("ruleCheck"),c.path("evidence"),c.path("score").asDouble(),hash,formula.path("recordedTotal").asDouble(),c.path("baselineDistance").asDouble(),c.path("changeSummary"),c.path("strategyEvidence"),c.path("riskFlags"));}
-            var missing=STRATEGIES.stream().filter(s->!savedStrategies.contains(s)).toList();var summary=json.createObjectNode().put("requestedCandidateCount",4).put("actualCandidateCount",savedStrategies.size());summary.set("missingStrategies",json.valueToTree(missing));
+            var missing=STRATEGIES.stream().filter(s->!savedStrategies.contains(s)).toList();var simulation=formulaDesign.simulationForBindings(org,run.bindings());var summary=json.createObjectNode().put("requestedCandidateCount",4).put("actualCandidateCount",savedStrategies.size()).put("simulation",simulation);if(simulation)summary.put("predictionMode","SIMULATION").put("resultNotice","测试环境模拟预测结果，不代表正式模型结论");summary.set("missingStrategies",json.valueToTree(missing));
             if(response.has("missingStrategyReasons"))summary.set("missingStrategyReasons",response.path("missingStrategyReasons"));
             if(response.has("shortfallReason"))summary.set("shortfallReason",response.path("shortfallReason"));
             if(response.has("searchEngine"))summary.set("searchEngine",response.path("searchEngine"));
@@ -332,11 +335,12 @@ public class OptimizationService {
         return value;
     }
     private String normalizeKey(String value){return value==null?"":value.toUpperCase(java.util.Locale.ROOT).replace("TEST_","").replace("PROCESS_","").replaceAll("[^A-Z0-9]","");}
-    private OptimizationRun view(UUID org,OptimizationRepository.RunRow run){var candidates=repository.candidates(org,run.id()).stream().map(c->new OptimizationCandidate(c.id(),c.candidateNo(),c.strategy(),c.title(),c.formula(),c.inputs(),c.results(),c.quality(),c.applicability(),c.ruleCheck(),c.score(),c.targetTotal(),c.distance(),c.changes(),c.strategyEvidence(),c.risks())).toList();var missing=STRATEGIES.stream().filter(s->candidates.stream().noneMatch(c->s.equals(c.strategy()))).toList();var map=new LinkedHashMap<UUID,UUID>();run.bindings().fields().forEachRemaining(e->map.put(UUID.fromString(e.getKey()),UUID.fromString(e.getValue().asText())));var result=run.result();return new OptimizationRun(run.id(),run.executionStatus(),run.outcomeStatus(),run.progress(),run.stage(),4,candidates.size(),missing,result.path("missingStrategyReasons"),candidates,run.error(),run.baseline(),run.request(),map,run.requestId(),run.updatedAt(),result.path("searchEngine").asText(null),result.path("searchStrategy").asText(null),result.path("searchEvidence"));}
+    private OptimizationRun view(UUID org,OptimizationRepository.RunRow run){var candidates=repository.candidates(org,run.id()).stream().map(c->new OptimizationCandidate(c.id(),c.candidateNo(),c.strategy(),c.title(),c.formula(),c.inputs(),c.results(),c.quality(),c.applicability(),c.ruleCheck(),c.score(),c.targetTotal(),c.distance(),c.changes(),c.strategyEvidence(),c.risks())).toList();var missing=STRATEGIES.stream().filter(s->candidates.stream().noneMatch(c->s.equals(c.strategy()))).toList();var map=new LinkedHashMap<UUID,UUID>();run.bindings().fields().forEachRemaining(e->map.put(UUID.fromString(e.getKey()),UUID.fromString(e.getValue().asText())));var result=run.result();var simulation=formulaDesign.simulationForBindings(org,run.bindings());return new OptimizationRun(run.id(),run.executionStatus(),run.outcomeStatus(),run.progress(),run.stage(),4,candidates.size(),missing,result.path("missingStrategyReasons"),candidates,run.error(),run.baseline(),run.request(),map,run.requestId(),run.updatedAt(),result.path("searchEngine").asText(null),result.path("searchStrategy").asText(null),result.path("searchEvidence"),simulation,simulation?"SIMULATION":"FORMAL",simulation?"测试环境模拟预测结果，不代表正式模型结论":null);}
     private OptimizationAccepted accepted(OptimizationRepository.RunRow run){var map=new LinkedHashMap<UUID,UUID>();run.bindings().fields().forEachRemaining(e->map.put(UUID.fromString(e.getKey()),UUID.fromString(e.getValue().asText())));var status=List.of("QUEUED","RUNNING").contains(run.executionStatus())?"RUNNING":run.executionStatus();return new OptimizationAccepted(run.id(),run.opsJobId(),status,map,1000);}
     private ObjectNode targetView(PredictionRepository.TargetBinding b){
         var n=json.createObjectNode().put("targetId",b.targetId().toString()).put("name",b.targetName())
-                .put("valueType",b.valueType()).put("available",formulaDesign.modelAvailable(b));
+                .put("valueType",b.valueType()).put("available",formulaDesign.modelAvailable(b))
+                .put("simulation",formulaDesign.isSimulation(b)).put("testOnlySimulation",b.testOnlySimulation());
         if(b.modelId()!=null)n.put("modelVersionId",b.modelId().toString());
         n.set("classes",b.classes()==null?json.createArrayNode():b.classes());
         if(b.definition()!=null&&b.definition().isObject()){

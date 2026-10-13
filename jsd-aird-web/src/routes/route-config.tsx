@@ -31,7 +31,6 @@ const InventoryControlPage = lazy(async () => ({ default: (await import('@/pages
 const KnowledgeDocumentPage = lazy(async () => ({ default: (await import('@/pages/knowledge')).KnowledgeDocumentPage }));
 const KnowledgeLibraryPage = lazy(async () => ({ default: (await import('@/pages/knowledge')).KnowledgeLibraryPage }));
 const KnowledgeReviewPage = lazy(async () => ({ default: (await import('@/pages/knowledge')).KnowledgeReviewPage }));
-const KnowledgeReviewQueuePage = lazy(async () => ({ default: (await import('@/pages/knowledge')).KnowledgeReviewQueuePage }));
 const KnowledgeSearchPage = lazy(async () => ({ default: (await import('@/pages/knowledge')).KnowledgeSearchPage }));
 const KnowledgeViewPage = lazy(async () => ({ default: (await import('@/pages/knowledge')).KnowledgeViewPage }));
 const ProductionOrderListPage = lazy(async () => ({ default: (await import('@/pages/production-orders')).ProductionOrderListPage }));
@@ -88,7 +87,7 @@ export const routeConfig: RouteObject[] = [
       { path: 'knowledge/library', element: <PagePermissionGate permission="knowledge.upload"><KnowledgeLibraryPage /></PagePermissionGate> },
       { path: 'knowledge/view', element: <KnowledgeViewPage /> },
       { path: 'knowledge/search', element: <KnowledgeSearchPage /> },
-      { path: 'knowledge/review', element: <PagePermissionGate permission="knowledge.review"><KnowledgeReviewQueuePage /></PagePermissionGate> },
+      { path: 'knowledge/review', element: <Navigate to="/knowledge/view?reviewStatus=PENDING_REVIEW" replace /> },
       { path: 'knowledge/review/:documentId/:versionId', element: <PagePermissionGate permission="knowledge.review"><KnowledgeReviewPage /></PagePermissionGate> },
       { path: 'knowledge/documents/:id', element: <KnowledgeDocumentPage /> },
       { path: 'assistant', element: <AssistantPage /> },

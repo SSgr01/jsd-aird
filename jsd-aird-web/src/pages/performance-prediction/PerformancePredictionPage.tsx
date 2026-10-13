@@ -10,8 +10,8 @@ import './performance-prediction.css'
 
 interface FormulaRow { key: string; materialId?: string; ratio?: number; unit: string }
 const unavailableLabels: Record<string, string> = {
-  NO_ACTIVE_MODEL: '尚无正式模型', QUALITY_POLICY_NOT_READY: '质量策略未发布',
-  DOMAIN_POLICY_NOT_READY: '适用域策略未就绪', TARGET_NOT_READY: '目标定义未发布',
+  NO_ACTIVE_MODEL: '还没有可用于正式预测的模型', QUALITY_POLICY_NOT_READY: '预测结果可信度尚未设置',
+  DOMAIN_POLICY_NOT_READY: '尚未设置模型适用的材料和实验条件范围', TARGET_NOT_READY: '预测目标设置尚未完成',
 }
 const predictionErrorLabels: Record<string, string> = {
   FORMULA_INCOMPLETE: '请确认已录入全部配方成分', FORMULA_AMOUNT_MISSING: '存在尚未填写用量的材料',
@@ -109,9 +109,9 @@ export function PerformancePredictionPage() {
           // Keep the ten enabled customer-SQL models together. Other imported
           // customer fields remain available/searchable, but must not push the
           // active metrics apart in the first viewport of the selector.
-          return index >= 0 ? index : target.formalPredictionAvailable ? 20 : 30
+          return index >= 0 ? index : (target.predictionAvailable ?? target.formalPredictionAvailable) ? 20 : 30
         }
-        if (target.formalPredictionAvailable) return 21
+        if (target.predictionAvailable ?? target.formalPredictionAvailable) return 21
         return target.registered ? 31 : 32
       }
       const byRank = rank(a) - rank(b)
@@ -123,7 +123,7 @@ export function PerformancePredictionPage() {
   useEffect(() => { predictionApi.context().then(setCatalog).catch(report).finally(() => setLoading(false)) }, [report])
   useEffect(() => {
     if (targets.length || !orderedTargets.length) return
-    const firstCustomerTarget = orderedTargets.find((target) => target.code.startsWith('CUSTOMER.TEST.') && target.formalPredictionAvailable)
+    const firstCustomerTarget = orderedTargets.find((target) => target.code.startsWith('CUSTOMER.TEST.') && (target.predictionAvailable ?? target.formalPredictionAvailable))
     if (firstCustomerTarget) setTargets([firstCustomerTarget.targetId])
   }, [orderedTargets, targets.length])
   useEffect(() => {
@@ -203,28 +203,30 @@ export function PerformancePredictionPage() {
     const customerNames = new Set(['修复速度', '涂层伸长率', '断裂伸长率', '拉伸强度', '剥离力', '弯曲韧性', '耐酸雨', '耐溶剂', '耐防晒霜', '耐芥末酱发黄'])
     const toOption = (item: (typeof orderedTargets)[number]) => ({
       value: targetOptionLabel(item),
-      label: `${targetOptionLabel(item)}${item.registered ? ' · 已登记，数据不足' : item.formalPredictionAvailable ? '' : ' · 暂不可预测'}`,
-      disabled: item.targetStatus === 'RETIRED' || !item.formalPredictionAvailable,
+      label: `${targetOptionLabel(item)}${item.registered ? ' · 已登记，数据不足' : item.simulationPredictionAvailable ? ' · 测试模拟' : item.formalPredictionAvailable ? '' : ' · 暂不可预测'}`,
+      disabled: item.targetStatus === 'RETIRED' || !(item.predictionAvailable ?? item.formalPredictionAvailable),
     })
     const customer = orderedTargets.filter((item) => item.code.startsWith('CUSTOMER.TEST.') && customerNames.has(item.name))
     const available = orderedTargets.filter((item) => !customer.includes(item) && item.formalPredictionAvailable)
-    const unavailable = orderedTargets.filter((item) => !customer.includes(item) && !item.formalPredictionAvailable)
+    const simulated = orderedTargets.filter((item) => !customer.includes(item) && !item.formalPredictionAvailable && item.simulationPredictionAvailable)
+    const unavailable = orderedTargets.filter((item) => !customer.includes(item) && !item.formalPredictionAvailable && !item.simulationPredictionAvailable)
     return [
       { label: '客户测试指标（已训练）', options: customer.map(toOption) },
       { label: '其他可预测目标', options: available.map(toOption) },
+      { label: '测试环境模拟模型', options: simulated.map(toOption) },
       { label: '暂不可预测目标', options: unavailable.map(toOption) },
     ].filter((group) => group.options.length)
   }, [orderedTargets])
   const canPredict=Boolean(targets.length&&context?.selected.some((item)=>item.available)&&!context?.configurationConflicts?.length&&(!formulaRequired||(complete&&!incompleteRows.length)))
 
   return <main className="performance-page">
-    <header className="performance-header"><div><Typography.Title level={2}>性能预测</Typography.Title><Typography.Text>输入准备实验的配方与条件，同时预测多个性能。</Typography.Text></div><div className="formal-mark"><SafetyCertificateOutlined /><span>正式模型结果</span></div></header>
+    <header className="performance-header"><div><Typography.Title level={2}>性能预测</Typography.Title><Typography.Text>输入准备实验的配方与条件，同时预测多个性能。</Typography.Text></div><div className="formal-mark"><SafetyCertificateOutlined /><span>{context?.selected.some((item)=>item.simulation)?'测试环境模拟预测':'正式模型结果'}</span></div></header>
 
     <section className="prediction-gates">
-      <div className="section-title"><span>选择预测目标</span><small>每个性能独立检查模型、输入、材料和适用范围</small></div>
+      <div className="section-title"><span>选择预测目标</span><small>系统会检查模型是否覆盖当前材料和实验条件</small></div>
       <Select mode="multiple" value={selectedTargetLabels} onChange={(labels)=>{const ids=labels.map((label)=>orderedTargets.find((item)=>targetOptionLabel(item)===label)?.targetId).filter((id): id is string => Boolean(id));setTargets(ids);setComplete(false)}} loading={loading} placeholder="按性能名称选择，可多选" maxTagCount="responsive" optionFilterProp="label" options={targetOptionGroups} />
       <RegisteredTargetsNotice targets={registeredTargets} />
-      {targets.length>0&&<div className="gate-grid">{targets.map((id)=>{const item=selectedById.get(id);const base=catalog?.targets.find((target)=>target.targetId===id);const available=item?.available;const reasons=item?.unavailableReasons??base?.unavailableReasons??[];return <div key={id} className={`gate-card ${available?'ready':'blocked'}`}><div>{available?<CheckCircleFilled />:<CloseCircleFilled />}<strong>{item?.name??base?.name??'未知目标'}</strong><Tag>{resultTypeLabels[(item?.valueType??base?.valueType) as keyof typeof resultTypeLabels]}</Tag></div><span>{available?'正式模型、输入方案和策略已固定':reasons.map((reason)=>unavailableLabels[reason]??reason).join('；')}</span></div>})}</div>}
+      {targets.length>0&&<div className="gate-grid">{targets.map((id)=>{const item=selectedById.get(id);const base=catalog?.targets.find((target)=>target.targetId===id);const available=item?.available;const reasons=item?.unavailableReasons??base?.unavailableReasons??[];return <div key={id} className={`gate-card ${available?'ready':'blocked'}`}><div>{available?<CheckCircleFilled />:<CloseCircleFilled />}<strong>{item?.name??base?.name??'未知目标'}</strong><Tag>{resultTypeLabels[(item?.valueType??base?.valueType) as keyof typeof resultTypeLabels]}</Tag>{item?.simulation&&<Tag color="purple">测试模拟</Tag>}</div><span>{available?(item?.simulation?'测试环境已开启模拟使用；本次预测会标记为测试结果':'模型和实验条件已准备好，可以进行正式预测'):reasons.map((reason)=>unavailableLabels[reason]??reason).join('；')}</span></div>})}</div>}
       {!!context?.configurationConflicts?.length&&<Alert type="error" showIcon message="所选模型对同一输入字段的类型或单位要求冲突，请调整目标组合" />}
     </section>
 
@@ -253,15 +255,17 @@ export function PerformancePredictionPage() {
 
       <section className="prediction-results">
         <div className="panel-heading"><div><AimOutlined /><span>预测结果</span></div>{result?.outcomeStatus&&<Tag color={result.outcomeStatus==='SUCCEEDED'?'green':result.outcomeStatus==='PARTIAL'?'gold':'default'}>{result.outcomeStatus==='SUCCEEDED'?'全部完成':result.outcomeStatus==='PARTIAL'?'部分完成':'条件不满足'}</Tag>}</div>
-        {predicting&&<div className="result-empty"><Spin size="large"/><strong>正在调用固定的正式模型</strong><span>页面刷新后仍会按预测记录恢复状态</span></div>}
+        <div className="quality-explanation">可信度说明结果可参考的程度。系统会结合实验信息是否齐全、模型已覆盖的材料和条件范围及测量提醒进行标注，不会改变预测值。</div>
+        {predicting&&<div className="result-empty"><Spin size="large"/><strong>{context?.selected.some((item)=>item.simulation)?'正在进行测试环境模拟预测':'正在使用正式模型预测'}</strong><span>页面刷新后仍会按预测记录恢复状态</span></div>}
         {!predicting&&!result&&<div className="result-empty"><AimOutlined/><strong>结果将在这里逐项展示</strong><span>连续值、等级和分类结果使用各自适合的表达。</span></div>}
           {result&&<div className="result-stack">
+          {result.simulation&&<Alert type="warning" showIcon message="测试环境模拟预测" description={result.resultNotice??'本次使用生成数据训练的模型，结果仅用于测试演练，不代表正式模型结论。'} />}
           {result.executionStatus==='FAILED'&&<Alert type="error" showIcon message="本次预测未能正常执行" description="模型制品或计算服务存在异常。已保存失败记录，可使用新请求重试。"/>}
-          {result.results.map((item)=>{const name=context?.selected.find((target)=>target.targetId===item.targetId)?.name??catalog?.targets.find((target)=>target.targetId===item.targetId)?.name??'预测目标';if(item.status==='SUCCEEDED'){const label=trust[item.quality?.level]??{text:'可信度待定',color:'default'};return <Card key={item.targetId} className="result-card"><div className="result-card-head"><div><CheckCircleFilled/><strong>{name}</strong></div><Space><Tag color={item.applicability.status==='IN_DOMAIN'?'green':'gold'}>{item.applicability.status==='IN_DOMAIN'?'适用范围内':'接近适用边界'}</Tag><Tag color={label.color}>{label.text}</Tag></Space></div><PredictionValue value={item.prediction}/>{item.warnings.filter((warning)=>warning.code!=='FORMULA_TOTAL_WARNING').map((warning)=><Alert key={warning.code} type="warning" showIcon message={warning.message}/>)}<Button type="link" onClick={()=>setEvidence(item)}>查看预测依据</Button></Card>}
+          {result.results.map((item)=>{const name=context?.selected.find((target)=>target.targetId===item.targetId)?.name??catalog?.targets.find((target)=>target.targetId===item.targetId)?.name??'预测目标';if(item.status==='SUCCEEDED'){const label=trust[item.quality?.level]??{text:'可信度待定',color:'default'};return <Card key={item.targetId} className="result-card"><div className="result-card-head"><div><CheckCircleFilled/><strong>{name}</strong>{item.simulation&&<Tag color="purple">模拟预测</Tag>}</div><Space><Tag color={item.applicability.status==='IN_DOMAIN'?'green':'gold'}>{item.applicability.status==='IN_DOMAIN'?'适用范围内':'接近适用边界'}</Tag><Tag color={label.color}>{label.text}</Tag></Space></div><PredictionValue value={item.prediction}/>{item.warnings.filter((warning)=>warning.code!=='FORMULA_TOTAL_WARNING').map((warning)=><Alert key={warning.code} type="warning" showIcon message={warning.message}/>)}<Button type="link" onClick={()=>setEvidence(item)}>查看预测依据</Button></Card>}
             return <Card key={item.targetId} className={`result-card result-${item.status.toLowerCase()}`}><div className="result-card-head"><div><CloseCircleFilled/><strong>{name}</strong></div><Tag color={item.status==='FAILED'?'red':'default'}>{item.status==='FAILED'?'模型异常':'无法预测'}</Tag></div><p>{predictionErrorLabels[item.errorCode]??item.message}</p></Card>})}
         </div>}
       </section>
     </div>
-    <Drawer open={Boolean(evidence)} onClose={()=>setEvidence(undefined)} width={560} title="预测依据">{evidence&&<div className="evidence-drawer"><p>该结果使用当前已确认的实验数据和适用范围规则计算。模型版本、训练数据和输入条件均在本次提交时固定。</p><dl><dt>结果状态</dt><dd>已完成</dd><dt>适用范围</dt><dd>{evidence.applicability.status==='IN_DOMAIN'?'适用范围内':'接近适用边界'}</dd><dt>可信度</dt><dd>{trust[evidence.quality?.level]?.text??'待确认'}</dd></dl><p className="evidence-note">如需查看详细技术记录，请联系管理员。</p></div>}</Drawer>
+    <Drawer open={Boolean(evidence)} onClose={()=>setEvidence(undefined)} width={560} title="预测依据">{evidence&&<div className="evidence-drawer"><p>本次预测固定使用了对应的模型版本、训练记录和实验条件；系统同时检查了当前配方与条件是否在模型覆盖范围内。</p><dl><dt>结果状态</dt><dd>已完成</dd><dt>模型适用范围</dt><dd>{evidence.applicability.status==='IN_DOMAIN'?'在模型已覆盖范围内':'接近模型覆盖边界'}</dd><dt>可信度</dt><dd>{trust[evidence.quality?.level]?.text??'待确认'}</dd></dl><p className="evidence-note">如需查看详细技术记录，请联系管理员。</p></div>}</Drawer>
   </main>
 }

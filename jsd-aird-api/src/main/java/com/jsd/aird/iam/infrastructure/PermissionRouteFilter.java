@@ -395,7 +395,9 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
                 || path.startsWith("/api/v1/ai/rnd/material-dictionaries"))
             return permission(read ? "ai.modeling.read" : "ai.config.manage", "AI_CONFIG", read ? "READ" : "WRITE");
         if (path.matches("/api/v1/ai/rnd/targets/[0-9a-f-]{36}/quality-policies")
-                || path.matches("/api/v1/ai/rnd/quality-policies/[0-9a-f-]{36}/publish"))
+                || path.matches("/api/v1/ai/rnd/quality-policies/[0-9a-f-]{36}/publish")
+                || path.matches("/api/v1/ai/rnd/targets/[0-9a-f-]{36}/domain-policies")
+                || path.matches("/api/v1/ai/rnd/domain-policies/[0-9a-f-]{36}/publish"))
             return permission(read ? "ai.modeling.read" : "ai.config.manage", "AI_CONFIG", read ? "READ" : "WRITE");
         if (path.equals("/api/v1/ai/rnd/predictions") && method.equals("POST"))
             return permission("ai.performance.predict", "AI_PERFORMANCE", "USE");

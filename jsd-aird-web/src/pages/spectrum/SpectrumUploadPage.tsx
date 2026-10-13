@@ -293,7 +293,7 @@ export function SpectrumUploadPage() {
         }}
         searchPlaceholder="搜索图谱名称"
         records={records}
-        recordsLoading={loading}
+        recordsLoading={loading && items.length === 0}
         pagination={page}
         onPageChange={(current, pageSize) => setPage((value) => ({ ...value, current, pageSize }))}
       />

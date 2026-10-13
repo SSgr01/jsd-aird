@@ -4,7 +4,7 @@
 DO $$
 BEGIN
     IF to_regclass('mfg.inventory_sample_dispatch') IS NULL THEN
-        RAISE NOTICE 'skip V69: mfg.inventory_sample_dispatch not present';
+        RAISE NOTICE 'skip V74: mfg.inventory_sample_dispatch not present';
         RETURN;
     END IF;
 

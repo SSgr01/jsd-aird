@@ -74,10 +74,49 @@ class EligibilityRuleEvaluatorTest {
         assertThat(result.primaryReason()).isEqualTo("MISSING_REQUIRED_X");
     }
 
+    @Test
+    void experimentTestItemMatchesOnePhysicalTargetEvenWhenFactsContainTheProjectedCopy() throws Exception {
+        var observation = json.readTree("""
+                {"items":[{"testItem":"UV后干膜室温放置12小时后的翘曲度（PET膜）","value":"反翘3.6cm"}]}
+                """);
+        var facts = json.readTree("""
+                {"testResults":[{"testItem":"UV后干膜室温放置12小时后的翘曲度（PET膜）","value":"反翘3.6cm"}]}
+                """);
+        var sample = new SampleRow(UUID.randomUUID(), "sample-1", "ACTIVE", "EXPERIMENT", UUID.randomUUID(), 1,
+                json.createObjectNode(), json.createObjectNode(), json.createObjectNode(), observation, facts,
+                json.createObjectNode(), "EXPERIMENT", "CURRENT", false);
+        var mapping = new SourceMappingRow(UUID.randomUUID(), "EXPERIMENT", json.readTree("""
+                {"targetFieldCode":"TEST.RESULT.VALUE","sourceAliases":["12小时后的翘曲度"]}
+                """), 1);
+        var result = evaluator.evaluate(config(List.of(), null, mapping), sample);
+        assertThat(result.state()).isEqualTo(State.TRAINABLE);
+        assertThat(result.evidence().path("targetValue").asDouble()).isEqualTo(3.6);
+    }
+
+    @Test
+    void operationLabelResolvesARequiredExperimentInput() throws Exception {
+        var field = new FieldRow(UUID.randomUUID(), true, 0, "coatingSolidsPct", "涂料固含", "NUMBER", "%",
+                "PRE_EXPERIMENT", json.createObjectNode(), json.createObjectNode());
+        var process = json.readTree("""
+                {"items":[{"operation":"涂料固含","value":"40.00%"}]}
+                """);
+        var sample = new SampleRow(UUID.randomUUID(), "sample-1", "ACTIVE", "DATA_CENTER", UUID.randomUUID(), 1,
+                json.createObjectNode(), process, json.createObjectNode(),
+                json.readTree("{\"gloss\":{\"value\":12.0}}"), json.createObjectNode(), json.createObjectNode(),
+                "DATA_CENTER", "CURRENT", false);
+        var result = evaluator.evaluate(config(List.of(field), null), sample);
+        assertThat(result.reasons()).extracting("code").doesNotContain("MISSING_REQUIRED_X");
+    }
+
     private Configuration config(List<FieldRow> fields, com.fasterxml.jackson.databind.JsonNode dictionary) throws Exception {
         var mapping = new SourceMappingRow(UUID.randomUUID(), "DATA_CENTER", json.readTree("{\"targetFieldCode\":\"GLOSS\",\"sourceAliases\":[\"gloss\"]}"), 1);
+        return config(fields, dictionary, mapping);
+    }
+
+    private Configuration config(List<FieldRow> fields, com.fasterxml.jackson.databind.JsonNode dictionary,
+                                 SourceMappingRow mapping) {
         var policy = new PolicyRow(UUID.randomUUID(), json.createObjectNode(), json.createObjectNode(), json.createObjectNode(), "0123456789012345678901234567890123456789012345678901234567890123");
-        return new Configuration(UUID.randomUUID(), targetVersion, scheme, "CONTINUOUS", "GU", List.of(), json.createObjectNode(), json.createObjectNode(), UUID.randomUUID(), "FROZEN", "PUBLISHED", fields, Map.of("DATA_CENTER", mapping), policy, dictionary, "hash");
+        return new Configuration(UUID.randomUUID(), targetVersion, scheme, "CONTINUOUS", "GU", List.of(), json.createObjectNode(), json.createObjectNode(), UUID.randomUUID(), "FROZEN", "PUBLISHED", fields, Map.of(mapping.sourceType(), mapping), policy, dictionary, "hash");
     }
 
     private SampleRow sample(String gloss, com.fasterxml.jackson.databind.JsonNode composition) throws Exception {

@@ -7,7 +7,8 @@ import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.jsd.aird.ops.application.port.FileStorageFacade;
 import com.jsd.aird.ops.application.port.AuditLogFacade;
 import com.jsd.aird.kb.domain.DocumentParser;
-import com.jsd.aird.kb.domain.MediaExtractionProvider;
+import com.jsd.aird.kb.domain.OcrMode;
+import com.jsd.aird.kb.infrastructure.MineruImageDocumentParser;
 import com.jsd.aird.quality.application.port.QualityDataStore;
 import com.jsd.aird.shared.api.PageResponse;
 import com.jsd.aird.shared.error.ApiErrorCode;
@@ -32,19 +33,19 @@ public class QualityDataService {
     private final FileStorageFacade storage;
     private final QualitySourceParser sourceParser;
     private final WorkbookInstanceParser workbookParser;
-    private final List<MediaExtractionProvider> mediaProviders;
+    private final MineruImageDocumentParser imageParser;
     private final AuditLogFacade audit;
     public QualityDataService(QualityDataStore repository, ObjectMapper objectMapper,
                               FileStorageFacade storage, QualitySourceParser sourceParser,
                               WorkbookInstanceParser workbookParser,
-                              List<MediaExtractionProvider> mediaProviders,
+                              MineruImageDocumentParser imageParser,
                               AuditLogFacade audit) {
         this.repository = repository;
         this.objectMapper = objectMapper;
         this.storage = storage;
         this.sourceParser = sourceParser;
         this.workbookParser = workbookParser;
-        this.mediaProviders = List.copyOf(mediaProviders);
+        this.imageParser = imageParser;
         this.audit = audit;
     }
 
@@ -319,27 +320,22 @@ public class QualityDataService {
     }
     private void applyImageOcr(QualityDataDefinitions.Type type, ObjectNode data,
                                UploadInput input, byte[] bytes) {
-        var provider = mediaProviders.stream()
-                .filter(item -> item.supports(input.originalName(), input.contentType()))
-                .filter(MediaExtractionProvider::isConfigured)
-                .findFirst()
-                .orElseGet(() -> mediaProviders.stream()
-                        .filter(item -> item.supports(input.originalName(), input.contentType()))
-                        .findFirst().orElse(null));
-        if (provider == null || !provider.isConfigured()) {
+        if (!imageParser.isConfigured()) {
             data.put("ocrStatus", "REVIEW_REQUIRED");
-            data.put("ocrMessage", provider == null ? "未找到可用的 OCR 服务" : provider.unavailableReason());
+            data.put("ocrMessage", imageParser.unavailableReason());
             data.put("parseStatus", "待人工补齐");
             return;
         }
         DocumentParser.ParsedDocument parsed;
         try {
-            parsed = provider.extract(new ByteArrayInputStream(bytes), input.originalName(),
-                    new MediaExtractionProvider.ExtractionContext(input.fileId(), input.contentType(), bytes.length, null));
+            var actor = ActorContext.required();
+            parsed = imageParser.parse(new ByteArrayInputStream(bytes), input.originalName(),
+                    new DocumentParser.ParseContext(actor.organizationId(), actor.userId(), input.fileId(),
+                            input.contentType(), bytes.length, OcrMode.ON, false));
         } catch (RuntimeException exception) {
             data.put("ocrStatus", "FAILED");
             data.put("ocrMessage", exception.getMessage() == null || exception.getMessage().isBlank()
-                    ? "OCR 解析失败，请人工录入" : exception.getMessage());
+                    ? "MinerU 图片解析失败，请人工录入" : exception.getMessage());
             data.put("parseStatus", "待人工补齐");
             return;
         }

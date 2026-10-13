@@ -200,7 +200,7 @@ export interface ModelVersion {
   trainableSamples: number; trainingJobId: string; createdAt: string; updatedAt: string; revision: number
 }
 export interface ModelRelease { id: string; action: string; modelVersionId: string; previousModelVersionId?: string; reason: string; createdAt: string }
-export interface ModelDetail { model: ModelVersion; snapshot: TrainingSnapshotSummary; applicabilityDomain: Record<string, unknown>; modelCard: Record<string, unknown>; rejectionReasons: string[]; releases: ModelRelease[] }
+export interface ModelDetail { model: ModelVersion; snapshot: TrainingSnapshotSummary; applicabilityDomain: Record<string, unknown>; modelCard: Record<string, unknown>; rejectionReasons: string[]; releases: ModelRelease[]; testActivationAllowed?: boolean }
 export interface ModelComparison { candidateId: string; activeModelId?: string; status: string; sameComparisonSet: boolean; candidateMetrics: Record<string, unknown>; activeMetrics: Record<string, unknown>; baselineMetrics: Record<string, unknown>; reasons: string[] }
 export interface ModelActionCommand extends VersionCommand { expectedActiveModelVersionId?: string; reason: string }
 export interface ModelActionResult { modelVersionId: string; status: ModelStatus; activeModelVersionId?: string; revision: number; changedAt: string }
@@ -222,6 +222,7 @@ export type TypedPrediction =
   | { resultType: 'CATEGORICAL'; label: string; probabilities: Record<string, number> }
 export interface TargetSuccess {
   targetId: string; status: 'SUCCEEDED'; prediction: TypedPrediction; modelVersionId: string
+  dataNature?: 'REAL' | 'SYNTHETIC'; productionEligible?: boolean; simulation?: boolean
   targetVersionId: string; inputSchemeId: string; snapshotId: string
   applicability: { status: DomainStatus; distance: number; reasons: string[] }
   warnings: Array<{ code: string; message: string; detail: Record<string, unknown> }>
@@ -238,20 +239,21 @@ export interface TargetFailed {
 }
 export interface PredictionResponse {
   requestId: string; predictionId: string; executionStatus: 'SUCCEEDED' | 'FAILED'
+  simulation?: boolean; predictionMode?: 'FORMAL' | 'SIMULATION'; resultNotice?: string
   outcomeStatus?: 'SUCCEEDED' | 'PARTIAL' | 'BLOCKED'
   results: Array<TargetSuccess | TargetBlocked | TargetFailed>
   warnings?: Array<{ code: string; message: string; detail: Record<string, unknown> }>
 }
 export interface PredictionRunning { predictionRecordId: string; requestId: string; executionStatus: 'RUNNING'; outcomeStatus?: never; pollAfterMs: number }
-export interface PredictionCatalogTarget { targetId: string; code: string; name: string; category: string; valueType: ValueType; targetStatus: string; formalPredictionAvailable: boolean; unavailableReasons: string[]; registered?: boolean; statusLabel?: string; unit?: string }
-export interface PredictionContextTarget { targetId: string; name: string; category: string; valueType: ValueType; available: boolean; modelVersionId?: string; unavailableReasons: string[]; formulaRequirement: 'REQUIRED' | 'NOT_USED'; fixedConditions?: Record<string, unknown>; evidence: Record<string, string> }
+export interface PredictionCatalogTarget { targetId: string; code: string; name: string; category: string; valueType: ValueType; targetStatus: string; formalPredictionAvailable: boolean; simulationPredictionAvailable?: boolean; predictionAvailable?: boolean; unavailableReasons: string[]; registered?: boolean; statusLabel?: string; unit?: string }
+export interface PredictionContextTarget { targetId: string; name: string; category: string; valueType: ValueType; available: boolean; simulation?: boolean; modelVersionId?: string; unavailableReasons: string[]; formulaRequirement: 'REQUIRED' | 'NOT_USED'; fixedConditions?: Record<string, unknown>; evidence: Record<string, string> }
 export interface PredictionInputField {
   fieldVersionId: string; code: string; name: string; valueType: 'NUMBER' | 'STRING' | 'BOOLEAN' | 'CATEGORY' | 'COMPOSITION'; unit?: string; required: boolean;
   encoding?: Record<string, unknown>; allowedValues?: Array<string | number>; sourceLabel?: string; inputGroup?: 'FORMULA' | 'PROCESS' | 'CONDITION' | 'OTHER';
   fixedByTargetDefinition?: boolean; requiredByTargets?: Array<{ targetId: string; targetName: string }>
 }
 export interface PredictionMaterial { materialId: string; code: string; name?: string; category?: string; role: string; encoderIndex: number }
-export interface PredictionContext { targets: PredictionCatalogTarget[]; selected: PredictionContextTarget[]; requiredInputs: PredictionInputField[]; materials: PredictionMaterial[]; configurationConflicts?: Array<{ fieldCode: string; definitions: string[] }> }
+export interface PredictionContext { targets: PredictionCatalogTarget[]; selected: PredictionContextTarget[]; requiredInputs: PredictionInputField[]; materials: PredictionMaterial[]; simulationAuthorized?: boolean; configurationConflicts?: Array<{ fieldCode: string; definitions: string[] }> }
 export interface InputSuggestion { candidateKey: string; name: string; valueType: InputValueType; unit?: string; availabilityStage: AvailabilityStage; dataCenterCoverage: number; experimentCoverage: number; totalCoverage: number; observedValues: string[]; observedRange: Record<string, unknown>; sourcePaths: string[]; existingInputFieldId?: string; existingInputFieldVersionId?: string; matchStatus: string; conflicts: string[]; modelEligible: boolean; estimatedTrainableSamples: number }
 export interface InputSuggestionPage { content: InputSuggestion[]; page: number; size: number; totalPages: number; totalElements: number }
 export interface QualityRule { code: string; priority: number; when: Record<string, unknown>; trustLevel: 'HIGH' | 'MEDIUM' | 'LOW'; explanation: string }
@@ -282,4 +284,5 @@ export interface ResearchRun {
   id: string; runType: 'FORMULA_PREDICTION' | 'EXPERIMENT_OPTIMIZATION'
   status: 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'PARTIAL' | 'BLOCKED' | 'FAILED' | 'CANCELLED'
   candidates: Candidate[]; modelBindings: Record<string, string>; error?: ErrorResponse; updatedAt: string
+  simulation?: boolean; predictionMode?: 'FORMAL' | 'SIMULATION'; resultNotice?: string
 }

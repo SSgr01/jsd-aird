@@ -44,7 +44,7 @@ describe('ModelManagementPage', () => {
     render(<AppProviders><MemoryRouter future={routerFuture}><ModelManagementPage /></MemoryRouter></AppProviders>)
     expect(await screen.findByText('60°光泽')).toBeInTheDocument()
     expect(screen.getByText('待评估')).toBeInTheDocument()
-    expect(screen.getByText('平均绝对误差 1.250')).toBeInTheDocument()
+    expect(screen.getByText('MAE（平均绝对误差） 1.250')).toBeInTheDocument()
     expect(screen.queryByText('model-1')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /立即检查/ })).toBeDisabled()
     expect(modelingApi.targets).not.toHaveBeenCalled()

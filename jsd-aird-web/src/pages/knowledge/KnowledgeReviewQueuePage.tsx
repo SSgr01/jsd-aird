@@ -6,11 +6,11 @@ import { useNavigate } from 'react-router-dom';
 import { knowledgeApi, type ReviewQueueItem } from '@/services/knowledge';
 import { reviewQueueStatus } from './knowledge-workflow-status';
 
-export function KnowledgeReviewQueuePage() {
+export function KnowledgeReviewQueuePage({ embedded = false, initialStatus }: { embedded?: boolean; initialStatus?: string } = {}) {
   const { message } = App.useApp();
   const navigate = useNavigate();
   const [items, setItems] = useState<ReviewQueueItem[]>([]);
-  const [status, setStatus] = useState<string>();
+  const [status, setStatus] = useState<string | undefined>(initialStatus);
   const [loading, setLoading] = useState(false);
   const load = useCallback(async () => {
     setLoading(true);
@@ -19,8 +19,10 @@ export function KnowledgeReviewQueuePage() {
     finally { setLoading(false); }
   }, [message, status]);
   useEffect(() => { void load(); }, [load]);
-  return <div className="business-page">
-    <div className="business-page-heading"><div><Typography.Title level={2}><EditOutlined /> 内容校对</Typography.Title><Typography.Text type="secondary">校对识别内容，确认后发布。</Typography.Text></div><Space><Select allowClear placeholder="全部校对状态" value={status} onChange={setStatus} options={[{ value: 'PENDING_REVIEW', label: '待校对' }, { value: 'REJECTED', label: '已驳回' }]} /><Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button></Space></div>
+  return <div className={embedded ? 'knowledge-review-queue-embedded' : 'business-page'}>
+    {embedded
+      ? <div className="business-page-heading knowledge-review-queue-toolbar"><Typography.Text type="secondary">校对解析内容并确认发布；已驳回的内容也可在此继续处理。</Typography.Text><Space><Select allowClear placeholder="全部校对状态" value={status} onChange={setStatus} options={[{ value: 'PENDING_REVIEW', label: '待校对' }, { value: 'REJECTED', label: '已驳回' }]} /><Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button></Space></div>
+      : <div className="business-page-heading"><div><Typography.Title level={2}><EditOutlined /> 内容校对</Typography.Title><Typography.Text type="secondary">校对识别内容，确认后发布。</Typography.Text></div><Space><Select allowClear placeholder="全部校对状态" value={status} onChange={setStatus} options={[{ value: 'PENDING_REVIEW', label: '待校对' }, { value: 'REJECTED', label: '已驳回' }]} /><Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button></Space></div>}
     <Card className="content-card">
       <Table className="catalog-knowledge-table knowledge-review-queue-table" scroll={{ x: 960 }} rowKey="versionId" loading={loading} dataSource={items} locale={{ emptyText: <Empty description="当前没有待处理的知识版本" /> }} columns={[
         { title: '文件', width: 320, render: (_: unknown, item: ReviewQueueItem) => <div><Typography.Text strong>{item.title}</Typography.Text><div className="binding-path">{item.originalName} · V{item.versionNo}</div></div> },

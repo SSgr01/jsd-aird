@@ -4943,12 +4943,6 @@ a:active,
   min-height: 180px;
   place-items: center;
 }
-.upload-workspace-records-refreshing {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 28px;
-}
 .upload-workspace-record {
   padding: 13px 14px;
   border: 1px solid var(--app-border);
@@ -6226,6 +6220,18 @@ a:active,
   gap: 10px;
 }
 
+.spectrum-chat-search-results {
+  display: grid;
+  min-height: 0;
+  gap: 6px;
+}
+
+.spectrum-chat-search-count {
+  display: block;
+  min-height: 18px;
+  font-size: var(--app-font-size-caption);
+}
+
 .spectrum-chat-scope-search.ant-input-affix-wrapper {
   min-height: 36px;
   border-radius: 8px;
@@ -6326,17 +6332,31 @@ a:active,
 }
 
 .spectrum-chat-chart-list {
-  display: grid;
-  gap: 4px;
+  position: relative;
+  height: 260px;
+  min-height: 64px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.spectrum-chat-chart-list-inner {
+  position: relative;
+  width: 100%;
 }
 
 .spectrum-chat-chart-option {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: -4px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
+  width: calc(100% + 4px);
   min-height: 48px;
   align-items: center;
   gap: 4px;
-  margin-left: -4px;
+  margin: 0;
   padding: 5px 3px 5px 8px;
   border-radius: 8px;
   transition:
@@ -6384,6 +6404,28 @@ a:active,
 .spectrum-chat-chart-option > .ant-btn {
   height: 30px;
   padding-inline: 8px;
+  font-size: var(--app-font-size-caption);
+}
+
+.spectrum-chat-chart-list-state,
+.spectrum-chat-chart-list-more {
+  display: flex;
+  min-height: 64px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-size-caption);
+}
+
+.spectrum-chat-chart-list-more {
+  min-height: 34px;
+}
+
+.spectrum-chat-chart-list-complete {
+  display: block;
+  padding-top: 4px;
+  text-align: center;
   font-size: var(--app-font-size-caption);
 }
 

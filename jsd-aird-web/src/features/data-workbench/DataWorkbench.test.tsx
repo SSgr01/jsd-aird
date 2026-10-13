@@ -56,7 +56,7 @@ describe('DataWorkbench', () => {
     expect(screen.getByRole('button', { name: /物料名称.*树脂 A/ })).toBeInTheDocument();
     expect(screen.getByText('原始值')).toBeInTheDocument();
     expect(screen.queryByText('标准化值')).not.toBeInTheDocument();
-    expect(screen.queryByText('原料数据 · B3')).not.toBeInTheDocument();
+    expect(screen.getByText('原料数据 · B3')).toBeInTheDocument();
     expect(screen.queryByText('binding-1')).not.toBeInTheDocument();
     expect(screen.queryByText('/material/name')).not.toBeInTheDocument();
     expect(screen.queryByText('无')).not.toBeInTheDocument();

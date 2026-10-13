@@ -6,7 +6,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.io.ByteArrayInputStream;
 import java.io.FilterInputStream;
 import java.io.IOException;
+import java.io.PipedInputStream;
+import java.io.PipedOutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.spc.application.port.SpectrumVisionClient;
 import org.junit.jupiter.api.Test;
@@ -17,8 +24,8 @@ class SpectrumResponsesStreamParserTest {
     private final SpectrumResponsesStreamParser parser = new SpectrumResponsesStreamParser(objectMapper);
 
     @Test
-    void parsesChineseAndEscapedJsonWhenUtf8BytesAreSplitArbitrarily() throws Exception {
-        var output = "{\"answerMarkdown\":\"峰位约 295 nm，差异约 0.2 Abs。\",\"observations\":[]}";
+    void streamsNaturalChineseMarkdownWhenUtf8BytesAreSplitArbitrarily() throws Exception {
+        var output = "## 光谱对比\n\n主峰约 295 nm，图上估读差异约 0.2 Abs。\n\n| 曲线 | 峰高 |\n|---|---:|\n| 旧样 | 2.4 Abs |";
         var stream = sse(
                 event("response.reasoning_summary_text.delta", "\"item_id\":\"r1\",\"summary_index\":0,\"delta\":\"先核对峰位\""),
                 event("response.reasoning_summary_text.done", "\"item_id\":\"r1\",\"summary_index\":0,\"text\":\"先核对峰位与强度。\""),
@@ -27,15 +34,51 @@ class SpectrumResponsesStreamParserTest {
                 completed(output),
                 "data: [DONE]\n\n");
         var deltas = new StringBuilder();
+        var chunks = new ArrayList<String>();
         var observer = new SpectrumVisionClient.StreamObserver() {
-            @Override public void onOutputTextDelta(String delta) { deltas.append(delta); }
+            @Override public void onOutputTextDelta(String delta) {
+                chunks.add(delta);
+                deltas.append(delta);
+            }
         };
 
         var parsed = parser.parse(oneByteAtATime(stream), observer);
 
         assertThat(parsed.outputText()).isEqualTo(output);
         assertThat(deltas.toString()).isEqualTo(output);
+        assertThat(chunks).containsExactly(output.substring(0, 24), output.substring(24));
         assertThat(parsed.response().path("usage").path("total_tokens").asInt()).isEqualTo(42);
+    }
+
+    @Test
+    void publishesOutputDeltaBeforeTheProviderCompletesTheResponse() throws Exception {
+        var output = "主峰约 295 nm。";
+        var input = new PipedInputStream();
+        var upstream = new PipedOutputStream(input);
+        var deltaPublished = new CountDownLatch(1);
+        var executor = Executors.newSingleThreadExecutor();
+        Future<SpectrumResponsesStreamParser.ParsedStream> parse = executor.submit(() ->
+                parser.parse(input, new SpectrumVisionClient.StreamObserver() {
+                    @Override
+                    public void onOutputTextDelta(String delta) {
+                        deltaPublished.countDown();
+                    }
+                }));
+        try {
+            upstream.write(event("response.output_text.delta",
+                    "\"delta\":" + objectMapper.writeValueAsString(output)).getBytes(StandardCharsets.UTF_8));
+            upstream.flush();
+
+            assertThat(deltaPublished.await(3, TimeUnit.SECONDS)).isTrue();
+            assertThat(parse.isDone()).isFalse();
+
+            upstream.write(completed(output).getBytes(StandardCharsets.UTF_8));
+            upstream.close();
+            assertThat(parse.get(3, TimeUnit.SECONDS).outputText()).isEqualTo(output);
+        } finally {
+            upstream.close();
+            executor.shutdownNow();
+        }
     }
 
     @Test

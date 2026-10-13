@@ -36,6 +36,19 @@ public class PredictionRepository {
                 this::qualityPolicy,org,id).stream().findFirst();
     }
 
+    public List<PredictionContracts.DomainPolicyView> domainPolicies(UUID org, UUID targetId) {
+        return jdbc.query("""
+            SELECT * FROM ai.modeling_policy_version
+            WHERE organization_id=? AND target_id=? AND kind='DOMAIN'
+            ORDER BY version_no DESC,id
+            """, this::domainPolicy, org, targetId);
+    }
+
+    public Optional<PredictionContracts.DomainPolicyView> domainPolicy(UUID org, UUID id) {
+        return jdbc.query("SELECT * FROM ai.modeling_policy_version WHERE organization_id=? AND id=? AND kind='DOMAIN'",
+                this::domainPolicy, org, id).stream().findFirst();
+    }
+
     public List<TargetBinding> targetBindings(UUID org, List<UUID> targetIds) {
         if (targetIds.isEmpty()) return List.of();
         var marks=String.join(",",java.util.Collections.nCopies(targetIds.size(),"?"));
@@ -45,9 +58,12 @@ public class PredictionRepository {
                    t.current_version_id,t.current_input_scheme_id,t.current_quality_policy_version_id,
                    tv.version_no target_version_no,tv.unit,tv.classes_jsonb,tv.definition_jsonb,
                    tv.observation_semantics_jsonb,coalesce(tv.definition_jsonb->>'sha256',tv.config_hash) target_hash,
-                   mv.id model_id,mv.target_version_id model_target_version_id,mv.input_scheme_id model_input_scheme_id,
-                   mv.training_snapshot_id,mv.contract_version,mv.metrics_jsonb,mv.applicability_domain_jsonb,
-                   mv.production_eligible,mv.data_nature,mv.domain_policy_version_id,
+                    mv.id model_id,mv.target_version_id model_target_version_id,mv.input_scheme_id model_input_scheme_id,
+                    mv.training_snapshot_id,mv.contract_version,mv.metrics_jsonb,mv.model_card_jsonb,mv.applicability_domain_jsonb,
+                   mv.production_eligible,mv.data_nature,
+                   coalesce((mv.model_card_jsonb->>'testOnlySimulation')::boolean,false) model_test_only_simulation,
+                   coalesce(mv.model_card_jsonb->>'sourceDataNature',mv.data_nature) model_source_data_nature,
+                   mv.domain_policy_version_id,
                    a.object_key,a.sha256 artifact_sha,a.media_type,
                    ts.target_definition_jsonb,ts.input_scheme_jsonb,ts.material_dictionary_jsonb,ts.preprocessing_jsonb,
                    qp.id quality_policy_id,qp.version_no quality_policy_version,qp.policy_hash quality_policy_hash,
@@ -70,14 +86,17 @@ public class PredictionRepository {
     public List<TargetCatalog> targetCatalog(UUID org) {
         return jdbc.query("""
             SELECT t.id,t.target_code,t.name,t.performance_project,t.value_type,t.status,
-                   mv.id model_id,t.current_quality_policy_version_id,
+                   mv.id model_id,t.current_quality_policy_version_id,mv.production_eligible,mv.data_nature,
+                   coalesce((mv.model_card_jsonb->>'testOnlySimulation')::boolean,false) test_only_simulation,
+                   coalesce(mv.model_card_jsonb->>'sourceDataNature',mv.data_nature) source_data_nature,
                    coalesce(mv.domain_policy_version_id,t.current_domain_policy_version_id) domain_policy_version_id
             FROM ai.prediction_target t
             LEFT JOIN ai.model_version mv ON mv.organization_id=t.organization_id AND mv.target_id=t.id AND mv.status='ACTIVE'
             WHERE t.organization_id=? ORDER BY t.performance_project,t.name,t.id
             """,(rs,n)->new TargetCatalog(uuid(rs,"id"),rs.getString("target_code"),rs.getString("name"),
                 rs.getString("performance_project"),rs.getString("value_type"),rs.getString("status"),
-                uuid(rs,"model_id"),uuid(rs,"current_quality_policy_version_id"),uuid(rs,"domain_policy_version_id")),org);
+                uuid(rs,"model_id"),uuid(rs,"current_quality_policy_version_id"),uuid(rs,"domain_policy_version_id"),
+                rs.getBoolean("production_eligible"),rs.getString("data_nature"),rs.getBoolean("test_only_simulation"),rs.getString("source_data_nature")),org);
     }
 
     public Optional<MaterialIdentity> material(String id) {
@@ -150,6 +169,11 @@ public class PredictionRepository {
                 config.path("defaultExplanation").asText(),rules,
                 rs.getString("policy_hash"),rs.getLong("revision"),instant(rs,"published_at"),instant(rs,"created_at"));
     }
+    private PredictionContracts.DomainPolicyView domainPolicy(ResultSet rs,int n)throws SQLException{
+        return new PredictionContracts.DomainPolicyView(uuid(rs,"id"),uuid(rs,"target_id"),rs.getInt("version_no"),
+                rs.getString("status"),rs.getString("kind"),node(rs,"configuration_jsonb"),rs.getString("policy_hash"),
+                rs.getLong("revision"),instant(rs,"published_at"),instant(rs,"created_at"));
+    }
     private TargetBinding binding(ResultSet rs,int n)throws SQLException{return new TargetBinding(
             uuid(rs,"target_id"),rs.getString("target_code"),rs.getString("name"),rs.getString("performance_project"),
             rs.getString("target_status"),rs.getString("value_type"),uuid(rs,"current_version_id"),
@@ -157,7 +181,8 @@ public class PredictionRepository {
             node(rs,"observation_semantics_jsonb"),rs.getString("target_hash"),uuid(rs,"model_id"),
             uuid(rs,"model_target_version_id"),uuid(rs,"model_input_scheme_id"),uuid(rs,"training_snapshot_id"),
             rs.getString("contract_version"),node(rs,"metrics_jsonb"),node(rs,"applicability_domain_jsonb"),
-            rs.getBoolean("production_eligible"),rs.getString("data_nature"),rs.getString("object_key"),
+            rs.getBoolean("production_eligible"),rs.getString("data_nature"),
+            rs.getBoolean("model_test_only_simulation"),rs.getString("model_source_data_nature"),rs.getString("object_key"),
             rs.getString("artifact_sha"),rs.getString("media_type"),node(rs,"target_definition_jsonb"),
             node(rs,"input_scheme_jsonb"),node(rs,"material_dictionary_jsonb"),node(rs,"preprocessing_jsonb"),
             uuid(rs,"quality_policy_id"),rs.getInt("quality_policy_version"),rs.getString("quality_policy_hash"),
@@ -170,13 +195,15 @@ public class PredictionRepository {
             node(rs,"target_results_jsonb"),rs.getLong("revision"),instant(rs,"created_at"),instant(rs,"completed_at"));}
 
     public record TargetCatalog(UUID id,String code,String name,String category,String valueType,String status,
-                                UUID modelId,UUID qualityPolicyId,UUID domainPolicyId) { }
+                                UUID modelId,UUID qualityPolicyId,UUID domainPolicyId,
+                                boolean productionEligible,String dataNature,boolean testOnlySimulation,
+                                String sourceDataNature) { }
     public record MaterialIdentity(UUID id,String code,String name,String category) { }
     public record TargetBinding(UUID targetId,String targetCode,String targetName,String category,String targetStatus,
         String valueType,UUID targetVersionId,int targetVersion,String unit,JsonNode classes,JsonNode definition,
         JsonNode observationSemantics,String targetHash,UUID modelId,UUID modelTargetVersionId,UUID modelInputSchemeId,
         UUID snapshotId,String contractVersion,JsonNode metrics,JsonNode modelDomain,boolean productionEligible,
-        String dataNature,String artifactKey,String artifactSha,String artifactMediaType,JsonNode frozenTarget,
+        String dataNature,boolean testOnlySimulation,String sourceDataNature,String artifactKey,String artifactSha,String artifactMediaType,JsonNode frozenTarget,
         JsonNode frozenInputScheme,JsonNode frozenDictionary,JsonNode frozenPreprocessing,UUID qualityPolicyId,
         int qualityPolicyVersion,String qualityPolicyHash,JsonNode qualityPolicy,String qualityPolicyStatus,
         UUID domainPolicyId,int domainPolicyVersion,String domainPolicyHash,JsonNode domainPolicy,String domainPolicyStatus) { }

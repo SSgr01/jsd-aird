@@ -119,12 +119,38 @@ public class TrainingJobHandler implements AsyncJobHandler {
         // instead of turning a safe retry into a duplicate-key failure.
         var existing=repository.jdbc().query("SELECT id FROM ai.model_version WHERE organization_id=? AND model_hash=?",(rs,n)->rs.getObject(1,UUID.class),org,modelHash).stream().findFirst().orElse(null);
         if(existing!=null)return existing;
-        var id=UUID.randomUUID();var next=repository.jdbc().queryForObject("SELECT coalesce(max(version_no),0)+1 FROM ai.model_version WHERE organization_id=? AND target_id=?",Integer.class,org,snapshot.summary().targetId());var selected=metrics.path("selectedAlgorithm").asText(rejected?"REJECTED":"UNKNOWN");var nature=snapshot.summary().dataNature();var activeMetrics=repository.jdbc().query("SELECT metrics_jsonb FROM ai.model_version WHERE organization_id=? AND target_id=? AND status='ACTIVE'",(rs,n)->repository.node(rs,"metrics_jsonb"),org,snapshot.summary().targetId()).stream().findFirst().orElse(null);var comparison=compare(snapshot.trainingPolicy().path("config"),metrics,activeMetrics);var fairRequired=snapshot.trainingPolicy().path("config").path("requireFairComparison").asBoolean();var eligible=!rejected&&"REAL".equals(nature)&&passes(snapshot.trainingPolicy().path("config"),metrics)&&(activeMetrics==null||!fairRequired||"BETTER".equals(comparison));var creator=repository.jdbc().queryForObject("SELECT requested_by FROM ai.training_job WHERE organization_id=? AND id=?",UUID.class,org,job);repository.jdbc().update("""
+        var modelCard=modelCard(snapshot.summary().id(),org);
+        var testOnlySimulation=modelCard.path("testOnlySimulation").asBoolean();
+        var id=UUID.randomUUID();
+        var next=repository.jdbc().queryForObject("SELECT coalesce(max(version_no),0)+1 FROM ai.model_version WHERE organization_id=? AND target_id=?",Integer.class,org,snapshot.summary().targetId());
+        var selected=metrics.path("selectedAlgorithm").asText(rejected?"REJECTED":"UNKNOWN");
+        var nature=snapshot.summary().dataNature();
+        var activeMetrics=repository.jdbc().query("SELECT metrics_jsonb FROM ai.model_version WHERE organization_id=? AND target_id=? AND status='ACTIVE'",(rs,n)->repository.node(rs,"metrics_jsonb"),org,snapshot.summary().targetId()).stream().findFirst().orElse(null);
+        var comparison=compare(snapshot.trainingPolicy().path("config"),metrics,activeMetrics);
+        var fairRequired=snapshot.trainingPolicy().path("config").path("requireFairComparison").asBoolean();
+        var passedRealDataGates=!rejected&&"REAL".equals(nature)&&passes(snapshot.trainingPolicy().path("config"),metrics)
+                &&(activeMetrics==null||!fairRequired||"BETTER".equals(comparison));
+        // Test-only REAL-view models go through the same quality gates but can
+        // never acquire production eligibility.  Their source provenance is
+        // retained in model_card_jsonb and activation is separately authorized.
+        var productionEligible=passedRealDataGates&&!testOnlySimulation;
+        var creator=repository.jdbc().queryForObject("SELECT requested_by FROM ai.training_job WHERE organization_id=? AND id=?",UUID.class,org,job);
+        repository.jdbc().update("""
             INSERT INTO ai.model_version(id,organization_id,target_id,target_version_id,input_scheme_id,training_snapshot_id,
                 training_job_id,model_artifact_id,model_type,status,metrics_jsonb,applicability_domain_jsonb,model_card_jsonb,
                 contract_version,model_hash,revision,created_by,version_no,data_nature,production_eligible,comparison_status,rejection_reasons_jsonb)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'formula-model.v2',?,0,?,?,?,?,?,?)
-            """,id,org,snapshot.summary().targetId(),snapshot.summary().targetVersionId(),snapshot.summary().inputSchemeId(),snapshot.summary().id(),job,artifact,selected,rejected?"REJECTED":"CANDIDATE",repository.pg(metrics),repository.pg(response.path("applicabilityDomain")),repository.pg(json.createObjectNode().put("snapshotId",snapshot.summary().id().toString()).put("trainedAt",Instant.now().toString())),modelHash,creator,next,nature,eligible,comparison,repository.pg(response.path("reasons")));return id;}
+             VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'formula-model.v2',?,0,?,?,?,?,?,?)
+             """,id,org,snapshot.summary().targetId(),snapshot.summary().targetVersionId(),snapshot.summary().inputSchemeId(),snapshot.summary().id(),job,artifact,selected,rejected?"REJECTED":"CANDIDATE",repository.pg(metrics),repository.pg(response.path("applicabilityDomain")),repository.pg(modelCard),modelHash,creator,next,nature,productionEligible,comparison,repository.pg(response.path("reasons")));
+        return id;
+    }
+    private JsonNode modelCard(UUID snapshotId,UUID org){
+        var scope=repository.jdbc().query("SELECT authorization_scope_jsonb FROM ai.training_snapshot WHERE organization_id=? AND id=?",(rs,n)->repository.node(rs,"authorization_scope_jsonb"),org,snapshotId).stream().findFirst().orElse(json.createObjectNode());
+        var card=json.createObjectNode().put("snapshotId",snapshotId.toString()).put("trainedAt",Instant.now().toString());
+        var testOnly=scope.path("testOnlySimulation").asBoolean();
+        card.put("testOnlySimulation",testOnly);
+        if(testOnly)card.put("sourceDataNature",scope.path("sourceDataNature").asText("SYNTHETIC")).put("sourceProductionEligible",false);
+        return card;
+    }
     private String compare(JsonNode policy,JsonNode candidate,JsonNode active){if(active==null)return "NOT_COMPARABLE";var set=candidate.path("comparisonSetHash").asText();if(set.isBlank()||!set.equals(active.path("comparisonSetHash").asText()))return "NOT_COMPARABLE";var metric=policy.path("primaryMetric").asText();var cNode=metricNode(candidate,metric);var aNode=metricNode(active,metric);if(cNode==null||aNode==null)return "NOT_COMPARABLE";var c=cNode.asDouble();var a=aNode.asDouble();if(Math.abs(c-a)<1e-12)return "EQUIVALENT";var lower=metric.toLowerCase().matches(".*(mae|rmse|loss|error|width).*");return lower?(c<a?"BETTER":"WORSE"):(c>a?"BETTER":"WORSE");}
     private boolean passes(JsonNode policy,JsonNode metrics){var metric=policy.path("primaryMetric").asText();var valueNode=metricNode(metrics,metric);if(metric.isBlank()||valueNode==null)return false;var value=valueNode.asDouble();var threshold=policy.path("metricThreshold").asDouble();return metric.toLowerCase().matches(".*(mae|rmse|loss|error|width).*")?value<=threshold:value>=threshold;}
     private JsonNode metricNode(JsonNode metrics,String metric){if(metrics==null||metric==null||metric.isBlank())return null;var direct=metrics.path(metric);if(direct.isNumber())return direct;var lower=metric.toLowerCase();var fields=metrics.fields();while(fields.hasNext()){var entry=fields.next();if(entry.getKey().toLowerCase().equals(lower)&&entry.getValue().isNumber())return entry.getValue();}return null;}

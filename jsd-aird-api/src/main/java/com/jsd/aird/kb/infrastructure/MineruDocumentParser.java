@@ -125,6 +125,16 @@ public final class MineruDocumentParser implements DocumentParser {
         return enabled && (StringUtils.hasText(token) || systemParsingPolicy.agentFallbackEnabled());
     }
 
+    /** Image OCR is always routed through the precise MinerU endpoint; Agent fallback is not used. */
+    public boolean isPreciselyConfigured() {
+        return enabled && StringUtils.hasText(token);
+    }
+
+    public String preciseUnavailableReason() {
+        if (!enabled) return "MinerU 图片解析已禁用";
+        return "MinerU 图片解析需要精准接口 Token；图片解析不使用 Agent 或 Qwen 降级";
+    }
+
     @Override
     public String unavailableReason() {
         return "MinerU 未配置精准接口 Token，且未启用 Agent 降级能力";

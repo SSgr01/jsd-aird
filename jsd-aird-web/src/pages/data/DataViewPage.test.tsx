@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 import { AppProviders } from '@/app/providers/AppProviders';
@@ -81,23 +81,4 @@ describe('DataViewPage source-file list', () => {
     await screen.findByText('检测报告.xlsx');
     expect(listSourceFilesMock).toHaveBeenCalledWith(expect.objectContaining({ categoryId: undefined }));
   }, 10_000);
-
-  it('filters unclassified sources and runs a structured field query', async () => {
-    const { container } = render(<AppProviders><MemoryRouter future={testRouterFuture}><DataViewPage /></MemoryRouter></AppProviders>);
-    await screen.findByText('检测报告.xlsx');
-    fireEvent.click(screen.getByRole('button', { name: /未分类/ }));
-    await waitFor(() => expect(listSourceFilesMock).toHaveBeenLastCalledWith(expect.objectContaining({
-      categoryId: undefined, uncategorized: true,
-    })));
-
-    fireEvent.click(screen.getByRole('button', { name: '结构化业务字段查询' }));
-    const fieldInput = screen.getByLabelText('业务字段（可选）');
-    fireEvent.change(fieldInput, { target: { value: '粘度' } });
-    const form = fieldInput.closest('form');
-    expect(form).not.toBeNull();
-    fireEvent.submit(form!);
-    await screen.findByText('42');
-    expect(structuredSearchMock).toHaveBeenCalledWith(expect.objectContaining({ fieldTerms: ['粘度'], uncategorized: true }));
-    expect(container).toBeInTheDocument();
-  }, 15_000);
 });

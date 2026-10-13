@@ -6,7 +6,7 @@ const pdfMock = vi.hoisted(() => {
   return { destroy, getDocument: vi.fn(() => ({ promise: new Promise(() => undefined), destroy })) };
 });
 
-vi.mock('pdfjs-dist', () => ({
+vi.mock('pdfjs-dist/legacy/build/pdf.mjs', () => ({
   GlobalWorkerOptions: { workerSrc: '' },
   getDocument: pdfMock.getDocument,
 }));

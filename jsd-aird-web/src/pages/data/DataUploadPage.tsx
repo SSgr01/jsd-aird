@@ -79,7 +79,7 @@ export function DataUploadPage() {
   }, []);
 
   const loadJobs = useCallback(async (_options: { silent?: boolean } = {}) => {
-    setJobsLoading(true);
+    if (!_options.silent) setJobsLoading(true);
     try {
       const page = await dataApi.listJobs({
         status: jobStatus === 'ALL' ? undefined : jobStatus,
@@ -91,7 +91,7 @@ export function DataUploadPage() {
     } catch (error) {
       if (!_options.silent) void message.error(error instanceof Error ? error.message : '导入任务加载失败');
     } finally {
-      setJobsLoading(false);
+      if (!_options.silent) setJobsLoading(false);
     }
   }, [jobKeyword, jobStatus, jobs.page, jobs.size, message]);
 

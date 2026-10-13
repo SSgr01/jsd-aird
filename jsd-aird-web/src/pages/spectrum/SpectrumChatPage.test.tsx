@@ -3,6 +3,134 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { AssistantResult, StreamingSpectrumResult } from './SpectrumChatPage';
 
 describe('AssistantResult', () => {
+  it('renders the model-authored Markdown report directly', () => {
+    render(
+      <AssistantResult
+        result={{
+          schemaVersion: 4,
+          analysisStatus: 'SUCCEEDED',
+          answerMarkdown: [
+            '## USP-096 新旧紫外光谱对比分析',
+            '',
+            '两条曲线的主要峰位接近，旧样峰顶略高。以下吸光度为图上估读。',
+            '',
+            '| 特征 | 旧 USP-096 | 新 USP-096 |',
+            '|---|---:|---:|',
+            '| 主峰 | 约 294 nm / 2.4 Abs | 约 294 nm / 2.2 Abs |',
+            '',
+            '### 目前无法确认',
+            '',
+            '单张叠加图不能判断峰高差是否可重复。',
+          ].join('\n'),
+        }}
+        warnings={[]}
+        citations={[]}
+        onPreview={() => undefined}
+      />,
+    );
+
+    expect(screen.getByRole('heading', { name: 'USP-096 新旧紫外光谱对比分析' })).toBeInTheDocument();
+    expect(screen.getByRole('table')).toBeInTheDocument();
+    expect(screen.getByText('单张叠加图不能判断峰高差是否可重复。')).toBeInTheDocument();
+    expect(screen.queryByText('图上观察与对比')).not.toBeInTheDocument();
+  });
+
+  it('renders Markdown tables in detailed V3 observations', () => {
+    render(
+      <AssistantResult
+        result={{
+          schemaVersion: 3,
+          analysisStatus: 'SUCCEEDED',
+          answer: {
+            summary: '两条曲线的主峰位置接近，旧样峰高较高。',
+            confirmed: [
+              '| 特征 | 旧 USP-096 | 新 USP-096 |\n|---|---:|---:|\n| 主峰 | 约 294 nm / 2.4 Abs | 约 294 nm / 2.2 Abs |',
+            ],
+            notConfirmed: [],
+            reasonableInference: [],
+            missingEvidence: [],
+            nextStep: [],
+          },
+        }}
+        warnings={[]}
+        citations={[]}
+        onPreview={() => undefined}
+      />,
+    );
+
+    expect(screen.getByRole('table')).toBeInTheDocument();
+    expect(screen.getByText('约 294 nm / 2.4 Abs')).toBeInTheDocument();
+    expect(screen.getByText('约 294 nm / 2.2 Abs')).toBeInTheDocument();
+  });
+
+  it('shows the complete core V3 answer immediately without exposing validation internals', () => {
+    render(
+      <AssistantResult
+        result={{
+          schemaVersion: 3,
+          analysisStatus: 'PARTIAL',
+          answer: {
+            summary: '图上主峰位置接近，新样的主峰吸光度低于旧样；差异仍需复测确认。',
+            metadata: ['图例标记为旧 USP-096 0.01%。'],
+            confirmed: [
+              '报告显示280 nm处吸光度约为3.271。',
+              '文件或报告将样品标记为50 ppm。',
+              '可见主峰。',
+              '曲线基线平稳。',
+              '第五条确认内容。',
+            ],
+            notConfirmed: ['当前不能确认实际浓度是否准确为50 ppm。'],
+            reasonableInference: ['当前吸光度水平提示需要关注定量可靠性。'],
+            missingEvidence: ['配液记录', '标准曲线或已验证的方法范围'],
+            nextStep: ['核对配液记录并进行适当稀释复测。'],
+          },
+          assessment: {
+            title: '浓度与测量适用性',
+            items: [
+              { label: '标称浓度', value: '50 ppm', source: '文档标记' },
+              { label: '实际浓度', value: '暂无法验证' },
+              { label: '当前测量适用性', value: '需要关注' },
+            ],
+          },
+          details: {
+            confirmed: [
+              '报告显示280 nm处吸光度约为3.271。',
+              '文件或报告将样品标记为50 ppm。',
+              '可见主峰。',
+              '曲线基线平稳。',
+              '第五条确认内容。',
+            ],
+            reasonableInference: ['当前吸光度水平提示需要关注定量可靠性。'],
+            limitations: ['当前不能确认实际浓度是否准确为50 ppm。'],
+          },
+          confidence: '中等',
+          claimId: 'C1',
+          validationReasonCodes: ['MISSING_STRONG_EVIDENCE'],
+        }}
+        warnings={['部分结论因依据不足未列入最终结果。']}
+        citations={[]}
+        onPreview={() => undefined}
+      />,
+    );
+
+    expect(screen.getByText('浓度与测量适用性')).toBeVisible();
+    expect(screen.getByText('分析结论')).toBeVisible();
+    expect(screen.getByText('图例与样品标记')).toBeVisible();
+    expect(screen.getByText('图例标记为旧 USP-096 0.01%。')).toBeVisible();
+    expect(screen.getByText('图上观察与对比')).toBeVisible();
+    expect(screen.getByText('暂不能确认')).toBeVisible();
+    expect(screen.getByText('建议补充的信息')).toBeVisible();
+    expect(screen.getByText('配液记录')).toBeVisible();
+    expect(screen.getByText('建议验证')).toBeVisible();
+    expect(screen.getByText('第五条确认内容。')).toBeVisible();
+    expect(screen.queryByText('部分问题暂时无法确认')).not.toBeInTheDocument();
+    expect(screen.queryByText('部分结论因依据不足未列入最终结果。')).not.toBeInTheDocument();
+    expect(screen.queryByText(/MISSING_STRONG_EVIDENCE/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/claimId/i)).not.toBeInTheDocument();
+    expect(screen.getByText('图上主峰位置接近，新样的主峰吸光度低于旧样；差异仍需复测确认。'))
+      .toBeVisible();
+  });
+
   it('renders the compact presentation and keeps internal evidence ids hidden', async () => {
     render(
       <AssistantResult
@@ -70,7 +198,7 @@ describe('AssistantResult', () => {
     expect(screen.getAllByText('依据图谱')).toHaveLength(1);
   });
 
-  it('hides status tags while retaining partial-result warnings', () => {
+  it('hides status tags and partial-result warning cards', () => {
     render(
       <AssistantResult
         result={{
@@ -89,8 +217,9 @@ describe('AssistantResult', () => {
     expect(screen.queryByText('待专业人员复核')).not.toBeInTheDocument();
     expect(screen.queryByText('低置信度')).not.toBeInTheDocument();
     expect(screen.queryByText('不足以建立峰位映射')).not.toBeInTheDocument();
-    expect(screen.getByText('部分结果已按证据边界收敛')).toBeInTheDocument();
-    expect(screen.getByText('图谱证据不足，结果已按边界收敛。')).toBeInTheDocument();
+    expect(screen.queryByText('部分结果已按证据边界收敛')).not.toBeInTheDocument();
+    expect(screen.queryByText('图谱证据不足，结果已按边界收敛。')).not.toBeInTheDocument();
+    expect(screen.getByText('当前证据不足，需要补充验证。')).toBeInTheDocument();
   });
 
   it('keeps the failure message without status tags', () => {
@@ -234,10 +363,19 @@ describe('AssistantResult', () => {
     render(<StreamingSpectrumResult answer="当前图片不足以支持明确化学归因。" />);
 
     expect(screen.getByText('当前图片不足以支持明确化学归因。')).toBeVisible();
-    expect(screen.getByText('完整分析仍在生成')).toBeVisible();
-    expect(screen.getByText(/以下是已校验的阶段性结论/)).toBeVisible();
+    expect(screen.getByText('正在生成分析回答')).toBeVisible();
+    expect(screen.getByText(/回答内容会实时显示/)).toBeVisible();
     expect(screen.queryByText('分析思路摘要')).not.toBeInTheDocument();
     expect(screen.queryByText(/Evidence Ids/i)).not.toBeInTheDocument();
+  });
+
+  it('keeps the streamed answer in the final result shell without a progress indicator', () => {
+    render(<StreamingSpectrumResult answer="已经完成的回答。" isStreaming={false} />);
+
+    expect(screen.getByText('已经完成的回答。')).toBeVisible();
+    expect(screen.queryByText('正在生成分析回答')).not.toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(document.querySelector('.spectrum-result-natural')).toBeInTheDocument();
   });
 
   it('uses an intent-specific heading for comparison answers', () => {

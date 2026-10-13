@@ -36,7 +36,8 @@ Thumbs.db
 /ragent-main/
 /.codex-tmp/
 /qa/
-/docs/
+/docs/*
+!/docs/图谱分析当前逻辑、性能与输出质量诊断.md
 /tmp/
 
 # Local AI/demo runtime output

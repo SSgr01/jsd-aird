@@ -10,7 +10,7 @@ vi.mock('@/pages/model-management', () => ({
   ModelManagementPage: ({ view }: { view?: string }) => <div data-testid="model-list-panel">模型列表面板 · {view}</div>,
 }))
 vi.mock('@/pages/modeling-settings', () => ({
-  ModelingSettingsPage: ({ openCreateTarget }: { openCreateTarget?: boolean }) => <div data-testid="modeling-settings-panel">建模设置面板{openCreateTarget ? ' · 新增目标' : ''}</div>,
+  ModelingSettingsPage: ({ openCreateTarget, onOpenTarget }: { openCreateTarget?: boolean; onOpenTarget?: (targetId: string) => void }) => <div data-testid="modeling-settings-panel">建模设置面板{openCreateTarget ? ' · 新增目标' : ''}<button type="button" onClick={() => onOpenTarget?.('target-1')}>开始配置</button></div>,
 }))
 
 function LocationProbe() {
@@ -46,5 +46,12 @@ describe('ModelCenterPage', () => {
     expect(screen.queryByRole('tab', { name: '模型列表' })).not.toBeInTheDocument()
     expect(screen.getByRole('tab', { name: '建模设置' })).toBeInTheDocument()
     expect(screen.getByTestId('modeling-settings-panel')).toBeInTheDocument()
+  })
+
+  it('opens the same full-page target workflow from embedded settings', async () => {
+    setPermissions(['ai.modeling.read'])
+    render(<AppProviders><MemoryRouter initialEntries={['/assistant/model-center?tab=settings']}><ModelCenterPage /><LocationProbe /></MemoryRouter></AppProviders>)
+    fireEvent.click(screen.getByRole('button', { name: '开始配置' }))
+    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/assistant/model-center/targets/target-1'))
   })
 })

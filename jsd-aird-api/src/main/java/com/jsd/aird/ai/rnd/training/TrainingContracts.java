@@ -50,7 +50,8 @@ public final class TrainingContracts {
                                JsonNode metrics, int trainableSamples, UUID trainingJobId,
                                Instant createdAt, Instant updatedAt, long revision) { }
     public record ModelDetail(ModelSummary model, SnapshotSummary snapshot, JsonNode applicabilityDomain,
-                              JsonNode modelCard, JsonNode rejectionReasons, List<ReleaseView> releases) { }
+                              JsonNode modelCard, JsonNode rejectionReasons, List<ReleaseView> releases,
+                              boolean testActivationAllowed) { }
     public record ModelComparison(UUID candidateId, UUID activeModelId, String status,
                                   boolean sameComparisonSet, JsonNode candidateMetrics,
                                   JsonNode activeMetrics, JsonNode baselineMetrics,

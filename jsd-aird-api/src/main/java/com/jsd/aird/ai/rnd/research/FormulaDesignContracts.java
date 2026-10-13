@@ -23,6 +23,7 @@ public final class FormulaDesignContracts {
                               List<Candidate> candidates, JsonNode shortfallReason,
                               JsonNode rejectionSummary, JsonNode actionHints,
                               Map<UUID, UUID> modelBindings, JsonNode frozenEvidence,
-                              String requestId, Instant updatedAt) { }
+                              String requestId, Instant updatedAt, boolean simulation,
+                              String predictionMode, String resultNotice) { }
     public record ResearchPage(List<ResearchRun> items, long total, int page, int size) { }
 }

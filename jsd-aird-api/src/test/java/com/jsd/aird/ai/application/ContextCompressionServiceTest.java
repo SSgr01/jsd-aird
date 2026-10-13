@@ -37,13 +37,29 @@ class ContextCompressionServiceTest {
 
         var context = new ContextCompressionService().compress(List.of(), List.of(data), 500);
 
-        assertThat(context.text()).contains("source=data")
+        assertThat(context.text()).contains("来源=数据中心记录")
                 .contains("evidenceRef=D1")
                 .doesNotContain("ref=")
                 .doesNotContain(data.hitId().toString())
                 .doesNotContain(data.fileObjectId().toString())
                 .doesNotContain(data.importJobId().toString())
                 .contains("材料名称=TEST-TPL-丙烯酸树脂");
+    }
+
+    @Test
+    void reservesMostContextForStructuredEvidenceDuringAnExactDataLookup() {
+        var knowledge = new KnowledgeSearchFacade.SearchHit(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
+                "知识资料", "manual.pdf", 1, "说明", "k".repeat(1_000), 0.9);
+        var data = new DataSourceFileSearchFacade.SourceFileHit(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
+                12, "B", "配方.xlsx", "原始内容", 0.9, "DATA_CENTER:Sheet1:B12",
+                "APP-UV-0001", "resin", "SJ-231（配方占比）", "55.86", "%", "NUMBER", "Sheet1", "B12",
+                "DATA_CENTER", "TEMPLATE_GUIDED", UUID.randomUUID(), UUID.randomUUID(), "CONFIRMED",
+                "SJ-231（配方占比）", null, null, null, "%", "%", null, "TARGET");
+
+        var context = new ContextCompressionService().compress(List.of(knowledge), List.of(data), 600, true);
+
+        assertThat(context.characterCount()).isLessThanOrEqualTo(600);
+        assertThat(context.text()).contains("evidenceRef=K1", "evidenceRef=D1", "值=55.86");
     }
 
     @Test

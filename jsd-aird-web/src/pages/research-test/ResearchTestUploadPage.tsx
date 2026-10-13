@@ -372,7 +372,7 @@ export function ResearchTestUploadPage({ type = 'REPORT' }: { type?: ResearchTes
           setPage((current) => ({ ...current, current: 1 }));
         }}
         records={records}
-        recordsLoading={loading}
+        recordsLoading={loading && rows.length === 0}
         pagination={page}
         onPageChange={(current, pageSize) => setPage({ current, pageSize, total: page.total })}
       />

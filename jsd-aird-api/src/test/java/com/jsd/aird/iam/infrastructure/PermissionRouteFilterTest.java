@@ -96,6 +96,9 @@ class PermissionRouteFilterTest {
         assertThat(code("POST", "/api/v1/ai/rnd/material-dictionaries")).isEqualTo("ai.config.manage");
         assertThat(code("GET", "/api/v1/ai/rnd/training-policies")).isEqualTo("ai.modeling.read");
         assertThat(code("POST", "/api/v1/ai/rnd/training-policies")).isEqualTo("ai.config.manage");
+        assertThat(code("GET", "/api/v1/ai/rnd/targets/" + id + "/domain-policies")).isEqualTo("ai.modeling.read");
+        assertThat(code("POST", "/api/v1/ai/rnd/targets/" + id + "/domain-policies")).isEqualTo("ai.config.manage");
+        assertThat(code("POST", "/api/v1/ai/rnd/domain-policies/" + id + "/publish")).isEqualTo("ai.config.manage");
         assertThat(code("POST", "/api/v1/ai/rnd/reviews/" + id + "/decisions")).isEqualTo("ai.data.review");
         assertThat(code("GET", "/api/v1/ai/rnd/training-jobs")).isEqualTo("ai.model.read");
         assertThat(code("POST", "/api/v1/ai/rnd/training-jobs/" + id + "/retry")).isEqualTo("ai.training.operate");

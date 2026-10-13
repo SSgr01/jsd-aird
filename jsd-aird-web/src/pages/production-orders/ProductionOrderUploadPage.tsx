@@ -180,8 +180,8 @@ export function ProductionOrderUploadPage() {
   const [deletingId, setDeletingId] = useState<string>();
   const [retryingId, setRetryingId] = useState<string>();
 
-  const loadUploads = useCallback(async () => {
-    setLoading(true);
+  const loadUploads = useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
+    if (!silent) setLoading(true);
     try {
       const result = await productionUploadApi.list({
         keyword: keyword || undefined,
@@ -197,9 +197,9 @@ export function ProductionOrderUploadPage() {
         total: result.total,
       }));
     } catch (error) {
-      void message.error(error instanceof Error ? error.message : '生产单上传记录加载失败');
+      if (!silent) void message.error(error instanceof Error ? error.message : '生产单上传记录加载失败');
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [keyword, message, page.current, page.pageSize, uploadStatus]);
 
@@ -245,7 +245,7 @@ export function ProductionOrderUploadPage() {
       )
     )
       return;
-    const timer = window.setInterval(() => void loadUploads(), 2000);
+    const timer = window.setInterval(() => void loadUploads({ silent: true }), 2000);
     return () => window.clearInterval(timer);
   }, [loadUploads, uploads]);
 
@@ -494,7 +494,7 @@ export function ProductionOrderUploadPage() {
         }}
         searchPlaceholder="搜索文件名称"
         records={records}
-        recordsLoading={loading}
+        recordsLoading={loading && uploads.length === 0}
         pagination={{ current: page.current, pageSize: page.pageSize, total: page.total }}
         onPageChange={(current, pageSize) => setPage((value) => ({ ...value, current, pageSize }))}
       />

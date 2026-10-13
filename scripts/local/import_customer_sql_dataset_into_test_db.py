@@ -87,6 +87,18 @@ def build_sql(
         object_keys[name] = f"{PREFIX}/research/{name}"
     copies: list[tuple[Path, Path]] = []
     statements: list[str] = ["BEGIN;", "CREATE EXTENSION IF NOT EXISTS pgcrypto;"]
+    # Never let the legacy initial importer move the experiment head back to
+    # version 1 after the source-group V2 repair has been applied.  Existing
+    # environments must use repair_customer_experiment_edit_model.py; a future
+    # clean importer can replace this legacy generator as a separate change.
+    statements.append(
+        "DO $dataset_upgrade_guard$ BEGIN "
+        "IF EXISTS (SELECT 1 FROM rnd.experiment e JOIN rnd.experiment_version v ON v.id=e.current_version_id "
+        f"WHERE e.organization_id={sql_text(ORG)}::uuid AND e.experiment_no='CUST-APP-EXT-20260921' "
+        "AND v.edit_model_jsonb#>>'{repairInfo,repairCode}'='CUST_APP_EXT_SOURCE_GROUP_V2') "
+        "THEN RAISE EXCEPTION 'CUST-APP-EXT-20260921 is already upgraded; do not rerun the legacy initial importer'; END IF; "
+        "END $dataset_upgrade_guard$;"
+    )
     # The experiment facts must reference a template that has already been
     # imported into the test database.  Failing here is clearer than allowing
     # a later foreign-key error after hundreds of generated statements.
@@ -116,6 +128,50 @@ def build_sql(
     mapping_path.write_text(json.dumps(mapping_payload, ensure_ascii=False, indent=2), encoding="utf-8")
     mapping_hash = sha_json(mapping_payload)
 
+    # Build the formal experiment facts that RND/T06 consume.  The previous
+    # importer only populated training_sample and left these arrays empty,
+    # which made the experiment visible in RND but unusable as an optimization
+    # baseline.
+    source_groups = []
+    formula_items = []
+    process_steps = []
+    test_results = []
+    dynamic_values = {}
+    for ordinal, raw in enumerate(csv_rows, 1):
+        row_key = str(raw["实验编号"])
+        group_key = f"CUSTOMER-SQL-LINEAGE-{(ordinal - 1) % 25:02d}|CUSTOMER-SQL-SHEET-{(ordinal - 1) % 10:02d}"
+        formula = {
+            "basis": "MASS_PERCENT",
+            "compositionComplete": True,
+            "components": [
+                {"materialCode": "SJ-230", "ratio": float(raw["主树脂配方比例（%）"] or 0)},
+                {"materialCode": "DSP-3315", "ratio": 1.6},
+                {"materialCode": "SS059/PC", "ratio": 1.2},
+                {"materialCode": "S-48", "ratio": max(0.0, 100.0 - float(raw["主树脂配方比例（%）"] or 0) - 2.8)},
+            ],
+            "recordedTotal": 100.0,
+            "normalizationRule": "SUM_TO_100_V1",
+        }
+        inputs = {
+            "coatingSolidsPct": raw["涂料固含（%）"],
+            "uvaIntensityMwCm2": raw["UVA光强（mW/cm²）"],
+            "uvEnergyMjCm2": raw["UV能量（mJ/cm²）"],
+            "temperatureC": raw["温度（℃）"],
+            "humidityRhPct": raw["湿度（%RH）"],
+            "substrate": "PET_100UM_OPTICAL",
+            "applicationMethod": "WIRE_BAR_ROLL_COAT_40UM",
+            "curingSource": "MERCURY_LAMP_UV",
+            "applicatorSpecUm": 40,
+        }
+        source_groups.append({"sourceGroupKey": group_key, "recordKey": row_key, "sourceIdentity": row_key, "sourceSheet": "客户应用性能数据"})
+        if not formula_items:
+            formula_items.extend([{**component, "sourceGroupKey": group_key, "recordKey": row_key} for component in formula["components"]])
+        if not process_steps:
+            process_steps.append({"sourceGroupKey": group_key, "recordKey": row_key, "conditions": inputs})
+        test_results.append({"sourceGroupKey": group_key, "recordKey": row_key, "targets": {CSV_TARGETS[h]: raw.get(h) for h in CSV_TARGETS}})
+        if not dynamic_values:
+            dynamic_values.update(inputs)
+
     edit_model = {
         "schemaVersion": "experiment-edit-model.v2",
         "dataNature": "SYNTHETIC",
@@ -126,10 +182,11 @@ def build_sql(
         "sourceFileObjectKey": object_keys[csv_rel],
         "fieldMappingObjectKey": object_keys[mapping_rel],
         "recordCount": len(csv_rows),
-        "sourceGroups": [],
-        "formulaItems": [],
-        "processSteps": [],
-        "testResults": [],
+        "sourceGroups": source_groups,
+        "formulaItems": formula_items,
+        "processSteps": process_steps,
+        "testResults": test_results,
+        "dynamicValues": dynamic_values,
     }
     statements.append(
         "INSERT INTO rnd.experiment(id,organization_id,experiment_no,title,category_name,source_type,status,classification_status,owner_id,owner_name,experiment_date,current_version_id,created_by,updated_by,source_file_id) "
@@ -137,7 +194,7 @@ def build_sql(
     )
     statements.append(
         "INSERT INTO rnd.experiment_version(id,organization_id,experiment_id,version_no,status,template_version_id,template_snapshot_hash,template_snapshot_jsonb,edit_model_jsonb,submitted_at,published_at,created_by) "
-        f"VALUES({sql_text(version_id)}::uuid,{sql_text(ORG)}::uuid,{sql_text(experiment_id)}::uuid,1,'COMPLETED',{sql_text(TEMPLATE_VERSION_ID)}::uuid,{sql_text(TEMPLATE_SNAPSHOT_HASH)},{sql_json(snapshot,'univer_snapshot')},{sql_json(edit_model,'dataset_edit_model')},now(),now(),{sql_text(ACTOR)}::uuid) ON CONFLICT(experiment_id,version_no) DO NOTHING;"
+        f"VALUES({sql_text(version_id)}::uuid,{sql_text(ORG)}::uuid,{sql_text(experiment_id)}::uuid,1,'COMPLETED',{sql_text(TEMPLATE_VERSION_ID)}::uuid,{sql_text(TEMPLATE_SNAPSHOT_HASH)},{sql_json(snapshot,'univer_snapshot')},{sql_json(edit_model,'dataset_edit_model')},now(),now(),{sql_text(ACTOR)}::uuid) ON CONFLICT(experiment_id,version_no) DO UPDATE SET status='COMPLETED',template_version_id=EXCLUDED.template_version_id,template_snapshot_hash=EXCLUDED.template_snapshot_hash,template_snapshot_jsonb=EXCLUDED.template_snapshot_jsonb,edit_model_jsonb=EXCLUDED.edit_model_jsonb,submitted_at=EXCLUDED.submitted_at,published_at=EXCLUDED.published_at;"
     )
     statements.append(f"UPDATE rnd.experiment SET current_version_id={sql_text(version_id)}::uuid WHERE id={sql_text(experiment_id)}::uuid;")
     statements.append(

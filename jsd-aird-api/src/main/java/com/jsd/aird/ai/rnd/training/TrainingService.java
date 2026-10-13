@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.ai.formula.application.FormulaModelArtifactStore;
 import com.jsd.aird.ai.rnd.modeling.ConfigurationHashing;
+import com.jsd.aird.ai.rnd.SyntheticTestAuthorization;
 import com.jsd.aird.ops.application.port.AuditLogFacade;
 import com.jsd.aird.ops.application.port.OpsAsyncFacade;
 import com.jsd.aird.platform.web.RequestIdHolder;
@@ -41,12 +42,12 @@ public class TrainingService {
     private final OpsAsyncFacade async;
     private final AuditLogFacade audit;
     private final FormulaModelArtifactStore artifacts;
-    private final boolean allowSyntheticActivation;
+    private final SyntheticTestAuthorization syntheticTestAuthorization;
 
     public TrainingService(TrainingRepository repository, ConfigurationHashing hashing, ObjectMapper json,
                            OpsAsyncFacade async, AuditLogFacade audit, FormulaModelArtifactStore artifacts,
-                           @Value("${JSD_AIRD_AI_ALLOW_SYNTHETIC_MODEL_ACTIVATION:false}") boolean allowSyntheticActivation) {
-        this.repository=repository;this.hashing=hashing;this.json=json;this.async=async;this.audit=audit;this.artifacts=artifacts;this.allowSyntheticActivation=allowSyntheticActivation;
+                           SyntheticTestAuthorization syntheticTestAuthorization) {
+        this.repository=repository;this.hashing=hashing;this.json=json;this.async=async;this.audit=audit;this.artifacts=artifacts;this.syntheticTestAuthorization=syntheticTestAuthorization;
     }
 
     public TrainingSettings settings(){return repository.settings(actor().organizationId());}
@@ -121,10 +122,13 @@ public class TrainingService {
         var rows=rows(target,samples);
         var valueHashes=rows.stream().map(SnapshotRow::hash).sorted().toList();
         var seed=target.training().path("seed").asLong();
+        var sourceDataNature=target.training().path("dataNature").asText();
+        var testOnlySimulation=syntheticTestAuthorization.enabled()&&"SYNTHETIC".equals(sourceDataNature);
+        var dataNature=testOnlySimulation?"REAL":sourceDataNature;
         var fingerprint=hashing.hash(Map.of("targetHash",target.targetHash(),"schemeHash",target.schemeHash(),
                 "policyHash",target.policyHash(),"dictionaryHash",config.dictionary().hash(),
                 "eligibilityFingerprint",target.eligibilityFingerprint(),"factHighWatermark",target.factHighWatermark(),
-                "seed",seed,"rowHashes",valueHashes));
+                "seed",seed,"dataNature",dataNature,"testOnlySimulation",testOnlySimulation,"rowHashes",valueHashes));
         var existing=repository.jdbc().query("""
                 SELECT j.id,j.training_snapshot_id FROM ai.training_job j JOIN ai.training_snapshot s
                   ON s.organization_id=j.organization_id AND s.id=j.training_snapshot_id
@@ -135,12 +139,16 @@ public class TrainingService {
         if(running!=null&&running>0)return blocked(org,target,"TRAINING_ALREADY_RUNNING");
         var snapshotId=UUID.randomUUID();var jobId=UUID.randomUUID();var objectPrefix="ai/rnd/v2/"+org+"/"+fingerprint+"/";
         var targetDefinition=targetDefinition(org,target);var inputScheme=inputScheme(target,config);var dictionary=materialDictionary(config.dictionary());
-        var policy=trainingPolicy(target);var preprocessing=versionedConfig(target.inputSchemeId(),target.inputSchemeVersion(),target.schemeHash(),target.preprocessing());
+        var policy=trainingPolicy(target);
+        if(testOnlySimulation&&policy.path("config") instanceof ObjectNode trainingConfig)trainingConfig.put("dataNature","REAL");
+        var preprocessing=versionedConfig(target.inputSchemeId(),target.inputSchemeVersion(),target.schemeHash(),target.preprocessing());
         var manifest=json.createObjectNode().put("contractVersion","formula-model.v2").put("snapshotHash",fingerprint)
                 .put("sampleCount",rows.size()).put("factHighWatermark",target.factHighWatermark()).put("seed",seed);
         manifest.set("rowHashes",json.valueToTree(valueHashes));
         var groups=json.createObjectNode().put("formulaLineageField","formula_lineage").put("sourceContextField","source_context");
-        var mappings=config.mappings();var dataNature=target.training().path("dataNature").asText();
+        var mappings=config.mappings();
+        var authorizationScope=json.createObjectNode().put("organizationId",org.toString()).put("dataNature",dataNature)
+                .put("sourceDataNature",sourceDataNature).put("testOnlySimulation",testOnlySimulation);
         repository.jdbc().update("""
                 INSERT INTO ai.training_snapshot(id,organization_id,target_id,target_version_id,input_scheme_id,
                     material_dictionary_version_id,modeling_policy_version_id,eligibility_run_id,status,sample_count,
@@ -151,7 +159,7 @@ public class TrainingService {
                 """,snapshotId,org,target.targetId(),target.targetVersionId(),target.inputSchemeId(),target.dictionaryId(),target.policyId(),
                 target.eligibilityRunId(),rows.size(),repository.pg(groups),repository.pg(manifest),fingerprint,objectPrefix,user,
                 repository.pg(mappings),repository.pg(targetDefinition),repository.pg(inputScheme),repository.pg(dictionary),repository.pg(preprocessing),
-                repository.pg(policy),repository.pg(json.createObjectNode().put("organizationId",org.toString())),target.factHighWatermark(),dataNature,fingerprint);
+                 repository.pg(policy),repository.pg(authorizationScope),target.factHighWatermark(),dataNature,fingerprint);
         long ordinal=0;for(var row:rows){repository.jdbc().update("""
                 INSERT INTO ai.training_snapshot_item(organization_id,training_snapshot_id,sample_revision_id,
                     eligibility_id,ordinal,split_group,row_hash,row_jsonb,training_sample_id,observation_ids_jsonb,
@@ -198,7 +206,7 @@ public class TrainingService {
     private JobActionResult doCancel(UUID id,CancelCommand command){var a=actor();var job=repository.job(a.organizationId(),id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"训练任务不存在"));if(job.revision()!=command.expectedRevision())throw new ApiException(ApiErrorCode.VERSION_CONFLICT);if(!Set.of("QUEUED","MATERIALIZING","SNAPSHOT_VALIDATING","FOLDING","TRAINING","VALIDATING").contains(job.status()))throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"任务当前状态不能取消");var ops=repository.jdbc().query("SELECT ops_job_id FROM ai.training_job WHERE organization_id=? AND id=?",(rs,n)->rs.getObject(1,UUID.class),a.organizationId(),id).stream().findFirst().orElse(null);if(ops!=null)async.cancel(a.organizationId(),ops);var updated=repository.jdbc().update("UPDATE ai.training_job SET status='CANCELLED',cancellation_requested_at=now(),finished_at=now(),current_stage='CANCELLED',revision=revision+1,updated_at=now() WHERE organization_id=? AND id=? AND revision=?",a.organizationId(),id,job.revision());if(updated!=1)throw new ApiException(ApiErrorCode.VERSION_CONFLICT);audit.append(a.organizationId(),a.userId(),"AI_TRAINING_CANCELLED","AI_TRAINING_JOB",id,json.valueToTree(command));return new JobActionResult(id,"CANCELLED",ops,job.attemptCount(),job.revision()+1);}
 
     public PageResponse<ModelSummary> models(String status,String category,String keyword,int page,int size){var a=actor();return repository.models(a.organizationId(),status,category,keyword,page,size);}
-    public ModelDetail model(UUID id){try{return repository.modelDetail(actor().organizationId(),id);}catch(Exception e){throw new ApiException(ApiErrorCode.NOT_FOUND,"模型版本不存在");}}
+    public ModelDetail model(UUID id){try{var detail=repository.modelDetail(actor().organizationId(),id);var testOnlySimulation=detail.modelCard().path("testOnlySimulation").asBoolean();var testActivationAllowed=syntheticTestAuthorization.allows(detail.model().dataNature(),detail.model().productionEligible(),testOnlySimulation);return new ModelDetail(detail.model(),detail.snapshot(),detail.applicabilityDomain(),detail.modelCard(),detail.rejectionReasons(),detail.releases(),testActivationAllowed);}catch(Exception e){throw new ApiException(ApiErrorCode.NOT_FOUND,"模型版本不存在");}}
     public ModelComparison comparison(UUID id){var a=actor();var candidate=repository.model(a.organizationId(),id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"模型版本不存在"));var active=repository.jdbc().query("SELECT id,metrics_jsonb,training_snapshot_id FROM ai.model_version WHERE organization_id=? AND target_id=? AND status='ACTIVE'",(rs,n)->new Object[]{rs.getObject(1,UUID.class),repository.node(rs,"metrics_jsonb"),rs.getObject(3,UUID.class)},a.organizationId(),candidate.targetId()).stream().findFirst().orElse(null);var baseline=candidate.metrics().path("baselines");var reasons=new ArrayList<String>();if(active!=null&&"NOT_COMPARABLE".equals(candidate.comparisonStatus()))reasons.add("当前候选与正式模型没有同一比较集，不能据此判断优劣");return new ModelComparison(id,active==null?null:(UUID)active[0],candidate.comparisonStatus(),active==null||!"NOT_COMPARABLE".equals(candidate.comparisonStatus()),candidate.metrics(),active==null?json.createObjectNode():(JsonNode)active[1],baseline,List.copyOf(reasons));}
 
     @Transactional
@@ -234,7 +242,8 @@ public class TrainingService {
             return new ModelActionResult(id, "PAUSED", null, model.revision() + 1, Instant.now());
         }
 
-        if (!model.productionEligible() && !(allowSyntheticActivation && "SYNTHETIC".equals(model.dataNature())))
+        var testOnlySimulation=repository.testOnlySimulation(actor.organizationId(),id);
+        if (!syntheticTestAuthorization.allows(model.dataNature(), model.productionEligible(),testOnlySimulation))
             throw new ApiException(ApiErrorCode.MODEL_NOT_PRODUCTION_ELIGIBLE);
         if ("ACTIVATE".equals(action) && !"CANDIDATE".equals(model.status())) {
             throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "只有候选模型可以启用");

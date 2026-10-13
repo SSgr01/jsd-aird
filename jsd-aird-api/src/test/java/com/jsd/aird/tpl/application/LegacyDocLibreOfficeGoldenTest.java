@@ -39,7 +39,7 @@ class LegacyDocLibreOfficeGoldenTest {
         var normalizer = new TemplateFileNormalizationService(
                 mock(FileStorageFacade.class), executable.toString(), Duration.ofSeconds(90));
         var converted = normalizer.normalize(
-                legacy.getFileName().toString(), "application/msword", Files.readAllBytes(legacy));
+                legacy.getFileName().toString(), "application/msword", Files.readAllBytes(legacy), false);
         var convertedParse = parser.parse(new ByteArrayInputStream(converted.normalizedBytes()));
         RecognitionModelClient.RecognitionBatch convertedBatch = engine.recognize(
                 TemplateFormat.DOCX, converted.normalizedName(), convertedParse.structureSummary());

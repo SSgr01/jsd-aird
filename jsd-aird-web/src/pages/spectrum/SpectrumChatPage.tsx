@@ -3,7 +3,6 @@ import {
   EyeOutlined,
   FileImageOutlined,
   LineChartOutlined,
-  SearchOutlined,
 } from '@ant-design/icons';
 import {
   Alert,
@@ -11,8 +10,6 @@ import {
   Button,
   Checkbox,
   Collapse,
-  Empty,
-  Input,
   Modal,
   Space,
   Spin,
@@ -53,6 +50,7 @@ import {
   remainingSpectrumDetails,
   resolveSpectrumPresentation,
 } from './spectrum-result-presentation';
+import { SpectrumChatScopeSelector } from './SpectrumChatScopeSelector';
 
 const findingLabels: Record<SpectrumResultPresentation['primaryIntent'], string> = {
   ATTRIBUTION: '归因依据',
@@ -658,7 +656,6 @@ export function SpectrumChatPage() {
   const [charts, setCharts] = useState<SpectrumChart[]>([]);
   const [unavailableChartIds, setUnavailableChartIds] = useState<Set<string>>(() => new Set());
   const [categoriesLoading, setCategoriesLoading] = useState(true);
-  const [chartsLoading, setChartsLoading] = useState(true);
   const [sessions, setSessions] = useState<SpectrumSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | undefined>(
     () =>
@@ -671,7 +668,6 @@ export function SpectrumChatPage() {
   const [selectedCharts, setSelectedCharts] = useState<string[]>([]);
   const [pageSelections, setPageSelections] = useState<Record<string, number[]>>({});
   const [sessionContextLoading, setSessionContextLoading] = useState(Boolean(activeSessionId));
-  const [scopeKeyword, setScopeKeyword] = useState('');
   const [question, setQuestion] = useState('');
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -692,36 +688,41 @@ export function SpectrumChatPage() {
   const sessionSelectionVersionRef = useRef(0);
   const refreshedAnalysisRunsRef = useRef(new Set<string>());
 
+  const cacheCharts = useCallback((incoming: SpectrumChart[]) => {
+    if (!incoming.length) return;
+    const byId = new Map(chartItemsRef.current.map((chart) => [chart.id, chart]));
+    incoming.forEach((chart) => byId.set(chart.id, chart));
+    const merged = [...byId.values()];
+    chartItemsRef.current = merged;
+    setCharts(merged);
+  }, []);
+
   const loadBase = useCallback(async () => {
     setLoading(true);
     setCategoriesLoading(true);
-    setChartsLoading(true);
     const categoryRequest = spectrumApi
       .categories()
       .then(setCategories)
       .catch(() => setCategories([]))
       .finally(() => setCategoriesLoading(false));
-    const chartRequest = spectrumApi
-      .listCharts({ size: 100 })
-      .then((chartPage) => {
-        const mergedCharts = [
-          ...chartPage.items,
-          ...chartItemsRef.current.filter(
-            (chart) => !chartPage.items.some((item) => item.id === chart.id),
-          ),
-        ];
-        chartItemsRef.current = mergedCharts;
-        setCharts(mergedCharts);
-        const routeChartIds = searchParams.get('chartIds')?.split(',').filter(Boolean) || [];
-        if (!initialSessionIdRef.current && routeChartIds.length)
-          setSelectedCharts(
-            routeChartIds.filter((id) => chartPage.items.some((item) => item.id === id)),
-          );
-      })
-      .catch(() => {
-        setCharts(chartItemsRef.current);
-      })
-      .finally(() => setChartsLoading(false));
+    const routeChartIds = searchParams.get('chartIds')?.split(',').filter(Boolean) || [];
+    const routeChartRequest = !initialSessionIdRef.current && routeChartIds.length
+      ? Promise.all(routeChartIds.slice(0, 12).map((chartId) => spectrumApi.chart(chartId).catch(() => undefined)))
+          .then((resolvedCharts) => {
+            const availableCharts = resolvedCharts.filter(
+              (chart): chart is SpectrumChart => Boolean(chart),
+            );
+            cacheCharts(availableCharts);
+            setSelectedCharts(routeChartIds.slice(0, 12));
+            setUnavailableChartIds(
+              new Set(
+                routeChartIds
+                  .slice(0, 12)
+                  .filter((id) => !availableCharts.some((chart) => chart.id === id)),
+              ),
+            );
+          })
+      : Promise.resolve();
     void spectrumApi.sessions().then(
       (sessionList) =>
         setSessions((current) => {
@@ -733,9 +734,9 @@ export function SpectrumChatPage() {
         }),
       () => undefined,
     );
-    await Promise.all([categoryRequest, chartRequest]);
+    await Promise.all([categoryRequest, routeChartRequest]);
     setLoading(false);
-  }, [searchParams]);
+  }, [cacheCharts, searchParams]);
 
   useEffect(() => {
     void loadBase();
@@ -775,14 +776,7 @@ export function SpectrumChatPage() {
           const unavailable = new Set(
             unresolvedChartIds.filter((chartId) => !availableCharts.some((chart) => chart.id === chartId)),
           );
-          const mergedCharts = [
-            ...chartItemsRef.current,
-            ...availableCharts.filter(
-              (chart) => !chartItemsRef.current.some((item) => item.id === chart.id),
-            ),
-          ];
-          chartItemsRef.current = mergedCharts;
-          setCharts(mergedCharts);
+          cacheCharts(availableCharts);
           setUnavailableChartIds(unavailable);
           setSessionContextLoading(false);
         });
@@ -835,7 +829,7 @@ export function SpectrumChatPage() {
         setActiveSessionId(undefined);
       }
     }
-  }, [searchParams]);
+  }, [cacheCharts, searchParams]);
 
   useEffect(() => {
     activeSessionRef.current = activeSessionId;
@@ -977,28 +971,6 @@ export function SpectrumChatPage() {
   );
   const hasUnavailableCharts = selectedCharts.some((id) => unavailableChartIds.has(id));
 
-  const filteredCharts = useMemo(() => {
-    const value = scopeKeyword.trim().toLowerCase();
-    return value
-      ? charts.filter((item) =>
-          `${item.title} ${item.originalName} ${item.sampleName || ''} ${item.batchNo || ''}`
-            .toLowerCase()
-            .includes(value),
-        )
-      : charts;
-  }, [charts, scopeKeyword]);
-
-  const chartsByCategory = useMemo(
-    () =>
-      categories
-        .map((category) => ({
-          category,
-          charts: filteredCharts.filter((item) => item.categoryId === category.id),
-        }))
-        .filter((item) => item.charts.length),
-    [categories, filteredCharts],
-  );
-
   const updateChartSelection = (chartId: string, checked: boolean) => {
     setSelectedCharts((current) => {
       if (checked) return current.includes(chartId) || current.length >= 12 ? current : [...current, chartId];
@@ -1020,76 +992,19 @@ export function SpectrumChatPage() {
     }
   };
 
+  const selectChart = (chart: SpectrumChart, checked: boolean) => {
+    if (checked) cacheCharts([chart]);
+    updateChartSelection(chart.id, checked);
+  };
+
   const scopeContent = (
-    <div className="spectrum-chat-scope-content">
-      <Input
-        className="spectrum-chat-scope-search"
-        allowClear
-        prefix={<SearchOutlined />}
-        placeholder="搜索图谱、样品、批号"
-        value={scopeKeyword}
-        onChange={(event) => setScopeKeyword(event.target.value)}
-      />
-      <div className="spectrum-chat-scope-summary">
-        <span>当前引用</span>
-        <strong>{selectedCharts.length}</strong>
-        <Typography.Text type="secondary">张图谱，可跨分类多选</Typography.Text>
-      </div>
-      {categoriesLoading || chartsLoading ? (
-        <div className="spectrum-chat-scope-state">
-          <Spin size="small" />
-          <Typography.Text type="secondary">正在加载图谱</Typography.Text>
-        </div>
-      ) : chartsByCategory.length ? (
-        <Collapse
-          className="spectrum-chat-category-list"
-          ghost
-          items={chartsByCategory.map(({ category, charts: categoryCharts }) => ({
-            key: category.id,
-            label: (
-              <span className="spectrum-chat-category-label">
-                <span>
-                  <LineChartOutlined />
-                  {category.name}
-                </span>
-                <b>{categoryCharts.length}</b>
-              </span>
-            ),
-            children: (
-              <div className="spectrum-chat-chart-list">
-                {categoryCharts.map((chart) => (
-                  <div
-                    key={chart.id}
-                    className={`spectrum-chat-chart-option${selectedCharts.includes(chart.id) ? ' is-selected' : ''}`}
-                  >
-                    <Checkbox
-                      checked={selectedCharts.includes(chart.id)}
-                      onChange={(event) => updateChartSelection(chart.id, event.target.checked)}
-                    >
-                      <span className="spectrum-chat-chart-copy">
-                        <Typography.Text ellipsis={{ tooltip: chart.title }}>
-                          {chart.title}
-                        </Typography.Text>
-                        <Typography.Text type="secondary" ellipsis={{ tooltip: chart.originalName }}>
-                          {chart.originalName}
-                        </Typography.Text>
-                      </span>
-                    </Checkbox>
-                    <Button type="link" size="small" onClick={() => void openPagePicker(chart)}>
-                      选页
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            ),
-          }))}
-        />
-      ) : (
-        <div className="spectrum-chat-scope-state">
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无可选图谱，请先上传" />
-        </div>
-      )}
-    </div>
+    <SpectrumChatScopeSelector
+      categories={categories}
+      categoriesLoading={categoriesLoading}
+      selectedCharts={selectedCharts}
+      onSelectChart={selectChart}
+      onOpenPagePicker={(chart) => void openPagePicker(chart)}
+    />
   );
 
   const composerTopContent = (

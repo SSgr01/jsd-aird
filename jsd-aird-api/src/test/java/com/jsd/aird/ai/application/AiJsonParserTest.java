@@ -12,7 +12,7 @@ class AiJsonParserTest {
 
     @Test
     void parsesJsonWrappedInMarkdownAndPreamble() {
-        var answer = parser.read("以下是结构化结果：\n```json\n{\"answer\":\"结论\",\"warnings\":[]}" 
+        var answer = parser.read("以下是结构化结果：\n```json\n{\"answer\":\"结论\",\"warnings\":[]}"
                 + "\n```", Answer.class);
 
         assertThat(answer).isNotNull();
@@ -23,6 +23,26 @@ class AiJsonParserTest {
     void returnsNullForEmptyOrNonObjectModelOutput() {
         assertThat(parser.read("", Answer.class)).isNull();
         assertThat(parser.read("[]", Answer.class)).isNull();
+    }
+
+    @Test
+    void reportsInvalidJsonWithABoundedResponsePreview() {
+        var result = parser.readWithDiagnostics("not-json" + "x".repeat(200), Answer.class, 32);
+
+        assertThat(result.successful()).isFalse();
+        assertThat(result.errorCode()).isEqualTo("INVALID_JSON_OBJECT");
+        assertThat(result.errorPath()).isEqualTo("$");
+        assertThat(result.valuePreview()).hasSize(33).endsWith("…");
+    }
+
+    @Test
+    void reportsTheJsonPathAndActualValueWhenBindingFails() {
+        var result = parser.readWithDiagnostics("{\"warnings\":7}", ArrayAnswer.class, 160);
+
+        assertThat(result.successful()).isFalse();
+        assertThat(result.errorCode()).isEqualTo("OBJECT_BINDING_FAILED");
+        assertThat(result.errorPath()).isEqualTo("$.warnings");
+        assertThat(result.valuePreview()).isEqualTo("7");
     }
 
     @Test
@@ -52,5 +72,8 @@ class AiJsonParserTest {
     }
 
     private record StructuredAnswer(String answer, String answerStatus, List<String> usedEvidenceRefs) {
+    }
+
+    private record ArrayAnswer(List<String> warnings) {
     }
 }

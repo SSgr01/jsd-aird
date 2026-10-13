@@ -24,4 +24,13 @@ class AssistantEvidenceSelectionTest {
         assertThat(selected).containsExactly("K2", "D1", "E1");
     }
 
+    @Test
+    void permitsCitationsForAllFieldsInAFullStructuredRecord() {
+        var refs = java.util.stream.IntStream.rangeClosed(1, 12).mapToObj(index -> "D" + index).toList();
+
+        var selected = AssistantService.selectEvidenceRefs("ANSWERED", refs, Set.copyOf(refs));
+
+        assertThat(selected).containsExactlyElementsOf(refs);
+    }
+
 }

@@ -26,7 +26,8 @@ public final class OptimizationContracts {
                                   JsonNode missingStrategyReasons,
                                   List<OptimizationCandidate> candidates,JsonNode error,JsonNode frozenBaseline,
                                   JsonNode frozenRequest,Map<UUID,UUID> modelBindings,String requestId,Instant updatedAt,
-                                  String searchEngine,String searchStrategy,JsonNode searchEvidence) { }
+                                  String searchEngine,String searchStrategy,JsonNode searchEvidence,
+                                  boolean simulation,String predictionMode,String resultNotice) { }
     public record DraftCommand(List<UUID> candidateIds, UUID categoryId, LocalDate plannedExperimentDate,
                                UUID projectId, UUID stageId, UUID taskId, String ownerName,
                                UUID templateVersionId) { }

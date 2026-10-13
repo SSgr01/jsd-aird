@@ -33,6 +33,7 @@ import com.jsd.aird.kb.domain.MediaExtractionProvider;
 import com.jsd.aird.kb.domain.MediaExtractionException;
 import com.jsd.aird.kb.domain.OcrMode;
 import com.jsd.aird.kb.domain.LexicalAnalyzer;
+import com.jsd.aird.kb.infrastructure.MineruImageDocumentParser;
 import com.jsd.aird.ops.application.port.AuditLogFacade;
 import com.jsd.aird.ops.application.port.FileStorageFacade;
 import com.jsd.aird.ops.application.port.OpsAsyncFacade;
@@ -1070,7 +1071,8 @@ public class KnowledgeService implements KnowledgeSearchFacade {
             }
             repository.updateScanStatus(documentId, "SAFE");
             repository.finishProcessingStep(organizationId, versionId, null, "SCAN", "SUCCEEDED", version.sha256(), null);
-            var mediaProvider = mediaProviders.stream()
+            var imageSource = MineruImageDocumentParser.isImageSource(version.originalName(), version.contentType());
+            var mediaProvider = imageSource ? null : mediaProviders.stream()
                     .filter(candidate -> candidate.supports(version.originalName(), version.contentType()))
                     .sorted((left, right) -> Boolean.compare(right.isConfigured(), left.isConfigured()))
                     .findFirst().orElse(null);

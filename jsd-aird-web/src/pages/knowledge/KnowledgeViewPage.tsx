@@ -1,7 +1,7 @@
 import { DeleteOutlined, DownloadOutlined, EditOutlined, EyeOutlined, FilePdfOutlined, FileWordOutlined, FileExcelOutlined, FolderOpenOutlined, LinkOutlined, ReloadOutlined, SafetyCertificateOutlined, StopOutlined, TagsOutlined, UndoOutlined, UploadOutlined } from '@ant-design/icons';
 import { App, Button, Dropdown, Empty, Input, Modal, Select, Space, Table, Tag, Tooltip, Typography } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 
 import { CategoryCardGrid, CategoryEditorModal, CatalogListPanel, type CatalogCategoryCard, type CategoryEditorValue } from '@/components/catalog-workspace';
 import { Can } from '@/components/auth/Can';
@@ -11,8 +11,16 @@ import '@/components/project-relations/project-relation-picker.css';
 import { knowledgeApi, type KnowledgeCategory, type KnowledgeDocument, type RelatedProject } from '@/services/knowledge';
 import { getProjects, type Project } from '@/services/project/project-api';
 import { projectResourceApi, type ProjectRelationTarget } from '@/services/project/project-resource-api';
+import { KnowledgeReviewQueuePage } from './KnowledgeReviewQueuePage';
 
 const scopes = [{ value: 'INTERNAL' as const, label: '内部资料' }, { value: 'EXTERNAL' as const, label: '外部资料' }];
+const reviewStatuses = ['PENDING_REVIEW', 'REJECTED', 'PUBLISHED', 'SUPERSEDED'];
+const reviewStatusLabels: Record<string, [string, string]> = {
+  PENDING_REVIEW: ['待校对', 'gold'],
+  REJECTED: ['已驳回', 'error'],
+  PUBLISHED: ['已发布', 'blue'],
+  SUPERSEDED: ['已被新版本替代', 'default'],
+};
 const statusLabels: Record<string, [string, string]> = { QUEUED: ['排队中', 'processing'], PROCESSING: ['解析中', 'processing'], READY: ['已入库', 'success'], FAILED: ['失败', 'error'], REJECTED: ['已拒绝', 'error'], PENDING_PROVIDER: ['解析服务暂不可用', 'warning'] };
 
 function fileIcon(contentType: string) {
@@ -37,6 +45,7 @@ function RelatedProjectsCell({ relations, onOpen }: { relations: RelatedProject[
 export function KnowledgeViewPage() {
   const { message, modal } = App.useApp();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [scope, setScope] = useState<'INTERNAL' | 'EXTERNAL'>('INTERNAL');
   const [categories, setCategories] = useState<KnowledgeCategory[]>([]);
   const [items, setItems] = useState<KnowledgeDocument[]>([]);
@@ -45,7 +54,10 @@ export function KnowledgeViewPage() {
   const [keyword, setKeyword] = useState('');
   const [status, setStatus] = useState<string>();
   const [lifecycleStatus, setLifecycleStatus] = useState<string>();
-  const [reviewStatus, setReviewStatus] = useState<string>();
+  const [reviewStatus, setReviewStatus] = useState<string | undefined>(() => {
+    const value = searchParams.get('reviewStatus');
+    return value && reviewStatuses.includes(value) ? value : undefined;
+  });
   const [categoryId, setCategoryId] = useState('ALL');
   const [page, setPage] = useState({ current: 1, pageSize: 20, total: 0 });
   const [editor, setEditor] = useState<{ mode: 'NEW' | 'EDIT'; item?: KnowledgeCategory }>();
@@ -60,9 +72,12 @@ export function KnowledgeViewPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectId, setProjectId] = useState<string>();
   const [relationEditor, setRelationEditor] = useState<{ item: KnowledgeDocument; targets: ProjectRelationTarget[] }>();
+  const canViewCatalog = usePermission('knowledge.view');
+  const canReview = usePermission('knowledge.review');
   const canUpdate = usePermission('knowledge.update');
 
   const load = useCallback(async () => {
+    if (!canViewCatalog) { setLoading(false); return; }
     setLoading(true);
     setLoadError(undefined);
     try {
@@ -77,10 +92,28 @@ export function KnowledgeViewPage() {
       void message.error(description);
     }
     finally { setLoading(false); }
-  }, [categoryId, keyword, lifecycleStatus, message, page.current, page.pageSize, projectId, reviewStatus, scope, status]);
+  }, [canViewCatalog, categoryId, keyword, lifecycleStatus, message, page.current, page.pageSize, projectId, reviewStatus, scope, status]);
+
+  useEffect(() => {
+    const value = searchParams.get('reviewStatus');
+    const next = value && reviewStatuses.includes(value) ? value : undefined;
+    setReviewStatus((current) => current === next ? current : next);
+  }, [searchParams]);
+
+  const changeReviewStatus = (value?: string) => {
+    const next = value && reviewStatuses.includes(value) ? value : undefined;
+    setReviewStatus(next);
+    setPage((current) => ({ ...current, current: 1 }));
+    setSearchParams((current) => {
+      const updated = new URLSearchParams(current);
+      if (next) updated.set('reviewStatus', next);
+      else updated.delete('reviewStatus');
+      return updated;
+    });
+  };
 
   useEffect(() => { void load(); }, [load]);
-  useEffect(() => { void getProjects({ page: 1, size: 100 }).then((result) => setProjects(result.items)).catch(() => setProjects([])); }, []);
+  useEffect(() => { if (canViewCatalog) void getProjects({ page: 1, size: 100 }).then((result) => setProjects(result.items)).catch(() => setProjects([])); }, [canViewCatalog]);
   useEffect(() => { setCategoryId('ALL'); setPage((value) => ({ ...value, current: 1 })); }, [scope]);
 
   const cards = useMemo<CatalogCategoryCard[]>(() => [
@@ -197,15 +230,17 @@ export function KnowledgeViewPage() {
 
   return <div className="business-page knowledge-view-page">
     <div className="page-heading"><div><Typography.Title level={2}>知识库查看</Typography.Title><Typography.Text type="secondary">治理逻辑文档、审核版本和当前发布快照；停用会立即退出文件检索与 AI 问答。</Typography.Text></div><Can permission="knowledge.upload"><Button type="primary" icon={<UploadOutlined />} onClick={() => navigate('/knowledge/library')}>上传文件</Button></Can></div>
+    {canViewCatalog ? <>
     <div className="catalog-tabs" role="tablist" aria-label="资料范围">{scopes.map((item) => <Button key={item.value} type={scope === item.value ? 'primary' : 'default'} role="tab" aria-selected={scope === item.value} onClick={() => setScope(item.value)}>{item.label}</Button>)}</div>
     <CategoryCardGrid categories={cards} activeId={categoryId} onSelect={(id) => { setCategoryId(id); setPage((value) => ({ ...value, current: 1 })); }} onCreate={canUpdate ? () => setEditor({ mode: 'NEW' }) : undefined} onRename={canUpdate ? (item) => setEditor({ mode: 'EDIT', item: categories.find((candidate) => candidate.id === item.id) }) : undefined} onDelete={canUpdate ? (item) => { const category = categories.find((candidate) => candidate.id === item.id); if (category?.allowedActions?.includes('DELETE')) setDeleteItem(category); } : undefined} />
-    <CatalogListPanel title={cards.find((item) => item.id === categoryId)?.name || '资料文件'} count={page.total} filters={<Space wrap><Input.Search allowClear placeholder="搜索文档、图片或音频" value={keyword} onChange={(event) => { setKeyword(event.target.value); setPage((value) => ({ ...value, current: 1 })); }} onSearch={() => void load()} /><Select allowClear showSearch optionFilterProp="label" popupMatchSelectWidth={false} classNames={{ popup: { root: 'project-relation-picker-dropdown' } }} placeholder="全部项目" value={projectId} onChange={(value) => { setProjectId(value); setPage((current) => ({ ...current, current: 1 })); }} options={projects.map((project) => ({ value: project.id, label: `${project.projectCode} · ${project.name}` }))} /><Select allowClear placeholder="全部解析状态" value={status} onChange={(value) => { setStatus(value); setPage((current) => ({ ...current, current: 1 })); }} options={Object.entries(statusLabels).map(([value, item]) => ({ value, label: item[0] }))} /><Select allowClear placeholder="全部生命周期" value={lifecycleStatus} onChange={setLifecycleStatus} options={[{ value: 'ACTIVE', label: '有效' }, { value: 'DISABLED', label: '已停用' }]} /><Select allowClear placeholder="全部审核状态" value={reviewStatus} onChange={setReviewStatus} options={[{ value: 'PENDING_REVIEW', label: '待审核' }, { value: 'REJECTED', label: '已驳回' }, { value: 'PUBLISHED', label: '已发布' }, { value: 'SUPERSEDED', label: '已替代' }]} /><Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button></Space>} actions={<><Typography.Text type="secondary">已选 {selected.length} 项</Typography.Text><Can permission="knowledge.update"><Dropdown menu={{ items: categories.map((category) => ({ key: category.id, label: category.name, onClick: () => void batchMove(category.id) })) }}><Button disabled={!selected.length}>批量移动</Button></Dropdown><Dropdown menu={{ items: [{ key: 'add', label: '添加标签', onClick: () => batchTags('ADD') }, { key: 'remove', label: '移除标签', onClick: () => batchTags('REMOVE') }] }}><Button icon={<TagsOutlined />} disabled={!selected.length}>批量标签</Button></Dropdown></Can><Can permission="knowledge.approve"><Dropdown menu={{ items: [{ key: 'approve', label: '授权当前发布版', onClick: () => batchAi('APPROVE') }, { key: 'revoke', label: '撤销当前发布版授权', danger: true, onClick: () => batchAi('REVOKE') }] }}><Button icon={<SafetyCertificateOutlined />} disabled={!selected.length}>批量 AI 授权</Button></Dropdown></Can><Can permission="knowledge.export"><Button loading={exporting} icon={<DownloadOutlined />} disabled={!selected.length || selected.length > 200} onClick={() => void exportDocuments()}>批量导出</Button></Can><Can permission="knowledge.delete"><Button danger icon={<DeleteOutlined />} disabled={!selected.length} onClick={deleteSelected}>删除未发布草稿</Button></Can></>} loading={loading} error={loadError} onRetry={() => void load()}>
-      <Table className="catalog-knowledge-table" scroll={{ x: 1580 }} rowKey="id" rowSelection={{ selectedRowKeys: selected, onChange: (keys) => setSelected(keys.map(String)) }} dataSource={items} pagination={{ current: page.current, pageSize: page.pageSize, total: page.total, showSizeChanger: true, onChange: (current, pageSize) => setPage({ current, pageSize, total: page.total }) }} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前分类暂无符合条件的文件"><Can permission="knowledge.upload"><Button type="primary" ghost icon={<UploadOutlined />} onClick={() => navigate('/knowledge/library')}>上传文件</Button></Can></Empty> }} columns={[{ title: '文件名称', dataIndex: 'title', width: 330, ellipsis: true, render: (_, item) => <Space>{fileIcon(item.contentType)}<span><Typography.Text strong ellipsis={{ tooltip: item.title }}>{item.title}</Typography.Text><span className="binding-path">{item.originalName} · {(item.size / 1024).toFixed(0)} KB · V{item.currentVersionNo}{item.currentPublicationNo ? ` · 发布#${item.currentPublicationNo}` : ''}</span></span></Space> }, { title: '当前分类', dataIndex: 'categoryName', width: 150, ellipsis: true, render: (value?: string) => value || '未分类' }, { title: '关联项目', width: 240, className: 'knowledge-related-projects-column', render: (_: unknown, item: KnowledgeDocument) => <RelatedProjectsCell relations={item.relatedProjects || []} onOpen={(projectId) => navigate(`/projects/${projectId}`)} /> }, { title: '生命周期', dataIndex: 'lifecycleStatus', width: 120, render: (value: string) => <Tag color={value === 'ACTIVE' ? 'success' : 'default'}>{value === 'ACTIVE' ? '有效' : '已停用'}</Tag> }, { title: '审核', dataIndex: 'reviewStatus', width: 130, render: (value: string) => <Tag color={value === 'PUBLISHED' ? 'blue' : value === 'REJECTED' ? 'error' : 'gold'}>{value}</Tag> }, { title: 'AI 使用', dataIndex: 'aiStatus', width: 120, render: (value: string) => <Tag color={value === 'APPROVED' ? 'success' : 'default'}>{value === 'APPROVED' ? '已授权' : '待授权'}</Tag> }, { title: '处理状态', dataIndex: 'status', width: 130, render: (value: string) => <Tag color={statusLabels[value]?.[1]}>{statusLabels[value]?.[0] || value}</Tag> }, { title: '操作', width: 450, render: (_, item) => <Space wrap><Button type="link" icon={<EyeOutlined />} onClick={() => navigate(`/knowledge/documents/${item.id}`)}>查看</Button><Can permission="knowledge.review">{item.reviewStatus === 'PENDING_REVIEW' || item.reviewStatus === 'REJECTED' ? <Button type="link" onClick={() => navigate(`/knowledge/review/${item.id}/${item.currentVersionId}`)}>校对</Button> : null}</Can><Can permission="knowledge.update"><Button type="link" icon={<EditOutlined />} onClick={() => { setRenameItem(item); setRenameValue(item.title); }}>重命名</Button><Dropdown trigger={['click']} menu={{ items: categories.map((category) => ({ key: category.id, label: category.name, onClick: () => void moveDocument(category.id, item) })) }}><Button type="link">移动</Button></Dropdown>{item.allowedActions?.includes('DISABLE') || item.allowedActions?.includes('RESTORE') ? <Button type="link" danger={item.allowedActions.includes('DISABLE')} icon={item.allowedActions.includes('DISABLE') ? <StopOutlined /> : <UndoOutlined />} onClick={() => lifecycle(item)}>{item.allowedActions.includes('DISABLE') ? '停用' : '恢复'}</Button> : null}</Can><Can permission="project.assign"><Button type="link" icon={<LinkOutlined />} onClick={() => setRelationEditor({ item, targets: (item.relatedProjects || []).map((relation) => ({ projectId: relation.projectId, stageId: relation.stageId, taskId: relation.taskId })) })}>关联项目</Button></Can></Space> }]} />
+    <CatalogListPanel title={cards.find((item) => item.id === categoryId)?.name || '资料文件'} count={page.total} filters={<Space wrap><Input.Search allowClear placeholder="搜索文档、图片或音频" value={keyword} onChange={(event) => { setKeyword(event.target.value); setPage((value) => ({ ...value, current: 1 })); }} onSearch={() => void load()} /><Select allowClear showSearch optionFilterProp="label" popupMatchSelectWidth={false} classNames={{ popup: { root: 'project-relation-picker-dropdown' } }} placeholder="全部项目" value={projectId} onChange={(value) => { setProjectId(value); setPage((current) => ({ ...current, current: 1 })); }} options={projects.map((project) => ({ value: project.id, label: `${project.projectCode} · ${project.name}` }))} /><Select allowClear placeholder="全部解析状态" value={status} onChange={(value) => { setStatus(value); setPage((current) => ({ ...current, current: 1 })); }} options={Object.entries(statusLabels).map(([value, item]) => ({ value, label: item[0] }))} /><Select allowClear placeholder="全部生命周期" value={lifecycleStatus} onChange={setLifecycleStatus} options={[{ value: 'ACTIVE', label: '有效' }, { value: 'DISABLED', label: '已停用' }]} /><Select allowClear placeholder="审核状态" value={reviewStatus} onChange={changeReviewStatus} options={[{ value: 'PENDING_REVIEW', label: '待校对' }, { value: 'REJECTED', label: '已驳回' }, { value: 'PUBLISHED', label: '已发布' }, { value: 'SUPERSEDED', label: '已替代' }]} /><Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button></Space>} actions={<><Typography.Text type="secondary">已选 {selected.length} 项</Typography.Text><Can permission="knowledge.update"><Dropdown menu={{ items: categories.map((category) => ({ key: category.id, label: category.name, onClick: () => void batchMove(category.id) })) }}><Button disabled={!selected.length}>批量移动</Button></Dropdown><Dropdown menu={{ items: [{ key: 'add', label: '添加标签', onClick: () => batchTags('ADD') }, { key: 'remove', label: '移除标签', onClick: () => batchTags('REMOVE') }] }}><Button icon={<TagsOutlined />} disabled={!selected.length}>批量标签</Button></Dropdown></Can><Can permission="knowledge.approve"><Dropdown menu={{ items: [{ key: 'approve', label: '授权当前发布版', onClick: () => batchAi('APPROVE') }, { key: 'revoke', label: '撤销当前发布版授权', danger: true, onClick: () => batchAi('REVOKE') }] }}><Button icon={<SafetyCertificateOutlined />} disabled={!selected.length}>批量 AI 授权</Button></Dropdown></Can><Can permission="knowledge.export"><Button loading={exporting} icon={<DownloadOutlined />} disabled={!selected.length || selected.length > 200} onClick={() => void exportDocuments()}>批量导出</Button></Can><Can permission="knowledge.delete"><Button danger icon={<DeleteOutlined />} disabled={!selected.length} onClick={deleteSelected}>删除未发布草稿</Button></Can></>} loading={loading} error={loadError} onRetry={() => void load()}>
+      <Table className="catalog-knowledge-table" scroll={{ x: 1580 }} rowKey="id" rowSelection={{ selectedRowKeys: selected, onChange: (keys) => setSelected(keys.map(String)) }} dataSource={items} pagination={{ current: page.current, pageSize: page.pageSize, total: page.total, showSizeChanger: true, onChange: (current, pageSize) => setPage({ current, pageSize, total: page.total }) }} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前分类暂无符合条件的文件"><Can permission="knowledge.upload"><Button type="primary" ghost icon={<UploadOutlined />} onClick={() => navigate('/knowledge/library')}>上传文件</Button></Can></Empty> }} columns={[{ title: '文件名称', dataIndex: 'title', width: 330, ellipsis: true, render: (_, item) => <Space>{fileIcon(item.contentType)}<span><Typography.Text strong ellipsis={{ tooltip: item.title }}>{item.title}</Typography.Text><span className="binding-path">{item.originalName} · {(item.size / 1024).toFixed(0)} KB · V{item.currentVersionNo}{item.currentPublicationNo ? ` · 发布#${item.currentPublicationNo}` : ''}</span></span></Space> }, { title: '当前分类', dataIndex: 'categoryName', width: 150, ellipsis: true, render: (value?: string) => value || '未分类' }, { title: '关联项目', width: 240, className: 'knowledge-related-projects-column', render: (_: unknown, item: KnowledgeDocument) => <RelatedProjectsCell relations={item.relatedProjects || []} onOpen={(projectId) => navigate(`/projects/${projectId}`)} /> }, { title: '生命周期', dataIndex: 'lifecycleStatus', width: 120, render: (value: string) => <Tag color={value === 'ACTIVE' ? 'success' : 'default'}>{value === 'ACTIVE' ? '有效' : '已停用'}</Tag> }, { title: '审核', dataIndex: 'reviewStatus', width: 130, render: (value: string) => { const [label, color] = reviewStatusLabels[value] || [value, 'default']; return <Tag color={color}>{label}</Tag>; } }, { title: 'AI 使用', dataIndex: 'aiStatus', width: 120, render: (value: string) => <Tag color={value === 'APPROVED' ? 'success' : 'default'}>{value === 'APPROVED' ? '已授权' : '待授权'}</Tag> }, { title: '处理状态', dataIndex: 'status', width: 130, render: (value: string) => <Tag color={statusLabels[value]?.[1]}>{statusLabels[value]?.[0] || value}</Tag> }, { title: '操作', width: 450, render: (_, item) => <Space wrap><Button type="link" icon={<EyeOutlined />} onClick={() => navigate(`/knowledge/documents/${item.id}`)}>查看</Button><Can permission="knowledge.review">{item.reviewStatus === 'PENDING_REVIEW' || item.reviewStatus === 'REJECTED' ? <Button type="link" onClick={() => navigate(`/knowledge/review/${item.id}/${item.currentVersionId}`)}>校对</Button> : null}</Can><Can permission="knowledge.update"><Button type="link" icon={<EditOutlined />} onClick={() => { setRenameItem(item); setRenameValue(item.title); }}>重命名</Button><Dropdown trigger={['click']} menu={{ items: categories.map((category) => ({ key: category.id, label: category.name, onClick: () => void moveDocument(category.id, item) })) }}><Button type="link">移动</Button></Dropdown>{item.allowedActions?.includes('DISABLE') || item.allowedActions?.includes('RESTORE') ? <Button type="link" danger={item.allowedActions.includes('DISABLE')} icon={item.allowedActions.includes('DISABLE') ? <StopOutlined /> : <UndoOutlined />} onClick={() => lifecycle(item)}>{item.allowedActions.includes('DISABLE') ? '停用' : '恢复'}</Button> : null}</Can><Can permission="project.assign"><Button type="link" icon={<LinkOutlined />} onClick={() => setRelationEditor({ item, targets: (item.relatedProjects || []).map((relation) => ({ projectId: relation.projectId, stageId: relation.stageId, taskId: relation.taskId })) })}>关联项目</Button></Can></Space> }]} />
     </CatalogListPanel>
     <CategoryEditorModal open={Boolean(editor)} title={editor?.mode === 'NEW' ? '新增知识分类' : '编辑知识分类'} initialValue={editor?.item ? { name: editor.item.name, description: editor.item.description } : { name: '' }} confirmLoading={saving} onCancel={() => setEditor(undefined)} onSubmit={(value) => void saveCategory(value)} />
     {deleteItem && <ModalDelete title={`删除分类“${deleteItem.name}”`} open onCancel={() => setDeleteItem(undefined)} onConfirm={() => void removeCategory()} loading={saving} replacementId={replacementId} onReplacementChange={setReplacementId} options={categories.filter((item) => item.id !== deleteItem.id).map((item) => ({ value: item.id, label: item.name }))} />}
     <Modal open={Boolean(renameItem)} title="重命名文件" okText="保存" cancelText="取消" confirmLoading={saving} onCancel={() => setRenameItem(undefined)} onOk={() => void renameDocument()}><Input aria-label="文件名称" maxLength={260} value={renameValue} onChange={(event) => setRenameValue(event.target.value)} /></Modal>
     <Modal open={Boolean(relationEditor)} title="维护知识文档关联项目" width={760} okText="保存" confirmLoading={saving} onCancel={() => setRelationEditor(undefined)} onOk={() => void saveRelations()}>{relationEditor && <ProjectRelationPicker value={relationEditor.targets} onChange={(targets) => setRelationEditor((current) => current ? { ...current, targets } : current)} />}</Modal>
+    </> : canReview ? <KnowledgeReviewQueuePage embedded initialStatus={reviewStatus} /> : <Empty description="没有查看或审核知识库的权限" />}
   </div>;
 }
 

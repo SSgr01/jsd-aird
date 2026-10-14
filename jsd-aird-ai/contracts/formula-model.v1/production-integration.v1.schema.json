@@ -1,0 +1,1688 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jsd.internal/contracts/formula-model.v1/production-integration.v1.json",
+  "title": "JSD-AIRD Formula Model Production Integration Contract v1",
+  "$defs": {
+    "ApplicabilityDomainPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "robustLowerQuantile": {
+          "default": 0.01,
+          "exclusiveMaximum": 0.5,
+          "minimum": 0.0,
+          "title": "Robustlowerquantile",
+          "type": "number"
+        },
+        "robustUpperQuantile": {
+          "default": 0.99,
+          "exclusiveMinimum": 0.5,
+          "maximum": 1.0,
+          "title": "Robustupperquantile",
+          "type": "number"
+        },
+        "nearBoundaryDistanceQuantile": {
+          "default": 0.95,
+          "exclusiveMaximum": 1.0,
+          "exclusiveMinimum": 0.5,
+          "title": "Nearboundarydistancequantile",
+          "type": "number"
+        },
+        "outOfDomainDistanceQuantile": {
+          "default": 0.99,
+          "exclusiveMinimum": 0.5,
+          "maximum": 1.0,
+          "title": "Outofdomaindistancequantile",
+          "type": "number"
+        },
+        "outOfDomainRequiresFallback": {
+          "default": true,
+          "title": "Outofdomainrequiresfallback",
+          "type": "boolean"
+        }
+      },
+      "title": "ApplicabilityDomainPolicy",
+      "type": "object"
+    },
+    "ArtifactReadRef": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 180,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "url": {
+          "format": "uri",
+          "minLength": 1,
+          "title": "Url",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "url",
+        "sha256"
+      ],
+      "title": "ArtifactReadRef",
+      "type": "object"
+    },
+    "ArtifactWriteRef": {
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "format": "uri",
+          "minLength": 1,
+          "title": "Url",
+          "type": "string"
+        },
+        "contentType": {
+          "default": "application/zip",
+          "title": "Contenttype",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "title": "ArtifactWriteRef",
+      "type": "object"
+    },
+    "BaselineType": {
+      "enum": [
+        "DEVELOPMENT_KNN",
+        "T06_SIMILAR_CASE"
+      ],
+      "title": "BaselineType",
+      "type": "string"
+    },
+    "BinaryReadinessThreshold": {
+      "additionalProperties": false,
+      "properties": {
+        "minSamples": {
+          "default": 80,
+          "minimum": 1,
+          "title": "Minsamples",
+          "type": "integer"
+        },
+        "minMinorityClassSamples": {
+          "default": 20,
+          "minimum": 1,
+          "title": "Minminorityclasssamples",
+          "type": "integer"
+        },
+        "minGroups": {
+          "default": 12,
+          "minimum": 2,
+          "title": "Mingroups",
+          "type": "integer"
+        },
+        "minRocAuc": {
+          "default": 0.65,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Minrocauc",
+          "type": "number"
+        },
+        "minPrAuc": {
+          "default": 0.5,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Minprauc",
+          "type": "number"
+        },
+        "minF1": {
+          "default": 0.5,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Minf1",
+          "type": "number"
+        },
+        "maxLogLoss": {
+          "default": 0.7,
+          "exclusiveMinimum": 0.0,
+          "title": "Maxlogloss",
+          "type": "number"
+        },
+        "maxBrierScore": {
+          "default": 0.25,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Maxbrierscore",
+          "type": "number"
+        }
+      },
+      "title": "BinaryReadinessThreshold",
+      "type": "object"
+    },
+    "CandidatePolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "maximumPoolSize": {
+          "default": 20000,
+          "maximum": 100000,
+          "minimum": 100,
+          "title": "Maximumpoolsize",
+          "type": "integer"
+        },
+        "minimumL1Distance": {
+          "default": 2.0,
+          "minimum": 0.0,
+          "title": "Minimuml1Distance",
+          "type": "number"
+        },
+        "conservativeMaximumL1Distance": {
+          "default": 10.0,
+          "exclusiveMinimum": 0.0,
+          "title": "Conservativemaximuml1Distance",
+          "type": "number"
+        },
+        "defaultCount": {
+          "default": 4,
+          "maximum": 16,
+          "minimum": 1,
+          "title": "Defaultcount",
+          "type": "integer"
+        }
+      },
+      "title": "CandidatePolicy",
+      "type": "object"
+    },
+    "CategoricalReadinessThreshold": {
+      "additionalProperties": false,
+      "properties": {
+        "minSamples": {
+          "default": 80,
+          "minimum": 1,
+          "title": "Minsamples",
+          "type": "integer"
+        },
+        "minSamplesPerObservedClass": {
+          "default": 10,
+          "minimum": 1,
+          "title": "Minsamplesperobservedclass",
+          "type": "integer"
+        },
+        "minObservedClasses": {
+          "default": 2,
+          "minimum": 2,
+          "title": "Minobservedclasses",
+          "type": "integer"
+        },
+        "minGroups": {
+          "default": 12,
+          "minimum": 2,
+          "title": "Mingroups",
+          "type": "integer"
+        },
+        "minMacroF1": {
+          "default": 0.4,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Minmacrof1",
+          "type": "number"
+        },
+        "minBalancedAccuracy": {
+          "default": 0.4,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Minbalancedaccuracy",
+          "type": "number"
+        },
+        "maxLogLoss": {
+          "default": 1.5,
+          "exclusiveMinimum": 0.0,
+          "title": "Maxlogloss",
+          "type": "number"
+        }
+      },
+      "title": "CategoricalReadinessThreshold",
+      "type": "object"
+    },
+    "ClassificationModelEligibilityProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "LOGISTIC_REGRESSION": {
+          "$ref": "#/$defs/ModelEligibilityRule"
+        },
+        "RF": {
+          "$ref": "#/$defs/ModelEligibilityRule"
+        },
+        "LIGHTGBM": {
+          "$ref": "#/$defs/ModelEligibilityRule"
+        },
+        "XGBOOST": {
+          "$ref": "#/$defs/ModelEligibilityRule"
+        },
+        "CATBOOST": {
+          "$ref": "#/$defs/ModelEligibilityRule"
+        }
+      },
+      "title": "ClassificationModelEligibilityProfile",
+      "type": "object"
+    },
+    "ClassificationModelSelectionPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "tieScoreTolerance": {
+          "default": 0.01,
+          "minimum": 0.0,
+          "title": "Tiescoretolerance",
+          "type": "number"
+        },
+        "binaryTieBreakOrder": {
+          "items": {
+            "$ref": "#/$defs/ModelType"
+          },
+          "title": "Binarytiebreakorder",
+          "type": "array"
+        },
+        "categoricalTieBreakOrder": {
+          "items": {
+            "$ref": "#/$defs/ModelType"
+          },
+          "title": "Categoricaltiebreakorder",
+          "type": "array"
+        }
+      },
+      "title": "ClassificationModelSelectionPolicy",
+      "type": "object"
+    },
+    "ContextFeatureSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "column": {
+          "title": "Column",
+          "type": "string"
+        },
+        "valueType": {
+          "$ref": "#/$defs/FeatureType"
+        },
+        "adjustable": {
+          "default": false,
+          "title": "Adjustable",
+          "type": "boolean"
+        },
+        "sharedWithinSourceGroup": {
+          "default": true,
+          "title": "Sharedwithinsourcegroup",
+          "type": "boolean"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unit"
+        }
+      },
+      "required": [
+        "code",
+        "column",
+        "valueType"
+      ],
+      "title": "ContextFeatureSpec",
+      "type": "object"
+    },
+    "ContinuousReadinessThreshold": {
+      "additionalProperties": false,
+      "properties": {
+        "minSamples": {
+          "default": 80,
+          "minimum": 1,
+          "title": "Minsamples",
+          "type": "integer"
+        },
+        "minGroups": {
+          "default": 12,
+          "minimum": 2,
+          "title": "Mingroups",
+          "type": "integer"
+        },
+        "minBaselineImprovement": {
+          "default": 0.1,
+          "minimum": 0.0,
+          "title": "Minbaselineimprovement",
+          "type": "number"
+        },
+        "maxNmae": {
+          "default": 0.2,
+          "exclusiveMinimum": 0.0,
+          "title": "Maxnmae",
+          "type": "number"
+        },
+        "minIntervalCoverage": {
+          "default": 0.85,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Minintervalcoverage",
+          "type": "number"
+        },
+        "maxIntervalCoverage": {
+          "default": 0.95,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Maxintervalcoverage",
+          "type": "number"
+        },
+        "requiredBaselineType": {
+          "$ref": "#/$defs/BaselineType",
+          "default": "T06_SIMILAR_CASE"
+        }
+      },
+      "title": "ContinuousReadinessThreshold",
+      "type": "object"
+    },
+    "DevelopmentReadinessThreshold": {
+      "additionalProperties": false,
+      "properties": {
+        "minSamples": {
+          "default": 30,
+          "minimum": 1,
+          "title": "Minsamples",
+          "type": "integer"
+        },
+        "minGroups": {
+          "default": 5,
+          "minimum": 2,
+          "title": "Mingroups",
+          "type": "integer"
+        }
+      },
+      "title": "DevelopmentReadinessThreshold",
+      "type": "object"
+    },
+    "Direction": {
+      "enum": [
+        "MINIMIZE",
+        "MAXIMIZE"
+      ],
+      "title": "Direction",
+      "type": "string"
+    },
+    "FeatureType": {
+      "enum": [
+        "NUMERIC",
+        "CATEGORICAL"
+      ],
+      "title": "FeatureType",
+      "type": "string"
+    },
+    "FeatureViewFeature": {
+      "additionalProperties": false,
+      "description": "An auditable feature added by a versioned model view.",
+      "properties": {
+        "code": {
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "column": {
+          "minLength": 1,
+          "title": "Column",
+          "type": "string"
+        },
+        "valueType": {
+          "$ref": "#/$defs/FeatureType"
+        },
+        "source": {
+          "enum": [
+            "TASK_PROFILE",
+            "SYNTHETIC_GENERATOR_V3_ONLY"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "required": {
+          "default": true,
+          "title": "Required",
+          "type": "boolean"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unit"
+        }
+      },
+      "required": [
+        "code",
+        "column",
+        "valueType",
+        "source"
+      ],
+      "title": "FeatureViewFeature",
+      "type": "object"
+    },
+    "FeatureViewSpec": {
+      "additionalProperties": false,
+      "description": "A hashable overlay describing the columns consumed by a model bundle.",
+      "properties": {
+        "schemaVersion": {
+          "const": "model-feature-view.v1",
+          "default": "model-feature-view.v1",
+          "title": "Schemaversion",
+          "type": "string"
+        },
+        "code": {
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "taskProfileCode": {
+          "minLength": 1,
+          "title": "Taskprofilecode",
+          "type": "string"
+        },
+        "taskProfileVersion": {
+          "minLength": 1,
+          "title": "Taskprofileversion",
+          "type": "string"
+        },
+        "taskProfileHash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Taskprofilehash",
+          "type": "string"
+        },
+        "scope": {
+          "default": "BASE",
+          "enum": [
+            "BASE",
+            "SYNTHETIC_GENERATOR_V3_ONLY"
+          ],
+          "title": "Scope",
+          "type": "string"
+        },
+        "developmentOnly": {
+          "default": false,
+          "title": "Developmentonly",
+          "type": "boolean"
+        },
+        "includedNumericColumns": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Includednumericcolumns",
+          "type": "array"
+        },
+        "includedCategoricalColumns": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Includedcategoricalcolumns",
+          "type": "array"
+        },
+        "additionalFeatures": {
+          "items": {
+            "$ref": "#/$defs/FeatureViewFeature"
+          },
+          "title": "Additionalfeatures",
+          "type": "array"
+        },
+        "contentHash": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Contenthash"
+        }
+      },
+      "required": [
+        "code",
+        "taskProfileCode",
+        "taskProfileVersion",
+        "taskProfileHash"
+      ],
+      "title": "FeatureViewSpec",
+      "type": "object"
+    },
+    "FormulaSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "basis": {
+          "const": "PERCENT_SUM_100",
+          "default": "PERCENT_SUM_100",
+          "title": "Basis",
+          "type": "string"
+        },
+        "total": {
+          "default": 100.0,
+          "title": "Total",
+          "type": "number"
+        },
+        "sumTolerance": {
+          "default": 0.02,
+          "exclusiveMinimum": 0.0,
+          "title": "Sumtolerance",
+          "type": "number"
+        },
+        "balanceMaterialCode": {
+          "title": "Balancematerialcode",
+          "type": "string"
+        },
+        "mainResinCodes": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Mainresincodes",
+          "type": "array"
+        },
+        "materials": {
+          "items": {
+            "$ref": "#/$defs/MaterialSpec"
+          },
+          "minItems": 2,
+          "title": "Materials",
+          "type": "array"
+        }
+      },
+      "required": [
+        "balanceMaterialCode",
+        "mainResinCodes",
+        "materials"
+      ],
+      "title": "FormulaSpec",
+      "type": "object"
+    },
+    "GenerateValidationFoldsRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "contractVersion": {
+          "const": "formula-model.v1",
+          "default": "formula-model.v1",
+          "title": "Contractversion",
+          "type": "string"
+        },
+        "requestId": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Requestid",
+          "type": "string"
+        },
+        "taskProfileHash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Taskprofilehash",
+          "type": "string"
+        },
+        "snapshotHash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Snapshothash",
+          "type": "string"
+        },
+        "seed": {
+          "default": 20260903,
+          "title": "Seed",
+          "type": "integer"
+        },
+        "taskProfile": {
+          "$ref": "#/$defs/TaskProfile"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/SnapshotArtifacts"
+        },
+        "output": {
+          "$ref": "#/$defs/ArtifactWriteRef"
+        }
+      },
+      "required": [
+        "requestId",
+        "taskProfileHash",
+        "snapshotHash",
+        "taskProfile",
+        "snapshot",
+        "output"
+      ],
+      "title": "GenerateValidationFoldsRequest",
+      "type": "object"
+    },
+    "GenerateValidationFoldsResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "contractVersion": {
+          "const": "formula-model.v1",
+          "default": "formula-model.v1",
+          "title": "Contractversion",
+          "type": "string"
+        },
+        "requestId": {
+          "title": "Requestid",
+          "type": "string"
+        },
+        "snapshotHash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Snapshothash",
+          "type": "string"
+        },
+        "validationFoldsSha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Validationfoldssha256",
+          "type": "string"
+        },
+        "validationFoldsSize": {
+          "minimum": 0,
+          "title": "Validationfoldssize",
+          "type": "integer"
+        },
+        "uploaded": {
+          "title": "Uploaded",
+          "type": "boolean"
+        },
+        "targets": {
+          "items": {
+            "$ref": "#/$defs/ValidationFoldTargetSummary"
+          },
+          "title": "Targets",
+          "type": "array"
+        }
+      },
+      "required": [
+        "requestId",
+        "snapshotHash",
+        "validationFoldsSha256",
+        "validationFoldsSize",
+        "uploaded",
+        "targets"
+      ],
+      "title": "GenerateValidationFoldsResponse",
+      "type": "object"
+    },
+    "MaterialSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "column": {
+          "minLength": 1,
+          "title": "Column",
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "MAIN_RESIN",
+            "ADDITIVE",
+            "BALANCE"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "minimum": {
+          "maximum": 100.0,
+          "minimum": 0.0,
+          "title": "Minimum",
+          "type": "number"
+        },
+        "maximum": {
+          "maximum": 100.0,
+          "minimum": 0.0,
+          "title": "Maximum",
+          "type": "number"
+        },
+        "step": {
+          "exclusiveMinimum": 0.0,
+          "maximum": 100.0,
+          "title": "Step",
+          "type": "number"
+        }
+      },
+      "required": [
+        "code",
+        "column",
+        "role",
+        "minimum",
+        "maximum",
+        "step"
+      ],
+      "title": "MaterialSpec",
+      "type": "object"
+    },
+    "ModelEligibilityProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "GP": {
+          "$ref": "#/$defs/ModelEligibilityRule"
+        },
+        "RF": {
+          "$ref": "#/$defs/ModelEligibilityRule"
+        },
+        "LIGHTGBM": {
+          "$ref": "#/$defs/ModelEligibilityRule"
+        },
+        "XGBOOST": {
+          "$ref": "#/$defs/ModelEligibilityRule"
+        },
+        "CATBOOST": {
+          "$ref": "#/$defs/ModelEligibilityRule"
+        }
+      },
+      "required": [
+        "GP",
+        "RF",
+        "LIGHTGBM",
+        "XGBOOST",
+        "CATBOOST"
+      ],
+      "title": "ModelEligibilityProfile",
+      "type": "object"
+    },
+    "ModelEligibilityRule": {
+      "additionalProperties": false,
+      "properties": {
+        "minSamples": {
+          "minimum": 1,
+          "title": "Minsamples",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "minSamples"
+      ],
+      "title": "ModelEligibilityRule",
+      "type": "object"
+    },
+    "ModelSelectionPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "tieNmaeTolerance": {
+          "default": 0.01,
+          "minimum": 0.0,
+          "title": "Tienmaetolerance",
+          "type": "number"
+        },
+        "modelTieBreakOrder": {
+          "items": {
+            "$ref": "#/$defs/ModelType"
+          },
+          "minItems": 5,
+          "title": "Modeltiebreakorder",
+          "type": "array"
+        }
+      },
+      "required": [
+        "modelTieBreakOrder"
+      ],
+      "title": "ModelSelectionPolicy",
+      "type": "object"
+    },
+    "ModelType": {
+      "enum": [
+        "LOGISTIC_REGRESSION",
+        "GAUSSIAN_PROCESS",
+        "RANDOM_FOREST",
+        "LIGHTGBM",
+        "XGBOOST",
+        "CATBOOST",
+        "ORDINAL_CUMULATIVE_LOGIT"
+      ],
+      "title": "ModelType",
+      "type": "string"
+    },
+    "OrdinalReadinessThreshold": {
+      "additionalProperties": false,
+      "properties": {
+        "minSamples": {
+          "default": 100,
+          "minimum": 1,
+          "title": "Minsamples",
+          "type": "integer"
+        },
+        "minSamplesPerObservedClass": {
+          "default": 10,
+          "minimum": 1,
+          "title": "Minsamplesperobservedclass",
+          "type": "integer"
+        },
+        "minGroups": {
+          "default": 12,
+          "minimum": 2,
+          "title": "Mingroups",
+          "type": "integer"
+        },
+        "maxGradeMae": {
+          "default": 1.0,
+          "minimum": 0.0,
+          "title": "Maxgrademae",
+          "type": "number"
+        },
+        "minPlusMinusOneAccuracy": {
+          "default": 0.85,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Minplusminusoneaccuracy",
+          "type": "number"
+        }
+      },
+      "title": "OrdinalReadinessThreshold",
+      "type": "object"
+    },
+    "ProbabilityCalibrationPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "method": {
+          "default": "PLATT",
+          "enum": [
+            "PLATT",
+            "ISOTONIC"
+          ],
+          "title": "Method",
+          "type": "string"
+        },
+        "calibrationFolds": {
+          "default": 3,
+          "maximum": 5,
+          "minimum": 2,
+          "title": "Calibrationfolds",
+          "type": "integer"
+        },
+        "expectedCalibrationErrorBins": {
+          "default": 10,
+          "maximum": 50,
+          "minimum": 5,
+          "title": "Expectedcalibrationerrorbins",
+          "type": "integer"
+        }
+      },
+      "title": "ProbabilityCalibrationPolicy",
+      "type": "object"
+    },
+    "ReadinessThresholdProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "development": {
+          "$ref": "#/$defs/DevelopmentReadinessThreshold"
+        },
+        "productionContinuous": {
+          "$ref": "#/$defs/ContinuousReadinessThreshold"
+        },
+        "productionOrdinal": {
+          "$ref": "#/$defs/OrdinalReadinessThreshold"
+        },
+        "productionBinary": {
+          "$ref": "#/$defs/BinaryReadinessThreshold"
+        },
+        "productionCategorical": {
+          "$ref": "#/$defs/CategoricalReadinessThreshold"
+        }
+      },
+      "title": "ReadinessThresholdProfile",
+      "type": "object"
+    },
+    "SnapshotArtifacts": {
+      "additionalProperties": false,
+      "properties": {
+        "manifest": {
+          "$ref": "#/$defs/ArtifactReadRef"
+        },
+        "measurements": {
+          "$ref": "#/$defs/ArtifactReadRef"
+        },
+        "sourceMap": {
+          "$ref": "#/$defs/ArtifactReadRef"
+        }
+      },
+      "required": [
+        "manifest",
+        "measurements",
+        "sourceMap"
+      ],
+      "title": "SnapshotArtifacts",
+      "type": "object"
+    },
+    "T06BaselineDocument": {
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "const": "t06-similar-case-baseline.v1",
+          "default": "t06-similar-case-baseline.v1",
+          "title": "Schemaversion",
+          "type": "string"
+        },
+        "baselineType": {
+          "const": "T06_SIMILAR_CASE",
+          "default": "T06_SIMILAR_CASE",
+          "title": "Baselinetype",
+          "type": "string"
+        },
+        "baselineVersion": {
+          "minLength": 1,
+          "title": "Baselineversion",
+          "type": "string"
+        },
+        "snapshotHash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Snapshothash",
+          "type": "string"
+        },
+        "taskProfileHash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Taskprofilehash",
+          "type": "string"
+        },
+        "validationFoldsHash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Validationfoldshash",
+          "type": "string"
+        },
+        "targets": {
+          "items": {
+            "$ref": "#/$defs/T06TargetBaseline"
+          },
+          "title": "Targets",
+          "type": "array"
+        },
+        "contentHash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Contenthash",
+          "type": "string"
+        }
+      },
+      "required": [
+        "baselineVersion",
+        "snapshotHash",
+        "taskProfileHash",
+        "validationFoldsHash",
+        "targets",
+        "contentHash"
+      ],
+      "title": "T06BaselineDocument",
+      "type": "object"
+    },
+    "T06BaselineObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "analysisRowId": {
+          "minLength": 1,
+          "title": "Analysisrowid",
+          "type": "string"
+        },
+        "targetKey": {
+          "minLength": 1,
+          "title": "Targetkey",
+          "type": "string"
+        },
+        "validationScheme": {
+          "enum": [
+            "FORMULA_LINEAGE",
+            "SOURCE_CONTEXT"
+          ],
+          "title": "Validationscheme",
+          "type": "string"
+        },
+        "foldIndex": {
+          "minimum": 0,
+          "title": "Foldindex",
+          "type": "integer"
+        },
+        "groupKey": {
+          "minLength": 1,
+          "title": "Groupkey",
+          "type": "string"
+        },
+        "actual": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "title": "Actual"
+        },
+        "predicted": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Predicted"
+        },
+        "classProbabilities": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Classprobabilities",
+          "type": "object"
+        },
+        "eligibleNeighborCount": {
+          "default": 0,
+          "maximum": 20,
+          "minimum": 0,
+          "title": "Eligibleneighborcount",
+          "type": "integer"
+        },
+        "sampleHash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Samplehash",
+          "type": "string"
+        }
+      },
+      "required": [
+        "analysisRowId",
+        "targetKey",
+        "validationScheme",
+        "foldIndex",
+        "groupKey",
+        "actual",
+        "sampleHash"
+      ],
+      "title": "T06BaselineObservation",
+      "type": "object"
+    },
+    "T06TargetBaseline": {
+      "additionalProperties": false,
+      "properties": {
+        "targetKey": {
+          "minLength": 1,
+          "title": "Targetkey",
+          "type": "string"
+        },
+        "targetCode": {
+          "minLength": 1,
+          "title": "Targetcode",
+          "type": "string"
+        },
+        "valueType": {
+          "$ref": "#/$defs/ValueType"
+        },
+        "metricsByScheme": {
+          "additionalProperties": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object"
+          },
+          "title": "Metricsbyscheme",
+          "type": "object"
+        },
+        "observations": {
+          "items": {
+            "$ref": "#/$defs/T06BaselineObservation"
+          },
+          "title": "Observations",
+          "type": "array"
+        },
+        "sampleHash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Samplehash",
+          "type": "string"
+        }
+      },
+      "required": [
+        "targetKey",
+        "targetCode",
+        "valueType",
+        "sampleHash"
+      ],
+      "title": "T06TargetBaseline",
+      "type": "object"
+    },
+    "TargetSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "targetKey": {
+          "title": "Targetkey",
+          "type": "string"
+        },
+        "valueType": {
+          "$ref": "#/$defs/ValueType"
+        },
+        "direction": {
+          "$ref": "#/$defs/Direction"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unit"
+        },
+        "testMethod": {
+          "title": "Testmethod",
+          "type": "string"
+        },
+        "substrate": {
+          "title": "Substrate",
+          "type": "string"
+        },
+        "mandatory": {
+          "default": false,
+          "title": "Mandatory",
+          "type": "boolean"
+        },
+        "weight": {
+          "default": 1.0,
+          "exclusiveMinimum": 0.0,
+          "title": "Weight",
+          "type": "number"
+        },
+        "ordinalValues": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ordinalvalues"
+        },
+        "ordinalLabels": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ordinallabels"
+        },
+        "classLabels": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Classlabels"
+        },
+        "positiveClass": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Positiveclass"
+        },
+        "decisionThreshold": {
+          "default": 0.5,
+          "exclusiveMaximum": 1.0,
+          "exclusiveMinimum": 0.0,
+          "title": "Decisionthreshold",
+          "type": "number"
+        },
+        "censoredColumn": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Censoredcolumn"
+        },
+        "censorTypeColumn": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Censortypecolumn"
+        }
+      },
+      "required": [
+        "code",
+        "targetKey",
+        "valueType",
+        "direction",
+        "testMethod",
+        "substrate"
+      ],
+      "title": "TargetSpec",
+      "type": "object"
+    },
+    "TaskProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "contractVersion": {
+          "const": "formula-model.v1",
+          "default": "formula-model.v1",
+          "title": "Contractversion",
+          "type": "string"
+        },
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "version": {
+          "title": "Version",
+          "type": "string"
+        },
+        "schemaHash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Schemahash",
+          "type": "string"
+        },
+        "ruleVersion": {
+          "title": "Ruleversion",
+          "type": "string"
+        },
+        "formula": {
+          "$ref": "#/$defs/FormulaSpec"
+        },
+        "contextFeatures": {
+          "items": {
+            "$ref": "#/$defs/ContextFeatureSpec"
+          },
+          "title": "Contextfeatures",
+          "type": "array"
+        },
+        "targets": {
+          "items": {
+            "$ref": "#/$defs/TargetSpec"
+          },
+          "title": "Targets",
+          "type": "array"
+        },
+        "validation": {
+          "$ref": "#/$defs/ValidationPolicy"
+        },
+        "readinessThresholds": {
+          "$ref": "#/$defs/ReadinessThresholdProfile"
+        },
+        "modelEligibility": {
+          "$ref": "#/$defs/ModelEligibilityProfile"
+        },
+        "modelSelection": {
+          "$ref": "#/$defs/ModelSelectionPolicy"
+        },
+        "classificationModelEligibility": {
+          "$ref": "#/$defs/ClassificationModelEligibilityProfile"
+        },
+        "classificationModelSelection": {
+          "$ref": "#/$defs/ClassificationModelSelectionPolicy"
+        },
+        "probabilityCalibration": {
+          "$ref": "#/$defs/ProbabilityCalibrationPolicy"
+        },
+        "applicabilityDomain": {
+          "$ref": "#/$defs/ApplicabilityDomainPolicy"
+        },
+        "candidate": {
+          "$ref": "#/$defs/CandidatePolicy"
+        }
+      },
+      "required": [
+        "code",
+        "version",
+        "schemaHash",
+        "ruleVersion",
+        "formula",
+        "contextFeatures",
+        "targets",
+        "modelEligibility",
+        "modelSelection"
+      ],
+      "title": "TaskProfile",
+      "type": "object"
+    },
+    "TrainRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "contractVersion": {
+          "const": "formula-model.v1",
+          "default": "formula-model.v1",
+          "title": "Contractversion",
+          "type": "string"
+        },
+        "requestId": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Requestid",
+          "type": "string"
+        },
+        "taskProfileHash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Taskprofilehash",
+          "type": "string"
+        },
+        "snapshotHash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Snapshothash",
+          "type": "string"
+        },
+        "seed": {
+          "default": 20260903,
+          "title": "Seed",
+          "type": "integer"
+        },
+        "taskProfile": {
+          "$ref": "#/$defs/TaskProfile"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/SnapshotArtifacts"
+        },
+        "output": {
+          "$ref": "#/$defs/ArtifactWriteRef"
+        },
+        "validationFolds": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactReadRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "t06Baseline": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactReadRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "featureView": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FeatureViewSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "requestId",
+        "taskProfileHash",
+        "snapshotHash",
+        "taskProfile",
+        "snapshot",
+        "output"
+      ],
+      "title": "TrainRequest",
+      "type": "object"
+    },
+    "ValidationFoldAssignment": {
+      "additionalProperties": false,
+      "properties": {
+        "analysisRowId": {
+          "minLength": 1,
+          "title": "Analysisrowid",
+          "type": "string"
+        },
+        "targetKey": {
+          "minLength": 1,
+          "title": "Targetkey",
+          "type": "string"
+        },
+        "foldIndex": {
+          "minimum": 0,
+          "title": "Foldindex",
+          "type": "integer"
+        },
+        "groupKey": {
+          "minLength": 1,
+          "title": "Groupkey",
+          "type": "string"
+        }
+      },
+      "required": [
+        "analysisRowId",
+        "targetKey",
+        "foldIndex",
+        "groupKey"
+      ],
+      "title": "ValidationFoldAssignment",
+      "type": "object"
+    },
+    "ValidationFoldScheme": {
+      "additionalProperties": false,
+      "properties": {
+        "validationScheme": {
+          "enum": [
+            "FORMULA_LINEAGE",
+            "SOURCE_CONTEXT"
+          ],
+          "title": "Validationscheme",
+          "type": "string"
+        },
+        "foldCount": {
+          "maximum": 10,
+          "minimum": 2,
+          "title": "Foldcount",
+          "type": "integer"
+        },
+        "assignments": {
+          "items": {
+            "$ref": "#/$defs/ValidationFoldAssignment"
+          },
+          "title": "Assignments",
+          "type": "array"
+        }
+      },
+      "required": [
+        "validationScheme",
+        "foldCount"
+      ],
+      "title": "ValidationFoldScheme",
+      "type": "object"
+    },
+    "ValidationFoldTargetSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "targetKey": {
+          "title": "Targetkey",
+          "type": "string"
+        },
+        "eligibleRows": {
+          "minimum": 0,
+          "title": "Eligiblerows",
+          "type": "integer"
+        },
+        "formulaLineageFolds": {
+          "minimum": 0,
+          "title": "Formulalineagefolds",
+          "type": "integer"
+        },
+        "sourceContextFolds": {
+          "minimum": 0,
+          "title": "Sourcecontextfolds",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "targetKey",
+        "eligibleRows",
+        "formulaLineageFolds",
+        "sourceContextFolds"
+      ],
+      "title": "ValidationFoldTargetSummary",
+      "type": "object"
+    },
+    "ValidationFoldsDocument": {
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "const": "validation-folds.v1",
+          "default": "validation-folds.v1",
+          "title": "Schemaversion",
+          "type": "string"
+        },
+        "snapshotHash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Snapshothash",
+          "type": "string"
+        },
+        "taskProfileHash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Taskprofilehash",
+          "type": "string"
+        },
+        "seed": {
+          "title": "Seed",
+          "type": "integer"
+        },
+        "schemes": {
+          "items": {
+            "$ref": "#/$defs/ValidationFoldScheme"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "title": "Schemes",
+          "type": "array"
+        },
+        "contentHash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Contenthash",
+          "type": "string"
+        }
+      },
+      "required": [
+        "snapshotHash",
+        "taskProfileHash",
+        "seed",
+        "schemes",
+        "contentHash"
+      ],
+      "title": "ValidationFoldsDocument",
+      "type": "object"
+    },
+    "ValidationPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "groupColumn": {
+          "default": "formula_lineage_group",
+          "title": "Groupcolumn",
+          "type": "string"
+        },
+        "sourceGroupColumn": {
+          "default": "source_sheet",
+          "title": "Sourcegroupcolumn",
+          "type": "string"
+        },
+        "folds": {
+          "default": 5,
+          "maximum": 10,
+          "minimum": 2,
+          "title": "Folds",
+          "type": "integer"
+        },
+        "intervalLevel": {
+          "default": 0.9,
+          "exclusiveMaximum": 1.0,
+          "exclusiveMinimum": 0.5,
+          "title": "Intervallevel",
+          "type": "number"
+        },
+        "randomKfoldDiagnostic": {
+          "default": false,
+          "title": "Randomkfolddiagnostic",
+          "type": "boolean"
+        }
+      },
+      "title": "ValidationPolicy",
+      "type": "object"
+    },
+    "ValueType": {
+      "enum": [
+        "CONTINUOUS",
+        "ORDINAL",
+        "BINARY",
+        "CATEGORICAL",
+        "CENSORED_COUNT"
+      ],
+      "title": "ValueType",
+      "type": "string"
+    }
+  },
+  "anyOf": [
+    {
+      "$ref": "#/$defs/GenerateValidationFoldsRequest"
+    },
+    {
+      "$ref": "#/$defs/GenerateValidationFoldsResponse"
+    },
+    {
+      "$ref": "#/$defs/ValidationFoldsDocument"
+    },
+    {
+      "$ref": "#/$defs/T06BaselineDocument"
+    },
+    {
+      "$ref": "#/$defs/TrainRequest"
+    }
+  ]
+}

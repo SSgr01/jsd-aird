@@ -1,5 +1,5 @@
 import { AppstoreOutlined, ReloadOutlined, SearchOutlined, UnorderedListOutlined } from '@ant-design/icons';
-import { Breadcrumb, Button, DatePicker, Empty, Input, Pagination, Popconfirm, Progress, Select, Space, Spin, Table, Tag, Tooltip, message } from 'antd';
+import { Button, DatePicker, Empty, Input, Pagination, Popconfirm, Progress, Select, Space, Spin, Table, Tag, Tooltip, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -108,15 +108,12 @@ export function PhasePage() {
   return (
     <div className="pm-page pm-unified-list-page pm-phase-page">
       {holder}
-      <div className="pm-page-head">
+      <div className="page-heading">
         <div>
-          <Breadcrumb items={[{ title: '项目管理' }, { title: '项目阶段' }]} />
-          <h3>项目阶段</h3>
+          <h2>项目阶段</h2>
           <p>跨项目查询、跟踪并定位研发阶段。</p>
         </div>
-      </div>
-      <div className="pm-phase-toolbar">
-        <Space size={8}>
+        <div className="pm-page-actions">
           <Button type="primary" onClick={() => navigate('/projects/list')}>项目列表</Button>
           <Space.Compact>
             <Tooltip title="卡片视图">
@@ -136,7 +133,7 @@ export function PhasePage() {
               />
             </Tooltip>
           </Space.Compact>
-        </Space>
+        </div>
       </div>
       <div className="pm-phase-filters">
         <Input prefix={<SearchOutlined />} placeholder="搜索阶段、项目名称或编号" value={keyword} onChange={(event) => { setKeyword(event.target.value); setPage(1); }} allowClear />

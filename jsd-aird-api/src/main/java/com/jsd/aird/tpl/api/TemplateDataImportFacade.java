@@ -12,6 +12,23 @@ public interface TemplateDataImportFacade {
 
     DataTemplateDefinition getPublished(UUID organizationId, UUID templateVersionId);
 
+    /**
+     * Resolves the current published experiment template by stable template code.
+     * The returned snapshot is an immutable source copy; callers must clone it
+     * before writing an experiment instance.
+     */
+    PublishedExperimentTemplate getPublishedExperimentTemplate(UUID organizationId, String templateCode);
+
+    /**
+     * Resolves the immutable experiment-template version already bound to an
+     * import job. Unlike the code-based lookup this must never float to a newer
+     * published revision.
+     */
+    default PublishedExperimentTemplate getExperimentTemplateVersion(UUID organizationId, UUID templateVersionId) {
+        var definition = getVersion(organizationId, templateVersionId);
+        return getPublishedExperimentTemplate(organizationId, definition.templateCode());
+    }
+
     /** Reads the immutable version bound to an existing import, even when it is no longer the current published version. */
     default DataTemplateDefinition getVersion(UUID organizationId, UUID templateVersionId) {
         return getPublished(organizationId, templateVersionId);
@@ -48,8 +65,19 @@ public interface TemplateDataImportFacade {
             String name,
             String category,
             int versionNo,
-            String format
+            String format,
+            int importContractVersion,
+            String templateUsage,
+            boolean experimentImportReady,
+            String recordMode,
+            List<String> identityTypes,
+            int identityCount
     ) {
+        public DataTemplateOption(UUID templateId, UUID versionId, String templateCode, String name,
+                                  String category, int versionNo, String format) {
+            this(templateId, versionId, templateCode, name, category, versionNo, format,
+                    0, "GENERAL_DATA", false, null, List.of(), 0);
+        }
     }
 
     record DataTemplateDefinition(
@@ -78,6 +106,19 @@ public interface TemplateDataImportFacade {
     }
 
     record WorkbookExport(byte[] content, List<ExportWarning> warnings) {
+    }
+
+    record PublishedExperimentTemplate(
+            UUID templateId,
+            UUID versionId,
+            String templateCode,
+            String name,
+            int versionNo,
+            String snapshotHash,
+            JsonNode snapshot,
+            JsonNode mappings,
+            JsonNode importContract
+    ) {
     }
 
     record ExportWarning(String code, String bindingId, String dataPath, String message) {
@@ -114,9 +155,39 @@ public interface TemplateDataImportFacade {
             String valueType,
             String unit,
             String labelPath,
+            List<String> labelPathSegments,
             String trainingRole,
-            boolean ragEligible
+            boolean ragEligible,
+            JsonNode experimentField,
+            String targetPath
     ) {
+        public ImportBinding(
+                String bindingId, String fieldCode, String dataPath, String mappingKind,
+                String parentBindingId, String repeatAxis, int recordHeight, int recordWidth,
+                int recordStride, JsonNode terminationRule, JsonNode locator, boolean required,
+                boolean identity, boolean trainingEligible, String valueSource, String valueType, String unit,
+                String labelPath, String trainingRole, boolean ragEligible
+        ) {
+            this(bindingId, fieldCode, dataPath, mappingKind, parentBindingId, repeatAxis,
+                    recordHeight, recordWidth, recordStride, terminationRule, locator, required, identity,
+                    trainingEligible, valueSource, valueType, unit, labelPath, List.of(), trainingRole, ragEligible,
+                    null, null);
+        }
+
+        public ImportBinding(
+                String bindingId, String fieldCode, String dataPath, String mappingKind,
+                String parentBindingId, String repeatAxis, int recordHeight, int recordWidth,
+                int recordStride, JsonNode terminationRule, JsonNode locator, boolean required,
+                boolean identity, boolean trainingEligible, String valueSource, String valueType, String unit,
+                String labelPath, String trainingRole, boolean ragEligible,
+                JsonNode experimentField, String targetPath
+        ) {
+            this(bindingId, fieldCode, dataPath, mappingKind, parentBindingId, repeatAxis,
+                    recordHeight, recordWidth, recordStride, terminationRule, locator, required, identity,
+                    trainingEligible, valueSource, valueType, unit, labelPath, List.of(), trainingRole,
+                    ragEligible, experimentField, targetPath);
+        }
+
         public ImportBinding(
                 String bindingId, String fieldCode, String dataPath, String mappingKind,
                 String parentBindingId, String repeatAxis, int recordHeight, int recordWidth,
@@ -125,8 +196,12 @@ public interface TemplateDataImportFacade {
         ) {
             this(bindingId, fieldCode, dataPath, mappingKind, parentBindingId, repeatAxis,
                     recordHeight, recordWidth, recordStride, terminationRule, locator, required, identity,
-                    trainingEligible, valueSource, valueType, unit, null,
-                    trainingEligible ? "FEATURE" : "EXCLUDE", true);
+                    trainingEligible, valueSource, valueType, unit, null, List.of(),
+                    trainingEligible ? "FEATURE" : "EXCLUDE", true, null, null);
+        }
+
+        public ImportBinding {
+            labelPathSegments = labelPathSegments == null ? List.of() : List.copyOf(labelPathSegments);
         }
     }
 

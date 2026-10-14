@@ -36,6 +36,7 @@ import {
   type InventoryTransaction,
   type InventoryProductOption,
 } from '@/services/inventory/inventory-api';
+import { generateUUID } from '@/utils/uuid';
 
 import './inventory-pages.css';
 import './inventory-control.css';
@@ -91,7 +92,7 @@ function writeRecords(records: ControlRecord[]) {
 }
 
 function addRecord(record: Omit<ControlRecord, 'id' | 'createdAt'>) {
-  const next = [...readRecords(), { ...record, id: crypto.randomUUID(), createdAt: new Date().toISOString() }];
+  const next = [...readRecords(), { ...record, id: generateUUID(), createdAt: new Date().toISOString() }];
   writeRecords(next);
 }
 

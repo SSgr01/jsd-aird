@@ -15,6 +15,9 @@ import type {
   StaticRegion,
   DocumentStructure,
   TemplateBinding,
+  ExperimentFieldSemantic,
+  ExperimentSemanticStatus,
+  ExperimentListProjection,
 } from '@/features/template-workspace/types';
 import { httpClient } from '@/services/http/client';
 
@@ -252,6 +255,14 @@ export interface RecognitionSuggestionPayload {
   activeGenerationId?: string;
   labelPath?: string;
   autoAccept?: boolean;
+  experimentField?: ExperimentFieldSemantic;
+  experimentItemLabel?: string;
+  experimentSemanticConfidence?: number;
+  experimentSemanticStatus?: ExperimentSemanticStatus;
+  experimentSemanticSource?: string;
+  experimentSemanticAlternatives?: ExperimentFieldSemantic[];
+  experimentSemanticIssue?: string;
+  listProjections?: ExperimentListProjection[];
   nameSource?: 'MODEL' | 'ROW_ATTRIBUTE_FALLBACK' | 'PHYSICAL_HEADER_FALLBACK'
     | 'GENERATED_PLACEHOLDER' | 'RUNTIME_SLOT';
   semanticFallback?: boolean;
@@ -292,6 +303,13 @@ export interface RecognitionSuggestionPayload {
     editability?: Editability;
     valueSource?: ValueSource;
     condition?: string;
+    experimentField?: ExperimentFieldSemantic;
+    experimentItemLabel?: string;
+    experimentSemanticConfidence?: number;
+    experimentSemanticStatus?: ExperimentSemanticStatus;
+    experimentSemanticSource?: string;
+    experimentSemanticAlternatives?: ExperimentFieldSemantic[];
+    experimentSemanticIssue?: string;
     required?: boolean;
     dataStartRow?: number;
     semanticConflict?: boolean;
@@ -628,6 +646,13 @@ export const templateApi = {
     return response.data.data;
   },
 
+  async createFromExperiment(experimentId: string, input: { name: string; categoryId: string }) {
+    const response = await httpClient.post<ApiResponse<TemplateWorkspace>>(
+      `/api/v1/experiments/${experimentId}/template-drafts`, input,
+    );
+    return response.data.data;
+  },
+
   async getEditModel(versionId: string) {
     const response = await httpClient.get<ApiResponse<TemplateWorkspace>>(
       `/api/v1/template-versions/${versionId}/edit-model`,
@@ -733,9 +758,10 @@ export const templateApi = {
     return response.data.data;
   },
 
-  async submitReview(versionId: string) {
+  async submitReview(versionId: string, dataCleanupConfirmed?: boolean) {
     const response = await httpClient.post<ApiResponse<TemplateVersionReview>>(
       `/api/v1/template-versions/${versionId}/review/submit`,
+      dataCleanupConfirmed === undefined ? undefined : { dataCleanupConfirmed },
     );
     return response.data.data;
   },

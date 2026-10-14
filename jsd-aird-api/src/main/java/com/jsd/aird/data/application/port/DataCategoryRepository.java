@@ -9,6 +9,8 @@ public interface DataCategoryRepository {
 
     List<Category> list(UUID organizationId);
 
+    DataSourceFacets facets(UUID organizationId);
+
     Optional<Category> find(UUID organizationId, UUID categoryId);
 
     Category create(UUID organizationId, UUID actorId, String name, String description);
@@ -20,6 +22,12 @@ public interface DataCategoryRepository {
     record Category(UUID id, String name, String description, int sortOrder, long sourceCount) {
         public List<String> getAllowedActions() {
             return AllowedActions.category(false);
+        }
+    }
+
+    record DataSourceFacets(List<Category> categories, long totalSourceCount, long uncategorizedSourceCount) {
+        public DataSourceFacets {
+            categories = categories == null ? List.of() : List.copyOf(categories);
         }
     }
 }

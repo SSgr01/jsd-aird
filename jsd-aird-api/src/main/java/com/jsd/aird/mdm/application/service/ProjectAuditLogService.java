@@ -35,28 +35,32 @@ public class ProjectAuditLogService {
 
         var safePage = Math.max(1, query.page());
         var safeSize = Math.min(100, Math.max(1, query.size()));
-        var parts = buildWhere(projectId, query);
-        var total = jdbc.queryForObject("SELECT count(*) FROM ops.audit_log al " + joins() + parts.where(),
-                Long.class, parts.args().toArray());
+        var source = auditSource(projectId);
+        var parts = buildWhere(query);
+        var baseArgs = new ArrayList<>(source.args());
+        baseArgs.addAll(parts.args());
+        var total = jdbc.queryForObject(source.sql() + " SELECT count(*) FROM audit_source al " + joins() + parts.where(),
+                Long.class, baseArgs.toArray());
         var totalValue = total == null ? 0L : total;
-        var args = new ArrayList<>(parts.args());
+        var args = new ArrayList<>(baseArgs);
         args.add(safeSize);
         args.add((safePage - 1L) * safeSize);
 
-        var items = jdbc.query("""
+        var items = jdbc.query(source.sql() + """
                 SELECT al.id, al.aggregate_type, al.aggregate_id, al.action,
-                       al.detail_jsonb, al.created_at,
+                       al.detail_jsonb, al.created_at, al.trace_id,
                        COALESCE(u.display_name, u.username,
-                                al.detail_jsonb ->> 'operator', '系统') AS operator,
+                                al.source_operator_name, al.detail_jsonb ->> 'operator', '系统') AS operator,
                        CASE al.aggregate_type
                            WHEN 'PROJECT' THEN p.name
                            WHEN 'PROJECT_STAGE' THEN s.name
                            WHEN 'PROJECT_TASK' THEN t.name
                            WHEN 'EXPERIMENT' THEN e.title
                            WHEN 'PROJECT_DOCUMENT' THEN d.title
+                           WHEN 'CUSTOMER_REQUIREMENT' THEN cr.title
                            ELSE COALESCE(al.detail_jsonb ->> 'objectName', al.detail_jsonb ->> 'name')
                        END AS object_name
-                FROM ops.audit_log al
+                FROM audit_source al
                 """ + joins() + parts.where() + " ORDER BY al.created_at DESC, al.id DESC LIMIT ? OFFSET ?",
                 (rs, rowNum) -> map(rs, rowNum, projectId), args.toArray());
 
@@ -64,21 +68,78 @@ public class ProjectAuditLogService {
         return new PageResponse<>(items, safePage, safeSize, totalValue, totalPages);
     }
 
-    private QueryParts buildWhere(UUID projectId, Query query) {
-        var where = new StringBuilder(" WHERE (al.organization_id = ? OR al.organization_id IS NULL) AND ");
+    private SourceParts auditSource(UUID projectId) {
+        var organizationId = ActorContext.required().organizationId();
         var args = new ArrayList<Object>();
-        args.add(ActorContext.required().organizationId());
-        where.append(projectScope());
-        var projectText = projectId.toString();
-        // The JSON fallback covers audit events emitted by modules whose aggregate
-        // table is not a project table but which carry projectId in their detail.
+        args.add(organizationId);
         args.add(projectId);
         args.add(projectId);
         args.add(projectId);
         args.add(projectId);
         args.add(projectId);
-        args.add(projectText);
-        args.add(projectText);
+        args.add(projectId);
+        args.add(projectId);
+        args.add(projectId.toString());
+        args.add(projectId.toString());
+        args.add(projectId);
+        args.add(organizationId);
+        args.add(projectId);
+        return new SourceParts("""
+                WITH audit_source AS (
+                    SELECT al.id, al.actor_id::text AS actor_id, al.action::text AS action,
+                           al.aggregate_type::text AS aggregate_type,
+                           al.aggregate_id, al.detail_jsonb, al.created_at,
+                           NULL::text AS source_operator_name, NULL::text AS trace_id
+                    FROM ops.audit_log al
+                    WHERE (al.organization_id = ? OR al.organization_id IS NULL)
+                      AND (
+                           (al.aggregate_type = 'PROJECT' AND al.aggregate_id = ?)
+                        OR (al.aggregate_type = 'PROJECT_STAGE' AND EXISTS (
+                               SELECT 1 FROM mdm.project_stage ps
+                               WHERE ps.id = al.aggregate_id AND ps.project_id = ?))
+                        OR (al.aggregate_type = 'PROJECT_TASK' AND EXISTS (
+                               SELECT 1 FROM mdm.project_task pt
+                               WHERE pt.id = al.aggregate_id AND pt.project_id = ?))
+                        OR (al.aggregate_type = 'EXPERIMENT' AND EXISTS (
+                               SELECT 1 FROM rnd.experiment re
+                               WHERE re.id = al.aggregate_id AND re.project_id = ? AND re.deleted = false))
+                        OR (al.aggregate_type = 'PROJECT_DOCUMENT' AND EXISTS (
+                               SELECT 1 FROM mdm.project_document pd
+                               WHERE pd.id = al.aggregate_id AND pd.project_id = ?))
+                        OR (al.aggregate_type = 'CUSTOMER_REQUIREMENT' AND EXISTS (
+                               SELECT 1 FROM mdm.customer_requirement cr
+                               WHERE cr.id = al.aggregate_id
+                                 AND (cr.project_id = ?
+                                      OR cr.assigned_project_ids @> jsonb_build_array(CAST(? AS text)))))
+                        OR al.detail_jsonb ->> 'projectId' = ?
+                        OR al.detail_jsonb ->> 'project_id' = ?
+                      )
+                    UNION ALL
+                    SELECT pda.id, pda.operator_id::text, pda.action::text,
+                           'PROJECT_DOCUMENT', pda.document_id,
+                           COALESCE(pda.after_jsonb, pda.before_jsonb, '{}'::jsonb),
+                           pda.created_at, pda.operator_name::text, pda.trace_id::text
+                    FROM mdm.project_document_audit pda
+                    JOIN mdm.project_document pd ON pd.id = pda.document_id
+                    WHERE pd.project_id = ?
+                    UNION ALL
+                    SELECT ea.id, ea.operator_id::text,
+                           CASE WHEN ea.action LIKE 'STATUS_%'
+                                THEN 'EXPERIMENT_STATUS_CHANGED'
+                                ELSE 'EXPERIMENT_' || ea.action END,
+                           'EXPERIMENT', ea.experiment_id,
+                           COALESCE(ea.after_jsonb, ea.before_jsonb, '{}'::jsonb),
+                           ea.created_at, ea.operator_name::text, NULL::text
+                    FROM rnd.experiment_audit ea
+                    JOIN rnd.experiment e ON e.id = ea.experiment_id
+                    WHERE ea.organization_id = ? AND e.project_id = ? AND e.deleted = false
+                )
+                """, args);
+    }
+
+    private QueryParts buildWhere(Query query) {
+        var where = new StringBuilder(" WHERE 1=1");
+        var args = new ArrayList<Object>();
 
         if (hasText(query.objectType())) {
             where.append(" AND al.aggregate_type = ?");
@@ -89,7 +150,7 @@ public class ProjectAuditLogService {
             args.add(query.action().trim().toUpperCase());
         }
         if (hasText(query.operator())) {
-            where.append(" AND COALESCE(u.display_name, u.username, al.detail_jsonb ->> 'operator', '系统') ILIKE ?");
+            where.append(" AND COALESCE(u.display_name, u.username, al.source_operator_name, al.detail_jsonb ->> 'operator', '系统') ILIKE ?");
             args.add("%" + query.operator().trim() + "%");
         }
         if (query.createdFrom() != null) {
@@ -102,7 +163,7 @@ public class ProjectAuditLogService {
         }
         if (hasText(query.keyword())) {
             where.append(" AND (COALESCE(al.action, '') ILIKE ? "
-                    + "OR COALESCE(p.name, s.name, t.name, e.title, d.title, '') ILIKE ? "
+                    + "OR COALESCE(p.name, s.name, t.name, e.title, d.title, cr.title, '') ILIKE ? "
                     + "OR COALESCE(al.detail_jsonb ->> 'objectName', '') ILIKE ? "
                     + "OR COALESCE(al.detail_jsonb ->> 'name', '') ILIKE ? "
                     + "OR COALESCE(al.detail_jsonb ->> 'detail', '') ILIKE ? "
@@ -118,25 +179,14 @@ public class ProjectAuditLogService {
         return new QueryParts(where, args);
     }
 
-    private static String projectScope() {
-        return "(" +
-                "(al.aggregate_type = 'PROJECT' AND al.aggregate_id = ?)" +
-                " OR (al.aggregate_type = 'PROJECT_STAGE' AND EXISTS (SELECT 1 FROM mdm.project_stage ps WHERE ps.id = al.aggregate_id AND ps.project_id = ?))" +
-                " OR (al.aggregate_type = 'PROJECT_TASK' AND EXISTS (SELECT 1 FROM mdm.project_task pt WHERE pt.id = al.aggregate_id AND pt.project_id = ?))" +
-                " OR (al.aggregate_type = 'EXPERIMENT' AND EXISTS (SELECT 1 FROM rnd.experiment re WHERE re.id = al.aggregate_id AND re.project_id = ? AND re.deleted = false))" +
-                " OR (al.aggregate_type = 'PROJECT_DOCUMENT' AND EXISTS (SELECT 1 FROM mdm.project_document pd WHERE pd.id = al.aggregate_id AND pd.project_id = ?) )" +
-                " OR al.detail_jsonb ->> 'projectId' = ?" +
-                " OR al.detail_jsonb ->> 'project_id' = ?" +
-                ")";
-    }
-
     private static String joins() {
-        return " LEFT JOIN iam.app_user u ON u.id = al.actor_id" +
+        return " LEFT JOIN iam.app_user u ON u.id::text = al.actor_id" +
                 " LEFT JOIN mdm.project p ON al.aggregate_type = 'PROJECT' AND p.id = al.aggregate_id" +
                 " LEFT JOIN mdm.project_stage s ON al.aggregate_type = 'PROJECT_STAGE' AND s.id = al.aggregate_id" +
                 " LEFT JOIN mdm.project_task t ON al.aggregate_type = 'PROJECT_TASK' AND t.id = al.aggregate_id" +
                 " LEFT JOIN rnd.experiment e ON al.aggregate_type = 'EXPERIMENT' AND e.id = al.aggregate_id AND e.deleted = false" +
-                " LEFT JOIN mdm.project_document d ON al.aggregate_type = 'PROJECT_DOCUMENT' AND d.id = al.aggregate_id";
+                " LEFT JOIN mdm.project_document d ON al.aggregate_type = 'PROJECT_DOCUMENT' AND d.id = al.aggregate_id" +
+                " LEFT JOIN mdm.customer_requirement cr ON al.aggregate_type = 'CUSTOMER_REQUIREMENT' AND cr.id = al.aggregate_id";
     }
 
     private static ProjectAuditLog map(ResultSet rs, int ignored, UUID projectId) throws SQLException {
@@ -145,7 +195,8 @@ public class ProjectAuditLogService {
         if (detail == null && detailJson != null && !detailJson.isEmpty() && !"{}".equals(detailJson)) {
             detail = detailJson;
         }
-        var traceId = text(readJson(rs.getString("detail_jsonb")), "traceId", "trace_id");
+        var traceId = rs.getString("trace_id");
+        if (traceId == null) traceId = text(readJson(rs.getString("detail_jsonb")), "traceId", "trace_id");
         return new ProjectAuditLog(
                 rs.getObject("id", UUID.class),
                 projectId,
@@ -185,6 +236,8 @@ public class ProjectAuditLogService {
     }
 
     private record QueryParts(StringBuilder where, List<Object> args) { }
+
+    private record SourceParts(String sql, List<Object> args) { }
 
     public record Query(String keyword, String objectType, String action, String operator,
                         Instant createdFrom, Instant createdTo, int page, int size) {

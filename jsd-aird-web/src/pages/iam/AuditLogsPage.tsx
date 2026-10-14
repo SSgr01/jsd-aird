@@ -2,7 +2,7 @@ import { ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import { App, Button, Card, Collapse, DatePicker, Descriptions, Empty, Input, Pagination, Select, Space, Spin, Table, Tag, Typography } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 
-import type dayjs from '@/utils/dayjs';
+import type { RangePickerProps } from 'antd/es/date-picker';
 import { iamApi } from '@/services/iam/iam-api';
 import type { AuditLogTechnicalDetail, AuditLogView } from '@/services/iam/iam-api';
 import { HttpError } from '@/services/http/errors';
@@ -10,6 +10,7 @@ import './iam.css';
 import '@/styles/management-list.css';
 
 const PAGE_SIZE = 20;
+type AuditDateRange = Parameters<NonNullable<RangePickerProps['onChange']>>[0];
 
 const moduleOptions = [
   { value: 'IAM', label: '系统设置' },
@@ -93,7 +94,7 @@ export function AuditLogsPage() {
   const [draftModule, setDraftModule] = useState<string>();
   const [draftOperation, setDraftOperation] = useState<string>();
   const [draftOperator, setDraftOperator] = useState('');
-  const [draftDates, setDraftDates] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null] | null>(null);
+  const [draftDates, setDraftDates] = useState<AuditDateRange>(null);
   const [query, setQuery] = useState<SearchQuery>({});
 
   const load = useCallback(async () => {

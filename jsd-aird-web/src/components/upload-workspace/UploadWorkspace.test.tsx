@@ -88,4 +88,28 @@ describe('UploadWorkspace', () => {
     const selectedFiles = firstCall?.[0] as UploadFile[] | undefined;
     expect(selectedFiles?.[0]?.name).toBe('data.csv');
   });
+
+  it('keeps existing upload records steady during background refreshes', () => {
+    render(
+      <UploadWorkspace
+        breadcrumbs={[{ title: '数据中心' }]}
+        title="数据上传"
+        leftTitle="数据分类"
+        classification={<div>物料/原料</div>}
+        accept=".csv"
+        files={[]}
+        onFilesChange={vi.fn()}
+        onRemoveFile={vi.fn()}
+        onClearFiles={vi.fn()}
+        submitLabel="开始上传"
+        onSubmit={vi.fn()}
+        rightTitle="已上传数据"
+        recordsLoading
+        records={[{ id: 'job-1', name: '持续显示.xlsx', detail: '仍在解析' }]}
+      />,
+    );
+
+    expect(screen.getByText('持续显示.xlsx')).toBeInTheDocument();
+    expect(screen.queryByText('正在刷新任务状态…')).not.toBeInTheDocument();
+  });
 });

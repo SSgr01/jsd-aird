@@ -187,6 +187,29 @@ class WordOoxmlPatchServiceTest {
     }
 
     @Test
+    void exportsMappedCustomRangeAsNativeWordContentControl() throws Exception {
+        var snapshot = objectMapper.createObjectNode().put("snapshotFormatVersion", 5);
+        snapshot.putObject("documentStyle").putObject("pageSize").put("width", 595).put("height", 842);
+        var body = snapshot.putObject("body");
+        body.put("dataStream", "前请输入值后\r\n");
+        body.putArray("paragraphs");
+        body.putArray("textRuns");
+        var range = body.putArray("customRanges").addObject()
+                .put("startIndex", 1).put("endIndex", 4)
+                .put("rangeId", "c5be774f-9a11-47a8-8c12-ea290a5b7580");
+        range.putObject("properties").put("source", "JSD_MAPPING")
+                .put("fieldCode", "FIELD.NAME");
+        var patched = service.applySnapshot(docx("""
+                <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                  <w:body><w:p><w:r><w:t>原文</w:t></w:r></w:p></w:body>
+                </w:document>
+                """), snapshot);
+        var xml = documentXml(patched);
+        assertThat(xml).contains("w:sdt", "w:sdtContent", "w:val=\"c5be774f-9a11-47a8-8c12-ea290a5b7580\"",
+                "FIELD.NAME", "请输入值");
+    }
+
+    @Test
     void exportsSnapshotTableCellBordersAsSolidWordBorders() throws Exception {
         var border = objectMapper.createObjectNode()
                 .put("dashStyle", 1);

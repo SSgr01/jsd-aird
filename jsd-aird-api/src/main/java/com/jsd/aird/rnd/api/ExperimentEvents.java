@@ -7,6 +7,7 @@ public final class ExperimentEvents {
     public static final String PUBLISHED = "experiment.published.v1";
     public static final String VERSION_PUBLISHED = "experiment.version.published.v1";
     public static final String VOIDED = "experiment.voided.v1";
+    public static final String REVISION_STARTED = "experiment.revision-started.v1";
     public static final String IMPORTED = "experiment.imported.v1";
     private ExperimentEvents() {}
 }

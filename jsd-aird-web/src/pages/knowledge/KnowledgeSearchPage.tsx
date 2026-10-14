@@ -5,7 +5,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 
 import { assistantApi, type FileSearchResult } from '@/services/assistant/assistant-api';
 import { FilePreviewModal, downloadPreviewFile, type FilePreviewDescriptor } from '@/components/file-preview';
-import { fetchFileBlob } from '@/services/files';
+import { fetchFilePreviewBlob, fileContentUrl } from '@/services/files';
 import { dataApi, type DataCategory } from '@/services/data/data-api';
 import { knowledgeApi, type KnowledgeCategory } from '@/services/knowledge';
 import { Can } from '@/components/auth/Can';
@@ -69,7 +69,8 @@ export function KnowledgeSearchPage() {
     fileName: file.originalName,
     contentType: file.contentType,
     size: file.size,
-    load: () => fetchFileBlob(file.fileObjectId),
+    load: () => fetchFilePreviewBlob(file.fileObjectId),
+    downloadUrl: fileContentUrl(file.fileObjectId),
   });
   const download = async (file: SearchFile) => {
     try { await downloadPreviewFile(descriptor(file)); void message.success('原文件下载已开始'); }

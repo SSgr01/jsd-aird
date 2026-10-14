@@ -43,4 +43,22 @@ class DataSearchAuthorizationServiceTest {
                 .isInstanceOf(ApiException.class)
                 .hasMessageContaining("数据中心查看权限");
     }
+
+    @Test
+    void keepsDataAndExperimentPermissionsIndependent() {
+        var authorization = mock(AuthorizationService.class);
+        var categoryId = UUID.randomUUID();
+        when(authorization.resolveScope(any())).thenAnswer(invocation -> {
+            var check = invocation.getArgument(0, com.jsd.aird.iam.api.PermissionCheck.class);
+            return "data.view".equals(check.permissionCode())
+                    ? DataScopeResolver.ResolvedDataScope.allow("CATEGORY", Set.of(categoryId))
+                    : DataScopeResolver.ResolvedDataScope.deny("ALL", "PERMISSION_DENIED");
+        });
+        var actor = new Actor(UUID.randomUUID(), UUID.randomUUID(), "analyst");
+
+        var scope = new DataSearchAuthorizationService(authorization).requireRetrievalScopes(actor);
+
+        assertThat(scope.dataScope().type()).isEqualTo("CATEGORY");
+        assertThat(scope.experimentScope().deniesAll()).isTrue();
+    }
 }

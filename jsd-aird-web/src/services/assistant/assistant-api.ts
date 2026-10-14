@@ -42,10 +42,16 @@ export interface AssistantCitation {
   publishedAt?: string;
   fetchedAt?: string;
   contentHash?: string;
+  sourceOwner?: 'DATA_CENTER' | 'EXPERIMENT';
+  recognitionMode?: 'FREEFORM' | 'TEMPLATE_GUIDED';
+  experimentId?: string;
+  experimentVersionId?: string;
 }
 
 export interface AssistantResponse {
   conversationId: string;
+  userMessageId: string;
+  assistantMessageId: string;
   answer: string;
   citations: AssistantCitation[];
   usedWebSearch: boolean;
@@ -55,7 +61,12 @@ export interface AssistantResponse {
 
 export interface ConversationView {
   conversationId: string;
-  messages: Array<{ role: string; content: string; citations?: AssistantCitation[] }>;
+  messages: Array<{ id: string; role: string; content: string; citations?: AssistantCitation[] }>;
+}
+
+export interface AssistantMessageReplacement {
+  replaceFromMessageId: string;
+  expectedLastMessageId: string;
 }
 
 export interface ConversationMeta {
@@ -96,6 +107,10 @@ export interface FileSearchResult {
       taskId?: string;
       taskName?: string;
     }>;
+    sourceOwner?: 'DATA_CENTER' | 'EXPERIMENT';
+    recognitionMode?: 'FREEFORM' | 'TEMPLATE_GUIDED';
+    experimentId?: string;
+    experimentVersionId?: string;
     hits: Array<{
       id: string;
       snippet: string;
@@ -170,9 +185,10 @@ export const assistantApi = {
     knowledgeCategoryIds: string[] = [],
     dataCategoryIds: string[] = [],
     webSearchEnabled = false,
-    onToken: (token: string) => void,
+    onToken: (token: string, replace?: boolean) => void,
     onDone: (response: AssistantResponse) => void,
     onStage?: (event: string, data: unknown) => void,
+    replacement?: AssistantMessageReplacement,
   ) {
     const requestStream = async (csrfToken: string) =>
       fetch(`${appEnv.apiBaseUrl}/api/v1/assistant/qa/stream`, {
@@ -190,6 +206,8 @@ export const assistantApi = {
           knowledgeCategoryIds,
           dataCategoryIds,
           webSearchEnabled,
+          replaceFromMessageId: replacement?.replaceFromMessageId,
+          expectedLastMessageId: replacement?.expectedLastMessageId,
         }),
       });
     let csrfToken = await ensureCsrfToken();
@@ -217,17 +235,35 @@ export const assistantApi = {
         if (response.ok && response.body) {
           // Continue with the retried stream below.
         } else {
-          // A token that remains invalid after refreshing means the current
-          // session can no longer be trusted. Clear the auth state so the
-          // route guard sends the user to login instead of rendering a
-          // misleading assistant error message.
-          notifyAuthRequired();
-          throw new AssistantRequestError(
-            '登录状态已失效，请重新登录。',
-            'AUTH_REQUIRED',
-            response.status,
-            traceId,
-          );
+          // A CSRF failure is a request-token problem, not proof that the
+          // login session expired. Preserve the structured error so the page
+          // can ask the user to refresh/retry without destroying a valid
+          // session.
+          let retryMessage = `流式问答失败（${response.status}）`;
+          let retryCode = 'AI_REQUEST_FAILED';
+          let retryTraceId = traceId;
+          try {
+            const payload = JSON.parse(await response.text()) as {
+              message?: string;
+              code?: string;
+              traceId?: string;
+            };
+            if (payload.message) retryMessage = payload.message;
+            if (payload.code) retryCode = payload.code;
+            if (payload.traceId) retryTraceId = payload.traceId;
+          } catch {
+            /* 保留 HTTP 状态提示 */
+          }
+          if (response.status === 401 || retryCode === 'AUTH_REQUIRED') {
+            notifyAuthRequired();
+            throw new AssistantRequestError(
+              retryMessage,
+              'AUTH_REQUIRED',
+              response.status,
+              retryTraceId,
+            );
+          }
+          throw new AssistantRequestError(retryMessage, retryCode, response.status, retryTraceId);
         }
       } else {
         throw new AssistantRequestError(message, code, response.status, traceId);
@@ -285,10 +321,15 @@ export const assistantApi = {
                   typeof parsed.delta === 'string'
                 ? parsed.delta
                 : '';
-          if (token) onToken(token);
+          if (token) {
+            const replace =
+              parsed && typeof parsed === 'object' && 'replace' in parsed && parsed.replace === true;
+            if (replace) onToken(token, true);
+            else onToken(token);
+          }
         }
         if (event === 'done') onDone(parsed as AssistantResponse);
-        if (event === 'thinking') onStage?.(event, parsed);
+        if (event === 'thinking' || event === 'context') onStage?.(event, parsed);
         event = 'message';
       }
     };

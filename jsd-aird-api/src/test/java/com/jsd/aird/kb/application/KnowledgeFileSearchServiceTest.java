@@ -4,6 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -20,6 +23,48 @@ import com.jsd.aird.kb.domain.LexicalAnalyzer;
 import org.junit.jupiter.api.Test;
 
 class KnowledgeFileSearchServiceTest {
+
+    @Test
+    void findsPublishedDocumentByExactTitleWhenNoBodySearchChannelMatches() {
+        var documents = mock(KnowledgeRepository.class);
+        var governance = mock(KnowledgeGovernanceRepository.class);
+        var organizationId = UUID.randomUUID();
+        var documentId = UUID.randomUUID();
+        var versionId = UUID.randomUUID();
+        var publicationId = UUID.randomUUID();
+        var fileId = UUID.randomUUID();
+        var metadataHit = new KnowledgeRepository.SearchRow(UUID.randomUUID(), documentId, versionId,
+                "火箭推进剂安全规范", "NASA-Spec-1009.pdf", null, "正文", "允许的推进剂储存条件。", 12.0);
+        when(documents.bm25Search(any(), any(), anyBoolean(), any(), any(), anyInt())).thenReturn(List.of());
+        when(documents.fullTextSearch(any(), any(), anyBoolean(), any(), any(), anyInt())).thenReturn(List.of());
+        when(documents.searchPublishedMetadata(eq(organizationId), eq(List.of("NASA-Spec-1009.pdf")),
+                eq(false), anyList(), isNull(), anyInt())).thenReturn(List.of(metadataHit));
+        when(documents.findVersion(organizationId, versionId)).thenReturn(Optional.of(
+                new KnowledgeRepository.VersionRow(versionId, documentId, 3, fileId, "NASA-Spec-1009.pdf",
+                        "application/pdf", 1024, "b".repeat(64), "READY", "poi", null,
+                        "PUBLISHED", 2, "AUTO", false, null, "LOCAL", "{}")));
+        when(documents.findDocument(organizationId, documentId)).thenReturn(Optional.of(
+                new KnowledgeRepository.DocumentRow(documentId, organizationId, "草稿标题", "READY", "SAFE",
+                        "PENDING", 3, versionId, "NASA-Spec-1009.pdf", "application/pdf", 1024,
+                        "b".repeat(64), null, Instant.now(), Instant.now(), "INTERNAL", UUID.randomUUID(),
+                        "SPEC", "ACTIVE", "PUBLISHED", "PUBLISHED", 2, publicationId, 1)));
+        when(governance.currentPublication(organizationId, documentId)).thenReturn(Optional.of(
+                new KnowledgeGovernanceRepository.PublicationRow(publicationId, documentId, versionId,
+                        UUID.randomUUID(), UUID.randomUUID(), 3, "CURRENT", "APPROVED", Instant.now())));
+        when(governance.publicationTags(organizationId, publicationId)).thenReturn(List.of("NASA"));
+        when(documents.findChunkAnchor(any(), any())).thenReturn(Optional.empty());
+
+        var files = new KnowledgeFileSearchService(documents, governance, testAnalyzer())
+                .searchFiles(organizationId, "NASA-Spec-1009.pdf", List.of(), 10);
+
+        assertThat(files).singleElement().satisfies(file -> {
+            assertThat(file.fileObjectId()).isEqualTo(fileId);
+            assertThat(file.fileVersionId()).isEqualTo(versionId);
+            assertThat(file.title()).isEqualTo("火箭推进剂安全规范");
+            assertThat(file.hits()).singleElement().satisfies(hit ->
+                    assertThat(hit.snippet()).isEqualTo("允许的推进剂储存条件。"));
+        });
+    }
 
     @Test
     void groupsSeveralChunkHitsIntoCurrentPublishedSourceFile() {

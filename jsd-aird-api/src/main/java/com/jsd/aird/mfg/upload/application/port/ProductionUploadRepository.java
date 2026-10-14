@@ -22,9 +22,19 @@ public interface ProductionUploadRepository {
                              double matchScore, JsonNode structureSummary, JsonNode workbookSnapshot,
                              JsonNode recognitionResult);
 
+    /**
+     * Stores the workbook snapshot generated from a photo upload's recognized
+     * values (or replaces it when the template or values changed), so the record
+     * becomes editable and exportable exactly like an Excel upload.
+     */
+    void saveGeneratedWorkbook(UUID uploadId, JsonNode workbookSnapshot);
+
     void failRecognition(UUID uploadId, String message);
 
     void replaceRecognitionFields(UUID uploadId, List<RecognitionField> fields);
+
+    /** Keeps the persisted review JSON in sync with field-table decisions. */
+    void updateRecognitionResult(UUID uploadId, JsonNode recognitionResult);
 
     void updateRecognizedMetadata(UUID uploadId, String orderNo, String productName,
                                   String category, LocalDate manufactureDate);

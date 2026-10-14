@@ -43,7 +43,7 @@ describe('assistant stream authentication failures', () => {
     httpMocks.notifyAuthRequired.mockReset();
   });
 
-  it('notifies the auth store after a CSRF refresh still leaves the session invalid', async () => {
+  it('keeps CSRF failures separate from login-session failures', async () => {
     const fetchMock = vi
       .spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(
@@ -55,9 +55,83 @@ describe('assistant stream authentication failures', () => {
 
     await expect(
       assistantApi.stream('测试', undefined, [], [], false, vi.fn(), vi.fn()),
-    ).rejects.toMatchObject({ code: 'AUTH_REQUIRED', status: 403 });
+    ).rejects.toMatchObject({ code: 'CSRF_TOKEN_INVALID', status: 403 });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(httpMocks.notifyAuthRequired).toHaveBeenCalledTimes(1);
+    expect(httpMocks.notifyAuthRequired).not.toHaveBeenCalled();
+  });
+
+  it('sends message replacement guards with an edited question', async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ code: 'AI_REQUEST_FAILED' }), { status: 409 }),
+      );
+
+    await expect(
+      assistantApi.stream(
+        '修改后的问题',
+        'conversation-1',
+        [],
+        [],
+        false,
+        vi.fn(),
+        vi.fn(),
+        undefined,
+        { replaceFromMessageId: 'message-2', expectedLastMessageId: 'message-8' },
+      ),
+    ).rejects.toMatchObject({ status: 409 });
+
+    const request = fetchMock.mock.calls.at(0)?.[1];
+    if (!request) throw new Error('未发送流式问答请求');
+    expect(
+      JSON.parse(typeof request.body === 'string' ? request.body : '') as unknown,
+    ).toMatchObject({
+      question: '修改后的问题',
+      conversationId: 'conversation-1',
+      replaceFromMessageId: 'message-2',
+      expectedLastMessageId: 'message-8',
+    });
+  });
+
+  it('dispatches the prepared conversation context from the live SSE stream', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(
+        [
+          'event: context\ndata: {"conversationId":"conversation-1","userMessageId":"user-1"}',
+          'event: token\ndata: {"delta":"回答增量"}',
+          'event: done\ndata: {"conversationId":"conversation-1","userMessageId":"user-1","assistantMessageId":"assistant-1","answer":"回答增量","citations":[],"usedWebSearch":false,"traceId":"trace-1","usage":{"inputTokens":1,"outputTokens":1,"totalTokens":2}}',
+        ].join('\n\n') + '\n\n',
+        { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+      ),
+    );
+    const onToken = vi.fn();
+    const onDone = vi.fn();
+    const onEvent = vi.fn();
+
+    await assistantApi.stream('问题', undefined, [], [], false, onToken, onDone, onEvent);
+
+    expect(onEvent).toHaveBeenCalledWith('context', {
+      conversationId: 'conversation-1',
+      userMessageId: 'user-1',
+    });
+    expect(onToken).toHaveBeenCalledWith('回答增量');
+    expect(onDone).toHaveBeenCalledWith(
+      expect.objectContaining({ assistantMessageId: 'assistant-1' }),
+    );
+  });
+
+  it('marks a live token as a full replacement when the server resynchronizes sanitized text', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(
+        'event: token\ndata: {"delta":"修订后的完整回答","replace":true}\n\nevent: done\ndata: {"conversationId":"conversation-1","userMessageId":"user-1","assistantMessageId":"assistant-1","answer":"修订后的完整回答","citations":[],"usedWebSearch":false,"traceId":"trace-1","usage":{"inputTokens":1,"outputTokens":1,"totalTokens":2}}\n\n',
+        { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+      ),
+    );
+    const onToken = vi.fn();
+
+    await assistantApi.stream('问题', undefined, [], [], false, onToken, vi.fn());
+
+    expect(onToken).toHaveBeenCalledWith('修订后的完整回答', true);
   });
 });

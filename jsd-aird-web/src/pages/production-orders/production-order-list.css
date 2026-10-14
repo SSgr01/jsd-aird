@@ -6,11 +6,15 @@
 
 .production-order-page .page-heading {
   min-width: 0;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
 .production-order-page .page-heading > div {
   min-width: 0;
+}
+
+.production-order-page .page-heading > div:first-child {
+  flex: 1 1 0;
 }
 
 .production-order-page .page-heading > .ant-space {
@@ -114,23 +118,31 @@
 }
 
 .production-order-filter .ant-space-item:first-child {
-  width: 300px;
-  min-width: 220px;
-  flex: 1 1 300px;
+  width: 320px;
+  min-width: 260px;
+  max-width: 420px;
+  flex: 2 1 320px;
 }
 
 .production-order-filter .ant-space-item:nth-child(2) {
+  width: 180px;
+  min-width: 150px;
+  flex: 0 1 180px;
+}
+
+.production-order-filter .ant-space-item:nth-child(3) {
   width: 160px;
   min-width: 140px;
   flex: 0 1 160px;
 }
 
-.production-order-filter .ant-space-item:nth-child(n + 3) {
+.production-order-filter .ant-space-item:nth-child(n + 4) {
   flex: 0 0 auto;
 }
 
 .production-order-filter .ant-space-item:first-child .ant-input-search,
-.production-order-filter .ant-space-item:nth-child(2) .ant-select {
+.production-order-filter .ant-space-item:nth-child(2) .ant-select,
+.production-order-filter .ant-space-item:nth-child(3) .ant-select {
   width: 100% !important;
 }
 
@@ -535,7 +547,8 @@
   }
 
   .production-order-filter .ant-space-item:first-child,
-  .production-order-filter .ant-space-item:nth-child(2) {
+  .production-order-filter .ant-space-item:nth-child(2),
+  .production-order-filter .ant-space-item:nth-child(3) {
     width: 100%;
     min-width: 0;
     flex-basis: 100%;

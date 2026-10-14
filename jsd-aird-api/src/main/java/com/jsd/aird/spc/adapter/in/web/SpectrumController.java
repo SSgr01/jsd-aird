@@ -7,6 +7,7 @@ import java.util.UUID;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.jsd.aird.platform.web.RequestIdHolder;
+import com.jsd.aird.platform.web.TiffPreview;
 import com.jsd.aird.spc.application.SpectrumService;
 import com.jsd.aird.shared.api.ApiResponse;
 import com.jsd.aird.shared.api.ResponseFactory;
@@ -101,6 +102,39 @@ public class SpectrumController {
     public void content(@PathVariable UUID chartId, HttpServletResponse response) throws IOException {
         var stored = service.openChart(chartId);
         var file = stored.file();
+        writeInline(file, response);
+    }
+
+    /**
+     * Return a browser-friendly rendering for formats that are accepted by the
+     * spectrum module but are not consistently rendered by mobile browsers.
+     * The original file remains available from /content for downloads.
+     */
+    @GetMapping("/charts/{chartId}/preview")
+    public void preview(@PathVariable UUID chartId, HttpServletResponse response) throws IOException {
+        var stored = service.openChart(chartId);
+        var file = stored.file();
+        if (!TiffPreview.isTiff(file.originalName(), file.contentType())) {
+            writeInline(file, response);
+            return;
+        }
+
+        byte[] png;
+        try (file) {
+            png = TiffPreview.toPng(file.stream());
+        } catch (Exception exception) {
+            throw new IOException("TIFF 图谱预览生成失败", exception);
+        }
+
+        response.setContentType("image/png");
+        response.setContentLengthLong(png.length);
+        response.setHeader(HttpHeaders.CONTENT_DISPOSITION,
+                ContentDisposition.inline().filename(TiffPreview.previewName(file.originalName()), StandardCharsets.UTF_8).build().toString());
+        response.getOutputStream().write(png);
+    }
+
+    private void writeInline(com.jsd.aird.ops.application.port.FileStorageFacade.StoredFile file,
+                             HttpServletResponse response) throws IOException {
         response.setContentType(file.contentType());
         response.setContentLengthLong(file.size());
         response.setHeader(HttpHeaders.CONTENT_DISPOSITION,

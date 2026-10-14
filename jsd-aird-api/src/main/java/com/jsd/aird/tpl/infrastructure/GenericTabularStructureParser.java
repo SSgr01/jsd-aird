@@ -105,9 +105,17 @@ public class GenericTabularStructureParser implements TabularStructureParser {
                         .put("column", columnIndex + 1)
                         .put("displayValue", display)
                         .put("cellType", cell.getCellType().name())
+                        .put("cellValueType", cell.getCellType().name())
                         .put("styleIndex", cell.getCellStyle().getIndex())
                         .put("locked", cell.getCellStyle().getLocked())
                         .put("hidden", cell.getCellStyle().getHidden());
+                var numberFormat = cell.getCellStyle().getDataFormatString();
+                item.put("numberFormat", numberFormat == null ? "" : numberFormat);
+                if (cell.getCellType() == CellType.NUMERIC) {
+                    item.put("rawNumericValue", java.math.BigDecimal.valueOf(cell.getNumericCellValue())
+                            .stripTrailingZeros().toPlainString());
+                    item.put("fractionRepresentation", numberFormat != null && numberFormat.contains("%"));
+                }
                 basisCells.addObject().put("address", address)
                         .put("value", normalizeFingerprintText(display))
                         .put("type", cell.getCellType().name());

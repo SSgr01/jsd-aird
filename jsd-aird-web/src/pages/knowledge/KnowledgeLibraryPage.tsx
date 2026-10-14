@@ -1,21 +1,15 @@
-import { DeleteOutlined, DownloadOutlined, EyeOutlined, FileTextOutlined, SafetyCertificateOutlined, UploadOutlined } from '@ant-design/icons';
+import { DeleteOutlined, FileTextOutlined, UploadOutlined } from '@ant-design/icons';
 import { App, Button, Form, Input, Select, Space, Typography } from 'antd';
 import type { UploadFile } from 'antd';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
 
-import { downloadPreviewFile } from '@/components/file-preview';
 import { UploadWorkspace, type UploadWorkspaceRecord } from '@/components/upload-workspace';
 import { ProjectRelationPicker } from '@/components/project-relations/ProjectRelationPicker';
 import { stageFile } from '@/services/files';
-import { knowledgeApi, type KnowledgeCategory, type KnowledgeDocument, type UploadPreflight } from '@/services/knowledge';
+import { knowledgeApi, type KnowledgeCategory, type UploadPreflight } from '@/services/knowledge';
 import type { ProjectRelationTarget } from '@/services/project/project-resource-api';
-import { documentWorkflowStatus } from './knowledge-workflow-status';
 import { loadKnowledgeUploadTasks, removeKnowledgeUploadTask, subscribeKnowledgeUploadTasks, updateKnowledgeUploadTask, type KnowledgeUploadTask } from './knowledge-upload-tasks';
 
-const aiLabels: Record<string, [string, string]> = {
-  PENDING: ['待授权', 'gold'], APPROVED: ['已授权', 'green'], REJECTED: ['已拒绝', 'red'], REVOKED: ['已撤销', 'orange'],
-};
 const formatSize = (size: number) => size < 1024 * 1024 ? `${Math.ceil(size / 1024)} KB` : `${(size / 1024 / 1024).toFixed(1)} MB`;
 
 async function runLimited<T, R>(items: T[], limit: number, worker: (item: T, index: number) => Promise<R>) {
@@ -54,18 +48,13 @@ function mergeUploadTasks(tasks: KnowledgeUploadTask[]) {
 
 export function KnowledgeLibraryPage() {
   const { message, modal } = App.useApp();
-  const navigate = useNavigate();
-  const [items, setItems] = useState<KnowledgeDocument[]>([]);
   const [fileList, setFileList] = useState<UploadFile[]>([]);
-  const [keyword, setKeyword] = useState('');
-  const [status, setStatus] = useState('ALL');
+  const [taskFilter, setTaskFilter] = useState('ALL');
   const [libraryScope, setLibraryScope] = useState<'INTERNAL' | 'EXTERNAL'>('INTERNAL');
   const [categoryId, setCategoryId] = useState<string>();
   const [tagsText, setTagsText] = useState('');
   const [sourceDescription, setSourceDescription] = useState('');
   const [categories, setCategories] = useState<KnowledgeCategory[]>([]);
-  const [page, setPage] = useState({ current: 1, pageSize: 8, total: 0 });
-  const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [projectRelations, setProjectRelations] = useState<ProjectRelationTarget[]>([]);
   const [uploadTasks, setUploadTasks] = useState<KnowledgeUploadTask[]>(() => loadKnowledgeUploadTasks());
@@ -73,22 +62,6 @@ export function KnowledgeLibraryPage() {
 
   useEffect(() => subscribeKnowledgeUploadTasks(() => setUploadTasks(loadKnowledgeUploadTasks())), []);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const result = await knowledgeApi.list({ keyword: keyword || undefined, status: status === 'ALL' ? undefined : status, page: page.current, size: page.pageSize });
-      setItems(result.items);
-      setPage((current) => ({ ...current, current: result.page, pageSize: result.size, total: result.total }));
-    } catch (error) { void message.error(error instanceof Error ? error.message : '知识库加载失败'); }
-    finally { setLoading(false); }
-  }, [keyword, message, page.current, page.pageSize, status]);
-
-  useEffect(() => { void load(); }, [load]);
-  useEffect(() => {
-    if (!uploadTasks.some((task) => ['STAGING', 'CHECKING', 'SUBMITTING', 'QUEUED'].includes(task.status))) return undefined;
-    const timer = window.setInterval(() => { void load(); }, 3000);
-    return () => window.clearInterval(timer);
-  }, [load, uploadTasks]);
   useEffect(() => {
     setCategoryId(undefined);
     void knowledgeApi.categories(libraryScope).then(setCategories).catch(() => setCategories([]));
@@ -170,7 +143,6 @@ export function KnowledgeLibraryPage() {
           const created = await knowledgeApi.createGoverned({ fileId: item.staged.fileId, title: item.file.name.replace(/\.[^.]+$/, ''), libraryScope, categoryId, tags, resolution: resolution.resolution, targetDocumentId: resolution.targetDocumentId, sourceInfo: { description: sourceDescription.trim(), originalName: item.file.name }, projectRelations });
           item.update('QUEUED', 100, { documentId: created.id, message: '已提交解析，离开页面不会取消任务' });
           succeeded += 1;
-          if (succeeded === 1 || succeeded % 4 === 0) await load();
         } catch (error) {
           item.update('FAILED', 100, { message: error instanceof Error ? error.message : '文件创建失败' });
           failed += 1;
@@ -179,62 +151,28 @@ export function KnowledgeLibraryPage() {
         }
       }
       setFileList([]);
-      await load();
       if (duplicates || failed) void message.warning(`${succeeded} 个文件已进入解析队列，${duplicates} 个完全重复，${failed} 个失败`);
       else void message.success(`已提交 ${succeeded} 个文件；解析完成后进入人工校对`);
     } catch (error) { void message.error(error instanceof Error ? error.message : '文件上传失败'); }
     finally { uploadLock.current = false; setUploading(false); }
   };
 
-  const grant = (item: KnowledgeDocument, action: 'APPROVE' | 'REVOKE') => {
-    modal.confirm({
-      title: action === 'APPROVE' ? `允许“${item.title}”用于 AI 问答？` : `撤销“${item.title}”的 AI 使用授权？`,
-      content: action === 'APPROVE' ? '授权作用于整个文档，并自动覆盖后续修订和新文件版本。' : '撤销后将取消待执行任务并清除该文档已有向量；关键词检索不受影响。',
-      okText: action === 'APPROVE' ? '确认授权' : '确认撤销', cancelText: '取消',
-      onOk: async () => {
-        try {
-          await knowledgeApi.grant(item.id, action);
-          void message.success(action === 'APPROVE' ? '文档已获得 AI 授权' : '文档 AI 授权已撤销');
-          await load();
-        } catch (reason) {
-          void message.error(reason instanceof Error ? reason.message : 'AI 授权操作失败');
-          throw reason;
-        }
-      },
-    });
-  };
-
-  const descriptor = (item: KnowledgeDocument) => ({ fileName: item.originalName, contentType: item.contentType, size: item.size, load: () => knowledgeApi.contentBlob(item.id) });
-  const downloadDocument = async (item: KnowledgeDocument) => {
-    try { await downloadPreviewFile(descriptor(item)); void message.success('原文件下载已开始'); }
-    catch (error) { void message.error(error instanceof Error ? error.message : '原文件下载失败'); }
-  };
-  const visibleTask = (task: KnowledgeUploadTask) => status === 'ALL'
-    || (status === 'PROCESSING' && ['STAGING', 'CHECKING', 'SUBMITTING', 'QUEUED'].includes(task.status))
-    || (status === 'FAILED' && ['FAILED', 'DUPLICATE'].includes(task.status));
-  const taskRecords: UploadWorkspaceRecord[] = mergeUploadTasks(uploadTasks).filter(visibleTask).filter((task) => !task.documentId || !items.some((item) => item.id === task.documentId)).map((task) => {
+  const allTasks = mergeUploadTasks(uploadTasks);
+  const inProgressCount = allTasks.filter((task) => ['STAGING', 'CHECKING', 'SUBMITTING', 'QUEUED'].includes(task.status)).length;
+  const failedCount = allTasks.filter((task) => ['FAILED', 'DUPLICATE'].includes(task.status)).length;
+  const visibleTask = (task: KnowledgeUploadTask) => taskFilter === 'ALL'
+    || (taskFilter === 'PROCESSING' && ['STAGING', 'CHECKING', 'SUBMITTING', 'QUEUED'].includes(task.status))
+    || (taskFilter === 'FAILED' && ['FAILED', 'DUPLICATE'].includes(task.status));
+  const taskRecords: UploadWorkspaceRecord[] = allTasks.filter(visibleTask).map((task) => {
     const state = taskStatus(task);
     return {
       id: `upload-task-${task.id}`, name: task.fileName, icon: <FileTextOutlined />,
       meta: `${formatSize(task.size)} · ${task.message || '任务仍在进行，离开页面不会取消'}`,
       detail: `上传任务更新时间 ${new Date(task.updatedAt).toLocaleString('zh-CN')}`,
       status: state, progress: task.progress,
-      actions: ['FAILED', 'DUPLICATE'].includes(task.status)
-        ? <Button type="link" danger={task.status === 'FAILED'} icon={<DeleteOutlined />} onClick={() => removeKnowledgeUploadTask(task.id)}>清除</Button>
-        : undefined,
+      actions: <Button type="link" danger={task.status === 'FAILED'} icon={<DeleteOutlined />} onClick={() => removeKnowledgeUploadTask(task.id)}>{['FAILED', 'DUPLICATE'].includes(task.status) ? '清除' : '移除记录'}</Button>,
     };
   });
-  const records: UploadWorkspaceRecord[] = [...taskRecords, ...items.map((item) => {
-    const state = documentWorkflowStatus(item);
-    const ai = aiLabels[item.aiStatus] || [item.aiStatus, 'default'];
-    return {
-      id: item.id, name: item.title, icon: <FileTextOutlined />,
-      meta: `${item.categoryName || '未分类'} · ${item.originalName} · ${formatSize(item.size)}`,
-      detail: `更新于 ${new Date(item.updatedAt).toLocaleString('zh-CN')} · AI ${ai[0]}`,
-      status: state,
-      actions: <Space size={4} wrap><Button type="link" icon={<EyeOutlined />} onClick={() => navigate(`/knowledge/documents/${item.id}`)}>查看</Button><Button type="link" icon={<DownloadOutlined />} onClick={() => void downloadDocument(item)}>下载</Button>{item.aiStatus === 'APPROVED' ? <Button type="link" danger onClick={() => grant(item, 'REVOKE')}>撤销 AI</Button> : <Button type="link" icon={<SafetyCertificateOutlined />} disabled={!item.currentPublicationId || item.reviewStatus !== 'PUBLISHED'} onClick={() => grant(item, 'APPROVE')}>授权 AI</Button>}</Space>,
-    };
-  })];
 
   return <>
     <UploadWorkspace
@@ -257,11 +195,10 @@ export function KnowledgeLibraryPage() {
       uploadMainText="拖拽文件到此处/点击选择文件/点击拍照上传"
       uploadHint="支持 PDF / Office / CSV / TXT / 图片 / 音频，可批量上传，单个文件最大100M。"
       submitLabel="开始上传" submitIcon={<UploadOutlined />} onSubmit={() => void upload()} submitting={uploading}
-      rightTitle="已上传文件" rightCount={page.total + taskRecords.length}
-      rightFilters={[{ key: 'ALL', label: '全部' }, { key: 'PROCESSING', label: '解析中' }, { key: 'READY', label: '解析完成' }, { key: 'FAILED', label: '失败' }]}
-      activeFilter={status} onFilterChange={(value) => { setStatus(value); setPage((current) => ({ ...current, current: 1 })); }}
-      searchValue={keyword} onSearchChange={(value) => { setKeyword(value); setPage((current) => ({ ...current, current: 1 })); }} searchPlaceholder="搜索文件名称"
-      records={records} recordsLoading={loading} pagination={page} onPageChange={(current, pageSize) => setPage((value) => ({ ...value, current, pageSize }))}
+      rightTitle="上传任务" rightCount={taskRecords.length}
+      rightFilters={[{ key: 'ALL', label: '全部', count: allTasks.length }, { key: 'PROCESSING', label: '进行中', count: inProgressCount }, { key: 'FAILED', label: '需处理', count: failedCount }]}
+      activeFilter={taskFilter} onFilterChange={setTaskFilter}
+      records={taskRecords}
     />
   </>;
 }

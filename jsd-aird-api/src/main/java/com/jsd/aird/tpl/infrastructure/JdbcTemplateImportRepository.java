@@ -98,6 +98,22 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
     }
 
     @Override
+    public void enqueueStandalone(NewImportJob job) {
+        enqueue(job);
+        jdbcTemplate.update("UPDATE ops.async_job SET status = 'SUCCEEDED', progress = 100, updated_at = now() WHERE id = ?",
+                job.asyncJobId());
+        jdbcTemplate.update("UPDATE tpl.template_import_job SET status = 'PARSING', updated_at = now() WHERE id = ?",
+                job.importJobId());
+    }
+
+    @Override
+    public boolean isExperimentUpload(UUID importJobId) {
+        return Boolean.TRUE.equals(jdbcTemplate.queryForObject(
+                "SELECT operation_source = 'EXPERIMENT_UPLOAD' FROM tpl.template_import_job WHERE id = ?",
+                Boolean.class, importJobId));
+    }
+
+    @Override
     public boolean enqueueRerun(RerunImportJob job) {
         var payload = objectMapper.createObjectNode()
                 .put("importJobId", job.importJobId().toString())
@@ -190,7 +206,7 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
     @Override
     public List<ImportJobView> list(UUID organizationId) {
         return queryJobs(false, """
-                        WHERE tij.organization_id = ?
+                        WHERE tij.organization_id = ? AND tij.operation_source <> 'EXPERIMENT_UPLOAD'
                         ORDER BY tij.created_at DESC
                         LIMIT 100
                         """, organizationId);
@@ -201,6 +217,20 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
         if (sourceSha256 == null || sourceSha256.isBlank()) return Optional.empty();
         return queryJobs("""
                 WHERE tij.organization_id = ? AND tij.source_sha256 = ? AND tij.format = ?
+                  AND tij.operation_source <> 'EXPERIMENT_UPLOAD'
+                ORDER BY tij.created_at DESC LIMIT 1
+                """, organizationId, sourceSha256, format.name()).stream().findFirst();
+    }
+
+    @Override
+    public Optional<ImportJobView> findReviewedTemplateSource(
+            UUID organizationId, String sourceSha256, TemplateFormat format
+    ) {
+        if (sourceSha256 == null || sourceSha256.isBlank()) return Optional.empty();
+        return queryJobs("""
+                WHERE tij.organization_id = ? AND tij.source_sha256 = ? AND tij.format = ?
+                  AND tij.generated_template_version_id IS NOT NULL
+                  AND tij.operation_source <> 'EXPERIMENT_UPLOAD'
                 ORDER BY tij.created_at DESC LIMIT 1
                 """, organizationId, sourceSha256, format.name()).stream().findFirst();
     }

@@ -99,12 +99,13 @@ public class AssistantController {
         return ResponseFactory.success(value, RequestIdHolder.currentOrUnknown());
     }
 
-    public record QaRequest(UUID conversationId, @Size(min = 1, max = 3000) String question,
+    public record QaRequest(UUID conversationId, UUID replaceFromMessageId, UUID expectedLastMessageId,
+                            @Size(min = 1, max = 3000) String question,
                             List<UUID> knowledgeCategoryIds, List<UUID> dataCategoryIds,
                             Boolean webSearchEnabled) {
         AssistantService.AskCommand command() {
-            return new AssistantService.AskCommand(conversationId, question, knowledgeCategoryIds, dataCategoryIds,
-                    Boolean.TRUE.equals(webSearchEnabled));
+            return new AssistantService.AskCommand(conversationId, replaceFromMessageId, expectedLastMessageId,
+                    question, knowledgeCategoryIds, dataCategoryIds, Boolean.TRUE.equals(webSearchEnabled));
         }
     }
     public record FileSearchRequest(@Size(min = 1, max = 1000) String query, Boolean aiOnly, int limit,

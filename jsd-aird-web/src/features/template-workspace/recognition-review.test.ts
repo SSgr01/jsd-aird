@@ -328,6 +328,84 @@ describe('recognition review draft merge', () => {
     expect(merged.mapping[0]).toMatchObject({ bindingStatus: 'AMBIGUOUS' });
     expect(merged.mapping[0]?.diagnostic?.recognitionDiff).toMatchObject({ status: 'STALE' });
   });
+
+  it('refreshes stale automatic experiment semantics from the latest recognition run', () => {
+    const schema = { type: 'object', properties: {} };
+    const firstItem = createItem({
+      status: 'CONFIRMED',
+      payload: {
+        ...createItem().payload,
+        bindingId: 'stable-coating-appearance',
+        experimentField: { domain: 'OTHER', field: 'DYNAMIC_VALUE' },
+        experimentSemanticStatus: 'NEEDS_REVIEW',
+        experimentSemanticSource: 'MODEL',
+        experimentSemanticIssue: '旧识别存在歧义',
+      },
+    });
+    const first = mergeRecognitionReview(schema, [], readFieldModel(schema, []), createReview(firstItem));
+    const latestItem = createItem({
+      id: '99999999-9999-9999-9999-999999999999',
+      status: 'CONFIRMED',
+      payload: {
+        ...createItem().payload,
+        bindingId: 'stable-coating-appearance',
+        experimentField: { domain: 'TEST', field: 'VALUE' },
+        experimentItemLabel: '性能测试 > 涂料外观',
+        experimentSemanticConfidence: 0.96,
+        experimentSemanticStatus: 'AUTO_CONFIRMED',
+        experimentSemanticSource: 'FIELD_RULE',
+      },
+    });
+
+    const merged = mergeRecognitionReview(
+      first.schema, first.mapping, first.model, createReview(latestItem),
+    );
+
+    expect(merged.model.fields[0]).toMatchObject({
+      experimentField: { domain: 'TEST', field: 'VALUE' },
+      experimentItemLabel: '性能测试 > 涂料外观',
+      experimentSemanticStatus: 'AUTO_CONFIRMED',
+      experimentSemanticSource: 'FIELD_RULE',
+      recognitionItemId: '99999999-9999-9999-9999-999999999999',
+    });
+    expect(merged.model.fields[0]?.experimentSemanticIssue).toBeUndefined();
+    expect(merged.mapping[0]?.diagnostic?.recognitionItemId)
+      .toBe('99999999-9999-9999-9999-999999999999');
+  });
+
+  it('preserves a human-confirmed experiment semantic across recognition runs', () => {
+    const schema = { type: 'object', properties: {} };
+    const first = mergeRecognitionReview(
+      schema, [], readFieldModel(schema, []), createReview(createItem({ status: 'CONFIRMED' })),
+    );
+    Object.assign(first.model.fields[0]!, {
+      experimentField: { domain: 'CONCLUSION', field: 'MAIN_CONCLUSION' },
+      experimentSemanticConfidence: 1,
+      experimentSemanticStatus: 'CONFIRMED',
+      experimentSemanticSource: 'HUMAN',
+    });
+    const latestItem = createItem({
+      status: 'CONFIRMED',
+      payload: {
+        ...createItem().payload,
+        experimentField: { domain: 'OTHER', field: 'DYNAMIC_VALUE' },
+        experimentSemanticStatus: 'NEEDS_REVIEW',
+        experimentSemanticSource: 'MODEL',
+        experimentSemanticIssue: '模型仍有歧义',
+      },
+    });
+
+    const merged = mergeRecognitionReview(
+      first.schema, first.mapping, first.model, createReview(latestItem),
+    );
+
+    expect(merged.model.fields[0]).toMatchObject({
+      experimentField: { domain: 'CONCLUSION', field: 'MAIN_CONCLUSION' },
+      experimentSemanticStatus: 'CONFIRMED',
+      experimentSemanticSource: 'HUMAN',
+    });
+    expect(merged.model.fields[0]?.experimentSemanticIssue).toBeUndefined();
+  });
 });
 
 function createReview(item: RecognitionReviewItem): RecognitionReview {

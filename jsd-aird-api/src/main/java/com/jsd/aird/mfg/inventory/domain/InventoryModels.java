@@ -25,12 +25,14 @@ public final class InventoryModels {
                               String actorName, Instant createdAt, boolean reversed) {}
     public record Page<T>(List<T> items, long page, long size, long total, long totalPages) {}
     public record Movement(UUID productId, Scope scope, Direction direction, String reason, BigDecimal quantityKg,
-                           LocalDate businessDate, String documentNo, String businessType, UUID businessId, String note) {}
+                           LocalDate businessDate, String documentNo, String businessType, UUID businessId, String note,
+                           String actorName) {}
     public record Sample(UUID id, String dispatchNo, LocalDate businessDate, UUID productId, String productName,
-                         BigDecimal quantityKg, UUID customerId, String customerName, String recipientName, String sampleAddress,
-                         String courierCompany, String trackingNo, String clientContact, String customerRequirement,
+                         Scope scope, BigDecimal quantityKg, UUID customerId, String customerName, String recipientName,
+                         String recipientPhone, String sampleAddress, String courierCompany, String trackingNo,
+                         String clientContact, String clientContactPhone, String senderName, String customerRequirement,
                          String customerFeedback, UUID transactionId, String operator, Instant createdAt) {}
     public record Shipment(UUID id, String shipmentNo, LocalDate businessDate, UUID productId, String productName,
-                           BigDecimal quantityKg, UUID customerId, String customerName, String note, UUID transactionId,
-                           String operator, Instant createdAt) {}
+                           Scope scope, BigDecimal quantityKg, UUID customerId, String customerName, String senderName,
+                           String note, UUID transactionId, String operator, Instant createdAt) {}
 }

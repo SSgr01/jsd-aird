@@ -1,0 +1,63 @@
+{
+  "taskProfileCode": "UVPU_APPLICATION_FORMULATION",
+  "analysisProfileVersion": "uvpu-analysis.v1.2",
+  "formulaBasis": "PERCENT_SUM_100",
+  "formulaTotal": 100.0,
+  "formulaNormalizationPolicy": {
+    "policy": "SUM_TO_100",
+    "ruleVersion": "uvpu-analysis.v1.2:SUM_TO_100_V1"
+  },
+  "lineageL1Threshold": 2.0,
+  "formulaBlankPolicy": {
+    "closedFormulaAbsentMeansZero": true,
+    "structuralZeroRuleVersion": "uvpu-analysis.v1.2:STRUCTURAL_ZERO_V1",
+    "listProjectionIds": [
+      "matrix-1a6295cf2b69ebfb",
+      "matrix-b2efc1f9da5dcb0e"
+    ]
+  },
+  "materials": [
+    {"code":"SJ-230","role":"MAIN_RESIN","family":"SJ-230","modelAllowed":true,"aliases":["SJ-230"]},
+    {"code":"SJ-231","role":"MAIN_RESIN","family":"SJ-231","modelAllowed":true,"aliases":["SJ-231"]},
+    {"code":"SJ-232","role":"MAIN_RESIN","family":"SJ-232","modelAllowed":true,"aliases":["SJ-232"]},
+    {"code":"SJ-230-WASHED","role":"MAIN_RESIN","family":"SJ-230","modelAllowed":true,"aliases":["SJ-230水洗后","SJ-230-WASHED"]},
+    {"code":"SJ-231-WASHED","role":"MAIN_RESIN","family":"SJ-231","modelAllowed":true,"aliases":["SJ-231水洗后","SJ-231-WASHED"]},
+    {"code":"SJ-232-WASHED","role":"MAIN_RESIN","family":"SJ-232","modelAllowed":true,"aliases":["SJ-232水洗后","SJ-232-WASHED"]},
+    {"code":"DSP-3315","role":"ADDITIVE","family":"DSP-3315","modelAllowed":true,"aliases":["DSP-3315"]},
+    {"code":"SS059/PC=1/1","role":"ADDITIVE","family":"SS059/PC","modelAllowed":true,"aliases":["SS059/PC=1/1","SS059/碳酸丙烯酯=1/1","SS059/PC"]},
+    {"code":"S-48","role":"BALANCE","family":"S-48","modelAllowed":true,"aliases":["S-48"]},
+    {"code":"DSP-612A/1%","role":"ADDITIVE","family":"DSP-612A","modelAllowed":false,"aliases":["DSP-612A/1%","DSP-612A"]}
+  ],
+  "targets": [
+    {
+      "targetKey":"APP.WARPING.HEIGHT@substrate=PET_100UM;stage=UV_IMMEDIATE",
+      "valueType":"CONTINUOUS","unit":"cm","testMethod":"APP_WARPING_HEIGHT",
+      "substrate":"PET_100UM_OPTICAL","stage":"UV_IMMEDIATE","condition":"STANDARD",
+      "includeAll":["翘曲","PET"],"includeAny":["UV后干膜翘曲度","初始翘曲"],"exclude":["12小时","12h"]
+    },
+    {
+      "targetKey":"APP.WARPING.HEIGHT@substrate=PET_100UM;stage=ROOM_12H",
+      "valueType":"CONTINUOUS","unit":"cm","testMethod":"APP_WARPING_HEIGHT",
+      "substrate":"PET_100UM_OPTICAL","stage":"ROOM_12H","condition":"STANDARD",
+      "includeAll":["翘曲","PET"],"includeAny":["12小时","12h"],"exclude":[]
+    },
+    {
+      "targetKey":"APP.HARDNESS.PENCIL@substrate=PET_100UM;load=1KG",
+      "valueType":"ORDINAL","unit":"","testMethod":"APP_PENCIL_HARDNESS",
+      "substrate":"PET_100UM_OPTICAL","stage":"UV_CURED","condition":"LOAD_1KG",
+      "includeAll":["硬度","PET","1KG"],"includeAny":[],"exclude":[]
+    },
+    {
+      "targetKey":"APP.ABRASION.STEELWOOL@substrate=PET_100UM;load=500G;contact=1X1_UNSPECIFIED",
+      "valueType":"CONTINUOUS","unit":"cycles","testMethod":"APP_STEEL_WOOL_ABRASION",
+      "substrate":"PET_100UM_OPTICAL","stage":"UV_CURED","condition":"LOAD_500G_CONTACT_1X1",
+      "includeAll":["钢丝绒","500G"],"includeAny":[],"exclude":[]
+    },
+    {
+      "targetKey":"APP.ABRASION.STEELWOOL@substrate=PET_100UM;load=1KG;contact=1X1_UNSPECIFIED",
+      "valueType":"CONTINUOUS","unit":"cycles","testMethod":"APP_STEEL_WOOL_ABRASION",
+      "substrate":"PET_100UM_OPTICAL","stage":"UV_CURED","condition":"LOAD_1KG_CONTACT_1X1",
+      "includeAll":["钢丝绒","1KG"],"includeAny":[],"exclude":[]
+    }
+  ]
+}

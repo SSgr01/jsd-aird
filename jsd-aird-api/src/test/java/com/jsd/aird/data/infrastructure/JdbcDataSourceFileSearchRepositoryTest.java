@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -38,13 +39,10 @@ class JdbcDataSourceFileSearchRepositoryTest {
 
         var sql = ArgumentCaptor.forClass(String.class);
         verify(jdbc).query(sql.capture(), any(RowMapper.class), any(Object[].class));
-        assertThat(sql.getValue()).contains("JOIN data.data_value v")
-                .contains("v.rag_eligible = true")
-                .contains("v.value_source <> 'FORMULA' OR v.calculation_status = 'VALID'")
-                .contains("candidate.value_path = v.value_path")
-                .contains("m.mapping_jsonb->>'dataPath' = v.value_path")
-                .contains("meta.field_name")
-                .contains("j.category_id IN (?)")
+        assertThat(sql.getValue()).contains("FROM ai.structured_retrieval_projection p")
+                .contains("p.source_owner = 'DATA_CENTER'")
+                .contains("p.data_category_id IN (?)")
+                .contains("p.experiment_category_id IN (?)")
                 .doesNotContain("staging_row", "raw_values_jsonb");
     }
 
@@ -59,7 +57,7 @@ class JdbcDataSourceFileSearchRepositoryTest {
             RowMapper<?> mapper = invocation.getArgument(1);
             var rs = mock(ResultSet.class);
             when(rs.getObject("import_job_id", UUID.class)).thenReturn(importJobId);
-            when(rs.getObject("source_file_id", UUID.class)).thenReturn(fileId);
+            when(rs.getObject("file_object_id", UUID.class)).thenReturn(fileId);
             when(rs.getString("source_file_name")).thenReturn("检测报告.xlsx");
             when(rs.getString("content_type")).thenReturn("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
             when(rs.getLong("size_bytes")).thenReturn(100L);
@@ -138,16 +136,34 @@ class JdbcDataSourceFileSearchRepositoryTest {
                 UUID.randomUUID(), query, List.of(UUID.randomUUID()), DataSourceFileSearchFacade.AccessScope.all());
 
         var sql = ArgumentCaptor.forClass(String.class);
-        verify(jdbc).query(sql.capture(), any(RowMapper.class), any(Object[].class));
+        verify(jdbc, times(2)).query(sql.capture(), any(RowMapper.class), any(Object[].class));
         assertThat(sql.getValue())
-                .contains("row_number() OVER (PARTITION BY lower(j.source_file_name)")
-                .contains("SELECT * FROM ranked_files WHERE latest_rank = 1")
-                .contains("record_value.record_id = r.id")
-                .contains("mapping.mapping_jsonb->>'dataPath' = v.value_path")
-                .contains("coalesce(mapping.mapping_jsonb->>'bindingId', mapping.field_code) = v.binding_id")
-                .doesNotContain("OR mapping.field_code = v.field_code")
-                .contains("v.rag_eligible = true")
-                .contains("v.calculation_status = 'VALID'");
+                .contains("FROM ai.structured_retrieval_projection p")
+                .contains("record_match.record_key ILIKE")
+                .contains("record_match.record_id = p.record_id")
+                .contains("p.data_category_id");
+        assertThat(sql.getAllValues()).anyMatch(value -> value.contains("p.field_name ILIKE"));
+    }
+
+    @Test
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void comparisonLookupMatchesAnyRequestedRecordInsteadOfRequiringOneRowToContainBoth() {
+        var jdbc = mock(JdbcTemplate.class);
+        when(jdbc.query(anyString(), any(RowMapper.class), any(Object[].class))).thenReturn(List.of());
+        var query = new DataSourceFileSearchFacade.DataDetailQuery(
+                DataSourceFileSearchFacade.DataQueryMode.FIELD_LOOKUP, "",
+                DataSourceFileSearchFacade.DataFileScope.AUTO, List.of("APP-001", "APP-002"), List.of("粘度"),
+                DataSourceFileSearchFacade.RecordTermMatch.ANY, 5, 5, 50);
+
+        new JdbcDataSourceFileSearchRepository(jdbc).queryDetails(
+                UUID.randomUUID(), query, List.of(UUID.randomUUID()), DataSourceFileSearchFacade.AccessScope.all());
+
+        var sql = ArgumentCaptor.forClass(String.class);
+        verify(jdbc, times(2)).query(sql.capture(), any(RowMapper.class), any(Object[].class));
+        assertThat(sql.getAllValues()).anyMatch(value -> value.contains(") OR EXISTS (SELECT 1")
+                && value.contains("record_match.record_id = p.record_id"));
+        assertThat(sql.getAllValues()).anyMatch(value -> value.contains("0+")
+                && value.contains("regexp_replace"));
     }
 
     @Test
@@ -167,8 +183,54 @@ class JdbcDataSourceFileSearchRepositoryTest {
         var sql = ArgumentCaptor.forClass(String.class);
         var args = ArgumentCaptor.forClass(Object[].class);
         verify(jdbc).query(sql.capture(), any(RowMapper.class), args.capture());
-        assertThat(sql.getValue()).contains("AND (j.category_id IN (?) OR j.category_id IS NULL)");
+        assertThat(sql.getValue()).contains("p.data_category_id IN (?)")
+                .contains("p.data_category_id IS NULL")
+                .contains("p.source_owner = 'EXPERIMENT'");
         assertThat(java.util.Arrays.asList(args.getValue())).contains(categorized)
                 .doesNotContain(JdbcDataSourceFileSearchRepository.UNCATEGORIZED_SCOPE_ID);
+    }
+
+    @Test
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void confirmedDataEvidenceFilterExcludesUnconfirmedAndExperimentSources() {
+        var jdbc = mock(JdbcTemplate.class);
+        when(jdbc.query(anyString(), any(RowMapper.class), any(Object[].class))).thenReturn(List.of());
+        var query = new DataSourceFileSearchFacade.DataDetailQuery(
+                DataSourceFileSearchFacade.DataQueryMode.FIELD_LOOKUP, "",
+                DataSourceFileSearchFacade.DataFileScope.AUTO, List.of("APP-UV-0001"), List.of("粘度"),
+                DataSourceFileSearchFacade.RecordTermMatch.ALL,
+                DataSourceFileSearchFacade.EvidenceFilter.CONFIRMED_DATA, 5, 5, 50,
+                DataSourceFileSearchFacade.ContextMode.MINIMAL, 32, 5, "VALUE");
+
+        new JdbcDataSourceFileSearchRepository(jdbc).queryDetails(UUID.randomUUID(), query,
+                List.of(UUID.randomUUID(), JdbcDataSourceFileSearchRepository.UNCATEGORIZED_SCOPE_ID),
+                DataSourceFileSearchFacade.AccessScope.all());
+
+        var sql = ArgumentCaptor.forClass(String.class);
+        verify(jdbc, times(2)).query(sql.capture(), any(RowMapper.class), any(Object[].class));
+        assertThat(sql.getAllValues()).allMatch(value -> value.contains("data.confirmed_submission_head")
+                && value.contains("p.source_owner = 'DATA_CENTER'")
+                && value.contains("s.status = 'CONFIRMED'"));
+    }
+
+    @Test
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void experimentOnlyScopeUsesTheLinkedExperimentAndNeverFallsBackToImportOwner() {
+        var jdbc = mock(JdbcTemplate.class);
+        when(jdbc.query(anyString(), any(RowMapper.class), any(Object[].class))).thenReturn(List.of());
+        var actorId = UUID.randomUUID();
+        var scope = new DataSourceFileSearchFacade.RetrievalAccessScope(
+                DataSourceFileSearchFacade.AccessScope.denied(),
+                new DataSourceFileSearchFacade.AccessScope("SELF", actorId, Set.of()));
+
+        new JdbcDataSourceFileSearchRepository(jdbc).searchSourceFiles(UUID.randomUUID(), "陈琪",
+                List.of(JdbcDataSourceFileSearchRepository.UNCATEGORIZED_SCOPE_ID), scope, 10);
+
+        var sql = ArgumentCaptor.forClass(String.class);
+        verify(jdbc).query(sql.capture(), any(RowMapper.class), any(Object[].class));
+        assertThat(sql.getValue()).contains("p.source_owner = 'DATA_CENTER' AND (1 = 0)")
+                .contains("p.source_owner = 'EXPERIMENT'")
+                .contains("p.experiment_created_by = ? OR p.experiment_owner_id = ?")
+                .doesNotContain("rnd.experiment_import_job");
     }
 }

@@ -42,6 +42,7 @@ export function TemplateUploadPage() {
   const [searchParams] = useSearchParams();
   const [files, setFiles] = useState<UploadFile[]>([]);
   const [jobs, setJobs] = useState<TemplateImportJob[]>([]);
+  const [jobsLoading, setJobsLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [selectedJob, setSelectedJob] = useState<TemplateImportJob>();
   const [viewingJob, setViewingJob] = useState<TemplateImportJob>();
@@ -84,16 +85,19 @@ export function TemplateUploadPage() {
     return false;
   };
 
-  const load = useCallback(async () => {
+  const load = useCallback(async ({ silent = false, includeCategories = true }: { silent?: boolean; includeCategories?: boolean } = {}) => {
+    if (!silent) setJobsLoading(true);
     try {
       const [imports, categoryItems] = await Promise.all([
         templateApi.listImports(),
-        templateApi.listCategories(),
+        includeCategories ? templateApi.listCategories() : Promise.resolve(undefined),
       ]);
       setJobs(imports);
-      setCategories(categoryItems);
+      if (categoryItems) setCategories(categoryItems);
     } catch (error) {
-      void message.error(error instanceof Error ? error.message : '识别记录加载失败');
+      if (!silent) void message.error(error instanceof Error ? error.message : '识别记录加载失败');
+    } finally {
+      if (!silent) setJobsLoading(false);
     }
   }, [message]);
 
@@ -119,7 +123,7 @@ export function TemplateUploadPage() {
 
   useEffect(() => {
     if (!running) return;
-    const timer = window.setInterval(() => void load(), 2000);
+    const timer = window.setInterval(() => void load({ silent: true, includeCategories: false }), 2000);
     return () => window.clearInterval(timer);
   }, [load, running]);
 
@@ -348,7 +352,7 @@ export function TemplateUploadPage() {
         searchValue={jobKeyword}
         onSearchChange={(value) => { setJobKeyword(value); setRecordPage((current) => ({ ...current, current: 1 })); }}
         records={uploadRecords}
-        recordsLoading={uploading}
+        recordsLoading={jobsLoading && jobs.length === 0}
         pagination={{ ...recordPage, total: allUploadRecords.length }}
         onPageChange={(current, pageSize) => setRecordPage({ current, pageSize })}
       />

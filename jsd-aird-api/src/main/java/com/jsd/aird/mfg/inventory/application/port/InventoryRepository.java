@@ -12,15 +12,17 @@ public interface InventoryRepository {
     boolean productExists(UUID org,UUID productId,Scope scope);
     java.util.List<ProductOption> productOptions(UUID org,Scope scope,String keyword);
     ProductOption createProduct(UUID org,String name,Scope scope,UUID actor);
-    BalancePage balances(UUID org,String keyword,Scope scope,AlertStatus alert,int page,int size);
+    BalancePage balances(UUID org,String keyword,Scope scope,AlertStatus alert,int page,int size,String sort);
     Optional<Balance> balance(UUID org,UUID productId,Scope scope);
     void upsertPolicy(UUID org,UUID productId,Scope scope,BigDecimal packageKg,BigDecimal lowStockKg,UUID actor);
     BigDecimal lockBalance(UUID org,UUID product,Scope scope,UUID actor);
     void updateBalance(UUID org,UUID product,Scope scope,BigDecimal quantity);
     void insertTransaction(UUID org,Transaction tx,String idempotencyKey);
-    int updateTransaction(UUID org,UUID id,LocalDate businessDate,String documentNo,String reason,String note);
+    int updateTransaction(UUID org,UUID id,LocalDate businessDate,String documentNo,String reason,String note,String actorName);
+    java.util.List<String> transactionReasons(UUID org,Scope scope);
     Optional<Transaction> findTransaction(UUID org,UUID id);
     Optional<Transaction> findByIdempotency(UUID org,String key);
+    Optional<Transaction> findByDocumentNo(UUID org,String documentNo,String businessType);
     Page<Transaction> transactions(UUID org,Scope scope,String keyword,String direction,String reason,int page,int size);
     void insertSample(UUID org,Sample sample,UUID actor);
     void insertShipment(UUID org,Shipment shipment,UUID actor);
@@ -32,9 +34,10 @@ public interface InventoryRepository {
     Optional<Sample> findSample(UUID org,UUID id);
     Optional<Shipment> findShipment(UUID org,UUID id);
     int updateSample(UUID org,UUID id,LocalDate businessDate,String dispatchNo,UUID customerId,String customerName,
-                     String recipientName,String sampleAddress,String courierCompany,String trackingNo,String clientContact,
+                     String recipientName,String recipientPhone,String sampleAddress,String courierCompany,String trackingNo,
+                     String clientContact,String clientContactPhone,String senderName,
                      String customerRequirement,String customerFeedback);
-    int updateShipment(UUID org,UUID id,LocalDate businessDate,String shipmentNo,UUID customerId,String customerName,String note);
+    int updateShipment(UUID org,UUID id,LocalDate businessDate,String shipmentNo,UUID customerId,String customerName,String senderName,String note);
     Optional<UUID> productIdByCode(UUID org,String code);
     void insertImport(UUID id,UUID org,String status,JsonNode rows,JsonNode errors,UUID actor);
     Optional<ImportData> findImport(UUID org,UUID id);

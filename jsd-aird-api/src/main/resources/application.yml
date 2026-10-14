@@ -24,11 +24,19 @@ spring:
       max-request-size: -1
   ai:
     model:
-      chat: ${JSD_AIRD_AI_CHAT_PROVIDER:openai}
+      # Keep optional Spring AI models disabled until their connection is
+      # explicitly configured. Domain services already report a structured
+      # AI_MODEL_NOT_CONFIGURED error when a model-dependent route is used.
+      chat: ${JSD_AIRD_AI_CHAT_PROVIDER:none}
       # Embeddings use the explicit compatible client below.  Disabling the
       # Spring AI embedding bean avoids a duplicate request whose path handling
       # differs across OpenAI-compatible providers.
       embedding: ${JSD_AIRD_AI_EMBEDDING_PROVIDER:none}
+      image: ${JSD_AIRD_AI_IMAGE_PROVIDER:none}
+      moderation: ${JSD_AIRD_AI_MODERATION_PROVIDER:none}
+      audio:
+        speech: ${JSD_AIRD_AI_SPEECH_PROVIDER:none}
+        transcription: ${JSD_AIRD_AI_TRANSCRIPTION_PROVIDER:none}
     openai:
       base-url: ${app.model.base-url:}
       api-key: ${app.model.api-key:}
@@ -113,6 +121,7 @@ app:
     poll-delay: ${JSD_AIRD_WORKER_POLL_DELAY:2s}
     lease-duration: ${JSD_AIRD_WORKER_LEASE_DURATION:60s}
     job-timeout: ${JSD_AIRD_WORKER_JOB_TIMEOUT:15m}
+    formula-model-build-timeout: ${JSD_AIRD_FORMULA_MODEL_BUILD_TIMEOUT:4h}
   model:
     base-url: ${JSD_AIRD_MODEL_BASE_URL:}
     api-key: ${JSD_AIRD_MODEL_API_KEY:}
@@ -128,16 +137,23 @@ app:
     auto-retry-count: ${JSD_AIRD_MODEL_AUTO_RETRY_COUNT:2}
     visual-mode: ${JSD_AIRD_MODEL_VISUAL_MODE:auto}
   spectrum:
+    pdf-render-dpi: ${JSD_AIRD_SPECTRUM_PDF_RENDER_DPI:240}
     model:
       base-url: ${JSD_AIRD_SPECTRUM_MODEL_BASE_URL:}
       api-key: ${JSD_AIRD_SPECTRUM_MODEL_API_KEY:}
       name: ${JSD_AIRD_SPECTRUM_MODEL_NAME:}
       responses-path: ${JSD_AIRD_SPECTRUM_MODEL_RESPONSES_PATH:/responses}
-      reasoning-effort: ${JSD_AIRD_SPECTRUM_MODEL_REASONING_EFFORT:high}
+      reasoning-effort: ${JSD_AIRD_SPECTRUM_MODEL_REASONING_EFFORT:medium}
+      text-verbosity: ${JSD_AIRD_SPECTRUM_MODEL_TEXT_VERBOSITY:high}
       max-output-tokens: ${JSD_AIRD_SPECTRUM_MODEL_MAX_OUTPUT_TOKENS:12000}
       connect-timeout: ${JSD_AIRD_SPECTRUM_MODEL_CONNECT_TIMEOUT:10s}
       read-timeout: ${JSD_AIRD_SPECTRUM_MODEL_READ_TIMEOUT:10m}
   ai:
+    formula-model:
+      base-url: ${JSD_AIRD_FORMULA_MODEL_BASE_URL:http://127.0.0.1:8090}
+      token: ${JSD_AIRD_FORMULA_MODEL_TOKEN:}
+      feedback-cron: ${JSD_AIRD_AI_FEEDBACK_CRON:0 30 2 * * *}
+      rebuild-check-cron: ${JSD_AIRD_AI_REBUILD_CHECK_CRON:0 0 2 * * SUN}
     prompt-version: ${JSD_AIRD_AI_PROMPT_VERSION:research-assistant-v2-grounded}
     query-rewrite:
       enabled: ${JSD_AIRD_QUERY_REWRITE_ENABLED:true}
@@ -147,11 +163,21 @@ app:
     retrieval:
       executor-threads: ${JSD_AIRD_RETRIEVAL_EXECUTOR_THREADS:8}
       queue-capacity: ${JSD_AIRD_RETRIEVAL_QUEUE_CAPACITY:64}
-      data-max-hits: ${JSD_AIRD_DATA_RETRIEVAL_MAX_HITS:16}
+      data-max-hits: ${JSD_AIRD_DATA_RETRIEVAL_MAX_HITS:32}
     conversation-title:
       enabled: ${JSD_AIRD_AI_CONVERSATION_TITLE_ENABLED:true}
       max-length: ${JSD_AIRD_AI_CONVERSATION_TITLE_MAX_LENGTH:30}
       prompt-version: ${JSD_AIRD_AI_CONVERSATION_TITLE_PROMPT_VERSION:conversation-title-v1}
+    formula-research-interpretation:
+      enabled: ${JSD_AIRD_FORMULA_RESEARCH_LLM_ENABLED:true}
+      model: ${JSD_AIRD_FORMULA_RESEARCH_LLM_MODEL:${app.model.model:}}
+      timeout: ${JSD_AIRD_FORMULA_RESEARCH_LLM_TIMEOUT:8s}
+      max-completion-tokens: ${JSD_AIRD_FORMULA_RESEARCH_LLM_MAX_COMPLETION_TOKENS:900}
+      prompt-version: ${JSD_AIRD_FORMULA_RESEARCH_LLM_PROMPT_VERSION:formula-research-interpretation-v1}
+    project-import:
+      enabled: ${JSD_AIRD_PROJECT_IMPORT_AI_ENABLED:true}
+      model: ${JSD_AIRD_PROJECT_IMPORT_AI_MODEL:${app.model.model:}}
+      max-completion-tokens: ${JSD_AIRD_PROJECT_IMPORT_AI_MAX_COMPLETION_TOKENS:1200}
     circuit-breaker:
       failure-threshold: ${JSD_AIRD_AI_CIRCUIT_BREAKER_FAILURE_THRESHOLD:3}
       open-seconds: ${JSD_AIRD_AI_CIRCUIT_BREAKER_OPEN_SECONDS:30}

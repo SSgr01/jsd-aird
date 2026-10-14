@@ -1,5 +1,5 @@
 import { AppstoreOutlined, CopyOutlined, DownloadOutlined, PlusOutlined, ReloadOutlined, SearchOutlined, UnorderedListOutlined } from '@ant-design/icons';
-import { App, Breadcrumb, Button, Checkbox, Empty, Input, Pagination, Popconfirm, Select, Space, Tag, Tooltip } from 'antd';
+import { App, Button, Checkbox, Empty, Input, Pagination, Popconfirm, Select, Space, Tag, Tooltip, Typography } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import dayjs from 'dayjs';
@@ -268,11 +268,53 @@ export function PartnerListPage() {
 
   return (
     <div className="cm-page pm-unified-list-page cm-customer-list-page">
-      <div className="cm-page-head cm-customer-page-intro">
+      <div className="page-heading cm-customer-page-heading">
         <div>
-          <Breadcrumb items={[{ title: '客户管理' }, { title: '客户列表' }]} />
-          <h3>客户列表</h3>
-          <p>统一管理公司档案、客户需求、关联项目及跟进记录。</p>
+          <Typography.Title level={2}>客户列表</Typography.Title>
+          <Typography.Text type="secondary">统一管理公司档案、客户需求、关联项目及跟进记录。</Typography.Text>
+        </div>
+        <div className="cm-customer-page-actions">
+          <Typography.Text type="secondary">已选 {selectedIds.length} 项</Typography.Text>
+          {selectedIds.length > 0 && (
+            <Button type="link" size="small" onClick={() => setSelectedIds([])}>
+              清除已选
+            </Button>
+          )}
+          <Button icon={<DownloadOutlined />} onClick={() => void exportRows()} loading={exporting}>
+            导出
+          </Button>
+          <Button icon={<CopyOutlined />} onClick={() => void copySelected()} disabled={!selectedIds.length} loading={copying}>
+            复制
+          </Button>
+          <Popconfirm
+            title={`批量删除 ${selectedIds.length} 个客户？`}
+            description="历史关联数据不会被删除。"
+            disabled={selectedIds.length === 0}
+            onConfirm={() => void batchDeactivate()}
+          >
+            <Button danger disabled={selectedIds.length === 0}>
+              删除
+            </Button>
+          </Popconfirm>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setModal({ mode: 'customer' })}>
+            新建客户
+          </Button>
+          <Space.Compact>
+            <Tooltip title="卡片视图">
+              <Button
+                className={viewMode === 'card' ? 'cm-view-btn active' : 'cm-view-btn'}
+                icon={<AppstoreOutlined />}
+                onClick={() => setViewMode('card')}
+              />
+            </Tooltip>
+            <Tooltip title="表格视图">
+              <Button
+                className={viewMode === 'table' ? 'cm-view-btn active' : 'cm-view-btn'}
+                icon={<UnorderedListOutlined />}
+                onClick={() => setViewMode('table')}
+              />
+            </Tooltip>
+          </Space.Compact>
         </div>
       </div>
 
@@ -334,57 +376,6 @@ export function PartnerListPage() {
         </Button>
       </div>
 
-      <div className="cm-batch-row">
-        <div className="cm-batch-summary">
-          <span className="cm-muted">已选 {selectedIds.length} 项</span>
-          {selectedIds.length > 0 && (
-            <Button type="link" size="small" onClick={() => setSelectedIds([])}>
-              清除已选
-            </Button>
-          )}
-        </div>
-        <div className="cm-batch-actions">
-          <Button icon={<DownloadOutlined />} onClick={() => void exportRows()} loading={exporting}>
-            导出
-          </Button>
-          <Button icon={<CopyOutlined />} onClick={() => void copySelected()} disabled={!selectedIds.length} loading={copying}>
-            复制
-          </Button>
-          <Popconfirm
-            title={`批量删除 ${selectedIds.length} 个客户？`}
-            description="历史关联数据不会被删除。"
-            disabled={selectedIds.length === 0}
-            onConfirm={() => void batchDeactivate()}
-          >
-            <Button danger disabled={selectedIds.length === 0}>
-              删除
-            </Button>
-          </Popconfirm>
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={() => setModal({ mode: 'customer' })}
-          >
-            新建客户
-          </Button>
-          <Space.Compact>
-            <Tooltip title="卡片视图">
-              <Button
-                className={viewMode === 'card' ? 'cm-view-btn active' : 'cm-view-btn'}
-                icon={<AppstoreOutlined />}
-                onClick={() => setViewMode('card')}
-              />
-            </Tooltip>
-            <Tooltip title="表格视图">
-              <Button
-                className={viewMode === 'table' ? 'cm-view-btn active' : 'cm-view-btn'}
-                icon={<UnorderedListOutlined />}
-                onClick={() => setViewMode('table')}
-              />
-            </Tooltip>
-            </Space.Compact>
-          </div>
-        </div>
       <div className="cm-table-card" aria-busy={loading}>
         {viewMode === 'table' ? (
           <div className="cm-table-wrap">

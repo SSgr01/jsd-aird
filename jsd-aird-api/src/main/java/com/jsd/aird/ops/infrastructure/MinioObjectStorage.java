@@ -101,6 +101,23 @@ public class MinioObjectStorage implements ObjectStorage {
     }
 
     @Override
+    public Optional<String> presignedPutUrl(String objectKey, Duration expiry) {
+        if (publicClient == null || objectKey == null || objectKey.isBlank()) return Optional.empty();
+        try {
+            ensureBucket();
+            var seconds = Math.max(60, Math.min(7 * 24 * 60 * 60, expiry == null ? 900 : expiry.toSeconds()));
+            return Optional.of(publicClient.getPresignedObjectUrl(GetPresignedObjectUrlArgs.builder()
+                    .method(Method.PUT)
+                    .bucket(bucket)
+                    .object(objectKey)
+                    .expiry((int) seconds, TimeUnit.SECONDS)
+                    .build()));
+        } catch (Exception exception) {
+            throw new IllegalStateException("MinIO 公网预签名上传 URL 生成失败", exception);
+        }
+    }
+
+    @Override
     public void delete(String objectKey) {
         try {
             client.removeObject(RemoveObjectArgs.builder()

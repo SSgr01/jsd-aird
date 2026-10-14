@@ -21,6 +21,7 @@ import type {
 
 interface Props {
   snapshot: Record<string, unknown>;
+  ariaLabel?: string;
   onDirty: () => void;
   onEditorValue: (binding: TemplateBinding, value: unknown) => void;
   onEditorLabel?: (binding: TemplateBinding, value: unknown) => void;
@@ -38,6 +39,7 @@ interface Props {
 export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function UniverSheetsEditor(
   {
     snapshot,
+    ariaLabel = 'Excel 模板编辑器',
     onDirty,
     onEditorValue,
     onEditorLabel,
@@ -536,6 +538,39 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
           suppressUnboundRef.current = false;
         });
       },
+      clearRangeConstants(sheetId, address) {
+        const workbook = apiRef.current?.getActiveWorkbook();
+        const sheet = workbook?.getSheetBySheetId(sheetId) ?? workbook?.getSheetByName(sheetId);
+        const range = sheet && validRange(address) ? sheet.getRange(address) : null;
+        if (!sheet || !range) return Promise.reject(new Error(`无法定位清理区域 ${address}`));
+        suppressUnboundRef.current = true;
+        try {
+          const formulas = range.getFormulas();
+          const values = range.getValues();
+          const parsed = parseA1Range(address);
+          if (!parsed) return Promise.reject(new Error(`无法解析清理区域 ${address}`));
+          let cleared = 0;
+          let formulasKept = 0;
+          formulas.forEach((row, rowIndex) => row.forEach((formula, columnIndex) => {
+            if (formula) {
+              formulasKept += 1;
+              return;
+            }
+            const value = values[rowIndex]?.[columnIndex];
+            if (value === '' || value == null) return;
+            sheet.getRange(formatA1Range({
+              startColumn: parsed.startColumn + columnIndex,
+              endColumn: parsed.startColumn + columnIndex,
+              startRow: parsed.startRow + rowIndex,
+              endRow: parsed.startRow + rowIndex,
+            })).setValue('');
+            cleared += 1;
+          }));
+          return Promise.resolve({ cleared, formulasKept });
+        } finally {
+          suppressUnboundRef.current = false;
+        }
+      },
       async appendRepeatRecord(binding) {
         if (!['REPEAT_REGION', 'REPEAT_FIELD']
           .includes(binding.mappingKind || '')) {
@@ -655,7 +690,7 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
     [],
   );
 
-  return <div ref={containerRef} className="univer-editor-surface" aria-label="Excel 模板编辑器" />;
+  return <div ref={containerRef} className="univer-editor-surface" aria-label={ariaLabel} />;
 });
 
 function resolveSheet(api: FUniver | undefined, binding: TemplateBinding) {
@@ -676,6 +711,10 @@ function focusWorkbookRange(api: FUniver | undefined, sheetId: string, address: 
   const range = sheet.getRange(address);
   workbook.setActiveSheet(sheet);
   sheet.setActiveRange(range);
+  // Selection alone does not move the viewport when the workbook is already
+  // scrolled. Keep the source-location action useful for both data-center and
+  // freeform recognition workbenches by bringing the active cell into view.
+  sheet.scrollToCell(range.getRow(), range.getColumn());
 }
 
 function resolveRange(api: FUniver | undefined, binding: TemplateBinding) {
@@ -893,10 +932,17 @@ function stableValueKey(value: unknown) {
 
 function verifyWrite(read: () => unknown, expected: unknown) {
   return new Promise<void>((resolve, reject) => {
-    window.requestAnimationFrame(() => {
-      if (sameValue(read(), expected)) resolve();
-      else reject(new Error('写入后回读的单元格内容不一致'));
-    });
+    let attempt = 0;
+    const check = () => {
+      if (sameValue(read(), expected)) {
+        resolve();
+      } else if (attempt++ < 8) {
+        window.setTimeout(check, 50);
+      } else {
+        reject(new Error('写入后回读的单元格内容不一致'));
+      }
+    };
+    window.requestAnimationFrame(check);
   });
 }
 

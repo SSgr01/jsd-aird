@@ -5,6 +5,7 @@ export type ProjectResourceType = 'KNOWLEDGE_DOCUMENT' | 'DATA_IMPORT_JOB';
 
 export interface ProjectRelationTarget {
   projectId: string;
+  /** Client-side display values; write APIs send only the hierarchy ids. */
   projectName?: string;
   stageId?: string;
   stageName?: string;

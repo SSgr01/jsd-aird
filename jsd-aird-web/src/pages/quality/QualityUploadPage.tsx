@@ -51,9 +51,10 @@ const progressDescriptions: Record<string, string> = {
 const visibilityOptions = [
   { value: 'ALL', label: '全员可见' },
   { value: 'RND', label: '研发部可见' },
-  { value: 'QUALITY', label: '品管部可见' },
   { value: 'PROJECT', label: '项目组可见' },
 ];
+// 品管部可见为历史数据兼容展示，下拉框不再提供该选项。
+const legacyVisibilityLabels: Record<string, string> = { QUALITY: '品管部可见' };
 
 function formatUploadStatus(upload: QualityUpload) {
   const status = statusView[upload.status] || { label: upload.status || '未知', color: 'default' };
@@ -67,7 +68,7 @@ function formatUploadStatus(upload: QualityUpload) {
 
 function visibilityText(value?: string) {
   const option = visibilityOptions.find((item) => item.value === value);
-  return option?.label || value || '全员可见';
+  return option?.label || legacyVisibilityLabels[value || ''] || value || '全员可见';
 }
 
 function fileTypeText(name: string) {
@@ -134,8 +135,12 @@ export function QualityUploadPage() {
     }
   }, [message]);
 
-  const loadUploads = useCallback(async (targetPage = page.current, targetPageSize = page.pageSize) => {
-    setLoading(true);
+  const loadUploads = useCallback(async (
+    targetPage = page.current,
+    targetPageSize = page.pageSize,
+    options: { silent?: boolean } = {},
+  ) => {
+    if (!options.silent) setLoading(true);
     try {
       const result = await qualityApi.uploads({
         keyword: keyword || undefined,
@@ -156,9 +161,9 @@ export function QualityUploadPage() {
         pageSize: result.size,
       }));
     } catch {
-      message.error('已上传文件加载失败');
+      if (!options.silent) message.error('已上传文件加载失败');
     } finally {
-      setLoading(false);
+      if (!options.silent) setLoading(false);
     }
   }, [keyword, message, page.current, page.pageSize, uploadStatus]);
 
@@ -299,9 +304,9 @@ export function QualityUploadPage() {
 
   useEffect(() => {
     if (!uploads.some((item) => ['UPLOADED', 'QUEUED', 'PARSING'].includes(item.status))) return;
-    const timer = window.setInterval(() => void loadUploads(), 2000);
+    const timer = window.setInterval(() => void loadUploads(page.current, page.pageSize, { silent: true }), 2000);
     return () => window.clearInterval(timer);
-  }, [loadUploads, uploads]);
+  }, [loadUploads, page.current, page.pageSize, uploads]);
 
   const records: UploadWorkspaceRecord[] = uploads.map((upload) => {
     const status = formatUploadStatus(upload);
@@ -424,7 +429,7 @@ export function QualityUploadPage() {
         }}
         searchPlaceholder="搜索文件名称"
         records={records}
-        recordsLoading={loading}
+        recordsLoading={loading && uploads.length === 0}
         pagination={{ current: page.current, pageSize: page.pageSize, total: page.total }}
         onPageChange={(current, pageSize) => setPage((value) => ({ ...value, current, pageSize }))}
     />

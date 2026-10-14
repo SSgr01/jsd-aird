@@ -1,6 +1,7 @@
 package com.jsd.aird.ai.application;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.JsonMappingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Component;
 
@@ -51,6 +52,66 @@ public class AiJsonParser {
             return node != null && node.isObject() ? node : null;
         } catch (Exception ignored) {
             return null;
+        }
+    }
+
+    /**
+     * Parses model output while preserving enough failure detail for diagnostics.
+     * The response preview is bounded because model output may contain user-derived
+     * search terms. Callers should log it only on parse/binding failures.
+     */
+    public <T> ReadResult<T> readWithDiagnostics(String raw, Class<T> type, int previewLimit) {
+        var node = object(raw);
+        if (node == null) {
+            return new ReadResult<>(null, "INVALID_JSON_OBJECT", "$", preview(raw, previewLimit));
+        }
+        try {
+            var value = objectMapper.treeToValue(node, type);
+            if (value == null) {
+                return new ReadResult<>(null, "EMPTY_BOUND_VALUE", "$", preview(node.toString(), previewLimit));
+            }
+            return new ReadResult<>(value, "", "", "");
+        } catch (Exception exception) {
+            var mapping = exception instanceof JsonMappingException jsonMapping ? jsonMapping : null;
+            var path = mapping == null ? "$" : mappingPath(mapping);
+            var failedNode = mapping == null ? null : nodeAtPath(node, mapping);
+            var valuePreview = failedNode == null ? preview(node.toString(), previewLimit)
+                    : preview(failedNode.toString(), previewLimit);
+            return new ReadResult<>(null, "OBJECT_BINDING_FAILED", path, valuePreview);
+        }
+    }
+
+    private static String mappingPath(JsonMappingException exception) {
+        var path = new StringBuilder("$");
+        for (var reference : exception.getPath()) {
+            if (reference.getFieldName() != null) path.append('.').append(reference.getFieldName());
+            else if (reference.getIndex() >= 0) path.append('[').append(reference.getIndex()).append(']');
+        }
+        return path.toString();
+    }
+
+    private static JsonNode nodeAtPath(JsonNode root, JsonMappingException exception) {
+        var node = root;
+        for (var reference : exception.getPath()) {
+            if (node == null) return null;
+            if (reference.getFieldName() != null) node = node.get(reference.getFieldName());
+            else if (reference.getIndex() >= 0 && node.isArray() && reference.getIndex() < node.size()) {
+                node = node.get(reference.getIndex());
+            }
+        }
+        return node;
+    }
+
+    private static String preview(String value, int limit) {
+        if (value == null) return "<null>";
+        var safeLimit = Math.max(0, limit);
+        var normalized = value.replaceAll("[\\p{Cntrl}&&[^\\t]]", " ").replace('\t', ' ');
+        return normalized.length() <= safeLimit ? normalized : normalized.substring(0, safeLimit) + "…";
+    }
+
+    public record ReadResult<T>(T value, String errorCode, String errorPath, String valuePreview) {
+        public boolean successful() {
+            return errorCode == null || errorCode.isBlank();
         }
     }
 

@@ -65,6 +65,29 @@ class GenericTabularStructureParserTest {
         assertThat(parsed.rows().get(1).get(2)).doesNotStartWith("=");
     }
 
+    @Test
+    void preservesNumericDisplayAndPercentageFormatEvidenceForFutureImports() throws Exception {
+        byte[] bytes;
+        try (var workbook = new XSSFWorkbook(); var output = new java.io.ByteArrayOutputStream()) {
+            var cell = workbook.createSheet("应用测试").createRow(0).createCell(0);
+            cell.setCellValue(0.4);
+            var style = workbook.createCellStyle();
+            style.setDataFormat(workbook.createDataFormat().getFormat("0.00%"));
+            cell.setCellStyle(style);
+            workbook.write(output);
+            bytes = output.toByteArray();
+        }
+
+        var parsed = parser.parse(new ByteArrayInputStream(bytes), "percentage.xlsx").sheets().getFirst();
+        var cell = findCell(parsed.layoutIr(), "A1");
+
+        assertThat(cell.path("cellValueType").asText()).isEqualTo("NUMERIC");
+        assertThat(cell.path("rawNumericValue").asText()).isEqualTo("0.4");
+        assertThat(cell.path("displayValue").asText()).isEqualTo("40.00%");
+        assertThat(cell.path("numberFormat").asText()).isEqualTo("0.00%");
+        assertThat(cell.path("fractionRepresentation").asBoolean()).isTrue();
+    }
+
     private com.fasterxml.jackson.databind.JsonNode findCell(com.fasterxml.jackson.databind.JsonNode layout, String address) {
         for (var cell : layout.path("cells")) if (address.equals(cell.path("address").asText())) return cell;
         throw new AssertionError("cell not found: " + address);

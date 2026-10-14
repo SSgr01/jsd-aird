@@ -3,13 +3,15 @@ import {
   DeleteOutlined,
   CopyOutlined,
   DownloadOutlined,
+  FileWordOutlined,
   PlusOutlined,
   ReloadOutlined,
   SearchOutlined,
+  UploadOutlined,
   UnorderedListOutlined,
 } from '@ant-design/icons';
 import {
-  Breadcrumb,
+  Alert,
   Button,
   Checkbox,
   DatePicker,
@@ -18,6 +20,7 @@ import {
   Empty,
   Form,
   Input,
+  InputNumber,
   message,
   Modal,
   Pagination,
@@ -26,7 +29,7 @@ import {
   Space,
   Tooltip,
 } from 'antd';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import dayjs from '@/utils/dayjs';
@@ -43,9 +46,12 @@ import {
   getProject,
   getProjects,
   exportProjects,
+  importProjectFromWord,
   projectPriorities,
   projectStatuses,
   type Project,
+  commitProjectImport,
+  type ProjectImportDraft,
   type ProjectInput,
   type ProjectPriority,
   type ProjectStatus,
@@ -61,16 +67,39 @@ interface CustomField {
 interface ProjectFormValues {
   name: string;
   projectCode?: string;
+  partnerName?: string;
   owner?: string;
   startDate?: dayjs.Dayjs | null;
+  endDate?: dayjs.Dayjs | null;
   priority?: ProjectPriority;
   status?: ProjectStatus;
+  teamSize?: number;
   teamMembers?: string[];
   background?: string;
   customFields?: CustomField[];
 }
 
 const DEFAULT_PAGE_SIZE = 10;
+
+function draftToFormValues(draft: ProjectImportDraft): Partial<ProjectFormValues> {
+  return {
+    projectCode: draft.projectCode,
+    name: draft.name,
+    partnerName: draft.partnerName,
+    owner: draft.owner,
+    startDate: draft.startDate ? dayjs(draft.startDate) : null,
+    endDate: draft.endDate ? dayjs(draft.endDate) : null,
+    priority: draft.priority,
+    status: draft.status,
+    teamSize: draft.teamSize,
+    teamMembers: draft.teamMembers ?? [],
+    background: draft.background,
+    customFields: Object.entries(draft.customFields ?? {}).map(([key, value]) => ({
+      key,
+      value: String(value ?? ''),
+    })),
+  };
+}
 
 function priorityClass(value: ProjectPriority) {
   return `pm-tag priority-${value.toLowerCase()}`;
@@ -98,9 +127,13 @@ export function ProjectListPage() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [detail, setDetail] = useState<Project | null>(null);
+  const [importedFileName, setImportedFileName] = useState<string>();
+  const [pendingImportData, setPendingImportData] = useState<ProjectImportDraft | null>(null);
   const [pendingFormValues, setPendingFormValues] = useState<Partial<ProjectFormValues> | null>(null);
   const [form] = Form.useForm<ProjectFormValues>();
+  const importInput = useRef<HTMLInputElement>(null);
 
   const [msg, holder] = message.useMessage();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -141,6 +174,7 @@ export function ProjectListPage() {
       teamMembers: [],
       customFields: [],
     });
+    setPendingImportData(null);
     setDrawerOpen(true);
     setSearchParams((current) => {
       current.delete('create');
@@ -285,16 +319,43 @@ export function ProjectListPage() {
   const closeDrawer = () => {
     setDrawerOpen(false);
     setPendingFormValues(null);
+    setImportedFileName(undefined);
+    setPendingImportData(null);
   };
 
   const openCreate = () => {
+    setImportedFileName(undefined);
+    setPendingImportData(null);
     setPendingFormValues({
       priority: 'MEDIUM',
       status: 'NOT_STARTED',
+      teamSize: 0,
       teamMembers: [],
       customFields: [],
     });
     setDrawerOpen(true);
+  };
+
+  const handleImport = async (file?: File) => {
+    if (!file) return;
+    const fileName = file.name.toLowerCase();
+    if (!fileName.endsWith('.doc') && !fileName.endsWith('.docx')) {
+      msg.error('请选择 .doc 或 .docx Word 文档');
+      return;
+    }
+    setImporting(true);
+    try {
+      const draft = await importProjectFromWord(file);
+      setImportedFileName(file.name);
+      setPendingImportData(draft);
+      setPendingFormValues(draftToFormValues(draft));
+      setDrawerOpen(true);
+      msg.success('AI 已完成文档分析，请核对识别结果后创建项目');
+    } catch (error) {
+      msg.error(error instanceof Error ? error.message : 'Word 文档 AI 分析失败');
+    } finally {
+      setImporting(false);
+    }
   };
 
   const buildInput = (values: ProjectFormValues): ProjectInput => {
@@ -305,11 +366,13 @@ export function ProjectListPage() {
     return {
       name: values.name.trim(),
       projectCode: values.projectCode?.trim() || undefined,
+      partnerName: values.partnerName?.trim() || undefined,
       owner: values.owner?.trim() || undefined,
       startDate: values.startDate?.format('YYYY-MM-DD') || undefined,
+      endDate: values.endDate?.format('YYYY-MM-DD') || undefined,
       priority: values.priority,
       status: values.status,
-      teamSize: (values.teamMembers ?? []).length,
+      teamSize: values.teamSize ?? (values.teamMembers ?? []).length,
       background: values.background?.trim() || undefined,
       customFields: Object.keys(customFields).length ? customFields : undefined,
       teamMembers: values.teamMembers ?? [],
@@ -327,8 +390,17 @@ export function ProjectListPage() {
 
     setSubmitting(true);
     try {
-      await createProject(input);
-      msg.success('项目已创建');
+      if (pendingImportData) {
+        const result = await commitProjectImport({
+          project: input,
+          requirements: pendingImportData.requirements ?? [],
+          meetings: pendingImportData.meetings ?? [],
+        });
+        msg.success(`项目已创建，已写入 ${result.requirementCount} 条客户需求和 ${result.meetingCount} 条会议纪要`);
+      } else {
+        await createProject(input);
+        msg.success('项目已创建');
+      }
       setPage(1);
       closeDrawer();
       await load();
@@ -342,11 +414,60 @@ export function ProjectListPage() {
   return (
     <div className="pm-page pm-unified-list-page pm-project-list-page">
       {holder}
-      <div className="pm-page-head pm-project-page-intro">
+      <div className="page-heading">
         <div>
-          <Breadcrumb items={[{ title: '项目管理' }, { title: '项目列表' }]} />
-          <h3>项目列表</h3>
+          <h2>项目列表</h2>
           <p>统一管理研发项目、项目阶段、任务及关联实验。</p>
+        </div>
+        <div className="pm-page-actions">
+          <span className="pm-selected">已选 {selected.size} 项</span>
+          {selected.size > 0 && (
+            <Button type="link" size="small" onClick={() => setSelected(new Set())}>
+              清除已选
+            </Button>
+          )}
+          <input
+            ref={importInput}
+            hidden
+            type="file"
+            accept=".doc,.docx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              event.currentTarget.value = '';
+              void handleImport(file);
+            }}
+          />
+          <Button icon={<FileWordOutlined />} loading={importing} onClick={() => importInput.current?.click()}>
+            AI 导入
+          </Button>
+          <Button icon={<DownloadOutlined />} loading={exporting} onClick={() => void handleExport()}>
+            导出
+          </Button>
+          <Button icon={<CopyOutlined />} disabled={!selected.size} onClick={handleCopy}>
+            复制
+          </Button>
+          <Button danger disabled={!selected.size} onClick={handleDelete}>
+            删除
+          </Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+            新建项目
+          </Button>
+          <Space.Compact>
+            <Tooltip title="卡片视图">
+              <Button
+                className={view === 'card' ? 'pm-view-btn active' : 'pm-view-btn'}
+                icon={<AppstoreOutlined />}
+                onClick={() => setView('card')}
+              />
+            </Tooltip>
+            <Tooltip title="列表视图">
+              <Button
+                className={view === 'list' ? 'pm-view-btn active' : 'pm-view-btn'}
+                icon={<UnorderedListOutlined />}
+                onClick={() => setView('list')}
+              />
+            </Tooltip>
+          </Space.Compact>
         </div>
       </div>
 
@@ -365,7 +486,9 @@ export function ProjectListPage() {
         <DatePicker.RangePicker
           value={dateRange}
           onChange={(v) => {
-            setDateRange(v);
+            // Ant Design and the local dayjs barrel can resolve separate pnpm copies; the
+            // runtime value is the same Dayjs shape, so narrow the boundary once here.
+            setDateRange(v as unknown as [dayjs.Dayjs | null, dayjs.Dayjs | null] | null);
             setPage(1);
           }}
           placeholder={['开始日期', '结束日期']}
@@ -403,47 +526,6 @@ export function ProjectListPage() {
         <Button className="pm-filter-reset" icon={<ReloadOutlined />} onClick={reset}>
           重置
         </Button>
-      </div>
-
-      <div className="pm-batch-row">
-        <div className="pm-batch-summary">
-          <span className="pm-selected">已选 {selected.size} 项</span>
-          {selected.size > 0 && (
-            <Button type="link" size="small" onClick={() => setSelected(new Set())}>
-              清除已选
-            </Button>
-          )}
-        </div>
-        <div className="pm-batch-actions">
-          <Button icon={<DownloadOutlined />} loading={exporting} onClick={() => void handleExport()}>
-            导出
-          </Button>
-          <Button icon={<CopyOutlined />} disabled={!selected.size} onClick={handleCopy}>
-            复制
-          </Button>
-          <Button danger disabled={!selected.size} onClick={handleDelete}>
-            删除
-          </Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-            新建项目
-          </Button>
-          <Space.Compact>
-            <Tooltip title="卡片视图">
-              <Button
-                className={view === 'card' ? 'pm-view-btn active' : 'pm-view-btn'}
-                icon={<AppstoreOutlined />}
-                onClick={() => setView('card')}
-              />
-            </Tooltip>
-            <Tooltip title="列表视图">
-              <Button
-                className={view === 'list' ? 'pm-view-btn active' : 'pm-view-btn'}
-                icon={<UnorderedListOutlined />}
-                onClick={() => setView('list')}
-              />
-            </Tooltip>
-          </Space.Compact>
-        </div>
       </div>
 
       <div className="pm-content" aria-busy={loading}>
@@ -593,7 +675,7 @@ export function ProjectListPage() {
       </div>
 
       <Modal
-        title="新建项目"
+        title={importedFileName ? '确认 AI 导入的项目' : '新建项目'}
         open={drawerOpen}
         onCancel={closeDrawer}
         onOk={handleSubmit}
@@ -604,6 +686,19 @@ export function ProjectListPage() {
         width={760}
       >
         <Form form={form} layout="vertical">
+          {importedFileName && (
+            <Alert
+              type="info"
+              showIcon
+              icon={<UploadOutlined />}
+              message={`已从“${importedFileName}”提取项目字段`}
+              description={
+                `请核对并补充必要信息；文档中缺少的字段会保持为空。` +
+                ` 本次识别到 ${pendingImportData?.requirements?.length ?? 0} 条客户需求、${pendingImportData?.meetings?.length ?? 0} 条会议纪要，点击“创建”后会一并写入系统。`
+              }
+              style={{ marginBottom: 20 }}
+            />
+          )}
           <div className="pm-form-basics">
             <div className="pm-section-head">
               <h4 className="pm-section-title">基础信息</h4>
@@ -628,11 +723,17 @@ export function ProjectListPage() {
               >
                 <Input placeholder="请输入项目名称" />
               </Form.Item>
+              <Form.Item name="partnerName" label="所属客户">
+                <Input placeholder="请输入客户或公司名称" maxLength={300} />
+              </Form.Item>
               <Form.Item name="owner" label="负责人">
                 <Input placeholder="请输入负责人" maxLength={100} />
               </Form.Item>
               <Form.Item name="startDate" label="开始日期">
                 <DatePicker style={{ width: '100%' }} placeholder="请选择开始日期" />
+              </Form.Item>
+              <Form.Item name="endDate" label="结束日期">
+                <DatePicker style={{ width: '100%' }} placeholder="请选择结束日期" />
               </Form.Item>
               <Form.Item name="priority" label="优先级">
                 <Select placeholder="请选择" options={projectPriorities.map(({ value, label }) => ({ value, label }))} />
@@ -643,6 +744,9 @@ export function ProjectListPage() {
                   placeholder="请选择"
                   options={projectStatuses.map(({ value, label }) => ({ value, label }))}
                 />
+              </Form.Item>
+              <Form.Item name="teamSize" label="团队人数">
+                <InputNumber min={0} precision={0} style={{ width: '100%' }} placeholder="请输入团队人数" />
               </Form.Item>
               <Form.Item name="teamMembers" label="团队成员" className="pm-form-span-2">
                 <Select

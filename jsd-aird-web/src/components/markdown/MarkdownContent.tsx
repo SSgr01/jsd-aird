@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { memo, type ReactNode } from 'react';
 
 import { latexHtml, normalizeMineruLatex } from './latex-rendering';
 
@@ -290,7 +290,7 @@ function renderBlocks(value: string): ReactNode[] {
   return blocks;
 }
 
-export function MarkdownContent({ value, className = '' }: MarkdownContentProps) {
+export const MarkdownContent = memo(function MarkdownContent({ value, className = '' }: MarkdownContentProps) {
   if (!value?.trim()) return null;
   return <div className={`ai-markdown ${className}`.trim()}>{renderBlocks(value)}</div>;
-}
+});

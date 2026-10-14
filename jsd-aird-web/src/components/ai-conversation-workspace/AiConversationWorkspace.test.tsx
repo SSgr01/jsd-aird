@@ -104,4 +104,102 @@ describe('AiConversationWorkspace', () => {
     expect(screen.getByRole('button', { name: '联网搜索' })).toHaveAttribute('aria-pressed', 'false');
     expect(screen.getByText('全部已授权资料')).toBeInTheDocument();
   });
+
+  it('edits a sent user message in place and confirms how many later messages are removed', () => {
+    const onEditMessage = vi.fn();
+    render(
+      <AiConversationWorkspace
+        conversations={[]}
+        messages={[
+          { id: 'user-1', role: 'USER', content: <p>原问题</p>, editableText: '原问题' },
+          { id: 'assistant-1', role: 'ASSISTANT', content: <p>原回答</p> },
+          { id: 'user-2', role: 'USER', content: <p>后续问题</p>, editableText: '后续问题' },
+        ]}
+        scopeContent={<div>资料范围</div>}
+        question="输入框草稿"
+        onNewConversation={vi.fn()}
+        onSelectConversation={vi.fn()}
+        onEditMessage={onEditMessage}
+        onQuestionChange={vi.fn()}
+        onSubmit={vi.fn()}
+      />,
+    );
+
+    const editButton = screen.getAllByRole('button', { name: '编辑并重新发送这条问题' })[0]!;
+    const userMessage = editButton.closest('.ai-message');
+    const messageBody = userMessage?.querySelector('.ai-message-body');
+    const actionRow = userMessage?.querySelector('.ai-message-actions');
+    expect(actionRow).toContainElement(editButton);
+    expect(
+      messageBody && actionRow &&
+        Boolean(messageBody.compareDocumentPosition(actionRow) & Node.DOCUMENT_POSITION_FOLLOWING),
+    ).toBe(true);
+
+    fireEvent.click(editButton);
+    const editor = screen.getByRole('textbox', { name: '编辑已发送的问题' });
+    expect(editor.closest('.ai-message-content')).toHaveClass('is-editing');
+    expect(editor).toHaveValue('原问题');
+    expect(screen.getByRole('textbox', { name: '输入问题' })).toHaveValue('输入框草稿');
+
+    fireEvent.change(editor, { target: { value: '修改后的问题' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存并重新发送' }));
+    expect(screen.getByText(/后续 2 条消息将从本会话中删除/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '替换并重新发送' }));
+
+    expect(onEditMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-1', editableText: '原问题' }),
+      '修改后的问题',
+    );
+  });
+
+  it('disables message editing while an answer is streaming', () => {
+    render(
+      <AiConversationWorkspace
+        conversations={[]}
+        messages={[{ id: 'user-1', role: 'USER', content: <p>用户问题</p>, editableText: '用户问题' }]}
+        scopeContent={<div>资料范围</div>}
+        question=""
+        streaming
+        onNewConversation={vi.fn()}
+        onSelectConversation={vi.fn()}
+        onEditMessage={vi.fn()}
+        onQuestionChange={vi.fn()}
+        onSubmit={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: '编辑并重新发送这条问题' })).toBeDisabled();
+  });
+
+  it('shows a jump button after the user scrolls away from the latest message', () => {
+    const { container } = render(
+      <AiConversationWorkspace
+        conversations={[]}
+        messages={[
+          { id: 'user-1', role: 'USER', content: <p>用户问题</p> },
+          { id: 'assistant-1', role: 'ASSISTANT', content: <p>助手回答</p> },
+        ]}
+        scopeContent={<div>资料范围</div>}
+        question=""
+        onNewConversation={vi.fn()}
+        onSelectConversation={vi.fn()}
+        onQuestionChange={vi.fn()}
+        onSubmit={vi.fn()}
+      />,
+    );
+    const messageArea = container.querySelector('.ai-conversation-messages') as HTMLDivElement;
+    Object.defineProperties(messageArea, {
+      scrollHeight: { configurable: true, value: 1000 },
+      clientHeight: { configurable: true, value: 300 },
+      scrollTop: { configurable: true, writable: true, value: 100 },
+    });
+    const scrollTo = vi.fn();
+    messageArea.scrollTo = scrollTo;
+
+    fireEvent.scroll(messageArea);
+    fireEvent.click(screen.getByRole('button', { name: '跳到最新消息' }));
+
+    expect(scrollTo).toHaveBeenCalledWith({ top: 1000, behavior: 'smooth' });
+    expect(screen.queryByRole('button', { name: '跳到最新消息' })).not.toBeInTheDocument();
+  });
 });

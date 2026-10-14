@@ -18,3 +18,11 @@ export function PagePermissionGate({ permission, children }: { permission: strin
   }
   return <>{children}</>;
 }
+
+export function PageAnyPermissionGate({ permissions, children }: { permissions: string[]; children: ReactNode }) {
+  const granted = useAuthStore((state) => state.user?.permissions ?? []);
+  if (!permissions.some((permission) => hasPermission(permission, granted))) {
+    return <Result status="403" title="暂无权限访问此页面" subTitle="请联系系统管理员开通模型或建模查看权限" />;
+  }
+  return <>{children}</>;
+}

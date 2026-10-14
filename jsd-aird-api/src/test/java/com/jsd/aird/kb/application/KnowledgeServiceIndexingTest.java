@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -40,6 +41,38 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.ObjectProvider;
 
 class KnowledgeServiceIndexingTest {
+
+    @Test
+    void retrievesCurrentAiAuthorizedChunkFromDocumentFilenameMetadata() {
+        var repository = mock(KnowledgeRepository.class);
+        var organizationId = UUID.randomUUID();
+        var row = new KnowledgeRepository.SearchRow(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
+                "NASA 燃料材料规范", "NASA-Spec-1009.pdf", null, "正文", "当前发布版本正文内容", 12.0, 1);
+        when(repository.batchBm25Rank(any(), anyList(), anyBoolean(), anyList(), anyInt())).thenReturn(List.of());
+        when(repository.searchPublishedMetadata(eq(organizationId), anyList(), eq(true), anyList(), isNull(), anyInt()))
+                .thenReturn(List.of(row));
+
+        var mapper = new ObjectMapper();
+        var service = new KnowledgeService(repository, mock(KnowledgeGovernanceRepository.class),
+                mock(FileStorageFacade.class), mock(OpsAsyncFacade.class), mock(AuditLogFacade.class), mapper,
+                new StructuredDocumentCodec(mapper), List.of(), mock(FileSafetyScanner.class),
+                mockEmbeddingProvider(), List.of(), "embedding-model", 1024, Duration.ofMinutes(15),
+                new BlockAwareChunker(mapper), testAnalyzer());
+
+        var result = service.search(new KnowledgeSearchFacade.SearchRequest(organizationId,
+                "NASA-Spec-1009.pdf", true, 5, List.of(), List.of()));
+
+        assertThat(result.hits()).singleElement().satisfies(hit -> {
+            assertThat(hit.originalName()).isEqualTo("NASA-Spec-1009.pdf");
+            assertThat(hit.content()).isEqualTo("当前发布版本正文内容");
+            assertThat(hit.pageNo()).isNull();
+        });
+        assertThat(result.trace().queries()).extracting(KnowledgeSearchFacade.QueryTrace::channel)
+                .contains("DOCUMENT_METADATA");
+        assertThat(result.trace().queries()).filteredOn(query -> "DOCUMENT_METADATA".equals(query.channel()))
+                .singleElement().satisfies(query -> assertThat(query.resultCount()).isEqualTo(1));
+        verify(repository).searchPublishedMetadata(eq(organizationId), anyList(), eq(true), anyList(), isNull(), anyInt());
+    }
 
     @Test
     void runsBm25AndEmbeddingVectorBranchesInParallelAndKeepsBothResults() throws Exception {

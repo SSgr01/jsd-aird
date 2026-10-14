@@ -125,4 +125,25 @@ class ImportCompatibilityEvaluatorTest {
         assertThat(result.status()).isEqualTo("COMPATIBLE");
         assertThat(result.componentMatches().get(0).path("anchorCoverage").asDouble()).isEqualTo(1.0);
     }
+
+    @Test
+    void requiredMissingFieldBlocksAndRelocatedFieldIsReported() {
+        var binding = mapper.createObjectNode().put("fieldCode", "viscosity").put("mappingKind", "SCALAR")
+                .put("labelPath", "粘度").put("valueSource", "INPUT");
+        binding.putObject("locator").put("labelRange", "B2");
+        var contract = mapper.createObjectNode();
+        contract.putArray("components").addObject().put("componentId", "measurements")
+                .put("range", "A1:C3").set("bindings", mapper.createArrayNode().add(binding));
+        var sheet = new TemplateDataImportFacade.ParsedSheet("sheet-1", "Sheet1", 0, 1, 2, 1, 3,
+                List.of(1), 1, 2, List.of(List.of("", "项目", ""), List.of("", "", "")));
+        var resolutions = mapper.createArrayNode();
+        resolutions.addObject().put("componentId", "measurements")
+                .put("fieldCode", "viscosity").put("status", "MISSING_REQUIRED");
+
+        var result = evaluator.evaluate(contract, List.of(sheet), resolutions);
+
+        assertThat(result.status()).isEqualTo("INCOMPATIBLE");
+        assertThat(result.componentMatches().get(0).path("fieldResolutions").get(0).path("status").asText())
+                .isEqualTo("MISSING_REQUIRED");
+    }
 }

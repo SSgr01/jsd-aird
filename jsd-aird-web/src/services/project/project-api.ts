@@ -1,4 +1,4 @@
-import { httpClient } from '@/services/http/client';
+import { httpClient, LARGE_PAYLOAD_TIMEOUT } from '@/services/http/client';
 
 interface ApiResponse<T> {
   data: T;
@@ -62,7 +62,7 @@ export interface StageQuery {
   size?: number;
 }
 
-export type ProjectLogObjectType = 'PROJECT_STAGE' | 'PROJECT_TASK' | 'PROJECT_EXPERIMENT' | 'EXPERIMENT' | 'PROJECT_DOCUMENT' | 'PROJECT';
+export type ProjectLogObjectType = 'PROJECT_STAGE' | 'PROJECT_TASK' | 'PROJECT_EXPERIMENT' | 'EXPERIMENT' | 'PROJECT_DOCUMENT' | 'CUSTOMER_REQUIREMENT' | 'PROJECT';
 export type ProjectLogAction = 'CREATE' | 'UPDATE' | 'REOPEN' | 'DELETE' | 'REORDER';
 
 export interface ProjectAuditLog {
@@ -152,6 +152,8 @@ export interface Project {
 export interface ProjectInput {
   projectCode?: string;
   name: string;
+  partnerId?: string;
+  partnerName?: string;
   owner?: string;
   startDate?: string;
   endDate?: string;
@@ -162,6 +164,52 @@ export interface ProjectInput {
   customFields?: Record<string, unknown>;
   teamMembers?: string[];
   version?: number;
+}
+
+export interface ProjectImportDraft {
+  projectCode?: string;
+  name?: string;
+  partnerName?: string;
+  owner?: string;
+  startDate?: string;
+  endDate?: string;
+  priority?: ProjectPriority;
+  status?: ProjectStatus;
+  teamSize?: number;
+  teamMembers?: string[];
+  background?: string;
+  customFields?: Record<string, string>;
+  requirements?: ProjectImportRequirement[];
+  meetings?: ProjectImportMeeting[];
+}
+
+export interface ProjectImportRequirement {
+  title?: string;
+  rawRequirement?: string;
+  urgency?: 'HIGH' | 'MEDIUM' | 'LOW';
+  raisedAt?: string;
+  deliveryDate?: string;
+  status?: 'DRAFT' | 'CONFIRMED' | 'IN_PROJECT' | 'COMPLETED' | 'CANCELLED';
+  customFields?: Record<string, string>;
+}
+
+export interface ProjectImportMeeting {
+  title?: string;
+  attendees?: string[];
+  occurredAt?: string;
+  summary?: string;
+}
+
+export interface ProjectImportCommitInput {
+  project: ProjectInput;
+  requirements: ProjectImportRequirement[];
+  meetings: ProjectImportMeeting[];
+}
+
+export interface ProjectImportCommitResult {
+  projectId: string;
+  requirementCount: number;
+  meetingCount: number;
 }
 
 export interface ProjectQuery {
@@ -279,6 +327,23 @@ export async function getProject(id: string): Promise<Project> {
 export async function createProject(input: ProjectInput) {
   const { data } = await httpClient.post<ApiResponse<{ id: string; version: number }>>(
     '/api/v1/projects',
+    input,
+  );
+  return data.data;
+}
+
+export async function importProjectFromWord(file: File): Promise<ProjectImportDraft> {
+  const body = new FormData();
+  body.append('file', file);
+  const { data } = await httpClient.post<ApiResponse<ProjectImportDraft>>('/api/v1/projects/import', body, {
+    timeout: LARGE_PAYLOAD_TIMEOUT,
+  });
+  return data.data;
+}
+
+export async function commitProjectImport(input: ProjectImportCommitInput): Promise<ProjectImportCommitResult> {
+  const { data } = await httpClient.post<ApiResponse<ProjectImportCommitResult>>(
+    '/api/v1/projects/import/commit',
     input,
   );
   return data.data;

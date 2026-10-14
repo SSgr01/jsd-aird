@@ -1006,7 +1006,12 @@ public class DocxStructureParser implements OfficeStructureParser, WordDocumentP
         result.put("nodeId", stableNodeId("content-control", control, sequence));
         result.put("sourcePath", sourcePath(control));
         result.put("contentControlId", id == null ? "" : attribute(id, "val"));
-        result.put("markerId", dataBinding == null ? "" : attribute(dataBinding, "storeItemID"));
+        var boundMarker = dataBinding == null ? "" : attribute(dataBinding, "storeItemID");
+        var tagValue = tag == null ? "" : attribute(tag, "val");
+        if (boundMarker.isBlank() && tagValue.matches("(?i)[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}")) {
+            boundMarker = tagValue;
+        }
+        result.put("markerId", boundMarker);
         result.put("tag", tag == null ? "" : attribute(tag, "val"));
         result.put("alias", alias == null ? "" : attribute(alias, "val"));
         result.put("text", text(control));
@@ -1618,6 +1623,16 @@ public class DocxStructureParser implements OfficeStructureParser, WordDocumentP
         }
 
         private void appendTable(Element table) {
+            // Univer Docs currently drops table tokens nested inside another
+            // table cell, which silently hides the whole sub-table (for
+            // example the 实验配方 grid of an experiment record). Defer the
+            // editable copy of every nested table and emit it as a top-level
+            // table right after its outer table; documentIR keeps the real
+            // Word nesting (see tableBlock).
+            if (tableDepth > 0) {
+                deferredNestedTables.add(table);
+                return;
+            }
             tableDepth++;
             if (stream.length() > 0 && stream.charAt(stream.length() - 1) != '\r') {
                 paragraphs.add(objectMapper.createObjectNode().put("startIndex", stream.length()).put("paragraphIndex", 0));

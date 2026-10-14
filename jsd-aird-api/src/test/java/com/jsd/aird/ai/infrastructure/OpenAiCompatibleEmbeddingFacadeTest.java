@@ -2,6 +2,8 @@ package com.jsd.aird.ai.infrastructure;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.net.InetSocketAddress;
@@ -37,7 +39,8 @@ class OpenAiCompatibleEmbeddingFacadeTest {
         server.start();
         try {
             var springModels = mock(ObjectProvider.class);
-            when(springModels.getIfAvailable()).thenReturn(null);
+            var springModel = mock(org.springframework.ai.embedding.EmbeddingModel.class);
+            when(springModels.getIfAvailable()).thenReturn(springModel);
             var facade = new OpenAiCompatibleEmbeddingFacade(
                     "http://127.0.0.1:" + server.getAddress().getPort() + "/v1",
                     "test-key", "text-embedding-v4", 1024,
@@ -48,6 +51,7 @@ class OpenAiCompatibleEmbeddingFacadeTest {
 
             assertThat(vector).isPresent();
             assertThat(vector.get().substring(1, vector.get().length() - 1).split(", ")).hasSize(1024);
+            verify(springModel, never()).embed("测试文本");
             var sent = objectMapper.readTree(requestBody.get());
             assertThat(sent.path("model").asText()).isEqualTo("text-embedding-v4");
             assertThat(sent.path("dimensions").asInt()).isEqualTo(1024);

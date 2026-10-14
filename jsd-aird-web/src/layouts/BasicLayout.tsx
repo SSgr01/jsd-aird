@@ -25,6 +25,7 @@ import {
   UserOutlined,
   SearchOutlined,
   PlusOutlined,
+  AimOutlined,
 } from '@ant-design/icons';
 import { ProLayout, type MenuDataItem } from '@ant-design/pro-components';
 import { Avatar, Button, Dropdown, Input, Result, Tooltip, Typography, type InputRef } from 'antd';
@@ -74,8 +75,8 @@ const route = {
       name: '电子实验记录本',
       icon: <ExperimentOutlined />,
       routes: [
-        { path: '/experiments/new', name: '新增实验', icon: <PlusOutlined /> },
-        { path: '/experiments/upload', name: '实验导入', icon: <UploadOutlined /> },
+        { path: '/experiments/new', name: '实验在线记录', icon: <PlusOutlined /> },
+        { path: '/experiments/upload', name: '实验数据导入', icon: <UploadOutlined /> },
         { path: '/experiments/list', name: '实验查看', icon: <EyeOutlined /> },
       ],
     },
@@ -125,6 +126,10 @@ const route = {
       routes: [
         { path: '/knowledge/search', name: '文件检索', icon: <FileSearchOutlined /> },
         { path: '/assistant', name: 'AI问答', icon: <RobotOutlined /> },
+        { path: '/assistant/formula-prediction', name: 'AI配方预测', icon: <AimOutlined /> },
+        { path: '/assistant/performance-prediction', name: '性能预测', icon: <LineChartOutlined /> },
+        { path: '/assistant/experiment-optimization', name: 'AI实验优化', icon: <ExperimentOutlined /> },
+        { path: '/assistant/model-center', name: '模型中心', icon: <LineChartOutlined /> },
       ],
     },
     {
@@ -132,7 +137,6 @@ const route = {
       name: '研发知识库',
       icon: <FolderOpenOutlined />,
       routes: [
-        { path: '/knowledge/review', name: '审核工作台', icon: <AuditOutlined /> },
         { path: '/knowledge/library', name: '资料上传', icon: <FolderOpenOutlined /> },
         { path: '/knowledge/view', name: '知识库查看', icon: <EyeOutlined /> },
       ],
@@ -259,10 +263,12 @@ function AccessDenied({ permissions, menuKeys }: { permissions: string[]; menuKe
 export function BasicLayout() {
   const location = useLocation();
   const isTemplateWorkspace = /^\/templates\/[^/]+\/workspace$/.test(location.pathname);
+  const isExperimentPage = ['/experiments/new', '/experiments/upload', '/experiments/list'].includes(location.pathname);
+  const isExperimentWorkspace = /^\/experiments\/(?!imports\/)[^/]+$/.test(location.pathname) && !isExperimentPage;
   const isDataWorkspace = /^\/data\/(?:import-jobs|assets)\/[^/]+$/.test(location.pathname);
   const isProjectDocumentWorkspace = /^\/projects\/[^/]+\/documents\/[^/]+$/.test(location.pathname);
   const isPermissionManagement = location.pathname.startsWith('/system/user-permissions');
-  const isWorkspace = isTemplateWorkspace || isDataWorkspace;
+  const isWorkspace = isTemplateWorkspace || isExperimentWorkspace || isDataWorkspace;
   const collapsed = useAppStore((state) => state.sidebarCollapsed);
   const setCollapsed = useAppStore((state) => state.setSidebarCollapsed);
   const user = useAuthStore((state) => state.user);
@@ -282,6 +288,7 @@ export function BasicLayout() {
         logo={<AppstoreOutlined />}
         route={visibleRoute}
         location={{ pathname: location.pathname }}
+        selectedKeys={[location.pathname.startsWith('/assistant/model-center') ? '/assistant/model-center' : location.pathname]}
         collapsed={collapsed}
         onCollapse={setCollapsed}
         layout="side"

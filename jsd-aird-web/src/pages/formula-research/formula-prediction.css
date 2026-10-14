@@ -1,0 +1,28 @@
+.formula-prediction-page { min-height: 100%; background: #f4f7fb; }
+.formula-prediction-shell { max-width: 1440px; width: 100%; margin: 0 auto; padding: 28px 32px 44px; }
+.formula-prediction-header { display:flex; justify-content:space-between; align-items:flex-end; gap:24px; margin-bottom:24px; }
+.formula-prediction-header h2 { margin: 4px 0 6px; color:#12233f; }
+.eyebrow { color:#246bce; font-size:12px; letter-spacing:.08em; text-transform:uppercase; }
+.prototype-note { display:flex; align-items:center; gap:5px; margin:0 0 16px; padding:10px 13px; border:1px solid #d8e5f5; border-radius:10px; background:#f8fbff; color:#60748e; font-size:12px; }
+.prototype-note strong { color:#315f9e; }
+.prediction-card { border:1px solid #e1e8f2; box-shadow: 0 8px 24px rgba(25,55,95,.05); border-radius:12px; margin-bottom:18px; }
+.prediction-card .ant-card-head { min-height:50px; border-bottom:1px solid #edf1f7; }
+.full-control { width:100%; }
+.target-list { margin-top:16px; display:grid; gap:10px; }
+.goal-card { background:#fbfdff; border-color:#d9e6f6; }
+.goal-heading { display:flex; justify-content:space-between; margin-bottom:14px; }
+.material-row { width:100%; justify-content:space-between; }
+.ratio-total { display:flex; justify-content:flex-end; align-items:center; gap:12px; color:#8a5a12; }
+.ratio-total.valid { color:#16784b; }
+.helper-card { background:#f8fbff; }
+.confirmation-card .ant-list-item { gap:10px; align-items:flex-start; }
+.confirmation-card .ant-list-item > span:last-child { text-align:right; }
+.run-card .ant-progress { margin-bottom:12px; }
+.compact-alert { margin-top:12px; }
+.empty-result { min-height:220px; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; }
+.empty-icon { color:#7fa7da; font-size:30px; margin-bottom:12px; }
+.candidate-card { margin-top:12px; border-color:#dce8f6; }
+.formula-summary { margin-top:12px; }
+@media (max-width: 800px) { .formula-prediction-shell { padding:18px 14px 32px; } .formula-prediction-header { align-items:flex-start; flex-direction:column; } }
+
+.material-space-row{display:grid;grid-template-columns:minmax(160px,1.2fr) 150px 120px minmax(220px,1fr);gap:10px;align-items:center;width:100%}.material-space-row>div:first-child{display:flex;flex-direction:column}.adjustment-hints{margin-top:8px;color:#76520b}@media(max-width:900px){.material-space-row{grid-template-columns:1fr 1fr}.material-space-row>div:first-child{grid-column:1/-1}}

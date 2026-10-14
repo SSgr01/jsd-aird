@@ -6,6 +6,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.HashSet;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -17,6 +18,7 @@ import java.security.MessageDigest;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
@@ -34,6 +36,9 @@ import com.jsd.aird.tpl.domain.TemplateStatus;
 import com.jsd.aird.tpl.application.port.BlankWordDocumentFactory;
 import com.jsd.aird.tpl.application.port.WordOoxmlPatcher;
 import com.jsd.aird.tpl.application.port.WordDocumentParser;
+import com.jsd.aird.rnd.application.port.ExperimentRepository;
+import com.jsd.aird.rnd.domain.ExperimentStatus;
+import com.jsd.aird.rnd.domain.ExperimentModels.Detail;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -64,6 +69,7 @@ public class TemplateWorkspaceService {
     private final WordOoxmlPatcher wordOoxmlPatchService;
     private final WordDocumentParser wordDocumentParser;
     private final TemplateImportContractCompiler importContractCompiler;
+    private final ExperimentRepository experimentRepository;
     private final TransactionTemplate transactionTemplate;
     private final String storageBucket;
 
@@ -83,6 +89,7 @@ public class TemplateWorkspaceService {
             WordOoxmlPatcher wordOoxmlPatchService,
             WordDocumentParser wordDocumentParser,
             TemplateImportContractCompiler importContractCompiler,
+            ExperimentRepository experimentRepository,
             PlatformTransactionManager transactionManager,
             @Value("${app.storage.bucket}") String storageBucket
     ) {
@@ -101,6 +108,7 @@ public class TemplateWorkspaceService {
         this.wordOoxmlPatchService = wordOoxmlPatchService;
         this.wordDocumentParser = wordDocumentParser;
         this.importContractCompiler = importContractCompiler;
+        this.experimentRepository = experimentRepository;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
         this.storageBucket = storageBucket;
     }
@@ -409,6 +417,146 @@ public class TemplateWorkspaceService {
         return get(versionId);
     }
 
+    /**
+     * Creates a template draft by copying the experiment's current persisted
+     * editor snapshot. This path intentionally does not invoke recognition or
+     * infer any fields from the copied document.
+     */
+    @Transactional
+    public TemplateRepository.TemplateWorkspace createFromExperiment(
+            UUID experimentId, String requestedName, UUID categoryId) {
+        var actor = ActorContext.required();
+        authorizationService.require(new PermissionCheck(
+                actor.organizationId(), actor.userId(), "experiment.view", "EXPERIMENT", experimentId, "READ"));
+        authorizationService.require(new PermissionCheck(
+                actor.organizationId(), actor.userId(), "template.create", "TEMPLATE", null, "WRITE"));
+        if (experimentRepository == null) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "实验模板复制服务未配置");
+        }
+
+        var experiment = experimentRepository.detail(actor.organizationId(), experimentId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "实验不存在"));
+        if (experiment.summary().status() == ExperimentStatus.VOIDED) {
+            throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN, "作废实验不支持另存为模板");
+        }
+        var name = trimToNull(requestedName);
+        if (name == null) throw new ApiException(ApiErrorCode.BAD_REQUEST, "模板名称不能为空");
+        if (name.length() > 160) throw new ApiException(ApiErrorCode.BAD_REQUEST, "模板名称不能超过 160 个字符");
+        var category = categoryId == null
+                ? null
+                : repository.findCategory(actor.organizationId(), categoryId)
+                        .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "模板分类不存在"));
+        if (category == null) throw new ApiException(ApiErrorCode.BAD_REQUEST, "请选择模板分类");
+
+        var format = experimentFormat(experiment.editModel());
+        var snapshot = currentExperimentSnapshot(experiment);
+        if (snapshot == null || !snapshot.isObject() || snapshot.isEmpty()) {
+            throw new ApiException(ApiErrorCode.FILE_NOT_READY, "当前实验没有可复制的文档内容");
+        }
+
+        var templateId = UUID.randomUUID();
+        var versionId = UUID.randomUUID();
+        var code = "TPL-" + LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE)
+                + "-" + templateId.toString().substring(0, 6).toUpperCase(Locale.ROOT);
+        var schema = blankSchema(code);
+        var mapping = objectMapper.createArrayNode();
+        var data = objectMapper.createObjectNode();
+        var layout = objectMapper.createObjectNode();
+        layout.set("initialSnapshot", snapshot.deepCopy());
+        layout.set("origin", objectMapper.createObjectNode()
+                .put("type", "EXPERIMENT")
+                .put("experimentId", experiment.summary().id().toString())
+                .put("experimentNo", experiment.summary().experimentNo())
+                .put("experimentTitle", experiment.summary().title()));
+
+        UUID stagedWordFileId = null;
+        if (format == TemplateFormat.DOCX) {
+            try {
+                var base = experimentWordBase(experiment, actor);
+                var patched = wordOoxmlPatchService.applySnapshot(base, snapshot);
+                var parsed = wordDocumentParser.parse(new ByteArrayInputStream(patched));
+                var documentStructure = parsed.structureSummary().path("documentIR").deepCopy();
+                var staged = stageWordDocument(patched, name, actor);
+                stagedWordFileId = staged.id();
+                layout.set("documentStructure", documentStructure);
+                layout.set("wordDocument", wordDocument(staged.id(), staged.sha256(), documentStructure));
+            } catch (ApiException exception) {
+                throw exception;
+            } catch (Exception exception) {
+                throw new ApiException(ApiErrorCode.SNAPSHOT_PERSIST_FAILED, "Word 模板底稿复制失败");
+            }
+        }
+
+        var schemaHash = canonicalizer.hash(schema);
+        var mappingHash = canonicalizer.hash(mapping);
+        var dataHash = canonicalizer.hash(data);
+        var snapshotHash = canonicalizer.hash(snapshot);
+        var pluginHash = canonicalizer.hashText(PLUGIN_MANIFEST);
+        var workspaceHash = canonicalizer.workspaceHash(
+                versionId.toString(), schema, mapping, data, snapshotHash, EDITOR_APP_VERSION, pluginHash);
+        repository.insertTemplate(new TemplateRepository.NewTemplate(
+                templateId, actor.organizationId(), code, name, category.name(), format, actor.userId()));
+        repository.insertVersion(new TemplateRepository.NewVersion(
+                versionId, templateId, schema, layout, format.snapshotKind(), EDITOR_APP_VERSION,
+                pluginHash, schemaHash, mappingHash, dataHash, workspaceHash, actor.userId()));
+        repository.replaceMappings(versionId, format, mapping);
+        if (stagedWordFileId != null) requestFileActivation(stagedWordFileId);
+        repository.appendAudit(actor.organizationId(), actor.userId(), "TEMPLATE_DRAFT_CREATED_FROM_EXPERIMENT",
+                "TEMPLATE_VERSION", versionId, objectMapper.createObjectNode()
+                        .put("experimentId", experimentId.toString())
+                        .put("format", format.name()));
+        return get(versionId);
+    }
+
+    private TemplateFormat experimentFormat(JsonNode editModel) {
+        var value = editModel == null ? "" : editModel.path("documentFormat").asText("");
+        if ("word".equalsIgnoreCase(value) || "docx".equalsIgnoreCase(value)) return TemplateFormat.DOCX;
+        if ("excel".equalsIgnoreCase(value) || "xlsx".equalsIgnoreCase(value)) return TemplateFormat.XLSX;
+        throw new ApiException(ApiErrorCode.BAD_REQUEST, "当前实验文档格式不支持另存为模板");
+    }
+
+    private JsonNode currentExperimentSnapshot(Detail experiment) {
+        var saved = experiment.editModel() == null ? null : experiment.editModel().path("documentSnapshot");
+        if (saved != null && saved.isObject() && !saved.isEmpty()) return saved;
+        var template = experiment.templateSnapshot();
+        return template != null && template.isObject() && !template.isEmpty() ? template : null;
+    }
+
+    private byte[] experimentWordBase(Detail experiment, Actor actor) throws Exception {
+        UUID sourceFileId = experiment.sourceFileId();
+        if (sourceFileId == null) {
+            sourceFileId = uuidFrom(experiment.editModel() == null
+                    ? null : experiment.editModel().path("sourceFileId"));
+        }
+        if (sourceFileId == null && experiment.templateVersionId() != null) {
+            var sourceTemplate = repository.findWorkspace(actor.organizationId(), experiment.templateVersionId())
+                    .orElse(null);
+            sourceFileId = uuidFrom(sourceTemplate == null ? null
+                    : sourceTemplate.wordDocument().path("workingDocxFileId"));
+            if (sourceFileId == null && sourceTemplate != null) {
+                sourceFileId = uuidFrom(sourceTemplate.wordDocument().path("sourceDocxFileId"));
+            }
+        }
+        if (sourceFileId != null) {
+            var source = fileRepository.find(actor.organizationId(), sourceFileId)
+                    .orElseThrow(() -> new ApiException(ApiErrorCode.FILE_NOT_READY, "Word 原生文档不存在"));
+            try (var stored = objectStorage.get(source.objectKey())) {
+                return stored.stream().readAllBytes();
+            }
+        }
+        return blankWordDocumentFactory.create(experiment.summary().title());
+    }
+
+    private UUID uuidFrom(JsonNode node) {
+        var value = node == null ? "" : node.asText("");
+        if (value.isBlank()) return null;
+        try {
+            return UUID.fromString(value);
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
+    }
+
     public TemplateRepository.TemplateWorkspace get(UUID versionId) {
         return repository.findWorkspace(ActorContext.required().organizationId(), versionId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "模板版本不存在"));
@@ -454,6 +602,7 @@ public class TemplateWorkspaceService {
         if (source.inlineSnapshot().isObject()) layout.set("initialSnapshot", source.inlineSnapshot().deepCopy());
         if (source.documentStructure().isObject()) layout.set("documentStructure", source.documentStructure().deepCopy());
         if (source.wordDocument().isObject()) layout.set("wordDocument", source.wordDocument().deepCopy());
+        if (source.origin() != null && source.origin().isObject()) layout.set("origin", source.origin().deepCopy());
         var workspaceHash = canonicalizer.workspaceHash(versionId.toString(), source.schema(), source.mapping(), data,
                 source.snapshotHash(), source.editorAppVersion(), source.pluginManifestHash());
         repository.insertTemplate(new TemplateRepository.NewTemplate(templateId, actor.organizationId(), code, name,
@@ -543,9 +692,15 @@ public class TemplateWorkspaceService {
         boolean reconciliationRequired;
         if (current.format() == TemplateFormat.DOCX) {
             normalizedSchema = normalizeWordSchema(command.schema());
-            normalizedMapping = objectMapper.createArrayNode();
+            if (normalizedSchema instanceof ObjectNode schemaObject) {
+                TemplateLocatorNormalizer.normalizeFieldModel(objectMapper, schemaObject);
+            }
+            normalizedMapping = normalizeMapping(command.mapping(), normalizedSchema);
             validateSchema(normalizedSchema);
-            reconciliationRequired = false;
+            reconciliationRequired = validateMappings(current.format(), normalizedMapping);
+            recognitionReviewService.validateAcceptedMappings(
+                    actor.organizationId(), versionId, normalizedMapping
+            );
         } else {
             normalizedSchema = normalizeFieldGroups(command.schema());
             normalizedSchema = standardFieldService.normalizeDraftFields(normalizedSchema);
@@ -553,6 +708,12 @@ public class TemplateWorkspaceService {
                 TemplateLocatorNormalizer.normalizeFieldModel(objectMapper, schemaObject);
             }
             normalizedMapping = normalizeMapping(command.mapping(), normalizedSchema);
+            if (normalizedSchema instanceof ObjectNode schemaObject
+                    && normalizedMapping instanceof ArrayNode mappingArray
+                    && schemaObject.path(TemplateRecognitionCompiler.FIELD_MODEL_KEY) instanceof ObjectNode model) {
+                new ExperimentTemplateSemanticCompiler(objectMapper).apply(schemaObject, mappingArray, model);
+                mergeRecognizedListProjections(actor.organizationId(), current, schemaObject, mappingArray);
+            }
             validateSchema(normalizedSchema);
             standardFieldService.validateFormalFields(normalizedSchema);
             reconciliationRequired = validateMappings(current.format(), normalizedMapping);
@@ -625,7 +786,8 @@ public class TemplateWorkspaceService {
                   var stagedSnapshot = objectStorage.get(snapshotFile.objectKey())) {
                  var snapshot = objectMapper.readTree(stagedSnapshot.stream().readAllBytes());
                  requireCurrentWordSnapshot(snapshot);
-                 var patched = wordOoxmlPatchService.applySnapshot(source.stream().readAllBytes(), snapshot);
+                 var patched = wordOoxmlPatchService.applySnapshot(source.stream().readAllBytes(),
+                         wordSnapshotWithFormalControls(snapshot, normalizedMapping));
                  var parsed = wordDocumentParser.parse(new ByteArrayInputStream(patched));
                 documentStructure = parsed.structureSummary().path("documentIR").deepCopy();
                 var staged = stageWordDocument(patched, currentFile.originalName(), actor);
@@ -675,6 +837,7 @@ public class TemplateWorkspaceService {
             layoutSummary.set("documentStructure", documentStructure);
         }
         if (wordDocument != null) layoutSummary.set("wordDocument", wordDocument);
+        if (current.origin() != null && current.origin().isObject()) layoutSummary.set("origin", current.origin().deepCopy());
 
         var updated = repository.updateDraft(new TemplateRepository.DraftUpdate(
                 actor.organizationId(),
@@ -732,6 +895,142 @@ public class TemplateWorkspaceService {
                 documentStructure == null ? null : documentStructure.deepCopy());
     }
 
+    /**
+     * Region roots are deliberately hidden from the editable business-field
+     * model. Formula matrix projections live on those roots, so persist them
+     * from the accepted recognition snapshot instead of asking the browser to
+     * round-trip hidden structural metadata.
+     */
+    private void mergeRecognizedListProjections(
+            UUID organizationId,
+            TemplateRepository.TemplateWorkspace current,
+            ObjectNode schema,
+            ArrayNode mapping
+    ) {
+        if (current.format() != TemplateFormat.XLSX) return;
+        // The repository lookup is scoped by import job, not by the generated
+        // recognition-run id.  Using the latter silently returned no reviewed
+        // suggestions and caused the executable mapping to lose hierarchy.
+        var importJob = importRepository.findLatestForVersion(organizationId, current.versionId()).orElse(null);
+        var suggestions = importJob == null
+                ? List.<TemplateImportRepository.RecognitionSuggestionView>of()
+                : importRepository.listSuggestions(organizationId, importJob.id());
+        // Recognition runs started directly from a copied workbook do not
+        // always have a template-import job row.  Keep the run-id fallback so
+        // the reviewed hierarchy is still available for draft compilation.
+        if (suggestions.isEmpty() && current.recognitionRunId() != null) {
+            suggestions = importRepository.listSuggestions(organizationId, current.recognitionRunId());
+        }
+        if (suggestions.isEmpty()) return;
+        var recognized = recognitionCompiler.compile(
+                objectMapper.createObjectNode(), suggestions, current.format());
+        var recognizedSchema = recognized.schema();
+        mergeRecognizedBindingMetadata(mapping, suggestions);
+        // The review projection enriches physical children with the complete
+        // hierarchy assembled from their region tree.  Raw persistence
+        // suggestions may contain only the leaf label, so use the same
+        // reviewed payload that the UI displays when it is available.
+        var review = recognitionReviewService.get(current.versionId());
+        mergeRecognizedReviewMetadata(mapping, review.items());
+        var recognizedConfiguration = recognizedSchema.path(
+                TemplateImportContractCompiler.EXPERIMENT_IMPORT_SCHEMA_KEY);
+        if (!recognizedConfiguration.isObject()
+                || !recognizedConfiguration.path("listProjections").isArray()) return;
+
+        var currentConfiguration = schema.path(TemplateImportContractCompiler.EXPERIMENT_IMPORT_SCHEMA_KEY);
+        if (!(currentConfiguration instanceof ObjectNode configuration)) {
+            schema.set(TemplateImportContractCompiler.EXPERIMENT_IMPORT_SCHEMA_KEY,
+                    recognizedConfiguration.deepCopy());
+            return;
+        }
+
+        var projections = new LinkedHashMap<String, JsonNode>();
+        for (var projection : configuration.path("listProjections")) {
+            var id = projection.path("listProjectionId").asText("");
+            if (!id.isBlank()) projections.put(id, projection.deepCopy());
+        }
+        for (var projection : recognizedConfiguration.path("listProjections")) {
+            var id = projection.path("listProjectionId").asText("");
+            if (!id.isBlank()) projections.putIfAbsent(id, projection.deepCopy());
+        }
+        var array = configuration.putArray("listProjections");
+        projections.entrySet().stream().sorted(Map.Entry.comparingByKey())
+                .forEach(entry -> array.add(entry.getValue()));
+        if (configuration.path("recognitionSummary") instanceof ObjectNode summary) {
+            summary.put("matrixCount", projections.size());
+        }
+    }
+
+    private void mergeRecognizedBindingMetadata(
+            ArrayNode target,
+            List<TemplateImportRepository.RecognitionSuggestionView> recognized
+    ) {
+        var byBinding = new java.util.HashMap<String, JsonNode>();
+        var byAddress = new java.util.HashMap<String, JsonNode>();
+        for (var item : recognized) {
+            var source = item.payload();
+            var bindingId = source.path("bindingId").asText("");
+            if (!bindingId.isBlank()) byBinding.put(bindingId, source);
+            var locator = source.path("locator");
+            var address = locator.path("address").asText(locator.path("valueRange").asText(""));
+            if (!address.isBlank()) byAddress.put(address, source);
+        }
+        for (var value : target) {
+            if (!(value instanceof ObjectNode object)) continue;
+            var source = byBinding.get(object.path("bindingId").asText(""));
+            if (source == null) {
+                var locator = object.path("locator");
+                source = byAddress.get(locator.path("address").asText(locator.path("valueRange").asText("")));
+            }
+            if (source == null) continue;
+            for (var key : List.of("labelPath", "labelPathSegments", "experimentField",
+                    "experimentItemLabel", "experimentSemanticConfidence",
+                    "experimentSemanticStatus", "experimentSemanticSource",
+                    "experimentSemanticAlternatives", "experimentSemanticIssue")) {
+                // A reviewed/edited mapping is authoritative.  Recognition is
+                // allowed to fill missing hierarchy, but an older suggestion
+                // must not overwrite a confirmed TEST/PROCESS/BASIC semantic
+                // with its fallback OTHER.DYNAMIC_VALUE classification.
+                if ("experimentField".equals(key)
+                        && object.path("experimentField").isObject()
+                        && !"OTHER".equals(object.path("experimentField").path("domain").asText(""))) {
+                    continue;
+                }
+                if (source.has(key)) object.set(key, source.path(key).deepCopy());
+            }
+        }
+    }
+
+    private void mergeRecognizedReviewMetadata(
+            ArrayNode target,
+            List<TemplateRecognitionReviewService.RecognitionReviewItem> reviewItems
+    ) {
+        var byBinding = new java.util.HashMap<String, JsonNode>();
+        var byAddress = new java.util.HashMap<String, JsonNode>();
+        for (var item : reviewItems) {
+            var source = item.payload();
+            if (source == null || !source.path("labelPathSegments").isArray()
+                    || source.path("labelPathSegments").isEmpty()) continue;
+            var bindingId = source.path("bindingId").asText("");
+            if (!bindingId.isBlank()) byBinding.put(bindingId, source);
+            var locator = source.path("locator");
+            var address = locator.path("address").asText(locator.path("valueRange").asText(""));
+            if (!address.isBlank()) byAddress.put(address, source);
+        }
+        for (var value : target) {
+            if (!(value instanceof ObjectNode object)) continue;
+            var source = byBinding.get(object.path("bindingId").asText(""));
+            if (source == null) {
+                var locator = object.path("locator");
+                source = byAddress.get(locator.path("address").asText(locator.path("valueRange").asText("")));
+            }
+            if (source == null) continue;
+            for (var key : List.of("labelPath", "labelPathSegments")) {
+                if (source.has(key)) object.set(key, source.path(key).deepCopy());
+            }
+        }
+    }
+
     private ObjectNode normalizeFieldGroups(JsonNode schema) {
         var normalized = (ObjectNode) schema.deepCopy();
         var fieldModel = normalized.path(TemplateRecognitionCompiler.FIELD_MODEL_KEY);
@@ -774,13 +1073,53 @@ public class TemplateWorkspaceService {
         var model = schema.path(TemplateRecognitionCompiler.FIELD_MODEL_KEY);
         var names = new java.util.HashMap<String, String>();
         var groups = new java.util.HashMap<String, String>();
+        var experimentFields = new java.util.HashMap<String, JsonNode>();
+        var experimentMetadata = new java.util.HashMap<String, JsonNode>();
         for (var group : model.path("groups")) groups.put(group.path("id").asText(""), group.path("name").asText(""));
-        for (var field : model.path("fields")) names.put(field.path("fieldId").asText(""),
-                groups.getOrDefault(field.path("groupId").asText(""), GroupNameNormalizer.BASIC_INFORMATION));
+        for (var field : model.path("fields")) {
+            names.put(field.path("fieldId").asText(""),
+                    groups.getOrDefault(field.path("groupId").asText(""), GroupNameNormalizer.BASIC_INFORMATION));
+            var bindingId = field.path("bindingId").asText("");
+            if (!bindingId.isBlank() && field.path("experimentField").isObject()) {
+                experimentFields.put(bindingId, field.path("experimentField").deepCopy());
+                experimentMetadata.put(bindingId, field);
+            }
+        }
         for (var binding : result) {
             if (!(binding instanceof ObjectNode object)) continue;
+            // targetPath is a derived V9 contract detail. Draft clients cannot
+            // author or persist it as a source of business semantics.
+            object.remove("targetPath");
+            var experimentField = experimentFields.get(object.path("bindingId").asText(""));
+            if (experimentField == null) object.remove("experimentField");
+            else object.set("experimentField", experimentField);
+            var semanticMetadata = experimentMetadata.get(object.path("bindingId").asText(""));
+            if (semanticMetadata != null) {
+                for (var key : java.util.List.of("experimentItemLabel", "experimentSemanticConfidence",
+                        "experimentSemanticStatus", "experimentSemanticSource",
+                        "experimentSemanticAlternatives", "experimentSemanticIssue")) {
+                    if (semanticMetadata.has(key)) object.set(key, semanticMetadata.path(key).deepCopy());
+                    else object.remove(key);
+                }
+            }
             var groupName = names.get(object.path("fieldId").asText(""));
             if (groupName != null) object.withObject("diagnostic").put("groupName", groupName);
+        }
+        // MappingPathNormalizer may repair a legacy duplicate path. Keep the
+        // persisted field model aligned with the binding that owns the path;
+        // otherwise the next workspace load would recreate the old duplicate.
+        if (model instanceof ObjectNode modelObject && modelObject.path("fields").isArray()) {
+            for (var field : modelObject.withArray("fields")) {
+                if (!(field instanceof ObjectNode fieldObject)) continue;
+                var bindingId = fieldObject.path("bindingId").asText("");
+                if (bindingId.isBlank()) continue;
+                for (var binding : result) {
+                    if (bindingId.equals(binding.path("bindingId").asText(""))) {
+                        fieldObject.put("dataPath", binding.path("dataPath").asText(""));
+                        break;
+                    }
+                }
+            }
         }
         return result;
     }
@@ -806,7 +1145,7 @@ public class TemplateWorkspaceService {
                 workspace.schema(), workspace.mapping(), workspace.format());
         if (!requiredFieldsWithoutPosition.isEmpty()) {
             var message = workspace.format() == TemplateFormat.DOCX
-                    ? "还有必填 Word 字段未插入正文位置"
+                    ? "还有 Word 字段未插入正文位置"
                     : "还有必填字段没有有效填写位置";
             throw new ApiException(ApiErrorCode.TEMPLATE_REQUIRED_FIELD_UNBOUND, message,
                     requiredFieldsWithoutPosition);
@@ -816,10 +1155,9 @@ public class TemplateWorkspaceService {
             throw new ApiException(ApiErrorCode.TEMPLATE_FIELD_LABEL_UNRESOLVED,
                     "还有字段没有确认标签位置，请在字段属性中手动选择", unresolvedLabels);
         }
-        if (workspace.format() == TemplateFormat.XLSX
-                && recognitionReviewService.hasIncompleteRecognition(actor.organizationId(), versionId)) {
+        if (recognitionReviewService.hasIncompleteRecognition(actor.organizationId(), versionId)) {
             throw new ApiException(ApiErrorCode.BINDING_INVALID,
-                    "识别结果尚未完成结构确认或人工复核，暂不能发布");
+                    "识别结果仍有待确认字段，暂不能发布");
         }
         if (workspace.format() == TemplateFormat.XLSX
                 && recognitionReviewService.hasOpenConflicts(actor.organizationId(), versionId)) {
@@ -888,7 +1226,9 @@ public class TemplateWorkspaceService {
             return missing;
         }
         for (JsonNode field : fields) {
-            if (!field.path("required").asBoolean(false)) continue;
+            if ("REGION".equals(field.path("fieldType").asText())
+                    || "REGION".equals(field.path("displayRole").asText())) continue;
+            if (format != TemplateFormat.DOCX && !field.path("required").asBoolean(false)) continue;
             var bindingId = field.path("bindingId").asText("");
             var binding = bindings.get(bindingId);
             if (binding == null) {
@@ -969,7 +1309,7 @@ public class TemplateWorkspaceService {
         return false;
     }
 
-    private boolean validateMappings(TemplateFormat format, JsonNode mapping) {
+    boolean validateMappings(TemplateFormat format, JsonNode mapping) {
         if (mapping == null || !mapping.isArray()) {
             throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "Mapping 必须是数组");
         }
@@ -1014,7 +1354,17 @@ public class TemplateWorkspaceService {
                 throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "bindingId 必须唯一：" + bindingId);
             }
             bindingsById.put(bindingId, binding);
-            if (binding.path("primaryBinding").asBoolean(true) && !primaryPaths.add(path)) {
+            // A workbook can contain the same form on multiple worksheets. In
+            // that case the semantic data path is intentionally shared, while
+            // the physical binding is scoped by worksheet. Keep rejecting two
+            // primary bindings for the same path on one worksheet, but do not
+            // reject the corresponding binding on another worksheet.
+            var sheetScope = format == TemplateFormat.XLSX
+                    ? binding.path("locator").path("sheetId").asText(
+                    binding.path("locator").path("sheetName").asText(""))
+                    : "";
+            var primaryPathKey = sheetScope.isBlank() ? path : sheetScope + "\u0000" + path;
+            if (binding.path("primaryBinding").asBoolean(true) && !primaryPaths.add(primaryPathKey)) {
                 throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "同一路径只能有一个主绑定：" + path);
             }
             var status = binding.path("bindingStatus").asText("VALID");
@@ -1047,8 +1397,25 @@ public class TemplateWorkspaceService {
         normalized.put("type", "object");
         normalized.put("documentType", "WORD");
         normalized.put("schemaVersion", 1);
-        normalized.remove(TemplateRecognitionCompiler.FIELD_MODEL_KEY);
         return normalized;
+    }
+
+    private JsonNode wordSnapshotWithFormalControls(JsonNode snapshot, JsonNode mapping) {
+        var filtered = snapshot.deepCopy();
+        if (!(filtered.path("body") instanceof ObjectNode body)
+                || !body.path("customRanges").isArray()) return filtered;
+        var markers = new HashSet<String>();
+        for (var binding : mapping) {
+            var markerId = binding.path("markerId").asText("");
+            if (!markerId.isBlank()) markers.add(markerId);
+        }
+        var ranges = JsonNodeFactory.instance.arrayNode();
+        for (var range : body.path("customRanges")) {
+            if (!"JSD_MAPPING".equals(range.path("properties").path("source").asText())
+                    || markers.contains(range.path("rangeId").asText(""))) ranges.add(range.deepCopy());
+        }
+        body.set("customRanges", ranges);
+        return filtered;
     }
 
     private String mappingDescription(JsonNode binding) {
@@ -1306,10 +1673,31 @@ public class TemplateWorkspaceService {
         }
         var versionId = UUID.randomUUID();
         var data = objectMapper.createObjectNode();
+        var revisionSchema = source.schema().deepCopy();
+        var placedWordBindings = new HashSet<String>();
+        if (source.format() == TemplateFormat.DOCX) {
+            for (var binding : source.mapping()) {
+                if (!binding.path("markerId").asText("").isBlank()) {
+                    placedWordBindings.add(binding.path("bindingId").asText(""));
+                }
+            }
+        }
+        for (var field : revisionSchema.path(TemplateRecognitionCompiler.FIELD_MODEL_KEY).path("fields")) {
+            if (field instanceof ObjectNode object) {
+                object.remove(List.of("recognitionItemId", "candidate", "candidateLocator",
+                        "candidateLocatorType"));
+                if (placedWordBindings.contains(object.path("bindingId").asText(""))) {
+                    object.put("reviewStatus", "CONFIRMED");
+                    object.put("labelStatus", "NOT_APPLICABLE");
+                    object.put("confidence", 1.0);
+                }
+            }
+        }
         var layoutSummary = objectMapper.createObjectNode()
                 .put("reconciliationRequired", source.reconciliationRequired())
                 .put("derivedFromVersionId", sourceVersionId.toString());
         if (source.documentStructure().isObject()) layoutSummary.set("documentStructure", source.documentStructure().deepCopy());
+        if (source.origin() != null && source.origin().isObject()) layoutSummary.set("origin", source.origin().deepCopy());
         if (source.wordDocument().isObject()) {
             var word = (ObjectNode) source.wordDocument().deepCopy();
             word.put("workingDocxFileId", word.path("publishedDocxFileId")
@@ -1320,14 +1708,14 @@ public class TemplateWorkspaceService {
         var snapshotHash = StringUtils.hasText(source.snapshotHash())
                 ? source.snapshotHash() : canonicalizer.hash(source.inlineSnapshot());
         var workspaceHash = canonicalizer.workspaceHash(
-                versionId.toString(), source.schema(), source.mapping(), data, snapshotHash,
+                versionId.toString(), revisionSchema, source.mapping(), data, snapshotHash,
                 source.editorAppVersion(), source.pluginManifestHash()
         );
         repository.insertRevision(new TemplateRepository.NewRevision(
-                versionId, source.templateId(), sourceVersionId, source.schema(), layoutSummary,
+                versionId, source.templateId(), sourceVersionId, revisionSchema, layoutSummary,
                 source.snapshotFileId(), source.snapshotHash(), source.snapshotKind(),
                 source.editorAppVersion(), source.pluginManifestHash(), source.snapshotFormatVersion(),
-                source.schemaHash(), source.mappingHash(), canonicalizer.hash(data), workspaceHash,
+                canonicalizer.hash(revisionSchema), source.mappingHash(), canonicalizer.hash(data), workspaceHash,
                 actor.userId()
         ));
         // Revisions and rollbacks are derived from a validated immutable

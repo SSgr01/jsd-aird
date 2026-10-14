@@ -24,10 +24,41 @@ public class JdbcDataCategoryRepository implements DataCategoryRepository {
                 SELECT c.id, c.name, c.description, c.sort_order, count(DISTINCT j.id) AS source_count
                 FROM data.data_category c
                 LEFT JOIN data.import_job j ON j.category_id = c.id AND j.organization_id = c.organization_id
+                    AND j.source_owner = 'DATA_CENTER'
                 WHERE c.organization_id = ?
                 GROUP BY c.id, c.name, c.description, c.sort_order, c.created_at
                 ORDER BY c.sort_order, c.created_at
                 """, this::map, organizationId);
+    }
+
+    @Override
+    public DataSourceFacets facets(UUID organizationId) {
+        var rows = jdbc.query("""
+                WITH totals AS (
+                    SELECT count(*) AS total_source_count,
+                           count(*) FILTER (WHERE category_id IS NULL) AS uncategorized_source_count
+                    FROM data.import_job
+                    WHERE organization_id = ? AND source_owner = 'DATA_CENTER'
+                )
+                SELECT totals.total_source_count, totals.uncategorized_source_count,
+                       c.id AS category_id, c.name, c.description, c.sort_order, c.created_at,
+                       count(DISTINCT j.id) AS source_count
+                FROM totals
+                LEFT JOIN data.data_category c ON c.organization_id = ?
+                LEFT JOIN data.import_job j ON j.organization_id = ? AND j.source_owner = 'DATA_CENTER'
+                    AND j.category_id = c.id
+                GROUP BY totals.total_source_count, totals.uncategorized_source_count,
+                         c.id, c.name, c.description, c.sort_order, c.created_at
+                ORDER BY c.sort_order NULLS LAST, c.created_at NULLS LAST
+                """, (rs, rowNum) -> new FacetRow(
+                rs.getLong("total_source_count"), rs.getLong("uncategorized_source_count"),
+                rs.getObject("category_id", UUID.class), rs.getString("name"), rs.getString("description"),
+                (Integer) rs.getObject("sort_order"), rs.getLong("source_count")), organizationId, organizationId, organizationId);
+        var categories = rows.stream().filter(row -> row.categoryId() != null)
+                .map(row -> new Category(row.categoryId(), row.name(), row.description(), row.sortOrder(), row.sourceCount()))
+                .toList();
+        var totals = rows.isEmpty() ? new FacetRow(0, 0, null, null, null, null, 0) : rows.getFirst();
+        return new DataSourceFacets(categories, totals.totalSourceCount(), totals.uncategorizedSourceCount());
     }
 
     @Override
@@ -36,6 +67,7 @@ public class JdbcDataCategoryRepository implements DataCategoryRepository {
                 SELECT c.id, c.name, c.description, c.sort_order, count(DISTINCT j.id) AS source_count
                 FROM data.data_category c
                 LEFT JOIN data.import_job j ON j.category_id = c.id AND j.organization_id = c.organization_id
+                    AND j.source_owner = 'DATA_CENTER'
                 WHERE c.organization_id = ? AND c.id = ?
                 GROUP BY c.id, c.name, c.description, c.sort_order, c.created_at
                 """, this::map, organizationId, categoryId).stream().findFirst();
@@ -75,4 +107,7 @@ public class JdbcDataCategoryRepository implements DataCategoryRepository {
         return new Category(rs.getObject("id", UUID.class), rs.getString("name"),
                 rs.getString("description"), rs.getInt("sort_order"), rs.getLong("source_count"));
     }
+
+    private record FacetRow(long totalSourceCount, long uncategorizedSourceCount, UUID categoryId,
+                            String name, String description, Integer sortOrder, long sourceCount) { }
 }

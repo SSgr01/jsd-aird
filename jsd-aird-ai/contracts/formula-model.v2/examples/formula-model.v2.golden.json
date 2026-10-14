@@ -1,0 +1,56 @@
+{
+  "contractVersion": "formula-model.v2",
+  "requestId": "r01-golden-001",
+  "seed": 20260912,
+  "hashes": {
+    "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "scheme": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "dictionary": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "preprocessing": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "policy": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "model": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  "targets": [
+    {"id":"target-gloss","version":1,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","code":"GLOSS_60","valueType":"CONTINUOUS","unit":"GU","classes":[],"observationSemantics":{"method":"60_DEG"}},
+    {"id":"target-hardness","version":1,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","code":"PENCIL_HARDNESS","valueType":"ORDINAL","classes":["B","HB","F","H","2H"],"observationSemantics":{"order":"ascending"}},
+    {"id":"target-uv-dry","version":1,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","code":"UV_SURFACE_DRY","valueType":"BINARY","classes":["NO","YES"],"positiveClass":"YES","observationSemantics":{"test":"touch"}},
+    {"id":"target-appearance","version":1,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","code":"APPEARANCE","valueType":"CATEGORICAL","classes":["CLEAR","HAZY","CRATERED"],"observationSemantics":{"inspection":"visual"}}
+  ],
+  "inputScheme": {
+    "id":"scheme-v1","version":1,"sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","targetVersionId":"target-version-v1",
+    "fields":[
+      {"fieldVersionId":"field-formula-v1","code":"formula","valueType":"COMPOSITION","required":true,"acquisitionTiming":"PRE_EXPERIMENT","encoding":{}},
+      {"fieldVersionId":"field-substrate-v1","code":"substrate","valueType":"CATEGORY","required":true,"acquisitionTiming":"PRE_EXPERIMENT","encoding":{}}
+    ]
+  },
+  "materialDictionary": {
+    "id":"dictionary-v1","version":1,"sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "materials":[
+      {"materialId":"material-resin","code":"RESIN_A","role":"MAIN_RESIN","encoderIndex":0},
+      {"materialId":"material-additive","code":"ADDITIVE_B","role":"ADDITIVE","encoderIndex":1},
+      {"materialId":"material-solvent","code":"SOLVENT_C","role":"SOLVENT","encoderIndex":2}
+    ]
+  },
+  "preprocessing":{"id":"preprocess-v1","version":1,"sha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","config":{"normalizeFormula":false}},
+  "trainingPolicy":{"id":"policy-v1","version":1,"sha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","config":{"validation":"GROUPED"}},
+  "formula": {
+    "basis":"MASS_PERCENT","compositionComplete":true,"recordedTotal":98.8,
+    "components":[
+      {"materialId":"material-resin","ratio":58.0,"unit":"PERCENT","amountKnown":true},
+      {"materialId":"material-additive","ratio":1.5,"unit":"PERCENT","amountKnown":true},
+      {"materialId":"material-solvent","ratio":39.3,"unit":"PERCENT","amountKnown":true}
+    ]
+  },
+  "modelBindings": [
+    {"targetIndex":0,"modelVersionId":"model-gloss-v1","modelBundle":{"url":"https://objects.invalid/gloss.zip","sha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}},
+    {"targetIndex":1,"modelVersionId":"model-hardness-v3","modelBundle":{"url":"https://objects.invalid/hardness.zip","sha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}},
+    {"targetIndex":2,"modelVersionId":"model-uv-dry-v2","modelBundle":{"url":"https://objects.invalid/uv-dry.zip","sha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}},
+    {"targetIndex":3,"modelVersionId":"model-appearance-v4","modelBundle":{"url":"https://objects.invalid/appearance.zip","sha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}}
+  ],
+  "typedResults": [
+    {"status":"SUCCEEDED","targetId":"target-gloss","modelVersionId":"model-gloss-v1","result":{"resultType":"CONTINUOUS","value":92.4,"unit":"GU","lower":89.8,"upper":95.0,"coverageLevel":0.9},"applicability":{"status":"IN_DOMAIN","distance":0.12,"reasons":[]},"warnings":[{"code":"FORMULA_TOTAL_WARNING","message":"recorded total is 98.8%"}]},
+    {"status":"SUCCEEDED","targetId":"target-hardness","modelVersionId":"model-hardness-v3","result":{"resultType":"ORDINAL","label":"H","probabilities":{"HB":0.1,"F":0.2,"H":0.6,"2H":0.1},"thresholdProbability":0.8},"applicability":{"status":"IN_DOMAIN","distance":0.18,"reasons":[]},"warnings":[]},
+    {"status":"SUCCEEDED","targetId":"target-uv-dry","modelVersionId":"model-uv-dry-v2","result":{"resultType":"BINARY","label":"YES","positiveClass":"YES","probability":0.91,"decisionThreshold":0.6},"applicability":{"status":"IN_DOMAIN","distance":0.14,"reasons":[]},"warnings":[]},
+    {"status":"SUCCEEDED","targetId":"target-appearance","modelVersionId":"model-appearance-v4","result":{"resultType":"CATEGORICAL","label":"CLEAR","probabilities":{"CLEAR":0.8,"HAZY":0.15,"CRATERED":0.05}},"applicability":{"status":"NEAR_BOUNDARY","distance":0.7,"reasons":["substrate near boundary"]},"warnings":[]}
+  ]
+}

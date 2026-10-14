@@ -19,6 +19,7 @@ import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import com.jsd.aird.ai.application.port.RerankerProvider;
 import com.jsd.aird.ai.application.port.WebSearchProvider;
@@ -34,6 +35,14 @@ class RagRetrievalServiceTest {
 
         assertThat(inferred.recordTerm()).isEqualTo("SJ-230水洗后");
         assertThat(inferred.fieldTerm()).isEqualTo("粘度");
+    }
+
+    @Test
+    void removesAssistantScopePrefixBeforeInferringRecordIdentifier() {
+        var inferred = RagRetrievalService.inferFieldLookup(
+                "只查数据中心：实验编号 APP-UV-0001 的粘度、硬度和钢丝绒耐磨结果");
+
+        assertThat(inferred.recordTerm()).isEqualTo("APP-UV-0001");
     }
 
     @Test
@@ -59,6 +68,129 @@ class RagRetrievalServiceTest {
 
         assertThat(inferred.recordTerm()).isEmpty();
         assertThat(inferred.fieldTerm()).isEqualTo("粘度");
+    }
+
+    @Test
+    void extractsChineseExperimentEntitiesWithoutGeneratingNgrams() {
+        assertThat(RagRetrievalService.extractStructuredQueryTerms("陈琪的实验有什么").entities())
+                .containsExactly("陈琪");
+        assertThat(RagRetrievalService.extractStructuredQueryTerms("分析甲油胶实验的数据").entities())
+                .containsExactly("甲油胶实验");
+    }
+
+    @Test
+    void longestMatchKeepsCompleteModelAndCombinationNames() {
+        assertThat(RagRetrievalService.extractStructuredQueryTerms(
+                "样品：超耐黄变聚氨酯（UV-01A）", List.of("超耐黄变聚氨酯", "UV-01A" )).entities())
+                .containsExactly("超耐黄变聚氨酯（UV-01A）");
+        assertThat(RagRetrievalService.extractStructuredQueryTerms(
+                "查询耐高温水性聚氨酯A-12的粘度", List.of("耐高温水性聚氨酯A-12", "A-12" )).entities())
+                .containsExactly("耐高温水性聚氨酯A-12");
+    }
+
+    @Test
+    void longestMatchKeepsIndependentEntitiesTogether() {
+        assertThat(RagRetrievalService.extractStructuredQueryTerms(
+                "陈琪的实验有什么，样品：UV-01A").entities())
+                .containsExactly("UV-01A", "陈琪");
+    }
+
+    @Test
+    void doesNotTurnTheRestOfAnIdentifierQuestionIntoARecordTerm() {
+        assertThat(RagRetrievalService.extractStructuredQueryTerms(
+                "只查数据中心：实验编号 APP-UV-0001 的粘度、硬度和钢丝绒耐磨结果").entities())
+                .contains("APP-UV-0001")
+                .doesNotContain("APP-UV-0001 的粘度、硬度和钢丝绒耐磨结果");
+        assertThat(RagRetrievalService.extractStructuredQueryTerms(
+                "比较 APP-UV-0001 和 APP-UV-0002 的粘度").entities())
+                .contains("APP-UV-0001", "APP-UV-0002");
+    }
+
+    @Test
+    void keepsAChinesePrefixedIdentifierWithSeparatorsIntact() {
+        assertThat(RagRetrievalService.extractStructuredQueryTerms(
+                "配方-001-01 里同一个指标有多个观察值").entities())
+                .contains("配方-001-01")
+                .doesNotContain("001-01");
+    }
+
+    @Test
+    void mapsExplicitLifecycleWordsToADataEvidenceBoundary() {
+        assertThat(RagRetrievalService.inferEvidenceFilter("正式数据中心中 APP-UV-0001 的粘度"))
+                .isEqualTo(DataSourceFileSearchFacade.EvidenceFilter.CONFIRMED_DATA);
+        assertThat(RagRetrievalService.inferEvidenceFilter("只看已完成的实验 EXP-20260918-1B9584"))
+                .isEqualTo(DataSourceFileSearchFacade.EvidenceFilter.COMPLETED_EXPERIMENT);
+        assertThat(RagRetrievalService.inferEvidenceFilter("实验本里 APP-UV-0001 的粘度"))
+                .isEqualTo(DataSourceFileSearchFacade.EvidenceFilter.ANY);
+    }
+
+    @Test
+    void doesNotTurnAnExplicitWorkbookNameIntoRecordIdentifiers() {
+        var question = "正式数据中心文件《2026年09月_应用配方性能评估_数据中心导入_240条.xlsx》中 APP-UV-0001 的粘度是多少？";
+
+        assertThat(RagRetrievalService.extractStructuredQueryTerms(
+                question.replaceAll("(?i)[“\\\"《][^”\\\"》\\r\\n]{1,260}\\.(?:xlsx|xls|csv)[”\\\"》]", " "))
+                .entities()).contains("APP-UV-0001")
+                .doesNotContain("2026", "09", "240", "xlsx");
+    }
+
+    @Test
+    void comparisonUsesIndependentIdentifiersAndCanonicalFieldNames() {
+        var knowledge = mock(KnowledgeSearchFacade.class);
+        var data = mock(DataSourceFileSearchFacade.class);
+        var rewrite = mock(QueryRewriteService.class);
+        var reranker = mock(RerankerProvider.class);
+        var categoryId = UUID.randomUUID();
+        var question = "只查数据中心：比较 APP-UV-0001 和 APP-UV-0002 的粘度、硬度和钢丝绒耐磨观察值，不要展示数据明细。";
+        var plan = new QueryRewriteService.QueryPlan(question, question, List.of(), List.of(), List.of(),
+                Map.of(), "", List.of(), new QueryRewriteService.DataRequest("FIELD_LOOKUP", "",
+                List.of("比较 APP-UV-0001 和 APP-UV-0002"), List.of("粘度", "硬度", "钢丝绒耐磨观察值")));
+        when(rewrite.rewrite(eq(question), anyList(), anyBoolean()))
+                .thenReturn(new QueryRewriteService.Result(plan, "MODEL", "fast", false));
+        var captured = new AtomicReference<DataSourceFileSearchFacade.DataDetailQuery>();
+        when(data.queryDetails(any(), any(), anyList(), any(DataSourceFileSearchFacade.AccessScope.class)))
+                .thenAnswer(invocation -> {
+                    var query = invocation.getArgument(1, DataSourceFileSearchFacade.DataDetailQuery.class);
+                    captured.set(query);
+                    return DataSourceFileSearchFacade.DataDetailResult.empty(query.mode());
+                });
+        when(reranker.isConfigured()).thenReturn(false);
+
+        new RagRetrievalService(knowledge, data, rewrite, reranker)
+                .retrieve(UUID.randomUUID(), question, List.of(), List.of(), List.of(categoryId), true);
+
+        assertThat(captured.get().recordTerms()).containsExactly("APP-UV-0001", "APP-UV-0002");
+        assertThat(captured.get().recordTermMatch()).isEqualTo(DataSourceFileSearchFacade.RecordTermMatch.ANY);
+        assertThat(captured.get().fieldTerms()).contains("粘度", "硬度", "钢丝绒耐磨");
+        assertThat(captured.get().recordTerms()).doesNotContain("比较 APP-UV-0001 和 APP-UV-0002");
+    }
+
+    @Test
+    void ignoresAnswerInstructionsWhenBuildingRecordTerms() {
+        var knowledge = mock(KnowledgeSearchFacade.class);
+        var data = mock(DataSourceFileSearchFacade.class);
+        var rewrite = mock(QueryRewriteService.class);
+        var reranker = mock(RerankerProvider.class);
+        var categoryId = UUID.randomUUID();
+        var question = "正式数据中心中 APP-UV-001 的粘度是多少？我少写了一个 0，请把命中的实验编号原样写出，并给出粘度。";
+        var plan = new QueryRewriteService.QueryPlan(question, question, List.of(), List.of(), List.of(),
+                Map.of(), "", List.of(), new QueryRewriteService.DataRequest("FIELD_LOOKUP", "",
+                List.of("APP-UV-001", "原样写出", "把命中"), List.of("粘度")));
+        when(rewrite.rewrite(eq(question), anyList(), anyBoolean()))
+                .thenReturn(new QueryRewriteService.Result(plan, "MODEL", "fast", false));
+        var captured = new AtomicReference<DataSourceFileSearchFacade.DataDetailQuery>();
+        when(data.queryDetails(any(), any(), anyList(), any(DataSourceFileSearchFacade.AccessScope.class)))
+                .thenAnswer(invocation -> {
+                    var query = invocation.getArgument(1, DataSourceFileSearchFacade.DataDetailQuery.class);
+                    captured.set(query);
+                    return DataSourceFileSearchFacade.DataDetailResult.empty(query.mode());
+                });
+        when(reranker.isConfigured()).thenReturn(false);
+
+        new RagRetrievalService(knowledge, data, rewrite, reranker)
+                .retrieve(UUID.randomUUID(), question, List.of(), List.of(), List.of(categoryId), true);
+
+        assertThat(captured.get().recordTerms()).containsExactly("APP-UV-001");
     }
 
     @Test
@@ -214,6 +346,13 @@ class RagRetrievalServiceTest {
                 .isEqualTo("https://example.com/path");
         assertThat(RagRetrievalService.canonicalWebUrl("http://127.0.0.1/admin")).isEmpty();
         assertThat(RagRetrievalService.canonicalWebUrl("file:///etc/passwd")).isEmpty();
+    }
+
+    @Test
+    void recognizesMultiRecordComparisonQuestions() {
+        assertThat(RagRetrievalService.isComparisonQuestion("比较 APP-001 和 APP-002 的粘度")).isTrue();
+        assertThat(RagRetrievalService.isComparisonQuestion("APP-001 vs APP-002 哪个耐磨更高")).isTrue();
+        assertThat(RagRetrievalService.isComparisonQuestion("查询 APP-001 的粘度")).isFalse();
     }
 
     @Test

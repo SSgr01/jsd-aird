@@ -21,6 +21,10 @@ final class ImportCompatibilityEvaluator {
     }
 
     Result evaluate(JsonNode contract, List<TemplateDataImportFacade.ParsedSheet> sheets) {
+        return evaluate(contract, sheets, objectMapper.createArrayNode());
+    }
+
+    Result evaluate(JsonNode contract, List<TemplateDataImportFacade.ParsedSheet> sheets, JsonNode fieldResolutions) {
         if (contract == null || !contract.path("components").isArray()) {
             return new Result("LEGACY", objectMapper.createArrayNode());
         }
@@ -34,12 +38,22 @@ final class ImportCompatibilityEvaluator {
             var best = sheets.stream().map(sheet -> score(component, sheet))
                     .max(java.util.Comparator.comparingDouble(ComponentScore::score)).orElse(null);
             var status = componentStatus(component, best, required);
+            var componentId = component.path("componentId").asText("");
+            var resolvedFields = objectMapper.createArrayNode();
+            if (fieldResolutions != null && fieldResolutions.isArray()) fieldResolutions.forEach(field -> {
+                if (componentId.equals(field.path("componentId").asText(""))) resolvedFields.add(field.deepCopy());
+            });
+            if (hasStatus(resolvedFields, "MISSING_REQUIRED")) status = "INCOMPATIBLE";
+            else if (hasStatus(resolvedFields, "AMBIGUOUS") && !"INCOMPATIBLE".equals(status)) status = "REVIEW_REQUIRED";
+            else if ((hasStatus(resolvedFields, "RELOCATED") || hasStatus(resolvedFields, "MISSING_OPTIONAL"))
+                    && "EXACT".equals(status)) status = "COMPATIBLE";
             statuses.add(status);
             var item = matches.addObject()
-                    .put("componentId", component.path("componentId").asText(""))
+                    .put("componentId", componentId)
                     .put("status", status)
                     .put("required", required)
                     .put("score", best == null ? 0 : best.score());
+            item.set("fieldResolutions", resolvedFields);
             var reasonCodes = item.putArray("resolutionReasonCodes");
             resolutionReasons(component, best, required, status).forEach(reasonCodes::add);
             var affected = item.putArray("affectedFieldIds");
@@ -61,6 +75,11 @@ final class ImportCompatibilityEvaluator {
                 : statuses.stream().anyMatch("REVIEW_REQUIRED"::equals) ? "REVIEW_REQUIRED"
                 : statuses.stream().anyMatch("COMPATIBLE"::equals) ? "COMPATIBLE" : "EXACT";
         return new Result(overall, matches);
+    }
+
+    private boolean hasStatus(JsonNode fields, String status) {
+        for (var field : fields) if (status.equals(field.path("status").asText())) return true;
+        return false;
     }
 
     private ComponentScore score(JsonNode component, TemplateDataImportFacade.ParsedSheet sheet) {

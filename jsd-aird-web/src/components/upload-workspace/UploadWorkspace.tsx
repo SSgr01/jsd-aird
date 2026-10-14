@@ -251,7 +251,6 @@ export function UploadWorkspace({
           )}
 
           <div className="upload-workspace-records" aria-live="polite">
-            {recordsLoading && records.length > 0 && <div className="upload-workspace-records-refreshing"><Spin size="small" /> <Typography.Text type="secondary">正在刷新任务状态…</Typography.Text></div>}
             {records.length ? records.map((record) => (
               <article className="upload-workspace-record" key={record.id}>
                 <div className="upload-workspace-record-main">

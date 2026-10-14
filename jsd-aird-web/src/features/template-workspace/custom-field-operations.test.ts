@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createCustomFieldWorkspace } from './custom-field-operations';
+import { createCustomFieldWorkspace, expandAdjacentRepeatRegion } from './custom-field-operations';
 import type { FieldModel, TemplateBinding } from './types';
 
 vi.stubGlobal('crypto', { randomUUID: () => '11111111-1111-4111-8111-111111111111' });
@@ -57,5 +57,49 @@ describe('createCustomFieldWorkspace', () => {
     expect(result.field.reviewStatus).toBe('NEEDS_CONFIRMATION');
     expect(result.binding.bindingStatus).toBe('MISSING');
     expect(result.binding.diagnostic).toMatchObject({ parentFieldId: 'parent', parentBindingId: 'parent-binding' });
+  });
+
+  it('inherits the parent worksheet and extends an adjacent detail column', () => {
+    const parent = { ...parentBinding, locator: {
+      sheetId: 'sheet-1', sheetName: '测试数据', range: 'A1:C3',
+      recordRange: 'A1:C3', dataRange: 'A2:C3', headerRange: 'A1:C1',
+      valueRange: 'A1:C3', logicalInputRange: 'A1:C3', address: 'A1:C3',
+      value: { range: 'A1:C3', address: 'A1' },
+    }, recordWidth: 3 };
+    const created = createCustomFieldWorkspace(
+      { type: 'object', properties: {} }, model, [parent],
+      { ownerId: 'template-1', origin: 'TEMPLATE_LOCAL', kind: 'REPEAT_FIELD',
+        name: '测试明细', parentField: model.fields[0], parentBinding: parent,
+        labelRange: 'D1', valueRange: 'D2:D3' },
+    );
+    expect(created.binding.locator.sheetId).toBe('sheet-1');
+    const expanded = expandAdjacentRepeatRegion(created.mapping, created.model, created.binding);
+    expect(expanded.mapping[0]!.locator).toMatchObject({
+      range: 'A1:D3', recordRange: 'A1:D3', dataRange: 'A2:D3',
+      headerRange: 'A1:D1', valueRange: 'A1:D3',
+      logicalInputRange: 'A1:D3', address: 'A1:D3',
+      value: { range: 'A1:D3', address: 'A1' },
+    });
+    expect(expanded.mapping[0]!.recordWidth).toBe(4);
+    expect(expanded.model.fields[0]!.recordWidth).toBe(4);
+    const repaired = expandAdjacentRepeatRegion(
+      [{ ...parent, locator: { ...parent.locator, recordRange: 'A1:D3', dataRange: 'A2:D3' }, recordWidth: 4 }, created.binding],
+      created.model, created.binding,
+    );
+    expect(repaired.mapping[0]!.locator.range).toBe('A1:D3');
+    expect(repaired.mapping[0]!.recordWidth).toBe(4);
+  });
+
+  it('does not extend a region for a different sheet or a distant column', () => {
+    const parent = { ...parentBinding, locator: { sheetId: 'sheet-1', dataRange: 'A2:C3' } };
+    const child = {
+      ...parent, bindingId: 'child', parentBindingId: 'parent-binding',
+      mappingKind: 'REPEAT_FIELD' as const,
+      locator: { sheetId: 'sheet-2', valueRange: 'D2:D3' },
+    };
+    expect(expandAdjacentRepeatRegion([parent, child], model, child).mapping[0]).toEqual(parent);
+    expect(expandAdjacentRepeatRegion([parent, { ...child, locator: {
+      sheetId: 'sheet-1', valueRange: 'F2:F3',
+    } }], model, { ...child, locator: { sheetId: 'sheet-1', valueRange: 'F2:F3' } }).mapping[0]).toEqual(parent);
   });
 });

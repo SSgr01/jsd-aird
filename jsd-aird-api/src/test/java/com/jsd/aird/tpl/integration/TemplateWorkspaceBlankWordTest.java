@@ -297,6 +297,7 @@ class TemplateWorkspaceBlankWordTest {
                 patcher,
                 wordDocumentParser,
                 importContractCompiler,
+                null,
                 transactionManager,
                 "test-bucket"
         );

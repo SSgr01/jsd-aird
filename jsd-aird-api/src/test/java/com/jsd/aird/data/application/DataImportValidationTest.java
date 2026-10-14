@@ -1,9 +1,11 @@
 package com.jsd.aird.data.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -17,6 +19,7 @@ import com.jsd.aird.data.application.port.DataRepository;
 import com.jsd.aird.ops.application.port.AuditLogFacade;
 import com.jsd.aird.ops.application.port.FileObjectRepository;
 import com.jsd.aird.ops.application.port.OpsAsyncFacade;
+import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.security.ActorContext;
 import com.jsd.aird.tpl.api.TemplateDataImportFacade;
 import org.junit.jupiter.api.AfterEach;
@@ -31,7 +34,8 @@ class DataImportValidationTest {
     private final ObjectMapper mapper = new ObjectMapper();
     private final DataRepository repository = mock(DataRepository.class);
     private final TemplateDataImportFacade templates = mock(TemplateDataImportFacade.class);
-    private final DataImportService service = new DataImportService(repository, mock(FileObjectRepository.class),
+    private final FileObjectRepository files = mock(FileObjectRepository.class);
+    private final DataImportService service = new DataImportService(repository, files,
             templates, mapper, mock(AuditLogFacade.class), mock(OpsAsyncFacade.class));
     private final UUID jobId = UUID.randomUUID();
     private final UUID templateVersionId = UUID.randomUUID();
@@ -54,6 +58,46 @@ class DataImportValidationTest {
         var captor = ArgumentCaptor.forClass(List.class);
         verify(repository).replaceValidation(eq(ORGANIZATION_ID), eq(jobId), any(), captor.capture(), eq("WAITING_MAPPING"));
         assertThat(captor.getValue()).anyMatch(item -> ((DataRepository.Issue) item).issueType().equals("REQUIRED_MAPPING_MISSING"));
+    }
+
+    @Test
+    void explainsThatExperimentImportsRequireTheV9ImportContractAndExperimentUsage() {
+        ActorContext.set(new com.jsd.aird.shared.security.Actor(ORGANIZATION_ID, USER_ID, "developer"));
+        when(templates.getPublished(ORGANIZATION_ID, templateVersionId))
+                .thenReturn(importTemplate(7, "GENERAL_DATA"));
+
+        assertThatThrownBy(() -> service.createExperiment(experimentDraftCommand()))
+                .isInstanceOf(ApiException.class)
+                .hasMessage("生成实验草稿需选择已发布且导入契约版本为 V9、用途为实验数据（EXPERIMENT_DATA）的模板；V9 指导入契约版本，不是模板版本号");
+        verify(repository, never()).insertJob(any());
+    }
+
+    @Test
+    void createsExperimentImportJobFromPublishedV9ExperimentTemplate() {
+        ActorContext.set(new com.jsd.aird.shared.security.Actor(ORGANIZATION_ID, USER_ID, "developer"));
+        var sourceFileId = UUID.randomUUID();
+        var experimentCategoryId = UUID.randomUUID();
+        when(templates.getPublished(ORGANIZATION_ID, templateVersionId))
+                .thenReturn(importTemplate(9, "EXPERIMENT_DATA"));
+        when(files.find(ORGANIZATION_ID, sourceFileId)).thenReturn(Optional.of(new FileObjectRepository.FileObject(
+                sourceFileId, ORGANIZATION_ID, "staged/data.xlsx", "data.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 100, "sha-256", "STAGED")));
+        when(repository.findCompletedDuplicate(ORGANIZATION_ID, "sha-256", templateVersionId))
+                .thenReturn(Optional.empty());
+        when(repository.findJob(eq(ORGANIZATION_ID), any(UUID.class))).thenReturn(Optional.of(new DataRepository.Job(
+                jobId, sourceFileId, "sha-256", "data.xlsx", "XLSX", templateVersionId, null,
+                "QUEUED", 0, "PREPARING", null, null, Instant.now(), Instant.now(),
+                9, "contract-hash", "READY", "EXPERIMENT_DRAFT", experimentCategoryId)));
+
+        var created = service.createExperiment(new DataImportService.CreateCommand(sourceFileId, templateVersionId,
+                null, false, List.of(), "EXPERIMENT_DRAFT", experimentCategoryId));
+
+        assertThat(created.importPurpose()).isEqualTo("EXPERIMENT_DRAFT");
+        var captor = org.mockito.ArgumentCaptor.forClass(DataRepository.NewJob.class);
+        verify(repository).insertJob(captor.capture());
+        assertThat(captor.getValue().importContractVersion()).isEqualTo(9);
+        assertThat(captor.getValue().importPurpose()).isEqualTo("EXPERIMENT_DRAFT");
+        assertThat(captor.getValue().targetExperimentCategoryId()).isEqualTo(experimentCategoryId);
     }
 
     @Test
@@ -134,6 +178,18 @@ class DataImportValidationTest {
         when(repository.findJob(ORGANIZATION_ID, jobId)).thenReturn(Optional.of(new DataRepository.Job(
                  jobId, UUID.randomUUID(), "sha", "data.xlsx", "XLSX", templateVersionId, null,
                 "WAITING_MAPPING", 45, "WAITING_MAPPING", "parser", null, Instant.now(), Instant.now())));
+    }
+
+    private DataImportService.CreateCommand experimentDraftCommand() {
+        return new DataImportService.CreateCommand(UUID.randomUUID(), templateVersionId,
+                null, false, List.of(), "EXPERIMENT_DRAFT", UUID.randomUUID());
+    }
+
+    private TemplateDataImportFacade.DataTemplateDefinition importTemplate(int contractVersion, String usage) {
+        var contract = mapper.createObjectNode().put("templateUsage", usage);
+        return new TemplateDataImportFacade.DataTemplateDefinition(UUID.randomUUID(), templateVersionId,
+                "experiment-template", "实验模板", "实验", 1, "XLSX", mapper.createObjectNode(),
+                mapper.createArrayNode(), List.of(), contractVersion, 1, "contract-hash", contract);
     }
 
     private DataRepository.Row row(String... values) {

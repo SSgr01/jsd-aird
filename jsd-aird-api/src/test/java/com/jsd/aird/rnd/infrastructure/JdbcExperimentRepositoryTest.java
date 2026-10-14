@@ -9,6 +9,7 @@ import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import java.time.Instant;
 import java.time.LocalDate;
@@ -115,6 +116,25 @@ class JdbcExperimentRepositoryTest {
         }
         assertThat(auditIndex).isGreaterThanOrEqualTo(0);
         assertThat(arguments.getAllValues().get(auditIndex)[8]).isEqualTo("actual-creator");
+    }
+
+    @Test
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void completedFactsQueryRequiresCurrentCompletedVersionAndAppliesProjectScope() {
+        doReturn(List.of()).when(jdbc).query(anyString(), any(RowMapper.class), any(Object[].class));
+        when(jdbc.queryForObject(anyString(), org.mockito.ArgumentMatchers.eq(Long.class), any(Object[].class)))
+                .thenReturn(0L);
+        var projectId = UUID.randomUUID();
+        var query = new ExperimentRepository.CompletedFactsSearch(java.util.Set.of(), null, null, 1, 20,
+                new ExperimentRepository.DataScopeFilter("PROJECT", USER_ID, java.util.Set.of(projectId)));
+
+        repository.completedFacts(ORGANIZATION_ID, query);
+        repository.countCompletedFacts(ORGANIZATION_ID, query);
+
+        var sql = ArgumentCaptor.forClass(String.class);
+        verify(jdbc).query(sql.capture(), any(RowMapper.class), any(Object[].class));
+        assertThat(sql.getValue()).contains("e.deleted=false", "e.status='COMPLETED'", "v.status='COMPLETED'",
+                "e.project_id IN");
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})

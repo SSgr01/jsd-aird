@@ -3,9 +3,9 @@ $Root = Split-Path -Parent $PSScriptRoot
 Push-Location (Join-Path $Root "jsd-aird-web")
 try {
     if (-not (Test-Path -LiteralPath "node_modules")) {
-        npm ci
+        & npm.cmd ci
     }
-    npm run dev
+    & npm.cmd run dev
 }
 finally {
     Pop-Location

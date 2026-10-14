@@ -375,10 +375,6 @@ export function QualityRecordWorkspacePage() {
     }
   };
   const switchView = (next: ViewMode) => {
-    if (next === 'versions' && versions.length === 0) {
-      msg.info('发布后才会生成版本记录');
-      return;
-    }
     if (next === 'versions' && dirty) {
       msg.warning('当前内容尚未保存，请先保存后再查看版本记录');
       return;
@@ -485,16 +481,14 @@ export function QualityRecordWorkspacePage() {
               ),
             },
             { key: 'edit', label: '编辑', disabled: !isDesktop },
-            ...(versions.length > 0
-              ? [{
-                key: 'versions',
-                label: (
-                  <>
-                    <HistoryOutlined /> 版本记录
-                  </>
-                ),
-              }]
-              : []),
+            {
+              key: 'versions',
+              label: (
+                <>
+                  <HistoryOutlined /> 版本记录
+                </>
+              ),
+            },
           ]}
         />
       </nav>

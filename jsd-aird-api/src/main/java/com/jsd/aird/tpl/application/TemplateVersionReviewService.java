@@ -31,14 +31,34 @@ public class TemplateVersionReviewService {
 
     @Transactional
     public View submit(UUID versionId) {
+        return submit(versionId, false);
+    }
+
+    @Transactional
+    public View submit(UUID versionId, boolean dataCleanupConfirmed) {
         var actor = ActorContext.required();
         requireDraft(actor.organizationId(), versionId);
         var current = reviews.ensure(actor.organizationId(), versionId);
         if (!current.status().equals("NOT_SUBMITTED") && !current.status().equals("REJECTED")) {
             throw new ApiException(ApiErrorCode.REVIEW_STATE_CONFLICT, "当前版本不允许提交审核");
         }
-        return view(reviews.transition(actor.organizationId(), versionId, current.status(), "SUBMITTED",
-                actor.userId(), null), reviews.events(actor.organizationId(), versionId));
+        var workspace = templates.findWorkspace(actor.organizationId(), versionId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "模板版本不存在"));
+        var experimentOrigin = workspace.origin() != null
+                && workspace.origin().isObject()
+                && "EXPERIMENT".equals(workspace.origin().path("type").asText());
+        if (experimentOrigin && !dataCleanupConfirmed) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "实验来源模板提交审核前必须确认已清理实际实验数据");
+        }
+        var comment = experimentOrigin ? "已确认检查并清理实际实验数据" : null;
+        var result = reviews.transition(actor.organizationId(), versionId, current.status(), "SUBMITTED",
+                actor.userId(), comment);
+        if (experimentOrigin) {
+            templates.appendAudit(actor.organizationId(), actor.userId(),
+                    "TEMPLATE_DATA_CLEANUP_CONFIRMED", "TEMPLATE_VERSION", versionId,
+                    workspace.origin().deepCopy());
+        }
+        return view(result, reviews.events(actor.organizationId(), versionId));
     }
 
     @Transactional

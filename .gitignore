@@ -36,4 +36,28 @@ Thumbs.db
 /ragent-main/
 /.codex-tmp/
 /qa/
-/docs/
+/docs/*
+!/docs/图谱分析当前逻辑、性能与输出质量诊断.md
+/tmp/
+
+# Local AI/demo runtime output
+/catboost_info/
+**/catboost_info/
+**/__pycache__/
+**/.pytest_cache/
+/.runtime/demo/
+.codex-temp
+
+
+# Local one-off scripts and alternate package-manager metadata. The committed
+# demo entry points above are explicitly re-included for cross-computer setup.
+/jsd-aird-web/pnpm-lock.yaml
+/jsd-aird-web/pnpm-workspace.yaml
+/scripts/sql/
+/scripts/testdata/*
+!/scripts/testdata/r07_register_15y_candidates.py
+!/scripts/testdata/r07_synthetic_15y_train_and_predict.py
+!/scripts/testdata/r07_synthetic_prediction_data.py
+!/scripts/testdata/r10_bulk_client_template_import.py
+!/scripts/testdata/r10_noformula_bundle.py
+!/scripts/testdata/r10_register_noformula_model.sql

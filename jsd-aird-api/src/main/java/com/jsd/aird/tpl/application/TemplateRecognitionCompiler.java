@@ -180,6 +180,9 @@ public class TemplateRecognitionCompiler {
                     }
                     field.set("locator", locator.deepCopy());
                      copyStandardMetadata(field, payload);
+                    copyIfPresent(payload, field, "labelPath", "labelPathSegments", "experimentField",
+                            "experimentItemLabel", "experimentSemanticConfidence", "experimentSemanticStatus",
+                            "experimentSemanticSource", "experimentSemanticAlternatives", "experimentSemanticIssue");
                     if (StringUtils.hasText(payload.path("parentFieldId").asText())) {
                         field.put("parentFieldId", payload.path("parentFieldId").asText());
                     }
@@ -195,6 +198,9 @@ public class TemplateRecognitionCompiler {
                     }
                     if (payload.path("tableModel").isObject()) {
                         field.set("tableModel", payload.path("tableModel").deepCopy());
+                    }
+                    if (payload.path("listProjections").isArray()) {
+                        field.set("listProjections", payload.path("listProjections").deepCopy());
                     }
                     fields.add(field);
                     if (("ROW_TABLE".equals(kind) || "COLUMN_TABLE".equals(kind))
@@ -232,7 +238,98 @@ public class TemplateRecognitionCompiler {
         baseSchema.set(FIELD_MODEL_KEY, fieldModel);
         TemplateLocatorNormalizer.normalizeFieldModel(objectMapper, baseSchema);
         fieldModel = (ObjectNode) baseSchema.path(FIELD_MODEL_KEY);
+        enrichHierarchyFromSuggestions(fields, mapping, suggestions);
+        attachListProjectionsToRootMappings(mapping, suggestions);
+        new ExperimentTemplateSemanticCompiler(objectMapper).apply(baseSchema, mapping, fieldModel);
         return new CompiledRecognition(baseSchema, mapping, fieldModel);
+    }
+
+    private void enrichHierarchyFromSuggestions(
+            ArrayNode fields,
+            ArrayNode mapping,
+            List<TemplateImportRepository.RecognitionSuggestionView> suggestions
+    ) {
+        var byBinding = new java.util.HashMap<String, JsonNode>();
+        var byAddress = new java.util.HashMap<String, JsonNode>();
+        for (var suggestion : suggestions) {
+            var payload = suggestion.payload();
+            if (!payload.path("labelPathSegments").isArray()
+                    || payload.path("labelPathSegments").isEmpty()) continue;
+            var bindingId = payload.path("bindingId").asText("");
+            if (!bindingId.isBlank()) byBinding.put(bindingId, payload);
+            var locator = payload.path("locator");
+            var address = locator.path("address").asText(locator.path("valueRange").asText(""));
+            if (!address.isBlank()) byAddress.put(address, payload);
+        }
+        for (var target : List.of(fields, mapping)) {
+            for (var value : target) {
+                if (!(value instanceof ObjectNode object)) continue;
+                var source = byBinding.get(object.path("bindingId").asText(""));
+                if (source == null) {
+                    var locator = object.path("locator");
+                    source = byAddress.get(locator.path("address").asText(locator.path("valueRange").asText("")));
+                }
+                if (source != null) {
+                    object.set("labelPathSegments", source.path("labelPathSegments").deepCopy());
+                    if (source.path("labelPath").isTextual()) {
+                        object.put("labelPath", source.path("labelPath").asText());
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * A physical table root can be synthesized from accepted child bindings,
+     * while the matrix projection is produced on the reviewed physical table
+     * suggestion.  Join the two by the immutable table range before semantic
+     * compilation so the executable mapping cannot lose the projection.
+     */
+    private void attachListProjectionsToRootMappings(
+            ArrayNode mapping,
+            List<TemplateImportRepository.RecognitionSuggestionView> suggestions
+    ) {
+        for (var suggestion : suggestions) {
+            var payload = suggestion.payload();
+            if ((!"ACCEPTED".equals(suggestion.decision())
+                    && !"CONFIRMED".equals(payload.path("canonicalStatus").asText("")))
+                    || !payload.path("listProjections").isArray()) continue;
+            var sourceRange = payload.path("locator").path("range")
+                    .asText(payload.path("range").asText(""));
+            var sourceSheet = payload.path("locator").path("sheetId")
+                    .asText(payload.path("sheetId").asText(""));
+            ObjectNode target = null;
+            for (var value : mapping) {
+                if (!(value instanceof ObjectNode candidate)) continue;
+                var locator = candidate.path("locator");
+                var candidateRange = locator.path("range").asText(locator.path("valueRange").asText(""));
+                var candidateSheet = locator.path("sheetId").asText(candidate.path("sheetId").asText(""));
+                if ("REPEAT_REGION".equals(candidate.path("mappingKind").asText(""))
+                        && sourceRange.equals(candidateRange)
+                        && (sourceSheet.isBlank() || sourceSheet.equals(candidateSheet))) {
+                    target = candidate;
+                    break;
+                }
+            }
+            if (target == null) continue;
+            var projections = target.withArray("listProjections");
+            for (var source : payload.path("listProjections")) {
+                if (!(source instanceof ObjectNode projection)) continue;
+                var copy = projection.deepCopy();
+                copy.put("componentId", target.path("bindingId").asText(
+                        projection.path("componentId").asText("")));
+                copy.put("parentBindingId", target.path("bindingId").asText(""));
+                var id = copy.path("listProjectionId").asText("");
+                var exists = false;
+                for (var existing : projections) {
+                    if (id.equals(existing.path("listProjectionId").asText(""))) {
+                        exists = true;
+                        break;
+                    }
+                }
+                if (!exists && !id.isBlank()) projections.add(copy);
+            }
+        }
     }
 
     private ObjectNode toBinding(
@@ -257,8 +354,11 @@ public class TemplateRecognitionCompiler {
                 ? "TABLE_COLUMN" : ("SCALAR".equals(kind) ? "FIELD" : "REGION"));
         var componentId = firstText(payload, "componentId", "regionId", "blockId", "parentBlockId");
         if (StringUtils.hasText(componentId)) binding.put("componentId", componentId);
-        copyIfPresent(payload, binding, "labelPath", "required", "identity", "trainingRole",
-                "trainingEligible", "ragEligible", "valueSource", "valueType", "unit");
+        copyIfPresent(payload, binding, "labelPath", "labelPathSegments", "required", "identity", "trainingRole",
+                "trainingEligible", "ragEligible", "valueSource", "valueType", "unit", "experimentField",
+                "experimentItemLabel", "experimentSemanticConfidence", "experimentSemanticStatus",
+                "experimentSemanticSource", "experimentSemanticAlternatives", "experimentSemanticIssue",
+                "listProjections");
         if (StringUtils.hasText(payload.path("parentBindingId").asText())) {
             binding.put("parentBindingId", payload.path("parentBindingId").asText());
         }
@@ -588,6 +688,9 @@ public class TemplateRecognitionCompiler {
                      .put("valueRange", column.path("valueRange").asText(""))
                      .put("dataStartRow", column.path("dataStartRow").asInt(0));
              copyStandardMetadata(child, column);
+            copyIfPresent(column, child, "labelPath", "labelPathSegments", "experimentField",
+                    "experimentItemLabel", "experimentSemanticConfidence", "experimentSemanticStatus",
+                    "experimentSemanticSource", "experimentSemanticAlternatives", "experimentSemanticIssue");
             var locator = objectMapper.createObjectNode()
                     .put("sheetId", payload.path("locator").path("sheetId").asText(""))
                     .put("sheetName", payload.path("locator").path("sheetName").asText(""))

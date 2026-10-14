@@ -19,6 +19,14 @@ export function fieldsMissingLabelPosition(
   });
 }
 
+export function hasUnplacedWordFields(model: FieldModel, mapping: TemplateBinding[]): boolean {
+  return model.fields.some((field) => {
+    if (field.displayRole === 'REGION' || field.fieldType === 'REGION') return false;
+    const binding = mapping.find((item) => item.bindingId === field.bindingId);
+    return !binding?.markerId;
+  });
+}
+
 export function publishReadinessBlocker(
   saveState: PublishSaveState,
   reviewSyncState: PublishReviewSyncState,

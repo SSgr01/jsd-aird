@@ -27,9 +27,9 @@ public interface SpectrumVisionClient {
         default void onOutputTextDelta(String delta) { }
     }
 
-    record VisionRequest(String prompt, List<VisionImage> images, String scenarioTemplate) { }
+    record VisionRequest(String prompt, List<VisionImage> images, String analysisIntent) { }
 
-    record VisionImage(UUID chartId, String category, int pageNo, String dataUri) { }
+    record VisionImage(UUID chartId, String category, int pageNo, String caption, String dataUri) { }
 
     record VisionResult(JsonNode result, JsonNode rawResponse, String model, String promptVersion) { }
 }

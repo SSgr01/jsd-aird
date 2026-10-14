@@ -308,7 +308,7 @@ export function ProjectTaskBoard({ projectId, stage, onTaskSaved }: {
           </div>
           <>
             <Choice label="选择新建" options={[{ key: 'blank', title: '空白新建', desc: '选择 Word 或 Excel 创建空白实验' }, { key: 'template', title: '选择模板新建', desc: '复制已发布模板形成独立实验副本' }]} value={createMode} onChange={(value) => changeCreateMode(value as CreateMode)} />
-            {createMode === 'template' ? <Form.Item name="templateVersionId" label="选择模板" rules={[{ required: true, message: '请选择实验模板' }]}><Select showSearch loading={templatesLoading} placeholder="请选择已发布模板" optionFilterProp="label" options={templates.map((item) => ({ value: item.versionId, label: `${item.name}（${item.format === 'XLSX' ? 'Excel' : 'Word'} · V${item.versionNo}）` }))} notFoundContent={templatesLoading ? '加载中' : '暂无已发布模板'} /></Form.Item> : <Choice label="文档格式" options={[{ key: 'word', title: 'Word 实验', desc: '正文、章节与文档结构编辑' }, { key: 'excel', title: 'Excel 实验', desc: '表格、单元格与字段结构编辑' }]} value={format} onChange={(value) => setFormat(value as DocumentFormat)} />}
+            {createMode === 'template' ? <ProjectTemplatePicker templates={templates} loading={templatesLoading} /> : <Choice label="文档格式" options={[{ key: 'word', title: 'Word 实验', desc: '正文、章节与文档结构编辑' }, { key: 'excel', title: 'Excel 实验', desc: '表格、单元格与字段结构编辑' }]} value={format} onChange={(value) => setFormat(value as DocumentFormat)} />}
           </>
         </Form>
       </div>
@@ -351,4 +351,31 @@ function FieldLabel({ text, kind, required }: { text: string; kind?: string; req
 
 function Choice({ label, options, value, onChange }: { label: string; options: Array<{ key: string; title: string; desc: string }>; value: string; onChange: (value: string) => void }) {
   return <div className="eln-choice-section"><label><i>*</i>{label}</label><div>{options.map((option, index) => <button type="button" className={value === option.key ? 'active' : ''} onClick={() => onChange(option.key)} key={option.key}><span>{index === 0 ? '▣' : '↪'}</span><b>{option.title}<small>{option.desc}</small></b></button>)}</div></div>;
+}
+
+const UNCATEGORIZED_TEMPLATE_CATEGORY = '__UNCATEGORIZED__';
+const templateCategoryKey = (category?: string) => category?.trim() || UNCATEGORIZED_TEMPLATE_CATEGORY;
+
+function ProjectTemplatePicker({ templates, loading }: { templates: ProjectTemplateOption[]; loading: boolean }) {
+  const form = Form.useFormInstance();
+  const [category, setCategory] = useState<string>();
+  const categories = useMemo(() => {
+    const values = new Map<string, string>();
+    templates.forEach((item) => values.set(templateCategoryKey(item.category), item.category?.trim() || '未分类'));
+    return [...values.entries()].map(([value, label]) => ({ value, label }));
+  }, [templates]);
+  const filtered = category ? templates.filter((item) => templateCategoryKey(item.category) === category) : templates;
+  // 切换分类会改变可选项，清空已选模板，避免留下不在可选列表中的版本。
+  const changeCategory = (next?: string) => {
+    setCategory(next);
+    form.setFieldValue('templateVersionId', undefined);
+  };
+  return <>
+    <Form.Item label="模板分类">
+      <Select allowClear aria-label="模板分类" placeholder="全部模板分类" options={categories} value={category} onChange={changeCategory} />
+    </Form.Item>
+    <Form.Item name="templateVersionId" label="选择模板" rules={[{ required: true, message: '请选择实验模板' }]}>
+      <Select showSearch loading={loading} placeholder="请选择已发布模板" optionFilterProp="label" options={filtered.map((item) => ({ value: item.versionId, label: `${item.name}（${item.format === 'XLSX' ? 'Excel' : 'Word'} · V${item.versionNo}）` }))} notFoundContent={loading ? '加载中' : '暂无该分类的已发布模板'} />
+    </Form.Item>
+  </>;
 }

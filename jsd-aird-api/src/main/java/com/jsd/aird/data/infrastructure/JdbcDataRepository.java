@@ -5,7 +5,9 @@ import java.security.MessageDigest;
 import java.sql.ResultSet;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -37,12 +39,14 @@ public class JdbcDataRepository implements DataRepository {
                     id, organization_id, source_file_id, source_sha256, source_file_name,
                     source_format, template_version_id, category_id, status,
                     duplicate_override, created_by, import_contract_version, contract_hash,
-                    source_file_hash, compatibility_status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'CREATED', ?, ?, ?, ?, ?, ?)
+                    source_file_hash, compatibility_status, import_purpose, target_experiment_category_id,
+                    source_owner
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'CREATED', ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, job.id(), job.organizationId(), job.sourceFileId(), job.sourceSha256(), job.sourceFileName(),
                 job.sourceFormat(), job.templateVersionId(), job.categoryId(),
                 job.duplicateOverride(), job.actorId(), job.importContractVersion(), job.contractHash(),
-                job.sourceSha256(), job.importContractVersion() == null ? "LEGACY" : "REVIEW_REQUIRED");
+                job.sourceSha256(), job.importContractVersion() == null ? "LEGACY" : "REVIEW_REQUIRED",
+                job.importPurpose(), job.targetExperimentCategoryId(), job.sourceOwner());
     }
 
     @Override
@@ -64,18 +68,21 @@ public class JdbcDataRepository implements DataRepository {
                        template_version_id, status, progress, current_stage,
                        category_id,
                        parser_version, error_message, created_at, updated_at,
-                       import_contract_version, contract_hash, compatibility_status
+                       import_contract_version, contract_hash, compatibility_status,
+                       import_purpose, target_experiment_category_id
                 FROM data.import_job WHERE organization_id = ? AND id = ?
                 """, this::mapJob, organizationId, importJobId).stream().findFirst();
     }
 
     @Override
     public PageResponse<Job> listJobs(UUID organizationId, UUID templateVersionId,
-                                      String status, String keyword, int page, int size) {
+                                      String status, String keyword, String sourceOwner, int page, int size) {
         var conditions = new ArrayList<String>();
         var parameters = new ArrayList<Object>();
         conditions.add("organization_id = ?");
         parameters.add(organizationId);
+        conditions.add("source_owner = ?");
+        parameters.add(sourceOwner == null || sourceOwner.isBlank() ? "DATA_CENTER" : sourceOwner);
         if (templateVersionId != null) {
             conditions.add("template_version_id = ?");
             parameters.add(templateVersionId);
@@ -100,7 +107,8 @@ public class JdbcDataRepository implements DataRepository {
                        template_version_id, status, progress, current_stage,
                        category_id,
                        parser_version, error_message, created_at, updated_at,
-                       import_contract_version, contract_hash, compatibility_status
+                       import_contract_version, contract_hash, compatibility_status,
+                       import_purpose, target_experiment_category_id
                 FROM data.import_job
                 WHERE
                 """ + where + " ORDER BY created_at DESC LIMIT ? OFFSET ?", this::mapJob, rows.toArray());
@@ -118,48 +126,78 @@ public class JdbcDataRepository implements DataRepository {
     public PageResponse<SourceFile> listSourceFiles(UUID organizationId, UUID categoryId, String status,
                                                     String keyword, java.util.Set<UUID> allowedImportJobIds,
                                                     int page, int size) {
+        return listSourceFiles(organizationId, categoryId, false, status, keyword, allowedImportJobIds, page, size);
+    }
+
+    @Override
+    public PageResponse<SourceFile> listSourceFiles(UUID organizationId, UUID categoryId, boolean uncategorized,
+                                                    String status, String keyword,
+                                                    java.util.Set<UUID> allowedImportJobIds, int page, int size) {
         if (allowedImportJobIds != null && allowedImportJobIds.isEmpty()) {
             return new PageResponse<>(List.of(), page, size, 0, 0);
         }
         var conditions = new ArrayList<String>();
         var parameters = new ArrayList<Object>();
-        conditions.add("j.organization_id = ?");
+        conditions.add("organization_id = ?");
         parameters.add(organizationId);
-        if (categoryId != null) {
-            conditions.add("j.category_id = ?");
+        // This catalog is the Data Center's import-job view. Experiment imports
+        // and experiment facts have separate ELN endpoints and must never be
+        // projected into this list.
+        conditions.add("source_owner = 'DATA_CENTER'");
+        if (uncategorized) {
+            conditions.add("category_id IS NULL");
+        } else if (categoryId != null) {
+            conditions.add("category_id = ?");
             parameters.add(categoryId);
         }
         if (status != null && !status.isBlank()) {
-            conditions.add("j.status = ?");
+            conditions.add("status = ?");
             parameters.add(status);
         }
         if (keyword != null && !keyword.isBlank()) {
-            conditions.add("lower(j.source_file_name) LIKE lower(?)");
+            conditions.add("lower(source_file_name) LIKE lower(?)");
             parameters.add("%" + keyword.trim() + "%");
         }
         if (allowedImportJobIds != null) {
-            conditions.add("j.id IN (" + String.join(",", java.util.Collections.nCopies(allowedImportJobIds.size(), "?")) + ")");
+            conditions.add("entry_id IN (" + String.join(",", java.util.Collections.nCopies(allowedImportJobIds.size(), "?")) + ")");
             parameters.addAll(allowedImportJobIds);
         }
         var where = String.join(" AND ", conditions);
-        var total = jdbc.queryForObject("SELECT count(*) FROM data.import_job j WHERE " + where,
+        var sourceEntries = """
+                WITH source_entries AS (
+                    SELECT j.id entry_id,j.source_file_id,j.source_file_name,j.source_format,
+                        j.template_version_id,j.category_id,c.name category_name,j.status,j.progress,
+                        j.created_at,j.updated_at,j.source_owner,j.recognition_mode,
+                        coalesce((SELECT s.status FROM data.confirmed_submission_head h
+                            JOIN data.confirmed_submission s ON s.organization_id=h.organization_id
+                                AND s.id=h.confirmed_submission_id
+                            WHERE h.organization_id=j.organization_id AND h.import_job_id=j.id),
+                            'NOT_CONFIRMED') formal_status,
+                        (SELECT l.experiment_id FROM data.import_experiment_link l
+                            WHERE l.organization_id=j.organization_id AND l.import_job_id=j.id
+                                AND l.experiment_id IS NOT NULL ORDER BY l.updated_at DESC LIMIT 1) experiment_id,
+                        (SELECT l.experiment_version_id FROM data.import_experiment_link l
+                            WHERE l.organization_id=j.organization_id AND l.import_job_id=j.id
+                                AND l.experiment_version_id IS NOT NULL ORDER BY l.updated_at DESC LIMIT 1) experiment_version_id,
+                        j.organization_id
+                    FROM data.import_job j LEFT JOIN data.data_category c ON c.id=j.category_id
+                )
+                """;
+        var total = jdbc.queryForObject(sourceEntries + " SELECT count(*) FROM source_entries WHERE " + where,
                 Long.class, parameters.toArray());
         var args = new ArrayList<>(parameters);
         args.add(size);
         args.add(Math.max(0, page - 1) * size);
-        var items = jdbc.query("""
-                SELECT j.id AS import_job_id, j.source_file_id, j.source_file_name, j.source_format,
-                       j.template_version_id, j.category_id, c.name AS category_name, j.status, j.progress,
-                       j.created_at, j.updated_at
-                FROM data.import_job j
-                LEFT JOIN data.data_category c ON c.id = j.category_id
-                 WHERE """ + " " + where + " ORDER BY j.updated_at DESC, j.created_at DESC LIMIT ? OFFSET ?",
-                (rs, n) -> new SourceFile(rs.getObject("import_job_id", UUID.class),
+        var items = jdbc.query(sourceEntries + " SELECT * FROM source_entries WHERE " + where
+                        + " ORDER BY updated_at DESC,created_at DESC,entry_id LIMIT ? OFFSET ?",
+                (rs, n) -> new SourceFile(rs.getObject("entry_id", UUID.class),
                         rs.getObject("source_file_id", UUID.class), rs.getString("source_file_name"),
                         rs.getString("source_format"), rs.getObject("template_version_id", UUID.class),
                         rs.getObject("category_id", UUID.class), rs.getString("category_name"),
                         rs.getString("status"), rs.getInt("progress"),
-                        rs.getTimestamp("created_at").toInstant(), rs.getTimestamp("updated_at").toInstant()),
+                        rs.getTimestamp("created_at").toInstant(), rs.getTimestamp("updated_at").toInstant(), List.of(),
+                        rs.getString("recognition_mode"), rs.getString("formal_status"),
+                        rs.getObject("experiment_id",UUID.class), rs.getObject("experiment_version_id",UUID.class)),
                 args.toArray());
         var totalValue = total == null ? 0L : total;
         return new PageResponse<>(items, page, size, totalValue, (totalValue + size - 1) / size);
@@ -173,13 +211,25 @@ public class JdbcDataRepository implements DataRepository {
     }
 
     @Override
+    public Optional<String> findSourceOwner(UUID organizationId, UUID importJobId) {
+        return jdbc.query("""
+                SELECT source_owner FROM data.import_job WHERE organization_id=? AND id=?
+                UNION ALL
+                SELECT 'EXPERIMENT' FROM rnd.experiment_import_job WHERE organization_id=? AND id=?
+                LIMIT 1
+                """, (rs, ignored) -> rs.getString(1), organizationId, importJobId,
+                organizationId, importJobId).stream().findFirst();
+    }
+
+    @Override
     public Optional<Job> findJobForUpdate(UUID organizationId, UUID importJobId) {
         return jdbc.query("""
                 SELECT id, source_file_id, source_sha256, source_file_name, source_format,
                        template_version_id, status, progress, current_stage,
                        category_id,
                        parser_version, error_message, created_at, updated_at,
-                       import_contract_version, contract_hash, compatibility_status
+                       import_contract_version, contract_hash, compatibility_status,
+                       import_purpose, target_experiment_category_id
                 FROM data.import_job WHERE organization_id = ? AND id = ? FOR UPDATE
                 """, this::mapJob, organizationId, importJobId).stream().findFirst();
     }
@@ -191,7 +241,8 @@ public class JdbcDataRepository implements DataRepository {
                        template_version_id, status, progress, current_stage,
                        category_id,
                        parser_version, error_message, created_at, updated_at,
-                       import_contract_version, contract_hash, compatibility_status
+                       import_contract_version, contract_hash, compatibility_status,
+                       import_purpose, target_experiment_category_id
                 FROM data.import_job
                 WHERE organization_id = ? AND source_sha256 = ? AND template_version_id = ?
                   AND status = 'COMPLETED'
@@ -581,22 +632,94 @@ public class JdbcDataRepository implements DataRepository {
                     row.sheetId(), row.sheetName(), row.rowNumber(), pgJson(row.raw()),
                     pgJson(row.normalized()), pgJson(row.corrected()), pgJson(row.normalized()),
                     row.recordKey().startsWith("IMPORT:"));
+            var anchorIds = new HashMap<String, UUID>();
             for (Anchor anchor : row.anchors()) {
+                var anchorId = UUID.randomUUID();
                 jdbc.update("""
                     INSERT INTO data.source_anchor (
                             id, record_id, import_job_id, field_code, binding_id, value_path,
                             label_path, value_source, value_status, file_id, sheet_id, sheet_name,
                             row_number, column_number, column_name, cell_address, raw_value_jsonb
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, UUID.randomUUID(), recordId, importJobId, anchor.fieldCode(), anchor.bindingId(),
+                        """, anchorId, recordId, importJobId, anchor.fieldCode(), anchor.bindingId(),
                         anchor.valuePath(), anchor.labelPath(), anchor.valueSource(), anchor.valueStatus(),
                         job.sourceFileId(), anchor.sheetId(), anchor.sheetName(), anchor.rowNumber(),
                         anchor.columnNumber(), anchor.columnName(), anchor.address(), pgJson(anchor.rawValue()));
+                anchorIds.put(anchorKey(anchor.fieldCode(), anchor.bindingId(), anchor.valuePath()), anchorId);
             }
+            insertSearchValues(organizationId, recordId, row.normalized(), anchorIds);
             committedRecords.add(new CommittedRecord(recordId, row.recordKey(), dataHash));
         }
         updateJobStatus(organizationId, importJobId, "COMPLETED", 100, "COMPLETED", null);
         return new CommitResult(List.copyOf(committedRecords), rows.size());
+    }
+
+    /** Keep the value-oriented assistant index in sync with the committed JSON snapshot. */
+    private void insertSearchValues(UUID organizationId, UUID recordId, JsonNode normalized,
+                                    Map<String, UUID> anchorIds) {
+        if (normalized == null || !normalized.isObject()) return;
+        var entries = normalized.fields();
+        while (entries.hasNext()) {
+            var entry = entries.next();
+            var wrapper = entry.getValue();
+            var fieldCode = text(wrapper, "fieldCode", entry.getKey());
+            var bindingId = text(wrapper, "bindingId", fieldCode);
+            var valuePath = text(wrapper, "valuePath", text(wrapper, "dataPath", "/" + fieldCode));
+            var value = firstText(wrapper, "normalizedValue", "displayValue", "rawValue");
+            if (value.isBlank()) continue;
+            var valueJson = firstNode(wrapper, "normalizedValue", "rawValue");
+            if (valueJson == null || valueJson.isMissingNode()) {
+                valueJson = objectMapper.getNodeFactory().textNode(value);
+            }
+            var anchorId = anchorIds.get(anchorKey(fieldCode, bindingId, valuePath));
+            jdbc.update("""
+                    INSERT INTO data.data_value(
+                        id, organization_id, record_id, field_code, binding_id, value_path, data_path, value_jsonb,
+                        value_text, normalized_unit, source_anchor_id, training_eligible)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(record_id, binding_id, value_path)
+                        WHERE binding_id IS NOT NULL AND value_path IS NOT NULL DO UPDATE SET
+                        data_path=excluded.data_path,
+                        value_jsonb=excluded.value_jsonb,
+                        value_text=excluded.value_text,
+                        normalized_unit=excluded.normalized_unit,
+                        source_anchor_id=excluded.source_anchor_id,
+                        training_eligible=excluded.training_eligible
+                    """, UUID.randomUUID(), organizationId, recordId, fieldCode, bindingId, valuePath, valuePath,
+                    pgJson(valueJson), value, blankToNull(wrapper.path("normalizedUnit").asText("")), anchorId,
+                    wrapper.path("trainingEligible").asBoolean(true));
+        }
+    }
+
+    private String anchorKey(String fieldCode, String bindingId, String valuePath) {
+        return (fieldCode == null ? "" : fieldCode) + "\u0000"
+                + (bindingId == null ? "" : bindingId) + "\u0000"
+                + (valuePath == null ? "" : valuePath);
+    }
+
+    private String text(JsonNode node, String field, String fallback) {
+        var value = node == null ? "" : node.path(field).asText("");
+        return value.isBlank() ? fallback : value;
+    }
+
+    private String firstText(JsonNode node, String... fields) {
+        for (var field : fields) {
+            var value = node == null ? "" : node.path(field).asText("");
+            if (!value.isBlank()) return value;
+        }
+        return "";
+    }
+
+    private JsonNode firstNode(JsonNode node, String... fields) {
+        for (var field : fields) {
+            var value = node == null ? null : node.get(field);
+            if (value != null && !value.isNull() && !value.isMissingNode()) return value;
+        }
+        return null;
+    }
+
+    private String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
     }
 
     private Job mapJob(ResultSet rs, int rowNum) throws java.sql.SQLException {
@@ -607,7 +730,8 @@ public class JdbcDataRepository implements DataRepository {
                 rs.getInt("progress"), rs.getString("current_stage"), rs.getString("parser_version"),
                 rs.getString("error_message"), rs.getTimestamp("created_at").toInstant(), rs.getTimestamp("updated_at").toInstant(),
                 (Integer) rs.getObject("import_contract_version"), rs.getString("contract_hash"),
-                rs.getString("compatibility_status"));
+                rs.getString("compatibility_status"), rs.getString("import_purpose"),
+                rs.getObject("target_experiment_category_id", UUID.class));
     }
 
     private List<Integer> ints(JsonNode node) {

@@ -1,0 +1,5 @@
+.registered-targets-notice { margin-top: 12px; }
+.registered-targets-notice .ant-alert-message { font-weight: 600; }
+.registered-targets-notice .ant-alert-description { color: #667085; }
+.registered-targets-list { max-height: 160px; overflow: auto; padding-right: 4px; }
+.registered-targets-toggle { padding-inline: 4px; white-space: nowrap; }

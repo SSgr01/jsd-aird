@@ -103,7 +103,8 @@ export function SpectrumUploadPage() {
     fileName: item.originalName,
     contentType: item.contentType,
     size: item.size,
-    load: () => spectrumApi.contentBlob(item.id),
+    load: () => spectrumApi.previewBlob(item.id),
+    downloadUrl: spectrumApi.contentUrl(item.id),
   });
 
   const upload = async () => {
@@ -292,7 +293,7 @@ export function SpectrumUploadPage() {
         }}
         searchPlaceholder="搜索图谱名称"
         records={records}
-        recordsLoading={loading}
+        recordsLoading={loading && items.length === 0}
         pagination={page}
         onPageChange={(current, pageSize) => setPage((value) => ({ ...value, current, pageSize }))}
       />

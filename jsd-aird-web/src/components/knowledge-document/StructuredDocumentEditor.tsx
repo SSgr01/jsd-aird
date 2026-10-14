@@ -5,6 +5,7 @@ import { Button, Divider, Space, Tooltip } from 'antd';
 import { useEffect, useRef } from 'react';
 
 import type { StructuredDocument } from '@/services/knowledge';
+import { generateUUID } from '@/utils/uuid';
 import { knowledgeDocumentExtensions } from './document-extensions';
 
 export interface StructuredDocumentEditorProps {
@@ -99,7 +100,7 @@ function ensureReviewAttributes(document: StructuredDocument): StructuredDocumen
     const content = node.content?.map(visit);
     if (!reviewable.has(node.type || '')) return { ...node, content };
     const attrs = { ...(node.attrs || {}) };
-    if (!attrs.reviewNodeId) attrs.reviewNodeId = crypto.randomUUID();
+    if (!attrs.reviewNodeId) attrs.reviewNodeId = generateUUID();
     if (!attrs.origin) attrs.origin = 'user';
     if (!Array.isArray(attrs.sourceNodeKeys)) attrs.sourceNodeKeys = [];
     return { ...node, attrs, content };

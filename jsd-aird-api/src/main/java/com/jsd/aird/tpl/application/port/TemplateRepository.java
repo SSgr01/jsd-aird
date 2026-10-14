@@ -2,6 +2,7 @@ package com.jsd.aird.tpl.application.port;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -96,6 +97,8 @@ public interface TemplateRepository {
                             int layoutStructureVersion, String contractHash, JsonNode contract, UUID actorId);
 
     Optional<ImportContract> findImportContract(UUID organizationId, UUID versionId);
+
+    Map<UUID, ImportContract> findImportContracts(UUID organizationId, List<UUID> versionIds);
 
     int updatePublishedWordDocument(UUID organizationId, UUID versionId, JsonNode wordDocument);
 
@@ -281,8 +284,26 @@ public interface TemplateRepository {
             String dataHash,
             String workspaceHash,
             long lockVersion,
-            boolean reconciliationRequired
+            boolean reconciliationRequired,
+            JsonNode origin
     ) {
+        /** Compatibility constructor for test doubles and older adapters. */
+        public TemplateWorkspace(
+                UUID templateId, UUID versionId, UUID recognitionRunId, String templateCode,
+                String name, TemplateFormat format, TemplateStatus status, int versionNo,
+                JsonNode schema, JsonNode mapping, JsonNode data, JsonNode documentStructure,
+                JsonNode wordDocument, JsonNode inlineSnapshot, UUID snapshotFileId,
+                String snapshotHash, String snapshotKind, String editorAppVersion,
+                String pluginManifestHash, int snapshotFormatVersion, String schemaHash,
+                String mappingHash, String dataHash, String workspaceHash, long lockVersion,
+                boolean reconciliationRequired
+        ) {
+            this(templateId, versionId, recognitionRunId, templateCode, name, format, status, versionNo,
+                    schema, mapping, data, documentStructure, wordDocument, inlineSnapshot, snapshotFileId,
+                    snapshotHash, snapshotKind, editorAppVersion, pluginManifestHash, snapshotFormatVersion,
+                    schemaHash, mappingHash, dataHash, workspaceHash, lockVersion, reconciliationRequired, null);
+        }
+
         public List<String> getAllowedActions() {
             return AllowedActions.template(status == null ? null : status.name(),
                     status == TemplateStatus.DRAFT, status == TemplateStatus.PUBLISHED);

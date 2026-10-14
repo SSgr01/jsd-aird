@@ -17,9 +17,9 @@ type DocumentFormat = 'word' | 'excel';
 type RecordMode = DocumentFormat | 'template';
 
 const visibilityOptions = [
-  { value: 'PROJECT', label: '项目组可见' },
   { value: 'ALL', label: '全员可见' },
-  { value: 'QUALITY', label: '品管部可见' },
+  { value: 'RND', label: '研发部可见' },
+  { value: 'PROJECT', label: '项目组可见' },
 ];
 
 export function NewExperimentPage() {
@@ -39,7 +39,7 @@ export function NewExperimentPage() {
   useEffect(() => {
     form.setFieldsValue({
       title: '',
-      visibility: 'PROJECT',
+      visibility: 'ALL',
     });
     void listExperiments({ page: 1, size: 14 })
       .then((result) => setRecent(result.items))
@@ -140,15 +140,15 @@ export function NewExperimentPage() {
   return <div className="upload-workspace-page eln-entry-page">
     <div className="upload-workspace-heading">
       <div>
-        <Breadcrumb items={[{ title: '电子实验记录本' }, { title: '新增实验' }]} />
-        <Typography.Title level={2}>新增实验</Typography.Title>
+        <Breadcrumb items={[{ title: '电子实验记录本' }, { title: '实验在线记录' }]} />
+        <Typography.Title level={2}>实验在线记录</Typography.Title>
         <Typography.Text type="secondary">在线创建 Word 或 Excel 实验记录，并关联项目、阶段与任务。</Typography.Text>
       </div>
       <div className="upload-workspace-heading-actions"><Button onClick={() => navigate('/experiments/list')}>实验查看</Button></div>
     </div>
     <div className="upload-workspace-grid">
     <section className="upload-workspace-panel upload-workspace-panel-left eln-entry-main" aria-labelledby="new-experiment-title">
-      <div className="upload-workspace-section-title" id="new-experiment-title">实验在线记录</div>
+      <div className="upload-workspace-section-title" id="new-experiment-title">基础信息</div>
       <Form form={form} layout="vertical" className="upload-workspace-classification">
         <div className="eln-entry-top-grid">
           <Form.Item name="title" label="文件名称" rules={[{ required: true, whitespace: true, message: '请输入文件名称' }]}>

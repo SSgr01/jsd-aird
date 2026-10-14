@@ -35,7 +35,7 @@ public class TemplateFileController {
         // Keep the original object staged before conversion. A normalization
         // failure must not create an import job, while the original remains
         // available for diagnostics and retry after the staged-file cleanup job.
-        Result result = normalizer.normalize(file.getOriginalFilename(), file.getContentType(), source);
+        Result result = normalizer.normalize(file.getOriginalFilename(), file.getContentType(), source, false);
         var normalized = result.normalizedFormat().equals(result.originalFormat())
                 ? original
                 : storage.stageFile(result.normalizedName(), result.normalizedContentType(), "TEMPLATE_NORMALIZED",

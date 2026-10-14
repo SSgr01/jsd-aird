@@ -4,6 +4,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -97,12 +98,19 @@ public class JdbcDataSourceFileSearchRepository implements DataSourceFileSearchF
     }
 
     private boolean canAggregateRecordLookup(DataDetailQuery request, List<FileCandidateRow> matches) {
-        return request.mode() == DataQueryMode.RECORD_DETAIL
+        return shouldAggregateRecordLookup(request, matches == null ? 0 : matches.size());
+    }
+
+    static boolean shouldAggregateRecordLookup(DataDetailQuery request, int candidateCount) {
+        var recordDetail = request.mode() == DataQueryMode.RECORD_DETAIL && request.fieldTerms().isEmpty();
+        var crossSourceFieldComparison = request.mode() == DataQueryMode.FIELD_LOOKUP
+                && ("COMPARE".equals(request.analysisGoal()) || "EVALUATE".equals(request.analysisGoal()))
+                && !request.fieldTerms().isEmpty();
+        return (recordDetail || crossSourceFieldComparison)
                 && request.fileScope() == DataFileScope.AUTO
                 && request.recordTerms().size() == 1
-                && request.fieldTerms().isEmpty()
-                && matches.size() > 1
-                && matches.size() <= 10;
+                && candidateCount > 1
+                && candidateCount <= 10;
     }
 
     private boolean isBroadRecordLookup(DataDetailQuery request) {
@@ -270,7 +278,11 @@ public class JdbcDataSourceFileSearchRepository implements DataSourceFileSearchF
         for (var term : request.recordTerms()) {
             score.append(" + CASE WHEN lower(btrim(v.record_key)) = lower(btrim(?)) THEN 100 "
                     + "WHEN lower(btrim(v.field_value)) = lower(btrim(?)) THEN 80 "
+                    + "WHEN concat_ws(' ', v.experiment_no, v.experiment_title, v.experiment_purpose, "
+                    + "v.experiment_category_name, v.project_name, v.experiment_stage_name, "
+                    + "v.experiment_task_name) ILIKE '%%' || ? || '%%' THEN 60 "
                     + "WHEN v.record_key ILIKE '%%' || ? || '%%' OR v.field_value ILIKE '%%' || ? || '%%' THEN 30 ELSE 0 END");
+            scoreArgs.add(term);
             scoreArgs.add(term);
             scoreArgs.add(term);
             scoreArgs.add(term);
@@ -295,7 +307,10 @@ public class JdbcDataSourceFileSearchRepository implements DataSourceFileSearchF
                     SELECT p.organization_id, p.import_job_id, p.file_object_id, p.original_name, p.source_format,
                            p.updated_at, p.source_owner, p.recognition_mode,
                            p.experiment_id, p.experiment_version_id, p.record_key,
-                           p.field_name, p.source_label, p.field_code, p.field_value
+                           p.field_name, p.source_label, p.field_code, p.field_value,
+                           p.experiment_no, p.experiment_title, p.experiment_purpose,
+                           p.experiment_category_name, p.project_name, p.experiment_stage_name,
+                           p.experiment_task_name
                     FROM ai.structured_retrieval_projection p
                     WHERE p.organization_id = ?
                       %s
@@ -666,11 +681,18 @@ public class JdbcDataSourceFileSearchRepository implements DataSourceFileSearchF
                     + " AND record_match.record_id = p.record_id"
                     + " AND (record_match.record_key ILIKE '%%' || ? || '%%'"
                     + " OR record_match.field_value ILIKE '%%' || ? || '%%'"
+                    + " OR record_match.original_name ILIKE '%%' || ? || '%%'"
+                    + " OR concat_ws(' ', record_match.experiment_no, record_match.experiment_title,"
+                    + " record_match.experiment_purpose, record_match.experiment_category_name,"
+                    + " record_match.project_name, record_match.experiment_stage_name,"
+                    + " record_match.experiment_task_name) ILIKE '%%' || ? || '%%'"
                     + " OR lower(regexp_replace(coalesce(record_match.record_key, ''), '[^a-z0-9一-龥]', '', 'g')) LIKE '%%' || ? || '%%'"
                     + " OR lower(regexp_replace(coalesce(record_match.field_value, ''), '[^a-z0-9一-龥]', '', 'g')) LIKE '%%' || ? || '%%'"
                     + " OR regexp_replace(lower(coalesce(record_match.record_key, '')), '(^|[^a-z0-9])0+', '\\1', 'g') LIKE '%%' || ? || '%%'"
                     + " OR regexp_replace(lower(coalesce(record_match.field_value, '')), '(^|[^a-z0-9])0+', '\\1', 'g') LIKE '%%' || ? || '%%'))");
             var term = request.recordTerms().get(index);
+            filterArgs.add(term);
+            filterArgs.add(term);
             filterArgs.add(term);
             filterArgs.add(term);
             var compact = compactLookupTerm(term);
@@ -723,6 +745,11 @@ public class JdbcDataSourceFileSearchRepository implements DataSourceFileSearchF
         var content = "记录：" + record + "；字段：" + field + "；值=" + value
                 + (rs.getString("normalized_unit") == null || rs.getString("normalized_unit").isBlank()
                 ? "" : " " + rs.getString("normalized_unit"));
+        var experimentContext = experimentContext(rs.getString("experiment_no"),
+                rs.getString("experiment_title"), rs.getString("experiment_purpose"),
+                rs.getString("experiment_category_name"), rs.getString("project_name"),
+                rs.getString("experiment_stage_name"), rs.getString("experiment_task_name"));
+        if (!experimentContext.isBlank()) content = experimentContext + "；" + content;
         var hit = new SourceFileHit(rs.getObject("value_id", UUID.class), file.fileId(), file.importJobId(),
                 (Integer) rs.getObject("source_row_number"), rs.getString("column_name"), file.originalName(),
                 content, 3.0, locator, record, rs.getString("field_code"), field, value,
@@ -777,11 +804,32 @@ public class JdbcDataSourceFileSearchRepository implements DataSourceFileSearchF
                            OR p.field_code ILIKE '%%' || ? || '%%'
                             OR p.field_name ILIKE '%%' || ? || '%%'
                             OR p.source_label ILIKE '%%' || ? || '%%'
-                            OR p.field_value ILIKE '%%' || ? || '%%')
+                            OR p.field_value ILIKE '%%' || ? || '%%'
+                            OR concat_ws(' ', p.experiment_no, p.experiment_title, p.experiment_purpose,
+                                         p.experiment_category_name, p.project_name, p.experiment_stage_name,
+                                         p.experiment_task_name, p.sheet_name) ILIKE '%%' || ? || '%%')
                 )
                 SELECT matched.*,
+                       coalesce((
+                           SELECT nullif(btrim(identity.field_value), '')
+                           FROM ai.structured_retrieval_projection identity
+                           WHERE identity.organization_id = matched.organization_id
+                             AND identity.import_job_id = matched.import_job_id
+                             AND identity.record_id = matched.record_id
+                             AND (identity.semantic_domain = 'BASIC'
+                                  AND identity.semantic_field = 'SOURCE_IDENTITY'
+                                  OR lower(btrim(coalesce(identity.field_name, ''))) IN
+                                     ('实验编号', '记录编号', '样品编号', '配方编号', '实验号', 'sample id', 'experiment id'))
+                           ORDER BY identity.value_id
+                           LIMIT 1
+                       ), matched.record_key) AS display_record,
                        GREATEST(
                            CASE WHEN matched.original_name ILIKE '%%' || ? || '%%' THEN 1.0 ELSE 0 END,
+                           CASE WHEN concat_ws(' ', matched.experiment_no, matched.experiment_title,
+                                                matched.experiment_purpose, matched.experiment_category_name,
+                                                matched.project_name, matched.experiment_stage_name,
+                                                matched.experiment_task_name, matched.sheet_name)
+                                     ILIKE '%%' || ? || '%%' THEN 1.5 ELSE 0 END,
                            CASE WHEN lower(matched.record_key) = lower(?) THEN 4.0
                                 WHEN matched.record_key ILIKE '%%' || ? || '%%' THEN 2.0 ELSE 0 END,
                            CASE WHEN lower(matched.field_code) = lower(?) THEN 3.5
@@ -802,7 +850,8 @@ public class JdbcDataSourceFileSearchRepository implements DataSourceFileSearchF
         args.add(organizationId);
         args.addAll(categoryParameters(categoryIds));
         args.addAll(permission.parameters());
-        for (var ignored = 0; ignored < 6; ignored++) args.add(normalizedQuery);
+        for (var ignored = 0; ignored < 7; ignored++) args.add(normalizedQuery);
+        args.add(normalizedQuery);
         args.add(normalizedQuery);
         args.add(normalizedQuery);
         args.add(normalizedQuery);
@@ -819,10 +868,146 @@ public class JdbcDataSourceFileSearchRepository implements DataSourceFileSearchF
         var grouped = new LinkedHashMap<UUID, Aggregate>();
         for (var row : rows) {
             var aggregate = grouped.computeIfAbsent(row.importJobId(), ignored -> new Aggregate(row));
-            if (aggregate.hits.size() < 10) aggregate.hits.add(hit(row));
+            aggregate.add(hit(row));
         }
         return grouped.values().stream().limit(Math.max(1, limit))
                 .map(item -> item.view(normalizedQuery)).toList();
+    }
+
+    /**
+     * A topic query often matches experiment metadata (title or purpose) and returns
+     * a low-value cell such as the formula total. Pull the sibling cells from those
+     * same authorized experiment records so the assistant can answer from the actual
+     * composition and test fields, with each value retaining its own source anchor.
+     */
+
+    @Override
+    public List<SourceFileHit> expandExperimentContexts(UUID organizationId, List<SourceFileHit> matchedHits,
+                                                        List<String> queryTerms,
+                                                        RetrievalAccessScope accessScope) {
+        var scope = accessScope == null ? RetrievalAccessScope.all() : accessScope;
+        if (scope.experimentScope() == null || scope.experimentScope().deniesAll()
+                || matchedHits == null || matchedHits.isEmpty()) return List.of();
+
+        var recordKeysByImport = new LinkedHashMap<UUID, LinkedHashSet<String>>();
+        for (var hit : matchedHits) {
+            if (hit == null || !"EXPERIMENT".equalsIgnoreCase(hit.sourceOwner())
+                    || hit.importJobId() == null || hit.recordKey() == null || hit.recordKey().isBlank()) continue;
+            recordKeysByImport.computeIfAbsent(hit.importJobId(), ignored -> new LinkedHashSet<>())
+                    .add(hit.recordKey());
+        }
+        if (recordKeysByImport.isEmpty()) return List.of();
+
+        var requestValues = new ArrayList<String>();
+        var args = new ArrayList<Object>();
+        for (var entry : recordKeysByImport.entrySet()) {
+            for (var recordKey : entry.getValue()) {
+                requestValues.add("(?, ?)");
+                args.add(entry.getKey());
+                args.add(recordKey);
+            }
+        }
+        var safeQueryTerms = (queryTerms == null ? List.<String>of() : queryTerms).stream()
+                .filter(term -> term != null && term.strip().length() >= 2 && term.strip().length() <= 40)
+                .map(String::strip).distinct().limit(10).toList();
+        var relevance = new StringBuilder();
+        var relevanceArgs = new ArrayList<Object>();
+        for (var term : safeQueryTerms) {
+            if (!relevance.isEmpty()) relevance.append(" OR ");
+            relevance.append("p.field_name ILIKE '%' || ? || '%' OR p.source_label ILIKE '%' || ? || '%' "
+                    + "OR p.field_code ILIKE '%' || ? || '%'");
+            relevanceArgs.add(term);
+            relevanceArgs.add(term);
+            relevanceArgs.add(term);
+        }
+        var matchedFieldRank = relevance.isEmpty() ? "false" : "(" + relevance + ")";
+        var compositionQuery = safeQueryTerms.stream().anyMatch(term -> term.matches(
+                "(?s).*(配方|组分|成分|成份|组成|合计|总计|添加量|用量|formula|composition).*"));
+        var contextOrder = compositionQuery
+                ? ("CASE WHEN p.semantic_domain = 'FORMULA' THEN 0 "
+                + "WHEN (position('合计' in coalesce(p.source_label, '')) > 0 "
+                + "OR position('合计' in coalesce(p.field_name, '')) > 0 "
+                + "OR position('total' in lower(coalesce(p.source_label, ''))) > 0 "
+                + "OR position('total' in lower(coalesce(p.field_name, ''))) > 0) THEN 1 "
+                + "WHEN %s THEN 2 "
+                + "WHEN position('配方' in coalesce(p.source_label, '')) > 0 THEN 3 "
+                + "WHEN p.semantic_domain = 'BASIC' THEN 4 "
+                + "WHEN p.semantic_domain = 'PROCESS' THEN 5 "
+                + "WHEN p.semantic_domain = 'TEST' THEN 6 ELSE 7 END").formatted(matchedFieldRank)
+                : ("CASE WHEN %s THEN 0 "
+                + "WHEN p.semantic_domain = 'FORMULA' THEN 1 "
+                + "WHEN position('配方' in coalesce(p.source_label, '')) > 0 THEN 2 "
+                + "WHEN p.semantic_domain = 'BASIC' THEN 3 "
+                + "WHEN p.semantic_domain = 'PROCESS' THEN 4 "
+                + "WHEN p.semantic_domain = 'TEST' THEN 5 ELSE 6 END").formatted(matchedFieldRank);
+        var permission = permissionClause(scope);
+        var sql = """
+                WITH requested(import_job_id, record_key) AS (VALUES %s),
+                ranked_context AS (
+                    SELECT p.*,
+                           coalesce((
+                               SELECT nullif(btrim(identity.field_value), '')
+                               FROM ai.structured_retrieval_projection identity
+                               WHERE identity.organization_id = p.organization_id
+                                 AND identity.import_job_id = p.import_job_id
+                                 AND identity.record_id = p.record_id
+                                 AND (identity.semantic_domain = 'BASIC'
+                                      AND identity.semantic_field = 'SOURCE_IDENTITY'
+                                      OR lower(btrim(coalesce(identity.field_name, ''))) IN
+                                         ('实验编号', '记录编号', '样品编号', '配方编号', '实验号', 'sample id', 'experiment id'))
+                               ORDER BY identity.value_id
+                               LIMIT 1
+                           ), p.record_key) AS display_record,
+                           coalesce(fo.content_type,
+                               CASE p.source_format WHEN 'CSV' THEN 'text/csv'
+                               WHEN 'XLS' THEN 'application/vnd.ms-excel'
+                               ELSE 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' END) AS content_type,
+                           coalesce(fo.size_bytes, 0) AS size_bytes,
+                           CASE WHEN %s THEN 12.0
+                                WHEN p.semantic_domain = 'FORMULA' THEN 11.5
+                                WHEN coalesce(p.source_label, '') ILIKE '%%配方%%' THEN 10.0
+                                WHEN p.semantic_domain = 'BASIC' THEN 9.0
+                                WHEN p.semantic_domain = 'PROCESS' THEN 8.5
+                                WHEN p.semantic_domain = 'TEST' THEN 8.0
+                                ELSE 7.0 END AS score,
+                           row_number() OVER (
+                               PARTITION BY p.import_job_id, p.record_key
+                               ORDER BY %s,
+                                        p.record_index, p.field_code, p.value_path, p.value_id
+                           ) AS context_rank
+                    FROM ai.structured_retrieval_projection p
+                    JOIN requested req ON req.import_job_id = p.import_job_id
+                                      AND req.record_key = p.record_key
+                    LEFT JOIN ops.file_object fo ON fo.id = p.file_object_id
+                        AND fo.organization_id = p.organization_id
+                    WHERE p.organization_id = ?
+                      AND p.source_owner = 'EXPERIMENT'
+                      AND nullif(btrim(p.field_value), '') IS NOT NULL
+                      %s
+                )
+                SELECT * FROM ranked_context
+                WHERE context_rank <= 24
+                ORDER BY score DESC, record_index, field_code, value_path
+                """.formatted(String.join(",", requestValues), matchedFieldRank,
+                contextOrder, permission.sql());
+        args.addAll(relevanceArgs);
+        args.addAll(relevanceArgs);
+        args.add(organizationId);
+        args.addAll(permission.parameters());
+        var rows = jdbc.query(sql, this::mapRow, args.toArray());
+        return rows.stream().map(this::sourceHit).toList();
+    }
+
+    private SourceFileHit sourceHit(Row row) {
+        var owner = "EXPERIMENT".equalsIgnoreCase(row.sourceOwner()) ? "EXPERIMENT_TEMPLATE" : "DATA_CENTER";
+        var locator = owner + ":" + readable(row.sheetName(), "") + ":" + readable(row.cellAddress(), "");
+        var hit = hit(row);
+        return new SourceFileHit(row.valueId(), row.fileId(), row.importJobId(), row.rowNumber(), row.column(),
+                row.originalName(), hit.snippet(), hit.score(), locator, row.recordKey(), row.fieldCode(),
+                row.fieldName(), row.value(), row.unit(), row.valueType(), row.sheetName(), row.cellAddress(),
+                row.sourceOwner(), row.recognitionMode(), row.experimentId(), row.experimentVersionId(),
+                row.experimentStatus(), row.sourceLabel(), row.semanticDomain(), row.semanticField(),
+                null, null, null, null, "SAME_RECORD");
     }
 
     private Row mapRow(ResultSet rs, int ignored) throws SQLException {
@@ -835,7 +1020,14 @@ public class JdbcDataSourceFileSearchRepository implements DataSourceFileSearchF
                 (Integer) rs.getObject("source_row_number"), rs.getString("column_name"),
                 rs.getString("cell_address"), rs.getObject("value_id", UUID.class),
                 rs.getString("field_code"), rs.getString("field_name"), rs.getString("field_value"),
-                rs.getString("normalized_unit"), rs.getString("value_type"), rs.getDouble("score"));
+                rs.getString("normalized_unit"), rs.getString("value_type"), rs.getDouble("score"),
+                rs.getString("experiment_no"), rs.getString("experiment_title"),
+                rs.getString("experiment_purpose"), rs.getString("experiment_category_name"),
+                rs.getString("project_name"), rs.getString("experiment_stage_name"),
+                rs.getString("experiment_task_name"), rs.getObject("record_id", UUID.class),
+                rs.getObject("record_index", Integer.class), rs.getString("value_path"),
+                rs.getString("source_label"), rs.getString("semantic_domain"), rs.getString("semantic_field"),
+                rs.getString("experiment_status"), rs.getString("display_record"));
     }
 
     private FileRow fileRow(ResultSet rs, int ignored) throws SQLException {
@@ -848,8 +1040,11 @@ public class JdbcDataSourceFileSearchRepository implements DataSourceFileSearchF
 
     private Hit hit(Row row) {
         var value = row.value() == null || row.value().isBlank() ? "未填写" : row.value();
-        var fieldName = readable(row.fieldName(), row.fieldCode());
-        var snippet = "记录=" + readable(row.recordKey(), "未命名记录")
+        var fieldName = readable(row.sourceLabel(), readable(row.fieldName(), row.fieldCode()));
+        var context = experimentContext(row.experimentNo(), row.experimentTitle(), row.experimentPurpose(),
+                row.experimentCategoryName(), row.projectName(), row.experimentStageName(), row.experimentTaskName());
+        var snippet = (context.isBlank() ? "" : context + "；")
+                + "记录=" + readable(row.displayRecord(), readable(row.recordKey(), "未命名记录"))
                 + "；字段=" + fieldName + "；值=" + value
                 + (row.unit() == null || row.unit().isBlank() ? "" : " " + row.unit());
         if (snippet.length() > 800) snippet = snippet.substring(0, 800) + "…";
@@ -862,6 +1057,23 @@ public class JdbcDataSourceFileSearchRepository implements DataSourceFileSearchF
         return value == null || value.isBlank() ? fallback : value;
     }
 
+    private String experimentContext(String experimentNo, String experimentTitle, String experimentPurpose,
+                                     String categoryName, String projectName, String stageName, String taskName) {
+        var parts = new ArrayList<String>();
+        addContext(parts, "实验编号", experimentNo);
+        addContext(parts, "实验名称", experimentTitle);
+        addContext(parts, "实验目的", experimentPurpose);
+        addContext(parts, "实验分类", categoryName);
+        addContext(parts, "项目", projectName);
+        addContext(parts, "阶段", stageName);
+        addContext(parts, "任务", taskName);
+        return String.join("；", parts);
+    }
+
+    private void addContext(List<String> parts, String label, String value) {
+        if (value != null && !value.isBlank()) parts.add(label + "=" + value.strip());
+    }
+
     private String categoryClause(List<UUID> categoryIds) {
         if (categoryIds == null || categoryIds.isEmpty()) return "";
         var categorizedIds = categoryParameters(categoryIds);
@@ -869,12 +1081,14 @@ public class JdbcDataSourceFileSearchRepository implements DataSourceFileSearchF
         var conditions = new ArrayList<String>();
         if (!categorizedIds.isEmpty()) {
             var placeholders = String.join(",", java.util.Collections.nCopies(categorizedIds.size(), "?"));
-            conditions.add("(p.source_owner = 'DATA_CENTER' AND p.data_category_id IN (" + placeholders + ")"
-                    + (includesUncategorized ? " OR p.data_category_id IS NULL" : "") + ")");
+            conditions.add("(p.source_owner = 'DATA_CENTER' AND (p.data_category_id IN (" + placeholders + ")"
+                    + (includesUncategorized ? " OR p.data_category_id IS NULL" : "") + "))");
         } else if (includesUncategorized) {
             conditions.add("(p.source_owner = 'DATA_CENTER' AND p.data_category_id IS NULL)");
         }
-        if (includesUncategorized) conditions.add("p.source_owner = 'EXPERIMENT'");
+        // Experiment imports are their own authorized source. Their inclusion
+        // must not depend on the synthetic "uncategorized" category token.
+        conditions.add("p.source_owner = 'EXPERIMENT'");
         return conditions.isEmpty() ? " AND 1 = 0" : " AND (" + String.join(" OR ", conditions) + ")";
     }
 
@@ -951,7 +1165,12 @@ public class JdbcDataSourceFileSearchRepository implements DataSourceFileSearchF
                        java.time.Instant updatedAt, String sourceOwner, String recognitionMode,
                        UUID experimentId, UUID experimentVersionId, String recordKey, String sheetName,
                        Integer rowNumber, String column, String cellAddress, UUID valueId, String fieldCode,
-                       String fieldName, String value, String unit, String valueType, double score) { }
+                       String fieldName, String value, String unit, String valueType, double score,
+                       String experimentNo, String experimentTitle, String experimentPurpose,
+                       String experimentCategoryName, String projectName, String experimentStageName,
+                       String experimentTaskName, UUID recordId, Integer recordIndex, String valuePath,
+                       String sourceLabel, String semanticDomain, String semanticField, String experimentStatus,
+                       String displayRecord) { }
 
     private record FileRow(UUID importJobId, UUID fileId, String originalName, String contentType,
                            long size, java.time.Instant updatedAt, String sourceOwner,
@@ -966,9 +1185,16 @@ public class JdbcDataSourceFileSearchRepository implements DataSourceFileSearchF
     private static final class Aggregate {
         private final Row row;
         private final List<Hit> hits = new ArrayList<>();
+        private final Set<UUID> hitIds = new java.util.HashSet<>();
 
         private Aggregate(Row row) {
             this.row = row;
+        }
+
+        private void add(Hit hit) {
+            var maximum = "EXPERIMENT".equalsIgnoreCase(row.sourceOwner()) ? 32 : 10;
+            if (hits.size() >= maximum || !hitIds.add(hit.hitId())) return;
+            hits.add(hit);
         }
 
         private SourceFileMatch view(String query) {

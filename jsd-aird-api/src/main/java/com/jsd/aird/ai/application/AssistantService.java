@@ -1,5 +1,6 @@
 package com.jsd.aird.ai.application;
 
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
@@ -466,6 +467,9 @@ public class AssistantService {
                  - 结构化来源明细必须由已授权的数据中心或实验本证据支持；没有这类证据时，不得用知识资料或互联网资料猜测、替代记录值。
                  - 结构化证据中的字段值、单位和业务记录必须保持原样。用户询问记录详情时，可用易读的列表或表格呈现相关字段；不要暴露内部存储字段、数据库标识或无关明细。
                 - 依据用户实际问题和证据的组织方式作答：同一业务记录跨工作表出现时仍归为同一记录，可按工作表或观察分别列值；不要把工作表数量当成业务记录数。多条命中先概括再归组；自然解释与数据事实要区分，不强制套用固定栏目或复述检索过程。
+                - 实验编号与业务记录编号、样品编号是不同字段，必须分别标注。相同业务编号出现在不同实验或文件时，按实验编号和来源文件分别归组；同字段值冲突时列出各自来源和值，不做多数表决，不推测差异原因。数值单位按来源原样保留，不自行补充或换算。
+                - 当多项数值与来源合计同时出现时，先复算分项之和；若与来源合计不一致，原样列出来源合计和分项之和并说明不一致，不补造缺失组分或原因。证据未说明数据差异原因时，直接说明原因未提供，不用“可能是测试条件”等说法猜测。
+                - 有结构化配方核算清单时，逐项保留清单列出的组分名称和值；清单只覆盖本轮检索到的字段时，应称为“检索到的组分”，不得声称是完整配方。
                 - 结构化数据查询没有命中时，只说明本轮选定来源中未找到可核对记录；不要推断数据不存在，也不要编造可能原因。需要时只提出能缩小查询范围的具体问题。
                 - 涉及差值、比例或百分比时，先复核运算与所列数值一致，并明确区分绝对差值、百分点和相对变化；条件或字段标签不同的观测值应分别呈现，不当作重复测量。
 
@@ -492,15 +496,31 @@ public class AssistantService {
                                          List<KnowledgeSearchFacade.SearchHit> hits,
                                          RagRetrievalService.Retrieval retrieval) {
         var answerDataHits = answerDataHits(retrieval);
-        var compressed = contextCompression.compress(hits, answerDataHits, 18000,
-                retrieval.dataDetail().mode() != DataSourceFileSearchFacade.DataQueryMode.NONE);
+        var contextCharacterLimit = 18_000;
+        var compressed = contextCompression.compress(hits, answerDataHits, contextCharacterLimit);
+        log.info("assistant_context_compressed knowledgeCandidates={} knowledgeIncluded={} knowledgeOmitted={} dataCandidates={} dataIncluded={} dataOmitted={} characters={} maxCharacters={}",
+                hits.size(), compressed.knowledgeCount(), Math.max(0, hits.size() - compressed.knowledgeCount()),
+                answerDataHits.size(), compressed.dataFileCount(),
+                Math.max(0, answerDataHits.size() - compressed.dataFileCount()),
+                compressed.characterCount(), contextCharacterLimit);
+        var formulaCheck = formulaConsistencyContext(question, answerDataHits);
+        if (question != null && question.matches("(?s).*(配方|组分|组成|合计|总计|添加量).*")
+                && !answerDataHits.isEmpty()) {
+            var formulaRows = answerDataHits.stream()
+                    .filter(hit -> hit != null && "FORMULA".equalsIgnoreCase(hit.semanticDomain())).count();
+            var totalRows = answerDataHits.stream().filter(AssistantService::isFormulaTotal).count();
+            log.info("assistant_formula_check_context dataHits={} formulaRows={} totalRows={} mismatchContextIncluded={}",
+                    answerDataHits.size(), formulaRows, totalRows, !formulaCheck.isBlank());
+        }
         var context = compressed.text().isBlank() ? "（没有找到已授权的检索内容）" : compressed.text();
         var dataContext = compressed.dataFileCount() == 0 ? "（没有找到已归档结构化来源文件内容）"
                 : "（数据中心和按模板实验的结构化来源已按各自 sourceType 编入上方受控上下文）";
         var dataChannelStatus = retrieval.trace().channels().stream()
-                .filter(channel -> "DATA_CENTER_ROW".equals(channel.channel()))
+                .filter(channel -> "STRUCTURED_DATA_ROW".equals(channel.channel()))
                 .map(RagRetrievalService.ChannelTrace::status)
-                .findFirst().orElse("UNKNOWN");
+                .findFirst().orElseGet(() -> retrieval.trace().channels().stream()
+                        .filter(channel -> "DATA_CENTER_ROW".equals(channel.channel()))
+                        .map(RagRetrievalService.ChannelTrace::status).findFirst().orElse("UNKNOWN"));
         var structuredQueryContext = dataLookupContext(retrieval.dataDetail(), dataChannelStatus);
         var external = externalContext(retrieval.webHits());
         var past = AssistantConversationContext.format(history);
@@ -514,6 +534,8 @@ public class AssistantService {
                 + "不得拼接同页其他实体的属性；表格标题中的规格标签按原文整体保留，不扩写设备或机理；"
                 + "证据只有英文技术名称时，answer 只能逐字使用该英文名称，禁止生成证据中没有的中文译名；"
                 + "具体数据记录只能由已授权的数据中心或实验本证据支持；"
+                + (formulaCheck.isBlank() ? "" : "配方数值核对结果（来自同一来源、同一业务记录的原始字段计算）："
+                + formulaCheck + "。答案应逐项保留核对清单中的组分名称和值；若组分之和与来源合计不一致，必须同时给出两者并明确说明不一致；不得只报来源合计，也不得猜测缺项或原因。")
                 + "回答应为非空的自然语言文本。";
         return new PromptBundle(text, evidenceCatalog(compressed.evidenceRefs(), external.evidenceRefs(), hits,
                 answerDataHits, retrieval.webHits()));
@@ -524,8 +546,7 @@ public class AssistantService {
         var result = new ArrayList<DataSourceFileSearchFacade.SourceFileHit>();
         var seen = new HashSet<UUID>();
         for (var hit : retrieval.dataHits()) {
-            result.add(hit);
-            if (hit.hitId() != null) seen.add(hit.hitId());
+            if (hit.hitId() == null || seen.add(hit.hitId())) result.add(hit);
         }
         for (var context : retrieval.dataDetail().recordContexts()) {
             for (var hit : context.contextHits()) {
@@ -535,8 +556,103 @@ public class AssistantService {
         return List.copyOf(result);
     }
 
+    static String formulaConsistencyContext(String question,
+                                            List<DataSourceFileSearchFacade.SourceFileHit> hits) {
+        if (question == null || !question.matches("(?s).*(配方|组分|组成|合计|总计|添加量).*")) return "";
+        if (hits == null || hits.isEmpty()) return "";
+        var groups = new LinkedHashMap<String, List<DataSourceFileSearchFacade.SourceFileHit>>();
+        for (var hit : hits) {
+            // Imported totals may be mapped as OTHER/DYNAMIC_VALUE while the
+            // individual ingredients are correctly classified as FORMULA.
+            // Keep named total fields for comparison, but never sum arbitrary
+            // numeric observations as formula components.
+            if (hit == null || (!"FORMULA".equalsIgnoreCase(hit.semanticDomain())
+                    && !isFormulaTotal(hit))) continue;
+            var group = String.join("|", safeText(hit.fileObjectId() == null ? null : hit.fileObjectId().toString()),
+                    safeText(hit.importJobId() == null ? null : hit.importJobId().toString()),
+                    businessRecordKey(hit), safeText(hit.sheetName()));
+            groups.computeIfAbsent(group, ignored -> new ArrayList<>()).add(hit);
+        }
+        var checks = new ArrayList<String>();
+        for (var group : groups.values()) {
+            var totals = group.stream().filter(AssistantService::isFormulaTotal)
+                    .filter(hit -> numericValue(hit.fieldValue()) != null).toList();
+            var components = group.stream().filter(hit -> "FORMULA".equalsIgnoreCase(hit.semanticDomain()))
+                    .filter(hit -> !isFormulaTotal(hit))
+                    .filter(hit -> numericValue(hit.fieldValue()) != null)
+                    .collect(java.util.stream.Collectors.toMap(
+                            hit -> String.join("|", safeText(hit.sourceLabel()), safeText(hit.fieldName()),
+                                    safeText(hit.fieldValue()), safeText(hit.unit())),
+                            hit -> hit, (left, right) -> left, LinkedHashMap::new)).values().stream().toList();
+            if (totals.size() != 1 || components.size() < 2) continue;
+            var total = totals.getFirst();
+            var unit = safeText(total.unit()).strip();
+            if (components.stream().anyMatch(hit -> !safeText(hit.unit()).strip().equals(unit))) continue;
+            var sum = components.stream().map(hit -> numericValue(hit.fieldValue()))
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            var sourceTotal = numericValue(total.fieldValue());
+            if (sourceTotal == null) continue;
+            var difference = sourceTotal.subtract(sum);
+            if (difference.compareTo(BigDecimal.ZERO) == 0) continue;
+            var representative = total;
+            var record = displayBusinessRecord(representative);
+            var componentValues = components.stream().map(hit -> {
+                        var label = safeText(hit.fieldName()).isBlank()
+                                ? safeText(hit.sourceLabel()) : safeText(hit.fieldName());
+                        var value = safeText(hit.fieldValue());
+                        var componentUnit = safeText(hit.unit()).strip();
+                        return label + "=" + value + (componentUnit.isBlank() ? "" : " " + componentUnit);
+                    })
+                    .collect(java.util.stream.Collectors.joining("；"));
+            checks.add("文件《" + safeText(representative.originalName()) + "》业务记录“" + record
+                    + "”：检索到的组分明细=" + componentValues
+                    + "；组分之和=" + decimalText(sum) + (unit.isBlank() ? "" : " " + unit)
+                    + "，来源合计=" + decimalText(sourceTotal) + (unit.isBlank() ? "" : " " + unit)
+                    + "，差额（来源合计－组分之和）=" + signedDecimalText(difference));
+        }
+        return String.join("；", checks);
+    }
+
+    private static boolean isFormulaTotal(DataSourceFileSearchFacade.SourceFileHit hit) {
+        var label = (safeText(hit.sourceLabel()) + " " + safeText(hit.fieldName()) + " "
+                + safeText(hit.semanticField())).replaceAll("\\s+", "").toLowerCase(Locale.ROOT);
+        return label.matches(".*(合计|总计|小计|总和|total|subtotal|sum).*" );
+    }
+
+    private static BigDecimal numericValue(String raw) {
+        if (raw == null) return null;
+        var value = raw.strip().replace(",", "");
+        if (!value.matches("[-+]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][-+]?\\d+)?")) return null;
+        try {
+            return new BigDecimal(value);
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    private static String displayBusinessRecord(DataSourceFileSearchFacade.SourceFileHit hit) {
+        var matcher = Pattern.compile("(?i)记录\\s*[：:=]\\s*([^；;]+)[；;]\\s*字段").matcher(safeText(hit.content()));
+        if (matcher.find()) return matcher.group(1).strip();
+        var key = safeText(hit.recordKey()).strip();
+        return key.isBlank() || key.matches("(?i)^IMPORT[:_-].*") ? "未提供" : key;
+    }
+
+    private static String businessRecordKey(DataSourceFileSearchFacade.SourceFileHit hit) {
+        var matcher = Pattern.compile("(?i)记录\\s*[：:=]\\s*([^；;]+)[；;]\\s*字段").matcher(safeText(hit.content()));
+        return matcher.find() ? matcher.group(1).strip() : safeText(hit.recordKey());
+    }
+
+    private static String decimalText(BigDecimal value) {
+        return value.stripTrailingZeros().toPlainString();
+    }
+
+    private static String signedDecimalText(BigDecimal value) {
+        var text = decimalText(value);
+        return value.signum() > 0 ? "+" + text : text;
+    }
+
     static String dataLookupContext(DataSourceFileSearchFacade.DataDetailResult detail) {
-        return dataLookupContext(detail, "SUCCEEDED");
+        return dataLookupContext(detail, "EMPTY");
     }
 
     static String dataLookupContext(DataSourceFileSearchFacade.DataDetailResult detail, boolean dataChannelSkipped) {
@@ -545,19 +661,33 @@ public class AssistantService {
 
     private static String dataLookupContext(DataSourceFileSearchFacade.DataDetailResult detail, String dataChannelStatus) {
         if (detail == null || detail.mode() == DataSourceFileSearchFacade.DataQueryMode.NONE) {
-            return "本轮没有执行精确的记录/字段查询；如有命中，常规来源检索结果已在证据上下文中提供。";
+            var searchSummary = switch (dataChannelStatus) {
+                case "SUCCEEDED" -> "常规结构化检索已找到相关证据，见上方上下文。";
+                case "EMPTY" -> "常规结构化检索本轮没有返回匹配内容。";
+                case "SKIPPED" -> "本轮选择的检索范围不包含结构化数据来源，未执行这部分检索。";
+                case "FAILED" -> "常规结构化检索未能完成，不能据此判断是否有匹配记录。";
+                case "PARTIAL" -> "常规结构化检索部分失败，只能依据已返回的证据回答。";
+                default -> "本轮结构化检索结果未能确定。";
+            };
+            return "本轮未执行精确的记录/字段定位；" + searchSummary
+                    + "未命中只表示本轮授权范围内没有检索到匹配内容，不能据此判断整个资料库是否包含相关数据。";
         }
+        var exactResultEmpty = detail.hits().isEmpty();
         var state = "SKIPPED".equals(dataChannelStatus)
-                ? "本轮没有检索数据中心，因为用户选择的来源范围不包含数据中心。"
+                ? "本轮没有检索结构化数据来源，因为用户选择的范围不包含数据中心或实验记录。"
                 : "FAILED".equals(dataChannelStatus)
-                ? "数据中心检索未能完成，不能据此判断是否存在匹配记录。"
+                ? "结构化数据检索未能完成，不能据此判断是否存在匹配记录。"
                 : "PARTIAL".equals(dataChannelStatus)
-                ? "数据中心检索部分失败；只可依据已提供的命中回答，不能声称结果完整。"
+                ? "结构化数据检索部分失败；只可依据已提供的命中回答，不能声称结果完整。"
+                : "SUCCEEDED".equals(dataChannelStatus) && exactResultEmpty
+                ? "精确的记录/字段定位未返回目标值，但一般结构化检索已找到相关证据；请依据上方命中内容回答。"
+                : "EMPTY".equals(dataChannelStatus) && exactResultEmpty
+                ? "精确定位和一般结构化检索本轮都未返回匹配内容，未找到匹配文件或记录；只能说明当前授权范围内本次未命中，不能据此判断整个资料库是否包含相关数据。"
                 : switch (detail.resolution()) {
             case RESOLVED -> detail.hits().isEmpty()
                     ? "查询已执行，但没有找到匹配的非空记录值。"
                     : "查询已执行并找到匹配记录，命中数据见证据上下文。";
-            case FILE_REQUIRED -> "本次请求需要指定数据文件名后才能查看文件概览。";
+            case FILE_REQUIRED -> "精确定位缺少唯一记录或文件线索；一般结构化检索结果仍需以已提供的证据为准。";
             case AMBIGUOUS -> "查询命中多个同等匹配的数据文件，需要用户选择文件。";
             case NOT_FOUND -> "当前授权数据范围内未找到匹配文件或记录。";
             case NOT_REQUESTED -> "本轮没有执行精确的记录/字段查询。";

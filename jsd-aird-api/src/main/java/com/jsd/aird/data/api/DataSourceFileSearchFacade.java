@@ -77,6 +77,13 @@ public interface DataSourceFileSearchFacade {
                 .toList();
     }
 
+    /** Resolve sibling values for already matched experiment records, within the same access scope. */
+    default List<SourceFileHit> expandExperimentContexts(UUID organizationId, List<SourceFileHit> matchedHits,
+                                                         List<String> queryTerms,
+                                                         RetrievalAccessScope accessScope) {
+        return List.of();
+    }
+
     private static String sourceLocator(SourceFileMatch file, Hit hit) {
         var owner = "EXPERIMENT".equalsIgnoreCase(file.sourceOwner())
                 ? "EXPERIMENT_TEMPLATE" : "DATA_CENTER";

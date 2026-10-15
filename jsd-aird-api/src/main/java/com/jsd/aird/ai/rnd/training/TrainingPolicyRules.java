@@ -1,7 +1,6 @@
 package com.jsd.aird.ai.rnd.training;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.jsd.aird.ai.rnd.modeling.ModelingContracts.ValidationIssue;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -10,6 +9,7 @@ import java.util.Set;
 
 /** Structural policy gate. Scientific values are supplied by administrators, never by code defaults. */
 public final class TrainingPolicyRules {
+    public record ValidationIssue(String code, String fieldCode, String message) { }
     private static final Set<String> DATA_NATURE = Set.of("REAL", "SYNTHETIC");
     private static final Set<String> ALGORITHMS = Set.of("GAUSSIAN_PROCESS", "RANDOM_FOREST", "LIGHTGBM",
             "XGBOOST", "CATBOOST", "LOGISTIC_REGRESSION", "ORDINAL_CUMULATIVE_LOGIT");

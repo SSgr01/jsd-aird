@@ -181,10 +181,10 @@ export function DataUploadPage() {
       <UploadWorkspace
       breadcrumbs={[{ title: '数据中心' }, { title: '数据上传' }]}
       title="数据上传"
-      description="普通业务数据和实验数据均按已发布模板导入，并在同一字段映射工作台完成确认。"
+      description="选择已发布模板并上传文件，核对字段与数据后确认导入。"
       leftTitle="选择导入模板"
       classification={<Form layout="vertical" component={false}>
-        <Form.Item label="导入模板" required help="显示已发布模板；模板自身定义字段和数据结构。">
+        <Form.Item label="导入模板" required>
           <Select
             showSearch
             optionFilterProp="label"
@@ -201,9 +201,9 @@ export function DataUploadPage() {
           message={chosen.experimentImportReady ? '实验数据模板 · 可生成实验草稿' : '普通数据模板'}
           description={chosen.experimentImportReady
             ? `整份文件一个实验${chosen.identityTypes?.length ? ` · 文件内关联标识：${chosen.identityTypes.map(identityTypeLabel).join('、')}` : ''}`
-            : '本次导入只保存数据中心记录和来源信息。'}
+            : '仅导入数据中心，不生成实验草稿。'}
         />}
-        <Form.Item label="关联项目 / 阶段 / 任务" extra="关系保存到本次导入任务，工作表、数据行和源文件会继承。"><ProjectRelationPicker value={projectRelations} onChange={setProjectRelations} /></Form.Item>
+        <Form.Item label="关联项目 / 阶段 / 任务" extra="所选关联会应用到本次导入的工作表、数据行和来源文件。"><ProjectRelationPicker value={projectRelations} onChange={setProjectRelations} /></Form.Item>
       </Form>}
       accept=".xls,.xlsx,.csv"
       maxCount={1}

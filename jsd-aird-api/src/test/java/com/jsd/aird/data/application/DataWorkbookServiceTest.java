@@ -212,7 +212,7 @@ class DataWorkbookServiceTest {
         var value = new DataWorkbookService.FieldValue(UUID.randomUUID().toString(), "DESCRIPTION",
                 "不合格描述（品管部）", "不合格描述（品管部）", "business-binding", "/description",
                 "INPUT", "VALID", "TEXT", "", false, false, true, true,
-                "sheet-1", "不良联络单", 6, "B6", null, null, null,
+                "sheet-1", "不良联络单", 6, "B6", null, null, null, null,
                 objectMapper.getNodeFactory().textNode("粘度超标"), true, false, null,
                 "business-region", "SCALAR", null, null, null, null, null, null);
 

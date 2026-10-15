@@ -21,6 +21,14 @@ public class ContextCompressionService {
     private static final Pattern BUSINESS_RECORD_PATTERN = Pattern.compile("(?:^|[；;])\\s*记录\\s*[=:：]\\s*([^；;\\s]+)");
     private static final Pattern EXPERIMENT_NUMBER_PATTERN = Pattern.compile("(?:^|[；;])\\s*实验编号\\s*[=:：]\\s*([^；;\\s]+)");
 
+    /** Backward-compatible entry point; context allocation is now source-neutral. */
+    @Deprecated(forRemoval = false)
+    public Context compress(List<KnowledgeSearchFacade.SearchHit> knowledge,
+                            List<DataSourceFileSearchFacade.SourceFileHit> dataFiles,
+                            int maxChars, boolean ignoredPrioritizeStructuredData) {
+        return compress(knowledge, dataFiles, maxChars);
+    }
+
     public Context compress(List<KnowledgeSearchFacade.SearchHit> knowledge,
                             List<DataSourceFileSearchFacade.SourceFileHit> dataFiles, int maxChars) {
         var chunks = new ArrayList<String>();
@@ -63,7 +71,8 @@ public class ContextCompressionService {
                     + ",page=" + first.pageNo() + ",section=" + first.section() + "] ";
             var separatorLength = chunks.isEmpty() ? 0 : 2;
             var contentBudget = remaining - prefix.length() - separatorLength;
-            if (contentBudget < 80) break;
+            var firstEvidenceRef = "[evidenceRef=" + groupRefs.getFirst() + "]";
+            if (contentBudget < firstEvidenceRef.length()) break;
             var excerpt = groupText.length() <= contentBudget ? groupText
                     : groupText.substring(0, Math.max(0, contentBudget - 1)) + "…";
             chunks.add(prefix + excerpt);

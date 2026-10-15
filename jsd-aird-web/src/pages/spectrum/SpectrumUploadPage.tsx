@@ -191,7 +191,7 @@ export function SpectrumUploadPage() {
       <UploadWorkspace
         breadcrumbs={[{ title: 'AI图谱中心' }, { title: '图谱上传' }]}
         title="图谱上传"
-        description="客户仅需提供 PDF 或图谱图片；上传后不依赖 CSV 原始数据，可直接选择图谱进入 AI 分析。"
+        description="上传图谱文件并补充样品信息，保存后即可开始 AI 分析。"
         headerActions={<Button onClick={() => navigate('/spectrum/view')}>查看图谱分类</Button>}
         leftTitle="图谱分类与信息"
         classification={

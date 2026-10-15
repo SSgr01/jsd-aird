@@ -1,5 +1,5 @@
 import { EditOutlined, ExperimentOutlined, FileExcelOutlined, FileTextOutlined, FileWordOutlined, SearchOutlined } from '@ant-design/icons';
-import { App, Breadcrumb, Button, Empty, Form, Input, Select, Skeleton, Typography } from 'antd';
+import { Alert, App, Breadcrumb, Button, Empty, Form, Input, Select, Skeleton, Typography } from 'antd';
 import dayjs from 'dayjs';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
@@ -8,8 +8,7 @@ import { ProjectRelationPicker } from '@/components/project-relations/ProjectRel
 import type { ProjectRelationTarget } from '@/services/project/project-resource-api';
 import { createExperiment, listExperiments, type ExperimentSummary } from '@/services/experiments/experiment-api';
 import { useAuthStore } from '@/stores/auth-store';
-import { templateApi } from '@/services/templates/template-api';
-import type { TemplateListItem } from '@/features/template-workspace/types';
+import { dataApi, type DataTemplateOption } from '@/services/data/data-api';
 
 import './experiments.css';
 
@@ -28,12 +27,13 @@ export function NewExperimentPage() {
   const user = useAuthStore((state) => state.user);
   const [form] = Form.useForm();
   const [recordMode, setRecordMode] = useState<RecordMode>('word');
-  const [templates, setTemplates] = useState<TemplateListItem[]>([]);
+  const [templates, setTemplates] = useState<DataTemplateOption[]>([]);
   const [templatesLoading, setTemplatesLoading] = useState(false);
   const [relations, setRelations] = useState<ProjectRelationTarget[]>([]);
   const [recent, setRecent] = useState<ExperimentSummary[]>([]);
   const [loadingRecent, setLoadingRecent] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [creationError, setCreationError] = useState('');
   const [keyword, setKeyword] = useState('');
 
   useEffect(() => {
@@ -56,7 +56,7 @@ export function NewExperimentPage() {
   }, [keyword, recent]);
 
   const templateOptions = useMemo(() => {
-    const groups = new Map<string, TemplateListItem[]>();
+    const groups = new Map<string, DataTemplateOption[]>();
     templates.forEach((item) => {
       const category = item.category?.trim() || '未分类';
       groups.set(category, [...(groups.get(category) || []), item]);
@@ -65,18 +65,21 @@ export function NewExperimentPage() {
       label,
       options: items.map((item) => ({
         value: item.versionId,
-        label: `${item.name}（${item.format === 'XLSX' ? 'Excel' : 'Word'} · V${item.versionNo}）`,
+        label: `${item.name}（Excel · V${item.versionNo}）`,
       })),
     }));
   }, [templates]);
 
   const changeRecordMode = (mode: RecordMode) => {
+    setCreationError('');
     setRecordMode(mode);
     form.setFieldValue('templateVersionId', undefined);
     if (mode === 'template' && !templates.length) {
       setTemplatesLoading(true);
-      void templateApi.list({ status: 'PUBLISHED', page: 1, size: 100 })
-        .then((result) => setTemplates(result.items))
+      void dataApi.listTemplates()
+        .then((result) => setTemplates(result.filter((item) => item.format === 'XLSX'
+          && item.importContractVersion === 9 && item.templateUsage === 'EXPERIMENT_DATA'
+          && item.experimentImportReady)))
         .catch(() => void message.error('模板列表加载失败'))
         .finally(() => setTemplatesLoading(false));
     }
@@ -85,23 +88,10 @@ export function NewExperimentPage() {
   const submit = async () => {
     const values = await form.validateFields();
     const relation = relations.find((item) => item.projectId);
+    setCreationError('');
     setSubmitting(true);
     try {
-      let selectedTemplate: TemplateListItem | undefined;
-      let templateSnapshot: Record<string, unknown> | undefined;
-      let templateSnapshotHash: string | undefined;
-      if (recordMode === 'template') {
-        selectedTemplate = templates.find((item) => item.versionId === values.templateVersionId);
-        const workspace = await templateApi.getEditModel(values.templateVersionId);
-        templateSnapshot = workspace.snapshotFileId && workspace.snapshotHash
-          ? await templateApi.downloadSnapshot(workspace.snapshotFileId)
-          : workspace.inlineSnapshot;
-        templateSnapshotHash = workspace.snapshotHash ?? workspace.workspaceHash;
-        if (!templateSnapshot) throw new Error('所选模板没有可用的文档内容');
-      }
-      const documentFormat: DocumentFormat = selectedTemplate?.format === 'XLSX'
-        ? 'excel'
-        : selectedTemplate?.format === 'DOCX' ? 'word' : recordMode as DocumentFormat;
+      const documentFormat: DocumentFormat = recordMode === 'template' ? 'excel' : recordMode;
       const item = await createExperiment({
         experimentNo: `EXP-${dayjs().format('YYYYMMDD')}-${String(Date.now()).slice(-6)}`,
         title: values.title.trim(),
@@ -110,8 +100,6 @@ export function NewExperimentPage() {
         visibility: values.visibility,
         sourceType: recordMode === 'template' ? 'TEMPLATE' : 'MANUAL',
         templateVersionId: recordMode === 'template' ? values.templateVersionId : undefined,
-        templateSnapshotHash,
-        templateSnapshot,
         ...(relation ? { projectId: relation.projectId, stageId: relation.stageId, taskId: relation.taskId } : {}),
         editModel: {
           title: values.title.trim(),
@@ -119,7 +107,6 @@ export function NewExperimentPage() {
           plan: '',
           documentFormat,
           blankDocument: recordMode !== 'template',
-          documentSnapshot: templateSnapshot,
           dynamicValues: {},
           formulaItems: [],
           processSteps: [],
@@ -131,7 +118,9 @@ export function NewExperimentPage() {
       void message.success('实验已创建，正在进入编辑');
       navigate(`/experiments/${item.id}`, { state: { returnTo: '/experiments/new' } });
     } catch (error) {
-      void message.error(error instanceof Error ? error.message : '实验创建失败');
+      const detail = error instanceof Error ? error.message : '实验创建失败';
+      setCreationError(detail);
+      void message.error(detail);
     } finally {
       setSubmitting(false);
     }
@@ -169,6 +158,7 @@ export function NewExperimentPage() {
           <Select showSearch optionFilterProp="label" loading={templatesLoading} placeholder="请选择已发布模板" popupMatchSelectWidth={false} classNames={{ popup: { root: 'experiment-import-dropdown experiment-template-dropdown' } }} options={templateOptions} notFoundContent={templatesLoading ? '加载中' : '暂无已发布模板'} />
         </Form.Item>}
         <div className="eln-entry-submit"><Button type="primary" icon={<EditOutlined />} loading={submitting} onClick={() => void submit()}>创建并进入编辑</Button></div>
+        {creationError && <Alert type="error" showIcon message="实验创建失败" description={creationError} />}
       </Form>
     </section>
     <section className="upload-workspace-panel upload-workspace-panel-right eln-entry-recent" aria-labelledby="recent-experiment-title">

@@ -321,7 +321,7 @@ export function TemplateUploadPage() {
       <UploadWorkspace
         breadcrumbs={[{ title: '模板中心' }, { title: '模板上传' }]}
         title="模板上传"
-        description="上传后系统自动识别字段、业务分组和表格区域；进入工作台后只需确认少量不确定内容。"
+        description="上传后检查字段和表格结构，确认无误后发布模板。"
         leftTitle="基础分类"
         classification={<Form layout="vertical" component={false}>
           <Form.Item label="模板分类">

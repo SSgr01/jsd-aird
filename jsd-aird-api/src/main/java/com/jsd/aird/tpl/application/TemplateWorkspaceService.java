@@ -1133,7 +1133,20 @@ public class TemplateWorkspaceService {
         }
         templateVersionReviewService.requireApproved(actor.organizationId(), versionId);
         if (workspace.format() == TemplateFormat.XLSX && workspace.snapshotFileId() == null) {
-            throw new ApiException(ApiErrorCode.FILE_NOT_READY, "发布前必须持久化 Excel 原生快照");
+            if (!workspace.inlineSnapshot().path("sheets").isObject()
+                    || workspace.inlineSnapshot().path("sheets").isEmpty()) {
+                throw new ApiException(ApiErrorCode.FILE_NOT_READY, "发布前必须持久化 Excel 原生快照");
+            }
+            var staged = stageWorkbookSnapshot(workspace.inlineSnapshot(), versionId, actor);
+            var workspaceHash = canonicalizer.workspaceHash(versionId.toString(), workspace.schema(),
+                    workspace.mapping(), workspace.data(), staged.sha256(),
+                    workspace.editorAppVersion(), workspace.pluginManifestHash());
+            if (repository.attachInitialSnapshot(actor.organizationId(), versionId, staged.id(),
+                    staged.sha256(), workspaceHash) == 0) {
+                throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT);
+            }
+            requestFileActivation(staged.id());
+            workspace = get(versionId);
         }
         if (workspace.format() == TemplateFormat.DOCX
                 && (!workspace.wordDocument().isObject()
@@ -1444,6 +1457,26 @@ public class TemplateWorkspaceService {
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "Word 原生文档不存在"));
         var stored = objectStorage.get(file.objectKey());
         return new WordDocumentDownload(file.originalName(), file.contentType(), stored);
+    }
+
+    private StagedSnapshot stageWorkbookSnapshot(JsonNode snapshot, UUID versionId, Actor actor) {
+        String key = null;
+        try {
+            var bytes = objectMapper.writeValueAsBytes(snapshot);
+            var sha = java.util.HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+            var id = UUID.randomUUID();
+            var name = "template-" + versionId + "-snapshot.json";
+            key = actor.organizationId() + "/template-snapshot/" + id + "/" + name;
+            objectStorage.put(key, new ByteArrayInputStream(bytes), bytes.length, "application/json");
+            fileRepository.insert(new FileObjectRepository.NewFileObject(
+                    id, actor.organizationId(), storageBucket, key, name, "application/json",
+                    bytes.length, sha, actor.userId()));
+            registerRollbackCleanup(key);
+            return new StagedSnapshot(id, sha);
+        } catch (Exception exception) {
+            if (key != null) deleteWordObjectQuietly(key);
+            throw new ApiException(ApiErrorCode.SNAPSHOT_PERSIST_FAILED, "Excel 原生快照暂存失败");
+        }
     }
 
     private StagedWord stageWordDocument(byte[] bytes, String originalName, Actor actor) {
@@ -1967,6 +2000,9 @@ public class TemplateWorkspaceService {
     }
 
     private record StagedWord(UUID id, String sha256) {
+    }
+
+    private record StagedSnapshot(UUID id, String sha256) {
     }
 
     public record BindingValuePair(String dataPath, JsonNode dataValue, JsonNode editorValue) {

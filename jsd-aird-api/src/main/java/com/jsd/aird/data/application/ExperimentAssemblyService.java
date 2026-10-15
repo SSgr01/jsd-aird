@@ -129,8 +129,14 @@ public class ExperimentAssemblyService {
         }
         var model=(com.fasterxml.jackson.databind.node.ObjectNode)candidate.editModel().deepCopy();
         model.set("documentSnapshot",sourceSnapshot);
+        model.put("sourceFileId", source.sourceFileId().toString());
+        model.put("sourceFileName", source.sourceFileName());
+        model.put("documentFormat", "excel");
         var created=experiments.createImportedDraft(new ExperimentDraftFacade.ImportedDraftCommand(
-                organizationId,actorId,actorName,model.path("title").asText(),categoryId,"EXCEL_IMPORT",
+                organizationId,actorId,actorName,model.path("title").asText(),categoryId,
+                source.sourceFileName().toLowerCase(java.util.Locale.ROOT)
+                        .matches(".*\\.(docx|png|jpg|jpeg|gif|webp|bmp|tif|tiff)")
+                        ?"OCR_IMPORT":"EXCEL_IMPORT",
                 projectId,stageId,taskId,blank(model.path("sourceOwnerName").asText()),date(model.path("sourceExperimentDate").asText()),
                 templateVersionId,templateSnapshotHash,templateSnapshot,model));
         repository.markSynced(organizationId,importJobId,assemblyKey,created.experimentId(),created.experimentVersionId(),created.experimentNo());

@@ -94,8 +94,8 @@ export const permissionLabels: Record<string, string> = {
   'spectrum.export': '导出图谱（spectrum.export）',
   'spectrum.download': '下载谱图数据（spectrum.download）',
   'ai.use': '使用 AI 研发助手',
-  'ai.modeling.read': '查看建模设置',
-  'ai.modeling.manage': '管理建模设置',
+  'ai.modeling.read': '使用建模工具',
+  'ai.modeling.manage': '管理指标清单',
   'ai.config.manage': '管理 AI 配置',
   'ai.model.read': '查看模型',
   'ai.model.publish': '发布与回退模型',
@@ -137,7 +137,8 @@ export function requiredPermissionForPath(pathname: string): string | undefined 
   // Pure menu group: its visibility is determined by accessible children.
   if (pathname === '/research-test-root') return undefined;
   const path = pathname.replace(/\/$/, '') || '/';
-  if (path === '/assistant/model-center') return undefined;
+  if (path === '/assistant/model-center' || path.startsWith('/assistant/model-center/targets/')) return undefined;
+  if (path.startsWith('/assistant/model-center/samples') || path.startsWith('/assistant/modeling-settings/')) return 'ai.modeling.read';
   if (path === '/assistant/modeling-settings') return 'ai.modeling.read';
   if (path === '/assistant/model-management') return 'ai.model.read';
   if (path === '/assistant/performance-prediction') return 'ai.performance.predict';
@@ -232,7 +233,7 @@ export function canViewPathWithMenus(pathname: string, permissions: string[], me
   // In the v2 model business roles own navigation visibility. Permission
   // levels remain independent and are enforced by page actions and APIs.
   if (menuKeys.length > 0 && menu) return hasMenu(menu, menuKeys);
-  if ((pathname.replace(/\/$/, '') || '/') === '/assistant/model-center') {
+  if (path === '/assistant/model-center' || path.startsWith('/assistant/model-center/targets/')) {
     return hasPermission('ai.model.read', permissions) || hasPermission('ai.modeling.read', permissions);
   }
   const required = requiredPermissionForPath(pathname);
@@ -272,8 +273,6 @@ export function firstAccessiblePath(permissions: string[], menuKeys: string[] = 
   const candidates = [
     ['/assistant', 'ai.use'],
     ['/assistant/model-center', 'ai.model.read'],
-    ['/assistant/modeling-settings', 'ai.modeling.read'],
-    ['/assistant/model-management', 'ai.model.read'],
     ['/assistant/performance-prediction', 'ai.performance.predict'],
     ['/projects/list', 'project.view'],
     ['/templates/library', 'template.view'],

@@ -83,14 +83,9 @@ public class CatalogRepository {
                 """, this::proposalRow, semanticKey).stream().findFirst();
     }
 
-    public List<ImportSummary> imports(int page, int size) {
-        return jdbc.query("SELECT * FROM tpl.standard_field_catalog_import ORDER BY catalog_version DESC,id LIMIT ? OFFSET ?",
-                this::importRow, size, Math.max(0, (page - 1) * size));
-    }
-
-    public long importCount() {
-        Long count = jdbc.queryForObject("SELECT count(*) FROM tpl.standard_field_catalog_import", Long.class);
-        return count == null ? 0 : count;
+    public List<ImportSummary> latestImports(int limit) {
+        return jdbc.query("SELECT * FROM tpl.standard_field_catalog_import ORDER BY catalog_version DESC,id LIMIT ?",
+                this::importRow, Math.max(1, Math.min(20, limit)));
     }
 
     public ProposalPage proposals(UUID importId, String keyword, String reviewStatus, int page, int size) {
@@ -108,81 +103,6 @@ public class CatalogRepository {
                 + " ORDER BY source_row,atomic_ordinal,id LIMIT ? OFFSET ?", this::proposalRow, queryArgs.toArray());
         long count = total == null ? 0 : total;
         return new ProposalPage(rows, page, size, count == 0 ? 0 : (count + size - 1) / size, count);
-    }
-
-    public Optional<ProposalView> proposal(UUID id) {
-        return jdbc.query("SELECT * FROM tpl.standard_field_catalog_proposal WHERE id=?", this::proposalRow, id)
-                .stream().findFirst();
-    }
-
-    public List<TargetSuggestion> targetProposals(String keyword, int limit, int offset) {
-        String pattern = keyword == null || keyword.isBlank() ? "%" : "%" + keyword.strip() + "%";
-        return jdbc.query("""
-                SELECT p.*, t.id matched_target_id, t.name matched_target_name,
-                       CASE WHEN t.id IS NULL THEN 'NEW_SUGGESTION' ELSE 'MATCH_EXISTING' END match_status
-                FROM tpl.standard_field_catalog_proposal p
-                LEFT JOIN ai.prediction_target t
-                  ON lower(t.name)=lower(p.atomic_name)
-                  OR lower(t.target_code)=lower(coalesce(p.suggested_code,''))
-                WHERE p.review_status IN ('NEEDS_REVIEW','ACCEPTED')
-                  AND (p.atomic_name ILIKE ? OR p.suggested_code ILIKE ?)
-                ORDER BY p.confidence DESC,p.source_row,p.atomic_ordinal,p.id LIMIT ? OFFSET ?
-                """, (rs, ignored) -> new TargetSuggestion(
-                rs.getObject("id", UUID.class), rs.getString("atomic_name"), rs.getString("suggested_code"),
-                rs.getString("suggested_value_type"), rs.getString("suggested_unit"),
-                rs.getObject("matched_target_id", UUID.class), rs.getString("matched_target_name"),
-                rs.getString("match_status"), rs.getInt("confidence"), json(rs,"qualifier_jsonb"),
-                strings(rs,"aliases_jsonb"), json(rs,"evidence_jsonb")), pattern, pattern, limit, offset);
-    }
-
-    public long targetProposalCount(String keyword) {
-        String pattern = keyword == null || keyword.isBlank() ? "%" : "%" + keyword.strip() + "%";
-        Long value = jdbc.queryForObject("""
-                SELECT count(*) FROM tpl.standard_field_catalog_proposal
-                WHERE review_status IN ('NEEDS_REVIEW','ACCEPTED')
-                  AND (atomic_name ILIKE ? OR suggested_code ILIKE ?)
-                """, Long.class, pattern, pattern);
-        return value == null ? 0 : value;
-    }
-
-    public void markApplied(UUID proposalId, JsonNode application) {
-        jdbc.update("UPDATE tpl.standard_field_catalog_proposal SET review_status='APPLIED', application_jsonb=?::jsonb WHERE id=?",
-                json(application), proposalId);
-    }
-
-    public UUID insertStandardFieldRequest(UUID organizationId, UUID proposalId, String displayName,
-                                           String dataType, String description, UUID createdBy) {
-        UUID id = UUID.randomUUID();
-        jdbc.update("""
-                INSERT INTO tpl.standard_field_request
-                    (id,organization_id,template_version_id,field_id,display_name,data_type,ui_type,group_code,description,created_by)
-                VALUES(?,?,NULL,?,?,?,?,?,?,?)
-                """, id, organizationId, "CATALOG_PROPOSAL:" + proposalId, displayName,
-                dataType, "TEXT", "TEST_RESULT", description, createdBy);
-        return id;
-    }
-
-    public List<InputSuggestion> inputSuggestions(UUID targetId, String keyword, int limit, int offset) {
-        String pattern = keyword == null || keyword.isBlank() ? "%" : "%" + keyword.strip() + "%";
-        return jdbc.query("""
-                SELECT DISTINCT f.id input_field_id, f.field_code, f.name field_name, f.value_type,
-                       f.availability_stage, fv.standard_field_dictionary_id,
-                       d.dictionary_code, d.display_name, factor.value AS factor
-                FROM ai.target_version tv
-                JOIN tpl.standard_field_catalog_proposal p ON p.id=tv.catalog_proposal_id
-                CROSS JOIN LATERAL jsonb_array_elements_text(p.factor_suggestions_jsonb) factor
-                JOIN ai.input_field f ON f.organization_id=tv.organization_id
-                    AND lower(f.name) ILIKE lower('%' || factor.value || '%')
-                LEFT JOIN ai.input_field_version fv ON fv.id=f.current_version_id
-                LEFT JOIN tpl.standard_field_dictionary d ON d.id=fv.standard_field_dictionary_id
-                WHERE tv.target_id=? AND (factor.value ILIKE ? OR f.name ILIKE ?)
-                ORDER BY f.name,f.id LIMIT ? OFFSET ?
-                """, (rs, ignored) -> new InputSuggestion(
-                rs.getObject("input_field_id", UUID.class), rs.getString("field_code"), rs.getString("field_name"),
-                rs.getString("value_type"), rs.getString("availability_stage"),
-                rs.getObject("standard_field_dictionary_id", UUID.class), rs.getString("dictionary_code"),
-                rs.getString("display_name"), 0, 0, "MATCH_EXISTING", 70, rs.getString("factor")),
-                targetId, pattern, pattern, limit, offset);
     }
 
     private ImportSummary importRow(ResultSet rs, int ignored) throws SQLException {

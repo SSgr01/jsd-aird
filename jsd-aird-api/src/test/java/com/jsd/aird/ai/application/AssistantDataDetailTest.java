@@ -26,7 +26,7 @@ class AssistantDataDetailTest {
                 DataSourceFileSearchFacade.DataQueryMode.RECORD_DETAIL);
 
         assertThat(AssistantService.dataLookupContext(detail, true))
-                .contains("本轮没有检索数据中心", "不包含数据中心")
+                .contains("本轮没有检索结构化数据来源", "不包含数据中心或实验记录")
                 .doesNotContain("未找到匹配文件或记录");
     }
 

@@ -10,7 +10,6 @@ import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.security.ActorContext;
 import org.apache.poi.ss.usermodel.DataFormatter;
 import org.apache.poi.ss.usermodel.WorkbookFactory;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -29,7 +28,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Matcher;
@@ -97,6 +95,7 @@ public class TestSemanticsCatalogService {
                         row.valueType(), row.unit(), standardId, standardCode, row.qualifiers(), array(row.aliases()),
                         array(row.factors()), row.evidence(), row.confidence(), changeStatus, previousId, diff);
             }
+            files.activate(fileId);
             return repository.findImport(importId).orElseThrow();
         } catch (IOException e) {
             throw new ApiException(ApiErrorCode.BAD_REQUEST, "测试项目清单无法读取", e);
@@ -105,127 +104,15 @@ public class TestSemanticsCatalogService {
         }
     }
 
-    public List<ImportSummary> imports(int page, int size) {
+    public List<ImportSummary> latestImports(int limit) {
         ActorContext.required();
-        page = Math.max(1, page); size = Math.max(1, Math.min(100, size));
-        return repository.imports(page, size);
-    }
-
-    public ImportSummary importDetail(UUID id) {
-        ActorContext.required();
-        return repository.findImport(id).orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "目录导入批次不存在"));
+        return repository.latestImports(limit);
     }
 
     public ProposalPage proposals(UUID importId, String keyword, String reviewStatus, int page, int size) {
         ActorContext.required();
         if (repository.findImport(importId).isEmpty()) throw new ApiException(ApiErrorCode.NOT_FOUND, "目录导入批次不存在");
         return repository.proposals(importId, keyword, reviewStatus, Math.max(1, page), Math.max(1, Math.min(200, size)));
-    }
-
-    public TargetSuggestionPage targetSuggestions(String keyword, int page, int size) {
-        ActorContext.required();
-        page = Math.max(1, page); size = Math.max(1, Math.min(200, size));
-        long total = repository.targetProposalCount(keyword);
-        List<TargetSuggestion> rows = repository.targetProposals(keyword, size, (page - 1) * size);
-        return new TargetSuggestionPage(rows, page, size, total == 0 ? 0 : (total + size - 1) / size, total);
-    }
-
-    @Transactional
-    public AppliedTarget applyTarget(UUID proposalId, ApplyTargetCommand command) {
-        var actor = ActorContext.required();
-        var proposal = repository.proposal(proposalId).orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "目录建议不存在"));
-        String mode = command == null || command.mode() == null ? "CREATE_DRAFT" : command.mode().trim().toUpperCase(Locale.ROOT);
-        if ("LINK_EXISTING".equals(mode)) {
-            if (command.targetId() == null) throw new ApiException(ApiErrorCode.BAD_REQUEST, "关联已有Y时必须指定目标");
-            var target = jdbc.query("SELECT id,name FROM ai.prediction_target WHERE organization_id=? AND id=?",
-                    (rs, ignored) -> new Object[]{rs.getObject(1, UUID.class), rs.getString(2)}, actor.organizationId(), command.targetId())
-                    .stream().findFirst().orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "目标不存在"));
-            ObjectNode application = mapper.createObjectNode().put("mode", mode).put("targetId", command.targetId().toString());
-            repository.markApplied(proposalId, application);
-            return new AppliedTarget((UUID) target[0], null, "LINKED", false, "已关联现有Y，未修改已发布版本");
-        }
-        if (!"CREATE_DRAFT".equals(mode)) throw new ApiException(ApiErrorCode.BAD_REQUEST, "不支持的目录应用方式");
-        String name = required(command == null ? null : command.name(), proposal.atomicName());
-        String code = required(command == null ? null : command.code(), Optional.ofNullable(proposal.suggestedCode()).orElseGet(() -> generatedCode(proposal.atomicName())));
-        String category = required(command == null ? null : command.category(), "待确认");
-        String valueType = required(command == null ? null : command.valueType(), proposal.suggestedValueType());
-        String unit = command != null && command.unit() != null ? command.unit() : proposal.suggestedUnit();
-        UUID fieldId = proposal.standardFieldId();
-        if (fieldId == null && proposal.standardFieldCode() != null) fieldId = findStandardField(proposal.standardFieldCode());
-        var existing = jdbc.query("SELECT id,name FROM ai.prediction_target WHERE organization_id=? AND target_code=?",
-                (rs, ignored) -> new Object[]{rs.getObject(1, UUID.class), rs.getString(2)}, actor.organizationId(), code)
-                .stream().findFirst();
-        if (existing.isPresent()) {
-            UUID existingId = (UUID) existing.get()[0];
-            ObjectNode application = mapper.createObjectNode().put("mode", "LINK_EXISTING").put("targetId", existingId.toString());
-            repository.markApplied(proposalId, application);
-            return new AppliedTarget(existingId, null, "LINKED", false, "已关联已有Y，未创建重复定义");
-        }
-        UUID targetId = UUID.randomUUID(), versionId = UUID.randomUUID();
-        JsonNode definition = command == null || command.definition() == null ? mapper.createObjectNode() : command.definition().deepCopy();
-        if (definition instanceof ObjectNode object) {
-            object.set("catalogQualifiers", proposal.qualifiers());
-            object.put("catalogProposalId", proposal.id().toString());
-            object.put("exampleResultsAreHints", true);
-            if (object.path("testMethod").asText().isBlank()) object.put("testMethod", Optional.ofNullable(proposal.rawTestMethod()).orElse(""));
-            if (object.path("sopCode").asText().isBlank()) object.put("sopCode", "");
-            if (object.path("testStage").asText().isBlank()) object.put("testStage", "");
-            if (object.path("pretreatment").asText().isBlank()) object.put("pretreatment", "");
-            if (object.path("optimizationDirection").asText().isBlank()) object.put("optimizationDirection", "");
-        }
-        JsonNode semantics = command == null || command.observationSemantics() == null ? proposal.qualifiers() : command.observationSemantics();
-        List<String> classes = command == null || command.classes() == null ? List.of() : command.classes();
-        String hash = sha256((valueType + "|" + Optional.ofNullable(unit).orElse("") + "|" + classes + "|" + definition + "|" + semantics).getBytes(StandardCharsets.UTF_8));
-        try {
-            jdbc.update("""
-                    INSERT INTO ai.prediction_target(id,organization_id,target_code,name,performance_project,value_type,status,revision,created_by,updated_by)
-                    VALUES(?,?,?,?,?,?,'DRAFT',0,?,?)
-                    """, targetId, actor.organizationId(), code, name, category, valueType, actor.userId(), actor.userId());
-            jdbc.update("""
-                    INSERT INTO ai.target_version(id,organization_id,target_id,version_no,status,value_type,unit,classes_jsonb,
-                      definition_jsonb,observation_semantics_jsonb,config_hash,result_standard_field_dictionary_id,catalog_proposal_id,created_by)
-                    VALUES(?,?,?,1,'DRAFT',?,?,?,?,?,?,?, ?,?)
-                    """, versionId, actor.organizationId(), targetId, valueType, unit, array(mapper.valueToTree(classes)),
-                    json(definition), json(semantics), hash, fieldId, proposalId, actor.userId());
-        } catch (DataIntegrityViolationException e) {
-            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "目标编码已存在，请修改建议编码", e);
-        }
-        UUID standardFieldRequestId = fieldId == null
-                ? repository.insertStandardFieldRequest(actor.organizationId(), proposalId, proposal.atomicName(),
-                standardRequestType(proposal.suggestedValueType()), "待系统匹配来源；测试项目：" + proposal.rawItemName(), actor.userId())
-                : null;
-        ObjectNode application = mapper.createObjectNode().put("mode", mode).put("targetId", targetId.toString()).put("targetVersionId", versionId.toString());
-        if (standardFieldRequestId != null) application.put("standardFieldRequestId", standardFieldRequestId.toString());
-        repository.markApplied(proposalId, application);
-        return new AppliedTarget(targetId, versionId, "DRAFT", true,
-                standardFieldRequestId == null ? "已创建组织内Y草稿" : "已创建Y草稿，来源匹配由系统继续处理");
-    }
-
-    @Transactional
-    public StandardFieldRequest requestStandardField(UUID proposalId) {
-        var actor = ActorContext.required();
-        var proposal = repository.proposal(proposalId)
-                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "语义建议不存在"));
-        UUID requestId = repository.insertStandardFieldRequest(actor.organizationId(), proposalId,
-                proposal.atomicName(), standardRequestType(proposal.suggestedValueType()),
-                "测试方法参考：" + Optional.ofNullable(proposal.rawTestMethod()).orElse("")
-                        + "；影响因素：" + Optional.ofNullable(proposal.rawInfluenceFactors()).orElse(""), actor.userId());
-        return new StandardFieldRequest(requestId, proposalId, "PENDING", "已提交标准字段申请，批准后可关联Y");
-    }
-
-    public InputSuggestionPage inputSuggestions(UUID targetId, String keyword, int page, int size) {
-        ActorContext.required();
-        page = Math.max(1, page); size = Math.max(1, Math.min(100, size));
-        var rows = repository.inputSuggestions(targetId, keyword, size, (page - 1) * size);
-        return new InputSuggestionPage(rows, page, size, rows.isEmpty() ? 0 : 1, rows.size());
-    }
-
-    private String standardRequestType(String suggestedValueType) {
-        return switch (Optional.ofNullable(suggestedValueType).orElse("UNKNOWN")) {
-            case "CONTINUOUS" -> "number";
-            case "ORDINAL", "BINARY", "CATEGORICAL", "CENSORED" -> "string";
-            default -> "string";
-        };
     }
 
     private List<Row> parse(byte[] bytes, String name) throws IOException {
@@ -292,10 +179,10 @@ public class TestSemanticsCatalogService {
         String unit=unit(item, method, example); List<String> aliases=List.of(item,method,names.get(0));
         List<String> factorList=splitFactors(factors);
         var result=new ArrayList<Row>(); int ordinal=0;
-        for(String atomic:names){String type=suggestType(item,method,example,atomic);String code=suggestCode(atomic);String standard=standardCode(atomic,item);int confidence="UNKNOWN".equals(type)?35:80;if(names.size()>1)confidence-=5;ObjectNode evidence=mapper.createObjectNode().put("sheetName","Sheet1").put("sourceRow",sourceRow).put("sourceFile", "customer-test-method-catalog").put("exampleResultsAreHints",true);
+        for(String atomic:names){String type=suggestType(item,method,example,atomic);String standard=standardCode(atomic,item);int confidence="UNKNOWN".equals(type)?35:80;if(names.size()>1)confidence-=5;ObjectNode evidence=mapper.createObjectNode().put("sheetName","Sheet1").put("sourceRow",sourceRow).put("sourceFile", "customer-test-method-catalog").put("exampleResultsAreHints",true);
             ObjectNode q=qualifier.deepCopy(); if (atomic.contains("20°")||atomic.contains("60°")||atomic.contains("85°"))q.put("angle",atomic.substring(0,atomic.indexOf('°')+1));
-            String semantic=normalize(standard==null?code:standard)+"|"+normalize(atomic)+"|"+normalize(method)+"|"+normalize(q.toString());
-            result.add(new Row(sourceRow,ordinal++,semantic,item,method,example,factors,atomic,code,type,unit,standard,q,aliases,factorList,evidence,confidence));}
+            String semantic=normalize(standard==null?atomic:standard)+"|"+normalize(atomic)+"|"+normalize(method)+"|"+normalize(q.toString());
+            result.add(new Row(sourceRow,ordinal++,semantic,item,method,example,factors,atomic,suggestCode(semantic),type,unit,standard,q,aliases,factorList,evidence,confidence));}
         return result;
     }
 
@@ -312,12 +199,9 @@ public class TestSemanticsCatalogService {
     private List<String> splitFactors(String value){if(value==null||value.isBlank())return List.of();return Arrays.stream(value.split("[、,，;；/]")).map(String::strip).filter(s->!s.isBlank()).distinct().toList();}
     private UUID findStandardField(String code){if(code==null||code.isBlank())return null;return jdbc.query("SELECT id FROM tpl.standard_field_dictionary WHERE dictionary_code=? AND status='ACTIVE' ORDER BY version_no DESC LIMIT 1",(rs,n)->rs.getObject(1,UUID.class),code).stream().findFirst().orElse(null);}
     private ArrayNode array(List<String> values){var a=mapper.createArrayNode();if(values!=null)values.forEach(a::add);return a;}
-    private ArrayNode array(JsonNode node){return node!=null&&node.isArray()?(ArrayNode)node:mapper.createArrayNode();}
     private String cell(org.apache.poi.ss.usermodel.Sheet sheet,int row,int col,DataFormatter f){var r=sheet.getRow(row);if(r==null||r.getCell(col)==null)return "";return f.formatCellValue(r.getCell(col)).strip();}
     private String normalize(String value){return value==null?"":Normalizer.normalize(value,Normalizer.Form.NFKC).toLowerCase(Locale.ROOT).replaceAll("[\\s_\\-/:：()（）]+","");}
-    private String generatedCode(String name){String slug=normalize(name).replaceAll("[^a-z0-9]+","_").toUpperCase(Locale.ROOT);if(slug.isBlank())slug="METRIC";return "CUSTOM.TEST."+slug+"."+UUID.randomUUID().toString().replace("-","").substring(0,8).toUpperCase(Locale.ROOT);}
-    private String suggestCode(String name){return "CUSTOM.TEST."+Integer.toHexString(normalize(name).hashCode()).replace('-','0').toUpperCase(Locale.ROOT);}
-    private String required(String value,String fallback){return value==null||value.isBlank()?fallback:value.strip();}
+    private String suggestCode(String name){return "CUSTOM.TEST."+sha256(normalize(name).getBytes(StandardCharsets.UTF_8)).substring(0,16).toUpperCase(Locale.ROOT);}
     private String sha256(byte[] bytes){try{var d=MessageDigest.getInstance("SHA-256");var out=d.digest(bytes);var s=new StringBuilder();for(byte b:out)s.append(String.format("%02x",b));return s.toString();}catch(Exception e){throw new IllegalStateException(e);}}
     private boolean proposalChanged(ProposalView previous, Row row) {
         return !java.util.Objects.equals(previous.rawItemName(), row.rawItem())

@@ -7,10 +7,12 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import java.math.BigDecimal;
 import java.math.MathContext;
+import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -99,43 +101,49 @@ public class EligibilityRuleEvaluator {
         mapping.path("includeAny").forEach(n -> aliases.add(n.asText()));
         aliases.removeIf(String::isBlank);
         var found = new ArrayList<TargetValue>();
-        collectObservations(sample.observations(), aliases, mapping, found, java.util.Collections.newSetFromMap(new IdentityHashMap<>()));
+        var matchedValues = java.util.Collections.newSetFromMap(new IdentityHashMap<JsonNode, Boolean>());
+        collectObservations(sample.observations(), aliases, mapping, found,
+                java.util.Collections.newSetFromMap(new IdentityHashMap<>()), matchedValues);
         // facts_jsonb contains the immutable source fact as well as the already projected observations.
         // Only use it as a fallback; scanning both trees would count one physical result twice and turn a
         // uniquely matched Y into an artificial ambiguity.
         if (found.isEmpty())
-            collectObservations(sample.facts(), aliases, mapping, found, java.util.Collections.newSetFromMap(new IdentityHashMap<>()));
+            collectObservations(sample.facts(), aliases, mapping, found,
+                    java.util.Collections.newSetFromMap(new IdentityHashMap<>()), matchedValues);
         return found;
     }
 
-    private void collectObservations(JsonNode node, List<String> aliases, JsonNode mapping, List<TargetValue> found, Set<JsonNode> visited) {
+    private void collectObservations(JsonNode node, List<String> aliases, JsonNode mapping, List<TargetValue> found,
+                                     Set<JsonNode> visited, Set<JsonNode> matchedValues) {
         if (node == null || node.isMissingNode() || node.isNull()) return;
         if (!visited.add(node)) return;
-        if (node.isArray()) { for (var item : node) collectObservations(item, aliases, mapping, found, visited); return; }
+        if (node.isArray()) { for (var item : node) collectObservations(item, aliases, mapping, found, visited, matchedValues); return; }
         if (!node.isObject()) return;
         for (var entry : iterable(node.fields())) {
             var key = entry.getKey();
             var semanticKey = key.startsWith("TABLE.COLUMN.") ? key.substring("TABLE.COLUMN.".length()) : key;
-            if (aliases.stream().anyMatch(a -> key.equalsIgnoreCase(a)
-                    || key.toLowerCase(Locale.ROOT).contains(a.toLowerCase(Locale.ROOT))
-                    || semanticKey.equalsIgnoreCase(a))) {
-                var value = entry.getValue();
+            var value = entry.getValue();
+            if (matches(key + " " + semanticKey, value, aliases, mapping)) {
                 var candidate = extractTargetValue(value);
                 if (candidate != null) {
-                    // A normalized fact can be reached once through its
-                    // TABLE.COLUMN key and once through its labelPath.  Mark
-                    // the value node before adding it so the same physical
-                    // observation is not mistaken for a technical replicate.
-                    if (visited.add(value)) found.add(candidate);
+                    if (matchedValues.add(targetValueNode(value))) found.add(candidate);
                 }
-                else collectObservations(value, aliases, mapping, found, visited);
             }
+            collectObservations(value, aliases, mapping, found, visited, matchedValues);
         }
         var label = text(node,"name","label","labelPath","fieldCode","targetCode","testMethod","testItem",
                 "testCondition","operation","itemLabel","item","sourceFieldCode");
-        if (!label.isBlank() && matches(label, aliases, mapping) && (node.has("value") || node.has("rawValue") || node.has("result")))
-            found.add(extractTargetValue(node));
-        for (var entry : iterable(node.fields())) collectObservations(entry.getValue(), aliases, mapping, found, visited);
+        if (!label.isBlank() && matches(label, node, aliases, mapping)) {
+            var candidate = extractTargetValue(node);
+            if (candidate != null && matchedValues.add(targetValueNode(node))) found.add(candidate);
+        }
+    }
+
+    private JsonNode targetValueNode(JsonNode node) {
+        if (node == null || !node.isObject()) return node;
+        for (var key : List.of("value", "normalizedValue", "rawNumericValue", "rawValue", "result"))
+            if (node.hasNonNull(key)) return node.get(key);
+        return node;
     }
 
     private TargetValue extractTargetValue(JsonNode node) {
@@ -162,11 +170,49 @@ public class EligibilityRuleEvaluator {
         return new TargetValue(value, node, null, null);
     }
 
-    private boolean matches(String label,List<String> aliases,JsonNode mapping){
-        var normalized=label.toLowerCase(Locale.ROOT);for(var alias:aliases)if(normalized.contains(alias.toLowerCase(Locale.ROOT)))return true;
-        for(var required:mapping.path("includeAll"))if(!normalized.contains(required.asText().toLowerCase(Locale.ROOT)))return false;
-        for(var excluded:mapping.path("exclude"))if(normalized.contains(excluded.asText().toLowerCase(Locale.ROOT)))return false;
-        return aliases.isEmpty();
+    private boolean matches(String label, JsonNode observation, List<String> aliases, JsonNode mapping) {
+        var semantic = label + " " + observationLabels(observation);
+        var normalized = normalizeSemantic(semantic);
+        if (!aliases.isEmpty() && aliases.stream().map(this::normalizeSemantic).noneMatch(normalized::contains)) return false;
+        for (var required : mapping.path("includeAll"))
+            if (!normalized.contains(normalizeSemantic(required.asText()))) return false;
+        var includeAny = mapping.path("includeAny");
+        if (includeAny.isArray() && !includeAny.isEmpty()
+                && java.util.stream.StreamSupport.stream(includeAny.spliterator(), false)
+                .map(JsonNode::asText).map(this::normalizeSemantic).noneMatch(normalized::contains)) return false;
+        for (var excluded : mapping.path("exclude"))
+            if (normalized.contains(normalizeSemantic(excluded.asText()))) return false;
+        var match = mapping.path("match");
+        if (match.isObject()) {
+            var fields = new LinkedHashMap<String, List<String>>();
+            fields.put("testMethod", List.of("testMethod", "method", "methodName"));
+            fields.put("load", List.of("load", "loadCondition", "weight"));
+            fields.put("substrate", List.of("substrate", "substrateType", "baseMaterial"));
+            fields.put("stage", List.of("stage", "testStage", "testCondition"));
+            for (var entry : fields.entrySet()) {
+                var expected = normalizeSemantic(match.path(entry.getKey()).asText(""));
+                if (expected.isBlank()) continue;
+                var actual = normalizeSemantic(text(observation, entry.getValue().toArray(String[]::new)));
+                if (actual.isBlank()) actual = normalized;
+                if (!actual.contains(expected) && !expected.contains(actual)) return false;
+            }
+        }
+        return true;
+    }
+
+    private String observationLabels(JsonNode node) {
+        if (node == null || !node.isObject()) return "";
+        var keys = List.of("name", "label", "labelPath", "fieldCode", "targetCode", "testItem", "testMethod",
+                "method", "testCondition", "operation", "itemLabel", "item", "sourceFieldCode",
+                "load", "loadCondition", "weight", "substrate", "substrateType", "baseMaterial", "stage", "testStage");
+        var parts = new ArrayList<String>();
+        for (var key : keys) if (node.hasNonNull(key) && node.path(key).isValueNode()) parts.add(node.path(key).asText());
+        return String.join(" ", parts);
+    }
+
+    private String normalizeSemantic(String value) {
+        return Normalizer.normalize(value == null ? "" : value, Normalizer.Form.NFKC)
+                .toLowerCase(Locale.ROOT).replaceAll("[\\s_\\-/:：()（）,，;；]+", "");
     }
 
     private boolean validTargetValue(Configuration c, TargetValue target) {

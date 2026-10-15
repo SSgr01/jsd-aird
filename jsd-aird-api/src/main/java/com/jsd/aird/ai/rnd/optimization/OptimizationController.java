@@ -24,6 +24,8 @@ public class OptimizationController {
                                                @RequestParam(required=false) String keyword,
                                                @RequestParam(defaultValue="0") int page,
                                                @RequestParam(defaultValue="20") int size){return ok(service.baselines(sourceType,keyword,page,size));}
+    @GetMapping("/optimization-datasets") public ApiResponse<JsonNode> historyDatasets(@RequestParam(required=false) String keyword){return ok(service.historyDatasets(keyword));}
+    @GetMapping("/optimization-datasets/{id}") public ApiResponse<JsonNode> historyDataset(@PathVariable UUID id){return ok(service.historyDataset(id));}
     @GetMapping("/optimization-context")
     public ApiResponse<JsonNode> context(@RequestParam String baselineType,@RequestParam UUID baselineId,
                                          @RequestParam(required=false) List<UUID> targetId){return ok(service.context(baselineType,baselineId,targetId));}
@@ -35,5 +37,8 @@ public class OptimizationController {
                                                     @RequestHeader("Idempotency-Key") String key){return ok(service.createDrafts(id,command,key));}
     @GetMapping("/research-runs/{id}/experiment-links") public ApiResponse<List<DraftLink>> links(@PathVariable UUID id){return ok(service.links(id));}
     @GetMapping("/research-runs/{id}/feedback") public ApiResponse<JsonNode> feedback(@PathVariable UUID id){return ok(feedback.forRun(id));}
+    @GetMapping("/research-runs/{id}/observations") public ApiResponse<JsonNode> observations(@PathVariable UUID id){return ok(feedback.observations(id));}
+    @PutMapping("/research-runs/{id}/observations") public ApiResponse<JsonNode> saveObservations(@PathVariable UUID id,@RequestBody ObservationCommand command){return ok(feedback.saveObservations(id,command));}
+    @PostMapping("/research-runs/{id}/next-round") public ResponseEntity<?> nextRound(@PathVariable UUID id,@RequestHeader("Idempotency-Key") String key){var accepted=service.continueHistorical(id,key);return ResponseEntity.accepted().body(accepted);}
     private <T> ApiResponse<T> ok(T value){return ResponseFactory.success(value, RequestIdHolder.currentOrUnknown());}
 }

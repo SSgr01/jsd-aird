@@ -15,17 +15,9 @@ import org.yaml.snakeyaml.Yaml;
 
 class AiRndContractTest {
 
-    private static final Set<String> R02_OPERATIONS = Set.of(
-            "readTargets", "readTarget", "createTarget", "readTargetVersions", "createTargetVersion",
-            "updateTargetVersion", "publishTargetVersion", "retireTarget",
-            "readInputFields", "readInputField", "readInputFieldVersions", "createInputField",
-            "createInputFieldVersion", "publishInputFieldVersion", "readSourceMappings", "createSourceMapping",
-            "publishSourceMapping", "readInputSchemes", "createInputScheme", "previewInputScheme",
-            "freezeInputScheme", "readTrainingPolicies", "createTrainingPolicy", "publishTrainingPolicy",
-            "readStandardFieldReferences", "readMaterialReferences", "readMaterialAliases", "createMaterialAlias",
-            "retireMaterialAlias", "readMaterialDictionaries", "createMaterialDictionary",
-            "freezeMaterialDictionary", "retireMaterialDictionary"
-    );
+    private static final Set<String> WORKBENCH_OPERATIONS = Set.of(
+            "readWorkbenchDatasets", "readWorkbenchDataset", "trainWorkbenchModel",
+            "readWorkbenchRun", "registerWorkbenchModel");
 
     @Test
     @SuppressWarnings("unchecked")
@@ -70,15 +62,19 @@ class AiRndContractTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    void r02OperationsUseConcreteResponsesAndMutationSchemas() {
+    void workbenchOperationsUseConcreteResponsesWithoutManualConfigurationEndpoints() {
         var stream = getClass().getResourceAsStream("/contracts/ai-rnd.v1.openapi.yaml");
         assertThat(stream).isNotNull();
         var document = (Map<String, Object>) new Yaml().load(new InputStreamReader(stream, StandardCharsets.UTF_8));
         var components = (Map<String, Object>) document.get("components");
         var operations = (Map<String, Map<String, Object>>) components.get("x-operations");
 
-        assertThat(operations).containsKeys(R02_OPERATIONS.toArray(String[]::new));
-        R02_OPERATIONS.forEach(operationId -> {
+        assertThat(operations).containsKeys(WORKBENCH_OPERATIONS.toArray(String[]::new));
+        var paths = (Map<String, Object>) document.get("paths");
+        assertThat(paths).doesNotContainKeys("/targets", "/input-fields", "/targets/{id}/input-schemes",
+                "/input-schemes/{id}/freeze", "/target-versions/{id}/publish");
+        assertThat(operations).doesNotContainKeys("createTarget", "createInputField", "createInputScheme");
+        WORKBENCH_OPERATIONS.forEach(operationId -> {
             var operation = operations.get(operationId);
             var responses = (Map<String, Object>) operation.get("responses");
             assertThat(responses).containsKey("200");

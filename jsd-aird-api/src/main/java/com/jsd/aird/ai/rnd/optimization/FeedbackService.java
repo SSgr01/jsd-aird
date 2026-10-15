@@ -19,9 +19,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
+
+import static com.jsd.aird.ai.rnd.optimization.OptimizationContracts.ObservationCommand;
 
 @Service
 public class FeedbackService {
@@ -53,7 +56,78 @@ public class FeedbackService {
             LEFT JOIN ai.prediction_target pt ON pt.organization_id=f.organization_id AND pt.id=f.target_id
             WHERE l.organization_id=? AND l.research_run_id=? ORDER BY l.created_at,f.created_at,f.id
             """,rs->{var n=candidates.addObject().put("candidateId",rs.getObject("research_candidate_id",UUID.class).toString()).put("experimentId",rs.getObject("experiment_id",UUID.class).toString()).put("experimentVersionId",rs.getObject("experiment_version_id",UUID.class).toString()).put("experimentNo",rs.getString("experiment_no")).put("experimentStatus",rs.getString("status"));var tid=rs.getObject("target_id",UUID.class);if(tid!=null){n.put("targetId",tid.toString()).put("targetName",rs.getString("target_name")).put("comparisonStatus",rs.getString("comparison_status"));if(rs.getString("reason_code")!=null)n.put("reasonCode",rs.getString("reason_code"));n.set("predicted",read(rs.getString("predicted_result_jsonb")));n.set("observed",read(rs.getString("observed_result_jsonb")));n.set("metrics",read(rs.getString("metrics_jsonb")));}},a.organizationId(),runId);
-        root.put("feedbackCount",candidates.size());return root;
+        var feedbackCount=0;
+        for(var candidate:candidates) if(candidate.hasNonNull("targetId")) feedbackCount++;
+        root.put("feedbackCount",feedbackCount);return root;
+    }
+
+    public JsonNode observations(UUID runId){
+        var a=ActorContext.required();var run=requireRunAccess(a.organizationId(),a.userId(),runId,"READ");
+        var root=json.createObjectNode();var items=root.putArray("observations");
+        if("HISTORICAL_GP_BO".equals(run.request().path("mode").asText())){
+            jdbc.query("""
+                SELECT research_candidate_id,field_code,observed_value_jsonb,updated_at
+                FROM ai.research_candidate_history_observation_v2
+                WHERE organization_id=? AND research_run_id=? ORDER BY research_candidate_id,field_code
+                """,rs->{var item=items.addObject();item.put("candidateId",rs.getObject("research_candidate_id",UUID.class).toString());
+                    item.put("fieldCode",rs.getString("field_code"));item.set("value",read(rs.getString("observed_value_jsonb")));
+                    item.put("updatedAt",rs.getTimestamp("updated_at").toInstant().toString());},a.organizationId(),runId);
+            return root;
+        }
+        jdbc.query("""
+            SELECT research_candidate_id,target_id,observed_result_jsonb,updated_at
+            FROM ai.research_candidate_observation_v2
+            WHERE organization_id=? AND research_run_id=? ORDER BY research_candidate_id,target_id
+            """,rs->{var item=items.addObject();item.put("candidateId",rs.getObject("research_candidate_id",UUID.class).toString());item.put("targetId",rs.getObject("target_id",UUID.class).toString());item.set("value",read(rs.getString("observed_result_jsonb")));item.put("updatedAt",rs.getTimestamp("updated_at").toInstant().toString());},a.organizationId(),runId);
+        return root;
+    }
+
+    @Transactional
+    public JsonNode saveObservations(UUID runId,ObservationCommand command){
+        var a=ActorContext.required();var run=requireRunAccess(a.organizationId(),a.userId(),runId,"UPDATE");
+        if(!"SUCCEEDED".equals(run.executionStatus()))throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"请等待方案生成完成后再填写实测值");
+        if(command==null||command.observations()==null||command.observations().isEmpty())throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"请至少填写一项实测值");
+        if("HISTORICAL_GP_BO".equals(run.request().path("mode").asText()))return saveHistoricalObservations(a.organizationId(),a.userId(),runId,command,run);
+        var goalIds=new HashSet<UUID>();var goals=run.request().path("typedGoals");
+        if(goals.isArray())for(var goal:goals)try{goalIds.add(UUID.fromString(goal.path("targetId").asText()));}catch(Exception ignored){}
+        for(var entry:command.observations()){
+            if(entry==null||entry.candidateId()==null||entry.targetId()==null||entry.value()==null||entry.value().isNull()||entry.value().isMissingNode())throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"实测值、方案和性能指标不能为空");
+            if(!goalIds.contains(entry.targetId()))throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"只能填写本轮选择的性能指标");
+            if(runs.candidate(a.organizationId(),runId,entry.candidateId()).isEmpty())throw new ApiException(ApiErrorCode.NOT_FOUND,"方案不存在");
+            var valueType=jdbc.query("SELECT value_type FROM ai.prediction_target WHERE organization_id=? AND id=?",(rs,n)->rs.getString(1),a.organizationId(),entry.targetId()).stream().findFirst().orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"性能指标不存在"));
+            if("CONTINUOUS".equals(valueType)&&!entry.value().isNumber())throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"该性能指标需要填写数字");
+            if(!"CONTINUOUS".equals(valueType)&&!entry.value().isTextual())throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"该性能指标需要选择已有类别");
+            jdbc.update("""
+                INSERT INTO ai.research_candidate_observation_v2(id,organization_id,research_run_id,research_candidate_id,target_id,observed_result_jsonb,created_by,updated_by)
+                VALUES(?,?,?,?,?,?,?,?)
+                ON CONFLICT(organization_id,research_run_id,research_candidate_id,target_id)
+                DO UPDATE SET observed_result_jsonb=EXCLUDED.observed_result_jsonb,updated_by=EXCLUDED.updated_by,updated_at=now()
+                """,UUID.randomUUID(),a.organizationId(),runId,entry.candidateId(),entry.targetId(),pg(entry.value()),a.userId(),a.userId());
+        }
+        var result=observations(runId);((ObjectNode)result).put("savedCount",command.observations().size());return result;
+    }
+
+    private JsonNode saveHistoricalObservations(UUID org,UUID user,UUID runId,ObservationCommand command,OptimizationRepository.RunRow run){
+        var target=run.request().path("target").asText();
+        for(var entry:command.observations()){
+            if(entry==null||entry.candidateId()==null||entry.fieldCode()==null||entry.value()==null||entry.value().isNull()||entry.value().isMissingNode())
+                throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"请填写方案实测值");
+            if(!target.equals(entry.fieldCode()))throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"只能填写本轮选择的 Y 指标");
+            if(!entry.value().isNumber()||!Double.isFinite(entry.value().asDouble()))throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"Y 实测值需要填写有效数字");
+            if(runs.candidate(org,runId,entry.candidateId()).isEmpty())throw new ApiException(ApiErrorCode.NOT_FOUND,"方案不存在");
+            jdbc.update("""
+                INSERT INTO ai.research_candidate_history_observation_v2(id,organization_id,research_run_id,research_candidate_id,field_code,observed_value_jsonb,created_by,updated_by)
+                VALUES(?,?,?,?,?,?,?,?)
+                ON CONFLICT(organization_id,research_run_id,research_candidate_id,field_code)
+                DO UPDATE SET observed_value_jsonb=EXCLUDED.observed_value_jsonb,updated_by=EXCLUDED.updated_by,updated_at=now()
+                """,UUID.randomUUID(),org,runId,entry.candidateId(),entry.fieldCode(),pg(entry.value()),user,user);
+        }
+        var result=observations(runId);((ObjectNode)result).put("savedCount",command.observations().size());return result;
+    }
+
+    private OptimizationRepository.RunRow requireRunAccess(UUID org,UUID user,UUID runId,String action){
+        authorization.require(new PermissionCheck(org,user,"ai.experiment.optimize","AI_RESEARCH_RUN",runId,action));
+        return runs.byId(org,user,runId).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND));
     }
 
     @Scheduled(fixedDelayString="${JSD_AIRD_R09_FEEDBACK_RECONCILE_MS:300000}")

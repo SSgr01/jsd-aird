@@ -48,7 +48,7 @@ class TemplateFileNormalizationServiceTest {
 
         var result = new TemplateFileNormalizationService(
                 mock(FileStorageFacade.class), executable, java.time.Duration.ofSeconds(90))
-                .normalize("配方.xls", "application/vnd.ms-excel", source);
+                .normalize("配方.xls", "application/vnd.ms-excel", source, false);
 
         assertThat(result.originalFormat()).isEqualTo("XLS");
         assertThat(result.normalizedFormat()).isEqualTo("XLSX");
@@ -85,8 +85,8 @@ class TemplateFileNormalizationServiceTest {
 
     @Test
     void convertsUtf8AndGbkCsvToCanonicalXlsx() throws Exception {
-        var utf8 = service.normalize("数据.csv", "text/csv", "名称,数量\r\n树脂,2".getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        var gbk = service.normalize("数据-gbk.csv", "text/csv", "名称,数量\r\n树脂,2".getBytes(Charset.forName("GBK")));
+        var utf8 = service.normalize("数据.csv", "text/csv", "名称,数量\r\n树脂,2".getBytes(java.nio.charset.StandardCharsets.UTF_8), false);
+        var gbk = service.normalize("数据-gbk.csv", "text/csv", "名称,数量\r\n树脂,2".getBytes(Charset.forName("GBK")), false);
 
         assertThat(utf8.normalizedFormat()).isEqualTo("XLSX");
         assertThat(gbk.normalizedFormat()).isEqualTo("XLSX");
@@ -97,19 +97,19 @@ class TemplateFileNormalizationServiceTest {
 
     @Test
     void rejectsCorruptLegacyOfficeFileWithoutReturningAHalfNormalizedResult() {
-        assertThatThrownBy(() -> service.normalize("broken.xls", "application/octet-stream", new byte[] {1, 2, 3}))
+        assertThatThrownBy(() -> service.normalize("broken.xls", "application/octet-stream", new byte[] {1, 2, 3}, false))
                 .hasMessageContaining("损坏");
     }
 
     @Test
     void rejectsMismatchedStandardOfficeExtensionBeforeParsing() {
-        assertThatThrownBy(() -> service.normalize("renamed.docx", "application/octet-stream", new byte[] {0, 1, 2, 3}))
+        assertThatThrownBy(() -> service.normalize("renamed.docx", "application/octet-stream", new byte[] {0, 1, 2, 3}, false))
                 .hasMessageContaining("格式与扩展名不一致");
     }
 
     @Test
     void rejectsEmptyOfficeFileWithoutCreatingNormalizedBytes() {
-        assertThatThrownBy(() -> service.normalize("empty.doc", "application/msword", new byte[0]))
+        assertThatThrownBy(() -> service.normalize("empty.doc", "application/msword", new byte[0], false))
                 .hasMessageContaining("为空");
     }
 }

@@ -3,6 +3,8 @@ package com.jsd.aird.data.application;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.ops.application.port.AsyncJobHandler;
+import com.jsd.aird.shared.security.Actor;
+import com.jsd.aird.shared.security.ActorContext;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Component;
 
@@ -24,8 +26,18 @@ public class DataImportJobHandler implements AsyncJobHandler {
 
     @Override
     public JsonNode handle(JsonNode payload) {
-        service.parseInternal(java.util.UUID.fromString(payload.path("organizationId").asText()),
-                java.util.UUID.fromString(payload.path("importJobId").asText()));
+        var previous = ActorContext.current();
+        var organizationId = java.util.UUID.fromString(payload.path("organizationId").asText());
+        var actorId = payload.path("actorId").asText("");
+        if (!actorId.isBlank()) ActorContext.set(new Actor(organizationId,
+                java.util.UUID.fromString(actorId), "import-worker"));
+        try {
+            service.parseInternal(organizationId,
+                    java.util.UUID.fromString(payload.path("importJobId").asText()));
+        } finally {
+            if (previous == null) ActorContext.clear();
+            else ActorContext.set(previous);
+        }
         return objectMapper.createObjectNode().put("status", "PARSED");
     }
 

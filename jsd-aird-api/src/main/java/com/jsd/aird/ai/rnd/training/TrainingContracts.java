@@ -48,14 +48,10 @@ public final class TrainingContracts {
                                String valueType, int version, String status, String modelType,
                                String dataNature, boolean productionEligible, String comparisonStatus,
                                JsonNode metrics, int trainableSamples, UUID trainingJobId,
-                               Instant createdAt, Instant updatedAt, long revision) { }
+                               Instant createdAt, Instant updatedAt, long revision, JsonNode source) { }
     public record ModelDetail(ModelSummary model, SnapshotSummary snapshot, JsonNode applicabilityDomain,
                               JsonNode modelCard, JsonNode rejectionReasons, List<ReleaseView> releases,
                               boolean testActivationAllowed) { }
-    public record ModelComparison(UUID candidateId, UUID activeModelId, String status,
-                                  boolean sameComparisonSet, JsonNode candidateMetrics,
-                                  JsonNode activeMetrics, JsonNode baselineMetrics,
-                                  List<String> reasons) { }
     public record ReleaseView(UUID id, String action, UUID modelVersionId, UUID previousModelVersionId,
                               String reason, Instant createdAt) { }
     public record ModelActionCommand(long expectedRevision, UUID expectedActiveModelVersionId,

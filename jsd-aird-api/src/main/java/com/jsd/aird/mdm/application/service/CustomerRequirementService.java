@@ -69,7 +69,7 @@ public class CustomerRequirementService {
     public void deleteRequirement(UUID id, long version) {
         BusinessPartnerService.requireWrite();
         var current = requirement(id);
-        if (!repository.deleteRequirement(id, version)) CrmServiceSupport.conflict();
+        if (!repository.deleteRequirement(id, version, CrmServiceSupport.OPERATOR)) CrmServiceSupport.conflict();
         if (current.partnerId() != null) {
             partnerService.appendAudit("CUSTOMER_REQUIREMENT_DELETED", current.partnerId());
         } else {

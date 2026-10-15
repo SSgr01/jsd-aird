@@ -15,24 +15,26 @@ public interface CustomerRequirementMapper {
         "cr.raw_requirement rawRequirement, cr.urgency, cr.raised_at raisedAt, cr.delivery_date deliveryDate, " +
         "cr.status, cr.custom_status_name customStatusName, cr.project_id projectId, " +
         "cr.assigned_project_ids::text assignedProjectIds, " +
-        "cr.custom_fields::text customFields, cr.version, cr.created_at createdAt, cr.updated_at updatedAt " +
+        "cr.custom_fields::text customFields, cr.version, cr.created_at createdAt, cr.updated_at updatedAt, " +
+        "cr.deleted, cr.deleted_at deletedAt, cr.deleted_by deletedBy " +
         "FROM mdm.customer_requirement cr ";
 
     @Select("<script>" + COLS +
-        "WHERE 1=1 <if test='partnerId != null'> AND cr.partner_id=#{partnerId}</if>" +
+        "WHERE cr.deleted = false " +
+        "<if test='partnerId != null'> AND cr.partner_id=#{partnerId}</if>" +
         "<if test='status != null'> AND cr.status=#{status}</if>" +
         "<if test='projectId != null'> AND (cr.project_id=#{projectId} OR cr.assigned_project_ids @> jsonb_build_array(CAST(#{projectId} AS text)))</if> " +
         "ORDER BY cr.updated_at DESC LIMIT #{size} OFFSET #{offset}</script>")
     List<RequirementRow> findPage(@Param("partnerId") UUID partnerId, @Param("projectId") UUID projectId,
                                   @Param("status") String status, @Param("offset") int offset, @Param("size") int size);
 
-    @Select("<script>SELECT count(*) FROM mdm.customer_requirement cr WHERE 1=1 " +
+    @Select("<script>SELECT count(*) FROM mdm.customer_requirement cr WHERE cr.deleted = false " +
         "<if test='partnerId != null'> AND cr.partner_id=#{partnerId}</if>" +
         "<if test='status != null'> AND cr.status=#{status}</if>" +
         "<if test='projectId != null'> AND (cr.project_id=#{projectId} OR cr.assigned_project_ids @> jsonb_build_array(CAST(#{projectId} AS text)))</if></script>")
     long count(@Param("partnerId") UUID partnerId, @Param("projectId") UUID projectId, @Param("status") String status);
 
-    @Select(COLS + "WHERE cr.id=#{id}")
+    @Select(COLS + "WHERE cr.id=#{id} AND cr.deleted = false")
     Optional<RequirementRow> findById(@Param("id") UUID id);
 
     @Insert("INSERT INTO mdm.customer_requirement(id,requirement_code,partner_id,title,raw_requirement,urgency,raised_at," +
@@ -61,6 +63,8 @@ public interface CustomerRequirementMapper {
                           @Param("customFields") String customFields,
                           @Param("version") long version, @Param("operator") String operator);
 
-    @Delete("DELETE FROM mdm.customer_requirement WHERE id=#{id} AND version=#{version}")
-    int deleteRequirement(@Param("id") UUID id, @Param("version") long version);
+    @Update("UPDATE mdm.customer_requirement SET deleted=true, deleted_at=now(), deleted_by=#{operator}, " +
+        "version=version+1, updated_at=now(), updated_by=#{operator} " +
+        "WHERE id=#{id} AND version=#{version} AND deleted=false")
+    int deleteRequirement(@Param("id") UUID id, @Param("version") long version, @Param("operator") String operator);
 }

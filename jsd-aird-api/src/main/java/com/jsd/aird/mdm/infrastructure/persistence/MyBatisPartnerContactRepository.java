@@ -51,6 +51,11 @@ public class MyBatisPartnerContactRepository implements PartnerContactRepository
     }
 
     @Override
+    public boolean deleteContact(UUID partnerId, UUID contactId, long version, String operator) {
+        return mapper.softDeleteContact(partnerId, contactId, version, operator) == 1;
+    }
+
+    @Override
     public boolean existsContact(UUID partnerId, String phone, String name, UUID excludedId) {
         return mapper.existsContact(partnerId, phone, name, excludedId);
     }

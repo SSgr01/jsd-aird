@@ -77,6 +77,14 @@ public class BusinessPartnerController {
         return ok(null);
     }
 
+    @DeleteMapping("/{id:[0-9a-fA-F-]{36}}")
+    @Operation(summary = "删除业务伙伴", description = "按版本号逻辑删除客户（置 deleted=true，并记录删除时间与操作人），历史审计记录继续保留")
+    public ApiResponse<Void> delete(@Parameter(description = "公司 ID") @PathVariable UUID id,
+                                    @RequestParam @PositiveOrZero long version) {
+        service.deletePartner(id, version);
+        return ok(null);
+    }
+
     private static <T> ApiResponse<T> ok(T data) {
         return ResponseFactory.success(data, RequestIdHolder.currentOrUnknown());
     }

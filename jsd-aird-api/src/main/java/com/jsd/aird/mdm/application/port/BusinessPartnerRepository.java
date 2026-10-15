@@ -23,4 +23,6 @@ public interface BusinessPartnerRepository {
     boolean update(BusinessPartner partner, String normalizedName, String operator);
 
     boolean updateStatus(UUID id, PartnerStatus status, long version, String operator);
+
+    boolean deletePartner(UUID id, long version, String operator);
 }

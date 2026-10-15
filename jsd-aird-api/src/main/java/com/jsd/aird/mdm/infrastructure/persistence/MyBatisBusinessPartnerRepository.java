@@ -69,6 +69,10 @@ public class MyBatisBusinessPartnerRepository implements BusinessPartnerReposito
         return mapper.updateStatus(id, s.name(), v, o) == 1;
     }
 
+    public boolean deletePartner(UUID id, long version, String operator) {
+        return mapper.softDelete(id, version, operator) == 1;
+    }
+
     private static BusinessPartner toDomain(BusinessPartnerRow r, List<PartnerContactRow> contacts) {
         return new BusinessPartner(r.id(), r.partnerCode(), r.name(), r.industry(), r.address(), PartnerStatus.valueOf(r.status()), r.remark(),
             contacts.stream().map(MyBatisBusinessPartnerRepository::toContact).toList(), r.customerLevel(),

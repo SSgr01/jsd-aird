@@ -16,6 +16,8 @@ public interface PartnerContactRepository {
 
     boolean updateContactStatus(UUID partnerId, UUID contactId, PartnerStatus status, long version, String operator);
 
+    boolean deleteContact(UUID partnerId, UUID contactId, long version, String operator);
+
     boolean existsContact(UUID partnerId, String phone, String name, UUID excludedId);
 
     List<PartnerContact> findContacts(UUID partnerId);

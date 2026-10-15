@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import dayjs from 'dayjs';
 import * as XLSX from 'xlsx';
-import { changePartnerStatus, createPartner, getPartners } from '@/services/partners/partner-api';
+import { createPartner, deletePartner, getPartners } from '@/services/partners/partner-api';
 import type { BusinessPartner } from '@/services/partners/partner-api';
 import { errorMessage } from '@/services/http/errors';
 import { PartnerPrototypeModal } from './PartnerPrototypeModals';
@@ -161,13 +161,9 @@ export function PartnerListPage() {
     setOwner(undefined);
     setPage(1);
   };
-  const deactivate = async (targets: BusinessPartner[]) => {
+  const removePartners = async (targets: BusinessPartner[]) => {
     try {
-      await Promise.all(
-        targets
-          .filter((x) => x.status === 'ACTIVE')
-          .map((x) => changePartnerStatus(x.id, 'INACTIVE', x.version)),
-      );
+      await Promise.all(targets.map((x) => deletePartner(x.id, x.version)));
       msg.success('删除成功');
       setSelectedIds([]);
       setSelectedPartnersById({});
@@ -215,12 +211,11 @@ export function PartnerListPage() {
     }
   };
   const batchDeactivate = async () => {
-    const targets = selectedPartners.filter((x) => x.status === 'ACTIVE');
-    if (!targets.length) {
+    if (!selectedPartners.length) {
       msg.warning('没有可删除的客户');
       return;
     }
-    await deactivate(targets);
+    await removePartners(selectedPartners);
   };
   const exportRows = async () => {
     setExporting(true);
@@ -437,10 +432,9 @@ export function PartnerListPage() {
                           <Popconfirm
                             title="删除该公司？"
                             description="历史关联数据不会被删除。"
-                            disabled={x.status === 'INACTIVE'}
-                            onConfirm={() => void deactivate([x])}
+                            onConfirm={() => void removePartners([x])}
                           >
-                            <Button danger type="link" size="small" disabled={x.status === 'INACTIVE'}>
+                            <Button danger type="link" size="small">
                               删除
                             </Button>
                           </Popconfirm>
@@ -515,10 +509,9 @@ export function PartnerListPage() {
                         <Popconfirm
                           title="删除该公司？"
                           description="历史关联数据不会被删除。"
-                          disabled={x.status === 'INACTIVE'}
-                          onConfirm={() => void deactivate([x])}
+                          onConfirm={() => void removePartners([x])}
                         >
-                          <Button danger type="link" size="small" disabled={x.status === 'INACTIVE'}>
+                          <Button danger type="link" size="small">
                             删除
                           </Button>
                         </Popconfirm>

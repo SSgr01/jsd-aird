@@ -104,6 +104,22 @@ public class PartnerContactService {
         partnerService.appendAudit(c.status() == PartnerStatus.ACTIVE ? "CONTACT_ACTIVATED" : "CONTACT_DEACTIVATED", partnerId);
     }
 
+    @Transactional
+    public void deleteContact(UUID partnerId, UUID contactId, long version) {
+        BusinessPartnerService.requireWrite();
+        partnerService.get(partnerId);
+        var assignedProjects = repository.findContacts(partnerId).stream()
+            .filter(item -> item.id().equals(contactId))
+            .findFirst()
+            .map(PartnerContact::assignedProjectIds)
+            .orElse(List.of());
+        if (!repository.deleteContact(partnerId, contactId, version, BusinessPartnerService.OPERATOR)) {
+            BusinessPartnerService.conflict();
+        }
+        clearProjectPartnersWhenUnassigned(partnerId, assignedProjects);
+        partnerService.appendAudit("CONTACT_DELETED", partnerId);
+    }
+
     private void synchronizeProjectPartners(UUID partnerId, String partnerName,
                                             List<String> previousProjects, List<String> currentProjects) {
         var before = normalizeProjectIds(previousProjects);

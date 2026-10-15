@@ -140,6 +140,9 @@ export async function copyPartners(ids: string[]) {
 export async function changePartnerStatus(id: string, status: PartnerStatus, version: number) {
   await httpClient.patch(`/api/v1/business-partners/${id}/status`, { status, version });
 }
+export async function deletePartner(id: string, version: number) {
+  await httpClient.delete(`/api/v1/business-partners/${id}?version=${version}`);
+}
 // 负责人
 export async function getPartnerContacts(partnerId: string) {
   const { data } = await httpClient.get<ApiResponse<PartnerContact[]>>(
@@ -159,6 +162,9 @@ export async function changeContactStatus(partnerId: string, contact: PartnerCon
     status: contact.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE',
     version: contact.version,
   });
+}
+export async function deleteContact(partnerId: string, contactId: string, version: number) {
+  await httpClient.delete(`/api/v1/business-partners/${partnerId}/contacts/${contactId}?version=${version}`);
 }
 // 联系人-项目关联向量
 export interface ContactProjectVector {

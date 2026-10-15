@@ -15,5 +15,5 @@ public interface CustomerRequirementRepository {
 
     boolean updateRequirement(CustomerRequirement requirement, String operator);
 
-    boolean deleteRequirement(UUID id, long version);
+    boolean deleteRequirement(UUID id, long version, String operator);
 }

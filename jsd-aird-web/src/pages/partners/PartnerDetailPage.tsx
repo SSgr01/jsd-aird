@@ -2,9 +2,9 @@ import { AppstoreOutlined, ArrowLeftOutlined, DeleteOutlined, EditOutlined, Plus
 import { App, Breadcrumb, Button, Empty, Input, Modal, Popconfirm, Select, Space, Spin, Tabs, Tooltip } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useBlocker, useParams } from 'react-router-dom';
-import { changeContactStatus, createContact, getContactProjectVectors, getPartner, getPartnerAudits, getPartnerContacts, updateContact, updatePartner, type ContactProjectVector, type PartnerAuditEntry } from '@/services/partners/partner-api';
+import { createContact, deleteContact, getContactProjectVectors, getPartner, getPartnerAudits, getPartnerContacts, updateContact, updatePartner, type ContactProjectVector, type PartnerAuditEntry } from '@/services/partners/partner-api';
 import type { BusinessPartner, ContactInput, PartnerContact, PartnerInput } from '@/services/partners/partner-api';
-import { deleteCommunication, getCommunications, getRequirements, updateRequirement } from '@/services/partners/crm-api';
+import { deleteCommunication, deleteRequirement, getCommunications, getRequirements } from '@/services/partners/crm-api';
 import type { Communication, Requirement } from '@/services/partners/crm-api';
 import { formatProjectStatus, getProjects, type Project } from '@/services/project/project-api';
 import dayjs from '@/utils/dayjs';
@@ -138,7 +138,7 @@ export function PartnerDetailPage() {
       // 负责人卡片默认折叠（新建的临时联系人保持展开）
       setCollapsedContactIds(new Set(value.contacts.filter((c) => !newContactIds.includes(c.id)).map((c) => c.id)));
       setProjects(projectVectors);
-      setRequirements(reqPage.items.filter((r) => r.status !== 'CANCELLED'));
+      setRequirements(reqPage.items);
       setRequirementsLoaded(true);
       setCommunications(commPage.items);
       setCommunicationsLoaded(true);
@@ -179,7 +179,7 @@ export function PartnerDetailPage() {
     setRequirementsLoading(true);
     try {
       const reqPage = await getRequirements({ partnerId: id, page: 1, size: 100 });
-      setRequirements(reqPage.items.filter((r) => r.status !== 'CANCELLED'));
+      setRequirements(reqPage.items);
       setRequirementsLoaded(true);
     } finally {
       setRequirementsLoading(false);
@@ -476,17 +476,17 @@ export function PartnerDetailPage() {
               <Space size={8}>
                 {isNew
                   ? <Button danger type="primary" icon={<DeleteOutlined />} onClick={() => cancelNewContact(person.id)}>删除</Button>
-                  : <Popconfirm title="停用该负责人？" description="历史业务关联将继续保留；客户至少保留一位负责人。" onConfirm={() => void (async () => {
-                    const activeContactCount = partner.contacts.filter((contact) => contact.status === 'ACTIVE').length;
+                  : <Popconfirm title="删除该负责人？" description="历史业务关联将继续保留；客户至少保留一位负责人。" onConfirm={() => void (async () => {
+                    const activeContactCount = partner.contacts.length;
                     if (activeContactCount <= 1) {
-                      msg.warning('至少保留一位负责人，当前负责人不可停用');
+                      msg.warning('至少保留一位负责人，当前负责人不可删除');
                       return;
                     }
-                    await changeContactStatus(id, person);
-                    msg.success('负责人已停用');
+                    await deleteContact(id, person.id, person.version);
+                    msg.success('负责人已删除');
                     await load();
                   })()}>
-                    <Button danger type="primary" icon={<DeleteOutlined />} disabled={person.status === 'INACTIVE'} onClick={(e) => e.stopPropagation()}>删除</Button>
+                    <Button danger type="primary" icon={<DeleteOutlined />} onClick={(e) => e.stopPropagation()}>删除</Button>
                   </Popconfirm>}
                 <Button type="primary" icon={<EditOutlined />} loading={savingContactIds.has(person.id)} disabled={(!isNew && person.status === 'INACTIVE') || savingContactIds.has(person.id)} onClick={() => void savePersonSnapshot(person)}>保存</Button>
               </Space>
@@ -540,8 +540,8 @@ export function PartnerDetailPage() {
                           <td>
                             <div className="cm-row-actions management-table-actions">
                               <button className="cm-link-button" onClick={() => setBusinessModal({ mode: 'requirement', edit: row })}>编辑</button>
-                              <Popconfirm title="取消该客户需求？" description="历史业务关联将继续保留。" onConfirm={() => void (async () => { await updateRequirement(row.id, { ...row, status: 'CANCELLED', version: row.version }); msg.success('客户需求已取消'); await load(); })()}>
-                                <Button danger type="text" disabled={row.status === 'CANCELLED'} onClick={(e) => e.stopPropagation()}>删除</Button>
+                              <Popconfirm title="删除该客户需求？" description="历史业务关联将继续保留。" onConfirm={() => void (async () => { await deleteRequirement(row.id, row.version); msg.success('客户需求已删除'); await load(); })()}>
+                                <Button danger type="text" onClick={(e) => e.stopPropagation()}>删除</Button>
                               </Popconfirm>
                             </div>
                           </td>
@@ -582,7 +582,7 @@ export function PartnerDetailPage() {
                             {formatProjectStatus(row.projectStatus)}
                           </span>
                         </td>
-                        <td>{row.progress ?? 0}%</td>
+                        <td>{(row.progress ?? 0).toFixed(2)}%</td>
                         <td>
                           <Link to={`/projects/${row.projectId}`}>
                             <Button type="link" size="small">查看</Button>

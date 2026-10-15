@@ -14,7 +14,7 @@ public record CustomerRequirement(
     JsonNode customFields,
     long version, Instant createdAt, Instant updatedAt
 ) {
-    /** There is intentionally no destructive requirement endpoint yet. */
+    /** 删除需求为逻辑删除（置 deleted=true），不会修改状态为 CANCELLED，也不会物理删除。 */
     public List<String> getAllowedActions() {
         return List.of();
     }

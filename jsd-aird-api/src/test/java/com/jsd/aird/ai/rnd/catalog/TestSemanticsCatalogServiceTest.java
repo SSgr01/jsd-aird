@@ -48,6 +48,39 @@ class TestSemanticsCatalogServiceTest {
         }
     }
 
+    @Test
+    void keepsSameNamedResultsSeparateWhenTheirTestMethodsDiffer() throws Exception {
+        try (var workbook = new HSSFWorkbook()) {
+            var sheet = workbook.createSheet("Sheet1");
+            var header = sheet.createRow(0);
+            header.createCell(1).setCellValue("测试项目");
+            header.createCell(2).setCellValue("测试方法");
+            header.createCell(3).setCellValue("测试结果");
+            header.createCell(4).setCellValue("影响因素");
+            var grid = sheet.createRow(1);
+            grid.createCell(1).setCellValue("附着力");
+            grid.createCell(2).setCellValue("划格法");
+            grid.createCell(3).setCellValue("0级");
+            var pullOff = sheet.createRow(2);
+            pullOff.createCell(1).setCellValue("附着力");
+            pullOff.createCell(2).setCellValue("拉开法");
+            pullOff.createCell(3).setCellValue("5 MPa");
+            try (var bytes = new ByteArrayOutputStream()) {
+                workbook.write(bytes);
+                var service = new TestSemanticsCatalogService(null, null, null, new ObjectMapper());
+                Method parse = TestSemanticsCatalogService.class.getDeclaredMethod("parse", byte[].class, String.class);
+                parse.setAccessible(true);
+                @SuppressWarnings("unchecked")
+                List<?> rows = (List<?>) parse.invoke(service, bytes.toByteArray(), "customer.xls");
+                assertThat(rows).hasSize(2);
+                assertThat(accessor(rows, "atomicName")).containsExactly("附着力", "附着力");
+                assertThat(accessor(rows, "rawMethod")).containsExactly("划格法", "拉开法");
+                assertThat(accessor(rows, "suggestedCode")).doesNotHaveDuplicates();
+                assertThat(accessor(rows, "semanticKey")).doesNotHaveDuplicates();
+            }
+        }
+    }
+
     private static List<Object> accessor(List<?> rows, String name) throws Exception {
         return rows.stream().map(row -> {
             try {

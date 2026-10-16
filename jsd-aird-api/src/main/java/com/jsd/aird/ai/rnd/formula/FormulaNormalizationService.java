@@ -49,16 +49,16 @@ public class FormulaNormalizationService {
             }
             var ratio = component.get("ratio");
             if (ratio == null || ratio.isNull() || !component.path("amountKnown").asBoolean(ratio.isNumber())) {
-                issues.add(new Issue("FORMULA_RATIO_MISSING", "材料“" + material + "”的比例为空；如明确未添加请填0，空白表示未知", i));
+                issues.add(new Issue("FORMULA_RATIO_MISSING", "第" + (i + 1) + "项材料比例为空；如明确未添加请填0，空白表示未知", i));
                 continue;
             }
             if (!ratio.isNumber() || !Double.isFinite(ratio.asDouble())) {
-                issues.add(new Issue("FORMULA_RATIO_NOT_NUMERIC", "材料“" + material + "”的比例必须是数字", i));
+                issues.add(new Issue("FORMULA_RATIO_NOT_NUMERIC", "第" + (i + 1) + "项材料比例必须是数字", i));
                 continue;
             }
             var value = ratio.decimalValue();
             if (value.signum() < 0) {
-                issues.add(new Issue("FORMULA_RATIO_NEGATIVE", "材料“" + material + "”的比例不能为负数", i));
+                issues.add(new Issue("FORMULA_RATIO_NEGATIVE", "第" + (i + 1) + "项材料比例不能为负数", i));
                 continue;
             }
             rawTotal = rawTotal.add(value);

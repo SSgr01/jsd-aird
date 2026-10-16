@@ -7053,6 +7053,19 @@ a:active,
 .templates-catalog-page .catalog-list-filters > .ant-space {
   max-width: 100%;
 }
+.templates-catalog-page .catalog-list-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  justify-content: stretch;
+  gap: 12px;
+}
+.templates-catalog-page .catalog-list-heading > div:first-child {
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.templates-catalog-page .catalog-list-filters {
+  justify-content: flex-start;
+}
 .catalog-template-table .ant-table-cell {
   white-space: nowrap;
   word-break: keep-all;

@@ -18,11 +18,15 @@ import com.jsd.aird.shared.api.PageResponse;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.security.ActorContext;
+import com.jsd.aird.shared.json.JsonCanonicalizer;
+import com.jsd.aird.tpl.api.TemplateDataImportFacade;
+import com.jsd.aird.tpl.api.TemplateWorkbookValues;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
@@ -34,20 +38,30 @@ public class ExperimentService {
     private final FileStorageFacade files;
     private final ExperimentEditModelNormalizer editModels;
     private final AuditLogFacade audit;
+    private final TemplateDataImportFacade templates;
+    private final JsonCanonicalizer canonicalizer;
 
-    @Autowired
     public ExperimentService(ExperimentRepository repository, ObjectMapper json, FileStorageFacade files,
                              ExperimentEditModelNormalizer editModels) {
-        this(repository, json, files, editModels, null);
+        this(repository, json, files, editModels, null, null, null);
     }
 
     public ExperimentService(ExperimentRepository repository, ObjectMapper json, FileStorageFacade files,
                              ExperimentEditModelNormalizer editModels, AuditLogFacade audit) {
+        this(repository, json, files, editModels, audit, null, null);
+    }
+
+    @Autowired
+    public ExperimentService(ExperimentRepository repository, ObjectMapper json, FileStorageFacade files,
+                             ExperimentEditModelNormalizer editModels, AuditLogFacade audit,
+                             TemplateDataImportFacade templates, JsonCanonicalizer canonicalizer) {
         this.repository = repository;
         this.json = json;
         this.files = files;
         this.editModels = editModels;
         this.audit = audit;
+        this.templates = templates;
+        this.canonicalizer = canonicalizer;
     }
 
     public PageResponse<Summary> search(ExperimentRepository.Search query) {
@@ -91,6 +105,25 @@ public class ExperimentService {
         var editModel = command.editModel() == null
                 ? editModels.empty(title, versionId)
                 : editModels.normalize(object(command.editModel(), "editModel"), versionId);
+        var templateSnapshot = command.templateSnapshot();
+        var templateSnapshotHash = command.templateSnapshotHash();
+        if (ExperimentSourceType.TEMPLATE.name().equals(sourceType) && command.templateVersionId() == null) {
+            throw validation("请选择已发布的 V9 实验数据模板");
+        }
+        if (ExperimentSourceType.TEMPLATE.name().equals(sourceType) && command.templateVersionId() != null && templates != null) {
+            var definition = templates.getPublished(actor.organizationId(), command.templateVersionId());
+            if (definition.importContractVersion() != 9
+                    || !"EXPERIMENT_DATA".equals(definition.importContract().path("templateUsage").asText())) {
+                throw validation("在线模板实验必须选择已发布的 V9 实验数据模板");
+            }
+            var published = templates.getExperimentTemplateVersion(actor.organizationId(), command.templateVersionId());
+            templateSnapshot = published.snapshot().deepCopy();
+            templateSnapshotHash = published.snapshotHash();
+            editModel.set("documentSnapshot", TemplateWorkbookValues.blankCopy(templateSnapshot,
+                    templates.getBindings(actor.organizationId(), command.templateVersionId())));
+            editModel.put("documentFormat", "excel");
+            editModel.putObject("templateDataReview").put("required", true).put("confirmed", false);
+        }
         if (command.sourceFileId() != null) {
             // Keep the relational source reference and the version snapshot
             // aligned for newly-created experiments.
@@ -114,8 +147,8 @@ public class ExperimentService {
                 command.experimentDate() == null ? LocalDate.now() : command.experimentDate(),
                 versionId,
                 command.templateVersionId(),
-                blankToNull(command.templateSnapshotHash()),
-                object(command.templateSnapshot(), "templateSnapshot"),
+                blankToNull(templateSnapshotHash),
+                object(templateSnapshot, "templateSnapshot"),
                 editModel,
                 actor.userId(),
                 actor.username()
@@ -174,6 +207,10 @@ public class ExperimentService {
     }
 
     public Detail save(UUID id, long revision, DraftCommand command) {
+        return saveInternal(id, revision, command, false);
+    }
+
+    private Detail saveInternal(UUID id, long revision, DraftCommand command, boolean confirmingData) {
         var actor = ActorContext.required();
         if (command == null || command.experimentNo() == null || command.experimentNo().isBlank()) {
             throw validation("实验编号不能为空");
@@ -188,6 +225,27 @@ public class ExperimentService {
             throw validation("实验日期不能为空");
         }
 
+        var model = editModels.normalize(object(command.editModel(), "editModel"), id);
+        var templateVersionId = command.templateVersionId();
+        var templateSnapshotHash = command.templateSnapshotHash();
+        var templateSnapshot = object(command.templateSnapshot(), "templateSnapshot");
+        var current = detail(id);
+        if (current.editModel().path("templateDataReview").path("required").asBoolean(false)) {
+            if (!current.templateVersionId().equals(templateVersionId))
+                throw validation("在线实验模板版本不可变更");
+            templateSnapshotHash = current.templateSnapshotHash();
+            templateSnapshot = (ObjectNode) current.templateSnapshot().deepCopy();
+            if (!confirmingData) {
+                var marker = (ObjectNode) current.editModel().path("templateDataReview").deepCopy();
+                var unchanged = marker.path("confirmed").asBoolean(false)
+                        && marker.path("dataHash").asText("")
+                        .equals(dataHash(current.templateVersionId(), model.path("dynamicValues")));
+                marker.put("confirmed", unchanged);
+                if (unchanged) marker.put("confirmedRevision", revision + 1);
+                else marker.remove("confirmedRevision");
+                model.set("templateDataReview", marker);
+            }
+        }
         var result = normalize(repository.saveDraft(
                 actor.organizationId(),
                 id,
@@ -202,16 +260,134 @@ public class ExperimentService {
                         command.taskId(),
                         blankToNull(command.ownerName()),
                         command.experimentDate(),
-                        command.templateVersionId(),
-                        blankToNull(command.templateSnapshotHash()),
-                        object(command.templateSnapshot(), "templateSnapshot"),
-                        editModels.normalize(object(command.editModel(), "editModel"), id)
+                        templateVersionId,
+                        blankToNull(templateSnapshotHash),
+                        templateSnapshot,
+                        model
                 ),
                 actor.userId(),
                 actor.username()
         ));
         return result;
     }
+
+    public TemplateDataReview templateDataReview(UUID id) {
+        var detail = detail(id);
+        if (detail.templateVersionId() == null || templates == null
+                || !detail.editModel().path("templateDataReview").path("required").asBoolean(false)) {
+            throw validation("当前实验不是按实验数据模板创建的在线记录");
+        }
+        var actor = ActorContext.required();
+        var definition = templates.getVersion(actor.organizationId(), detail.templateVersionId());
+        var bindings = templates.getBindings(actor.organizationId(), detail.templateVersionId());
+        var values = detail.editModel().path("dynamicValues");
+        var marker = detail.editModel().path("templateDataReview");
+        var confirmed = marker.path("confirmed").asBoolean(false)
+                && marker.path("confirmedRevision").asLong(-1) == detail.summary().revision()
+                && marker.path("dataHash").asText("").equals(dataHash(detail.templateVersionId(), values));
+        return new TemplateDataReview(detail.templateVersionId(), definition.contractHash(), definition.fields(),
+                bindings, values.deepCopy(), confirmed);
+    }
+
+    public Detail confirmTemplateData(UUID id, long revision) {
+        var current = detail(id);
+        if (current.summary().revision() != revision) throw validation("实验版本已变化，请刷新后确认数据");
+        var review = templateDataReview(id);
+        for (var field : review.fields()) {
+            var value = valueAt(review.values(), field);
+            if (field.required() && !hasRequiredValue(value))
+                throw validation("必填数据尚未填写：" + field.displayName());
+            if (hasValue(value) && List.of("NUMBER", "DECIMAL", "INTEGER", "FLOAT", "DOUBLE")
+                    .contains(field.dataType() == null ? "" : field.dataType().toUpperCase(Locale.ROOT))
+                    && !numericValuesValid(value))
+                throw validation("字段数值格式不正确：" + field.displayName());
+        }
+        var model = (ObjectNode) current.editModel().deepCopy();
+        model.withObject("templateDataReview").put("required", true).put("confirmed", true)
+                .put("confirmedRevision", revision + 1)
+                .put("dataHash", dataHash(review.templateVersionId(), review.values()));
+        var summary = current.summary();
+        return saveInternal(id, revision, new DraftCommand(summary.experimentNo(), summary.title(),
+                summary.categoryId(), summary.categoryName(), summary.projectId(), summary.stageId(),
+                summary.taskId(), summary.ownerName(), summary.experimentDate(), current.templateVersionId(),
+                current.templateSnapshotHash(), current.templateSnapshot(), model), true);
+    }
+
+    private JsonNode valueAt(JsonNode values, TemplateDataImportFacade.FieldDefinition field) {
+        var path = field.dataPath();
+        if (path == null || path.isBlank()) return values.path(field.fieldCode());
+        List<JsonNode> current = List.of(values);
+        var repeated = false;
+        for (var encoded : path.split("/")) {
+            if (encoded.isBlank()) continue;
+            var segment = encoded.replace("~1", "/").replace("~0", "~");
+            var next = new ArrayList<JsonNode>();
+            for (var node : current) {
+                if ("*".equals(segment)) {
+                    repeated = true;
+                    if (node.isArray()) node.forEach(next::add);
+                    else next.add(JsonNodeFactory.instance.nullNode());
+                } else {
+                    var value = node.path(segment);
+                    if (!value.isMissingNode() || repeated) next.add(value);
+                }
+            }
+            current = next;
+        }
+        if (current.isEmpty()) return values.path(field.fieldCode());
+        if (!repeated) return current.getFirst();
+        var collected = json.createArrayNode();
+        current.forEach(collected::add);
+        return collected;
+    }
+
+    private boolean hasRequiredValue(JsonNode value) {
+        if (value != null && value.isArray()) {
+            if (value.isEmpty()) return false;
+            for (var item : value) if (!hasRequiredValue(item)) return false;
+            return true;
+        }
+        return hasValue(value);
+    }
+
+    private boolean hasValue(JsonNode value) {
+        if (value == null || value.isMissingNode() || value.isNull()) return false;
+        if (value.isArray()) {
+            for (var item : value) if (hasValue(item)) return true;
+            return false;
+        }
+        if (value.isObject()) {
+            for (var item : value) if (hasValue(item)) return true;
+            return false;
+        }
+        return !value.asText("").isBlank();
+    }
+
+    private boolean numericValuesValid(JsonNode value) {
+        if (value == null || value.isNull() || value.isMissingNode()) return true;
+        if (value.isArray()) {
+            for (var item : value) if (!numericValuesValid(item)) return false;
+            return true;
+        }
+        if (value.isObject()) {
+            for (var item : value) if (!numericValuesValid(item)) return false;
+            return true;
+        }
+        if (value.asText("").isBlank()) return true;
+        try { new java.math.BigDecimal(value.asText().trim()); return true; }
+        catch (NumberFormatException exception) { return false; }
+    }
+
+    private String dataHash(UUID versionId, JsonNode values) {
+        if (canonicalizer == null) return "";
+        var envelope = json.createObjectNode().put("templateVersionId", versionId.toString());
+        envelope.set("values", values == null ? json.createObjectNode() : values);
+        return canonicalizer.hash(envelope);
+    }
+
+    public record TemplateDataReview(UUID templateVersionId, String contractHash,
+            List<TemplateDataImportFacade.FieldDefinition> fields,
+            List<TemplateDataImportFacade.ImportBinding> bindings, JsonNode values, boolean confirmed) {}
 
     public void delete(UUID id, long revision) {
         var actor = ActorContext.required();
@@ -230,6 +406,10 @@ public class ExperimentService {
         }
         if (target == ExperimentStatus.PENDING_REVIEW) {
             var model = detail(id).editModel();
+            if (model.path("templateDataReview").path("required").asBoolean(false)) {
+                var review = templateDataReview(id);
+                if (!review.confirmed()) throw validation("请先确认本次实验数据，再提交审核");
+            }
             if (model.path("recognizedFields").isArray()) {
                 var fields = model.path("recognizedFields");
                 if (fields.isEmpty()) throw validation("Excel 尚未识别出可绑定字段，请重新识别");

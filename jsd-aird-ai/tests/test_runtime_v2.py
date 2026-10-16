@@ -8,6 +8,7 @@ from pathlib import Path
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 from fastapi.testclient import TestClient
 
 from jsd_aird_ai.api import create_app
@@ -82,6 +83,15 @@ def client(tmp_path: Path) -> TestClient:
     return TestClient(create_app(Settings(allow_file_urls=True, temporary_root=tmp_path)))
 
 
+def test_v2_rejects_training_materials_missing_from_the_frozen_dictionary(tmp_path: Path) -> None:
+    request = payload(tmp_path)
+    request["context"]["materialDictionary"]["materials"][0]["materialId"] = "different-material"
+    checked = client(tmp_path).post("/internal/v2/snapshots/validate", json=request)
+    assert checked.status_code == 200
+    assert checked.json()["status"] == "REJECTED"
+    assert any(issue["code"] == "MATERIAL_NOT_IN_MODEL" for issue in checked.json()["issues"])
+
+
 def test_v2_validate_folds_and_continuous_train_preserve_recorded_total(tmp_path: Path) -> None:
     api = client(tmp_path)
     request = payload(tmp_path)
@@ -138,6 +148,38 @@ def test_v2_validate_folds_and_continuous_train_preserve_recorded_total(tmp_path
     })
     assert out_of_domain.json()["results"][0]["status"] == "BLOCKED"
     assert out_of_domain.json()["results"][0]["code"] == "OUT_OF_DOMAIN"
+    violations = out_of_domain.json()["results"][0]["detail"]["violations"]
+    assert violations
+    assert all(item["value"] < item["minimum"] or item["value"] > item["maximum"] for item in violations)
+
+    extrapolated = api.post("/internal/v2/models/score", json={
+        "contractVersion": "formula-model.v2", "requestId": "score-extrapolation", "seed": 17,
+        "runId": "prediction-extrapolation", "allowExtrapolation": True,
+        "formula": {"basis": "MASS_PERCENT", "compositionComplete": True, "recordedTotal": 98.8,
+                    "components": [{"materialId": "m1", "ratio": 31, "unit": "%", "amountKnown": True}]},
+        "inputs": {"temperature": 500, "substrate": "PET"}, "modelBindings": [score_binding],
+    })
+    assert extrapolated.status_code == 200, extrapolated.text
+    extrapolated_result = extrapolated.json()["results"][0]
+    assert extrapolated_result["status"] == "SUCCEEDED"
+    assert extrapolated_result["applicability"]["status"] == "OUT_OF_DOMAIN"
+    assert extrapolated_result["warnings"][0]["code"] == "EXTRAPOLATION"
+
+    recommendation = api.post("/internal/v2/models/recommend", json={
+        "contractVersion": "formula-model.v2", "requestId": "formula-extrapolation", "seed": 17,
+        "runId": "formula-run", "mode": "FORMULA_PREDICTION", "candidateCount": 1,
+        "baselineFormula": {"basis": "MASS_PERCENT", "compositionComplete": True, "recordedTotal": 100,
+                            "components": [{"materialId": "m1", "ratio": 100, "unit": "%", "amountKnown": True}]},
+        "fixedInputs": {"temperature": 35},
+        "goals": [{"targetId": "target-v1", "operator": "MAXIMIZE", "mandatory": False, "weight": 1}],
+        "constraints": {}, "searchSpace": {"variableMaterials": [{"materialId": "m1", "minimum": 0, "maximum": 100}]},
+        "modelBindings": [score_binding],
+    })
+    assert recommendation.status_code == 200, recommendation.text
+    candidate = recommendation.json()["candidates"][0]
+    assert candidate["inputs"]["temperature"] == 35
+    assert candidate["results"][0]["status"] == "SUCCEEDED"
+    assert candidate["results"][0]["applicability"]["status"] == "OUT_OF_DOMAIN"
 
     damaged = tmp_path / "damaged-model.zip"
     damaged.write_bytes(output.read_bytes() + b"damaged")
@@ -152,6 +194,52 @@ def test_v2_validate_folds_and_continuous_train_preserve_recorded_total(tmp_path
     assert failed.json()["executionStatus"] == "FAILED"
     assert failed.json()["outcomeStatus"] is None
     assert failed.json()["results"][0]["status"] == "FAILED"
+
+
+def test_modeling_workbench_trains_from_freely_selected_columns(tmp_path: Path) -> None:
+    api = client(tmp_path)
+    output = tmp_path / "workbench-model.zip"
+    rows = [
+        {"id": f"row-{index}", "values": {
+            "temperature": 18 + index,
+            "substrate": "PET" if index % 2 else "PC",
+            "gloss": float(index * 1.7 + (index % 3)),
+        }}
+        for index in range(18)
+    ]
+    response = api.post("/internal/v2/modeling/workbench/train", json={
+        "requestId": "workbench-run-1",
+        "seed": 17,
+        "xColumns": [
+            {"code": "temperature", "name": "温度", "kind": "NUMERIC"},
+            {"code": "substrate", "name": "基材", "kind": "CATEGORICAL"},
+        ],
+        "yColumn": {"code": "gloss", "name": "光泽", "kind": "NUMERIC", "unit": "GU"},
+        "rows": rows,
+        "output": output.as_uri(),
+    })
+
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["status"] == "SUCCEEDED"
+    assert result["rowCount"] == len(rows)
+    assert result["metrics"]["selectedAlgorithm"]
+    assert result["metrics"]["mae"] >= 0
+    assert result["metrics"]["comparison"]
+    assert result["modelBundle"]["sha256"] == sha(output.read_bytes())
+
+
+def test_modeling_workbench_rejects_y_with_one_observed_class() -> None:
+    service = FormulaModelV2Service(Settings())
+    with pytest.raises(Exception, match="Y 列只有一种结果"):
+        service.train_workbench({
+            "requestId": "workbench-one-class",
+            "seed": 17,
+            "xColumns": [{"code": "x", "name": "X", "kind": "NUMERIC"}],
+            "yColumn": {"code": "y", "name": "Y", "kind": "CATEGORICAL"},
+            "rows": [{"values": {"x": index, "y": "A"}} for index in range(8)],
+            "output": "file:///tmp/unused.zip",
+        })
 
 
 def test_v2_binary_training_and_v1_payload_rejection(tmp_path: Path) -> None:
@@ -234,3 +322,52 @@ def test_v2_model_without_composition_scores_without_formula(tmp_path: Path) -> 
     assert score.status_code == 200, score.text
     assert score.json()["executionStatus"] == "SUCCEEDED"
     assert score.json()["results"][0]["status"] == "SUCCEEDED"
+
+
+@pytest.mark.parametrize("kind", ["NUMERIC", "CATEGORICAL"])
+def test_registered_workbench_scores_frozen_model_without_formula(tmp_path: Path, kind: str) -> None:
+    api = client(tmp_path)
+    output = tmp_path / "registered.zip"
+    x_columns = [{"code": "formula:resin", "name": "树脂比例", "kind": "NUMERIC", "unit": "%"},
+                 {"code": "substrate", "name": "基材", "kind": "CATEGORICAL"}]
+    trained = api.post("/internal/v2/modeling/workbench/train", json={
+        "requestId": "register-workbench", "xColumns": x_columns,
+        "yColumn": {"code": "y", "name": "结果", "kind": kind},
+        "rows": [{"values": {"formula:resin": 20 + i, "substrate": "PET" if i % 2 else "PC",
+                             "y": float(i * 2) if kind == "NUMERIC" else ("优" if i % 2 else "良")}}
+                 for i in range(12)], "output": output.as_uri()})
+    assert trained.status_code == 200, trained.text
+    context = payload(tmp_path)["context"]
+    context["targetDefinition"].update(valueType="CONTINUOUS" if kind == "NUMERIC" else "CATEGORICAL",
+                                       unit=None, classes=[] if kind == "NUMERIC" else ["优", "良"])
+    context["inputScheme"]["fields"] = [
+        {"fieldVersionId": str(i), "code": x["code"], "name": x["name"], "unit": x.get("unit"),
+         "valueType": "NUMBER" if x["kind"] == "NUMERIC" else "CATEGORY", "required": True,
+         "acquisitionTiming": "PRE_EXPERIMENT"} for i, x in enumerate(x_columns)]
+    binding = {"target": context["targetDefinition"], "inputScheme": context["inputScheme"],
+               "preprocessing": context["preprocessing"], "materialDictionary": context["materialDictionary"],
+               "modelVersionId": "registered-model", "modelBundle": trained.json()["modelBundle"],
+               "applicabilityDomain": trained.json()["applicabilityDomain"] | {"nearBoundaryRatio": 0.05}}
+    request = {"requestId": "score-registered", "seed": 17, "runId": "prediction-1",
+               "inputs": {"formula:resin": 25, "substrate": "PET"}, "modelBindings": [binding]}
+    scored = api.post("/internal/v2/models/score", json=request)
+    assert scored.status_code == 200, scored.text
+    assert scored.json()["results"][0]["status"] == "SUCCEEDED", scored.text
+    result = scored.json()["results"][0]["result"]
+    assert result["resultType"] == ("CONTINUOUS" if kind == "NUMERIC" else "CATEGORICAL")
+    if kind == "NUMERIC":
+        assert result["unit"] is None
+    else:
+        assert set(result["probabilities"]) == {"优", "良"}
+    outside = api.post("/internal/v2/models/score", json=request | {"inputs": {"formula:resin": 80, "substrate": "PC"}})
+    assert outside.json()["results"][0]["status"] == "SUCCEEDED", outside.text
+    assert outside.json()["results"][0]["applicability"]["status"] == "OUT_OF_DOMAIN"
+    for bad, code in [({"formula:resin": 25, "substrate": "铝"}, "UNKNOWN_CATEGORY"),
+                      ({"formula:resin": "abc", "substrate": "PC"}, "INVALID_X_VALUE")]:
+        rejected = api.post("/internal/v2/models/score", json=request | {"inputs": bad}).json()["results"][0]
+        assert rejected["status"] == "BLOCKED"
+        assert rejected["code"] == code
+        assert rejected["detail"]["fieldName"] in {"基材", "树脂比例"}
+    output.write_bytes(b"corrupted")
+    damaged = api.post("/internal/v2/models/score", json=request)
+    assert damaged.json()["results"][0]["status"] == "FAILED"

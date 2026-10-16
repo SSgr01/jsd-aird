@@ -180,6 +180,147 @@ describe('experiment-workbook round trip', () => {
     expect(parseExperimentSnapshot(templateSnapshot, templateModel).documentSnapshot).toBe(templateSnapshot);
   });
 
+  it('keeps an AI draft usable when the selected template has no field coordinates', () => {
+    const templateSnapshot = {
+      id: 'published-template',
+      sheetOrder: ['sheet-template'],
+      sheets: {
+        'sheet-template': { id: 'sheet-template', name: '客户模板', rowCount: 20, columnCount: 10, cellData: {} },
+      },
+    };
+    const optimizationModel: ExperimentModel = {
+      title: '优化实验', documentFormat: 'excel',
+      formulaItems: [{ itemId: 'formula-1', sourceRefs: [], materialId: 'm1', materialName: '树脂', ratio: 76.7, actualQty: '', unit: '%' }],
+      aiSource: {
+        plannedInputs: { TEST_TEMPERATURE: 25 },
+        predictions: { targets: [
+          { targetName: '60°光泽', status: 'SUCCEEDED', result: { resultType: 'CONTINUOUS', value: 51.2, lower: 47, upper: 55, unit: 'GU' } },
+          { targetName: 'UV表干', status: 'SUCCEEDED', result: { resultType: 'BINARY', label: '表干', probability: 0.92 } },
+        ] },
+      },
+    };
+
+    const snapshot = buildExperimentSnapshot(optimizationModel, 'exp-ai', templateSnapshot);
+    const sheets = snapshot.sheets as Record<string, Record<string, unknown>>;
+    const formula = sheets['sheet-配方数据']?.cellData as Record<string, Record<string, { v: unknown }>>;
+    const conditions = sheets['sheet-ai-conditions']?.cellData as Record<string, Record<string, { v: unknown }>>;
+    const predictions = sheets['sheet-ai-prediction-reference']?.cellData as Record<string, Record<string, { v: unknown }>>;
+    expect(snapshot.sheetOrder).toEqual(['sheet-template', 'sheet-配方数据', 'sheet-ai-conditions', 'sheet-ai-prediction-reference']);
+    expect(formula?.['2']?.['0']?.v).toBe('树脂');
+    expect(formula?.['2']?.['1']?.v).toBe(76.7);
+    expect(conditions?.['2']?.['0']?.v).toBe('测试温度');
+    expect(conditions?.['2']?.['1']?.v).toBe(25);
+    expect(predictions?.['3']?.['1']?.v).toBe('51.2 GU');
+    expect(predictions?.['3']?.['2']?.v).toBe('47～55 GU');
+    expect(predictions?.['4']?.['1']?.v).toBe('表干 · 92%');
+    expect(sheets['sheet-record']).toBeUndefined();
+    expect(parseExperimentSnapshot(snapshot, optimizationModel).formulaItems?.[0]?.ratio).toBe('76.7');
+  });
+
+  it('writes AI recipe and test conditions into the selected template without changing its layout', () => {
+    const templateSnapshot = {
+      id: 'published-template',
+      sheetOrder: ['customer-sheet'],
+      sheets: {
+        'customer-sheet': {
+          id: 'customer-sheet', name: '配方实验记录', rowCount: 12, columnCount: 6,
+          cellData: {
+            '0': { '0': { v: '材料' }, '1': { v: '配方比例' }, '2': { v: '测试温度' }, '3': { v: '实测结果' } },
+            '1': { '0': { v: '' }, '1': { v: '', s: 9 }, '2': { v: '' }, '3': { v: '' } },
+            '2': { '0': { v: '' }, '1': { v: '', s: 9 }, '2': { v: '' }, '3': { v: '' } },
+          },
+        },
+      },
+    };
+    const optimizationModel: ExperimentModel = {
+      title: '树脂配方优化', documentFormat: 'excel',
+      formulaItems: [
+        { itemId: 'formula-1', sourceRefs: [], materialName: '树脂', ratio: 76.7, actualQty: '', unit: '%' },
+        { itemId: 'formula-2', sourceRefs: [], materialName: '助剂', ratio: 23.3, actualQty: '', unit: '%' },
+      ],
+      dynamicValues: { TEST_TEMPERATURE: 25 },
+      aiSource: {
+        plannedInputs: { TEST_TEMPERATURE: 25 },
+        predictions: { targets: [{ targetName: '光泽', status: 'SUCCEEDED', result: { resultType: 'CONTINUOUS', value: 51.2 } }] },
+        templateBindings: [
+          {
+            fieldCode: 'FORMULA_MATERIAL_NAME', targetPath: '/editModel/formulaItems/*/materialName',
+            mappingKind: 'REPEAT_FIELD', repeatAxis: 'ROW', recordHeight: 1, recordStride: 1,
+            valueSource: 'USER_INPUT', locator: { sheetId: 'customer-sheet', valueRange: 'A2:A8' },
+          },
+          {
+            fieldCode: 'FORMULA_RATIO', targetPath: '/editModel/formulaItems/*/ratio',
+            mappingKind: 'REPEAT_FIELD', repeatAxis: 'ROW', recordHeight: 1, recordStride: 1,
+            valueSource: 'USER_INPUT', locator: { sheetId: 'customer-sheet', valueRange: 'B2:B8' },
+          },
+          {
+            fieldCode: 'TEST_TEMPERATURE', targetPath: '/editModel/dynamicValues/*',
+            mappingKind: 'SCALAR', valueSource: 'USER_INPUT', locator: { sheetId: 'customer-sheet', valueRange: 'C2' },
+          },
+        ],
+      },
+    };
+
+    const snapshot = buildExperimentSnapshot(optimizationModel, 'exp-ai-template', templateSnapshot);
+    const sheets = snapshot.sheets as Record<string, Record<string, unknown>>;
+    const cells = sheets['customer-sheet']?.cellData as Record<string, Record<string, { v: unknown; s?: number }>>;
+
+    expect(snapshot.sheetOrder).toEqual(['customer-sheet', 'sheet-ai-prediction-reference']);
+    expect(cells['1']?.['0']?.v).toBe('树脂');
+    expect(cells['1']?.['1']).toEqual({ v: 76.7, s: 9 });
+    expect(cells['2']?.['0']?.v).toBe('助剂');
+    expect(cells['2']?.['1']?.v).toBe(23.3);
+    expect(cells['1']?.['2']?.v).toBe(25);
+    expect(cells['1']?.['3']?.v).toBe('');
+    expect(sheets['sheet-ai-recipe-plan']).toBeUndefined();
+    expect(sheets['sheet-ai-conditions']).toBeUndefined();
+    expect(sheets['sheet-record']).toBeUndefined();
+    cells['1']!['1'] = { ...cells['1']!['1']!, v: '77' };
+    const edited = parseExperimentSnapshot(snapshot, optimizationModel);
+    expect(edited.formulaItems?.[0]?.ratio).toBe('77');
+    expect(edited.dynamicValues?.TEST_TEMPERATURE).toBe('25');
+  });
+
+  it('adds AI draft sheets when the API has already attached a blank template snapshot', () => {
+    const optimizationModel: ExperimentModel = {
+      title: '优化实验',
+      documentFormat: 'word',
+      documentSnapshot: {
+        id: 'blank-template-copy',
+        sheetOrder: ['sheet-1'],
+        sheets: {
+          'sheet-1': { id: 'sheet-1', name: 'Sheet1', rowCount: 200, columnCount: 26, cellData: {} },
+        },
+      },
+      formulaItems: [
+        { itemId: 'formula-1', sourceRefs: [], materialId: 'm1', materialName: '树脂', ratio: 73.70012048, actualQty: '', unit: '%' },
+        { itemId: 'formula-2', sourceRefs: [], materialId: 'm2', materialName: '助剂', ratio: 26.29987952, actualQty: '', unit: '%' },
+      ],
+      aiSource: {
+        plannedInputs: { TEST_TEMPERATURE: 25 },
+        predictions: { targets: [{ targetName: '60°光泽', status: 'SUCCEEDED', result: { resultType: 'CONTINUOUS', value: 51.2, lower: 47, upper: 55, unit: 'GU' } }] },
+      },
+    };
+
+    const snapshot = buildExperimentSnapshot(optimizationModel, 'exp-ai-with-snapshot');
+    const sheets = snapshot.sheets as Record<string, Record<string, unknown>>;
+    const formula = sheets['sheet-配方数据']?.cellData as Record<string, Record<string, { v: unknown }>>;
+    const conditions = sheets['sheet-ai-conditions']?.cellData as Record<string, Record<string, { v: unknown }>>;
+    const predictions = sheets['sheet-ai-prediction-reference']?.cellData as Record<string, Record<string, { v: unknown }>>;
+
+    expect(snapshot.sheetOrder).toEqual(expect.arrayContaining(['sheet-配方数据', 'sheet-ai-conditions', 'sheet-ai-prediction-reference']));
+    expect(snapshot.sheetOrder).not.toContain('sheet-1');
+    expect((snapshot.sheetOrder as string[])[0]).toBe('sheet-配方数据');
+    expect(formula?.['2']?.['0']?.v).toBe('树脂');
+    expect(formula?.['2']?.['1']?.v).toBe(73.7);
+    expect(formula?.['3']?.['1']?.v).toBe(26.3);
+    expect((sheets['sheet-配方数据']?.columnData as Record<string, Record<string, unknown>>)?.['0']?.w).toBe(240);
+    expect((sheets['sheet-配方数据']?.columnData as Record<string, Record<string, unknown>>)?.['4']?.hd).toBe(1);
+    expect(conditions?.['2']?.['1']?.v).toBe(25);
+    expect(predictions?.['3']?.['1']?.v).toBe('51.2 GU');
+    expect(sheets['sheet-1']).toBeUndefined();
+  });
+
   it('keeps a blank experiment free of starter content', () => {
     const blankWord = buildExperimentSnapshot(
       { title: '空白 Word 实验', documentFormat: 'word', blankDocument: true },

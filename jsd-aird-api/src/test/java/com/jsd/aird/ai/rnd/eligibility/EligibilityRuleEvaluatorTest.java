@@ -94,6 +94,25 @@ class EligibilityRuleEvaluatorTest {
     }
 
     @Test
+    void testMethodMappingKeepsSameNamedResultsFromDifferentMethodsSeparate() throws Exception {
+        var observations = json.readTree("""
+                {"items":[
+                  {"testItem":"附着力","testMethod":"划格法","value":1},
+                  {"testItem":"附着力","testMethod":"拉开法","value":2}
+                ]}
+                """);
+        var sample = sampleWithObservations(observations, null);
+        var mapping = new SourceMappingRow(UUID.randomUUID(), "DATA_CENTER", json.readTree("""
+                {"targetFieldCode":"FILM.PROPERTY.ADHESION","sourceAliases":["附着力"],"match":{"testMethod":"划格法"}}
+                """), 1);
+
+        var result = evaluator.evaluate(config(List.of(), null, mapping), sample);
+
+        assertThat(result.state()).isEqualTo(State.TRAINABLE);
+        assertThat(result.evidence().path("targetValue").asInt()).isEqualTo(1);
+    }
+
+    @Test
     void operationLabelResolvesARequiredExperimentInput() throws Exception {
         var field = new FieldRow(UUID.randomUUID(), true, 0, "coatingSolidsPct", "涂料固含", "NUMBER", "%",
                 "PRE_EXPERIMENT", json.createObjectNode(), json.createObjectNode());

@@ -11,6 +11,7 @@
     "build": "tsc -b && vite build && npm run check:bundle",
     "check:bundle": "node scripts/check-bundle-size.mjs",
     "capture:template-render": "node scripts/capture-template-render.mjs",
+    "verify:operation-assistant": "vitest run --maxWorkers=2 src/components/operation-assistant/OperationAssistant.test.tsx src/services/operation-assistant/operation-assistant-api.test.ts src/services/operation-assistant/operation-manual.test.ts src/stores/operation-assistant-store.test.ts",
     "preview": "vite preview",
     "typecheck": "tsc -b --pretty false",
     "lint": "eslint . --max-warnings=0",

@@ -30,46 +30,6 @@ public final class AiRndContracts {
     public record VersionCommand(long expectedRevision) { }
     public record ReasonedVersionCommand(long expectedRevision, String reason) { }
 
-    public record TargetDraft(String code, String name, String category, ValueType valueType, JsonNode definitionDraft) { }
-    public record TargetSummary(UUID id, String code, String name, String category, ValueType valueType,
-                                ResourceStatus status, UUID currentVersionId, UUID currentInputSchemeId,
-                                UUID activeModelVersionId, long revision, Instant updatedAt) { }
-    public record TargetVersion(UUID id, UUID targetId, int version, VersionStatus status, ValueType valueType, String unit,
-                                List<String> classes, JsonNode definition, JsonNode observationSemantics,
-                                String configHash, Instant publishedAt) { }
-    public record TargetVersionCommand(JsonNode definition, JsonNode observationSemantics, String unit,
-                                       List<String> classes, long expectedRevision) { }
-
-    public record InputFieldDraft(String code, String name, String valueType, String unit, String availabilityStage,
-                                  UUID standardFieldDictionaryId, JsonNode definition, JsonNode preprocessing) { }
-    public record InputFieldSummary(UUID id, String code, String name, String valueType,
-                                    String unit, String availabilityStage, ResourceStatus status, UUID currentVersionId,
-                                    long revision) { }
-    public record InputFieldVersion(UUID id, UUID inputFieldId, int version, VersionStatus status,
-                                    String valueType, String unit, String availabilityStage,
-                                    UUID standardFieldDictionaryId, JsonNode definition, JsonNode preprocessing, String configHash) { }
-    public record SourceMappingVersion(UUID id, UUID targetId, UUID targetVersionId, String sourceType, int version,
-                                       VersionStatus status, JsonNode mapping, String mappingHash) { }
-    public record InputSchemeField(UUID inputFieldVersionId, boolean required, int ordinal, JsonNode override) { }
-    public record InputSchemeDraft(UUID targetVersionId, UUID materialDictionaryVersionId,
-                                   String code, String name, List<InputSchemeField> fields,
-                                   JsonNode preprocessing, long expectedRevision) { }
-    public record InputScheme(UUID id, UUID targetId, UUID targetVersionId, UUID materialDictionaryVersionId,
-                              String code, String name, int version,
-                              VersionStatus status, List<InputSchemeField> fields, String configHash,
-                              long revision, Instant frozenAt) { }
-    public record CoveragePreview(String evaluationStatus, String unavailableReason,
-                                  List<JsonNode> validationIssues, String schemaHash,
-                                  Long candidateSamples, Long trainable, Long excluded, Long reviewRequired,
-                                  List<UUID> changedSampleIds) { }
-
-    public record MaterialAlias(UUID id, UUID materialId, String alias, String normalizedAlias,
-                                String status, long revision, Instant updatedAt) { }
-    public record MaterialDictionaryItem(UUID materialId, String role, int ordinal, String token) { }
-    public record MaterialDictionary(UUID id, String code, int version, VersionStatus status,
-                                     List<MaterialDictionaryItem> items, JsonNode encoder,
-                                     String dictionaryHash, long revision, Instant frozenAt) { }
-
     public record QualificationReason(String code, String message, String fieldCode, JsonNode evidence) { }
     public record Eligibility(UUID id, UUID sampleRevisionId, UUID targetVersionId, UUID inputSchemeId,
                               EligibilityState state, List<QualificationReason> reasons,
@@ -90,7 +50,6 @@ public final class AiRndContracts {
                                UUID snapshotId, int version, ModelStatus status, String modelType,
                                List<Metric> metrics, JsonNode applicabilityDomain, String modelHash,
                                long revision, Instant createdAt) { }
-    public record ModelComparison(UUID targetId, List<ModelVersion> models, JsonNode sampleAndGroupComparison) { }
     public record PublishCommand(long expectedRevision, UUID expectedActiveModelVersionId, String reason) { }
     public record ActiveModel(UUID targetId, UUID activeModelVersionId, long targetRevision, Instant changedAt) { }
 

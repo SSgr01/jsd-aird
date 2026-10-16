@@ -42,6 +42,7 @@ public class DataImportService {
     private final StructuredDataExtractor structuredExtractor;
     private final ImportCompatibilityEvaluator compatibilityEvaluator;
     private final ProjectResourceFacade projectResources;
+    private final ExperimentDocumentDataParser documentParser;
     @Autowired
     public DataImportService(
             DataRepository repository,
@@ -51,7 +52,8 @@ public class DataImportService {
             AuditLogFacade auditLog,
             OpsAsyncFacade opsAsync,
             DataCategoryService categories,
-            ProjectResourceFacade projectResources
+            ProjectResourceFacade projectResources,
+            ExperimentDocumentDataParser documentParser
     ) {
         this.repository = repository;
         this.files = files;
@@ -61,8 +63,15 @@ public class DataImportService {
         this.opsAsync = opsAsync;
         this.categories = categories;
         this.projectResources = projectResources;
+        this.documentParser = documentParser;
         this.structuredExtractor = new StructuredDataExtractor(objectMapper);
         this.compatibilityEvaluator = new ImportCompatibilityEvaluator(objectMapper);
+    }
+
+    public DataImportService(DataRepository repository, FileObjectRepository files,
+            TemplateDataImportFacade templates, ObjectMapper objectMapper, AuditLogFacade auditLog,
+            OpsAsyncFacade opsAsync, DataCategoryService categories, ProjectResourceFacade projectResources) {
+        this(repository, files, templates, objectMapper, auditLog, opsAsync, categories, projectResources, null);
     }
 
     public DataImportService(
@@ -102,6 +111,10 @@ public class DataImportService {
         var actor = ActorContext.required();
         var template = templates.getPublished(actor.organizationId(), command.templateVersionId());
         var importPurpose = normalizeImportPurpose(command.importPurpose());
+        if ("EXPERIMENT".equals(sourceOwner) && !"EXPERIMENT_DRAFT".equals(importPurpose)) {
+            throw new ApiException(ApiErrorCode.VALIDATION_ERROR,
+                    "实验文件导入必须按已发布的 V9 实验数据模板生成草稿");
+        }
         if ("EXPERIMENT_DRAFT".equals(importPurpose)) {
             if (template.importContractVersion() != 9
                     || template.importContract() == null
@@ -116,6 +129,9 @@ public class DataImportService {
         var file = files.find(actor.organizationId(), command.sourceFileId())
                 .orElseThrow(() -> new ApiException(ApiErrorCode.FILE_NOT_READY, "数据源文件不存在"));
         var format = sourceFormat(file.originalName());
+        if ("DATA_CENTER".equals(sourceOwner) && Set.of("DOCX", "IMAGE").contains(format)) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "数据中心模板导入仅支持 XLS、XLSX 或 CSV");
+        }
         var duplicate = repository.findCompletedDuplicate(actor.organizationId(), file.sha256(), command.templateVersionId());
         if (duplicate.isPresent() && !command.duplicateOverride()) {
             throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,
@@ -134,7 +150,7 @@ public class DataImportService {
                 command.templateVersionId(), categoryId, command.duplicateOverride(), actor.userId(),
                 template.importContractVersion() > 0 ? template.importContractVersion() : null,
                 template.contractHash(), importPurpose, command.targetExperimentCategoryId(), sourceOwner));
-        repository.enqueueParse(UUID.randomUUID(), actor.organizationId(), id);
+        repository.enqueueParse(UUID.randomUUID(), actor.organizationId(), id, actor.userId());
         if (projectResources != null) {
             projectResources.replaceLinks(actor, ResourceType.DATA_IMPORT_JOB, id,
                     command.projectRelations() == null ? List.of() : command.projectRelations());
@@ -155,6 +171,42 @@ public class DataImportService {
     public PageResponse<DataRepository.Job> listExperimentJobs(UUID templateVersionId,
                                                                String status, String keyword, int page, int size) {
         return listJobs(templateVersionId, status, keyword, "EXPERIMENT", page, size);
+    }
+
+    @Transactional
+    public DataRepository.Job retryExperimentImport(UUID importJobId) {
+        var actor = ActorContext.required();
+        var job = repository.findJobForUpdate(actor.organizationId(), importJobId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "实验导入任务不存在"));
+        requireExperimentImportOwner(actor.organizationId(), importJobId);
+        if (!Set.of("FAILED", "CANCELLED").contains(job.status())) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "仅失败或已取消的实验导入任务可以重试");
+        }
+        repository.clearParsed(actor.organizationId(), importJobId);
+        repository.enqueueParse(UUID.randomUUID(), actor.organizationId(), importJobId, actor.userId());
+        return get(importJobId);
+    }
+
+    @Transactional
+    public void hideExperimentImport(UUID importJobId) {
+        var actor = ActorContext.required();
+        var job = repository.findJobForUpdate(actor.organizationId(), importJobId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "实验导入任务不存在"));
+        requireExperimentImportOwner(actor.organizationId(), importJobId);
+        if (Set.of("QUEUED", "PARSING", "VALIDATING", "COMMITTING").contains(job.status())) {
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "处理中任务不可删除，请等待处理结束");
+        }
+        if (repository.hideExperimentJob(actor.organizationId(), importJobId) != 1) {
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "任务状态已变化，请刷新后重试");
+        }
+    }
+
+    private void requireExperimentImportOwner(UUID organizationId, UUID importJobId) {
+        var owner = repository.findSourceOwner(organizationId, importJobId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "实验导入任务不存在"));
+        if (!"EXPERIMENT".equals(owner)) {
+            throw new ApiException(ApiErrorCode.PERMISSION_DENIED, "仅实验记录本导入任务可执行此操作");
+        }
     }
 
     private PageResponse<DataRepository.Job> listJobs(UUID templateVersionId,
@@ -244,24 +296,32 @@ public class DataImportService {
         if (!force && List.of("WAITING_MAPPING", "VALIDATING", "WAITING_CONFIRM", "COMPLETED").contains(job.status())) return;
         repository.updateJobStatus(organizationId, importJobId, "PARSING", 10, "READING_SOURCE", null);
         try {
-            var parsed = templates.parse(organizationId, job.templateVersionId(), job.sourceFileId());
-            repository.updateJobStatus(organizationId, importJobId, "PARSING", 45, "ANALYZING_STRUCTURE", null);
             var definition = templates.getVersion(organizationId, job.templateVersionId());
+            var experimentV9 = definition.importContractVersion() >= 9
+                    && "EXPERIMENT_DATA".equals(definition.importContract().path("templateUsage").asText(""));
+            var documentSource = Set.of("DOCX", "IMAGE").contains(job.sourceFormat());
+            var parsed = documentSource && documentParser != null
+                    ? documentParser.parse(organizationId, job.sourceFileId(), job.sourceFileName(),
+                            job.sourceSha256(), job.sourceFormat(), definition.fields())
+                    : templates.parse(organizationId, job.templateVersionId(), job.sourceFileId());
+            repository.updateJobStatus(organizationId, importJobId, "PARSING", 45, "ANALYZING_STRUCTURE", null);
             var originalBindings = templates.getBindings(organizationId, job.templateVersionId());
             var overrides = repository.listComponentOverrides(organizationId, importJobId);
             var bindings = applyComponentOverrides(originalBindings, overrides, definition.importContract());
-            var labelResolution = new BindingLabelResolver(objectMapper)
+            var labelResolution = documentSource ? null : new BindingLabelResolver(objectMapper)
                     .resolve(bindings, definition.fields(), parsed.sheets());
-            bindings = labelResolution.executableBindings();
-            var compatibility = applyCompatibilityOverrides(
+            if (labelResolution != null) bindings = labelResolution.executableBindings();
+            var compatibility = documentSource ? null : applyCompatibilityOverrides(
                     compatibilityEvaluator.evaluate(definition.importContract(), parsed.sheets(),
                             labelResolution.fieldResolutions()), overrides);
             var compatibilityReport = objectMapper.createObjectNode();
-            compatibilityReport.put("status", compatibility.status());
-            compatibilityReport.set("componentMatches", compatibility.componentMatches().deepCopy());
-            compatibilityReport.set("fieldResolutions", labelResolution.fieldResolutions().deepCopy());
+            compatibilityReport.put("status", documentSource ? "COMPATIBLE" : compatibility.status());
+            compatibilityReport.set("componentMatches", documentSource
+                    ? objectMapper.createArrayNode() : compatibility.componentMatches().deepCopy());
+            compatibilityReport.set("fieldResolutions", documentSource
+                    ? objectMapper.createArrayNode() : labelResolution.fieldResolutions().deepCopy());
             repository.saveCompatibilityReport(organizationId, importJobId,
-                    compatibility.status(), compatibilityReport);
+                    documentSource ? "COMPATIBLE" : compatibility.status(), compatibilityReport);
             var configured = repository.listSheets(organizationId, importJobId).stream()
                     .collect(java.util.stream.Collectors.toMap(DataRepository.Sheet::sheetId, item -> item, (left, right) -> left));
             if (force) repository.clearParsed(organizationId, importJobId);
@@ -288,11 +348,44 @@ public class DataImportService {
                         .put("structureFingerprint", parsedSheet.structureFingerprint() == null ? "" : parsedSheet.structureFingerprint());
                 structure.set("rows", objectMapper.valueToTree(parsedSheet.rows()));
                 if (parsedSheet.layoutIr() != null) structure.set("layoutIr", parsedSheet.layoutIr().deepCopy());
-                structure.set("componentMatches", compatibility.componentMatches().deepCopy());
+                structure.set("componentMatches", documentSource
+                        ? objectMapper.createArrayNode() : compatibility.componentMatches().deepCopy());
                 sheets.add(new DataRepository.Sheet(
                         UUID.randomUUID(), parsedSheet.sheetId(), parsedSheet.sheetName(), parsedSheet.sheetOrder(), selected,
                         headerRows, dataStart, dataEnd, structure, selected ? "PENDING" : "IGNORED"));
                 if (!selected) continue;
+
+                if (documentSource) {
+                    var candidates = parsedSheet.layoutIr().path("candidates");
+                    var raw = objectMapper.createObjectNode();
+                    var values = rowAt(parsedSheet.rows(), 2);
+                    for (int i = 0; i < definition.fields().size(); i++) {
+                        var field = definition.fields().get(i);
+                        var column = columnName(i + 1);
+                        var candidate = candidates.path(column);
+                        var status = candidate.path("status").asText("MISSING");
+                        var detail = objectMapper.createObjectNode()
+                                .put("dataPath", field.dataPath())
+                                .put("required", field.required())
+                                .put("identity", field.identity())
+                                .put("recognitionStatus", status)
+                                .put("sourceLocation", candidate.path("sourceLocation").asText(""));
+                        detail.set("alternatives", candidate.path("alternatives").deepCopy());
+                        var binding = bindings.stream().filter(item -> field.fieldCode().equals(item.fieldCode()))
+                                .findFirst().orElse(null);
+                        if (binding != null) detail.put("bindingId", binding.bindingId());
+                        var action = "AMBIGUOUS".equals(status) || "REVIEW_REQUIRED".equals(status)
+                                ? "PENDING" : "MISSING".equals(status) && !field.required() ? "IGNORE" : "MAP";
+                        mappings.add(new DataRepository.Mapping(UUID.randomUUID(), parsedSheet.sheetId(), column,
+                                field.displayName(), field.fieldCode(), field.displayName(), action,
+                                field.dataType(), null, field.defaultUnit(), detail,
+                                "MAP".equals(action) ? "MATCHED" : "PENDING"));
+                        raw.put(column, i < values.size() ? values.get(i) : "");
+                    }
+                    rows.add(new DataRepository.Row(UUID.randomUUID(), parsedSheet.sheetId(), 2, raw,
+                            raw.deepCopy(), raw.deepCopy(), "STAGED", sourceMetadata(parsedSheet, 2, raw)));
+                    continue;
+                }
 
                 // Structured template bindings are executable import instructions. They
                 // must run before the generic header mapper, otherwise a horizontal table
@@ -304,6 +397,7 @@ public class DataImportService {
                     rows.addAll(structured.get().rows());
                     continue;
                 }
+                if (experimentV9) continue;
                 var header = noHeader ? List.<String>of() : headerAt(parsedSheet.rows(), headerRows);
                 var resolvedDataStart = dataStart;
                 var profile = repository.findMappingProfile(organizationId, job.templateVersionId(),
@@ -407,6 +501,10 @@ public class DataImportService {
                     rows.add(new DataRepository.Row(UUID.randomUUID(), parsedSheet.sheetId(), rowIndex, raw, raw.deepCopy(),
                             raw.deepCopy(), "STAGED", metadata));
                 }
+            }
+            if (experimentV9 && rows.isEmpty()) {
+                throw new ApiException(ApiErrorCode.VALIDATION_ERROR,
+                        "文件中没有可导入的实验数据；请填写本次实验数据后重传，或使用在线新建");
             }
             repository.updateJobStatus(organizationId, importJobId, "PARSING", 95, "SAVING_PARSED_DATA", null);
             repository.saveParsed(importJobId, parsed.parserVersion(), sheets, mappings, rows, importJobId);
@@ -831,7 +929,8 @@ public class DataImportService {
             if (sheet.layoutIr() != null) for (var fact : sheet.layoutIr().path("cells")) {
                 if (!address.equalsIgnoreCase(fact.path("address").asText(""))) continue;
                 for (var key : List.of("valueSource", "formulaExpression", "cachedValue",
-                        "calculationSource", "calculationStatus", "formulaTrustStatus")) {
+                        "calculationSource", "calculationStatus", "formulaTrustStatus",
+                        "sourceLocation", "sourceLabel", "recognitionStatus")) {
                     if (fact.has(key)) cell.set(key, fact.path(key).deepCopy());
                 }
                 break;
@@ -1235,6 +1334,8 @@ public class DataImportService {
         if (lower.endsWith(".xlsx")) return "XLSX";
         if (lower.endsWith(".xls")) return "XLS";
         if (lower.endsWith(".csv")) return "CSV";
+        if (lower.endsWith(".docx")) return "DOCX";
+        if (lower.matches(".*\\.(png|jpg|jpeg|gif|webp|bmp|tif|tiff)$")) return "IMAGE";
         throw new ApiException(ApiErrorCode.BAD_REQUEST, "数据中心仅支持 XLS、XLSX 或 CSV");
     }
 

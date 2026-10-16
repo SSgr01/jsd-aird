@@ -486,6 +486,19 @@ public class JdbcTemplateRepository implements TemplateRepository {
     }
 
     @Override
+    public int attachInitialSnapshot(UUID organizationId, UUID versionId, UUID fileId,
+                                     String snapshotHash, String workspaceHash) {
+        return jdbcTemplate.update("""
+                UPDATE tpl.template_version tv
+                SET editor_snapshot_file_id = ?, editor_snapshot_hash = ?, workspace_hash = ?,
+                    lock_version = lock_version + 1, updated_at = now()
+                FROM tpl.template t
+                WHERE tv.template_id = t.id AND tv.id = ? AND t.organization_id = ?
+                  AND tv.status = 'DRAFT' AND tv.editor_snapshot_file_id IS NULL
+                """, fileId, snapshotHash, workspaceHash, versionId, organizationId);
+    }
+
+    @Override
     public void replaceMappings(UUID versionId, TemplateFormat format, JsonNode mappings) {
         jdbcTemplate.update("DELETE FROM tpl.template_mapping WHERE template_version_id = ?", versionId);
         var arguments = new ArrayList<Object[]>();

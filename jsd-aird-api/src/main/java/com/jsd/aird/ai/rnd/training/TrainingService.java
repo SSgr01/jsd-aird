@@ -207,7 +207,6 @@ public class TrainingService {
 
     public PageResponse<ModelSummary> models(String status,String category,String keyword,int page,int size){var a=actor();return repository.models(a.organizationId(),status,category,keyword,page,size);}
     public ModelDetail model(UUID id){try{var detail=repository.modelDetail(actor().organizationId(),id);var testOnlySimulation=detail.modelCard().path("testOnlySimulation").asBoolean();var testActivationAllowed=syntheticTestAuthorization.allows(detail.model().dataNature(),detail.model().productionEligible(),testOnlySimulation);return new ModelDetail(detail.model(),detail.snapshot(),detail.applicabilityDomain(),detail.modelCard(),detail.rejectionReasons(),detail.releases(),testActivationAllowed);}catch(Exception e){throw new ApiException(ApiErrorCode.NOT_FOUND,"模型版本不存在");}}
-    public ModelComparison comparison(UUID id){var a=actor();var candidate=repository.model(a.organizationId(),id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"模型版本不存在"));var active=repository.jdbc().query("SELECT id,metrics_jsonb,training_snapshot_id FROM ai.model_version WHERE organization_id=? AND target_id=? AND status='ACTIVE'",(rs,n)->new Object[]{rs.getObject(1,UUID.class),repository.node(rs,"metrics_jsonb"),rs.getObject(3,UUID.class)},a.organizationId(),candidate.targetId()).stream().findFirst().orElse(null);var baseline=candidate.metrics().path("baselines");var reasons=new ArrayList<String>();if(active!=null&&"NOT_COMPARABLE".equals(candidate.comparisonStatus()))reasons.add("当前候选与正式模型没有同一比较集，不能据此判断优劣");return new ModelComparison(id,active==null?null:(UUID)active[0],candidate.comparisonStatus(),active==null||!"NOT_COMPARABLE".equals(candidate.comparisonStatus()),candidate.metrics(),active==null?json.createObjectNode():(JsonNode)active[1],baseline,List.copyOf(reasons));}
 
     @Transactional
     public ModelActionResult activate(UUID id,ModelActionCommand command,String key){return changeModel(id,command,"ACTIVATE",key);}
@@ -224,6 +223,7 @@ public class TrainingService {
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "模型版本不存在"));
         if (model.revision() != command.expectedRevision()) throw new ApiException(ApiErrorCode.VERSION_CONFLICT);
 
+        repository.jdbc().query("SELECT id FROM ai.prediction_target WHERE organization_id=? AND id=? FOR UPDATE",(rs,n)->rs.getObject(1),actor.organizationId(),model.targetId());
         var active = repository.jdbc().query(
                 "SELECT id FROM ai.model_version WHERE organization_id=? AND target_id=? AND status='ACTIVE' FOR UPDATE",
                 (rs, n) -> rs.getObject(1, UUID.class), actor.organizationId(), model.targetId())
@@ -268,31 +268,23 @@ public class TrainingService {
                 """, (rs, n) -> new Object[]{rs.getObject(1, UUID.class), rs.getObject(2, UUID.class),
                 repository.node(rs, "configuration_jsonb")}, actor.organizationId(), model.targetId())
                 .stream().findFirst().orElseThrow();
-        if (inferencePolicies[0] == null) throw new ApiException(ApiErrorCode.QUALITY_POLICY_NOT_READY);
-
-        // A candidate receives the current published DOMAIN policy exactly once. A rollback
-        // reuses the domain binding frozen with that historical model; changing its payload
-        // would violate the model immutability trigger.
+        // Quality and boundary display settings are optional. Scoring uses the model's
+        // frozen applicability data and a built-in result explanation when no settings exist.
+        // Keep honoring a previously published boundary setting for compatibility.
         if ("ACTIVATE".equals(action)) {
-            if (inferencePolicies[1] == null || !((JsonNode) inferencePolicies[2]).path("nearBoundaryRatio").isNumber()) {
-                throw new ApiException(ApiErrorCode.DOMAIN_POLICY_NOT_READY);
+            var domainPolicyId = (UUID) inferencePolicies[1];
+            var domainConfig = (JsonNode) inferencePolicies[2];
+            if (domainPolicyId != null && domainConfig != null && domainConfig.path("nearBoundaryRatio").isNumber()) {
+                var domain = (ObjectNode) repository.jdbc().queryForObject(
+                        "SELECT applicability_domain_jsonb FROM ai.model_version WHERE organization_id=? AND id=?",
+                        (rs, n) -> repository.node(rs, "applicability_domain_jsonb"), actor.organizationId(), id).deepCopy();
+                domainConfig.fields().forEachRemaining(entry -> {
+                    if (!Set.of("features", "minimum", "maximum").contains(entry.getKey())) domain.set(entry.getKey(), entry.getValue());
+                });
+                repository.jdbc().update(
+                        "UPDATE ai.model_version SET domain_policy_version_id=?,applicability_domain_jsonb=? WHERE organization_id=? AND id=?",
+                        domainPolicyId, repository.pg(domain), actor.organizationId(), id);
             }
-            var domain = (ObjectNode) repository.jdbc().queryForObject(
-                    "SELECT applicability_domain_jsonb FROM ai.model_version WHERE organization_id=? AND id=?",
-                    (rs, n) -> repository.node(rs, "applicability_domain_jsonb"), actor.organizationId(), id).deepCopy();
-            ((JsonNode) inferencePolicies[2]).fields().forEachRemaining(entry -> {
-                if (!Set.of("features", "minimum", "maximum").contains(entry.getKey())) {
-                    domain.set(entry.getKey(), entry.getValue());
-                }
-            });
-            repository.jdbc().update(
-                    "UPDATE ai.model_version SET domain_policy_version_id=?,applicability_domain_jsonb=? WHERE organization_id=? AND id=?",
-                    inferencePolicies[1], repository.pg(domain), actor.organizationId(), id);
-        } else {
-            var historicalDomain = repository.jdbc().query(
-                    "SELECT domain_policy_version_id FROM ai.model_version WHERE organization_id=? AND id=?",
-                    (rs, n) -> rs.getObject(1, UUID.class), actor.organizationId(), id).stream().findFirst().orElse(null);
-            if (historicalDomain == null) throw new ApiException(ApiErrorCode.DOMAIN_POLICY_NOT_READY);
         }
 
         if (active != null && !active.equals(id)) {
@@ -303,6 +295,7 @@ public class TrainingService {
                 "UPDATE ai.model_version SET status='ACTIVE',revision=revision+1,updated_at=now() WHERE organization_id=? AND id=? AND revision=?",
                 actor.organizationId(), id, model.revision());
         if (updated != 1) throw new ApiException(ApiErrorCode.VERSION_CONFLICT);
+        repository.jdbc().update("UPDATE ai.prediction_target t SET current_version_id=m.target_version_id,current_input_scheme_id=m.input_scheme_id FROM ai.model_version m WHERE m.organization_id=t.organization_id AND m.target_id=t.id AND m.id=? AND m.organization_id=? AND m.workbench_run_id IS NOT NULL",id,actor.organizationId());
         insertRelease(actor, id, active, action, command.reason(), key);
         return new ModelActionResult(id, "ACTIVE", id, model.revision() + 1, Instant.now());
     }

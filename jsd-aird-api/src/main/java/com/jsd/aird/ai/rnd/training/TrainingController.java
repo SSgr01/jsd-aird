@@ -25,7 +25,6 @@ public class TrainingController {
     @GetMapping("/snapshots/{id}/items") public ApiResponse<?> snapshotItems(@PathVariable UUID id,@RequestParam(defaultValue="1")int page,@RequestParam(defaultValue="20")int size){return ok(service.snapshotItems(id,page,size));}
     @GetMapping("/models") public ApiResponse<?> models(@RequestParam(required=false)String status,@RequestParam(required=false)String category,@RequestParam(required=false)String keyword,@RequestParam(defaultValue="1")int page,@RequestParam(defaultValue="20")int size){return ok(service.models(status,category,keyword,page,size));}
     @GetMapping("/models/{id}") public ApiResponse<?> model(@PathVariable UUID id){return ok(service.model(id));}
-    @GetMapping("/models/{id}/comparison") public ApiResponse<?> comparison(@PathVariable UUID id){return ok(service.comparison(id));}
     @PostMapping("/models/{id}/activate") public ApiResponse<?> activate(@PathVariable UUID id,@RequestBody ModelActionCommand body,@RequestHeader("Idempotency-Key") String key){return ok(service.activate(id,body,key));}
     @PostMapping("/models/{id}/pause") public ApiResponse<?> pause(@PathVariable UUID id,@RequestBody ModelActionCommand body,@RequestHeader("Idempotency-Key") String key){return ok(service.pause(id,body,key));}
     @PostMapping("/models/{id}/rollback") public ApiResponse<?> rollback(@PathVariable UUID id,@RequestBody ModelActionCommand body,@RequestHeader("Idempotency-Key") String key){return ok(service.rollback(id,body,key));}

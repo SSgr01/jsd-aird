@@ -1,0 +1,1349 @@
+{
+  "version": "2026-10-15.1",
+  "pages": [
+    {
+      "id": "home",
+      "title": "工作台",
+      "path": "/dashboard",
+      "permissions": [],
+      "resourceType": "SYSTEM",
+      "contextPatterns": []
+    },
+    {
+      "id": "customers",
+      "title": "客户管理",
+      "path": "/partners",
+      "permissions": [
+        "customer.view"
+      ],
+      "resourceType": "CUSTOMER",
+      "contextPatterns": [
+        "^/partners/[^/]+$"
+      ]
+    },
+    {
+      "id": "template-upload",
+      "title": "模板上传",
+      "path": "/templates/upload",
+      "permissions": [
+        "template.upload"
+      ],
+      "resourceType": "TEMPLATE",
+      "contextPatterns": []
+    },
+    {
+      "id": "template-library",
+      "title": "模板查看",
+      "path": "/templates/library",
+      "permissions": [
+        "template.view"
+      ],
+      "resourceType": "TEMPLATE",
+      "contextPatterns": [
+        "^/templates/[^/]+/workspace$",
+        "^/render/import/[^/]+$"
+      ]
+    },
+    {
+      "id": "projects",
+      "title": "项目列表",
+      "path": "/projects/list",
+      "permissions": [
+        "project.view"
+      ],
+      "resourceType": "PROJECT",
+      "contextPatterns": [
+        "^/projects/[^/]+$",
+        "^/projects/[^/]+/documents/[^/]+$"
+      ]
+    },
+    {
+      "id": "project-phases",
+      "title": "阶段",
+      "path": "/projects/phases",
+      "permissions": [
+        "project.view"
+      ],
+      "resourceType": "PROJECT",
+      "contextPatterns": []
+    },
+    {
+      "id": "project-tasks",
+      "title": "任务",
+      "path": "/projects/tasks",
+      "permissions": [
+        "project.view"
+      ],
+      "resourceType": "PROJECT",
+      "contextPatterns": []
+    },
+    {
+      "id": "experiment-new",
+      "title": "在线新建实验",
+      "path": "/experiments/new",
+      "permissions": [
+        "experiment.create"
+      ],
+      "resourceType": "EXPERIMENT",
+      "contextPatterns": []
+    },
+    {
+      "id": "experiment-upload",
+      "title": "实验文件导入",
+      "path": "/experiments/upload",
+      "permissions": [
+        "experiment.create"
+      ],
+      "resourceType": "EXPERIMENT",
+      "contextPatterns": [
+        "^/experiments/template-imports/[^/]+$",
+        "^/experiments/imports/[^/]+$"
+      ]
+    },
+    {
+      "id": "experiments",
+      "title": "实验查看",
+      "path": "/experiments/list",
+      "permissions": [
+        "experiment.view"
+      ],
+      "resourceType": "EXPERIMENT",
+      "contextPatterns": [
+        "^/experiments/[^/]+$"
+      ]
+    },
+    {
+      "id": "report-upload",
+      "title": "综合测试报告上传",
+      "path": "/research-test/upload",
+      "permissions": [
+        "research-test.report.create"
+      ],
+      "resourceType": "RESEARCH_TEST_REPORT",
+      "contextPatterns": []
+    },
+    {
+      "id": "reports",
+      "title": "综合测试报告查看",
+      "path": "/research-test/reports",
+      "permissions": [
+        "research-test.report.view"
+      ],
+      "resourceType": "RESEARCH_TEST_REPORT",
+      "contextPatterns": [
+        "^/research-test/reports/[^/]+$"
+      ]
+    },
+    {
+      "id": "standard-upload",
+      "title": "测试标准上传",
+      "path": "/research-test/standard-upload",
+      "permissions": [
+        "research-test.standard.create"
+      ],
+      "resourceType": "RESEARCH_TEST_STANDARD",
+      "contextPatterns": []
+    },
+    {
+      "id": "standards",
+      "title": "测试标准方法",
+      "path": "/research-test/standards",
+      "permissions": [
+        "research-test.standard.view"
+      ],
+      "resourceType": "RESEARCH_TEST_STANDARD",
+      "contextPatterns": [
+        "^/research-test/standards/[^/]+$"
+      ]
+    },
+    {
+      "id": "quality-upload",
+      "title": "品管部数据上传",
+      "path": "/quality/upload",
+      "permissions": [
+        "quality.upload"
+      ],
+      "resourceType": "QUALITY",
+      "contextPatterns": []
+    },
+    {
+      "id": "quality-view",
+      "title": "品管部数据查看",
+      "path": "/quality/view",
+      "permissions": [
+        "quality.view"
+      ],
+      "resourceType": "QUALITY",
+      "contextPatterns": [
+        "^/quality/records/[^/]+$"
+      ]
+    },
+    {
+      "id": "spectrum-upload",
+      "title": "图谱上传",
+      "path": "/spectrum/upload",
+      "permissions": [
+        "spectrum.view"
+      ],
+      "resourceType": "SPECTRUM",
+      "contextPatterns": []
+    },
+    {
+      "id": "spectrum-view",
+      "title": "图谱查看",
+      "path": "/spectrum/view",
+      "permissions": [
+        "spectrum.view"
+      ],
+      "resourceType": "SPECTRUM",
+      "contextPatterns": []
+    },
+    {
+      "id": "spectrum-chat",
+      "title": "AI图谱分析",
+      "path": "/spectrum/chat",
+      "permissions": [
+        "spectrum.view"
+      ],
+      "resourceType": "SPECTRUM",
+      "contextPatterns": []
+    },
+    {
+      "id": "production-upload",
+      "title": "生产单上传",
+      "path": "/production-orders/upload",
+      "permissions": [
+        "production.view"
+      ],
+      "resourceType": "PRODUCTION_ORDER",
+      "contextPatterns": [
+        "^/production-orders/uploads/[^/]+/workspace$"
+      ]
+    },
+    {
+      "id": "production-list",
+      "title": "生产单查看",
+      "path": "/production-orders/list",
+      "permissions": [
+        "production.view"
+      ],
+      "resourceType": "PRODUCTION_ORDER",
+      "contextPatterns": [
+        "^/production-orders/[^/]+/workspace$"
+      ]
+    },
+    {
+      "id": "knowledge-upload",
+      "title": "资料上传",
+      "path": "/knowledge/library",
+      "permissions": [
+        "knowledge.upload"
+      ],
+      "resourceType": "KNOWLEDGE",
+      "contextPatterns": []
+    },
+    {
+      "id": "knowledge-view",
+      "title": "知识库查看",
+      "path": "/knowledge/view",
+      "permissions": [
+        "knowledge.view"
+      ],
+      "resourceType": "KNOWLEDGE",
+      "contextPatterns": [
+        "^/knowledge/documents/[^/]+$"
+      ]
+    },
+    {
+      "id": "knowledge-review",
+      "title": "知识资料审核",
+      "path": "/knowledge/view?reviewStatus=PENDING_REVIEW",
+      "permissions": [
+        "knowledge.review"
+      ],
+      "resourceType": "KNOWLEDGE",
+      "contextPatterns": [
+        "^/knowledge/review/[^/]+/[^/]+$"
+      ]
+    },
+    {
+      "id": "data-upload",
+      "title": "数据上传",
+      "path": "/data/upload",
+      "permissions": [
+        "data.create"
+      ],
+      "resourceType": "DATA",
+      "contextPatterns": [
+        "^/data/import-jobs/[^/]+$"
+      ]
+    },
+    {
+      "id": "data-view",
+      "title": "数据查看",
+      "path": "/data/view",
+      "permissions": [
+        "data.view"
+      ],
+      "resourceType": "DATA",
+      "contextPatterns": [
+        "^/data/recognition-jobs/[^/]+$"
+      ]
+    },
+    {
+      "id": "file-search",
+      "title": "文件检索",
+      "path": "/knowledge/search",
+      "permissions": [
+        "ai.use"
+      ],
+      "resourceType": "AI",
+      "contextPatterns": []
+    },
+    {
+      "id": "research-qa",
+      "title": "AI研发问答",
+      "path": "/assistant",
+      "permissions": [
+        "ai.use"
+      ],
+      "resourceType": "AI",
+      "contextPatterns": []
+    },
+    {
+      "id": "formula-prediction",
+      "title": "AI配方预测",
+      "path": "/assistant/formula-prediction",
+      "permissions": [
+        "ai.formula.predict"
+      ],
+      "resourceType": "AI",
+      "contextPatterns": []
+    },
+    {
+      "id": "performance-prediction",
+      "title": "性能预测",
+      "path": "/assistant/performance-prediction",
+      "permissions": [
+        "ai.performance.predict"
+      ],
+      "resourceType": "AI",
+      "contextPatterns": []
+    },
+    {
+      "id": "experiment-optimization",
+      "title": "AI实验优化",
+      "path": "/assistant/experiment-optimization",
+      "permissions": [
+        "ai.experiment.optimize"
+      ],
+      "resourceType": "AI",
+      "contextPatterns": []
+    },
+    {
+      "id": "model-center",
+      "title": "模型中心",
+      "path": "/assistant/model-center",
+      "permissions": [
+        "ai.model.read",
+        "ai.modeling.read"
+      ],
+      "resourceType": "AI",
+      "contextPatterns": [
+        "^/assistant/model-center/targets/[^/]+$"
+      ]
+    },
+    {
+      "id": "modeling-workbench",
+      "title": "建模工具",
+      "path": "/assistant/model-center?tab=workbench",
+      "permissions": [
+        "ai.modeling.read"
+      ],
+      "resourceType": "AI",
+      "contextPatterns": [
+        "^/assistant/modeling-settings(?:/samples(?:/[^/]+)?)?$",
+        "^/assistant/model-center/samples(?:/[^/]+)?$"
+      ]
+    },
+    {
+      "id": "model-management",
+      "title": "模型列表",
+      "path": "/assistant/model-center?tab=models",
+      "permissions": [
+        "ai.model.read"
+      ],
+      "resourceType": "AI",
+      "contextPatterns": [
+        "^/assistant/model-management$"
+      ]
+    },
+    {
+      "id": "inventory-query",
+      "title": "库存查询",
+      "path": "/inventory/query",
+      "permissions": [
+        "inventory.view"
+      ],
+      "resourceType": "INVENTORY",
+      "contextPatterns": []
+    },
+    {
+      "id": "inventory-rnd",
+      "title": "研发库存表",
+      "path": "/inventory/rnd",
+      "permissions": [
+        "inventory.view"
+      ],
+      "resourceType": "INVENTORY",
+      "contextPatterns": []
+    },
+    {
+      "id": "inventory-production",
+      "title": "生产库存表",
+      "path": "/inventory/production",
+      "permissions": [
+        "inventory.view"
+      ],
+      "resourceType": "INVENTORY",
+      "contextPatterns": []
+    },
+    {
+      "id": "inventory-samples",
+      "title": "发样记录表",
+      "path": "/inventory/samples",
+      "permissions": [
+        "inventory.view"
+      ],
+      "resourceType": "INVENTORY",
+      "contextPatterns": []
+    },
+    {
+      "id": "inventory-shipments",
+      "title": "出货记录表",
+      "path": "/inventory/shipments",
+      "permissions": [
+        "inventory.view"
+      ],
+      "resourceType": "INVENTORY",
+      "contextPatterns": []
+    },
+    {
+      "id": "users",
+      "title": "用户管理",
+      "path": "/system/users",
+      "permissions": [
+        "system.user.view"
+      ],
+      "resourceType": "USER",
+      "contextPatterns": []
+    },
+    {
+      "id": "permissions",
+      "title": "用户权限配置",
+      "path": "/system/user-permissions",
+      "permissions": [
+        "system.permission.manage"
+      ],
+      "resourceType": "USER",
+      "contextPatterns": []
+    },
+    {
+      "id": "audit",
+      "title": "操作日志",
+      "path": "/system/audit-logs",
+      "permissions": [
+        "system.audit.view"
+      ],
+      "resourceType": "AUDIT_LOG",
+      "contextPatterns": []
+    },
+    {
+      "id": "dictionary",
+      "title": "基础字典",
+      "path": "/system/dictionary",
+      "permissions": [
+        "system.dictionary.manage"
+      ],
+      "resourceType": "SYSTEM",
+      "contextPatterns": []
+    },
+    {
+      "id": "parameters",
+      "title": "系统参数",
+      "path": "/system/parameters",
+      "permissions": [
+        "system.parameter.manage"
+      ],
+      "resourceType": "SYSTEM",
+      "contextPatterns": []
+    },
+    {
+      "id": "password",
+      "title": "修改密码",
+      "path": "/change-password",
+      "permissions": [],
+      "resourceType": "SYSTEM",
+      "contextPatterns": []
+    }
+  ],
+  "sections": [
+    {
+      "id": "navigation",
+      "title": "找到功能与使用操作助手",
+      "pageIds": [
+        "home"
+      ],
+      "requiredPermissions": [],
+      "keywords": [
+        "功能入口",
+        "菜单",
+        "帮助",
+        "找不到",
+        "操作助手"
+      ],
+      "questions": [
+        "怎样找到系统里的功能？"
+      ]
+    },
+    {
+      "id": "password",
+      "title": "修改登录密码",
+      "pageIds": [
+        "password"
+      ],
+      "requiredPermissions": [],
+      "keywords": [
+        "密码",
+        "账号",
+        "修改密码",
+        "安全"
+      ],
+      "questions": [
+        "怎样修改密码？"
+      ]
+    },
+    {
+      "id": "customer-view",
+      "title": "查找客户资料",
+      "pageIds": [
+        "customers"
+      ],
+      "requiredPermissions": [],
+      "keywords": [
+        "客户",
+        "公司",
+        "负责人",
+        "客户查询"
+      ],
+      "questions": [
+        "怎样查找客户资料？"
+      ]
+    },
+    {
+      "id": "customer-create",
+      "title": "新建客户",
+      "pageIds": [
+        "customers"
+      ],
+      "requiredPermissions": [
+        "customer.create"
+      ],
+      "keywords": [
+        "新增客户",
+        "创建公司",
+        "客户录入"
+      ],
+      "questions": [
+        "怎样新建客户？"
+      ]
+    },
+    {
+      "id": "template-import",
+      "title": "上传模板文件",
+      "pageIds": [
+        "template-upload"
+      ],
+      "requiredPermissions": [
+        "template.upload"
+      ],
+      "keywords": [
+        "模板导入",
+        "Word模板",
+        "Excel模板",
+        "模板上传"
+      ],
+      "questions": [
+        "怎样上传模板？"
+      ]
+    },
+    {
+      "id": "template-view",
+      "title": "查看模板与版本",
+      "pageIds": [
+        "template-library"
+      ],
+      "requiredPermissions": [],
+      "keywords": [
+        "模板查看",
+        "模板分类",
+        "模板版本",
+        "找模板"
+      ],
+      "questions": [
+        "在哪里查看模板版本？"
+      ]
+    },
+    {
+      "id": "template-publish",
+      "title": "核对并发布模板",
+      "pageIds": [
+        "template-library"
+      ],
+      "requiredPermissions": [
+        "template.update",
+        "template.publish"
+      ],
+      "keywords": [
+        "发布模板",
+        "识别字段",
+        "模板草稿",
+        "导入契约"
+      ],
+      "questions": [
+        "怎样发布可用于导入的模板？"
+      ]
+    },
+    {
+      "id": "project-view",
+      "title": "查找项目及关联资料",
+      "pageIds": [
+        "projects"
+      ],
+      "requiredPermissions": [],
+      "keywords": [
+        "项目列表",
+        "项目详情",
+        "项目文档",
+        "查看项目"
+      ],
+      "questions": [
+        "怎样查看项目及关联资料？"
+      ]
+    },
+    {
+      "id": "project-create",
+      "title": "新建项目",
+      "pageIds": [
+        "projects"
+      ],
+      "requiredPermissions": [
+        "project.create"
+      ],
+      "keywords": [
+        "新建项目",
+        "创建研发项目",
+        "项目录入"
+      ],
+      "questions": [
+        "怎样新建项目？"
+      ]
+    },
+    {
+      "id": "project-phases",
+      "title": "查看项目阶段",
+      "pageIds": [
+        "project-phases"
+      ],
+      "requiredPermissions": [],
+      "keywords": [
+        "项目阶段",
+        "阶段进度",
+        "里程碑"
+      ],
+      "questions": [
+        "在哪里查看项目阶段？"
+      ]
+    },
+    {
+      "id": "project-tasks",
+      "title": "查看项目任务",
+      "pageIds": [
+        "project-tasks"
+      ],
+      "requiredPermissions": [],
+      "keywords": [
+        "项目任务",
+        "任务看板",
+        "任务进度"
+      ],
+      "questions": [
+        "在哪里查看项目任务？"
+      ]
+    },
+    {
+      "id": "experiment-new",
+      "title": "在线新建实验记录",
+      "pageIds": [
+        "experiment-new"
+      ],
+      "requiredPermissions": [
+        "experiment.create"
+      ],
+      "keywords": [
+        "在线实验",
+        "新建实验",
+        "空白Word",
+        "空白Excel",
+        "实验模板"
+      ],
+      "questions": [
+        "怎样在线新建实验记录？"
+      ]
+    },
+    {
+      "id": "experiment-import",
+      "title": "导入实验文件",
+      "pageIds": [
+        "experiment-upload"
+      ],
+      "requiredPermissions": [
+        "experiment.create"
+      ],
+      "keywords": [
+        "实验文件导入",
+        "实验数据导入",
+        "上传实验记录",
+        "Excel实验",
+        "实验表格",
+        "把Excel放进系统"
+      ],
+      "questions": [
+        "怎样导入实验记录？"
+      ]
+    },
+    {
+      "id": "experiment-view",
+      "title": "查找并查看实验记录",
+      "pageIds": [
+        "experiments"
+      ],
+      "requiredPermissions": [],
+      "keywords": [
+        "实验查看",
+        "实验记录本",
+        "实验列表",
+        "实验详情"
+      ],
+      "questions": [
+        "怎样查看已导入的实验记录？"
+      ]
+    },
+    {
+      "id": "report-upload",
+      "title": "上传综合测试报告",
+      "pageIds": [
+        "report-upload"
+      ],
+      "requiredPermissions": [
+        "research-test.report.create"
+      ],
+      "keywords": [
+        "报告上传",
+        "综合测试报告",
+        "测试报告导入"
+      ],
+      "questions": [
+        "怎样上传综合测试报告？"
+      ]
+    },
+    {
+      "id": "report-view",
+      "title": "查看综合测试报告",
+      "pageIds": [
+        "reports"
+      ],
+      "requiredPermissions": [],
+      "keywords": [
+        "报告查看",
+        "测试结果",
+        "报告草稿"
+      ],
+      "questions": [
+        "在哪里查看综合测试报告？"
+      ]
+    },
+    {
+      "id": "standard-upload",
+      "title": "上传测试标准方法",
+      "pageIds": [
+        "standard-upload"
+      ],
+      "requiredPermissions": [
+        "research-test.standard.create"
+      ],
+      "keywords": [
+        "标准上传",
+        "测试方法",
+        "测试标准导入",
+        "生效日期"
+      ],
+      "questions": [
+        "怎样上传测试标准方法？"
+      ]
+    },
+    {
+      "id": "standard-view",
+      "title": "查找测试标准方法",
+      "pageIds": [
+        "standards"
+      ],
+      "requiredPermissions": [],
+      "keywords": [
+        "标准查看",
+        "测试方法查询",
+        "标准方法"
+      ],
+      "questions": [
+        "怎样查找测试标准方法？"
+      ]
+    },
+    {
+      "id": "quality-upload",
+      "title": "上传品管部数据",
+      "pageIds": [
+        "quality-upload"
+      ],
+      "requiredPermissions": [
+        "quality.upload"
+      ],
+      "keywords": [
+        "品管上传",
+        "质量数据",
+        "品管文件",
+        "检验数据上传"
+      ],
+      "questions": [
+        "怎样上传品管部数据？"
+      ]
+    },
+    {
+      "id": "quality-view",
+      "title": "查看品管数据",
+      "pageIds": [
+        "quality-view"
+      ],
+      "requiredPermissions": [],
+      "keywords": [
+        "品管查看",
+        "质量记录",
+        "检验结果"
+      ],
+      "questions": [
+        "怎样查看品管数据？"
+      ]
+    },
+    {
+      "id": "spectrum-upload",
+      "title": "上传图谱",
+      "pageIds": [
+        "spectrum-upload"
+      ],
+      "requiredPermissions": [
+        "spectrum.create"
+      ],
+      "keywords": [
+        "图谱上传",
+        "谱图",
+        "PDF图谱",
+        "红外图谱",
+        "曲线图片"
+      ],
+      "questions": [
+        "怎样上传图谱文件？"
+      ]
+    },
+    {
+      "id": "spectrum-view",
+      "title": "查看图谱记录",
+      "pageIds": [
+        "spectrum-view"
+      ],
+      "requiredPermissions": [],
+      "keywords": [
+        "图谱查看",
+        "谱图查询",
+        "样品图谱"
+      ],
+      "questions": [
+        "在哪里查看已上传图谱？"
+      ]
+    },
+    {
+      "id": "spectrum-chat",
+      "title": "使用 AI 图谱分析",
+      "pageIds": [
+        "spectrum-chat"
+      ],
+      "requiredPermissions": [
+        "ai.use"
+      ],
+      "keywords": [
+        "图谱分析",
+        "图谱问答",
+        "谱图对比"
+      ],
+      "questions": [
+        "怎样使用 AI 图谱分析？"
+      ]
+    },
+    {
+      "id": "production-upload",
+      "title": "上传生产单",
+      "pageIds": [
+        "production-upload"
+      ],
+      "requiredPermissions": [
+        "production.create"
+      ],
+      "keywords": [
+        "生产单上传",
+        "生产单导入",
+        "生产Excel",
+        "订单文件"
+      ],
+      "questions": [
+        "怎样上传生产单？"
+      ]
+    },
+    {
+      "id": "production-view",
+      "title": "查看生产单及工作台",
+      "pageIds": [
+        "production-list"
+      ],
+      "requiredPermissions": [],
+      "keywords": [
+        "生产单查看",
+        "生产工作台",
+        "生产记录"
+      ],
+      "questions": [
+        "怎样打开生产单工作台？"
+      ]
+    },
+    {
+      "id": "knowledge-upload",
+      "title": "上传知识资料",
+      "pageIds": [
+        "knowledge-upload"
+      ],
+      "requiredPermissions": [
+        "knowledge.upload"
+      ],
+      "keywords": [
+        "知识库上传",
+        "研发资料",
+        "PDF资料",
+        "上传文档"
+      ],
+      "questions": [
+        "怎样上传研发知识资料？"
+      ]
+    },
+    {
+      "id": "knowledge-view",
+      "title": "查看知识资料及版本",
+      "pageIds": [
+        "knowledge-view"
+      ],
+      "requiredPermissions": [],
+      "keywords": [
+        "知识库查看",
+        "知识文档",
+        "资料版本"
+      ],
+      "questions": [
+        "怎样查找知识资料？"
+      ]
+    },
+    {
+      "id": "knowledge-review",
+      "title": "核对知识资料",
+      "pageIds": [
+        "knowledge-review"
+      ],
+      "requiredPermissions": [
+        "knowledge.review"
+      ],
+      "keywords": [
+        "知识审核",
+        "待审核资料",
+        "人工校对"
+      ],
+      "questions": [
+        "在哪里核对待审核知识资料？"
+      ]
+    },
+    {
+      "id": "data-import",
+      "title": "导入数据中心文件",
+      "pageIds": [
+        "data-upload"
+      ],
+      "requiredPermissions": [
+        "data.create"
+      ],
+      "keywords": [
+        "数据上传",
+        "数据中心导入",
+        "Excel数据",
+        "CSV数据",
+        "把表格放进系统"
+      ],
+      "questions": [
+        "怎样导入数据中心的 Excel 文件？"
+      ]
+    },
+    {
+      "id": "data-view",
+      "title": "查找数据和来源文件",
+      "pageIds": [
+        "data-view"
+      ],
+      "requiredPermissions": [],
+      "keywords": [
+        "数据查看",
+        "来源文件",
+        "数据查询",
+        "导入结果"
+      ],
+      "questions": [
+        "怎样查看导入的数据？"
+      ]
+    },
+    {
+      "id": "file-search",
+      "title": "使用文件检索",
+      "pageIds": [
+        "file-search"
+      ],
+      "requiredPermissions": [
+        "ai.use"
+      ],
+      "keywords": [
+        "文件检索",
+        "文件搜索",
+        "资料搜索"
+      ],
+      "questions": [
+        "怎样搜索系统里的文件？"
+      ]
+    },
+    {
+      "id": "research-qa",
+      "title": "使用 AI 研发问答",
+      "pageIds": [
+        "research-qa"
+      ],
+      "requiredPermissions": [
+        "ai.use"
+      ],
+      "keywords": [
+        "AI问答",
+        "研发问答",
+        "知识问答",
+        "引用来源"
+      ],
+      "questions": [
+        "怎样让 AI 回答研发资料问题？"
+      ]
+    },
+    {
+      "id": "formula-prediction",
+      "title": "使用 AI 配方预测",
+      "pageIds": [
+        "formula-prediction"
+      ],
+      "requiredPermissions": [
+        "ai.formula.predict"
+      ],
+      "keywords": [
+        "配方预测",
+        "配方设计",
+        "目标配方"
+      ],
+      "questions": [
+        "从哪里进行 AI 配方预测？"
+      ]
+    },
+    {
+      "id": "performance-prediction",
+      "title": "使用性能预测",
+      "pageIds": [
+        "performance-prediction"
+      ],
+      "requiredPermissions": [
+        "ai.performance.predict"
+      ],
+      "keywords": [
+        "性能预测",
+        "预测结果",
+        "性能模型"
+      ],
+      "questions": [
+        "怎样进入性能预测？"
+      ]
+    },
+    {
+      "id": "experiment-optimization",
+      "title": "使用 AI 实验优化",
+      "pageIds": [
+        "experiment-optimization"
+      ],
+      "requiredPermissions": [
+        "ai.experiment.optimize"
+      ],
+      "keywords": [
+        "实验优化",
+        "优化目标",
+        "下一轮实验"
+      ],
+      "questions": [
+        "怎样使用 AI 实验优化？"
+      ]
+    },
+    {
+      "id": "model-center",
+      "title": "查看模型中心",
+      "pageIds": [
+        "model-center"
+      ],
+      "requiredPermissions": [],
+      "keywords": [
+        "模型中心",
+        "模型列表",
+        "建模工具",
+        "模型版本"
+      ],
+      "questions": [
+        "模型中心在哪里？"
+      ]
+    },
+    {
+      "id": "modeling-workbench",
+      "title": "选择 X/Y 训练并注册模型",
+      "pageIds": [
+        "modeling-workbench"
+      ],
+      "requiredPermissions": [
+        "ai.modeling.read"
+      ],
+      "keywords": [
+        "建模工具",
+        "实验数据",
+        "X/Y",
+        "选择记录",
+        "训练",
+        "注册模型",
+        "指标清单"
+      ],
+      "questions": [
+        "怎样选择 X/Y 训练并注册模型？"
+      ]
+    },
+    {
+      "id": "model-management",
+      "title": "查看模型版本与训练记录",
+      "pageIds": [
+        "model-management"
+      ],
+      "requiredPermissions": [
+        "ai.model.read"
+      ],
+      "keywords": [
+        "模型管理",
+        "模型版本",
+        "训练任务"
+      ],
+      "questions": [
+        "在哪里查看模型版本？"
+      ]
+    },
+    {
+      "id": "inventory-query",
+      "title": "查询产品库存",
+      "pageIds": [
+        "inventory-query"
+      ],
+      "requiredPermissions": [],
+      "keywords": [
+        "库存查询",
+        "库存量",
+        "低库存",
+        "无库存"
+      ],
+      "questions": [
+        "怎样查询产品库存？"
+      ]
+    },
+    {
+      "id": "inventory-ledgers",
+      "title": "查看研发和生产库存流水",
+      "pageIds": [
+        "inventory-rnd",
+        "inventory-production"
+      ],
+      "requiredPermissions": [],
+      "keywords": [
+        "研发库存表",
+        "生产库存表",
+        "入库流水",
+        "扣减流水",
+        "库存变动"
+      ],
+      "questions": [
+        "怎样查看库存变动流水？"
+      ]
+    },
+    {
+      "id": "inventory-create",
+      "title": "登记库存变动",
+      "pageIds": [
+        "inventory-rnd",
+        "inventory-production"
+      ],
+      "requiredPermissions": [
+        "inventory.create"
+      ],
+      "keywords": [
+        "新增库存",
+        "入库",
+        "扣减库存",
+        "库存登记"
+      ],
+      "questions": [
+        "怎样登记库存入库或扣减？"
+      ]
+    },
+    {
+      "id": "sample-view",
+      "title": "查看发样记录",
+      "pageIds": [
+        "inventory-samples"
+      ],
+      "requiredPermissions": [],
+      "keywords": [
+        "发样记录",
+        "样品发出",
+        "样品库存"
+      ],
+      "questions": [
+        "在哪里查看发样记录？"
+      ]
+    },
+    {
+      "id": "shipment-view",
+      "title": "查看出货记录",
+      "pageIds": [
+        "inventory-shipments"
+      ],
+      "requiredPermissions": [],
+      "keywords": [
+        "出货记录",
+        "产品出货",
+        "出货单"
+      ],
+      "questions": [
+        "在哪里查看出货记录？"
+      ]
+    },
+    {
+      "id": "users",
+      "title": "查看用户管理",
+      "pageIds": [
+        "users"
+      ],
+      "requiredPermissions": [],
+      "keywords": [
+        "用户管理",
+        "账号列表",
+        "账号状态"
+      ],
+      "questions": [
+        "在哪里查看系统用户？"
+      ]
+    },
+    {
+      "id": "permissions",
+      "title": "配置用户权限",
+      "pageIds": [
+        "permissions"
+      ],
+      "requiredPermissions": [
+        "system.permission.manage"
+      ],
+      "keywords": [
+        "用户权限",
+        "权限配置",
+        "没有权限",
+        "菜单权限"
+      ],
+      "questions": [
+        "怎样配置用户权限？"
+      ]
+    },
+    {
+      "id": "audit",
+      "title": "查阅操作日志",
+      "pageIds": [
+        "audit"
+      ],
+      "requiredPermissions": [],
+      "keywords": [
+        "操作日志",
+        "审计",
+        "操作记录"
+      ],
+      "questions": [
+        "怎样查询系统操作日志？"
+      ]
+    },
+    {
+      "id": "dictionary",
+      "title": "维护基础字典",
+      "pageIds": [
+        "dictionary"
+      ],
+      "requiredPermissions": [
+        "system.dictionary.manage"
+      ],
+      "keywords": [
+        "基础字典",
+        "标准字典",
+        "字典维护"
+      ],
+      "questions": [
+        "基础字典在哪里维护？"
+      ]
+    },
+    {
+      "id": "parameters",
+      "title": "维护系统参数",
+      "pageIds": [
+        "parameters"
+      ],
+      "requiredPermissions": [
+        "system.parameter.manage"
+      ],
+      "keywords": [
+        "系统参数",
+        "参数设置",
+        "库存策略"
+      ],
+      "questions": [
+        "系统参数在哪里设置？"
+      ]
+    }
+  ]
+}

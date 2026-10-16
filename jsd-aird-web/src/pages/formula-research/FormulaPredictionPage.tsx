@@ -1,254 +1,195 @@
-/* The V2 API deliberately carries typed JSON result unions.  The page keeps
- * the rendering adapter permissive so new result types remain displayable
- * without weakening the API/client boundary. */
-/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-misused-promises */
-import { CheckCircleOutlined, ExperimentOutlined, LoadingOutlined, SearchOutlined, WarningOutlined } from '@ant-design/icons'
-import { Alert, App, Button, Card, Col, Divider, Empty, Input, InputNumber, Layout, List, Progress, Row, Select, Space, Statistic, Tag, Typography } from 'antd'
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { formulaDesignApi, type FormulaContext, type FormulaTarget, type ResearchRun } from '@/services/ai-rnd/formula-design-api'
-import { generateUUID } from '@/utils/uuid'
+import { ExperimentOutlined, ReloadOutlined } from '@ant-design/icons'
+import { Alert, Button, Collapse, Input, InputNumber, Select, Spin, Table, Tag, Typography } from 'antd'
+import type { ColumnsType } from 'antd/es/table'
+import { useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { formulaDesignApi, type FormulaContext, type FormulaMaterial, type FormulaRequest, type FormulaTarget, type ResearchRun } from '@/services/ai-rnd/formula-design-api'
+import { HttpError } from '@/services/http/errors'
 import { useAuthStore } from '@/stores/auth-store'
-import { RegisteredTargetsNotice } from '@/components/registered-targets-notice/RegisteredTargetsNotice'
-import { isModelVersionChanged } from '@/services/http/errors'
+import { generateUUID } from '@/utils/uuid'
+import { targetLabels } from '../performance-prediction/performance-prediction-utils'
+import { FormulaGoalEditor } from './FormulaGoalEditor'
+import { FormulaCandidateTable } from './FormulaCandidateTable'
+import { buildFormulaRequest, businessValue, categoryOptions, contextForRun, defaultGoal, fieldName, formatPredictionNumber, formulaFailure, formulaFingerprint, formulaInputError, formulaMaterialName, formulaRunNotice, formulaSpaceError, formulaUnavailable, goalError, materialSettingError, readFormulaDraft, restoreFormulaForm, syncFormulaForm, type FormulaDraft, type FormulaForm, type InputSetting, type MaterialSetting } from './formula-prediction-utils'
 import './formula-prediction.css'
 
-const { Title, Text } = Typography
-const typeLabel: Record<string, string> = { CONTINUOUS: '连续值', ORDINAL: '序数等级', BINARY: '二分类', CATEGORICAL: '多分类' }
-const knownMaterialLabels: Record<string, string> = {
-  '05060000-0000-0000-0000-000000000031': '树脂（RESIN）',
-  '05060000-0000-0000-0000-000000000032': '助剂（ADDITIVE）',
-}
-const inputFieldLabels: Record<string, string> = {
-  coatingSolidsPct: '涂料固含', uvaIntensityMwCm2: 'UVA光强', uvEnergyMjCm2: 'UV能量',
-  temperatureC: '环境温度', humidityRhPct: '环境湿度', substrate: '基材',
-  applicationMethod: '施工方式', applicatorSpecUm: '绕丝棒规格', curingSource: '固化光源',
-}
-const targetOptionLabel = (target: Pick<FormulaTarget, 'name'|'valueType'|'unit'>) => `${target.name} · ${typeLabel[target.valueType] ?? '预测目标'}${target.unit ? `（${target.unit}）` : ''}`
-const internalIdentifier = (value: unknown) => {
-  const text = String(value ?? '').trim()
-  return /^(?:[0-9a-f]{8}-[0-9a-f-]{27}|R05|R06|R07|R10|SYNTHETIC|TEST|STRUCT:)/i.test(text)
-}
-const stageLabel: Record<string, string> = { QUEUED: '等待执行', CHECKING_CONDITIONS: '检查条件', SEARCHING: '搜索方案', RULE_CHECKING: '规则检查', SUCCEEDED: '已完成', FAILED: '执行失败' }
-const operatorLabel = (operator: string, valueType: string) => {
-  if ((valueType === 'BINARY' || valueType === 'CATEGORICAL') && operator === 'MATCH') return '指定类别'
-  if (valueType === 'ORDINAL' && operator === 'MATCH') return '指定等级'
-  return ({ AT_LEAST: '至少达到', AT_MOST: '不超过', RANGE: '区间内', MATCH: '接近', MAXIMIZE: '尽量提高', MINIMIZE: '尽量降低' } as Record<string, string>)[operator] ?? operator
-}
-
-function displayTargetResult(targetResult: any) {
-  const result = targetResult?.result ?? targetResult
-  if (!result) return '—'
-  if (result.resultType === 'CONTINUOUS' && result.value !== undefined) return `${Number(result.value).toFixed(2)}${result.unit ? ` ${result.unit}` : ''}`
-  if (result.label) return result.probability == null ? result.label : `${result.label} · ${(Number(result.probability) * 100).toFixed(0)}%`
-  if (result.predictedClass) return result.predictedClass
-  if (result.class) return result.class
-  return '已通过'
-}
-
-function goalValue(target: FormulaTarget, operator?: string) {
-  if (target.valueType !== 'CONTINUOUS') return { label: undefined }
-  if (operator === 'RANGE') return [undefined, undefined]
-  if (operator === 'MATCH') return { target: undefined, tolerance: undefined }
-  return undefined
-}
-
-function continuousGoalComplete(operator: string | undefined, value: unknown) {
-  if (operator === 'MAXIMIZE' || operator === 'MINIMIZE') return true
-  if (operator === 'RANGE') {
-    return Array.isArray(value) && value.length === 2 && value[0] != null && value[1] != null && Number(value[0]) <= Number(value[1])
-  }
-  if (operator === 'MATCH') {
-    const match = value as { target?: number; tolerance?: number } | undefined
-    return match?.target != null && match?.tolerance != null && Number(match.tolerance) >= 0
-  }
-  return value != null && Number.isFinite(Number(value))
-}
-
-function categoryGoalComplete(target: FormulaTarget | undefined, goal: { value: any; minimumProbability?: number } | undefined) {
-  if (!target || target.valueType === 'CONTINUOUS') return true
-  return Boolean(goal?.value?.label) && goal?.minimumProbability != null && Number.isFinite(Number(goal.minimumProbability)) && Number(goal.minimumProbability) >= 0 && Number(goal.minimumProbability) <= 1
-}
-
+const terminal = (run: ResearchRun) => ['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(run.executionStatus)
+const updateRunUrl = (id: string) => { const query = new URLSearchParams(window.location.search); query.set('runId', id); window.history.replaceState({}, '', `${window.location.pathname}?${query.toString()}`) }
+const clearMissingRunUrl = (id?: string) => { const query = new URLSearchParams(window.location.search); if (id && query.get('runId') === id) { query.delete('runId'); window.history.replaceState({}, '', `${window.location.pathname}${query.size ? `?${query.toString()}` : ''}`) } }
+const snapshotContext = (context: FormulaContext): FormulaContext => ({ ...context, targets: context.targets.filter(target => context.selected.some(selected => selected.targetId === target.targetId)) })
 export function FormulaPredictionPage() {
-  const { message } = App.useApp()
-  const canPredict = useAuthStore((state) => state.can('ai.formula.predict'))
-  const [context, setContext] = useState<FormulaContext>()
-  const [selectedIds, setSelectedIds] = useState<string[]>([])
-  const [goals, setGoals] = useState<Record<string, { operator: string; value: any; mandatory: boolean; weight: number; minimumProbability?: number }>>({})
-  const [targetTotal, setTargetTotal] = useState(100)
-  const [materialRatios, setMaterialRatios] = useState<Record<string, number | undefined>>({})
-  const [materialModes, setMaterialModes] = useState<Record<string, 'FIXED'|'VARIABLE'>>({})
-  const [materialBounds, setMaterialBounds] = useState<Record<string, { minimum?: number; maximum?: number }>>({})
-  const [inputs, setInputs] = useState<Record<string, any>>({})
-  const [inputRanges, setInputRanges] = useState<Record<string, { minimum?: number; maximum?: number; step?: number }>>({})
-  const [run, setRun] = useState<ResearchRun>()
-  const [submitting, setSubmitting] = useState(false)
-  const [runId, setRunId] = useState<string>()
-  const selectedIdsRef = useRef<string[]>([])
-  const clearRun = () => {
-    setRun(undefined)
-    setRunId(undefined)
-    window.sessionStorage?.removeItem('r08.formulaRunId')
-    const query = new URLSearchParams(window.location.search)
-    if (query.has('runId')) {
-      query.delete('runId')
-      const next = query.toString()
-      window.history.replaceState({}, '', `${window.location.pathname}${next ? `?${next}` : ''}`)
-    }
-  }
-
+  const user = useAuthStore(state => state.user), permission = useAuthStore(state => state.can('ai.formula.predict'))
+  const storageKey = user ? `formula-prediction:v3:${user.organizationId}:${user.userId}` : undefined
+  return <FormulaPredictionWorkbench key={storageKey ?? 'anonymous'} storageKey={storageKey} permission={permission} />
+}
+function FormulaPredictionWorkbench({ storageKey, permission }: { storageKey?: string; permission: boolean }) {
+  const [draft, setDraft] = useState<FormulaDraft>(() => readFormulaDraft(storageKey))
+  const [recordId, setRecordId] = useState(() => {
+    const id = new URLSearchParams(window.location.search).get('runId') ?? (!draft.completed && !draft.pending ? sessionStorage.getItem('r08.formulaRunId') : null)
+    return id && id !== draft.pending?.id && id !== draft.completed?.run.id ? id : undefined
+  })
+  const [catalog, setCatalog] = useState<FormulaContext>(), [context, setContext] = useState<FormulaContext>()
+  const [catalogLoading, setCatalogLoading] = useState(true), [contextLoading, setContextLoading] = useState(false)
+  const [catalogError, setCatalogError] = useState(''), [contextError, setContextError] = useState(''), [runError, setRunError] = useState(''), [storageError, setStorageError] = useState('')
+  const [running, setRunning] = useState<ResearchRun>(), [refresh, setRefresh] = useState(0), [touched, setTouched] = useState<Record<string, boolean>>({})
+  const [openSections, setOpenSections] = useState<string[]>([])
+  const { form, pending, completed } = draft
+  const busy = Boolean(pending || recordId), selectionKey = form.targets.join('|')
+  const inputContext = pending?.context ?? context
+  const patchForm = (patch: Partial<FormulaForm>) => { setRunError(''); setDraft(current => ({ ...current, form: { ...current.form, ...patch } })) }
+  const touch = (key: string) => setTouched(current => ({ ...current, [key]: true }))
   useEffect(() => {
-    formulaDesignApi.context().then((initial) => {
-      if (selectedIdsRef.current.length) return
-      setContext(initial)
-      const query = new URLSearchParams(window.location.search)
-      const freshDemo = query.get('fresh') === '1' || query.get('fresh') === 'demo'
-      if (freshDemo) window.sessionStorage?.removeItem('r08.formulaRunId')
-      const remembered = freshDemo ? null : query.get('runId') ?? window.sessionStorage?.getItem('r08.formulaRunId') ?? null
-      if (remembered) setRunId(remembered)
-    }).catch(() => message.error('无法读取配方预测目录'))
-  }, [message])
+    if (!storageKey) return
+    try { localStorage.setItem(storageKey, JSON.stringify(draft)); setStorageError('') } catch { setStorageError('输入暂未保存，刷新前请保留当前页面。') }
+  }, [draft, storageKey])
   useEffect(() => {
-    if (!runId) return
     let active = true
-    const poll = async () => { try { const current = await formulaDesignApi.run(runId); if (!active) return; setRun(current); if (!['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(current.executionStatus)) window.setTimeout(poll, 1000) } catch { if (active) window.setTimeout(poll, 1500) } }
-    void poll(); return () => { active = false }
-  }, [runId])
-  // A refreshed page must restore the frozen target selection from the run;
-  // the run is the source of truth after submission, while the context only
-  // supplies the editable catalog and current display metadata.
+    setCatalogLoading(true); setCatalogError('')
+    formulaDesignApi.context().then(value => { if (active) setCatalog(value) }).catch(() => { if (active) setCatalogError('预测指标加载失败，请重试。') }).finally(() => { if (active) setCatalogLoading(false) })
+    return () => { active = false }
+  }, [refresh])
   useEffect(() => {
-    if (!run || selectedIdsRef.current.length) return
-    const frozen = run.frozenEvidence?.typedGoals
-    if (!Array.isArray(frozen)) return
-    const ids = frozen.map((goal: any) => String(goal?.targetId ?? '')).filter(Boolean)
-    if (!ids.length) return
-    selectedIdsRef.current = ids
-    setSelectedIds(ids)
-    setGoals((current) => Object.fromEntries(ids.map((id: string) => {
-      const goal = frozen.find((item: any) => String(item?.targetId) === id)
-      return [id, current[id] ?? { operator: goal?.operator ?? 'AT_LEAST', value: goal?.value, mandatory: goal?.mandatory ?? true, weight: Number(goal?.weight) > 0 ? Number(goal.weight) : 1, minimumProbability: goal?.minimumProbability }]
-    })))
-    formulaDesignApi.context(ids).then((detail) => setContext((current) => current ? { ...current, ...detail } : detail)).catch(() => undefined)
-  }, [run])
-  const selectedTargets = useMemo(() => {
-    const details = Array.isArray(context?.selected) ? context.selected : []
-    const catalog = Array.isArray(context?.targets) ? context.targets : []
-    return selectedIds.map((id) => details.find((target) => target.targetId === id) ?? catalog.find((target) => target.targetId === id)).filter((target): target is FormulaTarget => Boolean(target))
-  }, [context, selectedIds])
-  const materials = Array.isArray(context?.materialIntersection) ? context.materialIntersection.map((material) => internalIdentifier(material.code) ? { ...material, code: undefined } : material) : []
-  const materialLabel = (material: any, index: number) => {
-    const raw = `${material?.name ?? ''} ${material?.code ?? ''}`
-    if (internalIdentifier(material?.name) || internalIdentifier(material?.code) || /^(R05|R06|R07|R10|SYNTHETIC|TEST|STRUCT:)/i.test(raw.trim())) {
-      const role = `${material?.role ?? ''}`.toLowerCase()
-      if (role.includes('resin')) return '树脂'
-      if (role.includes('additive')) return '助剂'
-      if (role.includes('cross')) return '交联剂'
-      if (role.includes('dilut')) return '稀释剂'
-      return `配方材料${index + 1}`
-    }
-    return material?.name || knownMaterialLabels[material?.materialId] || material?.code || `材料 ${index + 1}`
-  }
-  const ratioSum = Object.values(materialRatios).reduce<number>((sum, value) => sum + (Number(value) || 0), 0)
-  const blankMaterialCount = materials.filter((material) => materialRatios[material.materialId] == null).length
-  const negativeRatioCount = materials.filter((material) => Number(materialRatios[material.materialId]) < 0).length
-  const availableTargets = useMemo(() => {
-    const items = Array.isArray(context?.targets) ? context.targets : []
-    return [...items].sort((a, b) => {
-      const customerOrder = ['修复速度', '涂层伸长率', '断裂伸长率', '拉伸强度', '剥离力', '弯曲韧性', '耐酸雨', '耐溶剂', '耐防晒霜', '耐芥末酱发黄']
-      const rank = (target: FormulaTarget) => {
-        if (target.code?.startsWith('CUSTOMER.TEST.')) {
-          const index = customerOrder.indexOf(target.name)
-          return index >= 0 ? index : target.available ? 20 : 30
+    if (!form.targets.length) { setContext(undefined); setContextLoading(false); setContextError(''); return }
+    let active = true
+    setContext(undefined); setContextLoading(true); setContextError('')
+    formulaDesignApi.context(form.targets).then(value => {
+      if (!active) return
+      setContext(value)
+      setDraft(current => ({ ...current, context: value, form: current.pending ? current.form : syncFormulaForm(current.form, value) }))
+      const defaults = syncFormulaForm(form, value)
+      if (value.materialIntersection.some(material => materialSettingError(defaults.materials[material.materialId]))) setOpenSections(current => [...new Set([...current, 'materials'])])
+      if (value.requiredInputs.some(field => formulaInputError(field, defaults.inputs[field.code]))) setOpenSections(current => [...new Set([...current, 'inputs'])])
+    }).catch(() => { if (active) setContextError('实验输入加载失败，请刷新模型信息。') }).finally(() => { if (active) setContextLoading(false) })
+    return () => { active = false }
+  }, [selectionKey, refresh])
+  useEffect(() => {
+    if (!recordId) return
+    let active = true
+    setRunError('')
+    formulaDesignApi.run(recordId).then(run => {
+      if (!active) return
+      const restoredContext = contextForRun(run, draft.context)
+      if (!restoredContext) { setRunError('方案输入信息未能读取，请保留当前输入后重试。'); return }
+      const restoredForm = restoreFormulaForm(run.frozenEvidence ?? {})
+      setDraft({ form: restoredForm, context: restoredContext, ...(terminal(run) ? { completed: { run, form: restoredForm, context: restoredContext } } : { pending: { key: `record:${run.id}`, id: run.id, request: run.frozenEvidence as FormulaRequest, context: restoredContext } }) })
+    }).catch(error => { if (active) { setRunError('这条方案无法恢复，已保留当前输入，请重新生成。'); if (error instanceof HttpError && [403, 404, 410].includes(error.status ?? 0)) clearMissingRunUrl(recordId) } }).finally(() => { if (active) { setRecordId(undefined); sessionStorage.removeItem('r08.formulaRunId') } })
+    return () => { active = false }
+  }, [recordId])
+  useEffect(() => {
+    if (!pending) return
+    let active = true, timer: number | undefined
+    setRunError('')
+    const poll = async () => {
+      try {
+        if (!pending.id) {
+          const accepted = await formulaDesignApi.submit(pending.request, pending.key)
+          if (!active) return
+          setDraft(current => current.pending?.key === pending.key ? { ...current, pending: { ...pending, id: accepted.runId } } : current)
+          updateRunUrl(accepted.runId); return
         }
-        return target.available ? 21 : target.registered ? 31 : 32
+        const run = await formulaDesignApi.run(pending.id)
+        if (!active) return
+        setRunError('')
+        if (!terminal(run)) { setRunning(run); timer = window.setTimeout(() => { void poll() }, 1000); return }
+        const resultContext = contextForRun(run, pending.context) ?? pending.context
+        setRunning(undefined)
+        setDraft(current => current.pending?.key === pending.key ? { ...current, pending: undefined, completed: { run, form: current.form, context: resultContext } } : current)
+      } catch (error) {
+        if (!active) return
+        const transient = !(error instanceof HttpError) || error.status == null || [408, 500, 502, 503, 504].includes(error.status)
+        if (transient) { setRunError('正在重新连接生成进度'); timer = window.setTimeout(() => { void poll() }, 3000); return }
+        setRunError(error instanceof HttpError && [403, 404, 410].includes(error.status ?? 0) ? '这条方案无法恢复，请使用已保存的输入重新生成。' : formulaFailure(error instanceof HttpError ? error.code : undefined))
+        if (error instanceof HttpError && [403, 404, 410].includes(error.status ?? 0)) clearMissingRunUrl(pending.id)
+        setDraft(current => current.pending?.key === pending.key ? { ...current, pending: undefined } : current)
+        if (error instanceof HttpError && error.code === 'MODEL_VERSION_CHANGED') setRefresh(value => value + 1)
       }
-      return rank(a) - rank(b) || a.name.localeCompare(b.name, 'zh-CN')
-    })
-  }, [context?.targets])
-  const selectedTargetOptions = selectedIds.map((id) => availableTargets.find((target) => target.targetId === id)).filter((target): target is FormulaTarget => Boolean(target)).map(targetOptionLabel)
-  const hasIncompleteCategoryGoal = selectedTargets.some((target) => !categoryGoalComplete(target, goals[target.targetId]))
-  const registeredTargets = availableTargets.filter((target) => target.registered)
-  useEffect(() => {
-    if (!materials.length) return
-    // Do not invent a starting recipe.  The previous UI filled the first three
-    // materials with equal shares, which looked like customer-provided data and
-    // made the total appear valid while the remaining materials were blank.
-    // Leave all ratios empty until the user deliberately enters them.
-    setMaterialRatios((current) => Object.keys(current).length ? current : Object.fromEntries(materials.map((material) => [material.materialId, undefined])))
-    setMaterialModes((current) => Object.keys(current).length ? current : Object.fromEntries(materials.map((material) => [material.materialId, 'VARIABLE'])))
-    setMaterialBounds((current) => Object.keys(current).length ? current : Object.fromEntries(materials.map((material) => [material.materialId, { minimum: 0, maximum: targetTotal }])))
-    setInputs((current) => Object.keys(current).length ? current : Object.fromEntries((context?.requiredInputs ?? []).map((field) => [field.code, field.valueType === 'NUMBER' ? 25 : ''])))
-  }, [materials, context?.requiredInputs, targetTotal])
-  const selectTargets = (ids: string[]) => {
-    clearRun()
-    selectedIdsRef.current = ids
-    setSelectedIds(ids)
-    setGoals((current) => Object.fromEntries(ids.map((id) => {
-      const target = availableTargets.find((item) => item.targetId === id)
-      const operator=target?.operators?.[0] ?? 'AT_LEAST'
-      return [id, current[id] ?? { operator, value: goalValue(target ?? ({ valueType: 'CONTINUOUS' } as FormulaTarget),operator), mandatory: !['MAXIMIZE','MINIMIZE'].includes(operator), weight: 1, minimumProbability: undefined }]
-    })))
-    if (ids.length) formulaDesignApi.context(ids).then((detail) => {
-      setContext((current) => current ? { ...current, ...detail } : detail)
-      const selected = Array.isArray(detail.selected) ? detail.selected : []
-      setGoals((current) => Object.fromEntries(ids.map((id) => { const target = selected.find((item) => item.targetId === id) ?? availableTargets.find((item) => item.targetId === id); const previous = current[id]; const operators = target?.operators ?? []; const operator=previous?.operator && operators.includes(previous.operator) ? previous.operator : operators[0] ?? 'AT_LEAST'; return [id, { operator, value: previous?.value ?? goalValue(target ?? ({ valueType: 'CONTINUOUS' } as FormulaTarget),operator), mandatory: !['MAXIMIZE','MINIMIZE'].includes(operator), weight: previous?.weight ?? 1, minimumProbability: previous?.minimumProbability }] })))
-    }).catch(() => message.error('无法读取目标的模型条件'))
-  }
-  const runDesign = async () => {
-    if (!canPredict || !selectedTargets.length) { message.warning('请先选择至少一个可用研发目标'); return }
-    if (!materials.length) { message.error('所选目标没有共同的材料空间'); return }
-    if (ratioSum <= 0) { message.warning('配方合计必须大于0，系统才能按相对比例归一化'); return }
-    if (Object.values(materialRatios).some((value) => value != null && Number(value) < 0)) { message.warning('发现负数材料比例，请先修正'); return }
-    if (selectedTargets.some((target) => !target.available)) { message.error('有目标尚未准备好模型或必要设置'); return }
-    for (const target of selectedTargets) {
-      const goal=goals[target.targetId]
-      if (!goal || !Number.isFinite(Number(goal.weight)) || Number(goal.weight) <= 0) { message.warning(`请为“${target.name}”填写大于0的目标权重`); return }
-      if (target.valueType !== 'CONTINUOUS' && !categoryGoalComplete(target, goal)) { message.warning(`请为“${target.name}”选择合格类别，并填写最低概率`); return }
-      if (target.valueType === 'CONTINUOUS' && !continuousGoalComplete(goal?.operator, goal?.value)) { message.warning(`请完整填写“${target.name}”的目标条件`); return }
     }
-    const components = materials
-      .filter((m) => materialRatios[m.materialId] != null || materialModes[m.materialId] === 'VARIABLE')
-      .map((m) => ({ materialId: m.materialId, ratio: materialRatios[m.materialId], unit: 'PERCENT', amountKnown: materialRatios[m.materialId] != null }))
-    if (!components.length) { message.warning('请填写至少一种材料比例'); return }
-    setSubmitting(true); setRun(undefined)
-    try {
-      const variableMaterials=materials.filter((m)=>materialModes[m.materialId]==='VARIABLE').map((m)=>({materialId:m.materialId,minimum:materialBounds[m.materialId]?.minimum??0,maximum:materialBounds[m.materialId]?.maximum??targetTotal}))
-      const variableInputs=Object.fromEntries(Object.entries(inputRanges).filter(([,range])=>range.minimum!=null&&range.maximum!=null))
-      const fixedInputs=Object.fromEntries(Object.entries(inputs).filter(([code])=>!variableInputs[code]))
-      const request = { typedGoals: selectedTargets.map((target) => { const goal=goals[target.targetId]!; return { targetId: target.targetId, valueType: target.valueType, expectedModelVersionId: target.modelVersionId, operator: goal.operator, value: goal.value, mandatory: !['MAXIMIZE','MINIMIZE'].includes(goal.operator), weight: Number(goal.weight), minimumProbability: goal.minimumProbability } }), targetTotal: 100, formulaBasis: 'MASS_PERCENT', baselineFormula: { basis: 'MASS_PERCENT', compositionComplete: true, components, recordedTotal: ratioSum }, fixedInputs, searchSpace: { allowedMaterialIds: materials.map((m) => m.materialId), variableMaterials, variableInputs }, constraints: {}, candidateCount: 4 }
-      const accepted = await formulaDesignApi.submit(request, generateUUID()); setRunId(accepted.runId); window.sessionStorage?.setItem('r08.formulaRunId', accepted.runId); const query = new URLSearchParams(window.location.search); query.set('runId', accepted.runId); window.history.replaceState({}, '', `${window.location.pathname}?${query.toString()}`)
-    } catch (error) {
-      if (isModelVersionChanged(error)) {
-        void message.warning('模型版本已更新，页面将刷新，请重新提交配方预测')
-        window.setTimeout(() => window.location.reload(), 0)
-      } else {
-        message.error(error instanceof Error ? error.message : '配方搜索提交失败')
-      }
-    } finally { setSubmitting(false) }
+    void poll()
+    return () => { active = false; if (timer) window.clearTimeout(timer) }
+  }, [pending?.key, pending?.id])
+  const knownTargets = useMemo(() => {
+    const targets = new Map<string, FormulaTarget>()
+    for (const source of [completed?.context.targets, draft.context?.targets, catalog?.targets]) source?.forEach(target => targets.set(target.targetId, target))
+    return [...targets.values()]
+  }, [catalog, draft.context, completed])
+  const labels = useMemo(() => targetLabels(knownTargets), [knownTargets]), captions = useMemo(() => targetLabels(knownTargets, false), [knownTargets])
+  const options = [
+    { label: '预测指标', options: knownTargets.filter(target => target.available) },
+    { label: '暂不可预测', options: knownTargets.filter(target => !target.available) },
+  ].filter(group => group.options.length).map(group => ({ label: group.label, options: group.options.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN')).map(target => ({ value: target.targetId, selectedLabel: labels.get(target.targetId) ?? target.name, label: `${labels.get(target.targetId) ?? target.name}${target.available ? '' : ` · ${formulaUnavailable(target)}`}`, disabled: !target.available && !form.targets.includes(target.targetId) })) }))
+  const selected = inputContext?.selected ?? []
+  const materialErrors = inputContext?.materialIntersection.filter(material => materialSettingError(form.materials[material.materialId])) ?? []
+  const inputErrors = inputContext?.requiredInputs.filter(field => formulaInputError(field, form.inputs[field.code])) ?? []
+  const goalErrors = selected.filter(target => goalError(target, form.goals[target.targetId]))
+  const spaceError = inputContext && selected.every(target => target.available) ? formulaSpaceError(form, inputContext) : ''
+  const unavailable = selected.filter(target => !target.available)
+  const ready = Boolean(inputContext && form.targets.length && selected.length === form.targets.length && !contextLoading && !contextError && !unavailable.length && !inputContext.configurationConflicts?.length)
+  const missing = goalErrors.length + materialErrors.length + inputErrors.length
+  const canGenerate = permission && ready && !missing && !spaceError && !busy
+  const comparisonContext = inputContext ?? draft.context
+  const changed = Boolean(completed && formulaFingerprint(form, comparisonContext) !== formulaFingerprint(completed.form, completed.context))
+  const patchGoal = (id: string, patch: Partial<FormulaForm['goals'][string]>) => patchForm({ goals: { ...form.goals, [id]: { ...form.goals[id]!, ...patch } } })
+  const patchMaterial = (id: string, patch: Partial<MaterialSetting>) => patchForm({ materials: { ...form.materials, [id]: { ...form.materials[id]!, ...patch } } })
+  const patchInput = (code: string, patch: Partial<InputSetting>) => patchForm({ inputs: { ...form.inputs, [code]: { ...form.inputs[code]!, ...patch } } })
+  const start = () => {
+    if (!canGenerate || !inputContext) return
+    setRunError(''); setRunning(undefined)
+    setDraft(current => ({ ...current, pending: { key: generateUUID(), request: buildFormulaRequest(current.form, inputContext), context: snapshotContext(inputContext) } }))
   }
-  const setRatio = (id: string, value: number | null) => { clearRun(); setMaterialRatios((current) => ({ ...current, [id]: value ?? undefined })) }
-  const changeGoal = (id: string, patch: Partial<{ operator: string; value: any; mandatory: boolean; weight: number; minimumProbability?: number }>) => { clearRun(); setGoals((current) => ({ ...current, [id]: { operator: current[id]?.operator ?? 'AT_LEAST', value: current[id]?.value, mandatory: current[id]?.mandatory ?? true, weight: current[id]?.weight ?? 1, ...patch } })) }
-  const changeOperator=(target:FormulaTarget,operator:string)=>changeGoal(target.targetId,{operator,value:goalValue(target,operator),mandatory:!['MAXIMIZE','MINIMIZE'].includes(operator)})
-  return <Layout className="formula-prediction-page"><div className="formula-prediction-shell">
-    <div className="formula-prediction-header"><div><Text className="eyebrow">AI研发助手 · 配方预测</Text><Title level={2}>AI配方预测</Title><Text type="secondary">先定义希望达到的性能和具体测试项，再确认条件，最后比较候选配方。</Text></div><Space><Tag color="blue">最多 4 个候选</Tag><Button type="primary" icon={<SearchOutlined />} onClick={runDesign} loading={submitting}>开始搜索</Button></Space></div>
-    <div className="prototype-note"><Text strong>目标 → 条件 → 候选</Text><Text type="secondary"> 每个目标使用已确认的模型、实验信息和模型覆盖范围；条件变化后需要重新计算。</Text></div>
-    <Row gutter={[18, 18]}>
-      <Col xs={24} lg={15}><Card title="研发目标" className="prediction-card" extra={<Text type="secondary">可多选目标</Text>}>
-        <Select mode="multiple" value={selectedTargetOptions} onChange={(labels) => selectTargets(labels.map((label) => availableTargets.find((target) => targetOptionLabel(target) === label)?.targetId).filter((id): id is string => Boolean(id)))} placeholder="选择要同时满足的研发目标" className="full-control" optionFilterProp="label" options={availableTargets.map((target) => ({ value: targetOptionLabel(target), label: `${targetOptionLabel(target)}${target.registered ? ' · 已登记，数据不足' : target.available ? '' : ' · 暂不可预测'}`, disabled: !target.available }))} />
-        <RegisteredTargetsNotice targets={registeredTargets} />
-        {hasIncompleteCategoryGoal && <Alert className="compact-alert" type="warning" showIcon message="二分类/等级目标必须填写两项：合格类别（或目标等级）和最低概率" description="例如：UV表干选择“OK”，最低概率填写 0.60。未填写完整前不能开始搜索。" />}
-        <div className="target-list">{selectedTargets.length ? selectedTargets.map((target) => {const goal=goals[target.targetId];const preference=['MAXIMIZE','MINIMIZE'].includes(goal?.operator ?? '');const categoryMissing=!categoryGoalComplete(target,goal);return <Card size="small" key={target.targetId} className="goal-card"><div className="goal-heading"><Space><Tag color="geekblue">{typeLabel[target.valueType]}</Tag><Text strong>{target.name}</Text></Space><Tag color={target.valueType !== 'CONTINUOUS' && categoryMissing ? 'orange' : 'green'}>{target.valueType !== 'CONTINUOUS' && categoryMissing ? '待填写必达条件' : '模型已固定'}</Tag></div><Row gutter={[10,10]} align="middle"><Col xs={24} md={6}><Select value={goal?.operator} onChange={(value) => changeOperator(target,value)} className="full-control" options={(target.operators ?? ['AT_LEAST']).map((value) => ({ value, label: operatorLabel(value, target.valueType) }))} /></Col><Col xs={24} md={target.valueType==='CONTINUOUS'?10:7}>{target.valueType!=='CONTINUOUS'?<Select status={categoryMissing&&!goal?.value?.label?'error':undefined} className="full-control" value={goal?.value?.label} onChange={(label)=>changeGoal(target.targetId,{value:{label}})} placeholder={`必填：选择${target.valueType==='ORDINAL'?'目标等级':'合格类别'}`} options={(target.classes??[]).map((label)=>({value:label,label}))}/>:preference?<Text type="secondary">作为偏好目标参与排序</Text>:goal?.operator==='RANGE'?<Space.Compact block><InputNumber className="full-control" value={goal?.value?.[0]} onChange={(value)=>changeGoal(target.targetId,{value:[value??undefined,goal?.value?.[1]]})} placeholder="下界"/><InputNumber className="full-control" value={goal?.value?.[1]} onChange={(value)=>changeGoal(target.targetId,{value:[goal?.value?.[0],value??undefined]})} placeholder="上界"/></Space.Compact>:goal?.operator==='MATCH'?<Space.Compact block><InputNumber className="full-control" value={goal?.value?.target} onChange={(value)=>changeGoal(target.targetId,{value:{...goal?.value,target:value??undefined}})} placeholder="目标值"/><InputNumber className="full-control" min={0} value={goal?.value?.tolerance} onChange={(value)=>changeGoal(target.targetId,{value:{...goal?.value,tolerance:value??undefined}})} placeholder="容差"/></Space.Compact>:<InputNumber className="full-control" value={goal?.value} onChange={(value)=>changeGoal(target.targetId,{value:value??undefined})} placeholder="目标值" addonAfter={target.unit}/>}</Col><Col xs={24} md={target.valueType==='CONTINUOUS'?8:5}><InputNumber min={0.01} step={0.1} precision={2} value={goal?.weight ?? 1} onChange={(value) => changeGoal(target.targetId, { weight: value ?? 1 })} addonBefore="权重" placeholder="例如 1" className="full-control" /></Col>{target.valueType !== 'CONTINUOUS' && <Col xs={24} md={6}><InputNumber status={categoryMissing&&goal?.minimumProbability==null?'error':undefined} min={0} max={1} step={0.05} value={goal?.minimumProbability} onChange={(value) => changeGoal(target.targetId, { minimumProbability: value ?? undefined })} addonBefore="最低概率*" placeholder="必填，例如 0.60" className="full-control" /></Col>}</Row></Card>}) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="请选择一个或多个目标" />}</div>
-      </Card>
-      <Card title="2 · 材料与配方空间" className="prediction-card" extra={<Space><Text>目标合计</Text><InputNumber min={0.01} value={targetTotal} onChange={(value) => setTargetTotal(value ?? 100)} addonAfter="%" /></Space>}>
-        {materials.length ? <List size="small" dataSource={materials} renderItem={(material, index) => {const mode=materialModes[material.materialId]??'VARIABLE';const bounds=materialBounds[material.materialId]??{};const internalCode=/^(R05|R06|R07|R10|SYNTHETIC|TEST|STRUCT:)/i.test(`${material.code ?? ''}`);return <List.Item><div className="material-space-row"><div><Text strong>{materialLabel(material, index)}</Text><Text type="secondary">{!internalCode && material.code && material.code !== materialLabel(material, index) ? material.code : (material.role || '配方材料')}</Text></div><InputNumber min={0} precision={4} value={materialRatios[material.materialId]} onChange={(value) => setRatio(material.materialId, value)} addonAfter="%" placeholder="比例（空白=未知）" /><Select value={mode} onChange={(value)=>setMaterialModes((old)=>({...old,[material.materialId]:value}))} options={[{value:'FIXED',label:'固定'},{value:'VARIABLE',label:'允许调整'}]}/>{mode==='VARIABLE'&&<Space.Compact><InputNumber min={0} precision={4} value={bounds.minimum} onChange={(value)=>setMaterialBounds((old)=>({...old,[material.materialId]:{...bounds,minimum:value??undefined}}))} placeholder="最小"/><InputNumber min={0} precision={4} value={bounds.maximum} onChange={(value)=>setMaterialBounds((old)=>({...old,[material.materialId]:{...bounds,maximum:value??undefined}}))} placeholder="最大"/></Space.Compact>}</div></List.Item>}} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="选择目标后显示共同材料" />}<Divider /><div className={Math.abs(ratioSum - targetTotal) < 0.00001 ? 'ratio-total valid' : 'ratio-total'}><Text>当前配方合计</Text><Text strong>{ratioSum.toFixed(2)}%</Text>{Math.abs(ratioSum - targetTotal) < 0.00001 ? <Tag color="green">符合目标合计</Tag> : <Tag color="blue">将按相对比例归一化到100%</Tag>}</div>{negativeRatioCount>0&&<Alert className="compact-alert" type="error" showIcon message="存在负数比例，请先修正"/>}{blankMaterialCount>0&&<Alert className="compact-alert" type="warning" showIcon message={`还有 ${blankMaterialCount} 项材料比例为空；空白表示未知，不能作为模型条件`}/>} {negativeRatioCount===0&&blankMaterialCount===0&&Math.abs(ratioSum-100)>0.00001&&<Alert className="compact-alert" type="info" showIcon message="合计不等于100%不会被直接拒绝，系统会先统一归一化，再用于案例和模型比较"/>}
-      </Card>
-      <Card title="当前共同实验条件" className="prediction-card">{context?.requiredInputs?.length ? <Row gutter={[12, 12]}>{context.requiredInputs.map((field) => {const range=inputRanges[field.code];return <Col xs={24} md={12} key={field.code}><Space direction="vertical" className="full-control" size={4}><Text type="secondary">{field.name || inputFieldLabels[field.code] || '实验条件'}{field.unit ? `（${field.unit}）` : ''}</Text>{field.valueType === 'NUMBER' ? <><Select value={range?'VARIABLE':'FIXED'} onChange={(mode)=>setInputRanges((old)=>{const next={...old};if(mode==='VARIABLE')next[field.code]={minimum:inputs[field.code] as number|undefined,maximum:inputs[field.code] as number|undefined};else delete next[field.code];return next})} options={[{value:'FIXED',label:'固定值'},{value:'VARIABLE',label:'允许变化'}]}/>{range?<Space.Compact block><InputNumber value={range.minimum} onChange={(value)=>setInputRanges((old)=>({...old,[field.code]:{...range,minimum:value??undefined}}))} placeholder="最小"/><InputNumber value={range.maximum} onChange={(value)=>setInputRanges((old)=>({...old,[field.code]:{...range,maximum:value??undefined}}))} placeholder="最大"/><InputNumber min={0} value={range.step} onChange={(value)=>setInputRanges((old)=>({...old,[field.code]:{...range,step:value??undefined}}))} placeholder="步长"/></Space.Compact>:<InputNumber value={inputs[field.code] ?? undefined} onChange={(value)=>setInputs((current)=>({...current,[field.code]:value}))} placeholder="填写固定条件" className="full-control" />}</> : <Input value={inputs[field.code] ?? ''} onChange={(event)=>setInputs((current)=>({...current,[field.code]:event.target.value}))} placeholder="填写固定条件" />}</Space></Col>})}</Row> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="选择目标后显示模型所需条件" />}</Card>
-      </Col>
-      <Col xs={24} lg={9}><Card title="研发条件摘要" className="prediction-card confirmation-card"><List size="small"><List.Item><Text>预测目标</Text><Text strong>{selectedTargets.length ? selectedTargets.map((target) => target.name).join('、') : '尚未选择'}</Text></List.Item><List.Item><Text>配方基准</Text><Text strong>质量百分比 · 归一化到100%</Text></List.Item><List.Item><Text>材料合计</Text><Text strong>{ratioSum.toFixed(2)}%{Math.abs(ratioSum-100)>0.00001?'（将归一化）':''}</Text></List.Item><List.Item><Text>模型</Text><Text strong>{selectedTargets.length ? `${selectedTargets.length} 个已固定` : '等待选择目标'}</Text></List.Item></List></Card>
-        {run ? <Card title="搜索进度" className="prediction-card run-card"><Progress percent={run.progress} status={run.executionStatus === 'FAILED' ? 'exception' : undefined} /><Space><Tag icon={run.executionStatus === 'SUCCEEDED' ? <CheckCircleOutlined /> : run.executionStatus === 'FAILED' ? <WarningOutlined /> : <LoadingOutlined />}>{stageLabel[run.currentStage || run.executionStatus] || run.executionStatus}</Tag><Text type="secondary">{run.actualCandidateCount}/{run.requestedCandidateCount} 个候选</Text>{run.simulation&&<Tag color="orange">测试环境模拟预测</Tag>}</Space>{run.simulation&&<Alert className="compact-alert" type="warning" showIcon message={run.resultNotice||'测试环境模拟预测结果，不代表正式模型结论'} />}{run.executionStatus === 'FAILED' && <Alert className="compact-alert" type="error" message="搜索执行失败，请使用新的请求重试" />}</Card> : <Card className="prediction-card empty-result"><ExperimentOutlined className="empty-icon" /><Title level={4}>候选配方方向</Title><Text type="secondary">确认研发目标和实验条件后，候选配方及逐目标模型结果会显示在这里。</Text></Card>}
-        {run?.executionStatus === 'SUCCEEDED' && <Card title={run.outcomeStatus === 'BLOCKED' ? '没有可行候选' : '候选对比'} className="prediction-card"><Statistic title="实际候选数量" value={run.actualCandidateCount} suffix={`/ ${run.requestedCandidateCount}`} />{run.outcomeStatus !== 'SUCCEEDED' && <Alert className="compact-alert" type="warning" message={run.shortfallReason || '当前条件下没有足够的可行方案'} description={<div>{run.rejectionSummary&&Object.entries(run.rejectionSummary).filter(([,count])=>count>0).map(([code,count])=><Tag key={code}>{({TARGET_NOT_MET:'目标未达到',OUT_OF_DOMAIN:'超出适用范围',INPUT_MISSING:'输入缺失',MATERIAL_MISMATCH:'材料不匹配',RULE_FAILED:'规则未通过',DUPLICATE:'重复方案'} as Record<string,string>)[code]??'需要调整的条件'} {count}</Tag>)}{run.actionHints?.length?<div className="adjustment-hints">建议：{run.actionHints.join('；')}</div>:null}</div>} />}{(Array.isArray(run.candidates) ? run.candidates : []).map((candidate) => <Card size="small" className="candidate-card" key={candidate.id}><Space><Tag color="blue">方案 {candidate.candidateNo}</Tag><Text strong>{candidate.title}</Text><Tag color="green">综合分 {Number(candidate.score ?? 0).toFixed(2)}</Tag></Space><div className="formula-summary">{(Array.isArray(candidate.formula?.components) ? candidate.formula.components : []).map((component: any, index: number) => { const material = materials.find((item) => item.materialId === component.materialId); return <Tag key={component.materialId}>{materialLabel(material ?? component, index)} {Number(component.ratio).toFixed(2)}%</Tag> })}</div><div className="target-results">{(Array.isArray(candidate.targetResults?.targets) ? candidate.targetResults.targets : []).map((result: any) => <Tag color={result.status === 'SUCCEEDED' ? 'green' : 'red'} key={`${result.targetId}-${result.status}`}>{result.targetName || '预测目标'}: {displayTargetResult(result)}</Tag>)}</div></Card>)}</Card>}
-      </Col>
-    </Row>
-  </div></Layout>
+  const goalColumns: ColumnsType<FormulaTarget> = [
+    { title: '目标性能', width: '30%', render: (_, target) => <div className="formula-target-name"><strong>{target.name}</strong>{(target.testMethod || target.testStage) && <small>{[businessValue(target.testMethod), businessValue(target.testStage), businessValue(target.category)].filter(Boolean).join(' · ')}</small>}</div> },
+    { title: '目标条件', render: (_, target) => <FormulaGoalEditor target={target} goal={form.goals[target.targetId] ?? defaultGoal(target)} caption={captions.get(target.targetId) ?? target.name} disabled={busy} touched={Boolean(touched[`goal:${target.targetId}`])} onBlur={() => touch(`goal:${target.targetId}`)} onChange={patch => patchGoal(target.targetId, patch)} /> },
+  ]
+  const materialColumns: ColumnsType<FormulaMaterial> = [
+    { title: '材料', width: 180, render: (_, material, index) => <div className="formula-target-name"><strong>{formulaMaterialName(material, index)}</strong>{material.supportedRanges?.length ? <small>训练记录 {material.supportedRanges.map(range => `${formatPredictionNumber(range.minimum)}～${formatPredictionNumber(range.maximum)}%`).join(' / ')}</small> : null}</div> },
+    { title: '比例设置', width: 130, render: (_, material, index) => <Select aria-label={`${formulaMaterialName(material, index)}比例设置`} value={form.materials[material.materialId]?.mode ?? 'VARIABLE'} disabled={busy} onChange={mode => patchMaterial(material.materialId, { mode })} options={[{ value: 'VARIABLE', label: '待预测' }, { value: 'FIXED', label: '固定' }]} /> },
+    ...(['ratio', 'minimum', 'maximum'] as const).map(key => ({ title: ({ ratio: '固定比例（%）', minimum: '最小比例（%）', maximum: '最大比例（%）' })[key], width: 145, render: (_: unknown, material: FormulaMaterial, index: number) => {
+      const setting = form.materials[material.materialId], relevant = key === 'ratio' ? setting?.mode === 'FIXED' : setting?.mode !== 'FIXED'
+      return relevant ? <InputNumber aria-label={`${formulaMaterialName(material, index)}${({ ratio: '固定比例', minimum: '最小比例', maximum: '最大比例' })[key]}`} value={setting?.[key]} disabled={busy} onBlur={() => touch(`material:${material.materialId}`)} status={touched[`material:${material.materialId}`] && materialSettingError(setting) ? 'error' : undefined} onChange={value => patchMaterial(material.materialId, { [key]: value ?? undefined })} /> : '—'
+    } })),
+  ]
+  const resultStatus = completed ? busy ? '上次结果' : changed ? '需重新生成' : completed.run.executionStatus === 'FAILED' ? '未完成' : completed.run.outcomeStatus === 'BLOCKED' ? '无可行方案' : completed.run.outcomeStatus === 'PARTIAL' ? '部分完成' : '已完成' : ''
+  const stageText = ({ QUEUED: '等待生成', CHECKING_CONDITIONS: '检查输入', SEARCHING: '生成配方', RULE_CHECKING: '检查方案' } as Record<string, string>)[running?.currentStage ?? ''] ?? '正在生成配方'
+  return <main className="formula-prediction-page">
+    <header className="formula-prediction-header"><Typography.Title level={2}>AI配方预测</Typography.Title><Link to="/assistant/model-center">模型中心</Link></header>
+    <section className="formula-target-panel" aria-label="目标选择"><label htmlFor="formula-targets">目标性能</label><Select id="formula-targets" aria-label="目标性能" mode="multiple" value={form.targets} options={options} maxTagCount="responsive" showSearch optionFilterProp="label" optionLabelProp="selectedLabel" placeholder="选择要达到的性能，可多选" disabled={busy} loading={catalogLoading} onChange={targets => { patchForm({ targets }); setTouched({}) }} />
+      {catalogError && <Alert type="error" showIcon message={catalogError} action={<Button size="small" onClick={() => setRefresh(value => value + 1)}>重试</Button>} />}
+      {!catalogLoading && !catalogError && !knownTargets.some(target => target.available) && !form.targets.length && <small className="formula-field-hint">当前没有可用于配方预测的指标，请在模型中心检查对应模型。</small>}
+    </section>
+    {storageError && <Alert className="formula-page-notice" type="warning" showIcon message={storageError} />}
+    {runError && !pending && <Alert className="formula-page-notice" type="error" showIcon message={runError} />}
+    {recordId ? <div className="formula-loading"><Spin /><span>正在读取方案</span></div> : !form.targets.length && !completed ? <div className="formula-start"><ExperimentOutlined /><span>选择目标性能后设置目标值</span></div> : <>
+      {form.targets.length > 0 && <section className="formula-input-panel" aria-label="配方预测输入"><div className="formula-panel-heading"><h3>目标与条件</h3><Button type="text" size="small" disabled={busy || contextLoading} icon={<ReloadOutlined />} onClick={() => setRefresh(value => value + 1)}>刷新模型信息</Button></div>
+        {contextError ? <Alert type="error" showIcon message={contextError} /> : contextLoading && !pending ? <div className="formula-loading"><Spin /><span>正在读取所需输入</span></div> : inputContext && <>
+          {unavailable.length > 0 && <Alert className="formula-input-notice" type="warning" showIcon message={unavailable.map(target => `${captions.get(target.targetId) ?? target.name}：${formulaUnavailable(target)}`).join('；')} />}
+          {inputContext.configurationConflicts?.length ? <Alert className="formula-input-notice" type="error" showIcon message="所选指标的实验条件类型、单位或可选类别不同，请调整指标组合。" /> : null}
+          {selected.length !== form.targets.length && <Alert className="formula-input-notice" type="warning" showIcon message="部分指标已不可用，请取消后重新选择。" />}
+          <Table size="small" rowKey="targetId" columns={goalColumns} dataSource={selected} pagination={false} scroll={{ x: 'max-content' }} />
+          <Collapse className="formula-constraints" activeKey={openSections} onChange={keys => setOpenSections(typeof keys === 'string' ? [keys] : keys)} items={[
+            ...(inputContext.materialIntersection.length ? [{ key: 'materials', label: `材料比例限制 · ${inputContext.materialIntersection.length} 种材料 · 合计 100%`, children: <>
+              <Table size="small" rowKey="materialId" columns={materialColumns} dataSource={inputContext.materialIntersection} pagination={false} scroll={{ x: 'max-content' }} />
+              {inputContext.materialIntersection.filter(material => touched[`material:${material.materialId}`] && materialSettingError(form.materials[material.materialId])).map((material, index) => <div role="alert" className="formula-field-error" key={material.materialId}>{formulaMaterialName(material, index)}：{materialSettingError(form.materials[material.materialId])}</div>)}
+              {spaceError && <div role="alert" className="formula-field-error">{spaceError}</div>}
+            </> }] : []),
+            ...(inputContext.requiredInputs.length ? [{ key: 'inputs', label: `实验条件 · ${inputContext.requiredInputs.length} 项${inputErrors.length ? ` · ${inputErrors.length} 项待填写` : ''}`, children: <div className="formula-condition-grid">{inputContext.requiredInputs.map(field => {
+              const setting: InputSetting = form.inputs[field.code] ?? { mode: 'FIXED' }, error = formulaInputError(field, setting), invalid = touched[`input:${field.code}`] && error
+              const props = { disabled: busy, 'aria-label': fieldName(field), onBlur: () => touch(`input:${field.code}`), status: invalid ? 'error' as const : undefined }
+              return <div className="formula-condition-field" key={field.code}><label>{fieldName(field)}{field.unit && <span>（{field.unit}）</span>}{field.required && <em aria-label="必填">*</em>}</label>
+                {field.valueType === 'NUMBER' ? <><Select aria-label={`${fieldName(field)}设置方式`} disabled={busy} value={setting.mode} options={[{ value: 'VARIABLE', label: '范围内预测' }, { value: 'FIXED', label: '固定值' }]} onChange={mode => patchInput(field.code, { mode })} />{setting.mode === 'VARIABLE' ? <div className="formula-condition-range">{(['minimum', 'maximum', 'step'] as const).map(key => <label className="formula-small-field" key={key}><span>{({ minimum: '最小值', maximum: '最大值', step: '步长（可选）' })[key]}</span><InputNumber {...props} aria-label={`${fieldName(field)}${({ minimum: '最小值', maximum: '最大值', step: '步长' })[key]}`} value={setting[key]} onChange={value => patchInput(field.code, { [key]: value ?? undefined })} /></label>)}</div> : <InputNumber {...props} value={typeof setting.value === 'number' ? setting.value : undefined} onChange={value => patchInput(field.code, { value: value ?? undefined })} />}</> : field.valueType === 'CATEGORY' ? <Select {...props} value={typeof setting.value === 'string' || typeof setting.value === 'number' ? String(setting.value) : undefined} options={categoryOptions(field)} onChange={value => patchInput(field.code, { value })} placeholder="请选择" /> : field.valueType === 'BOOLEAN' ? <Select {...props} value={typeof setting.value === 'boolean' ? setting.value : undefined} options={[{ value: true, label: '是' }, { value: false, label: '否' }]} onChange={value => patchInput(field.code, { value })} placeholder="请选择" /> : <Input {...props} value={typeof setting.value === 'string' ? setting.value : ''} onChange={event => patchInput(field.code, { value: event.target.value || undefined })} />}
+                {invalid && <small role="alert" className="formula-field-error">{error}</small>}
+                {field.supportedRanges?.length ? <small className="formula-field-hint">训练记录 {field.supportedRanges.map(range => `${formatPredictionNumber(range.minimum)}～${formatPredictionNumber(range.maximum)}${field.unit ?? ''}`).join(' / ')}</small> : null}
+              </div>
+            })}</div> }] : []),
+            ...(selected.length > 1 ? [{ key: 'weights', label: '多目标权重', children: <div className="formula-weight-grid">{selected.map(target => <label className="formula-small-field" key={target.targetId}><span>{captions.get(target.targetId) ?? target.name}</span><InputNumber aria-label={`${captions.get(target.targetId) ?? target.name}权重`} disabled={busy} value={form.goals[target.targetId]?.weight ?? 1} onBlur={() => touch(`goal:${target.targetId}`)} onChange={weight => patchGoal(target.targetId, { weight: weight ?? 1 })} /></label>)}</div> }] : []),
+          ]} />
+          {spaceError && !inputContext.materialIntersection.length && <Alert className="formula-input-notice" type="warning" showIcon message={spaceError} />}
+          <div className="formula-submit-row"><span>{missing ? `还有 ${missing} 项目标或输入待填写` : spaceError ? '请调整材料比例范围' : !permission ? '当前账号没有配方预测权限' : ''}</span><Button aria-label="生成配方方案" type="primary" icon={<ExperimentOutlined />} loading={Boolean(pending)} disabled={!canGenerate} onClick={start}>生成配方方案</Button></div>
+        </>}
+      </section>}
+      {(completed || pending) && <section className="formula-results-panel" aria-label="配方方案"><div className="formula-panel-heading"><h3>配方方案{completed && !pending ? ` · ${completed.run.actualCandidateCount} 个` : ''}</h3>{completed && <Tag color={changed || completed.run.outcomeStatus === 'PARTIAL' ? 'gold' : completed.run.executionStatus === 'FAILED' ? 'red' : 'default'}>{resultStatus}</Tag>}</div>
+        {pending && <div className="formula-loading" role="status"><Spin /><span>{runError || stageText}{running ? ` · ${running.progress}%` : ''}</span></div>}
+        {completed && <>{formulaRunNotice(completed.run) && <Alert className="formula-result-notice" type={completed.run.executionStatus === 'FAILED' ? 'error' : 'warning'} showIcon message={formulaRunNotice(completed.run)} />}{completed.run.candidates.length > 0 && <FormulaCandidateTable completed={completed} stale={changed} />}</>}
+      </section>}
+    </>}
+  </main>
 }

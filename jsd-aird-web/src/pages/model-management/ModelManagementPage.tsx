@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { App, Button, Card, Drawer, Empty, Form, Input, Modal, Progress, Select, Segmented, Space, Table, Tag, Tooltip, Typography } from 'antd'
-import { CheckCircleOutlined, ClockCircleOutlined, ControlOutlined, PauseCircleOutlined, PlayCircleOutlined, ReloadOutlined } from '@ant-design/icons'
+import { App, Button, Card, Checkbox, Drawer, Empty, Form, Input, Modal, Progress, Select, Segmented, Space, Table, Tag, Tooltip, Typography } from 'antd'
+import { CheckCircleOutlined, ClockCircleOutlined, ReloadOutlined } from '@ant-design/icons'
 import { useAuthStore } from '@/stores/auth-store'
-import { modelingApi } from '@/services/ai-rnd/modeling-api'
 import { trainingApi } from '@/services/ai-rnd/training-api'
-import type { ModelDetail, ModelVersion, PredictionTargetSummary, TrainingJobDetail, TrainingJobSummary, TrainingSettings } from '@/services/ai-rnd/ai-rnd-types'
+import type { ModelDetail, ModelVersion, TrainingJobDetail, TrainingJobSummary } from '@/services/ai-rnd/ai-rnd-types'
 import { isModelVersionChanged } from '@/services/http/errors'
+import { aiActionFeedback } from '@/services/ai-rnd/action-feedback'
 import './model-management.css'
 
 const modelStatus: Record<string, { text: string; color: string }> = {
@@ -69,14 +69,48 @@ const stageLabel: Record<string, string> = {
   SUCCEEDED: '训练完成', FAILED: '训练失败', CANCELLED: '已取消', RUNNING: '运行中',
 }
 const releaseActionLabel: Record<string, string> = {
-  ACTIVATE: '启用', PAUSE: '暂停', ROLLBACK: '回退', RETIRE: '归档', REJECT: '不采用',
+  REPLACE: '更新版本', ACTIVATE: '启用', PAUSE: '暂停', ROLLBACK: '回退', RETIRE: '归档', REJECT: '不采用',
 }
 const running = new Set(['QUEUED', 'MATERIALIZING', 'SNAPSHOT_VALIDATING', 'FOLDING', 'TRAINING', 'VALIDATING'])
 
 function when(value?: string) { return value ? new Date(value).toLocaleString('zh-CN') : '尚未执行' }
-function firstMetric(metrics: Record<string, unknown>) {
-  const entry = Object.entries(metrics).find(([key, val]) => typeof val === 'number' && key !== 'candidateCount' && customerMetricKeys.has(key))
-  return entry ? `${metricOriginalLabel[entry[0]] ?? entry[0]}（${metricLabel[entry[0]] ?? '验证指标'}） ${Number(entry[1]).toFixed(3)}` : '暂无业务验证指标'
+const preferredMetrics: Record<string, string[]> = {
+  CONTINUOUS: ['mae', 'rmse', 'r2'], ORDINAL: ['gradeMae', 'plusMinusOneAccuracy', 'spearman'],
+  BINARY: ['macroF1', 'accuracy', 'logLoss'], CATEGORICAL: ['macroF1', 'accuracy', 'logLoss'],
+}
+const lowerIsBetter = new Set(['mae', 'rmse', 'gradeMae', 'logLoss'])
+function primaryMetric(model: Pick<ModelVersion, 'metrics' | 'valueType'>) {
+  const available = Object.entries(model.metrics).filter(([key, value]) => customerMetricKeys.has(key) && typeof value === 'number')
+  const ordered = preferredMetrics[model.valueType] ?? []
+  const entry = ordered.map((key) => available.find(([candidate]) => candidate === key)).find(Boolean) ?? available[0]
+  if (!entry) return { value: '暂无验证指标', detail: '打开详情查看训练结果' }
+  const [key, value] = entry
+  const direction = lowerIsBetter.has(key) ? '越低越好' : '越高越好'
+  return { value: `${metricOriginalLabel[key] ?? key} ${Number(value).toFixed(3)}`, detail: `${metricLabel[key] ?? '验证指标'} · ${direction}` }
+}
+
+function modelActionLabel(status: string) {
+  if (status === 'CANDIDATE') return '检查结果'
+  if (status === 'ACTIVE') return '查看模型'
+  if (status === 'REJECTED') return '查看原因'
+  if (status === 'RETIRED') return '查看历史'
+  return '查看版本'
+}
+
+function modelStateHint(model: ModelVersion) {
+  if (model.status === 'CANDIDATE') return '检查验证结果后再决定是否启用'
+  if (model.status === 'ACTIVE') return '当前用于预测'
+  if (model.status === 'PAUSED') return '已暂停，不用于新预测'
+  if (model.status === 'REJECTED') return '未通过检查，可查看原因'
+  return '历史版本，仅供查看'
+}
+
+function modelUsageGuidance(model: ModelVersion) {
+  if (model.status === 'CANDIDATE') return model.productionEligible ? '检查验证结果后，再决定是否启用此版本。' : '此版本尚未达到启用条件，请查看验证结果和未通过原因。'
+  if (model.status === 'ACTIVE') return '此版本当前用于预测；新的训练结果会保存为独立版本。'
+  if (model.status === 'PAUSED') return '此版本已暂停，不会用于新的预测。'
+  if (model.status === 'REJECTED') return '此版本未通过检查，可查看验证表现和版本记录了解原因。'
+  return '这是历史版本，不会用于新的预测。'
 }
 
 function algorithmName(value: string) {
@@ -98,21 +132,18 @@ function metricValue(key: string, value: number) {
 
 type ModelManagementPageProps = {
   embedded?: boolean
+  focusModelId?: string
   focusTargetId?: string
-  onOpenSettings?: (targetId: string) => void
   view?: 'models' | 'jobs'
   onViewChange?: (view: 'models' | 'jobs') => void
 }
 
-export function ModelManagementPage({ embedded = false, focusTargetId, onOpenSettings, view, onViewChange }: ModelManagementPageProps = {}) {
+export function ModelManagementPage({ embedded = false, focusTargetId, focusModelId, view, onViewChange }: ModelManagementPageProps = {}) {
   const { message } = App.useApp()
   const canOperate = useAuthStore((state) => state.can('ai.training.operate'))
   const canPublish = useAuthStore((state) => state.can('ai.model.publish'))
-  const canModelingRead = useAuthStore((state) => state.can('ai.modeling.read'))
-  const [settings, setSettings] = useState<TrainingSettings>()
   const [models, setModels] = useState<ModelVersion[]>([])
   const [jobs, setJobs] = useState<TrainingJobSummary[]>([])
-  const [targets, setTargets] = useState<PredictionTargetSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [keyword, setKeyword] = useState('')
   const [status, setStatus] = useState<string>()
@@ -123,20 +154,25 @@ export function ModelManagementPage({ embedded = false, focusTargetId, onOpenSet
   const [action, setAction] = useState<{ type: 'activate' | 'pause' | 'rollback'; model: ModelVersion }>()
   const [actionForm] = Form.useForm<{ reason: string }>()
   const focusedTargetRef = useRef<string>()
-  const [showAllWaitingTargets, setShowAllWaitingTargets] = useState(false)
+  const [showHistory, setShowHistory] = useState(false)
+  const visibleModels = useMemo(() => {
+    if (showHistory || status) return models
+    const latest = new Map<string, number>()
+    for (const model of models) latest.set(model.targetId, Math.max(latest.get(model.targetId) ?? 0, model.version))
+    return models.filter((model) => model.status === 'ACTIVE' || model.version === latest.get(model.targetId))
+  }, [models, showHistory, status])
 
-  const report = useCallback((error: unknown) => { void message.error(error instanceof Error ? error.message : '操作失败') }, [message])
+  const report = useCallback((error: unknown) => { void message.error(aiActionFeedback(error, '操作未完成，请重试')) }, [message])
   const load = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true)
     try {
-      const [setting, modelPage, jobPage, targetPage] = await Promise.all([
-        trainingApi.settings(), trainingApi.models({ status, category, keyword: keyword || undefined, page: 1, size: 100 }),
+      const [modelPage, jobPage] = await Promise.all([
+        trainingApi.models({ status, category, keyword: keyword || undefined, page: 1, size: 100 }),
         trainingApi.jobs({ keyword: keyword || undefined, page: 1, size: 100 }),
-        canModelingRead ? modelingApi.targets({ page: 1, size: 100 }) : Promise.resolve({ items: [] as PredictionTargetSummary[], total: 0, page: 1, size: 100 }),
       ])
-      setSettings(setting); setModels(modelPage.items); setJobs(jobPage.items); setTargets(targetPage.items)
+      setModels(modelPage.items); setJobs(jobPage.items)
     } catch (error) { report(error) } finally { if (!quiet) setLoading(false) }
-  }, [canModelingRead, category, keyword, report, status])
+  }, [category, keyword, report, status])
 
   useEffect(() => { void load() }, [load])
   const hasRunning = jobs.some((job) => running.has(job.status))
@@ -146,21 +182,13 @@ export function ModelManagementPage({ embedded = false, focusTargetId, onOpenSet
   const activeCount = models.filter((model) => model.status === 'ACTIVE').length
   const candidateCount = models.filter((model) => model.status === 'CANDIDATE').length
   const trainingCount = jobs.filter((job) => running.has(job.status)).length
-  const modeledTargets = new Set(models.map((model) => model.targetId))
-  const waitingDataCount = targets.filter((target) => !modeledTargets.has(target.id)).length
-  // Keep the full set for the expandable summary.  The previous hard cap of
-  // 12 made the headline count (for example, 56 targets) disagree with the
-  // "查看全部" number, which was confusing in a customer-facing screen.
-  const waitingTargets = targets.filter((target) => !modeledTargets.has(target.id))
-  const categories = useMemo(() => [...new Set((canModelingRead ? targets.map((target) => target.category) : models.map((model) => model.category)).filter(Boolean))], [canModelingRead, models, targets])
-
-  const evaluate = async () => { try { const result = await trainingApi.evaluate(); void message.success(`已检查 ${result.targetsChecked} 个目标，新建 ${result.jobsCreated} 个训练任务`); await load() } catch (error) { report(error) } }
+  const categories = useMemo(() => [...new Set(models.map((model) => model.category).filter(Boolean))], [models])
   const openModel = async (row: ModelVersion) => { try { setModelDetail(await trainingApi.model(row.id)) } catch (error) { report(error) } }
   useEffect(() => {
-    if (!focusTargetId || focusedTargetRef.current === focusTargetId || !models.length) return
-    const model = models.find((item) => item.targetId === focusTargetId)
-    if (model) { focusedTargetRef.current = focusTargetId; void openModel(model) }
-  }, [focusTargetId, models])
+    if (!focusTargetId || focusedTargetRef.current === (focusModelId ?? focusTargetId) || !models.length) return
+    const model = models.find((item) => focusModelId ? item.id === focusModelId : item.targetId === focusTargetId)
+    if (model) { focusedTargetRef.current = focusModelId ?? focusTargetId; void openModel(model) }
+  }, [focusTargetId, focusModelId, models])
   const openJob = async (row: TrainingJobSummary) => { try { setJobDetail(await trainingApi.job(row.id)) } catch (error) { report(error) } }
   const retryJob = async () => {
     if (!jobDetail) return
@@ -186,19 +214,17 @@ export function ModelManagementPage({ embedded = false, focusTargetId, onOpenSet
         void message.warning('模型版本已更新，列表已刷新，请重新打开当前模型后再操作')
         return
       }
-      if (error instanceof Error) report(error)
+      if (error instanceof Error) { setAction(undefined); report(error) }
     }
   }
 
   const modelColumns = [
-    { title: '预测目标', key: 'target', render: (_: unknown, row: ModelVersion) => <div className="model-name"><strong>{row.targetName}</strong><span>{categoryLabel[row.category] ?? '实验数据'} · {valueType[row.valueType] ?? '结果预测'}</span></div> },
-    { title: '预测方法', dataIndex: 'modelType', width: 190, render: (value: string) => algorithmName(value) },
-    { title: '模型状态', dataIndex: 'status', width: 120, render: (value: string) => <Tag color={modelStatus[value]?.color}>{modelStatus[value]?.text ?? value}</Tag> },
-    { title: '验证结果', key: 'metrics', render: (_: unknown, row: ModelVersion) => <div className="model-metric"><strong>{firstMetric(row.metrics)}</strong><span>{row.comparisonStatus === 'NOT_COMPARABLE' ? '暂无同口径正式模型比较' : row.comparisonStatus === 'BETTER' ? '优于当前模型' : '已有比较结果'}</span></div> },
-    { title: '训练数据', dataIndex: 'trainableSamples', width: 110, render: (count: number) => `${count} 条` },
-    { title: '版本', dataIndex: 'version', width: 80, render: (version: number) => `第${version}版` },
-    { title: '更新时间', dataIndex: 'updatedAt', width: 170, render: when },
-    { title: '操作', key: 'action', width: 190, render: (_: unknown, row: ModelVersion) => <Space size={0}><Button type="link" onClick={() => void openModel(row)}>查看详情</Button>{onOpenSettings && canModelingRead && <Button type="link" onClick={() => onOpenSettings(row.targetId)}>训练数据与设置</Button>}</Space> },
+    { title: '预测目标', key: 'target', width: 180, ellipsis: true, render: (_: unknown, row: ModelVersion) => <div className="model-name"><div className="model-name-head"><strong title={row.targetName}>{row.targetName}</strong></div><span>{row.source?.datasetName || categoryLabel[row.category] || '实验数据'} · {valueType[row.valueType] ?? '结果预测'}{row.source?.xColumns?.length ? ` · X：${row.source.xColumns.map(x => x.name).join('、')}` : ''}</span></div> },
+    { title: '预测方法', dataIndex: 'modelType', width: 120, render: (value: string) => algorithmName(value) },
+    { title: '模型状态', dataIndex: 'status', width: 135, render: (_: string, row: ModelVersion) => { const state = modelStatus[row.status]; return <div className="model-state-cell"><Tag color={state?.color}>{state?.text ?? row.status}</Tag><span>{modelStateHint(row)}</span></div> } },
+    { title: '验证结果', key: 'metrics', width: 165, render: (_: unknown, row: ModelVersion) => { const metric = primaryMetric(row); return <div className="model-metric"><strong>{metric.value}</strong><span>{metric.detail}</span></div> } },
+    { title: '训练记录', key: 'samples-version', width: 125, render: (_: unknown, row: ModelVersion) => <div className="model-training-meta"><span>{row.trainableSamples} 条 · 第{row.version}版</span><small>{new Date(row.updatedAt).toLocaleDateString('zh-CN')}</small></div> },
+    { title: '操作', key: 'action', width: 110, render: (_: unknown, row: ModelVersion) => <Button type="link" onClick={() => void openModel(row)}>{modelActionLabel(row.status)}</Button> },
   ]
   const jobColumns = [
     { title: '预测目标', key: 'target', render: (_: unknown, row: TrainingJobSummary) => <div className="model-name"><strong>{row.targetName}</strong><span>{valueType[row.valueType] ?? '结果预测'}</span></div> },
@@ -209,49 +235,31 @@ export function ModelManagementPage({ embedded = false, focusTargetId, onOpenSet
   ]
 
   return <main className={`model-management-page${embedded ? ' model-management-panel' : ''}`}>
-    {!embedded && <header className="model-management-header">
-      <div><Typography.Title level={2}>模型中心</Typography.Title><Typography.Text>查看各项性能是否已有可用预测，并了解数据积累进度。</Typography.Text></div>
-      <Space><Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button><Button type="primary" icon={<PlayCircleOutlined />} disabled={!canOperate} onClick={() => void evaluate()}>立即检查</Button></Space>
-    </header>}
+    {!embedded && <header className="model-management-header"><Typography.Title level={2}>模型中心</Typography.Title></header>}
 
-    <section className="learning-control">
-      <div className="learning-icon"><ControlOutlined /></div>
-      <div><strong>自动训练新实验数据</strong><span>可用于训练的记录更新后，系统会按已设置的训练和验证要求生成待检查的模型版本。</span></div>
-      <div className="learning-meta"><small>最近检查</small><b>{when(settings?.lastEvaluatedAt)}</b></div>
-      <Tag color="green" className="learning-status-tag">系统自动运行</Tag>
-    </section>
-
-    <section className={`model-summary-strip${canModelingRead ? '' : ' model-summary-strip-limited'}`}>
+    <section className="model-summary-strip">
       <div><CheckCircleOutlined /><span>使用中</span><strong>{activeCount}</strong></div>
-      <div><ClockCircleOutlined /><span>待检查模型版本</span><strong>{candidateCount}</strong></div>
+      <div><ClockCircleOutlined /><span>待检查版本</span><strong>{candidateCount}</strong></div>
       <div><ReloadOutlined spin={trainingCount > 0} /><span>正在训练</span><strong>{trainingCount}</strong></div>
-      {canModelingRead && <div><PauseCircleOutlined /><span>积累数据</span><strong>{waitingDataCount}</strong></div>}
     </section>
-
-    {canModelingRead && waitingTargets.length > 0 && <Card className="model-readiness-card" size="small" title="正在积累数据的性能" bordered={false}>
-      <Typography.Paragraph type="secondary">这些性能已经登记，但当前样本还不足以形成可用预测。默认只显示前 8 项，数据积累后系统会自动检查是否可以训练。</Typography.Paragraph>
-      <Space wrap>{(showAllWaitingTargets ? waitingTargets : waitingTargets.slice(0, 8)).map((target) => <Tag key={target.id}>{target.name} · {valueType[target.valueType] ?? '结果'}</Tag>)}</Space>
-      {waitingTargets.length > 8 && <Button type="link" size="small" onClick={() => setShowAllWaitingTargets((current) => !current)}>{showAllWaitingTargets ? '收起' : `查看全部 ${waitingTargets.length} 项`}</Button>}
-    </Card>}
 
     <Card className="model-directory" variant="borderless">
       <div className="model-directory-toolbar">
         <Segmented value={tab} onChange={(value) => { const next = value as 'models' | 'jobs'; setTab(next); onViewChange?.(next) }} options={[{ value: 'models', label: '模型目录' }, { value: 'jobs', label: `训练任务${trainingCount ? ` (${trainingCount})` : ''}` }]} />
-        <Space wrap><Input.Search allowClear placeholder="搜索预测目标" onSearch={setKeyword} style={{ width: 220 }} /><Select allowClear placeholder="性能分类" value={category} onChange={setCategory} options={categories.map((item) => ({ value: item, label: categoryLabel[item] ?? '实验数据' }))} style={{ width: 150 }} />{tab === 'models' && <Select allowClear placeholder="模型状态" value={status} onChange={setStatus} options={Object.entries(modelStatus).map(([value, item]) => ({ value, label: item.text }))} style={{ width: 140 }} />}</Space>
+        <Space wrap><Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button>{tab==='models'&&<Checkbox checked={showHistory} onChange={(event)=>setShowHistory(event.target.checked)}>显示历史版本</Checkbox>}<Input.Search allowClear placeholder="搜索预测目标" onSearch={setKeyword} style={{ width: 200 }} /><Select allowClear placeholder="性能分类" value={category} onChange={setCategory} options={categories.map((item) => ({ value: item, label: categoryLabel[item] ?? '实验数据' }))} style={{ width: 140 }} />{tab === 'models' && <Select allowClear placeholder="模型状态" value={status} onChange={setStatus} options={Object.entries(modelStatus).map(([value, item]) => ({ value, label: item.text }))} style={{ width: 130 }} />}</Space>
       </div>
-      <Typography.Paragraph className="model-directory-note" type="secondary">“训练记录数”表示生成该模型版本时实际使用的记录数量。要查看最新数据及每条记录能否用于训练，请进入“建模设置”。</Typography.Paragraph>
-      {tab === 'models' ? <Table rowKey="id" loading={loading} columns={modelColumns} dataSource={models} pagination={{ pageSize: 12 }} locale={{ emptyText: <Empty description="尚无模型。请先在建模设置确认训练记录和训练要求。" /> }} /> : <Table rowKey="id" loading={loading} columns={jobColumns} dataSource={jobs} pagination={{ pageSize: 12 }} locale={{ emptyText: <Empty description="暂无训练任务" /> }} />}
+      {tab === 'models' ? <Table className="model-list-table" rowKey="id" loading={loading} columns={modelColumns} dataSource={visibleModels} tableLayout="fixed" scroll={{ x: 870 }} pagination={{ pageSize: 12 }} locale={{ emptyText: <Empty description="没有符合条件的模型" /> }} /> : <Table rowKey="id" loading={loading} columns={jobColumns} dataSource={jobs} scroll={{ x: 900 }} pagination={{ pageSize: 12 }} locale={{ emptyText: <Empty description="暂无训练任务" /> }} />}
     </Card>
 
     <Drawer width={620} open={Boolean(modelDetail)} onClose={() => setModelDetail(undefined)} title={modelDetail ? `${modelDetail.model.targetName} · 第${modelDetail.model.version}版` : ''}>
     {modelDetail && <div className="model-drawer">
         <div className="drawer-lead"><Tag color={modelStatus[modelDetail.model.status]?.color}>{modelStatus[modelDetail.model.status]?.text}</Tag>{algorithmName(modelDetail.model.modelType)}<span>{valueType[modelDetail.model.valueType] ?? '结果预测'} · {modelDetail.model.trainableSamples} 条训练数据</span></div>
         <section className="algorithm-explanation"><h3>算法说明</h3><p><strong>{modelTypeOriginalLabel[modelDetail.model.modelType] ?? modelDetail.model.modelType}（{modelTypeLabel[modelDetail.model.modelType] ?? '综合预测方法'}）</strong>：{modelTypeDescription[modelDetail.model.modelType] ?? '系统根据当前数据自动选择并验证预测方法。'}</p></section>
-        {!modelDetail.model.productionEligible && <div className="model-notice">{modelDetail.testActivationAllowed ? '此模型已获准在测试环境中启用，仅用于模拟演练；不能用于正式业务。' : '此版本尚未达到正式业务使用要求；由生成数据训练的模型仅限测试环境模拟演练。'}</div>}
-        <section><h3>验证表现</h3><p className="metric-intro">先看原始指标名称，再看中文含义和数学解释；不同指标需要结合判断，不能只看单个数值。</p><div className="metric-grid">{orderedMetrics(modelDetail.model.metrics).slice(0, 10).map(([key, value]) => <div key={key} className="metric-card"><div className="metric-title"><span><strong>{metricOriginalLabel[key] ?? key}</strong><em>{metricLabel[key] ?? '验证指标'}</em></span><Tooltip title={metricDescription[key] ?? '该指标用于衡量模型表现。'}><span className="metric-help">?</span></Tooltip></div><strong>{metricValue(key, Number(value))}</strong><p>{metricDescription[key] ?? '该指标用于衡量模型表现。'}</p></div>)}</div></section>
+        <div className="model-notice">{modelUsageGuidance(modelDetail.model)}</div>
+        <section><h3>验证表现</h3><p className="metric-intro">查看模型在未参与训练的数据上的预测误差和准确情况。</p><div className="metric-grid">{orderedMetrics(modelDetail.model.metrics).slice(0, 10).map(([key, value]) => <div key={key} className="metric-card"><div className="metric-title"><span><strong>{metricOriginalLabel[key] ?? key}</strong><em>{metricLabel[key] ?? '验证指标'}</em></span><Tooltip title={metricDescription[key] ?? '该指标用于衡量模型表现。'}><span className="metric-help">?</span></Tooltip></div><strong>{metricValue(key, Number(value))}</strong><p>{metricDescription[key] ?? '该指标用于衡量模型表现。'}</p></div>)}</div></section>
+        {modelDetail.model.source?.origin === 'WORKBENCH' && <section><h3>训练数据</h3><p>{modelDetail.model.source.datasetName}</p><p>X：{modelDetail.model.source.xColumns?.map(x => x.name).join('、')}</p><p>Y：{modelDetail.model.source.yColumn?.name}{modelDetail.model.source.yColumn?.unit ? `（${modelDetail.model.source.yColumn.unit}）` : ''}</p><Table size="small" rowKey={(row, index) => String(row.id ?? index)} scroll={{ x: 'max-content' }} pagination={{pageSize: 8}} dataSource={(modelDetail.modelCard.trainingRows as Array<{id: string; label?: string; title?: string; sourceDatasetName?: string; values: Record<string, string | number>}>) ?? []} columns={[{ title: '实验记录', render: (_, row) => row.label || row.title || row.sourceDatasetName || modelDetail.model.source?.datasetName }, ...[...(modelDetail.model.source.xColumns ?? []), ...(modelDetail.model.source.yColumn ? [modelDetail.model.source.yColumn] : [])].map(column => ({ title: `${column.name}${column.unit ? `（${column.unit}）` : ''}`, render: (_: unknown, row: {values: Record<string, string | number>}) => String(row.values[column.code] ?? '—') }))]} /></section>}
         <section><h3>版本记录</h3>{modelDetail.releases.length ? modelDetail.releases.map((release) => <div className="release-row" key={release.id}><Tag>{releaseActionLabel[release.action] ?? '状态变更'}</Tag><span>{release.reason}</span><small>{when(release.createdAt)}</small></div>) : <Typography.Text type="secondary">尚无启用或回退记录</Typography.Text>}</section>
-        <div className="model-notice">模型会根据已确认的实验数据自动更新。页面不展示内部训练编号和技术配置。</div>
-        {canPublish && <div className="drawer-actions">{modelDetail.model.status === 'CANDIDATE' && <Button type="primary" disabled={!modelDetail.model.productionEligible && !modelDetail.testActivationAllowed} onClick={() => setAction({ type: 'activate', model: modelDetail.model })}>{modelDetail.testActivationAllowed ? '启用测试模型' : '启用此模型版本'}</Button>}{modelDetail.model.status === 'ACTIVE' && <Button onClick={() => setAction({ type: 'pause', model: modelDetail.model })}>暂停使用</Button>}{['PAUSED', 'RETIRED'].includes(modelDetail.model.status) && <Button type="primary" disabled={!modelDetail.model.productionEligible && !modelDetail.testActivationAllowed} onClick={() => setAction({ type: 'rollback', model: modelDetail.model })}>回退到此版本</Button>}</div>}
+        {canPublish && <div className="drawer-actions">{modelDetail.model.status === 'CANDIDATE' && <Button type="primary" disabled={!modelDetail.model.productionEligible && !modelDetail.testActivationAllowed} onClick={() => setAction({ type: 'activate', model: modelDetail.model })}>启用此版本</Button>}{modelDetail.model.status === 'ACTIVE' && <Button onClick={() => setAction({ type: 'pause', model: modelDetail.model })}>暂停使用</Button>}{['PAUSED', 'RETIRED'].includes(modelDetail.model.status) && <Button type="primary" disabled={!modelDetail.model.productionEligible && !modelDetail.testActivationAllowed} onClick={() => setAction({ type: 'rollback', model: modelDetail.model })}>回退到此版本</Button>}</div>}
       </div>}
     </Drawer>
 
@@ -259,6 +267,6 @@ export function ModelManagementPage({ embedded = false, focusTargetId, onOpenSet
       {jobDetail && <div className="model-drawer"><div className="job-detail-progress"><Progress percent={jobDetail.job.progress} status={jobDetail.job.status === 'FAILED' ? 'exception' : jobDetail.job.status === 'SUCCEEDED' ? 'success' : 'active'} /><strong>{jobStatus[jobDetail.job.status]?.text ?? '处理中'}</strong><span>{jobDetail.job.errorMessage}</span></div><section><h3>运行记录</h3>{jobDetail.attempts.map((attempt) => <div className="attempt-row" key={attempt.id}><b>第 {attempt.attemptNo} 次</b><Tag color={attempt.status === 'SUCCEEDED' ? 'green' : attempt.status === 'RUNNING' ? 'processing' : 'red'}>{stageLabel[attempt.status] ?? '处理中'}</Tag><span>{stageLabel[attempt.stage] ?? '系统处理'}</span><small>{when(attempt.startedAt)}</small></div>)}</section><div className="model-notice">训练记录会自动保存，已有结果不会被覆盖。</div>{canOperate && <div className="drawer-actions">{jobDetail.job.status === 'FAILED' && <Button type="primary" onClick={() => { void retryJob() }}>重试</Button>}{running.has(jobDetail.job.status) && <Button danger onClick={() => { void cancelJob() }}>取消任务</Button>}</div>}</div>}
     </Drawer>
 
-    <Modal open={Boolean(action)} title={action?.type === 'pause' ? '暂停模型' : action?.type === 'rollback' ? '回退模型' : modelDetail?.testActivationAllowed ? '启用测试模型' : '启用此模型版本'} okText="确认" cancelText="取消" onCancel={() => setAction(undefined)} onOk={() => void submitAction()}><Form form={actionForm} layout="vertical"><Form.Item name="reason" label="操作原因" rules={[{ required: true, message: '请填写操作原因' }]}><Input.TextArea rows={3} maxLength={300} /></Form.Item></Form></Modal>
+    <Modal open={Boolean(action)} title={action?.type === 'pause' ? '暂停模型' : action?.type === 'rollback' ? '回退模型' : '启用此版本'} okText="确认" cancelText="取消" onCancel={() => setAction(undefined)} onOk={() => void submitAction()}><Form form={actionForm} layout="vertical"><Form.Item name="reason" label="操作原因" rules={[{ required: true, message: '请填写操作原因' }]}><Input.TextArea rows={3} maxLength={300} /></Form.Item></Form></Modal>
   </main>
 }

@@ -79,6 +79,9 @@ public interface TemplateRepository {
 
     int updateDraft(DraftUpdate update);
 
+    int attachInitialSnapshot(UUID organizationId, UUID versionId, UUID fileId,
+                              String snapshotHash, String workspaceHash);
+
     void replaceMappings(UUID versionId, TemplateFormat format, JsonNode mappings);
 
     void appendStructureChanges(

@@ -1,2 +1,2 @@
 export { ModelCenterPage } from './ModelCenterPage'
-export { ModelTargetPage } from './ModelTargetPage'
+export { LegacyModelCenterRedirect } from './LegacyModelCenterRedirect'

@@ -16,6 +16,9 @@ public interface DataRepository {
     void insertJob(NewJob job);
 
     void enqueueParse(UUID asyncJobId, UUID organizationId, UUID importJobId);
+    default void enqueueParse(UUID asyncJobId, UUID organizationId, UUID importJobId, UUID actorId) {
+        enqueueParse(asyncJobId, organizationId, importJobId);
+    }
 
     Optional<Job> findJob(UUID organizationId, UUID importJobId);
 
@@ -49,6 +52,8 @@ public interface DataRepository {
     Optional<String> findSourceOwner(UUID organizationId, UUID importJobId);
 
     Optional<Job> findJobForUpdate(UUID organizationId, UUID importJobId);
+
+    int hideExperimentJob(UUID organizationId, UUID importJobId);
 
     Optional<Job> findCompletedDuplicate(UUID organizationId, String sha256, UUID templateVersionId);
 

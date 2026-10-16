@@ -915,6 +915,11 @@ function valueCacheKey(binding: TemplateBinding) {
 }
 
 function sameValue(left: unknown, right: unknown) {
+  if (Array.isArray(left) && left.length === 1 && !Array.isArray(right)) {
+    return sameValue(left[0], right);
+  }
+  if (typeof left === 'number' && typeof right === 'string' && String(left) === right.trim()) return true;
+  if (typeof right === 'number' && typeof left === 'string' && String(right) === left.trim()) return true;
   return Object.is(left, right) || JSON.stringify(left) === JSON.stringify(right);
 }
 

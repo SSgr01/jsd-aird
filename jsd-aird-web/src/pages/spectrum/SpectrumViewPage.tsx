@@ -83,7 +83,7 @@ export function SpectrumViewPage() {
 
   return <div className="business-page spectrum-view-page">
     <div className="page-heading">
-      <div><Typography.Title level={2}>图谱查看</Typography.Title><Typography.Text type="secondary">按 IR、UV、HPLC/GPC、GC、纳米粒径和力学等分类查看，分类可继续扩展。</Typography.Text></div>
+      <div><Typography.Title level={2}>图谱查看</Typography.Title><Typography.Text type="secondary">按图谱类型查看和筛选数据。</Typography.Text></div>
       <Button type="primary" icon={<UploadOutlined />} onClick={() => navigate('/spectrum/upload')}>上传图谱</Button>
     </div>
     <CategoryCardGrid categories={cards} activeId={categoryId}

@@ -1,6 +1,6 @@
 import { httpClient } from '@/services/http/client'
-import { generateUUID } from '@/utils/uuid'
-import type { PredictionContext, PredictionRequest, PredictionResponse, PredictionRunning, QualityPolicy, QualityRule } from './ai-rnd-types'
+import { HttpError } from '@/services/http/errors'
+import type { PredictionContext, PredictionRequest, PredictionResponse, PredictionRunning } from './ai-rnd-types'
 
 interface ApiResponse<T> { data: T }
 const root = '/api/v1/ai/rnd'
@@ -18,17 +18,15 @@ export const predictionApi = {
       headers: { 'Idempotency-Key': idempotencyKey },
       validateStatus: (status) => [200, 202, 422, 503].includes(status),
     })
-    return response.data
+    const payload = response.data
+    if (payload?.executionStatus !== 'RUNNING' && !Array.isArray(payload?.results)) {
+      const failure = payload as unknown as { message?: string; code?: string; traceId?: string }
+      throw new HttpError(failure?.message || '预测服务返回异常，请稍后重试', failure?.code || 'PREDICTION_RESPONSE_INVALID', response.status, failure?.traceId)
+    }
+    return payload
   },
   async record(id: string) {
     const response = await httpClient.get<PredictionResponse | PredictionRunning>(`${root}/prediction-records/${id}`)
     return response.data
-  },
-  async qualityPolicies(targetId: string) { return data(await httpClient.get<ApiResponse<QualityPolicy[]>>(`${root}/targets/${targetId}/quality-policies`)) },
-  async createQualityPolicy(targetId: string, input: { defaultTrustLevel: string; defaultExplanation: string; rules: QualityRule[]; expectedRevision: number }) {
-    return data(await httpClient.post<ApiResponse<QualityPolicy>>(`${root}/targets/${targetId}/quality-policies`, input, { headers: { 'Idempotency-Key': generateUUID() } }))
-  },
-  async publishQualityPolicy(id: string, expectedRevision: number) {
-    return data(await httpClient.post<ApiResponse<QualityPolicy>>(`${root}/quality-policies/${id}/publish`, { expectedRevision }, { headers: { 'Idempotency-Key': generateUUID() } }))
   },
 }

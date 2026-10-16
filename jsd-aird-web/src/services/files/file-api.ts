@@ -16,7 +16,7 @@ export interface StageFileOptions {
 
 export async function stageFile(
   file: File,
-  kind: 'KNOWLEDGE' | 'SNAPSHOT' | 'IMPORT' | 'QUALITY_SOURCE' | 'PRODUCTION_SOURCE' | 'SPC_CHART' | 'RESEARCH_TEST_SOURCE' = 'KNOWLEDGE',
+  kind: 'KNOWLEDGE' | 'SNAPSHOT' | 'IMPORT' | 'QUALITY_SOURCE' | 'PRODUCTION_SOURCE' | 'SPC_CHART' | 'RESEARCH_TEST_SOURCE' | 'AI_MODELING_CATALOG' = 'KNOWLEDGE',
   options: StageFileOptions = {},
 ) {
   const body = new FormData();

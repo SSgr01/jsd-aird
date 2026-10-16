@@ -217,6 +217,14 @@
                 <directory>src/main/resources</directory>
             </resource>
             <resource>
+                <directory>../docs/operation-assistant</directory>
+                <targetPath>operation-assistant</targetPath>
+                <includes>
+                    <include>pages.json</include>
+                    <include>operation-manual.md</include>
+                </includes>
+            </resource>
+            <resource>
                 <directory>../jsd-aird-ai/src/jsd_aird_ai/task_profiles</directory>
                 <targetPath>ai-model-task-profiles</targetPath>
                 <includes>

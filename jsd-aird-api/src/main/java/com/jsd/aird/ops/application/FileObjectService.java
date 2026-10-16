@@ -206,6 +206,13 @@ public class FileObjectService implements FileStorageFacade {
             }
             return;
         }
+        if ("AI_MODELING_CATALOG".equalsIgnoreCase(kind)) {
+            var lowerName = originalName.toLowerCase(Locale.ROOT);
+            if (!lowerName.endsWith(".xls") && !lowerName.endsWith(".xlsx")) {
+                throw new ApiException(ApiErrorCode.BAD_REQUEST, "指标清单仅接受 XLS 或 XLSX 文件");
+            }
+            return;
+        }
         if (!"OFFICE".equalsIgnoreCase(kind) && !"TEMPLATE_SOURCE".equalsIgnoreCase(kind)) {
             return;
         }

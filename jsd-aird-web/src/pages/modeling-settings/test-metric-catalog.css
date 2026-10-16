@@ -1,0 +1,5 @@
+.catalog-manager-intro { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:12px; }
+.catalog-manager-intro > .ant-typography { max-width:480px; color:#57677d; line-height:1.6; }
+.catalog-manager-search { margin-bottom:12px; }
+.catalog-manager-error { margin:12px 0; }
+@media (max-width:760px) { .catalog-manager-intro { flex-direction:column; } }

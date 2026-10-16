@@ -84,7 +84,10 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
 
     private boolean isExcluded(HttpServletRequest request) {
         var path = request.getRequestURI();
-        return !path.startsWith("/api/v1/") || path.startsWith("/api/v1/auth/") || path.startsWith("/api/v1/iam/");
+        // This exact help endpoint is available to every authenticated user.
+        // SecurityConfig still enforces session authentication and CSRF.
+        return ("POST".equals(request.getMethod()) && "/api/v1/operation-assistant/qa/stream".equals(path))
+                || !path.startsWith("/api/v1/") || path.startsWith("/api/v1/auth/") || path.startsWith("/api/v1/iam/");
     }
 
     private boolean isRemovedLegacyAi(HttpServletRequest request) {
@@ -304,6 +307,9 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
 
         if (path.startsWith("/api/v1/data/experiment-import-jobs")) {
             if (read) return permission("experiment.view", "EXPERIMENT", "READ");
+            if (method.equals("DELETE")) return permission("experiment.delete", "EXPERIMENT", "WRITE");
+            if (method.equals("POST") && path.endsWith("/retry"))
+                return permission("experiment.update", "EXPERIMENT", "WRITE");
             if (path.contains("/commit") || path.contains("/experiment-sync"))
                 return permission("experiment.create", "EXPERIMENT", "WRITE");
             if (method.equals("PUT")) return permission("experiment.create", "EXPERIMENT", "WRITE");
@@ -365,6 +371,8 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
         if (path.startsWith("/api/v1/assistant") || path.startsWith("/api/v1/search"))
             return permission("ai.use", "AI", "USE");
         if (path.startsWith("/api/v1/files/staged")) {
+            if ("AI_MODELING_CATALOG".equalsIgnoreCase(request.getParameter("kind")))
+                return permission("ai.modeling.manage", "AI_MODELING", "WRITE");
             if ("PROJECT_DOCUMENT".equalsIgnoreCase(request.getParameter("kind")))
                 return permission("project.create", "PROJECT", "WRITE");
             if ("TEMPLATE_SOURCE".equalsIgnoreCase(request.getParameter("kind")))
@@ -385,15 +393,15 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
 
     private Permission aiRndPermission(String method, String path) {
         boolean read = Set.of("GET", "HEAD", "OPTIONS").contains(method);
+        if (path.equals("/api/v1/ai/rnd/test-metric-catalog/imports"))
+            return method.equals("POST") ? permission("ai.modeling.manage", "AI_MODELING", "WRITE")
+                    : read ? permission("ai.modeling.read", "AI_MODELING", "READ") : null;
+        if (path.matches("/api/v1/ai/rnd/test-metric-catalog/imports/[0-9a-f-]{36}/indicators") && read)
+            return permission("ai.modeling.read", "AI_MODELING", "READ");
         if (path.startsWith("/api/v1/ai/rnd/samples") && read)
             return permission("ai.modeling.read", "AI_DATA", "READ");
         if (path.equals("/api/v1/ai/rnd/facts/reconcile") && method.equals("POST"))
             return permission("ai.data.review", "AI_DATA", "OPERATE");
-        if (path.startsWith("/api/v1/ai/rnd/reference/") && read)
-            return permission("ai.modeling.read", "AI_MODELING", "READ");
-        if (path.startsWith("/api/v1/ai/rnd/material-aliases")
-                || path.startsWith("/api/v1/ai/rnd/material-dictionaries"))
-            return permission(read ? "ai.modeling.read" : "ai.config.manage", "AI_CONFIG", read ? "READ" : "WRITE");
         if (path.matches("/api/v1/ai/rnd/targets/[0-9a-f-]{36}/quality-policies")
                 || path.matches("/api/v1/ai/rnd/quality-policies/[0-9a-f-]{36}/publish")
                 || path.matches("/api/v1/ai/rnd/targets/[0-9a-f-]{36}/domain-policies")
@@ -405,7 +413,16 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
             return permission("ai.formula.predict", "AI_FORMULA", "USE");
         if (path.equals("/api/v1/ai/rnd/experiment-optimizations") && method.equals("POST"))
             return permission("ai.experiment.optimize", "AI_EXPERIMENT", "USE");
+        if (path.startsWith("/api/v1/ai/rnd/modeling-workbench/datasets") && read)
+            return permission("ai.modeling.read", "AI_MODELING", "READ");
+        if (path.matches("/api/v1/ai/rnd/modeling-workbench/runs/[0-9a-f-]{36}") && read)
+            return permission("ai.modeling.read", "AI_MODELING", "READ");
+        if (path.matches("/api/v1/ai/rnd/modeling-workbench/runs/[0-9a-f-]{36}/register") && method.equals("POST"))
+            return permission("ai.model.publish", "AI_MODEL", "PUBLISH");
+        if (path.equals("/api/v1/ai/rnd/modeling-workbench/runs") && method.equals("POST"))
+            return permission("ai.training.operate", "AI_TRAINING", "OPERATE");
         if ((path.startsWith("/api/v1/ai/rnd/optimization-baselines")
+                || path.startsWith("/api/v1/ai/rnd/optimization-datasets")
                 || path.startsWith("/api/v1/ai/rnd/optimization-context")
                 || path.matches("/api/v1/ai/rnd/experiment-optimizations/[0-9a-f-]{36}")) && read)
             return permission("ai.experiment.optimize", "AI_EXPERIMENT", "READ");
@@ -413,6 +430,12 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
             return permission("experiment.create", "EXPERIMENT", "WRITE");
         if (path.matches("/api/v1/ai/rnd/research-runs/[0-9a-f-]{36}/(experiment-links|feedback)") && read)
             return permission("ai.experiment.optimize", "AI_EXPERIMENT", "READ");
+        if (path.matches("/api/v1/ai/rnd/research-runs/[0-9a-f-]{36}/observations") && read)
+            return permission("ai.experiment.optimize", "AI_EXPERIMENT", "READ");
+        if (path.matches("/api/v1/ai/rnd/research-runs/[0-9a-f-]{36}/observations") && method.equals("PUT"))
+            return permission("ai.experiment.optimize", "AI_EXPERIMENT", "WRITE");
+        if (path.matches("/api/v1/ai/rnd/research-runs/[0-9a-f-]{36}/next-round") && method.equals("POST"))
+            return permission("ai.experiment.optimize", "AI_EXPERIMENT", "WRITE");
         if (path.startsWith("/api/v1/ai/rnd/research-runs") && read)
             return permission("ai.formula.predict", "AI_FORMULA", "READ");
         if (path.startsWith("/api/v1/ai/rnd/prediction-records") && read)
@@ -439,19 +462,9 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
         }
         if (path.startsWith("/api/v1/ai/rnd/snapshots") && read)
             return permission("ai.model.read", "AI_MODEL", "READ");
-        if (path.startsWith("/api/v1/ai/rnd/training-policies"))
-            return permission(read ? "ai.modeling.read" : "ai.config.manage", "AI_CONFIG", read ? "READ" : "WRITE");
         if (path.startsWith("/api/v1/ai/rnd/eligibility") && read)
             return permission("ai.modeling.read", "AI_MODELING", "READ");
-        if (path.matches("/api/v1/ai/rnd/input-schemes/[0-9a-f-]{36}/preview") && method.equals("POST"))
-            return permission("ai.modeling.read", "AI_MODELING", "READ");
-        if (read && (path.startsWith("/api/v1/ai/rnd/targets") || path.startsWith("/api/v1/ai/rnd/input-fields")
-                || path.startsWith("/api/v1/ai/rnd/input-field-versions") || path.startsWith("/api/v1/ai/rnd/input-schemes")
-                || path.startsWith("/api/v1/ai/rnd/source-mappings")))
-            return permission("ai.modeling.read", "AI_MODELING", "READ");
-        if (!read && (path.startsWith("/api/v1/ai/rnd/targets") || path.startsWith("/api/v1/ai/rnd/target-versions")
-                || path.startsWith("/api/v1/ai/rnd/input-fields") || path.startsWith("/api/v1/ai/rnd/input-field-versions")
-                || path.startsWith("/api/v1/ai/rnd/input-schemes") || path.startsWith("/api/v1/ai/rnd/source-mappings")))
+        if (path.matches("/api/v1/ai/rnd/targets/[0-9a-f-]{36}/reevaluate") && method.equals("POST"))
             return permission("ai.modeling.manage", "AI_MODELING", "WRITE");
         return null;
     }

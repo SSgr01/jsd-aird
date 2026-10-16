@@ -14,7 +14,7 @@ public final class FormulaDesignContracts {
     public enum OutcomeStatus { SUCCEEDED, PARTIAL, BLOCKED }
     public record RunAccepted(UUID runId, UUID asyncJobId, ExecutionStatus executionStatus,
                               Map<UUID, UUID> modelBindings, int pollAfterMs) { }
-    public record Candidate(UUID id, int candidateNo, String title, JsonNode formula,
+    public record Candidate(UUID id, int candidateNo, String title, JsonNode formula, JsonNode inputs,
                             JsonNode targetResults, JsonNode quality, JsonNode applicability,
                             JsonNode ruleCheck, double score) { }
     public record ResearchRun(UUID id, String runType, ExecutionStatus executionStatus,
@@ -24,6 +24,6 @@ public final class FormulaDesignContracts {
                               JsonNode rejectionSummary, JsonNode actionHints,
                               Map<UUID, UUID> modelBindings, JsonNode frozenEvidence,
                               String requestId, Instant updatedAt, boolean simulation,
-                              String predictionMode, String resultNotice) { }
+                              String predictionMode) { }
     public record ResearchPage(List<ResearchRun> items, long total, int page, int size) { }
 }

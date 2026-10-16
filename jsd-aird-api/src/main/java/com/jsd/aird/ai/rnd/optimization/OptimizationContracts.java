@@ -27,11 +27,13 @@ public final class OptimizationContracts {
                                   List<OptimizationCandidate> candidates,JsonNode error,JsonNode frozenBaseline,
                                   JsonNode frozenRequest,Map<UUID,UUID> modelBindings,String requestId,Instant updatedAt,
                                   String searchEngine,String searchStrategy,JsonNode searchEvidence,
-                                  boolean simulation,String predictionMode,String resultNotice) { }
+                                  boolean simulation,String predictionMode) { }
     public record DraftCommand(List<UUID> candidateIds, UUID categoryId, LocalDate plannedExperimentDate,
                                UUID projectId, UUID stageId, UUID taskId, String ownerName,
                                UUID templateVersionId) { }
     public record DraftLink(UUID candidateId,UUID experimentId,UUID experimentVersionId,String experimentNo,
                             String status,String href,Instant createdAt) { }
     public record DraftCreationResult(UUID runId,List<DraftLink> experiments) { }
+    public record ObservationValue(UUID candidateId, UUID targetId, String fieldCode, JsonNode value) { }
+    public record ObservationCommand(List<ObservationValue> observations) { }
 }

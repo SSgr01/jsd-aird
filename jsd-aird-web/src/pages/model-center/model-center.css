@@ -2,6 +2,6 @@
 .model-center-header { display:flex; align-items:flex-start; justify-content:space-between; gap:24px; margin-bottom:8px; }
 .model-center-header h2 { margin:0 0 5px; font-size:26px; }
 .model-center-tabs { margin-bottom: 0; }
-.model-center-page .model-management-panel, .model-center-page .modeling-settings-panel { max-width:none; padding:0; }
-.model-center-page .model-management-panel .model-management-header, .model-center-page .modeling-settings-panel > .modeling-header { display:none; }
+.model-center-page .model-management-panel { max-width:none; padding:0; }
+.model-center-page .model-management-panel .model-management-header { display:none; }
 @media (max-width: 900px) { .model-center-page { padding:16px; } .model-center-header { flex-direction:column; gap:12px; } }

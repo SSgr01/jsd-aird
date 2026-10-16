@@ -218,6 +218,7 @@ class ModelBindingV2(V2Model):
 
 class ScoreRequestV2(ContractRequestV2):
     run_id: str
+    allow_extrapolation: bool = False
     formula: FormulaV2 | None = None
     inputs: dict[str, Any]
     model_bindings: list[ModelBindingV2] = Field(min_length=1)

@@ -3,6 +3,7 @@ import { Navigate } from 'react-router-dom';
 import { lazy } from 'react';
 
 import { BasicLayout } from '@/layouts';
+import { AuthenticatedAssistantLayout } from '@/layouts/AuthenticatedAssistantLayout';
 import { AuthGate } from '@/components/auth/AuthGate';
 import { NotFoundPage } from '@/pages/not-found';
 import { AuthorizedHomeRedirect, PageAnyPermissionGate, PagePermissionGate } from '@/routes/route-guards';
@@ -10,12 +11,9 @@ import { AuthorizedHomeRedirect, PageAnyPermissionGate, PagePermissionGate } fro
 const AssistantPage = lazy(async () => ({ default: (await import('@/pages/assistant')).AssistantPage }));
 const FormulaPredictionPage = lazy(async () => ({ default: (await import('@/pages/formula-research')).FormulaPredictionPage }));
 const ExperimentOptimizationPage = lazy(async () => ({ default: (await import('@/pages/formula-research')).ExperimentOptimizationPage }));
-const ModelingSettingsPage = lazy(async () => ({ default: (await import('@/pages/modeling-settings')).ModelingSettingsPage }));
-const ModelManagementPage = lazy(async () => ({ default: (await import('@/pages/model-management')).ModelManagementPage }));
 const ModelCenterPage = lazy(async () => ({ default: (await import('@/pages/model-center')).ModelCenterPage }));
-const ModelTargetPage = lazy(async () => ({ default: (await import('@/pages/model-center')).ModelTargetPage }));
+const LegacyModelCenterRedirect = lazy(async () => ({ default: (await import('@/pages/model-center')).LegacyModelCenterRedirect }));
 const PerformancePredictionPage = lazy(async () => ({ default: (await import('@/pages/performance-prediction')).PerformancePredictionPage }));
-const SampleSourcePage = lazy(async () => ({ default: (await import('@/pages/modeling-settings')).SampleSourcePage }));
 const DashboardPage = lazy(async () => ({ default: (await import('@/pages/dashboard')).DashboardPage }));
 const DataImportJobPage = lazy(async () => ({ default: (await import('@/pages/data')).DataImportJobPage }));
 const DataUploadPage = lazy(async () => ({ default: (await import('@/pages/data')).DataUploadPage }));
@@ -51,7 +49,7 @@ const ProjectDocumentWorkspacePage = lazy(async () => ({ default: (await import(
 const ExperimentListPage = lazy(async () => ({ default: (await import('@/pages/experiments')).ExperimentListPage }));
 const ExperimentUploadPage = lazy(async () => ({ default: (await import('@/pages/experiments')).ExperimentUploadPage }));
 const NewExperimentPage = lazy(async () => ({ default: (await import('@/pages/experiments')).NewExperimentPage }));
-const ExperimentImportStatusPage = lazy(async () => ({ default: (await import('@/pages/experiments')).ExperimentImportStatusPage }));
+const ExperimentImportWorkbenchPage = lazy(async () => ({ default: (await import('@/pages/experiments')).ExperimentImportWorkbenchPage }));
 const ExperimentWorkspacePage = lazy(async () => ({ default: (await import('@/pages/experiments')).ExperimentWorkspacePage }));
 const DataRecognitionPage = lazy(async () => ({ default: (await import('@/pages/recognition')).DataRecognitionPage }));
 const ResearchTestListPage = lazy(async () => ({ default: (await import('@/pages/research-test')).ResearchTestListPage }));
@@ -68,7 +66,7 @@ const UserPermissionsPage = lazy(async () => ({ default: (await import('@/pages/
 const AuditLogsPage = lazy(async () => ({ default: (await import('@/pages/iam/AuditLogsPage')).AuditLogsPage }));
 const StandardDictionaryPage = lazy(async () => ({ default: (await import('@/pages/iam/StandardDictionaryPage')).StandardDictionaryPage }));
 
-export const routeConfig: RouteObject[] = [
+const applicationRoutes: RouteObject[] = [
   { path: '/login', element: <LoginPage /> },
   { path: '/change-password', element: <AuthGate><ChangePasswordPage /></AuthGate> },
   {
@@ -95,13 +93,13 @@ export const routeConfig: RouteObject[] = [
       { path: 'assistant/performance-prediction', element: <PagePermissionGate permission="ai.performance.predict"><PerformancePredictionPage /></PagePermissionGate> },
       { path: 'assistant/experiment-optimization', element: <PagePermissionGate permission="ai.experiment.optimize"><ExperimentOptimizationPage /></PagePermissionGate> },
       { path: 'assistant/model-center', element: <PageAnyPermissionGate permissions={['ai.model.read', 'ai.modeling.read']}><ModelCenterPage /></PageAnyPermissionGate> },
-      { path: 'assistant/model-center/targets/:targetId', element: <PagePermissionGate permission="ai.modeling.read"><ModelTargetPage /></PagePermissionGate> },
-      { path: 'assistant/model-center/samples', element: <PagePermissionGate permission="ai.modeling.read"><SampleSourcePage /></PagePermissionGate> },
-      { path: 'assistant/model-center/samples/:id', element: <PagePermissionGate permission="ai.modeling.read"><SampleSourcePage /></PagePermissionGate> },
-      { path: 'assistant/modeling-settings', element: <PagePermissionGate permission="ai.modeling.read"><ModelingSettingsPage /></PagePermissionGate> },
-      { path: 'assistant/model-management', element: <PagePermissionGate permission="ai.model.read"><ModelManagementPage /></PagePermissionGate> },
-      { path: 'assistant/modeling-settings/samples', element: <PagePermissionGate permission="ai.modeling.read"><SampleSourcePage /></PagePermissionGate> },
-      { path: 'assistant/modeling-settings/samples/:id', element: <PagePermissionGate permission="ai.modeling.read"><SampleSourcePage /></PagePermissionGate> },
+      { path: 'assistant/model-center/targets/:targetId', element: <PageAnyPermissionGate permissions={['ai.model.read', 'ai.modeling.read']}><LegacyModelCenterRedirect /></PageAnyPermissionGate> },
+      { path: 'assistant/model-center/samples', element: <PagePermissionGate permission="ai.modeling.read"><LegacyModelCenterRedirect /></PagePermissionGate> },
+      { path: 'assistant/model-center/samples/:id', element: <PagePermissionGate permission="ai.modeling.read"><LegacyModelCenterRedirect /></PagePermissionGate> },
+      { path: 'assistant/modeling-settings', element: <PagePermissionGate permission="ai.modeling.read"><LegacyModelCenterRedirect /></PagePermissionGate> },
+      { path: 'assistant/model-management', element: <PagePermissionGate permission="ai.model.read"><LegacyModelCenterRedirect models /></PagePermissionGate> },
+      { path: 'assistant/modeling-settings/samples', element: <PagePermissionGate permission="ai.modeling.read"><LegacyModelCenterRedirect /></PagePermissionGate> },
+      { path: 'assistant/modeling-settings/samples/:id', element: <PagePermissionGate permission="ai.modeling.read"><LegacyModelCenterRedirect /></PagePermissionGate> },
       {
         path: 'templates',
         element: <Navigate to="/templates/upload" replace />,
@@ -137,7 +135,7 @@ export const routeConfig: RouteObject[] = [
       { path: 'data', element: <Navigate to="/data/upload" replace /> },
       { path: 'data/upload', element: <PagePermissionGate permission="data.create"><DataUploadPage /></PagePermissionGate> },
       { path: 'data/import-jobs/:id', element: <DataImportJobPage /> },
-      { path: 'experiments/template-imports/:id', element: <DataImportJobPage workspaceMode="EXPERIMENT" /> },
+      { path: 'experiments/template-imports/:id', element: <ExperimentImportWorkbenchPage /> },
       { path: 'data/recognition-jobs/:id', element: <PagePermissionGate permission="data.view"><DataRecognitionPage /></PagePermissionGate> },
       { path: 'data/view', element: <DataViewPage /> },
       { path: 'spectrum', element: <Navigate to="/spectrum/upload" replace /> },
@@ -183,7 +181,7 @@ export const routeConfig: RouteObject[] = [
       { path: 'experiments/list', element: <ExperimentListPage /> },
       { path: 'experiments/new', element: <NewExperimentPage /> },
       { path: 'experiments/upload', element: <ExperimentUploadPage /> },
-      { path: 'experiments/imports/:id', element: <PagePermissionGate permission="experiment.view"><ExperimentImportStatusPage /></PagePermissionGate> },
+      { path: 'experiments/imports/:id', element: <Navigate to="/experiments/upload" replace /> },
       { path: 'experiments/:id', element: <ExperimentWorkspacePage /> },
       { path: 'research-test', element: <Navigate to="/research-test/reports" replace /> },
       { path: 'research-test/upload', element: <PagePermissionGate permission="research-test.report.create"><ResearchTestUploadPage /></PagePermissionGate> },
@@ -204,4 +202,9 @@ export const routeConfig: RouteObject[] = [
     path: '/production-orders/:orderId/workspace',
     element: <AuthGate><PagePermissionGate permission="production.view"><ProductionWorkspacePage /></PagePermissionGate></AuthGate>,
   },
+];
+
+export const routeConfig: RouteObject[] = [
+  ...applicationRoutes.filter((route) => route.path === '/login'),
+  { element: <AuthenticatedAssistantLayout />, children: applicationRoutes.filter((route) => route.path !== '/login') },
 ];

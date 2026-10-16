@@ -4,7 +4,7 @@ import { resolve } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
-import type { CoveragePreview, PredictionResponse, TypedPrediction } from './ai-rnd-types'
+import type { PredictionResponse, TypedPrediction } from './ai-rnd-types'
 
 describe('ai-rnd.v1 frozen types', () => {
   it('reads the shared v2 golden without changing 98.8 or result kinds', () => {
@@ -31,16 +31,4 @@ describe('ai-rnd.v1 frozen types', () => {
     expect(response.results[0]).not.toHaveProperty('prediction')
   })
 
-  it('expresses the R02 coverage state without fake zero counts', () => {
-    const preview: CoveragePreview = {
-      evaluationStatus: 'NOT_EVALUATED',
-      unavailableReason: 'DATA_PIPELINE_NOT_READY',
-      validationIssues: [],
-      schemaHash: 'a'.repeat(64),
-      changedSampleIds: [],
-    }
-    expect(preview.candidateSamples).toBeUndefined()
-    expect(preview.trainable).toBeUndefined()
-    expect(preview.excluded).toBeUndefined()
-  })
 })

@@ -51,13 +51,19 @@ public class JdbcDataRepository implements DataRepository {
 
     @Override
     public void enqueueParse(UUID asyncJobId, UUID organizationId, UUID importJobId) {
+        enqueueParse(asyncJobId, organizationId, importJobId, null);
+    }
+
+    @Override
+    public void enqueueParse(UUID asyncJobId, UUID organizationId, UUID importJobId, UUID actorId) {
         var payload = objectMapper.createObjectNode()
                 .put("organizationId", organizationId.toString())
                 .put("importJobId", importJobId.toString());
+        if (actorId != null) payload.put("actorId", actorId.toString());
         jdbc.update("""
                 INSERT INTO ops.async_job (id, organization_id, job_type, status, payload_jsonb, priority, idempotency_key)
                 VALUES (?, ?, 'DATA_IMPORT_PARSE', 'READY', ?, 50, ?)
-                """, asyncJobId, organizationId, pgJson(payload), "data-import-parse:" + importJobId);
+                """, asyncJobId, organizationId, pgJson(payload), "data-import-parse:" + importJobId + ":" + asyncJobId);
         updateJobStatus(organizationId, importJobId, "QUEUED", 0, "QUEUED", null);
     }
 
@@ -83,6 +89,7 @@ public class JdbcDataRepository implements DataRepository {
         parameters.add(organizationId);
         conditions.add("source_owner = ?");
         parameters.add(sourceOwner == null || sourceOwner.isBlank() ? "DATA_CENTER" : sourceOwner);
+        conditions.add("hidden_at IS NULL");
         if (templateVersionId != null) {
             conditions.add("template_version_id = ?");
             parameters.add(templateVersionId);
@@ -230,8 +237,18 @@ public class JdbcDataRepository implements DataRepository {
                        parser_version, error_message, created_at, updated_at,
                        import_contract_version, contract_hash, compatibility_status,
                        import_purpose, target_experiment_category_id
-                FROM data.import_job WHERE organization_id = ? AND id = ? FOR UPDATE
+                FROM data.import_job WHERE organization_id = ? AND id = ? AND hidden_at IS NULL FOR UPDATE
                 """, this::mapJob, organizationId, importJobId).stream().findFirst();
+    }
+
+    @Override
+    public int hideExperimentJob(UUID organizationId, UUID importJobId) {
+        return jdbc.update("""
+                UPDATE data.import_job SET hidden_at = now(), updated_at = now()
+                WHERE organization_id = ? AND id = ? AND source_owner = 'EXPERIMENT'
+                  AND hidden_at IS NULL
+                  AND status NOT IN ('QUEUED', 'PARSING', 'VALIDATING', 'COMMITTING')
+                """, organizationId, importJobId);
     }
 
     @Override

@@ -1,2 +1,2 @@
 export { FormulaPredictionPage } from './FormulaPredictionPage';
-export { ExperimentOptimizationPage } from './ExperimentOptimizationPage';
+export { HistoricalOptimizationWorkbench as ExperimentOptimizationPage } from './HistoricalOptimizationWorkbench';

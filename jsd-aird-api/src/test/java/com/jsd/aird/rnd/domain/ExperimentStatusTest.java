@@ -13,8 +13,10 @@ class ExperimentStatusTest {
     void exposesOnlyTheApprovedLifecycleTransitions() {
         var expected = Map.of(
                 ExperimentStatus.DRAFT,
-                Set.of(ExperimentStatus.PENDING, ExperimentStatus.IN_PROGRESS, ExperimentStatus.VOIDED),
-                ExperimentStatus.PENDING, Set.of(ExperimentStatus.IN_PROGRESS, ExperimentStatus.VOIDED),
+                Set.of(ExperimentStatus.PENDING, ExperimentStatus.IN_PROGRESS,
+                        ExperimentStatus.PENDING_REVIEW, ExperimentStatus.VOIDED),
+                ExperimentStatus.PENDING, Set.of(ExperimentStatus.IN_PROGRESS,
+                        ExperimentStatus.PENDING_REVIEW, ExperimentStatus.VOIDED),
                 ExperimentStatus.IN_PROGRESS,
                 Set.of(ExperimentStatus.PENDING_REVIEW, ExperimentStatus.VOIDED),
                 ExperimentStatus.RETURNED,

@@ -69,16 +69,24 @@ public class PredictionService {
 
     public JsonNode context(List<UUID> targetIds) {
         var actor=actor();var root=json.createObjectNode().put("simulationAuthorized",syntheticTestAuthorization.enabled());var catalog=json.createArrayNode();
-        for(var item:repository.targetCatalog(actor.organizationId())){
-            var formalAvailable=item.modelId()!=null&&item.productionEligible()&&"REAL".equals(item.dataNature())&&!item.testOnlySimulation()&&item.qualityPolicyId()!=null&&item.domainPolicyId()!=null;
-            var simulationAvailable=item.modelId()!=null&&syntheticTestAuthorization.enabled()
-                    &&(item.testOnlySimulation()||"SYNTHETIC".equals(item.sourceDataNature()))
-                    &&item.qualityPolicyId()!=null&&item.domainPolicyId()!=null;
+        var catalogRows=repository.targetCatalog(actor.organizationId());
+        var catalogBindings=new LinkedHashMap<UUID,PredictionRepository.TargetBinding>();
+        for(var binding:repository.targetBindings(actor.organizationId(),catalogRows.stream().map(PredictionRepository.TargetCatalog::id).toList()))catalogBindings.put(binding.targetId(),binding);
+        for(var item:catalogRows){
+            var binding=catalogBindings.get(item.id());
+            var unavailable=binding==null?reasons(item.modelId(),item.dataNature(),item.productionEligible(),item.testOnlySimulation()):gateAvailability(binding);
+            var formalAvailable=unavailable.isEmpty()&&item.modelId()!=null&&item.productionEligible()&&"REAL".equals(item.dataNature())&&!item.testOnlySimulation();
+            var simulationAvailable=unavailable.isEmpty()&&item.modelId()!=null&&syntheticTestAuthorization.enabled()
+                    &&(item.testOnlySimulation()||"SYNTHETIC".equals(item.sourceDataNature()));
             var value=json.createObjectNode().put("targetId",item.id().toString()).put("code",item.code())
                     .put("name",item.name()).put("category",item.category()).put("valueType",item.valueType())
                     .put("targetStatus",item.status()).put("formalPredictionAvailable",formalAvailable)
                     .put("simulationPredictionAvailable",simulationAvailable).put("predictionAvailable",formalAvailable||simulationAvailable);
-            var unavailable=reasons(item.modelId(),item.qualityPolicyId(),item.domainPolicyId(),item.dataNature(),item.productionEligible(),item.testOnlySimulation());value.set("unavailableReasons",json.valueToTree(unavailable));catalog.add(value);
+            if(binding!=null&&binding.definition().has("modelSource"))value.set("modelSource",binding.definition().path("modelSource"));
+            if(item.unit()!=null)value.put("unit",item.unit());
+            if(item.testMethod()!=null)value.put("testMethod",item.testMethod());
+            if(item.testStage()!=null)value.put("testStage",item.testStage());
+            value.set("unavailableReasons",json.valueToTree(unavailable));catalog.add(value);
         }
         RegisteredUvpuTargetCatalog.append(json, catalog);
         root.set("targets",catalog);
@@ -88,6 +96,17 @@ public class PredictionService {
         for(var binding:bindings){var entry=bindingSummary(binding);selected.add(entry);
             binding.frozenInputScheme().path("fields").forEach(field->{if(!"COMPOSITION".equals(field.path("valueType").asText()))mergeInputField(inputs,field,binding);});
             binding.frozenDictionary().path("materials").forEach(material->{var enriched=material.deepCopy();repository.material(material.path("materialId").asText()).ifPresent(m->{if(enriched instanceof ObjectNode o){o.put("code",m.code());o.put("name",m.name());o.put("category",m.category());}});materials.putIfAbsent(material.path("materialId").asText(),enriched);});}
+        for(var field:inputs.values()) {
+            if(!(field instanceof ObjectNode object)||!"NUMBER".equals(field.path("valueType").asText()))continue;
+            var ranges=json.createArrayNode();var feature="input:"+field.path("code").asText();
+            for(var binding:bindings){var domain=binding.modelDomain();if(domain==null)continue;var names=domain.path("features");
+                for(int index=0;index<names.size();index++)if((feature.equals(names.path(index).asText())||("modeling-workbench.v1".equals(binding.contractVersion())&&field.path("code").asText().equals(names.path(index).asText())))&&domain.path("minimum").path(index).isNumber()&&domain.path("maximum").path(index).isNumber()){
+                    var range=json.createObjectNode().put("targetId",binding.targetId().toString()).put("targetName",binding.targetName());
+                    range.set("minimum",domain.path("minimum").path(index));range.set("maximum",domain.path("maximum").path(index));ranges.add(range);
+                }
+            }
+            object.set("supportedRanges",ranges);
+        }
         root.set("selected",selected);root.set("requiredInputs",json.valueToTree(inputs.values()));root.set("materials",json.valueToTree(materials.values()));
         root.set("configurationConflicts",conflicts(bindings));return root;
     }
@@ -213,6 +232,7 @@ public class PredictionService {
         if(!scoreBindings.isEmpty()){
             var score=json.createObjectNode().put("contractVersion","formula-model.v2").put("requestId",requestId).put("seed",0).put("runId",id.toString());
             if(request.formula()==null) score.putNull("formula"); else score.set("formula",formulaNormalization.forModelCompute(normalizedRequest.path("formula")));
+            score.put("allowExtrapolation",true);
             score.set("inputs",json.valueToTree(request.inputs()));score.set("modelBindings",scoreBindings);
             try{var computed=compute.score(score);var returned=new HashSet<String>();
                 for(var item:computed.path("results")){var modelId=item.path("modelVersionId").asText();returned.add(modelId);var b=modelToBinding.get(modelId);
@@ -227,7 +247,6 @@ public class PredictionService {
                 .anyMatch(b->syntheticTestAuthorization.isSimulation(b.sourceDataNature(),b.testOnlySimulation()));
         var body=json.createObjectNode().put("predictionId",id.toString()).put("requestId",requestId)
                 .put("simulation",simulation).put("predictionMode",simulation?"SIMULATION":"FORMAL");
-        if(simulation)body.put("resultNotice","测试环境模拟预测结果，不代表正式模型结论");
         body.set("results",results);body.set("warnings",warnings);
         int http;if(failed>0&&succeeded==0){body.put("executionStatus","FAILED");body.putNull("outcomeStatus");http=503;body.put("code","PREDICTION_EXECUTION_FAILED");body.put("message","一个或多个正式模型无法执行");}
         else{body.put("executionStatus","SUCCEEDED");var outcome=succeeded==count?"SUCCEEDED":succeeded>0?"PARTIAL":"BLOCKED";body.put("outcomeStatus",outcome);http="BLOCKED".equals(outcome)&&count==1?422:200;}
@@ -240,22 +259,26 @@ public class PredictionService {
                 .put("dataNature",b.dataNature()).put("sourceDataNature",b.sourceDataNature())
                 .put("productionEligible",b.productionEligible()).put("testOnlySimulation",b.testOnlySimulation())
                 .put("simulation",syntheticTestAuthorization.isSimulation(b.sourceDataNature(),b.testOnlySimulation()))
-                .put("inputSchemeId",b.modelInputSchemeId().toString()).put("snapshotId",b.snapshotId().toString());
-        result.set("prediction",computed.path("result"));result.set("applicability",computed.path("applicability"));result.set("warnings",warnings.deepCopy());
+                .put("inputSchemeId",b.modelInputSchemeId().toString()).put("snapshotId",Objects.toString(b.snapshotId(),""));
+        var combinedWarnings=warnings.deepCopy();
+        if(computed.path("warnings").isArray()) computed.path("warnings").forEach(combinedWarnings::add);
+        result.set("prediction",computed.path("result"));result.set("applicability",computed.path("applicability"));result.set("warnings",combinedWarnings);
         var required=0;var present=0;for(var field:b.frozenInputScheme().path("fields"))if(field.path("required").asBoolean()){required++;if("COMPOSITION".equals(field.path("valueType").asText())){if(request.formula()!=null&&request.formula().compositionComplete())present++;}else if(request.inputs().get(field.path("code").asText())!=null&&!request.inputs().get(field.path("code").asText()).isNull())present++;}
-        var coverage=required==0?1d:(double)present/required;var codes=new ArrayList<String>();warnings.forEach(x->codes.add(x.path("code").asText()));
+        var coverage=required==0?1d:(double)present/required;var codes=new ArrayList<String>();combinedWarnings.forEach(x->codes.add(x.path("code").asText()));
         var evaluated=quality.evaluate(b.qualityPolicy(),b.metrics(),computed.path("applicability").path("status").asText(),coverage,codes,total);
-        result.set("quality",json.createObjectNode().put("level",evaluated.level()).put("explanation",evaluated.explanation()).put("policyVersionId",b.qualityPolicyId().toString()).put("evidenceCoverage",coverage));
+        result.set("quality",json.createObjectNode().put("level",evaluated.level()).put("explanation",evaluated.explanation()).put("policyVersionId",Objects.toString(b.qualityPolicyId(),"")).put("evidenceCoverage",coverage));
+        if("OUT_OF_DOMAIN".equals(computed.path("applicability").path("status").asText())) {
+            ((ObjectNode)result.path("quality")).put("level","LOW").put("explanation","超出训练数据范围，预测结果需实验验证");
+        }
         result.set("evidence",evidence(b));return result;
     }
-    private ObjectNode evidence(PredictionRepository.TargetBinding b){return json.createObjectNode().put("modelVersionId",b.modelId().toString()).put("targetVersionId",b.targetVersionId().toString()).put("inputSchemeId",b.modelInputSchemeId().toString()).put("snapshotId",b.snapshotId().toString()).put("domainPolicyVersionId",b.domainPolicyId().toString()).put("qualityPolicyVersionId",b.qualityPolicyId().toString());}
+    private ObjectNode evidence(PredictionRepository.TargetBinding b){return json.createObjectNode().put("modelVersionId",b.modelId().toString()).put("targetVersionId",b.targetVersionId().toString()).put("inputSchemeId",b.modelInputSchemeId().toString()).put("snapshotId",Objects.toString(b.snapshotId(),"")).put("domainPolicyVersionId",Objects.toString(b.domainPolicyId(),"")).put("qualityPolicyVersionId",Objects.toString(b.qualityPolicyId(),""));}
     private JsonNode gate(PredictionRepository.TargetBinding b,UUID expected,PredictionRequest request){
         if(!"ACTIVE".equals(b.targetStatus())||b.targetVersionId()==null)return blocked(b.targetId(),null,"TARGET_NOT_READY","预测目标尚未发布",json.createObjectNode());
         if(!modelAvailable(b))return blocked(b.targetId(),null,"NO_ACTIVE_MODEL","目标尚无可用于当前环境的模型",json.createObjectNode());
         if(expected!=null&&!expected.equals(b.modelId()))return blocked(b.targetId(),b.modelId(),"MODEL_VERSION_CHANGED","模型版本已变化，请刷新后重试",json.createObjectNode().put("currentModelVersionId",b.modelId().toString()));
-        if(!"formula-model.v2".equals(b.contractVersion()))return failed(b.targetId(),b.modelId(),"MODEL_CONTRACT_MISMATCH","模型契约版本不受支持",json.createObjectNode());
-        if(b.qualityPolicyId()==null||!"PUBLISHED".equals(b.qualityPolicyStatus()))return blocked(b.targetId(),b.modelId(),"QUALITY_POLICY_NOT_READY","质量策略尚未发布",json.createObjectNode());
-        if(b.domainPolicyId()==null||!"PUBLISHED".equals(b.domainPolicyStatus())||!domainReady(b))return blocked(b.targetId(),b.modelId(),"DOMAIN_POLICY_NOT_READY","模型适用域策略尚未完整冻结",json.createObjectNode());
+        if(!Set.of("formula-model.v2","modeling-workbench.v1").contains(b.contractVersion()))return failed(b.targetId(),b.modelId(),"MODEL_CONTRACT_MISMATCH","模型契约版本不受支持",json.createObjectNode());
+        if(!domainReady(b))return blocked(b.targetId(),b.modelId(),"MODEL_DOMAIN_UNAVAILABLE","模型训练信息不完整，请重新训练后重试",json.createObjectNode());
         if(formulaRequired(b)){
             var inputProblem=formulaProblem(request);
             if(inputProblem!=null)return blocked(b.targetId(),b.modelId(),inputProblem,
@@ -345,13 +368,18 @@ public class PredictionService {
         return target;
     }
     private ObjectNode mergedDomain(PredictionRepository.TargetBinding b){var out=b.modelDomain()!=null&&b.modelDomain().isObject()?((ObjectNode)b.modelDomain()).deepCopy():json.createObjectNode();var config=b.domainPolicy();if(config!=null&&config.isObject())config.fields().forEachRemaining(e->{if(!Set.of("features","minimum","maximum").contains(e.getKey()))out.set(e.getKey(),e.getValue());});out.put("policyVersionId",b.domainPolicyId()==null?"":b.domainPolicyId().toString());out.put("policyHash",Objects.toString(b.domainPolicyHash(),""));return out;}
-    private ObjectNode rewriteTarget(JsonNode source,UUID target){var out=((ObjectNode)source).deepCopy();out.put("targetId",target.toString());return out;}
+    static ObjectNode rewriteTarget(JsonNode source,UUID target){
+        var out=((ObjectNode)source).deepCopy();out.put("targetId",target.toString());
+        if(!out.hasNonNull("errorCode")&&out.hasNonNull("code"))out.set("errorCode",out.get("code"));
+        return out;
+    }
     private ObjectNode blocked(UUID target,UUID model,String code,String message,JsonNode detail){var x=json.createObjectNode().put("targetId",target.toString()).put("status","BLOCKED").put("errorCode",code).put("message",message);if(model!=null)x.put("modelVersionId",model.toString());x.set("detail",detail);return x;}
     private ObjectNode failed(UUID target,UUID model,String code,String message,JsonNode detail){var x=json.createObjectNode().put("targetId",target.toString()).put("status","FAILED").put("errorCode",code).put("message",message);if(model!=null)x.put("modelVersionId",model.toString());x.set("detail",detail);return x;}
     private ArrayNode formulaWarnings(PredictionRequest request, JsonNode normalizedRequest){var warnings=json.createArrayNode();if(request.formula()==null)return warnings;var formula=normalizedRequest.path("formula");if(formula.path("normalizationApplied").asBoolean(false)){var raw=formula.path("rawFormulaTotal").decimalValue();var item=json.createObjectNode().put("code","FORMULA_NORMALIZED").put("message","配方合计为 "+raw.stripTrailingZeros().toPlainString()+"%，系统已按相对比例归一化到100%");item.set("detail",json.createObjectNode().put("rawFormulaTotal",raw).put("normalizedFormulaTotal",100).put("normalizationFactor",formula.path("normalizationFactor")));warnings.add(item);}return warnings;}
     private BigDecimal formulaTotal(PredictionRequest request){if(request.formula()==null)return null;if(request.formula().recordedTotal()!=null)return request.formula().recordedTotal();BigDecimal total=BigDecimal.ZERO;for(var x:request.formula().components()){if(x.ratio()==null)return null;total=total.add(x.ratio());}return total;}
     private String formulaProblem(PredictionRequest request){if(request.formula()==null||!request.formula().compositionComplete())return "FORMULA_INCOMPLETE";if(request.formula().components()==null||request.formula().components().isEmpty())return "FORMULA_INCOMPLETE";for(var x:request.formula().components()){if(x.materialId()==null||x.ratio()==null)return "FORMULA_AMOUNT_MISSING";if(x.unit()==null||x.unit().isBlank())return "FORMULA_UNIT_UNRESOLVED";}return null;}
     private boolean formulaRequired(PredictionRepository.TargetBinding b){
+        if("modeling-workbench.v1".equals(b.contractVersion()))return false;
         for(var field:b.frozenInputScheme().path("fields")){
             var code=field.path("code").asText("").toUpperCase(java.util.Locale.ROOT);
             if("COMPOSITION".equals(field.path("valueType").asText())||code.contains("FORMULA")||code.contains("COMPOSITION"))return true;
@@ -384,9 +412,13 @@ public class PredictionService {
     private String inputGroup(String code,String type){return "COMPOSITION".equals(type)?"FORMULA":"OTHER";}
     private boolean isFixedByTargetDefinition(PredictionRepository.TargetBinding binding,String code){var fixed=binding.definition().path("fixedInputs");return fixed.isObject()&&fixed.has(code);}
     private ObjectNode fixedConditions(PredictionRepository.TargetBinding b){var fixed=json.createObjectNode();var definition=b.definition();for(var key:new String[]{"testMethod","testStage","pretreatment","fixedCondition","fixedConditions","load","substrate","angle"})if(definition.hasNonNull(key))fixed.set(key,definition.get(key));return fixed;}
-    private List<String> gateAvailability(PredictionRepository.TargetBinding b){var out=new ArrayList<String>();if(!modelAvailable(b))out.add("NO_ACTIVE_MODEL");if(b.qualityPolicyId()==null)out.add("QUALITY_POLICY_NOT_READY");if(b.domainPolicyId()==null||!domainReady(b))out.add("DOMAIN_POLICY_NOT_READY");return out;}
+    public List<String> gateAvailability(PredictionRepository.TargetBinding b){var out=new ArrayList<String>();if(!modelAvailable(b))out.add(unavailableModelReason(b.modelId(),b.dataNature(),b.testOnlySimulation()));if(!domainReady(b))out.add("MODEL_DOMAIN_UNAVAILABLE");return out;}
     private boolean modelAvailable(PredictionRepository.TargetBinding b){return b.modelId()!=null&&syntheticTestAuthorization.allows(b.dataNature(),b.productionEligible(),b.testOnlySimulation());}
-    private List<String> reasons(UUID model,UUID quality,UUID domain,String dataNature,boolean productionEligible,boolean testOnlySimulation){var out=new ArrayList<String>();if(model==null||!syntheticTestAuthorization.allows(dataNature,productionEligible,testOnlySimulation))out.add("NO_ACTIVE_MODEL");if(quality==null)out.add("QUALITY_POLICY_NOT_READY");if(domain==null)out.add("DOMAIN_POLICY_NOT_READY");return out;}
+    private List<String> reasons(UUID model,String dataNature,boolean productionEligible,boolean testOnlySimulation){var out=new ArrayList<String>();if(model==null||!syntheticTestAuthorization.allows(dataNature,productionEligible,testOnlySimulation))out.add(unavailableModelReason(model,dataNature,testOnlySimulation));return out;}
+    static String unavailableModelReason(UUID model,String dataNature,boolean testOnlySimulation){
+        if(model==null)return "NO_ACTIVE_MODEL";
+        return testOnlySimulation||"SYNTHETIC".equalsIgnoreCase(dataNature)?"SIMULATION_NOT_ENABLED":"MODEL_NOT_PRODUCTION_ELIGIBLE";
+    }
     private ArrayNode conflicts(List<PredictionRepository.TargetBinding> bindings){var byCode=new HashMap<String,Set<String>>();for(var b:bindings)for(var field:b.frozenInputScheme().path("fields"))byCode.computeIfAbsent(field.path("code").asText(),k->new HashSet<>()).add(field.path("valueType").asText()+"|"+field.path("unit").asText());var out=json.createArrayNode();byCode.forEach((code,defs)->{if(defs.size()>1)out.add(json.createObjectNode().put("fieldCode",code).set("definitions",json.valueToTree(defs)));});return out;}
     private ObjectNode bindingDocument(List<PredictionRepository.TargetBinding> bindings){var root=json.createObjectNode();var list=json.createArrayNode();bindings.forEach(x->list.add(bindingSummary(x)));root.set("targets",list);return root;}
     private ObjectNode running(UUID id,String requestId){return json.createObjectNode().put("predictionRecordId",id.toString()).put("requestId",requestId).put("executionStatus","RUNNING").putNull("outcomeStatus").put("pollAfterMs",1000);}
@@ -396,8 +428,8 @@ public class PredictionService {
     private void validateQuality(QualityPolicyCommand command){if(command==null||!Set.of("HIGH","MEDIUM","LOW").contains(command.defaultTrustLevel())||command.defaultExplanation()==null||command.defaultExplanation().isBlank())throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"必须配置默认可信等级及说明");var priorities=new HashSet<Integer>();for(var rule:command.rules()==null?List.<QualityRule>of():command.rules()){if(rule.code()==null||rule.code().isBlank()||rule.explanation()==null||rule.explanation().isBlank()||!Set.of("HIGH","MEDIUM","LOW").contains(rule.trustLevel())||rule.when()==null||!rule.when().isObject()||!priorities.add(rule.priority()))throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"质量规则编码、优先级、条件、可信等级或说明无效");}}
     private void validateDomain(DomainPolicyCommand command){
         var config=command==null?null:command.configuration();var ratio=config==null?null:config.path("nearBoundaryRatio");
-        if(config==null||!config.isObject()||!ratio.isNumber()||ratio.doubleValue()<0||ratio.doubleValue()>1)
-            throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"适用域策略必须是对象，并包含0到1之间的nearBoundaryRatio");
+        if(config==null||!config.isObject()||!ratio.isNumber()||ratio.doubleValue()<0||ratio.doubleValue()>=0.5)
+            throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"边界提醒区域需小于覆盖范围的50%，请填写0～49%的提醒区域");
         var numeric=config.path("numeric_features");var categorical=config.path("categorical_features");
         var near=config.path("near_boundary_threshold");var outside=config.path("out_of_domain_threshold");
         var anyCurrent=numeric.isArray()||categorical.isArray()||near.isNumber()||outside.isNumber();

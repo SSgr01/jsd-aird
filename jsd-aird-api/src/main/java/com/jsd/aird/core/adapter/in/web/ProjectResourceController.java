@@ -43,7 +43,12 @@ public class ProjectResourceController {
     @GetMapping("/project-resource-links")
     public ApiResponse<List<ProjectResourceFacade.RelatedProjectView>> links(
             @RequestParam ResourceType resourceType, @RequestParam UUID resourceId) {
-        return success(service.links(ActorContext.required(), resourceType, resourceId));
+        var actor = ActorContext.required();
+        if (resourceType == ResourceType.SPECTRUM_CHART) {
+            authorization.require(new PermissionCheck(actor.organizationId(), actor.userId(), "spectrum.view",
+                    "SPECTRUM", resourceId, "READ"));
+        }
+        return success(service.links(actor, resourceType, resourceId));
     }
 
     @PutMapping("/project-resource-links/{resourceType}/{resourceId}")
@@ -51,8 +56,16 @@ public class ProjectResourceController {
             @PathVariable ResourceType resourceType, @PathVariable UUID resourceId,
             @Valid @RequestBody LinkRequest request) {
         var actor = ActorContext.required();
-        var sourcePermission = resourceType == ResourceType.KNOWLEDGE_DOCUMENT ? "knowledge.update" : "data.update";
-        var sourceResource = resourceType == ResourceType.KNOWLEDGE_DOCUMENT ? "KNOWLEDGE" : "DATA";
+        var sourcePermission = switch (resourceType) {
+            case KNOWLEDGE_DOCUMENT -> "knowledge.update";
+            case DATA_IMPORT_JOB -> "data.update";
+            case SPECTRUM_CHART -> "spectrum.update";
+        };
+        var sourceResource = switch (resourceType) {
+            case KNOWLEDGE_DOCUMENT -> "KNOWLEDGE";
+            case DATA_IMPORT_JOB -> "DATA";
+            case SPECTRUM_CHART -> "SPECTRUM";
+        };
         authorization.require(new PermissionCheck(actor.organizationId(), actor.userId(), sourcePermission,
                 sourceResource, resourceId, "WRITE"));
         return success(service.replaceLinks(actor, resourceType, resourceId, targets(request.targets())));
@@ -61,7 +74,12 @@ public class ProjectResourceController {
     @PostMapping("/project-references")
     public ApiResponse<List<ProjectResourceFacade.ReferenceView>> addReferences(
             @Valid @RequestBody AddReferenceRequest request) {
-        return success(service.addReferences(ActorContext.required(), request.resourceType(), request.resourceId(),
+        var actor = ActorContext.required();
+        if (request.resourceType() == ResourceType.SPECTRUM_CHART) {
+            authorization.require(new PermissionCheck(actor.organizationId(), actor.userId(), "spectrum.view",
+                    "SPECTRUM", request.resourceId(), "READ"));
+        }
+        return success(service.addReferences(actor, request.resourceType(), request.resourceId(),
                 request.summary(), targets(request.targets())));
     }
 

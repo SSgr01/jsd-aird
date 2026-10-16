@@ -107,7 +107,8 @@ describe('HistoricalOptimizationWorkbench', () => {
     })
     expect(await screen.findByText('下一轮实验建议')).toBeInTheDocument()
     expect(screen.getByText('49.1')).toBeInTheDocument()
-    expect(screen.getByText('29.123')).toBeInTheDocument()
+    expect(screen.getByText('29.123456')).toBeInTheDocument()
+    expect(screen.getByText('8.54321')).toBeInTheDocument()
     expect(screen.queryByText('49.1 GU')).not.toBeInTheDocument()
   })
 

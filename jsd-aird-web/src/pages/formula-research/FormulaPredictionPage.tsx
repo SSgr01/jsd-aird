@@ -162,7 +162,7 @@ function FormulaPredictionWorkbench({ storageKey, permission }: { storageKey?: s
       {form.targets.length > 0 && <section className="formula-input-panel" aria-label="配方预测输入"><div className="formula-panel-heading"><h3>目标与条件</h3><Button type="text" size="small" disabled={busy || contextLoading} icon={<ReloadOutlined />} onClick={() => setRefresh(value => value + 1)}>刷新模型信息</Button></div>
         {contextError ? <Alert type="error" showIcon message={contextError} /> : contextLoading && !pending ? <div className="formula-loading"><Spin /><span>正在读取所需输入</span></div> : inputContext && <>
           {unavailable.length > 0 && <Alert className="formula-input-notice" type="warning" showIcon message={unavailable.map(target => `${captions.get(target.targetId) ?? target.name}：${formulaUnavailable(target)}`).join('；')} />}
-          {inputContext.configurationConflicts?.length ? <Alert className="formula-input-notice" type="error" showIcon message="所选指标的实验条件类型、单位或可选类别不同，请调整指标组合。" /> : null}
+          {inputContext.configurationConflicts?.length ? <Alert className="formula-input-notice" type="error" showIcon message={inputContext.configurationConflicts.some(item => item.fieldCode === 'FORMULA_MATERIALS') ? '所选模型使用的材料不同，请分别生成配方。' : '所选指标的实验条件类型、单位或可选类别不同，请调整指标组合。'} /> : null}
           {selected.length !== form.targets.length && <Alert className="formula-input-notice" type="warning" showIcon message="部分指标已不可用，请取消后重新选择。" />}
           <Table size="small" rowKey="targetId" columns={goalColumns} dataSource={selected} pagination={false} scroll={{ x: 'max-content' }} />
           <Collapse className="formula-constraints" activeKey={openSections} onChange={keys => setOpenSections(typeof keys === 'string' ? [keys] : keys)} items={[

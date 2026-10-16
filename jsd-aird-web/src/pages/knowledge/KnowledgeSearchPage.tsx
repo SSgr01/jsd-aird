@@ -18,7 +18,7 @@ type SearchFile = FileSearchResult['files'][number];
 export function KnowledgeSearchPage() {
   const { message } = App.useApp();
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const initialQuery = searchParams.get('q')?.trim() || '';
   const [query, setQuery] = useState(initialQuery);
   const autoQueryRef = useRef('');
@@ -35,6 +35,7 @@ export function KnowledgeSearchPage() {
   const [projectId, setProjectId] = useState<string | undefined>(searchParams.get('projectId') || undefined);
   const [relationEditor, setRelationEditor] = useState<{ file: SearchFile; mode: 'LINK' | 'REFERENCE'; targets: ProjectRelationTarget[] }>();
   const [relationSaving, setRelationSaving] = useState(false);
+  const searchRequestSequence = useRef(0);
 
   useEffect(() => {
     void Promise.all([knowledgeApi.categories(), dataApi.listCategories()])
@@ -45,13 +46,15 @@ export function KnowledgeSearchPage() {
 
   const doSearch = useCallback(async (requestedQuery?: string) => {
     const normalizedQuery = (requestedQuery ?? query).trim();
-    if (!normalizedQuery) { setSearched(true); setError('请输入检索关键词'); setResult(undefined); return; }
+    const requestSequence = ++searchRequestSequence.current;
+    if (!normalizedQuery) { setSearched(true); setError('请输入检索关键词'); setResult(undefined); setLoading(false); return; }
     setLoading(true); setError(undefined); setSearched(true);
     try {
-      setResult(await assistantApi.fileSearch({ query: normalizedQuery, limit: 30, knowledgeCategoryIds: selectedKnowledge, dataCategoryIds: selectedData, projectId }));
+      const next = await assistantApi.fileSearch({ query: normalizedQuery, limit: 30, knowledgeCategoryIds: selectedKnowledge, dataCategoryIds: selectedData, projectId });
+      if (requestSequence === searchRequestSequence.current) setResult(next);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '检索失败，请稍后重试');
-    } finally { setLoading(false); }
+      if (requestSequence === searchRequestSequence.current) setError(reason instanceof Error ? reason.message : '检索失败，请稍后重试');
+    } finally { if (requestSequence === searchRequestSequence.current) setLoading(false); }
   }, [projectId, query, selectedData, selectedKnowledge]);
 
   useEffect(() => {
@@ -104,10 +107,29 @@ export function KnowledgeSearchPage() {
     finally { setRelationSaving(false); }
   };
 
+  const resetSearch = () => {
+    searchRequestSequence.current += 1;
+    autoQueryRef.current = '';
+    setQuery('');
+    setSelectedKnowledge([]);
+    setSelectedData([]);
+    setProjectId(undefined);
+    setResult(undefined);
+    setError(undefined);
+    setSearched(false);
+    setLoading(false);
+    setSearchParams((current) => {
+      const updated = new URLSearchParams(current);
+      updated.delete('q');
+      updated.delete('projectId');
+      return updated;
+    }, { replace: true });
+  };
+
   return <div className="search-workspace-page">
     <Card className="search-hero content-card">
       <Typography.Text>结果按来源文件合并展示。</Typography.Text>
-      <div className="search-hero-row"><Input size="large" aria-label="文件检索关键词" value={query} onChange={(event) => setQuery(event.target.value)} onPressEnter={() => void doSearch()} placeholder="输入文件名、产品、项目、实验编号或文件内容" /><Select allowClear showSearch optionFilterProp="label" aria-label="按项目筛选" placeholder="全部项目" style={{ minWidth: 240 }} value={projectId} onChange={setProjectId} options={projects.map((project) => ({ value: project.id, label: `${project.projectCode} · ${project.name}` }))} /><Button type="primary" size="large" icon={<SearchOutlined />} onClick={() => void doSearch()}>检索文件</Button></div>
+      <div className="search-hero-row"><Input size="large" aria-label="文件检索关键词" value={query} onChange={(event) => setQuery(event.target.value)} onPressEnter={() => void doSearch()} placeholder="输入文件名、产品、项目、实验编号或文件内容" /><Select allowClear showSearch optionFilterProp="label" aria-label="按项目筛选" placeholder="全部项目" style={{ minWidth: 240 }} value={projectId} onChange={setProjectId} options={projects.map((project) => ({ value: project.id, label: `${project.projectCode} · ${project.name}` }))} /><Button type="primary" size="large" icon={<SearchOutlined />} onClick={() => void doSearch()}>检索文件</Button><Button size="large" onClick={resetSearch}>重置</Button></div>
     </Card>
     <div className="search-workbench">
       <aside className="search-scope-panel content-card">

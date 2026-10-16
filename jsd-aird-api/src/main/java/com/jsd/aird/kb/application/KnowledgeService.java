@@ -241,27 +241,44 @@ public class KnowledgeService implements KnowledgeSearchFacade {
     @Transactional
     public KnowledgeRepository.CategoryRow createCategory(String scope, String name, String description) {
         var actor = ActorContext.required();
-        return repository.createCategory(actor.organizationId(), actor.userId(), normalizeScope(scope), normalizeName(name), normalizeDescription(description));
+        var normalizedScope = normalizeScope(scope);
+        var normalizedName = normalizeName(name);
+        ensureCategoryNameAvailable(actor.organizationId(), normalizedScope, normalizedName, null);
+        return repository.createCategory(actor.organizationId(), actor.userId(), normalizedScope, normalizedName, normalizeDescription(description));
     }
 
     @Transactional
     public KnowledgeRepository.CategoryRow renameCategory(UUID categoryId, String name, String description) {
         var actor = ActorContext.required();
-        requireCategory(actor.organizationId(), categoryId);
-        return repository.renameCategory(actor.organizationId(), categoryId, normalizeName(name), normalizeDescription(description));
+        var category = requireCategory(actor.organizationId(), categoryId);
+        var normalizedName = normalizeName(name);
+        ensureCategoryNameAvailable(actor.organizationId(), category.scope(), normalizedName, categoryId);
+        return repository.renameCategory(actor.organizationId(), categoryId, normalizedName, normalizeDescription(description));
     }
 
     @Transactional
     public void deleteCategory(UUID categoryId, UUID replacementCategoryId) {
         var actor = ActorContext.required();
         var category = requireCategory(actor.organizationId(), categoryId);
-        if (replacementCategoryId != null) {
-            var replacement = requireCategory(actor.organizationId(), replacementCategoryId);
+        if ("未分类".equals(category.name())) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "默认的未分类不可删除");
+        }
+        if (categoryId.equals(replacementCategoryId)) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "替代分类不能是待删除分类本身");
+        }
+        var targetCategoryId = replacementCategoryId;
+        if (targetCategoryId == null) {
+            targetCategoryId = repository.findDefaultCategory(actor.organizationId(), category.scope())
+                    .map(KnowledgeRepository.CategoryRow::id)
+                    .orElse(null);
+        }
+        if (targetCategoryId != null) {
+            var replacement = requireCategory(actor.organizationId(), targetCategoryId);
             if (!category.scope().equals(replacement.scope())) {
                 throw new ApiException(ApiErrorCode.BAD_REQUEST, "替代分类必须属于相同资料范围");
             }
         }
-        repository.deleteCategory(actor.organizationId(), categoryId, replacementCategoryId);
+        repository.deleteCategory(actor.organizationId(), categoryId, targetCategoryId);
     }
 
     @Transactional
@@ -1261,6 +1278,14 @@ public class KnowledgeService implements KnowledgeSearchFacade {
     private KnowledgeRepository.CategoryRow requireCategory(UUID organizationId, UUID categoryId) {
         return repository.findCategory(organizationId, categoryId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "知识库分类不存在"));
+    }
+
+    private void ensureCategoryNameAvailable(UUID organizationId, String scope, String name,
+                                            UUID excludingCategoryId) {
+        repository.lockCategoryName(organizationId, scope, name);
+        if (repository.categoryNameExists(organizationId, scope, name, excludingCategoryId)) {
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "当前资料范围下已存在同名分类");
+        }
     }
 
     private KnowledgeRepository.DocumentRow requireDocument(UUID organizationId, UUID documentId) {

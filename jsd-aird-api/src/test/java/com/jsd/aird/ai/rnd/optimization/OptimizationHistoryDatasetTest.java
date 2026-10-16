@@ -21,8 +21,8 @@ class OptimizationHistoryDatasetTest {
     private final UUID org = UUID.randomUUID();
     private final UUID datasetId = UUID.randomUUID();
     private final OptimizationRepository repository = mock(OptimizationRepository.class);
-    private final OptimizationService service = new OptimizationService(repository, null, null, null, null, null, null,
-            mock(AuthorizationService.class), null, null, json, null, false);
+    private final OptimizationService service = new OptimizationService(repository, null, null, null, null,
+            mock(AuthorizationService.class), null, json, false);
 
     @AfterEach void clearActor() { ActorContext.clear(); }
 

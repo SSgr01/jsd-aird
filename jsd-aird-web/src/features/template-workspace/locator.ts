@@ -106,13 +106,23 @@ export function synchronizeLocatorCoordinates(
   updates: Record<string, unknown>,
 ): CanonicalLocator {
   const next = mergeLocators(locator, updates);
-  const valueRange = text(updates.address)
-    || text(updates.valueRange)
-    || text(updates.logicalInputRange)
-    || locatorValueRange(next);
-  const labelRange = text(updates.labelAddress)
-    || text(updates.labelRange)
-    || locatorLabelRange(next);
+  const hasUpdate = (keys: string[]) => keys.some((key) => Object.prototype.hasOwnProperty.call(updates, key));
+  const valueUpdated = hasUpdate(['address', 'valueRange', 'logicalInputRange']);
+  const labelUpdated = hasUpdate(['labelAddress', 'labelRange']);
+  const valueRange = valueUpdated
+    ? text(updates.address ?? updates.valueRange ?? updates.logicalInputRange)
+    : locatorValueRange(next);
+  const labelRange = labelUpdated
+    ? text(updates.labelAddress ?? updates.labelRange)
+    : locatorLabelRange(next);
+
+  if (valueUpdated && !valueRange) {
+    for (const key of ['address', 'range', 'valueRange', 'logicalInputRange', 'valueAddress',
+      'valueAnchor', 'anchorAddress', 'anchorRange', 'value']) delete next[key];
+  }
+  if (labelUpdated && !labelRange) {
+    for (const key of ['labelAddress', 'labelRange', 'labelAnchor', 'label']) delete next[key];
+  }
 
   if (valueRange) {
     const address = firstCell(valueRange);

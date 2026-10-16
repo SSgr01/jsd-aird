@@ -10,18 +10,29 @@ public interface SpectrumRepository {
     List<CategoryRow> listCategories(UUID organizationId);
     Optional<CategoryRow> findCategory(UUID organizationId, UUID categoryId);
     Optional<CategoryRow> findCategoryByCode(UUID organizationId, String code);
+    void lockCategoryName(UUID organizationId, String name);
+    boolean categoryNameExists(UUID organizationId, String name, UUID excludingCategoryId);
+    void lockCategoryCode(UUID organizationId, String code);
     CategoryRow createCategory(NewCategory command);
     CategoryRow renameCategory(UUID organizationId, UUID categoryId, String name, String description, String analysisHint, String fieldsJson);
     void deleteCategory(UUID organizationId, UUID categoryId);
 
     Optional<ChartRow> findChart(UUID organizationId, UUID chartId);
     Optional<ChartRow> findChartByHash(UUID organizationId, String sha256);
+    Optional<ChartRow> findChartByRequestId(UUID organizationId, UUID requestId);
+    void lockChartHash(UUID organizationId, String sha256);
+    void lockChartRequest(UUID organizationId, UUID requestId);
     List<ChartRow> listCharts(UUID organizationId, String keyword, UUID categoryId, String status, int page, int size);
     long countCharts(UUID organizationId, String keyword, UUID categoryId, String status);
     ChartRow insertChart(NewChart command);
     void updateChart(UUID organizationId, UUID chartId, String title, String sampleName, String batchNo,
                      String testConditions, String metadataJson);
+    int assignChartCategory(UUID organizationId, UUID chartId, UUID categoryId);
+    boolean hasProjectUsage(UUID organizationId, UUID chartId);
     void deleteChart(UUID organizationId, UUID chartId);
+    void recordUploadAttempt(NewUploadAttempt attempt);
+    List<UploadAttemptRow> listUploadAttempts(UUID organizationId, int limit);
+    List<ChartAnalysisExportRow> listChartAnalysisExports(UUID organizationId, UUID chartId, int limit);
 
     UUID createSession(UUID organizationId, UUID userId, String title);
     List<SessionRow> listSessions(UUID organizationId, UUID userId, int limit);
@@ -64,7 +75,18 @@ public interface SpectrumRepository {
 
     record NewChart(UUID id, UUID organizationId, UUID categoryId, UUID fileObjectId, String title,
                     String originalName, String contentType, long size, String sha256, String sampleName,
-                    String batchNo, String testConditions, String metadataJson, int pageCount, UUID createdBy) { }
+                    String batchNo, String testConditions, String metadataJson, int pageCount, UUID requestId,
+                    UUID createdBy) { }
+
+    record NewUploadAttempt(UUID organizationId, UUID requestId, UUID categoryId, UUID chartId,
+                            UUID fileObjectId, String originalName, long size, String status,
+                            String errorCode, String errorMessage, UUID createdBy) { }
+
+    record UploadAttemptRow(UUID requestId, UUID categoryId, UUID chartId, String originalName,
+                            long size, String status, String errorCode, String errorMessage, Instant createdAt) { }
+
+    record ChartAnalysisExportRow(UUID id, String mode, String question, String chartIdsJson, String status,
+                                  String resultJson, Instant createdAt, Instant completedAt) { }
 
     record SessionRow(UUID id, String title, Instant createdAt, Instant updatedAt,
                       String chartIdsJson, String pageSelectionsJson) { }

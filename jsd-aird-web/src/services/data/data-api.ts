@@ -129,7 +129,7 @@ export const dataApi = {
   async createCategory(input: { name: string; description?: string }) { const response = await httpClient.post<ApiResponse<DataCategory>>('/api/v1/data/categories', input); return response.data.data; },
   async renameCategory(id: string, input: { name: string; description?: string }) { const response = await httpClient.put<ApiResponse<DataCategory>>(`/api/v1/data/categories/${id}`, input); return response.data.data; },
   async deleteCategory(id: string, replacementCategoryId?: string) { await httpClient.delete(`/api/v1/data/categories/${id}`, { params: replacementCategoryId ? { replacementCategoryId } : undefined }); },
-  async assignSourceCategory(importJobId: string, categoryId: string) { await httpClient.put(`/api/v1/data/sources/${importJobId}/category`, { categoryId }); },
+  async assignSourceCategory(importJobId: string, categoryId?: string) { await httpClient.put(`/api/v1/data/sources/${importJobId}/category`, { categoryId: categoryId || null }); },
   async sourceBlob(fileId: string) { return fetchFileBlob(fileId); },
   async sourcePreviewBlob(fileId: string) { return fetchFilePreviewBlob(fileId); },
 };

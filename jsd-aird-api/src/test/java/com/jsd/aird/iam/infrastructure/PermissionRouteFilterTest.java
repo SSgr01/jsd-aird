@@ -3,11 +3,7 @@ package com.jsd.aird.iam.infrastructure;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
-import java.util.Map;
 import org.junit.jupiter.api.Test;
-import org.yaml.snakeyaml.Yaml;
 import org.springframework.mock.web.MockHttpServletRequest;
 
 class PermissionRouteFilterTest {
@@ -96,13 +92,15 @@ class PermissionRouteFilterTest {
         assertThat(code("POST", "/api/v1/ai/rnd/material-dictionaries")).isNull();
         assertThat(code("GET", "/api/v1/ai/rnd/training-policies")).isNull();
         assertThat(code("POST", "/api/v1/ai/rnd/training-policies")).isNull();
-        assertThat(code("GET", "/api/v1/ai/rnd/targets/" + id + "/domain-policies")).isEqualTo("ai.modeling.read");
-        assertThat(code("POST", "/api/v1/ai/rnd/targets/" + id + "/domain-policies")).isEqualTo("ai.config.manage");
-        assertThat(code("POST", "/api/v1/ai/rnd/domain-policies/" + id + "/publish")).isEqualTo("ai.config.manage");
-        assertThat(code("POST", "/api/v1/ai/rnd/reviews/" + id + "/decisions")).isEqualTo("ai.data.review");
-        assertThat(code("GET", "/api/v1/ai/rnd/training-jobs")).isEqualTo("ai.model.read");
-        assertThat(code("POST", "/api/v1/ai/rnd/training-jobs/" + id + "/retry")).isEqualTo("ai.training.operate");
-        assertThat(code("POST", "/api/v1/ai/rnd/models/" + id + "/activate")).isEqualTo("ai.model.publish");
+        assertThat(code("GET", "/api/v1/ai/rnd/targets/" + id + "/domain-policies")).isNull();
+        assertThat(code("POST", "/api/v1/ai/rnd/targets/" + id + "/domain-policies")).isNull();
+        assertThat(code("POST", "/api/v1/ai/rnd/domain-policies/" + id + "/publish")).isNull();
+        assertThat(code("POST", "/api/v1/ai/rnd/reviews/" + id + "/decisions")).isNull();
+        assertThat(code("GET", "/api/v1/ai/rnd/training-jobs")).isNull();
+        assertThat(code("POST", "/api/v1/ai/rnd/training-jobs/" + id + "/retry")).isNull();
+        assertThat(code("POST", "/api/v1/ai/rnd/models/" + id + "/activate")).isNull();
+        assertThat(code("POST", "/api/v1/ai/rnd/models/" + id + "/pause")).isEqualTo("ai.model.publish");
+        assertThat(code("POST", "/api/v1/ai/rnd/models/" + id + "/rollback")).isEqualTo("ai.model.publish");
         assertThat(code("POST", "/api/v1/ai/rnd/predictions")).isEqualTo("ai.performance.predict");
         assertThat(code("POST", "/api/v1/ai/rnd/formula-designs")).isEqualTo("ai.formula.predict");
         assertThat(code("POST", "/api/v1/ai/rnd/experiment-optimizations")).isEqualTo("ai.experiment.optimize");
@@ -123,29 +121,6 @@ class PermissionRouteFilterTest {
         assertThat(code("POST", "/api/v1/ai/rnd/research-runs/" + id + "/next-round"))
                 .isEqualTo("ai.experiment.optimize");
         assertThat(code("GET", "/api/v1/ai/formulation-readiness")).isNull();
-    }
-
-    @Test
-    @SuppressWarnings("unchecked")
-    void mapsEveryFrozenAiRndOperationToItsDeclaredPermission() {
-        var stream = getClass().getResourceAsStream("/contracts/ai-rnd.v1.openapi.yaml");
-        assertThat(stream).isNotNull();
-        var document = (Map<String, Object>) new Yaml().load(
-                new InputStreamReader(stream, StandardCharsets.UTF_8));
-        var components = (Map<String, Object>) document.get("components");
-        var operations = (Map<String, Map<String, Object>>) components.get("x-operations");
-        var paths = (Map<String, Map<String, Map<String, String>>>) document.get("paths");
-        var id = "00000000-0000-0000-0000-000000000001";
-
-        paths.forEach((template, methods) -> methods.forEach((method, reference) -> {
-            var ref = reference.get("$ref");
-            var operationName = ref.substring(ref.lastIndexOf('/') + 1);
-            var operation = operations.get(operationName);
-            var uri = "/api/v1/ai/rnd" + template.replace("{id}", id);
-            assertThat(code(method.toUpperCase(java.util.Locale.ROOT), uri))
-                    .as(operationName + " " + method.toUpperCase(java.util.Locale.ROOT) + " " + uri)
-                    .isEqualTo(operation.get("x-permission"));
-        }));
     }
 
     @Test

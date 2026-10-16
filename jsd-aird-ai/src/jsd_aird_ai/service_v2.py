@@ -1,11 +1,9 @@
-from __future__ import annotations
 
 import hashlib
 import io
 import json
-import pickle
+import logging
 import zipfile
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
@@ -14,17 +12,13 @@ import httpx
 import joblib
 import numpy as np
 import pandas as pd
-import pyarrow.parquet as pq
 from scipy.stats import norm, spearmanr
-from sklearn.base import BaseEstimator, ClassifierMixin, clone
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-from sklearn.feature_extraction import DictVectorizer
+from sklearn.base import clone
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import Matern, WhiteKernel
-from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, f1_score, mean_absolute_error, mean_squared_error, r2_score
-from sklearn.model_selection import KFold, StratifiedKFold
-from sklearn.model_selection import KFold, StratifiedKFold
+from sklearn.model_selection import GroupKFold, KFold, StratifiedGroupKFold, StratifiedKFold
+from sklearn.pipeline import Pipeline
 from baybe.campaign import Campaign
 from baybe.parameters import NumericalDiscreteParameter
 from baybe.recommenders import BotorchRecommender
@@ -33,92 +27,18 @@ from baybe.settings import Settings as BaybeSettings
 from baybe.surrogates import GaussianProcessSurrogate
 from baybe.targets import NumericalTarget
 
-from jsd_aird_ai.contracts_v2 import (
-    ApplicabilityV2,
-    ArtifactRefV2,
-    BinaryResultV2,
-    CategoricalResultV2,
-    ContinuousResultV2,
-    DomainStatusV2,
-    FoldAssignmentV2,
-    OrdinalResultV2,
-    ScoreRequestV2,
-    ScoreResponseV2,
-    TargetBlockedV2,
-    TargetFailedV2,
-    TargetSuccessV2,
-    TrainRequestV2,
-    TrainResponseV2,
-    ValidateRequestV2,
-    ValidateResponseV2,
-    ValidationFoldsRequestV2,
-    ValidationFoldsResponseV2,
-    ValidationIssueV2,
-    ValueTypeV2,
-    FormulaV2,
-    FormulaComponentV2,
-    RecommendRequestV2,
-    RecommendResponseV2,
-    RecommendedCandidateV2,
-    TargetOutcomeV2,
-)
+from jsd_aird_ai.contracts_v2 import ApplicabilityV2, BinaryResultV2, CategoricalResultV2, ContinuousResultV2, DomainStatusV2, OrdinalResultV2, ScoreRequestV2, ScoreResponseV2, TargetBlockedV2, TargetFailedV2, TargetSuccessV2, ValueTypeV2, FormulaV2, FormulaComponentV2, RecommendRequestV2, RecommendResponseV2, RecommendedCandidateV2
 from jsd_aird_ai.errors import ErrorCode, FormulaModelError
 from jsd_aird_ai.settings import Settings
+from jsd_aird_ai.workbench_training import candidates as workbench_candidates, fitted_metrics, prepare_data
 
 
 def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-@dataclass
-class _Dataset:
-    rows: pd.DataFrame
-    source: pd.DataFrame
 
 
-class OrdinalCumulativeLogit(ClassifierMixin, BaseEstimator):
-    """Proportional-threshold classifier that preserves the configured class order."""
-
-    def __init__(self, ordered_classes: tuple[str, ...], random_state: int, max_iter: int = 2000) -> None:
-        self.ordered_classes = ordered_classes
-        self.random_state = random_state
-        self.max_iter = max_iter
-
-    def fit(self, x: np.ndarray, y: np.ndarray) -> "OrdinalCumulativeLogit":
-        self.classes_ = np.asarray(self.ordered_classes)
-        order = {label: index for index, label in enumerate(self.ordered_classes)}
-        encoded = np.asarray([order[str(value)] for value in y], dtype=int)
-        self.threshold_models_: list[LogisticRegression | float] = []
-        for threshold in range(len(self.ordered_classes) - 1):
-            binary = (encoded > threshold).astype(int)
-            if np.unique(binary).size == 1:
-                self.threshold_models_.append(float(binary[0]))
-            else:
-                self.threshold_models_.append(LogisticRegression(
-                    max_iter=self.max_iter, random_state=self.random_state,
-                ).fit(x, binary))
-        return self
-
-    def predict_proba(self, x: np.ndarray) -> np.ndarray:
-        greater = []
-        for model in self.threshold_models_:
-            if isinstance(model, float):
-                greater.append(np.full(len(x), model, dtype=float))
-            else:
-                positive = list(model.classes_).index(1)
-                greater.append(model.predict_proba(x)[:, positive])
-        p_greater = np.column_stack(greater)
-        p_greater = np.minimum.accumulate(p_greater, axis=1)
-        probabilities = np.empty((len(x), len(self.ordered_classes)), dtype=float)
-        probabilities[:, 0] = 1.0 - p_greater[:, 0]
-        for index in range(1, len(self.ordered_classes) - 1):
-            probabilities[:, index] = p_greater[:, index - 1] - p_greater[:, index]
-        probabilities[:, -1] = p_greater[:, -1]
-        probabilities = np.clip(probabilities, 1e-12, 1.0)
-        return probabilities / probabilities.sum(axis=1, keepdims=True)
-
-    def predict(self, x: np.ndarray) -> np.ndarray:
-        return self.classes_[np.argmax(self.predict_proba(x), axis=1)]
 
 
 class FormulaModelV2Service:
@@ -127,140 +47,8 @@ class FormulaModelV2Service:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
 
-    def validate_snapshot(self, request: ValidateRequestV2) -> ValidateResponseV2:
-        issues: list[ValidationIssueV2] = []
-        try:
-            dataset = self._dataset(request)
-            self._validate_rows(request, dataset, issues)
-        except FormulaModelError as exc:
-            issues.append(ValidationIssueV2(code=str(exc.code), message=exc.message))
-        return ValidateResponseV2(
-            request_id=request.request_id,
-            status="REJECTED" if issues else "VALID",
-            snapshot_hash=request.snapshot.sha256,
-            issues=issues,
-        )
 
-    def validation_folds(self, request: ValidationFoldsRequestV2) -> ValidationFoldsResponseV2:
-        dataset = self._dataset(request)
-        issues: list[ValidationIssueV2] = []
-        self._validate_rows(request, dataset, issues)
-        if issues:
-            raise FormulaModelError(ErrorCode.INVALID_SNAPSHOT, "snapshot rows are invalid",
-                                    details={"issues": [item.model_dump(by_alias=True) for item in issues]})
-        source = dataset.source.set_index("row_id", drop=False)
-        assignments: list[FoldAssignmentV2] = []
-        unique_groups: dict[str, int] = {}
-        for row_id in dataset.rows["row_id"].astype(str):
-            if row_id not in source.index:
-                raise FormulaModelError(ErrorCode.INVALID_SNAPSHOT, "source-map row is missing",
-                                        details={"rowId": row_id})
-            source_row = source.loc[row_id]
-            parts = [str(source_row.get(field, "")) for field in request.group_fields]
-            group_key = "|".join(parts)
-            if group_key not in unique_groups:
-                digest = hashlib.sha256(f"{request.seed}:{group_key}".encode()).digest()
-                unique_groups[group_key] = int.from_bytes(digest[:8], "big")
-            fold = unique_groups[group_key] % request.fold_count
-            assignments.append(FoldAssignmentV2(row_id=row_id, group_key=group_key, fold=fold))
-        if len({item.fold for item in assignments}) < 2:
-            raise FormulaModelError(ErrorCode.INSUFFICIENT_DATA,
-                                    "independent groups cannot produce at least two validation folds")
-        canonical = json.dumps([item.model_dump(by_alias=True) for item in assignments],
-                               ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
-        return ValidationFoldsResponseV2(
-            request_id=request.request_id,
-            snapshot_hash=request.snapshot.sha256,
-            assignments_hash=_sha(canonical),
-            assignments=assignments,
-        )
 
-    def train(self, request: TrainRequestV2) -> TrainResponseV2:
-        dataset = self._dataset(request)
-        issues: list[ValidationIssueV2] = []
-        self._validate_rows(request, dataset, issues)
-        if issues:
-            return TrainResponseV2(request_id=request.request_id, job_id=request.job_id,
-                                   status="REJECTED", reasons=[item.code for item in issues])
-        fold_bytes = self._read(request.validation_folds.url, request.validation_folds.sha256)
-        try:
-            fold_payload = json.loads(fold_bytes)
-            fold_items = fold_payload.get("assignments", fold_payload)
-            fold_by_row = {str(item["rowId"]): int(item["fold"]) for item in fold_items}
-        except Exception as exc:
-            raise FormulaModelError(ErrorCode.INVALID_SNAPSHOT, "validation-folds artifact is invalid") from exc
-
-        # Keep the business code and display name together.  Snapshot facts retain
-        # the immutable source field label (for example ``涂料固含``), while a
-        # frozen input scheme uses its stable field code (``COATING_SOLIDS``).
-        # The feature builder must bridge those two identities instead of
-        # silently producing an empty feature matrix.
-        allowed_input_codes = {
-            field.code: (field.name or field.code)
-            for field in request.context.input_scheme.fields
-        }
-        include_formula = self._scheme_uses_formula(request.context.input_scheme)
-        feature_records = [self._features(row, allowed_input_codes, include_formula) for _, row in dataset.rows.iterrows()]
-        vectorizer = DictVectorizer(sparse=False)
-        features = vectorizer.fit_transform(feature_records)
-        row_ids = dataset.rows["row_id"].astype(str).tolist()
-        folds = np.array([fold_by_row.get(row_id, -1) for row_id in row_ids], dtype=int)
-        if np.any(folds < 0) or len(np.unique(folds)) < 2:
-            raise FormulaModelError(ErrorCode.INVALID_SNAPSHOT, "validation-folds do not cover the snapshot")
-
-        requires_formula = self._scheme_uses_formula(request.context.input_scheme)
-        target_type = ValueTypeV2(request.context.target_definition.value_type)
-        target = self._target(dataset.rows, target_type)
-        algorithms = request.context.training_policy.config.get("candidateAlgorithms") or []
-        if not algorithms:
-            return TrainResponseV2(request_id=request.request_id, job_id=request.job_id,
-                                   status="REJECTED", reasons=["CANDIDATE_ALGORITHMS_REQUIRED"])
-        candidates = self._candidates(target_type, algorithms, request.seed,
-                                      request.context.target_definition.classes)
-        if not candidates:
-            return TrainResponseV2(request_id=request.request_id, job_id=request.job_id,
-                                   status="REJECTED", reasons=["UNSUPPORTED_TARGET_TYPE_OR_ALGORITHM"])
-
-        results: list[tuple[float, str, Any, dict[str, Any]]] = []
-        for name, estimator in candidates:
-            try:
-                metrics, loss = self._cross_validate(estimator, features, target, folds, target_type,
-                                                     request.context.target_definition.classes)
-                fitted = clone(estimator).fit(features, target)
-                results.append((loss, name, fitted, metrics))
-            except Exception:
-                # A single optional learner may not support the dataset. Other configured
-                # candidates still receive the identical folds and comparison set.
-                continue
-        if not results:
-            return TrainResponseV2(request_id=request.request_id, job_id=request.job_id,
-                                   status="REJECTED", reasons=["NO_CANDIDATE_COMPLETED"])
-        results.sort(key=lambda item: (item[0], item[1]))
-        loss, name, model, metrics = results[0]
-        metrics["selectedAlgorithm"] = name
-        metrics["candidateCount"] = len(results)
-        metrics["comparison"] = [dict(algorithm=item[1], loss=item[0], **item[3]) for item in results]
-        metrics["baselines"] = {
-            "simple": self._baseline_metrics(target, folds, target_type,
-                                             request.context.target_definition.classes),
-            "historicalCase": {"status": "UNAVAILABLE", "reason": "HISTORICAL_CASE_BASELINE_NOT_CONFIGURED"},
-        }
-        comparison_rows = sorted((row_id, int(fold), str(value))
-                                 for row_id, fold, value in zip(row_ids, folds.tolist(), target.tolist()))
-        metrics["comparisonSetHash"] = _sha(json.dumps(comparison_rows, ensure_ascii=False,
-                                                       separators=(",", ":")).encode())
-        domain = self._domain(features, vectorizer.get_feature_names_out().tolist())
-        bundle = self._bundle(request, vectorizer, model, metrics, domain)
-        self._write(request.output, bundle)
-        return TrainResponseV2(
-            request_id=request.request_id,
-            job_id=request.job_id,
-            status="CANDIDATE",
-            model_bundle=ArtifactRefV2(url=request.output, sha256=_sha(bundle)),
-            metrics=metrics,
-            applicability_domain=domain,
-            reasons=[],
-        )
 
     def train_workbench(self, request: dict[str, Any]) -> dict[str, Any]:
         """Train an exploratory model directly from selected table columns."""
@@ -282,55 +70,31 @@ class FormulaModelV2Service:
 
         numeric_y = str(y_column.get("kind") or "").upper() == "NUMERIC"
         target_type = ValueTypeV2.CONTINUOUS if numeric_y else ValueTypeV2.CATEGORICAL
-        feature_rows: list[dict[str, Any]] = []
-        targets: list[float | str] = []
-        for row in rows:
-            values = row.get("values") if isinstance(row, dict) else None
-            if not isinstance(values, dict):
-                continue
-            y_value = values.get(y_code)
-            if y_value is None or (isinstance(y_value, str) and not y_value.strip()):
-                continue
-            features: dict[str, Any] = {}
-            valid = True
-            for column in x_columns:
-                code = str(column.get("code") or "")
-                value = values.get(code)
-                if value is None or (isinstance(value, str) and not value.strip()):
-                    valid = False
-                    break
-                if str(column.get("kind") or "").upper() == "NUMERIC":
-                    try:
-                        number = float(value)
-                    except (TypeError, ValueError):
-                        valid = False
-                        break
-                    if not np.isfinite(number):
-                        valid = False
-                        break
-                    features[code] = number
-                else:
-                    features[code] = str(value).strip()
-            if not valid:
-                continue
-            if numeric_y:
-                try:
-                    target = float(y_value)
-                except (TypeError, ValueError):
-                    continue
-                if not np.isfinite(target):
-                    continue
-                targets.append(target)
-            else:
-                targets.append(str(y_value).strip())
-            feature_rows.append(features)
-
-        sample_count = len(targets)
+        # Older frozen requests contain only complete rows. New requests also retain
+        # all selected rows so exclusions can be explained without rereading live data.
+        selected_rows = request.get("selectedRows", rows)
+        if not isinstance(selected_rows, list) or len(selected_rows) > 20000:
+            raise FormulaModelError(ErrorCode.INSUFFICIENT_DATA, "本次数据量超出单次建模范围，请缩小数据集")
+        feature_rows, target, checks = prepare_data(x_columns, y_column, selected_rows)
+        sample_count = len(target)
         if sample_count < 6:
             raise FormulaModelError(ErrorCode.INSUFFICIENT_DATA, f"X/Y 组合只有 {sample_count} 条完整记录，至少需要 6 条")
-        target = np.asarray(targets, dtype=float if numeric_y else str)
+        if all(field["distinctCount"] < 2 for field in checks["fields"][:-1]):
+            raise FormulaModelError(ErrorCode.INSUFFICIENT_DATA, "所选 X 在完整记录中都没有变化，请选择有不同取值的输入列")
+        feature_count = sum(1 if column["kind"] == "NUMERIC" else field["distinctCount"]
+                            for column, field in zip(x_columns, checks["fields"][:-1]))
+        if feature_count * sample_count > 20_000_000:
+            categorical = sorted([(field["distinctCount"], field["name"]) for column, field in zip(x_columns, checks["fields"][:-1])
+                                  if column["kind"] != "NUMERIC"], reverse=True)
+            detail = "、".join(f"{name}（{count} 种类别）" for count, name in categorical[:3])
+            raise FormulaModelError(ErrorCode.INSUFFICIENT_DATA,
+                f"类别展开后有 {feature_count} 个输入项、{sample_count} 条记录，超出本次训练可处理的规模。"
+                f"请减少勾选记录，或取消类别过多的 X：{detail}")
         classes: list[str] = []
-        if not numeric_y:
+        if numeric_y:
+            if np.unique(target).size < 2:
+                raise FormulaModelError(ErrorCode.INSUFFICIENT_DATA, "Y 列只有一种结果，请选择有不同实测值的结果列")
+        else:
             labels, counts = np.unique(target.astype(str), return_counts=True)
             if len(labels) < 2:
                 raise FormulaModelError(ErrorCode.INSUFFICIENT_DATA, "Y 列只有一种结果，无法训练分类模型")
@@ -338,46 +102,61 @@ class FormulaModelV2Service:
                 raise FormulaModelError(ErrorCode.INSUFFICIENT_DATA, "Y 列中每种结果至少需要 2 条记录")
             classes = labels.tolist()
 
-        vectorizer = DictVectorizer(sparse=False)
-        features = vectorizer.fit_transform(feature_rows)
         seed = int(request.get("seed") or 17)
-        if numeric_y:
-            # Keep at least two rows in each validation fold so R² remains a
-            # finite, useful metric even for the minimum supported data size.
-            fold_count = min(5, sample_count // 2)
-            folds = np.empty(sample_count, dtype=int)
-            for fold, (_, valid) in enumerate(KFold(n_splits=fold_count, shuffle=True, random_state=seed).split(features)):
-                folds[valid] = fold
-            algorithms = ["GAUSSIAN_PROCESS", "RANDOM_FOREST", "LIGHTGBM"] if sample_count <= 200 else ["RANDOM_FOREST", "LIGHTGBM"]
+        fold_count = min(5, sample_count // 2) if numeric_y else min(5, int(counts.min()))
+        # Repeated inputs belong to one fold, including replicates with different Y,
+        # so seeing the same input during training cannot inflate validation scores.
+        group_keys = [tuple(sorted(row.items())) for row in feature_rows]
+        group_ids = {key: index for index, key in enumerate(dict.fromkeys(group_keys))}
+        groups = np.asarray([group_ids[key] for key in group_keys])
+        grouped = len(group_ids) < sample_count
+        if grouped:
+            fold_count = min(fold_count, len(group_ids))
+            splitter = (GroupKFold(n_splits=fold_count, shuffle=True, random_state=seed) if numeric_y else
+                        StratifiedGroupKFold(n_splits=fold_count, shuffle=True, random_state=seed))
+            splits = splitter.split(feature_rows, target, groups)
         else:
-            fold_count = min(5, int(np.unique(target, return_counts=True)[1].min()))
-            folds = np.empty(sample_count, dtype=int)
-            splitter = StratifiedKFold(n_splits=fold_count, shuffle=True, random_state=seed)
-            for fold, (_, valid) in enumerate(splitter.split(features, target)):
-                folds[valid] = fold
-            algorithms = ["RANDOM_FOREST", "LIGHTGBM", "CATBOOST"]
-
-        candidates = self._candidates(target_type, algorithms, seed, classes)
-        results: list[tuple[float, str, Any, dict[str, Any]]] = []
-        for name, estimator in candidates:
+            splitter = (KFold(n_splits=fold_count, shuffle=True, random_state=seed) if numeric_y else
+                        StratifiedKFold(n_splits=fold_count, shuffle=True, random_state=seed))
+            splits = splitter.split(feature_rows, target)
+        folds = np.empty(sample_count, dtype=int)
+        for fold, (_, valid) in enumerate(splits):
+            folds[valid] = fold
+        minimum_train_count = min(int(np.sum(folds != fold)) for fold in np.unique(folds))
+        candidates = workbench_candidates(numeric_y, sample_count, minimum_train_count, seed, self.settings.model_threads, feature_count)
+        results: list[tuple[float, str, Any, dict[str, Any], dict[str, Any], str]] = []
+        failures = []
+        for index, (name, params, estimator) in enumerate(candidates):
+            candidate_id = f"{name}:{index}"
             try:
-                metrics, loss = self._cross_validate(estimator, features, target, folds, target_type, classes)
-                fitted = clone(estimator).fit(features, target)
-                results.append((loss, name, fitted, metrics))
-            except Exception:
-                # Keep the workbench usable when one optional learner cannot fit
-                # a particular small or highly categorical data set.
-                continue
+                metrics, loss = self._cross_validate(estimator, feature_rows, target, folds, target_type, classes)
+                if not np.isfinite(loss) or any(not np.isfinite(value) for value in metrics.values() if isinstance(value, (float, int))):
+                    raise ValueError("non-finite validation metrics")
+                fitted = clone(estimator).fit(feature_rows, target)
+                metrics["trainingMetrics"] = fitted_metrics(fitted, feature_rows, target, numeric_y, classes)
+                results.append((loss, name, fitted, metrics, params, candidate_id))
+            except Exception as exc:
+                logging.getLogger(__name__).warning("Workbench candidate %s failed: %s", candidate_id, type(exc).__name__)
+                failures.append(dict(candidateId=candidate_id, algorithm=name, errorType=type(exc).__name__))
         if not results:
             raise FormulaModelError(ErrorCode.INSUFFICIENT_DATA, "所选数据无法完成模型训练；请检查类别数量或更换 X/Y 列")
-        results.sort(key=lambda item: (item[0], item[1]))
-        _, selected_algorithm, model, selected_metrics = results[0]
+        results.sort(key=lambda item: (item[0], item[1], item[5]))
+        _, selected_algorithm, fitted, selected_metrics, _, selected_id = results[0]
+        # Preserve the original, unscaled feature ranges used by registration and
+        # prediction forms. The remaining fitted pipeline travels with the model.
+        vectorizer = fitted.named_steps["vectorizer"]
+        features = vectorizer.transform(feature_rows)
+        model = Pipeline(fitted.steps[1:])
         metrics = dict(selected_metrics)
-        metrics["selectedAlgorithm"] = selected_algorithm
-        metrics["candidateCount"] = len(results)
-        metrics["comparison"] = [dict(algorithm=name, loss=loss, **item_metrics)
-                                 for loss, name, _, item_metrics in results]
-        metrics["validationFolds"] = fold_count
+        metrics.update(selectedAlgorithm=selected_algorithm, selectedCandidateId=selected_id,
+                       selectionMetric="mae" if numeric_y else "logLoss", selectionDirection="MINIMIZE",
+                       candidateCount=len(results), validationFolds=fold_count,
+                       validationGrouping="IDENTICAL_X" if grouped else "ROWS",
+                       baselineMetrics=self._baseline_metrics(target, folds, target_type, classes),
+                       dataChecks=checks, failedCandidates=failures,
+                       preprocessing=dict(numericScaling="STANDARD", categoricalEncoding="ONE_HOT", fitScope="TRAIN_FOLD"))
+        metrics["comparison"] = [dict(algorithm=name, candidateId=candidate_id, parameters=params, loss=loss, **item_metrics)
+                                 for loss, name, _, item_metrics, params, candidate_id in results]
         domain = self._domain(features, vectorizer.get_feature_names_out().tolist())
 
         model_payload = io.BytesIO()
@@ -409,7 +188,7 @@ class FormulaModelV2Service:
             "requestId": request_id,
             "status": "SUCCEEDED",
             "rowCount": sample_count,
-            "excludedRowCount": len(rows) - sample_count,
+            "excludedRowCount": checks["excludedRowCount"],
             "metrics": metrics,
             "applicabilityDomain": domain,
             "modelBundle": {"url": output, "sha256": _sha(bundle_bytes)},
@@ -433,59 +212,9 @@ class FormulaModelV2Service:
 
                 bundle_bytes = self._read(binding.model_bundle.url, binding.model_bundle.sha256)
                 bundle = self._load_bundle(bundle_bytes)
-                if bundle.get("contractVersion") == "modeling-workbench.v1":
-                    outcomes.append(self._score_workbench(binding, bundle, request.inputs))
-                    continue
-                self._verify_binding(binding, bundle)
-                vectorizer = bundle["vectorizer"]
-                feature_names = vectorizer.get_feature_names_out().tolist()
-                needs_formula = self._scheme_uses_formula(binding.input_scheme) or any(
-                    name.startswith("material:") or name.startswith("formula:") for name in feature_names
-                )
-                if needs_formula and request.formula is None:
-                    outcomes.append(TargetBlockedV2(target_id=target_id, model_version_id=model_id,
-                        code="FORMULA_INCOMPLETE", message="该模型需要完整配方", detail={}))
-                    continue
-                if needs_formula:
-                    material_ids = {item.material_id for item in binding.material_dictionary.materials}
-                    unknown = sorted({item.material_id for item in request.formula.components
-                                      if item.material_id not in material_ids})
-                    if unknown:
-                        outcomes.append(TargetBlockedV2(target_id=target_id, model_version_id=model_id,
-                            code="MATERIAL_NOT_IN_MODEL", message="材料已识别，但当前模型未覆盖",
-                            detail={"materialIds": unknown}))
-                        continue
-                filtered_inputs = self._filtered_inputs(request.inputs, binding.input_scheme)
-                feature_record = self._feature_record(
-                    request.formula.model_dump(by_alias=True) if needs_formula and request.formula else {},
-                    filtered_inputs, include_formula=needs_formula,
-                )
-                unknown_categories = sorted(key for key in feature_record if "=" in key and key not in feature_names)
-                if unknown_categories:
-                    outcomes.append(TargetBlockedV2(target_id=target_id, model_version_id=model_id,
-                        code="UNKNOWN_CATEGORY", message="输入包含模型未见过的分类值",
-                        detail={"encodedValues": unknown_categories}))
-                    continue
-                vector = vectorizer.transform([feature_record])
-                relevant_features = self._domain_features(binding, feature_names)
-                applicability = self._applicability(vector[0], feature_names,
-                                                     binding.applicability_domain,
-                                                     bundle["applicabilityDomain"], relevant_features)
-                if applicability.status == DomainStatusV2.OUT_OF_DOMAIN and not request.allow_extrapolation:
-                    outcomes.append(TargetBlockedV2(target_id=target_id, model_version_id=model_id,
-                        code="OUT_OF_DOMAIN", message="输入超出模型适用域",
-                        detail={"distance": applicability.distance, "reasons": applicability.reasons,
-                                "violations": [{"fieldCode": name, "value": float(vector[0][index]),
-                                                "minimum": binding.applicability_domain["minimum"][index],
-                                                "maximum": binding.applicability_domain["maximum"][index]}
-                                               for index, name in enumerate(feature_names)
-                                               if name in applicability.reasons]}))
-                    continue
-                result = self._typed_result(binding, bundle, vector)
-                outcomes.append(TargetSuccessV2(target_id=target_id, model_version_id=model_id,
-                    result=result, applicability=applicability,
-                    warnings=[{"code": "EXTRAPOLATION", "message": "超出训练数据范围，预测结果需实验验证"}]
-                    if applicability.status == DomainStatusV2.OUT_OF_DOMAIN else []))
+                if bundle.get("contractVersion") != "modeling-workbench.v1":
+                    raise FormulaModelError(ErrorCode.UNSUPPORTED_CONTRACT, "请选择建模工具注册的模型")
+                outcomes.append(self._score_workbench(binding, bundle, request.inputs))
             except FormulaModelError as exc:
                 outcomes.append(TargetFailedV2(target_id=target_id, model_version_id=model_id,
                     code=str(exc.code), message=exc.message, detail=exc.details))
@@ -553,8 +282,6 @@ class FormulaModelV2Service:
         bindings and feature builder as scoring, which makes it safe for the
         local acceptance environment when an optimizer is unavailable.
         """
-        if request.mode == "EXPERIMENT_OPTIMIZATION":
-            return self._recommend_optimization(request)
         total = request.baseline_formula.recorded_total if request.baseline_formula and request.baseline_formula.recorded_total is not None else 100.0
         baseline = request.baseline_formula
         if baseline is None:
@@ -574,7 +301,9 @@ class FormulaModelV2Service:
         # it proposes are sent to the frozen model bundles.  This is a bounded
         # discrete representation of the feasible formula space, rather than
         # scoring the entire pool and applying BayBE as a post-hoc sorter.
-        pool_size = max(request.candidate_count * 8, 32) if engine == "BAYBE" else request.candidate_count
+        # Leave room to reject candidates for class/probability goals as well as
+        # numeric goals; the requested result count is not a search budget.
+        pool_size = max(request.candidate_count * 8, 32)
         formulas = self._formula_pool(baseline, total, pool_size, request.seed, request.search_space)
         # BayBE's discrete parameter requires at least two values.  A narrow
         # rule-constrained space may legitimately contain only one formula;
@@ -616,9 +345,10 @@ class FormulaModelV2Service:
                     scored_count += 1
                     formula = formulas[index]
                     candidate_inputs = self._candidate_inputs(request, index, len(formulas))
+                    score_inputs = self._formula_inputs(request, formula, candidate_inputs)
                     scored = self.score(ScoreRequestV2(
                         request_id=f"{request.request_id}:score:{index}", seed=request.seed,
-                        run_id=request.run_id, formula=formula, inputs=candidate_inputs,
+                        run_id=request.run_id, formula=formula, inputs=score_inputs,
                         model_bindings=request.model_bindings, allow_extrapolation=True))
                     if scored.execution_status == "FAILED":
                         had_execution_failure = True
@@ -678,8 +408,9 @@ class FormulaModelV2Service:
                 proposed_count += 1
                 scored_count += 1
                 candidate_inputs = self._candidate_inputs(request, index, len(formulas))
+                score_inputs = self._formula_inputs(request, formula, candidate_inputs)
                 scored = self.score(ScoreRequestV2(request_id=f"{request.request_id}:score:{index}", seed=request.seed,
-                                                    run_id=request.run_id, formula=formula, inputs=candidate_inputs,
+                                                    run_id=request.run_id, formula=formula, inputs=score_inputs,
                                                     model_bindings=request.model_bindings, allow_extrapolation=True))
                 if scored.execution_status == "FAILED":
                     had_execution_failure = True
@@ -705,7 +436,7 @@ class FormulaModelV2Service:
         accepted = accepted[:request.candidate_count]
         if had_execution_failure and not accepted:
             return RecommendResponseV2(request_id=request.request_id, run_id=request.run_id,
-                                       status="FAILED", execution_status="FAILED", outcome_status=None,
+                                       execution_status="FAILED", outcome_status=None,
                                        candidates=[], blocked_targets=[], warnings=[],
                                        code=("MODEL_ARTIFACT_INVALID" if first_failure_code in {"INVALID_SNAPSHOT", "HASH_MISMATCH", "UNSUPPORTED_CONTRACT", "MODEL_LOAD_FAILED"} else "COMPUTE_UNAVAILABLE"),
                                        message=first_failure_message or "模型制品或计算服务不可用",
@@ -714,14 +445,13 @@ class FormulaModelV2Service:
                                        search_evidence={"poolSize": len(formulas), "proposedCount": proposed_count,
                                                         "scoredCount": scored_count, "acceptedCount": len(accepted),
                                                         "algorithm": "BayBE ask-score-tell adaptive campaign" if engine == "BAYBE" else "stable deterministic pool"})
-        status = "READY" if len(accepted) == request.candidate_count else "PARTIAL" if accepted else "NO_FEASIBLE_CANDIDATE"
         outcome = "SUCCEEDED" if len(accepted) == request.candidate_count else "PARTIAL" if accepted else "BLOCKED"
         hints=self._rejection_hints(rejected)
-        return RecommendResponseV2(request_id=request.request_id, run_id=request.run_id, status=status,
+        return RecommendResponseV2(request_id=request.request_id, run_id=request.run_id,
                                    execution_status="SUCCEEDED", outcome_status=outcome,
                                    candidates=accepted, blocked_targets=[], warnings=[],
-                                   shortfall_reason=None if status == "READY" else self._shortfall_reason(rejected),
-                                   shortfall_reason_code=None if status == "READY" else self._shortfall_code(rejected),
+                                   shortfall_reason=None if outcome == "SUCCEEDED" else self._shortfall_reason(rejected),
+                                   shortfall_reason_code=None if outcome == "SUCCEEDED" else self._shortfall_code(rejected),
                                    rejection_summary=rejected, action_hints=hints,
                                    search_engine=engine, search_strategy=strategy,
                                    search_evidence={"poolSize": len(formulas),
@@ -888,13 +618,14 @@ class FormulaModelV2Service:
         z = np.divide(improvement, std, out=np.zeros_like(improvement), where=std > 1e-12)
         ei = improvement * norm.cdf(z) + std * norm.pdf(z)
 
-        history_vectors = {tuple(np.round(row, 8)) for row in x}
         ranked = np.argsort(-ei)
         selected: list[dict[str, Any]] = []
         selected_vectors: list[np.ndarray] = []
         for index in ranked:
             vector = encoded_candidates[index]
-            if tuple(np.round(vector, 8)) in history_vectors:
+            # Reject practically unchanged designs as well as exact repeats.
+            # Use the same normalized spacing as the new batch itself.
+            if np.any(np.linalg.norm(x - vector, axis=1) < 0.025):
                 continue
             if any(np.linalg.norm(vector - prior) < 0.025 for prior in selected_vectors):
                 continue
@@ -928,316 +659,10 @@ class FormulaModelV2Service:
         return ("BAYBE", "CONTINUOUS_BAYBE") if has_continuous else (
             "DETERMINISTIC_CANDIDATE_POOL", "DISCRETE_DETERMINISTIC_POOL")
 
-    def _recommend_optimization(self, request: RecommendRequestV2) -> RecommendResponseV2:
-        """Choose four distinct experiment strategies from one frozen baseline.
 
-        CONTROL is always the unmodified baseline.  The other strategies use
-        the explicitly confirmed target total and remain within the model
-        domain; EXPLORATORY may use NEAR_BOUNDARY but never OUT_OF_DOMAIN.
-        """
-        assert request.baseline_formula is not None
-        baseline = request.baseline_formula
-        baseline_total = float(baseline.recorded_total or sum(float(c.ratio or 0) for c in baseline.components))
-        target_total = float(request.constraints.get("targetTotal", baseline_total))
-        strategies = list(request.constraints.get("strategies") or
-                          ["CONTROL", "CONSERVATIVE", "BALANCED", "EXPLORATORY"])
-        engine, search_strategy = self._search_engine(request)
-        pool = [baseline]
-        # Keep the feasible representation larger than the evaluation budget.
-        # Continuous optimization evaluates only BayBE proposals; ordinal and
-        # categorical optimization keeps the deterministic pool semantics.
-        pool.extend(self._formula_pool(
-            baseline, target_total, max(64, request.candidate_count * 16) if engine == "BAYBE"
-            else max(32, request.candidate_count * 8), request.seed, request.constraints,
-        ))
-        # The baseline plus a single feasible variation is not a valid
-        # Bayesian search space.  Keep the real candidate and use the stable
-        # deterministic strategy selection for this narrow case.
-        if engine == "BAYBE" and len(pool) <= 2:
-            engine, search_strategy = "DETERMINISTIC_CANDIDATE_POOL", "DISCRETE_DETERMINISTIC_POOL"
-        scored_pool: list[tuple[FormulaV2, dict[str, Any], list[TargetSuccessV2], float, float, str, bool]] = []
-        had_failure = False
-        failure_code: str | None = None
-        failure_message: str | None = None
-        baseline_vector = {c.material_id: float(c.ratio or 0) for c in baseline.components}
-        proposed_count = 0
-        scored_count = 0
-        evaluated_indexes: set[int] = set()
 
-        def score_index(index: int) -> float:
-            nonlocal had_failure, failure_code, failure_message, proposed_count, scored_count
-            if index in evaluated_indexes:
-                return 0.0
-            evaluated_indexes.add(index)
-            proposed_count += 1
-            scored_count += 1
-            formula = pool[index]
-            candidate_inputs = request.fixed_inputs if index == 0 else self._input_candidate(
-                request.fixed_inputs, request.constraints, index - 1, max(len(pool) - 1, 1))
-            scored = self.score(ScoreRequestV2(
-                request_id=f"{request.request_id}:optimization:{index}", seed=request.seed,
-                run_id=request.run_id, formula=formula, inputs=candidate_inputs,
-                model_bindings=request.model_bindings,
-            ))
-            if scored.execution_status == "FAILED":
-                had_failure = True
-                failed = next((item for item in scored.results if getattr(item, "status", None) == "FAILED"), None)
-                failure_code = failure_code or getattr(failed, "code", None)
-                failure_message = failure_message or getattr(failed, "message", None)
-                return -1.0
-            successes = [item for item in scored.results if item.status == "SUCCEEDED"]
-            if len(successes) != len(request.model_bindings):
-                return -1.0
-            mandatory_ok = self._goals_satisfied(request.goals, successes)
-            score = self._goal_score(request.goals, successes)
-            current = {c.material_id: float(c.ratio or 0) for c in formula.components}
-            keys = set(baseline_vector) | set(current)
-            distance = sum(abs(current.get(k, 0.0) - baseline_vector.get(k, 0.0)) for k in keys) / max(target_total, 1e-9)
-            distance += self._input_distance(request.fixed_inputs, candidate_inputs, request.constraints)
-            domain_statuses = {str(s.applicability.status) for s in successes}
-            domain = ("OUT_OF_DOMAIN" if "OUT_OF_DOMAIN" in domain_statuses else
-                      "NEAR_BOUNDARY" if "NEAR_BOUNDARY" in domain_statuses else "IN_DOMAIN")
-            scored_pool.append((formula, candidate_inputs, successes, score, distance, domain, mandatory_ok))
-            # A bounded monotone utility lets BayBE compare any result type
-            # without encoding scientific thresholds in the optimizer.
-            return float(score / (1.0 + abs(score)))
 
-        if engine == "BAYBE" and len(pool) > 1:
-            # The baseline is always evaluated for the CONTROL strategy.  All
-            # other points enter the model only after BayBE proposes them.
-            score_index(0)
-            max_evaluations = min(len(pool) - 1, max(request.candidate_count * 8, 16))
-            values = [float(index) for index in range(1, max_evaluations + 1)]
-            try:
-                searchspace = SearchSpace.from_dataframe(
-                    pd.DataFrame({"candidateIndex": values}),
-                    [NumericalDiscreteParameter(name="candidateIndex", values=values)],
-                )
-                objective = NumericalTarget.normalized_ramp("utility", (-1.0, 1.0)).to_objective()
-                campaign = Campaign(searchspace=searchspace, objective=objective,
-                                    recommender=BotorchRecommender(
-                                        surrogate_model=GaussianProcessSurrogate()))
-                seed_indexes = [1]
-                if max_evaluations > 1:
-                    seed_indexes.append(1 + max_evaluations // 2)
-                measured: list[dict[str, float]] = []
-                with BaybeSettings(random_seed=int(request.seed) & 0xFFFFFFFF, cache_directory=None):
-                    for index in seed_indexes:
-                        measured.append({"candidateIndex": float(index), "utility": score_index(index)})
-                    campaign.add_measurements(pd.DataFrame(measured))
-                    while scored_count < max_evaluations + 1:
-                        batch_size = min(2, max_evaluations + 1 - scored_count)
-                        recommendation = campaign.recommend(batch_size=max(1, batch_size))
-                        indexes = [int(round(float(value))) for value in recommendation["candidateIndex"].tolist()]
-                        indexes = [index for index in indexes if 1 <= index <= max_evaluations]
-                        indexes = [index for index in indexes if index not in evaluated_indexes]
-                        if not indexes:
-                            break
-                        rows = [{"candidateIndex": float(index), "utility": score_index(index)} for index in indexes]
-                        campaign.add_measurements(pd.DataFrame(rows))
-            except Exception as exc:
-                raise FormulaModelError(ErrorCode.INTERNAL_COMPUTE_ERROR,
-                                        f"BayBE自适应优化候选提议失败: {type(exc).__name__}: {exc}")
-        else:
-            for index in range(len(pool)):
-                score_index(index)
-        if had_failure and not scored_pool:
-            return RecommendResponseV2(request_id=request.request_id, run_id=request.run_id,
-                status="FAILED", execution_status="FAILED", outcome_status=None, candidates=[],
-                code="MODEL_ARTIFACT_INVALID" if failure_code in {"INVALID_SNAPSHOT", "HASH_MISMATCH", "UNSUPPORTED_CONTRACT", "MODEL_LOAD_FAILED"} else "COMPUTE_UNAVAILABLE",
-                message=failure_message or "模型制品或计算服务不可用",
-                search_engine=engine,
-                search_strategy=search_strategy,
-                search_evidence={"poolSize": len(pool), "proposedCount": proposed_count,
-                                 "scoredCount": scored_count,
-                                 "algorithm": "BayBE ask-score-tell adaptive campaign" if engine == "BAYBE" else "stable deterministic strategy pool"})
 
-        selected: list[RecommendedCandidateV2] = []
-        used: set[str] = set()
-        missing_reasons: dict[str, str] = {}
-        non_control = [item for item in scored_pool if item[0] != baseline]
-        baseline_choice = next((item for item in scored_pool if item[0] == baseline), None)
-        baseline_score = baseline_choice[3] if baseline_choice else float("-inf")
-
-        def improves_baseline(item: tuple[FormulaV2, dict[str, Any], list[TargetSuccessV2], float, float, str, bool]) -> bool:
-            return item[3] > baseline_score + 1e-9
-
-        goal_satisfied = [item for item in non_control if item[6]]
-        in_domain = [item for item in goal_satisfied if item[5] == "IN_DOMAIN"]
-        for strategy in strategies:
-            choice: tuple[FormulaV2, dict[str, Any], list[TargetSuccessV2], float, float, str, bool] | None = None
-            if strategy == "CONTROL":
-                choice = next((item for item in scored_pool if item[0] == baseline), None)
-            else:
-                feasible = [item for item in scored_pool
-                            if item[6] and item[5] != "OUT_OF_DOMAIN" and item[0] != baseline
-                            and self._candidate_fingerprint(item[0], item[1]) not in used]
-                if strategy == "CONSERVATIVE":
-                    feasible = [item for item in feasible if item[5] == "IN_DOMAIN" and improves_baseline(item)]
-                    choice = min(feasible, key=lambda item: (item[4], -item[3]), default=None)
-                elif strategy == "BALANCED":
-                    feasible = [item for item in feasible if item[5] == "IN_DOMAIN" and improves_baseline(item)]
-                    choice = max(feasible, key=lambda item: (item[3], -item[4]), default=None)
-                elif strategy == "EXPLORATORY":
-                    choice = max(feasible, key=lambda item: (item[4], item[3]), default=None)
-                if choice is None:
-                    # Keep the strict, in-domain result as the preferred
-                    # result. If that is unavailable, offer a real
-                    # near-boundary experiment for validation before falling
-                    # back to an in-domain candidate that misses a hard goal.
-                    # Never suggest an out-of-domain candidate.
-                    alternatives = [item for item in scored_pool
-                                    if item[5] == "NEAR_BOUNDARY" and item[0] != baseline
-                                    and self._candidate_fingerprint(item[0], item[1]) not in used]
-                    if strategy in {"CONSERVATIVE", "BALANCED"}:
-                        improving_alternatives = [item for item in alternatives
-                                                  if item[6] and improves_baseline(item)]
-                        alternatives = improving_alternatives
-                    if strategy == "CONSERVATIVE":
-                        choice = min(alternatives, key=lambda item: (item[4], -item[3]), default=None)
-                    elif strategy == "BALANCED":
-                        choice = max(alternatives, key=lambda item: (item[3], -item[4]), default=None)
-                    elif strategy == "EXPLORATORY":
-                        choice = max(alternatives, key=lambda item: (item[4], item[3]), default=None)
-                    if choice is None:
-                        alternatives = [item for item in scored_pool
-                                        if not item[6] and item[5] == "IN_DOMAIN" and item[0] != baseline
-                                        and self._candidate_fingerprint(item[0], item[1]) not in used]
-                        if strategy == "CONSERVATIVE":
-                            choice = min(alternatives, key=lambda item: (item[4], -item[3]), default=None)
-                        elif strategy == "BALANCED":
-                            choice = max(alternatives, key=lambda item: (item[3], -item[4]), default=None)
-                        elif strategy == "EXPLORATORY":
-                            choice = max(alternatives, key=lambda item: (item[4], item[3]), default=None)
-                    if choice is None and strategy in {"CONSERVATIVE", "BALANCED"}:
-                        alternatives = [item for item in scored_pool
-                                        if not item[6] and item[5] == "NEAR_BOUNDARY" and item[0] != baseline
-                                        and self._candidate_fingerprint(item[0], item[1]) not in used]
-                        if strategy == "CONSERVATIVE":
-                            choice = min(alternatives, key=lambda item: (item[4], -item[3]), default=None)
-                        else:
-                            choice = max(alternatives, key=lambda item: (item[3], -item[4]), default=None)
-                    if choice is None and strategy == "EXPLORATORY":
-                        alternatives = [item for item in scored_pool
-                                        if not item[6] and item[5] == "NEAR_BOUNDARY" and item[0] != baseline
-                                        and self._candidate_fingerprint(item[0], item[1]) not in used]
-                        choice = max(alternatives, key=lambda item: (item[4], item[3]), default=None)
-            if choice is None:
-                # Conservative and balanced require an in-domain candidate;
-                # exploratory may use NEAR_BOUNDARY. Never return an
-                # out-of-domain alternative as an experiment suggestion.
-                if strategy == "CONTROL":
-                    missing_reasons[strategy] = "CONTROL_BASELINE_UNAVAILABLE"
-                elif not goal_satisfied:
-                    missing_reasons[strategy] = "MANDATORY_GOAL_NOT_MET"
-                elif strategy in {"CONSERVATIVE", "BALANCED"} and any(
-                        item[6] and self._candidate_fingerprint(item[0], item[1]) not in used
-                        for item in non_control) and not any(
-                        item[6] and improves_baseline(item) and self._candidate_fingerprint(item[0], item[1]) not in used
-                        for item in non_control):
-                    missing_reasons[strategy] = "NO_IMPROVING_CANDIDATE"
-                elif strategy in {"CONSERVATIVE", "BALANCED"} and not in_domain:
-                    missing_reasons[strategy] = "NO_IN_DOMAIN_CANDIDATE"
-                else:
-                    missing_reasons[strategy] = "NO_DISTINCT_FEASIBLE_CANDIDATE"
-                continue
-            formula, candidate_inputs, successes, score, distance, domain, mandatory_ok = choice
-            fingerprint = self._candidate_fingerprint(formula, candidate_inputs)
-            if fingerprint in used:
-                continue
-            used.add(fingerprint)
-            changes = self._formula_changes(baseline, formula)
-            risks = []
-            if not mandatory_ok:
-                risks.append("TARGET_NOT_MET")
-            if domain == "NEAR_BOUNDARY":
-                risks.append("NEAR_BOUNDARY")
-            selected.append(RecommendedCandidateV2(
-                candidate_id=f"{request.run_id}-{strategy.lower()}", formula=formula,
-                results=successes, score=score, strategy=strategy, inputs=candidate_inputs,
-                quality={"source": "PUBLISHED_QUALITY_POLICIES"},
-                applicability={"status": domain}, baseline_distance=distance,
-                change_summary=changes,
-                strategy_evidence={"selection": strategy, "mandatoryGoalsMet": mandatory_ok, "seed": request.seed,
-                                   "baselineTotal": baseline_total, "targetTotal": float(formula.recorded_total or 0)},
-                risk_flags=risks,
-                rule_check={"javaFinalCheckRequired": True,
-                            "formulaTotal": sum(float(c.ratio or 0) for c in formula.components)},
-            ))
-        missing = [item for item in strategies if all(candidate.strategy != item for candidate in selected)]
-        for strategy in missing:
-            missing_reasons.setdefault(strategy, "NO_DISTINCT_FEASIBLE_CANDIDATE")
-        has_unmet_alternatives = any(candidate.strategy != "CONTROL" and "TARGET_NOT_MET" in candidate.risk_flags
-                                     for candidate in selected)
-        has_boundary_alternatives = any(candidate.strategy != "CONTROL" and "NEAR_BOUNDARY" in candidate.risk_flags
-                                        for candidate in selected)
-        has_validation_alternatives = has_unmet_alternatives or has_boundary_alternatives
-        status = "READY" if not missing and not has_validation_alternatives else "PARTIAL" if selected else "NO_FEASIBLE_CANDIDATE"
-        outcome = "SUCCEEDED" if status == "READY" else "PARTIAL" if selected else "BLOCKED"
-        reason = ("暂无达到全部必达目标的改动方案，已列出可供验证的备选方案" if has_unmet_alternatives else
-                  "部分改动方案接近已有实验记录范围边缘，建议先做实验验证" if has_boundary_alternatives else
-                  None if not missing else "不可行策略：" + ",".join(missing))
-        return RecommendResponseV2(request_id=request.request_id, run_id=request.run_id, status=status,
-            execution_status="SUCCEEDED", outcome_status=outcome, candidates=selected,
-            missing_strategies=missing,
-            missing_strategy_reasons=missing_reasons,
-            shortfall_reason=reason,
-            search_engine=engine,
-            search_strategy=search_strategy,
-            search_evidence={"algorithm": "BayBE ask-score-tell adaptive campaign" if engine == "BAYBE" else "stable deterministic strategy pool",
-                             "strategies": strategies, "poolSize": len(pool),
-                             "proposedCount": proposed_count, "scoredCount": scored_count})
-
-    def _candidate_fingerprint(self, formula: FormulaV2, inputs: dict[str, Any]) -> str:
-        return formula.model_dump_json(by_alias=True) + "|" + json.dumps(inputs, ensure_ascii=False,
-                                                                           sort_keys=True)
-
-    def _input_candidate(self, baseline: dict[str, Any], constraints: dict[str, Any], index: int,
-                         count: int) -> dict[str, Any]:
-        result = dict(baseline)
-        variables = constraints.get("variableInputs") or []
-        fraction = ((index * 29 + 13) % max(count, 2)) / max(count - 1, 1)
-        for item in variables:
-            code = str(item.get("code") or "")
-            if not code:
-                continue
-            allowed = item.get("allowedValues") or []
-            if allowed:
-                result[code] = allowed[index % len(allowed)]
-                continue
-            if item.get("minimum") is not None and item.get("maximum") is not None:
-                minimum, maximum = float(item["minimum"]), float(item["maximum"])
-                value = minimum + (maximum - minimum) * fraction
-                step = item.get("step")
-                if step is not None and float(step) > 0:
-                    value = minimum + round((value - minimum) / float(step)) * float(step)
-                result[code] = max(minimum, min(maximum, value))
-        return result
-
-    def _input_distance(self, baseline: dict[str, Any], candidate: dict[str, Any],
-                        constraints: dict[str, Any]) -> float:
-        distance = 0.0
-        for item in constraints.get("variableInputs") or []:
-            code = str(item.get("code") or "")
-            if not code or code not in candidate or code not in baseline:
-                continue
-            if item.get("minimum") is not None and item.get("maximum") is not None:
-                span = max(float(item["maximum"]) - float(item["minimum"]), 1e-9)
-                distance += abs(float(candidate[code]) - float(baseline[code])) / span
-            elif candidate[code] != baseline[code]:
-                distance += 1.0
-        return distance
-
-    def _formula_changes(self, baseline: FormulaV2, candidate: FormulaV2) -> dict[str, Any]:
-        before = {c.material_id: float(c.ratio or 0) for c in baseline.components}
-        after = {c.material_id: float(c.ratio or 0) for c in candidate.components}
-        return {"materials": [{"materialId": key, "before": before.get(key, 0.0),
-                                "after": after.get(key, 0.0),
-                                "delta": after.get(key, 0.0) - before.get(key, 0.0)}
-                               for key in sorted(set(before) | set(after))
-                               if abs(after.get(key, 0.0) - before.get(key, 0.0)) > 1e-9],
-                "totalBefore": float(baseline.recorded_total or 0),
-                "totalAfter": float(candidate.recorded_total or 0)}
 
     def _formula_pool(self, baseline: FormulaV2, total: float, count: int, seed: int,
                       constraints: dict[str, Any] | None = None) -> list[FormulaV2]:
@@ -1318,6 +743,32 @@ class FormulaModelV2Service:
             if len(out) >= count:
                 break
         return out
+
+    @staticmethod
+    def _formula_inputs(request: RecommendRequestV2, formula: FormulaV2, conditions: dict[str, Any]) -> dict[str, Any]:
+        """Resolve candidate ratios into original X codes without changing performance prediction."""
+        inputs = dict(conditions)
+        ratios = {component.material_id: component.ratio for component in formula.components}
+        mappings: dict[str, str] = {}
+        for binding in request.model_bindings:
+            known = {material.material_id for material in binding.material_dictionary.materials}
+            for field in binding.input_scheme.fields:
+                material_id = field.encoding.get("formulaMaterialId")
+                if material_id is None:
+                    continue
+                if material_id not in known or field.code != f"formula:{material_id}" or field.value_type != "NUMBER":
+                    raise FormulaModelError(ErrorCode.INVALID_SNAPSHOT, "模型的材料比例关联不一致，请检查模型输入")
+                if material_id not in ratios or ratios[material_id] is None:
+                    raise FormulaModelError(ErrorCode.INSUFFICIENT_DATA, f"候选配方缺少材料比例：{field.name or field.code}")
+                if field.code in mappings and mappings[field.code] != material_id:
+                    raise FormulaModelError(ErrorCode.INVALID_SNAPSHOT, "所选模型的材料比例关联冲突")
+                mappings[field.code] = material_id
+                inputs[field.code] = float(ratios[material_id])
+        if mappings and (not formula.composition_complete or len(ratios) != len(formula.components)
+                         or any(value is None or not np.isfinite(value) or value < 0 for value in ratios.values())
+                         or abs(sum(float(value) for value in ratios.values()) - 100) > 1e-4):
+            raise FormulaModelError(ErrorCode.INSUFFICIENT_DATA, "候选配方的材料比例需完整、非负且合计为 100%")
+        return inputs
 
     @staticmethod
     def _candidate_inputs(request: RecommendRequestV2, index: int, count: int) -> dict[str, Any]:
@@ -1465,7 +916,7 @@ class FormulaModelV2Service:
     def _load_bundle(self, data: bytes) -> dict[str, Any]:
         try:
             with zipfile.ZipFile(io.BytesIO(data), "r") as archive:
-                payload_name = "model.joblib" if "model.joblib" in archive.namelist() else "model-payload.joblib"
+                payload_name = "model.joblib"
                 if payload_name not in archive.namelist() or "model-card.json" not in archive.namelist():
                     raise FormulaModelError(ErrorCode.INVALID_SNAPSHOT, "模型制品缺少必需文件")
                 payload = joblib.load(io.BytesIO(archive.read(payload_name)))
@@ -1477,56 +928,7 @@ class FormulaModelV2Service:
             raise FormulaModelError(ErrorCode.INVALID_SNAPSHOT, "模型制品内容无效")
         return payload
 
-    def _verify_binding(self, binding: Any, bundle: dict[str, Any]) -> None:
-        if bundle.get("contractVersion") != "formula-model.v2":
-            raise FormulaModelError(ErrorCode.UNSUPPORTED_CONTRACT, "模型制品契约版本不匹配")
-        # Local customer-field development bundles were produced before the
-        # publisher started persisting the database UUIDs into the frozen
-        # context.  They intentionally carry stable semantic references
-        # (customer-v2-*), while the Java binding carries the local UUIDs.
-        # Keep the production integrity gate strict; only permit this narrow
-        # compatibility path for explicitly synthetic bundles whose target
-        # code and feature/material vocabularies still match exactly.
-        synthetic = str(binding.target.observation_semantics.get("dataNature", "")).upper() == "SYNTHETIC"
-        target_actual = bundle.get("target") if isinstance(bundle.get("target"), dict) else {}
-        synthetic_compatible = synthetic and target_actual.get("code") == binding.target.code
-        checks = [
-            ("target", binding.target),
-            ("inputScheme", binding.input_scheme),
-            ("materialDictionary", binding.material_dictionary),
-            ("preprocessing", binding.preprocessing),
-        ]
-        for name, expected in checks:
-            actual = bundle.get(name)
-            if not isinstance(actual, dict):
-                raise FormulaModelError(ErrorCode.INVALID_SNAPSHOT, f"模型制品缺少{name}")
-            expected_payload = expected.model_dump(by_alias=True)
-            for key in ("id", "sha256"):
-                if actual.get(key) != expected_payload.get(key):
-                    if synthetic_compatible and name == "target":
-                        continue
-                    if synthetic_compatible and name == "inputScheme":
-                        expected_codes = [f.get("code") for f in expected_payload.get("fields", [])]
-                        actual_codes = [f.get("code") for f in actual.get("fields", [])]
-                        if expected_codes == actual_codes:
-                            continue
-                    if synthetic_compatible and name == "materialDictionary":
-                        expected_materials = [(m.get("materialId"), m.get("code"))
-                                              for m in expected_payload.get("materials", [])]
-                        actual_materials = [(m.get("materialId"), m.get("code"))
-                                             for m in actual.get("materials", [])]
-                        if expected_materials == actual_materials:
-                            continue
-                    raise FormulaModelError(ErrorCode.HASH_MISMATCH, f"模型制品{name}版本或哈希不匹配",
-                                            details={"field": key})
 
-    def _domain_features(self, binding: Any, names: list[str]) -> set[str]:
-        relevant = {"formula:recordedTotal"}
-        relevant.update(f"material:{item.material_id}" for item in binding.material_dictionary.materials)
-        for field in binding.input_scheme.fields:
-            direct = f"input:{field.code}"
-            relevant.update(name for name in names if name == direct or name.startswith(direct + "="))
-        return relevant
 
     def _applicability(self, values: np.ndarray, names: list[str], pinned: dict[str, Any],
                        trained: dict[str, Any], relevant_features: set[str] | None = None) -> ApplicabilityV2:
@@ -1611,243 +1013,16 @@ class FormulaModelV2Service:
                                   decision_threshold=float(threshold))
         return CategoricalResultV2(label=label, probabilities=probabilities)
 
-    def _dataset(self, request: ValidateRequestV2 | ValidationFoldsRequestV2 | TrainRequestV2) -> _Dataset:
-        manifest = self._read(request.snapshot.manifest.url, request.snapshot.manifest.sha256)
-        try:
-            manifest_json = json.loads(manifest)
-        except Exception as exc:
-            raise FormulaModelError(ErrorCode.INVALID_SNAPSHOT, "snapshot manifest is not JSON") from exc
-        if manifest_json.get("snapshotHash") != request.snapshot.sha256:
-            raise FormulaModelError(ErrorCode.HASH_MISMATCH, "snapshot hash differs from manifest")
-        rows = pq.read_table(io.BytesIO(self._read(request.snapshot.rows.url, request.snapshot.rows.sha256))).to_pandas()
-        source = pq.read_table(io.BytesIO(self._read(request.snapshot.source_map.url, request.snapshot.source_map.sha256))).to_pandas()
-        return _Dataset(rows=rows, source=source)
 
-    def _validate_rows(self, request: ValidateRequestV2 | ValidationFoldsRequestV2 | TrainRequestV2,
-                       dataset: _Dataset, issues: list[ValidationIssueV2]) -> None:
-        required = {"row_id", "formula_json", "inputs_json", "target_numeric", "target_label"}
-        missing = sorted(required - set(dataset.rows.columns))
-        if missing:
-            issues.append(ValidationIssueV2(code="MISSING_COLUMNS", message=",".join(missing)))
-            return
-        if dataset.rows.empty:
-            issues.append(ValidationIssueV2(code="INSUFFICIENT_DATA", message="snapshot contains no rows"))
-            return
-        if dataset.rows["row_id"].astype(str).duplicated().any():
-            issues.append(ValidationIssueV2(code="DUPLICATE_ROW_ID", message="row ids must be unique"))
-        source_ids = set(dataset.source.get("row_id", pd.Series(dtype=str)).astype(str))
-        requires_formula = self._scheme_uses_formula(request.context.input_scheme)
-        material_ids = {item.material_id for item in request.context.material_dictionary.materials}
-        for _, row in dataset.rows.iterrows():
-            row_id = str(row["row_id"])
-            if row_id not in source_ids:
-                issues.append(ValidationIssueV2(code="SOURCE_MAP_MISSING", message="source row missing", row_id=row_id))
-            try:
-                formula = json.loads(row["formula_json"])
-                if requires_formula and not formula.get("components"):
-                    issues.append(ValidationIssueV2(code="FORMULA_EMPTY", message="formula has no components", row_id=row_id))
-                if requires_formula and any(str(component.get("materialId", "")) not in material_ids
-                                            for component in formula.get("components", [])):
-                    issues.append(ValidationIssueV2(code="MATERIAL_NOT_IN_MODEL",
-                                                    message="formula materials differ from the frozen dictionary", row_id=row_id))
-                # recordedTotal is evidence. It is intentionally never normalized to 100.
-                if formula.get("recordedTotal") is not None and float(formula["recordedTotal"]) < 0:
-                    issues.append(ValidationIssueV2(code="FORMULA_TOTAL_INVALID", message="recorded total is negative", row_id=row_id))
-                json.loads(row["inputs_json"])
-            except Exception:
-                issues.append(ValidationIssueV2(code="ROW_JSON_INVALID", message="formula or inputs are invalid", row_id=row_id))
-        target_type = ValueTypeV2(request.context.target_definition.value_type)
-        if target_type == ValueTypeV2.CONTINUOUS and dataset.rows["target_numeric"].isna().any():
-            issues.append(ValidationIssueV2(code="TARGET_VALUE_MISSING", message="continuous target is missing"))
-        if target_type != ValueTypeV2.CONTINUOUS and dataset.rows["target_label"].isna().any():
-            issues.append(ValidationIssueV2(code="TARGET_LABEL_MISSING", message="class target is missing"))
 
-    def _features(self, row: pd.Series, allowed_input_codes: Any | None = None,
-                  include_formula: bool = True) -> dict[str, Any]:
-        formula = json.loads(row["formula_json"])
-        inputs = json.loads(row["inputs_json"])
-        return self._feature_record(formula, self._filtered_inputs(inputs, allowed_input_codes), include_formula)
 
-    def _filtered_inputs(self, inputs: dict[str, Any], scheme: Any) -> dict[str, Any]:
-        if not isinstance(inputs, dict):
-            return {}
-        if scheme is None:
-            return dict(inputs)
-        if isinstance(scheme, (set, frozenset, list, tuple)) and all(isinstance(item, str) for item in scheme):
-            scheme = {item: item for item in scheme}
-        if isinstance(scheme, dict) and all(isinstance(key, str) for key in scheme):
-            # Directly keyed facts are already normalized.
-            out = {key: inputs[key] for key in scheme if key in inputs}
-            if out:
-                return out
 
-            # Imported and completed-experiment facts intentionally retain their
-            # source identity.  Resolve a requested X by the stable code, its
-            # configured business name, the source field code, or label path.
-            wanted = {
-                code: {self._normalize_feature_text(code), self._normalize_feature_text(name)}
-                for code, name in scheme.items()
-            }
-            found: dict[str, Any] = {}
 
-            def walk(node: Any) -> None:
-                if isinstance(node, dict):
-                    source_keys = {
-                        self._normalize_feature_text(str(node.get("fieldCode", ""))),
-                        self._normalize_feature_text(str(node.get("labelPath", ""))),
-                        self._normalize_feature_text(str(node.get("name", ""))),
-                    }
-                    # Imported facts usually retain their source shape, for
-                    # example ``conditions.temperature`` or
-                    # ``process.uvEnergy``.  Those leaves do not carry a
-                    # fieldCode/name wrapper, so include the object keys in
-                    # the identity candidates.  A frozen X code may contain
-                    # a stable domain prefix (``TEST_TEMPERATURE``); matching
-                    # the unprefixed source leaf keeps that identity bridge
-                    # deterministic without turning arbitrary labels into
-                    # model features.
-                    source_keys.update(
-                        self._normalize_feature_text(str(key))
-                        for key in node.keys()
-                        if self._normalize_feature_text(str(key))
-                    )
-                    source_keys.discard("")
-                    for code, aliases in wanted.items():
-                        matched = any(
-                            alias == source
-                            or (len(source) >= 4 and (alias.endswith(source) or source.endswith(alias)))
-                            for alias in aliases
-                            for source in source_keys
-                        )
-                        if code in found or not matched:
-                            continue
-                        value = node.get("rawNumericValue")
-                        if value is None:
-                            value = node.get("normalizedValue")
-                        if value is None:
-                            value = node.get("rawValue")
-                        if value is not None:
-                            found[code] = self._coerce_feature_value(value)
-                        else:
-                            # Plain imported objects use a scalar leaf such
-                            # as ``{"temperature": 21}`` instead of a
-                            # wrapped field-value object.  Resolve the
-                            # matching leaf itself; otherwise the identity
-                            # match would succeed but still yield no value.
-                            for key, leaf in node.items():
-                                normalized_key = self._normalize_feature_text(str(key))
-                                if not isinstance(leaf, (dict, list)) and any(
-                                    alias == normalized_key
-                                    or (len(normalized_key) >= 4 and (
-                                        alias.endswith(normalized_key) or normalized_key.endswith(alias)))
-                                    for alias in aliases
-                                ):
-                                    found[code] = self._coerce_feature_value(leaf)
-                                    break
-                    for value in node.values():
-                        walk(value)
-                elif isinstance(node, list):
-                    for value in node:
-                        walk(value)
 
-            walk(inputs)
-            return found
-        fields = getattr(scheme, "fields", None)
-        if fields is None and isinstance(scheme, dict):
-            fields = scheme.get("fields", [])
-        codes = {getattr(field, "code", field.get("code") if isinstance(field, dict) else "")
-                 for field in (fields or [])}
-        # A frozen scheme is authoritative.  Keep only its explicitly named
-        # values so incidental source columns cannot change model features.
-        return {key: value for key, value in inputs.items() if key in codes}
 
-    @staticmethod
-    def _normalize_feature_text(value: str) -> str:
-        return "".join(str(value).strip().upper().split()).replace("_", "")
 
-    @staticmethod
-    def _coerce_feature_value(value: Any) -> Any:
-        if isinstance(value, (int, float, bool)):
-            return value
-        text = str(value).strip()
-        try:
-            return float(text)
-        except ValueError:
-            return text
 
-    def _feature_record(self, formula: dict[str, Any], inputs: dict[str, Any], include_formula: bool = True) -> dict[str, Any]:
-        out: dict[str, Any] = {}
-        if include_formula:
-            for component in formula.get("components", []):
-                material = str(component.get("materialId") or component.get("materialCode") or "UNKNOWN")
-                ratio = component.get("ratio")
-                if ratio is not None:
-                    out[f"material:{material}"] = float(ratio)
-            recorded_total = formula.get("recordedTotal")
-            if recorded_total is not None:
-                out["formula:recordedTotal"] = float(recorded_total)
-        self._flatten_inputs(inputs, "input", out)
-        return out
 
-    @staticmethod
-    def _scheme_uses_formula(scheme: Any) -> bool:
-        fields=getattr(scheme,"fields",None) or []
-        for field in fields:
-            value_type=str(getattr(field,"value_type","") or "")
-            code=str(getattr(field,"code","") or "").upper()
-            if value_type == "COMPOSITION" or "FORMULA" in code or "COMPOSITION" in code: return True
-        return False
-
-    def _flatten_inputs(self, node: Any, prefix: str, out: dict[str, Any]) -> None:
-        if isinstance(node, dict):
-            for key in sorted(node):
-                self._flatten_inputs(node[key], f"{prefix}:{key}", out)
-        elif isinstance(node, list):
-            for index, value in enumerate(node):
-                self._flatten_inputs(value, f"{prefix}:{index}", out)
-        else:
-            key = prefix
-            value = node
-            if isinstance(value, bool):
-                out[key] = int(value)
-            elif isinstance(value, (int, float)):
-                out[key] = float(value)
-            elif value is not None:
-                out[f"{key}={value}"] = 1.0
-
-    def _target(self, rows: pd.DataFrame, target_type: ValueTypeV2) -> np.ndarray:
-        if target_type == ValueTypeV2.CONTINUOUS:
-            return rows["target_numeric"].astype(float).to_numpy()
-        return rows["target_label"].astype(str).to_numpy()
-
-    def _candidates(self, target_type: ValueTypeV2, names: list[str], seed: int,
-                    classes: list[str]) -> list[tuple[str, Any]]:
-        requested = {str(name).upper() for name in names}
-        classification = target_type != ValueTypeV2.CONTINUOUS
-        out: list[tuple[str, Any]] = []
-        if "GAUSSIAN_PROCESS" in requested and not classification:
-            out.append(("GAUSSIAN_PROCESS", GaussianProcessRegressor(kernel=Matern() + WhiteKernel(), normalize_y=True, random_state=seed)))
-        if "LOGISTIC_REGRESSION" in requested and classification and target_type != ValueTypeV2.ORDINAL:
-            out.append(("LOGISTIC_REGRESSION", LogisticRegression(max_iter=2000, random_state=seed)))
-        if "ORDINAL_CUMULATIVE_LOGIT" in requested and target_type == ValueTypeV2.ORDINAL:
-            out.append(("ORDINAL_CUMULATIVE_LOGIT", OrdinalCumulativeLogit(tuple(classes), seed)))
-        if "RANDOM_FOREST" in requested:
-            cls = RandomForestClassifier if classification else RandomForestRegressor
-            out.append(("RANDOM_FOREST", cls(n_estimators=160, min_samples_leaf=2, random_state=seed, n_jobs=self.settings.model_threads)))
-        if "LIGHTGBM" in requested:
-            from lightgbm import LGBMClassifier, LGBMRegressor
-            cls = LGBMClassifier if classification else LGBMRegressor
-            out.append(("LIGHTGBM", cls(n_estimators=160, random_state=seed, n_jobs=self.settings.model_threads, verbosity=-1)))
-        if "XGBOOST" in requested:
-            from xgboost import XGBClassifier, XGBRegressor
-            cls = XGBClassifier if classification else XGBRegressor
-            out.append(("XGBOOST", cls(n_estimators=160, random_state=seed, n_jobs=self.settings.model_threads)))
-        if "CATBOOST" in requested:
-            from catboost import CatBoostClassifier, CatBoostRegressor
-            cls = CatBoostClassifier if classification else CatBoostRegressor
-            out.append(("CATBOOST", cls(iterations=160, random_seed=seed, thread_count=self.settings.model_threads, verbose=False)))
-        # Remove duplicate algorithm labels while preserving configured order.
-        return list({name: estimator for name, estimator in out}.items())
 
     def _baseline_metrics(self, y: np.ndarray, folds: np.ndarray, target_type: ValueTypeV2,
                           classes: list[str]) -> dict[str, Any]:
@@ -1942,22 +1117,6 @@ class FormulaModelV2Service:
                 "minimum": np.nanmin(features, axis=0).tolist(),
                 "maximum": np.nanmax(features, axis=0).tolist(), "features": names}
 
-    def _bundle(self, request: TrainRequestV2, vectorizer: DictVectorizer, model: Any,
-                metrics: dict[str, Any], domain: dict[str, Any]) -> bytes:
-        model_bytes = io.BytesIO()
-        joblib.dump({"contractVersion": "formula-model.v2", "target": request.context.target_definition.model_dump(by_alias=True),
-                     "inputScheme": request.context.input_scheme.model_dump(by_alias=True),
-                     "materialDictionary": request.context.material_dictionary.model_dump(by_alias=True),
-                     "preprocessing": request.context.preprocessing.model_dump(by_alias=True),
-                     "vectorizer": vectorizer, "model": model, "metrics": metrics, "applicabilityDomain": domain}, model_bytes)
-        output = io.BytesIO()
-        with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            archive.writestr("model.joblib", model_bytes.getvalue())
-            archive.writestr("model-card.json", json.dumps({"jobId": request.job_id, "snapshotId": request.snapshot.id,
-                                                            "target": request.context.target_definition.model_dump(by_alias=True),
-                                                            "metrics": metrics, "applicabilityDomain": domain},
-                                                           ensure_ascii=False, sort_keys=True, separators=(",", ":")))
-        return output.getvalue()
 
     def _read(self, url: Any, expected_sha: str) -> bytes:
         parsed = urlparse(str(url))

@@ -5,7 +5,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.ai.rnd.modeling.ConfigurationHashing;
-import com.jsd.aird.ai.rnd.facts.UnifiedFactService;
 import com.jsd.aird.iam.api.AuthorizationService;
 import com.jsd.aird.iam.api.PermissionCheck;
 import com.jsd.aird.recognition.application.port.SourceRecognitionRepository;
@@ -48,13 +47,12 @@ public class SourceRecognitionService {
     private final ConfigurationHashing hashing;
     private final AuditLogFacade audit;
     private final ObjectMapper json;
-    private final UnifiedFactService facts;
     private final AuthorizationService authorization;
 
     public SourceRecognitionService(SourceRecognitionRepository repository, FileObjectRepository files,
                                     ExperimentImportService sourceParser, ExperimentDraftFacade experiments,
                                     ConfigurationHashing hashing, AuditLogFacade audit, ObjectMapper json,
-                                    UnifiedFactService facts, AuthorizationService authorization) {
+                                    AuthorizationService authorization) {
         this.repository = repository;
         this.files = files;
         this.sourceParser = sourceParser;
@@ -62,7 +60,6 @@ public class SourceRecognitionService {
         this.hashing = hashing;
         this.audit = audit;
         this.json = json;
-        this.facts = facts;
         this.authorization = authorization;
     }
 
@@ -215,7 +212,6 @@ public class SourceRecognitionService {
                     .put("parserVersion", job.parserVersion());
             data = repository.finalizeData(actor.organizationId(), id, actor.userId(), samples,
                     contract, hashing.hash(json.valueToTree(samples)));
-            facts.projectSubmission(actor.organizationId(), data.submissionId());
         }
         var drafts = new ArrayList<DraftResult>();
         if (EXPERIMENT.equals(owner) || "EXPERIMENT_DRAFT".equals(job.importPurpose())) {

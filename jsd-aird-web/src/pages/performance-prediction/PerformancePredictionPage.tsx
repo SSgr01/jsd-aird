@@ -1,5 +1,5 @@
-import { AimOutlined, DeleteOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons'
-import { Alert, Button, Checkbox, Empty, Input, InputNumber, Select, Spin, Table, Tag, Typography } from 'antd'
+import { AimOutlined, ReloadOutlined } from '@ant-design/icons'
+import { Alert, Button, Empty, Input, InputNumber, Select, Spin, Table, Tag, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
@@ -8,7 +8,7 @@ import { predictionApi } from '@/services/ai-rnd/prediction-api'
 import { HttpError } from '@/services/http/errors'
 import { useAuthStore } from '@/stores/auth-store'
 import { generateUUID } from '@/utils/uuid'
-import { buildPredictionRequest, businessValue, categoryOptions, fieldName, formatPredictionNumber, formulaError, inputError, materialName, predictionFailure, predictionFingerprint, predictionNotes, readPredictionDraft, targetAvailable, targetLabels, unavailableReason, type FormulaRow, type PredictionDraft, type PredictionForm } from './performance-prediction-utils'
+import { buildPredictionRequest, businessValue, categoryOptions, fieldName, formatPredictionNumber, inputError, predictionFailure, predictionFingerprint, predictionNotes, readPredictionDraft, targetAvailable, targetLabels, unavailableReason, type PredictionDraft, type PredictionForm } from './performance-prediction-utils'
 import './performance-prediction.css'
 
 const inputGroups = { FORMULA: '配方相关条件', PROCESS: '工艺条件', CONDITION: '环境与基材', OTHER: '实验条件' }
@@ -72,14 +72,6 @@ function PerformancePredictionWorkbench({ storageKey }: { storageKey?: string })
     predictionApi.context(form.targets).then(value => {
       if (!active) return
       setContext(value)
-      if (value.selected.some(target => target.formulaRequirement === 'REQUIRED')) {
-        setDraft(current => {
-          const known = new Map(current.form.formula.filter(row => row.materialId).map(row => [row.materialId, row]))
-          const formula = [...current.form.formula.filter(row => !row.materialId), ...value.materials.filter(material => known.has(material.materialId) || !current.form.materialIds?.includes(material.materialId)).map(material => known.get(material.materialId) ?? { key: generateUUID(), materialId: material.materialId, unit: '%' })]
-          const changed = formula.map(row => row.materialId).join('|') !== current.form.formula.map(row => row.materialId).join('|')
-          return { ...current, form: { ...current.form, formula, materialIds: value.materials.map(material => material.materialId), complete: changed ? false : current.form.complete } }
-        })
-      }
     }).catch(() => { if (active) setContextError('实验输入加载失败，请刷新模型信息。') }).finally(() => { if (active) setContextLoading(false) })
     return () => { active = false }
   }, [selectionKey, refresh])
@@ -120,13 +112,9 @@ function PerformancePredictionWorkbench({ storageKey }: { storageKey?: string })
     { label: '预测指标', options: orderedTargets.filter(targetAvailable) },
     { label: '暂不可预测', options: orderedTargets.filter(target => !targetAvailable(target)) },
   ].filter(group => group.options.length).map(group => ({ label: group.label, options: group.options.map(target => ({ value: target.targetId, selectedLabel: target.modelSource ? `${target.name}${target.unit ? `（${target.unit}）` : ''}` : labels.get(target.targetId) ?? target.name, label: `${labels.get(target.targetId) ?? target.name}${targetAvailable(target) ? '' : ` · ${unavailableReason(target)}`}`, disabled: !targetAvailable(target) && !form.targets.includes(target.targetId) })) }))
-  const formulaRequired = Boolean(context?.selected.some(target => target.formulaRequirement === 'REQUIRED'))
-  const total = form.formula.reduce((sum, row) => sum + (row.ratio ?? 0), 0)
-  const converted = formulaRequired && total > 0 && Math.abs(total - 100) > 0.000001
   const inputErrors = (context?.requiredInputs ?? []).filter(field => inputError(field, form.inputs[field.code]))
-  const formulaErrors = formulaRequired ? form.formula.filter(row => formulaError(row, form.formula)) : []
   const selectionReady = Boolean(context && form.targets.length && !contextLoading && !contextError && form.targets.every(id => context.selected.some(target => target.targetId === id && target.available)) && !context.configurationConflicts?.length)
-  const canPredict = selectionReady && !inputErrors.length && (!formulaRequired || Boolean(form.formula.length && !formulaErrors.length && form.complete && total > 0))
+  const canPredict = selectionReady && !inputErrors.length
   const requestContext = context ?? completed?.submission.context
   const currentRequest = requestContext ? buildPredictionRequest(form, requestContext) : undefined
   const changedResult = Boolean(completed && currentRequest && predictionFingerprint(currentRequest) !== predictionFingerprint(completed.submission.request))
@@ -137,14 +125,7 @@ function PerformancePredictionWorkbench({ storageKey }: { storageKey?: string })
     const submission = { request: currentRequest, context: { ...context, targets: context.targets.filter(target => form.targets.includes(target.targetId)) } }
     setDraft(current => ({ ...current, pending: { key: generateUUID(), submission } }))
   }
-  const updateFormula = (key: string, patch: Partial<FormulaRow>) => patchForm({ formula: form.formula.map(row => row.key === key ? { ...row, ...patch } : row), complete: patch.materialId !== undefined ? false : form.complete })
   const touch = (code: string) => setTouched(current => ({ ...current, [code]: true }))
-  const formulaColumns: ColumnsType<FormulaRow> = [
-    { title: '材料', width: '48%', render: (_, row, index) => <Select aria-label={`材料 ${index + 1}`} disabled={busy} showSearch optionFilterProp="label" value={row.materialId} onChange={(materialId: string) => updateFormula(row.key, { materialId })} placeholder="选择材料" className="performance-material-select" options={(context?.materials ?? []).filter(material => material.materialId === row.materialId || !form.formula.some(item => item.materialId === material.materialId)).map(material => ({ value: material.materialId, label: materialName(material) }))} /> },
-    { title: '录入比例（%）', render: (_, row) => <div className="performance-formula-value"><InputNumber aria-label={`${materialName(context?.materials.find(material => material.materialId === row.materialId))}比例`} disabled={busy} value={row.ratio} precision={6} onBlur={() => touch(row.key)} onChange={ratio => updateFormula(row.key, { ratio: ratio ?? undefined })} placeholder="未使用填 0" status={touched[row.key] && formulaError(row, form.formula) ? 'error' : undefined} />{touched[row.key] && formulaError(row, form.formula) && <small className="performance-field-error" role="alert">{formulaError(row, form.formula)}</small>}</div> },
-    ...(converted ? [{ title: '换算比例（%）', render: (_: unknown, row: FormulaRow) => row.ratio == null ? '—' : formatPredictionNumber(row.ratio / total * 100) }] : []),
-    { title: '', width: 44, render: (_, row) => <Button type="text" disabled={busy} icon={<DeleteOutlined />} aria-label={`删除${materialName(context?.materials.find(material => material.materialId === row.materialId))}`} onClick={() => patchForm({ formula: form.formula.filter(item => item.key !== row.key), complete: false })} /> },
-  ]
   const resultContext = completed?.submission.context
   const resultLabels = useMemo(() => targetLabels(resultContext?.targets ?? [], false), [resultContext])
   const hasInterval = completed?.response.results.some(item => item.status === 'SUCCEEDED' && intervalText(item.prediction, item.applicability.status === 'OUT_OF_DOMAIN') !== '—')
@@ -161,7 +142,7 @@ function PerformancePredictionWorkbench({ storageKey }: { storageKey?: string })
   const resultStatus = busy ? '上次结果' : changedResult ? '输入已修改，需重新预测' : !succeededCount ? '未完成' : succeededCount < (completed?.response.results.length ?? 0) ? '部分完成' : '已完成'
   return <main className="performance-page">
     <header className="performance-header"><div><Typography.Title level={2}>性能预测</Typography.Title><Typography.Text type="secondary">选择指标并填写预测输入。</Typography.Text></div><Link to="/assistant/model-center">模型中心</Link></header>
-    <section className="performance-target-panel" aria-label="预测指标选择"><label htmlFor="performance-targets">预测指标</label><Select id="performance-targets" aria-label="预测指标" mode="multiple" value={form.targets} disabled={busy} loading={catalogLoading} options={targetOptions} maxTagCount="responsive" optionFilterProp="label" optionLabelProp="selectedLabel" onChange={(targets: string[]) => { patchForm({ targets, complete: false }); setTouched({}) }} placeholder="选择要预测的性能，可多选" />
+    <section className="performance-target-panel" aria-label="预测指标选择"><label htmlFor="performance-targets">预测指标</label><Select id="performance-targets" aria-label="预测指标" mode="multiple" value={form.targets} disabled={busy} loading={catalogLoading} options={targetOptions} maxTagCount="responsive" optionFilterProp="label" optionLabelProp="selectedLabel" onChange={(targets: string[]) => { patchForm({ targets }); setTouched({}) }} placeholder="选择要预测的性能，可多选" />
       {!catalogLoading && !catalogError && !availableCount && !form.targets.length && <div className="performance-catalog-note">当前没有可预测的指标。请在模型中心检查对应模型的状态和使用设置。</div>}
       {catalogError && <Alert type="error" showIcon message={catalogError} action={<Button size="small" onClick={() => setRefresh(value => value + 1)}>重试</Button>} />}
     </section>
@@ -173,10 +154,6 @@ function PerformancePredictionWorkbench({ storageKey }: { storageKey?: string })
           {context.configurationConflicts?.length ? <Alert type="error" showIcon message="所选指标的输入类型或单位不同，请调整指标组合。" /> : null}
           {context.selected.some(target => !target.available) && <Alert className="performance-page-notice" type="warning" showIcon message={context.selected.filter(target => !target.available).map(target => `${target.name} · ${unavailableReason(target)}`).join('；')} />}
           {form.targets.some(id => !context.selected.some(target => target.targetId === id)) && <Alert type="warning" showIcon message="所选指标已不可用，请重新选择预测指标。" />}
-          {formulaRequired && <div className="performance-formula-section"><div className="performance-section-heading"><h4>配方组成</h4><span>合计 {formatPredictionNumber(total)}%</span></div><Table size="small" rowKey="key" pagination={false} columns={formulaColumns} dataSource={form.formula} scroll={{ x: 'max-content' }} />
-            <div className="performance-formula-footer">{context.materials.some(material => !form.formula.some(row => row.materialId === material.materialId)) && <Button type="text" icon={<PlusOutlined />} disabled={busy} onClick={() => patchForm({ formula: [...form.formula, { key: generateUUID(), unit: '%' }], complete: false })}>添加材料</Button>}<Checkbox disabled={busy} checked={form.complete} onChange={event => patchForm({ complete: event.target.checked })}>配方已完整</Checkbox></div>
-            {converted && <div className="performance-field-hint">预测按 100% 换算，录入比例保留。</div>}{!formulaErrors.length && total <= 0 && <div className="performance-field-error">配方合计必须大于 0。</div>}
-          </div>}
           {Object.entries(inputGroups).map(([group, title]) => { const fields = context.requiredInputs.filter(field => (field.inputGroup ?? 'OTHER') === group); return fields.length ? <fieldset className="performance-condition-group" key={group}><legend>{title}</legend><div className="performance-condition-grid">{fields.map(field => {
             const name = fieldName(field), value = form.inputs[field.code], error = inputError(field, value), invalid = touched[field.code] && error
             const setValue = (next: unknown) => patchForm({ inputs: { ...form.inputs, [field.code]: next } })
@@ -191,7 +168,7 @@ function PerformancePredictionWorkbench({ storageKey }: { storageKey?: string })
             </div>
           })}</div></fieldset> : null })}
           {fixedConditions.length > 0 && <div className="performance-fixed-conditions"><strong>固定测试条件</strong>{fixedConditions.map(value => <span key={value}>{value}</span>)}</div>}
-          <div className="performance-submit-row"><span>{inputErrors.length + formulaErrors.length > 0 ? `还有 ${inputErrors.length + formulaErrors.length} 项输入待填写` : formulaRequired && !form.complete ? '请确认配方已完整' : ''}</span><Button aria-label="开始预测" type="primary" icon={<AimOutlined />} loading={busy} disabled={!canPredict || busy} onClick={startPrediction}>开始预测</Button></div>
+          <div className="performance-submit-row"><span>{inputErrors.length > 0 ? `还有 ${inputErrors.length} 项输入待填写` : ''}</span><Button aria-label="开始预测" type="primary" icon={<AimOutlined />} loading={busy} disabled={!canPredict || busy} onClick={startPrediction}>开始预测</Button></div>
         </>}
       </section>
       <section className="performance-results-panel" aria-label="预测结果"><div className="performance-panel-heading"><h3>预测结果</h3>{completed && <Tag color={changedResult || resultStatus === '部分完成' ? 'gold' : resultStatus === '未完成' ? 'red' : 'default'}>{resultStatus}</Tag>}</div>

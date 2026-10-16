@@ -15,7 +15,7 @@ describe('performance prediction input and restore', () => {
     expect(formatPredictionNumber(80.123456)).toBe('80.1235')
   })
   it('isolates account drafts and tolerates corrupted saved content', () => {
-    localStorage.setItem('org-a:user-a', JSON.stringify({ form: { targets: ['a'], formula: [], complete: false, inputs: { TEMPERATURE_C: 28 } } }))
+    localStorage.setItem('org-a:user-a', JSON.stringify({ form: { targets: ['a'], inputs: { TEMPERATURE_C: 28 } } }))
     expect(readPredictionDraft('org-a:user-a').form.inputs.TEMPERATURE_C).toBe(28)
     expect(readPredictionDraft('org-a:user-b').form.targets).toEqual([])
     localStorage.setItem('corrupted', '{bad')

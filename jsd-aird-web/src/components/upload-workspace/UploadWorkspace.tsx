@@ -7,6 +7,7 @@ import {
   FileWordOutlined,
   InboxOutlined,
   SearchOutlined,
+  StopOutlined,
 } from '@ant-design/icons';
 import {
   Breadcrumb,
@@ -68,6 +69,7 @@ export interface UploadWorkspaceProps {
   submitIcon?: ReactNode;
   onSubmit: () => void;
   submitting?: boolean;
+  onCancelSubmit?: () => void;
   submitDisabled?: boolean;
   rightTitle: string;
   rightCount?: number;
@@ -126,6 +128,7 @@ export function UploadWorkspace({
   submitIcon,
   onSubmit,
   submitting = false,
+  onCancelSubmit,
   submitDisabled = false,
   rightTitle,
   rightCount,
@@ -185,6 +188,7 @@ export function UploadWorkspace({
               >
                 {submitLabel}
               </Button>
+              {submitting && onCancelSubmit ? <Button icon={<StopOutlined />} onClick={onCancelSubmit}>停止后续文件</Button> : null}
             </Space>
           </div> : <div className="upload-workspace-mode-actions"><Button type="primary" icon={submitIcon} loading={submitting} disabled={submitDisabled} onClick={onSubmit}>{submitLabel}</Button></div>}
 

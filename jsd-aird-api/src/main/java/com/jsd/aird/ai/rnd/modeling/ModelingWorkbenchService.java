@@ -6,11 +6,10 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.ai.formula.application.FormulaModelArtifactStore;
 import com.jsd.aird.ai.rnd.optimization.OptimizationService;
-import com.jsd.aird.ai.rnd.training.FormulaModelV2Client;
+import com.jsd.aird.ai.rnd.compute.ModelComputeClient;
 import com.jsd.aird.ops.application.port.OpsAsyncFacade;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
-import com.jsd.aird.shared.security.Actor;
 import com.jsd.aird.shared.security.ActorContext;
 import org.postgresql.util.PGobject;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -20,7 +19,6 @@ import org.springframework.transaction.annotation.Transactional;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -39,12 +37,12 @@ public class ModelingWorkbenchService {
     private final OptimizationService optimization;
     private final ConfigurationHashing hashing;
     private final OpsAsyncFacade async;
-    private final FormulaModelV2Client compute;
+    private final ModelComputeClient compute;
     private final FormulaModelArtifactStore artifacts;
 
     public ModelingWorkbenchService(JdbcTemplate jdbc, ObjectMapper json, OptimizationService optimization,
                                     ConfigurationHashing hashing, OpsAsyncFacade async,
-                                    FormulaModelV2Client compute, FormulaModelArtifactStore artifacts) {
+                                    ModelComputeClient compute, FormulaModelArtifactStore artifacts) {
         this.jdbc = jdbc;
         this.json = json;
         this.optimization = optimization;
@@ -210,6 +208,7 @@ public class ModelingWorkbenchService {
         if (selectedCount > MAXIMUM_ROWS)
             throw validation("所选记录超过单次建模上限（20,000 条），请减少勾选记录");
         var rows = json.createArrayNode();
+        var selectedRows = json.createArrayNode();
         var distinct = new LinkedHashMap<String, LinkedHashSet<String>>();
         uniqueX.forEach(code -> distinct.put(code, new LinkedHashSet<>()));
         var targetValues = new LinkedHashMap<String, Integer>();
@@ -218,29 +217,35 @@ public class ModelingWorkbenchService {
             var sourceRowId = source.path("id").asText();
             if (!selectedIds.getOrDefault(sourceDatasetId, Set.of()).contains(sourceRowId)) continue;
             var sourceValues = source.path("values");
+            var selectedRow = selectedRows.addObject().put("id", sourceDatasetId + ":" + sourceRowId);
+            for (var metadata : List.of("label", "title", "versionId", "sourceDatasetName"))
+                if (source.has(metadata)) selectedRow.set(metadata, source.get(metadata));
+            var checkedValues = selectedRow.putObject("values");
+            for (var code : uniqueX) checkedValues.set(code, sourceValues.has(code) ? sourceValues.get(code).deepCopy() : json.nullNode());
+            checkedValues.set(command.yColumn(), sourceValues.has(command.yColumn()) ? sourceValues.get(command.yColumn()).deepCopy() : json.nullNode());
             var selectedValues = json.createObjectNode();
             boolean complete = true;
             for (var code : uniqueX) {
                 var value = sourceValues.path(code);
                 var column = columns.get(code);
                 if (!validValue(value, column.path("kind").asText())) { complete = false; break; }
-                selectedValues.set(code, value.deepCopy());
+                selectedValues.set(code, normalizedValue(value, column.path("kind").asText()));
             }
             var targetValue = sourceValues.path(command.yColumn());
             if (!complete || !validValue(targetValue, y.path("kind").asText())) continue;
             var row = rows.addObject().put("id", sourceDatasetId + ":" + sourceRowId);
             for(var metadata:List.of("label","title","versionId","sourceDatasetName")) if(source.has(metadata))row.set(metadata,source.get(metadata));
-            selectedValues.set(command.yColumn(), targetValue.deepCopy());
+            selectedValues.set(command.yColumn(), normalizedValue(targetValue, y.path("kind").asText()));
             row.set("values", selectedValues);
-            uniqueX.forEach(code -> distinct.get(code).add(sourceValues.path(code).asText()));
-            targetValues.merge(targetValue.asText(), 1, Integer::sum);
+            uniqueX.forEach(code -> distinct.get(code).add(selectedValues.path(code).asText()));
+            targetValues.merge(selectedValues.path(command.yColumn()).asText(), 1, Integer::sum);
         }
         if (rows.size() < MINIMUM_ROWS)
             throw validation("所选 X/Y 只有 " + rows.size() + " 条完整记录，至少需要 6 条；请换列或补充实验记录。");
-        for (var code : uniqueX) {
-            if (distinct.get(code).size() < 2)
-                throw validation("X“" + columns.get(code).path("name").asText(code) + "”的取值没有变化，请选择有不同取值的列。");
-        }
+        if (distinct.values().stream().allMatch(values -> values.size() < 2))
+            throw validation("所选 X 在完整记录中都没有变化，请选择有不同取值的输入列。");
+        if ("NUMERIC".equals(y.path("kind").asText()) && targetValues.size() < 2)
+            throw validation("Y 列只有一种结果，请选择有不同实测值的结果列。");
         if (!"NUMERIC".equals(y.path("kind").asText())) {
             if (targetValues.size() < 2) throw validation("Y 列只有一种结果，无法训练分类模型。");
             if (targetValues.values().stream().min(Integer::compareTo).orElse(0) < 2)
@@ -255,6 +260,7 @@ public class ModelingWorkbenchService {
         request.set("xColumns", xColumns);
         request.set("yColumn", y);
         request.set("rows", rows);
+        request.set("selectedRows", selectedRows);
         return request;
     }
 
@@ -295,8 +301,18 @@ public class ModelingWorkbenchService {
 
     private boolean validValue(JsonNode value, String kind) {
         if (value == null || value.isMissingNode() || value.isNull()) return false;
-        if ("NUMERIC".equals(kind)) return value.isNumber() && Double.isFinite(value.asDouble());
-        return !value.asText().isBlank();
+        if ("NUMERIC".equals(kind)) {
+            if (!value.isNumber() && !value.isTextual()) return false;
+            if (value.isTextual() && !value.asText().strip().matches("[+-]?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][+-]?\\d+)?")) return false;
+            try { return !value.asText().isBlank() && Double.isFinite(Double.parseDouble(value.asText().strip())); }
+            catch (NumberFormatException ignored) { return false; }
+        }
+        return (value.isTextual() || value.isNumber()) && !value.asText().isBlank();
+    }
+
+    private JsonNode normalizedValue(JsonNode value, String kind) {
+        return "NUMERIC".equals(kind) ? json.getNodeFactory().numberNode(Double.parseDouble(value.asText().strip()))
+                : json.getNodeFactory().textNode(value.asText().strip());
     }
 
     private JsonNode accepted(UUID id) {

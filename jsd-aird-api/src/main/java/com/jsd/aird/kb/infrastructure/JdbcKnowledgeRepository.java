@@ -166,6 +166,26 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
     }
 
     @Override
+    public void lockCategoryName(UUID organizationId, String scope, String name) {
+        var lockKey = organizationId + ":knowledge-category:" + scope + ":"
+                + name.trim().toLowerCase(java.util.Locale.ROOT);
+        jdbc.query("SELECT pg_advisory_xact_lock(hashtextextended(CAST(? AS text), 0))",
+                rs -> null, lockKey);
+    }
+
+    @Override
+    public boolean categoryNameExists(UUID organizationId, String scope, String name, UUID excludingCategoryId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+                SELECT EXISTS (
+                    SELECT 1 FROM kb.document_category
+                    WHERE organization_id = ? AND scope = ?
+                      AND lower(btrim(name)) = lower(btrim(?))
+                      AND (CAST(? AS uuid) IS NULL OR id <> CAST(? AS uuid))
+                )
+                """, Boolean.class, organizationId, scope, name, excludingCategoryId, excludingCategoryId));
+    }
+
+    @Override
     public CategoryRow createCategory(UUID organizationId, UUID actorId, String scope, String name, String description) {
         var id = UUID.randomUUID();
         jdbc.update("""

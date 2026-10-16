@@ -137,10 +137,7 @@ export function requiredPermissionForPath(pathname: string): string | undefined 
   // Pure menu group: its visibility is determined by accessible children.
   if (pathname === '/research-test-root') return undefined;
   const path = pathname.replace(/\/$/, '') || '/';
-  if (path === '/assistant/model-center' || path.startsWith('/assistant/model-center/targets/')) return undefined;
-  if (path.startsWith('/assistant/model-center/samples') || path.startsWith('/assistant/modeling-settings/')) return 'ai.modeling.read';
-  if (path === '/assistant/modeling-settings') return 'ai.modeling.read';
-  if (path === '/assistant/model-management') return 'ai.model.read';
+  if (path === '/assistant/model-center') return undefined;
   if (path === '/assistant/performance-prediction') return 'ai.performance.predict';
   if (path === '/assistant/formula-prediction') return 'ai.formula.predict';
   if (path === '/assistant/experiment-optimization') return 'ai.experiment.optimize';
@@ -233,7 +230,7 @@ export function canViewPathWithMenus(pathname: string, permissions: string[], me
   // In the v2 model business roles own navigation visibility. Permission
   // levels remain independent and are enforced by page actions and APIs.
   if (menuKeys.length > 0 && menu) return hasMenu(menu, menuKeys);
-  if (path === '/assistant/model-center' || path.startsWith('/assistant/model-center/targets/')) {
+  if (path === '/assistant/model-center') {
     return hasPermission('ai.model.read', permissions) || hasPermission('ai.modeling.read', permissions);
   }
   const required = requiredPermissionForPath(pathname);

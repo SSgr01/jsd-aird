@@ -8,6 +8,7 @@ import {
   EyeOutlined,
   FileExcelOutlined,
   FileWordOutlined,
+  HistoryOutlined,
   LoadingOutlined,
   PlusOutlined,
   ReloadOutlined,
@@ -30,6 +31,7 @@ import {
   Spin,
   Tabs,
   Tag,
+  Timeline,
   Typography,
 } from 'antd';
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
@@ -187,6 +189,7 @@ export function TemplateWorkspacePage() {
   const [fieldManagerTab, setFieldManagerTab] = useState<FieldManagerTab>('structure');
   const [recognitionReview, setRecognitionReview] = useState<RecognitionReview>();
   const [templateReview, setTemplateReview] = useState<TemplateVersionReview>();
+  const [reviewHistoryOpen, setReviewHistoryOpen] = useState(false);
   const [rejectReviewOpen, setRejectReviewOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
   const [recognitionActions, setRecognitionActions] = useState<Record<string, RecognitionAction>>(
@@ -675,11 +678,10 @@ export function TemplateWorkspacePage() {
   saveRef.current = save;
 
   useEffect(() => {
-    if (workspace?.format !== 'DOCX' || workspace.status !== 'DRAFT'
-        || view !== 'edit' || saveState !== 'DIRTY') return;
+    if (workspace?.status !== 'DRAFT' || view !== 'edit' || saveState !== 'DIRTY') return;
     const timer = window.setTimeout(() => { void saveRef.current(); }, 2000);
     return () => window.clearTimeout(timer);
-  }, [versionId, workspace?.format, workspace?.status, view, saveState, editRevision]);
+  }, [versionId, workspace?.status, view, saveState, editRevision]);
 
   function saveErrorMessage(error: unknown) {
     const raw = error instanceof Error ? error.message : '';
@@ -1786,6 +1788,14 @@ export function TemplateWorkspacePage() {
       okButtonProps: { danger: true },
       cancelText: '取消',
       onOk: () => {
+        const recognizedItem = recognitionReview?.items.find((item) =>
+          item.id === field.recognitionItemId || fieldMatchesIdentity(field, {
+            bindingId: item.payload.bindingId,
+            relationId: item.payload.relationId,
+            fieldId: item.payload.fieldId,
+            recognitionItemId: item.id,
+          }),
+        );
         const removed = removeBusinessField(schema, fieldModel, field.id);
         setSchema(removed.schema);
         setFieldModel(removed.model);
@@ -1795,6 +1805,7 @@ export function TemplateWorkspacePage() {
           fieldId: field.fieldId || field.id,
         })));
         setSelectedFieldId(removed.model.fields[0]?.id);
+        if (recognizedItem) recordRecognitionAction(recognizedItem.id, 'IGNORE', 'IGNORED');
         markDirty();
       },
     });
@@ -1972,6 +1983,7 @@ export function TemplateWorkspacePage() {
           )}
         </div>
         <Space wrap className="workspace-header-actions">
+            {templateReview && <Button size="small" icon={<HistoryOutlined />} onClick={() => setReviewHistoryOpen(true)}>审核记录</Button>}
              <SaveStateIndicator
                state={saveState}
                reviewSyncState={reviewSyncState}
@@ -2344,6 +2356,34 @@ export function TemplateWorkspacePage() {
         >
           新建分组
         </Button>
+      </Modal>
+      <Modal
+        title="模板审核记录"
+        open={reviewHistoryOpen}
+        footer={null}
+        width={640}
+        onCancel={() => setReviewHistoryOpen(false)}
+        destroyOnHidden
+      >
+        {templateReview?.events.length ? (
+          <Timeline items={[...templateReview.events].reverse().map((event) => ({
+            key: event.id,
+            color: event.toStatus === 'REJECTED' ? 'red' : event.toStatus === 'APPROVED' ? 'green' : 'blue',
+            children: (
+              <Space direction="vertical" size={2}>
+                <Typography.Text strong>
+                  {event.toStatus === 'SUBMITTED' ? '提交审核'
+                    : event.toStatus === 'APPROVED' ? '审核通过'
+                      : event.toStatus === 'REJECTED' ? '审核驳回' : event.toStatus}
+                </Typography.Text>
+                <Typography.Text type="secondary">
+                  {event.actorName || '未知用户'} · {new Date(event.createdAt).toLocaleString('zh-CN')}
+                </Typography.Text>
+                {event.comment ? <Typography.Paragraph style={{ margin: 0 }}>{event.comment}</Typography.Paragraph> : null}
+              </Space>
+            ),
+          }))} />
+        ) : <Typography.Text type="secondary">当前版本暂无审核操作记录。</Typography.Text>}
       </Modal>
     </section>
   );

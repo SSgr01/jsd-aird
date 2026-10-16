@@ -66,7 +66,8 @@ public class WorkbenchModelRegistrationService {
         var target=ref(targetVersionId);target.put("version",configurationVersion);target.put("code",targetCode).put("valueType",valueType);
         target.set("unit",y.path("unit").isMissingNode()?json.nullNode():y.path("unit"));
         target.set("classes",classes);target.set("observationSemantics",json.createObjectNode());
-        target.putObject("modelSource").put("datasetName",run.path("datasetName").asText()).set("xColumns",request.path("xColumns"));
+        var modelSource=target.putObject("modelSource").put("datasetName",run.path("datasetName").asText());
+        modelSource.set("xColumns",request.path("xColumns"));modelSource.set("yColumn",y);
         for(var metadata:List.of("testMethod","testStage","testMethods"))if(y.has(metadata))target.set(metadata,y.get(metadata));
         target.put("sha256",hashing.hash(target));
         var scheme=ref(schemeId);scheme.put("version",configurationVersion);scheme.put("targetVersionId",targetVersionId.toString());var fields=scheme.putArray("fields");
@@ -79,6 +80,7 @@ public class WorkbenchModelRegistrationService {
             if("CATEGORICAL".equals(x.path("kind").asText())){var values=new TreeSet<String>();request.path("rows").forEach(r->values.add(r.path("values").path(code).asText().strip()));var allowed=encoding.putArray("allowedValues");values.forEach(allowed::add);}
         }
         scheme.put("sha256",hashing.hash(scheme));
+        var materialDictionary=WorkbenchFormulaSupport.dictionary(json,scheme,request.path("rows"));
         if(ids.isEmpty()){
             jdbc.update("INSERT INTO ai.prediction_target(id,organization_id,target_code,name,performance_project,value_type,status,created_by,updated_by) VALUES(?,?,?,?,'GENERAL_DATA',?,'ACTIVE',?,?)",
                     targetId,org,targetCode,y.path("name").asText(),valueType,actor.userId(),actor.userId());
@@ -98,6 +100,7 @@ public class WorkbenchModelRegistrationService {
         int version=jdbc.queryForObject("SELECT coalesce(max(version_no),0)+1 FROM ai.model_version WHERE organization_id=? AND target_id=?",Integer.class,org,targetId);
         var card=json.createObjectNode().put("origin","WORKBENCH").put("workbenchRunId",runId.toString()).put("datasetName",run.path("datasetName").asText());
         card.set("xColumns",request.path("xColumns"));card.set("yColumn",y);card.set("targetDefinition",target);card.set("inputScheme",scheme);
+        card.set("materialDictionary",materialDictionary);
         card.put("rowCount",result.path("rowCount").asInt());
         var domain=(ObjectNode)result.path("applicabilityDomain").deepCopy();domain.put("nearBoundaryRatio",0.05);
         if(previous!=null)jdbc.update("UPDATE ai.model_version SET status='RETIRED',revision=revision+1,updated_at=now() WHERE organization_id=? AND id=?",org,previous);

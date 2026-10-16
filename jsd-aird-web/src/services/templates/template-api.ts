@@ -51,6 +51,7 @@ export interface TemplateVersionReview {
     fromStatus?: string;
     toStatus: string;
     actorId?: string;
+    actorName?: string;
     comment?: string;
     createdAt: string;
   }>;

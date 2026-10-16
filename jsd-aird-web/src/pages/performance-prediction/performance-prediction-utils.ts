@@ -1,14 +1,13 @@
 import type { PredictionCatalogTarget, PredictionContext, PredictionInputField, PredictionRequest, PredictionResponse, TargetBlocked, TargetFailed, TargetSuccess } from '@/services/ai-rnd/ai-rnd-types'
 
-export type FormulaRow = { key: string; materialId?: string; ratio?: number; unit: string }
-export type PredictionForm = { targets: string[]; formula: FormulaRow[]; materialIds?: string[]; complete: boolean; inputs: Record<string, unknown> }
+export type PredictionForm = { targets: string[]; inputs: Record<string, unknown> }
 export type PredictionSubmission = { request: PredictionRequest; context: PredictionContext }
 export type PredictionDraft = {
   form: PredictionForm
   pending?: { key: string; id?: string; submission: PredictionSubmission }
   completed?: { response: PredictionResponse; submission: PredictionSubmission }
 }
-const emptyForm = (): PredictionForm => ({ targets: [], formula: [], complete: false, inputs: {} })
+const emptyForm = (): PredictionForm => ({ targets: [], inputs: {} })
 const inputLabels: Record<string, string> = { COATING_SOLIDS_PCT: '涂料固含', COATING_SOLIDS: '涂料固含', TEMPERATURE_C: '温度', HUMIDITY_RH_PCT: '湿度', UVA_INTENSITY_MW_CM2: 'UVA光强', UV_ENERGY_MJ_CM2: 'UV能量', APPLICATOR_SPEC_UM: '绕丝棒规格', APPLICATION_METHOD: '施工方式', CURING_SOURCE: '固化光源', SUBSTRATE: '基材' }
 const categoryLabels: Record<string, string> = { PET_100UM_OPTICAL: 'PET 100μm光学膜', PC_170UM: 'PC 170μm膜', PMMA_PC_COMPOSITE_064: 'PMMA/PC复合板', WIRE_BAR_ROLL_COAT_40UM: '40μm绕丝棒涂布', SPRAY_COATING: '喷涂', MERCURY_LAMP_UV: '汞灯UV', LED_UV: 'LED UV', UVPU_APPLICATION_FORMULATION: 'UV/PU应用配方', UV_IMMEDIATE: 'UV固化后即时测试', NONE: '无特殊前处理', STANDARD: '标准条件' }
 const errorLabels: Record<string, string> = {
@@ -66,23 +65,14 @@ export function inputError(field: PredictionInputField, value: unknown) {
   if (field.valueType === 'CATEGORY' && (typeof value !== 'string' && typeof value !== 'number' || categoryOptions(field).length && !categoryOptions(field).some(option => option.value === String(value)))) return '请重新选择类别'
   return ''
 }
-export function formulaError(row: FormulaRow, rows: FormulaRow[]) {
-  if (!row.materialId) return '请选择材料'
-  if (rows.some(other => other.key !== row.key && other.materialId === row.materialId)) return '材料重复，请合并比例'
-  if (row.ratio == null) return '请填写比例；未使用填 0'
-  if (!Number.isFinite(row.ratio)) return '请输入有效数值'
-  if (row.ratio < 0) return '比例不能小于 0'
-  return ''
-}
 export function buildPredictionRequest(form: PredictionForm, context: PredictionContext): PredictionRequest {
   return {
-    ...(context.selected.some(target => target.formulaRequirement === 'REQUIRED') ? { formula: { basis: 'MASS_PERCENT' as const, compositionComplete: form.complete, recordedTotal: Number(form.formula.reduce((sum, row) => sum + (row.ratio ?? 0), 0).toFixed(6)), components: form.formula.map(row => ({ materialId: row.materialId!, ratio: row.ratio, unit: row.unit, amountKnown: row.ratio != null })) } } : {}),
     inputs: Object.fromEntries(context.requiredInputs.filter(field => form.inputs[field.code] !== undefined).map(field => [field.code, form.inputs[field.code]])),
     targets: form.targets.map(targetId => ({ targetId, expectedModelVersionId: context.selected.find(target => target.targetId === targetId)?.modelVersionId })),
   }
 }
 export function predictionFingerprint(request: PredictionRequest) {
-  return JSON.stringify({ ...request, inputs: Object.fromEntries(Object.entries(request.inputs).sort(([a], [b]) => a.localeCompare(b))), targets: [...request.targets].sort((a, b) => a.targetId.localeCompare(b.targetId)), ...(request.formula ? { formula: { ...request.formula, components: [...request.formula.components].sort((a, b) => a.materialId.localeCompare(b.materialId)) } } : {}) })
+  return JSON.stringify({ ...request, inputs: Object.fromEntries(Object.entries(request.inputs).sort(([a], [b]) => a.localeCompare(b))), targets: [...request.targets].sort((a, b) => a.targetId.localeCompare(b.targetId)) })
 }
 export function predictionFailure(code?: string, fallback = '预测未完成，请核对输入后重试。') { return errorLabels[code ?? ''] ?? fallback }
 export function predictionNotes(item: TargetSuccess | TargetBlocked | TargetFailed, context: PredictionContext) {
@@ -107,10 +97,9 @@ export function readPredictionDraft(key?: string): PredictionDraft {
   if (!key) return empty
   try {
     const raw: unknown = JSON.parse(localStorage.getItem(key) ?? 'null')
-    if (!isObject(raw) || !isObject(raw.form) || !Array.isArray(raw.form.targets) || !Array.isArray(raw.form.formula) || !isObject(raw.form.inputs)) return empty
-    const form: PredictionForm = { targets: raw.form.targets.filter((value): value is string => typeof value === 'string'), formula: raw.form.formula.filter((value): value is FormulaRow => isObject(value) && typeof value.key === 'string' && typeof value.unit === 'string' && (value.materialId == null || typeof value.materialId === 'string') && (value.ratio == null || typeof value.ratio === 'number')), complete: raw.form.complete === true, inputs: Object.fromEntries(Object.entries(raw.form.inputs).filter(([, value]) => value == null || ['string', 'number', 'boolean'].includes(typeof value))) }
+    if (!isObject(raw) || !isObject(raw.form) || !Array.isArray(raw.form.targets) || !isObject(raw.form.inputs)) return empty
+    const form: PredictionForm = { targets: raw.form.targets.filter((value): value is string => typeof value === 'string'), inputs: Object.fromEntries(Object.entries(raw.form.inputs).filter(([, value]) => value == null || ['string', 'number', 'boolean'].includes(typeof value))) }
     const validSubmission = (value: unknown) => isObject(value) && isObject(value.request) && Array.isArray(value.request.targets) && isObject(value.context) && Array.isArray(value.context.selected) && Array.isArray(value.context.requiredInputs) && Array.isArray(value.context.materials)
-    if (Array.isArray(raw.form.materialIds)) form.materialIds = raw.form.materialIds.filter((value): value is string => typeof value === 'string')
     return { form, ...(isObject(raw.pending) && typeof raw.pending.key === 'string' && validSubmission(raw.pending.submission) ? { pending: raw.pending as PredictionDraft['pending'] } : {}), ...(isObject(raw.completed) && isObject(raw.completed.response) && Array.isArray(raw.completed.response.results) && validSubmission(raw.completed.submission) ? { completed: raw.completed as PredictionDraft['completed'] } : {}) }
   } catch { return empty }
 }

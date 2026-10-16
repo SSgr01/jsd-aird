@@ -40,6 +40,7 @@ export function syncFormulaForm(form: FormulaForm, context: FormulaContext) {
   return { ...form, goals, materials, inputs }
 }
 export function formulaMaterialName(material?: Partial<FormulaMaterial>, index = 0) {
+  if (material?.sourceColumnName) return material.sourceColumnName
   const name = material?.name || material?.code || ''
   const match = /^(RESIN|ADDITIVE|CROSSLINKER|DILUENT)(?:[ _-]([A-Z]))?$/.exec(name)
   if (match) return `${({ RESIN: '树脂', ADDITIVE: '助剂', CROSSLINKER: '交联剂', DILUENT: '稀释剂' } as Record<string, string>)[match[1]!]}${match[2] ?? ''}`
@@ -47,8 +48,10 @@ export function formulaMaterialName(material?: Partial<FormulaMaterial>, index =
   return `${({ RESIN: '树脂', ADDITIVE: '助剂', CROSSLINKER: '交联剂', DILUENT: '稀释剂' } as Record<string, string>)[material?.role ?? ''] ?? '材料'} ${index + 1}`
 }
 export function formulaUnavailable(target: FormulaTarget) {
+  if (target.unavailableReasons.includes('FORMULA_TARGET_IS_RATIO')) return '此模型预测单项比例；反推配方请选择以性能为 Y 的模型'
+  if (target.unavailableReasons.includes('MODEL_FORMULA_INPUTS_INCOMPLETE')) return 'X 中的材料比例不完整，请选择完整配方比例列后训练'
   if (target.unavailableReasons.includes('MODEL_MATERIALS_INCONSISTENT')) return '模型材料与训练记录不一致，请重新训练'
-  if (target.unavailableReasons.includes('MODEL_NOT_FORMULA_ENABLED')) return '模型未使用材料比例，不能反推配方'
+  if (target.unavailableReasons.includes('MODEL_NOT_FORMULA_ENABLED')) return '训练时未选择材料比例作为 X，请加入比例列后训练'
   return unavailableReason(target)
 }
 export function goalError(target: FormulaTarget, goal?: FormulaForm['goals'][string]) {

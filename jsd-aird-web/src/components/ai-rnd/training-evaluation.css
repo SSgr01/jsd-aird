@@ -1,0 +1,10 @@
+.training-selection-rule { margin: 0 0 14px; color: #53657b; font-size: 13px; line-height: 1.7; }
+.training-selection-rule strong { color: #26384e; font-weight: 600; }
+.training-evaluation-note { display: block; margin-top: 10px; font-size: 12px; }
+.training-baseline { margin: 12px 0 0; color: #64748b; font-size: 12px; line-height: 1.7; }
+.training-method-comparison { margin-top: 10px; }
+.training-method-comparison > .ant-collapse-item > .ant-collapse-header { padding-inline: 0; font-weight: 600; }
+.training-method-comparison .ant-tag { margin-left: 6px; }
+.workbench-data-checks { display: grid; gap: 10px; margin-top: 16px; padding: 14px 16px; border: 1px solid #e3e9f1; border-radius: 9px; background: #fafbfd; }
+.workbench-data-checks p { margin: 0; color: #53657b; font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
+.workbench-data-checks .ant-collapse-header { padding-inline: 0 !important; }

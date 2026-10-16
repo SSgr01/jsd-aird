@@ -7,6 +7,9 @@ import type { Key } from 'react'
 import { modelingWorkbenchApi, type ModelingWorkbenchRun } from '@/services/ai-rnd/modeling-workbench-api'
 import type { HistoryDataset, HistoryDatasetOption, HistoryDatasetRow } from '@/services/ai-rnd/optimization-api'
 import { HttpError } from '@/services/http/errors'
+import { TrainingEvaluation } from '@/components/ai-rnd/TrainingEvaluation'
+import { WorkbenchDataChecks } from '@/components/ai-rnd/WorkbenchDataChecks'
+import { checkWorkbenchData } from '@/services/ai-rnd/workbench-data-checks'
 import { mergeHistoryDatasets, selectedRowIdsByDataset } from '@/services/ai-rnd/history-dataset-utils'
 import { workbenchFailureMessage, workbenchRegistrationMessage, workbenchRequestMessage } from './modeling-workbench-feedback'
 import { TestMetricCatalogManager } from './TestMetricCatalogManager'
@@ -16,6 +19,8 @@ const { Paragraph, Text, Title } = Typography
 const draftKey = 'ai-modeling-workbench-draft:v1'
 const stepTitles = ['选择数据', '选择 X / Y', '训练结果']
 const algorithmLabels: Record<string, string> = {
+  LINEAR_REGRESSION: '线性回归 Linear Regression',
+  RIDGE: '岭回归 Ridge',
   GAUSSIAN_PROCESS: '高斯过程 Gaussian Process',
   RANDOM_FOREST: '随机森林 Random Forest',
   LIGHTGBM: 'LightGBM',
@@ -23,19 +28,6 @@ const algorithmLabels: Record<string, string> = {
   CATBOOST: 'CatBoost',
   LOGISTIC_REGRESSION: '逻辑回归 Logistic Regression',
 }
-const metricLabels: Record<string, string> = {
-  mae: '平均绝对误差（MAE）', rmse: '均方根误差（RMSE）', r2: '拟合度（R²）',
-  accuracy: '准确率', macroF1: '宏平均 F1', logLoss: '概率损失',
-}
-const metricHints: Record<string, string> = {
-  mae: '预测值平均偏离实测值的大小，单位与 Y 相同，越小越好。',
-  rmse: '对较大误差更敏感，单位与 Y 相同，越小越好。',
-  r2: '衡量模型对结果变化的解释程度，越接近 1 越好；样本少时可能为负数。',
-  accuracy: '检查数据中预测正确的比例，越高越好。',
-  macroF1: '综合各结果类别的识别表现，越高越好。',
-  logLoss: '衡量预测概率与实际类别的偏差，越小越好。',
-}
-
 type SavedDraft = { datasetId?: string; datasetIds?: string[]; selectedRowIdsByDataset?: Record<string, string[]>; xColumns?: string[]; yColumn?: string; runId?: string; activeStep?: number }
 
 function cellText(value: unknown) {
@@ -58,20 +50,6 @@ function yUnavailableReason(dataset: HistoryDataset | undefined, column: History
     if (value !== undefined && value !== null && value !== '') counts.set(String(value), (counts.get(String(value)) ?? 0) + 1)
   })
   return [...counts.values()].every(count => count >= 2) ? '' : '部分类别少于 2 条记录'
-}
-
-function completeRowCount(dataset: HistoryDataset | undefined, xColumns: string[], yColumn: string) {
-  if (!dataset || !yColumn || !xColumns.length) return 0
-  return dataset.rows.filter(row => [yColumn, ...xColumns].every(code => {
-    const value = row.values[code]
-    return value !== undefined && value !== null && value !== '' && !(typeof value === 'number' && !Number.isFinite(value))
-  })).length
-}
-
-function formatMetric(key: string, value: unknown) {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return cellText(value)
-  if (key === 'accuracy' || key === 'macroF1') return `${(value * 100).toFixed(1)}%`
-  return Number(value.toFixed(4)).toString()
 }
 
 export type ModelingWorkbenchPageProps = {
@@ -273,12 +251,12 @@ export function ModelingWorkbenchPage({ canManageCatalog = false, canRegister = 
   ], [dataset?.columns, selectedDatasetIds.length])
 
   const usableY = useMemo(() => (selectedDatasetView?.columns ?? []).filter(column => !yUnavailableReason(selectedDatasetView, column)), [selectedDatasetView])
-  const completeRows = useMemo(() => completeRowCount(selectedDatasetView, xColumns, yColumn), [selectedDatasetView, xColumns, yColumn])
+  const dataChecks = useMemo(() => checkWorkbenchData(selectedDatasetView, xColumns, yColumn), [selectedDatasetView, xColumns, yColumn])
+  const completeRows = dataChecks?.usableRowCount ?? 0
+  const allXConstant = Boolean(dataChecks && dataChecks.fields.filter(field => field.role === 'X').every(field => field.distinctCount < 2))
   const selectedY = selectedDatasetView?.columns.find(column => column.code === yColumn)
   const currentMetrics = run?.result?.metrics ?? {}
   const selectedAlgorithm = typeof currentMetrics.selectedAlgorithm === 'string' ? currentMetrics.selectedAlgorithm : ''
-  const primaryMetricKeys = run?.yColumn.kind === 'NUMERIC' ? ['mae', 'rmse', 'r2'] : ['accuracy', 'macroF1', 'logLoss']
-  const comparisonRows = Array.isArray(currentMetrics.comparison) ? currentMetrics.comparison as Array<Record<string, unknown>> : []
   const trainingActive = submitting || Boolean(runId) && (run ? run.status === 'QUEUED' || run.status === 'RUNNING' : !runLoadError)
 
   const startTraining = async () => {
@@ -286,6 +264,7 @@ export function ModelingWorkbenchPage({ canManageCatalog = false, canRegister = 
     if (!selectedDatasetIds.length || !dataset) { message.warning('先选择实验数据表。'); return }
     if (!selectedRows.length) { message.warning('请至少勾选一条实验记录。'); return }
     if (!yColumn || !xColumns.length) { message.warning('请分别选择要预测的 Y 和作为输入的 X 列。'); return }
+    if (allXConstant) { message.warning('所选 X 在完整记录中都没有变化，请选择有不同取值的输入列。'); return }
     if (completeRows < 6) { message.warning(`当前组合只有 ${completeRows} 条完整记录，至少需要 6 条。`); return }
     setSubmitting(true)
     setLoadError('')
@@ -393,10 +372,11 @@ export function ModelingWorkbenchPage({ canManageCatalog = false, canRegister = 
           </Card>
         </div>
         <div className="workbench-readiness-row">
-          <div><Text strong>可用于训练</Text><Text className={completeRows >= 6 ? 'workbench-ready-count' : 'workbench-warning-count'}>{completeRows} 条完整记录</Text><Text type="secondary">至少需要 6 条；每个 X 至少有 2 种取值。</Text></div>
+          <div><Text strong>可用于训练</Text><Text className={completeRows >= 6 ? 'workbench-ready-count' : 'workbench-warning-count'}>{completeRows} 条完整记录</Text><Text type="secondary">至少需要 6 条完整记录，且至少一列 X 有不同取值。</Text></div>
           <div><Text strong>训练方式</Text><Text>系统自动比较多种预测方法</Text><Text type="secondary">训练结果会用交叉验证指标进行对比。</Text></div>
         </div>
-        <footer className="workbench-step-footer"><Button icon={<ArrowLeftOutlined />} onClick={() => setActiveStep(0)}>返回原表</Button><Button type="primary" icon={<ExperimentOutlined />} loading={submitting} disabled={!canTrain || trainingActive || !yColumn || !xColumns.length || completeRows < 6} onClick={() => void startTraining()}>{!canTrain ? '没有训练权限' : trainingActive ? '训练中' : '开始训练'}</Button></footer>
+        <WorkbenchDataChecks checks={dataChecks} />
+        <footer className="workbench-step-footer"><Button icon={<ArrowLeftOutlined />} onClick={() => setActiveStep(0)}>返回原表</Button><Button type="primary" icon={<ExperimentOutlined />} loading={submitting} disabled={!canTrain || trainingActive || !yColumn || !xColumns.length || completeRows < 6 || allXConstant} onClick={() => void startTraining()}>{!canTrain ? '没有训练权限' : trainingActive ? '训练中' : '开始训练'}</Button></footer>
       </>}
     </section>}
 
@@ -426,19 +406,7 @@ export function ModelingWorkbenchPage({ canManageCatalog = false, canRegister = 
             <div><span>预测结果 Y</span><strong>{run.yColumn.name}{run.yColumn.unit ? ` · ${run.yColumn.unit}` : ''}</strong></div>
           </div>
           <Card className="workbench-metric-card" title="交叉验证表现" extra={<Text type="secondary">用未参与每轮训练的数据检查预测效果</Text>}>
-            <div className="workbench-metrics">
-              {primaryMetricKeys.map(key => typeof currentMetrics[key] === 'number' && <div key={key}>
-                <Text type="secondary">{metricLabels[key]}</Text><strong>{formatMetric(key, currentMetrics[key])}{(key === 'mae' || key === 'rmse') && run.yColumn.unit ? <small> {run.yColumn.unit}</small> : null}</strong><Text type="secondary">{metricHints[key]}</Text>
-              </div>)}
-            </div>
-            {comparisonRows.length > 1 && <div className="workbench-comparison">
-              <Text strong>预测方法对比</Text>
-              <Table size="small" rowKey={row => String(row.algorithm)} pagination={false} dataSource={comparisonRows}
-                columns={[
-                  { title: '预测方法', dataIndex: 'algorithm', render: value => algorithmLabels[String(value)] ?? String(value) },
-                  ...primaryMetricKeys.filter(key => comparisonRows.some(row => typeof row[key] === 'number')).map(key => ({ title: metricLabels[key], dataIndex: key, render: (value: unknown) => formatMetric(key, value) })),
-                ]} />
-            </div>}
+            <TrainingEvaluation metrics={currentMetrics} numeric={run.yColumn.kind === 'NUMERIC'} unit={run.yColumn.unit} />
           </Card>
           {registrationError && <Alert type="error" showIcon message={registrationError} />}
           <footer className="workbench-step-footer"><Button onClick={() => setActiveStep(1)}>返回调整 X/Y</Button><Space>

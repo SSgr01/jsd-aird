@@ -12,7 +12,6 @@ const AssistantPage = lazy(async () => ({ default: (await import('@/pages/assist
 const FormulaPredictionPage = lazy(async () => ({ default: (await import('@/pages/formula-research')).FormulaPredictionPage }));
 const ExperimentOptimizationPage = lazy(async () => ({ default: (await import('@/pages/formula-research')).ExperimentOptimizationPage }));
 const ModelCenterPage = lazy(async () => ({ default: (await import('@/pages/model-center')).ModelCenterPage }));
-const LegacyModelCenterRedirect = lazy(async () => ({ default: (await import('@/pages/model-center')).LegacyModelCenterRedirect }));
 const PerformancePredictionPage = lazy(async () => ({ default: (await import('@/pages/performance-prediction')).PerformancePredictionPage }));
 const DashboardPage = lazy(async () => ({ default: (await import('@/pages/dashboard')).DashboardPage }));
 const DataImportJobPage = lazy(async () => ({ default: (await import('@/pages/data')).DataImportJobPage }));
@@ -85,7 +84,6 @@ const applicationRoutes: RouteObject[] = [
       { path: 'knowledge/library', element: <PagePermissionGate permission="knowledge.upload"><KnowledgeLibraryPage /></PagePermissionGate> },
       { path: 'knowledge/view', element: <KnowledgeViewPage /> },
       { path: 'knowledge/search', element: <KnowledgeSearchPage /> },
-      { path: 'knowledge/review', element: <Navigate to="/knowledge/view?reviewStatus=PENDING_REVIEW" replace /> },
       { path: 'knowledge/review/:documentId/:versionId', element: <PagePermissionGate permission="knowledge.review"><KnowledgeReviewPage /></PagePermissionGate> },
       { path: 'knowledge/documents/:id', element: <KnowledgeDocumentPage /> },
       { path: 'assistant', element: <AssistantPage /> },
@@ -93,13 +91,6 @@ const applicationRoutes: RouteObject[] = [
       { path: 'assistant/performance-prediction', element: <PagePermissionGate permission="ai.performance.predict"><PerformancePredictionPage /></PagePermissionGate> },
       { path: 'assistant/experiment-optimization', element: <PagePermissionGate permission="ai.experiment.optimize"><ExperimentOptimizationPage /></PagePermissionGate> },
       { path: 'assistant/model-center', element: <PageAnyPermissionGate permissions={['ai.model.read', 'ai.modeling.read']}><ModelCenterPage /></PageAnyPermissionGate> },
-      { path: 'assistant/model-center/targets/:targetId', element: <PageAnyPermissionGate permissions={['ai.model.read', 'ai.modeling.read']}><LegacyModelCenterRedirect /></PageAnyPermissionGate> },
-      { path: 'assistant/model-center/samples', element: <PagePermissionGate permission="ai.modeling.read"><LegacyModelCenterRedirect /></PagePermissionGate> },
-      { path: 'assistant/model-center/samples/:id', element: <PagePermissionGate permission="ai.modeling.read"><LegacyModelCenterRedirect /></PagePermissionGate> },
-      { path: 'assistant/modeling-settings', element: <PagePermissionGate permission="ai.modeling.read"><LegacyModelCenterRedirect /></PagePermissionGate> },
-      { path: 'assistant/model-management', element: <PagePermissionGate permission="ai.model.read"><LegacyModelCenterRedirect models /></PagePermissionGate> },
-      { path: 'assistant/modeling-settings/samples', element: <PagePermissionGate permission="ai.modeling.read"><LegacyModelCenterRedirect /></PagePermissionGate> },
-      { path: 'assistant/modeling-settings/samples/:id', element: <PagePermissionGate permission="ai.modeling.read"><LegacyModelCenterRedirect /></PagePermissionGate> },
       {
         path: 'templates',
         element: <Navigate to="/templates/upload" replace />,
@@ -181,7 +172,6 @@ const applicationRoutes: RouteObject[] = [
       { path: 'experiments/list', element: <ExperimentListPage /> },
       { path: 'experiments/new', element: <NewExperimentPage /> },
       { path: 'experiments/upload', element: <ExperimentUploadPage /> },
-      { path: 'experiments/imports/:id', element: <Navigate to="/experiments/upload" replace /> },
       { path: 'experiments/:id', element: <ExperimentWorkspacePage /> },
       { path: 'research-test', element: <Navigate to="/research-test/reports" replace /> },
       { path: 'research-test/upload', element: <PagePermissionGate permission="research-test.report.create"><ResearchTestUploadPage /></PagePermissionGate> },

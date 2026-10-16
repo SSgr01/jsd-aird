@@ -349,6 +349,9 @@ export function TemplatesPage() {
         <Dropdown trigger={['click']} menu={{ items: [
           { key: 'copy', icon: <CopyOutlined />, label: '复制模板' }, { key: 'rename', label: '重命名' },
           { key: 'move', icon: <FolderAddOutlined />, label: '移动分类' }, { key: 'history', icon: <HistoryOutlined />, label: '版本历史' },
+          ...(['PUBLISHED', 'RETIRED'].includes(record.status)
+            ? [{ key: 'revision', icon: <PlusOutlined />, label: record.hasDraft ? '打开修订草稿' : '创建修订草稿' }]
+            : []),
           ...(record.allowedActions?.includes('DELETE') ? [{ key: 'delete', danger: true, icon: <DeleteOutlined />, label: '删除草稿' }] : []),
           ...(record.allowedActions?.includes('RETIRE') ? [{ key: 'retire', danger: true, icon: <StopOutlined />, label: '停用模板' }] : []),
         ], onClick: ({ key }) => {

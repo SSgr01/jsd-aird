@@ -5,7 +5,6 @@ from pathlib import Path
 import yaml
 from fastapi.testclient import TestClient
 
-from conftest import validate_contract_definition
 from jsd_aird_ai.api import create_app
 from jsd_aird_ai.settings import Settings
 
@@ -22,18 +21,17 @@ def test_health_reports_pinned_baybe() -> None:
     assert body["dependencies"]["baybe"] == "0.15.0"
 
 
-def test_internal_token_is_enforced(validation_request) -> None:
+def test_internal_token_is_enforced() -> None:
     app = create_app(Settings(allow_file_urls=True, internal_token="secret"))
     client = TestClient(app)
     payload = {}
-    denied = client.post("/internal/v2/snapshots/validate", json=payload)
+    denied = client.post("/internal/v2/modeling/workbench/train", json=payload)
     assert denied.status_code == 422
-    assert denied.json()["code"] == "UNSUPPORTED_CONTRACT"
     assert denied.json()["contractVersion"] == "formula-model.v2"
-    allowed = client.post("/internal/v2/snapshots/validate", json=payload,
+    allowed = client.post("/internal/v2/modeling/workbench/train", json=payload,
                           headers={"Authorization": "Bearer secret"})
     assert allowed.status_code == 422
-    assert allowed.json()["code"] == "UNSUPPORTED_CONTRACT"
+    assert allowed.json()["code"] == "INSUFFICIENT_DATA"
     assert allowed.json()["contractVersion"] == "formula-model.v2"
 
 
@@ -41,6 +39,8 @@ def test_v1_routes_are_removed() -> None:
     client = TestClient(create_app(Settings()))
     assert client.get("/internal/v1/health/ready").status_code == 404
     assert client.post("/internal/v1/models/score", json={}).status_code == 404
+    for path in ["/internal/v2/snapshots/validate", "/internal/v2/snapshots/validation-folds", "/internal/v2/models/train"]:
+        assert client.post(path, json={}).status_code == 404
 
 
 def test_container_contract_is_non_root_read_only_and_database_free() -> None:

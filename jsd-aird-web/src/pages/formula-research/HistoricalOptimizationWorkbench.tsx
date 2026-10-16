@@ -19,9 +19,9 @@ const numericValues = (dataset: HistoryDataset | undefined, code: string) => (da
 const uniqueValues = (dataset: HistoryDataset | undefined, code: string) => new Set((dataset?.rows ?? [])
   .map(row => row.values[code]).filter(value => value !== undefined && value !== null && value !== '')).size
 const candidatePrediction = (candidate: any) => candidate?.results?.targets?.[0]?.result ?? {}
-const valueText = (value: unknown, unit?: string) => {
+const valueText = (value: unknown, unit?: string, significantDigits = 6) => {
   const number = Number(value)
-  return Number.isFinite(number) ? `${Number(number.toFixed(3))}${unit ? ` ${unit}` : ''}` : '—'
+  return Number.isFinite(number) ? `${Number(number.toPrecision(significantDigits))}${unit ? ` ${unit}` : ''}` : '—'
 }
 
 export function HistoricalOptimizationWorkbench() {
@@ -251,7 +251,7 @@ export function HistoricalOptimizationWorkbench() {
 
   const candidateColumns = [
     { title: '方案', dataIndex: 'title', fixed: 'left' as const, width: 110, render: (_: string, candidate: any) => <Text strong>{candidate.title}</Text> },
-    ...selectedFeatureColumns.map(column => ({ title: <span>{column.name}{column.unit ? <Text type="secondary">（{column.unit}）</Text> : null}</span>, width: 140, render: (_: unknown, candidate: any) => { const value = candidate.inputs?.[column.code]; return <Text>{column.kind === 'NUMERIC' ? valueText(value) : value ?? '—'}</Text> } })),
+    ...selectedFeatureColumns.map(column => ({ title: <span>{column.name}{column.unit ? <Text type="secondary">（{column.unit}）</Text> : null}</span>, width: 140, render: (_: unknown, candidate: any) => { const value = candidate.inputs?.[column.code]; return <Text>{column.kind === 'NUMERIC' ? valueText(value, undefined, 8) : value ?? '—'}</Text> } })),
     { title: <span>预测 {yMeta?.name ?? 'Y'}{yMeta?.unit ? `（${yMeta.unit}）` : ''}</span>, width: 170, render: (_: unknown, candidate: any) => { const prediction = candidatePrediction(candidate); return <Space direction="vertical" size={0}><Text strong>{valueText(prediction.value)}</Text><Text type="secondary">范围 {valueText(prediction.lower)}～{valueText(prediction.upper)}</Text></Space> } },
     { title: <span>实测 {yMeta?.name ?? 'Y'}{yMeta?.unit ? `（${yMeta.unit}）` : ''}</span>, width: 180, render: (_: unknown, candidate: any) => <InputNumber aria-label={`${candidate.title}实测${yMeta?.name ?? 'Y'}`} className="history-observation-input" value={observations[`${candidate.id}:${yColumn}`]} onChange={value => setObservations(current => ({ ...current, [`${candidate.id}:${yColumn}`]: value ?? undefined }))} placeholder="完成实验后填写" /> },
   ]

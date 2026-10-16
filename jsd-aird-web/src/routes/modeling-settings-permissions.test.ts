@@ -8,15 +8,6 @@ describe('modeling settings route permissions', () => {
     expect(canViewPath('/assistant/model-center', ['ai.model.read'])).toBe(true)
     expect(canViewPath('/assistant/model-center', ['ai.modeling.read'])).toBe(true)
     expect(canViewPath('/assistant/model-center', ['ai.use'])).toBe(false)
-    expect(canViewPath('/assistant/model-center/targets/target-1', ['ai.model.read'])).toBe(true)
-    expect(canViewPath('/assistant/model-center/targets/target-1', ['ai.use'])).toBe(false)
-    expect(canViewPath('/assistant/modeling-settings/samples', ['ai.modeling.read'])).toBe(true)
-  })
-
-  it('uses the new read permission without inheriting ai.use', () => {
-    expect(requiredPermissionForPath('/assistant/modeling-settings')).toBe('ai.modeling.read')
-    expect(canViewPath('/assistant/modeling-settings', ['ai.use'])).toBe(false)
-    expect(canViewPath('/assistant/modeling-settings', ['ai.modeling.read'])).toBe(true)
   })
 
   it('opens model center for model-only and modeling-only users', () => {

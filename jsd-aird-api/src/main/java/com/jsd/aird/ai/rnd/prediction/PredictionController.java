@@ -20,22 +20,6 @@ public class PredictionController {
 
     @GetMapping("/prediction-context")
     public ApiResponse<?> context(@RequestParam(required=false) List<UUID> targetId){return ok(service.context(targetId));}
-    @GetMapping("/targets/{id}/quality-policies")
-    public ApiResponse<?> qualityPolicies(@PathVariable UUID id){return ok(service.qualityPolicies(id));}
-    @PostMapping("/targets/{id}/quality-policies")
-    public ApiResponse<?> createQualityPolicy(@PathVariable UUID id,@RequestBody QualityPolicyCommand body,
-                                               @RequestHeader("Idempotency-Key") String key){return ok(service.createQualityPolicy(id,body,key));}
-    @PostMapping("/quality-policies/{id}/publish")
-    public ApiResponse<?> publishQualityPolicy(@PathVariable UUID id,@RequestBody PublishPolicyCommand body,
-                                                 @RequestHeader("Idempotency-Key") String key){return ok(service.publishQualityPolicy(id,body,key));}
-    @GetMapping("/targets/{id}/domain-policies")
-    public ApiResponse<?> domainPolicies(@PathVariable UUID id){return ok(service.domainPolicies(id));}
-    @PostMapping("/targets/{id}/domain-policies")
-    public ApiResponse<?> createDomainPolicy(@PathVariable UUID id,@RequestBody DomainPolicyCommand body,
-                                              @RequestHeader("Idempotency-Key") String key){return ok(service.createDomainPolicy(id,body,key));}
-    @PostMapping("/domain-policies/{id}/publish")
-    public ApiResponse<?> publishDomainPolicy(@PathVariable UUID id,@RequestBody PublishPolicyCommand body,
-                                               @RequestHeader("Idempotency-Key") String key){return ok(service.publishDomainPolicy(id,body,key));}
     @PostMapping("/predictions")
     public ResponseEntity<?> predict(@RequestBody PredictionRequest body,@RequestHeader("Idempotency-Key")String key){var result=service.predict(body,key);return ResponseEntity.status(result.status()).body(result.body());}
     @GetMapping("/prediction-records/{id}")

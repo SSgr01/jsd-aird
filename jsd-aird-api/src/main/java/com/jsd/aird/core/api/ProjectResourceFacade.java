@@ -34,7 +34,8 @@ public interface ProjectResourceFacade {
 
     enum ResourceType {
         KNOWLEDGE_DOCUMENT,
-        DATA_IMPORT_JOB
+        DATA_IMPORT_JOB,
+        SPECTRUM_CHART
     }
 
     record ProjectRelationTarget(UUID projectId, UUID stageId, UUID taskId) { }

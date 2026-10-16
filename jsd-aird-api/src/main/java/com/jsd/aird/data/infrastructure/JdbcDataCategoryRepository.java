@@ -74,6 +74,25 @@ public class JdbcDataCategoryRepository implements DataCategoryRepository {
     }
 
     @Override
+    public void lockCategoryName(UUID organizationId, String name) {
+        var lockKey = organizationId + ":data-category:" + name.trim().toLowerCase(java.util.Locale.ROOT);
+        jdbc.query("SELECT pg_advisory_xact_lock(hashtextextended(CAST(? AS text), 0))",
+                rs -> null, lockKey);
+    }
+
+    @Override
+    public boolean categoryNameExists(UUID organizationId, String name, UUID excludingCategoryId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+                SELECT EXISTS (
+                    SELECT 1 FROM data.data_category
+                    WHERE organization_id = ?
+                      AND lower(btrim(name)) = lower(btrim(?))
+                      AND (CAST(? AS uuid) IS NULL OR id <> CAST(? AS uuid))
+                )
+                """, Boolean.class, organizationId, name, excludingCategoryId, excludingCategoryId));
+    }
+
+    @Override
     public Category create(UUID organizationId, UUID actorId, String name, String description) {
         var id = UUID.randomUUID();
         jdbc.update("""
@@ -93,13 +112,11 @@ public class JdbcDataCategoryRepository implements DataCategoryRepository {
     @Override
     @Transactional
     public void delete(UUID organizationId, UUID categoryId, UUID replacementCategoryId) {
-        if (replacementCategoryId != null) {
-            jdbc.update("UPDATE data.import_job SET category_id = ? WHERE organization_id = ? AND category_id = ?",
-                    replacementCategoryId, organizationId, categoryId);
-        } else if (jdbc.queryForObject("SELECT count(*) FROM data.import_job WHERE organization_id = ? AND category_id = ?",
-                Long.class, organizationId, categoryId) > 0) {
-            throw new IllegalStateException("分类仍有来源文件，请先选择替代分类");
+        if (categoryId.equals(replacementCategoryId)) {
+            throw new IllegalArgumentException("替代分类不能是待删除分类本身");
         }
+        jdbc.update("UPDATE data.import_job SET category_id = ? WHERE organization_id = ? AND category_id = ?",
+                replacementCategoryId, organizationId, categoryId);
         jdbc.update("DELETE FROM data.data_category WHERE organization_id = ? AND id = ?", organizationId, categoryId);
     }
 

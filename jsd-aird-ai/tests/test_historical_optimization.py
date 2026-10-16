@@ -33,6 +33,10 @@ def test_historical_gp_ei_uses_measured_xy_without_model_bindings() -> None:
     assert len(result["candidates"]) == 4
     assert all(20 <= candidate["values"]["temperature"] <= 32 for candidate in result["candidates"])
     assert all("substrate" in candidate["values"] for candidate in result["candidates"])
+    for candidate in result["candidates"]:
+        values = candidate["values"]
+        same_substrate = [row for row in rows() if row["substrate"] == values["substrate"]]
+        assert all(abs(values["temperature"] - row["temperature"]) >= 0.3 for row in same_substrate)
 
 
 def test_historical_optimization_rejects_insufficient_data_with_actionable_message() -> None:

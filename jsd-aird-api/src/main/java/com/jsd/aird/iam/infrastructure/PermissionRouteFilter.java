@@ -398,15 +398,6 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
                     : read ? permission("ai.modeling.read", "AI_MODELING", "READ") : null;
         if (path.matches("/api/v1/ai/rnd/test-metric-catalog/imports/[0-9a-f-]{36}/indicators") && read)
             return permission("ai.modeling.read", "AI_MODELING", "READ");
-        if (path.startsWith("/api/v1/ai/rnd/samples") && read)
-            return permission("ai.modeling.read", "AI_DATA", "READ");
-        if (path.equals("/api/v1/ai/rnd/facts/reconcile") && method.equals("POST"))
-            return permission("ai.data.review", "AI_DATA", "OPERATE");
-        if (path.matches("/api/v1/ai/rnd/targets/[0-9a-f-]{36}/quality-policies")
-                || path.matches("/api/v1/ai/rnd/quality-policies/[0-9a-f-]{36}/publish")
-                || path.matches("/api/v1/ai/rnd/targets/[0-9a-f-]{36}/domain-policies")
-                || path.matches("/api/v1/ai/rnd/domain-policies/[0-9a-f-]{36}/publish"))
-            return permission(read ? "ai.modeling.read" : "ai.config.manage", "AI_CONFIG", read ? "READ" : "WRITE");
         if (path.equals("/api/v1/ai/rnd/predictions") && method.equals("POST"))
             return permission("ai.performance.predict", "AI_PERFORMANCE", "USE");
         if (path.equals("/api/v1/ai/rnd/formula-designs") && method.equals("POST"))
@@ -421,14 +412,8 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
             return permission("ai.model.publish", "AI_MODEL", "PUBLISH");
         if (path.equals("/api/v1/ai/rnd/modeling-workbench/runs") && method.equals("POST"))
             return permission("ai.training.operate", "AI_TRAINING", "OPERATE");
-        if ((path.startsWith("/api/v1/ai/rnd/optimization-baselines")
-                || path.startsWith("/api/v1/ai/rnd/optimization-datasets")
-                || path.startsWith("/api/v1/ai/rnd/optimization-context")
+        if ((path.startsWith("/api/v1/ai/rnd/optimization-datasets")
                 || path.matches("/api/v1/ai/rnd/experiment-optimizations/[0-9a-f-]{36}")) && read)
-            return permission("ai.experiment.optimize", "AI_EXPERIMENT", "READ");
-        if (path.matches("/api/v1/ai/rnd/research-runs/[0-9a-f-]{36}/experiment-drafts") && method.equals("POST"))
-            return permission("experiment.create", "EXPERIMENT", "WRITE");
-        if (path.matches("/api/v1/ai/rnd/research-runs/[0-9a-f-]{36}/(experiment-links|feedback)") && read)
             return permission("ai.experiment.optimize", "AI_EXPERIMENT", "READ");
         if (path.matches("/api/v1/ai/rnd/research-runs/[0-9a-f-]{36}/observations") && read)
             return permission("ai.experiment.optimize", "AI_EXPERIMENT", "READ");
@@ -444,28 +429,11 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
             return permission("ai.performance.predict", "AI_PERFORMANCE", "READ");
         if (path.equals("/api/v1/ai/rnd/formula-design-context") && read)
             return permission("ai.formula.predict", "AI_FORMULA", "READ");
-        if (path.startsWith("/api/v1/ai/rnd/reviews/") && path.endsWith("/decisions") && method.equals("POST"))
-            return permission("ai.data.review", "AI_DATA", "REVIEW");
-        if (path.equals("/api/v1/ai/rnd/training-settings"))
-            return permission(read ? "ai.model.read" : "ai.training.operate", "AI_TRAINING", read ? "READ" : "OPERATE");
-        if (path.startsWith("/api/v1/ai/rnd/training-jobs")) {
-            if (read) return permission("ai.model.read", "AI_MODEL", "READ");
-            if (path.equals("/api/v1/ai/rnd/training-jobs/evaluate") && method.equals("POST"))
-                return permission("ai.training.operate", "AI_TRAINING", "OPERATE");
-            if (method.equals("POST") && (path.endsWith("/retry") || path.endsWith("/cancel")))
-                return permission("ai.training.operate", "AI_TRAINING", "OPERATE");
-        }
         if (path.startsWith("/api/v1/ai/rnd/models")) {
             if (read) return permission("ai.model.read", "AI_MODEL", "READ");
-            if (method.equals("POST") && (path.endsWith("/activate") || path.endsWith("/rollback") || path.endsWith("/pause")))
+            if (method.equals("POST") && (path.endsWith("/rollback") || path.endsWith("/pause")))
                 return permission("ai.model.publish", "AI_MODEL", "PUBLISH");
         }
-        if (path.startsWith("/api/v1/ai/rnd/snapshots") && read)
-            return permission("ai.model.read", "AI_MODEL", "READ");
-        if (path.startsWith("/api/v1/ai/rnd/eligibility") && read)
-            return permission("ai.modeling.read", "AI_MODELING", "READ");
-        if (path.matches("/api/v1/ai/rnd/targets/[0-9a-f-]{36}/reevaluate") && method.equals("POST"))
-            return permission("ai.modeling.manage", "AI_MODELING", "WRITE");
         return null;
     }
 

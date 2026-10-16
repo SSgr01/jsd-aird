@@ -260,7 +260,8 @@ public class DataImportService {
         if (!"DATA_CENTER".equals(sourceOwner)) {
             throw new ApiException(ApiErrorCode.PERMISSION_DENIED, "实验本来源只能在实验记录本中维护");
         }
-        if (categories != null) categories.list().stream().filter(item -> item.id().equals(categoryId)).findFirst()
+        if (categoryId != null && categories != null) categories.list().stream()
+                .filter(item -> item.id().equals(categoryId)).findFirst()
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "数据分类不存在"));
         if (repository.assignSourceCategory(actor.organizationId(), importJobId, categoryId) == 0) {
             throw new ApiException(ApiErrorCode.NOT_FOUND, "来源文件不存在");
@@ -885,19 +886,7 @@ public class DataImportService {
                 .set("records", records);
         auditLog.append(organizationId, actorId, "DATA_IMPORT_COMMITTED", "DATA_IMPORT_JOB", job.id(), detail);
 
-        var eventPayload = objectMapper.createObjectNode()
-                .put("organizationId", organizationId.toString())
-                .put("actorId", actorId.toString())
-                .put("sourceOwner", sourceOwner)
-                .put("templateVersionId", job.templateVersionId().toString())
-                .put("importJobId", job.id().toString())
-                .put("sourceSha256", job.sourceSha256())
-                .put("recordCount", result.records().size())
-                .put("rowCount", result.rowCount())
-                .set("records", records.deepCopy());
-        opsAsync.appendOutbox("DATA_IMPORT_JOB", job.id(), "DATA_RECORDS_COMMITTED", eventPayload);
-        // R03 freezes committed data through confirmed_submission and the unified
-        // fact projection. New work must no longer write the legacy training_dataset.
+
     }
 
     private String importScopedKey(UUID importJobId, DataRepository.Row row) {

@@ -2,6 +2,7 @@ import type { ApiResponse, PageResponse } from '@/types/api';
 import { appEnv } from '@/app/config/env';
 import { httpClient } from '@/services/http/client';
 import { notifyAuthRequired } from '@/services/http/auth-events';
+import { downloadBlob } from '@/services/files/file-api';
 import { generateUUID } from '@/utils/uuid';
 
 export interface SpectrumFieldDefinition {
@@ -40,6 +41,17 @@ export interface SpectrumChart {
   createdAt: string;
   updatedAt: string;
   allowedActions?: string[];
+}
+export interface SpectrumUploadAttempt {
+  requestId: string;
+  categoryId?: string;
+  chartId?: string;
+  originalName: string;
+  size: number;
+  status: 'SUCCEEDED' | 'FAILED' | 'DUPLICATE' | 'CANCELLED';
+  errorCode?: string;
+  errorMessage?: string;
+  createdAt: string;
 }
 export interface SpectrumPage {
   pageNo: number;
@@ -211,6 +223,13 @@ export const spectrumApi = {
     );
     return response.data.data;
   },
+  async assignChartCategory(chartId: string, categoryId: string) {
+    const response = await httpClient.put<ApiResponse<SpectrumChart>>(
+      `/api/v1/spc/charts/${chartId}/category`,
+      { categoryId },
+    );
+    return response.data.data;
+  },
   async deleteCategory(id: string) {
     await httpClient.delete(`/api/v1/spc/categories/${id}`);
   },
@@ -230,6 +249,7 @@ export const spectrumApi = {
     return response.data.data;
   },
   async createChart(input: {
+    requestId: string;
     fileId: string;
     title?: string;
     categoryId: string;
@@ -237,6 +257,8 @@ export const spectrumApi = {
     batchNo?: string;
     testConditions?: string;
     metadata?: Record<string, unknown>;
+    originalName: string;
+    size: number;
   }) {
     const response = await httpClient.post<ApiResponse<SpectrumChart>>('/api/v1/spc/charts', input);
     return response.data.data;
@@ -263,6 +285,30 @@ export const spectrumApi = {
   },
   async deleteChart(id: string) {
     await httpClient.delete(`/api/v1/spc/charts/${id}`);
+  },
+  async uploadAttempts(limit = 100) {
+    const response = await httpClient.get<ApiResponse<SpectrumUploadAttempt[]>>(
+      '/api/v1/spc/uploads/attempts', { params: { limit } },
+    );
+    return response.data.data;
+  },
+  async recordUploadAttempt(input: {
+    requestId: string;
+    categoryId?: string;
+    fileObjectId?: string;
+    originalName: string;
+    size: number;
+    status: 'FAILED' | 'CANCELLED';
+    errorCode?: string;
+    errorMessage?: string;
+  }) {
+    await httpClient.post('/api/v1/spc/uploads/attempts', input);
+  },
+  async exportCharts(chartIds: string[]) {
+    const response = await httpClient.post<Blob>('/api/v1/spc/charts/export', { chartIds }, {
+      responseType: 'blob',
+    });
+    downloadBlob(response.data, '图谱资料导出.zip');
   },
   async pages(id: string) {
     const response = await httpClient.get<ApiResponse<SpectrumPage[]>>(

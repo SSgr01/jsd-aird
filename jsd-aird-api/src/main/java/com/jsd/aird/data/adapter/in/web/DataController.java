@@ -362,7 +362,7 @@ public class DataController {
 
     public record CategoryRequest(@NotBlank String name, @Size(max = 240) String description) {}
     public record RenameCategoryRequest(@NotBlank String name, @Size(max = 240) String description) {}
-    public record AssignCategoryRequest(@NotNull UUID categoryId) {}
+    public record AssignCategoryRequest(UUID categoryId) {}
     public record StructuredSearchRequest(@Size(max = 260) String fileName,
                                           List<@Size(max = 160) String> recordTerms,
                                           List<@Size(max = 160) String> fieldTerms,

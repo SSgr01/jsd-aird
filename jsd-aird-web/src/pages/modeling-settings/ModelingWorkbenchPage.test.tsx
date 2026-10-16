@@ -51,6 +51,22 @@ describe('ModelingWorkbenchPage', () => {
 
   afterEach(() => { vi.clearAllMocks(); window.localStorage.clear() })
 
+  it('checks selected rows before training and names missing fields and conflicting experiment records', async () => {
+    const rows = dataset.rows.map((row, index) => ({ ...row, values: {
+      ...row.values, temperature: index === 7 ? '' : index === 1 ? dataset.rows[0]!.values.temperature : row.values.temperature,
+    } }))
+    vi.mocked(modelingWorkbenchApi.dataset).mockResolvedValue({ ...dataset, rows })
+    window.localStorage.setItem('ai-modeling-workbench-draft:v1', JSON.stringify({ datasetId: dataset.id, xColumns: ['temperature'], yColumn: 'gloss', activeStep: 1 }))
+    render(<AppProviders><ModelingWorkbenchPage /></AppProviders>)
+    expect(await screen.findByText('数据检查')).toBeInTheDocument()
+    expect(screen.getByText(/1 条记录因所选字段缺失或无效/)).toBeInTheDocument()
+    expect(screen.getByText('X · 温度')).toBeInTheDocument()
+    expect(screen.getByText(/1 组相同 X 对应不同 Y，涉及 2 条记录/)).toBeInTheDocument()
+    fireEvent.click(screen.getByText('查看相关记录'))
+    expect(await screen.findByText(/EXP-1.*EXP-2/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /开始训练/ })).toBeEnabled()
+  })
+
   it('selects data, previews the table, freely assigns X/Y, trains, and shows all selected metrics', async () => {
     const goPredict = vi.fn()
     const openModel = vi.fn()
@@ -80,7 +96,7 @@ describe('ModelingWorkbenchPage', () => {
     }, expect.any(String)))
     expect(await screen.findByText('训练完成')).toBeInTheDocument()
     expect(screen.getAllByText('平均绝对误差（MAE）').length).toBeGreaterThan(0)
-    expect(screen.getByText('预测方法对比')).toBeInTheDocument()
+    expect(screen.getByText(/预测方法对比/)).toBeInTheDocument()
     expect(window.localStorage.getItem('ai-modeling-workbench-draft:v1')).toContain('run-1')
     expect(screen.queryByText(/按正式配置重新训练/)).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '注册模型' }))

@@ -491,7 +491,7 @@ export function ProjectListPage() {
             setDateRange(v as unknown as [dayjs.Dayjs | null, dayjs.Dayjs | null] | null);
             setPage(1);
           }}
-          placeholder={['开始日期', '结束日期']}
+          placeholder={['开始日期起', '开始日期止']}
         />
         <Select
           placeholder="全部负责人"
@@ -755,6 +755,9 @@ export function ProjectListPage() {
                   tokenSeparators={[',', '，', '\n']}
                   style={{ width: '100%' }}
                   allowClear
+                  // 与项目详情页一致：关闭候选下拉，避免已存在的同名成员被当成“已选中项”，
+                  // 回车时触发 rc-select 的“再选一次=取消选中”而把成员删掉。
+                  open={false}
                 />
               </Form.Item>
             </div>

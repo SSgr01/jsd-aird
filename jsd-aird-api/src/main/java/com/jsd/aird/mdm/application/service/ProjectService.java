@@ -8,6 +8,7 @@ import com.jsd.aird.mdm.domain.model.ProjectPriority;
 import com.jsd.aird.mdm.domain.model.ProjectStatus;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.apache.poi.ss.usermodel.Row;
@@ -98,8 +99,7 @@ public class ProjectService {
     public ProjectCommands.Created create(ProjectCommands.SaveProject command) {
         validate(command);
         var code = resolveCode(command.projectCode());
-        if (repository.existsByProjectCode(code, null))
-            throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "项目编号已存在：" + code);
+        if (repository.existsByProjectCode(code, null)) throw duplicateProjectCode(code);
 
         var now = Instant.now();
         var project = new Project(UUID.randomUUID(), code, command.name().trim(), command.partnerId(),
@@ -108,7 +108,7 @@ public class ProjectService {
             command.status() == null ? ProjectStatus.NOT_STARTED : command.status(),
             command.teamSize() == null ? 0 : Math.max(command.teamSize(), 0),
             command.background(), command.customFields(), command.teamMembers(), 0, now, now);
-        repository.insert(project, OPERATOR);
+        insert(project);
         return new ProjectCommands.Created(project.id(), 0);
     }
 
@@ -119,8 +119,7 @@ public class ProjectService {
             throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "项目编号不能为空");
         var current = get(id);
         var code = command.projectCode().trim();
-        if (repository.existsByProjectCode(code, id))
-            throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "项目编号已存在：" + code);
+        if (repository.existsByProjectCode(code, id)) throw duplicateProjectCode(code);
 
         var project = new Project(id, code, command.name().trim(), command.partnerId(),
             trim(command.partnerName()), trim(command.owner()), command.startDate(), command.endDate(),
@@ -132,7 +131,11 @@ public class ProjectService {
             current.version(), current.createdAt(), Instant.now());
 
         var version = command.version() == null ? current.version() : command.version();
-        if (!repository.update(project, version, OPERATOR)) conflict();
+        try {
+            if (!repository.update(project, version, OPERATOR)) conflict();
+        } catch (DuplicateKeyException exception) {
+            throw duplicateProjectCode(code);
+        }
     }
 
     @Transactional
@@ -157,9 +160,26 @@ public class ProjectService {
                 truncate(source.name() + "（副本）"), source.partnerId(), source.partnerName(), source.owner(),
                 source.startDate(), source.endDate(), source.priority(), ProjectStatus.NOT_STARTED,
                 source.teamSize(), source.background(), source.customFields(), source.teamMembers(), 0, now, now);
-            repository.insert(copy, OPERATOR);
+            insert(copy);
             return new ProjectCommands.Created(copy.id(), 0);
         }).toList();
+    }
+
+    /**
+     * 项目编号的唯一性最终由数据库约束保证：不同环境的约束形态可能不同（部分唯一索引只约束未删除数据，
+     * 历史库则可能是覆盖整表的唯一约束），而应用层的前置校验既看不到已删除数据，也无法拦截并发保存。
+     * 因此这里统一把约束冲突翻译成业务错误，避免前端收到 500「系统内部错误」。
+     */
+    private void insert(Project project) {
+        try {
+            repository.insert(project, OPERATOR);
+        } catch (DuplicateKeyException exception) {
+            throw duplicateProjectCode(project.projectCode());
+        }
+    }
+
+    private static ApiException duplicateProjectCode(String code) {
+        return new ApiException(ApiErrorCode.VALIDATION_ERROR, "项目编号已存在：" + code);
     }
 
     private String resolveCode(String projectCode) {

@@ -97,7 +97,7 @@ public class ProjectResourceService implements ProjectResourceFacade {
     @Transactional
     public List<RelatedProjectView> replaceLinks(Actor actor, ResourceType resourceType, UUID resourceId,
                                                  List<ProjectRelationTarget> targets) {
-        requireResource(actor.organizationId(), resourceType, resourceId);
+        var source = requireResource(actor.organizationId(), resourceType, resourceId);
         var desired = normalizeTargets(targets);
         var existing = rawTargets(actor.organizationId(), resourceType, resourceId);
         var involvedProjects = new LinkedHashSet<UUID>();
@@ -110,15 +110,17 @@ public class ProjectResourceService implements ProjectResourceFacade {
         var existingKeys = existing.stream().map(TargetKey::new).collect(java.util.stream.Collectors.toSet());
         for (var target : existing) {
             if (!desiredKeys.contains(new TargetKey(target))) {
-                if (activeReferenceExists(actor.organizationId(), resourceType, resourceId, target)) {
-                    throw new ApiException(ApiErrorCode.REFERENCE_IN_USE,
-                            "该项目关联仍被活动资料参考使用，请先删除资料参考");
-                }
+                // 取消关联：把该关联对应的资料参考一并置为“已移除”（软删除，可在资料参考里恢复，
+                // 恢复会重新建立关联）。取消关联与资料参考保持一致，不再要求先手工移除资料参考。
+                removeReferencesForTarget(actor, resourceType, resourceId, target);
                 deleteLink(actor.organizationId(), resourceType, resourceId, target);
             }
         }
         for (var target : desired) {
             if (!existingKeys.contains(new TargetKey(target))) insertLink(actor, resourceType, resourceId, target);
+            // 关联项目后，该项目详情的「资料参考」里应立即能看到这份文件；已存在记录（含已移除）时
+            // 保持不变，避免把用户在资料参考里主动“移除”的记录又翻回有效。
+            insertReferenceIfAbsent(actor, resourceType, source, target);
         }
         return links(actor, resourceType, resourceId);
     }
@@ -303,14 +305,48 @@ public class ProjectResourceService implements ProjectResourceFacade {
                 """, organizationId, type.name(), resourceId, target.projectId(), target.stageId(), target.taskId());
     }
 
-    private boolean activeReferenceExists(UUID organizationId, ResourceType type, UUID resourceId,
-                                          ProjectRelationTarget target) {
+    /**
+     * 关联项目时补一条项目资料参考：让“知识库/数据中心文件已关联项目”在项目详情的「资料参考」里立即可见。
+     * 已存在同一 (项目, 阶段, 任务, 资源) 记录时保持原状——既不重复插入，也不把用户主动“移除”的记录翻回有效。
+     */
+    private void insertReferenceIfAbsent(Actor actor, ResourceType type, SourceSnapshot source,
+                                         ProjectRelationTarget target) {
+        if (referenceExists(actor.organizationId(), type, source.resourceId(), target)) return;
+        var sourceModule = type == ResourceType.KNOWLEDGE_DOCUMENT ? "KNOWLEDGE" : "DATA_CENTER";
+        jdbc.update("""
+                INSERT INTO core.project_reference
+                    (id, organization_id, project_id, stage_id, task_id, resource_type, resource_id,
+                     file_version_id, file_object_id, source_module, title, original_name, content_type,
+                     size_bytes, summary, status, added_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'ACTIVE', ?)
+                ON CONFLICT (organization_id, resource_type, resource_id, project_id, stage_id, task_id)
+                DO NOTHING
+                """, UUID.randomUUID(), actor.organizationId(), target.projectId(), target.stageId(), target.taskId(),
+                type.name(), source.resourceId(), source.fileVersionId(), source.fileObjectId(), sourceModule,
+                source.title(), source.originalName(), source.contentType(), source.size(), actor.userId());
+    }
+
+    /** 同一 (项目, 阶段, 任务, 资源) 是否已有资料参考记录；含“已移除”，避免把用户的移除操作翻回有效。 */
+    private boolean referenceExists(UUID organizationId, ResourceType type, UUID resourceId,
+                                    ProjectRelationTarget target) {
         return Boolean.TRUE.equals(jdbc.queryForObject("""
                 SELECT EXISTS (SELECT 1 FROM core.project_reference
                  WHERE organization_id = ? AND resource_type = ? AND resource_id = ? AND project_id = ?
-                   AND stage_id IS NOT DISTINCT FROM ? AND task_id IS NOT DISTINCT FROM ? AND status = 'ACTIVE')
+                   AND stage_id IS NOT DISTINCT FROM ? AND task_id IS NOT DISTINCT FROM ?)
                 """, Boolean.class, organizationId, type.name(), resourceId, target.projectId(),
                 target.stageId(), target.taskId()));
+    }
+
+    /** 取消项目关联时，把该关联对应的活动资料参考软删除（置为“已移除”），保持“关联 ↔ 资料参考”一致。 */
+    private void removeReferencesForTarget(Actor actor, ResourceType type, UUID resourceId,
+                                           ProjectRelationTarget target) {
+        jdbc.update("""
+                UPDATE core.project_reference
+                   SET status = 'REMOVED', removed_by = ?, removed_at = now()
+                 WHERE organization_id = ? AND resource_type = ? AND resource_id = ? AND project_id = ?
+                   AND stage_id IS NOT DISTINCT FROM ? AND task_id IS NOT DISTINCT FROM ? AND status = 'ACTIVE'
+                """, actor.userId(), actor.organizationId(), type.name(), resourceId, target.projectId(),
+                target.stageId(), target.taskId());
     }
 
     private void upsertReference(Actor actor, ResourceType resourceType, SourceSnapshot source, String summary,

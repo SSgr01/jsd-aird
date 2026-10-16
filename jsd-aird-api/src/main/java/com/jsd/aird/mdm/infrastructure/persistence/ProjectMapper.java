@@ -17,6 +17,9 @@ public interface ProjectMapper {
         "p.team_size teamSize, p.background, p.custom_fields::text customFields, p.team_members::text teamMembers, p.version, " +
         "p.created_at createdAt, p.updated_at updatedAt FROM mdm.project p ";
 
+    // 日期筛选的是“开始日期”区间（与项目列表页的 开始日期 列、开始日期起/止 参数一致），
+    // 两个边界都必须落在 start_date 上。此前下界误用 end_date 匹配，未填写结束日期（end_date 为 null）
+    // 的项目会被整体过滤掉，表现为按日期查询时列表为空。
     String FILTERS = "<if test='keyword != null'> AND (p.name ILIKE concat('%',#{keyword},'%') " +
         "OR p.project_code ILIKE concat('%',#{keyword},'%') OR p.partner_name ILIKE concat('%',#{keyword},'%') " +
         "OR p.owner ILIKE concat('%',#{keyword},'%'))</if>" +
@@ -24,7 +27,7 @@ public interface ProjectMapper {
         "<if test='priority != null'> AND p.priority = #{priority}</if>" +
         "<if test='status != null'> AND p.status = #{status}</if>" +
         "<if test='partnerId != null'> AND p.partner_id = #{partnerId}</if>" +
-        "<if test='startDateFrom != null'> AND p.end_date &gt;= #{startDateFrom}</if>" +
+        "<if test='startDateFrom != null'> AND p.start_date &gt;= #{startDateFrom}</if>" +
         "<if test='startDateTo != null'> AND p.start_date &lt;= #{startDateTo}</if>";
 
     @Select("<script>" + SELECT_COLUMNS + "WHERE p.deleted = false " + FILTERS +

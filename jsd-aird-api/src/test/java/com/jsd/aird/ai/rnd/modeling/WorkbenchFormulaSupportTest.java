@@ -29,4 +29,17 @@ class WorkbenchFormulaSupportTest {
         ordinary.put("unit","%").put("valueType","CATEGORY");
         assertThat(WorkbenchFormulaSupport.materialId(ordinary)).isNull();
     }
+
+    @Test void retainsFixedZeroAndAcceptsOnlySmallDecimalRoundingDifferences() {
+        var scheme=json.createObjectNode().put("id","scheme");var fields=scheme.putArray("fields");
+        fields.addObject().put("code","formula:"+A).put("name","助剂比例").put("valueType","NUMBER").put("unit","%");
+        fields.addObject().put("code","formula:"+B).put("name","树脂比例").put("valueType","NUMBER").put("unit","%");
+        var rows=json.createArrayNode();
+        for(int i=0;i<6;i++)rows.addObject().putObject("values").put("formula:"+A,0).put("formula:"+B,new java.math.BigDecimal(i%2==0?"99.9999":"100.0001"));
+        var dictionary=WorkbenchFormulaSupport.dictionary(json,scheme,rows);
+        assertThat(dictionary.path("compositionStatus").asText()).isEqualTo("COMPLETE");
+        assertThat(dictionary.path("materials").get(0).path("fixedValue").decimalValue()).isEqualByComparingTo("0");
+        rows.get(0).withObject("values").put("formula:"+B,98.8);
+        assertThat(WorkbenchFormulaSupport.dictionary(json,scheme,rows).path("compositionStatus").asText()).isEqualTo("INCOMPLETE");
+    }
 }

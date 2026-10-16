@@ -68,7 +68,7 @@ public class WorkbenchModelRegistrationService {
         target.set("classes",classes);target.set("observationSemantics",json.createObjectNode());
         var modelSource=target.putObject("modelSource").put("datasetName",run.path("datasetName").asText());
         modelSource.set("xColumns",request.path("xColumns"));modelSource.set("yColumn",y);
-        for(var metadata:List.of("testMethod","testStage","testMethods"))if(y.has(metadata))target.set(metadata,y.get(metadata));
+        for(var metadata:List.of("testMethod","testStage","testMethods","semanticKey","materialId","compositionBasis","measurementComponent"))if(y.has(metadata))target.set(metadata,y.get(metadata));
         target.put("sha256",hashing.hash(target));
         var scheme=ref(schemeId);scheme.put("version",configurationVersion);scheme.put("targetVersionId",targetVersionId.toString());var fields=scheme.putArray("fields");
         for(var x:request.path("xColumns")){
@@ -76,11 +76,18 @@ public class WorkbenchModelRegistrationService {
                     .put("code",code).put("name",x.path("name").asText()).put("valueType","NUMERIC".equals(x.path("kind").asText())?"NUMBER":"CATEGORY")
                     .put("required",true).put("acquisitionTiming","PRE_EXPERIMENT");
             if(x.hasNonNull("unit"))field.set("unit",x.path("unit"));
+            for(var metadataKey:List.of("semanticKey","materialId","materialCode","compositionBasis","testMethods","testStage","measurementComponent"))if(x.has(metadataKey))field.set(metadataKey,x.get(metadataKey));
             var encoding=field.putObject("encoding");
             if("CATEGORICAL".equals(x.path("kind").asText())){var values=new TreeSet<String>();request.path("rows").forEach(r->values.add(r.path("values").path(code).asText().strip()));var allowed=encoding.putArray("allowedValues");values.forEach(allowed::add);}
         }
         scheme.put("sha256",hashing.hash(scheme));
         var materialDictionary=WorkbenchFormulaSupport.dictionary(json,scheme,request.path("rows"));
+        var selectedCodes=new java.util.HashSet<String>();request.path("xColumns").forEach(column->selectedCodes.add(column.path("code").asText()));
+        var missingMaterials=materialDictionary.putArray("missingMaterials");
+        boolean hasMaterial=request.path("xColumns").findValuesAsText("code").stream().anyMatch(code->code.startsWith("formula:"));
+        if(hasMaterial)for(var column:request.path("materialColumns"))if(!selectedCodes.contains(column.path("code").asText()))missingMaterials.add(column.path("name").asText());
+        if(!missingMaterials.isEmpty())materialDictionary.put("compositionStatus","INCOMPLETE");
+        materialDictionary.remove("sha256");materialDictionary.put("sha256",hashing.hash(materialDictionary));
         if(ids.isEmpty()){
             jdbc.update("INSERT INTO ai.prediction_target(id,organization_id,target_code,name,performance_project,value_type,status,created_by,updated_by) VALUES(?,?,?,?,'GENERAL_DATA',?,'ACTIVE',?,?)",
                     targetId,org,targetCode,y.path("name").asText(),valueType,actor.userId(),actor.userId());
@@ -129,7 +136,7 @@ public class WorkbenchModelRegistrationService {
         x.sort(Comparator.comparing(JsonNode::toString));identity.set("x",json.valueToTree(x));return identity;
     }
     private JsonNode columnIdentity(JsonNode column){var out=json.createObjectNode();
-        for(var key:List.of("code","kind","unit","testMethod","testStage","testMethods"))out.set(key,(column.hasNonNull(key)&&!(column.get(key).isArray()&&column.get(key).isEmpty()))?column.get(key):json.nullNode());return out;}
+        for(var key:List.of("code","kind","unit","testMethod","testStage","testMethods","semanticKey","materialId","compositionBasis","measurementComponent"))out.set(key,(column.hasNonNull(key)&&!(column.get(key).isArray()&&column.get(key).isEmpty()))?column.get(key):json.nullNode());return out;}
     private ObjectNode ref(UUID id){return json.createObjectNode().put("id",id.toString()).put("version",1);}
     private JsonNode parse(String text){try{return json.readTree(text);}catch(Exception e){throw new IllegalStateException(e);}}
     private PGobject pg(JsonNode node){try{var out=new PGobject();out.setType("jsonb");out.setValue(node.toString());return out;}catch(Exception e){throw new IllegalStateException(e);}}

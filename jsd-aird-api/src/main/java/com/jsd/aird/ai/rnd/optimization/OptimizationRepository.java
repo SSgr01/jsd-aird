@@ -27,51 +27,14 @@ public class OptimizationRepository {
 
     public JdbcTemplate jdbc() { return jdbc; }
 
-    public Optional<BaselineRow> baseline(UUID org, UUID user, String type, UUID id) {
-        var rows = switch (type) {
-            case "EXPERIMENT_VERSION" -> jdbc.query("""
+    public Optional<BaselineRow> historyBaseline(UUID org, UUID versionId) {
+        return jdbc.query("""
                 SELECT 'EXPERIMENT_VERSION' source_type,e.id entity_id,v.id version_id,e.title,
                        coalesce(e.experiment_no,'') source_label,v.edit_model_jsonb payload,
                        v.template_version_id,v.template_snapshot_hash,v.template_snapshot_jsonb,v.created_at updated_at
-                FROM rnd.experiment e JOIN rnd.experiment_version v ON v.organization_id=e.organization_id AND v.id=e.current_version_id
-                WHERE e.organization_id=? AND e.id=? AND e.status='COMPLETED' AND e.deleted=false
-                """, this::baseline, org, id);
-            case "DATA_SAMPLE_REVISION" -> jdbc.query("""
-                SELECT 'DATA_SAMPLE_REVISION' source_type,s.id entity_id,r.id version_id,
-                       coalesce(nullif(ij.source_file_name,''), nullif(src.source_business_key,''), '数据中心样本') ||
-                         CASE WHEN ci.sheet_name IS NOT NULL THEN ' · ' || ci.sheet_name ELSE '' END ||
-                         CASE WHEN ci.row_coordinate IS NOT NULL THEN ' · ' || ci.row_coordinate ELSE '' END title,
-                       '数据中心正式数据' source_label,
-                       jsonb_build_object('formula',r.composition_jsonb,'inputs',r.conditions_jsonb,
-                         'process',r.process_jsonb,'observations',r.observations_jsonb,
-                         'sourceCoordinates',r.source_coordinates_jsonb,'factHash',r.fact_hash) payload,
-                       NULL::uuid template_version_id,NULL::char(64) template_snapshot_hash,
-                       '{}'::jsonb template_snapshot_jsonb,r.created_at updated_at
-                FROM ai.training_sample s JOIN ai.sample_revision r ON r.organization_id=s.organization_id AND r.id=s.current_sample_revision_id
-                LEFT JOIN ai.sample_source src ON src.organization_id=s.organization_id AND src.id=r.sample_source_id
-                LEFT JOIN data.confirmed_submission_item ci ON ci.organization_id=s.organization_id
-                  AND ci.id=src.confirmed_submission_item_id
-                LEFT JOIN data.confirmed_submission cs ON cs.organization_id=ci.organization_id
-                  AND cs.id=ci.confirmed_submission_id
-                LEFT JOIN data.import_job ij ON ij.organization_id=cs.organization_id
-                  AND ij.id=cs.import_job_id
-                WHERE s.organization_id=? AND s.id=? AND s.status='ACTIVE' AND s.authority_source_type='DATA_CENTER'
-                """, this::baseline, org, id);
-            case "RESEARCH_CANDIDATE" -> jdbc.query("""
-                SELECT 'RESEARCH_CANDIDATE' source_type,c.id entity_id,c.id version_id,c.title,
-                       concat('配方预测 ',r.created_at::date) source_label,
-                       jsonb_build_object('formula',c.formula_jsonb,'inputs',c.fixed_inputs_jsonb,
-                         'predictions',c.target_results_jsonb,'quality',c.quality_jsonb,
-                         'applicability',c.applicability_jsonb,'runId',r.id) payload,
-                       NULL::uuid template_version_id,NULL::char(64) template_snapshot_hash,
-                       '{}'::jsonb template_snapshot_jsonb,c.created_at updated_at
-                FROM ai.research_candidate_v2 c JOIN ai.research_run_v2 r ON r.organization_id=c.organization_id AND r.id=c.research_run_id
-                WHERE c.organization_id=? AND c.id=? AND r.created_by=? AND r.run_type='FORMULA_PREDICTION'
-                  AND r.execution_status='SUCCEEDED'
-                """, this::baseline, org, id, user);
-            default -> List.<BaselineRow>of();
-        };
-        return rows.stream().findFirst();
+                FROM rnd.experiment e JOIN rnd.experiment_version v ON v.organization_id=e.organization_id AND v.experiment_id=e.id
+                WHERE e.organization_id=? AND v.id=? AND v.status='COMPLETED' AND e.deleted=false
+                """, this::baseline, org, versionId).stream().findFirst();
     }
 
     public List<HistoryDatasetRow> historyDatasets(UUID org, String keyword) {
@@ -102,13 +65,12 @@ public class OptimizationRepository {
                 r.getString("experiment_no"),r.getString("title"),read(r,"edit_model_jsonb"),instant(r,"created_at")),org,templateVersionId);
     }
 
-    public Optional<String> materialName(String materialId) {
-        try {
-            return jdbc.query("SELECT name FROM mdm.material WHERE id=? AND status<>'RETIRED'",
-                    (rs,n)->rs.getString("name"),UUID.fromString(materialId)).stream().findFirst();
-        } catch (IllegalArgumentException ignored) {
-            return Optional.empty();
-        }
+    public Map<String,String> materialIds(UUID organizationId) {
+        var ids=new LinkedHashMap<String,String>();
+        jdbc.query("SELECT code,id FROM mdm.material WHERE status<>'RETIRED'",
+                (rs,n)->Map.entry(rs.getString(1),rs.getObject(2).toString()))
+                .forEach(entry->ids.put(entry.getKey(),entry.getValue()));
+        return ids;
     }
 
     public Map<String,String> historyFieldNames(UUID organizationId) {

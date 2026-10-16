@@ -605,6 +605,8 @@ public class DataImportService {
                         .put("valuePath", valuePath)
                         .put("dataPath", valuePath)
                         .put("trainingEligible", mapping.detail().path("trainingEligible").asBoolean(true));
+                for(var metadataKey:List.of("materialId","materialCode","compositionBasis","testMethod","testStage"))
+                    if(mapping.detail().hasNonNull(metadataKey))value.set(metadataKey,mapping.detail().get(metadataKey).deepCopy());
                 var cell = row.sourceMetadata() == null ? null : row.sourceMetadata().path("cells").path(entry.getKey());
                 if (cell != null && cell.isObject()) {
                     for (var key : List.of("bindingId", "parentBindingId", "valuePath", "labelPath", "valueSource",
@@ -612,7 +614,7 @@ public class DataImportService {
                             "experimentField", "targetPath", "itemSourceKey", "listProjectionId", "itemLabel",
                             "labelPathSegments",
                             "itemLabelField", "labelSource", "unitSource", "cellValueType", "rawNumericValue",
-                            "displayValue", "numberFormat", "fractionRepresentation")) {
+                            "displayValue", "numberFormat", "fractionRepresentation", "materialId", "materialCode", "compositionBasis", "testMethod", "testStage")) {
                         if (cell.has(key)) value.set(key, cell.path(key).deepCopy());
                     }
                 }
@@ -1033,44 +1035,10 @@ public class DataImportService {
         return numeric == null ? raw.trim() : numeric.stripTrailingZeros().toPlainString();
     }
 
-    /**
-     * Customer reports often keep a numeric observation together with its
-     * direction/label (for example "正向翘曲1.4cm", "卷曲20°") or as a
-     * measured range ("8.8-9.8").  The import layer must accept those
-     * representations without discarding the original text; the raw value is
-     * retained in the source evidence and the returned normalized value is
-     * only the deterministic scalar used by downstream projections.
-     */
     private BigDecimal parseStructuredNumeric(String text, DataRepository.Mapping mapping) {
-        try {
-            return new BigDecimal(text);
-        } catch (NumberFormatException ignored) {
-            var number = "([+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+))";
-            var range = java.util.regex.Pattern.compile(
-                    ".*?" + number + "\\s*(?:-|–|—|~|至)\\s*" + number + ".*")
-                    .matcher(text);
-            if (range.matches()) {
-                return new BigDecimal(range.group(1))
-                        .add(new BigDecimal(range.group(2)))
-                        .divide(BigDecimal.valueOf(2), java.math.MathContext.DECIMAL64);
-            }
-
-            var expected = canonicalUnit(mapping.standardUnit());
-            if (!expected.isBlank()) {
-                var decorated = java.util.regex.Pattern.compile(
-                        ".*?" + number + "\\s*" + java.util.regex.Pattern.quote(mapping.standardUnit()) + ".*")
-                        .matcher(text);
-                if (decorated.matches()) return new BigDecimal(decorated.group(1));
-                // Accept equivalent micro/degree spellings after unit
-                // canonicalization, while still requiring a unit in the cell.
-                var withUnit = java.util.regex.Pattern.compile(
-                        ".*?" + number + "\\s*([^0-9\\s].*)").matcher(text);
-                if (withUnit.matches() && expected.equals(canonicalUnit(withUnit.group(2)))) {
-                    return new BigDecimal(withUnit.group(1));
-                }
-            }
-            throw ignored;
-        }
+        var number=com.jsd.aird.shared.data.MeasurementValueParser.number(text,mapping.standardUnit()==null?"":mapping.standardUnit());
+        if(number==null)throw new NumberFormatException("需要明确的实测数值，范围、上限和观察描述请分别记录");
+        return number;
     }
 
     private String canonicalUnit(String value) {

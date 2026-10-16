@@ -4,6 +4,7 @@ import io
 import json
 import logging
 import zipfile
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
@@ -518,11 +519,25 @@ class FormulaModelV2Service:
             values = [float(row[code]) for row in data]
             low = float(feature.get("minimum", min(values)))
             high = float(feature.get("maximum", max(values)))
-            if not np.isfinite(low) or not np.isfinite(high) or low >= high:
+            if not np.isfinite(low) or not np.isfinite(high) or low > high:
                 raise FormulaModelError(ErrorCode.UNSUPPORTED_CONTRACT,
-                                        f"X 因素“{feature.get('name', code)}”的最小值必须小于最大值")
+                                        f"X 因素“{feature.get('name', code)}”的最小值不能大于最大值")
             return low, high
 
+        # Training scales describe observations, independently of the search interval.
+        training_scales = {feature["code"]: (min(float(row[feature["code"]]) for row in data),
+                                             max(float(row[feature["code"]]) for row in data))
+                           for feature in selected_features if feature["kind"] == "NUMERIC"}
+        for feature in selected_features:
+            if feature["kind"] != "NUMERIC":
+                continue
+            low, high = bounds(feature)
+            observed_low, observed_high = training_scales[feature["code"]]
+            if observed_low == observed_high and (low != observed_low or high != observed_high):
+                raise FormulaModelError(ErrorCode.INSUFFICIENT_DATA,
+                                        f"X 因素“{feature.get('name', feature['code'])}”历史值固定，本轮请保持原值")
+            if "fixedValue" in feature and (low != high or float(feature["fixedValue"]) != low):
+                raise FormulaModelError(ErrorCode.UNSUPPORTED_CONTRACT, "固定值与因素范围不一致")
         feature_by_code = {feature["code"]: feature for feature in selected_features}
         composition_groups: list[tuple[list[str], float]] = []
         grouped_codes: set[str] = set()
@@ -543,19 +558,34 @@ class FormulaModelV2Service:
             if grouped_codes.intersection(codes) or not np.isfinite(total):
                 raise FormulaModelError(ErrorCode.UNSUPPORTED_CONTRACT, "配方比例设置重复或总量无效")
             limits = [bounds(feature_by_code[code]) for code in codes]
+            if any(low < 0 for low, _ in limits):
+                raise FormulaModelError(ErrorCode.UNSUPPORTED_CONTRACT, "材料比例不能为负数")
             if total < sum(low for low, _ in limits) - 1e-8 or total > sum(high for _, high in limits) + 1e-8:
                 raise FormulaModelError(ErrorCode.UNSUPPORTED_CONTRACT,
                                         "这组配方比例范围无法保持总量一致，请调整比例范围后重试")
             grouped_codes.update(codes)
             composition_groups.append((codes, total))
 
+        adjustable = any(feature["code"] not in grouped_codes and
+                         (len(categories[feature["code"]]) > 1 if feature["kind"] == "CATEGORICAL"
+                          else bounds(feature)[0] < bounds(feature)[1]) for feature in selected_features)
+        adjustable = adjustable or any(sum(bounds(feature_by_code[code])[0] < bounds(feature_by_code[code])[1]
+                                           for code in codes) >= 2 and
+                                       sum(bounds(feature_by_code[code])[0] for code in codes) < total <
+                                       sum(bounds(feature_by_code[code])[1] for code in codes)
+                                       for codes, total in composition_groups)
+        if not adjustable:
+            raise FormulaModelError(ErrorCode.NO_FEASIBLE_CANDIDATE,
+                                    "所选因素和配方总量没有可调整空间，请调整可变因素的范围")
+
         def encode(record: dict[str, Any]) -> list[float]:
             vector: list[float] = []
             for feature in selected_features:
                 code = feature["code"]
                 if feature["kind"] == "NUMERIC":
-                    low, high = bounds(feature)
-                    vector.append((float(record[code]) - low) / max(high - low, 1e-9))
+                    low, high = training_scales[code]
+                    if high > low:
+                        vector.append((float(record[code]) - low) / (high - low))
                 else:
                     vector.extend(1.0 if str(record[code]) == label else 0.0 for label in categories[code])
             return vector
@@ -766,7 +796,7 @@ class FormulaModelV2Service:
                 inputs[field.code] = float(ratios[material_id])
         if mappings and (not formula.composition_complete or len(ratios) != len(formula.components)
                          or any(value is None or not np.isfinite(value) or value < 0 for value in ratios.values())
-                         or abs(sum(float(value) for value in ratios.values()) - 100) > 1e-4):
+                         or abs(sum(Decimal(str(value)) for value in ratios.values()) - Decimal('100')) > Decimal('0.001')):
             raise FormulaModelError(ErrorCode.INSUFFICIENT_DATA, "候选配方的材料比例需完整、非负且合计为 100%")
         return inputs
 

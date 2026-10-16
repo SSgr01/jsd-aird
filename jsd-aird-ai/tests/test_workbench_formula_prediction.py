@@ -12,7 +12,7 @@ from jsd_aird_ai.settings import Settings
 MATERIALS = ["829e5306-ada7-4949-b7a4-3d571df9ca8c", "f44a3459-05c1-4958-a246-b5736c0aa682", "fa09039b-f0a2-48bd-9acc-71ed839ce94d"]
 
 
-def setup_model(tmp_path, monkeypatch, categorical=False):
+def setup_model(tmp_path, monkeypatch, categorical=False, fixed_value=None):
     # The training-pipeline suite covers all learners; these tests exercise real
     # persisted numeric/category models through formula generation and scoring.
     factory = runtime.workbench_candidates
@@ -31,6 +31,13 @@ def setup_model(tmp_path, monkeypatch, categorical=False):
         if not categorical:
             y = 1.7 * a + .8 * b + .4 * c + .5 * temperature + (3 if substrate == "PET" else 0)
         rows.append(dict(values=dict(zip([column["code"] for column in columns], [a, b, c, temperature, substrate])) | dict(y=y)))
+    fixed_id = 'bcc75753-5ca8-45db-a62f-82b8fdbffb03'
+    if fixed_value is not None:
+        columns.append(dict(code=f'formula:{fixed_id}', name='稳定剂比例', kind='NUMERIC', unit='%'))
+        for row in rows:
+            row['values'][f'formula:{fixed_id}'] = fixed_value
+            row['values'][f'formula:{MATERIALS[2]}'] -= fixed_value
+            row['values']['y'] -= .4 * fixed_value
     output = tmp_path / "model.zip"
     trained = api.post("/internal/v2/modeling/workbench/train", json=dict(
         requestId="formula-model", xColumns=columns, yColumn=dict(code="y", name="涂层性能", kind="CATEGORICAL" if categorical else "NUMERIC"),
@@ -41,13 +48,18 @@ def setup_model(tmp_path, monkeypatch, categorical=False):
     for index, column in enumerate(columns):
         fields.append(dict(fieldVersionId=f"field-{index}", code=column["code"], name=column["name"], unit=column.get("unit"),
                            valueType="NUMBER" if column["kind"] == "NUMERIC" else "CATEGORY", required=True,
-                           acquisitionTiming="PRE_EXPERIMENT", encoding=dict(formulaMaterialId=MATERIALS[index]) if index < 3 else {}))
+                           acquisitionTiming="PRE_EXPERIMENT", semanticKey=column["code"], testMethods=[], testStage="",
+                           **(dict(materialId=MATERIALS[index], materialCode=f"R-{index}", compositionBasis="MASS_PERCENT") if index < 3 else {}),
+                           encoding=dict(formulaMaterialId=MATERIALS[index]) if index < 3 else {}))
     binding = dict(target=ref | dict(code="coating", valueType="CATEGORICAL" if categorical else "CONTINUOUS", unit=None,
                                     classes=["优", "良"] if categorical else [], observationSemantics={}),
                    modelVersionId="model-1", modelBundle=trained.json()["modelBundle"],
                    inputScheme=ref | dict(targetVersionId="version-1", fields=fields),
                    materialDictionary=ref | dict(materials=[dict(materialId=material, code=material, encoderIndex=index) for index, material in enumerate(MATERIALS)]),
                    applicabilityDomain=trained.json()["applicabilityDomain"] | dict(nearBoundaryRatio=.05))
+    if fixed_value is not None:
+        fields[-1]['encoding'] = dict(formulaMaterialId=fixed_id)
+        binding['materialDictionary']['materials'].append(dict(materialId=fixed_id, code='STABILIZER', encoderIndex=3))
     formula = dict(basis="MASS_PERCENT", compositionComplete=True, recordedTotal=100,
                    components=[dict(materialId=material, ratio=value, unit="PERCENT", amountKnown=True) for material, value in zip(MATERIALS, [35, 25, 40])])
     request = dict(contractVersion="formula-model.v2", requestId="inverse", seed=17, runId="formula-run", mode="FORMULA_PREDICTION", candidateCount=3,
@@ -56,6 +68,9 @@ def setup_model(tmp_path, monkeypatch, categorical=False):
                                value=dict(label="优") if categorical else 100, minimumProbability=.5 if categorical else None)],
                    constraints={}, searchSpace=dict(variableMaterials=[dict(materialId=material, minimum=low, maximum=high)
                                                                         for material, low, high in zip(MATERIALS, [20, 20, 10], [60, 45, 60])]), modelBindings=[binding])
+    if fixed_value is not None:
+        formula['components'][2]['ratio'] -= fixed_value
+        formula['components'].append(dict(materialId=fixed_id, ratio=fixed_value, unit='PERCENT', amountKnown=True))
     return api, request, output
 
 
@@ -95,6 +110,19 @@ def test_mapping_does_not_change_ordinary_performance_prediction(tmp_path, monke
     inputs = dict(temperature=24, substrate="PET") | {f"formula:{material}": value for material, value in zip(MATERIALS, [35, 25, 40])}
     response = api.post("/internal/v2/models/score", json=dict(requestId="direct", seed=17, runId="prediction", inputs=inputs, modelBindings=request["modelBindings"]))
     assert response.json()["results"][0]["result"]["value"] == pytest.approx(110.5)
+
+
+@pytest.mark.parametrize('fixed_value', [0, 12])
+def test_trained_constant_material_is_kept_in_formula_predictions(tmp_path, monkeypatch, fixed_value):
+    api, request, _ = setup_model(tmp_path, monkeypatch, fixed_value=fixed_value)
+    response = api.post('/internal/v2/models/recommend', json=request)
+    assert response.status_code == 200, response.text
+    candidates = response.json()['candidates']
+    assert len(candidates) >= 2
+    for candidate in candidates:
+        components = candidate['formula']['components']
+        assert components[-1]['ratio'] == fixed_value
+        assert sum(item['ratio'] for item in components) == pytest.approx(100)
 
 
 def test_missing_or_duplicate_recipe_components_are_rejected(tmp_path, monkeypatch):

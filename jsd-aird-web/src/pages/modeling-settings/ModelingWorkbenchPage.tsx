@@ -1,7 +1,8 @@
+import { XYColumnPicker, SelectedDataIssues } from '@/components/ai-rnd/XYColumnPicker'
 import { ArrowLeftOutlined, ArrowRightOutlined, CheckCircleFilled, ExperimentOutlined, ReloadOutlined } from '@ant-design/icons'
-import { Alert, App, Button, Card, Checkbox, Empty, Input, Progress, Radio, Space, Table, Tag, Typography } from 'antd'
+import { Alert, App, Button, Card, Checkbox, Empty, Input, Progress, Space, Table, Tag, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Key } from 'react'
 
 import { modelingWorkbenchApi, type ModelingWorkbenchRun } from '@/services/ai-rnd/modeling-workbench-api'
@@ -36,22 +37,6 @@ function cellText(value: unknown) {
   return '—'
 }
 
-function uniqueCount(dataset: HistoryDataset | undefined, code: string) {
-  return new Set((dataset?.rows ?? []).map(row => row.values[code]).filter(value => value !== undefined && value !== null && value !== '')).size
-}
-
-function yUnavailableReason(dataset: HistoryDataset | undefined, column: HistoryDataset['columns'][number]) {
-  if (column.filledCount < 6) return `有效记录 ${column.filledCount}/6 条`
-  if (uniqueCount(dataset, column.code) < 2) return '结果未变化'
-  if (column.kind === 'NUMERIC') return ''
-  const counts = new Map<string, number>()
-  dataset?.rows.forEach(row => {
-    const value = row.values[column.code]
-    if (value !== undefined && value !== null && value !== '') counts.set(String(value), (counts.get(String(value)) ?? 0) + 1)
-  })
-  return [...counts.values()].every(count => count >= 2) ? '' : '部分类别少于 2 条记录'
-}
-
 export type ModelingWorkbenchPageProps = {
   canManageCatalog?: boolean
   canRegister?: boolean
@@ -71,6 +56,7 @@ export function ModelingWorkbenchPage({ canManageCatalog = false, canRegister = 
   const [yColumn, setYColumn] = useState('')
   const [activeStep, setActiveStep] = useState(0)
   const [runId, setRunId] = useState<string>()
+  const restoredRun = useRef<string>()
   const [run, setRun] = useState<ModelingWorkbenchRun>()
   const [loadingDatasets, setLoadingDatasets] = useState(false)
   const [loadingDataset, setLoadingDataset] = useState(false)
@@ -128,6 +114,12 @@ export function ModelingWorkbenchPage({ canManageCatalog = false, canRegister = 
 
   useEffect(() => {
     if (!dataset) return
+    if (!runId && Object.entries(selectedRowIds).some(([id, ids]) => selectedDatasetIds.includes(id) && ids.some(rowId => !dataset.rows.some(row => row.id === rowId)))) {
+      message.warning({ key: 'modeling-sample-refresh', content: '实验数据已按样品重新整理，请重新勾选记录并确认 X/Y。' })
+      setXColumns(current => current.filter(code => dataset.columns.some(column => column.code === code)))
+      setYColumn(current => dataset.columns.some(column => column.code === current) ? current : '')
+      setActiveStep(0)
+    }
     setSelectedRowIds(current => {
       let changed = false
       const next = { ...current }
@@ -192,6 +184,15 @@ export function ModelingWorkbenchPage({ canManageCatalog = false, canRegister = 
         if (cancelled) return
         setRun(current)
         setRunLoadError('')
+        if (current.datasetSnapshot?.rows && restoredRun.current !== current.id) {
+          restoredRun.current = current.id
+          const snapshot = current.datasetSnapshot
+          const ids = snapshot.sourceDatasetIds ?? [snapshot.id]
+          setSelectedDatasetIds(ids)
+          setDatasetCache(cache => ({ ...cache, ...Object.fromEntries(ids.map(id => [id, { ...snapshot, id, sourceDatasetIds: [id], rows: snapshot.rows.filter(row => (row.sourceDatasetId ?? snapshot.id) === id) }])) }))
+          setSelectedRowIds(current.selectedRowIdsByDataset ?? {})
+          setXColumns(current.xColumns.map(column => column.code)); setYColumn(current.yColumn.code)
+        }
         if (current.status === 'QUEUED' || current.status === 'RUNNING') timer = setTimeout(() => void poll(), 1300)
       } catch (error) {
         if (!cancelled) {
@@ -250,11 +251,9 @@ export function ModelingWorkbenchPage({ canManageCatalog = false, canRegister = 
     })),
   ], [dataset?.columns, selectedDatasetIds.length])
 
-  const usableY = useMemo(() => (selectedDatasetView?.columns ?? []).filter(column => !yUnavailableReason(selectedDatasetView, column)), [selectedDatasetView])
   const dataChecks = useMemo(() => checkWorkbenchData(selectedDatasetView, xColumns, yColumn), [selectedDatasetView, xColumns, yColumn])
   const completeRows = dataChecks?.usableRowCount ?? 0
   const allXConstant = Boolean(dataChecks && dataChecks.fields.filter(field => field.role === 'X').every(field => field.distinctCount < 2))
-  const selectedY = selectedDatasetView?.columns.find(column => column.code === yColumn)
   const currentMetrics = run?.result?.metrics ?? {}
   const selectedAlgorithm = typeof currentMetrics.selectedAlgorithm === 'string' ? currentMetrics.selectedAlgorithm : ''
   const trainingActive = submitting || Boolean(runId) && (run ? run.status === 'QUEUED' || run.status === 'RUNNING' : !runLoadError)
@@ -347,30 +346,8 @@ export function ModelingWorkbenchPage({ canManageCatalog = false, canRegister = 
         <Space wrap>{dataset && <Tag color="blue">{dataset.name} · 已选 {selectedRows.length}/{dataset.rows.length} 条</Tag>}<TestMetricCatalogManager canManage={canManageCatalog} /></Space>
       </div>
       {!dataset ? <Empty description="实验数据没有加载，请返回重新选择。"><Button onClick={() => setActiveStep(0)}>返回选择数据</Button></Empty> : <>
-        <div className="workbench-xy-layout">
-          <Card className="workbench-select-card" title={<span>选择 X <Text type="secondary">· 作为预测输入，可多选</Text></span>}>
-            {selectedDatasetView?.columns.length ? <Checkbox.Group className="workbench-column-choice-list" value={xColumns} onChange={values => setXColumns(values.map(String).filter(code => code !== yColumn))} options={selectedDatasetView.columns.filter(column => column.code !== yColumn).map(column => {
-              const levels = uniqueCount(selectedDatasetView, column.code)
-              const disabled = column.filledCount < 6 || levels < 2
-              return { value: column.code, disabled, label: <span className="workbench-column-option"><strong>{column.name}</strong><small>{column.kind === 'NUMERIC' ? '数值' : '分类'}{column.unit ? ` · ${column.unit}` : ''} · {column.filledCount}/{selectedRows.length} 条有值 · {levels} 种取值{disabled ? (column.filledCount < 6 ? ' · 完整记录不足' : ' · 取值未变化') : ''}</small></span> }
-            })} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有可选的 X 列" />}
-            {xColumns.length > 0 && <div className="workbench-selection-summary"><Text strong>已选 {xColumns.length} 列</Text><Space wrap>{xColumns.map(code => <Tag key={code} closable onClose={() => setXColumns(current => current.filter(item => item !== code))}>{selectedDatasetView?.columns.find(column => column.code === code)?.name ?? code}</Tag>)}</Space></div>}
-          </Card>
-          <Card className="workbench-select-card workbench-y-card" title={<span>选择 Y <Text type="secondary">· 每次训练预测一个结果</Text></span>}>
-            {(selectedDatasetView?.columns.length ?? 0) > 0 ? <Radio.Group className="workbench-column-choice-list" value={yColumn || undefined} onChange={event => { const value = String(event.target.value); setYColumn(value); setXColumns(current => current.filter(code => code !== value)) }}>
-              {(selectedDatasetView?.columns ?? []).map(column => {
-                const reason = yUnavailableReason(selectedDatasetView, column)
-                const levels = uniqueCount(selectedDatasetView, column.code)
-                return <Radio key={column.code} value={column.code} disabled={Boolean(reason)}>
-                  <span className="workbench-column-option"><strong>{column.name}</strong><small>{column.kind === 'NUMERIC' ? '数值' : '分类'}{column.unit ? ` · ${column.unit}` : ''} · {column.filledCount}/{selectedRows.length} 条有值 · {levels} 种结果{reason ? ` · ${reason}` : ''}</small></span>
-                </Radio>
-              })}
-            </Radio.Group> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有可选的 Y 列" />}
-            {yColumn && <div className="workbench-selection-summary workbench-y-detail"><Text strong>当前预测结果：{selectedY?.name}</Text><Text type="secondary">{selectedY?.kind === 'NUMERIC' ? `数值预测${selectedY.unit ? ` · 单位 ${selectedY.unit}` : ''}` : '类别预测'} · {selectedY?.filledCount ?? 0}/{selectedRows.length} 条有值 · {uniqueCount(selectedDatasetView, yColumn)} 种结果</Text><Paragraph>{selectedY?.kind === 'NUMERIC' ? '训练结果会显示 MAE、RMSE 和 R²。误差单位与这列相同。' : '训练结果会显示准确率、宏平均 F1 和概率损失；每种结果至少需要 2 条记录。'}</Paragraph>
-            </div>}
-            {!usableY.length && <Alert type="warning" showIcon message="没有可用于 Y 的列" description="Y 至少需要 6 条有效记录并且结果有变化；分类 Y 的每种结果至少需要 2 条。可补充实验记录后再试。" />}
-          </Card>
-        </div>
+        {selectedDatasetView && <XYColumnPicker dataset={selectedDatasetView} mode="modeling" xColumns={xColumns} yColumn={yColumn} onXChange={setXColumns} onYChange={value => { setYColumn(value); setXColumns(current => current.filter(code => code !== value)) }} />}
+        <SelectedDataIssues dataset={selectedDatasetView} xColumns={xColumns} yColumn={yColumn} />
         <div className="workbench-readiness-row">
           <div><Text strong>可用于训练</Text><Text className={completeRows >= 6 ? 'workbench-ready-count' : 'workbench-warning-count'}>{completeRows} 条完整记录</Text><Text type="secondary">至少需要 6 条完整记录，且至少一列 X 有不同取值。</Text></div>
           <div><Text strong>训练方式</Text><Text>系统自动比较多种预测方法</Text><Text type="secondary">训练结果会用交叉验证指标进行对比。</Text></div>

@@ -19,6 +19,7 @@ const messages: Record<string, string> = {
 }
 
 export function aiActionFeedback(error: unknown, fallback = '操作未完成，请重试') {
-  if (error instanceof HttpError) return messages[error.code] ?? fallback
+  if (error instanceof HttpError) return messages[error.code]
+    ?? (['SYS_VALIDATION_ERROR', 'VALIDATION_ERROR'].includes(error.code) && error.message ? error.message : fallback)
   return error instanceof Error && error.message ? error.message : fallback
 }

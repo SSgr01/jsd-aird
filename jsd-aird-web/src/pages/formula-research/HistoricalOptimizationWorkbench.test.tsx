@@ -56,7 +56,7 @@ const completedRun = {
     results: { targets: [{ targetId: 'result:gloss', targetName: '60°光泽', status: 'SUCCEEDED', result: { resultType: 'CONTINUOUS', value: 49.1, lower: 45.2, upper: 53, unit: 'GU' } }] },
     quality: {}, applicability: {}, ruleCheck: {}, score: 0, targetTotal: 0, baselineDistance: 0, changes: {}, strategyEvidence: {}, risks: [],
   }],
-  frozenBaseline: {}, frozenRequest: { mode: 'HISTORICAL_GP_BO', datasetId: dataset.id, datasetName: dataset.name,
+  frozenBaseline: {}, frozenRequest: { datasetSnapshot: dataset, mode: 'HISTORICAL_GP_BO', datasetId: dataset.id, datasetName: dataset.name,
     target: 'result:gloss', targetName: '60°光泽', direction: 'MAXIMIZE', candidateCount: 1,
     features: [{ code: 'input:temperature', kind: 'NUMERIC', minimum: 20, maximum: 34 }, { code: 'input:time', kind: 'NUMERIC', minimum: 5, maximum: 12 }],
     rows: dataset.rows.map(row => ({ ...row.values })), columns: dataset.columns },
@@ -91,8 +91,7 @@ describe('HistoricalOptimizationWorkbench', () => {
 
     fireEvent.click(screen.getByRole('checkbox', { name: /烘烤温度/ }))
     fireEvent.click(screen.getByRole('checkbox', { name: /烘烤时间/ }))
-    fireEvent.mouseDown(screen.getByRole('combobox'))
-    fireEvent.click(await screen.findByText(/60°光泽（GU）/))
+    fireEvent.click(screen.getByRole('radio', { name: /60°光泽/ }))
     const setRangeButton = screen.getAllByRole('button', { name: /设置范围/ }).find(element => element.tagName === 'BUTTON')
     expect(setRangeButton).toBeDefined()
     fireEvent.click(setRangeButton!)
@@ -139,16 +138,12 @@ describe('HistoricalOptimizationWorkbench', () => {
     expect(await screen.findByText('已选 2 张')).toBeInTheDocument()
     expect(await screen.findByText('已选 16 条')).toBeInTheDocument()
 
-    const preview = document.querySelectorAll('.history-layout > .ant-col .history-card')[1]
-    const firstRowCheckbox = preview?.querySelector('tbody input[type="checkbox"]')
-    expect(firstRowCheckbox).not.toBeNull()
-    fireEvent.click(firstRowCheckbox!)
-    expect(await screen.findByText('已选 15/16 条记录')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('checkbox', { name: /^选择实验记录 EXP-1$/ }))
+    expect(await screen.findByText('已选 15 条')).toBeInTheDocument()
     fireEvent.click(chooseXYButton())
     fireEvent.click(screen.getByRole('checkbox', { name: /烘烤温度/ }))
     fireEvent.click(screen.getByRole('checkbox', { name: /烘烤时间/ }))
-    fireEvent.mouseDown(screen.getByRole('combobox'))
-    fireEvent.click(await screen.findByText(/60°光泽（GU）/))
+    fireEvent.click(screen.getByRole('radio', { name: /60°光泽/ }))
     fireEvent.click(screen.getAllByRole('button', { name: /设置范围/ }).find(element => element.tagName === 'BUTTON')!)
     fireEvent.click(screen.getByRole('button', { name: '开始优化' }))
 
@@ -171,15 +166,39 @@ describe('HistoricalOptimizationWorkbench', () => {
     fireEvent.click(chooseXYButton())
 
     fireEvent.click(screen.getByRole('checkbox', { name: /助剂比例/ }))
-    fireEvent.mouseDown(screen.getByRole('combobox'))
-    fireEvent.click(await screen.findByText(/耐磨次数（次）/))
-    expect(await screen.findByText('请同时选择所有材料比例列')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('radio', { name: /耐磨次数/ }))
+    expect(await screen.findByText(/配方还缺少材料/)).toBeInTheDocument()
     expect(screen.getAllByRole('button', { name: /设置范围/ }).find(element => element.tagName === 'BUTTON')).toBeDisabled()
 
     fireEvent.click(screen.getByRole('checkbox', { name: /树脂 A 比例/ }))
     fireEvent.click(screen.getByRole('checkbox', { name: /树脂 B 比例/ }))
     await waitFor(() => expect(screen.getAllByRole('button', { name: /设置范围/ }).find(element => element.tagName === 'BUTTON')).toBeEnabled())
     expect(screen.queryByText('请同时选择所有材料比例列')).not.toBeInTheDocument()
+  })
+
+  it('retains fixed zero materials and prevents infeasible recipe bounds before submission', async () => {
+    const source = { ...compositionDataset, columns: [...compositionDataset.columns,
+      { code: 'formula:zero', name: '稳定剂比例', kind: 'NUMERIC', unit: '%', materialId: 'zero', filledCount: 8 }],
+      rows: compositionDataset.rows.map(row => ({ ...row, values: { ...row.values, 'formula:zero': 0 } })) }
+    api.historyDataset.mockResolvedValue(source)
+    api.historyDatasets.mockResolvedValue({ items: [{ id: source.id, name: source.name, rowCount: 8, updatedAt: '' }] })
+    render(<App><MemoryRouter><HistoricalOptimizationWorkbench /></MemoryRouter></App>)
+    fireEvent.click(await screen.findByText(source.name))
+    await waitFor(() => expect(chooseXYButton()).toBeEnabled())
+    fireEvent.click(chooseXYButton())
+    fireEvent.click(screen.getByRole('checkbox', { name: /助剂比例/ }))
+    expect(screen.getByRole('checkbox', { name: /稳定剂比例/ })).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: /稳定剂比例/ })).toBeDisabled()
+    expect(screen.getByText('固定 0% · 已纳入配方')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('checkbox', { name: /树脂 A 比例/ }))
+    fireEvent.click(screen.getByRole('checkbox', { name: /树脂 B 比例/ }))
+    fireEvent.click(screen.getByRole('radio', { name: /耐磨次数/ }))
+    fireEvent.click(screen.getAllByRole('button', { name: /设置范围/ }).find(element => element.tagName === 'BUTTON')!)
+    fireEvent.change(screen.getByRole('spinbutton', { name: '助剂比例最小值' }), { target: { value: '90' } })
+    fireEvent.change(screen.getByRole('spinbutton', { name: '助剂比例最大值' }), { target: { value: '95' } })
+    expect(screen.getByText(/当前材料比例范围无法合计为 100%/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '开始优化' })).toBeDisabled()
+    expect(api.submit).not.toHaveBeenCalled()
   })
 
   it('saves measured results, starts the next round, and restores it after a refresh', async () => {
@@ -207,8 +226,7 @@ describe('HistoricalOptimizationWorkbench', () => {
     fireEvent.click(chooseXYButton())
     fireEvent.click(screen.getByRole('checkbox', { name: /烘烤温度/ }))
     fireEvent.click(screen.getByRole('checkbox', { name: /烘烤时间/ }))
-    fireEvent.mouseDown(screen.getByRole('combobox'))
-    fireEvent.click(await screen.findByText(/60°光泽（GU）/))
+    fireEvent.click(screen.getByRole('radio', { name: /60°光泽/ }))
     fireEvent.click(screen.getAllByRole('button', { name: /设置范围/ }).find(element => element.tagName === 'BUTTON')!)
     fireEvent.click(screen.getByRole('button', { name: '开始优化' }))
 
@@ -250,8 +268,7 @@ describe('HistoricalOptimizationWorkbench', () => {
     fireEvent.click(chooseXYButton())
     fireEvent.click(screen.getByRole('checkbox', { name: /烘烤温度/ }))
     fireEvent.click(screen.getByRole('checkbox', { name: /烘烤时间/ }))
-    fireEvent.mouseDown(screen.getByRole('combobox'))
-    fireEvent.click(await screen.findByText(/60°光泽（GU）/))
+    fireEvent.click(screen.getByRole('radio', { name: /60°光泽/ }))
     fireEvent.click(screen.getAllByRole('button', { name: /设置范围/ }).find(element => element.tagName === 'BUTTON')!)
     fireEvent.click(screen.getByRole('button', { name: '开始优化' }))
 

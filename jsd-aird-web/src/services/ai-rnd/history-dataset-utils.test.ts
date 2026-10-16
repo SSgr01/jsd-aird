@@ -42,13 +42,14 @@ describe('history-dataset-utils', () => {
         { code: 'field:oven-temp', name: '温度', kind: 'NUMERIC', unit: '°C', filledCount: 1 },
         { code: 'field:measured-gloss', name: '光泽', kind: 'NUMERIC', unit: 'GU', filledCount: 1 },
       ],
-      rows: [{ id: 'row-b', versionId: 'version-b', label: '样本-b', title: '表 B', values: { 'field:oven-temp': 26, 'field:measured-gloss': 84 } }],
+      rows: [{ id: 'row-b', versionId: 'version-b', label: '样本-b', title: '表 B', values: { 'field:oven-temp': 26, 'field:measured-gloss': 84 }, sourceRefs: { 'field:oven-temp': [{ sheetId: 'sheet-1', row: 2, column: 3 }] } }],
     }
 
     const merged = mergeHistoryDatasets([first, second])!
 
     expect(merged.columns.map(column => column.code)).toEqual(['input:temperature', 'result:gloss'])
     expect(merged.rows[1]?.values).toEqual({ 'input:temperature': 26, 'result:gloss': 84 })
+    expect(merged.rows[1]?.sourceRefs?.['input:temperature']).toEqual([{ sheetId: 'sheet-1', row: 2, column: 3 }])
   })
 
   it('defaults every row in each selected table to checked and preserves explicit choices', () => {

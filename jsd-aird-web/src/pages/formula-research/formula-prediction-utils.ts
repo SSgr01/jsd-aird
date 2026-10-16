@@ -30,7 +30,8 @@ export function syncFormulaForm(form: FormulaForm, context: FormulaContext) {
   context.selected.forEach(target => { goals[target.targetId] ??= defaultGoal(target) })
   context.materialIntersection.forEach(material => {
     const range = learnedRange(material.supportedRanges)
-    materials[material.materialId] ??= { mode: 'VARIABLE', ...(range ? { minimum: Math.max(0, range.minimum), maximum: Math.min(100, range.maximum) } : {}) }
+    if (typeof material.fixedValue === 'number') materials[material.materialId] = { mode: 'FIXED', ratio: material.fixedValue }
+    else materials[material.materialId] ??= range?.minimum === range?.maximum && range ? { mode: 'FIXED', ratio: range.minimum } : { mode: 'VARIABLE', ...(range ? { minimum: Math.max(0, range.minimum), maximum: Math.min(100, range.maximum) } : {}) }
   })
   context.requiredInputs.forEach(field => {
     if (inputs[field.code]) return
@@ -49,7 +50,9 @@ export function formulaMaterialName(material?: Partial<FormulaMaterial>, index =
 }
 export function formulaUnavailable(target: FormulaTarget) {
   if (target.unavailableReasons.includes('FORMULA_TARGET_IS_RATIO')) return '此模型预测单项比例；反推配方请选择以性能为 Y 的模型'
-  if (target.unavailableReasons.includes('MODEL_FORMULA_INPUTS_INCOMPLETE')) return 'X 中的材料比例不完整，请选择完整配方比例列后训练'
+  if (target.unavailableReasons.includes('MODEL_FORMULA_INPUTS_INCOMPLETE')) return target.missingFormulaMaterials?.length
+    ? `X 中缺少材料：${target.missingFormulaMaterials.join('、')}，请加入后重新训练`
+    : target.formulaIssues?.length ? `配方记录需检查：${target.formulaIssues.slice(0, 3).join('；')}` : 'X 中的材料比例不完整，请选择完整配方比例列后训练'
   if (target.unavailableReasons.includes('MODEL_MATERIALS_INCONSISTENT')) return '模型材料与训练记录不一致，请重新训练'
   if (target.unavailableReasons.includes('MODEL_NOT_FORMULA_ENABLED')) return '训练时未选择材料比例作为 X，请加入比例列后训练'
   return unavailableReason(target)

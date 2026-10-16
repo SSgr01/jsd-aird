@@ -218,7 +218,7 @@ public class ModelingWorkbenchService {
             if (!selectedIds.getOrDefault(sourceDatasetId, Set.of()).contains(sourceRowId)) continue;
             var sourceValues = source.path("values");
             var selectedRow = selectedRows.addObject().put("id", sourceDatasetId + ":" + sourceRowId);
-            for (var metadata : List.of("label", "title", "versionId", "sourceDatasetName"))
+            for (var metadata : List.of("label", "title", "versionId", "sourceDatasetName", "sourceExperimentId", "sampleKey", "sampleNo", "sourceContextKey", "sourceRefs"))
                 if (source.has(metadata)) selectedRow.set(metadata, source.get(metadata));
             var checkedValues = selectedRow.putObject("values");
             for (var code : uniqueX) checkedValues.set(code, sourceValues.has(code) ? sourceValues.get(code).deepCopy() : json.nullNode());
@@ -234,7 +234,7 @@ public class ModelingWorkbenchService {
             var targetValue = sourceValues.path(command.yColumn());
             if (!complete || !validValue(targetValue, y.path("kind").asText())) continue;
             var row = rows.addObject().put("id", sourceDatasetId + ":" + sourceRowId);
-            for(var metadata:List.of("label","title","versionId","sourceDatasetName")) if(source.has(metadata))row.set(metadata,source.get(metadata));
+            for(var metadata:List.of("label","title","versionId","sourceDatasetName","sourceExperimentId","sampleKey","sampleNo","sourceContextKey","sourceRefs")) if(source.has(metadata))row.set(metadata,source.get(metadata));
             selectedValues.set(command.yColumn(), normalizedValue(targetValue, y.path("kind").asText()));
             row.set("values", selectedValues);
             uniqueX.forEach(code -> distinct.get(code).add(selectedValues.path(code).asText()));
@@ -261,6 +261,11 @@ public class ModelingWorkbenchService {
         request.set("yColumn", y);
         request.set("rows", rows);
         request.set("selectedRows", selectedRows);
+        request.set("datasetSnapshot",dataset.deepCopy());
+        var materials=request.putArray("materialColumns");
+        dataset.path("columns").forEach(column->{if(column.hasNonNull("materialId"))materials.add(selectedColumn(column));});
+        request.set("projectionVersion",dataset.path("projectionVersion"));
+        request.set("dataIssues",dataset.path("issues"));
         return request;
     }
 
@@ -293,7 +298,7 @@ public class ModelingWorkbenchService {
         var result = json.createObjectNode().put("code", source.path("code").asText())
                 .put("name", source.path("name").asText(source.path("code").asText()))
                 .put("kind", source.path("kind").asText("CATEGORICAL"));
-        for(var metadata:List.of("testMethod","testMethods","testStage"))if(source.hasNonNull(metadata))result.set(metadata,source.get(metadata));
+        for(var metadata:List.of("testMethod","testMethods","testStage","semanticKey","materialId","materialCode","compositionBasis","measurementComponent"))if(source.hasNonNull(metadata))result.set(metadata,source.get(metadata));
         if (source.hasNonNull("unit")) result.put("unit", source.path("unit").asText());
         else result.putNull("unit");
         return result;
@@ -334,6 +339,8 @@ public class ModelingWorkbenchService {
         result.set("xColumns", row.xColumns());
         result.set("yColumn", row.yColumn());
         result.set("result", row.result());
+        result.set("datasetSnapshot",row.request().path("datasetSnapshot"));
+        result.set("selectedRowIdsByDataset",row.request().path("selectedRowIdsByDataset"));
         result.set("error", row.error().isEmpty() ? json.nullNode() : row.error());
         return result;
     }

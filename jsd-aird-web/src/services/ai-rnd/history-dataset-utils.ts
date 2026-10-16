@@ -3,7 +3,9 @@ import type { HistoryDataset, HistoryDatasetColumn, HistoryDatasetRow } from './
 const normalizedFieldName = (name: string) => name.normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase()
 const normalizedUnit = (unit?: string) => (unit ?? '').normalize('NFKC').trim().replace(/\s+/g, '').toLocaleLowerCase()
 const compatibleColumn = (left: HistoryDatasetColumn, right: HistoryDatasetColumn) =>
-  left.kind === right.kind && normalizedUnit(left.unit) === normalizedUnit(right.unit) && JSON.stringify(left.testMethods ?? []) === JSON.stringify(right.testMethods ?? [])
+  left.kind === right.kind && normalizedUnit(left.unit) === normalizedUnit(right.unit) && JSON.stringify((left.testMethods ?? []).map(normalizedFieldName).sort()) === JSON.stringify((right.testMethods ?? []).map(normalizedFieldName).sort())
+  && (left.testStage ?? '') === (right.testStage ?? '') && (left.materialId ?? '') === (right.materialId ?? '')
+  && (left.compositionBasis ?? '') === (right.compositionBasis ?? '') && (left.measurementComponent ?? '') === (right.measurementComponent ?? '')
 
 /**
  * Combine matching experiment fields by stable code, or by an unambiguous
@@ -45,6 +47,8 @@ export function mergeHistoryDatasets(sources: HistoryDataset[]): HistoryDataset 
     sourceDatasetName: source.name,
     values: Object.fromEntries([...codesBySource[sourceIndex]!.entries()]
       .flatMap(([canonicalCode, sourceCode]) => row.values[sourceCode] === undefined ? [] : [[canonicalCode, row.values[sourceCode]]])),
+    sourceRefs: Object.fromEntries([...codesBySource[sourceIndex]!.entries()]
+      .flatMap(([canonicalCode, sourceCode]) => row.sourceRefs?.[sourceCode] === undefined ? [] : [[canonicalCode, row.sourceRefs[sourceCode]]])),
   })))
   for (const column of columns) {
     column.filledCount = rows.filter(row => {
@@ -59,6 +63,8 @@ export function mergeHistoryDatasets(sources: HistoryDataset[]): HistoryDataset 
     rowCount: rows.length,
     sourceDatasetIds: sources.map(source => source.id),
     columns,
+    projectionVersion: sources[0]!.projectionVersion,
+    issues: sources.flatMap((source, index) => (source.issues ?? []).map(issue => ({ ...issue, columnCode: [...codesBySource[index]!.entries()].find(([, code]) => code === issue.columnCode)?.[0] ?? issue.columnCode }))),
     rows,
   }
 }
@@ -73,3 +79,10 @@ export function selectedRowIdsByDataset(
     selectedRowIds[datasetId] ?? rows.filter(row => row.sourceDatasetId === datasetId).map(row => row.id),
   ]))
 }
+
+export const columnValues = (dataset: HistoryDataset | undefined, code: string) => (dataset?.rows ?? [])
+  .map(row => row.values[code]).filter(value => value !== undefined && value !== null && value !== '')
+export const columnLevels = (dataset: HistoryDataset | undefined, code: string) => new Set(columnValues(dataset, code)).size
+export const materialColumn = (column: HistoryDatasetColumn) => Boolean(column.materialId) || column.code.startsWith('formula:')
+export const fixedMaterial = (dataset: HistoryDataset | undefined, column: HistoryDatasetColumn) => materialColumn(column)
+  && column.kind === 'NUMERIC' && columnLevels(dataset, column.code) === 1

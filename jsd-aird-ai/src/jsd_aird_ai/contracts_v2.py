@@ -76,6 +76,13 @@ class InputFieldV2(V2Model):
     required: bool
     acquisition_timing: Literal["PRE_EXPERIMENT", "POST_EXPERIMENT"]
     encoding: dict[str, Any] = Field(default_factory=dict)
+    semantic_key: str | None = None
+    material_id: str | None = None
+    material_code: str | None = None
+    composition_basis: str | None = None
+    test_methods: list[str] = Field(default_factory=list)
+    test_stage: str | None = None
+    measurement_component: str | None = None
 
 
 class InputSchemeV2(VersionedRef):

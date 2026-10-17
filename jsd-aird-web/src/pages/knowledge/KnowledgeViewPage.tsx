@@ -215,7 +215,7 @@ export function KnowledgeViewPage() {
     }
     if (!item.allowedActions?.includes('DISABLE')) return;
     let reason = '';
-    modal.confirm({ title: `停用“${item.title}”？`, content: <Input.TextArea placeholder="停用原因（必填）" onChange={(event) => { reason = event.target.value; }} />, okText: '确认停用', okButtonProps: { danger: true }, onOk: async () => { if (!reason.trim()) throw new Error('停用原因不能为空'); await knowledgeApi.disable(item.id, reason.trim()); await load(); } });
+    modal.confirm({ title: `停用“${item.title}”？`, content: <Space direction="vertical" style={{ width: '100%' }}><Typography.Text>停用后，该文件将不再参与文件检索和 AI 问答。确定停用吗？</Typography.Text><Input.TextArea placeholder="停用原因（必填）" onChange={(event) => { reason = event.target.value; }} /></Space>, okText: '确认停用', okButtonProps: { danger: true }, onOk: async () => { if (!reason.trim()) throw new Error('停用原因不能为空'); await knowledgeApi.disable(item.id, reason.trim()); await load(); } });
   };
   const saveRelations = async () => {
     if (!relationEditor) return;
@@ -229,7 +229,7 @@ export function KnowledgeViewPage() {
   };
 
   return <div className="business-page knowledge-view-page">
-    <div className="page-heading"><div><Typography.Title level={2}>知识库查看</Typography.Title><Typography.Text type="secondary">治理逻辑文档、审核版本和当前发布快照；停用会立即退出文件检索与 AI 问答。</Typography.Text></div><Can permission="knowledge.upload"><Button type="primary" icon={<UploadOutlined />} onClick={() => navigate('/knowledge/library')}>上传文件</Button></Can></div>
+    <div className="page-heading"><div><Typography.Title level={2}>知识库查看</Typography.Title><Typography.Text type="secondary">管理知识文件、校对内容和发布状态。</Typography.Text></div><Can permission="knowledge.upload"><Button type="primary" icon={<UploadOutlined />} onClick={() => navigate('/knowledge/library')}>上传文件</Button></Can></div>
     {canViewCatalog ? <>
     <div className="catalog-tabs" role="tablist" aria-label="资料范围">{scopes.map((item) => <Button key={item.value} type={scope === item.value ? 'primary' : 'default'} role="tab" aria-selected={scope === item.value} onClick={() => setScope(item.value)}>{item.label}</Button>)}</div>
     <CategoryCardGrid categories={cards} activeId={categoryId} onSelect={(id) => { setCategoryId(id); setPage((value) => ({ ...value, current: 1 })); }} onCreate={canUpdate ? () => setEditor({ mode: 'NEW' }) : undefined} onRename={canUpdate ? (item) => setEditor({ mode: 'EDIT', item: categories.find((candidate) => candidate.id === item.id) }) : undefined} onDelete={canUpdate ? (item) => { const category = categories.find((candidate) => candidate.id === item.id); if (category?.allowedActions?.includes('DELETE')) setDeleteItem(category); } : undefined} />

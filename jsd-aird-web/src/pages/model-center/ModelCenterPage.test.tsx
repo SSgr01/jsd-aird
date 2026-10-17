@@ -10,7 +10,7 @@ vi.mock('@/pages/model-management', () => ({
   ModelManagementPage: ({ view }: { view?: string }) => <div data-testid="model-list-panel">模型列表面板 · {view}</div>,
 }))
 vi.mock('@/pages/modeling-settings', () => ({
-  ModelingSettingsPage: ({ openCreateTarget, onOpenTarget }: { openCreateTarget?: boolean; onOpenTarget?: (targetId: string) => void }) => <div data-testid="modeling-settings-panel">建模设置面板{openCreateTarget ? ' · 新增目标' : ''}<button type="button" onClick={() => onOpenTarget?.('target-1')}>开始配置</button></div>,
+  ModelingWorkbenchPage: () => <div data-testid="modeling-workbench-panel">自由选择 X / Y 建模工具</div>,
 }))
 
 function LocationProbe() {
@@ -28,30 +28,46 @@ function setPermissions(permissions: string[]) {
 describe('ModelCenterPage', () => {
   afterEach(() => useAuthStore.setState({ user: null, status: 'anonymous' }))
 
-  it('defaults to model list and keeps settings in the same route', async () => {
+  it('keeps only model list and workbench without manual configuration entries', () => {
     setPermissions(['ai.model.read', 'ai.modeling.read', 'ai.modeling.manage'])
-    render(<AppProviders><MemoryRouter initialEntries={['/assistant/model-center']}><ModelCenterPage /><LocationProbe /></MemoryRouter></AppProviders>)
-    expect(screen.getByRole('heading', { name: '模型中心' })).toBeInTheDocument()
-    expect(screen.getByTestId('model-list-panel')).toHaveTextContent('模型列表面板')
-    fireEvent.click(screen.getByRole('tab', { name: '建模设置' }))
-    expect(screen.getByTestId('modeling-settings-panel')).toBeInTheDocument()
-    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('?tab=settings'))
-    fireEvent.click(screen.getByRole('button', { name: /新增预测目标/ }))
-    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('?tab=settings&action=create-target'))
+    render(<AppProviders><MemoryRouter initialEntries={['/assistant/model-center']}><ModelCenterPage /></MemoryRouter></AppProviders>)
+    expect(screen.getByTestId('model-list-panel')).toBeInTheDocument()
+    expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual(['模型列表', '建模工具'])
+    expect(screen.queryByRole('button', { name: '新增预测目标' })).not.toBeInTheDocument()
   })
 
-  it('shows only the permitted panel for a modeling-only user', () => {
+  it('opens the workbench for a modeling-only user without training permissions', async () => {
     setPermissions(['ai.modeling.read'])
-    render(<AppProviders><MemoryRouter initialEntries={['/assistant/model-center?tab=models']}><ModelCenterPage /></MemoryRouter></AppProviders>)
+    render(<AppProviders><MemoryRouter initialEntries={['/assistant/model-center?tab=models']}><ModelCenterPage /><LocationProbe /></MemoryRouter></AppProviders>)
     expect(screen.queryByRole('tab', { name: '模型列表' })).not.toBeInTheDocument()
-    expect(screen.getByRole('tab', { name: '建模设置' })).toBeInTheDocument()
-    expect(screen.getByTestId('modeling-settings-panel')).toBeInTheDocument()
+    expect(screen.getByTestId('modeling-workbench-panel')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('?tab=workbench'))
   })
 
-  it('opens the same full-page target workflow from embedded settings', async () => {
-    setPermissions(['ai.modeling.read'])
-    render(<AppProviders><MemoryRouter initialEntries={['/assistant/model-center?tab=settings']}><ModelCenterPage /><LocationProbe /></MemoryRouter></AppProviders>)
-    fireEvent.click(screen.getByRole('button', { name: '开始配置' }))
-    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/assistant/model-center/targets/target-1'))
+  it.each([
+    ['?tab=settings', '?tab=workbench'],
+    ['?tab=settings&action=create-target&targetName=旧目标&targetUnit=GU', '?tab=workbench'],
+    ['?tab=settings&targetId=target-1', '?tab=models&targetId=target-1'],
+  ])('replaces retired configuration query %s with %s', async (query, expected) => {
+    setPermissions(['ai.model.read', 'ai.modeling.read'])
+    render(<AppProviders><MemoryRouter initialEntries={[`/assistant/model-center${query}`]}><ModelCenterPage /><LocationProbe /></MemoryRouter></AppProviders>)
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toBe(`/assistant/model-center${expected}`))
+    expect(screen.queryByRole('tab', { name: '目标设置' })).not.toBeInTheDocument()
+  })
+
+  it('switches from a focused registered model to the workbench without carrying old model links', async () => {
+    setPermissions(['ai.model.read', 'ai.modeling.read'])
+    render(<AppProviders><MemoryRouter initialEntries={['/assistant/model-center?tab=models&targetId=target-1&modelId=model-1']}><ModelCenterPage /><LocationProbe /></MemoryRouter></AppProviders>)
+    fireEvent.click(screen.getByRole('tab', { name: '建模工具' }))
+    expect(await screen.findByTestId('modeling-workbench-panel')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/assistant/model-center?tab=workbench'))
+    expect(screen.getByTestId('location').textContent).not.toContain('modelId')
+    expect(screen.getByTestId('location').textContent).not.toContain('targetId')
+  })
+
+  it('retains the original link while authentication is loading', () => {
+    useAuthStore.setState({ status: 'loading', user: null })
+    render(<AppProviders><MemoryRouter initialEntries={['/assistant/model-center?tab=settings&targetId=target-1']}><ModelCenterPage /><LocationProbe /></MemoryRouter></AppProviders>)
+    expect(screen.getByTestId('location')).toHaveTextContent('?tab=settings&targetId=target-1')
   })
 })

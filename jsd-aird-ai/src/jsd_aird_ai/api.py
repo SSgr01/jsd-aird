@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Annotated
+from typing import Annotated, Any
 
 import baybe
 import catboost
@@ -157,6 +157,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def train_v2(payload: TrainRequestV2) -> TrainResponseV2:
         return service_v2.train(payload)
 
+    @app.post("/internal/v2/modeling/workbench/train", dependencies=secured)
+    def train_modeling_workbench(payload: dict[str, Any]) -> dict[str, Any]:
+        return service_v2.train_workbench(payload)
+
     @app.post(
         "/internal/v2/models/score",
         response_model=ScoreResponseV2,
@@ -172,6 +176,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     def recommend_v2(payload: RecommendRequestV2) -> RecommendResponseV2:
         return service_v2.recommend(payload)
+
+    @app.post("/internal/v2/optimization/historical", dependencies=secured)
+    def recommend_historical_optimization(payload: dict[str, Any]) -> dict[str, Any]:
+        return service_v2.recommend_from_history(payload)
 
     return app
 

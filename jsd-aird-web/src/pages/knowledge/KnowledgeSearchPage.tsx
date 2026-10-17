@@ -106,7 +106,7 @@ export function KnowledgeSearchPage() {
 
   return <div className="search-workspace-page">
     <Card className="search-hero content-card">
-      <Typography.Text>仅返回研发知识库和数据中心的来源文件；一个文件的多个内容命中会聚合在同一张卡片中。</Typography.Text>
+      <Typography.Text>结果按来源文件合并展示。</Typography.Text>
       <div className="search-hero-row"><Input size="large" aria-label="文件检索关键词" value={query} onChange={(event) => setQuery(event.target.value)} onPressEnter={() => void doSearch()} placeholder="输入文件名、产品、项目、实验编号或文件内容" /><Select allowClear showSearch optionFilterProp="label" aria-label="按项目筛选" placeholder="全部项目" style={{ minWidth: 240 }} value={projectId} onChange={setProjectId} options={projects.map((project) => ({ value: project.id, label: `${project.projectCode} · ${project.name}` }))} /><Button type="primary" size="large" icon={<SearchOutlined />} onClick={() => void doSearch()}>检索文件</Button></div>
     </Card>
     <div className="search-workbench">

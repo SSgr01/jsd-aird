@@ -15,7 +15,7 @@ import '@/styles/management-list.css';
 
 const taskStatuses: Record<string, string> = { PENDING: '待开始', IN_PROGRESS: '进行中', COMPLETED: '已完成', CANCELLED: '已取消' };
 const formatTaskStatus = (s: string) => taskStatuses[s] ?? s;
-const experimentStatuses: Record<string, string> = { DRAFT: '草稿', PENDING: '待开始', IN_PROGRESS: '进行中', PENDING_REVIEW: '待审核', RETURNED: '已退回', COMPLETED: '已完成', VOIDED: '已作废', CANCELLED: '已取消' };
+const experimentStatuses: Record<string, string> = { DRAFT: '草稿', PENDING: '待开始', IN_PROGRESS: '进行中', PENDING_REVIEW: '待审核', RETURNED: '已退回', COMPLETED: '已发布', VOIDED: '已作废', CANCELLED: '已取消' };
 const formatExperimentStatus = (s: string) => experimentStatuses[s] ?? s;
 
 interface ExperimentFormValues {

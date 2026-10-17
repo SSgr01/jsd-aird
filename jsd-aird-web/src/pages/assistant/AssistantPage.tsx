@@ -848,15 +848,6 @@ export function AssistantPage() {
             联网搜索
           </Button>
         }
-        scopeSummary={
-          <Typography.Text type="secondary">
-            {allAuthorizedSelected
-              ? '全部已授权资料'
-              : hasSelectedScope
-                ? `已选择 ${selectedKnowledge.length + selectedData.length} 个检索范围`
-                : '未选择资料范围'}
-          </Typography.Text>
-        }
         pendingLabel={streamStage}
         question={question}
         loading={loading}

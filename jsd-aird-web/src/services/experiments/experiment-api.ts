@@ -1,5 +1,6 @@
 import { httpClient } from '@/services/http/client';
 import type { ApiResponse } from '@/types/api';
+import type { ImportBinding, TemplateFieldDefinition } from '@/services/data/data-api';
 
 export type ExperimentStatus =
   'DRAFT' | 'PENDING' | 'IN_PROGRESS' | 'PENDING_REVIEW' | 'RETURNED' | 'COMPLETED' | 'VOIDED';
@@ -97,6 +98,7 @@ export interface ExperimentModel extends Record<string, unknown> {
   blankDocument?: boolean;
   documentSnapshot?: Record<string, unknown>;
   dynamicValues?: Record<string, unknown>;
+  templateDataReview?: { required: boolean; confirmed: boolean; dataHash?: string; confirmedRevision?: number };
   recognizedFields?: Array<{
     id: string;
     bindingId: string;
@@ -154,27 +156,13 @@ export interface ExperimentDetail {
   reviews: Array<Record<string, unknown>>;
   attachments: Array<Record<string, unknown>>;
 }
-export interface ExperimentSourceReference {
-  id: string;
-  recognitionJobId: string;
-  confirmedSubmissionId?: string;
-  submissionRevision?: number;
-  currentSubmissionId?: string;
-  currentSubmissionRevision?: number;
-  sourceOwner: 'DATA_CENTER' | 'EXPERIMENT';
-  recognitionMode: 'FREEFORM' | 'TEMPLATE_GUIDED';
-  sourceFileId: string;
-  sourceFileName: string;
-  sourceFileSha256: string;
-  experimentBoundaryId: string;
-  sampleBoundaryId: string;
-  logicalSampleKey: string;
-  sourceGroupKeys: string[];
-  sourceCoordinates: Record<string, unknown>;
-  recognitionSnapshot: Record<string, unknown>;
-  contentHash: string;
-  sourceUpdated: boolean;
-  createdAt: string;
+export interface ExperimentTemplateDataReview {
+  templateVersionId: string;
+  contractHash: string;
+  fields: TemplateFieldDefinition[];
+  bindings: ImportBinding[];
+  values: Record<string, unknown>;
+  confirmed: boolean;
 }
 export interface ExperimentVersion {
   id: string;
@@ -226,10 +214,11 @@ export async function getExperiment(id: string) {
     await httpClient.get<ApiResponse<ExperimentDetail>>(`/api/v1/experiments/${id}/edit-model`),
   );
 }
-export async function getExperimentSources(id: string) {
-  return data(
-    await httpClient.get<ApiResponse<ExperimentSourceReference[]>>(`/api/v1/experiments/${id}/sources`),
-  );
+export async function getExperimentTemplateDataReview(id: string) {
+  return data(await httpClient.get<ApiResponse<ExperimentTemplateDataReview>>(`/api/v1/experiments/${id}/data-review`));
+}
+export async function confirmExperimentTemplateData(id: string, revision: number) {
+  return data(await httpClient.post<ApiResponse<ExperimentDetail>>(`/api/v1/experiments/${id}/confirm-data`, { revision }));
 }
 export async function exportExperiment(id: string) {
   const response = await httpClient.get<Blob>(`/api/v1/experiments/${id}/export`, {

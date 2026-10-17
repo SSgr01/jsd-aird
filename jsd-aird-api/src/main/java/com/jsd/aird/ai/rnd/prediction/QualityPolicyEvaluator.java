@@ -11,9 +11,10 @@ import java.util.List;
 public class QualityPolicyEvaluator {
     public Result evaluate(JsonNode policy,JsonNode metrics,String domain,double coverage,
                            List<String> warningCodes,BigDecimal formulaTotal){
-        var fallback=policy.path("defaultTrustLevel").asText();
-        var explanation=policy.path("defaultExplanation").asText("采用已发布质量策略的默认可信等级");
-        var rules=new java.util.ArrayList<JsonNode>();policy.path("rules").forEach(rules::add);
+        var configured=policy==null?com.fasterxml.jackson.databind.node.MissingNode.getInstance():policy;
+        var fallback=configured.path("defaultTrustLevel").asText("MEDIUM");
+        var explanation=configured.path("defaultExplanation").asText("结合模型验证结果和本次输入条件生成。");
+        var rules=new java.util.ArrayList<JsonNode>();configured.path("rules").forEach(rules::add);
         rules.sort(java.util.Comparator.comparingInt(x->x.path("priority").asInt()));
         for(var rule:rules){if(matches(rule.path("when"),metrics,domain,coverage,warningCodes,formulaTotal))
             return new Result(rule.path("trustLevel").asText(),rule.path("explanation").asText());}

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { DataFieldValueView } from '@/services/data/data-api';
-import { importFieldForCell, importFieldInSheetRow, normalizeImportCellAddress } from './data-import-workbench-utils';
+import { importFieldForCell, importFieldInSheetRow, isPendingImportMapping, normalizeImportCellAddress } from './data-import-workbench-utils';
 
 const field = (overrides: Partial<DataFieldValueView> = {}): DataFieldValueView => ({
   recordId: 'record-1',
@@ -41,5 +41,14 @@ describe('data import workbench cell identity', () => {
     expect(importFieldInSheetRow([other, field()], {
       sheetId: 'sheet-1', sheetName: 'Sheet1', address: 'A2',
     }, 2)).toEqual(field());
+  });
+});
+
+describe('pending import mappings', () => {
+  it('treats explicit ignore as resolved while keeping incomplete mappings pending', () => {
+    expect(isPendingImportMapping({ action: 'IGNORE', fieldCode: 'OPTIONAL_FIELD' })).toBe(false);
+    expect(isPendingImportMapping({ action: 'PENDING', fieldCode: 'FIELD' })).toBe(true);
+    expect(isPendingImportMapping({ action: 'MAP' })).toBe(true);
+    expect(isPendingImportMapping({ action: 'MAP', fieldCode: 'FIELD' })).toBe(false);
   });
 });

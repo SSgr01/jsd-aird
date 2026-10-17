@@ -361,7 +361,7 @@ export function TemplatesPage() {
   ];
 
   return <div className="business-page templates-catalog-page">
-    <div className="page-heading"><div><Typography.Title level={2}>模板查看</Typography.Title><Typography.Text type="secondary">管理模板、发布版本和草稿版本；每个模板仅展示一条记录。</Typography.Text></div><Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新建模板</Button></div>
+    <div className="page-heading"><div><Typography.Title level={2}>模板查看</Typography.Title><Typography.Text type="secondary">查看模板，管理草稿和已发布版本。</Typography.Text></div><Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新建模板</Button></div>
     <CategoryCardGrid categories={categoryCards} activeId={uncategorized ? 'UNCATEGORIZED' : categoryId ?? 'ALL'}
       onSelect={(id) => changeFilter(() => { setCategoryId(id === 'ALL' || id === 'UNCATEGORIZED' ? undefined : id); setUncategorized(id === 'UNCATEGORIZED'); })}
       onCreate={() => { categoryForm.resetFields(); setCategoryEditor('NEW'); }}
@@ -413,7 +413,7 @@ export function TemplatesPage() {
         <Form.Item name="name" label="模板名称" rules={[{ required: true, whitespace: true, message: '请输入模板名称' }]}><Input autoFocus maxLength={160} /></Form.Item>
         <Form.Item name="format" label="编辑格式" rules={[{ required: true }]}><Select options={[{ value: 'XLSX', label: 'Excel 模板' }, { value: 'DOCX', label: 'Word 模板' }]} /></Form.Item>
         <Form.Item name="category" label="分类"><Select allowClear options={categoryItems.map((item) => ({ value: item.name, label: item.name }))} /></Form.Item>
-      </Form> : <Typography.Paragraph type="secondary">前往模板上传页，选择分类并批量导入 XLSX 或 DOCX 文件。原上传地址保持兼容。</Typography.Paragraph>}
+      </Form> : <Typography.Paragraph type="secondary">选择分类并上传 XLSX 或 DOCX 模板文件。</Typography.Paragraph>}
     </Modal>
 
     <Modal title={categoryEditor === 'NEW' ? '新建分类' : '编辑分类'} open={Boolean(categoryEditor)} confirmLoading={savingCategory} onOk={() => categoryForm.submit()} onCancel={() => { setCategoryEditor(undefined); categoryForm.resetFields(); }} forceRender>

@@ -11,6 +11,8 @@ import java.sql.SQLException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -137,6 +139,52 @@ public class OptimizationRepository {
         return rows.stream().findFirst();
     }
 
+    public List<HistoryDatasetRow> historyDatasets(UUID org, String keyword) {
+        var like = "%" + (keyword == null ? "" : keyword.strip()) + "%";
+        return jdbc.query("""
+            SELECT tv.id dataset_id,t.name dataset_name,count(*) row_count,max(v.created_at) updated_at
+            FROM rnd.experiment e
+            JOIN rnd.experiment_version v ON v.organization_id=e.organization_id AND v.id=e.current_version_id
+            JOIN tpl.template_version tv ON tv.id=v.template_version_id
+            JOIN tpl.template t ON t.id=tv.template_id AND t.organization_id=e.organization_id
+            WHERE e.organization_id=? AND e.deleted=false AND e.status='COMPLETED'
+              AND v.status='COMPLETED'
+              AND (t.name ILIKE ? OR e.title ILIKE ? OR e.experiment_no ILIKE ?)
+            GROUP BY tv.id,t.name ORDER BY max(v.created_at) DESC,t.name
+            """, (r,n)->new HistoryDatasetRow(r.getObject("dataset_id",UUID.class),r.getString("dataset_name"),
+                r.getInt("row_count"),instant(r,"updated_at")),org,like,like,like);
+    }
+
+    public List<HistoryRecordRow> historyRecords(UUID org, UUID templateVersionId) {
+        return jdbc.query("""
+            SELECT e.id experiment_id,v.id version_id,e.experiment_no,e.title,v.edit_model_jsonb,v.created_at
+            FROM rnd.experiment e
+            JOIN rnd.experiment_version v ON v.organization_id=e.organization_id AND v.id=e.current_version_id
+            WHERE e.organization_id=? AND e.deleted=false AND e.status='COMPLETED' AND v.status='COMPLETED'
+              AND v.template_version_id=?
+            ORDER BY v.created_at,e.experiment_no,e.id
+            """,(r,n)->new HistoryRecordRow(r.getObject("experiment_id",UUID.class),r.getObject("version_id",UUID.class),
+                r.getString("experiment_no"),r.getString("title"),read(r,"edit_model_jsonb"),instant(r,"created_at")),org,templateVersionId);
+    }
+
+    public Optional<String> materialName(String materialId) {
+        try {
+            return jdbc.query("SELECT name FROM mdm.material WHERE id=? AND status<>'RETIRED'",
+                    (rs,n)->rs.getString("name"),UUID.fromString(materialId)).stream().findFirst();
+        } catch (IllegalArgumentException ignored) {
+            return Optional.empty();
+        }
+    }
+
+    public Map<String,String> historyFieldNames(UUID organizationId) {
+        var names = new LinkedHashMap<String,String>();
+        jdbc.query("SELECT dictionary_code,display_name FROM tpl.standard_field_dictionary WHERE status='ACTIVE' ORDER BY version_no",
+                (rs,n)->Map.entry(rs.getString(1),rs.getString(2))).forEach(entry->names.put(entry.getKey(),entry.getValue()));
+        jdbc.query("SELECT field_code,name FROM ai.input_field WHERE organization_id=? AND status<>'RETIRED'",
+                (rs,n)->Map.entry(rs.getString(1),rs.getString(2)),organizationId).forEach(entry->names.putIfAbsent(entry.getKey(),entry.getValue()));
+        return names;
+    }
+
     public boolean insertRun(UUID id, UUID org, UUID user, String key, String requestId, String requestHash,
                              JsonNode request, JsonNode bindings, long seed, JsonNode searchConfig,
                              BaselineRow baseline, String baselineHash, JsonNode baselineSnapshot,
@@ -148,9 +196,10 @@ public class OptimizationRepository {
               heartbeat_at,baseline_type,baseline_entity_id,baseline_version_id,baseline_content_hash,
               baseline_snapshot_jsonb,optimization_config_jsonb)
             VALUES(?,?, 'EXPERIMENT_OPTIMIZATION','QUEUED',?,?,?,?,'{}'::jsonb,?,?,'ai-rnd.v1',?,
-              'formula-search.v2',?,'QUEUED',NULL,0,'QUEUED',now(),?,?,?,?,?,?)
+              ?,?,'QUEUED',NULL,0,'QUEUED',now(),?,?,?,?,?,?)
             ON CONFLICT(organization_id,idempotency_key) DO NOTHING
-            """, id,org,key,requestHash,pg(request),pg(bindings),user,requestId,seed,pg(searchConfig),
+            """, id,org,key,requestHash,pg(request),pg(bindings),user,requestId,seed,
+                "GAUSSIAN_PROCESS_EI".equals(searchConfig.path("algorithm").asText())?"gaussian-process-ei.v1":"formula-search.v2",pg(searchConfig),
                 baseline.type(),baseline.entityId(),baseline.versionId(),baselineHash,pg(baselineSnapshot),pg(optimizationConfig))==1;
     }
 
@@ -218,6 +267,8 @@ public class OptimizationRepository {
 
     public record BaselineRow(String type,UUID entityId,UUID versionId,String title,String sourceLabel,JsonNode payload,
                               UUID templateVersionId,String templateSnapshotHash,JsonNode templateSnapshot,Instant updatedAt){}
+    public record HistoryDatasetRow(UUID id,String name,int rowCount,Instant updatedAt){}
+    public record HistoryRecordRow(UUID experimentId,UUID versionId,String experimentNo,String title,JsonNode editModel,Instant updatedAt){}
     public record RunRow(UUID id,String executionStatus,String outcomeStatus,int progress,String stage,String requestId,
                          String requestHash,JsonNode request,JsonNode bindings,JsonNode result,JsonNode error,UUID createdBy,
                          UUID opsJobId,long seed,JsonNode searchConfig,String baselineType,UUID baselineEntityId,

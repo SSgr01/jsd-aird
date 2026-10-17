@@ -182,10 +182,10 @@ export function KnowledgeLibraryPage() {
       leftTitle="基础分类"
       classification={<Form layout="vertical" component={false}>
         <Form.Item label="资料范围" required><Select value={libraryScope} onChange={setLibraryScope} options={[{ value: 'INTERNAL', label: '内部资料' }, { value: 'EXTERNAL', label: '外部资料' }]} /></Form.Item>
-        <Form.Item label="保存分类" required help="同分类内文件名相似时会提示作为新版本上传"><Select allowClear value={categoryId} onChange={setCategoryId} placeholder="选择知识库分类" options={categories.map((item) => ({ value: item.id, label: item.name }))} /></Form.Item>
+        <Form.Item label="保存分类" required help="同分类下名称相近时，会提示作为新版本上传。"><Select allowClear value={categoryId} onChange={setCategoryId} placeholder="选择知识库分类" options={categories.map((item) => ({ value: item.id, label: item.name }))} /></Form.Item>
         <Form.Item label="标签"><Input value={tagsText} onChange={(event) => setTagsText(event.target.value)} placeholder="多个标签用逗号分隔" /></Form.Item>
         <Form.Item label="来源信息"><Input.TextArea rows={3} value={sourceDescription} onChange={(event) => setSourceDescription(event.target.value)} placeholder="资料来源、提供方或获取背景" /></Form.Item>
-        <Form.Item label="关联项目 / 阶段 / 任务" extra="批量上传时会应用到每个逻辑文档；新版本默认继承原文档关系。"><ProjectRelationPicker value={projectRelations} onChange={setProjectRelations} /></Form.Item>
+        <Form.Item label="关联项目 / 阶段 / 任务" extra="批量上传时，所选关联会应用到所有文件；新版本沿用原有关联。"><ProjectRelationPicker value={projectRelations} onChange={setProjectRelations} /></Form.Item>
         <Form.Item label="权限可见" required><Select defaultValue="研发部可见" options={[{ value: '研发部可见', label: '研发部可见' }, { value: '全员可见', label: '全员可见' }, { value: '项目组可见', label: '项目组可见' }]} /></Form.Item>
       </Form>}
       accept=".pdf,.docx,.doc,.xlsx,.xls,.pptx,.ppt,.csv,.txt,.md,.png,.jpg,.jpeg,.tif,.tiff,.wav,.mp3,.m4a,.aac,.flac,.ogg,.opus"

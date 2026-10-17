@@ -15,7 +15,7 @@ import joblib
 import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
-from scipy.stats import spearmanr
+from scipy.stats import norm, spearmanr
 from sklearn.base import BaseEstimator, ClassifierMixin, clone
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.feature_extraction import DictVectorizer
@@ -23,6 +23,8 @@ from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import Matern, WhiteKernel
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, f1_score, mean_absolute_error, mean_squared_error, r2_score
+from sklearn.model_selection import KFold, StratifiedKFold
+from sklearn.model_selection import KFold, StratifiedKFold
 from baybe.campaign import Campaign
 from baybe.parameters import NumericalDiscreteParameter
 from baybe.recommenders import BotorchRecommender
@@ -260,6 +262,159 @@ class FormulaModelV2Service:
             reasons=[],
         )
 
+    def train_workbench(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Train an exploratory model directly from selected table columns."""
+        request_id = str(request.get("requestId") or "")
+        x_columns = request.get("xColumns")
+        y_column = request.get("yColumn")
+        rows = request.get("rows")
+        output = request.get("output")
+        if not request_id or not isinstance(x_columns, list) or not x_columns or not isinstance(y_column, dict):
+            raise FormulaModelError(ErrorCode.INSUFFICIENT_DATA, "请至少选择一列 X 和一列 Y")
+        if not isinstance(rows, list) or len(rows) > 20000:
+            raise FormulaModelError(ErrorCode.INSUFFICIENT_DATA, "本次数据量超出单次建模范围，请缩小数据集")
+        x_codes = [str(column.get("code") or "") for column in x_columns]
+        y_code = str(y_column.get("code") or "")
+        if any(not code for code in x_codes) or len(set(x_codes)) != len(x_codes) or y_code in x_codes:
+            raise FormulaModelError(ErrorCode.INVALID_SNAPSHOT, "X/Y 列选择无效，请重新选择")
+        if not isinstance(output, str) or not output:
+            raise FormulaModelError(ErrorCode.INVALID_SNAPSHOT, "模型文件保存地址无效")
+
+        numeric_y = str(y_column.get("kind") or "").upper() == "NUMERIC"
+        target_type = ValueTypeV2.CONTINUOUS if numeric_y else ValueTypeV2.CATEGORICAL
+        feature_rows: list[dict[str, Any]] = []
+        targets: list[float | str] = []
+        for row in rows:
+            values = row.get("values") if isinstance(row, dict) else None
+            if not isinstance(values, dict):
+                continue
+            y_value = values.get(y_code)
+            if y_value is None or (isinstance(y_value, str) and not y_value.strip()):
+                continue
+            features: dict[str, Any] = {}
+            valid = True
+            for column in x_columns:
+                code = str(column.get("code") or "")
+                value = values.get(code)
+                if value is None or (isinstance(value, str) and not value.strip()):
+                    valid = False
+                    break
+                if str(column.get("kind") or "").upper() == "NUMERIC":
+                    try:
+                        number = float(value)
+                    except (TypeError, ValueError):
+                        valid = False
+                        break
+                    if not np.isfinite(number):
+                        valid = False
+                        break
+                    features[code] = number
+                else:
+                    features[code] = str(value).strip()
+            if not valid:
+                continue
+            if numeric_y:
+                try:
+                    target = float(y_value)
+                except (TypeError, ValueError):
+                    continue
+                if not np.isfinite(target):
+                    continue
+                targets.append(target)
+            else:
+                targets.append(str(y_value).strip())
+            feature_rows.append(features)
+
+        sample_count = len(targets)
+        if sample_count < 6:
+            raise FormulaModelError(ErrorCode.INSUFFICIENT_DATA, f"X/Y 组合只有 {sample_count} 条完整记录，至少需要 6 条")
+        target = np.asarray(targets, dtype=float if numeric_y else str)
+        classes: list[str] = []
+        if not numeric_y:
+            labels, counts = np.unique(target.astype(str), return_counts=True)
+            if len(labels) < 2:
+                raise FormulaModelError(ErrorCode.INSUFFICIENT_DATA, "Y 列只有一种结果，无法训练分类模型")
+            if int(counts.min()) < 2:
+                raise FormulaModelError(ErrorCode.INSUFFICIENT_DATA, "Y 列中每种结果至少需要 2 条记录")
+            classes = labels.tolist()
+
+        vectorizer = DictVectorizer(sparse=False)
+        features = vectorizer.fit_transform(feature_rows)
+        seed = int(request.get("seed") or 17)
+        if numeric_y:
+            # Keep at least two rows in each validation fold so R² remains a
+            # finite, useful metric even for the minimum supported data size.
+            fold_count = min(5, sample_count // 2)
+            folds = np.empty(sample_count, dtype=int)
+            for fold, (_, valid) in enumerate(KFold(n_splits=fold_count, shuffle=True, random_state=seed).split(features)):
+                folds[valid] = fold
+            algorithms = ["GAUSSIAN_PROCESS", "RANDOM_FOREST", "LIGHTGBM"] if sample_count <= 200 else ["RANDOM_FOREST", "LIGHTGBM"]
+        else:
+            fold_count = min(5, int(np.unique(target, return_counts=True)[1].min()))
+            folds = np.empty(sample_count, dtype=int)
+            splitter = StratifiedKFold(n_splits=fold_count, shuffle=True, random_state=seed)
+            for fold, (_, valid) in enumerate(splitter.split(features, target)):
+                folds[valid] = fold
+            algorithms = ["RANDOM_FOREST", "LIGHTGBM", "CATBOOST"]
+
+        candidates = self._candidates(target_type, algorithms, seed, classes)
+        results: list[tuple[float, str, Any, dict[str, Any]]] = []
+        for name, estimator in candidates:
+            try:
+                metrics, loss = self._cross_validate(estimator, features, target, folds, target_type, classes)
+                fitted = clone(estimator).fit(features, target)
+                results.append((loss, name, fitted, metrics))
+            except Exception:
+                # Keep the workbench usable when one optional learner cannot fit
+                # a particular small or highly categorical data set.
+                continue
+        if not results:
+            raise FormulaModelError(ErrorCode.INSUFFICIENT_DATA, "所选数据无法完成模型训练；请检查类别数量或更换 X/Y 列")
+        results.sort(key=lambda item: (item[0], item[1]))
+        _, selected_algorithm, model, selected_metrics = results[0]
+        metrics = dict(selected_metrics)
+        metrics["selectedAlgorithm"] = selected_algorithm
+        metrics["candidateCount"] = len(results)
+        metrics["comparison"] = [dict(algorithm=name, loss=loss, **item_metrics)
+                                 for loss, name, _, item_metrics in results]
+        metrics["validationFolds"] = fold_count
+        domain = self._domain(features, vectorizer.get_feature_names_out().tolist())
+
+        model_payload = io.BytesIO()
+        joblib.dump({
+            "contractVersion": "modeling-workbench.v1",
+            "xColumns": x_columns,
+            "yColumn": y_column,
+            "valueType": str(target_type),
+            "classes": classes,
+            "vectorizer": vectorizer,
+            "model": model,
+            "metrics": metrics,
+            "applicabilityDomain": domain,
+        }, model_payload)
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+            bundle.writestr("model.joblib", model_payload.getvalue())
+            bundle.writestr("model-card.json", json.dumps({
+                "requestId": request_id,
+                "xColumns": x_columns,
+                "yColumn": y_column,
+                "rowCount": sample_count,
+                "metrics": metrics,
+                "applicabilityDomain": domain,
+            }, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+        bundle_bytes = archive.getvalue()
+        self._write(output, bundle_bytes)
+        return {
+            "requestId": request_id,
+            "status": "SUCCEEDED",
+            "rowCount": sample_count,
+            "excludedRowCount": len(rows) - sample_count,
+            "metrics": metrics,
+            "applicabilityDomain": domain,
+            "modelBundle": {"url": output, "sha256": _sha(bundle_bytes)},
+        }
+
     def score(self, request: ScoreRequestV2) -> ScoreResponseV2:
         """Score each pinned model independently without hiding target-local failures."""
         outcomes: list[TargetSuccessV2 | TargetBlockedV2 | TargetFailedV2] = []
@@ -278,6 +433,9 @@ class FormulaModelV2Service:
 
                 bundle_bytes = self._read(binding.model_bundle.url, binding.model_bundle.sha256)
                 bundle = self._load_bundle(bundle_bytes)
+                if bundle.get("contractVersion") == "modeling-workbench.v1":
+                    outcomes.append(self._score_workbench(binding, bundle, request.inputs))
+                    continue
                 self._verify_binding(binding, bundle)
                 vectorizer = bundle["vectorizer"]
                 feature_names = vectorizer.get_feature_names_out().tolist()
@@ -313,14 +471,21 @@ class FormulaModelV2Service:
                 applicability = self._applicability(vector[0], feature_names,
                                                      binding.applicability_domain,
                                                      bundle["applicabilityDomain"], relevant_features)
-                if applicability.status == DomainStatusV2.OUT_OF_DOMAIN:
+                if applicability.status == DomainStatusV2.OUT_OF_DOMAIN and not request.allow_extrapolation:
                     outcomes.append(TargetBlockedV2(target_id=target_id, model_version_id=model_id,
                         code="OUT_OF_DOMAIN", message="输入超出模型适用域",
-                        detail={"distance": applicability.distance, "reasons": applicability.reasons}))
+                        detail={"distance": applicability.distance, "reasons": applicability.reasons,
+                                "violations": [{"fieldCode": name, "value": float(vector[0][index]),
+                                                "minimum": binding.applicability_domain["minimum"][index],
+                                                "maximum": binding.applicability_domain["maximum"][index]}
+                                               for index, name in enumerate(feature_names)
+                                               if name in applicability.reasons]}))
                     continue
                 result = self._typed_result(binding, bundle, vector)
                 outcomes.append(TargetSuccessV2(target_id=target_id, model_version_id=model_id,
-                    result=result, applicability=applicability, warnings=[]))
+                    result=result, applicability=applicability,
+                    warnings=[{"code": "EXTRAPOLATION", "message": "超出训练数据范围，预测结果需实验验证"}]
+                    if applicability.status == DomainStatusV2.OUT_OF_DOMAIN else []))
             except FormulaModelError as exc:
                 outcomes.append(TargetFailedV2(target_id=target_id, model_version_id=model_id,
                     code=str(exc.code), message=exc.message, detail=exc.details))
@@ -337,6 +502,48 @@ class FormulaModelV2Service:
         outcome = "SUCCEEDED" if succeeded == len(outcomes) else "PARTIAL" if succeeded else "BLOCKED"
         return ScoreResponseV2(request_id=request.request_id, run_id=request.run_id,
                                execution_status="SUCCEEDED", outcome_status=outcome, results=outcomes)
+
+    def _score_workbench(self, binding: Any, bundle: dict[str, Any], inputs: dict[str, Any]) -> Any:
+        columns = bundle.get("xColumns", [])
+        fields = binding.input_scheme.fields
+        y = bundle.get("yColumn", {})
+        if ([(c["code"], c.get("unit"), "NUMBER" if c["kind"] == "NUMERIC" else "CATEGORY") for c in columns]
+                != [(f.code, f.unit, f.value_type) for f in fields]
+                or bundle.get("valueType") != str(binding.target.value_type)
+                or y.get("unit") != binding.target.unit
+                or bundle.get("classes", []) != binding.target.classes):
+            raise FormulaModelError(ErrorCode.INVALID_SNAPSHOT, "模型字段与注册信息不一致，请在模型中心检查此版本")
+        vectorizer = bundle["vectorizer"]
+        names = vectorizer.get_feature_names_out().tolist()
+        record: dict[str, Any] = {}
+        for column in columns:
+            code = column["code"]
+            name = column.get("name", code)
+            value = inputs.get(code)
+            problem = None
+            if value is None or isinstance(value, str) and not value.strip():
+                problem = ("MISSING_REQUIRED_X", f"请填写{name}")
+            elif column["kind"] == "NUMERIC":
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or not np.isfinite(value):
+                    problem = ("INVALID_X_VALUE", f"{name}需要填写有效数字")
+                else:
+                    record[code] = float(value)
+            else:
+                text = str(value).strip()
+                if f"{code}={text}" not in names:
+                    problem = ("UNKNOWN_CATEGORY", f"{name}没有“{text}”的训练记录，请选择已有类别")
+                else:
+                    record[code] = text
+            if problem:
+                return TargetBlockedV2(target_id=binding.target.id, model_version_id=binding.model_version_id,
+                                       code=problem[0], message=problem[1], detail={"fieldCode": code, "fieldName": name})
+        vector = vectorizer.transform([record])
+        applicability = self._applicability(vector[0], names, binding.applicability_domain,
+                                             bundle["applicabilityDomain"])
+        return TargetSuccessV2(target_id=binding.target.id, model_version_id=binding.model_version_id,
+            result=self._typed_result(binding, bundle, vector), applicability=applicability,
+            warnings=[{"code": "EXTRAPOLATION", "message": "超出历史实验范围，结果需要实验验证"}]
+            if applicability.status == DomainStatusV2.OUT_OF_DOMAIN else [])
 
     def recommend(self, request: RecommendRequestV2) -> RecommendResponseV2:
         """Deterministic, model-only formula search for the V2 boundary.
@@ -412,7 +619,7 @@ class FormulaModelV2Service:
                     scored = self.score(ScoreRequestV2(
                         request_id=f"{request.request_id}:score:{index}", seed=request.seed,
                         run_id=request.run_id, formula=formula, inputs=candidate_inputs,
-                        model_bindings=request.model_bindings))
+                        model_bindings=request.model_bindings, allow_extrapolation=True))
                     if scored.execution_status == "FAILED":
                         had_execution_failure = True
                         failure = next((item for item in scored.results if getattr(item, "status", None) == "FAILED"), None)
@@ -473,7 +680,7 @@ class FormulaModelV2Service:
                 candidate_inputs = self._candidate_inputs(request, index, len(formulas))
                 scored = self.score(ScoreRequestV2(request_id=f"{request.request_id}:score:{index}", seed=request.seed,
                                                     run_id=request.run_id, formula=formula, inputs=candidate_inputs,
-                                                    model_bindings=request.model_bindings))
+                                                    model_bindings=request.model_bindings, allow_extrapolation=True))
                 if scored.execution_status == "FAILED":
                     had_execution_failure = True
                     failure = next((item for item in scored.results if getattr(item, "status", None) == "FAILED"), None)
@@ -523,6 +730,197 @@ class FormulaModelV2Service:
                                                     "acceptedCount": len(accepted),
                                                     "algorithm": "BayBE ask-score-tell adaptive campaign" if engine == "BAYBE" else "stable deterministic pool"})
 
+    def recommend_from_history(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Fit a Gaussian process to measured X/Y rows and maximize EI."""
+        features = request.get("features")
+        rows = request.get("rows")
+        target = request.get("target")
+        direction = str(request.get("direction", "MAXIMIZE")).upper()
+        if not isinstance(features, list) or not features or not isinstance(rows, list) or not isinstance(target, str):
+            raise FormulaModelError(ErrorCode.UNSUPPORTED_CONTRACT, "请选择 X 因素、Y 指标和历史实验数据")
+        if direction not in {"MAXIMIZE", "MINIMIZE"}:
+            raise FormulaModelError(ErrorCode.UNSUPPORTED_CONTRACT, "优化方向只能是提高或降低")
+
+        selected_features: list[dict[str, Any]] = []
+        for feature in features:
+            if not isinstance(feature, dict) or not feature.get("code"):
+                raise FormulaModelError(ErrorCode.UNSUPPORTED_CONTRACT, "X 因素格式不正确")
+            kind = str(feature.get("kind", "NUMERIC")).upper()
+            if kind not in {"NUMERIC", "CATEGORICAL"}:
+                raise FormulaModelError(ErrorCode.UNSUPPORTED_CONTRACT, "X 因素只支持数值或分类字段")
+            selected_features.append({**feature, "kind": kind, "code": str(feature["code"])})
+
+        data: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            try:
+                y = float(row[target])
+                record: dict[str, Any] = {"__y": y}
+                valid = np.isfinite(y)
+                for feature in selected_features:
+                    code = feature["code"]
+                    value = row.get(code)
+                    if feature["kind"] == "NUMERIC":
+                        value = float(value)
+                        valid = valid and np.isfinite(value)
+                    else:
+                        value = str(value).strip()
+                        valid = valid and bool(value)
+                    record[code] = value
+                if valid:
+                    data.append(record)
+            except (TypeError, ValueError, OverflowError):
+                continue
+        if len(data) < 4:
+            raise FormulaModelError(ErrorCode.INSUFFICIENT_DATA, "至少需要 4 条 X 和 Y 都填写完整的历史实验")
+
+        categories: dict[str, list[str]] = {}
+        for feature in selected_features:
+            if feature["kind"] == "CATEGORICAL":
+                categories[feature["code"]] = sorted({str(row[feature["code"]]) for row in data})
+                if len(categories[feature["code"]]) < 2:
+                    raise FormulaModelError(ErrorCode.INSUFFICIENT_DATA,
+                                            f"X 因素“{feature.get('name', feature['code'])}”只有一个取值，无法比较其影响")
+
+        def bounds(feature: dict[str, Any]) -> tuple[float, float]:
+            code = feature["code"]
+            values = [float(row[code]) for row in data]
+            low = float(feature.get("minimum", min(values)))
+            high = float(feature.get("maximum", max(values)))
+            if not np.isfinite(low) or not np.isfinite(high) or low >= high:
+                raise FormulaModelError(ErrorCode.UNSUPPORTED_CONTRACT,
+                                        f"X 因素“{feature.get('name', code)}”的最小值必须小于最大值")
+            return low, high
+
+        feature_by_code = {feature["code"]: feature for feature in selected_features}
+        composition_groups: list[tuple[list[str], float]] = []
+        grouped_codes: set[str] = set()
+        raw_groups = request.get("compositionGroups", [])
+        if raw_groups is None:
+            raw_groups = []
+        if not isinstance(raw_groups, list):
+            raise FormulaModelError(ErrorCode.UNSUPPORTED_CONTRACT, "配方比例设置格式不正确")
+        for group in raw_groups:
+            codes = group.get("codes") if isinstance(group, dict) else None
+            try:
+                codes = list(dict.fromkeys(str(code) for code in codes))
+                total = float(group.get("total"))
+            except (TypeError, ValueError, AttributeError):
+                raise FormulaModelError(ErrorCode.UNSUPPORTED_CONTRACT, "配方比例设置格式不正确")
+            if len(codes) < 2 or any(code not in feature_by_code or feature_by_code[code]["kind"] != "NUMERIC" for code in codes):
+                raise FormulaModelError(ErrorCode.UNSUPPORTED_CONTRACT, "配方比例设置与所选 X 因素不匹配")
+            if grouped_codes.intersection(codes) or not np.isfinite(total):
+                raise FormulaModelError(ErrorCode.UNSUPPORTED_CONTRACT, "配方比例设置重复或总量无效")
+            limits = [bounds(feature_by_code[code]) for code in codes]
+            if total < sum(low for low, _ in limits) - 1e-8 or total > sum(high for _, high in limits) + 1e-8:
+                raise FormulaModelError(ErrorCode.UNSUPPORTED_CONTRACT,
+                                        "这组配方比例范围无法保持总量一致，请调整比例范围后重试")
+            grouped_codes.update(codes)
+            composition_groups.append((codes, total))
+
+        def encode(record: dict[str, Any]) -> list[float]:
+            vector: list[float] = []
+            for feature in selected_features:
+                code = feature["code"]
+                if feature["kind"] == "NUMERIC":
+                    low, high = bounds(feature)
+                    vector.append((float(record[code]) - low) / max(high - low, 1e-9))
+                else:
+                    vector.extend(1.0 if str(record[code]) == label else 0.0 for label in categories[code])
+            return vector
+
+        x = np.asarray([encode(row) for row in data], dtype=float)
+        observed = np.asarray([row["__y"] for row in data], dtype=float)
+        if np.unique(np.round(x, 10), axis=0).shape[0] < 2 or np.std(observed) < 1e-12:
+            raise FormulaModelError(ErrorCode.INSUFFICIENT_DATA, "历史数据中的 X 或 Y 没有变化，无法学习优化方向")
+
+        seed = int(request.get("seed", 0)) & 0xFFFFFFFF
+        rng = np.random.default_rng(seed)
+        candidate_count = max(1, min(int(request.get("candidateCount", 4)), 8))
+        pool_size = max(2048, min(16384, candidate_count * 1024))
+        candidates: list[dict[str, Any]] = []
+        attempt_limit = pool_size * (20 if composition_groups else 1)
+        for _ in range(attempt_limit):
+            candidate: dict[str, Any] = {}
+            for feature in selected_features:
+                code = feature["code"]
+                if code in grouped_codes:
+                    continue
+                if feature["kind"] == "NUMERIC":
+                    low, high = bounds(feature)
+                    candidate[code] = float(rng.uniform(low, high))
+                else:
+                    candidate[code] = str(rng.choice(categories[code]))
+            feasible = True
+            for codes, total in composition_groups:
+                derived_code = max(codes, key=lambda code: bounds(feature_by_code[code])[1] - bounds(feature_by_code[code])[0])
+                assigned = 0.0
+                for code in codes:
+                    if code == derived_code:
+                        continue
+                    low, high = bounds(feature_by_code[code])
+                    value = float(rng.uniform(low, high))
+                    candidate[code] = value
+                    assigned += value
+                low, high = bounds(feature_by_code[derived_code])
+                remainder = total - assigned
+                if remainder < low - 1e-8 or remainder > high + 1e-8:
+                    feasible = False
+                    break
+                candidate[derived_code] = float(np.clip(remainder, low, high))
+            if feasible:
+                candidates.append(candidate)
+                if len(candidates) >= pool_size:
+                    break
+        if not candidates:
+            raise FormulaModelError(ErrorCode.NO_FEASIBLE_CANDIDATE,
+                                    "这组配方比例范围无法生成总量一致的新方案，请调整比例范围")
+        encoded_candidates = np.asarray([encode(row) for row in candidates], dtype=float)
+
+        kernel = Matern(length_scale=0.5, nu=2.5) + WhiteKernel(noise_level=1e-5, noise_level_bounds="fixed")
+        gp = GaussianProcessRegressor(kernel=kernel, normalize_y=True, alpha=1e-8,
+                                      random_state=seed, n_restarts_optimizer=0)
+        oriented_y = observed if direction == "MAXIMIZE" else -observed
+        gp.fit(x, oriented_y)
+        mean, std = gp.predict(encoded_candidates, return_std=True)
+        improvement = mean - float(np.max(oriented_y)) - 0.01 * max(float(np.std(observed)), 1e-9)
+        z = np.divide(improvement, std, out=np.zeros_like(improvement), where=std > 1e-12)
+        ei = improvement * norm.cdf(z) + std * norm.pdf(z)
+
+        history_vectors = {tuple(np.round(row, 8)) for row in x}
+        ranked = np.argsort(-ei)
+        selected: list[dict[str, Any]] = []
+        selected_vectors: list[np.ndarray] = []
+        for index in ranked:
+            vector = encoded_candidates[index]
+            if tuple(np.round(vector, 8)) in history_vectors:
+                continue
+            if any(np.linalg.norm(vector - prior) < 0.025 for prior in selected_vectors):
+                continue
+            selected_vectors.append(vector)
+            selected.append({
+                "values": candidates[index],
+                "predictedValue": float(mean[index] if direction == "MAXIMIZE" else -mean[index]),
+                "uncertainty": float(std[index]),
+                "expectedImprovement": float(max(ei[index], 0.0)),
+            })
+            if len(selected) >= candidate_count:
+                break
+        if not selected:
+            raise FormulaModelError(ErrorCode.NO_FEASIBLE_CANDIDATE, "当前搜索范围内没有新的实验组合")
+        return {
+            "status": "READY" if len(selected) == candidate_count else "PARTIAL",
+            "candidates": selected,
+            "searchEngine": "GAUSSIAN_PROCESS_EI",
+            "searchEvidence": {
+                "trainingRowCount": len(data), "featureCount": len(selected_features),
+                "kernel": "Matern 5/2 + WhiteKernel", "acquisition": "Expected Improvement",
+                "bestObservedValue": float(max(observed) if direction == "MAXIMIZE" else min(observed)),
+                "candidatePoolSize": pool_size,
+            },
+        }
+
     def _search_engine(self, request: RecommendRequestV2) -> tuple[str, str]:
         """Select the search implementation from the frozen Y semantics."""
         has_continuous = any(binding.target.value_type == ValueTypeV2.CONTINUOUS
@@ -557,7 +955,7 @@ class FormulaModelV2Service:
         # deterministic strategy selection for this narrow case.
         if engine == "BAYBE" and len(pool) <= 2:
             engine, search_strategy = "DETERMINISTIC_CANDIDATE_POOL", "DISCRETE_DETERMINISTIC_POOL"
-        scored_pool: list[tuple[FormulaV2, dict[str, Any], list[TargetSuccessV2], float, float, str]] = []
+        scored_pool: list[tuple[FormulaV2, dict[str, Any], list[TargetSuccessV2], float, float, str, bool]] = []
         had_failure = False
         failure_code: str | None = None
         failure_message: str | None = None
@@ -596,9 +994,10 @@ class FormulaModelV2Service:
             keys = set(baseline_vector) | set(current)
             distance = sum(abs(current.get(k, 0.0) - baseline_vector.get(k, 0.0)) for k in keys) / max(target_total, 1e-9)
             distance += self._input_distance(request.fixed_inputs, candidate_inputs, request.constraints)
-            domain = "NEAR_BOUNDARY" if any(s.applicability.status == "NEAR_BOUNDARY" for s in successes) else "IN_DOMAIN"
-            scored_pool.append((formula, candidate_inputs, successes, score, distance,
-                                domain if mandatory_ok else "GOAL_MISS"))
+            domain_statuses = {str(s.applicability.status) for s in successes}
+            domain = ("OUT_OF_DOMAIN" if "OUT_OF_DOMAIN" in domain_statuses else
+                      "NEAR_BOUNDARY" if "NEAR_BOUNDARY" in domain_statuses else "IN_DOMAIN")
+            scored_pool.append((formula, candidate_inputs, successes, score, distance, domain, mandatory_ok))
             # A bounded monotone utility lets BayBE compare any result type
             # without encoding scientific thresholds in the optimizer.
             return float(score / (1.0 + abs(score)))
@@ -657,51 +1056,109 @@ class FormulaModelV2Service:
         used: set[str] = set()
         missing_reasons: dict[str, str] = {}
         non_control = [item for item in scored_pool if item[0] != baseline]
-        goal_satisfied = [item for item in non_control if item[5] != "GOAL_MISS"]
+        baseline_choice = next((item for item in scored_pool if item[0] == baseline), None)
+        baseline_score = baseline_choice[3] if baseline_choice else float("-inf")
+
+        def improves_baseline(item: tuple[FormulaV2, dict[str, Any], list[TargetSuccessV2], float, float, str, bool]) -> bool:
+            return item[3] > baseline_score + 1e-9
+
+        goal_satisfied = [item for item in non_control if item[6]]
         in_domain = [item for item in goal_satisfied if item[5] == "IN_DOMAIN"]
         for strategy in strategies:
-            choice: tuple[FormulaV2, dict[str, Any], list[TargetSuccessV2], float, float, str] | None = None
+            choice: tuple[FormulaV2, dict[str, Any], list[TargetSuccessV2], float, float, str, bool] | None = None
             if strategy == "CONTROL":
                 choice = next((item for item in scored_pool if item[0] == baseline), None)
             else:
                 feasible = [item for item in scored_pool
-                            if item[5] != "GOAL_MISS" and item[0] != baseline
+                            if item[6] and item[5] != "OUT_OF_DOMAIN" and item[0] != baseline
                             and self._candidate_fingerprint(item[0], item[1]) not in used]
                 if strategy == "CONSERVATIVE":
-                    feasible = [item for item in feasible if item[5] == "IN_DOMAIN"]
+                    feasible = [item for item in feasible if item[5] == "IN_DOMAIN" and improves_baseline(item)]
                     choice = min(feasible, key=lambda item: (item[4], -item[3]), default=None)
                 elif strategy == "BALANCED":
-                    feasible = [item for item in feasible if item[5] == "IN_DOMAIN"]
+                    feasible = [item for item in feasible if item[5] == "IN_DOMAIN" and improves_baseline(item)]
                     choice = max(feasible, key=lambda item: (item[3], -item[4]), default=None)
                 elif strategy == "EXPLORATORY":
                     choice = max(feasible, key=lambda item: (item[4], item[3]), default=None)
+                if choice is None:
+                    # Keep the strict, in-domain result as the preferred
+                    # result. If that is unavailable, offer a real
+                    # near-boundary experiment for validation before falling
+                    # back to an in-domain candidate that misses a hard goal.
+                    # Never suggest an out-of-domain candidate.
+                    alternatives = [item for item in scored_pool
+                                    if item[5] == "NEAR_BOUNDARY" and item[0] != baseline
+                                    and self._candidate_fingerprint(item[0], item[1]) not in used]
+                    if strategy in {"CONSERVATIVE", "BALANCED"}:
+                        improving_alternatives = [item for item in alternatives
+                                                  if item[6] and improves_baseline(item)]
+                        alternatives = improving_alternatives
+                    if strategy == "CONSERVATIVE":
+                        choice = min(alternatives, key=lambda item: (item[4], -item[3]), default=None)
+                    elif strategy == "BALANCED":
+                        choice = max(alternatives, key=lambda item: (item[3], -item[4]), default=None)
+                    elif strategy == "EXPLORATORY":
+                        choice = max(alternatives, key=lambda item: (item[4], item[3]), default=None)
+                    if choice is None:
+                        alternatives = [item for item in scored_pool
+                                        if not item[6] and item[5] == "IN_DOMAIN" and item[0] != baseline
+                                        and self._candidate_fingerprint(item[0], item[1]) not in used]
+                        if strategy == "CONSERVATIVE":
+                            choice = min(alternatives, key=lambda item: (item[4], -item[3]), default=None)
+                        elif strategy == "BALANCED":
+                            choice = max(alternatives, key=lambda item: (item[3], -item[4]), default=None)
+                        elif strategy == "EXPLORATORY":
+                            choice = max(alternatives, key=lambda item: (item[4], item[3]), default=None)
+                    if choice is None and strategy in {"CONSERVATIVE", "BALANCED"}:
+                        alternatives = [item for item in scored_pool
+                                        if not item[6] and item[5] == "NEAR_BOUNDARY" and item[0] != baseline
+                                        and self._candidate_fingerprint(item[0], item[1]) not in used]
+                        if strategy == "CONSERVATIVE":
+                            choice = min(alternatives, key=lambda item: (item[4], -item[3]), default=None)
+                        else:
+                            choice = max(alternatives, key=lambda item: (item[3], -item[4]), default=None)
+                    if choice is None and strategy == "EXPLORATORY":
+                        alternatives = [item for item in scored_pool
+                                        if not item[6] and item[5] == "NEAR_BOUNDARY" and item[0] != baseline
+                                        and self._candidate_fingerprint(item[0], item[1]) not in used]
+                        choice = max(alternatives, key=lambda item: (item[4], item[3]), default=None)
             if choice is None:
                 # Conservative and balanced require an in-domain candidate;
-                # exploratory may use NEAR_BOUNDARY but still must meet every
-                # mandatory goal. Keep these gates visible to the caller.
+                # exploratory may use NEAR_BOUNDARY. Never return an
+                # out-of-domain alternative as an experiment suggestion.
                 if strategy == "CONTROL":
                     missing_reasons[strategy] = "CONTROL_BASELINE_UNAVAILABLE"
                 elif not goal_satisfied:
                     missing_reasons[strategy] = "MANDATORY_GOAL_NOT_MET"
+                elif strategy in {"CONSERVATIVE", "BALANCED"} and any(
+                        item[6] and self._candidate_fingerprint(item[0], item[1]) not in used
+                        for item in non_control) and not any(
+                        item[6] and improves_baseline(item) and self._candidate_fingerprint(item[0], item[1]) not in used
+                        for item in non_control):
+                    missing_reasons[strategy] = "NO_IMPROVING_CANDIDATE"
                 elif strategy in {"CONSERVATIVE", "BALANCED"} and not in_domain:
                     missing_reasons[strategy] = "NO_IN_DOMAIN_CANDIDATE"
                 else:
                     missing_reasons[strategy] = "NO_DISTINCT_FEASIBLE_CANDIDATE"
                 continue
-            formula, candidate_inputs, successes, score, distance, domain = choice
+            formula, candidate_inputs, successes, score, distance, domain, mandatory_ok = choice
             fingerprint = self._candidate_fingerprint(formula, candidate_inputs)
             if fingerprint in used:
                 continue
             used.add(fingerprint)
             changes = self._formula_changes(baseline, formula)
-            risks = ["接近适用域边界"] if domain == "NEAR_BOUNDARY" else []
+            risks = []
+            if not mandatory_ok:
+                risks.append("TARGET_NOT_MET")
+            if domain == "NEAR_BOUNDARY":
+                risks.append("NEAR_BOUNDARY")
             selected.append(RecommendedCandidateV2(
                 candidate_id=f"{request.run_id}-{strategy.lower()}", formula=formula,
                 results=successes, score=score, strategy=strategy, inputs=candidate_inputs,
                 quality={"source": "PUBLISHED_QUALITY_POLICIES"},
                 applicability={"status": domain}, baseline_distance=distance,
                 change_summary=changes,
-                strategy_evidence={"selection": strategy, "seed": request.seed,
+                strategy_evidence={"selection": strategy, "mandatoryGoalsMet": mandatory_ok, "seed": request.seed,
                                    "baselineTotal": baseline_total, "targetTotal": float(formula.recorded_total or 0)},
                 risk_flags=risks,
                 rule_check={"javaFinalCheckRequired": True,
@@ -710,9 +1167,16 @@ class FormulaModelV2Service:
         missing = [item for item in strategies if all(candidate.strategy != item for candidate in selected)]
         for strategy in missing:
             missing_reasons.setdefault(strategy, "NO_DISTINCT_FEASIBLE_CANDIDATE")
-        status = "READY" if not missing else "PARTIAL" if selected else "NO_FEASIBLE_CANDIDATE"
-        outcome = "SUCCEEDED" if not missing else "PARTIAL" if selected else "BLOCKED"
-        reason = None if not missing else "不可行策略：" + ",".join(missing)
+        has_unmet_alternatives = any(candidate.strategy != "CONTROL" and "TARGET_NOT_MET" in candidate.risk_flags
+                                     for candidate in selected)
+        has_boundary_alternatives = any(candidate.strategy != "CONTROL" and "NEAR_BOUNDARY" in candidate.risk_flags
+                                        for candidate in selected)
+        has_validation_alternatives = has_unmet_alternatives or has_boundary_alternatives
+        status = "READY" if not missing and not has_validation_alternatives else "PARTIAL" if selected else "NO_FEASIBLE_CANDIDATE"
+        outcome = "SUCCEEDED" if status == "READY" else "PARTIAL" if selected else "BLOCKED"
+        reason = ("暂无达到全部必达目标的改动方案，已列出可供验证的备选方案" if has_unmet_alternatives else
+                  "部分改动方案接近已有实验记录范围边缘，建议先做实验验证" if has_boundary_alternatives else
+                  None if not missing else "不可行策略：" + ",".join(missing))
         return RecommendResponseV2(request_id=request.request_id, run_id=request.run_id, status=status,
             execution_status="SUCCEEDED", outcome_status=outcome, candidates=selected,
             missing_strategies=missing,
@@ -804,34 +1268,33 @@ class FormulaModelV2Service:
             valid_bounds=all(low-1e-8<=baseline_values.get(material,0)<=high+1e-8
                              for material,(low,high) in bounds.items())
             return [baseline] if valid_total and valid_bounds else []
-        first, second, *remaining = variable_indexes
+        rng = np.random.default_rng(int(seed) & 0xFFFFFFFF)
         for i in range(attempts):
             ratios = [float(c.ratio or 0) for c in components]
             fixed_total = sum(ratios[index] for index in range(len(ratios)) if index not in variable_indexes)
             variable_total = total - fixed_total
-            low_first, high_first = bounds.get(components[first].material_id, (0.0, variable_total))
-            other_minimum = sum(bounds.get(components[index].material_id, (0.0, variable_total))[0]
-                                for index in variable_indexes if index != first)
-            other_maximum = sum(bounds.get(components[index].material_id, (0.0, variable_total))[1]
-                                for index in variable_indexes if index != first)
-            low_first = max(low_first, variable_total - other_maximum)
-            high_first = min(high_first, variable_total - other_minimum)
-            if high_first < low_first - 1e-8:
-                continue
-            fraction = ((i * 37 + seed * 11) % 997) / 996.0
-            ratios[first] = low_first + (high_first - low_first) * fraction
-            remaining_total = variable_total - ratios[first]
-            remaining_indexes = [index for index in variable_indexes if index != first]
-            # Allocate the remaining total deterministically while respecting
-            # every explicitly confirmed material bound.
-            for position, index in enumerate(remaining_indexes):
+            # Include each material's feasible extremes, then sample every
+            # free dimension. A midpoint complement for later materials
+            # incorrectly restricted a three-material space to one line.
+            extreme = i < 2 * len(variable_indexes)
+            if extreme:
+                first = variable_indexes[i // 2]
+                order = [first] + [index for index in variable_indexes if index != first]
+            else:
+                order = [int(index) for index in rng.permutation(variable_indexes)]
+            remaining_total = variable_total
+            for position, index in enumerate(order):
                 low, high = bounds.get(components[index].material_id, (0.0, variable_total))
                 later_min = sum(bounds.get(components[j].material_id, (0.0, variable_total))[0]
-                                for j in remaining_indexes[position + 1:])
+                                for j in order[position + 1:])
                 later_max = sum(bounds.get(components[j].material_id, (0.0, variable_total))[1]
-                                for j in remaining_indexes[position + 1:])
-                assigned = remaining_total if position == len(remaining_indexes) - 1 else max(
-                    low, min(high, remaining_total - (later_min + later_max) / 2.0))
+                                for j in order[position + 1:])
+                feasible_low = max(low, remaining_total - later_max)
+                feasible_high = min(high, remaining_total - later_min)
+                if feasible_high < feasible_low - 1e-8:
+                    break
+                fraction = float(i % 2) if extreme and position == 0 else float(rng.random())
+                assigned = remaining_total if position == len(order) - 1 else feasible_low + (feasible_high - feasible_low) * fraction
                 ratios[index] = assigned
                 remaining_total -= assigned
             if abs(sum(ratios) - total) > 1e-6:
@@ -864,7 +1327,8 @@ class FormulaModelV2Service:
             if not isinstance(spec,dict): continue
             minimum=spec.get("minimum");maximum=spec.get("maximum")
             if minimum is None or maximum is None: continue
-            fraction=((index*37+position*17+int(request.seed)*11)%997)/996.0 if count>1 else 0.5
+            fraction = float(np.random.default_rng(np.random.SeedSequence([
+                int(request.seed) & 0xFFFFFFFF, index, position, 20261015])).random()) if count > 1 else 0.5
             value=float(minimum)+(float(maximum)-float(minimum))*fraction
             step=spec.get("step")
             if step is not None and float(step)>0:
@@ -890,11 +1354,14 @@ class FormulaModelV2Service:
             result = success.result
             value = goal.value
             if isinstance(result, ContinuousResultV2):
-                if goal.operator == "AT_LEAST" and result.lower < float(value): return False
-                if goal.operator == "AT_MOST" and result.upper > float(value): return False
+                # The goal is compared with the predicted value shown to the
+                # user. The prediction interval is uncertainty context, not a
+                # second hidden pass/fail threshold.
+                if goal.operator == "AT_LEAST" and result.value < float(value): return False
+                if goal.operator == "AT_MOST" and result.value > float(value): return False
                 if goal.operator == "RANGE":
                     lo, hi = float(value[0]), float(value[1])
-                    if result.lower < lo or result.upper > hi: return False
+                    if result.value < lo or result.value > hi: return False
                 if goal.operator == "MATCH":
                     if not isinstance(value,dict): return False
                     if abs(result.value-float(value.get("target")))>float(value.get("tolerance",0.0)): return False
@@ -956,19 +1423,44 @@ class FormulaModelV2Service:
         return hints
 
     def _goal_score(self, goals: list[Any], successes: list[TargetSuccessV2]) -> float:
-        score = 0.0
+        weighted_score = 0.0
+        total_weight = 0.0
         for index, goal in enumerate(goals):
             result = next((item.result for item in successes if item.target_id == goal.target_id), None)
             if result is None and index < len(successes):
                 result = successes[index].result
             if result is None: continue
+            weight = max(float(goal.weight), 0.0)
             if isinstance(result, ContinuousResultV2):
-                score += float(result.value) * float(goal.weight)
-            elif hasattr(result, "probabilities"):
-                score += max(result.probabilities.values()) * float(goal.weight)
+                value = float(result.value)
+                reference = float(goal.value) if isinstance(goal.value, (int, float)) else value
+                scale = max(abs(reference), abs(float(result.upper) - float(result.lower)), 1e-9)
+                if goal.operator in {"MINIMIZE", "AT_MOST"}:
+                    margin = reference - value
+                elif goal.operator in {"MAXIMIZE", "AT_LEAST"}:
+                    margin = value - reference
+                elif goal.operator == "RANGE" and isinstance(goal.value, (list, tuple)) and len(goal.value) == 2:
+                    lower, upper = float(goal.value[0]), float(goal.value[1])
+                    margin = -max(lower - value, value - upper, 0.0)
+                elif goal.operator == "MATCH" and isinstance(goal.value, dict):
+                    desired = float(goal.value.get("target", value))
+                    tolerance = max(float(goal.value.get("tolerance", 0.0)), 0.0)
+                    margin = tolerance - abs(value - desired)
+                else:
+                    margin = 0.0
+                utility = 0.5 + 0.5 * max(-1.0, min(1.0, margin / scale))
+            elif hasattr(result, "probabilities") or isinstance(result, BinaryResultV2):
+                desired = goal.value.get("label") if isinstance(goal.value, dict) else str(goal.value)
+                if isinstance(result, BinaryResultV2):
+                    probability = result.probability if desired == result.positive_class else 1.0 - result.probability
+                else:
+                    probability = float(result.probabilities.get(desired, 0.0))
+                utility = max(0.0, min(1.0, probability))
             else:
-                score += float(getattr(result, "probability", 0.0)) * float(goal.weight)
-        return score
+                utility = max(0.0, min(1.0, float(getattr(result, "probability", 0.0))))
+            weighted_score += utility * weight
+            total_weight += weight
+        return weighted_score / total_weight if total_weight else 0.0
 
     def _load_bundle(self, data: bytes) -> dict[str, Any]:
         try:
@@ -1145,6 +1637,7 @@ class FormulaModelV2Service:
             issues.append(ValidationIssueV2(code="DUPLICATE_ROW_ID", message="row ids must be unique"))
         source_ids = set(dataset.source.get("row_id", pd.Series(dtype=str)).astype(str))
         requires_formula = self._scheme_uses_formula(request.context.input_scheme)
+        material_ids = {item.material_id for item in request.context.material_dictionary.materials}
         for _, row in dataset.rows.iterrows():
             row_id = str(row["row_id"])
             if row_id not in source_ids:
@@ -1153,6 +1646,10 @@ class FormulaModelV2Service:
                 formula = json.loads(row["formula_json"])
                 if requires_formula and not formula.get("components"):
                     issues.append(ValidationIssueV2(code="FORMULA_EMPTY", message="formula has no components", row_id=row_id))
+                if requires_formula and any(str(component.get("materialId", "")) not in material_ids
+                                            for component in formula.get("components", [])):
+                    issues.append(ValidationIssueV2(code="MATERIAL_NOT_IN_MODEL",
+                                                    message="formula materials differ from the frozen dictionary", row_id=row_id))
                 # recordedTotal is evidence. It is intentionally never normalized to 100.
                 if formula.get("recordedTotal") is not None and float(formula["recordedTotal"]) < 0:
                     issues.append(ValidationIssueV2(code="FORMULA_TOTAL_INVALID", message="recorded total is negative", row_id=row_id))

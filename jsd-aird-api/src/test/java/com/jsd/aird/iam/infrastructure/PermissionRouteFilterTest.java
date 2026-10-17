@@ -86,16 +86,16 @@ class PermissionRouteFilterTest {
     @Test
     void mapsAiRndRoutesToFineGrainedPermissionsAndRemovesLegacyRoutes() {
         var id = "00000000-0000-0000-0000-000000000001";
-        assertThat(code("GET", "/api/v1/ai/rnd/targets")).isEqualTo("ai.modeling.read");
-        assertThat(code("POST", "/api/v1/ai/rnd/targets")).isEqualTo("ai.modeling.manage");
-        assertThat(code("POST", "/api/v1/ai/rnd/input-schemes/" + id + "/preview")).isEqualTo("ai.modeling.read");
-        assertThat(code("GET", "/api/v1/ai/rnd/reference/standard-fields")).isEqualTo("ai.modeling.read");
-        assertThat(code("GET", "/api/v1/ai/rnd/material-aliases")).isEqualTo("ai.modeling.read");
-        assertThat(code("POST", "/api/v1/ai/rnd/material-aliases")).isEqualTo("ai.config.manage");
-        assertThat(code("GET", "/api/v1/ai/rnd/material-dictionaries")).isEqualTo("ai.modeling.read");
-        assertThat(code("POST", "/api/v1/ai/rnd/material-dictionaries")).isEqualTo("ai.config.manage");
-        assertThat(code("GET", "/api/v1/ai/rnd/training-policies")).isEqualTo("ai.modeling.read");
-        assertThat(code("POST", "/api/v1/ai/rnd/training-policies")).isEqualTo("ai.config.manage");
+        assertThat(code("GET", "/api/v1/ai/rnd/targets")).isNull();
+        assertThat(code("POST", "/api/v1/ai/rnd/targets")).isNull();
+        assertThat(code("POST", "/api/v1/ai/rnd/input-schemes/" + id + "/preview")).isNull();
+        assertThat(code("GET", "/api/v1/ai/rnd/reference/standard-fields")).isNull();
+        assertThat(code("GET", "/api/v1/ai/rnd/material-aliases")).isNull();
+        assertThat(code("POST", "/api/v1/ai/rnd/material-aliases")).isNull();
+        assertThat(code("GET", "/api/v1/ai/rnd/material-dictionaries")).isNull();
+        assertThat(code("POST", "/api/v1/ai/rnd/material-dictionaries")).isNull();
+        assertThat(code("GET", "/api/v1/ai/rnd/training-policies")).isNull();
+        assertThat(code("POST", "/api/v1/ai/rnd/training-policies")).isNull();
         assertThat(code("GET", "/api/v1/ai/rnd/targets/" + id + "/domain-policies")).isEqualTo("ai.modeling.read");
         assertThat(code("POST", "/api/v1/ai/rnd/targets/" + id + "/domain-policies")).isEqualTo("ai.config.manage");
         assertThat(code("POST", "/api/v1/ai/rnd/domain-policies/" + id + "/publish")).isEqualTo("ai.config.manage");
@@ -106,6 +106,22 @@ class PermissionRouteFilterTest {
         assertThat(code("POST", "/api/v1/ai/rnd/predictions")).isEqualTo("ai.performance.predict");
         assertThat(code("POST", "/api/v1/ai/rnd/formula-designs")).isEqualTo("ai.formula.predict");
         assertThat(code("POST", "/api/v1/ai/rnd/experiment-optimizations")).isEqualTo("ai.experiment.optimize");
+        assertThat(code("GET", "/api/v1/ai/rnd/optimization-datasets")).isEqualTo("ai.experiment.optimize");
+        assertThat(code("GET", "/api/v1/ai/rnd/optimization-datasets/" + id)).isEqualTo("ai.experiment.optimize");
+        assertThat(code("POST", "/api/v1/ai/rnd/modeling-workbench/runs/" + id + "/register")).isEqualTo("ai.model.publish");
+        assertThat(code("GET", "/api/v1/ai/rnd/modeling-workbench/datasets")).isEqualTo("ai.modeling.read");
+        assertThat(code("GET", "/api/v1/ai/rnd/modeling-workbench/runs/" + id)).isEqualTo("ai.modeling.read");
+        assertThat(code("POST", "/api/v1/ai/rnd/modeling-workbench/runs")).isEqualTo("ai.training.operate");
+        assertThat(code("GET", "/api/v1/ai/rnd/test-metric-catalog/imports")).isEqualTo("ai.modeling.read");
+        assertThat(code("POST", "/api/v1/ai/rnd/test-metric-catalog/imports")).isEqualTo("ai.modeling.manage");
+        assertThat(code("POST", "/api/v1/ai/rnd/test-metric-catalog/imports/" + id + "/indicators/" + id + "/register")).isNull();
+        assertThat(codeWithKind("POST", "/api/v1/files/staged", "AI_MODELING_CATALOG")).isEqualTo("ai.modeling.manage");
+        assertThat(code("GET", "/api/v1/ai/rnd/research-runs/" + id + "/observations"))
+                .isEqualTo("ai.experiment.optimize");
+        assertThat(code("PUT", "/api/v1/ai/rnd/research-runs/" + id + "/observations"))
+                .isEqualTo("ai.experiment.optimize");
+        assertThat(code("POST", "/api/v1/ai/rnd/research-runs/" + id + "/next-round"))
+                .isEqualTo("ai.experiment.optimize");
         assertThat(code("GET", "/api/v1/ai/formulation-readiness")).isNull();
     }
 
@@ -177,6 +193,33 @@ class PermissionRouteFilterTest {
 
     private String code(String method, String uri) {
         return filter.permissionCode(new MockHttpServletRequest(method, uri));
+    }
+
+    @Test
+    void helpBypassesOnlyBusinessPermissionCheckForTheExactPostEndpoint() throws Exception {
+        var authorization = org.mockito.Mockito.mock(com.jsd.aird.iam.api.AuthorizationService.class);
+        var helpFilter = new PermissionRouteFilter(authorization, new ObjectMapper().findAndRegisterModules(), false);
+        var actor = new com.jsd.aird.shared.security.Actor(java.util.UUID.randomUUID(), java.util.UUID.randomUUID(), "customer", "USER");
+        var forwarded = new java.util.concurrent.atomic.AtomicBoolean();
+        com.jsd.aird.shared.security.ActorContext.set(actor);
+        org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(
+                org.springframework.security.authentication.UsernamePasswordAuthenticationToken.authenticated(actor, null, java.util.List.of()));
+        try {
+            helpFilter.doFilter(new MockHttpServletRequest("POST", "/api/v1/operation-assistant/qa/stream"),
+                    new org.springframework.mock.web.MockHttpServletResponse(), (request, response) -> forwarded.set(true));
+            assertThat(forwarded).isTrue();
+            org.mockito.Mockito.verifyNoInteractions(authorization);
+            forwarded.set(false);
+            var rejected = new org.springframework.mock.web.MockHttpServletResponse();
+            helpFilter.doFilter(new MockHttpServletRequest("POST", "/api/v1/operation-assistant/qa/stream/extra"), rejected,
+                    (request, response) -> forwarded.set(true));
+            assertThat(forwarded).isFalse();
+            assertThat(rejected.getStatus()).isEqualTo(403);
+            assertThat(code("POST", "/api/v1/assistant/qa/stream")).isEqualTo("ai.use");
+        } finally {
+            com.jsd.aird.shared.security.ActorContext.clear();
+            org.springframework.security.core.context.SecurityContextHolder.clearContext();
+        }
     }
 
     private String codeWithProjectId(String method, String uri, String projectId) {

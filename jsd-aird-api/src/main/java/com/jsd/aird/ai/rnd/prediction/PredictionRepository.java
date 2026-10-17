@@ -65,7 +65,8 @@ public class PredictionRepository {
                    coalesce(mv.model_card_jsonb->>'sourceDataNature',mv.data_nature) model_source_data_nature,
                    mv.domain_policy_version_id,
                    a.object_key,a.sha256 artifact_sha,a.media_type,
-                   ts.target_definition_jsonb,ts.input_scheme_jsonb,ts.material_dictionary_jsonb,ts.preprocessing_jsonb,
+                   coalesce(ts.target_definition_jsonb,mv.model_card_jsonb->'targetDefinition') target_definition_jsonb,
+                   coalesce(ts.input_scheme_jsonb,mv.model_card_jsonb->'inputScheme') input_scheme_jsonb,ts.material_dictionary_jsonb,ts.preprocessing_jsonb,
                    qp.id quality_policy_id,qp.version_no quality_policy_version,qp.policy_hash quality_policy_hash,
                    qp.configuration_jsonb quality_policy_jsonb,qp.status quality_policy_status,
                    dp.id domain_policy_id,dp.version_no domain_policy_version,dp.policy_hash domain_policy_hash,
@@ -77,7 +78,7 @@ public class PredictionRepository {
             LEFT JOIN ai.training_snapshot ts ON ts.organization_id=mv.organization_id AND ts.id=mv.training_snapshot_id
             LEFT JOIN ai.modeling_policy_version qp ON qp.organization_id=t.organization_id AND qp.id=t.current_quality_policy_version_id
             LEFT JOIN ai.modeling_policy_version dp ON dp.organization_id=t.organization_id
-                AND dp.id=coalesce(mv.domain_policy_version_id,t.current_domain_policy_version_id)
+                AND dp.id=coalesce(t.current_domain_policy_version_id,mv.domain_policy_version_id)
             WHERE t.organization_id=? AND t.id IN (%s)
             ORDER BY t.performance_project,t.name,t.id
             """.formatted(marks),this::binding,args.toArray());
@@ -89,14 +90,18 @@ public class PredictionRepository {
                    mv.id model_id,t.current_quality_policy_version_id,mv.production_eligible,mv.data_nature,
                    coalesce((mv.model_card_jsonb->>'testOnlySimulation')::boolean,false) test_only_simulation,
                    coalesce(mv.model_card_jsonb->>'sourceDataNature',mv.data_nature) source_data_nature,
-                   coalesce(mv.domain_policy_version_id,t.current_domain_policy_version_id) domain_policy_version_id
+                   coalesce(t.current_domain_policy_version_id,mv.domain_policy_version_id) domain_policy_version_id,
+                   tv.unit,coalesce(tv.definition_jsonb->>'testMethod',tv.observation_semantics_jsonb->>'testMethod') test_method,
+                   coalesce(tv.definition_jsonb->>'testStage',tv.observation_semantics_jsonb->>'testStage') test_stage
             FROM ai.prediction_target t
             LEFT JOIN ai.model_version mv ON mv.organization_id=t.organization_id AND mv.target_id=t.id AND mv.status='ACTIVE'
+            LEFT JOIN ai.target_version tv ON tv.organization_id=t.organization_id AND tv.id=t.current_version_id
             WHERE t.organization_id=? ORDER BY t.performance_project,t.name,t.id
             """,(rs,n)->new TargetCatalog(uuid(rs,"id"),rs.getString("target_code"),rs.getString("name"),
                 rs.getString("performance_project"),rs.getString("value_type"),rs.getString("status"),
                 uuid(rs,"model_id"),uuid(rs,"current_quality_policy_version_id"),uuid(rs,"domain_policy_version_id"),
-                rs.getBoolean("production_eligible"),rs.getString("data_nature"),rs.getBoolean("test_only_simulation"),rs.getString("source_data_nature")),org);
+                rs.getBoolean("production_eligible"),rs.getString("data_nature"),rs.getBoolean("test_only_simulation"),rs.getString("source_data_nature"),
+                rs.getString("unit"),rs.getString("test_method"),rs.getString("test_stage")),org);
     }
 
     public Optional<MaterialIdentity> material(String id) {
@@ -197,7 +202,7 @@ public class PredictionRepository {
     public record TargetCatalog(UUID id,String code,String name,String category,String valueType,String status,
                                 UUID modelId,UUID qualityPolicyId,UUID domainPolicyId,
                                 boolean productionEligible,String dataNature,boolean testOnlySimulation,
-                                String sourceDataNature) { }
+                                String sourceDataNature,String unit,String testMethod,String testStage) { }
     public record MaterialIdentity(UUID id,String code,String name,String category) { }
     public record TargetBinding(UUID targetId,String targetCode,String targetName,String category,String targetStatus,
         String valueType,UUID targetVersionId,int targetVersion,String unit,JsonNode classes,JsonNode definition,

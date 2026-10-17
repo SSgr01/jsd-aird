@@ -96,6 +96,17 @@ public class DataController {
         return success(service.listExperimentJobs(templateVersionId, status, keyword, page, size));
     }
 
+    @PostMapping("/experiment-import-jobs/{id}/retry")
+    public ApiResponse<DataRepository.Job> retryExperimentImport(@PathVariable UUID id) {
+        return success(service.retryExperimentImport(id));
+    }
+
+    @DeleteMapping("/experiment-import-jobs/{id}")
+    public ApiResponse<Void> deleteExperimentImport(@PathVariable UUID id) {
+        service.hideExperimentImport(id);
+        return success(null);
+    }
+
     @PostMapping("/recognition-jobs")
     public ApiResponse<?> createRecognition(@Valid @RequestBody RecognitionCreateRequest request) {
         var relation = request.projectRelations() == null ? null

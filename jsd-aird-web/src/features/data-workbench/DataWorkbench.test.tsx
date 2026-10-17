@@ -62,6 +62,12 @@ describe('DataWorkbench', () => {
     expect(screen.queryByText('无')).not.toBeInTheDocument();
   });
 
+  it('prefers the original document location for Word and image fields', () => {
+    render(<DataFieldCard field={{ ...field, sourceLocation: '表格 2 行 4' }} active />);
+    expect(screen.getByText('表格 2 行 4')).toBeInTheDocument();
+    expect(screen.queryByText('原料数据 · B3')).not.toBeInTheDocument();
+  });
+
   it('explains how a staged field is confirmed instead of showing a generic warning', () => {
     render(<DataFieldCard field={{ ...field, valueStatus: 'STAGED' }} active />);
 

@@ -20,6 +20,7 @@ import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.excel.WorkbookInstanceParser;
 import com.jsd.aird.shared.security.ActorContext;
 import com.jsd.aird.tpl.api.TemplateDataImportFacade;
+import com.jsd.aird.tpl.api.TemplateWorkbookValues;
 import org.springframework.stereotype.Service;
 
 /** Builds the immutable source workbook plus the current correction overlay for data workbenches. */
@@ -70,11 +71,32 @@ public class DataWorkbookService {
         var job = repository.findJob(organizationId, importJobId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "导入任务不存在"));
         var file = requireFile(organizationId, job.sourceFileId());
-        var snapshot = sourceSnapshot(file, job.sourceFormat(), repository.listSheets(organizationId, importJobId));
+        var snapshot = Set.of("DOCX", "IMAGE").contains(job.sourceFormat())
+                ? templateSnapshotForDocument(organizationId, job)
+                : sourceSnapshot(file, job.sourceFormat(), repository.listSheets(organizationId, importJobId));
         if (snapshot == null || !snapshot.isObject() || snapshot.isEmpty()) {
             throw new ApiException(ApiErrorCode.FILE_NOT_READY, "导入文件缺少可编辑工作簿快照");
         }
         return snapshot.deepCopy();
+    }
+
+    private JsonNode templateSnapshotForDocument(UUID organizationId, DataRepository.Job job) {
+        var template = templates.getExperimentTemplateVersion(organizationId, job.templateVersionId());
+        var bindings = templates.getBindings(organizationId, job.templateVersionId());
+        var snapshot = TemplateWorkbookValues.blankCopy(template.snapshot(), bindings);
+        for (var row : repository.listRows(organizationId, job.id())) {
+            var values = row.correctedValues();
+            if (values == null || !values.isObject()) continue;
+            for (var binding : bindings) {
+                if (binding.fieldCode() == null || binding.fieldCode().isBlank()) continue;
+                var value = values.path(binding.fieldCode());
+                if (!value.isObject()) continue;
+                var text = value.hasNonNull("correctedValue")
+                        ? value.path("correctedValue").asText("") : value.path("normalizedValue").asText("");
+                if (!text.isBlank()) TemplateWorkbookValues.writeInput(snapshot, binding, text);
+            }
+        }
+        return snapshot;
     }
 
     private FileObjectRepository.FileObject requireFile(UUID organizationId, UUID fileId) {
@@ -94,7 +116,7 @@ public class DataWorkbookService {
                 throw new ApiException(ApiErrorCode.FILE_NOT_READY, "原始 Excel 工作簿读取失败");
             }
         }
-        if ("CSV".equals(format)) return csvSnapshot(file.originalName(), sheets);
+        if (Set.of("CSV", "DOCX", "IMAGE").contains(format)) return csvSnapshot(file.originalName(), sheets);
         return objectMapper.createObjectNode();
     }
 
@@ -237,6 +259,7 @@ public class DataWorkbookService {
                         !wrapped || value.path("trainingEligible").asBoolean(true),
                         mapping == null || mapping.detail().path("ragEligible").asBoolean(true),
                         row.sheetId(), sheetNames.getOrDefault(row.sheetId(), row.sheetId()), row.rowNumber(), address,
+                        source.path("sourceLocation").asText(""),
                         rawValue.deepCopy(), normalizedValue.deepCopy(), correctedValue.deepCopy(), effective.deepCopy(),
                         mapping != null && "MAP".equals(mapping.action())
                                 && !mapping.detail().path("syntheticDimension").asBoolean(false)
@@ -793,7 +816,8 @@ public class DataWorkbookService {
                              String bindingId, String valuePath, String valueSource, String valueStatus,
                              String valueType, String unit, boolean required, boolean identity,
                              boolean trainingEligible, boolean ragEligible, String sheetId, String sheetName,
-                             Integer rowNumber, String address, JsonNode rawValue, JsonNode normalizedValue,
+                             Integer rowNumber, String address, String sourceLocation,
+                             JsonNode rawValue, JsonNode normalizedValue,
                              JsonNode correctedValue, JsonNode effectiveValue, boolean editable,
                              boolean excluded, String exclusionReason, String componentId, String mappingKind,
                              String repeatAxis, String parentBindingId, String groupPath, String recordKey,

@@ -155,7 +155,7 @@ export function DataViewPage() {
 
   return <div className="business-page">
     <div className="page-heading">
-      <div><Typography.Title level={2}>数据中心</Typography.Title><Typography.Text type="secondary">管理数据中心上传和确认状态。实验本导入及实验记录在电子实验记录本中查看。</Typography.Text></div>
+      <div><Typography.Title level={2}>数据中心</Typography.Title><Typography.Text type="secondary">查看数据中心导入文件及确认状态。</Typography.Text></div>
       <Can permission="data.create"><Button type="primary" icon={<UploadOutlined />} onClick={() => navigate('/data/upload')}>数据上传</Button></Can>
     </div>
     <CategoryCardGrid categories={cards} activeId={categoryId}
@@ -163,7 +163,7 @@ export function DataViewPage() {
       onCreate={canUpdate ? () => setEditor({ mode: 'NEW' }) : undefined}
       onRename={canUpdate ? (item) => setEditor({ mode: 'EDIT', item: categories.find((candidate) => candidate.id === item.id) }) : undefined}
       onDelete={canUpdate ? (item) => { const category = categories.find((candidate) => candidate.id === item.id); if (category?.allowedActions?.includes('DELETE')) setDeleteItem(category); } : undefined} />
-    <div className="catalog-sync-note"><ReloadOutlined /> 每行对应一次数据中心导入；同名文件的多次导入分别保留。“已入库”只表示导入完成，不代表数据已确认。</div>
+    <div className="catalog-sync-note"><ReloadOutlined /> 同一文件的多次导入会分别保留；“已入库”不代表数据已确认。</div>
     <CatalogListPanel title={cards.find((item) => item.id === categoryId)?.name || '来源文件'} count={page.total}
       filters={<Space wrap><Input.Search allowClear placeholder="搜索来源文件名" value={keyword} onChange={(event) => { setKeyword(event.target.value); setPage((value) => ({ ...value, current: 1 })); }} onSearch={() => void load()} /><Select allowClear showSearch optionFilterProp="label" popupMatchSelectWidth={false} classNames={{ popup: { root: 'project-relation-picker-dropdown' } }} placeholder="全部项目" value={projectId} onChange={(value) => { setProjectId(value); setPage((current) => ({ ...current, current: 1 })); }} options={projects.map((project) => ({ value: project.id, label: `${project.projectCode} · ${project.name}` }))} /><Select allowClear placeholder="全部状态" value={status} onChange={(value) => { setStatus(value); setPage((value) => ({ ...value, current: 1 })); }} options={Object.entries(statusLabels).map(([value, item]) => ({ value, label: item[0] }))} /><Button onClick={() => { setStructuredSearchResult(undefined); setStructuredSearchOpen(true); }}>结构化业务字段查询</Button><Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button></Space>}
       loading={loading}>

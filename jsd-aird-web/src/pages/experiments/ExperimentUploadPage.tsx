@@ -3,22 +3,20 @@ import {
   DeleteOutlined,
   DownloadOutlined,
   EyeOutlined,
-  PictureOutlined,
   ReloadOutlined,
 } from '@ant-design/icons';
-import { Alert, App, Button, Col, Form, Modal, Radio, Row, Select, Space, Upload } from 'antd';
+import { Alert, App, Button, Col, Form, Popconfirm, Row, Select, Space, Upload } from 'antd';
 import type { UploadFile, UploadProps } from 'antd';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { ProjectRelationPicker } from '@/components/project-relations/ProjectRelationPicker';
 import type { ProjectRelationTarget } from '@/services/project/project-resource-api';
 import { UploadWorkspace, type UploadWorkspaceRecord } from '@/components/upload-workspace';
-import { dataApi, type DataJob, type DataTemplateOption } from '@/services/data/data-api';
+import { dataApi, type DataJob, type DataTemplateOption, type ExperimentSyncStatus } from '@/services/data/data-api';
 import { dataParseProgress, dataParseStageLabel } from '@/services/data/data-progress';
 import {
   deleteExperimentImport,
-  importExperimentFile,
   listCategories,
   listExperimentImports,
   retryExperimentImport,
@@ -27,26 +25,17 @@ import {
   type ExperimentImportJob,
 } from '@/services/experiments/experiment-api';
 import { downloadFile } from '@/services/files/file-api';
+import { loadAllPages } from './experiment-import-history-utils';
 
-const visibilityOptions = [
-  { value: 'ALL' as const, label: '全员可见' },
-  { value: 'RND' as const, label: '研发部可见' },
-  { value: 'PROJECT' as const, label: '项目组可见' },
-];
-const visibilityText = (value?: 'ALL' | 'RND' | 'QUALITY' | 'PROJECT') =>
-  visibilityOptions.find((item) => item.value === value)?.label
-  || (value === 'QUALITY' ? '品管部可见' : undefined)
-  || '全员可见';
-
-type UploadMode = 'FREEFORM' | 'TEMPLATE';
 type UnifiedJob =
   | { kind: 'FREEFORM'; job: ExperimentImportJob }
   | { kind: 'TEMPLATE'; job: DataJob };
 
+const ACTIVE_JOB_STATES = ['CREATED', 'QUEUED', 'PARSING', 'VALIDATING', 'COMMITTING'];
+
 export function ExperimentUploadPage() {
   const { message } = App.useApp();
   const navigate = useNavigate();
-  const [mode, setMode] = useState<UploadMode>('TEMPLATE');
   const [files, setFiles] = useState<UploadFile[]>([]);
   const [freeJobs, setFreeJobs] = useState<ExperimentImportJob[]>([]);
   const [templateJobs, setTemplateJobs] = useState<DataJob[]>([]);
@@ -56,26 +45,25 @@ export function ExperimentUploadPage() {
   const [templateVersionId, setTemplateVersionId] = useState<string>();
   const [experimentCategoryId, setExperimentCategoryId] = useState<string>();
   const [projectRelations, setProjectRelations] = useState<ProjectRelationTarget[]>([]);
-  const [visibility, setVisibility] = useState<'ALL' | 'RND' | 'QUALITY' | 'PROJECT'>('ALL');
   const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [filter, setFilter] = useState('ALL');
   const [keyword, setKeyword] = useState('');
   const [page, setPage] = useState({ current: 1, pageSize: 8 });
-  const [ocrOpen, setOcrOpen] = useState(false);
-  const [ocrFiles, setOcrFiles] = useState<UploadFile[]>([]);
-  const [ocrSubmitting, setOcrSubmitting] = useState(false);
   const [retryingId, setRetryingId] = useState<string>();
+  const [assemblyStatuses, setAssemblyStatuses] = useState<Record<string, ExperimentSyncStatus>>({});
+  const requestedAssemblyStatuses = useRef(new Set<string>());
 
   const load = useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
     if (!silent) setLoading(true);
     try {
-      const [free, templatesPage] = await Promise.all([
+      const [free, allTemplateJobs] = await Promise.all([
         listExperimentImports(),
-        dataApi.listExperimentJobs({ page: 1, size: 100 }),
+        loadAllPages((page, size) => dataApi.listExperimentJobs({ page, size })),
       ]);
       setFreeJobs(free);
-      setTemplateJobs(templatesPage.items.filter((item) => item.importPurpose === 'EXPERIMENT_DRAFT'));
+      setTemplateJobs(allTemplateJobs
+        .filter((item) => item.importPurpose === 'EXPERIMENT_DRAFT'));
     } catch (error) {
       if (!silent) void message.error(error instanceof Error ? error.message : '实验上传记录加载失败');
     } finally {
@@ -106,7 +94,7 @@ export function ExperimentUploadPage() {
   }, [load]);
 
   const running = useMemo(
-    () => [...freeJobs, ...templateJobs].some((job) => ['QUEUED', 'PARSING', 'VALIDATING', 'WAITING_MAPPING', 'WAITING_CONFIRM', 'COMMITTING'].includes(job.status)),
+    () => [...freeJobs, ...templateJobs].some((job) => ACTIVE_JOB_STATES.includes(job.status)),
     [freeJobs, templateJobs],
   );
   useEffect(() => {
@@ -121,13 +109,9 @@ export function ExperimentUploadPage() {
   );
 
   const validate: UploadProps['beforeUpload'] = (file) => {
-    const accepted = mode === 'TEMPLATE'
-      ? /\.(xlsx|xls|csv|doc|docx|jpg|jpeg|png|gif|webp|bmp|tif|tiff)$/i
-      : /\.(xlsx|xls|csv|doc|docx|pdf|jpg|jpeg|png|tif|tiff)$/i;
+    const accepted = /\.(xlsx|xls|csv|docx|jpg|jpeg|png|gif|webp|bmp|tif|tiff)$/i;
     if (file.size === 0 || !accepted.test(file.name)) {
-      void message.error(mode === 'TEMPLATE'
-        ? '按模板导入支持 XLSX / XLS / CSV / DOC / DOCX，图片与 Word 按实验本解析生成实验草稿'
-        : '自由上传支持 XLSX / XLS / CSV / DOCX / PDF / JPG / PNG / TIF 文件');
+      void message.error('实验模板导入支持 XLSX / XLS / CSV / DOCX 及常见图片格式');
       return Upload.LIST_IGNORE;
     }
     return false;
@@ -137,57 +121,28 @@ export function ExperimentUploadPage() {
     const sourceFiles = files.flatMap((item) => (item.originFileObj ? [item.originFileObj] : []));
     if (!sourceFiles.length) { void message.warning('请先选择实验文件'); return; }
     if (!experimentCategoryId) { void message.warning('请选择实验分类'); return; }
-    // 图片和 Word 不经过模板映射，只有表格文件才必须选择模板。
-    if (mode === 'TEMPLATE' && sourceFiles.some((file) => isSpreadsheetFile(file.name)) && !chosenTemplate) {
+    if (!chosenTemplate) {
       void message.warning(templates.length
         ? '请选择可用于实验导入的已发布模板'
         : '暂无可用于实验导入的模板，请先在模板中心配置并发布实验数据模板');
       return;
     }
-    const selectedTemplateVersionId = chosenTemplate?.versionId;
     setUploading(true);
     let failed = 0;
     let templateJobCount = 0;
-    let ocrCount = 0;
     try {
       for (const file of sourceFiles) {
         try {
-          // 按模板导入的表格进入数据中心字段映射工作台；按模板导入时额外
-          // 选择的图片 / Word 仍走实验本既有解析直导路径，直接生成实验草稿。
-          if (mode === 'TEMPLATE' && isSpreadsheetFile(file.name)) {
-            // Keep the source owned by the experiment module while the
-            // confirmation workspace is shared with Data Center.
-            const staged = await stageExperimentFile(file);
-            await dataApi.createExperimentJob({
-              sourceFileId: staged.fileId,
-              templateVersionId: selectedTemplateVersionId!,
-              duplicateOverride: true,
-              importPurpose: 'EXPERIMENT_DRAFT',
-              targetExperimentCategoryId: experimentCategoryId!,
-              projectRelations,
-            });
-            templateJobCount += 1;
-          } else {
-            const staged = await stageExperimentFile(file);
-            const category = categories.find((item) => item.id === experimentCategoryId);
-            await importExperimentFile({
-              fileId: staged.fileId,
-              fileName: staged.originalName,
-              sha256: staged.sha256,
-              format: formatForFile(file.name),
-              duplicateOverride: true,
-              categoryId: category?.id,
-              categoryName: category?.name,
-              ...(projectRelations[0] ? {
-                projectId: projectRelations[0].projectId,
-                stageId: projectRelations[0].stageId,
-                taskId: projectRelations[0].taskId,
-              } : {}),
-              experimentDate: new Date().toISOString().slice(0, 10),
-              visibility,
-            });
-            ocrCount += 1;
-          }
+          const staged = await stageExperimentFile(file);
+          await dataApi.createExperimentJob({
+            sourceFileId: staged.fileId,
+            templateVersionId: chosenTemplate.versionId,
+            duplicateOverride: true,
+            importPurpose: 'EXPERIMENT_DRAFT',
+            targetExperimentCategoryId: experimentCategoryId,
+            projectRelations,
+          });
+          templateJobCount += 1;
         } catch (error) {
           failed += 1;
           void message.error(error instanceof Error ? `${file.name}：${error.message}` : `${file.name} 上传失败`);
@@ -198,37 +153,11 @@ export function ExperimentUploadPage() {
       if (!failed) {
         const parts: string[] = [];
         if (templateJobCount) parts.push(`${templateJobCount} 个按模板导入任务`);
-        if (ocrCount) parts.push(mode === 'TEMPLATE' ? `${ocrCount} 个图片/Word 解析任务` : `${ocrCount} 个自由上传文件`);
         void message.success(`已提交 ${parts.join('、') || '0 个文件'}`);
       } else void message.warning(`${sourceFiles.length - failed} 个文件已提交，${failed} 个失败`);
     } finally {
       setUploading(false);
     }
-  };
-
-  const submitOcr = async () => {
-    const sourceFiles = ocrFiles.flatMap((item) => (item.originFileObj ? [item.originFileObj] : []));
-    if (!sourceFiles.length) return;
-    setOcrSubmitting(true);
-    let failed = 0;
-    try {
-      const category = categories.find((item) => item.id === experimentCategoryId);
-      for (const file of sourceFiles) {
-        try {
-          const staged = await stageExperimentFile(file);
-          await importExperimentFile({
-            fileId: staged.fileId, fileName: staged.originalName, sha256: staged.sha256,
-            format: formatForFile(file.name), duplicateOverride: true,
-            categoryId: category?.id, categoryName: category?.name,
-            experimentDate: new Date().toISOString().slice(0, 10), visibility,
-          });
-        } catch { failed += 1; }
-      }
-      await load();
-      if (failed) void message.warning(`${sourceFiles.length - failed} 个自由上传任务已提交，${failed} 个失败`);
-      else void message.success(`已提交 ${sourceFiles.length} 个自由上传任务`);
-      setOcrFiles([]); setOcrOpen(false);
-    } finally { setOcrSubmitting(false); }
   };
 
   const retry = async (job: ExperimentImportJob) => {
@@ -247,40 +176,54 @@ export function ExperimentUploadPage() {
       && (!keyword || item.job.sourceFileName.toLowerCase().includes(keyword.toLowerCase()));
   }).sort((a, b) => new Date(b.job.createdAt).getTime() - new Date(a.job.createdAt).getTime()), [filter, freeJobs, keyword, templateJobs]);
 
-  const records: UploadWorkspaceRecord[] = jobs
-    .slice((page.current - 1) * page.pageSize, page.current * page.pageSize)
-    .map((item) => item.kind === 'TEMPLATE' ? templateRecord(item.job) : freeRecord(item.job));
+  const visibleJobs = useMemo(
+    () => jobs.slice((page.current - 1) * page.pageSize, page.current * page.pageSize),
+    [jobs, page.current, page.pageSize],
+  );
+  useEffect(() => {
+    const targets = visibleJobs.flatMap((item) => item.kind === 'TEMPLATE' && item.job.status === 'COMPLETED'
+      && !assemblyStatuses[item.job.id] && !requestedAssemblyStatuses.current.has(item.job.id) ? [item.job.id] : []);
+    if (!targets.length) return;
+    targets.forEach((id) => requestedAssemblyStatuses.current.add(id));
+    void Promise.all(targets.map(async (id) => [id, await dataApi.experimentSyncStatus(id)] as const))
+      .then((items) => setAssemblyStatuses((current) => ({ ...current, ...Object.fromEntries(items) })))
+      .catch(() => targets.forEach((id) => requestedAssemblyStatuses.current.delete(id)));
+  }, [assemblyStatuses, visibleJobs]);
+  const assemblyPollingKey = visibleJobs.flatMap((item) => item.kind === 'TEMPLATE'
+    && assemblyStatuses[item.job.id]?.links.some((link) => ['READY', 'RUNNING'].includes(link.status))
+    ? [item.job.id] : []).join('|');
+  useEffect(() => {
+    const ids = assemblyPollingKey ? assemblyPollingKey.split('|') : [];
+    if (!ids.length) return undefined;
+    const timer = window.setInterval(() => {
+      void Promise.all(ids.map(async (id) => [id, await dataApi.experimentSyncStatus(id)] as const))
+        .then((items) => setAssemblyStatuses((current) => ({ ...current, ...Object.fromEntries(items) })))
+        .catch(() => undefined);
+    }, 1800);
+    return () => window.clearInterval(timer);
+  }, [assemblyPollingKey]);
 
-  // 按模板导入同样允许追加图片：只有表格文件才要求已选模板。
-  const requiresTemplate = mode === 'TEMPLATE' && files.some((item) => isSpreadsheetFile(item.name));
+  const records: UploadWorkspaceRecord[] = visibleJobs
+    .map((item) => item.kind === 'TEMPLATE' ? templateRecord(item.job) : freeRecord(item.job));
 
   return <>
     <UploadWorkspace
       breadcrumbs={[{ title: '电子实验记录本' }, { title: '实验数据导入' }]}
-      title="实验数据导入"
-      description="自由上传 Excel 后自动识别区域、字段和填写位置，进入实验工作台确认绑定；按模板导入仍使用数据中心字段映射工作台。"
+      title="文件导入"
+      description="选择已发布实验数据模板，核对并确认本次实验数据后生成实验草稿。"
       headerActions={<Space>
-        <Button icon={<PictureOutlined />} onClick={() => { setOcrFiles([]); setOcrOpen(true); }}>拍照录入</Button>
         <Button type="primary" onClick={() => navigate('/experiments')}>实验列表</Button>
       </Space>}
       leftTitle="基础信息"
       classification={<Form layout="vertical" component={false}>
-        <Form.Item label="录入方式" required>
-          <Radio.Group value={mode} onChange={(event) => { setMode(event.target.value as UploadMode); setFiles([]); }} optionType="button" buttonStyle="solid" options={[{ value: 'TEMPLATE', label: '按模板导入' }, { value: 'FREEFORM', label: '自由上传' }]} />
-        </Form.Item>
         <Row gutter={12}>
           <Col span={12}>
             <Form.Item label="实验分类" required>
               <Select value={experimentCategoryId} onChange={setExperimentCategoryId} options={categories.map((item) => ({ value: item.id, label: item.name }))} placeholder="请选择实验分类" />
             </Form.Item>
           </Col>
-          <Col span={12}>
-            <Form.Item label="权限可见">
-              <Select value={visibility} onChange={setVisibility} options={visibilityOptions} />
-            </Form.Item>
-          </Col>
         </Row>
-        {mode === 'TEMPLATE' ? <>
+        <>
           <Form.Item label="实验数据模板" required>
             <Select showSearch optionFilterProp="label" loading={templatesLoading} value={templateVersionId} onChange={setTemplateVersionId} options={templates.map((item) => ({ value: item.versionId, label: `${item.name} · ${item.templateCode} · V${item.versionNo}` }))} placeholder="请选择实验数据模板" notFoundContent={templatesLoading ? '加载中' : '没有匹配的实验数据模板'} />
           </Form.Item>
@@ -290,11 +233,10 @@ export function ExperimentUploadPage() {
             message="暂无符合实验导入要求的 Excel 模板"
             description="请在模板中心配置并发布导入契约版本为 V9、用途为实验数据（EXPERIMENT_DATA）的 Excel 模板。"
           /> : null}
-          {chosenTemplate ? <Alert showIcon type="info" message={`按“${chosenTemplate.name}”模板创建实验草稿`} description="Excel 按模板进入字段映射工作台；图片 / Word 解析后直接生成实验草稿。" /> : null}
-        </> : null}
+        </>
         <Form.Item label="关联项目 / 阶段 / 任务"><ProjectRelationPicker value={projectRelations} onChange={setProjectRelations} multiple={false} /></Form.Item>
       </Form>}
-      accept=".doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.gif,.webp,.bmp,.tif,.tiff"
+      accept=".docx,.xls,.xlsx,.csv,.png,.jpg,.jpeg,.gif,.webp,.bmp,.tif,.tiff"
       beforeUpload={validate}
       multiple
       files={files}
@@ -302,15 +244,15 @@ export function ExperimentUploadPage() {
       onRemoveFile={(file) => setFiles((current) => current.filter((item) => item.uid !== file.uid))}
       onClearFiles={() => setFiles([])}
       uploadHint="支持 XLSX / DOCX / 图片，可批量上传，单个文件最大100M。"
-      uploadMainText="拖拽文件到此处/点击选择文件/点击拍照上传"
+      uploadMainText="拖拽文件到此处或点击选择文件"
       submitLabel="开始上传"
       submitIcon={<CloudUploadOutlined />}
       onSubmit={() => void submit()}
       submitting={uploading}
-      submitDisabled={!experimentCategoryId || (requiresTemplate && !chosenTemplate)}
-      rightTitle="已上传文件"
+      submitDisabled={!experimentCategoryId || !chosenTemplate}
+      rightTitle="导入历史"
       rightCount={jobs.length}
-      rightFilters={[{ key: 'ALL', label: '全部' }, { key: 'PARSING', label: '处理中' }, { key: 'WAITING_MAPPING', label: '待确认' }, { key: 'COMPLETED', label: '已完成' }, { key: 'FAILED', label: '失败' }]}
+      rightFilters={[{ key: 'ALL', label: '全部' }, { key: 'PARSING', label: '处理中' }, { key: 'WAITING_MAPPING', label: '待确认' }, { key: 'COMPLETED', label: '导入完成' }, { key: 'FAILED', label: '失败' }]}
       activeFilter={filter}
       onFilterChange={(value) => { setFilter(value); setPage((current) => ({ ...current, current: 1 })); }}
       searchValue={keyword}
@@ -320,7 +262,6 @@ export function ExperimentUploadPage() {
       pagination={{ current: page.current, pageSize: page.pageSize, total: jobs.length }}
       onPageChange={(current, pageSize) => setPage({ current, pageSize })}
     />
-    <ModalShell open={ocrOpen} onClose={() => setOcrOpen(false)} files={ocrFiles} setFiles={setOcrFiles} submitting={ocrSubmitting} onSubmit={() => void submitOcr()} />
   </>;
 
   function freeRecord(job: ExperimentImportJob): UploadWorkspaceRecord {
@@ -328,52 +269,72 @@ export function ExperimentUploadPage() {
     return {
       id: `free-${job.id}`,
       name: job.sourceFileName,
-      meta: `${formatLabel(job.sourceFormat)} · ${job.sourceFormat === 'IMAGE' ? '图片解析' : '自由上传'} · ${new Date(job.createdAt).toLocaleString('zh-CN')}`,
-      detail: [job.currentStage || (job.status === 'COMPLETED' ? '已完成' : '等待解析'), `来源归属：实验记录本 · ${visibilityText(job.visibility)}`, job.errorMessage ? `失败原因：${job.errorMessage}` : null].filter(Boolean).join(' · '),
-      status: job.status === 'COMPLETED' ? { label: '已创建草稿', color: 'success' } : job.status === 'FAILED' ? { label: '解析失败', color: 'error' } : { label: `处理中 ${progress}%`, color: 'processing' },
+      meta: `${formatLabel(job.sourceFormat)} · 无模板导入 · ${new Date(job.createdAt).toLocaleString('zh-CN')}`,
+      detail: [job.currentStage || (job.status === 'COMPLETED' ? '草稿已生成，尚未发布' : '等待解析'), job.errorMessage ? `失败原因：${job.errorMessage}` : null].filter(Boolean).join(' · '),
+      status: job.status === 'COMPLETED' ? { label: '草稿已生成 · 尚未发布', color: 'success' } : job.status === 'FAILED' ? { label: '解析失败', color: 'error' } : { label: `处理中 ${progress}%`, color: 'processing' },
       progress,
-      actions: <Space size={2}><Button type="link" icon={<EyeOutlined />} onClick={() => job.experimentId ? navigate(`/experiments/${job.experimentId}`) : navigate(`/experiments/imports/${job.id}`)}>{job.experimentId ? (/\.(xlsx|xls|png|jpe?g|gif|webp|bmp|tiff?)$/i.test(job.sourceFileName) ? '确认字段' : '打开实验') : '查看状态'}</Button><Button type="link" icon={<DownloadOutlined />} onClick={() => void downloadFile(job.sourceFileId, job.sourceFileName).catch((error) => void message.error(error instanceof Error ? error.message : '原文件下载失败'))}>下载原文件</Button><Button type="link" icon={<ReloadOutlined />} loading={retryingId === job.id} onClick={() => void retry(job)}>重试</Button><Button type="link" danger icon={<DeleteOutlined />} disabled={!['QUEUED', 'PARSING', 'COMPLETED', 'FAILED', 'CANCELLED'].includes(job.status)} onClick={() => Modal.confirm({ title: `删除“${job.sourceFileName}”的导入记录？`, content: ['QUEUED', 'PARSING'].includes(job.status) ? '删除后将取消后台解析任务，原始文件仍保留在文件存储中。' : job.experimentId ? '仅删除导入记录，不删除已生成的实验草稿、原始附件或来源追溯关系。' : '仅删除导入记录，不删除原始附件。', okText: ['QUEUED', 'PARSING'].includes(job.status) ? '取消解析并删除' : '删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => deleteFree(job) })}>删除</Button></Space>,
+      actions: <Space size={2}>{job.experimentId ? <Button type="link" icon={<EyeOutlined />} onClick={() => navigate(`/experiments/${job.experimentId}`)}>打开实验</Button> : null}<Button type="link" icon={<DownloadOutlined />} onClick={() => void downloadFile(job.sourceFileId, job.sourceFileName).catch((error) => void message.error(error instanceof Error ? error.message : '原文件下载失败'))}>下载原文件</Button><Button type="link" icon={<ReloadOutlined />} disabled={!['FAILED', 'CANCELLED'].includes(job.status)} loading={retryingId === job.id} onClick={() => void retry(job)}>重试</Button><Popconfirm title="确认删除该导入记录？" description="删除后记录将从列表中移除。" okText="删除" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => deleteFree(job)}><Button type="link" danger icon={<DeleteOutlined />} disabled={ACTIVE_JOB_STATES.includes(job.status)}>删除</Button></Popconfirm></Space>,
     };
   }
 
   function templateRecord(job: DataJob): UploadWorkspaceRecord {
     const progress = dataParseProgress(job);
+    const assembly = assemblyStatuses[job.id];
+    const assemblyLinks = assembly?.links ?? [];
+    const linkedExperiments = assemblyLinks.filter((item) => item.experimentId);
+    const pendingCandidates = assembly?.plan.candidates.filter((item) =>
+      ['NEEDS_REVIEW', 'BLOCKED', 'FAILED'].includes(item.status),
+    ) ?? [];
+    const pendingReasons = pendingCandidates.flatMap((item) =>
+      [...item.conflicts, ...item.warnings].map((entry) => entry.message),
+    );
+    const linkReasons = assemblyLinks.flatMap((item) =>
+      item.errorMessage || item.resolutionReason ? [item.errorMessage || item.resolutionReason || ''] : [],
+    );
+    const hasPendingAssembly = pendingCandidates.length > 0;
+    const assemblyText = linkedExperiments.length
+      ? linkedExperiments.length + ' 个实验草稿已生成，尚未发布' + (hasPendingAssembly ? '；另有 ' + pendingCandidates.length + ' 项待处理' : '')
+      : hasPendingAssembly ? '待处理，尚未生成草稿' + (pendingReasons[0] ? '：' + pendingReasons[0] : '')
+        : !assembly ? '导入完成，正在读取实验草稿状态'
+          : assembly.plan.readyCount ? '实验草稿生成中' : '导入完成，尚未生成实验草稿';
     return {
       id: `template-${job.id}`,
       name: job.sourceFileName,
       meta: `按模板导入 · ${new Date(job.createdAt).toLocaleString('zh-CN')}`,
-      detail: dataParseStageLabel(job),
-      status: job.status === 'COMPLETED' ? { label: '已完成', color: 'success' } : job.status === 'FAILED' ? { label: '处理失败', color: 'error' } : { label: job.status === 'WAITING_MAPPING' || job.status === 'WAITING_CONFIRM' ? '待确认映射' : `处理中 ${progress}%`, color: job.status === 'WAITING_MAPPING' || job.status === 'WAITING_CONFIRM' ? 'warning' : 'processing' },
+      detail: job.status === 'COMPLETED' ? [assemblyText, ...pendingReasons, ...linkReasons].filter(Boolean).slice(0, 3).join(' · ') : dataParseStageLabel(job),
+      status: job.status === 'COMPLETED'
+        ? linkedExperiments.length ? { label: '草稿已生成 · 尚未发布', color: 'success' }
+          : hasPendingAssembly ? { label: '待处理 · 未生成草稿', color: 'warning' }
+            : assembly?.plan.readyCount ? { label: '草稿生成中', color: 'processing' }
+              : { label: '导入完成', color: 'success' }
+        : job.status === 'FAILED' ? { label: '处理失败', color: 'error' }
+          : { label: job.status === 'WAITING_MAPPING' || job.status === 'WAITING_CONFIRM' ? '待确认数据' : `处理中 ${progress}%`, color: job.status === 'WAITING_MAPPING' || job.status === 'WAITING_CONFIRM' ? 'warning' : 'processing' },
       progress,
-      actions: <Space size={2}><Button type="link" icon={<EyeOutlined />} onClick={() => navigate(`/experiments/template-imports/${job.id}`)}>查看映射</Button><Button type="link" icon={<DownloadOutlined />} onClick={() => void dataApi.sourceBlob(job.sourceFileId).then((blob) => downloadBlob(blob, job.sourceFileName)).catch((error) => void message.error(error instanceof Error ? error.message : '原文件下载失败'))}>下载原文件</Button></Space>,
+      actions: <Space size={2}><Button type="link" icon={<EyeOutlined />} onClick={() => navigate(`/experiments/template-imports/${job.id}`)}>确认数据</Button><Button type="link" icon={<ReloadOutlined />} disabled={!['FAILED', 'CANCELLED'].includes(job.status)} loading={retryingId === job.id} onClick={() => void retryTemplate(job)}>重试</Button><Popconfirm title="确认删除该导入记录？" description="删除后记录将从列表中移除。" okText="删除" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => deleteTemplate(job)}><Button type="link" danger icon={<DeleteOutlined />} disabled={ACTIVE_JOB_STATES.includes(job.status)}>删除</Button></Popconfirm><Button type="link" icon={<DownloadOutlined />} onClick={() => void dataApi.sourceBlob(job.sourceFileId).then((blob) => downloadBlob(blob, job.sourceFileName)).catch((error) => void message.error(error instanceof Error ? error.message : '原文件下载失败'))}>下载原文件</Button></Space>,
     };
   }
 
+  async function retryTemplate(job: DataJob) {
+    setRetryingId(job.id);
+    try { await dataApi.retryExperimentJob(job.id); await load(); void message.success(`“${job.sourceFileName}”已加入重新处理队列`); }
+    catch (error) { void message.error(error instanceof Error ? error.message : '重试失败'); }
+    finally { setRetryingId(undefined); }
+  }
+
+  async function deleteTemplate(job: DataJob) {
+    try {
+      await dataApi.deleteExperimentJob(job.id);
+      setAssemblyStatuses((current) => { const next = { ...current }; delete next[job.id]; return next; });
+      requestedAssemblyStatuses.current.delete(job.id);
+      await load();
+      void message.success('导入记录已删除');
+    } catch (error) { void message.error(error instanceof Error ? error.message : '删除失败'); }
+  }
+
   async function deleteFree(job: ExperimentImportJob) {
-    try { await deleteExperimentImport(job.id); await load(); void message.success('自由上传记录已删除'); }
+    try { await deleteExperimentImport(job.id); await load(); void message.success('无模板导入记录已删除'); }
     catch (error) { void message.error(error instanceof Error ? error.message : '删除失败'); }
   }
-}
-
-function ModalShell({ open, onClose, files, setFiles, submitting, onSubmit }: { open: boolean; onClose: () => void; files: UploadFile[]; setFiles: (files: UploadFile[]) => void; submitting: boolean; onSubmit: () => void }) {
-  return <Modal title="拍照 / OCR录入" open={open} onCancel={onClose} footer={null} width={620}>
-    <Upload.Dragger accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff" multiple fileList={files} showUploadList beforeUpload={(file) => { if (!file.size || !/\.(pdf|jpg|jpeg|png|tif|tiff)$/i.test(file.name)) return Upload.LIST_IGNORE; return false; }} onChange={({ fileList }) => setFiles(fileList)}><p><PictureOutlined /> 点击选择文件/点击拍照上传</p></Upload.Dragger>
-    <Space style={{ marginTop: 16, width: '100%', justifyContent: 'flex-end' }}><Button onClick={onClose}>取消</Button><Button type="primary" disabled={!files.length} loading={submitting} onClick={onSubmit}>开始上传</Button></Space>
-  </Modal>;
-}
-
-function isSpreadsheetFile(name: string) {
-  return /\.(xlsx|xls|csv)$/i.test(name);
-}
-
-function formatForFile(name: string) {
-  const extension = name.split('.').pop()?.toLowerCase();
-  if (extension === 'xlsx') return 'XLSX';
-  if (extension === 'xls') return 'XLS';
-  if (extension === 'csv') return 'CSV';
-  if (extension === 'doc' || extension === 'docx') return 'DOCX';
-  if (extension === 'pdf') return 'PDF';
-  return 'IMAGE';
 }
 
 function formatLabel(format: string) {

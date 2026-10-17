@@ -18,6 +18,13 @@ public class AiExecutorConfiguration {
         return Executors.newVirtualThreadPerTaskExecutor();
     }
 
+    @Bean(name = "operationManualVectorExecutor", destroyMethod = "shutdown")
+    ExecutorService operationManualVectorExecutor() {
+        return new ThreadPoolExecutor(4, 4, 30, TimeUnit.SECONDS,
+                new ArrayBlockingQueue<>(16), Thread.ofPlatform().name("operation-vector-", 0).factory(),
+                new ThreadPoolExecutor.AbortPolicy());
+    }
+
     @Bean(name = "ragRetrievalExecutor", destroyMethod = "shutdown")
     ExecutorService ragRetrievalExecutor(
             @Value("${app.ai.retrieval.executor-threads:8}") int threads,

@@ -35,8 +35,10 @@ public class FormulaModelV2Client {
     public JsonNode validate(JsonNode request) { return post("/internal/v2/snapshots/validate", request, Duration.ofMinutes(15)); }
     public JsonNode folds(JsonNode request) { return post("/internal/v2/snapshots/validation-folds", request, Duration.ofMinutes(15)); }
     public JsonNode train(JsonNode request) { return post("/internal/v2/models/train", request, Duration.ofHours(4)); }
+    public JsonNode trainWorkbench(JsonNode request) { return post("/internal/v2/modeling/workbench/train", request, Duration.ofHours(4)); }
     public JsonNode score(JsonNode request) { return post("/internal/v2/models/score", request, Duration.ofMinutes(2)); }
     public JsonNode recommend(JsonNode request) { return post("/internal/v2/models/recommend", request, Duration.ofMinutes(5)); }
+    public JsonNode recommendHistoricalOptimization(JsonNode request) { return post("/internal/v2/optimization/historical", request, Duration.ofMinutes(5)); }
 
     private JsonNode post(String path, JsonNode payload, Duration timeout) {
         if (baseUrl.isBlank()) throw new ApiException(ApiErrorCode.COMPUTE_UNAVAILABLE, "formula-model.v2计算服务地址未配置");

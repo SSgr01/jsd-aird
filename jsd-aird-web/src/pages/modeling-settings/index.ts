@@ -1,2 +1,1 @@
-export { ModelingSettingsPage } from './ModelingSettingsPage'
-export { SampleSourcePage } from './SampleSourcePage'
+export { ModelingWorkbenchPage } from './ModelingWorkbenchPage'

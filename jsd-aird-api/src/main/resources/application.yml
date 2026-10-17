@@ -155,6 +155,8 @@ app:
       feedback-cron: ${JSD_AIRD_AI_FEEDBACK_CRON:0 30 2 * * *}
       rebuild-check-cron: ${JSD_AIRD_AI_REBUILD_CHECK_CRON:0 0 2 * * SUN}
     prompt-version: ${JSD_AIRD_AI_PROMPT_VERSION:research-assistant-v2-grounded}
+    operation-assistant:
+      embedding-query-timeout: ${JSD_AIRD_OPERATION_ASSISTANT_EMBEDDING_QUERY_TIMEOUT:3s}
     query-rewrite:
       enabled: ${JSD_AIRD_QUERY_REWRITE_ENABLED:true}
       model: ${JSD_AIRD_QUERY_REWRITE_MODEL:qwen3.7-flash-2026-07-15}

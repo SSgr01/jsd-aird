@@ -24,6 +24,8 @@ import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.security.Actor;
 import com.jsd.aird.shared.security.ActorContext;
+import com.jsd.aird.shared.json.JsonCanonicalizer;
+import com.jsd.aird.tpl.api.TemplateDataImportFacade;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -152,6 +154,132 @@ class ExperimentServiceTest {
     }
 
     @Test
+    void confirmsImportedWorkbookAndInvalidatesConfirmationWhenCellsChange() {
+        var id = UUID.randomUUID();
+        var versionId = UUID.randomUUID();
+        var workbook = mapper.createObjectNode();
+        workbook.withObject("sheets").withObject("sheet-1").withObject("cellData")
+                .withObject("0").withObject("0").put("v", "result");
+        var model = mapper.createObjectNode();
+        model.set("documentSnapshot", workbook);
+        var summary = new Summary(id, "EXP-IMPORT-1", "导入实验", null, null,
+                "EXCEL_IMPORT", ExperimentStatus.DRAFT, null, null, null, null, null, null,
+                "creator", LocalDate.of(2026, 8, 25), 1, 1, Instant.now());
+        var current = new Detail(summary, versionId, null, null, null,
+                mapper.createObjectNode(), model, List.of(), List.of());
+        when(repository.detail(ORGANIZATION_ID, id)).thenReturn(Optional.of(current));
+        var importService = new ExperimentService(repository, mapper, files,
+                new ExperimentEditModelNormalizer(mapper), null, null, new JsonCanonicalizer(mapper));
+
+        assertThatThrownBy(() -> importService.transition(id, 1, ExperimentStatus.PENDING_REVIEW, null))
+                .hasMessageContaining("请先确认本次导入的实验数据");
+
+        when(repository.saveDraft(any(), any(), any(Long.class), any(), any(), any()))
+                .thenAnswer(invocation -> {
+                    var draft = invocation.<ExperimentRepository.Draft>getArgument(3);
+                    var savedSummary = new Summary(id, "EXP-IMPORT-1", "导入实验", null, null,
+                            "EXCEL_IMPORT", ExperimentStatus.DRAFT, null, null, null, null, null, null,
+                            "creator", LocalDate.of(2026, 8, 25), 1, 2, Instant.now());
+                    return new Detail(savedSummary, versionId, null, null, null,
+                            mapper.createObjectNode(), draft.editModel(), List.of(), List.of());
+                });
+        var confirmed = importService.confirmTemplateData(id, 1);
+        assertThat(confirmed.editModel().path("importDataReview").path("confirmed").asBoolean()).isTrue();
+        assertThat(confirmed.editModel().path("importDataReview").path("confirmedRevision").asLong()).isEqualTo(2);
+
+        var changed = confirmed.editModel().deepCopy();
+        ((com.fasterxml.jackson.databind.node.ObjectNode) changed.path("documentSnapshot")
+                .path("sheets").path("sheet-1").path("cellData").path("0").path("0"))
+                .put("v", "updated");
+        when(repository.detail(ORGANIZATION_ID, id)).thenReturn(Optional.of(confirmed));
+        importService.save(id, 2, new ExperimentService.DraftCommand(
+                "EXP-IMPORT-1", "导入实验", null, null, null, null, null,
+                "creator", LocalDate.of(2026, 8, 25), null, null,
+                mapper.createObjectNode(), changed));
+        var captor = ArgumentCaptor.forClass(ExperimentRepository.Draft.class);
+        verify(repository, org.mockito.Mockito.times(2)).saveDraft(any(), any(), any(Long.class),
+                captor.capture(), any(), any());
+        assertThat(captor.getAllValues().get(1).editModel().path("importDataReview").path("confirmed").asBoolean())
+                .isFalse();
+    }
+
+    @Test
+    void templateImportRequiresItsBoundFieldValueBeforeConfirmation() {
+        var id = UUID.randomUUID();
+        var versionId = UUID.randomUUID();
+        var templateVersionId = UUID.randomUUID();
+        var workbook = mapper.createObjectNode();
+        workbook.withObject("sheets").withObject("sheet-1").withObject("cellData")
+                .withObject("1").withObject("1").put("v", "");
+        workbook.path("sheets").path("sheet-1").withObject("cellData")
+                .withObject("0").withObject("0").put("v", "实验数据");
+        var model = mapper.createObjectNode().put("sourceImportJobId", UUID.randomUUID().toString());
+        model.set("documentSnapshot", workbook);
+        var summary = new Summary(id, "EXP-TEMPLATE-IMPORT", "模板导入实验", null, null,
+                "EXCEL_IMPORT", ExperimentStatus.DRAFT, null, null, null, null, null, null,
+                "creator", LocalDate.of(2026, 8, 25), 1, 1, Instant.now());
+        var current = new Detail(summary, versionId, null, templateVersionId, null,
+                mapper.createObjectNode(), model, List.of(), List.of());
+        when(repository.detail(ORGANIZATION_ID, id)).thenReturn(Optional.of(current));
+        var templates = mock(TemplateDataImportFacade.class);
+        var field = new TemplateDataImportFacade.FieldDefinition(
+                "VISCOSITY", "粘度", "NUMBER", null, true, false, List.of(), "/viscosity");
+        var binding = new TemplateDataImportFacade.ImportBinding(
+                "viscosity-binding", "VISCOSITY", "/viscosity", "SCALAR", null, null,
+                1, 1, 1, mapper.createObjectNode(), mapper.createObjectNode()
+                        .put("sheetId", "sheet-1").put("address", "B2"),
+                true, false, true, "SOURCE", "NUMBER", null);
+        when(templates.getVersion(ORGANIZATION_ID, templateVersionId)).thenReturn(
+                new TemplateDataImportFacade.DataTemplateDefinition(null, templateVersionId, "V9", "实验模板",
+                        null, 1, "XLSX", mapper.createObjectNode(), mapper.createObjectNode(), List.of(field)));
+        when(templates.getBindings(ORGANIZATION_ID, templateVersionId)).thenReturn(List.of(binding));
+        var importService = new ExperimentService(repository, mapper, files,
+                new ExperimentEditModelNormalizer(mapper), null, templates, new JsonCanonicalizer(mapper));
+
+        assertThat(importService.templateDataReview(id).fields()).containsExactly(field);
+        assertThatThrownBy(() -> importService.confirmTemplateData(id, 1))
+                .hasMessageContaining("必填数据尚未填写：粘度");
+
+        ((com.fasterxml.jackson.databind.node.ObjectNode) workbook.path("sheets").path("sheet-1")
+                .path("cellData").path("1").path("1")).put("v", "1350");
+        when(repository.saveDraft(any(), any(), any(Long.class), any(), any(), any()))
+                .thenAnswer(invocation -> {
+                    var draft = invocation.<ExperimentRepository.Draft>getArgument(3);
+                    var savedSummary = new Summary(id, "EXP-TEMPLATE-IMPORT", "模板导入实验", null, null,
+                            "EXCEL_IMPORT", ExperimentStatus.DRAFT, null, null, null, null, null, null,
+                            "creator", LocalDate.of(2026, 8, 25), 1, 2, Instant.now());
+                    return new Detail(savedSummary, versionId, null, templateVersionId, null,
+                            mapper.createObjectNode(), draft.editModel(), List.of(), List.of());
+                });
+        var confirmed = importService.confirmTemplateData(id, 1);
+        assertThat(confirmed.editModel().path("importDataReview").path("confirmed").asBoolean()).isTrue();
+    }
+
+    @Test
+    void legacyTemplateDraftWithoutReviewMarkerStillRequiresFieldConfirmation() {
+        var id = UUID.randomUUID();
+        var templateVersionId = UUID.randomUUID();
+        var summary = new Summary(id, "EXP-TEMPLATE-1", "模板实验", null, null,
+                "TEMPLATE", ExperimentStatus.DRAFT, null, null, null, null, null, null,
+                "creator", LocalDate.of(2026, 8, 25), 1, 1, Instant.now());
+        var detail = new Detail(summary, UUID.randomUUID(), null, templateVersionId, null,
+                mapper.createObjectNode(), mapper.createObjectNode(), List.of(), List.of());
+        when(repository.detail(ORGANIZATION_ID, id)).thenReturn(Optional.of(detail));
+        var templates = mock(TemplateDataImportFacade.class);
+        when(templates.getVersion(ORGANIZATION_ID, templateVersionId)).thenReturn(
+                new TemplateDataImportFacade.DataTemplateDefinition(null, templateVersionId, "V9", "实验模板",
+                        null, 1, "XLSX", mapper.createObjectNode(), mapper.createObjectNode(),
+                        List.of(new TemplateDataImportFacade.FieldDefinition(
+                                "VISCOSITY", "粘度", "NUMBER", null, true, false, List.of(), "/viscosity"))));
+        var templateService = new ExperimentService(repository, mapper, files,
+                new ExperimentEditModelNormalizer(mapper), null, templates, new JsonCanonicalizer(mapper));
+
+        assertThat(templateService.templateDataReview(id).fields()).hasSize(1);
+        assertThatThrownBy(() -> templateService.transition(id, 1, ExperimentStatus.PENDING_REVIEW, null))
+                .hasMessageContaining("请先确认本次实验数据");
+    }
+
+    @Test
     void savesImportedDraftWithoutInventingOwnerOrExperimentDate() {
         var experimentId = UUID.randomUUID();
         var versionId = UUID.randomUUID();
@@ -160,6 +288,9 @@ class ExperimentServiceTest {
                 "EXCEL_IMPORT", ExperimentStatus.DRAFT, null, null, null, null, null, null,
                 null, null, 1, 1, Instant.now()
         );
+        when(repository.detail(ORGANIZATION_ID, experimentId)).thenReturn(Optional.of(
+                new Detail(summary, versionId, null, null, null, mapper.createObjectNode(),
+                        mapper.createObjectNode(), List.of(), List.of())));
         when(repository.saveDraft(
                 org.mockito.ArgumentMatchers.eq(ORGANIZATION_ID),
                 org.mockito.ArgumentMatchers.eq(experimentId),

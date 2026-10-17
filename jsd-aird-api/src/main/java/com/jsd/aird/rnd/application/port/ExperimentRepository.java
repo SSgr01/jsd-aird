@@ -68,4 +68,6 @@ public interface ExperimentRepository {
     Category createCategory(UUID organizationId, String code, String name, String description, UUID actorId);
     Category updateCategory(UUID organizationId, UUID id, long revision, String name, String description, UUID actorId);
     Category setCategoryActive(UUID organizationId, UUID id, long revision, boolean active);
+    /** 删除分类前先把该分类下的实验迁移到目标分类（null 表示移出分类），返回删除的分类行数。 */
+    int deleteCategory(UUID organizationId, UUID id, UUID replacementCategoryId);
 }

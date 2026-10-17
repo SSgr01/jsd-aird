@@ -49,6 +49,7 @@ public class ExperimentController {
     @PostMapping("/experiment-categories") public ApiResponse<?> category(@Valid @RequestBody CategoryRequest r){return ok(service.createCategory(r.code,r.name,r.description));}
     @PutMapping("/experiment-categories/{id}") public ApiResponse<?> updateCategory(@PathVariable UUID id,@Valid @RequestBody CategoryUpdateRequest r){return ok(service.updateCategory(id,r.revision,r.name,r.description));}
     @PutMapping("/experiment-categories/{id}/active") public ApiResponse<?> categoryActive(@PathVariable UUID id,@Valid @RequestBody CategoryActiveRequest r){return ok(service.categoryActive(id,r.revision,r.active));}
+    @DeleteMapping("/experiment-categories/{id}") public ApiResponse<?> deleteCategory(@PathVariable UUID id,@RequestParam(required=false)UUID replacementCategoryId){service.deleteCategory(id,replacementCategoryId);return ok(null);}
     private static <T>ApiResponse<T> ok(T data){return ResponseFactory.success(data,RequestIdHolder.currentOrUnknown());}
     private static ResponseEntity<byte[]> download(ExperimentExportService.Download file){
         var disposition=ContentDisposition.attachment().filename(file.fileName(), StandardCharsets.UTF_8).build();

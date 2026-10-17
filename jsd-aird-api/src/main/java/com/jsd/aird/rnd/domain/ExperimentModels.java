@@ -28,7 +28,7 @@ public final class ExperimentModels {
     public record Audit(UUID id, String action, JsonNode before, JsonNode after, String operatorName, Instant createdAt) {}
     public record Category(UUID id, String code, String name, String description, boolean active, long revision) {
         public List<String> getAllowedActions() {
-            return active ? List.of("DISABLE") : List.of("RESTORE");
+            return active ? List.of("DISABLE", "DELETE") : List.of("RESTORE", "DELETE");
         }
     }
     public record ImportJob(UUID id, UUID sourceFileId, String sourceFileName, String sha256, String status,

@@ -124,6 +124,9 @@ public class ExperimentService {
             editModel.put("documentFormat", "excel");
             editModel.putObject("templateDataReview").put("required", true).put("confirmed", false);
         }
+        if (ExperimentSourceType.EXCEL_IMPORT.name().equals(sourceType)) {
+            editModel.putObject("importDataReview").put("confirmed", false);
+        }
         if (command.sourceFileId() != null) {
             // Keep the relational source reference and the version snapshot
             // aligned for newly-created experiments.
@@ -218,10 +221,13 @@ public class ExperimentService {
         if (command.title() == null || command.title().isBlank()) {
             throw validation("实验名称不能为空");
         }
-        if (command.ownerName() == null || command.ownerName().isBlank()) {
+        var current = detail(id);
+        var imported = "EXCEL_IMPORT".equals(current.summary().sourceType())
+                || "OCR_IMPORT".equals(current.summary().sourceType());
+        if (!imported && (command.ownerName() == null || command.ownerName().isBlank())) {
             throw validation("实验负责人不能为空");
         }
-        if (command.experimentDate() == null) {
+        if (!imported && command.experimentDate() == null) {
             throw validation("实验日期不能为空");
         }
 
@@ -229,22 +235,36 @@ public class ExperimentService {
         var templateVersionId = command.templateVersionId();
         var templateSnapshotHash = command.templateSnapshotHash();
         var templateSnapshot = object(command.templateSnapshot(), "templateSnapshot");
-        var current = detail(id);
-        if (current.editModel().path("templateDataReview").path("required").asBoolean(false)) {
+        if (isOnlineTemplate(current)) {
             if (!current.templateVersionId().equals(templateVersionId))
                 throw validation("在线实验模板版本不可变更");
             templateSnapshotHash = current.templateSnapshotHash();
             templateSnapshot = (ObjectNode) current.templateSnapshot().deepCopy();
             if (!confirmingData) {
-                var marker = (ObjectNode) current.editModel().path("templateDataReview").deepCopy();
+                var marker = current.editModel().path("templateDataReview").isObject()
+                        ? (ObjectNode) current.editModel().path("templateDataReview").deepCopy()
+                        : json.createObjectNode().put("required", true).put("confirmed", false);
                 var unchanged = marker.path("confirmed").asBoolean(false)
                         && marker.path("dataHash").asText("")
                         .equals(dataHash(current.templateVersionId(), model.path("dynamicValues")));
                 marker.put("confirmed", unchanged);
                 if (unchanged) marker.put("confirmedRevision", revision + 1);
                 else marker.remove("confirmedRevision");
+                marker.put("required", true);
                 model.set("templateDataReview", marker);
             }
+        }
+        if (("EXCEL_IMPORT".equals(current.summary().sourceType()) || isTemplateImport(current)) && !confirmingData) {
+            var previous = current.editModel().path("importDataReview");
+            var marker = json.createObjectNode();
+            var unchanged = previous.path("confirmed").asBoolean(false)
+                    && previous.path("dataHash").asText("").equals(importDataHash(model.path("documentSnapshot")));
+            marker.put("confirmed", unchanged);
+            if (unchanged) {
+                marker.put("confirmedRevision", revision + 1);
+                marker.put("dataHash", previous.path("dataHash").asText());
+            }
+            model.set("importDataReview", marker);
         }
         var result = normalize(repository.saveDraft(
                 actor.organizationId(),
@@ -273,18 +293,21 @@ public class ExperimentService {
 
     public TemplateDataReview templateDataReview(UUID id) {
         var detail = detail(id);
+        var templateImport = isTemplateImport(detail);
         if (detail.templateVersionId() == null || templates == null
-                || !detail.editModel().path("templateDataReview").path("required").asBoolean(false)) {
-            throw validation("当前实验不是按实验数据模板创建的在线记录");
+                || (!templateImport && !isOnlineTemplate(detail))) {
+            throw validation("当前实验没有绑定实验数据模板");
         }
         var actor = ActorContext.required();
         var definition = templates.getVersion(actor.organizationId(), detail.templateVersionId());
         var bindings = templates.getBindings(actor.organizationId(), detail.templateVersionId());
         var values = detail.editModel().path("dynamicValues");
         var marker = detail.editModel().path("templateDataReview");
-        var confirmed = marker.path("confirmed").asBoolean(false)
-                && marker.path("confirmedRevision").asLong(-1) == detail.summary().revision()
-                && marker.path("dataHash").asText("").equals(dataHash(detail.templateVersionId(), values));
+        var confirmed = templateImport
+                ? importDataConfirmed(detail)
+                : marker.path("confirmed").asBoolean(false)
+                    && marker.path("confirmedRevision").asLong(-1) == detail.summary().revision()
+                    && marker.path("dataHash").asText("").equals(dataHash(detail.templateVersionId(), values));
         return new TemplateDataReview(detail.templateVersionId(), definition.contractHash(), definition.fields(),
                 bindings, values.deepCopy(), confirmed);
     }
@@ -292,6 +315,34 @@ public class ExperimentService {
     public Detail confirmTemplateData(UUID id, long revision) {
         var current = detail(id);
         if (current.summary().revision() != revision) throw validation("实验版本已变化，请刷新后确认数据");
+        if ("EXCEL_IMPORT".equals(current.summary().sourceType()) || isTemplateImport(current)) {
+            var model = (ObjectNode) current.editModel().deepCopy();
+            var snapshot = model.path("documentSnapshot");
+            if (!hasWorkbookData(snapshot))
+                throw validation("导入实验没有可确认的工作表数据");
+            if (isTemplateImport(current)) {
+                var review = templateDataReview(id);
+                if (review.fields().isEmpty() || review.bindings().isEmpty())
+                    throw validation("实验模板没有可确认的字段绑定");
+                for (var field : review.fields()) {
+                    if (!field.required()) continue;
+                    var binding = review.bindings().stream()
+                            .filter(item -> (field.dataPath() != null && field.dataPath().equals(item.dataPath()))
+                                    || (field.fieldCode() != null && field.fieldCode().equals(item.fieldCode())))
+                            .findFirst().orElse(null);
+                    if (binding == null || !hasBoundWorkbookValue(snapshot, binding.locator()))
+                        throw validation("必填数据尚未填写：" + field.displayName());
+                }
+            }
+            model.withObject("importDataReview").put("confirmed", true)
+                    .put("confirmedRevision", revision + 1)
+                    .put("dataHash", importDataHash(snapshot));
+            var summary = current.summary();
+            return saveInternal(id, revision, new DraftCommand(summary.experimentNo(), summary.title(),
+                    summary.categoryId(), summary.categoryName(), summary.projectId(), summary.stageId(),
+                    summary.taskId(), summary.ownerName(), summary.experimentDate(), current.templateVersionId(),
+                    current.templateSnapshotHash(), current.templateSnapshot(), model), true);
+        }
         var review = templateDataReview(id);
         for (var field : review.fields()) {
             var value = valueAt(review.values(), field);
@@ -385,6 +436,96 @@ public class ExperimentService {
         return canonicalizer.hash(envelope);
     }
 
+    private String importDataHash(JsonNode snapshot) {
+        return canonicalizer.hash(snapshot);
+    }
+
+    private boolean isTemplateImport(Detail detail) {
+        return ("EXCEL_IMPORT".equals(detail.summary().sourceType())
+                    || "OCR_IMPORT".equals(detail.summary().sourceType()))
+                && detail.templateVersionId() != null
+                && !detail.editModel().path("sourceImportJobId").asText("").isBlank();
+    }
+
+    private boolean isOnlineTemplate(Detail detail) {
+        return "TEMPLATE".equals(detail.summary().sourceType()) && detail.templateVersionId() != null;
+    }
+
+    private boolean importDataConfirmed(Detail detail) {
+        var marker = detail.editModel().path("importDataReview");
+        return marker.path("confirmed").asBoolean(false)
+                && marker.path("confirmedRevision").asLong(-1) == detail.summary().revision()
+                && marker.path("dataHash").asText("").equals(importDataHash(detail.editModel().path("documentSnapshot")));
+    }
+
+    private boolean hasBoundWorkbookValue(JsonNode snapshot, JsonNode locator) {
+        var sheets = snapshot.path("sheets");
+        var sheet = sheets.path(locator.path("sheetId").asText(""));
+        if (sheet.isMissingNode()) {
+            for (var candidate : sheets) {
+                if (locator.path("sheetName").asText("").equals(candidate.path("name").asText(""))) {
+                    sheet = candidate;
+                    break;
+                }
+            }
+        }
+        if (sheet.isMissingNode()) return false;
+        var address = locator.path("valueRange").asText("");
+        if (address.isBlank()) address = locator.path("address").asText("");
+        if (address.isBlank()) address = locator.path("logicalInputRange").asText("");
+        if (address.isBlank()) address = locator.path("anchorAddress").asText("");
+        if (address.isBlank()) address = locator.path("dataRange").asText("");
+        if (address.isBlank()) return false;
+        var bounds = address.replace("$", "").split(":", -1);
+        var first = workbookCoordinate(bounds[0]);
+        var last = workbookCoordinate(bounds[bounds.length - 1]);
+        if (first == null || last == null || (long) (last[0] - first[0] + 1) * (last[1] - first[1] + 1) > 10_000)
+            return false;
+        var labelRange = locator.path("labelRange").asText("").replace("$", "").split(":", -1);
+        var labelFirst = workbookCoordinate(labelRange[0]);
+        var labelLast = workbookCoordinate(labelRange[labelRange.length - 1]);
+        var inline = "INLINE_TEXT".equalsIgnoreCase(locator.path("valueMode").asText(""))
+                || "AFTER_DELIMITER".equalsIgnoreCase(locator.path("valuePart").asText(""));
+        for (int row = first[0]; row <= last[0]; row++) {
+            for (int column = first[1]; column <= last[1]; column++) {
+                if (!inline && labelFirst != null && labelLast != null && row >= labelFirst[0] && row <= labelLast[0]
+                        && column >= labelFirst[1] && column <= labelLast[1]) continue;
+                var value = sheet.path("cellData").path(String.valueOf(row)).path(String.valueOf(column)).path("v");
+                if (inline) {
+                    var text = value.asText("");
+                    var separator = Math.max(text.indexOf('：'), text.indexOf(':'));
+                    if (separator < 0 || text.substring(separator + 1).isBlank()) continue;
+                }
+                if (hasValue(value)) return true;
+            }
+        }
+        return false;
+    }
+
+    private int[] workbookCoordinate(String address) {
+        if (address == null || !address.matches("(?i)[A-Z]+[1-9][0-9]*")) return null;
+        var column = 0;
+        var index = 0;
+        while (index < address.length() && Character.isLetter(address.charAt(index))) {
+            column = column * 26 + Character.toUpperCase(address.charAt(index)) - 'A' + 1;
+            index++;
+        }
+        return new int[] {Integer.parseInt(address.substring(index)) - 1, column - 1};
+    }
+
+    private boolean hasWorkbookData(JsonNode snapshot) {
+        var sheets = snapshot.path("sheets");
+        if (!sheets.isObject()) return false;
+        for (var sheet : sheets) {
+            for (var row : sheet.path("cellData")) {
+                for (var cell : row) {
+                    if (hasValue(cell.path("v"))) return true;
+                }
+            }
+        }
+        return false;
+    }
+
     public record TemplateDataReview(UUID templateVersionId, String contractHash,
             List<TemplateDataImportFacade.FieldDefinition> fields,
             List<TemplateDataImportFacade.ImportBinding> bindings, JsonNode values, boolean confirmed) {}
@@ -405,8 +546,17 @@ public class ExperimentService {
             throw validation("实验目标状态不能为空");
         }
         if (target == ExperimentStatus.PENDING_REVIEW) {
-            var model = detail(id).editModel();
-            if (model.path("templateDataReview").path("required").asBoolean(false)) {
+            var current = detail(id);
+            var model = current.editModel();
+            if ("EXCEL_IMPORT".equals(current.summary().sourceType()) || isTemplateImport(current)) {
+                var marker = model.path("importDataReview");
+                if (!marker.path("confirmed").asBoolean(false)
+                        || marker.path("confirmedRevision").asLong(-1) != current.summary().revision()
+                        || !marker.path("dataHash").asText("").equals(importDataHash(model.path("documentSnapshot")))) {
+                    throw validation("请先确认本次导入的实验数据，再提交审核");
+                }
+            }
+            if (isOnlineTemplate(current)) {
                 var review = templateDataReview(id);
                 if (!review.confirmed()) throw validation("请先确认本次实验数据，再提交审核");
             }
@@ -506,6 +656,22 @@ public class ExperimentService {
         var result = repository.setCategoryActive(actor.organizationId(), id, revision, active);
         audit(actor, "EXPERIMENT_CATEGORY_STATUS_CHANGED", "EXPERIMENT_CATEGORY", id, result.name());
         return result;
+    }
+
+    /** 删除实验分类；分类下的实验会迁移到 replacementCategoryId（为空表示移出分类）。 */
+    public void deleteCategory(UUID id, UUID replacementCategoryId) {
+        var actor = ActorContext.required();
+        var organizationId = actor.organizationId();
+        if (id.equals(replacementCategoryId)) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "不能迁移到当前分类");
+        }
+        var category = repository.categories(organizationId, true).stream()
+                .filter(value -> value.id().equals(id)).findFirst()
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "实验分类不存在"));
+        if (repository.deleteCategory(organizationId, id, replacementCategoryId) == 0) {
+            throw new ApiException(ApiErrorCode.NOT_FOUND, "实验分类不存在");
+        }
+        audit(actor, "EXPERIMENT_CATEGORY_DELETED", "EXPERIMENT_CATEGORY", id, category.name());
     }
 
     private void audit(com.jsd.aird.shared.security.Actor actor, String action, String type, UUID id, String name) {

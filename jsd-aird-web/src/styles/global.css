@@ -491,6 +491,84 @@ a:active,
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
 }
+/* 实验模板数据面板：标题、页签、字段列表、底部按钮各占一行，
+   字段列表独占剩余高度并自行滚动，避免被底部按钮遮挡。 */
+.experiment-template-data-panel {
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+}
+.experiment-import-data-panel {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+.experiment-import-review-column {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.experiment-import-review-column > .data-workbench-panel,
+.experiment-import-review-column > .experiment-field-manager {
+  flex: 1;
+  min-height: 0;
+}
+.experiment-import-review-tabs,
+.experiment-import-sheet-tabs {
+  display: flex;
+  gap: 12px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--app-border);
+}
+.experiment-import-review-tabs button,
+.experiment-import-sheet-tabs button {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  padding: 10px 2px;
+  cursor: pointer;
+}
+.experiment-import-review-tabs button[aria-selected="true"],
+.experiment-import-sheet-tabs button[aria-selected="true"] {
+  color: #315efb;
+  border-bottom-color: #315efb;
+}
+.experiment-import-data-body {
+  overflow: auto;
+}
+.experiment-import-sheet-tabs {
+  overflow-x: auto;
+}
+.experiment-import-sheet-tabs button {
+  white-space: nowrap;
+}
+.experiment-import-value {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--app-border);
+}
+.experiment-import-value span:last-child {
+  overflow-wrap: anywhere;
+}
+.experiment-template-data-panel .data-workbench-panel-header {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px 8px;
+}
+.experiment-template-data-panel .data-workbench-panel-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.experiment-template-data-panel .data-workbench-panel-title .ant-typography {
+  margin: 0;
+}
+.experiment-template-data-panel .data-workbench-tabs {
+  padding: 0 14px;
+}
+.experiment-template-data-panel > .data-panel-body {
+  padding-top: 0;
+}
 .data-workbench-tabs {
   padding: 0 12px;
   border-bottom: 1px solid var(--app-border);
@@ -4312,6 +4390,56 @@ a:active,
 }
 .template-business-workspace .workspace-publish-button {
   box-shadow: 0 2px 6px rgb(40 104 215 / 18%);
+}
+
+/* 实验查看页头部参照数据中心：标题可收缩省略、标签可换行、按钮区可收缩换行，
+   避免窄屏时标题/标签被按钮压住或互相重叠。 */
+.experiment-workspace-shell .workspace-identity {
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+.experiment-workspace-shell .workspace-identity > .ant-btn,
+.experiment-workspace-shell .workspace-identity > .ant-tag,
+.experiment-workspace-shell .workspace-identity > .workspace-meta-item {
+  flex: 0 0 auto;
+}
+.experiment-workspace-shell .workspace-title-block {
+  min-width: 0;
+  max-width: 100%;
+  flex: 0 1 auto;
+}
+.experiment-workspace-shell .workspace-title-block > span {
+  max-width: 100%;
+}
+.experiment-workspace-shell .workspace-title-block > span:last-child {
+  font-size: clamp(14px, 1.2vw, 17px);
+}
+.experiment-workspace-shell .workspace-header > .ant-space {
+  min-width: 0;
+  max-width: 100%;
+  flex: 0 1 auto;
+  justify-content: flex-end;
+}
+/* 按钮自身不压缩，放不下时整行换行，避免按钮文字被挤压重叠。 */
+.experiment-workspace-shell .workspace-header > .ant-space .ant-space-item {
+  flex: 0 0 auto;
+}
+.experiment-workspace-shell .workspace-header > .ant-space .ant-btn {
+  white-space: nowrap;
+}
+@media (max-width: 1440px) {
+  .experiment-workspace-shell .workspace-header .ant-btn {
+    padding-inline: 10px;
+    font-size: 13px;
+  }
+  .experiment-workspace-shell .workspace-header .ant-tag {
+    font-size: 11px;
+  }
+  .experiment-workspace-shell .workspace-breadcrumb {
+    font-size: 11px;
+  }
 }
 
 .template-business-workspace .workspace-view-tabs {

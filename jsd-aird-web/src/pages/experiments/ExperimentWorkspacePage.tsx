@@ -62,12 +62,14 @@ import {
   confirmExperimentTemplateData,
   type ExperimentTemplateDataReview,
 } from '@/services/experiments/experiment-api';
-import { downloadBlob, fetchFileBlob } from '@/services/files/file-api';
+import { downloadBlob, fetchFilePreviewBlob, fileContentUrl } from '@/services/files/file-api';
+import { FilePreviewModal, downloadPreviewFile, type FilePreviewDescriptor } from '@/components/file-preview';
 import { Can } from '@/components/auth/Can';
 import { templateApi, type TemplateCategory } from '@/services/templates/template-api';
 import { ExperimentFieldReviewPanel } from './ExperimentFieldReviewPanel';
 import './experiments.css';
 import { ExperimentTemplateDataPanel } from './ExperimentTemplateDataPanel';
+import { ExperimentImportDataPanel } from './ExperimentImportDataPanel';
 
 const SheetsEditor = lazy(async () => ({
   default: (await import('@/features/template-workspace/UniverSheetsEditor')).UniverSheetsEditor,
@@ -79,6 +81,8 @@ const DocsEditor = lazy(async () => ({
 
 type WorkspaceView = 'preview' | 'edit' | 'versions';
 type PublishAction = 'submit-review' | 'approve';
+/** 与模板中心一致：停止编辑 2 秒后自动保存草稿。 */
+const AUTOSAVE_DELAY_MS = 2000;
 const STATUS_TEXT: Record<string, string> = {
   DRAFT: '草稿',
   PENDING: '待开始',
@@ -135,18 +139,24 @@ export function ExperimentWorkspacePage({
   const [editModel, setEditModel] = useState<ExperimentModel>({});
   const [templateReview, setTemplateReview] = useState<ExperimentTemplateDataReview>();
   const pendingTemplateWrites = useRef<Promise<void>[]>([]);
+  const savePromiseRef = useRef<Promise<boolean>>();
+  const saveRef = useRef<(silent?: boolean) => Promise<boolean>>(() => Promise.resolve(false));
+  const autosaveTimerRef = useRef<number>();
+  const editGenerationRef = useRef(0);
   const [versions, setVersions] = useState<ExperimentVersion[]>([]);
   const [selectedVersion, setSelectedVersion] = useState<ExperimentVersion>();
   const [view, setView] = useState<WorkspaceView>('preview');
   const [busy, setBusy] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const [downloadingSource, setDownloadingSource] = useState(false);
+  const [previewSource, setPreviewSource] = useState<FilePreviewDescriptor>();
   const [saveState, setSaveState] = useState<SaveState>('SAVED');
+  const [editRevision, setEditRevision] = useState(0);
   const [loadError, setLoadError] = useState<string>();
   const [reviewOpen, setReviewOpen] = useState(false);
   const [returnOpen, setReturnOpen] = useState(false);
   const [returnReason, setReturnReason] = useState('');
   const [reviewTrigger, setReviewTrigger] = useState(0);
+  const [importPanelTab, setImportPanelTab] = useState<'data' | 'recognition'>('data');
   const [coordinatePicking, setCoordinatePicking] = useState<{ fieldId: string; target: 'labelAddress' | 'address' }>();
   const [recognitionBusy, setRecognitionBusy] = useState(false);
   const [recognitionProgress, setRecognitionProgress] = useState<number>();
@@ -156,6 +166,9 @@ export function ExperimentWorkspacePage({
   const [templateCategories, setTemplateCategories] = useState<TemplateCategory[]>([]);
   const [templateDraftForm] = Form.useForm<{ name: string; categoryId: string }>();
   const isDesktop = useDesktopEditing();
+  // 只读状态与自动保存共用同一判定，避免两处条件漂移。
+  const statusLocked = !detail
+    || ['COMPLETED', 'VOIDED', 'PENDING_REVIEW'].includes(detail.summary.status);
 
   const load = useCallback(async () => {
     setSaveState('SAVED');
@@ -179,6 +192,9 @@ export function ExperimentWorkspacePage({
       setDetail(d);
       setEditModel(nextModel);
       setTemplateReview(nextModel.templateDataReview?.required
+        || (d.summary.sourceType === 'TEMPLATE' && Boolean(d.templateVersionId))
+        || (['EXCEL_IMPORT', 'OCR_IMPORT'].includes(d.summary.sourceType)
+          && Boolean(nextModel.sourceImportJobId) && Boolean(d.templateVersionId))
         ? await getExperimentTemplateDataReview(id) : undefined);
       const initialSnapshot = buildExperimentSnapshot(
         nextModel,
@@ -190,6 +206,8 @@ export function ExperimentWorkspacePage({
       const editable = !['COMPLETED', 'VOIDED', 'PENDING_REVIEW'].includes(d.summary.status);
       setView(editable ? 'edit' : 'preview');
       setSaveState('SAVED');
+      editGenerationRef.current = 0;
+      setEditRevision(0);
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : '实验本加载失败');
     }
@@ -223,13 +241,20 @@ export function ExperimentWorkspacePage({
     return { ...model, dynamicValues: values };
   };
 
+  // 与模板中心一致：每次修改推进编辑代号并标记未保存，由自动保存接管落库。
+  const markDirty = () => {
+    editGenerationRef.current += 1;
+    setEditRevision(editGenerationRef.current);
+    setSaveState((current) => (current === 'SAVING' ? current : 'DIRTY'));
+  };
+
   const updateRecognizedField = (fieldId: string, changes: Partial<NonNullable<ExperimentModel['recognizedFields']>[number]>) => {
     setEditModel((current) => ({
       ...current,
       recognizedFields: current.recognizedFields?.map((field) =>
         field.id === fieldId ? { ...field, ...changes } : field),
     }));
-    setSaveState('DIRTY');
+    markDirty();
   };
   const updateRecognizedRegion = (regionId: string, confirmed: boolean) => {
     setEditModel((current) => ({
@@ -237,7 +262,7 @@ export function ExperimentWorkspacePage({
       recognizedRegions: current.recognizedRegions?.map((region) =>
         region.id === regionId ? { ...region, confirmed } : region),
     }));
-    setSaveState('DIRTY');
+    markDirty();
   };
   const handleCoordinateSelection = (selection: EditorSelection) => {
     if (!coordinatePicking) return;
@@ -264,7 +289,7 @@ export function ExperimentWorkspacePage({
         };
       }),
     }));
-    setSaveState('DIRTY');
+    markDirty();
     setCoordinatePicking(undefined);
   };
   const confirmAllRecognizedFields = () => {
@@ -277,7 +302,7 @@ export function ExperimentWorkspacePage({
             || field.locator.valueRange || field.locator.dataRange)
           ? { ...field, confirmed: true } : field),
     }));
-    setSaveState('DIRTY');
+    markDirty();
   };
   const restartRecognition = async () => {
     if (!detail || recognitionBusy) return;
@@ -308,7 +333,6 @@ export function ExperimentWorkspacePage({
       setRecognitionProgress(undefined);
     }
   };
-  const imageSource = /\.(png|jpe?g|gif|webp|bmp|tiff?)$/i.test(editModel.sourceFileName || '');
   const regionBindings: TemplateBinding[] = (editModel.recognizedRegions ?? [])
     .filter((region) => ['ROW_TABLE', 'COLUMN_TABLE'].includes(region.kind) && region.bindingId)
     .map((region) => ({
@@ -358,14 +382,17 @@ export function ExperimentWorkspacePage({
   ];
   const handleRecognizedValue = (binding: TemplateBinding, value: unknown) => {
     if (value === undefined || !binding.dataPath) return;
+    const dataPath = binding.dataPath;
+    const unchanged =
+      JSON.stringify(getAtPath(editModel.dynamicValues ?? {}, dataPath)) === JSON.stringify(value);
     setEditModel((current) => {
       const values = current.dynamicValues ?? {};
-      if (JSON.stringify(getAtPath(values, binding.dataPath)) === JSON.stringify(value)) return current;
-      setSaveState('DIRTY');
-      return { ...current, dynamicValues: setAtPath(values, binding.dataPath, value),
+      if (JSON.stringify(getAtPath(values, dataPath)) === JSON.stringify(value)) return current;
+      return { ...current, dynamicValues: setAtPath(values, dataPath, value),
         templateDataReview: current.templateDataReview?.required
           ? { ...current.templateDataReview, confirmed: false } : current.templateDataReview };
     });
+    if (!unchanged) markDirty();
   };
 
   const changeTemplateValue = (path: string, value: string) => {
@@ -392,14 +419,16 @@ export function ExperimentWorkspacePage({
       templateDataReview: current.templateDataReview?.required
         ? { ...current.templateDataReview, confirmed: false } : current.templateDataReview,
     }));
-    setSaveState('DIRTY');
+    markDirty();
   };
 
   const confirmTemplateData = async () => {
-    if (!detail || !templateReview) return;
+    if (!detail || (!templateReview && detail.summary.sourceType !== 'EXCEL_IMPORT')) return;
     setBusy(true);
     try {
       await Promise.all(pendingTemplateWrites.current);
+      // 自动保存可能仍在进行，先等它结束，避免同一 revision 并发写入冲突。
+      await savePromiseRef.current;
       const saved = await persistDraft(currentDraftModel());
       if (!saved) return;
       await confirmExperimentTemplateData(id, saved.summary.revision);
@@ -412,11 +441,11 @@ export function ExperimentWorkspacePage({
     }
   };
 
-  const persistDraft = async (nextModel: ExperimentModel, successText?: string) => {
+  const persistDraft = async (nextModel: ExperimentModel, successText?: string, silent = false) => {
     if (!detail) return undefined;
     const title = nextModel.title ?? detail.summary.title;
     if (!title.trim()) {
-      void message.warning('实验标题不能为空');
+      if (!silent) void message.warning('实验标题不能为空');
       return undefined;
     }
     const savedDetail = await saveExperiment(id, {
@@ -439,21 +468,29 @@ export function ExperimentWorkspacePage({
     // here would trigger UniverSheetsEditor’s snapshot effect, destroy the
     // current workspace, and recreate it from a possibly stale response.
     setDetail(savedDetail);
-    setEditModel({ ...nextModel, templateDataReview: savedDetail.editModel.templateDataReview });
-    setSaveState('SAVED');
+    setEditModel({ ...nextModel, templateDataReview: savedDetail.editModel.templateDataReview,
+      importDataReview: savedDetail.editModel.importDataReview });
     if (successText) void message.success(successText);
     return savedDetail;
   };
 
-  const save = async () => {
+  const performSave = async (silent: boolean): Promise<boolean> => {
     if (!detail) return false;
+    const generation = editGenerationRef.current;
     setSaveState('SAVING');
     try {
-      const savedDetail = await persistDraft(currentDraftModel(), '草稿已保存');
+      const savedDetail = await persistDraft(
+        currentDraftModel(),
+        silent ? undefined : '草稿已保存',
+        silent,
+      );
       if (!savedDetail) {
         setSaveState('DIRTY');
         return false;
       }
+      // 保存期间如果继续编辑，保持“未保存”，由自动保存继续落库，
+      // 避免把保存前的旧内容当成最新版本。
+      setSaveState(editGenerationRef.current === generation ? 'SAVED' : 'DIRTY');
       return true;
     } catch (error) {
       setSaveState('DIRTY');
@@ -461,6 +498,26 @@ export function ExperimentWorkspacePage({
       return false;
     }
   };
+
+  const save = (silent = false): Promise<boolean> => {
+    if (savePromiseRef.current) return savePromiseRef.current;
+    const pending = performSave(silent).finally(() => {
+      if (savePromiseRef.current === pending) savePromiseRef.current = undefined;
+    });
+    savePromiseRef.current = pending;
+    return pending;
+  };
+  saveRef.current = save;
+
+  // 参照模板中心：编辑态停止输入 2 秒后自动保存草稿。
+  // 每次编辑都会推进 editRevision，从而重置防抖计时器。
+  useEffect(() => {
+    if (saveState !== 'DIRTY' || statusLocked || !isDesktop || view !== 'edit' || busy) return;
+    autosaveTimerRef.current = window.setTimeout(() => {
+      void saveRef.current(true);
+    }, AUTOSAVE_DELAY_MS);
+    return () => window.clearTimeout(autosaveTimerRef.current);
+  }, [saveState, statusLocked, isDesktop, view, busy, editRevision, id]);
 
   const openReviewInformation = () => {
     reviewForm.setFieldsValue(reviewInformation(editModel));
@@ -478,6 +535,7 @@ export function ExperimentWorkspacePage({
     setBusy(true);
     setSaveState('SAVING');
     try {
+      await savePromiseRef.current;
       const nextModel = withReviewInformation(currentDraftModel(), values);
       const savedDetail = await persistDraft(nextModel);
       if (!savedDetail) {
@@ -590,20 +648,6 @@ export function ExperimentWorkspacePage({
     }
   };
 
-  const downloadSource = async () => {
-    if (!detail?.sourceFileId) return;
-    setDownloadingSource(true);
-    try {
-      const blob = await fetchFileBlob(detail.sourceFileId);
-      downloadBlob(blob, detail.editModel.sourceFileName || detail.summary.title || '实验原文');
-      void message.success('原文已下载');
-    } catch (error) {
-      void message.error(error instanceof Error ? error.message : '原文下载失败');
-    } finally {
-      setDownloadingSource(false);
-    }
-  };
-
   const openTemplateDraft = async () => {
     if (!detail || view === 'versions' || statusIsVoided(detail.summary.status)) return;
     templateDraftForm.setFieldsValue({ name: `${detail.summary.title}模板`.slice(0, 160) });
@@ -681,14 +725,27 @@ export function ExperimentWorkspacePage({
   if (!detail || !snapshot) return <Skeleton active paragraph={{ rows: 12 }} />;
 
   const status = detail.summary.status;
-  const sourceIsImage = imageSource;
-  const readonly = ['COMPLETED', 'VOIDED', 'PENDING_REVIEW'].includes(status);
+  // 与数据中心一致：预览走预览接口，下载走原文件地址（浏览器原生下载）。
+  const sourceFile: FilePreviewDescriptor | undefined = detail.sourceFileId
+    ? {
+        fileName: detail.editModel.sourceFileName || detail.summary.title || '实验原文',
+        load: () => fetchFilePreviewBlob(detail.sourceFileId!),
+        downloadUrl: fileContentUrl(detail.sourceFileId),
+      }
+    : undefined;
+  const readonly = statusLocked;
   const editable = !readonly && isDesktop && view === 'edit';
   const showExcelRecognition = !templateReview && documentFormatOf(editModel, snapshot) === 'excel'
     && Array.isArray(editModel.recognizedFields);
   const templateDataConfirmed = Boolean(templateReview?.confirmed && saveState === 'SAVED'
     && editModel.templateDataReview?.confirmed
     && editModel.templateDataReview.confirmedRevision === detail.summary.revision);
+  const importedData = detail.summary.sourceType === 'EXCEL_IMPORT'
+    || (detail.summary.sourceType === 'OCR_IMPORT' && Boolean(editModel.sourceImportJobId));
+  const importedFromTemplate = importedData && Boolean(editModel.sourceImportJobId) && Boolean(templateReview);
+  const importDataConfirmed = Boolean(importedData && saveState === 'SAVED'
+    && editModel.importDataReview?.confirmed
+    && editModel.importDataReview.confirmedRevision === detail.summary.revision);
   const pendingFieldCount = editModel.recognizedFields?.filter((field) => !field.confirmed).length ?? 0;
   const pendingRegionCount = editModel.recognizedRegions?.filter((region) => !region.confirmed).length ?? 0;
   const recognitionFailed = editModel.recognitionSummary?.modelStatus === 'FAILED'
@@ -725,7 +782,8 @@ export function ExperimentWorkspacePage({
             {STATUS_TEXT[status] ?? status}
           </Tag>
           {showExcelRecognition ? <Tag color="blue">审核：{pendingFieldCount || pendingRegionCount ? '待确认' : '已确认'}</Tag> : null}
-          {templateReview ? <Tag color={templateDataConfirmed ? 'success' : 'warning'}>数据：{templateDataConfirmed ? '已确认' : '待确认'}</Tag> : null}
+          {templateReview && !importedData ? <Tag color={templateDataConfirmed ? 'success' : 'warning'}>数据：{templateDataConfirmed ? '已确认' : '待确认'}</Tag> : null}
+          {importedData ? <Tag color={importDataConfirmed ? 'success' : 'warning'}>数据：{importDataConfirmed ? '已确认' : '待确认'}</Tag> : null}
         </div>
         <Space wrap>
           <SaveStateBadge state={saveState} />
@@ -737,15 +795,25 @@ export function ExperimentWorkspacePage({
           >
             导出
           </Button>
-          {detail.sourceFileId && (
+          {sourceFile ? (
+            <Button
+              type="primary"
+              ghost
+              icon={<EyeOutlined />}
+              onClick={() => setPreviewSource(sourceFile)}
+            >
+              预览原文件
+            </Button>
+          ) : null}
+          {sourceFile ? (
             <Button
               icon={<DownloadOutlined />}
-              loading={downloadingSource}
-              onClick={() => void downloadSource()}
+              onClick={() => void downloadPreviewFile(sourceFile)
+                .catch((error) => void message.error(error instanceof Error ? error.message : '原文件下载失败'))}
             >
-              {sourceIsImage ? '原图下载' : '原文下载'}
+              下载原文件
             </Button>
-          )}
+          ) : null}
           {status === 'COMPLETED' && <Can permission="experiment.update">
             <Button loading={busy} onClick={reviseCompletedExperiment}>创建修订</Button>
           </Can>}
@@ -781,6 +849,12 @@ export function ExperimentWorkspacePage({
           </> : null}
         </Space>
       </header>
+
+      <FilePreviewModal
+        open={Boolean(previewSource)}
+        file={previewSource}
+        onClose={() => setPreviewSource(undefined)}
+      />
 
       <Modal
         title="另存为模板"
@@ -853,12 +927,12 @@ export function ExperimentWorkspacePage({
             <div className="recognition-status-content"><span className="recognition-status-icon">{needsRecognitionReview ? <RobotOutlined /> : <CheckCircleOutlined />}</span><strong>{recognitionBusy ? '正在重新识别实验工作簿' : recognitionFailed ? '智能识别未完成' : needsRecognitionReview ? 'AI 识别待确认' : 'AI 识别已完成'}</strong><span>{recognitionBusy ? `识别进度 ${recognitionProgress ?? 0}%` : needsRecognitionReview ? `区域 ${editModel.recognizedRegions?.length ?? 0} ｜ 字段 ${editModel.recognizedFields?.length ?? 0} ｜ 待确认字段 ${pendingFieldCount} ｜ 结构冲突 0` : `区域 ${editModel.recognizedRegions?.length ?? 0} ｜ 字段 ${editModel.recognizedFields?.length ?? 0}`}</span></div>
             {recognitionBusy ? <Progress className="recognition-inline-progress" percent={recognitionProgress ?? 0} showInfo={false} /> : null}
             <Space size={6}>
-              <Button size="small" onClick={() => setReviewTrigger((current) => current + 1)}>开始确认</Button>
+              <Button size="small" onClick={() => { setImportPanelTab('recognition'); setReviewTrigger((current) => current + 1); }}>开始确认</Button>
               <Button size="small" icon={<ThunderboltOutlined />} disabled={!editable || recognitionBusy || pendingFieldCount === 0} onClick={confirmAllRecognizedFields}>一键确认全部字段</Button>
               <Button size="small" icon={<ReloadOutlined />} disabled={!editable} loading={recognitionBusy} onClick={() => void restartRecognition().catch((error) => void message.error(error instanceof Error ? error.message : '重新识别失败'))}>重新识别</Button>
             </Space>
           </div> : null}
-          <div className={`template-workspace-grid prototype-workspace-grid ${showExcelRecognition || templateReview ? 'has-field-bindings' : ''}`}>
+          <div className={`template-workspace-grid prototype-workspace-grid ${showExcelRecognition || templateReview || importedData ? 'has-field-bindings' : ''}`}>
             <main className={`workspace-canvas ${view === 'preview' ? 'is-preview' : ''}`}>
               <Suspense
                 fallback={
@@ -871,7 +945,7 @@ export function ExperimentWorkspacePage({
                       ref={editorRef}
                       snapshot={snapshot}
                       editable={editable}
-                      onDirty={() => setSaveState('DIRTY')}
+                      onDirty={() => markDirty()}
                     />
                   </div>
                 ) : (
@@ -883,13 +957,41 @@ export function ExperimentWorkspacePage({
                       editable={editable}
                       onEditorValue={handleRecognizedValue}
                       onSelectionChange={handleCoordinateSelection}
-                      onDirty={() => setSaveState('DIRTY')}
+                      onDirty={() => markDirty()}
                     />
                   </div>
                 )}
               </Suspense>
             </main>
-            {showExcelRecognition ? <ExperimentFieldReviewPanel
+            {importedData || showExcelRecognition ? <div className="experiment-import-review-column">
+              {importedData && showExcelRecognition ? <div className="experiment-import-review-tabs" role="tablist" aria-label="导入数据面板">
+                <button type="button" role="tab" aria-selected={importPanelTab === 'data'}
+                  onClick={() => setImportPanelTab('data')}>数据确认</button>
+                <button type="button" role="tab" aria-selected={importPanelTab === 'recognition'}
+                  onClick={() => setImportPanelTab('recognition')}>识别字段</button>
+              </div> : null}
+              {importedData && !importedFromTemplate && (importPanelTab === 'data' || !showExcelRecognition) ? <ExperimentImportDataPanel
+                snapshot={editModel.documentSnapshot ?? snapshot}
+                confirmed={importDataConfirmed}
+                editable={editable}
+                busy={busy}
+                onConfirm={() => void confirmTemplateData()}
+              /> : null}
+              {importedFromTemplate && templateReview ? <ExperimentTemplateDataPanel
+                review={templateReview}
+                values={editModel.dynamicValues ?? {}}
+                importedSnapshot={editModel.documentSnapshot ?? snapshot}
+                editable={editable}
+                confirmed={importDataConfirmed}
+                busy={busy}
+                onChange={changeTemplateValue}
+                onFocus={(bindingId) => {
+                  const binding = recognizedBindings.find((item) => item.bindingId === bindingId);
+                  if (binding) editorRef.current?.focusBinding(binding);
+                }}
+                onConfirm={() => void confirmTemplateData()}
+              /> : null}
+            {showExcelRecognition && (!importedData || importPanelTab === 'recognition') ? <ExperimentFieldReviewPanel
               fields={editModel.recognizedFields ?? []}
               regions={editModel.recognizedRegions ?? []}
               editable={editable}
@@ -928,20 +1030,21 @@ export function ExperimentWorkspacePage({
                     confidence: 1, locator: {},
                   }],
                 }));
-                setSaveState('DIRTY');
+                markDirty();
               }}
               onDeleteField={(fieldId) => {
                 setEditModel((current) => ({
                   ...current,
                   recognizedFields: current.recognizedFields?.filter((field) => field.id !== fieldId),
                 }));
-                setSaveState('DIRTY');
+                markDirty();
               }}
               picking={coordinatePicking}
               onPickCoordinate={(fieldId, target) => setCoordinatePicking({ fieldId, target })}
               reviewTrigger={reviewTrigger}
             /> : null}
-            {templateReview ? <ExperimentTemplateDataPanel
+            </div> : null}
+            {templateReview && !importedFromTemplate ? <ExperimentTemplateDataPanel
               review={templateReview}
               values={editModel.dynamicValues ?? {}}
               editable={editable}

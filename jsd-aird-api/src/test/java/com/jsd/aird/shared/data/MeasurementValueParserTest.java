@@ -12,4 +12,13 @@ class MeasurementValueParserTest {
         assertThat(MeasurementValueParser.number("1e309","")).isNull();
         assertThat(MeasurementValueParser.missing("/（未测试）")).isTrue();
     }
+    @Test void keepsExplicitMassAndPartUnitsWithoutConvertingThemToPercentages() {
+        assertThat(MeasurementValueParser.number("70份","份")).isEqualByComparingTo("70");
+        assertThat(MeasurementValueParser.number("30g","g")).isEqualByComparingTo("30");
+        assertThat(MeasurementValueParser.number("5mL","mL")).isEqualByComparingTo("5");
+        assertThat(MeasurementValueParser.inferredUnit("70份")).isEqualTo("份");
+        assertThat(MeasurementValueParser.number("70份","%")).isNull();
+        assertThat(MeasurementValueParser.number("30g","%")).isNull();
+        assertThat(MeasurementValueParser.number("5mL","%")).isNull();
+    }
 }

@@ -193,9 +193,6 @@ public class ModelingWorkbenchService {
         var uniqueX = new LinkedHashSet<>(command.xColumns());
         if (uniqueX.size() != command.xColumns().size()) throw validation("X 列不能重复");
         if (uniqueX.contains(command.yColumn())) throw validation("Y 列不能同时作为 X 输入");
-        var formulaCodes=columns.values().stream().filter(this::mappedFormulaColumn).map(column->column.path("code").asText()).toList();
-        if(uniqueX.stream().anyMatch(formulaCodes::contains)&&!uniqueX.containsAll(formulaCodes))
-            throw validation("材料比例不完整，请将所有已映射材料比例选为 X");
         var xColumns = json.createArrayNode();
         for (var code : uniqueX) {
             var source = columns.get(code);
@@ -308,14 +305,12 @@ public class ModelingWorkbenchService {
     }
 
     private boolean mappedFormulaColumn(JsonNode column) {
-        if(!"MATERIAL_RATIO".equals(column.path("semanticType").asText())
-                || !"MAPPED".equals(column.path("mappingStatus").asText())
+        if("UNMAPPED".equals(column.path("mappingStatus").asText())
                 || !"NUMERIC".equals(column.path("kind").asText()))return false;
-        var unit=column.path("unit").asText();
-        if(!unit.isBlank()&&!Set.of("%","PERCENT").contains(unit))return false;
         try {
             var materialId=UUID.fromString(column.path("materialId").asText()).toString();
-            return column.path("code").asText().equals("formula:"+materialId);
+            var prefix="formula:"+materialId;var code=column.path("code").asText();
+            return code.equals(prefix)||code.startsWith(prefix+"|");
         } catch(IllegalArgumentException ignored) { return false; }
     }
 

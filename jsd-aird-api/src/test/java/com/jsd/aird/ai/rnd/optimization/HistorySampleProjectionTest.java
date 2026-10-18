@@ -15,7 +15,7 @@ class HistorySampleProjectionTest {
         return new HistorySampleProjection(json).dataset(org,dataset,"实验数据",List.of(
             new OptimizationRepository.HistoryRecordRow(UUID.randomUUID(),UUID.randomUUID(),"REPORT","实验",json.readTree(value),Instant.EPOCH)),Map.of(),Map.of());
     }
-    @Test void samplesAreRowsAndExperimentConditionsAreCopiedToEverySample() throws Exception {
+    @Test void conditionsStayWithinTheirSampleContextAndUnscopedValuesAreNotBroadcast() throws Exception {
         var data=project("""
           {"sampleGroups":[
              {"sampleKey":"a","sourceIdentity":"SAME-NO","sourceContextKey":"sheet-a"},
@@ -29,18 +29,15 @@ class HistorySampleProjectionTest {
            "dynamicValues":{"环境湿度":60,"备注":"说明","合计":100}}
           """);
         assertThat(data.path("rowCount").asInt()).isEqualTo(2);
-        assertThat(data.path("columns").findValuesAsText("name")).containsExactly("温度","60°光泽","环境湿度");
+        assertThat(data.path("columns").findValuesAsText("name")).containsExactly("温度","60°光泽");
         var temperature=columnCode(data,"温度");
         var gloss=columnCode(data,"60°光泽");
-        var humidity=columnCode(data,"环境湿度");
         assertThat(data.path("rows").get(0).path("values").path(temperature).asDouble()).isEqualTo(27.5);
         assertThat(data.path("rows").get(1).path("values").path(temperature).asDouble()).isEqualTo(29);
         assertThat(data.path("rows").get(1).path("values").path(gloss).asDouble()).isEqualTo(80);
-        assertThat(data.path("rows").get(0).path("values").path(humidity).asDouble()).isEqualTo(60);
-        assertThat(data.path("rows").get(1).path("values").path(humidity).asDouble()).isEqualTo(60);
         assertThat(data.path("rows").get(0).path("id")).isNotEqualTo(data.path("rows").get(1).path("id"));
     }
-    @Test void validMaterialIdsCreateFormulaColumnsAndLegacyMaterialsStayUnmapped() throws Exception {
+    @Test void materialIdentitiesStayStableAndOriginalUnitsArePreserved() throws Exception {
         var materialId=UUID.randomUUID();
         var data=project("""
           {"formulaItems":[{"materialId":"%s","materialCode":"SJ-230","materialName":"SJ-230","unit":"份","ratio":0},
@@ -50,30 +47,38 @@ class HistorySampleProjectionTest {
           """.formatted(materialId));
         var material=data.path("columns").get(0);
         assertThat(material.path("name").asText()).isEqualTo("SJ-230比例");
-        assertThat(material.path("code").asText()).isEqualTo("formula:"+materialId);
+        assertThat(material.path("code").asText()).startsWith("formula:"+materialId+"|");
         assertThat(material.path("materialId").asText()).isEqualTo(materialId.toString());
         assertThat(material.path("semanticType").asText()).isEqualTo("MATERIAL_RATIO");
         assertThat(material.path("mappingStatus").asText()).isEqualTo("MAPPED");
-        assertThat(material.path("unit").asText()).isEqualTo("%");
+        assertThat(material.path("unit").asText()).isEqualTo("份");
+        assertThat(material.path("compositionBasis").asText()).isEqualTo("UNSPECIFIED");
         assertThat(data.path("rows").get(0).path("values").path(material.path("code").asText()).asInt()).isZero();
         var legacy=data.path("columns").get(1);
-        assertThat(legacy.path("code").asText()).isEqualTo("unmapped-formula:resin");
-        assertThat(legacy.path("name").asText()).endsWith("（未绑定材料）");
-        assertThat(legacy.path("mappingStatus").asText()).isEqualTo("UNMAPPED");
-        assertThat(legacy.has("materialId")).isFalse();
+        assertThat(legacy.path("code").asText()).startsWith("formula:");
+        assertThat(legacy.path("name").asText()).isEqualTo("旧树脂比例");
+        assertThat(legacy.path("mappingStatus").asText()).isEqualTo("MAPPED");
+        assertThat(legacy.path("unit").asText()).isEqualTo("g");
+        assertThat(legacy.path("compositionBasis").asText()).isEqualTo("UNSPECIFIED");
+        assertThat(UUID.fromString(legacy.path("materialId").asText()).toString()).isNotEqualTo("not-a-uuid");
         var shortened=data.path("columns").get(2);
-        assertThat(shortened.path("code").asText()).isEqualTo("unmapped-formula:short");
-        assertThat(shortened.path("mappingStatus").asText()).isEqualTo("UNMAPPED");
-        assertThat(shortened.has("materialId")).isFalse();
+        assertThat(shortened.path("code").asText()).startsWith("formula:");
+        assertThat(shortened.path("mappingStatus").asText()).isEqualTo("MAPPED");
+        assertThat(shortened.path("materialId").asText()).isNotEqualTo(UUID.fromString("1-1-1-1-1").toString());
+        var again=project("""
+          {"formulaItems":[{"materialCode":"RESIN","materialName":"旧树脂","unit":"g","ratio":90}]}
+          """);
+        assertThat(again.path("columns").get(0).path("materialId")).isEqualTo(legacy.path("materialId"));
     }
     @Test void logicalSampleKeysKeepFormulaConditionsAndResultsAligned() throws Exception {
         var resin=UUID.randomUUID();var additive=UUID.randomUUID();
         var data=project("""
-          {"dynamicValues":{"环境温度":25},"formulaItems":[
-            {"materialId":"%s","materialName":"树脂","ratio":70,"logicalSampleKey":"sample-1","sourceIdentity":"S-1"},
-            {"materialId":"%s","materialName":"助剂","ratio":30,"logicalSampleKey":"sample-1","sourceIdentity":"S-1"},
-            {"materialId":"%s","materialName":"树脂","ratio":60,"logicalSampleKey":"sample-2","sourceIdentity":"S-2"},
-            {"materialId":"%s","materialName":"助剂","ratio":40,"logicalSampleKey":"sample-2","sourceIdentity":"S-2"}],
+          {"processSteps":[{"name":"环境温度","value":25,"sampleKey":"sample-1"},
+                           {"name":"环境温度","value":25,"sampleKey":"sample-2"}],"formulaItems":[
+            {"materialId":"%s","materialName":"树脂","unit":"%%","ratio":70,"logicalSampleKey":"sample-1","sourceIdentity":"S-1"},
+            {"materialId":"%s","materialName":"助剂","unit":"%%","ratio":30,"logicalSampleKey":"sample-1","sourceIdentity":"S-1"},
+            {"materialId":"%s","materialName":"树脂","unit":"%%","ratio":60,"logicalSampleKey":"sample-2","sourceIdentity":"S-2"},
+            {"materialId":"%s","materialName":"助剂","unit":"%%","ratio":40,"logicalSampleKey":"sample-2","sourceIdentity":"S-2"}],
            "testResults":[
             {"testItem":"光泽","value":80,"logicalSampleKey":"sample-1","sourceIdentity":"S-1"},
             {"testItem":"光泽","value":90,"logicalSampleKey":"sample-2","sourceIdentity":"S-2"}]}
@@ -151,6 +156,72 @@ class HistorySampleProjectionTest {
         var data=new HistorySampleProjection(json).dataset(org,dataset,"实验数据",records,Map.of(),Map.of());
         assertThat(data.path("rows")).hasSize(2);
         assertThat(data.path("rows").get(0).path("id")).isNotEqualTo(data.path("rows").get(1).path("id"));
+    }
+    @Test void explicitMaterialCodesMatchMasterDataAndNamesStayScopedToTheirTemplateAndOrganization() throws Exception {
+        var master=UUID.randomUUID();
+        var model=json.readTree("""
+          {"formulaItems":[{"materialCode":"R-1","materialName":"树脂","unit":"%","ratio":80},
+                           {"materialCode":"","materialName":"助剂","unit":"%","ratio":20}]}
+          """);
+        var records=List.of(new OptimizationRepository.HistoryRecordRow(UUID.randomUUID(),UUID.randomUUID(),"R1","实验",model,Instant.EPOCH));
+        var projection=new HistorySampleProjection(json);
+        var first=projection.dataset(org,dataset,"实验",records,Map.of(),Map.of("R-1",master.toString()));
+        var again=projection.dataset(org,dataset,"实验",records,Map.of(),Map.of("R-1",master.toString()));
+        var anotherTemplate=projection.dataset(org,UUID.randomUUID(),"实验",records,Map.of(),Map.of("R-1",master.toString()));
+        var anotherOrg=projection.dataset(UUID.randomUUID(),dataset,"实验",records,Map.of(),Map.of());
+        assertThat(first.path("columns").get(0).path("materialId").asText()).isEqualTo(master.toString());
+        assertThat(first.path("columns").get(1).path("materialId")).isEqualTo(again.path("columns").get(1).path("materialId"));
+        assertThat(first.path("columns").get(1).path("materialId")).isNotEqualTo(anotherTemplate.path("columns").get(1).path("materialId"));
+        assertThat(first.path("columns").get(1).path("materialId")).isNotEqualTo(anotherOrg.path("columns").get(1).path("materialId"));
+    }
+    @Test void sharedSourceRowsApplyOnlyToTheirContextAndNeverBecomeExtraSamples() throws Exception {
+        var data=project("""
+          {"sampleGroups":[{"sampleKey":"a","sourceIdentity":"A","sourceContextKey":"sheet-1","sourceRecordKeys":["sample-a-record"]},
+                           {"sampleKey":"b","sourceIdentity":"B","sourceContextKey":"sheet-1"},
+                           {"sampleKey":"c","sourceIdentity":"C","sourceContextKey":"sheet-2"}],
+           "processSteps":[{"name":"温度","value":25,"unit":"°C","sourceRecordKey":"shared-row","sourceContextKey":"sheet-1"}],
+           "testResults":[{"testItem":"光泽","value":80,"sampleKey":"a"},
+                          {"testItem":"光泽","value":90,"sampleKey":"b"},
+                          {"testItem":"光泽","value":85,"sampleKey":"c"},
+                          {"testItem":"含水率","value":0.1,"unit":"%","sourceRecordKey":"sample-a-record","sourceContextKey":"sheet-1"}]}
+          """);
+        assertThat(data.path("rows")).hasSize(3);
+        var temperature=columnCode(data,"温度");
+        assertThat(data.path("rows").get(0).path("values").path(temperature).asInt()).isEqualTo(25);
+        assertThat(data.path("rows").get(1).path("values").path(temperature).asInt()).isEqualTo(25);
+        assertThat(data.path("rows").get(2).path("values").has(temperature)).isFalse();
+        var water=columnCode(data,"含水率");
+        assertThat(data.path("rows").get(0).path("values").path(water).asDouble()).isEqualTo(0.1);
+        assertThat(data.path("rows").get(1).path("values").has(water)).isFalse();
+    }
+    @Test void importedContextWithoutAnySampleDoesNotCreateALearningObservation() throws Exception {
+        var data=project("""
+          {"sourceImportJobId":"import","processSteps":[{"name":"温度","value":25,"sourceRecordKey":"shared-row","sourceContextKey":"sheet-1"}]}
+          """);
+        assertThat(data.path("rows")).isEmpty();
+        assertThat(data.path("issues")).hasSize(1);
+    }
+    @Test void percentageFormattingIsAppliedOnceAndDifferentCompositionUnitsRemainSeparate() throws Exception {
+        var material=UUID.randomUUID();
+        var data=project("""
+          {"sampleGroups":[{"sampleKey":"a"},{"sampleKey":"b"}],"formulaItems":[
+            {"materialId":"%s","materialName":"树脂","unit":"%%","ratio":70,"sampleKey":"a","sourceRefs":[{"rawNumericValue":0.7,"numberFormat":"0.0%%","displayValue":"70%%"}]},
+            {"materialId":"%s","materialName":"树脂","unit":"份","ratio":70,"sampleKey":"b"}]}
+          """.formatted(material,material));
+        assertThat(data.path("columns")).hasSize(2);
+        assertThat(data.path("columns").get(0).path("unit").asText()).isEqualTo("%");
+        assertThat(data.path("columns").get(1).path("unit").asText()).isEqualTo("份");
+        assertThat(data.path("columns").get(0).path("code")).isNotEqualTo(data.path("columns").get(1).path("code"));
+        assertThat(data.path("rows").get(0).path("values").path("formula:"+material).asDouble()).isEqualTo(70);
+    }
+    @Test void conflictingPercentFormattingAndMassUnitsAreReportedInsteadOfConverted() throws Exception {
+        var data=project("""
+          {"formulaItems":[{"materialName":"树脂","unit":"g","ratio":30,
+            "sourceRefs":[{"rawNumericValue":0.3,"numberFormat":"0.0%","displayValue":"30%"}]}]}
+          """);
+        assertThat(data.path("rows").get(0).path("values")).isEmpty();
+        assertThat(data.path("columns").get(0).path("unit").asText()).isEqualTo("g");
+        assertThat(data.path("issues").get(0).path("message").asText()).contains("百分比格式").contains("g");
     }
     private String columnCode(com.fasterxml.jackson.databind.JsonNode data,String name) {
         return java.util.stream.StreamSupport.stream(data.path("columns").spliterator(),false)

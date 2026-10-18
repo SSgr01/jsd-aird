@@ -73,6 +73,38 @@ describe('knowledge API', () => {
     );
   });
 
+  it('retries a parsed upload with the current review revision and lock version', async () => {
+    httpMock.get.mockResolvedValue({ data: { data: {
+      documentId: 'document-1', versionId: 'version-1',
+      reviewRevision: { id: 'revision-2', lockVersion: 8 },
+    } } });
+
+    await knowledgeApi.reparseUploadTask('document-1', 'version-1');
+
+    expect(httpMock.get).toHaveBeenCalledWith('/api/v1/knowledge/documents/document-1/versions/version-1/review', { timeout: 120_000 });
+    expect(httpMock.post).toHaveBeenCalledWith('/api/v1/knowledge/documents/document-1/versions/version-1/reparse', {
+      reviewRevisionId: 'revision-2', lockVersion: 8,
+    });
+  });
+
+  it('retries a failed parse that has no review revision', async () => {
+    httpMock.get.mockResolvedValue({ data: { data: { documentId: 'document-1', versionId: 'version-1' } } });
+
+    await knowledgeApi.reparseUploadTask('document-1', 'version-1');
+
+    expect(httpMock.post).toHaveBeenCalledWith('/api/v1/knowledge/documents/document-1/versions/version-1/reparse', {
+      reviewRevisionId: null, lockVersion: null,
+    });
+  });
+
+  it('does not submit a retry when the current review cannot be read', async () => {
+    httpMock.get.mockRejectedValueOnce(new Error('没有读取权限'));
+
+    await expect(knowledgeApi.reparseUploadTask('document-1', 'version-1')).rejects.toThrow('没有读取权限');
+
+    expect(httpMock.post).not.toHaveBeenCalled();
+  });
+
   it('uses a large-document timeout for published content', async () => {
     httpMock.get.mockResolvedValue({ data: { data: { publication: { id: 'publication-1' } } } });
 

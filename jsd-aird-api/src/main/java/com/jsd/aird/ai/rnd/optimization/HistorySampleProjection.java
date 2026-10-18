@@ -6,12 +6,13 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.shared.data.MeasurementValueParser;
 
+import java.nio.charset.StandardCharsets;
 import java.text.Normalizer;
 import java.util.*;
 
 /** A report is a source document; samples, not documents, are learning observations. */
 public final class HistorySampleProjection {
-    public static final int VERSION = 2;
+    public static final int VERSION = 3;
     private final ObjectMapper json;
     public HistorySampleProjection(ObjectMapper json) { this.json = json; }
 
@@ -34,12 +35,13 @@ public final class HistorySampleProjection {
                         .put("title",record.title()).put("sourceDatasetId",datasetId.toString()).put("sourceDatasetName",name);
                 var values=row.putObject("values");var refs=row.putObject("sourceRefs");var states=row.putObject("cellStates");var conflicts=new HashSet<String>();
                 for(var domain:List.of("formulaItems","processSteps","testResults"))for(var item:observations(model,domain)) {
-                    if(!belongs(item,group,groups.size()))continue;
+                    if(!belongs(item,group,groups))continue;
                     var label=text(item,"targetName","testItem","materialName","labelPath","operation","name","field");
                     if(label.isBlank()||metadata(label))continue;
                     boolean formula=domain.equals("formulaItems");
-                    var unit=formula?"%":cleanUnit(text(item,"unit","rawUnit"));
+                    var unit=cleanUnit(text(item,"unit","rawUnit"));
                     var raw=raw(model,item,formula?"ratio":"value");
+                    if(unit.isBlank()&&snapshotPercentage(model,item))unit="%";
                     if(unit.isBlank())unit=MeasurementValueParser.inferredUnit(raw.asText());
                     if(unit.isBlank()&&label.matches(".*[/／][µμu]m$"))unit="μm";
                     String code;
@@ -48,15 +50,22 @@ public final class HistorySampleProjection {
                         var identity=text(item,"materialCode","code","materialName","name","materialId");
                         if(identity.isBlank())continue;
                         var materialId=canonicalMaterialId(text(item,"materialId"));
-                        code=materialId.isBlank()?"unmapped-formula:"+normal(identity):"formula:"+materialId;
+                        var materialCode=text(item,"materialCode","code");
+                        if(materialId.isBlank())materialId=canonicalMaterialId(materialIds.get(materialCode));
+                        if(materialId.isBlank())materialId=UUID.nameUUIDFromBytes((org+":material:"+
+                                (materialCode.isBlank()?datasetId+":"+normal(identity):normal(materialCode)))
+                                .getBytes(StandardCharsets.UTF_8)).toString();
                         column.put("semanticType","MATERIAL_RATIO")
-                                .put("mappingStatus",materialId.isBlank()?"UNMAPPED":"MAPPED")
+                                .put("mappingStatus","MAPPED")
                                 .put("materialCode",text(item,"materialCode","code","materialName","name"))
                                 .put("compositionBasis",text(item,"compositionBasis","basis"));
-                        if(!materialId.isBlank())column.put("materialId",materialId);
+                        column.put("materialId",materialId);
                         if(column.path("compositionBasis").asText().isBlank())column.put("compositionBasis",unit.equals("%")?"MASS_PERCENT":"UNSPECIFIED");
+                        code="formula:"+materialId;
+                        if(!"MASS_PERCENT".equals(column.path("compositionBasis").asText())||!Set.of("","%","PERCENT").contains(unit))
+                            code+="|"+normal(unit)+"|"+normal(column.path("compositionBasis").asText());
                         var ratioName=label.endsWith("比例")?label:label+"比例";
-                        column.put("name",materialId.isBlank()?ratioName+"（未绑定材料）":ratioName);
+                        column.put("name",ratioName);
                     } else {
                         var method=text(item,"testMethod");var stage=text(item,"testStage");
                         var semantic=normal(label)+"|"+normal(unit)+"|"+normal(method)+"|"+normal(stage);
@@ -73,10 +82,17 @@ public final class HistorySampleProjection {
                     if(unit.isBlank()&&number!=null){unit=MeasurementValueParser.inferredUnit(raw.asText());column.put("unit",unit);}
                     boolean numeric=formula||number!=null||!unit.isBlank()&&!categorical||label.matches(".*(?:温度|湿度|膜厚|粘度|分子量|伸长率|耐磨|能量|光强|固含).* ".strip());
                     column.put("kind",numeric?"NUMERIC":"CATEGORICAL");
-                    if(number!=null&&snapshotPercentage(model,item))number=number.movePointRight(2);
                     var prior=columns.putIfAbsent(code,column);
                     if(prior!=null&&numeric)prior.put("kind","NUMERIC");
                     var locations=refs.withArray(code);item.path("sourceRefs").forEach(ref -> locations.add(ref.deepCopy()));
+                    if(number!=null&&snapshotPercentage(model,item)) {
+                        if(!Set.of("%","PERCENT").contains(unit)) {
+                            states.put(code,"CONFLICT");
+                            issue(issues,row,code,raw,"原单元格使用百分比格式，但字段单位为“"+unit+"”，请确认原始单位后再使用");
+                            continue;
+                        }
+                        number=number.movePointRight(2);
+                    }
                     if(MeasurementValueParser.missing(raw.asText())){states.put(code,"MISSING");continue;}
                     if(raw.asText().contains("估")||label.contains("估的")||raw.asText().matches("(?s).*[<>＜＞≤≥～~].*")) {
                         states.put(code,raw.asText().matches("(?s).*[<>＜＞≤≥].*")?"LIMIT":label.contains("估")||raw.asText().contains("估")?"ESTIMATED":"RANGE");
@@ -96,7 +112,7 @@ public final class HistorySampleProjection {
                         var recordKey=key.substring(0,split);
                         boolean own=false;for(var k:group.path("sourceRecordKeys"))if(recordKey.equals(k.asText()))own=true;
                         if(!own)return;label=key.substring(split+14);
-                    }
+                    } else if(groups.size()>1)return;
                     if(metadata(label)||target.isContainerNode()||MeasurementValueParser.missing(target.asText()))return;
                     var n=MeasurementValueParser.number(target.asText(),"");var code="input:"+normal(label);
                     var c=json.createObjectNode().put("code",code).put("semanticKey",code).put("name",label)
@@ -105,7 +121,7 @@ public final class HistorySampleProjection {
                 });
             }
             for(var domain:List.of("formulaItems","processSteps","testResults"))for(var item:observations(model,domain)) {
-                if(groups.stream().anyMatch(group -> belongs(item,group,groups.size())))continue;
+                if(groups.stream().anyMatch(group -> belongs(item,group,groups)))continue;
                 var label=text(item,"targetName","testItem","materialName","labelPath","operation","name","field");
                 if(label.isBlank()||metadata(label))continue;
                 var unit=cleanUnit(text(item,"unit","rawUnit"));
@@ -172,22 +188,29 @@ public final class HistorySampleProjection {
             addRecordKey(group,text(source,"sourceRecordKey"));
         }
         for(var domain:List.of("formulaItems","processSteps","testResults"))for(var item:model.path(domain)) {
-            var key=sampleGroupKey(item);if(key.isBlank())continue;
+            var key=observationSampleKey(item);if(key.isBlank())continue;
             var group=groups.computeIfAbsent(key,ignored->json.createObjectNode().put("sampleKey",key)
                     .put("sourceContextKey",text(item,"sourceContextKey")).put("sourceIdentity",text(item,"sourceIdentity")));
             addRecordKey(group,text(item,"sourceRecordKey"));
         }
-        return groups.isEmpty()?List.of(json.createObjectNode()):new ArrayList<>(groups.values());
+        if(groups.isEmpty())return model.hasNonNull("sourceImportJobId")?List.of():List.of(json.createObjectNode());
+        return new ArrayList<>(groups.values());
     }
-    private boolean belongs(JsonNode item,JsonNode group,int count) {
-        var key=sampleGroupKey(item);var selected=sampleGroupKey(group);
+    private boolean belongs(JsonNode item,JsonNode group,List<JsonNode> groups) {
+        var key=observationSampleKey(item);var selected=sampleGroupKey(group);
         if(!key.isBlank())return key.equals(selected);
         var record=text(item,"sourceRecordKey");
         for(var k:group.path("sourceRecordKeys"))if(!record.isBlank()&&record.equals(k.asText()))return true;
+        if(!record.isBlank())for(var other:groups)for(var keyOfOther:other.path("sourceRecordKeys"))
+            if(record.equals(keyOfOther.asText()))return false;
         if(!text(item,"sourceIdentity").isBlank())return false;
         var context=text(item,"sourceContextKey");
         if(!context.isBlank())return context.equals(text(group,"sourceContextKey"));
-        return true;
+        return record.isBlank()&&groups.size()==1;
+    }
+    private String observationSampleKey(JsonNode node) {
+        var key=text(node,"logicalSampleKey","sampleKey","sourceGroupKey");
+        return key.isBlank()&&!text(node,"sourceIdentity").isBlank()?text(node,"sourceRecordKey"):key;
     }
     private String sampleGroupKey(JsonNode node) {
         var key=text(node,"logicalSampleKey","sampleKey","sourceGroupKey");
@@ -241,6 +264,7 @@ public final class HistorySampleProjection {
     private boolean metadata(String label) { return label.matches(".*(?:备注|补充说明|合计|总计|实验编号|样品编号|配方编号).* ".strip()); }
     private String cleanUnit(String unit) {
         var value=MeasurementValueParser.unit(unit);
+        if(Set.of("份","质量份","重量份","体积份","次","秒").contains(value))return value;
         return value.matches("[%°℃A-Za-z0-9μ²/·.Ω]+")?value:"";
     }
     static String normal(String text) { return Normalizer.normalize(text,Normalizer.Form.NFKC).strip().replaceAll("\\s+"," ").toLowerCase(Locale.ROOT); }

@@ -70,6 +70,9 @@ describe('history-dataset-utils', () => {
     expect(isMappedFormulaColumn(unmapped)).toBe(false)
     expect(isUnmappedFormulaColumn(unmapped)).toBe(true)
     expect(isMappedFormulaColumn(legacyPrefixOnly)).toBe(false)
+    const frozen = { ...mapped, semanticType: undefined, mappingStatus: undefined }
+    expect(isMappedFormulaColumn(frozen)).toBe(true)
+    expect(isMappedFormulaColumn({ ...mapped, materialId: '1-1-1-1-1' })).toBe(false)
   })
 
   it('does not merge columns whose material mapping metadata differs', () => {

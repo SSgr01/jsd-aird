@@ -81,7 +81,7 @@ describe('ModelingWorkbenchPage', () => {
     expect(modelingWorkbenchApi.train).not.toHaveBeenCalled()
   })
 
-  it('requires every mapped material ratio and marks legacy material columns as unavailable to formula prediction', async () => {
+  it('allows a partial formula X selection for ordinary performance modeling', async () => {
     vi.mocked(modelingWorkbenchApi.datasets).mockResolvedValue({ items: [{ id: formulaDataset.id, name: formulaDataset.name, rowCount: 8, updatedAt: '' }] })
     vi.mocked(modelingWorkbenchApi.dataset).mockResolvedValue(formulaDataset)
     window.localStorage.setItem('ai-modeling-workbench-draft:v1', JSON.stringify({
@@ -90,12 +90,14 @@ describe('ModelingWorkbenchPage', () => {
 
     render(<AppProviders><ModelingWorkbenchPage /></AppProviders>)
 
-    expect(await screen.findByText('材料比例不完整')).toBeInTheDocument()
-    expect(screen.getByText(/已选择 1\/2 个材料比例/)).toBeInTheDocument()
-    expect(screen.getByText('未绑定材料')).toBeInTheDocument()
-    expect(screen.getByText(/不能用于配方预测/)).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('checkbox', { name: /助剂比例/ }))
-    await waitFor(() => expect(screen.queryByText('材料比例不完整')).not.toBeInTheDocument())
+    await screen.findByRole('checkbox', { name: /树脂比例/ }, { timeout: 10_000 })
+    const train = screen.getByRole('button', { name: /开始训练/ })
+    await waitFor(() => expect(train).toBeEnabled())
+    expect(screen.queryByText('材料比例不完整')).not.toBeInTheDocument()
+    fireEvent.click(train)
+    await waitFor(() => expect(modelingWorkbenchApi.train).toHaveBeenCalledWith(expect.objectContaining({
+      xColumns: [`formula:${resinId}`], yColumn: 'result:gloss',
+    }), expect.any(String)))
   })
 
   it('checks selected rows before training and names missing fields and conflicting experiment records', async () => {

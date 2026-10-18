@@ -8,8 +8,13 @@ const compatibleColumn = (left: HistoryDatasetColumn, right: HistoryDatasetColum
   && (left.compositionBasis ?? '') === (right.compositionBasis ?? '') && (left.measurementComponent ?? '') === (right.measurementComponent ?? '')
   && left.semanticType === right.semanticType && left.mappingStatus === right.mappingStatus
 
-export const isMappedFormulaColumn = (column: HistoryDatasetColumn) =>
-  column.semanticType === 'MATERIAL_RATIO' && column.mappingStatus === 'MAPPED' && Boolean(column.materialId)
+export const isMappedFormulaColumn = (column: HistoryDatasetColumn) => {
+  const id = column.materialId ?? ''
+  const prefix = `formula:${id}`
+  return column.kind === 'NUMERIC' && column.mappingStatus !== 'UNMAPPED'
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
+    && (column.code === prefix || column.code.startsWith(`${prefix}|`))
+}
 
 export const isUnmappedFormulaColumn = (column: HistoryDatasetColumn) =>
   column.semanticType === 'MATERIAL_RATIO' && column.mappingStatus === 'UNMAPPED'

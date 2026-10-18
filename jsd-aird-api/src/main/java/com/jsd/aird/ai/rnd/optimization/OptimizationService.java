@@ -240,14 +240,12 @@ public class OptimizationService {
     }
 
     private boolean mappedFormulaColumn(JsonNode column) {
-        if(!"MATERIAL_RATIO".equals(column.path("semanticType").asText())
-                || !"MAPPED".equals(column.path("mappingStatus").asText())
+        if("UNMAPPED".equals(column.path("mappingStatus").asText())
                 || !"NUMERIC".equals(column.path("kind").asText()))return false;
-        var unit=column.path("unit").asText();
-        if(!unit.isBlank()&&!Set.of("%","PERCENT").contains(unit))return false;
         try {
             var materialId=UUID.fromString(column.path("materialId").asText()).toString();
-            return column.path("code").asText().equals("formula:"+materialId);
+            var prefix="formula:"+materialId;var code=column.path("code").asText();
+            return code.equals(prefix)||code.startsWith(prefix+"|");
         } catch(IllegalArgumentException ignored) { return false; }
     }
 
@@ -353,12 +351,15 @@ public class OptimizationService {
             }
         }
         var selectedFormulaCodes=featureCodes.stream().filter(formulaCodes::contains).toList();
+        for(var code:selectedFormulaCodes) {
+            var column=columns.get(code);var unit=column.path("unit").asText();
+            if(!"MASS_PERCENT".equals(column.path("compositionBasis").asText())||!Set.of("","%","PERCENT").contains(unit))
+                throw validation("材料“"+column.path("name").asText()+"”的计量基准不是质量百分比，当前材料优化只支持质量百分比；请先确认原始记录的单位和计量基准");
+        }
         if(!selectedFormulaCodes.isEmpty()&&!featureCodes.containsAll(formulaCodes))
             throw validation("配方还缺少材料："+formulaCodes.stream().filter(code->!featureCodes.contains(code)).map(code->columns.get(code).path("name").asText(code)).collect(java.util.stream.Collectors.joining("、")));
         var compositionGroups=json.createArrayNode();
         if(formulaCodes.size()>=2&&featureCodes.containsAll(formulaCodes)){
-            for(var code:formulaCodes)if(!"MASS_PERCENT".equals(columns.get(code).path("compositionBasis").asText("MASS_PERCENT")))
-                throw validation("请在导入映射中确认材料“"+columns.get(code).path("name").asText()+"”的质量百分比基准");
             for(var row:selectedRows){
                 // Incomplete X/Y rows are excluded below, as shown in the selection preview.
                 if(featureCodes.stream().anyMatch(code -> !row.path("values").hasNonNull(code)) || !row.path("values").path(targetCode).isNumber())continue;

@@ -8,7 +8,7 @@ import java.util.regex.Pattern;
 public final class MeasurementValueParser {
     private MeasurementValueParser() {}
     private static final String NUMBER = "[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?";
-    private static final Pattern SCALAR = Pattern.compile("^(" + NUMBER + ")\\s*(%|℃|°C|°|cm|mm|[µμu]m|nm|mJ/cm[²2]|mW/cm[²2]|J/cm[²2]|W/cm[²2]|mN/m|MPa|mPa[·.]s|cps|KU|g/m[lL]|%RH|次|cycles|s|秒|N|V|Ω|B)?$", Pattern.CASE_INSENSITIVE);
+    private static final Pattern SCALAR = Pattern.compile("^(" + NUMBER + ")\\s*(%|℃|°C|°|cm|mm|[µμu]m|nm|mJ/cm[²2]|mW/cm[²2]|J/cm[²2]|W/cm[²2]|mN/m|MPa|mPa[·.]s|cps|KU|g/m[lL]|g|kg|mg|m[lL]|L|phr|份|质量份|重量份|体积份|%RH|次|cycles|s|秒|N|V|Ω|B)?$", Pattern.CASE_INSENSITIVE);
     public static String unit(String value) {
         return Normalizer.normalize(value == null ? "" : value, Normalizer.Form.NFKC).strip()
                 .replace("℃", "°C").replace("µ", "μ").replace("um", "μm")

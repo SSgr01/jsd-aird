@@ -29,9 +29,9 @@ const compositionDataset = {
   id: 'formula-template-version',
   name: '树脂配方历史数据',
   columns: [
-    { code: 'formula:00000000-0000-0000-0000-000000000001', name: '助剂比例', kind: 'NUMERIC', unit: '%', filledCount: 8, semanticType: 'MATERIAL_RATIO', materialId: '00000000-0000-0000-0000-000000000001', mappingStatus: 'MAPPED' },
-    { code: 'formula:00000000-0000-0000-0000-000000000002', name: '树脂 A 比例', kind: 'NUMERIC', unit: '%', filledCount: 8, semanticType: 'MATERIAL_RATIO', materialId: '00000000-0000-0000-0000-000000000002', mappingStatus: 'MAPPED' },
-    { code: 'formula:00000000-0000-0000-0000-000000000003', name: '树脂 B 比例', kind: 'NUMERIC', unit: '%', filledCount: 8, semanticType: 'MATERIAL_RATIO', materialId: '00000000-0000-0000-0000-000000000003', mappingStatus: 'MAPPED' },
+    { code: 'formula:00000000-0000-0000-0000-000000000001', name: '助剂比例', kind: 'NUMERIC', unit: '%', compositionBasis: 'MASS_PERCENT', filledCount: 8, semanticType: 'MATERIAL_RATIO', materialId: '00000000-0000-0000-0000-000000000001', mappingStatus: 'MAPPED' },
+    { code: 'formula:00000000-0000-0000-0000-000000000002', name: '树脂 A 比例', kind: 'NUMERIC', unit: '%', compositionBasis: 'MASS_PERCENT', filledCount: 8, semanticType: 'MATERIAL_RATIO', materialId: '00000000-0000-0000-0000-000000000002', mappingStatus: 'MAPPED' },
+    { code: 'formula:00000000-0000-0000-0000-000000000003', name: '树脂 B 比例', kind: 'NUMERIC', unit: '%', compositionBasis: 'MASS_PERCENT', filledCount: 8, semanticType: 'MATERIAL_RATIO', materialId: '00000000-0000-0000-0000-000000000003', mappingStatus: 'MAPPED' },
     { code: 'result:wear', name: '耐磨次数', kind: 'NUMERIC', unit: '次', filledCount: 8 },
   ],
   rows: Array.from({ length: 8 }, (_, index) => ({
@@ -184,7 +184,7 @@ describe('HistoricalOptimizationWorkbench', () => {
   it('retains fixed zero materials and prevents infeasible recipe bounds before submission', async () => {
     const stabilizerId = '00000000-0000-0000-0000-000000000004'
     const source = { ...compositionDataset, columns: [...compositionDataset.columns,
-      { code: `formula:${stabilizerId}`, name: '稳定剂比例', kind: 'NUMERIC', unit: '%', semanticType: 'MATERIAL_RATIO', mappingStatus: 'MAPPED', materialId: stabilizerId, filledCount: 8 }],
+      { code: `formula:${stabilizerId}`, name: '稳定剂比例', kind: 'NUMERIC', unit: '%', compositionBasis: 'MASS_PERCENT', semanticType: 'MATERIAL_RATIO', mappingStatus: 'MAPPED', materialId: stabilizerId, filledCount: 8 }],
       rows: compositionDataset.rows.map(row => ({ ...row, values: { ...row.values, [`formula:${stabilizerId}`]: 0 } })) }
     api.historyDataset.mockResolvedValue(source)
     api.historyDatasets.mockResolvedValue({ items: [{ id: source.id, name: source.name, rowCount: 8, updatedAt: '' }] })
@@ -203,6 +203,23 @@ describe('HistoricalOptimizationWorkbench', () => {
     fireEvent.change(screen.getByRole('spinbutton', { name: '助剂比例最小值' }), { target: { value: '90' } })
     fireEvent.change(screen.getByRole('spinbutton', { name: '助剂比例最大值' }), { target: { value: '95' } })
     expect(screen.getByText(/当前材料比例范围无法合计为 100%/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '开始优化' })).toBeDisabled()
+    expect(api.submit).not.toHaveBeenCalled()
+  })
+
+  it('keeps mass parts visible but blocks material optimization until the mass percentage basis is confirmed', async () => {
+    const source = { ...compositionDataset, columns: compositionDataset.columns.map(column => column.materialId
+      ? { ...column, unit: '份', compositionBasis: 'UNSPECIFIED' } : column) }
+    api.historyDataset.mockResolvedValue(source)
+    api.historyDatasets.mockResolvedValue({ items: [{ id: source.id, name: source.name, rowCount: 8, updatedAt: '' }] })
+    render(<App><MemoryRouter><HistoricalOptimizationWorkbench /></MemoryRouter></App>)
+    fireEvent.click(await screen.findByText(source.name))
+    await waitFor(() => expect(chooseXYButton()).toBeEnabled())
+    fireEvent.click(chooseXYButton())
+    for (const material of ['助剂比例', '树脂 A 比例', '树脂 B 比例']) fireEvent.click(screen.getByRole('checkbox', { name: new RegExp(material) }))
+    fireEvent.click(screen.getByRole('radio', { name: /耐磨次数/ }))
+    fireEvent.click(screen.getAllByRole('button', { name: /设置范围/ }).find(element => element.tagName === 'BUTTON')!)
+    expect(screen.getByText(/计量基准不是质量百分比/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '开始优化' })).toBeDisabled()
     expect(api.submit).not.toHaveBeenCalled()
   })

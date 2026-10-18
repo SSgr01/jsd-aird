@@ -67,7 +67,10 @@ export const knowledgeApi = {
   async createUploadTask(input: { fileName: string; size: number; uploadContext?: KnowledgeUploadContext }) { const response = await httpClient.post<ApiResponse<KnowledgeUploadTask>>('/api/v1/knowledge/upload-tasks', input); return response.data.data; },
   async updateUploadTask(id: string, input: { status: Exclude<KnowledgeUploadTaskStatus, 'COMPLETED'>; progress: number; sourceFileId?: string; uploadContext?: KnowledgeUploadContext; documentId?: string; documentVersionId?: string; message?: string }) { const response = await httpClient.put<ApiResponse<KnowledgeUploadTask>>(`/api/v1/knowledge/upload-tasks/${id}`, input); return response.data.data; },
   async deleteUploadTask(id: string) { await httpClient.delete(`/api/v1/knowledge/upload-tasks/${id}`); },
-  async reparseUploadTask(documentId: string, versionId: string) { const response = await httpClient.post<ApiResponse<KnowledgeDocument>>(`/api/v1/knowledge/documents/${documentId}/versions/${versionId}/reparse`, { reviewRevisionId: null, lockVersion: null }); return response.data.data; },
+  async reparseUploadTask(documentId: string, versionId: string) {
+    const current = await knowledgeApi.review(documentId, versionId);
+    return knowledgeApi.reparse(current);
+  },
   async categories(scope?: 'INTERNAL' | 'EXTERNAL') { const response = await httpClient.get<ApiResponse<KnowledgeCategory[]>>('/api/v1/knowledge/categories', { params: scope ? { scope } : undefined }); return response.data.data; },
   async createCategory(input: { name: string; scope: 'INTERNAL' | 'EXTERNAL'; description?: string }) { const response = await httpClient.post<ApiResponse<KnowledgeCategory>>('/api/v1/knowledge/categories', input); return response.data.data; },
   async renameCategory(id: string, input: { name: string; description?: string }) { const response = await httpClient.put<ApiResponse<KnowledgeCategory>>(`/api/v1/knowledge/categories/${id}`, input); return response.data.data; },

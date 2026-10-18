@@ -213,7 +213,9 @@ export function HistoricalOptimizationWorkbench() {
   const recipeMin = recipeFeatures.reduce((sum, column) => sum + (bounds[column.code]?.minimum ?? 0), 0)
   const recipeMax = recipeFeatures.reduce((sum, column) => sum + (bounds[column.code]?.maximum ?? 0), 0)
   const recipeVariable = recipeFeatures.some(adjustable)
-  const compositionProblem = formulaSelected && !partialFormulaSelection && (recipeMin > 100 + (recipeVariable ? 1e-9 : 0.001) || recipeMax < 100 - (recipeVariable ? 1e-9 : 0.001))
+  const unsupportedMaterial = recipeFeatures.find(column => column.compositionBasis !== 'MASS_PERCENT' || !['', '%', 'PERCENT'].includes(column.unit ?? ''))
+  const compositionProblem = unsupportedMaterial ? `材料“${unsupportedMaterial.name}”的计量基准不是质量百分比，请先确认原始记录的单位和计量基准。`
+    : formulaSelected && !partialFormulaSelection && (recipeMin > 100 + (recipeVariable ? 1e-9 : 0.001) || recipeMax < 100 - (recipeVariable ? 1e-9 : 0.001))
     ? '当前材料比例范围无法合计为 100%，请调整对应材料的上下限或固定值。' : ''
   const hasAdjustment = selectedFeatureColumns.some(column => !formulaCodes.includes(column.code) && adjustable(column))
     || recipeFeatures.some(column => {

@@ -56,6 +56,41 @@ class ModelingWorkbenchDataTest {
                 .hasMessageContaining("所选 X 在完整记录中都没有变化");
     }
 
+    @Test void ordinaryModelingAllowsPartialRecipeInputsAndKeepsTheMissingMaterialMetadata() {
+        var id=UUID.randomUUID();var data=formulaDataset();
+        var x=data.path("columns").get(0).path("code").asText();
+        var command=new ModelingWorkbenchService.TrainCommand(id,List.of(id),List.of(x),"y",null);
+        ObjectNode frozen=ReflectionTestUtils.invokeMethod(service,"freezeRequest",data,command,List.of(id));
+        assertThat(frozen.path("rows")).hasSize(6);
+        assertThat(frozen.path("xColumns")).hasSize(1);
+        assertThat(frozen.path("materialColumns")).hasSize(2);
+    }
+
+    @Test void aMaterialRatioCanBeYWithoutRequiringItAsAnInput() {
+        var id=UUID.randomUUID();var data=formulaDataset();
+        var x=data.path("columns").get(0).path("code").asText();
+        var y=data.path("columns").get(1).path("code").asText();
+        var command=new ModelingWorkbenchService.TrainCommand(id,List.of(id),List.of(x,"y"),y,null);
+        ObjectNode frozen=ReflectionTestUtils.invokeMethod(service,"freezeRequest",data,command,List.of(id));
+        assertThat(frozen.path("rows")).hasSize(6);
+        assertThat(frozen.path("yColumn").path("code").asText()).isEqualTo(y);
+        assertThat(frozen.path("xColumns").findValuesAsText("code")).doesNotContain(y);
+    }
+
+    private ObjectNode formulaDataset() {
+        var data=json.createObjectNode().put("name","涂层配方");
+        var columns=data.putArray("columns");
+        var resin=UUID.randomUUID().toString();var additive=UUID.randomUUID().toString();
+        for(var material:List.of(resin,additive))columns.addObject().put("code","formula:"+material)
+                .put("name",material).put("kind","NUMERIC").put("unit","%")
+                .put("materialId",material).put("semanticType","MATERIAL_RATIO").put("mappingStatus","MAPPED").put("compositionBasis","MASS_PERCENT");
+        columns.addObject().put("code","y").put("name","耐磨").put("kind","NUMERIC");
+        var rows=data.putArray("rows");
+        for(int i=0;i<6;i++)rows.addObject().put("id","row-"+i).putObject("values")
+                .put("formula:"+resin,70+i).put("formula:"+additive,30-i).put("y",200+i*10);
+        return data;
+    }
+
     private ObjectNode dataset() {
         var data = json.createObjectNode().put("name", "涂层配方");
         var columns = data.putArray("columns");

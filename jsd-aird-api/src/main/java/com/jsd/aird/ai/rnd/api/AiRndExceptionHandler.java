@@ -1,8 +1,6 @@
 package com.jsd.aird.ai.rnd.api;
 
-import com.jsd.aird.ai.rnd.eligibility.EligibilityController;
-import com.jsd.aird.ai.rnd.facts.UnifiedFactController;
-import com.jsd.aird.ai.rnd.training.TrainingController;
+import com.jsd.aird.ai.rnd.modeling.ModelRegistryController;
 import com.jsd.aird.ai.rnd.prediction.PredictionController;
 import com.jsd.aird.ai.rnd.research.FormulaDesignController;
 import com.jsd.aird.platform.web.RequestIdHolder;
@@ -22,8 +20,7 @@ import org.springframework.web.method.annotation.MethodArgumentTypeMismatchExcep
 
 /** Keeps the frozen ai-rnd.v1 failure envelope independent from the legacy API envelope. */
 @Order(Ordered.HIGHEST_PRECEDENCE)
-@RestControllerAdvice(assignableTypes = {EligibilityController.class,
-        UnifiedFactController.class, TrainingController.class, PredictionController.class, FormulaDesignController.class})
+@RestControllerAdvice(assignableTypes = {ModelRegistryController.class, PredictionController.class, FormulaDesignController.class})
 public class AiRndExceptionHandler {
     private static final Logger log = LoggerFactory.getLogger(AiRndExceptionHandler.class);
 

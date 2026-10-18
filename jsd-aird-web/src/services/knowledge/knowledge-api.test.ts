@@ -4,6 +4,7 @@ const httpMock = vi.hoisted(() => ({
   get: vi.fn(),
   post: vi.fn(),
   put: vi.fn(),
+  delete: vi.fn(),
 }));
 
 vi.mock('@/services/http/client', () => ({ httpClient: httpMock }));
@@ -29,6 +30,31 @@ describe('knowledge API', () => {
     expect(httpMock.post).toHaveBeenCalledWith('/api/v1/knowledge/documents', input);
   });
 
+  it('reads and updates upload records through the server API', async () => {
+    const task = { id: 'task-1', fileName: 'report.pdf', size: 1024, status: 'QUEUED', progress: 100 };
+    httpMock.get.mockResolvedValue({ data: { data: [task] } });
+    httpMock.put.mockResolvedValue({ data: { data: task } });
+
+    expect(await knowledgeApi.uploadTasks()).toEqual([task]);
+    await knowledgeApi.updateUploadTask('task-1', { status: 'QUEUED', progress: 100, documentId: 'doc-1', documentVersionId: 'version-1' });
+
+    expect(httpMock.get).toHaveBeenCalledWith('/api/v1/knowledge/upload-tasks', { params: { limit: 100 } });
+    expect(httpMock.put).toHaveBeenCalledWith('/api/v1/knowledge/upload-tasks/task-1', {
+      status: 'QUEUED', progress: 100, documentId: 'doc-1', documentVersionId: 'version-1',
+    });
+  });
+
+  it('creates and removes upload records through the server API', async () => {
+    const task = { id: 'task-1', fileName: 'report.pdf', size: 1024, status: 'STAGING', progress: 8 };
+    httpMock.post.mockResolvedValue({ data: { data: task } });
+
+    expect(await knowledgeApi.createUploadTask({ fileName: 'report.pdf', size: 1024 })).toEqual(task);
+    await knowledgeApi.deleteUploadTask('task-1');
+
+    expect(httpMock.post).toHaveBeenCalledWith('/api/v1/knowledge/upload-tasks', { fileName: 'report.pdf', size: 1024 });
+    expect(httpMock.delete).toHaveBeenCalledWith('/api/v1/knowledge/upload-tasks/task-1');
+  });
+
   it('reparses without customer parsing policy', async () => {
     const review = {
       documentId: 'document-1',
@@ -45,6 +71,38 @@ describe('knowledge API', () => {
         lockVersion: 7,
       },
     );
+  });
+
+  it('retries a parsed upload with the current review revision and lock version', async () => {
+    httpMock.get.mockResolvedValue({ data: { data: {
+      documentId: 'document-1', versionId: 'version-1',
+      reviewRevision: { id: 'revision-2', lockVersion: 8 },
+    } } });
+
+    await knowledgeApi.reparseUploadTask('document-1', 'version-1');
+
+    expect(httpMock.get).toHaveBeenCalledWith('/api/v1/knowledge/documents/document-1/versions/version-1/review', { timeout: 120_000 });
+    expect(httpMock.post).toHaveBeenCalledWith('/api/v1/knowledge/documents/document-1/versions/version-1/reparse', {
+      reviewRevisionId: 'revision-2', lockVersion: 8,
+    });
+  });
+
+  it('retries a failed parse that has no review revision', async () => {
+    httpMock.get.mockResolvedValue({ data: { data: { documentId: 'document-1', versionId: 'version-1' } } });
+
+    await knowledgeApi.reparseUploadTask('document-1', 'version-1');
+
+    expect(httpMock.post).toHaveBeenCalledWith('/api/v1/knowledge/documents/document-1/versions/version-1/reparse', {
+      reviewRevisionId: null, lockVersion: null,
+    });
+  });
+
+  it('does not submit a retry when the current review cannot be read', async () => {
+    httpMock.get.mockRejectedValueOnce(new Error('没有读取权限'));
+
+    await expect(knowledgeApi.reparseUploadTask('document-1', 'version-1')).rejects.toThrow('没有读取权限');
+
+    expect(httpMock.post).not.toHaveBeenCalled();
   });
 
   it('uses a large-document timeout for published content', async () => {

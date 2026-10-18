@@ -13,6 +13,8 @@ import com.jsd.aird.platform.web.RequestIdHolder;
 import com.jsd.aird.shared.api.ApiResponse;
 import com.jsd.aird.shared.api.PageResponse;
 import com.jsd.aird.shared.api.ResponseFactory;
+import com.jsd.aird.shared.error.ApiErrorCode;
+import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.security.ActorContext;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotEmpty;
@@ -43,6 +45,7 @@ public class ProjectResourceController {
     @GetMapping("/project-resource-links")
     public ApiResponse<List<ProjectResourceFacade.RelatedProjectView>> links(
             @RequestParam ResourceType resourceType, @RequestParam UUID resourceId) {
+        requireLinkableResource(resourceType);
         return success(service.links(ActorContext.required(), resourceType, resourceId));
     }
 
@@ -50,9 +53,18 @@ public class ProjectResourceController {
     public ApiResponse<List<ProjectResourceFacade.RelatedProjectView>> replace(
             @PathVariable ResourceType resourceType, @PathVariable UUID resourceId,
             @Valid @RequestBody LinkRequest request) {
+        requireLinkableResource(resourceType);
         var actor = ActorContext.required();
-        var sourcePermission = resourceType == ResourceType.KNOWLEDGE_DOCUMENT ? "knowledge.update" : "data.update";
-        var sourceResource = resourceType == ResourceType.KNOWLEDGE_DOCUMENT ? "KNOWLEDGE" : "DATA";
+        var sourcePermission = switch (resourceType) {
+            case KNOWLEDGE_DOCUMENT -> "knowledge.update";
+            case DATA_IMPORT_JOB -> "data.update";
+            case SPECTRUM_CHART -> throw unsupportedChartLinks();
+        };
+        var sourceResource = switch (resourceType) {
+            case KNOWLEDGE_DOCUMENT -> "KNOWLEDGE";
+            case DATA_IMPORT_JOB -> "DATA";
+            case SPECTRUM_CHART -> throw unsupportedChartLinks();
+        };
         authorization.require(new PermissionCheck(actor.organizationId(), actor.userId(), sourcePermission,
                 sourceResource, resourceId, "WRITE"));
         return success(service.replaceLinks(actor, resourceType, resourceId, targets(request.targets())));
@@ -61,7 +73,12 @@ public class ProjectResourceController {
     @PostMapping("/project-references")
     public ApiResponse<List<ProjectResourceFacade.ReferenceView>> addReferences(
             @Valid @RequestBody AddReferenceRequest request) {
-        return success(service.addReferences(ActorContext.required(), request.resourceType(), request.resourceId(),
+        var actor = ActorContext.required();
+        if (request.resourceType() == ResourceType.SPECTRUM_CHART) {
+            authorization.require(new PermissionCheck(actor.organizationId(), actor.userId(), "spectrum.view",
+                    "SPECTRUM", request.resourceId(), "READ"));
+        }
+        return success(service.addReferences(actor, request.resourceType(), request.resourceId(),
                 request.summary(), targets(request.targets())));
     }
 
@@ -93,6 +110,14 @@ public class ProjectResourceController {
 
     private List<ProjectRelationTarget> targets(List<TargetRequest> targets) {
         return targets.stream().map(item -> new ProjectRelationTarget(item.projectId(), item.stageId(), item.taskId())).toList();
+    }
+
+    private void requireLinkableResource(ResourceType resourceType) {
+        if (resourceType == ResourceType.SPECTRUM_CHART) throw unsupportedChartLinks();
+    }
+
+    private ApiException unsupportedChartLinks() {
+        return new ApiException(ApiErrorCode.BAD_REQUEST, "图谱仅支持加入项目参考资料");
     }
 
     private <T> ApiResponse<T> success(T value) {

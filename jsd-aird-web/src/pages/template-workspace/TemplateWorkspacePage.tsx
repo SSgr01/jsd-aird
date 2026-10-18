@@ -8,6 +8,7 @@ import {
   EyeOutlined,
   FileExcelOutlined,
   FileWordOutlined,
+  HistoryOutlined,
   LoadingOutlined,
   PlusOutlined,
   ReloadOutlined,
@@ -30,6 +31,7 @@ import {
   Spin,
   Tabs,
   Tag,
+  Timeline,
   Typography,
 } from 'antd';
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
@@ -175,6 +177,7 @@ export function TemplateWorkspacePage() {
   const [editRevision, setEditRevision] = useState(0);
   const [reviewSyncState, setReviewSyncState] = useState<ReviewSyncState>('FRESH');
   const [publishBusy, setPublishBusy] = useState(false);
+  const [revisionBusy, setRevisionBusy] = useState(false);
   const [loadError, setLoadError] = useState<string>();
   const [versionHistory, setVersionHistory] = useState<TemplateVersionHistoryItem[]>([]);
   const [picking, setPicking] = useState<{ fieldId: string; target: CoordinateTarget }>();
@@ -187,6 +190,7 @@ export function TemplateWorkspacePage() {
   const [fieldManagerTab, setFieldManagerTab] = useState<FieldManagerTab>('structure');
   const [recognitionReview, setRecognitionReview] = useState<RecognitionReview>();
   const [templateReview, setTemplateReview] = useState<TemplateVersionReview>();
+  const [reviewHistoryOpen, setReviewHistoryOpen] = useState(false);
   const [rejectReviewOpen, setRejectReviewOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
   const [recognitionActions, setRecognitionActions] = useState<Record<string, RecognitionAction>>(
@@ -675,11 +679,10 @@ export function TemplateWorkspacePage() {
   saveRef.current = save;
 
   useEffect(() => {
-    if (workspace?.format !== 'DOCX' || workspace.status !== 'DRAFT'
-        || view !== 'edit' || saveState !== 'DIRTY') return;
+    if (workspace?.status !== 'DRAFT' || view !== 'edit' || saveState !== 'DIRTY') return;
     const timer = window.setTimeout(() => { void saveRef.current(); }, 2000);
     return () => window.clearTimeout(timer);
-  }, [versionId, workspace?.format, workspace?.status, view, saveState, editRevision]);
+  }, [versionId, workspace?.status, view, saveState, editRevision]);
 
   function saveErrorMessage(error: unknown) {
     const raw = error instanceof Error ? error.message : '';
@@ -761,6 +764,25 @@ export function TemplateWorkspacePage() {
       void message.success('模板已驳回');
     } catch (error) {
       void message.error(error instanceof Error ? error.message : '驳回模板失败');
+    }
+  };
+
+  const createOrOpenRevision = async () => {
+    if (!workspace) return;
+    const draft = versionHistory.find((item) => item.status === 'DRAFT');
+    if (draft) {
+      navigate(`/templates/${draft.versionId}/workspace`);
+      return;
+    }
+    setRevisionBusy(true);
+    try {
+      const revision = await templateApi.createRevision(workspace.versionId);
+      void message.success('已创建新的修订草稿');
+      navigate(`/templates/${revision.versionId}/workspace`);
+    } catch (error) {
+      void message.error(error instanceof Error ? error.message : '创建修订草稿失败');
+    } finally {
+      setRevisionBusy(false);
     }
   };
 
@@ -1786,6 +1808,14 @@ export function TemplateWorkspacePage() {
       okButtonProps: { danger: true },
       cancelText: '取消',
       onOk: () => {
+        const recognizedItem = recognitionReview?.items.find((item) =>
+          item.id === field.recognitionItemId || fieldMatchesIdentity(field, {
+            bindingId: item.payload.bindingId,
+            relationId: item.payload.relationId,
+            fieldId: item.payload.fieldId,
+            recognitionItemId: item.id,
+          }),
+        );
         const removed = removeBusinessField(schema, fieldModel, field.id);
         setSchema(removed.schema);
         setFieldModel(removed.model);
@@ -1795,6 +1825,7 @@ export function TemplateWorkspacePage() {
           fieldId: field.fieldId || field.id,
         })));
         setSelectedFieldId(removed.model.fields[0]?.id);
+        if (recognizedItem) recordRecognitionAction(recognizedItem.id, 'IGNORE', 'IGNORED');
         markDirty();
       },
     });
@@ -1972,6 +2003,17 @@ export function TemplateWorkspacePage() {
           )}
         </div>
         <Space wrap className="workspace-header-actions">
+          {['PUBLISHED', 'RETIRED'].includes(workspace.status) && (
+            <Button
+              size="small"
+              icon={<PlusOutlined />}
+              loading={revisionBusy}
+              onClick={() => void createOrOpenRevision()}
+            >
+              {versionHistory.some((item) => item.status === 'DRAFT') ? '打开修订草稿' : '创建修订版'}
+            </Button>
+          )}
+            {templateReview && <Button size="small" icon={<HistoryOutlined />} onClick={() => setReviewHistoryOpen(true)}>审核记录</Button>}
              <SaveStateIndicator
                state={saveState}
                reviewSyncState={reviewSyncState}
@@ -2344,6 +2386,34 @@ export function TemplateWorkspacePage() {
         >
           新建分组
         </Button>
+      </Modal>
+      <Modal
+        title="模板审核记录"
+        open={reviewHistoryOpen}
+        footer={null}
+        width={640}
+        onCancel={() => setReviewHistoryOpen(false)}
+        destroyOnHidden
+      >
+        {templateReview?.events.length ? (
+          <Timeline items={[...templateReview.events].reverse().map((event) => ({
+            key: event.id,
+            color: event.toStatus === 'REJECTED' ? 'red' : event.toStatus === 'APPROVED' ? 'green' : 'blue',
+            children: (
+              <Space direction="vertical" size={2}>
+                <Typography.Text strong>
+                  {event.toStatus === 'SUBMITTED' ? '提交审核'
+                    : event.toStatus === 'APPROVED' ? '审核通过'
+                      : event.toStatus === 'REJECTED' ? '审核驳回' : event.toStatus}
+                </Typography.Text>
+                <Typography.Text type="secondary">
+                  {event.actorName || '未知用户'} · {new Date(event.createdAt).toLocaleString('zh-CN')}
+                </Typography.Text>
+                {event.comment ? <Typography.Paragraph style={{ margin: 0 }}>{event.comment}</Typography.Paragraph> : null}
+              </Space>
+            ),
+          }))} />
+        ) : <Typography.Text type="secondary">当前版本暂无审核操作记录。</Typography.Text>}
       </Modal>
     </section>
   );
@@ -2826,21 +2896,23 @@ function nonBlockingWarnings(
   const duplicated = duplicatePositionCount(mapping);
   if (lowConfidence) warnings.push(`${lowConfidence} 个字段建议核对`);
   if (optionalWithoutPosition) warnings.push(`${optionalWithoutPosition} 个可选字段没有填写位置`);
-  if (duplicated) warnings.push(`${duplicated} 处填写位置重复`);
+  if (duplicated) {
+    warnings.push(
+      `有 ${duplicated} 个 Excel 填写位置被多个字段共用（同一工作表中的单元格或区域完全相同），填写时可能互相覆盖；此项仅提醒核对，不会单独阻止发布。`,
+    );
+  }
   return warnings;
 }
 
 function duplicatePositionCount(mapping: TemplateBinding[]) {
-  const positions = new Set<string>();
-  let count = 0;
+  const positions = new Map<string, number>();
   for (const binding of mapping) {
     const address = stringValue(binding.locator.address || binding.locator.range);
     if (!address) continue;
     const key = `${stringValue(binding.locator.sheetId) || stringValue(binding.locator.sheetName)}:${address}`;
-    if (positions.has(key)) count += 1;
-    positions.add(key);
+    positions.set(key, (positions.get(key) ?? 0) + 1);
   }
-  return count;
+  return [...positions.values()].filter((count) => count > 1).length;
 }
 
 function addCustomFieldSchema(schema: Record<string, unknown>, field: BusinessField) {

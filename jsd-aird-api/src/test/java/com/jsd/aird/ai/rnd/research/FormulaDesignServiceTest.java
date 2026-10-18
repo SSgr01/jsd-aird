@@ -2,19 +2,21 @@ package com.jsd.aird.ai.rnd.research;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.ai.formula.application.FormulaModelArtifactStore;
-import com.jsd.aird.ai.rnd.SyntheticTestAuthorization;
 import com.jsd.aird.ai.rnd.formula.FormulaNormalizationService;
 import com.jsd.aird.ai.rnd.modeling.ConfigurationHashing;
+import com.jsd.aird.ai.rnd.modeling.WorkbenchFormulaSupport;
 import com.jsd.aird.ai.rnd.prediction.PredictionRepository;
 import com.jsd.aird.ai.rnd.prediction.PredictionService;
-import com.jsd.aird.ai.rnd.training.FormulaModelV2Client;
+import com.jsd.aird.ai.rnd.compute.ModelComputeClient;
 import com.jsd.aird.ops.application.port.AuditLogFacade;
 import com.jsd.aird.ops.application.port.OpsAsyncFacade;
 import com.jsd.aird.shared.security.ActorContext;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Instant;
 import java.util.List;
@@ -22,6 +24,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -31,92 +34,104 @@ class FormulaDesignServiceTest {
     private final PredictionRepository predictions=mock(PredictionRepository.class);
     private final PredictionService predictionContext=mock(PredictionService.class);
     private final FormulaModelArtifactStore artifacts=mock(FormulaModelArtifactStore.class);
-    private final FormulaModelV2Client compute=mock(FormulaModelV2Client.class);
+    private final ModelComputeClient compute=mock(ModelComputeClient.class);
     private final ConfigurationHashing hashing=new ConfigurationHashing(json);
     private final FormulaNormalizationService normalization=new FormulaNormalizationService(json);
     private final FormulaDesignService service=new FormulaDesignService(repository,predictions,predictionContext,artifacts,compute,hashing,
-            mock(OpsAsyncFacade.class),mock(AuditLogFacade.class),json,normalization,new SyntheticTestAuthorization("production",false),false);
+            mock(OpsAsyncFacade.class),mock(AuditLogFacade.class),json,normalization,false);
 
     @AfterEach void clearActor(){ActorContext.clear();}
     private JsonNode node(String text)throws Exception{return json.readTree(text);}
-    private PredictionRepository.TargetBinding binding(UUID id,boolean composition)throws Exception{
-        var b=mock(PredictionRepository.TargetBinding.class);
-        when(b.targetId()).thenReturn(id);when(b.modelId()).thenReturn(UUID.randomUUID());when(b.targetVersionId()).thenReturn(UUID.randomUUID());
-        when(b.targetName()).thenReturn("涂层光泽");when(b.valueType()).thenReturn("CONTINUOUS");when(b.unit()).thenReturn("GU");
-        when(b.classes()).thenReturn(json.createArrayNode());when(b.definition()).thenReturn(json.createObjectNode());
-        when(b.qualityPolicy()).thenReturn(json.createObjectNode());when(b.observationSemantics()).thenReturn(json.createObjectNode());
-        when(b.frozenInputScheme()).thenReturn(node(composition?"{\"id\":\"scheme\",\"fields\":[{\"code\":\"FORMULA\",\"valueType\":\"COMPOSITION\",\"required\":true}]}":"{\"fields\":[{\"code\":\"temperature\",\"valueType\":\"NUMBER\"}]}"));
-        when(b.frozenDictionary()).thenReturn(node("{\"materials\":[{\"materialId\":\"resin\",\"name\":\"丙烯酸树脂\",\"encoderIndex\":0}]}"));
-        when(b.modelDomain()).thenReturn(node(composition?"{\"features\":[\"material:resin\"],\"minimum\":[60],\"maximum\":[80]}":"{\"features\":[\"input:temperature\"],\"minimum\":[20],\"maximum\":[30]}"));
-        when(predictionContext.gateAvailability(b)).thenReturn(List.of());return b;
-    }
+
     private FormulaDesignRepository.Row row(UUID id,JsonNode request,JsonNode bindings,String hash){
         return new FormulaDesignRepository.Row(id,"FORMULA_PREDICTION","RUNNING",null,35,"SEARCHING","request",hash,request,bindings,json.createObjectNode(),null,ActorContext.developmentDefault().userId(),UUID.randomUUID(),1,json.createObjectNode(),Instant.now());
     }
 
-    @Test void excludesModelsThatDidNotLearnMaterialProportions()throws Exception{
-        ActorContext.set(ActorContext.developmentDefault());var id=UUID.randomUUID();var b=binding(id,false);
-        var base=json.createObjectNode();base.putArray("targets").addObject().put("targetId",id.toString()).put("name","涂层光泽").put("predictionAvailable",true);
-        base.putArray("selected");base.putArray("requiredInputs");base.putArray("materials");base.putArray("configurationConflicts");
+
+
+    private PredictionRepository.TargetBinding workbenchBinding()throws Exception {
+        var b=mock(PredictionRepository.TargetBinding.class);
+        when(b.targetId()).thenReturn(UUID.randomUUID());when(b.modelId()).thenReturn(UUID.randomUUID());
+        when(b.targetVersionId()).thenReturn(UUID.randomUUID());when(b.workbenchRunId()).thenReturn(UUID.randomUUID());
+        when(b.targetName()).thenReturn("耐磨次数");when(b.targetCode()).thenReturn("WB_WEAR");when(b.targetHash()).thenReturn("0".repeat(64));
+        when(b.targetVersion()).thenReturn(1);when(b.valueType()).thenReturn("CONTINUOUS");
+        when(b.classes()).thenReturn(json.createArrayNode());when(b.definition()).thenReturn(json.createObjectNode());
+        when(b.observationSemantics()).thenReturn(json.createObjectNode());
+        when(predictionContext.gateAvailability(b)).thenReturn(List.of());
+        var a="f44a3459-05c1-4958-a246-b5736c0aa682";var c="fa09039b-f0a2-48bd-9acc-71ed839ce94d";
+        var scheme=json.createObjectNode().put("id","workbench").put("version",1).put("sha256","0".repeat(64));var fields=scheme.putArray("fields");
+        for(var id:List.of(a,c))fields.addObject().put("code","formula:"+id).put("name",id.equals(a)?"树脂 A比例":"树脂 B比例").put("valueType","NUMBER").put("unit","%").put("required",true).putObject("encoding");
+        fields.addObject().put("code","temperature").put("name","温度").put("valueType","NUMBER").put("unit","°C").put("required",true);
+        var rows=json.createArrayNode();rows.addObject().putObject("values").put("formula:"+a,40).put("formula:"+c,60);
+        when(b.contractVersion()).thenReturn("modeling-workbench.v1");when(b.unit()).thenReturn(null);
+        when(b.frozenInputScheme()).thenReturn(scheme);when(b.frozenDictionary()).thenReturn(WorkbenchFormulaSupport.dictionary(json,scheme,rows));
+        var domain=json.createObjectNode();domain.putArray("features").add("formula:"+a).add("formula:"+c).add("temperature");
+        domain.putArray("minimum").add(20).add(20).add(20);domain.putArray("maximum").add(80).add(80).add(30);when(b.modelDomain()).thenReturn(domain);
+        when(b.artifactKey()).thenReturn("model.zip");when(b.artifactSha()).thenReturn("0".repeat(64));
+        when(artifacts.readRef(anyString(),anyString(),anyString())).thenReturn(new FormulaModelArtifactStore.ArtifactReadRef("model","http://localhost/model.zip","0".repeat(64)));
+        return b;
+    }
+
+    @Test void exposesWorkbenchRatiosOnceAndMapsCandidatesWithoutMutatingFrozenFields()throws Exception {
+        ActorContext.set(ActorContext.developmentDefault());var b=workbenchBinding();
+        var base=json.createObjectNode();base.putArray("targets").addObject().put("targetId",b.targetId().toString());
+        base.putArray("selected").addObject().put("targetId",b.targetId().toString());
+        base.set("requiredInputs",b.frozenInputScheme().path("fields").deepCopy());base.putArray("configurationConflicts");
         when(predictionContext.context(anyList())).thenReturn(base);when(predictions.targetBindings(any(),anyList())).thenReturn(List.of(b));
-        var context=service.context(List.of());
-        assertThat(context.path("targets").get(0).path("available").asBoolean()).isFalse();
-        assertThat(context.path("targets").get(0).path("unavailableReasons").toString()).contains("MODEL_NOT_FORMULA_ENABLED");
+        var context=service.context(List.of(b.targetId()));
+        assertThat(context.path("selected").get(0).path("available").asBoolean()).isTrue();
+        assertThat(context.path("materialIntersection").size()).isEqualTo(2);
+        assertThat(context.path("materialIntersection").get(0).path("name").asText()).isEqualTo("树脂 A");
+        assertThat(context.path("materialIntersection").get(0).path("sourceColumnName").asText()).isEqualTo("树脂 A比例");
+        assertThat(context.path("materialIntersection").get(0).path("supportedRanges").get(0).path("minimum").asInt()).isEqualTo(20);
+        assertThat(context.path("requiredInputs").size()).isEqualTo(1);
+        assertThat(context.path("requiredInputs").get(0).path("code").asText()).isEqualTo("temperature");
+        var payload=service.frozenModelBinding(b);
+        assertThat(payload.path("inputScheme").path("fields").get(0).path("encoding").path("formulaMaterialId").asText()).isEqualTo("f44a3459-05c1-4958-a246-b5736c0aa682");
+        assertThat(payload.path("target").path("unit").isNull()).isTrue();
+        assertThat(b.frozenInputScheme().path("fields").get(0).path("encoding").has("formulaMaterialId")).isFalse();
     }
-    @Test void intersectsCategoriesAndRejectsContradictoryMultiTargetInputDefinitions()throws Exception{
-        ActorContext.set(ActorContext.developmentDefault());var first=binding(UUID.randomUUID(),true);var second=binding(UUID.randomUUID(),true);
-        when(first.frozenInputScheme()).thenReturn(node("{\"fields\":[{\"code\":\"SUBSTRATE\",\"valueType\":\"CATEGORY\",\"required\":false,\"encoding\":{\"allowedValues\":[\"PET\"]}}]}"));
-        when(second.frozenInputScheme()).thenReturn(node("{\"fields\":[{\"code\":\"SUBSTRATE\",\"valueType\":\"CATEGORY\",\"required\":true,\"encoding\":{\"allowedValues\":[\"PC\"]}}]}"));
-        var base=json.createObjectNode();base.putArray("targets");var selected=base.putArray("selected");
-        for(var b:List.of(first,second)){var target=json.createObjectNode().put("targetId",b.targetId().toString()).put("name",b.targetName());selected.add(target);base.withArray("targets").add(target.deepCopy());}
-        base.set("requiredInputs",node("[{\"code\":\"SUBSTRATE\",\"valueType\":\"CATEGORY\",\"required\":false,\"allowedValues\":[\"PET\"]}]"));base.putArray("configurationConflicts");
-        when(predictionContext.context(anyList())).thenReturn(base);when(predictions.targetBindings(any(),anyList())).thenReturn(List.of(first,second));
-        var context=service.context(List.of(first.targetId(),second.targetId()));
-        assertThat(context.path("requiredInputs").get(0).path("required").asBoolean()).isTrue();
-        assertThat(context.path("requiredInputs").get(0).path("allowedValues").isEmpty()).isTrue();
-        assertThat(context.path("configurationConflicts").get(0).path("fieldCode").asText()).isEqualTo("SUBSTRATE");
-        assertThat(context.path("materialIntersection").get(0).path("supportedRanges").size()).isEqualTo(2);
-    }
-    @Test void rejectsAModelWhoseLearnedMaterialsDoNotMatchItsFrozenDictionary()throws Exception{
-        ActorContext.set(ActorContext.developmentDefault());var id=UUID.randomUUID();var b=binding(id,true);
-        when(b.sourceDataNature()).thenReturn("SYNTHETIC");
-        when(b.modelDomain()).thenReturn(node("{\"features\":[\"material:another-material\"],\"minimum\":[10],\"maximum\":[20]}"));
-        var base=json.createObjectNode();base.putArray("targets").addObject().put("targetId",id.toString());
-        base.putArray("selected");base.putArray("requiredInputs");base.putArray("configurationConflicts");
+
+    @Test void explainsIncompleteProportionsAndSingleRatioTargets()throws Exception {
+        ActorContext.set(ActorContext.developmentDefault());var b=workbenchBinding();
+        ((com.fasterxml.jackson.databind.node.ObjectNode)b.frozenDictionary()).put("compositionStatus","INCOMPLETE");
+        var source=json.createObjectNode();source.putObject("modelSource").putObject("yColumn").put("code","formula:f44a3459-05c1-4958-a246-b5736c0aa682").put("kind","NUMERIC").put("unit","%");when(b.definition()).thenReturn(source);
+        var base=json.createObjectNode();base.putArray("targets").addObject().put("targetId",b.targetId().toString());base.putArray("selected");base.putArray("requiredInputs");base.putArray("configurationConflicts");
         when(predictionContext.context(anyList())).thenReturn(base);when(predictions.targetBindings(any(),anyList())).thenReturn(List.of(b));
         var target=service.context(List.of()).path("targets").get(0);
         assertThat(target.path("available").asBoolean()).isFalse();
-        assertThat(target.path("unavailableReasons").toString()).contains("MODEL_MATERIALS_INCONSISTENT");
-        assertThat(target.path("simulation").asBoolean()).isTrue();
+        assertThat(target.path("unavailableReasons").toString()).contains("FORMULA_TARGET_IS_RATIO","MODEL_FORMULA_INPUTS_INCOMPLETE");
     }
-    @Test void preservesActualCandidateConditionsAndDistinguishesIdenticalRecipesWithDifferentConditions()throws Exception{
-        var org=ActorContext.developmentDefault().organizationId();var run=UUID.randomUUID();var b=binding(UUID.randomUUID(),true);
-        when(b.artifactKey()).thenReturn("model.zip");when(b.artifactSha()).thenReturn("0".repeat(64));
-        when(artifacts.readRef(anyString(),anyString(),anyString())).thenReturn(new FormulaModelArtifactStore.ArtifactReadRef("model","http://localhost/model.zip","0".repeat(64)));
-        when(predictions.targetBindings(any(),anyList())).thenReturn(List.of(b));
-        when(predictions.jdbc()).thenReturn(mock(org.springframework.jdbc.core.JdbcTemplate.class));
-        var request=json.createObjectNode();request.put("candidateCount",2);request.putArray("typedGoals").addObject().put("targetId",b.targetId().toString()).put("operator","MAXIMIZE").put("weight",1);
-        request.set("baselineFormula",node("{\"basis\":\"MASS_PERCENT\",\"compositionComplete\":true,\"recordedTotal\":100,\"components\":[{\"materialId\":\"resin\",\"ratio\":100,\"unit\":\"%\",\"amountKnown\":true}]}"));request.putObject("fixedInputs");request.putObject("searchSpace");
-        request.put("simulation",true);request.putObject("displayContext");
-        var bindings=json.createObjectNode().put(b.targetId().toString(),b.modelId().toString());
-        when(repository.any(org,run)).thenReturn(Optional.of(row(run,request,bindings,"hash")));when(repository.markRunning(org,run)).thenReturn(true);
-        var response=json.createObjectNode().put("executionStatus","SUCCEEDED");var candidates=response.putArray("candidates");
-        for(var temperature:List.of(25,30)){var candidate=candidates.addObject();candidate.set("formula",request.path("baselineFormula"));candidate.putObject("inputs").put("temperature",temperature);candidate.putArray("results");}
-        when(compute.recommend(any())).thenReturn(response);service.execute(org,run);
-        var payload=ArgumentCaptor.forClass(JsonNode.class);verify(compute).recommend(payload.capture());
-        assertThat(payload.getValue().has("simulation")).isFalse();assertThat(payload.getValue().has("displayContext")).isFalse();
-        var inputs=ArgumentCaptor.forClass(JsonNode.class);var hashes=ArgumentCaptor.forClass(String.class);
-        verify(repository,times(2)).saveCandidate(eq(org),eq(run),anyInt(),any(),inputs.capture(),any(),any(),any(),any(),any(),anyDouble(),hashes.capture(),any(),any(),any(),anyDouble(),anyDouble(),anyDouble());
-        assertThat(inputs.getAllValues().stream().map(value->value.path("temperature").asInt()).toList()).containsExactly(25,30);
-        assertThat(hashes.getAllValues().get(0)).isNotEqualTo(hashes.getAllValues().get(1));
+
+    @Test void validatesMappedRecipeTotalsBoundsAndFixedConditionsBeforeSaving()throws Exception {
+        var b=workbenchBinding();var payload=json.createObjectNode();payload.putArray("modelBindings").add(service.frozenModelBinding(b));
+        var request=json.createObjectNode();var formula=request.putObject("baselineFormula").put("basis","MASS_PERCENT").put("compositionComplete",true).put("recordedTotal",100);
+        var components=formula.putArray("components");
+        var a="f44a3459-05c1-4958-a246-b5736c0aa682";var c="fa09039b-f0a2-48bd-9acc-71ed839ce94d";
+        components.addObject().put("materialId",a).put("ratio",40).put("unit","PERCENT").put("amountKnown",true);
+        components.addObject().put("materialId",c).put("ratio",60).put("unit","PERCENT").put("amountKnown",true);
+        request.put("targetTotal",100).put("formulaBasis","MASS_PERCENT");request.putObject("fixedInputs").put("temperature",25);
+        var space=request.putObject("searchSpace");var variables=space.putArray("variableMaterials");
+        for(var id:List.of(a,c))variables.addObject().put("materialId",id).put("minimum",20).put("maximum",80);
+        ReflectionTestUtils.invokeMethod(service,"validateFormulaRequest",request,List.of(b));
+        var candidate=json.createObjectNode();candidate.set("formula",formula.deepCopy());candidate.putObject("inputs").put("temperature",25);
+        assertThat((Boolean)ReflectionTestUtils.invokeMethod(service,"candidateMatchesRequest",candidate,request,payload)).isTrue();
+        candidate.withObject("inputs").put("temperature",30);
+        assertThat((Boolean)ReflectionTestUtils.invokeMethod(service,"candidateMatchesRequest",candidate,request,payload)).isFalse();
+        candidate.withObject("inputs").put("temperature",25);((ObjectNode)candidate.path("formula").path("components").get(0)).put("ratio",50);
+        assertThat((Boolean)ReflectionTestUtils.invokeMethod(service,"candidateMatchesRequest",candidate,request,payload)).isFalse();
+        ((ObjectNode)candidate.path("formula").path("components").get(1)).put("ratio",50);
+        ((ObjectNode)variables.get(0)).put("maximum",45);
+        assertThat((Boolean)ReflectionTestUtils.invokeMethod(service,"candidateMatchesRequest",candidate,request,payload)).isFalse();
+        variables.remove(0); // A is fixed at 40%; a complete but changed formula must also be rejected.
+        assertThat((Boolean)ReflectionTestUtils.invokeMethod(service,"candidateMatchesRequest",candidate,request,payload)).isFalse();
+        candidate.set("formula",formula.deepCopy());
+        assertThat((Boolean)ReflectionTestUtils.invokeMethod(service,"candidateMatchesRequest",candidate,request,payload)).isTrue();
+        request.withObject("fixedInputs").put("formula:"+a,40);
+        assertThatThrownBy(()->ReflectionTestUtils.invokeMethod(service,"validateFormulaRequest",request,List.of(b))).hasMessageContaining("材料比例请在配方材料中设置");
     }
-    @Test void returnsTheExistingTaskForARetriedRequestBeforeRecheckingModelAvailability()throws Exception{
-        ActorContext.set(ActorContext.developmentDefault());var actor=ActorContext.required();var id=UUID.randomUUID();
-        var body=json.createObjectNode().put("targetTotal",100).put("formulaBasis","MASS_PERCENT");
-        body.set("baselineFormula",node("{\"basis\":\"MASS_PERCENT\",\"compositionComplete\":true,\"recordedTotal\":100,\"components\":[{\"materialId\":\"resin\",\"ratio\":100,\"unit\":\"%\",\"amountKnown\":true}]}"));
-        var normalized=body.deepCopy();normalized.set("baselineFormula",normalization.requireValid(body.path("baselineFormula")).formula());
-        when(repository.byKey(actor.organizationId(),actor.userId(),"request-key")).thenReturn(Optional.of(row(id,normalized,json.createObjectNode(),hashing.hash(normalized))));
-        assertThat(service.submit(body,"request-key").runId()).isEqualTo(id);
-        verify(predictions,never()).targetBindings(any(),anyList());
-    }
+
+
+
+
 }

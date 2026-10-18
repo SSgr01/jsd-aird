@@ -9,6 +9,7 @@ class AllowedActionsTest {
     @Test
     void knowledgeDraftCanBeDeletedButPublishedCanOnlyBeDisabled() {
         assertEquals(java.util.List.of("DELETE"), AllowedActions.knowledge("ACTIVE", "PENDING_REVIEW", false));
+        assertEquals(java.util.List.of(), AllowedActions.knowledge("ACTIVE", "PENDING_REVIEW", false, true));
         assertEquals(java.util.List.of("DISABLE"), AllowedActions.knowledge("ACTIVE", "PUBLISHED", true));
         assertEquals(java.util.List.of("RESTORE"), AllowedActions.knowledge("DISABLED", "PUBLISHED", true));
     }

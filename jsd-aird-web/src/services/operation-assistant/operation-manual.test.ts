@@ -38,7 +38,8 @@ describe('operation handbook navigation', () => {
     expect(currentOperationPage('/experiments/upload')?.id).toBe('experiment-upload');
     expect(currentOperationPage('/assistant/model-center', '?tab=workbench')?.id).toBe('modeling-workbench');
     expect(currentOperationPage('/assistant/model-center', '?tab=models')?.id).toBe('model-management');
-    expect(operationManual.pages.some(page => page.path === '/assistant/modeling-settings')).toBe(false);
+    expect(currentOperationPage('/assistant/model-center', '?modelId=model-1&tab=models')?.id).toBe('model-management');
+    expect(currentOperationPage('/assistant/model-center', '?tab=settings')).toBeUndefined();
     expect(currentOperationPage('/experiments/template-imports/job-1')?.id).toBe(
       'experiment-upload',
     );
@@ -48,6 +49,21 @@ describe('operation handbook navigation', () => {
     expect(currentOperationPage('/knowledge/view', '?reviewStatus=PENDING_REVIEW')?.id).toBe(
       'knowledge-review',
     );
+  });
+
+  it.each([
+    '/assistant/modeling-settings',
+    '/assistant/modeling-settings/samples',
+    '/assistant/modeling-settings/samples/sample-1',
+    '/assistant/model-management',
+    '/assistant/model-center/targets/target-1',
+    '/assistant/model-center/samples',
+    '/assistant/model-center/samples/sample-1',
+    '/experiments/imports/import-1',
+    '/knowledge/review',
+  ])('does not recognize or redirect a removed page: %s', (path) => {
+    expect(currentOperationPage(path)).toBeUndefined();
+    expect(matchRoutes(routeConfig, path)?.at(-1)?.route.path).toBe('*');
   });
 
   it('filters recommended questions and links by operation, page and menu grants', () => {

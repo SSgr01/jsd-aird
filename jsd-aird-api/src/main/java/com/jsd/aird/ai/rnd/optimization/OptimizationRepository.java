@@ -9,7 +9,6 @@ import org.springframework.stereotype.Repository;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -28,125 +27,45 @@ public class OptimizationRepository {
 
     public JdbcTemplate jdbc() { return jdbc; }
 
-    public List<BaselineRow> baselines(UUID org, UUID user, String type, String keyword, int page, int size) {
-        var result = new ArrayList<BaselineRow>();
-        var like = "%" + (keyword == null ? "" : keyword.strip()) + "%";
-        if (type == null || type.isBlank() || "EXPERIMENT_VERSION".equals(type)) {
-            result.addAll(jdbc.query("""
-                SELECT 'EXPERIMENT_VERSION' source_type,e.id entity_id,v.id version_id,e.title,
-                       coalesce(e.experiment_no,'') source_label,v.edit_model_jsonb payload,
-                       v.template_version_id,v.template_snapshot_hash,v.template_snapshot_jsonb,
-                       v.created_at updated_at
-                FROM rnd.experiment e JOIN rnd.experiment_version v
-                  ON v.organization_id=e.organization_id AND v.id=e.current_version_id
-                WHERE e.organization_id=? AND e.deleted=false AND e.status='COMPLETED'
-                  AND (e.title ILIKE ? OR e.experiment_no ILIKE ?)
-                ORDER BY v.created_at DESC,e.id LIMIT ? OFFSET ?
-                """, this::baseline, org, like, like, size, page * size));
-        }
-        if (type == null || type.isBlank() || "DATA_SAMPLE_REVISION".equals(type)) {
-            result.addAll(jdbc.query("""
-                SELECT 'DATA_SAMPLE_REVISION' source_type,s.id entity_id,r.id version_id,
-                       coalesce(nullif(ij.source_file_name,''), nullif(src.source_business_key,''), '数据中心样本') ||
-                         CASE WHEN ci.sheet_name IS NOT NULL THEN ' · ' || ci.sheet_name ELSE '' END ||
-                         CASE WHEN ci.row_coordinate IS NOT NULL THEN ' · ' || ci.row_coordinate ELSE '' END title,
-                       '数据中心正式数据' source_label,
-                       jsonb_build_object('formula',r.composition_jsonb,'inputs',r.conditions_jsonb,
-                         'process',r.process_jsonb,'observations',r.observations_jsonb,
-                         'sourceCoordinates',r.source_coordinates_jsonb,'factHash',r.fact_hash) payload,
-                       NULL::uuid template_version_id,NULL::char(64) template_snapshot_hash,
-                       '{}'::jsonb template_snapshot_jsonb,r.created_at updated_at
-                FROM ai.training_sample s JOIN ai.sample_revision r
-                  ON r.organization_id=s.organization_id AND r.id=s.current_sample_revision_id
-                LEFT JOIN ai.sample_source src ON src.organization_id=s.organization_id
-                  AND src.training_sample_id=s.id AND src.id=r.sample_source_id
-                LEFT JOIN data.confirmed_submission_item ci ON ci.organization_id=s.organization_id
-                  AND ci.id=src.confirmed_submission_item_id
-                LEFT JOIN data.confirmed_submission cs ON cs.organization_id=ci.organization_id
-                  AND cs.id=ci.confirmed_submission_id
-                LEFT JOIN data.import_job ij ON ij.organization_id=cs.organization_id
-                  AND ij.id=cs.import_job_id
-                WHERE s.organization_id=? AND s.status='ACTIVE' AND s.authority_source_type='DATA_CENTER'
-                  AND (s.logical_sample_key ILIKE ? OR coalesce(src.source_business_key,'') ILIKE ?
-                    OR coalesce(ij.source_file_name,'') ILIKE ?)
-                ORDER BY r.created_at DESC,s.id LIMIT ? OFFSET ?
-                """, this::baseline, org, like, like, like, size, page * size));
-        }
-        if (type == null || type.isBlank() || "RESEARCH_CANDIDATE".equals(type)) {
-            result.addAll(jdbc.query("""
-                SELECT 'RESEARCH_CANDIDATE' source_type,c.id entity_id,c.id version_id,c.title,
-                       concat('配方预测 ',r.created_at::date) source_label,
-                       jsonb_build_object('formula',c.formula_jsonb,'inputs',c.fixed_inputs_jsonb,
-                         'predictions',c.target_results_jsonb,'quality',c.quality_jsonb,
-                         'applicability',c.applicability_jsonb,'runId',r.id) payload,
-                       NULL::uuid template_version_id,NULL::char(64) template_snapshot_hash,
-                       '{}'::jsonb template_snapshot_jsonb,c.created_at updated_at
-                FROM ai.research_candidate_v2 c JOIN ai.research_run_v2 r
-                  ON r.organization_id=c.organization_id AND r.id=c.research_run_id
-                WHERE c.organization_id=? AND r.created_by=? AND r.run_type='FORMULA_PREDICTION'
-                  AND r.execution_status='SUCCEEDED' AND (c.title ILIKE ? OR r.request_id ILIKE ?)
-                ORDER BY c.created_at DESC,c.id LIMIT ? OFFSET ?
-                """, this::baseline, org, user, like, like, size, page * size));
-        }
-        result.sort((a,b) -> b.updatedAt().compareTo(a.updatedAt()));
-        return result.stream().limit(size).toList();
-    }
-
-    public Optional<BaselineRow> baseline(UUID org, UUID user, String type, UUID id) {
-        var rows = switch (type) {
-            case "EXPERIMENT_VERSION" -> jdbc.query("""
+    public Optional<BaselineRow> historyBaseline(UUID org, UUID versionId) {
+        return jdbc.query("""
                 SELECT 'EXPERIMENT_VERSION' source_type,e.id entity_id,v.id version_id,e.title,
                        coalesce(e.experiment_no,'') source_label,v.edit_model_jsonb payload,
                        v.template_version_id,v.template_snapshot_hash,v.template_snapshot_jsonb,v.created_at updated_at
-                FROM rnd.experiment e JOIN rnd.experiment_version v ON v.organization_id=e.organization_id AND v.id=e.current_version_id
-                WHERE e.organization_id=? AND e.id=? AND e.status='COMPLETED' AND e.deleted=false
-                """, this::baseline, org, id);
-            case "DATA_SAMPLE_REVISION" -> jdbc.query("""
-                SELECT 'DATA_SAMPLE_REVISION' source_type,s.id entity_id,r.id version_id,
-                       coalesce(nullif(ij.source_file_name,''), nullif(src.source_business_key,''), '数据中心样本') ||
-                         CASE WHEN ci.sheet_name IS NOT NULL THEN ' · ' || ci.sheet_name ELSE '' END ||
-                         CASE WHEN ci.row_coordinate IS NOT NULL THEN ' · ' || ci.row_coordinate ELSE '' END title,
-                       '数据中心正式数据' source_label,
-                       jsonb_build_object('formula',r.composition_jsonb,'inputs',r.conditions_jsonb,
-                         'process',r.process_jsonb,'observations',r.observations_jsonb,
-                         'sourceCoordinates',r.source_coordinates_jsonb,'factHash',r.fact_hash) payload,
-                       NULL::uuid template_version_id,NULL::char(64) template_snapshot_hash,
-                       '{}'::jsonb template_snapshot_jsonb,r.created_at updated_at
-                FROM ai.training_sample s JOIN ai.sample_revision r ON r.organization_id=s.organization_id AND r.id=s.current_sample_revision_id
-                LEFT JOIN ai.sample_source src ON src.organization_id=s.organization_id AND src.id=r.sample_source_id
-                LEFT JOIN data.confirmed_submission_item ci ON ci.organization_id=s.organization_id
-                  AND ci.id=src.confirmed_submission_item_id
-                LEFT JOIN data.confirmed_submission cs ON cs.organization_id=ci.organization_id
-                  AND cs.id=ci.confirmed_submission_id
-                LEFT JOIN data.import_job ij ON ij.organization_id=cs.organization_id
-                  AND ij.id=cs.import_job_id
-                WHERE s.organization_id=? AND s.id=? AND s.status='ACTIVE' AND s.authority_source_type='DATA_CENTER'
-                """, this::baseline, org, id);
-            case "RESEARCH_CANDIDATE" -> jdbc.query("""
-                SELECT 'RESEARCH_CANDIDATE' source_type,c.id entity_id,c.id version_id,c.title,
-                       concat('配方预测 ',r.created_at::date) source_label,
-                       jsonb_build_object('formula',c.formula_jsonb,'inputs',c.fixed_inputs_jsonb,
-                         'predictions',c.target_results_jsonb,'quality',c.quality_jsonb,
-                         'applicability',c.applicability_jsonb,'runId',r.id) payload,
-                       NULL::uuid template_version_id,NULL::char(64) template_snapshot_hash,
-                       '{}'::jsonb template_snapshot_jsonb,c.created_at updated_at
-                FROM ai.research_candidate_v2 c JOIN ai.research_run_v2 r ON r.organization_id=c.organization_id AND r.id=c.research_run_id
-                WHERE c.organization_id=? AND c.id=? AND r.created_by=? AND r.run_type='FORMULA_PREDICTION'
-                  AND r.execution_status='SUCCEEDED'
-                """, this::baseline, org, id, user);
-            default -> List.<BaselineRow>of();
-        };
-        return rows.stream().findFirst();
+                FROM rnd.experiment e JOIN rnd.experiment_version v ON v.organization_id=e.organization_id AND v.experiment_id=e.id
+                WHERE e.organization_id=? AND v.id=? AND v.status='COMPLETED' AND e.deleted=false
+                """, this::baseline, org, versionId).stream().findFirst();
     }
 
     public List<HistoryDatasetRow> historyDatasets(UUID org, String keyword) {
         var like = "%" + (keyword == null ? "" : keyword.strip()) + "%";
         return jdbc.query("""
-            SELECT tv.id dataset_id,t.name dataset_name,count(*) row_count,max(v.created_at) updated_at
+            SELECT tv.id dataset_id,t.name dataset_name,
+                   sum(greatest(coalesce(samples.sample_count,0),1)) row_count,max(v.created_at) updated_at
             FROM rnd.experiment e
             JOIN rnd.experiment_version v ON v.organization_id=e.organization_id AND v.id=e.current_version_id
             JOIN tpl.template_version tv ON tv.id=v.template_version_id
             JOIN tpl.template t ON t.id=tv.template_id AND t.organization_id=e.organization_id
+            LEFT JOIN LATERAL (
+              SELECT count(DISTINCT group_key) sample_count
+              FROM (
+                SELECT coalesce(nullif(item->>'logicalSampleKey',''),nullif(item->>'sampleKey',''),nullif(item->>'sourceGroupKey',''),
+                         CASE WHEN nullif(item->>'sourceIdentity','') IS NOT NULL THEN nullif(item->>'sourceRecordKey','') END) group_key
+                FROM jsonb_array_elements(coalesce(v.edit_model_jsonb->'sourceGroups','[]'::jsonb)) item
+                UNION ALL
+                SELECT coalesce(nullif(item->>'logicalSampleKey',''),nullif(item->>'sampleKey',''),nullif(item->>'sourceGroupKey',''),
+                         CASE WHEN nullif(item->>'sourceIdentity','') IS NOT NULL THEN nullif(item->>'sourceRecordKey','') END) group_key
+                FROM jsonb_array_elements(coalesce(v.edit_model_jsonb->'formulaItems','[]'::jsonb)) item
+                UNION ALL
+                SELECT coalesce(nullif(item->>'logicalSampleKey',''),nullif(item->>'sampleKey',''),nullif(item->>'sourceGroupKey',''),
+                         CASE WHEN nullif(item->>'sourceIdentity','') IS NOT NULL THEN nullif(item->>'sourceRecordKey','') END)
+                FROM jsonb_array_elements(coalesce(v.edit_model_jsonb->'processSteps','[]'::jsonb)) item
+                UNION ALL
+                SELECT coalesce(nullif(item->>'logicalSampleKey',''),nullif(item->>'sampleKey',''),nullif(item->>'sourceGroupKey',''),
+                         CASE WHEN nullif(item->>'sourceIdentity','') IS NOT NULL THEN nullif(item->>'sourceRecordKey','') END)
+                FROM jsonb_array_elements(coalesce(v.edit_model_jsonb->'testResults','[]'::jsonb)) item
+              ) grouped WHERE group_key IS NOT NULL
+            ) samples ON true
             WHERE e.organization_id=? AND e.deleted=false AND e.status='COMPLETED'
               AND v.status='COMPLETED'
               AND (t.name ILIKE ? OR e.title ILIKE ? OR e.experiment_no ILIKE ?)
@@ -167,13 +86,12 @@ public class OptimizationRepository {
                 r.getString("experiment_no"),r.getString("title"),read(r,"edit_model_jsonb"),instant(r,"created_at")),org,templateVersionId);
     }
 
-    public Optional<String> materialName(String materialId) {
-        try {
-            return jdbc.query("SELECT name FROM mdm.material WHERE id=? AND status<>'RETIRED'",
-                    (rs,n)->rs.getString("name"),UUID.fromString(materialId)).stream().findFirst();
-        } catch (IllegalArgumentException ignored) {
-            return Optional.empty();
-        }
+    public Map<String,String> materialIds(UUID organizationId) {
+        var ids=new LinkedHashMap<String,String>();
+        jdbc.query("SELECT code,id FROM mdm.material WHERE status<>'RETIRED'",
+                (rs,n)->Map.entry(rs.getString(1),rs.getObject(2).toString()))
+                .forEach(entry->ids.put(entry.getKey(),entry.getValue()));
+        return ids;
     }
 
     public Map<String,String> historyFieldNames(UUID organizationId) {
@@ -237,29 +155,10 @@ public class OptimizationRepository {
     public List<CandidateRow> candidates(UUID org,UUID run){return jdbc.query("SELECT * FROM ai.research_candidate_v2 WHERE organization_id=? AND research_run_id=? ORDER BY candidate_no",this::candidate,org,run);}
     public Optional<CandidateRow> candidate(UUID org,UUID run,UUID candidate){return jdbc.query("SELECT * FROM ai.research_candidate_v2 WHERE organization_id=? AND research_run_id=? AND id=?",this::candidate,org,run,candidate).stream().findFirst();}
 
-    public Optional<LinkRow> linkByKey(UUID org,UUID user,String key){return jdbc.query("SELECT l.*,e.experiment_no,e.status FROM ai.research_experiment_link_v2 l JOIN rnd.experiment e ON e.organization_id=l.organization_id AND e.id=l.experiment_id WHERE l.organization_id=? AND l.created_by=? AND l.idempotency_key=?",this::link,org,user,key).stream().findFirst();}
-    public void insertEvidenceAndLink(UUID org,UUID user,RunRow run,CandidateRow candidate,UUID experimentId,UUID versionId,
-                                      String key,JsonNode intent,String intentHash,UUID evidenceId,String evidenceHash){
-        jdbc.update("""
-            INSERT INTO rnd.experiment_ai_source_evidence(id,organization_id,experiment_id,experiment_version_id,
-              request_hash,formula_jsonb,predictions_jsonb,model_bindings_jsonb,source_summary_jsonb,evidence_hash,captured_by,
-              research_run_id,research_candidate_id,baseline_snapshot_jsonb,target_evidence_jsonb,request_jsonb)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """,evidenceId,org,experimentId,versionId,run.requestHash(),pg(candidate.formula()),pg(candidate.results()),
-                pg(run.bindings()),pg(json.createObjectNode().put("sourceType","AI_EXPERIMENT_OPTIMIZATION").put("strategy",candidate.strategy())),
-                evidenceHash,user,run.id(),candidate.id(),pg(run.baseline()),pg(candidate.evidence()),pg(run.request()));
-        jdbc.update("""
-            INSERT INTO ai.research_experiment_link_v2(id,organization_id,research_run_id,research_candidate_id,
-              experiment_id,experiment_version_id,idempotency_key,created_by,creation_intent_jsonb,creation_intent_hash,source_evidence_id)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?)
-            """,UUID.randomUUID(),org,run.id(),candidate.id(),experimentId,versionId,key,user,pg(intent),intentHash,evidenceId);
-    }
-    public List<LinkRow> links(UUID org,UUID run){return jdbc.query("SELECT l.*,e.experiment_no,e.status FROM ai.research_experiment_link_v2 l JOIN rnd.experiment e ON e.organization_id=l.organization_id AND e.id=l.experiment_id WHERE l.organization_id=? AND l.research_run_id=? ORDER BY l.created_at,l.id",this::link,org,run);}
-
     private BaselineRow baseline(ResultSet r,int n)throws SQLException{return new BaselineRow(r.getString("source_type"),r.getObject("entity_id",UUID.class),r.getObject("version_id",UUID.class),r.getString("title"),r.getString("source_label"),read(r,"payload"),r.getObject("template_version_id",UUID.class),r.getString("template_snapshot_hash"),read(r,"template_snapshot_jsonb"),instant(r,"updated_at"));}
     private RunRow run(ResultSet r,int n)throws SQLException{return new RunRow(r.getObject("id",UUID.class),r.getString("execution_status"),r.getString("outcome_status"),r.getInt("progress"),r.getString("current_stage"),r.getString("request_id"),r.getString("request_hash"),read(r,"request_jsonb"),read(r,"model_bindings_jsonb"),read(r,"result_summary_jsonb"),readNullable(r,"error_jsonb"),r.getObject("created_by",UUID.class),r.getObject("ops_job_id",UUID.class),r.getLong("seed"),read(r,"search_config_jsonb"),r.getString("baseline_type"),r.getObject("baseline_entity_id",UUID.class),r.getObject("baseline_version_id",UUID.class),r.getString("baseline_content_hash"),read(r,"baseline_snapshot_jsonb"),read(r,"optimization_config_jsonb"),instant(r,"updated_at"));}
     private CandidateRow candidate(ResultSet r,int n)throws SQLException{return new CandidateRow(r.getObject("id",UUID.class),r.getInt("candidate_no"),r.getString("title"),r.getString("search_strategy"),read(r,"formula_jsonb"),read(r,"fixed_inputs_jsonb"),read(r,"target_results_jsonb"),read(r,"quality_jsonb"),read(r,"applicability_jsonb"),read(r,"rule_check_jsonb"),read(r,"evidence_jsonb"),r.getDouble("score"),r.getDouble("target_total"),r.getDouble("baseline_distance"),read(r,"change_summary_jsonb"),read(r,"strategy_evidence_jsonb"),read(r,"risk_flags_jsonb"));}
-    private LinkRow link(ResultSet r,int n)throws SQLException{return new LinkRow(r.getObject("id",UUID.class),r.getObject("research_candidate_id",UUID.class),r.getObject("experiment_id",UUID.class),r.getObject("experiment_version_id",UUID.class),r.getString("experiment_no"),r.getString("status"),instant(r,"created_at"));}
+
     private JsonNode read(ResultSet r,String col)throws SQLException{try{var s=r.getString(col);return s==null?json.createObjectNode():json.readTree(s);}catch(Exception e){throw new SQLException(e);}}
     private JsonNode readNullable(ResultSet r,String col)throws SQLException{var s=r.getString(col);if(s==null)return null;try{return json.readTree(s);}catch(Exception e){throw new SQLException(e);}}
     private Instant instant(ResultSet r,String col)throws SQLException{var t=r.getTimestamp(col);return t==null?Instant.EPOCH:t.toInstant();}
@@ -276,5 +175,5 @@ public class OptimizationRepository {
     public record CandidateRow(UUID id,int candidateNo,String title,String strategy,JsonNode formula,JsonNode inputs,
                                JsonNode results,JsonNode quality,JsonNode applicability,JsonNode ruleCheck,JsonNode evidence,
                                double score,double targetTotal,double distance,JsonNode changes,JsonNode strategyEvidence,JsonNode risks){}
-    public record LinkRow(UUID id,UUID candidateId,UUID experimentId,UUID experimentVersionId,String experimentNo,String status,Instant createdAt){}
+
 }

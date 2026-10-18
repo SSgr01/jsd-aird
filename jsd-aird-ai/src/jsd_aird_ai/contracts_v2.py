@@ -76,6 +76,13 @@ class InputFieldV2(V2Model):
     required: bool
     acquisition_timing: Literal["PRE_EXPERIMENT", "POST_EXPERIMENT"]
     encoding: dict[str, Any] = Field(default_factory=dict)
+    semantic_key: str | None = None
+    material_id: str | None = None
+    material_code: str | None = None
+    composition_basis: str | None = None
+    test_methods: list[str] = Field(default_factory=list)
+    test_stage: str | None = None
+    measurement_component: str | None = None
 
 
 class InputSchemeV2(VersionedRef):
@@ -98,15 +105,11 @@ class MaterialV2(V2Model):
 
 
 class MaterialDictionaryV2(VersionedRef):
-    materials: list[MaterialV2] = Field(min_length=1)
+    materials: list[MaterialV2] = Field(default_factory=list)
 
 
-class PreprocessingV2(VersionedRef):
-    config: dict[str, Any]
 
 
-class TrainingPolicyV2(VersionedRef):
-    config: dict[str, Any]
 
 
 class ContractRequestV2(V2Model):
@@ -120,23 +123,10 @@ class ContractResponseV2(V2Model):
     request_id: str
 
 
-class FrozenContextV2(V2Model):
-    target_definition: TargetDefinitionV2
-    input_scheme: InputSchemeV2
-    material_dictionary: MaterialDictionaryV2
-    preprocessing: PreprocessingV2
-    training_policy: TrainingPolicyV2
 
 
-class SnapshotRefV2(VersionedRef):
-    manifest: ArtifactRefV2
-    rows: ArtifactRefV2
-    source_map: ArtifactRefV2
 
 
-class ValidateRequestV2(ContractRequestV2):
-    snapshot: SnapshotRefV2
-    context: FrozenContextV2
 
 
 class ValidationIssueV2(V2Model):
@@ -146,44 +136,16 @@ class ValidationIssueV2(V2Model):
     field_code: str | None = None
 
 
-class ValidateResponseV2(ContractResponseV2):
-    status: Literal["VALID", "REJECTED"]
-    snapshot_hash: Sha256
-    issues: list[ValidationIssueV2] = Field(default_factory=list)
 
 
-class ValidationFoldsRequestV2(ValidateRequestV2):
-    fold_count: int = Field(ge=2, le=10)
-    group_fields: list[str] = Field(min_length=1)
 
 
-class FoldAssignmentV2(V2Model):
-    row_id: str
-    group_key: str
-    fold: int = Field(ge=0)
 
 
-class ValidationFoldsResponseV2(ContractResponseV2):
-    snapshot_hash: Sha256
-    assignments_hash: Sha256
-    assignments: list[FoldAssignmentV2]
 
 
-class TrainRequestV2(ContractRequestV2):
-    job_id: str
-    snapshot: SnapshotRefV2
-    context: FrozenContextV2
-    validation_folds: ArtifactRefV2
-    output: Annotated[AnyUrl, Field()]
 
 
-class TrainResponseV2(ContractResponseV2):
-    job_id: str
-    status: Literal["CANDIDATE", "REJECTED", "FAILED"]
-    model_bundle: ArtifactRefV2 | None = None
-    metrics: dict[str, Any] = Field(default_factory=dict)
-    applicability_domain: dict[str, Any] = Field(default_factory=dict)
-    reasons: list[str] = Field(default_factory=list)
 
 
 class FormulaComponentV2(V2Model):
@@ -212,8 +174,8 @@ class ModelBindingV2(V2Model):
     model_bundle: ArtifactRefV2
     input_scheme: InputSchemeV2
     material_dictionary: MaterialDictionaryV2
-    preprocessing: PreprocessingV2
     applicability_domain: dict[str, Any]
+    result_constraints: dict[str, Any] = Field(default_factory=dict)
 
 
 class ScoreRequestV2(ContractRequestV2):
@@ -325,7 +287,7 @@ class TypedGoalV2(V2Model):
 
 class RecommendRequestV2(ContractRequestV2):
     run_id: str
-    mode: Literal["FORMULA_PREDICTION", "EXPERIMENT_OPTIMIZATION"]
+    mode: Literal["FORMULA_PREDICTION"]
     baseline_formula: FormulaV2 | None = None
     fixed_inputs: dict[str, Any]
     goals: list[TypedGoalV2] = Field(min_length=1)
@@ -333,13 +295,7 @@ class RecommendRequestV2(ContractRequestV2):
     search_space: dict[str, Any] = Field(default_factory=dict)
     model_bindings: list[ModelBindingV2] = Field(min_length=1)
     candidate_count: int = Field(default=4, ge=1, le=16)
-
-    @model_validator(mode="after")
-    def optimization_requires_baseline(self) -> "RecommendRequestV2":
-        if self.mode == "EXPERIMENT_OPTIMIZATION" and self.baseline_formula is None:
-            raise ValueError("experiment optimization requires baselineFormula")
-        return self
-
+    result_constraints: dict[str, Any] = Field(default_factory=dict)
 
 class RecommendedCandidateV2(V2Model):
     candidate_id: str
@@ -347,7 +303,7 @@ class RecommendedCandidateV2(V2Model):
     results: list[TargetSuccessV2]
     score: float
     rule_check: dict[str, Any]
-    strategy: Literal["CONTROLLED_POOL", "CONTROL", "CONSERVATIVE", "BALANCED", "EXPLORATORY"] = "CONTROLLED_POOL"
+    strategy: Literal["CONTROLLED_POOL"] = "CONTROLLED_POOL"
     inputs: dict[str, Any] = Field(default_factory=dict)
     quality: dict[str, Any] = Field(default_factory=dict)
     applicability: dict[str, Any] = Field(default_factory=dict)
@@ -359,16 +315,9 @@ class RecommendedCandidateV2(V2Model):
 
 class RecommendResponseV2(ContractResponseV2):
     run_id: str
-    # ``status`` remains as a wire-compatible label for existing internal
-    # callers; new consumers use the explicit execution/outcome pair.
-    status: Literal["READY", "PARTIAL", "NO_FEASIBLE_CANDIDATE", "FAILED"]
     execution_status: Literal["SUCCEEDED", "FAILED"] = "SUCCEEDED"
     outcome_status: Literal["SUCCEEDED", "PARTIAL", "BLOCKED"] | None = None
     candidates: list[RecommendedCandidateV2]
-    # Preserve the reason for each missing strategy so callers can explain a
-    # partial result instead of showing an unexplained shortfall.
-    missing_strategies: list[str] = Field(default_factory=list)
-    missing_strategy_reasons: dict[str, str] = Field(default_factory=dict)
     blocked_targets: list[TargetBlockedV2] = Field(default_factory=list)
     warnings: list[ValidationIssueV2] = Field(default_factory=list)
     shortfall_reason: str | None = None

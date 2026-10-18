@@ -125,8 +125,8 @@ export function ExperimentSemanticsPanel({
         <Alert
           showIcon
           type="info"
-          message="系统识别为普通数据模板"
-          description="当前没有发现能够可靠关联实验编号与实验数据的结构。普通数据模板继续使用V8，不影响现有导入。"
+          message="按普通数据表导入"
+          description="系统没有识别到实验编号与数据之间的关联结构。此模板仍可按普通数据表导入，原有导入方式不受影响。"
         />
       </section>
     );
@@ -134,17 +134,20 @@ export function ExperimentSemanticsPanel({
 
   return (
     <section className="experiment-semantics-pane" role="tabpanel">
+      <div className="field-manager-help experiment-data-help">
+        这里配置导入时如何整理实验数据：识别实验、样品、配方或批次编号，关联配方材料和用量，并归类测试结果。通常由系统自动完成，只需处理下方标出的异常。
+      </div>
       <div className="experiment-semantic-summary">
         <div>
           <span>系统已识别为</span>
           <strong>实验数据模板</strong>
         </div>
         <div>
-          <span>实验聚合</span>
+          <span>每个文件按</span>
           <strong>整份文件一个实验</strong>
         </div>
         <div>
-          <span>自动确认</span>
+          <span>系统自动识别</span>
           <strong>{autoConfirmed} 项</strong>
         </div>
         <div className={issueCount ? 'has-issue' : undefined}>
@@ -157,10 +160,10 @@ export function ExperimentSemanticsPanel({
         showIcon
         type={issueCount ? 'warning' : 'success'}
         icon={issueCount ? <ExclamationCircleOutlined /> : <CheckCircleOutlined />}
-        message={issueCount ? '实验语义基本完成，仅需处理异常项' : '实验语义识别完成，无冲突'}
+        message={issueCount ? '实验数据已识别，请处理标出的项目' : '实验数据设置已完成'}
         description={issueCount
-          ? '系统已经采用高可信结果，不需要逐字段设置。请只核对下方标记的异常。'
-          : '系统已根据分组、字段名称和结构校验自动生成V9草稿配置。'}
+          ? '系统已自动整理大部分字段，无需逐项设置。请只处理下方标出的内容。'
+          : '系统已根据字段名称和表格结构生成导入设置。'}
         action={(
           <Button size="small" icon={<EyeOutlined />} onClick={() => setShowDetails((value) => !value)}>
             {showDetails ? '收起结果' : '查看结果'}
@@ -170,7 +173,7 @@ export function ExperimentSemanticsPanel({
 
       {showDetails && (
         <div className="field-property-section experiment-semantics-list">
-          <div className="field-property-section-title">已识别内容</div>
+          <div className="field-property-section-title">系统识别到的内容</div>
           <div className="experiment-semantic-domain-list">
             {configuration.identities.length > 0 && (
               <Tag color="blue">{identityLabel}</Tag>
@@ -178,13 +181,12 @@ export function ExperimentSemanticsPanel({
             {domains.map((domain) => <Tag key={domain}>{DOMAIN_LABELS[domain] ?? domain}</Tag>)}
             {configuration.listProjections.length > 0 && (
               <Tag color="purple">
-                配方矩阵 {configuration.listProjections.length} 个（实际材料和配方数在导入时确定）
+                配方表格 {configuration.listProjections.length} 个（实际材料和用量以导入文件为准）
               </Tag>
             )}
           </div>
           <small>
-            这里确认的是模板结构，不是实验数量；数据中心会根据上传文件中的实际填写内容生成来源记录，并单独标记缺少来源编号的记录。
-            业务分组用于理解字段，模型输入和预测目标由后续任务档案决定。
+            这里展示模板中配置的编号、配方表格和数据类别，不代表已有多少条实验记录。实际记录数量由上传文件中的填写内容决定；缺少编号的记录会单独提示。AI 模型使用哪些字段，可在模型任务中设置。
           </small>
         </div>
       )}
@@ -198,7 +200,7 @@ export function ExperimentSemanticsPanel({
             if (!component || component.fields.some((field) => field.bindingId === identity.bindingId)) return null;
             return (
               <div className="experiment-semantics-card" key={`invalid-${identity.componentId}`}>
-                <strong>{component?.name ?? '数据区域'}：原来源编号字段已失效</strong>
+                <strong>{component?.name ?? '数据区域'}：原编号字段已失效</strong>
                 <Select
                   value={identity.identityType}
                   disabled={!editable}
@@ -207,7 +209,7 @@ export function ExperimentSemanticsPanel({
                 />
                 <Select
                   allowClear
-                  placeholder="重新选择来源编号字段"
+                  placeholder="重新选择编号字段"
                   disabled={!editable}
                   options={(component?.fields ?? []).filter((field) => field.bindingId).map((field) => ({
                     value: field.bindingId as string,
@@ -224,7 +226,7 @@ export function ExperimentSemanticsPanel({
             return (
               <div className="experiment-semantics-card" key={`semantic-${field.id}`}>
                 <strong>{semanticFieldDisplayName(field)}</strong>
-                <small>{field.experimentSemanticIssue ?? '系统无法唯一确定这个字段的实验含义。'}</small>
+                <small>{field.experimentSemanticIssue ?? '系统无法确定该字段属于哪类实验数据，请选择。'}</small>
                 <Select
                   showSearch
                   optionFilterProp="label"

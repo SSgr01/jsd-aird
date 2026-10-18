@@ -17,9 +17,7 @@ from fastapi.responses import JSONResponse
 from jsd_aird_ai import __version__
 from jsd_aird_ai.errors import ErrorCode, FormulaModelError
 from jsd_aird_ai.contracts_v2 import (
-    ErrorResponseV2, ScoreRequestV2, ScoreResponseV2, TrainRequestV2, TrainResponseV2, ValidateRequestV2,
-    ValidateResponseV2, ValidationFoldsRequestV2, ValidationFoldsResponseV2,
-    RecommendRequestV2, RecommendResponseV2,
+    ErrorResponseV2, ScoreRequestV2, ScoreResponseV2, RecommendRequestV2, RecommendResponseV2,
 )
 from jsd_aird_ai.service_v2 import FormulaModelV2Service
 from jsd_aird_ai.settings import Settings
@@ -133,29 +131,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             },
         }
 
-    @app.post(
-        "/internal/v2/snapshots/validate",
-        response_model=ValidateResponseV2,
-        dependencies=secured,
-    )
-    def validate_snapshot_v2(payload: ValidateRequestV2) -> ValidateResponseV2:
-        return service_v2.validate_snapshot(payload)
 
-    @app.post(
-        "/internal/v2/snapshots/validation-folds",
-        response_model=ValidationFoldsResponseV2,
-        dependencies=secured,
-    )
-    def validation_folds_v2(payload: ValidationFoldsRequestV2) -> ValidationFoldsResponseV2:
-        return service_v2.validation_folds(payload)
 
-    @app.post(
-        "/internal/v2/models/train",
-        response_model=TrainResponseV2,
-        dependencies=secured,
-    )
-    def train_v2(payload: TrainRequestV2) -> TrainResponseV2:
-        return service_v2.train(payload)
 
     @app.post("/internal/v2/modeling/workbench/train", dependencies=secured)
     def train_modeling_workbench(payload: dict[str, Any]) -> dict[str, Any]:

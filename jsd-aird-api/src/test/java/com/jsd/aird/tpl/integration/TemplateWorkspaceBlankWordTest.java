@@ -160,7 +160,8 @@ class TemplateWorkspaceBlankWordTest {
 
         var exportService = new TemplateOfficeExportService(
                 repository, fileRepository, objectStorage, objectMapper,
-                new SnapshotWorkbookExporter(objectMapper), patcher);
+                new SnapshotWorkbookExporter(objectMapper), patcher,
+                org.mockito.Mockito.mock(com.jsd.aird.iam.api.AuthorizationService.class));
         var exported = exportService.export(created.versionId(), "DOCX", "DRAFT");
         var exportedStructure = parser.parse(new ByteArrayInputStream(exported.content()))
                 .structureSummary().path("documentIR");

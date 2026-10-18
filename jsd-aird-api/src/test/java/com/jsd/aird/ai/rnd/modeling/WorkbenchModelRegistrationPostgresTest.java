@@ -3,7 +3,7 @@ package com.jsd.aird.ai.rnd.modeling;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.ai.formula.application.FormulaModelArtifactStore;
 import com.jsd.aird.ai.rnd.prediction.PredictionRepository;
-import com.jsd.aird.ai.rnd.training.TrainingRepository;
+import com.jsd.aird.ai.rnd.modeling.ModelRegistryRepository;
 import com.jsd.aird.ops.application.port.AuditLogFacade;
 import com.jsd.aird.shared.security.Actor;
 import com.jsd.aird.shared.security.ActorContext;
@@ -22,6 +22,46 @@ import static org.mockito.Mockito.*;
 
 @EnabledIfEnvironmentVariable(named="JSD_AIRD_WORKBENCH_DB_TEST",matches="true")
 class WorkbenchModelRegistrationPostgresTest {
+    @Test
+    void readsFormulaColumnsAndCompleteCompositionFromFrozenWorkbenchRows() {
+        var ds=new DriverManagerDataSource(System.getenv("JSD_AIRD_DATASOURCE_URL"),System.getenv("JSD_AIRD_DATASOURCE_USERNAME"),System.getenv("JSD_AIRD_DATASOURCE_PASSWORD"));
+        var json=new ObjectMapper();
+        var jdbc=new JdbcTemplate(ds);
+        var tx=new TransactionTemplate(new DataSourceTransactionManager(ds));
+        tx.execute(status->{
+            status.setRollbackOnly();
+            var actor=jdbc.query("SELECT organization_id,created_by FROM ai.modeling_workbench_run LIMIT 1",(rs,n)->new Actor(rs.getObject(1,UUID.class),rs.getObject(2,UUID.class),"admin")).getFirst();
+            ActorContext.set(actor);
+            try {
+                var store=mock(FormulaModelArtifactStore.class);
+                when(store.verify(anyString(),anyString(),anyString())).thenAnswer(call->new FormulaModelArtifactStore.StoredArtifact(call.getArgument(0),call.getArgument(1),100,"application/zip"));
+                var service=new WorkbenchModelRegistrationService(jdbc,json,new ConfigurationHashing(json),store,mock(AuditLogFacade.class));
+                var a="formula:"+UUID.randomUUID();var b="formula:"+UUID.randomUUID();var id=UUID.randomUUID();
+                var request=json.createObjectNode();var xs=request.putArray("xColumns");
+                xs.addObject().put("code",a).put("name","树脂 A比例").put("kind","NUMERIC").put("unit","%");
+                xs.addObject().put("code",b).put("name","树脂 B比例").put("kind","NUMERIC").put("unit","%");
+                request.putObject("yColumn").put("code","wear").put("name","耐磨次数").put("kind","NUMERIC");
+                var rows=request.putArray("rows");for(int i=0;i<8;i++)rows.addObject().put("id","row-"+i).putObject("values").put(a,20+i).put(b,80-i).put("wear",100+i*10);
+                var result=json.createObjectNode().put("rowCount",8);result.putObject("metrics").put("selectedAlgorithm","LINEAR_REGRESSION").put("mae",0.5);
+                var domain=result.putObject("applicabilityDomain");domain.putArray("features").add(a).add(b);domain.putArray("minimum").add(20).add(73);domain.putArray("maximum").add(27).add(80);
+                jdbc.update("INSERT INTO ai.modeling_workbench_run(id,organization_id,created_by,dataset_id,dataset_name,idempotency_key,request_hash,request_jsonb,selected_x_jsonb,selected_y_jsonb,status,result_jsonb,model_artifact_key,model_artifact_sha256) VALUES(?,?,?,?,?,?,?,?::jsonb,?::jsonb,?::jsonb,'SUCCEEDED',?::jsonb,?,?)",
+                        id,actor.organizationId(),actor.userId(),UUID.randomUUID(),"涂层配方",id.toString(),"a".repeat(64),request.toString(),xs.toString(),request.path("yColumn").toString(),result.toString(),"registration/"+id,"c".repeat(64));
+                var registered=service.register(id,"formula");var target=UUID.fromString(registered.path("targetId").asText());
+                var repository=new PredictionRepository(jdbc,json);
+                var binding=repository.targetBindings(actor.organizationId(),List.of(target)).getFirst();
+                assertThat(binding.frozenDictionary().path("compositionStatus").asText()).isEqualTo("COMPLETE");
+                assertThat(binding.frozenDictionary().path("materials").size()).isEqualTo(2);
+                var restored=repository.targetBindings(actor.organizationId(),List.of(target)).getFirst();
+                assertThat(restored.frozenDictionary().path("compositionStatus").asText()).isEqualTo("COMPLETE");
+                assertThat(restored.frozenDictionary().path("materials").get(0).path("materialId").asText()).isEqualTo(a.substring(8));
+                assertThat(restored.definition().path("modelSource").path("yColumn").path("code").asText()).isEqualTo("wear");
+                assertThat(restored.artifactSha()).isEqualTo("c".repeat(64));
+                verify(store,times(1)).verify(anyString(),anyString(),anyString());
+            } finally {ActorContext.clear();}
+            return null;
+        });
+    }
+
     @Test
     void registersFrozenRunsIdempotentlyAndVersionsWithoutFabricatingTrainingJobs() {
         var ds=new DriverManagerDataSource(System.getenv("JSD_AIRD_DATASOURCE_URL"),
@@ -52,8 +92,8 @@ class WorkbenchModelRegistrationPostgresTest {
                 var second=service.register(runIds.get(1),"second");assertThat(second.path("targetId")).isEqualTo(first.path("targetId"));assertThat(second.path("version").asInt()).isEqualTo(2);
                 assertThat(service.registration(actor.organizationId(),runIds.getFirst()).path("status").asText()).isEqualTo("RETIRED");
                 var modelId=UUID.fromString(second.path("modelVersionId").asText());
-                var model=new TrainingRepository(jdbc,json).modelDetail(actor.organizationId(),modelId);
-                assertThat(model.snapshot()).isNull();assertThat(model.model().trainingJobId()).isNull();assertThat(model.model().trainableSamples()).isEqualTo(8);
+                var model=new ModelRegistryRepository(jdbc,json).modelDetail(actor.organizationId(),modelId);
+                assertThat(model.model().workbenchRunId()).isEqualTo(runIds.get(1));assertThat(model.model().trainableSamples()).isEqualTo(8);
                 assertThat(model.modelCard().path("trainingRows").get(0).path("label").asText()).isEqualTo("配方记录 0");
                 var binding=new PredictionRepository(jdbc,json).targetBindings(actor.organizationId(),List.of(UUID.fromString(second.path("targetId").asText()))).getFirst();
                 assertThat(binding.modelId()).isEqualTo(modelId);assertThat(binding.frozenInputScheme().path("fields").get(0).path("code").asText()).isEqualTo(code);

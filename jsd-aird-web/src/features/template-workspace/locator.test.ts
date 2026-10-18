@@ -78,6 +78,26 @@ describe('template locator normalization', () => {
     expect(locatorLabelRange(locator)).toBe('A5');
   });
 
+  it('clears every stored value coordinate instead of restoring the previous position', () => {
+    const locator = synchronizeLocatorCoordinates({
+      address: 'B5', range: 'B5', valueRange: 'B5', logicalInputRange: 'B5',
+      valueAddress: 'B5', valueAnchor: 'B5', anchorAddress: 'B5', anchorRange: 'B5',
+      value: { address: 'B5', range: 'B5' }, labelAddress: 'A5', labelRange: 'A5',
+    }, { address: '' });
+
+    expect(locatorValueRange(locator)).toBe('');
+    expect(locator.address).toBeUndefined();
+    expect(locator.range).toBeUndefined();
+    expect(locator.valueRange).toBeUndefined();
+    expect(locator.logicalInputRange).toBeUndefined();
+    expect(locator.valueAddress).toBeUndefined();
+    expect(locator.valueAnchor).toBeUndefined();
+    expect(locator.anchorAddress).toBeUndefined();
+    expect(locator.anchorRange).toBeUndefined();
+    expect(locator.value).toBeUndefined();
+    expect(locatorLabelRange(locator)).toBe('A5');
+  });
+
   it('moves label aliases without changing the value coordinate', () => {
     const locator = synchronizeLocatorCoordinates({
       address: 'B5', valueRange: 'B5', logicalInputRange: 'B5',

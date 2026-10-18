@@ -1,7 +1,7 @@
 package com.jsd.aird.ai.rnd.modeling;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.jsd.aird.ai.rnd.training.FormulaModelV2Client;
+import com.jsd.aird.ai.rnd.compute.ModelComputeClient;
 import com.jsd.aird.ops.application.port.AsyncJobHandler;
 import com.jsd.aird.shared.error.ApiException;
 import org.springframework.stereotype.Component;
@@ -26,7 +26,7 @@ public class ModelingWorkbenchJobHandler implements AsyncJobHandler {
     }
 
     @Override public boolean isRetryable(Exception exception) {
-        return exception instanceof FormulaModelV2Client.ComputeTransportException
+        return exception instanceof ModelComputeClient.ComputeTransportException
                 || exception instanceof ApiException api && (api.errorCode() == com.jsd.aird.shared.error.ApiErrorCode.FILE_NOT_READY
                 || api.errorCode() == com.jsd.aird.shared.error.ApiErrorCode.TRAINING_TIMEOUT
                 || api.errorCode() == com.jsd.aird.shared.error.ApiErrorCode.COMPUTE_UNAVAILABLE);

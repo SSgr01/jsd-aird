@@ -18,6 +18,8 @@ public interface ProjectResourceFacade {
     Map<UUID, List<RelatedProjectView>> links(Actor actor, ResourceType resourceType,
                                               Collection<UUID> resourceIds);
 
+    boolean hasLinks(Actor actor, ResourceType resourceType, UUID resourceId);
+
     Set<UUID> resourceIdsForProject(Actor actor, ResourceType resourceType, UUID projectId);
 
     List<RelatedProjectView> replaceLinks(Actor actor, ResourceType resourceType, UUID resourceId,
@@ -34,7 +36,8 @@ public interface ProjectResourceFacade {
 
     enum ResourceType {
         KNOWLEDGE_DOCUMENT,
-        DATA_IMPORT_JOB
+        DATA_IMPORT_JOB,
+        SPECTRUM_CHART
     }
 
     record ProjectRelationTarget(UUID projectId, UUID stageId, UUID taskId) { }

@@ -7,8 +7,15 @@ import type {
 } from '@/services/templates/template-api';
 
 import { buildDisplaySuggestions, recognitionCounts } from './recognition-display';
+import { isUserUploadHistoryFile } from './upload-history';
 
 describe('TemplateUploadPage recognition summary', () => {
+  it('hides internal editor snapshots from uploaded-file history', () => {
+    expect(isUserUploadHistoryFile('xlsx-univer-snapshot.json')).toBe(false);
+    expect(isUserUploadHistoryFile('docx-univer-snapshot.json')).toBe(false);
+    expect(isUserUploadHistoryFile('QA_Template_OriginalName_20261017.xlsx')).toBe(true);
+  });
+
   it('uses field-only counts instead of raw pending suggestions', () => {
     const job = {
       result: { qualityIssueCount: 2 },

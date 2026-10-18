@@ -7,10 +7,11 @@ const root = '/api/v1/ai/rnd'
 const unwrap = <T>(response: { data: ApiResponse<T> }) => response.data.data
 
 export type FormulaTarget = {
-  targetId: string; code: string; name: string; category?: string; valueType: 'CONTINUOUS'|'ORDINAL'|'BINARY'|'CATEGORICAL'
+  missingFormulaMaterials?: string[]; formulaIssues?: string[]
+  targetId: string; code: string; name: string; category?: string; modelSource?: { datasetName: string; xColumns: Array<{ name: string }> }; valueType: 'CONTINUOUS'|'ORDINAL'|'BINARY'|'CATEGORICAL'
   available: boolean; simulation?: boolean; testOnlySimulation?: boolean; modelVersionId?: string; operators?: string[]; unavailableReasons: string[]; unit?: string; classes?: string[]; positiveClass?: string; registered?: boolean; statusLabel?: string; decisionThreshold?: number; testMethod?: string; testStage?: string; targetStatus?: string; formalPredictionAvailable?: boolean
 }
-export type FormulaMaterial = { materialId: string; code?: string; name?: string; category?: string; role?: string; encoderIndex?: number; supportedRanges?: Array<{ targetId: string; targetName: string; minimum: number; maximum: number }> }
+export type FormulaMaterial = { materialId: string; code?: string; name?: string; sourceColumnName?: string; fixedValue?: number; category?: string; role?: string; encoderIndex?: number; supportedRanges?: Array<{ targetId: string; targetName: string; minimum: number; maximum: number }> }
 export type FormulaContext = {
   targets: FormulaTarget[]
   selected: Array<FormulaTarget & { modelVersionId?: string }>

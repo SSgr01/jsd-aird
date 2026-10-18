@@ -55,7 +55,8 @@ class DataWorkbookServiceTest {
         assertThat(field.rawValue().asText()).isEqualTo("测试树脂 A");
         assertThat(field.normalizedValue().asText()).isEqualTo("测试树脂 A");
         assertThat(field.effectiveValue().asText()).isEqualTo("测试树脂 A");
-        assertThat(field.editable()).isTrue();
+        // Plain staged values can be previewed, but corrections require validated binding metadata.
+        assertThat(field.editable()).isFalse();
     }
 
     @Test

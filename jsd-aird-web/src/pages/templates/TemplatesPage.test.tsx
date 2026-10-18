@@ -12,7 +12,7 @@ vi.mock('@/services/templates/template-api', () => ({
     listFacets: vi.fn(),
     listCategories: vi.fn(),
     filterOptions: vi.fn(),
-    exportCsv: vi.fn(),
+    exportFiles: vi.fn(),
   },
 }));
 
@@ -26,7 +26,7 @@ const listCategoriesMock = vi.mocked(templateApi.listCategories);
 // eslint-disable-next-line @typescript-eslint/unbound-method
 const filterOptionsMock = vi.mocked(templateApi.filterOptions);
 // eslint-disable-next-line @typescript-eslint/unbound-method
-const exportCsvMock = vi.mocked(templateApi.exportCsv);
+const exportFilesMock = vi.mocked(templateApi.exportFiles);
 const testRouterFuture = { v7_startTransition: true, v7_relativeSplatPath: true } as const;
 
 const publishedWithDraft: TemplateListItem = {
@@ -87,7 +87,7 @@ describe('TemplatesPage catalog presentation', () => {
       { id: 'category-empty', name: '空分类', description: '暂无模板', sortOrder: 2, templateCount: 0 },
     ]);
     filterOptionsMock.mockResolvedValue([{ id: 'creator-1', displayName: '本地开发用户' }]);
-    exportCsvMock.mockResolvedValue(undefined);
+    exportFilesMock.mockResolvedValue(undefined);
   });
 
   it('uses facet counts and displays lifecycle status separately from both versions', async () => {
@@ -104,6 +104,8 @@ describe('TemplatesPage catalog presentation', () => {
     expect(within(uncategorizedCard as HTMLElement).getByText('89')).toBeInTheDocument();
     expect(within(emptyCard as HTMLElement).getByText('0')).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: '状态' })).toBeInTheDocument();
+    expect(screen.queryByText('TPL-PUBLISHED')).not.toBeInTheDocument();
+    expect(screen.queryByText('TPL-RETIRED')).not.toBeInTheDocument();
     expect(screen.getAllByText('有未发布修改')).toHaveLength(2);
     expect(screen.getByText('发布 V1')).toBeInTheDocument();
     expect(screen.getByText('草稿 V2')).toBeInTheDocument();
@@ -117,28 +119,24 @@ describe('TemplatesPage catalog presentation', () => {
     expect(categorySelector?.contains(renameCategoryButton)).toBe(false);
 
     const createButton = screen.getByRole('button', { name: /新建模板/ });
-    const exportButton = screen.getByRole('button', { name: /导出当前筛选结果/ });
-    expect(createButton.compareDocumentPosition(exportButton) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    expect(screen.queryByRole('button', { name: /导出当前筛选结果/ })).not.toBeInTheDocument();
+    expect(createButton).toBeInTheDocument();
 
     fireEvent.click(screen.getAllByRole('checkbox')[1]!);
     const exportSelectedButton = await screen.findByRole('button', { name: /导出选中/ });
     fireEvent.click(exportSelectedButton);
-    await waitFor(() => expect(exportCsvMock).toHaveBeenCalledWith(expect.objectContaining({
-      templateIds: ['template-published'],
-    })));
+    await waitFor(() => expect(exportFilesMock).toHaveBeenCalledWith([publishedWithDraft.versionId]));
   }, 60_000);
 
-  it('submits search explicitly and never sends the active category to facets', async () => {
+  it('searches while typing with latest updates first and never sends the active category to facets', async () => {
     render(<AppProviders><MemoryRouter future={testRouterFuture}><TemplatesPage /></MemoryRouter></AppProviders>);
     await screen.findByText('已发布模板');
-    const initialListCalls = listMock.mock.calls.length;
-    const search = screen.getByPlaceholderText('名称或编码');
+    const search = screen.getByPlaceholderText('搜索模板名称');
 
     fireEvent.change(search, { target: { value: '生命周期' } });
-    await new Promise((resolve) => window.setTimeout(resolve, 0));
-    expect(listMock).toHaveBeenCalledTimes(initialListCalls);
-    fireEvent.keyDown(search, { key: 'Enter', code: 'Enter' });
-    await waitFor(() => expect(listMock).toHaveBeenLastCalledWith(expect.objectContaining({ keyword: '生命周期' })));
+    await waitFor(() => expect(listMock).toHaveBeenLastCalledWith(expect.objectContaining({
+      keyword: '生命周期', page: 1, sortBy: 'UPDATED_AT', sortDirection: 'DESC',
+    })));
 
     fireEvent.click(screen.getByRole('button', { name: /未分类/ }));
     await waitFor(() => expect(listMock).toHaveBeenLastCalledWith(expect.objectContaining({ uncategorized: true })));
@@ -165,11 +163,12 @@ describe('TemplatesPage catalog presentation', () => {
   });
 
   it('reports export failures and restores the export button', async () => {
-    exportCsvMock.mockRejectedValueOnce(new Error('导出服务不可用'));
+    exportFilesMock.mockRejectedValueOnce(new Error('导出服务不可用'));
     render(<AppProviders><MemoryRouter future={testRouterFuture}><TemplatesPage /></MemoryRouter></AppProviders>);
     await screen.findByText('已发布模板');
 
-    const exportButton = screen.getByRole('button', { name: /导出当前筛选结果/ });
+    fireEvent.click(screen.getAllByRole('checkbox')[1]!);
+    const exportButton = await screen.findByRole('button', { name: /导出选中/ });
     fireEvent.click(exportButton);
 
     expect(await screen.findByText('导出服务不可用')).toBeInTheDocument();

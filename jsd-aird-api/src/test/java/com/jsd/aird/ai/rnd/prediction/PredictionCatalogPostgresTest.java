@@ -36,19 +36,5 @@ class PredictionCatalogPostgresTest {
         assertThat(configured.unit()).isEqualTo(expected.get("unit"));
         assertThat(configured.testMethod()).isEqualTo(expected.get("method"));
         assertThat(configured.testStage()).isEqualTo(expected.get("stage"));
-        var updatedPolicies = jdbc.queryForList("""
-                SELECT t.id,t.current_domain_policy_version_id
-                FROM ai.prediction_target t JOIN ai.model_version m ON m.target_id=t.id AND m.organization_id=t.organization_id
-                WHERE t.organization_id=? AND m.status='ACTIVE'
-                  AND t.current_domain_policy_version_id IS NOT NULL
-                  AND t.current_domain_policy_version_id IS DISTINCT FROM m.domain_policy_version_id
-                LIMIT 1
-                """, organizationId);
-        if (!updatedPolicies.isEmpty()) {
-            var updated = updatedPolicies.getFirst();
-            var targetId = (UUID) updated.get("id");
-            var binding = new PredictionRepository(jdbc, new ObjectMapper()).targetBindings(organizationId, List.of(targetId)).getFirst();
-            assertThat(binding.domainPolicyId()).isEqualTo(updated.get("current_domain_policy_version_id"));
-        }
     }
 }

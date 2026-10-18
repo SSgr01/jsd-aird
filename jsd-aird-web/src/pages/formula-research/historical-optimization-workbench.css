@@ -36,7 +36,6 @@
 }
 
 .history-steps-card,
-.history-layout,
 .history-step-panel {
   max-width: 1440px;
   margin-right: auto;
@@ -116,42 +115,13 @@
   border-color: #e1e4eb;
 }
 
-.history-dataset-option.disabled {
-  background: #f6f7f9;
-  cursor: not-allowed;
-  opacity: .68;
-}
-
 .history-dataset-option > span { display: grid; gap: 4px; }
 .history-dataset-option > .history-selection-mark { display: grid; place-items: center; flex: 0 0 18px; width: 18px; height: 18px; border: 1px solid #cbd5e1; border-radius: 4px; color: #fff; font-size: 12px; }
 .history-dataset-option.selected > .history-selection-mark { border-color: #3569d4; background: #3569d4; }
 .history-preview-hint { margin-bottom: 12px; }
-.history-table-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 8px; }
 .history-role-tag { margin-inline-start: 6px; font-size: 10px; line-height: 18px; }
 .history-step-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 16px; }
 .history-step-panel { display: grid; gap: 2px; }
-
-.history-factor-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(235px, 1fr));
-  gap: 10px;
-  width: 100%;
-}
-
-.history-factor-grid .ant-checkbox-wrapper {
-  display: flex;
-  align-items: flex-start;
-  min-height: 60px;
-  padding: 11px 12px;
-  border: 1px solid #e8edf3;
-  border-radius: 9px;
-  background: #fff;
-}
-
-.history-factor-grid .ant-checkbox-wrapper-checked { border-color: #7d98dc; background: #f7f9ff; }
-.history-factor-option { display: grid; gap: 3px; }
-.history-factor-option .ant-typography-secondary { font-size: 12px; }
-.history-y-select { width: min(100%, 520px); }
 
 .history-direction-control {
   display: flex;
@@ -175,3 +145,7 @@
   .history-step-footer, .history-measurement-footer { align-items: stretch; flex-direction: column; }
   .history-step-footer > .ant-space { justify-content: space-between; }
 }
+
+.history-data-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
+.history-data-layout > div { min-width: 0; }
+.history-data-layout .history-dataset-list { grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); max-height: 240px; }

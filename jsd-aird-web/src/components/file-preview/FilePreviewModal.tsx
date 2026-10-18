@@ -71,7 +71,7 @@ export function FilePreviewModal({ open, file, onClose, showSpreadsheetMerges = 
           throw new Error('文件超过 50 MB，暂不支持在线预览，请下载原文件查看。');
         }
         setBlob(loaded);
-        if (nextMode === 'image' || nextMode === 'audio') {
+        if (nextMode === 'image' || nextMode === 'audio' || nextMode === 'video') {
           nextObjectUrl = URL.createObjectURL(loaded);
           setObjectUrl(nextObjectUrl);
         } else if (nextMode === 'text') {
@@ -189,7 +189,9 @@ export function FilePreviewModal({ open, file, onClose, showSpreadsheetMerges = 
       ) : mode === 'image' && objectUrl ? (
         <div className="file-preview-image-wrap"><img className="file-preview-image" src={objectUrl} alt={file.fileName} /></div>
       ) : mode === 'audio' && objectUrl ? (
-        <div className="file-preview-state"><audio controls preload="metadata" src={objectUrl} style={{ width: '100%' }}>当前浏览器不支持音频播放</audio></div>
+        <div className="file-preview-state"><audio controls preload="metadata" src={objectUrl} style={{ width: '100%' }} onError={() => setError('浏览器无法播放此音频编码，可下载原文件查看。')}>当前浏览器不支持音频播放</audio></div>
+      ) : mode === 'video' && objectUrl ? (
+        <div className="file-preview-state"><video controls preload="metadata" src={objectUrl} style={{ width: '100%', maxHeight: '65vh' }} onError={() => setError('浏览器无法播放此视频编码，可下载原文件查看。')}>当前浏览器不支持视频播放</video></div>
       ) : mode === 'text' ? (
         <pre className="file-preview-text">{text || '文件内容为空'}</pre>
       ) : mode === 'docx' ? (

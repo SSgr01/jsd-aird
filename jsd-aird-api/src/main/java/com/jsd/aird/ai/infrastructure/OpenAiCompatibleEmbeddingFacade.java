@@ -23,6 +23,8 @@ import org.slf4j.LoggerFactory;
 public class OpenAiCompatibleEmbeddingFacade implements KnowledgeEmbeddingFacade {
 
     private static final Logger log = LoggerFactory.getLogger(OpenAiCompatibleEmbeddingFacade.class);
+    // text-embedding-v4 accepts at most ten texts in a compatible API request.
+    private static final int MAX_BATCH_SIZE = 10;
 
     private final String baseUrl;
     private final String apiKey;
@@ -103,6 +105,13 @@ public class OpenAiCompatibleEmbeddingFacade implements KnowledgeEmbeddingFacade
     @Override
     public List<Optional<String>> embedVectors(List<String> texts) {
         if (texts == null || texts.isEmpty()) return List.of();
+        if (texts.size() > MAX_BATCH_SIZE) {
+            var vectors = new ArrayList<Optional<String>>(texts.size());
+            for (int offset = 0; offset < texts.size(); offset += MAX_BATCH_SIZE) {
+                vectors.addAll(embedVectors(texts.subList(offset, Math.min(offset + MAX_BATCH_SIZE, texts.size()))));
+            }
+            return List.copyOf(vectors);
+        }
         var normalized = texts.stream().map(value -> value == null ? "" : value.strip()).toList();
         if (normalized.size() == 1) return List.of(embedVector(normalized.getFirst()));
         if (!StringUtils.hasText(baseUrl) || !StringUtils.hasText(apiKey) || !StringUtils.hasText(model)) {

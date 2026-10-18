@@ -157,7 +157,54 @@ describe('RecognitionReviewPanel', () => {
 
     expect(screen.getByText('填写当前产品的业务名称')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '确认' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '忽略' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /产品名称/ })).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('已确认的字段不再提供忽略入口，应在字段属性中删除', () => {
+    const confirmed = review.items[1]!;
+    render(
+      <RecognitionReviewPanel
+        review={{ ...review, items: [confirmed], regions: [] }}
+        editable
+        selectedRecognitionItemId={confirmed.id}
+        {...handlers}
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: '确认' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '忽略' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '修改' })).toBeInTheDocument();
+  });
+
+  it('区域字段树中的已确认字段也不提供忽略入口', () => {
+    const confirmed = review.items[1]!;
+    render(
+      <RecognitionReviewPanel
+        review={{
+          ...review,
+          items: [confirmed],
+          regions: [{
+            regionId: 'region-1',
+            blockId: 'region-1',
+            kind: 'FORM_REGION',
+            sheetId: 'sheet-1',
+            sheetName: 'Sheet1',
+            range: 'A1:C3',
+            fieldName: '基础信息',
+            status: 'CONFIRMED',
+            alternatives: [],
+            fields: [confirmed],
+            auditSuggestions: [],
+          }],
+        }}
+        editable
+        selectedRecognitionItemId={confirmed.id}
+        {...handlers}
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: '忽略' })).not.toBeInTheDocument();
   });
 
   it('在筛选文字后显示对应数量', () => {

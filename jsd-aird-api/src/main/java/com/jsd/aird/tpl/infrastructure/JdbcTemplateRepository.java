@@ -282,6 +282,50 @@ public class JdbcTemplateRepository implements TemplateRepository {
     }
 
     @Override
+    public void lockTemplateName(UUID organizationId, UUID categoryId, String name) {
+        var lockKey = organizationId + ":template-name:" + (categoryId == null ? "uncategorized" : categoryId)
+                + ":" + name.trim().toLowerCase(java.util.Locale.ROOT);
+        jdbcTemplate.queryForObject("SELECT pg_advisory_xact_lock(hashtextextended(CAST(? AS text), 0))",
+                Object.class, lockKey);
+    }
+
+    @Override
+    public boolean templateNameExists(UUID organizationId, UUID categoryId, String name, UUID excludingTemplateId) {
+        return Boolean.TRUE.equals(jdbcTemplate.queryForObject("""
+                SELECT EXISTS (
+                    SELECT 1 FROM tpl.template
+                    WHERE organization_id = ?
+                      AND category_id IS NOT DISTINCT FROM CAST(? AS uuid)
+                      AND lower(btrim(name)) = lower(btrim(?))
+                      AND (CAST(? AS uuid) IS NULL OR id <> CAST(? AS uuid))
+                )
+                """, Boolean.class, organizationId, categoryId, name, excludingTemplateId, excludingTemplateId));
+    }
+
+    @Override
+    public List<String> templateNamesInCategory(UUID organizationId, UUID categoryId) {
+        return jdbcTemplate.queryForList("""
+                SELECT name FROM tpl.template
+                WHERE organization_id = ? AND category_id = ?
+                ORDER BY lower(btrim(name)), id
+                """, String.class, organizationId, categoryId);
+    }
+
+    @Override
+    public long countTemplateNameConflicts(UUID organizationId, UUID sourceCategoryId, UUID targetCategoryId) {
+        return jdbcTemplate.queryForObject("""
+                SELECT count(*) FROM tpl.template source
+                WHERE source.organization_id = ? AND source.category_id = ?
+                  AND EXISTS (
+                    SELECT 1 FROM tpl.template target
+                    WHERE target.organization_id = source.organization_id
+                      AND target.category_id IS NOT DISTINCT FROM CAST(? AS uuid)
+                      AND lower(btrim(target.name)) = lower(btrim(source.name))
+                  )
+                """, Long.class, organizationId, sourceCategoryId, targetCategoryId);
+    }
+
+    @Override
     public List<TemplateListItem> findPublishedDataTemplates(UUID organizationId) {
         return findTemplates(new TemplateQuery(organizationId, null, null, false, null, TemplateStatus.PUBLISHED,
                 null, null, null, "UPDATED_AT", "DESC", 1, 1000)).items().stream()
@@ -769,8 +813,16 @@ public class JdbcTemplateRepository implements TemplateRepository {
     public boolean categoryNameExists(UUID organizationId, String name, UUID excludingId) {
         return Boolean.TRUE.equals(jdbcTemplate.queryForObject("""
                 SELECT EXISTS(SELECT 1 FROM tpl.template_category
-                WHERE organization_id = ? AND lower(name) = lower(?) AND (?::uuid IS NULL OR id <> ?::uuid))
+                WHERE organization_id = ? AND lower(btrim(name)) = lower(btrim(?))
+                  AND (?::uuid IS NULL OR id <> ?::uuid))
                 """, Boolean.class, organizationId, name, excludingId, excludingId));
+    }
+
+    @Override
+    public void lockCategoryName(UUID organizationId, String name) {
+        var lockKey = organizationId + ":template-category:" + name.trim().toLowerCase(java.util.Locale.ROOT);
+        jdbcTemplate.query("SELECT pg_advisory_xact_lock(hashtextextended(CAST(? AS text), 0))",
+                rs -> null, lockKey);
     }
 
     @Override

@@ -29,6 +29,14 @@ public interface TemplateRepository {
 
     Optional<TemplateSummary> findTemplateSummary(UUID organizationId, UUID templateId);
 
+    void lockTemplateName(UUID organizationId, UUID categoryId, String name);
+
+    boolean templateNameExists(UUID organizationId, UUID categoryId, String name, UUID excludingTemplateId);
+
+    List<String> templateNamesInCategory(UUID organizationId, UUID categoryId);
+
+    long countTemplateNameConflicts(UUID organizationId, UUID sourceCategoryId, UUID targetCategoryId);
+
     List<TemplateListItem> findPublishedDataTemplates(UUID organizationId);
 
     Optional<TemplateWorkspace> findPublishedDataTemplate(UUID organizationId, UUID versionId);
@@ -54,6 +62,8 @@ public interface TemplateRepository {
     int retireTemplate(UUID organizationId, UUID templateId);
 
     List<TemplateCategoryItem> findCategories(UUID organizationId);
+
+    void lockCategoryName(UUID organizationId, String name);
 
     void insertCategory(UUID id, UUID organizationId, String name, String description, int sortOrder, UUID actorId);
 

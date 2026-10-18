@@ -1,4 +1,4 @@
-import { DatabaseOutlined, FileTextOutlined } from '@ant-design/icons';
+import { DatabaseOutlined, FileTextOutlined, LineChartOutlined } from '@ant-design/icons';
 import { App, Button, Input, Select, Space, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
@@ -54,9 +54,9 @@ export function ReferenceMaterialsTab({ projectId }: { projectId: string }) {
 
   const source = (record: ReferenceMaterial) => {
     if (!record.sourceAvailable) return;
-    navigate(record.resourceType === 'KNOWLEDGE_DOCUMENT'
-      ? `/knowledge/documents/${record.resourceId}`
-      : `/data/import-jobs/${record.resourceId}`);
+    if (record.resourceType === 'KNOWLEDGE_DOCUMENT') navigate(`/knowledge/documents/${record.resourceId}`);
+    else if (record.resourceType === 'DATA_IMPORT_JOB') navigate(`/data/import-jobs/${record.resourceId}`);
+    else navigate(`/spectrum/view?chartId=${record.resourceId}`);
   };
   const changeStatus = (record: ReferenceMaterial) => {
     const restoring = record.status === 'REMOVED';
@@ -74,7 +74,7 @@ export function ReferenceMaterialsTab({ projectId }: { projectId: string }) {
   };
 
   const columns: ColumnsType<ReferenceMaterial> = [
-    { title: '来源', dataIndex: 'sourceModule', width: 130, render: (value: string) => <Tag color={value === 'KNOWLEDGE' ? 'blue' : 'purple'} icon={value === 'KNOWLEDGE' ? <FileTextOutlined /> : <DatabaseOutlined />}>{value === 'KNOWLEDGE' ? '研发知识库' : '数据中心'}</Tag> },
+    { title: '来源', dataIndex: 'sourceModule', width: 150, render: (value: string) => <Tag color={value === 'KNOWLEDGE' ? 'blue' : value === 'SPECTRUM' ? 'cyan' : 'purple'} icon={value === 'KNOWLEDGE' ? <FileTextOutlined /> : value === 'SPECTRUM' ? <LineChartOutlined /> : <DatabaseOutlined />}>{value === 'KNOWLEDGE' ? '研发知识库' : value === 'SPECTRUM' ? 'AI图谱中心' : '数据中心'}</Tag> },
     { title: '标题与摘要', dataIndex: 'title', render: (_: string, record) => <div className="pm-ref-title-cell"><div className="pm-ref-title">{record.title}</div><div className="pm-ref-summary">{record.summary || record.originalName || '—'}</div>{!record.sourceAvailable && <Tag color="warning">来源已不可用</Tag>}</div> },
     { title: '阶段/任务', width: 180, render: (_: unknown, record) => [record.stageName, record.taskName].filter(Boolean).join(' / ') || '项目级' },
     { title: '添加人', dataIndex: 'addedByName', width: 110, render: (value?: string, record?: ReferenceMaterial) => value || record?.addedBy || '—' },

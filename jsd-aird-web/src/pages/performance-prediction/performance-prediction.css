@@ -14,19 +14,11 @@
 .performance-workspace-multiple { grid-template-columns: minmax(0, 1fr); }
 .performance-workspace-multiple .performance-condition-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .performance-input-panel, .performance-results-panel { min-width: 0; padding: 20px; border: 1px solid var(--performance-border); border-radius: 12px; background: #fff; }
-.performance-panel-heading, .performance-section-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.performance-panel-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
 .performance-panel-heading { margin-bottom: 18px; padding-bottom: 14px; border-bottom: 1px solid #edf0f5; }
 .performance-panel-heading h3 { margin: 0; font-size: 16px; font-weight: 650; }
 .performance-panel-heading .ant-tag { margin-inline-end: 0; white-space: normal; }
 .performance-panel-heading .ant-btn { padding: 0 5px; color: var(--performance-muted); font-size: 12px; }
-.performance-section-heading { margin-bottom: 12px; }
-.performance-section-heading h4 { margin: 0; font-size: 14px; font-weight: 600; }
-.performance-section-heading > span { color: var(--performance-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-.performance-material-select, .performance-formula-value .ant-input-number { width: 100%; }
-.performance-formula-section { margin-bottom: 22px; }
-.performance-formula-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
-.performance-formula-footer .ant-btn { padding-inline: 0; }
-.performance-formula-value small { display: block; margin-top: 5px; }
 .performance-condition-group { min-width: 0; margin: 0 0 22px; padding: 0; border: 0; }
 .performance-condition-group legend { margin-bottom: 12px; padding: 0; color: #36465a; font-size: 14px; font-weight: 600; }
 .performance-condition-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }

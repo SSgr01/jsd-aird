@@ -153,7 +153,7 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
     @Override
     public Optional<ImportJobView> find(UUID organizationId, UUID importJobId) {
         return queryJobs("""
-                        WHERE tij.id = ? AND tij.organization_id = ?
+                        WHERE tij.id = ? AND tij.organization_id = ? AND tij.hidden_at IS NULL
                         """, importJobId, organizationId).stream().findFirst();
     }
 
@@ -206,7 +206,8 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
     @Override
     public List<ImportJobView> list(UUID organizationId) {
         return queryJobs(false, """
-                        WHERE tij.organization_id = ? AND tij.operation_source <> 'EXPERIMENT_UPLOAD'
+                        WHERE tij.organization_id = ? AND tij.hidden_at IS NULL
+                          AND tij.operation_source <> 'EXPERIMENT_UPLOAD'
                         ORDER BY tij.created_at DESC
                         LIMIT 100
                         """, organizationId);
@@ -249,6 +250,7 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
                   + ") AS result_jsonb,";
         return jdbcTemplate.query("""
                         SELECT tij.id, tij.source_file_id,
+                               coalesce(tij.original_source_file_id, tij.source_file_id) AS original_source_file_id,
                                COALESCE(original_source.original_name, inferred_source.original_name,
                                         fo.original_name) AS source_file_name,
                                tij.format,
@@ -408,7 +410,8 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
                         rs.getString("category_name"),
                         rs.getString("source_sha256"),
                         rs.getBoolean("duplicate_override"),
-                        rs.getObject("duplicate_source_job_id", UUID.class)
+                        rs.getObject("duplicate_source_job_id", UUID.class),
+                        rs.getObject("original_source_file_id", UUID.class)
                 ),
                 arguments
         );
@@ -1172,18 +1175,16 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
 
     @Override
     public int delete(UUID organizationId, UUID importJobId) {
-        var asyncJobId = jdbcTemplate.query("""
-                        SELECT async_job_id FROM tpl.template_import_job
-                        WHERE id = ? AND organization_id = ?
-                        """, (rs, rowNum) -> rs.getObject(1, UUID.class), importJobId, organizationId)
-                .stream().findFirst().orElse(null);
-        if (asyncJobId == null) return 0;
-        var deleted = jdbcTemplate.update("""
-                        DELETE FROM tpl.template_import_job
-                        WHERE id = ? AND organization_id = ?
+        return jdbcTemplate.update("""
+                        UPDATE tpl.template_import_job
+                           SET hidden_at = now(), updated_at = now()
+                         WHERE id = ? AND organization_id = ? AND hidden_at IS NULL
+                           AND NOT EXISTS (
+                               SELECT 1 FROM ops.async_job aj
+                                WHERE aj.id = tpl.template_import_job.async_job_id
+                                  AND aj.status NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED')
+                           )
                         """, importJobId, organizationId);
-        jdbcTemplate.update("DELETE FROM ops.async_job WHERE id = ?", asyncJobId);
-        return deleted;
     }
 
     @Override

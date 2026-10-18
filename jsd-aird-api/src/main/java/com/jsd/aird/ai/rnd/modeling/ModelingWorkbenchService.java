@@ -6,11 +6,10 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.ai.formula.application.FormulaModelArtifactStore;
 import com.jsd.aird.ai.rnd.optimization.OptimizationService;
-import com.jsd.aird.ai.rnd.training.FormulaModelV2Client;
+import com.jsd.aird.ai.rnd.compute.ModelComputeClient;
 import com.jsd.aird.ops.application.port.OpsAsyncFacade;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
-import com.jsd.aird.shared.security.Actor;
 import com.jsd.aird.shared.security.ActorContext;
 import org.postgresql.util.PGobject;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -20,7 +19,6 @@ import org.springframework.transaction.annotation.Transactional;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -39,12 +37,12 @@ public class ModelingWorkbenchService {
     private final OptimizationService optimization;
     private final ConfigurationHashing hashing;
     private final OpsAsyncFacade async;
-    private final FormulaModelV2Client compute;
+    private final ModelComputeClient compute;
     private final FormulaModelArtifactStore artifacts;
 
     public ModelingWorkbenchService(JdbcTemplate jdbc, ObjectMapper json, OptimizationService optimization,
                                     ConfigurationHashing hashing, OpsAsyncFacade async,
-                                    FormulaModelV2Client compute, FormulaModelArtifactStore artifacts) {
+                                    ModelComputeClient compute, FormulaModelArtifactStore artifacts) {
         this.jdbc = jdbc;
         this.json = json;
         this.optimization = optimization;
@@ -66,20 +64,25 @@ public class ModelingWorkbenchService {
     public JsonNode train(TrainCommand command, String idempotencyKey) {
         var actor = ActorContext.required();
         if (idempotencyKey == null || idempotencyKey.isBlank()) throw validation("训练请求缺少唯一标识，请重新点击开始训练");
+        var normalizedKey = idempotencyKey.strip();
+        var submissionFingerprint = hashing.hash(hashing.canonical(json.valueToTree(command)));
+        jdbc.queryForObject("SELECT 1 FROM (SELECT pg_advisory_xact_lock(hashtextextended(?, 0))) AS workbench_lock", Integer.class,
+                actor.organizationId() + ":" + actor.userId() + ":modeling:" + normalizedKey);
+        var accepted = jdbc.query("SELECT id,request_jsonb FROM ai.modeling_workbench_run WHERE organization_id=? AND created_by=? AND idempotency_key=?",
+                (rs, n) -> new Object[]{rs.getObject(1, UUID.class), read(rs, "request_jsonb")},
+                actor.organizationId(), actor.userId(), normalizedKey).stream().findFirst().orElse(null);
+        if (accepted != null) {
+            var saved = (JsonNode) accepted[1];
+            if (!submissionFingerprint.equals(saved.path("submissionFingerprint").asText()))
+                throw new ApiException(ApiErrorCode.IDEMPOTENCY_CONFLICT);
+            return accepted((UUID) accepted[0]);
+        }
         var datasetIds = requestedDatasetIds(command);
 
         var dataset = optimization.modelingHistoryDatasetSetForTraining(datasetIds);
         var frozenRequest = freezeRequest(dataset, command, datasetIds);
+        ((ObjectNode) frozenRequest).put("submissionFingerprint", submissionFingerprint);
         var requestHash = hashing.hash(frozenRequest);
-        var previous = jdbc.query("""
-                SELECT id,request_hash FROM ai.modeling_workbench_run
-                WHERE organization_id=? AND created_by=? AND idempotency_key=?
-                """, (rs, n) -> new Object[]{rs.getObject(1, UUID.class), rs.getString(2)},
-                actor.organizationId(), actor.userId(), idempotencyKey.strip()).stream().findFirst().orElse(null);
-        if (previous != null) {
-            if (!requestHash.equals(previous[1])) throw new ApiException(ApiErrorCode.IDEMPOTENCY_CONFLICT);
-            return accepted((UUID) previous[0]);
-        }
 
         var runId = UUID.randomUUID();
         var x = (ArrayNode) frozenRequest.path("xColumns");
@@ -91,13 +94,13 @@ public class ModelingWorkbenchService {
                         request_jsonb,selected_x_jsonb,selected_y_jsonb,status,progress,current_stage)
                     VALUES(?,?,?,?,?,?,?,?,?,?,'QUEUED',0,'QUEUED')
                     """, runId, actor.organizationId(), actor.userId(), datasetIds.getFirst(),
-                    dataset.path("name").asText("实验数据"), idempotencyKey.strip(), requestHash,
+                    dataset.path("name").asText("实验数据"), normalizedKey, requestHash,
                     pg(frozenRequest), pg(x), pg(y));
         } catch (org.springframework.dao.DataIntegrityViolationException conflict) {
-            var raced = jdbc.queryForObject("SELECT id,request_hash FROM ai.modeling_workbench_run WHERE organization_id=? AND created_by=? AND idempotency_key=?",
-                    (rs, n) -> new Object[]{rs.getObject(1, UUID.class), rs.getString(2)},
-                    actor.organizationId(), actor.userId(), idempotencyKey.strip());
-            if (!requestHash.equals(raced[1])) throw new ApiException(ApiErrorCode.IDEMPOTENCY_CONFLICT);
+            var raced = jdbc.queryForObject("SELECT id,request_jsonb FROM ai.modeling_workbench_run WHERE organization_id=? AND created_by=? AND idempotency_key=?",
+                    (rs, n) -> new Object[]{rs.getObject(1, UUID.class), read(rs, "request_jsonb")},
+                    actor.organizationId(), actor.userId(), normalizedKey);
+            if (!submissionFingerprint.equals(((JsonNode) raced[1]).path("submissionFingerprint").asText())) throw new ApiException(ApiErrorCode.IDEMPOTENCY_CONFLICT);
             return accepted((UUID) raced[0]);
         }
 
@@ -130,7 +133,8 @@ public class ModelingWorkbenchService {
                 (rs, n) -> read(rs, "request_jsonb"), organizationId, runId).stream().findFirst().orElseThrow();
         var modelKey = "ai/rnd/modeling-workbench/" + organizationId + "/" + runId + "/model-bundle.zip";
         var write = artifacts.writeRef(modelKey, "application/zip");
-        var computeRequest = ((ObjectNode) request.deepCopy()).put("requestId", runId.toString())
+        var computePayload = (ObjectNode) request.deepCopy(); computePayload.remove("submissionFingerprint");
+        var computeRequest = computePayload.put("requestId", runId.toString())
                 .put("output", write.url());
         async.updateProgress(organizationId, "modeling-workbench:" + runId, 35, "TRAINING");
         jdbc.update("UPDATE ai.modeling_workbench_run SET progress=35,current_stage='TRAINING',updated_at=now() WHERE organization_id=? AND id=? AND status='RUNNING'",
@@ -210,6 +214,7 @@ public class ModelingWorkbenchService {
         if (selectedCount > MAXIMUM_ROWS)
             throw validation("所选记录超过单次建模上限（20,000 条），请减少勾选记录");
         var rows = json.createArrayNode();
+        var selectedRows = json.createArrayNode();
         var distinct = new LinkedHashMap<String, LinkedHashSet<String>>();
         uniqueX.forEach(code -> distinct.put(code, new LinkedHashSet<>()));
         var targetValues = new LinkedHashMap<String, Integer>();
@@ -218,29 +223,35 @@ public class ModelingWorkbenchService {
             var sourceRowId = source.path("id").asText();
             if (!selectedIds.getOrDefault(sourceDatasetId, Set.of()).contains(sourceRowId)) continue;
             var sourceValues = source.path("values");
+            var selectedRow = selectedRows.addObject().put("id", sourceDatasetId + ":" + sourceRowId);
+            for (var metadata : List.of("label", "title", "versionId", "sourceDatasetName", "sourceExperimentId", "sampleKey", "sampleNo", "sourceContextKey", "sourceRefs"))
+                if (source.has(metadata)) selectedRow.set(metadata, source.get(metadata));
+            var checkedValues = selectedRow.putObject("values");
+            for (var code : uniqueX) checkedValues.set(code, sourceValues.has(code) ? sourceValues.get(code).deepCopy() : json.nullNode());
+            checkedValues.set(command.yColumn(), sourceValues.has(command.yColumn()) ? sourceValues.get(command.yColumn()).deepCopy() : json.nullNode());
             var selectedValues = json.createObjectNode();
             boolean complete = true;
             for (var code : uniqueX) {
                 var value = sourceValues.path(code);
                 var column = columns.get(code);
                 if (!validValue(value, column.path("kind").asText())) { complete = false; break; }
-                selectedValues.set(code, value.deepCopy());
+                selectedValues.set(code, normalizedValue(value, column.path("kind").asText()));
             }
             var targetValue = sourceValues.path(command.yColumn());
             if (!complete || !validValue(targetValue, y.path("kind").asText())) continue;
             var row = rows.addObject().put("id", sourceDatasetId + ":" + sourceRowId);
-            for(var metadata:List.of("label","title","versionId","sourceDatasetName")) if(source.has(metadata))row.set(metadata,source.get(metadata));
-            selectedValues.set(command.yColumn(), targetValue.deepCopy());
+            for(var metadata:List.of("label","title","versionId","sourceDatasetName","sourceExperimentId","sampleKey","sampleNo","sourceContextKey","sourceRefs")) if(source.has(metadata))row.set(metadata,source.get(metadata));
+            selectedValues.set(command.yColumn(), normalizedValue(targetValue, y.path("kind").asText()));
             row.set("values", selectedValues);
-            uniqueX.forEach(code -> distinct.get(code).add(sourceValues.path(code).asText()));
-            targetValues.merge(targetValue.asText(), 1, Integer::sum);
+            uniqueX.forEach(code -> distinct.get(code).add(selectedValues.path(code).asText()));
+            targetValues.merge(selectedValues.path(command.yColumn()).asText(), 1, Integer::sum);
         }
         if (rows.size() < MINIMUM_ROWS)
             throw validation("所选 X/Y 只有 " + rows.size() + " 条完整记录，至少需要 6 条；请换列或补充实验记录。");
-        for (var code : uniqueX) {
-            if (distinct.get(code).size() < 2)
-                throw validation("X“" + columns.get(code).path("name").asText(code) + "”的取值没有变化，请选择有不同取值的列。");
-        }
+        if (distinct.values().stream().allMatch(values -> values.size() < 2))
+            throw validation("所选 X 在完整记录中都没有变化，请选择有不同取值的输入列。");
+        if ("NUMERIC".equals(y.path("kind").asText()) && targetValues.size() < 2)
+            throw validation("Y 列只有一种结果，请选择有不同实测值的结果列。");
         if (!"NUMERIC".equals(y.path("kind").asText())) {
             if (targetValues.size() < 2) throw validation("Y 列只有一种结果，无法训练分类模型。");
             if (targetValues.values().stream().min(Integer::compareTo).orElse(0) < 2)
@@ -255,6 +266,12 @@ public class ModelingWorkbenchService {
         request.set("xColumns", xColumns);
         request.set("yColumn", y);
         request.set("rows", rows);
+        request.set("selectedRows", selectedRows);
+        request.set("datasetSnapshot",dataset.deepCopy());
+        var materials=request.putArray("materialColumns");
+        dataset.path("columns").forEach(column->{if(mappedFormulaColumn(column))materials.add(selectedColumn(column));});
+        request.set("projectionVersion",dataset.path("projectionVersion"));
+        request.set("dataIssues",dataset.path("issues"));
         return request;
     }
 
@@ -287,16 +304,36 @@ public class ModelingWorkbenchService {
         var result = json.createObjectNode().put("code", source.path("code").asText())
                 .put("name", source.path("name").asText(source.path("code").asText()))
                 .put("kind", source.path("kind").asText("CATEGORICAL"));
-        for(var metadata:List.of("testMethod","testMethods","testStage"))if(source.hasNonNull(metadata))result.set(metadata,source.get(metadata));
+        for(var metadata:List.of("testMethod","testMethods","testStage","semanticKey","semanticType","materialId","materialCode","mappingStatus","compositionBasis","measurementComponent"))if(source.hasNonNull(metadata))result.set(metadata,source.get(metadata));
         if (source.hasNonNull("unit")) result.put("unit", source.path("unit").asText());
         else result.putNull("unit");
         return result;
     }
 
+    private boolean mappedFormulaColumn(JsonNode column) {
+        if("UNMAPPED".equals(column.path("mappingStatus").asText())
+                || !"NUMERIC".equals(column.path("kind").asText()))return false;
+        try {
+            var materialId=UUID.fromString(column.path("materialId").asText()).toString();
+            var prefix="formula:"+materialId;var code=column.path("code").asText();
+            return code.equals(prefix)||code.startsWith(prefix+"|");
+        } catch(IllegalArgumentException ignored) { return false; }
+    }
+
     private boolean validValue(JsonNode value, String kind) {
         if (value == null || value.isMissingNode() || value.isNull()) return false;
-        if ("NUMERIC".equals(kind)) return value.isNumber() && Double.isFinite(value.asDouble());
-        return !value.asText().isBlank();
+        if ("NUMERIC".equals(kind)) {
+            if (!value.isNumber() && !value.isTextual()) return false;
+            if (value.isTextual() && !value.asText().strip().matches("[+-]?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][+-]?\\d+)?")) return false;
+            try { return !value.asText().isBlank() && Double.isFinite(Double.parseDouble(value.asText().strip())); }
+            catch (NumberFormatException ignored) { return false; }
+        }
+        return (value.isTextual() || value.isNumber()) && !value.asText().isBlank();
+    }
+
+    private JsonNode normalizedValue(JsonNode value, String kind) {
+        return "NUMERIC".equals(kind) ? json.getNodeFactory().numberNode(Double.parseDouble(value.asText().strip()))
+                : json.getNodeFactory().textNode(value.asText().strip());
     }
 
     private JsonNode accepted(UUID id) {
@@ -318,6 +355,8 @@ public class ModelingWorkbenchService {
         result.set("xColumns", row.xColumns());
         result.set("yColumn", row.yColumn());
         result.set("result", row.result());
+        result.set("datasetSnapshot",row.request().path("datasetSnapshot"));
+        result.set("selectedRowIdsByDataset",row.request().path("selectedRowIdsByDataset"));
         result.set("error", row.error().isEmpty() ? json.nullNode() : row.error());
         return result;
     }

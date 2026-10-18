@@ -1,6 +1,6 @@
 import { downloadBlob, triggerNativeDownload } from '@/services/files';
 
-export type FilePreviewMode = 'pdf' | 'image' | 'audio' | 'text' | 'docx' | 'spreadsheet' | 'unsupported';
+export type FilePreviewMode = 'pdf' | 'image' | 'audio' | 'video' | 'text' | 'docx' | 'spreadsheet' | 'unsupported';
 
 export interface FilePreviewDescriptor {
   fileName: string;
@@ -138,6 +138,7 @@ export function detectPreviewMode(fileName: string, contentType = ''): FilePrevi
   if (normalizedType.startsWith('image/')) return 'image';
   if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'tif', 'tiff'].includes(extension)) return 'image';
   if (normalizedType.startsWith('audio/') || ['wav', 'mp3', 'm4a', 'aac', 'flac', 'ogg', 'opus'].includes(extension)) return 'audio';
+  if (normalizedType.startsWith('video/') || ['mp4', 'm4v', 'mov', 'webm'].includes(extension)) return 'video';
   if (normalizedType.includes('wordprocessingml.document') || extension === 'docx') return 'docx';
   if (normalizedType.includes('spreadsheetml.sheet') || normalizedType.includes('ms-excel') || ['xls', 'xlsx', 'csv'].includes(extension)) return 'spreadsheet';
   if (normalizedType.startsWith('text/') || ['txt', 'md', 'json', 'xml', 'log'].includes(extension)) return 'text';

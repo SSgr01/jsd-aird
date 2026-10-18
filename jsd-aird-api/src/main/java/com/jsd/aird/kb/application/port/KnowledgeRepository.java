@@ -35,6 +35,8 @@ public interface KnowledgeRepository {
     List<CategoryRow> listCategories(UUID organizationId, String scope);
     Optional<CategoryRow> findCategory(UUID organizationId, UUID categoryId);
     Optional<CategoryRow> findDefaultCategory(UUID organizationId, String scope);
+    void lockCategoryName(UUID organizationId, String scope, String name);
+    boolean categoryNameExists(UUID organizationId, String scope, String name, UUID excludingCategoryId);
     CategoryRow createCategory(UUID organizationId, UUID actorId, String scope, String name, String description);
     CategoryRow renameCategory(UUID organizationId, UUID categoryId, String name, String description);
     void deleteCategory(UUID organizationId, UUID categoryId, UUID replacementCategoryId);
@@ -87,6 +89,10 @@ public interface KnowledgeRepository {
     }
     List<SearchRow> bm25Search(UUID organizationId, List<AnalyzedTerm> terms, boolean aiOnly,
                                List<UUID> categoryIds, int limit);
+    default List<TermDiscrimination> termDiscrimination(UUID organizationId, List<AnalyzedTerm> terms,
+                                                        List<UUID> categoryIds, Set<UUID> allowedDocumentIds) {
+        return List.of();
+    }
     default List<SearchRow> bm25Search(UUID organizationId, List<AnalyzedTerm> terms, boolean aiOnly,
                                       List<UUID> categoryIds, java.util.Set<UUID> allowedDocumentIds, int limit) {
         if (allowedDocumentIds != null && allowedDocumentIds.isEmpty()) return List.of();
@@ -176,6 +182,7 @@ public interface KnowledgeRepository {
     record AnalyzedTerm(int familyOrdinal, String analyzerVersion, String term) {
         public AnalyzedTerm(String analyzerVersion, String term) { this(0, analyzerVersion, term); }
     }
+    record TermDiscrimination(int familyOrdinal, double inverseDocumentFrequency) { }
     record AnalyzedQuery(int ordinal, String query, List<AnalyzedTerm> terms) {
         public AnalyzedQuery {
             terms = terms == null ? List.of() : List.copyOf(terms);

@@ -40,20 +40,20 @@ public class DataController {
     private final com.jsd.aird.data.application.DataCategoryService categoryService;
     private final ExperimentAssemblyService experimentAssemblyService;
     private final SourceRecognitionService recognitionService;
-    private final com.jsd.aird.data.application.DataStructuredSearchService structuredSearchService;
+    private final com.jsd.aird.data.application.DataPublicationService publicationService;
 
     public DataController(DataImportService service,
                           com.jsd.aird.data.application.DataCategoryService categoryService,
                           DataWorkbookService workbookService,
                           ExperimentAssemblyService experimentAssemblyService,
                           SourceRecognitionService recognitionService,
-                          com.jsd.aird.data.application.DataStructuredSearchService structuredSearchService) {
+                          com.jsd.aird.data.application.DataPublicationService publicationService) {
         this.service = service;
         this.categoryService = categoryService;
         this.workbookService = workbookService;
         this.experimentAssemblyService = experimentAssemblyService;
         this.recognitionService = recognitionService;
-        this.structuredSearchService = structuredSearchService;
+        this.publicationService = publicationService;
     }
 
     @GetMapping("/templates")
@@ -171,6 +171,17 @@ public class DataController {
         return success(service.listJobs(templateVersionId, status, keyword, page, size));
     }
 
+    @PostMapping("/import-jobs/{id}/retry")
+    public ApiResponse<DataRepository.Job> reprocess(@PathVariable UUID id) {
+        return success(service.reprocessDataCenterImport(id));
+    }
+
+    @DeleteMapping("/import-jobs/{id}")
+    public ApiResponse<Void> deleteImport(@PathVariable UUID id) {
+        service.hideDataCenterImport(id);
+        return success(null);
+    }
+
     @PostMapping("/import-jobs/{id}/parse")
     public ApiResponse<DataRepository.Job> parse(@PathVariable UUID id) {
         service.parse(id);
@@ -252,6 +263,10 @@ public class DataController {
 
     @PostMapping("/import-jobs/{id}/commit")
     public ApiResponse<DataRepository.Job> commit(@PathVariable UUID id) {
+        if (service.isDataCenterJob(id)) {
+            publicationService.confirm(id);
+            return success(service.get(id));
+        }
         service.commit(id);
         var job = service.get(id);
         if ("EXPERIMENT_DRAFT".equals(job.importPurpose())) {
@@ -296,13 +311,6 @@ public class DataController {
     @GetMapping("/sources/facets")
     public ApiResponse<com.jsd.aird.data.application.port.DataCategoryRepository.DataSourceFacets> sourceFacets() {
         return success(categoryService.facets());
-    }
-
-    @PostMapping("/sources/structured-search")
-    public ApiResponse<com.jsd.aird.data.api.DataSourceFileSearchFacade.DataDetailResult> structuredSearch(
-            @Valid @RequestBody StructuredSearchRequest request) {
-        return success(structuredSearchService.search(new com.jsd.aird.data.application.DataStructuredSearchService.SearchCommand(
-                request.fileName(), request.recordTerms(), request.fieldTerms(), request.categoryId(), request.uncategorized())));
     }
 
     @GetMapping("/categories")
@@ -362,12 +370,7 @@ public class DataController {
 
     public record CategoryRequest(@NotBlank String name, @Size(max = 240) String description) {}
     public record RenameCategoryRequest(@NotBlank String name, @Size(max = 240) String description) {}
-    public record AssignCategoryRequest(@NotNull UUID categoryId) {}
-    public record StructuredSearchRequest(@Size(max = 260) String fileName,
-                                          List<@Size(max = 160) String> recordTerms,
-                                          List<@Size(max = 160) String> fieldTerms,
-                                          UUID categoryId, boolean uncategorized) {}
-
+    public record AssignCategoryRequest(UUID categoryId) {}
     public record SheetRequest(@NotNull List<@Valid SheetItem> items) {}
     public record SheetItem(@NotBlank String sheetId, boolean selected, List<Integer> headerRows,
                             Integer dataStartRow, Integer dataEndRow, @NotBlank String confirmationStatus) {}

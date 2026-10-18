@@ -2,7 +2,6 @@ package com.jsd.aird.ai.rnd.research;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.jsd.aird.ai.rnd.prediction.PredictionRepository;
 import org.postgresql.util.PGobject;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -83,23 +82,6 @@ public class FormulaDesignRepository {
     }
     public List<CandidateRow> candidates(UUID org, UUID run) {
         return jdbc.query("SELECT id,candidate_no,title,formula_jsonb,process_jsonb,target_results_jsonb,quality_jsonb,applicability_jsonb,rule_check_jsonb,score FROM ai.research_candidate_v2 WHERE organization_id=? AND research_run_id=? ORDER BY candidate_no",this::candidate,org,run);
-    }
-    public List<JsonNode> modelDisplaySnapshots(UUID org, List<UUID> modelIds) {
-        if (modelIds.isEmpty()) return List.of();
-        var marks = String.join(",", java.util.Collections.nCopies(modelIds.size(), "?"));
-        var args = new java.util.ArrayList<Object>(); args.add(org); args.addAll(modelIds);
-        return jdbc.query("""
-            SELECT jsonb_build_object('targetId',m.target_id,'name',coalesce(ts.target_definition_jsonb->>'name',t.name),
-                'valueType',t.value_type,'unit',tv.unit,'classes',tv.classes_jsonb,'testMethod',tv.definition_jsonb->>'testMethod',
-                'testStage',tv.definition_jsonb->>'testStage','modelVersionId',m.id,
-                'inputScheme',ts.input_scheme_jsonb,'dictionary',ts.material_dictionary_jsonb,
-                'domain',m.applicability_domain_jsonb) metadata
-            FROM ai.model_version m
-            LEFT JOIN ai.prediction_target t ON t.organization_id=m.organization_id AND t.id=m.target_id
-            LEFT JOIN ai.target_version tv ON tv.organization_id=m.organization_id AND tv.id=m.target_version_id
-            LEFT JOIN ai.training_snapshot ts ON ts.organization_id=m.organization_id AND ts.id=m.training_snapshot_id
-            WHERE m.organization_id=? AND m.id IN (%s) ORDER BY m.target_id
-            """.formatted(marks), (r,n)->read(r,"metadata"), args.toArray());
     }
     private Row row(ResultSet r,int n)throws SQLException { return new Row(r.getObject("id",UUID.class),r.getString("run_type"),r.getString("execution_status"),r.getString("outcome_status"),r.getInt("progress"),r.getString("current_stage"),r.getString("request_id"),r.getString("request_hash"),read(r,"request_jsonb"),read(r,"model_bindings_jsonb"),read(r,"result_summary_jsonb"),readNullable(r,"error_jsonb"),r.getObject("created_by",UUID.class),r.getObject("ops_job_id",UUID.class),r.getLong("seed"),read(r,"search_config_jsonb"),instant(r,"updated_at")); }
     private CandidateRow candidate(ResultSet r,int n)throws SQLException { return new CandidateRow(r.getObject("id",UUID.class),r.getInt("candidate_no"),r.getString("title"),read(r,"formula_jsonb"),read(r,"process_jsonb"),read(r,"target_results_jsonb"),read(r,"quality_jsonb"),read(r,"applicability_jsonb"),read(r,"rule_check_jsonb"),r.getDouble("score")); }

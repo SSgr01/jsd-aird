@@ -211,12 +211,17 @@ public class ExperimentImportAssembler {
                     item.set("labelPathSegments", labelPathSegments(wrapper));
                     if ("FORMULA".equals(wantedDomain)) {
                         item.put("materialName", label);
-                        item.putNull("materialId");
-                        item.put("materialCode", "");
+                        if (wrapper.hasNonNull("materialId")) item.set("materialId", wrapper.get("materialId"));
+                        else if (!item.has("materialId")) item.putNull("materialId");
+                        if (wrapper.hasNonNull("materialCode")) item.set("materialCode", wrapper.get("materialCode"));
+                        else if (!item.has("materialCode")) item.put("materialCode", "");
                         if ("RATIO".equals(field)) {
                             putNumberOrText(item, "ratio", value);
                             item.set("rawValue", raw);
                             item.put("rawUnit", wrapper.path("rawUnit").asText(""));
+                            var ratioUnit=wrapper.path("normalizedUnit").asText(wrapper.path("rawUnit").asText(""));
+                            item.put("unit",ratioUnit);
+                            item.put("compositionBasis",wrapper.path("compositionBasis").asText("%".equals(ratioUnit)?"MASS_PERCENT":"UNSPECIFIED"));
                         }
                     } else if ("PROCESS".equals(wantedDomain)) {
                         item.put("operation", label);
@@ -228,7 +233,8 @@ public class ExperimentImportAssembler {
                         item.set("value", missing(value) ? json.nullNode() : value);
                         item.set("rawValue", raw);
                         item.put("unit", wrapper.path("normalizedUnit").asText(""));
-                        item.put("testMethod", "");
+                        item.put("testMethod", wrapper.path("testMethod").asText(""));
+                        item.put("testStage", wrapper.path("testStage").asText(""));
                         item.put("testCondition", label);
                         item.put("substrate", substrate(label));
                     }

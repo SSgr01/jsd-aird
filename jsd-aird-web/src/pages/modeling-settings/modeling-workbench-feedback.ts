@@ -3,7 +3,7 @@ import { HttpError } from '@/services/http/errors'
 type Failure = { code?: string; message?: string }
 
 const messages: Record<string, string> = {
-  COMPUTE_UNAVAILABLE: '训练服务暂时无法连接，请稍后重新训练。',
+  COMPUTE_UNAVAILABLE: '计算服务暂不可用，请稍后重试。',
   TRAINING_TIMEOUT: '训练用时过长，请减少 X 列或实验记录后重试。',
   AI_MODEL_ARTIFACT_INVALID: '训练文件无法保存或读取，请联系管理员检查训练服务。',
   FILE_NOT_READY: '训练文件暂时无法读取，请稍后重试。',

@@ -10,7 +10,6 @@ vi.mock('@/services/data/data-api', () => ({
     listSourceFiles: vi.fn(),
     listCategories: vi.fn(),
     sourceFacets: vi.fn(),
-    structuredSearch: vi.fn(),
     listTemplates: vi.fn(),
     sourceBlob: vi.fn(),
     assignSourceCategory: vi.fn(),
@@ -27,7 +26,6 @@ vi.mock('@/services/project/project-api', () => ({
 const listSourceFilesMock = vi.mocked(dataApi.listSourceFiles);
 const listCategoriesMock = vi.mocked(dataApi.listCategories);
 const sourceFacetsMock = vi.mocked(dataApi.sourceFacets);
-const structuredSearchMock = vi.mocked(dataApi.structuredSearch);
 const listTemplatesMock = vi.mocked(dataApi.listTemplates);
 const testRouterFuture = { v7_startTransition: true, v7_relativeSplatPath: true } as const;
 
@@ -50,11 +48,6 @@ describe('DataViewPage source-file list', () => {
       uncategorizedSourceCount: 6,
     });
     listTemplatesMock.mockResolvedValue([{ templateId: 'tpl-1', versionId: 'version-1', templateCode: 'test', name: '检测模板', category: '检测', versionNo: 1, format: 'XLSX' }]);
-    structuredSearchMock.mockResolvedValue({
-      mode: 'FIELD_LOOKUP', resolution: 'RESOLVED', sourceRecordCount: 1, searchableValueCount: 1,
-      hits: [{ hitId: 'hit-1', importJobId: 'job-1', originalName: '检测报告.xlsx', content: '42', recordKey: 'R-1', fieldName: '粘度', fieldValue: '42', sheetName: '明细', cellAddress: 'D2' }],
-      truncated: false, candidates: [], candidatesTruncated: false,
-    });
   });
 
   it('shows one row for the source file and its import summary', async () => {

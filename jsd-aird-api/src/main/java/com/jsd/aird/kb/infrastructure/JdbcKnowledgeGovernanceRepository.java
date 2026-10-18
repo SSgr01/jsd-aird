@@ -69,6 +69,12 @@ public class JdbcKnowledgeGovernanceRepository implements KnowledgeGovernanceRep
     }
 
     @Override
+    public JsonNode sourceInfo(UUID organizationId, UUID documentId) {
+        return jdbc.queryForObject("SELECT source_info_jsonb FROM kb.document WHERE organization_id = ? AND id = ?",
+                (rs, row) -> read(rs.getString(1)), organizationId, documentId);
+    }
+
+    @Override
     public void updateDraftMetadata(UUID organizationId, UUID documentId, String title,
                                     String libraryScope, UUID categoryId) {
         jdbc.update("""

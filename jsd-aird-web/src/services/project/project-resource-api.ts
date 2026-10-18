@@ -1,7 +1,7 @@
 import { httpClient } from '@/services/http/client';
 import type { ApiResponse, PageResponse } from '@/types/api';
 
-export type ProjectResourceType = 'KNOWLEDGE_DOCUMENT' | 'DATA_IMPORT_JOB';
+export type ProjectResourceType = 'KNOWLEDGE_DOCUMENT' | 'DATA_IMPORT_JOB' | 'SPECTRUM_CHART';
 
 export interface ProjectRelationTarget {
   projectId: string;
@@ -31,7 +31,7 @@ export interface ProjectReference {
   resourceId: string;
   fileVersionId?: string;
   fileObjectId?: string;
-  sourceModule: 'KNOWLEDGE' | 'DATA_CENTER';
+  sourceModule: 'KNOWLEDGE' | 'DATA_CENTER' | 'SPECTRUM';
   title: string;
   originalName?: string;
   contentType?: string;

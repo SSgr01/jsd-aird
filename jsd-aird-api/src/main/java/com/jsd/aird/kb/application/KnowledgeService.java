@@ -241,27 +241,44 @@ public class KnowledgeService implements KnowledgeSearchFacade {
     @Transactional
     public KnowledgeRepository.CategoryRow createCategory(String scope, String name, String description) {
         var actor = ActorContext.required();
-        return repository.createCategory(actor.organizationId(), actor.userId(), normalizeScope(scope), normalizeName(name), normalizeDescription(description));
+        var normalizedScope = normalizeScope(scope);
+        var normalizedName = normalizeName(name);
+        ensureCategoryNameAvailable(actor.organizationId(), normalizedScope, normalizedName, null);
+        return repository.createCategory(actor.organizationId(), actor.userId(), normalizedScope, normalizedName, normalizeDescription(description));
     }
 
     @Transactional
     public KnowledgeRepository.CategoryRow renameCategory(UUID categoryId, String name, String description) {
         var actor = ActorContext.required();
-        requireCategory(actor.organizationId(), categoryId);
-        return repository.renameCategory(actor.organizationId(), categoryId, normalizeName(name), normalizeDescription(description));
+        var category = requireCategory(actor.organizationId(), categoryId);
+        var normalizedName = normalizeName(name);
+        ensureCategoryNameAvailable(actor.organizationId(), category.scope(), normalizedName, categoryId);
+        return repository.renameCategory(actor.organizationId(), categoryId, normalizedName, normalizeDescription(description));
     }
 
     @Transactional
     public void deleteCategory(UUID categoryId, UUID replacementCategoryId) {
         var actor = ActorContext.required();
         var category = requireCategory(actor.organizationId(), categoryId);
-        if (replacementCategoryId != null) {
-            var replacement = requireCategory(actor.organizationId(), replacementCategoryId);
+        if ("未分类".equals(category.name())) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "默认的未分类不可删除");
+        }
+        if (categoryId.equals(replacementCategoryId)) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "替代分类不能是待删除分类本身");
+        }
+        var targetCategoryId = replacementCategoryId;
+        if (targetCategoryId == null) {
+            targetCategoryId = repository.findDefaultCategory(actor.organizationId(), category.scope())
+                    .map(KnowledgeRepository.CategoryRow::id)
+                    .orElse(null);
+        }
+        if (targetCategoryId != null) {
+            var replacement = requireCategory(actor.organizationId(), targetCategoryId);
             if (!category.scope().equals(replacement.scope())) {
                 throw new ApiException(ApiErrorCode.BAD_REQUEST, "替代分类必须属于相同资料范围");
             }
         }
-        repository.deleteCategory(actor.organizationId(), categoryId, replacementCategoryId);
+        repository.deleteCategory(actor.organizationId(), categoryId, targetCategoryId);
     }
 
     @Transactional
@@ -287,11 +304,50 @@ public class KnowledgeService implements KnowledgeSearchFacade {
     }
 
     @Transactional
+    public DocumentView updateDocument(UUID documentId, UpdateDocumentCommand command) {
+        var actor = ActorContext.required();
+        var document = requireDocument(actor.organizationId(), documentId);
+        var category = requireCategory(actor.organizationId(), command.categoryId());
+        if (!category.scope().equals(command.libraryScope())) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "分类与资料范围不匹配");
+        }
+        var source = command.sourceInfo();
+        if (source != null && !source.isObject()) throw new ApiException(ApiErrorCode.BAD_REQUEST, "来源信息格式无效");
+        var visibility = source == null ? "研发部可见" : source.path("visibility").asText("研发部可见");
+        if (!Set.of("研发部可见", "全员可见", "项目组可见").contains(visibility)) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "权限可见设置无效");
+        }
+        var tags = new java.util.LinkedHashMap<String, String>();
+        for (var tag : command.tags() == null ? List.<String>of() : command.tags()) {
+            if (StringUtils.hasText(tag)) tags.putIfAbsent(tag.strip().toLowerCase(Locale.ROOT), tag.strip());
+        }
+        if (tags.size() > 50 || tags.values().stream().anyMatch(tag -> tag.length() > 100)) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "最多设置50个标签，每个标签不超过100字");
+        }
+        governance.updateDraftMetadata(actor.organizationId(), documentId, normalizeDocumentTitle(command.title()),
+                command.libraryScope(), command.categoryId());
+        governance.updateSourceInfo(actor.organizationId(), documentId, document.currentVersionId(), source);
+        governance.replaceTags(actor.organizationId(), actor.userId(), documentId, List.copyOf(tags.values()));
+        if (command.projectRelations() != null) {
+            projectResources.replaceLinks(actor, ResourceType.KNOWLEDGE_DOCUMENT, documentId, command.projectRelations());
+        }
+        audit.append(actor.organizationId(), actor.userId(), "KB_DOCUMENT_UPDATED", "KB_DOCUMENT", documentId,
+                objectMapper.valueToTree(command));
+        return get(documentId);
+    }
+
+    public record UpdateDocumentCommand(String title, String libraryScope, UUID categoryId, List<String> tags,
+                                        JsonNode sourceInfo, List<ProjectResourceFacade.ProjectRelationTarget> projectRelations) { }
+
+    @Transactional
     public void deleteDocument(UUID documentId) {
         var actor = ActorContext.required();
         requireDocument(actor.organizationId(), documentId);
         if (governance.hasPublication(actor.organizationId(), documentId)) {
             throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "已发布文档不可物理删除，请使用停用");
+        }
+        if (projectResources != null && projectResources.hasLinks(actor, ResourceType.KNOWLEDGE_DOCUMENT, documentId)) {
+            throw new ApiException(ApiErrorCode.REFERENCE_IN_USE, "已关联项目的知识资料不可物理删除，请先解除项目关联");
         }
         repository.deleteDocument(actor.organizationId(), documentId);
         audit.append(actor.organizationId(), actor.userId(), "KB_DOCUMENT_DELETED", "KB_DOCUMENT", documentId,
@@ -454,59 +510,26 @@ public class KnowledgeService implements KnowledgeSearchFacade {
             throw new ApiException(ApiErrorCode.BAD_REQUEST, "一次最多导出 200 个知识文件");
         }
         try (var output = new ByteArrayOutputStream(); var zip = new ZipOutputStream(output, StandardCharsets.UTF_8)) {
-            var manifest = new StringBuilder("documentId,title,originalName,versionNo,versionId,sha256\n");
             var usedNames = new java.util.HashSet<String>();
-            usedNames.add("manifest.csv");
             for (var documentId : documentIds.stream().distinct().toList()) {
                 var document = repository.findDocument(actor.organizationId(), documentId)
                         .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "知识文件不存在：" + documentId));
                 var version = repository.findVersion(actor.organizationId(), document.currentVersionId())
                         .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "知识文件版本不存在：" + document.currentVersionId()));
-                var baseName = sanitizeExportName(document.title() + "_V" + version.versionNo() + "_" + version.originalName());
-                var entryName = uniqueExportName(baseName, usedNames);
+                var entryName = com.jsd.aird.shared.office.ArchiveFileNames.unique(version.originalName(), usedNames);
                 try (var stored = storage.open(actor.organizationId(), version.fileObjectId())) {
                     zip.putNextEntry(new ZipEntry(entryName));
                     stored.stream().transferTo(zip);
                     zip.closeEntry();
                 }
-                manifest.append(csv(document.id().toString())).append(',')
-                        .append(csv(document.title())).append(',')
-                        .append(csv(version.originalName())).append(',')
-                        .append(version.versionNo()).append(',')
-                        .append(csv(version.id().toString())).append(',')
-                        .append(csv(version.sha256())).append('\n');
             }
-            zip.putNextEntry(new ZipEntry("manifest.csv"));
-            zip.write(manifest.toString().getBytes(StandardCharsets.UTF_8));
-            zip.closeEntry();
             zip.finish();
             return output.toByteArray();
+        } catch (ApiException exception) {
+            throw exception;
         } catch (Exception exception) {
             throw new IllegalStateException("知识文件导出失败", exception);
         }
-    }
-
-    private String sanitizeExportName(String value) {
-        var normalized = value == null ? "document" : value.replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]", "_").trim();
-        normalized = normalized.replaceAll("^\\.+", "");
-        return normalized.isBlank() ? "document" : normalized.substring(0, Math.min(180, normalized.length()));
-    }
-
-    private String uniqueExportName(String requested, java.util.Set<String> usedNames) {
-        var candidate = requested;
-        var suffix = 2;
-        while (!usedNames.add(candidate)) {
-            var dot = requested.lastIndexOf('.');
-            var stem = dot > 0 ? requested.substring(0, dot) : requested;
-            var extension = dot > 0 ? requested.substring(dot) : "";
-            candidate = stem + "_" + suffix++ + extension;
-        }
-        return candidate;
-    }
-
-    private String csv(String value) {
-        var safe = value == null ? "" : value;
-        return "\"" + safe.replace("\"", "\"\"") + "\"";
     }
 
     public List<KnowledgeSearchFacade.SearchHit> search(UUID organizationId, String query, boolean aiOnly, int limit) {
@@ -1243,7 +1266,7 @@ public class KnowledgeService implements KnowledgeSearchFacade {
                 row.sha256(), safeUserError(row.parseError()), row.createdAt(), row.updatedAt(), row.libraryScope(), row.categoryId(), row.categoryName(),
                 row.lifecycleStatus(), row.reviewStatus(), row.reviewRevisionStatus(), row.reviewRevision(),
                 row.currentPublicationId(), row.currentPublicationNo(),
-                List.of());
+                List.of(), governance.tags(row.organizationId(), row.id()), governance.sourceInfo(row.organizationId(), row.id()));
     }
 
     private List<DocumentView> withProjects(com.jsd.aird.shared.security.Actor actor, List<DocumentView> items) {
@@ -1255,12 +1278,20 @@ public class KnowledgeService implements KnowledgeSearchFacade {
                 item.size(), item.sha256(), item.parseError(), item.createdAt(), item.updatedAt(), item.libraryScope(),
                 item.categoryId(), item.categoryName(), item.lifecycleStatus(), item.reviewStatus(),
                 item.reviewRevisionStatus(), item.reviewRevision(),
-                item.currentPublicationId(), item.currentPublicationNo(), links.getOrDefault(item.id(), List.of()))).toList();
+                item.currentPublicationId(), item.currentPublicationNo(), links.getOrDefault(item.id(), List.of()), item.tags(), item.sourceInfo())).toList();
     }
 
     private KnowledgeRepository.CategoryRow requireCategory(UUID organizationId, UUID categoryId) {
         return repository.findCategory(organizationId, categoryId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "知识库分类不存在"));
+    }
+
+    private void ensureCategoryNameAvailable(UUID organizationId, String scope, String name,
+                                            UUID excludingCategoryId) {
+        repository.lockCategoryName(organizationId, scope, name);
+        if (repository.categoryNameExists(organizationId, scope, name, excludingCategoryId)) {
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "当前资料范围下已存在同名分类");
+        }
     }
 
     private KnowledgeRepository.DocumentRow requireDocument(UUID organizationId, UUID documentId) {
@@ -1380,9 +1411,11 @@ public class KnowledgeService implements KnowledgeSearchFacade {
                                UUID categoryId, String categoryName, String lifecycleStatus, String reviewStatus,
                                String reviewRevisionStatus, int reviewRevision,
                                UUID currentPublicationId, Integer currentPublicationNo,
-                               List<ProjectResourceFacade.RelatedProjectView> relatedProjects) {
+                               List<ProjectResourceFacade.RelatedProjectView> relatedProjects,
+                               List<String> tags, JsonNode sourceInfo) {
         public List<String> getAllowedActions() {
-            return AllowedActions.knowledge(lifecycleStatus, reviewStatus, currentPublicationId != null);
+            return AllowedActions.knowledge(lifecycleStatus, reviewStatus, currentPublicationId != null,
+                    relatedProjects != null && !relatedProjects.isEmpty());
         }
     }
     public record ProcessingView(UUID documentId, UUID versionId, String documentStatus, String documentError,

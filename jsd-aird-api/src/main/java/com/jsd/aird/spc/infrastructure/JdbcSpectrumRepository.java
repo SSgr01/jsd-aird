@@ -62,6 +62,32 @@ public class JdbcSpectrumRepository implements SpectrumRepository {
     }
 
     @Override
+    public void lockCategoryName(UUID organizationId, String name) {
+        var lockKey = organizationId + ":spectrum-category-name:" + name.trim().toLowerCase(java.util.Locale.ROOT);
+        jdbc.query("SELECT pg_advisory_xact_lock(hashtextextended(CAST(? AS text), 0))",
+                rs -> null, lockKey);
+    }
+
+    @Override
+    public boolean categoryNameExists(UUID organizationId, String name, UUID excludingCategoryId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+                SELECT EXISTS (
+                    SELECT 1 FROM spc.chart_category
+                    WHERE organization_id = ?
+                      AND lower(btrim(name)) = lower(btrim(?))
+                      AND (CAST(? AS uuid) IS NULL OR id <> CAST(? AS uuid))
+                )
+                """, Boolean.class, organizationId, name, excludingCategoryId, excludingCategoryId));
+    }
+
+    @Override
+    public void lockCategoryCode(UUID organizationId, String code) {
+        var lockKey = organizationId + ":spectrum-category-code:" + code;
+        jdbc.query("SELECT pg_advisory_xact_lock(hashtextextended(CAST(? AS text), 0))",
+                rs -> null, lockKey);
+    }
+
+    @Override
     public CategoryRow createCategory(NewCategory command) {
         jdbc.update("""
                 INSERT INTO spc.chart_category (
@@ -101,6 +127,24 @@ public class JdbcSpectrumRepository implements SpectrumRepository {
     public Optional<ChartRow> findChartByHash(UUID organizationId, String sha256) {
         return jdbc.query(chartQuery("WHERE a.organization_id = ? AND a.sha256 = ? AND a.status = 'READY'"),
                 this::mapChart, organizationId, sha256).stream().findFirst();
+    }
+
+    @Override
+    public Optional<ChartRow> findChartByRequestId(UUID organizationId, UUID requestId) {
+        return jdbc.query(chartQuery("WHERE a.organization_id = ? AND a.request_id = ?"),
+                this::mapChart, organizationId, requestId).stream().findFirst();
+    }
+
+    @Override
+    public void lockChartHash(UUID organizationId, String sha256) {
+        jdbc.query("SELECT pg_advisory_xact_lock(hashtextextended(CAST(? AS text), 0))", rs -> null,
+                organizationId + ":spectrum-chart-hash:" + sha256);
+    }
+
+    @Override
+    public void lockChartRequest(UUID organizationId, UUID requestId) {
+        jdbc.query("SELECT pg_advisory_xact_lock(hashtextextended(CAST(? AS text), 0))", rs -> null,
+                organizationId + ":spectrum-chart-request:" + requestId);
     }
 
     @Override
@@ -144,12 +188,12 @@ public class JdbcSpectrumRepository implements SpectrumRepository {
                 INSERT INTO spc.chart_asset (
                     id, organization_id, category_id, file_object_id, title, original_name, content_type,
                     size_bytes, sha256, sample_name, batch_no, test_conditions, metadata_jsonb, page_count,
-                    created_by
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    request_id, created_by
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, command.id(), command.organizationId(), command.categoryId(), command.fileObjectId(),
                 command.title(), command.originalName(), command.contentType(), command.size(), command.sha256(),
                 command.sampleName(), command.batchNo(), command.testConditions(), json(command.metadataJson()),
-                command.pageCount(), command.createdBy());
+                command.pageCount(), command.requestId(), command.createdBy());
         return findChart(command.organizationId(), command.id()).orElseThrow();
     }
 
@@ -161,14 +205,114 @@ public class JdbcSpectrumRepository implements SpectrumRepository {
                 SET title = ?, sample_name = ?, batch_no = ?, test_conditions = ?, metadata_jsonb = ?, updated_at = now()
                 WHERE organization_id = ? AND id = ? AND status = 'READY'
                 """, title, sampleName, batchNo, testConditions, json(metadataJson), organizationId, chartId);
+        jdbc.update("""
+                UPDATE core.project_reference
+                   SET title = ?
+                 WHERE organization_id = ? AND resource_type = 'SPECTRUM_CHART' AND resource_id = ?
+                   AND status = 'ACTIVE'
+                """, title, organizationId, chartId);
+    }
+
+    @Override
+    public int assignChartCategory(UUID organizationId, UUID chartId, UUID categoryId) {
+        return jdbc.update("""
+                UPDATE spc.chart_asset a
+                SET category_id = ?, updated_at = now()
+                FROM spc.chart_category c
+                WHERE a.organization_id = ? AND a.id = ? AND a.status = 'READY'
+                  AND c.organization_id = a.organization_id AND c.id = ?
+                """, categoryId, organizationId, chartId, categoryId);
+    }
+
+    @Override
+    public boolean hasActiveProjectReference(UUID organizationId, UUID chartId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+                SELECT EXISTS (
+                    SELECT 1 FROM core.project_reference
+                     WHERE organization_id = ? AND resource_type = 'SPECTRUM_CHART'
+                       AND resource_id = ? AND status = 'ACTIVE'
+                )
+                """, Boolean.class, organizationId, chartId));
+    }
+
+    @Override
+    public boolean hasAnalysisReportReference(UUID organizationId, UUID chartId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+                SELECT EXISTS (
+                    SELECT 1 FROM spc.analysis_run
+                     WHERE organization_id = ?
+                       AND chart_ids_jsonb @> jsonb_build_array(CAST(? AS text))
+                )
+                """, Boolean.class, organizationId, chartId.toString()));
     }
 
     @Override
     public void deleteChart(UUID organizationId, UUID chartId) {
         jdbc.update("""
+                DELETE FROM core.project_resource_link
+                 WHERE organization_id = ? AND resource_type = 'SPECTRUM_CHART' AND resource_id = ?
+                """, organizationId, chartId);
+        jdbc.update("""
                 UPDATE spc.chart_asset SET status = 'DELETED', updated_at = now()
                 WHERE organization_id = ? AND id = ?
                 """, organizationId, chartId);
+    }
+
+    @Override
+    public void recordUploadAttempt(NewUploadAttempt attempt) {
+        jdbc.update("""
+                INSERT INTO spc.chart_upload_attempt (
+                    id, organization_id, request_id, category_id, chart_id, file_object_id, original_name,
+                    size_bytes, status, error_code, error_message, upload_context_jsonb, parent_request_id, created_by
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?)
+                ON CONFLICT (organization_id, request_id) DO UPDATE
+                   SET category_id = EXCLUDED.category_id,
+                       chart_id = coalesce(EXCLUDED.chart_id, spc.chart_upload_attempt.chart_id),
+                       file_object_id = coalesce(EXCLUDED.file_object_id, spc.chart_upload_attempt.file_object_id),
+                       original_name = EXCLUDED.original_name,
+                       size_bytes = EXCLUDED.size_bytes,
+                       status = EXCLUDED.status,
+                       error_code = EXCLUDED.error_code,
+                       error_message = EXCLUDED.error_message,
+                       upload_context_jsonb = EXCLUDED.upload_context_jsonb,
+                       parent_request_id = coalesce(EXCLUDED.parent_request_id, spc.chart_upload_attempt.parent_request_id),
+                       hidden_at = NULL,
+                       created_at = now()
+                 WHERE spc.chart_upload_attempt.status <> 'SUCCEEDED'
+                    OR EXCLUDED.status = 'SUCCEEDED'
+                """, UUID.randomUUID(), attempt.organizationId(), attempt.requestId(), attempt.categoryId(),
+                attempt.chartId(), attempt.fileObjectId(), attempt.originalName(), Math.max(0, attempt.size()),
+                attempt.status(), attempt.errorCode(), attempt.errorMessage(),
+                attempt.uploadContextJson() == null ? "{}" : attempt.uploadContextJson(),
+                attempt.parentRequestId(), attempt.createdBy());
+    }
+
+    @Override
+    public List<UploadAttemptRow> listUploadAttempts(UUID organizationId, int limit) {
+        return jdbc.query("""
+                SELECT request_id, category_id, chart_id, original_name, file_object_id, size_bytes, status,
+                       error_code, error_message, upload_context_jsonb::text, parent_request_id, created_at
+                  FROM spc.chart_upload_attempt
+                 WHERE organization_id = ?
+                   AND hidden_at IS NULL
+                 ORDER BY created_at DESC
+                 LIMIT ?
+                """, (rs, ignored) -> new UploadAttemptRow(rs.getObject("request_id", UUID.class),
+                rs.getObject("category_id", UUID.class), rs.getObject("chart_id", UUID.class),
+                rs.getString("original_name"), rs.getObject("file_object_id", UUID.class),
+                rs.getLong("size_bytes"), rs.getString("status"), rs.getString("error_code"),
+                rs.getString("error_message"), rs.getString("upload_context_jsonb"),
+                rs.getObject("parent_request_id", UUID.class), instant(rs, "created_at")),
+                organizationId, Math.max(1, Math.min(limit, 200)));
+    }
+
+    @Override
+    public int hideUploadAttempt(UUID organizationId, UUID requestId) {
+        return jdbc.update("""
+                UPDATE spc.chart_upload_attempt
+                   SET hidden_at = now()
+                 WHERE organization_id = ? AND request_id = ? AND hidden_at IS NULL
+                """, organizationId, requestId);
     }
 
     @Override

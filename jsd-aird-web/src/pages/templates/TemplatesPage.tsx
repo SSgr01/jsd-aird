@@ -9,7 +9,8 @@ import {
   HistoryOutlined,
   MoreOutlined,
   PlusOutlined,
-  ReloadOutlined,
+  RedoOutlined,
+  SearchOutlined,
   StopOutlined,
 } from '@ant-design/icons';
 import {
@@ -73,7 +74,6 @@ export function TemplatesPage() {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
-  const [searchInput, setSearchInput] = useState('');
   const [keyword, setKeyword] = useState('');
   const [format, setFormat] = useState<TemplateFormat>();
   const [status, setStatus] = useState<TemplateStatus>();
@@ -81,8 +81,6 @@ export function TemplatesPage() {
   const [uncategorized, setUncategorized] = useState(false);
   const [createdBy, setCreatedBy] = useState<string>();
   const [updatedRange, setUpdatedRange] = useState<TemplateDateRange>(null);
-  const [sortBy, setSortBy] = useState<'UPDATED_AT' | 'CREATED_AT' | 'NAME'>('UPDATED_AT');
-  const [sortDirection, setSortDirection] = useState<'ASC' | 'DESC'>('DESC');
   const [categoryItems, setCategoryItems] = useState<TemplateCategory[]>([]);
   const [creatorOptions, setCreatorOptions] = useState<Array<{ id: string; displayName: string }>>([]);
   const [createOpen, setCreateOpen] = useState(false);
@@ -113,8 +111,8 @@ export function TemplatesPage() {
   const listParams = useMemo(() => ({
     keyword: keyword.trim() || undefined, categoryId, uncategorized: uncategorized || undefined, format, status, createdBy,
     updatedFrom: updatedRange?.[0]?.startOf('day').toISOString(), updatedTo: updatedRange?.[1]?.endOf('day').toISOString(),
-    sortBy, sortDirection, page, size: pageSize,
-  }), [categoryId, createdBy, format, keyword, page, pageSize, sortBy, sortDirection, status, uncategorized, updatedRange]);
+    sortBy: 'UPDATED_AT' as const, sortDirection: 'DESC' as const, page, size: pageSize,
+  }), [categoryId, createdBy, format, keyword, page, pageSize, status, uncategorized, updatedRange]);
 
   const facetParams = useMemo(() => ({
     keyword: keyword.trim() || undefined, format, status, createdBy,
@@ -179,13 +177,12 @@ export function TemplatesPage() {
   }, [categoryItems, facets]);
 
   const applySearch = (value: string) => {
-    setSearchInput(value);
-    changeFilter(() => setKeyword(value.trim()));
+    changeFilter(() => setKeyword(value));
   };
 
   const resetFilters = () => {
-    setSearchInput(''); setKeyword(''); setFormat(undefined); setStatus(undefined); setCategoryId(undefined); setUncategorized(false);
-    setCreatedBy(undefined); setUpdatedRange(null); setSortBy('UPDATED_AT'); setSortDirection('DESC');
+    setKeyword(''); setFormat(undefined); setStatus(undefined); setCategoryId(undefined); setUncategorized(false);
+    setCreatedBy(undefined); setUpdatedRange(null);
     setPage(1); clearSelection();
   };
 
@@ -193,11 +190,11 @@ export function TemplatesPage() {
     await Promise.all([load(), loadFacets(), loadOptions()]);
   };
 
-  const exportTemplates = async (params: Parameters<typeof templateApi.exportCsv>[0]) => {
+  const exportTemplates = async () => {
     setExporting(true);
     try {
-      await templateApi.exportCsv(params);
-      void message.success('模板列表已导出');
+      await templateApi.exportFiles(selected.map((item) => item.versionId));
+      void message.success('模板文件已导出');
     } catch (error) {
       void message.error(error instanceof Error ? error.message : '模板导出失败');
     } finally {
@@ -220,18 +217,6 @@ export function TemplatesPage() {
       if (error && typeof error === 'object' && 'errorFields' in error) return;
       void message.error(error instanceof Error ? error.message : '模板创建失败');
     } finally { setCreating(false); }
-  };
-
-  const createRevision = async (record: TemplateListItem) => {
-    if (record.hasDraft && record.draftVersionId) {
-      navigate(`/templates/${record.draftVersionId}/workspace`); return;
-    }
-    try {
-      const source = record.currentPublishedVersionId ?? record.versionId;
-      const workspace = await templateApi.createRevision(source);
-      void message.success('已创建新的修订草稿');
-      navigate(`/templates/${workspace.versionId}/workspace`);
-    } catch (error) { void message.error(error instanceof Error ? error.message : '创建修订草稿失败'); }
   };
 
   const deleteDraft = (record: TemplateListItem) => modal.confirm({
@@ -336,7 +321,7 @@ export function TemplatesPage() {
   const columns: TableColumnsType<TemplateListItem> = [
     {
       title: '模板', dataIndex: 'name',
-      render: (_, record) => <Space>{record.format === 'XLSX' ? <FileExcelOutlined /> : <FileWordOutlined />}<span><Typography.Link strong onClick={(event) => { event.stopPropagation(); navigate(`/templates/${record.versionId}/workspace`); }}>{record.name}</Typography.Link><span className="binding-path">{record.templateCode}</span></span></Space>,
+      render: (_, record) => <Space>{record.format === 'XLSX' ? <FileExcelOutlined /> : <FileWordOutlined />}<Typography.Link strong onClick={(event) => { event.stopPropagation(); navigate(`/templates/${record.versionId}/workspace`); }}>{record.name}</Typography.Link></Space>,
     },
     { title: '分类', dataIndex: 'category', render: (_, record) => record.category || '未分类' },
     { title: '状态', key: 'status', render: (_, record) => templateStatus(record) },
@@ -354,7 +339,7 @@ export function TemplatesPage() {
         ], onClick: ({ key }) => {
           if (key === 'copy' || key === 'rename') { setOperation({ type: key === 'copy' ? 'COPY' : 'RENAME', item: record }); setOperationName(key === 'copy' ? `${record.name} - 副本` : record.name); setOperationCategoryId(record.categoryId); }
           if (key === 'move') setMovingTemplate(record); if (key === 'history') navigate(`/templates/${record.versionId}/workspace?view=versions`);
-          if (key === 'delete') deleteDraft(record); if (key === 'revision') void createRevision(record); if (key === 'retire') retire(record);
+          if (key === 'delete') deleteDraft(record); if (key === 'retire') retire(record);
         } }}><Button type="text" aria-label="更多模板操作" icon={<MoreOutlined />} /></Dropdown>
       </Space>,
     },
@@ -371,17 +356,14 @@ export function TemplatesPage() {
 
     <CatalogListPanel title="模板列表" count={total} countLabel="个模板"
       filters={<Space wrap size={10}>
-        <Input.Search allowClear placeholder="名称或编码" value={searchInput}
-          onChange={(event) => { setSearchInput(event.target.value); clearSelection(); }}
-          onClear={() => applySearch('')} onSearch={applySearch} style={{ width: 230 }} />
+        <Input allowClear prefix={<SearchOutlined />} placeholder="搜索模板名称" value={keyword}
+          onChange={(event) => applySearch(event.target.value)} style={{ width: 230 }} />
         <Select allowClear placeholder="全部分类" value={uncategorized ? 'UNCATEGORIZED' : categoryId} onChange={(value) => changeFilter(() => { setUncategorized(value === 'UNCATEGORIZED'); setCategoryId(value === 'UNCATEGORIZED' ? undefined : value); })} options={[...categoryItems.map((item) => ({ value: item.id, label: item.name })), { value: 'UNCATEGORIZED', label: '未分类' }]} style={{ width: 150 }} />
         <Select allowClear placeholder="全部格式" value={format} onChange={(value) => changeFilter(() => setFormat(value))} options={[{ value: 'XLSX', label: 'Excel' }, { value: 'DOCX', label: 'Word' }]} style={{ width: 130 }} />
         <Select allowClear placeholder="全部状态" value={status} onChange={(value) => changeFilter(() => setStatus(value))} options={Object.entries(statusLabels).map(([value, item]) => ({ value, label: item.label }))} style={{ width: 130 }} />
         <Select allowClear placeholder="创建人" value={createdBy} onChange={(value) => changeFilter(() => setCreatedBy(value))} options={creatorOptions.map((item) => ({ value: item.id, label: item.displayName }))} style={{ width: 140 }} />
         <RangePicker value={updatedRange} onChange={(values) => changeFilter(() => setUpdatedRange(values ? [values[0]!, values[1]!] : null))} />
-        <Select value={sortBy} onChange={(value) => changeFilter(() => setSortBy(value))} options={[{ value: 'UPDATED_AT', label: '最近更新' }, { value: 'CREATED_AT', label: '创建时间' }, { value: 'NAME', label: '名称' }]} style={{ width: 130 }} />
-        <Select value={sortDirection} onChange={(value) => changeFilter(() => setSortDirection(value))} options={[{ value: 'DESC', label: '降序' }, { value: 'ASC', label: '升序' }]} style={{ width: 100 }} />
-        <Button onClick={resetFilters}>重置</Button><Button icon={<ReloadOutlined />} onClick={() => void refreshCatalog()}>刷新</Button>
+        <Button icon={<RedoOutlined />} onClick={resetFilters}>重置</Button>
       </Space>}
       actions={<>
         <Typography.Text type="secondary">已选 {selected.length} 个模板</Typography.Text>
@@ -390,10 +372,8 @@ export function TemplatesPage() {
           <Button icon={<FolderAddOutlined />} disabled={batchOperating} onClick={() => setBatchMoveOpen(true)}>移动分类</Button>
           <Button danger icon={<DeleteOutlined />} disabled={!selected.some((item) => item.allowedActions?.includes('DELETE'))} loading={batchOperating} onClick={() => void runBatch('DELETE_DRAFT')}>删除纯草稿</Button>
           <Button danger icon={<StopOutlined />} disabled={!selected.some((item) => item.allowedActions?.includes('RETIRE'))} loading={batchOperating} onClick={() => void runBatch('RETIRE')}>停用发布版</Button>
-          <Button icon={<DownloadOutlined />} loading={exporting} onClick={() => void exportTemplates({ ...listParams, templateIds: selected.map((item) => item.templateId) })}>导出选中</Button>
-          <Button type="link" disabled={batchOperating} onClick={clearSelection}>取消选择</Button>
+          <Button icon={<DownloadOutlined />} loading={exporting} onClick={() => void exportTemplates()}>导出选中</Button>
         </>}
-        <Button icon={<DownloadOutlined />} loading={exporting} onClick={() => void exportTemplates(listParams)}>导出当前筛选结果</Button>
       </>}
     >
       <Table className="catalog-template-table" rowKey="templateId" loading={loading} dataSource={items}

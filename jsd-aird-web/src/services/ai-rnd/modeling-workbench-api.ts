@@ -8,6 +8,8 @@ const unwrap = <T>(response: { data: ApiResponse<T> }) => response.data.data
 export type WorkbenchMetric = number | string | Record<string, unknown> | Array<unknown>
 export type WorkbenchRegistration = { modelVersionId: string; targetId: string; version: number; status: string; registeredAt: string }
 export type ModelingWorkbenchRun = {
+  datasetSnapshot?: HistoryDataset
+  selectedRowIdsByDataset?: Record<string, string[]>
   registration?: WorkbenchRegistration | null
   id: string
   datasetName: string

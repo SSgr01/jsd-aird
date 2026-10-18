@@ -1,37 +1,18 @@
 package com.jsd.aird.ai.rnd;
 
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Component;
+import java.util.Locale;
 
 /**
- * Explicitly authorizes generated-data workflows in a test deployment only.
- * Production eligibility remains an independent, unchanged qualification.
+ * Keeps synthetic training data eligible only in explicitly enabled test
+ * environments. This policy does not rewrite or infer a model's data origin.
  */
-@Component
-public final class SyntheticTestAuthorization {
-    private final boolean enabled;
+public record SyntheticTestAuthorization(String environment, boolean syntheticTestEnabled) {
 
-    public SyntheticTestAuthorization(
-            @Value("${JSD_AIRD_RUNTIME_ENVIRONMENT:production}") String runtimeEnvironment,
-            @Value("${JSD_AIRD_AI_TEST_SYNTHETIC_WORKFLOW_ENABLED:false}") boolean enabled) {
-        this.enabled = enabled && "test".equalsIgnoreCase(runtimeEnvironment == null ? "" : runtimeEnvironment.strip());
-    }
-
-    public boolean enabled() {
-        return enabled;
-    }
-
-    public boolean allows(String dataNature, boolean productionEligible) {
-        return allows(dataNature, productionEligible, false);
-    }
-
-    public boolean allows(String dataNature, boolean productionEligible, boolean testOnlySimulation) {
-        if (testOnlySimulation) return enabled;
-        if (productionEligible && "REAL".equalsIgnoreCase(dataNature)) return true;
-        return enabled && "SYNTHETIC".equalsIgnoreCase(dataNature);
-    }
-
-    public boolean isSimulation(String dataNature, boolean testOnlySimulation) {
-        return enabled && (testOnlySimulation || "SYNTHETIC".equalsIgnoreCase(dataNature));
+    public boolean allows(String dataOrigin, boolean explicitlyAllowProductionRealData) {
+        var origin = dataOrigin == null ? "" : dataOrigin.trim().toUpperCase(Locale.ROOT);
+        if ("REAL".equals(origin)) return explicitlyAllowProductionRealData;
+        if (!"SYNTHETIC".equals(origin)) return false;
+        return "test".equalsIgnoreCase(environment == null ? "" : environment.trim())
+                && syntheticTestEnabled;
     }
 }

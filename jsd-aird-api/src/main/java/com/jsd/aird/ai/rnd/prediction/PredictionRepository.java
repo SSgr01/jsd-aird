@@ -1,9 +1,9 @@
 package com.jsd.aird.ai.rnd.prediction;
 
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.jsd.aird.ai.rnd.modeling.WorkbenchFormulaSupport;
 import org.postgresql.util.PGobject;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -12,6 +12,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.util.List;
+import java.util.ArrayList;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -23,94 +24,52 @@ public class PredictionRepository {
     public PredictionRepository(JdbcTemplate jdbc, ObjectMapper json) { this.jdbc=jdbc; this.json=json; }
     public JdbcTemplate jdbc() { return jdbc; }
 
-    public List<PredictionContracts.QualityPolicyView> qualityPolicies(UUID org, UUID targetId) {
-        return jdbc.query("""
-            SELECT * FROM ai.modeling_policy_version
-            WHERE organization_id=? AND target_id=? AND kind='QUALITY'
-            ORDER BY version_no DESC,id
-            """, this::qualityPolicy, org,targetId);
-    }
-
-    public Optional<PredictionContracts.QualityPolicyView> qualityPolicy(UUID org, UUID id) {
-        return jdbc.query("SELECT * FROM ai.modeling_policy_version WHERE organization_id=? AND id=? AND kind='QUALITY'",
-                this::qualityPolicy,org,id).stream().findFirst();
-    }
-
-    public List<PredictionContracts.DomainPolicyView> domainPolicies(UUID org, UUID targetId) {
-        return jdbc.query("""
-            SELECT * FROM ai.modeling_policy_version
-            WHERE organization_id=? AND target_id=? AND kind='DOMAIN'
-            ORDER BY version_no DESC,id
-            """, this::domainPolicy, org, targetId);
-    }
-
-    public Optional<PredictionContracts.DomainPolicyView> domainPolicy(UUID org, UUID id) {
-        return jdbc.query("SELECT * FROM ai.modeling_policy_version WHERE organization_id=? AND id=? AND kind='DOMAIN'",
-                this::domainPolicy, org, id).stream().findFirst();
-    }
-
-    public List<TargetBinding> targetBindings(UUID org, List<UUID> targetIds) {
-        if (targetIds.isEmpty()) return List.of();
+    public List<TargetBinding> targetBindings(UUID org,List<UUID> targetIds){
+        if(targetIds.isEmpty())return List.of();
         var marks=String.join(",",java.util.Collections.nCopies(targetIds.size(),"?"));
-        var args=new java.util.ArrayList<Object>();args.add(org);args.addAll(targetIds);
+        var args=new ArrayList<Object>();args.add(org);args.addAll(targetIds);
         return jdbc.query("""
-            SELECT t.id target_id,t.target_code,t.name,t.performance_project,t.status target_status,t.value_type,
-                   t.current_version_id,t.current_input_scheme_id,t.current_quality_policy_version_id,
-                   tv.version_no target_version_no,tv.unit,tv.classes_jsonb,tv.definition_jsonb,
-                   tv.observation_semantics_jsonb,coalesce(tv.definition_jsonb->>'sha256',tv.config_hash) target_hash,
-                    mv.id model_id,mv.target_version_id model_target_version_id,mv.input_scheme_id model_input_scheme_id,
-                    mv.training_snapshot_id,mv.contract_version,mv.metrics_jsonb,mv.model_card_jsonb,mv.applicability_domain_jsonb,
-                   mv.production_eligible,mv.data_nature,
-                   coalesce((mv.model_card_jsonb->>'testOnlySimulation')::boolean,false) model_test_only_simulation,
-                   coalesce(mv.model_card_jsonb->>'sourceDataNature',mv.data_nature) model_source_data_nature,
-                   mv.domain_policy_version_id,
-                   a.object_key,a.sha256 artifact_sha,a.media_type,
-                   coalesce(ts.target_definition_jsonb,mv.model_card_jsonb->'targetDefinition') target_definition_jsonb,
-                   coalesce(ts.input_scheme_jsonb,mv.model_card_jsonb->'inputScheme') input_scheme_jsonb,ts.material_dictionary_jsonb,ts.preprocessing_jsonb,
-                   qp.id quality_policy_id,qp.version_no quality_policy_version,qp.policy_hash quality_policy_hash,
-                   qp.configuration_jsonb quality_policy_jsonb,qp.status quality_policy_status,
-                   dp.id domain_policy_id,dp.version_no domain_policy_version,dp.policy_hash domain_policy_hash,
-                   dp.configuration_jsonb domain_policy_jsonb,dp.status domain_policy_status
+            SELECT t.id target_id,t.target_code,t.name,t.performance_project,t.status target_status,
+                tv.id target_version_id,tv.version_no,tv.value_type,tv.unit,tv.classes_jsonb,tv.definition_jsonb,
+                tv.observation_semantics_jsonb,tv.config_hash target_hash,mv.id model_id,mv.target_version_id model_target_version_id,
+                mv.input_scheme_id,mv.contract_version,mv.metrics_jsonb,mv.applicability_domain_jsonb,
+                mv.model_card_jsonb->'targetDefinition' frozen_target,mv.model_card_jsonb->'inputScheme' input_scheme,
+                wr.request_jsonb,wr.id workbench_run_id,a.object_key,a.sha256 artifact_sha,a.media_type
             FROM ai.prediction_target t
-            LEFT JOIN ai.target_version tv ON tv.organization_id=t.organization_id AND tv.id=t.current_version_id
-            LEFT JOIN ai.model_version mv ON mv.organization_id=t.organization_id AND mv.target_id=t.id AND mv.status='ACTIVE'
+            JOIN ai.target_version tv ON tv.organization_id=t.organization_id AND tv.id=t.current_version_id
+            LEFT JOIN ai.model_version mv ON mv.organization_id=t.organization_id AND mv.target_id=t.id
+                AND mv.status='ACTIVE' AND mv.contract_version='modeling-workbench.v1' AND mv.workbench_run_id IS NOT NULL
+            LEFT JOIN ai.modeling_workbench_run wr ON wr.organization_id=mv.organization_id AND wr.id=mv.workbench_run_id
             LEFT JOIN ai.artifact a ON a.organization_id=mv.organization_id AND a.id=mv.model_artifact_id
-            LEFT JOIN ai.training_snapshot ts ON ts.organization_id=mv.organization_id AND ts.id=mv.training_snapshot_id
-            LEFT JOIN ai.modeling_policy_version qp ON qp.organization_id=t.organization_id AND qp.id=t.current_quality_policy_version_id
-            LEFT JOIN ai.modeling_policy_version dp ON dp.organization_id=t.organization_id
-                AND dp.id=coalesce(t.current_domain_policy_version_id,mv.domain_policy_version_id)
             WHERE t.organization_id=? AND t.id IN (%s)
-            ORDER BY t.performance_project,t.name,t.id
-            """.formatted(marks),this::binding,args.toArray());
+                AND EXISTS(SELECT 1 FROM ai.model_version registered WHERE registered.organization_id=t.organization_id
+                    AND registered.target_id=t.id AND registered.contract_version='modeling-workbench.v1' AND registered.workbench_run_id IS NOT NULL)
+            ORDER BY t.name,t.id
+            """.formatted(marks),(rs,n)->{
+                var scheme=node(rs,"input_scheme");var definition=node(rs,"definition_jsonb");
+                var request=node(rs,"request_jsonb");
+                if(definition instanceof ObjectNode object && request.isObject())object.withObject("modelSource").set("yColumn",request.path("yColumn"));
+                return new TargetBinding(uuid(rs,"target_id"),rs.getString("target_code"),rs.getString("name"),rs.getString("performance_project"),
+                    rs.getString("target_status"),rs.getString("value_type"),uuid(rs,"target_version_id"),rs.getInt("version_no"),rs.getString("unit"),
+                    node(rs,"classes_jsonb"),definition,node(rs,"observation_semantics_jsonb"),rs.getString("target_hash"),uuid(rs,"model_id"),
+                    uuid(rs,"model_target_version_id"),uuid(rs,"input_scheme_id"),rs.getString("contract_version"),node(rs,"metrics_jsonb"),
+                    node(rs,"applicability_domain_jsonb"),rs.getString("object_key"),rs.getString("artifact_sha"),rs.getString("media_type"),
+                    node(rs,"frozen_target"),scheme,WorkbenchFormulaSupport.dictionary(json,scheme,request.path("rows")),uuid(rs,"workbench_run_id"));
+            },args.toArray());
     }
-
-    public List<TargetCatalog> targetCatalog(UUID org) {
+    public List<TargetCatalog> targetCatalog(UUID org){
         return jdbc.query("""
-            SELECT t.id,t.target_code,t.name,t.performance_project,t.value_type,t.status,
-                   mv.id model_id,t.current_quality_policy_version_id,mv.production_eligible,mv.data_nature,
-                   coalesce((mv.model_card_jsonb->>'testOnlySimulation')::boolean,false) test_only_simulation,
-                   coalesce(mv.model_card_jsonb->>'sourceDataNature',mv.data_nature) source_data_nature,
-                   coalesce(t.current_domain_policy_version_id,mv.domain_policy_version_id) domain_policy_version_id,
-                   tv.unit,coalesce(tv.definition_jsonb->>'testMethod',tv.observation_semantics_jsonb->>'testMethod') test_method,
-                   coalesce(tv.definition_jsonb->>'testStage',tv.observation_semantics_jsonb->>'testStage') test_stage
-            FROM ai.prediction_target t
-            LEFT JOIN ai.model_version mv ON mv.organization_id=t.organization_id AND mv.target_id=t.id AND mv.status='ACTIVE'
-            LEFT JOIN ai.target_version tv ON tv.organization_id=t.organization_id AND tv.id=t.current_version_id
-            WHERE t.organization_id=? ORDER BY t.performance_project,t.name,t.id
-            """,(rs,n)->new TargetCatalog(uuid(rs,"id"),rs.getString("target_code"),rs.getString("name"),
-                rs.getString("performance_project"),rs.getString("value_type"),rs.getString("status"),
-                uuid(rs,"model_id"),uuid(rs,"current_quality_policy_version_id"),uuid(rs,"domain_policy_version_id"),
-                rs.getBoolean("production_eligible"),rs.getString("data_nature"),rs.getBoolean("test_only_simulation"),rs.getString("source_data_nature"),
-                rs.getString("unit"),rs.getString("test_method"),rs.getString("test_stage")),org);
+            SELECT t.id,t.target_code,t.name,t.performance_project,t.value_type,t.status,mv.id model_id,
+                tv.unit,tv.definition_jsonb->>'testMethod' test_method,tv.definition_jsonb->>'testStage' test_stage
+            FROM ai.prediction_target t JOIN ai.target_version tv ON tv.organization_id=t.organization_id AND tv.id=t.current_version_id
+            LEFT JOIN ai.model_version mv ON mv.organization_id=t.organization_id AND mv.target_id=t.id
+                AND mv.status='ACTIVE' AND mv.contract_version='modeling-workbench.v1' AND mv.workbench_run_id IS NOT NULL
+            WHERE t.organization_id=? AND EXISTS(SELECT 1 FROM ai.model_version registered WHERE registered.organization_id=t.organization_id
+                AND registered.target_id=t.id AND registered.contract_version='modeling-workbench.v1' AND registered.workbench_run_id IS NOT NULL)
+            ORDER BY t.name,t.id
+            """,(rs,n)->new TargetCatalog(uuid(rs,"id"),rs.getString("target_code"),rs.getString("name"),rs.getString("performance_project"),
+                rs.getString("value_type"),rs.getString("status"),uuid(rs,"model_id"),rs.getString("unit"),rs.getString("test_method"),rs.getString("test_stage")),org);
     }
-
-    public Optional<MaterialIdentity> material(String id) {
-        try {
-            return jdbc.query("SELECT id,code,name,category FROM mdm.material WHERE id=? AND status<>'RETIRED'",
-                    (rs,n)->new MaterialIdentity(uuid(rs,"id"),rs.getString("code"),rs.getString("name"),rs.getString("category")),UUID.fromString(id)).stream().findFirst();
-        } catch (IllegalArgumentException ignored) { return Optional.empty(); }
-    }
-
     public boolean insertRunning(UUID id, UUID org, UUID user, String key, String requestId,
                                  String requestHash, JsonNode request, JsonNode bindings) {
         return jdbc.update("""
@@ -166,52 +125,18 @@ public class PredictionRepository {
     }
     private Instant instant(ResultSet rs,String name)throws SQLException{var t=rs.getTimestamp(name);return t==null?null:t.toInstant();}
 
-    private PredictionContracts.QualityPolicyView qualityPolicy(ResultSet rs,int n)throws SQLException{
-        var config=node(rs,"configuration_jsonb");List<PredictionContracts.QualityRule> rules;
-        try{rules=json.convertValue(config.path("rules"),new TypeReference<>(){});}catch(Exception e){rules=List.of();}
-        return new PredictionContracts.QualityPolicyView(uuid(rs,"id"),uuid(rs,"target_id"),rs.getInt("version_no"),
-                rs.getString("status"),rs.getString("kind"),config.path("defaultTrustLevel").asText(),
-                config.path("defaultExplanation").asText(),rules,
-                rs.getString("policy_hash"),rs.getLong("revision"),instant(rs,"published_at"),instant(rs,"created_at"));
-    }
-    private PredictionContracts.DomainPolicyView domainPolicy(ResultSet rs,int n)throws SQLException{
-        return new PredictionContracts.DomainPolicyView(uuid(rs,"id"),uuid(rs,"target_id"),rs.getInt("version_no"),
-                rs.getString("status"),rs.getString("kind"),node(rs,"configuration_jsonb"),rs.getString("policy_hash"),
-                rs.getLong("revision"),instant(rs,"published_at"),instant(rs,"created_at"));
-    }
-    private TargetBinding binding(ResultSet rs,int n)throws SQLException{return new TargetBinding(
-            uuid(rs,"target_id"),rs.getString("target_code"),rs.getString("name"),rs.getString("performance_project"),
-            rs.getString("target_status"),rs.getString("value_type"),uuid(rs,"current_version_id"),
-            rs.getInt("target_version_no"),rs.getString("unit"),node(rs,"classes_jsonb"),node(rs,"definition_jsonb"),
-            node(rs,"observation_semantics_jsonb"),rs.getString("target_hash"),uuid(rs,"model_id"),
-            uuid(rs,"model_target_version_id"),uuid(rs,"model_input_scheme_id"),uuid(rs,"training_snapshot_id"),
-            rs.getString("contract_version"),node(rs,"metrics_jsonb"),node(rs,"applicability_domain_jsonb"),
-            rs.getBoolean("production_eligible"),rs.getString("data_nature"),
-            rs.getBoolean("model_test_only_simulation"),rs.getString("model_source_data_nature"),rs.getString("object_key"),
-            rs.getString("artifact_sha"),rs.getString("media_type"),node(rs,"target_definition_jsonb"),
-            node(rs,"input_scheme_jsonb"),node(rs,"material_dictionary_jsonb"),node(rs,"preprocessing_jsonb"),
-            uuid(rs,"quality_policy_id"),rs.getInt("quality_policy_version"),rs.getString("quality_policy_hash"),
-            node(rs,"quality_policy_jsonb"),rs.getString("quality_policy_status"),uuid(rs,"domain_policy_id"),
-            rs.getInt("domain_policy_version"),rs.getString("domain_policy_hash"),node(rs,"domain_policy_jsonb"),
-            rs.getString("domain_policy_status"));}
     private PredictionRow prediction(ResultSet rs,int n)throws SQLException{return new PredictionRow(uuid(rs,"id"),
             rs.getString("request_id"),rs.getString("request_hash"),rs.getString("execution_status"),
             rs.getString("outcome_status"),(Integer)rs.getObject("terminal_http_status"),node(rs,"terminal_response_jsonb"),
             node(rs,"target_results_jsonb"),rs.getLong("revision"),instant(rs,"created_at"),instant(rs,"completed_at"));}
 
     public record TargetCatalog(UUID id,String code,String name,String category,String valueType,String status,
-                                UUID modelId,UUID qualityPolicyId,UUID domainPolicyId,
-                                boolean productionEligible,String dataNature,boolean testOnlySimulation,
-                                String sourceDataNature,String unit,String testMethod,String testStage) { }
-    public record MaterialIdentity(UUID id,String code,String name,String category) { }
+        UUID modelId,String unit,String testMethod,String testStage) { }
     public record TargetBinding(UUID targetId,String targetCode,String targetName,String category,String targetStatus,
         String valueType,UUID targetVersionId,int targetVersion,String unit,JsonNode classes,JsonNode definition,
         JsonNode observationSemantics,String targetHash,UUID modelId,UUID modelTargetVersionId,UUID modelInputSchemeId,
-        UUID snapshotId,String contractVersion,JsonNode metrics,JsonNode modelDomain,boolean productionEligible,
-        String dataNature,boolean testOnlySimulation,String sourceDataNature,String artifactKey,String artifactSha,String artifactMediaType,JsonNode frozenTarget,
-        JsonNode frozenInputScheme,JsonNode frozenDictionary,JsonNode frozenPreprocessing,UUID qualityPolicyId,
-        int qualityPolicyVersion,String qualityPolicyHash,JsonNode qualityPolicy,String qualityPolicyStatus,
-        UUID domainPolicyId,int domainPolicyVersion,String domainPolicyHash,JsonNode domainPolicy,String domainPolicyStatus) { }
+        String contractVersion,JsonNode metrics,JsonNode modelDomain,String artifactKey,String artifactSha,String artifactMediaType,
+        JsonNode frozenTarget,JsonNode frozenInputScheme,JsonNode frozenDictionary,UUID workbenchRunId) { }
     public record PredictionRow(UUID id,String requestId,String requestHash,String executionStatus,String outcomeStatus,
                                 Integer terminalHttpStatus,JsonNode terminalResponse,JsonNode targetResults,long revision,
                                 Instant createdAt,Instant completedAt) { }

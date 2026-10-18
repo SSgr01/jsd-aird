@@ -6,11 +6,8 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.ai.formula.application.FormulaModelArtifactStore;
 import com.jsd.aird.ai.rnd.api.AiRndContracts.PredictionRequest;
-import com.jsd.aird.ai.rnd.SyntheticTestAuthorization;
-import com.jsd.aird.ai.rnd.formula.FormulaNormalizationService;
-import com.jsd.aird.ai.rnd.catalog.RegisteredUvpuTargetCatalog;
 import com.jsd.aird.ai.rnd.modeling.ConfigurationHashing;
-import com.jsd.aird.ai.rnd.training.FormulaModelV2Client;
+import com.jsd.aird.ai.rnd.compute.ModelComputeClient;
 import com.jsd.aird.ops.application.port.AuditLogFacade;
 import com.jsd.aird.platform.web.RequestIdHolder;
 import com.jsd.aird.shared.error.ApiErrorCode;
@@ -21,10 +18,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
-import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -44,63 +39,54 @@ public class PredictionService {
     private static final String CONTRACT="ai-rnd.v1";
     private final PredictionRepository repository;
     private final FormulaModelArtifactStore artifacts;
-    private final FormulaModelV2Client compute;
+    private final ModelComputeClient compute;
     private final ConfigurationHashing hashing;
-    private final QualityPolicyEvaluator quality;
     private final ObjectMapper json;
     private final AuditLogFacade audit;
-    private final FormulaNormalizationService formulaNormalization;
     private final TransactionTemplate transactions;
     private final Duration staleAfter;
-    private final SyntheticTestAuthorization syntheticTestAuthorization;
 
     public PredictionService(PredictionRepository repository, FormulaModelArtifactStore artifacts,
-                             FormulaModelV2Client compute, ConfigurationHashing hashing,
-                             QualityPolicyEvaluator quality, ObjectMapper json, AuditLogFacade audit,
-                             FormulaNormalizationService formulaNormalization,
+                             ModelComputeClient compute, ConfigurationHashing hashing,
+                             ObjectMapper json, AuditLogFacade audit,
                              PlatformTransactionManager tx,
-                              @Value("${app.ai.rnd.prediction-stale-after:PT3M}") Duration staleAfter,
-                              SyntheticTestAuthorization syntheticTestAuthorization) {
+                              @Value("${app.ai.rnd.prediction-stale-after:PT3M}") Duration staleAfter) {
         this.repository=repository;this.artifacts=artifacts;this.compute=compute;this.hashing=hashing;
-        this.quality=quality;this.json=json;this.audit=audit;this.transactions=new TransactionTemplate(tx);
-        this.formulaNormalization=formulaNormalization;
-        this.staleAfter=staleAfter;this.syntheticTestAuthorization=syntheticTestAuthorization;
+        this.json=json;this.audit=audit;this.transactions=new TransactionTemplate(tx);
+        this.staleAfter=staleAfter;
     }
 
     public JsonNode context(List<UUID> targetIds) {
-        var actor=actor();var root=json.createObjectNode().put("simulationAuthorized",syntheticTestAuthorization.enabled());var catalog=json.createArrayNode();
+        var actor=actor();var root=json.createObjectNode();var catalog=json.createArrayNode();
         var catalogRows=repository.targetCatalog(actor.organizationId());
         var catalogBindings=new LinkedHashMap<UUID,PredictionRepository.TargetBinding>();
         for(var binding:repository.targetBindings(actor.organizationId(),catalogRows.stream().map(PredictionRepository.TargetCatalog::id).toList()))catalogBindings.put(binding.targetId(),binding);
         for(var item:catalogRows){
             var binding=catalogBindings.get(item.id());
-            var unavailable=binding==null?reasons(item.modelId(),item.dataNature(),item.productionEligible(),item.testOnlySimulation()):gateAvailability(binding);
-            var formalAvailable=unavailable.isEmpty()&&item.modelId()!=null&&item.productionEligible()&&"REAL".equals(item.dataNature())&&!item.testOnlySimulation();
-            var simulationAvailable=unavailable.isEmpty()&&item.modelId()!=null&&syntheticTestAuthorization.enabled()
-                    &&(item.testOnlySimulation()||"SYNTHETIC".equals(item.sourceDataNature()));
+            var unavailable=binding==null?reasons(item.modelId()):gateAvailability(binding);
+            var formalAvailable=unavailable.isEmpty()&&item.modelId()!=null;
             var value=json.createObjectNode().put("targetId",item.id().toString()).put("code",item.code())
                     .put("name",item.name()).put("category",item.category()).put("valueType",item.valueType())
                     .put("targetStatus",item.status()).put("formalPredictionAvailable",formalAvailable)
-                    .put("simulationPredictionAvailable",simulationAvailable).put("predictionAvailable",formalAvailable||simulationAvailable);
+                    .put("predictionAvailable",formalAvailable);
             if(binding!=null&&binding.definition().has("modelSource"))value.set("modelSource",binding.definition().path("modelSource"));
             if(item.unit()!=null)value.put("unit",item.unit());
             if(item.testMethod()!=null)value.put("testMethod",item.testMethod());
             if(item.testStage()!=null)value.put("testStage",item.testStage());
             value.set("unavailableReasons",json.valueToTree(unavailable));catalog.add(value);
         }
-        RegisteredUvpuTargetCatalog.append(json, catalog);
         root.set("targets",catalog);
         if(targetIds==null||targetIds.isEmpty()){root.set("selected",json.createArrayNode());root.set("requiredInputs",json.createArrayNode());root.set("materials",json.createArrayNode());return root;}
         var bindings=repository.targetBindings(actor.organizationId(),distinct(targetIds));
         var selected=json.createArrayNode();var inputs=new LinkedHashMap<String,JsonNode>();var materials=new LinkedHashMap<String,JsonNode>();
         for(var binding:bindings){var entry=bindingSummary(binding);selected.add(entry);
             binding.frozenInputScheme().path("fields").forEach(field->{if(!"COMPOSITION".equals(field.path("valueType").asText()))mergeInputField(inputs,field,binding);});
-            binding.frozenDictionary().path("materials").forEach(material->{var enriched=material.deepCopy();repository.material(material.path("materialId").asText()).ifPresent(m->{if(enriched instanceof ObjectNode o){o.put("code",m.code());o.put("name",m.name());o.put("category",m.category());}});materials.putIfAbsent(material.path("materialId").asText(),enriched);});}
+        }
         for(var field:inputs.values()) {
             if(!(field instanceof ObjectNode object)||!"NUMBER".equals(field.path("valueType").asText()))continue;
             var ranges=json.createArrayNode();var feature="input:"+field.path("code").asText();
             for(var binding:bindings){var domain=binding.modelDomain();if(domain==null)continue;var names=domain.path("features");
-                for(int index=0;index<names.size();index++)if((feature.equals(names.path(index).asText())||("modeling-workbench.v1".equals(binding.contractVersion())&&field.path("code").asText().equals(names.path(index).asText())))&&domain.path("minimum").path(index).isNumber()&&domain.path("maximum").path(index).isNumber()){
+                for(int index=0;index<names.size();index++)if((feature.equals(names.path(index).asText())||field.path("code").asText().equals(names.path(index).asText()))&&domain.path("minimum").path(index).isNumber()&&domain.path("maximum").path(index).isNumber()){
                     var range=json.createObjectNode().put("targetId",binding.targetId().toString()).put("targetName",binding.targetName());
                     range.set("minimum",domain.path("minimum").path(index));range.set("maximum",domain.path("maximum").path(index));ranges.add(range);
                 }
@@ -111,85 +97,9 @@ public class PredictionService {
         root.set("configurationConflicts",conflicts(bindings));return root;
     }
 
-    @Transactional(readOnly=true)
-    public List<QualityPolicyView> qualityPolicies(UUID targetId){requireTarget(targetId);return repository.qualityPolicies(actor().organizationId(),targetId);}
-
-    @Transactional
-    public QualityPolicyView createQualityPolicy(UUID targetId,QualityPolicyCommand command,String idempotencyKey){
-        var a=actor();requireKey(idempotencyKey);validateQuality(command);lockTarget(a,targetId,command.expectedRevision());
-        var operation="CREATE_QUALITY_POLICY:"+targetId;var request=json.valueToTree(command);var hash=hashing.hash(request);
-        var existing=receipt(a,operation,idempotencyKey,hash);if(existing!=null)return json.convertValue(existing,QualityPolicyView.class);
-        var next=repository.jdbc().queryForObject("SELECT coalesce(max(version_no),0)+1 FROM ai.modeling_policy_version WHERE organization_id=? AND target_id=? AND kind='QUALITY'",Integer.class,a.organizationId(),targetId);
-        var config=json.createObjectNode().put("defaultTrustLevel",command.defaultTrustLevel()).put("defaultExplanation",command.defaultExplanation());config.set("rules",json.valueToTree(command.rules()));
-        var id=UUID.randomUUID();var policyHash=hashing.hash(config);
-        repository.jdbc().update("""
-            INSERT INTO ai.modeling_policy_version(id,organization_id,target_id,version_no,status,kind,
-                qualification_jsonb,validation_jsonb,training_jsonb,configuration_jsonb,policy_hash,created_by)
-            VALUES(?,?,?,?,'DRAFT','QUALITY','{}'::jsonb,'{}'::jsonb,'{}'::jsonb,?,?,?)
-            """,id,a.organizationId(),targetId,next,repository.pg(config),policyHash,a.userId());
-        bumpTarget(a,targetId,command.expectedRevision());var view=repository.qualityPolicy(a.organizationId(),id).orElseThrow();
-        saveReceipt(a,operation,idempotencyKey,hash,id,json.valueToTree(view));audit.append(a.organizationId(),a.userId(),"AI_QUALITY_POLICY_CREATED","AI_MODELING_POLICY",id,config);return view;
-    }
-
-    @Transactional
-    public QualityPolicyView publishQualityPolicy(UUID id,PublishPolicyCommand command,String idempotencyKey){
-        var a=actor();requireKey(idempotencyKey);var current=repository.qualityPolicy(a.organizationId(),id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"质量策略不存在"));
-        if(!"DRAFT".equals(current.status()))throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"只有草稿质量策略可以发布");
-        lockTarget(a,current.targetId(),command.expectedRevision());var operation="PUBLISH_QUALITY_POLICY:"+id;var hash=hashing.hash(command);
-        var existing=receipt(a,operation,idempotencyKey,hash);if(existing!=null)return json.convertValue(existing,QualityPolicyView.class);
-        repository.jdbc().update("UPDATE ai.modeling_policy_version SET status='PUBLISHED',published_at=now(),published_by=? WHERE organization_id=? AND id=? AND kind='QUALITY' AND status='DRAFT'",a.userId(),a.organizationId(),id);
-        var updated=repository.jdbc().update("""
-            UPDATE ai.prediction_target SET current_quality_policy_version_id=?,revision=revision+1,updated_by=?,updated_at=now()
-            WHERE organization_id=? AND id=? AND revision=?
-            """,id,a.userId(),a.organizationId(),current.targetId(),command.expectedRevision());
-        if(updated!=1)throw new ApiException(ApiErrorCode.VERSION_CONFLICT);
-        var view=repository.qualityPolicy(a.organizationId(),id).orElseThrow();saveReceipt(a,operation,idempotencyKey,hash,id,json.valueToTree(view));
-        audit.append(a.organizationId(),a.userId(),"AI_QUALITY_POLICY_PUBLISHED","AI_MODELING_POLICY",id,json.valueToTree(command));return view;
-    }
-
-    @Transactional(readOnly=true)
-    public List<DomainPolicyView> domainPolicies(UUID targetId){requireTarget(targetId);return repository.domainPolicies(actor().organizationId(),targetId);}
-
-    @Transactional
-    public DomainPolicyView createDomainPolicy(UUID targetId,DomainPolicyCommand command,String idempotencyKey){
-        var a=actor();requireKey(idempotencyKey);validateDomain(command);lockTarget(a,targetId,command.expectedRevision());
-        var operation="CREATE_DOMAIN_POLICY:"+targetId;var hash=hashing.hash(command);
-        var existing=receipt(a,operation,idempotencyKey,hash);if(existing!=null)return json.convertValue(existing,DomainPolicyView.class);
-        var next=repository.jdbc().queryForObject("SELECT coalesce(max(version_no),0)+1 FROM ai.modeling_policy_version WHERE organization_id=? AND target_id=? AND kind='DOMAIN'",Integer.class,a.organizationId(),targetId);
-        var config=(ObjectNode)command.configuration().deepCopy();var policyHash=hashing.hash(config);var id=UUID.randomUUID();
-        repository.jdbc().update("""
-            INSERT INTO ai.modeling_policy_version(id,organization_id,target_id,version_no,status,kind,
-                qualification_jsonb,validation_jsonb,training_jsonb,configuration_jsonb,policy_hash,created_by)
-            VALUES(?,?,?,?,'DRAFT','DOMAIN','{}'::jsonb,'{}'::jsonb,'{}'::jsonb,?,?,?)
-            """,id,a.organizationId(),targetId,next,repository.pg(config),policyHash,a.userId());
-        bumpTarget(a,targetId,command.expectedRevision());var view=repository.domainPolicy(a.organizationId(),id).orElseThrow();
-        saveReceipt(a,operation,idempotencyKey,hash,id,json.valueToTree(view));
-        audit.append(a.organizationId(),a.userId(),"AI_DOMAIN_POLICY_CREATED","AI_MODELING_POLICY",id,config);return view;
-    }
-
-    @Transactional
-    public DomainPolicyView publishDomainPolicy(UUID id,PublishPolicyCommand command,String idempotencyKey){
-        var a=actor();requireKey(idempotencyKey);var current=repository.domainPolicy(a.organizationId(),id)
-                .orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"适用域策略不存在"));
-        if(!"DRAFT".equals(current.status()))throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"只有草稿适用域策略可以发布");
-        lockTarget(a,current.targetId(),command.expectedRevision());var operation="PUBLISH_DOMAIN_POLICY:"+id;var hash=hashing.hash(command);
-        var existing=receipt(a,operation,idempotencyKey,hash);if(existing!=null)return json.convertValue(existing,DomainPolicyView.class);
-        repository.jdbc().update("UPDATE ai.modeling_policy_version SET status='PUBLISHED',published_at=now(),published_by=? WHERE organization_id=? AND id=? AND kind='DOMAIN' AND status='DRAFT'",a.userId(),a.organizationId(),id);
-        var updated=repository.jdbc().update("""
-            UPDATE ai.prediction_target SET current_domain_policy_version_id=?,revision=revision+1,updated_by=?,updated_at=now()
-            WHERE organization_id=? AND id=? AND revision=?
-            """,id,a.userId(),a.organizationId(),current.targetId(),command.expectedRevision());
-        if(updated!=1)throw new ApiException(ApiErrorCode.VERSION_CONFLICT);
-        var view=repository.domainPolicy(a.organizationId(),id).orElseThrow();saveReceipt(a,operation,idempotencyKey,hash,id,json.valueToTree(view));
-        audit.append(a.organizationId(),a.userId(),"AI_DOMAIN_POLICY_PUBLISHED","AI_MODELING_POLICY",id,json.valueToTree(command));return view;
-    }
-
     public PredictionHttpResult predict(PredictionRequest request,String idempotencyKey){
         var a=actor();requireKey(idempotencyKey);validateRequest(request);var started=System.nanoTime();
         var requestNode=(ObjectNode)json.valueToTree(request);
-        var formulaResult=request.formula()==null?null:formulaNormalization.requireValid(requestNode.path("formula"));
-        if (formulaResult != null) requestNode.set("formula", formulaResult.formula());
-        var effectiveRequest=json.convertValue(requestNode, PredictionRequest.class);
         var targetIds=request.targets().stream().map(x->x.targetId()).toList();var bindings=repository.targetBindings(a.organizationId(),distinct(targetIds));
         var frozen=bindingDocument(bindings);var normalized=normalized(requestNode);var requestHash=hashing.hash(normalized);
         var id=UUID.randomUUID();var requestId=RequestIdHolder.currentOrUnknown();
@@ -199,7 +109,7 @@ public class PredictionService {
             if("RUNNING".equals(old.executionStatus()))return new PredictionHttpResult(202,running(old.id(),old.requestId()));
             return new PredictionHttpResult(old.terminalHttpStatus(),old.terminalResponse());}
         audit.append(a.organizationId(),a.userId(),"AI_PERFORMANCE_PREDICTION_STARTED","AI_PREDICTION",id,frozen);
-        var result=execute(id,requestId,effectiveRequest,requestNode,bindings,started);
+        var result=execute(id,requestId,request,bindings);
         var row=repository.byId(a.organizationId(),a.userId(),id).orElseThrow();
         if("RUNNING".equals(row.executionStatus())){
             var duration=Duration.ofNanos(System.nanoTime()-started).toMillis();var response=result.body();
@@ -218,10 +128,10 @@ public class PredictionService {
     @Scheduled(fixedDelayString="${app.ai.rnd.prediction-reconcile-delay:PT1M}")
     public void reconcileStale(){repository.failStale(Instant.now().minus(staleAfter));}
 
-    private PredictionHttpResult execute(UUID id,String requestId,PredictionRequest request,JsonNode normalizedRequest,List<PredictionRepository.TargetBinding> bindings,long started){
+    private PredictionHttpResult execute(UUID id,String requestId,PredictionRequest request,List<PredictionRepository.TargetBinding> bindings){
         var byTarget=new HashMap<UUID,PredictionRepository.TargetBinding>();bindings.forEach(x->byTarget.put(x.targetId(),x));
         var results=json.createArrayNode();var scoreBindings=json.createArrayNode();var modelToBinding=new HashMap<String,PredictionRepository.TargetBinding>();
-        var warnings=formulaWarnings(request, normalizedRequest);var total=formulaTotal(request);
+        var warnings=json.createArrayNode();
         for(var wanted:request.targets()){
             var b=byTarget.get(wanted.targetId());if(b==null){results.add(blocked(wanted.targetId(),null,"TARGET_NOT_FOUND","预测目标不存在",json.createObjectNode()));continue;}
             var reason=gate(b,wanted.expectedModelVersionId(),request);
@@ -231,20 +141,18 @@ public class PredictionService {
         }
         if(!scoreBindings.isEmpty()){
             var score=json.createObjectNode().put("contractVersion","formula-model.v2").put("requestId",requestId).put("seed",0).put("runId",id.toString());
-            if(request.formula()==null) score.putNull("formula"); else score.set("formula",formulaNormalization.forModelCompute(normalizedRequest.path("formula")));
             score.put("allowExtrapolation",true);
             score.set("inputs",json.valueToTree(request.inputs()));score.set("modelBindings",scoreBindings);
             try{var computed=compute.score(score);var returned=new HashSet<String>();
                 for(var item:computed.path("results")){var modelId=item.path("modelVersionId").asText();returned.add(modelId);var b=modelToBinding.get(modelId);
-                    if(b==null)continue;if("SUCCEEDED".equals(item.path("status").asText()))results.add(success(b,item,warnings,total,request));
+                    if(b==null)continue;if("SUCCEEDED".equals(item.path("status").asText()))results.add(success(b,item));
                     else if("BLOCKED".equals(item.path("status").asText()))results.add(rewriteTarget(item,b.targetId()));
                     else results.add(rewriteTarget(item,b.targetId()));}
                 for(var entry:modelToBinding.entrySet())if(!returned.contains(entry.getKey()))results.add(failed(entry.getValue().targetId(),entry.getValue().modelId(),"MODEL_RESPONSE_MISSING","计算服务未返回该目标结果",json.createObjectNode()));
             }catch(Exception exception){for(var b:modelToBinding.values())results.add(failed(b.targetId(),b.modelId(),"COMPUTE_UNAVAILABLE","计算服务暂不可用",json.createObjectNode().put("message",String.valueOf(exception.getMessage()))));}
         }
         var count=results.size();var succeeded=0;var failed=0;for(var x:results){if("SUCCEEDED".equals(x.path("status").asText()))succeeded++;if("FAILED".equals(x.path("status").asText()))failed++;}
-        var simulation=bindings.stream().filter(b->request.targets().stream().anyMatch(w->w.targetId().equals(b.targetId())))
-                .anyMatch(b->syntheticTestAuthorization.isSimulation(b.sourceDataNature(),b.testOnlySimulation()));
+        var simulation=false;
         var body=json.createObjectNode().put("predictionId",id.toString()).put("requestId",requestId)
                 .put("simulation",simulation).put("predictionMode",simulation?"SIMULATION":"FORMAL");
         body.set("results",results);body.set("warnings",warnings);
@@ -253,121 +161,30 @@ public class PredictionService {
         return new PredictionHttpResult(http,body);
     }
 
-    private ObjectNode success(PredictionRepository.TargetBinding b,JsonNode computed,ArrayNode warnings,BigDecimal total,PredictionRequest request){
+    private ObjectNode success(PredictionRepository.TargetBinding b,JsonNode computed){
         var result=json.createObjectNode().put("targetId",b.targetId().toString()).put("targetName",b.targetName()).put("status","SUCCEEDED")
-                .put("modelVersionId",b.modelId().toString()).put("targetVersionId",b.targetVersionId().toString())
-                .put("dataNature",b.dataNature()).put("sourceDataNature",b.sourceDataNature())
-                .put("productionEligible",b.productionEligible()).put("testOnlySimulation",b.testOnlySimulation())
-                .put("simulation",syntheticTestAuthorization.isSimulation(b.sourceDataNature(),b.testOnlySimulation()))
-                .put("inputSchemeId",b.modelInputSchemeId().toString()).put("snapshotId",Objects.toString(b.snapshotId(),""));
-        var combinedWarnings=warnings.deepCopy();
-        if(computed.path("warnings").isArray()) computed.path("warnings").forEach(combinedWarnings::add);
+            .put("modelVersionId",b.modelId().toString()).put("targetVersionId",b.targetVersionId().toString())
+            .put("inputSchemeId",b.modelInputSchemeId().toString()).put("workbenchRunId",b.workbenchRunId().toString());
+        var combinedWarnings=json.createArrayNode();if(computed.path("warnings").isArray())computed.path("warnings").forEach(combinedWarnings::add);
         result.set("prediction",computed.path("result"));result.set("applicability",computed.path("applicability"));result.set("warnings",combinedWarnings);
-        var required=0;var present=0;for(var field:b.frozenInputScheme().path("fields"))if(field.path("required").asBoolean()){required++;if("COMPOSITION".equals(field.path("valueType").asText())){if(request.formula()!=null&&request.formula().compositionComplete())present++;}else if(request.inputs().get(field.path("code").asText())!=null&&!request.inputs().get(field.path("code").asText()).isNull())present++;}
-        var coverage=required==0?1d:(double)present/required;var codes=new ArrayList<String>();combinedWarnings.forEach(x->codes.add(x.path("code").asText()));
-        var evaluated=quality.evaluate(b.qualityPolicy(),b.metrics(),computed.path("applicability").path("status").asText(),coverage,codes,total);
-        result.set("quality",json.createObjectNode().put("level",evaluated.level()).put("explanation",evaluated.explanation()).put("policyVersionId",Objects.toString(b.qualityPolicyId(),"")).put("evidenceCoverage",coverage));
-        if("OUT_OF_DOMAIN".equals(computed.path("applicability").path("status").asText())) {
-            ((ObjectNode)result.path("quality")).put("level","LOW").put("explanation","超出训练数据范围，预测结果需实验验证");
-        }
         result.set("evidence",evidence(b));return result;
     }
-    private ObjectNode evidence(PredictionRepository.TargetBinding b){return json.createObjectNode().put("modelVersionId",b.modelId().toString()).put("targetVersionId",b.targetVersionId().toString()).put("inputSchemeId",b.modelInputSchemeId().toString()).put("snapshotId",Objects.toString(b.snapshotId(),"")).put("domainPolicyVersionId",Objects.toString(b.domainPolicyId(),"")).put("qualityPolicyVersionId",Objects.toString(b.qualityPolicyId(),""));}
+    private ObjectNode evidence(PredictionRepository.TargetBinding b){return json.createObjectNode().put("modelVersionId",b.modelId().toString()).put("workbenchRunId",b.workbenchRunId().toString());}
     private JsonNode gate(PredictionRepository.TargetBinding b,UUID expected,PredictionRequest request){
         if(!"ACTIVE".equals(b.targetStatus())||b.targetVersionId()==null)return blocked(b.targetId(),null,"TARGET_NOT_READY","预测目标尚未发布",json.createObjectNode());
         if(!modelAvailable(b))return blocked(b.targetId(),null,"NO_ACTIVE_MODEL","目标尚无可用于当前环境的模型",json.createObjectNode());
         if(expected!=null&&!expected.equals(b.modelId()))return blocked(b.targetId(),b.modelId(),"MODEL_VERSION_CHANGED","模型版本已变化，请刷新后重试",json.createObjectNode().put("currentModelVersionId",b.modelId().toString()));
-        if(!Set.of("formula-model.v2","modeling-workbench.v1").contains(b.contractVersion()))return failed(b.targetId(),b.modelId(),"MODEL_CONTRACT_MISMATCH","模型契约版本不受支持",json.createObjectNode());
+        if(!"modeling-workbench.v1".equals(b.contractVersion()))return failed(b.targetId(),b.modelId(),"MODEL_CONTRACT_MISMATCH","模型契约版本不受支持",json.createObjectNode());
         if(!domainReady(b))return blocked(b.targetId(),b.modelId(),"MODEL_DOMAIN_UNAVAILABLE","模型训练信息不完整，请重新训练后重试",json.createObjectNode());
-        if(formulaRequired(b)){
-            var inputProblem=formulaProblem(request);
-            if(inputProblem!=null)return blocked(b.targetId(),b.modelId(),inputProblem,
-                    "FORMULA_AMOUNT_MISSING".equals(inputProblem)?"存在尚未填写用量的材料":"请确认已录入全部配方成分",
-                    json.createObjectNode());
-        }
+
         var missing=json.createArrayNode();for(var field:b.frozenInputScheme().path("fields"))if(field.path("required").asBoolean()&&!"COMPOSITION".equals(field.path("valueType").asText())&&(request.inputs().get(field.path("code").asText())==null||request.inputs().get(field.path("code").asText()).isNull()))missing.add(field.path("code").asText());
         if(!missing.isEmpty())return blocked(b.targetId(),b.modelId(),"MISSING_REQUIRED_X","缺少模型要求的输入字段",json.createObjectNode().set("missingFields",missing));
-        if(formulaRequired(b)){
-            var known=new HashSet<String>();b.frozenDictionary().path("materials").forEach(x->known.add(x.path("materialId").asText()));
-            var unknown=json.createArrayNode();request.formula().components().forEach(x->{if(x.materialId()!=null&&!known.contains(x.materialId().toString()))unknown.add(x.materialId().toString());});
-            if(!unknown.isEmpty())return blocked(b.targetId(),b.modelId(),"MATERIAL_NOT_IN_MODEL","材料已识别，但当前模型未覆盖",json.createObjectNode().set("materialIds",unknown));
-        }
+
         return null;
     }
-    private boolean domainReady(PredictionRepository.TargetBinding b){
-        var merged=mergedDomain(b);
-        // Accept both the frozen v2 domain shape and the current development
-        // bundle shape.  The latter names numeric/categorical feature lists
-        // explicitly and stores the boundary thresholds as numbers.
-        var legacy=merged.has("features")&&merged.has("minimum")&&merged.has("maximum")&&merged.path("nearBoundaryRatio").isNumber();
-        var current=merged.path("numeric_features").isArray()
-                && merged.path("categorical_features").isArray()
-                && merged.path("near_boundary_threshold").isNumber()
-                && merged.path("out_of_domain_threshold").isNumber();
-        return legacy||current;
-    }
-    private ObjectNode scoreBinding(PredictionRepository.TargetBinding b){var ref=artifacts.readRef(b.artifactKey(),b.artifactKey(),b.artifactSha());var out=json.createObjectNode();out.set("target",scoreTarget(b));out.put("modelVersionId",b.modelId().toString());out.set("modelBundle",json.createObjectNode().put("url",ref.url()).put("sha256",ref.sha256()));out.set("inputScheme",v2InputScheme(b));out.set("materialDictionary",v2MaterialDictionary(b.frozenDictionary()));out.set("preprocessing",v2Preprocessing(b.frozenPreprocessing()));out.set("applicabilityDomain",mergedDomain(b));return out;}
-    private ObjectNode v2InputScheme(PredictionRepository.TargetBinding b){
-        var source=b.frozenInputScheme();var out=source!=null&&source.isObject()?((ObjectNode)source).deepCopy():json.createObjectNode();
-        // The database keeps display/authoring metadata on the input scheme,
-        // but formula-model.v2 accepts only the frozen versioned reference,
-        // targetVersionId and typed fields.  In particular,
-        // materialDictionaryVersionId belongs to the Java-side binding and
-        // must not cross the Python scoring boundary.
-        out.remove("name");out.remove("code");out.remove("status");out.remove("targetId");out.remove("materialDictionaryVersionId");
-        out.put("targetVersionId",b.targetVersionId().toString());var fields=json.createArrayNode();
-        if(source!=null)source.path("fields").forEach(raw->{var field=json.createObjectNode();var code=raw.path("code").asText("");if(code.isBlank())return;field.put("fieldVersionId",raw.path("fieldVersionId").asText("legacy-field-"+code));field.put("code",code);if(raw.hasNonNull("name"))field.put("name",raw.path("name").asText());if(raw.hasNonNull("unit"))field.put("unit",raw.path("unit").asText());if(raw.has("ordinal"))field.put("ordinal",raw.path("ordinal").asInt());field.put("valueType",raw.path("valueType").asText("STRING"));field.put("required",raw.path("required").asBoolean(false));field.put("acquisitionTiming",raw.path("acquisitionTiming").asText(raw.path("availabilityStage").asText("PRE_EXPERIMENT")));if(raw.has("encoding")&&raw.path("encoding").isObject())field.set("encoding",raw.path("encoding"));else field.set("encoding",json.createObjectNode());fields.add(field);});
-        out.set("fields",fields);return out;
-    }
-    /** Normalize older frozen snapshots at the Java/Python boundary. The database snapshot remains immutable. */
-    private ObjectNode v2MaterialDictionary(JsonNode source){
-        var out=json.createObjectNode();
-        if(source!=null&&source.isObject()){
-            out.put("id",source.path("id").asText("material-dictionary-v1"));
-            out.put("version",Math.max(1,source.path("version").asInt(1)));
-            var sha=source.path("sha256").asText("");out.put("sha256",sha.matches("[0-9a-f]{64}")?sha:"0000000000000000000000000000000000000000000000000000000000000000");
-        } else {out.put("id","material-dictionary-v1").put("version",1).put("sha256","0000000000000000000000000000000000000000000000000000000000000000");}
-        var materials=json.createArrayNode();
-        if(source!=null)source.path("materials").forEach((m)->{var x=json.createObjectNode().put("materialId",m.path("materialId").asText());
-            var code=m.path("code").asText(m.path("token").asText(m.path("materialId").asText()));x.put("code",code);if(m.hasNonNull("role"))x.put("role",m.path("role").asText());x.put("encoderIndex",m.path("encoderIndex").isNumber()?m.path("encoderIndex").asInt():m.path("ordinal").asInt(materials.size()));materials.add(x);});
-        if(materials.isEmpty())materials.add(json.createObjectNode().put("materialId","UNUSED").put("code","UNUSED").put("encoderIndex",0));
-        out.set("materials",materials);return out;
-    }
-    private ObjectNode v2Preprocessing(JsonNode source){var out=json.createObjectNode();
-        if(source!=null&&source.isObject()){
-            out.put("id",source.path("id").asText("preprocessing-v1"));out.put("version",Math.max(1,source.path("version").asInt(1)));
-            var sha=source.path("sha256").asText("");out.put("sha256",sha.matches("[0-9a-f]{64}")?sha:"0000000000000000000000000000000000000000000000000000000000000000");
-            out.set("config",source.has("config")?source.path("config"):json.createObjectNode());
-        } else out.put("id","preprocessing-v1").put("version",1).put("sha256","0000000000000000000000000000000000000000000000000000000000000000").set("config",json.createObjectNode());
-        return out;
-    }
-    /** Build the strict formula-model.v2 target shape from the frozen domain data.
-     *  Model cards may contain display-only fields such as name/catalogSource/synthetic;
-     *  those fields must never cross the runtime contract boundary. */
-    private ObjectNode scoreTarget(PredictionRepository.TargetBinding b){
-        var frozen=b.frozenTarget();
-        var targetHash=frozen!=null&&frozen.path("sha256").isTextual()?frozen.path("sha256").asText():b.targetHash();
-        var target=json.createObjectNode().put("id",b.targetVersionId().toString())
-                .put("version",b.targetVersion()).put("sha256",targetHash)
-                .put("code",b.targetCode()).put("valueType",b.valueType());
-        if(b.unit()!=null) target.put("unit",b.unit()); else target.putNull("unit");
-        target.set("classes", "CONTINUOUS".equals(b.valueType()) ? json.createArrayNode() : (b.classes()==null?json.createArrayNode():b.classes()));
-        if ("BINARY".equals(b.valueType())) {
-            var positiveClass = b.definition() == null ? null : b.definition().path("positiveClass");
-            if (positiveClass != null && positiveClass.isTextual() && !positiveClass.asText().isBlank()) {
-                target.put("positiveClass", positiveClass.asText());
-            } else if (b.classes() != null && b.classes().isArray() && b.classes().size() == 2) {
-                target.put("positiveClass", b.classes().get(1).asText());
-            } else {
-                target.putNull("positiveClass");
-            }
-        } else {
-            target.putNull("positiveClass");
-        }
-        target.set("observationSemantics",b.observationSemantics()==null?json.createObjectNode():b.observationSemantics());
-        return target;
-    }
-    private ObjectNode mergedDomain(PredictionRepository.TargetBinding b){var out=b.modelDomain()!=null&&b.modelDomain().isObject()?((ObjectNode)b.modelDomain()).deepCopy():json.createObjectNode();var config=b.domainPolicy();if(config!=null&&config.isObject())config.fields().forEachRemaining(e->{if(!Set.of("features","minimum","maximum").contains(e.getKey()))out.set(e.getKey(),e.getValue());});out.put("policyVersionId",b.domainPolicyId()==null?"":b.domainPolicyId().toString());out.put("policyHash",Objects.toString(b.domainPolicyHash(),""));return out;}
+    private boolean domainReady(PredictionRepository.TargetBinding b){var domain=b.modelDomain();return domain!=null&&domain.path("features").isArray()&&domain.path("minimum").isArray()&&domain.path("maximum").isArray()&&domain.path("nearBoundaryRatio").isNumber();}
+    private ObjectNode scoreBinding(PredictionRepository.TargetBinding b){return com.jsd.aird.ai.rnd.modeling.WorkbenchModelBinding.create(b,json,artifacts,false);}
+    private ObjectNode mergedDomain(PredictionRepository.TargetBinding b){return (ObjectNode)b.modelDomain().deepCopy();}
     static ObjectNode rewriteTarget(JsonNode source,UUID target){
         var out=((ObjectNode)source).deepCopy();out.put("targetId",target.toString());
         if(!out.hasNonNull("errorCode")&&out.hasNonNull("code"))out.set("errorCode",out.get("code"));
@@ -375,21 +192,14 @@ public class PredictionService {
     }
     private ObjectNode blocked(UUID target,UUID model,String code,String message,JsonNode detail){var x=json.createObjectNode().put("targetId",target.toString()).put("status","BLOCKED").put("errorCode",code).put("message",message);if(model!=null)x.put("modelVersionId",model.toString());x.set("detail",detail);return x;}
     private ObjectNode failed(UUID target,UUID model,String code,String message,JsonNode detail){var x=json.createObjectNode().put("targetId",target.toString()).put("status","FAILED").put("errorCode",code).put("message",message);if(model!=null)x.put("modelVersionId",model.toString());x.set("detail",detail);return x;}
-    private ArrayNode formulaWarnings(PredictionRequest request, JsonNode normalizedRequest){var warnings=json.createArrayNode();if(request.formula()==null)return warnings;var formula=normalizedRequest.path("formula");if(formula.path("normalizationApplied").asBoolean(false)){var raw=formula.path("rawFormulaTotal").decimalValue();var item=json.createObjectNode().put("code","FORMULA_NORMALIZED").put("message","配方合计为 "+raw.stripTrailingZeros().toPlainString()+"%，系统已按相对比例归一化到100%");item.set("detail",json.createObjectNode().put("rawFormulaTotal",raw).put("normalizedFormulaTotal",100).put("normalizationFactor",formula.path("normalizationFactor")));warnings.add(item);}return warnings;}
-    private BigDecimal formulaTotal(PredictionRequest request){if(request.formula()==null)return null;if(request.formula().recordedTotal()!=null)return request.formula().recordedTotal();BigDecimal total=BigDecimal.ZERO;for(var x:request.formula().components()){if(x.ratio()==null)return null;total=total.add(x.ratio());}return total;}
-    private String formulaProblem(PredictionRequest request){if(request.formula()==null||!request.formula().compositionComplete())return "FORMULA_INCOMPLETE";if(request.formula().components()==null||request.formula().components().isEmpty())return "FORMULA_INCOMPLETE";for(var x:request.formula().components()){if(x.materialId()==null||x.ratio()==null)return "FORMULA_AMOUNT_MISSING";if(x.unit()==null||x.unit().isBlank())return "FORMULA_UNIT_UNRESOLVED";}return null;}
-    private boolean formulaRequired(PredictionRepository.TargetBinding b){
-        if("modeling-workbench.v1".equals(b.contractVersion()))return false;
-        for(var field:b.frozenInputScheme().path("fields")){
-            var code=field.path("code").asText("").toUpperCase(java.util.Locale.ROOT);
-            if("COMPOSITION".equals(field.path("valueType").asText())||code.contains("FORMULA")||code.contains("COMPOSITION"))return true;
-        }
-        for(var feature:mergedDomain(b).path("features")){
-            var name=feature.asText();if(name.startsWith("material:")||name.startsWith("formula:"))return true;
-        }
-        return false;
+    private ObjectNode bindingSummary(PredictionRepository.TargetBinding b){
+        var x=json.createObjectNode().put("targetId",b.targetId().toString()).put("name",b.targetName()).put("category",b.category())
+            .put("valueType",b.valueType()).put("available",gateAvailability(b).isEmpty()).put("formulaRequirement","NOT_USED");
+        if(b.modelId()!=null)x.put("modelVersionId",b.modelId().toString());
+        x.set("unavailableReasons",json.valueToTree(gateAvailability(b)));x.set("fixedConditions",fixedConditions(b));
+        if (b.definition().has("modelSource")) x.set("modelSource", b.definition().path("modelSource").deepCopy());
+        return x;
     }
-    private ObjectNode bindingSummary(PredictionRepository.TargetBinding b){var simulation=syntheticTestAuthorization.isSimulation(b.sourceDataNature(),b.testOnlySimulation());var x=json.createObjectNode().put("targetId",b.targetId().toString()).put("name",b.targetName()).put("category",b.category()).put("valueType",b.valueType()).put("available",gateAvailability(b).isEmpty()).put("simulation",simulation).put("testOnlySimulation",b.testOnlySimulation()).put("dataNature",b.dataNature()).put("sourceDataNature",b.sourceDataNature()).put("formulaRequirement",formulaRequired(b)?"REQUIRED":"NOT_USED");if(b.modelId()!=null)x.put("modelVersionId",b.modelId().toString());x.set("unavailableReasons",json.valueToTree(gateAvailability(b)));x.set("fixedConditions",fixedConditions(b));x.set("evidence",b.modelId()==null?json.createObjectNode():evidence(b));return x;}
     private void mergeInputField(Map<String,JsonNode> inputs,JsonNode raw,PredictionRepository.TargetBinding binding){
         var code=raw.path("code").asText();if(code.isBlank())return;
         var field=raw.deepCopy();
@@ -412,35 +222,15 @@ public class PredictionService {
     private String inputGroup(String code,String type){return "COMPOSITION".equals(type)?"FORMULA":"OTHER";}
     private boolean isFixedByTargetDefinition(PredictionRepository.TargetBinding binding,String code){var fixed=binding.definition().path("fixedInputs");return fixed.isObject()&&fixed.has(code);}
     private ObjectNode fixedConditions(PredictionRepository.TargetBinding b){var fixed=json.createObjectNode();var definition=b.definition();for(var key:new String[]{"testMethod","testStage","pretreatment","fixedCondition","fixedConditions","load","substrate","angle"})if(definition.hasNonNull(key))fixed.set(key,definition.get(key));return fixed;}
-    public List<String> gateAvailability(PredictionRepository.TargetBinding b){var out=new ArrayList<String>();if(!modelAvailable(b))out.add(unavailableModelReason(b.modelId(),b.dataNature(),b.testOnlySimulation()));if(!domainReady(b))out.add("MODEL_DOMAIN_UNAVAILABLE");return out;}
-    private boolean modelAvailable(PredictionRepository.TargetBinding b){return b.modelId()!=null&&syntheticTestAuthorization.allows(b.dataNature(),b.productionEligible(),b.testOnlySimulation());}
-    private List<String> reasons(UUID model,String dataNature,boolean productionEligible,boolean testOnlySimulation){var out=new ArrayList<String>();if(model==null||!syntheticTestAuthorization.allows(dataNature,productionEligible,testOnlySimulation))out.add(unavailableModelReason(model,dataNature,testOnlySimulation));return out;}
-    static String unavailableModelReason(UUID model,String dataNature,boolean testOnlySimulation){
-        if(model==null)return "NO_ACTIVE_MODEL";
-        return testOnlySimulation||"SYNTHETIC".equalsIgnoreCase(dataNature)?"SIMULATION_NOT_ENABLED":"MODEL_NOT_PRODUCTION_ELIGIBLE";
-    }
+    public List<String> gateAvailability(PredictionRepository.TargetBinding b){var out=new ArrayList<String>();if(!modelAvailable(b))out.add("NO_ACTIVE_MODEL");else if(!domainReady(b))out.add("MODEL_DOMAIN_UNAVAILABLE");return out;}
+    private boolean modelAvailable(PredictionRepository.TargetBinding b){return b.modelId()!=null&&"modeling-workbench.v1".equals(b.contractVersion());}
+    private List<String> reasons(UUID model){return model==null?List.of("NO_ACTIVE_MODEL"):List.of();}
     private ArrayNode conflicts(List<PredictionRepository.TargetBinding> bindings){var byCode=new HashMap<String,Set<String>>();for(var b:bindings)for(var field:b.frozenInputScheme().path("fields"))byCode.computeIfAbsent(field.path("code").asText(),k->new HashSet<>()).add(field.path("valueType").asText()+"|"+field.path("unit").asText());var out=json.createArrayNode();byCode.forEach((code,defs)->{if(defs.size()>1)out.add(json.createObjectNode().put("fieldCode",code).set("definitions",json.valueToTree(defs)));});return out;}
     private ObjectNode bindingDocument(List<PredictionRepository.TargetBinding> bindings){var root=json.createObjectNode();var list=json.createArrayNode();bindings.forEach(x->list.add(bindingSummary(x)));root.set("targets",list);return root;}
     private ObjectNode running(UUID id,String requestId){return json.createObjectNode().put("predictionRecordId",id.toString()).put("requestId",requestId).put("executionStatus","RUNNING").putNull("outcomeStatus").put("pollAfterMs",1000);}
     private JsonNode normalized(JsonNode request){return hashing.canonical(request);}
     private List<UUID> distinct(List<UUID> ids){return ids.stream().filter(Objects::nonNull).distinct().sorted().toList();}
-    private void validateRequest(PredictionRequest request){if(request==null||request.targets()==null||request.targets().isEmpty())throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"至少选择一个预测目标");if(request.inputs()==null)throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"实验前条件不能为空");if(request.formula()!=null&&request.formula().components()==null)throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"配方组成格式无效");if(distinct(request.targets().stream().map(x->x.targetId()).toList()).size()!=request.targets().size())throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"预测目标不能重复");}
-    private void validateQuality(QualityPolicyCommand command){if(command==null||!Set.of("HIGH","MEDIUM","LOW").contains(command.defaultTrustLevel())||command.defaultExplanation()==null||command.defaultExplanation().isBlank())throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"必须配置默认可信等级及说明");var priorities=new HashSet<Integer>();for(var rule:command.rules()==null?List.<QualityRule>of():command.rules()){if(rule.code()==null||rule.code().isBlank()||rule.explanation()==null||rule.explanation().isBlank()||!Set.of("HIGH","MEDIUM","LOW").contains(rule.trustLevel())||rule.when()==null||!rule.when().isObject()||!priorities.add(rule.priority()))throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"质量规则编码、优先级、条件、可信等级或说明无效");}}
-    private void validateDomain(DomainPolicyCommand command){
-        var config=command==null?null:command.configuration();var ratio=config==null?null:config.path("nearBoundaryRatio");
-        if(config==null||!config.isObject()||!ratio.isNumber()||ratio.doubleValue()<0||ratio.doubleValue()>=0.5)
-            throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"边界提醒区域需小于覆盖范围的50%，请填写0～49%的提醒区域");
-        var numeric=config.path("numeric_features");var categorical=config.path("categorical_features");
-        var near=config.path("near_boundary_threshold");var outside=config.path("out_of_domain_threshold");
-        var anyCurrent=numeric.isArray()||categorical.isArray()||near.isNumber()||outside.isNumber();
-        if(anyCurrent&&(!numeric.isArray()||!categorical.isArray()||!near.isNumber()||!outside.isNumber()||near.doubleValue()<0||outside.doubleValue()<near.doubleValue()))
-            throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"现代适用域配置需要数值/类别特征数组及有效的边界阈值");
-    }
-    private void requireTarget(UUID id){var a=actor();var count=repository.jdbc().queryForObject("SELECT count(*) FROM ai.prediction_target WHERE organization_id=? AND id=?",Long.class,a.organizationId(),id);if(count==null||count!=1)throw new ApiException(ApiErrorCode.NOT_FOUND,"预测目标不存在");}
-    private void lockTarget(Actor a,UUID id,long revision){var current=repository.jdbc().query("SELECT revision FROM ai.prediction_target WHERE organization_id=? AND id=? FOR UPDATE",(rs,n)->rs.getLong(1),a.organizationId(),id).stream().findFirst().orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"预测目标不存在"));if(current!=revision)throw new ApiException(ApiErrorCode.VERSION_CONFLICT);}
-    private void bumpTarget(Actor a,UUID id,long revision){if(repository.jdbc().update("UPDATE ai.prediction_target SET revision=revision+1,updated_by=?,updated_at=now() WHERE organization_id=? AND id=? AND revision=?",a.userId(),a.organizationId(),id,revision)!=1)throw new ApiException(ApiErrorCode.VERSION_CONFLICT);}
-    private JsonNode receipt(Actor a,String operation,String key,String hash){return repository.jdbc().query("SELECT request_hash,response_jsonb FROM ai.configuration_command_receipt WHERE organization_id=? AND operation=? AND idempotency_key=?",(rs,n)->new JsonNode[]{json.getNodeFactory().textNode(rs.getString(1)),read(rs.getString(2))},a.organizationId(),operation,key).stream().findFirst().map(x->{if(!x[0].asText().equals(hash))throw new ApiException(ApiErrorCode.IDEMPOTENCY_CONFLICT);return x[1];}).orElse(null);}
-    private void saveReceipt(Actor a,String operation,String key,String hash,UUID id,JsonNode response){repository.jdbc().update("INSERT INTO ai.configuration_command_receipt(id,organization_id,operation,idempotency_key,request_hash,resource_type,resource_id,response_jsonb,created_by) VALUES(?,?,?,?,?,'MODELING_POLICY',?,?,?)",UUID.randomUUID(),a.organizationId(),operation,key,hash,id,repository.pg(response),a.userId());}
+    private void validateRequest(PredictionRequest request){if(request==null||request.targets()==null||request.targets().isEmpty())throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"至少选择一个预测目标");if(request.inputs()==null)throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"实验前条件不能为空");if(distinct(request.targets().stream().map(x->x.targetId()).toList()).size()!=request.targets().size())throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"预测目标不能重复");}
     private JsonNode read(String raw){try{return json.readTree(raw);}catch(Exception e){throw new IllegalStateException(e);}}
     private String textOrNull(JsonNode node,String name){return node.hasNonNull(name)?node.path(name).asText():null;}
     private void requireKey(String key){if(key==null||key.isBlank()||key.length()>200)throw new ApiException(ApiErrorCode.BAD_REQUEST,"Idempotency-Key不能为空且不能超过200字符");}

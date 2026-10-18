@@ -57,7 +57,7 @@ public final class AiRndContracts {
     public record Formula(String basis, boolean compositionComplete, List<FormulaComponent> components,
                           BigDecimal recordedTotal) { }
     public record PredictionTarget(UUID targetId, UUID expectedModelVersionId) { }
-    public record PredictionRequest(Formula formula, Map<String, JsonNode> inputs, List<PredictionTarget> targets) { }
+    public record PredictionRequest(Map<String, JsonNode> inputs, List<PredictionTarget> targets) { }
     public record Warning(String code, String message, JsonNode detail) { }
 
     @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "resultType")

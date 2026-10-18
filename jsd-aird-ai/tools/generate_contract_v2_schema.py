@@ -12,14 +12,10 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from jsd_aird_ai.contracts_v2 import (  # noqa: E402
     ErrorResponseV2, RecommendRequestV2, RecommendResponseV2, ScoreRequestV2,
-    ScoreResponseV2, TrainRequestV2, TrainResponseV2, ValidateRequestV2,
-    ValidateResponseV2, ValidationFoldsRequestV2, ValidationFoldsResponseV2,
+    ScoreResponseV2,
 )
 
 ContractV2 = Union[
-    ValidateRequestV2, ValidateResponseV2,
-    ValidationFoldsRequestV2, ValidationFoldsResponseV2,
-    TrainRequestV2, TrainResponseV2,
     ScoreRequestV2, ScoreResponseV2,
     RecommendRequestV2, RecommendResponseV2, ErrorResponseV2,
 ]

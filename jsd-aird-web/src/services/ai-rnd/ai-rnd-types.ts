@@ -3,7 +3,7 @@ export const AI_RND_CONTRACT_VERSION = 'ai-rnd.v1' as const
 
 export type ValueType = 'CONTINUOUS' | 'ORDINAL' | 'BINARY' | 'CATEGORICAL'
 export type DomainStatus = 'IN_DOMAIN' | 'NEAR_BOUNDARY' | 'OUT_OF_DOMAIN'
-export type ModelStatus = 'CANDIDATE' | 'ACTIVE' | 'PAUSED' | 'RETIRED' | 'REJECTED'
+export type ModelStatus = 'ACTIVE' | 'PAUSED' | 'RETIRED'
 
 export interface Page<T> { items: T[]; total: number; page: number; size: number; totalPages?: number }
 export interface ErrorDetail { targetId?: string; fieldCode?: string; missingFields?: string[]; evidence?: unknown }
@@ -11,25 +11,15 @@ export interface ErrorResponse { code: string; message: string; requestId: strin
 export interface VersionCommand { expectedRevision: number }
 export interface ReasonedVersionCommand extends VersionCommand { reason: string }
 
-export type TrainingJobStatus = 'QUEUED' | 'MATERIALIZING' | 'SNAPSHOT_VALIDATING' | 'FOLDING' | 'TRAINING' | 'VALIDATING' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED'
-export interface TrainingJobSummary {
-  id: string; targetId: string; targetName: string; category: string; valueType: ValueType
-  status: TrainingJobStatus; stage: string; progress: number; attemptCount: number; maxAttempts: number
-  snapshotId: string; candidateModelId?: string; errorCode?: string; errorMessage?: string
-  createdAt: string; startedAt?: string; finishedAt?: string; revision: number
-}
-export interface TrainingAttempt { id: string; attemptNo: number; status: string; stage: string; progress: number; workerId?: string; startedAt: string; heartbeatAt?: string; finishedAt?: string; errorCode?: string; errorMessage?: string; artifacts: Record<string, unknown> }
-export interface TrainingSnapshotSummary { id: string; targetId: string; targetVersionId: string; inputSchemeId: string; eligibilityRunId: string; sampleCount: number; dataNature: 'REAL' | 'SYNTHETIC'; snapshotHash: string; businessFingerprint: string; frozenAt: string }
-export interface TrainingJobDetail { job: TrainingJobSummary; snapshot: TrainingSnapshotSummary; attempts: TrainingAttempt[]; policy: Record<string, unknown>; frozenConfiguration: Record<string, unknown> }
 export interface ModelVersion {
   id: string; targetId: string; targetName: string; category: string; valueType: ValueType; version: number
   status: ModelStatus; modelType: string; dataNature: 'REAL' | 'SYNTHETIC'; productionEligible: boolean
   comparisonStatus: 'BETTER' | 'WORSE' | 'EQUIVALENT' | 'NOT_COMPARABLE'; metrics: Record<string, unknown>
   source?: { origin?: string; datasetName?: string; xColumns?: Array<{code: string; name: string; unit?: string}>; yColumn?: {code: string; name: string; unit?: string} };
-  trainableSamples: number; trainingJobId: string | null; createdAt: string; updatedAt: string; revision: number
+  trainableSamples: number; workbenchRunId: string; createdAt: string; updatedAt: string; revision: number
 }
 export interface ModelRelease { id: string; action: string; modelVersionId: string; previousModelVersionId?: string; reason: string; createdAt: string }
-export interface ModelDetail { model: ModelVersion; snapshot?: TrainingSnapshotSummary | null; applicabilityDomain: Record<string, unknown>; modelCard: Record<string, unknown>; rejectionReasons: string[]; releases: ModelRelease[]; testActivationAllowed?: boolean }
+export interface ModelDetail { model: ModelVersion; applicabilityDomain: Record<string, unknown>; modelCard: Record<string, unknown>; releases: ModelRelease[] }
 export interface ModelActionCommand extends VersionCommand { expectedActiveModelVersionId?: string; reason: string }
 export interface ModelActionResult { modelVersionId: string; status: ModelStatus; activeModelVersionId?: string; revision: number; changedAt: string }
 
@@ -40,7 +30,7 @@ export interface Formula {
 }
 export interface PredictionTarget { targetId: string; expectedModelVersionId?: string }
 export interface PredictionRequest {
-  formula?: Formula; inputs: Record<string, unknown>; targets: PredictionTarget[]
+  inputs: Record<string, unknown>; targets: PredictionTarget[]
 }
 export interface Interval { lower: number; upper: number; coverageLevel: number }
 export type TypedPrediction =

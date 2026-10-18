@@ -14,11 +14,10 @@ const targets: PredictionCatalogTarget[] = [
   { targetId: 'gloss-wet', code: 'GLOSS.WET', name: '60°光泽', unit: 'GU', testMethod: '湿膜', category: '膜性能', valueType: 'CONTINUOUS', targetStatus: 'ACTIVE', formalPredictionAvailable: true, unavailableReasons: [] },
   { targetId: 'repair', code: 'CUSTOMER.TEST.REPAIR', name: '修复速度', category: '客户测试语义', valueType: 'CONTINUOUS', targetStatus: 'ACTIVE', formalPredictionAvailable: false, unavailableReasons: ['NO_ACTIVE_MODEL'] },
 ]
-let needsFormula = false
 function context(ids: string[] = []): PredictionContext {
-  return { targets, selected: targets.filter(target => ids.includes(target.targetId)).map(target => ({ targetId: target.targetId, name: target.name, category: target.category, valueType: target.valueType, available: target.formalPredictionAvailable, modelVersionId: `model-${target.targetId}`, unavailableReasons: target.unavailableReasons, formulaRequirement: needsFormula ? 'REQUIRED' : 'NOT_USED', evidence: {} })),
+  return { targets, selected: targets.filter(target => ids.includes(target.targetId)).map(target => ({ targetId: target.targetId, name: target.name, category: target.category, valueType: target.valueType, available: target.formalPredictionAvailable, modelVersionId: `model-${target.targetId}`, unavailableReasons: target.unavailableReasons, formulaRequirement: 'NOT_USED', evidence: {} })),
     requiredInputs: ids.length ? [{ fieldVersionId: 'temp-version', code: 'TEMPERATURE_C', name: '温度', valueType: 'NUMBER', unit: '°C', required: true, supportedRanges: ids.map(targetId => ({ targetId, targetName: '60°光泽', minimum: 20, maximum: 32 })) }] : [],
-    materials: needsFormula ? [{ materialId: 'resin', name: '丙烯酸树脂', code: 'R1', role: 'RESIN', encoderIndex: 0 }, { materialId: 'additive', name: '流平剂', code: 'A1', role: 'ADDITIVE', encoderIndex: 1 }] : [],
+    materials: [],
   }
 }
 function success(targetId = 'gloss-dry', outside = false): TargetSuccess {
@@ -36,7 +35,7 @@ function fillTemperature(value = '25') { fireEvent.change(screen.getByRole('spin
 
 describe('PerformancePredictionPage', () => {
   beforeEach(() => {
-    vi.clearAllMocks(); localStorage.clear(); needsFormula = false
+    vi.clearAllMocks(); localStorage.clear()
     api.context.mockImplementation((ids?: string[]) => Promise.resolve(context(ids)))
     api.predict.mockImplementation((request: PredictionRequest) => Promise.resolve(response(request)))
     api.record.mockResolvedValue(response())
@@ -63,7 +62,7 @@ describe('PerformancePredictionPage', () => {
     expect(screen.queryByText(/预测区间 78/)).not.toBeInTheDocument()
   })
   it('shows an unavailable restored selection once while preserving its input', async () => {
-    localStorage.setItem(storageKey, JSON.stringify({ form: { targets: ['repair'], formula: [], complete: false, inputs: { TEMPERATURE_C: 25 } } }))
+    localStorage.setItem(storageKey, JSON.stringify({ form: { targets: ['repair'], inputs: { TEMPERATURE_C: 25 } } }))
     mount()
     expect(await screen.findByText('修复速度 · 尚无已启用模型')).toBeInTheDocument()
     expect(screen.getAllByText('修复速度 · 尚无已启用模型')).toHaveLength(1)
@@ -73,24 +72,18 @@ describe('PerformancePredictionPage', () => {
     fireEvent.keyDown(screen.getByRole('combobox', { name: '预测指标' }), { key: 'Backspace', code: 'Backspace' })
     expect(await screen.findByText('选择预测指标后填写实验输入')).toBeInTheDocument()
   })
-  it('keeps blank ratios unknown, rejects negatives and preserves raw ratios with conversion', async () => {
-    needsFormula = true; mount(); await selectTarget(); fillTemperature()
-    const resin = screen.getByRole('spinbutton', { name: '丙烯酸树脂比例' }), additive = screen.getByRole('spinbutton', { name: '流平剂比例' })
-    expect(resin).toHaveValue(''); expect(additive).toHaveValue('')
-    fireEvent.click(screen.getByRole('checkbox', { name: '配方已完整' }))
-    expect(screen.getByRole('button', { name: '开始预测' })).toBeDisabled()
-    fireEvent.change(resin, { target: { value: '-3' } }); fireEvent.blur(resin)
-    expect(screen.getByText('比例不能小于 0')).toBeInTheDocument()
-    act(() => resin.focus())
-    fireEvent.change(resin, { target: { value: '60' } })
-    expect(screen.getByRole('spinbutton', { name: '丙烯酸树脂比例' })).toHaveFocus()
-    fireEvent.change(screen.getByRole('spinbutton', { name: '流平剂比例' }), { target: { value: '20' } })
-    expect(screen.getByRole('checkbox', { name: '配方已完整' })).toBeChecked()
-    expect(screen.getAllByText('换算比例（%）').length).toBeGreaterThan(0)
-    expect(await screen.findByText('75')).toBeInTheDocument()
+  it('uses a selected percentage X directly without requiring an entire recipe', async () => {
+    api.context.mockImplementation((ids?: string[]) => {
+      const value = context(ids)
+      if (ids?.length) value.requiredInputs.push({ fieldVersionId: 'ratio', code: 'formula:resin', name: '树脂比例', valueType: 'NUMBER', unit: '%', required: true })
+      return Promise.resolve(value)
+    })
+    mount(); await selectTarget(); fillTemperature()
+    fireEvent.change(screen.getByRole('spinbutton', { name: '树脂比例' }), { target: { value: '35' } })
+    expect(screen.queryByText('配方已完整')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '开始预测' }))
     await screen.findByText('80.1235')
-    expect(api.predict.mock.calls[0]?.[0]).toMatchObject({ formula: { recordedTotal: 80, compositionComplete: true, components: [{ materialId: 'resin', ratio: 60 }, { materialId: 'additive', ratio: 20 }] } })
+    expect(api.predict.mock.calls[0]?.[0]).toEqual({ inputs: { TEMPERATURE_C: 25, 'formula:resin': 35 }, targets: [{ targetId: 'gloss-dry', expectedModelVersionId: 'model-gloss-dry' }] })
   })
   it('retains prior results after edits and restores the form and result on remount', async () => {
     const view = mount(); await selectTarget(); fillTemperature(); fireEvent.click(screen.getByRole('button', { name: '开始预测' })); await screen.findByText('80.1235')
@@ -153,7 +146,7 @@ describe('PerformancePredictionPage', () => {
     mount(); await selectTarget(); await selectTarget('湿膜'); fillTemperature(); fireEvent.click(screen.getByRole('button', { name: '开始预测' }))
     expect(await screen.findByText('80.1235')).toBeInTheDocument()
     expect(screen.getByRole('columnheader', { name: '预测结果' })).toBeInTheDocument()
-    expect(screen.getByText('预测服务暂不可用，请稍后重试。')).toBeInTheDocument()
+    expect(screen.getByText('计算服务暂不可用，请稍后重试。')).toBeInTheDocument()
     expect(screen.getByText('部分完成')).toBeInTheDocument()
     expect(screen.queryByText(/java.lang/)).not.toBeInTheDocument()
   })
@@ -165,6 +158,14 @@ describe('PerformancePredictionPage', () => {
     expect(screen.queryByRole('columnheader', { name: '预测区间' })).not.toBeInTheDocument()
     expect(screen.queryByRole('columnheader', { name: '说明' })).not.toBeInTheDocument()
     expect(screen.getByRole('columnheader', { name: '单位' })).toBeInTheDocument()
+  })
+  it('does not show a blocked invalid prediction value', async () => {
+    api.predict.mockResolvedValue({ ...response(), outcomeStatus: 'BLOCKED', results: [{ targetId: 'gloss-dry', status: 'BLOCKED', errorCode: 'INVALID_PREDICTION_RESULT', message: 'internal details' }] })
+    mount(); await selectTarget(); fillTemperature(); fireEvent.click(screen.getByRole('button', { name: '开始预测' }))
+    expect(await screen.findByText('未得到预测值')).toBeInTheDocument()
+    expect(screen.getByText('模型结果不合理，未展示数值。请核对输入和单位，并补充相近实验后重新训练。')).toBeInTheDocument()
+    expect(screen.queryByText('internal details')).not.toBeInTheDocument()
+    expect(screen.queryByText('80.1235')).not.toBeInTheDocument()
   })
   it('retries an unacknowledged request with the same key after network timeout', async () => {
     api.predict.mockRejectedValueOnce(new Error('ETIMEDOUT'))
@@ -181,13 +182,5 @@ describe('PerformancePredictionPage', () => {
     expect(await screen.findByText('这条预测记录无法恢复，请使用已保存的输入重新预测。')).toBeInTheDocument()
     expect(screen.getByRole('spinbutton', { name: '温度' })).toHaveValue('25')
     expect(screen.getByRole('button', { name: '开始预测' })).toBeEnabled()
-  })
-  it('preserves deliberately removed materials across refresh', async () => {
-    needsFormula = true
-    const view = mount(); await selectTarget()
-    fireEvent.click(screen.getByRole('button', { name: '删除流平剂' }))
-    await waitFor(() => expect(screen.queryByRole('spinbutton', { name: '流平剂比例' })).not.toBeInTheDocument())
-    view.unmount(); mount(); await screen.findByRole('spinbutton', { name: '丙烯酸树脂比例' })
-    expect(screen.queryByRole('spinbutton', { name: '流平剂比例' })).not.toBeInTheDocument()
   })
 })

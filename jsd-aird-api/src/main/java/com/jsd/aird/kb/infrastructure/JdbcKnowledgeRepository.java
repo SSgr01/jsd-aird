@@ -166,6 +166,26 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
     }
 
     @Override
+    public void lockCategoryName(UUID organizationId, String scope, String name) {
+        var lockKey = organizationId + ":knowledge-category:" + scope + ":"
+                + name.trim().toLowerCase(java.util.Locale.ROOT);
+        jdbc.query("SELECT pg_advisory_xact_lock(hashtextextended(CAST(? AS text), 0))",
+                rs -> null, lockKey);
+    }
+
+    @Override
+    public boolean categoryNameExists(UUID organizationId, String scope, String name, UUID excludingCategoryId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+                SELECT EXISTS (
+                    SELECT 1 FROM kb.document_category
+                    WHERE organization_id = ? AND scope = ?
+                      AND lower(btrim(name)) = lower(btrim(?))
+                      AND (CAST(? AS uuid) IS NULL OR id <> CAST(? AS uuid))
+                )
+                """, Boolean.class, organizationId, scope, name, excludingCategoryId, excludingCategoryId));
+    }
+
+    @Override
     public CategoryRow createCategory(UUID organizationId, UUID actorId, String scope, String name, String description) {
         var id = UUID.randomUUID();
         jdbc.update("""
@@ -452,9 +472,17 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
     @Override
     public void attachProcessingSteps(UUID organizationId, UUID versionId, UUID parseRunId) {
         jdbc.update("""
-                UPDATE kb.document_processing_step SET parse_run_id = ?, updated_at = now()
-                WHERE organization_id = ? AND document_version_id = ? AND parse_run_id IS NULL
-                """, parseRunId, organizationId, versionId);
+                UPDATE kb.document_processing_step legacy SET parse_run_id = ?, updated_at = now()
+                WHERE legacy.organization_id = ? AND legacy.document_version_id = ?
+                  AND legacy.parse_run_id IS NULL AND legacy.review_revision_id IS NULL
+                  AND NOT EXISTS (
+                      SELECT 1 FROM kb.document_processing_step current_run
+                      WHERE current_run.organization_id = legacy.organization_id
+                        AND current_run.document_version_id = legacy.document_version_id
+                        AND current_run.parse_run_id = ? AND current_run.review_revision_id IS NULL
+                        AND current_run.step_key = legacy.step_key
+                  )
+                """, parseRunId, organizationId, versionId, parseRunId);
     }
 
     @Override
@@ -758,6 +786,56 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
         args.add(limit);
         args.add(limit);
         return jdbc.query(sql, this::mapSearch, args.toArray());
+    }
+
+    @Override
+    public List<TermDiscrimination> termDiscrimination(UUID organizationId, List<AnalyzedTerm> terms,
+                                                       List<UUID> categoryIds,
+                                                       java.util.Set<UUID> allowedDocumentIds) {
+        if (terms == null || terms.isEmpty()) return List.of();
+        if (allowedDocumentIds != null && allowedDocumentIds.isEmpty()) return List.of();
+        var sql = """
+                WITH query_terms AS (
+                    SELECT DISTINCT * FROM unnest(?::int[], ?::text[], ?::text[])
+                        AS q(family_ordinal, analyzer_version, term)
+                ), eligible_chunks AS (
+                    SELECT c.id, c.analyzer_version
+                    FROM kb.document_chunk c
+                    JOIN kb.document d ON d.id = c.document_id
+                    JOIN kb.document_version v ON v.id = c.document_version_id
+                    JOIN ops.file_object f ON f.id = v.file_object_id
+                        AND f.organization_id = d.organization_id AND f.status <> 'DELETED'
+                    JOIN kb.publication p ON p.id = d.current_publication_id
+                        AND p.document_version_id = c.document_version_id
+                        AND p.review_revision_id = c.review_revision_id AND p.status = 'CURRENT'
+                    WHERE d.organization_id = ? AND d.lifecycle_status = 'ACTIVE' AND c.chunk_role = 'CHILD'
+                """ + categoryClause(categoryIds) + documentClause(allowedDocumentIds) + """
+                ), corpus AS (
+                    SELECT analyzer_version, count(*)::double precision AS document_count
+                    FROM eligible_chunks GROUP BY analyzer_version
+                ), family_matches AS (
+                    SELECT q.family_ordinal, c.analyzer_version,
+                           count(DISTINCT c.id)::double precision AS document_frequency
+                    FROM eligible_chunks c
+                    JOIN kb.chunk_term t ON t.chunk_id = c.id
+                    JOIN query_terms q ON q.term = t.term AND q.analyzer_version = c.analyzer_version
+                    GROUP BY q.family_ordinal, c.analyzer_version
+                )
+                SELECT m.family_ordinal,
+                       max(ln(((c.document_count - m.document_frequency + 0.5) /
+                               (m.document_frequency + 0.5)) + 1)) AS inverse_document_frequency
+                FROM family_matches m JOIN corpus c USING (analyzer_version)
+                GROUP BY m.family_ordinal
+                """;
+        var args = new java.util.ArrayList<Object>();
+        args.add(terms.stream().map(AnalyzedTerm::familyOrdinal).toArray(Integer[]::new));
+        args.add(terms.stream().map(AnalyzedTerm::analyzerVersion).toArray(String[]::new));
+        args.add(terms.stream().map(AnalyzedTerm::term).toArray(String[]::new));
+        args.add(organizationId);
+        if (categoryIds != null) args.addAll(categoryIds);
+        if (allowedDocumentIds != null) args.addAll(allowedDocumentIds);
+        return jdbc.query(sql, (rs, ignored) -> new TermDiscrimination(rs.getInt("family_ordinal"),
+                rs.getDouble("inverse_document_frequency")), args.toArray());
     }
 
     @Override

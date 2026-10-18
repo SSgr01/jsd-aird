@@ -28,9 +28,48 @@ class BasicFileSafetyScannerTest {
     }
 
     @Test
-    void acceptsLegacyWordDocument() {
+    void rejectsCanonicalEicarSafetyTestFile() {
+        var sample = "X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
+                .getBytes(StandardCharsets.US_ASCII);
+
+        var result = scanner.scan(new ByteArrayInputStream(sample), "eicar-test.txt", "text/plain", sample.length);
+
+        assertThat(result.status()).isEqualTo(BasicFileSafetyScanner.ScanResult.Status.REJECTED);
+        assertThat(result.reason()).contains("EICAR");
+    }
+
+    @Test
+    void rejectsEicarSignatureInsideOfficeArchiveEntry() {
+        var sample = "prefix X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H* suffix";
+        var archive = zipBytes("word/document.xml", sample);
+
+        var result = scanner.scan(new ByteArrayInputStream(archive), "eicar-test.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document", archive.length);
+
+        assertThat(result.status()).isEqualTo(BasicFileSafetyScanner.ScanResult.Status.REJECTED);
+        assertThat(result.reason()).contains("EICAR");
+    }
+
+    @Test
+    void acceptsOle2ContainerHeaderForDownstreamDocumentValidation() {
         var result = scanner.scan(new ByteArrayInputStream(oleHeader()),
                 "project-brief.doc", "application/msword", 512);
+
+        assertThat(result.status()).isEqualTo(BasicFileSafetyScanner.ScanResult.Status.SAFE);
+    }
+
+    @Test
+    void acceptsMp4VideoOriginal() {
+        var result = scanner.scan(new ByteArrayInputStream(new byte[] {0, 0, 0, 16, 'f', 't', 'y', 'p', 'i', 's', 'o', 'm'}),
+                "inspection.mp4", "video/mp4", 16);
+
+        assertThat(result.status()).isEqualTo(BasicFileSafetyScanner.ScanResult.Status.SAFE);
+    }
+
+    @Test
+    void acceptsWebmVideoOriginal() {
+        var result = scanner.scan(new ByteArrayInputStream(new byte[] {0x1A, 0x45, (byte) 0xDF, (byte) 0xA3, 1, 2}),
+                "inspection.webm", "video/webm", 6);
 
         assertThat(result.status()).isEqualTo(BasicFileSafetyScanner.ScanResult.Status.SAFE);
     }
@@ -45,10 +84,14 @@ class BasicFileSafetyScannerTest {
     }
 
     private byte[] zipBytes(String entryName) {
+        return zipBytes(entryName, "macro");
+    }
+
+    private byte[] zipBytes(String entryName, String content) {
         try (var output = new java.io.ByteArrayOutputStream();
              var zip = new java.util.zip.ZipOutputStream(output)) {
             zip.putNextEntry(new java.util.zip.ZipEntry(entryName));
-            zip.write("macro".getBytes(StandardCharsets.UTF_8));
+            zip.write(content.getBytes(StandardCharsets.UTF_8));
             zip.closeEntry();
             zip.finish();
             return output.toByteArray();

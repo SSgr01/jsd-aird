@@ -27,6 +27,9 @@ import { useNavigate, useParams } from 'react-router-dom';
 
 import { FilePreviewModal, downloadPreviewFile, type FilePreviewDescriptor } from '@/components/file-preview';
 import { usePermission } from '@/components/auth/usePermission';
+import { DataPublicationPanel } from '@/features/data-workbench/DataPublicationPanel';
+import { confirmationBlockReason, sheetSummary } from '@/services/data/import-guidance';
+import type { DataPublication } from '@/services/data/data-api';
 import { ProjectRelationPicker } from '@/components/project-relations/ProjectRelationPicker';
 import {
   DataFieldDataBrowser,
@@ -102,7 +105,11 @@ export function DataImportJobPage({
   const [relationOpen, setRelationOpen] = useState(false);
   const [assemblyPlan, setAssemblyPlan] = useState<ExperimentAssemblyPlan>();
   const [assemblyLinks, setAssemblyLinks] = useState<ExperimentAssemblyLink[]>([]);
-  const canUpdate = usePermission(workspaceMode === 'EXPERIMENT' ? 'experiment.create' : 'data.update');
+  const [publication, setPublication] = useState<DataPublication>();
+  const [workspaceView, setWorkspaceView] = useState('edit');
+  const [versionContainer, setVersionContainer] = useState<HTMLDivElement | null>(null);
+  const hasUpdatePermission = usePermission(workspaceMode === 'EXPERIMENT' ? 'experiment.create' : 'data.update');
+  const canUpdate = hasUpdatePermission && !['PENDING_REVIEW', 'APPROVED', 'PUBLISHED', 'DISABLED'].includes(publication?.status || '');
   const canAssign = usePermission('project.assign');
   const canCreate = usePermission(workspaceMode === 'EXPERIMENT' ? 'experiment.create' : 'data.create');
 
@@ -309,10 +316,36 @@ export function DataImportJobPage({
       if (workspaceMode === 'EXPERIMENT') await loadAssembly();
       void message.success(workspaceMode === 'EXPERIMENT'
         ? '导入数据已确认，实验草稿生成状态已更新'
-        : '正式数据提交完成');
+        : '数据已确认，可以提交审核');
     } catch (error) {
       void message.error(error instanceof Error ? error.message : '正式数据提交失败');
     } finally { setSaving(false); }
+  };
+
+  const reExtract = async () => {
+    setSaving(true);
+    try {
+      await dataApi.reExtract(id);
+      await load();
+      void message.success('数据已重新读取并校验');
+    } catch (error) { void message.error(error instanceof Error ? error.message : '重新读取失败'); }
+    finally { setSaving(false); }
+  };
+
+  const saveDraft = async () => {
+    setSaving(true);
+    try {
+      for (const [key, value] of Object.entries(documentCorrections)) {
+        const field = fields.find((item) => fieldKey(item) === key);
+        if (!field?.editable || !field.recordId) throw new Error('字段位置已变化，请重新核对后保存');
+        await dataApi.correctValue(id, field.recordId, { bindingId: field.bindingId, valuePath: field.valuePath, correctedValue: value, reason: '保存导入草稿' });
+        setDocumentCorrections((current) => { const next = { ...current }; delete next[key]; return next; });
+      }
+      await dataApi.saveMappings(id, preview.mappings);
+      await load();
+      void message.success('导入草稿已保存');
+    } catch (error) { void message.error(error instanceof Error ? error.message : '草稿保存失败，未保存内容仍保留'); }
+    finally { setSaving(false); }
   };
 
   const saveComponentAnchor = async () => {
@@ -347,9 +380,9 @@ export function DataImportJobPage({
   const meta = (
     <Space wrap size={8}>
       {categoryName ? <Tag color="blue">归档分类：{categoryName}</Tag> : null}
-      <Tag color={preview.job.status === 'COMPLETED' ? 'success' : preview.job.status === 'FAILED' ? 'error' : 'processing'}>
+      {(workspaceMode === 'EXPERIMENT' || processing || preview.job.status === 'FAILED') && <Tag color={preview.job.status === 'COMPLETED' ? 'success' : preview.job.status === 'FAILED' ? 'error' : 'processing'}>
         {jobStatusLabels[preview.job.status] || '处理中'}
-      </Tag>
+      </Tag>}
       {workspaceMode === 'DATA' ? <Tag color={compatibility === 'EXACT' ? 'success' : compatibility === 'COMPATIBLE' ? 'blue' : 'warning'}>
         {compatibilityLabels[compatibility] || '需要确认'}
       </Tag> : null}
@@ -364,18 +397,26 @@ export function DataImportJobPage({
       title={preview.job.sourceFileName}
       leading={<Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate(workspaceMode === 'EXPERIMENT' ? '/experiments/upload' : (canCreate ? '/data/upload' : '/data/view'))}>{workspaceMode === 'EXPERIMENT' ? '返回实验上传' : (canCreate ? '返回上传' : '返回数据查看')}</Button>}
       meta={meta}
+      navigation={workspaceMode === 'DATA' && <nav className="workspace-view-tabs data-workspace-view-tabs" aria-label="数据工作台视图"><Tabs activeKey={workspaceView === 'edit' && !canUpdate ? 'preview' : workspaceView} onChange={setWorkspaceView} items={[{ key: 'preview', label: <span><EyeOutlined /> 预览</span> }, { key: 'edit', label: '编辑', disabled: !canUpdate }, { key: 'versions', label: '版本记录' }]} /></nav>}
+      content={workspaceMode === 'DATA' && workspaceView === 'versions' ? <div ref={setVersionContainer} /> : undefined}
       actions={<>
+        {workspaceMode === 'DATA' && canUpdate && workbook?.editable && <Button loading={saving} disabled={Boolean(savingCell) || processing} onClick={() => void saveDraft()}>保存草稿</Button>}
+        {workspaceMode === 'DATA' && <DataPublicationPanel jobId={id} refreshKey={preview.job.updatedAt}
+          versionContainer={versionContainer}
+          canConfirm={preview.job.status === 'WAITING_CONFIRM' && !blockers.length && !['INCOMPATIBLE', 'REVIEW_REQUIRED'].includes(compatibility)}
+          disabled={saving || Boolean(savingCell) || Object.keys(documentCorrections).length > 0}
+          onStateChange={setPublication} onChanged={() => void load()} />}
         <Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button>
         <Button icon={<EyeOutlined />} onClick={() => setPreviewFile(sourceFile)}>预览原文件</Button>
         <Button icon={<DownloadOutlined />} onClick={() => void downloadPreviewFile(sourceFile)}>下载原文件</Button>
         {canAssign && canUpdate ? <Button icon={<LinkOutlined />} onClick={() => setRelationOpen(true)}>关联项目</Button> : null}
-        {canUpdate && preview.job.status !== 'COMPLETED' ? <Button
+        {workspaceMode === 'EXPERIMENT' && canUpdate && preview.job.status !== 'COMPLETED' ? <Button
           type="primary"
           icon={<CheckOutlined />}
           disabled={blockers.length > 0 || preview.job.status !== 'WAITING_CONFIRM' || ['INCOMPATIBLE', 'REVIEW_REQUIRED'].includes(compatibility)}
           loading={saving}
           onClick={() => void commit()}
-        >{workspaceMode === 'EXPERIMENT' ? '确认数据' : '确认并提交'}</Button> : null}
+        >确认数据</Button> : null}
       </>}
       notice={<>
         {loadError ? <Alert
@@ -387,13 +428,19 @@ export function DataImportJobPage({
           closable
           onClose={() => setLoadError(undefined)}
         /> : null}
-        <WorkbenchNotice preview={preview} processing={processing} />
+        <WorkbenchNotice preview={preview} processing={processing} onIssue={(issue) => {
+          if (issue.sheetId && issue.address) { editorRef.current?.focusCell?.(issue.sheetId, issue.address); setActiveTab('data'); }
+          else setActiveTab('mapping');
+        }} />
+        {!processing && preview.job.status !== 'COMPLETED' && confirmationBlockReason(preview) && <Alert type="warning" showIcon
+          message={confirmationBlockReason(preview)} action={<Button onClick={() => setActiveTab('mapping')}>处理映射与工作表</Button>} />}
+        {Object.keys(documentCorrections).length > 0 && <Alert type="info" showIcon message="有尚未保存的字段修改，请保存草稿后提交审核。" />}
       </>}
       canvas={['DOCX', 'IMAGE'].includes(preview.job.sourceFormat) ? <OriginalDocumentCanvas file={sourceFile} /> : <DataWorkbookCanvas
         ref={editorRef}
         workbook={workbook}
         loading={!workbook && processing}
-        editable={Boolean(canUpdate && workbook?.editable && workbook.fields.some((field) => field.editable) && !savingCell)}
+        editable={Boolean(workspaceView === 'edit' && canUpdate && workbook?.editable && workbook.fields.some((field) => field.editable) && !savingCell && !saving)}
         onSelectionChange={handleSelection}
         onCellChange={(change) => void handleCellChange(change)}
       />}
@@ -415,7 +462,7 @@ export function DataImportJobPage({
             selectedCell={selectedCell}
             headerExtra={<Space size={8}>
               {savingCell ? <Tag color="processing">正在保存</Tag> : null}
-              {canUpdate && preview.job.status === 'WAITING_MAPPING' ? <Button
+              {canUpdate && preview.job.status === 'WAITING_MAPPING' && (pendingMappings.length > 0 || preview.rows.some((row) => row.status === 'STAGED')) ? <Button
                 size="small"
                 type="primary"
                 loading={saving}
@@ -423,25 +470,26 @@ export function DataImportJobPage({
                   if (pendingMappings.length) setActiveTab('mapping');
                   else void saveMappings();
                 }}
-              >{pendingMappings.length ? '去确认字段映射' : '确认自动对应并校验'}</Button> : null}
+              >{pendingMappings.length ? '处理字段映射' : '校验数据'}</Button> : null}
             </Space>}
             onSelectField={selectField}
             renderFieldExtra={(field) => <Space size={8}>
-              {canUpdate && ['DOCX', 'IMAGE'].includes(preview.job.sourceFormat) && field.recordId ? <Space.Compact>
-                <Input aria-label={`修正${field.fieldName}`} placeholder="核对原文后输入实际值"
-                  value={documentCorrections[field.bindingId] ?? formatImportValue(field.effectiveValue)}
-                  onChange={(event) => setDocumentCorrections((current) => ({ ...current, [field.bindingId]: event.target.value }))} />
-                <Button loading={savingCell === field.bindingId} onClick={() => {
-                  setSavingCell(field.bindingId);
+              {workspaceView === 'edit' && canUpdate && field.editable && field.recordId ? <Space.Compact>
+                <Input disabled={saving || Boolean(savingCell)} aria-label={`修正${field.fieldName}`} placeholder="核对原文后输入实际值"
+                  value={documentCorrections[fieldKey(field) || ''] ?? formatImportValue(field.effectiveValue)}
+                  onChange={(event) => setDocumentCorrections((current) => ({ ...current, [fieldKey(field) || '']: event.target.value }))} />
+                <Button disabled={saving || Boolean(savingCell)} loading={savingCell === fieldKey(field)} onClick={() => {
+                  setSavingCell(fieldKey(field));
                   void dataApi.correctValue(id, field.recordId!, {
                     bindingId: field.bindingId, valuePath: field.valuePath,
-                    correctedValue: documentCorrections[field.bindingId] ?? formatImportValue(field.effectiveValue),
+                    correctedValue: documentCorrections[fieldKey(field) || ''] ?? formatImportValue(field.effectiveValue),
                     reason: '人工核对原文件',
-                  }).then(() => load()).then(() => void message.success('已修正并重新校验'))
+                  }).then(() => { setDocumentCorrections((current) => { const next = { ...current }; delete next[fieldKey(field) || '']; return next; }); return load(); }).then(() => void message.success('已修正并重新校验'))
                     .catch((error: unknown) => void message.error(error instanceof Error ? error.message : '修正失败'))
                     .finally(() => setSavingCell(undefined));
                 }}>保存修正</Button>
               </Space.Compact> : null}
+              {!field.editable && <Typography.Text type="secondary">{field.excluded ? '已排除的记录不可修正' : ['FORMULA', 'DERIVED', 'STATIC'].includes(field.valueSource) ? '公式、派生值和静态内容由源文件计算，不能直接修改' : '此字段当前只读'}</Typography.Text>}
               {!field.excluded && field.valueStatus !== 'VALID' && field.editable && field.sheetId && field.address ? (
                 !['DOCX', 'IMAGE'].includes(preview.job.sourceFormat) ? <Button size="small" onClick={() => selectField(field)}>定位并修正</Button> : null
               ) : null}
@@ -460,14 +508,12 @@ export function DataImportJobPage({
           <MappingPanel
             preview={preview}
             saving={saving}
-            readOnly={!canUpdate}
+            readOnly={!canUpdate || workspaceView !== 'edit'}
             onUpdateMapping={updateMapping}
             onSaveMappings={() => void saveMappings()}
             onUpdateSheet={updateSheet}
             onSaveSheets={() => void saveSheets()}
-            onReExtract={() => void dataApi.reExtract(id)
-              .then(() => load())
-              .catch((error: unknown) => message.error(error instanceof Error ? error.message : '重新读取失败'))}
+            onReExtract={() => void reExtract()}
             onLocateComponent={(item) => {
               setComponentAnchor({ componentId: item.componentId, sheetId: item.sheetId });
               setAnchorRange(''); setAnchorReason('');
@@ -543,9 +589,12 @@ function MappingPanel({ preview, saving, readOnly, onUpdateMapping, onSaveMappin
       </Typography.Text> : null}
       <Select disabled={readOnly} value={item.action} options={actionOptions} onChange={(value) => onUpdateMapping(index, { action: value })} />
       <Select showSearch optionFilterProp="label" placeholder="选择对应字段" value={item.fieldCode} disabled={readOnly || item.action !== 'MAP'} options={templateFields.map((field) => ({ value: field.fieldCode, label: `${field.displayName}${field.required ? ' · 必填' : ''}` }))} onChange={(value) => { const field = templateFields.find((candidate) => candidate.fieldCode === value); onUpdateMapping(index, { fieldCode: value, fieldName: field?.displayName, valueType: field?.dataType, standardUnit: field?.defaultUnit, detail: { ...(item.detail || {}), dataPath: field?.dataPath, identity: field?.identity, required: field?.required } }); }} />
-    </div>)}{!readOnly && <Button type="primary" block loading={saving} onClick={onSaveMappings}>保存并校验</Button>}</section> : preview.job.status === 'WAITING_MAPPING' ? <section className="data-panel-section"><Alert type="info" showIcon message={`已自动匹配 ${preview.mappings.length} 个字段`} />{!readOnly && <Button type="primary" block loading={saving} onClick={onSaveMappings}>确认并校验</Button>}</section> : <Alert type="success" showIcon message="已确认" />}
-    <WorkbenchPanelHeader title="工作表" extra={!readOnly ? <Button size="small" onClick={onReExtract}>重新读取</Button> : undefined} />
-    <div className="data-panel-section">{preview.sheets.map((sheet) => <article className="data-sheet-card" key={sheet.sheetId}><div className="data-sheet-card-title"><Checkbox disabled={readOnly} checked={sheet.selected} onChange={(event) => onUpdateSheet(sheet.sheetId, { selected: event.target.checked })}>{sheet.sheetName}</Checkbox><Tag>{sheet.selected ? '已选' : '未选'}</Tag></div><div className="data-sheet-fields"><label>表头<InputNumber disabled={readOnly} min={1} value={sheet.headerRows[0]} onChange={(value) => onUpdateSheet(sheet.sheetId, { headerRows: value ? [value] : [] })} /></label><label>数据起始<InputNumber disabled={readOnly} min={1} value={sheet.dataStartRow} onChange={(value) => onUpdateSheet(sheet.sheetId, { dataStartRow: value ?? undefined })} /></label><label>数据结束<InputNumber disabled={readOnly} min={sheet.dataStartRow || 1} value={sheet.dataEndRow} onChange={(value) => onUpdateSheet(sheet.sheetId, { dataEndRow: value ?? undefined })} /></label></div></article>)}{!readOnly && <Button type="primary" block loading={saving} onClick={onSaveSheets}>保存工作表设置</Button>}</div>
+    </div>)}{!readOnly && <Button type="primary" block loading={saving} onClick={onSaveMappings}>保存并校验</Button>}</section> : preview.job.status === 'WAITING_MAPPING' && preview.rows.some((row) => row.status === 'STAGED') ? <section className="data-panel-section"><Alert type="info" showIcon message={`已自动匹配 ${preview.mappings.length} 个字段`} />{!readOnly && <Button type="primary" block loading={saving} onClick={onSaveMappings}>校验数据</Button>}</section> : <Alert type="success" showIcon message="字段已匹配，异常值可在字段数据中修正" />}
+    <WorkbenchPanelHeader title="工作表" extra={!readOnly ? <Button size="small" loading={saving} onClick={onReExtract}>重新读取</Button> : undefined} />
+    <div className="data-panel-section">{preview.sheets.map((sheet) => <article className="data-sheet-card" key={sheet.sheetId}><div className="data-sheet-card-title"><Checkbox disabled={readOnly} checked={sheet.selected} onChange={(event) => onUpdateSheet(sheet.sheetId, { selected: event.target.checked })}>{sheet.sheetName}</Checkbox><Tag>{sheet.selected ? '已选' : '未选'}</Tag></div>
+      <Space wrap size={4}><Tag>映射 {sheetSummary(preview, sheet.sheetId).mappingCount}</Tag><Tag>记录 {sheetSummary(preview, sheet.sheetId).recordCount}</Tag><Tag color={sheetSummary(preview, sheet.sheetId).blockerCount ? 'error' : 'default'}>问题 {sheetSummary(preview, sheet.sheetId).blockerCount}</Tag></Space>
+      <Typography.Paragraph type={sheet.selected && !sheetSummary(preview, sheet.sheetId).recordCount ? 'warning' : 'secondary'}>{sheetSummary(preview, sheet.sheetId).message}</Typography.Paragraph>
+      <div className="data-sheet-fields"><label>表头<InputNumber disabled={readOnly} min={1} value={sheet.headerRows[0]} onChange={(value) => onUpdateSheet(sheet.sheetId, { headerRows: value ? [value] : [] })} /></label><label>数据起始<InputNumber disabled={readOnly} min={1} value={sheet.dataStartRow} onChange={(value) => onUpdateSheet(sheet.sheetId, { dataStartRow: value ?? undefined })} /></label><label>数据结束<InputNumber disabled={readOnly} min={sheet.dataStartRow || 1} value={sheet.dataEndRow} onChange={(value) => onUpdateSheet(sheet.sheetId, { dataEndRow: value ?? undefined })} /></label></div></article>)}{!readOnly && <Button type="primary" block loading={saving} onClick={onSaveSheets}>保存工作表设置</Button>}</div>
     {(preview.compatibilityReport?.componentMatches?.some((item) => ['REVIEW_REQUIRED', 'INCOMPATIBLE'].includes(item.status)
       || item.fieldResolutions?.some((field) => field.status !== 'ORIGINAL')) || false) ? <CompatibilityPanel
       preview={preview}
@@ -566,7 +615,7 @@ function formatImportValue(value: unknown): string {
   return '';
 }
 
-function WorkbenchNotice({ preview, processing }: { preview: DataPreview; processing: boolean }) {
+function WorkbenchNotice({ preview, processing, onIssue }: { preview: DataPreview; processing: boolean; onIssue: (issue: DataPreview['issues'][number]) => void }) {
   if (processing) return <Alert banner showIcon type="info" message="系统正在读取工作簿并校验字段，完成后自动更新。" />;
   const statusNotice = preview.job.status === 'FAILED'
     ? <Alert banner showIcon type="error" message={preview.job.errorMessage || '文件处理失败，请检查原文件。'} />
@@ -577,7 +626,7 @@ function WorkbenchNotice({ preview, processing }: { preview: DataPreview; proces
         : undefined;
   return <Space direction="vertical" size={8} style={{ width: '100%' }}>
     {statusNotice}
-    <DataImportQualityNotice issues={preview.issues} sheets={preview.sheets} />
+    <DataImportQualityNotice issues={preview.issues} sheets={preview.sheets} onLocate={onIssue} />
   </Space>;
 }
 

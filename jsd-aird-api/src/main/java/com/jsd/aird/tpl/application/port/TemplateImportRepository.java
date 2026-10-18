@@ -253,7 +253,8 @@ public interface TemplateImportRepository {
             String categoryName,
             String sourceSha256,
             boolean duplicateOverride,
-            UUID duplicateSourceJobId
+            UUID duplicateSourceJobId,
+            UUID originalSourceFileId
     ) {
         public List<String> getAllowedActions() {
             return AllowedActions.templateImport(status, generatedTemplateVersionId != null);

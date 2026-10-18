@@ -10,6 +10,11 @@ public interface KnowledgeFileSearchFacade {
 
     List<FileMatch> searchFiles(UUID organizationId, String query, List<UUID> categoryIds, int limit);
 
+    default List<String> discriminativeTerms(UUID organizationId, String query, List<UUID> categoryIds,
+                                             Set<UUID> allowedDocumentIds) {
+        return List.of();
+    }
+
     default List<FileMatch> searchFiles(UUID organizationId, String query, List<UUID> categoryIds,
                                         Set<UUID> allowedDocumentIds, int limit) {
         if (allowedDocumentIds != null && allowedDocumentIds.isEmpty()) return List.of();

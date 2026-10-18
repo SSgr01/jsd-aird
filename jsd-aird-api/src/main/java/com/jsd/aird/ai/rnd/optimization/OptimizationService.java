@@ -219,7 +219,9 @@ public class OptimizationService {
                 && left.path("testStage").asText().equals(right.path("testStage").asText())
                 && left.path("compositionBasis").asText().equals(right.path("compositionBasis").asText())
                 && left.path("materialId").asText().equals(right.path("materialId").asText())
-                && left.path("measurementComponent").asText().equals(right.path("measurementComponent").asText());
+                && left.path("measurementComponent").asText().equals(right.path("measurementComponent").asText())
+                && left.path("semanticType").asText().equals(right.path("semanticType").asText())
+                && left.path("mappingStatus").asText().equals(right.path("mappingStatus").asText());
     }
 
     private List<String> methods(JsonNode column) {
@@ -235,6 +237,18 @@ public class OptimizationService {
     private String normalizeFieldUnit(String value) {
         return Normalizer.normalize(value == null ? "" : value, Normalizer.Form.NFKC)
                 .replaceAll("\\s+", "").toLowerCase(Locale.ROOT);
+    }
+
+    private boolean mappedFormulaColumn(JsonNode column) {
+        if(!"MATERIAL_RATIO".equals(column.path("semanticType").asText())
+                || !"MAPPED".equals(column.path("mappingStatus").asText())
+                || !"NUMERIC".equals(column.path("kind").asText()))return false;
+        var unit=column.path("unit").asText();
+        if(!unit.isBlank()&&!Set.of("%","PERCENT").contains(unit))return false;
+        try {
+            var materialId=UUID.fromString(column.path("materialId").asText()).toString();
+            return column.path("code").asText().equals("formula:"+materialId);
+        } catch(IllegalArgumentException ignored) { return false; }
     }
 
     private JsonNode mergedHistoryDataset(List<UUID> datasetIds) {
@@ -308,10 +322,11 @@ public class OptimizationService {
         var selectedIdsByDataset=json.createObjectNode();
         for(var sourceId:datasetIds){var ids=selectedIdsByDataset.putArray(sourceId.toString());for(var row:selectedRows)if(sourceId.toString().equals(row.path("sourceDatasetId").asText(datasetId.toString())))ids.add(row.path("id").asText());}
         var columns=new LinkedHashMap<String,JsonNode>();dataset.path("columns").forEach(column->columns.put(column.path("code").asText(),column));
+        var formulaCodes=columns.values().stream().filter(this::mappedFormulaColumn).map(column->column.path("code").asText()).toList();
         var requestedX=body.path("xColumns").deepCopy();var targetCode=body.path("yColumn").asText();
-        if(requestedX.isArray()&&java.util.stream.StreamSupport.stream(requestedX.spliterator(),false).anyMatch(x->x.asText().startsWith("formula:"))) {
+        if(requestedX.isArray()&&java.util.stream.StreamSupport.stream(requestedX.spliterator(),false).anyMatch(x->formulaCodes.contains(x.asText()))) {
             var requestedCodes=new LinkedHashSet<String>();requestedX.forEach(x->requestedCodes.add(x.asText()));
-            for(var column:columns.values())if(column.path("materialId").isTextual()&&!requestedCodes.contains(column.path("code").asText())) {
+            for(var column:columns.values())if(mappedFormulaColumn(column)&&!requestedCodes.contains(column.path("code").asText())) {
                 var observed=new LinkedHashSet<String>();int filled=0;
                 for(var row:selectedRows){var v=row.path("values").path(column.path("code").asText());if(v.isNumber()){observed.add(v.asText());filled++;}}
                 if(observed.size()==1&&filled>=4)((ArrayNode)requestedX).add(column.path("code").asText());
@@ -332,13 +347,12 @@ public class OptimizationService {
                 var supplied=body.path("bounds").path(code);double min=supplied.path("minimum").asDouble(defaultMin);double max=supplied.path("maximum").asDouble(defaultMax);
                 if(!Double.isFinite(min)||!Double.isFinite(max)||min>max)throw validation("X 因素“"+feature.path("name").asText()+"”的最小值不能大于最大值");
                 if(defaultMin==defaultMax&&(min!=defaultMin||max!=defaultMax))throw validation("X 因素“"+feature.path("name").asText()+"”历史值固定，本轮请保持原值");
-                if(code.startsWith("formula:")&&min<0)throw validation("材料比例不能为负数："+feature.path("name").asText());
+                if(formulaCodes.contains(code)&&min<0)throw validation("材料比例不能为负数："+feature.path("name").asText());
                 feature.put("minimum",min).put("maximum",max);
                 if(min==max)feature.put("fixedValue",min);
             }
         }
-        var formulaCodes=columns.keySet().stream().filter(code->code.startsWith("formula:")).toList();
-        var selectedFormulaCodes=featureCodes.stream().filter(code->code.startsWith("formula:")).toList();
+        var selectedFormulaCodes=featureCodes.stream().filter(formulaCodes::contains).toList();
         if(!selectedFormulaCodes.isEmpty()&&!featureCodes.containsAll(formulaCodes))
             throw validation("配方还缺少材料："+formulaCodes.stream().filter(code->!featureCodes.contains(code)).map(code->columns.get(code).path("name").asText(code)).collect(java.util.stream.Collectors.joining("、")));
         var compositionGroups=json.createArrayNode();

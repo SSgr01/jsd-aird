@@ -84,6 +84,17 @@ public class ProjectResourceService implements ProjectResourceFacade {
     }
 
     @Override
+    public boolean hasLinks(Actor actor, ResourceType resourceType, UUID resourceId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+                SELECT EXISTS (
+                    SELECT 1
+                      FROM core.project_resource_link
+                     WHERE organization_id = ? AND resource_type = ? AND resource_id = ?
+                )
+                """, Boolean.class, actor.organizationId(), resourceType.name(), resourceId));
+    }
+
+    @Override
     public Set<UUID> resourceIdsForProject(Actor actor, ResourceType resourceType, UUID projectId) {
         requireProject(actor, "project.view", projectId, "READ");
         return Set.copyOf(jdbc.queryForList("""

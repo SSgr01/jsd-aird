@@ -40,11 +40,32 @@ public class OptimizationRepository {
     public List<HistoryDatasetRow> historyDatasets(UUID org, String keyword) {
         var like = "%" + (keyword == null ? "" : keyword.strip()) + "%";
         return jdbc.query("""
-            SELECT tv.id dataset_id,t.name dataset_name,count(*) row_count,max(v.created_at) updated_at
+            SELECT tv.id dataset_id,t.name dataset_name,
+                   sum(greatest(coalesce(samples.sample_count,0),1)) row_count,max(v.created_at) updated_at
             FROM rnd.experiment e
             JOIN rnd.experiment_version v ON v.organization_id=e.organization_id AND v.id=e.current_version_id
             JOIN tpl.template_version tv ON tv.id=v.template_version_id
             JOIN tpl.template t ON t.id=tv.template_id AND t.organization_id=e.organization_id
+            LEFT JOIN LATERAL (
+              SELECT count(DISTINCT group_key) sample_count
+              FROM (
+                SELECT coalesce(nullif(item->>'logicalSampleKey',''),nullif(item->>'sampleKey',''),nullif(item->>'sourceGroupKey',''),
+                         CASE WHEN nullif(item->>'sourceIdentity','') IS NOT NULL THEN nullif(item->>'sourceRecordKey','') END) group_key
+                FROM jsonb_array_elements(coalesce(v.edit_model_jsonb->'sourceGroups','[]'::jsonb)) item
+                UNION ALL
+                SELECT coalesce(nullif(item->>'logicalSampleKey',''),nullif(item->>'sampleKey',''),nullif(item->>'sourceGroupKey',''),
+                         CASE WHEN nullif(item->>'sourceIdentity','') IS NOT NULL THEN nullif(item->>'sourceRecordKey','') END) group_key
+                FROM jsonb_array_elements(coalesce(v.edit_model_jsonb->'formulaItems','[]'::jsonb)) item
+                UNION ALL
+                SELECT coalesce(nullif(item->>'logicalSampleKey',''),nullif(item->>'sampleKey',''),nullif(item->>'sourceGroupKey',''),
+                         CASE WHEN nullif(item->>'sourceIdentity','') IS NOT NULL THEN nullif(item->>'sourceRecordKey','') END)
+                FROM jsonb_array_elements(coalesce(v.edit_model_jsonb->'processSteps','[]'::jsonb)) item
+                UNION ALL
+                SELECT coalesce(nullif(item->>'logicalSampleKey',''),nullif(item->>'sampleKey',''),nullif(item->>'sourceGroupKey',''),
+                         CASE WHEN nullif(item->>'sourceIdentity','') IS NOT NULL THEN nullif(item->>'sourceRecordKey','') END)
+                FROM jsonb_array_elements(coalesce(v.edit_model_jsonb->'testResults','[]'::jsonb)) item
+              ) grouped WHERE group_key IS NOT NULL
+            ) samples ON true
             WHERE e.organization_id=? AND e.deleted=false AND e.status='COMPLETED'
               AND v.status='COMPLETED'
               AND (t.name ILIKE ? OR e.title ILIKE ? OR e.experiment_no ILIKE ?)

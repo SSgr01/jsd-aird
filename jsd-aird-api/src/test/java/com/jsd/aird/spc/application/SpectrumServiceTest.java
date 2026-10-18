@@ -3,6 +3,7 @@ package com.jsd.aird.spc.application;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -93,12 +94,39 @@ class SpectrumServiceTest {
     }
 
     @Test
-    void preventsDeletingChartUsedByProjectOrActiveReference() {
+    void explicitDuplicateOverrideCreatesASeparateChartAndLinksRetryHistory() {
+        ActorContext.set(new Actor(ORGANIZATION_ID, USER_ID, "tester"));
+        var repository = mock(SpectrumRepository.class);
+        var storage = mock(FileStorageFacade.class);
+        var category = category();
+        var original = chart(category.id(), UUID.randomUUID());
+        var recreated = chart(category.id(), UUID.randomUUID());
+        var fileId = UUID.randomUUID();
+        var requestId = UUID.randomUUID();
+        var parentRequestId = UUID.randomUUID();
+        when(repository.findCategory(ORGANIZATION_ID, category.id())).thenReturn(Optional.of(category));
+        when(repository.findChartByRequestId(ORGANIZATION_ID, requestId)).thenReturn(Optional.empty());
+        when(repository.findChartByHash(ORGANIZATION_ID, original.sha256())).thenReturn(Optional.of(original));
+        when(repository.insertChart(any())).thenReturn(recreated);
+        when(storage.open(ORGANIZATION_ID, fileId)).thenAnswer(ignored -> storedFile(fileId, original.sha256()));
+
+        var service = new SpectrumService(repository, storage, new ObjectMapper());
+        var command = new SpectrumService.CreateChartCommand(fileId.toString(), "复测图谱", category.id(),
+                null, null, null, null, requestId, true, new ObjectMapper().createObjectNode(), parentRequestId);
+
+        assertThat(service.createChart(command).id()).isEqualTo(recreated.id());
+        verify(repository).recordUploadAttempt(argThat(attempt ->
+                recreated.id().equals(attempt.chartId()) && parentRequestId.equals(attempt.parentRequestId())
+                        && "SUCCEEDED".equals(attempt.status())));
+    }
+
+    @Test
+    void preventsDeletingChartWithAnActiveProjectReference() {
         ActorContext.set(new Actor(ORGANIZATION_ID, USER_ID, "tester"));
         var repository = mock(SpectrumRepository.class);
         var chart = chart(UUID.randomUUID(), UUID.randomUUID());
         when(repository.findChart(ORGANIZATION_ID, chart.id())).thenReturn(Optional.of(chart));
-        when(repository.hasProjectUsage(ORGANIZATION_ID, chart.id())).thenReturn(true);
+        when(repository.hasActiveProjectReference(ORGANIZATION_ID, chart.id())).thenReturn(true);
 
         assertThatThrownBy(() -> new SpectrumService(repository, mock(FileStorageFacade.class), new ObjectMapper())
                 .deleteChart(chart.id()))
@@ -109,17 +137,28 @@ class SpectrumServiceTest {
     }
 
     @Test
-    void exportContainsChartManifestAndOriginalFile() throws Exception {
+    void preventsDeletingChartReferencedByAnAnalysisReport() {
+        ActorContext.set(new Actor(ORGANIZATION_ID, USER_ID, "tester"));
+        var repository = mock(SpectrumRepository.class);
+        var chart = chart(UUID.randomUUID(), UUID.randomUUID());
+        when(repository.findChart(ORGANIZATION_ID, chart.id())).thenReturn(Optional.of(chart));
+        when(repository.hasAnalysisReportReference(ORGANIZATION_ID, chart.id())).thenReturn(true);
+
+        assertThatThrownBy(() -> new SpectrumService(repository, mock(FileStorageFacade.class), new ObjectMapper())
+                .deleteChart(chart.id()))
+                .isInstanceOf(ApiException.class)
+                .satisfies(error -> assertThat(((ApiException) error).errorCode())
+                        .isEqualTo(ApiErrorCode.REFERENCE_IN_USE));
+        verify(repository, never()).deleteChart(ORGANIZATION_ID, chart.id());
+    }
+
+    @Test
+    void exportContainsOnlyOriginalFiles() throws Exception {
         ActorContext.set(new Actor(ORGANIZATION_ID, USER_ID, "tester"));
         var repository = mock(SpectrumRepository.class);
         var storage = mock(FileStorageFacade.class);
         var chart = chart(UUID.randomUUID(), UUID.randomUUID());
         when(repository.findChart(ORGANIZATION_ID, chart.id())).thenReturn(Optional.of(chart));
-        when(repository.listChartAnalysisExports(ORGANIZATION_ID, chart.id(), 20)).thenReturn(List.of(
-                new SpectrumRepository.ChartAnalysisExportRow(UUID.randomUUID(), "AI_CHAT", "列出图谱主峰",
-                        "[\"" + chart.id() + "\"]", "SUCCEEDED",
-                        "{\"observations\":[{\"label\":\"主峰\",\"value\":\"1730 cm-1\"}]}",
-                        Instant.now(), Instant.now())));
         when(storage.open(ORGANIZATION_ID, chart.fileObjectId())).thenAnswer(ignored ->
                 new FileStorageFacade.StoredFile(chart.fileObjectId(), chart.originalName(), chart.contentType(),
                         chart.size(), chart.sha256(), new ByteArrayInputStream("graph-image".getBytes(StandardCharsets.UTF_8))));
@@ -133,10 +172,8 @@ class SpectrumServiceTest {
                 entries.put(entry.getName(), new String(zip.readAllBytes(), StandardCharsets.UTF_8));
             }
         }
-        assertThat(entries).containsKey("图谱清单.csv");
-        assertThat(entries.get("图谱清单.csv")).contains(chart.title()).contains(chart.sha256());
-        assertThat(entries.get("AI分析结果.json")).contains("主峰").contains("1730 cm-1");
-        assertThat(entries.get("原始文件/" + chart.id() + "_" + chart.originalName())).isEqualTo("graph-image");
+        assertThat(entries).containsOnlyKeys(chart.originalName());
+        assertThat(entries.get(chart.originalName())).isEqualTo("graph-image");
     }
 
     private SpectrumRepository.CategoryRow category() {

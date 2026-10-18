@@ -29,14 +29,19 @@ const compositionDataset = {
   id: 'formula-template-version',
   name: '树脂配方历史数据',
   columns: [
-    { code: 'formula:additive', name: '助剂比例', kind: 'NUMERIC', unit: '%', filledCount: 8 },
-    { code: 'formula:resin_a', name: '树脂 A 比例', kind: 'NUMERIC', unit: '%', filledCount: 8 },
-    { code: 'formula:resin_b', name: '树脂 B 比例', kind: 'NUMERIC', unit: '%', filledCount: 8 },
+    { code: 'formula:00000000-0000-0000-0000-000000000001', name: '助剂比例', kind: 'NUMERIC', unit: '%', filledCount: 8, semanticType: 'MATERIAL_RATIO', materialId: '00000000-0000-0000-0000-000000000001', mappingStatus: 'MAPPED' },
+    { code: 'formula:00000000-0000-0000-0000-000000000002', name: '树脂 A 比例', kind: 'NUMERIC', unit: '%', filledCount: 8, semanticType: 'MATERIAL_RATIO', materialId: '00000000-0000-0000-0000-000000000002', mappingStatus: 'MAPPED' },
+    { code: 'formula:00000000-0000-0000-0000-000000000003', name: '树脂 B 比例', kind: 'NUMERIC', unit: '%', filledCount: 8, semanticType: 'MATERIAL_RATIO', materialId: '00000000-0000-0000-0000-000000000003', mappingStatus: 'MAPPED' },
     { code: 'result:wear', name: '耐磨次数', kind: 'NUMERIC', unit: '次', filledCount: 8 },
   ],
   rows: Array.from({ length: 8 }, (_, index) => ({
     id: `formula-experiment-${index}`, versionId: `formula-version-${index}`, label: `配方实验 ${index + 1}`, title: `配方实验 ${index + 1}`,
-    values: { 'formula:additive': 52 + index * 0.2, 'formula:resin_a': 3 + index * 0.1, 'formula:resin_b': 45 - index * 0.3, 'result:wear': 850 + index * 15 },
+    values: {
+      'formula:00000000-0000-0000-0000-000000000001': 52 + index * 0.2,
+      'formula:00000000-0000-0000-0000-000000000002': 3 + index * 0.1,
+      'formula:00000000-0000-0000-0000-000000000003': 45 - index * 0.3,
+      'result:wear': 850 + index * 15,
+    },
   })),
 }
 
@@ -76,7 +81,7 @@ describe('HistoricalOptimizationWorkbench', () => {
       { id: dataset.id, name: dataset.name, rowCount: dataset.rowCount, updatedAt: '' },
       { id: 'sparse-template', name: '稀疏配方记录', rowCount: 1, updatedAt: '' },
     ] })
-    api.historyDataset.mockImplementation(async (id: string) => id === sparseDataset.id ? sparseDataset : dataset)
+    api.historyDataset.mockImplementation((id: string) => id === sparseDataset.id ? sparseDataset : dataset)
     api.submit.mockResolvedValue({ runId: completedRun.id, executionStatus: 'QUEUED', pollAfterMs: 1000 })
     api.run.mockResolvedValue(completedRun)
     api.observations.mockResolvedValue({ observations: [] })
@@ -131,7 +136,7 @@ describe('HistoricalOptimizationWorkbench', () => {
       { id: dataset.id, name: dataset.name, rowCount: dataset.rowCount, updatedAt: '' },
       { id: second.id, name: second.name, rowCount: second.rowCount, updatedAt: '' },
     ] })
-    api.historyDataset.mockImplementation(async (id: string) => id === dataset.id ? dataset : second)
+    api.historyDataset.mockImplementation((id: string) => id === dataset.id ? dataset : second)
     render(<App><MemoryRouter><HistoricalOptimizationWorkbench /></MemoryRouter></App>)
     fireEvent.click(await screen.findByText('涂层历史数据'))
     fireEvent.click(await screen.findByText('涂层补充数据'))
@@ -177,9 +182,10 @@ describe('HistoricalOptimizationWorkbench', () => {
   })
 
   it('retains fixed zero materials and prevents infeasible recipe bounds before submission', async () => {
+    const stabilizerId = '00000000-0000-0000-0000-000000000004'
     const source = { ...compositionDataset, columns: [...compositionDataset.columns,
-      { code: 'formula:zero', name: '稳定剂比例', kind: 'NUMERIC', unit: '%', materialId: 'zero', filledCount: 8 }],
-      rows: compositionDataset.rows.map(row => ({ ...row, values: { ...row.values, 'formula:zero': 0 } })) }
+      { code: `formula:${stabilizerId}`, name: '稳定剂比例', kind: 'NUMERIC', unit: '%', semanticType: 'MATERIAL_RATIO', mappingStatus: 'MAPPED', materialId: stabilizerId, filledCount: 8 }],
+      rows: compositionDataset.rows.map(row => ({ ...row, values: { ...row.values, [`formula:${stabilizerId}`]: 0 } })) }
     api.historyDataset.mockResolvedValue(source)
     api.historyDatasets.mockResolvedValue({ items: [{ id: source.id, name: source.name, rowCount: 8, updatedAt: '' }] })
     render(<App><MemoryRouter><HistoricalOptimizationWorkbench /></MemoryRouter></App>)
@@ -213,7 +219,7 @@ describe('HistoricalOptimizationWorkbench', () => {
       },
       searchEvidence: { trainingRowCount: 9 },
     }
-    api.run.mockImplementation(async (id: string) => id === 'run-2' ? secondRun : completedRun)
+    api.run.mockImplementation((id: string) => id === 'run-2' ? secondRun : completedRun)
     api.saveObservations.mockResolvedValue({ observations: [
       { candidateId: 'candidate-1', fieldCode: 'result:gloss', value: 51.2, updatedAt: new Date().toISOString() },
     ], savedCount: 1 })

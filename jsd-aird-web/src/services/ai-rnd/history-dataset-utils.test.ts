@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mergeHistoryDatasets, selectedRowIdsByDataset } from './history-dataset-utils'
+import { isMappedFormulaColumn, isUnmappedFormulaColumn, mergeHistoryDatasets, selectedRowIdsByDataset } from './history-dataset-utils'
 import type { HistoryDataset } from './optimization-api'
 
 const table = (id: string, name: string, unit = '°C'): HistoryDataset => ({
@@ -56,5 +56,27 @@ describe('history-dataset-utils', () => {
     const merged = mergeHistoryDatasets([table('a', '表 A'), table('b', '表 B')])!
     expect(selectedRowIdsByDataset(['a', 'b'], merged.rows, {})).toEqual({ a: ['row-a'], b: ['row-b'] })
     expect(selectedRowIdsByDataset(['a', 'b'], merged.rows, { a: [], b: ['row-b'] })).toEqual({ a: [], b: ['row-b'] })
+  })
+
+  it('recognizes formula ratios from metadata and rejects unmapped legacy material columns', () => {
+    const mapped = { code: 'formula:00000000-0000-0000-0000-000000000001', name: '树脂比例', kind: 'NUMERIC' as const, unit: '%', filledCount: 1,
+      semanticType: 'MATERIAL_RATIO' as const, materialId: '00000000-0000-0000-0000-000000000001', mappingStatus: 'MAPPED' as const }
+    const unmapped = { code: 'unmapped-formula:legacy-resin', name: '旧树脂比例（未绑定材料）', kind: 'NUMERIC' as const, unit: '%', filledCount: 1,
+      semanticType: 'MATERIAL_RATIO' as const, mappingStatus: 'UNMAPPED' as const }
+    const legacyPrefixOnly = { code: 'formula:predictable-looking-code', name: '旧比例', kind: 'NUMERIC' as const, unit: '%', filledCount: 1 }
+
+    expect(isMappedFormulaColumn(mapped)).toBe(true)
+    expect(isUnmappedFormulaColumn(mapped)).toBe(false)
+    expect(isMappedFormulaColumn(unmapped)).toBe(false)
+    expect(isUnmappedFormulaColumn(unmapped)).toBe(true)
+    expect(isMappedFormulaColumn(legacyPrefixOnly)).toBe(false)
+  })
+
+  it('does not merge columns whose material mapping metadata differs', () => {
+    const first = table('a', '表 A'), second = table('b', '表 B')
+    Object.assign(first.columns[0]!, { semanticType: 'MATERIAL_RATIO', materialId: '00000000-0000-0000-0000-000000000001', mappingStatus: 'MAPPED' })
+    Object.assign(second.columns[0]!, { semanticType: 'MATERIAL_RATIO', mappingStatus: 'UNMAPPED' })
+
+    expect(mergeHistoryDatasets([first, second])!.columns.map(column => column.code)).toEqual(['result:gloss'])
   })
 })

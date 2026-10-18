@@ -1,12 +1,12 @@
-import { DownloadOutlined, EyeOutlined, FileExcelOutlined, RightOutlined } from '@ant-design/icons';
-import { Alert, App, Button, Form, Select } from 'antd';
+import { FileExcelOutlined, FilePdfOutlined, FileWordOutlined, RightOutlined } from '@ant-design/icons';
+import { Alert, App, Form, Select, Upload } from 'antd';
 import type { UploadFile } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { UploadWorkspace, type UploadWorkspaceRecord } from '@/components/upload-workspace';
 import { ProjectRelationPicker } from '@/components/project-relations/ProjectRelationPicker';
-import { FilePreviewModal, downloadPreviewFile, type FilePreviewDescriptor } from '@/components/file-preview';
+import { downloadFile } from '@/services/files';
 import { dataApi, type DataJob, type DataTemplateOption } from '@/services/data/data-api';
 import { dataParseProgress, dataParseStageLabel } from '@/services/data/data-progress';
 import type { ProjectRelationTarget } from '@/services/project/project-resource-api';
@@ -18,6 +18,8 @@ const statusFilters = [
   { key: 'PARSING', label: '解析中' },
   { key: 'WAITING_CONFIRM', label: '待审核' },
   { key: 'COMPLETED', label: '已完成' },
+  { key: 'FAILED', label: '失败' },
+  { key: 'CANCELLED', label: '已取消' },
 ];
 
 const statusView: Record<string, { label: string; color: string }> = {
@@ -34,19 +36,44 @@ const statusView: Record<string, { label: string; color: string }> = {
   CANCELLED: { label: '已取消', color: 'default' },
 };
 
-function jobRecord(job: DataJob, navigate: (path: string) => void, onPreview: (job: DataJob) => void, onDownload: (job: DataJob) => void): UploadWorkspaceRecord {
+const supportedSourceFileName = /\.(?:xls|xlsx|csv|doc|docx|pdf)$/i;
+const documentSourceFileName = /\.(?:doc|docx|pdf)$/i;
+
+function documentSourceFormat(fileName: string) {
+  return /\.pdf$/i.test(fileName) ? 'PDF' : 'DOCX';
+}
+
+function jobRecord(
+  job: DataJob,
+  navigate: (path: string) => void,
+  onDownload: (job: DataJob) => Promise<void>,
+  onRetry: (job: DataJob) => Promise<void>,
+  onDelete: (job: DataJob) => void,
+  retrying: boolean,
+  deleting: boolean,
+): UploadWorkspaceRecord {
   const status = statusView[job.status] || { label: job.status, color: 'default' };
   const parseProgress = dataParseProgress(job);
+  const terminal = ['COMPLETED', 'FAILED', 'CANCELLED'].includes(job.status);
   return {
     id: job.id,
     name: job.sourceFileName,
-    icon: <FileExcelOutlined />,
-    meta: job.templateVersionId ? `模板版本 ${job.templateVersionId}` : '自由实验识别',
-    detail: `${new Date(job.createdAt).toLocaleString('zh-CN')} · ${dataParseStageLabel(job)}`,
+    icon: job.sourceFormat === 'PDF' ? <FilePdfOutlined />
+      : job.sourceFormat === 'DOCX' ? <FileWordOutlined />
+        : <FileExcelOutlined />,
+    meta: job.templateVersionId ? `模板版本 ${job.templateVersionId}` : '自由识别',
+    detail: job.status === 'FAILED' && job.errorMessage
+      ? `${new Date(job.createdAt).toLocaleString('zh-CN')} · ${job.errorMessage}`
+      : `${new Date(job.createdAt).toLocaleString('zh-CN')} · ${dataParseStageLabel(job)}`,
     status,
     progress: parseProgress,
     progressLabel: '解析进度',
-    actions: <><Button type="link" icon={<EyeOutlined />} onClick={() => onPreview(job)}>预览</Button><Button type="link" icon={<DownloadOutlined />} onClick={() => onDownload(job)}>下载</Button><Button type="link" icon={<RightOutlined />} onClick={() => navigate(job.templateVersionId ? `/data/import-jobs/${job.id}` : `/data/recognition-jobs/${job.id}`)}>查看导入任务</Button></>,
+    commonActions: {
+      view: { onClick: () => navigate(job.templateVersionId ? `/data/import-jobs/${job.id}` : `/data/recognition-jobs/${job.id}`) },
+      download: { onClick: () => { void onDownload(job); } },
+      retry: { disabled: !terminal, loading: retrying, onClick: () => { void onRetry(job); } },
+      delete: { disabled: !terminal, loading: deleting, onClick: () => onDelete(job) },
+    },
   };
 }
 
@@ -61,9 +88,10 @@ export function DataUploadPage() {
   const [jobStatus, setJobStatus] = useState('ALL');
   const [jobKeyword, setJobKeyword] = useState('');
   const [jobsLoading, setJobsLoading] = useState(false);
-  const [previewFile, setPreviewFile] = useState<FilePreviewDescriptor>();
   const [projectRelations, setProjectRelations] = useState<ProjectRelationTarget[]>([]);
   const [experimentCategoryId, setExperimentCategoryId] = useState<string>();
+  const [retryingJobId, setRetryingJobId] = useState<string>();
+  const [deletingJobId, setDeletingJobId] = useState<string>();
 
   useEffect(() => {
     setTemplateVersionId(undefined);
@@ -107,94 +135,130 @@ export function DataUploadPage() {
   const chosen = useMemo(() => templates.find((item) => item.versionId === templateVersionId), [templateVersionId, templates]);
 
   const submit = async () => {
-    const file = files[0]?.originFileObj;
-    if (!file) { void message.warning('请选择数据文件'); return; }
-    if (!chosen) { void message.warning('请选择已发布模板'); return; }
-    if (chosen.experimentImportReady && !experimentCategoryId) { void message.warning('实验模板暂未配置默认实验分类'); return; }
+    const selectedFiles = files.flatMap((item) => item.originFileObj ? [{ file: item.originFileObj, uid: item.uid }] : []);
+    if (!selectedFiles.length) { void message.warning('请选择数据文件'); return; }
+    const templateFiles = selectedFiles.filter(({ file }) => !documentSourceFileName.test(file.name));
+    if (templateFiles.length && !chosen) { void message.warning('Excel / CSV 文件请选择已发布模板'); return; }
+    if (templateFiles.length && chosen?.experimentImportReady && !experimentCategoryId) { void message.warning('实验模板暂未配置默认实验分类'); return; }
     setLoading(true);
-    const fileUid = files[0]?.uid;
-    const updateUploadFile = (status: UploadFile['status'], percent: number) => {
-      setFiles((current) => current.map((item) => item.uid === fileUid ? { ...item, status, percent } : item));
-    };
-    updateUploadFile('uploading', 0);
-    let uploadCompleted = false;
+    const failedUids = new Set<string>();
+    let succeeded = 0;
+    let skipped = 0;
     try {
-      const staged = await dataApi.stageSource(file, (percent) => updateUploadFile('uploading', percent));
-      uploadCompleted = true;
-      updateUploadFile('done', 100);
-      const create = async (duplicateOverride: boolean) => dataApi.createJob({
-        sourceFileId: staged.fileId,
-        templateVersionId: chosen.versionId,
-        duplicateOverride,
-        projectRelations,
-        importPurpose: chosen.experimentImportReady ? 'EXPERIMENT_DRAFT' : 'DATA_ONLY',
-        targetExperimentCategoryId: chosen.experimentImportReady ? experimentCategoryId : undefined,
-      });
-      try {
-        const job = await create(false);
-        navigate(`/data/import-jobs/${job.id}`);
-      } catch (error) {
-        if (error instanceof Error && error.message.includes('历史任务')) {
-          modal.confirm({
-            title: '文件已成功导入过',
-            content: `${error.message}。是否明确创建一次重复导入？重复导入不会覆盖历史修订。`,
-            okText: '确认重复导入',
-            cancelText: '取消',
-            onOk: async () => {
-              setLoading(true);
-              try {
-                const job = await create(true);
-                navigate(`/data/import-jobs/${job.id}`);
-              } catch (retryError) {
-                void message.error(retryError instanceof Error ? retryError.message : '重复导入创建失败');
-              } finally {
-                setLoading(false);
-              }
-            },
+      for (const entry of selectedFiles) {
+        const updateUploadFile = (status: UploadFile['status'], percent: number) => {
+          setFiles((current) => current.map((item) => item.uid === entry.uid ? { ...item, status, percent } : item));
+        };
+        updateUploadFile('uploading', 0);
+        try {
+          const staged = await dataApi.stageSource(entry.file, (percent) => updateUploadFile('uploading', percent));
+          if (documentSourceFileName.test(entry.file.name)) {
+            await dataApi.createRecognitionJob({
+              sourceFileId: staged.fileId,
+              sourceFormat: documentSourceFormat(entry.file.name),
+              recognitionMode: 'FREEFORM',
+              importPurpose: 'DATA_ONLY',
+              projectRelations,
+            });
+            succeeded += 1;
+            updateUploadFile('done', 100);
+            continue;
+          }
+          if (!chosen) throw new Error('Excel / CSV 文件请选择已发布模板');
+          const create = (duplicateOverride: boolean) => dataApi.createJob({
+            sourceFileId: staged.fileId,
+            templateVersionId: chosen.versionId,
+            duplicateOverride,
+            projectRelations,
+            importPurpose: chosen.experimentImportReady ? 'EXPERIMENT_DRAFT' : 'DATA_ONLY',
+            targetExperimentCategoryId: chosen.experimentImportReady ? experimentCategoryId : undefined,
           });
-        } else throw error;
+          try {
+            await create(false);
+          } catch (error) {
+            if (!(error instanceof Error) || !error.message.includes('历史任务')) throw error;
+            const override = await new Promise<boolean>((resolve) => {
+              modal.confirm({
+                title: `“${entry.file.name}”文件已成功导入过`,
+                content: `${error.message}。确认后会保留旧任务并单独创建一次重复导入。`,
+                okText: '确认重复导入', cancelText: '跳过本文件',
+                onOk: () => resolve(true), onCancel: () => resolve(false),
+              });
+            });
+            if (!override) { skipped += 1; continue; }
+            await create(true);
+          }
+          succeeded += 1;
+          updateUploadFile('done', 100);
+        } catch (error) {
+          failedUids.add(entry.uid);
+          updateUploadFile('error', 0);
+          void message.error(error instanceof Error ? `${entry.file.name}：${error.message}` : `${entry.file.name}：创建导入任务失败`);
+        }
       }
-      setFiles([]);
+      setFiles((current) => current.filter((item) => failedUids.has(item.uid)));
       await loadJobs();
+      if (failedUids.size) void message.warning(`${succeeded} 个文件已接收，${skipped} 个跳过，${failedUids.size} 个失败，可重新提交失败文件`);
+      else if (skipped) void message.info(`${succeeded} 个文件已接收，${skipped} 个重复文件已跳过`);
+      else void message.success(`已接收 ${succeeded} 个文件，系统正在处理`);
     } catch (error) {
-      updateUploadFile(uploadCompleted ? 'done' : 'error', uploadCompleted ? 100 : 0);
       void message.error(error instanceof Error ? error.message : '创建导入任务失败');
     } finally {
       setLoading(false);
     }
   };
 
-  const fileDescriptor = (job: DataJob): FilePreviewDescriptor => ({
-    fileName: job.sourceFileName,
-    load: () => dataApi.sourcePreviewBlob(job.sourceFileId),
-    downloadUrl: `/api/v1/files/${encodeURIComponent(job.sourceFileId)}/content`,
-  });
-  const openPreview = (job: DataJob) => setPreviewFile(fileDescriptor(job));
   const downloadJob = async (job: DataJob) => {
-    try { await downloadPreviewFile(fileDescriptor(job)); void message.success('原文件下载已开始'); }
+    try { await downloadFile(job.sourceFileId, job.sourceFileName); void message.success('原文件下载已开始'); }
     catch (error) { void message.error(error instanceof Error ? error.message : '原文件下载失败'); }
   };
-  const records = jobs.items.map((job) => jobRecord(job, navigate, openPreview, () => { void downloadJob(job); }));
+  const retryJob = async (job: DataJob) => {
+    setRetryingJobId(job.id);
+    try {
+      if (job.templateVersionId) await dataApi.reprocessJob(job.id);
+      else await dataApi.retryRecognitionJob(job.id);
+      await loadJobs();
+      void message.success('已重新处理');
+    }
+    catch (error) { void message.error(error instanceof Error ? error.message : '重新处理失败'); }
+    finally { setRetryingJobId(undefined); }
+  };
+  const deleteJob = (job: DataJob) => {
+    modal.confirm({
+      title: `删除“${job.sourceFileName}”的上传记录？`,
+      content: '只隐藏上传历史；原文件、已导入数据和实验记录会保留。',
+      okText: '删除记录', okButtonProps: { danger: true }, cancelText: '取消',
+      onOk: async () => {
+        setDeletingJobId(job.id);
+        try { await dataApi.hideJob(job.id); await loadJobs(); void message.success('上传历史已隐藏'); }
+        catch (error) { void message.error(error instanceof Error ? error.message : '删除上传记录失败'); }
+        finally { setDeletingJobId(undefined); }
+      },
+    });
+  };
+  const records = jobs.items.map((job) => jobRecord(job, navigate, downloadJob, retryJob, deleteJob,
+    retryingJobId === job.id, deletingJobId === job.id));
 
   return (
     <>
       <UploadWorkspace
       breadcrumbs={[{ title: '数据中心' }, { title: '数据上传' }]}
       title="数据上传"
-      description="选择已发布模板并上传文件，核对字段与数据后确认导入。"
+      description="Excel / CSV 按已发布模板导入；Word / PDF 可直接提交自由识别。上传后可查看处理状态与失败原因。"
       leftTitle="选择导入模板"
       classification={<Form layout="vertical" component={false}>
-        <Form.Item label="导入模板" required>
+        <Form.Item label="Excel / CSV 导入模板">
           <Select
             showSearch
             optionFilterProp="label"
-            placeholder="请选择已发布模板"
+            placeholder="请选择已发布模板（Word / PDF 可不选）"
             value={templateVersionId}
             onChange={setTemplateVersionId}
             options={templates.map((item) => ({ value: item.versionId, label: `${item.name} · ${item.templateCode} · V${item.versionNo}` }))}
             notFoundContent="暂无已发布模板"
           />
         </Form.Item>
+        <Alert type="info" showIcon message="Excel / CSV 按模板导入；Word / PDF 使用自由识别，可不选模板。" />
         {chosen && <Alert
           showIcon
           type={chosen.experimentImportReady ? 'success' : 'info'}
@@ -205,21 +269,30 @@ export function DataUploadPage() {
         />}
         <Form.Item label="关联项目 / 阶段 / 任务" extra="所选关联会应用到本次导入的工作表、数据行和来源文件。"><ProjectRelationPicker value={projectRelations} onChange={setProjectRelations} /></Form.Item>
       </Form>}
-      accept=".xls,.xlsx,.csv"
-      maxCount={1}
+      accept=".xls,.xlsx,.csv,.doc,.docx,.pdf"
+      beforeUpload={(file) => {
+        if (!supportedSourceFileName.test(file.name)) {
+          void message.error(`不支持“${file.name}”：请上传 Excel、CSV、Word 或 PDF 文件`);
+          return Upload.LIST_IGNORE;
+        }
+        return false;
+      }}
+      multiple
+      maxCount={20}
       files={files}
       onFilesChange={setFiles}
       onRemoveFile={(file) => setFiles((current) => current.filter((item) => item.uid !== file.uid))}
       onClearFiles={() => setFiles([])}
       uploadMainText="拖拽文件到此处/点击选择文件/点击拍照上传"
-      uploadHint="支持 XLS / XLSX / CSV；可批量上传，单个文件最大100M。"
+      uploadHint="支持 XLS / XLSX / CSV / DOC / DOCX / PDF；单次最多 20 个文件，单个文件最大 100M。"
       uploadDisabled={loading}
       previewEmptyText="暂无待导入文件，点击上方区域选择文件"
       submitLabel="创建导入任务"
       submitIcon={<RightOutlined />}
       onSubmit={() => void submit()}
       submitting={loading}
-      submitDisabled={!chosen || (chosen?.experimentImportReady === true && !experimentCategoryId)}
+      submitDisabled={files.some((item) => item.originFileObj && !documentSourceFileName.test(item.name))
+        && (!chosen || (chosen.experimentImportReady && !experimentCategoryId))}
       rightTitle="已上传数据"
       rightCount={jobs.total}
       rightFilters={statusFilters}
@@ -233,7 +306,6 @@ export function DataUploadPage() {
       pagination={{ current: jobs.page, pageSize: jobs.size, total: jobs.total }}
       onPageChange={(page, pageSize) => setJobs((current) => ({ ...current, page, size: pageSize }))}
       />
-      <FilePreviewModal open={Boolean(previewFile)} file={previewFile} onClose={() => setPreviewFile(undefined)} showSpreadsheetMerges={false} />
     </>
   );
 }

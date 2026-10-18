@@ -135,7 +135,7 @@ public class SpectrumService {
             }
             repository.lockChartHash(actor.organizationId(), file.sha256());
             var duplicate = repository.findChartByHash(actor.organizationId(), file.sha256());
-            if (duplicate.isPresent()) {
+            if (duplicate.isPresent() && !command.duplicateOverride()) {
                 throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "相同图谱文件已存在：" + duplicate.get().title());
             }
             var title = StringUtils.hasText(command.title()) ? command.title().trim() : file.originalName();
@@ -147,7 +147,7 @@ public class SpectrumService {
             storage.activate(fileId);
             repository.recordUploadAttempt(new SpectrumRepository.NewUploadAttempt(actor.organizationId(), requestId,
                     category.id(), chart.id(), fileId, file.originalName(), file.size(), "SUCCEEDED", null, null,
-                    actor.userId()));
+                    jsonObject(command.uploadContext()), command.parentRequestId(), actor.userId()));
             audit(actor, "SPECTRUM_CHART_CREATED", "SPECTRUM_CHART", chart.id(), chart.title());
             return chartView(chart);
         } catch (DataIntegrityViolationException exception) {
@@ -183,6 +183,7 @@ public class SpectrumService {
     public ChartView updateChart(UUID chartId, UpdateChartCommand command) {
         var actor = ActorContext.required();
         requireChart(actor.organizationId(), chartId);
+        if (command.categoryId() != null) assignChartCategory(chartId, command.categoryId());
         repository.updateChart(actor.organizationId(), chartId, required(command.title(), "图谱名称不能为空"),
                 trim(command.sampleName()), trim(command.batchNo()), trim(command.testConditions()), validJsonObject(command.metadata()));
         audit(actor, "SPECTRUM_CHART_UPDATED", "SPECTRUM_CHART", chartId, command.title());
@@ -206,9 +207,10 @@ public class SpectrumService {
     public void deleteChart(UUID chartId) {
         var actor = ActorContext.required();
         requireChart(actor.organizationId(), chartId);
-        if (repository.hasProjectUsage(actor.organizationId(), chartId)) {
+        if (repository.hasActiveProjectReference(actor.organizationId(), chartId)
+                || repository.hasAnalysisReportReference(actor.organizationId(), chartId)) {
             throw new ApiException(ApiErrorCode.REFERENCE_IN_USE,
-                    "图谱已关联项目或加入项目资料，请先解除关联和资料引用后删除");
+                    "图谱已被项目参考资料或分析记录引用，暂不能删除；请先处理相关引用");
         }
         repository.deleteChart(actor.organizationId(), chartId);
         audit(actor, "SPECTRUM_CHART_DELETED", "SPECTRUM_CHART", chartId, null);
@@ -224,14 +226,24 @@ public class SpectrumService {
         repository.recordUploadAttempt(new SpectrumRepository.NewUploadAttempt(actor.organizationId(),
                 command.requestId(), command.categoryId(), null, command.fileObjectId(),
                 bounded(required(command.originalName(), "文件名不能为空"), 500), Math.max(0, command.size()), status,
-                bounded(trim(command.errorCode()), 80), bounded(trim(command.errorMessage()), 2000), actor.userId()));
+                bounded(trim(command.errorCode()), 80), bounded(trim(command.errorMessage()), 2000),
+                jsonObject(command.uploadContext()), command.parentRequestId(), actor.userId()));
     }
 
     public List<UploadAttemptView> uploadAttempts(int limit) {
         var actor = ActorContext.required();
         return repository.listUploadAttempts(actor.organizationId(), limit).stream().map(row ->
                 new UploadAttemptView(row.requestId(), row.categoryId(), row.chartId(), row.originalName(),
-                        row.size(), row.status(), row.errorCode(), row.errorMessage(), row.createdAt())).toList();
+                        row.fileObjectId(), row.size(), row.status(), row.errorCode(), row.errorMessage(),
+                        parseJson(row.uploadContextJson()), row.parentRequestId(), row.createdAt())).toList();
+    }
+
+    @Transactional
+    public void hideUploadAttempt(UUID requestId) {
+        var actor = ActorContext.required();
+        if (repository.hideUploadAttempt(actor.organizationId(), requestId) == 0) {
+            throw new ApiException(ApiErrorCode.NOT_FOUND, "上传记录不存在或已删除");
+        }
     }
 
     public void writeExport(List<UUID> requestedIds, OutputStream output) throws IOException {
@@ -245,42 +257,11 @@ public class SpectrumService {
         }
         var charts = ids.stream().map(id -> requireChart(actor.organizationId(), id)).toList();
         try (var zip = new ZipOutputStream(output, StandardCharsets.UTF_8)) {
-            zip.putNextEntry(new ZipEntry("图谱清单.csv"));
-            zip.write("\uFEFF图谱名称,分类,样品名称,批号,测试条件,源文件,文件大小,页数,SHA-256,元数据\r\n"
-                    .getBytes(StandardCharsets.UTF_8));
-            for (var chart : charts) {
-                var metadata = validJsonObject(chart.metadataJson());
-                var line = List.of(chart.title(), chart.categoryName(), blankValue(chart.sampleName()),
-                        blankValue(chart.batchNo()), blankValue(chart.testConditions()), chart.originalName(),
-                        Long.toString(chart.size()), Integer.toString(chart.pageCount()), chart.sha256(), metadata)
-                        .stream().map(this::csv).collect(java.util.stream.Collectors.joining(",")) + "\r\n";
-                zip.write(line.getBytes(StandardCharsets.UTF_8));
-            }
-            zip.closeEntry();
-            var analysisRows = new LinkedHashMap<UUID, SpectrumRepository.ChartAnalysisExportRow>();
-            for (var chart : charts) {
-                repository.listChartAnalysisExports(actor.organizationId(), chart.id(), 20)
-                        .forEach(row -> analysisRows.putIfAbsent(row.id(), row));
-            }
-            var analyses = objectMapper.createArrayNode();
-            for (var row : analysisRows.values()) {
-                var analysis = analyses.addObject();
-                analysis.put("analysisId", row.id().toString());
-                analysis.put("mode", row.mode());
-                analysis.put("question", row.question());
-                analysis.put("status", row.status());
-                analysis.set("chartIds", parse(row.chartIdsJson(), objectMapper.createArrayNode()));
-                analysis.set("result", parse(row.resultJson(), objectMapper.createObjectNode()));
-                if (row.createdAt() != null) analysis.put("createdAt", row.createdAt().toString());
-                if (row.completedAt() != null) analysis.put("completedAt", row.completedAt().toString());
-            }
-            zip.putNextEntry(new ZipEntry("AI分析结果.json"));
-            zip.write(analyses.toPrettyString().getBytes(StandardCharsets.UTF_8));
-            zip.closeEntry();
+            var usedNames = new java.util.HashSet<String>();
             for (var chart : charts) {
                 var stored = openChart(actor.organizationId(), chart.id());
                 try (var stream = stored.file().stream()) {
-                    zip.putNextEntry(new ZipEntry("原始文件/" + chart.id() + "_" + safeFileName(chart.originalName())));
+                    zip.putNextEntry(new ZipEntry(com.jsd.aird.shared.office.ArchiveFileNames.unique(chart.originalName(), usedNames)));
                     stream.transferTo(zip);
                     zip.closeEntry();
                 }
@@ -289,19 +270,8 @@ public class SpectrumService {
         }
     }
 
-    private String csv(String value) {
-        return "\"" + (value == null ? "" : value.replace("\"", "\"\"")) + "\"";
-    }
-
-    private String blankValue(String value) { return value == null ? "" : value; }
-
     private String bounded(String value, int maxLength) {
         return value == null || value.length() <= maxLength ? value : value.substring(0, maxLength);
-    }
-
-    private String safeFileName(String value) {
-        var safe = value == null ? "图谱文件" : value.replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]", "_").trim();
-        return safe.isEmpty() ? "图谱文件" : safe;
     }
 
     public StoredChartFile openChart(UUID chartId) {
@@ -449,6 +419,18 @@ public class SpectrumService {
         return value == null || !value.isObject() ? "{}" : value.toString();
     }
 
+    private String jsonObject(JsonNode value) {
+        if (value == null || value.isNull()) return "{}";
+        if (!value.isObject() || value.toString().length() > 16_000) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "上传记录信息无效或过长");
+        }
+        return value.toString();
+    }
+
+    private JsonNode parseJson(String value) {
+        return parse(value, objectMapper.createObjectNode());
+    }
+
     private String validJsonObject(String value) {
         try {
             var node = StringUtils.hasText(value) ? objectMapper.readTree(value) : objectMapper.createObjectNode();
@@ -513,17 +495,31 @@ public class SpectrumService {
     public record CategoryCommand(String code, String name, String description, String analysisHint, JsonNode fields) { }
 
     public record CreateChartCommand(String fileId, String title, UUID categoryId, String sampleName, String batchNo,
-                                     String testConditions, JsonNode metadata, UUID requestId) { }
+                                     String testConditions, JsonNode metadata, UUID requestId,
+                                     boolean duplicateOverride, JsonNode uploadContext, UUID parentRequestId) {
+        public CreateChartCommand(String fileId, String title, UUID categoryId, String sampleName, String batchNo,
+                                  String testConditions, JsonNode metadata, UUID requestId) {
+            this(fileId, title, categoryId, sampleName, batchNo, testConditions, metadata, requestId,
+                    false, null, null);
+        }
+    }
 
     public record UploadAttemptCommand(UUID requestId, UUID categoryId, UUID fileObjectId, String originalName,
-                                       long size, String status, String errorCode, String errorMessage) { }
+                                       long size, String status, String errorCode, String errorMessage,
+                                       JsonNode uploadContext, UUID parentRequestId) {
+        public UploadAttemptCommand(UUID requestId, UUID categoryId, UUID fileObjectId, String originalName,
+                                    long size, String status, String errorCode, String errorMessage) {
+            this(requestId, categoryId, fileObjectId, originalName, size, status, errorCode, errorMessage,
+                    null, null);
+        }
+    }
 
     public record UploadAttemptView(UUID requestId, UUID categoryId, UUID chartId, String originalName,
-                                    long size, String status, String errorCode, String errorMessage,
-                                    Instant createdAt) { }
+                                    UUID fileObjectId, long size, String status, String errorCode, String errorMessage,
+                                    JsonNode uploadContext, UUID parentRequestId, Instant createdAt) { }
 
     public record UpdateChartCommand(String title, String sampleName, String batchNo, String testConditions,
-                                     JsonNode metadata) { }
+                                     JsonNode metadata, UUID categoryId) { }
 
     public record CategoryView(UUID id, String code, String name, String description, String analysisHint,
                                JsonNode fields, int sortOrder, boolean systemCategory, long chartCount) {

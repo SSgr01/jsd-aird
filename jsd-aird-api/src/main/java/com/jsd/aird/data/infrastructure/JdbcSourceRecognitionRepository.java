@@ -46,7 +46,8 @@ public class JdbcSourceRecognitionRepository implements SourceRecognitionReposit
         var payload = json.createObjectNode()
                 .put("organizationId", job.organizationId().toString())
                 .put("recognitionJobId", job.id().toString())
-                .put("sourceOwner", job.sourceOwner());
+                .put("sourceOwner", job.sourceOwner())
+                .put("actorId", job.actorId().toString());
         jdbc.update("""
                 INSERT INTO ops.async_job(id,organization_id,job_type,status,payload_jsonb,priority,idempotency_key)
                 VALUES(gen_random_uuid(),?,'SOURCE_RECOGNITION_PARSE','READY',?,50,?)
@@ -103,7 +104,7 @@ public class JdbcSourceRecognitionRepository implements SourceRecognitionReposit
     }
 
     @Override
-    public int markParsing(UUID organizationId, UUID id, String sourceOwner) {
+    public int markParsing(UUID organizationId, UUID id, String sourceOwner, UUID actorId) {
         var updated = jdbc.update("""
                 UPDATE data.import_job SET status='QUEUED',progress=0,current_stage='QUEUED',
                     error_message=NULL,updated_at=now()
@@ -113,7 +114,8 @@ public class JdbcSourceRecognitionRepository implements SourceRecognitionReposit
             var sequence = jdbc.queryForObject("SELECT source_sequence+1 FROM data.import_job WHERE organization_id=? AND id=?",
                     Long.class, organizationId, id);
             var payload = json.createObjectNode().put("organizationId", organizationId.toString())
-                    .put("recognitionJobId", id.toString()).put("sourceOwner", sourceOwner);
+                    .put("recognitionJobId", id.toString()).put("sourceOwner", sourceOwner)
+                    .put("actorId", actorId.toString());
             jdbc.update("""
                     INSERT INTO ops.async_job(id,organization_id,job_type,status,payload_jsonb,priority,idempotency_key)
                     VALUES(gen_random_uuid(),?,'SOURCE_RECOGNITION_PARSE','READY',?,50,?)

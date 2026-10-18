@@ -6,6 +6,13 @@ const compatibleColumn = (left: HistoryDatasetColumn, right: HistoryDatasetColum
   left.kind === right.kind && normalizedUnit(left.unit) === normalizedUnit(right.unit) && JSON.stringify((left.testMethods ?? []).map(normalizedFieldName).sort()) === JSON.stringify((right.testMethods ?? []).map(normalizedFieldName).sort())
   && (left.testStage ?? '') === (right.testStage ?? '') && (left.materialId ?? '') === (right.materialId ?? '')
   && (left.compositionBasis ?? '') === (right.compositionBasis ?? '') && (left.measurementComponent ?? '') === (right.measurementComponent ?? '')
+  && left.semanticType === right.semanticType && left.mappingStatus === right.mappingStatus
+
+export const isMappedFormulaColumn = (column: HistoryDatasetColumn) =>
+  column.semanticType === 'MATERIAL_RATIO' && column.mappingStatus === 'MAPPED' && Boolean(column.materialId)
+
+export const isUnmappedFormulaColumn = (column: HistoryDatasetColumn) =>
+  column.semanticType === 'MATERIAL_RATIO' && column.mappingStatus === 'UNMAPPED'
 
 /**
  * Combine matching experiment fields by stable code, or by an unambiguous
@@ -83,6 +90,6 @@ export function selectedRowIdsByDataset(
 export const columnValues = (dataset: HistoryDataset | undefined, code: string) => (dataset?.rows ?? [])
   .map(row => row.values[code]).filter(value => value !== undefined && value !== null && value !== '')
 export const columnLevels = (dataset: HistoryDataset | undefined, code: string) => new Set(columnValues(dataset, code)).size
-export const materialColumn = (column: HistoryDatasetColumn) => Boolean(column.materialId) || column.code.startsWith('formula:')
+export const materialColumn = isMappedFormulaColumn
 export const fixedMaterial = (dataset: HistoryDataset | undefined, column: HistoryDatasetColumn) => materialColumn(column)
   && column.kind === 'NUMERIC' && columnLevels(dataset, column.code) === 1

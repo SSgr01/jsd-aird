@@ -1,4 +1,4 @@
-import { DeleteOutlined, DownloadOutlined, EyeOutlined, FolderOpenOutlined, LineChartOutlined, MessageOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons';
+import { DeleteOutlined, DownloadOutlined, EyeOutlined, FolderOpenOutlined, LineChartOutlined, MessageOutlined, RedoOutlined, SearchOutlined, UploadOutlined } from '@ant-design/icons';
 import { App, Button, Dropdown, Empty, Input, Modal, Select, Space, Table, Tag, Typography } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -11,6 +11,7 @@ import { ProjectRelationPicker } from '@/components/project-relations/ProjectRel
 import type { ProjectRelationTarget } from '@/services/project/project-resource-api';
 import { projectResourceApi } from '@/services/project/project-resource-api';
 import { spectrumApi, type SpectrumCategory, type SpectrumChart } from '@/services/spectrum';
+import { SpectrumChartEditor } from './SpectrumChartEditor';
 
 const formatSize = (size: number) => size < 1024 * 1024 ? `${Math.ceil(size / 1024)} KB` : `${(size / 1024 / 1024).toFixed(1)} MB`;
 
@@ -31,11 +32,9 @@ export function SpectrumViewPage() {
   const [deleteItem, setDeleteItem] = useState<SpectrumCategory>();
   const [saving, setSaving] = useState(false);
   const [selectedChartIds, setSelectedChartIds] = useState<string[]>([]);
-  const [renameItem, setRenameItem] = useState<SpectrumChart>();
-  const [renameValue, setRenameValue] = useState('');
+  const [editingItem, setEditingItem] = useState<SpectrumChart>();
   const [projectEditor, setProjectEditor] = useState<{
     item: SpectrumChart;
-    mode: 'LINKS' | 'MATERIALS';
     targets: ProjectRelationTarget[];
   }>();
 
@@ -115,52 +114,19 @@ export function SpectrumViewPage() {
     });
   };
 
-  const saveRename = async () => {
-    if (!renameItem || !renameValue.trim()) return;
-    setSaving(true);
-    try {
-      await spectrumApi.updateChart(renameItem.id, {
-        title: renameValue.trim(),
-        sampleName: renameItem.sampleName,
-        batchNo: renameItem.batchNo,
-        testConditions: renameItem.testConditions,
-        metadata: renameItem.metadata,
-      });
-      setRenameItem(undefined);
-      await load();
-      void message.success('图谱名称已更新');
-    } catch (error) { void message.error(error instanceof Error ? error.message : '图谱重命名失败'); }
-    finally { setSaving(false); }
-  };
-
-  const openProjectEditor = async (item: SpectrumChart, mode: 'LINKS' | 'MATERIALS') => {
-    setSaving(true);
-    try {
-      const targets = mode === 'LINKS'
-        ? (await projectResourceApi.links('SPECTRUM_CHART', item.id)).map((target) => ({
-          projectId: target.projectId, projectName: target.projectName, stageId: target.stageId,
-          stageName: target.stageName, taskId: target.taskId, taskName: target.taskName,
-        }))
-        : [];
-      setProjectEditor({ item, mode, targets });
-    } catch (error) { void message.error(error instanceof Error ? error.message : '项目关系加载失败'); }
-    finally { setSaving(false); }
+  const openProjectEditor = (item: SpectrumChart) => {
+    setProjectEditor({ item, targets: [] });
   };
 
   const saveProjectEditor = async () => {
     if (!projectEditor) return;
     const targets = projectEditor.targets.filter((target) => target.projectId);
-    if (projectEditor.mode === 'MATERIALS' && !targets.length) { void message.warning('请选择至少一个项目'); return; }
+    if (!targets.length) { void message.warning('请选择至少一个项目'); return; }
     setSaving(true);
     try {
-      if (projectEditor.mode === 'LINKS') {
-        await projectResourceApi.replaceLinks('SPECTRUM_CHART', projectEditor.item.id, targets);
-        void message.success('图谱项目、阶段和任务关联已保存');
-      } else {
-        await projectResourceApi.addReferences('SPECTRUM_CHART', projectEditor.item.id, targets,
-          `${projectEditor.item.categoryName}${projectEditor.item.sampleName ? ` · ${projectEditor.item.sampleName}` : ''}`);
-        void message.success('图谱已加入项目资料');
-      }
+      await projectResourceApi.addReferences('SPECTRUM_CHART', projectEditor.item.id, targets,
+        `${projectEditor.item.categoryName}${projectEditor.item.sampleName ? ` · ${projectEditor.item.sampleName}` : ''}`);
+      void message.success('图谱已加入项目参考资料');
       setProjectEditor(undefined);
     } catch (error) { void message.error(error instanceof Error ? error.message : '项目资料保存失败'); }
     finally { setSaving(false); }
@@ -168,7 +134,7 @@ export function SpectrumViewPage() {
 
   const exportCharts = async (ids: string[]) => {
     if (ids.length > 50) { void message.warning('每次最多导出 50 个图谱，请减少选择数量'); return; }
-    try { await spectrumApi.exportCharts(ids); void message.success(`已导出 ${ids.length} 个图谱的元数据、AI 分析结果和源文件`); }
+    try { await spectrumApi.exportCharts(ids); void message.success(`已导出 ${ids.length} 个图谱源文件`); }
     catch (error) { void message.error(error instanceof Error ? error.message : '图谱导出失败'); }
   };
 
@@ -190,7 +156,7 @@ export function SpectrumViewPage() {
       onRename={(item) => setEditor({ mode: 'EDIT', item: categories.find((candidate) => candidate.id === item.id) })}
       onDelete={(item) => { const category = categories.find((candidate) => candidate.id === item.id); if (category?.allowedActions?.includes('DELETE')) setDeleteItem(category); }} />
     <CatalogListPanel title={cards.find((item) => item.id === categoryId)?.name || '图谱'} count={page.total}
-      filters={<Space wrap><Input.Search allowClear placeholder="搜索图谱名称、样品或批号" value={keyword} onChange={(event) => { setKeyword(event.target.value); setPage((value) => ({ ...value, current: 1 })); }} onSearch={() => void load()} /><Select allowClear placeholder="全部状态" value={status} onChange={(value) => { setStatus(value); setPage((value) => ({ ...value, current: 1 })); }} options={[{ value: 'READY', label: '可分析' }, { value: 'DELETED', label: '已删除' }]} /><Button onClick={resetFilters}>重置</Button><Button icon={<DownloadOutlined />} disabled={!selectedChartIds.length} onClick={() => void exportCharts(selectedChartIds)}>导出所选 ({selectedChartIds.length})</Button><Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button></Space>}
+      filters={<Space wrap><Input allowClear prefix={<SearchOutlined />} placeholder="搜索图谱名称、样品或批号" value={keyword} onChange={(event) => { setKeyword(event.target.value); setPage((value) => ({ ...value, current: 1 })); }} /><Select allowClear placeholder="全部状态" value={status} onChange={(value) => { setStatus(value); setPage((value) => ({ ...value, current: 1 })); }} options={[{ value: 'READY', label: '可分析' }, { value: 'DELETED', label: '已删除' }]} /><Button icon={<RedoOutlined />} onClick={resetFilters}>重置</Button><Button icon={<DownloadOutlined />} disabled={!selectedChartIds.length} onClick={() => void exportCharts(selectedChartIds)}>导出所选 ({selectedChartIds.length})</Button></Space>}
       loading={loading}>
       <Table<SpectrumChart> className="catalog-spectrum-table" rowKey="id" dataSource={items} rowSelection={{ selectedRowKeys: selectedChartIds, onChange: (keys) => setSelectedChartIds(keys.map(String)) }} scroll={{ x: 1580 }} pagination={{ current: page.current, pageSize: page.pageSize, total: page.total, showSizeChanger: true, onChange: (current, pageSize) => setPage({ current, pageSize, total: page.total }) }} locale={{ emptyText: <Empty description="暂无图谱" /> }} columns={[
         { title: '图谱', dataIndex: 'title', width: 280, ellipsis: true, render: (value: string, record) => <Space><LineChartOutlined /><span><Typography.Text strong ellipsis={{ tooltip: value }}>{value}</Typography.Text><br /><Typography.Text type="secondary">{record.originalName}</Typography.Text></span></Space> },
@@ -204,10 +170,8 @@ export function SpectrumViewPage() {
           <Button type="link" icon={<MessageOutlined />} onClick={() => navigate(`/spectrum/chat?chartIds=${record.id}`)}>AI 对话</Button>
           <Button type="link" onClick={() => void downloadPreviewFile(descriptor(record))}>下载源文件</Button>
           <Dropdown trigger={['click']} menu={{ items: categories.filter((category) => category.id !== record.categoryId).map((category) => ({ key: category.id, label: category.name, icon: <FolderOpenOutlined />, onClick: () => void moveChart(record, category.id) })) }}><Button type="link">移动分类</Button></Dropdown>
-          <Button type="link" onClick={() => { setRenameItem(record); setRenameValue(record.title); }}>重命名</Button>
-          <Button type="link" onClick={() => void openProjectEditor(record, 'LINKS')}>项目关联</Button>
-          <Button type="link" onClick={() => void openProjectEditor(record, 'MATERIALS')}>加入项目资料</Button>
-          <Button type="link" icon={<DownloadOutlined />} onClick={() => void exportCharts([record.id])}>导出资料</Button>
+          <Button type="link" onClick={() => setEditingItem(record)}>编辑</Button>
+          <Button type="link" onClick={() => openProjectEditor(record)}>加入参考资料</Button>
           {record.allowedActions?.includes('DELETE') ? <Button type="link" danger icon={<DeleteOutlined />} onClick={() => removeChart(record)}>删除</Button> : null}
         </Space> },
       ]} />
@@ -215,11 +179,9 @@ export function SpectrumViewPage() {
     <CategoryEditorModal open={Boolean(editor)} title={editor?.mode === 'NEW' ? '新增图谱分类' : '编辑图谱分类'} initialValue={editor?.item ? { name: editor.item.name, description: editor.item.description } : { name: '' }} confirmLoading={saving} onCancel={() => setEditor(undefined)} onSubmit={(value) => void saveCategory(value)} />
     {deleteItem && <Modal open title={`删除分类“${deleteItem.name}”`} okText="删除" okButtonProps={{ danger: true }} cancelText="取消" confirmLoading={saving} onCancel={() => setDeleteItem(undefined)} onOk={() => void removeCategory()}><Typography.Paragraph>分类下必须没有图谱才能删除；删除后不会删除原始文件。</Typography.Paragraph></Modal>}
     <FilePreviewModal open={Boolean(previewFile)} file={previewFile} onClose={() => setPreviewFile(undefined)} />
-    <Modal open={Boolean(renameItem)} title="重命名图谱" okText="保存" confirmLoading={saving} onCancel={() => setRenameItem(undefined)} onOk={() => void saveRename()}>
-      <Input maxLength={260} value={renameValue} onChange={(event) => setRenameValue(event.target.value)} placeholder="请输入图谱名称" />
-    </Modal>
-    <Modal open={Boolean(projectEditor)} title={projectEditor?.mode === 'LINKS' ? '维护图谱项目 / 阶段 / 任务关联' : '加入项目资料'} width={780} okText="保存" confirmLoading={saving} onCancel={() => setProjectEditor(undefined)} onOk={() => void saveProjectEditor()}>
-      {projectEditor && <ProjectRelationPicker value={projectEditor.targets} onChange={(targets) => setProjectEditor((current) => current ? { ...current, targets } : current)} />}
+    {editingItem && <SpectrumChartEditor item={editingItem} categories={categories} onCancel={() => setEditingItem(undefined)} onSaved={() => { setEditingItem(undefined); void load(); }} />}
+    <Modal open={Boolean(projectEditor)} title="加入项目参考资料" width={780} okText="保存" confirmLoading={saving} onCancel={() => setProjectEditor(undefined)} onOk={() => void saveProjectEditor()}>
+      {projectEditor && <ProjectRelationPicker value={projectEditor.targets} onChange={(targets) => setProjectEditor((current) => current ? { ...current, targets } : current)} emptyText="尚未选择项目参考资料" addText="添加参考资料" removeText="移除参考资料" />}
     </Modal>
   </div>;
 }

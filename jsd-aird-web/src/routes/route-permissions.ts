@@ -142,7 +142,7 @@ export function requiredPermissionForPath(pathname: string): string | undefined 
   if (path === '/assistant/formula-prediction') return 'ai.formula.predict';
   if (path === '/assistant/experiment-optimization') return 'ai.experiment.optimize';
   if (path === '/assistant' || path.startsWith('/assistant/') || path === '/knowledge/search') return 'ai.use';
-  if (path === '/knowledge/library') return 'knowledge.upload';
+  if (path === '/knowledge/library' || path.startsWith('/knowledge/upload-tasks/')) return 'knowledge.upload';
   if (path === '/data/upload') return 'data.create';
   if (path === '/quality/upload') return 'quality.upload';
   if (path === '/quality/view' || path.startsWith('/quality/records/')) return 'quality.view';
@@ -159,6 +159,7 @@ export function requiredPermissionForPath(pathname: string): string | undefined 
   if (path.startsWith('/research-test')) return 'research-test.report.view';
   if (path.startsWith('/knowledge/review')) return 'knowledge.review';
   if (path.startsWith('/knowledge')) return 'knowledge.view';
+  if (path.startsWith('/template-imports/')) return 'template.upload';
   if (path === '/templates/upload') return 'template.upload';
   if (path.startsWith('/templates') || path.startsWith('/render/import')) return 'template.view';
   if (path.startsWith('/production-orders')) return 'production.view';
@@ -190,8 +191,9 @@ export function requiredMenuForPath(pathname: string): string | undefined {
   if (path === '/research-test/standard-upload') return 'research-test.standard.upload';
   if (path.startsWith('/research-test/standards')) return 'research-test.standard';
   if (path.startsWith('/knowledge/review')) return 'knowledge.review';
-  if (path.startsWith('/knowledge/library')) return 'knowledge.upload';
+  if (path.startsWith('/knowledge/library') || path.startsWith('/knowledge/upload-tasks/')) return 'knowledge.upload';
   if (path.startsWith('/knowledge')) return 'knowledge.view';
+  if (path.startsWith('/template-imports/')) return 'template.upload';
   if (path.startsWith('/templates/upload')) return 'template.upload';
   if (path.startsWith('/templates') || path.startsWith('/render/import')) return 'template.view';
   if (path.startsWith('/quality/upload')) return 'quality.upload';

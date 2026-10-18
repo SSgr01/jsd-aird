@@ -11,7 +11,7 @@ import { HttpError } from '@/services/http/errors'
 import { TrainingEvaluation } from '@/components/ai-rnd/TrainingEvaluation'
 import { WorkbenchDataChecks } from '@/components/ai-rnd/WorkbenchDataChecks'
 import { checkWorkbenchData } from '@/services/ai-rnd/workbench-data-checks'
-import { mergeHistoryDatasets, selectedRowIdsByDataset } from '@/services/ai-rnd/history-dataset-utils'
+import { isMappedFormulaColumn, mergeHistoryDatasets, selectedRowIdsByDataset } from '@/services/ai-rnd/history-dataset-utils'
 import { workbenchFailureMessage, workbenchRegistrationMessage, workbenchRequestMessage } from './modeling-workbench-feedback'
 import { TestMetricCatalogManager } from './TestMetricCatalogManager'
 import './modeling-workbench.css'
@@ -254,6 +254,9 @@ export function ModelingWorkbenchPage({ canManageCatalog = false, canRegister = 
   const dataChecks = useMemo(() => checkWorkbenchData(selectedDatasetView, xColumns, yColumn), [selectedDatasetView, xColumns, yColumn])
   const completeRows = dataChecks?.usableRowCount ?? 0
   const allXConstant = Boolean(dataChecks && dataChecks.fields.filter(field => field.role === 'X').every(field => field.distinctCount < 2))
+  const formulaCodes = (selectedDatasetView?.columns ?? []).filter(isMappedFormulaColumn).map(column => column.code)
+  const selectedFormulaCodes = xColumns.filter(code => formulaCodes.includes(code))
+  const partialFormulaSelection = selectedFormulaCodes.length > 0 && formulaCodes.some(code => !xColumns.includes(code))
   const currentMetrics = run?.result?.metrics ?? {}
   const selectedAlgorithm = typeof currentMetrics.selectedAlgorithm === 'string' ? currentMetrics.selectedAlgorithm : ''
   const trainingActive = submitting || Boolean(runId) && (run ? run.status === 'QUEUED' || run.status === 'RUNNING' : !runLoadError)
@@ -263,6 +266,7 @@ export function ModelingWorkbenchPage({ canManageCatalog = false, canRegister = 
     if (!selectedDatasetIds.length || !dataset) { message.warning('先选择实验数据表。'); return }
     if (!selectedRows.length) { message.warning('请至少勾选一条实验记录。'); return }
     if (!yColumn || !xColumns.length) { message.warning('请分别选择要预测的 Y 和作为输入的 X 列。'); return }
+    if (partialFormulaSelection) { message.warning('材料比例不完整，请将所有已映射材料比例选为 X。'); return }
     if (allXConstant) { message.warning('所选 X 在完整记录中都没有变化，请选择有不同取值的输入列。'); return }
     if (completeRows < 6) { message.warning(`当前组合只有 ${completeRows} 条完整记录，至少需要 6 条。`); return }
     setSubmitting(true)
@@ -347,13 +351,14 @@ export function ModelingWorkbenchPage({ canManageCatalog = false, canRegister = 
       </div>
       {!dataset ? <Empty description="实验数据没有加载，请返回重新选择。"><Button onClick={() => setActiveStep(0)}>返回选择数据</Button></Empty> : <>
         {selectedDatasetView && <XYColumnPicker dataset={selectedDatasetView} mode="modeling" xColumns={xColumns} yColumn={yColumn} onXChange={setXColumns} onYChange={value => { setYColumn(value); setXColumns(current => current.filter(code => code !== value)) }} />}
+        {partialFormulaSelection && <Alert type="warning" showIcon message="材料比例不完整" description={`已选择 ${selectedFormulaCodes.length}/${formulaCodes.length} 个材料比例；用于配方预测时必须把所有已映射材料比例都选为 X。`} />}
         <SelectedDataIssues dataset={selectedDatasetView} xColumns={xColumns} yColumn={yColumn} />
         <div className="workbench-readiness-row">
           <div><Text strong>可用于训练</Text><Text className={completeRows >= 6 ? 'workbench-ready-count' : 'workbench-warning-count'}>{completeRows} 条完整记录</Text><Text type="secondary">至少需要 6 条完整记录，且至少一列 X 有不同取值。</Text></div>
           <div><Text strong>训练方式</Text><Text>系统自动比较多种预测方法</Text><Text type="secondary">训练结果会用交叉验证指标进行对比。</Text></div>
         </div>
         <WorkbenchDataChecks checks={dataChecks} />
-        <footer className="workbench-step-footer"><Button icon={<ArrowLeftOutlined />} onClick={() => setActiveStep(0)}>返回原表</Button><Button type="primary" icon={<ExperimentOutlined />} loading={submitting} disabled={!canTrain || trainingActive || !yColumn || !xColumns.length || completeRows < 6 || allXConstant} onClick={() => void startTraining()}>{!canTrain ? '没有训练权限' : trainingActive ? '训练中' : '开始训练'}</Button></footer>
+        <footer className="workbench-step-footer"><Button icon={<ArrowLeftOutlined />} onClick={() => setActiveStep(0)}>返回原表</Button><Button type="primary" icon={<ExperimentOutlined />} loading={submitting} disabled={!canTrain || trainingActive || !yColumn || !xColumns.length || completeRows < 6 || allXConstant || partialFormulaSelection} onClick={() => void startTraining()}>{!canTrain ? '没有训练权限' : trainingActive ? '训练中' : '开始训练'}</Button></footer>
       </>}
     </section>}
 

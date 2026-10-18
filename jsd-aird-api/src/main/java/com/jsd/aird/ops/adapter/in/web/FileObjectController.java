@@ -9,6 +9,8 @@ import com.jsd.aird.platform.web.RequestIdHolder;
 import com.jsd.aird.platform.web.TiffPreview;
 import com.jsd.aird.shared.api.ApiResponse;
 import com.jsd.aird.shared.api.ResponseFactory;
+import com.jsd.aird.shared.error.ApiErrorCode;
+import com.jsd.aird.shared.error.ApiException;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ContentDisposition;
@@ -35,16 +37,26 @@ public class FileObjectController {
     public ApiResponse<FileObjectService.StagedFile> stage(
             @RequestPart MultipartFile file,
             @RequestParam(defaultValue = "SNAPSHOT") String kind
-    ) throws IOException {
+    ) {
+        var input = openUpload(file);
         return ResponseFactory.success(
                 service.stage(
                         file.getOriginalFilename(),
                         file.getContentType() == null ? "application/octet-stream" : file.getContentType(),
                         kind,
-                        file.getInputStream()
+                        input
                 ),
                 RequestIdHolder.currentOrUnknown()
         );
+    }
+
+    private java.io.InputStream openUpload(MultipartFile file) {
+        try {
+            return file.getInputStream();
+        } catch (IOException exception) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST,
+                    "上传文件无法读取，可能已被安全软件隔离，请检查文件安全状态后重试");
+        }
     }
 
     @GetMapping("/{fileId}/content")

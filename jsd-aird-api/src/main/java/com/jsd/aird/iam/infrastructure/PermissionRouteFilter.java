@@ -289,6 +289,12 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
         if (path.startsWith("/api/v1/knowledge")) {
             if (path.equals("/api/v1/knowledge/search") || path.equals("/api/v1/knowledge/assistant"))
                 return permission("ai.use", "KNOWLEDGE", "WRITE");
+            if (path.startsWith("/api/v1/knowledge/upload-tasks")) {
+                if (read) return permission("knowledge.view", "KNOWLEDGE", "READ");
+                if (method.equals("POST") || method.equals("PUT") || method.equals("DELETE"))
+                    return permission("knowledge.upload", "KNOWLEDGE", "WRITE");
+                return null;
+            }
             if (path.contains("/download")) return permission("knowledge.download", "KNOWLEDGE", "READ");
             if (path.contains("/export")) return permission("knowledge.export", "KNOWLEDGE", "READ");
             if (path.contains("/ai-grant") || path.contains("/batch/ai-usage")) return permission("ai.external", "KNOWLEDGE", "WRITE");
@@ -317,8 +323,6 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
             return null;
         }
         if (path.startsWith("/api/v1/data")) {
-            if (path.equals("/api/v1/data/sources/structured-search"))
-                return permission("data.view", "DATA", "READ");
             if (path.contains("/export")) return permission("data.export", "DATA", "READ");
             if (path.contains("/download")) return permission("data.download", "DATA", "READ");
             if (path.contains("/approve")) return permission("data.approve", "DATA", "WRITE");

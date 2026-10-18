@@ -2,6 +2,7 @@ package com.jsd.aird.kb.infrastructure;
 
 import java.io.InputStream;
 import java.io.BufferedInputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import java.util.Set;
 import java.util.zip.ZipInputStream;
@@ -14,10 +15,14 @@ public class BasicFileSafetyScanner implements FileSafetyScanner {
 
     private static final Set<String> SUPPORTED = Set.of(
             "pdf", "doc", "docx", "xlsx", "xls", "pptx", "ppt", "csv", "txt", "md",
-            "png", "jpg", "jpeg", "gif", "wav", "mp3", "m4a"
+            "png", "jpg", "jpeg", "gif", "wav", "mp3", "m4a", "mp4", "m4v", "mov", "webm"
     );
     private static final int MAX_ZIP_ENTRIES = 20_000;
     private static final long MAX_UNCOMPRESSED_BYTES = 512L * 1024 * 1024;
+    private static final byte[] EICAR_SIGNATURE =
+            "X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
+                    .getBytes(StandardCharsets.US_ASCII);
+    private static final int[] EICAR_PREFIX = prefixTable(EICAR_SIGNATURE);
 
     @Override
     public ScanResult scan(InputStream source, String fileName, String contentType, long size) {
@@ -45,6 +50,13 @@ public class BasicFileSafetyScanner implements FileSafetyScanner {
         if (Set.of("docx", "xlsx", "pptx", "xlsm", "pptm").contains(extension)) {
             return scanZip(input);
         }
+        try {
+            if (containsEicar(input)) {
+                return new ScanResult(ScanResult.Status.REJECTED, "检测到 EICAR 安全测试签名");
+            }
+        } catch (Exception exception) {
+            return new ScanResult(ScanResult.Status.UNAVAILABLE, "文件内容安全检查未完成");
+        }
         return new ScanResult(ScanResult.Status.SAFE, "local-basic-scanner");
     }
 
@@ -61,6 +73,7 @@ public class BasicFileSafetyScanner implements FileSafetyScanner {
         if ("xls".equals(extension)) return type.contains("ms-excel") || type.contains("ole");
         if ("ppt".equals(extension)) return type.contains("ms-powerpoint") || type.contains("ole");
         if (Set.of("png", "jpg", "jpeg", "gif").contains(extension)) return type.startsWith("image/");
+        if (Set.of("mp4", "m4v", "mov", "webm").contains(extension)) return type.startsWith("video/");
         return type.startsWith("audio/") || type.startsWith("application/");
     }
 
@@ -81,6 +94,10 @@ public class BasicFileSafetyScanner implements FileSafetyScanner {
                 && bytes.length >= 12 && bytes[8] == 'W' && bytes[9] == 'A' && bytes[10] == 'V' && bytes[11] == 'E';
         if ("mp3".equals(extension)) return startsWith(bytes, new byte[]{'I', 'D', '3'})
                 || (bytes.length >= 2 && (bytes[0] & 0xFF) == 0xFF && (bytes[1] & 0xE0) == 0xE0);
+        if (Set.of("mp4", "m4v", "mov").contains(extension)) {
+            return bytes.length >= 8 && bytes[4] == 'f' && bytes[5] == 't' && bytes[6] == 'y' && bytes[7] == 'p';
+        }
+        if ("webm".equals(extension)) return startsWith(bytes, new byte[]{0x1A, 0x45, (byte) 0xDF, (byte) 0xA3});
         return bytes.length >= 8 && bytes[4] == 'f' && bytes[5] == 't' && bytes[6] == 'y' && bytes[7] == 'p';
     }
 
@@ -106,17 +123,58 @@ public class BasicFileSafetyScanner implements FileSafetyScanner {
                 if (entry.getName().toLowerCase(Locale.ROOT).contains("vbaProject".toLowerCase(Locale.ROOT))) {
                     return new ScanResult(ScanResult.Status.REJECTED, "包含宏代码，禁止进入知识库");
                 }
+                var signatureMatcher = new SignatureMatcher();
                 int read;
                 while ((read = zip.read(buffer)) >= 0) {
+                    if (read == 0) continue;
                     expanded += read;
                     if (expanded > MAX_UNCOMPRESSED_BYTES) {
                         return new ScanResult(ScanResult.Status.REJECTED, "压缩包展开后超过安全限制");
+                    }
+                    if (signatureMatcher.matches(buffer, read)) {
+                        return new ScanResult(ScanResult.Status.REJECTED, "检测到 EICAR 安全测试签名");
                     }
                 }
             }
             return new ScanResult(ScanResult.Status.SAFE, "local-basic-scanner");
         } catch (Exception exception) {
             return new ScanResult(ScanResult.Status.REJECTED, "压缩文件结构校验失败");
+        }
+    }
+
+    private boolean containsEicar(InputStream source) throws java.io.IOException {
+        var matcher = new SignatureMatcher();
+        var buffer = new byte[8192];
+        int read;
+        while ((read = source.read(buffer)) >= 0) {
+            if (read > 0 && matcher.matches(buffer, read)) return true;
+        }
+        return false;
+    }
+
+    private static int[] prefixTable(byte[] pattern) {
+        var prefix = new int[pattern.length];
+        for (var index = 1; index < pattern.length; index++) {
+            var matched = prefix[index - 1];
+            while (matched > 0 && pattern[index] != pattern[matched]) matched = prefix[matched - 1];
+            if (pattern[index] == pattern[matched]) matched++;
+            prefix[index] = matched;
+        }
+        return prefix;
+    }
+
+    private static final class SignatureMatcher {
+        private int matched;
+
+        private boolean matches(byte[] value, int length) {
+            for (var index = 0; index < length; index++) {
+                while (matched > 0 && value[index] != EICAR_SIGNATURE[matched]) {
+                    matched = EICAR_PREFIX[matched - 1];
+                }
+                if (value[index] == EICAR_SIGNATURE[matched]) matched++;
+                if (matched == EICAR_SIGNATURE.length) return true;
+            }
+            return false;
         }
     }
 

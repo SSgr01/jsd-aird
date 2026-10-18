@@ -109,6 +109,27 @@ class KnowledgeFileSearchServiceTest {
         });
     }
 
+    @Test
+    void selectsThreeTermsWithHighestCorpusInverseDocumentFrequency() {
+        var documents = mock(KnowledgeRepository.class);
+        var governance = mock(KnowledgeGovernanceRepository.class);
+        var analyzer = testAnalyzer();
+        var query = "common rare valuable vital";
+        var families = analyzer.analyzeCompatibleQuery(query);
+        when(documents.termDiscrimination(any(), anyList(), anyList(), isNull())).thenReturn(List.of(
+                new KnowledgeRepository.TermDiscrimination(families.get(0).ordinal(), 1.0),
+                new KnowledgeRepository.TermDiscrimination(families.get(1).ordinal(), 3.0),
+                new KnowledgeRepository.TermDiscrimination(families.get(2).ordinal(), 5.0),
+                new KnowledgeRepository.TermDiscrimination(families.get(3).ordinal(), 4.0)));
+
+        var terms = new KnowledgeFileSearchService(documents, governance, analyzer)
+                .discriminativeTerms(UUID.randomUUID(), query, List.of(), null);
+
+        assertThat(terms).containsExactly(families.get(2).alternatives().getFirst().term(),
+                families.get(3).alternatives().getFirst().term(),
+                families.get(1).alternatives().getFirst().term());
+    }
+
     private LexicalAnalyzer testAnalyzer() {
         return new LexicalAnalyzer() {
             @Override public String version() { return "material-smartcn-v2"; }

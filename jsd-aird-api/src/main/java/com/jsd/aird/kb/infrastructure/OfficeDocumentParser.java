@@ -8,6 +8,8 @@ import java.util.Locale;
 import java.util.Map;
 
 import com.jsd.aird.kb.domain.DocumentParser;
+import org.apache.poi.hwpf.HWPFDocument;
+import org.apache.poi.hwpf.extractor.WordExtractor;
 import org.apache.poi.ss.usermodel.DataFormatter;
 import org.apache.poi.ss.usermodel.WorkbookFactory;
 import org.apache.poi.ss.util.CellReference;
@@ -32,7 +34,7 @@ public class OfficeDocumentParser implements DocumentParser {
     @Override
     public boolean supports(String fileName, String contentType) {
         var name = fileName.toLowerCase(Locale.ROOT);
-        return name.endsWith(".docx") || name.endsWith(".xlsx") || name.endsWith(".xls")
+        return name.endsWith(".docx") || name.endsWith(".doc") || name.endsWith(".xlsx") || name.endsWith(".xls")
                 || name.endsWith(".pptx") || name.endsWith(".ppt");
     }
 
@@ -41,10 +43,11 @@ public class OfficeDocumentParser implements DocumentParser {
         var name = fileName.toLowerCase(Locale.ROOT);
         try {
             if (name.endsWith(".docx")) return parseDocx(source);
+            if (name.endsWith(".doc")) return parseLegacyDoc(source);
             if (name.endsWith(".pptx") || name.endsWith(".ppt")) return parsePpt(source);
             return parseWorkbook(source);
         } catch (Exception exception) {
-            throw new IllegalStateException("Office 文件解析失败: " + fileName, exception);
+            throw new OfficeDocumentParseException(fileName, exception);
         }
     }
 
@@ -84,6 +87,23 @@ public class OfficeDocumentParser implements DocumentParser {
             }
         }
         return new ParsedDocument(blocks, "office-docx-v2");
+    }
+
+    private ParsedDocument parseLegacyDoc(InputStream source) throws Exception {
+        var blocks = new ArrayList<TextBlock>();
+        try (var document = new HWPFDocument(source)) {
+            var extractor = new WordExtractor(document);
+            var paragraphNo = 0;
+            for (var paragraph : extractor.getParagraphText()) {
+                var text = paragraph.replace('\r', ' ').replace('\u0007', ' ').strip();
+                var paragraphId = "p-" + paragraphNo++;
+                if (!text.isBlank()) {
+                    blocks.add(new TextBlock(null, "paragraph", text, null, null, paragraphId,
+                            List.of(), null, null, null));
+                }
+            }
+        }
+        return new ParsedDocument(blocks, "office-doc-v1");
     }
 
     private String paragraphSection(XWPFParagraph paragraph) {

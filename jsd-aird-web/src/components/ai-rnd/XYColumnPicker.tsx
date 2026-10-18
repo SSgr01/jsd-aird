@@ -1,7 +1,7 @@
 import { Card, Checkbox, Empty, Input, Radio, Space, Tag, Typography } from 'antd'
 import { useMemo, useState, type ReactNode } from 'react'
 import type { HistoryDataset, HistoryDatasetColumn } from '@/services/ai-rnd/optimization-api'
-import { columnValues, materialColumn } from '@/services/ai-rnd/history-dataset-utils'
+import { columnValues, isUnmappedFormulaColumn, materialColumn } from '@/services/ai-rnd/history-dataset-utils'
 import './xy-column-picker.css'
 
 const { Text } = Typography
@@ -31,8 +31,8 @@ export function XYColumnPicker({ dataset, mode, xColumns, yColumn, onXChange, on
     return ''
   }
   const label = (column: HistoryDatasetColumn, side: 'X' | 'Y', reason: string) => <span className="workbench-column-option">
-    <strong>{column.name}</strong>
-    <small>{column.kind === 'NUMERIC' ? '数值' : '分类'}{column.unit ? ` · ${column.unit}` : ''} · {column.filledCount}/{dataset.rows.length} 条有值 · {levels(column.code)} 种{side === 'X' ? '取值' : '结果'}</small>
+    <strong>{column.name}{side === 'X' && isUnmappedFormulaColumn(column) ? <Tag color="warning">未绑定材料</Tag> : null}</strong>
+    <small>{column.kind === 'NUMERIC' ? '数值' : '分类'}{column.unit ? ` · ${column.unit}` : ''} · {column.filledCount}/{dataset.rows.length} 条有值 · {levels(column.code)} 种{side === 'X' ? '取值' : '结果'}{side === 'X' && isUnmappedFormulaColumn(column) ? ' · 不能用于配方预测' : ''}</small>
     {side === 'X' && fixed(column) && <small className="field-choice-fixed-label">固定 {String(values(column.code)[0])}{column.unit ?? ''}{lockedXCodes.includes(column.code) ? ' · 已纳入配方' : ''}</small>}
     {reason && <small className="field-choice-reason">{reason}</small>}
   </span>

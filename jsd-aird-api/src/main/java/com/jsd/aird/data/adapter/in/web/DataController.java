@@ -40,20 +40,17 @@ public class DataController {
     private final com.jsd.aird.data.application.DataCategoryService categoryService;
     private final ExperimentAssemblyService experimentAssemblyService;
     private final SourceRecognitionService recognitionService;
-    private final com.jsd.aird.data.application.DataStructuredSearchService structuredSearchService;
 
     public DataController(DataImportService service,
                           com.jsd.aird.data.application.DataCategoryService categoryService,
                           DataWorkbookService workbookService,
                           ExperimentAssemblyService experimentAssemblyService,
-                          SourceRecognitionService recognitionService,
-                          com.jsd.aird.data.application.DataStructuredSearchService structuredSearchService) {
+                          SourceRecognitionService recognitionService) {
         this.service = service;
         this.categoryService = categoryService;
         this.workbookService = workbookService;
         this.experimentAssemblyService = experimentAssemblyService;
         this.recognitionService = recognitionService;
-        this.structuredSearchService = structuredSearchService;
     }
 
     @GetMapping("/templates")
@@ -169,6 +166,17 @@ public class DataController {
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size) {
         return success(service.listJobs(templateVersionId, status, keyword, page, size));
+    }
+
+    @PostMapping("/import-jobs/{id}/retry")
+    public ApiResponse<DataRepository.Job> reprocess(@PathVariable UUID id) {
+        return success(service.reprocessDataCenterImport(id));
+    }
+
+    @DeleteMapping("/import-jobs/{id}")
+    public ApiResponse<Void> deleteImport(@PathVariable UUID id) {
+        service.hideDataCenterImport(id);
+        return success(null);
     }
 
     @PostMapping("/import-jobs/{id}/parse")
@@ -298,13 +306,6 @@ public class DataController {
         return success(categoryService.facets());
     }
 
-    @PostMapping("/sources/structured-search")
-    public ApiResponse<com.jsd.aird.data.api.DataSourceFileSearchFacade.DataDetailResult> structuredSearch(
-            @Valid @RequestBody StructuredSearchRequest request) {
-        return success(structuredSearchService.search(new com.jsd.aird.data.application.DataStructuredSearchService.SearchCommand(
-                request.fileName(), request.recordTerms(), request.fieldTerms(), request.categoryId(), request.uncategorized())));
-    }
-
     @GetMapping("/categories")
     public ApiResponse<List<com.jsd.aird.data.application.port.DataCategoryRepository.Category>> categories() {
         return success(categoryService.list());
@@ -363,11 +364,6 @@ public class DataController {
     public record CategoryRequest(@NotBlank String name, @Size(max = 240) String description) {}
     public record RenameCategoryRequest(@NotBlank String name, @Size(max = 240) String description) {}
     public record AssignCategoryRequest(UUID categoryId) {}
-    public record StructuredSearchRequest(@Size(max = 260) String fileName,
-                                          List<@Size(max = 160) String> recordTerms,
-                                          List<@Size(max = 160) String> fieldTerms,
-                                          UUID categoryId, boolean uncategorized) {}
-
     public record SheetRequest(@NotNull List<@Valid SheetItem> items) {}
     public record SheetItem(@NotBlank String sheetId, boolean selected, List<Integer> headerRows,
                             Integer dataStartRow, Integer dataEndRow, @NotBlank String confirmationStatus) {}

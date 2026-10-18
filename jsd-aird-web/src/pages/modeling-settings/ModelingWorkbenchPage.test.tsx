@@ -30,6 +30,26 @@ const dataset = {
   })),
 }
 
+const resinId = '00000000-0000-0000-0000-000000000011'
+const additiveId = '00000000-0000-0000-0000-000000000012'
+const formulaDataset = {
+  id: 'formula-dataset', name: '配方实验', rowCount: 8,
+  columns: [
+    { code: `formula:${resinId}`, name: '树脂比例', kind: 'NUMERIC' as const, unit: '%', filledCount: 8,
+      semanticType: 'MATERIAL_RATIO' as const, materialId: resinId, mappingStatus: 'MAPPED' as const },
+    { code: `formula:${additiveId}`, name: '助剂比例', kind: 'NUMERIC' as const, unit: '%', filledCount: 8,
+      semanticType: 'MATERIAL_RATIO' as const, materialId: additiveId, mappingStatus: 'MAPPED' as const },
+    { code: 'unmapped-formula:legacy-filler', name: '旧填料比例（未绑定材料）', kind: 'NUMERIC' as const, unit: '%', filledCount: 8,
+      semanticType: 'MATERIAL_RATIO' as const, mappingStatus: 'UNMAPPED' as const },
+    { code: 'result:gloss', name: '光泽', kind: 'NUMERIC' as const, unit: 'GU', filledCount: 8 },
+  ],
+  rows: Array.from({ length: 8 }, (_, index) => ({
+    id: `formula-row-${index + 1}`, versionId: `formula-version-${index + 1}`, label: `S-${index + 1}`, title: `配方实验 ${index + 1}`,
+    values: { [`formula:${resinId}`]: 70 - index, [`formula:${additiveId}`]: 30 + index,
+      'unmapped-formula:legacy-filler': index + 1, 'result:gloss': 60 + index },
+  })),
+}
+
 const trainedRun = {
   id: 'run-1', datasetName: dataset.name, status: 'SUCCEEDED' as const, progress: 100, currentStage: 'SUCCEEDED', rowCount: 8,
   xColumns: [dataset.columns[0]!, dataset.columns[1]!], yColumn: dataset.columns[2]!,
@@ -50,6 +70,33 @@ describe('ModelingWorkbenchPage', () => {
   })
 
   afterEach(() => { vi.clearAllMocks(); window.localStorage.clear() })
+
+  it('keeps training blocked until a Y result is selected', async () => {
+    render(<AppProviders><ModelingWorkbenchPage /></AppProviders>)
+
+    fireEvent.click(await screen.findByRole('button', { name: /UV涂层实验/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /下一步：选择 X \/ Y/ }))
+    fireEvent.click(screen.getByRole('checkbox', { name: /温度/ }))
+    expect(screen.getByRole('button', { name: /开始训练/ })).toBeDisabled()
+    expect(modelingWorkbenchApi.train).not.toHaveBeenCalled()
+  })
+
+  it('requires every mapped material ratio and marks legacy material columns as unavailable to formula prediction', async () => {
+    vi.mocked(modelingWorkbenchApi.datasets).mockResolvedValue({ items: [{ id: formulaDataset.id, name: formulaDataset.name, rowCount: 8, updatedAt: '' }] })
+    vi.mocked(modelingWorkbenchApi.dataset).mockResolvedValue(formulaDataset)
+    window.localStorage.setItem('ai-modeling-workbench-draft:v1', JSON.stringify({
+      datasetId: formulaDataset.id, xColumns: [`formula:${resinId}`], yColumn: 'result:gloss', activeStep: 1,
+    }))
+
+    render(<AppProviders><ModelingWorkbenchPage /></AppProviders>)
+
+    expect(await screen.findByText('材料比例不完整')).toBeInTheDocument()
+    expect(screen.getByText(/已选择 1\/2 个材料比例/)).toBeInTheDocument()
+    expect(screen.getByText('未绑定材料')).toBeInTheDocument()
+    expect(screen.getByText(/不能用于配方预测/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('checkbox', { name: /助剂比例/ }))
+    await waitFor(() => expect(screen.queryByText('材料比例不完整')).not.toBeInTheDocument())
+  })
 
   it('checks selected rows before training and names missing fields and conflicting experiment records', async () => {
     const rows = dataset.rows.map((row, index) => ({ ...row, values: {
@@ -217,6 +264,18 @@ describe('ModelingWorkbenchPage', () => {
     expect(goPredict).toHaveBeenCalledWith('target-1')
     expect(screen.queryByRole('button', { name: '注册模型' })).not.toBeInTheDocument()
     expect(modelingWorkbenchApi.train).not.toHaveBeenCalled()
+  })
+
+  it('keeps registration retryable when the trained model file cannot be verified', async () => {
+    window.localStorage.setItem('ai-modeling-workbench-draft:v1', JSON.stringify({ datasetId: dataset.id, xColumns: ['temperature'], yColumn: 'gloss', runId: 'run-1', activeStep: 2 }))
+    vi.mocked(modelingWorkbenchApi.register).mockRejectedValue(new HttpError('artifact checksum mismatch', 'AI_MODEL_ARTIFACT_INVALID', 422))
+    render(<AppProviders><ModelingWorkbenchPage canRegister /></AppProviders>)
+
+    const register = await screen.findByRole('button', { name: '注册模型' })
+    fireEvent.click(register)
+    expect(await screen.findByText('模型文件无法读取或未通过检查，请重新训练后再注册。')).toBeInTheDocument()
+    expect(screen.queryByText(/checksum mismatch/)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '注册模型' })).toBeEnabled()
   })
 
   it('shows a recoverable message for a failed computation without internal service terms', async () => {

@@ -14,6 +14,7 @@ import { getProjects, type Project } from '@/services/project/project-api';
 import { projectResourceApi, type ProjectRelationTarget } from '@/services/project/project-resource-api';
 
 type SearchFile = FileSearchResult['files'][number];
+const MAX_QUERY_LENGTH = 1000;
 
 export function KnowledgeSearchPage() {
   const { message } = App.useApp();
@@ -45,8 +46,16 @@ export function KnowledgeSearchPage() {
   useEffect(() => { void getProjects({ page: 1, size: 100 }).then((page) => setProjects(page.items)).catch(() => setProjects([])); }, []);
 
   const doSearch = useCallback(async (requestedQuery?: string) => {
-    const normalizedQuery = (requestedQuery ?? query).trim();
+    const rawQuery = requestedQuery ?? query;
+    const normalizedQuery = rawQuery.trim();
     const requestSequence = ++searchRequestSequence.current;
+    if (rawQuery.length > MAX_QUERY_LENGTH) {
+      setSearched(true);
+      setError(`关键词长度为 ${rawQuery.length} 个字符，超过 ${MAX_QUERY_LENGTH} 字符限制，请缩短后重试`);
+      setResult(undefined);
+      setLoading(false);
+      return;
+    }
     if (!normalizedQuery) { setSearched(true); setError('请输入检索关键词'); setResult(undefined); setLoading(false); return; }
     setLoading(true); setError(undefined); setSearched(true);
     try {
@@ -129,7 +138,7 @@ export function KnowledgeSearchPage() {
   return <div className="search-workspace-page">
     <Card className="search-hero content-card">
       <Typography.Text>结果按来源文件合并展示。</Typography.Text>
-      <div className="search-hero-row"><Input size="large" aria-label="文件检索关键词" value={query} onChange={(event) => setQuery(event.target.value)} onPressEnter={() => void doSearch()} placeholder="输入文件名、产品、项目、实验编号或文件内容" /><Select allowClear showSearch optionFilterProp="label" aria-label="按项目筛选" placeholder="全部项目" style={{ minWidth: 240 }} value={projectId} onChange={setProjectId} options={projects.map((project) => ({ value: project.id, label: `${project.projectCode} · ${project.name}` }))} /><Button type="primary" size="large" icon={<SearchOutlined />} onClick={() => void doSearch()}>检索文件</Button><Button size="large" onClick={resetSearch}>重置</Button></div>
+      <div className="search-hero-row"><Input size="large" aria-label="文件检索关键词" value={query} status={query.length > MAX_QUERY_LENGTH ? 'error' : undefined} showCount={{ formatter: ({ value }) => `${value.length}/${MAX_QUERY_LENGTH}` }} onChange={(event) => { const nextQuery = event.target.value; setQuery(nextQuery); if (error?.includes(`超过 ${MAX_QUERY_LENGTH} 字符限制`)) { setError(undefined); setSearched(false); } }} onPressEnter={() => void doSearch()} placeholder="输入文件名、产品、项目、实验编号或文件内容" /><Select allowClear showSearch optionFilterProp="label" aria-label="按项目筛选" placeholder="全部项目" style={{ minWidth: 240 }} value={projectId} onChange={setProjectId} options={projects.map((project) => ({ value: project.id, label: `${project.projectCode} · ${project.name}` }))} /><Button type="primary" size="large" icon={<SearchOutlined />} onClick={() => void doSearch()}>检索文件</Button><Button size="large" onClick={resetSearch}>重置</Button></div>
     </Card>
     <div className="search-workbench">
       <aside className="search-scope-panel content-card">
@@ -142,7 +151,7 @@ export function KnowledgeSearchPage() {
       <main className="search-result-panel">
         <div className="search-result-heading"><Typography.Title level={3}><FileSearchOutlined /> 来源文件</Typography.Title>{searched && <Typography.Text type="secondary">共 {result?.files.length || 0} 个文件</Typography.Text>}</div>
         {loading && <div className="search-state"><Spin /><Typography.Text type="secondary">正在查询本地全文索引…</Typography.Text></div>}
-        {error && <Alert type="error" showIcon message={error} action={<Button onClick={() => void doSearch()}>重试</Button>} />}
+        {error && <Alert type="error" showIcon message={error} action={query.length > MAX_QUERY_LENGTH ? undefined : <Button onClick={() => void doSearch()}>重试</Button>} />}
         {!loading && !error && searched && !result?.files.length && <Card className="content-card"><Empty description="没有找到来源文件，请调整关键词或检索范围" /></Card>}
         {!loading && !error && !searched && <div className="search-state"><SearchOutlined /><Typography.Text type="secondary">输入关键词开始检索</Typography.Text></div>}
         {!loading && !error && result?.files.map((file) => <Card key={`${file.sourceModule}-${file.fileVersionId}`} className="search-result-card content-card">

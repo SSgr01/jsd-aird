@@ -76,7 +76,7 @@ public class JdbcDataRepository implements DataRepository {
                        parser_version, error_message, created_at, updated_at,
                        import_contract_version, contract_hash, compatibility_status,
                        import_purpose, target_experiment_category_id
-                FROM data.import_job WHERE organization_id = ? AND id = ?
+                FROM data.import_job WHERE organization_id = ? AND id = ? AND hidden_at IS NULL
                 """, this::mapJob, organizationId, importJobId).stream().findFirst();
     }
 
@@ -249,6 +249,52 @@ public class JdbcDataRepository implements DataRepository {
                   AND hidden_at IS NULL
                   AND status NOT IN ('QUEUED', 'PARSING', 'VALIDATING', 'COMMITTING')
                 """, organizationId, importJobId);
+    }
+
+    @Override
+    public int hideDataCenterJob(UUID organizationId, UUID importJobId) {
+        return jdbc.update("""
+                UPDATE data.import_job SET hidden_at = now(), updated_at = now()
+                WHERE organization_id = ? AND id = ? AND source_owner = 'DATA_CENTER'
+                  AND hidden_at IS NULL
+                  AND status NOT IN ('QUEUED', 'PARSING', 'VALIDATING', 'COMMITTING')
+                """, organizationId, importJobId);
+    }
+
+    @Override
+    public void saveAttemptHistory(UUID organizationId, UUID importJobId, String reason, UUID actorId) {
+        jdbc.update("""
+                INSERT INTO data.import_job_attempt (
+                    id, organization_id, import_job_id, attempt_no, reason, status, snapshot_jsonb, created_by
+                )
+                SELECT gen_random_uuid(), j.organization_id, j.id,
+                       (SELECT coalesce(max(previous.attempt_no), 0) + 1
+                          FROM data.import_job_attempt previous
+                         WHERE previous.organization_id = j.organization_id
+                           AND previous.import_job_id = j.id),
+                       ?, j.status,
+                       jsonb_build_object(
+                           'job', to_jsonb(j),
+                           'sheets', coalesce((SELECT jsonb_agg(to_jsonb(x) ORDER BY x.sheet_order, x.id)
+                                                FROM data.import_sheet x WHERE x.import_job_id = j.id), '[]'::jsonb),
+                           'mappings', coalesce((SELECT jsonb_agg(to_jsonb(x) ORDER BY x.created_at, x.id)
+                                                  FROM data.import_mapping x WHERE x.import_job_id = j.id), '[]'::jsonb),
+                           'stagingRows', coalesce((SELECT jsonb_agg(to_jsonb(x) ORDER BY x.import_sheet_id, x.source_row_number)
+                                                     FROM data.staging_row x WHERE x.import_job_id = j.id), '[]'::jsonb),
+                           'issues', coalesce((SELECT jsonb_agg(to_jsonb(x) ORDER BY x.created_at, x.id)
+                                                FROM data.import_issue x WHERE x.import_job_id = j.id), '[]'::jsonb),
+                           'records', coalesce((SELECT jsonb_agg(to_jsonb(x) ORDER BY x.record_index, x.id)
+                                                 FROM data.data_record x WHERE x.organization_id = j.organization_id
+                                                   AND x.import_job_id = j.id), '[]'::jsonb),
+                           'values', coalesce((SELECT jsonb_agg(to_jsonb(value_row) ORDER BY value_row.record_id, value_row.field_code, value_row.data_path)
+                                                FROM data.data_value value_row
+                                                JOIN data.data_record record_row ON record_row.id = value_row.record_id
+                                               WHERE record_row.organization_id = j.organization_id
+                                                 AND record_row.import_job_id = j.id), '[]'::jsonb)
+                       ), ?, now()
+                  FROM data.import_job j
+                 WHERE j.organization_id = ? AND j.id = ? AND j.hidden_at IS NULL
+                """, reason, actorId, organizationId, importJobId);
     }
 
     @Override

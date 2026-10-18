@@ -105,6 +105,17 @@ public class TemplateController {
     // Do not constrain content negotiation here. Axios sends application/json
     // in its default Accept header even though this endpoint returns a file;
     // the response itself declares the CSV content type below.
+    @PostMapping(value = "/templates/export", produces = "application/zip")
+    public void exportFiles(@Valid @RequestBody ExportFilesRequest request, HttpServletResponse response) throws IOException {
+        var content = officeExportService.exportFiles(request.versionIds());
+        response.setContentType("application/zip");
+        response.setContentLength(content.length);
+        response.setHeader(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=templates.zip");
+        response.getOutputStream().write(content);
+    }
+
+    public record ExportFilesRequest(@NotNull @Size(min = 1, max = 100) List<@NotNull UUID> versionIds) { }
+
     @GetMapping("/templates/export.csv")
     public ResponseEntity<byte[]> exportCsv(
             @RequestParam(required = false) String keyword,

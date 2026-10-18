@@ -77,6 +77,12 @@ class PermissionRouteFilterTest {
                 .isEqualTo("ai.external");
         assertThat(code("POST", "/api/v1/knowledge/documents/00000000-0000-0000-0000-000000000000/versions/00000000-0000-0000-0000-000000000000/reparse"))
                 .isEqualTo("knowledge.update");
+        assertThat(code("GET", "/api/v1/knowledge/upload-tasks")).isEqualTo("knowledge.view");
+        assertThat(code("POST", "/api/v1/knowledge/upload-tasks")).isEqualTo("knowledge.upload");
+        assertThat(code("PUT", "/api/v1/knowledge/upload-tasks/00000000-0000-0000-0000-000000000000"))
+                .isEqualTo("knowledge.upload");
+        assertThat(code("DELETE", "/api/v1/knowledge/upload-tasks/00000000-0000-0000-0000-000000000000"))
+                .isEqualTo("knowledge.upload");
     }
 
     @Test

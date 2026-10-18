@@ -21,8 +21,8 @@ class ContextCompressionServiceTest {
         var context = new ContextCompressionService().compress(List.of(hit), List.of(data), 200);
 
         assertThat(context.characterCount()).isLessThanOrEqualTo(200);
-        assertThat(context.text()).contains("source=knowledge")
-                .contains("evidenceRef=K1")
+        assertThat(context.characterCount()).isEqualTo(context.text().length());
+        assertThat(context.text()).contains("evidenceRef=D1")
                 .doesNotContain("ref=")
                 .doesNotContain(hit.chunkId().toString())
                 .doesNotContain(hit.documentId().toString())
@@ -47,7 +47,23 @@ class ContextCompressionServiceTest {
     }
 
     @Test
-    void reservesMostContextForStructuredEvidenceDuringAnExactDataLookup() {
+    void showsBusinessRecordIdentityInsteadOfInternalProjectionKey() {
+        var internalRecordKey = "IMPORT:STRUCT:sheet-1:COLUMN:1";
+        var data = new DataSourceFileSearchFacade.SourceFileHit(UUID.randomUUID(), UUID.randomUUID(),
+                UUID.randomUUID(), 12, "D", "阳离子树脂应用性能实验-003.xlsx",
+                "实验编号=EXP-20260921-05361A；实验名称=UV/PU阳离子树脂应用性能；记录=G-6488；字段=UA-145；值=49.25",
+                0.9, "EXPERIMENT_TEMPLATE:Sheet1:D11", internalRecordKey, "UA-145", "UA-145", "49.25",
+                null, "NUMBER", "Sheet1", "D11", "EXPERIMENT", "TEMPLATE_GUIDED",
+                UUID.randomUUID(), UUID.randomUUID());
+
+        var context = new ContextCompressionService().compress(List.of(), List.of(data), 1_000);
+
+        assertThat(context.text()).contains("; 实验编号=EXP-20260921-05361A; 业务记录=G-6488")
+                .doesNotContain(internalRecordKey);
+    }
+
+    @Test
+    void keepsKnowledgeAndStructuredEvidenceWhenBothSourcesArePresent() {
         var knowledge = new KnowledgeSearchFacade.SearchHit(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
                 "知识资料", "manual.pdf", 1, "说明", "k".repeat(1_000), 0.9);
         var data = new DataSourceFileSearchFacade.SourceFileHit(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
@@ -56,9 +72,10 @@ class ContextCompressionServiceTest {
                 "DATA_CENTER", "TEMPLATE_GUIDED", UUID.randomUUID(), UUID.randomUUID(), "CONFIRMED",
                 "SJ-231（配方占比）", null, null, null, "%", "%", null, "TARGET");
 
-        var context = new ContextCompressionService().compress(List.of(knowledge), List.of(data), 600, true);
+        var context = new ContextCompressionService().compress(List.of(knowledge), List.of(data), 600);
 
         assertThat(context.characterCount()).isLessThanOrEqualTo(600);
+        assertThat(context.characterCount()).isEqualTo(context.text().length());
         assertThat(context.text()).contains("evidenceRef=K1", "evidenceRef=D1", "值=55.86");
     }
 

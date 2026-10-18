@@ -182,9 +182,48 @@ public class DataImportService {
         if (!Set.of("FAILED", "CANCELLED").contains(job.status())) {
             throw new ApiException(ApiErrorCode.BAD_REQUEST, "仅失败或已取消的实验导入任务可以重试");
         }
+        repository.saveAttemptHistory(actor.organizationId(), importJobId, "RETRY", actor.userId());
         repository.clearParsed(actor.organizationId(), importJobId);
         repository.enqueueParse(UUID.randomUUID(), actor.organizationId(), importJobId, actor.userId());
         return get(importJobId);
+    }
+
+    @Transactional
+    public DataRepository.Job reprocessDataCenterImport(UUID importJobId) {
+        var actor = ActorContext.required();
+        var job = repository.findJobForUpdate(actor.organizationId(), importJobId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "数据导入任务不存在"));
+        requireDataCenterImportOwner(actor.organizationId(), importJobId);
+        if (!Set.of("COMPLETED", "FAILED", "CANCELLED").contains(job.status())) {
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "仅已完成、失败或已取消的任务可以重新处理");
+        }
+        repository.saveAttemptHistory(actor.organizationId(), importJobId,
+                "COMPLETED".equals(job.status()) ? "REPROCESS" : "RETRY", actor.userId());
+        repository.clearParsed(actor.organizationId(), importJobId);
+        repository.enqueueParse(UUID.randomUUID(), actor.organizationId(), importJobId, actor.userId());
+        return get(importJobId);
+    }
+
+    @Transactional
+    public void hideDataCenterImport(UUID importJobId) {
+        var actor = ActorContext.required();
+        var job = repository.findJobForUpdate(actor.organizationId(), importJobId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "数据导入任务不存在"));
+        requireDataCenterImportOwner(actor.organizationId(), importJobId);
+        if (Set.of("QUEUED", "PARSING", "VALIDATING", "COMMITTING").contains(job.status())) {
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "处理中任务不可删除，请等待处理结束");
+        }
+        if (repository.hideDataCenterJob(actor.organizationId(), importJobId) != 1) {
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "任务状态已变化，请刷新后重试");
+        }
+    }
+
+    private void requireDataCenterImportOwner(UUID organizationId, UUID importJobId) {
+        var owner = repository.findSourceOwner(organizationId, importJobId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "数据导入任务不存在"));
+        if (!"DATA_CENTER".equals(owner)) {
+            throw new ApiException(ApiErrorCode.PERMISSION_DENIED, "仅数据中心导入任务可执行此操作");
+        }
     }
 
     @Transactional

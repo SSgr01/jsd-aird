@@ -175,7 +175,7 @@ export function TemplateFieldManager({
             aria-selected={activeTab === 'experiment'}
             onClick={() => onActiveTabChange('experiment')}
           >
-            实验语义
+            实验数据设置
           </button>
         )}
       </div>
@@ -653,6 +653,7 @@ export function FieldProperties({
   const locator = mergeLocators(field.locator, binding?.locator);
   const sourceLabelAddress = locatorLabelRange(locator);
   const sourceAddress = locatorValueRange(locator);
+  const canDeleteField = editable && !field.candidate && field.reviewStatus === 'CONFIRMED';
   const [labelAddress, setLabelAddress] = useState(sourceLabelAddress);
   const [address, setAddress] = useState(sourceAddress);
   const [labelError, setLabelError] = useState<string>();
@@ -695,6 +696,11 @@ export function FieldProperties({
       <section className="field-properties-pane" role="tabpanel">
         <div className="field-properties-scroll">
           {reviewText && <FieldReviewNotice field={field} text={reviewText} />}
+          {(field.candidate || field.reviewStatus === 'NEEDS_CONFIRMATION') && (
+            <div className="field-property-alert full" role="status">
+              待确认字段请在“识别确认”中选择忽略；确认后可在此删除。
+            </div>
+          )}
           <BusinessPropertyFields
             editable={editable}
             field={field}
@@ -710,7 +716,7 @@ export function FieldProperties({
             </Button>
           )}
         </div>
-        {editable && <DeleteFieldButton field={field} onDeleteField={onDeleteField} />}
+        {canDeleteField && <DeleteFieldButton field={field} onDeleteField={onDeleteField} />}
       </section>
     );
   }
@@ -719,6 +725,11 @@ export function FieldProperties({
     <section className="field-properties-pane" role="tabpanel">
       <div className="field-properties-scroll">
         {reviewText && <FieldReviewNotice field={field} text={reviewText} />}
+        {(field.candidate || field.reviewStatus === 'NEEDS_CONFIRMATION') && (
+          <div className="field-property-alert full" role="status">
+            待确认字段请在“识别确认”中选择忽略；确认后可在此删除。
+          </div>
+        )}
         <BusinessPropertyFields
           editable={editable}
           field={field}
@@ -780,7 +791,7 @@ export function FieldProperties({
         </div>
       </div>
 
-      {editable && <DeleteFieldButton field={field} onDeleteField={onDeleteField} />}
+      {canDeleteField && <DeleteFieldButton field={field} onDeleteField={onDeleteField} />}
     </section>
   );
 }

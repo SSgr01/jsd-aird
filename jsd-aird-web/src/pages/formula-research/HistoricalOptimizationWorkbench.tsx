@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Key } from 'react'
 import { aiActionFeedback } from '@/services/ai-rnd/action-feedback'
 import { optimizationApi, type HistoryDataset, type HistoryDatasetColumn, type HistoryDatasetOption, type OptimizationObservation, type OptimizationRun } from '@/services/ai-rnd/optimization-api'
-import { mergeHistoryDatasets, selectedRowIdsByDataset, fixedMaterial } from '@/services/ai-rnd/history-dataset-utils'
+import { mergeHistoryDatasets, selectedRowIdsByDataset, fixedMaterial, isMappedFormulaColumn } from '@/services/ai-rnd/history-dataset-utils'
 import { generateUUID } from '@/utils/uuid'
 import { XYColumnPicker, SelectedDataIssues } from '@/components/ai-rnd/XYColumnPicker'
 import { createExperiment } from '@/services/experiments/experiment-api'
@@ -199,11 +199,11 @@ export function HistoricalOptimizationWorkbench() {
   }, [selectedDatasetView, xColumns, yColumn])
   const yMeta = numericColumns.find(column => column.code === yColumn)
   const selectedFeatureColumns = xColumns.map(code => selectedDatasetView?.columns.find(column => column.code === code)).filter((column): column is HistoryDatasetColumn => Boolean(column))
-  const formulaCodes = (selectedDatasetView?.columns ?? []).filter(column => column.code.startsWith('formula:')).map(column => column.code)
+  const formulaCodes = (selectedDatasetView?.columns ?? []).filter(isMappedFormulaColumn).map(column => column.code)
   const missingFormulaColumns = (selectedDatasetView?.columns ?? []).filter(column => formulaCodes.includes(column.code) && !xColumns.includes(column.code) && !fixedMaterial(selectedDatasetView, column))
-  const partialFormulaSelection = xColumns.some(code => code.startsWith('formula:')) && missingFormulaColumns.length > 0
+  const partialFormulaSelection = selectedFeatureColumns.some(isMappedFormulaColumn) && missingFormulaColumns.length > 0
   const fixedCodes = selectedDatasetView?.columns.filter(column => column.code !== yColumn && fixedMaterial(selectedDatasetView, column) && column.filledCount >= 4).map(column => column.code) ?? []
-  const formulaSelected = xColumns.some(code => code.startsWith('formula:'))
+  const formulaSelected = xColumns.some(code => formulaCodes.includes(code))
   useEffect(() => {
     if (!formulaSelected) return
     setXColumns(current => fixedCodes.some(code => !current.includes(code)) ? [...new Set([...current, ...fixedCodes])] : current)

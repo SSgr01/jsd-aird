@@ -28,6 +28,8 @@ class WorkbenchFormulaSupportTest {
         assertThat(WorkbenchFormulaSupport.materialId(ordinary)).isNull();
         ordinary.put("unit","%").put("valueType","CATEGORY");
         assertThat(WorkbenchFormulaSupport.materialId(ordinary)).isNull();
+        ordinary.put("code","formula:not-a-uuid").put("unit","%").put("valueType","NUMBER");
+        assertThat(WorkbenchFormulaSupport.materialId(ordinary)).isNull();
     }
 
     @Test void retainsFixedZeroAndAcceptsOnlySmallDecimalRoundingDifferences() {

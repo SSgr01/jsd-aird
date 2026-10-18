@@ -200,10 +200,7 @@ public class FileObjectService implements FileStorageFacade {
             return;
         }
         if ("DATA_SOURCE".equalsIgnoreCase(kind)) {
-            var lowerName = originalName.toLowerCase(Locale.ROOT);
-            if (!lowerName.endsWith(".xls") && !lowerName.endsWith(".xlsx") && !lowerName.endsWith(".csv")) {
-                throw new ApiException(ApiErrorCode.BAD_REQUEST, "数据中心仅接受 XLS、XLSX 或 CSV 文件");
-            }
+            validateDataSource(file, originalName);
             return;
         }
         if ("AI_MODELING_CATALOG".equalsIgnoreCase(kind)) {
@@ -228,6 +225,34 @@ public class FileObjectService implements FileStorageFacade {
         if (!xlsx && !docx) {
             throw new ApiException(ApiErrorCode.BAD_REQUEST, "只接受 XLSX 或 DOCX OOXML 文件");
         }
+        validateOoxmlPackage(file, xlsx, docx);
+    }
+
+    private void validateDataSource(Path file, String originalName) throws IOException {
+        var lowerName = originalName == null ? "" : originalName.toLowerCase(Locale.ROOT);
+        var xlsx = lowerName.endsWith(".xlsx");
+        var docx = lowerName.endsWith(".docx");
+        if (xlsx || docx) {
+            validateOoxmlPackage(file, xlsx, docx);
+            return;
+        }
+        if (lowerName.endsWith(".xls") || lowerName.endsWith(".doc")) {
+            validateOleFile(file, lowerName.endsWith(".xls") ? "XLS" : "DOC");
+            return;
+        }
+        if (lowerName.endsWith(".pdf")) {
+            validatePdfFile(file);
+            return;
+        }
+        if (lowerName.endsWith(".csv")) {
+            if (Files.size(file) == 0) throw new ApiException(ApiErrorCode.BAD_REQUEST, "CSV 文件为空");
+            return;
+        }
+        throw new ApiException(ApiErrorCode.BAD_REQUEST,
+                "数据中心仅接受 XLS、XLSX、CSV、DOC、DOCX 或 PDF 文件");
+    }
+
+    private void validateOoxmlPackage(Path file, boolean xlsx, boolean docx) throws IOException {
         var entries = new HashSet<String>();
         try (var input = Files.newInputStream(file); var zip = new ZipInputStream(input)) {
             var entry = zip.getNextEntry();
@@ -256,6 +281,28 @@ public class FileObjectService implements FileStorageFacade {
         }
         if (docx && !entries.contains("word/document.xml")) {
             throw new ApiException(ApiErrorCode.BAD_REQUEST, "DOCX 文件缺少正文内容");
+        }
+    }
+
+    private void validateOleFile(Path file, String format) throws IOException {
+        var expected = new byte[]{(byte) 0xD0, (byte) 0xCF, 0x11, (byte) 0xE0,
+                (byte) 0xA1, (byte) 0xB1, 0x1A, (byte) 0xE1};
+        try (var input = Files.newInputStream(file)) {
+            if (!java.util.Arrays.equals(input.readNBytes(expected.length), expected)) {
+                throw new ApiException(ApiErrorCode.BAD_REQUEST,
+                        format + " 文件内容无效或已损坏，请上传真实的 Office 文件");
+            }
+        }
+    }
+
+    private void validatePdfFile(Path file) throws IOException {
+        try (var input = Files.newInputStream(file)) {
+            var header = input.readNBytes(5);
+            if (header.length != 5 || header[0] != '%' || header[1] != 'P' || header[2] != 'D'
+                    || header[3] != 'F' || header[4] != '-') {
+                throw new ApiException(ApiErrorCode.BAD_REQUEST,
+                        "PDF 文件头无效或文件已损坏，请上传真实的 PDF 文件");
+            }
         }
     }
 

@@ -225,21 +225,33 @@ public class JdbcSpectrumRepository implements SpectrumRepository {
     }
 
     @Override
-    public boolean hasProjectUsage(UUID organizationId, UUID chartId) {
+    public boolean hasActiveProjectReference(UUID organizationId, UUID chartId) {
         return Boolean.TRUE.equals(jdbc.queryForObject("""
                 SELECT EXISTS (
-                    SELECT 1 FROM core.project_resource_link
-                     WHERE organization_id = ? AND resource_type = 'SPECTRUM_CHART' AND resource_id = ?
-                    UNION ALL
                     SELECT 1 FROM core.project_reference
                      WHERE organization_id = ? AND resource_type = 'SPECTRUM_CHART'
                        AND resource_id = ? AND status = 'ACTIVE'
                 )
-                """, Boolean.class, organizationId, chartId, organizationId, chartId));
+                """, Boolean.class, organizationId, chartId));
+    }
+
+    @Override
+    public boolean hasAnalysisReportReference(UUID organizationId, UUID chartId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+                SELECT EXISTS (
+                    SELECT 1 FROM spc.analysis_run
+                     WHERE organization_id = ?
+                       AND chart_ids_jsonb @> jsonb_build_array(CAST(? AS text))
+                )
+                """, Boolean.class, organizationId, chartId.toString()));
     }
 
     @Override
     public void deleteChart(UUID organizationId, UUID chartId) {
+        jdbc.update("""
+                DELETE FROM core.project_resource_link
+                 WHERE organization_id = ? AND resource_type = 'SPECTRUM_CHART' AND resource_id = ?
+                """, organizationId, chartId);
         jdbc.update("""
                 UPDATE spc.chart_asset SET status = 'DELETED', updated_at = now()
                 WHERE organization_id = ? AND id = ?
@@ -251,8 +263,8 @@ public class JdbcSpectrumRepository implements SpectrumRepository {
         jdbc.update("""
                 INSERT INTO spc.chart_upload_attempt (
                     id, organization_id, request_id, category_id, chart_id, file_object_id, original_name,
-                    size_bytes, status, error_code, error_message, created_by
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    size_bytes, status, error_code, error_message, upload_context_jsonb, parent_request_id, created_by
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?)
                 ON CONFLICT (organization_id, request_id) DO UPDATE
                    SET category_id = EXCLUDED.category_id,
                        chart_id = coalesce(EXCLUDED.chart_id, spc.chart_upload_attempt.chart_id),
@@ -262,46 +274,45 @@ public class JdbcSpectrumRepository implements SpectrumRepository {
                        status = EXCLUDED.status,
                        error_code = EXCLUDED.error_code,
                        error_message = EXCLUDED.error_message,
+                       upload_context_jsonb = EXCLUDED.upload_context_jsonb,
+                       parent_request_id = coalesce(EXCLUDED.parent_request_id, spc.chart_upload_attempt.parent_request_id),
+                       hidden_at = NULL,
                        created_at = now()
                  WHERE spc.chart_upload_attempt.status <> 'SUCCEEDED'
                     OR EXCLUDED.status = 'SUCCEEDED'
                 """, UUID.randomUUID(), attempt.organizationId(), attempt.requestId(), attempt.categoryId(),
                 attempt.chartId(), attempt.fileObjectId(), attempt.originalName(), Math.max(0, attempt.size()),
-                attempt.status(), attempt.errorCode(), attempt.errorMessage(), attempt.createdBy());
+                attempt.status(), attempt.errorCode(), attempt.errorMessage(),
+                attempt.uploadContextJson() == null ? "{}" : attempt.uploadContextJson(),
+                attempt.parentRequestId(), attempt.createdBy());
     }
 
     @Override
     public List<UploadAttemptRow> listUploadAttempts(UUID organizationId, int limit) {
         return jdbc.query("""
-                SELECT request_id, category_id, chart_id, original_name, size_bytes, status,
-                       error_code, error_message, created_at
+                SELECT request_id, category_id, chart_id, original_name, file_object_id, size_bytes, status,
+                       error_code, error_message, upload_context_jsonb::text, parent_request_id, created_at
                   FROM spc.chart_upload_attempt
                  WHERE organization_id = ?
+                   AND hidden_at IS NULL
                  ORDER BY created_at DESC
                  LIMIT ?
                 """, (rs, ignored) -> new UploadAttemptRow(rs.getObject("request_id", UUID.class),
                 rs.getObject("category_id", UUID.class), rs.getObject("chart_id", UUID.class),
-                rs.getString("original_name"), rs.getLong("size_bytes"), rs.getString("status"),
-                rs.getString("error_code"), rs.getString("error_message"), instant(rs, "created_at")),
+                rs.getString("original_name"), rs.getObject("file_object_id", UUID.class),
+                rs.getLong("size_bytes"), rs.getString("status"), rs.getString("error_code"),
+                rs.getString("error_message"), rs.getString("upload_context_jsonb"),
+                rs.getObject("parent_request_id", UUID.class), instant(rs, "created_at")),
                 organizationId, Math.max(1, Math.min(limit, 200)));
     }
 
     @Override
-    public List<ChartAnalysisExportRow> listChartAnalysisExports(UUID organizationId, UUID chartId, int limit) {
-        return jdbc.query("""
-                SELECT id, mode, question, chart_ids_jsonb::text AS chart_ids_json, status,
-                       result_jsonb::text AS result_json, created_at, completed_at
-                  FROM spc.analysis_run
-                 WHERE organization_id = ?
-                   AND status IN ('SUCCEEDED', 'PARTIAL')
-                   AND chart_ids_jsonb @> jsonb_build_array(CAST(? AS text))
-                 ORDER BY completed_at DESC NULLS LAST, created_at DESC
-                 LIMIT ?
-                """, (rs, ignored) -> new ChartAnalysisExportRow(rs.getObject("id", UUID.class),
-                rs.getString("mode"), rs.getString("question"), rs.getString("chart_ids_json"),
-                rs.getString("status"), rs.getString("result_json"), instant(rs, "created_at"),
-                instant(rs, "completed_at")), organizationId, chartId.toString(),
-                Math.max(1, Math.min(limit, 100)));
+    public int hideUploadAttempt(UUID organizationId, UUID requestId) {
+        return jdbc.update("""
+                UPDATE spc.chart_upload_attempt
+                   SET hidden_at = now()
+                 WHERE organization_id = ? AND request_id = ? AND hidden_at IS NULL
+                """, organizationId, requestId);
     }
 
     @Override

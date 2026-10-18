@@ -26,6 +26,7 @@ const SampleRecordsPage = lazy(async () => ({ default: (await import('@/pages/in
 const ShipmentRecordsPage = lazy(async () => ({ default: (await import('@/pages/inventory')).ShipmentRecordsPage }));
 const InventoryControlPage = lazy(async () => ({ default: (await import('@/pages/inventory')).InventoryControlPage }));
 const KnowledgeDocumentPage = lazy(async () => ({ default: (await import('@/pages/knowledge')).KnowledgeDocumentPage }));
+const KnowledgeUploadTaskDetailPage = lazy(async () => ({ default: (await import('@/pages/knowledge')).KnowledgeUploadTaskDetailPage }));
 const KnowledgeLibraryPage = lazy(async () => ({ default: (await import('@/pages/knowledge')).KnowledgeLibraryPage }));
 const KnowledgeReviewPage = lazy(async () => ({ default: (await import('@/pages/knowledge')).KnowledgeReviewPage }));
 const KnowledgeSearchPage = lazy(async () => ({ default: (await import('@/pages/knowledge')).KnowledgeSearchPage }));
@@ -35,6 +36,7 @@ const ProductionOrderUploadPage = lazy(async () => ({ default: (await import('@/
 const ProductionUploadWorkspacePage = lazy(async () => ({ default: (await import('@/pages/production-orders')).ProductionUploadWorkspacePage }));
 const ProductionWorkspacePage = lazy(async () => ({ default: (await import('@/pages/production-orders/ProductionWorkspacePage')).ProductionWorkspacePage }));
 const TemplateUploadPage = lazy(async () => ({ default: (await import('@/pages/template-upload')).TemplateUploadPage }));
+const TemplateImportDetailPage = lazy(async () => ({ default: (await import('@/pages/template-upload')).TemplateImportDetailPage }));
 const TemplateWorkspacePage = lazy(async () => ({ default: (await import('@/pages/template-workspace')).TemplateWorkspacePage }));
 const TemplatesPage = lazy(async () => ({ default: (await import('@/pages/templates')).TemplatesPage }));
 const TemplateImportRenderPage = lazy(async () => ({ default: (await import('@/pages/template-render/TemplateImportRenderPage')).TemplateImportRenderPage }));
@@ -82,6 +84,7 @@ const applicationRoutes: RouteObject[] = [
       },
       { path: 'dashboard', element: <DashboardPage /> },
       { path: 'knowledge/library', element: <PagePermissionGate permission="knowledge.upload"><KnowledgeLibraryPage /></PagePermissionGate> },
+      { path: 'knowledge/upload-tasks/:id', element: <PagePermissionGate permission="knowledge.upload"><KnowledgeUploadTaskDetailPage /></PagePermissionGate> },
       { path: 'knowledge/view', element: <KnowledgeViewPage /> },
       { path: 'knowledge/search', element: <KnowledgeSearchPage /> },
       { path: 'knowledge/review/:documentId/:versionId', element: <PagePermissionGate permission="knowledge.review"><KnowledgeReviewPage /></PagePermissionGate> },
@@ -98,6 +101,10 @@ const applicationRoutes: RouteObject[] = [
       {
         path: 'templates/upload',
         element: <TemplateUploadPage />,
+      },
+      {
+        path: 'template-imports/:importJobId',
+        element: <PagePermissionGate permission="template.upload"><TemplateImportDetailPage /></PagePermissionGate>,
       },
       {
         path: 'templates/library',

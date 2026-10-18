@@ -91,7 +91,8 @@ public class SpectrumController {
                             request.originalName() == null || request.originalName().isBlank()
                                     ? "未知图谱文件" : request.originalName(),
                             request.size(), status, code,
-                            exception.getMessage() == null ? "图谱保存失败" : exception.getMessage()));
+                            exception.getMessage() == null ? "图谱保存失败" : exception.getMessage(),
+                            request.uploadContext(), request.parentRequestId()));
                 } catch (RuntimeException ignored) {
                     // Preserve the original create failure; recording is best-effort for malformed requests.
                 }
@@ -110,16 +111,34 @@ public class SpectrumController {
     public ApiResponse<Void> recordUploadAttempt(@Valid @RequestBody UploadAttemptRequest request) {
         service.recordUploadAttempt(new SpectrumService.UploadAttemptCommand(request.requestId(),
                 request.categoryId(), request.fileObjectId(), request.originalName(), request.size(),
-                request.status(), request.errorCode(), request.errorMessage()));
+                request.status(), request.errorCode(), request.errorMessage(),
+                request.uploadContext(), request.parentRequestId()));
+        return success(null);
+    }
+
+    @DeleteMapping("/uploads/attempts/{requestId}")
+    public ApiResponse<Void> hideUploadAttempt(@PathVariable UUID requestId) {
+        service.hideUploadAttempt(requestId);
         return success(null);
     }
 
     @PostMapping("/charts/export")
     public void exportCharts(@Valid @RequestBody ExportChartsRequest request, HttpServletResponse response)
             throws IOException {
+        if (request.chartIds().size() == 1) {
+            var file = service.openChart(request.chartIds().getFirst()).file();
+            try (var stream = file.stream()) {
+                response.setContentType(file.contentType());
+                response.setContentLengthLong(file.size());
+                response.setHeader(HttpHeaders.CONTENT_DISPOSITION,
+                        ContentDisposition.attachment().filename(file.originalName(), StandardCharsets.UTF_8).build().toString());
+                stream.transferTo(response.getOutputStream());
+            }
+            return;
+        }
         response.setContentType("application/zip");
         response.setHeader(HttpHeaders.CONTENT_DISPOSITION,
-                ContentDisposition.attachment().filename("图谱资料导出.zip", StandardCharsets.UTF_8).build().toString());
+                ContentDisposition.attachment().filename("图谱文件.zip", StandardCharsets.UTF_8).build().toString());
         service.writeExport(request.chartIds(), response.getOutputStream());
     }
 
@@ -251,17 +270,21 @@ public class SpectrumController {
                                      JsonNode metadata,
                                      @NotNull UUID requestId,
                                      @Size(max = 500) String originalName,
-                                     @Min(0) long size) {
+                                     @Min(0) long size,
+                                     boolean duplicateOverride,
+                                     JsonNode uploadContext,
+                                     UUID parentRequestId) {
         SpectrumService.CreateChartCommand command() {
             return new SpectrumService.CreateChartCommand(fileId, title, categoryId, sampleName, batchNo,
-                    testConditions, metadata, requestId);
+                    testConditions, metadata, requestId, duplicateOverride, uploadContext, parentRequestId);
         }
     }
 
     public record UploadAttemptRequest(@NotNull UUID requestId, UUID categoryId, UUID fileObjectId,
                                        @NotBlank @Size(max = 500) String originalName, @Min(0) long size,
                                        @NotBlank String status, @Size(max = 80) String errorCode,
-                                       @Size(max = 2000) String errorMessage) { }
+                                       @Size(max = 2000) String errorMessage, JsonNode uploadContext,
+                                       UUID parentRequestId) { }
 
     public record ExportChartsRequest(@NotNull @Size(min = 1, max = 50) List<@NotNull UUID> chartIds) { }
 
@@ -269,9 +292,9 @@ public class SpectrumController {
                                      @Size(max = 260) String sampleName,
                                      @Size(max = 160) String batchNo,
                                      @Size(max = 10000) String testConditions,
-                                     JsonNode metadata) {
+                                     JsonNode metadata, UUID categoryId) {
         SpectrumService.UpdateChartCommand command() {
-            return new SpectrumService.UpdateChartCommand(title, sampleName, batchNo, testConditions, metadata);
+            return new SpectrumService.UpdateChartCommand(title, sampleName, batchNo, testConditions, metadata, categoryId);
         }
     }
 

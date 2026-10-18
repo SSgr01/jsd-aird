@@ -1,2 +1,2 @@
 export { UploadWorkspace } from './UploadWorkspace';
-export type { UploadWorkspaceFilter, UploadWorkspaceProps, UploadWorkspaceRecord } from './UploadWorkspace';
+export type { UploadWorkspaceAction, UploadWorkspaceActions, UploadWorkspaceFilter, UploadWorkspaceProps, UploadWorkspaceRecord } from './UploadWorkspace';

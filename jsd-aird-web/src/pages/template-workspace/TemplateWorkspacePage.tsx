@@ -177,6 +177,7 @@ export function TemplateWorkspacePage() {
   const [editRevision, setEditRevision] = useState(0);
   const [reviewSyncState, setReviewSyncState] = useState<ReviewSyncState>('FRESH');
   const [publishBusy, setPublishBusy] = useState(false);
+  const [revisionBusy, setRevisionBusy] = useState(false);
   const [loadError, setLoadError] = useState<string>();
   const [versionHistory, setVersionHistory] = useState<TemplateVersionHistoryItem[]>([]);
   const [picking, setPicking] = useState<{ fieldId: string; target: CoordinateTarget }>();
@@ -763,6 +764,25 @@ export function TemplateWorkspacePage() {
       void message.success('模板已驳回');
     } catch (error) {
       void message.error(error instanceof Error ? error.message : '驳回模板失败');
+    }
+  };
+
+  const createOrOpenRevision = async () => {
+    if (!workspace) return;
+    const draft = versionHistory.find((item) => item.status === 'DRAFT');
+    if (draft) {
+      navigate(`/templates/${draft.versionId}/workspace`);
+      return;
+    }
+    setRevisionBusy(true);
+    try {
+      const revision = await templateApi.createRevision(workspace.versionId);
+      void message.success('已创建新的修订草稿');
+      navigate(`/templates/${revision.versionId}/workspace`);
+    } catch (error) {
+      void message.error(error instanceof Error ? error.message : '创建修订草稿失败');
+    } finally {
+      setRevisionBusy(false);
     }
   };
 
@@ -1983,6 +2003,16 @@ export function TemplateWorkspacePage() {
           )}
         </div>
         <Space wrap className="workspace-header-actions">
+          {['PUBLISHED', 'RETIRED'].includes(workspace.status) && (
+            <Button
+              size="small"
+              icon={<PlusOutlined />}
+              loading={revisionBusy}
+              onClick={() => void createOrOpenRevision()}
+            >
+              {versionHistory.some((item) => item.status === 'DRAFT') ? '打开修订草稿' : '创建修订版'}
+            </Button>
+          )}
             {templateReview && <Button size="small" icon={<HistoryOutlined />} onClick={() => setReviewHistoryOpen(true)}>审核记录</Button>}
              <SaveStateIndicator
                state={saveState}
@@ -2866,21 +2896,23 @@ function nonBlockingWarnings(
   const duplicated = duplicatePositionCount(mapping);
   if (lowConfidence) warnings.push(`${lowConfidence} 个字段建议核对`);
   if (optionalWithoutPosition) warnings.push(`${optionalWithoutPosition} 个可选字段没有填写位置`);
-  if (duplicated) warnings.push(`${duplicated} 处填写位置重复`);
+  if (duplicated) {
+    warnings.push(
+      `有 ${duplicated} 个 Excel 填写位置被多个字段共用（同一工作表中的单元格或区域完全相同），填写时可能互相覆盖；此项仅提醒核对，不会单独阻止发布。`,
+    );
+  }
   return warnings;
 }
 
 function duplicatePositionCount(mapping: TemplateBinding[]) {
-  const positions = new Set<string>();
-  let count = 0;
+  const positions = new Map<string, number>();
   for (const binding of mapping) {
     const address = stringValue(binding.locator.address || binding.locator.range);
     if (!address) continue;
     const key = `${stringValue(binding.locator.sheetId) || stringValue(binding.locator.sheetName)}:${address}`;
-    if (positions.has(key)) count += 1;
-    positions.add(key);
+    positions.set(key, (positions.get(key) ?? 0) + 1);
   }
-  return count;
+  return [...positions.values()].filter((count) => count > 1).length;
 }
 
 function addCustomFieldSchema(schema: Record<string, unknown>, field: BusinessField) {

@@ -41,6 +41,7 @@ Thumbs.db
 !/docs/database-upgrade-v76.md
 !/docs/图谱分析当前逻辑、性能与输出质量诊断.md
 /tmp/
+/outputs/
 
 # Local AI/demo runtime output
 /catboost_info/

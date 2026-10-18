@@ -86,6 +86,29 @@ public class KnowledgeFileSearchService implements KnowledgeFileSearchFacade {
         return result;
     }
 
+    @Override
+    public List<String> discriminativeTerms(UUID organizationId, String query, List<UUID> categoryIds,
+                                            Set<UUID> allowedDocumentIds) {
+        var families = lexicalAnalyzer.analyzeCompatibleQuery(query);
+        if (families.isEmpty()) return List.of();
+        if (families.size() <= 3) {
+            return families.stream().map(family -> family.alternatives().getFirst().term()).distinct().toList();
+        }
+        var terms = families.stream().flatMap(family -> family.alternatives().stream()
+                .map(alternative -> new KnowledgeRepository.AnalyzedTerm(family.ordinal(),
+                        alternative.analyzerVersion(), alternative.term()))).toList();
+        var idfByFamily = documents.termDiscrimination(organizationId, terms, categoryIds,
+                allowedDocumentIds).stream().collect(
+                java.util.stream.Collectors.toMap(KnowledgeRepository.TermDiscrimination::familyOrdinal,
+                        KnowledgeRepository.TermDiscrimination::inverseDocumentFrequency, Math::max));
+        var unknownTermIdf = idfByFamily.values().stream().mapToDouble(Double::doubleValue).max().orElse(0.0) + 1.0;
+        var ranked = families.stream().sorted(java.util.Comparator
+                .comparingDouble((LexicalAnalyzer.QueryTermFamily family) ->
+                        idfByFamily.getOrDefault(family.ordinal(), idfByFamily.isEmpty() ? 0.0 : unknownTermIdf)).reversed()
+                .thenComparingInt(LexicalAnalyzer.QueryTermFamily::ordinal)).limit(3).toList();
+        return ranked.stream().map(family -> family.alternatives().getFirst().term()).distinct().toList();
+    }
+
     private String normalize(String value) {
         return value == null ? "" : java.text.Normalizer.normalize(value, java.text.Normalizer.Form.NFKC)
                 .toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9\\u4E00-\\u9FFF]", "");

@@ -6,7 +6,6 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.shared.data.MeasurementValueParser;
 
-import java.nio.charset.StandardCharsets;
 import java.text.Normalizer;
 import java.util.*;
 
@@ -25,7 +24,7 @@ public final class HistorySampleProjection {
         for(var record:records) {
             var model=record.editModel();var groups=groups(model);
             for(var group:groups) {
-                var groupKey=text(group,"sampleKey","sourceGroupKey");
+                var groupKey=sampleGroupKey(group);
                 var context=text(group,"sourceContextKey");
                 var sample=text(group,"sourceIdentity");
                 var row=rows.addObject().put("id",record.versionId()+":"+(!groupKey.isBlank()?groupKey:"sample"))
@@ -38,27 +37,26 @@ public final class HistorySampleProjection {
                     if(!belongs(item,group,groups.size()))continue;
                     var label=text(item,"targetName","testItem","materialName","labelPath","operation","name","field");
                     if(label.isBlank()||metadata(label))continue;
-                    var unit=cleanUnit(text(item,"unit","rawUnit"));
                     boolean formula=domain.equals("formulaItems");
+                    var unit=formula?"%":cleanUnit(text(item,"unit","rawUnit"));
                     var raw=raw(model,item,formula?"ratio":"value");
                     if(unit.isBlank())unit=MeasurementValueParser.inferredUnit(raw.asText());
                     if(unit.isBlank()&&label.matches(".*[/／][µμu]m$"))unit="μm";
                     String code;
                     var column=json.createObjectNode().put("name",label).put("unit",unit);
                     if(formula) {
-                        var identity=text(item,"materialId","materialCode","code","materialName","name");
+                        var identity=text(item,"materialCode","code","materialName","name","materialId");
                         if(identity.isBlank())continue;
-                        var materialId=text(item,"materialId");
-                        if(!materialId.isBlank())try { UUID.fromString(materialId); } catch(IllegalArgumentException ignored) { materialId=""; }
-                        if(materialId.isBlank())materialId=materialIds.getOrDefault(text(item,"materialCode","code"),"");
-                        if(materialId.isBlank())materialId=UUID.nameUUIDFromBytes((org+":material:"+
-                                (text(item,"materialCode","code").isBlank()?datasetId+":"+normal(identity):normal(identity)))
-                                .getBytes(StandardCharsets.UTF_8)).toString();
-                        code="formula:"+materialId;
-                        column.put("materialId",materialId).put("materialCode",text(item,"materialCode","code","materialName","name"))
+                        var materialId=canonicalMaterialId(text(item,"materialId"));
+                        code=materialId.isBlank()?"unmapped-formula:"+normal(identity):"formula:"+materialId;
+                        column.put("semanticType","MATERIAL_RATIO")
+                                .put("mappingStatus",materialId.isBlank()?"UNMAPPED":"MAPPED")
+                                .put("materialCode",text(item,"materialCode","code","materialName","name"))
                                 .put("compositionBasis",text(item,"compositionBasis","basis"));
+                        if(!materialId.isBlank())column.put("materialId",materialId);
                         if(column.path("compositionBasis").asText().isBlank())column.put("compositionBasis",unit.equals("%")?"MASS_PERCENT":"UNSPECIFIED");
-                        column.put("name",label.endsWith("比例")?label:label+"比例");
+                        var ratioName=label.endsWith("比例")?label:label+"比例";
+                        column.put("name",materialId.isBlank()?ratioName+"（未绑定材料）":ratioName);
                     } else {
                         var method=text(item,"testMethod");var stage=text(item,"testStage");
                         var semantic=normal(label)+"|"+normal(unit)+"|"+normal(method)+"|"+normal(stage);
@@ -98,7 +96,7 @@ public final class HistorySampleProjection {
                         var recordKey=key.substring(0,split);
                         boolean own=false;for(var k:group.path("sourceRecordKeys"))if(recordKey.equals(k.asText()))own=true;
                         if(!own)return;label=key.substring(split+14);
-                    } else if(groups.size()>1)return;
+                    }
                     if(metadata(label)||target.isContainerNode()||MeasurementValueParser.missing(target.asText()))return;
                     var n=MeasurementValueParser.number(target.asText(),"");var code="input:"+normal(label);
                     var c=json.createObjectNode().put("code",code).put("semanticKey",code).put("name",label)
@@ -166,28 +164,48 @@ public final class HistorySampleProjection {
     }
 
     private List<JsonNode> groups(JsonNode model) {
-        var groups=new LinkedHashMap<String,JsonNode>();
-        for(var group:model.path("sampleGroups"))groups.put(text(group,"sampleKey","sourceGroupKey"),group);
+        var groups=new LinkedHashMap<String,ObjectNode>();
+        for(var collection:List.of("sourceGroups","sampleGroups"))for(var source:model.path(collection)) {
+            var key=sampleGroupKey(source);if(key.isBlank())continue;
+            var group=groups.computeIfAbsent(key,ignored->{var copy=(ObjectNode)source.deepCopy();if(!copy.has("sampleKey"))copy.put("sampleKey",key);return copy;});
+            source.path("sourceRecordKeys").forEach(recordKey->addRecordKey(group,recordKey.asText()));
+            addRecordKey(group,text(source,"sourceRecordKey"));
+        }
         for(var domain:List.of("formulaItems","processSteps","testResults"))for(var item:model.path(domain)) {
-            var key=text(item,"sampleKey","sourceGroupKey");
-            if(key.isBlank()&&!text(item,"sourceIdentity").isBlank())key=text(item,"sourceRecordKey");
-            if(!key.isBlank()&&!groups.containsKey(key)) {
-                var g=json.createObjectNode().put("sampleKey",key).put("sourceContextKey",text(item,"sourceContextKey"))
-                        .put("sourceIdentity",text(item,"sourceIdentity"));
-                g.putArray("sourceRecordKeys").add(text(item,"sourceRecordKey"));groups.put(key,g);
-            }
+            var key=sampleGroupKey(item);if(key.isBlank())continue;
+            var group=groups.computeIfAbsent(key,ignored->json.createObjectNode().put("sampleKey",key)
+                    .put("sourceContextKey",text(item,"sourceContextKey")).put("sourceIdentity",text(item,"sourceIdentity")));
+            addRecordKey(group,text(item,"sourceRecordKey"));
         }
         return groups.isEmpty()?List.of(json.createObjectNode()):new ArrayList<>(groups.values());
     }
     private boolean belongs(JsonNode item,JsonNode group,int count) {
-        var key=text(item,"sampleKey","sourceGroupKey");var selected=text(group,"sampleKey","sourceGroupKey");
+        var key=sampleGroupKey(item);var selected=sampleGroupKey(group);
         if(!key.isBlank())return key.equals(selected);
         var record=text(item,"sourceRecordKey");
         for(var k:group.path("sourceRecordKeys"))if(!record.isBlank()&&record.equals(k.asText()))return true;
         if(!text(item,"sourceIdentity").isBlank())return false;
         var context=text(item,"sourceContextKey");
         if(!context.isBlank())return context.equals(text(group,"sourceContextKey"));
-        return count==1;
+        return true;
+    }
+    private String sampleGroupKey(JsonNode node) {
+        var key=text(node,"logicalSampleKey","sampleKey","sourceGroupKey");
+        return key.isBlank()?text(node,"sourceRecordKey"):key;
+    }
+    private void addRecordKey(ObjectNode group,String recordKey) {
+        if(recordKey.isBlank())return;
+        var keys=group.withArray("sourceRecordKeys");
+        for(var existing:keys)if(recordKey.equals(existing.asText()))return;
+        keys.add(recordKey);
+    }
+    private String canonicalMaterialId(String raw) {
+        try {
+            if(raw==null||raw.isBlank())return "";
+            var value=raw.strip();var id=UUID.fromString(value);
+            return id.toString().equalsIgnoreCase(value)?id.toString():"";
+        }
+        catch(IllegalArgumentException ignored){return "";}
     }
     private JsonNode raw(JsonNode model,JsonNode item,String key) {
         for(var ref:item.path("sourceRefs")) {

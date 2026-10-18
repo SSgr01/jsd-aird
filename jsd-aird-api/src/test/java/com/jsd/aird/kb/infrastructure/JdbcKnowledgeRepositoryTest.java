@@ -21,6 +21,24 @@ import org.springframework.jdbc.core.JdbcTemplate;
 class JdbcKnowledgeRepositoryTest {
 
     @Test
+    void attachingLegacyProcessingStepsSkipsStepsAlreadyCreatedForParseRun() {
+        var jdbc = mock(JdbcTemplate.class);
+        var repository = new JdbcKnowledgeRepository(jdbc);
+        var organizationId = UUID.randomUUID();
+        var versionId = UUID.randomUUID();
+        var parseRunId = UUID.randomUUID();
+
+        repository.attachProcessingSteps(organizationId, versionId, parseRunId);
+
+        var sql = ArgumentCaptor.forClass(String.class);
+        var args = ArgumentCaptor.forClass(Object[].class);
+        verify(jdbc).update(sql.capture(), args.capture());
+        assertThat(sql.getValue()).contains("NOT EXISTS", "current_run.parse_run_id = ?",
+                "current_run.step_key = legacy.step_key", "legacy.parse_run_id IS NULL");
+        assertThat(args.getValue()).containsExactly(parseRunId, organizationId, versionId, parseRunId);
+    }
+
+    @Test
     void writesParentsBeforeChildrenAndIndexesOnlyChildTerms() {
         var jdbc = mock(JdbcTemplate.class);
         var repository = new JdbcKnowledgeRepository(jdbc);
@@ -74,6 +92,23 @@ class JdbcKnowledgeRepositoryTest {
         verify(jdbc, times(2)).update(updateSql.capture(), any(Object[].class));
         assertThat(String.join("\n", updateSql.getAllValues())).contains("GROUP BY c.analyzer_version",
                 "GROUP BY c.analyzer_version, t.term", "c.chunk_role = 'CHILD'");
+    }
+
+    @Test
+    void readsCorpusIdfForAnalyzedQueryFamilies() {
+        var jdbc = mock(JdbcTemplate.class);
+        var repository = new JdbcKnowledgeRepository(jdbc);
+
+        repository.termDiscrimination(UUID.randomUUID(), List.of(
+                new KnowledgeRepository.AnalyzedTerm(0, "material-smartcn-v3", "聚氨酯"),
+                new KnowledgeRepository.AnalyzedTerm(1, "material-smartcn-v3", "粘接")),
+                List.of(UUID.randomUUID()), java.util.Set.of(UUID.randomUUID()));
+
+        var sql = ArgumentCaptor.forClass(String.class);
+        verify(jdbc).query(sql.capture(), any(org.springframework.jdbc.core.RowMapper.class),
+                any(Object[].class));
+        assertThat(sql.getValue()).contains("kb.chunk_term", "document_frequency", "document_count",
+                "GROUP BY m.family_ordinal", "metadata_snapshot_jsonb", "d.id IN");
     }
 
     @Test

@@ -18,6 +18,8 @@ interface Props {
   onChange: (value: ProjectRelationTarget[]) => void;
   disabled?: boolean;
   emptyText?: string;
+  addText?: string;
+  removeText?: string;
   /** Legacy upload endpoints persist one project hierarchy; resource links can remain multi-valued. */
   multiple?: boolean;
 }
@@ -29,6 +31,8 @@ export function ProjectRelationPicker({
   onChange,
   disabled,
   emptyText = '尚未关联项目',
+  addText = '添加项目关系',
+  removeText = '删除项目关系',
   multiple = true,
 }: Props) {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -125,8 +129,8 @@ export function ProjectRelationPicker({
           update(index, { taskId, taskName: task?.name });
         }}
       />
-      {!disabled && <Button aria-label="删除项目关系" icon={<DeleteOutlined />} onClick={() => onChange(normalized.filter((_, itemIndex) => itemIndex !== index))} />}
+      {!disabled && <Button aria-label={removeText} icon={<DeleteOutlined />} onClick={() => onChange(normalized.filter((_, itemIndex) => itemIndex !== index))} />}
     </Space>)}
-    {!disabled && (multiple || !normalized.length) && <Button type="dashed" icon={<PlusOutlined />} onClick={() => onChange([...normalized, { projectId: '' }])}>添加项目关系</Button>}
+    {!disabled && (multiple || !normalized.length) && <Button type="dashed" icon={<PlusOutlined />} onClick={() => onChange([...normalized, { projectId: '' }])}>{addText}</Button>}
   </Space>;
 }

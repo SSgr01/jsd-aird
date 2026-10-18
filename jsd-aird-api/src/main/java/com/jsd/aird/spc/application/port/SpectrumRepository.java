@@ -28,11 +28,12 @@ public interface SpectrumRepository {
     void updateChart(UUID organizationId, UUID chartId, String title, String sampleName, String batchNo,
                      String testConditions, String metadataJson);
     int assignChartCategory(UUID organizationId, UUID chartId, UUID categoryId);
-    boolean hasProjectUsage(UUID organizationId, UUID chartId);
+    boolean hasActiveProjectReference(UUID organizationId, UUID chartId);
+    boolean hasAnalysisReportReference(UUID organizationId, UUID chartId);
     void deleteChart(UUID organizationId, UUID chartId);
     void recordUploadAttempt(NewUploadAttempt attempt);
     List<UploadAttemptRow> listUploadAttempts(UUID organizationId, int limit);
-    List<ChartAnalysisExportRow> listChartAnalysisExports(UUID organizationId, UUID chartId, int limit);
+    int hideUploadAttempt(UUID organizationId, UUID requestId);
 
     UUID createSession(UUID organizationId, UUID userId, String title);
     List<SessionRow> listSessions(UUID organizationId, UUID userId, int limit);
@@ -80,13 +81,12 @@ public interface SpectrumRepository {
 
     record NewUploadAttempt(UUID organizationId, UUID requestId, UUID categoryId, UUID chartId,
                             UUID fileObjectId, String originalName, long size, String status,
-                            String errorCode, String errorMessage, UUID createdBy) { }
+                            String errorCode, String errorMessage, String uploadContextJson,
+                            UUID parentRequestId, UUID createdBy) { }
 
     record UploadAttemptRow(UUID requestId, UUID categoryId, UUID chartId, String originalName,
-                            long size, String status, String errorCode, String errorMessage, Instant createdAt) { }
-
-    record ChartAnalysisExportRow(UUID id, String mode, String question, String chartIdsJson, String status,
-                                  String resultJson, Instant createdAt, Instant completedAt) { }
+                            UUID fileObjectId, long size, String status, String errorCode, String errorMessage,
+                            String uploadContextJson, UUID parentRequestId, Instant createdAt) { }
 
     record SessionRow(UUID id, String title, Instant createdAt, Instant updatedAt,
                       String chartIdsJson, String pageSelectionsJson) { }

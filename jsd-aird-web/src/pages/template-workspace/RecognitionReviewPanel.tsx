@@ -533,7 +533,7 @@ export function RecognitionReviewPanel({
                         >
                           修改
                         </Button>}
-                        {allowIgnore && <Popconfirm
+                        {allowIgnore && item.status !== 'CONFIRMED' && <Popconfirm
                           title={`忽略“${item.fieldName}”？`}
                           description={wordMode ? '只忽略这条识别建议，不会删除 Word 正文内容。' : '只移除字段定义，不会删除 Excel 中的原内容。'}
                           okText="忽略"
@@ -800,7 +800,7 @@ function RegionFieldCard({
               <>
                 {field.status !== 'CONFIRMED' && <Button size="small" type="primary" icon={<CheckOutlined />} disabled={!editable || busy || (Boolean(field.payload.standardRequired) && Boolean(field.payload.requiresStandardConfirmation))} onClick={() => onConfirm(field)}>{wordMode ? '插入正文并确认' : '确认'}</Button>}
                 {allowModify && <Button size="small" icon={<EditOutlined />} disabled={!editable || busy} onClick={() => onModify(field)}>修改</Button>}
-                {allowIgnore && <Popconfirm title={`忽略“${field.fieldName || '该字段'}”？`} okText="忽略" cancelText="取消" onConfirm={() => onIgnore(field)}>
+                {allowIgnore && field.status !== 'CONFIRMED' && <Popconfirm title={`忽略“${field.fieldName || '该字段'}”？`} okText="忽略" cancelText="取消" onConfirm={() => onIgnore(field)}>
                   <Button size="small" danger type="text" icon={<EyeInvisibleOutlined />} disabled={!editable || busy}>忽略</Button>
                 </Popconfirm>}
               </>

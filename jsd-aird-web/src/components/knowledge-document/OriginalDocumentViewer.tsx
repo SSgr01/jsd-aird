@@ -21,6 +21,7 @@ export function OriginalDocumentViewer(props: OriginalDocumentViewerProps) {
   if (type === 'application/pdf' || name.endsWith('.pdf')) return <PdfViewer source={blob} selected={selected?.sourceAnchor} sourceNodes={props.sourceNodes} onSourceSelect={props.onSourceSelect} />;
   if (type.startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp|tiff?)$/.test(name)) return <ImageViewer blob={blob} selected={selected?.sourceAnchor} sourceNodes={props.sourceNodes} onSourceSelect={props.onSourceSelect} />;
   if (type.startsWith('audio/') || /\.(mp3|wav|m4a|aac|flac|ogg|opus)$/.test(name)) return <AudioViewer blob={blob} selected={selected?.sourceAnchor} sourceNodes={props.sourceNodes} onSourceSelect={props.onSourceSelect} />;
+  if (type.startsWith('video/') || /\.(mp4|m4v|mov|webm)$/.test(name)) return <VideoViewer blob={blob} />;
   if (name.endsWith('.docx')) return <DocxViewer blob={blob} selected={selected?.sourceAnchor} sourceNodes={props.sourceNodes} onSourceSelect={props.onSourceSelect} />;
   if (/\.(xlsx|xls|csv)$/.test(name)) return <WorkbookViewer blob={blob} selected={selected?.sourceAnchor} sourceNodes={props.sourceNodes} onSourceSelect={props.onSourceSelect} />;
   if (type.startsWith('text/') || /\.(txt|md)$/.test(name)) return <TextViewer blob={blob} />;
@@ -51,7 +52,54 @@ function ImageViewer({ blob, selected, sourceNodes, onSourceSelect }: { blob: Bl
 
 function AudioViewer({ blob, selected, sourceNodes, onSourceSelect }: { blob: Blob; selected?: SourceAnchor; sourceNodes: SourceNode[]; onSourceSelect?: (key: string) => void }) { const [url, setUrl] = useState(''); const audio = useRef<HTMLAudioElement>(null); useEffect(() => { const value = URL.createObjectURL(blob); setUrl(value); return () => URL.revokeObjectURL(value); }, [blob]); useEffect(() => { if (audio.current && selected?.startMs !== undefined) { audio.current.currentTime = selected.startMs / 1000; } }, [selected]); return <div className="knowledge-audio-viewer"><Typography.Title level={4}>原始音频</Typography.Title><audio ref={audio} src={url} controls onSeeked={(event) => { const milliseconds = event.currentTarget.currentTime * 1000; const source = sourceNodes.find((node) => node.sourceAnchor.kind === 'time_range' && (node.sourceAnchor.startMs || 0) <= milliseconds && (node.sourceAnchor.endMs ?? Number.MAX_SAFE_INTEGER) >= milliseconds); if (source) onSourceSelect?.(source.sourceNodeKey); }} /><Typography.Text type="secondary">选择右侧转写段落可定位到对应时间。</Typography.Text></div>; }
 
-function DocxViewer({ blob, selected, sourceNodes, onSourceSelect }: { blob: Blob; selected?: SourceAnchor; sourceNodes: SourceNode[]; onSourceSelect?: (key: string) => void }) { const host = useRef<HTMLDivElement>(null); useEffect(() => { if (host.current) { host.current.innerHTML = ''; const target = host.current; void import('docx-preview').then(({ renderAsync }) => renderAsync(blob, target, target, { breakPages: true, renderHeaders: true, renderFooters: true, renderFootnotes: true, renderEndnotes: true, useBase64URL: false })); } }, [blob]); useEffect(() => { if (!host.current || !selected?.paragraphId) return; const index = Number(selected.paragraphId.replace(/\D/g, '')); host.current.querySelectorAll('p')[index]?.scrollIntoView({ block: 'center', behavior: 'smooth' }); }, [selected]); return <div className="knowledge-docx-viewer" ref={host} onClick={(event) => { const paragraph = (event.target as HTMLElement).closest('p'); if (!paragraph || !host.current) return; const index = [...host.current.querySelectorAll('p')].indexOf(paragraph); const node = sourceNodes.find((item) => item.sourceAnchor.paragraphId === `p-${index}`); if (node) onSourceSelect?.(node.sourceNodeKey); }} />; }
+function DocxViewer({ blob, selected, sourceNodes, onSourceSelect }: { blob: Blob; selected?: SourceAnchor; sourceNodes: SourceNode[]; onSourceSelect?: (key: string) => void }) {
+  const host = useRef<HTMLDivElement>(null);
+  const [previewError, setPreviewError] = useState(false);
+
+  useEffect(() => {
+    const target = host.current;
+    if (!target) return undefined;
+    let active = true;
+    target.replaceChildren();
+    setPreviewError(false);
+    void import('docx-preview')
+      .then(({ renderAsync }) => renderAsync(blob, target, target, {
+        breakPages: true,
+        renderHeaders: true,
+        renderFooters: true,
+        renderFootnotes: true,
+        renderEndnotes: true,
+        useBase64URL: false,
+      }))
+      .catch(() => {
+        if (active) setPreviewError(true);
+      });
+    return () => { active = false; };
+  }, [blob]);
+
+  useEffect(() => {
+    if (!host.current || !selected?.paragraphId || previewError) return;
+    const index = Number(selected.paragraphId.replace(/\D/g, ''));
+    host.current.querySelectorAll('p')[index]?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [previewError, selected]);
+
+  if (previewError) {
+    return <Alert
+      type="warning"
+      showIcon
+      message="原文件无法预览"
+      description="文件可能已损坏或内容与扩展名不符；仍可下载原文件核对。"
+    />;
+  }
+
+  return <div className="knowledge-docx-viewer" ref={host} onClick={(event) => {
+    const paragraph = (event.target as HTMLElement).closest('p');
+    if (!paragraph || !host.current) return;
+    const index = [...host.current.querySelectorAll('p')].indexOf(paragraph);
+    const node = sourceNodes.find((item) => item.sourceAnchor.paragraphId === `p-${index}`);
+    if (node) onSourceSelect?.(node.sourceNodeKey);
+  }} />;
+}
 
 type XlsxModule = typeof XLSX;
 
@@ -64,3 +112,5 @@ function anchorContainsCell(range: string, row: number, column: number, xlsx: Xl
 function anchorContainsPoint(anchor: SourceAnchor, x: number, y: number) { return normalizedAnchorContainsPoint(anchor, x, y); }
 
 function TextViewer({ blob }: { blob: Blob }) { const [text, setText] = useState(''); useEffect(() => { void blob.text().then(setText); }, [blob]); return <pre className="knowledge-text-viewer">{text}</pre>; }
+
+function VideoViewer({ blob }: { blob: Blob }) { const [url, setUrl] = useState(''); const [error, setError] = useState(false); useEffect(() => { const value = URL.createObjectURL(blob); setUrl(value); setError(false); return () => URL.revokeObjectURL(value); }, [blob]); return <div className="knowledge-video-viewer">{error ? <Alert type="warning" showIcon message="浏览器无法播放此视频编码，可下载原文件查看。" /> : <video controls preload="metadata" src={url} style={{ maxWidth: '100%', maxHeight: '65vh' }} onError={() => setError(true)}>当前浏览器不支持视频播放</video>}</div>; }

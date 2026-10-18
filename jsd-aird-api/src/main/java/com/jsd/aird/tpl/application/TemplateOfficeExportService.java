@@ -26,6 +26,7 @@ public class TemplateOfficeExportService {
     private final ObjectMapper objectMapper;
     private final SnapshotWorkbookExporter workbookExporter;
     private final WordOoxmlPatcher wordOoxmlPatcher;
+    private final com.jsd.aird.iam.api.AuthorizationService authorization;
 
     public TemplateOfficeExportService(
             TemplateRepository repository,
@@ -33,7 +34,8 @@ public class TemplateOfficeExportService {
             ObjectStorage storage,
             ObjectMapper objectMapper,
             SnapshotWorkbookExporter workbookExporter,
-            WordOoxmlPatcher wordOoxmlPatcher
+            WordOoxmlPatcher wordOoxmlPatcher,
+            com.jsd.aird.iam.api.AuthorizationService authorization
     ) {
         this.repository = repository;
         this.files = files;
@@ -41,6 +43,7 @@ public class TemplateOfficeExportService {
         this.objectMapper = objectMapper;
         this.workbookExporter = workbookExporter;
         this.wordOoxmlPatcher = wordOoxmlPatcher;
+        this.authorization = authorization;
     }
 
     public Check check(UUID versionId, String format, String state) {
@@ -68,6 +71,32 @@ public class TemplateOfficeExportService {
         var snapshot = readSnapshot(workspace);
         var exported = wordOoxmlPatcher.applySnapshot(source, snapshot);
         return new Download(fileName(workspace, "docx", state), contentType("DOCX"), exported, warnings);
+    }
+
+    public byte[] exportFiles(List<UUID> versionIds) throws java.io.IOException {
+        if (versionIds == null || versionIds.isEmpty() || versionIds.size() > 100 || versionIds.stream().anyMatch(java.util.Objects::isNull)) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "请选择 1 到 100 个模板导出");
+        }
+        try (var output = new java.io.ByteArrayOutputStream();
+             var zip = new java.util.zip.ZipOutputStream(output, java.nio.charset.StandardCharsets.UTF_8)) {
+            var usedNames = new java.util.HashSet<String>();
+            for (var id : versionIds.stream().distinct().toList()) {
+                var item = repository.findWorkspace(ActorContext.required().organizationId(), id)
+                        .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "模板版本不存在"));
+                var actor = ActorContext.required();
+                if (!authorization.check(new com.jsd.aird.iam.api.PermissionCheck(actor.organizationId(), actor.userId(),
+                        "template.export", "TEMPLATE", item.templateId(), "READ")).allowed()) {
+                    throw new ApiException(ApiErrorCode.PERMISSION_DENIED, "没有导出该模板的权限");
+                }
+                var file = export(id, item.format().name(), item.status().name());
+                var name = com.jsd.aird.shared.office.ArchiveFileNames.unique(file.fileName(), usedNames);
+                zip.putNextEntry(new java.util.zip.ZipEntry(name));
+                zip.write(file.content());
+                zip.closeEntry();
+            }
+            zip.finish();
+            return output.toByteArray();
+        }
     }
 
     private TemplateRepository.TemplateWorkspace workspace(UUID versionId, String state) {

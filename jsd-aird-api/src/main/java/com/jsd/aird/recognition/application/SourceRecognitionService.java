@@ -179,7 +179,7 @@ public class SourceRecognitionService {
     @Transactional
     public SourceRecognitionRepository.Job retry(String owner, UUID id) {
         var actor = ActorContext.required();
-        if (repository.markParsing(actor.organizationId(), id, checkedOwner(owner)) != 1)
+        if (repository.markParsing(actor.organizationId(), id, checkedOwner(owner), actor.userId()) != 1)
             throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "当前识别任务不可重试");
         return required(actor.organizationId(), id, owner);
     }

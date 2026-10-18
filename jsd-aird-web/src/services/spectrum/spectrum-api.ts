@@ -46,11 +46,14 @@ export interface SpectrumUploadAttempt {
   requestId: string;
   categoryId?: string;
   chartId?: string;
+  fileObjectId?: string;
   originalName: string;
   size: number;
   status: 'SUCCEEDED' | 'FAILED' | 'DUPLICATE' | 'CANCELLED';
   errorCode?: string;
   errorMessage?: string;
+  uploadContext: Record<string, unknown>;
+  parentRequestId?: string;
   createdAt: string;
 }
 export interface SpectrumPage {
@@ -259,6 +262,9 @@ export const spectrumApi = {
     metadata?: Record<string, unknown>;
     originalName: string;
     size: number;
+    duplicateOverride?: boolean;
+    uploadContext?: Record<string, unknown>;
+    parentRequestId?: string;
   }) {
     const response = await httpClient.post<ApiResponse<SpectrumChart>>('/api/v1/spc/charts', input);
     return response.data.data;
@@ -271,6 +277,7 @@ export const spectrumApi = {
     id: string,
     input: {
       title: string;
+      categoryId?: string;
       sampleName?: string;
       batchNo?: string;
       testConditions?: string;
@@ -298,17 +305,23 @@ export const spectrumApi = {
     fileObjectId?: string;
     originalName: string;
     size: number;
-    status: 'FAILED' | 'CANCELLED';
+    status: 'FAILED' | 'DUPLICATE' | 'CANCELLED';
     errorCode?: string;
     errorMessage?: string;
+    uploadContext?: Record<string, unknown>;
+    parentRequestId?: string;
   }) {
     await httpClient.post('/api/v1/spc/uploads/attempts', input);
   },
+  async hideUploadAttempt(requestId: string) {
+    await httpClient.delete(`/api/v1/spc/uploads/attempts/${requestId}`);
+  },
   async exportCharts(chartIds: string[]) {
     const response = await httpClient.post<Blob>('/api/v1/spc/charts/export', { chartIds }, {
-      responseType: 'blob',
+      responseType: 'blob', headers: { Accept: '*/*' }, timeout: 0,
     });
-    downloadBlob(response.data, '图谱资料导出.zip');
+    const encodedName = /filename\*=UTF-8''([^;]+)/i.exec(String(response.headers['content-disposition'] || ''))?.[1];
+    downloadBlob(response.data, encodedName ? decodeURIComponent(encodedName) : '图谱文件.zip');
   },
   async pages(id: string) {
     const response = await httpClient.get<ApiResponse<SpectrumPage[]>>(

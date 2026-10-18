@@ -6909,8 +6909,9 @@ a:active,
 }
 .upload-workspace-record-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 4px 8px;
   margin-top: 10px;
   padding-top: 9px;
   border-top: 1px solid var(--app-border);

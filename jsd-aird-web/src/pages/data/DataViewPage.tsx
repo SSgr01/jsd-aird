@@ -1,5 +1,6 @@
-import { DatabaseOutlined, DownloadOutlined, EyeOutlined, LinkOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons';
-import { App, Button, Dropdown, Empty, Form, Input, Modal, Progress, Select, Space, Table, Tag, Typography } from 'antd';
+import { DatabaseOutlined, DownloadOutlined, EyeOutlined, LinkOutlined, RedoOutlined, ReloadOutlined, SearchOutlined, UploadOutlined } from '@ant-design/icons';
+import { App, Button, Dropdown, Empty, Input, Modal, Progress, Select, Space, Table, Tag, Typography } from 'antd';
+import { DataPublicationPanel } from '@/features/data-workbench/DataPublicationPanel';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
@@ -11,7 +12,7 @@ import { Can } from '@/components/auth/Can';
 import { usePermission } from '@/components/auth/usePermission';
 import { ProjectRelationPicker } from '@/components/project-relations/ProjectRelationPicker';
 import '@/components/project-relations/project-relation-picker.css';
-import { dataApi, type DataCategory, type DataSourceFile, type DataStructuredSearchResult } from '@/services/data/data-api';
+import { dataApi, type DataCategory, type DataSourceFile } from '@/services/data/data-api';
 import { dataParseProgress } from '@/services/data/data-progress';
 import { getProjects, type Project } from '@/services/project/project-api';
 import { projectResourceApi, type ProjectRelationTarget } from '@/services/project/project-resource-api';
@@ -20,18 +21,15 @@ const statusLabels: Record<string, [string, string]> = {
   CREATED: ['待处理', 'default'], QUEUED: ['上传中', 'processing'], PARSING: ['解析中', 'blue'],
   WAITING_SHEET: ['待确认工作表', 'gold'], WAITING_MAPPING: ['待确认字段', 'gold'],
   VALIDATING: ['校验中', 'processing'], WAITING_CONFIRM: ['待确认提交', 'orange'],
-  COMMITTING: ['入库中', 'processing'], COMPLETED: ['已入库', 'success'],
+  COMMITTING: ['处理中', 'processing'], COMPLETED: ['处理完成', 'success'],
   FAILED: ['处理失败', 'error'], CANCELLED: ['已取消', 'default'],
 };
 const formalStatusLabels: Record<string, [string, string]> = {
+  DRAFT: ['导入草稿', 'default'], PENDING_REVIEW: ['待审核', 'processing'], RETURNED: ['已驳回', 'error'], APPROVED: ['审核通过，待发布', 'processing'], PUBLISHED: ['已发布', 'success'], DISABLED: ['已停用', 'default'],
   CONFIRMED: ['已确认', 'success'], SUPERSEDED: ['已被新版本替代', 'gold'],
   INVALIDATED: ['已失效', 'error'], NOT_CONFIRMED: ['未确认', 'default'],
 };
 const UNCATEGORIZED_CATEGORY_ID = 'UNCATEGORIZED';
-
-function splitSearchTerms(value?: string) {
-  return (value || '').split(/[，,、;；\n]+/).map((item) => item.trim()).filter(Boolean).slice(0, 8);
-}
 
 export function DataViewPage() {
   const { message } = App.useApp();
@@ -54,10 +52,6 @@ export function DataViewPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectId, setProjectId] = useState<string>();
   const [relationEditor, setRelationEditor] = useState<{ item: DataSourceFile; targets: ProjectRelationTarget[] }>();
-  const [structuredSearchOpen, setStructuredSearchOpen] = useState(false);
-  const [structuredSearchLoading, setStructuredSearchLoading] = useState(false);
-  const [structuredSearchResult, setStructuredSearchResult] = useState<DataStructuredSearchResult>();
-  const [structuredSearchForm] = Form.useForm<{ fileName?: string; recordTerms?: string; fieldTerms?: string }>();
   const canUpdate = usePermission('data.update');
 
   const load = useCallback(async () => {
@@ -104,9 +98,16 @@ export function DataViewPage() {
   const sourceRoute = (item: DataSourceFile) => item.recognitionMode === 'FREEFORM'
     ? `/data/recognition-jobs/${item.importJobId}`
     : `/data/import-jobs/${item.importJobId}`;
-  const moveSource = async (item: DataSourceFile, nextCategoryId: string) => {
+  const moveSource = async (item: DataSourceFile, nextCategoryId?: string) => {
     try { await dataApi.assignSourceCategory(item.importJobId, nextCategoryId); await load(); void message.success('归档分类已更新'); }
     catch (error) { void message.error(error instanceof Error ? error.message : '归档分类更新失败'); }
+  };
+  const resetFilters = () => {
+    setCategoryId('ALL');
+    setKeyword('');
+    setStatus(undefined);
+    setProjectId(undefined);
+    setPage((current) => ({ ...current, current: 1 }));
   };
   const saveCategory = async (value: CategoryEditorValue) => {
     setSaving(true);
@@ -138,21 +139,6 @@ export function DataViewPage() {
     finally { setSaving(false); }
   };
 
-  const runStructuredSearch = async (values: { fileName?: string; recordTerms?: string; fieldTerms?: string }) => {
-    setStructuredSearchLoading(true);
-    try {
-      const result = await dataApi.structuredSearch({
-        fileName: values.fileName?.trim() || undefined,
-        recordTerms: splitSearchTerms(values.recordTerms),
-        fieldTerms: splitSearchTerms(values.fieldTerms),
-        categoryId: categoryId !== 'ALL' && categoryId !== UNCATEGORIZED_CATEGORY_ID ? categoryId : undefined,
-        uncategorized: categoryId === UNCATEGORIZED_CATEGORY_ID,
-      });
-      setStructuredSearchResult(result);
-    } catch (error) { void message.error(error instanceof Error ? error.message : '结构化业务字段查询失败'); }
-    finally { setStructuredSearchLoading(false); }
-  };
-
   return <div className="business-page">
     <div className="page-heading">
       <div><Typography.Title level={2}>数据中心</Typography.Title><Typography.Text type="secondary">查看数据中心导入文件及确认状态。</Typography.Text></div>
@@ -163,9 +149,9 @@ export function DataViewPage() {
       onCreate={canUpdate ? () => setEditor({ mode: 'NEW' }) : undefined}
       onRename={canUpdate ? (item) => setEditor({ mode: 'EDIT', item: categories.find((candidate) => candidate.id === item.id) }) : undefined}
       onDelete={canUpdate ? (item) => { const category = categories.find((candidate) => candidate.id === item.id); if (category?.allowedActions?.includes('DELETE')) setDeleteItem(category); } : undefined} />
-    <div className="catalog-sync-note"><ReloadOutlined /> 同一文件的多次导入会分别保留；“已入库”不代表数据已确认。</div>
+    <div className="catalog-sync-note"><ReloadOutlined /> 处理完成后需确认数据、提交审核，通过后发布。可在“审核与版本记录”查看版本和审核意见。</div>
     <CatalogListPanel title={cards.find((item) => item.id === categoryId)?.name || '来源文件'} count={page.total}
-      filters={<Space wrap><Input.Search allowClear placeholder="搜索来源文件名" value={keyword} onChange={(event) => { setKeyword(event.target.value); setPage((value) => ({ ...value, current: 1 })); }} onSearch={() => void load()} /><Select allowClear showSearch optionFilterProp="label" popupMatchSelectWidth={false} classNames={{ popup: { root: 'project-relation-picker-dropdown' } }} placeholder="全部项目" value={projectId} onChange={(value) => { setProjectId(value); setPage((current) => ({ ...current, current: 1 })); }} options={projects.map((project) => ({ value: project.id, label: `${project.projectCode} · ${project.name}` }))} /><Select allowClear placeholder="全部状态" value={status} onChange={(value) => { setStatus(value); setPage((value) => ({ ...value, current: 1 })); }} options={Object.entries(statusLabels).map(([value, item]) => ({ value, label: item[0] }))} /><Button onClick={() => { setStructuredSearchResult(undefined); setStructuredSearchOpen(true); }}>结构化业务字段查询</Button><Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button></Space>}
+      filters={<Space wrap><Input allowClear prefix={<SearchOutlined />} placeholder="搜索来源文件名" value={keyword} onChange={(event) => { setKeyword(event.target.value); setPage((value) => ({ ...value, current: 1 })); }} /><Select allowClear showSearch optionFilterProp="label" popupMatchSelectWidth={false} classNames={{ popup: { root: 'project-relation-picker-dropdown' } }} placeholder="全部项目" value={projectId} onChange={(value) => { setProjectId(value); setPage((current) => ({ ...current, current: 1 })); }} options={projects.map((project) => ({ value: project.id, label: `${project.projectCode} · ${project.name}` }))} /><Select allowClear placeholder="全部状态" value={status} onChange={(value) => { setStatus(value); setPage((value) => ({ ...value, current: 1 })); }} options={[{ label: '审核发布状态', options: ['DRAFT', 'CONFIRMED', 'PENDING_REVIEW', 'RETURNED', 'APPROVED', 'PUBLISHED', 'DISABLED'].map((value) => ({ value: `PUB_${value}`, label: formalStatusLabels[value]?.[0] || value })) }, { label: '文件处理状态', options: Object.entries(statusLabels).map(([value, item]) => ({ value, label: item[0] })) }]} /><Button icon={<RedoOutlined />} onClick={resetFilters}>重置</Button></Space>}
       loading={loading}>
       <Table className="catalog-data-table" scroll={{ x: 1660 }} rowKey="importJobId" dataSource={items} pagination={{ current: page.current, pageSize: page.pageSize, total: page.total, showSizeChanger: true, onChange: (current, pageSize) => setPage({ current, pageSize, total: page.total }) }} locale={{ emptyText: <Empty description="暂无来源文件" /> }} onRow={(record) => ({ onDoubleClick: () => navigate(sourceRoute(record)) })} columns={[
         { title: '来源文件', dataIndex: 'originalName', width: 280, ellipsis: true, render: (value: string, record: DataSourceFile) => <Space><DatabaseOutlined /><Typography.Text strong ellipsis={{ tooltip: value }}>{value}</Typography.Text><Typography.Text type="secondary">{record.sourceFormat}</Typography.Text></Space> },
@@ -176,37 +162,12 @@ export function DataViewPage() {
         { title: '导入任务', dataIndex: 'status', width: 130, render: (value: string) => <Tag color={statusLabels[value]?.[1]}>{statusLabels[value]?.[0] || value}</Tag> },
         { title: '解析进度', dataIndex: 'progress', width: 170, render: (_: number, record: DataSourceFile) => { const percent = dataParseProgress(record); return <Progress percent={percent} size="small" status={record.status === 'FAILED' ? 'exception' : percent === 100 ? 'success' : 'active'} format={(value) => `${value ?? 0}%`} />; } },
         { title: '最近更新', dataIndex: 'updatedAt', width: 180, render: (value: string) => new Date(value).toLocaleString('zh-CN') },
-        { title: '操作', width: 500, render: (_: unknown, record: DataSourceFile) => <Space wrap>{record.fileObjectId && <><Button type="link" icon={<EyeOutlined />} onClick={() => setPreviewFile(resolveFile(record))}>预览</Button><Button type="link" icon={<DownloadOutlined />} onClick={() => void downloadPreviewFile(resolveFile(record))}>下载</Button></>}<Button type="link" onClick={() => navigate(sourceRoute(record))}>{record.recognitionMode === 'FREEFORM' ? '查看识别' : '查看导入'}</Button>{record.experimentId && <Button type="link" onClick={() => navigate(`/experiments/${record.experimentId}`)}>查看实验</Button>}<Can permission="data.update"><Dropdown trigger={['click']} menu={{ items: categories.map((category) => ({ key: category.id, label: category.name, onClick: () => void moveSource(record, category.id) })) }}><Button type="link">移动分类</Button></Dropdown></Can><Can permission="project.assign"><Button type="link" icon={<LinkOutlined />} onClick={() => setRelationEditor({ item: record, targets: (record.relatedProjects || []).map((relation) => ({ projectId: relation.projectId, stageId: relation.stageId, taskId: relation.taskId })) })}>关联项目</Button></Can></Space> },
+        { title: '操作', width: 500, render: (_: unknown, record: DataSourceFile) => <Space wrap><DataPublicationPanel lazy jobId={record.importJobId} onChanged={() => void load()} onEdit={() => navigate(sourceRoute(record))} />{record.fileObjectId && <><Button type="link" icon={<EyeOutlined />} onClick={() => setPreviewFile(resolveFile(record))}>预览</Button><Button type="link" icon={<DownloadOutlined />} onClick={() => void downloadPreviewFile(resolveFile(record))}>下载</Button></>}<Button type="link" onClick={() => navigate(sourceRoute(record))}>{record.recognitionMode === 'FREEFORM' ? '查看识别' : '查看导入'}</Button>{record.experimentId && <Button type="link" onClick={() => navigate(`/experiments/${record.experimentId}`)}>查看实验</Button>}<Can permission="data.update"><Dropdown trigger={['click']} menu={{ items: [{ key: UNCATEGORIZED_CATEGORY_ID, label: '移到未分类', onClick: () => void moveSource(record) }, ...categories.map((category) => ({ key: category.id, label: category.name, onClick: () => void moveSource(record, category.id) })) ] }}><Button type="link">移动分类</Button></Dropdown></Can><Can permission="project.assign"><Button type="link" icon={<LinkOutlined />} onClick={() => setRelationEditor({ item: record, targets: (record.relatedProjects || []).map((relation) => ({ projectId: relation.projectId, stageId: relation.stageId, taskId: relation.taskId })) })}>关联项目</Button></Can></Space> },
       ]} />
     </CatalogListPanel>
     <CategoryEditorModal open={Boolean(editor)} title={editor?.mode === 'NEW' ? '新增归档分类' : '编辑归档分类'} initialValue={editor?.item ? { name: editor.item.name, description: editor.item.description } : { name: '' }} confirmLoading={saving} onCancel={() => setEditor(undefined)} onSubmit={(value) => void saveCategory(value)} />
-    {deleteItem && <Modal open title={`删除分类“${deleteItem.name}”`} okText="删除并迁移" okButtonProps={{ danger: true }} cancelText="取消" confirmLoading={saving} onCancel={() => setDeleteItem(undefined)} onOk={() => void removeCategory()}><Typography.Paragraph>分类中的来源文件将被迁移到下方分类；未选择时仅允许删除空分类。</Typography.Paragraph><Select allowClear placeholder="选择替代分类" value={replacementId} onChange={setReplacementId} options={categories.filter((item) => item.id !== deleteItem.id).map((item) => ({ value: item.id, label: item.name }))} style={{ width: '100%' }} /></Modal>}
+    {deleteItem && <Modal open title={`删除分类“${deleteItem.name}”`} okText="删除并迁移" okButtonProps={{ danger: true }} cancelText="取消" confirmLoading={saving} onCancel={() => setDeleteItem(undefined)} onOk={() => void removeCategory()}><Typography.Paragraph>来源文件将迁移到所选分类；未选择时移到“未分类”。</Typography.Paragraph><Select allowClear placeholder="未分类" value={replacementId} onChange={setReplacementId} options={categories.filter((item) => item.id !== deleteItem.id).map((item) => ({ value: item.id, label: item.name }))} style={{ width: '100%' }} /></Modal>}
     <FilePreviewModal open={Boolean(previewFile)} file={previewFile} onClose={() => setPreviewFile(undefined)} showSpreadsheetMerges={false} />
     <Modal open={Boolean(relationEditor)} title="维护数据任务关联项目" width={760} okText="保存" confirmLoading={saving} onCancel={() => setRelationEditor(undefined)} onOk={() => void saveRelations()}>{relationEditor && <ProjectRelationPicker value={relationEditor.targets} onChange={(targets) => setRelationEditor((current) => current ? { ...current, targets } : current)} />}</Modal>
-    <Modal open={structuredSearchOpen} title="结构化业务字段查询" width={980} footer={null} onCancel={() => setStructuredSearchOpen(false)} destroyOnHidden>
-      <Form form={structuredSearchForm} layout="vertical" onFinish={(values) => void runStructuredSearch(values)}>
-        <Space align="start" size="middle" style={{ display: 'flex' }}>
-          <Form.Item name="fileName" label="来源文件（可选）" style={{ flex: 1 }}><Input placeholder="按文件名限定" /></Form.Item>
-          <Form.Item name="recordTerms" label="记录标识（可选）" style={{ flex: 1 }}><Input placeholder="多个标识用逗号分隔" /></Form.Item>
-          <Form.Item name="fieldTerms" label="业务字段（可选）" style={{ flex: 1 }}><Input placeholder="字段名称或编码" /></Form.Item>
-        </Space>
-        <Space style={{ width: '100%', justifyContent: 'space-between', marginBottom: 12 }}>
-          <Typography.Text type="secondary">留空文件名可跨文件查询；结果显示结构化值及其来源位置。</Typography.Text>
-          <Button type="primary" htmlType="submit" loading={structuredSearchLoading}>查询</Button>
-        </Space>
-      </Form>
-      {structuredSearchResult && <>
-        {structuredSearchResult.resolution === 'AMBIGUOUS' && <Typography.Paragraph type="warning">匹配到多个来源文件：{structuredSearchResult.candidates.map((item) => item.originalName).join('、')}</Typography.Paragraph>}
-        {structuredSearchResult.resolution === 'NOT_FOUND' && <Empty description="没有找到匹配的结构化业务字段" />}
-        {structuredSearchResult.resolution === 'FILE_REQUIRED' && <Empty description="请输入文件名、记录标识或业务字段" />}
-        {structuredSearchResult.hits.length > 0 && <Table size="small" rowKey={(item) => item.hitId} dataSource={structuredSearchResult.hits} pagination={{ pageSize: 8 }} scroll={{ x: 850 }} columns={[
-          { title: '来源文件', dataIndex: 'originalName', width: 220, ellipsis: true },
-          { title: '记录标识', dataIndex: 'recordKey', width: 150, ellipsis: true },
-          { title: '业务字段', dataIndex: 'fieldName', width: 180, ellipsis: true, render: (value: string | undefined, record) => value || record.fieldCode || '—' },
-          { title: '字段值', dataIndex: 'fieldValue', width: 180, render: (value: string | undefined, record) => `${value ?? record.content ?? '—'}${record.unit ? ` ${record.unit}` : ''}` },
-          { title: '来源位置', width: 160, render: (_: unknown, record) => [record.sheetName, record.cellAddress].filter(Boolean).join(' · ') || record.sourceLocator || '—' },
-        ]} />}
-      </>}
-    </Modal>
   </div>;
 }

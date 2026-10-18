@@ -1,12 +1,16 @@
 import {
   DeleteOutlined,
+  DownloadOutlined,
+  EyeOutlined,
   FileExcelOutlined,
   FileImageOutlined,
   FilePdfOutlined,
   FileTextOutlined,
   FileWordOutlined,
   InboxOutlined,
+  ReloadOutlined,
   SearchOutlined,
+  StopOutlined,
 } from '@ant-design/icons';
 import {
   Breadcrumb,
@@ -29,6 +33,20 @@ export interface UploadWorkspaceFilter {
   count?: number;
 }
 
+export interface UploadWorkspaceAction {
+  onClick: () => void;
+  disabled?: boolean;
+  loading?: boolean;
+  title?: string;
+}
+
+export interface UploadWorkspaceActions {
+  view?: UploadWorkspaceAction;
+  download?: UploadWorkspaceAction;
+  retry?: UploadWorkspaceAction;
+  delete?: UploadWorkspaceAction;
+}
+
 export interface UploadWorkspaceRecord {
   id: string;
   name: string;
@@ -38,6 +56,7 @@ export interface UploadWorkspaceRecord {
   status?: { label: string; color?: string };
   progress?: number;
   progressLabel?: ReactNode;
+  commonActions?: UploadWorkspaceActions;
   actions?: ReactNode;
 }
 
@@ -68,6 +87,7 @@ export interface UploadWorkspaceProps {
   submitIcon?: ReactNode;
   onSubmit: () => void;
   submitting?: boolean;
+  onCancelSubmit?: () => void;
   submitDisabled?: boolean;
   rightTitle: string;
   rightCount?: number;
@@ -126,6 +146,7 @@ export function UploadWorkspace({
   submitIcon,
   onSubmit,
   submitting = false,
+  onCancelSubmit,
   submitDisabled = false,
   rightTitle,
   rightCount,
@@ -185,6 +206,7 @@ export function UploadWorkspace({
               >
                 {submitLabel}
               </Button>
+              {submitting && onCancelSubmit ? <Button icon={<StopOutlined />} onClick={onCancelSubmit}>停止后续文件</Button> : null}
             </Space>
           </div> : <div className="upload-workspace-mode-actions"><Button type="primary" icon={submitIcon} loading={submitting} disabled={submitDisabled} onClick={onSubmit}>{submitLabel}</Button></div>}
 
@@ -269,7 +291,13 @@ export function UploadWorkspace({
                   </div>
                   {record.status && <Tag color={record.status.color}>{record.status.label}</Tag>}
                 </div>
-                {record.actions && <div className="upload-workspace-record-actions">{record.actions}</div>}
+                {(record.commonActions || record.actions) && <div className="upload-workspace-record-actions">
+                  {record.commonActions?.view && <Button type="link" icon={<EyeOutlined />} title={record.commonActions.view.title} disabled={record.commonActions.view.disabled} onClick={record.commonActions.view.onClick}>查看</Button>}
+                  {record.commonActions?.download && <Button type="link" icon={<DownloadOutlined />} title={record.commonActions.download.title} disabled={record.commonActions.download.disabled} onClick={record.commonActions.download.onClick}>下载</Button>}
+                  {record.commonActions?.retry && <Button type="link" icon={<ReloadOutlined />} title={record.commonActions.retry.title} loading={record.commonActions.retry.loading} disabled={record.commonActions.retry.disabled} onClick={record.commonActions.retry.onClick}>重试</Button>}
+                  {record.commonActions?.delete && <Button type="link" danger icon={<DeleteOutlined />} title={record.commonActions.delete.title} loading={record.commonActions.delete.loading} disabled={record.commonActions.delete.disabled} onClick={record.commonActions.delete.onClick}>删除</Button>}
+                  {record.actions}
+                </div>}
               </article>
             )) : recordsLoading ? <div className="upload-workspace-records-loading"><Spin /></div> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={`暂无${rightTitle}`} />}
           </div>

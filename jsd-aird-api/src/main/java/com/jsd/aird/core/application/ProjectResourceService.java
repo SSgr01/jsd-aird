@@ -84,6 +84,17 @@ public class ProjectResourceService implements ProjectResourceFacade {
     }
 
     @Override
+    public boolean hasLinks(Actor actor, ResourceType resourceType, UUID resourceId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+                SELECT EXISTS (
+                    SELECT 1
+                      FROM core.project_resource_link
+                     WHERE organization_id = ? AND resource_type = ? AND resource_id = ?
+                )
+                """, Boolean.class, actor.organizationId(), resourceType.name(), resourceId));
+    }
+
+    @Override
     public Set<UUID> resourceIdsForProject(Actor actor, ResourceType resourceType, UUID projectId) {
         requireProject(actor, "project.view", projectId, "READ");
         return Set.copyOf(jdbc.queryForList("""
@@ -98,6 +109,7 @@ public class ProjectResourceService implements ProjectResourceFacade {
     public List<RelatedProjectView> replaceLinks(Actor actor, ResourceType resourceType, UUID resourceId,
                                                  List<ProjectRelationTarget> targets) {
         var source = requireResource(actor.organizationId(), resourceType, resourceId);
+        lockDataSource(actor, resourceType, resourceId);
         var desired = normalizeTargets(targets);
         var existing = rawTargets(actor.organizationId(), resourceType, resourceId);
         var involvedProjects = new LinkedHashSet<UUID>();
@@ -130,6 +142,7 @@ public class ProjectResourceService implements ProjectResourceFacade {
     public List<ReferenceView> addReferences(Actor actor, ResourceType resourceType, UUID resourceId,
                                              String summary, List<ProjectRelationTarget> targets) {
         var source = requireResource(actor.organizationId(), resourceType, resourceId);
+        lockDataSource(actor,resourceType,resourceId);
         var normalized = normalizeTargets(targets);
         if (normalized.isEmpty()) throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "至少选择一个项目");
         normalized.forEach(target -> {
@@ -140,6 +153,12 @@ public class ProjectResourceService implements ProjectResourceFacade {
         });
         return normalized.stream().map(target -> referenceByTuple(actor.organizationId(), resourceType, resourceId, target))
                 .toList();
+    }
+
+    private void lockDataSource(Actor actor, ResourceType type, UUID id) {
+        if (type == ResourceType.DATA_IMPORT_JOB) jdbc.query(
+                "SELECT id FROM data.import_job WHERE organization_id=? AND id=? FOR UPDATE",
+                (rs,n) -> rs.getObject(1,UUID.class),actor.organizationId(),id);
     }
 
     @Override
@@ -196,6 +215,9 @@ public class ProjectResourceService implements ProjectResourceFacade {
     public ReferenceView restoreReference(Actor actor, UUID referenceId) {
         var row = requireReference(actor.organizationId(), referenceId);
         requireProject(actor, "project.assign", row.projectId(), "WRITE");
+        if (!row.sourceAvailable()) {
+            throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "来源资料已不可用，无法恢复项目引用");
+        }
         var target = new ProjectRelationTarget(row.projectId(), row.stageId(), row.taskId());
         validateHierarchy(target);
         insertLink(actor, row.resourceType(), row.resourceId(), target);
@@ -264,6 +286,12 @@ public class ProjectResourceService implements ProjectResourceFacade {
                       FROM data.import_job j
                       LEFT JOIN ops.file_object fo ON fo.id = j.source_file_id AND fo.organization_id = j.organization_id
                      WHERE j.organization_id = ? AND j.id = ?
+                    """, this::mapSource, organizationId, resourceId);
+            case SPECTRUM_CHART -> jdbc.query("""
+                    SELECT a.id AS resource_id, a.title, NULL::uuid AS file_version_id, a.file_object_id,
+                           a.original_name, a.content_type, a.size_bytes
+                      FROM spc.chart_asset a
+                     WHERE a.organization_id = ? AND a.id = ? AND a.status = 'READY'
                     """, this::mapSource, organizationId, resourceId);
         };
         if (rows.isEmpty()) throw new ApiException(ApiErrorCode.NOT_FOUND, "关联来源不存在");
@@ -351,7 +379,11 @@ public class ProjectResourceService implements ProjectResourceFacade {
 
     private void upsertReference(Actor actor, ResourceType resourceType, SourceSnapshot source, String summary,
                                  ProjectRelationTarget target) {
-        var sourceModule = resourceType == ResourceType.KNOWLEDGE_DOCUMENT ? "KNOWLEDGE" : "DATA_CENTER";
+        var sourceModule = switch (resourceType) {
+            case KNOWLEDGE_DOCUMENT -> "KNOWLEDGE";
+            case DATA_IMPORT_JOB -> "DATA_CENTER";
+            case SPECTRUM_CHART -> "SPECTRUM";
+        };
         jdbc.update("""
                 INSERT INTO core.project_reference
                     (id, organization_id, project_id, stage_id, task_id, resource_type, resource_id,
@@ -395,9 +427,15 @@ public class ProjectResourceService implements ProjectResourceFacade {
         return """
                 SELECT r.*, s.name AS stage_name, t.name AS task_name,
                        coalesce(u.display_name, u.username) AS added_by_name,
-                       CASE WHEN r.resource_type = 'KNOWLEDGE_DOCUMENT'
-                            THEN EXISTS (SELECT 1 FROM kb.document d WHERE d.id = r.resource_id AND d.organization_id = r.organization_id)
-                            ELSE EXISTS (SELECT 1 FROM data.import_job j WHERE j.id = r.resource_id AND j.organization_id = r.organization_id)
+                       CASE r.resource_type
+                            WHEN 'KNOWLEDGE_DOCUMENT' THEN EXISTS (
+                                SELECT 1 FROM kb.document d WHERE d.id = r.resource_id AND d.organization_id = r.organization_id)
+                            WHEN 'DATA_IMPORT_JOB' THEN EXISTS (
+                                SELECT 1 FROM data.import_job j WHERE j.id = r.resource_id AND j.organization_id = r.organization_id)
+                            WHEN 'SPECTRUM_CHART' THEN EXISTS (
+                                SELECT 1 FROM spc.chart_asset a WHERE a.id = r.resource_id
+                                  AND a.organization_id = r.organization_id AND a.status = 'READY')
+                            ELSE false
                        END AS source_available
                   FROM core.project_reference r
                   LEFT JOIN iam.app_user u ON u.id = r.added_by

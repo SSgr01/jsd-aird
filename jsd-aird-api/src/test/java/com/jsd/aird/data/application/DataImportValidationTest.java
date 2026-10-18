@@ -180,6 +180,65 @@ class DataImportValidationTest {
                 "WAITING_MAPPING", 45, "WAITING_MAPPING", "parser", null, Instant.now(), Instant.now())));
     }
 
+    @Test
+    void rereadingTheSameSourceKeepsCorrectionsButReanchoringDoesNotMoveThem() {
+        var raw=mapper.createObjectNode().put("A","100").put("B","树脂");
+        var oldLocation=mapper.createObjectNode().put("address","A2").put("sheet","one");
+        var correction=mapper.createObjectNode().put("correctedValue","200");
+        var previous=new DataRepository.Row(UUID.randomUUID(),"sheet-1",2,raw,raw,correction,"VALID",oldLocation);
+        var unchanged=new DataRepository.Row(UUID.randomUUID(),"sheet-1",2,mapper.createObjectNode().put("B","树脂").put("A","100"),raw,mapper.createObjectNode(),"STAGED",mapper.createObjectNode().put("sheet","one").put("address","A2"));
+        var relocated=new DataRepository.Row(UUID.randomUUID(),"sheet-1",2,raw,raw,mapper.createObjectNode(),"STAGED",mapper.createObjectNode().put("address","B2"));
+        var restored=service.restoreCorrections(List.of(unchanged,relocated),List.of(previous));
+        assertThat(restored.get(0).id()).isEqualTo(previous.id());
+        assertThat(restored.get(0).correctedValues()).isEqualTo(correction);
+        assertThat(restored.get(1).correctedValues().isEmpty()).isTrue();
+    }
+
+    @Test
+    void selectedSecondSheetWithoutMappingCannotSilentlyDisappear() {
+        givenJob();
+        when(templates.getVersion(ORGANIZATION_ID, templateVersionId)).thenReturn(definition(false));
+        when(repository.listSheets(ORGANIZATION_ID, jobId)).thenReturn(List.of(new DataRepository.Sheet(
+                UUID.randomUUID(), "sheet-2", "耐候性能", 1, true, List.of(1), 2, 4, mapper.createObjectNode(), "CONFIRMED")));
+        service.validateInternal(ORGANIZATION_ID, jobId);
+        var issues = ArgumentCaptor.forClass(List.class);
+        verify(repository).replaceValidation(eq(ORGANIZATION_ID),eq(jobId),any(),issues.capture(),eq("WAITING_MAPPING"));
+        assertThat(issues.getValue()).anyMatch(value -> ((DataRepository.Issue)value).issueType().equals("SHEET_MAPPING_MISSING"));
+    }
+
+    @Test
+    void correctedNumericValueIsValidatedAndPublishedWithoutLosingOriginalValue() {
+        givenJob();
+        when(templates.getVersion(ORGANIZATION_ID, templateVersionId)).thenReturn(definition(false));
+        var mapping = new DataRepository.Mapping(UUID.randomUUID(),"sheet-1","A","黏度","VISCOSITY","黏度",
+                "MAP","NUMBER",null,null,mapper.createObjectNode().put("bindingId","viscosity").put("dataPath","/viscosity"),"CONFIRMED");
+        when(repository.listMappings(ORGANIZATION_ID,jobId)).thenReturn(List.of(mapping));
+        var raw = mapper.createObjectNode().put("A","读数不清");
+        var correction = mapper.createObjectNode().put("fieldCode","VISCOSITY").put("bindingId","viscosity").put("valuePath","/viscosity").put("normalizedValue","读数不清").put("correctedValue","1250.50");
+        when(repository.listRows(ORGANIZATION_ID,jobId)).thenReturn(List.of(new DataRepository.Row(UUID.randomUUID(),"sheet-1",2,raw,mapper.createObjectNode(),mapper.createObjectNode().set("VISCOSITY",correction),"BLOCKED")));
+        service.validateInternal(ORGANIZATION_ID,jobId);
+        var rows = ArgumentCaptor.forClass(List.class);
+        verify(repository).replaceValidation(eq(ORGANIZATION_ID),eq(jobId),rows.capture(),any(),eq("WAITING_CONFIRM"));
+        var row = (DataRepository.Row)rows.getValue().getFirst();
+        assertThat(row.normalizedValues().path("VISCOSITY").path("rawValue").asText()).isEqualTo("读数不清");
+        assertThat(row.normalizedValues().path("VISCOSITY").path("normalizedValue").asText()).isEqualTo("1250.5");
+        assertThat(row.correctedValues().path("VISCOSITY").path("normalizedValue").asText()).isEqualTo("1250.5");
+    }
+
+    @Test
+    void invalidCorrectionCannotBypassNumericValidation() {
+        givenJob();
+        when(templates.getVersion(ORGANIZATION_ID,templateVersionId)).thenReturn(definition(false));
+        var detail=mapper.createObjectNode().put("bindingId","number").put("dataPath","/number");
+        when(repository.listMappings(ORGANIZATION_ID,jobId)).thenReturn(List.of(new DataRepository.Mapping(UUID.randomUUID(),"sheet-1","A","数值","N","数值","MAP","NUMBER",null,null,detail,"CONFIRMED")));
+        var correction=mapper.createObjectNode().put("bindingId","number").put("valuePath","/number").put("correctedValue","未知");
+        when(repository.listRows(ORGANIZATION_ID,jobId)).thenReturn(List.of(new DataRepository.Row(UUID.randomUUID(),"sheet-1",2,mapper.createObjectNode().put("A","100"),mapper.createObjectNode(),mapper.createObjectNode().set("N",correction),"VALID")));
+        service.validateInternal(ORGANIZATION_ID,jobId);
+        var issues=ArgumentCaptor.forClass(List.class);
+        verify(repository).replaceValidation(eq(ORGANIZATION_ID),eq(jobId),any(),issues.capture(),eq("WAITING_MAPPING"));
+        assertThat(issues.getValue()).anyMatch(value -> ((DataRepository.Issue)value).issueType().equals("TYPE_ERROR"));
+    }
+
     private DataImportService.CreateCommand experimentDraftCommand() {
         return new DataImportService.CreateCommand(UUID.randomUUID(), templateVersionId,
                 null, false, List.of(), "EXPERIMENT_DRAFT", UUID.randomUUID());

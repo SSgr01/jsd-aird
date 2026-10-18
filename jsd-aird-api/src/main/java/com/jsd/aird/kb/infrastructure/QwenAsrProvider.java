@@ -2,6 +2,8 @@ package com.jsd.aird.kb.infrastructure;
 
 import java.io.InputStream;
 import java.io.IOException;
+import java.net.InetAddress;
+import java.net.URI;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -115,6 +117,12 @@ public class QwenAsrProvider implements MediaExtractionProvider {
             throw new IllegalStateException("ASR 服务尚未配置");
         }
         var publicUrl = context == null ? null : context.publicUrl();
+        if (!isAsrResolvableUrl(publicUrl)) {
+            // Local development storage returns file:// URLs. DashScope runs
+            // outside this machine and cannot download those paths, so send
+            // the bytes through its temporary upload flow instead.
+            publicUrl = null;
+        }
         String taskId = null;
         try {
             if (!StringUtils.hasText(publicUrl)) {
@@ -214,6 +222,31 @@ public class QwenAsrProvider implements MediaExtractionProvider {
         var value = StringUtils.hasText(fileName) ? fileName : "audio.bin";
         value = value.replaceAll("[^A-Za-z0-9._-]", "_");
         return UUID.randomUUID() + "-" + value;
+    }
+
+    private boolean isAsrResolvableUrl(String value) {
+        if (!StringUtils.hasText(value)) return false;
+        try {
+            var uri = URI.create(value);
+            var scheme = uri.getScheme();
+            if (scheme == null) return false;
+            if (scheme.equalsIgnoreCase("oss")) return true;
+            if (!scheme.equalsIgnoreCase("http") && !scheme.equalsIgnoreCase("https")) return false;
+            var host = uri.getHost();
+            if (!StringUtils.hasText(host)) return false;
+            var normalizedHost = host.toLowerCase(Locale.ROOT);
+            if (normalizedHost.equals("localhost") || normalizedHost.endsWith(".localhost")
+                    || normalizedHost.endsWith(".local") || normalizedHost.endsWith(".internal")
+                    || normalizedHost.endsWith(".lan")) return false;
+            var address = InetAddress.getByName(host);
+            var bytes = address.getAddress();
+            var uniqueLocalIpv6 = bytes.length == 16 && (bytes[0] & 0xFE) == 0xFC;
+            return !address.isAnyLocalAddress() && !address.isLoopbackAddress()
+                    && !address.isLinkLocalAddress() && !address.isSiteLocalAddress()
+                    && !uniqueLocalIpv6;
+        } catch (IOException | IllegalArgumentException ignored) {
+            return false;
+        }
     }
 
     private JsonNode poll(String taskId) throws InterruptedException {

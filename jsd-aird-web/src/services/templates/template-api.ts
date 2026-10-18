@@ -1,5 +1,5 @@
 import type { ApiResponse, PageResponse } from '@/types/api';
-import { triggerNativeDownload } from '@/services/files/file-api';
+import { downloadBlob, triggerNativeDownload } from '@/services/files/file-api';
 import type {
   BusinessBlock,
   TemplateFormat,
@@ -51,6 +51,7 @@ export interface TemplateVersionReview {
     fromStatus?: string;
     toStatus: string;
     actorId?: string;
+    actorName?: string;
     comment?: string;
     createdAt: string;
   }>;
@@ -136,6 +137,7 @@ export interface TemplateImportRecognitionSummary {
 export interface TemplateImportJob {
   id: string;
   sourceFileId: string;
+  originalSourceFileId?: string;
   sourceFileName: string;
   format: TemplateFormat;
   status: string;
@@ -627,15 +629,11 @@ export const templateApi = {
     return response.data.data;
   },
 
-  exportCsv(params: Record<string, string | number | boolean | string[] | undefined>) {
-    const query = new URLSearchParams();
-    Object.entries(params).forEach(([key, value]) => {
-      if (value === undefined) return;
-      if (Array.isArray(value)) value.forEach((item) => query.append(key, String(item)));
-      else query.set(key, String(value));
+  async exportFiles(versionIds: string[]) {
+    const response = await httpClient.post<Blob>('/api/v1/templates/export', { versionIds }, {
+      responseType: 'blob', headers: { Accept: 'application/zip, application/json' }, timeout: 0,
     });
-    triggerNativeDownload(`/api/v1/templates/export.csv${query.toString() ? `?${query}` : ''}`, 'templates.csv');
-    return Promise.resolve();
+    downloadBlob(response.data, 'templates.zip');
   },
 
   async create(input: CreateTemplateInput) {

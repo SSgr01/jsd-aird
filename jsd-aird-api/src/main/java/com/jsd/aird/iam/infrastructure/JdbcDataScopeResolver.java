@@ -76,7 +76,8 @@ public class JdbcDataScopeResolver implements DataScopeResolver {
             }
             case "DATA" -> {
                 sql = """
-                        SELECT EXISTS (SELECT 1 FROM data.data_record WHERE organization_id = ? AND created_by = ? AND id = ?)
+                        SELECT EXISTS (SELECT 1 FROM data.data_record r JOIN data.import_job j ON j.id=r.import_job_id
+                                       WHERE r.organization_id = ? AND j.created_by = ? AND r.id = ?)
                         OR EXISTS (SELECT 1 FROM data.import_job WHERE organization_id = ? AND created_by = ? AND id = ?)
                         """;
                 args = new Object[]{check.organizationId(), check.userId(), check.resourceId(),
@@ -105,6 +106,8 @@ public class JdbcDataScopeResolver implements DataScopeResolver {
     private ResolvedDataScope assigned(String resourceType, PermissionCheck check) {
         String sql;
         return switch (resourceType) {
+            case "DATA" -> exists("SELECT EXISTS (SELECT 1 FROM data.publication WHERE organization_id = ? AND reviewer_id = ? AND import_job_id = ?)",
+                    new Object[]{check.organizationId(), check.userId(), check.resourceId()}, "ASSIGNED", "NOT_ASSIGNED");
             case "PRODUCTION" -> exists("SELECT EXISTS (SELECT 1 FROM mfg.production_order WHERE organization_id = ? AND owner_id = ? AND id = ?)",
                     new Object[]{check.organizationId(), check.userId(), check.resourceId()}, "ASSIGNED", "NOT_ASSIGNED");
             case "EXPERIMENT" -> exists("SELECT EXISTS (SELECT 1 FROM rnd.experiment WHERE organization_id = ? AND owner_id = ? AND id = ?)",
@@ -116,6 +119,14 @@ public class JdbcDataScopeResolver implements DataScopeResolver {
     private ResolvedDataScope relationScope(String resourceType, PermissionCheck check, Set<UUID> targetIds,
                                             String relationColumn, String reason) {
         if (targetIds.isEmpty()) return ResolvedDataScope.deny(relationColumn.equals("project_id") ? "PROJECT" : "CATEGORY", "EMPTY_SCOPE");
+        if ("DATA".equals(resourceType)) {
+            var placeholders = String.join(",", targetIds.stream().map(ignored -> "?").toList());
+            var args = new java.util.ArrayList<Object>(); args.add(check.organizationId()); args.add(check.resourceId()); args.addAll(targetIds);
+            var sql = "SELECT EXISTS(SELECT 1 FROM data.import_job j WHERE j.organization_id=? AND j.id=? AND "
+                    + ("category_id".equals(relationColumn) ? "j.category_id IN (" + placeholders + ")"
+                    : "EXISTS(SELECT 1 FROM core.project_resource_link l WHERE l.organization_id=j.organization_id AND l.resource_type='DATA_IMPORT_JOB' AND l.resource_id=j.id AND l.project_id IN (" + placeholders + "))") + ")";
+            return exists(sql, args.toArray(), "project_id".equals(relationColumn) ? "PROJECT" : "CATEGORY", reason);
+        }
         String table;
         String idColumn = "id";
         if ("TEMPLATE".equals(resourceType)) table = "tpl.template";

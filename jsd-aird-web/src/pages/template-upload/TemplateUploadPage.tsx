@@ -1,7 +1,5 @@
 import {
-  DeleteOutlined,
   CloudUploadOutlined,
-  ReloadOutlined,
 } from '@ant-design/icons';
 import {
   Alert,
@@ -10,10 +8,7 @@ import {
   Form,
   Input,
   Modal,
-  Progress,
   Select,
-  Space,
-  Table,
   Upload,
 } from 'antd';
 import type { UploadFile, UploadProps } from 'antd';
@@ -24,14 +19,15 @@ import { UploadWorkspace, type UploadWorkspaceRecord } from '@/components/upload
 import {
   templateApi,
   type CreateTemplateInput,
-  type RecognitionSuggestion,
   type TemplateImportJob,
   type TemplateCategory,
 } from '@/services/templates/template-api';
 import { HttpError } from '@/services/http/errors';
 
-import { buildDisplaySuggestions, recognitionCounts } from './recognition-display';
+import { recognitionCounts } from './recognition-display';
 import { sourceFormatOf } from './normalize-template-file';
+import { isUserUploadHistoryFile } from './upload-history';
+import { downloadFile } from '@/services/files';
 
 // Show all files in the picker so unsupported formats are not silently hidden;
 // beforeUpload remains the single source of truth for rejecting them.
@@ -45,9 +41,6 @@ export function TemplateUploadPage() {
   const [jobsLoading, setJobsLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [selectedJob, setSelectedJob] = useState<TemplateImportJob>();
-  const [viewingJob, setViewingJob] = useState<TemplateImportJob>();
-  const [viewSuggestions, setViewSuggestions] = useState<RecognitionSuggestion[]>([]);
-  const [viewLoading, setViewLoading] = useState(false);
   const [deletingJobId, setDeletingJobId] = useState<string>();
   const [retryingJobId, setRetryingJobId] = useState<string>();
   const [creating, setCreating] = useState(false);
@@ -57,10 +50,6 @@ export function TemplateUploadPage() {
   const [recordPage, setRecordPage] = useState({ current: 1, pageSize: 8 });
   const [uploadCategory, setUploadCategory] = useState<string>();
   const [form] = Form.useForm<CreateTemplateInput>();
-  const displaySuggestions = useMemo(
-    () => buildDisplaySuggestions(viewSuggestions),
-    [viewSuggestions],
-  );
 
   const validateTemplateFile: UploadProps['beforeUpload'] = (file) => {
     try {
@@ -116,9 +105,14 @@ export function TemplateUploadPage() {
     setRecordPage((value) => ({ ...value, current: 1 }));
   }, [jobFilter, jobKeyword]);
 
-  const running = useMemo(
-    () => jobs.some((job) => !['PARSED', 'FAILED'].includes(job.status)),
+  const uploadHistoryJobs = useMemo(
+    () => jobs.filter((job) => isUserUploadHistoryFile(job.sourceFileName)),
     [jobs],
+  );
+
+  const running = useMemo(
+    () => uploadHistoryJobs.some((job) => !['PARSED', 'FAILED', 'CANCELLED'].includes(job.status)),
+    [uploadHistoryJobs],
   );
 
   useEffect(() => {
@@ -194,11 +188,11 @@ export function TemplateUploadPage() {
     }
   };
 
-  const filteredJobs = useMemo(() => jobs.filter((job) => {
-    const filterMatch = jobFilter === 'ALL' || (jobFilter === 'PROCESSING' ? !['PARSED', 'FAILED'].includes(job.status) : job.status === jobFilter);
+  const filteredJobs = useMemo(() => uploadHistoryJobs.filter((job) => {
+    const filterMatch = jobFilter === 'ALL' || (jobFilter === 'PROCESSING' ? !['PARSED', 'FAILED', 'CANCELLED'].includes(job.status) : job.status === jobFilter);
     const keywordMatch = !jobKeyword || job.sourceFileName.toLowerCase().includes(jobKeyword.toLowerCase());
     return filterMatch && keywordMatch;
-  }), [jobFilter, jobKeyword, jobs]);
+  }), [jobFilter, jobKeyword, uploadHistoryJobs]);
 
   const allUploadRecords: UploadWorkspaceRecord[] = filteredJobs.map((job) => {
     const status = job.status === 'FAILED'
@@ -213,12 +207,28 @@ export function TemplateUploadPage() {
       detail: job.status === 'PARSED' ? recognitionLabel(job) : `${stageLabel(job.currentStage)} · ${jobElapsed(job)} · 最近更新${heartbeatAge(job)}`,
       status,
       progress: job.progress,
-      actions: <Space size={2} wrap>
-        <Button type="link" disabled={job.status !== 'PARSED'} onClick={() => void openRecognition(job)}>查看识别结果</Button>
-        <Button type="link" disabled={job.status !== 'PARSED'} onClick={() => openCreate(job)}>创建模板</Button>
-        <Button type="link" icon={<ReloadOutlined />} loading={retryingJobId === job.id} disabled={!['PARSED', 'FAILED'].includes(job.status)} onClick={() => void retryRecognition(job)}>重试</Button>
-        {job.allowedActions?.includes('DELETE') ? <Button type="link" danger icon={<DeleteOutlined />} loading={deletingJobId === job.id} aria-label={`删除 ${job.sourceFileName}`} onClick={() => Modal.confirm({ title: `删除“${job.sourceFileName}”的识别记录？`, content: '只删除识别记录，不删除原始文件；已生成模板的记录不能删除。', okText: '删除记录', okButtonProps: { danger: true }, cancelText: '取消', onOk: () => deleteRecognition(job) })} /> : null}
-      </Space>,
+      commonActions: {
+        view: { onClick: () => navigate(job.generatedTemplateVersionId
+          ? `/templates/${job.generatedTemplateVersionId}/workspace?importJobId=${job.id}`
+          : `/template-imports/${job.id}`) },
+        download: { onClick: () => downloadFile(job.originalSourceFileId || job.sourceFileId, job.sourceFileName) },
+        retry: {
+          disabled: !['PARSED', 'FAILED', 'CANCELLED'].includes(job.status),
+          loading: retryingJobId === job.id,
+          onClick: () => void retryRecognition(job),
+        },
+        delete: {
+          disabled: !['PARSED', 'FAILED', 'CANCELLED'].includes(job.status),
+          loading: deletingJobId === job.id,
+          onClick: () => Modal.confirm({
+            title: `删除“${job.sourceFileName}”的上传记录？`,
+            content: '只隐藏上传历史；原文件和已生成的模板都会保留。',
+            okText: '删除记录', okButtonProps: { danger: true }, cancelText: '取消',
+            onOk: () => deleteRecognition(job),
+          }),
+        },
+      },
+      actions: <Button type="link" disabled={job.status !== 'PARSED'} onClick={() => openCreate(job)}>创建模板</Button>,
     };
   });
   const uploadRecords = allUploadRecords.slice((recordPage.current - 1) * recordPage.pageSize, recordPage.current * recordPage.pageSize);
@@ -244,26 +254,12 @@ export function TemplateUploadPage() {
       .trim();
   }
 
-  const openRecognition = async (job: TemplateImportJob) => {
-    setViewingJob(job);
-    setViewLoading(true);
-    try {
-      const suggestions = await templateApi.listRecognitionSuggestions(job.id);
-      setViewSuggestions(suggestions);
-    } catch (error) {
-      void message.error(error instanceof Error ? error.message : '识别详情加载失败');
-    } finally {
-      setViewLoading(false);
-    }
-  };
-
   const deleteRecognition = async (job: TemplateImportJob) => {
     setDeletingJobId(job.id);
     try {
       await templateApi.deleteImport(job.id);
-      if (viewingJob?.id === job.id) setViewingJob(undefined);
       await load();
-      void message.success('识别记录已删除');
+      void message.success('上传历史已隐藏；模板和原文件保留');
     } catch (error) {
       void message.error(error instanceof Error ? error.message : '识别记录删除失败');
     } finally {
@@ -391,59 +387,6 @@ export function TemplateUploadPage() {
         </Form>
       </Modal>
 
-      <Modal
-        title={viewingJob ? `识别结果：${viewingJob.sourceFileName}` : '识别结果'}
-        open={Boolean(viewingJob)}
-        width={960}
-        footer={
-          viewingJob ? (
-            <Space>
-              <Button onClick={() => setViewingJob(undefined)}>关闭</Button>
-              <Button
-                type="primary"
-                onClick={() => {
-                  const job = viewingJob;
-                  setViewingJob(undefined);
-                  if (job) openCreate(job);
-                }}
-              >
-                填写模板信息并创建
-              </Button>
-            </Space>
-          ) : null
-        }
-        onCancel={() => setViewingJob(undefined)}
-      >
-        {viewLoading ? (
-          <Progress percent={60} status="active" showInfo={false} />
-        ) : (
-          <Space direction="vertical" size={16} style={{ width: '100%' }}>
-            <Alert
-              type={viewingJob ? recognitionAlertType(viewingJob) : 'info'}
-              showIcon
-              message={viewingJob ? recognitionLabel(viewingJob) : '识别结果'}
-              description={
-                viewingJob
-                  ? recognitionDescription(viewingJob)
-                  : undefined
-              }
-            />
-            <Table
-              size="small"
-              rowKey="id"
-              pagination={{ pageSize: 8 }}
-              dataSource={displaySuggestions}
-              columns={[
-                {
-                  title: '识别项目',
-                  dataIndex: 'label',
-                },
-                { title: '说明', dataIndex: 'details' },
-              ]}
-            />
-          </Space>
-        )}
-      </Modal>
     </>
   );
 }

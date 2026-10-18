@@ -1,13 +1,20 @@
 package com.jsd.aird.kb.infrastructure;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
+import com.jsd.aird.kb.domain.DocumentParser;
+import org.apache.poi.hssf.usermodel.HSSFWorkbook;
 import org.apache.poi.ss.usermodel.Workbook;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 
 class OfficeDocumentParserTest {
@@ -36,6 +43,58 @@ class OfficeDocumentParserTest {
                 .containsExactly("heading-1", "paragraph", "table-row");
         assertThat(parsed.blocks()).extracting(value -> value.paragraphId())
                 .containsExactly("p-0", "p-1", "table-0-row-0");
+    }
+
+    @Test
+    void supportsLegacyWordFilesAlongsideDocx() {
+        assertThat(parser.supports("legacy-report.doc", "application/msword")).isTrue();
+    }
+
+    @Test
+    void parsesGenuineLegacyWordBinaryDocument() throws Exception {
+        var fixture = Path.of("..", "docs", "word-import-smoke", "Word真实测试_按列明细与嵌套表格.doc")
+                .toAbsolutePath().normalize();
+        Assumptions.assumeTrue(Files.isRegularFile(fixture), "本机未提供真实 DOC 样例，跳过二进制解析用例");
+        try (InputStream source = Files.newInputStream(fixture)) {
+            var parsed = parser.parse(source, "legacy-report.doc");
+
+            assertThat(parsed.parserVersion()).isEqualTo("office-doc-v1");
+            assertThat(parsed.blocks()).isNotEmpty();
+            assertThat(parsed.blocks()).allSatisfy(block -> assertThat(block.content()).isNotBlank());
+        }
+    }
+
+    @Test
+    void parsesBiff8LegacyExcelWorkbook() throws Exception {
+        var bytes = new ByteArrayOutputStream();
+        try (var workbook = new HSSFWorkbook()) {
+            var sheet = workbook.createSheet("配方");
+            sheet.createRow(0).createCell(0).setCellValue("批次编号");
+            sheet.getRow(0).createCell(1).setCellValue("BIFF8-BATCH-42");
+            sheet.createRow(1).createCell(0).setCellValue("树脂A");
+            sheet.getRow(1).createCell(1).setCellValue(62.5);
+            workbook.write(bytes);
+        }
+
+        var parsed = parser.parse(new ByteArrayInputStream(bytes.toByteArray()), "legacy-formula.xls");
+
+        assertThat(parsed.parserVersion()).isEqualTo("office-workbook-v2");
+        assertThat(parsed.blocks()).extracting(DocumentParser.TextBlock::content)
+                .contains("批次编号 | BIFF8-BATCH-42", "树脂A | 62.5");
+    }
+
+    @Test
+    void rejectsTruncatedLegacyOfficeFilesAsDeterministicFailures() {
+        var truncatedOleHeader = new byte[] {(byte) 0xD0, (byte) 0xCF, 0x11, (byte) 0xE0,
+                (byte) 0xA1, (byte) 0xB1, 0x1A, (byte) 0xE1};
+
+        for (var fileName : new String[] {"broken.doc", "broken.xls"}) {
+            assertThatThrownBy(() -> parser.parse(new ByteArrayInputStream(truncatedOleHeader), fileName))
+                    .isInstanceOf(OfficeDocumentParseException.class)
+                    .hasMessageContaining("损坏")
+                    .hasMessageContaining(fileName)
+                    .satisfies(exception -> assertThat(((OfficeDocumentParseException) exception).retryable()).isFalse());
+        }
     }
 
     @Test

@@ -71,33 +71,6 @@
 .selected-dataset-row > td { background: #f2f7ff !important; }
 .workbench-step-footer { align-items: center; margin-top: 20px; padding-top: 16px; border-top: 1px solid #edf0f5; }
 
-.workbench-xy-layout { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
-.workbench-select-card .ant-card-head-title { font-weight: 700; }
-.workbench-column-choice-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); align-content: start; gap: 8px; width: 100%; max-height: min(400px, 48vh); overflow-y: auto; overscroll-behavior: contain; padding: 2px; }
-.workbench-column-choice-list .ant-checkbox-wrapper,
-.workbench-column-choice-list .ant-radio-wrapper { display: flex; min-width: 0; min-height: 72px; align-items: flex-start; gap: 9px; margin: 0; padding: 10px 11px; border: 1px solid #e3e9f1; border-radius: 9px; background: #fff; transition: border-color .15s, background .15s, box-shadow .15s; }
-.workbench-column-choice-list .ant-checkbox-wrapper:not(.ant-checkbox-wrapper-disabled):hover,
-.workbench-column-choice-list .ant-radio-wrapper:not(.ant-radio-wrapper-disabled):hover { border-color: #9ab8ef; background: #f8faff; }
-.workbench-column-choice-list .ant-checkbox-wrapper-checked,
-.workbench-column-choice-list .ant-radio-wrapper-checked { border-color: #87aefa; background: #f5f8ff; }
-.workbench-column-choice-list .ant-checkbox-wrapper:focus-within,
-.workbench-column-choice-list .ant-radio-wrapper:focus-within { outline: 2px solid rgb(47 110 229 / 30%); outline-offset: 1px; }
-.workbench-column-choice-list .ant-checkbox,
-.workbench-column-choice-list .ant-radio { flex: 0 0 auto; margin-top: 2px; }
-.workbench-column-choice-list .ant-checkbox-wrapper-disabled,
-.workbench-column-choice-list .ant-radio-wrapper-disabled { cursor: not-allowed; background: #f8f9fb; }
-.workbench-column-option { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
-.workbench-column-option strong { color: #26384e; font-size: 13px; }
-.workbench-column-option small { color: #7a8799; font-size: 11px; line-height: 1.4; }
-.workbench-selection-summary { display: grid; gap: 8px; margin-top: 14px; padding: 12px 13px; border: 1px solid #e3e9f1; border-radius: 9px; background: #fafbfd; }
-.workbench-selection-summary > .ant-typography:first-child { margin: 0; color: #26384e; }
-.workbench-selection-summary .ant-tag { margin-inline-end: 0; }
-.workbench-selection-summary .ant-space { max-width: 100%; max-height: 104px; overflow-y: auto; overscroll-behavior: contain; padding-right: 3px; }
-.workbench-selection-summary .ant-space-item { max-width: 100%; }
-.workbench-selection-summary .ant-tag { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
-.workbench-y-detail { gap: 7px; }
-.workbench-y-detail .ant-typography { margin: 0; }
-.workbench-y-detail p { color: #67778c; font-size: 12px; line-height: 1.6; }
 .workbench-readiness-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 14px; }
 .workbench-readiness-row > div { display: grid; gap: 5px; padding: 13px 15px; border: 1px solid #e6ebf2; border-radius: 9px; background: #fbfcfe; }
 .workbench-ready-count { color: #14824b; font-weight: 700; }
@@ -115,13 +88,6 @@
 .workbench-result-summary span { display: block; margin-bottom: 5px; color: #78869a; font-size: 11px; }
 .workbench-result-summary strong { display: block; overflow-wrap: anywhere; color: #25374d; font-size: 13px; }
 .workbench-metric-card { margin-top: 14px; }
-.workbench-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
-.workbench-metrics > div { display: grid; gap: 7px; padding: 14px; border: 1px solid #e7ebf2; border-radius: 9px; }
-.workbench-metrics > div strong { color: #1c3555; font-size: 24px; font-variant-numeric: tabular-nums; }
-.workbench-metrics > div strong small { color: #64748b; font-size: 12px; font-weight: 400; }
-.workbench-metrics > div .ant-typography:last-child { font-size: 11px; line-height: 1.5; }
-.workbench-comparison { margin-top: 20px; }
-.workbench-comparison > .ant-typography { display: block; margin-bottom: 8px; }
 .workbench-result-error { display: grid; gap: 14px; max-width: 760px; margin: 30px auto; }
 
 @media (max-width: 1100px) {
@@ -139,5 +105,4 @@
   .workbench-xy-layout { grid-template-columns: 1fr; }
   .workbench-readiness-row { grid-template-columns: 1fr; }
   .workbench-result-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .workbench-metrics { grid-template-columns: 1fr; }
 }

@@ -1,5 +1,5 @@
 {
-  "version": "2026-10-15.1",
+  "version": "2026-10-15.2",
   "pages": [
     {
       "id": "home",
@@ -96,8 +96,7 @@
       ],
       "resourceType": "EXPERIMENT",
       "contextPatterns": [
-        "^/experiments/template-imports/[^/]+$",
-        "^/experiments/imports/[^/]+$"
+        "^/experiments/template-imports/[^/]+$"
       ]
     },
     {
@@ -349,9 +348,7 @@
         "ai.modeling.read"
       ],
       "resourceType": "AI",
-      "contextPatterns": [
-        "^/assistant/model-center/targets/[^/]+$"
-      ]
+      "contextPatterns": []
     },
     {
       "id": "modeling-workbench",
@@ -361,10 +358,7 @@
         "ai.modeling.read"
       ],
       "resourceType": "AI",
-      "contextPatterns": [
-        "^/assistant/modeling-settings(?:/samples(?:/[^/]+)?)?$",
-        "^/assistant/model-center/samples(?:/[^/]+)?$"
-      ]
+      "contextPatterns": []
     },
     {
       "id": "model-management",
@@ -374,9 +368,7 @@
         "ai.model.read"
       ],
       "resourceType": "AI",
-      "contextPatterns": [
-        "^/assistant/model-management$"
-      ]
+      "contextPatterns": []
     },
     {
       "id": "inventory-query",

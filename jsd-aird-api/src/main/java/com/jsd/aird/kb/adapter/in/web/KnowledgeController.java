@@ -1,10 +1,12 @@
 package com.jsd.aird.kb.adapter.in.web;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.UUID;
 
 import com.jsd.aird.kb.application.KnowledgeService;
+import com.jsd.aird.kb.application.KnowledgeUploadTaskService;
 import com.jsd.aird.platform.web.HttpContentDisposition;
 import com.jsd.aird.kb.application.KnowledgeGovernanceService;
 import com.jsd.aird.kb.api.KnowledgeSearchFacade;
@@ -19,6 +21,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.ContentDisposition;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -36,12 +39,14 @@ public class KnowledgeController {
 
     private final KnowledgeService service;
     private final KnowledgeGovernanceService governance;
+    private final KnowledgeUploadTaskService uploadTasks;
 
     public KnowledgeController(KnowledgeService service, FileStorageFacade storage,
-                               KnowledgeGovernanceService governance) {
+                               KnowledgeGovernanceService governance, KnowledgeUploadTaskService uploadTasks) {
         this.service = service;
         this.storage = storage;
         this.governance = governance;
+        this.uploadTasks = uploadTasks;
     }
 
     @PostMapping(value = "/documents", consumes = org.springframework.http.MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -75,6 +80,33 @@ public class KnowledgeController {
     ) {
         return success(service.list(keyword, status, scope, categoryId, lifecycleStatus, reviewStatus,
                 projectId, page, size));
+    }
+
+    @PostMapping("/upload-tasks")
+    public ApiResponse<KnowledgeUploadTaskService.UploadTaskView> createUploadTask(
+            @Valid @RequestBody UploadTaskCreateRequest request) {
+        return success(uploadTasks.create(new KnowledgeUploadTaskService.CreateCommand(
+                request.fileName(), request.size(), request.uploadContext())));
+    }
+
+    @GetMapping("/upload-tasks")
+    public ApiResponse<List<KnowledgeUploadTaskService.UploadTaskView>> uploadTasks(
+            @RequestParam(defaultValue = "100") int limit) {
+        return success(uploadTasks.list(limit));
+    }
+
+    @PutMapping("/upload-tasks/{id}")
+    public ApiResponse<KnowledgeUploadTaskService.UploadTaskView> updateUploadTask(
+            @PathVariable UUID id, @Valid @RequestBody UploadTaskUpdateRequest request) {
+        return success(uploadTasks.update(id, new KnowledgeUploadTaskService.UpdateCommand(
+                request.status(), request.progress(), request.sourceFileId(), request.uploadContext(),
+                request.documentId(), request.documentVersionId(), request.message())));
+    }
+
+    @DeleteMapping("/upload-tasks/{id}")
+    public ApiResponse<Void> deleteUploadTask(@PathVariable UUID id) {
+        uploadTasks.delete(id);
+        return success(null);
     }
 
     @GetMapping("/categories")
@@ -119,6 +151,19 @@ public class KnowledgeController {
         service.deleteDocument(id);
         return success(null);
     }
+
+    @PutMapping("/documents/{id}/metadata")
+    public ApiResponse<KnowledgeService.DocumentView> updateMetadata(@PathVariable UUID id,
+            @Valid @RequestBody UpdateMetadataRequest request) {
+        return success(service.updateDocument(id, new KnowledgeService.UpdateDocumentCommand(request.title(),
+                request.libraryScope(), request.categoryId(), request.tags(), request.sourceInfo(), request.projectRelations())));
+    }
+
+    public record UpdateMetadataRequest(@NotBlank @Size(max = 260) String title,
+            @NotBlank @jakarta.validation.constraints.Pattern(regexp = "INTERNAL|EXTERNAL") String libraryScope,
+            @NotNull UUID categoryId, @Size(max = 50) List<@Size(max = 100) String> tags,
+            com.fasterxml.jackson.databind.JsonNode sourceInfo,
+            List<com.jsd.aird.core.api.ProjectResourceFacade.ProjectRelationTarget> projectRelations) { }
 
     @GetMapping("/documents/{id}")
     public ApiResponse<KnowledgeService.DocumentView> get(@PathVariable UUID id) {
@@ -189,8 +234,21 @@ public class KnowledgeController {
         }
     }
 
-    @PostMapping(value = "/documents/export", produces = "application/zip")
+    @PostMapping("/documents/export")
     public void export(@Valid @RequestBody DocumentExportRequest request, HttpServletResponse response) throws IOException {
+        var documentIds = request.documentIds().stream().distinct().toList();
+        if (documentIds.size() == 1) {
+            var document = service.get(documentIds.getFirst());
+            var file = service.openVersionContent(document.id(), document.currentVersionId());
+            try (var stream = file.stream()) {
+                response.setContentType(file.contentType());
+                response.setContentLengthLong(file.size());
+                response.setHeader(HttpHeaders.CONTENT_DISPOSITION,
+                        ContentDisposition.attachment().filename(file.originalName(), StandardCharsets.UTF_8).build().toString());
+                stream.transferTo(response.getOutputStream());
+            }
+            return;
+        }
         var content = service.exportDocuments(request.documentIds());
         response.setContentType("application/zip");
         response.setContentLength(content.length);
@@ -220,5 +278,13 @@ public class KnowledgeController {
     public record RenameCategoryRequest(@NotBlank String name, @Size(max = 240) String description) { }
     public record AssignCategoryRequest(@NotNull UUID categoryId) { }
     public record RenameDocumentRequest(@NotBlank @Size(max = 260) String title) { }
-    public record DocumentExportRequest(@NotNull @Size(min = 1, max = 200) List<UUID> documentIds) { }
+    public record DocumentExportRequest(@NotNull @Size(min = 1, max = 200) List<@NotNull UUID> documentIds) { }
+    public record UploadTaskCreateRequest(@NotBlank @Size(max = 500) String fileName,
+                                         @jakarta.validation.constraints.PositiveOrZero long size,
+                                         com.fasterxml.jackson.databind.JsonNode uploadContext) { }
+    public record UploadTaskUpdateRequest(
+            @NotBlank @jakarta.validation.constraints.Pattern(regexp = "STAGING|CHECKING|SUBMITTING|QUEUED|DUPLICATE|FAILED") String status,
+            @jakarta.validation.constraints.Min(0) @jakarta.validation.constraints.Max(100) int progress,
+            UUID sourceFileId, com.fasterxml.jackson.databind.JsonNode uploadContext,
+            UUID documentId, UUID documentVersionId, @Size(max = 2000) String message) { }
 }

@@ -20,5 +20,5 @@ public interface TemplateVersionReviewRepository {
                   UUID reviewedBy, Instant reviewedAt, String comment, long lockVersion) { }
 
     record ReviewEvent(UUID id, UUID versionId, String fromStatus, String toStatus,
-                       UUID actorId, String comment, Instant createdAt) { }
+                       UUID actorId, String actorName, String comment, Instant createdAt) { }
 }

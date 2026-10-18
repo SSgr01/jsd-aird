@@ -27,7 +27,6 @@ def binding(index: int) -> dict:
         "modelBundle": compact["modelBundle"],
         "inputScheme": GOLDEN["inputScheme"],
         "materialDictionary": GOLDEN["materialDictionary"],
-        "preprocessing": GOLDEN["preprocessing"],
         "applicabilityDomain": {"method":"ROBUST_FEATURE_RANGE", "features":[], "minimum":[],
                                   "maximum":[], "nearBoundaryRatio":0.1},
     }

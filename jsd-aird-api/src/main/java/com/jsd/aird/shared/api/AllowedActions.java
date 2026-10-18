@@ -14,8 +14,14 @@ public final class AllowedActions {
     private AllowedActions() { }
 
     public static List<String> knowledge(String lifecycleStatus, String reviewStatus, boolean hasPublication) {
+        return knowledge(lifecycleStatus, reviewStatus, hasPublication, false);
+    }
+
+    public static List<String> knowledge(String lifecycleStatus, String reviewStatus, boolean hasPublication,
+                                         boolean projectLinked) {
         if ("DISABLED".equalsIgnoreCase(lifecycleStatus)) return List.of("RESTORE");
         if (hasPublication || "PUBLISHED".equalsIgnoreCase(reviewStatus)) return List.of("DISABLE");
+        if (projectLinked) return List.of();
         return List.of("DELETE");
     }
 

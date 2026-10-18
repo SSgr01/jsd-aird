@@ -54,6 +54,8 @@ public interface DataRepository {
     Optional<Job> findJobForUpdate(UUID organizationId, UUID importJobId);
 
     int hideExperimentJob(UUID organizationId, UUID importJobId);
+    int hideDataCenterJob(UUID organizationId, UUID importJobId);
+    void saveAttemptHistory(UUID organizationId, UUID importJobId, String reason, UUID actorId);
 
     Optional<Job> findCompletedDuplicate(UUID organizationId, String sha256, UUID templateVersionId);
 

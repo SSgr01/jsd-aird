@@ -13,6 +13,7 @@ public interface KnowledgeGovernanceRepository {
     List<DuplicateMatch> exactMatches(UUID organizationId, String sha256);
     List<DuplicateMatch> possibleMatches(UUID organizationId, String normalizedStem, UUID categoryId);
     void updateSourceInfo(UUID organizationId, UUID documentId, UUID versionId, JsonNode sourceInfo);
+    default JsonNode sourceInfo(UUID organizationId, UUID documentId) { return null; }
     void updateDraftMetadata(UUID organizationId, UUID documentId, String title,
                              String libraryScope, UUID categoryId);
 

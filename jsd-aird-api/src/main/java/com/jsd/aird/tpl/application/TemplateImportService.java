@@ -394,14 +394,11 @@ public class TemplateImportService {
         var actor = ActorContext.required();
         var job = repository.find(actor.organizationId(), importJobId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "导入任务不存在"));
-        if (repository.findGeneratedVersionId(importJobId).isPresent()) {
-            throw new ApiException(ApiErrorCode.BAD_REQUEST, "该识别记录已经生成模板，不能删除模板来源记录");
-        }
-        if (!"PARSED".equals(job.status()) && !"FAILED".equals(job.status())) {
-            throw new ApiException(ApiErrorCode.BAD_REQUEST, "识别尚未结束，暂时不能删除记录");
+        if (!java.util.Set.of("PARSED", "FAILED", "CANCELLED").contains(job.status())) {
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "处理中记录不可删除，请等待识别结束");
         }
         if (repository.delete(actor.organizationId(), importJobId) == 0) {
-            throw new ApiException(ApiErrorCode.NOT_FOUND, "识别记录不存在");
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "记录状态已变化，请刷新后重试");
         }
     }
 

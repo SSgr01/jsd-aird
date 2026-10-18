@@ -1,6 +1,7 @@
 import manifest from '../../../../docs/operation-assistant/pages.json';
 import { canViewPathWithMenus, hasPermission } from '@/routes/route-permissions';
 import type { AuthUser } from '@/services/auth/auth-api';
+import { isCurrentModelCenterQuery } from '@/routes/model-center-location';
 
 export const operationManual = manifest;
 export type OperationPage = (typeof manifest.pages)[number];
@@ -16,8 +17,15 @@ export function canUseOperationPage(page: OperationPage, user: AuthUser | null) 
 }
 
 export function currentOperationPage(pathname: string, search = '') {
+  const parameters = new URLSearchParams(search);
+  if (pathname === '/assistant/model-center' && !isCurrentModelCenterQuery(parameters)) return undefined;
   return (
-    manifest.pages.find((page) => page.path === `${pathname}${search}`) ||
+    manifest.pages.find((page) => {
+      const [path, query] = page.path.split('?');
+      return path === pathname && query && [...new URLSearchParams(query)].every(
+        ([key, value]) => parameters.get(key) === value,
+      );
+    }) ||
     manifest.pages.find((page) => page.path === pathname) ||
     manifest.pages.find((page) =>
       page.contextPatterns.some((pattern) => new RegExp(pattern).test(pathname)),

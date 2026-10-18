@@ -194,6 +194,7 @@ public class TemplateWorkspaceService {
     public TemplateRepository.TemplateCategoryItem createCategory(String name, String description) {
         var actor = ActorContext.required();
         var normalized = validCategoryName(name);
+        repository.lockCategoryName(actor.organizationId(), normalized);
         if (repository.categoryNameExists(actor.organizationId(), normalized, null)) {
             throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "分类名称已存在");
         }
@@ -210,6 +211,7 @@ public class TemplateWorkspaceService {
     public TemplateRepository.TemplateCategoryItem renameCategory(UUID categoryId, String name, String description) {
         var actor = ActorContext.required();
         var normalized = validCategoryName(name);
+        repository.lockCategoryName(actor.organizationId(), normalized);
         if (repository.categoryNameExists(actor.organizationId(), normalized, categoryId)) {
             throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "分类名称已存在");
         }
@@ -241,6 +243,13 @@ public class TemplateWorkspaceService {
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "分类不存在"));
         if (replacementCategoryId != null) repository.findCategory(organizationId, replacementCategoryId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "目标分类不存在"));
+        repository.templateNamesInCategory(organizationId, categoryId).stream()
+                .distinct().sorted(String.CASE_INSENSITIVE_ORDER)
+                .forEach(name -> repository.lockTemplateName(organizationId, replacementCategoryId, name));
+        if (repository.countTemplateNameConflicts(organizationId, categoryId, replacementCategoryId) > 0) {
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,
+                    "迁移后会与目标分类中的模板重名，请先重命名冲突模板");
+        }
         repository.deleteCategory(organizationId, categoryId, replacementCategoryId);
         repository.appendAudit(organizationId, actor.userId(), "TEMPLATE_CATEGORY_DELETED",
                 "TEMPLATE_CATEGORY", categoryId, objectMapper.createObjectNode()
@@ -253,6 +262,11 @@ public class TemplateWorkspaceService {
         var organizationId = actor.organizationId();
         if (categoryId != null) repository.findCategory(organizationId, categoryId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "分类不存在"));
+        var template = repository.findTemplateSummary(organizationId, templateId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "模板不存在"));
+        if (!java.util.Objects.equals(template.categoryId(), categoryId)) {
+            ensureTemplateNameAvailable(organizationId, categoryId, template.name(), templateId);
+        }
         if (repository.assignTemplateCategory(organizationId, templateId, categoryId) == 0) {
             throw new ApiException(ApiErrorCode.NOT_FOUND, "模板不存在");
         }
@@ -270,6 +284,14 @@ public class TemplateWorkspaceService {
         return normalized;
     }
 
+    private void ensureTemplateNameAvailable(UUID organizationId, UUID categoryId, String name,
+                                            UUID excludingTemplateId) {
+        repository.lockTemplateName(organizationId, categoryId, name);
+        if (repository.templateNameExists(organizationId, categoryId, name, excludingTemplateId)) {
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "同一分类下已存在同名模板");
+        }
+    }
+
     @Transactional
     public TemplateRepository.TemplateWorkspace createBlank(CreateBlankCommand command) {
         var actor = ActorContext.required();
@@ -278,8 +300,29 @@ public class TemplateWorkspaceService {
             normalizedCategory = importRepository.find(actor.organizationId(), command.importJobId())
                     .map(TemplateImportRepository.ImportJobView::categoryName).map(this::trimToNull).orElse(null);
         }
-        if (normalizedCategory != null) repository.ensureCategory(
-                actor.organizationId(), validCategoryName(normalizedCategory), actor.userId());
+        UUID targetCategoryId = null;
+        if (normalizedCategory != null) {
+            var requestedCategoryName = validCategoryName(normalizedCategory);
+            repository.lockCategoryName(actor.organizationId(), requestedCategoryName);
+            var existingCategory = repository.findCategories(actor.organizationId()).stream()
+                    .filter(item -> item.name().equalsIgnoreCase(requestedCategoryName))
+                    .findFirst();
+            if (existingCategory.isPresent()) {
+                normalizedCategory = existingCategory.get().name();
+                targetCategoryId = existingCategory.get().id();
+            } else {
+                repository.ensureCategory(actor.organizationId(), requestedCategoryName, actor.userId());
+                var createdCategory = repository.findCategories(actor.organizationId()).stream()
+                        .filter(item -> item.name().equalsIgnoreCase(requestedCategoryName))
+                        .findFirst()
+                        .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "模板分类创建失败"));
+                normalizedCategory = createdCategory.name();
+                targetCategoryId = createdCategory.id();
+            }
+        }
+        if (command.importJobId() == null) {
+            ensureTemplateNameAvailable(actor.organizationId(), targetCategoryId, command.name().trim(), null);
+        }
         var templateId = UUID.randomUUID();
         var versionId = UUID.randomUUID();
         var code = "TPL-" + LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE)
@@ -332,6 +375,7 @@ public class TemplateWorkspaceService {
             var compiled = recognitionCompiler.compile(schema, List.of(), command.format());
             schema = compiled.schema();
         }
+        ensureTemplateNameAvailable(actor.organizationId(), targetCategoryId, templateName, null);
         var layoutSummary = objectMapper.createObjectNode();
         layoutSummary.set("initialSnapshot", snapshot);
         if (blankWordDocument != null) {
@@ -447,6 +491,7 @@ public class TemplateWorkspaceService {
                 : repository.findCategory(actor.organizationId(), categoryId)
                         .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "模板分类不存在"));
         if (category == null) throw new ApiException(ApiErrorCode.BAD_REQUEST, "请选择模板分类");
+        ensureTemplateNameAvailable(actor.organizationId(), category.id(), name, null);
 
         var format = experimentFormat(experiment.editModel());
         var snapshot = currentExperimentSnapshot(experiment);
@@ -572,6 +617,9 @@ public class TemplateWorkspaceService {
         var normalized = trimToNull(name);
         if (normalized == null) throw new ApiException(ApiErrorCode.BAD_REQUEST, "模板名称不能为空");
         if (normalized.length() > 160) throw new ApiException(ApiErrorCode.BAD_REQUEST, "模板名称不能超过 160 个字符");
+        var template = repository.findTemplateSummary(actor.organizationId(), templateId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "模板不存在"));
+        ensureTemplateNameAvailable(actor.organizationId(), template.categoryId(), normalized, templateId);
         if (repository.renameTemplate(actor.organizationId(), templateId, normalized) == 0) {
             throw new ApiException(ApiErrorCode.NOT_FOUND, "模板不存在");
         }
@@ -595,6 +643,7 @@ public class TemplateWorkspaceService {
         var name = trimToNull(requestedName);
         if (name == null) name = source.name() + " - 副本";
         if (name.length() > 160) throw new ApiException(ApiErrorCode.BAD_REQUEST, "模板名称不能超过 160 个字符");
+        ensureTemplateNameAvailable(actor.organizationId(), effectiveCategoryId, name, null);
         var data = source.data().isObject() ? source.data().deepCopy() : objectMapper.createObjectNode();
         var layout = objectMapper.createObjectNode()
                 .put("copiedFromVersionId", sourceVersionId.toString())

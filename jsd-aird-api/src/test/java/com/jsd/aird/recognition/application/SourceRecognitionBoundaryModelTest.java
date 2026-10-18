@@ -3,7 +3,6 @@ package com.jsd.aird.recognition.application;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.jsd.aird.ai.rnd.facts.UnifiedFactService;
 import com.jsd.aird.ai.rnd.modeling.ConfigurationHashing;
 import com.jsd.aird.iam.api.AuthorizationService;
 import com.jsd.aird.ops.application.port.AuditLogFacade;
@@ -27,7 +26,7 @@ class SourceRecognitionBoundaryModelTest {
             mock(SourceRecognitionRepository.class), mock(FileObjectRepository.class),
             mock(ExperimentImportService.class), mock(ExperimentDraftFacade.class),
             new ConfigurationHashing(json), mock(AuditLogFacade.class), json,
-            mock(UnifiedFactService.class), mock(AuthorizationService.class));
+            mock(AuthorizationService.class));
 
     @Test
     void keepsThreeTechnicalReplicatesAsObservationsOfOneLogicalSample() throws Exception {

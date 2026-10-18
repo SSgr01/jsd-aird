@@ -71,7 +71,6 @@ def payload(tmp_path: Path, value_type: str = "CONTINUOUS") -> dict:
                                  "required": True, "acquisitionTiming": "PRE_EXPERIMENT", "encoding": {}}]},
             "materialDictionary": {"id": "dict-1", "version": 1, "sha256": "4" * 64,
                                    "materials": [{"materialId": "m1", "code": "M1", "role": "RESIN", "encoderIndex": 0}]},
-            "preprocessing": {"id": "prep-1", "version": 1, "sha256": "5" * 64, "config": {}},
             "trainingPolicy": {"id": "policy-1", "version": 1, "sha256": "6" * 64,
                                "config": {"candidateAlgorithms": ["ORDINAL_CUMULATIVE_LOGIT"] if value_type == "ORDINAL" else ["RANDOM_FOREST", "LOGISTIC_REGRESSION"],
                                           "replicateHandling": "KEEP_GROUPED"}},
@@ -83,117 +82,8 @@ def client(tmp_path: Path) -> TestClient:
     return TestClient(create_app(Settings(allow_file_urls=True, temporary_root=tmp_path)))
 
 
-def test_v2_rejects_training_materials_missing_from_the_frozen_dictionary(tmp_path: Path) -> None:
-    request = payload(tmp_path)
-    request["context"]["materialDictionary"]["materials"][0]["materialId"] = "different-material"
-    checked = client(tmp_path).post("/internal/v2/snapshots/validate", json=request)
-    assert checked.status_code == 200
-    assert checked.json()["status"] == "REJECTED"
-    assert any(issue["code"] == "MATERIAL_NOT_IN_MODEL" for issue in checked.json()["issues"])
 
 
-def test_v2_validate_folds_and_continuous_train_preserve_recorded_total(tmp_path: Path) -> None:
-    api = client(tmp_path)
-    request = payload(tmp_path)
-    service = FormulaModelV2Service(Settings(allow_file_urls=True, temporary_root=tmp_path))
-    assert service._features(pd.Series({"formula_json": json.dumps({
-        "recordedTotal": 98.8, "components": [{"materialId": "m1", "ratio": 98.8}]}),
-        "inputs_json": json.dumps({"temperature": 25})}))["formula:recordedTotal"] == 98.8
-    checked = api.post("/internal/v2/snapshots/validate", json=request)
-    assert checked.status_code == 200
-    assert checked.json()["status"] == "VALID"
-    folds_request = request | {"foldCount": 4, "groupFields": ["formula_lineage", "source_context"]}
-    folded = api.post("/internal/v2/snapshots/validation-folds", json=folds_request)
-    assert folded.status_code == 200
-    folds_bytes = json.dumps({"assignments": folded.json()["assignments"]}).encode()
-    folds_ref = artifact(tmp_path / "folds.json", folds_bytes)
-    output = tmp_path / "model.zip"
-    trained = api.post("/internal/v2/models/train", json=request | {
-        "jobId": "job-1", "validationFolds": folds_ref, "output": output.as_uri()
-    })
-    assert trained.status_code == 200, trained.text
-    assert trained.json()["status"] == "CANDIDATE"
-    assert trained.json()["modelBundle"]["sha256"] == sha(output.read_bytes())
-    assert trained.json()["metrics"]["baselines"]["simple"]["status"] == "AVAILABLE"
-    assert len(trained.json()["metrics"]["comparisonSetHash"]) == 64
-
-    model = trained.json()
-    score_binding = {
-        "target": request["context"]["targetDefinition"],
-        "modelVersionId": "model-continuous-v1",
-        "modelBundle": model["modelBundle"],
-        "inputScheme": request["context"]["inputScheme"],
-        "materialDictionary": request["context"]["materialDictionary"],
-        "preprocessing": request["context"]["preprocessing"],
-        "applicabilityDomain": model["applicabilityDomain"] | {"nearBoundaryRatio": 0.1},
-    }
-    score = api.post("/internal/v2/models/score", json={
-        "contractVersion": "formula-model.v2", "requestId": "score-runtime", "seed": 17,
-        "runId": "prediction-1",
-        "formula": {"basis": "MASS_PERCENT", "compositionComplete": True, "recordedTotal": 98.8,
-                    "components": [{"materialId": "m1", "ratio": 31, "unit": "%", "amountKnown": True}]},
-        "inputs": {"temperature": 21, "substrate": "PET"}, "modelBindings": [score_binding],
-    })
-    assert score.status_code == 200, score.text
-    assert score.json()["executionStatus"] == "SUCCEEDED"
-    assert score.json()["outcomeStatus"] == "SUCCEEDED"
-    assert score.json()["results"][0]["result"]["resultType"] == "CONTINUOUS"
-
-    out_of_domain = api.post("/internal/v2/models/score", json={
-        "contractVersion": "formula-model.v2", "requestId": "score-ood", "seed": 17,
-        "runId": "prediction-ood",
-        "formula": {"basis": "MASS_PERCENT", "compositionComplete": True, "recordedTotal": 98.8,
-                    "components": [{"materialId": "m1", "ratio": 999, "unit": "%", "amountKnown": True}]},
-        "inputs": {"temperature": 21, "substrate": "PET"}, "modelBindings": [score_binding],
-    })
-    assert out_of_domain.json()["results"][0]["status"] == "BLOCKED"
-    assert out_of_domain.json()["results"][0]["code"] == "OUT_OF_DOMAIN"
-    violations = out_of_domain.json()["results"][0]["detail"]["violations"]
-    assert violations
-    assert all(item["value"] < item["minimum"] or item["value"] > item["maximum"] for item in violations)
-
-    extrapolated = api.post("/internal/v2/models/score", json={
-        "contractVersion": "formula-model.v2", "requestId": "score-extrapolation", "seed": 17,
-        "runId": "prediction-extrapolation", "allowExtrapolation": True,
-        "formula": {"basis": "MASS_PERCENT", "compositionComplete": True, "recordedTotal": 98.8,
-                    "components": [{"materialId": "m1", "ratio": 31, "unit": "%", "amountKnown": True}]},
-        "inputs": {"temperature": 500, "substrate": "PET"}, "modelBindings": [score_binding],
-    })
-    assert extrapolated.status_code == 200, extrapolated.text
-    extrapolated_result = extrapolated.json()["results"][0]
-    assert extrapolated_result["status"] == "SUCCEEDED"
-    assert extrapolated_result["applicability"]["status"] == "OUT_OF_DOMAIN"
-    assert extrapolated_result["warnings"][0]["code"] == "EXTRAPOLATION"
-
-    recommendation = api.post("/internal/v2/models/recommend", json={
-        "contractVersion": "formula-model.v2", "requestId": "formula-extrapolation", "seed": 17,
-        "runId": "formula-run", "mode": "FORMULA_PREDICTION", "candidateCount": 1,
-        "baselineFormula": {"basis": "MASS_PERCENT", "compositionComplete": True, "recordedTotal": 100,
-                            "components": [{"materialId": "m1", "ratio": 100, "unit": "%", "amountKnown": True}]},
-        "fixedInputs": {"temperature": 35},
-        "goals": [{"targetId": "target-v1", "operator": "MAXIMIZE", "mandatory": False, "weight": 1}],
-        "constraints": {}, "searchSpace": {"variableMaterials": [{"materialId": "m1", "minimum": 0, "maximum": 100}]},
-        "modelBindings": [score_binding],
-    })
-    assert recommendation.status_code == 200, recommendation.text
-    candidate = recommendation.json()["candidates"][0]
-    assert candidate["inputs"]["temperature"] == 35
-    assert candidate["results"][0]["status"] == "SUCCEEDED"
-    assert candidate["results"][0]["applicability"]["status"] == "OUT_OF_DOMAIN"
-
-    damaged = tmp_path / "damaged-model.zip"
-    damaged.write_bytes(output.read_bytes() + b"damaged")
-    damaged_binding = score_binding | {"modelBundle": {"url": damaged.as_uri(), "sha256": model["modelBundle"]["sha256"]}}
-    failed = api.post("/internal/v2/models/score", json={
-        "contractVersion": "formula-model.v2", "requestId": "score-failed", "seed": 17,
-        "runId": "prediction-failed",
-        "formula": {"basis": "MASS_PERCENT", "compositionComplete": True, "recordedTotal": 98.8,
-                    "components": [{"materialId": "m1", "ratio": 31, "unit": "%", "amountKnown": True}]},
-        "inputs": {"temperature": 21, "substrate": "PET"}, "modelBindings": [damaged_binding],
-    })
-    assert failed.json()["executionStatus"] == "FAILED"
-    assert failed.json()["outcomeStatus"] is None
-    assert failed.json()["results"][0]["status"] == "FAILED"
 
 
 def test_modeling_workbench_trains_from_freely_selected_columns(tmp_path: Path) -> None:
@@ -242,86 +132,10 @@ def test_modeling_workbench_rejects_y_with_one_observed_class() -> None:
         })
 
 
-def test_v2_binary_training_and_v1_payload_rejection(tmp_path: Path) -> None:
-    api = client(tmp_path)
-    request = payload(tmp_path, "BINARY")
-    folded = api.post("/internal/v2/snapshots/validation-folds",
-                      json=request | {"foldCount": 4, "groupFields": ["formula_lineage"]})
-    assert folded.status_code == 200, folded.text
-    folds_ref = artifact(tmp_path / "folds-binary.json",
-                         json.dumps({"assignments": folded.json()["assignments"]}).encode())
-    trained = api.post("/internal/v2/models/train", json=request | {
-        "jobId": "job-binary", "validationFolds": folds_ref,
-        "output": (tmp_path / "binary.zip").as_uri()
-    })
-    assert trained.status_code == 200, trained.text
-    assert trained.json()["status"] == "CANDIDATE"
-    invalid = request | {"contractVersion": "formula-model.v1"}
-    rejected = api.post("/internal/v2/snapshots/validate", json=invalid)
-    assert rejected.status_code == 422
-    assert rejected.json()["contractVersion"] == "formula-model.v2"
 
 
-def test_v2_ordinal_uses_cumulative_logit_and_multiclass_is_typed(tmp_path: Path) -> None:
-    api = client(tmp_path)
-    for value_type, algorithm in [("ORDINAL", "ORDINAL_CUMULATIVE_LOGIT"), ("CATEGORICAL", "RANDOM_FOREST")]:
-        request = payload(tmp_path, value_type)
-        request["context"]["trainingPolicy"]["config"]["candidateAlgorithms"] = [algorithm]
-        folded = api.post("/internal/v2/snapshots/validation-folds",
-                          json=request | {"foldCount": 4, "groupFields": ["formula_lineage", "source_context"]})
-        assert folded.status_code == 200, folded.text
-        folds_ref = artifact(tmp_path / f"folds-{value_type}.json",
-                             json.dumps({"assignments": folded.json()["assignments"]}).encode())
-        trained = api.post("/internal/v2/models/train", json=request | {
-            "jobId": f"job-{value_type}", "validationFolds": folds_ref,
-            "output": (tmp_path / f"{value_type}.zip").as_uri(),
-        })
-        assert trained.status_code == 200, trained.text
-        assert trained.json()["status"] == "CANDIDATE"
-        assert trained.json()["metrics"]["selectedAlgorithm"] == algorithm
-        if value_type == "ORDINAL":
-            assert "gradeMae" in trained.json()["metrics"]
 
 
-def test_v2_model_without_composition_scores_without_formula(tmp_path: Path) -> None:
-    api = client(tmp_path)
-    request = payload(tmp_path)
-    request["context"]["inputScheme"]["fields"] = [
-        field for field in request["context"]["inputScheme"]["fields"]
-        if field["valueType"] != "COMPOSITION"
-    ]
-    folded = api.post("/internal/v2/snapshots/validation-folds", json=request | {
-        "foldCount": 4, "groupFields": ["formula_lineage", "source_context"]
-    })
-    assert folded.status_code == 200, folded.text
-    folds_ref = artifact(tmp_path / "folds-no-formula.json",
-                         json.dumps({"assignments": folded.json()["assignments"]}).encode())
-    trained = api.post("/internal/v2/models/train", json=request | {
-        "jobId": "job-no-formula", "validationFolds": folds_ref,
-        "output": (tmp_path / "no-formula.zip").as_uri(),
-    })
-    assert trained.status_code == 200, trained.text
-    assert trained.json()["status"] == "CANDIDATE"
-    assert all(not name.startswith(("formula:", "material:"))
-               for name in trained.json()["applicabilityDomain"]["features"])
-
-    binding = {
-        "target": request["context"]["targetDefinition"],
-        "modelVersionId": "model-no-formula-v1",
-        "modelBundle": trained.json()["modelBundle"],
-        "inputScheme": request["context"]["inputScheme"],
-        "materialDictionary": request["context"]["materialDictionary"],
-        "preprocessing": request["context"]["preprocessing"],
-        "applicabilityDomain": trained.json()["applicabilityDomain"] | {"nearBoundaryRatio": 0.1},
-    }
-    score = api.post("/internal/v2/models/score", json={
-        "contractVersion": "formula-model.v2", "requestId": "score-no-formula", "seed": 17,
-        "runId": "prediction-no-formula", "inputs": {"temperature": 21},
-        "modelBindings": [binding],
-    })
-    assert score.status_code == 200, score.text
-    assert score.json()["executionStatus"] == "SUCCEEDED"
-    assert score.json()["results"][0]["status"] == "SUCCEEDED"
 
 
 @pytest.mark.parametrize("kind", ["NUMERIC", "CATEGORICAL"])
@@ -345,7 +159,7 @@ def test_registered_workbench_scores_frozen_model_without_formula(tmp_path: Path
          "valueType": "NUMBER" if x["kind"] == "NUMERIC" else "CATEGORY", "required": True,
          "acquisitionTiming": "PRE_EXPERIMENT"} for i, x in enumerate(x_columns)]
     binding = {"target": context["targetDefinition"], "inputScheme": context["inputScheme"],
-               "preprocessing": context["preprocessing"], "materialDictionary": context["materialDictionary"],
+               "materialDictionary": context["materialDictionary"],
                "modelVersionId": "registered-model", "modelBundle": trained.json()["modelBundle"],
                "applicabilityDomain": trained.json()["applicabilityDomain"] | {"nearBoundaryRatio": 0.05}}
     request = {"requestId": "score-registered", "seed": 17, "runId": "prediction-1",

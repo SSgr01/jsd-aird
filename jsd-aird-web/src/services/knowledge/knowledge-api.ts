@@ -3,13 +3,16 @@ import { httpClient } from '@/services/http/client';
 import { appEnv } from '@/app/config/env';
 
 export type KnowledgeStatus = 'QUEUED' | 'PROCESSING' | 'READY' | 'FAILED' | 'REJECTED' | 'PENDING_PROVIDER';
+export type KnowledgeUploadTaskStatus = 'STAGING' | 'CHECKING' | 'SUBMITTING' | 'QUEUED' | 'COMPLETED' | 'DUPLICATE' | 'FAILED';
+export interface KnowledgeUploadContext { libraryScope: string; categoryId?: string; tags?: string[]; sourceDescription?: string; visibility?: string; projectRelations?: Array<{ projectId: string; stageId?: string; taskId?: string }> }
+export interface KnowledgeUploadTask { id: string; fileName: string; size: number; status: KnowledgeUploadTaskStatus; progress: number; sourceFileId?: string; uploadContext?: KnowledgeUploadContext; documentId?: string; documentVersionId?: string; message?: string; createdAt: string; updatedAt: string }
 export type AiStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'REVOKED';
 export type ReviewRevisionStatus = 'DRAFT' | 'BUILDING' | 'PUBLISHED' | 'FAILED' | 'SUPERSEDED';
 export type StructuredDocument = { type: 'doc'; schemaVersion?: number; content?: StructuredNode[] };
 export type StructuredNode = { type: string; text?: string; attrs?: Record<string, unknown>; content?: StructuredNode[]; marks?: Array<{ type: string; attrs?: Record<string, unknown> }> };
 
 export interface RelatedProject { projectId: string; projectCode: string; projectName: string; stageId?: string; stageName?: string; taskId?: string; taskName?: string }
-export interface KnowledgeDocument { id: string; title: string; status: KnowledgeStatus; scanStatus: string; aiStatus: AiStatus; currentVersionNo: number; currentVersionId: string; originalName: string; contentType: string; size: number; sha256: string; parseError?: string; createdAt: string; updatedAt: string; libraryScope: 'INTERNAL' | 'EXTERNAL'; categoryId?: string; categoryName?: string; lifecycleStatus: 'ACTIVE' | 'DISABLED'; reviewStatus: 'PENDING_REVIEW' | 'REJECTED' | 'PUBLISHED' | 'SUPERSEDED'; reviewRevisionStatus?: ReviewRevisionStatus; reviewRevision: number; currentPublicationId?: string; currentPublicationNo?: number; relatedProjects: RelatedProject[]; allowedActions: string[] }
+export interface KnowledgeDocument { tags?: string[]; sourceInfo?: Record<string, unknown>; id: string; title: string; status: KnowledgeStatus; scanStatus: string; aiStatus: AiStatus; currentVersionNo: number; currentVersionId: string; originalName: string; contentType: string; size: number; sha256: string; parseError?: string; createdAt: string; updatedAt: string; libraryScope: 'INTERNAL' | 'EXTERNAL'; categoryId?: string; categoryName?: string; lifecycleStatus: 'ACTIVE' | 'DISABLED'; reviewStatus: 'PENDING_REVIEW' | 'REJECTED' | 'PUBLISHED' | 'SUPERSEDED'; reviewRevisionStatus?: ReviewRevisionStatus; reviewRevision: number; currentPublicationId?: string; currentPublicationNo?: number; relatedProjects: RelatedProject[]; allowedActions: string[] }
 export interface KnowledgeProcessing { documentId: string; versionId: string; documentStatus: KnowledgeStatus; documentError?: string; parseRunId?: string; parseRunStatus?: 'QUEUED' | 'PROCESSING' | 'SUCCEEDED' | 'FAILED'; parseRunError?: string; lastAttemptAt?: string; jobId?: string; jobStatus?: string; progress: number; currentStage?: string; attemptCount: number; maxAttempts: number; nextAttemptAt?: string; terminal: boolean; lastError?: string }
 export interface KnowledgeCategory { id: string; scope: 'INTERNAL' | 'EXTERNAL'; name: string; description?: string; sortOrder: number; documentCount: number; allowedActions?: string[] }
 export interface KnowledgeVersion { id: string; documentId: string; versionNo: number; fileObjectId: string; originalName: string; contentType: string; size: number; sha256: string; status: KnowledgeStatus; errorMessage?: string; reviewStatus: string; reviewRevision: number; effectiveOcr?: boolean; parserMode?: 'PRECISE' | 'AGENT_FALLBACK' | 'LOCAL'; parserMetadata?: Record<string, unknown> }
@@ -60,14 +63,32 @@ function loadContentBlob(path: string): Promise<Blob> {
 
 export const knowledgeApi = {
   async list(params: { keyword?: string; status?: string; scope?: string; categoryId?: string; lifecycleStatus?: string; reviewStatus?: string; projectId?: string; page?: number; size?: number } = {}) { const response = await httpClient.get<ApiResponse<PageResponse<KnowledgeDocument>>>('/api/v1/knowledge/documents', { params }); return response.data.data; },
+  async uploadTasks(limit = 100) { const response = await httpClient.get<ApiResponse<KnowledgeUploadTask[]>>('/api/v1/knowledge/upload-tasks', { params: { limit } }); return response.data.data; },
+  async createUploadTask(input: { fileName: string; size: number; uploadContext?: KnowledgeUploadContext }) { const response = await httpClient.post<ApiResponse<KnowledgeUploadTask>>('/api/v1/knowledge/upload-tasks', input); return response.data.data; },
+  async updateUploadTask(id: string, input: { status: Exclude<KnowledgeUploadTaskStatus, 'COMPLETED'>; progress: number; sourceFileId?: string; uploadContext?: KnowledgeUploadContext; documentId?: string; documentVersionId?: string; message?: string }) { const response = await httpClient.put<ApiResponse<KnowledgeUploadTask>>(`/api/v1/knowledge/upload-tasks/${id}`, input); return response.data.data; },
+  async deleteUploadTask(id: string) { await httpClient.delete(`/api/v1/knowledge/upload-tasks/${id}`); },
+  async reparseUploadTask(documentId: string, versionId: string) {
+    const current = await knowledgeApi.review(documentId, versionId);
+    return knowledgeApi.reparse(current);
+  },
   async categories(scope?: 'INTERNAL' | 'EXTERNAL') { const response = await httpClient.get<ApiResponse<KnowledgeCategory[]>>('/api/v1/knowledge/categories', { params: scope ? { scope } : undefined }); return response.data.data; },
   async createCategory(input: { name: string; scope: 'INTERNAL' | 'EXTERNAL'; description?: string }) { const response = await httpClient.post<ApiResponse<KnowledgeCategory>>('/api/v1/knowledge/categories', input); return response.data.data; },
   async renameCategory(id: string, input: { name: string; description?: string }) { const response = await httpClient.put<ApiResponse<KnowledgeCategory>>(`/api/v1/knowledge/categories/${id}`, input); return response.data.data; },
   async deleteCategory(id: string, replacementCategoryId?: string) { await httpClient.delete(`/api/v1/knowledge/categories/${id}`, { params: replacementCategoryId ? { replacementCategoryId } : undefined }); },
   async assignCategory(documentId: string, categoryId: string) { await httpClient.put(`/api/v1/knowledge/documents/${documentId}/category`, { categoryId }); },
+  async updateMetadata(id: string, input: { title: string; libraryScope: 'INTERNAL' | 'EXTERNAL'; categoryId: string; tags: string[]; sourceInfo: Record<string, unknown>; projectRelations?: Array<{ projectId: string; stageId?: string; taskId?: string }> }) {
+    const response = await httpClient.put<ApiResponse<KnowledgeDocument>>(`/api/v1/knowledge/documents/${id}/metadata`, input);
+    return response.data.data;
+  },
   async rename(id: string, title: string) { const response = await httpClient.put<ApiResponse<KnowledgeDocument>>(`/api/v1/knowledge/documents/${id}`, { title }); return response.data.data; },
   async remove(id: string) { await httpClient.delete(`/api/v1/knowledge/documents/${id}`); },
-  async exportDocuments(documentIds: string[]) { const response = await httpClient.post<Blob>('/api/v1/knowledge/documents/export', { documentIds }, { responseType: 'blob', timeout: LARGE_DOCUMENT_TIMEOUT_MS }); return response.data; },
+  async exportDocuments(documentIds: string[]) {
+    const response = await httpClient.post<Blob>('/api/v1/knowledge/documents/export', { documentIds }, {
+      responseType: 'blob', headers: { Accept: '*/*' }, timeout: LARGE_DOCUMENT_TIMEOUT_MS,
+    });
+    const encodedName = /filename\*=UTF-8''([^;]+)/i.exec(String(response.headers['content-disposition'] || ''))?.[1];
+    return { blob: response.data, fileName: encodedName ? decodeURIComponent(encodedName) : 'knowledge-documents.zip' };
+  },
   async get(id: string) { const response = await httpClient.get<ApiResponse<KnowledgeDocument>>(`/api/v1/knowledge/documents/${id}`); return response.data.data; },
   async processing(id: string) { const response = await httpClient.get<ApiResponse<KnowledgeProcessing>>(`/api/v1/knowledge/documents/${id}/processing`); return response.data.data; },
   async versions(id: string) { const response = await httpClient.get<ApiResponse<KnowledgeVersion[]>>(`/api/v1/knowledge/documents/${id}/versions`); return response.data.data; },

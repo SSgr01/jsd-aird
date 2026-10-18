@@ -1,8 +1,19 @@
 import { describe, expect, it } from 'vitest'
 import { formulaContext, formulaTargets } from '@/test/formula-prediction-fixtures'
-import { buildFormulaRequest, emptyFormulaForm, formulaFingerprint, formulaSpaceError, goalError, goalMet, learnedRange, restoreFormulaForm, syncFormulaForm } from './formula-prediction-utils'
+import { buildFormulaRequest, emptyFormulaForm, formulaFingerprint, formulaMaterialName, formulaSpaceError, formulaUnavailable, goalError, goalMet, learnedRange, restoreFormulaForm, syncFormulaForm } from './formula-prediction-utils'
 
 describe('formula input and result consistency', () => {
+  it('keeps workbench material column names aligned with the training table', () => {
+    expect(formulaMaterialName({ name: 'ADDITIVE', sourceColumnName: 'ADDITIVE比例' })).toBe('ADDITIVE比例')
+    expect(formulaMaterialName({ name: 'ADDITIVE' })).toBe('助剂')
+  })
+  it('distinguishes missing proportion inputs, incomplete formulas and a ratio selected as Y', () => {
+    const base = formulaTargets[0]!
+    expect(formulaUnavailable({ ...base, unavailableReasons: ['MODEL_NOT_FORMULA_ENABLED'] })).toBe('训练时未选择材料比例作为 X，请加入比例列后训练')
+    expect(formulaUnavailable({ ...base, unavailableReasons: ['MODEL_FORMULA_INPUTS_INCOMPLETE'] })).toContain('材料比例不完整')
+    expect(formulaUnavailable({ ...base, unavailableReasons: ['FORMULA_TARGET_IS_RATIO', 'MODEL_FORMULA_INPUTS_INCOMPLETE'] })).toContain('以性能为 Y')
+  })
+
   it('uses only saved ranges and does not require predicted proportions in advance', () => {
     const context = formulaContext(['dry-gloss'])
     const form = syncFormulaForm({ ...emptyFormulaForm(), targets: ['dry-gloss'] }, context)

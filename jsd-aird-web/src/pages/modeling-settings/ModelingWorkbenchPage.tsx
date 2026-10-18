@@ -1,21 +1,27 @@
+import { XYColumnPicker, SelectedDataIssues } from '@/components/ai-rnd/XYColumnPicker'
 import { ArrowLeftOutlined, ArrowRightOutlined, CheckCircleFilled, ExperimentOutlined, ReloadOutlined } from '@ant-design/icons'
-import { Alert, App, Button, Card, Checkbox, Empty, Input, Progress, Radio, Space, Table, Tag, Typography } from 'antd'
+import { Alert, App, Button, Card, Checkbox, Empty, Input, Progress, Space, Table, Tag, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Key } from 'react'
 
 import { modelingWorkbenchApi, type ModelingWorkbenchRun } from '@/services/ai-rnd/modeling-workbench-api'
 import type { HistoryDataset, HistoryDatasetOption, HistoryDatasetRow } from '@/services/ai-rnd/optimization-api'
 import { HttpError } from '@/services/http/errors'
+import { useAuthStore } from '@/stores/auth-store'
+import { TrainingEvaluation } from '@/components/ai-rnd/TrainingEvaluation'
+import { WorkbenchDataChecks } from '@/components/ai-rnd/WorkbenchDataChecks'
+import { checkWorkbenchData } from '@/services/ai-rnd/workbench-data-checks'
 import { mergeHistoryDatasets, selectedRowIdsByDataset } from '@/services/ai-rnd/history-dataset-utils'
 import { workbenchFailureMessage, workbenchRegistrationMessage, workbenchRequestMessage } from './modeling-workbench-feedback'
 import { TestMetricCatalogManager } from './TestMetricCatalogManager'
 import './modeling-workbench.css'
 
 const { Paragraph, Text, Title } = Typography
-const draftKey = 'ai-modeling-workbench-draft:v1'
 const stepTitles = ['选择数据', '选择 X / Y', '训练结果']
 const algorithmLabels: Record<string, string> = {
+  LINEAR_REGRESSION: '线性回归 Linear Regression',
+  RIDGE: '岭回归 Ridge',
   GAUSSIAN_PROCESS: '高斯过程 Gaussian Process',
   RANDOM_FOREST: '随机森林 Random Forest',
   LIGHTGBM: 'LightGBM',
@@ -23,55 +29,13 @@ const algorithmLabels: Record<string, string> = {
   CATBOOST: 'CatBoost',
   LOGISTIC_REGRESSION: '逻辑回归 Logistic Regression',
 }
-const metricLabels: Record<string, string> = {
-  mae: '平均绝对误差（MAE）', rmse: '均方根误差（RMSE）', r2: '拟合度（R²）',
-  accuracy: '准确率', macroF1: '宏平均 F1', logLoss: '概率损失',
-}
-const metricHints: Record<string, string> = {
-  mae: '预测值平均偏离实测值的大小，单位与 Y 相同，越小越好。',
-  rmse: '对较大误差更敏感，单位与 Y 相同，越小越好。',
-  r2: '衡量模型对结果变化的解释程度，越接近 1 越好；样本少时可能为负数。',
-  accuracy: '检查数据中预测正确的比例，越高越好。',
-  macroF1: '综合各结果类别的识别表现，越高越好。',
-  logLoss: '衡量预测概率与实际类别的偏差，越小越好。',
-}
-
 type SavedDraft = { datasetId?: string; datasetIds?: string[]; selectedRowIdsByDataset?: Record<string, string[]>; xColumns?: string[]; yColumn?: string; runId?: string; activeStep?: number }
+type PendingTraining = { key: string; request: { datasetIds: string[]; selectedRowIdsByDataset: Record<string, string[]>; xColumns: string[]; yColumn: string }; runId?: string }
 
 function cellText(value: unknown) {
   if (typeof value === 'number') return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(4)))
   if (typeof value === 'string' && value.trim()) return value
   return '—'
-}
-
-function uniqueCount(dataset: HistoryDataset | undefined, code: string) {
-  return new Set((dataset?.rows ?? []).map(row => row.values[code]).filter(value => value !== undefined && value !== null && value !== '')).size
-}
-
-function yUnavailableReason(dataset: HistoryDataset | undefined, column: HistoryDataset['columns'][number]) {
-  if (column.filledCount < 6) return `有效记录 ${column.filledCount}/6 条`
-  if (uniqueCount(dataset, column.code) < 2) return '结果未变化'
-  if (column.kind === 'NUMERIC') return ''
-  const counts = new Map<string, number>()
-  dataset?.rows.forEach(row => {
-    const value = row.values[column.code]
-    if (value !== undefined && value !== null && value !== '') counts.set(String(value), (counts.get(String(value)) ?? 0) + 1)
-  })
-  return [...counts.values()].every(count => count >= 2) ? '' : '部分类别少于 2 条记录'
-}
-
-function completeRowCount(dataset: HistoryDataset | undefined, xColumns: string[], yColumn: string) {
-  if (!dataset || !yColumn || !xColumns.length) return 0
-  return dataset.rows.filter(row => [yColumn, ...xColumns].every(code => {
-    const value = row.values[code]
-    return value !== undefined && value !== null && value !== '' && !(typeof value === 'number' && !Number.isFinite(value))
-  })).length
-}
-
-function formatMetric(key: string, value: unknown) {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return cellText(value)
-  if (key === 'accuracy' || key === 'macroF1') return `${(value * 100).toFixed(1)}%`
-  return Number(value.toFixed(4)).toString()
 }
 
 export type ModelingWorkbenchPageProps = {
@@ -82,17 +46,32 @@ export type ModelingWorkbenchPageProps = {
   canTrain?: boolean
 }
 
-export function ModelingWorkbenchPage({ canManageCatalog = false, canRegister = false, onGoPredict, onOpenModel, canTrain = true }: ModelingWorkbenchPageProps) {
+export function ModelingWorkbenchPage(props: ModelingWorkbenchPageProps) {
+  const user = useAuthStore(state => state.user)
+  const storageKey = user ? `ai-modeling-workbench:v2:${user.organizationId}:${user.userId}` : 'ai-modeling-workbench:v2:anonymous'
+  return <ModelingWorkbenchPageInner key={storageKey} storageKey={storageKey} {...props} />
+}
+
+function ModelingWorkbenchPageInner({ canManageCatalog = false, canRegister = false, onGoPredict, onOpenModel, canTrain = true, storageKey }: ModelingWorkbenchPageProps & { storageKey: string }) {
   const { message } = App.useApp()
+  const draftKey = `${storageKey}:draft`
+  const operationKey = `${storageKey}:pending-training`
   const [datasets, setDatasets] = useState<HistoryDatasetOption[]>([])
   const [datasetKeyword, setDatasetKeyword] = useState('')
   const [selectedDatasetIds, setSelectedDatasetIds] = useState<string[]>([])
   const [datasetCache, setDatasetCache] = useState<Record<string, HistoryDataset>>({})
+  const [frozenDataset, setFrozenDataset] = useState<HistoryDataset>()
   const [selectedRowIds, setSelectedRowIds] = useState<Record<string, string[]>>({})
   const [xColumns, setXColumns] = useState<string[]>([])
   const [yColumn, setYColumn] = useState('')
   const [activeStep, setActiveStep] = useState(0)
   const [runId, setRunId] = useState<string>()
+  const [pendingTraining, setPendingTraining] = useState<PendingTraining | undefined>(() => {
+    try { return JSON.parse(window.localStorage.getItem(operationKey) ?? 'null') as PendingTraining | null ?? undefined }
+    catch { return undefined }
+  })
+  const restoredRun = useRef<string>()
+  const userNavigated = useRef(false)
   const [run, setRun] = useState<ModelingWorkbenchRun>()
   const [loadingDatasets, setLoadingDatasets] = useState(false)
   const [loadingDataset, setLoadingDataset] = useState(false)
@@ -121,14 +100,22 @@ export function ModelingWorkbenchPage({ canManageCatalog = false, canRegister = 
     finally { setLoadingDatasets(false) }
   }, [])
 
+  const navigateToStep = (step: number) => {
+    userNavigated.current = true
+    setActiveStep(step)
+  }
+
   const sourceDatasets = useMemo(() => selectedDatasetIds.map(id => datasetCache[id]).filter((item): item is HistoryDataset => Boolean(item)), [datasetCache, selectedDatasetIds])
-  const dataset = useMemo(() => sourceDatasets.length === selectedDatasetIds.length ? mergeHistoryDatasets(sourceDatasets) : undefined, [selectedDatasetIds, sourceDatasets])
+  const liveDataset = useMemo(() => sourceDatasets.length === selectedDatasetIds.length ? mergeHistoryDatasets(sourceDatasets) : undefined, [selectedDatasetIds, sourceDatasets])
+  const dataset = runId && frozenDataset ? frozenDataset : liveDataset
 
   const toggleDataset = (ids: Key[]) => {
+    if (pendingTraining) return
     const nextIds = ids.map(String)
     if (nextIds.join('|') === selectedDatasetIds.join('|')) return
     setSelectedDatasetIds(nextIds)
-    setXColumns([]); setYColumn(''); setRun(undefined); setRunId(undefined)
+    setRun(undefined); setRunId(undefined); setFrozenDataset(undefined)
+    setPendingTraining(undefined); window.localStorage.removeItem(operationKey)
   }
 
   useEffect(() => {
@@ -150,6 +137,15 @@ export function ModelingWorkbenchPage({ canManageCatalog = false, canRegister = 
 
   useEffect(() => {
     if (!dataset) return
+    const availableCodes = new Set(dataset.columns.map(column => column.code))
+    const staleRows = !runId && Object.entries(selectedRowIds).some(([id, ids]) => selectedDatasetIds.includes(id) && ids.some(rowId => !dataset.rows.some(row => row.id === rowId)))
+    const staleFields = !runId && (xColumns.some(code => !availableCodes.has(code)) || Boolean(yColumn && !availableCodes.has(yColumn)))
+    if (staleRows || staleFields) {
+      message.warning({ key: 'modeling-sample-refresh', content: staleRows ? '实验数据已按样品重新整理，请重新勾选记录并确认 X/Y。' : '所选数据表中有字段已变化，请检查并重新确认 X/Y。' })
+      setXColumns(current => current.filter(code => availableCodes.has(code)))
+      setYColumn(current => availableCodes.has(current) ? current : '')
+      setActiveStep(staleRows ? 0 : 1)
+    }
     setSelectedRowIds(current => {
       let changed = false
       const next = { ...current }
@@ -184,7 +180,7 @@ export function ModelingWorkbenchPage({ canManageCatalog = false, canRegister = 
           setSelectedRowIds(saved.selectedRowIdsByDataset ?? {})
           setXColumns(saved.xColumns ?? [])
           setYColumn(saved.yColumn ?? '')
-          setActiveStep(saved.activeStep === 0 ? 0 : saved.activeStep === 1 ? 1 : saved.runId ? 2 : 1)
+          if (!userNavigated.current) setActiveStep(saved.activeStep === 0 ? 0 : saved.activeStep === 1 ? 1 : saved.runId ? 2 : 1)
         }
         if (saved.runId) setRunId(saved.runId)
       } catch (error) {
@@ -214,9 +210,28 @@ export function ModelingWorkbenchPage({ canManageCatalog = false, canRegister = 
         if (cancelled) return
         setRun(current)
         setRunLoadError('')
+        if (current.datasetSnapshot?.rows && restoredRun.current !== current.id) {
+          restoredRun.current = current.id
+          const snapshot = current.datasetSnapshot
+          setFrozenDataset(snapshot)
+          const ids = snapshot.sourceDatasetIds ?? [snapshot.id]
+          setSelectedDatasetIds(ids)
+          setSelectedRowIds(current.selectedRowIdsByDataset ?? {})
+          setXColumns(current.xColumns.map(column => column.code)); setYColumn(current.yColumn.code)
+        }
+        if (['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(current.status)) {
+          setPendingTraining(undefined); window.localStorage.removeItem(operationKey)
+        }
         if (current.status === 'QUEUED' || current.status === 'RUNNING') timer = setTimeout(() => void poll(), 1300)
       } catch (error) {
         if (!cancelled) {
+          if (error instanceof HttpError && error.status === 404) {
+            setRun(undefined); setRunId(undefined); setFrozenDataset(undefined); setPendingTraining(undefined); setSubmitting(false)
+            window.localStorage.removeItem(operationKey)
+            setLoadError('这条训练任务已不存在，已保留建模设置。')
+            setActiveStep(0)
+            return
+          }
           setRunLoadError(workbenchRequestMessage(error))
           if (!(error instanceof HttpError && [401, 403, 404].includes(error.status ?? 0))) timer = setTimeout(() => void poll(), 2500)
         }
@@ -272,46 +287,84 @@ export function ModelingWorkbenchPage({ canManageCatalog = false, canRegister = 
     })),
   ], [dataset?.columns, selectedDatasetIds.length])
 
-  const usableY = useMemo(() => (selectedDatasetView?.columns ?? []).filter(column => !yUnavailableReason(selectedDatasetView, column)), [selectedDatasetView])
-  const completeRows = useMemo(() => completeRowCount(selectedDatasetView, xColumns, yColumn), [selectedDatasetView, xColumns, yColumn])
-  const selectedY = selectedDatasetView?.columns.find(column => column.code === yColumn)
+  const dataChecks = useMemo(() => checkWorkbenchData(selectedDatasetView, xColumns, yColumn), [selectedDatasetView, xColumns, yColumn])
+  const completeRows = dataChecks?.usableRowCount ?? 0
+  const allXConstant = Boolean(dataChecks && dataChecks.fields.filter(field => field.role === 'X').every(field => field.distinctCount < 2))
   const currentMetrics = run?.result?.metrics ?? {}
   const selectedAlgorithm = typeof currentMetrics.selectedAlgorithm === 'string' ? currentMetrics.selectedAlgorithm : ''
-  const primaryMetricKeys = run?.yColumn.kind === 'NUMERIC' ? ['mae', 'rmse', 'r2'] : ['accuracy', 'macroF1', 'logLoss']
-  const comparisonRows = Array.isArray(currentMetrics.comparison) ? currentMetrics.comparison as Array<Record<string, unknown>> : []
-  const trainingActive = submitting || Boolean(runId) && (run ? run.status === 'QUEUED' || run.status === 'RUNNING' : !runLoadError)
+  const trainingActive = submitting || Boolean(pendingTraining) || Boolean(runId) && (run ? run.status === 'QUEUED' || run.status === 'RUNNING' : !runLoadError)
+
+  useEffect(() => {
+    if (!pendingTraining) return
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    if (pendingTraining.runId) {
+      setRunId(pendingTraining.runId); if (!userNavigated.current) setActiveStep(2); setSubmitting(false)
+      return
+    }
+    setSubmitting(true)
+    const send = async () => {
+      try {
+        const accepted = await modelingWorkbenchApi.train(pendingTraining.request, pendingTraining.key)
+        if (cancelled) return
+        setLoadError('')
+        const confirmed = { ...pendingTraining, runId: accepted.runId }
+        try { window.localStorage.setItem(operationKey, JSON.stringify(confirmed)) } catch { /* the saved request can still be retried with the same key */ }
+        setPendingTraining(confirmed); setRunId(accepted.runId); setRun(undefined); if (!userNavigated.current) setActiveStep(2); setSubmitting(false)
+      } catch (error) {
+        if (cancelled) return
+        const retryable = !(error instanceof HttpError) || error.status == null || error.status === 408 || error.status >= 500
+        if (retryable) {
+          setLoadError('训练请求尚未确认，正在使用同一请求重新连接。')
+          timer = setTimeout(() => { void send() }, 3000)
+          return
+        }
+        setLoadError(workbenchRequestMessage(error)); setSubmitting(false)
+        setPendingTraining(undefined); window.localStorage.removeItem(operationKey)
+      }
+    }
+    void send()
+    return () => { cancelled = true; if (timer) clearTimeout(timer) }
+  }, [operationKey, pendingTraining?.key, pendingTraining?.runId])
 
   const startTraining = async () => {
     if (submitting || trainingActive) return
     if (!selectedDatasetIds.length || !dataset) { message.warning('先选择实验数据表。'); return }
     if (!selectedRows.length) { message.warning('请至少勾选一条实验记录。'); return }
     if (!yColumn || !xColumns.length) { message.warning('请分别选择要预测的 Y 和作为输入的 X 列。'); return }
+    if (allXConstant) { message.warning('所选 X 在完整记录中都没有变化，请选择有不同取值的输入列。'); return }
     if (completeRows < 6) { message.warning(`当前组合只有 ${completeRows} 条完整记录，至少需要 6 条。`); return }
-    setSubmitting(true)
     setLoadError('')
+    // Navigation performed while configuring X/Y should not suppress the post-submit
+    // transition. Only navigation after this submission starts should take priority.
+    userNavigated.current = false
     try {
       const key = globalThis.crypto?.randomUUID?.() ?? `modeling-${Date.now()}-${Math.random().toString(16).slice(2)}`
-      const accepted = await modelingWorkbenchApi.train({
+      const request = {
         datasetIds: selectedDatasetIds,
         selectedRowIdsByDataset: selectedIdsByDataset,
         xColumns,
         yColumn,
-      }, key)
-      setRunId(accepted.runId)
-      setRun(undefined)
-      setActiveStep(current => current === 1 ? 2 : current)
+      }
+      const pending = { key, request }
+      window.localStorage.setItem(operationKey, JSON.stringify(pending))
+      setPendingTraining(pending); setSubmitting(true)
     } catch (error) {
-      setLoadError(workbenchRequestMessage(error))
-    } finally { setSubmitting(false) }
+      setLoadError(error instanceof DOMException && error.name === 'QuotaExceededError'
+        ? '训练请求未提交：浏览器无法保存恢复信息，请清理本地空间后重试。'
+        : workbenchRequestMessage(error))
+    }
   }
 
   const clearRun = () => {
     setRunId(undefined)
     setRun(undefined)
+    setFrozenDataset(undefined)
     setActiveStep(0)
     setXColumns([])
     setYColumn('')
     setLoadError('')
+    setPendingTraining(undefined); window.localStorage.removeItem(operationKey)
     window.localStorage.removeItem(draftKey)
   }
 
@@ -319,7 +372,7 @@ export function ModelingWorkbenchPage({ canManageCatalog = false, canRegister = 
     <nav className="modeling-workbench-steps" aria-label="建模步骤">
       {stepTitles.map((title, index) => {
         const available = index === 0 || (index === 1 && Boolean(dataset)) || (index === 2 && Boolean(runId))
-        return <button key={title} type="button" aria-current={activeStep === index ? 'step' : undefined} className={activeStep === index ? 'active' : ''} disabled={!available} onClick={() => setActiveStep(index)}>
+        return <button key={title} type="button" aria-current={activeStep === index ? 'step' : undefined} className={activeStep === index ? 'active' : ''} disabled={!available} onClick={() => navigateToStep(index)}>
           <span className="workbench-step-number">{index < activeStep ? <CheckCircleFilled /> : index + 1}</span>
           <span>{title}</span>
         </button>
@@ -359,7 +412,7 @@ export function ModelingWorkbenchPage({ canManageCatalog = false, canRegister = 
             </>}
         </Card>
       </div>
-      <footer className="workbench-step-footer"><Text type="secondary">{trainingActive ? '训练中，可查看原表；完成后可更换数据。' : selectedRows.length < 6 ? `至少勾选 6 条记录后继续；可合并多张表（还差 ${6 - selectedRows.length} 条）。` : '只有勾选且 X/Y 都有值的记录会用于训练。'}</Text><Button type="primary" disabled={!dataset || !dataset.columns.length || selectedRows.length < 6 || loadingDataset} onClick={() => setActiveStep(1)}>下一步：选择 X / Y <ArrowRightOutlined /></Button></footer>
+      <footer className="workbench-step-footer"><Text type="secondary">{trainingActive ? '训练中，可查看原表；完成后可更换数据。' : selectedRows.length < 6 ? `至少勾选 6 条记录后继续；可合并多张表（还差 ${6 - selectedRows.length} 条）。` : '只有勾选且 X/Y 都有值的记录会用于训练。'}</Text><Button type="primary" disabled={!dataset || !dataset.columns.length || selectedRows.length < 6 || loadingDataset} onClick={() => navigateToStep(1)}>下一步：选择 X / Y <ArrowRightOutlined /></Button></footer>
     </section>}
 
     {activeStep === 1 && <section className="modeling-workbench-panel">
@@ -367,36 +420,15 @@ export function ModelingWorkbenchPage({ canManageCatalog = false, canRegister = 
         <div><Title level={3}>选择输入 X 和预测结果 Y</Title><Paragraph>同一列不能同时作为 X 和 Y。</Paragraph></div>
         <Space wrap>{dataset && <Tag color="blue">{dataset.name} · 已选 {selectedRows.length}/{dataset.rows.length} 条</Tag>}<TestMetricCatalogManager canManage={canManageCatalog} /></Space>
       </div>
-      {!dataset ? <Empty description="实验数据没有加载，请返回重新选择。"><Button onClick={() => setActiveStep(0)}>返回选择数据</Button></Empty> : <>
-        <div className="workbench-xy-layout">
-          <Card className="workbench-select-card" title={<span>选择 X <Text type="secondary">· 作为预测输入，可多选</Text></span>}>
-            {selectedDatasetView?.columns.length ? <Checkbox.Group className="workbench-column-choice-list" value={xColumns} onChange={values => setXColumns(values.map(String).filter(code => code !== yColumn))} options={selectedDatasetView.columns.filter(column => column.code !== yColumn).map(column => {
-              const levels = uniqueCount(selectedDatasetView, column.code)
-              const disabled = column.filledCount < 6 || levels < 2
-              return { value: column.code, disabled, label: <span className="workbench-column-option"><strong>{column.name}</strong><small>{column.kind === 'NUMERIC' ? '数值' : '分类'}{column.unit ? ` · ${column.unit}` : ''} · {column.filledCount}/{selectedRows.length} 条有值 · {levels} 种取值{disabled ? (column.filledCount < 6 ? ' · 完整记录不足' : ' · 取值未变化') : ''}</small></span> }
-            })} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有可选的 X 列" />}
-            {xColumns.length > 0 && <div className="workbench-selection-summary"><Text strong>已选 {xColumns.length} 列</Text><Space wrap>{xColumns.map(code => <Tag key={code} closable onClose={() => setXColumns(current => current.filter(item => item !== code))}>{selectedDatasetView?.columns.find(column => column.code === code)?.name ?? code}</Tag>)}</Space></div>}
-          </Card>
-          <Card className="workbench-select-card workbench-y-card" title={<span>选择 Y <Text type="secondary">· 每次训练预测一个结果</Text></span>}>
-            {(selectedDatasetView?.columns.length ?? 0) > 0 ? <Radio.Group className="workbench-column-choice-list" value={yColumn || undefined} onChange={event => { const value = String(event.target.value); setYColumn(value); setXColumns(current => current.filter(code => code !== value)) }}>
-              {(selectedDatasetView?.columns ?? []).map(column => {
-                const reason = yUnavailableReason(selectedDatasetView, column)
-                const levels = uniqueCount(selectedDatasetView, column.code)
-                return <Radio key={column.code} value={column.code} disabled={Boolean(reason)}>
-                  <span className="workbench-column-option"><strong>{column.name}</strong><small>{column.kind === 'NUMERIC' ? '数值' : '分类'}{column.unit ? ` · ${column.unit}` : ''} · {column.filledCount}/{selectedRows.length} 条有值 · {levels} 种结果{reason ? ` · ${reason}` : ''}</small></span>
-                </Radio>
-              })}
-            </Radio.Group> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有可选的 Y 列" />}
-            {yColumn && <div className="workbench-selection-summary workbench-y-detail"><Text strong>当前预测结果：{selectedY?.name}</Text><Text type="secondary">{selectedY?.kind === 'NUMERIC' ? `数值预测${selectedY.unit ? ` · 单位 ${selectedY.unit}` : ''}` : '类别预测'} · {selectedY?.filledCount ?? 0}/{selectedRows.length} 条有值 · {uniqueCount(selectedDatasetView, yColumn)} 种结果</Text><Paragraph>{selectedY?.kind === 'NUMERIC' ? '训练结果会显示 MAE、RMSE 和 R²。误差单位与这列相同。' : '训练结果会显示准确率、宏平均 F1 和概率损失；每种结果至少需要 2 条记录。'}</Paragraph>
-            </div>}
-            {!usableY.length && <Alert type="warning" showIcon message="没有可用于 Y 的列" description="Y 至少需要 6 条有效记录并且结果有变化；分类 Y 的每种结果至少需要 2 条。可补充实验记录后再试。" />}
-          </Card>
-        </div>
+      {!dataset ? <Empty description="实验数据没有加载，请返回重新选择。"><Button onClick={() => navigateToStep(0)}>返回选择数据</Button></Empty> : <>
+        {selectedDatasetView && <XYColumnPicker dataset={selectedDatasetView} mode="modeling" xColumns={xColumns} yColumn={yColumn} onXChange={setXColumns} onYChange={value => { setYColumn(value); setXColumns(current => current.filter(code => code !== value)) }} disabled={Boolean(pendingTraining)} />}
+        <SelectedDataIssues dataset={selectedDatasetView} xColumns={xColumns} yColumn={yColumn} />
         <div className="workbench-readiness-row">
-          <div><Text strong>可用于训练</Text><Text className={completeRows >= 6 ? 'workbench-ready-count' : 'workbench-warning-count'}>{completeRows} 条完整记录</Text><Text type="secondary">至少需要 6 条；每个 X 至少有 2 种取值。</Text></div>
+          <div><Text strong>可用于训练</Text><Text className={completeRows >= 6 ? 'workbench-ready-count' : 'workbench-warning-count'}>{completeRows} 条完整记录</Text><Text type="secondary">至少需要 6 条完整记录，且至少一列 X 有不同取值。</Text></div>
           <div><Text strong>训练方式</Text><Text>系统自动比较多种预测方法</Text><Text type="secondary">训练结果会用交叉验证指标进行对比。</Text></div>
         </div>
-        <footer className="workbench-step-footer"><Button icon={<ArrowLeftOutlined />} onClick={() => setActiveStep(0)}>返回原表</Button><Button type="primary" icon={<ExperimentOutlined />} loading={submitting} disabled={!canTrain || trainingActive || !yColumn || !xColumns.length || completeRows < 6} onClick={() => void startTraining()}>{!canTrain ? '没有训练权限' : trainingActive ? '训练中' : '开始训练'}</Button></footer>
+        <WorkbenchDataChecks checks={dataChecks} />
+        <footer className="workbench-step-footer"><Button icon={<ArrowLeftOutlined />} onClick={() => navigateToStep(0)}>返回原表</Button><Button type="primary" icon={<ExperimentOutlined />} loading={submitting} disabled={!canTrain || trainingActive || !yColumn || !xColumns.length || completeRows < 6 || allXConstant} onClick={() => void startTraining()}>{!canTrain ? '没有训练权限' : trainingActive ? '训练中' : '开始训练'}</Button></footer>
       </>}
     </section>}
 
@@ -426,19 +458,7 @@ export function ModelingWorkbenchPage({ canManageCatalog = false, canRegister = 
             <div><span>预测结果 Y</span><strong>{run.yColumn.name}{run.yColumn.unit ? ` · ${run.yColumn.unit}` : ''}</strong></div>
           </div>
           <Card className="workbench-metric-card" title="交叉验证表现" extra={<Text type="secondary">用未参与每轮训练的数据检查预测效果</Text>}>
-            <div className="workbench-metrics">
-              {primaryMetricKeys.map(key => typeof currentMetrics[key] === 'number' && <div key={key}>
-                <Text type="secondary">{metricLabels[key]}</Text><strong>{formatMetric(key, currentMetrics[key])}{(key === 'mae' || key === 'rmse') && run.yColumn.unit ? <small> {run.yColumn.unit}</small> : null}</strong><Text type="secondary">{metricHints[key]}</Text>
-              </div>)}
-            </div>
-            {comparisonRows.length > 1 && <div className="workbench-comparison">
-              <Text strong>预测方法对比</Text>
-              <Table size="small" rowKey={row => String(row.algorithm)} pagination={false} dataSource={comparisonRows}
-                columns={[
-                  { title: '预测方法', dataIndex: 'algorithm', render: value => algorithmLabels[String(value)] ?? String(value) },
-                  ...primaryMetricKeys.filter(key => comparisonRows.some(row => typeof row[key] === 'number')).map(key => ({ title: metricLabels[key], dataIndex: key, render: (value: unknown) => formatMetric(key, value) })),
-                ]} />
-            </div>}
+            <TrainingEvaluation metrics={currentMetrics} numeric={run.yColumn.kind === 'NUMERIC'} unit={run.yColumn.unit} />
           </Card>
           {registrationError && <Alert type="error" showIcon message={registrationError} />}
           <footer className="workbench-step-footer"><Button onClick={() => setActiveStep(1)}>返回调整 X/Y</Button><Space>

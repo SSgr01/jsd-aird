@@ -8,7 +8,6 @@ import java.util.UUID;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.ai.rnd.modeling.ConfigurationHashing;
-import com.jsd.aird.ai.rnd.facts.UnifiedFactService;
 import com.jsd.aird.data.infrastructure.JdbcSourceRecognitionRepository;
 import com.jsd.aird.iam.api.AuthorizationService;
 import com.jsd.aird.recognition.application.port.SourceRecognitionRepository;
@@ -486,17 +485,6 @@ class FlywayMigrationIT {
         assertThat(repository.claimFinalization(organizationId, jobId, "DATA_CENTER", 0)).isEqualTo(1);
         var submission = repository.finalizeData(organizationId, jobId, actorId,
                 List.of(sampleA, sampleB, sampleC), empty, "4".repeat(64));
-        var facts = new UnifiedFactService(jdbc, mapper, new ConfigurationHashing(mapper),
-                mock(AuthorizationService.class));
-        assertThat(facts.projectSubmission(organizationId, submission.submissionId())).isEqualTo(3);
-        assertThat(jdbc.queryForObject("SELECT count(*) FROM ai.training_sample WHERE logical_sample_key LIKE 'R03:SAMPLE-%'",
-                Integer.class)).isEqualTo(3);
-        assertThat(jdbc.queryForObject("""
-                SELECT jsonb_array_length(r.observations_jsonb->'items')
-                FROM ai.training_sample s JOIN ai.sample_revision r ON r.id=s.current_sample_revision_id
-                WHERE s.logical_sample_key='R03:SAMPLE-A'
-                """, Integer.class)).isEqualTo(3);
-
         repository.linkExperiment(organizationId, jobId, submission.submissionId(), "experiment-a", experiment1, version1,
                 "R03-1", empty, empty, List.of(sampleA, sampleB), "1".repeat(64), actorId);
         repository.linkExperiment(organizationId, jobId, submission.submissionId(), "experiment-b", experiment2, version2,

@@ -16,6 +16,7 @@ export interface ReferenceMaterialQuery {
 export const REFERENCE_SOURCE_OPTIONS = [
   { value: 'KNOWLEDGE', label: '研发知识库' },
   { value: 'DATA_CENTER', label: '数据中心' },
+  { value: 'SPECTRUM', label: 'AI图谱中心' },
 ];
 
 export const REFERENCE_STATUS_OPTIONS = [

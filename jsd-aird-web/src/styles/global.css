@@ -2069,6 +2069,8 @@ a:active,
 }
 
 .version-history-item {
+  width: 100%;
+  box-sizing: border-box;
   display: grid;
   grid-template-columns: 64px minmax(0, 1fr);
   gap: 16px;
@@ -7037,8 +7039,9 @@ a:active,
 }
 .upload-workspace-record-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 4px 8px;
   margin-top: 10px;
   padding-top: 9px;
   border-top: 1px solid var(--app-border);
@@ -8140,3 +8143,6 @@ a:active,
     flex: 0 0 auto;
   }
 }
+
+.data-workspace-view-tabs { height: 50px; padding: 0 24px; background: var(--workspace-panel, #fff); }
+.data-workspace-view-tabs .ant-tabs-tab { padding: 13px 3px; font-size: 14px; }

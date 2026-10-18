@@ -2,6 +2,7 @@ import { App } from 'antd'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { HttpError } from '@/services/http/errors'
 import { HistoricalOptimizationWorkbench } from './HistoricalOptimizationWorkbench'
 
 const api = vi.hoisted(() => ({
@@ -29,14 +30,19 @@ const compositionDataset = {
   id: 'formula-template-version',
   name: '树脂配方历史数据',
   columns: [
-    { code: 'formula:additive', name: '助剂比例', kind: 'NUMERIC', unit: '%', filledCount: 8 },
-    { code: 'formula:resin_a', name: '树脂 A 比例', kind: 'NUMERIC', unit: '%', filledCount: 8 },
-    { code: 'formula:resin_b', name: '树脂 B 比例', kind: 'NUMERIC', unit: '%', filledCount: 8 },
+    { code: 'formula:00000000-0000-0000-0000-000000000001', name: '助剂比例', kind: 'NUMERIC', unit: '%', compositionBasis: 'MASS_PERCENT', filledCount: 8, semanticType: 'MATERIAL_RATIO', materialId: '00000000-0000-0000-0000-000000000001', mappingStatus: 'MAPPED' },
+    { code: 'formula:00000000-0000-0000-0000-000000000002', name: '树脂 A 比例', kind: 'NUMERIC', unit: '%', compositionBasis: 'MASS_PERCENT', filledCount: 8, semanticType: 'MATERIAL_RATIO', materialId: '00000000-0000-0000-0000-000000000002', mappingStatus: 'MAPPED' },
+    { code: 'formula:00000000-0000-0000-0000-000000000003', name: '树脂 B 比例', kind: 'NUMERIC', unit: '%', compositionBasis: 'MASS_PERCENT', filledCount: 8, semanticType: 'MATERIAL_RATIO', materialId: '00000000-0000-0000-0000-000000000003', mappingStatus: 'MAPPED' },
     { code: 'result:wear', name: '耐磨次数', kind: 'NUMERIC', unit: '次', filledCount: 8 },
   ],
   rows: Array.from({ length: 8 }, (_, index) => ({
     id: `formula-experiment-${index}`, versionId: `formula-version-${index}`, label: `配方实验 ${index + 1}`, title: `配方实验 ${index + 1}`,
-    values: { 'formula:additive': 52 + index * 0.2, 'formula:resin_a': 3 + index * 0.1, 'formula:resin_b': 45 - index * 0.3, 'result:wear': 850 + index * 15 },
+    values: {
+      'formula:00000000-0000-0000-0000-000000000001': 52 + index * 0.2,
+      'formula:00000000-0000-0000-0000-000000000002': 3 + index * 0.1,
+      'formula:00000000-0000-0000-0000-000000000003': 45 - index * 0.3,
+      'result:wear': 850 + index * 15,
+    },
   })),
 }
 
@@ -56,7 +62,7 @@ const completedRun = {
     results: { targets: [{ targetId: 'result:gloss', targetName: '60°光泽', status: 'SUCCEEDED', result: { resultType: 'CONTINUOUS', value: 49.1, lower: 45.2, upper: 53, unit: 'GU' } }] },
     quality: {}, applicability: {}, ruleCheck: {}, score: 0, targetTotal: 0, baselineDistance: 0, changes: {}, strategyEvidence: {}, risks: [],
   }],
-  frozenBaseline: {}, frozenRequest: { mode: 'HISTORICAL_GP_BO', datasetId: dataset.id, datasetName: dataset.name,
+  frozenBaseline: {}, frozenRequest: { datasetSnapshot: dataset, mode: 'HISTORICAL_GP_BO', datasetId: dataset.id, datasetName: dataset.name,
     target: 'result:gloss', targetName: '60°光泽', direction: 'MAXIMIZE', candidateCount: 1,
     features: [{ code: 'input:temperature', kind: 'NUMERIC', minimum: 20, maximum: 34 }, { code: 'input:time', kind: 'NUMERIC', minimum: 5, maximum: 12 }],
     rows: dataset.rows.map(row => ({ ...row.values })), columns: dataset.columns },
@@ -76,7 +82,7 @@ describe('HistoricalOptimizationWorkbench', () => {
       { id: dataset.id, name: dataset.name, rowCount: dataset.rowCount, updatedAt: '' },
       { id: 'sparse-template', name: '稀疏配方记录', rowCount: 1, updatedAt: '' },
     ] })
-    api.historyDataset.mockImplementation(async (id: string) => id === sparseDataset.id ? sparseDataset : dataset)
+    api.historyDataset.mockImplementation((id: string) => id === sparseDataset.id ? sparseDataset : dataset)
     api.submit.mockResolvedValue({ runId: completedRun.id, executionStatus: 'QUEUED', pollAfterMs: 1000 })
     api.run.mockResolvedValue(completedRun)
     api.observations.mockResolvedValue({ observations: [] })
@@ -91,8 +97,7 @@ describe('HistoricalOptimizationWorkbench', () => {
 
     fireEvent.click(screen.getByRole('checkbox', { name: /烘烤温度/ }))
     fireEvent.click(screen.getByRole('checkbox', { name: /烘烤时间/ }))
-    fireEvent.mouseDown(screen.getByRole('combobox'))
-    fireEvent.click(await screen.findByText(/60°光泽（GU）/))
+    fireEvent.click(screen.getByRole('radio', { name: /60°光泽/ }))
     const setRangeButton = screen.getAllByRole('button', { name: /设置范围/ }).find(element => element.tagName === 'BUTTON')
     expect(setRangeButton).toBeDefined()
     fireEvent.click(setRangeButton!)
@@ -107,7 +112,8 @@ describe('HistoricalOptimizationWorkbench', () => {
     })
     expect(await screen.findByText('下一轮实验建议')).toBeInTheDocument()
     expect(screen.getByText('49.1')).toBeInTheDocument()
-    expect(screen.getByText('29.123')).toBeInTheDocument()
+    expect(screen.getByText('29.123456')).toBeInTheDocument()
+    expect(screen.getByText('8.54321')).toBeInTheDocument()
     expect(screen.queryByText('49.1 GU')).not.toBeInTheDocument()
   })
 
@@ -131,23 +137,19 @@ describe('HistoricalOptimizationWorkbench', () => {
       { id: dataset.id, name: dataset.name, rowCount: dataset.rowCount, updatedAt: '' },
       { id: second.id, name: second.name, rowCount: second.rowCount, updatedAt: '' },
     ] })
-    api.historyDataset.mockImplementation(async (id: string) => id === dataset.id ? dataset : second)
+    api.historyDataset.mockImplementation((id: string) => id === dataset.id ? dataset : second)
     render(<App><MemoryRouter><HistoricalOptimizationWorkbench /></MemoryRouter></App>)
     fireEvent.click(await screen.findByText('涂层历史数据'))
     fireEvent.click(await screen.findByText('涂层补充数据'))
     expect(await screen.findByText('已选 2 张')).toBeInTheDocument()
     expect(await screen.findByText('已选 16 条')).toBeInTheDocument()
 
-    const preview = document.querySelectorAll('.history-layout > .ant-col .history-card')[1]
-    const firstRowCheckbox = preview?.querySelector('tbody input[type="checkbox"]')
-    expect(firstRowCheckbox).not.toBeNull()
-    fireEvent.click(firstRowCheckbox!)
-    expect(await screen.findByText('已选 15/16 条记录')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('checkbox', { name: /^选择实验记录 EXP-1$/ }))
+    expect(await screen.findByText('已选 15 条')).toBeInTheDocument()
     fireEvent.click(chooseXYButton())
     fireEvent.click(screen.getByRole('checkbox', { name: /烘烤温度/ }))
     fireEvent.click(screen.getByRole('checkbox', { name: /烘烤时间/ }))
-    fireEvent.mouseDown(screen.getByRole('combobox'))
-    fireEvent.click(await screen.findByText(/60°光泽（GU）/))
+    fireEvent.click(screen.getByRole('radio', { name: /60°光泽/ }))
     fireEvent.click(screen.getAllByRole('button', { name: /设置范围/ }).find(element => element.tagName === 'BUTTON')!)
     fireEvent.click(screen.getByRole('button', { name: '开始优化' }))
 
@@ -170,15 +172,57 @@ describe('HistoricalOptimizationWorkbench', () => {
     fireEvent.click(chooseXYButton())
 
     fireEvent.click(screen.getByRole('checkbox', { name: /助剂比例/ }))
-    fireEvent.mouseDown(screen.getByRole('combobox'))
-    fireEvent.click(await screen.findByText(/耐磨次数（次）/))
-    expect(await screen.findByText('请同时选择所有材料比例列')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('radio', { name: /耐磨次数/ }))
+    expect(await screen.findByText(/配方还缺少材料/)).toBeInTheDocument()
     expect(screen.getAllByRole('button', { name: /设置范围/ }).find(element => element.tagName === 'BUTTON')).toBeDisabled()
 
     fireEvent.click(screen.getByRole('checkbox', { name: /树脂 A 比例/ }))
     fireEvent.click(screen.getByRole('checkbox', { name: /树脂 B 比例/ }))
     await waitFor(() => expect(screen.getAllByRole('button', { name: /设置范围/ }).find(element => element.tagName === 'BUTTON')).toBeEnabled())
     expect(screen.queryByText('请同时选择所有材料比例列')).not.toBeInTheDocument()
+  })
+
+  it('retains fixed zero materials and prevents infeasible recipe bounds before submission', async () => {
+    const stabilizerId = '00000000-0000-0000-0000-000000000004'
+    const source = { ...compositionDataset, columns: [...compositionDataset.columns,
+      { code: `formula:${stabilizerId}`, name: '稳定剂比例', kind: 'NUMERIC', unit: '%', compositionBasis: 'MASS_PERCENT', semanticType: 'MATERIAL_RATIO', mappingStatus: 'MAPPED', materialId: stabilizerId, filledCount: 8 }],
+      rows: compositionDataset.rows.map(row => ({ ...row, values: { ...row.values, [`formula:${stabilizerId}`]: 0 } })) }
+    api.historyDataset.mockResolvedValue(source)
+    api.historyDatasets.mockResolvedValue({ items: [{ id: source.id, name: source.name, rowCount: 8, updatedAt: '' }] })
+    render(<App><MemoryRouter><HistoricalOptimizationWorkbench /></MemoryRouter></App>)
+    fireEvent.click(await screen.findByText(source.name))
+    await waitFor(() => expect(chooseXYButton()).toBeEnabled())
+    fireEvent.click(chooseXYButton())
+    fireEvent.click(screen.getByRole('checkbox', { name: /助剂比例/ }))
+    expect(screen.getByRole('checkbox', { name: /稳定剂比例/ })).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: /稳定剂比例/ })).toBeDisabled()
+    expect(screen.getByText('固定 0% · 已纳入配方')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('checkbox', { name: /树脂 A 比例/ }))
+    fireEvent.click(screen.getByRole('checkbox', { name: /树脂 B 比例/ }))
+    fireEvent.click(screen.getByRole('radio', { name: /耐磨次数/ }))
+    fireEvent.click(screen.getAllByRole('button', { name: /设置范围/ }).find(element => element.tagName === 'BUTTON')!)
+    fireEvent.change(screen.getByRole('spinbutton', { name: '助剂比例最小值' }), { target: { value: '90' } })
+    fireEvent.change(screen.getByRole('spinbutton', { name: '助剂比例最大值' }), { target: { value: '95' } })
+    expect(screen.getByText(/当前材料比例范围无法合计为 100%/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '开始优化' })).toBeDisabled()
+    expect(api.submit).not.toHaveBeenCalled()
+  })
+
+  it('keeps mass parts visible but blocks material optimization until the mass percentage basis is confirmed', async () => {
+    const source = { ...compositionDataset, columns: compositionDataset.columns.map(column => column.materialId
+      ? { ...column, unit: '份', compositionBasis: 'UNSPECIFIED' } : column) }
+    api.historyDataset.mockResolvedValue(source)
+    api.historyDatasets.mockResolvedValue({ items: [{ id: source.id, name: source.name, rowCount: 8, updatedAt: '' }] })
+    render(<App><MemoryRouter><HistoricalOptimizationWorkbench /></MemoryRouter></App>)
+    fireEvent.click(await screen.findByText(source.name))
+    await waitFor(() => expect(chooseXYButton()).toBeEnabled())
+    fireEvent.click(chooseXYButton())
+    for (const material of ['助剂比例', '树脂 A 比例', '树脂 B 比例']) fireEvent.click(screen.getByRole('checkbox', { name: new RegExp(material) }))
+    fireEvent.click(screen.getByRole('radio', { name: /耐磨次数/ }))
+    fireEvent.click(screen.getAllByRole('button', { name: /设置范围/ }).find(element => element.tagName === 'BUTTON')!)
+    expect(screen.getByText(/计量基准不是质量百分比/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '开始优化' })).toBeDisabled()
+    expect(api.submit).not.toHaveBeenCalled()
   })
 
   it('saves measured results, starts the next round, and restores it after a refresh', async () => {
@@ -193,7 +237,7 @@ describe('HistoricalOptimizationWorkbench', () => {
       },
       searchEvidence: { trainingRowCount: 9 },
     }
-    api.run.mockImplementation(async (id: string) => id === 'run-2' ? secondRun : completedRun)
+    api.run.mockImplementation((id: string) => id === 'run-2' ? secondRun : completedRun)
     api.saveObservations.mockResolvedValue({ observations: [
       { candidateId: 'candidate-1', fieldCode: 'result:gloss', value: 51.2, updatedAt: new Date().toISOString() },
     ], savedCount: 1 })
@@ -206,8 +250,7 @@ describe('HistoricalOptimizationWorkbench', () => {
     fireEvent.click(chooseXYButton())
     fireEvent.click(screen.getByRole('checkbox', { name: /烘烤温度/ }))
     fireEvent.click(screen.getByRole('checkbox', { name: /烘烤时间/ }))
-    fireEvent.mouseDown(screen.getByRole('combobox'))
-    fireEvent.click(await screen.findByText(/60°光泽（GU）/))
+    fireEvent.click(screen.getByRole('radio', { name: /60°光泽/ }))
     fireEvent.click(screen.getAllByRole('button', { name: /设置范围/ }).find(element => element.tagName === 'BUTTON')!)
     fireEvent.click(screen.getByRole('button', { name: '开始优化' }))
 
@@ -240,8 +283,8 @@ describe('HistoricalOptimizationWorkbench', () => {
     expect(screen.getByRole('spinbutton', { name: /候选方案 1实测60°光泽/ })).toBeInTheDocument()
   })
 
-  it('keeps the setup editable and shows the server reason when optimization is rejected', async () => {
-    api.submit.mockRejectedValueOnce(new Error('所选 X/Y 组合只有 2 条完整记录，至少需要 4 条'))
+  it('keeps the setup editable and explains structured data shortage when optimization is rejected', async () => {
+    api.submit.mockRejectedValueOnce(new HttpError('internal details', 'INSUFFICIENT_DATA', 400))
     render(<App><MemoryRouter><HistoricalOptimizationWorkbench /></MemoryRouter></App>)
     await screen.findByText('涂层历史数据')
     fireEvent.click(screen.getByText('涂层历史数据'))
@@ -249,12 +292,11 @@ describe('HistoricalOptimizationWorkbench', () => {
     fireEvent.click(chooseXYButton())
     fireEvent.click(screen.getByRole('checkbox', { name: /烘烤温度/ }))
     fireEvent.click(screen.getByRole('checkbox', { name: /烘烤时间/ }))
-    fireEvent.mouseDown(screen.getByRole('combobox'))
-    fireEvent.click(await screen.findByText(/60°光泽（GU）/))
+    fireEvent.click(screen.getByRole('radio', { name: /60°光泽/ }))
     fireEvent.click(screen.getAllByRole('button', { name: /设置范围/ }).find(element => element.tagName === 'BUTTON')!)
     fireEvent.click(screen.getByRole('button', { name: '开始优化' }))
 
-    expect(await screen.findByText('所选 X/Y 组合只有 2 条完整记录，至少需要 4 条')).toBeInTheDocument()
+    expect(await screen.findByText('符合条件的完整实验记录不足，请补齐记录或调整 X/Y。')).toBeInTheDocument()
     expect(api.submit).toHaveBeenCalledOnce()
     expect(screen.getByRole('button', { name: '开始优化' })).toBeEnabled()
   })

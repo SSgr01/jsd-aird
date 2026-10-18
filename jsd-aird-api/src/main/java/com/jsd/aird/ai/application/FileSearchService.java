@@ -61,23 +61,36 @@ public class FileSearchService {
                 : dataAuthorization == null
                 ? DataSourceFileSearchFacade.RetrievalAccessScope.all()
                 : dataAuthorization.requireRetrievalScopes(actor);
+        var analyzedCoreTerms = knowledge.discriminativeTerms(actor.organizationId(), query,
+                safe(command.knowledgeCategoryIds()), allowedKnowledge);
+        var explicitCoreTerms = identifierQuery ? List.<String>of() : explicitQueryTerms(query);
+        var coreTerms = explicitCoreTerms.size() > 1 && explicitCoreTerms.size() <= 3
+                ? explicitCoreTerms.stream().limit(3).toList()
+                : analyzedCoreTerms;
         knowledge.searchFiles(actor.organizationId(), query, safe(command.knowledgeCategoryIds()), allowedKnowledge, limit)
-                .stream().map(file -> knowledgeFile(file, query)).filter(Objects::nonNull).forEach(candidates::add);
+                .stream().map(file -> knowledgeFile(file, query, coreTerms)).filter(Objects::nonNull).forEach(candidates::add);
         var dataFilesById = new LinkedHashMap<UUID, DataSourceFileSearchFacade.SourceFileMatch>();
-        for (var term : dataEnabled ? searchTerms(query, identifierQuery) : List.<String>of()) {
+        var dataTerms = new LinkedHashSet<String>();
+        dataTerms.add(query);
+        if (!identifierQuery && coreTerms != null) dataTerms.addAll(coreTerms);
+        dataTerms.addAll(searchTerms(query, identifierQuery));
+        for (var term : dataEnabled ? dataTerms.stream().limit(12).toList() : List.<String>of()) {
             dataSources.searchSourceFiles(actor.organizationId(), term, safe(command.dataCategoryIds()),
                             retrievalAccessScope, limit).stream()
                     .filter(file -> allowedData == null || allowedData.contains(file.importJobId()))
                     .forEach(file -> dataFilesById.merge(file.fileObjectId(), file, this::mergeDataFile));
         }
-        dataFilesById.values().stream().map(file -> dataFile(file, query)).filter(Objects::nonNull).forEach(candidates::add);
-        var knowledgeIds = candidates.stream().filter(file -> ResourceType.KNOWLEDGE_DOCUMENT.name().equals(file.resourceType()))
+        dataFilesById.values().stream().map(file -> dataFile(file, query, coreTerms)).filter(Objects::nonNull).forEach(candidates::add);
+        var hasExactFilename = candidates.stream().anyMatch(file -> "EXACT_FILENAME".equals(file.matchType()));
+        var selectedCandidates = candidates.stream()
+                .filter(file -> !hasExactFilename || "EXACT_FILENAME".equals(file.matchType())).toList();
+        var knowledgeIds = selectedCandidates.stream().filter(file -> ResourceType.KNOWLEDGE_DOCUMENT.name().equals(file.resourceType()))
                 .map(FileResult::resourceId).toList();
-        var dataIds = candidates.stream().filter(file -> ResourceType.DATA_IMPORT_JOB.name().equals(file.resourceType()))
+        var dataIds = selectedCandidates.stream().filter(file -> ResourceType.DATA_IMPORT_JOB.name().equals(file.resourceType()))
                 .map(FileResult::resourceId).toList();
         var knowledgeProjects = projectResources.links(actor, ResourceType.KNOWLEDGE_DOCUMENT, knowledgeIds);
         var dataProjects = projectResources.links(actor, ResourceType.DATA_IMPORT_JOB, dataIds);
-        var files = candidates.stream()
+        var files = selectedCandidates.stream()
                 .filter(file -> !identifierQuery || Set.of("EXACT_FILENAME", "EXACT_IDENTIFIER").contains(file.matchType()))
                 .map(file -> withProjects(file, ResourceType.KNOWLEDGE_DOCUMENT.name().equals(file.resourceType())
                         ? knowledgeProjects.getOrDefault(file.resourceId(), List.of())
@@ -88,12 +101,12 @@ public class FileSearchService {
         return new FileSearchResponse(files);
     }
 
-    private FileResult knowledgeFile(KnowledgeFileSearchFacade.FileMatch file, String query) {
+    private FileResult knowledgeFile(KnowledgeFileSearchFacade.FileMatch file, String query, List<String> coreTerms) {
         var hits = file.hits().stream().map(item -> new Hit(item.hitId(), item.snippet(), item.score(),
                 new SourceAnchor(item.pageNo(), item.sheetName(), item.cellRange(), item.paragraphId(),
                         item.bbox(), item.startTimeMs(), item.endTimeMs(), item.section(), null, null))).toList();
         var classification = classify(query, file.originalName(), file.title(), hits.stream().map(Hit::snippet).toList(),
-                file.matchedTerms());
+                file.matchedTerms(), coreTerms);
         if (classification == null) return null;
         return new FileResult(file.fileObjectId(), file.logicalDocumentId(), file.fileVersionId(),
                 ResourceType.KNOWLEDGE_DOCUMENT.name(), file.logicalDocumentId(), "KNOWLEDGE",
@@ -102,12 +115,12 @@ public class FileSearchService {
                 null, null, null, null);
     }
 
-    private FileResult dataFile(DataSourceFileSearchFacade.SourceFileMatch file, String query) {
+    private FileResult dataFile(DataSourceFileSearchFacade.SourceFileMatch file, String query, List<String> coreTerms) {
         var hits = file.hits().stream().map(item -> new Hit(item.hitId(), item.snippet(), item.score(),
                 new SourceAnchor(null, item.sheetName(), item.cellAddress(), null, List.of(), null, null,
                         "SOURCE_CELL", item.rowNumber(), item.columnName()))).toList();
         var classification = classify(query, file.originalName(), file.originalName(), hits.stream().map(Hit::snippet).toList(),
-                file.matchedTerms());
+                file.matchedTerms(), coreTerms);
         if (classification == null) return null;
         return new FileResult(file.fileObjectId(), null, file.importJobId(), ResourceType.DATA_IMPORT_JOB.name(),
                 file.importJobId(), "DATA_CENTER", file.originalName(),
@@ -150,16 +163,26 @@ public class FileSearchService {
         return terms.stream().limit(12).toList();
     }
 
+    private List<String> explicitQueryTerms(String query) {
+        var terms = new LinkedHashSet<String>();
+        for (var term : query.split("[\\s,，、；;：:()（）]+")) {
+            if (normalize(term).length() >= 2) terms.add(term.trim());
+        }
+        return List.copyOf(terms);
+    }
+
     private boolean isIdentifier(String value) {
         return value.matches("(?i)[A-Z]{2,}[-_][A-Z0-9]+") || value.matches("(?i)[A-Z]{2,}\\d{3,}");
     }
 
     private MatchClassification classify(String query, String originalName, String title, List<String> snippets,
-                                          List<String> evidenceTerms) {
+                                          List<String> evidenceTerms, List<String> coreTerms) {
         var normalizedQuery = normalize(query);
-        var normalizedName = normalize(removeExtension(originalName));
+        var normalizedName = normalize(originalName);
+        var normalizedNameWithoutExtension = normalize(removeExtension(originalName));
         var normalizedTitle = normalize(title);
-        if (normalizedName.equals(normalizedQuery) || normalizedTitle.equals(normalizedQuery)) {
+        if (normalizedName.equals(normalizedQuery) || normalizedNameWithoutExtension.equals(normalizedQuery)
+                || normalizedTitle.equals(normalizedQuery)) {
             return new MatchClassification("EXACT_FILENAME", List.of("文件名"), List.of(query));
         }
         if (isIdentifier(query) && (normalizedName.contains(normalizedQuery) || normalizedTitle.contains(normalizedQuery))) {
@@ -183,6 +206,17 @@ public class FileSearchService {
             if (normalizedTerm.length() >= 2 && haystacks.stream().anyMatch(value -> normalize(value).contains(normalizedTerm))) {
                 evidence.add(term);
             }
+        }
+        if (coreTerms != null && !coreTerms.isEmpty()) {
+            var matchedCoreTerms = coreTerms.stream().filter(StringUtils::hasText).distinct()
+                    .filter(term -> {
+                        var normalizedTerm = normalize(term);
+                        return !normalizedTerm.isEmpty() && (evidence.stream()
+                                .anyMatch(item -> normalize(item).contains(normalizedTerm))
+                                || haystacks.stream().anyMatch(value -> normalize(value).contains(normalizedTerm)));
+                    }).count();
+            var requiredCoreTerms = coreTerms.size() == 1 ? 1 : 2;
+            if (matchedCoreTerms < requiredCoreTerms) return null;
         }
         if (!evidence.isEmpty()) {
             return new MatchClassification("CONTENT", List.of("文件内容"), evidence.stream().limit(20).toList());

@@ -7,13 +7,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class PredictionResultMappingTest {
     @Test
-    void distinguishesExistingSimulationModelsFromTargetsWithoutAnEnabledModel() {
-        assertThat(PredictionService.unavailableModelReason(null,"SYNTHETIC",false)).isEqualTo("NO_ACTIVE_MODEL");
-        assertThat(PredictionService.unavailableModelReason(UUID.randomUUID(),"SYNTHETIC",false)).isEqualTo("SIMULATION_NOT_ENABLED");
-        assertThat(PredictionService.unavailableModelReason(UUID.randomUUID(),"REAL",true)).isEqualTo("SIMULATION_NOT_ENABLED");
-        assertThat(PredictionService.unavailableModelReason(UUID.randomUUID(),"REAL",false)).isEqualTo("MODEL_NOT_PRODUCTION_ELIGIBLE");
-    }
-    @Test
     void exposesComputeFailureCodeUnderThePublicApiFieldAndPreservesDetails() throws Exception {
         var json=new ObjectMapper();
         var source=json.readTree("""

@@ -31,28 +31,42 @@ public class DataCategoryService {
     @Transactional
     public DataCategoryRepository.Category create(String name, String description) {
         var actor = ActorContext.required();
-        return repository.create(actor.organizationId(), actor.userId(), normalizeName(name), normalizeDescription(description));
+        var normalizedName = normalizeName(name);
+        ensureNameAvailable(actor.organizationId(), normalizedName, null);
+        return repository.create(actor.organizationId(), actor.userId(), normalizedName, normalizeDescription(description));
     }
 
     @Transactional
     public DataCategoryRepository.Category rename(UUID id, String name, String description) {
         var actor = ActorContext.required();
         require(actor.organizationId(), id);
-        return repository.rename(actor.organizationId(), id, normalizeName(name), normalizeDescription(description));
+        var normalizedName = normalizeName(name);
+        ensureNameAvailable(actor.organizationId(), normalizedName, id);
+        return repository.rename(actor.organizationId(), id, normalizedName, normalizeDescription(description));
     }
 
     @Transactional
     public void delete(UUID id, UUID replacementId) {
         var actor = ActorContext.required();
-        var category = require(actor.organizationId(), id);
         if (replacementId != null) {
-            var replacement = require(actor.organizationId(), replacementId);
+            if (id.equals(replacementId)) {
+                throw new ApiException(ApiErrorCode.BAD_REQUEST, "替代分类不能是待删除分类本身");
+            }
+            require(actor.organizationId(), replacementId);
         }
+        require(actor.organizationId(), id);
         repository.delete(actor.organizationId(), id, replacementId);
     }
 
     private DataCategoryRepository.Category require(UUID organizationId, UUID id) {
         return repository.find(organizationId, id).orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "数据分类不存在"));
+    }
+
+    private void ensureNameAvailable(UUID organizationId, String name, UUID excludingCategoryId) {
+        repository.lockCategoryName(organizationId, name);
+        if (repository.categoryNameExists(organizationId, name, excludingCategoryId)) {
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "数据分类名称已存在");
+        }
     }
 
     private String normalizeName(String value) {

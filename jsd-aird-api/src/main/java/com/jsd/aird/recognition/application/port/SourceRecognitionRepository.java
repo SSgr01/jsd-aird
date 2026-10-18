@@ -17,7 +17,7 @@ public interface SourceRecognitionRepository {
                     JsonNode boundaries);
     Job updateWorkspace(UUID organizationId, UUID id, String sourceOwner, long expectedRevision,
                         JsonNode workspace, JsonNode boundaries, UUID profileId);
-    int markParsing(UUID organizationId, UUID id, String sourceOwner);
+    int markParsing(UUID organizationId, UUID id, String sourceOwner, UUID actorId);
     int claimFinalization(UUID organizationId, UUID id, String sourceOwner, long expectedRevision);
     int cancel(UUID organizationId, UUID id, String sourceOwner);
     void fail(UUID organizationId, UUID id, String message);

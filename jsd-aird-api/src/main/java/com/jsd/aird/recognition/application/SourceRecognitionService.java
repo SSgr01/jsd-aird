@@ -5,7 +5,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.ai.rnd.modeling.ConfigurationHashing;
-import com.jsd.aird.ai.rnd.facts.UnifiedFactService;
 import com.jsd.aird.iam.api.AuthorizationService;
 import com.jsd.aird.iam.api.PermissionCheck;
 import com.jsd.aird.recognition.application.port.SourceRecognitionRepository;
@@ -48,13 +47,23 @@ public class SourceRecognitionService {
     private final ConfigurationHashing hashing;
     private final AuditLogFacade audit;
     private final ObjectMapper json;
-    private final UnifiedFactService facts;
     private final AuthorizationService authorization;
+    private com.jsd.aird.data.application.DataReviewGuard dataReviewGuard;
+    private com.jsd.aird.data.application.DataPublicationService dataPublication;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setDataPublication(com.jsd.aird.data.application.DataReviewGuard guard,
+            com.jsd.aird.data.application.DataPublicationService publication) {
+        this.dataReviewGuard = guard; this.dataPublication = publication;
+    }
+    private void beforeDataEdit(String owner, UUID id) {
+        if (DATA_CENTER.equals(owner) && dataReviewGuard != null)
+            dataReviewGuard.beforeEdit(ActorContext.required().organizationId(), id);
+    }
 
     public SourceRecognitionService(SourceRecognitionRepository repository, FileObjectRepository files,
                                     ExperimentImportService sourceParser, ExperimentDraftFacade experiments,
                                     ConfigurationHashing hashing, AuditLogFacade audit, ObjectMapper json,
-                                    UnifiedFactService facts, AuthorizationService authorization) {
+                                    AuthorizationService authorization) {
         this.repository = repository;
         this.files = files;
         this.sourceParser = sourceParser;
@@ -62,7 +71,6 @@ public class SourceRecognitionService {
         this.hashing = hashing;
         this.audit = audit;
         this.json = json;
-        this.facts = facts;
         this.authorization = authorization;
     }
 
@@ -130,6 +138,7 @@ public class SourceRecognitionService {
     @Transactional
     public SourceRecognitionRepository.Job updateBoundaries(String owner, UUID id, long expectedRevision,
                                                              JsonNode boundaries) {
+        beforeDataEdit(owner, id);
         var actor = ActorContext.required();
         var current = required(actor.organizationId(), id, checkedOwner(owner));
         validateBoundaries(boundaries);
@@ -145,6 +154,7 @@ public class SourceRecognitionService {
     public SourceRecognitionRepository.Job updateMappings(String owner, UUID id, long expectedRevision,
                                                            JsonNode candidates, JsonNode unrecognized,
                                                            JsonNode issues) {
+        beforeDataEdit(owner, id);
         var actor = ActorContext.required();
         var current = required(actor.organizationId(), id, checkedOwner(owner));
         requireArray(candidates, "字段候选");
@@ -165,6 +175,7 @@ public class SourceRecognitionService {
     @Transactional
     public SourceRecognitionRepository.RecognitionProfile saveProfile(String owner, UUID id,
                                                                        String name, long expectedRevision) {
+        beforeDataEdit(owner, id);
         var actor = ActorContext.required();
         var current = required(actor.organizationId(), id, checkedOwner(owner));
         if (current.recognitionRevision() != expectedRevision)
@@ -181,8 +192,9 @@ public class SourceRecognitionService {
 
     @Transactional
     public SourceRecognitionRepository.Job retry(String owner, UUID id) {
+        beforeDataEdit(owner, id);
         var actor = ActorContext.required();
-        if (repository.markParsing(actor.organizationId(), id, checkedOwner(owner)) != 1)
+        if (repository.markParsing(actor.organizationId(), id, checkedOwner(owner), actor.userId()) != 1)
             throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "当前识别任务不可重试");
         return required(actor.organizationId(), id, owner);
     }
@@ -215,7 +227,6 @@ public class SourceRecognitionService {
                     .put("parserVersion", job.parserVersion());
             data = repository.finalizeData(actor.organizationId(), id, actor.userId(), samples,
                     contract, hashing.hash(json.valueToTree(samples)));
-            facts.projectSubmission(actor.organizationId(), data.submissionId());
         }
         var drafts = new ArrayList<DraftResult>();
         if (EXPERIMENT.equals(owner) || "EXPERIMENT_DRAFT".equals(job.importPurpose())) {
@@ -241,6 +252,8 @@ public class SourceRecognitionService {
             }
         }
         repository.markFinalized(actor.organizationId(), id);
+        if (DATA_CENTER.equals(owner) && dataPublication != null && data != null)
+            dataPublication.confirmRecognition(id, data.submissionId());
         var detail = json.createObjectNode().put("sourceOwner", owner).put("draftCount", drafts.size())
                 .put("sampleCount", samples.size());
         if (data != null) detail.put("confirmedSubmissionId", data.submissionId().toString())
@@ -253,6 +266,7 @@ public class SourceRecognitionService {
 
     @Transactional
     public void cancel(String owner, UUID id) {
+        beforeDataEdit(owner, id);
         var actor = ActorContext.required();
         if (repository.cancel(actor.organizationId(), id, checkedOwner(owner)) != 1)
             throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "已完成任务不能取消");

@@ -13,6 +13,10 @@ public interface DataCategoryRepository {
 
     Optional<Category> find(UUID organizationId, UUID categoryId);
 
+    void lockCategoryName(UUID organizationId, String name);
+
+    boolean categoryNameExists(UUID organizationId, String name, UUID excludingCategoryId);
+
     Category create(UUID organizationId, UUID actorId, String name, String description);
 
     Category rename(UUID organizationId, UUID categoryId, String name, String description);

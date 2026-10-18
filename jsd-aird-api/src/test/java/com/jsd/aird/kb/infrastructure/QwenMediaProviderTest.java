@@ -275,7 +275,7 @@ class QwenMediaProviderTest {
                     "zh", true, true, Duration.ofSeconds(3), Duration.ofMillis(1));
             var parsed = provider.extract(new ByteArrayInputStream(new byte[] {9}), "sample.wav",
                     new MediaExtractionProvider.ExtractionContext(null, "audio/wav", 1,
-                            "http://minio-public/presigned.wav"));
+                            "https://1.1.1.1/presigned.wav"));
 
             assertThat(parsed.providerTaskId()).isEqualTo("task-1");
             assertThat(parsed.blocks()).hasSize(1);
@@ -343,7 +343,8 @@ class QwenMediaProviderTest {
                     "qwen3-asr-flash-filetrans", "/services/audio/asr/transcription", "/tasks",
                     "zh", true, false, Duration.ofSeconds(3), Duration.ofMillis(1));
             var parsed = provider.extract(new ByteArrayInputStream(new byte[] {9, 8, 7}), "中文录音.wav",
-                    new MediaExtractionProvider.ExtractionContext(null, "audio/wav", 1, null));
+                    new MediaExtractionProvider.ExtractionContext(null, "audio/wav", 1,
+                            "http://10.70.70.169:9000/jsd-aird/local-audio.wav"));
 
             assertThat(parsed.providerTaskId()).isEqualTo("task-local-upload");
             assertThat(parsed.blocks()).extracting(block -> block.content()).contains("本地音频临时上传成功");
@@ -386,7 +387,7 @@ class QwenMediaProviderTest {
             var provider = asrProvider(server, Duration.ofSeconds(3));
             var parsed = provider.extract(new ByteArrayInputStream(new byte[] {1}), "retry.wav",
                     new MediaExtractionProvider.ExtractionContext(null, "audio/wav", 1,
-                            "http://minio-public/retry.wav"));
+                            "https://1.1.1.1/retry.wav"));
 
             assertThat(attempts).hasValue(3);
             assertThat(parsed.blocks()).extracting(block -> block.content()).contains("重试成功");
@@ -413,7 +414,7 @@ class QwenMediaProviderTest {
             var provider = asrProvider(server, Duration.ofMillis(40));
             assertThatThrownBy(() -> provider.extract(new ByteArrayInputStream(new byte[] {1}), "timeout.wav",
                     new MediaExtractionProvider.ExtractionContext(null, "audio/wav", 1,
-                            "http://minio-public/timeout.wav")))
+                            "https://1.1.1.1/timeout.wav")))
                     .isInstanceOf(MediaExtractionException.class)
                     .hasMessageContaining("超过轮询超时")
                     .extracting(error -> ((MediaExtractionException) error).providerTaskId())

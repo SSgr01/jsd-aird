@@ -379,6 +379,16 @@ public class AuditLogPresentationService {
         put(map, "DATA_IMPORT_COMMITTED", "数据中心", "导入完成", false);
         put(map, "DATA_RECORDS_COMMITTED", "数据中心", "导入完成", false);
         put(map, "DATA_IMPORT_VALUE_CORRECTED", "数据中心", "修改数据", false);
+        put(map, "DATA_CONFIRMED", "数据中心", "确认数据", false);
+        put(map, "DATA_SUBMITTED", "数据中心", "提交审核", false);
+        put(map, "DATA_WITHDRAWN", "数据中心", "撤回送审", false);
+        put(map, "DATA_RETURNED", "数据中心", "退回修改", false);
+        put(map, "DATA_APPROVED", "数据中心", "审核通过", false);
+        put(map, "DATA_PUBLISHED", "数据中心", "发布", false);
+        put(map, "DATA_DISABLED", "数据中心", "停用", false);
+        put(map, "DATA_RESTORED", "数据中心", "恢复使用", false);
+        put(map, "DATA_REVISION_CREATED", "数据中心", "创建修订", false);
+        put(map, "DATA_RECORD_UPDATED", "数据中心", "维护正式记录", false);
         put(map, "EXPERIMENT_CREATED", "实验记录本", "新增", false);
         put(map, "EXPERIMENT_COPIED", "实验记录本", "复制", false);
         put(map, "EXPERIMENT_DRAFT_SAVED", "实验记录本", "保存", false);

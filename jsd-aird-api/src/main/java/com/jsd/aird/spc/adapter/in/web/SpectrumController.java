@@ -14,6 +14,7 @@ import com.jsd.aird.shared.api.ResponseFactory;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Size;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.ContentDisposition;
@@ -23,12 +24,13 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
-import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import com.jsd.aird.shared.error.ApiErrorCode;
+import com.jsd.aird.shared.error.ApiException;
 
 @RestController
 @RequestMapping("/api/v1/spc")
@@ -73,7 +75,71 @@ public class SpectrumController {
 
     @PostMapping("/charts")
     public ApiResponse<SpectrumService.ChartView> createChart(@Valid @RequestBody CreateChartRequest request) {
-        return success(service.createChart(request.command()));
+        try {
+            return success(service.createChart(request.command()));
+        } catch (RuntimeException exception) {
+            if (request.requestId() != null) {
+                var apiException = exception instanceof ApiException error ? error : null;
+                var code = apiException == null ? "UPLOAD_FAILED" : apiException.errorCode().code();
+                var status = apiException != null && apiException.errorCode() == ApiErrorCode.RESOURCE_CONFLICT
+                        ? "DUPLICATE" : "FAILED";
+                UUID stagedFileId = null;
+                try { stagedFileId = UUID.fromString(request.fileId()); } catch (RuntimeException ignored) { }
+                try {
+                    service.recordUploadAttempt(new SpectrumService.UploadAttemptCommand(request.requestId(),
+                            request.categoryId(), stagedFileId,
+                            request.originalName() == null || request.originalName().isBlank()
+                                    ? "未知图谱文件" : request.originalName(),
+                            request.size(), status, code,
+                            exception.getMessage() == null ? "图谱保存失败" : exception.getMessage(),
+                            request.uploadContext(), request.parentRequestId()));
+                } catch (RuntimeException ignored) {
+                    // Preserve the original create failure; recording is best-effort for malformed requests.
+                }
+            }
+            throw exception;
+        }
+    }
+
+    @GetMapping("/uploads/attempts")
+    public ApiResponse<List<SpectrumService.UploadAttemptView>> uploadAttempts(
+            @RequestParam(defaultValue = "100") int limit) {
+        return success(service.uploadAttempts(limit));
+    }
+
+    @PostMapping("/uploads/attempts")
+    public ApiResponse<Void> recordUploadAttempt(@Valid @RequestBody UploadAttemptRequest request) {
+        service.recordUploadAttempt(new SpectrumService.UploadAttemptCommand(request.requestId(),
+                request.categoryId(), request.fileObjectId(), request.originalName(), request.size(),
+                request.status(), request.errorCode(), request.errorMessage(),
+                request.uploadContext(), request.parentRequestId()));
+        return success(null);
+    }
+
+    @DeleteMapping("/uploads/attempts/{requestId}")
+    public ApiResponse<Void> hideUploadAttempt(@PathVariable UUID requestId) {
+        service.hideUploadAttempt(requestId);
+        return success(null);
+    }
+
+    @PostMapping("/charts/export")
+    public void exportCharts(@Valid @RequestBody ExportChartsRequest request, HttpServletResponse response)
+            throws IOException {
+        if (request.chartIds().size() == 1) {
+            var file = service.openChart(request.chartIds().getFirst()).file();
+            try (var stream = file.stream()) {
+                response.setContentType(file.contentType());
+                response.setContentLengthLong(file.size());
+                response.setHeader(HttpHeaders.CONTENT_DISPOSITION,
+                        ContentDisposition.attachment().filename(file.originalName(), StandardCharsets.UTF_8).build().toString());
+                stream.transferTo(response.getOutputStream());
+            }
+            return;
+        }
+        response.setContentType("application/zip");
+        response.setHeader(HttpHeaders.CONTENT_DISPOSITION,
+                ContentDisposition.attachment().filename("图谱文件.zip", StandardCharsets.UTF_8).build().toString());
+        service.writeExport(request.chartIds(), response.getOutputStream());
     }
 
     @GetMapping("/charts/{chartId}")
@@ -85,6 +151,12 @@ public class SpectrumController {
     public ApiResponse<SpectrumService.ChartView> updateChart(@PathVariable UUID chartId,
                                                                @Valid @RequestBody UpdateChartRequest request) {
         return success(service.updateChart(chartId, request.command()));
+    }
+
+    @PutMapping("/charts/{chartId}/category")
+    public ApiResponse<SpectrumService.ChartView> assignChartCategory(@PathVariable UUID chartId,
+                                                                       @Valid @RequestBody AssignChartCategoryRequest request) {
+        return success(service.assignChartCategory(chartId, request.categoryId()));
     }
 
     @DeleteMapping("/charts/{chartId}")
@@ -195,20 +267,36 @@ public class SpectrumController {
                                      @Size(max = 260) String sampleName,
                                      @Size(max = 160) String batchNo,
                                      @Size(max = 10000) String testConditions,
-                                     JsonNode metadata) {
+                                     JsonNode metadata,
+                                     @NotNull UUID requestId,
+                                     @Size(max = 500) String originalName,
+                                     @Min(0) long size,
+                                     boolean duplicateOverride,
+                                     JsonNode uploadContext,
+                                     UUID parentRequestId) {
         SpectrumService.CreateChartCommand command() {
             return new SpectrumService.CreateChartCommand(fileId, title, categoryId, sampleName, batchNo,
-                    testConditions, metadata);
+                    testConditions, metadata, requestId, duplicateOverride, uploadContext, parentRequestId);
         }
     }
+
+    public record UploadAttemptRequest(@NotNull UUID requestId, UUID categoryId, UUID fileObjectId,
+                                       @NotBlank @Size(max = 500) String originalName, @Min(0) long size,
+                                       @NotBlank String status, @Size(max = 80) String errorCode,
+                                       @Size(max = 2000) String errorMessage, JsonNode uploadContext,
+                                       UUID parentRequestId) { }
+
+    public record ExportChartsRequest(@NotNull @Size(min = 1, max = 50) List<@NotNull UUID> chartIds) { }
 
     public record UpdateChartRequest(@NotBlank @Size(max = 260) String title,
                                      @Size(max = 260) String sampleName,
                                      @Size(max = 160) String batchNo,
                                      @Size(max = 10000) String testConditions,
-                                     JsonNode metadata) {
+                                     JsonNode metadata, UUID categoryId) {
         SpectrumService.UpdateChartCommand command() {
-            return new SpectrumService.UpdateChartCommand(title, sampleName, batchNo, testConditions, metadata);
+            return new SpectrumService.UpdateChartCommand(title, sampleName, batchNo, testConditions, metadata, categoryId);
         }
     }
+
+    public record AssignChartCategoryRequest(@NotNull UUID categoryId) { }
 }

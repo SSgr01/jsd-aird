@@ -65,14 +65,17 @@ public class JdbcTemplateVersionReviewRepository implements TemplateVersionRevie
     @Override
     public List<ReviewEvent> events(UUID organizationId, UUID versionId) {
         return jdbc.query("""
-                SELECT id, version_id, from_status, to_status, actor_id, comment, created_at
-                FROM tpl.template_version_review_event
-                WHERE organization_id = ? AND version_id = ?
-                ORDER BY created_at DESC
+                SELECT e.id, e.version_id, e.from_status, e.to_status, e.actor_id,
+                       COALESCE(u.display_name, u.username, '未知用户') AS actor_name,
+                       e.comment, e.created_at
+                FROM tpl.template_version_review_event e
+                LEFT JOIN iam.app_user u ON u.id = e.actor_id AND u.organization_id = e.organization_id
+                WHERE e.organization_id = ? AND e.version_id = ?
+                ORDER BY e.created_at DESC, e.id DESC
                 """, (rs, row) -> new ReviewEvent(
                 rs.getObject("id", UUID.class), rs.getObject("version_id", UUID.class),
                 rs.getString("from_status"), rs.getString("to_status"),
-                rs.getObject("actor_id", UUID.class), rs.getString("comment"),
+                rs.getObject("actor_id", UUID.class), rs.getString("actor_name"), rs.getString("comment"),
                 rs.getTimestamp("created_at").toInstant()), organizationId, versionId);
     }
 

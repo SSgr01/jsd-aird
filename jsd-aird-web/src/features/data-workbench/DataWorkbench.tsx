@@ -33,6 +33,8 @@ interface ShellProps {
   leading?: ReactNode;
   meta?: ReactNode;
   actions?: ReactNode;
+  navigation?: ReactNode;
+  content?: ReactNode;
   notice?: ReactNode;
   canvas: ReactNode;
   panel: ReactNode;
@@ -40,7 +42,7 @@ interface ShellProps {
   children?: ReactNode;
 }
 
-export function DataWorkbenchShell({ breadcrumb, title, canvasLabel = 'Excel 工作区', leading, meta, actions, notice, canvas, panel, footer, children }: ShellProps) {
+export function DataWorkbenchShell({ breadcrumb, title, canvasLabel = 'Excel 工作区', leading, meta, actions, navigation, content, notice, canvas, panel, footer, children }: ShellProps) {
   return (
     <section className="data-workbench" aria-label={`${title}数据工作台`}>
       <header className="data-workbench-header">
@@ -56,11 +58,12 @@ export function DataWorkbenchShell({ breadcrumb, title, canvasLabel = 'Excel 工
         </div>
         <Space wrap>{actions}</Space>
       </header>
+      {navigation}
       {notice ? <div className="data-workbench-notice">{notice}</div> : null}
-      <div className="data-workbench-grid">
+      {content || <div className="data-workbench-grid">
         <section className="data-workbook-canvas" aria-label={canvasLabel}>{canvas}</section>
         <aside className="data-workbench-panel">{panel}</aside>
-      </div>
+      </div>}
       {footer ? <footer className="data-workbench-footer">{footer}</footer> : null}
       {children}
     </section>
@@ -92,6 +95,7 @@ export const DataWorkbookCanvas = forwardRef<EditorHandle, CanvasProps>(function
         snapshot={workbook.snapshot}
         bindings={[]}
         editable={Boolean(editable && workbook.editable)}
+        permissionDialogVisible={Boolean(editable && workbook.editable)}
         onDirty={() => undefined}
         onEditorValue={() => undefined}
         onSelectionChange={onSelectionChange}

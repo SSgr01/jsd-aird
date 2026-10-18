@@ -15,6 +15,8 @@ describe('file preview utilities', () => {
     ['manual.pdf', 'application/octet-stream', 'pdf'],
     ['photo.png', '', 'image'],
     ['interview.mp3', 'audio/mpeg', 'audio'],
+    ['inspection.mp4', 'video/mp4', 'video'],
+    ['inspection.webm', 'application/octet-stream', 'video'],
     ['notes.docx', '', 'docx'],
     ['table.xlsx', '', 'spreadsheet'],
     ['table.csv', 'text/csv', 'spreadsheet'],

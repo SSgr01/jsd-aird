@@ -26,6 +26,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 
 import { FilePreviewModal } from '@/components/file-preview';
+import { DataPublicationPanel } from '@/features/data-workbench/DataPublicationPanel';
+import type { DataPublication } from '@/services/data/data-api';
 import { fetchFilePreviewBlob, fileContentUrl } from '@/services/files';
 import {
   DataFieldDataBrowser,
@@ -97,6 +99,8 @@ function SourceRecognitionPage({ owner }: { owner: SourceOwner }) {
   const [finalizing, setFinalizing] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [profileName, setProfileName] = useState('');
+  const [publication, setPublication] = useState<DataPublication>();
+  const reviewLocked = ['PENDING_REVIEW', 'APPROVED', 'PUBLISHED', 'DISABLED'].includes(publication?.status || '');
 
   const apply = useCallback((value: RecognitionJob) => {
     setJob(value);
@@ -213,7 +217,7 @@ function SourceRecognitionPage({ owner }: { owner: SourceOwner }) {
       void message.success(
         owner === 'EXPERIMENT'
           ? `已创建 ${result.drafts.length} 条实验草稿`
-          : `已生成正式 Submission V${result.submissionRevision}${result.drafts.length ? `，并创建 ${result.drafts.length} 条实验草稿` : ''}`,
+          : '数据已确认，请提交审核，通过后发布正式数据',
       );
       const onlyDraft = result.drafts[0];
       if (result.drafts.length === 1 && onlyDraft) nav(`/experiments/${onlyDraft.experimentId}`);
@@ -485,6 +489,8 @@ function SourceRecognitionPage({ owner }: { owner: SourceOwner }) {
       meta={meta}
       actions={
         <>
+          {owner === 'DATA_CENTER' && <DataPublicationPanel jobId={job.id} refreshKey={job.updatedAt}
+            onStateChange={setPublication} onChanged={() => void load(false)} />}
           <Button icon={<ReloadOutlined />} onClick={() => void load()}>
             刷新
           </Button>
@@ -494,7 +500,7 @@ function SourceRecognitionPage({ owner }: { owner: SourceOwner }) {
           <Button
             icon={<SaveOutlined />}
             loading={saving}
-            disabled={parsing || job.status === 'FAILED'}
+            disabled={reviewLocked || parsing || job.status === 'FAILED'}
             onClick={() => void save()}
           >
             保存工作区
@@ -503,10 +509,10 @@ function SourceRecognitionPage({ owner }: { owner: SourceOwner }) {
             type="primary"
             icon={<CheckCircleOutlined />}
             loading={finalizing}
-            disabled={parsing || job.status === 'FAILED'}
+            disabled={reviewLocked || parsing || job.status === 'FAILED'}
             onClick={() => void finalize()}
           >
-            {owner === 'EXPERIMENT' ? '确认并创建实验' : '确认并提交'}
+            {owner === 'EXPERIMENT' ? '确认并创建实验' : '确认数据'}
           </Button>
         </>
       }

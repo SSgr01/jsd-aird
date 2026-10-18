@@ -36,22 +36,26 @@ describe('ModelCenterPage', () => {
     expect(screen.queryByRole('button', { name: '新增预测目标' })).not.toBeInTheDocument()
   })
 
-  it('opens the workbench for a modeling-only user without training permissions', async () => {
+  it('opens the workbench for a modeling-only user without training permissions', () => {
     setPermissions(['ai.modeling.read'])
-    render(<AppProviders><MemoryRouter initialEntries={['/assistant/model-center?tab=models']}><ModelCenterPage /><LocationProbe /></MemoryRouter></AppProviders>)
+    render(<AppProviders><MemoryRouter initialEntries={['/assistant/model-center']}><ModelCenterPage /><LocationProbe /></MemoryRouter></AppProviders>)
     expect(screen.queryByRole('tab', { name: '模型列表' })).not.toBeInTheDocument()
     expect(screen.getByTestId('modeling-workbench-panel')).toBeInTheDocument()
-    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('?tab=workbench'))
+    expect(screen.getByTestId('location').textContent).toBe('/assistant/model-center')
   })
 
   it.each([
-    ['?tab=settings', '?tab=workbench'],
-    ['?tab=settings&action=create-target&targetName=旧目标&targetUnit=GU', '?tab=workbench'],
-    ['?tab=settings&targetId=target-1', '?tab=models&targetId=target-1'],
-  ])('replaces retired configuration query %s with %s', async (query, expected) => {
+    '?tab=settings',
+    '?tab=settings&action=create-target&targetName=旧目标&targetUnit=GU',
+    '?tab=settings&targetId=target-1',
+    '?action=create-target',
+  ])('rejects a retired configuration query without rewriting it: %s', (query) => {
     setPermissions(['ai.model.read', 'ai.modeling.read'])
     render(<AppProviders><MemoryRouter initialEntries={[`/assistant/model-center${query}`]}><ModelCenterPage /><LocationProbe /></MemoryRouter></AppProviders>)
-    await waitFor(() => expect(screen.getByTestId('location').textContent).toBe(`/assistant/model-center${expected}`))
+    expect(screen.getByText('访问的页面不存在。')).toBeInTheDocument()
+    expect(screen.getByTestId('location').textContent).toBe(`/assistant/model-center${query}`)
+    expect(screen.queryByTestId('model-list-panel')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('modeling-workbench-panel')).not.toBeInTheDocument()
     expect(screen.queryByRole('tab', { name: '目标设置' })).not.toBeInTheDocument()
   })
 
@@ -67,7 +71,7 @@ describe('ModelCenterPage', () => {
 
   it('retains the original link while authentication is loading', () => {
     useAuthStore.setState({ status: 'loading', user: null })
-    render(<AppProviders><MemoryRouter initialEntries={['/assistant/model-center?tab=settings&targetId=target-1']}><ModelCenterPage /><LocationProbe /></MemoryRouter></AppProviders>)
-    expect(screen.getByTestId('location')).toHaveTextContent('?tab=settings&targetId=target-1')
+    render(<AppProviders><MemoryRouter initialEntries={['/assistant/model-center?tab=models&targetId=target-1']}><ModelCenterPage /><LocationProbe /></MemoryRouter></AppProviders>)
+    expect(screen.getByTestId('location')).toHaveTextContent('?tab=models&targetId=target-1')
   })
 })

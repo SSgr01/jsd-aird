@@ -146,7 +146,7 @@ describe('PerformancePredictionPage', () => {
     mount(); await selectTarget(); await selectTarget('湿膜'); fillTemperature(); fireEvent.click(screen.getByRole('button', { name: '开始预测' }))
     expect(await screen.findByText('80.1235')).toBeInTheDocument()
     expect(screen.getByRole('columnheader', { name: '预测结果' })).toBeInTheDocument()
-    expect(screen.getByText('预测服务暂不可用，请稍后重试。')).toBeInTheDocument()
+    expect(screen.getByText('计算服务暂不可用，请稍后重试。')).toBeInTheDocument()
     expect(screen.getByText('部分完成')).toBeInTheDocument()
     expect(screen.queryByText(/java.lang/)).not.toBeInTheDocument()
   })
@@ -158,6 +158,14 @@ describe('PerformancePredictionPage', () => {
     expect(screen.queryByRole('columnheader', { name: '预测区间' })).not.toBeInTheDocument()
     expect(screen.queryByRole('columnheader', { name: '说明' })).not.toBeInTheDocument()
     expect(screen.getByRole('columnheader', { name: '单位' })).toBeInTheDocument()
+  })
+  it('does not show a blocked invalid prediction value', async () => {
+    api.predict.mockResolvedValue({ ...response(), outcomeStatus: 'BLOCKED', results: [{ targetId: 'gloss-dry', status: 'BLOCKED', errorCode: 'INVALID_PREDICTION_RESULT', message: 'internal details' }] })
+    mount(); await selectTarget(); fillTemperature(); fireEvent.click(screen.getByRole('button', { name: '开始预测' }))
+    expect(await screen.findByText('未得到预测值')).toBeInTheDocument()
+    expect(screen.getByText('模型结果不合理，未展示数值。请核对输入和单位，并补充相近实验后重新训练。')).toBeInTheDocument()
+    expect(screen.queryByText('internal details')).not.toBeInTheDocument()
+    expect(screen.queryByText('80.1235')).not.toBeInTheDocument()
   })
   it('retries an unacknowledged request with the same key after network timeout', async () => {
     api.predict.mockRejectedValueOnce(new Error('ETIMEDOUT'))

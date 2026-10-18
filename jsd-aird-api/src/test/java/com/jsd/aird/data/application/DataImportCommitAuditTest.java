@@ -50,7 +50,7 @@ class DataImportCommitAuditTest {
     }
 
     @Test
-    void appendsAuditAndOutboxWithIdentifiersAndHashes() {
+    void appendsAuditWithIdentifiersAndHashesWithoutObsoleteIndexingOutbox() {
         ActorContext.set(new com.jsd.aird.shared.security.Actor(ORGANIZATION_ID, USER_ID, "developer"));
         var recordId = UUID.randomUUID();
         when(repository.findJobForUpdate(ORGANIZATION_ID, importJobId)).thenReturn(Optional.of(job));
@@ -71,7 +71,7 @@ class DataImportCommitAuditTest {
         var detail = org.mockito.ArgumentCaptor.forClass(com.fasterxml.jackson.databind.JsonNode.class);
         verify(auditLog).append(eq(ORGANIZATION_ID), eq(USER_ID), eq("DATA_IMPORT_COMMITTED"),
                 eq("DATA_IMPORT_JOB"), eq(importJobId), detail.capture());
-        verify(opsAsync).appendOutbox(eq("DATA_IMPORT_JOB"), eq(importJobId), eq("DATA_RECORDS_COMMITTED"), any());
+        verifyNoInteractions(opsAsync);
         assertThat(detail.getValue().path("sourceSha256").asText()).isEqualTo("source-sha");
         assertThat(detail.getValue().path("records").get(0).path("recordId").asText()).isEqualTo(recordId.toString());
         assertThat(detail.getValue().toString()).doesNotContain("raw-secret");

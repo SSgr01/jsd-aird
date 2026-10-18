@@ -19,6 +19,7 @@ import com.jsd.aird.tpl.api.TemplateDataImportFacade;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.ByteBuffer;
 import java.text.Normalizer;
@@ -303,13 +304,22 @@ public class OptimizationService {
         var result = new ArrayList<JsonNode>(); rows.forEach(result::add); return result;
     }
 
+    @Transactional
     public OptimizationAccepted submit(JsonNode body,String idempotencyKey){
         var a=actor();require(a,"ai.experiment.optimize","AI_EXPERIMENT_OPTIMIZATION",null,"CREATE");
         if(idempotencyKey==null||idempotencyKey.isBlank())throw validation("必须提供幂等键");
         if(body==null||!body.isObject()||!"HISTORICAL_GP_BO".equals(body.path("mode").asText()))throw validation("请先选择实验数据和 X/Y");
-        return submitHistorical(body,idempotencyKey,a,List.of(),null);
+        return submitHistorical(body,idempotencyKey,a,List.of(),null,hashing.hash(hashing.canonical(body)));
     }
-    private OptimizationAccepted submitHistorical(JsonNode body,String idempotencyKey,Actor actor,List<JsonNode> supplementalRows,OptimizationRepository.RunRow previous){
+    private OptimizationAccepted submitHistorical(JsonNode body,String idempotencyKey,Actor actor,List<JsonNode> supplementalRows,OptimizationRepository.RunRow previous,String submissionFingerprint){
+        var key=idempotencyKey.strip();
+        repository.jdbc().queryForObject("SELECT 1 FROM (SELECT pg_advisory_xact_lock(hashtextextended(?, 0))) AS optimization_lock", Integer.class,
+                actor.organizationId()+":"+actor.userId()+":optimization:"+key);
+        var accepted=repository.byKey(actor.organizationId(),actor.userId(),key).orElse(null);
+        if(accepted!=null){
+            if(!submissionFingerprint.equals(accepted.request().path("submissionFingerprint").asText()))throw new ApiException(ApiErrorCode.IDEMPOTENCY_CONFLICT);
+            return accepted(accepted);
+        }
         require(actor,"experiment.view","EXPERIMENT",null,"READ");
         var datasetIds=requestedHistoryDatasetIds(body);var datasetId=datasetIds.getFirst();
         boolean useFrozenRows=previous!=null;
@@ -433,6 +443,9 @@ public class OptimizationService {
                 .put("targetName",columns.get(targetCode).path("name").asText(targetCode)).put("direction",direction)
                 .put("candidateCount",4).put("selectedRowCount",selectedRows.size());
         request.set("datasetIds",json.valueToTree(datasetIds));request.set("selectedRowIdsByDataset",selectedIdsByDataset);
+        request.put("submissionFingerprint",submissionFingerprint);
+        if (isNonNegativeCountUnit(targetUnit(dataset.path("columns"), targetCode)))
+            request.putObject("resultConstraints").put("nonNegative", true);
         request.set("datasetSnapshot",dataset.deepCopy());request.put("projectionVersion",HistorySampleProjection.VERSION);
         request.set("features",featureNodes);request.set("rows",rows);request.set("columns",dataset.path("columns").deepCopy());
         if(!compositionGroups.isEmpty())request.set("compositionGroups",compositionGroups);
@@ -443,7 +456,7 @@ public class OptimizationService {
         boolean inserted;
         try{inserted=repository.insertRun(runId,actor.organizationId(),actor.userId(),idempotencyKey.strip(),requestId,requestHash,normalized,json.createObjectNode(),seed,config,anchor,hashing.hash(frozen),frozen,optimization);}
         catch(DataIntegrityViolationException e){throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"当前组织已有实验优化任务执行中",e);}
-        if(!inserted){var old=repository.byKey(actor.organizationId(),actor.userId(),idempotencyKey).orElseThrow();if(!old.requestHash().equals(requestHash))throw new ApiException(ApiErrorCode.IDEMPOTENCY_CONFLICT);return accepted(old);}
+        if(!inserted){var old=repository.byKey(actor.organizationId(),actor.userId(),idempotencyKey).orElseThrow();if(!submissionFingerprint.equals(old.request().path("submissionFingerprint").asText()))throw new ApiException(ApiErrorCode.IDEMPOTENCY_CONFLICT);return accepted(old);}
         var payload=json.createObjectNode().put("organizationId",actor.organizationId().toString()).put("actorId",actor.userId().toString()).put("runId",runId.toString()).put("requestId",requestId);
         var jobId=jobs.enqueue(actor.organizationId(),"AI_EXPERIMENT_OPTIMIZATION_V2",payload,"ai-experiment-optimization:"+runId,45,3);repository.attachJob(actor.organizationId(),runId,jobId);
         audit.append(actor.organizationId(),actor.userId(),"AI_EXPERIMENT_OPTIMIZATION_STARTED","AI_RESEARCH_RUN",runId,normalized);
@@ -461,9 +474,19 @@ public class OptimizationService {
         if(!complete)rows.remove(rows.size()-1);
     }
 
+    @Transactional
     public OptimizationAccepted continueHistorical(UUID previousRunId,String idempotencyKey){
         var actor=actor();require(actor,"ai.experiment.optimize","AI_RESEARCH_RUN",previousRunId,"UPDATE");
         if(idempotencyKey==null||idempotencyKey.isBlank())throw validation("必须提供幂等键");
+        var key=idempotencyKey.strip();
+        repository.jdbc().queryForObject("SELECT 1 FROM (SELECT pg_advisory_xact_lock(hashtextextended(?, 0))) AS optimization_lock", Integer.class,
+                actor.organizationId()+":"+actor.userId()+":optimization:"+key);
+        var fingerprint=hashing.hash(json.createObjectNode().put("operation","NEXT_ROUND").put("parentRunId",previousRunId.toString()));
+        var accepted=repository.byKey(actor.organizationId(),actor.userId(),key).orElse(null);
+        if(accepted!=null){
+            if(!fingerprint.equals(accepted.request().path("submissionFingerprint").asText()))throw new ApiException(ApiErrorCode.IDEMPOTENCY_CONFLICT);
+            return accepted(accepted);
+        }
         var previous=repository.byId(actor.organizationId(),actor.userId(),previousRunId).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND));
         if(!"HISTORICAL_GP_BO".equals(previous.request().path("mode").asText()))throw validation("只有历史数据优化任务可以继续下一轮");
         if(!"SUCCEEDED".equals(previous.executionStatus()))throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"请等待本轮候选方案生成完成");
@@ -493,7 +516,7 @@ public class OptimizationService {
                 bounds.putObject(feature.path("code").asText()).put("minimum",feature.path("minimum").asDouble()).put("maximum",feature.path("maximum").asDouble());
             }
         }
-        return submitHistorical(body,idempotencyKey,actor,supplemental,previous);
+        return submitHistorical(body,idempotencyKey,actor,supplemental,previous,fingerprint);
     }
 
     public OptimizationRun get(UUID runId){var a=actor();require(a,"ai.experiment.optimize","AI_RESEARCH_RUN",runId,"READ");return view(a.organizationId(),repository.byId(a.organizationId(),a.userId(),runId).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"实验优化运行不存在")));}
@@ -505,7 +528,7 @@ public class OptimizationService {
     }
     private JsonNode executeHistorical(UUID org,OptimizationRepository.RunRow run){
         repository.progress(org,run.id(),20,"FITTING_GAUSSIAN_PROCESS");
-        var payload=(ObjectNode)run.request().deepCopy();payload.put("seed",run.seed());
+        var payload=(ObjectNode)run.request().deepCopy();payload.remove("submissionFingerprint");payload.put("seed",run.seed());
         var response=compute.recommendHistoricalOptimization(payload);repository.progress(org,run.id(),78,"SELECTING_EXPERIMENTS");
         var saved=0;var targetCode=run.request().path("target").asText();var targetName=run.request().path("targetName").asText(targetCode);
         for(var proposal:response.path("candidates")){
@@ -535,6 +558,7 @@ public class OptimizationService {
     }
 
     private String targetUnit(JsonNode columns,String code){if(columns.isArray())for(var column:columns)if(code.equals(column.path("code").asText()))return column.path("unit").asText("");return "";}
+    private boolean isNonNegativeCountUnit(String raw){var unit=Normalizer.normalize(raw==null?"":raw,Normalizer.Form.NFKC).strip().toLowerCase(Locale.ROOT);return Set.of("次","cycle","cycles").contains(unit);}
 
     public void fail(UUID org,UUID run,String code,String message){repository.fail(org,run,code,message);}
 

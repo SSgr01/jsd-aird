@@ -326,6 +326,13 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
             if (path.contains("/export")) return permission("data.export", "DATA", "READ");
             if (path.contains("/download")) return permission("data.download", "DATA", "READ");
             if (path.contains("/approve")) return permission("data.approve", "DATA", "WRITE");
+            if (path.endsWith("/publication/publish")) return permission("data.approve", "DATA", "WRITE");
+            if (path.endsWith("/publication/disable") || path.endsWith("/publication/restore"))
+                return permission("data.update", "DATA", "WRITE");
+            if (path.endsWith("/publication/submit") || path.endsWith("/publication/withdraw"))
+                return permission("data.submit", "DATA", "WRITE");
+            if (path.endsWith("/publication/confirm") || path.endsWith("/publication/revise"))
+                return permission("data.update", "DATA", "WRITE");
             if (path.contains("/commit")) return permission("data.submit", "DATA", "WRITE");
             if (path.matches("/api/v1/data/recognition-jobs/[0-9a-f-]{36}/finalize"))
                 return permission("data.submit", "DATA", "WRITE");
@@ -461,6 +468,8 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
 
     private UUID resourceId(HttpServletRequest request) {
         var path = request.getRequestURI();
+        var dataSourceMatcher = java.util.regex.Pattern.compile("/api/v1/data/sources/([0-9a-fA-F-]{36})(?:/|$)").matcher(path);
+        if (dataSourceMatcher.find()) return UUID.fromString(dataSourceMatcher.group(1));
         if (path.startsWith("/api/v1/project-resource-links") || path.startsWith("/api/v1/project-references")) {
             // These endpoints authorize every project in the application service because the project id is in
             // the request body or the reference record, not reliably in the URL.

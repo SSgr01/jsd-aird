@@ -1991,6 +1991,8 @@ a:active,
 }
 
 .version-history-item {
+  width: 100%;
+  box-sizing: border-box;
   display: grid;
   grid-template-columns: 64px minmax(0, 1fr);
   gap: 16px;
@@ -8013,3 +8015,6 @@ a:active,
     flex: 0 0 auto;
   }
 }
+
+.data-workspace-view-tabs { height: 50px; padding: 0 24px; background: var(--workspace-panel, #fff); }
+.data-workspace-view-tabs .ant-tabs-tab { padding: 13px 3px; font-size: 14px; }

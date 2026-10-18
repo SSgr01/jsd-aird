@@ -55,8 +55,12 @@ public class ModelComputeClient {
             }
             var code = body.path("code").asText();
             if (response.statusCode() >= 500) throw new ComputeTransportException(message);
-            throw new ApiException(SetCodes.ARTIFACT.contains(code) ? ApiErrorCode.AI_MODEL_ARTIFACT_INVALID
-                    : ApiErrorCode.INVALID_SCHEMA, message, detail);
+            var errorCode = switch (code) {
+                case "NO_FEASIBLE_CANDIDATE" -> ApiErrorCode.NO_FEASIBLE_CANDIDATE;
+                case "INSUFFICIENT_DATA" -> ApiErrorCode.INSUFFICIENT_DATA;
+                default -> SetCodes.ARTIFACT.contains(code) ? ApiErrorCode.AI_MODEL_ARTIFACT_INVALID : ApiErrorCode.INVALID_SCHEMA;
+            };
+            throw new ApiException(errorCode, message, detail);
         } catch (HttpTimeoutException exception) {
             throw new ApiException(ApiErrorCode.TRAINING_TIMEOUT, "formula-model.v2训练超时");
         } catch (InterruptedException exception) {

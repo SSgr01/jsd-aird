@@ -64,20 +64,25 @@ public class ModelingWorkbenchService {
     public JsonNode train(TrainCommand command, String idempotencyKey) {
         var actor = ActorContext.required();
         if (idempotencyKey == null || idempotencyKey.isBlank()) throw validation("训练请求缺少唯一标识，请重新点击开始训练");
+        var normalizedKey = idempotencyKey.strip();
+        var submissionFingerprint = hashing.hash(hashing.canonical(json.valueToTree(command)));
+        jdbc.queryForObject("SELECT 1 FROM (SELECT pg_advisory_xact_lock(hashtextextended(?, 0))) AS workbench_lock", Integer.class,
+                actor.organizationId() + ":" + actor.userId() + ":modeling:" + normalizedKey);
+        var accepted = jdbc.query("SELECT id,request_jsonb FROM ai.modeling_workbench_run WHERE organization_id=? AND created_by=? AND idempotency_key=?",
+                (rs, n) -> new Object[]{rs.getObject(1, UUID.class), read(rs, "request_jsonb")},
+                actor.organizationId(), actor.userId(), normalizedKey).stream().findFirst().orElse(null);
+        if (accepted != null) {
+            var saved = (JsonNode) accepted[1];
+            if (!submissionFingerprint.equals(saved.path("submissionFingerprint").asText()))
+                throw new ApiException(ApiErrorCode.IDEMPOTENCY_CONFLICT);
+            return accepted((UUID) accepted[0]);
+        }
         var datasetIds = requestedDatasetIds(command);
 
         var dataset = optimization.modelingHistoryDatasetSetForTraining(datasetIds);
         var frozenRequest = freezeRequest(dataset, command, datasetIds);
+        ((ObjectNode) frozenRequest).put("submissionFingerprint", submissionFingerprint);
         var requestHash = hashing.hash(frozenRequest);
-        var previous = jdbc.query("""
-                SELECT id,request_hash FROM ai.modeling_workbench_run
-                WHERE organization_id=? AND created_by=? AND idempotency_key=?
-                """, (rs, n) -> new Object[]{rs.getObject(1, UUID.class), rs.getString(2)},
-                actor.organizationId(), actor.userId(), idempotencyKey.strip()).stream().findFirst().orElse(null);
-        if (previous != null) {
-            if (!requestHash.equals(previous[1])) throw new ApiException(ApiErrorCode.IDEMPOTENCY_CONFLICT);
-            return accepted((UUID) previous[0]);
-        }
 
         var runId = UUID.randomUUID();
         var x = (ArrayNode) frozenRequest.path("xColumns");
@@ -89,13 +94,13 @@ public class ModelingWorkbenchService {
                         request_jsonb,selected_x_jsonb,selected_y_jsonb,status,progress,current_stage)
                     VALUES(?,?,?,?,?,?,?,?,?,?,'QUEUED',0,'QUEUED')
                     """, runId, actor.organizationId(), actor.userId(), datasetIds.getFirst(),
-                    dataset.path("name").asText("实验数据"), idempotencyKey.strip(), requestHash,
+                    dataset.path("name").asText("实验数据"), normalizedKey, requestHash,
                     pg(frozenRequest), pg(x), pg(y));
         } catch (org.springframework.dao.DataIntegrityViolationException conflict) {
-            var raced = jdbc.queryForObject("SELECT id,request_hash FROM ai.modeling_workbench_run WHERE organization_id=? AND created_by=? AND idempotency_key=?",
-                    (rs, n) -> new Object[]{rs.getObject(1, UUID.class), rs.getString(2)},
-                    actor.organizationId(), actor.userId(), idempotencyKey.strip());
-            if (!requestHash.equals(raced[1])) throw new ApiException(ApiErrorCode.IDEMPOTENCY_CONFLICT);
+            var raced = jdbc.queryForObject("SELECT id,request_jsonb FROM ai.modeling_workbench_run WHERE organization_id=? AND created_by=? AND idempotency_key=?",
+                    (rs, n) -> new Object[]{rs.getObject(1, UUID.class), read(rs, "request_jsonb")},
+                    actor.organizationId(), actor.userId(), normalizedKey);
+            if (!submissionFingerprint.equals(((JsonNode) raced[1]).path("submissionFingerprint").asText())) throw new ApiException(ApiErrorCode.IDEMPOTENCY_CONFLICT);
             return accepted((UUID) raced[0]);
         }
 
@@ -128,7 +133,8 @@ public class ModelingWorkbenchService {
                 (rs, n) -> read(rs, "request_jsonb"), organizationId, runId).stream().findFirst().orElseThrow();
         var modelKey = "ai/rnd/modeling-workbench/" + organizationId + "/" + runId + "/model-bundle.zip";
         var write = artifacts.writeRef(modelKey, "application/zip");
-        var computeRequest = ((ObjectNode) request.deepCopy()).put("requestId", runId.toString())
+        var computePayload = (ObjectNode) request.deepCopy(); computePayload.remove("submissionFingerprint");
+        var computeRequest = computePayload.put("requestId", runId.toString())
                 .put("output", write.url());
         async.updateProgress(organizationId, "modeling-workbench:" + runId, 35, "TRAINING");
         jdbc.update("UPDATE ai.modeling_workbench_run SET progress=35,current_stage='TRAINING',updated_at=now() WHERE organization_id=? AND id=? AND status='RUNNING'",

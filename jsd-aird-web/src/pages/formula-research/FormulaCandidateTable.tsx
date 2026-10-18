@@ -1,6 +1,6 @@
 import { Table } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { targetLabels } from '../performance-prediction/performance-prediction-utils'
+import { conditionFieldLabels, targetLabels } from '../performance-prediction/performance-prediction-utils'
 import { candidateNote, conditionText, fieldName, formatPredictionNumber, formulaMaterialName, goalMet, resultPrediction, resultText, type FormulaCompleted } from './formula-prediction-utils'
 import type { FormulaCandidate, FormulaMaterial } from '@/services/ai-rnd/formula-design-api'
 
@@ -9,6 +9,7 @@ export function FormulaCandidateTable({ completed, stale = false }: { completed:
   const materials = new Map<string, FormulaMaterial>(context.materialIntersection.map(material => [material.materialId, material]))
   run.candidates.forEach(candidate => candidate.formula.components?.forEach(component => { if (!materials.has(component.materialId)) materials.set(component.materialId, component) }))
   const labels = targetLabels(context.selected, false)
+  const conditionLabels = conditionFieldLabels(context.requiredInputs, context.selected)
   const notes = run.candidates.map(candidateNote)
   const sharedNote = notes.length > 0 && notes[0] && notes.every(note => note === notes[0]) ? notes[0] : ''
   const hasNotes = !sharedNote && notes.some(Boolean)
@@ -18,7 +19,7 @@ export function FormulaCandidateTable({ completed, stale = false }: { completed:
       const component = candidate.formula.components?.find(item => item.materialId === material.materialId)
       return component?.ratio == null ? '未记录' : formatPredictionNumber(component.ratio)
     } })),
-    ...context.requiredInputs.map(field => ({ title: `${fieldName(field)}${field.unit ? `（${field.unit}）` : ''}`, width: 130, render: (_: unknown, candidate: FormulaCandidate) => conditionText(candidate.inputs?.[field.code] ?? run.frozenEvidence?.fixedInputs?.[field.code]) })),
+    ...context.requiredInputs.map(field => ({ title: `${conditionLabels.get(field.code) ?? fieldName(field)}${field.unit ? `（${field.unit}）` : ''}`, width: 130, render: (_: unknown, candidate: FormulaCandidate) => conditionText(candidate.inputs?.[field.code] ?? run.frozenEvidence?.fixedInputs?.[field.code]) })),
     ...context.selected.map(target => ({ title: `预测 ${labels.get(target.targetId) ?? target.name}${target.unit ? `（${target.unit}）` : ''}`, width: 155, fixed: 'right' as const, render: (_: unknown, candidate: FormulaCandidate) => {
       const result = candidate.targetResults.targets?.find(item => item.targetId === target.targetId), value = resultPrediction(result)
       const met = goalMet(form.goals[target.targetId], target, result)

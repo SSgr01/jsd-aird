@@ -40,17 +40,20 @@ public class DataController {
     private final com.jsd.aird.data.application.DataCategoryService categoryService;
     private final ExperimentAssemblyService experimentAssemblyService;
     private final SourceRecognitionService recognitionService;
+    private final com.jsd.aird.data.application.DataPublicationService publicationService;
 
     public DataController(DataImportService service,
                           com.jsd.aird.data.application.DataCategoryService categoryService,
                           DataWorkbookService workbookService,
                           ExperimentAssemblyService experimentAssemblyService,
-                          SourceRecognitionService recognitionService) {
+                          SourceRecognitionService recognitionService,
+                          com.jsd.aird.data.application.DataPublicationService publicationService) {
         this.service = service;
         this.categoryService = categoryService;
         this.workbookService = workbookService;
         this.experimentAssemblyService = experimentAssemblyService;
         this.recognitionService = recognitionService;
+        this.publicationService = publicationService;
     }
 
     @GetMapping("/templates")
@@ -260,6 +263,10 @@ public class DataController {
 
     @PostMapping("/import-jobs/{id}/commit")
     public ApiResponse<DataRepository.Job> commit(@PathVariable UUID id) {
+        if (service.isDataCenterJob(id)) {
+            publicationService.confirm(id);
+            return success(service.get(id));
+        }
         service.commit(id);
         var job = service.get(id);
         if ("EXPERIMENT_DRAFT".equals(job.importPurpose())) {

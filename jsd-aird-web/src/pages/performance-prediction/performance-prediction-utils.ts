@@ -13,8 +13,8 @@ const categoryLabels: Record<string, string> = { PET_100UM_OPTICAL: 'PET 100μm�
 const errorLabels: Record<string, string> = {
   INVALID_SNAPSHOT: '模型文件未能读取，请在模型中心检查或重新训练。', MODEL_LOAD_FAILED: '模型文件未能读取，请在模型中心检查或重新训练。',
   FORMULA_INCOMPLETE: '请确认配方已完整。', FORMULA_AMOUNT_MISSING: '请补齐材料用量。', FORMULA_RATIO_MISSING: '请补齐材料比例；未使用的材料填 0。', FORMULA_RATIO_NEGATIVE: '材料比例不能小于 0。', FORMULA_RATIO_NOT_NUMERIC: '材料比例必须为数值。', FORMULA_TOTAL_NON_POSITIVE: '配方合计必须大于 0。', FORMULA_UNIT_UNRESOLVED: '请检查配方单位。', MISSING_REQUIRED_X: '请补齐必填的实验条件。',
-  MATERIAL_NOT_IN_MODEL: '当前模型未包含所选材料，请调整材料或更换预测指标。', UNKNOWN_CATEGORY: '所选类别无法用于当前模型，请重新选择。', OUT_OF_DOMAIN: '模型未返回该条件的预测值，请核对数值和单位，或补充相近实验记录后重新训练。',
-  COMPUTE_UNAVAILABLE: '预测服务暂不可用，请稍后重试。', MODEL_ARTIFACT_UNAVAILABLE: '模型暂不可用，请在模型中心检查状态。', MODEL_ARTIFACT_INVALID: '模型暂不可用，请在模型中心检查状态。', MODEL_CONTRACT_MISMATCH: '模型输入已更新，请刷新模型信息后重试。', MODEL_VERSION_CHANGED: '模型版本已更新，请核对输入后重新预测。', NO_ACTIVE_MODEL: '当前指标没有已启用模型，请在模型中心启用。', MODEL_DOMAIN_UNAVAILABLE: '模型训练信息不完整，请在模型中心重新训练。',
+  MATERIAL_NOT_IN_MODEL: '当前模型未包含所选材料，请调整材料或更换预测指标。', UNKNOWN_CATEGORY: '所选类别无法用于当前模型，请重新选择。', OUT_OF_DOMAIN: '模型未返回该条件的预测值，请核对数值和单位，或补充相近实验记录后重新训练。', INVALID_PREDICTION_RESULT: '模型结果不合理，未展示数值。请核对输入和单位，并补充相近实验后重新训练。',
+  COMPUTE_UNAVAILABLE: '计算服务暂不可用，请稍后重试。', MODEL_ARTIFACT_UNAVAILABLE: '模型暂不可用，请在模型中心检查状态。', MODEL_ARTIFACT_INVALID: '模型暂不可用，请在模型中心检查状态。', MODEL_CONTRACT_MISMATCH: '模型输入已更新，请刷新模型信息后重试。', MODEL_VERSION_CHANGED: '模型版本已更新，请核对输入后重新预测。', NO_ACTIVE_MODEL: '当前指标没有已启用模型，请在模型中心启用。', MODEL_DOMAIN_UNAVAILABLE: '模型训练信息不完整，请在模型中心重新训练。',
 }
 export function fieldName(field: PredictionInputField) { const name = field.name || field.sourceLabel || field.code; return inputLabels[name.toUpperCase()] || (name.toLowerCase() === 'temperature' || name === 'TEST_TEMPERATURE' ? '温度' : name.toLowerCase() === 'humidity' ? '湿度' : name || '实验条件') }
 export function businessValue(value: unknown) { if (typeof value === 'boolean') return value ? '是' : '否'; const text = typeof value === 'string' || typeof value === 'number' ? String(value) : ''; if (text === 'UV_CURED') return 'UV固化后'; return categoryLabels[text] ?? categoryLabels[text.toUpperCase()] ?? (/^[A-Z][A-Z0-9]+(?:_[A-Z0-9]+)+$/.test(text) ? '' : text) }
@@ -24,6 +24,10 @@ export function formatPredictionNumber(value: number) {
   if (value === 0) return '0'
   const magnitude = Math.abs(value)
   return magnitude < 0.0001 || magnitude >= 1e9 ? value.toExponential(3) : String(Number(value.toFixed(magnitude < 1 ? 6 : 4)))
+}
+export function invalidContinuousPrediction(value: number, unit?: string) {
+  const normalized = (unit ?? '').normalize('NFKC').trim().toLocaleLowerCase('en-US')
+  return !Number.isFinite(value) || ['次', 'cycle', 'cycles'].includes(normalized) && value < 0
 }
 export function targetAvailable(target: PredictionCatalogTarget) { return target.targetStatus !== 'RETIRED' && Boolean(target.predictionAvailable ?? (target.formalPredictionAvailable || target.simulationPredictionAvailable)) }
 export function unavailableReason(target: { targetStatus?: string; unavailableReasons: string[]; registered?: boolean }) {
@@ -49,6 +53,19 @@ export function targetLabels(targets: TargetLabelData[], includeUnit = true) {
     labels.set(target.targetId, sameName.length > 1 && duplicates.length > 1 ? `${label}（指标 ${duplicates.findIndex(item => item.targetId === target.targetId) + 1}）` : label)
   }
   return labels
+}
+export function conditionFieldLabels(fields: PredictionInputField[], targets: TargetLabelData[]) {
+  const targetNameById = targetLabels(targets, false)
+  const byCode = new Map<string, string>()
+  for (const field of fields) {
+    const base = fieldName(field)
+    const duplicates = fields.filter(item => fieldName(item) === base && item.unit === field.unit)
+    if (duplicates.length < 2) { byCode.set(field.code, base); continue }
+    const related = (field.requiredByTargets ?? []).map(item => targetNameById.get(item.targetId) ?? item.targetName).filter(Boolean)
+    const qualifiers = [...new Set(related)]
+    byCode.set(field.code, qualifiers.length ? `${base} · ${qualifiers.join(' / ')}` : `${base} · ${field.code}`)
+  }
+  return byCode
 }
 export function categoryOptions(field: PredictionInputField) {
   const configured: unknown = field.allowedValues ?? field.encoding?.allowedValues

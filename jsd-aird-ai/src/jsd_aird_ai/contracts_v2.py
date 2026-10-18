@@ -175,6 +175,7 @@ class ModelBindingV2(V2Model):
     input_scheme: InputSchemeV2
     material_dictionary: MaterialDictionaryV2
     applicability_domain: dict[str, Any]
+    result_constraints: dict[str, Any] = Field(default_factory=dict)
 
 
 class ScoreRequestV2(ContractRequestV2):
@@ -294,6 +295,7 @@ class RecommendRequestV2(ContractRequestV2):
     search_space: dict[str, Any] = Field(default_factory=dict)
     model_bindings: list[ModelBindingV2] = Field(min_length=1)
     candidate_count: int = Field(default=4, ge=1, le=16)
+    result_constraints: dict[str, Any] = Field(default_factory=dict)
 
 class RecommendedCandidateV2(V2Model):
     candidate_id: str

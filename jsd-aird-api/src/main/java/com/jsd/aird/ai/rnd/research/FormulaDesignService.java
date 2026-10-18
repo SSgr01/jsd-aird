@@ -70,7 +70,29 @@ public class FormulaDesignService {
         var bindings = new ArrayList<PredictionRepository.TargetBinding>();
         for (var item : root.path("selected")) if (item instanceof ObjectNode target) {
             var binding = all.get(target.path("targetId").asText());
-            if (binding != null) { enrichTarget(target,binding); bindings.add(binding); }
+            if (binding != null) {
+                enrichTarget(target,binding);
+                if (availabilityReasons(binding).isEmpty()) bindings.add(binding);
+            }
+        }
+        var availableIds = bindings.stream().map(b -> b.targetId().toString()).collect(java.util.stream.Collectors.toSet());
+        var conditionDefinitions = new LinkedHashMap<String,java.util.Set<String>>();
+        for (var binding : bindings) for (var field : binding.frozenInputScheme().path("fields"))
+            conditionDefinitions.computeIfAbsent(field.path("code").asText(), ignored -> new java.util.LinkedHashSet<>())
+                    .add(field.path("valueType").asText() + "|" + field.path("unit").asText());
+        var conditionConflicts = json.createArrayNode();
+        conditionDefinitions.forEach((code, definitions) -> {
+            if (definitions.size() > 1) conditionConflicts.add(json.createObjectNode().put("fieldCode",code).set("definitions",json.valueToTree(definitions)));
+        });
+        root.set("configurationConflicts", conditionConflicts);
+        var requiredInputs = (ArrayNode) root.path("requiredInputs");
+        for (int index = requiredInputs.size() - 1; index >= 0; index--) {
+            var field = requiredInputs.path(index);
+            if (field.path("requiredByTargets").isArray() && !field.path("requiredByTargets").isEmpty()) {
+                boolean used = false;
+                for (var target : field.path("requiredByTargets")) if (availableIds.contains(target.path("targetId").asText())) { used = true; break; }
+                if (!used) requiredInputs.remove(index);
+            }
         }
         var materials = commonMaterials(bindings);
         var ratioCodes=new LinkedHashSet<String>();
@@ -138,6 +160,7 @@ public class FormulaDesignService {
         target.set("classes",binding.classes()==null?json.createArrayNode():binding.classes());
         if (binding.unit()!=null) target.put("unit",binding.unit());
         if (binding.modelId()!=null) target.put("modelVersionId",binding.modelId().toString());
+        if (binding.definition().has("modelSource")) target.set("modelSource", binding.definition().path("modelSource").deepCopy());
         for (var key : List.of("testMethod","testStage","positiveClass","decisionThreshold"))
             if (binding.definition().hasNonNull(key)) target.set(key,binding.definition().get(key));
     }

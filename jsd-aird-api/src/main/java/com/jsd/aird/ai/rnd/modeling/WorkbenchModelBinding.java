@@ -21,6 +21,9 @@ public final class WorkbenchModelBinding {
         if(b.unit()==null)target.putNull("unit");else target.put("unit",b.unit());
         target.set("classes",b.classes());target.putNull("positiveClass");
         target.set("observationSemantics",b.observationSemantics());
+        var unit = b.unit() == null ? "" : java.text.Normalizer.normalize(b.unit(), java.text.Normalizer.Form.NFKC).strip().toLowerCase(java.util.Locale.ROOT);
+        if (java.util.Set.of("次", "cycle", "cycles").contains(unit))
+            out.putObject("resultConstraints").put("nonNegative", true);
         var ref=artifacts.readRef("model",b.artifactKey(),b.artifactSha());
         out.putObject("modelBundle").put("url",ref.url()).put("sha256",ref.sha256());
         var scheme=(ObjectNode)b.frozenInputScheme().deepCopy();

@@ -12,6 +12,21 @@ class PermissionRouteFilterTest {
             check -> null, new ObjectMapper(), false);
 
     @Test
+    void dataReviewAndPublicationUseSeparatePermissions() {
+        var path="/api/v1/data/sources/00000000-0000-0000-0000-000000000001/publication/";
+        assertThat(code("POST",path+"confirm")).isEqualTo("data.update");
+        assertThat(code("POST",path+"submit")).isEqualTo("data.submit");
+        assertThat(code("POST",path+"withdraw")).isEqualTo("data.submit");
+        assertThat(code("POST",path+"approve")).isEqualTo("data.approve");
+        assertThat(code("POST",path+"publish")).isEqualTo("data.approve");
+        assertThat(code("POST",path+"disable")).isEqualTo("data.update");
+        assertThat(code("POST",path+"restore")).isEqualTo("data.update");
+        assertThat(code("POST",path+"revise")).isEqualTo("data.update");
+        assertThat(code("GET",path+"snapshots/00000000-0000-0000-0000-000000000002")).isEqualTo("data.view");
+        assertThat(code("GET","/api/v1/data/sources/00000000-0000-0000-0000-000000000001/records/export")).isEqualTo("data.export");
+    }
+
+    @Test
     void mapsTemplateActionsToIndependentPermissions() {
         assertThat(code("POST", "/api/v1/templates")).isEqualTo("template.create");
         assertThat(code("PUT", "/api/v1/template-versions/00000000-0000-0000-0000-000000000001/draft"))

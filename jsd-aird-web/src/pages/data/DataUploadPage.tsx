@@ -8,6 +8,7 @@ import { UploadWorkspace, type UploadWorkspaceRecord } from '@/components/upload
 import { ProjectRelationPicker } from '@/components/project-relations/ProjectRelationPicker';
 import { downloadFile } from '@/services/files';
 import { dataApi, type DataJob, type DataTemplateOption } from '@/services/data/data-api';
+import { templateCategory, templateGroups } from '@/services/data/import-guidance';
 import { dataParseProgress, dataParseStageLabel } from '@/services/data/data-progress';
 import type { ProjectRelationTarget } from '@/services/project/project-resource-api';
 import { listCategories } from '@/services/experiments/experiment-api';
@@ -16,7 +17,7 @@ const statusFilters = [
   { key: 'ALL', label: '全部' },
   { key: 'QUEUED', label: '上传中' },
   { key: 'PARSING', label: '解析中' },
-  { key: 'WAITING_CONFIRM', label: '待审核' },
+  { key: 'WAITING_CONFIRM', label: '待确认数据' },
   { key: 'COMPLETED', label: '已完成' },
   { key: 'FAILED', label: '失败' },
   { key: 'CANCELLED', label: '已取消' },
@@ -29,7 +30,7 @@ const statusView: Record<string, { label: string; color: string }> = {
   WAITING_SHEET: { label: '待确认 Sheet', color: 'gold' },
   WAITING_MAPPING: { label: '待字段映射', color: 'gold' },
   VALIDATING: { label: '校验中', color: 'processing' },
-  WAITING_CONFIRM: { label: '待审核', color: 'orange' },
+  WAITING_CONFIRM: { label: '待确认数据', color: 'orange' },
   COMMITTING: { label: '提交中', color: 'processing' },
   COMPLETED: { label: '已完成', color: 'success' },
   FAILED: { label: '处理失败', color: 'error' },
@@ -82,6 +83,7 @@ export function DataUploadPage() {
   const navigate = useNavigate();
   const [templates, setTemplates] = useState<DataTemplateOption[]>([]);
   const [templateVersionId, setTemplateVersionId] = useState<string>();
+  const [templateCategoryFilter, setTemplateCategoryFilter] = useState<string>();
   const [files, setFiles] = useState<UploadFile[]>([]);
   const [loading, setLoading] = useState(false);
   const [jobs, setJobs] = useState<{ items: DataJob[]; page: number; size: number; total: number }>({ items: [], page: 1, size: 8, total: 0 });
@@ -247,6 +249,14 @@ export function DataUploadPage() {
       description="Excel / CSV 按已发布模板导入；Word / PDF 可直接提交自由识别。上传后可查看处理状态与失败原因。"
       leftTitle="选择导入模板"
       classification={<Form layout="vertical" component={false}>
+        <Form.Item label="模板分类">
+          <Select allowClear placeholder="全部模板分类" value={templateCategoryFilter}
+            options={[...new Set(templates.map(templateCategory))].sort((a, b) => a.localeCompare(b, 'zh-CN')).map((value) => ({ value, label: value }))}
+            onChange={(category) => {
+              setTemplateCategoryFilter(category);
+              if (category && templates.find((item) => item.versionId === templateVersionId && templateCategory(item) !== category)) setTemplateVersionId(undefined);
+            }} />
+        </Form.Item>
         <Form.Item label="Excel / CSV 导入模板">
           <Select
             showSearch
@@ -254,8 +264,8 @@ export function DataUploadPage() {
             placeholder="请选择已发布模板（Word / PDF 可不选）"
             value={templateVersionId}
             onChange={setTemplateVersionId}
-            options={templates.map((item) => ({ value: item.versionId, label: `${item.name} · ${item.templateCode} · V${item.versionNo}` }))}
-            notFoundContent="暂无已发布模板"
+            options={templateGroups(templates, templateCategoryFilter)}
+            notFoundContent={templateCategoryFilter ? '该分类暂无已发布模板，可切换分类' : '暂无已发布模板'}
           />
         </Form.Item>
         <Alert type="info" showIcon message="Excel / CSV 按模板导入；Word / PDF 使用自由识别，可不选模板。" />

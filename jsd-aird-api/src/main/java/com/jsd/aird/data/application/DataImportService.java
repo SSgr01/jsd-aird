@@ -43,6 +43,13 @@ public class DataImportService {
     private final ImportCompatibilityEvaluator compatibilityEvaluator;
     private final ProjectResourceFacade projectResources;
     private final ExperimentDocumentDataParser documentParser;
+    private DataReviewGuard reviewGuard;
+    @Autowired
+    public void setReviewGuard(DataReviewGuard reviewGuard) { this.reviewGuard = reviewGuard; }
+
+    private void beforeEdit(UUID organizationId, UUID jobId) {
+        if (reviewGuard != null) reviewGuard.beforeEdit(organizationId, jobId);
+    }
     @Autowired
     public DataImportService(
             DataRepository repository,
@@ -191,6 +198,7 @@ public class DataImportService {
     @Transactional
     public DataRepository.Job reprocessDataCenterImport(UUID importJobId) {
         var actor = ActorContext.required();
+        beforeEdit(actor.organizationId(), importJobId);
         var job = repository.findJobForUpdate(actor.organizationId(), importJobId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "数据导入任务不存在"));
         requireDataCenterImportOwner(actor.organizationId(), importJobId);
@@ -314,8 +322,10 @@ public class DataImportService {
                 command.fieldId(), command.displayName(), command.valueType(), command.uiType(), command.groupCode(), command.description()));
     }
 
+    @Transactional
     public void parse(UUID importJobId) {
         var actor = ActorContext.required();
+        beforeEdit(actor.organizationId(), importJobId);
         parseInternal(actor.organizationId(), importJobId);
     }
 
@@ -326,6 +336,7 @@ public class DataImportService {
     @Transactional
     public void reExtract(UUID importJobId) {
         var actor = ActorContext.required();
+        beforeEdit(actor.organizationId(), importJobId);
         requireJob(actor.organizationId(), importJobId);
         parseInternal(actor.organizationId(), importJobId, true);
     }
@@ -364,6 +375,7 @@ public class DataImportService {
                     documentSource ? "COMPATIBLE" : compatibility.status(), compatibilityReport);
             var configured = repository.listSheets(organizationId, importJobId).stream()
                     .collect(java.util.stream.Collectors.toMap(DataRepository.Sheet::sheetId, item -> item, (left, right) -> left));
+            var previousRows = force ? repository.listRows(organizationId, importJobId) : List.<DataRepository.Row>of();
             if (force) repository.clearParsed(organizationId, importJobId);
             var sheets = new ArrayList<DataRepository.Sheet>();
             var mappings = new ArrayList<DataRepository.Mapping>();
@@ -547,18 +559,41 @@ public class DataImportService {
                         "文件中没有可导入的实验数据；请填写本次实验数据后重传，或使用在线新建");
             }
             repository.updateJobStatus(organizationId, importJobId, "PARSING", 95, "SAVING_PARSED_DATA", null);
-            repository.saveParsed(importJobId, parsed.parserVersion(), sheets, mappings, rows, importJobId);
+            repository.saveParsed(importJobId, parsed.parserVersion(), sheets, mappings, restoreCorrections(rows, previousRows), importJobId);
+            // Template bindings already identify the fields. Expose editable, validated values immediately;
+            // unresolved mappings remain blockers instead of requiring an extra confirmation for every import.
+            if (!documentSource && "DATA_CENTER".equals(repository.findSourceOwner(organizationId, importJobId).orElse("DATA_CENTER")))
+                validateInternal(organizationId, importJobId);
         } catch (RuntimeException exception) {
             repository.updateJobStatus(organizationId, importJobId, "FAILED", 0, "FAILED", safeMessage(exception));
             throw exception;
         }
     }
 
+    List<DataRepository.Row> restoreCorrections(List<DataRepository.Row> extracted, List<DataRepository.Row> previous) {
+        var old = new HashMap<CorrectionIdentity,DataRepository.Row>();
+        for (var row:previous) old.put(correctionIdentity(row),row);
+        return extracted.stream().map(row -> {
+            var prior=old.get(correctionIdentity(row));
+            if (prior==null) return row;
+            return new DataRepository.Row(prior.id(),row.sheetId(),row.rowNumber(),row.rawValues(),row.normalizedValues(),
+                    prior.correctedValues(),row.status(),row.sourceMetadata(),prior.excluded(),prior.exclusionReason());
+        }).toList();
+    }
+
+    private CorrectionIdentity correctionIdentity(DataRepository.Row row) {
+        // Reapply only to the same physical source record. Re-anchoring or a
+        // changed raw value must never move a correction onto another record.
+        return new CorrectionIdentity(row.sheetId(),row.rowNumber(),row.rawValues(),row.sourceMetadata());
+    }
+    private record CorrectionIdentity(String sheetId,int rowNumber,JsonNode raw,JsonNode source) {}
+
     @Transactional
     public void confirmSheets(UUID importJobId, List<DataRepository.SheetUpdate> updates) {
         var actor = ActorContext.required();
+        beforeEdit(actor.organizationId(), importJobId);
         var job = requireJob(actor.organizationId(), importJobId);
-        if (!Set.of("WAITING_SHEET", "WAITING_MAPPING").contains(job.status())) {
+        if (!Set.of("WAITING_SHEET", "WAITING_MAPPING", "WAITING_CONFIRM").contains(job.status())) {
             throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,
                     "当前状态为 " + job.status() + "，不能重新确认工作表；如需修改请重新解析");
         }
@@ -569,8 +604,9 @@ public class DataImportService {
     @Transactional
     public void saveMappings(UUID importJobId, List<MappingCommand> commands) {
         var actor = ActorContext.required();
+        beforeEdit(actor.organizationId(), importJobId);
         var job = requireJob(actor.organizationId(), importJobId);
-        if (!Set.of("WAITING_MAPPING", "WAITING_SHEET").contains(job.status())) {
+        if (!Set.of("WAITING_MAPPING", "WAITING_SHEET", "WAITING_CONFIRM").contains(job.status())) {
             throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,
                     "当前状态为 " + job.status() + "，不能修改字段映射");
         }
@@ -591,6 +627,7 @@ public class DataImportService {
     @Transactional
     public void validate(UUID importJobId) {
         var actor = ActorContext.required();
+        beforeEdit(actor.organizationId(), importJobId);
         validateInternal(actor.organizationId(), importJobId);
     }
 
@@ -600,6 +637,17 @@ public class DataImportService {
         var mappings = repository.listMappings(organizationId, importJobId);
         var rows = repository.listRows(organizationId, importJobId);
         var issues = new ArrayList<DataRepository.Issue>();
+        for (var sheet : repository.listSheets(organizationId, importJobId)) {
+            if (!sheet.selected()) continue;
+            var mapped = mappings.stream().anyMatch(item -> sheet.sheetId().equals(item.sheetId()) && "MAP".equals(item.action())
+                    && item.fieldCode()!=null && !item.fieldCode().isBlank());
+            var hasRecords = rows.stream().anyMatch(row -> sheet.sheetId().equals(row.sheetId()));
+            if (!mapped || !hasRecords) issues.add(new DataRepository.Issue(null, sheet.sheetId(), null, "BLOCKER",
+                    !mapped ? "SHEET_MAPPING_MISSING" : "SHEET_RECORDS_MISSING", null, null, null,
+                    !mapped ? "已选择工作表“" + sheet.sheetName() + "”没有可执行字段映射，请核对模板覆盖范围或取消导入该表"
+                            : "已选择工作表“" + sheet.sheetName() + "”未读取到记录，请核对数据区域或取消导入该表",
+                    objectMapper.createObjectNode().put("action", "CHECK_SHEET"), "OPEN"));
+        }
         var mappingByColumn = new HashMap<String, DataRepository.Mapping>();
         for (var mapping : mappings) mappingByColumn.put(mappingKey(mapping.sheetId(), mappingComponentId(mapping),
                 mapping.sourceColumn()), mapping);
@@ -631,14 +679,19 @@ public class DataImportService {
                     continue;
                 }
                 var raw = entry.getValue().asText();
-                var normalizedValue = normalize(raw, mapping, row, issues);
                 var valuePath = mapping.detail().path("dataPath").asText("/" + mapping.fieldCode());
                 var bindingId = mapping.detail().path("bindingId").asText(mapping.fieldCode());
+                var correction = findNormalizedValue(row.correctedValues(), bindingId, valuePath).orElse(null);
+                var effectiveInput = correction != null && correction.has("correctedValue")
+                        ? correction.path("correctedValue").asText("") : raw;
+                var normalizedValue = normalize(effectiveInput, mapping, row, issues);
                 var value = objectMapper.createObjectNode().put("rawValue", raw)
                         .put("rawUnit", mapping.sourceUnit() == null ? "" : mapping.sourceUnit())
                         .put("normalizedValue", normalizedValue)
                         .put("normalizedUnit", mapping.standardUnit() == null ? "" : mapping.standardUnit())
                         .put("fieldCode", mapping.fieldCode())
+                        .put("fieldName", mapping.fieldName())
+                        .put("valueSource", mapping.detail().path("valueSource").asText("INPUT"))
                         .put("bindingId", bindingId)
                         .put("sourceColumn", mapping.sourceColumn())
                         .put("valuePath", valuePath)
@@ -706,6 +759,7 @@ public class DataImportService {
                     rowBlocked = true;
                 }
             }
+            rowBlocked |= issues.stream().anyMatch(item -> "BLOCKER".equals(item.severity()) && row.id().equals(issueRecordId(item)));
             normalizedRows.add(new DataRepository.Row(row.id(), row.sheetId(), row.rowNumber(), row.rawValues(), normalized,
                     corrected, rowBlocked ? "BLOCKED" : "VALID",
                     row.sourceMetadata(), false, null));
@@ -742,6 +796,7 @@ public class DataImportService {
     public void reanchorComponent(UUID importJobId, String componentId, String sheetId,
                                   String sourceRange, String reason) {
         var actor = ActorContext.required();
+        beforeEdit(actor.organizationId(), importJobId);
         var job = requireJob(actor.organizationId(), importJobId);
         if ("COMPLETED".equals(job.status())) {
             throw new ApiException(ApiErrorCode.BAD_REQUEST, "已完成的导入任务不能修改组件位置");
@@ -789,6 +844,7 @@ public class DataImportService {
     @Transactional
     public void resolveIssue(UUID importJobId, UUID issueId, String status, String reason) {
         var actor = ActorContext.required();
+        beforeEdit(actor.organizationId(), importJobId);
         requireJob(actor.organizationId(), importJobId);
         // Blockers cannot be dismissed by changing a status flag. They are
         // resolved only after a correction/exclusion triggers revalidation.
@@ -809,6 +865,7 @@ public class DataImportService {
     public void correctValue(UUID importJobId, UUID recordId, String bindingId, String valuePath,
                              JsonNode correctedValue, String reason) {
         var actor = ActorContext.required();
+        beforeEdit(actor.organizationId(), importJobId);
         requireJob(actor.organizationId(), importJobId);
         if (reason == null || reason.isBlank()) throw new ApiException(ApiErrorCode.BAD_REQUEST, "修正数据时必须填写原因");
         var row = repository.listRows(actor.organizationId(), importJobId).stream()
@@ -845,6 +902,7 @@ public class DataImportService {
     @Transactional
     public void excludeRow(UUID importJobId, UUID recordId, boolean excluded, String reason) {
         var actor = ActorContext.required();
+        beforeEdit(actor.organizationId(), importJobId);
         requireJob(actor.organizationId(), importJobId);
         if (excluded && (reason == null || reason.isBlank())) {
             throw new ApiException(ApiErrorCode.BAD_REQUEST, "排除记录时必须填写原因");
@@ -900,7 +958,7 @@ public class DataImportService {
                     ? importScopedKey(job.id(), row) : identity)
                     : metadata.path("identitySynthetic").asBoolean(false)
                     ? importScopedKey(job.id(), row) : structuredKey;
-            return new DataRepository.CommittedRow(row.sheetId(), sheetNames.getOrDefault(row.sheetId(), row.sheetId()), row.rowNumber(), row.rawValues(), row.normalizedValues(),
+            return new DataRepository.CommittedRow(row.sheetId(), sheetNames.getOrDefault(row.sheetId(), row.sheetId()), row.rowNumber(), row.rawValues(), effectiveValues,
                     row.correctedValues(), recordKey, anchors);
         }).toList();
         var result = repository.commit(actor.organizationId(), importJobId, actor.userId(), committed);
@@ -931,19 +989,27 @@ public class DataImportService {
     }
 
     private String importScopedKey(UUID importJobId, DataRepository.Row row) {
-        return "IMPORT:" + importJobId + ":" + row.sheetId() + ":" + row.rowNumber() + ":" + row.id();
+        return "IMPORT:" + importJobId + ":" + row.sheetId() + ":" + row.rowNumber() + ":"
+                + (row.sourceMetadata() == null ? "" : row.sourceMetadata().path("componentId").asText(""));
     }
 
     private DataRepository.Job requireJob(UUID organizationId, UUID id) {
         return repository.findJob(organizationId, id).orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "导入任务不存在"));
     }
 
+    public boolean isDataCenterJob(UUID id) {
+        var actor = ActorContext.required();
+        requireJob(actor.organizationId(), id);
+        return "DATA_CENTER".equals(repository.findSourceOwner(actor.organizationId(), id).orElse("DATA_CENTER"));
+    }
+
 
     private DataRepository.Issue issue(DataRepository.Row row, DataRepository.Mapping mapping, String severity,
                                        String type, String message) {
         var detail = objectMapper.createObjectNode().put("recordId", row.id().toString());
-        return new DataRepository.Issue(null, row.sheetId(), mapping == null ? null : mapping.fieldCode(), severity, type,
-                row.rowNumber(), mapping == null ? null : mapping.sourceColumn(), mapping == null ? null : mapping.sourceColumn() + row.rowNumber(),
+        var location=mapping==null ? null : anchor(mapping,row,row.sheetId());
+        return new DataRepository.Issue(null, location==null ? row.sheetId() : location.sheetId(), mapping == null ? null : mapping.fieldCode(), severity, type,
+                location==null ? row.rowNumber() : location.rowNumber(), mapping == null ? null : mapping.sourceColumn(), location==null ? null : location.address(),
                 message, detail, "OPEN");
     }
 
@@ -978,15 +1044,19 @@ public class DataImportService {
     private JsonNode correctedValues(JsonNode normalized, JsonNode corrected) {
         var result = normalized == null || !normalized.isObject()
                 ? objectMapper.createObjectNode() : (ObjectNode) normalized.deepCopy();
-        if (corrected != null && corrected.isObject()) corrected.fields().forEachRemaining(entry -> {
-            if (entry.getValue() != null && !entry.getValue().isNull()) result.set(entry.getKey(), entry.getValue().deepCopy());
+        if (corrected != null && corrected.isObject()) result.fields().forEachRemaining(entry -> {
+            var base = entry.getValue();
+            var match = findNormalizedValue(corrected, base.path("bindingId").asText(entry.getKey()),
+                    base.path("valuePath").asText("/" + entry.getKey())).orElse(null);
+            if (match != null && match.has("correctedValue") && base instanceof ObjectNode object)
+                object.set("correctedValue", match.get("correctedValue").deepCopy());
         });
         return result;
     }
 
     private String effectiveFieldValue(JsonNode wrapper) {
         if (wrapper == null || wrapper.isMissingNode() || wrapper.isNull()) return "";
-        if (wrapper.has("correctedValue") && !wrapper.path("correctedValue").isNull()) return wrapper.path("correctedValue").asText("");
+        if (wrapper.has("correctedValue")) return wrapper.path("correctedValue").asText("");
         return wrapper.path("normalizedValue").asText("");
     }
 

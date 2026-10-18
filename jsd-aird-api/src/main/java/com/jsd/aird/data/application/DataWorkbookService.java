@@ -33,6 +33,9 @@ public class DataWorkbookService {
     private final WorkbookInstanceParser workbookParser;
     private final TemplateDataImportFacade templates;
     private final ObjectMapper objectMapper;
+    private DataReviewGuard reviewGuard;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setReviewGuard(DataReviewGuard reviewGuard) { this.reviewGuard = reviewGuard; }
 
     public DataWorkbookService(DataRepository repository, FileObjectRepository files, ObjectStorage storage,
                                WorkbookInstanceParser workbookParser, TemplateDataImportFacade templates,
@@ -62,7 +65,8 @@ public class DataWorkbookService {
         return context(file, job.sourceSha256(), job.sourceFormat(), snapshot, sheets,
                 sheets.stream().filter(DataRepository.Sheet::selected).findFirst()
                         .map(DataRepository.Sheet::sheetId).orElse(null),
-                List.of("WAITING_MAPPING", "WAITING_CONFIRM").contains(job.status()),
+                List.of("WAITING_MAPPING", "WAITING_CONFIRM").contains(job.status())
+                        && (reviewGuard == null || !reviewGuard.locked(actor.organizationId(), importJobId)),
                 fieldDefinitions, fields, definition);
     }
 
@@ -261,7 +265,7 @@ public class DataWorkbookService {
                         row.sheetId(), sheetNames.getOrDefault(row.sheetId(), row.sheetId()), row.rowNumber(), address,
                         source.path("sourceLocation").asText(""),
                         rawValue.deepCopy(), normalizedValue.deepCopy(), correctedValue.deepCopy(), effective.deepCopy(),
-                        mapping != null && "MAP".equals(mapping.action())
+                        wrapped && mapping != null && "MAP".equals(mapping.action())
                                 && !mapping.detail().path("syntheticDimension").asBoolean(false)
                                 && editableValue(valueSource)
                                 && !address.isBlank(),

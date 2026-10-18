@@ -109,6 +109,7 @@ public class ProjectResourceService implements ProjectResourceFacade {
     public List<RelatedProjectView> replaceLinks(Actor actor, ResourceType resourceType, UUID resourceId,
                                                  List<ProjectRelationTarget> targets) {
         requireResource(actor.organizationId(), resourceType, resourceId);
+        lockDataSource(actor,resourceType,resourceId);
         var desired = normalizeTargets(targets);
         var existing = rawTargets(actor.organizationId(), resourceType, resourceId);
         var involvedProjects = new LinkedHashSet<UUID>();
@@ -139,6 +140,7 @@ public class ProjectResourceService implements ProjectResourceFacade {
     public List<ReferenceView> addReferences(Actor actor, ResourceType resourceType, UUID resourceId,
                                              String summary, List<ProjectRelationTarget> targets) {
         var source = requireResource(actor.organizationId(), resourceType, resourceId);
+        lockDataSource(actor,resourceType,resourceId);
         var normalized = normalizeTargets(targets);
         if (normalized.isEmpty()) throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "至少选择一个项目");
         normalized.forEach(target -> {
@@ -149,6 +151,12 @@ public class ProjectResourceService implements ProjectResourceFacade {
         });
         return normalized.stream().map(target -> referenceByTuple(actor.organizationId(), resourceType, resourceId, target))
                 .toList();
+    }
+
+    private void lockDataSource(Actor actor, ResourceType type, UUID id) {
+        if (type == ResourceType.DATA_IMPORT_JOB) jdbc.query(
+                "SELECT id FROM data.import_job WHERE organization_id=? AND id=? FOR UPDATE",
+                (rs,n) -> rs.getObject(1,UUID.class),actor.organizationId(),id);
     }
 
     @Override

@@ -1,5 +1,5 @@
 import type { FormulaCandidate, FormulaContext, FormulaGoal, FormulaMaterial, FormulaRequest, FormulaTarget, FormulaTargetResult, GoalValue, ResearchRun } from '@/services/ai-rnd/formula-design-api'
-import { businessValue, categoryOptions, fieldName, formatPredictionNumber, inputError, predictionFailure, unavailableReason } from '../performance-prediction/performance-prediction-utils'
+import { businessValue, categoryOptions, fieldName, formatPredictionNumber, inputError, invalidContinuousPrediction, predictionFailure, unavailableReason } from '../performance-prediction/performance-prediction-utils'
 import { feasibleFormulaSeed } from './formula-search'
 
 export type MaterialSetting = { mode: 'FIXED' | 'VARIABLE'; ratio?: number; minimum?: number; maximum?: number }
@@ -145,6 +145,7 @@ export function formulaRunNotice(run: ResearchRun) {
   const reasons = run.rejectionSummary ?? {}
   if ((reasons.TARGET_NOT_MET ?? 0) > 0) return '未找到足够的达标方案，可调整目标值或材料范围后重新生成。'
   if ((reasons.OUT_OF_DOMAIN ?? 0) > 0) return '部分条件未能得到预测值，请核对数值和单位，或补充相近实验记录后重新训练。'
+  if ((reasons.INVALID_PREDICTION ?? 0) > 0) return '部分模型结果不合理，已排除相关方案。请核对输入和单位，并补充相近实验后重新训练。'
   if ((reasons.MATERIAL_MISMATCH ?? 0) > 0) return '部分材料不在模型中，请调整材料或更换指标。'
   return run.actualCandidateCount ? `本次生成 ${run.actualCandidateCount} 个不同方案，当前条件下没有更多可行方案。` : '当前条件下没有可行方案，请调整目标值、材料比例范围或实验条件。'
 }
@@ -152,7 +153,7 @@ export function resultPrediction(result?: FormulaTargetResult) { return result?.
 export function resultText(result?: FormulaTargetResult) {
   const value = resultPrediction(result)
   if (!value || result?.status !== 'SUCCEEDED') return '未得到预测值'
-  if (value.resultType === 'CONTINUOUS') return formatPredictionNumber(value.value)
+  if (value.resultType === 'CONTINUOUS') return invalidContinuousPrediction(value.value, value.unit) ? '未展示：结果不合理，请核对单位并补充相近实验后重新训练' : formatPredictionNumber(value.value)
   return value.label
 }
 export function goalMet(goal: FormulaForm['goals'][string] | undefined, target: FormulaTarget, result?: FormulaTargetResult) {

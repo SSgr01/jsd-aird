@@ -197,6 +197,7 @@ public class PredictionService {
             .put("valueType",b.valueType()).put("available",gateAvailability(b).isEmpty()).put("formulaRequirement","NOT_USED");
         if(b.modelId()!=null)x.put("modelVersionId",b.modelId().toString());
         x.set("unavailableReasons",json.valueToTree(gateAvailability(b)));x.set("fixedConditions",fixedConditions(b));
+        if (b.definition().has("modelSource")) x.set("modelSource", b.definition().path("modelSource").deepCopy());
         return x;
     }
     private void mergeInputField(Map<String,JsonNode> inputs,JsonNode raw,PredictionRepository.TargetBinding binding){

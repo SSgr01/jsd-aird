@@ -158,8 +158,13 @@ public class JdbcDataRepository implements DataRepository {
             parameters.add(categoryId);
         }
         if (status != null && !status.isBlank()) {
-            conditions.add("status = ?");
-            parameters.add(status);
+            if (status.startsWith("PUB_")) {
+                conditions.add("formal_status = ?");
+                parameters.add(status.substring(4));
+            } else {
+                conditions.add("status = ?");
+                parameters.add(status);
+            }
         }
         if (keyword != null && !keyword.isBlank()) {
             conditions.add("lower(source_file_name) LIKE lower(?)");
@@ -175,7 +180,8 @@ public class JdbcDataRepository implements DataRepository {
                     SELECT j.id entry_id,j.source_file_id,j.source_file_name,j.source_format,
                         j.template_version_id,j.category_id,c.name category_name,j.status,j.progress,
                         j.created_at,j.updated_at,j.source_owner,j.recognition_mode,
-                        coalesce((SELECT s.status FROM data.confirmed_submission_head h
+                        coalesce((SELECT p.status FROM data.publication p WHERE p.organization_id=j.organization_id AND p.import_job_id=j.id),
+                          (SELECT s.status FROM data.confirmed_submission_head h
                             JOIN data.confirmed_submission s ON s.organization_id=h.organization_id
                                 AND s.id=h.confirmed_submission_id
                             WHERE h.organization_id=j.organization_id AND h.import_job_id=j.id),
@@ -676,13 +682,28 @@ public class JdbcDataRepository implements DataRepository {
     public CommitResult commit(UUID organizationId, UUID importJobId, UUID actorId, List<CommittedRow> rows) {
         var job = findJob(organizationId, importJobId).orElseThrow();
         var committedRecords = new ArrayList<CommittedRecord>();
+        var previousIds = new HashMap<String, java.util.ArrayDeque<UUID>>();
+        jdbc.query("SELECT id,record_key,sheet_id FROM data.data_record WHERE organization_id=? AND import_job_id=? ORDER BY record_index",
+                rs -> {
+                    var key=rs.getString("record_key");
+                    var ids=previousIds.computeIfAbsent(rs.getString("sheet_id") + "|" + key,ignored -> new java.util.ArrayDeque<>());
+                    ids.add(rs.getObject("id",UUID.class));
+                    if (key.startsWith("IMPORT:") && key.matches(".*:[0-9a-fA-F-]{36}$"))
+                        previousIds.putIfAbsent(rs.getString("sheet_id")+"|"+key.substring(0,key.lastIndexOf(':')+1),ids);
+                }, organizationId, importJobId);
+        var occurrences = new HashMap<String, Integer>();
         // A re-confirmation replaces the records of this import batch. Cascades
         // remove the field values and source anchors belonging to those records.
         jdbc.update("DELETE FROM data.data_record WHERE organization_id = ? AND import_job_id = ?",
                 organizationId, importJobId);
         var recordIndex = 0;
         for (CommittedRow row : rows) {
-            var recordId = UUID.randomUUID();
+            var identity = row.sheetId() + "|" + row.recordKey();
+            var occurrence = occurrences.merge(identity, 1, Integer::sum);
+            var prior = previousIds.get(identity);
+            var recordId = prior != null && !prior.isEmpty() ? prior.removeFirst()
+                    : UUID.nameUUIDFromBytes((importJobId + "|" + identity + "|" + occurrence)
+                            .getBytes(java.nio.charset.StandardCharsets.UTF_8));
             var dataHash = hash(row.normalized());
             jdbc.update("""
                     INSERT INTO data.data_record (

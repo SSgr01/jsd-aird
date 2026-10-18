@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from jsd_aird_ai.errors import FormulaModelError
+import jsd_aird_ai.service_v2 as runtime
 from jsd_aird_ai.service_v2 import FormulaModelV2Service
 from jsd_aird_ai.settings import Settings
 
@@ -113,9 +115,28 @@ def test_fixing_a_previously_variable_factor_keeps_its_training_information() ->
 
 
 def test_ranges_with_no_actual_freedom_are_rejected_before_fitting() -> None:
-    import pytest
     with pytest.raises(FormulaModelError, match="没有可调整空间"):
         service().recommend_from_history({
             "features": [{"code": "temperature", "kind": "NUMERIC", "minimum": 27, "maximum": 27}],
             "target": "strength", "rows": rows(),
         })
+
+
+def test_non_negative_count_predictions_are_filtered_but_unknown_units_keep_negative_values(monkeypatch) -> None:
+    def negative_prediction(self, values, return_std=False, **kwargs):
+        mean = np.full(len(values), -2.0)
+        return (mean, np.full(len(values), 0.1)) if return_std else mean
+
+    monkeypatch.setattr(runtime.GaussianProcessRegressor, "predict", negative_prediction)
+    request = {
+        "features": [{"code": "temperature", "kind": "NUMERIC", "minimum": 20, "maximum": 32}],
+        "target": "strength", "direction": "MAXIMIZE", "rows": rows(), "candidateCount": 2, "seed": 7,
+    }
+
+    allowed = service().recommend_from_history(request)
+    assert allowed["candidates"]
+    assert all(candidate["predictedValue"] == -2.0 for candidate in allowed["candidates"])
+
+    with pytest.raises(FormulaModelError, match="负的计数预测") as error:
+        service().recommend_from_history(request | {"resultConstraints": {"nonNegative": True}})
+    assert error.value.code.value == "NO_FEASIBLE_CANDIDATE"

@@ -5,9 +5,9 @@ import { columnValues, isUnmappedFormulaColumn, materialColumn } from '@/service
 import './xy-column-picker.css'
 
 const { Text } = Typography
-export function XYColumnPicker({ dataset, mode, xColumns, yColumn, onXChange, onYChange, yExtra, lockedXCodes = [] }: {
+export function XYColumnPicker({ dataset, mode, xColumns, yColumn, onXChange, onYChange, yExtra, lockedXCodes = [], disabled = false }: {
   dataset: HistoryDataset; mode: 'modeling' | 'optimization'; xColumns: string[]; yColumn?: string
-  onXChange: (values: string[]) => void; onYChange: (value: string) => void; yExtra?: ReactNode; lockedXCodes?: string[]
+  onXChange: (values: string[]) => void; onYChange: (value: string) => void; yExtra?: ReactNode; lockedXCodes?: string[]; disabled?: boolean
 }) {
   const [xQuery, setXQuery] = useState('')
   const [yQuery, setYQuery] = useState('')
@@ -43,17 +43,17 @@ export function XYColumnPicker({ dataset, mode, xColumns, yColumn, onXChange, on
   const selectedY = dataset.columns.find(column => column.code === yColumn)
   return <div className="workbench-xy-layout">
     <Card className="workbench-select-card" title={<span>选择 X <Text type="secondary">· 作为预测输入，可多选</Text></span>}>
-      <Input aria-label="搜索 X 字段" placeholder="搜索字段名称" allowClear value={xQuery} onChange={event => setXQuery(event.target.value)} className="field-choice-search" />
+      <Input aria-label="搜索 X 字段" placeholder="搜索字段名称" allowClear value={xQuery} disabled={disabled} onChange={event => setXQuery(event.target.value)} className="field-choice-search" />
       <Checkbox.Group className="workbench-column-choice-list" value={xColumns} onChange={values => onXChange([...new Set([...values.map(String), ...lockedXCodes])].filter(code => code !== yColumn))}>
-        {xChoices.map(column => <Checkbox key={column.code} value={column.code} disabled={xDisabled(column)} className={fixed(column) ? 'field-choice-fixed' : undefined}>{label(column, 'X', xReason(column))}</Checkbox>)}
+        {xChoices.map(column => <Checkbox key={column.code} value={column.code} disabled={disabled || xDisabled(column)} className={fixed(column) ? 'field-choice-fixed' : undefined}>{label(column, 'X', xReason(column))}</Checkbox>)}
       </Checkbox.Group>
       {!xChoices.length && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有匹配的字段" />}
-      {xColumns.length > 0 && <div className="workbench-selection-summary"><Text strong>已选 {xColumns.length} 列</Text><Space wrap>{xColumns.map(code => <Tag key={code} closable={!lockedXCodes.includes(code)} onClose={() => onXChange(xColumns.filter(item => item !== code))}>{dataset.columns.find(column => column.code === code)?.name ?? code}</Tag>)}</Space></div>}
+      {xColumns.length > 0 && <div className="workbench-selection-summary"><Text strong>已选 {xColumns.length} 列</Text><Space wrap>{xColumns.map(code => <Tag key={code} closable={!disabled && !lockedXCodes.includes(code)} onClose={() => onXChange(xColumns.filter(item => item !== code))}>{dataset.columns.find(column => column.code === code)?.name ?? code}</Tag>)}</Space></div>}
     </Card>
     <Card className="workbench-select-card" title={<span>选择 Y <Text type="secondary">· {mode === 'modeling' ? '每次训练预测一个结果' : '选择本轮优化的结果'}</Text></span>}>
-      <Input aria-label="搜索 Y 字段" placeholder="搜索字段名称" allowClear value={yQuery} onChange={event => setYQuery(event.target.value)} className="field-choice-search" />
+      <Input aria-label="搜索 Y 字段" placeholder="搜索字段名称" allowClear value={yQuery} disabled={disabled} onChange={event => setYQuery(event.target.value)} className="field-choice-search" />
       <Radio.Group className="workbench-column-choice-list" value={yColumn} onChange={event => { const value = String(event.target.value); onYChange(value); onXChange(xColumns.filter(code => code !== value)) }}>
-        {yChoices.map(column => <Radio key={column.code} value={column.code} disabled={Boolean(yReason(column))}>{label(column, 'Y', yReason(column))}</Radio>)}
+        {yChoices.map(column => <Radio key={column.code} value={column.code} disabled={disabled || Boolean(yReason(column))}>{label(column, 'Y', yReason(column))}</Radio>)}
       </Radio.Group>
       {!yChoices.length && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有匹配的字段" />}
       {selectedY && <div className="workbench-selection-summary workbench-y-detail"><Text strong>当前预测结果：{selectedY.name}</Text><Text type="secondary">{selectedY.kind === 'NUMERIC' ? '数值预测' : '类别预测'}{selectedY.unit ? ` · 单位 ${selectedY.unit}` : ''}</Text>{mode === 'modeling' && <Text type="secondary">{selectedY.kind === 'NUMERIC' ? '训练结果显示 MAE、RMSE 和 R²，误差单位与本列相同。' : '训练结果显示准确率、宏平均 F1 和概率损失。'}</Text>}</div>}

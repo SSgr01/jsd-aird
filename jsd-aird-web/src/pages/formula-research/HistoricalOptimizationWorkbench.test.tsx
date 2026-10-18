@@ -2,6 +2,7 @@ import { App } from 'antd'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { HttpError } from '@/services/http/errors'
 import { HistoricalOptimizationWorkbench } from './HistoricalOptimizationWorkbench'
 
 const api = vi.hoisted(() => ({
@@ -282,8 +283,8 @@ describe('HistoricalOptimizationWorkbench', () => {
     expect(screen.getByRole('spinbutton', { name: /候选方案 1实测60°光泽/ })).toBeInTheDocument()
   })
 
-  it('keeps the setup editable and shows the server reason when optimization is rejected', async () => {
-    api.submit.mockRejectedValueOnce(new Error('所选 X/Y 组合只有 2 条完整记录，至少需要 4 条'))
+  it('keeps the setup editable and explains structured data shortage when optimization is rejected', async () => {
+    api.submit.mockRejectedValueOnce(new HttpError('internal details', 'INSUFFICIENT_DATA', 400))
     render(<App><MemoryRouter><HistoricalOptimizationWorkbench /></MemoryRouter></App>)
     await screen.findByText('涂层历史数据')
     fireEvent.click(screen.getByText('涂层历史数据'))
@@ -295,7 +296,7 @@ describe('HistoricalOptimizationWorkbench', () => {
     fireEvent.click(screen.getAllByRole('button', { name: /设置范围/ }).find(element => element.tagName === 'BUTTON')!)
     fireEvent.click(screen.getByRole('button', { name: '开始优化' }))
 
-    expect(await screen.findByText('所选 X/Y 组合只有 2 条完整记录，至少需要 4 条')).toBeInTheDocument()
+    expect(await screen.findByText('符合条件的完整实验记录不足，请补齐记录或调整 X/Y。')).toBeInTheDocument()
     expect(api.submit).toHaveBeenCalledOnce()
     expect(screen.getByRole('button', { name: '开始优化' })).toBeEnabled()
   })

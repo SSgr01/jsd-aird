@@ -12,12 +12,23 @@ import { createExperiment } from '@/services/experiments/experiment-api'
 import { useAuthStore } from '@/stores/auth-store'
 import { historicalCandidateDraft } from './historical-optimization-draft'
 import { useNavigate } from 'react-router-dom'
+import { invalidContinuousPrediction } from '../performance-prediction/performance-prediction-utils'
+import { HttpError } from '@/services/http/errors'
 import './historical-optimization-workbench.css'
 
 const { Title, Text, Paragraph } = Typography
-const runStorageKey = 'r09.gpOptimizationRunId'
-const setupStorageKey = 'r09.gpOptimizationSetup'
+const clearOptimizationRunUrl = (id?: string) => {
+  const query = new URLSearchParams(window.location.search)
+  if (id && query.get('optimizationRun') !== id) return
+  query.delete('optimizationRun')
+  window.history.replaceState({}, '', `${window.location.pathname}${query.size ? `?${query.toString()}` : ''}`)
+}
+const setOptimizationRunUrl = (id: string) => {
+  const query = new URLSearchParams(window.location.search); query.set('optimizationRun', id)
+  window.history.replaceState({}, '', `${window.location.pathname}?${query.toString()}`)
+}
 const stepTitles = ['选择数据', '选择 X 和 Y', '设置范围', '查看方案']
+type PendingOptimizationOperation = { kind: 'SUBMIT'; key: string; request: Record<string, unknown>; acceptedRunId?: string } | { kind: 'NEXT_ROUND'; key: string; parentRunId: string; acceptedRunId?: string }
 
 const numericValues = (dataset: HistoryDataset | undefined, code: string) => (dataset?.rows ?? [])
   .map(row => row.values[code]).filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
@@ -30,11 +41,25 @@ const valueText = (value: unknown, unit?: string, significantDigits = 6) => {
 }
 
 export function HistoricalOptimizationWorkbench() {
+  const user = useAuthStore(state => state.user)
+  const storageKey = user ? `historical-optimization:v2:${user.organizationId}:${user.userId}` : 'historical-optimization:v2:anonymous'
+  return <HistoricalOptimizationWorkbenchInner key={storageKey} storageKey={storageKey} />
+}
+
+function HistoricalOptimizationWorkbenchInner({ storageKey }: { storageKey: string }) {
   const { message } = App.useApp()
   const user = useAuthStore(state => state.user)
   const navigate = useNavigate()
+  const runStorageKey = `${storageKey}:run`
+  const setupStorageKey = `${storageKey}:setup`
+  const operationStorageKey = `${storageKey}:pending-operation`
+  const draftStorageKey = `${storageKey}:drafts`
+  const [pendingOperation, setPendingOperation] = useState<PendingOptimizationOperation | undefined>(() => {
+    try { return JSON.parse(localStorage.getItem(operationStorageKey) ?? 'null') as PendingOptimizationOperation | null ?? undefined }
+    catch { return undefined }
+  })
   const [creatingDraft, setCreatingDraft] = useState<string>()
-  const [drafts, setDrafts] = useState<Record<string, string>>(() => { try { return JSON.parse(localStorage.getItem('gp-optimization-drafts') ?? '{}') as Record<string,string> } catch { return {} } })
+  const [drafts, setDrafts] = useState<Record<string, string>>(() => { try { return JSON.parse(localStorage.getItem(draftStorageKey) ?? '{}') as Record<string,string> } catch { return {} } })
   const [keyword, setKeyword] = useState('')
   const [datasets, setDatasets] = useState<HistoryDatasetOption[]>([])
   const [selectedDatasetIds, setSelectedDatasetIds] = useState<string[]>([])
@@ -47,6 +72,8 @@ export function HistoricalOptimizationWorkbench() {
   const [activeStep, setActiveStep] = useState(0)
   const [runId, setRunId] = useState<string>()
   const [run, setRun] = useState<OptimizationRun>()
+  const [frozenDataset, setFrozenDataset] = useState<HistoryDataset>()
+  const [runLoadError, setRunLoadError] = useState('')
   const [loadingDatasets, setLoadingDatasets] = useState(false)
   const [loadingDataset, setLoadingDataset] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -67,7 +94,8 @@ export function HistoricalOptimizationWorkbench() {
   }
 
   const sourceDatasets = useMemo(() => selectedDatasetIds.map(id => datasetCache[id]).filter((item): item is HistoryDataset => Boolean(item)), [datasetCache, selectedDatasetIds])
-  const dataset = useMemo(() => sourceDatasets.length === selectedDatasetIds.length ? mergeHistoryDatasets(sourceDatasets) : undefined, [selectedDatasetIds, sourceDatasets])
+  const liveDataset = useMemo(() => sourceDatasets.length === selectedDatasetIds.length ? mergeHistoryDatasets(sourceDatasets) : undefined, [selectedDatasetIds, sourceDatasets])
+  const dataset = runId && frozenDataset ? frozenDataset : liveDataset
   const rowIdsByDataset = useMemo(() => selectedRowIdsByDataset(selectedDatasetIds, dataset?.rows ?? [], selectedRowIds), [dataset?.rows, selectedDatasetIds, selectedRowIds])
   const selectedRows = useMemo(() => dataset?.rows.filter(row => rowIdsByDataset[row.sourceDatasetId ?? dataset.id]?.includes(row.id)) ?? [], [dataset, rowIdsByDataset])
   const selectedDatasetView = useMemo<HistoryDataset | undefined>(() => dataset ? ({
@@ -76,12 +104,13 @@ export function HistoricalOptimizationWorkbench() {
   }) : undefined, [dataset, selectedRows])
 
   const toggleDatasets = (ids: Key[]) => {
+    if (pendingOperation) return
     const next = ids.map(String)
     if (next.join('|') === selectedDatasetIds.join('|')) return
     restoreStarted.current = false
     manualBounds.current.clear()
-    setSelectedDatasetIds(next); setXColumns([]); setYColumn(undefined); setBounds({}); setRun(undefined); setRunId(undefined)
-    setSavedObservations([]); setObservations({}); sessionStorage.removeItem(runStorageKey)
+    setSelectedDatasetIds(next); setBounds({}); setRun(undefined); setRunId(undefined); setFrozenDataset(undefined)
+    setSavedObservations([]); setObservations({}); localStorage.removeItem(runStorageKey); localStorage.removeItem(operationStorageKey); clearOptimizationRunUrl()
   }
 
   useEffect(() => {
@@ -92,23 +121,33 @@ export function HistoricalOptimizationWorkbench() {
     }
     missing.forEach(id => loadingDatasetIds.current.add(id))
     setLoadingDataset(true)
+    let cancelled = false
     void Promise.all(missing.map(id => optimizationApi.historyDataset(id))).then(values => {
-      if (!restoreStarted.current) setDatasetCache(current => ({ ...current, ...Object.fromEntries(values.map(value => [value.id, value])) }))
+      if (!cancelled) setDatasetCache(current => ({ ...current, ...Object.fromEntries(values.map(value => [value.id, value])) }))
     }).catch(error => { message.error(aiActionFeedback(error, '无法读取所选数据表')) }).finally(() => {
-      missing.forEach(id => loadingDatasetIds.current.delete(id))
-      setLoadingDataset(selectedDatasetIds.some(id => loadingDatasetIds.current.has(id)))
+      if (!cancelled) {
+        missing.forEach(id => loadingDatasetIds.current.delete(id))
+        setLoadingDataset(selectedDatasetIds.some(id => loadingDatasetIds.current.has(id)))
+      }
     })
+    return () => { cancelled = true; missing.forEach(id => loadingDatasetIds.current.delete(id)) }
   }, [datasetCache, message, selectedDatasetIds])
 
   useEffect(() => {
     if (!dataset || runId) return
     const ids = new Set(dataset.rows.map(row => row.id))
-    if (!Object.entries(selectedRowIds).some(([id, rows]) => selectedDatasetIds.includes(id) && rows.some(row => !ids.has(row)))) return
-    setSelectedRowIds(current => Object.fromEntries(Object.entries(current).map(([id, rows]) => [id, selectedDatasetIds.includes(id) ? rows.filter(row => ids.has(row)) : rows])))
-    setXColumns(current => current.filter(code => dataset.columns.some(column => column.code === code)))
-    setYColumn(current => dataset.columns.some(column => column.code === current) ? current : undefined)
-    setActiveStep(0)
-    message.warning({ key: 'optimization-sample-refresh', content: '实验数据已按样品重新整理，请重新勾选记录并确认 X/Y。' })
+    const availableCodes = new Set(dataset.columns.map(column => column.code))
+    const staleRows = Object.entries(selectedRowIds).some(([id, rows]) => selectedDatasetIds.includes(id) && rows.some(row => !ids.has(row)))
+    const staleFields = xColumns.some(code => !availableCodes.has(code)) || Boolean(yColumn && !availableCodes.has(yColumn))
+    if (staleRows) setSelectedRowIds(current => Object.fromEntries(Object.entries(current).map(([id, rows]) => [id, selectedDatasetIds.includes(id) ? rows.filter(row => ids.has(row)) : rows])))
+    if (staleFields) {
+      setXColumns(current => current.filter(code => availableCodes.has(code)))
+      setYColumn(current => current && availableCodes.has(current) ? current : undefined)
+    }
+    if (staleRows || staleFields) {
+      setActiveStep(staleRows ? 0 : 1)
+      message.warning({ key: 'optimization-sample-refresh', content: staleRows ? '实验数据已按样品重新整理，请重新勾选记录并确认 X/Y。' : '所选数据表中有字段已变化，请检查并重新确认 X/Y。' })
+    }
   }, [dataset])
 
   useEffect(() => {
@@ -135,7 +174,7 @@ export function HistoricalOptimizationWorkbench() {
     localStorage.setItem(setupStorageKey, JSON.stringify({ datasetIds: selectedDatasetIds, selectedRowIdsByDataset: selectedRowIds, xColumns, yColumn, activeStep, direction, bounds, manualBounds: [...manualBounds.current] }))
   }, [activeStep, selectedDatasetIds, selectedRowIds, setupReady, xColumns, yColumn, direction, bounds])
   useEffect(() => {
-    const remembered = new URLSearchParams(location.search).get('optimizationRun') ?? sessionStorage.getItem(runStorageKey) ?? undefined
+    const remembered = new URLSearchParams(location.search).get('optimizationRun') ?? localStorage.getItem(runStorageKey) ?? undefined
     if (remembered) { setRunId(remembered); setActiveStep(3) }
   }, [])
 
@@ -147,7 +186,7 @@ export function HistoricalOptimizationWorkbench() {
       try {
         const current = await optimizationApi.run(runId)
         if (!active) return
-        setRun(current)
+        setRun(current); setRunLoadError(''); localStorage.setItem(runStorageKey, current.id)
         const request: any = current.frozenRequest ?? {}
         if (request.mode === 'HISTORICAL_GP_BO' && !restoreStarted.current) {
           restoreStarted.current = true
@@ -156,10 +195,7 @@ export function HistoricalOptimizationWorkbench() {
           setSelectedRowIds(request.selectedRowIdsByDataset ?? {})
           const snapshot = request.datasetSnapshot as HistoryDataset | undefined
           if (snapshot?.rows) {
-            setDatasetCache(cache => ({ ...cache, ...Object.fromEntries(sourceIds.map(id => [id, {
-              ...snapshot, id, sourceDatasetIds: [id], rows: snapshot.rows.filter(row => (row.sourceDatasetId ?? sourceIds[0]) === id),
-              rowCount: snapshot.rows.filter(row => (row.sourceDatasetId ?? sourceIds[0]) === id).length,
-            }])) }))
+            setFrozenDataset(snapshot)
           } else { message.warning('本任务未保存样品明细，请重新选择数据开始优化') }
           const features = Array.isArray(request.features) ? request.features : []
           manualBounds.current = new Set(features.map((feature: any) => String(feature.code)))
@@ -170,6 +206,9 @@ export function HistoricalOptimizationWorkbench() {
         }
         if (['QUEUED', 'RUNNING'].includes(current.executionStatus)) timer = window.setTimeout(() => { void poll() }, 1200)
         else {
+          if (pendingOperation?.acceptedRunId === current.id) {
+            localStorage.removeItem(operationStorageKey); setPendingOperation(undefined); setSubmitting(false); setContinuing(false)
+          }
           try {
             const saved = (await optimizationApi.observations(runId)).observations
             if (active) {
@@ -179,7 +218,14 @@ export function HistoricalOptimizationWorkbench() {
           } catch { /* observation form remains available */ }
         }
       } catch (error) {
-        if (active) message.error(aiActionFeedback(error, '读取优化结果失败，请刷新重试'))
+        if (!active) return
+        if (error instanceof HttpError && [404, 410].includes(error.status ?? 0)) {
+          setRun(undefined); setRunId(undefined); setFrozenDataset(undefined); setRunLoadError('这条优化任务已不存在，已保留设置')
+          localStorage.removeItem(runStorageKey); localStorage.removeItem(operationStorageKey); setPendingOperation(undefined); clearOptimizationRunUrl(runId)
+          return
+        }
+        setRunLoadError('连接暂时中断，正在重新读取优化进度。')
+        if (!(error instanceof HttpError && [401, 403].includes(error.status ?? 0))) timer = window.setTimeout(() => { void poll() }, 3000)
       }
     }
     void poll()
@@ -231,24 +277,69 @@ export function HistoricalOptimizationWorkbench() {
     return ''
   }
   const hasSavedMeasurement = savedObservations.length > 0
+  const configurationLocked = Boolean(pendingOperation || runId && frozenDataset)
   const canSubmit = Boolean(selectedDatasetView && selectedRows.length && yColumn && xColumns.length && completeRowCount >= 4 && hasAdjustment && !partialFormulaSelection && !compositionProblem && !selectedFeatureColumns.some(column => rangeError(column)))
+
+  const detachRunForEditing = () => {
+    setRunId(undefined); setRun(undefined); setFrozenDataset(undefined); setPendingOperation(undefined)
+    localStorage.removeItem(operationStorageKey); localStorage.removeItem(runStorageKey); clearOptimizationRunUrl()
+  }
+
+  useEffect(() => {
+    if (!pendingOperation) return
+    let cancelled = false
+    let timer: number | undefined
+    if (pendingOperation.acceptedRunId) {
+      setRunId(pendingOperation.acceptedRunId); setRun(undefined); setActiveStep(3); setRunLoadError('')
+      localStorage.setItem(runStorageKey, pendingOperation.acceptedRunId)
+      setOptimizationRunUrl(pendingOperation.acceptedRunId)
+      setSubmitting(false); setContinuing(false)
+      return
+    }
+    if (pendingOperation.kind === 'SUBMIT') setSubmitting(true); else setContinuing(true)
+    const send = async () => {
+      try {
+        const accepted = pendingOperation.kind === 'SUBMIT'
+          ? await optimizationApi.submit(pendingOperation.request, pendingOperation.key)
+          : await optimizationApi.nextRound(pendingOperation.parentRunId, pendingOperation.key)
+        if (cancelled) return
+        const confirmed = { ...pendingOperation, acceptedRunId: accepted.runId } as PendingOptimizationOperation
+        try { localStorage.setItem(operationStorageKey, JSON.stringify(confirmed)) } catch { /* the original command remains retryable with the same key */ }
+        setPendingOperation(confirmed); setRunId(accepted.runId); setRun(undefined); setActiveStep(3); setRunLoadError('')
+        localStorage.setItem(runStorageKey, accepted.runId); setOptimizationRunUrl(accepted.runId)
+        setSavedObservations([]); setObservations({}); restoreStarted.current = false
+        setSubmitting(false); setContinuing(false)
+      } catch (error) {
+        if (cancelled) return
+        const retryable = !(error instanceof HttpError) || error.status == null || error.status === 408 || error.status >= 500
+        if (retryable) {
+          setRunLoadError('请求尚未确认，正在使用同一请求重新连接。')
+          timer = window.setTimeout(() => { void send() }, 3000)
+          return
+        }
+        setRunLoadError(aiActionFeedback(error, '优化请求未能提交，请检查数据和选择范围。'))
+        setPendingOperation(undefined); localStorage.removeItem(operationStorageKey)
+        setSubmitting(false); setContinuing(false)
+      }
+    }
+    void send()
+    return () => { cancelled = true; if (timer) window.clearTimeout(timer) }
+  }, [pendingOperation?.key, pendingOperation?.acceptedRunId])
 
   const submit = async () => {
     if (!dataset || !selectedRows.length || !yColumn || !xColumns.length) { message.warning('先选择数据表、记录和 X/Y 列'); return }
     if (completeRowCount < 4) { message.warning(`当前 X/Y 组合只有 ${completeRowCount} 条完整记录，至少需要 4 条`); return }
     if (!canSubmit) { message.warning('请检查每个数值 X 因素的最小值和最大值'); return }
-    setSubmitting(true)
-    try {
-      const accepted = await optimizationApi.submit({
+    const request = {
         mode: 'HISTORICAL_GP_BO', datasetId: selectedDatasetIds[0], datasetIds: selectedDatasetIds,
         selectedRowIdsByDataset: rowIdsByDataset, xColumns, yColumn, direction, bounds,
         candidateCount: 4,
-      }, generateUUID())
-      setRun(undefined); setRunId(accepted.runId); setActiveStep(3); setSavedObservations([]); setObservations({})
-      restoreStarted.current = false; sessionStorage.setItem(runStorageKey, accepted.runId)
-      history.replaceState({}, '', `${location.pathname}?optimizationRun=${accepted.runId}`)
-    } catch (error) { message.error(aiActionFeedback(error, '启动优化失败，请检查数据和选择范围')) }
-    finally { setSubmitting(false) }
+      }
+    const operation: PendingOptimizationOperation = { kind: 'SUBMIT', key: generateUUID(), request }
+    try { localStorage.setItem(operationStorageKey, JSON.stringify(operation)) }
+    catch { setRunLoadError('优化未提交：浏览器无法保存恢复信息，请清理本地空间后重试。'); return }
+    setFrozenDataset(dataset); setRun(undefined); setRunId(undefined); localStorage.removeItem(runStorageKey); clearOptimizationRunUrl()
+    setPendingOperation(operation); setSubmitting(true); setRunLoadError('')
   }
 
   const saveMeasurements = async () => {
@@ -267,14 +358,10 @@ export function HistoricalOptimizationWorkbench() {
 
   const startNextRound = async () => {
     if (!runId || !hasSavedMeasurement) return
-    setContinuing(true)
-    try {
-      const accepted = await optimizationApi.nextRound(runId, generateUUID())
-      setRun(undefined); setRunId(accepted.runId); setActiveStep(3); setSavedObservations([]); setObservations({})
-      restoreStarted.current = false; sessionStorage.setItem(runStorageKey, accepted.runId)
-      history.replaceState({}, '', `${location.pathname}?optimizationRun=${accepted.runId}`)
-    } catch (error) { message.error(aiActionFeedback(error, '启动下一轮优化失败')) }
-    finally { setContinuing(false) }
+    const operation: PendingOptimizationOperation = { kind: 'NEXT_ROUND', key: generateUUID(), parentRunId: runId }
+    try { localStorage.setItem(operationStorageKey, JSON.stringify(operation)) }
+    catch { setRunLoadError('下一轮未提交：浏览器无法保存恢复信息，请清理本地空间后重试。'); return }
+    setPendingOperation(operation); setContinuing(true); setRunLoadError('')
   }
 
   const previewColumns = useMemo(() => {
@@ -297,7 +384,7 @@ export function HistoricalOptimizationWorkbench() {
       const measured = savedObservations.find(item => item.candidateId === candidate.id)
       const input = historicalCandidateDraft(run, candidate, measured ? Number(measured.value) : undefined)
       const created = await createExperiment({ ...input, ownerName: user.displayName || user.username })
-      const next = { ...drafts, [candidate.id]: created.id }; setDrafts(next); localStorage.setItem('gp-optimization-drafts',JSON.stringify(next))
+      const next = { ...drafts, [candidate.id]: created.id }; setDrafts(next); localStorage.setItem(draftStorageKey,JSON.stringify(next))
       message.success('实验草稿已生成'); navigate(`/experiments/${created.id}`)
     } catch (error) { message.error(aiActionFeedback(error, '实验草稿生成失败')) }
     finally { setCreatingDraft(undefined) }
@@ -306,12 +393,12 @@ export function HistoricalOptimizationWorkbench() {
   const candidateColumns = [
     { title: '方案', dataIndex: 'title', fixed: 'left' as const, width: 110, render: (_: string, candidate: any) => <Text strong>{candidate.title}</Text> },
     ...selectedFeatureColumns.map(column => ({ title: <span>{column.name}{column.unit ? <Text type="secondary">（{column.unit}）</Text> : null}</span>, width: 140, render: (_: unknown, candidate: any) => { const value = candidate.inputs?.[column.code]; return <Text>{column.kind === 'NUMERIC' ? valueText(value, undefined, 8) : value ?? '—'}</Text> } })),
-    { title: <span>预测 {yMeta?.name ?? 'Y'}{yMeta?.unit ? `（${yMeta.unit}）` : ''}</span>, width: 170, render: (_: unknown, candidate: any) => { const prediction = candidatePrediction(candidate); return <Space direction="vertical" size={0}><Text strong>{valueText(prediction.value)}</Text><Text type="secondary">范围 {valueText(prediction.lower)}～{valueText(prediction.upper)}</Text></Space> } },
-    { title: <span>实测 {yMeta?.name ?? 'Y'}{yMeta?.unit ? `（${yMeta.unit}）` : ''}</span>, width: 180, render: (_: unknown, candidate: any) => <InputNumber aria-label={`${candidate.title}实测${yMeta?.name ?? 'Y'}`} className="history-observation-input" value={observations[`${candidate.id}:${yColumn}`]} onChange={value => setObservations(current => ({ ...current, [`${candidate.id}:${yColumn}`]: value ?? undefined }))} placeholder="完成实验后填写" /> },
+    { title: <span>预测 {yMeta?.name ?? 'Y'}{yMeta?.unit ? `（${yMeta.unit}）` : ''}</span>, width: 210, render: (_: unknown, candidate: any) => { const prediction = candidatePrediction(candidate); const hasPrediction = Number.isFinite(Number(prediction.value)); const invalid = hasPrediction && invalidContinuousPrediction(Number(prediction.value), yMeta?.unit); return <Space direction="vertical" size={0}><Text strong>{invalid ? '未展示：结果不合理' : valueText(prediction.value)}</Text>{invalid ? <Text type="danger">核对单位并补充相近实验后重新优化</Text> : <Text type="secondary">范围 {valueText(prediction.lower)}～{valueText(prediction.upper)}</Text>}</Space> } },
+    { title: <span>实测 {yMeta?.name ?? 'Y'}{yMeta?.unit ? `（${yMeta.unit}）` : ''}</span>, width: 180, render: (_: unknown, candidate: any) => <InputNumber aria-label={`${candidate.title}实测${yMeta?.name ?? 'Y'}`} className="history-observation-input" disabled={Boolean(pendingOperation)} value={observations[`${candidate.id}:${yColumn}`]} onChange={value => setObservations(current => ({ ...current, [`${candidate.id}:${yColumn}`]: value ?? undefined }))} placeholder="完成实验后填写" /> },
     ...(user?.permissions.includes('experiment.create') ? [{ title: '实验记录', width: 140, render: (_: unknown, candidate: any) => <Button loading={creatingDraft === candidate.id} disabled={Boolean(creatingDraft)} onClick={() => void createDraft(candidate)}>{drafts[candidate.id] ? '查看实验草稿' : '生成实验草稿'}</Button> }] : []),
   ]
 
-  const steps = <div className="history-steps-card"><Steps current={activeStep} onChange={step => setActiveStep(step)} responsive={false} items={stepTitles.map(title => ({ title }))} /></div>
+  const steps = <div className="history-steps-card"><Steps current={activeStep} onChange={setActiveStep} responsive={false} items={stepTitles.map(title => ({ title }))} /></div>
 
   return <main className="historical-optimization-page">
     <header className="historical-page-header">
@@ -319,11 +406,12 @@ export function HistoricalOptimizationWorkbench() {
       <Button icon={<ReloadOutlined />} onClick={() => void loadDatasets()}>刷新数据</Button>
     </header>
     {steps}
+    {runLoadError && <Alert className="history-range-note" type={runLoadError.includes('不存在') ? 'warning' : 'error'} showIcon message={runLoadError} />}
 
     {activeStep === 0 && <div className="history-layout history-data-layout">
       <div><Card title="选择数据表" className="history-card" extra={<Text type="secondary">已选 {selectedDatasetIds.length} 张</Text>}>
         <Space.Compact className="history-search"><Input value={keyword} onChange={event => setKeyword(event.target.value)} onPressEnter={() => void loadDatasets()} placeholder="搜索实验模板"/><Button onClick={() => void loadDatasets()}>搜索</Button></Space.Compact>
-        <div className="history-dataset-list">{datasets.length ? datasets.map(item => <button key={item.id} type="button" role="checkbox" aria-checked={selectedDatasetIds.includes(item.id)} disabled={submitting} className={`history-dataset-option ${selectedDatasetIds.includes(item.id) ? 'selected' : ''}`} onClick={() => toggleDatasets(selectedDatasetIds.includes(item.id) ? selectedDatasetIds.filter(id => id !== item.id) : [...selectedDatasetIds, item.id])}>
+        <div className="history-dataset-list">{datasets.length ? datasets.map(item => <button key={item.id} type="button" role="checkbox" aria-checked={selectedDatasetIds.includes(item.id)} disabled={Boolean(pendingOperation)} className={`history-dataset-option ${selectedDatasetIds.includes(item.id) ? 'selected' : ''}`} onClick={() => toggleDatasets(selectedDatasetIds.includes(item.id) ? selectedDatasetIds.filter(id => id !== item.id) : [...selectedDatasetIds, item.id])}>
           <span className="history-selection-mark" aria-hidden="true">{selectedDatasetIds.includes(item.id) ? '✓' : ''}</span>
           <span><Text strong>{item.name}</Text><Text type="secondary">{item.rowCount} 条已完成实验</Text></span><RightOutlined />
         </button>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={loadingDatasets ? '正在读取数据' : '没有可用的已完成实验数据'} />}</div>
@@ -332,8 +420,8 @@ export function HistoricalOptimizationWorkbench() {
         {dataset ? <><Paragraph type="secondary" className="history-preview-hint">多张表按相同字段、数据类型和单位合并。默认全选记录，可逐条取消；未勾选的记录不会参与优化。</Paragraph>
           {selectedDatasetIds.length > 1 && !dataset.columns.length && <Alert type="warning" showIcon message="所选数据表没有共同字段" description="请取消不匹配的数据表，选择字段和单位一致的数据表后再继续。" />}
           <Table size="small" rowKey="id" loading={loadingDataset} rowSelection={{ selectedRowKeys: selectedRows.map(row => row.id), preserveSelectedRowKeys: true,
-            columnTitle: <Checkbox aria-label="全选实验记录" checked={selectedRows.length === dataset.rows.length && dataset.rows.length > 0} indeterminate={selectedRows.length > 0 && selectedRows.length < dataset.rows.length} disabled={loadingDataset || submitting} onChange={event => { setSelectedRowIds(current => ({ ...current, ...Object.fromEntries((dataset.sourceDatasetIds ?? [dataset.id]).map(id => [id, event.target.checked ? dataset.rows.filter(row => (row.sourceDatasetId ?? dataset.id) === id).map(row => row.id) : []])) })); }} />, hideSelectAll: true,
-            renderCell: (_checked, row) => <Checkbox aria-label={`选择实验记录 ${row.label || row.title || row.id}`} checked={selectedRows.some(item => item.id === row.id)} disabled={loadingDataset || submitting} onChange={event => {
+            columnTitle: <Checkbox aria-label="全选实验记录" checked={selectedRows.length === dataset.rows.length && dataset.rows.length > 0} indeterminate={selectedRows.length > 0 && selectedRows.length < dataset.rows.length} disabled={loadingDataset || Boolean(pendingOperation) || Boolean(runId && frozenDataset)} onChange={event => { setSelectedRowIds(current => ({ ...current, ...Object.fromEntries((dataset.sourceDatasetIds ?? [dataset.id]).map(id => [id, event.target.checked ? dataset.rows.filter(row => (row.sourceDatasetId ?? dataset.id) === id).map(row => row.id) : []])) })); }} />, hideSelectAll: true,
+            renderCell: (_checked, row) => <Checkbox aria-label={`选择实验记录 ${row.label || row.title || row.id}`} checked={selectedRows.some(item => item.id === row.id)} disabled={loadingDataset || Boolean(pendingOperation) || Boolean(runId && frozenDataset)} onChange={event => {
               const sourceId = row.sourceDatasetId ?? dataset.id
               setSelectedRowIds(current => { const ids = current[sourceId] ?? dataset.rows.filter(item => (item.sourceDatasetId ?? dataset.id) === sourceId).map(item => item.id); return { ...current, [sourceId]: event.target.checked ? [...new Set([...ids,row.id])] : ids.filter(id => id !== row.id) } })
             }} />,
@@ -345,10 +433,10 @@ export function HistoricalOptimizationWorkbench() {
 
     {activeStep === 1 && <div className="history-step-panel">
       {!selectedDatasetView ? <Card className="history-card"><Empty description="先选择实验数据并勾选要使用的记录"><Button onClick={() => setActiveStep(0)}>选择数据</Button></Empty></Card> : <>
-        <XYColumnPicker dataset={selectedDatasetView} mode="optimization" xColumns={xColumns} yColumn={yColumn} onXChange={setXColumns}
+        <XYColumnPicker dataset={selectedDatasetView} mode="optimization" xColumns={xColumns} yColumn={yColumn} onXChange={setXColumns} disabled={Boolean(pendingOperation) || Boolean(runId && frozenDataset)}
           lockedXCodes={formulaSelected ? fixedCodes : []}
           onYChange={value => { setYColumn(value); setXColumns(current => current.filter(code => code !== value)) }}
-          yExtra={yColumn ? <div className="history-direction-control"><Text>优化方向</Text><Select aria-label="优化方向" value={direction} onChange={setDirection} options={[{ value: 'MAXIMIZE', label: '越高越好' }, { value: 'MINIMIZE', label: '越低越好' }]} /></div> : null} />
+          yExtra={yColumn ? <div className="history-direction-control"><Text>优化方向</Text><Select aria-label="优化方向" disabled={configurationLocked} value={direction} onChange={setDirection} options={[{ value: 'MAXIMIZE', label: '越高越好' }, { value: 'MINIMIZE', label: '越低越好' }]} /></div> : null} />
         {partialFormulaSelection && <Alert className="history-range-note" type="warning" showIcon message={`配方还缺少材料：${missingFormulaColumns.map(column => column.name).join('、')}`} />}
         <SelectedDataIssues dataset={selectedDatasetView} xColumns={xColumns} yColumn={yColumn} />
         <div className="history-step-footer"><Button onClick={() => setActiveStep(0)}>上一步</Button><Space><Text type="secondary">当前选择可用 {completeRowCount} 条完整记录</Text><Button type="primary" disabled={!xColumns.length || !yColumn || completeRowCount < 4 || partialFormulaSelection} onClick={() => setActiveStep(2)}>设置范围<RightOutlined /></Button></Space></div>
@@ -360,25 +448,25 @@ export function HistoricalOptimizationWorkbench() {
         <Card className="history-card" title="X 因素可搜索范围" extra={<Text type="secondary">默认取历史数据中的最小值和最大值</Text>}>
           <Table size="small" pagination={false} rowKey="code" dataSource={selectedFeatureColumns} columns={[
             { title: 'X 因素', dataIndex: 'name', render: (name: string, column: HistoryDatasetColumn) => <Space direction="vertical" size={0}><Text strong>{name}</Text><Text type="secondary">{column.kind === 'NUMERIC' ? '数值因素' : '分类因素'}{column.unit ? ` · ${column.unit}` : ''}</Text>{rangeError(column) && <Text type="danger">{rangeError(column)}</Text>}</Space> },
-            { title: '历史取值', render: (_: unknown, column: HistoryDatasetColumn) => column.kind === 'NUMERIC' ? fixedMaterial(selectedDatasetView, column) ? <Text>固定 {numericValues(selectedDatasetView,column.code)[0]}{column.unit ?? ''}</Text> : <Space><InputNumber aria-label={`${column.name}最小值`} value={bounds[column.code]?.minimum} onChange={value => { manualBounds.current.add(column.code); setBounds(current => ({ ...current, [column.code]: { ...current[column.code], minimum: value ?? undefined } })) }} /><Text type="secondary">至</Text><InputNumber aria-label={`${column.name}最大值`} value={bounds[column.code]?.maximum} onChange={value => { manualBounds.current.add(column.code); setBounds(current => ({ ...current, [column.code]: { ...current[column.code], maximum: value ?? undefined } })) }} /></Space> : <Text>{[...new Set(selectedDatasetView.rows.map(row => row.values[column.code]).filter(value => value !== undefined && value !== null && value !== ''))].join('、')}</Text> },
+            { title: '历史取值', render: (_: unknown, column: HistoryDatasetColumn) => column.kind === 'NUMERIC' ? fixedMaterial(selectedDatasetView, column) ? <Text>固定 {numericValues(selectedDatasetView,column.code)[0]}{column.unit ?? ''}</Text> : <Space><InputNumber aria-label={`${column.name}最小值`} disabled={configurationLocked} value={bounds[column.code]?.minimum} onChange={value => { manualBounds.current.add(column.code); setBounds(current => ({ ...current, [column.code]: { ...current[column.code], minimum: value ?? undefined } })) }} /><Text type="secondary">至</Text><InputNumber aria-label={`${column.name}最大值`} disabled={configurationLocked} value={bounds[column.code]?.maximum} onChange={value => { manualBounds.current.add(column.code); setBounds(current => ({ ...current, [column.code]: { ...current[column.code], maximum: value ?? undefined } })) }} /></Space> : <Text>{[...new Set(selectedDatasetView.rows.map(row => row.values[column.code]).filter(value => value !== undefined && value !== null && value !== ''))].join('、')}</Text> },
           ]} />
           <Alert className="history-range-note" type="info" showIcon message={`将用 ${completeRowCount} 条完整实验记录学习 ${yMeta?.name ?? 'Y'}，再生成满足范围和配方总量的新实验组合。`} />
         </Card>
         {compositionProblem ? <Text type="warning">{compositionProblem}</Text> : !hasAdjustment && <Text type="warning">当前范围与配方总量约束没有留下可调整空间，请调整因素范围。</Text>}
-        <div className="history-step-footer"><Button onClick={() => setActiveStep(1)}>上一步</Button><Button type="primary" loading={submitting} disabled={!canSubmit} onClick={() => void submit()}>开始优化</Button></div>
+        <div className="history-step-footer"><Button onClick={() => setActiveStep(1)}>上一步</Button><Button type="primary" loading={submitting} disabled={!canSubmit || Boolean(runId) || Boolean(pendingOperation)} onClick={() => void submit()}>开始优化</Button></div>
       </>}
     </div>}
 
     {activeStep === 3 && <div className="history-step-panel">
-      {!runId ? <Card className="history-card"><Empty description="还没有优化结果"><Button type="primary" onClick={() => setActiveStep(dataset ? 1 : 0)}>选择数据并开始</Button></Empty></Card> : !run ? <Card className="history-card"><Progress percent={15} status="active" /><Text type="secondary">正在拟合历史实验数据并搜索下一组方案…</Text></Card> : run.executionStatus === 'FAILED' ? <Card className="history-card"><Alert type="error" showIcon message="优化没有完成" description={aiActionFeedback(run.error?.message, '检查 X/Y 是否有足够的完整且不同的历史记录，然后重新提交。')} /><div className="history-step-footer"><Button onClick={() => { setRunId(undefined); setRun(undefined); setActiveStep(2); sessionStorage.removeItem(runStorageKey) }}>调整条件后重试</Button></div></Card> : ['QUEUED','RUNNING'].includes(run.executionStatus) ? <Card className="history-card"><Progress percent={Math.max(run.progress, 10)} status="active" /><Text type="secondary">高斯过程正在学习 {run.frozenRequest?.rows?.length ?? 0} 条历史实验…</Text></Card> : <>
+      {!runId ? runLoadError ? <Card className="history-card"><Alert type="warning" showIcon message={runLoadError} /><div className="history-step-footer"><Button onClick={() => setActiveStep(2)}>返回保留的设置</Button><Button type="primary" onClick={() => { setRunLoadError(''); setActiveStep(2) }}>重新开始优化</Button></div></Card> : <Card className="history-card"><Empty description="还没有优化结果"><Button type="primary" onClick={() => setActiveStep(dataset ? 1 : 0)}>选择数据并开始</Button></Empty></Card> : !run ? <Card className="history-card">{runLoadError ? <Alert type="warning" showIcon message={runLoadError} description="任务设置已保留。可稍后刷新进度，或返回设置重新优化。" /> : <Text type="secondary">已提交，正在读取优化任务状态…</Text>}<div className="history-step-footer"><Button icon={<ReloadOutlined />} onClick={() => { setRunLoadError(''); void optimizationApi.run(runId).then(current => { setRun(current); setRunLoadError('') }).catch(error => setRunLoadError(aiActionFeedback(error, '读取优化进度失败，请重试。'))) }}>重试读取</Button><Button onClick={() => setActiveStep(2)}>返回设置</Button></div></Card> : run.executionStatus === 'FAILED' ? <Card className="history-card"><Alert type="error" showIcon message="优化没有完成" description={aiActionFeedback(run.error, '检查 X/Y 是否有足够的完整且不同的历史记录，然后重新提交。')} /><div className="history-step-footer"><Button onClick={() => { detachRunForEditing(); setActiveStep(2) }}>调整条件后重试</Button></div></Card> : ['QUEUED','RUNNING'].includes(run.executionStatus) ? <Card className="history-card"><Progress percent={Math.max(run.progress, 10)} status="active" /><Text type="secondary">高斯过程正在学习 {run.frozenRequest?.rows?.length ?? 0} 条历史实验…</Text></Card> : <>
         <Card className="history-card history-result-card" title="下一轮实验建议" extra={<Space><Tag color="green">已生成 {run.candidates.length} 个方案</Tag><Button icon={<ReloadOutlined />} onClick={() => void optimizationApi.run(runId).then(setRun)}>刷新</Button></Space>}>
           <Paragraph className="history-result-explainer">高斯过程使用 {run.searchEvidence?.trainingRowCount ?? run.frozenRequest?.rows?.length ?? '历史'} 条实验记录学习 X 与 Y 的关系。完成实验后填写实测 Y，系统会把这些新记录纳入下一轮计算。</Paragraph>
           {run.candidates.length ? <Table size="middle" rowKey="id" pagination={false} scroll={{ x: 'max-content' }} columns={candidateColumns} dataSource={run.candidates} /> : <Empty description="当前数据无法生成新的实验组合" />}
-          {run.candidates.length > 0 && <div className="history-measurement-footer"><Text type="secondary">预测用于安排实验；实测值保存后才能用于下一轮优化。</Text><Space><Button loading={saving} onClick={() => void saveMeasurements()}>保存实测值</Button><Button type="primary" disabled={!hasSavedMeasurement} loading={continuing} onClick={() => void startNextRound()}>用实测值优化下一轮</Button></Space></div>}
+          {run.candidates.length > 0 && <div className="history-measurement-footer"><Text type="secondary">预测用于安排实验；实测值保存后才能用于下一轮优化。</Text><Space><Button loading={saving} disabled={Boolean(pendingOperation)} onClick={() => void saveMeasurements()}>保存实测值</Button><Button type="primary" disabled={!hasSavedMeasurement || Boolean(pendingOperation)} loading={continuing} onClick={() => void startNextRound()}>用实测值优化下一轮</Button></Space></div>}
         </Card>
         {savedObservations.length > 0 && <Card className="history-card" title="已保存的实测值"><Text type="secondary">{savedObservations.length} 条实测结果已保存，可继续优化下一轮。</Text></Card>}
       </>}
-      <div className="history-step-footer"><Button onClick={() => setActiveStep(0)}>查看数据</Button>{dataset && <Button onClick={() => setActiveStep(1)}>修改 X/Y 选择</Button>}</div>
+      <div className="history-step-footer"><Button onClick={() => setActiveStep(0)}>查看数据</Button>{dataset && <Button onClick={() => { detachRunForEditing(); setActiveStep(1) }}>修改 X/Y 选择</Button>}</div>
     </div>}
   </main>
 }

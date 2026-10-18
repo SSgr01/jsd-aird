@@ -8,20 +8,22 @@ import { predictionApi } from '@/services/ai-rnd/prediction-api'
 import { HttpError } from '@/services/http/errors'
 import { useAuthStore } from '@/stores/auth-store'
 import { generateUUID } from '@/utils/uuid'
-import { buildPredictionRequest, businessValue, categoryOptions, fieldName, formatPredictionNumber, inputError, predictionFailure, predictionFingerprint, predictionNotes, readPredictionDraft, targetAvailable, targetLabels, unavailableReason, type PredictionDraft, type PredictionForm } from './performance-prediction-utils'
+import { buildPredictionRequest, businessValue, categoryOptions, fieldName, formatPredictionNumber, inputError, invalidContinuousPrediction, predictionFailure, predictionFingerprint, predictionNotes, readPredictionDraft, targetAvailable, targetLabels, unavailableReason, type PredictionDraft, type PredictionForm } from './performance-prediction-utils'
 import './performance-prediction.css'
 
 const inputGroups = { FORMULA: '配方相关条件', PROCESS: '工艺条件', CONDITION: '环境与基材', OTHER: '实验条件' }
 function isRunning(value: PredictionResponse | PredictionRunning): value is PredictionRunning { return value.executionStatus === 'RUNNING' }
 function requestError(error: unknown, fallback: string) { return error instanceof HttpError ? predictionFailure(error.code) : fallback }
 function PredictionValue({ value }: { value: TypedPrediction }) {
-  if (value.resultType === 'CONTINUOUS') return <strong className="performance-result-number">{formatPredictionNumber(value.value)}</strong>
+  if (value.resultType === 'CONTINUOUS') return invalidContinuousPrediction(value.value, value.unit)
+    ? <span className="performance-field-hint">未展示：结果不合理，请核对单位并补充相近实验后重新训练</span>
+    : <strong className="performance-result-number">{formatPredictionNumber(value.value)}</strong>
   const probability = value.resultType === 'BINARY' ? `${value.positiveClass} 概率 ${(value.probability * 100).toFixed(1)}%` : value.resultType === 'ORDINAL' && value.thresholdProbability != null ? `达到该等级或更高 ${(value.thresholdProbability * 100).toFixed(1)}%` : ''
   const probabilities = value.resultType === 'BINARY' ? {} : value.probabilities
   return <div className="performance-class-result"><strong>{value.label}</strong>{probability && <small>{probability}</small>}{Object.entries(probabilities).map(([label, chance]) => <small key={label}>{label} {(chance * 100).toFixed(1)}%</small>)}</div>
 }
 function intervalText(value: TypedPrediction, extrapolated: boolean) {
-  return value.resultType === 'CONTINUOUS' && value.interval && !extrapolated ? `${formatPredictionNumber(value.interval.lower)}～${formatPredictionNumber(value.interval.upper)}（${(value.interval.coverageLevel * 100).toFixed(0)}%）` : '—'
+  return value.resultType === 'CONTINUOUS' && !invalidContinuousPrediction(value.value, value.unit) && value.interval && !extrapolated ? `${formatPredictionNumber(value.interval.lower)}～${formatPredictionNumber(value.interval.upper)}（${(value.interval.coverageLevel * 100).toFixed(0)}%）` : '—'
 }
 export function PerformancePredictionPage() {
   const user = useAuthStore(state => state.user)

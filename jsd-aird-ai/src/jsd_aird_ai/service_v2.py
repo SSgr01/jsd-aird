@@ -270,6 +270,16 @@ class FormulaModelV2Service:
         vector = vectorizer.transform([record])
         applicability = self._applicability(vector[0], names, binding.applicability_domain,
                                              bundle["applicabilityDomain"])
+        if ValueTypeV2(binding.target.value_type) == ValueTypeV2.CONTINUOUS:
+            point = np.asarray(bundle["model"].predict(vector), dtype=float).reshape(-1)
+            constraints = binding.result_constraints or {}
+            invalid = point.size != 1 or not np.isfinite(point[0])
+            invalid = invalid or (bool(constraints.get("nonNegative")) and point.size == 1 and point[0] < 0)
+            if invalid:
+                return TargetBlockedV2(target_id=binding.target.id, model_version_id=binding.model_version_id,
+                    code="INVALID_PREDICTION_RESULT",
+                    message="模型给出了不合理的计数结果，未展示数值。请核对输入和单位，并补充相近实验后重新训练。",
+                    detail={"constraint": "NON_NEGATIVE" if constraints.get("nonNegative") else "FINITE"})
         return TargetSuccessV2(target_id=binding.target.id, model_version_id=binding.model_version_id,
             result=self._typed_result(binding, bundle, vector), applicability=applicability,
             warnings=[{"code": "EXTRAPOLATION", "message": "超出历史实验范围，结果需要实验验证"}]
@@ -314,7 +324,7 @@ class FormulaModelV2Service:
             engine, strategy = "DETERMINISTIC_CANDIDATE_POOL", "DISCRETE_DETERMINISTIC_POOL"
         accepted: list[RecommendedCandidateV2] = []
         rejected = {"TARGET_NOT_MET": 0, "OUT_OF_DOMAIN": 0, "INPUT_MISSING": 0,
-                    "MATERIAL_MISMATCH": 0, "RULE_FAILED": 0, "DUPLICATE": 0}
+                    "MATERIAL_MISMATCH": 0, "RULE_FAILED": 0, "INVALID_PREDICTION": 0, "DUPLICATE": 0}
         had_execution_failure = False
         first_failure_code: str | None = None
         first_failure_message: str | None = None
@@ -651,8 +661,13 @@ class FormulaModelV2Service:
         ranked = np.argsort(-ei)
         selected: list[dict[str, Any]] = []
         selected_vectors: list[np.ndarray] = []
+        invalid_prediction_count = 0
         for index in ranked:
             vector = encoded_candidates[index]
+            predicted_point = float(mean[index] if direction == "MAXIMIZE" else -mean[index])
+            if not np.isfinite(predicted_point) or (request.get("resultConstraints", {}).get("nonNegative") and predicted_point < 0):
+                invalid_prediction_count += 1
+                continue
             # Reject practically unchanged designs as well as exact repeats.
             # Use the same normalized spacing as the new batch itself.
             if np.any(np.linalg.norm(x - vector, axis=1) < 0.025):
@@ -662,13 +677,16 @@ class FormulaModelV2Service:
             selected_vectors.append(vector)
             selected.append({
                 "values": candidates[index],
-                "predictedValue": float(mean[index] if direction == "MAXIMIZE" else -mean[index]),
+                "predictedValue": predicted_point,
                 "uncertainty": float(std[index]),
                 "expectedImprovement": float(max(ei[index], 0.0)),
             })
             if len(selected) >= candidate_count:
                 break
         if not selected:
+            if invalid_prediction_count:
+                raise FormulaModelError(ErrorCode.NO_FEASIBLE_CANDIDATE,
+                    "所有候选都产生了负的计数预测，未生成方案。请核对 Y 的单位、X 选择，并补充相近实验后重新优化。")
             raise FormulaModelError(ErrorCode.NO_FEASIBLE_CANDIDATE, "当前搜索范围内没有新的实验组合")
         return {
             "status": "READY" if len(selected) == candidate_count else "PARTIAL",
@@ -877,6 +895,7 @@ class FormulaModelV2Service:
             if getattr(item, "status", None) != "BLOCKED": continue
             code=getattr(item, "code", "")
             if code == "OUT_OF_DOMAIN": summary["OUT_OF_DOMAIN"] += 1
+            elif code == "INVALID_PREDICTION_RESULT": summary["INVALID_PREDICTION"] += 1
             elif code in {"MISSING_REQUIRED_X", "FORMULA_INCOMPLETE"}: summary["INPUT_MISSING"] += 1
             elif code in {"MATERIAL_NOT_IN_MODEL", "UNKNOWN_MATERIAL"}: summary["MATERIAL_MISMATCH"] += 1
             else: summary["RULE_FAILED"] += 1
@@ -889,7 +908,7 @@ class FormulaModelV2Service:
     def _shortfall_reason(summary: dict[str, int]) -> str:
         labels={"TARGET_NOT_MET":"候选未达到目标要求","OUT_OF_DOMAIN":"候选超出模型适用范围",
                 "INPUT_MISSING":"候选缺少模型输入","MATERIAL_MISMATCH":"候选材料不在模型覆盖范围",
-                "RULE_FAILED":"候选未通过业务规则","DUPLICATE":"候选重复"}
+                "RULE_FAILED":"候选未通过业务规则","INVALID_PREDICTION":"模型预测结果不合理，已排除相关方案","DUPLICATE":"候选重复"}
         code=FormulaModelV2Service._shortfall_code(summary)
         return labels.get(code,"当前材料和约束无法形成可行候选")
 
@@ -899,6 +918,7 @@ class FormulaModelV2Service:
         if summary.get("TARGET_NOT_MET"): hints.append("放宽目标值或最低概率")
         if summary.get("OUT_OF_DOMAIN"): hints.append("缩小材料和工艺变量范围")
         if summary.get("INPUT_MISSING"): hints.append("补充模型要求的实验前条件")
+        if summary.get("INVALID_PREDICTION"): hints.append("核对输入和单位，并补充相近实验后重新训练")
         if summary.get("MATERIAL_MISMATCH"): hints.append("选择所有目标模型共同覆盖的材料")
         if not hints: hints.append("调整材料比例范围或可变条件")
         return hints

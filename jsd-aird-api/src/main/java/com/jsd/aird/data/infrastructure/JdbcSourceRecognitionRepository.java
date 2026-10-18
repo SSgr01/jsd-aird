@@ -177,10 +177,6 @@ public class JdbcSourceRecognitionRepository implements SourceRecognitionReposit
                 SELECT coalesce(max(revision_no),0)+1 FROM data.confirmed_submission
                 WHERE organization_id=? AND import_job_id=?
                 """, Integer.class, organizationId, recognitionJobId);
-        if (previous != null) jdbc.update("""
-                UPDATE data.confirmed_submission SET status='SUPERSEDED'
-                WHERE organization_id=? AND id=? AND status='CONFIRMED'
-                """, organizationId, previous);
         var submissionId = UUID.randomUUID();
         jdbc.update("""
                 INSERT INTO data.confirmed_submission(id,organization_id,import_job_id,revision_no,status,
@@ -188,22 +184,13 @@ public class JdbcSourceRecognitionRepository implements SourceRecognitionReposit
                 VALUES(?,?,?,?,'CONFIRMED',?,?,?,?,?)
                 """, submissionId, organizationId, recognitionJobId, revisionNo, submissionHash,
                 actorId, previous, job.sourceSequence(), pg(mappingContract));
-        // data_record remains the current Data read model. Immutable submission
-        // items keep the old facts and coordinates after this replacement.
-        jdbc.update("DELETE FROM data.data_record WHERE organization_id=? AND import_job_id=?",
-                organizationId, recognitionJobId);
+        // Confirmation creates immutable facts; approval switches the official read model.
         var itemIds = new java.util.ArrayList<UUID>();
-        var index = 0;
         for (var sample : samples) {
-            var recordId = UUID.randomUUID();
-            jdbc.update("""
-                    INSERT INTO data.data_record(id,organization_id,import_job_id,record_key,record_index,
-                        sheet_id,sheet_name,source_row_number,raw_data_jsonb,normalized_data_jsonb,
-                        corrected_data_jsonb,effective_data_jsonb,quality_status,synthetic_key)
-                    VALUES(?,?,?,?,?,NULL,NULL,NULL,?,?,?,?,'VALID',false)
-                    """, recordId, organizationId, recognitionJobId, sample.sampleBoundaryId(), ++index,
-                    pg(sample.rawFact()), pg(sample.effectiveFact()), pg(sample.correctedFact()),
-                    pg(sample.effectiveFact()));
+            var recordId = jdbc.query("SELECT id FROM data.data_record WHERE organization_id=? AND import_job_id=? AND record_key=? ORDER BY record_index LIMIT 1",
+                    (rs,n) -> rs.getObject(1,UUID.class),organizationId,recognitionJobId,sample.sampleBoundaryId()).stream().findFirst()
+                    .orElseGet(() -> UUID.nameUUIDFromBytes((recognitionJobId + ":" + sample.sampleBoundaryId())
+                            .getBytes(java.nio.charset.StandardCharsets.UTF_8)));
             var itemId = UUID.randomUUID();
             var identity = json.createObjectNode()
                     .put("experimentBoundaryId", sample.experimentBoundaryId())
@@ -222,17 +209,6 @@ public class JdbcSourceRecognitionRepository implements SourceRecognitionReposit
                     pg(sample.sourceCoordinates()), job.sourceSha256(), sample.contentHash());
             itemIds.add(itemId);
         }
-        jdbc.update("""
-                INSERT INTO data.confirmed_submission_head(organization_id,import_job_id,confirmed_submission_id)
-                VALUES(?,?,?) ON CONFLICT(organization_id,import_job_id) DO UPDATE SET
-                    confirmed_submission_id=excluded.confirmed_submission_id,
-                    revision=data.confirmed_submission_head.revision+1,updated_at=now()
-                """, organizationId, recognitionJobId, submissionId);
-        jdbc.update("""
-                UPDATE data.import_experiment_link SET source_updated=true,updated_at=now()
-                WHERE organization_id=? AND import_job_id=? AND experiment_id IS NOT NULL
-                    AND confirmed_submission_id IS DISTINCT FROM ?
-                """, organizationId, recognitionJobId, submissionId);
         return new FinalizedData(submissionId, revisionNo, List.copyOf(itemIds));
     }
 

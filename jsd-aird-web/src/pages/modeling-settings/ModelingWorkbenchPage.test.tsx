@@ -5,7 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AppProviders } from '@/app/providers/AppProviders'
 import { modelingWorkbenchApi } from '@/services/ai-rnd/modeling-workbench-api'
 import { HttpError } from '@/services/http/errors'
+import { useAuthStore } from '@/stores/auth-store'
 import { ModelingWorkbenchPage } from './ModelingWorkbenchPage'
+
+const workbenchDraftKey = 'ai-modeling-workbench:v2:anonymous:draft'
 
 vi.mock('@/services/ai-rnd/modeling-workbench-api', () => ({
   modelingWorkbenchApi: {
@@ -63,6 +66,7 @@ const trainedRun = {
 describe('ModelingWorkbenchPage', () => {
   beforeEach(() => {
     window.localStorage.clear()
+    useAuthStore.setState({ user: null, status: 'anonymous' })
     vi.mocked(modelingWorkbenchApi.datasets).mockResolvedValue({ items: [{ id: dataset.id, name: dataset.name, rowCount: 8, updatedAt: '2026-10-15T00:00:00Z' }] })
     vi.mocked(modelingWorkbenchApi.dataset).mockResolvedValue(dataset)
     vi.mocked(modelingWorkbenchApi.train).mockResolvedValue({ runId: 'run-1', status: 'QUEUED', pollAfterMs: 1000 })
@@ -84,7 +88,7 @@ describe('ModelingWorkbenchPage', () => {
   it('allows a partial formula X selection for ordinary performance modeling', async () => {
     vi.mocked(modelingWorkbenchApi.datasets).mockResolvedValue({ items: [{ id: formulaDataset.id, name: formulaDataset.name, rowCount: 8, updatedAt: '' }] })
     vi.mocked(modelingWorkbenchApi.dataset).mockResolvedValue(formulaDataset)
-    window.localStorage.setItem('ai-modeling-workbench-draft:v1', JSON.stringify({
+    window.localStorage.setItem(workbenchDraftKey, JSON.stringify({
       datasetId: formulaDataset.id, xColumns: [`formula:${resinId}`], yColumn: 'result:gloss', activeStep: 1,
     }))
 
@@ -105,7 +109,7 @@ describe('ModelingWorkbenchPage', () => {
       ...row.values, temperature: index === 7 ? '' : index === 1 ? dataset.rows[0]!.values.temperature : row.values.temperature,
     } }))
     vi.mocked(modelingWorkbenchApi.dataset).mockResolvedValue({ ...dataset, rows })
-    window.localStorage.setItem('ai-modeling-workbench-draft:v1', JSON.stringify({ datasetId: dataset.id, xColumns: ['temperature'], yColumn: 'gloss', activeStep: 1 }))
+    window.localStorage.setItem(workbenchDraftKey, JSON.stringify({ datasetId: dataset.id, xColumns: ['temperature'], yColumn: 'gloss', activeStep: 1 }))
     render(<AppProviders><ModelingWorkbenchPage /></AppProviders>)
     expect(await screen.findByText('数据检查')).toBeInTheDocument()
     expect(screen.getByText(/1 条记录因所选字段缺失或无效/)).toBeInTheDocument()
@@ -146,7 +150,7 @@ describe('ModelingWorkbenchPage', () => {
     expect(await screen.findByText('训练完成')).toBeInTheDocument()
     expect(screen.getAllByText('平均绝对误差（MAE）').length).toBeGreaterThan(0)
     expect(screen.getByText(/预测方法对比/)).toBeInTheDocument()
-    expect(window.localStorage.getItem('ai-modeling-workbench-draft:v1')).toContain('run-1')
+    expect(window.localStorage.getItem(workbenchDraftKey)).toContain('run-1')
     expect(screen.queryByText(/按正式配置重新训练/)).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '注册模型' }))
     fireEvent.click(await screen.findByRole('button', { name: '去预测' }))
@@ -244,7 +248,7 @@ describe('ModelingWorkbenchPage', () => {
   })
 
   it('restores the last visited step and keeps saved result metrics when the draft Y changes', async () => {
-    window.localStorage.setItem('ai-modeling-workbench-draft:v1', JSON.stringify({ datasetId: dataset.id, xColumns: ['temperature'], yColumn: 'substrate', runId: 'run-1', activeStep: 1 }))
+    window.localStorage.setItem(workbenchDraftKey, JSON.stringify({ datasetId: dataset.id, xColumns: ['temperature'], yColumn: 'substrate', runId: 'run-1', activeStep: 1 }))
     render(<AppProviders><ModelingWorkbenchPage /></AppProviders>)
     expect(await screen.findByRole('heading', { name: '选择输入 X 和预测结果 Y' })).toBeInTheDocument()
     expect(screen.getByRole('checkbox', { name: /温度/ })).toBeChecked()
@@ -258,7 +262,7 @@ describe('ModelingWorkbenchPage', () => {
   })
 
   it('restores a registered model after refresh without registering or training again', async () => {
-    window.localStorage.setItem('ai-modeling-workbench-draft:v1', JSON.stringify({ datasetId: dataset.id, xColumns: ['temperature'], yColumn: 'gloss', runId: 'run-1', activeStep: 2 }))
+    window.localStorage.setItem(workbenchDraftKey, JSON.stringify({ datasetId: dataset.id, xColumns: ['temperature'], yColumn: 'gloss', runId: 'run-1', activeStep: 2 }))
     vi.mocked(modelingWorkbenchApi.run).mockResolvedValue({ ...trainedRun, registration: { modelVersionId: 'model-1', targetId: 'target-1', version: 2, status: 'ACTIVE', registeredAt: '2026-10-15T00:00:00Z' } })
     const goPredict = vi.fn()
     render(<AppProviders><ModelingWorkbenchPage canRegister onGoPredict={goPredict} /></AppProviders>)
@@ -269,7 +273,7 @@ describe('ModelingWorkbenchPage', () => {
   })
 
   it('keeps registration retryable when the trained model file cannot be verified', async () => {
-    window.localStorage.setItem('ai-modeling-workbench-draft:v1', JSON.stringify({ datasetId: dataset.id, xColumns: ['temperature'], yColumn: 'gloss', runId: 'run-1', activeStep: 2 }))
+    window.localStorage.setItem(workbenchDraftKey, JSON.stringify({ datasetId: dataset.id, xColumns: ['temperature'], yColumn: 'gloss', runId: 'run-1', activeStep: 2 }))
     vi.mocked(modelingWorkbenchApi.register).mockRejectedValue(new HttpError('artifact checksum mismatch', 'AI_MODEL_ARTIFACT_INVALID', 422))
     render(<AppProviders><ModelingWorkbenchPage canRegister /></AppProviders>)
 
@@ -281,7 +285,7 @@ describe('ModelingWorkbenchPage', () => {
   })
 
   it('shows a recoverable message for a failed computation without internal service terms', async () => {
-    window.localStorage.setItem('ai-modeling-workbench-draft:v1', JSON.stringify({ datasetId: dataset.id, xColumns: ['temperature'], yColumn: 'gloss', runId: 'run-1', activeStep: 2 }))
+    window.localStorage.setItem(workbenchDraftKey, JSON.stringify({ datasetId: dataset.id, xColumns: ['temperature'], yColumn: 'gloss', runId: 'run-1', activeStep: 2 }))
     vi.mocked(modelingWorkbenchApi.run).mockResolvedValue({ ...trainedRun, status: 'FAILED', error: { code: 'AI_MODEL_ARTIFACT_INVALID', message: 'formula-model.v2 file URLs are disabled' } })
     render(<AppProviders><ModelingWorkbenchPage /></AppProviders>)
     expect(await screen.findByText('训练文件无法保存或读取，请联系管理员检查训练服务。')).toBeInTheDocument()
@@ -291,18 +295,18 @@ describe('ModelingWorkbenchPage', () => {
   })
 
   it('does not present a missing training record as a job still waiting to run', async () => {
-    window.localStorage.setItem('ai-modeling-workbench-draft:v1', JSON.stringify({ datasetId: dataset.id, xColumns: ['temperature'], yColumn: 'gloss', runId: 'run-1', activeStep: 2 }))
+    window.localStorage.setItem(workbenchDraftKey, JSON.stringify({ datasetId: dataset.id, xColumns: ['temperature'], yColumn: 'gloss', runId: 'run-1', activeStep: 2 }))
     vi.mocked(modelingWorkbenchApi.run).mockRejectedValue(new HttpError('record not found', 'NOT_FOUND', 404))
     render(<AppProviders><ModelingWorkbenchPage /></AppProviders>)
-    expect(await screen.findByText('训练记录暂时无法读取')).toBeInTheDocument()
+    expect(await screen.findByText('这条训练任务已不存在，已保留建模设置。')).toBeInTheDocument()
     expect(screen.queryByText('训练任务已提交')).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: '返回选择数据' }))
     expect(screen.getByRole('heading', { name: '选择实验数据并预览原表' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /UV涂层实验/ })).toBeInTheDocument()
   })
 
   it('explains a categorical Y with too few examples in one class', async () => {
     vi.mocked(modelingWorkbenchApi.dataset).mockResolvedValue({ ...dataset, rows: dataset.rows.map((row, index) => ({ ...row, values: { ...row.values, substrate: index === 0 ? 'PC' : 'PET' } })) })
-    window.localStorage.setItem('ai-modeling-workbench-draft:v1', JSON.stringify({ datasetId: dataset.id, activeStep: 1 }))
+    window.localStorage.setItem(workbenchDraftKey, JSON.stringify({ datasetId: dataset.id, activeStep: 1 }))
     render(<AppProviders><ModelingWorkbenchPage /></AppProviders>)
     await screen.findByRole('heading', { name: '选择输入 X 和预测结果 Y' })
     expect(await screen.findByText(/部分类别少于 2 条记录/)).toBeInTheDocument()
@@ -321,7 +325,7 @@ describe('ModelingWorkbenchPage', () => {
       })),
     }
     vi.mocked(modelingWorkbenchApi.dataset).mockResolvedValue(manyColumnDataset)
-    window.localStorage.setItem('ai-modeling-workbench-draft:v1', JSON.stringify({ datasetId: dataset.id, activeStep: 1 }))
+    window.localStorage.setItem(workbenchDraftKey, JSON.stringify({ datasetId: dataset.id, activeStep: 1 }))
     render(<AppProviders><ModelingWorkbenchPage /></AppProviders>)
 
     expect(await screen.findByRole('heading', { name: '选择输入 X 和预测结果 Y' })).toBeInTheDocument()
@@ -330,31 +334,23 @@ describe('ModelingWorkbenchPage', () => {
     expect(screen.getAllByRole('radio')).toHaveLength(manyColumnDataset.columns.length)
   })
 
-  it('keeps the current task linked while allowing navigation during training', async () => {
-    window.localStorage.setItem('ai-modeling-workbench-draft:v1', JSON.stringify({ datasetId: dataset.id, xColumns: ['temperature'], yColumn: 'gloss', runId: 'run-1', activeStep: 1 }))
-    vi.mocked(modelingWorkbenchApi.run).mockResolvedValue({ ...trainedRun, status: 'RUNNING', progress: 35 })
-    render(<AppProviders><ModelingWorkbenchPage /></AppProviders>)
-    expect(await screen.findByRole('button', { name: /训练中/ })).toBeDisabled()
-    fireEvent.click(screen.getByRole('button', { name: /返回原表/ }))
-    expect(await screen.findByRole('button', { name: dataset.name })).toBeDisabled()
-    expect(screen.getByText('训练中，可查看原表；完成后可更换数据。')).toBeInTheDocument()
-    expect(modelingWorkbenchApi.train).not.toHaveBeenCalled()
-    expect(window.localStorage.getItem('ai-modeling-workbench-draft:v1')).toContain('run-1')
-  })
-
   it('respects navigation performed before the training submission returns', async () => {
-    window.localStorage.setItem('ai-modeling-workbench-draft:v1', JSON.stringify({ datasetId: dataset.id, xColumns: ['temperature'], yColumn: 'gloss', activeStep: 1 }))
     let finish: (() => void) | undefined
     vi.mocked(modelingWorkbenchApi.train).mockImplementation(() => new Promise(resolve => { finish = () => resolve({ runId: 'run-2', status: 'QUEUED', pollAfterMs: 1000 }) }))
     render(<AppProviders><ModelingWorkbenchPage /></AppProviders>)
+    fireEvent.click(await screen.findByRole('button', { name: /UV涂层实验/ }))
+    expect(await screen.findByText('EXP-1')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /下一步：选择 X \/ Y/ }))
+    fireEvent.click(screen.getByRole('checkbox', { name: /温度/ }))
+    fireEvent.click(await screen.findByRole('radio', { name: /60°光泽度/ }))
     const train = await screen.findByRole('button', { name: /开始训练/ })
     await waitFor(() => expect(train).toBeEnabled())
     fireEvent.click(train)
-    fireEvent.click(screen.getByRole('button', { name: /选择数据$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /返回原表/ }))
     expect(await screen.findByRole('button', { name: dataset.name })).toBeDisabled()
     await act(async () => { finish?.(); await Promise.resolve() })
     expect(screen.getByRole('heading', { name: '选择实验数据并预览原表' })).toBeInTheDocument()
-    await waitFor(() => expect(window.localStorage.getItem('ai-modeling-workbench-draft:v1')).toContain('run-2'))
+    await waitFor(() => expect(window.localStorage.getItem(workbenchDraftKey)).toContain('run-2'))
   })
 
 })

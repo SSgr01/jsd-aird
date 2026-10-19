@@ -134,6 +134,7 @@ export function ExperimentWorkspacePage({
   const goBack = () => onBack ? onBack() : navigate(returnTo);
   const { message, modal } = App.useApp();
   const editorRef = useRef<EditorHandle>(null);
+  const detailRef = useRef<ExperimentDetail>();
   const [detail, setDetail] = useState<ExperimentDetail>();
   const [snapshot, setSnapshot] = useState<Record<string, unknown>>();
   const [editModel, setEditModel] = useState<ExperimentModel>({});
@@ -161,10 +162,16 @@ export function ExperimentWorkspacePage({
   const [recognitionBusy, setRecognitionBusy] = useState(false);
   const [recognitionProgress, setRecognitionProgress] = useState<number>();
   const [reviewForm] = Form.useForm<ReviewInformation>();
+  const reviewFormValuesRef = useRef<ReviewInformation>();
   const [templateDraftOpen, setTemplateDraftOpen] = useState(false);
   const [templateDraftSaving, setTemplateDraftSaving] = useState(false);
   const [templateCategories, setTemplateCategories] = useState<TemplateCategory[]>([]);
   const [templateDraftForm] = Form.useForm<{ name: string; categoryId: string }>();
+  const templateDraftNameRef = useRef('');
+  const [metadataOpen, setMetadataOpen] = useState(false);
+  const [metadataSaving, setMetadataSaving] = useState(false);
+  const [metadataForm] = Form.useForm<{ ownerName: string; experimentDate: string }>();
+  const metadataFormValuesRef = useRef<{ ownerName: string; experimentDate: string }>();
   const isDesktop = useDesktopEditing();
   // 只读状态与自动保存共用同一判定，避免两处条件漂移。
   const statusLocked = !detail
@@ -189,6 +196,7 @@ export function ExperimentWorkspacePage({
       ) {
         nextModel.documentSnapshot = d.templateSnapshot;
       }
+      detailRef.current = d;
       setDetail(d);
       setEditModel(nextModel);
       setTemplateReview(nextModel.templateDataReview?.required
@@ -441,37 +449,91 @@ export function ExperimentWorkspacePage({
     }
   };
 
-  const persistDraft = async (nextModel: ExperimentModel, successText?: string, silent = false) => {
-    if (!detail) return undefined;
-    const title = nextModel.title ?? detail.summary.title;
+  const persistDraft = async (
+    nextModel: ExperimentModel,
+    successText?: string,
+    silent = false,
+    metadata?: { ownerName: string; experimentDate: string },
+  ) => {
+    const currentDetail = detailRef.current?.summary.id === id ? detailRef.current : detail;
+    if (!currentDetail) return undefined;
+    const title = nextModel.title ?? currentDetail.summary.title;
     if (!title.trim()) {
       if (!silent) void message.warning('实验标题不能为空');
       return undefined;
     }
     const savedDetail = await saveExperiment(id, {
-      revision: detail.summary.revision,
-      experimentNo: detail.summary.experimentNo,
+      revision: currentDetail.summary.revision,
+      experimentNo: currentDetail.summary.experimentNo,
       title,
-      categoryId: detail.summary.categoryId,
-      categoryName: detail.summary.categoryName,
-      projectId: detail.summary.projectId,
-      stageId: detail.summary.stageId,
-      taskId: detail.summary.taskId,
-      ownerName: detail.summary.ownerName,
-      experimentDate: detail.summary.experimentDate,
-      templateVersionId: detail.templateVersionId,
-      templateSnapshotHash: detail.templateSnapshotHash,
-      templateSnapshot: detail.templateSnapshot,
+      categoryId: currentDetail.summary.categoryId,
+      categoryName: currentDetail.summary.categoryName,
+      projectId: currentDetail.summary.projectId,
+      stageId: currentDetail.summary.stageId,
+      taskId: currentDetail.summary.taskId,
+      ownerName: metadata?.ownerName ?? currentDetail.summary.ownerName ?? '',
+      experimentDate: metadata?.experimentDate ?? currentDetail.summary.experimentDate ?? '',
+      templateVersionId: currentDetail.templateVersionId,
+      templateSnapshotHash: currentDetail.templateSnapshotHash,
+      templateSnapshot: currentDetail.templateSnapshot,
       editModel: nextModel,
     });
     // Keep the live editor mounted after a draft save. Updating `snapshot`
     // here would trigger UniverSheetsEditor’s snapshot effect, destroy the
     // current workspace, and recreate it from a possibly stale response.
+    detailRef.current = savedDetail;
     setDetail(savedDetail);
     setEditModel({ ...nextModel, templateDataReview: savedDetail.editModel.templateDataReview,
       importDataReview: savedDetail.editModel.importDataReview });
     if (successText) void message.success(successText);
     return savedDetail;
+  };
+
+  const openMetadataEditor = () => {
+    if (!detail) return;
+    metadataFormValuesRef.current = {
+      ownerName: detail.summary.ownerName ?? '',
+      experimentDate: detail.summary.experimentDate ?? '',
+    };
+    setMetadataOpen(true);
+  };
+
+  useEffect(() => {
+    if (!metadataOpen || !metadataFormValuesRef.current) return;
+    metadataForm.setFieldsValue(metadataFormValuesRef.current);
+  }, [metadataForm, metadataOpen]);
+
+  const saveMetadata = async () => {
+    if (!detail || metadataSaving) return;
+    let values: { ownerName: string; experimentDate: string };
+    try {
+      values = await metadataForm.validateFields();
+    } catch {
+      return;
+    }
+    const generation = editGenerationRef.current;
+    window.clearTimeout(autosaveTimerRef.current);
+    setMetadataSaving(true);
+    setSaveState('SAVING');
+    try {
+      await Promise.all(pendingTemplateWrites.current);
+      await savePromiseRef.current;
+      const saved = await persistDraft(currentDraftModel(), '实验基本信息已保存', false, {
+        ownerName: values.ownerName.trim(),
+        experimentDate: values.experimentDate,
+      });
+      if (saved) {
+        setSaveState(editGenerationRef.current === generation ? 'SAVED' : 'DIRTY');
+        setMetadataOpen(false);
+      } else {
+        setSaveState('DIRTY');
+      }
+    } catch (error) {
+      setSaveState('DIRTY');
+      void message.error(error instanceof Error ? error.message : '实验基本信息保存失败');
+    } finally {
+      setMetadataSaving(false);
+    }
   };
 
   const performSave = async (silent: boolean): Promise<boolean> => {
@@ -512,17 +574,22 @@ export function ExperimentWorkspacePage({
   // 参照模板中心：编辑态停止输入 2 秒后自动保存草稿。
   // 每次编辑都会推进 editRevision，从而重置防抖计时器。
   useEffect(() => {
-    if (saveState !== 'DIRTY' || statusLocked || !isDesktop || view !== 'edit' || busy) return;
+    if (saveState !== 'DIRTY' || statusLocked || !isDesktop || view !== 'edit' || busy || metadataOpen || metadataSaving) return;
     autosaveTimerRef.current = window.setTimeout(() => {
       void saveRef.current(true);
     }, AUTOSAVE_DELAY_MS);
     return () => window.clearTimeout(autosaveTimerRef.current);
-  }, [saveState, statusLocked, isDesktop, view, busy, editRevision, id]);
+  }, [saveState, statusLocked, isDesktop, view, busy, editRevision, id, metadataOpen, metadataSaving]);
 
   const openReviewInformation = () => {
-    reviewForm.setFieldsValue(reviewInformation(editModel));
+    reviewFormValuesRef.current = reviewInformation(editModel);
     setReviewOpen(true);
   };
+
+  useEffect(() => {
+    if (!reviewOpen || !reviewFormValuesRef.current) return;
+    reviewForm.setFieldsValue(reviewFormValuesRef.current);
+  }, [reviewForm, reviewOpen]);
 
   const submitReviewWithInformation = async () => {
     if (!detail) return;
@@ -634,8 +701,10 @@ export function ExperimentWorkspacePage({
     try {
       const blob = await exportExperiment(id);
       const extension = documentFormatOf(detail.editModel) === 'word' ? 'docx' : 'xlsx';
-      const versionSuffix =
-        versions.length > 0 ? `-V${versions[0]?.versionNo ?? detail.summary.versionNo}` : '';
+      // The export endpoint exports the current experiment revision, while
+      // the version list only contains published versions. Use the current
+      // summary version so draft revisions are named correctly as well.
+      const versionSuffix = `-V${detail.summary.versionNo || 1}`;
       downloadBlob(
         blob,
         `${detail.summary.title || detail.summary.experimentNo}${versionSuffix}.${extension}`,
@@ -650,7 +719,7 @@ export function ExperimentWorkspacePage({
 
   const openTemplateDraft = async () => {
     if (!detail || view === 'versions' || statusIsVoided(detail.summary.status)) return;
-    templateDraftForm.setFieldsValue({ name: `${detail.summary.title}模板`.slice(0, 160) });
+    templateDraftNameRef.current = `${detail.summary.title}模板`.slice(0, 160);
     setTemplateDraftOpen(true);
     try {
       setTemplateCategories(await templateApi.listCategories());
@@ -658,6 +727,11 @@ export function ExperimentWorkspacePage({
       void message.error(error instanceof Error ? error.message : '模板分类加载失败');
     }
   };
+
+  useEffect(() => {
+    if (!templateDraftOpen) return;
+    templateDraftForm.setFieldsValue({ name: templateDraftNameRef.current });
+  }, [templateDraftForm, templateDraftOpen]);
 
   const createTemplateDraft = async () => {
     if (!detail || templateDraftSaving) return;
@@ -733,6 +807,7 @@ export function ExperimentWorkspacePage({
         downloadUrl: fileContentUrl(detail.sourceFileId),
       }
     : undefined;
+  const sourceIsImage = /\.(png|jpe?g|gif|webp|bmp|tiff?)$/i.test(sourceFile?.fileName ?? '');
   const readonly = statusLocked;
   const editable = !readonly && isDesktop && view === 'edit';
   // 无模板导入（CONTENT_ONLY）不涉及识别区域与字段绑定，隐藏 Excel 识别审核面板。
@@ -778,7 +853,8 @@ export function ExperimentWorkspacePage({
             </Typography.Text>
             <Typography.Text strong>{detail.summary.title}</Typography.Text>
           </span>
-          <span className="workspace-meta-item">V{versions[0]?.versionNo ?? detail.summary.versionNo ?? 1}</span>
+          <span className="workspace-meta-item">V{detail.summary.versionNo || 1}</span>
+          <span className="workspace-meta-item">负责人：{detail.summary.ownerName || '未设置'} · 日期：{detail.summary.experimentDate || '未设置'}</span>
           {showExcelRecognition ? <span className="workspace-meta-item"><FileExcelOutlined /> Excel</span> : null}
           <Tag color={status === 'COMPLETED' ? 'green' : status === 'VOIDED' ? 'default' : 'blue'}>
             {STATUS_TEXT[status] ?? status}
@@ -813,12 +889,13 @@ export function ExperimentWorkspacePage({
               onClick={() => void downloadPreviewFile(sourceFile)
                 .catch((error) => void message.error(error instanceof Error ? error.message : '原文件下载失败'))}
             >
-              下载原文件
+              {sourceIsImage ? '原图下载' : '原文下载'}
             </Button>
           ) : null}
           {status === 'COMPLETED' && <Can permission="experiment.update">
             <Button loading={busy} onClick={reviseCompletedExperiment}>创建修订</Button>
           </Can>}
+          {editable && <Button onClick={openMetadataEditor}>编辑基本信息</Button>}
           <Can permission="template.create">
             <Button
               disabled={view === 'versions' || status === 'VOIDED'}
@@ -866,7 +943,7 @@ export function ExperimentWorkspacePage({
         confirmLoading={templateDraftSaving}
         onCancel={() => setTemplateDraftOpen(false)}
         onOk={() => void createTemplateDraft()}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={templateDraftForm} layout="vertical" preserve={false}>
           <Form.Item
@@ -892,6 +969,37 @@ export function ExperimentWorkspacePage({
             showIcon
             message="将复制当前实验的版式和正文。系统仅不带入实验编号、日期、负责人及项目关联等平台信息；文档中的实验值会原样保留，请在模板编辑页清理后再提交审核。"
           />
+        </Form>
+      </Modal>
+
+      <Modal
+        title="编辑实验基本信息"
+        open={metadataOpen}
+        okText="保存"
+        cancelText="取消"
+        confirmLoading={metadataSaving}
+        onCancel={() => setMetadataOpen(false)}
+        onOk={() => void saveMetadata()}
+        destroyOnHidden
+      >
+        <Typography.Paragraph type="secondary">
+          无模板导入默认使用当前登录人和上传当天，可在这里确认或调整。
+        </Typography.Paragraph>
+        <Form form={metadataForm} layout="vertical">
+          <Form.Item
+            name="ownerName"
+            label="负责人"
+            rules={[{ required: true, whitespace: true, message: '请输入负责人' }]}
+          >
+            <Input maxLength={100} placeholder="请输入负责人" />
+          </Form.Item>
+          <Form.Item
+            name="experimentDate"
+            label="实验日期"
+            rules={[{ required: true, message: '请选择实验日期' }]}
+          >
+            <Input type="date" />
+          </Form.Item>
         </Form>
       </Modal>
 
@@ -1071,7 +1179,7 @@ export function ExperimentWorkspacePage({
         confirmLoading={busy}
         onCancel={() => setReviewOpen(false)}
         onOk={() => void submitReviewWithInformation()}
-        destroyOnClose
+        destroyOnHidden
       >
         <Typography.Paragraph type="secondary">
           这两项属于实验审核信息，不会改变已冻结的实验模板版式。
@@ -1101,7 +1209,7 @@ export function ExperimentWorkspacePage({
         confirmLoading={busy}
         onCancel={() => setReturnOpen(false)}
         onOk={() => void returnForChanges()}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form layout="vertical">
           <Form.Item label="退回原因" required>

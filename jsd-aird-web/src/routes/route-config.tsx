@@ -36,7 +36,6 @@ const ProductionOrderUploadPage = lazy(async () => ({ default: (await import('@/
 const ProductionUploadWorkspacePage = lazy(async () => ({ default: (await import('@/pages/production-orders')).ProductionUploadWorkspacePage }));
 const ProductionWorkspacePage = lazy(async () => ({ default: (await import('@/pages/production-orders/ProductionWorkspacePage')).ProductionWorkspacePage }));
 const TemplateUploadPage = lazy(async () => ({ default: (await import('@/pages/template-upload')).TemplateUploadPage }));
-const TemplateImportDetailPage = lazy(async () => ({ default: (await import('@/pages/template-upload')).TemplateImportDetailPage }));
 const TemplateWorkspacePage = lazy(async () => ({ default: (await import('@/pages/template-workspace')).TemplateWorkspacePage }));
 const TemplatesPage = lazy(async () => ({ default: (await import('@/pages/templates')).TemplatesPage }));
 const TemplateImportRenderPage = lazy(async () => ({ default: (await import('@/pages/template-render/TemplateImportRenderPage')).TemplateImportRenderPage }));
@@ -101,10 +100,6 @@ const applicationRoutes: RouteObject[] = [
       {
         path: 'templates/upload',
         element: <TemplateUploadPage />,
-      },
-      {
-        path: 'template-imports/:importJobId',
-        element: <PagePermissionGate permission="template.upload"><TemplateImportDetailPage /></PagePermissionGate>,
       },
       {
         path: 'templates/library',

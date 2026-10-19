@@ -5,7 +5,7 @@ import {
   EyeOutlined,
   ReloadOutlined,
 } from '@ant-design/icons';
-import { App, Button, Col, Form, Popconfirm, Radio, Input, Row, Select, Space, Upload } from 'antd';
+import { App, Button, Col, Form, Popconfirm, Radio, Row, Select, Space, Upload } from 'antd';
 import type { UploadFile, UploadProps } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -38,11 +38,8 @@ const ACTIVE_JOB_STATES = ['CREATED', 'QUEUED', 'PARSING', 'VALIDATING', 'COMMIT
 export function ExperimentUploadPage() {
   const { message } = App.useApp();
   const user = useAuthStore((state) => state.user);
-  useEffect(() => { setOwnerName(user?.displayName || user?.username || ''); }, [user]);
   const navigate = useNavigate();
   const [mode, setMode] = useState<'TEMPLATE' | 'CONTENT_ONLY'>('TEMPLATE');
-  const [ownerName, setOwnerName] = useState('');
-  const [experimentDate, setExperimentDate] = useState(new Date().toLocaleDateString('sv-SE'));
   const [files, setFiles] = useState<UploadFile[]>([]);
   const [freeJobs, setFreeJobs] = useState<ExperimentImportJob[]>([]);
   const [templateJobs, setTemplateJobs] = useState<DataJob[]>([]);
@@ -129,7 +126,6 @@ export function ExperimentUploadPage() {
     const sourceFiles = files.flatMap((item) => (item.originFileObj ? [item.originFileObj] : []));
     if (!sourceFiles.length) { void message.warning('请先选择实验文件'); return; }
     if (!experimentCategoryId) { void message.warning('请选择实验分类'); return; }
-    if (mode === 'CONTENT_ONLY' && (!ownerName.trim() || !experimentDate)) { void message.warning('请填写负责人和实验日期'); return; }
     if (mode === 'TEMPLATE' && !chosenTemplate) {
       void message.warning(templates.length
         ? '请选择可用于实验导入的已发布模板'
@@ -149,8 +145,10 @@ export function ExperimentUploadPage() {
             const format = ext === 'xls' ? 'XLS' : ext === 'xlsx' ? 'XLSX' : ext === 'csv' ? 'CSV' : ext === 'pdf' ? 'PDF' : ext === 'doc' || ext === 'docx' ? 'DOCX' : 'IMAGE';
             const relation = projectRelations[0];
             await importExperimentFile({fileId:staged.fileId,fileName:staged.originalName,sha256:staged.sha256,format,
-              processingMode:'CONTENT_ONLY',title:file.name.replace(/\.[^.]+$/,''),ownerName:ownerName.trim(),
-              experimentDate,categoryId:experimentCategoryId,categoryName:categories.find(c=>c.id===experimentCategoryId)?.name,
+              processingMode:'CONTENT_ONLY',title:file.name.replace(/\.[^.]+$/,''),
+              ownerName:user?.displayName?.trim() || user?.username || '',
+              experimentDate:new Date().toLocaleDateString('sv-SE'),
+              categoryId:experimentCategoryId,categoryName:categories.find(c=>c.id===experimentCategoryId)?.name,
               projectId:relation?.projectId,stageId:relation?.stageId,taskId:relation?.taskId});
           } else await dataApi.createExperimentJob({
             sourceFileId: staged.fileId,
@@ -229,14 +227,13 @@ export function ExperimentUploadPage() {
     <UploadWorkspace
       breadcrumbs={[{ title: '电子实验记录本' }, { title: '实验数据导入' }]}
       title="文件导入"
-      description="选择按模板导入或无模板导入，读取文件内容后进入实验编辑器。"
+      description="无模板导入无需预填负责人和日期；草稿默认使用当前用户和今天，解析完成后可在实验编辑页修改基本信息。"
       headerActions={<Space>
         <Button type="primary" onClick={() => navigate('/experiments')}>实验列表</Button>
       </Space>}
       leftTitle="基础信息"
       classification={<Form layout="vertical" component={false}>
         <Form.Item label="导入方式"><Radio.Group value={mode} onChange={(e) => { setMode(e.target.value); setFiles([]); }} options={[{value:'TEMPLATE',label:'按模板导入'},{value:'CONTENT_ONLY',label:'无模板导入'}]} optionType="button" /></Form.Item>
-        {mode === 'CONTENT_ONLY' && <><Form.Item label="负责人" required><Input value={ownerName} onChange={e=>setOwnerName(e.target.value)} /></Form.Item><Form.Item label="实验日期" required><Input type="date" value={experimentDate} onChange={e=>setExperimentDate(e.target.value)} /></Form.Item></>}
 
         <Row gutter={12}>
           <Col span={12}>

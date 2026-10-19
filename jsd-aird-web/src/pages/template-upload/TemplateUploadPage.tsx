@@ -8,6 +8,9 @@ import {
   Form,
   Input,
   Modal,
+  Progress,
+  Space,
+  Table,
   Select,
   Upload,
 } from 'antd';
@@ -19,12 +22,13 @@ import { UploadWorkspace, type UploadWorkspaceRecord } from '@/components/upload
 import {
   templateApi,
   type CreateTemplateInput,
+  type RecognitionSuggestion,
   type TemplateImportJob,
   type TemplateCategory,
 } from '@/services/templates/template-api';
 import { HttpError } from '@/services/http/errors';
 
-import { recognitionCounts } from './recognition-display';
+import { buildDisplaySuggestions, recognitionCounts } from './recognition-display';
 import { sourceFormatOf } from './normalize-template-file';
 import { isUserUploadHistoryFile } from './upload-history';
 import { downloadFile } from '@/services/files';
@@ -40,6 +44,10 @@ export function TemplateUploadPage() {
   const [jobs, setJobs] = useState<TemplateImportJob[]>([]);
   const [jobsLoading, setJobsLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [viewingJob, setViewingJob] = useState<TemplateImportJob>();
+  const [viewSuggestions, setViewSuggestions] = useState<RecognitionSuggestion[]>([]);
+  const [viewLoading, setViewLoading] = useState(false);
+  const displaySuggestions = useMemo(() => buildDisplaySuggestions(viewSuggestions), [viewSuggestions]);
   const [selectedJob, setSelectedJob] = useState<TemplateImportJob>();
   const [deletingJobId, setDeletingJobId] = useState<string>();
   const [retryingJobId, setRetryingJobId] = useState<string>();
@@ -50,6 +58,11 @@ export function TemplateUploadPage() {
   const [recordPage, setRecordPage] = useState({ current: 1, pageSize: 8 });
   const [uploadCategory, setUploadCategory] = useState<string>();
   const [form] = Form.useForm<CreateTemplateInput>();
+
+  const closeRecognition = () => {
+    setViewingJob(undefined);
+    setViewSuggestions([]);
+  };
 
   const validateTemplateFile: UploadProps['beforeUpload'] = (file) => {
     try {
@@ -208,9 +221,7 @@ export function TemplateUploadPage() {
       status,
       progress: job.progress,
       commonActions: {
-        view: { onClick: () => navigate(job.generatedTemplateVersionId
-          ? `/templates/${job.generatedTemplateVersionId}/workspace?importJobId=${job.id}`
-          : `/template-imports/${job.id}`) },
+        view: { onClick: () => void openRecognition(job) },
         download: { onClick: () => downloadFile(job.originalSourceFileId || job.sourceFileId, job.sourceFileName) },
         retry: {
           disabled: !['PARSED', 'FAILED', 'CANCELLED'].includes(job.status),
@@ -237,6 +248,20 @@ export function TemplateUploadPage() {
     const maxPage = Math.max(1, Math.ceil(allUploadRecords.length / recordPage.pageSize));
     if (recordPage.current > maxPage) setRecordPage((value) => ({ ...value, current: maxPage }));
   }, [allUploadRecords.length, recordPage.current, recordPage.pageSize]);
+
+  const openRecognition = async (job: TemplateImportJob) => {
+    setViewingJob(job);
+    setViewSuggestions([]);
+    setViewLoading(true);
+    try {
+      const suggestions = await templateApi.listRecognitionSuggestions(job.id);
+      setViewSuggestions(suggestions);
+    } catch (error) {
+      void message.error(error instanceof Error ? error.message : '识别详情加载失败');
+    } finally {
+      setViewLoading(false);
+    }
+  };
 
   const openCreate = (job: TemplateImportJob) => {
     setSelectedJob(job);
@@ -387,13 +412,67 @@ export function TemplateUploadPage() {
         </Form>
       </Modal>
 
+      <Modal
+        title={viewingJob ? `识别结果：${viewingJob.sourceFileName}` : '识别结果'}
+        open={Boolean(viewingJob)}
+        width={960}
+        footer={
+          viewingJob ? (
+            <Space>
+              <Button onClick={closeRecognition}>关闭</Button>
+              <Button
+                type="primary"
+                onClick={() => {
+                  const job = viewingJob;
+                  setViewingJob(undefined);
+                  if (job) openCreate(job);
+                }}
+              >
+                填写模板信息并创建
+              </Button>
+            </Space>
+          ) : null
+        }
+        onCancel={closeRecognition}
+      >
+        {viewLoading ? (
+          <Progress percent={60} status="active" showInfo={false} />
+        ) : (
+          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            <Alert
+              type={viewingJob ? recognitionAlertType(viewingJob) : 'info'}
+              showIcon
+              message={viewingJob ? recognitionLabel(viewingJob) : '识别结果'}
+              description={
+                viewingJob
+                  ? recognitionDescription(viewingJob)
+                  : undefined
+              }
+            />
+            <Table
+              size="small"
+              rowKey="id"
+              pagination={{ pageSize: 8 }}
+              dataSource={displaySuggestions}
+              columns={[
+                {
+                  title: '识别项目',
+                  dataIndex: 'label',
+                },
+                { title: '说明', dataIndex: 'details' },
+              ]}
+            />
+          </Space>
+        )}
+      </Modal>
+
     </>
   );
 }
 
 function recognitionStatus(job: TemplateImportJob) {
   if (job.status === 'FAILED') return 'FAILED';
-  if (job.recognitionRunStatus === 'PARTIAL') return 'REVIEW_REQUIRED';
+  if (job.recognitionRunStatus === 'PARTIAL' || recognitionCounts(job).pending > 0 || recognitionCounts(job).conflicts > 0) return 'REVIEW_REQUIRED';
   return (
     job.recognitionSummary?.recognitionStatus ?? job.result.recognitionStatus ?? 'REVIEW_REQUIRED'
   );

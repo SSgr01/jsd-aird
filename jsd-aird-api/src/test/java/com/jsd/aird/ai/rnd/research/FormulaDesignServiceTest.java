@@ -60,7 +60,10 @@ class FormulaDesignServiceTest {
         when(predictionContext.gateAvailability(b)).thenReturn(List.of());
         var a="f44a3459-05c1-4958-a246-b5736c0aa682";var c="fa09039b-f0a2-48bd-9acc-71ed839ce94d";
         var scheme=json.createObjectNode().put("id","workbench").put("version",1).put("sha256","0".repeat(64));var fields=scheme.putArray("fields");
-        for(var id:List.of(a,c))fields.addObject().put("code","formula:"+id).put("name",id.equals(a)?"树脂 A比例":"树脂 B比例").put("valueType","NUMBER").put("unit","%").put("required",true).putObject("encoding");
+        for(var id:List.of(a,c))fields.addObject().put("code","formula:"+id).put("name",id.equals(a)?"树脂 A比例":"树脂 B比例")
+                .put("valueType","NUMBER").put("unit","%").put("required",true).put("semanticType","MATERIAL_RATIO")
+                .put("mappingStatus","MAPPED").put("materialId",id).put("materialCode",id.equals(a)?"R-1":"A-1")
+                .put("compositionBasis","MASS_PERCENT").putObject("encoding");
         fields.addObject().put("code","temperature").put("name","温度").put("valueType","NUMBER").put("unit","°C").put("required",true);
         var rows=json.createArrayNode();rows.addObject().putObject("values").put("formula:"+a,40).put("formula:"+c,60);
         when(b.contractVersion()).thenReturn("modeling-workbench.v1");when(b.unit()).thenReturn(null);
@@ -95,7 +98,10 @@ class FormulaDesignServiceTest {
     @Test void explainsIncompleteProportionsAndSingleRatioTargets()throws Exception {
         ActorContext.set(ActorContext.developmentDefault());var b=workbenchBinding();
         ((com.fasterxml.jackson.databind.node.ObjectNode)b.frozenDictionary()).put("compositionStatus","INCOMPLETE");
-        var source=json.createObjectNode();source.putObject("modelSource").putObject("yColumn").put("code","formula:f44a3459-05c1-4958-a246-b5736c0aa682").put("kind","NUMERIC").put("unit","%");when(b.definition()).thenReturn(source);
+        var source=json.createObjectNode();source.putObject("modelSource").putObject("yColumn")
+                .put("code","formula:f44a3459-05c1-4958-a246-b5736c0aa682").put("kind","NUMERIC").put("unit","%")
+                .put("semanticType","MATERIAL_RATIO").put("mappingStatus","MAPPED")
+                .put("materialId","f44a3459-05c1-4958-a246-b5736c0aa682").put("compositionBasis","MASS_PERCENT");when(b.definition()).thenReturn(source);
         var base=json.createObjectNode();base.putArray("targets").addObject().put("targetId",b.targetId().toString());base.putArray("selected");base.putArray("requiredInputs");base.putArray("configurationConflicts");
         when(predictionContext.context(anyList())).thenReturn(base);when(predictions.targetBindings(any(),anyList())).thenReturn(List.of(b));
         var target=service.context(List.of()).path("targets").get(0);

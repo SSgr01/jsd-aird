@@ -1,6 +1,7 @@
 import { Alert, Button, Typography } from 'antd';
 
 import type { DataIssue, DataSheet } from '@/services/data/data-api';
+import { importIssueMessage, requiresTemplateChange } from '@/services/data/import-guidance';
 
 export function DataImportQualityNotice({ issues, sheets, onLocate }: { issues: DataIssue[]; sheets: DataSheet[]; onLocate?: (issue: DataIssue) => void }) {
   const openIssues = issues.filter((issue) => !['RESOLVED', 'IGNORED'].includes(issue.status));
@@ -35,9 +36,8 @@ export function DataImportQualityNotice({ issues, sheets, onLocate }: { issues: 
                 ].filter(Boolean).join(' · ');
                 return <li key={issue.id || `${issue.issueType}-${issue.sheetId}-${index}`}>
                   {location ? <Typography.Text strong>{location}：</Typography.Text> : null}
-                  {issue.message}
-                  {issue.fieldCode ? `（${issue.fieldCode}）` : ''}
-                  {onLocate && <Button size="small" type="link" onClick={() => onLocate(issue)}>{issue.address ? '定位并修正' : '处理映射与工作表'}</Button>}
+                  {importIssueMessage(issue.issueType, issue.message)}
+                  {onLocate && <Button size="small" type="link" onClick={() => onLocate(issue)}>{issue.address && !requiresTemplateChange(issue.issueType) ? '修改数据' : '重新选择模板或文件'}</Button>}
                 </li>;
               })}
             </ul>

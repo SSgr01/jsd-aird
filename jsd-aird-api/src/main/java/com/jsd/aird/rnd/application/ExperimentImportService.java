@@ -74,14 +74,24 @@ public class ExperimentImportService {
     public Accepted importFile(Command command) {
         var actor = ActorContext.required();
         var normalized = normalize(command);
-        if (!normalized.duplicateOverride()) {
+        if (normalized.processingMode() != null && !normalized.contentOnly())
+            throw new ApiException(ApiErrorCode.BAD_REQUEST,"不支持的导入方式");
+        if (!normalized.contentOnly() && !normalized.duplicateOverride()) {
             var existing = imports.findCompletedBySourceHash(actor.organizationId(), normalized.sha256());
             if (existing.isPresent()) return new Accepted(existing.get().id(), "COMPLETED");
+        }
+        if (normalized.contentOnly()) {
+            if (normalized.title() == null || normalized.title().isBlank() || normalized.ownerName() == null || normalized.ownerName().isBlank())
+                throw new ApiException(ApiErrorCode.BAD_REQUEST, "实验名称和负责人不能为空");
+            imports.lockSource(actor.organizationId(), normalized.fileId());
+            var existing = imports.findContentImport(actor.organizationId(), normalized.fileId());
+            if (existing.isPresent()) return new Accepted(existing.get().id(), existing.get().status());
         }
         var jobId = UUID.randomUUID();
         imports.create(jobId, actor.organizationId(), normalized.fileId(), normalized.fileName(),
                 normalized.sha256(), normalized.format().name(), normalized.categoryName(), normalized.projectId(),
                 normalized.stageId(), normalized.taskId(), normalized.visibility(), actor.userId());
+        imports.saveOptions(actor.organizationId(), jobId, objectMapper.valueToTree(normalized));
         enqueue(jobId, normalized, actor, "experiment-import:" + jobId);
         return new Accepted(jobId, "PARSING");
     }
@@ -90,6 +100,9 @@ public class ExperimentImportService {
         var actor = ActorContext.required();
         var job = imports.find(actor.organizationId(), id)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "上传记录不存在"));
+        var savedOptions = imports.options(actor.organizationId(), id);
+        if ("CONTENT_ONLY".equals(savedOptions.path("processingMode").asText()) && !Set.of("FAILED","CANCELLED").contains(job.status()))
+            throw new ApiException(ApiErrorCode.BAD_REQUEST,"仅失败或已取消的无模板导入任务可以重试");
         if ("PARSING".equals(job.status())) {
             // A retry of an in-flight import must first stop the old worker.
             // These updates intentionally run outside one surrounding
@@ -108,6 +121,12 @@ public class ExperimentImportService {
             throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "上传记录状态已变化，请刷新后重试");
         }
         final TemplateFormat format = parseFormat(job.sourceFormat());
+        var options = savedOptions;
+        if ("CONTENT_ONLY".equals(options.path("processingMode").asText())) {
+            var original = objectMapper.convertValue(options, Command.class);
+            enqueue(job.id(), original, actor, "experiment-import-retry:" + job.id() + ":" + UUID.randomUUID());
+            return new Accepted(job.id(), "PARSING");
+        }
         var command = normalize(new Command(job.sourceFileId(), job.sourceFileName(), job.sourceSha256(), format,
                 null, job.categoryName(), job.projectId(), job.stageId(), job.taskId(), LocalDate.now(), job.visibility()));
         enqueue(job.id(), command, actor, "experiment-import-retry:" + job.id() + ":" + UUID.randomUUID());
@@ -174,7 +193,7 @@ public class ExperimentImportService {
                 var editorSnapshot = parsed.initialEditorSnapshot();
                 TemplateOfficeFacade.RecognitionBatch recognitionBatch = null;
                 com.fasterxml.jackson.databind.JsonNode recognitionResult = null;
-                if (excelUpload) {
+                if (excelUpload && !command.contentOnly()) {
                     var recognitionFileId = command.fileId();
                     if (command.format() == TemplateFormat.XLS) {
                         var normalized = files.stageDerived(actor.organizationId(), actor.userId(),
@@ -203,7 +222,7 @@ public class ExperimentImportService {
                 var ocrWorkbook = command.format() == TemplateFormat.IMAGE
                         && parsed.structureSummary() != null
                         && "XLSX".equals(parsed.structureSummary().path("outputFormat").asText(""));
-                if (ocrWorkbook && editorSnapshot != null && editorSnapshot.isObject()) {
+                if (!command.contentOnly() && ocrWorkbook && editorSnapshot != null && editorSnapshot.isObject()) {
                     try {
                         var snapshotName = command.fileName().replaceFirst("(?i)\\.[^.]+$", "") + ".snapshot.json";
                         var stagedSnapshot = files.stageDerived(actor.organizationId(), actor.userId(),
@@ -230,7 +249,8 @@ public class ExperimentImportService {
                     }
                 }
                 var editModel = objectMapper.createObjectNode();
-                editModel.put("title", command.fileName());
+                editModel.put("title", command.contentOnly() ? command.title() : command.fileName());
+                if (command.contentOnly()) editModel.put("importProcessingMode", "CONTENT_ONLY");
                 editModel.put("purpose", "");
                 editModel.put("plan", "");
                 // Images are OCR-ed through the shared template/knowledge media
@@ -344,10 +364,10 @@ public class ExperimentImportService {
                 if (!imports.isParsing(actor.organizationId(), jobId)) return null;
                 updateProgress(actor.organizationId(), asyncIdempotencyKey, 85, "BUILDING_EXPERIMENT");
                 var importedDraft = new ExperimentService.CreateCommand(
-                        null, command.fileName(), command.categoryId(), command.categoryName(),
+                        null, command.contentOnly() ? command.title() : command.fileName(), command.categoryId(), command.categoryName(),
                         command.format() == TemplateFormat.XLSX || command.format() == TemplateFormat.XLS || command.format() == TemplateFormat.CSV
                                 ? "EXCEL_IMPORT" : "OCR_IMPORT",
-                        command.projectId(), command.stageId(), command.taskId(), actor.username(),
+                        command.projectId(), command.stageId(), command.taskId(), command.contentOnly() ? command.ownerName() : actor.username(),
                         command.experimentDate(), command.fileId(), null, command.sha256(),
                         editorSnapshot, editModel);
                 // A retry keeps the import job's existing experiment_id. Reuse
@@ -411,6 +431,7 @@ public class ExperimentImportService {
         payload.put("actorRole", actor.role() == null ? "ADMIN" : actor.role());
         payload.put("asyncIdempotencyKey", idempotencyKey);
         putUuid(payload, "fileId", command.fileId());
+        payload.put("command", objectMapper.valueToTree(command));
         payload.put("fileName", command.fileName());
         payload.put("sha256", command.sha256());
         payload.put("format", command.format().name());
@@ -435,7 +456,7 @@ public class ExperimentImportService {
         }
         return new Command(command.fileId(), command.fileName().strip(), command.sha256().strip(), command.format(),
                 command.categoryId(), command.categoryName(), command.projectId(), command.stageId(), command.taskId(),
-                command.experimentDate(), visibility, command.duplicateOverride());
+                command.experimentDate(), visibility, command.duplicateOverride(), command.processingMode(), command.title(), command.ownerName());
     }
 
     private TemplateFormat parseFormat(String value) {
@@ -447,6 +468,8 @@ public class ExperimentImportService {
     }
 
     private byte[] normalizedOfficeBytes(String fileName, String contentType, TemplateFormat format, byte[] bytes) {
+        if (format == TemplateFormat.XLS)
+            return fileNormalizer.normalizeOfficeFile(fileName, "application/vnd.ms-excel", bytes).content();
         if (format != TemplateFormat.DOCX || fileName == null
                 || !fileName.toLowerCase(java.util.Locale.ROOT).endsWith(".doc")) return bytes;
         return fileNormalizer.normalizeOfficeFile(fileName,
@@ -536,7 +559,14 @@ public class ExperimentImportService {
     public record Command(UUID fileId, String fileName, String sha256, TemplateFormat format,
                           UUID categoryId, String categoryName, UUID projectId, UUID stageId,
                           UUID taskId, LocalDate experimentDate, String visibility,
-                          boolean duplicateOverride) {
+                          boolean duplicateOverride, String processingMode, String title, String ownerName) {
+        public boolean contentOnly() { return "CONTENT_ONLY".equals(processingMode); }
+        public Command(UUID fileId, String fileName, String sha256, TemplateFormat format,
+                       UUID categoryId, String categoryName, UUID projectId, UUID stageId,
+                       UUID taskId, LocalDate experimentDate, String visibility, boolean duplicateOverride) {
+            this(fileId,fileName,sha256,format,categoryId,categoryName,projectId,stageId,taskId,
+                    experimentDate,visibility,duplicateOverride,null,null,null);
+        }
         public Command(UUID fileId, String fileName, String sha256, TemplateFormat format,
                        UUID categoryId, String categoryName, UUID projectId, UUID stageId,
                        UUID taskId, LocalDate experimentDate, String visibility) {
@@ -566,13 +596,16 @@ public class ExperimentImportService {
                     .put("rowCount", 200).put("columnCount", 26);
             var cellData = objectMapper.createObjectNode();
             if (format == TemplateFormat.CSV) {
-                var text = new String(bytes, StandardCharsets.UTF_8);
-                var rows = text.split("\\R", -1);
-                for (int rowIndex = 0; rowIndex < Math.min(rows.length, 200); rowIndex++) {
+                var rows = ExperimentCsvContent.read(bytes);
+                if (rows.size() > 1_048_576 || rows.stream().anyMatch(row -> row.size() > 16_384))
+                    throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"CSV 超出表格可容纳范围，请拆分文件后上传");
+                sheet.put("rowCount", Math.max(200,rows.size()));
+                sheet.put("columnCount",Math.max(26,rows.stream().mapToInt(List::size).max().orElse(0)));
+                for (int rowIndex = 0; rowIndex < rows.size(); rowIndex++) {
                     var cells = objectMapper.createObjectNode();
-                    var columns = rows[rowIndex].split(",", -1);
-                    for (int columnIndex = 0; columnIndex < Math.min(columns.length, 26); columnIndex++) {
-                        cells.set(String.valueOf(columnIndex), objectMapper.createObjectNode().put("v", columns[columnIndex].trim()));
+                    var columns = rows.get(rowIndex);
+                    for (int columnIndex = 0; columnIndex < columns.size(); columnIndex++) {
+                        cells.set(String.valueOf(columnIndex), objectMapper.createObjectNode().put("v", columns.get(columnIndex)));
                     }
                     if (!cells.isEmpty()) cellData.set(String.valueOf(rowIndex), cells);
                 }
@@ -611,6 +644,29 @@ public class ExperimentImportService {
     }
 
     OfficeStructureParser.ParseResult parseSource(Command command, byte[] bytes, Actor actor) {
+        if (command.contentOnly() && command.format() == TemplateFormat.PDF) {
+            try (var pdf = org.apache.pdfbox.Loader.loadPDF(bytes)) {
+                var blocks = new ArrayList<DocumentParser.TextBlock>();
+                var complete = true;
+                for (int page = 1; page <= pdf.getNumberOfPages(); page++) {
+                    var stripper = new org.apache.pdfbox.text.PDFTextStripper();
+                    stripper.setStartPage(page); stripper.setEndPage(page);
+                    var text = stripper.getText(pdf);
+                    if (text.isBlank()) complete = false;
+                    blocks.add(new DocumentParser.TextBlock(page, "paragraph", text));
+                }
+                if (complete && !blocks.isEmpty())
+                    return ocrSnapshot(command.fileName(), new DocumentParser.ParsedDocument(blocks, "pdf-text-v1"));
+                if (mineruParser.isConfigured()) {
+                    var extracted = mineruParser.parse(new ByteArrayInputStream(bytes), command.fileName(),
+                        new DocumentParser.ParseContext(actor.organizationId(),actor.userId(),command.fileId(),"application/pdf",bytes.length,OcrMode.ON,false));
+                    if (extracted.blocks().isEmpty()) throw new IllegalStateException("PDF OCR 未读取到内容");
+                    return ocrSnapshot(command.fileName(), extracted);
+                }
+            } catch (java.io.IOException e) {
+                throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"PDF 正文读取失败：" + e.getMessage());
+            }
+        }
         if (command.format() != TemplateFormat.PDF && command.format() != TemplateFormat.IMAGE) {
             return genericParse(command.format(), command.fileName(), bytes);
         }
@@ -632,14 +688,20 @@ public class ExperimentImportService {
                 .filter(item -> item.isConfigured() && item.supports(command.fileName(), contentType(command.format(), command.fileName())))
                 .findFirst()
                 .orElse(null);
-        if (provider == null) return genericParse(command.format(), command.fileName(), bytes);
+        if (provider == null) {
+            if (command.contentOnly()) throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "正文读取或 OCR 服务未配置，无法读取该文件内容");
+            return genericParse(command.format(), command.fileName(), bytes);
+        }
         try {
             var extracted = provider.extract(new ByteArrayInputStream(bytes), command.fileName(),
                     new MediaExtractionProvider.ExtractionContext(command.fileId(), contentType(command.format(), command.fileName()), bytes.length, null));
+            if (command.contentOnly() && extracted.blocks().stream().noneMatch(b -> b.content() != null && !b.content().isBlank()))
+                throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "OCR 未读取到正文内容，请检查原文件后重试");
             return command.format() == TemplateFormat.IMAGE
                     ? ocrWorkbookResult(command.fileName(), contentType(command.format(), command.fileName()), bytes, extracted)
                     : ocrSnapshot(command.fileName(), extracted);
         } catch (RuntimeException ignored) {
+            if (command.contentOnly()) throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "正文读取或 OCR 失败：" + (ignored.getMessage() == null ? "请稍后重试" : ignored.getMessage()));
             // A reviewable source draft is safer than losing the original file when OCR is unavailable.
             return genericParse(command.format(), command.fileName(), bytes);
         }
@@ -663,7 +725,7 @@ public class ExperimentImportService {
                 || format == TemplateFormat.CSV || format == TemplateFormat.IMAGE;
     }
 
-    private OfficeStructureParser.ParseResult ocrSnapshot(String fileName, DocumentParser.ParsedDocument extracted) {
+    OfficeStructureParser.ParseResult ocrSnapshot(String fileName, DocumentParser.ParsedDocument extracted) {
         var summary = objectMapper.createObjectNode()
                 .put("format", "OCR_IMPORT")
                 .put("parserVersion", extracted.parserVersion() == null ? "ocr" : extracted.parserVersion())
@@ -680,12 +742,18 @@ public class ExperimentImportService {
             if (block.confidence() != null) node.put("confidence", block.confidence());
         });
         var text = extracted.blocks().stream().map(DocumentParser.TextBlock::content)
-                .filter(java.util.Objects::nonNull).filter(item -> !item.isBlank()).reduce((left, right) -> left + "\\r\\n" + right).orElse("");
+                .filter(java.util.Objects::nonNull).filter(item -> !item.isBlank())
+                .map(item -> item.replace("\r\n", "\n").replace('\r', '\n').replace('\n', '\r'))
+                .reduce((left, right) -> left + "\r" + right).orElse("");
         var snapshot = objectMapper.createObjectNode().put("id", UUID.randomUUID().toString())
                 .put("snapshotFormatVersion", 5).put("editorMode", "UNIVER_DOCS").put("title", fileName);
-        var body = objectMapper.createObjectNode().put("dataStream", text + "\\r\\n");
+        var body = objectMapper.createObjectNode().put("dataStream", text + "\r\n");
         body.putArray("textRuns");
-        body.putArray("paragraphs").addObject().put("startIndex", 0);
+        var paragraphs = body.putArray("paragraphs");
+        var stream = body.path("dataStream").asText();
+        for (int index=0; index<stream.length(); index++)
+            if (stream.charAt(index)=='\r') paragraphs.addObject().put("startIndex",index);
+        body.putArray("sectionBreaks").addObject().put("startIndex",stream.length()-1);
         body.putArray("customRanges");
         snapshot.set("body", body);
         snapshot.set("documentStyle", objectMapper.createObjectNode().set("pageSize", objectMapper.createObjectNode().put("width", 595).put("height", 842)));

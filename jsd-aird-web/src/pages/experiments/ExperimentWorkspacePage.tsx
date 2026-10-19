@@ -1,3 +1,4 @@
+import { FilePreviewModal } from '@/components/file-preview/FilePreviewModal';
 import {
   ArrowLeftOutlined,
   CheckCircleOutlined,
@@ -39,12 +40,6 @@ import {
 } from '@/features/experiment-workspace/experiment-workbook';
 import type { EditorHandle, EditorSelection, TemplateBinding } from '@/features/template-workspace/types';
 import { getAtPath, setAtPath } from '@/features/template-workspace/path-utils';
-import {
-  reviewInformation,
-  reviewInformationMissing,
-  withReviewInformation,
-  type ReviewInformation,
-} from './experiment-review-information';
 import {
   actExperiment,
   createRevision,
@@ -143,14 +138,13 @@ export function ExperimentWorkspacePage({
   const [downloadingSource, setDownloadingSource] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>('SAVED');
   const [loadError, setLoadError] = useState<string>();
-  const [reviewOpen, setReviewOpen] = useState(false);
   const [returnOpen, setReturnOpen] = useState(false);
   const [returnReason, setReturnReason] = useState('');
+  const [sourcePreviewOpen, setSourcePreviewOpen] = useState(false);
   const [reviewTrigger, setReviewTrigger] = useState(0);
   const [coordinatePicking, setCoordinatePicking] = useState<{ fieldId: string; target: 'labelAddress' | 'address' }>();
   const [recognitionBusy, setRecognitionBusy] = useState(false);
   const [recognitionProgress, setRecognitionProgress] = useState<number>();
-  const [reviewForm] = Form.useForm<ReviewInformation>();
   const [templateDraftOpen, setTemplateDraftOpen] = useState(false);
   const [templateDraftSaving, setTemplateDraftSaving] = useState(false);
   const [templateCategories, setTemplateCategories] = useState<TemplateCategory[]>([]);
@@ -295,7 +289,7 @@ export function ExperimentWorkspacePage({
         setRecognitionProgress(latest.progress);
         if (latest.status === 'COMPLETED') {
           await load();
-          void message.success('重新识别完成，请核对字段和填写位置');
+          void message.success('重新识别完成');
           return;
         }
         if (['FAILED', 'CANCELLED'].includes(latest.status)) {
@@ -462,40 +456,6 @@ export function ExperimentWorkspacePage({
     }
   };
 
-  const openReviewInformation = () => {
-    reviewForm.setFieldsValue(reviewInformation(editModel));
-    setReviewOpen(true);
-  };
-
-  const submitReviewWithInformation = async () => {
-    if (!detail) return;
-    let values: ReviewInformation;
-    try {
-      values = await reviewForm.validateFields();
-    } catch {
-      return;
-    }
-    setBusy(true);
-    setSaveState('SAVING');
-    try {
-      const nextModel = withReviewInformation(currentDraftModel(), values);
-      const savedDetail = await persistDraft(nextModel);
-      if (!savedDetail) {
-        setSaveState('DIRTY');
-        return;
-      }
-      await actExperiment(id, 'submit-review', savedDetail.summary.revision);
-      setReviewOpen(false);
-      void message.success('已提交审核');
-      await load();
-    } catch (error) {
-      setSaveState('DIRTY');
-      void message.error(error instanceof Error ? error.message : '提交审核失败');
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const publish = (action: PublishAction) => {
     if (action === 'submit-review' && Array.isArray(editModel.recognizedFields)
       && (!editModel.recognizedFields.length
@@ -503,10 +463,6 @@ export function ExperimentWorkspacePage({
         || editModel.recognizedRegions?.some((region) => !region.confirmed))) {
       setReviewTrigger((current) => current + 1);
       void message.warning('请先确认 Excel 识别区域与字段绑定，再提交审核');
-      return;
-    }
-    if (action === 'submit-review' && reviewInformationMissing(editModel)) {
-      openReviewInformation();
       return;
     }
     void act(action);
@@ -577,7 +533,7 @@ export function ExperimentWorkspacePage({
       const blob = await exportExperiment(id);
       const extension = documentFormatOf(detail.editModel) === 'word' ? 'docx' : 'xlsx';
       const versionSuffix =
-        versions.length > 0 ? `-V${versions[0]?.versionNo ?? detail.summary.versionNo}` : '';
+        `-V${detail.summary.versionNo ?? 1}`;
       downloadBlob(
         blob,
         `${detail.summary.title || detail.summary.experimentNo}${versionSuffix}.${extension}`,
@@ -684,7 +640,7 @@ export function ExperimentWorkspacePage({
   const sourceIsImage = imageSource;
   const readonly = ['COMPLETED', 'VOIDED', 'PENDING_REVIEW'].includes(status);
   const editable = !readonly && isDesktop && view === 'edit';
-  const showExcelRecognition = !templateReview && documentFormatOf(editModel, snapshot) === 'excel'
+  const showExcelRecognition = editModel.importProcessingMode !== 'CONTENT_ONLY' && !templateReview && documentFormatOf(editModel, snapshot) === 'excel'
     && Array.isArray(editModel.recognizedFields);
   const templateDataConfirmed = Boolean(templateReview?.confirmed && saveState === 'SAVED'
     && editModel.templateDataReview?.confirmed
@@ -719,7 +675,7 @@ export function ExperimentWorkspacePage({
             </Typography.Text>
             <Typography.Text strong>{detail.summary.title}</Typography.Text>
           </span>
-          <span className="workspace-meta-item">V{versions[0]?.versionNo ?? detail.summary.versionNo ?? 1}</span>
+          <span className="workspace-meta-item">V{detail.summary.versionNo ?? 1}</span>
           {showExcelRecognition ? <span className="workspace-meta-item"><FileExcelOutlined /> Excel</span> : null}
           <Tag color={status === 'COMPLETED' ? 'green' : status === 'VOIDED' ? 'default' : 'blue'}>
             {STATUS_TEXT[status] ?? status}
@@ -737,6 +693,7 @@ export function ExperimentWorkspacePage({
           >
             导出
           </Button>
+          {detail.sourceFileId && <Button icon={<EyeOutlined />} onClick={() => setSourcePreviewOpen(true)}>预览原文件</Button>}
           {detail.sourceFileId && (
             <Button
               icon={<DownloadOutlined />}
@@ -819,6 +776,7 @@ export function ExperimentWorkspacePage({
         </Form>
       </Modal>
 
+      <FilePreviewModal open={sourcePreviewOpen} onClose={() => setSourcePreviewOpen(false)} file={detail.sourceFileId ? {fileName: String(editModel.sourceFileName || detail.summary.title),load: () => fetchFileBlob(detail.sourceFileId!)} : undefined} />
       <nav className="workspace-view-tabs" aria-label="实验页面">
         <Tabs
           activeKey={view}
@@ -958,36 +916,6 @@ export function ExperimentWorkspacePage({
         </div>
       )}
 
-      <Modal
-        title="审核信息"
-        open={reviewOpen}
-        okText="保存并提交审核"
-        cancelText="取消"
-        confirmLoading={busy}
-        onCancel={() => setReviewOpen(false)}
-        onOk={() => void submitReviewWithInformation()}
-        destroyOnClose
-      >
-        <Typography.Paragraph type="secondary">
-          这两项属于实验审核信息，不会改变已冻结的实验模板版式。
-        </Typography.Paragraph>
-        <Form form={reviewForm} layout="vertical" preserve={false}>
-          <Form.Item
-            name="purpose"
-            label="实验目的"
-            rules={[{ required: true, whitespace: true, message: '请填写实验目的' }]}
-          >
-            <Input.TextArea rows={3} placeholder="说明本次实验需要验证的目标" />
-          </Form.Item>
-          <Form.Item
-            name="mainConclusion"
-            label="主要结论"
-            rules={[{ required: true, whitespace: true, message: '请填写主要结论' }]}
-          >
-            <Input.TextArea rows={4} placeholder="填写真实实验完成后得到的主要结论" />
-          </Form.Item>
-        </Form>
-      </Modal>
       <Modal
         title="退回修改"
         open={returnOpen}

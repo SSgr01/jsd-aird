@@ -27,6 +27,7 @@ class HistoricalOptimizationFrozenDataTest {
             return RETURNS_DEFAULTS.answer(call);
         });
         var jdbc=mock(JdbcTemplate.class);when(repository.jdbc()).thenReturn(jdbc);
+        when(repository.materialCatalog(any())).thenReturn(MaterialCatalogSnapshot.empty());
         var jobs=mock(OpsAsyncFacade.class,call->call.getMethod().getName().equals("enqueue")?UUID.randomUUID():RETURNS_DEFAULTS.answer(call));
         var org=UUID.randomUUID();var user=UUID.randomUUID();var run=UUID.randomUUID();var dataset=UUID.randomUUID();
         var request=json.createObjectNode().put("mode","HISTORICAL_GP_BO").put("datasetId",dataset.toString())

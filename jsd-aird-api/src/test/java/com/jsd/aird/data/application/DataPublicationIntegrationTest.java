@@ -129,8 +129,9 @@ class DataPublicationIntegrationTest {
         });
     }
 
-    @Test
-    void matchedWorkbookValidatesBothSheetsImmediatelyAndRereadingPreservesCorrections() {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings={"DATA_CENTER", "EXPERIMENT"})
+    void matchedWorkbookValidatesBothSheetsImmediatelyAndRereadingPreservesCorrections(String owner) {
         var source=new DriverManagerDataSource(System.getProperty("jsd.it.jdbcUrl"),System.getProperty("jsd.it.username"),System.getProperty("jsd.it.password"));
         new TransactionTemplate(new DataSourceTransactionManager(source)).executeWithoutResult(tx -> {
             tx.setRollbackOnly(); ActorContext.set(ActorContext.developmentDefault());
@@ -143,7 +144,7 @@ class DataPublicationIntegrationTest {
                         INSERT INTO ops.file_object(id,organization_id,bucket,object_key,original_name,content_type,size_bytes,sha256,status,created_by,activated_at)
                         VALUES(?,?,'data','resin.xlsx','树脂黏度记录.xlsx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',10,?,'ACTIVE',?,now())
                         """,file,org,"e".repeat(64),user);
-                repo.insertJob(new DataRepository.NewJob(job,org,file,"e".repeat(64),"树脂黏度记录.xlsx","XLSX",version,false,user));
+                repo.insertJob(new DataRepository.NewJob(job,org,file,"e".repeat(64),"树脂黏度记录.xlsx","XLSX",version,null,false,user,null,null,"DATA_ONLY",null,owner));
                 when(templates.getVersion(org,version)).thenReturn(new TemplateDataImportFacade.DataTemplateDefinition(UUID.randomUUID(),version,"RESIN","树脂黏度","物料",1,"XLSX",
                         json.createObjectNode(),json.createArrayNode(),List.of(new TemplateDataImportFacade.FieldDefinition("VISCOSITY","黏度","NUMBER",null,true,false,List.of(),"/viscosity"))));
                 var sheets=List.of(

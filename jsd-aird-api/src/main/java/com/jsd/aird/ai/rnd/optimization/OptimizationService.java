@@ -174,7 +174,7 @@ public class OptimizationService {
                 .orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"历史实验数据不存在或无权查看"));
         var records=repository.historyRecords(organizationId,templateVersionId);
         var fieldNames=repository.historyFieldNames(organizationId);
-        return new HistorySampleProjection(json).dataset(organizationId,dataset.id(),dataset.name(),records,fieldNames,repository.materialIds(organizationId));
+        return new HistorySampleProjection(json).dataset(dataset.id(),dataset.name(),records,fieldNames,repository.materialCatalog(organizationId));
     }
 
     private CommonHistoryColumns commonHistoryColumns(List<JsonNode> sources) {
@@ -198,7 +198,7 @@ public class OptimizationService {
                 var sameCode = columns.stream().filter(item -> code.equals(item.path("code").asText())
                         && compatibleHistoryColumn(canonical, item)).toList();
                 JsonNode match = sameCode.size() == 1 ? sameCode.getFirst() : null;
-                if (match == null && !name.isBlank() && firstNameCount == 1) {
+                if (match == null && !name.isBlank() && firstNameCount == 1 && !unmappedMaterialRatio(canonical)) {
                     var sameName = columns.stream().filter(item -> name.equals(normalizeFieldName(item.path("name").asText()))
                             && compatibleHistoryColumn(canonical, item)).toList();
                     if (sameName.size() == 1) match = sameName.getFirst();
@@ -225,6 +225,11 @@ public class OptimizationService {
                 && left.path("mappingStatus").asText().equals(right.path("mappingStatus").asText());
     }
 
+    private boolean unmappedMaterialRatio(JsonNode column) {
+        return "MATERIAL_RATIO".equals(column.path("semanticType").asText())
+                && !"MAPPED".equals(column.path("mappingStatus").asText());
+    }
+
     private List<String> methods(JsonNode column) {
         var values=new ArrayList<String>();column.path("testMethods").forEach(method -> values.add(normalizeFieldName(method.asText())));
         Collections.sort(values);return values;
@@ -240,12 +245,14 @@ public class OptimizationService {
                 .replaceAll("\\s+", "").toLowerCase(Locale.ROOT);
     }
 
-    private boolean mappedFormulaColumn(JsonNode column) {
-        if("UNMAPPED".equals(column.path("mappingStatus").asText())
-                || !"NUMERIC".equals(column.path("kind").asText()))return false;
+    private boolean mappedFormulaColumn(JsonNode column,Set<String> knownMaterialIds) {
+        if(!"MATERIAL_RATIO".equals(column.path("semanticType").asText())
+                ||!"MAPPED".equals(column.path("mappingStatus").asText())
+                ||!"NUMERIC".equals(column.path("kind").asText()))return false;
+        var id=column.path("materialId").asText();
         try {
-            var materialId=UUID.fromString(column.path("materialId").asText()).toString();
-            var prefix="formula:"+materialId;var code=column.path("code").asText();
+            if(!UUID.fromString(id).toString().equals(id)||!knownMaterialIds.contains(id))return false;
+            var code=column.path("code").asText();var prefix="formula:"+id;
             return code.equals(prefix)||code.startsWith(prefix+"|");
         } catch(IllegalArgumentException ignored) { return false; }
     }
@@ -330,17 +337,29 @@ public class OptimizationService {
         var selectedIdsByDataset=json.createObjectNode();
         for(var sourceId:datasetIds){var ids=selectedIdsByDataset.putArray(sourceId.toString());for(var row:selectedRows)if(sourceId.toString().equals(row.path("sourceDatasetId").asText(datasetId.toString())))ids.add(row.path("id").asText());}
         var columns=new LinkedHashMap<String,JsonNode>();dataset.path("columns").forEach(column->columns.put(column.path("code").asText(),column));
-        var formulaCodes=columns.values().stream().filter(this::mappedFormulaColumn).map(column->column.path("code").asText()).toList();
+        var knownMaterialIds=repository.materialCatalog(actor.organizationId()).validIds();
+        var ratioColumns=columns.values().stream().filter(column->"MATERIAL_RATIO".equals(column.path("semanticType").asText())).toList();
+        var formulaCodes=columns.values().stream().filter(column->mappedFormulaColumn(column,knownMaterialIds)).map(column->column.path("code").asText()).toList();
         var requestedX=body.path("xColumns").deepCopy();var targetCode=body.path("yColumn").asText();
         if(requestedX.isArray()&&java.util.stream.StreamSupport.stream(requestedX.spliterator(),false).anyMatch(x->formulaCodes.contains(x.asText()))) {
             var requestedCodes=new LinkedHashSet<String>();requestedX.forEach(x->requestedCodes.add(x.asText()));
-            for(var column:columns.values())if(mappedFormulaColumn(column)&&!requestedCodes.contains(column.path("code").asText())) {
+            for(var column:columns.values())if(mappedFormulaColumn(column,knownMaterialIds)&&!requestedCodes.contains(column.path("code").asText())) {
                 var observed=new LinkedHashSet<String>();int filled=0;
                 for(var row:selectedRows){var v=row.path("values").path(column.path("code").asText());if(v.isNumber()){observed.add(v.asText());filled++;}}
                 if(observed.size()==1&&filled>=4)((ArrayNode)requestedX).add(column.path("code").asText());
             }
         }
         if(!requestedX.isArray()||requestedX.isEmpty())throw validation("至少选择一个 X 因素");
+        for(var selected:requestedX) {
+            var column=columns.get(selected.asText());
+            if(column!=null&&"MATERIAL_RATIO".equals(column.path("semanticType").asText())
+                    &&!mappedFormulaColumn(column,knownMaterialIds))
+                throw validation("材料“"+column.path("name").asText(selected.asText())+"”的身份尚未确认，请补充材料编号后再优化");
+        }
+        boolean formulaSelected=false;
+        for(var selected:requestedX)if(formulaCodes.contains(selected.asText())){formulaSelected=true;break;}
+        if(formulaSelected&&ratioColumns.stream().anyMatch(column->!mappedFormulaColumn(column,knownMaterialIds)))
+            throw validation("配方中有材料身份尚未确认，请补充材料编号后再优化");
         if(!columns.containsKey(targetCode)||!"NUMERIC".equals(columns.get(targetCode).path("kind").asText()))throw validation("Y 指标需要是有数值记录的实验结果列");
         var featureNodes=json.createArrayNode();var featureCodes=new LinkedHashSet<String>();
         for(var selected:requestedX){

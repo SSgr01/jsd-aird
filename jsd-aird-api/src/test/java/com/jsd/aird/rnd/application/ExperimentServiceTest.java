@@ -152,7 +152,7 @@ class ExperimentServiceTest {
     }
 
     @Test
-    void savesImportedDraftWithoutInventingOwnerOrExperimentDate() {
+    void savesImportedDraftWithTheExplicitOwnerAndExperimentDate() {
         var experimentId = UUID.randomUUID();
         var versionId = UUID.randomUUID();
         var summary = new Summary(
@@ -173,9 +173,11 @@ class ExperimentServiceTest {
                     List.of(), List.of());
         });
 
+        when(repository.detail(ORGANIZATION_ID, experimentId)).thenReturn(Optional.of(
+                new Detail(summary, versionId, null, null, null, mapper.createObjectNode(), mapper.createObjectNode(), List.of(), List.of())));
         service.save(experimentId, 1, new ExperimentService.DraftCommand(
                 "EXP-IMPORT-001", "应用测试报告", null, null,
-                null, null, null, null, null, null, null,
+                null, null, null, "陈明", java.time.LocalDate.of(2026, 10, 18), null, null,
                 mapper.createObjectNode(), mapper.createObjectNode()
         ));
 
@@ -188,8 +190,8 @@ class ExperimentServiceTest {
                 org.mockito.ArgumentMatchers.eq(USER_ID),
                 org.mockito.ArgumentMatchers.eq("creator")
         );
-        assertThat(captor.getValue().ownerName()).isNull();
-        assertThat(captor.getValue().experimentDate()).isNull();
+        assertThat(captor.getValue().ownerName()).isEqualTo("陈明");
+        assertThat(captor.getValue().experimentDate()).isEqualTo(java.time.LocalDate.of(2026, 10, 18));
     }
 
     private Summary summary(ExperimentRepository.Create command) {

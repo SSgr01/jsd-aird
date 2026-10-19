@@ -37,7 +37,7 @@ public class ExperimentImportJobHandler implements AsyncJobHandler {
                 payload.path("actorName").asText("developer"),
                 payload.path("actorRole").asText("ADMIN")
         );
-        var command = new ExperimentImportService.Command(
+        var command = payload.path("command").isObject() ? objectMapper.convertValue(payload.path("command"), ExperimentImportService.Command.class) : new ExperimentImportService.Command(
                 uuid(payload, "fileId"),
                 payload.path("fileName").asText(),
                 payload.path("sha256").asText(),

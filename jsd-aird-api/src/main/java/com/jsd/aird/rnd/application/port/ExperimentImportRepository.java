@@ -11,6 +11,10 @@ public interface ExperimentImportRepository {
     void create(UUID id, UUID organizationId, UUID fileId, String fileName, String sha256,
                 String format, String categoryName, UUID projectId, UUID stageId, UUID taskId,
                 String visibility, UUID actorId);
+    void lockSource(UUID organizationId, UUID fileId);
+    Optional<Job> findContentImport(UUID organizationId, UUID fileId);
+    void saveOptions(UUID organizationId, UUID id, JsonNode options);
+    JsonNode options(UUID organizationId, UUID id);
     void complete(UUID id, UUID experimentId, JsonNode parseResult);
     void fail(UUID id, String errorMessage);
     Optional<Job> find(UUID organizationId, UUID id);

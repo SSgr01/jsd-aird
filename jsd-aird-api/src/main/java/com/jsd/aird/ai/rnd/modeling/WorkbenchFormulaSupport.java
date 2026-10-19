@@ -16,12 +16,17 @@ public final class WorkbenchFormulaSupport {
 
     public static String materialId(JsonNode field) {
         var code = field.path("code").asText();
-        if (!code.startsWith("formula:") || !Set.of("NUMERIC", "NUMBER").contains(field.path("kind").asText(field.path("valueType").asText()))) return null;
+        if (!"MATERIAL_RATIO".equals(field.path("semanticType").asText())
+                || !"MAPPED".equals(field.path("mappingStatus").asText())
+                || !Set.of("NUMERIC", "NUMBER").contains(field.path("kind").asText(field.path("valueType").asText()))) return null;
         var unit = field.path("unit").asText("");
-        if (!unit.isBlank() && !Set.of("%", "PERCENT").contains(unit)) return null;
-        var id = field.path("materialId").asText(code.substring("formula:".length()));
-        if(!field.path("compositionBasis").asText("MASS_PERCENT").equals("MASS_PERCENT"))return null;
-        try { return UUID.fromString(id).toString().equals(id) ? id : null; }
+        if (!Set.of("%", "PERCENT").contains(unit)) return null;
+        var id = field.path("materialId").asText();
+        try {
+            var canonical = UUID.fromString(id).toString();
+            return canonical.equals(id) && code.equals("formula:" + id)
+                    && "MASS_PERCENT".equals(field.path("compositionBasis").asText()) ? id : null;
+        }
         catch (IllegalArgumentException ignored) { return null; }
     }
 
@@ -44,7 +49,12 @@ public final class WorkbenchFormulaSupport {
             for(var row:rows){var value=row.path("values").path(field.path("code").asText());if(value.isNumber()){observed.add(value.decimalValue().stripTrailingZeros());filled++;}}
             if(rows.size()>=6&&filled==rows.size()&&observed.size()==1)((ObjectNode)materials.get(materials.size()-1)).put("fixedValue",observed.iterator().next());
         }
-        boolean complete = rows.isArray() && !rows.isEmpty() && !materials.isEmpty();
+        boolean hasRatioColumns=false, hasUnusableRatio=false;
+        for(var field:scheme.path("fields"))if("MATERIAL_RATIO".equals(field.path("semanticType").asText())){
+            hasRatioColumns=true;
+            if(materialId(field)==null)hasUnusableRatio=true;
+        }
+        boolean complete = rows.isArray() && !rows.isEmpty() && !materials.isEmpty() && !hasUnusableRatio;
         var issues=dictionary.putArray("compositionIssues");
         for (var row : rows) {
             if(materials.isEmpty())break;
@@ -62,7 +72,7 @@ public final class WorkbenchFormulaSupport {
             }
             if (rowComplete&&total.subtract(new java.math.BigDecimal("100")).abs().compareTo(new java.math.BigDecimal("0.001"))>0) {complete = false;issues.add("样品“"+row.path("label").asText(row.path("id").asText())+"”的材料比例合计为"+total.stripTrailingZeros().toPlainString()+"%");}
         }
-        dictionary.put("compositionStatus", materials.isEmpty() ? "NOT_USED" : complete ? "COMPLETE" : "INCOMPLETE");
+        dictionary.put("compositionStatus", materials.isEmpty() ? (hasRatioColumns?"INCOMPLETE":"NOT_USED") : complete ? "COMPLETE" : "INCOMPLETE");
         dictionary.put("sha256", new ConfigurationHashing(json).hash(dictionary));
         return dictionary;
     }

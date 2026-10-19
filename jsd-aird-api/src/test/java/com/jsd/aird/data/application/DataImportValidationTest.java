@@ -46,6 +46,14 @@ class DataImportValidationTest {
     }
 
     @Test
+    void preservesActionableValidationReasonWhenParsingFails() {
+        var reason = "文件中没有可导入的实验数据；请填写本次实验数据后重传，或使用在线新建";
+        service.markParseFailed(ORGANIZATION_ID, jobId,
+                new ApiException(com.jsd.aird.shared.error.ApiErrorCode.VALIDATION_ERROR, reason));
+        verify(repository).updateJobStatus(ORGANIZATION_ID, jobId, "FAILED", 0, "FAILED", reason);
+    }
+
+    @Test
     void blocksRowsWhenTemplateRequiredFieldHasNoMapping() {
         ActorContext.set(new com.jsd.aird.shared.security.Actor(ORGANIZATION_ID, USER_ID, "developer"));
         givenJob();
@@ -98,6 +106,49 @@ class DataImportValidationTest {
         assertThat(captor.getValue().importContractVersion()).isEqualTo(9);
         assertThat(captor.getValue().importPurpose()).isEqualTo("EXPERIMENT_DRAFT");
         assertThat(captor.getValue().targetExperimentCategoryId()).isEqualTo(experimentCategoryId);
+    }
+
+    @Test
+    void createsTemplateGuidedDataImportJobForWordSourceAndWordTemplate() {
+        ActorContext.set(new com.jsd.aird.shared.security.Actor(ORGANIZATION_ID, USER_ID, "developer"));
+        var sourceFileId = UUID.randomUUID();
+        when(templates.getPublished(ORGANIZATION_ID, templateVersionId))
+                .thenReturn(importTemplate("DOCX", 0, "GENERAL_DATA"));
+        when(files.find(ORGANIZATION_ID, sourceFileId)).thenReturn(Optional.of(new FileObjectRepository.FileObject(
+                sourceFileId, ORGANIZATION_ID, "staged/report.docx", "report.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document", 100, "docx-sha", "STAGED")));
+        when(repository.findCompletedDuplicate(ORGANIZATION_ID, "docx-sha", templateVersionId))
+                .thenReturn(Optional.empty());
+        when(repository.findJob(eq(ORGANIZATION_ID), any(UUID.class))).thenReturn(Optional.of(new DataRepository.Job(
+                jobId, sourceFileId, "docx-sha", "report.docx", "DOCX", templateVersionId, null,
+                "QUEUED", 0, "PREPARING", null, null, Instant.now(), Instant.now(),
+                0, "contract-hash", "READY", "DATA_ONLY", null)));
+
+        var created = service.create(new DataImportService.CreateCommand(sourceFileId, templateVersionId,
+                null, false, List.of(), "DATA_ONLY", null));
+
+        assertThat(created.sourceFormat()).isEqualTo("DOCX");
+        var captor = ArgumentCaptor.forClass(DataRepository.NewJob.class);
+        verify(repository).insertJob(captor.capture());
+        assertThat(captor.getValue().sourceFormat()).isEqualTo("DOCX");
+        assertThat(captor.getValue().templateVersionId()).isEqualTo(templateVersionId);
+    }
+
+    @Test
+    void rejectsWordSourceWhenSpreadsheetTemplateIsSelected() {
+        ActorContext.set(new com.jsd.aird.shared.security.Actor(ORGANIZATION_ID, USER_ID, "developer"));
+        var sourceFileId = UUID.randomUUID();
+        when(templates.getPublished(ORGANIZATION_ID, templateVersionId))
+                .thenReturn(importTemplate("XLSX", 0, "GENERAL_DATA"));
+        when(files.find(ORGANIZATION_ID, sourceFileId)).thenReturn(Optional.of(new FileObjectRepository.FileObject(
+                sourceFileId, ORGANIZATION_ID, "staged/report.docx", "report.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document", 100, "docx-sha", "STAGED")));
+
+        assertThatThrownBy(() -> service.create(new DataImportService.CreateCommand(sourceFileId, templateVersionId,
+                null, false, List.of(), "DATA_ONLY", null)))
+                .isInstanceOf(ApiException.class)
+                .hasMessage("所选模板格式与文件类型不匹配：Excel / CSV 请选择 Excel 模板，DOCX 请选择 Word 模板；PDF 请使用自由识别");
+        verify(repository, never()).insertJob(any());
     }
 
     @Test
@@ -245,9 +296,13 @@ class DataImportValidationTest {
     }
 
     private TemplateDataImportFacade.DataTemplateDefinition importTemplate(int contractVersion, String usage) {
+        return importTemplate("XLSX", contractVersion, usage);
+    }
+
+    private TemplateDataImportFacade.DataTemplateDefinition importTemplate(String format, int contractVersion, String usage) {
         var contract = mapper.createObjectNode().put("templateUsage", usage);
         return new TemplateDataImportFacade.DataTemplateDefinition(UUID.randomUUID(), templateVersionId,
-                "experiment-template", "实验模板", "实验", 1, "XLSX", mapper.createObjectNode(),
+                "experiment-template", "实验模板", "实验", 1, format, mapper.createObjectNode(),
                 mapper.createArrayNode(), List.of(), contractVersion, 1, "contract-hash", contract);
     }
 

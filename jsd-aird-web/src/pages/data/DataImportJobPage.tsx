@@ -11,11 +11,8 @@ import {
   Alert,
   App,
   Button,
-  Checkbox,
   Input,
-  InputNumber,
   Modal,
-  Select,
   Space,
   Spin,
   Tabs,
@@ -28,7 +25,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { FilePreviewModal, downloadPreviewFile, type FilePreviewDescriptor } from '@/components/file-preview';
 import { usePermission } from '@/components/auth/usePermission';
 import { DataPublicationPanel } from '@/features/data-workbench/DataPublicationPanel';
-import { confirmationBlockReason, sheetSummary } from '@/services/data/import-guidance';
+import { confirmationBlockReason, requiresTemplateChange } from '@/services/data/import-guidance';
 import type { DataPublication } from '@/services/data/data-api';
 import { ProjectRelationPicker } from '@/components/project-relations/ProjectRelationPicker';
 import {
@@ -36,18 +33,15 @@ import {
   DataFieldStructureBrowser,
   DataWorkbenchShell,
   DataWorkbookCanvas,
-  WorkbenchPanelHeader,
 } from '@/features/data-workbench/DataWorkbench';
 import { DataImportQualityNotice } from '@/features/data-workbench/DataImportQualityNotice';
 import { OriginalDocumentCanvas } from '@/features/data-workbench/OriginalDocumentCanvas';
 import type { EditorCellChange, EditorHandle, EditorSelection } from '@/features/template-workspace/types';
-import { importFieldForCell, importFieldInSheetRow, isPendingImportMapping } from './data-import-workbench-utils';
+import { importFieldForCell, importFieldInSheetRow } from './data-import-workbench-utils';
 import {
   dataApi,
-  type ComponentMatch,
   type DataFieldValueView,
   type DataWorkbookFieldDefinition,
-  type DataMapping,
   type DataPreview,
   type DataWorkbookSnapshot,
   type ExperimentAssemblyPlan,
@@ -56,7 +50,7 @@ import {
 import { projectResourceApi, type ProjectRelationTarget, type RelatedProjectView } from '@/services/project/project-resource-api';
 import { dataParseProgress } from '@/services/data/data-progress';
 
-type PanelTab = 'data' | 'structure' | 'mapping';
+type PanelTab = 'data' | 'structure';
 
 const jobStatusLabels: Record<string, string> = {
   PARSING: '解析中', VALIDATING: '校验中', WAITING_MAPPING: '待确认数据', WAITING_CONFIRM: '待确认数据',
@@ -65,11 +59,6 @@ const jobStatusLabels: Record<string, string> = {
 const compatibilityLabels: Record<string, string> = {
   EXACT: '模板匹配', COMPATIBLE: '模板可用', REVIEW_REQUIRED: '需要确认', INCOMPATIBLE: '模板不匹配', LEGACY: '已兼容',
 };
-const actionOptions = [
-  { value: 'MAP', label: '映射到字段' },
-  { value: 'IGNORE', label: '忽略此列' },
-  { value: 'REQUEST_FIELD', label: '申请新增字段' },
-];
 
 export function DataImportJobPage({
   workspaceMode = 'DATA',
@@ -96,9 +85,6 @@ export function DataImportJobPage({
   const [selectedBindingId, setSelectedBindingId] = useState<string>();
   const [selectedCell, setSelectedCell] = useState<EditorSelection>();
   const [previewFile, setPreviewFile] = useState<FilePreviewDescriptor>();
-  const [componentAnchor, setComponentAnchor] = useState<{ componentId: string; sheetId?: string }>();
-  const [anchorRange, setAnchorRange] = useState('');
-  const [anchorReason, setAnchorReason] = useState('');
   const [categoryName, setCategoryName] = useState<string>();
   const [relatedProjects, setRelatedProjects] = useState<RelatedProjectView[]>([]);
   const [projectRelations, setProjectRelations] = useState<ProjectRelationTarget[]>([]);
@@ -188,7 +174,6 @@ export function DataImportJobPage({
   const fields = workbook?.fields || [];
   const blockers = preview?.issues.filter((issue) => issue.severity === 'BLOCKER'
     && !['RESOLVED', 'IGNORED'].includes(issue.status)) || [];
-  const pendingMappings = preview?.mappings.filter(isPendingImportMapping) || [];
 
   if (loading && !preview) return <div className="data-workbench-loading"><Spin /></div>;
   if (!preview) return (
@@ -272,42 +257,6 @@ export function DataImportJobPage({
     }
   };
 
-  const saveSheets = async () => {
-    setSaving(true);
-    try {
-      await dataApi.saveSheets(id, preview.sheets.map((sheet) => ({ ...sheet, confirmationStatus: sheet.selected ? 'CONFIRMED' : 'IGNORED' })));
-      await load();
-      void message.success('工作表配置已确认并重新读取数据');
-    } catch (error) {
-      void message.error(error instanceof Error ? error.message : '工作表配置保存失败');
-    } finally { setSaving(false); }
-  };
-
-  const updateSheet = (sheetId: string, patch: Partial<DataPreview['sheets'][number]>) => {
-    setPreview((current) => current ? {
-      ...current,
-      sheets: current.sheets.map((item) => item.sheetId === sheetId ? { ...item, ...patch } : item),
-    } : current);
-  };
-
-  const updateMapping = (index: number, patch: Partial<DataMapping>) => {
-    setPreview((current) => current ? {
-      ...current,
-      mappings: current.mappings.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item),
-    } : current);
-  };
-
-  const saveMappings = async () => {
-    setSaving(true);
-    try {
-      await dataApi.saveMappings(id, preview.mappings);
-      await load();
-      void message.success('字段映射已保存并重新校验');
-    } catch (error) {
-      void message.error(error instanceof Error ? error.message : '字段映射保存失败');
-    } finally { setSaving(false); }
-  };
-
   const commit = async () => {
     setSaving(true);
     try {
@@ -348,25 +297,6 @@ export function DataImportJobPage({
     finally { setSaving(false); }
   };
 
-  const saveComponentAnchor = async () => {
-    if (!componentAnchor || !anchorRange.trim() || !anchorReason.trim()) {
-      void message.warning('请填写工作表、范围和重新定位原因');
-      return;
-    }
-    setSaving(true);
-    try {
-      await dataApi.reanchorComponent(id, componentAnchor.componentId, {
-        sheetId: componentAnchor.sheetId || preview.sheets[0]?.sheetId || '',
-        sourceRange: anchorRange.trim(), reason: anchorReason.trim(),
-      });
-      setComponentAnchor(undefined);
-      await load();
-      void message.success('区域位置已更新并重新提取数据');
-    } catch (error) {
-      void message.error(error instanceof Error ? error.message : '区域重新定位失败');
-    } finally { setSaving(false); }
-  };
-
   const compatibility = preview.job.compatibilityStatus || 'LEGACY';
   const saveProjectRelations = async () => {
     setSaving(true);
@@ -400,13 +330,14 @@ export function DataImportJobPage({
       navigation={workspaceMode === 'DATA' && <nav className="workspace-view-tabs data-workspace-view-tabs" aria-label="数据工作台视图"><Tabs activeKey={workspaceView === 'edit' && !canUpdate ? 'preview' : workspaceView} onChange={setWorkspaceView} items={[{ key: 'preview', label: <span><EyeOutlined /> 预览</span> }, { key: 'edit', label: '编辑', disabled: !canUpdate }, { key: 'versions', label: '版本记录' }]} /></nav>}
       content={workspaceMode === 'DATA' && workspaceView === 'versions' ? <div ref={setVersionContainer} /> : undefined}
       actions={<>
-        {workspaceMode === 'DATA' && canUpdate && workbook?.editable && <Button loading={saving} disabled={Boolean(savingCell) || processing} onClick={() => void saveDraft()}>保存草稿</Button>}
+        {canUpdate && workbook?.editable && <Button loading={saving} disabled={Boolean(savingCell) || processing} onClick={() => void saveDraft()}>保存草稿</Button>}
         {workspaceMode === 'DATA' && <DataPublicationPanel jobId={id} refreshKey={preview.job.updatedAt}
           versionContainer={versionContainer}
           canConfirm={preview.job.status === 'WAITING_CONFIRM' && !blockers.length && !['INCOMPATIBLE', 'REVIEW_REQUIRED'].includes(compatibility)}
           disabled={saving || Boolean(savingCell) || Object.keys(documentCorrections).length > 0}
           onStateChange={setPublication} onChanged={() => void load()} />}
         <Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button>
+        {canUpdate && !processing && preview.job.status !== 'COMPLETED' && <Button loading={saving} onClick={() => void reExtract()}>重新解析</Button>}
         <Button icon={<EyeOutlined />} onClick={() => setPreviewFile(sourceFile)}>预览原文件</Button>
         <Button icon={<DownloadOutlined />} onClick={() => void downloadPreviewFile(sourceFile)}>下载原文件</Button>
         {canAssign && canUpdate ? <Button icon={<LinkOutlined />} onClick={() => setRelationOpen(true)}>关联项目</Button> : null}
@@ -416,7 +347,7 @@ export function DataImportJobPage({
           disabled={blockers.length > 0 || preview.job.status !== 'WAITING_CONFIRM' || ['INCOMPATIBLE', 'REVIEW_REQUIRED'].includes(compatibility)}
           loading={saving}
           onClick={() => void commit()}
-        >确认数据</Button> : null}
+        >生成实验草稿</Button> : null}
       </>}
       notice={<>
         {loadError ? <Alert
@@ -429,11 +360,11 @@ export function DataImportJobPage({
           onClose={() => setLoadError(undefined)}
         /> : null}
         <WorkbenchNotice preview={preview} processing={processing} onIssue={(issue) => {
-          if (issue.sheetId && issue.address) { editorRef.current?.focusCell?.(issue.sheetId, issue.address); setActiveTab('data'); }
-          else setActiveTab('mapping');
+          if (issue.sheetId && issue.address && !requiresTemplateChange(issue.issueType)) { editorRef.current?.focusCell?.(issue.sheetId, issue.address); setActiveTab('data'); }
+          else navigate(workspaceMode === 'EXPERIMENT' ? '/experiments/upload' : '/data/upload');
         }} />
         {!processing && preview.job.status !== 'COMPLETED' && confirmationBlockReason(preview) && <Alert type="warning" showIcon
-          message={confirmationBlockReason(preview)} action={<Button onClick={() => setActiveTab('mapping')}>处理映射与工作表</Button>} />}
+          message={confirmationBlockReason(preview)} action={<Button onClick={() => navigate(workspaceMode === 'EXPERIMENT' ? '/experiments/upload' : '/data/upload')}>重新选择模板或文件</Button>} />}
         {Object.keys(documentCorrections).length > 0 && <Alert type="info" showIcon message="有尚未保存的字段修改，请保存草稿后提交审核。" />}
       </>}
       canvas={['DOCX', 'IMAGE'].includes(preview.job.sourceFormat) ? <OriginalDocumentCanvas file={sourceFile} /> : <DataWorkbookCanvas
@@ -452,7 +383,6 @@ export function DataImportJobPage({
           items={[
             { key: 'data', label: '字段数据' },
             { key: 'structure', label: '字段结构' },
-            { key: 'mapping', label: '字段映射' },
           ]}
         />
         {activeTab === 'data' ? (
@@ -462,15 +392,6 @@ export function DataImportJobPage({
             selectedCell={selectedCell}
             headerExtra={<Space size={8}>
               {savingCell ? <Tag color="processing">正在保存</Tag> : null}
-              {canUpdate && preview.job.status === 'WAITING_MAPPING' && (pendingMappings.length > 0 || preview.rows.some((row) => row.status === 'STAGED')) ? <Button
-                size="small"
-                type="primary"
-                loading={saving}
-                onClick={() => {
-                  if (pendingMappings.length) setActiveTab('mapping');
-                  else void saveMappings();
-                }}
-              >{pendingMappings.length ? '处理字段映射' : '校验数据'}</Button> : null}
             </Space>}
             onSelectField={selectField}
             renderFieldExtra={(field) => <Space size={8}>
@@ -504,23 +425,6 @@ export function DataImportJobPage({
             onSelectField={selectDefinition}
           />
         ) : null}
-        {activeTab === 'mapping' ? (
-          <MappingPanel
-            preview={preview}
-            saving={saving}
-            readOnly={!canUpdate || workspaceView !== 'edit'}
-            onUpdateMapping={updateMapping}
-            onSaveMappings={() => void saveMappings()}
-            onUpdateSheet={updateSheet}
-            onSaveSheets={() => void saveSheets()}
-            onReExtract={() => void reExtract()}
-            onLocateComponent={(item) => {
-              setComponentAnchor({ componentId: item.componentId, sheetId: item.sheetId });
-              setAnchorRange(''); setAnchorReason('');
-            }}
-            onFocus={(sheetId, address) => editorRef.current?.focusRange?.(sheetId, address)}
-          />
-        ) : null}
       </>}
       footer={preview.job.status === 'COMPLETED' ? (
         workspaceMode === 'EXPERIMENT' ? (
@@ -548,61 +452,8 @@ export function DataImportJobPage({
     >
       <FilePreviewModal open={Boolean(previewFile)} file={previewFile} onClose={() => setPreviewFile(undefined)} showSpreadsheetMerges={false} />
       <Modal open={relationOpen} title="维护数据任务关联项目" width={760} okText="保存" confirmLoading={saving} onCancel={() => setRelationOpen(false)} onOk={() => void saveProjectRelations()}><ProjectRelationPicker value={projectRelations} onChange={setProjectRelations} /></Modal>
-      <Modal open={Boolean(componentAnchor)} title="调整本次导入的数据区域" okText="保存并重新读取" cancelText="取消" confirmLoading={saving} onOk={() => void saveComponentAnchor()} onCancel={() => setComponentAnchor(undefined)}>
-        <Space direction="vertical" style={{ width: '100%' }}>
-          <Alert type="info" showIcon message="该位置只作用于本次导入，不修改已发布模板。" />
-          <Select value={componentAnchor?.sheetId} onChange={(value) => setComponentAnchor((current) => current ? { ...current, sheetId: value } : current)} options={preview.sheets.map((sheet) => ({ value: sheet.sheetId, label: sheet.sheetName }))} style={{ width: '100%' }} />
-          <Input value={anchorRange} onChange={(event) => setAnchorRange(event.target.value)} placeholder="区域范围，例如 E4:N100" />
-          <Input.TextArea rows={3} value={anchorReason} onChange={(event) => setAnchorReason(event.target.value)} placeholder="请输入重新定位原因" />
-        </Space>
-      </Modal>
     </DataWorkbenchShell>
   );
-}
-
-function MappingPanel({ preview, saving, readOnly, onUpdateMapping, onSaveMappings, onUpdateSheet, onSaveSheets, onReExtract, onLocateComponent, onFocus }: {
-  preview: DataPreview;
-  saving: boolean;
-  readOnly: boolean;
-  onUpdateMapping: (index: number, patch: Partial<DataMapping>) => void;
-  onSaveMappings: () => void;
-  onUpdateSheet: (sheetId: string, patch: Partial<DataPreview['sheets'][number]>) => void;
-  onSaveSheets: () => void;
-  onReExtract: () => void;
-  onLocateComponent: (item: ComponentMatch) => void;
-  onFocus: (sheetId: string, address: string) => void;
-}) {
-  const pending = preview.mappings.map((item, index) => ({ item, index })).filter(({ item }) => isPendingImportMapping(item));
-  const templateFields = preview.templateContract?.fields || [];
-  return <div className="data-panel-body">
-    <WorkbenchPanelHeader title="字段映射" />
-    {pending.length ? <section className="data-panel-section"><Alert type="warning" showIcon message={`待确认 ${pending.length} 个字段`} />{pending.map(({ item, index }) => <div className="data-mapping-card" key={`${item.sheetId}-${item.sourceColumn}`}>
-      <strong>{item.sourceHeader || `位置 ${item.sourceColumn}`}</strong>
-      {item.detail?.recognitionStatus ? <Typography.Text type="warning">
-        {item.detail.recognitionStatus === 'AMBIGUOUS' ? '识别到多个候选值'
-          : item.detail.recognitionStatus === 'REVIEW_REQUIRED' ? 'OCR 结果需要人工确认'
-            : item.detail.recognitionStatus === 'MISSING' ? '原文件中未识别到该字段' : ''}
-        {item.detail.sourceLocation ? ` · ${formatImportValue(item.detail.sourceLocation)}` : ''}
-      </Typography.Text> : null}
-      {Array.isArray(item.detail?.alternatives) ? <Typography.Text type="secondary">
-        候选：{item.detail.alternatives.map((candidate) => formatImportValue((candidate as { value?: unknown }).value)).filter(Boolean).join(' / ') || '无'}
-      </Typography.Text> : null}
-      <Select disabled={readOnly} value={item.action} options={actionOptions} onChange={(value) => onUpdateMapping(index, { action: value })} />
-      <Select showSearch optionFilterProp="label" placeholder="选择对应字段" value={item.fieldCode} disabled={readOnly || item.action !== 'MAP'} options={templateFields.map((field) => ({ value: field.fieldCode, label: `${field.displayName}${field.required ? ' · 必填' : ''}` }))} onChange={(value) => { const field = templateFields.find((candidate) => candidate.fieldCode === value); onUpdateMapping(index, { fieldCode: value, fieldName: field?.displayName, valueType: field?.dataType, standardUnit: field?.defaultUnit, detail: { ...(item.detail || {}), dataPath: field?.dataPath, identity: field?.identity, required: field?.required } }); }} />
-    </div>)}{!readOnly && <Button type="primary" block loading={saving} onClick={onSaveMappings}>保存并校验</Button>}</section> : preview.job.status === 'WAITING_MAPPING' && preview.rows.some((row) => row.status === 'STAGED') ? <section className="data-panel-section"><Alert type="info" showIcon message={`已自动匹配 ${preview.mappings.length} 个字段`} />{!readOnly && <Button type="primary" block loading={saving} onClick={onSaveMappings}>校验数据</Button>}</section> : <Alert type="success" showIcon message="字段已匹配，异常值可在字段数据中修正" />}
-    <WorkbenchPanelHeader title="工作表" extra={!readOnly ? <Button size="small" loading={saving} onClick={onReExtract}>重新读取</Button> : undefined} />
-    <div className="data-panel-section">{preview.sheets.map((sheet) => <article className="data-sheet-card" key={sheet.sheetId}><div className="data-sheet-card-title"><Checkbox disabled={readOnly} checked={sheet.selected} onChange={(event) => onUpdateSheet(sheet.sheetId, { selected: event.target.checked })}>{sheet.sheetName}</Checkbox><Tag>{sheet.selected ? '已选' : '未选'}</Tag></div>
-      <Space wrap size={4}><Tag>映射 {sheetSummary(preview, sheet.sheetId).mappingCount}</Tag><Tag>记录 {sheetSummary(preview, sheet.sheetId).recordCount}</Tag><Tag color={sheetSummary(preview, sheet.sheetId).blockerCount ? 'error' : 'default'}>问题 {sheetSummary(preview, sheet.sheetId).blockerCount}</Tag></Space>
-      <Typography.Paragraph type={sheet.selected && !sheetSummary(preview, sheet.sheetId).recordCount ? 'warning' : 'secondary'}>{sheetSummary(preview, sheet.sheetId).message}</Typography.Paragraph>
-      <div className="data-sheet-fields"><label>表头<InputNumber disabled={readOnly} min={1} value={sheet.headerRows[0]} onChange={(value) => onUpdateSheet(sheet.sheetId, { headerRows: value ? [value] : [] })} /></label><label>数据起始<InputNumber disabled={readOnly} min={1} value={sheet.dataStartRow} onChange={(value) => onUpdateSheet(sheet.sheetId, { dataStartRow: value ?? undefined })} /></label><label>数据结束<InputNumber disabled={readOnly} min={sheet.dataStartRow || 1} value={sheet.dataEndRow} onChange={(value) => onUpdateSheet(sheet.sheetId, { dataEndRow: value ?? undefined })} /></label></div></article>)}{!readOnly && <Button type="primary" block loading={saving} onClick={onSaveSheets}>保存工作表设置</Button>}</div>
-    {(preview.compatibilityReport?.componentMatches?.some((item) => ['REVIEW_REQUIRED', 'INCOMPATIBLE'].includes(item.status)
-      || item.fieldResolutions?.some((field) => field.status !== 'ORIGINAL')) || false) ? <CompatibilityPanel
-      preview={preview}
-      readOnly={readOnly}
-      onLocateComponent={onLocateComponent}
-      onFocus={onFocus}
-    /> : null}
-  </div>;
 }
 
 function formatImportValue(value: unknown): string {
@@ -622,84 +473,12 @@ function WorkbenchNotice({ preview, processing, onIssue }: { preview: DataPrevie
     : preview.job.compatibilityStatus === 'INCOMPATIBLE'
       ? <Alert banner showIcon type="error" message="当前文件与所选模板不匹配，请选择正确模板或检查表头。" />
       : preview.job.compatibilityStatus === 'REVIEW_REQUIRED'
-        ? <Alert banner showIcon type="warning" message="部分字段位置或映射需要确认。" />
+        ? <Alert banner showIcon type="warning" message="文件与所选模板的结构不一致，无法可靠读取，请重新选择模板或文件。" />
         : undefined;
   return <Space direction="vertical" size={8} style={{ width: '100%' }}>
     {statusNotice}
     <DataImportQualityNotice issues={preview.issues} sheets={preview.sheets} onLocate={onIssue} />
   </Space>;
-}
-
-function CompatibilityPanel({ preview, readOnly, onLocateComponent, onFocus }: {
-  preview: DataPreview;
-  readOnly: boolean;
-  onLocateComponent: (item: ComponentMatch) => void;
-  onFocus: (sheetId: string, address: string) => void;
-}) {
-  const matches = preview.compatibilityReport?.componentMatches || [];
-  const status = preview.job.compatibilityStatus || preview.compatibilityReport?.status || 'LEGACY';
-  const reviewCount = matches.filter((item) => item.status === 'REVIEW_REQUIRED').length;
-  const incompatibleCount = matches.filter((item) => item.status === 'INCOMPATIBLE').length;
-  const summary = incompatibleCount
-    ? '模板不匹配'
-    : `有 ${reviewCount} 个位置需要确认`;
-
-  return <section className="data-compatibility-panel">
-    <WorkbenchPanelHeader title="需要处理的位置" />
-    <div className="data-panel-section">
-      <Alert
-        type={incompatibleCount ? 'error' : reviewCount ? 'warning' : 'success'}
-        showIcon
-        message={summary}
-        description={status === 'REVIEW_REQUIRED' ? '请在字段映射中确认，必要时调整数据范围。' : undefined}
-      />
-      <details className="data-compatibility-details">
-        <summary>查看详情</summary>
-        {matches.map((item, index) => <article className="data-component-card" key={item.componentId}>
-          <div>
-            <strong>{item.sheetName ? `工作表：${item.sheetName}` : `数据区域 ${index + 1}`}</strong>
-            <Tag color={item.status === 'EXACT' ? 'success' : item.status === 'COMPATIBLE' ? 'blue' : item.status === 'INCOMPATIBLE' ? 'error' : 'warning'}>
-              {compatibilityLabels[item.status]}
-            </Tag>
-          </div>
-          <Typography.Text type="secondary">{compatibilityDetail(item, preview)}</Typography.Text>
-          {item.fieldResolutions?.filter((field) => field.status !== 'ORIGINAL').map((field) => <Typography.Text
-            key={field.bindingId}
-            type={field.status === 'MISSING_REQUIRED' ? 'danger' : field.status === 'AMBIGUOUS' ? 'warning' : 'secondary'}
-          >{fieldResolutionDetail(field)}</Typography.Text>)}
-          <Space>
-            <Button size="small" disabled={!item.sheetId} onClick={() => item.sheetId && onFocus(item.sheetId, componentRange(preview, item))}>查看位置</Button>
-            {!readOnly && <Button size="small" disabled={preview.job.status === 'COMPLETED'} onClick={() => onLocateComponent(item)}>调整位置</Button>}
-          </Space>
-        </article>)}
-      </details>
-    </div>
-  </section>;
-}
-
-function fieldResolutionDetail(field: NonNullable<ComponentMatch['fieldResolutions']>[number]) {
-  const name = field.displayName || field.fieldCode;
-  if (field.status === 'RELOCATED') return `${name}：已从 ${field.originalLabelRange || '原位置'} 自动迁移至 ${field.resolvedLabelRange || '新位置'}`;
-  if (field.status === 'MISSING_REQUIRED') return `${name}：未找到必填项目，已阻断提交`;
-  if (field.status === 'MISSING_OPTIONAL') return `${name}：未找到可选项目，本次不导入该字段`;
-  if (field.status === 'AMBIGUOUS') return `${name}：找到多个位置（${field.candidateAddresses?.join('、') || '位置未知'}），需要人工确认`;
-  return `${name}：已在原位置匹配`;
-}
-
-function compatibilityDetail(item: ComponentMatch, preview: DataPreview) {
-  const labels = (item.affectedFieldIds || [])
-    .map((fieldCode) => preview.templateContract?.fields.find((field) => field.fieldCode === fieldCode)?.displayName)
-    .filter((value): value is string => Boolean(value))
-    .filter((value, index, values) => values.indexOf(value) === index)
-    .slice(0, 4);
-  const suffix = labels.length ? `（${labels.join('、')}${item.affectedFieldIds && item.affectedFieldIds.length > labels.length ? '等' : ''}）` : '';
-  const reason = item.resolutionReasonCodes?.[0];
-  if (reason === 'LABEL_ANCHORS_MISSING') return `未能在上传文件中定位部分字段${suffix}，请检查表头或字段映射。`;
-  if (reason === 'LABEL_ANCHORS_CHANGED') return `部分字段${suffix}的位置与模板不同，请确认实际对应关系。`;
-  if (reason === 'COMPONENT_RANGE_CHANGED') return '数据区域范围与模板不同，请确认数据起止位置。';
-  if (reason === 'SHEET_RENAMED_OR_MOVED') return '工作表名称或位置发生变化，请确认当前工作表。';
-  if (reason === 'FORMULA_ROLE_CONFLICT') return '发现公式位置与可填写位置不一致，请检查原文件。';
-  return item.anchorCoverage !== undefined ? `已找到约 ${Math.round(item.anchorCoverage * 100)}% 的字段位置。` : '请确认当前数据区域。';
 }
 
 function fieldKey(field?: DataFieldValueView) {
@@ -714,20 +493,6 @@ function definitionForValue(workbook: DataWorkbookSnapshot | undefined, field: D
 function cellRow(address: string) {
   const match = /([1-9][0-9]*)$/.exec(address.replace(/\$/g, ''));
   return match ? Number(match[1]) : undefined;
-}
-
-function componentRange(preview: DataPreview, item: ComponentMatch) {
-  const override = preview.componentOverrides?.find((candidate) => candidate.componentId === item.componentId);
-  if (override?.sourceRange) return override.sourceRange;
-  const contract = preview.templateContract?.contract;
-  const components = contract && Array.isArray(contract.components) ? contract.components : [];
-  const component = components.find((candidate: unknown) => isRecord(candidate)
-    && candidate.componentId === item.componentId) as Record<string, unknown> | undefined;
-  return typeof component?.range === 'string' ? component.range : 'A1';
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 function fieldTypeLabel(value?: string) {

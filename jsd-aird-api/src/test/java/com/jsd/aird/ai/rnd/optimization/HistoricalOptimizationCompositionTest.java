@@ -10,6 +10,7 @@ import com.jsd.aird.ops.application.port.OpsAsyncFacade;
 import com.jsd.aird.shared.security.Actor;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.time.Instant;
 import java.util.List;
@@ -73,6 +74,10 @@ class HistoricalOptimizationCompositionTest {
             if(call.getMethod().getName().equals("insertRun")){submitted.set(call.getArgument(6));return true;}
             return RETURNS_DEFAULTS.answer(call);
         });
+        var jdbc=mock(JdbcTemplate.class);
+        when(repository.jdbc()).thenReturn(jdbc);
+        when(jdbc.queryForObject(anyString(),eq(Integer.class),any(Object[].class))).thenReturn(1);
+        when(repository.materialCatalog(any())).thenReturn(new MaterialCatalogSnapshot(java.util.Map.of(),java.util.Map.of(),java.util.Set.copyOf(ids)));
         var jobs=mock(OpsAsyncFacade.class,call->call.getMethod().getName().equals("enqueue")?UUID.randomUUID():RETURNS_DEFAULTS.answer(call));
         var service=new OptimizationService(repository,null,new ConfigurationHashing(json),jobs,mock(AuditLogFacade.class),mock(AuthorizationService.class),null,json,false);
         var request=json.createObjectNode().put("datasetId",datasetId.toString()).put("yColumn","gloss");
@@ -83,6 +88,6 @@ class HistoricalOptimizationCompositionTest {
                 json.createObjectNode(),json.createObjectNode(),json.createObjectNode(),actor.userId(),null,1,json.createObjectNode(),"EXPERIMENT_VERSION",
                 UUID.randomUUID(),UUID.randomUUID(),"hash",json.createObjectNode().put("title","配方"),json.createObjectNode(),Instant.EPOCH);
         var savedRows=new java.util.ArrayList<JsonNode>();data.path("rows").forEach(row->savedRows.add(row.path("values")));
-        ReflectionTestUtils.invokeMethod(service,"submitHistorical",request,"composition",actor,savedRows,previous);
+        ReflectionTestUtils.invokeMethod(service,"submitHistorical",request,"composition",actor,savedRows,previous,"composition-fingerprint");
     }
 }

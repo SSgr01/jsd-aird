@@ -77,6 +77,8 @@ class InputFieldV2(V2Model):
     acquisition_timing: Literal["PRE_EXPERIMENT", "POST_EXPERIMENT"]
     encoding: dict[str, Any] = Field(default_factory=dict)
     semantic_key: str | None = None
+    semantic_type: str | None = None
+    mapping_status: str | None = None
     material_id: str | None = None
     material_code: str | None = None
     composition_basis: str | None = None

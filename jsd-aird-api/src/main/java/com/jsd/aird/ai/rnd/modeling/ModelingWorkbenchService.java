@@ -269,7 +269,7 @@ public class ModelingWorkbenchService {
         request.set("selectedRows", selectedRows);
         request.set("datasetSnapshot",dataset.deepCopy());
         var materials=request.putArray("materialColumns");
-        dataset.path("columns").forEach(column->{if(mappedFormulaColumn(column))materials.add(selectedColumn(column));});
+        dataset.path("columns").forEach(column->{if("MATERIAL_RATIO".equals(column.path("semanticType").asText()))materials.add(selectedColumn(column));});
         request.set("projectionVersion",dataset.path("projectionVersion"));
         request.set("dataIssues",dataset.path("issues"));
         return request;
@@ -308,16 +308,6 @@ public class ModelingWorkbenchService {
         if (source.hasNonNull("unit")) result.put("unit", source.path("unit").asText());
         else result.putNull("unit");
         return result;
-    }
-
-    private boolean mappedFormulaColumn(JsonNode column) {
-        if("UNMAPPED".equals(column.path("mappingStatus").asText())
-                || !"NUMERIC".equals(column.path("kind").asText()))return false;
-        try {
-            var materialId=UUID.fromString(column.path("materialId").asText()).toString();
-            var prefix="formula:"+materialId;var code=column.path("code").asText();
-            return code.equals(prefix)||code.startsWith(prefix+"|");
-        } catch(IllegalArgumentException ignored) { return false; }
     }
 
     private boolean validValue(JsonNode value, String kind) {

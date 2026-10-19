@@ -38,7 +38,6 @@ const statusView: Record<string, { label: string; color: string }> = {
 };
 
 const supportedSourceFileName = /\.(?:xls|xlsx|csv|doc|docx|pdf)$/i;
-const documentSourceFileName = /\.(?:doc|docx|pdf)$/i;
 
 function documentSourceFormat(fileName: string) {
   return /\.pdf$/i.test(fileName) ? 'PDF' : 'DOCX';
@@ -82,7 +81,8 @@ export function DataUploadPage() {
   const { message, modal } = App.useApp();
   const navigate = useNavigate();
   const [templates, setTemplates] = useState<DataTemplateOption[]>([]);
-  const [templateVersionId, setTemplateVersionId] = useState<string>();
+  const [spreadsheetTemplateVersionId, setSpreadsheetTemplateVersionId] = useState<string>();
+  const [wordTemplateVersionId, setWordTemplateVersionId] = useState<string>();
   const [templateCategoryFilter, setTemplateCategoryFilter] = useState<string>();
   const [files, setFiles] = useState<UploadFile[]>([]);
   const [loading, setLoading] = useState(false);
@@ -96,9 +96,10 @@ export function DataUploadPage() {
   const [deletingJobId, setDeletingJobId] = useState<string>();
 
   useEffect(() => {
-    setTemplateVersionId(undefined);
+    setSpreadsheetTemplateVersionId(undefined);
+    setWordTemplateVersionId(undefined);
     void dataApi.listTemplates()
-      .then((items) => setTemplates(items.filter((item) => item.format === 'XLSX')))
+      .then(setTemplates)
       .catch((error) => void message.error(error instanceof Error ? error.message : '模板加载失败'));
   }, [message]);
 
@@ -134,14 +135,19 @@ export function DataUploadPage() {
     return () => window.clearInterval(timer);
   }, [jobs.items, loadJobs]);
 
-  const chosen = useMemo(() => templates.find((item) => item.versionId === templateVersionId), [templateVersionId, templates]);
+  const spreadsheetTemplates = useMemo(() => templates.filter((item) => item.format === 'XLSX'), [templates]);
+  const wordTemplates = useMemo(() => templates.filter((item) => item.format === 'DOCX'), [templates]);
+  const chosenSpreadsheetTemplate = useMemo(() => spreadsheetTemplates.find((item) => item.versionId === spreadsheetTemplateVersionId), [spreadsheetTemplateVersionId, spreadsheetTemplates]);
+  const chosenWordTemplate = useMemo(() => wordTemplates.find((item) => item.versionId === wordTemplateVersionId), [wordTemplateVersionId, wordTemplates]);
 
   const submit = async () => {
     const selectedFiles = files.flatMap((item) => item.originFileObj ? [{ file: item.originFileObj, uid: item.uid }] : []);
     if (!selectedFiles.length) { void message.warning('请选择数据文件'); return; }
-    const templateFiles = selectedFiles.filter(({ file }) => !documentSourceFileName.test(file.name));
-    if (templateFiles.length && !chosen) { void message.warning('Excel / CSV 文件请选择已发布模板'); return; }
-    if (templateFiles.length && chosen?.experimentImportReady && !experimentCategoryId) { void message.warning('实验模板暂未配置默认实验分类'); return; }
+    const spreadsheetFiles = selectedFiles.filter(({ file }) => /\.(?:xls|xlsx|csv)$/i.test(file.name));
+    if (spreadsheetFiles.length && !chosenSpreadsheetTemplate) { void message.warning('Excel / CSV 文件请选择已发布的 Excel 模板'); return; }
+    if ((spreadsheetFiles.length && chosenSpreadsheetTemplate?.experimentImportReady
+      || selectedFiles.some(({ file }) => /\.docx$/i.test(file.name)) && chosenWordTemplate?.experimentImportReady)
+      && !experimentCategoryId) { void message.warning('实验模板暂未配置默认实验分类'); return; }
     setLoading(true);
     const failedUids = new Set<string>();
     let succeeded = 0;
@@ -154,7 +160,11 @@ export function DataUploadPage() {
         updateUploadFile('uploading', 0);
         try {
           const staged = await dataApi.stageSource(entry.file, (percent) => updateUploadFile('uploading', percent));
-          if (documentSourceFileName.test(entry.file.name)) {
+          const isPdf = /\.pdf$/i.test(entry.file.name);
+          const isWord = /\.docx?$/i.test(entry.file.name);
+          const isDocx = /\.docx$/i.test(entry.file.name);
+          const template = isDocx ? chosenWordTemplate : isWord ? undefined : chosenSpreadsheetTemplate;
+          if (isPdf || isWord && !template) {
             await dataApi.createRecognitionJob({
               sourceFileId: staged.fileId,
               sourceFormat: documentSourceFormat(entry.file.name),
@@ -166,14 +176,14 @@ export function DataUploadPage() {
             updateUploadFile('done', 100);
             continue;
           }
-          if (!chosen) throw new Error('Excel / CSV 文件请选择已发布模板');
+          if (!template) throw new Error(isWord ? 'Word 文件请选择已发布的 Word 模板' : 'Excel / CSV 文件请选择已发布的 Excel 模板');
           const create = (duplicateOverride: boolean) => dataApi.createJob({
             sourceFileId: staged.fileId,
-            templateVersionId: chosen.versionId,
+            templateVersionId: template.versionId,
             duplicateOverride,
             projectRelations,
-            importPurpose: chosen.experimentImportReady ? 'EXPERIMENT_DRAFT' : 'DATA_ONLY',
-            targetExperimentCategoryId: chosen.experimentImportReady ? experimentCategoryId : undefined,
+            importPurpose: template.experimentImportReady ? 'EXPERIMENT_DRAFT' : 'DATA_ONLY',
+            targetExperimentCategoryId: template.experimentImportReady ? experimentCategoryId : undefined,
           });
           try {
             await create(false);
@@ -246,7 +256,7 @@ export function DataUploadPage() {
       <UploadWorkspace
       breadcrumbs={[{ title: '数据中心' }, { title: '数据上传' }]}
       title="数据上传"
-      description="Excel / CSV 按已发布模板导入；Word / PDF 可直接提交自由识别。上传后可查看处理状态与失败原因。"
+      description="Excel / CSV 和 Word 可选择对应的已发布模板导入；Word 不选模板或上传 PDF 时使用自由识别。上传后可查看处理状态与失败原因。"
       leftTitle="选择导入模板"
       classification={<Form layout="vertical" component={false}>
         <Form.Item label="模板分类">
@@ -254,28 +264,49 @@ export function DataUploadPage() {
             options={[...new Set(templates.map(templateCategory))].sort((a, b) => a.localeCompare(b, 'zh-CN')).map((value) => ({ value, label: value }))}
             onChange={(category) => {
               setTemplateCategoryFilter(category);
-              if (category && templates.find((item) => item.versionId === templateVersionId && templateCategory(item) !== category)) setTemplateVersionId(undefined);
+              if (category && spreadsheetTemplates.find((item) => item.versionId === spreadsheetTemplateVersionId && templateCategory(item) !== category)) setSpreadsheetTemplateVersionId(undefined);
+              if (category && wordTemplates.find((item) => item.versionId === wordTemplateVersionId && templateCategory(item) !== category)) setWordTemplateVersionId(undefined);
             }} />
         </Form.Item>
         <Form.Item label="Excel / CSV 导入模板">
           <Select
             showSearch
             optionFilterProp="label"
-            placeholder="请选择已发布模板（Word / PDF 可不选）"
-            value={templateVersionId}
-            onChange={setTemplateVersionId}
-            options={templateGroups(templates, templateCategoryFilter)}
+            placeholder="请选择已发布的 Excel 模板"
+            value={spreadsheetTemplateVersionId}
+            onChange={setSpreadsheetTemplateVersionId}
+            options={templateGroups(spreadsheetTemplates, templateCategoryFilter)}
             notFoundContent={templateCategoryFilter ? '该分类暂无已发布模板，可切换分类' : '暂无已发布模板'}
           />
         </Form.Item>
-        <Alert type="info" showIcon message="Excel / CSV 按模板导入；Word / PDF 使用自由识别，可不选模板。" />
-        {chosen && <Alert
+        <Form.Item label="Word 导入模板（可选）">
+          <Select
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            placeholder="选择 Word 模板；不选时使用自由识别"
+            value={wordTemplateVersionId}
+            onChange={setWordTemplateVersionId}
+            options={templateGroups(wordTemplates, templateCategoryFilter)}
+            notFoundContent={templateCategoryFilter ? '该分类暂无已发布 Word 模板，可切换分类' : '暂无已发布 Word 模板'}
+          />
+        </Form.Item>
+        <Alert type="info" showIcon message="Excel / CSV 使用 Excel 模板；Word 可选 Word 模板或自由识别；PDF 使用自由识别。" />
+        {chosenSpreadsheetTemplate && <Alert
           showIcon
-          type={chosen.experimentImportReady ? 'success' : 'info'}
-          message={chosen.experimentImportReady ? '实验数据模板 · 可生成实验草稿' : '普通数据模板'}
-          description={chosen.experimentImportReady
-            ? `整份文件一个实验${chosen.identityTypes?.length ? ` · 文件内关联标识：${chosen.identityTypes.map(identityTypeLabel).join('、')}` : ''}`
+          type={chosenSpreadsheetTemplate.experimentImportReady ? 'success' : 'info'}
+          message={chosenSpreadsheetTemplate.experimentImportReady ? 'Excel 实验数据模板 · 可生成实验草稿' : 'Excel 普通数据模板'}
+          description={chosenSpreadsheetTemplate.experimentImportReady
+            ? `整份文件一个实验${chosenSpreadsheetTemplate.identityTypes?.length ? ` · 文件内关联标识：${chosenSpreadsheetTemplate.identityTypes.map(identityTypeLabel).join('、')}` : ''}`
             : '仅导入数据中心，不生成实验草稿。'}
+        />}
+        {chosenWordTemplate && <Alert
+          showIcon
+          type={chosenWordTemplate.experimentImportReady ? 'success' : 'info'}
+          message={chosenWordTemplate.experimentImportReady ? 'Word 实验数据模板 · 可生成实验草稿' : 'Word 普通数据模板'}
+          description={chosenWordTemplate.experimentImportReady
+            ? `整份文件一个实验${chosenWordTemplate.identityTypes?.length ? ` · 文件内关联标识：${chosenWordTemplate.identityTypes.map(identityTypeLabel).join('、')}` : ''}`
+            : '按模板字段识别并导入数据中心。'}
         />}
         <Form.Item label="关联项目 / 阶段 / 任务" extra="所选关联会应用到本次导入的工作表、数据行和来源文件。"><ProjectRelationPicker value={projectRelations} onChange={setProjectRelations} /></Form.Item>
       </Form>}
@@ -301,8 +332,10 @@ export function DataUploadPage() {
       submitIcon={<RightOutlined />}
       onSubmit={() => void submit()}
       submitting={loading}
-      submitDisabled={files.some((item) => item.originFileObj && !documentSourceFileName.test(item.name))
-        && (!chosen || (chosen.experimentImportReady && !experimentCategoryId))}
+      submitDisabled={files.some((item) => item.originFileObj && /\.(?:xls|xlsx|csv)$/i.test(item.name))
+        && (!chosenSpreadsheetTemplate || (chosenSpreadsheetTemplate.experimentImportReady && !experimentCategoryId))
+        || files.some((item) => item.originFileObj && /\.docx$/i.test(item.name))
+        && Boolean(chosenWordTemplate?.experimentImportReady && !experimentCategoryId)}
       rightTitle="已上传数据"
       rightCount={jobs.total}
       rightFilters={statusFilters}

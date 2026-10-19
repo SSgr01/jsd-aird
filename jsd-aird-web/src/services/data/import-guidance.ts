@@ -30,9 +30,20 @@ export function sheetSummary(preview: DataPreview, sheetId: string) {
 }
 
 export function confirmationBlockReason(preview: DataPreview) {
+  if (preview.issues.some((issue) => requiresTemplateChange(issue.issueType) && issue.severity === 'BLOCKER' && !['RESOLVED', 'IGNORED'].includes(issue.status)))
+    return '文件中有内容无法按所选模板读取，请重新选择模板或文件；仍无法导入时请联系模板维护人员。';
   const count = preview.issues.filter((issue) => issue.severity === 'BLOCKER' && !['RESOLVED', 'IGNORED'].includes(issue.status)).length;
   if (count) return `有 ${count} 项阻断问题，请在下方定位并修正；草稿修正会保留`;
-  if (['INCOMPATIBLE', 'REVIEW_REQUIRED'].includes(preview.job.compatibilityStatus || '')) return '模板数据区域需要核对，请打开字段映射';
-  if (preview.job.status !== 'WAITING_CONFIRM') return '完成工作表选择、字段映射和校验后可确认数据';
+  if (['INCOMPATIBLE', 'REVIEW_REQUIRED'].includes(preview.job.compatibilityStatus || '')) return '文件与所选模板不一致，无法可靠读取。请重新选择模板或文件；仍无法导入时请联系模板维护人员。';
+  if (preview.job.status === 'WAITING_MAPPING' && preview.mappings.some((item) => item.action !== 'IGNORE' && (item.action !== 'MAP' || !item.fieldCode))) return '部分内容无法按所选模板读取。请重新选择模板或文件；无需手动设置字段对应关系。';
+  if (preview.job.status !== 'WAITING_CONFIRM') return '数据尚未完成解析，请稍后刷新；处理失败时可重新解析或重新上传。';
   return undefined;
+}
+
+export function requiresTemplateChange(issueType: string) {
+  return ['UNMAPPED_FIELD', 'REQUIRED_MAPPING_MISSING', 'DUPLICATE_FIELD_MAPPING', 'SHEET_MAPPING_MISSING', 'SHEET_RECORDS_MISSING'].includes(issueType);
+}
+
+export function importIssueMessage(issueType: string, message: string) {
+  return requiresTemplateChange(issueType) ? '该处内容无法按所选模板可靠读取，请重新选择模板或文件。' : message;
 }

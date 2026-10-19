@@ -375,6 +375,9 @@ export async function stageExperimentFile(file: File) {
   );
 }
 export async function importExperimentFile(input: {
+  processingMode?: 'CONTENT_ONLY';
+  title?: string;
+  ownerName?: string;
   fileId: string;
   fileName: string;
   sha256: string;

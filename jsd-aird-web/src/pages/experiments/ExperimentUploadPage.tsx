@@ -5,7 +5,7 @@ import {
   EyeOutlined,
   ReloadOutlined,
 } from '@ant-design/icons';
-import { Alert, App, Button, Col, Form, Popconfirm, Row, Select, Space, Upload } from 'antd';
+import { App, Button, Col, Form, Popconfirm, Radio, Input, Row, Select, Space, Upload } from 'antd';
 import type { UploadFile, UploadProps } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -16,6 +16,7 @@ import { UploadWorkspace, type UploadWorkspaceRecord } from '@/components/upload
 import { dataApi, type DataJob, type DataTemplateOption, type ExperimentSyncStatus } from '@/services/data/data-api';
 import { dataParseProgress, dataParseStageLabel } from '@/services/data/data-progress';
 import {
+  importExperimentFile,
   deleteExperimentImport,
   listCategories,
   listExperimentImports,
@@ -25,6 +26,7 @@ import {
   type ExperimentImportJob,
 } from '@/services/experiments/experiment-api';
 import { downloadFile } from '@/services/files/file-api';
+import { useAuthStore } from '@/stores/auth-store';
 import { loadAllPages } from './experiment-import-history-utils';
 
 type UnifiedJob =
@@ -35,7 +37,12 @@ const ACTIVE_JOB_STATES = ['CREATED', 'QUEUED', 'PARSING', 'VALIDATING', 'COMMIT
 
 export function ExperimentUploadPage() {
   const { message } = App.useApp();
+  const user = useAuthStore((state) => state.user);
+  useEffect(() => { setOwnerName(user?.displayName || user?.username || ''); }, [user]);
   const navigate = useNavigate();
+  const [mode, setMode] = useState<'TEMPLATE' | 'CONTENT_ONLY'>('TEMPLATE');
+  const [ownerName, setOwnerName] = useState('');
+  const [experimentDate, setExperimentDate] = useState(new Date().toLocaleDateString('sv-SE'));
   const [files, setFiles] = useState<UploadFile[]>([]);
   const [freeJobs, setFreeJobs] = useState<ExperimentImportJob[]>([]);
   const [templateJobs, setTemplateJobs] = useState<DataJob[]>([]);
@@ -109,8 +116,8 @@ export function ExperimentUploadPage() {
   );
 
   const validate: UploadProps['beforeUpload'] = (file) => {
-    const accepted = /\.(xlsx|xls|csv|docx|jpg|jpeg|png|gif|webp|bmp|tif|tiff)$/i;
-    if (file.size === 0 || !accepted.test(file.name)) {
+    const accepted = mode === 'CONTENT_ONLY' ? /\.(xlsx|xls|csv|doc|docx|pdf|jpg|jpeg|png|gif|webp|bmp|tif|tiff)$/i : /\.(xlsx|xls|csv|docx|jpg|jpeg|png|gif|webp|bmp|tif|tiff)$/i;
+    if (file.size === 0 || file.size > 200 * 1024 * 1024 || !accepted.test(file.name)) {
       void message.error('实验模板导入支持 XLSX / XLS / CSV / DOCX 及常见图片格式');
       return Upload.LIST_IGNORE;
     }
@@ -118,25 +125,36 @@ export function ExperimentUploadPage() {
   };
 
   const submit = async () => {
+    if (uploading) return;
     const sourceFiles = files.flatMap((item) => (item.originFileObj ? [item.originFileObj] : []));
     if (!sourceFiles.length) { void message.warning('请先选择实验文件'); return; }
     if (!experimentCategoryId) { void message.warning('请选择实验分类'); return; }
-    if (!chosenTemplate) {
+    if (mode === 'CONTENT_ONLY' && (!ownerName.trim() || !experimentDate)) { void message.warning('请填写负责人和实验日期'); return; }
+    if (mode === 'TEMPLATE' && !chosenTemplate) {
       void message.warning(templates.length
         ? '请选择可用于实验导入的已发布模板'
-        : '暂无可用于实验导入的模板，请先在模板中心配置并发布实验数据模板');
+        : '暂无可用模板，可选择无模板导入');
       return;
     }
     setUploading(true);
+    const failedNames = new Set<string>();
     let failed = 0;
     let templateJobCount = 0;
     try {
       for (const file of sourceFiles) {
         try {
           const staged = await stageExperimentFile(file);
-          await dataApi.createExperimentJob({
+          if (mode === 'CONTENT_ONLY') {
+            const ext = file.name.split('.').pop()?.toLowerCase();
+            const format = ext === 'xls' ? 'XLS' : ext === 'xlsx' ? 'XLSX' : ext === 'csv' ? 'CSV' : ext === 'pdf' ? 'PDF' : ext === 'doc' || ext === 'docx' ? 'DOCX' : 'IMAGE';
+            const relation = projectRelations[0];
+            await importExperimentFile({fileId:staged.fileId,fileName:staged.originalName,sha256:staged.sha256,format,
+              processingMode:'CONTENT_ONLY',title:file.name.replace(/\.[^.]+$/,''),ownerName:ownerName.trim(),
+              experimentDate,categoryId:experimentCategoryId,categoryName:categories.find(c=>c.id===experimentCategoryId)?.name,
+              projectId:relation?.projectId,stageId:relation?.stageId,taskId:relation?.taskId});
+          } else await dataApi.createExperimentJob({
             sourceFileId: staged.fileId,
-            templateVersionId: chosenTemplate.versionId,
+            templateVersionId: chosenTemplate!.versionId,
             duplicateOverride: true,
             importPurpose: 'EXPERIMENT_DRAFT',
             targetExperimentCategoryId: experimentCategoryId,
@@ -144,15 +162,16 @@ export function ExperimentUploadPage() {
           });
           templateJobCount += 1;
         } catch (error) {
+          failedNames.add(file.name);
           failed += 1;
           void message.error(error instanceof Error ? `${file.name}：${error.message}` : `${file.name} 上传失败`);
         }
       }
-      setFiles([]);
+      setFiles(current => current.filter(f => failedNames.has(f.name)));
       await load();
       if (!failed) {
         const parts: string[] = [];
-        if (templateJobCount) parts.push(`${templateJobCount} 个按模板导入任务`);
+        if (templateJobCount) parts.push(`${templateJobCount} 个${mode === 'CONTENT_ONLY' ? '无模板导入' : '按模板导入'}任务`);
         void message.success(`已提交 ${parts.join('、') || '0 个文件'}`);
       } else void message.warning(`${sourceFiles.length - failed} 个文件已提交，${failed} 个失败`);
     } finally {
@@ -210,12 +229,15 @@ export function ExperimentUploadPage() {
     <UploadWorkspace
       breadcrumbs={[{ title: '电子实验记录本' }, { title: '实验数据导入' }]}
       title="文件导入"
-      description="选择已发布实验数据模板，核对并确认本次实验数据后生成实验草稿。"
+      description="选择按模板导入或无模板导入，读取文件内容后进入实验编辑器。"
       headerActions={<Space>
         <Button type="primary" onClick={() => navigate('/experiments')}>实验列表</Button>
       </Space>}
       leftTitle="基础信息"
       classification={<Form layout="vertical" component={false}>
+        <Form.Item label="导入方式"><Radio.Group value={mode} onChange={(e) => { setMode(e.target.value); setFiles([]); }} options={[{value:'TEMPLATE',label:'按模板导入'},{value:'CONTENT_ONLY',label:'无模板导入'}]} optionType="button" /></Form.Item>
+        {mode === 'CONTENT_ONLY' && <><Form.Item label="负责人" required><Input value={ownerName} onChange={e=>setOwnerName(e.target.value)} /></Form.Item><Form.Item label="实验日期" required><Input type="date" value={experimentDate} onChange={e=>setExperimentDate(e.target.value)} /></Form.Item></>}
+
         <Row gutter={12}>
           <Col span={12}>
             <Form.Item label="实验分类" required>
@@ -223,33 +245,27 @@ export function ExperimentUploadPage() {
             </Form.Item>
           </Col>
         </Row>
-        <>
+        {mode === 'TEMPLATE' && <>
           <Form.Item label="实验数据模板" required>
             <Select showSearch optionFilterProp="label" loading={templatesLoading} value={templateVersionId} onChange={setTemplateVersionId} options={templates.map((item) => ({ value: item.versionId, label: `${item.name} · ${item.templateCode} · V${item.versionNo}` }))} placeholder="请选择实验数据模板" notFoundContent={templatesLoading ? '加载中' : '没有匹配的实验数据模板'} />
           </Form.Item>
-          {!templatesLoading && templates.length === 0 ? <Alert
-            showIcon
-            type="warning"
-            message="暂无符合实验导入要求的 Excel 模板"
-            description="请在模板中心配置并发布导入契约版本为 V9、用途为实验数据（EXPERIMENT_DATA）的 Excel 模板。"
-          /> : null}
-        </>
+        </>}
         <Form.Item label="关联项目 / 阶段 / 任务"><ProjectRelationPicker value={projectRelations} onChange={setProjectRelations} multiple={false} /></Form.Item>
       </Form>}
-      accept=".docx,.xls,.xlsx,.csv,.png,.jpg,.jpeg,.gif,.webp,.bmp,.tif,.tiff"
+      accept={mode === 'CONTENT_ONLY' ? '.doc,.docx,.pdf,.xls,.xlsx,.csv,.png,.jpg,.jpeg,.gif,.webp,.bmp,.tif,.tiff' : '.docx,.xls,.xlsx,.csv,.png,.jpg,.jpeg,.gif,.webp,.bmp,.tif,.tiff'}
       beforeUpload={validate}
       multiple
       files={files}
       onFilesChange={setFiles}
       onRemoveFile={(file) => setFiles((current) => current.filter((item) => item.uid !== file.uid))}
       onClearFiles={() => setFiles([])}
-      uploadHint="支持 XLSX / DOCX / 图片，可批量上传，单个文件最大100M。"
+      uploadHint={mode === 'CONTENT_ONLY' ? '支持 Excel / Word / PDF / 图片，可批量上传，单个文件最大200MB。' : '支持 XLSX / DOCX / 图片，可批量上传，单个文件最大200MB。'}
       uploadMainText="拖拽文件到此处或点击选择文件"
       submitLabel="开始上传"
       submitIcon={<CloudUploadOutlined />}
       onSubmit={() => void submit()}
       submitting={uploading}
-      submitDisabled={!experimentCategoryId || !chosenTemplate}
+      submitDisabled={!experimentCategoryId || (mode === 'TEMPLATE' && !chosenTemplate)}
       rightTitle="导入历史"
       rightCount={jobs.length}
       rightFilters={[{ key: 'ALL', label: '全部' }, { key: 'PARSING', label: '处理中' }, { key: 'WAITING_MAPPING', label: '待确认' }, { key: 'COMPLETED', label: '导入完成' }, { key: 'FAILED', label: '失败' }]}
@@ -270,7 +286,7 @@ export function ExperimentUploadPage() {
       id: `free-${job.id}`,
       name: job.sourceFileName,
       meta: `${formatLabel(job.sourceFormat)} · 无模板导入 · ${new Date(job.createdAt).toLocaleString('zh-CN')}`,
-      detail: [job.currentStage || (job.status === 'COMPLETED' ? '草稿已生成，尚未发布' : '等待解析'), job.errorMessage ? `失败原因：${job.errorMessage}` : null].filter(Boolean).join(' · '),
+      detail: [(job.status === 'COMPLETED' ? '草稿已生成，尚未发布' : job.currentStage || '等待读取'), job.errorMessage ? `失败原因：${job.errorMessage}` : null].filter(Boolean).join(' · '),
       status: job.status === 'COMPLETED' ? { label: '草稿已生成 · 尚未发布', color: 'success' } : job.status === 'FAILED' ? { label: '解析失败', color: 'error' } : { label: `处理中 ${progress}%`, color: 'processing' },
       progress,
       actions: <Space size={2}>{job.experimentId ? <Button type="link" icon={<EyeOutlined />} onClick={() => navigate(`/experiments/${job.experimentId}`)}>打开实验</Button> : null}<Button type="link" icon={<DownloadOutlined />} onClick={() => void downloadFile(job.sourceFileId, job.sourceFileName).catch((error) => void message.error(error instanceof Error ? error.message : '原文件下载失败'))}>下载原文件</Button><Button type="link" icon={<ReloadOutlined />} disabled={!['FAILED', 'CANCELLED'].includes(job.status)} loading={retryingId === job.id} onClick={() => void retry(job)}>重试</Button><Popconfirm title="确认删除该导入记录？" description="删除后记录将从列表中移除。" okText="删除" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => deleteFree(job)}><Button type="link" danger icon={<DeleteOutlined />} disabled={ACTIVE_JOB_STATES.includes(job.status)}>删除</Button></Popconfirm></Space>,

@@ -70,6 +70,40 @@ def test_recommend_binds_multiple_y_models() -> None:
     assert len(request.model_bindings) == 4
 
 
+def test_recommend_accepts_registered_workbench_material_mapping_and_result_constraints() -> None:
+    payload = {
+        "contractVersion": "formula-model.v2", "requestId": "workbench", "seed": 17,
+        "runId": "recommend-run", "mode": "FORMULA_PREDICTION",
+        "goals": [{"targetId": "target-version", "operator": "AT_LEAST", "value": 900}],
+        "fixedInputs": {}, "constraints": {}, "candidateCount": 4,
+        "resultConstraints": {"nonNegative": True},
+        "baselineFormula": {"basis": "MASS_PERCENT", "compositionComplete": True,
+            "components": [{"materialId": "material-1", "ratio": 100, "unit": "PERCENT", "amountKnown": True}]},
+        "modelBindings": [{
+            "target": {"id": "target-version", "version": 1, "sha256": "0" * 64,
+                "code": "wear", "valueType": "CONTINUOUS", "unit": "cycles", "classes": [],
+                "observationSemantics": {}},
+            "modelVersionId": "model-1", "modelBundle": {"url": "http://localhost/model.zip", "sha256": "0" * 64},
+            "inputScheme": {"id": "scheme-1", "version": 1, "sha256": "0" * 64, "targetVersionId": "target-version",
+                "fields": [{"fieldVersionId": "field-1", "code": "formula:material-1", "name": "RESIN比例", "unit": "%",
+                    "valueType": "NUMBER", "required": True, "acquisitionTiming": "PRE_EXPERIMENT",
+                    "semanticKey": "formula:material-1", "semanticType": "MATERIAL_RATIO", "mappingStatus": "MAPPED",
+                    "materialId": "material-1", "materialCode": "RESIN", "compositionBasis": "MASS_PERCENT",
+                    "encoding": {"formulaMaterialId": "material-1"}}]},
+            "materialDictionary": {"id": "materials-1", "version": 1, "sha256": "0" * 64,
+                "materials": [{"materialId": "material-1", "code": "RESIN", "encoderIndex": 0}]},
+            "applicabilityDomain": {"features": [], "minimum": [], "maximum": []},
+            "resultConstraints": {"nonNegative": True},
+        }],
+    }
+    request = RecommendRequestV2.model_validate(payload)
+    binding = request.model_bindings[0]
+    assert binding.input_scheme.fields[0].semantic_type == "MATERIAL_RATIO"
+    assert binding.input_scheme.fields[0].mapping_status == "MAPPED"
+    assert binding.result_constraints["nonNegative"] is True
+    assert request.result_constraints["nonNegative"] is True
+
+
 def test_v1_payload_is_rejected_by_v2_schema_source() -> None:
     payload = score_request()
     payload["contractVersion"] = "formula-model.v1"

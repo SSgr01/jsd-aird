@@ -735,7 +735,9 @@ export function ExperimentWorkspacePage({
     : undefined;
   const readonly = statusLocked;
   const editable = !readonly && isDesktop && view === 'edit';
-  const showExcelRecognition = !templateReview && documentFormatOf(editModel, snapshot) === 'excel'
+  // 无模板导入（CONTENT_ONLY）不涉及识别区域与字段绑定，隐藏 Excel 识别审核面板。
+  const showExcelRecognition = editModel.importProcessingMode !== 'CONTENT_ONLY'
+    && !templateReview && documentFormatOf(editModel, snapshot) === 'excel'
     && Array.isArray(editModel.recognizedFields);
   const templateDataConfirmed = Boolean(templateReview?.confirmed && saveState === 'SAVED'
     && editModel.templateDataReview?.confirmed

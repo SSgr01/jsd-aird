@@ -376,6 +376,109 @@
           "additionalProperties": true,
           "title": "Encoding",
           "type": "object"
+        },
+        "semanticKey": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Semantickey"
+        },
+        "semanticType": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Semantictype"
+        },
+        "mappingStatus": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mappingstatus"
+        },
+        "materialId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Materialid"
+        },
+        "materialCode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Materialcode"
+        },
+        "compositionBasis": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Compositionbasis"
+        },
+        "testMethods": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Testmethods",
+          "type": "array"
+        },
+        "testStage": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Teststage"
+        },
+        "measurementComponent": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Measurementcomponent"
         }
       },
       "required": [
@@ -523,6 +626,11 @@
           "additionalProperties": true,
           "title": "Applicabilitydomain",
           "type": "object"
+        },
+        "resultConstraints": {
+          "additionalProperties": true,
+          "title": "Resultconstraints",
+          "type": "object"
         }
       },
       "required": [
@@ -646,6 +754,11 @@
           "minimum": 1,
           "title": "Candidatecount",
           "type": "integer"
+        },
+        "resultConstraints": {
+          "additionalProperties": true,
+          "title": "Resultconstraints",
+          "type": "object"
         }
       },
       "required": [

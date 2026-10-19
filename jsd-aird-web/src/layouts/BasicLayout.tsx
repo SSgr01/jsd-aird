@@ -267,6 +267,7 @@ export function BasicLayout() {
   const isExperimentWorkspace = /^\/experiments\/(?!imports\/)[^/]+$/.test(location.pathname) && !isExperimentPage;
   const isDataWorkspace = /^\/data\/(?:import-jobs|assets)\/[^/]+$/.test(location.pathname);
   const isProjectDocumentWorkspace = /^\/projects\/[^/]+\/documents\/[^/]+$/.test(location.pathname);
+  const isKnowledgeWorkbench = location.pathname.startsWith('/knowledge/review/') || location.pathname.startsWith('/knowledge/documents/');
   const isPermissionManagement = location.pathname.startsWith('/system/user-permissions');
   const isWorkspace = isTemplateWorkspace || isExperimentWorkspace || isDataWorkspace;
   const collapsed = useAppStore((state) => state.sidebarCollapsed);
@@ -302,7 +303,7 @@ export function BasicLayout() {
         menuItemRender={(item: MenuDataItem & { isUrl: boolean; onClick: () => void }, dom: React.ReactNode, menuProps: { isMobile?: boolean }) => (item.path ? <Link to={item.path} onClick={menuProps.isMobile ? item.onClick : undefined}>{dom}</Link> : dom)}
       >
         <main
-          className={`app-content${isWorkspace ? ' app-content-workspace' : ''}${isProjectDocumentWorkspace ? ' app-content-project-document-workspace' : ''}${isPermissionManagement ? ' app-content-permission-management' : ''}`}
+          className={`app-content${isWorkspace ? ' app-content-workspace' : ''}${isProjectDocumentWorkspace ? ' app-content-project-document-workspace' : ''}${isKnowledgeWorkbench ? ' app-content-knowledge-workbench' : ''}${isPermissionManagement ? ' app-content-permission-management' : ''}`}
           id="main-content"
         >
           {requiredPermission && !canViewPathWithMenus(location.pathname, permissions, menuKeys) ? <AccessDenied permissions={permissions} menuKeys={menuKeys} /> : <Outlet />}

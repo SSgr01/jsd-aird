@@ -81,8 +81,14 @@ public class ExperimentImportService {
             if (existing.isPresent()) return new Accepted(existing.get().id(), "COMPLETED");
         }
         if (normalized.contentOnly()) {
-            if (normalized.title() == null || normalized.title().isBlank() || normalized.ownerName() == null || normalized.ownerName().isBlank())
-                throw new ApiException(ApiErrorCode.BAD_REQUEST, "实验名称和负责人不能为空");
+            if (normalized.title() == null || normalized.title().isBlank())
+                throw new ApiException(ApiErrorCode.BAD_REQUEST, "实验名称不能为空");
+            normalized = new Command(normalized.fileId(), normalized.fileName(), normalized.sha256(), normalized.format(),
+                    normalized.categoryId(), normalized.categoryName(), normalized.projectId(), normalized.stageId(),
+                    normalized.taskId(), normalized.experimentDate() == null ? LocalDate.now() : normalized.experimentDate(),
+                    normalized.visibility(), normalized.duplicateOverride(), normalized.processingMode(), normalized.title(),
+                    normalized.ownerName() == null || normalized.ownerName().isBlank()
+                            ? actor.username() : normalized.ownerName().strip());
             imports.lockSource(actor.organizationId(), normalized.fileId());
             var existing = imports.findContentImport(actor.organizationId(), normalized.fileId());
             if (existing.isPresent()) return new Accepted(existing.get().id(), existing.get().status());

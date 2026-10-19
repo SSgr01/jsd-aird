@@ -8146,3 +8146,22 @@ a:active,
 
 .data-workspace-view-tabs { height: 50px; padding: 0 24px; background: var(--workspace-panel, #fff); }
 .data-workspace-view-tabs .ant-tabs-tab { padding: 13px 3px; font-size: 14px; }
+
+.app-content.app-content-knowledge-workbench {
+  height: calc(100dvh - 64px);
+  min-height: 0;
+  padding: 80px clamp(16px, 2vw, 32px) 20px;
+  overflow: auto;
+}
+
+@media (max-width: 1199px) {
+  .app-content.app-content-knowledge-workbench {
+    padding: 76px 20px 20px;
+  }
+}
+
+@media (max-width: 720px) {
+  .app-content.app-content-knowledge-workbench {
+    padding: 68px 16px 16px;
+  }
+}

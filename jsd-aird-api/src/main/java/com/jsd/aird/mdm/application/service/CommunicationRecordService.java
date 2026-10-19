@@ -60,7 +60,7 @@ public class CommunicationRecordService {
     public void deleteCommunication(UUID id, long version) {
         BusinessPartnerService.requireWrite();
         var current = communication(id);
-        if (!repository.deleteCommunication(id, version)) CrmServiceSupport.conflict();
+        if (!repository.deleteCommunication(id, version, CrmServiceSupport.OPERATOR)) CrmServiceSupport.conflict();
         partnerService.appendAudit("COMMUNICATION_DELETED", current.partnerId());
     }
 

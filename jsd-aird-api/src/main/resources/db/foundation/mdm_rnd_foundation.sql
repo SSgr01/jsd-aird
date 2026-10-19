@@ -15,6 +15,9 @@ CREATE TABLE mdm.business_partner (
     remark varchar(1000), customer_level varchar(50), cooperation_status varchar(50), main_business varchar(500),
     custom_fields jsonb NOT NULL DEFAULT '{}'::jsonb,
     version bigint NOT NULL DEFAULT 0,
+    deleted boolean NOT NULL DEFAULT false,
+    deleted_at timestamptz,
+    deleted_by varchar(160),
     created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
     created_by varchar(160) NOT NULL, updated_by varchar(160) NOT NULL,
     CONSTRAINT business_partner_custom_fields_object CHECK (jsonb_typeof(custom_fields) = 'object'),
@@ -28,6 +31,9 @@ CREATE TABLE mdm.partner_contact (
     status varchar(20) NOT NULL DEFAULT 'ACTIVE', assigned_project_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
     members varchar(1000) NOT NULL DEFAULT '', wechat varchar(200), custom_fields jsonb NOT NULL DEFAULT '{}'::jsonb,
     version bigint NOT NULL DEFAULT 0,
+    deleted boolean NOT NULL DEFAULT false,
+    deleted_at timestamptz,
+    deleted_by varchar(160),
     created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
     created_by varchar(160) NOT NULL, updated_by varchar(160) NOT NULL,
     CONSTRAINT partner_contact_projects_array CHECK (jsonb_typeof(assigned_project_ids) = 'array'),
@@ -41,6 +47,8 @@ CREATE TABLE mdm.communication_record (
     internal_participants varchar(500), communication_method varchar(30) NOT NULL, content text NOT NULL, status varchar(30) NOT NULL,
     custom_fields jsonb NOT NULL DEFAULT '{}'::jsonb, version bigint NOT NULL DEFAULT 0,
     deleted boolean NOT NULL DEFAULT false,
+    deleted_at timestamptz,
+    deleted_by varchar(160),
     created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
     created_by varchar(160) NOT NULL, updated_by varchar(160),
     CONSTRAINT communication_custom_fields_object CHECK (jsonb_typeof(custom_fields) = 'object'),
@@ -54,6 +62,9 @@ CREATE TABLE mdm.customer_requirement (
     status varchar(30) NOT NULL, custom_status_name varchar(50), project_id uuid,
     assigned_project_ids jsonb NOT NULL DEFAULT '[]'::jsonb, custom_fields jsonb NOT NULL DEFAULT '{}'::jsonb,
     version bigint NOT NULL DEFAULT 0,
+    deleted boolean NOT NULL DEFAULT false,
+    deleted_at timestamptz,
+    deleted_by varchar(160),
     created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
     created_by varchar(160) NOT NULL, updated_by varchar(160) NOT NULL,
     CONSTRAINT requirement_projects_array CHECK (jsonb_typeof(assigned_project_ids) = 'array'),
@@ -317,7 +328,7 @@ $$ SELECT count(*) FROM mdm.project_task WHERE stage_id = stage_uuid AND deleted
 
 CREATE INDEX idx_partner_contact_partner ON mdm.partner_contact(partner_id, status, created_at);
 CREATE INDEX idx_communication_partner ON mdm.communication_record(partner_id, communicated_at DESC) WHERE deleted = false;
-CREATE INDEX idx_requirement_partner ON mdm.customer_requirement(partner_id, updated_at DESC);
+CREATE INDEX idx_requirement_partner ON mdm.customer_requirement(partner_id, updated_at DESC) WHERE deleted = false;
 CREATE INDEX idx_customer_requirement_assigned_project_ids ON mdm.customer_requirement USING gin(assigned_project_ids);
 CREATE INDEX idx_requirement_project ON mdm.customer_requirement(project_id);
 CREATE INDEX idx_partner_contact_project ON mdm.partner_contact_project(project_id);

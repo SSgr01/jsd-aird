@@ -153,13 +153,15 @@ public class ProjectAuditLogService {
             where.append(" AND COALESCE(u.display_name, u.username, al.source_operator_name, al.detail_jsonb ->> 'operator', '系统') ILIKE ?");
             args.add("%" + query.operator().trim() + "%");
         }
+        // JDBC 参数必须显式转成 java.sql.Timestamp：PostgreSQL 驱动对 java.time.Instant
+        // 无法推断 SQL 类型（setObject 会抛 “Can't infer the SQL type”），会表现为 500 系统内部错误。
         if (query.createdFrom() != null) {
             where.append(" AND al.created_at >= ?");
-            args.add(query.createdFrom());
+            args.add(java.sql.Timestamp.from(query.createdFrom()));
         }
         if (query.createdTo() != null) {
             where.append(" AND al.created_at <= ?");
-            args.add(query.createdTo());
+            args.add(java.sql.Timestamp.from(query.createdTo()));
         }
         if (hasText(query.keyword())) {
             where.append(" AND (COALESCE(al.action, '') ILIKE ? "

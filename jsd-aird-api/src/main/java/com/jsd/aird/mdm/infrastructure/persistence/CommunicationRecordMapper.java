@@ -51,6 +51,7 @@ public interface CommunicationRecordMapper {
                             @Param("status") String status, @Param("customFields") String customFields,
                             @Param("version") long version, @Param("operator") String operator);
 
-    @Update("UPDATE mdm.communication_record SET deleted=true,version=version+1,updated_at=now() WHERE id=#{id} AND version=#{version}")
-    int deleteCommunication(@Param("id") UUID id, @Param("version") long version);
+    @Update("UPDATE mdm.communication_record SET deleted=true, deleted_at=now(), deleted_by=#{operator}, " +
+        "version=version+1, updated_at=now(), updated_by=#{operator} WHERE id=#{id} AND version=#{version} AND deleted=false")
+    int deleteCommunication(@Param("id") UUID id, @Param("version") long version, @Param("operator") String operator);
 }

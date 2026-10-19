@@ -31,7 +31,24 @@ public class ProjectWorkService {
   var task=new ProjectTask(id,existing.taskCode(),existing.projectId(),input.stageId(),required(input.name(),"任务名称不能为空"),clean(input.owner()),input.priority()==null?existing.priority():input.priority(),input.plannedDate(),input.status()==null?"PENDING":input.status(),existing.experimentCount(),version,existing.createdAt(),existing.updatedAt());
   int rows=mapper.updateTask(task);
   if(rows==0) throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"任务已被他人修改，请刷新后重试");
+  if(!Objects.equals(existing.stageId(),input.stageId())) moveTaskChildren(id,input.stageId());
   return getTask(id);
+ }
+ /**
+  * 任务换阶段时，任务下的过程产物需要一起迁到新阶段：这些数据以 (stage_id, task_id) 成对存储，
+  * 且关联查询要求与任务同阶段，否则换阶段后它们会在新阶段里查不到（详见 ProjectWorkMapper 中的说明）。
+  */
+ private void moveTaskChildren(UUID taskId,UUID toStageId){
+  mapper.moveTaskExperiments(taskId,toStageId);
+  mapper.moveTaskTestRecords(taskId,toStageId);
+  mapper.moveTaskExperimentImportJobs(taskId,toStageId);
+  mapper.moveTaskUploadFiles(taskId,toStageId);
+  mapper.moveTaskDataRecords(taskId,toStageId);
+  mapper.moveTaskProductionUploads(taskId,toStageId);
+  mapper.dropShadowedTaskResourceLinks(taskId,toStageId);
+  mapper.moveTaskResourceLinks(taskId,toStageId);
+  mapper.dropShadowedTaskReferences(taskId,toStageId);
+  mapper.moveTaskReferences(taskId,toStageId);
  }
  @Transactional
  public void deleteTask(UUID id,long version){

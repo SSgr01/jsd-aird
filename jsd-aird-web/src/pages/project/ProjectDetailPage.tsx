@@ -266,6 +266,11 @@ export function ProjectDetailPage() {
               tokenSeparators={[',', '，', '\n']}
               style={{ width: '100%' }}
               allowClear
+              // 禁用下拉：成员是自由录入的，没有候选可选项。下拉一旦打开，已存在的同名成员会成为
+              // “已选中”的候选项，此时回车/点击会走 rc-select 的“再选一次=取消选中”分支，把该成员
+              // 悄悄删掉（若它是唯一成员，团队成员会被清空并随保存落库）。open=false 后回车只会
+              // 走 tags 的提交分支，同名成员自动去重，不会删除。
+              open={false}
             />
           </Form.Item>
           <Form.Item name="background" label="项目描述" className="pm-form-span-2">

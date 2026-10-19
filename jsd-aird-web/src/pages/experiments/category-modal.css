@@ -5,3 +5,4 @@
 .eln-category-modal .ant-modal-footer { margin: 0; padding: 16px 20px; border-top: 1px solid #dfe6f0; }
 .eln-category-modal .ant-form-item-label > label { font-weight: 600; }
 .eln-category-modal textarea { min-height: 90px; }
+.eln-category-modal .eln-category-delete-tip { margin: 0 0 12px; color: var(--text-secondary, #5c6b82); line-height: 1.6; }

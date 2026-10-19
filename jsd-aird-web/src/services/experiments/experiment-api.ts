@@ -99,6 +99,7 @@ export interface ExperimentModel extends Record<string, unknown> {
   documentSnapshot?: Record<string, unknown>;
   dynamicValues?: Record<string, unknown>;
   templateDataReview?: { required: boolean; confirmed: boolean; dataHash?: string; confirmedRevision?: number };
+  importDataReview?: { confirmed: boolean; dataHash?: string; confirmedRevision?: number };
   recognizedFields?: Array<{
     id: string;
     bindingId: string;
@@ -326,6 +327,12 @@ export async function updateCategory(id: string, input: { revision: number; name
 }
 export async function setCategoryActive(id: string, revision: number, active: boolean) {
   return data(await httpClient.put<ApiResponse<Category>>(`/api/v1/experiment-categories/${id}/active`, { revision, active }));
+}
+/** Deletes the category; experiments inside it move to replacementCategoryId (empty means uncategorized). */
+export async function deleteCategory(id: string, replacementCategoryId?: string) {
+  await httpClient.delete(`/api/v1/experiment-categories/${id}`, {
+    params: replacementCategoryId ? { replacementCategoryId } : undefined,
+  });
 }
 export interface StagedFile {
   fileId: string;

@@ -49,8 +49,8 @@ public class MyBatisCommunicationRecordRepository implements CommunicationRecord
     }
 
     @Override
-    public boolean deleteCommunication(UUID id, long version) {
-        return mapper.deleteCommunication(id, version) == 1;
+    public boolean deleteCommunication(UUID id, long version, String operator) {
+        return mapper.deleteCommunication(id, version, operator) == 1;
     }
 
     private static CommunicationRecord toDomain(CommunicationRow r) {

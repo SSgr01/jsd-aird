@@ -357,7 +357,7 @@ function NewDocumentModal({ open, projectLabel, projectId, onCancel, onCreate, o
           fileObjectId,
         });
         await onImported();
-        message.success('文件已上传至 MinIO，解析并保存为项目文档');
+        message.success('文件已上传');
       } else {
         await onCreate({
           title: values.title?.trim() || selectedTpl?.name || file?.name || '未命名文档',
@@ -505,7 +505,7 @@ function NewDocumentModal({ open, projectLabel, projectId, onCancel, onCreate, o
                 {uploading ? '上传中…' : `已选择：${file.name}`}
               </div>
             ) : (
-              <div className="pm-new-doc-tip">支持 DOCX、XLSX；文件将上传到 MinIO，解析后保存为项目文档。</div>
+              <div className="pm-new-doc-tip">支持 DOCX、XLSX。</div>
             )}
           </Form.Item>
         )}

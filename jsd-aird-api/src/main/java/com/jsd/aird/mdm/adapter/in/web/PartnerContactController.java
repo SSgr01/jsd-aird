@@ -61,6 +61,15 @@ public class PartnerContactController {
         return ok(null);
     }
 
+    @DeleteMapping("/{id}/contacts/{contactId}")
+    @Operation(summary = "删除联系人", description = "按版本号逻辑删除联系人（置 deleted=true，并记录删除时间与操作人），而不是修改状态")
+    public ApiResponse<Void> deleteContact(@Parameter(description = "公司 ID") @PathVariable UUID id,
+                                          @Parameter(description = "联系人 ID") @PathVariable UUID contactId,
+                                          @RequestParam @PositiveOrZero long version) {
+        service.deleteContact(id, contactId, version);
+        return ok(null);
+    }
+
     @GetMapping("/{id}/contacts/projects")
     @Operation(summary = "查询联系人-项目关联向量", description = "通过 partner_contact_project 关联表，获取指定公司下每个联系人所关联的项目向量数据")
     public ApiResponse<List<ContactProjectVector>> findContactProjectVectors(

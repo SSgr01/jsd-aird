@@ -6,7 +6,7 @@ import { Can } from '@/components/auth/Can';
 import { createProjectExperiment, deleteProjectExperiment, listProjectExperiments, type ExperimentSummary } from '@/services/experiments/experiment-api';
 import { projectTemplateApi, type ProjectTemplateOption } from '@/services/project/project-template-api';
 import {
-  createProjectTask, deleteProjectTask, getProjectStages, getProjectTask, getStageTasks,
+  createProjectTask, deleteProjectTask, getProjectTask, getStageTasks,
   updateProjectTask,
   projectPriorities, type ProjectPriority, type ProjectStage, type ProjectTask,
 } from '@/services/project/project-api';
@@ -42,10 +42,13 @@ interface TaskFormValues {
   status: string;
 }
 
-export function ProjectTaskBoard({ projectId, stage, onTaskSaved }: {
+export function ProjectTaskBoard({ projectId, stage, stages, onTaskSaved }: {
   projectId: string;
   stage: ProjectStage;
-  onTaskSaved?: (stageId: string) => void | Promise<void>;
+  // 阶段列表由 ProjectStageBoard 统一维护（新增/删除/排序后都会刷新），
+  // 这里直接复用，避免任务面板自己只按 projectId 拉一次快照导致新阶段不可选。
+  stages: ProjectStage[];
+  onTaskSaved?: () => void | Promise<void>;
 }) {
   const nav = useNavigate();
   const location = useLocation();
@@ -62,7 +65,6 @@ export function ProjectTaskBoard({ projectId, stage, onTaskSaved }: {
   const [templates, setTemplates] = useState<ProjectTemplateOption[]>([]);
   const [templatesLoading, setTemplatesLoading] = useState(false);
 
-  const [stages, setStages] = useState<ProjectStage[]>([]);
   const [experimentTasks, setExperimentTasks] = useState<ProjectTask[]>([]);
   const [searchParams] = useSearchParams();
   const focusedTaskId = searchParams.get('taskId');
@@ -91,7 +93,6 @@ export function ProjectTaskBoard({ projectId, stage, onTaskSaved }: {
       focusedTaskRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
   }, [focusedTaskId, tasks]);
-  useEffect(() => { void getProjectStages(projectId).then(setStages).catch(() => setStages([])); }, [projectId]);
   const refreshExperiments = useCallback(async (taskId = selected?.id) => {
     if (!taskId) {
       setExperiments([]);
@@ -208,9 +209,11 @@ export function ProjectTaskBoard({ projectId, stage, onTaskSaved }: {
         stageId: values.stageId, name: values.name.trim(), owner: values.owner?.trim() || '',
         priority: values.priority, plannedDate: values.plannedDate.format('YYYY-MM-DD'), status: values.status,
       };
-      const savedTask = editingTask
-        ? await updateProjectTask(editingTask.id, { ...payload, version: editingTask.version })
-        : await createProjectTask(projectId, payload);
+      if (editingTask) {
+        await updateProjectTask(editingTask.id, { ...payload, version: editingTask.version });
+      } else {
+        await createProjectTask(projectId, payload);
+      }
       messageApi.success(editingTask ? '任务已更新' : '任务已创建并记录日志');
       setTaskOpen(false);
       taskForm.resetFields();
@@ -218,7 +221,8 @@ export function ProjectTaskBoard({ projectId, stage, onTaskSaved }: {
       // The stage-level callback refreshes stage metadata (for example task
       // counts), but it does not remount this board. Always reload the task
       // list here so a newly created/updated task is visible immediately.
-      if (onTaskSaved) await onTaskSaved(savedTask.stageId);
+      // 回调只刷新阶段统计，不会把当前阶段切到任务所属阶段（编辑任务换阶段时保持用户当前视图）。
+      if (onTaskSaved) await onTaskSaved();
       await load();
     } catch (reason) {
       messageApi.error(reason instanceof Error ? reason.message : '保存失败');

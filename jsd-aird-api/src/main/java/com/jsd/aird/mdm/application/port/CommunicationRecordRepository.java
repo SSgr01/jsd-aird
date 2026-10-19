@@ -15,5 +15,5 @@ public interface CommunicationRecordRepository {
 
     boolean updateCommunication(CommunicationRecord record, String operator);
 
-    boolean deleteCommunication(UUID id, long version);
+    boolean deleteCommunication(UUID id, long version, String operator);
 }

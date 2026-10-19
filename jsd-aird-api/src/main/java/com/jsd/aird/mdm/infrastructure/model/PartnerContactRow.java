@@ -5,5 +5,6 @@ import java.util.UUID;
 
 public record PartnerContactRow(UUID id, UUID partnerId, String name, String department, String title, String phone,
                                 String email, String status, String assignedProjectIds, String members, String wechat,
-                                String customFields, long version, Instant createdAt, Instant updatedAt) {
+                                String customFields, long version, Instant createdAt, Instant updatedAt,
+                                boolean deleted, Instant deletedAt, String deletedBy) {
 }

@@ -167,12 +167,10 @@ export function ProjectStageBoard({ projectId }: { projectId: string }) {
     void saveOrder(next);
   };
 
-  const handleTaskSaved = useCallback(async (stageId: string) => {
-    const data = await load();
-    if (data?.some(({ id }) => id === stageId)) {
-      setSelectedStageId(stageId);
-      setCollapsedStageId(undefined);
-    }
+  // 任务保存后只刷新阶段统计（任务数/实验数等），不切换当前阶段：
+  // 编辑任务换了阶段也停留在用户当前查看的阶段，避免视图被自动带走。
+  const handleTaskSaved = useCallback(async () => {
+    await load();
   }, [load]);
 
   return (
@@ -261,6 +259,7 @@ export function ProjectStageBoard({ projectId }: { projectId: string }) {
         <ProjectTaskBoard
           projectId={projectId}
           stage={stages.find(({ id }) => id === selectedStageId)!}
+          stages={stages}
           onTaskSaved={handleTaskSaved}
         />
       ) : null}

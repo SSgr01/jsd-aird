@@ -53,7 +53,7 @@ public class CustomerRequirementController {
     }
 
     @DeleteMapping("/requirements/{id}")
-    @Operation(summary = "删除客户需求", description = "按版本号删除客户需求，历史审计记录继续保留")
+    @Operation(summary = "删除客户需求", description = "按版本号逻辑删除客户需求（置 deleted=true），不修改状态，历史审计记录继续保留")
     ApiResponse<Void> deleteRequirement(@Parameter(description = "需求 ID") @PathVariable UUID id,
                                         @RequestParam @PositiveOrZero long version) {
         service.deleteRequirement(id, version);

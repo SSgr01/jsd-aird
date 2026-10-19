@@ -8,9 +8,9 @@ import type { Communication, CommunicationInput, Requirement, RequirementInput }
 import { getProjects } from '@/services/project/project-api';
 import type { Project } from '@/services/project/project-api';
 import {
-  changeContactStatus,
   createContact,
   createPartner,
+  deleteContact,
   getPartnerContacts,
   updateContact,
   updatePartner,
@@ -244,7 +244,7 @@ function CustomerModal({ partner, open, onClose, onSaved }: Omit<Props, 'mode'>)
         for (const contact of loadedContacts.filter(
           (item) => item.status === 'ACTIVE' && !people.some((person) => person.id === item.id),
         ))
-          await changeContactStatus(partner.id, contact);
+          await deleteContact(partner.id, contact.id, contact.version);
       form.resetFields();
       setPeople([]);
     setNameTouched(false);

@@ -53,7 +53,7 @@ public class CommunicationRecordController {
     }
 
     @DeleteMapping("/communications/{id}")
-    @Operation(summary = "删除沟通记录", description = "删除指定沟通记录（需携带版本号）")
+    @Operation(summary = "删除沟通记录", description = "按版本号逻辑删除沟通记录（置 deleted=true，并记录删除时间与操作人），而不是修改状态")
     ApiResponse<Void> deleteCommunication(@Parameter(description = "沟通记录 ID") @PathVariable UUID id,
                                            @RequestParam @PositiveOrZero Long version) {
         service.deleteCommunication(id, version);

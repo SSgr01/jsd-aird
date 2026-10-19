@@ -17,11 +17,13 @@ public interface BusinessPartnerMapper {
 
     String SELECT_COLUMNS = "SELECT p.id, p.partner_code partnerCode, p.name, p.industry, p.address, " +
         "p.status, p.remark, p.customer_level customerLevel, p.cooperation_status cooperationStatus, " +
-        "p.main_business mainBusiness, p.custom_fields::text customFields, p.version, p.created_at createdAt, p.updated_at updatedAt " +
+        "p.main_business mainBusiness, p.custom_fields::text customFields, p.version, p.created_at createdAt, p.updated_at updatedAt, " +
+        "p.deleted, p.deleted_at deletedAt, p.deleted_by deletedBy " +
         "FROM mdm.business_partner p ";
 
     @Select("<script>" + SELECT_COLUMNS +
-        "WHERE 1=1 <if test='keyword != null and keyword != &quot;&quot;'> AND (p.partner_code ILIKE concat('%',#{keyword},'%') OR p.name ILIKE concat('%',#{keyword},'%') OR EXISTS (SELECT 1 FROM mdm.partner_contact c WHERE c.partner_id=p.id AND c.status='ACTIVE' AND c.name ILIKE concat('%',#{keyword},'%')))</if>" +
+        "WHERE 1=1 AND p.deleted = false " +
+        "<if test='keyword != null and keyword != &quot;&quot;'> AND (p.partner_code ILIKE concat('%',#{keyword},'%') OR p.name ILIKE concat('%',#{keyword},'%') OR EXISTS (SELECT 1 FROM mdm.partner_contact c WHERE c.partner_id=p.id AND c.status='ACTIVE' AND c.name ILIKE concat('%',#{keyword},'%')))</if>" +
         "<if test='industry != null and industry != &quot;&quot;'> AND p.industry=#{industry}</if>" +
         "<if test='customerLevel != null and customerLevel != &quot;&quot;'> AND p.customer_level=#{customerLevel}</if>" +
         "<if test='cooperationStatus != null and cooperationStatus != &quot;&quot;'> AND p.cooperation_status=#{cooperationStatus}</if>" +
@@ -49,7 +51,7 @@ public interface BusinessPartnerMapper {
         LEFT JOIN (
             SELECT partner_id, COUNT(*) AS req_count
             FROM mdm.customer_requirement
-            WHERE status <![CDATA[<>]]> 'CANCELLED'
+            WHERE deleted = false AND status <![CDATA[<>]]> 'CANCELLED'
             GROUP BY partner_id
         ) req ON req.partner_id = bp.id
         LEFT JOIN (
@@ -79,7 +81,7 @@ public interface BusinessPartnerMapper {
         """)
     List<PartnerStatsRow> selectPartnerStats(@Param("ids") List<UUID> ids);
 
-    @Select("<script>SELECT count(*) FROM mdm.business_partner p WHERE 1=1 " +
+    @Select("<script>SELECT count(*) FROM mdm.business_partner p WHERE 1=1 AND p.deleted = false " +
         "<if test='keyword != null and keyword != &quot;&quot;'> AND (p.partner_code ILIKE concat('%',#{keyword},'%') OR p.name ILIKE concat('%',#{keyword},'%') OR EXISTS (SELECT 1 FROM mdm.partner_contact c WHERE c.partner_id=p.id AND c.status='ACTIVE' AND c.name ILIKE concat('%',#{keyword},'%')))</if>" +
         "<if test='industry != null and industry != &quot;&quot;'> AND p.industry=#{industry}</if>" +
         "<if test='customerLevel != null and customerLevel != &quot;&quot;'> AND p.customer_level=#{customerLevel}</if>" +
@@ -93,7 +95,7 @@ public interface BusinessPartnerMapper {
                @Param("owner") String owner,
                @Param("status") String status);
 
-    @Select(SELECT_COLUMNS + "WHERE p.id=#{id} GROUP BY p.id")
+    @Select(SELECT_COLUMNS + "WHERE p.id=#{id} AND p.deleted = false GROUP BY p.id")
     Optional<BusinessPartnerRow> findById(@Param("id") UUID id);
 
     @Select("<script>SELECT EXISTS(SELECT 1 FROM mdm.business_partner WHERE normalized_name=#{name} <if test='excludedId != null'>AND id != #{excludedId}</if>)</script>")
@@ -118,7 +120,12 @@ public interface BusinessPartnerMapper {
     @Update("UPDATE mdm.business_partner SET status=#{status},version=version+1,updated_at=now(),updated_by=#{operator} WHERE id=#{id} AND version=#{version}")
     int updateStatus(@Param("id") UUID id, @Param("status") String status, @Param("version") long version, @Param("operator") String operator);
 
-    @Select("SELECT id,partner_id partnerId,name,department,title,phone,email,status,assigned_project_ids::text assignedProjectIds,members,wechat,custom_fields::text customFields,version,created_at createdAt,updated_at updatedAt FROM mdm.partner_contact WHERE partner_id=#{partnerId} ORDER BY status,created_at")
+    @Update("UPDATE mdm.business_partner SET deleted=true, deleted_at=now(), deleted_by=#{operator}, " +
+        "version=version+1, updated_at=now(), updated_by=#{operator} " +
+        "WHERE id=#{id} AND version=#{version} AND deleted=false")
+    int softDelete(@Param("id") UUID id, @Param("version") long version, @Param("operator") String operator);
+
+    @Select("SELECT id,partner_id partnerId,name,department,title,phone,email,status,assigned_project_ids::text assignedProjectIds,members,wechat,custom_fields::text customFields,version,created_at createdAt,updated_at updatedAt,deleted,deleted_at deletedAt,deleted_by deletedBy FROM mdm.partner_contact WHERE partner_id=#{partnerId} AND deleted = false ORDER BY status,created_at")
     List<PartnerContactRow> findContacts(@Param("partnerId") UUID partnerId);
 
     @Insert("INSERT INTO mdm.partner_contact(id,partner_id,name,department,title,phone,email,status,assigned_project_ids,members,wechat,custom_fields,version,created_at,updated_at,created_by,updated_by) VALUES(#{id},#{partnerId},#{name},#{department},#{title},#{phone},#{email},'ACTIVE',CAST(#{assignedProjectIds} AS jsonb),#{members},#{wechat},CAST(#{customFields} AS jsonb),0,#{now},#{now},#{operator},#{operator})")
@@ -161,12 +168,12 @@ public interface BusinessPartnerMapper {
         FROM mdm.partner_contact pc
         JOIN mdm.partner_contact_project pcp ON pcp.contact_id = pc.id
         JOIN mdm.project p ON p.id = pcp.project_id AND p.deleted = false
-        WHERE pc.partner_id = #{partnerId} AND pc.status = 'ACTIVE'
+        WHERE pc.partner_id = #{partnerId} AND pc.status = 'ACTIVE' AND pc.deleted = false
         ORDER BY pc.created_at, p.created_at
         """)
     List<com.jsd.aird.mdm.application.port.ContactProjectVector> findContactProjectVectors(@Param("partnerId") UUID partnerId);
 
-    @Select("SELECT EXISTS (SELECT 1 FROM mdm.partner_contact pc JOIN mdm.partner_contact_project pcp ON pcp.contact_id = pc.id WHERE pc.partner_id = #{partnerId} AND pc.status = 'ACTIVE' AND pcp.project_id = #{projectId})")
+    @Select("SELECT EXISTS (SELECT 1 FROM mdm.partner_contact pc JOIN mdm.partner_contact_project pcp ON pcp.contact_id = pc.id WHERE pc.partner_id = #{partnerId} AND pc.status = 'ACTIVE' AND pc.deleted = false AND pcp.project_id = #{projectId})")
     boolean hasActiveProjectAssignment(@Param("partnerId") UUID partnerId, @Param("projectId") UUID projectId);
 
     @Insert("""
@@ -180,10 +187,16 @@ public interface BusinessPartnerMapper {
     int updateContactStatus(@Param("partnerId") UUID partnerId, @Param("id") UUID id, @Param("status") String status,
                             @Param("version") long version, @Param("operator") String operator);
 
+    @Update("UPDATE mdm.partner_contact SET deleted=true, deleted_at=now(), deleted_by=#{operator}, " +
+        "version=version+1, updated_at=now(), updated_by=#{operator} " +
+        "WHERE id=#{contactId} AND partner_id=#{partnerId} AND version=#{version} AND deleted=false")
+    int softDeleteContact(@Param("partnerId") UUID partnerId, @Param("contactId") UUID contactId,
+                          @Param("version") long version, @Param("operator") String operator);
+
     @Delete("DELETE FROM mdm.partner_contact WHERE partner_id=#{partnerId}")
     void deleteContacts(@Param("partnerId") UUID partnerId);
 
-    @Select("<script>SELECT EXISTS(SELECT 1 FROM mdm.partner_contact WHERE partner_id=#{partnerId} AND status='ACTIVE' " +
+    @Select("<script>SELECT EXISTS(SELECT 1 FROM mdm.partner_contact WHERE partner_id=#{partnerId} AND status='ACTIVE' AND deleted = false " +
         "<choose>" +
         "<when test='phone != null and phone != &quot;&quot;'>AND phone=#{phone}</when>" +
         "<otherwise>AND name=#{name}</otherwise>" +

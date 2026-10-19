@@ -26,6 +26,8 @@ export function ReferenceMaterialsTab({ projectId }: { projectId: string }) {
   const [items, setItems] = useState<ReferenceMaterial[]>([]);
   const [loading, setLoading] = useState(false);
   const [filters, setFilters] = useState<ReferenceMaterialQuery>({ status: 'ACTIVE', page: 1, size: 20 });
+  // 搜索框与查询条件分离：输入过程中不触发请求，回车或点击搜索后才查询。
+  const [keywordInput, setKeywordInput] = useState('');
   const [total, setTotal] = useState(0);
   const [stages, setStages] = useState<ProjectStage[]>([]);
   const [tasks, setTasks] = useState<ProjectTask[]>([]);
@@ -85,7 +87,13 @@ export function ReferenceMaterialsTab({ projectId }: { projectId: string }) {
 
   return <div className="pm-ref-tab">
     <div className="pm-ref-filters">
-      <Input.Search allowClear placeholder="搜索标题、文件名或摘要" style={{ minWidth: 250 }} value={filters.keyword} onChange={(event) => setFilters((current) => ({ ...current, keyword: event.target.value || undefined, page: 1 }))} />
+      <Input.Search allowClear placeholder="搜索标题、文件名或摘要" style={{ minWidth: 250 }} value={keywordInput}
+        onChange={(event) => {
+          const value = event.target.value;
+          setKeywordInput(value);
+          if (!value.trim()) setFilters((current) => ({ ...current, keyword: undefined, page: 1 }));
+        }}
+        onSearch={(value) => setFilters((current) => ({ ...current, keyword: value.trim() || undefined, page: 1 }))} />
       <Select allowClear placeholder="来源" style={{ minWidth: 140 }} options={REFERENCE_SOURCE_OPTIONS} value={filters.source} onChange={(sourceValue) => setFilters((current) => ({ ...current, source: sourceValue, page: 1 }))} />
       <Select allowClear placeholder="阶段" style={{ minWidth: 150 }} options={stages.map((item) => ({ value: item.id, label: item.name }))} value={filters.stageId} onChange={(stageId) => setFilters((current) => ({ ...current, stageId, taskId: undefined, page: 1 }))} />
       <Select allowClear placeholder="任务" style={{ minWidth: 150 }} disabled={!filters.stageId} options={tasks.map((item) => ({ value: item.id, label: item.name }))} value={filters.taskId} onChange={(taskId) => setFilters((current) => ({ ...current, taskId, page: 1 }))} />

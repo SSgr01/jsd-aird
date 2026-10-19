@@ -80,6 +80,14 @@ public class BusinessPartnerService {
         appendAudit(c.status() == PartnerStatus.ACTIVE ? "CUSTOMER_ACTIVATED" : "CUSTOMER_DEACTIVATED", id);
     }
 
+    @Transactional
+    public void deletePartner(UUID id, long version) {
+        requireWrite();
+        get(id);
+        if (!repository.deletePartner(id, version, OPERATOR)) conflict();
+        appendAudit("CUSTOMER_DELETED", id);
+    }
+
     public List<AuditLogFacade.AuditEntry> audits(UUID id) {
         get(id);
         var actor = ActorContext.required();

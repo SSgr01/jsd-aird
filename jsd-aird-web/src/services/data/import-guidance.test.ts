@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { confirmationBlockReason, sheetSummary, templateGroups } from './import-guidance';
+import { confirmationBlockReason, importIssueMessage, requiresTemplateChange, sheetSummary, templateGroups } from './import-guidance';
 import type { DataPreview, DataTemplateOption } from './data-api';
 
 describe('data import guidance', () => {
+  it('directs unreadable template structures back to file/template selection instead of field configuration', () => {
+    expect(requiresTemplateChange('UNMAPPED_FIELD')).toBe(true);
+    expect(requiresTemplateChange('REQUIRED_MISSING')).toBe(false);
+    expect(importIssueMessage('UNMAPPED_FIELD', '字段尚未完成映射')).toContain('重新选择模板或文件');
+    expect(importIssueMessage('REQUIRED_MISSING', '必填字段为空')).toBe('必填字段为空');
+  });
   it('groups published template versions by category and keeps uncategorized versions visible', () => {
     const templates = [
       { versionId: 'a', name: '材料性能', templateCode: 'MAT', versionNo: 2, category: '物料', format: 'XLSX' },

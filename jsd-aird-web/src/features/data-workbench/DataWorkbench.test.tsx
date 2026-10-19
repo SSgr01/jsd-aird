@@ -71,8 +71,8 @@ describe('DataWorkbench', () => {
   it('explains how a staged field is confirmed instead of showing a generic warning', () => {
     render(<DataFieldCard field={{ ...field, valueStatus: 'STAGED' }} active />);
 
-    expect(screen.getByText('待确认映射')).toBeInTheDocument();
-    expect(screen.getByText('请先在“字段映射”中确认字段对应关系。')).toBeInTheDocument();
+    expect(screen.getByText('尚未读取')).toBeInTheDocument();
+    expect(screen.getByText('该处内容尚未可靠读取，请重新解析；仍无法读取时请更换模板或文件。')).toBeInTheDocument();
   });
 
   it('renders a template field once while two imported records browse their own values', () => {

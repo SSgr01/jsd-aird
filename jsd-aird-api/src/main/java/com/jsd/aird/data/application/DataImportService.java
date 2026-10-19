@@ -136,8 +136,15 @@ public class DataImportService {
         var file = files.find(actor.organizationId(), command.sourceFileId())
                 .orElseThrow(() -> new ApiException(ApiErrorCode.FILE_NOT_READY, "数据源文件不存在"));
         var format = sourceFormat(file.originalName());
-        if ("DATA_CENTER".equals(sourceOwner) && Set.of("DOCX", "IMAGE").contains(format)) {
-            throw new ApiException(ApiErrorCode.BAD_REQUEST, "数据中心模板导入仅支持 XLS、XLSX 或 CSV");
+        var templateFormat = template.format();
+        var expectedTemplateFormat = switch (format) {
+            case "DOCX" -> "DOCX";
+            case "XLS", "XLSX", "CSV" -> "XLSX";
+            default -> null;
+        };
+        if (expectedTemplateFormat == null || !expectedTemplateFormat.equals(templateFormat)) {
+            throw new ApiException(ApiErrorCode.VALIDATION_ERROR,
+                    "所选模板格式与文件类型不匹配：Excel / CSV 请选择 Excel 模板，DOCX 请选择 Word 模板；PDF 请使用自由识别");
         }
         var duplicate = repository.findCompletedDuplicate(actor.organizationId(), file.sha256(), command.templateVersionId());
         if (duplicate.isPresent() && !command.duplicateOverride()) {
@@ -562,7 +569,7 @@ public class DataImportService {
             repository.saveParsed(importJobId, parsed.parserVersion(), sheets, mappings, restoreCorrections(rows, previousRows), importJobId);
             // Template bindings already identify the fields. Expose editable, validated values immediately;
             // unresolved mappings remain blockers instead of requiring an extra confirmation for every import.
-            if (!documentSource && "DATA_CENTER".equals(repository.findSourceOwner(organizationId, importJobId).orElse("DATA_CENTER")))
+            if (!documentSource)
                 validateInternal(organizationId, importJobId);
         } catch (RuntimeException exception) {
             repository.updateJobStatus(organizationId, importJobId, "FAILED", 0, "FAILED", safeMessage(exception));
@@ -1418,6 +1425,8 @@ public class DataImportService {
     }
 
     private String safeMessage(Throwable error) {
+        if (error instanceof ApiException api && api.errorCode() == ApiErrorCode.VALIDATION_ERROR)
+            return api.getMessage();
         if (isDataConflict(error)) return "导入数据结构存在冲突，请检查模板区域后重新导入";
         if (error instanceof IllegalArgumentException) return "导入文件或模板配置无效，请检查后重新导入";
         return "文件解析失败，请检查文件内容后重试";

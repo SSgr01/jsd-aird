@@ -6,18 +6,17 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.shared.data.MeasurementValueParser;
 
-import java.nio.charset.StandardCharsets;
 import java.text.Normalizer;
 import java.util.*;
 
 /** A report is a source document; samples, not documents, are learning observations. */
 public final class HistorySampleProjection {
-    public static final int VERSION = 3;
+    public static final int VERSION = 4;
     private final ObjectMapper json;
     public HistorySampleProjection(ObjectMapper json) { this.json = json; }
 
-    public ObjectNode dataset(UUID org, UUID datasetId, String name, List<OptimizationRepository.HistoryRecordRow> records,
-                              Map<String,String> fieldNames, Map<String,String> materialIds) {
+    public ObjectNode dataset(UUID datasetId, String name, List<OptimizationRepository.HistoryRecordRow> records,
+                              Map<String,String> fieldNames, MaterialCatalogSnapshot materialCatalog) {
         var out=json.createObjectNode().put("id",datasetId.toString()).put("name",name).put("projectionVersion",VERSION);
         out.set("sourceDatasetIds",json.valueToTree(List.of(datasetId.toString())));
         var rows=out.putArray("rows");var issues=out.putArray("issues");
@@ -49,21 +48,31 @@ public final class HistorySampleProjection {
                     if(formula) {
                         var identity=text(item,"materialCode","code","materialName","name","materialId");
                         if(identity.isBlank())continue;
-                        var materialId=canonicalMaterialId(text(item,"materialId"));
+                        var suppliedId=canonicalMaterialId(text(item,"materialId"));
+                        if(!materialCatalog.validIds().contains(suppliedId))suppliedId="";
                         var materialCode=text(item,"materialCode","code");
-                        if(materialId.isBlank())materialId=canonicalMaterialId(materialIds.get(materialCode));
-                        if(materialId.isBlank())materialId=UUID.nameUUIDFromBytes((org+":material:"+
-                                (materialCode.isBlank()?datasetId+":"+normal(identity):normal(materialCode)))
-                                .getBytes(StandardCharsets.UTF_8)).toString();
+                        var materialCodeId=canonicalMaterialId(materialCode);
+                        var codeId=!materialCodeId.isBlank()
+                                ? materialCatalog.validIds().contains(materialCodeId)?materialCodeId:null
+                                : materialCatalog.resolve(materialCode);
+                        boolean identityConflict=!suppliedId.isBlank()&&!materialCode.isBlank()
+                                &&(codeId==null||!suppliedId.equals(codeId));
+                        var materialId=identityConflict?"":!suppliedId.isBlank()?suppliedId:Objects.toString(codeId,"");
+                        var basis=text(item,"compositionBasis","basis");
                         column.put("semanticType","MATERIAL_RATIO")
-                                .put("mappingStatus","MAPPED")
-                                .put("materialCode",text(item,"materialCode","code","materialName","name"))
-                                .put("compositionBasis",text(item,"compositionBasis","basis"));
-                        column.put("materialId",materialId);
-                        if(column.path("compositionBasis").asText().isBlank())column.put("compositionBasis",unit.equals("%")?"MASS_PERCENT":"UNSPECIFIED");
-                        code="formula:"+materialId;
-                        if(!"MASS_PERCENT".equals(column.path("compositionBasis").asText())||!Set.of("","%","PERCENT").contains(unit))
-                            code+="|"+normal(unit)+"|"+normal(column.path("compositionBasis").asText());
+                                .put("mappingStatus",materialId.isBlank()?"UNMAPPED":"MAPPED")
+                                .put("compositionBasis",basis.isBlank()?"UNSPECIFIED":basis);
+                        if(!materialId.isBlank()) {
+                            var canonicalCode=materialCatalog.code(materialId);
+                            column.put("materialId",materialId).put("materialCode",Objects.toString(canonicalCode,materialCode));
+                            code="formula:"+materialId;
+                            if(!"MASS_PERCENT".equals(basis)||!Set.of("%","PERCENT").contains(unit))
+                                code+="|"+normal(unit)+"|"+normal(basis.isBlank()?"UNSPECIFIED":basis);
+                        } else {
+                            column.put("materialCode",materialCode);
+                            code="ratio-unmapped:"+datasetId+":"+normal(materialCode.isBlank()?identity:materialCode)
+                                    +"|"+normal(unit)+"|"+normal(basis);
+                        }
                         var ratioName=label.endsWith("比例")?label:label+"比例";
                         column.put("name",ratioName);
                     } else {

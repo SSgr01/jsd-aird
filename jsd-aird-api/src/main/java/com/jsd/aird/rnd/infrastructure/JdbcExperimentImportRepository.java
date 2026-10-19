@@ -35,6 +35,21 @@ public class JdbcExperimentImportRepository implements ExperimentImportRepositor
                 stageId, taskId, visibility, actorId);
     }
 
+    @Override public void lockSource(UUID org, UUID fileId) {
+        var found = jdbc.queryForList("SELECT id FROM ops.file_object WHERE organization_id=? AND id=? AND status <> 'DELETED' FOR UPDATE", UUID.class, org, fileId);
+        if (found.isEmpty()) throw new com.jsd.aird.shared.error.ApiException(com.jsd.aird.shared.error.ApiErrorCode.NOT_FOUND,"原文件不存在");
+    }
+    @Override public Optional<Job> findContentImport(UUID org, UUID fileId) {
+        return jdbc.queryForList("SELECT id FROM rnd.experiment_import_job WHERE organization_id=? AND source_file_id=? AND import_options_jsonb->>'processingMode'='CONTENT_ONLY' ORDER BY created_at DESC LIMIT 1", UUID.class,org,fileId).stream().findFirst().flatMap(id -> find(org,id));
+    }
+    @Override public void saveOptions(UUID org, UUID id, JsonNode options) {
+        jdbc.update("UPDATE rnd.experiment_import_job SET import_options_jsonb=? WHERE organization_id=? AND id=?",json(options),org,id);
+    }
+    @Override public JsonNode options(UUID org, UUID id) {
+        var values=jdbc.queryForList("SELECT import_options_jsonb::text FROM rnd.experiment_import_job WHERE organization_id=? AND id=?",String.class,org,id);
+        try { return objectMapper.readTree(values.isEmpty()?"{}":values.getFirst()); }
+        catch (JsonProcessingException e) { throw new IllegalStateException(e); }
+    }
     @Override
     public void complete(UUID id, UUID experimentId, JsonNode parseResult) {
         jdbc.update("UPDATE rnd.experiment_import_job SET status='COMPLETED', experiment_id=?, parse_result_jsonb=?, updated_at=now() WHERE id=? AND status='PARSING'",

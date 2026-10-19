@@ -161,7 +161,7 @@ export function DataFieldCard({ field, active, onSelect, extra, children }: Fiel
           {!field.excluded && field.valueStatus !== 'VALID' ? (
             <Typography.Text type="warning">
               {field.valueStatus === 'STAGED'
-                ? '请先在“字段映射”中确认字段对应关系。'
+                ? '该处内容尚未可靠读取，请重新解析；仍无法读取时请更换模板或文件。'
                 : field.editable
                   ? '请直接修改左侧单元格，保存后系统会重新校验。'
                   : '该字段不能直接修正，请检查原文件或排除整条记录。'}
@@ -442,7 +442,7 @@ function valueTypeLabel(value?: string) {
 function fieldStatusLabel(status?: string) {
   switch ((status || '').toUpperCase()) {
     case 'VALID': return '校验通过';
-    case 'STAGED': return '待确认映射';
+    case 'STAGED': return '尚未读取';
     case 'WAITING_CONFIRM': return '待确认提交';
     case 'BLOCKED': return '需修正';
     default: return '待确认';

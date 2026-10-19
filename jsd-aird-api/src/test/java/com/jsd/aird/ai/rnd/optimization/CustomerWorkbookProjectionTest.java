@@ -53,11 +53,15 @@ class CustomerWorkbookProjectionTest {
         var source=new SourceImport(UUID.randomUUID(),UUID.randomUUID(),path.getFileName().toString(),"file-hash",datasetId,9,"contract-hash","COMPLETED","EXPERIMENT",null,UUID.randomUUID(),Instant.EPOCH,sourceRecords);
         var assembled=new ExperimentImportAssembler(json).assemble(source,json.createObjectNode());
         var model=assembled.candidates().getFirst().editModel();
-        var result=new HistorySampleProjection(json).dataset(UUID.randomUUID(),datasetId,"应用配方",List.of(new OptimizationRepository.HistoryRecordRow(UUID.randomUUID(),UUID.randomUUID(),"REPORT","应用配方",model,Instant.EPOCH)),Map.of(),Map.of());
+        var result=new HistorySampleProjection(json).dataset(datasetId,"应用配方",List.of(new OptimizationRepository.HistoryRecordRow(UUID.randomUUID(),UUID.randomUUID(),"REPORT","应用配方",model,Instant.EPOCH)),Map.of(),MaterialCatalogSnapshot.empty());
         assertThat(result.path("rowCount").asInt()).isEqualTo(12);
         assertThat(result.path("rows").findValuesAsText("sampleNo")).doesNotHaveDuplicates();
         var materials=new ArrayList<String>();
-        for(var column:result.path("columns"))if(column.has("materialId"))materials.add(column.path("code").asText());
+        for(var column:result.path("columns"))if("MATERIAL_RATIO".equals(column.path("semanticType").asText())) {
+            assertThat(column.path("mappingStatus").asText()).isEqualTo("UNMAPPED");
+            assertThat(column.has("materialId")).isFalse();
+            materials.add(column.path("code").asText());
+        }
         assertThat(materials).hasSize(9);
         for(var row:result.path("rows")) {
             double total=materials.stream().mapToDouble(code->row.path("values").path(code).asDouble()).sum();

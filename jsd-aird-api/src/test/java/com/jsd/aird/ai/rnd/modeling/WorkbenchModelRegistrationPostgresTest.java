@@ -36,10 +36,16 @@ class WorkbenchModelRegistrationPostgresTest {
                 var store=mock(FormulaModelArtifactStore.class);
                 when(store.verify(anyString(),anyString(),anyString())).thenAnswer(call->new FormulaModelArtifactStore.StoredArtifact(call.getArgument(0),call.getArgument(1),100,"application/zip"));
                 var service=new WorkbenchModelRegistrationService(jdbc,json,new ConfigurationHashing(json),store,mock(AuditLogFacade.class));
-                var a="formula:"+UUID.randomUUID();var b="formula:"+UUID.randomUUID();var id=UUID.randomUUID();
+                var materialA=UUID.randomUUID();var materialB=UUID.randomUUID();
+                jdbc.update("INSERT INTO mdm.material(id,code,name,category,source_category,source_module,created_by,updated_by) VALUES(?,?,?,'RESIN','TEST','AI',?,?),(?,?,?,'ADDITIVE','TEST','AI',?,?)",
+                        materialA,"WB-TEST-"+materialA,"测试树脂",actor.userId().toString(),actor.userId().toString(),
+                        materialB,"WB-TEST-"+materialB,"测试助剂",actor.userId().toString(),actor.userId().toString());
+                var a="formula:"+materialA;var b="formula:"+materialB;var id=UUID.randomUUID();
                 var request=json.createObjectNode();var xs=request.putArray("xColumns");
-                xs.addObject().put("code",a).put("name","树脂 A比例").put("kind","NUMERIC").put("unit","%");
-                xs.addObject().put("code",b).put("name","树脂 B比例").put("kind","NUMERIC").put("unit","%");
+                xs.addObject().put("code",a).put("name","树脂 A比例").put("kind","NUMERIC").put("unit","%")
+                        .put("semanticType","MATERIAL_RATIO").put("mappingStatus","MAPPED").put("materialId",a.substring(8)).put("materialCode","R-1").put("compositionBasis","MASS_PERCENT");
+                xs.addObject().put("code",b).put("name","树脂 B比例").put("kind","NUMERIC").put("unit","%")
+                        .put("semanticType","MATERIAL_RATIO").put("mappingStatus","MAPPED").put("materialId",b.substring(8)).put("materialCode","R-2").put("compositionBasis","MASS_PERCENT");
                 request.putObject("yColumn").put("code","wear").put("name","耐磨次数").put("kind","NUMERIC");
                 var rows=request.putArray("rows");for(int i=0;i<8;i++)rows.addObject().put("id","row-"+i).putObject("values").put(a,20+i).put(b,80-i).put("wear",100+i*10);
                 var result=json.createObjectNode().put("rowCount",8);result.putObject("metrics").put("selectedAlgorithm","LINEAR_REGRESSION").put("mae",0.5);
@@ -51,6 +57,8 @@ class WorkbenchModelRegistrationPostgresTest {
                 var binding=repository.targetBindings(actor.organizationId(),List.of(target)).getFirst();
                 assertThat(binding.frozenDictionary().path("compositionStatus").asText()).isEqualTo("COMPLETE");
                 assertThat(binding.frozenDictionary().path("materials").size()).isEqualTo(2);
+                assertThat(binding.frozenInputScheme().path("fields").get(0).path("semanticType").asText()).isEqualTo("MATERIAL_RATIO");
+                assertThat(binding.frozenInputScheme().path("fields").get(0).path("mappingStatus").asText()).isEqualTo("MAPPED");
                 var restored=repository.targetBindings(actor.organizationId(),List.of(target)).getFirst();
                 assertThat(restored.frozenDictionary().path("compositionStatus").asText()).isEqualTo("COMPLETE");
                 assertThat(restored.frozenDictionary().path("materials").get(0).path("materialId").asText()).isEqualTo(a.substring(8));

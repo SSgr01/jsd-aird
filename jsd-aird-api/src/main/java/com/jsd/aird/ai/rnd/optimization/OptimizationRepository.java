@@ -11,6 +11,7 @@ import java.sql.SQLException;
 import java.time.Instant;
 import java.util.List;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -86,12 +87,30 @@ public class OptimizationRepository {
                 r.getString("experiment_no"),r.getString("title"),read(r,"edit_model_jsonb"),instant(r,"created_at")),org,templateVersionId);
     }
 
-    public Map<String,String> materialIds(UUID organizationId) {
-        var ids=new LinkedHashMap<String,String>();
+    public MaterialCatalogSnapshot materialCatalog(UUID organizationId) {
+        var identities=new LinkedHashMap<String,String>();
+        var codesById=new LinkedHashMap<String,String>();
+        var validIds=new LinkedHashSet<String>();
         jdbc.query("SELECT code,id FROM mdm.material WHERE status<>'RETIRED'",
                 (rs,n)->Map.entry(rs.getString(1),rs.getObject(2).toString()))
-                .forEach(entry->ids.put(entry.getKey(),entry.getValue()));
-        return ids;
+                .forEach(entry->{
+                    var code=entry.getKey();var id=entry.getValue();validIds.add(id);codesById.put(id,code);
+                    addMaterialIdentity(identities,code,id);
+                });
+        jdbc.query("""
+                SELECT a.normalized_alias,a.material_id
+                FROM mdm.material_alias a JOIN mdm.material m ON m.id=a.material_id
+                WHERE a.organization_id=? AND a.status='ACTIVE' AND m.status<>'RETIRED'
+                """,(rs,n)->Map.entry(rs.getString(1),rs.getObject(2).toString()),organizationId)
+                .forEach(entry->addMaterialIdentity(identities,entry.getKey(),entry.getValue()));
+        return new MaterialCatalogSnapshot(identities,codesById,validIds);
+    }
+
+    private void addMaterialIdentity(Map<String,String> identities,String identity,String materialId) {
+        var key=com.jsd.aird.ai.rnd.modeling.ConfigurationHashing.normalizeAlias(identity);
+        if(key.isBlank())return;
+        var existing=identities.putIfAbsent(key,materialId);
+        if(existing!=null&&!existing.equals(materialId))identities.put(key,"");
     }
 
     public Map<String,String> historyFieldNames(UUID organizationId) {

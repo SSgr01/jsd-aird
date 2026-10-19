@@ -41,7 +41,7 @@ public class ExperimentImportController {
         return ok(service.importFile(new ExperimentImportService.Command(
                 request.fileId(), request.fileName(), request.sha256(), request.format(),
                 request.categoryId(), request.categoryName(), request.projectId(), request.stageId(),
-                request.taskId(), request.experimentDate(), request.visibility(), request.duplicateOverride())));
+                request.taskId(), request.experimentDate(), request.visibility(), request.duplicateOverride(), request.processingMode(), request.title(), request.ownerName())));
     }
 
     @GetMapping
@@ -79,5 +79,5 @@ public class ExperimentImportController {
                                 UUID categoryId, String categoryName, UUID projectId,
                                 UUID stageId, UUID taskId, LocalDate experimentDate,
                                 String visibility, String recognitionMode,
-                                UUID templateVersionId, boolean duplicateOverride) {}
+                                UUID templateVersionId, boolean duplicateOverride, String processingMode, String title, String ownerName) {}
 }

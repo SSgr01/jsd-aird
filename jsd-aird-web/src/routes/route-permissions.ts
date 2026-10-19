@@ -159,7 +159,6 @@ export function requiredPermissionForPath(pathname: string): string | undefined 
   if (path.startsWith('/research-test')) return 'research-test.report.view';
   if (path.startsWith('/knowledge/review')) return 'knowledge.review';
   if (path.startsWith('/knowledge')) return 'knowledge.view';
-  if (path.startsWith('/template-imports/')) return 'template.upload';
   if (path === '/templates/upload') return 'template.upload';
   if (path.startsWith('/templates') || path.startsWith('/render/import')) return 'template.view';
   if (path.startsWith('/production-orders')) return 'production.view';
@@ -193,7 +192,6 @@ export function requiredMenuForPath(pathname: string): string | undefined {
   if (path.startsWith('/knowledge/review')) return 'knowledge.review';
   if (path.startsWith('/knowledge/library') || path.startsWith('/knowledge/upload-tasks/')) return 'knowledge.upload';
   if (path.startsWith('/knowledge')) return 'knowledge.view';
-  if (path.startsWith('/template-imports/')) return 'template.upload';
   if (path.startsWith('/templates/upload')) return 'template.upload';
   if (path.startsWith('/templates') || path.startsWith('/render/import')) return 'template.view';
   if (path.startsWith('/quality/upload')) return 'quality.upload';

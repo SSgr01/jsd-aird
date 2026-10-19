@@ -19,7 +19,7 @@ import type {
   ExperimentSemanticStatus,
   ExperimentListProjection,
 } from '@/features/template-workspace/types';
-import { httpClient } from '@/services/http/client';
+import { httpClient, LARGE_PAYLOAD_TIMEOUT } from '@/services/http/client';
 
 export interface CreateTemplateInput {
   name: string;
@@ -869,7 +869,7 @@ export const templateApi = {
       originalFormat: 'XLSX' | 'DOCX' | 'XLS' | 'CSV' | 'DOC'; normalizedFormat: TemplateFormat;
       normalizationStatus: 'PASSTHROUGH' | 'NORMALIZED'; normalizationMessage: string;
       originalSha256: string; normalizedSha256: string;
-    }>>('/api/v1/template-files/staged', body);
+    }>>('/api/v1/template-files/staged', body, { timeout: LARGE_PAYLOAD_TIMEOUT });
     return response.data.data;
   },
 

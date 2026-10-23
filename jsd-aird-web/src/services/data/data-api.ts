@@ -2,7 +2,6 @@ import type { ApiResponse, PageResponse } from '@/types/api';
 import { httpClient } from '@/services/http/client';
 import { fetchFileBlob, fetchFilePreviewBlob } from '@/services/files';
 import type { ProjectRelationTarget, RelatedProjectView } from '@/services/project/project-resource-api';
-import type { RecognitionJob } from '@/services/source-recognition';
 
 export interface DataTemplateOption {
   templateId: string;
@@ -84,14 +83,6 @@ export const dataApi = {
   },
   async createExperimentJob(input: { sourceFileId: string; templateVersionId: string; categoryId?: string; duplicateOverride?: boolean; projectRelations?: ProjectRelationTarget[]; importPurpose: 'EXPERIMENT_DRAFT'; targetExperimentCategoryId: string }) {
     const response = await httpClient.post<ApiResponse<DataJob>>('/api/v1/data/experiment-import-jobs', input); return response.data.data;
-  },
-  async createRecognitionJob(input: { sourceFileId: string; sourceFormat?: string; recognitionMode: 'FREEFORM' | 'TEMPLATE_GUIDED'; templateVersionId?: string; categoryId?: string; duplicateOverride?: boolean; projectRelations?: ProjectRelationTarget[]; importPurpose: 'DATA_ONLY' | 'EXPERIMENT_DRAFT'; targetExperimentCategoryId?: string; experimentDate?: string }) {
-    const response = await httpClient.post<ApiResponse<RecognitionJob>>('/api/v1/data/recognition-jobs', input);
-    return response.data.data;
-  },
-  async retryRecognitionJob(id: string) {
-    const response = await httpClient.post<ApiResponse<RecognitionJob>>(`/api/v1/data/recognition-jobs/${id}/retry`);
-    return response.data.data;
   },
   async getJob(id: string) { const response = await httpClient.get<ApiResponse<DataJob>>(`/api/v1/data/import-jobs/${id}`); return response.data.data; },
   async listJobs(params: { templateVersionId?: string; status?: string; keyword?: string; page?: number; size?: number } = {}) {

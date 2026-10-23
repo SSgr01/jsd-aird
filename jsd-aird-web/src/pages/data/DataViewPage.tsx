@@ -158,11 +158,30 @@ export function DataViewPage() {
         { title: '数据确认', dataIndex: 'formalStatus', width: 150, render: (value: string) => <Tag color={formalStatusLabels[value]?.[1]}>{formalStatusLabels[value]?.[0] || value}</Tag> },
         { title: '归档分类', dataIndex: 'categoryName', width: 150, ellipsis: true, render: (value?: string) => value || '未分类' },
         { title: '关联项目', width: 260, render: (_: unknown, record: DataSourceFile) => <Space size={[0, 4]} wrap>{record.relatedProjects?.length ? record.relatedProjects.map((relation) => <Tag color="blue" key={`${relation.projectId}-${relation.stageId || ''}-${relation.taskId || ''}`} onClick={() => navigate(`/projects/${relation.projectId}`)} style={{ cursor: 'pointer' }}>{relation.projectName}{relation.stageName ? ` / ${relation.stageName}` : ''}{relation.taskName ? ` / ${relation.taskName}` : ''}</Tag>) : '—'}</Space> },
-        { title: '识别方式', dataIndex: 'templateVersionId', width: 320, ellipsis: true, render: (value: string | undefined, record: DataSourceFile) => { if (record.recognitionMode === 'FREEFORM') return '自由识别'; const item = templates.find((candidate) => candidate.versionId === value); return item ? `${item.name} · ${item.templateCode} · V${item.versionNo}` : value ? `版本 ${value.slice(0, 8)}` : '—'; } },
+        { title: '识别方式', dataIndex: 'templateVersionId', width: 320, ellipsis: true, render: (value: string | undefined, record: DataSourceFile) => { if (record.recognitionMode === 'FREEFORM') return '历史自由识别（只读）'; const item = templates.find((candidate) => candidate.versionId === value); return item ? `${item.name} · ${item.templateCode} · V${item.versionNo}` : value ? `版本 ${value.slice(0, 8)}` : '—'; } },
         { title: '导入任务', dataIndex: 'status', width: 130, render: (value: string) => <Tag color={statusLabels[value]?.[1]}>{statusLabels[value]?.[0] || value}</Tag> },
         { title: '解析进度', dataIndex: 'progress', width: 170, render: (_: number, record: DataSourceFile) => { const percent = dataParseProgress(record); return <Progress percent={percent} size="small" status={record.status === 'FAILED' ? 'exception' : percent === 100 ? 'success' : 'active'} format={(value) => `${value ?? 0}%`} />; } },
         { title: '最近更新', dataIndex: 'updatedAt', width: 180, render: (value: string) => new Date(value).toLocaleString('zh-CN') },
-        { title: '操作', width: 500, render: (_: unknown, record: DataSourceFile) => <Space wrap><DataPublicationPanel lazy jobId={record.importJobId} onChanged={() => void load()} onEdit={() => navigate(sourceRoute(record))} />{record.fileObjectId && <><Button type="link" icon={<EyeOutlined />} onClick={() => setPreviewFile(resolveFile(record))}>预览</Button><Button type="link" icon={<DownloadOutlined />} onClick={() => void downloadPreviewFile(resolveFile(record))}>下载</Button></>}<Button type="link" onClick={() => navigate(sourceRoute(record))}>{record.recognitionMode === 'FREEFORM' ? '查看识别' : '查看导入'}</Button>{record.experimentId && <Button type="link" onClick={() => navigate(`/experiments/${record.experimentId}`)}>查看实验</Button>}<Can permission="data.update"><Dropdown trigger={['click']} menu={{ items: [{ key: UNCATEGORIZED_CATEGORY_ID, label: '移到未分类', onClick: () => void moveSource(record) }, ...categories.map((category) => ({ key: category.id, label: category.name, onClick: () => void moveSource(record, category.id) })) ] }}><Button type="link">移动分类</Button></Dropdown></Can><Can permission="project.assign"><Button type="link" icon={<LinkOutlined />} onClick={() => setRelationEditor({ item: record, targets: (record.relatedProjects || []).map((relation) => ({ projectId: relation.projectId, stageId: relation.stageId, taskId: relation.taskId })) })}>关联项目</Button></Can></Space> },
+        { title: '操作', width: 500, render: (_: unknown, record: DataSourceFile) => {
+          const historicalFreeform = record.recognitionMode === 'FREEFORM';
+          return <Space wrap>
+            <DataPublicationPanel lazy readOnly={historicalFreeform} jobId={record.importJobId}
+              onChanged={() => void load()} onEdit={() => navigate(sourceRoute(record))} />
+            {record.fileObjectId && <>
+              <Button type="link" icon={<EyeOutlined />} onClick={() => setPreviewFile(resolveFile(record))}>预览</Button>
+              <Button type="link" icon={<DownloadOutlined />} onClick={() => void downloadPreviewFile(resolveFile(record))}>下载</Button>
+            </>}
+            <Button type="link" onClick={() => navigate(sourceRoute(record))}>
+              {historicalFreeform ? '查看历史结果' : '查看导入'}
+            </Button>
+            {record.experimentId && <Button type="link" onClick={() => navigate(`/experiments/${record.experimentId}`)}>查看实验</Button>}
+            {!historicalFreeform && <Can permission="data.update"><Dropdown trigger={['click']} menu={{ items: [
+              { key: UNCATEGORIZED_CATEGORY_ID, label: '移到未分类', onClick: () => void moveSource(record) },
+              ...categories.map((category) => ({ key: category.id, label: category.name, onClick: () => void moveSource(record, category.id) })),
+            ] }}><Button type="link">移动分类</Button></Dropdown></Can>}
+            {!historicalFreeform && <Can permission="project.assign"><Button type="link" icon={<LinkOutlined />} onClick={() => setRelationEditor({ item: record, targets: (record.relatedProjects || []).map((relation) => ({ projectId: relation.projectId, stageId: relation.stageId, taskId: relation.taskId })) })}>关联项目</Button></Can>}
+          </Space>;
+        } },
       ]} />
     </CatalogListPanel>
     <CategoryEditorModal open={Boolean(editor)} title={editor?.mode === 'NEW' ? '新增归档分类' : '编辑归档分类'} initialValue={editor?.item ? { name: editor.item.name, description: editor.item.description } : { name: '' }} confirmLoading={saving} onCancel={() => setEditor(undefined)} onSubmit={(value) => void saveCategory(value)} />

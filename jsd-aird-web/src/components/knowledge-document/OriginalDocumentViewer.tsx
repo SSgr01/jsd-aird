@@ -22,7 +22,7 @@ export function OriginalDocumentViewer(props: OriginalDocumentViewerProps) {
   if (type.startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp|tiff?)$/.test(name)) return <ImageViewer blob={blob} selected={selected?.sourceAnchor} sourceNodes={props.sourceNodes} onSourceSelect={props.onSourceSelect} />;
   if (type.startsWith('audio/') || /\.(mp3|wav|m4a|aac|flac|ogg|opus)$/.test(name)) return <AudioViewer blob={blob} selected={selected?.sourceAnchor} sourceNodes={props.sourceNodes} onSourceSelect={props.onSourceSelect} />;
   if (type.startsWith('video/') || /\.(mp4|m4v|mov|webm)$/.test(name)) return <VideoViewer blob={blob} />;
-  if (name.endsWith('.docx')) return <DocxViewer blob={blob} selected={selected?.sourceAnchor} sourceNodes={props.sourceNodes} onSourceSelect={props.onSourceSelect} />;
+  if (/\.docx?$/.test(name)) return <DocxViewer blob={blob} selected={selected?.sourceAnchor} sourceNodes={props.sourceNodes} onSourceSelect={props.onSourceSelect} />;
   if (/\.(xlsx|xls|csv)$/.test(name)) return <WorkbookViewer blob={blob} selected={selected?.sourceAnchor} sourceNodes={props.sourceNodes} onSourceSelect={props.onSourceSelect} />;
   if (type.startsWith('text/') || /\.(txt|md)$/.test(name)) return <TextViewer blob={blob} />;
   return <div className="knowledge-viewer-state"><Empty image={<FileUnknownOutlined style={{ fontSize: 36 }} />} description="此格式首期仅提供解析文本对照，请下载原文件查看完整格式" /></div>;

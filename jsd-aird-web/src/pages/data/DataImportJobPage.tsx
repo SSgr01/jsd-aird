@@ -367,7 +367,7 @@ export function DataImportJobPage({
           message={confirmationBlockReason(preview)} action={<Button onClick={() => navigate(workspaceMode === 'EXPERIMENT' ? '/experiments/upload' : '/data/upload')}>重新选择模板或文件</Button>} />}
         {Object.keys(documentCorrections).length > 0 && <Alert type="info" showIcon message="有尚未保存的字段修改，请保存草稿后提交审核。" />}
       </>}
-      canvas={['DOCX', 'IMAGE'].includes(preview.job.sourceFormat) ? <OriginalDocumentCanvas file={sourceFile} /> : <DataWorkbookCanvas
+      canvas={['DOC', 'DOCX', 'IMAGE'].includes(preview.job.sourceFormat) ? <OriginalDocumentCanvas file={sourceFile} /> : <DataWorkbookCanvas
         ref={editorRef}
         workbook={workbook}
         loading={!workbook && processing}
@@ -412,7 +412,7 @@ export function DataImportJobPage({
               </Space.Compact> : null}
               {!field.editable && <Typography.Text type="secondary">{field.excluded ? '已排除的记录不可修正' : ['FORMULA', 'DERIVED', 'STATIC'].includes(field.valueSource) ? '公式、派生值和静态内容由源文件计算，不能直接修改' : '此字段当前只读'}</Typography.Text>}
               {!field.excluded && field.valueStatus !== 'VALID' && field.editable && field.sheetId && field.address ? (
-                !['DOCX', 'IMAGE'].includes(preview.job.sourceFormat) ? <Button size="small" onClick={() => selectField(field)}>定位并修正</Button> : null
+                !['DOC', 'DOCX', 'IMAGE'].includes(preview.job.sourceFormat) ? <Button size="small" onClick={() => selectField(field)}>定位并修正</Button> : null
               ) : null}
             </Space>}
             renderFieldMeta={(field) => <Space wrap size={4}><Tag>类型：{fieldTypeLabel(field.valueType)}</Tag>{field.required ? <Tag color="orange">必填</Tag> : null}{field.identity ? <Tag color="blue">记录标识</Tag> : null}</Space>}

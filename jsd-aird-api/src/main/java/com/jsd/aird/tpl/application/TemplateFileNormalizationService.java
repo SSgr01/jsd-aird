@@ -23,9 +23,10 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import com.jsd.aird.ops.application.port.FileStorageFacade;
+import com.jsd.aird.ops.application.port.TemplateOfficeNormalizationFacade;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
-import com.jsd.aird.tpl.api.TemplateOfficeNormalizationFacade.NormalizedOfficeFile;
+import com.jsd.aird.ops.application.port.TemplateOfficeNormalizationFacade.NormalizedOfficeFile;
 import org.apache.poi.hwpf.HWPFDocument;
 import org.apache.poi.hwpf.usermodel.Table;
 import org.apache.poi.hwpf.usermodel.TableCell;
@@ -54,7 +55,7 @@ import org.springframework.stereotype.Service;
  * discarded; the returned normalized file is the one used by recognition.
  */
 @Service
-public class TemplateFileNormalizationService implements com.jsd.aird.tpl.api.TemplateOfficeNormalizationFacade {
+public class TemplateFileNormalizationService implements TemplateOfficeNormalizationFacade {
 
     private static final String XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
     private static final String DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";

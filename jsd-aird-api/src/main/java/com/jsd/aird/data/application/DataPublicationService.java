@@ -396,6 +396,10 @@ public class DataPublicationService {
         var job = (lock ? repository.findJobForUpdate(org(), jobId) : repository.findJob(org(), jobId))
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "数据来源不存在"));
         check("DATA_CENTER".equals(repository.findSourceOwner(org(), jobId).orElse("")), "该来源不属于数据中心");
+        if (lock && isFreeform(jobId)) {
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,
+                    "历史自由识别记录已设为只读，只能查看和下载原文件");
+        }
         return job;
     }
 

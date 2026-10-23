@@ -15,7 +15,7 @@ import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.security.Actor;
 import com.jsd.aird.shared.security.ActorContext;
 import com.jsd.aird.tpl.application.port.OfficeStructureParser;
-import com.jsd.aird.tpl.api.TemplateOfficeNormalizationFacade;
+import com.jsd.aird.ops.application.port.TemplateOfficeNormalizationFacade;
 import com.jsd.aird.tpl.api.TemplateOfficeFacade;
 import com.jsd.aird.tpl.domain.TemplateFormat;
 import org.springframework.stereotype.Service;

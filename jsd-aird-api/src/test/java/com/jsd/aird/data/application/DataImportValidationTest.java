@@ -147,7 +147,7 @@ class DataImportValidationTest {
         assertThatThrownBy(() -> service.create(new DataImportService.CreateCommand(sourceFileId, templateVersionId,
                 null, false, List.of(), "DATA_ONLY", null)))
                 .isInstanceOf(ApiException.class)
-                .hasMessage("所选模板格式与文件类型不匹配：Excel / CSV 请选择 Excel 模板，DOCX 请选择 Word 模板；PDF 请使用自由识别");
+                .hasMessage("所选模板格式与文件类型不匹配：Excel / CSV 请选择 Excel 模板，DOC / DOCX 请选择 Word 模板；PDF 不支持数据中心导入");
         verify(repository, never()).insertJob(any());
     }
 

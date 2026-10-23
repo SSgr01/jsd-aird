@@ -7,7 +7,7 @@ import { DocumentComparisonViewer, OriginalDocumentViewer, StructuredDocumentRen
 import { usePermission } from '@/components/auth/usePermission';
 import { ProjectRelationPicker } from '@/components/project-relations/ProjectRelationPicker';
 import { downloadPreviewFile } from '@/components/file-preview';
-import { stageFile } from '@/services/files';
+import { fetchFilePreviewBlob, stageFile } from '@/services/files';
 import { knowledgeApi, type KnowledgeDocument, type KnowledgeProcessing, type KnowledgeReview, type KnowledgeVersion, type Publication, type PublishedContent, type StructuredNode } from '@/services/knowledge';
 import { projectResourceApi, type ProjectRelationTarget } from '@/services/project/project-resource-api';
 import { pendingKnowledgeReviewPath } from './knowledge-document-routing';
@@ -32,7 +32,12 @@ export function KnowledgeDocumentPage() {
     if (!loading && directReviewPath) navigate(directReviewPath, { replace: true });
   }, [directReviewPath, loading, navigate]);
   const selectedPublication = publications.find((value) => value.id === publicationId); const sourceVersionId = selectedPublication?.versionId || item?.currentVersionId; const sourceVersion = versions.find((value) => value.id === sourceVersionId);
-  const loadOriginal = useCallback(() => { if (!id) return Promise.reject(new Error('文档不存在')); return knowledgeApi.contentBlob(id, sourceVersionId); }, [id, sourceVersionId]);
+  const loadOriginal = useCallback(() => {
+    if (!id) return Promise.reject(new Error('文档不存在'));
+    const originalName = sourceVersion?.originalName || item?.originalName || '';
+    if (/\.doc$/i.test(originalName) && sourceVersion?.fileObjectId) return fetchFilePreviewBlob(sourceVersion.fileObjectId);
+    return knowledgeApi.contentBlob(id, sourceVersionId);
+  }, [id, item?.originalName, sourceVersion?.fileObjectId, sourceVersion?.originalName, sourceVersionId]);
   if (loading || !item || directReviewPath) return <div className="business-page"><Spin /></div>;
 
   const currentPublication = publications.find((value) => value.status === 'CURRENT'); const revisionStatus = review?.reviewRevision?.status; const reviewPending = Boolean(review && revisionStatus && revisionStatus !== 'PUBLISHED' && revisionStatus !== 'SUPERSEDED'); const pendingNewVersion = Boolean(review && (!currentPublication || review.versionId !== currentPublication.versionId || reviewPending)); const workflowStatus = documentWorkflowStatus(item);

@@ -50,6 +50,10 @@ public class DataImportService {
     private void beforeEdit(UUID organizationId, UUID jobId) {
         if (reviewGuard != null) reviewGuard.beforeEdit(organizationId, jobId);
     }
+
+    private void assertNotFreeform(UUID organizationId, UUID jobId) {
+        if (reviewGuard != null) reviewGuard.assertNotFreeform(organizationId, jobId);
+    }
     @Autowired
     public DataImportService(
             DataRepository repository,
@@ -138,13 +142,13 @@ public class DataImportService {
         var format = sourceFormat(file.originalName());
         var templateFormat = template.format();
         var expectedTemplateFormat = switch (format) {
-            case "DOCX" -> "DOCX";
+            case "DOC", "DOCX" -> "DOCX";
             case "XLS", "XLSX", "CSV" -> "XLSX";
             default -> null;
         };
         if (expectedTemplateFormat == null || !expectedTemplateFormat.equals(templateFormat)) {
             throw new ApiException(ApiErrorCode.VALIDATION_ERROR,
-                    "所选模板格式与文件类型不匹配：Excel / CSV 请选择 Excel 模板，DOCX 请选择 Word 模板；PDF 请使用自由识别");
+                    "所选模板格式与文件类型不匹配：Excel / CSV 请选择 Excel 模板，DOC / DOCX 请选择 Word 模板；PDF 不支持数据中心导入");
         }
         var duplicate = repository.findCompletedDuplicate(actor.organizationId(), file.sha256(), command.templateVersionId());
         if (duplicate.isPresent() && !command.duplicateOverride()) {
@@ -222,6 +226,7 @@ public class DataImportService {
     @Transactional
     public void hideDataCenterImport(UUID importJobId) {
         var actor = ActorContext.required();
+        assertNotFreeform(actor.organizationId(), importJobId);
         var job = repository.findJobForUpdate(actor.organizationId(), importJobId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "数据导入任务不存在"));
         requireDataCenterImportOwner(actor.organizationId(), importJobId);
@@ -309,6 +314,7 @@ public class DataImportService {
     @Transactional
     public void assignSourceCategory(UUID importJobId, UUID categoryId) {
         var actor = ActorContext.required();
+        assertNotFreeform(actor.organizationId(), importJobId);
         var sourceOwner = repository.findSourceOwner(actor.organizationId(), importJobId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "来源文件不存在"));
         if (!"DATA_CENTER".equals(sourceOwner)) {
@@ -324,6 +330,7 @@ public class DataImportService {
 
     public TemplateDataImportFacade.FieldRequest requestField(UUID importJobId, FieldRequestCommand command) {
         var actor = ActorContext.required();
+        assertNotFreeform(actor.organizationId(), importJobId);
         var job = requireJob(actor.organizationId(), importJobId);
         return templates.requestField(actor.organizationId(), job.templateVersionId(), new TemplateDataImportFacade.FieldRequestCommand(
                 command.fieldId(), command.displayName(), command.valueType(), command.uiType(), command.groupCode(), command.description()));
@@ -357,7 +364,7 @@ public class DataImportService {
             var definition = templates.getVersion(organizationId, job.templateVersionId());
             var experimentV9 = definition.importContractVersion() >= 9
                     && "EXPERIMENT_DATA".equals(definition.importContract().path("templateUsage").asText(""));
-            var documentSource = Set.of("DOCX", "IMAGE").contains(job.sourceFormat());
+            var documentSource = Set.of("DOC", "DOCX", "IMAGE").contains(job.sourceFormat());
             var parsed = documentSource && documentParser != null
                     ? documentParser.parse(organizationId, job.sourceFileId(), job.sourceFileName(),
                             job.sourceSha256(), job.sourceFormat(), definition.fields())
@@ -921,6 +928,7 @@ public class DataImportService {
     @Transactional
     public void commit(UUID importJobId) {
         var actor = ActorContext.required();
+        assertNotFreeform(actor.organizationId(), importJobId);
         var job = repository.findJobForUpdate(actor.organizationId(), importJobId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "导入任务不存在"));
         if ("COMPLETED".equals(job.status())) return;
@@ -1407,9 +1415,10 @@ public class DataImportService {
         if (lower.endsWith(".xlsx")) return "XLSX";
         if (lower.endsWith(".xls")) return "XLS";
         if (lower.endsWith(".csv")) return "CSV";
+        if (lower.endsWith(".doc")) return "DOC";
         if (lower.endsWith(".docx")) return "DOCX";
         if (lower.matches(".*\\.(png|jpg|jpeg|gif|webp|bmp|tif|tiff)$")) return "IMAGE";
-        throw new ApiException(ApiErrorCode.BAD_REQUEST, "数据中心仅支持 XLS、XLSX 或 CSV");
+        throw new ApiException(ApiErrorCode.BAD_REQUEST, "数据中心仅支持 XLS、XLSX、CSV、DOC 或 DOCX 文件；PDF 不支持导入");
     }
 
     private String columnName(int value) {

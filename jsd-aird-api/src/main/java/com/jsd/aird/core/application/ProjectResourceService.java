@@ -156,9 +156,14 @@ public class ProjectResourceService implements ProjectResourceFacade {
     }
 
     private void lockDataSource(Actor actor, ResourceType type, UUID id) {
-        if (type == ResourceType.DATA_IMPORT_JOB) jdbc.query(
-                "SELECT id FROM data.import_job WHERE organization_id=? AND id=? FOR UPDATE",
-                (rs,n) -> rs.getObject(1,UUID.class),actor.organizationId(),id);
+        if (type == ResourceType.DATA_IMPORT_JOB) {
+            var modes = jdbc.query("SELECT source_owner,recognition_mode FROM data.import_job WHERE organization_id=? AND id=? FOR UPDATE",
+                    (rs, n) -> new String[]{rs.getString(1), rs.getString(2)}, actor.organizationId(), id);
+            if (modes.stream().anyMatch(row -> "DATA_CENTER".equals(row[0]) && "FREEFORM".equals(row[1]))) {
+                throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,
+                        "历史自由识别记录已设为只读，不能修改项目关联");
+            }
+        }
     }
 
     @Override

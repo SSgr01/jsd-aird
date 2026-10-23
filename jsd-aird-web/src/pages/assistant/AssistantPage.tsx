@@ -586,9 +586,24 @@ export function AssistantPage() {
 
   const resolveCitationFile = (citation: AssistantCitation): FilePreviewDescriptor => {
     if (citation.documentId) {
+      const documentId = citation.documentId;
+      const versionId = citation.versionId;
+      const fileName = citation.originalName || citation.title || 'knowledge-document';
       return {
-        fileName: citation.originalName || citation.title || 'knowledge-document',
-        load: () => knowledgeApi.contentBlob(citation.documentId as string, citation.versionId),
+        fileName,
+        load: async () => {
+          if (/\.doc$/i.test(fileName)) {
+            const resolvedVersionId = versionId || (await knowledgeApi.get(documentId)).currentVersionId;
+            const versions = await knowledgeApi.versions(documentId);
+            const version = versions.find((item) => item.id === resolvedVersionId);
+            if (!version) throw new Error('找不到知识文档对应的文件版本');
+            return fetchFilePreviewBlob(version.fileObjectId);
+          }
+          return knowledgeApi.contentBlob(documentId, versionId);
+        },
+        downloadUrl: versionId
+          ? `/api/v1/knowledge/documents/${encodeURIComponent(documentId)}/versions/${encodeURIComponent(versionId)}/content`
+          : `/api/v1/knowledge/documents/${encodeURIComponent(documentId)}/content`,
       };
     }
     const fileObjectId = citation.fileObjectId;

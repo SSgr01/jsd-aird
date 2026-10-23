@@ -6,9 +6,9 @@ import { usePermission } from '@/components/auth/usePermission';
 import { dataApi, type DataPublication } from '@/services/data/data-api';
 import { publicationLabels, actionLabels, snapshotRows } from './publication-display';
 
-export function DataPublicationPanel({ jobId, refreshKey, canConfirm = false, disabled = false, lazy = false, onChanged, onStateChange, onEdit, versionContainer }: {
+export function DataPublicationPanel({ jobId, refreshKey, canConfirm = false, disabled = false, readOnly = false, lazy = false, onChanged, onStateChange, onEdit, versionContainer }: {
   versionContainer?: HTMLElement | null;
-  jobId: string; refreshKey?: string; canConfirm?: boolean; disabled?: boolean; lazy?: boolean;
+  jobId: string; refreshKey?: string; canConfirm?: boolean; disabled?: boolean; readOnly?: boolean; lazy?: boolean;
   onChanged?: () => void; onStateChange?: (state: DataPublication) => void; onEdit?: () => void;
 }) {
   const { message } = App.useApp();
@@ -75,26 +75,26 @@ export function DataPublicationPanel({ jobId, refreshKey, canConfirm = false, di
     <Tag color={state.status === 'PUBLISHED' ? 'success' : state.status === 'RETURNED' ? 'error' : 'processing'}>{publicationLabels[state.status]}</Tag>
     {state.status === 'RETURNED' && <Typography.Text type="danger" style={{ maxWidth: 280 }} ellipsis={{ tooltip: true }}>驳回原因：{state.events.find((event) => event.action === 'RETURNED')?.comment || '请查看审核记录'}</Typography.Text>}
     {state.publishedSnapshotId && !['PUBLISHED', 'DISABLED'].includes(state.status) && <Tag color={state.publishedEnabled ? 'success' : 'default'}>{state.publishedEnabled ? '原发布版本继续有效' : '原发布版本已停用'}</Tag>}
-    {canSubmit && ['DRAFT', 'RETURNED', 'CONFIRMED'].includes(state.status) && !revisionRequired && <Button
+    {!readOnly && canSubmit && ['DRAFT', 'RETURNED', 'CONFIRMED'].includes(state.status) && !revisionRequired && <Button
       type="primary" disabled={busy || disabled || (state.status !== 'CONFIRMED' && (!canUpdate || !canConfirm))}
       onClick={() => { setOpen(false); setSubmitOpen(true); }}>{state.status === 'RETURNED' ? '重新提交审核' : '提交审核'}</Button>}
-    {canUpdate && !canSubmit && canConfirm && ['DRAFT', 'RETURNED'].includes(state.status) && <Button disabled={busy || disabled}
+    {!readOnly && canUpdate && !canSubmit && canConfirm && ['DRAFT', 'RETURNED'].includes(state.status) && <Button disabled={busy || disabled}
       onClick={() => void run(() => dataApi.publicationAction(jobId, 'confirm'), '数据已确认，可由有送审权限的人员提交发布审核')}>确认数据</Button>}
     {state.status === 'PENDING_REVIEW' && <>
       {activeSnapshot && <Button disabled={busy} onClick={() => void showSnapshot(activeSnapshot.id, activeSnapshot.versionNo)}>查看审核内容</Button>}
-      {canReview && activeSnapshot && <><Button danger disabled={busy} onClick={() => { setOpen(false); setComment(''); setRejectOpen(true); }}>驳回</Button>
+      {!readOnly && canReview && activeSnapshot && <><Button danger disabled={busy} onClick={() => { setOpen(false); setComment(''); setRejectOpen(true); }}>驳回</Button>
         <Button type="primary" disabled={busy} onClick={() => void run(() => dataApi.review(jobId, activeSnapshot.id, true), '审核已通过，可单独发布')}>审核通过</Button></>}
-      {canSubmit && <Button disabled={busy} onClick={() => void run(() => dataApi.publicationAction(jobId, 'withdraw'), '已撤回，可继续修改')}>撤回送审</Button>}
+      {!readOnly && canSubmit && <Button disabled={busy} onClick={() => void run(() => dataApi.publicationAction(jobId, 'withdraw'), '已撤回，可继续修改')}>撤回送审</Button>}
     </>}
     {state.status === 'APPROVED' && <>
-      {canReview && <Button type="primary" disabled={busy} onClick={() => void run(() => dataApi.publicationAction(jobId, 'publish'), '导入数据已发布并正式入库')}>发布</Button>}
-      {canSubmit && <Button disabled={busy} onClick={() => void run(() => dataApi.publicationAction(jobId, 'withdraw'), '已撤回，修改后需重新提交审核')}>撤回修改</Button>}
+      {!readOnly && canReview && <Button type="primary" disabled={busy} onClick={() => void run(() => dataApi.publicationAction(jobId, 'publish'), '导入数据已发布并正式入库')}>发布</Button>}
+      {!readOnly && canSubmit && <Button disabled={busy} onClick={() => void run(() => dataApi.publicationAction(jobId, 'withdraw'), '已撤回，修改后需重新提交审核')}>撤回修改</Button>}
     </>}
-    {canUpdate && (state.status === 'PUBLISHED' || revisionRequired) && <Popconfirm title="停用这份已发布资料？" description="保留历史与引用，停用后不再参与 AI 检索。" onConfirm={() => { void run(() => dataApi.publicationAction(jobId, 'disable'), '已停用'); }}><Button disabled={busy}>停用</Button></Popconfirm>}
-    {canUpdate && state.status === 'DISABLED' && <Button disabled={busy} onClick={() => void run(() => dataApi.publicationAction(jobId, 'restore'), '已恢复使用')}>恢复使用</Button>}
-    {canUpdate && (['PUBLISHED', 'DISABLED'].includes(state.status) || revisionRequired) && <Button disabled={busy}
+    {!readOnly && canUpdate && (state.status === 'PUBLISHED' || revisionRequired) && <Popconfirm title="停用这份已发布资料？" description="保留历史与引用，停用后不再参与 AI 检索。" onConfirm={() => { void run(() => dataApi.publicationAction(jobId, 'disable'), '已停用'); }}><Button disabled={busy}>停用</Button></Popconfirm>}
+    {!readOnly && canUpdate && state.status === 'DISABLED' && <Button disabled={busy} onClick={() => void run(() => dataApi.publicationAction(jobId, 'restore'), '已恢复使用')}>恢复使用</Button>}
+    {!readOnly && canUpdate && (['PUBLISHED', 'DISABLED'].includes(state.status) || revisionRequired) && <Button disabled={busy}
       onClick={() => void run(() => dataApi.publicationAction(jobId, 'revise'), '修订草稿已打开，原发布版本保持不变').then((ok) => { if (ok) { setOpen(false); onEdit?.(); } })}>创建修订</Button>}
-    {lazy && onEdit && !revisionRequired && ['DRAFT', 'RETURNED', 'CONFIRMED'].includes(state.status) && <Button onClick={onEdit}>打开草稿</Button>}
+    {!readOnly && lazy && onEdit && !revisionRequired && ['DRAFT', 'RETURNED', 'CONFIRMED'].includes(state.status) && <Button onClick={onEdit}>打开草稿</Button>}
   </Space>;
 
   const versionContent = state && (

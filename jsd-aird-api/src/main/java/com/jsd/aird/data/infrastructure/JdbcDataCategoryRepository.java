@@ -74,6 +74,15 @@ public class JdbcDataCategoryRepository implements DataCategoryRepository {
     }
 
     @Override
+    public boolean hasHistoricalFreeformSources(UUID organizationId, UUID categoryId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+                SELECT EXISTS(SELECT 1 FROM data.import_job
+                WHERE organization_id=? AND category_id=? AND source_owner='DATA_CENTER'
+                  AND recognition_mode='FREEFORM')
+                """, Boolean.class, organizationId, categoryId));
+    }
+
+    @Override
     public void lockCategoryName(UUID organizationId, String name) {
         var lockKey = organizationId + ":data-category:" + name.trim().toLowerCase(java.util.Locale.ROOT);
         jdbc.query("SELECT pg_advisory_xact_lock(hashtextextended(CAST(? AS text), 0))",

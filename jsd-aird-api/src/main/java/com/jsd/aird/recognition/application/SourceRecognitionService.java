@@ -56,8 +56,14 @@ public class SourceRecognitionService {
         this.dataReviewGuard = guard; this.dataPublication = publication;
     }
     private void beforeDataEdit(String owner, UUID id) {
-        if (DATA_CENTER.equals(owner) && dataReviewGuard != null)
-            dataReviewGuard.beforeEdit(ActorContext.required().organizationId(), id);
+        if (!DATA_CENTER.equals(owner)) return;
+        var organizationId = ActorContext.required().organizationId();
+        var job = required(organizationId, id, owner);
+        if ("FREEFORM".equals(job.recognitionMode())) {
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,
+                    "历史自由识别记录已设为只读，只能查看和下载原文件");
+        }
+        if (dataReviewGuard != null) dataReviewGuard.beforeEdit(organizationId, id);
     }
 
     public SourceRecognitionService(SourceRecognitionRepository repository, FileObjectRepository files,
@@ -84,6 +90,12 @@ public class SourceRecognitionService {
         var format = command.sourceFormat() == null || command.sourceFormat().isBlank()
                 ? sourceFormat(file.originalName()) : normalizeFormat(command.sourceFormat());
         var mode = normalizeMode(command.recognitionMode(), command.templateVersionId());
+        if (DATA_CENTER.equals(owner) && "PDF".equals(format)) {
+            throw validation("PDF 不支持数据中心导入，请上传 DOC / DOCX 或 Excel 文件并选择对应模板");
+        }
+        if (DATA_CENTER.equals(owner) && "FREEFORM".equals(mode)) {
+            throw validation("数据中心导入必须选择已发布模板；自由识别仅保留为历史记录");
+        }
         if ("TEMPLATE_GUIDED".equals(mode) && command.templateVersionId() == null)
             throw validation("模板辅助识别必须选择模板版本");
         var existing = repository.findBySourceHash(actor.organizationId(), owner, file.sha256());
@@ -203,6 +215,10 @@ public class SourceRecognitionService {
     public FinalizeResult finalizeWorkspace(String owner, UUID id, long expectedRevision) {
         var actor = ActorContext.required();
         var job = required(actor.organizationId(), id, checkedOwner(owner));
+        if (DATA_CENTER.equals(owner) && "FREEFORM".equals(job.recognitionMode())) {
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,
+                    "历史自由识别记录已设为只读，只能查看和下载原文件");
+        }
         if (job.recognitionRevision() != expectedRevision)
             throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT, "识别工作区版本已变化，请刷新后提交");
         if (!"WAITING_MAPPING".equals(job.status()))

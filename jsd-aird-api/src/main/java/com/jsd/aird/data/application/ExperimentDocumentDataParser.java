@@ -15,8 +15,10 @@ import com.jsd.aird.rnd.application.ExperimentImportService;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.tpl.api.TemplateDataImportFacade;
+import com.jsd.aird.ops.application.port.TemplateOfficeNormalizationFacade;
 import com.jsd.aird.tpl.domain.TemplateFormat;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /** Projects Word and OCR observations into the staged shape used by template imports. */
@@ -25,17 +27,25 @@ final class ExperimentDocumentDataParser {
     private final FileStorageFacade files;
     private final ExperimentImportService sourceParser;
     private final ObjectMapper json;
+    private final TemplateOfficeNormalizationFacade officeNormalization;
 
-    ExperimentDocumentDataParser(FileStorageFacade files, ExperimentImportService sourceParser, ObjectMapper json) {
+    @Autowired
+    ExperimentDocumentDataParser(FileStorageFacade files, ExperimentImportService sourceParser, ObjectMapper json,
+                                 TemplateOfficeNormalizationFacade officeNormalization) {
         this.files = files;
         this.sourceParser = sourceParser;
         this.json = json;
+        this.officeNormalization = officeNormalization;
+    }
+
+    ExperimentDocumentDataParser(FileStorageFacade files, ExperimentImportService sourceParser, ObjectMapper json) {
+        this(files, sourceParser, json, null);
     }
 
     TemplateDataImportFacade.ParsedTabularFile parse(UUID organizationId, UUID fileId, String fileName,
             String sourceHash, String format, List<TemplateDataImportFacade.FieldDefinition> fields) {
-        var observations = "DOCX".equals(format)
-                ? wordObservations(organizationId, fileId)
+        var observations = java.util.Set.of("DOC", "DOCX").contains(format)
+                ? wordObservations(organizationId, fileId, fileName, format)
                 : imageObservations(organizationId, fileId, fileName, sourceHash);
         if (observations.isEmpty()) {
             throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "未从文件中识别出可核对的数据，请检查文件或 OCR 服务");
@@ -76,30 +86,45 @@ final class ExperimentDocumentDataParser {
         return new TemplateDataImportFacade.ParsedTabularFile(format, "experiment-document-data-v1", List.of(sheet));
     }
 
-    private List<Observation> wordObservations(UUID organizationId, UUID fileId) {
-        try (var stored = files.open(organizationId, fileId);
-             var document = new XWPFDocument(new ByteArrayInputStream(stored.stream().readAllBytes()))) {
-            var result = new ArrayList<Observation>();
-            for (int i = 0; i < document.getParagraphs().size(); i++)
-                addText(result, document.getParagraphs().get(i).getText(), "段落 " + (i + 1));
-            for (int t = 0; t < document.getTables().size(); t++) {
-                var table = document.getTables().get(t);
-                for (int r = 0; r < table.getRows().size(); r++) {
-                    var row = table.getRows().get(r);
-                    if (row.getTableCells().size() >= 2) {
-                        var label = row.getCell(0).getText().trim();
-                        var value = row.getCell(1).getText().trim();
-                        if (!label.isBlank() && !value.isBlank())
-                            result.add(new Observation(label, value, "表格 " + (t + 1) + " 行 " + (r + 1)));
+    private List<Observation> wordObservations(UUID organizationId, UUID fileId, String fileName, String format) {
+        try (var stored = files.open(organizationId, fileId)) {
+            var source = stored.stream().readAllBytes();
+            var wordBytes = "DOC".equals(format)
+                    ? normalizeLegacyWord(fileName, stored.contentType(), source)
+                    : source;
+            try (var document = new XWPFDocument(new ByteArrayInputStream(wordBytes))) {
+                var result = new ArrayList<Observation>();
+                for (int i = 0; i < document.getParagraphs().size(); i++)
+                    addText(result, document.getParagraphs().get(i).getText(), "段落 " + (i + 1));
+                for (int t = 0; t < document.getTables().size(); t++) {
+                    var table = document.getTables().get(t);
+                    for (int r = 0; r < table.getRows().size(); r++) {
+                        var row = table.getRows().get(r);
+                        if (row.getTableCells().size() >= 2) {
+                            var label = row.getCell(0).getText().trim();
+                            var value = row.getCell(1).getText().trim();
+                            if (!label.isBlank() && !value.isBlank())
+                                result.add(new Observation(label, value, "表格 " + (t + 1) + " 行 " + (r + 1)));
+                        }
+                        for (var cell : row.getTableCells())
+                            addText(result, cell.getText(), "表格 " + (t + 1) + " 行 " + (r + 1));
                     }
-                    for (var cell : row.getTableCells())
-                        addText(result, cell.getText(), "表格 " + (t + 1) + " 行 " + (r + 1));
                 }
+                return result;
             }
-            return result;
         } catch (Exception exception) {
-            throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "Word 文件解析失败，请上传有效的 DOCX 文件");
+            if (exception instanceof ApiException apiException) throw apiException;
+            throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "Word 文件解析失败，请检查 DOC / DOCX 文件是否有效");
         }
+    }
+
+    private byte[] normalizeLegacyWord(String fileName, String contentType, byte[] source) {
+        if (officeNormalization == null) {
+            throw new ApiException(ApiErrorCode.FILE_NOT_READY, "DOC 转换服务未配置，请检查 LibreOffice 服务");
+        }
+        return officeNormalization.normalizeOfficeFile(fileName,
+                contentType == null || contentType.isBlank() ? "application/msword" : contentType,
+                source).content();
     }
 
     private List<Observation> imageObservations(UUID organizationId, UUID fileId, String fileName,

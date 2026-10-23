@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
 import { DocumentComparisonViewer, OriginalDocumentViewer, StructuredDocumentEditor, VirtualDataTable, anchorLabel, findNodeByReviewId, sourceNodeMap } from '@/components/knowledge-document';
+import { fetchFilePreviewBlob } from '@/services/files';
 import { knowledgeApi, type IssueAction, type KnowledgeReview, type StructuredDocument } from '@/services/knowledge';
 
 type SaveState = 'saved' | 'dirty' | 'saving' | 'offline' | 'conflict';
@@ -78,6 +79,7 @@ export function KnowledgeReviewPage() {
 
   const loadOriginal = useCallback(() => {
     const current = latestReview.current; if (!current) return Promise.reject(new Error('文档未加载'));
+    if (/\.doc$/i.test(current.originalName) && current.fileObjectId) return fetchFilePreviewBlob(current.fileObjectId);
     return knowledgeApi.contentBlob(current.documentId, current.versionId);
   }, []);
   const sourceMap = useMemo(() => sourceNodeMap(review?.sourceNodes || []), [review?.sourceNodes]); const selectedSource = sourceMap.get(selectedSourceNodeKey || '');

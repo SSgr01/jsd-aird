@@ -55,6 +55,10 @@ public class DataCategoryService {
             require(actor.organizationId(), replacementId);
         }
         require(actor.organizationId(), id);
+        if (repository.hasHistoricalFreeformSources(actor.organizationId(), id)) {
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,
+                    "该分类仍包含历史自由识别记录，删除分类会修改这些记录；请保留该分类");
+        }
         repository.delete(actor.organizationId(), id, replacementId);
     }
 

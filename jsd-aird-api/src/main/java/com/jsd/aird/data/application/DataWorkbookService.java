@@ -75,7 +75,7 @@ public class DataWorkbookService {
         var job = repository.findJob(organizationId, importJobId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "导入任务不存在"));
         var file = requireFile(organizationId, job.sourceFileId());
-        var snapshot = Set.of("DOCX", "IMAGE").contains(job.sourceFormat())
+        var snapshot = Set.of("DOC", "DOCX", "IMAGE").contains(job.sourceFormat())
                 ? templateSnapshotForDocument(organizationId, job)
                 : sourceSnapshot(file, job.sourceFormat(), repository.listSheets(organizationId, importJobId));
         if (snapshot == null || !snapshot.isObject() || snapshot.isEmpty()) {
@@ -120,7 +120,7 @@ public class DataWorkbookService {
                 throw new ApiException(ApiErrorCode.FILE_NOT_READY, "原始 Excel 工作簿读取失败");
             }
         }
-        if (Set.of("CSV", "DOCX", "IMAGE").contains(format)) return csvSnapshot(file.originalName(), sheets);
+        if (Set.of("CSV", "DOC", "DOCX", "IMAGE").contains(format)) return csvSnapshot(file.originalName(), sheets);
         return objectMapper.createObjectNode();
     }
 

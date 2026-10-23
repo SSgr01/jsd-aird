@@ -13,6 +13,8 @@ public interface DataCategoryRepository {
 
     Optional<Category> find(UUID organizationId, UUID categoryId);
 
+    default boolean hasHistoricalFreeformSources(UUID organizationId, UUID categoryId) { return false; }
+
     void lockCategoryName(UUID organizationId, String name);
 
     boolean categoryNameExists(UUID organizationId, String name, UUID excludingCategoryId);
